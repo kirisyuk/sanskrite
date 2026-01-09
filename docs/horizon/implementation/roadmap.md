@@ -77,16 +77,716 @@
     - `RELATED_TO` (PERSON ↔ PERSON): прочие общеизвестные связи (бизнес‑партнёры/друзья/однокурсники и т.п.), контекст в `reason`/qualifiers.
   - Обновить Scout/Research промпты и Critic `missingInfo` под новые связи (аудитор компании; публичные родственники; public "related" связи) с жёсткими правилами по направлению/типам.
 - **Требования к скаутингу металлургических и горнодобывающих компаний (metal & mining)**
-  - При скаутинге компаний из секторов `/Materials/Mining/*` (Precious_Metals, Industrial_Metals, Rare_Earths) scout-critic **обязательно должен требовать наличие связанных объектов типа `/fac`** (Facility).
+  - При скаутинге компаний из секторов `/Materials/Mining/*` (Precious_Metals, Industrial_Metals, Rare_Earths) scout-critic **обязательно должен требовать наличие связанных объектов типа `/fac`** (Facility) и/или `/deposit/` (Natural Resource Deposit).
   - Для каждого связанного `/fac` требуется следующая информация:
     - **Продукты**: список продуктов, которые добываются/производятся на объекте (связи `PRODUCES` с `/product/...` путями).
     - **Запасы и добыча по каждому продукту отдельно**:
-      - **Разведанные запасы** (explored reserves) для каждого продукта: объёмы с единицами измерения из канонического словаря (`allowedMetricUnits` в `horizon_taxonomy`).
-      - **Добываемые запасы** (extracted reserves) для каждого продукта: объёмы с единицами измерения из канонического словаря.
+      - **Разведанные запасы** (proven reserves) для каждого продукта: объёмы с единицами измерения из канонического словаря (`allowedMetricUnits` в `horizon_taxonomy`).
+      - **Вероятные запасы** (probable reserves) для каждого продукта: объёмы с единицами измерения из канонического словаря.
       - **Добыча** (production/extraction) для каждого продукта: объёмы с единицами измерения из канонического словаря.
-  - Единицы измерения должны соответствовать каноническому словарю (`allowedMetricUnits`), например: `tons`, `metric_tons`, `ounces`, `kg`, `cubic_meters` и т.д.
-  - Обновить Critic Agent: если для metal & mining компании отсутствуют связанные `/fac` объекты или для `/fac` отсутствует информация о продуктах/запасах/добыче по каждому продукту — добавлять в `missingInfo` конкретные вопросы для поиска этой информации.
-  - Обновить Scout/Research промпты: при разведке metal & mining компаний явно извлекать информацию о производственных объектах (`/fac`), их продуктах, а также запасы и добычу **отдельно для каждого продукта**.
+  - Если запасы известны только на уровне месторождения (deposit), а не конкретного `/fac`:
+    - Создавать сущность `/deposit/` с reserves-метриками.
+    - Связывать `/fac → EXTRACTS_FROM → /deposit/`.
+  - Единицы измерения должны соответствовать каноническому словарю (`allowedMetricUnits`), например: `metric_tons`, `kt`, `mt`, `oz`, `moz`, `kg`, `lbs` и т.д.
+  - Обновить Critic Agent: если для metal & mining компании отсутствуют связанные `/fac` объекты или для `/fac`/`/deposit/` отсутствует информация о продуктах/запасах/добыче по каждому продукту — добавлять в `missingInfo` конкретные вопросы для поиска этой информации.
+  - Обновить Scout/Research промпты: при разведке metal & mining компаний явно извлекать информацию о производственных объектах (`/fac`), месторождениях (`/deposit/`), их продуктах, а также запасы и добычу **отдельно для каждого продукта**.
+- **Требования к скаутингу нефтегазовых компаний (oil & gas)**
+  - При скаутинге компаний из секторов `/Energy/Fossil_Fuels/Oil_Gas_*` (Upstream, Midstream, Downstream) scout-critic **обязательно должен требовать наличие связанных объектов типа `/fac`** (Facility) и/или `/deposit/` (Natural Resource Deposit — basin/field).
+  - Для **upstream** компаний (exploration & production):
+    - Требовать связанные `/deposit/` (месторождения/бассейны) с reserves-метриками.
+    - Требовать связанные `/fac/` (скважины, платформы, терминалы) с production-метриками.
+    - Связи: `/fac → EXTRACTS_FROM → /deposit/`, `/org → OPERATES_IN → /deposit/`.
+  - Для **midstream** компаний (pipelines, storage, LNG):
+    - Требовать связанные `/fac/` (трубопроводы, хранилища, LNG-терминалы) с capacity-метриками.
+  - Для **downstream** компаний (refining, petrochemicals):
+    - Требовать связанные `/fac/` (НПЗ, нефтехимические заводы) с capacity/throughput-метриками.
+  - Для каждого связанного `/deposit/` (для upstream) требуется:
+    - **Продукты**: crude oil, natural gas, condensate, NGL (связи `PRODUCES` с `/product/...`).
+    - **Запасы по классификации SPE-PRMS**:
+      - `reserves_proven_{product}` (1P): доказанные запасы
+      - `reserves_probable_{product}` (2P): вероятные запасы
+      - `reserves_possible_{product}` (3P): возможные запасы (опционально)
+    - **Добыча**: `production_{product}` — текущий уровень добычи.
+  - Единицы измерения для O&G: `bbl`, `mbbl`, `mmbbl` (нефть), `bcf`, `tcf`, `mcf` (газ), `boe` (barrels of oil equivalent), `bpd`, `mbpd` (добыча в день).
+  - Обновить Critic Agent: если для O&G upstream компании отсутствуют связанные `/deposit/` или `/fac/`, или отсутствует информация о reserves/production — добавлять в `missingInfo` конкретные вопросы.
+  - Обновить Scout/Research промпты: при разведке O&G компаний явно извлекать информацию о месторождениях (`/deposit/`), производственных объектах (`/fac/`), и reserves/production **с корректными единицами измерения**.
+- **Новый тип сущности: Natural Resource Deposit (`/deposit/`)**
+  - **Назначение**: моделирование геологических единиц (месторождения, бассейны, формации) с ресурсными характеристиками. Отличается от `/loc/` (административно-географическая единица) и `/fac/` (производственный объект).
+  - **Canonical path format**: `/deposit/{resource-slug}/{deposit-slug}`
+    - `{resource-slug}`: основной (primary) тип ресурса в deposit'е
+    - `{deposit-slug}`: уникальный идентификатор месторождения (lowercase, slugified)
+  - **Примеры canonical paths**:
+    - `/deposit/crude-oil/permian-basin` — Permian Basin (Texas/New Mexico)
+    - `/deposit/crude-oil/ghawar` — Ghawar Field (Saudi Arabia)
+    - `/deposit/natural-gas/north-sea` — North Sea gas fields
+    - `/deposit/lithium/atacama-salar` — Salar de Atacama (Chile)
+    - `/deposit/copper/escondida` — Escondida copper deposit (Chile)
+    - `/deposit/iron-ore/pilbara` — Pilbara iron ore province (Australia)
+    - `/deposit/gold/witwatersrand` — Witwatersrand Basin (South Africa)
+    - `/deposit/uranium/olympic-dam` — Olympic Dam (Australia, polymetallic)
+  - **FragmentType**: `DEPOSIT`
+  - **Deposit-specific атрибуты** (через `Identifiers` или новые поля):
+    - `depositKind`: классификация типа месторождения
+      - O&G: `basin`, `field`, `formation`, `play`, `block`
+      - Mining: `deposit`, `belt`, `province`, `district`, `salar`
+    - `primaryResource`: основной ресурс (используется в canonical path)
+    - `secondaryResources`: дополнительные ресурсы (для polymetallic deposits)
+    - `geologicalAge`: геологический возраст (опционально)
+    - `discoveryYear`: год открытия (опционально)
+  - **Multi-resource deposits**: если deposit содержит несколько ресурсов (напр. Olympic Dam = uranium + copper + gold):
+    - Primary resource → идёт в canonical path
+    - Secondary resources → хранятся в `Identifiers["secondaryResources"]` или `Tags`
+    - Reserves/production хранятся отдельно для каждого ресурса в `State`
+  - **Связи (relation types)**:
+    - `EXTRACTS_FROM` (новый тип): `/fac/` → `/deposit/` — facility добывает из месторождения
+    - `LOCATED_IN`: `/deposit/` → `/loc/` — месторождение находится в регионе
+    - `OPERATES_IN`: `/org/` → `/deposit/` — компания работает в месторождении
+    - `PRODUCES`: `/deposit/` → `/product/` — месторождение производит ресурс (агрегированно)
+  - **Хранение метрик reserves/production** (используем существующий `State map[string]MetricValue`):
+    - Naming convention для ключей:
+      - `reserves_proven_{product}` — доказанные запасы (1P / SPE-PRMS proven)
+      - `reserves_probable_{product}` — вероятные запасы (2P / SPE-PRMS probable)
+      - `reserves_possible_{product}` — возможные запасы (3P / SPE-PRMS possible)
+      - `production_{product}` — текущая добыча
+    - `MetricValue.Value` — абсолютное значение (float64, поддерживает большие числа)
+    - `MetricValue.Unit` — единица измерения из `allowedMetricUnits`
+    - `MetricValue.ObservedAt` — дата актуальности данных (важно для reserves)
+    - `MetricValue.Confidence` — уверенность в оценке
+    - `MetricValue.Provenance` — источник данных
+  - **Пример структуры для O&G deposit**:
+    ```json
+    {
+      "canonicalPath": "/deposit/crude-oil/permian-basin",
+      "type": "DEPOSIT",
+      "labels": {"en": "Permian Basin"},
+      "identifiers": {
+        "depositKind": "basin",
+        "primaryResource": "crude-oil",
+        "secondaryResources": "natural-gas,ngl"
+      },
+      "homeLocation": {
+        "name": "West Texas / Southeast New Mexico",
+        "iso3166_1": "US",
+        "iso3166_2": "US-TX"
+      },
+      "state": {
+        "reserves_proven_crude_oil": {"value": 46000000000, "unit": "bbl", "confidence": 0.95, "observedAt": "2024-01-15T00:00:00Z"},
+        "reserves_probable_crude_oil": {"value": 12000000000, "unit": "bbl", "confidence": 0.8},
+        "reserves_proven_natural_gas": {"value": 75, "unit": "tcf", "confidence": 0.9},
+        "production_crude_oil": {"value": 5500000, "unit": "bpd", "confidence": 0.95}
+      }
+    }
+    ```
+  - **Пример структуры для mining deposit**:
+    ```json
+    {
+      "canonicalPath": "/deposit/lithium/atacama-salar",
+      "type": "DEPOSIT",
+      "labels": {"en": "Salar de Atacama"},
+      "identifiers": {
+        "depositKind": "salar",
+        "primaryResource": "lithium",
+        "secondaryResources": "potassium"
+      },
+      "homeLocation": {
+        "name": "Atacama Desert, Chile",
+        "iso3166_1": "CL",
+        "iso3166_2": "CL-AN"
+      },
+      "state": {
+        "reserves_proven_lithium_carbonate": {"value": 6800000, "unit": "metric_tons", "confidence": 0.9},
+        "reserves_probable_lithium_carbonate": {"value": 2100000, "unit": "metric_tons", "confidence": 0.75},
+        "production_lithium_carbonate": {"value": 85000, "unit": "metric_tons_per_year", "confidence": 0.95},
+        "reserves_proven_potassium": {"value": 1200000000, "unit": "metric_tons", "confidence": 0.85}
+      }
+    }
+    ```
+  - **Связь `/deposit/` и `/product/`** — разные сущности:
+    - `/deposit/` — геологический объект с запасами
+    - `/product/` — товар/материал в supply chain
+    - Один deposit → много products (Atacama даёт lithium и potassium)
+    - Один product → много deposits (lithium добывают из разных месторождений)
+  - **Scout/Critic интеграция**:
+    - При скаутинге extractive company → проверять наличие `/deposit/` или `/fac/` с reserves
+    - Если reserves известны только для deposit (не для fac) → создать `/deposit/`, привязать reserves туда
+    - Если reserves известны для конкретного fac → хранить на fac
+    - Critic должен требовать `/deposit/` для upstream O&G и mining companies
+- **Расширение таксономии продуктов для extractive industries**
+  - **AllowedProductTypes** — добавить:
+    - `hydrocarbon` — crude oil, condensate, NGL
+    - `fuel` — refined fuels (gasoline, diesel, jet fuel)
+    - `petrochemical` — ethylene, propylene, polymers
+  - **AllowedProductStages** — добавить:
+    - `liquefaction` — LNG production
+    - `cracking` — petrochemical cracking
+  - **KnownProducts** — расширить словарь:
+    - **O&G Upstream**: `crude-oil`, `natural-gas`, `condensate`, `ngl`
+    - **O&G Midstream/Downstream**: `lng`, `gasoline`, `diesel`, `jet-fuel`, `naphtha`, `ethylene`, `propylene`
+    - **Mining (расширить)**: `iron-ore`, `copper-ore`, `copper-concentrate`, `refined-copper`, `gold-ore`, `gold-bullion`, `rare-earth-ore`, `neodymium-oxide`, `uranium-ore`, `yellowcake`
+  - **ProductSynonyms** — добавить алиасы:
+    - O&G: `oil` → `crude-oil`, `petroleum` → `crude-oil`, `gas` → `natural-gas`, `petrol` → `gasoline`, etc.
+    - Mining: `iron` → `iron-ore`, `copper` → `copper-ore`, `gold` → `gold-ore`, `u3o8` → `yellowcake`, etc.
+  - **Примеры canonical paths для продуктов**:
+    - `/product/raw/hydrocarbon/extraction/crude-oil`
+    - `/product/raw/hydrocarbon/liquefaction/lng`
+    - `/product/finished/fuel/refining/gasoline`
+    - `/product/component/petrochemical/cracking/ethylene`
+    - `/product/raw/mineral/extraction/iron-ore`
+    - `/product/component/mineral/refining/refined-copper`
+- **Расширение canonical path для Services (отдельная структура для услуг)**
+  - **Проблема**: Текущий формат `/product/{category}/{type}/{stage}/{slug}` не подходит для услуг:
+    - `type` (mineral/electronic/chemical) — бессмысленно для IT-консалтинга
+    - `stage` (extraction/manufacturing) — бессмысленно для услуг
+    - Если domain услуги только в slug — **pattern matching невозможен** для модели рисков
+  - **Зачем нужна сегментация**: Модель рисков/ограничений будет:
+    1. Канонизировать ограничение: "IT-услуги в RU" → pattern `/product/service/it/*`
+    2. Алгоритмически искать в графе edges по pattern match
+    3. Сегментность canonical path позволяет matching без знания конкретных slug'ов
+  - **Решение**: Отдельный формат для services:
+    ```
+    Goods (текущее):  /product/{category}/{type}/{stage}/{slug}
+    Services (новое): /product/service/{domain}/{subdomain}/{slug}
+    ```
+  - **AllowedServiceDomains** — новый словарь:
+    ```go
+    AllowedServiceDomains: []string{
+        "it",           // IT services, software, cloud, hosting
+        "financial",    // banking, insurance, payments, investment
+        "legal",        // law, compliance, audit, notary
+        "consulting",   // management, strategy, advisory
+        "logistics",    // transport, warehousing, customs
+        "engineering",  // R&D, design, architecture
+        "media",        // advertising, PR, content, broadcasting
+        "telecom",      // communications, internet, mobile
+        "education",    // training, certification, academic
+        "healthcare",   // medical, pharma, clinical
+        "construction", // building, civil engineering
+        "security",     // physical, cyber, investigation
+        "hr",           // recruitment, staffing, payroll
+        "real-estate",  // brokerage, property management
+    }
+    ```
+  - **AllowedServiceSubdomains** — по domain:
+    | Domain | Subdomains |
+    |--------|------------|
+    | `it` | `software`, `cloud`, `hosting`, `consulting`, `integration`, `support`, `security`, `data` |
+    | `financial` | `banking`, `insurance`, `payments`, `investment`, `audit`, `tax`, `crypto` |
+    | `legal` | `corporate`, `litigation`, `compliance`, `ip`, `sanctions`, `immigration` |
+    | `consulting` | `management`, `strategy`, `operations`, `hr`, `marketing` |
+    | `logistics` | `freight`, `warehousing`, `customs`, `courier`, `cold-chain` |
+    | `engineering` | `design`, `rd`, `testing`, `certification`, `maintenance` |
+    | `media` | `advertising`, `pr`, `content`, `broadcasting`, `production` |
+    | `telecom` | `mobile`, `fixed`, `internet`, `satellite`, `voip` |
+  - **Примеры canonical paths для services**:
+    - `/product/service/it/software/custom-development`
+    - `/product/service/it/cloud/hosting`
+    - `/product/service/it/consulting/digital-transformation`
+    - `/product/service/financial/banking/payment-processing`
+    - `/product/service/financial/audit/external-audit`
+    - `/product/service/legal/compliance/sanctions-advisory`
+    - `/product/service/legal/corporate/m-and-a`
+    - `/product/service/logistics/freight/air-cargo`
+    - `/product/service/consulting/strategy/market-entry`
+  - **Pattern matching для модели рисков**:
+    - "Запретить все IT-услуги" → `/product/service/it/*`
+    - "Запретить банковские услуги" → `/product/service/financial/banking/*`
+    - "Запретить юр. консультации по санкциям" → `/product/service/legal/compliance/sanctions-*`
+    - "Запретить все финансовые услуги" → `/product/service/financial/*`
+  - **Пример использования с jurisdictions**:
+    ```
+    Санкция: "IT-услуги из KZ в RU запрещены"
+    
+    Канонизация ограничения:
+      product_pattern: /product/service/it/*
+      source_jurisdiction: kz
+      target_jurisdiction: ru
+    
+    Алгоритмическая проверка:
+      for edge in edges where edge.type == "SUPPLIES_TO":
+          if edge.source.jurisdiction == "kz" 
+             && edge.target.jurisdiction == "ru"
+             && match(edge.qualifiers.product, "/product/service/it/*"):
+              → RISK SIGNAL
+    ```
+  - **KnownServices** — словарь известных услуг:
+    ```go
+    KnownServices: map[string]ServiceSpecData{
+        "custom-software-development": {Domain: "it", Subdomain: "software"},
+        "cloud-hosting": {Domain: "it", Subdomain: "cloud"},
+        "payment-processing": {Domain: "financial", Subdomain: "banking"},
+        "external-audit": {Domain: "financial", Subdomain: "audit"},
+        "sanctions-compliance": {Domain: "legal", Subdomain: "compliance"},
+        "air-freight": {Domain: "logistics", Subdomain: "freight"},
+    }
+    ```
+  - **ServiceSynonyms** — алиасы:
+    ```go
+    ServiceSynonyms: map[string]string{
+        "software development": "custom-software-development",
+        "app development": "custom-software-development",
+        "web hosting": "cloud-hosting",
+        "aws": "cloud-hosting",
+        "gcp": "cloud-hosting",
+        "azure": "cloud-hosting",
+        "payment gateway": "payment-processing",
+        "sanctions screening": "sanctions-compliance",
+        "aml": "sanctions-compliance",
+    }
+    ```
+  - **Интеграция с goods**: Goods сохраняют текущий формат, services — новый:
+    - Goods: `/product/{category}/{type}/{stage}/{slug}` где category ≠ "service"
+    - Services: `/product/service/{domain}/{subdomain}/{slug}`
+    - Общий prefix `/product/` сохраняется для единообразия
+  - **Scout/Critic интеграция**:
+    - При извлечении услуг Scout должен определять domain/subdomain
+    - Critic требует корректный формат для services
+    - Если domain не определён → fallback `/product/service/other/{slug}` с missingInfo
+  - **Чеклист изменений**:
+    - [ ] `backend/internal/models/horizon_taxonomy.go` → добавить `AllowedServiceDomains []string`, `AllowedServiceSubdomains map[string][]string`
+    - [ ] `backend/cmd/tools/horizon_seed_taxonomy/main.go` → заполнить domains и subdomains
+    - [ ] `backend/internal/taxonomy/runtime.go` → `NormalizeServicePath()`, `ValidateServicePath()`
+    - [ ] `backend/internal/horizon/scout/agents/scout_agent.go` → логика определения domain/subdomain для services
+    - [ ] `docs/horizon/architecture/taxonomy.md` → документировать формат services
+- **Расширение allowedMetricUnits для extractive industries**
+  - **O&G units (volume)**:
+    - `bbl` — barrel (основная единица нефти)
+    - `mbbl` — thousand barrels
+    - `mmbbl` — million barrels
+    - `bcf` — billion cubic feet (газ)
+    - `tcf` — trillion cubic feet (газ)
+    - `mcf` — thousand cubic feet (газ)
+    - `boe` — barrels of oil equivalent (конвертация газ → нефть)
+  - **O&G units (rate)**:
+    - `bpd` — barrels per day
+    - `mbpd` — thousand barrels per day
+    - `mcf_per_day` — thousand cubic feet per day
+    - `mmcf_per_day` — million cubic feet per day
+  - **Mining units (mass)**:
+    - `metric_tons` — метрические тонны
+    - `kt` — thousand metric tons
+    - `mt` — million metric tons
+    - `tons` — short tons (US)
+    - `oz` — troy ounces (precious metals)
+    - `moz` — million troy ounces
+    - `kg` — kilograms
+    - `g` — grams
+    - `lbs` — pounds
+    - `carats` — carats (diamonds)
+  - **Mining units (rate)**:
+    - `metric_tons_per_year` — годовая добыча
+    - `oz_per_year` — унции в год (precious metals)
+    - `kt_per_year` — тысячи тонн в год
+- **Новый relation type: EXTRACTS_FROM**
+  - **Направление**: `/fac/` → `/deposit/` (facility извлекает ресурсы из месторождения)
+  - **Семантика**: более точная, чем `LOCATED_IN`, отражает операционную связь
+  - **Использование**:
+    - Шахта `/fac/bhp/escondida-mine` → `EXTRACTS_FROM` → `/deposit/copper/escondida`
+    - Скважина `/fac/aramco/ghawar-field-ops` → `EXTRACTS_FROM` → `/deposit/crude-oil/ghawar`
+  - **Fallback**: если точная связь неизвестна, можно использовать `LOCATED_IN`
+  - **Добавить в AllowedRelationTypes**: `EXTRACTS_FROM`
+- **Allowed deposit resource slugs** (новый словарь в runtime taxonomy):
+  - **Hydrocarbons**: `crude-oil`, `natural-gas`, `oil-gas` (combined), `coal`, `oil-sands`, `shale-oil`
+  - **Base metals**: `copper`, `zinc`, `nickel`, `aluminum`, `tin`, `lead`
+  - **Precious metals**: `gold`, `silver`, `platinum`, `palladium`
+  - **Battery metals**: `lithium`, `cobalt`
+  - **Ferrous**: `iron-ore`, `manganese`, `chromium`
+  - **Strategic/Rare**: `rare-earth`, `uranium`, `tungsten`, `molybdenum`
+  - **Industrial minerals**: `potash`, `phosphate`, `sulfur`
+- **Чеклист изменений для extractive industries support (код + таксономия)**
+  - [ ] **CanonicalPrefixes** — добавить `/deposit/` в:
+    - `backend/cmd/tools/horizon_seed_taxonomy/main.go` → `CanonicalPrefixes`
+    - `docs/horizon/architecture/taxonomy.md` (документация)
+  - [ ] **FragmentType** — добавить `DEPOSIT` в:
+    - `backend/internal/horizon/models/common.go` → `FragmentTypeDeposit = "DEPOSIT"`
+    - Обновить switch-case в `engine.go`, `taxonomy.go` и других местах, где определяется тип по canonical path prefix
+  - [ ] **AllowedRelationTypes** — добавить `EXTRACTS_FROM` в:
+    - `backend/cmd/tools/horizon_seed_taxonomy/main.go` → `AllowedRelationTypes`
+    - `backend/internal/taxonomy/runtime.go` → `builtInAllowedRelationTypes`
+  - [ ] **AllowedMetricUnits** — расширить в:
+    - `backend/cmd/tools/horizon_seed_taxonomy/main.go` → `AllowedMetricUnits`
+    - Добавить: `bbl`, `mbbl`, `mmbbl`, `bcf`, `tcf`, `mcf`, `boe`, `bpd`, `mbpd`, `metric_tons`, `kt`, `mt`, `oz`, `moz`, `kg`, `lbs`, `carats`, `metric_tons_per_year`, `oz_per_year`, `kt_per_year`
+  - [ ] **AllowedProductTypes** — расширить в:
+    - `backend/cmd/tools/horizon_seed_taxonomy/main.go` → `AllowedProductTypes`
+    - Добавить: `hydrocarbon`, `fuel`, `petrochemical`
+  - [ ] **AllowedProductStages** — расширить в:
+    - `backend/cmd/tools/horizon_seed_taxonomy/main.go` → `AllowedProductStages`
+    - Добавить: `liquefaction`, `cracking`
+  - [ ] **KnownProducts** — расширить в:
+    - `backend/cmd/tools/horizon_seed_taxonomy/main.go` → `KnownProducts`
+    - Добавить O&G продукты: `crude-oil`, `natural-gas`, `condensate`, `ngl`, `lng`, `gasoline`, `diesel`, `jet-fuel`, `naphtha`, `ethylene`, `propylene`
+    - Добавить mining продукты: `iron-ore`, `copper-ore`, `copper-concentrate`, `refined-copper`, `gold-ore`, `gold-bullion`, `rare-earth-ore`, `neodymium-oxide`, `uranium-ore`, `yellowcake`
+  - [ ] **ProductSynonyms** — расширить в:
+    - `backend/cmd/tools/horizon_seed_taxonomy/main.go` → `ProductSynonyms`
+    - O&G: `oil` → `crude-oil`, `petroleum` → `crude-oil`, `gas` → `natural-gas`, `petrol` → `gasoline`, etc.
+    - Mining: `iron` → `iron-ore`, `copper` → `copper-ore`, `gold` → `gold-ore`, `u3o8` → `yellowcake`, etc.
+  - [ ] **AllowedDepositResources** — новый словарь в:
+    - `backend/internal/models/horizon_taxonomy.go` → добавить поле `AllowedDepositResources []string`
+    - `backend/cmd/tools/horizon_seed_taxonomy/main.go` → заполнить словарь
+    - `backend/internal/taxonomy/runtime.go` → добавить `AllowedDepositResources` в `RuntimeTaxonomy`
+    - `backend/internal/taxonomy/cache_firestore.go` → загрузка из Firestore
+  - [ ] **Scout/Critic промпты** — обновить для extractive industries:
+    - `backend/internal/horizon/scout/agents/scout_agent.go` → добавить `/deposit/` в canonical path rules
+    - `backend/internal/horizon/scout/agents/critic_agent.go` → добавить проверку `/deposit/` для mining/O&G
+    - `backend/internal/horizon/scout/taxonomy_classifier.go` → добавить DEPOSIT classification
+  - [ ] **Critic: обязательные products для FACILITY** (независимо от specialty):
+    - Для **любого `/fac/`** Critic должен требовать:
+      - Наличие связей `PRODUCES → /product/...` (что производит facility)
+      - Наличие связей `CONSUMES → /product/...` (что потребляет facility)
+      - Если products отсутствуют — добавлять в `missingInfo` вопросы с требованием canonical `/product/...` paths
+    - Для **extractive `/fac/`** (mining: `/Materials/Mining/*`, O&G: `/Energy/Fossil_Fuels/Oil_Gas_*`):
+      - Требовать reserves/production метрики **по каждому продукту отдельно** (не агрегированно)
+      - Naming convention: `reserves_proven_{product_slug}`, `production_{product_slug}`
+      - Если reserves известны только на уровне deposit → требовать `/deposit/` с `EXTRACTS_FROM` связью
+    - Текущий gap: Critic спрашивает "what products" только при specialty=products_and_services, и не требует создания `/product/` фрагментов
+    - Обновить `critic_agent.go`:
+      ```
+      - If entity is FACILITY (canonicalPath starts with /fac/):
+        - MANDATORY: If no PRODUCES relations with /product/... targets exist, add:
+          "What products does this facility produce? Return as /product/{category}/{type}/{stage}/{slug} canonical paths."
+        - MANDATORY: If no CONSUMES relations with /product/... targets exist, add:
+          "What inputs/materials does this facility consume? Return as /product/... canonical paths."
+        - If facility is in extractive sector (mining/O&G based on sectorPath):
+          - For each product in PRODUCES: require reserves and production metrics
+          - If reserves are at deposit level, require /deposit/ and EXTRACTS_FROM relation
+      ```
+  - [ ] **Critic: обязательные products/services для ORGANIZATION** (профильные компании):
+    - Для **любого `/org/`** Critic должен определить:
+      1. Это **операционная компания** (производит products/services сама)?
+      2. Или это **холдинг/головная компания** (производит через дочерние общества)?
+    - **Логика определения**:
+      - Если есть `OWNS` или `SUBSIDIARY_OF` (inverse) edges → вероятно холдинг
+      - Если `sectorPath` = `/Financials/Capital_Markets/*` или `/Organization/Holding` → холдинг
+      - Если нет subsidiaries и не холдинг → операционная компания
+    - **Для операционной компании** (`/org/` без subsidiaries):
+      - MANDATORY: Требовать связи `PRODUCES → /product/...` или `PRODUCES → /product/service/...`
+      - Если products/services отсутствуют — добавлять в `missingInfo`:
+        - "What products does <org> manufacture/produce? Return as /product/{category}/{type}/{stage}/{slug} canonical paths."
+        - "What services does <org> provide? Return as /product/service/{domain}/{subdomain}/{slug} canonical paths."
+    - **Для холдинга/головной компании** (`/org/` с subsidiaries):
+      - MANDATORY: **Сначала** требовать subsidiaries через `OWNS` или обратные `SUBSIDIARY_OF`
+      - Добавлять в `missingInfo`:
+        - "What are the operating subsidiaries of <org>? Return as /org/{iso2}/{slug} canonical paths with OWNS relations and ownership_percent."
+      - **Затем** для каждой subsidiary требовать products/services (рекурсивно)
+      - Холдинг сам НЕ обязан иметь PRODUCES — products привязаны к subsidiaries
+    - **Примеры**:
+      - `Alphabet Inc` (холдинг) → OWNS → `Google LLC`, `Waymo`, `DeepMind` (subsidiaries)
+      - `Google LLC` (операционная) → PRODUCES → `/product/service/it/cloud/gcp`, `/product/service/media/advertising/google-ads`
+      - `Tesla Inc` (операционная, не холдинг) → PRODUCES → `/product/finished/mechanical/assembly/electric-vehicle`
+    - **Порядок проверки Critic**:
+      ```
+      1. If entity is ORGANIZATION (canonicalPath starts with /org/):
+         a. Check if entity has OWNS edges to other /org/ (subsidiaries)
+         b. If YES (holding company):
+            - If subsidiaries list is incomplete or missing → add to missingInfo:
+              "What operating subsidiaries does <org> own? Include ownership percentage."
+            - Do NOT require PRODUCES for the holding itself
+            - Flag subsidiaries for separate scouting with products/services requirement
+         c. If NO (operating company):
+            - MANDATORY: If no PRODUCES relations exist → add to missingInfo:
+              "What products does <org> produce?" and/or
+              "What services does <org> provide?"
+            - Require canonical /product/... or /product/service/... paths
+      2. For FACILITY (/fac/): always require PRODUCES (as before)
+      ```
+    - **Связь с equity specialty**:
+      - Если запрошена specialty=equity → усиленные требования к ownership structure
+      - Требовать полную цепочку: ultimate parent → intermediate holdings → operating companies
+    - **Чеклист**:
+      - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → добавить логику holding vs operating
+      - [ ] Определить эвристику "is_holding_company" (по OWNS edges, sectorPath, entityPath)
+      - [ ] Для холдингов: сначала subsidiaries, потом products на subsidiaries
+      - [ ] Для операционных: сразу products/services
+  - [ ] **Canonical path inference** — обновить:
+    - `backend/internal/horizon/scout/taxonomy.go` → `InferTaxonomyFromCanonicalPath` для `/deposit/`
+  - [ ] **Документация** — обновить:
+    - `docs/horizon/architecture/taxonomy.md` — добавить секцию про `/deposit/`
+    - `docs/horizon/architecture/data-model.md` — добавить DEPOSIT fragment type
+  - [ ] **Firestore re-seed** — после изменений:
+    - Выполнить `go run ./cmd/tools/horizon_seed_taxonomy --project <project> --version v1`
+- **Lifecycle Stages для HorizonFragment (стадии строительства и жизненного цикла)**
+  - **Проблема**: Не все `/fac/`, `/deposit/`, `/org/` существуют и работают. Некоторые строятся, планируются, законсервированы или закрыты. Текущая модель не различает "завод работает" от "завод строится".
+  - **Решение**: Добавить поля lifecycle в `HorizonFragment`:
+    ```go
+    type HorizonFragment struct {
+        // ... existing fields ...
+        
+        // Lifecycle — стадия жизненного цикла объекта в реальном мире
+        LifecycleStage    string     `json:"lifecycleStage,omitempty" firestore:"lifecycleStage,omitempty"`
+        ExpectedStartDate *time.Time `json:"expectedStartDate,omitempty" firestore:"expectedStartDate,omitempty"`
+        ActualStartDate   *time.Time `json:"actualStartDate,omitempty" firestore:"actualStartDate,omitempty"`
+        ExpectedEndDate   *time.Time `json:"expectedEndDate,omitempty" firestore:"expectedEndDate,omitempty"`
+        ActualEndDate     *time.Time `json:"actualEndDate,omitempty" firestore:"actualEndDate,omitempty"`
+    }
+    ```
+  - **Семантика полей**:
+    - `LifecycleStage` — текущая стадия объекта (canonical value из словаря)
+    - `ExpectedStartDate` — когда объект **планируется** ввести в эксплуатацию (для construction)
+    - `ActualStartDate` — когда объект **фактически** начал работу
+    - `ExpectedEndDate` — когда объект **планируется** закрыть (decommissioning)
+    - `ActualEndDate` — когда объект **фактически** закрылся
+  - **Отличие от существующих полей**:
+    - `ValidFrom/ValidTo` — про валидность **наших данных** (когда мы знаем что информация верна)
+    - `Governance.Status` — про состояние **в нашей системе** (ACTIVE/DORMANT/ARCHIVED)
+    - `LifecycleStage` — про состояние **объекта в реальном мире** (строится/работает/закрыт)
+  - **Canonical lifecycle stages** (единый словарь для всех типов):
+    ```
+    AllowedLifecycleStages: []string{
+        // Ранние стадии
+        "concept",           // раннее планирование, pre-feasibility
+        "planning",          // детальное планирование, feasibility study
+        "permitting",        // получение разрешений, licensing
+        "financing",         // привлечение финансирования
+        
+        // Строительство
+        "construction",      // строительство, development drilling
+        "commissioning",     // пуско-наладка, ramp-up
+        
+        // Эксплуатация
+        "operational",       // в эксплуатации (default для работающих объектов)
+        "expansion",         // расширение (работает + строится дополнительная мощность)
+        
+        // Остановка
+        "suspended",         // временно остановлен, care & maintenance, shut-in
+        
+        // Закрытие
+        "decommissioning",   // вывод из эксплуатации, abandonment
+        "closed",            // закрыт, dissolved, depleted, demolished
+    }
+    ```
+  - **Маппинг по типам фрагментов**:
+    | Stage | FACILITY | DEPOSIT | ORGANIZATION |
+    |-------|----------|---------|--------------|
+    | `concept` | Pre-feasibility | Early exploration | Pre-incorporation |
+    | `planning` | Feasibility study | Appraisal | Business planning |
+    | `permitting` | Getting permits | Licensing | Registration |
+    | `financing` | Securing funding | — | Fundraising |
+    | `construction` | Building | Development drilling | — |
+    | `commissioning` | Ramp-up | First production | Launch |
+    | `operational` | Running ✓ | Production ✓ | Operating ✓ |
+    | `expansion` | Adding capacity | Infill drilling | Scaling |
+    | `suspended` | Idle / C&M | Shut-in | Dormant |
+    | `decommissioning` | Closing down | Abandonment | Liquidation |
+    | `closed` | Demolished | Depleted | Dissolved |
+  - **Industry-specific aliases** (для удобства маппятся в canonical):
+    - **O&G**: `exploration` → `concept`, `appraisal` → `planning`, `development` → `construction`, `production` → `operational`, `shut_in` → `suspended`
+    - **Mining**: `pre_feasibility` → `concept`, `feasibility` → `planning`, `development` → `construction`
+    - **ORG**: `startup` → `commissioning`, `restructuring` → `suspended`, `liquidation` → `decommissioning`, `dissolved` → `closed`
+  - **Примеры использования**:
+    ```json
+    {
+      "canonicalPath": "/fac/tesla/monterrey-gigafactory",
+      "type": "FACILITY",
+      "lifecycleStage": "construction",
+      "expectedStartDate": "2026-03-01T00:00:00Z",
+      "labels": {"en": "Tesla Gigafactory Monterrey"}
+    }
+    ```
+    ```json
+    {
+      "canonicalPath": "/deposit/lithium/thacker-pass",
+      "type": "DEPOSIT",
+      "lifecycleStage": "permitting",
+      "expectedStartDate": "2027-01-01T00:00:00Z",
+      "labels": {"en": "Thacker Pass Lithium Project"}
+    }
+    ```
+  - **Влияние на supply chain**:
+    - Объект в `construction` не может быть **текущим** supplier/customer
+    - Edges к таким объектам должны иметь `Qualifiers["modality"] = "projected"`
+    - Propagation engine учитывает lifecycleStage при расчёте весов:
+      - `operational` → нормальный вес
+      - `construction` → сниженный вес или отдельный "projected" signal
+      - `closed` → не участвует в propagation
+  - **Scout/Critic интеграция**:
+    - Scout должен извлекать lifecycleStage и dates из источников
+    - Critic должен требовать lifecycleStage для:
+      - Всех `/fac/` — обязательно
+      - Всех `/deposit/` — обязательно
+      - `/org/` в extractive sectors — обязательно
+    - Если lifecycleStage == "construction" или "planning", требовать expectedStartDate
+  - **Чеклист изменений**:
+    - [ ] `backend/internal/horizon/models/fragment.go` → добавить поля `LifecycleStage`, `ExpectedStartDate`, `ActualStartDate`, `ExpectedEndDate`, `ActualEndDate`
+    - [ ] `backend/internal/models/horizon_taxonomy.go` → добавить `AllowedLifecycleStages []string`
+    - [ ] `backend/cmd/tools/horizon_seed_taxonomy/main.go` → заполнить `AllowedLifecycleStages`
+    - [ ] `backend/internal/taxonomy/runtime.go` → добавить `AllowedLifecycleStages`, `NormalizeLifecycleStage()`
+    - [ ] `backend/internal/horizon/scout/agents/scout_agent.go` → извлекать lifecycle info
+    - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → требовать lifecycle для /fac/, /deposit/
+    - [ ] Propagation engine → учитывать lifecycleStage при расчёте весов
+    - [ ] `docs/horizon/architecture/taxonomy.md` → документировать lifecycle stages
+- **Edge Metrics (метрики на рёбрах: %, суммы, объёмы)**
+  - **Проблема**: Текущие edges имеют только абстрактные `EdgeProperties` (Criticality, Amplification, LatencyHours). Нет конкретных метрик:
+    - OWNS → на сколько %?
+    - INVESTS_IN → сколько вложил? каким раундом?
+    - SUPPLIES_TO → какой объём? на какую сумму?
+  - **Решение**: Добавить `Metrics map[string]MetricValue` в `DependencyEdge`:
+    ```go
+    type DependencyEdge struct {
+        // ... existing fields ...
+        
+        // Edge-specific metrics — numerical data with units (like fragment State)
+        Metrics map[string]MetricValue `json:"metrics,omitempty" firestore:"metrics,omitempty"`
+    }
+    ```
+  - **Переиспользуем существующий MetricValue**:
+    - `Value` (float64) — значение
+    - `Unit` (*string) — единица измерения
+    - `Confidence` (float64) — уверенность
+    - `ObservedAt` (time.Time) — дата наблюдения
+    - `Provenance` — источник данных
+    - `ErrorMargin` — интервал ошибки
+  - **Разделение Metrics vs Qualifiers**:
+    - `Qualifiers` (существующий) — categorical/string данные (`round: "series_b"`, `product: "/product/..."`)
+    - `Metrics` (новый) — numerical данные с unit/confidence/provenance
+  - **Canonical metric names по типам edges**:
+    | Edge Type | Metric Name | Unit | Описание |
+    |-----------|-------------|------|----------|
+    | `OWNS` | `ownership_percent` | `percent` | Доля владения |
+    | `OWNS` | `voting_percent` | `percent` | Доля голосов (если отличается) |
+    | `SUBSIDIARY_OF` | `ownership_percent` | `percent` | Доля владения родителем |
+    | `INVESTS_IN` | `investment_amount` | currency | Сумма инвестиции |
+    | `INVESTS_IN` | `round_size_total` | currency | Общий размер раунда |
+    | `SUPPLIES_TO` | `annual_volume` | varies | Годовой объём поставок |
+    | `SUPPLIES_TO` | `contract_value` | currency | Стоимость контракта |
+    | `SUPPLIES_TO` | `contract_duration_years` | `years` | Срок контракта |
+    | `PRODUCES` | `annual_capacity` | varies | Годовая мощность |
+    | `PRODUCES` | `annual_output` | varies | Фактический выпуск |
+    | `CONSUMES` | `annual_consumption` | varies | Годовое потребление |
+    | `EXTRACTS_FROM` | `annual_extraction` | varies | Годовая добыча |
+    | `EMPLOYED_BY` | `tenure_years` | `years` | Стаж работы |
+    | `EMPLOYED_BY` | `compensation` | currency | Компенсация |
+    | `BOARD_MEMBER_OF` | `tenure_years` | `years` | Срок в совете |
+    | `OPERATES_IN` | `market_share` | `percent` | Доля рынка |
+    | `COMPETES_WITH` | `relative_market_share` | `ratio` | Относительная доля |
+  - **Canonical qualifiers по типам edges** (categorical, в Qualifiers):
+    | Edge Type | Qualifier | Values |
+    |-----------|-----------|--------|
+    | `INVESTS_IN` | `round` | `seed`, `series_a`, `series_b`, `series_c`, `series_d`, `growth`, `ipo`, `secondary` |
+    | `INVESTS_IN` | `roundDate` | ISO date string |
+    | `SUPPLIES_TO` | `product` | `/product/...` canonical path |
+    | `PRODUCES` | `product` | `/product/...` canonical path |
+    | `CONSUMES` | `product` | `/product/...` canonical path |
+    | `EXTRACTS_FROM` | `product` | `/product/...` canonical path |
+    | `EMPLOYED_BY` | `role` | `ceo`, `cfo`, `coo`, `cto`, etc. |
+    | `EMPLOYED_BY` | `startDate` | ISO date string |
+    | `BOARD_MEMBER_OF` | `committees` | comma-separated list |
+    | `REGULATES` | `regulationType` | `licensing`, `environmental`, `safety`, etc. |
+  - **Примеры использования**:
+    ```json
+    {
+      "type": "OWNS",
+      "sourceFragmentId": "/org/sa/aramco",
+      "targetFragmentId": "/org/kr/s-oil",
+      "metrics": {
+        "ownership_percent": {
+          "value": 63.4,
+          "unit": "percent",
+          "confidence": 0.99,
+          "observedAt": "2024-01-01T00:00:00Z"
+        }
+      },
+      "properties": {"criticality": 0.9}
+    }
+    ```
+    ```json
+    {
+      "type": "INVESTS_IN",
+      "sourceFragmentId": "/org/us/sequoia",
+      "targetFragmentId": "/org/us/stripe",
+      "metrics": {
+        "investment_amount": {"value": 500000000, "unit": "usd", "confidence": 0.9}
+      },
+      "qualifiers": {
+        "round": "series_h",
+        "roundDate": "2023-03-15"
+      }
+    }
+    ```
+    ```json
+    {
+      "type": "SUPPLIES_TO",
+      "sourceFragmentId": "/org/cl/sqm",
+      "targetFragmentId": "/org/cn/catl",
+      "metrics": {
+        "annual_volume": {"value": 50000, "unit": "metric_tons_per_year"},
+        "contract_value": {"value": 1500000000, "unit": "usd"},
+        "contract_duration_years": {"value": 5, "unit": "years"}
+      },
+      "qualifiers": {
+        "product": "/product/raw/chemical/refining/lithium-carbonate"
+      }
+    }
+    ```
+  - **Связь Metrics → Criticality**:
+    - `EdgeProperties.Criticality` может быть **derived** из Metrics
+    - Например: OWNS с ownership_percent > 50% → criticality = 0.9
+    - Или: SUPPLIES_TO с contract_value > $1B → criticality = 0.8
+    - Это делает граф самодокументируемым: criticality имеет обоснование
+  - **AllowedMetricUnits — расширить для edges**:
+    ```go
+    // Добавить к существующим
+    "percent",           // ownership, market share
+    "years",             // tenure, contract duration
+    "count",             // committees, employees
+    "ratio",             // relative values
+    ```
+  - **Scout/Critic интеграция**:
+    - Scout должен извлекать edge metrics из источников
+    - Critic должен требовать metrics для:
+      - `OWNS` → обязательно `ownership_percent`
+      - `INVESTS_IN` → желательно `investment_amount`, обязательно `round` qualifier
+      - `SUPPLIES_TO` → желательно `annual_volume` или `contract_value`
+    - Если metrics отсутствуют → добавлять в `missingInfo` вопросы
+  - **Связь с Events**:
+    - Investment rounds = Events (`/event/stripe-series-h-2023`)
+    - Edge `INVESTS_IN` может иметь `Qualifiers["eventId"]` → ссылка на Event fragment
+    - Event содержит полные детали: организаторы, все участники, условия
+    - Базовые metrics живут на edge, детали — в Event
+  - **Чеклист изменений**:
+    - [ ] `backend/internal/horizon/models/dependency_edge.go` → добавить `Metrics map[string]MetricValue`
+    - [ ] `backend/internal/models/horizon_taxonomy.go` → добавить `AllowedEdgeMetrics map[string][]string` (edge type → allowed metrics)
+    - [ ] `backend/cmd/tools/horizon_seed_taxonomy/main.go` → заполнить `AllowedEdgeMetrics`
+    - [ ] `backend/internal/taxonomy/runtime.go` → `AllowedEdgeMetrics`, `ValidateEdgeMetrics()`
+    - [ ] `backend/cmd/tools/horizon_seed_taxonomy/main.go` → расширить `AllowedMetricUnits` (`percent`, `years`, `count`, `ratio`)
+    - [ ] `backend/internal/horizon/scout/agents/scout_agent.go` → извлекать edge metrics
+    - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → требовать metrics для OWNS, INVESTS_IN, SUPPLIES_TO
+    - [ ] `docs/horizon/architecture/data-model.md` → документировать edge metrics
+- **Связь Lifecycle Stage → Edge Modality**
+  - **Проблема**: Если target fragment в `construction`, edge к нему — это "будущая" связь, не текущая.
+  - **Решение**: Автоматически помечать edges к non-operational targets:
+    - Если `target.LifecycleStage` не в [`operational`, `expansion`]:
+      - Устанавливать `edge.Qualifiers["modality"] = "projected"`
+      - Или `edge.ValidFrom` = target's `ExpectedStartDate`
+    - Propagation engine учитывает modality:
+      - `modality: "actual"` (default) → полный вес
+      - `modality: "projected"` → сниженный вес или отдельный signal type
+      - `modality: "historical"` → не участвует в текущем propagation
+  - **Canonical edge modalities**:
+    ```go
+    AllowedEdgeModalities: []string{
+        "actual",      // связь существует и активна (default)
+        "projected",   // связь планируется (target в construction)
+        "historical",  // связь существовала в прошлом
+        "potential",   // связь возможна, но не подтверждена
+    }
+    ```
+  - **Примеры**:
+    ```json
+    {
+      "type": "SUPPLIES_TO",
+      "sourceFragmentId": "/fac/tesla/monterrey-gigafactory",
+      "targetFragmentId": "/org/na/ford",
+      "qualifiers": {
+        "modality": "projected",
+        "product": "/product/component/electronic/manufacturing/battery-cell"
+      },
+      "validFrom": "2026-03-01T00:00:00Z"
+    }
+    ```
+  - **Чеклист изменений**:
+    - [ ] `backend/internal/models/horizon_taxonomy.go` → добавить `AllowedEdgeModalities []string`
+    - [ ] `backend/cmd/tools/horizon_seed_taxonomy/main.go` → заполнить `AllowedEdgeModalities`
+    - [ ] `backend/internal/horizon/scout/engine.go` → при создании edge проверять target.LifecycleStage и устанавливать modality
+    - [ ] Propagation engine → учитывать modality при расчёте весов
 - **Обработка метрик при propagation (семантика поверх "доставки дельт")**
   - Ввести registry/factory **именованных метрик**.
   - Для части метрик применять **детерминированные handler’ы** (algorithmic rules сначала): stateful / categorical / gated.
