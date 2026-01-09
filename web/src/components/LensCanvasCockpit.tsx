@@ -6286,7 +6286,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const aggKeysToSuppress = hovered ? (levelsAggKeysByNodeId.get(hovered) || null) : null;
 
       const selectedGroupId = String(selectedLevelsAggGroupId || '').trim();
-      const selectedEdgeType = normalizeEdgeType(selectedLevelsAggEdgeType);
+      const selectedEdgeType = normalizeEdgeType(selectedLevelsAggEdgeType ?? undefined);
       const selectedAggKey = String(selectedLevelsAggKey || '').trim();
       const selectedAggKeyIsGpair = !!selectedAggKey && selectedAggKey.startsWith('gpair:');
       const selectedGroupNode = selectedGroupId ? nodes.find((n) => String(n.id || '').trim() === selectedGroupId) : undefined;
@@ -6497,7 +6497,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // This should take precedence over hover modes (edge hover, node hover, group hover) so it doesn't look "in the background".
     if (isLevelsLayout) {
       const selectedGroupId = String(selectedLevelsAggGroupId || '').trim();
-      const selectedEdgeType = normalizeEdgeType(selectedLevelsAggEdgeType);
+      const selectedEdgeType = normalizeEdgeType(selectedLevelsAggEdgeType ?? undefined);
       const selectedAggKey = String(selectedLevelsAggKey || '').trim();
       if (selectedGroupId) {
         const groupNode = nodes.find((n) => String(n.id || '').trim() === selectedGroupId);
@@ -8470,7 +8470,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (layoutMode === 'levels' && isLevelsAgg && (isParentChildAggEdge || isGroupPairAggEdge) && isLevelsLeftGroup) {
       // Toggle preview for this exact group+type.
       const curGroup = String(selectedLevelsAggGroupId || '').trim();
-      const curType = normalizeEdgeType(selectedLevelsAggEdgeType);
+      const curType = normalizeEdgeType(selectedLevelsAggEdgeType ?? undefined);
       const curKey = String(selectedLevelsAggKey || '').trim();
       const nextKey = isGroupPairAggEdge ? aggKey : `${aggGroupId}::edge:${aggEdgeType}`;
       const same = curType === aggEdgeType && curKey === nextKey && (!isGroupPairAggEdge ? (curGroup === aggGroupId) : true);

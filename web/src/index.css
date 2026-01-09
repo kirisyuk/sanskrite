@@ -66,6 +66,62 @@
   50% { opacity: 0.7; transform: scale(1.1); }
 }
 
+/* ReactFlow Controls: theme-aware (buttons/icons) */
+.react-flow__controls {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+}
+.react-flow__controls button,
+.react-flow__controls .react-flow__controls-button {
+  background: transparent !important;
+  color: var(--text-heading) !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+}
+.react-flow__controls button:last-child,
+.react-flow__controls .react-flow__controls-button:last-child {
+  border-bottom: 0 !important;
+}
+.react-flow__controls button svg,
+.react-flow__controls .react-flow__controls-button svg {
+  color: inherit !important;
+  fill: currentColor !important;
+  stroke: currentColor !important;
+}
+[data-theme="dark"] .react-flow__controls button:hover,
+[data-theme="dark"] .react-flow__controls .react-flow__controls-button:hover {
+  background: var(--white-06) !important;
+}
+[data-theme="light"] .react-flow__controls button:hover,
+[data-theme="light"] .react-flow__controls .react-flow__controls-button:hover {
+  background: rgba(0, 0, 0, 0.04) !important;
+}
+.react-flow__controls button:focus-visible,
+.react-flow__controls .react-flow__controls-button:focus-visible {
+  outline: 2px solid var(--brand-35) !important;
+  outline-offset: -2px;
+}
+
+/* ReactFlow MiniMap: theme-aware container + outlines (node fill is controlled by nodeColor prop) */
+.react-flow__minimap {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+}
+.react-flow__minimap svg {
+  background: transparent !important;
+}
+.react-flow__minimap-mask {
+  stroke: var(--border-subtle) !important;
+}
+.react-flow__minimap-node {
+  stroke: var(--border-subtle) !important;
+  stroke-width: 1 !important;
+}
+
 /* Gradient border for UnfoldRequest in dark theme */
 [data-theme="dark"] .unfold-request-gradient-border {
   border: 2px solid transparent;

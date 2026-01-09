@@ -1156,6 +1156,35 @@ func (e *ScoutEngine) processRelationsInternal(
 			continue
 		}
 
+		// Resolve actual canonical paths after all normalizations (sourceID/targetID may have been swapped).
+		resolvedSourcePath := ""
+		resolvedTargetPath := ""
+		if edgeSourceID == sourceFragment.ID {
+			resolvedSourcePath = sourceFragment.CanonicalPath
+		} else if targetFragment != nil && edgeSourceID == targetFragment.ID {
+			resolvedSourcePath = targetFragment.CanonicalPath
+		} else if e.fragmentsRepo != nil {
+			if f, _ := e.fragmentsRepo.Get(ctx, edgeSourceID); f != nil {
+				resolvedSourcePath = f.CanonicalPath
+			}
+		}
+		if edgeTargetID == targetFragment.ID && targetFragment != nil {
+			resolvedTargetPath = targetFragment.CanonicalPath
+		} else if edgeTargetID == sourceFragment.ID {
+			resolvedTargetPath = sourceFragment.CanonicalPath
+		} else if e.fragmentsRepo != nil {
+			if f, _ := e.fragmentsRepo.Get(ctx, edgeTargetID); f != nil {
+				resolvedTargetPath = f.CanonicalPath
+			}
+		}
+		// Fallback to original paths if resolution failed
+		if resolvedSourcePath == "" {
+			resolvedSourcePath = sourceFragment.CanonicalPath
+		}
+		if resolvedTargetPath == "" {
+			resolvedTargetPath = targetPath
+		}
+
 		edge := &models.DependencyEdge{
 			TenantID:         "global",
 			SourceFragmentID: edgeSourceID,
@@ -1172,8 +1201,8 @@ func (e *ScoutEngine) processRelationsInternal(
 				"normalizedRelationType": normalizedRelationType,
 				"rawConfidence":          rel.Confidence,
 				"targetName":             strings.TrimSpace(rel.TargetName),
-				"targetCanonicalPath":    strings.TrimSpace(targetPath),
-				"sourceCanonicalPath":    strings.TrimSpace(sourceFragment.CanonicalPath),
+				"targetCanonicalPath":    strings.TrimSpace(resolvedTargetPath),
+				"sourceCanonicalPath":    strings.TrimSpace(resolvedSourcePath),
 			},
 			Provenance: models.Provenance{
 				Method:    provenanceMethod,

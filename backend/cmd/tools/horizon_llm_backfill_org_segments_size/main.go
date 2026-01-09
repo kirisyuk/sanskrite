@@ -934,8 +934,17 @@ CRITICAL OUTPUT RULES:
 - orgSize MUST be exactly one of: "sme" | "le" | "enterprise" | "mega" | "na"
 - marketSegments MUST be canonical paths: /segment/{domain}/{vertical}/{geo}
   - geo MUST be ISO3166-1 alpha2 lowercase (2 letters) or "global"
-  - Use domain as broad area (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate)
-  - vertical as specific industry slug (e.g., semiconductors, retail-banking, ev-batteries)
+  - domain and vertical MUST be SLUGS:
+    - lowercase a-z0-9 and hyphen '-' ONLY
+    - DO NOT use underscores '_' anywhere
+    - if you need separators, use '-' (kebab-case)
+    - examples:
+      - BAD:  /segment/agriculture/grain_production/global
+      - GOOD: /segment/agriculture/grain-production/global
+      - BAD:  /segment/financial-services/capital_markets/de
+      - GOOD: /segment/financial-services/capital-markets/de
+  - Use domain as broad area (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate|public|government|public-sector|professional-services|b2b|commercial)
+  - vertical as a specific industry slug (e.g., semiconductors, retail-banking, ev-batteries, oil-and-gas)
 - If cannot determine: orgSize="na" and marketSegments=[]
 
 INPUT ORGANIZATIONS (JSON array):
@@ -962,6 +971,10 @@ func buildTaskExecutorPrompt(items []ItemInput) string {
 Rules:
 - items MUST have exactly the same length as input, one item per org, and fragmentId must match.
 - marketSegments MUST be canonical (/segment/{domain}/{vertical}/{geo}) and geo must be iso2 or global.
+- domain and vertical MUST be slugs: lowercase a-z0-9 and hyphen '-' ONLY. NEVER use underscore '_'.
+  Examples:
+  - BAD:  /segment/agriculture/grain_production/global
+  - GOOD: /segment/agriculture/grain-production/global
 - orgSize must be one of sme|le|enterprise|mega|na.
 
 INPUT (JSON array):

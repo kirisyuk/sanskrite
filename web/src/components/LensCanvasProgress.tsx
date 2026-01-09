@@ -173,10 +173,11 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
             minHeight: 0,
             width: '100%',
             overflowY: 'auto',
-            padding: '16px 4px', // Небольшой отступ
+            padding: '16px 24px', // Match input container padding
           }}
         >
-          <div style={{ position: 'relative', paddingLeft: 36 }}>
+          {/* Constrain width to match input field below */}
+          <div style={{ maxWidth: 960, margin: '0 auto', position: 'relative', paddingLeft: 36 }}>
             {/* Timeline line */}
             <div
               style={{
