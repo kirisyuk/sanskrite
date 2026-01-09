@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ThemeContext } from './ThemeProvider';
 import type { SemanticGroup, LinearSection } from '../lib/elkLayout';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
+import { RiskSegmentIcon, computeRiskSegments, computeRiskSegmentSource, formatRiskLevel, clamp01, type RiskSegmentId } from '../lib/riskShield';
 
 // Типы нод для Horizon графа (на основе LensItem)
 export interface HorizonNodeData {
@@ -1642,6 +1643,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const { theme } = React.useContext(ThemeContext);
   const colors = getNodeColors(data.type, theme);
   const [isHovering, setIsHovering] = React.useState(false);
+  // Risk panel (below node): active tab + compact/full toggle.
+  const [riskTab, setRiskTab] = React.useState<RiskSegmentId>('geopolitical');
+  const [riskExpanded, setRiskExpanded] = React.useState(false);
   const rightFiltersRef = React.useRef<HTMLDivElement | null>(null);
   const rightFiltersBtnRef = React.useRef<HTMLButtonElement | null>(null);
   
@@ -1700,160 +1704,14 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   // Risk Shield button: only on "real" fragment nodes (not group nodes, not stack controllers, not stack members).
   // For now it's a pure UI affordance; wiring happens later.
   const showRiskShieldButton = Boolean(data.fragmentId && !String((data as any)?.stackGroupKey || '').trim());
+  const isRiskShieldOpen = Boolean(data.riskShieldOpen);
 
-  // Risk Shield computation (Horizon-native):
-  // - Prefer standardized segment rollup metrics: /metric/risk/risk_segment_<segmentId>
-  // - Fallback to currently propagated base metrics in fragment.state
-  const RISK_SEGMENTS = [
-    { id: 'geopolitical', color: '#F59E0B' },
-    { id: 'supply', color: '#14B8A6' },
-    { id: 'financial', color: '#10B981' },
-    { id: 'cyber', color: '#3B82F6' },
-    { id: 'esg', color: '#84CC16' },
-    { id: 'operational', color: '#64748B' },
-    { id: 'keyperson', color: '#8B5CF6' },
-    { id: 'regulatory', color: '#F43F5E' },
-  ] as const;
-
-  type RiskSegmentId = typeof RISK_SEGMENTS[number]['id'];
-  type RiskLevel = 'none' | 'low' | 'medium' | 'high' | 'critical';
-
-  const clamp01 = (x: number) => {
-    if (!Number.isFinite(x)) return 0;
-    if (x < 0) return 0;
-    if (x > 1) return 1;
-    return x;
-  };
-
-  const directionalToRisk01 = (x: number) => {
-    // Directional metrics are typically [-1..1]. Negative means "bad" (riskier).
-    // Map: -1 -> 1 (max risk), +1 -> 0 (min risk).
-    if (!Number.isFinite(x)) return 0;
-    if (x < -1) x = -1;
-    if (x > 1) x = 1;
-    return clamp01((-x + 1) / 2);
-  };
-
-  const metricValue = (baseOrKey: string): number | undefined => {
-    const s = (data as any)?.state as Record<string, number> | undefined;
-    if (!s) return undefined;
-    const k = String(baseOrKey || '').trim();
-    if (!k) return undefined;
-    // Exact key
-    if (typeof s[k] === 'number') return s[k];
-    // Canonical risk metric path
-    const riskPath = k.startsWith('/') ? k : `/metric/risk/${k}`;
-    if (typeof s[riskPath] === 'number') return s[riskPath];
-    // Bare last segment lookup (support legacy keys stored without /metric/risk/)
-    const base = k.split('/').filter(Boolean).slice(-1)[0] || k;
-    if (typeof s[base] === 'number') return s[base];
-    // Also try riskPath base
-    const base2 = riskPath.split('/').filter(Boolean).slice(-1)[0];
-    if (base2 && typeof s[base2] === 'number') return s[base2];
-    return undefined;
-  };
-
-  const maxDefined = (...vals: Array<number | undefined>) => {
-    let m: number | undefined = undefined;
-    for (const v of vals) {
-      if (typeof v !== 'number' || !Number.isFinite(v)) continue;
-      m = typeof m === 'number' ? Math.max(m, v) : v;
-    }
-    return m;
-  };
-
-  const computeSegmentScore01 = (seg: RiskSegmentId): number => {
-    // 1) Prefer segment rollup metric from doc (server-side rollup or future derived metrics).
-    const segKey = `/metric/risk/risk_segment_${seg}`;
-    const segKeyAlt = `risk_segment_${seg}`;
-    const fromSeg = metricValue(segKey);
-    const fromSegAlt = metricValue(segKeyAlt);
-    if (typeof fromSeg === 'number') return clamp01(fromSeg);
-    if (typeof fromSegAlt === 'number') return clamp01(fromSegAlt);
-
-    // 2) Fallback to existing propagated base metrics in fragment.state.
-    const sanction = metricValue('sanction_exposure');
-    const stability = metricValue('stability_index');
-    const corruption = metricValue('corruption_vulnerability');
-    const geoAlign = metricValue('geopolitical_alignment');
-    const supplyCrit = metricValue('supply_chain_criticality');
-    const opHealth = metricValue('operational_health');
-    const capUtil = metricValue('capacity_utilization');
-    const marketSent = metricValue('market_sentiment');
-    const publicPerc = metricValue('public_perception');
-    const water = metricValue('water_intensity');
-    const energy = metricValue('energy_intensity');
-    const labor = metricValue('labor_intensity');
-
-    switch (seg) {
-      case 'geopolitical': {
-        const geo = maxDefined(
-          sanction,
-          stability,
-          corruption,
-          typeof geoAlign === 'number' ? directionalToRisk01(geoAlign) : undefined,
-        );
-        return clamp01(typeof geo === 'number' ? geo : 0);
-      }
-      case 'supply': {
-        return clamp01(typeof supplyCrit === 'number' ? supplyCrit : 0);
-      }
-      case 'financial': {
-        return clamp01(typeof marketSent === 'number' ? directionalToRisk01(marketSent) : 0);
-      }
-      case 'cyber': {
-        // No stable base metric in v1 fallback set yet (often derived from signals /sphere/cyber/*).
-        return 0;
-      }
-      case 'esg': {
-        const v = maxDefined(water, energy, labor);
-        return clamp01(typeof v === 'number' ? v : 0);
-      }
-      case 'operational': {
-        // operational_health is a "health" metric; risk is inverse.
-        const invHealth = typeof opHealth === 'number' ? clamp01(1 - opHealth) : undefined;
-        const v = maxDefined(invHealth, capUtil);
-        return clamp01(typeof v === 'number' ? v : 0);
-      }
-      case 'keyperson': {
-        return clamp01(typeof publicPerc === 'number' ? directionalToRisk01(publicPerc) : 0);
-      }
-      case 'regulatory': {
-        // Conservative proxy until dedicated regulatory metrics appear:
-        // sanctions exposure + corruption vulnerability correlate with regulatory friction.
-        const v = maxDefined(sanction, corruption);
-        return clamp01(typeof v === 'number' ? v : 0);
-      }
-      default:
-        return 0;
-    }
-  };
-
-  const scoreToLevel = (v01: number): RiskLevel => {
-    const v = clamp01(v01);
-    if (v <= 0.001) return 'none';
-    if (v < 0.25) return 'low';
-    if (v < 0.5) return 'medium';
-    if (v < 0.75) return 'high';
-    return 'critical';
-  };
-
-  const levelToAlpha = (lvl: RiskLevel): number => {
-    switch (lvl) {
-      case 'none':
-        return 0.12;
-      case 'low':
-        return 0.32;
-      case 'medium':
-        return 0.58;
-      case 'high':
-        return 0.82;
-      case 'critical':
-        return 1.0;
-      default:
-        return 0.32;
-    }
-  };
+  // Risk Shield: compute segments from HorizonFragment.state (prefer risk_segment_*; fallback to propagated base metrics)
+  const riskSegments = React.useMemo(() => computeRiskSegments((data as any)?.state), [data]);
+  React.useEffect(() => {
+    // Closing panel resets expanded view (tab stays).
+    if (!Boolean(data.riskShieldOpen) && riskExpanded) setRiskExpanded(false);
+  }, [data.riskShieldOpen, riskExpanded]);
   // Collapsed stacked view: show 2–3 subtle "cards" peeking from underneath.
   const stackLayers = canToggleStack && !stackExpanded
     ? Math.min(3, Math.max(2, Math.ceil((stackCount || 0) / 8)))
@@ -1956,7 +1814,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         <NodeToolbar
           isVisible={isSelected}
           position={Position.Bottom}
-          offset={12}
+          // If risk panel is open, push Scout CTA below it (risk mode takes vertical space under node).
+          offset={
+            Boolean(data.riskShieldOpen)
+              ? (riskExpanded ? 260 : 190)
+              : 12
+          }
         >
           <button
             type="button"
@@ -2190,93 +2053,219 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           overflow: 'visible',
         }}
       >
-      {/* Risk Shield overlay (8-segment octagon ring) */}
+      {/* Risk panel (below node). Shield visuals removed (per latest UX direction). */}
       {Boolean(data.riskShieldOpen) && (
         <div
           style={{
             position: 'absolute',
-            inset: 0,
-            pointerEvents: 'none',
-            zIndex: 3,
+            left: '50%',
+            top: '100%',
+            transform: 'translateX(-50%)',
+            marginTop: 10,
+            width: 360,
+            maxWidth: 420,
+            pointerEvents: 'auto',
+            zIndex: 6,
           }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
         >
-          {(() => {
-            // Place the ring OUTSIDE the node card:
-            // - inner radius must exceed the node half-diagonal + a small gap
-            // - outer radius adds ring thickness
-            const halfW = NODE_WIDTH_PX / 2;
-            const halfH = NODE_CARD_HEIGHT_PX / 2;
-            const halfDiag = Math.sqrt(halfW * halfW + halfH * halfH);
-            const gap = 10; // space between node card and ring inner edge
-            const thickness = 6;
-            const rInner = halfDiag + gap;
-            const rOuter = rInner + thickness;
-            const pad = 4; // SVG padding for glow
-            const size = Math.ceil((rOuter + pad) * 2);
-            const cx = size / 2;
-            const cy = size / 2;
+          {/* Accent separator (echo node outline color): dashed and full panel width */}
+          <div
+            style={{
+              height: 0,
+              borderTop: `2px dashed ${theme === 'dark' ? hexToRgba(accentColor, 0.55) : hexToRgba(accentColor, 0.38)}`,
+              margin: '0 0 10px',
+              width: '100%',
+              boxShadow: theme === 'dark' ? `0 0 18px ${hexToRgba(accentColor, 0.20)}` : 'none',
+            }}
+          />
 
-            const ptsOuter: Array<{ x: number; y: number }> = [];
-            const ptsInner: Array<{ x: number; y: number }> = [];
-            for (let i = 0; i < 8; i++) {
-              const a = ((22.5 + i * 45) * Math.PI) / 180;
-              ptsOuter.push({ x: cx + rOuter * Math.cos(a), y: cy + rOuter * Math.sin(a) });
-              ptsInner.push({ x: cx + rInner * Math.cos(a), y: cy + rInner * Math.sin(a) });
-            }
-            const segments = RISK_SEGMENTS.map((seg) => {
-              const score = computeSegmentScore01(seg.id);
-              const lvl = scoreToLevel(score);
-              const alpha = levelToAlpha(lvl);
-              return { ...seg, score, lvl, alpha };
-            });
+          <div
+            style={{
+              borderRadius: 16,
+              border: 'none',
+              background: theme === 'dark' ? 'rgba(10,10,12,0.70)' : 'rgba(255,255,255,0.72)',
+              backdropFilter: 'blur(12px)',
+              boxShadow: theme === 'dark' ? '0 22px 70px rgba(0,0,0,0.55)' : '0 22px 70px rgba(0,0,0,0.16)',
+              padding: 12,
+            }}
+          >
+            {/* Tabs: 8 risk icons (order = polygon, top clockwise) */}
+            <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 8, marginBottom: 10 }}>
+              {riskSegments.map((seg) => {
+                const isActive = seg.id === riskTab;
+                const op = 0.05 + 0.95 * clamp01(seg.score);
+                const title = `${seg.label}: ${formatRiskLevel(seg.level)} (${seg.score.toFixed(2)}) — ${seg.description}`;
+                return (
+                  <button
+                    key={`risk-tab-${seg.id}`}
+                    type="button"
+                    title={title}
+                    onClick={() => setRiskTab(seg.id)}
+                    style={{
+                      // Match node expand/collapse control size for visual rhyme.
+                      width: 24,
+                      height: 24,
+                      borderRadius: 9,
+                      border: isActive
+                        ? `1px solid ${hexToRgba(seg.color, theme === 'dark' ? 0.55 : 0.40)}`
+                        : `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.10)'}`,
+                      background: isActive
+                        ? (theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.05)')
+                        : 'transparent',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: isActive
+                        ? (theme === 'dark' ? `0 0 0 2px ${hexToRgba(seg.color, 0.16)}` : `0 0 0 2px ${hexToRgba(seg.color, 0.10)}`)
+                        : 'none',
+                    }}
+                  >
+                    <RiskSegmentIcon id={seg.id} size={14} color={seg.color} opacity={isActive ? 1 : op} />
+                  </button>
+                );
+              })}
+            </div>
 
-            const glowNeeded = segments.some((s) => s.lvl === 'high' || s.lvl === 'critical');
+            {(() => {
+              const current = riskSegments.find((s) => s.id === riskTab) || riskSegments[0];
+              const score = clamp01(current?.score ?? 0);
+              const pct = Math.round(score * 100);
+              const source = computeRiskSegmentSource((data as any)?.state, current.id);
 
-            return (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: '50%',
-                  top: '50%',
-                  transform: 'translate(-50%, -50%)',
-                  width: size,
-                  height: size,
-                  pointerEvents: 'none',
-                }}
-              >
-                <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-                  {glowNeeded && (
-                    <defs>
-                      <filter id="hznRiskGlow" x="-50%" y="-50%" width="200%" height="200%">
-                        <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="rgba(59,130,246,0.35)" />
-                      </filter>
-                    </defs>
-                  )}
-                  <g filter={glowNeeded ? 'url(#hznRiskGlow)' : undefined}>
-                    {segments.map((seg, i) => {
-                      const j = (i + 1) % 8;
-                      const p0 = ptsOuter[i];
-                      const p1 = ptsOuter[j];
-                      const q1 = ptsInner[j];
-                      const q0 = ptsInner[i];
-                      const d = `M ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} L ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} L ${q1.x.toFixed(2)} ${q1.y.toFixed(2)} L ${q0.x.toFixed(2)} ${q0.y.toFixed(2)} Z`;
-                      return (
-                        <path
-                          key={`riskseg-${seg.id}`}
-                          d={d}
-                          fill={seg.color}
-                          fillOpacity={seg.alpha}
-                          stroke={seg.color}
-                          strokeOpacity={Math.min(1, seg.alpha + 0.12)}
-                          strokeWidth={1.2}
-                        />
-                      );
-                    })}
-                  </g>
-                </svg>
-              </div>
-            );
-          })()}
+              if (!riskExpanded) {
+                // Compact view: bar + number
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setRiskExpanded(true)}
+                    style={{
+                      width: '100%',
+                      border: 'none',
+                      background: 'transparent',
+                      padding: 0,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                    title="Show details"
+                  >
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)' }}>
+                        {current.label}
+                      </div>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-secondary-strong)' }}>
+                        {pct}%
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 8,
+                        height: 8,
+                        borderRadius: 999,
+                        background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.06)',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${pct}%`,
+                          height: '100%',
+                          background: current.color,
+                          opacity: 0.9,
+                        }}
+                      />
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.4 }}>
+                      {current.description}
+                    </div>
+                  </button>
+                );
+              }
+
+              // Expanded view: deterministic “profile” (no LLM)
+              return (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                      <RiskSegmentIcon id={current.id} size={18} color={current.color} opacity={1} />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 950, color: 'var(--text-heading)', lineHeight: 1.2 }}>
+                          {current.label}
+                        </div>
+                        <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                          {current.description}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRiskExpanded(false)}
+                      title="Collapse"
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 10,
+                        border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
+                        background: 'transparent',
+                        color: 'var(--text-heading)',
+                        cursor: 'pointer',
+                        opacity: 0.75,
+                        fontSize: 16,
+                        fontWeight: 900,
+                        lineHeight: 1,
+                        flexShrink: 0,
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-secondary-strong)' }}>
+                      Level: {formatRiskLevel(current.level)}
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-secondary-strong)' }}>
+                      Score: {score.toFixed(2)} ({pct}%)
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 8,
+                      height: 8,
+                      borderRadius: 999,
+                      background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.06)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${pct}%`,
+                        height: '100%',
+                        background: current.color,
+                        opacity: 0.9,
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.5 }}>
+                    {source.kind === 'none' ? (
+                      <div>Source metric: — (no direct metric available)</div>
+                    ) : (
+                      <div>
+                        Source metric: <span style={{ fontWeight: 900, color: 'var(--text-heading)' }}>{source.key}</span>{' '}
+                        <span style={{ opacity: 0.8 }}>
+                          ({source.kind === 'segment_metric' ? 'segment' : 'fallback'}; value={source.value.toFixed(2)})
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
         </div>
       )}
 
@@ -2877,13 +2866,16 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               if (data.fragmentId) data.onToggleRiskShield?.(data.fragmentId);
             }}
             aria-label="Risk shield"
-            title="Risk shield"
+            title={isRiskShieldOpen ? 'Risk shield (on)' : 'Risk shield'}
             style={{
               width: 24,
               height: 24,
               borderRadius: 9,
               border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
-              background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)',
+              // Match expand/collapse affordance: when active, use the same amber fill as "collapse" state.
+              background: isRiskShieldOpen
+                ? (theme === 'dark' ? 'rgba(245, 158, 11, 0.28)' : 'rgba(245, 158, 11, 0.18)')
+                : (theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)'),
               color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
               cursor: 'pointer',
               display: 'flex',
@@ -2892,7 +2884,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
             }}
           >
-            {/* Octagon (polygon) icon */}
+            {/* Exclamation icon (attention / risk mode) */}
             <svg
               width="14"
               height="14"
@@ -2903,7 +2895,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               strokeLinecap="round"
               strokeLinejoin="round"
             >
-              <path d="M7.86 2h8.28L22 7.86v8.28L16.14 22H7.86L2 16.14V7.86L7.86 2z" />
+              <path d="M12 7v7" />
+              <path d="M12 18h.01" />
             </svg>
           </button>
         </div>

@@ -3405,11 +3405,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setLensItems([]);
       setNodes([]);
       setEdges([]);
+      setRiskShieldActiveNodeId(null);
       return;
     }
 
     const loadLensItems = async () => {
       try {
+        // New lens / reload: reset risk shield state.
+        setRiskShieldActiveNodeId(null);
         // New lens / reload: allow a single auto-arrange if default layout is Hierarchical.
         autoArrangeOnceRef.current = false;
         const itemsRaw = await api.getLensItems(lensId);
@@ -3609,6 +3612,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     setLoading(true);
     setError(null);
+    // Fresh graph load should always reset shield mode.
+    setRiskShieldActiveNodeId(null);
 
     try {
       // Reset expansion/grid bookkeeping for a fresh load.
@@ -6284,12 +6289,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const applyRiskShieldDimming = (arr: Edge[]) => {
       if (!riskActive) return arr;
       return (arr || []).map((e: any) => {
-        const s = String(e?.source || '').trim();
-        const t = String(e?.target || '').trim();
-        const incident = (!!s && s === riskId) || (!!t && t === riskId);
         const baseStyle: any = (e as any)?.style || {};
         const curOpacity = typeof baseStyle.opacity === 'number' ? baseStyle.opacity : DIM_OPACITY;
-        const nextOpacity = incident ? Math.max(curOpacity, 0.46) : Math.min(curOpacity, 0.08);
+        // In shield mode, edges are not the primary semantic layer — keep ALL edges muted uniformly.
+        const nextOpacity = Math.min(curOpacity, 0.06);
         const d0: any = (e as any)?.data || {};
         return {
           ...(e as any),
@@ -6304,6 +6307,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Perf mode: do not derive per-edge styles/labels (avoids O(E) object cloning on hover),
     // just return filtered edges.
     if (perfMode && !riskActive) return baseVisibleEdges;
+    // Risk Shield prevails over all hover/selection edge logic.
+    if (riskActive) return applyRiskShieldDimming(baseVisibleEdges);
 
     // Levels Two-Pane aggregation:
     // - hide per-child edges by default (they exist for hover reveal)

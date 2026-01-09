@@ -8,6 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
 import { HorizonOnDemandDependencyResolverModal, type HorizonOnDemandContext } from './HorizonOnDemandDependencyResolverModal';
+import { RISK_SEGMENTS, RiskSegmentIcon, clamp01, computeRiskSegments, formatRiskLevel, segmentForMetricBaseKey } from '../lib/riskShield';
 
 interface ObjectInspectorProps {
   nodeId: string | null;
@@ -2044,6 +2045,32 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             </span>
               }
             >
+              {/* Risk Shield legend (ordered from top clockwise) */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
+                {computeRiskSegments(nodeData.state).map((seg) => {
+                  const op = 0.05 + 0.95 * clamp01(seg.score);
+                  const title = `${seg.label}: ${formatRiskLevel(seg.level)} (${seg.score.toFixed(2)}) — ${seg.description}`;
+                  return (
+                    <div
+                      key={`inspector-riskseg-${seg.id}`}
+                      title={title}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 8px',
+                        borderRadius: 12,
+                        border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.10)'}`,
+                        background: theme === 'dark' ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.55)',
+                      }}
+                    >
+                      <RiskSegmentIcon id={seg.id} size={18} color={seg.color} opacity={op} />
+                      <span style={{ fontSize: 11, fontWeight: 850, color: 'var(--text-heading)' }}>{seg.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
               {(() => {
                 const colorFrom01 = (x: number) => {
                   const v = Math.max(0, Math.min(1, x));
@@ -2116,6 +2143,23 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {entries.slice(0, 12).map((m) => (
                       <div key={m.rawKey} title={m.rawKey} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        {/* Segment icon (synced with Risk Shield). */}
+                        {(() => {
+                          const segId = segmentForMetricBaseKey(m.key);
+                          if (!segId) {
+                            return <div style={{ width: 18, height: 18, flexShrink: 0 }} />;
+                          }
+                          const spec = RISK_SEGMENTS.find((s) => s.id === segId);
+                          const color = spec?.color || 'var(--text-tertiary-weak)';
+                          // Use metric's "riskiness" proxy: for most risk-ish rows, m.v01 is already oriented.
+                          const op = 0.05 + 0.95 * clamp01(m.v01);
+                          const title = `${spec?.label || segId}: ${m.label}`;
+                          return (
+                            <div title={title} style={{ width: 18, height: 18, flexShrink: 0 }}>
+                              <RiskSegmentIcon id={segId} size={18} color={color} opacity={op} />
+                            </div>
+                          );
+                        })()}
                         <div style={{ width: 12, height: 12, borderRadius: 99, background: m.dot, flexShrink: 0 }} />
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
