@@ -76,6 +76,11 @@
     - `RELATIVE_OF` (PERSON ↔ PERSON): прямое родство (публичные родственники).
     - `RELATED_TO` (PERSON ↔ PERSON): прочие общеизвестные связи (бизнес‑партнёры/друзья/однокурсники и т.п.), контекст в `reason`/qualifiers.
   - Обновить Scout/Research промпты и Critic `missingInfo` под новые связи (аудитор компании; публичные родственники; public "related" связи) с жёсткими правилами по направлению/типам.
+
+---
+### Большой раздел работ (единый блок): расширение онтологии/таксономии Horizon
+Отсюда и до секции **“Обработка метрик при propagation (семантика поверх "доставки дельт")”** включительно — один целостный блок работ: новые canonical paths, новые fragment/edge types, нормализация, требования Critic/Scout, lifecycle/time, edge metrics/temporal validity, и интеграция с propagation.
+---
 - **Требования к скаутингу металлургических и горнодобывающих компаний (metal & mining)**
   - При скаутинге компаний из секторов `/Materials/Mining/*` (Precious_Metals, Industrial_Metals, Rare_Earths) scout-critic **обязательно должен требовать наличие связанных объектов типа `/fac`** (Facility) и/или `/deposit/` (Natural Resource Deposit).
   - Для каждого связанного `/fac` требуется следующая информация:
@@ -233,6 +238,56 @@
     - `/product/component/petrochemical/cracking/ethylene`
     - `/product/raw/mineral/extraction/iron-ore`
     - `/product/component/mineral/refining/refined-copper`
+- **Опциональный последний сегмент: конкретное название продукта (model/SKU)**
+  - **Формат**:
+    ```
+    Goods:    /product/{category}/{type}/{stage}/{slug}[/{model-slug}]
+    Services: /product/service/{domain}/{subdomain}/{slug}[/{offering-slug}]
+    ```
+  - **Назначение**: Позволяет моделировать конкретные модели/SKU/брендированные продукты:
+    - `/product/finished/mechanical/manufacturing/excavator` — экскаваторы (generic)
+    - `/product/finished/mechanical/manufacturing/excavator/cat-390f` — конкретная модель Caterpillar 390F
+    - `/product/finished/mechanical/manufacturing/excavator/komatsu-pc2000` — Komatsu PC2000
+  - **Правила**:
+    - Последний сегмент **опционален** — можно использовать generic slug
+    - Model-slug должен быть **официальным названием** (или его каноническим slug'ом)
+    - Slug'ы нормализуются: lowercase, дефисы, без спецсимволов
+    - Pattern matching работает: `/product/*/mechanical/*/excavator/*` поймает все модели экскаваторов
+  - **Примеры для Goods**:
+    | Категория | Generic product | Конкретная модель |
+    |-----------|-----------------|-------------------|
+    | Automotive | `/product/finished/mechanical/assembly/electric-vehicle` | `.../electric-vehicle/tesla-model-3` |
+    | Semiconductors | `/product/component/electronic/manufacturing/gpu` | `.../gpu/nvidia-h100` |
+    | Pharma | `/product/finished/healthcare/manufacturing/vaccine` | `.../vaccine/pfizer-comirnaty` |
+    | Aircraft | `/product/finished/mechanical/assembly/commercial-aircraft` | `.../commercial-aircraft/boeing-737-max` |
+    | Mining Equipment | `/product/finished/mechanical/manufacturing/haul-truck` | `.../haul-truck/caterpillar-797f` |
+  - **Примеры для Services**:
+    | Категория | Generic service | Конкретное предложение |
+    |-----------|-----------------|------------------------|
+    | Cloud | `/product/service/it/cloud/platform` | `.../platform/aws-ec2` |
+    | CRM | `/product/service/it/software/crm-saas` | `.../crm-saas/salesforce-sales-cloud` |
+    | Banking | `/product/service/financial/banking/payment-processing` | `.../payment-processing/stripe-connect` |
+  - **Когда использовать model-slug**:
+    - Когда нужно отслеживать **конкретную модель** в supply chain (e.g. "Boeing 737 MAX" vs "Boeing 787")
+    - Когда модель имеет **уникальные характеристики** (sanctions, safety issues, etc.)
+    - Когда нужно привязать **capacity/production** к конкретной модели
+    - **Не обязательно** если generic category достаточно для анализа
+  - **Scout/Critic интеграция**:
+    - Scout извлекает model name если упоминается в источнике
+    - Critic **не требует** model-slug — это enhancement, не mandatory
+    - Для связей `PRODUCES` model-slug полезен если production идёт по конкретным моделям
+  - **KnownProductModels** — словарь известных моделей (опционально):
+    ```go
+    KnownProductModels: map[string]ProductModelSpec{
+        "tesla-model-3": {GenericSlug: "electric-vehicle", Manufacturer: "tesla"},
+        "nvidia-h100":   {GenericSlug: "gpu", Manufacturer: "nvidia"},
+        "boeing-737-max": {GenericSlug: "commercial-aircraft", Manufacturer: "boeing"},
+    }
+    ```
+  - **Чеклист изменений**:
+    - [ ] `backend/internal/taxonomy/runtime.go` → обновить `ValidateProductPath()` для опционального 5го сегмента
+    - [ ] `backend/internal/models/horizon_taxonomy.go` → опционально `KnownProductModels map[string]ProductModelSpec`
+    - [ ] `docs/horizon/architecture/taxonomy.md` → документировать model-slug
 - **Расширение canonical path для Services (отдельная структура для услуг)**
   - **Проблема**: Текущий формат `/product/{category}/{type}/{stage}/{slug}` не подходит для услуг:
     - `type` (mineral/electronic/chemical) — бессмысленно для IT-консалтинга
@@ -264,6 +319,7 @@
         "security",     // physical, cyber, investigation
         "hr",           // recruitment, staffing, payroll
         "real-estate",  // brokerage, property management
+        "other",        // fallback bucket when domain is unclear (must be allowed if used)
     }
     ```
   - **AllowedServiceSubdomains** — по domain:
@@ -277,6 +333,7 @@
     | `engineering` | `design`, `rd`, `testing`, `certification`, `maintenance` |
     | `media` | `advertising`, `pr`, `content`, `broadcasting`, `production` |
     | `telecom` | `mobile`, `fixed`, `internet`, `satellite`, `voip` |
+    | `other` | `other` |
   - **Примеры canonical paths для services**:
     - `/product/service/it/software/custom-development`
     - `/product/service/it/cloud/hosting`
@@ -449,13 +506,16 @@
           - For each product in PRODUCES: require reserves and production metrics
           - If reserves are at deposit level, require /deposit/ and EXTRACTS_FROM relation
       ```
-  - [ ] **Critic: обязательные products/services для ORGANIZATION** (профильные компании):
+  - [ ] **Critic: обязательные products/services для ORGANIZATION** (независимо от specialty — это базовая информация):
+    - **ВАЖНО**: Это требование применяется **всегда**, не только при `specialty=products_and_services`.
+    - **Текущий gap в коде**: `critic_agent.go` (строки 151-155) требует products только если запрошен `specialty=products_and_services`. Это неправильно — products/services нужны для понимания бизнеса **любой** operating company.
     - Для **любого `/org/`** Critic должен определить:
       1. Это **операционная компания** (производит products/services сама)?
       2. Или это **холдинг/головная компания** (производит через дочерние общества)?
-    - **Логика определения**:
+    - **Логика определения холдинга**:
       - Если есть `OWNS` или `SUBSIDIARY_OF` (inverse) edges → вероятно холдинг
       - Если `sectorPath` = `/Financials/Capital_Markets/*` или `/Organization/Holding` → холдинг
+      - Если `entityPath` содержит "holding", "investment" → холдинг
       - Если нет subsidiaries и не холдинг → операционная компания
     - **Для операционной компании** (`/org/` без subsidiaries):
       - MANDATORY: Требовать связи `PRODUCES → /product/...` или `PRODUCES → /product/service/...`
@@ -468,10 +528,21 @@
         - "What are the operating subsidiaries of <org>? Return as /org/{iso2}/{slug} canonical paths with OWNS relations and ownership_percent."
       - **Затем** для каждой subsidiary требовать products/services (рекурсивно)
       - Холдинг сам НЕ обязан иметь PRODUCES — products привязаны к subsidiaries
-    - **Примеры**:
-      - `Alphabet Inc` (холдинг) → OWNS → `Google LLC`, `Waymo`, `DeepMind` (subsidiaries)
-      - `Google LLC` (операционная) → PRODUCES → `/product/service/it/cloud/gcp`, `/product/service/media/advertising/google-ads`
-      - `Tesla Inc` (операционная, не холдинг) → PRODUCES → `/product/finished/mechanical/assembly/electric-vehicle`
+    - **Примеры по секторам** (products/services нужны для ВСЕХ операционных компаний):
+      | Сектор | Пример компании | Ожидаемые PRODUCES |
+      |--------|-----------------|-------------------|
+      | **Technology/IT** | Salesforce | `/product/service/it/software/crm-saas`, `/product/service/it/cloud/platform` |
+      | **Technology/IT** | NVIDIA | `/product/component/electronic/manufacturing/gpu`, `/product/service/it/software/cuda` |
+      | **Consumer/Retail** | Nike | `/product/finished/consumer/manufacturing/footwear`, `/product/finished/consumer/manufacturing/apparel` |
+      | **Healthcare/Pharma** | Pfizer | `/product/finished/healthcare/manufacturing/vaccine`, `/product/finished/healthcare/manufacturing/drug` |
+      | **Industrial/Manufacturing** | Caterpillar | `/product/finished/mechanical/manufacturing/excavator`, `/product/finished/mechanical/manufacturing/bulldozer` |
+      | **Financial/Banking** | JPMorgan | `/product/service/financial/banking/commercial-lending`, `/product/service/financial/investment/asset-management` |
+      | **Energy/Utilities** | NextEra | `/product/raw/energy/generation/electricity`, `/product/service/energy/distribution/grid-services` |
+      | **Telecom** | Verizon | `/product/service/telecom/mobile/wireless-service`, `/product/service/telecom/internet/broadband` |
+      | **Real Estate** | CBRE | `/product/service/real-estate/brokerage/commercial-brokerage`, `/product/service/consulting/operations/property-management` |
+      | **Extractive** (Mining) | BHP | `/product/raw/mineral/extraction/iron-ore`, `/product/raw/mineral/extraction/copper-ore` + reserves/production metrics |
+      | **Extractive** (O&G) | ExxonMobil | `/product/raw/hydrocarbon/extraction/crude-oil`, `/product/finished/fuel/refining/gasoline` + reserves/production metrics |
+      | **Holding** | Berkshire Hathaway | Нет PRODUCES (холдинг) → требовать OWNS → subsidiaries (GEICO, BNSF, etc.) → на них products |
     - **Порядок проверки Critic**:
       ```
       1. If entity is ORGANIZATION (canonicalPath starts with /org/):
@@ -482,20 +553,65 @@
             - Do NOT require PRODUCES for the holding itself
             - Flag subsidiaries for separate scouting with products/services requirement
          c. If NO (operating company):
-            - MANDATORY: If no PRODUCES relations exist → add to missingInfo:
+            - MANDATORY (ALWAYS, not just for products_and_services specialty):
+              If no PRODUCES relations exist → add to missingInfo:
               "What products does <org> produce?" and/or
               "What services does <org> provide?"
             - Require canonical /product/... or /product/service/... paths
       2. For FACILITY (/fac/): always require PRODUCES (as before)
       ```
+    - **Связь с `specialty=products_and_services`**:
+      - Базовые products/services нужны **всегда** (даже без specialty)
+      - Если `products_and_services` запрошен — требовать **дополнительную детализацию**:
+        - TRANSFORMS_INTO relations для продуктов
+        - CONSUMES relations (inputs/materials)
+        - Capacity/volume metrics на edges
     - **Связь с equity specialty**:
       - Если запрошена specialty=equity → усиленные требования к ownership structure
       - Требовать полную цепочку: ultimate parent → intermediate holdings → operating companies
     - **Чеклист**:
-      - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → добавить логику holding vs operating
-      - [ ] Определить эвристику "is_holding_company" (по OWNS edges, sectorPath, entityPath)
+      - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → **УБРАТЬ** условие `if specialty == products_and_services` для базового PRODUCES check
+      - [ ] `critic_agent.go` → добавить логику holding vs operating (всегда, не только при specialty)
+      - [ ] `critic_agent.go` → для `products_and_services` specialty добавить **дополнительные** требования (TRANSFORMS_INTO, CONSUMES, metrics)
+      - [ ] Определить эвристику `isHoldingCompany()` (по OWNS edges, sectorPath, entityPath keywords)
       - [ ] Для холдингов: сначала subsidiaries, потом products на subsidiaries
       - [ ] Для операционных: сразу products/services
+      - [ ] Unit tests: проверить что IT/Manufacturing/Retail компании без products → missingInfo
+  - **MissingInfo → Research Plan (и защита от бесконечных циклов)**
+    - **Идея**: `missingInfo[]` — это не просто список вопросов, а **план дозапроса/доскаутинга** (grounded research) для конкретной сущности.
+    - **Как работает сейчас (код)**:
+      - Critic возвращает `missingInfo[]` (вопросы/поисковые запросы).
+      - ScoutEngine **один раз** вызывает ResearchAgent с этим списком, не делая циклов внутри одного job.
+      - Важно: после research мы **не перегоняем** Critic заново в рамках того же job (иначе легко получить loop).
+    - **Где есть защита уже сейчас**:
+      - **Idempotency**: terminal jobs (`VERIFIED/FAILED`) не переисполняются (Cloud Tasks retries).
+      - **Circuit breaker**: ограничение попыток обработки одного и того же `targetCanonicalPath` внутри одного job (защита от alias/dedup oscillation и повторных retries).
+      - **Freshness threshold**: если фрагмент недавно верифицирован и нет новых фактов — ScoutEngine пропускает дорогой scouting/research (для Lens-driven jobs).
+      - **Budget caps**: дневные лимиты на USD и output tokens (lens/cascade), чтобы не сжечь бюджет даже при повторных попытках.
+    - **Чего НЕ хватает (для полного отсутствия бесконечных циклов между jobs)**:
+      - Если `missingInfo` не удалось закрыть (данных нет в источниках), Critic на следующем job может снова запросить то же самое.
+      - Нужен слой **“exhaustion/cooldown”** для конкретных missingInfo-вопросов.
+    - **Требование (добавить)**: Per-entity “missingInfo exhaustion”
+      - Храним попытки по ключу `(tenantId, canonicalPath, missingInfoHash)` в отдельной коллекции:
+        - `horizon_missing_info_status/{tenantId}:{canonicalPath}:{hash}`
+        - поля: `attempts`, `lastAttemptAt`, `status=open|resolved|exhausted`, `cooldownUntil`, `lastSourcesFingerprint`
+      - Правила:
+        - Один и тот же missingInfo query **не пытаться** чаще 1 раза в N часов (cooldown), пока не появятся новые факты/источники.
+        - Если attempts ≥ K и “новых источников нет” → `status=exhausted` на M дней.
+        - Если появились новые источники/факты (fingerprint изменился) → сбрасываем cooldown и пробуем снова.
+      - **Stop-conditions** (чётко):
+        - MAX attempts per (canonicalPath, query) = K
+        - cooldown = N hours between attempts
+        - hard TTL для “exhausted” = M days, после чего можно попробовать снова (на случай появления новых данных).
+    - **Что показывать UI/аналитике**:
+      - “Unresolved missingInfo” как backlog по узлу (что не нашли и почему: exhausted/cooldown).
+      - Это позволит пользователю/Watchdog целенаправленно добавить источники или смириться с unknown.
+    - **Чеклист изменений**:
+      - [ ] `backend/internal/horizon/scout/engine.go` → перед вызовом ResearchAgent проверять `horizon_missing_info_status` и фильтровать exhausted/cooldown вопросы
+      - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → вопросы формулировать **детерминированно** (чтобы хеш стабильно совпадал)
+      - [ ] Firestore: новая коллекция `horizon_missing_info_status` + индексы (tenantId, canonicalPath, status)
+      - [ ] Telemetry: логировать “attempted/blocked_by_cooldown/exhausted”
+      - [ ] UI: показывать unresolved missingInfo backlog
   - [ ] **Canonical path inference** — обновить:
     - `backend/internal/horizon/scout/taxonomy.go` → `InferTaxonomyFromCanonicalPath` для `/deposit/`
   - [ ] **Документация** — обновить:
@@ -503,6 +619,103 @@
     - `docs/horizon/architecture/data-model.md` — добавить DEPOSIT fragment type
   - [ ] **Firestore re-seed** — после изменений:
     - Выполнить `go run ./cmd/tools/horizon_seed_taxonomy --project <project> --version v1`
+  - [ ] **Type & Edge Normalizers** — код приведения типов/рёбер к единообразию:
+    - **`backend/internal/horizon/scout/type_normalizer.go`**:
+      - `pathTypeMap` (строки ~108-120) — маппит canonical path prefixes к FragmentType
+      - **Нужно добавить**: `/deposit/` → `FragmentTypeDeposit`
+      - Код:
+        ```go
+        pathTypeMap := map[string]models.FragmentType{
+            "/loc/":         models.FragmentTypeGeoRegion,
+            "/geo/":         models.FragmentTypeGeoRegion,
+            "/org/":         models.FragmentTypeOrganization,
+            "/fac/":         models.FragmentTypeFacility,
+            "/deposit/":     models.FragmentTypeDeposit,  // NEW
+            "/product/":     models.FragmentTypeProduct,
+            "/program/":     models.FragmentTypeProgram,
+            "/market/":      models.FragmentTypeMarket,
+            "/event/":       models.FragmentTypeEvent,
+            "/person/":      models.FragmentTypePerson,
+            "/media/":       models.FragmentTypeMediaChannel,
+            "/supply-link/": models.FragmentTypeSupplyLink,
+        }
+        ```
+    - **`backend/internal/horizon/scout/edge_normalizer.go`**:
+      - `EdgeDirectionPolicies` — определяет валидные source/target FragmentTypes для каждого edge type
+      - **Нужно добавить**:
+        1. `EXTRACTS_FROM` — новый edge type:
+           ```go
+           models.DependencyTypeExtractsFrom: {
+               ValidSourceTypes: []models.FragmentType{models.FragmentTypeFacility},
+               ValidTargetTypes: []models.FragmentType{models.FragmentTypeDeposit},
+               Description:      "Facility extracts from deposit",
+           }
+           ```
+        2. Обновить `OWNS` — добавить `FragmentTypeDeposit` в ValidTargetTypes:
+           ```go
+           models.DependencyTypeOwns: {
+               ValidSourceTypes: []models.FragmentType{
+                   models.FragmentTypeOrganization,
+                   models.FragmentTypePerson,
+               },
+               ValidTargetTypes: []models.FragmentType{
+                   models.FragmentTypeOrganization,
+                   models.FragmentTypeFacility,
+                   models.FragmentTypeProduct,
+                   models.FragmentTypeDeposit,  // NEW
+               },
+           }
+           ```
+        3. Обновить `PRODUCES` — добавить `FragmentTypeDeposit` в ValidSourceTypes (deposit produces resources):
+           ```go
+           models.DependencyTypeProduces: {
+               ValidSourceTypes: []models.FragmentType{
+                   models.FragmentTypeOrganization,
+                   models.FragmentTypeFacility,
+                   models.FragmentTypeDeposit,  // NEW - deposits produce resources
+               },
+               ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
+           }
+           ```
+        4. Обновить `LOCATED_IN` — добавить `FragmentTypeDeposit` в ValidSourceTypes:
+           ```go
+           models.DependencyTypeLocatedIn: {
+               ValidSourceTypes: []models.FragmentType{
+                   models.FragmentTypeFacility,
+                   models.FragmentTypeOrganization,
+                   models.FragmentTypePerson,
+                   models.FragmentTypeGeoRegion,
+                   models.FragmentTypeDeposit,  // NEW
+               },
+               ValidTargetTypes: []models.FragmentType{models.FragmentTypeGeoRegion},
+           }
+           ```
+        5. Обновить `OPERATES_IN` — добавить `FragmentTypeDeposit` в ValidTargetTypes:
+           ```go
+           models.DependencyTypeOperatesIn: {
+               ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+               ValidTargetTypes: []models.FragmentType{
+                   models.FragmentTypeGeoRegion,
+                   models.FragmentTypeFacility,
+                   models.FragmentTypeDeposit,  // NEW
+               },
+           }
+           ```
+    - **`backend/internal/taxonomy/runtime.go`**:
+      - `NormalizeRelationType()` — нормализует relation types к канону
+      - **Нужно добавить**: `EXTRACTS_FROM` в switch/map алиасов
+      - `NormalizeProductName()` — нормализует product names
+      - **Нужно обновить**: для services формат `/product/service/{domain}/{subdomain}/{slug}`
+    - **`backend/internal/horizon/policy/canonization_policy.go`**:
+      - Политики канонизации путей
+      - **Проверить**: корректность для `/deposit/` и `/product/service/...`
+    - **Чеклист для normalizers**:
+      - [ ] `type_normalizer.go` → добавить `/deposit/` в `pathTypeMap`
+      - [ ] `edge_normalizer.go` → добавить `EXTRACTS_FROM` в `EdgeDirectionPolicies`
+      - [ ] `edge_normalizer.go` → обновить `OWNS`, `PRODUCES`, `LOCATED_IN`, `OPERATES_IN` для `DEPOSIT`
+      - [ ] `runtime.go` → добавить `EXTRACTS_FROM` в `NormalizeRelationType()`
+      - [ ] `runtime.go` → обновить `NormalizeProductName()` для services
+      - [ ] `canonization_policy.go` → проверить/обновить для новых путей
 - **Lifecycle Stages для HorizonFragment (стадии строительства и жизненного цикла)**
   - **Проблема**: Не все `/fac/`, `/deposit/`, `/org/` существуют и работают. Некоторые строятся, планируются, законсервированы или закрыты. Текущая модель не различает "завод работает" от "завод строится".
   - **Решение**: Добавить поля lifecycle в `HorizonFragment`:
@@ -525,7 +738,8 @@
     - `ExpectedEndDate` — когда объект **планируется** закрыть (decommissioning)
     - `ActualEndDate` — когда объект **фактически** закрылся
   - **Отличие от существующих полей**:
-    - `ValidFrom/ValidTo` — про валидность **наших данных** (когда мы знаем что информация верна)
+    - `DependencyEdge.ValidFrom/ValidTo` — про **реальный срок действия** связи/факта (effective time: когда связь началась/закончилась в мире)
+    - `MetricValue.ObservedAt` + `Provenance` — про **эпистемику** (когда мы наблюдали/узнали и из какого источника)
     - `Governance.Status` — про состояние **в нашей системе** (ACTIVE/DORMANT/ARCHIVED)
     - `LifecycleStage` — про состояние **объекта в реальном мире** (строится/работает/закрыт)
   - **Canonical lifecycle stages** (единый словарь для всех типов):
@@ -592,7 +806,7 @@
     ```
   - **Влияние на supply chain**:
     - Объект в `construction` не может быть **текущим** supplier/customer
-    - Edges к таким объектам должны иметь `Qualifiers["modality"] = "projected"`
+    - Edges к таким объектам должны иметь `Qualifiers["edgeModality"] = "projected"` (чтобы не путать с эпистемической modality: observed/reported/predicted)
     - Propagation engine учитывает lifecycleStage при расчёте весов:
       - `operational` → нормальный вес
       - `construction` → сниженный вес или отдельный "projected" signal
@@ -728,6 +942,14 @@
     "years",             // tenure, contract duration
     "count",             // committees, employees
     "ratio",             // relative values
+    // Currency / index units:
+    // ВАЖНО: валюты и финансовые индексы НЕ ограничиваем allowlist'ом.
+    // Unit может быть любым тикером/кодом (например: "usd", "eur", "usdt", "inr", "rub", "cny",
+    // "brent", "wti", "cpi_ru", "moex", "sp500") — чтобы не ломать санкционные/теневые рынки.
+    //
+    // Имплементация (runtime validation):
+    // - Для currency/index единиц разрешаем pattern, а не точный allowlist.
+    // - Минимальный контракт: lowercase, [a-z0-9_], длина 2..32.
     ```
   - **Scout/Critic интеграция**:
     - Scout должен извлекать edge metrics из источников
@@ -750,16 +972,153 @@
     - [ ] `backend/internal/horizon/scout/agents/scout_agent.go` → извлекать edge metrics
     - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → требовать metrics для OWNS, INVESTS_IN, SUPPLIES_TO
     - [ ] `docs/horizon/architecture/data-model.md` → документировать edge metrics
+- **Edge Temporal Validity (срок действия связей)**
+  - **Проблема**: Связи могут иметь ограниченный срок действия:
+    - Инвестировал в прошлом, но **уже вышел**
+    - Работал в прошлом (**бывший сотрудник**)
+    - Руководил в прошлом (**экс-CEO**)
+    - Был членом совета директоров
+    - Поставлял в прошлом, но контракт завершён
+  - **Существующие поля** (уже есть в `DependencyEdge`):
+    ```go
+    ValidFrom *time.Time `json:"validFrom,omitempty" firestore:"validFrom,omitempty"`
+    ValidTo   *time.Time `json:"validTo,omitempty" firestore:"validTo,omitempty"`
+    ```
+  - **Семантика**:
+    - `ValidFrom` — когда связь **начала** действовать (дата найма, инвестиции, контракта)
+    - `ValidTo` — когда связь **прекратила** действовать (увольнение, выход из инвестиции, конец контракта)
+    - `ValidTo == nil` → связь **активна** на текущий момент
+    - `ValidTo != nil && ValidTo < now` → связь **историческая**
+  - **ВАЖНО: Исторические связи НЕ удаляются**:
+    - Хранят ценную информацию о прошлых связях
+    - Нужны для анализа карьерных путей, инвестиционной истории
+    - Нужны для compliance (кто был связан с sanctioned entity)
+    - Просто помечаются как неактивные через `ValidTo`
+  - **Методы на DependencyEdge**:
+    ```go
+    // IsActive проверяет активна ли связь на заданный момент времени
+    func (e *DependencyEdge) IsActive(at time.Time) bool {
+        if e.ValidFrom != nil && at.Before(*e.ValidFrom) {
+            return false // связь ещё не началась
+        }
+        if e.ValidTo != nil && at.After(*e.ValidTo) {
+            return false // связь уже завершилась
+        }
+        return true
+    }
+    
+    // IsActiveNow проверяет активна ли связь сейчас
+    func (e *DependencyEdge) IsActiveNow() bool {
+        return e.IsActive(time.Now())
+    }
+    
+    // IsHistorical проверяет завершилась ли связь
+    func (e *DependencyEdge) IsHistorical() bool {
+        return e.ValidTo != nil && time.Now().After(*e.ValidTo)
+    }
+    ```
+  - **Edge types где ValidTo особенно важен**:
+    | Edge Type | Пример завершения | Как заполнять |
+    |-----------|-------------------|---------------|
+    | `EMPLOYED_BY` | Увольнение, уход | ValidTo = дата ухода |
+    | `BOARD_MEMBER_OF` | Выход из совета | ValidTo = дата выхода |
+    | `MANAGES` | Смена руководства | ValidTo = дата смены |
+    | `OWNS` | Продажа доли | ValidTo = дата продажи |
+    | `INVESTS_IN` | Выход из инвестиции (exit) | ValidTo = дата exit |
+    | `SUPPLIES_TO` | Завершение контракта | ValidTo = дата окончания |
+    | `AUDITED_BY` | Смена аудитора | ValidTo = дата смены |
+    | `CONTROLS` | Потеря контроля | ValidTo = дата потери |
+  - **Влияние на Propagation**:
+    - **Активные связи** (`IsActiveNow() == true`) — участвуют в propagation полноценно
+      - (т.е. propagation фильтрует edges по окну `ValidFrom/ValidTo`, а не только по `edgeModality`)
+    - **Исторические связи** (`IsHistorical() == true`) — **не участвуют** в real-time propagation
+    - Но исторические связи **участвуют** в:
+      - Timeline analysis (как развивались связи)
+      - Compliance checks (был ли связан с sanctioned entity в прошлом)
+      - Career path analysis
+    - **Будущие связи** (`ValidFrom > now`) — не участвуют в propagation, но видны как "projected"
+    - **Правило выставления `edgeModality` на основе дат** (для единообразия UI/аналитики):
+      - если `ValidFrom != nil && ValidFrom > now` → `edgeModality = "projected"`
+      - если `ValidTo != nil && ValidTo < now` → `edgeModality = "historical"`
+      - иначе → `edgeModality = "actual"`
+  - **Влияние на риски (Risk Model)**:
+    - Исторические связи с sanctioned entities = **lower but non-zero risk**
+    - "Бывший сотрудник sanctioned company" — всё равно red flag
+    - Модель рисков должна учитывать `ValidTo` при расчёте risk score
+  - **Scout/Critic интеграция**:
+    - Scout должен извлекать temporal info:
+      - "worked at X from 2015 to 2020" → ValidFrom = 2015-01-01, ValidTo = 2020-12-31
+      - "former CEO" → ValidTo = past date (если известна)
+      - "joined in 2021" → ValidFrom = 2021-01-01, ValidTo = nil
+    - Critic должен:
+      - Если source содержит "former", "ex-", "бывший" → требовать ValidTo
+      - Для `EMPLOYED_BY`, `BOARD_MEMBER_OF`, `MANAGES` → желательно ValidFrom
+  - **Qualifiers для temporal context** (дополнительно к ValidFrom/ValidTo):
+    - `Qualifiers["startReason"]`: "hired", "elected", "acquired", "contracted"
+    - `Qualifiers["endReason"]`: "resigned", "fired", "retired", "expired", "sold", "exited"
+    - `Qualifiers["tenure"]`: "2015-2020", "5 years" (human-readable summary)
+  - **JSON пример — исторический EMPLOYED_BY**:
+    ```json
+    {
+      "type": "EMPLOYED_BY",
+      "sourceFragmentId": "/person/us/satya-nadella",
+      "targetFragmentId": "/org/us/sun-microsystems",
+      "validFrom": "1992-01-01T00:00:00Z",
+      "validTo": "1992-12-31T00:00:00Z",
+      "qualifiers": {
+        "role": "Intern",
+        "endReason": "contract_ended"
+      }
+    }
+    ```
+  - **JSON пример — активный OWNS**:
+    ```json
+    {
+      "type": "OWNS",
+      "sourceFragmentId": "/org/us/softbank-vision-fund",
+      "targetFragmentId": "/org/us/wework",
+      "validFrom": "2017-08-01T00:00:00Z",
+      "validTo": null,
+      "metrics": {
+        "ownership_percent": {"value": 29.5, "unit": "percent"}
+      }
+    }
+    ```
+  - **JSON пример — exit из INVESTS_IN**:
+    ```json
+    {
+      "type": "INVESTS_IN",
+      "sourceFragmentId": "/org/us/sequoia-capital",
+      "targetFragmentId": "/org/us/airbnb",
+      "validFrom": "2009-04-01T00:00:00Z",
+      "validTo": "2020-12-10T00:00:00Z",
+      "metrics": {
+        "investment_amount": {"value": 600000, "unit": "usd"}
+      },
+      "qualifiers": {
+        "round": "seed",
+        "endReason": "ipo_exit"
+      }
+    }
+    ```
+  - **Чеклист изменений**:
+    - [ ] `backend/internal/horizon/models/dependency_edge.go` → добавить методы `IsActive()`, `IsActiveNow()`, `IsHistorical()`
+    - [ ] `backend/internal/horizon/scout/agents/scout_agent.go` → извлекать temporal info из sources ("former", "ex-", "since", "until")
+    - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → требовать ValidTo для "former/ex-" relationships
+    - [ ] Propagation engine → фильтровать historical edges из real-time propagation
+    - [ ] Risk model (future) → учитывать historical relationships в risk scoring
+    - [ ] Query API → параметр `?includeHistorical=true|false` (default: false для active only)
+    - [ ] `docs/horizon/architecture/data-model.md` → документировать edge temporal validity
 - **Связь Lifecycle Stage → Edge Modality**
   - **Проблема**: Если target fragment в `construction`, edge к нему — это "будущая" связь, не текущая.
   - **Решение**: Автоматически помечать edges к non-operational targets:
     - Если `target.LifecycleStage` не в [`operational`, `expansion`]:
-      - Устанавливать `edge.Qualifiers["modality"] = "projected"`
+      - Устанавливать `edge.Qualifiers["edgeModality"] = "projected"` (отдельно от эпистемической modality)
       - Или `edge.ValidFrom` = target's `ExpectedStartDate`
-    - Propagation engine учитывает modality:
-      - `modality: "actual"` (default) → полный вес
-      - `modality: "projected"` → сниженный вес или отдельный signal type
-      - `modality: "historical"` → не участвует в текущем propagation
+    - Propagation engine учитывает `edgeModality`:
+      - `edgeModality: "actual"` (default) → полный вес
+      - `edgeModality: "projected"` → сниженный вес или отдельный signal type
+      - `edgeModality: "historical"` → не участвует в текущем propagation
   - **Canonical edge modalities**:
     ```go
     AllowedEdgeModalities: []string{
@@ -776,7 +1135,7 @@
       "sourceFragmentId": "/fac/tesla/monterrey-gigafactory",
       "targetFragmentId": "/org/na/ford",
       "qualifiers": {
-        "modality": "projected",
+        "edgeModality": "projected",
         "product": "/product/component/electronic/manufacturing/battery-cell"
       },
       "validFrom": "2026-03-01T00:00:00Z"
@@ -796,6 +1155,10 @@
     - вторичные характеристики сущности,
     - (опционально) политику применения/порогов.
   - Требования: **идемпотентность**, **трассировка (explain/trace)**, **версионирование логики** (чтобы воспроизводить состояние).
+
+---
+### Конец большого раздела работ: расширение онтологии/таксономии Horizon
+---
 - **Signal handlers: риски / возможности / тренды / направления (семантика поверх доставки)**
   - Ввести единый тип “signal” (kind: risk|opportunity|trend|direction) с **каноническим type** (runtime taxonomy: allowed + synonyms).
   - Provenance считаем “вынесенным”: сигнал должен ссылаться на доказательную базу через онтологические ноды/факты (например, `ontology_facts`, `ontology_events`, `ontology_claims`, `ontology_sources`), а не тащить “простыни” ссылок внутрь Horizon.
