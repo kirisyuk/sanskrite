@@ -73,6 +73,31 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 			}
 		}
 
+		// Canonicalize certain mis-modeled edges before running validation policy.
+		// Example: PRODUCT OWNS ORGANIZATION -> ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
+		if sourceType != "" && targetType != "" {
+			if newType, shouldSwap, changed, reason := models.CanonicalizeEdge(edge.Type, models.FragmentType(sourceType), models.FragmentType(targetType)); changed {
+				oldType := edge.Type
+				edge.Type = newType
+				if shouldSwap {
+					edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
+					sourceType, targetType = targetType, sourceType
+				}
+				if edge.Qualifiers == nil {
+					edge.Qualifiers = map[string]interface{}{}
+				}
+				edge.Qualifiers["canonicalized"] = true
+				edge.Qualifiers["canonicalizedFromEdgeType"] = string(oldType)
+				edge.Qualifiers["canonicalizationReason"] = reason
+				edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
+				if shouldSwap {
+					edge.Qualifiers["normalizedDirection"] = true
+				}
+				log.Printf("%s Canonicalized edge: %s -> %s (%s) [from %s] reason=%s",
+					logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, oldType, reason)
+			}
+		}
+
 		decision, err := r.validationPolicy.Execute(ctx, policy.PolicyInput{
 			Kind: "edge",
 			Context: map[string]interface{}{
@@ -247,6 +272,64 @@ func (r *DependencyEdgesRepository) ListByTarget(ctx context.Context, tenantID, 
 		edges = append(edges, &edge)
 	}
 	return edges, nil
+}
+
+// EdgeQueryOptions provides optional filtering for edge queries.
+type EdgeQueryOptions struct {
+	IncludeHistorical bool // If false (default), filter out edges where ValidTo < now
+	IncludeFuture     bool // If false (default), filter out edges where ValidFrom > now
+}
+
+// ListBySourceWithOptions gets outgoing edges with filtering options.
+// When options.IncludeHistorical is false, historical edges (ValidTo < now) are filtered out.
+// When options.IncludeFuture is false, future edges (ValidFrom > now) are filtered out.
+func (r *DependencyEdgesRepository) ListBySourceWithOptions(ctx context.Context, tenantID, sourceFragmentID string, edgeType *models.DependencyType, limit int, opts *EdgeQueryOptions) ([]*models.DependencyEdge, error) {
+	edges, err := r.ListBySource(ctx, tenantID, sourceFragmentID, edgeType, limit)
+	if err != nil {
+		return nil, err
+	}
+	return filterEdgesByOptions(edges, opts), nil
+}
+
+// ListByTargetWithOptions gets incoming edges with filtering options.
+// When options.IncludeHistorical is false, historical edges (ValidTo < now) are filtered out.
+// When options.IncludeFuture is false, future edges (ValidFrom > now) are filtered out.
+func (r *DependencyEdgesRepository) ListByTargetWithOptions(ctx context.Context, tenantID, targetFragmentID string, edgeType *models.DependencyType, limit int, opts *EdgeQueryOptions) ([]*models.DependencyEdge, error) {
+	edges, err := r.ListByTarget(ctx, tenantID, targetFragmentID, edgeType, limit)
+	if err != nil {
+		return nil, err
+	}
+	return filterEdgesByOptions(edges, opts), nil
+}
+
+// filterEdgesByOptions applies temporal filtering based on options.
+// This is done in-memory because Firestore doesn't support null-field comparisons efficiently.
+func filterEdgesByOptions(edges []*models.DependencyEdge, opts *EdgeQueryOptions) []*models.DependencyEdge {
+	if opts == nil {
+		opts = &EdgeQueryOptions{} // Default: exclude historical and future
+	}
+
+	// If including everything, return as-is
+	if opts.IncludeHistorical && opts.IncludeFuture {
+		return edges
+	}
+
+	result := make([]*models.DependencyEdge, 0, len(edges))
+	for _, edge := range edges {
+		if edge == nil {
+			continue
+		}
+		// Filter historical edges
+		if !opts.IncludeHistorical && edge.IsHistorical() {
+			continue
+		}
+		// Filter future edges
+		if !opts.IncludeFuture && edge.IsFuture() {
+			continue
+		}
+		result = append(result, edge)
+	}
+	return result
 }
 
 // Update обновляет DependencyEdge

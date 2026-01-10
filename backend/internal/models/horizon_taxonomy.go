@@ -42,8 +42,28 @@ type HorizonTaxonomy struct {
 	// Industry taxonomy (/industry/...) — canonical, multi-valued classification for ORG/PERSON/PRODUCT.
 	// This is intended to be more strict than free-form sectorPath.
 	AllowedIndustryPaths []string          `json:"allowedIndustryPaths,omitempty" firestore:"allowedIndustryPaths,omitempty"`
-	IndustrySynonyms     map[string]string `json:"industrySynonyms,omitempty" firestore:"industrySynonyms,omitempty"` // normalized label -> /industry/... path
+	IndustrySynonyms     map[string]string `json:"industrySynonyms,omitempty" firestore:"industrySynonyms,omitempty"`       // normalized label -> /industry/... path
 	IndustryWikidataMap  map[string]string `json:"industryWikidataMap,omitempty" firestore:"industryWikidataMap,omitempty"` // Wikidata QID -> /industry/... path
+
+	// Natural resource deposits (/deposit/{resource-slug}/{deposit-slug})
+	AllowedDepositResources []string `json:"allowedDepositResources,omitempty" firestore:"allowedDepositResources,omitempty"`
+
+	// Lifecycle stages for FACILITY, DEPOSIT, ORGANIZATION
+	AllowedLifecycleStages []string          `json:"allowedLifecycleStages,omitempty" firestore:"allowedLifecycleStages,omitempty"`
+	LifecycleStageAliases  map[string]string `json:"lifecycleStageAliases,omitempty" firestore:"lifecycleStageAliases,omitempty"` // industry-specific alias -> canonical
+
+	// Edge metrics (numerical data on edges)
+	AllowedEdgeMetrics    map[string][]string `json:"allowedEdgeMetrics,omitempty" firestore:"allowedEdgeMetrics,omitempty"`       // edge type -> allowed metric names
+	AllowedEdgeModalities []string            `json:"allowedEdgeModalities,omitempty" firestore:"allowedEdgeModalities,omitempty"` // "actual", "projected", "historical", "potential"
+
+	// Service taxonomy (/product/service/{domain}/{subdomain}/{slug})
+	AllowedServiceDomains    []string                    `json:"allowedServiceDomains,omitempty" firestore:"allowedServiceDomains,omitempty"`
+	AllowedServiceSubdomains map[string][]string         `json:"allowedServiceSubdomains,omitempty" firestore:"allowedServiceSubdomains,omitempty"` // domain -> subdomains
+	KnownServices            map[string]ServiceSpecData  `json:"knownServices,omitempty" firestore:"knownServices,omitempty"`
+	ServiceSynonyms          map[string]string           `json:"serviceSynonyms,omitempty" firestore:"serviceSynonyms,omitempty"` // alias -> canonical slug
+
+	// Optional: product models (for specific SKU/model tracking)
+	KnownProductModels map[string]ProductModelSpecData `json:"knownProductModels,omitempty" firestore:"knownProductModels,omitempty"` // model-slug -> spec
 }
 
 // ProductSpecData is the Firestore representation of ProductSpec.
@@ -55,9 +75,21 @@ type ProductSpecData struct {
 
 // SignalTypeSpecData is the Firestore representation of SignalTypeSpec.
 type SignalTypeSpecData struct {
-	Kind               string `json:"kind" firestore:"kind"`                             // "risk", "opportunity", "trend", "direction"
-	Label              string `json:"label" firestore:"label"`                          // Human-readable label
-	DefaultMetric      string `json:"defaultMetric" firestore:"defaultMetric"`          // Default metric name for rollup
-	PropagationProfile string `json:"propagationProfile" firestore:"propagationProfile"` // "upstream_amplified", "downstream_amplified", "jurisdiction_scoped", etc.
+	Kind               string `json:"kind" firestore:"kind"`                               // "risk", "opportunity", "trend", "direction"
+	Label              string `json:"label" firestore:"label"`                             // Human-readable label
+	DefaultMetric      string `json:"defaultMetric" firestore:"defaultMetric"`             // Default metric name for rollup
+	PropagationProfile string `json:"propagationProfile" firestore:"propagationProfile"`   // "upstream_amplified", "downstream_amplified", "jurisdiction_scoped", etc.
+}
+
+// ServiceSpecData is the Firestore representation for services (/product/service/{domain}/{subdomain}/{slug}).
+type ServiceSpecData struct {
+	Domain    string `json:"domain" firestore:"domain"`       // "it", "financial", "legal", etc.
+	Subdomain string `json:"subdomain" firestore:"subdomain"` // "software", "cloud", "banking", etc.
+}
+
+// ProductModelSpecData is the Firestore representation for specific product models/SKUs.
+type ProductModelSpecData struct {
+	GenericSlug  string `json:"genericSlug" firestore:"genericSlug"`   // parent product slug (e.g., "excavator")
+	Manufacturer string `json:"manufacturer" firestore:"manufacturer"` // manufacturer org slug (e.g., "caterpillar")
 }
 

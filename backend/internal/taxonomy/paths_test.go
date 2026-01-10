@@ -151,6 +151,16 @@ func TestValidateCanonicalPath(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid deposit path (preferred)",
+			path:    "/deposit/crude-oil/permian-basin",
+			wantErr: false,
+		},
+		{
+			name:    "valid deposit path (legacy)",
+			path:    "/deposit/ghawar",
+			wantErr: false,
+		},
+		{
 			name:    "namespace-only path is invalid",
 			path:    "/org",
 			wantErr: true,

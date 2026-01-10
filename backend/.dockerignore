@@ -7,6 +7,18 @@ ws-broker
 *.test
 *.out
 
+# Local tool binaries (can be very large; not needed for Docker builds)
+horizon_*
+
+# Local build artifacts and caches
+bin/
+build/
+
+# Local data dumps / experiments
+*.jsonl
+*.duration.txt
+*.log
+
 # Ignore vendor if exists
 vendor/
 

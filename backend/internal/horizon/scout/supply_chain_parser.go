@@ -170,6 +170,8 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 		return models.FragmentTypeProduct
 	case "GEO_REGION":
 		return models.FragmentTypeGeoRegion
+	case "DEPOSIT":
+		return models.FragmentTypeDeposit
 	}
 
 	// Fallback: infer from canonical path prefix
@@ -183,6 +185,8 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 		return models.FragmentTypeProduct
 	case strings.HasPrefix(canonicalPath, "/loc/"):
 		return models.FragmentTypeGeoRegion
+	case strings.HasPrefix(canonicalPath, "/deposit/"):
+		return models.FragmentTypeDeposit
 	}
 
 	return ""

@@ -2706,6 +2706,43 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 				// Keep processing below: direction might still need to be reversed.
 			}
 
+			// Canonicalize certain mis-modeled edges where reversing is not sufficient.
+			// Example: PRODUCT OWNS ORGANIZATION -> ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
+			if newType, shouldSwap, changed, reason := scout.CanonicalizeEdge(edge.Type, sourceType, targetType); changed {
+				oldType := edge.Type
+				edge.Type = newType
+				if shouldSwap {
+					oldSource := edge.SourceFragmentID
+					edge.SourceFragmentID = edge.TargetFragmentID
+					edge.TargetFragmentID = oldSource
+					sourceType, targetType = targetType, sourceType
+				}
+				// Re-apply symmetric normalization after swap/type-change (noop for non-symmetric).
+				edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+
+				if edge.Qualifiers == nil {
+					edge.Qualifiers = map[string]interface{}{}
+				}
+				edge.Qualifiers["canonicalized"] = true
+				edge.Qualifiers["canonicalizedFromEdgeType"] = string(oldType)
+				edge.Qualifiers["canonicalizationReason"] = reason
+				edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
+				if shouldSwap {
+					edge.Qualifiers["normalizedDirection"] = true
+				}
+
+				if err := edgesRepo.Update(ctx, &edge); err != nil {
+					log.Printf("  ERROR: failed to canonicalize edge %s: %v", edge.ID, err)
+					continue
+				}
+				if *verbose {
+					log.Printf("  ✓ Canonicalized edge %s: %s -> %s [%s -> %s]",
+						edge.ID, oldType, edge.Type, edge.TargetFragmentID, edge.SourceFragmentID)
+				}
+				fixed++
+				continue
+			}
+
 			if scout.ShouldReverseEdge(edge.Type, sourceType, targetType) {
 				// Reverse the edge
 				oldSource := edge.SourceFragmentID

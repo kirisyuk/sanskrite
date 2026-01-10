@@ -86,6 +86,7 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'REQUIRES': 2,
   'USES': 2,
   'NEEDS': 2,
+  'EXTRACTS_FROM': 2,
 
   // 3) Market (peers)
   'COMPETES_WITH': 3,
@@ -347,11 +348,23 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
   const type = normalizeEdgeType(edgeType);
   
   switch (type) {
+    // People / governance relationships should be treated as "context" for placement:
+    // founders/board/executives/staff are not supply-chain nor customers.
+    case 'FOUNDED':
+    case 'BOARD_MEMBER_OF':
+    case 'EXECUTIVE_OF':
+    case 'EMPLOYED_BY':
+    case 'KEY_PERSON':
+    case 'WORKS_FOR':
+      return 'context';
+
     // Supply Chain vs Customers depends on direction
     case 'SUPPLIES_TO':
       return isOutgoing ? 'customers' : 'supply-chain';  // outgoing = we supply to them (customer), incoming = they supply to us (supplier)
     case 'DEPENDS_ON':
       return isOutgoing ? 'supply-chain' : 'customers';  // outgoing = we depend on them (upstream), incoming = they depend on us (downstream)
+    case 'EXTRACTS_FROM':
+      return isOutgoing ? 'supply-chain' : 'customers';  // outgoing = we extract from them (upstream resource), incoming = they extract from us (rare)
     case 'CONSUMES':
       return 'supply-chain';  // we consume something = upstream
     
@@ -452,6 +465,7 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'REQUIRES',
     'USES',
     'NEEDS',
+    'EXTRACTS_FROM',
   ]);
 
   // RIGHT side: environment (context/regulation/competition/influence).
@@ -489,6 +503,7 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'NEEDS',
     'USES',
     'CONSUMES',
+    'EXTRACTS_FROM',
     // Context / Geography
     'LOCATED_IN',
     'OPERATES_IN',
@@ -1062,6 +1077,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'NEEDS',
     'USES',
     'CONSUMES',
+    'EXTRACTS_FROM',
     // Governance/employment: PERSON -(EMPLOYED_BY)-> ORG means ORG is the "more ultimate" node (parent).
     'EMPLOYED_BY',
     'LOCATED_IN',
@@ -1088,7 +1104,7 @@ export async function layoutLevelsTwoPane<T = any>(
   // Example: A -(DEPENDS_ON)-> B means A is downstream of B.
   // If B is expanded/central, the edge is incoming to B, but A should stay in the LEFT group (downstream),
   // not be promoted into the right backbone.
-  const INCOMING_STAY_IN_GROUP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'AUDITED_BY']);
+  const INCOMING_STAY_IN_GROUP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM', 'AUDITED_BY']);
 
   // Context / geography relations should stay in LEFT groups even when they are "incoming" to an expanded node.
   // Otherwise expanding a GEO node would promote many orgs/places into the right backbone and compete for space.
@@ -1098,6 +1114,11 @@ export async function layoutLevelsTwoPane<T = any>(
     'BASED_IN',
     'HEADQUARTERED_IN',
     'REGULATES',
+    // Influence relations should stay grouped (context), not be promoted into the right backbone.
+    // Otherwise an incoming INFLUENCES edge can incorrectly "hijack" the hierarchy layout.
+    'INFLUENCES',
+    'AFFECTS',
+    'IMPACTS',
   ]);
 
   const getParentChild = (e: any): { parent: string; child: string } | null => {
@@ -1396,6 +1417,7 @@ export async function layoutLevelsTwoPane<T = any>(
     if (tt === 'MEDIA_CHANNEL') return 130;
     // "Places / assets"
     if (tt === 'FACILITY') return 210;
+    if (tt === 'DEPOSIT') return 215;
     if (tt === 'GEO_REGION') return 220;
     if (tt === 'LOCATION') return 230;
     // Other domain objects
@@ -1855,10 +1877,15 @@ export async function layoutLevelsTwoPane<T = any>(
   const stackKeyByMemberId = new Map<string, string>(); // memberId -> stackGroupKey
   const stackControllerByMemberId = new Map<string, string>(); // memberId -> controllerId
 
-  const CONTROL_EDGE_TYPES = new Set(['OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN']);
+  // Control / ownership / governance signals that should be bucketed into Stakeholders.
+  // NOTE: This is used for right-pane stacking in Levels layout.
+  const CONTROL_EDGE_TYPES = new Set(['OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'FOUNDED']);
+  // Person -> Org "control / governance" signals. If present, we bucket the PERSON into Stakeholders instead of generic People.
+  // (Example: founder or investor should appear among stakeholders for the expanded org.)
+  const PERSON_CONTROL_EDGE_TYPES = new Set(['FOUNDED', 'INVESTS_IN', 'OWNS', 'CONTROLS', 'MANAGES', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF']);
   const GEO_TYPES = new Set(['GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY']);
   const SUPPLY_EDGE_TYPES = new Set(['SUPPLIES_TO', 'PRODUCES']);
-  const DEPENDENCY_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+  const DEPENDENCY_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
   const stackKindOfRightNode = (id: string, relatedId?: string): { kind: string; title: string; visualType: string } | null => {
     const node = fragments.find((x) => x.id === id);
     const d: any = (node as any)?.data;
@@ -1896,9 +1923,16 @@ export async function layoutLevelsTwoPane<T = any>(
       const self = String(id || '').trim();
       if (rel && self) {
         const dk = `${self}||${rel}`; // person -> org (directed)
+        const dkRev = `${rel}||${self}`; // org -> person (may happen if edge direction is noisy)
         const dset = directedEdgeTypes.get(dk) || null;
+        const dsetRev = directedEdgeTypes.get(dkRev) || null;
         const hasEmployedBy = dset ? Array.from(dset).some((x) => normalizeEdgeType(x) === 'EMPLOYED_BY') : false;
         if (hasEmployedBy) return { kind: 'staff', title: 'Staff', visualType: 'PERSON' };
+        const hasControlSignal =
+          (dset ? Array.from(dset).some((x) => PERSON_CONTROL_EDGE_TYPES.has(normalizeEdgeType(x))) : false) ||
+          (dsetRev ? Array.from(dsetRev).some((x) => PERSON_CONTROL_EDGE_TYPES.has(normalizeEdgeType(x))) : false) ||
+          (pairTypes ? Array.from(pairTypes).some((x) => PERSON_CONTROL_EDGE_TYPES.has(normalizeEdgeType(x))) : false);
+        if (hasControlSignal) return { kind: 'control', title: 'Stakeholders', visualType: 'ORGANIZATION' };
       }
       return { kind: 'persons', title: 'People', visualType: 'PERSON' };
     }
@@ -2885,7 +2919,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     // NOTE: SUBSIDIARY_OF is inverse of OWNS (subsidiary -> parent). The backend often normalizes it into OWNS,
     // but keep this here for robustness when legacy edges leak through.
     'SUBSIDIARY_OF',
-    'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES',
+    'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM',
     // Context acts like upstream/parent
     'LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN'
   ]);

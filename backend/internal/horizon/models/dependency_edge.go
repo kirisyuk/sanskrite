@@ -18,6 +18,11 @@ type DependencyEdge struct {
 	ValidFrom        *time.Time             `json:"validFrom,omitempty" firestore:"validFrom,omitempty"`
 	ValidTo          *time.Time             `json:"validTo,omitempty" firestore:"validTo,omitempty"`
 	Metadata         EdgeMetadata           `json:"metadata" firestore:"metadata"`
+
+	// Metrics — edge-specific numerical metrics with units, provenance, etc.
+	// Examples: ownership_percent, investment_amount, annual_volume, contract_value.
+	// Uses the same MetricValue structure as fragment State for consistency.
+	Metrics map[string]MetricValue `json:"metrics,omitempty" firestore:"metrics,omitempty"`
 }
 
 // DependencyType тип зависимости
@@ -46,6 +51,10 @@ const (
 	// Used for generic value chain relationships (e.g., lithium-ore → lithium-carbonate → cathode-material → battery-cell).
 	// Source: upstream product (earlier stage), Target: downstream product (later stage).
 	DependencyTypeTransformsInto DependencyType = "TRANSFORMS_INTO"
+	// DependencyTypeExtractsFrom represents facility extracting resources from a deposit.
+	// Direction: FACILITY → DEPOSIT (e.g., mine extracts from ore deposit, platform extracts from oil field).
+	// More precise than LOCATED_IN, captures the operational relationship.
+	DependencyTypeExtractsFrom DependencyType = "EXTRACTS_FROM"
 
 	// --- Governance / control / org-person relationships ---
 	// MANAGES: formal management relationship (CEO, director, operator) — not necessarily ownership.
@@ -129,4 +138,56 @@ func (e *DependencyEdge) Validate() error {
 	}
 
 	return nil
+}
+
+// IsActive checks whether the edge is active (effective) at the given time.
+// Returns true if the edge's validity window includes the given time.
+// - If ValidFrom is set and time is before it, the edge hasn't started yet.
+// - If ValidTo is set and time is after it, the edge has ended.
+// - Otherwise, the edge is active.
+func (e *DependencyEdge) IsActive(at time.Time) bool {
+	if e.ValidFrom != nil && at.Before(*e.ValidFrom) {
+		return false // edge hasn't started yet
+	}
+	if e.ValidTo != nil && at.After(*e.ValidTo) {
+		return false // edge has ended
+	}
+	return true
+}
+
+// IsActiveNow checks whether the edge is active at the current moment.
+func (e *DependencyEdge) IsActiveNow() bool {
+	return e.IsActive(time.Now())
+}
+
+// IsHistorical checks whether the edge has ended (ValidTo is in the past).
+// Historical edges are not deleted but are filtered from real-time propagation.
+func (e *DependencyEdge) IsHistorical() bool {
+	return e.ValidTo != nil && time.Now().After(*e.ValidTo)
+}
+
+// IsFuture checks whether the edge hasn't started yet (ValidFrom is in the future).
+// Future edges represent projected/planned relationships.
+func (e *DependencyEdge) IsFuture() bool {
+	return e.ValidFrom != nil && time.Now().Before(*e.ValidFrom)
+}
+
+// GetEdgeModality derives the edge modality from ValidFrom/ValidTo dates.
+// Returns: "actual", "projected", or "historical".
+// This is used for propagation filtering and UI display.
+func (e *DependencyEdge) GetEdgeModality() string {
+	// Check explicit qualifier first
+	if e.Qualifiers != nil {
+		if modality, ok := e.Qualifiers["edgeModality"].(string); ok && modality != "" {
+			return modality
+		}
+	}
+	// Derive from dates
+	if e.IsFuture() {
+		return "projected"
+	}
+	if e.IsHistorical() {
+		return "historical"
+	}
+	return "actual"
 }

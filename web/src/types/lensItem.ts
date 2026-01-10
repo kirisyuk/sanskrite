@@ -28,27 +28,44 @@ export type DependencyType =
   | 'SUPPLIES_TO'
   | 'LOCATED_IN'
   | 'OWNS'
+  | 'PARENT_OF'
   | 'SUBSIDIARY_OF'
   | 'PRODUCES'
   | 'CONSUMES'
   | 'OPERATES_IN'
+  | 'BASED_IN'
+  | 'HEADQUARTERED_IN'
   | 'REGULATES'
   | 'COMPETES_WITH'
+  | 'CONFLICTS_WITH'
+  | 'OPPOSES'
   | 'DEPENDS_ON'
   | 'INFLUENCES'
   | 'TRANSFORMS_INTO'
+  | 'EXTRACTS_FROM'
   // Governance / org-person
   | 'MANAGES'
   | 'CONTROLS'
   | 'EMPLOYED_BY'
   | 'BOARD_MEMBER_OF'
+  | 'EXECUTIVE_OF'
   | 'FOUNDED'
   | 'INVESTS_IN'
   | 'PARTNERS_WITH'
+  | 'COOPERATES_WITH'
   // OSINT-lite / governance extensions
   | 'AUDITED_BY'
   | 'RELATIVE_OF'
-  | 'RELATED_TO';
+  | 'RELATED_TO'
+  // UI/ingestion-tolerant aliases (backend may emit these, UI should not break)
+  | 'REQUIRES'
+  | 'NEEDS'
+  | 'USES'
+  | 'SIMILAR_TO'
+  | 'LINKED_TO'
+  | 'AFFECTS'
+  | 'IMPACTS'
+  | 'SUPPORTS';
 
 export type EdgeDirection = 'forward' | 'reverse' | 'bidirectional';
 

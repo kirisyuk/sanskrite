@@ -80,6 +80,18 @@ type HorizonFragment struct {
 	ProductRef          *string `json:"productRef,omitempty" firestore:"productRef,omitempty"`                   // /product/... (required for SUPPLY_LINK)
 	SupplierFacilityRef *string `json:"supplierFacilityRef,omitempty" firestore:"supplierFacilityRef,omitempty"` // /fac/... (optional)
 	CustomerFacilityRef *string `json:"customerFacilityRef,omitempty" firestore:"customerFacilityRef,omitempty"` // /fac/... (optional)
+
+	// Lifecycle — real-world lifecycle stage and dates (for FACILITY, DEPOSIT, ORGANIZATION).
+	// LifecycleStage is a canonical value from AllowedLifecycleStages (e.g., "construction", "operational", "closed").
+	LifecycleStage string `json:"lifecycleStage,omitempty" firestore:"lifecycleStage,omitempty"`
+	// ExpectedStartDate — when the entity is planned to become operational (for construction/planning stages).
+	ExpectedStartDate *time.Time `json:"expectedStartDate,omitempty" firestore:"expectedStartDate,omitempty"`
+	// ActualStartDate — when the entity actually started operating.
+	ActualStartDate *time.Time `json:"actualStartDate,omitempty" firestore:"actualStartDate,omitempty"`
+	// ExpectedEndDate — when the entity is planned to close/decommission.
+	ExpectedEndDate *time.Time `json:"expectedEndDate,omitempty" firestore:"expectedEndDate,omitempty"`
+	// ActualEndDate — when the entity actually closed.
+	ActualEndDate *time.Time `json:"actualEndDate,omitempty" firestore:"actualEndDate,omitempty"`
 }
 
 // FragmentMetadata метаданные жизненного цикла

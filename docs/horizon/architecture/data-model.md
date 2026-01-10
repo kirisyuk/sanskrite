@@ -16,7 +16,7 @@
   "id": "uuid",
   "tenantId": "global",
   "canonicalPath": "/fac/tsmc/fab-21",
-  "type": "ORGANIZATION | FACILITY | GEO_REGION | SPHERE | EVENT | PRODUCT | PROGRAM | MARKET | PERSON",
+  "type": "ORGANIZATION | FACILITY | GEO_REGION | SPHERE | EVENT | PRODUCT | PROGRAM | MARKET | PERSON | DEPOSIT",
   "entityPath": "/Infrastructure/Manufacturing/Factory",
   "sectorPath": "/Technology/Semiconductors/Manufacturing",
   "entityId": "uuid",
@@ -55,6 +55,11 @@
   },
   "validFrom": "2020-01-01T00:00:00Z",
   "validTo": null,
+  "lifecycleStage": "operational",
+  "expectedStartDate": null,
+  "actualStartDate": "2020-01-01T00:00:00Z",
+  "expectedEndDate": null,
+  "actualEndDate": null,
   "labels": {
     "en": "TSMC Fab 21",
     "ru": "TSMC Фабрика 21"
@@ -323,7 +328,7 @@
   "tenantId": "string",
   "sourceFragmentId": "uuid",
   "targetFragmentId": "uuid",
-  "type": "SUPPLIES_TO | LOCATED_IN | OWNS | PRODUCES | OPERATES_IN | REGULATES | COMPETES_WITH | DEPENDS_ON | INFLUENCES",
+  "type": "SUPPLIES_TO | LOCATED_IN | OWNS | PRODUCES | OPERATES_IN | REGULATES | COMPETES_WITH | DEPENDS_ON | INFLUENCES | EXTRACTS_FROM | CONSUMES | SUBSIDIARY_OF | ...",
   "properties": {
     "criticality": 0.9,
     "amplification": 1.1,
@@ -332,7 +337,25 @@
   "qualifiers": {
     "sharePercentage": 0.45,
     "contractType": "long-term",
-    "alternativeSuppliers": 2
+    "alternativeSuppliers": 2,
+    "edgeModality": "actual",
+    "eventId": "/event/funding-round-series-a"
+  },
+  "metrics": {
+    "ownership_percent": {
+      "value": 45.0,
+      "unit": "percent",
+      "confidence": 0.95,
+      "observedAt": "2025-12-17T14:30:00Z",
+      "provenance": { "sourceRefs": [{ "sourceId": "doc-uuid", "sourceType": "document" }] }
+    },
+    "investment_amount": {
+      "value": 10000000,
+      "unit": "usd",
+      "confidence": 0.90,
+      "observedAt": "2025-12-17T14:30:00Z",
+      "provenance": { "sourceRefs": [{ "sourceId": "doc-uuid", "sourceType": "document" }] }
+    }
   },
   "provenance": {
     "sourceRefs": [
@@ -364,6 +387,44 @@
 - `(tenantId, properties.criticality DESC)` — для сортировки по критичности
 
 **Связь с Frame**: DependencyEdge создается на основе Frame со статусом VERIFIED
+
+### horizon_missing_info_status
+
+**Назначение**: Трекинг статуса поиска недостающей информации (exhaustion/cooldown mechanism)
+
+**Структура документа**:
+```json
+{
+  "id": "fragmentId-questionHash",
+  "tenantId": "global",
+  "fragmentId": "uuid",
+  "question": "What is the ownership percentage for OWNS relation between X and Y?",
+  "questionHash": "sha256hash",
+  "status": "pending | in_progress | exhausted | resolved",
+  "attempts": 3,
+  "lastAttempt": "2025-12-17T14:30:00Z",
+  "nextAttempt": "2025-12-18T14:30:00Z",
+  "exhaustedAt": null,
+  "resolvedAt": null,
+  "resolutionProvenance": null,
+  "createdAt": "2025-12-15T10:00:00Z",
+  "updatedAt": "2025-12-17T14:30:00Z"
+}
+```
+
+**Статусы**:
+- `pending`: Вопрос создан, ожидает исследования
+- `in_progress`: Исследование в процессе
+- `exhausted`: Информация не найдена после максимального количества попыток
+- `resolved`: Информация найдена и применена
+
+**Индексы**:
+- `(tenantId, fragmentId, questionHash)` — для поиска статуса
+- `(tenantId, status, nextAttempt ASC)` — для планирования retry
+
+**Cooldown механизм**:
+- После неудачной попытки: `nextAttempt = now + cooldownDuration` (настраивается)
+- После `maxAttempts` попыток: `status = exhausted`, retry только вручную или по расписанию
 
 ### watchdog_configs
 
@@ -587,6 +648,13 @@ type HorizonFragment struct {
     // Location с ISO стандартами
     HomeLocation  *Location         `json:"homeLocation,omitempty" firestore:"homeLocation,omitempty"`
     
+    // Lifecycle — стадия жизненного цикла объекта в реальном мире (NEW)
+    LifecycleStage    string     `json:"lifecycleStage,omitempty" firestore:"lifecycleStage,omitempty"`
+    ExpectedStartDate *time.Time `json:"expectedStartDate,omitempty" firestore:"expectedStartDate,omitempty"`
+    ActualStartDate   *time.Time `json:"actualStartDate,omitempty" firestore:"actualStartDate,omitempty"`
+    ExpectedEndDate   *time.Time `json:"expectedEndDate,omitempty" firestore:"expectedEndDate,omitempty"`
+    ActualEndDate     *time.Time `json:"actualEndDate,omitempty" firestore:"actualEndDate,omitempty"`
+    
     // Provenance
     Provenance    Provenance        `json:"provenance" firestore:"provenance"`
     
@@ -655,7 +723,9 @@ const (
     FragmentTypeProgram      FragmentType = "PROGRAM"
     FragmentTypeMarket       FragmentType = "MARKET"
     FragmentTypePerson       FragmentType = "PERSON"
-    FragmentTypeEvent        FragmentType = "EVENT"
+    FragmentTypeDeposit      FragmentType = "DEPOSIT"      // NEW: Natural resource deposits
+    FragmentTypeMediaChannel FragmentType = "MEDIA_CHANNEL"
+    FragmentTypeSupplyLink   FragmentType = "SUPPLY_LINK"
 )
 
 type FragmentMetadata struct {
@@ -764,26 +834,56 @@ type DependencyEdge struct {
     Type             DependencyType          `json:"type" firestore:"type"`
     Properties       EdgeProperties         `json:"properties" firestore:"properties"`
     Qualifiers       map[string]interface{} `json:"qualifiers,omitempty" firestore:"qualifiers,omitempty"`
+    
+    // Metrics — edge-specific numerical metrics with units, provenance, etc. (NEW)
+    // Examples: ownership_percent, investment_amount, annual_volume, contract_value
+    Metrics          map[string]MetricValue `json:"metrics,omitempty" firestore:"metrics,omitempty"`
+    
     Provenance       Provenance             `json:"provenance" firestore:"provenance"`
+    
+    // ValidFrom/ValidTo — real-world effective time of the relationship (NEW semantics)
+    // NOT epistemic time (when we observed) — that's in MetricValue.ObservedAt + Provenance
     ValidFrom        *time.Time             `json:"validFrom,omitempty" firestore:"validFrom,omitempty"`
     ValidTo          *time.Time             `json:"validTo,omitempty" firestore:"validTo,omitempty"`
+    
     Metadata         EdgeMetadata           `json:"metadata" firestore:"metadata"`
 }
+
+// IsActive checks if the edge is active at a given time
+func (e *DependencyEdge) IsActive(at time.Time) bool
+
+// IsActiveNow checks if the edge is currently active
+func (e *DependencyEdge) IsActiveNow() bool
+
+// IsHistorical checks if the edge has already ended
+func (e *DependencyEdge) IsHistorical() bool
 
 type DependencyType string
 
 const (
-    DependencyTypeSuppliesTo   DependencyType = "SUPPLIES_TO"
-    DependencyTypeLocatedIn    DependencyType = "LOCATED_IN"
-    DependencyTypeOwns         DependencyType = "OWNS"
-    DependencyTypeProduces     DependencyType = "PRODUCES"
-    DependencyTypeOperatesIn   DependencyType = "OPERATES_IN"
-    DependencyTypeRegulates    DependencyType = "REGULATES"
-    DependencyTypeCompetesWith DependencyType = "COMPETES_WITH"
-    DependencyTypeDependsOn    DependencyType = "DEPENDS_ON"
-    DependencyTypeInfluences   DependencyType = "INFLUENCES"
-    DependencyTypeOwns         DependencyType = "OWNS"
-    DependencyTypeCompetesWith DependencyType = "COMPETES_WITH"
+    DependencyTypeSuppliesTo    DependencyType = "SUPPLIES_TO"
+    DependencyTypeLocatedIn     DependencyType = "LOCATED_IN"
+    DependencyTypeOwns          DependencyType = "OWNS"
+    DependencyTypeProduces      DependencyType = "PRODUCES"
+    DependencyTypeConsumes      DependencyType = "CONSUMES"
+    DependencyTypeOperatesIn    DependencyType = "OPERATES_IN"
+    DependencyTypeRegulates     DependencyType = "REGULATES"
+    DependencyTypeCompetesWith  DependencyType = "COMPETES_WITH"
+    DependencyTypeDependsOn     DependencyType = "DEPENDS_ON"
+    DependencyTypeInfluences    DependencyType = "INFLUENCES"
+    DependencyTypeSubsidiaryOf  DependencyType = "SUBSIDIARY_OF"
+    DependencyTypeTransformsInto DependencyType = "TRANSFORMS_INTO"
+    DependencyTypeManages       DependencyType = "MANAGES"
+    DependencyTypeControls      DependencyType = "CONTROLS"
+    DependencyTypeEmployedBy    DependencyType = "EMPLOYED_BY"
+    DependencyTypeBoardMemberOf DependencyType = "BOARD_MEMBER_OF"
+    DependencyTypeFounded       DependencyType = "FOUNDED"
+    DependencyTypeInvestsIn     DependencyType = "INVESTS_IN"
+    DependencyTypePartnersWith  DependencyType = "PARTNERS_WITH"
+    DependencyTypeAuditedBy     DependencyType = "AUDITED_BY"
+    DependencyTypeRelativeOf    DependencyType = "RELATIVE_OF"
+    DependencyTypeRelatedTo     DependencyType = "RELATED_TO"
+    DependencyTypeExtractsFrom  DependencyType = "EXTRACTS_FROM" // NEW: FACILITY extracts from DEPOSIT
 )
 
 type EdgeProperties struct {
@@ -796,6 +896,31 @@ type EdgeMetadata struct {
     SourceFrameID  string    `json:"sourceFrameId" firestore:"sourceFrameId"`
     CreatedAt      time.Time `json:"createdAt" firestore:"createdAt"`
     LastUpdatedAt  time.Time `json:"lastUpdatedAt" firestore:"lastUpdatedAt"`
+}
+
+// Qualifiers — categorical data and modality for edges
+// Standard qualifiers:
+// - edgeModality: "actual" | "projected" | "historical" | "potential"
+// - eventId: Reference to /event/ fragment (e.g., for INVESTS_IN funding rounds)
+// - round: Investment round name (e.g., "Series A")
+// - contractType: Type of contract (e.g., "long-term", "spot")
+
+// MissingInfoStatus — tracks missing information research status (NEW)
+type MissingInfoStatus struct {
+    ID                   string      `json:"id" firestore:"id"` // fragmentId-questionHash
+    TenantID             string      `json:"tenantId" firestore:"tenantId"`
+    FragmentID           string      `json:"fragmentId" firestore:"fragmentId"`
+    Question             string      `json:"question" firestore:"question"`
+    QuestionHash         string      `json:"questionHash" firestore:"questionHash"`
+    Status               string      `json:"status" firestore:"status"` // pending, in_progress, exhausted, resolved
+    Attempts             int         `json:"attempts" firestore:"attempts"`
+    LastAttempt          time.Time   `json:"lastAttempt" firestore:"lastAttempt"`
+    NextAttempt          *time.Time  `json:"nextAttempt,omitempty" firestore:"nextAttempt,omitempty"`
+    ExhaustedAt          *time.Time  `json:"exhaustedAt,omitempty" firestore:"exhaustedAt,omitempty"`
+    ResolvedAt           *time.Time  `json:"resolvedAt,omitempty" firestore:"resolvedAt,omitempty"`
+    ResolutionProvenance *Provenance `json:"resolutionProvenance,omitempty" firestore:"resolutionProvenance,omitempty"`
+    CreatedAt            time.Time   `json:"createdAt" firestore:"createdAt"`
+    UpdatedAt            time.Time   `json:"updatedAt" firestore:"updatedAt"`
 }
 ```
 
@@ -895,15 +1020,63 @@ gcloud firestore indexes composite create \
 
 ## Связь с таксономией
 
-Все HorizonFragment должны соответствовать базовой таксономии (Core Taxonomy v1.0):
+Все HorizonFragment должны соответствовать базовой таксономии (Core Taxonomy v1.0+):
 
-- **entityPath**: Определяет физическую природу узла (`/Organization/*`, `/Infrastructure/*`, `/Resource/*`, `/Person/*`, `/Geo/*`)
+- **entityPath**: Определяет физическую природу узла (`/Organization/*`, `/Infrastructure/*`, `/Resource/*`, `/Person/*`, `/Geo/*`, `/Resource/Deposit/*`)
 - **sectorPath**: Определяет отрасль и сектор (`/Energy/*`, `/Technology/*`, `/Materials/*`, и т.д.)
 - **homeLocation**: Использует ISO стандарты (ISO 3166-1/3166-2 для регионов, ISO 6709 для координат)
+- **lifecycleStage**: Определяет стадию жизненного цикла объекта (concept, planning, construction, operational, expansion, suspended, closed, decommissioned) — **NEW**
 - **state**: Содержит гибкие метрики с описаниями и типами согласно таксономии
   - Стандартизированные метрики из таксономии (operational_health, capacity_utilization, и т.д.)
   - Дополнительные метрики с описаниями и типами (magnitude/directional)
   - Каждая метрика содержит value, confidence, unit, errorMargin, observedAt, provenance
+  - Для DEPOSIT: обязательные метрики `reserves_volume`, `production_volume` — **NEW**
+
+### Lifecycle Stages (NEW)
+
+Для сущностей типа ORGANIZATION, FACILITY, DEPOSIT поддерживаются стадии жизненного цикла:
+
+| Stage | Description | Typical Dates |
+|-------|-------------|---------------|
+| `concept` | Ранняя идея, разведка, pre-feasibility | — |
+| `planning` | Проектирование, получение разрешений, финансирование | expectedStartDate |
+| `construction` | Строительство, разработка | expectedStartDate, actualStartDate |
+| `operational` | Активный, производящий, в эксплуатации | actualStartDate |
+| `expansion` | Расширение/модернизация | — |
+| `suspended` | Временно неактивен, законсервирован | — |
+| `closed` | Закрыт, прекратил операции | actualEndDate |
+| `decommissioned` | Демонтирован, выведен из эксплуатации | actualEndDate |
+
+### Edge Direction Policies (updated)
+
+Правила направления для типов рёбер (source → target):
+
+| Edge Type | Valid Source Types | Valid Target Types |
+|-----------|-------------------|-------------------|
+| `EXTRACTS_FROM` | FACILITY | DEPOSIT |
+| `OWNS` | ORGANIZATION, PERSON | ORGANIZATION, FACILITY, PRODUCT, DEPOSIT |
+| `PRODUCES` | ORGANIZATION, FACILITY, DEPOSIT | PRODUCT |
+| `LOCATED_IN` | FACILITY, ORGANIZATION, PERSON, GEO_REGION, DEPOSIT | GEO_REGION |
+| `OPERATES_IN` | ORGANIZATION | GEO_REGION, FACILITY, DEPOSIT |
+
+### Edge Temporal Validity (NEW)
+
+Рёбра имеют поля `ValidFrom`/`ValidTo` для определения **реального времени действия** связи:
+
+- При `propagation`: исторические рёбра (ValidTo < now) **исключаются** из real-time распространения
+- При `query`: параметр `?includeHistorical=true|false` позволяет включать/исключать исторические рёбра
+
+### Edge Metrics (NEW)
+
+Рёбра могут содержать числовые метрики с единицами измерения:
+
+| Edge Type | Common Metrics |
+|-----------|---------------|
+| `OWNS` | ownership_percent, voting_rights_percent |
+| `INVESTS_IN` | investment_amount, valuation_at_investment |
+| `SUPPLIES_TO` | annual_volume, contract_value |
+| `PRODUCES` | annual_production_volume, reserves_volume |
+| `CONSUMES` | annual_consumption_volume |
 
 **Интеграция с существующей онтологией**:
 - HorizonFragment расширяет Entity через BaseOntologyFields

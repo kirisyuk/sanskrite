@@ -19,8 +19,15 @@ cmd/*/ws-broker
 cmd/*/verified-proxy
 cmd/*/hatlone-ws
 
+# Local tool binaries produced by `go build` / `go install` for cmd/tools (often 40-80MB each)
+horizon_*
+
 # Log files
 *.log
+
+# Local data dumps / experiments (can be huge; never needed for container builds)
+*.jsonl
+*.duration.txt
 
 # Git
 .git/

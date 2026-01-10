@@ -191,6 +191,8 @@ func normalizeFragmentTypeHardcoded(s string) models.FragmentType {
 		return models.FragmentTypeMediaChannel
 	case string(models.FragmentTypeSupplyLink), "SUPPLYLINK":
 		return models.FragmentTypeSupplyLink
+	case string(models.FragmentTypeDeposit), "MINE", "FIELD", "BASIN", "RESERVOIR":
+		return models.FragmentTypeDeposit
 	default:
 		return ""
 	}
@@ -441,6 +443,8 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 			expectedPrefix = "/event/"
 		case models.FragmentTypePerson:
 			expectedPrefix = "/person/"
+		case models.FragmentTypeDeposit:
+			expectedPrefix = "/deposit/"
 		}
 		if expectedPrefix != "" {
 			if relType == models.FragmentTypeOrganization {

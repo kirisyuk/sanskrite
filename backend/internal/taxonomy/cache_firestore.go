@@ -125,6 +125,18 @@ func (c *FirestoreRuntimeTaxonomyCache) Get(ctx context.Context) (*RuntimeTaxono
 		}
 	}
 
+	// Metric units (physical units only). Currency/index units are validated by pattern elsewhere.
+	if len(t.AllowedMetricUnits) > 0 {
+		rt.AllowedMetricUnits = map[string]struct{}{}
+		for _, u := range t.AllowedMetricUnits {
+			u = strings.ToLower(strings.TrimSpace(u))
+			if u == "" {
+				continue
+			}
+			rt.AllowedMetricUnits[u] = struct{}{}
+		}
+	}
+
 	// Load signal types
 	if len(t.AllowedSignalKinds) > 0 {
 		rt.AllowedSignalKinds = map[string]struct{}{}
@@ -261,6 +273,142 @@ func (c *FirestoreRuntimeTaxonomyCache) Get(ctx context.Context) (*RuntimeTaxono
 				continue
 			}
 			rt.IndustryWikidataMap[k] = v
+		}
+	}
+
+	// Load deposit resources
+	if len(t.AllowedDepositResources) > 0 {
+		rt.AllowedDepositResources = map[string]struct{}{}
+		for _, r := range t.AllowedDepositResources {
+			r = strings.ToLower(strings.TrimSpace(r))
+			if r == "" {
+				continue
+			}
+			rt.AllowedDepositResources[r] = struct{}{}
+		}
+	}
+
+	// Load lifecycle stages
+	if len(t.AllowedLifecycleStages) > 0 {
+		rt.AllowedLifecycleStages = map[string]struct{}{}
+		for _, s := range t.AllowedLifecycleStages {
+			s = strings.ToLower(strings.TrimSpace(s))
+			if s == "" {
+				continue
+			}
+			rt.AllowedLifecycleStages[s] = struct{}{}
+		}
+	}
+	if len(t.LifecycleStageAliases) > 0 {
+		rt.LifecycleStageAliases = map[string]string{}
+		for k, v := range t.LifecycleStageAliases {
+			k = strings.ToLower(strings.TrimSpace(k))
+			v = strings.ToLower(strings.TrimSpace(v))
+			if k == "" || v == "" {
+				continue
+			}
+			rt.LifecycleStageAliases[k] = v
+		}
+	}
+
+	// Load edge metrics and modalities
+	if len(t.AllowedEdgeMetrics) > 0 {
+		rt.AllowedEdgeMetrics = map[string][]string{}
+		for k, v := range t.AllowedEdgeMetrics {
+			k = strings.ToUpper(strings.TrimSpace(k))
+			if k == "" || len(v) == 0 {
+				continue
+			}
+			metrics := make([]string, 0, len(v))
+			for _, m := range v {
+				m = strings.ToLower(strings.TrimSpace(m))
+				if m != "" {
+					metrics = append(metrics, m)
+				}
+			}
+			if len(metrics) > 0 {
+				rt.AllowedEdgeMetrics[k] = metrics
+			}
+		}
+	}
+	if len(t.AllowedEdgeModalities) > 0 {
+		rt.AllowedEdgeModalities = map[string]struct{}{}
+		for _, m := range t.AllowedEdgeModalities {
+			m = strings.ToLower(strings.TrimSpace(m))
+			if m == "" {
+				continue
+			}
+			rt.AllowedEdgeModalities[m] = struct{}{}
+		}
+	}
+
+	// Load service taxonomy
+	if len(t.AllowedServiceDomains) > 0 {
+		rt.AllowedServiceDomains = map[string]struct{}{}
+		for _, d := range t.AllowedServiceDomains {
+			d = strings.ToLower(strings.TrimSpace(d))
+			if d == "" {
+				continue
+			}
+			rt.AllowedServiceDomains[d] = struct{}{}
+		}
+	}
+	if len(t.AllowedServiceSubdomains) > 0 {
+		rt.AllowedServiceSubdomains = map[string][]string{}
+		for k, v := range t.AllowedServiceSubdomains {
+			k = strings.ToLower(strings.TrimSpace(k))
+			if k == "" || len(v) == 0 {
+				continue
+			}
+			subs := make([]string, 0, len(v))
+			for _, s := range v {
+				s = strings.ToLower(strings.TrimSpace(s))
+				if s != "" {
+					subs = append(subs, s)
+				}
+			}
+			if len(subs) > 0 {
+				rt.AllowedServiceSubdomains[k] = subs
+			}
+		}
+	}
+	if len(t.KnownServices) > 0 {
+		rt.KnownServices = map[string]ServiceSpec{}
+		for k, v := range t.KnownServices {
+			k = strings.ToLower(strings.TrimSpace(k))
+			if k == "" {
+				continue
+			}
+			rt.KnownServices[k] = ServiceSpec{
+				Domain:    strings.ToLower(strings.TrimSpace(v.Domain)),
+				Subdomain: strings.ToLower(strings.TrimSpace(v.Subdomain)),
+			}
+		}
+	}
+	if len(t.ServiceSynonyms) > 0 {
+		rt.ServiceSynonyms = map[string]string{}
+		for k, v := range t.ServiceSynonyms {
+			k = strings.ToLower(strings.TrimSpace(k))
+			v = strings.ToLower(strings.TrimSpace(v))
+			if k == "" || v == "" {
+				continue
+			}
+			rt.ServiceSynonyms[k] = v
+		}
+	}
+
+	// Load product models (optional)
+	if len(t.KnownProductModels) > 0 {
+		rt.KnownProductModels = map[string]ProductModelSpec{}
+		for k, v := range t.KnownProductModels {
+			k = strings.ToLower(strings.TrimSpace(k))
+			if k == "" {
+				continue
+			}
+			rt.KnownProductModels[k] = ProductModelSpec{
+				GenericSlug:  strings.ToLower(strings.TrimSpace(v.GenericSlug)),
+				Manufacturer: strings.ToLower(strings.TrimSpace(v.Manufacturer)),
+			}
 		}
 	}
 

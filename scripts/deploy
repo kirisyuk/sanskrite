@@ -1826,7 +1826,7 @@ if [[ "$TARGET_CLEANUP_REVISIONS" -eq 1 ]]; then
   echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
   
   # Clean up revisions for all services (keep last 10 per service)
-  local services=("sanskrite-api" "sanskrite-telegram" "sanskrite-ws" "hatlone-ws" "verified-proxy")
+  services=("sanskrite-api" "sanskrite-telegram" "sanskrite-ws" "hatlone-ws" "verified-proxy")
   for service in "${services[@]}"; do
     if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
       cleanup_old_revisions "$service" "$REGION" 10

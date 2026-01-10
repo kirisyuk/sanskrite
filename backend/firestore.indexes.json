@@ -937,6 +937,30 @@
       ]
     },
     {
+      "collectionGroup": "horizon_missing_info_status",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fragmentId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_missing_info_status",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fragmentId", "order": "ASCENDING" },
+        { "fieldPath": "questionHash", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_missing_info_status",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "nextAttemptAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "external_data_cache",
       "queryScope": "COLLECTION",
       "fields": [

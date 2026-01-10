@@ -65,6 +65,20 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   const [onDemandOpen, setOnDemandOpen] = React.useState(false);
   const [onDemandCtx, setOnDemandCtx] = React.useState<HorizonOnDemandContext | null>(null);
 
+  const formatMetricValue = React.useCallback((mv: any): string => {
+    if (!mv || typeof mv !== 'object') return String(mv ?? '');
+    const v = (mv as any).value;
+    const unit = String((mv as any).unit || '').trim();
+    const conf = typeof (mv as any).confidence === 'number' ? (mv as any).confidence : undefined;
+    const observedAt = String((mv as any).observedAt || '').trim();
+    const parts: string[] = [];
+    if (v !== undefined && v !== null && v !== '') parts.push(String(v));
+    if (unit) parts.push(unit);
+    if (typeof conf === 'number' && Number.isFinite(conf)) parts.push(`conf=${Math.round(Math.max(0, Math.min(1, conf)) * 100)}%`);
+    if (observedAt) parts.push(`asOf=${observedAt}`);
+    return parts.join(' ');
+  }, []);
+
   // Lens-scope pin state (best-effort): derived from lens.scope to avoid stale nodeData snapshots.
   const [lensScopePinned, setLensScopePinned] = React.useState<boolean | null>(null);
   React.useEffect(() => {
@@ -645,6 +659,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       AFFECTS: 'Affects',
       REGULATES: 'Regulates',
       IMPACTS: 'Impacts',
+      EXTRACTS_FROM: 'Extracts',
     };
     if (MAP[u]) return MAP[u];
     const human = u
@@ -696,6 +711,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       'AFFECTS',
       'IMPACTS',
       'SUPPORTS',
+      'EXTRACTS_FROM',
     ];
     // De-dupe + stable sort
     return Array.from(new Set(all)).sort((a, b) => a.localeCompare(b));
@@ -728,6 +744,10 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     if (t === 'AUDITED_BY') {
       if (fromType !== 'ORGANIZATION' && fromType !== 'FACILITY') return { ok: false, message: 'AUDITED_BY: From должен быть ORGANIZATION или FACILITY' };
       if (toType !== 'ORGANIZATION') return { ok: false, message: 'AUDITED_BY: To должен быть ORGANIZATION' };
+    }
+    if (t === 'EXTRACTS_FROM') {
+      if (fromType !== 'FACILITY') return { ok: false, message: 'EXTRACTS_FROM: From должен быть FACILITY' };
+      if (toType !== 'DEPOSIT') return { ok: false, message: 'EXTRACTS_FROM: To должен быть DEPOSIT' };
     }
     if (t === 'RELATIVE_OF' || t === 'RELATED_TO') {
       if (fromType !== 'PERSON') return { ok: false, message: `${t}: From должен быть PERSON` };
@@ -1768,7 +1788,10 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           {(edgeData?.criticality !== undefined ||
             edgeData?.amplification !== undefined ||
             edgeData?.latencyHours !== undefined ||
-            edge?.properties) && (
+            edge?.properties ||
+            edge?.direction ||
+            edge?.validFrom ||
+            edge?.validTo) && (
             <SectionCard title="Properties">
                 {(edgeData?.criticality !== undefined || edge?.properties?.criticality !== undefined) && (
                 <KV k="Criticality" v={<span style={mono}>{edge?.properties?.criticality ?? edgeData?.criticality}</span>} />
@@ -1780,6 +1803,18 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                 <KV k="Latency (h)" v={<span style={mono}>{edge?.properties?.latencyHours ?? edgeData?.latencyHours}</span>} />
               )}
               {edge?.direction && <KV k="Direction" v={<span>{edge.direction}</span>} />}
+              {edge?.validFrom && <KV k="Valid from" v={<span style={mono}>{String(edge.validFrom)}</span>} copyText={String(edge.validFrom)} />}
+              {edge?.validTo && <KV k="Valid to" v={<span style={mono}>{String(edge.validTo)}</span>} copyText={String(edge.validTo)} />}
+            </SectionCard>
+          )}
+
+          {edge?.metrics && Object.keys(edge.metrics).length > 0 && (
+            <SectionCard title="Metrics">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {Object.entries(edge.metrics).map(([k, mv]) => (
+                  <KV key={k} k={k} v={<span style={mono}>{formatMetricValue(mv)}</span>} />
+                ))}
+              </div>
             </SectionCard>
           )}
 
@@ -2038,10 +2073,10 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
           {nodeData?.state && Object.keys(nodeData.state).length > 0 && (
             <SectionCard
-              title="Signals"
+              title="State"
               right={
                 <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                  0–1 and −1…+1
+                  mixed
             </span>
               }
             >
@@ -2090,6 +2125,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
                     // Values may be either 0..1 or -1..+1 (bipolar). Do not clamp negatives to 0.
                     const vRaw = Number(v);
+                    const isSignal = Boolean(meta) || Math.abs(vRaw) <= 1.0001; // heuristic: raw metrics (e.g. reserves) are typically >> 1
                     const vUnit = Math.max(0, Math.min(1, vRaw));
                     const vBipolar = Math.max(-1, Math.min(1, vRaw));
                     const v01 = scale === 'bipolar' ? (vBipolar + 1) / 2 : vUnit;
@@ -2119,6 +2155,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                       label,
                       group: meta?.group || 'other',
                       scale,
+                      kind: isSignal ? ('signal' as const) : ('raw' as const),
                       v01,
                       vBipolar,
                       dot,
@@ -2139,9 +2176,12 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   return a.label.localeCompare(b.label);
                 });
 
+                const signalEntries = entries.filter((e) => e.kind === 'signal');
+                const rawEntries = entries.filter((e) => e.kind === 'raw');
+
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {entries.slice(0, 12).map((m) => (
+                    {signalEntries.slice(0, 12).map((m) => (
                       <div key={m.rawKey} title={m.rawKey} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         {/* Segment icon (synced with Risk Shield). */}
                         {(() => {
@@ -2237,6 +2277,22 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       </div>
                       </div>
                     ))}
+                    {rawEntries.length > 0 && (
+                      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border-subtle)' }}>
+                        <div style={{ fontSize: 11, fontWeight: 900, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                          Raw metrics
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {rawEntries.slice(0, 16).map((m) => {
+                            const mv = (fragment as any)?.state?.[m.rawKey];
+                            const valueText = mv && typeof mv === 'object' ? formatMetricValue(mv) : String((nodeData as any)?.state?.[m.rawKey]);
+                            return (
+                              <KV key={m.rawKey} k={m.label} v={<span style={mono}>{valueText}</span>} />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -2256,6 +2312,11 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             )}
               {fragment.canonicalPath && <KV k="Canonical path" v={<span style={mono}>{fragment.canonicalPath}</span>} copyText={fragment.canonicalPath} />}
               {fragment.type && <KV k="Fragment type" v={<span>{String(fragment.type)}</span>} />}
+              {fragment.lifecycleStage && <KV k="Lifecycle stage" v={<span style={mono}>{String(fragment.lifecycleStage)}</span>} />}
+              {fragment.expectedStartDate && <KV k="Expected start" v={<span style={mono}>{String(fragment.expectedStartDate)}</span>} />}
+              {fragment.actualStartDate && <KV k="Actual start" v={<span style={mono}>{String(fragment.actualStartDate)}</span>} />}
+              {fragment.expectedEndDate && <KV k="Expected end" v={<span style={mono}>{String(fragment.expectedEndDate)}</span>} />}
+              {fragment.actualEndDate && <KV k="Actual end" v={<span style={mono}>{String(fragment.actualEndDate)}</span>} />}
               <KV
                 k="Org size"
                 v={<span style={mono}>{fragment.orgSize ? String(fragment.orgSize) : '-'}</span>}

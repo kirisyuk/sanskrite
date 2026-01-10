@@ -144,13 +144,61 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2}/{slug}. If unknown, /gov/na/{slug}."
 	  - If canonicalPath is legacy (/org/{slug}) or uses /org/na/{slug}, add a question:
 	    - "What is the country of origin / primary jurisdiction for <org>? Prefer canonicalPath /org/{iso2}/{slug} (iso2=ISO3166-1 alpha2)."
+	
+	MANDATORY - Lifecycle stage (always required for FACILITY, DEPOSIT, extractive ORGANIZATION):
+	  - If lifecycleStage is empty/missing for a /fac/, /deposit/, or extractive /org/ (mining/O&G sector), add:
+	    - "What is the operational status of <entity>? Is it: concept/planning/permitting/financing/construction/commissioning/operational/expansion/suspended/decommissioning/closed?"
+	  - If lifecycleStage is 'construction' or 'planning' but expectedStartDate is missing, add:
+	    - "When is <entity> expected to become operational? Provide planned start date."
+	
+	MANDATORY - Products/services for operating organizations (always, not just for products_and_services specialty):
+	  - For any /org/ (ORGANIZATION), first determine if it's a HOLDING company or OPERATING company:
+	    - HOLDING indicators: has OWNS edges to other /org/, sectorPath contains "Financials/Capital_Markets" or "Holding", labels contain "holding", "investment", "group"
+	    - OPERATING company: produces products/services directly
+	  - For OPERATING /org/: if there are NO PRODUCES relations with /product/... or /product/service/... targets, add:
+	    - "What products does <org> manufacture/produce? Return as /product/{category}/{type}/{stage}/{slug} canonical paths."
+	    - "What services does <org> provide? Return as /product/service/{domain}/{subdomain}/{slug} canonical paths."
+	  - For HOLDING /org/: first require subsidiaries, then products on subsidiaries:
+	    - If no OWNS edges to other /org/: "What operating subsidiaries does <org> own? Include ownership percentage."
+	    - Flag subsidiaries for separate scouting with products/services requirement.
+	
+	MANDATORY - Products/inputs for FACILITY (always, not just for products_and_services specialty):
+	  - For any /fac/ (FACILITY): if there are NO PRODUCES relations, add:
+	    - "What products does this facility produce? Return as /product/... canonical paths."
+	  - If there are NO CONSUMES relations, add:
+	    - "What inputs/materials does this facility consume? Return as /product/... canonical paths."
+	
+	MANDATORY - Extractive industries (Mining and O&G):
+	  - If sectorPath contains "Materials/Mining" or "Energy/Fossil_Fuels/Oil_Gas":
+	    - If no /deposit/ entities are linked (EXTRACTS_FROM or OPERATES_IN), add:
+	      - "What deposits/fields/basins does <org/fac> extract from? Return as /deposit/{resource}/{deposit-slug}."
+	    - For each product in PRODUCES: if no reserves metrics, add:
+	      - "What are the proven/probable reserves for <product> at <entity>? Provide units (metric_tons, moz, bbl, tcf)."
+	    - For each product in PRODUCES: if no production metrics, add:
+	      - "What is the annual production of <product> at <entity>? Provide units (metric_tons_per_year, oz_per_year, bpd)."
+	
+	MANDATORY - Edge metrics (for key relationship types):
+	  - For OWNS edges: if no ownership_percent metric, add:
+	    - "What is the ownership percentage for <owner> in <target>?"
+	  - For INVESTS_IN edges: if no round qualifier, add:
+	    - "What investment round was this (seed/series_a/series_b/etc.)?"
+	  - For INVESTS_IN edges: if no investment_amount metric, consider adding (desired, not mandatory):
+	    - "What was the investment amount?"
+	
+	MANDATORY - Temporal validity (for historical relationships):
+	  - If source text contains "former", "ex-", "бывший", "previously", "past", or indicates a relationship ended:
+	    - If ValidTo is not set on the edge, add:
+	      - "When did <person/org> leave/exit <target>? Provide end date for the relationship."
+	
 	- If "management" specialty is requested for an Organization/Facility, you MUST ensure leadership/board/founder coverage:
 	  - If there are no PERSON relations relevant to leadership (MANAGES / EMPLOYED_BY / BOARD_MEMBER_OF / FOUNDED), add specific questions like:
 	    - "Who is the CEO/CFO/COO/CTO/CIO/CMO/CHRO of <org>?" and "Who are the board members/chair of <org>?" and "Who founded <org>?"
 	  - NOTE: PERSON relations may appear inverted due to extraction being anchored on the organization; still treat them as valid signals for completeness.
-	- If "products_and_services" specialty is requested:
-	  - For ORGANIZATION/FACILITY: if there are no PRODUCT relations for outputs/inputs (PRODUCES / CONSUMES), add questions:
-	    - "What products and services does <org> produce/offer?" and "What key inputs/materials/components does <org> consume?"
+	- If "products_and_services" specialty is requested (ENHANCED requirements beyond the baseline):
+	  - For ORGANIZATION/FACILITY: in addition to baseline PRODUCES/CONSUMES, also check for:
+	    - TRANSFORMS_INTO relations for products (value chain)
+	    - Capacity/volume metrics on edges
+	    - Add questions for missing transformations and metrics.
 	  - For PRODUCT: if there are no product-to-product transformation relations (TRANSFORMS_INTO), add a question:
 	    - "What is this product produced from and what does it transform into? Provide upstream/downstream products."
 	- If "supply_chain" specialty is requested:

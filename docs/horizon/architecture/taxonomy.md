@@ -33,7 +33,7 @@ Runtime taxonomy в коде представлена моделью `HorizonTax
 
 ### canonicalPrefixes (default v1)
 
-`/gov/`, `/org/`, `/fac/`, `/loc/`, `/person/`, `/product/`, `/program/`, `/market/`, `/segment/`, `/event/`, `/sphere/`, `/industry/`, `/media/`
+`/gov/`, `/org/`, `/fac/`, `/loc/`, `/person/`, `/product/`, `/program/`, `/market/`, `/segment/`, `/event/`, `/sphere/`, `/industry/`, `/media/`, `/deposit/`
 
 ### eventType vocabulary (default v1)
 
@@ -43,13 +43,99 @@ Runtime taxonomy в коде представлена моделью `HorizonTax
 
 ### relationType vocabulary (default v1)
 
-`SUPPLIES_TO`, `LOCATED_IN`, `OWNS`, `PRODUCES`, `CONSUMES`, `OPERATES_IN`, `REGULATES`, `COMPETES_WITH`, `INFLUENCES`, `DEPENDS_ON`, `SUBSIDIARY_OF`, `TRANSFORMS_INTO`, `MANAGES`, `CONTROLS`, `EMPLOYED_BY`, `BOARD_MEMBER_OF`, `FOUNDED`, `INVESTS_IN`, `PARTNERS_WITH`, `AUDITED_BY`, `RELATIVE_OF`, `RELATED_TO`
+`SUPPLIES_TO`, `LOCATED_IN`, `OWNS`, `PRODUCES`, `CONSUMES`, `OPERATES_IN`, `REGULATES`, `COMPETES_WITH`, `INFLUENCES`, `DEPENDS_ON`, `SUBSIDIARY_OF`, `TRANSFORMS_INTO`, `MANAGES`, `CONTROLS`, `EMPLOYED_BY`, `BOARD_MEMBER_OF`, `FOUNDED`, `INVESTS_IN`, `PARTNERS_WITH`, `AUDITED_BY`, `RELATIVE_OF`, `RELATED_TO`, `EXTRACTS_FROM`
 
 **Нормализация**: unknown → `INFLUENCES` (safe default), `DEPENDS` → `DEPENDS_ON`, `OWNED_BY` → `SUBSIDIARY_OF`.
 
+### Временная валидность рёбер (ValidFrom/ValidTo)
+
+Каждое ребро имеет поля `ValidFrom` и `ValidTo`, которые определяют **реальное время действия** связи в мире:
+- `ValidFrom`: Когда связь стала действующей (начало отношений, инвестиции, назначение на должность)
+- `ValidTo`: Когда связь прекратила действие (выход из инвестиции, увольнение, продажа доли)
+
+**Важно**: Это **не** время наблюдения данных (epistemic time) — для этого используется `MetricValue.ObservedAt + Provenance`.
+
+**Методы фильтрации**:
+- `IsActive(at time.Time)`: Проверяет, активна ли связь в момент `at`
+- `IsActiveNow()`: Проверяет, активна ли связь сейчас
+- `IsHistorical()`: Проверяет, закончилась ли связь (ValidTo < now)
+
+### Edge Modality (edgeModality)
+
+Квалификатор `edgeModality` в `Qualifiers` описывает статус связи:
+- `actual`: Действующая связь (default)
+- `projected`: Планируемая связь (например, для объектов в стадии construction)
+- `historical`: Историческая связь (auto-set если ValidTo в прошлом)
+- `potential`: Потенциальная связь (обсуждается, но не подтверждена)
+
+**Auto-set логика**:
+- Если `target.lifecycleStage` не `operational` или `expansion` и ValidFrom в будущем → `projected`
+- Если `ValidTo` в прошлом → `historical`
+
 ### allowedMetricUnits (default v1)
 
-`usd`, `eur`, `rub`, `units`, `units_per_day`, `days`, `hours`, `ratio`, `index_point`, `code`
+`usd`, `eur`, `rub`, `units`, `units_per_day`, `days`, `hours`, `ratio`, `index_point`, `code`, `tons`, `barrels`, `cubic_meters`, `percent`
+
+**Pattern-based единицы**: Валюты и индексы могут быть любыми (не ограничены allowlist):
+- `currency_code_pattern`: Любой 3-буквенный код валюты (USD, EUR, RUB, KZT, USDT, и т.д.)
+- `index_point`: Любой числовой индекс
+
+### allowedDepositResources (default v1)
+
+Канонические типы ресурсов для `/deposit/` сущностей:
+
+`oil`, `natural-gas`, `coal`, `iron-ore`, `copper-ore`, `gold-ore`, `silver-ore`, `lithium-ore`, `uranium-ore`, `bauxite`, `phosphate`, `potash`, `diamond`, `water`, `other`
+
+### allowedLifecycleStages (default v1)
+
+Канонические стадии жизненного цикла для ORGANIZATION, FACILITY, DEPOSIT:
+
+`concept`, `planning`, `construction`, `operational`, `expansion`, `suspended`, `closed`, `decommissioned`, `other`
+
+**Синонимы** (нормализуются автоматически):
+- `exploration` → `concept`
+- `pre-feasibility`, `feasibility` → `planning`
+- `development` → `construction`
+- `producing`, `active` → `operational`
+- `mothballed`, `shut-in` → `suspended`
+- `abandoned` → `closed`
+
+### allowedEdgeMetrics (default v1)
+
+Метрики, разрешённые для разных типов рёбер:
+
+| Edge Type | Allowed Metrics |
+|-----------|-----------------|
+| `OWNS` | `ownership_percent`, `voting_rights_percent` |
+| `INVESTS_IN` | `investment_amount`, `valuation_at_investment` |
+| `SUPPLIES_TO` | `annual_volume`, `contract_value` |
+| `PRODUCES` | `annual_production_volume`, `reserves_volume` |
+| `CONSUMES` | `annual_consumption_volume` |
+
+### allowedEdgeModalities (default v1)
+
+`actual`, `projected`, `historical`, `potential`
+
+### allowedServiceDomains (default v1)
+
+Домены для канонических путей сервисов `/product/service/{domain}/...`:
+
+`it`, `finance`, `consulting`, `logistics`, `legal`, `hr`, `marketing`, `energy`, `mining`, `healthcare`, `construction`, `other`
+
+### allowedServiceSubdomains (default v1)
+
+Субдомены для каждого домена:
+
+| Domain | Subdomains |
+|--------|------------|
+| `it` | `software-development`, `cloud-services`, `cybersecurity`, `it-consulting`, `data-analytics`, `telecom`, `other` |
+| `finance` | `banking`, `asset-management`, `insurance`, `advisory`, `other` |
+| `consulting` | `management`, `strategy`, `technical`, `other` |
+| `logistics` | `transportation`, `warehousing`, `freight-forwarding`, `other` |
+| `energy` | `drilling`, `exploration`, `refining`, `power-generation`, `other` |
+| `mining` | `exploration`, `drilling`, `processing`, `other` |
+| `construction` | `engineering`, `project-management`, `heavy-equipment-rental`, `other` |
+| `other` | `general`, `miscellaneous` |
 
 ## 0.1 Canonical paths (то, что реально валидируется кодом)
 
@@ -78,6 +164,56 @@ CanonicalPath — это **Horizon-first** идентификатор фрагм
   - `admin1/city`: slug или `na`
 
 Это **не то же самое**, что `entityPath` (см. ниже): `entityPath` может быть `/Geo/...`, а canonicalPath для location-fragment при этом будет `/loc/...`.
+
+### Deposit canonicalPath (для месторождений)
+
+- **canonicalPath для месторождений (namespace `deposit`)**:
+  - `/deposit/{resource-slug}/{deposit-slug}`
+  - `resource-slug`: канонический тип ресурса из `allowedDepositResources` (oil, natural-gas, iron-ore, и т.д.)
+  - `deposit-slug`: slug названия месторождения (permian-basin, ghawar-field, pilbara-mine)
+
+**Примеры**:
+- "Пермский нефтяной бассейн" → `/deposit/oil/permian-basin`
+- "Месторождение Гавар (Саудовская Аравия)" → `/deposit/oil/ghawar-field`
+- "Железорудная шахта Пилбара" → `/deposit/iron-ore/pilbara-mine`
+
+**Fallback**: Если тип ресурса неизвестен → `/deposit/other/{deposit-slug}`
+
+### Product canonicalPath (включая модели/SKU)
+
+- **canonicalPath для продуктов (namespace `product`)**:
+  - `/product/{category}/{type}/{stage}/{slug}[/{model-sku-slug}]`
+  - `category`: `raw` | `component` | `finished` | `service`
+  - `type`: `mineral` | `agricultural` | `chemical` | `electronic` | `mechanical` | `energy` | и т.д.
+  - `stage`: `extraction` | `refining` | `processing` | `manufacturing` | `assembly` | `delivery` | и т.д.
+  - `slug`: slug названия продукта
+  - `model-sku-slug`: **(опционально)** slug конкретной модели/SKU
+
+**Примеры**:
+- "Литиевая руда" → `/product/raw/mineral/extraction/lithium-ore`
+- "Карбонат лития" → `/product/raw/chemical/refining/lithium-carbonate`
+- "Батарейная ячейка" → `/product/component/electronic/manufacturing/battery-cell`
+- "Электромобиль" → `/product/finished/mechanical/assembly/electric-vehicle`
+- "Экскаватор CAT 320" → `/product/finished/mechanical/manufacturing/excavator/excavator-cat-320`
+
+**Fallback**: Если category/type/stage неизвестны → `/product/{slug}`
+
+### Service canonicalPath (для сервисов)
+
+- **canonicalPath для сервисов (подтип product)**:
+  - `/product/service/{domain}/{subdomain}/{slug}[/{offering-slug}]`
+  - `domain`: домен сервиса из `allowedServiceDomains` (it, finance, consulting, и т.д.)
+  - `subdomain`: субдомен из `allowedServiceSubdomains` (software-development, cloud-services, и т.д.)
+  - `slug`: slug названия сервиса
+  - `offering-slug`: **(опционально)** slug конкретного предложения/пакета
+
+**Примеры**:
+- "Cloud Hosting" → `/product/service/it/cloud-services/cloud-hosting`
+- "IT Consulting" → `/product/service/it/consulting/it-consulting`
+- "Management Consulting" → `/product/service/consulting/management/management-consulting`
+- "Нефтебуровые услуги" → `/product/service/energy/drilling/oil-drilling`
+
+**Fallback**: Если domain/subdomain неизвестны → `/product/service/other/general/{slug}`
 
 ## 1. Numeric Standards (Принципы оценки)
 
@@ -173,6 +309,20 @@ CanonicalPath — это **Horizon-first** идентификатор фрагм
 /Resource/Energy/Electricity           # Электроэнергия
 /Resource/Component/Electronic         # Электронные компоненты (Полупроводники)
 /Resource/Component/Mechanical         # Механические компоненты
+/Resource/Deposit                      # Месторождение природных ресурсов (NEW)
+```
+
+### 2.6. Deposit (Месторождения) — NEW
+
+```
+/Resource/Deposit/Oil                  # Нефтяное месторождение
+/Resource/Deposit/Gas                  # Газовое месторождение
+/Resource/Deposit/Coal                 # Угольное месторождение
+/Resource/Deposit/IronOre              # Железорудное месторождение
+/Resource/Deposit/Gold                 # Золотое месторождение
+/Resource/Deposit/Lithium              # Литиевое месторождение
+/Resource/Deposit/Uranium              # Урановое месторождение
+/Resource/Deposit/Other                # Другое месторождение
 ```
 
 ### 2.4. Person (Физические лица)

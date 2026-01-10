@@ -45,6 +45,10 @@ func InferTaxonomyFromCanonicalPath(canonicalPath string) (entityPath, sectorPat
 		// Продукт/ресурс (приближение)
 		entityPath = "/Resource/Component/Electronic"
 		sectorPath = inferSectorFromPath(parts)
+	case "deposit":
+		// Месторождение / природный ресурс
+		entityPath = inferDepositPath(parts)
+		sectorPath = inferSectorFromPath(parts)
 	default:
 		// Пытаемся определить по содержимому пути
 		entityPath = inferEntityPathFromContent(parts)
@@ -149,6 +153,36 @@ func inferResourcePath(parts []string) string {
 		return "/Resource/Energy/Electricity"
 	default:
 		return "/Resource/RawMaterial/Mineral"
+	}
+}
+
+// inferDepositPath определяет entityPath и sectorPath для deposit'а
+func inferDepositPath(parts []string) string {
+	if len(parts) < 2 {
+		return "/Deposit/Mineral"
+	}
+
+	// Второй сегмент - тип ресурса (e.g., "crude-oil", "lithium", "copper")
+	resourceSlug := strings.ToLower(parts[1])
+
+	switch {
+	case strings.Contains(resourceSlug, "oil") || strings.Contains(resourceSlug, "gas") ||
+		strings.Contains(resourceSlug, "coal") || strings.Contains(resourceSlug, "shale"):
+		return "/Deposit/Hydrocarbon"
+	case strings.Contains(resourceSlug, "gold") || strings.Contains(resourceSlug, "silver") ||
+		strings.Contains(resourceSlug, "platinum") || strings.Contains(resourceSlug, "palladium"):
+		return "/Deposit/PreciousMetal"
+	case strings.Contains(resourceSlug, "lithium") || strings.Contains(resourceSlug, "cobalt"):
+		return "/Deposit/BatteryMetal"
+	case strings.Contains(resourceSlug, "copper") || strings.Contains(resourceSlug, "zinc") ||
+		strings.Contains(resourceSlug, "nickel") || strings.Contains(resourceSlug, "aluminum"):
+		return "/Deposit/BaseMetal"
+	case strings.Contains(resourceSlug, "iron") || strings.Contains(resourceSlug, "manganese"):
+		return "/Deposit/FerrousMetal"
+	case strings.Contains(resourceSlug, "rare-earth") || strings.Contains(resourceSlug, "uranium"):
+		return "/Deposit/StrategicMineral"
+	default:
+		return "/Deposit/Mineral"
 	}
 }
 

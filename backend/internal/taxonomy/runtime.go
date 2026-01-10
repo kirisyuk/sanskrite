@@ -29,6 +29,10 @@ type RuntimeTaxonomy struct {
 	// Relation types for horizon_dependency_edges (upper snake-case, e.g. "SUPPLIES_TO").
 	AllowedRelationTypes map[string]struct{}
 
+	// Metric units allow-list (used as a hint for prompts/validation).
+	// IMPORTANT: Currency and index-like units are intentionally NOT allow-listed.
+	AllowedMetricUnits map[string]struct{}
+
 	// Signal types for OntologyFact(kind=signal)
 	AllowedSignalKinds map[string]struct{}       // "risk", "opportunity", "trend", "direction"
 	SignalTypes        map[string]SignalTypeSpec // "risk:supply_disruption" -> spec
@@ -41,6 +45,26 @@ type RuntimeTaxonomy struct {
 	ProductStageOrder        []string               // Ordered list for algorithmic upstream/downstream propagation
 	KnownProducts            map[string]ProductSpec // "lithium-carbonate" -> spec
 	ProductSynonyms          map[string]string      // "Li2CO3" -> "lithium-carbonate", "battery grade lithium" -> "lithium-carbonate"
+
+	// Natural resource deposits (/deposit/{resource-slug}/{deposit-slug})
+	AllowedDepositResources map[string]struct{} // "crude-oil", "lithium", "copper", etc.
+
+	// Lifecycle stages for FACILITY, DEPOSIT, ORGANIZATION
+	AllowedLifecycleStages map[string]struct{} // "construction", "operational", "closed", etc.
+	LifecycleStageAliases  map[string]string   // "exploration" -> "concept", "production" -> "operational"
+
+	// Edge metrics (numerical data on edges)
+	AllowedEdgeMetrics    map[string][]string // edge type -> allowed metric names
+	AllowedEdgeModalities map[string]struct{} // "actual", "projected", "historical", "potential"
+
+	// Service taxonomy (/product/service/{domain}/{subdomain}/{slug})
+	AllowedServiceDomains    map[string]struct{}   // "it", "financial", "legal", etc.
+	AllowedServiceSubdomains map[string][]string   // domain -> subdomains
+	KnownServices            map[string]ServiceSpec // "custom-software-development" -> spec
+	ServiceSynonyms          map[string]string     // "software development" -> "custom-software-development"
+
+	// Optional: product models (for specific SKU/model tracking)
+	KnownProductModels map[string]ProductModelSpec // "cat-390f" -> spec
 }
 
 // SignalTypeSpec defines a signal type specification.
@@ -73,6 +97,7 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"INFLUENCES":      {},
 	"DEPENDS_ON":      {},
 	"TRANSFORMS_INTO": {},
+	"EXTRACTS_FROM":   {}, // FACILITY → DEPOSIT
 	// Governance / org-person
 	"MANAGES":         {},
 	"CONTROLS":        {},
@@ -305,6 +330,18 @@ type ProductSpec struct {
 	Stage    string `json:"stage"`    // "extraction", "refining", "processing", "manufacturing", "assembly"
 }
 
+// ServiceSpec defines a service specification for /product/service/{domain}/{subdomain}/{slug}.
+type ServiceSpec struct {
+	Domain    string `json:"domain"`    // "it", "financial", "legal", etc.
+	Subdomain string `json:"subdomain"` // "software", "cloud", "banking", etc.
+}
+
+// ProductModelSpec defines a specific product model/SKU.
+type ProductModelSpec struct {
+	GenericSlug  string `json:"genericSlug"`  // parent product slug (e.g., "excavator")
+	Manufacturer string `json:"manufacturer"` // manufacturer org slug (e.g., "caterpillar")
+}
+
 // GetProductSpec returns the specification for a product slug.
 func GetProductSpec(productSlug string) *ProductSpec {
 	if t := getRuntimeTaxonomy(); t != nil && t.KnownProducts != nil {
@@ -391,4 +428,251 @@ func normalizeProductSlug(s string) string {
 	s = reProductMultiDash.ReplaceAllString(s, "-")
 	s = strings.Trim(s, "-")
 	return s
+}
+
+// --- Deposit Resources ---
+
+// IsValidDepositResource checks if a deposit resource slug is valid.
+func IsValidDepositResource(resource string) bool {
+	if resource == "" {
+		return false
+	}
+	r := strings.ToLower(strings.TrimSpace(resource))
+	if t := getRuntimeTaxonomy(); t != nil && t.AllowedDepositResources != nil {
+		_, ok := t.AllowedDepositResources[r]
+		return ok
+	}
+	// Fallback: basic resources
+	switch r {
+	case "crude-oil", "natural-gas", "coal", "lithium", "copper", "gold", "iron-ore", "uranium":
+		return true
+	}
+	return false
+}
+
+// --- Lifecycle Stages ---
+
+// NormalizeLifecycleStage normalizes a lifecycle stage to canonical form using aliases.
+func NormalizeLifecycleStage(stage string) string {
+	s := strings.ToLower(strings.TrimSpace(stage))
+	if s == "" {
+		return ""
+	}
+	if t := getRuntimeTaxonomy(); t != nil {
+		// Check aliases first
+		if t.LifecycleStageAliases != nil {
+			if canonical, ok := t.LifecycleStageAliases[s]; ok && canonical != "" {
+				return canonical
+			}
+		}
+		// Check if it's a valid canonical stage
+		if t.AllowedLifecycleStages != nil {
+			if _, ok := t.AllowedLifecycleStages[s]; ok {
+				return s
+			}
+		}
+	}
+	// Fallback: return as-is if looks valid
+	switch s {
+	case "concept", "planning", "permitting", "financing", "construction", "commissioning",
+		"operational", "expansion", "suspended", "decommissioning", "closed":
+		return s
+	}
+	return s // return as-is, validation can reject later
+}
+
+// IsValidLifecycleStage checks if a lifecycle stage is valid (canonical or alias).
+func IsValidLifecycleStage(stage string) bool {
+	s := strings.ToLower(strings.TrimSpace(stage))
+	if s == "" {
+		return false
+	}
+	if t := getRuntimeTaxonomy(); t != nil {
+		// Check aliases
+		if t.LifecycleStageAliases != nil {
+			if _, ok := t.LifecycleStageAliases[s]; ok {
+				return true
+			}
+		}
+		// Check canonical stages
+		if t.AllowedLifecycleStages != nil {
+			_, ok := t.AllowedLifecycleStages[s]
+			return ok
+		}
+	}
+	// Fallback
+	switch s {
+	case "concept", "planning", "permitting", "financing", "construction", "commissioning",
+		"operational", "expansion", "suspended", "decommissioning", "closed":
+		return true
+	}
+	return false
+}
+
+// --- Edge Modalities ---
+
+// IsValidEdgeModality checks if an edge modality is valid.
+func IsValidEdgeModality(modality string) bool {
+	m := strings.ToLower(strings.TrimSpace(modality))
+	if m == "" {
+		return false
+	}
+	if t := getRuntimeTaxonomy(); t != nil && t.AllowedEdgeModalities != nil {
+		_, ok := t.AllowedEdgeModalities[m]
+		return ok
+	}
+	// Fallback
+	switch m {
+	case "actual", "projected", "historical", "potential":
+		return true
+	}
+	return false
+}
+
+// --- Edge Metrics ---
+
+// GetAllowedEdgeMetrics returns the allowed metric names for an edge type.
+func GetAllowedEdgeMetrics(edgeType string) []string {
+	et := strings.ToUpper(strings.TrimSpace(edgeType))
+	if t := getRuntimeTaxonomy(); t != nil && t.AllowedEdgeMetrics != nil {
+		if metrics, ok := t.AllowedEdgeMetrics[et]; ok {
+			return metrics
+		}
+	}
+	return nil
+}
+
+// IsValidEdgeMetric checks if a metric name is valid for a given edge type.
+func IsValidEdgeMetric(edgeType, metricName string) bool {
+	et := strings.ToUpper(strings.TrimSpace(edgeType))
+	mn := strings.ToLower(strings.TrimSpace(metricName))
+	if et == "" || mn == "" {
+		return false
+	}
+	if t := getRuntimeTaxonomy(); t != nil && t.AllowedEdgeMetrics != nil {
+		if metrics, ok := t.AllowedEdgeMetrics[et]; ok {
+			for _, m := range metrics {
+				if strings.ToLower(m) == mn {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	// Fallback: no validation if no taxonomy
+	return false
+}
+
+// --- Service Taxonomy ---
+
+// IsValidServiceDomain checks if a service domain is valid.
+func IsValidServiceDomain(domain string) bool {
+	d := strings.ToLower(strings.TrimSpace(domain))
+	if d == "" {
+		return false
+	}
+	if t := getRuntimeTaxonomy(); t != nil && t.AllowedServiceDomains != nil {
+		_, ok := t.AllowedServiceDomains[d]
+		return ok
+	}
+	// Fallback
+	switch d {
+	case "it", "financial", "legal", "consulting", "logistics", "engineering", "media", "telecom",
+		"education", "healthcare", "construction", "security", "hr", "real-estate", "other":
+		return true
+	}
+	return false
+}
+
+// IsValidServiceSubdomain checks if a service subdomain is valid for the given domain.
+func IsValidServiceSubdomain(domain, subdomain string) bool {
+	d := strings.ToLower(strings.TrimSpace(domain))
+	s := strings.ToLower(strings.TrimSpace(subdomain))
+	if d == "" || s == "" {
+		return false
+	}
+	if t := getRuntimeTaxonomy(); t != nil && t.AllowedServiceSubdomains != nil {
+		if subs, ok := t.AllowedServiceSubdomains[d]; ok {
+			for _, sub := range subs {
+				if sub == s {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	// Fallback: allow "other" for any domain
+	return s == "other"
+}
+
+// GetServiceSpec returns the specification for a service slug.
+func GetServiceSpec(serviceSlug string) *ServiceSpec {
+	slug := strings.ToLower(strings.TrimSpace(serviceSlug))
+	if t := getRuntimeTaxonomy(); t != nil && t.KnownServices != nil {
+		if spec, ok := t.KnownServices[slug]; ok {
+			return &spec
+		}
+	}
+	return nil
+}
+
+// NormalizeServiceName normalizes a service name to canonical slug using synonyms.
+func NormalizeServiceName(name string) string {
+	raw := strings.ToLower(strings.TrimSpace(name))
+	if raw == "" {
+		return ""
+	}
+	if t := getRuntimeTaxonomy(); t != nil && t.ServiceSynonyms != nil {
+		if canonical, ok := t.ServiceSynonyms[raw]; ok && canonical != "" {
+			return normalizeProductSlug(canonical)
+		}
+	}
+	return normalizeProductSlug(raw)
+}
+
+// --- Unit Validation ---
+
+// reCurrencyUnit matches pattern-based currency/index units: lowercase [a-z0-9_], len 2..32.
+var reCurrencyUnit = regexp.MustCompile(`^[a-z0-9_]{2,32}$`)
+
+// IsValidMetricUnit checks if a metric unit is valid.
+// Physical units use allowlist; currency/index units use pattern matching.
+func IsValidMetricUnit(unit string, isCurrencyMetric bool) bool {
+	u := strings.ToLower(strings.TrimSpace(unit))
+	if u == "" {
+		return true // unit is optional
+	}
+	// For currency metrics, use pattern validation
+	if isCurrencyMetric {
+		return reCurrencyUnit.MatchString(u)
+	}
+	// For physical units, prefer runtime allowlist (from Firestore) when available.
+	if t := getRuntimeTaxonomy(); t != nil && t.AllowedMetricUnits != nil && len(t.AllowedMetricUnits) > 0 {
+		if _, ok := t.AllowedMetricUnits[u]; ok {
+			return true
+		}
+		// Fail-open: accept unknown units that still look like a unit token to avoid dropping data.
+		// (We can later canonicalize units more strictly if needed.)
+		return reCurrencyUnit.MatchString(u)
+	}
+	// Fallback: common physical units
+	switch u {
+	case "percent", "years", "count", "ratio", "days", "hours", "units", "units_per_day", "index_point",
+		"bbl", "mbbl", "mmbbl", "bcf", "tcf", "mcf", "boe", "bpd", "mbpd", "mcf_per_day", "mmcf_per_day",
+		"metric_tons", "kt", "mt", "tons", "oz", "moz", "kg", "g", "lbs", "carats",
+		"metric_tons_per_year", "oz_per_year", "kt_per_year":
+		return true
+	}
+	// Also allow currency pattern for fallback
+	return reCurrencyUnit.MatchString(u)
+}
+
+// IsCurrencyMetric returns true if the metric name typically uses currency units.
+func IsCurrencyMetric(metricName string) bool {
+	m := strings.ToLower(strings.TrimSpace(metricName))
+	switch m {
+	case "investment_amount", "round_size_total", "contract_value", "compensation", "revenue", "market_cap", "valuation":
+		return true
+	}
+	return strings.Contains(m, "_amount") || strings.Contains(m, "_value") || strings.Contains(m, "_cost")
 }

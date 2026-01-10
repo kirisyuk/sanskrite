@@ -441,6 +441,13 @@ func (e *PropagationEngine) propagateHotPath(
 				continue
 			}
 
+			// Filter out inactive edges (historical or future) from real-time propagation
+			// Historical edges (ValidTo < now) and future edges (ValidFrom > now) are excluded.
+			// This ensures propagation only flows through currently active relationships.
+			if !edge.IsActiveNow() {
+				continue
+			}
+
 			// Use policy if available, otherwise fallback to default behavior
 			var dampedDelta float64
 			var shouldPropagate bool
@@ -803,6 +810,12 @@ func (e *PropagationEngine) simulateHotPath(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+
+		// Filter out inactive edges (historical or future) from real-time propagation
+		if !edge.IsActiveNow() {
+			continue
+		}
+
 		// Применяем затухание волны
 		dampedDelta := e.damping.ApplyDamping(delta, edge.Properties.Amplification, edge.Properties.Criticality)
 

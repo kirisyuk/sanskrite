@@ -40,6 +40,20 @@ type DiscoveredRelation struct {
 	Confidence   float64 `json:"confidence"`
 	// IMPORTANT: must be a stable canonical path. DO NOT use /discovered/*
 	TargetCanonicalPath string `json:"targetCanonicalPath"`
+
+	// --- Optional edge enrichment (fail-open) ---
+	// ValidFrom/ValidTo are real-world effective dates for the relationship.
+	// Keep them as strings to avoid hard-failing JSON unmarshalling on date format drift.
+	// Supported formats are parsed later: "YYYY-MM-DD" (preferred) and RFC3339.
+	ValidFrom *string `json:"validFrom,omitempty"`
+	ValidTo   *string `json:"validTo,omitempty"`
+
+	// Metrics are edge-specific numerical metrics (ownership_percent, investment_amount, annual_volume, etc).
+	// Values use models.MetricValue (now tolerant to numeric strings like "10M", "45%").
+	Metrics map[string]models.MetricValue `json:"metrics,omitempty"`
+
+	// Qualifiers are categorical edge annotations (edgeModality, eventId, round, etc).
+	Qualifiers map[string]interface{} `json:"qualifiers,omitempty"`
 }
 
 // ScoutResult результат работы Scout Agent
@@ -231,6 +245,8 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 			scoutResult.Fragment.Type = models.FragmentTypeMarket
 		case strings.Contains(targetCanonicalPath, "/fac/"):
 			scoutResult.Fragment.Type = models.FragmentTypeFacility
+		case strings.Contains(targetCanonicalPath, "/deposit/"):
+			scoutResult.Fragment.Type = models.FragmentTypeDeposit
 		case strings.Contains(targetCanonicalPath, "/loc/") || strings.Contains(targetCanonicalPath, "/region/"):
 			scoutResult.Fragment.Type = models.FragmentTypeGeoRegion
 		case strings.Contains(targetCanonicalPath, "/event/"):
@@ -350,12 +366,30 @@ TASK: Extract all relevant information about this entity and return it as a JSON
      - "mega": Mega Corporation (>50000 employees or >$10B revenue)
      - "na": Cannot determine from available information
      ALWAYS attempt to classify; use "na" only if truly unknown.
-   - state: Map of metrics (operational_health, capacity_utilization, etc.) with MetricValue objects
+   - state: Map of metrics with MetricValue objects.
+     IMPORTANT: there are two common classes of metrics:
+       A) Normalized risk metrics under /metric/risk/... where value is a score:
+          - Magnitude: value in [0..1]
+          - Directional: value in [-1..1]
+       B) Domain/industrial metrics (absolute quantities), e.g. reserves/production/capacity:
+          - value is an absolute number (NOT normalized to 0..1), unit must be specified (bbl, tcf, metric_tons, etc).
    - description: Brief description of the entity
    - homeLocation: Location object with ISO standards if available
+   - lifecycleStage: (IMPORTANT for FACILITY/DEPOSIT/extractive ORG) Current operational stage:
+     - "concept" | "planning" | "permitting" | "financing" | "construction" | "commissioning" | "operational" | "expansion" | "suspended" | "decommissioning" | "closed"
+     - Default to "operational" if entity is clearly operating; otherwise extract from text
+   - expectedStartDate: (if lifecycleStage is construction/planning) When entity is expected to become operational (ISO8601)
+   - actualStartDate: When entity actually started operating (ISO8601), if known
+   - expectedEndDate: When entity is planned to close (ISO8601), if known
+   - actualEndDate: When entity actually closed (ISO8601), if known
    - identifiers: Map of identifiers (ISIN, LEI, Ticker, etc.) if available
    - kbRefs: Array of KB references (Wikidata, DBpedia) if available
-   - metrics: All metrics must be in range [0.0..1.0] (Magnitude) or [-1.0..1.0] (Directional). Each metric must include: value, confidence (0..1), observedAt (ISO 8601), provenance.
+   - metrics format rules (for both normalized and absolute metrics):
+     - value MUST be a JSON number (no commas; expand "10M" to 10000000)
+     - unit MUST be lowercase string (or omit unit if truly unitless)
+     - confidence MUST be 0..1
+     - observedAt MUST be ISO8601 ("YYYY-MM-DD" or RFC3339)
+     - provenance MUST include method + at least 1 sourceId
 
 2. "relations" Field (Array of Objects):
    Identify key dependencies, suppliers, customers, subsidiaries, competitors, or locations mentioned in the text.
@@ -382,6 +416,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
    - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
    - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
+     Include in 'reason': round name/number, investment amount if known.
+     If a specific funding event exists (with date, participants), consider linking to /event/funding-round/{slug} via Qualifiers["eventId"].
    - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
    - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
    - AUDITED_BY: source (ORGANIZATION/FACILITY) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
@@ -406,19 +442,43 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
    - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
    - LOCATED_IN: target MUST be GEO_REGION
-   - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
+   - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION, FACILITY, or DEPOSIT
    - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
    - DEPENDS_ON: source can be ORGANIZATION/FACILITY/PRODUCT, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
+   - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT (e.g., mine extracts from ore deposit, platform extracts from oil field)
+   - OWNS: can also target DEPOSIT (org/person owns deposit rights)
+   - PRODUCES: source can also be DEPOSIT (deposits produce resources)
+   - LOCATED_IN: source can also be DEPOSIT (deposits are located in regions)
    
    Each object must include:
    - targetName: Full legal/official name where relevant (e.g., "Tesla, Inc.")
    - targetLegalName: Same as targetName (explicit field)
    - targetShortName: Base name without ownership suffix (e.g., "Tesla")
-   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL"
-   - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, COMPETES_WITH, INFLUENCES
+   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT"
+   - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, COMPETES_WITH, INFLUENCES, EXTRACTS_FROM
    - reason: Brief evidence/reason for this relation
    - confidence: 0.0 to 1.0
    - targetCanonicalPath: REQUIRED. Suggest a STABLE canonical path.
+
+   Optional edge enrichment fields (HIGHLY RECOMMENDED when available):
+   - validFrom: (Optional) Relationship start date in real world. Prefer "YYYY-MM-DD" (or RFC3339 if needed).
+   - validTo: (Optional) Relationship end date in real world (for historical relations). Prefer "YYYY-MM-DD".
+   - qualifiers: (Optional) Map of categorical qualifiers, e.g.:
+     - edgeModality: "actual" | "projected" | "historical" | "potential"
+     - eventId: "/event/{slug}" (e.g., funding round for INVESTS_IN)
+     - round: "Series A" (INVESTS_IN)
+     - contractType: "long-term" | "spot" (SUPPLIES_TO)
+   - metrics: (Optional) Map of numerical edge metrics with MetricValue objects.
+     Examples:
+       - OWNS: ownership_percent (unit="percent", value=45.0), voting_percent
+       - INVESTS_IN: investment_amount (unit like "usd" / any ticker code), round_size_total
+       - SUPPLIES_TO: annual_volume, contract_value
+     MetricValue format:
+       - value MUST be a JSON number (no commas; expand "10M" to 10000000)
+       - unit MUST be lowercase (e.g., "percent", "usd", "bbl", "metric_tons_per_year")
+       - confidence MUST be 0..1
+       - observedAt MUST be ISO8601 ("YYYY-MM-DD" or RFC3339)
+     We will tolerate some variations (e.g., "45%%" or "10M") but prefer strict numeric JSON.
 
 3. "supplyChains" Field (Array of Objects) - ONLY if supply_chain module is enabled:
    Each object represents one supply chain path with:
@@ -456,17 +516,41 @@ CANONICAL PATH RULES:
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - People: /person/{lowercase-slug}
-  - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
-    - category: "raw" | "component" | "finished" | "service"
-    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy"
-    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly"
+  - Products (Goods): MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}[/{model-slug}]
+    - category: "raw" | "component" | "finished"
+    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy" | "hydrocarbon" | "fuel" | "petrochemical"
+    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly" | "liquefaction" | "cracking"
     - slug: lowercase-slug derived from product name
+    - model-slug: (OPTIONAL) specific product model/SKU (e.g., "cat-390f" for Caterpillar 390F excavator)
     - Examples:
       - "Lithium Ore" -> /product/raw/mineral/extraction/lithium-ore
       - "Lithium Carbonate" -> /product/raw/chemical/refining/lithium-carbonate
       - "Battery Cell" -> /product/component/electronic/manufacturing/battery-cell
       - "Electric Vehicle" -> /product/finished/mechanical/assembly/electric-vehicle
+      - "Caterpillar 390F" -> /product/finished/mechanical/manufacturing/excavator/cat-390f
+      - "Crude Oil" -> /product/raw/hydrocarbon/extraction/crude-oil
+      - "LNG" -> /product/raw/hydrocarbon/liquefaction/lng
     - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
+  - Services: Use structure /product/service/{domain}/{subdomain}/{slug}[/{offering-slug}]
+    - domain: "it" | "financial" | "legal" | "consulting" | "logistics" | "engineering" | "media" | "telecom" | "education" | "healthcare" | "construction" | "security" | "hr" | "real-estate" | "other"
+    - subdomain: domain-specific (e.g., "software" | "cloud" | "hosting" for IT; "banking" | "insurance" | "payments" for financial)
+    - slug: lowercase-slug derived from service name
+    - offering-slug: (OPTIONAL) specific offering/product
+    - Examples:
+      - "Software Development" -> /product/service/it/software/custom-development
+      - "Cloud Hosting" -> /product/service/it/cloud/hosting
+      - "Payment Processing" -> /product/service/financial/payments/payment-processing
+      - "Salesforce Sales Cloud" -> /product/service/it/software/crm-saas/salesforce-sales-cloud
+  - Deposits (Natural Resource): /deposit/{resource-slug}/{deposit-slug}
+    - resource-slug: primary resource type (examples: crude-oil, natural-gas, lithium, copper, gold, iron-ore, uranium, rare-earth, coal)
+      - IMPORTANT: this list is NOT exhaustive. If you encounter a different resource (e.g., potash, phosphate, nickel),
+        use a best-effort lowercase slug and still emit a /deposit/... path. Use "other" only if truly unknown.
+    - deposit-slug: lowercase-slug derived from deposit/field/basin name
+    - Examples:
+      - "Permian Basin" -> /deposit/crude-oil/permian-basin
+      - "Atacama Salar" -> /deposit/lithium/atacama-salar
+      - "Escondida Mine" -> /deposit/copper/escondida
+      - "Ghawar Field" -> /deposit/crude-oil/ghawar
   - Programs:
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
     - Otherwise /program/{programSlug}

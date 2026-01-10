@@ -110,10 +110,11 @@ func (n *TypeNormalizer) checkPathTypeMismatch(fragment *models.HorizonFragment)
 		"/geo/":         models.FragmentTypeGeoRegion,
 		"/org/":         models.FragmentTypeOrganization,
 		"/fac/":         models.FragmentTypeFacility,
+		"/deposit/":     models.FragmentTypeDeposit, // Natural resource deposits
 		"/product/":     models.FragmentTypeProduct,
 		"/program/":     models.FragmentTypeProgram,
 		"/market/":      models.FragmentTypeMarket,
-		"/event/":      models.FragmentTypeEvent,
+		"/event/":       models.FragmentTypeEvent,
 		"/person/":      models.FragmentTypePerson,
 		"/media/":       models.FragmentTypeMediaChannel,
 		"/supply-link/": models.FragmentTypeSupplyLink,

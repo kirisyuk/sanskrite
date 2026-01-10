@@ -436,6 +436,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       NEEDS: 'Needs',
       USES: 'Uses',
       CONSUMES: 'Consumes',
+      EXTRACTS_FROM: 'Extracts',
       // Ownership / control
       OWNS: 'Owns',
       MANAGES: 'Manages',
@@ -511,6 +512,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   } | null>(null);
   const [scopeScoutDepth, setScopeScoutDepth] = React.useState<1 | 2>(1);
   const [scopeScoutInFlightId, setScopeScoutInFlightId] = React.useState<string | null>(null);
+  const scopeScoutCancelBtnRef = React.useRef<HTMLButtonElement | null>(null);
+  const scopeScoutPrevActiveElRef = React.useRef<HTMLElement | null>(null);
   const [hoveredGroupId, setHoveredGroupId] = React.useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = React.useState<string | null>(null);
@@ -940,8 +943,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'NEEDS',
       'USES',
       'CONSUMES',
+      'EXTRACTS_FROM',
     ];
-    const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY'];
+    const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY', 'EXTRACTS_FROM'];
     const MARKET = [
       'COMPETES_WITH',
       'CONFLICTS_WITH',
@@ -1902,8 +1906,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const unionEdgeTypes = (() => {
       if (wantsAll) return [] as string[];
       const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
-      const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES'];
-      const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY'];
+      const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM'];
+      const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY', 'EXTRACTS_FROM'];
       const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO'];
       const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
       const out = new Set<string>();
@@ -1919,7 +1923,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const CONTROL_FWD = new Set(['OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF']);
     const CONTROL_INV = new Set(['SUBSIDIARY_OF']);
     const SUPPLY_FWD = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
-    const SUPPLY_INV = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+    const SUPPLY_INV = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
     const PEER = new Set(['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO']);
     const CONTEXTISH = new Set(['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES']);
     const INFLUENCEISH = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS']);
@@ -2432,6 +2436,149 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   };
 
   const normalizeEdgeType = useCallback((t: string | undefined) => (t || '').toUpperCase().trim(), []);
+
+  // If two nodes are connected by both influence and dependency edges, we should present the influence edge
+  // as the primary semantic (per product rules). This applies regardless of direction.
+  // Likewise, LOCATED_IN should dominate DEPENDS-like relations for ORG/GOV -> GEO placements when directed correctly.
+  const suppressDominatedEdges = useCallback(
+    (edgesIn: Edge[] | null | undefined, nodesIn?: Node<HorizonNodeData>[] | null): Edge[] => {
+      const edges = Array.isArray(edgesIn) ? edgesIn : [];
+      if (edges.length === 0) return [];
+
+      const nodeById = new Map<string, any>();
+      if (Array.isArray(nodesIn)) {
+        for (const n of nodesIn) {
+          const id = norm((n as any)?.id);
+          if (!id) continue;
+          nodeById.set(id, n);
+        }
+      }
+
+      const typeOfNode = (id: string): string => {
+        const n = nodeById.get(norm(id));
+        const t = String((n as any)?.data?.type || '').trim();
+        return t ? t.toUpperCase().replace(/\s+/g, '_') : '';
+      };
+      const cpOfNode = (id: string): string => {
+        const n = nodeById.get(norm(id));
+        return String((n as any)?.data?.canonicalPath || '').trim();
+      };
+      const isOrgLike = (id: string): boolean => {
+        const t = typeOfNode(id);
+        if (t === 'ORGANIZATION') return true;
+        const cp = cpOfNode(id);
+        return Boolean(cp && (cp.startsWith('/org/') || cp.startsWith('/gov/')));
+      };
+      const isGeoLike = (id: string): boolean => {
+        const t = typeOfNode(id);
+        if (t === 'GEO_REGION' || t === 'LOCATION') return true;
+        if (t && t.includes('GEO')) return true;
+        const cp = cpOfNode(id);
+        return Boolean(cp && cp.startsWith('/loc/'));
+      };
+
+      const INFL = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES']);
+      const DEP = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
+      const PARTNER = new Set(['PARTNERS_WITH', 'COOPERATES_WITH']);
+      const bestPartner = (types: Set<string>): string => {
+        // Prefer PARTNERS_WITH over COOPERATES_WITH for UI stability.
+        if (types.has('PARTNERS_WITH')) return 'PARTNERS_WITH';
+        if (types.has('COOPERATES_WITH')) return 'COOPERATES_WITH';
+        return 'PARTNERS_WITH';
+      };
+      const bestInfluence = (types: Set<string>): string => {
+        // Prefer the most specific label for UI stability.
+        if (types.has('INFLUENCES')) return 'INFLUENCES';
+        if (types.has('AFFECTS')) return 'AFFECTS';
+        if (types.has('IMPACTS')) return 'IMPACTS';
+        if (types.has('REGULATES')) return 'REGULATES';
+        return 'INFLUENCES';
+      };
+      const pairKey = (a: string, b: string) => {
+        const x = norm(a);
+        const y = norm(b);
+        return x < y ? `${x}||${y}` : `${y}||${x}`;
+      };
+      const edgeTypeOf = (e: any): string => {
+        return normalizeEdgeType((e as any)?.data?.edgeType || (e as any)?.data?.subkind || (e as any)?.label || (e as any)?.type);
+      };
+
+      // Build type sets per unordered pair.
+      const typesByPair = new Map<string, Set<string>>();
+      const hasLocatedOutByPair = new Map<string, boolean>(); // ORG/GOV -> GEO LOCATED_IN exists
+      for (const e of edges as any[]) {
+        const s = norm(e?.source);
+        const t = norm(e?.target);
+        if (!s || !t || s === t) continue;
+        const et = edgeTypeOf(e);
+        if (!et) continue;
+        const k = pairKey(s, t);
+        const set = typesByPair.get(k) || new Set<string>();
+        set.add(et);
+        typesByPair.set(k, set);
+        if (et === 'LOCATED_IN') {
+          if (isOrgLike(s) && isGeoLike(t)) {
+            hasLocatedOutByPair.set(k, true);
+          }
+        }
+      }
+
+      const winnerByPair = new Map<string, string>(); // if set, suppress others (dep-like / non-winner influence)
+      for (const [k, set] of typesByPair.entries()) {
+        const hasPartner = Array.from(set).some((t) => PARTNER.has(t));
+        const hasInfluence = Array.from(set).some((t) => INFL.has(t));
+        const hasDep = Array.from(set).some((t) => DEP.has(t));
+        // Partnership dominates both influence and dependency (product rule).
+        if (hasPartner && (hasDep || hasInfluence)) {
+          winnerByPair.set(k, bestPartner(set));
+          continue;
+        }
+        if (hasInfluence && hasDep) {
+          winnerByPair.set(k, bestInfluence(set));
+          continue;
+        }
+        const hasLocatedOut = Boolean(hasLocatedOutByPair.get(k));
+        if (hasLocatedOut && hasDep) {
+          winnerByPair.set(k, 'LOCATED_IN');
+          continue;
+        }
+      }
+
+      if (winnerByPair.size === 0) return edges;
+
+      // Filter edges by winner.
+      const out: Edge[] = [];
+      for (const e of edges as any[]) {
+        const s = norm(e?.source);
+        const t = norm(e?.target);
+        if (!s || !t || s === t) {
+          out.push(e);
+          continue;
+        }
+        const k = pairKey(s, t);
+        const win = winnerByPair.get(k);
+        if (!win) {
+          out.push(e);
+          continue;
+        }
+        const et = edgeTypeOf(e);
+        if (et === win) {
+          out.push(e);
+          continue;
+        }
+        // Suppress dependency edges when influence or located_in dominates.
+        if (DEP.has(et)) continue;
+        // Suppress alternate influence labels when a winner is chosen (keeps one clean semantic edge).
+        if (INFL.has(et) && INFL.has(win)) continue;
+        // Suppress influence edges when partnership dominates.
+        if (INFL.has(et) && PARTNER.has(win)) continue;
+        out.push(e);
+      }
+
+      return out;
+    },
+    [norm, normalizeEdgeType],
+  );
 
   /**
    * Determine source and target handles based on semantic group.
@@ -3594,14 +3741,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       });
 
+      const filteredEdges = suppressDominatedEdges(graphEdges, graphNodes);
+
       if (skippedEdges.length > 0) {
         dbg(
           `[Cockpit] ${skippedEdges.length} edges skipped (endpoints not loaded). Use + to load related fragments.`,
         );
       }
-      dbg('[Cockpit] Converted to graph:', { nodes: graphNodes.length, edges: graphEdges.length });
-    return { nodes: graphNodes, edges: graphEdges };
-  }, [norm, dbg, getEdgeStroke, getEdgeCaptionShort]);
+      dbg('[Cockpit] Converted to graph:', { nodes: graphNodes.length, edges: filteredEdges.length });
+    return { nodes: graphNodes, edges: filteredEdges };
+  }, [norm, dbg, getEdgeStroke, getEdgeCaptionShort, suppressDominatedEdges]);
 
   // Загрузка графа из Cockpit API и сохранение в LensItems
   const handleLoadGraph = useCallback(async () => {
@@ -3755,9 +3904,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       });
 
+      // Suppress dominated edges (partners > influence > depends, located_in > depends when directed correctly)
+      const filteredEdges = suppressDominatedEdges(graphEdges, graphNodes);
+
       // 4. Применяем ELK layout и отображаем граф
       dbg('[Cockpit] Applying ELK layout to nodes:', graphNodes.length);
-      const layoutedNodes = await layoutFullGraph(graphNodes, graphEdges, {
+      const layoutedNodes = await layoutFullGraph(graphNodes, filteredEdges, {
         direction: 'DOWN',
         nodeWidth: ELK_NODE_WIDTH,
         nodeHeight: ELK_NODE_HEIGHT,
@@ -3766,10 +3918,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         maxChildRows: ELK_MAX_CHILD_ROWS,
       });
 
-      dbg('[Cockpit] Setting nodes and edges:', { nodes: layoutedNodes.length, edges: graphEdges.length });
+      dbg('[Cockpit] Setting nodes and edges:', { nodes: layoutedNodes.length, edges: filteredEdges.length });
       // Reset collapse bookkeeping for a fresh graph
       baseNodeIdsRef.current = new Set(layoutedNodes.filter((n) => !(n.data as any)?.isGroup).map((n) => n.id));
-      baseEdgeIdsRef.current = new Set(graphEdges.map((e) => e.id));
+      baseEdgeIdsRef.current = new Set(filteredEdges.map((e) => e.id));
       nodeClaimCountRef.current = new Map();
       edgeClaimCountRef.current = new Map();
       expansionsRef.current = new Map();
@@ -3780,7 +3932,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         data: { ...(node.data as any), onLoadRelated: invokeLoadRelated, onCollapse: invokeCollapse, onScopeScout: invokeScopeScout },
       }));
       setNodes(withCallbacks as any);
-      setEdges(graphEdges);
+      setEdges(filteredEdges);
       setLoading(false);
 
         // Initialize grid cells for all central nodes (depth=0) so second-order expansions
@@ -4561,7 +4713,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         // - DEPENDS_ON: if central → neighbor (outgoing), neighbor is a prerequisite (upstream) => treat as 'incoming'
         let effectiveDirection: 'incoming' | 'outgoing' = direction;
         const etUpper = String(edgeType || '').toUpperCase().trim();
-        const DEP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+        const DEP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
         if (layoutMode === 'levels' && DEP_TYPES.has(etUpper)) {
           effectiveDirection = direction === 'incoming' ? 'outgoing' : 'incoming';
         }
@@ -4578,7 +4730,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             // Ownership / Control (Strongest)
             upper === 'OWNS' || upper === 'PARENT_OF' || upper === 'SUBSIDIARY_OF' || upper === 'MANAGES' || upper === 'CONTROLS' ||
             // Supply / Dependency
-            upper === 'DEPENDS_ON' || upper === 'REQUIRES' || upper === 'NEEDS' || upper === 'USES' || upper === 'CONSUMES'
+            upper === 'DEPENDS_ON' || upper === 'REQUIRES' || upper === 'NEEDS' || upper === 'USES' || upper === 'CONSUMES' || upper === 'EXTRACTS_FROM'
           );
         };
         
@@ -4587,12 +4739,95 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           fragmentEdgeType.set(neighborId, edgeType);
           fragmentDirection.set(neighborId, effectiveDirection);
         } else {
+          // === LOCATED_IN vs DEPENDS_ON OVERRIDE ===
+          // If both LOCATED_IN and DEPENDS-like relations exist between an ORG/GOV and a GEO node,
+          // we want the GEO placement to be driven by LOCATED_IN (when directed correctly: org -> geo).
+          // Otherwise GEO nodes can be misplaced into dependency groups.
+          const typeOf = (fid: string): string => {
+            const f = byId.get(String(fid || '').trim());
+            const t0 = String(f?.type || '').trim();
+            if (t0) return t0.toUpperCase().replace(/\s+/g, '_');
+            const n = nodeByFragmentId.get(String(fid || '').trim());
+            const t1 = String((n as any)?.data?.type || '').trim();
+            return t1 ? t1.toUpperCase().replace(/\s+/g, '_') : '';
+          };
+          const isOrgLikeType = (t: string, fid: string): boolean => {
+            const tt = String(t || '').toUpperCase().trim();
+            if (tt === 'ORGANIZATION') return true;
+            const f = byId.get(String(fid || '').trim());
+            const cp = String(f?.canonicalPath || '').trim();
+            return Boolean(cp && (cp.startsWith('/org/') || cp.startsWith('/gov/')));
+          };
+          const isGeoType = (t: string, fid: string): boolean => {
+            const tt = String(t || '').toUpperCase().trim();
+            if (tt === 'GEO_REGION' || tt === 'LOCATION') return true;
+            if (tt.includes('GEO')) return true;
+            const f = byId.get(String(fid || '').trim());
+            const cp = String(f?.canonicalPath || '').trim();
+            return Boolean(cp && cp.startsWith('/loc/'));
+          };
+          const centralType = typeOf(fragmentId);
+          const neighborType = typeOf(neighborId);
+          const isCentralOrgLike = isOrgLikeType(centralType, fragmentId); // includes /gov/*
+          const isNeighborOrgLike = isOrgLikeType(neighborType, neighborId);
+          const isNeighborGeo = isGeoType(neighborType, neighborId);
+
           // === LEVELS PRODUCT OVERRIDE ===
           // In Levels mode, if the expanded node has an OUTGOING PRODUCES edge to a neighbor,
           // it must dominate placement/grouping even if other edge types exist (including dependencies).
           // Otherwise products can "escape" into the right backbone due to dependency heuristics.
           const existingUpper = String(existingType || '').toUpperCase().trim();
           const newUpper = String(edgeType || '').toUpperCase().trim();
+
+          if (layoutMode === 'levels' && isCentralOrgLike && isNeighborGeo) {
+            const isDepLike = (u: string) => DEP_TYPES.has(String(u || '').toUpperCase().trim());
+            const existingIsLocatedOut = existingUpper === 'LOCATED_IN' && existingDir === 'outgoing';
+            const newIsLocatedOut = newUpper === 'LOCATED_IN' && effectiveDirection === 'outgoing';
+
+            // If LOCATED_IN (org -> geo) is already chosen, do NOT let DEPENDS-like edges override it.
+            if (existingIsLocatedOut && isDepLike(newUpper)) {
+              return;
+            }
+            // If we currently have a DEPENDS-like edge, but we see LOCATED_IN (org -> geo), promote LOCATED_IN.
+            if (isDepLike(existingUpper) && newIsLocatedOut) {
+              fragmentEdgeType.set(neighborId, edgeType);
+              fragmentDirection.set(neighborId, effectiveDirection);
+              return;
+            }
+          }
+
+          // === INFLUENCE vs DEPENDS OVERRIDE ===
+          // If an ORG/GOV influences another ORG, this semantic is stronger than dependency for placement/grouping,
+          // even if dependency edges exist (and even if they point in the opposite direction).
+          // Otherwise "Depends" can hide the actual semantic and misplace the influencer/target in the wrong group.
+          if (isCentralOrgLike && isNeighborOrgLike) {
+            const INFL = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES']);
+            const PARTNER = new Set(['PARTNERS_WITH', 'COOPERATES_WITH']);
+            const existingIsInfluence = INFL.has(existingUpper);
+            const newIsInfluence = INFL.has(newUpper);
+            const existingIsDepLike = DEP_TYPES.has(existingUpper);
+            const newIsDepLike = DEP_TYPES.has(newUpper);
+            const existingIsPartner = PARTNER.has(existingUpper);
+            const newIsPartner = PARTNER.has(newUpper);
+
+            // Partnership dominates both influence and dependency regardless of direction/priority.
+            if (existingIsPartner && (newIsInfluence || newIsDepLike)) return;
+            if (!existingIsPartner && newIsPartner && (existingIsInfluence || existingIsDepLike)) {
+              fragmentEdgeType.set(neighborId, edgeType);
+              fragmentDirection.set(neighborId, effectiveDirection);
+              return;
+            }
+
+            // Keep influence if already chosen.
+            if (existingIsInfluence && newIsDepLike) return;
+            // Promote influence over dependency regardless of direction/priority.
+            if (existingIsDepLike && newIsInfluence) {
+              fragmentEdgeType.set(neighborId, edgeType);
+              fragmentDirection.set(neighborId, effectiveDirection);
+              return;
+            }
+          }
+
           const existingIsProducesOut = layoutMode === 'levels' && existingUpper === 'PRODUCES' && existingDir === 'outgoing';
           const newIsProducesOut = layoutMode === 'levels' && newUpper === 'PRODUCES' && effectiveDirection === 'outgoing';
           if (existingIsProducesOut) return;
@@ -4606,7 +4841,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           // If a node has both a control/management signal and a dependency signal to the expanded node,
           // the control signal must dominate. Otherwise the node can be misclassified (e.g., not bucketed into Stakeholders).
           const LEVELS_CONTROL_TYPES = new Set(['OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'SUBSIDIARY_OF']);
-          const LEVELS_DEP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+          const LEVELS_DEP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
           const existingIsControl = layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(existingUpper);
           const newIsControl = layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(newUpper);
           const existingIsDep = layoutMode === 'levels' && LEVELS_DEP_TYPES.has(existingUpper);
@@ -4832,7 +5067,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // If a neighbor has ANY outgoing edge INTO the expanded node (neighbor → expanded),
       // then we do NOT render dependency edges outgoing FROM the expanded node (expanded -(DEPENDS_*)-> neighbor).
       // This avoids confusing bidirectional "Depends" visuals when the relationship is already expressed in reverse.
-      const DEP_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+      const DEP_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
       const centralFragId = String(fragmentId || '').trim();
       const neighborsWithOutgoingIntoCentral = new Set<string>();
       for (const e of depEdges) {
@@ -5295,7 +5530,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         })();
 
         const fragmentNodes = [...updatedCurrentNodes, ...newNodes].filter((n) => !(n?.data as any)?.isGroup);
-        layoutedNodes = await layoutLinearFullGraph(fragmentNodes as any, mergedEdges as any, {
+        const filteredMergedEdges = suppressDominatedEdges(mergedEdges as any, fragmentNodes as any);
+        layoutedNodes = await layoutLinearFullGraph(fragmentNodes as any, filteredMergedEdges as any, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -5305,7 +5541,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         });
 
         // Apply Linear handle rules using the freshly updated node data (edgeTypeFromParent/directionFromParent)
-        linearEdgesAfterLayout = recalculateLinearHandles(mergedEdges, layoutedNodes);
+        linearEdgesAfterLayout = recalculateLinearHandles(filteredMergedEdges as any, layoutedNodes);
       } else if (isLevelsLayout) {
         // Levels layout (contract-driven): Two-Pane model
         // - right column: expanded nodes (plus depth=0 roots)
@@ -5333,7 +5569,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
         // Keep any existing group nodes in the input so pagination state can be preserved.
         const allNodes = [...updatedCurrentNodes, ...newNodes];
-        layoutedNodes = await layoutLevelsTwoPane(allNodes as any, mergedEdges as any, {
+        const filteredMergedEdges = suppressDominatedEdges(mergedEdges as any, allNodes as any);
+        layoutedNodes = await layoutLevelsTwoPane(allNodes as any, filteredMergedEdges as any, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -5343,7 +5580,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           collapsedSubcategories,
           onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
         });
-        linearEdgesAfterLayout = recalculateLevelsTwoPaneHandles(mergedEdges, layoutedNodes as any);
+        linearEdgesAfterLayout = recalculateLevelsTwoPaneHandles(filteredMergedEdges as any, layoutedNodes as any);
       } else {
         // Fallback: используем freeform
         layoutedNodes = await layoutExpansionWithGroups(
@@ -5404,7 +5641,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Обновляем состояние
       setNodes(finalNodes);
       if ((isLinearLayout || isLevelsLayout) && linearEdgesAfterLayout) {
-        setEdges(linearEdgesAfterLayout as any);
+        setEdges(suppressDominatedEdges(linearEdgesAfterLayout as any, finalNodes as any) as any);
       } else {
         setEdges((prev) => {
           const out: any[] = [];
@@ -5425,7 +5662,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             seen.add(k);
             out.push({ ...(e as any), id: `edge-${k}` });
           }
-          return out;
+          return suppressDominatedEdges(out as any, finalNodes as any) as any;
         });
       }
 
@@ -6903,7 +7140,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     const GOVERNANCE_TYPES = new Set(['BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY']);
     const HIER = new Set(['OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF']);
-    const INV = new Set(['SUBSIDIARY_OF', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES']);
+    const INV = new Set(['SUBSIDIARY_OF', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
 
     const edgeTypeOf = (e: any) => normalizeEdgeType(e?.data?.edgeType || e?.data?.subkind || e?.label || e?.type);
     const parentChildFromEdge = (e: any): { parent: string; child: string; et: string } | null => {
@@ -8777,6 +9014,31 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setScopeScoutModal(null);
     }
   }, [lensId, onScopeScout, scopeScoutModal, scopeScoutDepth, setNodes]);
+
+  // Scope-scout modal: Esc to close + basic focus management.
+  React.useEffect(() => {
+    if (!scopeScoutModal) return;
+
+    scopeScoutPrevActiveElRef.current = document.activeElement as HTMLElement | null;
+    const t = window.setTimeout(() => scopeScoutCancelBtnRef.current?.focus(), 0);
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (scopeScoutInFlightId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setScopeScoutModal(null);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKeyDown, true);
+      const prev = scopeScoutPrevActiveElRef.current;
+      scopeScoutPrevActiveElRef.current = null;
+      prev?.focus?.();
+    };
+  }, [scopeScoutModal, scopeScoutInFlightId]);
 
   // Ask-graph helpers
   const clearGraphQueryHighlight = React.useCallback(() => {
@@ -11240,8 +11502,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       {/* Scope-scout confirm modal (portal) */}
       {scopeScoutModal && ReactDOM.createPortal(
         <div
-          role="dialog"
-          aria-modal="true"
           onClick={() => {
             if (scopeScoutInFlightId) return;
             setScopeScoutModal(null);
@@ -11259,6 +11519,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         >
           <div
             onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="scope-scout-title"
+            aria-describedby="scope-scout-desc"
+            tabIndex={-1}
             style={{
               width: 520,
               maxWidth: 'min(520px, calc(100vw - 32px))',
@@ -11270,11 +11535,39 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               color: 'var(--text-heading)',
             }}
           >
-            <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 8 }}>
-              Run additional research?
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+              <div id="scope-scout-title" style={{ fontSize: 14, fontWeight: 800, lineHeight: 1.2 }}>
+                Run supplemental research?
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (scopeScoutInFlightId) return;
+                  setScopeScoutModal(null);
+                }}
+                aria-label="Close"
+                disabled={Boolean(scopeScoutInFlightId)}
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: 10,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  color: 'var(--text-secondary-strong)',
+                  cursor: scopeScoutInFlightId ? 'not-allowed' : 'pointer',
+                  opacity: scopeScoutInFlightId ? 0.5 : 0.85,
+                  fontSize: 18,
+                  fontWeight: 900,
+                  lineHeight: 1,
+                }}
+                title="Close"
+              >
+                ×
+              </button>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', lineHeight: 1.4 }}>
-              This will add the node to the current lens <strong>Scope</strong> and start a new scouting run with <strong>depth = 1</strong>.
+            <div id="scope-scout-desc" style={{ fontSize: 12, color: 'var(--text-secondary-strong)', lineHeight: 1.4 }}>
+              This action adds the selected node to the lens <strong>Scope</strong> and initiates an incremental discovery
+              pass to expand the relationship map around it.
             </div>
 
             <div style={{ marginTop: 10, fontSize: 12 }}>
@@ -11284,15 +11577,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               </div>
             </div>
 
-            <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
-                Depth
+            <div style={{ marginTop: 12, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                  Depth
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                  {scopeScoutDepth === 1
+                    ? 'Direct connections only — immediate relationships to the selected node.'
+                    : 'Direct + indirect connections — relationships of the newly discovered connections.'}
+                </div>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   type="button"
                   onClick={() => setScopeScoutDepth(1)}
                   disabled={Boolean(scopeScoutInFlightId)}
+                  aria-pressed={scopeScoutDepth === 1}
+                  aria-label="Depth 1"
                   style={{
                     padding: '6px 10px',
                     borderRadius: 10,
@@ -11302,7 +11604,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                     cursor: scopeScoutInFlightId ? 'not-allowed' : 'pointer',
                     opacity: scopeScoutInFlightId ? 0.5 : 1,
                   }}
-                  title="Scout only this node (and record direct relations)"
+                  title="Direct relationships (one hop)"
                 >
                   1
                 </button>
@@ -11310,6 +11612,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   type="button"
                   onClick={() => setScopeScoutDepth(2)}
                   disabled={Boolean(scopeScoutInFlightId)}
+                  aria-pressed={scopeScoutDepth === 2}
+                  aria-label="Depth 2"
                   style={{
                     padding: '6px 10px',
                     borderRadius: 10,
@@ -11319,7 +11623,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                     cursor: scopeScoutInFlightId ? 'not-allowed' : 'pointer',
                     opacity: scopeScoutInFlightId ? 0.5 : 1,
                   }}
-                  title="Also scout newly discovered neighbors (one additional hop)"
+                  title="Direct + indirect relationships"
                 >
                   2
                 </button>
@@ -11331,6 +11635,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 type="button"
                 onClick={() => setScopeScoutModal(null)}
                 disabled={Boolean(scopeScoutInFlightId)}
+                ref={scopeScoutCancelBtnRef}
                 style={{
                   padding: '8px 10px',
                   borderRadius: 10,
@@ -11348,16 +11653,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 onClick={confirmScopeScout}
                 disabled={!onScopeScout || Boolean(scopeScoutInFlightId)}
                 style={{
-                  padding: '8px 10px',
+                  padding: '8px 12px',
                   borderRadius: 10,
-                  border: '1px solid rgba(59,130,246,0.55)',
-                  background: 'rgba(59,130,246,0.16)',
-                  color: 'var(--text-heading)',
+                  border: 'none',
+                  background: 'var(--accent-primary, #3B82F6)',
+                  color: '#fff',
+                  fontWeight: 850,
                   cursor: (!onScopeScout || scopeScoutInFlightId) ? 'not-allowed' : 'pointer',
                   opacity: (!onScopeScout || scopeScoutInFlightId) ? 0.5 : 1,
+                  boxShadow: '0 10px 22px rgba(59,130,246,0.24)',
                 }}
               >
-                {scopeScoutInFlightId ? 'Starting…' : `Run research (depth ${scopeScoutDepth})`}
+                {scopeScoutInFlightId ? 'Starting…' : 'Run research'}
               </button>
             </div>
           </div>

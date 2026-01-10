@@ -162,6 +162,25 @@ func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *mode
 		return fmt.Errorf("failed to resolve edge endpoints: srcErr=%v dstErr=%v", srcErr, dstErr)
 	}
 
+	// Canonicalize certain mis-modeled edges where reversing is not sufficient.
+	// Example: PRODUCT OWNS ORGANIZATION should become ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
+	if newType, shouldSwap, changed, reason := scout.CanonicalizeEdge(edge.Type, srcFrag.Type, dstFrag.Type); changed {
+		oldType := edge.Type
+		edge.Type = newType
+		edge.Qualifiers["canonicalized"] = true
+		edge.Qualifiers["canonicalizedFromEdgeType"] = string(oldType)
+		edge.Qualifiers["canonicalizationReason"] = reason
+		edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
+		if shouldSwap {
+			edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
+			edge.Qualifiers["normalizedDirection"] = true
+			// Keep local type vars consistent for subsequent direction validation.
+			srcFrag, dstFrag = dstFrag, srcFrag
+		}
+		// Re-apply symmetric normalization after any swap/type-change (noop for non-symmetric).
+		edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+	}
+
 	// Enforce direction policies (FOUNDED, EMPLOYED_BY, MANAGES, KEY_PERSON, etc.).
 	if valid, shouldReverse, rule := scout.ValidateEdgeDirection(edge.Type, srcFrag.Type, dstFrag.Type); !valid {
 		if shouldReverse {
@@ -637,6 +656,7 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 			"NEEDS":            {},
 			"USES":             {},
 			"CONSUMES":         {},
+			"EXTRACTS_FROM":    {}, // Facility -> Deposit means Deposit is upstream prerequisite/context
 			"LOCATED_IN":       {},
 			"OPERATES_IN":      {},
 			"BASED_IN":         {},

@@ -14,7 +14,7 @@ func BuildSupplyChainPathPayload(nodes []SupplyChainPathNode, edges []SupplyChai
 	if len(edges) > 0 {
 		payload["edges"] = edges
 	}
-	if notes != nil && len(notes) > 0 {
+	if len(notes) > 0 {
 		payload["notes"] = notes
 	}
 	return payload

@@ -142,6 +142,13 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     text: '#9A3412', textDark: '#FED7AA',
     accent: '#F97316', accentDark: '#FB923C',
   },
+  'DEPOSIT': {
+    // Earth / deposit: deeper soil/ore brown (avoid amber used by PRODUCT)
+    bg: '#FBF2E8', bgDark: '#1A120C',
+    border: '#6B3F2A', borderDark: '#B7791F',
+    text: '#5A2E0D', textDark: '#F2D3B8',
+    accent: '#8B4513', accentDark: '#C6903D',
+  },
   'PERSON': {
     bg: '#CFFAFE', bgDark: '#164E63',
     border: '#06B6D4', borderDark: '#22D3EE',
@@ -431,6 +438,16 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
           <path d="M17 18h1" />
           <path d="M12 18h1" />
           <path d="M7 18h1" />
+        </svg>
+      );
+    
+    case 'DEPOSIT':
+      // Deposit / resource: layered rock icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 16l4-6 5 3 5-6 4 9" />
+          <path d="M4 20h16" />
+          <path d="M6 18h12" />
         </svg>
       );
     
@@ -1119,6 +1136,7 @@ const formatEdgeTypes = (edgeTypes: string[] | undefined): string => {
 const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected, id }) => {
   const { theme } = React.useContext(ThemeContext);
   const { t } = useTranslation();
+  const [hoveredRelKey, setHoveredRelKey] = React.useState<string | null>(null);
   // Groups are primarily visual containers; they must NOT block clicks on child nodes.
   // We only treat a group as interactive if explicitly requested (rare).
   const isBackdrop = Boolean((data as any)?.groupIsBackdrop);
@@ -1159,12 +1177,14 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
   // In some layouts (e.g. Levels Two-Pane), groups are purely structural containers.
   // Best practice: no semantic fill, only a subtle outline.
   if (noFill) {
+    // Keep groups mostly "no-fill" to avoid fighting the palette.
+    // If we ever want a fill here, it should be an extremely subtle cold graphite.
     bg = 'transparent';
-    border = theme === 'dark' ? 'rgba(148, 163, 184, 0.28)' : 'rgba(100, 116, 139, 0.22)';
+    border = theme === 'dark' ? 'rgba(148, 163, 184, 0.42)' : 'rgba(100, 116, 139, 0.34)';
   }
 
   const titleColor = theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.85)';
-  const subtitleColor = theme === 'dark' ? 'rgba(255,255,255,0.55)' : 'rgba(15,23,42,0.55)';
+  const subtitleColor = theme === 'dark' ? 'rgba(255,255,255,0.62)' : 'rgba(15,23,42,0.62)';
   const count = typeof data.groupCount === 'number' ? data.groupCount : undefined;
   const ring = selected ? (theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(15,23,42,0.20)') : undefined;
 
@@ -1277,7 +1297,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         width: '100%',
         height: '100%',
         background: bg,
-        border: `1px dashed ${border}`,
+        border: `${noFill ? 2 : 1.5}px dashed ${border}`,
         borderRadius: 12,
         boxShadow: (noFill && !ring)
           ? 'none'
@@ -1306,7 +1326,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                   bottom: 6,
                   width: 1,
                   borderLeft: `1px dashed ${border}`,
-                  opacity: theme === 'dark' ? 0.28 : 0.22,
+                  opacity: theme === 'dark' ? 0.46 : 0.40,
                   pointerEvents: 'none',
                 }}
               />
@@ -1325,7 +1345,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                   maxWidth,
                   fontSize: 10,
                   fontWeight: 700,
-                  color: subtitleColor,
+                  color: theme === 'dark' ? 'rgba(255,255,255,0.66)' : 'rgba(15,23,42,0.66)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.3px',
                   overflow: 'hidden',
@@ -1363,7 +1383,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                     bottom: 6,
                     width: 1,
                     borderLeft: `1px dashed ${border}`,
-                    opacity: theme === 'dark' ? 0.18 : 0.14,
+                    opacity: theme === 'dark' ? 0.32 : 0.26,
                     pointerEvents: 'none',
                   }}
                 />
@@ -1385,6 +1405,12 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
               const isCollapsed = Boolean((rb as any)?.collapsed);
               const nodeCount = typeof (rb as any)?.nodeCount === 'number' ? (rb as any).nodeCount : undefined;
               const showCollapsePill = Boolean(canToggle && !isCollapsed && typeof nodeCount === 'number' && nodeCount > 1);
+              const relHoverKey = `${groupIdForToggle}:${edgeTypeKey || label || `${bIdx}-${rIdx}`}`;
+              const isRelHovered = hoveredRelKey === relHoverKey;
+              const relTitleColor =
+                theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.88)';
+              const relLabelColor = isRelHovered ? relTitleColor : subtitleColor;
+              const relLabelOpacity = isRelHovered ? 0.96 : (theme === 'dark' ? 0.72 : 0.72);
               return (
                 <div
                   key={`rel-label-${bIdx}-${rIdx}`}
@@ -1395,15 +1421,18 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                     width: w,
                     height: 16,
                     fontSize: 10,
-                    fontWeight: 700,
-                    color: subtitleColor,
+                    fontWeight: 800,
+                    color: relLabelColor,
                     textTransform: 'uppercase',
                     letterSpacing: '0.25px',
-                    opacity: theme === 'dark' ? 0.55 : 0.60,
-                    pointerEvents: 'none',
+                    opacity: relLabelOpacity,
+                    pointerEvents: 'auto',
                     lineHeight: '16px',
+                    transition: 'opacity 120ms ease, color 120ms ease',
                   }}
                   title={label}
+                  onMouseEnter={() => setHoveredRelKey(relHoverKey)}
+                  onMouseLeave={() => setHoveredRelKey((cur) => (cur === relHoverKey ? null : cur))}
                 >
                   <span
                     style={{
@@ -1432,6 +1461,8 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                       }}
                       aria-label={`Collapse ${label} (${nodeCount})`}
                       title={`Collapse ${label} (${nodeCount})`}
+                      onMouseEnter={() => setHoveredRelKey(relHoverKey)}
+                      onMouseLeave={() => setHoveredRelKey((cur) => (cur === relHoverKey ? null : cur))}
                       style={{
                         pointerEvents: 'auto',
                         position: 'absolute',
@@ -1440,9 +1471,15 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                         height: 16,
                         padding: '0 6px',
                         borderRadius: 999,
-                        border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)'}`,
-                        background: theme === 'dark' ? 'rgba(0,0,0,0.26)' : 'rgba(255,255,255,0.78)',
-                        color: subtitleColor,
+                        border: `1px solid ${
+                          theme === 'dark'
+                            ? (isRelHovered ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.18)')
+                            : (isRelHovered ? 'rgba(15,23,42,0.22)' : 'rgba(15,23,42,0.14)')
+                        }`,
+                        background: theme === 'dark'
+                          ? (isRelHovered ? 'rgba(0,0,0,0.40)' : 'rgba(0,0,0,0.26)')
+                          : (isRelHovered ? 'rgba(255,255,255,0.90)' : 'rgba(255,255,255,0.78)'),
+                        color: isRelHovered ? relTitleColor : subtitleColor,
                         cursor: 'pointer',
                         display: 'inline-flex',
                         alignItems: 'center',
@@ -1450,6 +1487,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                         fontSize: 10,
                         fontWeight: 850,
                         lineHeight: 1,
+                        transition: 'all 120ms ease',
                       }}
                     >
                       <span>{nodeCount}</span>
@@ -2089,8 +2127,38 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               backdropFilter: 'blur(12px)',
               boxShadow: theme === 'dark' ? '0 22px 70px rgba(0,0,0,0.55)' : '0 22px 70px rgba(0,0,0,0.16)',
               padding: 12,
+              position: 'relative',
             }}
           >
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!data.fragmentId) return;
+                (data as any)?.onToggleRiskShield?.(data.fragmentId);
+              }}
+              aria-label="Close risk panel"
+              title="Close"
+              style={{
+                position: 'absolute',
+                top: 8,
+                right: 8,
+                width: 28,
+                height: 28,
+                borderRadius: 10,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
+                background: 'transparent',
+                color: 'var(--text-heading)',
+                cursor: 'pointer',
+                opacity: 0.75,
+                fontSize: 16,
+                fontWeight: 900,
+                lineHeight: 1,
+              }}
+            >
+              ×
+            </button>
+
             {/* Tabs: 8 risk icons (order = polygon, top clockwise) */}
             <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 8, marginBottom: 10 }}>
               {riskSegments.map((seg) => {
@@ -2103,6 +2171,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                     type="button"
                     title={title}
                     onClick={() => setRiskTab(seg.id)}
+                    aria-label={`Risk tab: ${seg.label}`}
+                    aria-pressed={isActive}
                     style={{
                       // Match node expand/collapse control size for visual rhyme.
                       width: 24,

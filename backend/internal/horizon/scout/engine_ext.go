@@ -17,6 +17,52 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
+func parseOptionalISODate(s *string) *time.Time {
+	if s == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(*s)
+	if raw == "" {
+		return nil
+	}
+	// Preferred: YYYY-MM-DD
+	if t, err := time.Parse("2006-01-02", raw); err == nil {
+		tt := t.UTC()
+		return &tt
+	}
+	// Accept RFC3339 variants as a fallback.
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		tt := t.UTC()
+		return &tt
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		tt := t.UTC()
+		return &tt
+	}
+	return nil
+}
+
+func mergeQualifiers(dst map[string]interface{}, extra map[string]interface{}) map[string]interface{} {
+	if dst == nil {
+		dst = map[string]interface{}{}
+	}
+	if len(extra) == 0 {
+		return dst
+	}
+	for k, v := range extra {
+		kk := strings.TrimSpace(k)
+		if kk == "" {
+			continue
+		}
+		// Do not overwrite existing keys (baseQualifiers/raw debug fields win).
+		if _, exists := dst[kk]; exists {
+			continue
+		}
+		dst[kk] = v
+	}
+	return dst
+}
+
 func parseStateInt(v interface{}, def int) int {
 	switch t := v.(type) {
 	case int:
@@ -1062,8 +1108,65 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 			return ""
 		}
+		// Resolve *actual* endpoint canonical paths (needed for /gov vs /org semantics).
+		// NOTE: Gov bodies are modeled as ORGANIZATION fragments, so type-only validation can't distinguish them.
+		resolvePathByID := func(id string) string {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				return ""
+			}
+			if sourceFragment != nil && strings.TrimSpace(sourceFragment.ID) == id {
+				return strings.TrimSpace(sourceFragment.CanonicalPath)
+			}
+			if targetFragment != nil && strings.TrimSpace(targetFragment.ID) == id {
+				return strings.TrimSpace(targetFragment.CanonicalPath)
+			}
+			// Fallback: best-effort fetch (rare; only when endpoints differ from source/target fragments).
+			if e.fragmentsRepo != nil {
+				if f, ferr := e.fragmentsRepo.Get(ctx, id); ferr == nil && f != nil {
+					return strings.TrimSpace(f.CanonicalPath)
+				}
+			}
+			return ""
+		}
 		srcTypeActual := resolveTypeByID(edgeSourceID)
 		dstTypeActual := resolveTypeByID(edgeTargetID)
+
+		// Special-case canonicalization: REGULATES involving /gov paths.
+		// In reality, government bodies (namespace /gov/...) are regulators; companies are regulated.
+		// LLMs frequently output inverted direction as ORG -> GOV for REGULATES; fix it best-effort.
+		govRegulatesSwapApplied := false
+		govRegulatesSwapReason := ""
+		if edgeType == models.DependencyTypeRegulates {
+			srcPathActual := resolvePathByID(edgeSourceID)
+			dstPathActual := resolvePathByID(edgeTargetID)
+			if strings.HasPrefix(srcPathActual, "/org/") && strings.HasPrefix(dstPathActual, "/gov/") {
+				edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+				srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
+				directionChanged = true
+				govRegulatesSwapApplied = true
+				govRegulatesSwapReason = "canonicalize: REGULATES /org -> /gov swapped to /gov -> /org (gov bodies are regulators)"
+				// Re-apply symmetric normalization after any swap (noop for non-symmetric).
+				edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
+			}
+		}
+
+		// Canonicalize certain mis-modeled edges where reversing is not sufficient.
+		// Example: PRODUCT OWNS ORGANIZATION should become ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
+		canonFromEdgeType := ""
+		canonReason := ""
+		if newType, shouldSwap, changed, reason := CanonicalizeEdge(edgeType, srcTypeActual, dstTypeActual); changed {
+			canonFromEdgeType = string(edgeType)
+			canonReason = reason
+			edgeType = newType
+			directionChanged = true
+			if shouldSwap {
+				edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+				srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
+			}
+			// Re-apply symmetric normalization after any swap/type-change (noop for non-symmetric).
+			edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
+		}
 
 		// Policy: direction validation and reversal (enforced for known edge types).
 		// Use unified ValidationPolicy if available, otherwise fallback to hardcoded rules
@@ -1213,6 +1316,22 @@ func (e *ScoutEngine) processRelationsInternal(
 				LastUpdatedAt: time.Now(),
 			},
 		}
+		if canonFromEdgeType != "" {
+			edge.Qualifiers["canonicalized"] = true
+			edge.Qualifiers["canonicalizedFromEdgeType"] = canonFromEdgeType
+			edge.Qualifiers["canonicalizationReason"] = canonReason
+			edge.Qualifiers["normalizedEdgeType"] = string(edgeType)
+		}
+		// Temporal validity (real-world effective time) — fail-open:
+		// If parsing fails, keep edge without dates rather than dropping it.
+		edge.ValidFrom = parseOptionalISODate(rel.ValidFrom)
+		edge.ValidTo = parseOptionalISODate(rel.ValidTo)
+
+		// Edge metrics (quantitative attributes) — keep even if not allowlisted (fail-open).
+		if len(rel.Metrics) > 0 {
+			edge.Metrics = rel.Metrics
+		}
+
 		if len(baseQualifiers) > 0 {
 			for k, v := range baseQualifiers {
 				if _, exists := edge.Qualifiers[k]; !exists {
@@ -1220,11 +1339,19 @@ func (e *ScoutEngine) processRelationsInternal(
 				}
 			}
 		}
+		// Merge structured qualifiers from LLM (edgeModality, eventId, round, etc.) without overwriting debug/base fields.
+		if len(rel.Qualifiers) > 0 {
+			edge.Qualifiers = mergeQualifiers(edge.Qualifiers, rel.Qualifiers)
+		}
 		if directionChanged {
 			edge.Qualifiers["normalizedDirection"] = true
 			edge.Qualifiers["normalizedEdgeType"] = string(edgeType)
 			edge.Qualifiers["normalizedSourceFragmentId"] = edge.SourceFragmentID
 			edge.Qualifiers["normalizedTargetFragmentId"] = edge.TargetFragmentID
+		}
+		if govRegulatesSwapApplied {
+			edge.Qualifiers["canonicalizedGovRegulatesSwap"] = true
+			edge.Qualifiers["govRegulatesSwapReason"] = govRegulatesSwapReason
 		}
 
 		// Используем Create, предполагая что репо обработает дубликаты или мы просто создаем новые

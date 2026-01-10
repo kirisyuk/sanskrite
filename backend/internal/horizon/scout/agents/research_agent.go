@@ -62,7 +62,9 @@ func (a *ResearchAgent) EnrichFragment(
 			// иначе при сбое gemini-3-pro-preview у нас не остаётся подходящих моделей.
 			MinCapabilityScore: 7,
 			MinContextWindow:   16000,
-			MaxOutputSize:      4096,
+			// IMPORTANT: grounded research often spends budget on tool calls + thinking; keep enough headroom
+			// to avoid truncated JSON (which triggers expensive multi-model fallbacks).
+			MaxOutputSize: 16000,
 		},
 		Verifier: verifier,
 	}
@@ -345,6 +347,10 @@ Organization Classification (ORG/FACILITY):
   - fragment.marketSegments: array of canonical paths /segment/{domain}/{vertical}/{geo} (geo = ISO2 or global)
   - fragment.orgSize: one of "sme" | "le" | "enterprise" | "mega" | "na"
 
+OUTPUT BUDGET RULES (CRITICAL):
+- Keep fragment.description SHORT (max 500 chars). Prefer omitting description entirely if it risks truncating JSON.
+- If you cannot fit everything, prioritize answering the missingInfo questions and producing VALID JSON with closed braces.
+
 RELATION DIRECTION RULES (STRICT):
 Each relation object describes a directed edge FROM THIS FRAGMENT (source) TO targetCanonicalPath (target).
 Choose relationType to match this direction:
@@ -368,12 +374,13 @@ Choose relationType to match this direction:
 - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
 - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
 - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
+- EXTRACTS_FROM: source (FACILITY) extracts from target (DEPOSIT). Use for mines/oil fields/ore bodies.
 - AUDITED_BY: source (ORGANIZATION/FACILITY) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
 - COMPETES_WITH / INFLUENCES: as labeled.
 
 EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
 - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
-- OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT
+- OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT/DEPOSIT
 - CONTROLS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY
 - MANAGES: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PROGRAM
 - EMPLOYED_BY: source MUST be PERSON, target MUST be ORGANIZATION
@@ -381,25 +388,30 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - FOUNDED: source MUST be PERSON or ORGANIZATION, target MUST be ORGANIZATION/PROGRAM
 - INVESTS_IN: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/PROGRAM/PRODUCT
 - PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
-- PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
+- PRODUCES: source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT
 - LOCATED_IN: target MUST be GEO_REGION
-- OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
+- OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY or DEPOSIT
 - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
 - DEPENDS_ON: source can be ORGANIZATION/FACILITY/PRODUCT, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
 - AUDITED_BY: source MUST be ORGANIZATION or FACILITY, target MUST be ORGANIZATION
 - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
 - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
+- EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT
 
 DiscoveredRelation Schema:
 {
   "targetName": "string",
   "targetLegalName": "string",
   "targetShortName": "string",
-  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL",
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES",
+  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT",
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM",
   "reason": "string",
   "confidence": 0.0,
-  "targetCanonicalPath": "string, REQUIRED"
+  "targetCanonicalPath": "string, REQUIRED",
+  "validFrom": "YYYY-MM-DD (optional)",
+  "validTo": "YYYY-MM-DD (optional)",
+  "qualifiers": { "edgeModality": "actual|projected|historical|potential", "eventId": "/event/{slug}" },
+  "metrics": { "ownership_percent": { "value": 45.0, "unit": "percent", "confidence": 0.9, "observedAt": "YYYY-MM-DD", "provenance": {"sourceIds":["..."], "method":"extracted"} } }
 }
 
 CANONICAL PATH RULES:
@@ -416,17 +428,36 @@ CANONICAL PATH RULES:
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - People: /person/{lowercase-slug}
-  - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
+  - Products (Goods): MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}[/{model-sku-slug}]
     - category: "raw" | "component" | "finished" | "service"
-    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy"
-    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly"
+    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy" | "hydrocarbon" | "fuel" | "petrochemical"
+    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly" | "liquefaction" | "cracking"
     - slug: lowercase-slug derived from product name
+    - model-sku-slug: (OPTIONAL) specific model/SKU slug
     - Examples:
       - "Lithium Ore" -> /product/raw/mineral/extraction/lithium-ore
       - "Lithium Carbonate" -> /product/raw/chemical/refining/lithium-carbonate
       - "Battery Cell" -> /product/component/electronic/manufacturing/battery-cell
       - "Electric Vehicle" -> /product/finished/mechanical/assembly/electric-vehicle
+      - "Crude Oil" -> /product/raw/hydrocarbon/extraction/crude-oil
+      - "LNG" -> /product/raw/hydrocarbon/liquefaction/lng
     - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
+  - Services: Use structure /product/service/{domain}/{subdomain}/{slug}[/{offering-slug}]
+    - domain: it | financial | legal | consulting | logistics | engineering | media | telecom | education | healthcare | construction | security | hr | real-estate | other
+    - subdomain: domain-specific (e.g., software, cloud, hosting, banking, payments, compliance, etc.)
+  - Deposits (Natural Resource): /deposit/{resource-slug}/{deposit-slug}
+    - IMPORTANT: resource-slug examples are not exhaustive; prefer best-effort slug over dropping the deposit.
+    - Examples:
+      - "Permian Basin" -> /deposit/crude-oil/permian-basin
+      - "Atacama Salar" -> /deposit/lithium/atacama-salar
+      - "Escondida Mine" -> /deposit/copper/escondida
+      - "Ghawar Field" -> /deposit/crude-oil/ghawar
+
+METRIC VALUE FORMAT (IMPORTANT):
+- value MUST be a JSON number (expand \"10M\" to 10000000; do NOT include commas)
+- unit MUST be lowercase string (or omit)
+- confidence MUST be 0..1 (if you only know \"80\", output 0.8)
+- observedAt MUST be ISO8601 (\"YYYY-MM-DD\" or RFC3339)
   - Programs:
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
     - Otherwise /program/{programSlug}

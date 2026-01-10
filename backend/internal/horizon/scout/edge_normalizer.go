@@ -56,6 +56,21 @@ type EdgeDirectionRule struct {
 	Description      string // Human-readable explanation
 }
 
+// =============================================================================
+// Policy 2.5: Edge Canonicalization (Type + Direction Rewrites)
+// =============================================================================
+// Some edge patterns are not just "wrong direction" but "wrong relation type".
+// In those cases, reversing is not sufficient: we rewrite type and (optionally) swap.
+//
+// NOTE: Keep this conservative and explicit. This is used at creation time and during cleanup.
+
+// CanonicalizeEdge rewrites an edge type (and optionally direction) based on endpoint fragment types.
+// Returns: (newType, shouldSwapEndpoints, changed, reason).
+func CanonicalizeEdge(edgeType models.DependencyType, sourceType, targetType models.FragmentType) (models.DependencyType, bool, bool, string) {
+	// Keep the canonicalization logic in models to avoid import cycles (repo <-> scout).
+	return models.CanonicalizeEdge(edgeType, sourceType, targetType)
+}
+
 // EdgeDirectionPolicies defines which fragment types are allowed as source/target.
 // If an edge violates these rules, reverse source<->target if the reverse is valid.
 var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
@@ -83,8 +98,9 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
 			models.FragmentTypeProduct,
+			models.FragmentTypeDeposit, // Deposits can be owned
 		},
-		Description: "Owner owns asset/subsidiary",
+		Description: "Owner owns asset/subsidiary/deposit",
 	},
 
 	// CONTROLS: Control flows from controller to controlled entity.
@@ -191,11 +207,12 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 	},
 
 	// PRODUCES: Production flows from producer to product.
-	// Only Organizations and Facilities can produce.
+	// Organizations, Facilities, and Deposits can produce.
 	models.DependencyTypeProduces: {
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
+			models.FragmentTypeDeposit, // Deposits produce resources
 		},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
 		Description:      "Producer produces product",
@@ -221,20 +238,22 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeOrganization,
 			models.FragmentTypePerson,
 			models.FragmentTypeGeoRegion, // Nested regions: city in state
+			models.FragmentTypeDeposit,   // Deposits are located in regions
 		},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeGeoRegion},
 		Description:      "Entity is located within region",
 	},
 
-	// OPERATES_IN: Organization operates in a region or facility.
+	// OPERATES_IN: Organization operates in a region, facility, or deposit.
 	// Only Organizations can operate.
 	models.DependencyTypeOperatesIn: {
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
 		ValidTargetTypes: []models.FragmentType{
 			models.FragmentTypeGeoRegion,
 			models.FragmentTypeFacility,
+			models.FragmentTypeDeposit, // Companies operate in deposits (mining, O&G)
 		},
-		Description: "Organization operates in location",
+		Description: "Organization operates in location/deposit",
 	},
 
 	// SUPPLIES_TO: Supply chain relationship.
@@ -273,6 +292,14 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeProduct},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
 		Description:      "Product transforms into downstream product",
+	},
+
+	// EXTRACTS_FROM: Facility extracts resources from a deposit.
+	// Direction: FACILITY → DEPOSIT (more precise than LOCATED_IN).
+	models.DependencyTypeExtractsFrom: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeFacility},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDeposit},
+		Description:      "Facility extracts from deposit (mining, O&G)",
 	},
 
 	// AUDITED_BY: organization/facility is audited by an audit firm (organization).

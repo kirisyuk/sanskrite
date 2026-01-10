@@ -77,6 +77,10 @@ const (
 	// not a media holding/company. This helps model narratives and distribution channels separately from owners.
 	FragmentTypeMediaChannel FragmentType = "MEDIA_CHANNEL"
 	FragmentTypeSupplyLink   FragmentType = "SUPPLY_LINK" // Tenant-specific supply chain link
+	// FragmentTypeDeposit represents a natural resource deposit (oil field, mine, basin, etc.).
+	// Canonical path format: /deposit/{resource-slug}/{deposit-slug}
+	// Example: /deposit/crude-oil/permian-basin, /deposit/lithium/atacama-salar
+	FragmentTypeDeposit FragmentType = "DEPOSIT"
 )
 
 // EpistemicStatus статус эпистемической достоверности

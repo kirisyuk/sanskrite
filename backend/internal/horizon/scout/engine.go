@@ -207,7 +207,11 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 				LastUpdatedAt: now,
 			},
 		}
-		_, _ = e.edgesRepo.Create(ctx, edge) // best effort
+		if _, err := e.edgesRepo.Create(ctx, edge); err != nil {
+			// Fail-open: dimension edges are not critical for core graph materialization, but must not be silent.
+			fmt.Printf("[ScoutEngine] Failed to create dimension edge: src=%s dst=%s type=%s err=%v\n",
+				sourceID, targetID, string(edgeType), err)
+		}
 	}
 
 	for _, f := range facts {
@@ -235,7 +239,10 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 				ensureInfluenceEdge(sfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "sphere", "path": sp, "factId": f.ID})
 				// Metric updates are optional; sphere linkage should exist even without metrics.
 				if len(f.MetricUpdates) > 0 && applyMetricUpdates(sfrag, f) {
-					_ = e.fragmentsRepo.Update(ctx, sfrag)
+						if err := e.fragmentsRepo.Update(ctx, sfrag); err != nil {
+							fmt.Printf("[ScoutEngine] Failed to update sphere dimension fragment after metric updates: id=%s path=%s err=%v\n",
+								strings.TrimSpace(sfrag.ID), strings.TrimSpace(sfrag.CanonicalPath), err)
+						}
 					dimensionFragmentIDsToPropagate[sfrag.ID] = struct{}{}
 				}
 			}
@@ -250,7 +257,10 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 					ensureInfluenceEdge(gfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "geo", "path": lp, "factId": f.ID})
 					// Metric updates are optional; geo linkage should exist even without metrics.
 					if len(f.MetricUpdates) > 0 && applyMetricUpdates(gfrag, f) {
-						_ = e.fragmentsRepo.Update(ctx, gfrag)
+						if err := e.fragmentsRepo.Update(ctx, gfrag); err != nil {
+							fmt.Printf("[ScoutEngine] Failed to update geo dimension fragment after metric updates: id=%s path=%s err=%v\n",
+								strings.TrimSpace(gfrag.ID), strings.TrimSpace(gfrag.CanonicalPath), err)
+						}
 						dimensionFragmentIDsToPropagate[gfrag.ID] = struct{}{}
 					}
 				}
@@ -265,7 +275,9 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 			go func() {
 				propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 				defer cancel()
-				_ = e.propagationTrigger(propCtx, fid)
+				if err := e.propagationTrigger(propCtx, fid); err != nil {
+					fmt.Printf("[ScoutEngine] propagationTrigger failed for dimension fragment: fragmentId=%s err=%v\n", fid, err)
+				}
 			}()
 		}
 	}
@@ -310,6 +322,7 @@ type ScoutEngine struct {
 	validationPolicy        *policy.PolicyExecutor            // Optional: unified validation policy for edges
 	canonizationPolicy      *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
 	canonicalPathResolver   *CanonicalPathResolver            // Unified canonicalization and deduplication service
+	missingInfoStatusRepo   *repo.MissingInfoStatusRepository // Tracks missingInfo attempts to prevent infinite loops
 }
 
 // bestEffortRewriteLensScope replaces alias canonical paths in lens.Scope with their canonical equivalents.
@@ -751,7 +764,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}
 			attempts[cp] = attempts[cp] + 1
 			job.State["canonicalPathAttempts"] = attempts
-			_ = e.scoutingJobsRepo.Update(ctx, job) // best-effort
+			if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+				fmt.Printf("[ScoutEngine] Failed to persist circuit breaker state (best-effort): jobId=%s target=%s err=%v\n",
+					strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+			}
 			trace.Log(ctx, "scout_exec", "scout.job.circuit_breaker.tick", map[string]any{
 				"tenantId":      strings.TrimSpace(job.TenantID),
 				"projectId":     strings.TrimSpace(job.ProjectID),
@@ -772,7 +788,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				})
 				fmt.Printf("[ScoutEngine] Circuit breaker tripped: job=%s canonicalPath=%s attempts=%d. Hard-stopping.\n",
 					strings.TrimSpace(job.ID), cp, attempts[cp])
-				_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "circuit_breaker")
+				if err := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "circuit_breaker"); err != nil {
+					fmt.Printf("[ScoutEngine] Failed to transition job to FAILED on circuit breaker (best-effort): jobId=%s target=%s err=%v\n",
+						strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+				}
 				e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
 					"tenantId":      job.TenantID,
 					"projectId":     job.ProjectID,
@@ -1029,13 +1048,19 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 														},
 													}
 												}
-												_ = e.fragmentsRepo.Update(ctx, frag)
+												if err := e.fragmentsRepo.Update(ctx, frag); err != nil {
+													fmt.Printf("[ScoutEngine] Failed to persist signal-derived metric updates (best-effort): signalId=%s fragmentId=%s path=%s err=%v\n",
+														strings.TrimSpace(signalID), strings.TrimSpace(frag.ID), strings.TrimSpace(path), err)
+												}
 												// Trigger propagation for signal-derived metrics
 												if e.propagationTrigger != nil {
 													go func(fid string) {
 														propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 														defer cancel()
-														_ = e.propagationTrigger(propCtx, fid)
+														if err := e.propagationTrigger(propCtx, fid); err != nil {
+															fmt.Printf("[ScoutEngine] propagationTrigger failed for signal-derived metric updates: fragmentId=%s signalId=%s err=%v\n",
+																strings.TrimSpace(fid), strings.TrimSpace(signalID), err)
+														}
 													}(frag.ID)
 												}
 											}
@@ -1047,7 +1072,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					}
 
 					// Dimension propagation: for applied facts, map sphere/location to dimension fragments and trigger waves.
-					_ = e.applyDimensionWavesFromAppliedFacts(ctx, existingFragment, facts, applyRes.AppliedFactIDs)
+					if err := e.applyDimensionWavesFromAppliedFacts(ctx, existingFragment, facts, applyRes.AppliedFactIDs); err != nil {
+						fmt.Printf("[ScoutEngine] applyDimensionWavesFromAppliedFacts failed (best-effort): jobId=%s fragmentId=%s target=%s err=%v\n",
+							strings.TrimSpace(job.ID), strings.TrimSpace(existingFragment.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+					}
 					// Trigger propagation for deterministic updates as well (non-blocking).
 					if e.propagationTrigger != nil {
 						go func(fid string) {
@@ -1058,7 +1086,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 							}
 						}(existingFragment.ID)
 					}
-					_ = e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "fast_path_applied_facts")
+					if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "fast_path_applied_facts"); err != nil {
+						fmt.Printf("[ScoutEngine] Failed to transition job to VERIFIED on fast-path (best-effort): jobId=%s target=%s err=%v\n",
+							strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+					}
 					// Emit completion + node upsert for UI.
 					e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
 						"tenantId":        job.TenantID,
@@ -1449,7 +1480,9 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		validationResult, err = e.criticAgent.Validate(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, aggregatedContent, specialties)
 		if err != nil {
 			// Логируем ошибку, но не останавливаем процесс (fail-open с низким confidence)
-			fmt.Printf("Validation error: %v\n", err)
+			fmt.Printf("[ScoutEngine] critic validation error (fail-open): jobId=%s target=%s err=%v\n",
+				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> critic validation error (fail-open): %v", err))
 			validationResult = &agents.ValidationResult{
 				IsValid:    true,
 				Confidence: 0.5,
@@ -1459,6 +1492,27 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 
 	// RESEARCH: Дообогащение данных через Research Agent
 	if len(validationResult.MissingInfo) > 0 {
+		// Filter out missingInfo items that are exhausted or in cooldown to prevent infinite loops.
+		// This uses the horizon_missing_info_status collection to track attempts per question.
+		if e.missingInfoStatusRepo != nil {
+			searchable, filteredCount, err := e.missingInfoStatusRepo.FilterSearchable(ctx, extractedFragment.ID, validationResult.MissingInfo)
+			if err != nil {
+				// Fail-open: keep missingInfo list, but log loudly so issues are visible.
+				fmt.Printf("[ScoutEngine] missingInfo filter error (fail-open): jobId=%s fragmentId=%s target=%s err=%v\n",
+					strings.TrimSpace(job.ID), strings.TrimSpace(extractedFragment.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> missingInfo filter error (fail-open): %v", err))
+			} else {
+				if filteredCount > 0 {
+					fmt.Printf("[ScoutEngine] Filtered %d exhausted/cooldown missingInfo items for fragment %s\n", filteredCount, extractedFragment.ID)
+					e.logLine(ctx, job, "info", fmt.Sprintf("> filtered %d exhausted/cooldown missingInfo items", filteredCount))
+				}
+				validationResult.MissingInfo = searchable
+			}
+		}
+		// Check if there are still items to research after filtering
+		if len(validationResult.MissingInfo) == 0 {
+			goto SKIP_RESEARCH
+		}
 		// Daily guardrails (USD + token caps) to keep costs bounded during MVP.
 		if e.budgetPolicy.Enabled && e.spendLedger != nil && lensID != "" && cascadeID != "" {
 			day := time.Now().UTC().Format("2006-01-02")
@@ -1539,7 +1593,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			if v, ok := job.State["decompositionHints"]; ok && v != nil {
 				// Parse decompositionHints (may come as []interface{} from JSON)
 				if dhBytes, err := json.Marshal(v); err == nil {
-					_ = json.Unmarshal(dhBytes, &decompositionHints)
+				if err := json.Unmarshal(dhBytes, &decompositionHints); err != nil {
+					fmt.Printf("[ScoutEngine] Failed to parse decompositionHints (best-effort): jobId=%s target=%s err=%v\n",
+						strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+				}
 				}
 			}
 		}
@@ -1600,6 +1657,18 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					return trace.StrSlice(out, 12)
 				}(),
 			})
+			// Record successful research attempts for resolved questions.
+			// A question is considered resolved if new relations/data were found.
+			if e.missingInfoStatusRepo != nil {
+				foundSomething := len(newRelations) > 0 || len(newSupplyChains) > 0
+				for _, q := range validationResult.MissingInfo {
+					if recErr := e.missingInfoStatusRepo.RecordAttempt(ctx, extractedFragment.ID, q, foundSomething, 0); recErr != nil {
+						fmt.Printf("[ScoutEngine] missingInfo RecordAttempt failed: jobId=%s fragmentId=%s target=%s found=%v err=%v q=%q\n",
+							strings.TrimSpace(job.ID), strings.TrimSpace(extractedFragment.ID), strings.TrimSpace(job.TargetCanonicalPath), foundSomething, recErr, trace.Trunc(q, 160))
+						e.logLine(ctx, job, "warn", fmt.Sprintf("> missingInfo RecordAttempt failed: %v", recErr))
+					}
+				}
+			}
 		} else {
 			fmt.Printf("[ScoutEngine] Research failed: %v\n", err)
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> research failed: %v", err))
@@ -1611,6 +1680,16 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
 				"error":               err.Error(),
 			})
+			// Record failed research attempts (increment counter, apply cooldown).
+			if e.missingInfoStatusRepo != nil {
+				for _, q := range validationResult.MissingInfo {
+					if recErr := e.missingInfoStatusRepo.RecordAttempt(ctx, extractedFragment.ID, q, false, 0); recErr != nil {
+						fmt.Printf("[ScoutEngine] missingInfo RecordAttempt failed: jobId=%s fragmentId=%s target=%s found=%v err=%v q=%q\n",
+							strings.TrimSpace(job.ID), strings.TrimSpace(extractedFragment.ID), strings.TrimSpace(job.TargetCanonicalPath), false, recErr, trace.Trunc(q, 160))
+						e.logLine(ctx, job, "warn", fmt.Sprintf("> missingInfo RecordAttempt failed: %v", recErr))
+					}
+				}
+			}
 		}
 	}
 SKIP_RESEARCH:
@@ -1747,7 +1826,10 @@ SKIP_RESEARCH:
 		if _, ok := job.State["aliasCanonicalPath"]; !ok && old != "" {
 			job.State["aliasCanonicalPath"] = old
 		}
-		_ = e.scoutingJobsRepo.Update(ctx, job)
+		if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+			fmt.Printf("[ScoutEngine] Failed to persist job retarget (best-effort): jobId=%s from=%s to=%s err=%v\n",
+				strings.TrimSpace(job.ID), old, effectiveCanonicalPath, err)
+		}
 		// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
 		e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 		trace.Log(ctx, "scout_persist", "scout.retarget.done", map[string]any{
@@ -2332,9 +2414,15 @@ func (e *ScoutEngine) emitMinimalFactsFromScoutRun(ctx context.Context, job *mod
 			s.VectorText = s.GenerateVectorText()
 
 			if e.factEmitter != nil {
-				_, _ = e.factEmitter.Emit(ctx, s, emitOpts) // best effort
+				if _, err := e.factEmitter.Emit(ctx, s, emitOpts); err != nil {
+					fmt.Printf("[ScoutEngine] Failed to emit signal snapshot fact (best-effort): jobId=%s target=%s err=%v\n",
+						strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+				}
 			} else if e.planner != nil && e.planner.factsRepo != nil {
-				_, _ = e.planner.factsRepo.Create(ctx, s) // best effort
+				if _, err := e.planner.factsRepo.Create(ctx, s); err != nil {
+					fmt.Printf("[ScoutEngine] Failed to persist signal snapshot fact (best-effort): jobId=%s target=%s err=%v\n",
+						strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+				}
 			}
 			job.State["scoutSignalsEmitted"] = true
 		}
@@ -2342,7 +2430,10 @@ func (e *ScoutEngine) emitMinimalFactsFromScoutRun(ctx context.Context, job *mod
 
 	if job.State != nil {
 		job.State["scoutFactsEmitted"] = true
-		_ = e.scoutingJobsRepo.Update(ctx, job)
+		if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+			fmt.Printf("[ScoutEngine] Failed to persist job state scoutFactsEmitted (best-effort): jobId=%s target=%s err=%v\n",
+				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+		}
 	}
 	return nil
 }
@@ -2415,7 +2506,10 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 	}
 	if v, ok := job.State["decompositionHints"]; ok && v != nil {
 		if dhBytes, err := json.Marshal(v); err == nil {
-			_ = json.Unmarshal(dhBytes, &decompositionHints)
+			if err := json.Unmarshal(dhBytes, &decompositionHints); err != nil {
+				fmt.Printf("[ScoutEngine] Failed to parse decompositionHints for intent seeding (best-effort): jobId=%s target=%s err=%v\n",
+					strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+			}
 		}
 	}
 
@@ -2443,7 +2537,10 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 	}
 	if len(rels) == 0 {
 		job.State["intentDecompositionDone"] = true
-		_ = e.scoutingJobsRepo.Update(ctx, job)
+		if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+			fmt.Printf("[ScoutEngine] Failed to persist intentDecompositionDone (best-effort): jobId=%s target=%s err=%v\n",
+				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+		}
 		return nil
 	}
 
@@ -2498,7 +2595,7 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 			f.VectorText = f.GenerateVectorText()
 			if e.factEmitter != nil {
 				rc, _ := rtctx.Get(ctx)
-				_, _ = e.factEmitter.Emit(ctx, f, coreontology.EmitFactOptions{
+				if _, err := e.factEmitter.Emit(ctx, f, coreontology.EmitFactOptions{
 					TenantID:         strings.TrimSpace(job.TenantID),
 					ProjectID:        strings.TrimSpace(job.ProjectID),
 					LensID:           strings.TrimSpace(job.LensID),
@@ -2506,9 +2603,15 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 					CorrelationID:    strings.TrimSpace(rc.CorrelationID),
 					PublishFeedEvent: true,
 					Actor:            "system",
-				}) // best effort
+				}); err != nil { // best effort
+					fmt.Printf("[ScoutEngine] Failed to emit intent relation fact (best-effort): jobId=%s target=%s type=%s err=%v\n",
+						strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), strings.TrimSpace(r.RelationType), err)
+				}
 			} else if e.planner != nil && e.planner.factsRepo != nil {
-				_, _ = e.planner.factsRepo.Create(ctx, f) // best effort
+				if _, err := e.planner.factsRepo.Create(ctx, f); err != nil { // best effort
+					fmt.Printf("[ScoutEngine] Failed to persist intent relation fact (best-effort): jobId=%s target=%s type=%s err=%v\n",
+						strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), strings.TrimSpace(r.RelationType), err)
+				}
 			}
 		}
 	}
@@ -2519,7 +2622,10 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 	}
 
 	job.State["intentDecompositionDone"] = true
-	_ = e.scoutingJobsRepo.Update(ctx, job)
+	if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+		fmt.Printf("[ScoutEngine] Failed to persist intentDecompositionDone (best-effort): jobId=%s target=%s err=%v\n",
+			strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+	}
 	return nil
 }
 
@@ -2610,7 +2716,10 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 			}
 		}
 		if !hasSphere && e.fragmentsRepo != nil {
-			_ = e.fragmentsRepo.UpdateIndexPaths(ctx, target.ID, []string{sp}) // best effort
+			if err := e.fragmentsRepo.UpdateIndexPaths(ctx, target.ID, []string{sp}); err != nil { // best effort
+				fmt.Printf("[ScoutEngine] Failed to UpdateIndexPaths (best-effort): fragmentId=%s target=%s indexPath=%s err=%v\n",
+					strings.TrimSpace(target.ID), strings.TrimSpace(target.CanonicalPath), sp, err)
+			}
 			// Keep local copy consistent for subsequent iterations in this job.
 			target.IndexPaths = models.MergeIndexPaths(target, []string{sp})
 		}

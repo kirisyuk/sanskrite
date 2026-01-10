@@ -60,6 +60,8 @@ var ValidCanonicalPathNamespace = map[string]bool{
 	"event":   true,
 	// Media endpoints (e.g., specific Telegram channels).
 	"media": true,
+	// Natural resource deposits (e.g., oil field, mine).
+	"deposit": true,
 }
 
 // ValidateCanonicalPath validates that a canonical path matches the expected format.
@@ -143,6 +145,16 @@ func ValidateCanonicalPath(path string) error {
 		geo := strings.ToLower(strings.TrimSpace(parts[3]))
 		if geo != "global" && !reCountryAlpha2.MatchString(geo) {
 			return fmt.Errorf("segment canonical path has invalid geo %q (expected ISO3166-1 alpha2 or 'global'): %s", parts[3], path)
+		}
+	case "deposit":
+		// Allowed:
+		// - preferred: /deposit/{resource-slug}/{deposit-slug}
+		// - legacy fallback: /deposit/{deposit-slug}
+		//
+		// IMPORTANT: We intentionally do NOT enforce resource allow-lists here to avoid breaking ingestion
+		// when taxonomy drifts or LLM outputs a new resource type.
+		if len(parts) < 2 {
+			return fmt.Errorf("deposit canonical path must have at least 2 segments: /deposit/{slug} (legacy) or /deposit/{resource}/{slug}: %s", path)
 		}
 	}
 
