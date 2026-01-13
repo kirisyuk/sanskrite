@@ -355,17 +355,54 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - sectorPath: Must match the provided sector path
    - legalName: The legal/official name of the entity, INCLUDING the form of ownership when relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC, etc.)
    - shortName: The base name WITHOUT the form of ownership (used for canonicalPath slugging)
-   - marketSegments: IMPORTANT for ORG/FACILITY. Array of canonical segment paths /segment/{domain}/{vertical}/{geo}.
-     Examples: /segment/finance/retail-banking/global, /segment/technology/semiconductors/us, /segment/industrial/ev-batteries/cn
-     Domains: finance, technology, industrial, consumer, healthcare, energy, materials, telecom, real-estate, etc.
-     geo: ISO2 lowercase (us, cn, de, jp) or "global"
-   - orgSize: IMPORTANT for ORG. Organization size bucket based on employees/revenue/assets:
-     - "sme": Small/Medium Enterprise (<500 employees or <$100M revenue)
-     - "le": Large Enterprise (500-5000 employees or $100M-$1B revenue)
-     - "enterprise": Major Enterprise (5000-50000 employees or $1B-$10B revenue)
-     - "mega": Mega Corporation (>50000 employees or >$10B revenue)
-     - "na": Cannot determine from available information
-     ALWAYS attempt to classify; use "na" only if truly unknown.
+   - marketSegments: *** HIGHLY IMPORTANT for ORGANIZATION/FACILITY/GOV ***
+     You MUST attempt to determine market segments for any org/gov/facility. This is critical for graph analytics.
+     Format: Array of canonical paths /segment/{domain}/{vertical}/{geo}
+     
+     DOMAIN taxonomy (pick the most relevant):
+       - finance (banking, insurance, asset-management, payments, capital-markets)
+       - technology (software, hardware, semiconductors, cloud, ai-ml, cybersecurity, telecom-equipment)
+       - industrial (manufacturing, machinery, aerospace, defense, automotive, construction, chemicals)
+       - consumer (retail, e-commerce, food-beverage, apparel, luxury, hospitality, media-entertainment)
+       - healthcare (pharma, biotech, medical-devices, hospitals, health-insurance)
+       - energy (oil-gas, renewables, utilities, nuclear, mining)
+       - materials (metals, chemicals, construction-materials, paper-packaging)
+       - telecom (carriers, infrastructure, media)
+       - real-estate (commercial, residential, reits)
+       - public-sector (government, defense, education, ngo) - USE FOR /gov/ entities
+       - professional-services (consulting, legal, accounting, engineering)
+     
+     GEO: ISO3166-1 alpha2 lowercase (us, cn, de, jp, ru, kz) OR "global" if multinational
+     
+     Examples:
+       - Tesla → ["/segment/industrial/automotive/us", "/segment/energy/renewables/global"]
+       - JPMorgan → ["/segment/finance/banking/us", "/segment/finance/capital-markets/global"]
+       - Ministry of Finance → ["/segment/public-sector/government/kz"]
+       - TSMC → ["/segment/technology/semiconductors/tw"]
+     
+     If the entity clearly operates in multiple domains, include ALL relevant segments.
+     Only omit if you genuinely cannot determine ANY market positioning from available information.
+
+   - orgSize: *** HIGHLY IMPORTANT for ORGANIZATION/GOV ***
+     You MUST classify organization size. This enables filtering and risk assessment.
+     
+     Classification criteria (use ANY available signal):
+       - "sme": Small/Medium (<500 employees OR <$100M revenue OR local/regional scope)
+       - "le": Large Enterprise (500-5000 employees OR $100M-$1B revenue OR national scope)
+       - "enterprise": Major Enterprise (5000-50000 employees OR $1B-$10B revenue OR multinational)
+       - "mega": Mega Corporation (>50000 employees OR >$10B revenue OR global household name)
+       - "na": Use ONLY if you cannot find ANY size indicators (revenue, employees, market cap, scope)
+     
+     For GOVERNMENT bodies (/gov/):
+       - Federal ministries/agencies of major economies → typically "enterprise" or "mega"
+       - Regional/state agencies → typically "le" or "enterprise"
+       - Municipal/local bodies → typically "sme" or "le"
+       - International organizations (UN, WTO, IMF) → "mega"
+     
+     PREFER to classify rather than use "na". Even rough estimates are valuable.
+   - marketDomain: (MARKET only) canonical domain family for the market (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate).
+   - marketVertical: (MARKET only) specific vertical (e.g., banking, semiconductors, ev-batteries).
+   - marketChannels: (MARKET only) array of channels (best-effort): ["b2b","b2c","public-sector",...]. Can be empty/omitted.
    - state: Map of metrics with MetricValue objects.
      IMPORTANT: there are two common classes of metrics:
        A) Normalized risk metrics under /metric/risk/... where value is a score:
@@ -426,6 +463,12 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
    - RELATIVE_OF: person-person symmetric relationship (public relatives). Use ONLY when both are PERSON.
    - RELATED_TO: person-person symmetric relationship (publicly known associates: friends/partners/classmates). Use ONLY when both are PERSON.
+   - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY -> MARKET).
+     - If THIS FRAGMENT is MARKET, still emit relations with relationType=PARTICIPATES_IN to the player entities; backend will reverse the edge direction.
+     - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
+   - DOMINATES: entity dominates a market (leader) (canonical direction: ORG/FACILITY -> MARKET).
+     - If THIS FRAGMENT is MARKET, still emit relations with relationType=DOMINATES to the leader entity; backend will reverse the edge direction.
+     - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
    
    EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
    - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
@@ -437,6 +480,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - FOUNDED: source MUST be PERSON or ORGANIZATION, target MUST be ORGANIZATION/PROGRAM
    - INVESTS_IN: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/PROGRAM/PRODUCT
    - PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
+   - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
+   - DOMINATES: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
    - PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
    - AUDITED_BY: source MUST be ORGANIZATION or FACILITY, target MUST be ORGANIZATION
    - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
@@ -555,8 +600,10 @@ CANONICAL PATH RULES:
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
     - Otherwise /program/{programSlug}
   - Markets:
-    - Prefer /market/{domainSlug}/{marketSlug} when domain is known
-    - Otherwise /market/{marketSlug}
+    - Prefer /market/{geo}/{marketSlug}
+      - geo: ISO3166-1 alpha2 lowercase OR "global" if unknown
+      - Examples: /market/iq/sme-banking, /market/global/ev-batteries
+    - Legacy /market/{marketSlug} may exist; prefer /market/{geo}/{slug} for NEW markets
   - Facilities:
     - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise /fac/{facilitySlug}

@@ -133,13 +133,28 @@ TASK: Compare the extracted data with the source content and identify any confli
 	Missing Info logic:
 	- If important fields (like location, key metrics for the sector) are empty or unknown, add a specific question to 'missingInfo'.
 	- If the entity is an Organization or Facility, and NO supply chain relations (suppliers, customers, competitors) were found, you MUST add a question to find them. Example: "Who are the key suppliers for Tesla?" or "What are the major competitors of this entity?"
-	- If the entity is an Organization or Facility:
+	- If the entity is an Organization, Facility, or Government body (/org/, /fac/, /gov/):
 	  - If no external auditor is present (AUDITED_BY), add a question:
 	    - "Who is the external auditor of <org> (as of YYYY)? Provide audit firm and source."
-	  - MANDATORY: If marketSegments is empty or missing, you MUST add this question:
-	    - "Which market segments does <org> operate in? Return canonical paths /segment/{domain}/{vertical}/{geo} where domain=finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate, vertical=specific industry, geo=ISO2 or 'global'. Example: /segment/technology/semiconductors/us"
-	  - MANDATORY: If orgSize is empty, missing, or "na", you MUST add this question:
-	    - "What is the organization size for <org>? Determine orgSize based on: employees (<500=sme, 500-5000=le, 5000-50000=enterprise, >50000=mega) OR revenue (<$100M=sme, $100M-$1B=le, $1B-$10B=enterprise, >$10B=mega). Provide sources."
+	  
+	  - *** CRITICAL *** If marketSegments is empty or missing, you MUST add this question:
+	    - "What industry/sector does <entity> operate in? Return as marketSegments array with canonical paths:
+	      Format: /segment/{domain}/{vertical}/{geo}
+	      Domains: finance, technology, industrial, consumer, healthcare, energy, materials, telecom, real-estate, public-sector, professional-services
+	      Verticals: banking, software, automotive, oil-gas, government, consulting, etc.
+	      Geo: ISO2 (us, de, cn) or 'global'
+	      Examples: /segment/technology/semiconductors/tw, /segment/public-sector/government/ru, /segment/finance/banking/us
+	      For government bodies use domain=public-sector, vertical=government or specific function (defense, treasury, regulation)."
+	  
+	  - *** CRITICAL *** If orgSize is empty, missing, or "na", you MUST add this question:
+	    - "What is the size of <entity>? Find employee count, revenue, or market cap to determine orgSize:
+	      - sme: <500 employees or <$100M revenue (small regional player)
+	      - le: 500-5000 employees or $100M-$1B revenue (national player)
+	      - enterprise: 5000-50000 employees or $1B-$10B revenue (major multinational)
+	      - mega: >50000 employees or >$10B revenue (global giant)
+	      For government: federal ministries of G20 countries = enterprise/mega, regional agencies = le/enterprise, municipal = sme/le.
+	      Search for annual reports, Wikipedia infobox, LinkedIn company page, or news about company size."
+	  
 	  - If this looks like a government body (ministry/agency/regulator) but canonicalPath is not /gov/{iso2}/{slug}, add a question:
 	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2}/{slug}. If unknown, /gov/na/{slug}."
 	  - If canonicalPath is legacy (/org/{slug}) or uses /org/na/{slug}, add a question:
@@ -189,6 +204,21 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - If source text contains "former", "ex-", "бывший", "previously", "past", or indicates a relationship ended:
 	    - If ValidTo is not set on the edge, add:
 	      - "When did <person/org> leave/exit <target>? Provide end date for the relationship."
+
+	MANDATORY - Market sizing & concentration (always required for MARKET):
+	  - If the entity is a MARKET (fragment.type == MARKET OR canonicalPath starts with /market/):
+	    - If marketDomain is empty/missing, add:
+	      - "What is the marketDomain for <market>? Return one of finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate with sources."
+	    - If marketVertical is empty/missing, add:
+	      - "What is the marketVertical for <market>? Return a specific vertical (e.g., banking, semiconductors, ev-batteries) with sources."
+	    - If there are no PARTICIPATES_IN / DOMINATES relations to real players, add:
+	      - "Who are the key players in <market> (top companies) and who dominates? Provide names, market shares if available, and sources."
+	    - If state is missing market sizing metrics, you MUST add questions:
+	      - "What is the TAM (total addressable market) in USD for <market> (latest year)? Provide value and sources. Store as /metric/market/tam_usd."
+	      - "What is the market CAGR percent for <market> (provide period, e.g., 2024-2029)? Provide percent, period, and sources. Store as /metric/market/cagr_percent."
+	    - If state is missing concentration metrics, add questions:
+	      - "What is the CR4 (top-4 market share percent) for <market>? Provide value and sources. Store as /metric/market/cr4_percent."
+	      - "What is the HHI (0..10000) for <market>? Provide value and sources. Store as /metric/market/hhi."
 	
 	- If "management" specialty is requested for an Organization/Facility, you MUST ensure leadership/board/founder coverage:
 	  - If there are no PERSON relations relevant to leadership (MANAGES / EMPLOYED_BY / BOARD_MEMBER_OF / FOUNDED), add specific questions like:

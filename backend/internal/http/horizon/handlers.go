@@ -217,6 +217,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 		case "scope-scout":
 			h.ScopeScoutLensNode(w, r)
 			return
+		case "scope-scout-query":
+			h.ScopeScoutLensQuery(w, r)
+			return
 		case "graph-query":
 			h.QueryGraph(w, r)
 			return

@@ -527,6 +527,54 @@ go run ./cmd/tools/horizon_find_missing_wikidata \
 
 ---
 
+### `horizon_llm_backfill`
+
+**Назначение:** Унифицированный LLM-backfill батчами для разных типов фрагментов и наборов полей/метрик (общие: скан, пагинация, курсор, батчи, structured JSON).
+
+**Фичи (`--features`):**
+- `org_classifiers`: backfill `orgSize` + `marketSegments` для `ORGANIZATION`
+- `market_profile`: backfill `marketDomain` + `marketVertical` + `marketChannels` для `MARKET`
+- `market_metrics`: backfill market metrics в `state` для `MARKET` под ключами:
+  - `/metric/market/tam_usd` (unit=`usd`)
+  - `/metric/market/cagr_percent` (unit=`percent`)
+  - `/metric/market/hhi` (unit=`index`, 0..10000)
+  - `/metric/market/cr4_percent` (unit=`percent`, 0..100)
+  - `/metric/market/supply_chain_risk` (0..1)
+
+**Использование:**
+```bash
+# Dry-run: backfill MARKET profile + market metrics
+go run ./cmd/tools/horizon_llm_backfill \
+  --project=sanskrite \
+  --features=market_profile,market_metrics \
+  --types=MARKET \
+  --limit=200 \
+  --batch-size=10 \
+  --page-size=500
+
+# Apply: backfill org classifiers
+go run ./cmd/tools/horizon_llm_backfill \
+  --project=sanskrite \
+  --apply \
+  --features=org_classifiers \
+  --types=ORGANIZATION \
+  --limit=1000 \
+  --batch-size=10 \
+  --cursor-file=/tmp/horizon_llm_backfill_cursor.json
+```
+
+**Флаги (основные):**
+- `--features` - список фич через запятую
+- `--types` - типы фрагментов (если не указано, выводится из `--features`)
+- `--limit`, `--batch-size`, `--page-size`, `--max-scan`
+- `--start-after`, `--cursor-file`, `--save-cursor-every-pages`
+- `--model`, `--engine` (`task_executor|direct`), `--grounding`, `--max-output-tokens`
+- `--apply` + per-feature overwrite:
+  - `--overwrite-orgsize`, `--overwrite-segments`
+  - `--overwrite-market-profile`, `--overwrite-market-metrics`
+
+---
+
 ### `horizon_expand_taxonomy_relation_types`
 
 **Назначение:** Расширяет типы отношений в таксономии.

@@ -327,6 +327,9 @@ func main() {
 			"SUBSIDIARY_OF",
 			"TRANSFORMS_INTO",
 			"EXTRACTS_FROM", // FACILITY → DEPOSIT
+			// Market participation
+			"PARTICIPATES_IN",
+			"DOMINATES",
 			// Governance / org-person
 			"MANAGES",
 			"CONTROLS",
@@ -351,11 +354,11 @@ func main() {
 			"bcf", "tcf", "mcf", // cubic feet (gas)
 			"boe", // barrels of oil equivalent
 			// O&G units (rate)
-			"bpd", "mbpd",         // barrels per day
+			"bpd", "mbpd", // barrels per day
 			"mcf_per_day", "mmcf_per_day", // cubic feet per day
 			// Mining units (mass)
 			"metric_tons", "kt", "mt", // metric tons (thousands, millions)
-			"tons",    // short tons (US)
+			"tons",      // short tons (US)
 			"oz", "moz", // troy ounces (precious metals)
 			"kg", "g", "lbs",
 			"carats",
@@ -425,16 +428,16 @@ func main() {
 			"ethylene":  {Category: "component", Type: "petrochemical", Stage: "cracking"},
 			"propylene": {Category: "component", Type: "petrochemical", Stage: "cracking"},
 			// Mining products
-			"iron-ore":          {Category: "raw", Type: "mineral", Stage: "extraction"},
-			"copper-ore":        {Category: "raw", Type: "mineral", Stage: "extraction"},
+			"iron-ore":           {Category: "raw", Type: "mineral", Stage: "extraction"},
+			"copper-ore":         {Category: "raw", Type: "mineral", Stage: "extraction"},
 			"copper-concentrate": {Category: "raw", Type: "mineral", Stage: "processing"},
-			"refined-copper":    {Category: "component", Type: "mineral", Stage: "refining"},
-			"gold-ore":          {Category: "raw", Type: "mineral", Stage: "extraction"},
-			"gold-bullion":      {Category: "component", Type: "mineral", Stage: "refining"},
-			"rare-earth-ore":    {Category: "raw", Type: "mineral", Stage: "extraction"},
-			"neodymium-oxide":   {Category: "component", Type: "mineral", Stage: "refining"},
-			"uranium-ore":       {Category: "raw", Type: "mineral", Stage: "extraction"},
-			"yellowcake":        {Category: "component", Type: "mineral", Stage: "refining"},
+			"refined-copper":     {Category: "component", Type: "mineral", Stage: "refining"},
+			"gold-ore":           {Category: "raw", Type: "mineral", Stage: "extraction"},
+			"gold-bullion":       {Category: "component", Type: "mineral", Stage: "refining"},
+			"rare-earth-ore":     {Category: "raw", Type: "mineral", Stage: "extraction"},
+			"neodymium-oxide":    {Category: "component", Type: "mineral", Stage: "refining"},
+			"uranium-ore":        {Category: "raw", Type: "mineral", Stage: "extraction"},
+			"yellowcake":         {Category: "component", Type: "mineral", Stage: "refining"},
 		},
 		ProductSynonyms: map[string]string{
 			// Battery materials
@@ -459,12 +462,12 @@ func main() {
 			"electric car":             "electric-vehicle",
 			"electric vehicle":         "electric-vehicle",
 			// O&G
-			"oil":        "crude-oil",
-			"petroleum":  "crude-oil",
-			"gas":        "natural-gas",
-			"petrol":     "gasoline",
-			"kerosene":   "jet-fuel",
-			"avgas":      "jet-fuel",
+			"oil":       "crude-oil",
+			"petroleum": "crude-oil",
+			"gas":       "natural-gas",
+			"petrol":    "gasoline",
+			"kerosene":  "jet-fuel",
+			"avgas":     "jet-fuel",
 			// Mining
 			"iron":   "iron-ore",
 			"copper": "copper-ore",
@@ -581,10 +584,10 @@ func main() {
 		// Lifecycle stages for FACILITY, DEPOSIT, ORGANIZATION
 		AllowedLifecycleStages: []string{
 			// Early stages
-			"concept",       // pre-feasibility
-			"planning",      // feasibility study
-			"permitting",    // licensing
-			"financing",     // fundraising
+			"concept",    // pre-feasibility
+			"planning",   // feasibility study
+			"permitting", // licensing
+			"financing",  // fundraising
 			// Construction
 			"construction",  // development drilling
 			"commissioning", // ramp-up
@@ -599,42 +602,42 @@ func main() {
 		},
 		LifecycleStageAliases: map[string]string{
 			// O&G industry
-			"exploration":      "concept",
-			"appraisal":        "planning",
-			"development":      "construction",
-			"production":       "operational",
-			"shut_in":          "suspended",
-			"shut-in":          "suspended",
-			"abandonment":      "decommissioning",
+			"exploration": "concept",
+			"appraisal":   "planning",
+			"development": "construction",
+			"production":  "operational",
+			"shut_in":     "suspended",
+			"shut-in":     "suspended",
+			"abandonment": "decommissioning",
 			// Mining industry
-			"pre_feasibility":  "concept",
-			"pre-feasibility":  "concept",
-			"feasibility":      "planning",
+			"pre_feasibility": "concept",
+			"pre-feasibility": "concept",
+			"feasibility":     "planning",
 			// Organizations
-			"startup":          "commissioning",
-			"restructuring":    "suspended",
-			"liquidation":      "decommissioning",
-			"dissolved":        "closed",
+			"startup":       "commissioning",
+			"restructuring": "suspended",
+			"liquidation":   "decommissioning",
+			"dissolved":     "closed",
 			// Common
-			"operating":        "operational",
-			"active":           "operational",
-			"idle":             "suspended",
-			"mothballed":       "suspended",
+			"operating":  "operational",
+			"active":     "operational",
+			"idle":       "suspended",
+			"mothballed": "suspended",
 		},
 
 		// Edge metrics (numerical data on edges)
 		AllowedEdgeMetrics: map[string][]string{
-			"OWNS":         {"ownership_percent", "voting_percent"},
-			"SUBSIDIARY_OF": {"ownership_percent"},
-			"INVESTS_IN":   {"investment_amount", "round_size_total"},
-			"SUPPLIES_TO":  {"annual_volume", "contract_value", "contract_duration_years"},
-			"PRODUCES":     {"annual_capacity", "annual_output"},
-			"CONSUMES":     {"annual_consumption"},
-			"EXTRACTS_FROM": {"annual_extraction"},
-			"EMPLOYED_BY":  {"tenure_years", "compensation"},
+			"OWNS":            {"ownership_percent", "voting_percent"},
+			"SUBSIDIARY_OF":   {"ownership_percent"},
+			"INVESTS_IN":      {"investment_amount", "round_size_total"},
+			"SUPPLIES_TO":     {"annual_volume", "contract_value", "contract_duration_years"},
+			"PRODUCES":        {"annual_capacity", "annual_output"},
+			"CONSUMES":        {"annual_consumption"},
+			"EXTRACTS_FROM":   {"annual_extraction"},
+			"EMPLOYED_BY":     {"tenure_years", "compensation"},
 			"BOARD_MEMBER_OF": {"tenure_years"},
-			"OPERATES_IN":  {"market_share"},
-			"COMPETES_WITH": {"relative_market_share"},
+			"OPERATES_IN":     {"market_share"},
+			"COMPETES_WITH":   {"relative_market_share"},
 		},
 		AllowedEdgeModalities: []string{
 			"actual",     // relationship exists and is active (default)
@@ -685,17 +688,17 @@ func main() {
 			"strategy-consulting":         {Domain: "consulting", Subdomain: "strategy"},
 		},
 		ServiceSynonyms: map[string]string{
-			"software development":  "custom-software-development",
-			"app development":       "custom-software-development",
-			"web hosting":           "cloud-hosting",
-			"aws":                   "cloud-hosting",
-			"gcp":                   "cloud-hosting",
-			"azure":                 "cloud-hosting",
-			"payment gateway":       "payment-processing",
-			"sanctions screening":   "sanctions-compliance",
-			"aml":                   "sanctions-compliance",
-			"airfreight":            "air-freight",
-			"ocean freight":         "sea-freight",
+			"software development": "custom-software-development",
+			"app development":      "custom-software-development",
+			"web hosting":          "cloud-hosting",
+			"aws":                  "cloud-hosting",
+			"gcp":                  "cloud-hosting",
+			"azure":                "cloud-hosting",
+			"payment gateway":      "payment-processing",
+			"sanctions screening":  "sanctions-compliance",
+			"aml":                  "sanctions-compliance",
+			"airfreight":           "air-freight",
+			"ocean freight":        "sea-freight",
 		},
 	}
 

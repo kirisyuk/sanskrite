@@ -16,18 +16,18 @@ import (
 
 // SignalMonitoringService monitors signals and creates snapshots
 type SignalMonitoringService struct {
-	signalsRepo        *repo.ListeningSignalsRepository
-	snapshotRefsRepo   *repo.SignalSnapshotRefsRepository
-	coreDocsRepo       *repo.CoreDocsRepo
-	documentsRepo      *repo.DocumentsRepository
-	taskExecutor       *ai.AITaskExecutor
-	genaiClient        *gen_combined.Client
-	tavilyClient       interface {
+	signalsRepo      *repo.ListeningSignalsRepository
+	snapshotRefsRepo *repo.SignalSnapshotRefsRepository
+	coreDocsRepo     *repo.CoreDocsRepo
+	documentsRepo    *repo.DocumentsRepository
+	taskExecutor     *ai.AITaskExecutor
+	genaiClient      *gen_combined.Client
+	tavilyClient     interface {
 		Search(ctx context.Context, query string, maxResults int) (*TavilySearchResponse, error)
 	}
-	checkInterval            time.Duration
-	minRelevanceScore        float64 // Minimum relevance score for findings (default: 0.6)
-	minConfidenceThreshold   float64 // Minimum confidence for creating snapshot (default: 0.5)
+	checkInterval          time.Duration
+	minRelevanceScore      float64 // Minimum relevance score for findings (default: 0.6)
+	minConfidenceThreshold float64 // Minimum confidence for creating snapshot (default: 0.5)
 }
 
 // TavilySearchResponse represents Tavily search response
@@ -37,9 +37,9 @@ type TavilySearchResponse struct {
 
 // TavilySearchResult represents a single Tavily search result
 type TavilySearchResult struct {
-	Title   string `json:"title"`
-	URL     string `json:"url"`
-	Content string `json:"content"`
+	Title   string  `json:"title"`
+	URL     string  `json:"url"`
+	Content string  `json:"content"`
 	Score   float64 `json:"score"`
 }
 
@@ -57,11 +57,11 @@ func NewSignalMonitoringService(
 		coreDocsRepo:           coreDocsRepo,
 		documentsRepo:          documentsRepo,
 		taskExecutor:           taskExecutor,
-		genaiClient:            nil, // Will be set via WithGenAIClient
-		tavilyClient:           nil, // Will be set via WithTavilyClient if available
+		genaiClient:            nil,           // Will be set via WithGenAIClient
+		tavilyClient:           nil,           // Will be set via WithTavilyClient if available
 		checkInterval:          6 * time.Hour, // Default: every 6 hours
-		minRelevanceScore:      0.6,  // Findings with score < 0.6 are filtered out
-		minConfidenceThreshold: 0.5,  // Snapshots with confidence < 0.5 are not created
+		minRelevanceScore:      0.6,           // Findings with score < 0.6 are filtered out
+		minConfidenceThreshold: 0.5,           // Snapshots with confidence < 0.5 are not created
 	}
 }
 
@@ -257,7 +257,7 @@ func (s *SignalMonitoringService) performSearch(ctx context.Context, signal *mod
 	if signal.ProjectID != nil {
 		projectID := *signal.ProjectID
 		sourceIDs := []string{fmt.Sprintf("project:%s", projectID)}
-		
+
 		limit := 50
 		docs, err := s.documentsRepo.ListBySources(ctx, signal.TenantID, sourceIDs, limit, nil, nil)
 		if err == nil {
@@ -278,7 +278,7 @@ func (s *SignalMonitoringService) performSearch(ctx context.Context, signal *mod
 	if s.tavilyClient != nil && len(signal.SearchQueries) > 0 {
 		// Combine search queries
 		combinedQuery := strings.Join(signal.SearchQueries, " OR ")
-		
+
 		tavilyResults, err := s.tavilyClient.Search(ctx, combinedQuery, 10) // Get top 10 results
 		if err == nil && tavilyResults != nil {
 			// Convert Tavily results to Document-like structures for processing
@@ -286,10 +286,10 @@ func (s *SignalMonitoringService) performSearch(ctx context.Context, signal *mod
 			for _, result := range tavilyResults.Results {
 				// Create a pseudo-document from Tavily result
 				doc := &models.Document{
-					ID:      fmt.Sprintf("tavily_%s_%d", signal.ID, time.Now().UnixNano()),
-					Title:   result.Title,
+					ID:       fmt.Sprintf("tavily_%s_%d", signal.ID, time.Now().UnixNano()),
+					Title:    result.Title,
 					FullText: result.Content,
-					URL:     result.URL, // Store URL directly
+					URL:      result.URL, // Store URL directly
 					SourceID: "tavily_web_search",
 					TenantID: signal.TenantID,
 					OriginPublishedAt: func() *time.Time {
@@ -331,7 +331,7 @@ type Finding struct {
 
 // SourceRef represents a source reference
 type SourceRef struct {
-	Type  string `json:"type"`  // "document", "web_search", etc.
+	Type  string `json:"type"` // "document", "web_search", etc.
 	ID    string `json:"id,omitempty"`
 	Title string `json:"title,omitempty"`
 	URL   string `json:"url,omitempty"`
@@ -374,7 +374,7 @@ func (s *SignalMonitoringService) analyzeSearchResults(
 	if s.genaiClient != nil {
 		return s.analyzeWithStructuredOutput(ctx, signal, resultsText, previousContent, previousFindings)
 	}
-	
+
 	// Fallback to TaskExecutor (legacy mode)
 	return s.analyzeWithTaskExecutor(ctx, signal, resultsText, previousContent, previousFindings)
 }
@@ -395,7 +395,7 @@ func (s *SignalMonitoringService) analyzeWithStructuredOutput(
 		"type": "object",
 		"properties": map[string]interface{}{
 			"reasoning": map[string]interface{}{
-				"type": "object",
+				"type":        "object",
 				"description": "Chain-of-thought reasoning for analysis",
 				"properties": map[string]interface{}{
 					"relevanceCheck": map[string]interface{}{
@@ -505,7 +505,7 @@ func (s *SignalMonitoringService) analyzeWithStructuredOutput(
 
 	// Validate confidence threshold
 	if analysisResult.Confidence < s.minConfidenceThreshold {
-		log.Printf("[SignalMonitoring] Low confidence (%.2f < %.2f) for signal %s, skipping snapshot", 
+		log.Printf("[SignalMonitoring] Low confidence (%.2f < %.2f) for signal %s, skipping snapshot",
 			analysisResult.Confidence, s.minConfidenceThreshold, signal.ID)
 		return nil, nil
 	}
@@ -519,13 +519,13 @@ func (s *SignalMonitoringService) analyzeWithStructuredOutput(
 	}
 
 	if len(filteredFindings) == 0 {
-		log.Printf("[SignalMonitoring] All findings filtered out (relevance < %.2f or not new) for signal %s", 
+		log.Printf("[SignalMonitoring] All findings filtered out (relevance < %.2f or not new) for signal %s",
 			s.minRelevanceScore, signal.ID)
 		return nil, nil
 	}
 
 	analysisResult.Findings = filteredFindings
-	log.Printf("[SignalMonitoring] Analysis complete: %d relevant + new findings (confidence: %.2f)", 
+	log.Printf("[SignalMonitoring] Analysis complete: %d relevant + new findings (confidence: %.2f)",
 		len(filteredFindings), analysisResult.Confidence)
 
 	return &analysisResult, nil
@@ -575,7 +575,7 @@ func (s *SignalMonitoringService) analyzeWithTaskExecutor(
 
 	// Validate confidence threshold
 	if analysisResult.Confidence < s.minConfidenceThreshold {
-		log.Printf("[SignalMonitoring] Low confidence (%.2f) for signal %s, skipping snapshot", 
+		log.Printf("[SignalMonitoring] Low confidence (%.2f) for signal %s, skipping snapshot",
 			analysisResult.Confidence, signal.ID)
 		return nil, nil
 	}
@@ -604,14 +604,14 @@ func (s *SignalMonitoringService) formatSearchResults(results []*models.Document
 
 	for i, doc := range results {
 		builder.WriteString(fmt.Sprintf("Result %d:\n", i+1))
-		
+
 		// Determine source type
 		sourceType := "document"
 		if strings.HasPrefix(doc.ID, "tavily_") {
 			sourceType = "web_search"
 		}
 		builder.WriteString(fmt.Sprintf("Source Type: %s\n", sourceType))
-		
+
 		if doc.Title != "" {
 			builder.WriteString(fmt.Sprintf("Title: %s\n", doc.Title))
 		}
@@ -648,11 +648,22 @@ func (s *SignalMonitoringService) buildEnhancedAnalysisPrompt(
 	var prompt strings.Builder
 
 	prompt.WriteString("You are analyzing search results for a monitoring signal using chain-of-thought reasoning.\n\n")
-	
+
 	prompt.WriteString("=== SIGNAL DEFINITION ===\n")
 	prompt.WriteString(fmt.Sprintf("Signal Name: %s\n", signal.Name))
 	prompt.WriteString(fmt.Sprintf("Signal Text: %s\n", signal.Signal))
 	prompt.WriteString(fmt.Sprintf("Search Queries: %s\n\n", strings.Join(signal.SearchQueries, ", ")))
+
+	if strings.TrimSpace(previousContent) != "" {
+		// Best-effort context: prior snapshot content helps the model avoid restating the same facts.
+		pc := previousContent
+		if len(pc) > 2000 {
+			pc = pc[:2000] + "..."
+		}
+		prompt.WriteString("=== PREVIOUS SNAPSHOT CONTENT (CONTEXT) ===\n")
+		prompt.WriteString(pc)
+		prompt.WriteString("\n\n")
+	}
 
 	prompt.WriteString("=== SEARCH RESULTS ===\n")
 	prompt.WriteString(resultsText)
@@ -669,12 +680,12 @@ func (s *SignalMonitoringService) buildEnhancedAnalysisPrompt(
 
 	prompt.WriteString("=== TASK ===\n")
 	prompt.WriteString("Analyze search results using the following chain-of-thought process:\n\n")
-	
+
 	prompt.WriteString("1. RELEVANCE CHECK:\n")
 	prompt.WriteString("   - For each search result, determine if it's DIRECTLY relevant to the signal\n")
 	prompt.WriteString("   - Assign relevance score (0-1): 0.9-1.0=highly relevant, 0.6-0.8=relevant, <0.6=irrelevant\n")
 	prompt.WriteString(fmt.Sprintf("   - ONLY include findings with relevance score >= %.1f\n\n", s.minRelevanceScore))
-	
+
 	prompt.WriteString("2. NOVELTY CHECK:\n")
 	if len(previousFindings) > 0 {
 		prompt.WriteString("   - Compare each finding SEMANTICALLY with previous findings\n")
@@ -684,23 +695,22 @@ func (s *SignalMonitoringService) buildEnhancedAnalysisPrompt(
 	} else {
 		prompt.WriteString("   - This is the first snapshot, mark all findings as isNew=true\n\n")
 	}
-	
+
 	prompt.WriteString("3. EXTRACTION:\n")
 	prompt.WriteString("   - Extract findings that are: relevant (score >= 0.6) AND new (isNew=true)\n")
 	prompt.WriteString("   - Include source references for each finding\n")
 	prompt.WriteString("   - Write concise, factual findings (not opinions or speculation)\n\n")
-	
+
 	prompt.WriteString("4. CONFIDENCE:\n")
 	prompt.WriteString("   - Assign overall confidence (0-1) based on:\n")
 	prompt.WriteString("     * Quality of sources\n")
 	prompt.WriteString("     * Clarity of connection to signal\n")
 	prompt.WriteString("     * Amount of supporting evidence\n\n")
-	
+
 	prompt.WriteString("Return structured JSON with reasoning steps and findings.")
-	
+
 	return prompt.String()
 }
-
 
 // createSnapshotDocument creates a CoreDoc snapshot document
 func (s *SignalMonitoringService) createSnapshotDocument(
@@ -735,7 +745,7 @@ func (s *SignalMonitoringService) createSnapshotDocument(
 		"signalId":     signal.ID,
 		"capturedAt":   now.Format(time.RFC3339),
 		"summary":      analysisResult.Summary,
-		"keyFindings":  keyFindings,          // Backward compatible: array of strings
+		"keyFindings":  keyFindings,             // Backward compatible: array of strings
 		"findings":     analysisResult.Findings, // Full structured findings with scores
 		"sources":      sources,
 		"contentDelta": analysisResult.ContentDelta,
@@ -750,15 +760,20 @@ func (s *SignalMonitoringService) createSnapshotDocument(
 
 	// Create snapshot document
 	snapshotDoc := &models.CoreDoc{
-		DocType:     stringPtr("signal_snapshot"),
-		TenantID:    signal.TenantID,
-		ProjectID:   func() string { if signal.ProjectID != nil { return *signal.ProjectID }; return "" }(),
-		Filename:    fmt.Sprintf("snapshot_%s_%d.json", signal.ID, now.Unix()),
-		ContentType: "application/json",
+		DocType:  stringPtr("signal_snapshot"),
+		TenantID: signal.TenantID,
+		ProjectID: func() string {
+			if signal.ProjectID != nil {
+				return *signal.ProjectID
+			}
+			return ""
+		}(),
+		Filename:      fmt.Sprintf("snapshot_%s_%d.json", signal.ID, now.Unix()),
+		ContentType:   "application/json",
 		ExtractedText: stringPtr(analysisResult.Summary),
-		ParseMeta:    parseMeta,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ParseMeta:     parseMeta,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	// Save to CoreDocsRepo (will be automatically indexed)
@@ -775,4 +790,3 @@ func (s *SignalMonitoringService) createSnapshotDocument(
 func stringPtr(s string) *string {
 	return &s
 }
-

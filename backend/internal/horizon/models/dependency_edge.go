@@ -56,6 +56,12 @@ const (
 	// More precise than LOCATED_IN, captures the operational relationship.
 	DependencyTypeExtractsFrom DependencyType = "EXTRACTS_FROM"
 
+	// --- Market participation ---
+	// PARTICIPATES_IN: org/facility participates in a market (player relationship).
+	DependencyTypeParticipatesIn DependencyType = "PARTICIPATES_IN"
+	// DOMINATES: org/facility dominates a market (leader relationship).
+	DependencyTypeDominates DependencyType = "DOMINATES"
+
 	// --- Governance / control / org-person relationships ---
 	// MANAGES: formal management relationship (CEO, director, operator) — not necessarily ownership.
 	DependencyTypeManages DependencyType = "MANAGES"

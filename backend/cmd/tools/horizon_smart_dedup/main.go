@@ -6,13 +6,15 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 	"unicode"
 
 	"cloud.google.com/go/firestore"
-	"google.golang.org/api/iterator"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
@@ -40,11 +42,19 @@ var (
 	typeFilter         = flag.String("type", "", "Filter by fragment type (GEO_REGION, ORGANIZATION, FACILITY, etc.)")
 	unionClusters      = flag.Bool("union-clusters", false, "Build transitive clusters via union-find across signals (recommended for per-type runs; helps catch chain duplicates)")
 	skipVertexSync     = flag.Bool("skip-vertex-sync", false, "Skip Vertex AI Search sync (faster, run bulk sync separately)")
+	skipEdgePass       = flag.Bool("skip-edge-pass", false, "Skip global edge direction fix + symmetric normalization + edge dedup pass (safer for targeted fragment-only dedup runs)")
+	pageSize           = flag.Int("page-size", 500, "Firestore page size for loading fragments (pagination). Lower = safer, higher = fewer round-trips")
+	startAfterDocID    = flag.String("start-after", "", "Resume cursor: start loading fragments after this Firestore document ID (__name__)")
+	pageTimeoutSec     = flag.Int("page-timeout-s", 90, "Timeout in seconds for each Firestore page fetch while loading fragments (0 disables)")
 	enableProductAlias = flag.Bool("enable-product-alias", false, "Enable PRODUCT alias clustering (model/SKU heuristic). Default OFF: better duplicates than false-positive merges.")
 	enableOrgNameOnly  = flag.Bool("enable-org-name-only", false, "Enable ORGANIZATION name-only clustering (shortName/label[en]). Default OFF (too many false merges).")
 	enableOrgFuzzyName = flag.Bool("enable-org-fuzzy-name", false, "Enable ORGANIZATION fuzzy-ish name clustering (normalized legalName + stub-rescue normalized label/legal). Default OFF.")
 	fixEdgesOnly       = flag.Bool("fix-edges-only", false, "Only fix/normalize edges (direction + symmetric normalization + dedup). Skips fragment dedup/merge even if duplicates are found.")
 )
+
+// Used to print a reliable resume cursor on Ctrl+C / SIGTERM and on load failures.
+// NOTE: atomic.Value must be Store()'d before first Load().
+var globalLastSeen atomic.Value // string
 
 // DuplicateCluster represents a group of fragments that are duplicates of each other
 type DuplicateCluster struct {
@@ -66,6 +76,190 @@ type Stats struct {
 	EdgesDirectionFixed int
 }
 
+// =============================================================================
+// ORGANIZATION dedup safety helpers (name-based signals are high risk)
+// =============================================================================
+
+// orgGroupishHint returns true if the fragment name/path suggests a holding/group/international brand
+// which is often a distinct entity from an operating company.
+// We intentionally do NOT include common corporate suffixes like Inc/LLC/Ltd/Company here.
+func orgGroupishHint(f *models.HorizonFragment) bool {
+	if f == nil {
+		return false
+	}
+	s := strings.ToLower(strings.TrimSpace(f.CanonicalPath)) + " " +
+		strings.ToLower(strings.TrimSpace(f.Labels["en"])) + " " +
+		strings.ToLower(strings.TrimSpace(f.Identifiers["legalName"])) + " " +
+		strings.ToLower(strings.TrimSpace(f.Identifiers["shortName"]))
+	// Group-ish tokens that frequently indicate a different legal/top-level entity.
+	toks := []string{
+		"group",
+		"holding",
+		"holdings",
+		"international",
+		"collection",
+	}
+	for _, t := range toks {
+		if strings.Contains(s, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// orgConflictingWikidataIDs checks if a set of fragments contains multiple distinct non-empty Wikidata IDs.
+// If so, we should NOT merge them (strong evidence they are different entities).
+func orgConflictingWikidataIDs(frags []*models.HorizonFragment) (conflict bool, ids []string) {
+	seen := map[string]struct{}{}
+	for _, f := range frags {
+		if f == nil || f.Type != models.FragmentTypeOrganization {
+			continue
+		}
+		qid := strings.TrimSpace(extractWikidataID(f))
+		if qid == "" {
+			continue
+		}
+		seen[qid] = struct{}{}
+	}
+	if len(seen) <= 1 {
+		return false, nil
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return true, out
+}
+
+// shouldSkipOrgNameCluster applies conservative guards for ORG clusters that are created from name-ish signals.
+func shouldSkipOrgNameCluster(matchType string, frags []*models.HorizonFragment) (bool, string) {
+	if len(frags) <= 1 {
+		return true, "too_few"
+	}
+	// Only apply to ORGANIZATION clusters.
+	for _, f := range frags {
+		if f != nil && f.Type != models.FragmentTypeOrganization {
+			return false, ""
+		}
+	}
+
+	// Never merge if there are conflicting Wikidata IDs.
+	if conflict, ids := orgConflictingWikidataIDs(frags); conflict {
+		return true, fmt.Sprintf("conflicting_wikidata_ids=%v", ids)
+	}
+
+	// For fuzzy/name-only signals, avoid "groupish" vs "non-groupish" merges unless Wikidata is identical
+	// (handled above). This prevents common false positives like:
+	//   Hyundai Motor Group vs Hyundai Motor
+	//   Casinos Austria International vs Casinos Austria
+	groupish := 0
+	nonGroupish := 0
+	for _, f := range frags {
+		if f == nil || f.Type != models.FragmentTypeOrganization {
+			continue
+		}
+		if orgGroupishHint(f) {
+			groupish++
+		} else {
+			nonGroupish++
+		}
+	}
+	if groupish > 0 && nonGroupish > 0 {
+		// Only enforce for the riskier name-derived signals.
+		switch matchType {
+		case "shortName", "labelEN", "normalizedLegal", "orgNormalizedName", "orgSlugAlias":
+			return true, fmt.Sprintf("groupish_mismatch(groupish=%d nonGroupish=%d)", groupish, nonGroupish)
+		default:
+		}
+	}
+
+	return false, ""
+}
+
+// extractOrgOrGovSlug extracts last segment slug from:
+// - /org/{iso2}/{slug}
+// - /org/{slug} (legacy)
+// - /gov/{iso2}/{slug}
+func extractOrgOrGovSlug(path string) string {
+	p := strings.TrimSpace(path)
+	if p == "" || !strings.HasPrefix(p, "/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	ns := parts[0]
+	if ns != "org" && ns != "gov" {
+		return ""
+	}
+	// /org/{slug}
+	if ns == "org" && len(parts) == 2 {
+		return strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+	// /org/{iso2}/{slug} or /gov/{iso2}/{slug}
+	if len(parts) >= 3 {
+		return strings.ToLower(strings.TrimSpace(parts[2]))
+	}
+	return ""
+}
+
+// extractLegacyOrgSlugAliases returns slug aliases from identifiers that store historical paths.
+// We only care about legacy /org/{slug} aliases (merged_paths / legacy_org_canonical_path).
+func extractLegacyOrgSlugAliases(f *models.HorizonFragment) []string {
+	if f == nil || f.Type != models.FragmentTypeOrganization || f.Identifiers == nil {
+		return nil
+	}
+	var out []string
+	for _, p := range extractAliasCanonicalPathsForDedup(f) {
+		p = strings.TrimSpace(p)
+		if !strings.HasPrefix(p, "/org/") {
+			continue
+		}
+		parts := strings.Split(strings.Trim(p, "/"), "/")
+		// Only legacy: /org/{slug}
+		if len(parts) == 2 && parts[0] == "org" {
+			slug := strings.ToLower(strings.TrimSpace(parts[1]))
+			if slug != "" {
+				out = append(out, slug)
+			}
+		}
+	}
+	return out
+}
+
+func isSafeOrgSlugAlias(slug string) bool {
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	if slug == "" {
+		return false
+	}
+	// Too long and too generic slugs are risky for cross-country merges.
+	if len(slug) > 10 {
+		return false
+	}
+	// Require at least one letter.
+	hasLetter := false
+	for _, r := range slug {
+		if (r >= 'a' && r <= 'z') || (r >= 'а' && r <= 'я') {
+			hasLetter = true
+		}
+	}
+	if !hasLetter {
+		return false
+	}
+	// Avoid a few ultra-generic aliases.
+	switch slug {
+	case "bank", "group", "holding", "holdings", "fund", "company", "corp", "inc", "llc":
+		return false
+	}
+	return true
+}
+
+func normalizeLegalKey(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
 func main() {
 	flag.Parse()
 
@@ -75,11 +269,40 @@ func main() {
 	if *dryRun {
 		*apply = false
 	}
+	if *pageSize <= 0 {
+		*pageSize = 500
+	}
+	if *pageSize > 2000 {
+		*pageSize = 2000 // safety cap
+	}
+	if *pageTimeoutSec < 0 {
+		*pageTimeoutSec = 0
+	}
 
 	ctx := context.Background()
 
 	log.Printf("=== Horizon Smart Deduplication Tool ===")
 	log.Printf("project=%s tenant=%s apply=%v typeFilter=%q", *projectID, *tenantID, *apply, *typeFilter)
+	if strings.TrimSpace(*startAfterDocID) != "" {
+		log.Printf("resume cursor: start-after=%s", strings.TrimSpace(*startAfterDocID))
+	}
+	log.Printf("pagination: page-size=%d page-timeout-s=%d", *pageSize, *pageTimeoutSec)
+
+	// Always be able to print a resume cursor even if the process is interrupted (Ctrl+C / SIGTERM).
+	globalLastSeen.Store(strings.TrimSpace(*startAfterDocID))
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		<-sigCh
+		if v := globalLastSeen.Load(); v != nil {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				log.Printf("resume cursor: start-after=%s", strings.TrimSpace(s))
+			}
+		}
+		log.Printf("FATAL: interrupted")
+		os.Exit(130)
+	}()
 
 	// Initialize Firestore
 	fsClient, err := gcp.NewFirestoreClient(ctx, *projectID)
@@ -128,6 +351,11 @@ func main() {
 	log.Printf("\n=== Step 1: Loading fragments ===")
 	fragments, err := loadAllFragments(ctx, db, *tenantID, *typeFilter)
 	if err != nil {
+		if v := globalLastSeen.Load(); v != nil {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				log.Printf("resume cursor: start-after=%s", strings.TrimSpace(s))
+			}
+		}
 		log.Fatalf("FATAL: failed to load fragments: %v", err)
 	}
 	stats.TotalFragments = len(fragments)
@@ -386,6 +614,27 @@ func main() {
 		byCanonicalPath[k] = append(byCanonicalPath[k], f)
 	}
 
+	// ORG/GOV slug indexes (for resolving legacy alias /org/{slug} → canonical /org/{iso2}/{slug} and /gov/{iso2}/{slug}).
+	// This helps catch cases like:
+	//   /org/public-investment-fund with identifiers.merged_paths="/org/pif"
+	//   should merge into /org/sa/pif and/or /gov/sa/pif even if /org/pif doesn't exist as a standalone fragment.
+	orgGovSlugIndex := make(map[string][]*models.HorizonFragment)   // slug -> fragments with /org/{iso2}/{slug} or /gov/{iso2}/{slug} (and legacy /org/{slug})
+	orgAliasSlugIndex := make(map[string][]*models.HorizonFragment) // slug -> fragments that declare alias via merged_paths / legacy_org_canonical_path (legacy /org/{slug})
+	for _, f := range fragments {
+		if f == nil || f.Type != models.FragmentTypeOrganization {
+			continue
+		}
+		if slug := extractOrgOrGovSlug(f.CanonicalPath); slug != "" {
+			orgGovSlugIndex[slug] = append(orgGovSlugIndex[slug], f)
+		}
+		for _, slug := range extractLegacyOrgSlugAliases(f) {
+			if !isSafeOrgSlugAlias(slug) {
+				continue
+			}
+			orgAliasSlugIndex[slug] = append(orgAliasSlugIndex[slug], f)
+		}
+	}
+
 	log.Printf("✓ Wikidata index: %d unique IDs", len(wikidataIndex))
 	log.Printf("✓ ShortName index: %d unique keys", len(shortNameIndex))
 	log.Printf("✓ LegalName index: %d unique keys", len(legalNameIndex))
@@ -596,6 +845,86 @@ func main() {
 	}
 	log.Printf("  Found %d aliasPath-based clusters", aliasClusters)
 
+	// Priority 0.775: ORG legacy slug aliases (/org/{slug} in merged_paths) -> canonical /org/{iso2}/{slug} or /gov/{iso2}/{slug}.
+	// This is conservative and guarded:
+	// - slug must be short-ish and not generic
+	// - legalName must not conflict across candidates
+	// - conflicting Wikidata IDs forbid merge
+	orgSlugAliasClusters := 0
+	for slug, claimers := range orgAliasSlugIndex {
+		slug = strings.ToLower(strings.TrimSpace(slug))
+		if !isSafeOrgSlugAlias(slug) {
+			continue
+		}
+		// Candidate set: anything already living under .../{slug} plus the fragments that claim this alias.
+		cands := make([]*models.HorizonFragment, 0, len(orgGovSlugIndex[slug])+len(claimers))
+		cands = append(cands, orgGovSlugIndex[slug]...)
+		cands = append(cands, claimers...)
+		if len(cands) <= 1 {
+			continue
+		}
+		// Unique by ID and skip processed.
+		seenID := map[string]struct{}{}
+		unprocessed := make([]*models.HorizonFragment, 0, len(cands))
+		for _, f := range cands {
+			if f == nil {
+				continue
+			}
+			id := strings.TrimSpace(f.ID)
+			if id == "" || processedFragmentIDs[id] {
+				continue
+			}
+			if _, ok := seenID[id]; ok {
+				continue
+			}
+			seenID[id] = struct{}{}
+			unprocessed = append(unprocessed, f)
+		}
+		if len(unprocessed) <= 1 {
+			continue
+		}
+
+		// LegalName must not conflict (ignore empties).
+		lnSet := map[string]struct{}{}
+		for _, f := range unprocessed {
+			if f == nil || f.Type != models.FragmentTypeOrganization {
+				continue
+			}
+			ln := normalizeLegalKey(f.Identifiers["legalName"])
+			if ln == "" {
+				continue
+			}
+			lnSet[ln] = struct{}{}
+		}
+		if len(lnSet) > 1 {
+			if *verbose {
+				log.Printf("  SKIP ORG cluster (orgSlugAlias): slug=%s reason=conflicting_legal_names", slug)
+			}
+			continue
+		}
+		if skip, reason := shouldSkipOrgNameCluster("orgSlugAlias", unprocessed); skip {
+			if *verbose {
+				log.Printf("  SKIP ORG cluster (orgSlugAlias): slug=%s reason=%s", slug, reason)
+			}
+			continue
+		}
+
+		cluster := &DuplicateCluster{
+			MatchType:  "orgSlugAlias",
+			MatchValue: slug,
+			Fragments:  unprocessed,
+		}
+		cluster.CanonicalID = selectCanonical(unprocessed)
+		clusters = append(clusters, cluster)
+		for _, f := range unprocessed {
+			if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
+				processedFragmentIDs[f.ID] = true
+			}
+		}
+		orgSlugAliasClusters++
+	}
+	log.Printf("  Found %d orgSlugAlias-based clusters", orgSlugAliasClusters)
+
 	// Priority 0.8: Organization path normalization (- vs _) — same type only
 	// Example: /org/riyadh_air vs /org/riyadh-air
 	orgPathNormClusters := 0
@@ -682,6 +1011,15 @@ func main() {
 				}
 			}
 			if len(unprocessed) > 1 {
+				// Extra safety for ORGANIZATION: name-only signals are risky.
+				if unprocessed[0].Type == models.FragmentTypeOrganization {
+					if skip, reason := shouldSkipOrgNameCluster("shortName", unprocessed); skip {
+						if *verbose {
+							log.Printf("  SKIP ORG cluster (shortName): key=%s reason=%s", key, reason)
+						}
+						continue
+					}
+				}
 				cluster := &DuplicateCluster{
 					MatchType:  "shortName",
 					MatchValue: key,
@@ -750,6 +1088,15 @@ func main() {
 				}
 			}
 			if len(unprocessed) > 1 {
+				// Extra safety for ORGANIZATION: label-only signals are risky.
+				if unprocessed[0].Type == models.FragmentTypeOrganization {
+					if skip, reason := shouldSkipOrgNameCluster("labelEN", unprocessed); skip {
+						if *verbose {
+							log.Printf("  SKIP ORG cluster (labelEN): key=%s reason=%s", key, reason)
+						}
+						continue
+					}
+				}
 				cluster := &DuplicateCluster{
 					MatchType:  "labelEN",
 					MatchValue: key,
@@ -834,6 +1181,15 @@ func main() {
 				if fragType == models.FragmentTypeGeoRegion {
 					continue // Don't create cluster for GEO_REGION with normalized names
 				}
+				// Extra safety for ORGANIZATION: normalized legal can collapse group vs operating company.
+				if fragType == models.FragmentTypeOrganization {
+					if skip, reason := shouldSkipOrgNameCluster("normalizedLegal", unprocessed); skip {
+						if *verbose {
+							log.Printf("  SKIP ORG cluster (normalizedLegal): key=%s reason=%s", key, reason)
+						}
+						continue
+					}
+				}
 				cluster := &DuplicateCluster{
 					MatchType:  "normalizedLegal",
 					MatchValue: key,
@@ -879,6 +1235,14 @@ func main() {
 			}
 		}
 		if high == 0 || low == 0 {
+			continue
+		}
+
+		// Extra safety: do not merge if Wikidata conflicts or groupish mismatch.
+		if skip, reason := shouldSkipOrgNameCluster("orgNormalizedName", unprocessed); skip {
+			if *verbose {
+				log.Printf("  SKIP ORG cluster (orgNormalizedName): key=%s reason=%s", key, reason)
+			}
 			continue
 		}
 
@@ -1143,6 +1507,13 @@ func main() {
 FIX_EDGES:
 	// Step 5: Fix edge directions (reverse edges that point in wrong direction)
 	// IMPORTANT: This can create duplicates; we run symmetric normalization + dedup afterwards.
+	if *skipEdgePass {
+		log.Printf("\n=== Step 5: Fixing edge directions ===")
+		log.Printf("SKIPPED (--skip-edge-pass): not modifying edges globally")
+		log.Printf("\n=== Step 6: Normalizing & deduplicating edges ===")
+		log.Printf("SKIPPED (--skip-edge-pass): not modifying edges globally")
+		goto SUMMARY
+	}
 	log.Printf("\n=== Step 5: Fixing edge directions ===")
 	if *apply {
 		fixed, err := fixEdgeDirections(ctx, db, edgesRepo, fragmentTypes, *tenantID)
@@ -1180,6 +1551,7 @@ FIX_EDGES:
 	}
 
 	// Print summary
+SUMMARY:
 	log.Printf("\n=== Summary ===")
 	log.Printf("Total fragments scanned: %d", stats.TotalFragments)
 	log.Printf("Duplicate clusters found: %d", stats.ClustersFound)
@@ -1197,41 +1569,67 @@ FIX_EDGES:
 
 func loadAllFragments(ctx context.Context, db *firestore.Client, tenantID, typeFilter string) ([]*models.HorizonFragment, error) {
 	col := db.Collection("horizon_fragments")
-	q := col.Where("tenantId", "==", tenantID)
-
+	base := col.Where("tenantId", "==", tenantID)
 	if typeFilter != "" {
-		q = q.Where("type", "==", typeFilter)
+		base = base.Where("type", "==", typeFilter)
 	}
-
-	iter := q.Documents(ctx)
-	defer iter.Stop()
+	// Pagination by DocumentID to avoid Firestore query timeouts.
+	base = base.OrderBy(firestore.DocumentID, firestore.Asc)
 
 	var fragments []*models.HorizonFragment
 	loadedIDs := make(map[string]bool)
 	count := 0
+
+	lastSeen := strings.TrimSpace(*startAfterDocID)
 	for {
-		doc, err := iter.Next()
-		if err == iterator.Done {
-			break
+		pageQ := base.Limit(*pageSize)
+		if lastSeen != "" {
+			pageQ = pageQ.StartAfter(lastSeen)
+		}
+
+		pageCtx := ctx
+		var cancel context.CancelFunc
+		if *pageTimeoutSec > 0 {
+			pageCtx, cancel = context.WithTimeout(ctx, time.Duration(*pageTimeoutSec)*time.Second)
+		}
+		docs, err := getDocsWithRetry(pageCtx, pageQ, 3)
+		if cancel != nil {
+			cancel()
 		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to iterate fragments: %w", err)
+			globalLastSeen.Store(lastSeen)
+			return nil, fmt.Errorf("failed to fetch fragments page (start-after=%s): %w", lastSeen, err)
+		}
+		if len(docs) == 0 {
+			break
 		}
 
-		var f models.HorizonFragment
-		if err := doc.DataTo(&f); err != nil {
-			log.Printf("WARNING: failed to parse fragment %s: %v", doc.Ref.ID, err)
-			continue
-		}
-		if strings.TrimSpace(f.ID) == "" {
-			f.ID = doc.Ref.ID
-		}
-		fragments = append(fragments, &f)
-		loadedIDs[f.ID] = true
-		count++
+		for _, doc := range docs {
+			if doc == nil {
+				continue
+			}
+			lastSeen = doc.Ref.ID
+			globalLastSeen.Store(lastSeen)
 
-		if count%1000 == 0 {
-			log.Printf("  ... loaded %d fragments", count)
+			var f models.HorizonFragment
+			if err := doc.DataTo(&f); err != nil {
+				log.Printf("WARNING: failed to parse fragment %s: %v", doc.Ref.ID, err)
+				continue
+			}
+			if strings.TrimSpace(f.ID) == "" {
+				f.ID = doc.Ref.ID
+			}
+			fragments = append(fragments, &f)
+			loadedIDs[f.ID] = true
+			count++
+
+			if count%1000 == 0 {
+				log.Printf("  ... loaded %d fragments", count)
+			}
+		}
+
+		if len(docs) < *pageSize {
+			break
 		}
 	}
 
@@ -1635,6 +2033,22 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 
 		// For ORGANIZATION: prefer higher-quality canonical nodes over low-signal LLM stubs.
 		if f.Type == models.FragmentTypeOrganization {
+			// Prefer canonical /org/{iso2}/{slug} over legacy /org/{slug} and /gov/{iso2}/{slug}.
+			// Rationale: /gov/* is a different namespace and frequently appears as an ingestion artifact for org-like entities.
+			// We can merge data from /gov into /org, but the stable canonical for ORG should live under /org/*.
+			cp := strings.TrimSpace(f.CanonicalPath)
+			if strings.HasPrefix(cp, "/org/") {
+				parts := strings.Split(strings.Trim(cp, "/"), "/")
+				if len(parts) >= 3 {
+					score += 60 // /org/{iso2}/{slug} (strong preference: stable canonical namespace)
+				} else if len(parts) == 2 {
+					score += 0 // legacy /org/{slug} (deprioritize; merge into ISO2 canonical if available)
+				}
+			} else if strings.HasPrefix(cp, "/gov/") {
+				// Slight penalty — still can win if much richer, but usually should merge into /org canonical.
+				score -= 5
+			}
+
 			switch strings.ToUpper(strings.TrimSpace(f.Governance.Status)) {
 			case "ACTIVE":
 				score += 40
@@ -1855,6 +2269,84 @@ func fixGeoPath(path string) string {
 func mergeFragmentData(target, source *models.HorizonFragment) bool {
 	changed := false
 
+	// Helper: decide which MetricValue to keep for the same metric key.
+	// Policy (best-effort):
+	// - prefer higher confidence
+	// - then prefer newer observedAt (if present)
+	// - then prefer richer provenance (more sourceIds)
+	// - then prefer non-empty unit
+	// - finally prefer non-zero value (helps keep "real" metrics when the other is a stub)
+	chooseMetric := func(cur, in models.MetricValue) (models.MetricValue, bool) {
+		curUnit := ""
+		inUnit := ""
+		if cur.Unit != nil {
+			curUnit = strings.TrimSpace(*cur.Unit)
+		}
+		if in.Unit != nil {
+			inUnit = strings.TrimSpace(*in.Unit)
+		}
+		// If current is "empty", take incoming.
+		if cur.Confidence <= 0 && cur.Value == 0 && curUnit == "" && len(cur.Provenance.SourceIDs) == 0 && cur.ObservedAt.IsZero() {
+			return in, true
+		}
+		// If incoming is empty, keep current.
+		if in.Confidence <= 0 && in.Value == 0 && inUnit == "" && len(in.Provenance.SourceIDs) == 0 && in.ObservedAt.IsZero() {
+			return cur, false
+		}
+
+		// Confidence wins.
+		if in.Confidence > cur.Confidence+1e-9 {
+			return in, true
+		}
+		if cur.Confidence > in.Confidence+1e-9 {
+			return cur, false
+		}
+
+		// More recent observation wins (if both present).
+		if !cur.ObservedAt.IsZero() || !in.ObservedAt.IsZero() {
+			if cur.ObservedAt.IsZero() && !in.ObservedAt.IsZero() {
+				return in, true
+			}
+			if !cur.ObservedAt.IsZero() && in.ObservedAt.IsZero() {
+				return cur, false
+			}
+			if in.ObservedAt.After(cur.ObservedAt) {
+				return in, true
+			}
+			if cur.ObservedAt.After(in.ObservedAt) {
+				return cur, false
+			}
+		}
+
+		// Provenance density wins.
+		curN := 0
+		inN := 0
+		if cur.Provenance.SourceIDs != nil {
+			curN = len(cur.Provenance.SourceIDs)
+		}
+		if in.Provenance.SourceIDs != nil {
+			inN = len(in.Provenance.SourceIDs)
+		}
+		if inN > curN {
+			return in, true
+		}
+		if curN > inN {
+			return cur, false
+		}
+
+		// Unit presence wins.
+		if curUnit == "" && inUnit != "" {
+			return in, true
+		}
+
+		// Non-zero value wins (very last-resort).
+		if cur.Value == 0 && in.Value != 0 {
+			return in, true
+		}
+
+		return cur, false
+	}
+
 	// Merge Labels (fill missing)
 	if target.Labels == nil {
 		target.Labels = make(map[string]string)
@@ -1946,13 +2438,40 @@ func mergeFragmentData(target, source *models.HorizonFragment) bool {
 		}
 	}
 
-	// Track merged canonical paths
-	if target.Identifiers["merged_paths"] == "" {
-		target.Identifiers["merged_paths"] = source.CanonicalPath
-	} else if !strings.Contains(target.Identifiers["merged_paths"], source.CanonicalPath) {
-		target.Identifiers["merged_paths"] += "," + source.CanonicalPath
+	// Merge State metrics: union keys, prefer "richer" per-key MetricValue.
+	if len(source.State) > 0 {
+		if target.State == nil {
+			target.State = make(map[string]models.MetricValue)
+		}
+		for k, mv := range source.State {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				continue
+			}
+			cur, ok := target.State[key]
+			if !ok {
+				target.State[key] = mv
+				changed = true
+				continue
+			}
+			chosen, did := chooseMetric(cur, mv)
+			if did {
+				target.State[key] = chosen
+				changed = true
+			}
+		}
 	}
-	changed = true
+
+	// Track merged canonical paths
+	if strings.TrimSpace(source.CanonicalPath) != "" {
+		if target.Identifiers["merged_paths"] == "" {
+			target.Identifiers["merged_paths"] = source.CanonicalPath
+			changed = true
+		} else if !strings.Contains(target.Identifiers["merged_paths"], source.CanonicalPath) {
+			target.Identifiers["merged_paths"] += "," + source.CanonicalPath
+			changed = true
+		}
+	}
 
 	return changed
 }
@@ -1991,6 +2510,53 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		// Check if edge already exists
 		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, ns, nt, edge.Type)
 		if err == nil && existing != nil {
+			// Merge edge metrics/qualifiers into the existing edge before deleting to avoid losing data.
+			merged := false
+			if existing.Metrics == nil && edge.Metrics != nil {
+				existing.Metrics = map[string]models.MetricValue{}
+			}
+			if edge.Metrics != nil {
+				if existing.Metrics == nil {
+					existing.Metrics = map[string]models.MetricValue{}
+				}
+				for mk, mv := range edge.Metrics {
+					kk := strings.TrimSpace(mk)
+					if kk == "" {
+						continue
+					}
+					if cur, ok := existing.Metrics[kk]; ok {
+						// Prefer higher confidence; then more recent observedAt.
+						// (Keep conservative: if equal, don't churn.)
+						if mv.Confidence > cur.Confidence+1e-9 || (!mv.ObservedAt.IsZero() && cur.ObservedAt.IsZero()) || mv.ObservedAt.After(cur.ObservedAt) {
+							existing.Metrics[kk] = mv
+							merged = true
+						}
+					} else {
+						existing.Metrics[kk] = mv
+						merged = true
+					}
+				}
+			}
+			if edge.Qualifiers != nil {
+				if existing.Qualifiers == nil {
+					existing.Qualifiers = map[string]interface{}{}
+				}
+				for qk, qv := range edge.Qualifiers {
+					kk := strings.TrimSpace(qk)
+					if kk == "" {
+						continue
+					}
+					if _, ok := existing.Qualifiers[kk]; ok {
+						continue // don't overwrite
+					}
+					existing.Qualifiers[kk] = qv
+					merged = true
+				}
+			}
+			// If we merged anything, update existing edge.
+			if merged {
+				_ = edgesRepo.Update(ctx, existing) // best-effort
+			}
 			if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
 				deleted++
 			}
@@ -2034,6 +2600,47 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		// Check if edge already exists
 		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, ns, nt, edge.Type)
 		if err == nil && existing != nil {
+			// Merge edge metrics/qualifiers into the existing edge before deleting to avoid losing data.
+			merged := false
+			if edge.Metrics != nil {
+				if existing.Metrics == nil {
+					existing.Metrics = map[string]models.MetricValue{}
+				}
+				for mk, mv := range edge.Metrics {
+					kk := strings.TrimSpace(mk)
+					if kk == "" {
+						continue
+					}
+					if cur, ok := existing.Metrics[kk]; ok {
+						if mv.Confidence > cur.Confidence+1e-9 || (!mv.ObservedAt.IsZero() && cur.ObservedAt.IsZero()) || mv.ObservedAt.After(cur.ObservedAt) {
+							existing.Metrics[kk] = mv
+							merged = true
+						}
+					} else {
+						existing.Metrics[kk] = mv
+						merged = true
+					}
+				}
+			}
+			if edge.Qualifiers != nil {
+				if existing.Qualifiers == nil {
+					existing.Qualifiers = map[string]interface{}{}
+				}
+				for qk, qv := range edge.Qualifiers {
+					kk := strings.TrimSpace(qk)
+					if kk == "" {
+						continue
+					}
+					if _, ok := existing.Qualifiers[kk]; ok {
+						continue
+					}
+					existing.Qualifiers[kk] = qv
+					merged = true
+				}
+			}
+			if merged {
+				_ = edgesRepo.Update(ctx, existing) // best-effort
+			}
 			if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
 				deleted++
 			}
@@ -2051,15 +2658,177 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 	return reassigned, deleted, nil
 }
 
+// mergeEdgeRich merges src edge metrics/qualifiers into dst, preferring richer MetricValues per-key.
+// It returns true if dst was modified.
+func mergeEdgeRich(dst, src *models.DependencyEdge) bool {
+	if dst == nil || src == nil {
+		return false
+	}
+	changed := false
+
+	// Helper: decide which MetricValue to keep for the same metric key (richer wins).
+	chooseMetric := func(cur, in models.MetricValue) (models.MetricValue, bool) {
+		curUnit := ""
+		inUnit := ""
+		if cur.Unit != nil {
+			curUnit = strings.TrimSpace(*cur.Unit)
+		}
+		if in.Unit != nil {
+			inUnit = strings.TrimSpace(*in.Unit)
+		}
+		// If current is "empty", take incoming.
+		if cur.Confidence <= 0 && cur.Value == 0 && curUnit == "" && len(cur.Provenance.SourceIDs) == 0 && cur.ObservedAt.IsZero() {
+			return in, true
+		}
+		// If incoming is empty, keep current.
+		if in.Confidence <= 0 && in.Value == 0 && inUnit == "" && len(in.Provenance.SourceIDs) == 0 && in.ObservedAt.IsZero() {
+			return cur, false
+		}
+
+		// Confidence wins.
+		if in.Confidence > cur.Confidence+1e-9 {
+			return in, true
+		}
+		if cur.Confidence > in.Confidence+1e-9 {
+			return cur, false
+		}
+
+		// More recent observation wins (if both present).
+		if !cur.ObservedAt.IsZero() || !in.ObservedAt.IsZero() {
+			if cur.ObservedAt.IsZero() && !in.ObservedAt.IsZero() {
+				return in, true
+			}
+			if !cur.ObservedAt.IsZero() && in.ObservedAt.IsZero() {
+				return cur, false
+			}
+			if in.ObservedAt.After(cur.ObservedAt) {
+				return in, true
+			}
+			if cur.ObservedAt.After(in.ObservedAt) {
+				return cur, false
+			}
+		}
+
+		// Provenance density wins.
+		curN := 0
+		inN := 0
+		if cur.Provenance.SourceIDs != nil {
+			curN = len(cur.Provenance.SourceIDs)
+		}
+		if in.Provenance.SourceIDs != nil {
+			inN = len(in.Provenance.SourceIDs)
+		}
+		if inN > curN {
+			return in, true
+		}
+		if curN > inN {
+			return cur, false
+		}
+
+		// Unit presence wins.
+		if curUnit == "" && inUnit != "" {
+			return in, true
+		}
+
+		// Non-zero value wins (very last-resort).
+		if cur.Value == 0 && in.Value != 0 {
+			return in, true
+		}
+
+		return cur, false
+	}
+
+	// Metrics: union keys, prefer richer per-key.
+	if len(src.Metrics) > 0 {
+		if dst.Metrics == nil {
+			dst.Metrics = map[string]models.MetricValue{}
+			changed = true
+		}
+		for k, mv := range src.Metrics {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				continue
+			}
+			cur, ok := dst.Metrics[key]
+			if !ok {
+				dst.Metrics[key] = mv
+				changed = true
+				continue
+			}
+			chosen, did := chooseMetric(cur, mv)
+			if did {
+				dst.Metrics[key] = chosen
+				changed = true
+				continue
+			}
+			// Even if we didn't replace, try to union provenance SourceIDs to avoid losing evidence.
+			if len(mv.Provenance.SourceIDs) > 0 && len(cur.Provenance.SourceIDs) > 0 {
+				seen := map[string]struct{}{}
+				out := make([]string, 0, len(cur.Provenance.SourceIDs)+len(mv.Provenance.SourceIDs))
+				for _, s := range cur.Provenance.SourceIDs {
+					s = strings.TrimSpace(s)
+					if s == "" {
+						continue
+					}
+					if _, ok := seen[s]; ok {
+						continue
+					}
+					seen[s] = struct{}{}
+					out = append(out, s)
+				}
+				for _, s := range mv.Provenance.SourceIDs {
+					s = strings.TrimSpace(s)
+					if s == "" {
+						continue
+					}
+					if _, ok := seen[s]; ok {
+						continue
+					}
+					seen[s] = struct{}{}
+					out = append(out, s)
+				}
+				if len(out) > len(cur.Provenance.SourceIDs) {
+					cur.Provenance.SourceIDs = out
+					dst.Metrics[key] = cur
+					changed = true
+				}
+			}
+		}
+	}
+
+	// Qualifiers: union keys, do not overwrite.
+	if len(src.Qualifiers) > 0 {
+		if dst.Qualifiers == nil {
+			dst.Qualifiers = map[string]interface{}{}
+			changed = true
+		}
+		for k, v := range src.Qualifiers {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				continue
+			}
+			if _, ok := dst.Qualifiers[key]; ok {
+				continue
+			}
+			dst.Qualifiers[key] = v
+			changed = true
+		}
+	}
+
+	return changed
+}
+
 // deduplicateEdges removes duplicate edges.
 // IMPORTANT: uses symmetric-aware EdgeKey so symmetric relations are deduplicated
 // even if stored as A->B and B->A.
 func deduplicateEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, tenantID string) (int, error) {
 	// Streamed dedup (no need to store all edges).
 	// Keep the earliest-created edge for each EdgeKey; delete the rest.
+	// IMPORTANT: before deleting, merge metrics/qualifiers into the kept edge to avoid losing rich data.
 	const pageSize = 500
 	bestByKey := make(map[string]*models.DependencyEdge) // key -> best edge
 	toDelete := make([]string, 0, 1024)
+	toUpdate := make(map[string]*models.DependencyEdge) // edgeID -> merged edge (kept)
 
 	var lastDoc *firestore.DocumentSnapshot
 	for {
@@ -2111,12 +2880,21 @@ func deduplicateEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo
 			}
 
 			if !curAt.IsZero() && (bestAt.IsZero() || curAt.Before(bestAt)) {
-				// Current is better (older) → delete previous best, keep current
+				// Current is better (older) → merge previous best into current, delete previous best, keep current
+				if mergeEdgeRich(&edge, best) {
+					cpy := edge
+					bestByKey[key] = &cpy
+					toUpdate[cpy.ID] = &cpy
+				} else {
+					cpy := edge
+					bestByKey[key] = &cpy
+				}
 				toDelete = append(toDelete, best.ID)
-				cpy := edge
-				bestByKey[key] = &cpy
 			} else {
-				// Current is duplicate → delete current
+				// Current is duplicate → merge current into best, delete current
+				if mergeEdgeRich(best, &edge) {
+					toUpdate[best.ID] = best
+				}
 				toDelete = append(toDelete, edge.ID)
 			}
 		}
@@ -2125,6 +2903,14 @@ func deduplicateEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo
 		if len(docs) < pageSize {
 			break
 		}
+	}
+
+	// Persist merged kept edges before deletion (best-effort; failures should not block dedup).
+	for _, e := range toUpdate {
+		if e == nil || strings.TrimSpace(e.ID) == "" {
+			continue
+		}
+		_ = edgesRepo.Update(ctx, e)
 	}
 
 	deleted := 0
@@ -2214,9 +3000,7 @@ func normalizeLegalName(name string) string {
 	}
 
 	for _, suffix := range suffixes {
-		if strings.HasSuffix(name, suffix) {
-			name = strings.TrimSuffix(name, suffix)
-		}
+		name = strings.TrimSuffix(name, suffix)
 	}
 
 	// Remove punctuation and extra spaces

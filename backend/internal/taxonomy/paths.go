@@ -45,7 +45,7 @@ func transliterateCyrillicToLatin(s string) string {
 
 // ValidCanonicalPathNamespace defines allowed namespace prefixes for canonical paths
 var ValidCanonicalPathNamespace = map[string]bool{
-	"org":     true,
+	"org": true,
 	// Government / state bodies (jurisdiction-scoped; prevents cross-country name collisions).
 	"gov":     true,
 	"person":  true,
@@ -313,18 +313,26 @@ func ProgramCanonicalPath(jurisdiction string, programLabel string) string {
 }
 
 // MarketCanonicalPath returns a Horizon-canonical market path.
-// Preferred format (when domain is known): /market/{domainSlug}/{marketSlug}
-// Fallback format: /market/{marketSlug}
-func MarketCanonicalPath(domain string, marketLabel string) string {
-	dSlug := Slugify(domain)
+// Canonical format: /market/{geo}/{marketSlug}
+// - geo: ISO3166-1 alpha2 lowercase (2 chars) or "global"
+// - marketSlug: lowercase slug derived from market label
+//
+// NOTE:
+// - We intentionally default geo to "global" if missing/invalid to keep ingestion non-blocking.
+// - Legacy market paths (/market/{slug} or /market/{domain}/{slug}) may still exist; prefer this for NEW markets.
+func MarketCanonicalPath(geo string, marketLabel string) string {
+	g := strings.ToLower(strings.TrimSpace(geo))
+	if g == "" {
+		g = "global"
+	}
+	if g != "global" && !reCountryAlpha2.MatchString(g) {
+		g = "global"
+	}
 	mSlug := Slugify(marketLabel)
 	if mSlug == "" {
 		return ""
 	}
-	if dSlug == "" {
-		return JoinPath("market", mSlug)
-	}
-	return JoinPath("market", dSlug, mSlug)
+	return JoinPath("market", g, mSlug)
 }
 
 // EntityCanonicalPath returns a Horizon-first canonical path for an ontology entity.
@@ -353,7 +361,7 @@ func EntityCanonicalPath(entityType string, canonicalName string) string {
 	case "Program":
 		return ProgramCanonicalPath("", canonicalName)
 	case "Market":
-		return MarketCanonicalPath("", canonicalName)
+		return MarketCanonicalPath("global", canonicalName)
 	case "Location":
 		// We cannot canonicalize a location without at least ISO3166-1 country code.
 		// Location canonicalization should be done via GeoCanonicalPath(country, admin1, city).

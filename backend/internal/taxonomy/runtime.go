@@ -58,13 +58,20 @@ type RuntimeTaxonomy struct {
 	AllowedEdgeModalities map[string]struct{} // "actual", "projected", "historical", "potential"
 
 	// Service taxonomy (/product/service/{domain}/{subdomain}/{slug})
-	AllowedServiceDomains    map[string]struct{}   // "it", "financial", "legal", etc.
-	AllowedServiceSubdomains map[string][]string   // domain -> subdomains
+	AllowedServiceDomains    map[string]struct{}    // "it", "financial", "legal", etc.
+	AllowedServiceSubdomains map[string][]string    // domain -> subdomains
 	KnownServices            map[string]ServiceSpec // "custom-software-development" -> spec
-	ServiceSynonyms          map[string]string     // "software development" -> "custom-software-development"
+	ServiceSynonyms          map[string]string      // "software development" -> "custom-software-development"
 
 	// Optional: product models (for specific SKU/model tracking)
 	KnownProductModels map[string]ProductModelSpec // "cat-390f" -> spec
+
+	// --- Market segment normalization (Firestore-backed dictionary) ---
+	SegmentChannelDomains   map[string]struct{}        // domain values treated as "channel" (b2b/b2c/public-sector/etc)
+	SegmentDomainAliases    map[string]string          // domain -> normalized domain (e.g. "gov" -> "public-sector")
+	SegmentVerticalAliases  map[string]string          // vertical -> normalized vertical (e.g. "retail-banking" -> "banking")
+	SegmentVerticalFamilies map[string]string          // vertical -> normalized domain (family), used when domain is channel-like
+	SegmentNormRules        map[string]SegmentNormRule // explicit overrides keyed by "/segment/{domain}/{vertical}"
 }
 
 // SignalTypeSpec defines a signal type specification.
@@ -98,6 +105,9 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"DEPENDS_ON":      {},
 	"TRANSFORMS_INTO": {},
 	"EXTRACTS_FROM":   {}, // FACILITY → DEPOSIT
+	// Market participation
+	"PARTICIPATES_IN": {},
+	"DOMINATES":       {},
 	// Governance / org-person
 	"MANAGES":         {},
 	"CONTROLS":        {},

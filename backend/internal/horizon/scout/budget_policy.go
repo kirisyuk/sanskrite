@@ -12,8 +12,8 @@ type BudgetPolicy struct {
 	Enabled bool
 
 	// USD budgets (daily)
-	CascadeDailyMaxUSD float64 // default 0.50
-	LensDailyMaxUSD    float64 // default 4.00
+	CascadeDailyMaxUSD float64 // default 1.00
+	LensDailyMaxUSD    float64 // default 8.00
 
 	// Token budgets (daily). These are enforced as fallback safety even if cost attribution fails.
 	// Default values are derived from a conservative pricing envelope (gemini-3-flash-preview output $3/1M).
@@ -23,9 +23,9 @@ type BudgetPolicy struct {
 
 func DefaultBudgetPolicy() BudgetPolicy {
 	p := BudgetPolicy{
-		Enabled:               true,
-		CascadeDailyMaxUSD:    0.50,
-		LensDailyMaxUSD:       4.00,
+		Enabled:                     true,
+		CascadeDailyMaxUSD:          1.00,
+		LensDailyMaxUSD:             8.00,
 		CascadeDailyMaxOutputTokens: 0,
 		LensDailyMaxOutputTokens:    0,
 	}
@@ -46,8 +46,8 @@ func DefaultBudgetPolicy() BudgetPolicy {
 //
 // Env vars:
 // - HORIZON_BUDGETS_ENABLED (default "1")
-// - HORIZON_CASCADE_DAILY_MAX_USD (default 0.50)
-// - HORIZON_LENS_DAILY_MAX_USD (default 4.00)
+// - HORIZON_CASCADE_DAILY_MAX_USD (default 1.00)
+// - HORIZON_LENS_DAILY_MAX_USD (default 8.00)
 // - HORIZON_CASCADE_DAILY_MAX_OUTPUT_TOKENS (default derived)
 // - HORIZON_LENS_DAILY_MAX_OUTPUT_TOKENS (default derived)
 func BudgetPolicyFromEnv() BudgetPolicy {
@@ -88,5 +88,3 @@ func BudgetPolicyFromEnv() BudgetPolicy {
 	}
 	return p
 }
-
-

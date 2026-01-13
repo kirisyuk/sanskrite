@@ -8,7 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
 import { HorizonOnDemandDependencyResolverModal, type HorizonOnDemandContext } from './HorizonOnDemandDependencyResolverModal';
-import { RISK_SEGMENTS, RiskSegmentIcon, clamp01, computeRiskSegments, formatRiskLevel, segmentForMetricBaseKey } from '../lib/riskShield';
+import { RISK_SEGMENTS, RiskSegmentIcon, segmentForMetricBaseKey } from '../lib/riskShield';
 
 interface ObjectInspectorProps {
   nodeId: string | null;
@@ -42,7 +42,6 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   }, []);
 
   const [fragment, setFragment] = React.useState<any>(null);
-  const [entity, setEntity] = React.useState<any>(null);
   const [edge, setEdge] = React.useState<any>(null);
   const [sourceFragment, setSourceFragment] = React.useState<any>(null);
   const [targetFragment, setTargetFragment] = React.useState<any>(null);
@@ -57,8 +56,6 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   const [nodeExplainText, setNodeExplainText] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [ensuring, setEnsuring] = React.useState(false);
-  const [enriching, setEnriching] = React.useState(false);
   const [productIOLoading, setProductIOLoading] = React.useState(false);
   const [productIOError, setProductIOError] = React.useState<string | null>(null);
   const [productIOResult, setProductIOResult] = React.useState<{ nodes: number; edges: number } | null>(null);
@@ -178,11 +175,10 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     return `rgba(${r},${g},${b},${a})`;
   }, []);
 
-  // Load fragment and entity data when nodeId changes
+  // Load fragment data when nodeId changes
   React.useEffect(() => {
     if (!nodeId) {
       setFragment(null);
-      setEntity(null);
       setError(null);
       setNodeExplainError(null);
       setNodeExplainText(null);
@@ -192,7 +188,6 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     // Reset node-scoped UI state immediately on node switch,
     // so we don't show the previous node's details while the new one loads.
     setFragment(null);
-    setEntity(null);
     setError(null);
     setNodeExplainError(null);
     setNodeExplainText(null);
@@ -200,8 +195,6 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     setProductIOError(null);
     setProductIOResult(null);
     setProductIOLoading(false);
-    setEnsuring(false);
-    setEnriching(false);
 
     const loadData = async () => {
       setLoading(true);
@@ -219,15 +212,6 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
         // Load fragment
         const fragmentData = await api.getHorizonFragment(fragmentId);
         setFragment(fragmentData);
-
-        // Try to load linked entity
-        try {
-          const entityData = await api.getFragmentEntity(fragmentId);
-          setEntity(entityData);
-        } catch (err) {
-          // Entity might not exist, that's okay
-          setEntity(null);
-        }
       } catch (err: any) {
         console.error('[ObjectInspector] Failed to load data', err);
         setError(err.response?.data?.error || err.message || 'Failed to load data');
@@ -908,6 +892,49 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     [copyToClipboard],
   );
 
+  const FieldBlock: React.FC<{ label: string; value?: React.ReactNode; copyText?: string }> = React.useCallback(
+    ({ label, value, copyText }) => {
+      if (!value) return null;
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{label}</div>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-heading)', minWidth: 0, overflowWrap: 'anywhere' }}>
+              {value}
+            </div>
+            {copyText && (
+              <button
+                type="button"
+                onClick={() => void copyToClipboard(copyText)}
+                title="Copy"
+                aria-label="Copy"
+                style={{
+                  flexShrink: 0,
+                  width: 28,
+                  height: 28,
+                  borderRadius: 10,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-tertiary)',
+                  color: 'var(--text-secondary-strong)',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M9 9h10v10H9z" />
+                  <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    },
+    [copyToClipboard],
+  );
+
   const Chip: React.FC<{ children: React.ReactNode; tone?: 'neutral' | 'info' | 'danger' }> = React.useCallback(
     ({ children, tone = 'neutral' }) => {
       const bg =
@@ -1330,110 +1357,31 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               <div style={{ fontSize: 14, fontWeight: 900, color: 'var(--text-heading)', lineHeight: 1.25 }}>
                 {edgeId ? 'Relationship' : nodeDisplayName}
               </div>
-              <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {edgeId ? (
-                  <>
-                    <Chip tone="info">
-                      <span style={{ width: 8, height: 8, borderRadius: 99, background: edgeStroke }} />
-                      {edgeCaption}
-                    </Chip>
-                    {edgeTypeRaw && <Chip>{edgeTypeRaw}</Chip>}
-                  </>
-                ) : (
-                  <>
-                    {nodeType && (
-                      <AccentChip accent={nodeAccent}>
-                        <HorizonNodeIcon type={nodeType} color={nodeAccent} size={14} />
-                        {nodeTypeHuman}
-                      </AccentChip>
-                    )}
-                    {nodeStatus && <Chip>{nodeStatus}</Chip>}
-                    {(() => {
-                      const cp = String(nodeCanonicalPath || '').trim();
-                      const canPin = Boolean(lensId && cp);
-                      const pinned = lensScopePinned === null ? Boolean((nodeData as any)?.pinnedToScope) : lensScopePinned;
-                      if (!canPin) return null;
-                      return (
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            // Prefer node-provided callback (keeps graph + scope preview in sync).
-                            const cb = (nodeData as any)?.onTogglePin as
-                              | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
-                              | undefined;
-                            if (cb) {
-                              cb({ fragmentId: nodeData?.fragmentId, canonicalPath: cp, nextPinned: !pinned });
-                              setLensScopePinned(!pinned);
-                              return;
-                            }
-
-                            // Fallback: update lens scope directly.
-                            if (!lensId) return;
-                            setLensScopePinned(!pinned);
-                            try {
-                              const lens = await api.getHorizonLens(lensId);
-                              const current: string[] = Array.isArray(lens?.scope)
-                                ? lens.scope.map((s: any) => String(s || '').trim()).filter(Boolean)
-                                : [];
-                              const has = current.includes(cp);
-                              const next = !pinned ? (has ? current : [...current, cp]) : current.filter((x) => x !== cp);
-                              await api.updateHorizonLens(lensId, {
-                                tenantId: lens.tenantId,
-                                projectId: lens.projectId,
-                                name: lens.name,
-                                scope: next,
-                                viewConfig: lens.viewConfig,
-                                alertConfig: lens.alertConfig,
-                                status: lens.status,
-                                scopeFragments: lens.scopeFragments,
-                                resolvedQueries: lens.resolvedQueries,
-                                lastResolved: lens.lastResolved,
-                              });
-                            } catch {
-                              // Re-sync (best-effort)
-                              try {
-                                const lens = await api.getHorizonLens(lensId);
-                                const scope = Array.isArray(lens?.scope)
-                                  ? lens.scope.map((s: any) => String(s || '').trim()).filter(Boolean)
-                                  : [];
-                                setLensScopePinned(scope.includes(cp));
-                              } catch {
-                                // ignore
-                              }
-                            }
-                          }}
-                          title={pinned ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
-                          aria-label={pinned ? 'Unpin from scope' : 'Pin to scope'}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            padding: '4px 8px',
-                            borderRadius: 999,
-                            border: `1px solid ${pinned ? hexToRgba(nodeAccent, theme === 'dark' ? 0.42 : 0.28) : 'var(--border-subtle)'}`,
-                            background: pinned ? hexToRgba(nodeAccent, theme === 'dark' ? 0.18 : 0.12) : 'var(--white-10)',
-                            color: pinned ? 'var(--text-heading)' : 'var(--text-secondary-strong)',
-                            fontSize: 11,
-                            fontWeight: 800,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <span style={{ color: pinned ? nodeAccent : 'var(--text-secondary-strong)', display: 'inline-flex' }}>
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <line x1="12" y1="17" x2="12" y2="22" />
-                              <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-                            </svg>
-                          </span>
-                          {pinned ? 'Pinned' : 'Pin'}
-                        </button>
-                      );
-                    })()}
-                  </>
-                )}
-              </div>
-              {!edgeId && nodeCanonicalPath && (
-                <div style={{ marginTop: 8 }}>
-                  <KV k="Canonical path" v={<span style={mono}>{nodeCanonicalPath}</span>} copyText={nodeCanonicalPath} />
+              {edgeId && (
+                <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  <Chip tone="info">
+                    <span style={{ width: 8, height: 8, borderRadius: 99, background: edgeStroke }} />
+                    {edgeCaption}
+                  </Chip>
+                  {edgeTypeRaw && <Chip>{edgeTypeRaw}</Chip>}
+                </div>
+              )}
+              {!edgeId && (
+                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {nodeCanonicalPath && (
+                    <FieldBlock label="Canonical path" value={<span style={mono}>{nodeCanonicalPath}</span>} copyText={nodeCanonicalPath} />
+                  )}
+                  {nodeType && (
+                    <FieldBlock
+                      label="Type"
+                      value={
+                        <AccentChip accent={nodeAccent}>
+                          <HorizonNodeIcon type={nodeType} color={nodeAccent} size={14} />
+                          {nodeTypeHuman}
+                        </AccentChip>
+                      }
+                    />
+                  )}
                 </div>
               )}
             </div>
@@ -1840,7 +1788,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             </Disclosure>
           )}
 
-          <Disclosure title="Technical" subtitle="IDs & raw fields">
+          <Disclosure title="Technical" subtitle="IDs">
             <KV k="Edge ID" v={<span style={mono}>{edgeId}</span>} copyText={edgeId} />
             {edgeData?.lensItemId && <KV k="Lens item" v={<span style={mono}>{edgeData.lensItemId}</span>} copyText={edgeData.lensItemId} />}
             {(edge?.id && edge?.id !== edgeId) && <KV k="Dependency edge" v={<span style={mono}>{edge.id}</span>} copyText={edge.id} />}
@@ -1866,118 +1814,187 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       {/* Node */}
       {nodeId && (
         <>
-          <SectionCard title="Context">
-            {(nodeData as any)?.visibleNeighborNodes && (
+          {/* Overview: primary business classification should be visible immediately (not hidden in disclosures). */}
+          {canUseLoadedFragment && fragment && (String((fragment as any)?.type || '').toUpperCase() === 'ORGANIZATION' || String((fragment as any)?.type || '').toUpperCase() === 'FACILITY') && (
+            <SectionCard title="Overview">
               <KV
-                k="Visible context"
-                v={
-                  <span style={{ color: 'var(--text-secondary-strong)', fontSize: 12, fontWeight: 650 }}>
-                    {(nodeData as any)?.visibleNeighborNodes?.length || 0} neighbors, {(nodeData as any)?.visibleIncidentEdges?.length || 0} edges
-                  </span>
-                }
+                k="Org size"
+                v={<span style={mono}>{(fragment as any)?.orgSize ? String((fragment as any).orgSize) : '-'}</span>}
+                copyText={(fragment as any)?.orgSize ? String((fragment as any).orgSize) : undefined}
               />
-            )}
-          </SectionCard>
+              <KV
+                k="Market segments"
+                v={(() => {
+                  const segsRaw = (fragment as any)?.marketSegments;
+                  const segs = Array.isArray(segsRaw) ? segsRaw.map((p: any) => String(p || '').trim()).filter(Boolean) : [];
+                  if (segs.length === 0) return <span style={mono}>-</span>;
 
-          <SectionCard
-            title="Governance and location"
-            right={directRelationsLoading ? <Chip>Loading…</Chip> : undefined}
-          >
-            {(() => {
-              const currentFid = String(fragmentIdForNode || '').trim();
-              const showErr = Boolean(directRelationsError && directRelationsErrorForRef.current === currentFid);
-              const d =
-                currentFid && directRelations?.source?.centerFragmentId === currentFid
-                  ? directRelations
-                  : null;
-              const showSkeleton = Boolean(!showErr && currentFid && !d);
-              const PREVIEW_N = 3;
+                  const labelFor = (p: string) => {
+                    const parts = p.split('/').filter(Boolean);
+                    // /segment/{domain}/{vertical}/{geo}
+                    if (parts.length >= 4 && parts[0] === 'segment') {
+                      const domain = parts[1] || '';
+                      const vertical = parts[2] || '';
+                      const geo = parts[3] || '';
+                      if (vertical && geo) return `${vertical} · ${geo}`;
+                      if (vertical) return vertical;
+                      if (domain && geo) return `${domain} · ${geo}`;
+                      return domain || p;
+                    }
+                    return p;
+                  };
 
-              const renderList = (items: any[]) => {
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {items.map((n) => {
-                      const accent = getNodeColors(n.type || 'UNKNOWN', theme === 'dark' ? 'dark' : 'light').accent;
-                      return (
-                        <div key={n.id} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                            {n.type ? (
-                              <AccentChip accent={accent}>
-                                <HorizonNodeIcon type={n.type} color={accent} size={14} />
-                                {formatHorizonFragmentType(n.type)}
-                              </AccentChip>
-                            ) : (
-                              <Chip>Unknown</Chip>
-                            )}
-                            <span style={{ color: 'var(--text-heading)', fontSize: 13, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {n.label}
-                            </span>
-                          </div>
+                  // Keep the overview compact: show a few chips, but keep all accessible.
+                  const PREVIEW = 4;
+                  const preview = segs.slice(0, PREVIEW);
+                  const hiddenN = Math.max(0, segs.length - preview.length);
+
+                  return (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {preview.map((p) => (
+                        <span key={p} title={p}>
+                          <Chip>{labelFor(p)}</Chip>
+                        </span>
+                      ))}
+                      {hiddenN > 0 && (
+                        <span title={segs.join('\n')}>
+                          <Chip>+{hiddenN} more</Chip>
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
+                copyText={(() => {
+                  const segsRaw = (fragment as any)?.marketSegments;
+                  const segs = Array.isArray(segsRaw) ? segsRaw.map((p: any) => String(p || '').trim()).filter(Boolean) : [];
+                  return segs.length > 0 ? segs.join('\n') : undefined;
+                })()}
+              />
+            </SectionCard>
+          )}
+
+          {(() => {
+            const currentFid = String(fragmentIdForNode || '').trim();
+            if (!currentFid) return null;
+
+            const showErr = Boolean(directRelationsError && directRelationsErrorForRef.current === currentFid);
+            const d =
+              currentFid && directRelations?.source?.centerFragmentId === currentFid
+                ? directRelations
+                : null;
+            const showSkeleton = Boolean(!showErr && currentFid && !d);
+            const PREVIEW_N = 3;
+
+            const renderList = (items: any[]) => {
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {items.map((n) => {
+                    const accent = getNodeColors(n.type || 'UNKNOWN', theme === 'dark' ? 'dark' : 'light').accent;
+                    return (
+                      <div key={n.id} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                          {n.type ? (
+                            <div
+                              title={formatHorizonFragmentType(n.type)}
+                              style={{
+                                width: 28,
+                                height: 28,
+                                borderRadius: 999,
+                                border: `1px solid ${hexToRgba(accent, theme === 'dark' ? 0.40 : 0.28)}`,
+                                background: hexToRgba(accent, theme === 'dark' ? 0.16 : 0.10),
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flexShrink: 0,
+                              }}
+                            >
+                              <HorizonNodeIcon type={n.type} color={accent} size={16} />
+                            </div>
+                          ) : (
+                            <div style={{ width: 28, height: 28, flexShrink: 0 }} />
+                          )}
+                          <span style={{ color: 'var(--text-heading)', fontSize: 13, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {n.label}
+                          </span>
                         </div>
-                      );
-                    })}
-                  </div>
-                );
-              };
-
-              const t = String(nodeType || '').trim().toUpperCase();
-              const isPerson = t === 'PERSON';
-              const isOrg = t === 'ORGANIZATION';
-              const isGeo = t === 'GEO_REGION';
-
-              const Section: React.FC<{ title: string; items: any[] }> = ({ title, items }) => {
-                if (!items || items.length === 0) return null;
-                const key = `${currentFid}:${title}`;
-                const expanded = Boolean(govLocExpanded[key]);
-                const shown = expanded ? items : items.slice(0, PREVIEW_N);
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)' }}>{title}</div>
-                    <div>{renderList(shown)}</div>
-                    {!expanded && items.length > PREVIEW_N && (
-                      <button
-                        type="button"
-                        onClick={() => setGovLocExpanded((prev) => ({ ...prev, [key]: true }))}
-                        style={{
-                          alignSelf: 'flex-start',
-                          padding: '6px 10px',
-                          borderRadius: 10,
-                          border: '1px solid var(--border-subtle)',
-                          background: 'var(--bg-tertiary)',
-                          color: 'var(--text-heading)',
-                          cursor: 'pointer',
-                          fontSize: 12,
-                          fontWeight: 850,
-                        }}
-                      >
-                        Show more
-                      </button>
-                    )}
-                  </div>
+                      </div>
+                    );
+                  })}
+                </div>
               );
-              };
+            };
 
-              const SkeletonBar: React.FC<{ w: string }> = ({ w }) => (
-                <div
-                  style={{
-                    width: w,
-                    height: 12,
-                    borderRadius: 999,
-                    background: theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)',
-                  }}
-                />
+            const t = String(nodeType || '').trim().toUpperCase();
+            const isPerson = t === 'PERSON';
+            const isOrg = t === 'ORGANIZATION';
+            const isGeo = t === 'GEO_REGION';
+
+            const Section: React.FC<{ title: string; items: any[] }> = ({ title, items }) => {
+              if (!items || items.length === 0) return null;
+              const key = `${currentFid}:${title}`;
+              const expanded = Boolean(govLocExpanded[key]);
+              const shown = expanded ? items : items.slice(0, PREVIEW_N);
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)' }}>{title}</div>
+                  <div>{renderList(shown)}</div>
+                  {!expanded && items.length > PREVIEW_N && (
+                    <button
+                      type="button"
+                      onClick={() => setGovLocExpanded((prev) => ({ ...prev, [key]: true }))}
+                      style={{
+                        alignSelf: 'flex-start',
+                        padding: '6px 10px',
+                        borderRadius: 10,
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-tertiary)',
+                        color: 'var(--text-heading)',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 850,
+                      }}
+                    >
+                      Show more
+                    </button>
+                  )}
+                </div>
               );
+            };
 
-              if (showErr) {
-                return (
+            const SkeletonBar: React.FC<{ w: string }> = ({ w }) => (
+              <div
+                style={{
+                  width: w,
+                  height: 12,
+                  borderRadius: 999,
+                  background: theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)',
+                }}
+              />
+            );
+
+            const hasAny =
+              (d?.managesIn?.length || 0) > 0 ||
+              (d?.managesOut?.length || 0) > 0 ||
+              (d?.boardIn?.length || 0) > 0 ||
+              (d?.boardOut?.length || 0) > 0 ||
+              (d?.locatedOut?.length || 0) > 0 ||
+              (d?.locatedIn?.length || 0) > 0;
+
+            // UX: hide the entire panel when there's no content.
+            // Still show while loading or if there's an error.
+            const shouldShow = Boolean(showErr || directRelationsLoading || showSkeleton || hasAny);
+            if (!shouldShow) return null;
+
+            return (
+              <SectionCard
+                title="Governance and location"
+                right={directRelationsLoading ? <Chip>Loading…</Chip> : undefined}
+              >
+                {showErr ? (
                   <div style={{ fontSize: 12, color: '#f87171', fontWeight: 650 }}>
                     {directRelationsError}
                   </div>
-                );
-              }
-
-              if (showSkeleton) {
-                return (
+                ) : showSkeleton ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                       <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)' }}>Managed by</div>
@@ -1989,47 +2006,28 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                       <SkeletonBar w="68%" />
                     </div>
                   </div>
-                );
-              }
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {/* Management */}
+                    {!isGeo && (
+                      <>
+                        <Section title="Managed by" items={d?.managesIn || []} />
+                        <Section title="Manages" items={d?.managesOut || []} />
+                      </>
+                    )}
 
-              return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {/* Management */}
-                  {!isGeo && (
-                    <>
-                      <Section title="Managed by" items={d?.managesIn || []} />
-                      <Section title="Manages" items={d?.managesOut || []} />
-                    </>
-                  )}
+                    {/* Governance: show only the direction that makes sense for the node type */}
+                    {isOrg && <Section title="Board members" items={d?.boardIn || []} />}
+                    {isPerson && <Section title="Board of" items={d?.boardOut || []} />}
 
-                  {/* Governance: show only the direction that makes sense for the node type */}
-                  {isOrg && <Section title="Board members" items={d?.boardIn || []} />}
-                  {isPerson && <Section title="Board of" items={d?.boardOut || []} />}
-
-                  {/* Location */}
-                  {!isGeo && <Section title="Located in" items={d?.locatedOut || []} />}
-                  {isGeo && <Section title="Located here" items={d?.locatedIn || []} />}
-
-                  {(() => {
-                    // If everything is empty, show a tiny neutral hint (but never show empty subsections).
-                    const hasAny =
-                      (d?.managesIn?.length || 0) > 0 ||
-                      (d?.managesOut?.length || 0) > 0 ||
-                      (d?.boardIn?.length || 0) > 0 ||
-                      (d?.boardOut?.length || 0) > 0 ||
-                      (d?.locatedOut?.length || 0) > 0 ||
-                      (d?.locatedIn?.length || 0) > 0;
-                    if (hasAny) return null;
-                    return (
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', fontWeight: 650 }}>
-                        No governance/location relationships found.
-                      </div>
-                    );
-                  })()}
-                </div>
-              );
-            })()}
-          </SectionCard>
+                    {/* Location */}
+                    {!isGeo && <Section title="Located in" items={d?.locatedOut || []} />}
+                    {isGeo && <Section title="Located here" items={d?.locatedIn || []} />}
+                  </div>
+                )}
+              </SectionCard>
+            );
+          })()}
 
           <Disclosure title="AI explanation" subtitle="Grounded + structured">
           <button
@@ -2071,41 +2069,14 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           )}
           </Disclosure>
 
-          {nodeData?.state && Object.keys(nodeData.state).length > 0 && (
-            <SectionCard
-              title="State"
-              right={
-                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                  mixed
-            </span>
-              }
-            >
-              {/* Risk Shield legend (ordered from top clockwise) */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
-                {computeRiskSegments(nodeData.state).map((seg) => {
-                  const op = 0.05 + 0.95 * clamp01(seg.score);
-                  const title = `${seg.label}: ${formatRiskLevel(seg.level)} (${seg.score.toFixed(2)}) — ${seg.description}`;
-                  return (
-                    <div
-                      key={`inspector-riskseg-${seg.id}`}
-                      title={title}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '6px 8px',
-                        borderRadius: 12,
-                        border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.10)'}`,
-                        background: theme === 'dark' ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.55)',
-                      }}
-                    >
-                      <RiskSegmentIcon id={seg.id} size={18} color={seg.color} opacity={op} />
-                      <span style={{ fontSize: 11, fontWeight: 850, color: 'var(--text-heading)' }}>{seg.label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-
+          {(() => {
+            const nodeState = (nodeData as any)?.state;
+            const fragState = (fragment as any)?.state;
+            const hasNodeState = nodeState && typeof nodeState === 'object' && Object.keys(nodeState).length > 0;
+            const hasFragState = fragState && typeof fragState === 'object' && Object.keys(fragState).length > 0;
+            return hasNodeState || hasFragState;
+          })() && (
+            <Disclosure title="Metrics" subtitle="KPIs + signals" defaultOpen={false}>
               {(() => {
                 const colorFrom01 = (x: number) => {
                   const v = Math.max(0, Math.min(1, x));
@@ -2114,17 +2085,181 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   return '#EF4444';
                 };
 
-                const entries = Object.entries(nodeData.state || {})
+                // Merge node state (lens item) with fragment.state (authoritative MetricValue objects).
+                // We keep BOTH:
+                // - `mergedValues`: numeric values for scoring/visuals (signals)
+                // - `mergedMetricObjects`: rich objects for KPI-style display (value + unit + confidence + asOf)
+                const mergedValues: Record<string, number> = {};
+                const mergedMetricObjects: Record<string, any> = {};
+
+                const ns = (nodeData as any)?.state;
+                if (ns && typeof ns === 'object') {
+                  for (const [k, v] of Object.entries(ns)) {
+                    const kk = String(k || '').trim();
+                    const vv = typeof v === 'number' ? v : Number(v);
+                    if (!kk || !Number.isFinite(vv)) continue;
+                    mergedValues[kk] = vv;
+                    if (!mergedMetricObjects[kk]) mergedMetricObjects[kk] = { value: vv };
+                  }
+                }
+                if (fragment && (fragment as any)?.state && typeof (fragment as any).state === 'object') {
+                  for (const [k, mv] of Object.entries((fragment as any).state)) {
+                    const kk = String(k || '').trim();
+                    if (!kk) continue;
+                    if (mv && typeof mv === 'object' && 'value' in (mv as any)) {
+                      const vv = Number((mv as any).value);
+                      if (!Number.isFinite(vv)) continue;
+                      // Prefer fragment as source of truth (more precise than lens summaries).
+                      mergedValues[kk] = vv;
+                      mergedMetricObjects[kk] = mv;
+                    }
+                  }
+                }
+
+                // Market nodes: show domain-specific KPIs prominently (TAM/CAGR/etc).
+                // Heuristic: canonicalPath starts with /market (primary), with /segment as a fallback.
+                const cp = String(nodeCanonicalPath || (fragment as any)?.canonicalPath || '').trim().toLowerCase();
+                const isMarketNode = cp.startsWith('/market/') || cp === '/market' || cp.startsWith('/segment/') || cp === '/segment';
+                const normalizeBaseKey = (k: string) => {
+                  const raw = String(k || '').trim().toLowerCase();
+                  const base = raw.split('/').pop() || raw;
+                  return base.replace(/\s+/g, '_');
+                };
+                const isMarketMetricKey = (baseKey: string) => {
+                  // Conservative allow-list-ish heuristic to avoid misclassifying generic metrics.
+                  return (
+                    baseKey === 'tam' ||
+                    baseKey === 'tam_usd' ||
+                    baseKey === 'sam' ||
+                    baseKey === 'sam_usd' ||
+                    baseKey === 'som' ||
+                    baseKey === 'som_usd' ||
+                    baseKey === 'cagr' ||
+                    baseKey === 'cagr_percent' ||
+                    baseKey === 'growth' ||
+                    baseKey === 'growth_rate' ||
+                    baseKey === 'growth_rate_percent' ||
+                    baseKey === 'market_size' ||
+                    baseKey === 'market_size_usd'
+                  );
+                };
+                const marketLabelFor = (baseKey: string, fallback: string) => {
+                  if (baseKey === 'tam' || baseKey === 'tam_usd') return 'TAM';
+                  if (baseKey === 'sam' || baseKey === 'sam_usd') return 'SAM';
+                  if (baseKey === 'som' || baseKey === 'som_usd') return 'SOM';
+                  if (baseKey === 'cagr' || baseKey === 'cagr_percent') return 'CAGR';
+                  if (baseKey.startsWith('growth')) return 'Growth';
+                  if (baseKey.startsWith('market_size')) return 'Market size';
+                  return fallback;
+                };
+                const formatKpiValue = (mv: any): string => {
+                  const v0 = mv && typeof mv === 'object' && 'value' in mv ? Number((mv as any).value) : Number(mv);
+                  if (!Number.isFinite(v0)) return '-';
+                  const unitRaw = mv && typeof mv === 'object' ? String((mv as any).unit || (mv as any).uom || '').trim() : '';
+                  const unit = unitRaw.toLowerCase();
+                  // Currency (usd)
+                  if (unit === 'usd' || unit === '$' || unit.includes('usd')) {
+                    try {
+                      return new Intl.NumberFormat('en-US', {
+                        style: 'currency',
+                        currency: 'USD',
+                        notation: 'compact',
+                        compactDisplay: 'short',
+                        maximumFractionDigits: 1,
+                      }).format(v0);
+                    } catch {
+                      // fallback
+                      return `${v0} USD`;
+                    }
+                  }
+                  // Percent
+                  if (unit.includes('percent') || unit === '%' || unit === 'pct') {
+                    const pct = Math.abs(v0) <= 1 ? v0 * 100 : v0;
+                    const digits = pct >= 10 ? 0 : 1;
+                    return `${pct.toFixed(digits)}%`;
+                  }
+                  // Generic compact numbers
+                  if (Math.abs(v0) >= 1_000_000) {
+                    try {
+                      return new Intl.NumberFormat('en-US', { notation: 'compact', compactDisplay: 'short', maximumFractionDigits: 2 }).format(v0);
+                    } catch {
+                      // ignore
+                    }
+                  }
+                  return unitRaw ? `${v0} ${unitRaw}` : String(v0);
+                };
+                const formatKpiMeta = (mv: any): string => {
+                  if (!mv || typeof mv !== 'object') return '';
+                  const parts: string[] = [];
+                  const conf = (mv as any).conf;
+                  if (typeof conf === 'number' && Number.isFinite(conf)) {
+                    parts.push(`Confidence ${Math.round(Math.max(0, Math.min(1, conf)) * 100)}%`);
+                  }
+                  const asOf = String((mv as any).observedAt || '').trim();
+                  if (asOf) {
+                    try {
+                      const d = new Date(asOf);
+                      if (!Number.isNaN(d.getTime())) parts.push(`As of ${d.toLocaleDateString()}`);
+                      else parts.push(`As of ${asOf}`);
+                    } catch {
+                      parts.push(`As of ${asOf}`);
+                    }
+                  }
+                  return parts.join(' · ');
+                };
+                const MarketMetricIcon: React.FC<{ baseKey: string }> = ({ baseKey }) => {
+                  const k = String(baseKey || '').trim().toLowerCase();
+                  const color = theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.92)';
+                  const stroke = color;
+                  const common = {
+                    width: 16,
+                    height: 16,
+                    viewBox: '0 0 24 24',
+                    fill: 'none' as const,
+                    stroke,
+                    strokeWidth: 2,
+                    strokeLinecap: 'round' as const,
+                    strokeLinejoin: 'round' as const,
+                  };
+                  if (k.startsWith('tam') || k.startsWith('sam') || k.startsWith('som') || k.includes('market_size')) {
+                    // Coins / market size
+                    return (
+                      <svg {...common}>
+                        <ellipse cx="12" cy="7" rx="6.5" ry="3" />
+                        <path d="M5.5 7v4c0 1.7 2.9 3 6.5 3s6.5-1.3 6.5-3V7" />
+                        <path d="M5.5 11v4c0 1.7 2.9 3 6.5 3s6.5-1.3 6.5-3v-4" />
+                      </svg>
+                    );
+                  }
+                  if (k.startsWith('cagr') || k.startsWith('growth')) {
+                    // Trend up
+                    return (
+                      <svg {...common}>
+                        <path d="M3 17l6-6 4 4 8-8" />
+                        <path d="M14 7h7v7" />
+                      </svg>
+                    );
+                  }
+                  // Default: small dot (neutral)
+                  return (
+                    <svg {...common}>
+                      <circle cx="12" cy="12" r="2.5" />
+                    </svg>
+                  );
+                };
+
+                const entries = Object.entries(mergedValues || {})
                   .map(([k, v]) => [String(k || ''), typeof v === 'number' ? v : Number(v)] as const)
                   .filter(([k, v]) => k && Number.isFinite(v))
                   .map(([k, v]) => {
-                    const key = k.toLowerCase().split('/').pop() || k.toLowerCase();
+                    const key = normalizeBaseKey(k);
                     const meta = METRIC_META[key];
                     const label = meta?.label || key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
                     const scale: 'unit' | 'bipolar' = meta?.scale || 'unit';
 
                     // Values may be either 0..1 or -1..+1 (bipolar). Do not clamp negatives to 0.
                     const vRaw = Number(v);
+                    const isMarket = isMarketNode && isMarketMetricKey(key);
                     const isSignal = Boolean(meta) || Math.abs(vRaw) <= 1.0001; // heuristic: raw metrics (e.g. reserves) are typically >> 1
                     const vUnit = Math.max(0, Math.min(1, vRaw));
                     const vBipolar = Math.max(-1, Math.min(1, vRaw));
@@ -2155,7 +2290,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                       label,
                       group: meta?.group || 'other',
                       scale,
-                      kind: isSignal ? ('signal' as const) : ('raw' as const),
+                      kind: isMarket ? ('market' as const) : (isSignal ? ('signal' as const) : ('raw' as const)),
                       v01,
                       vBipolar,
                       dot,
@@ -2176,13 +2311,76 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   return a.label.localeCompare(b.label);
                 });
 
+                const marketEntries = entries.filter((e) => e.kind === 'market');
                 const signalEntries = entries.filter((e) => e.kind === 'signal');
                 const rawEntries = entries.filter((e) => e.kind === 'raw');
 
+                // Sort market KPIs in a product-first order.
+                const marketOrder = ['tam_usd', 'tam', 'sam_usd', 'sam', 'som_usd', 'som', 'cagr_percent', 'cagr', 'growth_rate_percent', 'growth_rate', 'growth', 'market_size_usd', 'market_size'];
+                marketEntries.sort((a, b) => {
+                  const ia = marketOrder.indexOf(a.key);
+                  const ib = marketOrder.indexOf(b.key);
+                  if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+                  return a.label.localeCompare(b.label);
+                });
+
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {signalEntries.slice(0, 12).map((m) => (
-                      <div key={m.rawKey} title={m.rawKey} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {/* Market KPIs: own subsection, open by default. */}
+                    {marketEntries.length > 0 && (
+                      <Disclosure
+                        key={`market-kpis:${String(nodeId || '')}:${String(nodeCanonicalPath || '')}`}
+                        title="Market KPIs"
+                        subtitle={`${Math.min(6, marketEntries.length)} shown`}
+                        defaultOpen
+                      >
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                          {marketEntries.slice(0, 6).map((m) => {
+                            const mv = mergedMetricObjects[m.rawKey];
+                            const title = String(m.rawKey || '').trim();
+                            const label = marketLabelFor(m.key, m.label);
+                            const val = formatKpiValue(mv);
+                            const meta = formatKpiMeta(mv);
+                            return (
+                              <div
+                                key={`market-kpi:${m.rawKey}`}
+                                title={title}
+                                style={{
+                                  borderRadius: 14,
+                                  border: '1px solid var(--border-subtle)',
+                                  background: theme === 'dark' ? 'rgba(0,0,0,0.14)' : 'rgba(255,255,255,0.55)',
+                                  padding: 10,
+                                  minWidth: 0,
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+                                  <div style={{ fontSize: 11, fontWeight: 900, color: 'var(--text-secondary)', letterSpacing: 0.2 }}>
+                                    {label}
+                                  </div>
+                                  <div style={{ width: 16, height: 16, flexShrink: 0, opacity: 0.95 }}>
+                                    <MarketMetricIcon baseKey={m.key} />
+                                  </div>
+                                </div>
+                                <div style={{ marginTop: 6, fontSize: 18, fontWeight: 950, color: 'var(--text-heading)', lineHeight: 1.1 }}>
+                                  {val}
+                                </div>
+                                {meta && (
+                                  <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-secondary)', fontWeight: 650 }}>
+                                    {meta}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </Disclosure>
+                    )}
+
+                    {/* Signals: inline (no subgroup). */}
+                    {signalEntries.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {signalEntries.slice(0, 18).map((m) => (
+                          <div key={m.rawKey} title={m.rawKey} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         {/* Segment icon (synced with Risk Shield). */}
                         {(() => {
                           const segId = segmentForMetricBaseKey(m.key);
@@ -2191,16 +2389,13 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                           }
                           const spec = RISK_SEGMENTS.find((s) => s.id === segId);
                           const color = spec?.color || 'var(--text-tertiary-weak)';
-                          // Use metric's "riskiness" proxy: for most risk-ish rows, m.v01 is already oriented.
-                          const op = 0.05 + 0.95 * clamp01(m.v01);
                           const title = `${spec?.label || segId}: ${m.label}`;
                           return (
                             <div title={title} style={{ width: 18, height: 18, flexShrink: 0 }}>
-                              <RiskSegmentIcon id={segId} size={18} color={color} opacity={op} />
+                                    <RiskSegmentIcon id={segId} size={18} color={color} opacity={1} />
                             </div>
                           );
                         })()}
-                        <div style={{ width: 12, height: 12, borderRadius: 99, background: m.dot, flexShrink: 0 }} />
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
                             <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -2275,108 +2470,158 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           )}
         </div>
       </div>
+                          </div>
+                        ))}
+                        {signalEntries.length > 18 && (
+                          <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 650 }}>
+                            Showing 18 of {signalEntries.length}. (More can be added later if needed.)
+                          </div>
+                        )}
                       </div>
-                    ))}
+                    )}
+
+                    {/* Raw metrics: keep accessible, but collapsed by default (technical). */}
                     {rawEntries.length > 0 && (
-                      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border-subtle)' }}>
-                        <div style={{ fontSize: 11, fontWeight: 900, color: 'var(--text-secondary)', marginBottom: 8 }}>
-                          Raw metrics
-                        </div>
+                      <Disclosure
+                        key={`raw:${String(nodeId || '')}:${String(nodeCanonicalPath || '')}`}
+                        title="Raw metrics"
+                        subtitle={`${rawEntries.length} ${rawEntries.length === 1 ? 'field' : 'fields'}`}
+                      >
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                          {rawEntries.slice(0, 16).map((m) => {
+                          {rawEntries.slice(0, 24).map((m) => {
                             const mv = (fragment as any)?.state?.[m.rawKey];
                             const valueText = mv && typeof mv === 'object' ? formatMetricValue(mv) : String((nodeData as any)?.state?.[m.rawKey]);
-                            return (
-                              <KV key={m.rawKey} k={m.label} v={<span style={mono}>{valueText}</span>} />
-                            );
+                            return <KV key={m.rawKey} k={m.label} v={<span style={mono}>{valueText}</span>} />;
                           })}
+                          {rawEntries.length > 24 && (
+                            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-secondary)', fontWeight: 650 }}>
+                              Showing 24 of {rawEntries.length}.
                         </div>
+                          )}
                       </div>
+                      </Disclosure>
                     )}
                   </div>
                 );
               })()}
-            </SectionCard>
-          )}
-
-          {canUseLoadedFragment && fragment && (
-            <Disclosure title="Fragment details" subtitle="Source object metadata">
-            {fragment.labels && Object.keys(fragment.labels).length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-                {Object.entries(fragment.labels).map(([lang, label]) => (
-                    <Chip key={lang}>
-                      {lang}: {String(label)}
-                    </Chip>
-                ))}
-              </div>
-            )}
-              {fragment.canonicalPath && <KV k="Canonical path" v={<span style={mono}>{fragment.canonicalPath}</span>} copyText={fragment.canonicalPath} />}
-              {fragment.type && <KV k="Fragment type" v={<span>{String(fragment.type)}</span>} />}
-              {fragment.lifecycleStage && <KV k="Lifecycle stage" v={<span style={mono}>{String(fragment.lifecycleStage)}</span>} />}
-              {fragment.expectedStartDate && <KV k="Expected start" v={<span style={mono}>{String(fragment.expectedStartDate)}</span>} />}
-              {fragment.actualStartDate && <KV k="Actual start" v={<span style={mono}>{String(fragment.actualStartDate)}</span>} />}
-              {fragment.expectedEndDate && <KV k="Expected end" v={<span style={mono}>{String(fragment.expectedEndDate)}</span>} />}
-              {fragment.actualEndDate && <KV k="Actual end" v={<span style={mono}>{String(fragment.actualEndDate)}</span>} />}
-              <KV
-                k="Org size"
-                v={<span style={mono}>{fragment.orgSize ? String(fragment.orgSize) : '-'}</span>}
-                copyText={fragment.orgSize ? String(fragment.orgSize) : undefined}
-              />
-              <KV
-                k="Market segments"
-                v={
-                  Array.isArray(fragment.marketSegments) && fragment.marketSegments.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {fragment.marketSegments.map((p: any, idx: number) => (
-                        <span key={`${String(p)}-${idx}`} style={mono}>
-                          {String(p)}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <span style={mono}>-</span>
-                  )
-                }
-                copyText={
-                  Array.isArray(fragment.marketSegments) && fragment.marketSegments.length > 0
-                    ? fragment.marketSegments.map((p: any) => String(p)).join('\n')
-                    : undefined
-                }
-              />
-              {fragment.identifiers && Object.keys(fragment.identifiers).length > 0 && (
-                <div style={{ marginTop: 6 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>Identifiers</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {Object.entries(fragment.identifiers).map(([k, v]) => (
-                      <KV key={k} k={k} v={<span style={mono}>{String(v)}</span>} copyText={String(v)} />
-                    ))}
-              </div>
-              </div>
-            )}
             </Disclosure>
           )}
-
-          {canUseLoadedFragment && entity && (
-            <Disclosure title="Linked entity" subtitle="Enriched business object">
-              {entity.canonicalName && <KV k="Name" v={<span>{entity.canonicalName}</span>} />}
-              {entity.type && <KV k="Type" v={<span>{entity.type}</span>} />}
-              {entity.locationPath && <KV k="Location path" v={<span style={mono}>{entity.locationPath}</span>} copyText={entity.locationPath} />}
-              {entity.homeLocation?.iso6709 && <KV k="Coordinates" v={<span style={mono}>{entity.homeLocation.iso6709}</span>} copyText={entity.homeLocation.iso6709} />}
-              {entity.kbRefs && entity.kbRefs.length > 0 && (
-                <div style={{ marginTop: 6 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>KB refs</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {entity.kbRefs.map((ref: any, idx: number) => (
-                      <KV key={idx} k={String(ref.kb || 'KB')} v={<span style={mono}>{String(ref.externalId || 'N/A')}</span>} />
-                    ))}
-          </div>
-        </div>
-              )}
-            </Disclosure>
-      )}
 
           {(nodeData?.fragmentId || nodeId) && (
-            <Disclosure title="Actions" subtitle="Operational / experimental">
+            <Disclosure title="Technical" subtitle="IDs & tools">
+              {(() => {
+                const cp = String(nodeCanonicalPath || '').trim();
+                const canPin = Boolean(lensId && cp);
+                const pinned = lensScopePinned === null ? Boolean((nodeData as any)?.pinnedToScope) : lensScopePinned;
+                if (!canPin) return null;
+                return (
+                  <div style={{ marginBottom: 12 }}>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        // Prefer node-provided callback (keeps graph + scope preview in sync).
+                        const cb = (nodeData as any)?.onTogglePin as
+                          | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
+                          | undefined;
+                        if (cb) {
+                          cb({ fragmentId: nodeData?.fragmentId, canonicalPath: cp, nextPinned: !pinned });
+                          setLensScopePinned(!pinned);
+                          return;
+                        }
+
+                        // Fallback: update lens scope directly.
+                        if (!lensId) return;
+                        setLensScopePinned(!pinned);
+                        try {
+                          const lens = await api.getHorizonLens(lensId);
+                          const current: string[] = Array.isArray(lens?.scope)
+                            ? lens.scope.map((s: any) => String(s || '').trim()).filter(Boolean)
+                            : [];
+                          const has = current.includes(cp);
+                          const next = !pinned ? (has ? current : [...current, cp]) : current.filter((x) => x !== cp);
+                          await api.updateHorizonLens(lensId, {
+                            tenantId: lens.tenantId,
+                            projectId: lens.projectId,
+                            name: lens.name,
+                            scope: next,
+                            viewConfig: lens.viewConfig,
+                            alertConfig: lens.alertConfig,
+                            status: lens.status,
+                            scopeFragments: lens.scopeFragments,
+                            resolvedQueries: lens.resolvedQueries,
+                            lastResolved: lens.lastResolved,
+                          });
+                        } catch {
+                          // Re-sync (best-effort)
+                          try {
+                            const lens = await api.getHorizonLens(lensId);
+                            const scope = Array.isArray(lens?.scope)
+                              ? lens.scope.map((s: any) => String(s || '').trim()).filter(Boolean)
+                              : [];
+                            setLensScopePinned(scope.includes(cp));
+                          } catch {
+                            // ignore
+                          }
+                        }
+                      }}
+                      title={pinned ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
+                      aria-label={pinned ? 'Unpin from scope' : 'Pin to scope'}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        padding: '8px 10px',
+                        borderRadius: 12,
+                        border: `1px solid ${pinned ? hexToRgba(nodeAccent, theme === 'dark' ? 0.42 : 0.28) : 'var(--border-subtle)'}`,
+                        background: pinned ? hexToRgba(nodeAccent, theme === 'dark' ? 0.18 : 0.12) : 'var(--bg-tertiary)',
+                        color: 'var(--text-heading)',
+                        fontSize: 12,
+                        fontWeight: 850,
+                        cursor: 'pointer',
+                        width: '100%',
+                      }}
+                    >
+                      {pinned ? 'Unpin from scope' : 'Pin to scope'}
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {canUseLoadedFragment && fragment && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)', marginBottom: 10 }}>
+                    Fragment
+                  </div>
+                  {fragment.labels && Object.keys(fragment.labels).length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                      {Object.entries(fragment.labels).map(([lang, label]) => (
+                        <Chip key={lang}>
+                          {lang}: {String(label)}
+                        </Chip>
+                      ))}
+                    </div>
+                  )}
+                  {fragment.canonicalPath && <KV k="Canonical path" v={<span style={mono}>{fragment.canonicalPath}</span>} copyText={fragment.canonicalPath} />}
+                  {fragment.type && <KV k="Type" v={<span>{String(fragment.type)}</span>} />}
+                  {fragment.lifecycleStage && <KV k="Lifecycle" v={<span style={mono}>{String(fragment.lifecycleStage)}</span>} />}
+                  {fragment.expectedStartDate && <KV k="Expected start" v={<span style={mono}>{String(fragment.expectedStartDate)}</span>} />}
+                  {fragment.actualStartDate && <KV k="Actual start" v={<span style={mono}>{String(fragment.actualStartDate)}</span>} />}
+                  {fragment.expectedEndDate && <KV k="Expected end" v={<span style={mono}>{String(fragment.expectedEndDate)}</span>} />}
+                  {fragment.actualEndDate && <KV k="Actual end" v={<span style={mono}>{String(fragment.actualEndDate)}</span>} />}
+                  {fragment.identifiers && Object.keys(fragment.identifiers).length > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>Identifiers</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {Object.entries(fragment.identifiers).map(([k, v]) => (
+                          <KV key={k} k={k} v={<span style={mono}>{String(v)}</span>} copyText={String(v)} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* On-demand resolver (no writes) */}
               {nodeId && nodeData && (
                 <div style={{ marginBottom: 12 }}>
@@ -2568,7 +2813,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginBottom: 10, lineHeight: 1.35 }}>
               Extract products this object <b>produces</b> and <b>consumes</b>, then materialize them into the global Horizon graph.
                     <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary-weak)' }}>
-                v1: PRODUCT-only. Fragment is primary; entity link is enrichment.
+                v1: PRODUCT-only. Fragment is primary.
               </div>
             </div>
                   {productIOError && <div style={{ fontSize: 12, color: '#f87171', marginBottom: 8 }}>{productIOError}</div>}
@@ -2599,89 +2844,10 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
         </div>
       )}
 
-              {/* Ensure / Enrich */}
-      {nodeId && nodeData && canUseLoadedFragment && fragment && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <button
-                    type="button"
-              onClick={async () => {
-                if (!fragment.id || ensuring) return;
-                setEnsuring(true);
-                setError(null);
-                try {
-                        await api.ensureFragmentEntity(fragment.id);
-                  const fragmentData = await api.getHorizonFragment(fragment.id);
-                  setFragment(fragmentData);
-                  try {
-                    const entityData = await api.getFragmentEntity(fragment.id);
-                    setEntity(entityData);
-                        } catch {
-                    setEntity(null);
-                  }
-                } catch (err: any) {
-                  console.error('[ObjectInspector] Failed to ensure entity', err);
-                  setError(err.response?.data?.error || err.message || 'Failed to ensure entity');
-                } finally {
-                  setEnsuring(false);
-                }
-              }}
-              disabled={ensuring || enriching}
-              style={{
-                      padding: '10px 12px',
-                      borderRadius: 12,
-                backgroundColor: ensuring ? 'var(--bg-secondary)' : 'var(--accent-primary)',
-                color: 'var(--text-on-accent)',
-                border: 'none',
-                cursor: ensuring || enriching ? 'not-allowed' : 'pointer',
-                      fontSize: 12,
-                      fontWeight: 850,
-                opacity: ensuring || enriching ? 0.6 : 1,
-              }}
-            >
-                    {ensuring ? 'Updating…' : 'Ensure entity'}
-            </button>
-            {canUseLoadedFragment && entity && (
-              <button
-                      type="button"
-                onClick={async () => {
-                  if (!fragment.id || enriching) return;
-                  setEnriching(true);
-                  setError(null);
-                  try {
-                    await api.enrichFragmentEntity(fragment.id, true);
-                    const entityData = await api.getFragmentEntity(fragment.id);
-                    setEntity(entityData);
-                    const fragmentData = await api.getHorizonFragment(fragment.id);
-                    setFragment(fragmentData);
-                  } catch (err: any) {
-                    console.error('[ObjectInspector] Failed to enrich entity', err);
-                    setError(err.response?.data?.error || err.message || 'Failed to enrich entity');
-                  } finally {
-                    setEnriching(false);
-                  }
-                }}
-                disabled={ensuring || enriching}
-                style={{
-                        padding: '10px 12px',
-                        borderRadius: 12,
-                        backgroundColor: enriching ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
-                  color: 'var(--text-heading)',
-                  border: '1px solid var(--border-subtle)',
-                  cursor: ensuring || enriching ? 'not-allowed' : 'pointer',
-                        fontSize: 12,
-                        fontWeight: 850,
-                  opacity: ensuring || enriching ? 0.6 : 1,
-                }}
-              >
-                      {enriching ? 'Updating…' : 'Enrich entity'}
-              </button>
-            )}
-        </div>
-              )}
-            </Disclosure>
-          )}
-
-          <Disclosure title="Technical" subtitle="IDs & raw fields">
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)', marginBottom: 10 }}>
+                  IDs
+                </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
               <button
                 type="button"
@@ -2690,26 +2856,15 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   const fid = String(fragmentIdForNode || '').trim();
                   setTechCopyState('copying');
                   try {
-                    // Best-effort: include latest fragment + linked entity (where Wikidata lives in kbRefs).
+                    // Best-effort: include latest fragment.
                     let frag: any = fragment;
-                    let ent: any = entity;
                     if (fid) {
                       try {
                         frag = await api.getHorizonFragment(fid);
                       } catch {
                         // keep existing
                       }
-                      try {
-                        ent = await api.getFragmentEntity(fid);
-                        setEntity(ent);
-                      } catch {
-                        // keep existing
-                      }
                     }
-
-                    const wikidataRefs = Array.isArray(ent?.kbRefs)
-                      ? ent.kbRefs.filter((r: any) => String(r?.kb || '').toLowerCase().includes('wikidata'))
-                      : [];
 
                     const payload = {
                       kind: 'horizon_fragment_tech_dump',
@@ -2723,10 +2878,6 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                         status: nodeStatus || frag?.status || null,
                       },
                       fragment: frag || null,
-                      linkedEntity: ent || null,
-                      wikidata: {
-                        refs: wikidataRefs,
-                      },
                       nodeData: nodeData || null,
                     };
 
@@ -2743,7 +2894,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   }
                 }}
                 disabled={techCopyState === 'copying' || Boolean(edgeId)}
-                title="Copy all technical data (fragment + linked entity/Wikidata) as JSON"
+                title="Copy all technical data (fragment) as JSON"
                 style={{
                   padding: '6px 10px',
                   borderRadius: 10,
@@ -2780,7 +2931,9 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             {typeof (nodeData as any)?.expanded === 'boolean' && <KV k="Expanded" v={<span style={mono}>{String((nodeData as any).expanded)}</span>} />}
             {typeof (nodeData as any)?.collapsed === 'boolean' && <KV k="Collapsed" v={<span style={mono}>{String((nodeData as any).collapsed)}</span>} />}
             {typeof (nodeData as any)?.critical === 'boolean' && <KV k="Critical" v={<span style={mono}>{String((nodeData as any).critical)}</span>} />}
-          </Disclosure>
+              </div>
+            </Disclosure>
+          )}
         </>
       )}
     </div>

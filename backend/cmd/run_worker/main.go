@@ -57,6 +57,19 @@ func main() {
 		}
 	})
 
+	// Load market segment normalization dictionary from Firestore.
+	taxonomy.InitMarketSegmentDictionaryCacheFromFirestore(fsClient.Client(), "v1", 20*time.Minute)
+	if err := taxonomy.RefreshMarketSegmentDictionary(ctx); err != nil {
+		logger := log.New(os.Stdout, "[worker] ", log.LstdFlags|log.Lshortfile)
+		logger.Printf("WARNING: failed to load market segment dictionary: %v", err)
+	}
+	taxonomy.StartMarketSegmentDictionaryAutoRefresh(ctx, 10*time.Minute, func(err error) {
+		if err != nil {
+			logger := log.New(os.Stdout, "[worker] ", log.LstdFlags|log.Lshortfile)
+			logger.Printf("WARNING: market segment dictionary refresh failed: %v", err)
+		}
+	})
+
 	logger := log.New(os.Stdout, "[worker] ", log.LstdFlags|log.Lshortfile)
 
 	// Initialize repositories

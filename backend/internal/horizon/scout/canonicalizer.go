@@ -30,7 +30,9 @@ func Slugify(s string) string { return slugify(s) }
 
 // PreferredCanonicalPaths is an exported wrapper returning ordered canonical path candidates.
 // It is used by non-scout workflows to ensure consistent canonicalization rules.
-func PreferredCanonicalPaths(rel agents.DiscoveredRelation) []string { return preferredCanonicalPaths(rel) }
+func PreferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
+	return preferredCanonicalPaths(rel)
+}
 
 // preferredCanonicalPaths returns ordered canonical path candidates derived from names only.
 // For facilities we emit both:
@@ -94,8 +96,9 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 		// We avoid guessing jurisdiction aggressively; LLM/inputs may provide it explicitly.
 		return []string{"/program/" + slug}
 	case models.FragmentTypeMarket:
-		// Preferred: /market/{domain}/{slug} when domain can be inferred; fallback: /market/{slug}
-		return []string{"/market/" + slug}
+		// Preferred (NEW): /market/{geo}/{slug}. Without geo, default to global.
+		// Also keep legacy /market/{slug} as a secondary candidate for backward compatibility.
+		return []string{"/market/global/" + slug, "/market/" + slug}
 	case models.FragmentTypeEvent:
 		return []string{"/event/" + slug}
 	case models.FragmentTypeGeoRegion:
@@ -142,7 +145,7 @@ func normalizeLegacyGeoPath(path string) string {
 // Uses CanonizationPolicy if available in ScoutEngine, otherwise falls back to hardcoded rules.
 func (e *ScoutEngine) normalizeFragmentType(ctx context.Context, s string) models.FragmentType {
 	logPrefix := "[ScoutEngine:normalizeFragmentType]"
-	
+
 	// Try CanonizationPolicy if available
 	if e.canonizationPolicy != nil {
 		decision, err := e.canonizationPolicy.Execute(ctx, policy.PolicyInput{
@@ -210,10 +213,10 @@ func normalizeFragmentType(s string) models.FragmentType {
 // 3) LLM canonicalization (strict JSON) as a last resort
 func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.DiscoveredRelation) (string, error) {
 	logPrefix := "[ScoutEngine:resolveCanonicalPath]"
-	
+
 	// Normalize fragment type using CanonizationPolicy if available
 	relType := e.normalizeFragmentType(ctx, rel.TargetType)
-	
+
 	// Try CanonizationPolicy for path normalization if available
 	if e.canonizationPolicy != nil && strings.TrimSpace(rel.TargetCanonicalPath) != "" {
 		decision, err := e.canonizationPolicy.Execute(ctx, policy.PolicyInput{
@@ -467,7 +470,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 			CanonicalPath: out.CanonicalPath,
 			Type:          relType,
 		}
-		
+
 		decision, err := e.validationPolicy.Execute(ctx, policy.PolicyInput{
 			Kind:     "fragment",
 			Context:  map[string]interface{}{"validationKind": "fragment"},
@@ -478,15 +481,15 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 			fmt.Printf("%s ERROR: ValidationPolicy failed for LLM output: %v\n", logPrefix, err)
 			// Continue with hardcoded validation
 		} else {
-			fmt.Printf("%s ValidationPolicy check for LLM output: action=%s, path=%s\n", 
+			fmt.Printf("%s ValidationPolicy check for LLM output: action=%s, path=%s\n",
 				logPrefix, decision.Action, decision.DecisionPath)
-			
+
 			// Don't block execution - only log warnings/penalties
 			// ValidationPolicy "reject" is treated as warning, not blocker
 			switch decision.Action {
 			case "reject":
 				reason, _ := decision.Params["reason"].(string)
-				fmt.Printf("%s WARNING: ValidationPolicy would reject LLM output (non-blocking): %s (canonicalPath=%s)\n", 
+				fmt.Printf("%s WARNING: ValidationPolicy would reject LLM output (non-blocking): %s (canonicalPath=%s)\n",
 					logPrefix, reason, out.CanonicalPath)
 				// Continue - let hardcoded validation handle critical cases
 			case "penalty":
@@ -588,8 +591,17 @@ RULES:
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known (e.g., "Kazakhstan Alem.ai" -> /program/kazakhstan/alem-ai)
     - Otherwise use /program/{programSlug}
   - MARKET:
-    - Prefer /market/{domainSlug}/{marketSlug} when domain is known (e.g., "Energy secondary liquidity" -> /market/energy/secondary-liquidity)
-    - Otherwise use /market/{marketSlug}
+    - Prefer /market/{geo}/{marketSlug}
+      - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global" if unknown
+      - GEOGRAPHY INFERENCE: Extract geo from the market name/context:
+        - If the name mentions a country/region, use that country's ISO2 code
+        - "Saudi event marketing" → /market/sa/event-marketing (NOT /market/global/...)
+        - "German automotive" → /market/de/automotive
+        - Use "global" ONLY when no geographic context is present
+      - Examples:
+        - "SME banking in Iraq" -> /market/iq/sme-banking
+        - "Global EV batteries" -> /market/global/ev-batteries
+        - "UAE fintech sector" -> /market/ae/fintech
   - FACILITY:
     - Prefer /fac/{orgSlug}/{facilitySlug} when the org can be inferred from the facility name (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise use /fac/{facilitySlug}

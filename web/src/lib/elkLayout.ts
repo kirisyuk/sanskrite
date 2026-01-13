@@ -1040,6 +1040,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'MANAGES',
     'CONTROLS',
     'INVESTS_IN',
+    'FOUNDED',
   ]);
   const GOVERNANCE_CONTROL_TYPES = new Set(['BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY']);
   const SUPPLY_CHAIN_TYPES = new Set(['PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO']);
@@ -1060,6 +1061,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'MANAGES',
     'CONTROLS',
     'INVESTS_IN',
+    'FOUNDED',
     'BOARD_MEMBER_OF',
     'EXECUTIVE_OF',
     'PRODUCES',
@@ -1403,6 +1405,41 @@ export async function layoutLevelsTwoPane<T = any>(
     return raw.toUpperCase().replace(/\s+/g, '_');
   };
 
+  // Business-friendly labels for type groups in left pane
+  const getTypeGroupLabel = (typeKey: string): string => {
+    const tt = normalizeFragmentType(typeKey);
+    const TYPE_LABEL_MAP: Record<string, string> = {
+      // Products & Services
+      'PRODUCT': 'Products & Services',
+      'SERVICE': 'Products & Services',
+      'TECHNOLOGY': 'Products & Services',
+      // Business Interests
+      'ORGANIZATION': 'Business Interests',
+      'MEDIA_CHANNEL': 'Business Interests',
+      // Key People
+      'PERSON': 'Key People',
+      // Geographic Presence
+      'GEO_REGION': 'Geographic Presence',
+      'LOCATION': 'Geographic Presence',
+      'COUNTRY': 'Geographic Presence',
+      'STATE': 'Geographic Presence',
+      'PROVINCE': 'Geographic Presence',
+      'CITY': 'Geographic Presence',
+      // Facilities
+      'FACILITY': 'Facilities',
+      // Natural Resources
+      'DEPOSIT': 'Natural Resources',
+      // Milestones
+      'EVENT': 'Milestones',
+      // Threats
+      'RISK': 'Threats',
+    };
+    return TYPE_LABEL_MAP[tt] || typeKey
+      .replace(/_/g, ' ')
+      .toLowerCase()
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  };
+
   // Type bucketing order for horizontal separation inside left groups.
   // Product request: keep Products separate from Organizations, etc.
   const typeOrderScore = (t: string): number => {
@@ -1481,7 +1518,7 @@ export async function layoutLevelsTwoPane<T = any>(
       BOARD_MEMBER_OF: 'Board',
       EXECUTIVE_OF: 'Executive',
       // UX copy: for an auditor node, these are audited entities (clients), not "audited by".
-      AUDITED_BY: 'Audit clients',
+      AUDITED_BY: 'Audit',
       RELATIVE_OF: 'Relatives',
       RELATED_TO: 'Related',
       SUPPLIES_TO: 'Supplies',
@@ -2620,10 +2657,7 @@ export async function layoutLevelsTwoPane<T = any>(
         groupTypeBlocks:
           (g.blocks || []).map((b, idx) => {
             const typeKey = String((b as any)?.typeKey || '').trim() || 'UNKNOWN';
-            const label = typeKey
-              .replace(/_/g, ' ')
-              .toLowerCase()
-              .replace(/\b\w/g, (c) => c.toUpperCase());
+            const label = getTypeGroupLabel(typeKey);
             const blockW = Math.max(1, Math.floor((b as any)?.blockW || 0)) || (
               Math.max(1, Math.floor((b as any)?.cols || 1)) * nodeWidth +
               Math.max(0, Math.max(1, Math.floor((b as any)?.cols || 1)) - 1) * groupChildGapX
@@ -2891,7 +2925,7 @@ export function deriveLevelsTreeMetadata<T = any>(
   // If we traverse INCOMING edge of this type: Rank - 1
   const HIERARCHY_TYPES = new Set([
     // Corporate structure / control
-    'OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF',
+    'OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'FOUNDED', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF',
     'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO',
     // Influence is usually Top-Down: Regulator (Parent) -> Company (Child)
     'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'
@@ -2903,6 +2937,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     'MANAGES',
     'CONTROLS',
     'INVESTS_IN',
+    'FOUNDED',
   ]);
   const INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS']);
   const hierarchyScore = (et: string): number => {
@@ -3415,6 +3450,9 @@ function makeGroupParentNode<T = any>(params: {
   id: string;
   position: { x: number; y: number };
   parentId: string;
+  ownerLabel?: string;
+  ownerType?: string;
+  ownerCanonicalPath?: string;
   semanticGroup: SemanticGroup;
   edgeTypes: string[];  // All edge types in this semantic group (for display)
   count: number;
@@ -3434,6 +3472,9 @@ function makeGroupParentNode<T = any>(params: {
     id,
     position,
     parentId,
+    ownerLabel,
+    ownerType,
+    ownerCanonicalPath,
     semanticGroup,
     edgeTypes,
     count,
@@ -3473,6 +3514,10 @@ function makeGroupParentNode<T = any>(params: {
       groupInteractive: false,
       groupIsBackdrop: false,
       groupParentId: parentId,
+      groupOwnerFragmentId: parentId,
+      groupOwnerLabel: ownerLabel,
+      groupOwnerType: ownerType,
+      groupOwnerCanonicalPath: ownerCanonicalPath,
       groupSemanticGroup: semanticGroup,
       groupEdgeTypes: edgeTypes,
       groupCount: count,
@@ -4232,6 +4277,12 @@ export function rebuildGroupContainers<T = any>(
 
     // Find parent node to center groups properly
     const parentNode = fragments.find((n) => n.id === g.parentId || (n.data as any)?.fragmentId === g.parentId);
+    const ownerLabel =
+      String((parentNode as any)?.data?.label || '').trim() ||
+      String((parentNode as any)?.data?.canonicalPath || '').trim().split('/').filter(Boolean).slice(-1)[0] ||
+      '';
+    const ownerType = String((parentNode as any)?.data?.type || '').trim() || undefined;
+    const ownerCanonicalPath = String((parentNode as any)?.data?.canonicalPath || '').trim() || undefined;
     const parentX = parentNode?.position.x ?? 0;
     const parentY = parentNode?.position.y ?? 0;
     const parentCenterX = parentX + nodeWidth / 2;
@@ -4279,6 +4330,9 @@ export function rebuildGroupContainers<T = any>(
         id: gid,
         position: { x, y },
         parentId: g.parentId,
+        ownerLabel,
+        ownerType,
+        ownerCanonicalPath,
         semanticGroup: g.semanticGroup,
         edgeTypes: Array.from(g.edgeTypes),
         count: g.kids.length,

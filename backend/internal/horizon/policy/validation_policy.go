@@ -501,6 +501,7 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 			horizonmodels.FragmentTypeOrganization,
 			horizonmodels.FragmentTypeFacility,
 			horizonmodels.FragmentTypeProduct,
+			horizonmodels.FragmentTypeDeposit,
 		},
 		Description: "Owner owns asset/subsidiary",
 	},
@@ -575,6 +576,7 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []horizonmodels.FragmentType{
 			horizonmodels.FragmentTypeOrganization,
 			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeDeposit,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
 		Description:      "Producer produces product",
@@ -594,6 +596,7 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 			horizonmodels.FragmentTypeOrganization,
 			horizonmodels.FragmentTypePerson,
 			horizonmodels.FragmentTypeGeoRegion,
+			horizonmodels.FragmentTypeDeposit,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeGeoRegion},
 		Description:      "Entity is located within region",
@@ -603,6 +606,7 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []horizonmodels.FragmentType{
 			horizonmodels.FragmentTypeGeoRegion,
 			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeDeposit,
 		},
 		Description: "Organization operates in location",
 	},
@@ -653,6 +657,25 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		},
 		Description: "Source entity influences target entity (political/economic influence)",
 	},
+
+	// PARTICIPATES_IN: org/fac participates in a market.
+	horizonmodels.DependencyTypeParticipatesIn: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
+		Description:      "Entity participates in market",
+	},
+	// DOMINATES: org/fac dominates a market (leader).
+	horizonmodels.DependencyTypeDominates: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
+		Description:      "Entity dominates market (leader)",
+	},
 }
 
 func containsFragmentType(types []horizonmodels.FragmentType, t horizonmodels.FragmentType) bool {
@@ -681,6 +704,14 @@ func (p *ValidationPolicy) expectedPathPrefix(fragType horizonmodels.FragmentTyp
 		return "/media/"
 	case horizonmodels.FragmentTypeSupplyLink:
 		return "/supply-link/" // Tenant-specific, format: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}
+	case horizonmodels.FragmentTypeProgram:
+		return "/program/"
+	case horizonmodels.FragmentTypeMarket:
+		return "/market/"
+	case horizonmodels.FragmentTypeEvent:
+		return "/event/"
+	case horizonmodels.FragmentTypeDeposit:
+		return "/deposit/"
 	default:
 		return ""
 	}

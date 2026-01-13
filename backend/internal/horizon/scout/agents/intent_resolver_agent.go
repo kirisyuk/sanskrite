@@ -17,8 +17,8 @@ type IntentResolution struct {
 	SpherePaths []string `json:"spherePaths"`
 	Keywords    []string `json:"keywords"`
 	Anchors     []struct {
-		CanonicalPath string  `json:"canonicalPath"`
-		Type          string  `json:"type"` // ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL (best-effort)
+		CanonicalPath string `json:"canonicalPath"`
+		Type          string `json:"type"` // ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL (best-effort)
 		// Name is the preferred English display name for this anchor (NOT a slug, NOT a URL).
 		// If the original name is non-English and no established English name exists, transliteration is acceptable.
 		Name       string  `json:"name,omitempty"`
@@ -340,7 +340,19 @@ RULES:
     - If jurisdiction is unknown, use /gov/na/{slug}.
 
 - PROGRAM/MARKET/EVENT/PERSON canonicalPath:
-  - /program/{slug}, /market/{slug}, /event/{slug}, /person/{slug}
+  - /program/{slug}, /market/{geo}/{slug}, /event/{slug}, /person/{slug}
+  - MARKET geo MUST be ISO2 lowercase or "global" (default "global" if unknown)
+
+- MARKET GEOGRAPHY INHERITANCE (CRITICAL):
+  - When the query mentions a specific country/region AND a market/industry together:
+    - The MARKET anchor MUST inherit that country's ISO2 code as geo
+    - Do NOT default to "global" when geographic context is present in the query
+  - Examples:
+    - "Saudi Arabia Event marketing market" → /market/sa/event-marketing (NOT /market/global/event-marketing)
+    - "German automotive industry" → /market/de/automotive (NOT /market/global/automotive)
+    - "UAE banking sector" → /market/ae/banking (NOT /market/global/banking)
+  - Use "global" as geo ONLY when NO geographic context is provided in the query
+  - You CAN also include a separate GEO_REGION anchor for the country - that is fine and often useful
 
 - Prefer STABLE anchors:
   - choose country canonical paths for country scope, not adjective/alias forms

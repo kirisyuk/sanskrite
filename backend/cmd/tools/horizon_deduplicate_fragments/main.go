@@ -117,6 +117,14 @@ func main() {
 			log.Printf("  [DRY-RUN] Would keep: %s, remove: %v", primaryID, duplicateIDs)
 			stats.DryRunDuplicates += len(duplicateIDs)
 		} else {
+			// Merge fragment data (especially metrics) from duplicates into primary BEFORE deleting.
+			// Rationale: canonicalPath-level duplicates can be created by race conditions; the "losing" fragment
+			// may still contain richer State metrics or identifiers. We want the richest data to survive.
+			if err := mergeDuplicateFragmentData(ctx, fragmentsRepo, versionsRepo, primaryID, duplicateIDs); err != nil {
+				log.Printf("WARNING: Failed to merge fragment data into primary %s for %s: %v", primaryID, canonicalPath, err)
+				// Continue: reference migration + deletion is still useful, but may lose some data.
+			}
+
 			// Migrate all references from duplicates to primary
 			if err := migrateReferences(ctx, primaryID, duplicateIDs, edgesRepo, watchdogRepo, lensesRepo, versionsRepo, fsClient, canonicalPath); err != nil {
 				log.Printf("ERROR: Failed to migrate references for %s: %v", canonicalPath, err)
@@ -165,6 +173,247 @@ func main() {
 			log.Printf("Re-exported %d fragments to GCS", stats.ReExported)
 		}
 	}
+}
+
+// mergeDuplicateFragmentData merges fragment fields + state metrics from duplicate fragments (and their versions)
+// into the primary fragment, preferring richer/higher-confidence MetricValues.
+func mergeDuplicateFragmentData(
+	ctx context.Context,
+	fragmentsRepo *repo.HorizonFragmentsRepository,
+	versionsRepo *repo.HorizonFragmentVersionsRepository,
+	primaryID string,
+	duplicateIDs []string,
+) error {
+	if strings.TrimSpace(primaryID) == "" || len(duplicateIDs) == 0 {
+		return nil
+	}
+
+	primary, err := fragmentsRepo.Get(ctx, primaryID)
+	if err != nil || primary == nil {
+		return fmt.Errorf("failed to load primary fragment %s: %w", primaryID, err)
+	}
+
+	changed := false
+
+	// Merge each duplicate fragment.
+	for _, dupID := range duplicateIDs {
+		dupID = strings.TrimSpace(dupID)
+		if dupID == "" || dupID == primaryID {
+			continue
+		}
+		dup, err := fragmentsRepo.Get(ctx, dupID)
+		if err != nil || dup == nil {
+			continue
+		}
+		if mergeFragmentDataPreferMetrics(primary, dup) {
+			changed = true
+		}
+
+		// Also merge metrics from historical versions of the duplicate (best-effort).
+		// Versions store only State metrics, and are otherwise deleted during dedup.
+		if versionsRepo != nil {
+			versions, err := versionsRepo.ListByFragment(ctx, "global", dupID, 10000, 0)
+			if err == nil && len(versions) > 0 {
+				for _, v := range versions {
+					if v == nil || v.State == nil || len(v.State) == 0 {
+						continue
+					}
+					if mergeStatePreferMetrics(primary, v.State) {
+						changed = true
+					}
+				}
+			}
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+	// Persist merged primary (Validate() runs inside Update).
+	if err := fragmentsRepo.Update(ctx, primary); err != nil {
+		return fmt.Errorf("failed to update merged primary fragment: %w", err)
+	}
+	return nil
+}
+
+// mergeFragmentDataPreferMetrics merges source fragment data into target. It is "fill-first" for identity fields,
+// but merges State metrics by preferring higher-confidence/newer values and keeping more keys overall.
+func mergeFragmentDataPreferMetrics(target, source *models.HorizonFragment) bool {
+	changed := false
+	if target == nil || source == nil {
+		return false
+	}
+
+	// Labels: fill missing.
+	if target.Labels == nil {
+		target.Labels = map[string]string{}
+	}
+	for k, v := range source.Labels {
+		if strings.TrimSpace(v) != "" && strings.TrimSpace(target.Labels[k]) == "" {
+			target.Labels[k] = v
+			changed = true
+		}
+	}
+
+	// Identifiers: fill missing.
+	if target.Identifiers == nil {
+		target.Identifiers = map[string]string{}
+	}
+	for k, v := range source.Identifiers {
+		if strings.TrimSpace(v) != "" && strings.TrimSpace(target.Identifiers[k]) == "" {
+			target.Identifiers[k] = v
+			changed = true
+		}
+	}
+
+	// KBRefs: union.
+	existingRefs := map[string]bool{}
+	for _, ref := range target.KBRefs {
+		existingRefs[fmt.Sprintf("%s:%s", ref.KB, ref.ExternalID)] = true
+	}
+	for _, ref := range source.KBRefs {
+		key := fmt.Sprintf("%s:%s", ref.KB, ref.ExternalID)
+		if !existingRefs[key] {
+			target.KBRefs = append(target.KBRefs, ref)
+			changed = true
+		}
+	}
+
+	// Description: fill if empty.
+	if strings.TrimSpace(target.Description) == "" && strings.TrimSpace(source.Description) != "" {
+		target.Description = source.Description
+		changed = true
+	}
+
+	// Tags: union.
+	tagSet := map[string]bool{}
+	for _, t := range target.Tags {
+		tagSet[t] = true
+	}
+	for _, t := range source.Tags {
+		if !tagSet[t] {
+			target.Tags = append(target.Tags, t)
+			tagSet[t] = true
+			changed = true
+		}
+	}
+
+	// OrgSize: fill if empty/na.
+	if strings.TrimSpace(source.OrgSize) != "" {
+		cur := strings.TrimSpace(strings.ToLower(target.OrgSize))
+		in := strings.TrimSpace(source.OrgSize)
+		if cur == "" || cur == "na" {
+			target.OrgSize = in
+			changed = true
+		}
+	}
+
+	// MarketSegments: union + dedup.
+	if len(source.MarketSegments) > 0 {
+		seen := map[string]bool{}
+		for _, s := range target.MarketSegments {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				seen[s] = true
+			}
+		}
+		for _, s := range source.MarketSegments {
+			s = strings.TrimSpace(s)
+			if s == "" || seen[s] {
+				continue
+			}
+			seen[s] = true
+			target.MarketSegments = append(target.MarketSegments, s)
+			changed = true
+		}
+	}
+
+	// State metrics: union + prefer richer.
+	if mergeStatePreferMetrics(target, source.State) {
+		changed = true
+	}
+
+	// Track merged canonical paths for future alias resolution.
+	if strings.TrimSpace(source.CanonicalPath) != "" {
+		if target.Identifiers["merged_paths"] == "" {
+			target.Identifiers["merged_paths"] = source.CanonicalPath
+			changed = true
+		} else if !strings.Contains(target.Identifiers["merged_paths"], source.CanonicalPath) {
+			target.Identifiers["merged_paths"] += "," + source.CanonicalPath
+			changed = true
+		}
+	}
+
+	return changed
+}
+
+func mergeStatePreferMetrics(target *models.HorizonFragment, src map[string]models.MetricValue) bool {
+	if target == nil || src == nil || len(src) == 0 {
+		return false
+	}
+	if target.State == nil {
+		target.State = map[string]models.MetricValue{}
+	}
+	changed := false
+	for k, mv := range src {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		cur, ok := target.State[key]
+		if !ok {
+			target.State[key] = mv
+			changed = true
+			continue
+		}
+		if betterMetricValue(mv, cur) {
+			target.State[key] = mv
+			changed = true
+		}
+	}
+	return changed
+}
+
+// betterMetricValue returns true if a is preferable to b.
+func betterMetricValue(a, b models.MetricValue) bool {
+	// Prefer higher confidence.
+	if a.Confidence > b.Confidence+1e-9 {
+		return true
+	}
+	if b.Confidence > a.Confidence+1e-9 {
+		return false
+	}
+	// Prefer newer observation time.
+	if b.ObservedAt.IsZero() && !a.ObservedAt.IsZero() {
+		return true
+	}
+	if !b.ObservedAt.IsZero() && a.ObservedAt.IsZero() {
+		return false
+	}
+	if !a.ObservedAt.IsZero() && !b.ObservedAt.IsZero() && a.ObservedAt.After(b.ObservedAt) {
+		return true
+	}
+	// Prefer richer provenance.
+	if len(a.Provenance.SourceIDs) > len(b.Provenance.SourceIDs) {
+		return true
+	}
+	// Prefer unit presence.
+	bu := ""
+	au := ""
+	if b.Unit != nil {
+		bu = strings.TrimSpace(*b.Unit)
+	}
+	if a.Unit != nil {
+		au = strings.TrimSpace(*a.Unit)
+	}
+	if bu == "" && au != "" {
+		return true
+	}
+	// Prefer non-zero value.
+	if b.Value == 0 && a.Value != 0 {
+		return true
+	}
+	return false
 }
 
 type DeduplicationStats struct {
@@ -391,6 +640,10 @@ func migrateEdges(ctx context.Context, primaryID string, duplicateIDs []string, 
 			// Check if edge already exists with primary as source
 			existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, primaryID, edge.TargetFragmentID, edge.Type)
 			if err == nil && existing != nil {
+				// Merge metrics into the existing edge before deleting the duplicate edge.
+				if mergeEdgeMetrics(existing, edge) {
+					_ = edgesRepo.Update(ctx, existing) // best-effort
+				}
 				// Edge already exists, delete duplicate
 				if err := edgesRepo.Delete(ctx, edge.ID); err != nil {
 					log.Printf("WARNING: Failed to delete duplicate edge %s: %v", edge.ID, err)
@@ -436,6 +689,10 @@ func migrateEdges(ctx context.Context, primaryID string, duplicateIDs []string, 
 			// Check if edge already exists with primary as target
 			existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, edge.SourceFragmentID, primaryID, edge.Type)
 			if err == nil && existing != nil {
+				// Merge metrics into the existing edge before deleting the duplicate edge.
+				if mergeEdgeMetrics(existing, edge) {
+					_ = edgesRepo.Update(ctx, existing) // best-effort
+				}
 				// Edge already exists, delete duplicate
 				if err := edgesRepo.Delete(ctx, edge.ID); err != nil {
 					log.Printf("WARNING: Failed to delete duplicate edge %s: %v", edge.ID, err)
@@ -464,6 +721,52 @@ func migrateEdges(ctx context.Context, primaryID string, duplicateIDs []string, 
 	}
 
 	return nil
+}
+
+// mergeEdgeMetrics merges src edge metrics/qualifiers into dst, preferring richer values.
+func mergeEdgeMetrics(dst, src *models.DependencyEdge) bool {
+	if dst == nil || src == nil {
+		return false
+	}
+	changed := false
+	if src.Metrics != nil && len(src.Metrics) > 0 {
+		if dst.Metrics == nil {
+			dst.Metrics = map[string]models.MetricValue{}
+		}
+		for k, mv := range src.Metrics {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				continue
+			}
+			if cur, ok := dst.Metrics[key]; ok {
+				if betterMetricValue(mv, cur) {
+					dst.Metrics[key] = mv
+					changed = true
+				}
+			} else {
+				dst.Metrics[key] = mv
+				changed = true
+			}
+		}
+	}
+	// Qualifiers: fill missing only (never overwrite).
+	if src.Qualifiers != nil && len(src.Qualifiers) > 0 {
+		if dst.Qualifiers == nil {
+			dst.Qualifiers = map[string]interface{}{}
+		}
+		for k, v := range src.Qualifiers {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				continue
+			}
+			if _, ok := dst.Qualifiers[key]; ok {
+				continue
+			}
+			dst.Qualifiers[key] = v
+			changed = true
+		}
+	}
+	return changed
 }
 
 func migrateWatchdogs(ctx context.Context, primaryID string, duplicateIDs []string, watchdogRepo *repo.WatchdogConfigsRepository, stats *DeduplicationStats) error {

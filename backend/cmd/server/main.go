@@ -165,6 +165,17 @@ func main() {
 		}
 	})
 
+	// Load market segment normalization dictionary from Firestore (used to derive MarketSegmentNorms).
+	taxonomy.InitMarketSegmentDictionaryCacheFromFirestore(fsClient.Client(), "v1", 20*time.Minute)
+	if err := taxonomy.RefreshMarketSegmentDictionary(ctx); err != nil {
+		log.Printf("WARNING: failed to load market segment dictionary: %v", err)
+	}
+	taxonomy.StartMarketSegmentDictionaryAutoRefresh(ctx, 10*time.Minute, func(err error) {
+		if err != nil {
+			log.Printf("WARNING: market segment dictionary refresh failed: %v", err)
+		}
+	})
+
 	// Initialize GCS client for uploads
 	gcsClient, err := gcp.NewGCSClient(ctx, projectID)
 	if err != nil {

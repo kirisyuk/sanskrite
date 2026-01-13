@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -40,9 +41,32 @@ type HorizonFragment struct {
 	// This is an ORG-level classification (not a separate fragment type in MVP).
 	MarketSegments []string `json:"marketSegments,omitempty" firestore:"marketSegments,omitempty"`
 
+	// MarketSegmentNorms are derived, normalized "market coordinates" for each MarketSegment entry.
+	// They are computed using a Firestore-backed dictionary (runtime taxonomy) and are intended for:
+	// - consistent UI rendering (icons / grouping)
+	// - future filtering/indexing
+	MarketSegmentNorms []coremodels.MarketSegmentNorm `json:"marketSegmentNorms,omitempty" firestore:"marketSegmentNorms,omitempty"`
+	// MarketSegmentNormDomains is a deduplicated list of normalized market domains (market_l1) for indexing/filtering.
+	MarketSegmentNormDomains []string `json:"marketSegmentNormDomains,omitempty" firestore:"marketSegmentNormDomains,omitempty"`
+	// MarketSegmentNormVerticals is a deduplicated list of normalized market verticals (market_l2) for indexing/filtering.
+	MarketSegmentNormVerticals []string `json:"marketSegmentNormVerticals,omitempty" firestore:"marketSegmentNormVerticals,omitempty"`
+	// MarketSegmentNormPairs is a deduplicated list of normalized domain/vertical pairs for indexing/filtering.
+	// Format: "{domain}/{vertical}" if vertical != "", else "{domain}".
+	MarketSegmentNormPairs []string `json:"marketSegmentNormPairs,omitempty" firestore:"marketSegmentNormPairs,omitempty"`
+
 	// OrgSize is a coarse organization size bucket (ORG-level property).
 	// Canonical values: "sme" | "le" | "enterprise" | "mega" | "na"
 	OrgSize string `json:"orgSize,omitempty" firestore:"orgSize,omitempty"`
+
+	// --- MARKET-specific (when Type == MARKET) ---
+	// MarketDomain is a coarse canonical market domain.
+	// Expected values (non-exhaustive, best-effort): finance, technology, industrial, consumer, healthcare, energy, materials, telecom, real-estate.
+	MarketDomain string `json:"marketDomain,omitempty" firestore:"marketDomain,omitempty"`
+	// MarketVertical is a more specific vertical/industry label within the domain (best-effort).
+	MarketVertical string `json:"marketVertical,omitempty" firestore:"marketVertical,omitempty"`
+	// MarketChannels is a multi-valued channel classification for the market (best-effort).
+	// Examples: b2b, b2c, public-sector.
+	MarketChannels []string `json:"marketChannels,omitempty" firestore:"marketChannels,omitempty"`
 
 	// IndexPaths — денормализованные “координаты” фрагмента для детерминированного картографирования/фильтрации.
 	// Собирается из canonicalPath + (sectorPath/entityPath + ancestors) + location + tags + identifiers + (optional spheres).
@@ -160,6 +184,50 @@ func (f *HorizonFragment) Validate() error {
 	// These fields can be produced by Scout/Research and should be canonicalized before persistence.
 	f.MarketSegments = taxonomy.NormalizeSegmentPaths(f.MarketSegments)
 	f.OrgSize = taxonomy.NormalizeOrgSize(f.OrgSize)
+
+	// Best-effort: normalize MARKET canonical path + fields (non-blocking).
+	if f.Type == FragmentTypeMarket {
+		// Tighten flat /market/{slug} into /market/global/{slug}.
+		// NOTE: do not rewrite legacy /market/{domain}/{slug} because geo is unknown.
+		cp := strings.TrimSpace(f.CanonicalPath)
+		if strings.HasPrefix(cp, "/market/") {
+			parts := strings.Split(strings.Trim(cp, "/"), "/")
+			// market/{x}
+			if len(parts) == 2 && parts[0] == "market" && strings.TrimSpace(parts[1]) != "" {
+				f.CanonicalPath = "/market/global/" + strings.TrimSpace(parts[1])
+			}
+		}
+
+		// Normalize domain/vertical/channels (best-effort).
+		f.MarketDomain = strings.ToLower(strings.TrimSpace(f.MarketDomain))
+		f.MarketVertical = strings.ToLower(strings.TrimSpace(f.MarketVertical))
+		// Dedupe/normalize channels.
+		if len(f.MarketChannels) > 0 {
+			seen := map[string]struct{}{}
+			out := make([]string, 0, len(f.MarketChannels))
+			for _, ch := range f.MarketChannels {
+				ch = strings.ToLower(strings.TrimSpace(ch))
+				// Canonicalize common aliases (keep aligned with segment channel conventions).
+				switch ch {
+				case "gov", "government", "public":
+					ch = "public-sector"
+				}
+				if ch == "" {
+					continue
+				}
+				if _, ok := seen[ch]; ok {
+					continue
+				}
+				seen[ch] = struct{}{}
+				out = append(out, ch)
+			}
+			f.MarketChannels = out
+		}
+	}
+
+	// Best-effort: compute derived market segment normals for stable UI + indexing.
+	f.MarketSegmentNorms, f.MarketSegmentNormDomains, f.MarketSegmentNormVerticals, f.MarketSegmentNormPairs =
+		taxonomy.NormalizeMarketSegments(f.MarketSegments)
 
 	// Best-effort: ensure indexPaths is always present for new/updated fragments.
 	// This keeps expand/graph filtering deterministic without requiring backfills.

@@ -325,6 +325,25 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypePerson},
 		Description:      "Person is related to person (symmetric)",
 	},
+
+	// PARTICIPATES_IN: org/fac participates in a market.
+	models.DependencyTypeParticipatesIn: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
+		Description:      "Entity participates in market",
+	},
+	// DOMINATES: org/fac dominates a market (leader).
+	models.DependencyTypeDominates: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
+		Description:      "Entity dominates market (leader)",
+	},
 }
 
 // ValidateEdgeDirection checks if an edge has correct direction according to policies.

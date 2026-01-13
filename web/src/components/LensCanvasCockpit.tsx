@@ -22,6 +22,7 @@ import { HORIZON_NODE_TYPES, setHorizonNodeVisualQuality, type HorizonNodeVisual
 import { api } from '../lib/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
 import {
   layoutExpansionWithGroups,
@@ -1266,11 +1267,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, [addNodeOpen, addNodeResults, nodes]);
 
   const paletteSelectableItems = React.useMemo(() => {
+    const q = String(addNodeQuery || '').trim();
+    const scoutItem = q.length >= 2 ? [{ kind: 'scout' as const, query: q }] : [];
     return [
+      ...scoutItem,
       ...graphSearchResults.map((m) => ({ kind: 'graph' as const, node: m.node, label: m.label, canonicalPath: m.canonicalPath, type: m.type })),
       ...filteredAddNodeResults.map((r) => ({ kind: 'index' as const, entity: r })),
     ];
-  }, [graphSearchResults, filteredAddNodeResults]);
+  }, [addNodeQuery, graphSearchResults, filteredAddNodeResults]);
 
   const addNodeQueryTrim = String(addNodeQuery || '').trim();
 
@@ -1329,6 +1333,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   // Prevent mode-switch relayout loops
   const lastAppliedLayoutModeRef = React.useRef<'freeform' | 'linear' | 'levels' | null>(null);
   const autoArrangeOnceRef = React.useRef<boolean>(false);
+  // Proxy ref to avoid TDZ when effects above reference convertLensItemsToGraph (defined later).
+  // We set this ref to the real callback after it's initialized.
+  const convertLensItemsToGraphRef = React.useRef<
+    (items: LensItem[] | null | undefined) => { nodes: Node<HorizonNodeData>[]; edges: Edge[] }
+  >(() => ({ nodes: [], edges: [] }));
 
   // When graph grows large and user didn't override perf mode, auto-disable heavy visuals once.
   React.useEffect(() => {
@@ -2144,6 +2153,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   depth,
                   canonicalPath: fragObj?.canonicalPath,
                   indexPaths: Array.isArray(fragObj?.indexPaths) ? fragObj.indexPaths : undefined,
+                  marketSegments: Array.isArray(fragObj?.marketSegments) ? fragObj.marketSegments : undefined,
+                  marketSegmentNorms: Array.isArray(fragObj?.marketSegmentNorms) ? fragObj.marketSegmentNorms : undefined,
+                  marketSegmentNormDomains: Array.isArray(fragObj?.marketSegmentNormDomains) ? fragObj.marketSegmentNormDomains : undefined,
+                  marketSegmentNormVerticals: Array.isArray(fragObj?.marketSegmentNormVerticals) ? fragObj.marketSegmentNormVerticals : undefined,
+                  marketSegmentNormPairs: Array.isArray(fragObj?.marketSegmentNormPairs) ? fragObj.marketSegmentNormPairs : undefined,
                   label: fragObj?.labels?.en || humanizeCanonicalPath(fragObj?.canonicalPath) || 'Fragment',
                   type: fragObj?.type,
                   state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
@@ -3560,7 +3574,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       try {
         // New lens / reload: reset risk shield state.
         setRiskShieldActiveNodeId(null);
-        // New lens / reload: allow a single auto-arrange if default layout is Hierarchical.
+        // New lens / reload: allow a single auto-arrange on initial load (whatever the current layout mode is).
         autoArrangeOnceRef.current = false;
         const itemsRaw = await api.getLensItems(lensId);
         const items = Array.isArray(itemsRaw) ? (itemsRaw as LensItem[]) : [];
@@ -3570,7 +3584,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         setLensItems(items);
         
         // Преобразуем LensItems в ноды и рёбра
-        const { nodes: loadedNodes, edges: loadedEdges } = convertLensItemsToGraph(items);
+        const { nodes: loadedNodes, edges: loadedEdges } = convertLensItemsToGraphRef.current(items);
         dbg('[Cockpit] Initial load converted:', { nodes: loadedNodes.length, edges: loadedEdges.length });
         // IMPORTANT: do not re-load lens items when scope changes (pin/unpin).
         // Pin state is injected via a separate effect that reacts to scope + nodes.
@@ -3579,18 +3593,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         
         // Pin state + callbacks are injected by the dedicated effect (triggered by nodes.length changes).
         
-        // Fit view after initial load (and trigger auto-arrange for Levels mode)
+        // Fit view after initial load and trigger ONE auto-arrange using the CURRENT layout mode.
         setTimeout(() => {
           if (reactFlowInstanceRef.current && loadedNodes.length > 0) {
             reactFlowInstanceRef.current.fitView({ padding: 0.1, duration: 300 });
           }
-          // Trigger auto-arrange for Levels mode (moved from useEffect to avoid nodes.length dependency)
-          if (layoutMode === 'levels' && !autoArrangeOnceRef.current && loadedNodes.length > 0) {
+          // Trigger auto-arrange once on initial load (moved from useEffect to avoid nodes.length dependency).
+          if (!autoArrangeOnceRef.current && loadedNodes.length > 0) {
             const hasFragments = loadedNodes.some((n) => !((n.data as any)?.isGroup));
-            if (hasFragments) {
-              autoArrangeOnceRef.current = true;
-              invokeArrange();
-            }
+            if (!hasFragments) return;
+            autoArrangeOnceRef.current = true;
+            // Note: invokeArrange -> handleArrange uses current `layoutMode` to choose the algorithm.
+            // We keep layoutMode in a ref so we don't re-fetch LensItems on layout mode changes.
+            invokeArrange();
           }
         }, 100);
       } catch (err: any) {
@@ -3600,7 +3615,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
 
     loadLensItems();
-  }, [lensId, setNodes, setEdges, dbg, layoutMode, invokeArrange]);
+  }, [lensId, setNodes, setEdges, dbg, invokeArrange]);
 
   // Преобразование LensItems в ReactFlow ноды и рёбра
   const convertLensItemsToGraph = useCallback((items: LensItem[] | null | undefined) => {
@@ -3751,6 +3766,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       dbg('[Cockpit] Converted to graph:', { nodes: graphNodes.length, edges: filteredEdges.length });
     return { nodes: graphNodes, edges: filteredEdges };
   }, [norm, dbg, getEdgeStroke, getEdgeCaptionShort, suppressDominatedEdges]);
+  // Keep proxy ref updated (used by initial-load effect declared above).
+  convertLensItemsToGraphRef.current = convertLensItemsToGraph;
 
   // Загрузка графа из Cockpit API и сохранение в LensItems
   const handleLoadGraph = useCallback(async () => {
@@ -3834,6 +3851,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             depth: 0,
             canonicalPath: fragment.canonicalPath,
             indexPaths: Array.isArray(fragment.indexPaths) ? fragment.indexPaths : undefined,
+            marketSegments: Array.isArray(fragment.marketSegments) ? fragment.marketSegments : undefined,
+            marketSegmentNorms: Array.isArray(fragment.marketSegmentNorms) ? fragment.marketSegmentNorms : undefined,
+            marketSegmentNormDomains: Array.isArray(fragment.marketSegmentNormDomains) ? fragment.marketSegmentNormDomains : undefined,
+            marketSegmentNormVerticals: Array.isArray(fragment.marketSegmentNormVerticals) ? fragment.marketSegmentNormVerticals : undefined,
+            marketSegmentNormPairs: Array.isArray(fragment.marketSegmentNormPairs) ? fragment.marketSegmentNormPairs : undefined,
             label: fragment.labels?.en || humanizeCanonicalPath(fragment.canonicalPath) || `Fragment ${index}`,
             type: fragment.type,
             state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
@@ -5024,6 +5046,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             depth: childDepth,
             canonicalPath: fragment.canonicalPath,
             indexPaths: Array.isArray(fragment.indexPaths) ? fragment.indexPaths : undefined,
+            marketSegments: Array.isArray(fragment.marketSegments) ? fragment.marketSegments : undefined,
+            marketSegmentNorms: Array.isArray(fragment.marketSegmentNorms) ? fragment.marketSegmentNorms : undefined,
+            marketSegmentNormDomains: Array.isArray(fragment.marketSegmentNormDomains) ? fragment.marketSegmentNormDomains : undefined,
+            marketSegmentNormVerticals: Array.isArray(fragment.marketSegmentNormVerticals) ? fragment.marketSegmentNormVerticals : undefined,
+            marketSegmentNormPairs: Array.isArray(fragment.marketSegmentNormPairs) ? fragment.marketSegmentNormPairs : undefined,
             label: fragment.labels?.en || humanizeCanonicalPath(fragment.canonicalPath) || 'Fragment',
             type: fragment.type,
             state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
@@ -6269,6 +6296,179 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     return { nodeIds: visited, edgeIds: usedEdgeIds, ultimatePersonIds };
   }, [perfMode, hoverHighlightMode, hoveredNodeId, nodes, edges, isLevelsLayout]);
 
+  // Off-screen node previews: show previews for nodes that are outside viewport when hovering.
+  // IMPORTANT: Must NOT disturb ReactFlow's internal layout or edge rendering.
+  const offScreenPreviews = React.useMemo(() => {
+    // Temporarily disabled (UX needs redesign).
+    const OFFSCREEN_PREVIEW_ENABLED = false;
+    if (!OFFSCREEN_PREVIEW_ENABLED) return [];
+    if (perfMode) return [];
+    if (!hoverHighlight || !hoveredNodeId) return [];
+    
+    const hovered = String(hoveredNodeId || '').trim();
+    if (!hovered) return [];
+    
+    const inst: any = reactFlowInstanceRef.current;
+    if (!inst) return [];
+    
+    // Get viewport bounds (in screen pixels relative to the ReactFlow container).
+    // In reactflow@11:
+    // - node.position is in flow coordinates
+    // - viewport { x, y, zoom } maps flow->screen: sx = fx*zoom + x, sy = fy*zoom + y
+    const vp = inst.getViewport?.();
+    const zoom = typeof vp?.zoom === 'number' ? vp.zoom : 1;
+    const vx = typeof vp?.x === 'number' ? vp.x : 0;
+    const vy = typeof vp?.y === 'number' ? vp.y : 0;
+
+    // We render previews in an absolute overlay over the ReactFlow wrapper.
+    const rf = document.querySelector('.react-flow') as HTMLElement | null;
+    if (!rf) return [];
+    const rfRect = rf.getBoundingClientRect();
+    const viewportWidth = rfRect.width;
+    const viewportHeight = rfRect.height;
+
+    const nodeBoxScreen = (n: any) => {
+      const px = typeof n?.position?.x === 'number' ? n.position.x : 0;
+      const py = typeof n?.position?.y === 'number' ? n.position.y : 0;
+      const w = typeof n?.width === 'number' ? n.width : ELK_NODE_WIDTH;
+      const h = typeof n?.height === 'number' ? n.height : ELK_NODE_HEIGHT;
+      const left = px * zoom + vx;
+      const top = py * zoom + vy;
+      return { left, top, right: left + w * zoom, bottom: top + h * zoom, w: w * zoom, h: h * zoom };
+    };
+
+    const nodeCenterScreen = (n: any) => {
+      const b = nodeBoxScreen(n);
+      return { x: b.left + b.w / 2, y: b.top + b.h / 2 };
+    };
+
+    // Place the preview card INSIDE the viewport with padding so it never overflows the screen.
+    // (We don't know the exact rendered width, so we reserve a conservative inset.)
+    const PREVIEW_HALF_W = 115;
+    const PREVIEW_HALF_H = 34;
+    const PREVIEW_PAD = 10;
+    const xmin = PREVIEW_HALF_W + PREVIEW_PAD;
+    const xmax = Math.max(xmin, viewportWidth - PREVIEW_HALF_W - PREVIEW_PAD);
+    const ymin = PREVIEW_HALF_H + PREVIEW_PAD;
+    const ymax = Math.max(ymin, viewportHeight - PREVIEW_HALF_H - PREVIEW_PAD);
+
+    const rayToRect = (ox: number, oy: number, dx: number, dy: number) => {
+      const EPS = 1e-6;
+      let tmin = -Infinity;
+      let tmax = Infinity;
+
+      // X slab
+      if (Math.abs(dx) < EPS) {
+        if (ox < xmin || ox > xmax) return null;
+      } else {
+        const tx1 = (xmin - ox) / dx;
+        const tx2 = (xmax - ox) / dx;
+        tmin = Math.max(tmin, Math.min(tx1, tx2));
+        tmax = Math.min(tmax, Math.max(tx1, tx2));
+      }
+
+      // Y slab
+      if (Math.abs(dy) < EPS) {
+        if (oy < ymin || oy > ymax) return null;
+      } else {
+        const ty1 = (ymin - oy) / dy;
+        const ty2 = (ymax - oy) / dy;
+        tmin = Math.max(tmin, Math.min(ty1, ty2));
+        tmax = Math.min(tmax, Math.max(ty1, ty2));
+      }
+
+      if (tmax < 0 || tmin > tmax) return null;
+      // If origin is inside the rect, entry is behind us; use exit.
+      const t = tmin >= 0 ? tmin : tmax;
+      if (!Number.isFinite(t) || t < 0) return null;
+
+      const px = ox + dx * t;
+      const py = oy + dy * t;
+      return {
+        x: Math.min(xmax, Math.max(xmin, px)),
+        y: Math.min(ymax, Math.max(ymin, py)),
+      };
+    };
+    
+    // Find hovered node position
+    const hoveredNode = nodes.find((n) => n.id === hovered);
+    if (!hoveredNode || !hoveredNode.position) return [];
+    
+    const hoveredScreenPos = nodeCenterScreen(hoveredNode);
+    
+    // Find direct edges from hovered node (max 2)
+    const directEdges = edges.filter((e) => {
+      const source = String(e.source || '').trim();
+      const target = String(e.target || '').trim();
+      return (source === hovered || target === hovered) && hoverHighlight.edgeIds.has(e.id);
+    }).slice(0, 2);
+    
+    const previews: Array<{
+      nodeId: string;
+      edgeId: string;
+      screenX: number;
+      screenY: number;
+      angle: number;
+      node: Node;
+      edge: Edge;
+      hoveredScreenX: number;
+      hoveredScreenY: number;
+    }> = [];
+    
+    for (const edge of directEdges) {
+      const targetNodeId = edge.source === hovered ? edge.target : edge.source;
+      const targetNode = nodes.find((n) => n.id === targetNodeId);
+      if (!targetNode || !targetNode.position) continue;
+      
+      const targetScreenPos = nodeCenterScreen(targetNode);
+      
+      // If the target node is fully visible (with margin), don't show preview.
+      const margin = 18;
+      const tb = nodeBoxScreen(targetNode);
+      const isFullyVisible =
+        tb.left >= margin &&
+        tb.top >= margin &&
+        tb.right <= viewportWidth - margin &&
+        tb.bottom <= viewportHeight - margin;
+      if (isFullyVisible) continue;
+      
+      // Calculate angle from hovered node to target node
+      const dx = targetScreenPos.x - hoveredScreenPos.x;
+      const dy = targetScreenPos.y - hoveredScreenPos.y;
+      const angle = Math.atan2(dy, dx);
+      const normalizedAngle = angle < 0 ? angle + 2 * Math.PI : angle;
+
+      // Ray-rectangle intersection against the *padded* rect (keeps preview on-screen).
+      const hit = rayToRect(hoveredScreenPos.x, hoveredScreenPos.y, dx, dy);
+      if (!hit) continue;
+      const previewX = hit.x;
+      const previewY = hit.y;
+      
+      previews.push({
+        nodeId: targetNodeId,
+        edgeId: edge.id,
+        screenX: previewX,
+        screenY: previewY,
+        angle: normalizedAngle,
+        node: targetNode,
+        edge: edge,
+        hoveredScreenX: hoveredScreenPos.x,
+        hoveredScreenY: hoveredScreenPos.y,
+      });
+    }
+    
+    return previews;
+  }, [hoverHighlight, hoveredNodeId, nodes, edges, perfMode]);
+
+  const offScreenPreviewEdgeIds = React.useMemo(() => {
+    const s = new Set<string>();
+    for (const p of offScreenPreviews as any[]) {
+      const id = String((p as any)?.edgeId || '').trim();
+      if (id) s.add(id);
+    }
+    return s;
+  }, [offScreenPreviews]);
+
   // Pagination: hide children on non-active pages; never render edges connected to hidden nodes.
   const hiddenNodeIds = React.useMemo(() => {
     const out = new Set<string>();
@@ -6972,6 +7172,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const out = edgesForDisplay.map((e) => {
         const { baseStyle } = baseStyled(e);
         const eid = String((e as any)?.id || '').trim();
+        // If we are rendering an off-screen preview for this edge, hide the real edge segment
+        // (otherwise it still points to the true off-screen node and visually contradicts the preview).
+        if (eid && offScreenPreviewEdgeIds.has(eid)) {
+          return withLabel(e, false, { ...baseStyle, opacity: 0 }, false);
+        }
         const isHiEdge = eid && hiEdgeIds.has(eid);
         // Modern UX: show captions and lift to front only for edges incident to the hovered node.
         const isIncident = e.source === hoveredNodeId || e.target === hoveredNodeId;
@@ -7885,25 +8090,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setNodes(withCallbacks);
 
       // Focus behavior after arrange:
-      // - If a stack-preview chip requested focus, center on that node (and avoid full-graph fitView).
-      // - Otherwise keep the existing fitView behavior.
+      // - If a stack-preview chip (or expand/collapse flow) requested focus, center on that node.
+      // - Otherwise DO NOT auto-fit the entire graph. Expanding a node should keep the user's zoom/context.
       const focusId = String(pendingFocusNodeIdRef.current || '').trim();
       pendingFocusNodeIdRef.current = null;
       if (focusId) {
-        const target = withCallbacks.find((n: any) => String(n?.id || '').trim() === focusId) as any;
         setTimeout(() => {
           try {
-            const inst: any = reactFlowInstanceRef.current;
-            if (inst && target) inst.fitView?.({ nodes: [target], padding: 0.35, duration: 420 });
+            // Keep zoom stable; just center on the node.
+            focusOnFragment(focusId);
           } catch {}
         }, 60);
-      } else {
-      // Fit view после arrange
-      setTimeout(() => {
-        if (reactFlowInstanceRef.current && withGroups.length > 0) {
-          reactFlowInstanceRef.current.fitView({ padding: 0.1, duration: 400 });
-        }
-      }, 100);
       }
 
       dbg('[Cockpit] Arrange completed');
@@ -8200,6 +8397,248 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return { position: pos, row: null as any, col: null as any, nodeId: fragmentId };
     },
     [isFreeformLayout, gridState.cells, nodes, ELK_NODE_WIDTH],
+  );
+
+  // --- Scout from query (no manual type selection) ---
+  // Uses existing WS pipeline + new /scope-scout-query endpoint.
+  const rtGraphNodes = useHorizonRealtimeStore((s) => s.nodes);
+  const pendingScoutRef = React.useRef<
+    Map<string, { placeholderId: string; query: string; canonicalPath?: string; createdAt: number }>
+  >(new Map());
+
+  const genCorrelationId = React.useCallback((): string => {
+    try {
+      const c: any = (globalThis as any)?.crypto;
+      if (c?.randomUUID) return String(c.randomUUID());
+    } catch {}
+    // Fallback: good-enough unique token for client-side correlation
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }, []);
+
+  const findFragmentIdByCanonicalPath = React.useCallback(
+    (canonicalPath: string): string => {
+      const cp = String(canonicalPath || '').trim();
+      if (!cp) return '';
+      const nodes = rtGraphNodes || {};
+      for (const v of Object.values(nodes as any)) {
+        const vcp = String((v as any)?.canonicalPath || '').trim();
+        const fid = String((v as any)?.fragmentId || '').trim();
+        if (vcp && fid && vcp === cp) return fid;
+      }
+      return '';
+    },
+    [rtGraphNodes],
+  );
+
+  const materializeScoutedNode = React.useCallback(
+    async (args: { placeholderId: string; fragmentId: string; canonicalPath: string }) => {
+      const fragmentId = norm(args.fragmentId);
+      const canonicalPath = String(args.canonicalPath || '').trim();
+      if (!lensId || !fragmentId || !canonicalPath) return;
+
+      // If already on canvas, just remove placeholder and focus existing.
+      const existing = (nodesStateRef.current || nodes).find((n) => norm((n.data as any)?.fragmentId || n.id) === fragmentId);
+      if (existing) {
+        setNodes((prev) => (prev || []).filter((n) => String(n.id || '').trim() !== String(args.placeholderId || '').trim()));
+        try {
+          focusOnFragment(existing.id);
+        } catch {}
+        return;
+      }
+
+      // Resolve fragment for label/type/state and persist as a LensItem node.
+      let fragment: any;
+      try {
+        fragment = await api.getHorizonFragmentByPath(canonicalPath);
+      } catch (e) {
+        console.warn('[Cockpit] Failed to resolve scouted fragment by path', canonicalPath, e);
+        return;
+      }
+
+      const label =
+        String(fragment?.labels?.en || fragment?.label || '').trim() ||
+        canonicalPath.split('/').filter(Boolean).slice(-1)[0] ||
+        fragmentId;
+      const type = String(fragment?.type || '').trim() || undefined;
+      const state = extractStateMetrics(fragment?.state);
+      const placement = computeNewRootPosition(fragmentId);
+      const position = placement.position;
+
+      let createdId = '';
+      try {
+        const res = await api.createLensItem(lensId, {
+          kind: 'node',
+          subkind: 'fragment',
+          fragmentId,
+          canonicalPath,
+          label,
+          type,
+          state,
+          status: fragment?.status,
+          expanded: false,
+          collapsed: false,
+          critical: false,
+          position,
+        });
+        createdId = String(res?.id || '').trim();
+      } catch (e) {
+        console.warn('[Cockpit] Failed to create lens item for scouted node', e);
+        return;
+      }
+
+      // Replace placeholder node with real node.
+      const newNode: Node<HorizonNodeData> = {
+        id: fragmentId,
+        type: 'horizonFragment',
+        position,
+        data: {
+          id: fragmentId,
+          lensItemId: createdId,
+          fragmentId,
+          canonicalPath,
+          label,
+          type,
+          state,
+          showMetrics: showNodeMetrics,
+          status: fragment?.status,
+          expanded: false,
+          collapsed: false,
+          critical: false,
+          parentFragmentId: undefined,
+          rootFragmentId: fragmentId,
+          depth: 0,
+          onLoadRelated: invokeLoadRelated,
+          onCollapse: invokeCollapse,
+          onScopeScout: invokeScopeScout,
+        },
+      } as any;
+
+      setNodes((prev) => {
+        const pid = String(args.placeholderId || '').trim();
+        const filtered = (prev || []).filter((n) => String((n as any)?.id || '').trim() !== pid);
+        return [...filtered, newNode as any];
+      });
+
+      // Focus new node (keep current zoom).
+      try {
+        focusOnFragment(fragmentId);
+      } catch {}
+    },
+    [
+      lensId,
+      nodes,
+      setNodes,
+      computeNewRootPosition,
+      extractStateMetrics,
+      showNodeMetrics,
+      invokeLoadRelated,
+      invokeCollapse,
+      invokeScopeScout,
+      focusOnFragment,
+    ],
+  );
+
+  // WS-driven placeholder reconciliation: once a scouted canonicalPath is materialized, swap in the real node.
+  React.useEffect(() => {
+    if (!lensId) return;
+    const pending = pendingScoutRef.current;
+    if (!pending || pending.size === 0) return;
+
+    for (const [cid, st] of pending.entries()) {
+      const cp = String(st.canonicalPath || '').trim();
+      if (!cp) continue;
+      const fid = findFragmentIdByCanonicalPath(cp);
+      if (!fid) continue;
+      pending.delete(cid);
+      void materializeScoutedNode({ placeholderId: st.placeholderId, fragmentId: fid, canonicalPath: cp });
+    }
+  }, [lensId, rtGraphNodes, findFragmentIdByCanonicalPath, materializeScoutedNode]);
+
+  const scoutForQuery = React.useCallback(
+    async (query: string) => {
+      const q = String(query || '').trim();
+      if (!lensId || q.length < 2) return;
+
+      const correlationId = genCorrelationId();
+      const placeholderId = `scout:${correlationId}`;
+
+      // Add placeholder node immediately.
+      const placement = computeNewRootPosition(placeholderId);
+      const position = placement.position;
+      const ph: Node<HorizonNodeData> = {
+        id: placeholderId,
+        type: 'horizonFragment',
+        position,
+        data: {
+          id: placeholderId,
+          fragmentId: placeholderId,
+          canonicalPath: '',
+          label: `Scouting: ${q}`,
+          type: 'UNKNOWN',
+          showMetrics: showNodeMetrics,
+          status: 'scouting',
+          expanded: false,
+          collapsed: false,
+          critical: false,
+          parentFragmentId: undefined,
+          rootFragmentId: placeholderId,
+          depth: 0,
+          isScopeScouting: true,
+          onLoadRelated: invokeLoadRelated,
+          onCollapse: invokeCollapse,
+          onScopeScout: invokeScopeScout,
+        } as any,
+      } as any;
+      setNodes((prev) => [...(prev || []), ph as any]);
+
+      pendingScoutRef.current.set(correlationId, { placeholderId, query: q, createdAt: Date.now() });
+
+      // Close palette quickly (user stays on graph).
+      closeAddNode();
+
+      try {
+        const res = await api.scopeScoutHorizonLensQuery(lensId, { query: q }, { correlationId });
+        const cp = String(res?.targetCanonicalPath || '').trim();
+        if (cp) {
+          // Optimistic scope preview update (pin state and UI consistency).
+          setLensScopePaths((prev) => (prev.includes(cp) ? prev : [...prev, cp]));
+
+          // Update placeholder node with canonicalPath to enable WS reconciliation.
+          setNodes((prev) =>
+            (prev || []).map((n) => {
+              if (String((n as any)?.id || '').trim() !== placeholderId) return n;
+              const d0: any = (n as any)?.data || {};
+              const d = { ...d0, canonicalPath: cp, label: d0?.label || `Scouting: ${q}` };
+              return { ...(n as any), data: d } as any;
+            }),
+          );
+          const st = pendingScoutRef.current.get(correlationId);
+          if (st) pendingScoutRef.current.set(correlationId, { ...st, canonicalPath: cp });
+        }
+      } catch (e) {
+        console.warn('[Cockpit] scope-scout-query failed', e);
+        // Mark placeholder as failed (keep visible so user understands something happened).
+        setNodes((prev) =>
+          (prev || []).map((n) => {
+            if (String((n as any)?.id || '').trim() !== placeholderId) return n;
+            const d0: any = (n as any)?.data || {};
+            return { ...(n as any), data: { ...d0, isScopeScouting: false, status: 'failed', label: `Scout failed: ${q}` } } as any;
+          }),
+        );
+      }
+    },
+    [
+      lensId,
+      genCorrelationId,
+      computeNewRootPosition,
+      showNodeMetrics,
+      invokeLoadRelated,
+      invokeCollapse,
+      invokeScopeScout,
+      setNodes,
+      closeAddNode,
+      setLensScopePaths,
+    ],
   );
 
   const addNodeToLens = React.useCallback(
@@ -10646,6 +11085,85 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           )}
         </ReactFlow>
 
+        {/* Off-screen node previews (render OUTSIDE ReactFlow to avoid interfering with layout). */}
+        {offScreenPreviews.length > 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              pointerEvents: 'none',
+              zIndex: 210,
+            }}
+          >
+            {/* Shared SVG layer for all preview lines */}
+            <svg
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                pointerEvents: 'none',
+              }}
+            >
+              {offScreenPreviews.map((p) => (
+                <line
+                  key={`preview-line-${p.edgeId}-${p.nodeId}`}
+                  x1={p.hoveredScreenX}
+                  y1={p.hoveredScreenY}
+                  x2={p.screenX}
+                  y2={p.screenY}
+                  stroke={theme === 'dark' ? 'rgba(255, 255, 255, 0.40)' : 'rgba(15, 23, 42, 0.40)'}
+                  strokeWidth={2}
+                  strokeDasharray="4 4"
+                />
+              ))}
+            </svg>
+
+            {/* Preview cards */}
+            {offScreenPreviews.map((p) => {
+              const nodeData: any = p.node.data || {};
+              const nodeLabel = String(nodeData.label || p.node.id || '').trim();
+              const edgeData: any = p.edge.data || {};
+              const edgeType = String(edgeData.edgeType || p.edge.label || '').trim();
+
+              return (
+                <div
+                  key={`preview-card-${p.nodeId}`}
+                  style={{
+                    position: 'absolute',
+                    left: p.screenX,
+                    top: p.screenY,
+                    transform: 'translate(-50%, -50%)',
+                    minWidth: 120,
+                    maxWidth: 200,
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    background: theme === 'dark' ? 'rgba(15, 23, 42, 0.95)' : 'rgba(255, 255, 255, 0.96)',
+                    border: `1px solid ${theme === 'dark' ? 'rgba(255, 255, 255, 0.22)' : 'rgba(15, 23, 42, 0.16)'}`,
+                    boxShadow: theme === 'dark'
+                      ? '0 10px 26px rgba(0, 0, 0, 0.55)'
+                      : '0 10px 26px rgba(0, 0, 0, 0.20)',
+                    color: theme === 'dark' ? 'rgba(255, 255, 255, 0.92)' : 'rgba(15, 23, 42, 0.90)',
+                    fontSize: 12,
+                    fontWeight: 650,
+                    textAlign: 'center',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {nodeLabel || '…'}
+                  {edgeType && (
+                    <div style={{ fontSize: 10, opacity: 0.72, marginTop: 4, fontWeight: 550 }}>
+                      {edgeType}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Ask-Graph FAB + recent questions chips (max 5) */}
         <div
           style={{
@@ -11172,6 +11690,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                     e.preventDefault();
                     const picked = paletteSelectableItems[addNodeActiveIndex];
                     if (!picked) return;
+                    if (picked.kind === 'scout') {
+                      void scoutForQuery(picked.query);
+                      return;
+                    }
                     if (picked.kind === 'graph') {
                       focusGraphNodeFromPalette(picked.node.id);
                       return;
@@ -11208,6 +11730,54 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 </div>
               )}
 
+              {/* Scout from query */}
+              {addNodeQueryTrim.length >= 2 && (
+                <div>
+                  <div style={{ padding: '10px 16px 6px', fontSize: 11, fontWeight: 800, color: 'var(--text-secondary-strong)', letterSpacing: 0.4, textTransform: 'uppercase' }}>
+                    Scout
+                  </div>
+                  {(() => {
+                    const absIdx = 0;
+                    const isActive = absIdx === addNodeActiveIndex;
+                    return (
+                      <button
+                        key={`scout-${addNodeQueryTrim}`}
+                        type="button"
+                        onClick={() => void scoutForQuery(addNodeQueryTrim)}
+                        onMouseEnter={() => setAddNodeActiveIndex(absIdx)}
+                        style={{
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '10px 16px',
+                          border: 'none',
+                          borderLeft: `3px solid ${isActive ? 'var(--accent-primary, #3B82F6)' : 'transparent'}`,
+                          background: isActive ? (theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)') : 'transparent',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 2,
+                          transition: 'background 0.1s',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+                          <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            Scout for “{addNodeQueryTrim}”
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary-strong)', border: '1px solid var(--border-subtle)', borderRadius: 999, padding: '2px 8px', background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}>
+                              Create
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', opacity: 0.9 }}>
+                          Adds to scope and starts scouting; node will appear when ready.
+                        </div>
+                      </button>
+                    );
+                  })()}
+                </div>
+              )}
+
               {addNodeError && (
                 <div style={{ padding: '16px', textAlign: 'center', color: '#EF4444', fontSize: 13 }}>
                   {addNodeError}
@@ -11221,7 +11791,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 </div>
               )}
               {graphSearchResults.map((m, idx) => {
-                const absIdx = idx;
+                const absIdx = (addNodeQueryTrim.length >= 2 ? 1 : 0) + idx;
                 const isActive = absIdx === addNodeActiveIndex;
                 return (
                   <button
@@ -11281,7 +11851,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               )}
 
               {filteredAddNodeResults.map((r, idx) => {
-                const absIdx = graphSearchResults.length + idx;
+                const absIdx = (addNodeQueryTrim.length >= 2 ? 1 : 0) + graphSearchResults.length + idx;
                 const isActive = absIdx === addNodeActiveIndex;
                 return (
                   <button

@@ -1,5 +1,5 @@
 import React from 'react';
-import { NodeTypes, Handle, Position, NodeProps, NodeToolbar } from 'reactflow';
+import { NodeTypes, Handle, Position, NodeProps, NodeToolbar, useReactFlow } from 'reactflow';
 import { useTranslation } from 'react-i18next';
 import { ThemeContext } from './ThemeProvider';
 import type { SemanticGroup, LinearSection } from '../lib/elkLayout';
@@ -18,6 +18,22 @@ export interface HorizonNodeData {
   depth?: number;
   canonicalPath?: string;
   indexPaths?: string[];
+  /** Canonical market segment paths (/segment/...) for this fragment (if present). */
+  marketSegments?: string[];
+  /** Derived normalization of market segments (computed on backend). */
+  marketSegmentNorms?: Array<{
+    segmentPath: string;
+    normDomain: string;
+    normVertical?: string;
+    normPair: string;
+    channel?: string;
+  }>;
+  /** Deduped list of normalized market domains (for future filtering). */
+  marketSegmentNormDomains?: string[];
+  /** Deduped list of normalized market verticals (for future filtering). */
+  marketSegmentNormVerticals?: string[];
+  /** Deduped list of normalized domain/vertical pairs (for future filtering). */
+  marketSegmentNormPairs?: string[];
   label?: string;
   type?: string; // FragmentType
   state?: Record<string, number>; // Метрики
@@ -41,6 +57,11 @@ export interface HorizonNodeData {
   // Group/container nodes (UI-only, not persisted)
   isGroup?: boolean;
   groupParentId?: string;
+  /** Owner of this semantic group container (single parent node in the right pane). */
+  groupOwnerFragmentId?: string;
+  groupOwnerLabel?: string;
+  groupOwnerType?: string;
+  groupOwnerCanonicalPath?: string;
   groupSemanticGroup?: SemanticGroup;  // New: semantic category
   groupEdgeTypes?: string[];  // New: all edge types in this group
   groupDirection?: 'incoming' | 'outgoing' | 'both';  // Legacy, derived from semantic group
@@ -395,6 +416,200 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
   const style: React.CSSProperties = { width: size, height: size, flexShrink: 0 };
   
   switch (normalizedType) {
+    case 'MARKET_RENEWABLES':
+      // Renewables / clean energy: leaf + bolt
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M20 4c-7 0-12 5-12 12 0 2.5 1.2 4 3.2 4 5.8 0 8.8-7.2 8.8-16z" />
+          <path d="M10 14l4-6-1 5h3l-5 7 1-6h-2z" />
+        </svg>
+      );
+
+    case 'MARKET_ACCOUNTING':
+      // Accounting: calculator
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <rect x="6" y="3" width="12" height="18" rx="2" />
+          <path d="M8.5 7h7" />
+          <path d="M9 11h.01" />
+          <path d="M12 11h.01" />
+          <path d="M15 11h.01" />
+          <path d="M9 14h.01" />
+          <path d="M12 14h.01" />
+          <path d="M15 14h.01" />
+          <path d="M9 17h6" />
+        </svg>
+      );
+
+    case 'MARKET_CONSULTING':
+      // Consulting: briefcase
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M10 6V5a2 2 0 0 1 2-2h0a2 2 0 0 1 2 2v1" />
+          <rect x="3" y="6" width="18" height="14" rx="2" />
+          <path d="M3 12h18" />
+          <path d="M10 12v2h4v-2" />
+        </svg>
+      );
+
+    case 'MARKET_AUTOMOTIVE':
+      // Automotive / vehicles: compact car
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M5 16l1.2-4a3 3 0 0 1 2.9-2h6.8a3 3 0 0 1 2.9 2L22 16" />
+          <path d="M3 16h18" />
+          <path d="M6 16v2" />
+          <path d="M18 16v2" />
+          <circle cx="7.5" cy="18.5" r="1.5" />
+          <circle cx="16.5" cy="18.5" r="1.5" />
+          <path d="M8 10.5h8" />
+        </svg>
+      );
+
+    case 'MARKET_LEGAL':
+      // Legal: balance scales
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M12 3v18" />
+          <path d="M7 6h10" />
+          <path d="M7 6l-3 5h6l-3-5z" />
+          <path d="M17 6l-3 5h6l-3-5z" />
+          <path d="M6 21h12" />
+        </svg>
+      );
+
+    case 'MARKET_TRADING':
+      // Trading: bidirectional arrows
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M7 7h11" />
+          <path d="M16 4l3 3-3 3" />
+          <path d="M17 17H6" />
+          <path d="M8 14l-3 3 3 3" />
+        </svg>
+      );
+
+    case 'MARKET_ENERGY':
+      // Oil & gas / energy: droplet + flame-ish mark
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M12 2s5 6 5 10a5 5 0 0 1-10 0c0-4 5-10 5-10z" />
+          <path d="M9.5 14.5c.6 1.6 2 2.5 3.5 2.5" />
+          <path d="M14.5 14.5c-.4 1.1-1.2 1.9-2.2 2.3" />
+        </svg>
+      );
+
+    case 'MARKET_LOGISTICS':
+      // Logistics / freight: truck + box
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 17V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v10" />
+          <path d="M17 17h2a2 2 0 0 0 2-2v-4l-2-3h-4" />
+          <path d="M7 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
+          <path d="M18 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
+          <path d="M7 9h6" />
+          <path d="M7 12h6" />
+        </svg>
+      );
+
+    case 'MARKET_FINANCE':
+      // Credit card / finance icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <path d="M3 10h18" />
+          <path d="M7 15h4" />
+        </svg>
+      );
+
+    case 'MARKET_CRYPTO':
+      // Coin icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 7v10" />
+          <path d="M9.5 9.5h4a2 2 0 0 1 0 4h-4" />
+          <path d="M9.5 13.5h4a2 2 0 0 1 0 4h-4" />
+        </svg>
+      );
+
+    case 'MARKET_REAL_ESTATE':
+      // Home icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 11l9-7 9 7" />
+          <path d="M5 10v10h14V10" />
+          <path d="M10 20v-6h4v6" />
+        </svg>
+      );
+
+    case 'MARKET_HEALTHCARE':
+      // Medical cross
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M12 3v18" />
+          <path d="M3 12h18" />
+        </svg>
+      );
+
+    case 'MARKET_CONSTRUCTION':
+      // Hammer icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M14 7l3 3" />
+          <path d="M6 9l7-7 5 5-7 7" />
+          <path d="M2 22l7-7" />
+        </svg>
+      );
+
+    case 'MARKET_ENTERTAINMENT':
+      // Film icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <rect x="3" y="6" width="18" height="12" rx="2" />
+          <path d="M7 6v12" />
+          <path d="M17 6v12" />
+          <path d="M3 10h4" />
+          <path d="M17 10h4" />
+        </svg>
+      );
+
+    case 'MARKET_GAMBLING':
+      // Dice icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <rect x="5" y="5" width="14" height="14" rx="3" />
+          <path d="M9 9h.01" />
+          <path d="M15 15h.01" />
+          <path d="M15 9h.01" />
+          <path d="M9 15h.01" />
+          <path d="M12 12h.01" />
+        </svg>
+      );
+
+    case 'MARKET_RETAIL':
+      // Shopping bag icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M6 7h12l-1 14H7L6 7z" />
+          <path d="M9 7a3 3 0 0 1 6 0" />
+        </svg>
+      );
+
+    case 'MARKET_GOVERNMENT':
+      // Landmark / building icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 10l9-5 9 5" />
+          <path d="M4 10v10" />
+          <path d="M20 10v10" />
+          <path d="M8 20V11" />
+          <path d="M12 20V11" />
+          <path d="M16 20V11" />
+          <path d="M2 20h20" />
+        </svg>
+      );
+
     case 'ORGANIZATION':
       // Building icon
       return (
@@ -573,6 +788,209 @@ export const getMetricColor = (key: string, value: number): string => {
   if (normalizedValue >= 0.7) return '#22C55E'; // green
   if (normalizedValue >= 0.4) return '#F59E0B'; // amber
   return '#EF4444'; // red
+};
+
+const segmentDomainKey = (segmentPath: string): string => {
+  // Canonical: /segment/{domain}/{vertical}/{geo}
+  const parts = String(segmentPath || '').trim().split('/').filter(Boolean);
+  const domain = String(parts[1] || '').toLowerCase().trim();
+  return domain || String(segmentPath || '').trim();
+};
+
+const topMarketSegmentNorms = (
+  data: any,
+  limit: number = 3,
+): Array<{ segmentPath: string; normDomain: string; normVertical?: string; normPair: string; channel?: string }> => {
+  const norms = Array.isArray(data?.marketSegmentNorms) ? (data.marketSegmentNorms as any[]) : [];
+  const out: Array<{ segmentPath: string; normDomain: string; normVertical?: string; normPair: string; channel?: string }> = [];
+  const seen = new Set<string>();
+  for (const n of norms) {
+    const normPair = String(n?.normPair || '').trim();
+    const normDomain = String(n?.normDomain || '').trim();
+    if (!normPair || !normDomain) continue;
+    if (seen.has(normPair)) continue;
+    seen.add(normPair);
+    out.push({
+      segmentPath: String(n?.segmentPath || '').trim(),
+      normDomain,
+      normVertical: String(n?.normVertical || '').trim() || undefined,
+      normPair,
+      channel: String(n?.channel || '').trim() || undefined,
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+};
+
+const topMarketSegments = (data: any, limit: number = 3): string[] => {
+  const fromMarket = Array.isArray(data?.marketSegments) ? (data.marketSegments as any[]) : [];
+  const fromIndex = Array.isArray(data?.indexPaths) ? (data.indexPaths as any[]) : [];
+  const raw = (fromMarket.length > 0 ? fromMarket : fromIndex).map((x) => String(x || '').trim()).filter(Boolean);
+  const segs = raw.filter((p) => p.startsWith('/segment/'));
+  // Dedup by top-level domain so sub-segments don't show as duplicate icons (e.g., /segment/automotive/...).
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of segs) {
+    const k = segmentDomainKey(s);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+    if (out.length >= limit) break;
+  }
+  return out;
+};
+
+const segmentIconType = (normDomain: string, normVertical?: string): string | null => {
+  const d = String(normDomain || '').toLowerCase().trim();
+  const v = String(normVertical || '').toLowerCase().trim();
+
+  if (!d) return null;
+
+  // Normalize common aliases for segment domain (we see both "finance" and "financial" in the wild).
+  const d0 = d === 'financial' ? 'finance' : d;
+
+  // Renewables / storage: often encoded as vertical under energy domain.
+  if (
+    d0 === 'energy' &&
+    (v === 'renewable-energy' ||
+      v === 'renewable-energy-storage' ||
+      v === 'renewables' ||
+      v.includes('renewable') ||
+      v.includes('solar') ||
+      v.includes('wind') ||
+      v.includes('storage') ||
+      v.includes('battery'))
+  ) {
+    return 'MARKET_RENEWABLES';
+  }
+
+  // Professional services are often encoded in VERTICAL under broad domains like /segment/financial/* or /segment/b2b/*.
+  // Prefer vertical-based mapping first (more specific), but also accept domain-based encoding.
+  if (
+    d0 === 'accounting' ||
+    d0 === 'bookkeeping' ||
+    d0 === 'audit' ||
+    d0 === 'auditing' ||
+    d0.includes('account') ||
+    v === 'accounting' ||
+    v === 'bookkeeping' ||
+    v === 'audit' ||
+    v === 'auditing' ||
+    v === 'tax' ||
+    v.includes('account') ||
+    v.includes('audit') ||
+    v.includes('tax')
+  ) {
+    return 'MARKET_ACCOUNTING';
+  }
+  if (
+    d0 === 'consulting' ||
+    d0 === 'advisory' ||
+    d0 === 'management-consulting' ||
+    d0.includes('consult') ||
+    v === 'consulting' ||
+    v === 'advisory' ||
+    v === 'management-consulting' ||
+    v === 'professional-services' ||
+    v.includes('consult') ||
+    v.includes('advis')
+  ) {
+    return 'MARKET_CONSULTING';
+  }
+
+  // Automotive / EV
+  if (
+    d0 === 'electric-vehicles' ||
+    d0 === 'electric-vehicle' ||
+    d0 === 'ev' ||
+    d0 === 'automotive' ||
+    d0 === 'vehicles' ||
+    d0 === 'vehicle' ||
+    d0 === 'auto' ||
+    d0.includes('vehicle') ||
+    d0.includes('automotive') ||
+    d0.includes('electric-vehicle') ||
+    // EV can be encoded as vertical under other domains (e.g. manufacturing/electric-vehicles).
+    v === 'electric-vehicles' ||
+    v === 'electric-vehicle' ||
+    v === 'ev' ||
+    v.includes('electric-vehicle')
+  ) {
+    return 'MARKET_AUTOMOTIVE';
+  }
+
+  // Legal / compliance / law
+  if (
+    d === 'legal' ||
+    d === 'law' ||
+    d === 'legal-services' ||
+    d === 'compliance' ||
+    d.includes('legal') ||
+    d.includes('compliance')
+  ) {
+    return 'MARKET_LEGAL';
+  }
+
+  // Trading / import-export / wholesale
+  if (
+    d === 'trading' ||
+    d === 'import-export' ||
+    d === 'wholesale' ||
+    d === 'wholesaling' ||
+    d.includes('trading') ||
+    d.includes('import') ||
+    d.includes('export')
+  ) {
+    return 'MARKET_TRADING';
+  }
+
+  // "Commercial" is frequently used as a retail/commerce proxy.
+  if (d === 'commercial' || d === 'commerce' || d === 'ecommerce' || d === 'e-commerce') {
+    return 'MARKET_RETAIL';
+  }
+
+  // Energy / oil & gas (incl. services)
+  if (
+    d === 'energy' ||
+    d === 'oil-and-gas' ||
+    d === 'oil-and-gas-services' ||
+    d.includes('oil') ||
+    d.includes('gas')
+  ) {
+    return 'MARKET_ENERGY';
+  }
+
+  // Logistics / freight / shipping
+  if (
+    d0 === 'logistics' ||
+    d0 === 'freight-forwarding' ||
+    d0 === 'contract-logistics' ||
+    d0 === 'supply-chain-management' ||
+    d0 === 'shipping' ||
+    d0 === 'transportation' ||
+    d0 === 'supply-chain' ||
+    d0.includes('freight') ||
+    d0.includes('logistic')
+  ) {
+    return 'MARKET_LOGISTICS';
+  }
+
+  if (d0 === 'finance') {
+    if (v === 'crypto') return 'MARKET_CRYPTO';
+    return 'MARKET_FINANCE';
+  }
+  if (d === 'real-estate') return 'MARKET_REAL_ESTATE';
+  if (d === 'healthcare') return 'MARKET_HEALTHCARE';
+  if (d === 'construction') return 'MARKET_CONSTRUCTION';
+  if (d === 'retail') return 'MARKET_RETAIL';
+  if (d === 'government' || d === 'public-administration' || d === 'defense') return 'MARKET_GOVERNMENT';
+  if (d === 'entertainment') {
+    if (v === 'casinos' || v === 'gambling') return 'MARKET_GAMBLING';
+    return 'MARKET_ENTERTAINMENT';
+  }
+  if (d === 'gambling' || d === 'casinos') return 'MARKET_GAMBLING';
+  if (d === 'technology') return 'TECHNOLOGY';
+  return null;
 };
 
 /** Get edge stroke color by edge type (matches getEdgeStyle in LensCanvasCockpit) */
@@ -1136,6 +1554,7 @@ const formatEdgeTypes = (edgeTypes: string[] | undefined): string => {
 const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected, id }) => {
   const { theme } = React.useContext(ThemeContext);
   const { t } = useTranslation();
+  const rf = useReactFlow();
   const [hoveredRelKey, setHoveredRelKey] = React.useState<string | null>(null);
   // Groups are primarily visual containers; they must NOT block clicks on child nodes.
   // We only treat a group as interactive if explicitly requested (rare).
@@ -1250,6 +1669,29 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
   // Subtitle: edge types in this group
   const subtitle = formatEdgeTypes(edgeTypes);
 
+  // Owner chip (single owner by product definition).
+  const ownerId = String((data as any)?.groupOwnerFragmentId || data.groupParentId || '').trim();
+  const ownerLabel = String((data as any)?.groupOwnerLabel || '').trim();
+  const ownerType = String((data as any)?.groupOwnerType || '').trim();
+  const ownerAccent = ownerType ? getNodeColors(ownerType, theme === 'dark' ? 'dark' : 'light').accent : border;
+  const showOwnerChip = Boolean(ownerId && ownerLabel);
+
+  const focusOwner = React.useCallback(() => {
+    if (!ownerId) return;
+    try {
+      const node: any = rf.getNode?.(ownerId);
+      if (!node) return;
+      const x0 = (node.positionAbsolute?.x ?? node.position?.x ?? 0);
+      const y0 = (node.positionAbsolute?.y ?? node.position?.y ?? 0);
+      const w = typeof node.width === 'number' ? node.width : 180;
+      const h = typeof node.height === 'number' ? node.height : 160;
+      const cx = x0 + w / 2;
+      const cy = y0 + h / 2;
+      const z = rf.getZoom?.();
+      rf.setCenter?.(cx, cy, { zoom: typeof z === 'number' ? z : undefined, duration: 360 });
+    } catch {}
+  }, [ownerId, rf]);
+
   // Arrow button styles
   const arrowButtonStyle: React.CSSProperties = {
     position: 'absolute',
@@ -1307,10 +1749,53 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         // (pagination buttons). Backdrop-only groups should not intercept clicks.
         pointerEvents: isBackdrop ? 'none' : 'auto',
         position: 'relative',
-        overflow: 'hidden',
+        // Allow the owner chip to sit on the border without being clipped.
+        overflow: 'visible',
         cursor: interactive ? 'grab' : 'default',
       }}
     >
+      {showOwnerChip && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            focusOwner();
+          }}
+          title={ownerType ? `${ownerLabel} · ${formatHorizonFragmentType(ownerType)}` : ownerLabel}
+          style={{
+            position: 'absolute',
+            top: -12,
+            left: 12,
+            zIndex: 20,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            maxWidth: 'min(360px, calc(100% - 24px))',
+            padding: '6px 10px',
+            borderRadius: 999,
+            border: `1px solid ${ownerAccent}`,
+            background: theme === 'dark' ? 'rgba(2, 6, 23, 0.88)' : 'rgba(255,255,255,0.92)',
+            color: titleColor,
+            cursor: 'pointer',
+            boxShadow: theme === 'dark' ? '0 10px 30px rgba(0,0,0,0.35)' : '0 10px 30px rgba(0,0,0,0.15)',
+          }}
+        >
+          {ownerType && <HorizonNodeIcon type={ownerType} color={ownerAccent} size={14} />}
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 850,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            {ownerLabel}
+          </span>
+        </button>
+      )}
       {/* Optional: Type subsections (visual separators + labels). Keep pointerEvents off. */}
       {showTypeBlocks && (
         <>
@@ -1696,8 +2181,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   // Allow Research even if the first "load related" attempt returned empty: in that case the node isn't expanded,
   // but the user should still be able to run scouting from it.
   const isSelected = Boolean(selected);
-  // Node expand/collapse (load related fragments). NOTE: stacks should not show this control:
-  // the stack "N" pill controls stack expansion; node expansion is misleading on stack controllers.
+  // Node expand/collapse (load related fragments).
+  // NOTE:
+  // - When a stack is COLLAPSED, the controller node should NOT show "expand relations" because the "N" pill
+  //   already controls the stack expansion and having two expand affordances is confusing.
+  // - When a stack is EXPANDED, the controller node behaves like a normal node and SHOULD show expand relations
+  //   (otherwise the first visible node feels "broken" vs other nodes).
   const canCollapse0 = Boolean(data.fragmentId && data.onCollapse && isExpanded && !data.isLoadingRelated);
   const showExpand0 = Boolean(data.fragmentId && data.onLoadRelated && !isExpanded);
   const isPinnedToScope = Boolean((data as any)?.pinnedToScope);
@@ -1731,8 +2220,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           })()
         )
       : '';
-  const canCollapse = canCollapse0 && !isStackController;
-  const showExpand = showExpand0 && !isStackController;
+  const suppressNodeExpandOnCollapsedStackController = Boolean(isStackController && !stackExpanded && (stackCount || 0) > 1);
+  const canCollapse = canCollapse0 && !suppressNodeExpandOnCollapsedStackController;
+  const showExpand = showExpand0 && !suppressNodeExpandOnCollapsedStackController;
   const canExpandClick = Boolean(showExpand && !isLoadingRelated);
   const stackPreviewOpen = Boolean((data as any)?.stackPreviewOpen);
   const stackPreviewItems = Array.isArray((data as any)?.stackPreviewItems) ? ((data as any)?.stackPreviewItems as any[]) : [];
@@ -1743,6 +2233,65 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   // For now it's a pure UI affordance; wiring happens later.
   const showRiskShieldButton = Boolean(data.fragmentId && !String((data as any)?.stackGroupKey || '').trim());
   const isRiskShieldOpen = Boolean(data.riskShieldOpen);
+  const segmentNorms = React.useMemo(() => topMarketSegmentNorms(data, 3), [data]);
+  const segmentIconTypes = React.useMemo(() => {
+    const fromNorms = (segmentNorms || [])
+      .map((n) => ({ norm: n, iconType: segmentIconType(n.normDomain, n.normVertical) }))
+      .filter((x) => Boolean(x.iconType));
+    if (fromNorms.length > 0) {
+      // Dedup by icon type: if multiple segments map to the same icon, show only one.
+      const seen = new Set<string>();
+      const out: typeof fromNorms = [];
+      for (const it of fromNorms) {
+        const k = String((it as any)?.iconType || '').trim();
+        if (!k || seen.has(k)) continue;
+        seen.add(k);
+        out.push(it);
+      }
+      return out;
+    }
+
+    // Fallback: if backend didn't send marketSegmentNorms, derive icons from raw /segment paths.
+    const segs = topMarketSegments(data, 3);
+    const fromRaw = segs
+      .map((p) => {
+        const parts = String(p || '').trim().split('/').filter(Boolean);
+        // Canonical: /segment/{domain}/{vertical}/{geo}
+        const domain = String(parts[1] || '').toLowerCase().trim();
+        const vertical = String(parts[2] || '').toLowerCase().trim();
+        const iconType = segmentIconType(domain, vertical || undefined);
+        return {
+          norm: {
+            segmentPath: p,
+            normDomain: domain,
+            normVertical: vertical || undefined,
+            normPair: vertical ? `${domain}/${vertical}` : domain,
+          },
+          iconType,
+        };
+      })
+      .filter((x) => Boolean(x.iconType));
+    // Dedup by icon type (raw fallback too).
+    const seen = new Set<string>();
+    const out: typeof fromRaw = [];
+    for (const it of fromRaw) {
+      const k = String((it as any)?.iconType || '').trim();
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      out.push(it);
+    }
+    return out;
+  }, [segmentNorms]);
+  const showSegmentBadges = React.useMemo(() => {
+    if (!showRiskShieldButton) return false;
+    if (!segmentIconTypes || segmentIconTypes.length === 0) return false;
+    const t = String((data as any)?.type || '').toUpperCase().trim().replace(/\s+/g, '_');
+    const cp = String((data as any)?.canonicalPath || '').trim();
+    // Only for org / gov (business interests); segments are not meaningful for most other node types.
+    if (t === 'ORGANIZATION') return true;
+    if (cp.startsWith('/org/') || cp.startsWith('/gov/')) return true;
+    return false;
+  }, [showRiskShieldButton, segmentIconTypes, data]);
 
   // Risk Shield: compute segments from HorizonFragment.state (prefer risk_segment_*; fallback to propagated base metrics)
   const riskSegments = React.useMemo(() => computeRiskSegments((data as any)?.state), [data]);
@@ -2972,7 +3521,53 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         </div>
       )}
 
-      {/* Stack toggle: sits just below the node, pairs with the stacked-card visual cue */}
+      {/* Top market segments (max 3): centered between left (!) and right expand/collapse controls. */}
+      {showSegmentBadges && (
+        <div
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: 12,
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            zIndex: 2,
+            pointerEvents: 'none',
+            // Keep a little breathing room so it doesn't visually touch the left/right controls.
+            paddingLeft: 6,
+            paddingRight: 6,
+          }}
+        >
+          {segmentIconTypes.slice(0, 3).map(({ norm: n, iconType }) => {
+            if (!iconType) return null;
+            const p = String(n?.segmentPath || '').trim() || String(n?.normPair || '').trim();
+            return (
+              <div
+                key={`seg-${String(data.id || '')}-${String(n?.normPair || '')}`}
+                title={p}
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 9,
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                  background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)',
+                  color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
+                  opacity: 0.92,
+                }}
+              >
+                <HorizonNodeIcon type={iconType} color={accentColor} size={14} />
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Stack toggle: when expanded, show collapse button to the right of the node; when collapsed, show expand button below */}
       {canToggleStack && !isSubcategoryStackController && (
         <button
           type="button"
@@ -2985,9 +3580,16 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           title={stackExpanded ? 'Collapse stacked nodes' : `Show ${(stackCount || 0)} items`}
           style={{
             position: 'absolute',
-            left: '50%',
-            bottom: -14,
-            transform: 'translateX(-50%)',
+            ...(stackExpanded ? {
+              left: '100%',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              marginLeft: 8,
+            } : {
+              left: '50%',
+              bottom: -14,
+              transform: 'translateX(-50%)',
+            }),
             height: 26,
             padding: '0 10px',
             borderRadius: 999,

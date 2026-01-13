@@ -1,0 +1,41 @@
+{
+  "segmentChannelDomains": [
+    "b2b",
+    "b2c",
+    "b2g",
+    "commercial",
+    "consumer",
+    "gov",
+    "government",
+    "industrial",
+    "public",
+    "public-sector"
+  ],
+  "segmentDomainAliases": {
+    "b2g": "public-sector",
+    "financial-services": "finance",
+    "fintech": "finance",
+    "gov": "public-sector",
+    "government": "public-sector",
+    "industrials": "industrial",
+    "public": "public-sector"
+  },
+  "segmentNormRules": {},
+  "segmentVerticalAliases": {
+    "cryptocurrency": "crypto",
+    "retail-banking": "banking"
+  },
+  "segmentVerticalFamilies": {
+    "banking": "finance",
+    "cybersecurity": "technology",
+    "electronics": "technology",
+    "financial-services": "finance",
+    "fintech": "finance",
+    "insurance": "finance",
+    "investment": "finance",
+    "it-services": "technology",
+    "semiconductors": "technology",
+    "software": "technology",
+    "utilities": "energy"
+  }
+}

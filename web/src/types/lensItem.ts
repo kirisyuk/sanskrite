@@ -43,6 +43,8 @@ export type DependencyType =
   | 'INFLUENCES'
   | 'TRANSFORMS_INTO'
   | 'EXTRACTS_FROM'
+  | 'PARTICIPATES_IN'
+  | 'DOMINATES'
   // Governance / org-person
   | 'MANAGES'
   | 'CONTROLS'

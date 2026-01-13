@@ -12,9 +12,9 @@ import (
 
 // ArtifactSchedulerService handles scheduled auto-updates for artifacts
 type ArtifactSchedulerService struct {
-	coreDocsRepo   *repo.CoreDocsRepo
-	orchestrator   *ArtifactOrchestratorService
-	checkInterval  time.Duration // How often to check for scheduled updates
+	coreDocsRepo  *repo.CoreDocsRepo
+	orchestrator  *ArtifactOrchestratorService
+	checkInterval time.Duration // How often to check for scheduled updates
 }
 
 // NewArtifactSchedulerService creates a new scheduler service
@@ -60,6 +60,7 @@ func (s *ArtifactSchedulerService) Start(ctx context.Context) {
 
 // processScheduledUpdates checks all artifacts and triggers updates for scheduled ones
 func (s *ArtifactSchedulerService) processScheduledUpdates(ctx context.Context) {
+	_ = ctx // reserved for future: batched Firestore queries / cancellation, keep signature stable
 	// Get all artifacts with auto-update enabled
 	// Note: This is a simplified approach - in production, you might want to:
 	// 1. Use Firestore queries to filter by autoUpdateEnabled and trigger type
@@ -153,6 +154,7 @@ func (s *ArtifactSchedulerService) ProcessProjectArtifacts(ctx context.Context, 
 
 // shouldTriggerDaily checks if a daily update should be triggered
 func (s *ArtifactSchedulerService) shouldTriggerDaily(ctx context.Context, artifact *models.CoreDoc, now time.Time) bool {
+	_ = ctx // reserved for future: tenant/timezone lookup, keep signature stable
 	// Check last update time
 	lastUpdate := s.getLastUpdateTime(artifact)
 	if lastUpdate.IsZero() {
@@ -177,6 +179,7 @@ func (s *ArtifactSchedulerService) shouldTriggerDaily(ctx context.Context, artif
 
 // shouldTriggerWeekly checks if a weekly update should be triggered
 func (s *ArtifactSchedulerService) shouldTriggerWeekly(ctx context.Context, artifact *models.CoreDoc, now time.Time) bool {
+	_ = ctx // reserved for future: tenant/timezone lookup, keep signature stable
 	// Check last update time
 	lastUpdate := s.getLastUpdateTime(artifact)
 	if lastUpdate.IsZero() {
@@ -285,4 +288,3 @@ func (s *ArtifactSchedulerService) ProcessAllProjects(ctx context.Context) error
 	log.Printf("[ArtifactScheduler] ProcessAllProjects called - implementation needed")
 	return nil
 }
-

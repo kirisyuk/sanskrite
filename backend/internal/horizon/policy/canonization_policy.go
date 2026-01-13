@@ -26,11 +26,11 @@ type CanonizationRulesRepo interface {
 
 // CanonizationRule defines a normalization rule.
 type CanonizationRule struct {
-	ID          string `json:"id" firestore:"id"`
-	InputType   string `json:"inputType" firestore:"inputType"`   // "canonical_path", "entity_type", "name"
+	ID           string `json:"id" firestore:"id"`
+	InputType    string `json:"inputType" firestore:"inputType"`       // "canonical_path", "entity_type", "name"
 	InputPattern string `json:"inputPattern" firestore:"inputPattern"` // Pattern to match
-	Output      string `json:"output" firestore:"output"`         // Normalized output
-	Priority    int    `json:"priority" firestore:"priority"`
+	Output       string `json:"output" firestore:"output"`             // Normalized output
+	Priority     int    `json:"priority" firestore:"priority"`
 }
 
 // NewCanonizationPolicy creates a new CanonizationPolicy.
@@ -48,14 +48,14 @@ func (p *CanonizationPolicy) Name() string {
 // Decide normalizes an input value.
 func (p *CanonizationPolicy) Decide(ctx context.Context, input PolicyInput) (PolicyDecision, error) {
 	logPrefix := "[CanonizationPolicy]"
-	
+
 	inputType, _ := input.Context["inputType"].(string)
 	inputValue, _ := input.Context["inputValue"].(string)
 
 	log.Printf("%s Decide called: inputType=%s, inputValue=%s", logPrefix, inputType, inputValue)
 
 	if inputType == "" || inputValue == "" {
-		log.Printf("%s ERROR: missing inputType or inputValue (inputType=%s, inputValue=%s)", 
+		log.Printf("%s ERROR: missing inputType or inputValue (inputType=%s, inputValue=%s)",
 			logPrefix, inputType, inputValue)
 		return PolicyDecision{
 			Action:       "skip",
@@ -74,7 +74,7 @@ func (p *CanonizationPolicy) Decide(ctx context.Context, input PolicyInput) (Pol
 	if err == nil && len(rules) > 0 {
 		for _, rule := range rules {
 			if rule.InputType == inputType && p.matchesPattern(inputValue, rule.InputPattern) {
-				log.Printf("%s DB rule matched: id=%s, inputType=%s, pattern=%s, output=%s", 
+				log.Printf("%s DB rule matched: id=%s, inputType=%s, pattern=%s, output=%s",
 					logPrefix, rule.ID, rule.InputType, rule.InputPattern, rule.Output)
 				return PolicyDecision{
 					Action:       "normalize_to",
@@ -90,7 +90,7 @@ func (p *CanonizationPolicy) Decide(ctx context.Context, input PolicyInput) (Pol
 
 	// Fallback to hardcoded normalization
 	normalized := p.normalizeFallback(inputType, inputValue)
-	log.Printf("%s Normalized via hardcoded rules: %s -> %s (inputType=%s)", 
+	log.Printf("%s Normalized via hardcoded rules: %s -> %s (inputType=%s)",
 		logPrefix, inputValue, normalized, inputType)
 	return PolicyDecision{
 		Action:       "normalize_to",
@@ -121,6 +121,16 @@ func (p *CanonizationPolicy) normalizeFallback(inputType, inputValue string) str
 		// Handle legacy geo paths
 		if strings.HasPrefix(normalized, "/region/") {
 			normalized = p.normalizeLegacyGeoPath(normalized)
+		}
+		// Best-effort: MARKET canonical path tightening (non-blocking).
+		// If we see a flat /market/{slug}, upgrade it to /market/global/{slug}.
+		// Legacy /market/{domain}/{slug} is left untouched (cannot infer geo safely).
+		if strings.HasPrefix(normalized, "/market/") {
+			parts := strings.Split(strings.Trim(normalized, "/"), "/")
+			// parts[0] == "market"
+			if len(parts) == 2 && parts[1] != "" {
+				normalized = "/market/global/" + parts[1]
+			}
 		}
 		return normalized
 	case "relation_type":
@@ -212,4 +222,3 @@ func (p *CanonizationPolicy) matchesPattern(value, pattern string) bool {
 	}
 	return false
 }
-

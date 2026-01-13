@@ -1812,6 +1812,46 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   /**
+   * Horizon - Resolve query -> add anchor node to lens scope + run scouting (single-node by default)
+   * POST /api/horizon/lenses/{lensId}/scope-scout-query
+   */
+  async scopeScoutHorizonLensQuery(
+    lensId: string,
+    input: { query: string; specialties?: string[] },
+    options?: { correlationId?: string; sessionId?: string }
+  ): Promise<{
+    jobId: string;
+    scopeAdded: boolean;
+    targetCanonicalPath: string;
+    lens?: {
+      id: string;
+      tenantId: string;
+      projectId: string;
+      name: string;
+      scope: string[];
+      viewConfig?: Record<string, any>;
+      alertConfig?: Record<string, any>;
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+      scopeFragments?: Record<string, string>;
+      resolvedQueries?: Record<string, string[]>;
+      lastResolved?: string;
+    };
+  }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/scope-scout-query`, input, { headers });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] scopeScoutHorizonLensQuery error:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Horizon - Ask a grounded question against the currently visible graph snapshot.
    * POST /api/horizon/lenses/{lensId}/graph-query
    */

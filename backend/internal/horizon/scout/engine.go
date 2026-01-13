@@ -239,10 +239,10 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 				ensureInfluenceEdge(sfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "sphere", "path": sp, "factId": f.ID})
 				// Metric updates are optional; sphere linkage should exist even without metrics.
 				if len(f.MetricUpdates) > 0 && applyMetricUpdates(sfrag, f) {
-						if err := e.fragmentsRepo.Update(ctx, sfrag); err != nil {
-							fmt.Printf("[ScoutEngine] Failed to update sphere dimension fragment after metric updates: id=%s path=%s err=%v\n",
-								strings.TrimSpace(sfrag.ID), strings.TrimSpace(sfrag.CanonicalPath), err)
-						}
+					if err := e.fragmentsRepo.Update(ctx, sfrag); err != nil {
+						fmt.Printf("[ScoutEngine] Failed to update sphere dimension fragment after metric updates: id=%s path=%s err=%v\n",
+							strings.TrimSpace(sfrag.ID), strings.TrimSpace(sfrag.CanonicalPath), err)
+					}
 					dimensionFragmentIDsToPropagate[sfrag.ID] = struct{}{}
 				}
 			}
@@ -1402,6 +1402,17 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				fmt.Sprintf("Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships.", job.TargetCanonicalPath),
 			},
 		}
+		// MARKET: When internal sources are empty, we must explicitly seed market sizing/concentration questions.
+		// Critic is not run in this branch, so without these prompts market metrics are often never populated.
+		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || defaultType == models.FragmentTypeMarket {
+			validationResult.MissingInfo = append(validationResult.MissingInfo,
+				fmt.Sprintf("What is the market domain and vertical for %s? Return marketDomain (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate) and marketVertical (specific vertical) with sources.", job.TargetCanonicalPath),
+				fmt.Sprintf("What is the TAM (total addressable market) in USD for %s (latest available year)? Provide value (number), year, and sources.", job.TargetCanonicalPath),
+				fmt.Sprintf("What is the market CAGR percent for %s (provide period, e.g. 2024-2029)? Provide percent and sources.", job.TargetCanonicalPath),
+				fmt.Sprintf("What is the market concentration for %s? Provide CR4 (top-4 share percent) and/or HHI (0..10000) with sources.", job.TargetCanonicalPath),
+				fmt.Sprintf("Who are the key players in %s and who dominates? Provide top players and (if available) market shares.", job.TargetCanonicalPath),
+			)
+		}
 		// Always request ORG/FACILITY classifiers and governance facts when internal sources are empty.
 		// Critic is not run in this branch, so we seed missingInfo explicitly for grounded research.
 		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/org/") ||
@@ -1409,8 +1420,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/fac/") {
 			validationResult.MissingInfo = append(validationResult.MissingInfo,
 				fmt.Sprintf("Who is the external auditor of %s (as of the latest fiscal year)? Provide audit firm legal name and source. Output as relation AUDITED_BY.", job.TargetCanonicalPath),
-				fmt.Sprintf("Which market segments does %s operate in? Return canonical /segment/{domain}/{vertical}/{geo} (geo=ISO2 or global) with sources.", job.TargetCanonicalPath),
-				fmt.Sprintf("What is the org size for %s? Return orgSize as one of sme|le|enterprise|mega|na using employees/revenue/assets with sources.", job.TargetCanonicalPath),
+				fmt.Sprintf("[HIGH PRIORITY] What industry/sector does %s operate in? Return marketSegments as array of paths /segment/{domain}/{vertical}/{geo}. Domains: finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate|public-sector|professional-services. For government use public-sector domain. Geo: ISO2 or global. Example: /segment/technology/semiconductors/tw", job.TargetCanonicalPath),
+				fmt.Sprintf("[HIGH PRIORITY] What is the size of %s? Find employee count or revenue to determine orgSize: sme (<500 emp or <$100M rev), le (500-5000 emp or $100M-$1B), enterprise (5000-50000 emp or $1B-$10B), mega (>50000 emp or >$10B). For government: federal G20 ministries=enterprise/mega, regional=le/enterprise. Use 'na' only if truly unknown.", job.TargetCanonicalPath),
 			)
 		}
 		// If a gov path uses /gov/na/... we MUST resolve jurisdiction to avoid cross-country collisions.
@@ -1488,6 +1499,15 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				Confidence: 0.5,
 			}
 		}
+	}
+
+	// MARKET METRICS NORMALIZATION (best-effort):
+	// Research currently may emit legacy keys like "market_tam_usd". We canonicalize them into /metric/market/... so:
+	// - Critic can reliably require/check them
+	// - later systems can aggregate/query them consistently
+	// - they are not "lost" due to inconsistent key naming.
+	if extractedFragment != nil && (extractedFragment.Type == models.FragmentTypeMarket || strings.HasPrefix(strings.TrimSpace(extractedFragment.CanonicalPath), "/market/")) {
+		normalizeMarketMetricKeys(extractedFragment)
 	}
 
 	// RESEARCH: Дообогащение данных через Research Agent
@@ -1593,10 +1613,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			if v, ok := job.State["decompositionHints"]; ok && v != nil {
 				// Parse decompositionHints (may come as []interface{} from JSON)
 				if dhBytes, err := json.Marshal(v); err == nil {
-				if err := json.Unmarshal(dhBytes, &decompositionHints); err != nil {
-					fmt.Printf("[ScoutEngine] Failed to parse decompositionHints (best-effort): jobId=%s target=%s err=%v\n",
-						strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
-				}
+					if err := json.Unmarshal(dhBytes, &decompositionHints); err != nil {
+						fmt.Printf("[ScoutEngine] Failed to parse decompositionHints (best-effort): jobId=%s target=%s err=%v\n",
+							strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+					}
 				}
 			}
 		}
@@ -1786,7 +1806,11 @@ SKIP_RESEARCH:
 		if err != nil {
 			fmt.Printf("[ScoutEngine] MetricsAgent failed (keeping existing state, len=%d): %v\n", len(extractedFragment.State), err)
 		} else if len(state) > 0 {
-			extractedFragment.State = state
+			// IMPORTANT: Do NOT replace the entire state map.
+			// Research (especially for MARKET) can populate absolute market metrics (TAM/CAGR/HHI/CR4) which must be preserved.
+			for k, v := range state {
+				extractedFragment.State[k] = v
+			}
 		}
 	}
 
@@ -1980,6 +2004,56 @@ SKIP_RESEARCH:
 					fragmentID = existingFragment.ID
 					usedExistingDuplicate = true
 
+					// Merge OrgSize/MarketSegments from extracted into existing (fill-only)
+					if strings.TrimSpace(extractedFragment.OrgSize) != "" {
+						cur := strings.TrimSpace(strings.ToLower(existingFragment.OrgSize))
+						in := strings.TrimSpace(extractedFragment.OrgSize)
+						if cur == "" || cur == "na" {
+							existingFragment.OrgSize = in
+						}
+					}
+					if len(extractedFragment.MarketSegments) > 0 {
+						if existingFragment.MarketSegments == nil {
+							existingFragment.MarketSegments = make([]string, 0, len(extractedFragment.MarketSegments))
+						}
+						seen := make(map[string]bool)
+						for _, s := range existingFragment.MarketSegments {
+							s = strings.TrimSpace(s)
+							if s != "" {
+								seen[s] = true
+							}
+						}
+						for _, s := range extractedFragment.MarketSegments {
+							s = strings.TrimSpace(s)
+							if s == "" {
+								continue
+							}
+							if seen[s] {
+								continue
+							}
+							seen[s] = true
+							existingFragment.MarketSegments = append(existingFragment.MarketSegments, s)
+						}
+					}
+
+					// Also merge State/Metadata from extracted fragment so new scouting is effective
+					if len(extractedFragment.State) > 0 {
+						if existingFragment.State == nil {
+							existingFragment.State = make(map[string]models.MetricValue)
+						}
+						for k, v := range extractedFragment.State {
+							existingFragment.State[k] = v
+						}
+					}
+					existingFragment.Metadata.LastUpdatedAt = time.Now()
+					existingFragment.Metadata.LastVerifiedAt = time.Now()
+					existingFragment.Metadata.SourceFrameID = frameID
+
+					// Best-effort: save the merged OrgSize/MarketSegments back to Firestore
+					if uerr := e.fragmentsRepo.Update(ctx, existingFragment); uerr != nil {
+						fmt.Printf("[ScoutEngine] Warning: failed to update fragment after dedup merge: %v\n", uerr)
+					}
+
 					// If dedup selected a replacement fragment, we must retarget the job to it as well.
 					// Otherwise subsequent steps (events, decomposition, retries) will keep using the alias.
 					if existingFragment != nil {
@@ -2022,6 +2096,41 @@ SKIP_RESEARCH:
 					existingFragment.Metadata.LastVerifiedAt = time.Now()
 					existingFragment.Metadata.SourceFrameID = frameID
 					existingFragment.Metadata.EpistemicStatus = extractedFragment.Metadata.EpistemicStatus
+
+					// Merge OrgSize: fill if existing is empty/unknown ("na")
+					if strings.TrimSpace(extractedFragment.OrgSize) != "" {
+						cur := strings.TrimSpace(strings.ToLower(existingFragment.OrgSize))
+						in := strings.TrimSpace(extractedFragment.OrgSize)
+						if cur == "" || cur == "na" {
+							existingFragment.OrgSize = in
+						}
+					}
+
+					// Merge MarketSegments: union + dedup
+					if len(extractedFragment.MarketSegments) > 0 {
+						if existingFragment.MarketSegments == nil {
+							existingFragment.MarketSegments = make([]string, 0, len(extractedFragment.MarketSegments))
+						}
+						seen := make(map[string]bool)
+						for _, s := range existingFragment.MarketSegments {
+							s = strings.TrimSpace(s)
+							if s != "" {
+								seen[s] = true
+							}
+						}
+						for _, s := range extractedFragment.MarketSegments {
+							s = strings.TrimSpace(s)
+							if s == "" {
+								continue
+							}
+							if seen[s] {
+								continue
+							}
+							seen[s] = true
+							existingFragment.MarketSegments = append(existingFragment.MarketSegments, s)
+						}
+					}
+
 					// Normalize display label again (safe; no canonical changes).
 					if existingFragment.Labels == nil {
 						existingFragment.Labels = map[string]string{}

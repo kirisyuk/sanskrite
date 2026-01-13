@@ -260,7 +260,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 			}
 			decompositionBlock += "\nYour PRIMARY goal is to DISCOVER relations to concrete entities (organizations, products, facilities) that constitute this market/program.\n"
 			decompositionBlock += "Use the suggested search queries to find real players. Output them as relations with high confidence (0.7+).\n"
-			decompositionBlock += "IMPORTANT: If you encounter market size/market share metrics, treat them as SUPPORTING evidence only. The output MUST still be real-world entities.\n\n"
+			decompositionBlock += "IMPORTANT: Prefer extracting REAL-WORLD ENTITIES (players) first. If you also find market metrics (TAM/CAGR/HHI/CR4) or market shares, include them in fragment.state / relation.metrics as best-effort.\n\n"
 		} else if originalQuery != "" {
 			// Fallback: generate decomposition guidance from originalQuery
 			decompositionBlock = "MARKET/PROGRAM DECOMPOSITION GUIDANCE:\n"
@@ -272,7 +272,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 			decompositionBlock += "- Regulatory bodies or governing organizations\n"
 			decompositionBlock += "- Notable facilities or infrastructure\n"
 			decompositionBlock += "Output discovered entities as relations with confidence >= 0.7.\n"
-			decompositionBlock += "IMPORTANT: If you encounter market size/market share metrics, treat them as SUPPORTING evidence only. The output MUST still be real-world entities.\n\n"
+			decompositionBlock += "IMPORTANT: Prefer extracting REAL-WORLD ENTITIES (players) first. If you also find market metrics (TAM/CAGR/HHI/CR4) or market shares, include them in fragment.state / relation.metrics as best-effort.\n\n"
 		}
 	}
 	specBlock := ""
@@ -342,10 +342,48 @@ Name Normalization Rules:
   - fragment.identifiers.shortName: base name without ownership suffix
 - For relations, ALWAYS provide targetLegalName and targetShortName in addition to targetName.
 
-Organization Classification (ORG/FACILITY):
-- If you can determine market positioning, output:
-  - fragment.marketSegments: array of canonical paths /segment/{domain}/{vertical}/{geo} (geo = ISO2 or global)
-  - fragment.orgSize: one of "sme" | "le" | "enterprise" | "mega" | "na"
+Organization Classification (ORG/FACILITY/GOV) - *** HIGH PRIORITY ***:
+You SHOULD actively research and determine these fields for any organization or government body:
+
+- fragment.marketSegments: Array of canonical paths /segment/{domain}/{vertical}/{geo}
+  DOMAIN options: finance | technology | industrial | consumer | healthcare | energy | materials | telecom | real-estate | public-sector | professional-services
+  VERTICAL: specific industry (banking, semiconductors, automotive, oil-gas, government, etc.)
+  GEO: ISO2 lowercase (us, de, cn) or "global"
+  
+  Examples by entity type:
+    - Bank → ["/segment/finance/banking/us"]
+    - Tech company → ["/segment/technology/software/global"]
+    - Government ministry → ["/segment/public-sector/government/kz"]
+    - Oil company → ["/segment/energy/oil-gas/sa"]
+  
+  Search for: "company industry", "business segments", "sector classification", "what does X do"
+
+- fragment.orgSize: one of "sme" | "le" | "enterprise" | "mega" | "na"
+  Classification:
+    - sme: <500 employees or <$100M revenue
+    - le: 500-5000 employees or $100M-$1B revenue
+    - enterprise: 5000-50000 employees or $1B-$10B revenue
+    - mega: >50000 employees or >$10B revenue
+  
+  For government: federal agencies of major countries = enterprise/mega, regional = le/enterprise, local = sme/le
+  
+  Search for: "X employees", "X revenue", "X company size", "X annual report"
+  
+  Use "na" ONLY if no size information can be found after searching.
+
+Market Enrichment (MARKET):
+- If the fragment is a MARKET, output (best-effort):
+  - fragment.marketDomain: finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate
+  - fragment.marketVertical: specific vertical (banking, semiconductors, ev-batteries, ...)
+  - fragment.marketChannels: array (can include b2b, b2c, public-sector, ...)
+- Market sizing/concentration metrics (HIGH PRIORITY):
+  - Store these metrics in fragment.state using CANONICAL keys under /metric/market/... (preferred):
+    - "/metric/market/tam_usd": USD TAM (absolute number), unit="usd"
+    - "/metric/market/cagr_percent": CAGR in percent, unit="percent"
+    - "/metric/market/hhi": HHI index (0..10000), unit="index"
+    - "/metric/market/cr4_percent": CR4 concentration in percent, unit="percent"
+    - "/metric/market/supply_chain_risk": 0..1 (unit optional)
+  - Do NOT fabricate numbers. If you cannot find a reliable estimate, omit the metric (the system will keep the question open).
 
 OUTPUT BUDGET RULES (CRITICAL):
 - Keep fragment.description SHORT (max 500 chars). Prefer omitting description entirely if it risks truncating JSON.
@@ -377,6 +415,12 @@ Choose relationType to match this direction:
 - EXTRACTS_FROM: source (FACILITY) extracts from target (DEPOSIT). Use for mines/oil fields/ore bodies.
 - AUDITED_BY: source (ORGANIZATION/FACILITY) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
 - COMPETES_WITH / INFLUENCES: as labeled.
+- PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY -> MARKET).
+  - If THIS FRAGMENT is MARKET, you may still emit PARTICIPATES_IN relations to player entities; backend will reverse the edge direction.
+  - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
+- DOMINATES: entity dominates a market (leader) (canonical direction: ORG/FACILITY -> MARKET).
+  - If THIS FRAGMENT is MARKET, you may still emit DOMINATES relations to leader entities; backend will reverse the edge direction.
+  - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
 
 EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
 - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
@@ -397,6 +441,8 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
 - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
 - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT
+- PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
+- DOMINATES: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
 
 DiscoveredRelation Schema:
 {
@@ -404,7 +450,7 @@ DiscoveredRelation Schema:
   "targetLegalName": "string",
   "targetShortName": "string",
   "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT",
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM",
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED",
@@ -462,8 +508,15 @@ METRIC VALUE FORMAT (IMPORTANT):
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
     - Otherwise /program/{programSlug}
   - Markets:
-    - Prefer /market/{domainSlug}/{marketSlug} when domain is known
-    - Otherwise /market/{marketSlug}
+    - Prefer /market/{geo}/{marketSlug}
+      - geo: ISO3166-1 alpha2 lowercase OR "global" if unknown
+      - GEOGRAPHY INHERITANCE: If THIS FRAGMENT is a regional market (e.g., /market/sa/...), 
+        new MARKET relations MUST inherit that geo, not default to "global"
+      - Extract geo from market name context when present:
+        - "Saudi event marketing" → /market/sa/event-marketing (NOT /market/global/...)
+        - "German automotive" → /market/de/automotive
+      - Examples: /market/iq/sme-banking, /market/ae/fintech, /market/global/ev-batteries
+    - Legacy /market/{marketSlug} may exist; prefer /market/{geo}/{slug} for NEW markets
   - Facilities:
     - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred
     - Otherwise /fac/{facilitySlug}
