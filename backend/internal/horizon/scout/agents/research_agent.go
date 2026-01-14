@@ -371,11 +371,25 @@ You SHOULD actively research and determine these fields for any organization or 
   
   Use "na" ONLY if no size information can be found after searching.
 
+Government Body Enrichment (GOV - when canonicalPath starts with /gov/):
+- If the fragment is a government body (/gov/...), output (best-effort):
+  - fragment.govType: type of government body. Values: government, ministry, department, agency, authority, regulator, committee, service, bureau, office, council, commission
+  - fragment.parentGovPath: canonical path of superior/parent body in administrative hierarchy
+    - Example: /gov/sa/sfda → parent: /gov/sa/ministry-of-health
+- GOV HIERARCHY: Use ADMINISTERS to link superior body → subordinate body
+  - Example: if THIS FRAGMENT is /gov/sa/ministry-of-health and you discover /gov/sa/sfda reports to it, emit ADMINISTERS relation
+  - Direction: superior → subordinate (THIS FRAGMENT → subordinate)
+- Search for: "X parent ministry", "X reports to", "X organizational structure", "X is part of which ministry"
+
 Market Enrichment (MARKET):
 - If the fragment is a MARKET, output (best-effort):
   - fragment.marketDomain: finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate
   - fragment.marketVertical: specific vertical (banking, semiconductors, ev-batteries, ...)
   - fragment.marketChannels: array (can include b2b, b2c, public-sector, ...)
+  - fragment.parentMarketPath: canonical path of broader/parent market (e.g., /market/sa/event-marketing → parent: /market/sa/marketing)
+- MARKET HIERARCHY: Use HAS_SUBMARKET to link parent market → narrower sub-market
+  - Example: if THIS FRAGMENT is /market/sa/marketing and you discover /market/sa/event-marketing, emit HAS_SUBMARKET relation
+  - Direction: broader → narrower (THIS FRAGMENT → sub-market)
 - Market sizing/concentration metrics (HIGH PRIORITY):
   - Store these metrics in fragment.state using CANONICAL keys under /metric/market/... (preferred):
     - "/metric/market/tam_usd": USD TAM (absolute number), unit="usd"
@@ -443,6 +457,8 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT
 - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
 - DOMINATES: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
+- HAS_SUBMARKET: source MUST be MARKET, target MUST be MARKET (parent → narrower sub-market)
+- ADMINISTERS: source MUST be ORGANIZATION (/gov/...), target MUST be ORGANIZATION (/gov/...) (superior → subordinate)
 
 DiscoveredRelation Schema:
 {
@@ -450,7 +466,7 @@ DiscoveredRelation Schema:
   "targetLegalName": "string",
   "targetShortName": "string",
   "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT",
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES",
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_SUBMARKET" | "ADMINISTERS",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED",

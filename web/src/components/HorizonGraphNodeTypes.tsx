@@ -138,6 +138,15 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     text: '#1E40AF', textDark: '#BFDBFE',
     accent: '#3B82F6', accentDark: '#60A5FA',
   },
+  // ORGANIZATION nodes that live under /gov/* namespace (same behavior as ORG, different visual).
+  // Goal: make ingestion artifacts / government bodies visually distinct without changing semantics.
+  'GOV_ORG': {
+    // Sky palette (distinct from ORG blue, and from GEO green).
+    bg: '#E0F2FE', bgDark: '#0B2A3A',
+    border: '#0284C7', borderDark: '#38BDF8',
+    text: '#075985', textDark: '#BAE6FD',
+    accent: '#0EA5E9', accentDark: '#38BDF8',
+  },
   'GEO_REGION': {
     bg: '#D1FAE5', bgDark: '#064E3B',
     border: '#10B981', borderDark: '#34D399',
@@ -410,6 +419,20 @@ export const formatHorizonFragmentType = (type: string | undefined): string => {
   return t.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
+// Visual-only type overrides (do NOT change semantics/behavior).
+// Currently used to render /gov/* organizations differently while keeping them as ORGANIZATION logically.
+export const getHorizonNodeVisualType = (
+  type: string | undefined,
+  canonicalPath?: string | null,
+): string => {
+  const t = String(type || '').trim();
+  const cp = String(canonicalPath || '').trim();
+  if (t.toUpperCase() === 'ORGANIZATION' && cp.startsWith('/gov/')) {
+    return 'GOV_ORG';
+  }
+  return t;
+};
+
 // SVG иконки для разных типов
 export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string; size?: number }> = ({ type, color, size = 16 }) => {
   const normalizedType = (type || '').toUpperCase().replace(/\s+/g, '_');
@@ -603,6 +626,21 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
           <path d="M3 10l9-5 9 5" />
           <path d="M4 10v10" />
           <path d="M20 10v10" />
+          <path d="M8 20V11" />
+          <path d="M12 20V11" />
+          <path d="M16 20V11" />
+          <path d="M2 20h20" />
+        </svg>
+      );
+
+    case 'GOV_ORG':
+      // Government-like organization (same semantics as ORGANIZATION, different visual).
+      // Use a landmark / courthouse icon to distinguish from regular corporate org nodes.
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 10l9-5 9 5" />
+          <path d="M5 10v10" />
+          <path d="M19 10v10" />
           <path d="M8 20V11" />
           <path d="M12 20V11" />
           <path d="M16 20V11" />
@@ -2164,7 +2202,8 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
 const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected }) => {
   // Note: ensureHorizonNode2026Styles() is called once on module load (not per render)
   const { theme } = React.useContext(ThemeContext);
-  const colors = getNodeColors(data.type, theme);
+  const baseVisualType = getHorizonNodeVisualType(data.type, data.canonicalPath);
+  const colors = getNodeColors(baseVisualType, theme);
   const [isHovering, setIsHovering] = React.useState(false);
   // Risk panel (below node): active tab + compact/full toggle.
   const [riskTab, setRiskTab] = React.useState<RiskSegmentId>('geopolitical');
@@ -2345,7 +2384,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   }, [canLocalFilters, localFiltersOpen, data]);
   
   // Stack controllers can have a separate visual type (Persons/Products/Control/Geolocation).
-  const visualType = isCollapsedStackController && stackVisualType ? stackVisualType : (data.type || '');
+  const visualType = isCollapsedStackController && stackVisualType ? stackVisualType : baseVisualType;
   const colorsForVisual = visualType ? getNodeColors(visualType, theme) : colors;
 
   // 2026 visual style: neutral surface with tinted accent (less "dashboardy", more product-like)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
@@ -449,8 +450,22 @@ func (h *HorizonHandlers) DeleteEdge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if edge.TenantID != authInfo.TenantID {
-		http.Error(w, "Access denied", http.StatusForbidden)
-		return
+		edgeTenant := strings.TrimSpace(edge.TenantID)
+		// Horizon "world graph" edges are typically stored under tenantId=system (and sometimes tenantId=global).
+		// Allow admins to curate/delete these shared edges even if the caller tenant differs.
+		// This matches the HITL update endpoint policy.
+		if strings.EqualFold(edgeTenant, "global") || strings.EqualFold(edgeTenant, "system") {
+			if !authInfo.IsSystem {
+				p := &horizonpolicy.HumanInTheLoopPolicy{UsersRepo: h.usersRepo}
+				if !p.IsAdmin(r.Context(), authInfo.TenantID, authInfo.UID) {
+					http.Error(w, "Admin access required", http.StatusForbidden)
+					return
+				}
+			}
+		} else {
+			http.Error(w, "Access denied", http.StatusForbidden)
+			return
+		}
 	}
 
 	if err := h.service.Edges().Delete(r.Context(), edgeID); err != nil {

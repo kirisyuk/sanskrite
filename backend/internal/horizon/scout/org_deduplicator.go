@@ -71,7 +71,12 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		return fragment, nil
 	}
 	// Government bodies (/gov/{iso2|na}/{slug}) are modeled as ORGANIZATION, but MUST NOT be deduplicated by name-only
-	// across jurisdictions (e.g., "Ministry of Defence"). For /gov we only allow Tier-1 Wikidata dedup.
+	// across jurisdictions (e.g., "Ministry of Defence").
+	//
+	// However, we DO allow a very narrow "gov -> org" bridge dedup when the jurisdiction is explicit and stable:
+	// - /gov/{iso2}/{slug} may be an ingestion artifact for an org-like entity that should live under /org/{iso2}/...
+	// - High-confidence bridge requires exact legalName + (shortName OR label[en]) match within the SAME iso2,
+	//   and forbids conflicting Wikidata IDs.
 	isGov := strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/")
 
 	// =========================================================================
@@ -141,8 +146,13 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		}
 	}
 
-	// For government bodies, stop here to avoid false merges across countries based on names.
+	// For government bodies, stop here by default to avoid false merges across countries based on names.
+	// Exception: allow a guarded gov->org bridge for explicit ISO2 when names match strongly.
 	if isGov {
+		if existing, err := d.findGovOrgBridgeCandidate(ctx, fragment); err == nil && existing != nil && existing.ID != fragment.ID {
+			fmt.Printf("[OrgDeduplicator] Gov->Org bridge dedup: %s -> %s\n", fragment.CanonicalPath, existing.CanonicalPath)
+			return existing, nil
+		}
 		return fragment, nil
 	}
 
@@ -220,6 +230,79 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	}
 
 	return fragment, nil
+}
+
+// findGovOrgBridgeCandidate attempts to deduplicate a /gov/{iso2}/{slug} ORGANIZATION fragment into an /org/{iso2}/{slug}
+// fragment when we have strong signals that they represent the same real-world entity.
+//
+// This is intentionally narrow and conservative:
+// - requires explicit ISO2 on BOTH sides and they must match
+// - requires exact legalName, and also requires (shortName OR label[en]) to match when provided
+// - forbids conflicting Wikidata IDs
+func (d *OrgDeduplicator) findGovOrgBridgeCandidate(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, error) {
+	if d == nil || d.fragmentsRepo == nil || fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+		return nil, nil
+	}
+	fs := parseOrgPathScope(fragment.CanonicalPath)
+	if fs.ns != "gov" || !fs.hasCC || !isExplicitCountryCode(fs.cc) {
+		return nil, nil
+	}
+	legalName := strings.TrimSpace(fragment.Identifiers["legalName"])
+	if legalName == "" {
+		return nil, nil
+	}
+
+	cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", legalName, models.FragmentTypeOrganization)
+	if err != nil || len(cands) == 0 {
+		return nil, err
+	}
+
+	fragShort := strings.TrimSpace(fragment.Identifiers["shortName"])
+	fragLabel := strings.TrimSpace(fragment.Labels["en"])
+	fragQID := strings.TrimSpace(extractWikidataIDFromFragment(fragment))
+
+	filtered := make([]*models.HorizonFragment, 0, len(cands))
+	for _, c := range cands {
+		if c == nil || c.Type != models.FragmentTypeOrganization || c.ID == "" || c.ID == fragment.ID {
+			continue
+		}
+		cs := parseOrgPathScope(c.CanonicalPath)
+		// Bridge target must be a country-scoped /org/{iso2}/{slug} (stable canonical namespace).
+		if cs.ns != "org" || !cs.hasCC || !isExplicitCountryCode(cs.cc) {
+			continue
+		}
+		if cs.cc != fs.cc {
+			continue
+		}
+
+		// Never bridge if Wikidata conflicts (strong evidence they are distinct entities).
+		cQID := strings.TrimSpace(extractWikidataIDFromFragment(c))
+		if fragQID != "" && cQID != "" && !strings.EqualFold(fragQID, cQID) {
+			continue
+		}
+
+		// Require an additional name signal beyond legalName if we have it on the gov fragment.
+		// This keeps the bridge conservative, while still catching obvious artifacts like:
+		// /gov/sa/saudi-olympic-and-paralympic-committee <-> /org/sa/sopc
+		if fragShort != "" {
+			if !strings.EqualFold(strings.TrimSpace(c.Identifiers["shortName"]), fragShort) {
+				continue
+			}
+		} else if fragLabel != "" {
+			if !strings.EqualFold(strings.TrimSpace(c.Labels["en"]), fragLabel) {
+				continue
+			}
+		} else {
+			// No extra signal; too risky to bridge.
+			continue
+		}
+
+		filtered = append(filtered, c)
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	return chooseBestOrgCandidate(filtered), nil
 }
 
 // findByWikidataID searches for an existing fragment with the given Wikidata ID.

@@ -1172,6 +1172,19 @@ func main() {
 			lensLifecycle := horizonlens.NewLifecycleManager(horizonFragmentsRepo)
 			lensCalculator := horizonlens.NewMetricsCalculator(horizonFragmentsRepo)
 			lensService := horizonlens.NewLensService(horizonLensesRepo, horizonFragmentsRepo, horizonScoutingJobsRepo, ontologyFactsRepo, lensLifecycle, lensCalculator, pub)
+
+			// Wire cascade cleanup repos for lens deletion (best-effort orphan cleanup)
+			horizonLensItemsRepo := horizonrepo.NewLensItemsRepository(fsClient.Client())
+			horizonExposurePathsRepo := horizonrepo.NewExposurePathsRepository(fsClient.Client())
+			horizonMaterializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(fsClient.Client())
+			lensService.WithCleanupRepos(
+				horizonLensItemsRepo,
+				horizonExposurePathsRepo,
+				horizonMaterializedArtifactsRepo,
+				horizonSpendLedger,
+				agentJobsRepo, // implements AgentJobsDeleter interface
+			)
+
 			horizonService.SetLensService(lensService)
 
 			// Initialize Propagation subsystem

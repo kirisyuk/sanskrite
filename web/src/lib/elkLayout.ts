@@ -67,6 +67,8 @@ const INCREMENTAL_LAYOUT_OPTIONS: LayoutOptions = {
 // - Then: regulation/influence
 // - Then: generic context (geography, location)
 const EDGE_TYPE_PRIORITY: Record<string, number> = {
+  // 0) Market-defining relation (stronger than generic influence/competition for placement)
+  'DOMINATES': 0,
   // 1) Ownership / control (strongest)
   'OWNS': 1,
   'PARENT_OF': 1,
@@ -94,6 +96,8 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'OPPOSES': 3,
   'PARTNERS_WITH': 3,
   'COOPERATES_WITH': 3,
+  // Market participation (org in market)
+  'PARTICIPATES_IN': 3,
   // Person-person social graph (peers)
   'RELATED_TO': 3,
   'RELATIVE_OF': 3,
@@ -348,6 +352,12 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
   const type = normalizeEdgeType(edgeType);
   
   switch (type) {
+    // Market-defining relation:
+    // - If the central node DOMINATES the neighbor (outgoing), the neighbor is "market" (left).
+    // - If the neighbor DOMINATES the central node (incoming), the neighbor is "context" (right).
+    // This places orgs that define a market to the RIGHT of the market node.
+    case 'DOMINATES':
+      return isOutgoing ? 'market' : 'context';
     // People / governance relationships should be treated as "context" for placement:
     // founders/board/executives/staff are not supply-chain nor customers.
     case 'FOUNDED':
@@ -391,6 +401,7 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'OPPOSES':
     case 'PARTNERS_WITH':
     case 'COOPERATES_WITH':
+    case 'PARTICIPATES_IN':
     case 'RELATED_TO':
     case 'RELATIVE_OF':
     case 'SIMILAR_TO':
@@ -432,6 +443,15 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
  */
 export function getLinearSection(edgeType: string | undefined, isOutgoing: boolean): LinearSection {
   const t = normalizeEdgeType(edgeType);
+
+  // Special case: DOMINATES should be primarily a horizontal ordering signal:
+  // - outgoing (center dominates neighbor) => neighbor should appear LEFT of center
+  // - incoming (neighbor dominates center) => neighbor should appear RIGHT of center
+  // Keep it in TOP band for stability (avoid pushing dominant semantics into "downstream").
+  if (t === 'DOMINATES') {
+    const isLeft = Boolean(isOutgoing);
+    return isLeft ? 'top-left' : 'top-right';
+  }
 
   // Direction-agnostic relations: direction does NOT define top/bottom.
   // These are typically "peer" or symmetric relations.
@@ -1049,6 +1069,8 @@ export async function layoutLevelsTwoPane<T = any>(
     const t = String(et || '').trim();
     if (!t) return 0;
     if (STRONG_CONTROL_TYPES.has(t)) return 400;
+    // Market-defining relation: strong, but below hard control/ownership.
+    if (t === 'DOMINATES') return 260;
     if (GOVERNANCE_CONTROL_TYPES.has(t)) return 220;
     if (SUPPLY_CHAIN_TYPES.has(t)) return 120;
     if (INFLUENCE_TYPES.has(t)) return 40;
@@ -1071,6 +1093,8 @@ export async function layoutLevelsTwoPane<T = any>(
     'AFFECTS',
     'REGULATES',
     'IMPACTS',
+    // Market-defining relations (org -> market): treat as hierarchy signal so the org is placed to the RIGHT.
+    'DOMINATES',
   ]);
   const INVERTED_HIERARCHY_TYPES = new Set([
     'SUBSIDIARY_OF',
@@ -1097,6 +1121,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'OPPOSES',
     'PARTNERS_WITH',
     'COOPERATES_WITH',
+    'PARTICIPATES_IN',
     'RELATED_TO',
     'RELATIVE_OF',
     'SIMILAR_TO',
@@ -2918,6 +2943,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     'RELATED_TO',
     'SIMILAR_TO',
     'LINKED_TO',
+    'PARTICIPATES_IN',
   ]);
 
   // Types that imply hierarchy (Parent -> Child)
@@ -2927,6 +2953,8 @@ export function deriveLevelsTreeMetadata<T = any>(
     // Corporate structure / control
     'OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'FOUNDED', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF',
     'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO',
+    // Market-defining (org -> market): treat as hierarchy signal
+    'DOMINATES',
     // Influence is usually Top-Down: Regulator (Parent) -> Company (Child)
     'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'
   ]);
@@ -2944,6 +2972,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     const t = String(et || '').toUpperCase().trim();
     if (!t) return 0;
     if (STRONG_CONTROL_TYPES.has(t)) return 400;
+    if (t === 'DOMINATES') return 260;
     if (t === 'BOARD_MEMBER_OF' || t === 'EXECUTIVE_OF') return 220;
     if (t === 'PRODUCES' || t === 'SUPPLIES_TO' || t === 'TRANSFORMS_INTO') return 120;
     if (INFLUENCE_TYPES.has(t)) return 40;

@@ -61,6 +61,16 @@ const (
 	DependencyTypeParticipatesIn DependencyType = "PARTICIPATES_IN"
 	// DOMINATES: org/facility dominates a market (leader relationship).
 	DependencyTypeDominates DependencyType = "DOMINATES"
+	// HAS_SUBMARKET: market hierarchy (parent market → child/narrower market).
+	// Example: /market/sa/marketing HAS_SUBMARKET /market/sa/event-marketing
+	// Direction: broader market → narrower market.
+	DependencyTypeHasSubmarket DependencyType = "HAS_SUBMARKET"
+
+	// --- Government hierarchy ---
+	// ADMINISTERS: government administrative hierarchy (superior body → subordinate body).
+	// Example: /gov/sa/ministry-of-health ADMINISTERS /gov/sa/sfda
+	// Direction: superior → subordinate (like OWNS but for administrative relationships).
+	DependencyTypeAdministers DependencyType = "ADMINISTERS"
 
 	// --- Governance / control / org-person relationships ---
 	// MANAGES: formal management relationship (CEO, director, operator) — not necessarily ownership.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -17,11 +18,13 @@ var ErrExposurePathNotFound = errors.New("exposure path not found")
 // Collection: horizon_exposure_paths
 type ExposurePathsRepository struct {
 	col *firestore.CollectionRef
+	db  *firestore.Client
 }
 
 func NewExposurePathsRepository(db *firestore.Client) *ExposurePathsRepository {
 	return &ExposurePathsRepository{
 		col: db.Collection("horizon_exposure_paths"),
+		db:  db,
 	}
 }
 
@@ -141,4 +144,43 @@ func (r *ExposurePathsRepository) ListByLens(ctx context.Context, tenantID, lens
 	return out, nil
 }
 
+// DeleteByLens deletes all exposure path artifacts for a given lensId (best-effort).
+// NOTE: This is used for cascade cleanup when a lens is deleted.
+func (r *ExposurePathsRepository) DeleteByLens(ctx context.Context, tenantID, lensID string) (int, error) {
+	if r == nil || r.col == nil || r.db == nil {
+		return 0, fmt.Errorf("exposure paths repo not configured")
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	lensID = strings.TrimSpace(lensID)
+	if tenantID == "" || lensID == "" {
+		return 0, fmt.Errorf("tenantID and lensID are required")
+	}
+
+	const batchSize = 200
+	const maxBatches = 50 // hard cap to avoid long deletes in request path
+	deleted := 0
+
+	for i := 0; i < maxBatches; i++ {
+		docs, err := r.col.Where("tenantId", "==", tenantID).Where("lensId", "==", lensID).Limit(batchSize).Documents(ctx).GetAll()
+		if err != nil {
+			return deleted, fmt.Errorf("firestore query failed: %w", err)
+		}
+		if len(docs) == 0 {
+			return deleted, nil
+		}
+		b := r.db.Batch()
+		for _, d := range docs {
+			b.Delete(d.Ref)
+		}
+		if _, err := b.Commit(ctx); err != nil {
+			return deleted, fmt.Errorf("firestore batch delete failed: %w", err)
+		}
+		deleted += len(docs)
+		if len(docs) < batchSize {
+			return deleted, nil
+		}
+	}
+
+	return deleted, nil
+}
 

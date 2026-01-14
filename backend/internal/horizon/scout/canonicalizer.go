@@ -570,6 +570,11 @@ RULES:
 - ONLY include ownership suffix in canonicalPath if (and only if) it is REQUIRED to disambiguate entities with same shortName.
 - Intangible-but-real actors (alliances, coalitions, unions, regulators, ministries, agencies, associations) are ORGANIZATION.
 - Government bodies MUST use /gov/{iso2|na}/{slug} (iso2 = jurisdiction). Other orgs use /org/{iso2|na}/{slug}.
+- GOV HIERARCHY: Government bodies form administrative hierarchies:
+  - government → ministry → department → agency/authority/regulator
+  - GovTypes: government, ministry, department, agency, authority, regulator, committee, service, bureau, office, council, commission
+  - When canonicalizing, prefer specific agency names over generic ministry references
+  - Example: "Saudi FDA" → /gov/sa/sfda (type: authority), parent would be /gov/sa/ministry-of-health
 - Use these namespaces:
   - ORGANIZATION:
     - /org/{iso2|na}/{lowercase-slug} (companies, NGOs, etc.)
@@ -598,10 +603,14 @@ RULES:
         - "Saudi event marketing" → /market/sa/event-marketing (NOT /market/global/...)
         - "German automotive" → /market/de/automotive
         - Use "global" ONLY when no geographic context is present
+      - MARKET HIERARCHY: Markets form broader → narrower hierarchies
+        - Example: marketing → digital-marketing → event-marketing
+        - When canonicalizing a narrow market, the slug should reflect specificity
+        - Parent market can be inferred by removing the most specific qualifier from the slug
       - Examples:
-        - "SME banking in Iraq" -> /market/iq/sme-banking
-        - "Global EV batteries" -> /market/global/ev-batteries
-        - "UAE fintech sector" -> /market/ae/fintech
+        - "SME banking in Iraq" -> /market/iq/sme-banking (parent: /market/iq/banking)
+        - "Global EV batteries" -> /market/global/ev-batteries (parent: /market/global/batteries)
+        - "UAE fintech sector" -> /market/ae/fintech (parent: /market/ae/finance)
   - FACILITY:
     - Prefer /fac/{orgSlug}/{facilitySlug} when the org can be inferred from the facility name (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise use /fac/{facilitySlug}

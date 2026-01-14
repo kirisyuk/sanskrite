@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -16,12 +17,14 @@ var ErrLensItemNotFound = errors.New("lens item not found")
 // LensItemsRepository репозиторий для работы с LensItem
 type LensItemsRepository struct {
 	col *firestore.CollectionRef
+	db  *firestore.Client
 }
 
 // NewLensItemsRepository создает новый репозиторий
 func NewLensItemsRepository(db *firestore.Client) *LensItemsRepository {
 	return &LensItemsRepository{
 		col: db.Collection("horizon_lens_items"),
+		db:  db,
 	}
 }
 
@@ -146,6 +149,43 @@ func (r *LensItemsRepository) DeleteByLens(ctx context.Context, lensID string) e
 		_, _ = r.col.Doc(d.Ref.ID).Delete(ctx)
 	}
 	return nil
+}
+
+// DeleteByTenantAndLens deletes all LensItems for a given (tenantId, lensId).
+// This is used for cascade cleanup to avoid cross-tenant deletions on id collisions.
+func (r *LensItemsRepository) DeleteByTenantAndLens(ctx context.Context, tenantID, lensID string) (int, error) {
+	if r == nil || r.col == nil || r.db == nil {
+		return 0, ErrInvalidDocument
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	lensID = strings.TrimSpace(lensID)
+	if tenantID == "" || lensID == "" {
+		return 0, ErrInvalidDocument
+	}
+	const batchSize = 200
+	const maxBatches = 50
+	deleted := 0
+	for i := 0; i < maxBatches; i++ {
+		docs, err := r.col.Where("tenantId", "==", tenantID).Where("lensId", "==", lensID).Limit(batchSize).Documents(ctx).GetAll()
+		if err != nil {
+			return deleted, err
+		}
+		if len(docs) == 0 {
+			return deleted, nil
+		}
+		b := r.db.Batch()
+		for _, d := range docs {
+			b.Delete(d.Ref)
+		}
+		if _, err := b.Commit(ctx); err != nil {
+			return deleted, err
+		}
+		deleted += len(docs)
+		if len(docs) < batchSize {
+			return deleted, nil
+		}
+	}
+	return deleted, nil
 }
 
 // ListByProject возвращает LensItems для проекта, отсортированные по createdAt asc

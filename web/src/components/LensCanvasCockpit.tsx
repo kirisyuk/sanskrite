@@ -18,7 +18,13 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { ThemeContext } from './ThemeProvider';
-import { HORIZON_NODE_TYPES, setHorizonNodeVisualQuality, type HorizonNodeVisualQuality } from './HorizonGraphNodeTypes';
+import {
+  HORIZON_NODE_TYPES,
+  setHorizonNodeVisualQuality,
+  type HorizonNodeVisualQuality,
+  getNodeColors,
+  getHorizonNodeVisualType,
+} from './HorizonGraphNodeTypes';
 import { api } from '../lib/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -1784,6 +1790,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const type = (edgeType || '').toUpperCase();
     const baseWidth = criticality ? Math.max(1, criticality * 2) : 1.5;
 
+    // 🟡 Dominance / market-defining — Amber (high salience)
+    if (type === 'DOMINATES') {
+      return {
+        stroke: '#F59E0B', // amber-500
+        strokeWidth: Math.max(baseWidth + 1.0, 2.6),
+      };
+    }
+
     // 🔴 Конкуренция/Конфликт — Красный
     if (['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES'].includes(type)) {
       return {
@@ -1934,6 +1948,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const SUPPLY_FWD = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
     const SUPPLY_INV = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
     const PEER = new Set(['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO']);
+    // Market-defining relations: org DOMINATES market → org appears to the RIGHT of market (not up/down hierarchy)
+    const MARKET_DEFINING = new Set(['DOMINATES']);
     const CONTEXTISH = new Set(['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES']);
     const INFLUENCEISH = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS']);
 
@@ -1941,6 +1957,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const relForEdge = (fromId: string, s: string, t: string, et: string): Rel => {
       if (!fromId || !s || !t) return 'unknown';
       if (PEER.has(et)) return 'peer';
+      if (MARKET_DEFINING.has(et)) return 'peer'; // DOMINATES is horizontal (org to the right of market)
       if (CONTEXTISH.has(et) || INFLUENCEISH.has(et)) return 'peer';
 
       // Control hierarchy
@@ -2134,8 +2151,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 });
               }
 
-              const directionFromParent: 'incoming' | 'outgoing' =
-                rel === 'up' ? 'incoming' : 'outgoing';
+              // Direction from the perspective of the central node (fromNodeId):
+              // - 'incoming' if the edge points TO the central node (other → central)
+              // - 'outgoing' if the edge points FROM the central node (central → other)
+              // For hierarchical relations (up/down), use rel. For peer relations, use actual edge direction.
+              let directionFromParent: 'incoming' | 'outgoing';
+              if (rel === 'up') {
+                directionFromParent = 'incoming';
+              } else if (rel === 'down') {
+                directionFromParent = 'outgoing';
+              } else {
+                // Peer/market-defining: determine by actual edge direction
+                // If central node (fromNodeId) is the target, it's incoming; otherwise outgoing
+                directionFromParent = (t === fromNodeId) ? 'incoming' : 'outgoing';
+              }
               const isBackbone = rel === 'up' || rel === 'down';
 
               layerNewNodes.push({
@@ -2407,6 +2436,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   // Приоритет типов связей для сортировки (меньше = важнее = левее)
   const EDGE_TYPE_PRIORITY: Record<string, number> = {
+    // 0. "Market-defining" relation — should dominate other semantics in the same pair
+    'DOMINATES': 0,
     // 1. Конкуренция/Конфликт — самые важные
     'COMPETES_WITH': 1,
     'CONFLICTS_WITH': 1,
@@ -2490,10 +2521,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const cp = cpOfNode(id);
         return Boolean(cp && cp.startsWith('/loc/'));
       };
+      const isMarketLike = (id: string): boolean => {
+        const t = typeOfNode(id);
+        if (t === 'MARKET') return true;
+        const cp = cpOfNode(id);
+        return Boolean(cp && cp.startsWith('/market/'));
+      };
 
       const INFL = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES']);
       const DEP = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
       const PARTNER = new Set(['PARTNERS_WITH', 'COOPERATES_WITH']);
+      const DOM = new Set(['DOMINATES']);
       const bestPartner = (types: Set<string>): string => {
         // Prefer PARTNERS_WITH over COOPERATES_WITH for UI stability.
         if (types.has('PARTNERS_WITH')) return 'PARTNERS_WITH';
@@ -2520,6 +2558,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Build type sets per unordered pair.
       const typesByPair = new Map<string, Set<string>>();
       const hasLocatedOutByPair = new Map<string, boolean>(); // ORG/GOV -> GEO LOCATED_IN exists
+      const hasDominatesOrgMarketByPair = new Map<string, boolean>(); // org<->market has DOMINATES
       for (const e of edges as any[]) {
         const s = norm(e?.source);
         const t = norm(e?.target);
@@ -2535,10 +2574,21 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             hasLocatedOutByPair.set(k, true);
           }
         }
+        if (et === 'DOMINATES') {
+          if ((isOrgLike(s) && isMarketLike(t)) || (isMarketLike(s) && isOrgLike(t))) {
+            hasDominatesOrgMarketByPair.set(k, true);
+          }
+        }
       }
 
       const winnerByPair = new Map<string, string>(); // if set, suppress others (dep-like / non-winner influence)
       for (const [k, set] of typesByPair.entries()) {
+        const hasDominates = Array.from(set).some((t) => DOM.has(t));
+        if (hasDominates && Boolean(hasDominatesOrgMarketByPair.get(k)) && set.size > 1) {
+          // Product rule: for org<->market links, DOMINATES is primary and suppresses all other semantics.
+          winnerByPair.set(k, 'DOMINATES');
+          continue;
+        }
         const hasPartner = Array.from(set).some((t) => PARTNER.has(t));
         const hasInfluence = Array.from(set).some((t) => INFL.has(t));
         const hasDep = Array.from(set).some((t) => DEP.has(t));
@@ -2580,6 +2630,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           out.push(e);
           continue;
         }
+        // If DOMINATES is the winner, suppress all other edges for the pair.
+        if (win === 'DOMINATES') continue;
         // Suppress dependency edges when influence or located_in dominates.
         if (DEP.has(et)) continue;
         // Suppress alternate influence labels when a winner is chosen (keeps one clean semantic edge).
@@ -8975,8 +9027,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   // Memoized nodeColor callback for MiniMap (avoid recreating function on every render)
   const miniMapNodeColor = React.useCallback((node: Node<HorizonNodeData>) => {
     const data = node.data as HorizonNodeData;
-    return data.critical ? '#EF4444' : '#3B82F6';
-  }, []);
+    if (data.critical) return '#EF4444';
+    const vt = getHorizonNodeVisualType(data.type, (data as any)?.canonicalPath);
+    return getNodeColors(vt || data.type, theme === 'dark' ? 'dark' : 'light').accent;
+  }, [theme]);
 
   const miniMapMaskColor = theme === 'dark' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)';
 
@@ -9983,11 +10037,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 top: 'calc(100% + 6px)',
                 right: 0,
                 minWidth: 240,
+                maxHeight: 'calc(100vh - 200px)',
+                overflowY: 'auto',
                 borderRadius: 12,
                 border: '1px solid var(--border-subtle)',
                 background: 'var(--bg-elevated)',
                 boxShadow: theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.55)' : '0 14px 40px rgba(0,0,0,0.18)',
-                overflow: 'hidden',
                 zIndex: 1000,
               }}
             >

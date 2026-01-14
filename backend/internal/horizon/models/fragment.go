@@ -67,8 +67,21 @@ type HorizonFragment struct {
 	// MarketChannels is a multi-valued channel classification for the market (best-effort).
 	// Examples: b2b, b2c, public-sector.
 	MarketChannels []string `json:"marketChannels,omitempty" firestore:"marketChannels,omitempty"`
+	// ParentMarketPath is the canonical path of the parent market in the hierarchy.
+	// Example: /market/sa/event-marketing has parent /market/sa/marketing
+	// This enables market hierarchy traversal (broader → narrower markets).
+	ParentMarketPath string `json:"parentMarketPath,omitempty" firestore:"parentMarketPath,omitempty"`
 
-	// IndexPaths — денормализованные “координаты” фрагмента для детерминированного картографирования/фильтрации.
+	// --- GOV-specific (when Type == ORGANIZATION and CanonicalPath starts with /gov/) ---
+	// GovType is the type/level of government body (best-effort classification).
+	// Expected values: government, ministry, department, agency, committee, service, regulator, authority, bureau, office, council, commission
+	GovType string `json:"govType,omitempty" firestore:"govType,omitempty"`
+	// ParentGovPath is the canonical path of the parent government body in the administrative hierarchy.
+	// Example: /gov/sa/sfda has parent /gov/sa/ministry-of-health
+	// This enables administrative hierarchy traversal (superior → subordinate bodies).
+	ParentGovPath string `json:"parentGovPath,omitempty" firestore:"parentGovPath,omitempty"`
+
+	// IndexPaths — денормализованные "координаты" фрагмента для детерминированного картографирования/фильтрации.
 	// Собирается из canonicalPath + (sectorPath/entityPath + ancestors) + location + tags + identifiers + (optional spheres).
 	// Ограничено по размеру (см. BuildIndexPaths/NormalizeIndexPaths).
 	IndexPaths []string `json:"indexPaths,omitempty" firestore:"indexPaths,omitempty"`
@@ -222,6 +235,32 @@ func (f *HorizonFragment) Validate() error {
 				out = append(out, ch)
 			}
 			f.MarketChannels = out
+		}
+
+		// Best-effort: normalize parent market path.
+		f.ParentMarketPath = strings.TrimSpace(f.ParentMarketPath)
+		if f.ParentMarketPath != "" && !strings.HasPrefix(f.ParentMarketPath, "/market/") {
+			f.ParentMarketPath = "" // invalid parent path, clear it
+		}
+	}
+
+	// Best-effort: normalize GOV-specific fields (when canonicalPath starts with /gov/).
+	if strings.HasPrefix(f.CanonicalPath, "/gov/") {
+		// Normalize govType to lowercase.
+		f.GovType = strings.ToLower(strings.TrimSpace(f.GovType))
+		// Validate govType against allowed values (best-effort, non-blocking).
+		allowedGovTypes := map[string]struct{}{
+			"government": {}, "ministry": {}, "department": {}, "agency": {},
+			"authority": {}, "regulator": {}, "committee": {}, "service": {},
+			"bureau": {}, "office": {}, "council": {}, "commission": {},
+		}
+		if _, ok := allowedGovTypes[f.GovType]; !ok && f.GovType != "" {
+			// Unknown govType - keep it but don't block (best-effort).
+		}
+		// Normalize parent gov path.
+		f.ParentGovPath = strings.TrimSpace(f.ParentGovPath)
+		if f.ParentGovPath != "" && !strings.HasPrefix(f.ParentGovPath, "/gov/") {
+			f.ParentGovPath = "" // invalid parent path, clear it
 		}
 	}
 

@@ -16,13 +16,15 @@ import (
 // - horizon_lens_spend: per lens per UTC day
 // - horizon_cascade_spend: per cascade per UTC day
 type HorizonSpendLedger struct {
-	lensCol   *firestore.CollectionRef
+	db         *firestore.Client
+	lensCol    *firestore.CollectionRef
 	cascadeCol *firestore.CollectionRef
 }
 
 func NewHorizonSpendLedger(db *firestore.Client) *HorizonSpendLedger {
 	return &HorizonSpendLedger{
-		lensCol:   db.Collection("horizon_lens_spend"),
+		db:         db,
+		lensCol:    db.Collection("horizon_lens_spend"),
 		cascadeCol: db.Collection("horizon_cascade_spend"),
 	}
 }
@@ -157,4 +159,84 @@ func (r *HorizonSpendLedger) GetLensDaySpendUSD(ctx context.Context, tenantID, l
 	return doc.SpendUSD, doc.InputTokens, doc.OutputTokens, nil
 }
 
+// DeleteByLens deletes all per-lens spend documents for a given lensId (best-effort).
+// NOTE: This is used for cascade cleanup when a lens is deleted.
+// Doc IDs are structured as {tenantID}__{lensID}__{dayUtc}.
+func (r *HorizonSpendLedger) DeleteByLens(ctx context.Context, tenantID, lensID string) (int, error) {
+	if r == nil || r.lensCol == nil || r.db == nil {
+		return 0, fmt.Errorf("spend ledger not configured")
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	lensID = strings.TrimSpace(lensID)
+	if tenantID == "" || lensID == "" {
+		return 0, fmt.Errorf("tenantID and lensID are required")
+	}
 
+	const batchSize = 200
+	const maxBatches = 50 // hard cap to avoid long deletes in request path
+	deleted := 0
+
+	for i := 0; i < maxBatches; i++ {
+		docs, err := r.lensCol.Where("tenantId", "==", tenantID).Where("lensId", "==", lensID).Limit(batchSize).Documents(ctx).GetAll()
+		if err != nil {
+			return deleted, fmt.Errorf("firestore query failed: %w", err)
+		}
+		if len(docs) == 0 {
+			return deleted, nil
+		}
+		b := r.db.Batch()
+		for _, d := range docs {
+			b.Delete(d.Ref)
+		}
+		if _, err := b.Commit(ctx); err != nil {
+			return deleted, fmt.Errorf("firestore batch delete failed: %w", err)
+		}
+		deleted += len(docs)
+		if len(docs) < batchSize {
+			return deleted, nil
+		}
+	}
+
+	return deleted, nil
+}
+
+
+// DeleteCascadeSpendByLens deletes all per-cascade spend documents that reference a given lensId (best-effort).
+// This cleans up horizon_cascade_spend entries that would otherwise remain as orphans.
+func (r *HorizonSpendLedger) DeleteCascadeSpendByLens(ctx context.Context, tenantID, lensID string) (int, error) {
+	if r == nil || r.cascadeCol == nil || r.db == nil {
+		return 0, fmt.Errorf("spend ledger not configured")
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	lensID = strings.TrimSpace(lensID)
+	if tenantID == "" || lensID == "" {
+		return 0, fmt.Errorf("tenantID and lensID are required")
+	}
+
+	const batchSize = 200
+	const maxBatches = 50
+	deleted := 0
+
+	for i := 0; i < maxBatches; i++ {
+		docs, err := r.cascadeCol.Where("tenantId", "==", tenantID).Where("lensId", "==", lensID).Limit(batchSize).Documents(ctx).GetAll()
+		if err != nil {
+			return deleted, fmt.Errorf("firestore query failed: %w", err)
+		}
+		if len(docs) == 0 {
+			return deleted, nil
+		}
+		b := r.db.Batch()
+		for _, d := range docs {
+			b.Delete(d.Ref)
+		}
+		if _, err := b.Commit(ctx); err != nil {
+			return deleted, fmt.Errorf("firestore batch delete failed: %w", err)
+		}
+		deleted += len(docs)
+		if len(docs) < batchSize {
+			return deleted, nil
+		}
+	}
+
+	return deleted, nil
+}

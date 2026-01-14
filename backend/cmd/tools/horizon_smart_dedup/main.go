@@ -385,7 +385,8 @@ func main() {
 		if shortName := strings.TrimSpace(f.Identifiers["shortName"]); shortName != "" {
 			// For ORG: shortName is name-only and very collision-prone; default OFF.
 			if f.Type == models.FragmentTypeOrganization {
-				if !isGovCanonicalPath(f.CanonicalPath) && *enableOrgNameOnly {
+				// When explicitly enabled, allow both /org/* and /gov/* to participate (still ISO2-scoped).
+				if *enableOrgNameOnly {
 					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
 					if iso2 != "na" {
 						key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, strings.ToLower(shortName))
@@ -400,14 +401,13 @@ func main() {
 
 		// Index by legalName (type-scoped)
 		if legalName := strings.TrimSpace(f.Identifiers["legalName"]); legalName != "" {
-			// For ORG: only within known ISO2; skip /gov/* entirely.
+			// For ORG: only within known ISO2. Include /gov/* here because exact legalName is high-confidence,
+			// and selectCanonical() already prefers /org/* as the stable canonical namespace.
 			if f.Type == models.FragmentTypeOrganization {
-				if !isGovCanonicalPath(f.CanonicalPath) {
-					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
-					if iso2 != "na" {
-						key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, strings.ToLower(legalName))
-						legalNameIndex[key] = append(legalNameIndex[key], f)
-					}
+				iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
+				if iso2 != "na" {
+					key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, strings.ToLower(legalName))
+					legalNameIndex[key] = append(legalNameIndex[key], f)
 				}
 			} else {
 				key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(legalName))
@@ -419,7 +419,8 @@ func main() {
 		if labelEN := strings.TrimSpace(f.Labels["en"]); labelEN != "" {
 			// For ORG: label is name-only and very collision-prone; default OFF.
 			if f.Type == models.FragmentTypeOrganization {
-				if !isGovCanonicalPath(f.CanonicalPath) && *enableOrgNameOnly {
+				// When explicitly enabled, allow both /org/* and /gov/* to participate (still ISO2-scoped).
+				if *enableOrgNameOnly {
 					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
 					if iso2 != "na" {
 						key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, strings.ToLower(labelEN))
@@ -1054,6 +1055,15 @@ func main() {
 				}
 			}
 			if len(unprocessed) > 1 {
+				// Extra safety for ORGANIZATION: even exact legalName can collide; never merge across distinct Wikidata IDs.
+				if unprocessed[0].Type == models.FragmentTypeOrganization {
+					if skip, reason := shouldSkipOrgNameCluster("legalName", unprocessed); skip {
+						if *verbose {
+							log.Printf("  SKIP ORG cluster (legalName): key=%s reason=%s", key, reason)
+						}
+						continue
+					}
+				}
 				cluster := &DuplicateCluster{
 					MatchType:  "legalName",
 					MatchValue: key,

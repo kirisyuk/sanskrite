@@ -255,3 +255,81 @@ func (r *MaterializedArtifactsRepository) Delete(ctx context.Context, id string)
 	return nil
 }
 
+// DeleteByLens deletes all materialized artifacts for a given lensId (best-effort).
+// NOTE: This is used for cascade cleanup when a lens is deleted.
+func (r *MaterializedArtifactsRepository) DeleteByLens(ctx context.Context, lensID string) (int, error) {
+	if r == nil || r.col == nil || r.db == nil {
+		return 0, fmt.Errorf("materialized artifacts repo not configured")
+	}
+	lensID = strings.TrimSpace(lensID)
+	if lensID == "" {
+		return 0, fmt.Errorf("lensID is required")
+	}
+
+	const batchSize = 200
+	const maxBatches = 50 // hard cap to avoid long deletes in request path
+	deleted := 0
+
+	for i := 0; i < maxBatches; i++ {
+		docs, err := r.col.Where("lensId", "==", lensID).Limit(batchSize).Documents(ctx).GetAll()
+		if err != nil {
+			return deleted, fmt.Errorf("firestore query failed: %w", err)
+		}
+		if len(docs) == 0 {
+			return deleted, nil
+		}
+		b := r.db.Batch()
+		for _, d := range docs {
+			b.Delete(d.Ref)
+		}
+		if _, err := b.Commit(ctx); err != nil {
+			return deleted, fmt.Errorf("firestore batch delete failed: %w", err)
+		}
+		deleted += len(docs)
+		if len(docs) < batchSize {
+			return deleted, nil
+		}
+	}
+
+	return deleted, nil
+}
+
+// DeleteByTenantAndLens deletes all materialized artifacts for a given (tenantId, lensId) pair (best-effort).
+// This is used for cascade cleanup to avoid cross-tenant deletions on id collisions.
+func (r *MaterializedArtifactsRepository) DeleteByTenantAndLens(ctx context.Context, tenantID, lensID string) (int, error) {
+	if r == nil || r.col == nil || r.db == nil {
+		return 0, fmt.Errorf("materialized artifacts repo not configured")
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	lensID = strings.TrimSpace(lensID)
+	if tenantID == "" || lensID == "" {
+		return 0, fmt.Errorf("tenantID and lensID are required")
+	}
+
+	const batchSize = 200
+	const maxBatches = 50 // hard cap to avoid long deletes in request path
+	deleted := 0
+
+	for i := 0; i < maxBatches; i++ {
+		docs, err := r.col.Where("tenantId", "==", tenantID).Where("lensId", "==", lensID).Limit(batchSize).Documents(ctx).GetAll()
+		if err != nil {
+			return deleted, fmt.Errorf("firestore query failed: %w", err)
+		}
+		if len(docs) == 0 {
+			return deleted, nil
+		}
+		b := r.db.Batch()
+		for _, d := range docs {
+			b.Delete(d.Ref)
+		}
+		if _, err := b.Commit(ctx); err != nil {
+			return deleted, fmt.Errorf("firestore batch delete failed: %w", err)
+		}
+		deleted += len(docs)
+		if len(docs) < batchSize {
+			return deleted, nil
+		}
+	}
+
+	return deleted, nil
+}

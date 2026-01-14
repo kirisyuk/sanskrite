@@ -354,6 +354,18 @@ RULES:
   - Use "global" as geo ONLY when NO geographic context is provided in the query
   - You CAN also include a separate GEO_REGION anchor for the country - that is fine and often useful
 
+- MARKET HIERARCHY (best-effort):
+  - Markets form hierarchies: broader → narrower (e.g., marketing → digital-marketing → event-marketing)
+  - When creating a MARKET anchor, consider if there's an obvious parent market
+  - In decompositionHints.subMarkets, list narrower segments that belong to this market
+  - Example hierarchy: /market/sa/marketing → /market/sa/digital-marketing → /market/sa/event-marketing
+
+- GOV HIERARCHY (best-effort):
+  - Government bodies form administrative hierarchies: government → ministry → department → agency/authority
+  - GovType values: government, ministry, department, agency, authority, regulator, committee, service, bureau, office, council, commission
+  - When anchoring government bodies, prefer specific agencies over generic ministry references when the query is specific
+  - Example: "Saudi FDA" → /gov/sa/sfda (type: authority/regulator), parent would be /gov/sa/ministry-of-health
+
 - Prefer STABLE anchors:
   - choose country canonical paths for country scope, not adjective/alias forms
   - choose products/materials at the right level (raw vs component vs finished) when possible

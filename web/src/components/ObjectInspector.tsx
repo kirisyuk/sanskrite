@@ -3,7 +3,7 @@ import { api } from '../lib/api';
 import { auth } from '../lib/firebase';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 import { ThemeContext } from './ThemeProvider';
-import { HorizonNodeIcon, getNodeColors, formatHorizonFragmentType, getMetricColor } from './HorizonGraphNodeTypes';
+import { HorizonNodeIcon, getNodeColors, formatHorizonFragmentType, getMetricColor, getHorizonNodeVisualType } from './HorizonGraphNodeTypes';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
@@ -801,7 +801,11 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
       setHitlOpen(false);
     } catch (err: any) {
-      setHitlError(err?.response?.data?.error || err?.message || 'Failed to apply edge edit');
+      const respData = err?.response?.data;
+      const serverMsg =
+        (typeof respData === 'string' && respData.trim()) ? respData.trim()
+          : (respData?.error ? String(respData.error).trim() : '');
+      setHitlError(serverMsg || err?.message || 'Failed to apply edge edit');
     } finally {
       setHitlBusy(false);
     }
@@ -1086,6 +1090,12 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   );
   const fragmentIdForNode = React.useMemo(() => String(nodeData?.fragmentId || nodeId || '').trim(), [nodeData, nodeId]);
 
+  const nodeVisualType = React.useMemo(() => {
+    const t = nodeType || fragment?.type;
+    const cp = nodeCanonicalPath || fragment?.canonicalPath;
+    return getHorizonNodeVisualType(t, cp);
+  }, [nodeType, nodeCanonicalPath, fragment]);
+
   const canUseLoadedFragment = React.useMemo(() => {
     const wantId = String(nodeData?.fragmentId || nodeId || '').trim();
     const loadedId = String((fragment as any)?.id || (fragment as any)?.ID || '').trim();
@@ -1264,9 +1274,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   }, [edgeData, edge]);
 
   const nodeAccent = React.useMemo(() => {
-    const t = nodeType || fragment?.type;
-    return getNodeColors(t, theme === 'dark' ? 'dark' : 'light').accent;
-  }, [nodeType, fragment, theme]);
+    return getNodeColors(nodeVisualType || nodeType || fragment?.type, theme === 'dark' ? 'dark' : 'light').accent;
+  }, [nodeVisualType, nodeType, fragment, theme]);
 
   const nodeTypeHuman = React.useMemo(() => formatHorizonFragmentType(nodeType), [nodeType]);
 
@@ -1350,7 +1359,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   flexShrink: 0,
                 }}
               >
-                <HorizonNodeIcon type={nodeType} color={nodeAccent} size={18} />
+                <HorizonNodeIcon type={nodeVisualType || nodeType} color={nodeAccent} size={18} />
         </div>
       )}
             <div style={{ minWidth: 0 }}>
@@ -1376,7 +1385,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                       label="Type"
                       value={
                         <AccentChip accent={nodeAccent}>
-                          <HorizonNodeIcon type={nodeType} color={nodeAccent} size={14} />
+                          <HorizonNodeIcon type={nodeVisualType || nodeType} color={nodeAccent} size={14} />
                           {nodeTypeHuman}
                         </AccentChip>
                       }
@@ -1434,10 +1443,11 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                     {sourceFragment?.type && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         {(() => {
-                          const accent = getNodeColors(sourceFragment.type, theme === 'dark' ? 'dark' : 'light').accent;
+                          const vt = getHorizonNodeVisualType(sourceFragment.type, sourceFragment.canonicalPath);
+                          const accent = getNodeColors(vt || sourceFragment.type, theme === 'dark' ? 'dark' : 'light').accent;
                           return (
                             <AccentChip accent={accent}>
-                              <HorizonNodeIcon type={sourceFragment.type} color={accent} size={14} />
+                              <HorizonNodeIcon type={vt || sourceFragment.type} color={accent} size={14} />
                               {formatHorizonFragmentType(sourceFragment.type)}
                             </AccentChip>
                           );
@@ -1468,10 +1478,11 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                     {targetFragment?.type && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         {(() => {
-                          const accent = getNodeColors(targetFragment.type, theme === 'dark' ? 'dark' : 'light').accent;
+                          const vt = getHorizonNodeVisualType(targetFragment.type, targetFragment.canonicalPath);
+                          const accent = getNodeColors(vt || targetFragment.type, theme === 'dark' ? 'dark' : 'light').accent;
                           return (
                             <AccentChip accent={accent}>
-                              <HorizonNodeIcon type={targetFragment.type} color={accent} size={14} />
+                              <HorizonNodeIcon type={vt || targetFragment.type} color={accent} size={14} />
                               {formatHorizonFragmentType(targetFragment.type)}
                             </AccentChip>
                           );

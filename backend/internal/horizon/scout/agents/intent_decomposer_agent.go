@@ -233,7 +233,7 @@ Return ONLY JSON with this schema:
       "targetLegalName": "string",
       "targetShortName": "string",
       "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL",
-      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES",
+      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "HAS_SUBMARKET" | "ADMINISTERS",
       "reason": "string",
       "confidence": 0.0,
       "targetCanonicalPath": "string (REQUIRED, stable, NOT /discovered/*)"
@@ -272,8 +272,16 @@ RULES:
     - GEOGRAPHY INHERITANCE: If TARGET is a regional market (e.g., /market/sa/...), new MARKET relations MUST inherit that geo
       - Example: decomposing /market/sa/event-marketing → sub-markets should be /market/sa/... (NOT /market/global/...)
     - Use "global" ONLY when the market is truly global or no geographic context exists
+    - MARKET HIERARCHY: Use HAS_SUBMARKET to link parent market → narrower sub-market
+      - Example: /market/sa/marketing HAS_SUBMARKET /market/sa/event-marketing
+      - Direction: broader → narrower
   - PROGRAM: /program/{jurisdictionSlug}/{programSlug}
     - If TARGET is a regional program, new related entities should reflect that jurisdiction context
+  - GOV: /gov/{iso2}/{slug}
+    - GOV HIERARCHY: Use ADMINISTERS to link superior gov body → subordinate body
+      - Example: /gov/sa/ministry-of-health ADMINISTERS /gov/sa/sfda
+      - Direction: superior → subordinate
+    - GovTypes: government, ministry, department, agency, authority, regulator, committee, service, bureau, office
 - VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
   - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
   - canonicalPath MUST match expected prefix for targetType

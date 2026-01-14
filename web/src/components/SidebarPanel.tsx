@@ -861,7 +861,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                 <path d="M9 3h6l1 7-2 2v5H10v-5L8 10l1-7Z" />
               </svg>
             </button>
-            {isHorizonMode && project.projectType === 'horizon' && onNewLens && (
+            {isHorizonMode && !isModernSidebarMode && project.projectType === 'horizon' && onNewLens && (
               <button
                 type="button"
                 className="sidebar-icon-btn"
@@ -2009,23 +2009,6 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
           background: var(--white-10);
           border-color: var(--border-subtle);
         }
-        .sidebar-modern .sidebar-pill {
-          width: 100%;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 10px;
-          padding: 10px 12px;
-          border-radius: 14px;
-          border: 1px solid var(--border-subtle);
-          background: var(--white-06);
-          color: var(--text-secondary-strong);
-          cursor: pointer;
-          transition: background 120ms ease;
-        }
-        .sidebar-modern .sidebar-pill:hover {
-          background: var(--white-10);
-        }
       `}</style>
 
       {/* Mobile overlay backdrop */}
@@ -2066,7 +2049,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         }}
       >
         <div className="p-6 h-full flex flex-col">
-          <div className="flex items-center justify-between mb-6">
+          <div className={`flex items-center justify-between ${isModernSidebarMode ? 'mb-4' : 'mb-6'}`}>
             {currentMode === 'pages' ? (
               <div className="flex items-center gap-2">
                 <button
@@ -2181,6 +2164,34 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                 <button
                   type="button"
                   className="sidebar-icon-btn"
+                  title={
+                    currentMode === 'horizon'
+                      ? (isDetailsView ? 'New Lens' : 'New Project')
+                      : 'New Chat'
+                  }
+                  aria-label={
+                    currentMode === 'horizon'
+                      ? (isDetailsView ? 'New Lens' : 'New Project')
+                      : 'New Chat'
+                  }
+                  onClick={() => {
+                    onCloseAllModals?.();
+                    if (currentMode === 'horizon' && isDetailsView && onNewLens) {
+                      onNewLens();
+                    } else {
+                      onResetChat();
+                    }
+                    if (isMobile) onClose();
+                  }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  className="sidebar-icon-btn"
                   title={sidebarDensity === 'compact' ? 'Comfortable density' : 'Compact density'}
                   onClick={() => setSidebarDensity((d) => (d === 'compact' ? 'comfortable' : 'compact'))}
                 >
@@ -2261,88 +2272,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
             ) : (
               <>
                 {isModernSidebarMode ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <button
-                      type="button"
-                      className="sidebar-pill"
-                      onClick={() => openPalette()}
-                      title="Search (Ctrl/Cmd+K)"
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-secondary-strong)', flexShrink: 0 }}>
-                          <circle cx="11" cy="11" r="8" />
-                          <path d="m21 21-4.3-4.3" />
-                        </svg>
-                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          Search projects{isHorizonMode ? ' & lenses' : ' & jobs'}…
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                        <kbd style={{ fontSize: 10, padding: '2px 6px', borderRadius: 8, border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-secondary-strong)' }}>
-                          {isMac ? '⌘K' : 'Ctrl K'}
-                        </kbd>
-                      </div>
-                    </button>
-
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onCloseAllModals?.();
-                          // Horizon best-practice: when inside a project (details view), primary CTA is New Lens.
-                          // When browsing projects, primary CTA is New Project.
-                          if (isHorizonMode && isDetailsView && onNewLens) {
-                            onNewLens();
-                          } else {
-                            onResetChat();
-                          }
-                          if (isMobile) onClose();
-                        }}
-                        style={{
-                          flex: 1,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: 10,
-                          height: 38,
-                          borderRadius: 14,
-                          border: '1px solid var(--border-subtle)',
-                          background: 'var(--accent-primary)',
-                          color: '#fff',
-                          fontWeight: 650,
-                          fontSize: 12,
-                        }}
-                        title={
-                          isHorizonMode
-                            ? (isDetailsView ? 'Create New Lens' : 'New Project')
-                            : t('unfold.sections.newChat')
-                        }
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M12 5v14" /><path d="M5 12h14" />
-                        </svg>
-                        {isHorizonMode ? (isDetailsView ? 'New Lens' : 'New Project') : t('unfold.sections.newChat')}
-                      </button>
-                      {onShowWorkspace && (
-                        <button
-                          type="button"
-                          className="sidebar-icon-btn"
-                          onClick={() => {
-                            onShowWorkspace?.();
-                            if (isMobile) onClose();
-                          }}
-                          title={t('unfold.sections.workspace')}
-                        >
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                            <path d="M9 22V12h6v10" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-
-                    <div style={{ height: 1, background: 'var(--border-subtle)', marginTop: 4 }} />
-                  </div>
+                  <div style={{ height: 1, background: 'var(--border-subtle)', marginTop: 4 }} />
                 ) : (
                   <>
                     <button

@@ -116,6 +116,13 @@ type LensService struct {
 	criticalPathDetector  *critical_path.Detector         // Optional: for critical path detection
 	edgesRepo             *repo.DependencyEdgesRepository // Required for critical path detection
 	canonicalPathResolver *scout.CanonicalPathResolver    // Optional: for early canonicalization and deduplication
+
+	// Optional cleanup repos for cascade delete (best-effort, non-critical)
+	lensItemsRepo        *repo.LensItemsRepository
+	exposurePathsRepo    *repo.ExposurePathsRepository
+	materializedRepo     *repo.MaterializedArtifactsRepository
+	spendLedger          *repo.HorizonSpendLedger
+	agentJobsRepo        AgentJobsDeleter // interface for deleting agent jobs by ID
 }
 
 // NewLensService создает новый Lens Service
@@ -151,6 +158,29 @@ func (s *LensService) WithCriticalPathDetector(detector *critical_path.Detector,
 // WithCanonicalPathResolver sets the canonical path resolver for early canonicalization and deduplication.
 func (s *LensService) WithCanonicalPathResolver(resolver *scout.CanonicalPathResolver) *LensService {
 	s.canonicalPathResolver = resolver
+	return s
+}
+
+// AgentJobsDeleter abstracts agent_jobs deletion for cascade cleanup.
+// This avoids importing the full AgentJobsRepository into the horizon/lens package.
+type AgentJobsDeleter interface {
+	Delete(ctx context.Context, id string) error
+}
+
+// WithCleanupRepos wires optional repositories for cascade cleanup on lens deletion.
+// All are best-effort: errors are logged but do not fail DeleteLens.
+func (s *LensService) WithCleanupRepos(
+	lensItemsRepo *repo.LensItemsRepository,
+	exposurePathsRepo *repo.ExposurePathsRepository,
+	materializedRepo *repo.MaterializedArtifactsRepository,
+	spendLedger *repo.HorizonSpendLedger,
+	agentJobsDeleter AgentJobsDeleter,
+) *LensService {
+	s.lensItemsRepo = lensItemsRepo
+	s.exposurePathsRepo = exposurePathsRepo
+	s.materializedRepo = materializedRepo
+	s.spendLedger = spendLedger
+	s.agentJobsRepo = agentJobsDeleter
 	return s
 }
 
@@ -1261,11 +1291,16 @@ func (s *LensService) DeleteLens(ctx context.Context, lensID string) error {
 		return fmt.Errorf("failed to get lens: %w", err)
 	}
 
-	// Удаляем Lens
+	// Удаляем Lens document
 	if err := s.lensesRepo.Delete(ctx, lensID); err != nil {
 		return fmt.Errorf("failed to delete lens: %w", err)
 	}
 
+	// ── Cascade cleanup (best-effort, non-critical) ──
+	// Delete orphaned lens-specific data that would otherwise remain in Firestore.
+	s.cascadeDeleteLensData(ctx, lens.TenantID, lens.ProjectID, lensID)
+
+	// ── Fragment subscription cleanup ──
 	// Fast path: if we have ScopeFragments cache, decrement by fragment IDs directly.
 	// This avoids alias/canonicalPath mismatches when lens.Scope contains non-canonical paths.
 	if len(lens.ScopeFragments) > 0 {
@@ -1317,6 +1352,87 @@ func (s *LensService) DeleteLens(ctx context.Context, lensID string) error {
 	}
 
 	return nil
+}
+
+// cascadeDeleteLensData performs best-effort cleanup of lens-specific orphan data.
+// Errors are logged but do not propagate (lens deletion succeeds regardless).
+func (s *LensService) cascadeDeleteLensData(ctx context.Context, tenantID, projectID, lensID string) {
+	tenantID = strings.TrimSpace(tenantID)
+	projectID = strings.TrimSpace(projectID)
+	lensID = strings.TrimSpace(lensID)
+	if lensID == "" {
+		return
+	}
+
+	// 1. LensItems (horizon_lens_items)
+	if s.lensItemsRepo != nil {
+		if tenantID != "" {
+			if _, err := s.lensItemsRepo.DeleteByTenantAndLens(ctx, tenantID, lensID); err != nil {
+				log.Printf("[LensService] cascadeDeleteLensData: failed to delete lens items for %s: %v", lensID, err)
+			}
+		} else {
+			if err := s.lensItemsRepo.DeleteByLens(ctx, lensID); err != nil {
+				log.Printf("[LensService] cascadeDeleteLensData: failed to delete lens items for %s: %v", lensID, err)
+			}
+		}
+	}
+
+	// 2. MaterializedArtifacts (horizon_materialized_artifacts)
+	if s.materializedRepo != nil {
+		if tenantID != "" {
+			if _, err := s.materializedRepo.DeleteByTenantAndLens(ctx, tenantID, lensID); err != nil {
+				log.Printf("[LensService] cascadeDeleteLensData: failed to delete materialized artifacts for %s: %v", lensID, err)
+			}
+		} else {
+			if _, err := s.materializedRepo.DeleteByLens(ctx, lensID); err != nil {
+				log.Printf("[LensService] cascadeDeleteLensData: failed to delete materialized artifacts for %s: %v", lensID, err)
+			}
+		}
+	}
+
+	// 3. ExposurePaths (horizon_exposure_paths)
+	if s.exposurePathsRepo != nil && tenantID != "" {
+		if _, err := s.exposurePathsRepo.DeleteByLens(ctx, tenantID, lensID); err != nil {
+			log.Printf("[LensService] cascadeDeleteLensData: failed to delete exposure paths for %s: %v", lensID, err)
+		}
+	}
+
+	// 4. SpendLedger (horizon_lens_spend)
+	if s.spendLedger != nil && tenantID != "" {
+		if _, err := s.spendLedger.DeleteByLens(ctx, tenantID, lensID); err != nil {
+			log.Printf("[LensService] cascadeDeleteLensData: failed to delete lens spend for %s: %v", lensID, err)
+		}
+		if _, err := s.spendLedger.DeleteCascadeSpendByLens(ctx, tenantID, lensID); err != nil {
+			log.Printf("[LensService] cascadeDeleteLensData: failed to delete cascade spend for %s: %v", lensID, err)
+		}
+	}
+
+	// 5. ScoutingJobs (agent_jobs with state.lensId = lensID)
+	// Best-effort: delete pending/running scout jobs for this lens to avoid orphan work.
+	if s.scoutingJobsRepo != nil && s.agentJobsRepo != nil && tenantID != "" {
+		jobs := ([]*models.ScoutingJob)(nil)
+		var err error
+		// Prefer project-scoped listing for higher recall and better indexes.
+		if projectID != "" {
+			jobs, err = s.scoutingJobsRepo.ListByProjectAndLens(ctx, tenantID, projectID, lensID, 2000)
+		} else {
+			jobs, err = s.scoutingJobsRepo.ListByLens(ctx, tenantID, lensID, 2000)
+		}
+		if err == nil {
+			for _, j := range jobs {
+				if j == nil || j.ID == "" {
+					continue
+				}
+				// Only delete pending/running jobs; completed/failed are historical artifacts
+				if j.Status != agentmodels.AgentJobStatusPending && j.Status != agentmodels.AgentJobStatusRunning {
+					continue
+				}
+				if err := s.agentJobsRepo.Delete(ctx, j.ID); err != nil {
+					log.Printf("[LensService] cascadeDeleteLensData: failed to delete scout job %s for lens %s: %v", j.ID, lensID, err)
+				}
+			}
+		}
+	}
 }
 
 // GetLens получает Lens по ID
