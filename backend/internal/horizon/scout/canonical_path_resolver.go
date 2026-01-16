@@ -636,53 +636,6 @@ func normalizeFlatProductPath(ctx context.Context, path string) string {
 	return strings.TrimSpace(out.CanonicalPath)
 }
 
-// normalizeGeoCountryAliasPath converts non-strict geo country paths into strict /loc/{cc}/na/na.
-// Examples:
-// - /loc/uae -> /loc/ae/na/na
-// - /loc/saudi-arabia -> /loc/sa/na/na
-// - /loc/ae -> /loc/ae/na/na
-// Returns "" if no safe normalization is possible.
-func normalizeGeoCountryAliasPath(path string) string {
-	p := strings.TrimSpace(path)
-	if !strings.HasPrefix(p, "/loc/") {
-		return ""
-	}
-	parts := strings.Split(strings.Trim(p, "/"), "/")
-	// loc/{country}/{admin1}/{city} is already strict
-	if len(parts) == 4 && parts[0] == "loc" {
-		return p
-	}
-	// loc/{slug} country-only alias
-	if len(parts) != 2 || parts[0] != "loc" {
-		return ""
-	}
-	slug := strings.TrimSpace(parts[1])
-	if slug == "" {
-		return ""
-	}
-
-	// If it's already an ISO alpha2, normalize to /na/na.
-	if len(slug) == 2 && reCountryAlpha2.MatchString(strings.ToLower(slug)) {
-		return "/loc/" + strings.ToLower(slug) + "/na/na"
-	}
-
-	// Try mapping common country names/aliases.
-	countrySlug := strings.ReplaceAll(slug, "-", " ")
-	countrySlug = strings.ReplaceAll(countrySlug, "_", " ")
-	countrySlug = strings.ToLower(strings.TrimSpace(countrySlug))
-	if countrySlug == "" {
-		return ""
-	}
-	// Safety: only normalize known country names (avoid Georgia, etc.).
-	if !IsKnownCountryName(countrySlug) {
-		return ""
-	}
-	if canon := GetCountryCanonicalPath(countrySlug); canon != "" {
-		return canon
-	}
-	return ""
-}
-
 // ResolveBatch resolves multiple canonical paths in batch.
 // Returns a map from input path to ResolveResult.
 func (r *CanonicalPathResolver) ResolveBatch(

@@ -317,6 +317,8 @@ type ScoutEngine struct {
 	personDeduplicator      *PersonDeduplicator               // Deduplicates persons by name/phonetic match
 	preCreateValidator      *PreCreateValidator               // Validates fragments before creation
 	orgHierarchyBuilder     *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
+	marketHierarchyBuilder  *MarketHierarchyBuilder           // Auto-creates market hierarchy (segment-first when possible)
+	govHierarchyBuilder     *GovHierarchyBuilder              // Best-effort gov type inference + admin hierarchy helpers
 	productDeduplicator     *ProductDeduplicator              // Deduplicates products by Wikidata/CAS/formula
 	productHierarchyBuilder *ProductHierarchyBuilder          // Auto-creates product value chain hierarchy
 	validationPolicy        *policy.PolicyExecutor            // Optional: unified validation policy for edges
@@ -475,6 +477,8 @@ func NewScoutEngine(
 	orgDedup := NewOrgDeduplicator(fragmentsRepo, nil)       // WikidataClient set via WithWikidataClient
 	personDedup := NewPersonDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
 	orgHierarchy := NewOrgHierarchyBuilder(fragmentsRepo, edgesRepo)
+	marketHierarchy := NewMarketHierarchyBuilder(fragmentsRepo, edgesRepo)
+	govHierarchy := NewGovHierarchyBuilder(fragmentsRepo, edgesRepo)
 	productDedup := NewProductDeduplicator(fragmentsRepo, nil)                    // WikidataClient set via WithWikidataClient
 	productHierarchy := NewProductHierarchyBuilder(fragmentsRepo, edgesRepo, nil) // WikidataClient set via WithWikidataClient
 
@@ -501,6 +505,8 @@ func NewScoutEngine(
 		orgDeduplicator:         orgDedup,
 		personDeduplicator:      personDedup,
 		orgHierarchyBuilder:     orgHierarchy,
+		marketHierarchyBuilder:  marketHierarchy,
+		govHierarchyBuilder:     govHierarchy,
 		productDeduplicator:     productDedup,
 		productHierarchyBuilder: productHierarchy,
 	}
@@ -1420,7 +1426,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/fac/") {
 			validationResult.MissingInfo = append(validationResult.MissingInfo,
 				fmt.Sprintf("Who is the external auditor of %s (as of the latest fiscal year)? Provide audit firm legal name and source. Output as relation AUDITED_BY.", job.TargetCanonicalPath),
-				fmt.Sprintf("[HIGH PRIORITY] What industry/sector does %s operate in? Return marketSegments as array of paths /segment/{domain}/{vertical}/{geo}. Domains: finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate|public-sector|professional-services. For government use public-sector domain. Geo: ISO2 or global. Example: /segment/technology/semiconductors/tw", job.TargetCanonicalPath),
+				fmt.Sprintf("[HIGH PRIORITY] What industry/sector does %s operate in? Return marketSegments as array of paths /segment/{domain}/{vertical}/{geo}. Domains: finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate|public-sector|professional-services. For government use public-sector domain. Geo: ISO2 lowercase or regional bucket (global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta). Example: /segment/technology/semiconductors/tw", job.TargetCanonicalPath),
 				fmt.Sprintf("[HIGH PRIORITY] What is the size of %s? Find employee count or revenue to determine orgSize: sme (<500 emp or <$100M rev), le (500-5000 emp or $100M-$1B), enterprise (5000-50000 emp or $1B-$10B), mega (>50000 emp or >$10B). For government: federal G20 ministries=enterprise/mega, regional=le/enterprise. Use 'na' only if truly unknown.", job.TargetCanonicalPath),
 			)
 		}
@@ -1488,7 +1494,13 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		e.logLine(ctx, job, "info", "> critic validating extracted data")
 
-		validationResult, err = e.criticAgent.Validate(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, aggregatedContent, specialties)
+		// Provide Critic with a compact view of the existing hierarchy skeleton for MARKET/GOV targets,
+		// so it can explicitly request "build up/down" actions as missingInfo without blocking the pipeline.
+		graphContext := ""
+		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") {
+			graphContext = e.buildGraphSkeletonContext(ctx, job.TargetCanonicalPath)
+		}
+		validationResult, err = e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, aggregatedContent, specialties, graphContext)
 		if err != nil {
 			// Логируем ошибку, но не останавливаем процесс (fail-open с низким confidence)
 			fmt.Printf("[ScoutEngine] critic validation error (fail-open): jobId=%s target=%s err=%v\n",
@@ -2170,6 +2182,13 @@ SKIP_RESEARCH:
 				}
 				extractedFragment.ID = fragmentID
 				existingFragment = extractedFragment
+
+				// Segment-first linking: materialize derived market nodes from org/fac marketSegments (best-effort).
+				e.ensureSegmentDerivedMarketLinks(ctx, existingFragment, "scout_job", job.ID)
+			}
+			// Segment-first linking also applies when we adopted an existing fragment (dedup path).
+			if usedExistingDuplicate {
+				e.ensureSegmentDerivedMarketLinks(ctx, existingFragment, "scout_job", job.ID)
 			}
 		}
 	} else {
@@ -2248,6 +2267,9 @@ SKIP_RESEARCH:
 			return fmt.Errorf("failed to update fragment: %w", err)
 		}
 		fragmentID = existingFragment.ID
+
+		// Segment-first linking: materialize derived market nodes from org/fac marketSegments (best-effort).
+		e.ensureSegmentDerivedMarketLinks(ctx, existingFragment, "scout_job", job.ID)
 	}
 
 	// Auto-enrich fragment with external hierarchy (Wikidata/Geo/Org)
@@ -3028,6 +3050,20 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 	if fragment.Type == models.FragmentTypeProduct && e.productHierarchyBuilder != nil {
 		if err := e.productHierarchyBuilder.EnsureProductHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
 			fmt.Printf("[ScoutEngine] Warning: failed to build product hierarchy for %s: %v\n", fragment.CanonicalPath, err)
+		}
+	}
+
+	// Auto-create market hierarchy for MARKET fragments (segment-first when possible; heuristic fallback)
+	if fragment.Type == models.FragmentTypeMarket && e.marketHierarchyBuilder != nil {
+		if err := e.marketHierarchyBuilder.EnsureMarketHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
+			fmt.Printf("[ScoutEngine] Warning: failed to build market hierarchy for %s: %v\n", fragment.CanonicalPath, err)
+		}
+	}
+
+	// Best-effort gov type inference for /gov/... fragments (stored as ORGANIZATION)
+	if strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/") && e.govHierarchyBuilder != nil {
+		if err := e.govHierarchyBuilder.EnsureGovHierarchy(ctx, fragment.ID, fragment); err != nil {
+			fmt.Printf("[ScoutEngine] Warning: failed to infer gov hierarchy fields for %s: %v\n", fragment.CanonicalPath, err)
 		}
 	}
 }

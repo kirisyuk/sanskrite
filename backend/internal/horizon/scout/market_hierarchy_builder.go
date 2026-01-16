@@ -8,6 +8,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // =============================================================================
@@ -71,35 +72,55 @@ func (b *MarketHierarchyBuilder) EnsureMarketHierarchy(
 		return nil
 	}
 
-	// Parse canonical path: /market/{geo}/{slug}
+	// Parse canonical path:
+	// - legacy: /market/{geo}/{slug}
+	// - segment-first (v2): /market/{geo}/{domain}/{vertical}[/{...optional...}]
 	cp := strings.TrimSpace(fragment.CanonicalPath)
 	if !strings.HasPrefix(cp, "/market/") {
 		return nil
 	}
 
 	parts := strings.Split(strings.Trim(cp, "/"), "/")
-	// parts: ["market", geo, slug]
-	if len(parts) != 3 {
+	// parts: ["market", geo, ...]
+	if len(parts) < 3 {
 		return nil
 	}
 
 	geo := parts[1]
-	slug := parts[2]
+	rest := parts[2:]
 
-	// Try to infer parent market slug
-	parentSlug := inferParentMarketSlug(slug)
-	if parentSlug == "" || parentSlug == slug {
-		return nil
+	parentPath := ""
+	parentNameSlug := ""
+
+	// v2: /market/{geo}/{domain}/{vertical}
+	if len(rest) >= 2 {
+		domain := strings.TrimSpace(rest[0])
+		vertical := strings.TrimSpace(rest[1])
+
+		if pv := taxonomy.SegmentVerticalParent(vertical); pv != "" && pv != vertical {
+			parentPath = "/market/" + geo + "/" + domain + "/" + pv
+			parentNameSlug = pv
+		} else {
+			// Fallback: parent is domain-level market.
+			parentPath = "/market/" + geo + "/" + domain
+			parentNameSlug = domain
+		}
+	} else {
+		// legacy: /market/{geo}/{slug}
+		slug := strings.TrimSpace(rest[0])
+		parentSlug := inferParentMarketSlug(slug)
+		if parentSlug == "" || parentSlug == slug {
+			return nil
+		}
+		parentPath = "/market/" + geo + "/" + parentSlug
+		parentNameSlug = parentSlug
 	}
-
-	// Generate parent canonical path
-	parentPath := "/market/" + geo + "/" + parentSlug
-	if parentPath == cp {
+	if parentPath == "" || parentPath == cp {
 		return nil
 	}
 
 	// Find or create parent market
-	parentID, err := b.ensureParentMarket(ctx, parentPath, parentSlug, geo, provenanceMethod, sourceID)
+	parentID, err := b.ensureParentMarket(ctx, parentPath, parentNameSlug, provenanceMethod, sourceID)
 	if err != nil || parentID == "" {
 		return nil // Best effort
 	}
@@ -160,7 +181,7 @@ func inferParentMarketSlug(slug string) string {
 }
 
 // ensureParentMarket finds or creates the parent market fragment.
-func (b *MarketHierarchyBuilder) ensureParentMarket(ctx context.Context, path, slug, geo, provenanceMethod, sourceID string) (string, error) {
+func (b *MarketHierarchyBuilder) ensureParentMarket(ctx context.Context, path, slug, provenanceMethod, sourceID string) (string, error) {
 	// Try to find existing
 	existing, err := b.fragmentsRepo.GetByCanonicalPath(ctx, path)
 	if err == nil && existing != nil && existing.ID != "" {
@@ -188,7 +209,12 @@ func (b *MarketHierarchyBuilder) ensureParentMarket(ctx context.Context, path, s
 			Status: string(models.FragmentStatusActive),
 		},
 		Provenance: models.Provenance{
-			Method: "market_hierarchy_inferred",
+			Method: func() string {
+				if strings.TrimSpace(provenanceMethod) != "" {
+					return strings.TrimSpace(provenanceMethod)
+				}
+				return "market_hierarchy_inferred"
+			}(),
 			SourceIDs: func() []string {
 				if strings.TrimSpace(sourceID) == "" {
 					return nil

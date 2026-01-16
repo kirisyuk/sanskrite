@@ -1,0 +1,346 @@
+package scout
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+)
+
+// buildGraphSkeletonContext produces a compact context block for Critic/Research to reason about
+// hierarchy completeness for MARKET and GOV entities using existing graph state.
+//
+// Best-effort: returns "" if it cannot build useful context.
+func (e *ScoutEngine) buildGraphSkeletonContext(ctx context.Context, canonicalPath string) string {
+	if e == nil || e.fragmentsRepo == nil || e.edgesRepo == nil {
+		return ""
+	}
+	cp := strings.TrimSpace(canonicalPath)
+	if cp == "" {
+		return ""
+	}
+
+	switch {
+	case strings.HasPrefix(cp, "/market/"):
+		b, _ := e.buildMarketSkeletonContext(ctx, cp)
+		return b
+	case strings.HasPrefix(cp, "/gov/"):
+		b, _ := e.buildGovSkeletonContext(ctx, cp)
+		return b
+	default:
+		return ""
+	}
+}
+
+type skeletonEdgeView struct {
+	Type        string `json:"type"`
+	SourcePath  string `json:"sourceCanonicalPath,omitempty"`
+	TargetPath  string `json:"targetCanonicalPath,omitempty"`
+	SourceID    string `json:"sourceFragmentId,omitempty"`
+	TargetID    string `json:"targetFragmentId,omitempty"`
+	Criticality any    `json:"criticality,omitempty"`
+}
+
+type marketSkeletonContext struct {
+	Kind          string `json:"kind"` // "market_skeleton"
+	CanonicalPath string `json:"canonicalPath"`
+	Exists        bool   `json:"exists"`
+	FragmentID    string `json:"fragmentId,omitempty"`
+
+	Parsed struct {
+		Geo      string `json:"geo,omitempty"`
+		IsV2     bool   `json:"isV2"`
+		Domain   string `json:"domain,omitempty"`
+		Vertical string `json:"vertical,omitempty"`
+		Slug     string `json:"slug,omitempty"` // legacy
+	} `json:"parsed"`
+
+	ExpectedParentPath   string `json:"expectedParentPath,omitempty"`
+	ExpectedParentExists bool   `json:"expectedParentExists,omitempty"`
+
+	ParentEdges  []skeletonEdgeView `json:"parentEdges,omitempty"`  // incoming HAS_SUBMARKET (parent -> this)
+	ChildEdges   []skeletonEdgeView `json:"childEdges,omitempty"`   // outgoing HAS_SUBMARKET (this -> child)
+	SiblingPaths []string           `json:"siblingPaths,omitempty"` // other children of the same parent (if any)
+
+	NearbyPaths []string `json:"nearbyPaths,omitempty"` // existing market nodes in same geo/(domain) prefix (cap)
+}
+
+type govSkeletonContext struct {
+	Kind          string `json:"kind"` // "gov_skeleton"
+	CanonicalPath string `json:"canonicalPath"`
+	Exists        bool   `json:"exists"`
+	FragmentID    string `json:"fragmentId,omitempty"`
+
+	Parsed struct {
+		GeoISO2 string `json:"geoIso2,omitempty"`
+		Slug    string `json:"slug,omitempty"`
+	} `json:"parsed"`
+
+	GovType       string `json:"govType,omitempty"`
+	ParentGovPath string `json:"parentGovPath,omitempty"`
+
+	ParentEdges  []skeletonEdgeView `json:"parentEdges,omitempty"` // incoming ADMINISTERS (parent -> this)
+	ChildEdges   []skeletonEdgeView `json:"childEdges,omitempty"`  // outgoing ADMINISTERS (this -> child)
+	SiblingPaths []string           `json:"siblingPaths,omitempty"`
+
+	NearbyPaths []string `json:"nearbyPaths,omitempty"` // existing gov nodes in same jurisdiction prefix (cap)
+}
+
+func (e *ScoutEngine) buildMarketSkeletonContext(ctx context.Context, canonicalPath string) (string, error) {
+	cp := strings.TrimSpace(canonicalPath)
+	if cp == "" || !strings.HasPrefix(cp, "/market/") {
+		return "", nil
+	}
+
+	var out marketSkeletonContext
+	out.Kind = "market_skeleton"
+	out.CanonicalPath = cp
+
+	// Parse:
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	// parts: ["market", geo, ...]
+	if len(parts) >= 3 {
+		out.Parsed.Geo = strings.TrimSpace(parts[1])
+		rest := parts[2:]
+		// v2: /market/{geo}/{domain}/{vertical}
+		if len(rest) >= 2 {
+			out.Parsed.IsV2 = true
+			out.Parsed.Domain = strings.TrimSpace(rest[0])
+			out.Parsed.Vertical = strings.TrimSpace(rest[1])
+		} else if len(rest) == 1 {
+			out.Parsed.IsV2 = false
+			out.Parsed.Slug = strings.TrimSpace(rest[0])
+		}
+	}
+
+	// Resolve fragment if it exists
+	frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, cp)
+	if err == nil && frag != nil && frag.ID != "" {
+		out.Exists = true
+		out.FragmentID = strings.TrimSpace(frag.ID)
+		// Prefer explicit fields when present
+		if strings.TrimSpace(frag.ParentMarketPath) != "" {
+			out.ExpectedParentPath = strings.TrimSpace(frag.ParentMarketPath)
+		}
+	}
+
+	// Compute expected parent path when not set, based on canonical path conventions.
+	if out.ExpectedParentPath == "" && out.Parsed.Geo != "" {
+		if out.Parsed.IsV2 && out.Parsed.Domain != "" && out.Parsed.Vertical != "" {
+			// Prefer dictionary-driven parent when possible (MarketHierarchyBuilder uses SegmentVerticalParent).
+			pv := taxonomy.SegmentVerticalParent(out.Parsed.Vertical)
+			if pv != "" && pv != out.Parsed.Vertical {
+				out.ExpectedParentPath = "/market/" + out.Parsed.Geo + "/" + out.Parsed.Domain + "/" + pv
+			} else {
+				out.ExpectedParentPath = "/market/" + out.Parsed.Geo + "/" + out.Parsed.Domain
+			}
+		} else if !out.Parsed.IsV2 && out.Parsed.Slug != "" {
+			parentSlug := inferParentMarketSlug(out.Parsed.Slug)
+			if parentSlug != "" && parentSlug != out.Parsed.Slug {
+				out.ExpectedParentPath = "/market/" + out.Parsed.Geo + "/" + parentSlug
+			}
+		}
+	}
+
+	if out.ExpectedParentPath != "" {
+		if pf, err := e.fragmentsRepo.GetByCanonicalPath(ctx, out.ExpectedParentPath); err == nil && pf != nil && pf.ID != "" {
+			out.ExpectedParentExists = true
+		}
+	}
+
+	// Edges (only if fragment exists in DB; otherwise we can't query edges by ID).
+	if out.FragmentID != "" {
+		edgeType := models.DependencyTypeHasSubmarket
+		parents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &edgeType, 5)
+		children, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &edgeType, 15)
+
+		// Parent edges (incoming)
+		for _, ed := range parents {
+			if ed == nil {
+				continue
+			}
+			v := skeletonEdgeView{
+				Type:        string(ed.Type),
+				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
+				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
+				Criticality: ed.Properties.Criticality,
+			}
+			if sf, err := e.fragmentsRepo.Get(ctx, v.SourceID); err == nil && sf != nil {
+				v.SourcePath = strings.TrimSpace(sf.CanonicalPath)
+			}
+			if tf, err := e.fragmentsRepo.Get(ctx, v.TargetID); err == nil && tf != nil {
+				v.TargetPath = strings.TrimSpace(tf.CanonicalPath)
+			}
+			out.ParentEdges = append(out.ParentEdges, v)
+		}
+
+		// Child edges (outgoing)
+		for _, ed := range children {
+			if ed == nil {
+				continue
+			}
+			v := skeletonEdgeView{
+				Type:        string(ed.Type),
+				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
+				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
+				Criticality: ed.Properties.Criticality,
+			}
+			if sf, err := e.fragmentsRepo.Get(ctx, v.SourceID); err == nil && sf != nil {
+				v.SourcePath = strings.TrimSpace(sf.CanonicalPath)
+			}
+			if tf, err := e.fragmentsRepo.Get(ctx, v.TargetID); err == nil && tf != nil {
+				v.TargetPath = strings.TrimSpace(tf.CanonicalPath)
+			}
+			out.ChildEdges = append(out.ChildEdges, v)
+		}
+
+		// Siblings: other children of the same parent (if we have a parent edge)
+		if len(out.ParentEdges) > 0 && out.ParentEdges[0].SourceID != "" {
+			parentID := out.ParentEdges[0].SourceID
+			sibEdges, _ := e.edgesRepo.ListBySource(ctx, "global", parentID, &edgeType, 20)
+			for _, ed := range sibEdges {
+				if ed == nil || strings.TrimSpace(ed.TargetFragmentID) == "" || strings.TrimSpace(ed.TargetFragmentID) == out.FragmentID {
+					continue
+				}
+				if tf, err := e.fragmentsRepo.Get(ctx, strings.TrimSpace(ed.TargetFragmentID)); err == nil && tf != nil && strings.TrimSpace(tf.CanonicalPath) != "" {
+					out.SiblingPaths = append(out.SiblingPaths, strings.TrimSpace(tf.CanonicalPath))
+				}
+			}
+		}
+	}
+
+	// Nearby nodes in the same region/domain namespace (prefix search; cap to keep prompt small)
+	prefix := ""
+	if out.Parsed.Geo != "" && out.Parsed.IsV2 && out.Parsed.Domain != "" {
+		prefix = "/market/" + out.Parsed.Geo + "/" + out.Parsed.Domain + "/"
+	} else if out.Parsed.Geo != "" {
+		prefix = "/market/" + out.Parsed.Geo + "/"
+	}
+	if prefix != "" {
+		if nearby, err := e.fragmentsRepo.SearchPrefix(ctx, prefix, 15); err == nil && len(nearby) > 0 {
+			for _, f := range nearby {
+				if f == nil {
+					continue
+				}
+				p := strings.TrimSpace(f.CanonicalPath)
+				if p != "" && p != cp {
+					out.NearbyPaths = append(out.NearbyPaths, p)
+				}
+			}
+		}
+	}
+
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func (e *ScoutEngine) buildGovSkeletonContext(ctx context.Context, canonicalPath string) (string, error) {
+	cp := strings.TrimSpace(canonicalPath)
+	if cp == "" || !strings.HasPrefix(cp, "/gov/") {
+		return "", nil
+	}
+
+	var out govSkeletonContext
+	out.Kind = "gov_skeleton"
+	out.CanonicalPath = cp
+
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	// parts: ["gov", iso2, slug...]
+	if len(parts) >= 3 {
+		out.Parsed.GeoISO2 = strings.TrimSpace(parts[1])
+		out.Parsed.Slug = strings.TrimSpace(parts[2])
+	}
+
+	frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, cp)
+	if err == nil && frag != nil && frag.ID != "" {
+		out.Exists = true
+		out.FragmentID = strings.TrimSpace(frag.ID)
+		out.GovType = strings.TrimSpace(frag.GovType)
+		out.ParentGovPath = strings.TrimSpace(frag.ParentGovPath)
+	}
+
+	if out.FragmentID != "" {
+		edgeType := models.DependencyTypeAdministers
+		parents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &edgeType, 5)
+		children, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &edgeType, 15)
+
+		for _, ed := range parents {
+			if ed == nil {
+				continue
+			}
+			v := skeletonEdgeView{
+				Type:        string(ed.Type),
+				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
+				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
+				Criticality: ed.Properties.Criticality,
+			}
+			if sf, err := e.fragmentsRepo.Get(ctx, v.SourceID); err == nil && sf != nil {
+				v.SourcePath = strings.TrimSpace(sf.CanonicalPath)
+			}
+			if tf, err := e.fragmentsRepo.Get(ctx, v.TargetID); err == nil && tf != nil {
+				v.TargetPath = strings.TrimSpace(tf.CanonicalPath)
+			}
+			out.ParentEdges = append(out.ParentEdges, v)
+		}
+
+		for _, ed := range children {
+			if ed == nil {
+				continue
+			}
+			v := skeletonEdgeView{
+				Type:        string(ed.Type),
+				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
+				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
+				Criticality: ed.Properties.Criticality,
+			}
+			if sf, err := e.fragmentsRepo.Get(ctx, v.SourceID); err == nil && sf != nil {
+				v.SourcePath = strings.TrimSpace(sf.CanonicalPath)
+			}
+			if tf, err := e.fragmentsRepo.Get(ctx, v.TargetID); err == nil && tf != nil {
+				v.TargetPath = strings.TrimSpace(tf.CanonicalPath)
+			}
+			out.ChildEdges = append(out.ChildEdges, v)
+		}
+
+		// Siblings: other subordinates of the same parent (if we have a parent edge)
+		if len(out.ParentEdges) > 0 && out.ParentEdges[0].SourceID != "" {
+			parentID := out.ParentEdges[0].SourceID
+			sibEdges, _ := e.edgesRepo.ListBySource(ctx, "global", parentID, &edgeType, 20)
+			for _, ed := range sibEdges {
+				if ed == nil || strings.TrimSpace(ed.TargetFragmentID) == "" || strings.TrimSpace(ed.TargetFragmentID) == out.FragmentID {
+					continue
+				}
+				if tf, err := e.fragmentsRepo.Get(ctx, strings.TrimSpace(ed.TargetFragmentID)); err == nil && tf != nil && strings.TrimSpace(tf.CanonicalPath) != "" {
+					out.SiblingPaths = append(out.SiblingPaths, strings.TrimSpace(tf.CanonicalPath))
+				}
+			}
+		}
+	}
+
+	// Nearby nodes in same jurisdiction
+	if out.Parsed.GeoISO2 != "" {
+		prefix := "/gov/" + out.Parsed.GeoISO2 + "/"
+		if nearby, err := e.fragmentsRepo.SearchPrefix(ctx, prefix, 15); err == nil && len(nearby) > 0 {
+			for _, f := range nearby {
+				if f == nil {
+					continue
+				}
+				p := strings.TrimSpace(f.CanonicalPath)
+				if p != "" && p != cp {
+					out.NearbyPaths = append(out.NearbyPaths, p)
+				}
+			}
+		}
+	}
+
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}

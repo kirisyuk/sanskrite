@@ -344,6 +344,19 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
 		Description:      "Entity dominates market (leader)",
 	},
+	// HAS_SUBMARKET: market hierarchy (parent market -> child sub-market).
+	models.DependencyTypeHasSubmarket: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeMarket},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
+		Description:      "Market has sub-market (hierarchy)",
+	},
+	// ADMINISTERS: government hierarchy (superior body -> subordinate body).
+	// NOTE: GOV bodies are stored as FragmentTypeOrganization under /gov/... canonical paths.
+	models.DependencyTypeAdministers: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Government body administers subordinate body (hierarchy)",
+	},
 }
 
 // ValidateEdgeDirection checks if an edge has correct direction according to policies.

@@ -138,13 +138,13 @@ func ValidateCanonicalPath(path string) error {
 		}
 	case "segment":
 		// /segment/{domain}/{vertical}/{geo}
-		// geo: ISO2 or "global"
+		// geo: ISO2 or a regional bucket: global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta
 		if len(parts) != 4 {
 			return fmt.Errorf("segment canonical path must have exactly 4 segments: /segment/{domain}/{vertical}/{geo}: %s", path)
 		}
 		geo := strings.ToLower(strings.TrimSpace(parts[3]))
-		if geo != "global" && !reCountryAlpha2.MatchString(geo) {
-			return fmt.Errorf("segment canonical path has invalid geo %q (expected ISO3166-1 alpha2 or 'global'): %s", parts[3], path)
+		if geo != "global" && geo != "mena" && geo != "emea" && geo != "apac" && geo != "latam" && geo != "na" && geo != "gcc" && geo != "eu" && geo != "asean" && geo != "nordics" && geo != "benelux" && geo != "anz" && geo != "cis" && geo != "ssa" && geo != "usmca" && geo != "nafta" && !reCountryAlpha2.MatchString(geo) {
+			return fmt.Errorf("segment canonical path has invalid geo %q (expected ISO3166-1 alpha2 or regional bucket: global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta): %s", parts[3], path)
 		}
 	case "deposit":
 		// Allowed:

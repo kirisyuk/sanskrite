@@ -27,6 +27,17 @@ type MarketSegmentDictionary struct {
 
 	// Explicit overrides keyed by "/segment/{domain}/{vertical}" (geo ignored).
 	SegmentNormRules map[string]MarketSegmentNormRuleData `json:"segmentNormRules,omitempty" firestore:"segmentNormRules,omitempty"`
+
+	// --- Segment-first market hierarchy support ---
+	// VerticalParents defines a best-effort hierarchy between verticals (within the segment taxonomy):
+	// childVertical -> parentVertical (geo ignored).
+	// Example: "event-marketing" -> "marketing", "marketing" -> "advertising".
+	SegmentVerticalParents map[string]string `json:"segmentVerticalParents,omitempty" firestore:"segmentVerticalParents,omitempty"`
+
+	// VerticalSynonyms defines best-effort synonym mapping for vertical names:
+	// rawVertical -> canonicalVertical (geo ignored).
+	// Example: "experiential-marketing" -> "event-marketing".
+	SegmentVerticalSynonyms map[string]string `json:"segmentVerticalSynonyms,omitempty" firestore:"segmentVerticalSynonyms,omitempty"`
 }
 
 // MarketSegmentNormRuleData is the Firestore representation of an explicit override.

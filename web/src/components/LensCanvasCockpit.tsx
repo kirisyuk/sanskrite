@@ -952,7 +952,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'CONSUMES',
       'EXTRACTS_FROM',
     ];
-    const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY', 'EXTRACTS_FROM'];
+    const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
     const MARKET = [
       'COMPETES_WITH',
       'CONFLICTS_WITH',
@@ -963,6 +963,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'RELATIVE_OF',
       'SIMILAR_TO',
       'LINKED_TO',
+      // Market skeleton
+      'HAS_SUBMARKET',
     ];
     const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
 
@@ -1798,6 +1800,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       };
     }
 
+    // 🟦 Market hierarchy (skeleton) — Teal dashed
+    if (type === 'HAS_SUBMARKET') {
+      return {
+        stroke: '#14B8A6', // teal-500
+        strokeWidth: Math.max(1.2, baseWidth * 0.95),
+        strokeDasharray: '5 4',
+      };
+    }
+
+    // 🟦 Government admin hierarchy (skeleton) — Sky dashed
+    if (type === 'ADMINISTERS') {
+      return {
+        stroke: '#0EA5E9', // sky-500
+        strokeWidth: Math.max(1.2, baseWidth * 0.95),
+        strokeDasharray: '4 4',
+      };
+    }
+
     // 🔴 Конкуренция/Конфликт — Красный
     if (['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES'].includes(type)) {
       return {
@@ -1930,8 +1950,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (wantsAll) return [] as string[];
       const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
       const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM'];
-      const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY', 'EXTRACTS_FROM'];
-      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO'];
+      const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
+      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'HAS_SUBMARKET'];
       const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
       const out = new Set<string>();
       if (draft.scopes.ownership) for (const t of OWNERSHIP) out.add(t);
@@ -2457,6 +2477,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     'FOUNDED': 3,
     'PARENT_OF': 3,
     'SUBSIDIARY_OF': 3,
+    // 3.5. Hierarchies / skeleton links (market + gov)
+    'HAS_SUBMARKET': 3,
+    'ADMINISTERS': 3,
     // 4. Партнёрство/Поставки — средний приоритет
     'PARTNERS_WITH': 4,
     'COOPERATES_WITH': 4,
@@ -2481,6 +2504,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   };
 
   const normalizeEdgeType = useCallback((t: string | undefined) => (t || '').toUpperCase().trim(), []);
+
+  const isSpherePath = useCallback((p: string | undefined | null): boolean => {
+    const cp = String(p || '').trim().toLowerCase();
+    return cp.startsWith('/sphere/');
+  }, []);
+  const isSphereType = useCallback((t: string | undefined | null): boolean => {
+    return String(t || '').trim().toUpperCase() === 'SPHERE';
+  }, []);
 
   // If two nodes are connected by both influence and dependency edges, we should present the influence edge
   // as the primary semantic (per product rules). This applies regardless of direction.
@@ -3698,6 +3729,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const isExplicitNode = kind === 'node';
       const hasFragmentId = !!item.fragmentId;
       const isLikelyNode = !kind && hasFragmentId; // Fallback: if no kind but has fragmentId, treat as node
+
+      if (isSphereType(item.type) || isSpherePath(item.canonicalPath)) {
+        return false;
+      }
       
       if (!isExplicitNode && !isLikelyNode && kind) {
         // Only log if kind exists but isn't 'node'
@@ -3770,6 +3805,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     edgeItems.forEach(item => {
         const sFrag = item.sourceFragmentId ? norm(item.sourceFragmentId) : '';
         const tFrag = item.targetFragmentId ? norm(item.targetFragmentId) : '';
+        const srcType = (item as any)?.sourceType;
+        const dstType = (item as any)?.targetType;
+        const srcPath = (item as any)?.sourceCanonicalPath;
+        const dstPath = (item as any)?.targetCanonicalPath;
+        if (isSphereType(srcType) || isSphereType(dstType)) return;
+        if (isSpherePath(srcPath) || isSpherePath(dstPath)) return;
         const sourceId = sFrag ? fragmentToNodeId.get(sFrag) : null;
         const targetId = tFrag ? fragmentToNodeId.get(tFrag) : null;
 
@@ -3817,7 +3858,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
       dbg('[Cockpit] Converted to graph:', { nodes: graphNodes.length, edges: filteredEdges.length });
     return { nodes: graphNodes, edges: filteredEdges };
-  }, [norm, dbg, getEdgeStroke, getEdgeCaptionShort, suppressDominatedEdges]);
+  }, [norm, dbg, getEdgeStroke, getEdgeCaptionShort, suppressDominatedEdges, isSpherePath, isSphereType]);
   // Keep proxy ref updated (used by initial-load effect declared above).
   convertLensItemsToGraphRef.current = convertLensItemsToGraph;
 
@@ -3859,8 +3900,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       dbg('[Cockpit] Loading graph from cockpit API...');
       const cockpitData = await api.getHorizonLensCockpit(lensId);
       
-      const fragments = cockpitData.graph.nodes || [];
-      const edges = cockpitData.graph.edges || [];
+      const rawFragments = cockpitData.graph.nodes || [];
+      const rawEdges = cockpitData.graph.edges || [];
+      const fragments = rawFragments.filter((f: any) => !(isSphereType(f?.type) || isSpherePath(f?.canonicalPath)));
+      const edges = rawEdges.filter((e: any) => {
+        if (isSphereType(e?.sourceType) || isSphereType(e?.targetType)) return false;
+        if (isSpherePath(e?.sourceCanonicalPath) || isSpherePath(e?.targetCanonicalPath)) return false;
+        return true;
+      });
 
       dbg('[Cockpit] Loaded graph:', { fragments: fragments.length, edges: edges.length });
 

@@ -40,7 +40,7 @@ var (
 	tenantID           = flag.String("tenant", "global", "Tenant ID (default: global)")
 	verbose            = flag.Bool("verbose", false, "Verbose logging")
 	typeFilter         = flag.String("type", "", "Filter by fragment type (GEO_REGION, ORGANIZATION, FACILITY, etc.)")
-	unionClusters      = flag.Bool("union-clusters", false, "Build transitive clusters via union-find across signals (recommended for per-type runs; helps catch chain duplicates)")
+	unionClusters      = flag.Bool("union-clusters", true, "Build transitive clusters via union-find across signals (recommended; helps catch chain duplicates). Set false to skip aliasPath-based transitive clustering.")
 	skipVertexSync     = flag.Bool("skip-vertex-sync", false, "Skip Vertex AI Search sync (faster, run bulk sync separately)")
 	skipEdgePass       = flag.Bool("skip-edge-pass", false, "Skip global edge direction fix + symmetric normalization + edge dedup pass (safer for targeted fragment-only dedup runs)")
 	pageSize           = flag.Int("page-size", 500, "Firestore page size for loading fragments (pagination). Lower = safer, higher = fewer round-trips")
@@ -50,6 +50,7 @@ var (
 	enableOrgNameOnly  = flag.Bool("enable-org-name-only", false, "Enable ORGANIZATION name-only clustering (shortName/label[en]). Default OFF (too many false merges).")
 	enableOrgFuzzyName = flag.Bool("enable-org-fuzzy-name", false, "Enable ORGANIZATION fuzzy-ish name clustering (normalized legalName + stub-rescue normalized label/legal). Default OFF.")
 	fixEdgesOnly       = flag.Bool("fix-edges-only", false, "Only fix/normalize edges (direction + symmetric normalization + dedup). Skips fragment dedup/merge even if duplicates are found.")
+	canonicalizeEdges  = flag.Bool("edge-canonicalize", true, "Rewrite mis-modeled edges into canonical types (e.g., MARKET OWNS MARKET -> HAS_SUBMARKET, ORG DEPENDS_ON MARKET -> PARTICIPATES_IN).")
 )
 
 // Used to print a reliable resume cursor on Ctrl+C / SIGTERM and on load failures.
@@ -74,6 +75,7 @@ type Stats struct {
 	EdgesDeleted        int
 	EdgesDeduplicated   int
 	EdgesDirectionFixed int
+	EdgesCanonicalized  int
 }
 
 // =============================================================================
@@ -773,75 +775,81 @@ func main() {
 	// Example: /org/pif declared as merged_paths by canonical /org/public-investment-fund
 	aliasClusters := 0
 	{
-		uf := newUnionFind()
-		ids := make([]string, 0, len(fragments))
-		for _, f := range fragments {
-			if f == nil {
-				continue
+		if unionClusters != nil && !*unionClusters {
+			if *verbose {
+				log.Printf("  Skipping aliasPath transitive clustering (--union-clusters=false)")
 			}
-			if processedFragmentIDs[f.ID] {
-				continue
+		} else {
+			uf := newUnionFind()
+			ids := make([]string, 0, len(fragments))
+			for _, f := range fragments {
+				if f == nil {
+					continue
+				}
+				if processedFragmentIDs[f.ID] {
+					continue
+				}
+				if strings.TrimSpace(f.ID) == "" {
+					continue
+				}
+				uf.add(f.ID)
+				ids = append(ids, f.ID)
 			}
-			if strings.TrimSpace(f.ID) == "" {
-				continue
-			}
-			uf.add(f.ID)
-			ids = append(ids, f.ID)
-		}
 
-		// Union pairs connected by alias canonicalPath references.
-		for _, f := range fragments {
-			if f == nil {
-				continue
-			}
-			if processedFragmentIDs[f.ID] {
-				continue
-			}
-			// Keep this conservative: org-specific alias identifiers are high-signal for ORGs,
-			// but can be noisy for other types (we have separate, safer dedup signals for them).
-			if f.Type != models.FragmentTypeOrganization {
-				continue
-			}
-			for _, alias := range extractAliasCanonicalPathsForDedup(f) {
-				k := fmt.Sprintf("%s:%s", f.Type, alias) // same type only
-				for _, other := range byCanonicalPath[k] {
-					if other == nil || processedFragmentIDs[other.ID] || other.ID == f.ID {
-						continue
+			// Union pairs connected by alias canonicalPath references.
+			for _, f := range fragments {
+				if f == nil {
+					continue
+				}
+				if processedFragmentIDs[f.ID] {
+					continue
+				}
+				// Keep this conservative: org-specific alias identifiers are high-signal for ORGs,
+				// but can be noisy for other types (we have separate, safer dedup signals for them).
+				if f.Type != models.FragmentTypeOrganization {
+					continue
+				}
+				for _, alias := range extractAliasCanonicalPathsForDedup(f) {
+					k := fmt.Sprintf("%s:%s", f.Type, alias) // same type only
+					for _, other := range byCanonicalPath[k] {
+						if other == nil || processedFragmentIDs[other.ID] || other.ID == f.ID {
+							continue
+						}
+						uf.union(f.ID, other.ID)
 					}
-					uf.union(f.ID, other.ID)
 				}
 			}
-		}
 
-		// Materialize groups into clusters.
-		for _, group := range uf.groups(ids) {
-			if len(group) <= 1 {
-				continue
-			}
-			var frs []*models.HorizonFragment
-			for _, id := range group {
-				if f := idToFrag[id]; f != nil {
-					frs = append(frs, f)
+			// Materialize groups into clusters.
+			for _, group := range uf.groups(ids) {
+				if len(group) <= 1 {
+					continue
 				}
-			}
-			if len(frs) <= 1 {
-				continue
-			}
-			cluster := &DuplicateCluster{
-				MatchType:  "aliasPath",
-				MatchValue: fmt.Sprintf("%s:%s", frs[0].Type, frs[0].ID),
-				Fragments:  frs,
-			}
-			cluster.CanonicalID = selectCanonical(frs)
-			clusters = append(clusters, cluster)
-			// Mark only duplicates as processed, so the canonical can still absorb
-			// additional duplicates found by other signals later (transitive merges).
-			for _, f := range frs {
-				if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
-					processedFragmentIDs[f.ID] = true
+				var frs []*models.HorizonFragment
+				for _, id := range group {
+					if f := idToFrag[id]; f != nil {
+						frs = append(frs, f)
+					}
 				}
+				if len(frs) <= 1 {
+					continue
+				}
+				cluster := &DuplicateCluster{
+					MatchType:  "aliasPath",
+					MatchValue: fmt.Sprintf("%s:%s", frs[0].Type, frs[0].ID),
+					Fragments:  frs,
+				}
+				cluster.CanonicalID = selectCanonical(frs)
+				clusters = append(clusters, cluster)
+				// Mark only duplicates as processed, so the canonical can still absorb
+				// additional duplicates found by other signals later (transitive merges).
+				for _, f := range frs {
+					if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
+						processedFragmentIDs[f.ID] = true
+					}
+				}
+				aliasClusters++
 			}
-			aliasClusters++
 		}
 	}
 	log.Printf("  Found %d aliasPath-based clusters", aliasClusters)
@@ -1526,12 +1534,16 @@ FIX_EDGES:
 	}
 	log.Printf("\n=== Step 5: Fixing edge directions ===")
 	if *apply {
-		fixed, err := fixEdgeDirections(ctx, db, edgesRepo, fragmentTypes, *tenantID)
+		fixed, canonicalized, err := fixEdgeDirections(ctx, db, edgesRepo, fragmentTypes, *tenantID, *canonicalizeEdges)
 		if err != nil {
 			log.Printf("ERROR: edge direction fix failed: %v", err)
 		} else {
 			stats.EdgesDirectionFixed = fixed
-			log.Printf("✓ Fixed/normalized direction of %d edges", fixed)
+			stats.EdgesCanonicalized = canonicalized
+			log.Printf("✓ Fixed direction of %d edges", fixed)
+			if *canonicalizeEdges {
+				log.Printf("✓ Canonicalized %d edges", canonicalized)
+			}
 		}
 	} else {
 		log.Printf("[DRY-RUN] Would fix edge directions")
@@ -1572,6 +1584,7 @@ SUMMARY:
 	log.Printf("Edges deleted (duplicates/self-loops): %d", stats.EdgesDeleted)
 	log.Printf("Edges deduplicated: %d", stats.EdgesDeduplicated)
 	log.Printf("Edges direction fixed: %d", stats.EdgesDirectionFixed)
+	log.Printf("Edges canonicalized: %d", stats.EdgesCanonicalized)
 	if !*apply {
 		log.Printf("\n[DRY-RUN] No changes made. Use --apply to execute.")
 	}
@@ -2126,20 +2139,6 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 	}
 
 	return scoredFragments[0].fragment.ID
-}
-
-// extractCountryCodeFromPath extracts ISO alpha-2 country code from /loc/{cc}/... path.
-// Returns empty string if path is not in canonical format or country code is not ISO alpha-2.
-func extractCountryCodeFromPath(path string) string {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) >= 2 && parts[0] == "loc" {
-		cc := parts[1]
-		// Check if it's a valid ISO alpha-2 code (2 lowercase letters)
-		if len(cc) == 2 && cc >= "aa" && cc <= "zz" {
-			return cc
-		}
-	}
-	return ""
 }
 
 // filterGeoByCountry filters GEO_REGION fragments to only include those with same country.
@@ -3027,27 +3026,6 @@ func normalizeLegalName(name string) string {
 // FACILITY normalized-name helpers (conservative)
 // =============================================================================
 
-// extractFacilityOrgFromPath parses canonical facility paths like:
-//
-//	/fac/{orgSlug}/{facilitySlug}
-//
-// and returns {orgSlug}. Returns "" if the path isn't in expected format.
-func extractFacilityOrgFromPath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" || !strings.HasPrefix(path, "/fac/") {
-		return ""
-	}
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "fac" {
-		return ""
-	}
-	org := strings.ToLower(strings.TrimSpace(parts[1]))
-	if org == "" || org == "na" {
-		return ""
-	}
-	return org
-}
-
 // extractFacilityNameFromPath returns the last slug segment from /fac/{org}/{slug}.
 func extractFacilityNameFromPath(path string) string {
 	path = strings.TrimSpace(path)
@@ -3384,12 +3362,14 @@ func extractPersonNameFromPath(path string) string {
 
 // fixEdgeDirections reverses edges that point in the wrong direction
 // Uses pagination (100 edges per page) and pre-built fragment type cache for efficiency
-func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, fragmentTypes map[string]models.FragmentType, tenantID string) (int, error) {
+func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, fragmentTypes map[string]models.FragmentType, tenantID string, canonicalizeTypes bool) (int, int, error) {
 	log.Printf("Fixing edge directions with pagination (page size: 100)...")
+	log.Printf("Edge canonicalization enabled: %t", canonicalizeTypes)
 	log.Printf("Using pre-loaded fragment type cache with %d entries", len(fragmentTypes))
 
 	const pageSize = 100
-	fixed := 0
+	reversed := 0
+	canonicalized := 0
 	totalChecked := 0
 	var lastDoc *firestore.DocumentSnapshot
 
@@ -3430,7 +3410,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 
 		docs, err := q.Documents(ctx).GetAll()
 		if err != nil {
-			return fixed, fmt.Errorf("failed to get edges page: %w", err)
+			return reversed, canonicalized, fmt.Errorf("failed to get edges page: %w", err)
 		}
 
 		if len(docs) == 0 {
@@ -3464,7 +3444,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 					log.Printf("  ERROR: failed to normalize SUBSIDIARY_OF edge %s: %v", edge.ID, err)
 					continue
 				}
-				fixed++
+				canonicalized++
 				continue
 			}
 
@@ -3490,51 +3470,54 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 				if *verbose {
 					log.Printf("  ✓ Normalized HAS_KEY_PERSON → KEY_PERSON: %s → %s", edge.SourceFragmentID, edge.TargetFragmentID)
 				}
-				fixed++
+				canonicalized++
 				continue
 			}
 
 			// Canonical representation: WORKS_FOR is legacy; normalize to EMPLOYED_BY.
 			if edge.Type == models.DependencyTypeWorksFor {
 				edge.Type = models.DependencyTypeEmployedBy
+				canonicalized++
 				// Keep processing below: direction might still need to be reversed.
 			}
 
 			// Canonicalize certain mis-modeled edges where reversing is not sufficient.
 			// Example: PRODUCT OWNS ORGANIZATION -> ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
-			if newType, shouldSwap, changed, reason := scout.CanonicalizeEdge(edge.Type, sourceType, targetType); changed {
-				oldType := edge.Type
-				edge.Type = newType
-				if shouldSwap {
-					oldSource := edge.SourceFragmentID
-					edge.SourceFragmentID = edge.TargetFragmentID
-					edge.TargetFragmentID = oldSource
-					sourceType, targetType = targetType, sourceType
-				}
-				// Re-apply symmetric normalization after swap/type-change (noop for non-symmetric).
-				edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+			if canonicalizeTypes {
+				if newType, shouldSwap, changed, reason := scout.CanonicalizeEdge(edge.Type, sourceType, targetType); changed {
+					oldType := edge.Type
+					edge.Type = newType
+					if shouldSwap {
+						oldSource := edge.SourceFragmentID
+						edge.SourceFragmentID = edge.TargetFragmentID
+						edge.TargetFragmentID = oldSource
+						sourceType, targetType = targetType, sourceType
+					}
+					// Re-apply symmetric normalization after swap/type-change (noop for non-symmetric).
+					edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
 
-				if edge.Qualifiers == nil {
-					edge.Qualifiers = map[string]interface{}{}
-				}
-				edge.Qualifiers["canonicalized"] = true
-				edge.Qualifiers["canonicalizedFromEdgeType"] = string(oldType)
-				edge.Qualifiers["canonicalizationReason"] = reason
-				edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
-				if shouldSwap {
-					edge.Qualifiers["normalizedDirection"] = true
-				}
+					if edge.Qualifiers == nil {
+						edge.Qualifiers = map[string]interface{}{}
+					}
+					edge.Qualifiers["canonicalized"] = true
+					edge.Qualifiers["canonicalizedFromEdgeType"] = string(oldType)
+					edge.Qualifiers["canonicalizationReason"] = reason
+					edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
+					if shouldSwap {
+						edge.Qualifiers["normalizedDirection"] = true
+					}
 
-				if err := edgesRepo.Update(ctx, &edge); err != nil {
-					log.Printf("  ERROR: failed to canonicalize edge %s: %v", edge.ID, err)
+					if err := edgesRepo.Update(ctx, &edge); err != nil {
+						log.Printf("  ERROR: failed to canonicalize edge %s: %v", edge.ID, err)
+						continue
+					}
+					if *verbose {
+						log.Printf("  ✓ Canonicalized edge %s: %s -> %s [%s -> %s]",
+							edge.ID, oldType, edge.Type, edge.TargetFragmentID, edge.SourceFragmentID)
+					}
+					canonicalized++
 					continue
 				}
-				if *verbose {
-					log.Printf("  ✓ Canonicalized edge %s: %s -> %s [%s -> %s]",
-						edge.ID, oldType, edge.Type, edge.TargetFragmentID, edge.SourceFragmentID)
-				}
-				fixed++
-				continue
 			}
 
 			if scout.ShouldReverseEdge(edge.Type, sourceType, targetType) {
@@ -3554,13 +3537,13 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 					log.Printf("  ✓ Reversed edge %s: %s (%s) -> %s (%s) [%s]",
 						edge.ID, edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Type)
 				}
-				fixed++
+				reversed++
 			}
 		}
 
 		totalChecked += len(docs)
 		if totalChecked%1000 == 0 || len(docs) < pageSize {
-			log.Printf("  Progress: checked %d edges, fixed %d so far...", totalChecked, fixed)
+			log.Printf("  Progress: checked %d edges, reversed %d, canonicalized %d so far...", totalChecked, reversed, canonicalized)
 		}
 
 		lastDoc = docs[len(docs)-1]
@@ -3571,5 +3554,5 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 	}
 
 	log.Printf("  Completed: checked %d edges total", totalChecked)
-	return fixed, nil
+	return reversed, canonicalized, nil
 }

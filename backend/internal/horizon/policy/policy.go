@@ -25,23 +25,23 @@ type Policy interface {
 
 // PolicyInput contains context for policy decision-making.
 type PolicyInput struct {
-	Kind     string                 `json:"kind"`     // "propagation", "scout", "canonization", etc.
-	Context  map[string]interface{} `json:"context"` // Arbitrary context for the decision
+	Kind     string                         `json:"kind"`               // "propagation", "scout", "canonization", etc.
+	Context  map[string]interface{}         `json:"context"`            // Arbitrary context for the decision
 	Fragment *horizonmodels.HorizonFragment `json:"fragment,omitempty"` // Optional: relevant fragment
 	Edge     *horizonmodels.DependencyEdge  `json:"edge,omitempty"`     // Optional: relevant edge
-	Fact     *coremodels.OntologyFact        `json:"fact,omitempty"`     // Optional: relevant fact
+	Fact     *coremodels.OntologyFact       `json:"fact,omitempty"`     // Optional: relevant fact
 }
 
 // PolicyDecision represents the result of a policy decision.
 type PolicyDecision struct {
-	Action      string                 `json:"action"`      // e.g., "propagate", "skip", "normalize_to", "synthesize_signal"
-	Params      map[string]interface{} `json:"params"`     // Action-specific parameters
+	Action string                 `json:"action"` // e.g., "propagate", "skip", "normalize_to", "synthesize_signal"
+	Params map[string]interface{} `json:"params"` // Action-specific parameters
 
 	// Telemetry
-	DecisionPath string  `json:"decisionPath"` // "rule:exact_match" | "rule:pattern" | "llm:fallback"
-	RuleID       *string `json:"ruleId,omitempty"` // If rule-based: which rule
-	Confidence   float64 `json:"confidence"`       // 0..1
-	LatencyMs    int     `json:"latencyMs"`      // Decision latency
+	DecisionPath string  `json:"decisionPath"`        // "rule:exact_match" | "rule:pattern" | "llm:fallback"
+	RuleID       *string `json:"ruleId,omitempty"`    // If rule-based: which rule
+	Confidence   float64 `json:"confidence"`          // 0..1
+	LatencyMs    int     `json:"latencyMs"`           // Decision latency
 	LLMTokens    *int    `json:"llmTokens,omitempty"` // If LLM was used: token count
 }
 
@@ -78,11 +78,11 @@ func (e *PolicyExecutor) Execute(ctx context.Context, input PolicyInput) (Policy
 
 	log.Printf("%s Execute called: kind=%s", logPrefix, input.Kind)
 	if input.Fragment != nil {
-		log.Printf("%s Input fragment: id=%s, type=%s, canonicalPath=%s", 
+		log.Printf("%s Input fragment: id=%s, type=%s, canonicalPath=%s",
 			logPrefix, input.Fragment.ID, input.Fragment.Type, input.Fragment.CanonicalPath)
 	}
 	if input.Edge != nil {
-		log.Printf("%s Input edge: id=%s, sourceID=%s, targetID=%s, type=%s", 
+		log.Printf("%s Input edge: id=%s, sourceID=%s, targetID=%s, type=%s",
 			logPrefix, input.Edge.ID, input.Edge.SourceFragmentID, input.Edge.TargetFragmentID, input.Edge.Type)
 	}
 	if len(input.Context) > 0 {
@@ -104,7 +104,7 @@ func (e *PolicyExecutor) Execute(ctx context.Context, input PolicyInput) (Policy
 	if decision.DecisionPath != "llm:fallback" {
 		// Rule-based decision
 		decision.LatencyMs = int(time.Since(start).Milliseconds())
-		log.Printf("%s Decision: action=%s, path=%s, confidence=%.2f, latency=%dms", 
+		log.Printf("%s Decision: action=%s, path=%s, confidence=%.2f, latency=%dms",
 			logPrefix, decision.Action, decision.DecisionPath, decision.Confidence, decision.LatencyMs)
 		if decision.RuleID != nil {
 			log.Printf("%s Rule ID: %s", logPrefix, *decision.RuleID)
@@ -129,7 +129,7 @@ func (e *PolicyExecutor) Execute(ctx context.Context, input PolicyInput) (Policy
 			llmDecision.DecisionPath = "llm:fallback"
 			llmDecision.LatencyMs = int(time.Since(start).Milliseconds())
 			llmDecision.LLMTokens = &tokens
-			log.Printf("%s LLM decision: action=%s, confidence=%.2f, tokens=%d, latency=%dms", 
+			log.Printf("%s LLM decision: action=%s, confidence=%.2f, tokens=%d, latency=%dms",
 				logPrefix, llmDecision.Action, llmDecision.Confidence, tokens, llmDecision.LatencyMs)
 			if e.telemetry != nil {
 				if err := e.telemetry.Record(llmDecision, e.policy.Name()); err != nil {
@@ -144,7 +144,7 @@ func (e *PolicyExecutor) Execute(ctx context.Context, input PolicyInput) (Policy
 	// Fallback to default decision if both rule and LLM fail
 	decision.LatencyMs = int(time.Since(start).Milliseconds())
 	decision.DecisionPath = "rule:default"
-	log.Printf("%s Using default decision: action=%s, confidence=%.2f", 
+	log.Printf("%s Using default decision: action=%s, confidence=%.2f",
 		logPrefix, decision.Action, decision.Confidence)
 	if e.telemetry != nil {
 		if err := e.telemetry.Record(decision, e.policy.Name()); err != nil {
@@ -155,7 +155,6 @@ func (e *PolicyExecutor) Execute(ctx context.Context, input PolicyInput) (Policy
 }
 
 // buildLLMPrompt constructs a prompt for LLM fallback (to be overridden by specific policies).
-func (e *PolicyExecutor) buildLLMPrompt(input PolicyInput) string {
+func (e *PolicyExecutor) buildLLMPrompt(_ PolicyInput) string {
 	return "You are a policy decision agent for Horizon. Make a decision based on the input context."
 }
-

@@ -5,13 +5,14 @@ import (
 	"strings"
 )
 
-var reISO2OrGlobal = regexp.MustCompile(`^(global|[a-z]{2})$`)
+var reISO2OrGlobal = regexp.MustCompile(`^(global|mena|emea|apac|latam|na|gcc|eu|asean|nordics|benelux|anz|cis|ssa|usmca|nafta|[a-z]{2})$`)
 
 // SegmentCanonicalPath returns a canonical market segment path:
 // /segment/{domain}/{vertical}/{geo}
 //
-// - domain/vertical are slugified (lowercase a-z0-9-)
-// - geo must be ISO3166-1 alpha2 lowercase (2 chars) or "global"
+//   - domain/vertical are slugified (lowercase a-z0-9-)
+//   - geo must be ISO3166-1 alpha2 lowercase (2 chars) or a regional bucket:
+//     global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta
 //
 // Returns ("", false) if the path cannot be normalized safely.
 func SegmentCanonicalPath(domain, vertical, geo string) (string, bool) {
@@ -150,5 +151,3 @@ func NormalizeOrgSize(in string) string {
 		return "na"
 	}
 }
-
-

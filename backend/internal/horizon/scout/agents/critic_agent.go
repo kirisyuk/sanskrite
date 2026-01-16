@@ -43,7 +43,21 @@ type ValidationConflict struct {
 
 // Validate проверяет извлеченные данные на соответствие источникам
 func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string) (*ValidationResult, error) {
-	prompt := a.buildValidationPrompt(extractedData, relations, supplyChains, sourceContent, specialties)
+	return a.ValidateWithGraphContext(ctx, extractedData, relations, supplyChains, sourceContent, specialties, "")
+}
+
+// ValidateWithGraphContext validates extracted data and can optionally be given a compact "graph context"
+// (e.g., existing market/gov skeleton) to assess hierarchy completeness beyond the current source content.
+func (a *CriticAgent) ValidateWithGraphContext(
+	ctx context.Context,
+	extractedData *models.HorizonFragment,
+	relations []DiscoveredRelation,
+	supplyChains []SupplyChain,
+	sourceContent string,
+	specialties []string,
+	graphContext string,
+) (*ValidationResult, error) {
+	prompt := a.buildValidationPrompt(extractedData, relations, supplyChains, sourceContent, specialties, graphContext)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -79,7 +93,7 @@ func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.Horizo
 }
 
 // buildValidationPrompt строит промпт для валидации данных
-func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string) string {
+func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string, graphContext string) string {
 	extractedJSON, _ := json.MarshalIndent(extractedData, "", "  ")
 	relationsJSON, _ := json.MarshalIndent(relations, "", "  ")
 	supplyChainsJSON := "[]"
@@ -104,12 +118,22 @@ EXTRACTED SUPPLY CHAINS (JSON):
 `, supplyChainsJSON)
 	}
 
+	graphContextBlock := ""
+	if strings.TrimSpace(graphContext) != "" {
+		graphContextBlock = fmt.Sprintf(`
+GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
+%s
+
+`, strings.TrimSpace(graphContext))
+	}
+
 	return fmt.Sprintf(`You are a validation agent (Critic) for a risk analysis system. Your task is to verify that extracted data matches the source content and assess the completeness of the knowledge graph.
 
 EXTRACTED DATA (JSON):
 %s
 
 EXTRACTED RELATIONS (JSON):
+%s
 %s
 %s
 SOURCE CONTENT:
@@ -142,7 +166,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      Format: /segment/{domain}/{vertical}/{geo}
 	      Domains: finance, technology, industrial, consumer, healthcare, energy, materials, telecom, real-estate, public-sector, professional-services
 	      Verticals: banking, software, automotive, oil-gas, government, consulting, etc.
-	      Geo: ISO2 (us, de, cn) or 'global'
+	      Geo: ISO2 lowercase (us, de, cn) or regional bucket (global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta)
 	      Examples: /segment/technology/semiconductors/tw, /segment/public-sector/government/ru, /segment/finance/banking/us
 	      For government bodies use domain=public-sector, vertical=government or specific function (defense, treasury, regulation)."
 	  
@@ -219,6 +243,27 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - If state is missing concentration metrics, add questions:
 	      - "What is the CR4 (top-4 market share percent) for <market>? Provide value and sources. Store as /metric/market/cr4_percent."
 	      - "What is the HHI (0..10000) for <market>? Provide value and sources. Store as /metric/market/hhi."
+
+	MANDATORY - Market/Gov skeleton completeness (use GRAPH SKELETON CONTEXT when provided):
+	  - If GRAPH SKELETON CONTEXT.kind == "market_skeleton":
+	    - Your goal is to ensure the market is CONNECTED into a regional/global hierarchy (skeleton), not just populated with players.
+	    - If parentEdges is empty AND expectedParentPath is present:
+	      - Add a missingInfo item to find/confirm the correct parent market and create HAS_SUBMARKET edge parent -> this.
+	      - Prefer segment-first paths: /market/{geo}/{domain}/{vertical} where possible; avoid creating new legacy /market/{geo}/{slug} if a v2 path exists.
+	    - If childEdges is empty:
+	      - Add a missingInfo item: "What are the key immediate sub-markets of <market> in this geography? Return 5-10 /market/... canonical paths and HAS_SUBMARKET edges (broader -> narrower)."
+	    - If nearbyPaths suggests many related markets exist but this node has no parent/children, add a missingInfo item:
+	      - "How should <market> be placed within the existing market skeleton for <geo>? Use nearbyPaths as candidates; add HAS_SUBMARKET edges."
+	    - If the market path appears legacy (/market/{geo}/{slug}) and nearbyPaths includes segment-first v2 nodes, add a missingInfo item:
+	      - "Map legacy market <market> to segment-first /market/{geo}/{domain}/{vertical} (or propose segment dictionary synonyms/parents) and create bridging edges."
+	  - If GRAPH SKELETON CONTEXT.kind == "gov_skeleton":
+	    - Your goal is to ensure the government body is CONNECTED into an administrative hierarchy (skeleton).
+	    - If parentEdges is empty AND parentGovPath is empty:
+	      - Add a missingInfo item: "Which superior government body (ministry/department/government) administers <gov>? Return parentGovPath and ADMINISTERS edge superior -> subordinate."
+	    - If childEdges is empty AND govType indicates a higher-level body (government|ministry|department):
+	      - Add a missingInfo item: "What are the key subordinate agencies/authorities administered by <gov>? Return 5-10 /gov/... paths and ADMINISTERS edges."
+	    - If nearbyPaths suggests many gov bodies exist in the jurisdiction but this node has no parent/children, add a missingInfo item:
+	      - "Place <gov> into the existing administrative skeleton for <geoIso2> using nearbyPaths as candidates; add ADMINISTERS edges."
 	
 	- If "management" specialty is requested for an Organization/Facility, you MUST ensure leadership/board/founder coverage:
 	  - If there are no PERSON relations relevant to leadership (MANAGES / EMPLOYED_BY / BOARD_MEMBER_OF / FOUNDED), add specific questions like:
@@ -252,5 +297,5 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - "Who are the publicly known close associates of <person> (business partners/friends/classmates)? Return RELATED_TO links with evidence."
 	- If relations seem sparse or inconsistent with the entity's scale, flag it.
 
-	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, sourceContent, specBlock)
+	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock)
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -92,8 +93,13 @@ func backfillBatch(
 	// We only require that JSON parses into the LLMResponse struct.
 	// Missing fields/metrics MUST NOT fail the whole batch; we handle them per-item and log in JSONL.
 	verify := func(out LLMResponse) error { _ = out; return nil }
+	// Optional strict-mode verifier: only enabled when strictSegments is requested.
+	// This intentionally makes the batch "fail-closed" to catch prompt regressions during controlled runs.
+	if strictSegments != nil && *strictSegments {
+		verify = func(out LLMResponse) error { return verifyLLMResponse(out, inp, featSet) }
+	}
 
-	parsed, raw, pt, ot, tt, durMs, err := callLLMUnified(
+	parsed, raw, usedModel, pt, ot, tt, durMs, err := callLLMUnified(
 		ctx,
 		client,
 		exec,
@@ -145,7 +151,11 @@ func backfillBatch(
 			Reason:          "",
 			ScannedAt:       now,
 		}
-		row.LLM.Model = strings.TrimSpace(*model)
+		if strings.TrimSpace(usedModel) != "" {
+			row.LLM.Model = strings.TrimSpace(usedModel)
+		} else {
+			row.LLM.Model = strings.TrimSpace(*model)
+		}
 		row.LLM.PromptTokens = pt
 		row.LLM.OutputTokens = ot
 		row.LLM.TotalTokens = tt
@@ -394,6 +404,12 @@ Rules:
   - marketDomain MUST be "unknown" (not empty)
   - marketVertical MUST be "unknown" (not empty)
 - Do NOT invent numbers. For market metrics, only output values with sources in provenance.sourceIds.
+- marketSegments must be canonical and taxonomy-aligned.
+  - geo MUST be ISO3166-1 alpha2 when a specific country is known.
+  - ISO country codes MUST be lowercase (e.g., "sa", "cn", "my").
+  - Regional buckets allowed ONLY when the company truly operates across the region and you cannot map to a single country:
+    mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta
+  - If you are unsure or cannot map to a known vertical, return [].
 - market metric keys (when requested) MUST use these canonical keys only: %s
   - supply_chain_risk is OPTIONAL; include it only if you can source it reliably.
 
@@ -670,6 +686,27 @@ func applyOrgClassifiers(cur *models.HorizonFragment, it LLMResponseItem, row *R
 			cur.MarketSegments = union
 			changed = true
 		}
+	}
+
+	norms, normDomains, normVerticals, normPairs := taxonomy.NormalizeMarketSegments(cur.MarketSegments)
+	row.Validation.SegmentNormDomains = normDomains
+	row.Validation.SegmentNormVerticals = normVerticals
+	row.Validation.SegmentNormPairs = normPairs
+	if !reflect.DeepEqual(cur.MarketSegmentNorms, norms) {
+		cur.MarketSegmentNorms = norms
+		changed = true
+	}
+	if !equalStringSlices(cur.MarketSegmentNormDomains, normDomains) {
+		cur.MarketSegmentNormDomains = normDomains
+		changed = true
+	}
+	if !equalStringSlices(cur.MarketSegmentNormVerticals, normVerticals) {
+		cur.MarketSegmentNormVerticals = normVerticals
+		changed = true
+	}
+	if !equalStringSlices(cur.MarketSegmentNormPairs, normPairs) {
+		cur.MarketSegmentNormPairs = normPairs
+		changed = true
 	}
 	return changed
 }

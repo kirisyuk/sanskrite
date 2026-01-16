@@ -20,6 +20,10 @@ type MarketSegmentDictionary struct {
 	VerticalAliases  map[string]string
 	VerticalFamilies map[string]string
 	NormRules        map[string]SegmentNormRule // key: "/segment/{domain}/{vertical}"
+
+	// Segment-first hierarchy support
+	VerticalParents  map[string]string // childVertical -> parentVertical
+	VerticalSynonyms map[string]string // rawVertical -> canonicalVertical
 }
 
 var msMu sync.RWMutex
@@ -152,6 +156,26 @@ func (c *FirestoreMarketSegmentDictCache) Get(ctx context.Context) (*MarketSegme
 			continue
 		}
 		out.NormRules[k] = SegmentNormRule{NormDomain: nd, NormVertical: nv, Channel: ch}
+	}
+
+	// Optional: vertical hierarchy + synonyms
+	out.VerticalParents = map[string]string{}
+	for k, v := range doc.SegmentVerticalParents {
+		k = strings.ToLower(strings.TrimSpace(k))
+		v = strings.ToLower(strings.TrimSpace(v))
+		if k == "" || v == "" {
+			continue
+		}
+		out.VerticalParents[k] = v
+	}
+	out.VerticalSynonyms = map[string]string{}
+	for k, v := range doc.SegmentVerticalSynonyms {
+		k = strings.ToLower(strings.TrimSpace(k))
+		v = strings.ToLower(strings.TrimSpace(v))
+		if k == "" || v == "" {
+			continue
+		}
+		out.VerticalSynonyms[k] = v
 	}
 
 	c.cached = out

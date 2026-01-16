@@ -128,13 +128,19 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 // ExecuteStructuredTask выполняет задачу, которая должна вернуть строго типизированный ответ,
 // и использует для его проверки верификатор из объекта AITask
 func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask) (interface{}, error) {
+	parsed, _, err := e.ExecuteStructuredTaskWithModel(ctx, task)
+	return parsed, err
+}
+
+// ExecuteStructuredTaskWithModel returns the parsed result and the actual model used.
+func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, task *AITask) (interface{}, string, error) {
 	log.Printf("ExecuteStructuredTask called with task type: %s", task.TaskType)
 	inputChars := len(task.InputContent)
 	inputTokens := inputChars / 4 // Approximate token count (4 chars per token)
 	startedAt := time.Now()
 
 	if task.Verifier == nil {
-		return nil, fmt.Errorf("ExecuteStructuredTask requires a Verifier in the AITask object, but it was nil")
+		return nil, "", fmt.Errorf("ExecuteStructuredTask requires a Verifier in the AITask object, but it was nil")
 	}
 
 	triedModels := []string{}
@@ -144,7 +150,7 @@ func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask
 		if currentModel == "" {
 			log.Printf("ERROR: All models tried or unavailable for structured task '%s'. Total models tried: %d, Input size: %d chars (%d tokens est)",
 				task.TaskType, len(triedModels), inputChars, inputTokens)
-			return nil, fmt.Errorf("unable to complete structured task '%s': No suitable AI models available after all fallbacks (windowChars=%d)", task.TaskType, inputChars)
+			return nil, "", fmt.Errorf("unable to complete structured task '%s': No suitable AI models available after all fallbacks (windowChars=%d)", task.TaskType, inputChars)
 		}
 
 		modelCapabilities, err := e.modelManager.GetModelCapabilities(currentModel)
@@ -214,7 +220,7 @@ func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask
 		}
 
 		_ = startedAt // для телеметрии
-		return parsedResult, nil
+		return parsedResult, currentModel, nil
 	}
 }
 

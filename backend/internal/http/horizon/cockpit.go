@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
 
@@ -49,16 +50,31 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	filteredFragments := make([]*models.HorizonFragment, 0, len(fragments))
+	allowedFragmentIDs := make(map[string]struct{}, len(fragments))
+	for _, fragment := range fragments {
+		if fragment == nil || isSphereFragment(fragment) {
+			continue
+		}
+		filteredFragments = append(filteredFragments, fragment)
+		allowedFragmentIDs[fragment.ID] = struct{}{}
+	}
 
 	// Получаем DependencyEdge для всех фрагментов
 	edgesRepo := h.service.Edges()
 	var allEdges []interface{}
 	seen := make(map[string]struct{}, 1024)
-	for _, fragment := range fragments {
+	for _, fragment := range filteredFragments {
 		// Получаем исходящие рёбра
 		outgoingEdges, err := edgesRepo.ListBySource(r.Context(), "global", fragment.ID, nil, 100)
 		if err == nil {
 			for _, edge := range outgoingEdges {
+				if _, ok := allowedFragmentIDs[edge.SourceFragmentID]; !ok {
+					continue
+				}
+				if _, ok := allowedFragmentIDs[edge.TargetFragmentID]; !ok {
+					continue
+				}
 				// Dedup: edges can be returned twice (source list + target list) or via multiple scope nodes.
 				// Key: source|target|type to avoid duplicates in UI (ReactFlow requires unique ids).
 				k := edge.SourceFragmentID + "|" + edge.TargetFragmentID + "|" + string(edge.Type)
@@ -73,6 +89,12 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 		incomingEdges, err := edgesRepo.ListByTarget(r.Context(), "global", fragment.ID, nil, 100)
 		if err == nil {
 			for _, edge := range incomingEdges {
+				if _, ok := allowedFragmentIDs[edge.SourceFragmentID]; !ok {
+					continue
+				}
+				if _, ok := allowedFragmentIDs[edge.TargetFragmentID]; !ok {
+					continue
+				}
 				k := edge.SourceFragmentID + "|" + edge.TargetFragmentID + "|" + string(edge.Type)
 				if _, ok := seen[k]; ok {
 					continue
@@ -86,11 +108,11 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 	// Вычисляем метрики Lens через MetricsCalculator
 	// Получаем все фрагменты и вычисляем метрики
 	metrics := make(map[string]interface{})
-	if len(fragments) > 0 {
+	if len(filteredFragments) > 0 {
 		// Простое вычисление метрик на основе фрагментов
 		metricSums := make(map[string]float64)
 		metricCounts := make(map[string]int)
-		for _, fragment := range fragments {
+		for _, fragment := range filteredFragments {
 			for metricName, metricValue := range fragment.State {
 				metricSums[metricName] += metricValue.Value
 				metricCounts[metricName]++
@@ -101,7 +123,7 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 				metrics[metricName] = metricSums[metricName] / float64(count)
 			}
 		}
-		metrics["totalFragments"] = len(fragments)
+		metrics["totalFragments"] = len(filteredFragments)
 	}
 
 	// Формируем ответ для Cockpit UI
@@ -113,11 +135,11 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 			"metrics": metrics,
 		},
 		"graph": map[string]interface{}{
-			"nodes": fragments,
+			"nodes": filteredFragments,
 			"edges": allEdges,
 		},
 		"summary": map[string]interface{}{
-			"totalFragments": len(fragments),
+			"totalFragments": len(filteredFragments),
 			"totalEdges":     len(allEdges),
 			"metrics":        metrics,
 		},
@@ -125,6 +147,17 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func isSphereFragment(fragment *models.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	if fragment.Type == models.FragmentType("SPHERE") {
+		return true
+	}
+	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
+	return strings.HasPrefix(cp, "/sphere/")
 }
 
 // SimulateWhatIf выполняет What-If симуляцию изменения метрик
@@ -221,4 +254,3 @@ func (h *HorizonHandlers) SimulateWhatIf(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
-

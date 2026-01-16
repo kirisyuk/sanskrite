@@ -79,6 +79,8 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'EXECUTIVE_OF': 1,
   // Governance (strong, but not control)
   'AUDITED_BY': 2,
+  // Administrative hierarchy (gov skeleton)
+  'ADMINISTERS': 2,
 
   // 2) Products & dependency (inputs/outputs)
   'PRODUCES': 2,
@@ -89,6 +91,8 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'USES': 2,
   'NEEDS': 2,
   'EXTRACTS_FROM': 2,
+  // Market hierarchy (market skeleton)
+  'HAS_SUBMARKET': 2,
 
   // 3) Market (peers)
   'COMPETES_WITH': 3,
@@ -368,6 +372,14 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'WORKS_FOR':
       return 'context';
 
+    // Hierarchies (skeleton):
+    // - Market hierarchy: parent should appear to the RIGHT, child to the LEFT.
+    case 'HAS_SUBMARKET':
+      return isOutgoing ? 'market' : 'context';
+    // - Government admin hierarchy: treat as operating context (right).
+    case 'ADMINISTERS':
+      return 'context';
+
     // Supply Chain vs Customers depends on direction
     case 'SUPPLIES_TO':
       return isOutgoing ? 'customers' : 'supply-chain';  // outgoing = we supply to them (customer), incoming = they supply to us (supplier)
@@ -453,6 +465,13 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     return isLeft ? 'top-left' : 'top-right';
   }
 
+  // Special case: HAS_SUBMARKET should be purely horizontal.
+  // - outgoing (parent -> child) => child LEFT
+  // - incoming (parent -> child) => parent RIGHT
+  if (t === 'HAS_SUBMARKET') {
+    return isOutgoing ? 'top-left' : 'top-right';
+  }
+
   // Direction-agnostic relations: direction does NOT define top/bottom.
   // These are typically "peer" or symmetric relations.
   const SYMMETRIC = new Set<string>([
@@ -498,6 +517,8 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'HEADQUARTERED_IN',
     // Regulation / policy
     'REGULATES',
+    // Gov skeleton hierarchy
+    'ADMINISTERS',
     // Influence (in/out)
     'INFLUENCES',
     'AFFECTS',
@@ -1071,6 +1092,8 @@ export async function layoutLevelsTwoPane<T = any>(
     if (STRONG_CONTROL_TYPES.has(t)) return 400;
     // Market-defining relation: strong, but below hard control/ownership.
     if (t === 'DOMINATES') return 260;
+    // Market hierarchy (parent -> submarket): strong structural signal.
+    if (t === 'HAS_SUBMARKET') return 240;
     if (GOVERNANCE_CONTROL_TYPES.has(t)) return 220;
     if (SUPPLY_CHAIN_TYPES.has(t)) return 120;
     if (INFLUENCE_TYPES.has(t)) return 40;
@@ -1095,6 +1118,8 @@ export async function layoutLevelsTwoPane<T = any>(
     'IMPACTS',
     // Market-defining relations (org -> market): treat as hierarchy signal so the org is placed to the RIGHT.
     'DOMINATES',
+    // Market hierarchy (parent -> submarket).
+    'HAS_SUBMARKET',
   ]);
   const INVERTED_HIERARCHY_TYPES = new Set([
     'SUBSIDIARY_OF',
@@ -1627,6 +1652,10 @@ export async function layoutLevelsTwoPane<T = any>(
     });
 
     const blocks: TypeBlock<T>[] = [];
+    // If any type block already needs 2 rows, allow other blocks to expand to 2 rows as well.
+    // This keeps width compact without increasing overall height (which is already 2 rows).
+    const forceTwoRows = Array.from(byType.values()).some((list) => (list?.length || 0) > 4);
+    const minRowsForBlock = forceTwoRows ? 2 : 1;
     // Make separation visually obvious; a slightly larger gap costs width but greatly helps scanning.
     const interBlockGapX = Math.max(84, Math.floor(nodeWidth * 0.45));
     const interRelGapX = Math.max(24, Math.floor(nodeWidth * 0.18));
@@ -1705,7 +1734,9 @@ export async function layoutLevelsTwoPane<T = any>(
           const visibleSize = collapsed ? 1 : nodesRel.length;
           maxRelSizeVisible = Math.max(maxRelSizeVisible, Math.max(1, visibleSize));
         }
-        const rowsForType = Math.max(1, Math.min(baseRowsForType, maxRelSizeVisible));
+        const rowsForType = forceTwoRows
+          ? Math.max(minRowsForBlock, baseRowsForType)
+          : Math.max(1, Math.min(baseRowsForType, maxRelSizeVisible));
         const innerHForType = rowsForType * nodeHeight + Math.max(0, rowsForType - 1) * groupChildGapY;
         maxInnerH = Math.max(maxInnerH, innerHForType);
         maxRows = Math.max(maxRows, rowsForType);
@@ -1766,7 +1797,7 @@ export async function layoutLevelsTwoPane<T = any>(
         blocks.push({ typeKey, rows: rowsForType, cols: relColsTotal, startX: cursorX, blockW: typeBlockW, relBlocks });
         cursorX += typeBlockW;
       } else {
-        const rowsForType = rowsForCount(list.length);
+        const rowsForType = Math.max(minRowsForBlock, rowsForCount(list.length));
         const innerHForType = rowsForType * nodeHeight + Math.max(0, rowsForType - 1) * groupChildGapY;
         maxInnerH = Math.max(maxInnerH, innerHForType);
         maxRows = Math.max(maxRows, rowsForType);
@@ -2955,6 +2986,8 @@ export function deriveLevelsTreeMetadata<T = any>(
     'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO',
     // Market-defining (org -> market): treat as hierarchy signal
     'DOMINATES',
+    // Market hierarchy (parent -> submarket)
+    'HAS_SUBMARKET',
     // Influence is usually Top-Down: Regulator (Parent) -> Company (Child)
     'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'
   ]);
@@ -2973,6 +3006,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     if (!t) return 0;
     if (STRONG_CONTROL_TYPES.has(t)) return 400;
     if (t === 'DOMINATES') return 260;
+    if (t === 'HAS_SUBMARKET') return 240;
     if (t === 'BOARD_MEMBER_OF' || t === 'EXECUTIVE_OF') return 220;
     if (t === 'PRODUCES' || t === 'SUPPLIES_TO' || t === 'TRANSFORMS_INTO') return 120;
     if (INFLUENCE_TYPES.has(t)) return 40;

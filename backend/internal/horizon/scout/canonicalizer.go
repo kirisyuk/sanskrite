@@ -596,21 +596,24 @@ RULES:
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known (e.g., "Kazakhstan Alem.ai" -> /program/kazakhstan/alem-ai)
     - Otherwise use /program/{programSlug}
   - MARKET:
-    - Prefer /market/{geo}/{marketSlug}
+    - Segment-first preferred: /market/{geo}/{domain}/{vertical}
+      - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
       - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global" if unknown
+      - Example: "Saudi event marketing" → /market/sa/professional-services/event-marketing (if domain is known)
+    - Legacy fallback (allowed): /market/{geo}/{marketSlug}
+      - Use when domain/vertical cannot be inferred reliably
       - GEOGRAPHY INFERENCE: Extract geo from the market name/context:
         - If the name mentions a country/region, use that country's ISO2 code
         - "Saudi event marketing" → /market/sa/event-marketing (NOT /market/global/...)
         - "German automotive" → /market/de/automotive
         - Use "global" ONLY when no geographic context is present
-      - MARKET HIERARCHY: Markets form broader → narrower hierarchies
-        - Example: marketing → digital-marketing → event-marketing
-        - When canonicalizing a narrow market, the slug should reflect specificity
-        - Parent market can be inferred by removing the most specific qualifier from the slug
-      - Examples:
-        - "SME banking in Iraq" -> /market/iq/sme-banking (parent: /market/iq/banking)
-        - "Global EV batteries" -> /market/global/ev-batteries (parent: /market/global/batteries)
-        - "UAE fintech sector" -> /market/ae/fintech (parent: /market/ae/finance)
+    - MARKET HIERARCHY: Markets form broader → narrower hierarchies
+      - Parent relationships are modeled as HAS_SUBMARKET edges (broader → narrower)
+      - Example: marketing → digital-marketing → event-marketing
+    - Examples:
+      - "SME banking in Iraq" -> /market/iq/finance/banking (segment-first) or /market/iq/sme-banking (legacy)
+      - "Global EV batteries" -> /market/global/automotive/ev-batteries (segment-first) or /market/global/ev-batteries (legacy)
+      - "UAE fintech sector" -> /market/ae/finance/fintech (segment-first) or /market/ae/fintech (legacy)
   - FACILITY:
     - Prefer /fac/{orgSlug}/{facilitySlug} when the org can be inferred from the facility name (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise use /fac/{facilitySlug}

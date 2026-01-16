@@ -141,11 +141,19 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
   // ORGANIZATION nodes that live under /gov/* namespace (same behavior as ORG, different visual).
   // Goal: make ingestion artifacts / government bodies visually distinct without changing semantics.
   'GOV_ORG': {
-    // Sky palette (distinct from ORG blue, and from GEO green).
-    bg: '#E0F2FE', bgDark: '#0B2A3A',
-    border: '#0284C7', borderDark: '#38BDF8',
-    text: '#075985', textDark: '#BAE6FD',
-    accent: '#0EA5E9', accentDark: '#38BDF8',
+    // Teal palette (institutional / public sector; distinct from ORG blue and GEO green).
+    bg: '#CCFBF1', bgDark: '#042F2E',
+    border: '#14B8A6', borderDark: '#2DD4BF',
+    text: '#0F766E', textDark: '#99F6E4',
+    accent: '#14B8A6', accentDark: '#2DD4BF',
+  },
+  // Market nodes (/market/*). Keep distinct from PRODUCT (amber) and ORG (blue).
+  'MARKET': {
+    // Fuchsia palette (economy/market; distinct from TECHNOLOGY purple and SERVICE pink).
+    bg: '#FAE8FF', bgDark: '#2A0A2B',
+    border: '#D946EF', borderDark: '#F0ABFC',
+    text: '#86198F', textDark: '#F5D0FE',
+    accent: '#D946EF', accentDark: '#F0ABFC',
   },
   'GEO_REGION': {
     bg: '#D1FAE5', bgDark: '#064E3B',
@@ -427,8 +435,13 @@ export const getHorizonNodeVisualType = (
 ): string => {
   const t = String(type || '').trim();
   const cp = String(canonicalPath || '').trim();
-  if (t.toUpperCase() === 'ORGANIZATION' && cp.startsWith('/gov/')) {
+  // Any /gov/* fragment should look "government-ish", regardless of declared type.
+  if (cp.startsWith('/gov/')) {
     return 'GOV_ORG';
+  }
+  // Any /market/* fragment should look like a market node, regardless of declared type.
+  if (cp.startsWith('/market/')) {
+    return 'MARKET';
   }
   return t;
 };
@@ -439,6 +452,15 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
   const style: React.CSSProperties = { width: size, height: size, flexShrink: 0 };
   
   switch (normalizedType) {
+    case 'MARKET':
+      // Market: trend line (generic market icon)
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 17l6-6 4 4 7-7" />
+          <path d="M14 8h6v6" />
+        </svg>
+      );
+
     case 'MARKET_RENEWABLES':
       // Renewables / clean energy: leaf + bolt
       return (
@@ -771,6 +793,17 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
         </svg>
       );
     
+    case 'PROGRAM':
+      // Program / initiative: clipboard icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <rect x="6" y="4" width="12" height="16" rx="2" />
+          <path d="M9 4a3 3 0 0 1 6 0" />
+          <path d="M9 10h6" />
+          <path d="M9 14h6" />
+        </svg>
+      );
+
     case 'EVENT':
       // Calendar icon
       return (
@@ -2428,6 +2461,81 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const NODE_WIDTH_PX = 180;
   const NODE_CARD_HEIGHT_PX = 148;
 
+  // MARKET sizing summary (compact, for node bottom area).
+  const isMarketNode = React.useMemo(() => {
+    const t = String((data as any)?.type || '').trim().toUpperCase();
+    const cp = String((data as any)?.canonicalPath || '').trim();
+    return t === 'MARKET' || cp.startsWith('/market/');
+  }, [data]);
+  const marketSummary = React.useMemo(() => {
+    if (!isMarketNode) return null;
+    const st = ((data as any)?.state || {}) as Record<string, number>;
+    const num = (v: any): number | null => {
+      const n = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const get = (k: string): number | null => {
+      if (!st) return null;
+      if (Object.prototype.hasOwnProperty.call(st, k)) return num((st as any)[k]);
+      return null;
+    };
+    // Support both canonical and legacy keys (backend normalizes, but UI should be tolerant).
+    const tam =
+      get('/metric/market/tam_usd') ??
+      get('tam_usd') ??
+      get('tam') ??
+      get('market_tam_usd') ??
+      null;
+    const cagr =
+      get('/metric/market/cagr_percent') ??
+      get('cagr_percent') ??
+      get('cagr') ??
+      get('market_cagr_percent') ??
+      null;
+
+    const formatUSD = (v: number | null): string => {
+      if (v == null) return '';
+      const x = Number(v);
+      if (!Number.isFinite(x)) return '';
+      const abs = Math.abs(x);
+      const sign = x < 0 ? '-' : '';
+      const fmt = (n: number, suf: string) => {
+        const d = n >= 10 ? 0 : 1;
+        const s = n.toFixed(d).replace(/\.0$/, '');
+        return `${sign}$${s}${suf}`;
+      };
+      if (abs >= 1e12) return fmt(abs / 1e12, 'T');
+      if (abs >= 1e9) return fmt(abs / 1e9, 'B');
+      if (abs >= 1e6) return fmt(abs / 1e6, 'M');
+      if (abs >= 1e3) return fmt(abs / 1e3, 'K');
+      return `${sign}$${abs.toFixed(0)}`;
+    };
+    const formatPercent = (v: number | null): string => {
+      if (v == null) return '';
+      const x = Number(v);
+      if (!Number.isFinite(x)) return '';
+      // Heuristic: if it's 0..1, treat as ratio and convert to percent.
+      const pct = x > 0 && x < 1 ? x * 100 : x;
+      const d = Math.abs(pct) >= 10 ? 0 : 1;
+      const s = pct.toFixed(d).replace(/\.0$/, '');
+      return `${s}%`;
+    };
+
+    const tamS = formatUSD(tam);
+    const cagrS = formatPercent(cagr);
+    if (!tamS && !cagrS) return null;
+
+    // Conservative UX: default to TAM only; add CAGR only when the combined label is short enough.
+    const full = tamS && cagrS ? `TAM ${tamS} · CAGR ${cagrS}` : (tamS ? `TAM ${tamS}` : `CAGR ${cagrS}`);
+    const compact = tamS ? `TAM ${tamS}` : `CAGR ${cagrS}`;
+    const showBoth = Boolean(tamS && cagrS && full.length <= 18);
+
+    return {
+      text: showBoth ? full : compact,
+      title: full, // always include the full detail in tooltip
+    };
+  }, [data, isMarketNode]);
+
   // Форматирование типа для отображения
   const formatType = (type: string) => {
     return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -3558,6 +3666,58 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             </svg>
           </button>
         </div>
+      )}
+
+      {/* MARKET: compact sizing summary between the two bottom buttons (non-interactive). */}
+      {marketSummary && (
+        (() => {
+          // Reserve space so we don't overlap the bottom-left and bottom-right controls.
+          const leftReserve = showRiskShieldButton ? 12 + 24 + 8 : 12;
+          const rightButtons = (showExpand ? 1 : 0) + (canCollapse ? 1 : 0);
+          const rightReserve = (() => {
+            // If the bottom-right controls are not rendered, keep a minimal padding.
+            if (!(showExpand || canCollapse || (isSubcategoryStackController && canToggleStack))) return 12;
+            // Subcategory stack controller has an additional "count" pill (wider than 24px).
+            const hasCountPill = Boolean(isSubcategoryStackController && canToggleStack && typeof stackCount === 'number');
+            const countPillW = hasCountPill ? 28 + 8 + 10 : 0; // minWidth + padding + a bit of safety
+            const buttonsW = rightButtons > 0 ? (rightButtons * 24 + Math.max(0, rightButtons - 1) * 6) : 0;
+            // +12 right margin + small safety gap.
+            return 12 + countPillW + buttonsW + 8;
+          })();
+
+          return (
+            <div
+              title={marketSummary.title}
+              style={{
+                position: 'absolute',
+                left: leftReserve,
+                right: rightReserve,
+                bottom: 12,
+                height: 24,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                pointerEvents: 'none', // avoid intercepting clicks on bottom buttons
+                zIndex: 1,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: '0.01em',
+                  color: mutedTextColor,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  maxWidth: '100%',
+                }}
+              >
+                {marketSummary.text}
+              </div>
+            </div>
+          );
+        })()
       )}
 
       {/* Top market segments (max 3): centered between left (!) and right expand/collapse controls. */}

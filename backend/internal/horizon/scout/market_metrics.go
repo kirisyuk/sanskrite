@@ -40,7 +40,7 @@ func normalizeMarketMetricKeys(fragment *models.HorizonFragment) {
 	if fragment == nil {
 		return
 	}
-	if fragment.State == nil || len(fragment.State) == 0 {
+	if len(fragment.State) == 0 {
 		return
 	}
 	// Only apply to MARKET nodes (by type or path prefix).

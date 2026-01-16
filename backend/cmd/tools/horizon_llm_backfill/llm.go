@@ -198,8 +198,9 @@ func callLLMUnified(
 	inputPrompt string,
 	schema map[string]any,
 	verify func(LLMResponse) error,
-) (LLMResponse, string, int, int, int, int, error) {
+) (LLMResponse, string, string, int, int, int, int, error) {
 	var empty LLMResponse
+	usedModel := ""
 	llmCtx, cancel := context.WithTimeout(ctx, 240*time.Second)
 	defer cancel()
 
@@ -211,7 +212,7 @@ func callLLMUnified(
 
 	if useEngine == "task_executor" {
 		if exec == nil || mm == nil {
-			return empty, "", 0, 0, 0, 0, fmt.Errorf("task_executor not configured")
+			return empty, "", "", 0, 0, 0, 0, fmt.Errorf("task_executor not configured")
 		}
 		minScore := *minCapScore
 		if minScore <= 0 {
@@ -241,19 +242,29 @@ func callLLMUnified(
 			Verifier:        ver,
 			EnableTelemetry: true,
 		}
-		start := time.Now()
-		parsedAny, err := exec.ExecuteStructuredTask(llmCtx, task)
-		durMs := int(time.Since(start).Milliseconds())
-		if err != nil {
-			return empty, "", 0, 0, 0, durMs, err
+		const maxAttempts = 3
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			start := time.Now()
+			parsedAny, actualModel, err := exec.ExecuteStructuredTaskWithModel(llmCtx, task)
+			durMs := int(time.Since(start).Milliseconds())
+			if err == nil {
+				parsed := parsedAny.(LLMResponse)
+				rawBytes, _ := json.Marshal(parsed)
+				usedModel = actualModel
+				return parsed, string(rawBytes), usedModel, 0, 0, 0, durMs, nil
+			}
+			if !isRetryableLLMError(err) || attempt == maxAttempts {
+				return empty, "", "", 0, 0, 0, durMs, err
+			}
+			backoff := time.Duration(attempt*2) * time.Second
+			log.Printf("WARNING: task_executor failed (attempt %d/%d): %v; retrying in %s", attempt, maxAttempts, err, backoff)
+			time.Sleep(backoff)
 		}
-		parsed := parsedAny.(LLMResponse)
-		rawBytes, _ := json.Marshal(parsed)
-		return parsed, string(rawBytes), 0, 0, 0, durMs, nil
+		return empty, "", "", 0, 0, 0, 0, fmt.Errorf("task_executor failed after retries")
 	}
 
 	if client == nil {
-		return empty, "", 0, 0, 0, 0, fmt.Errorf("direct engine not configured")
+		return empty, "", "", 0, 0, 0, 0, fmt.Errorf("direct engine not configured")
 	}
 
 	sysDirect := "Return the result ONLY by calling the function 'return_structured'. Do not output any text outside of the function call. No markdown. No code fences."
@@ -275,26 +286,60 @@ func callLLMUnified(
 		ToolChoice:        "required",
 		ParallelToolCalls: false,
 	}
-	start := time.Now()
-	resp, err := client.GenAIGenerate(llmCtx, req)
-	durMs := int(time.Since(start).Milliseconds())
-	if err != nil || resp == nil {
-		if err == nil {
-			err = fmt.Errorf("nil response")
+	const maxAttempts = 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		start := time.Now()
+		resp, err := client.GenAIGenerate(llmCtx, req)
+		durMs := int(time.Since(start).Milliseconds())
+		if err != nil || resp == nil {
+			if err == nil {
+				err = fmt.Errorf("nil response")
+			}
+			if !isRetryableLLMError(err) || attempt == maxAttempts {
+				return empty, "", "", 0, 0, 0, durMs, err
+			}
+			backoff := time.Duration(attempt*2) * time.Second
+			log.Printf("WARNING: direct engine failed (attempt %d/%d): %v; retrying in %s", attempt, maxAttempts, err, backoff)
+			time.Sleep(backoff)
+			continue
 		}
-		return empty, "", 0, 0, 0, durMs, err
-	}
 
-	ver2 := ai.NewGenericVerifier(func(out LLMResponse) error {
-		if verify != nil {
-			return verify(out)
+		ver2 := ai.NewGenericVerifier(func(out LLMResponse) error {
+			if verify != nil {
+				return verify(out)
+			}
+			return nil
+		})
+		parsedAny, err := ver2.VerifyAndParse(resp.Content)
+		if err != nil {
+			return empty, resp.Content, modelName, resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, durMs, fmt.Errorf("LLM JSON validation failed: %w", err)
 		}
-		return nil
-	})
-	parsedAny, err := ver2.VerifyAndParse(resp.Content)
-	if err != nil {
-		return empty, resp.Content, resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, durMs, fmt.Errorf("LLM JSON validation failed: %w", err)
+		parsed := parsedAny.(LLMResponse)
+		return parsed, resp.Content, modelName, resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, durMs, nil
 	}
-	parsed := parsedAny.(LLMResponse)
-	return parsed, resp.Content, resp.Usage.PromptTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens, durMs, nil
+	return empty, "", "", 0, 0, 0, 0, fmt.Errorf("direct engine failed after retries")
+}
+
+func isRetryableLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	retryHints := []string{
+		"connection reset",
+		"timeout",
+		"temporarily unavailable",
+		"server error",
+		"rate limit",
+		"429",
+		"503",
+		"eof",
+		"tls handshake",
+	}
+	for _, h := range retryHints {
+		if strings.Contains(msg, h) {
+			return true
+		}
+	}
+	return false
 }

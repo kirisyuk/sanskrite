@@ -29,7 +29,45 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeOperatesIn, true, true, "canonicalize: DEPOSIT EXTRACTS_FROM ORGANIZATION -> ORGANIZATION OPERATES_IN DEPOSIT"
 	}
 
+	// =============================================================================
+	// MARKET-related canonicalization
+	// =============================================================================
+
+	// OWNS(MARKET → MARKET) → HAS_SUBMARKET
+	// LLM often says "beverages owns beer market" meaning hierarchy, not ownership.
+	if edgeType == DependencyTypeOwns &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeMarket {
+		return DependencyTypeHasSubmarket, false, true, "canonicalize: MARKET OWNS MARKET -> MARKET HAS_SUBMARKET MARKET"
+	}
+
+	// DEPENDS(ORG → MARKET) → PARTICIPATES_IN
+	// LLM interprets "company depends on market" (revenue exposure) but correct semantic is participation.
+	if edgeType == DependencyTypeDependsOn &&
+		sourceType == FragmentTypeOrganization &&
+		targetType == FragmentTypeMarket {
+		return DependencyTypeParticipatesIn, false, true, "canonicalize: ORGANIZATION DEPENDS_ON MARKET -> ORGANIZATION PARTICIPATES_IN MARKET"
+	}
+
+	// DEPENDS(FACILITY → MARKET) → PARTICIPATES_IN
+	// Same logic for facilities.
+	if edgeType == DependencyTypeDependsOn &&
+		sourceType == FragmentTypeFacility &&
+		targetType == FragmentTypeMarket {
+		return DependencyTypeParticipatesIn, false, true, "canonicalize: FACILITY DEPENDS_ON MARKET -> FACILITY PARTICIPATES_IN MARKET"
+	}
+	// DEPENDS(MARKET → ORG/FACILITY) → PARTICIPATES_IN (swap)
+	// If the edge is reversed, flip it to ORG/FACILITY -> MARKET.
+	if edgeType == DependencyTypeDependsOn &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET DEPENDS_ON ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET"
+	}
+	if edgeType == DependencyTypeDependsOn &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeFacility {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET DEPENDS_ON FACILITY -> FACILITY PARTICIPATES_IN MARKET"
+	}
+
 	return edgeType, false, false, ""
 }
-
-

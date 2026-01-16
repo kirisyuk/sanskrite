@@ -676,6 +676,19 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
 		Description:      "Entity dominates market (leader)",
 	},
+	// HAS_SUBMARKET: market hierarchy (parent market -> child sub-market).
+	horizonmodels.DependencyTypeHasSubmarket: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
+		Description:      "Market has sub-market (hierarchy)",
+	},
+	// ADMINISTERS: government hierarchy (superior body -> subordinate body).
+	// NOTE: GOV bodies are stored as FragmentTypeOrganization under /gov/... canonical paths.
+	horizonmodels.DependencyTypeAdministers: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
+		Description:      "Government body administers subordinate body (hierarchy)",
+	},
 }
 
 func containsFragmentType(types []horizonmodels.FragmentType, t horizonmodels.FragmentType) bool {

@@ -524,15 +524,19 @@ METRIC VALUE FORMAT (IMPORTANT):
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
     - Otherwise /program/{programSlug}
   - Markets:
-    - Prefer /market/{geo}/{marketSlug}
+    - Prefer (segment-first): /market/{geo}/{domain}/{vertical}
+      - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
+      - This enables consistent market hierarchy + aggregation
+    - Legacy fallback (allowed): /market/{geo}/{marketSlug}
       - geo: ISO3166-1 alpha2 lowercase OR "global" if unknown
       - GEOGRAPHY INHERITANCE: If THIS FRAGMENT is a regional market (e.g., /market/sa/...), 
         new MARKET relations MUST inherit that geo, not default to "global"
       - Extract geo from market name context when present:
         - "Saudi event marketing" → /market/sa/event-marketing (NOT /market/global/...)
         - "German automotive" → /market/de/automotive
-      - Examples: /market/iq/sme-banking, /market/ae/fintech, /market/global/ev-batteries
-    - Legacy /market/{marketSlug} may exist; prefer /market/{geo}/{slug} for NEW markets
+      - Examples (legacy): /market/iq/sme-banking, /market/ae/fintech, /market/global/ev-batteries
+      - Examples (segment-first): /market/sa/professional-services/marketing, /market/sa/professional-services/event-marketing
+    - Legacy /market/{marketSlug} may exist; prefer segment-first /market/{geo}/{domain}/{vertical} for NEW markets when possible
   - Facilities:
     - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred
     - Otherwise /fac/{facilitySlug}

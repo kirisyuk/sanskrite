@@ -340,7 +340,12 @@ RULES:
     - If jurisdiction is unknown, use /gov/na/{slug}.
 
 - PROGRAM/MARKET/EVENT/PERSON canonicalPath:
-  - /program/{slug}, /market/{geo}/{slug}, /event/{slug}, /person/{slug}
+  - /program/{slug}, /event/{slug}, /person/{slug}
+  - MARKET (segment-first):
+    - Preferred: /market/{geo}/{domain}/{vertical}
+      - domain/vertical SHOULD align with the /segment/{domain}/{vertical}/{geo} taxonomy used for organizations.
+      - This enables consistent market hierarchy + aggregation.
+    - Legacy fallback (allowed): /market/{geo}/{slug} when domain/vertical cannot be inferred.
   - MARKET geo MUST be ISO2 lowercase or "global" (default "global" if unknown)
 
 - MARKET GEOGRAPHY INHERITANCE (CRITICAL):
@@ -358,7 +363,7 @@ RULES:
   - Markets form hierarchies: broader → narrower (e.g., marketing → digital-marketing → event-marketing)
   - When creating a MARKET anchor, consider if there's an obvious parent market
   - In decompositionHints.subMarkets, list narrower segments that belong to this market
-  - Example hierarchy: /market/sa/marketing → /market/sa/digital-marketing → /market/sa/event-marketing
+  - Example hierarchy (segment-first): /market/sa/{domain}/marketing → /market/sa/{domain}/digital-marketing → /market/sa/{domain}/event-marketing
 
 - GOV HIERARCHY (best-effort):
   - Government bodies form administrative hierarchies: government → ministry → department → agency/authority

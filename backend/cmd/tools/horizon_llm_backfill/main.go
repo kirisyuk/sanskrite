@@ -15,6 +15,7 @@ import (
 	"cloud.google.com/go/firestore"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // Unified LLM backfill tool (scaffold).
@@ -34,12 +35,13 @@ var (
 	projectID = flag.String("project", "", "GCP project ID (required)")
 	tenantID  = flag.String("tenant", "global", "Tenant ID (default: global)")
 
-	featuresFlag = flag.String("features", "market_metrics,market_profile", "Comma-separated list of features: org_classifiers,market_profile,market_metrics")
-	typesFlag    = flag.String("types", "", "Optional comma-separated fragment types to scan (e.g., ORGANIZATION,MARKET). If empty, derived from features.")
+	featuresFlag   = flag.String("features", "market_metrics,market_profile", "Comma-separated list of features: org_classifiers,market_profile,market_metrics")
+	typesFlag      = flag.String("types", "", "Optional comma-separated fragment types to scan (e.g., ORGANIZATION,MARKET). If empty, derived from features.")
+	orgClassifiers = flag.Bool("org-classifiers", false, "Enable LLM backfill for orgSize + marketSegments (adds feature org_classifiers)")
 
 	model           = flag.String("model", "gemini-3-flash-preview", "Model name or alias")
 	engine          = flag.String("engine", "task_executor", "LLM engine: task_executor|direct")
-	grounding       = flag.Bool("grounding", true, "Enable search grounding")
+	grounding       = flag.Bool("grounding", false, "Enable search grounding")
 	minCapScore     = flag.Int("min-capability-score", 0, "Override MinCapabilityScore (0 = derive from model registry)")
 	maxOutputTokens = flag.Int("max-output-tokens", 8192, "Max output tokens budget (>=8192 recommended for structured JSON)")
 	llmConcurrency  = flag.Int("llm-concurrency", 1, "How many LLM batch calls to run in parallel (>=1) (not used yet; sequential MVP)")
@@ -65,6 +67,9 @@ var (
 	overwriteSegments  = flag.Bool("overwrite-segments", false, "Overwrite existing marketSegments (default: union/fill-only)")
 	overwriteMarket    = flag.Bool("overwrite-market-profile", false, "Overwrite marketDomain/marketVertical/marketChannels (default: fill-only)")
 	overwriteMarketMet = flag.Bool("overwrite-market-metrics", false, "Overwrite /metric/market/* metrics (default: fill-only)")
+
+	segmentDictVersion = flag.String("segment-dict-version", "v1", "Market segment dictionary version for normalization (Firestore doc id)")
+	segmentDictRefresh = flag.Bool("segment-dict-refresh", true, "Load market segment dictionary from Firestore for normalization")
 )
 
 type Row struct {
@@ -92,10 +97,13 @@ type Row struct {
 	NewMarketState map[string]models.MetricValue `json:"newMarketState,omitempty"`
 
 	Validation struct {
-		SegmentsNormalized []string `json:"segmentsNormalized,omitempty"`
-		SegmentsDropped    int      `json:"segmentsDropped,omitempty"`
-		MarketMetricsKept  int      `json:"marketMetricsKept,omitempty"`
-		MarketMetricsSet   int      `json:"marketMetricsSet,omitempty"`
+		SegmentsNormalized   []string `json:"segmentsNormalized,omitempty"`
+		SegmentsDropped      int      `json:"segmentsDropped,omitempty"`
+		SegmentNormDomains   []string `json:"segmentNormDomains,omitempty"`
+		SegmentNormVerticals []string `json:"segmentNormVerticals,omitempty"`
+		SegmentNormPairs     []string `json:"segmentNormPairs,omitempty"`
+		MarketMetricsKept    int      `json:"marketMetricsKept,omitempty"`
+		MarketMetricsSet     int      `json:"marketMetricsSet,omitempty"`
 	} `json:"validation,omitempty"`
 
 	LLM struct {
@@ -132,6 +140,9 @@ func main() {
 	featSet, err := parseFeatures(*featuresFlag)
 	if err != nil {
 		log.Fatalf("FATAL: invalid --features: %v", err)
+	}
+	if orgClassifiers != nil && *orgClassifiers {
+		featSet[string(featureOrgClassifiers)] = struct{}{}
 	}
 	typeSet, err := parseTypes(*typesFlag, featSet)
 	if err != nil {
@@ -180,6 +191,13 @@ func main() {
 		log.Fatalf("FATAL: failed to init Firestore client: %v", err)
 	}
 	defer db.Close()
+
+	if segmentDictRefresh != nil && *segmentDictRefresh {
+		taxonomy.InitMarketSegmentDictionaryCacheFromFirestore(db, strings.TrimSpace(*segmentDictVersion), 20*time.Minute)
+		if err := taxonomy.RefreshMarketSegmentDictionary(ctx); err != nil {
+			log.Printf("WARNING: failed to load market segment dictionary: %v (will use built-in rules)", err)
+		}
+	}
 
 	// LLM clients
 	mm := ai.NewAIModelManager()

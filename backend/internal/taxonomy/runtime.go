@@ -108,6 +108,10 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	// Market participation
 	"PARTICIPATES_IN": {},
 	"DOMINATES":       {},
+	// Market hierarchy
+	"HAS_SUBMARKET": {},
+	// Government hierarchy
+	"ADMINISTERS": {},
 	// Governance / org-person
 	"MANAGES":         {},
 	"CONTROLS":        {},

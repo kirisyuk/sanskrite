@@ -150,6 +150,56 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
         return stateMap[state] || state;
       };
 
+      const formatTypeLabel = (raw: string): string => {
+        const t = String(raw || '').trim();
+        if (!t) return '';
+        return t.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+      };
+
+      const relationVerb = (raw: string): string => {
+        const u = String(raw || '').toUpperCase().trim();
+        switch (u) {
+          case 'SUPPLIES_TO':
+            return 'supplies to';
+          case 'PRODUCES':
+            return 'produces';
+          case 'TRANSFORMS_INTO':
+            return 'transforms into';
+          case 'DEPENDS_ON':
+            return 'depends on';
+          case 'REQUIRES':
+            return 'requires';
+          case 'USES':
+            return 'uses';
+          case 'NEEDS':
+            return 'needs';
+          case 'OWNS':
+            return 'owns';
+          case 'MANAGES':
+            return 'manages';
+          case 'CONTROLS':
+            return 'controls';
+          case 'INVESTS_IN':
+            return 'invests in';
+          case 'INFLUENCES':
+            return 'influences';
+          case 'AFFECTS':
+            return 'affects';
+          case 'IMPACTS':
+            return 'impacts';
+          case 'REGULATES':
+            return 'regulates';
+          case 'COMPETES_WITH':
+            return 'competes with';
+          case 'PARTNERS_WITH':
+            return 'partners with';
+          case 'COOPERATES_WITH':
+            return 'cooperates with';
+          default:
+            return u ? u.toLowerCase().replace(/_/g, ' ') : 'linked to';
+        }
+      };
+
       let text = type;
       let icon: HorizonRealtimeEvent['icon'] = 'info';
       let humanReadable: HorizonRealtimeEvent['humanReadable'] | undefined;
@@ -236,6 +286,19 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
             if (m) {
               const title = 'Supply chain parsing failed';
               return { title, description: short(m[1] || ''), text: title };
+            }
+          }
+
+          // Research started
+          {
+            const m = l.match(/^\>\s*research started\s*(?:\(\s*missing\s*=\s*(\d+)\s*\))?/i);
+            if (m) {
+              const missing = parseInt(m[1] || '0', 10) || 0;
+              const title = 'Research started';
+              const description = missing > 0
+                ? `Gathering missing info (${missing} item${missing === 1 ? '' : 's'})`
+                : 'Gathering missing info';
+              return { title, description: short(description), text: title };
             }
           }
 
@@ -357,6 +420,52 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
           description: cp ? `Entity: ${cp}` : undefined,
           entityName: entityName,
         };
+      } else if (type === 'horizon.ontology.fact.created') {
+        icon = 'info';
+        const kind = typeof data?.kind === 'string' ? data.kind : '';
+        const fType = typeof data?.type === 'string' ? data.type : '';
+        const title = typeof data?.title === 'string' ? data.title : '';
+        const canonicalPaths = Array.isArray(data?.canonicalPaths) ? data.canonicalPaths : [];
+        const actorPaths = Array.isArray(data?.actorPaths) ? data.actorPaths : [];
+        const pickPaths = (arr: any[]) =>
+          arr
+            .map((v) => (typeof v === 'string' ? v.trim() : ''))
+            .filter((v) => v);
+        const paths = Array.from(new Set([...pickPaths(actorPaths), ...pickPaths(canonicalPaths)]));
+        const first = paths[0] ? getEntityName(paths[0]) : '';
+        const second = paths[1] ? getEntityName(paths[1]) : '';
+        const kindLabel = kind ? formatTypeLabel(kind) : 'Fact';
+        const typeLabel = fType ? formatTypeLabel(fType) : '';
+
+        let description = '';
+        if (kind === 'relation') {
+          icon = 'edge';
+          const verb = relationVerb(fType);
+          if (first && second) {
+            description = `${first} ${verb} ${second}`;
+          } else if (title) {
+            description = title;
+          } else if (typeLabel) {
+            description = typeLabel;
+          }
+          text = description ? short(description) : 'Relationship created';
+          humanReadable = {
+            title: 'Relationship created',
+            description: description ? short(description) : undefined,
+            entityName: first || undefined,
+          };
+        } else {
+          const headline = title || typeLabel || kindLabel;
+          text = headline ? short(headline) : `${kindLabel} created`;
+          description = title && typeLabel && title !== typeLabel
+            ? `${typeLabel} • ${title}`
+            : title || typeLabel;
+          humanReadable = {
+            title: `${kindLabel} created`,
+            description: description ? short(description) : undefined,
+            entityName: first || undefined,
+          };
+        }
       } else if (type === 'horizon.graph.edge.upserted') {
         icon = 'edge';
         const src = typeof data?.sourceFragmentId === 'string' ? data.sourceFragmentId : '';
