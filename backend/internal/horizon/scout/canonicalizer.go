@@ -4,24 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
-var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
-var multiDash = regexp.MustCompile(`-+`)
-
 func slugify(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = nonSlugChars.ReplaceAllString(s, "-")
-	s = multiDash.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	return s
+	// Single source of truth: taxonomy.Slugify includes best-effort Cyrillic transliteration
+	// and shared Horizon/Ontology slug rules.
+	return taxonomy.Slugify(s)
 }
 
 // Slugify is an exported wrapper for Horizon canonical path slugging.
@@ -110,6 +105,10 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 		return nil
 	case models.FragmentTypePerson:
 		return []string{"/person/" + slug}
+	case models.FragmentTypeCommunity:
+		// Preferred: /community/{geo}/{type}/{slug}. Without geo/type, default to global/interest.
+		// Also keep simpler fallback for backward compatibility.
+		return []string{"/community/global/interest/" + slug, "/community/global/" + slug}
 	default:
 		return []string{"/org/na/" + slug, "/org/" + slug}
 	}
@@ -196,6 +195,8 @@ func normalizeFragmentTypeHardcoded(s string) models.FragmentType {
 		return models.FragmentTypeSupplyLink
 	case string(models.FragmentTypeDeposit), "MINE", "FIELD", "BASIN", "RESERVOIR":
 		return models.FragmentTypeDeposit
+	case string(models.FragmentTypeCommunity), "NETWORK", "GROUP", "COLLECTIVE":
+		return models.FragmentTypeCommunity
 	default:
 		return ""
 	}
@@ -448,6 +449,8 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 			expectedPrefix = "/person/"
 		case models.FragmentTypeDeposit:
 			expectedPrefix = "/deposit/"
+		case models.FragmentTypeCommunity:
+			expectedPrefix = "/community/"
 		}
 		if expectedPrefix != "" {
 			if relType == models.FragmentTypeOrganization {
@@ -631,6 +634,26 @@ RULES:
     - Brazil / São Paulo / São Paulo: /loc/br/sp/sao-paulo
     - Kazakhstan / Astana: /loc/kz/na/astana
   - EVENT: /event/{lowercase-slug}
+  - COMMUNITY: /community/{geo}/{type}/{slug}
+    - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
+    - type: trade | activist | professional | criminal | religious | ethnic | interest
+      - trade: commercial networks without formal structure (hawala, informal trade networks)
+      - activist: political/social activist groups
+      - professional: professional communities without legal entity (OSINT researchers, developers)
+      - criminal: criminal networks and organizations
+      - religious: religious communities and congregations
+      - ethnic: diaspora and ethnic communities
+      - interest: hobby/interest-based communities
+    - slug: lowercase-slug derived from community name
+    - Examples:
+      - "Hawala network in Dubai" → /community/ae/trade/hawala-dubai-network
+      - "Kazan drug dealers" → /community/ru/criminal/kazan-synthetic-dealers
+      - "NEXTA supporters" → /community/by/activist/nexta-supporters
+      - "OSINT community" → /community/global/professional/osint-researchers
+    - CRITICAL: COMMUNITY is for INFORMAL groups WITHOUT legal structure.
+      - If the entity has legal registration → use ORGANIZATION (/org/)
+      - If the entity is a media endpoint (channel/group) → use MEDIA_CHANNEL (/media/)
+      - COMMUNITY is the social entity that *uses* channels, not the channel itself
 - VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
   - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
   - canonicalPath MUST match expected prefix for targetType:
@@ -642,6 +665,7 @@ RULES:
     - MARKET -> /market/
     - EVENT -> /event/
     - PERSON -> /person/
+    - COMMUNITY -> /community/ (format: /community/{geo}/{type}/{slug})
   - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city}
   - GEO_REGION country code MUST be valid ISO3166-1 alpha2 (2 lowercase letters)
 - Output only JSON, no markdown, no extra text.

@@ -6,12 +6,26 @@ import (
 	"log"
 	"math"
 	"strings"
+	"sync/atomic"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
+
+// CanonicalPathResolverStats is a lightweight in-memory counter snapshot for observability.
+// It intentionally avoids introducing external metrics deps; higher-level services may scrape/log it.
+type CanonicalPathResolverStats struct {
+	ResolveCalls               int64
+	CanonizationPolicyRewrites int64
+	GeoStrictified             int64
+	GeoNamesRewrites           int64
+	ProductTaxonomyRewrites    int64
+	FoundExistingByPath        int64
+	OrgDedupHits               int64
+	FoundExistingAfterDedup    int64
+}
 
 // CanonicalPathResolver provides unified canonicalization and deduplication for canonical paths.
 // This service ensures that all paths are normalized and deduplicated early in the pipeline,
@@ -21,6 +35,16 @@ type CanonicalPathResolver struct {
 	canonizationPolicy *policy.PolicyExecutor
 	orgDeduplicator    *OrgDeduplicator
 	geonamesClient     coreontology.GeoNamesClientInterface
+
+	// Stats counters (atomic; best-effort only).
+	resolveCalls               int64
+	canonizationPolicyRewrites int64
+	geoStrictified             int64
+	geoNamesRewrites           int64
+	productTaxonomyRewrites    int64
+	foundExistingByPath        int64
+	orgDedupHits               int64
+	foundExistingAfterDedup    int64
 }
 
 // NewCanonicalPathResolver creates a new canonical path resolver.
@@ -79,6 +103,7 @@ func (r *CanonicalPathResolver) Resolve(
 	if inputPath == "" {
 		return nil, fmt.Errorf("input path is required")
 	}
+	atomic.AddInt64(&r.resolveCalls, 1)
 
 	result := &ResolveResult{
 		CanonicalPath:      inputPath,
@@ -99,6 +124,7 @@ func (r *CanonicalPathResolver) Resolve(
 		if err == nil && decision.Action == "normalize_to" {
 			normalized, _ := decision.Params["output"].(string)
 			if normalized != "" && normalized != inputPath {
+				atomic.AddInt64(&r.canonizationPolicyRewrites, 1)
 				result.NormalizationSteps = append(result.NormalizationSteps,
 					fmt.Sprintf("canonization_policy: %s -> %s", inputPath, normalized))
 				result.CanonicalPath = normalized
@@ -115,6 +141,7 @@ func (r *CanonicalPathResolver) Resolve(
 	// /loc/{countryAlpha2}/na/na for country-only locations.
 	if fragmentType == models.FragmentTypeGeoRegion {
 		if norm := normalizeGeoPathToStrict(result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
+			atomic.AddInt64(&r.geoStrictified, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps,
 				fmt.Sprintf("geo_strictify: %s -> %s", result.CanonicalPath, norm))
 			result.CanonicalPath = norm
@@ -125,6 +152,7 @@ func (r *CanonicalPathResolver) Resolve(
 	// Keep our canonical schema (/loc/{cc}/{admin1}/{city}) but verify/correct admin1/country using GeoNames.
 	if fragmentType == models.FragmentTypeGeoRegion && r.geonamesClient != nil {
 		if norm, step, confPenalty := normalizeGeoPathViaGeoNames(ctx, result.CanonicalPath, r.geonamesClient); norm != "" && norm != result.CanonicalPath {
+			atomic.AddInt64(&r.geoNamesRewrites, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps, step)
 			result.CanonicalPath = norm
 			if confPenalty > 0 {
@@ -137,6 +165,7 @@ func (r *CanonicalPathResolver) Resolve(
 	// We only attempt to "upgrade" flat product paths; if we cannot confidently classify, we keep the original path.
 	if fragmentType == models.FragmentTypeProduct {
 		if norm := normalizeFlatProductPath(ctx, result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
+			atomic.AddInt64(&r.productTaxonomyRewrites, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps,
 				fmt.Sprintf("product_taxonomy: %s -> %s", result.CanonicalPath, norm))
 			result.CanonicalPath = norm
@@ -147,6 +176,7 @@ func (r *CanonicalPathResolver) Resolve(
 	if r.fragmentsRepo != nil {
 		existing, err := r.fragmentsRepo.GetByCanonicalPath(ctx, result.CanonicalPath)
 		if err == nil && existing != nil && existing.ID != "" {
+			atomic.AddInt64(&r.foundExistingByPath, 1)
 			result.ExistingFragment = existing
 			result.NormalizationSteps = append(result.NormalizationSteps,
 				fmt.Sprintf("found_existing_fragment: %s (id=%s)", result.CanonicalPath, existing.ID))
@@ -200,6 +230,7 @@ func (r *CanonicalPathResolver) Resolve(
 		deduplicated, err := r.orgDeduplicator.DeduplicateOrg(ctx, testFragment)
 		if err == nil && deduplicated != nil && deduplicated.ID != "" {
 			if deduplicated.CanonicalPath != result.CanonicalPath {
+				atomic.AddInt64(&r.orgDedupHits, 1)
 				result.NormalizationSteps = append(result.NormalizationSteps,
 					fmt.Sprintf("org_deduplication: %s -> %s (id=%s)", result.CanonicalPath, deduplicated.CanonicalPath, deduplicated.ID))
 				result.CanonicalPath = deduplicated.CanonicalPath
@@ -214,6 +245,7 @@ func (r *CanonicalPathResolver) Resolve(
 	if result.ExistingFragment == nil && r.fragmentsRepo != nil {
 		existing, err := r.fragmentsRepo.GetByCanonicalPath(ctx, result.CanonicalPath)
 		if err == nil && existing != nil && existing.ID != "" {
+			atomic.AddInt64(&r.foundExistingAfterDedup, 1)
 			result.ExistingFragment = existing
 			result.NormalizationSteps = append(result.NormalizationSteps,
 				fmt.Sprintf("found_existing_after_dedup: %s (id=%s)", result.CanonicalPath, existing.ID))
@@ -222,6 +254,23 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	return result, nil
+}
+
+// Stats returns a best-effort snapshot of in-memory counters.
+func (r *CanonicalPathResolver) Stats() CanonicalPathResolverStats {
+	if r == nil {
+		return CanonicalPathResolverStats{}
+	}
+	return CanonicalPathResolverStats{
+		ResolveCalls:               atomic.LoadInt64(&r.resolveCalls),
+		CanonizationPolicyRewrites: atomic.LoadInt64(&r.canonizationPolicyRewrites),
+		GeoStrictified:             atomic.LoadInt64(&r.geoStrictified),
+		GeoNamesRewrites:           atomic.LoadInt64(&r.geoNamesRewrites),
+		ProductTaxonomyRewrites:    atomic.LoadInt64(&r.productTaxonomyRewrites),
+		FoundExistingByPath:        atomic.LoadInt64(&r.foundExistingByPath),
+		OrgDedupHits:               atomic.LoadInt64(&r.orgDedupHits),
+		FoundExistingAfterDedup:    atomic.LoadInt64(&r.foundExistingAfterDedup),
+	}
 }
 
 // normalizeGeoPathViaGeoNames normalizes /loc paths using GeoNames (cache-first via the injected client).
@@ -683,6 +732,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	if inputPath == "" {
 		return nil, fmt.Errorf("input path is required")
 	}
+	atomic.AddInt64(&r.resolveCalls, 1)
 
 	result := &ResolveResult{
 		CanonicalPath:      inputPath,
@@ -703,6 +753,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 		if err == nil && decision.Action == "normalize_to" {
 			normalized, _ := decision.Params["output"].(string)
 			if normalized != "" && normalized != inputPath {
+				atomic.AddInt64(&r.canonizationPolicyRewrites, 1)
 				result.NormalizationSteps = append(result.NormalizationSteps,
 					fmt.Sprintf("canonization_policy: %s -> %s", inputPath, normalized))
 				result.CanonicalPath = normalized
@@ -739,6 +790,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 		deduplicated, err := r.orgDeduplicator.DeduplicateOrg(ctx, testFragment)
 		if err == nil && deduplicated != nil && deduplicated.ID != "" {
 			if deduplicated.CanonicalPath != result.CanonicalPath {
+				atomic.AddInt64(&r.orgDedupHits, 1)
 				result.NormalizationSteps = append(result.NormalizationSteps,
 					fmt.Sprintf("org_deduplication_with_metadata: %s -> %s (id=%s)", result.CanonicalPath, deduplicated.CanonicalPath, deduplicated.ID))
 				result.CanonicalPath = deduplicated.CanonicalPath
@@ -753,6 +805,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	if r.fragmentsRepo != nil {
 		existing, err := r.fragmentsRepo.GetByCanonicalPath(ctx, result.CanonicalPath)
 		if err == nil && existing != nil && existing.ID != "" {
+			atomic.AddInt64(&r.foundExistingByPath, 1)
 			result.ExistingFragment = existing
 			result.NormalizationSteps = append(result.NormalizationSteps,
 				fmt.Sprintf("found_existing_fragment: %s (id=%s)", result.CanonicalPath, existing.ID))

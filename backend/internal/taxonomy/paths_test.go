@@ -177,13 +177,23 @@ func TestValidateCanonicalPath(t *testing.T) {
 	}
 }
 
+func TestSlugify_BasicASCII(t *testing.T) {
+	if got := Slugify("Tesla, Inc."); got != "tesla-inc" {
+		t.Fatalf("Slugify(Tesla, Inc.) = %q, want %q", got, "tesla-inc")
+	}
+}
+
 func TestSlugify_TransliterationCyrillic(t *testing.T) {
-	got := Slugify("В казани поймут")
-	// Expected best-effort transliteration + slugging.
-	// Note: exact transliteration scheme is internal; update this test if mapping changes.
+	got := Slugify("В Казани поймут")
 	want := "v-kazani-poymut"
 	if got != want {
 		t.Fatalf("Slugify(cyrillic) = %q, want %q", got, want)
+	}
+}
+
+func TestJoinPath_UsesSlugify(t *testing.T) {
+	if got := JoinPath("media", "telegram", "В Казани поймут"); got != "/media/telegram/v-kazani-poymut" {
+		t.Fatalf("JoinPath(media, telegram, cyrillic) = %q, want %q", got, "/media/telegram/v-kazani-poymut")
 	}
 }
 

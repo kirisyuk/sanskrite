@@ -165,7 +165,8 @@ func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *mode
 
 	// Canonicalize certain mis-modeled edges where reversing is not sufficient.
 	// Example: PRODUCT OWNS ORGANIZATION should become ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
-	if newType, shouldSwap, changed, reason := scout.CanonicalizeEdge(edge.Type, srcFrag.Type, dstFrag.Type); changed {
+	// Use path-aware canonicalization to handle community subtypes (dynasty/tribe).
+	if newType, shouldSwap, changed, reason := scout.CanonicalizeEdgeWithPaths(edge.Type, srcFrag.Type, dstFrag.Type, srcFrag.CanonicalPath, dstFrag.CanonicalPath); changed {
 		oldType := edge.Type
 		edge.Type = newType
 		edge.Qualifiers["canonicalized"] = true

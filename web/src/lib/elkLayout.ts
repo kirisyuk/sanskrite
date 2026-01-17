@@ -93,6 +93,8 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'EXTRACTS_FROM': 2,
   // Market hierarchy (market skeleton)
   'HAS_SUBMARKET': 2,
+  // Community hierarchy (dynasty/tribe skeleton)
+  'HAS_SUBGROUP': 2,
 
   // 3) Market (peers)
   'COMPETES_WITH': 3,
@@ -105,6 +107,10 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   // Person-person social graph (peers)
   'RELATED_TO': 3,
   'RELATIVE_OF': 3,
+  // Community relationships
+  'MEMBER_OF': 3,
+  'AFFILIATED_WITH': 3,
+  'OPERATES_VIA': 2,
 
   // 4) Regulation / influence
   'REGULATES': 4,
@@ -379,6 +385,16 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     // - Government admin hierarchy: treat as operating context (right).
     case 'ADMINISTERS':
       return 'context';
+    
+    // Community relationships
+    case 'OPERATES_VIA':
+      return 'context';  // channels used by community
+    case 'MEMBER_OF':
+      return isOutgoing ? 'context' : 'supply-chain';  // person is member of community
+    case 'AFFILIATED_WITH':
+      return 'context';  // affiliation with formal org
+    case 'HAS_SUBGROUP':
+      return isOutgoing ? 'market' : 'context';  // community hierarchy (like HAS_SUBMARKET)
 
     // Supply Chain vs Customers depends on direction
     case 'SUPPLIES_TO':
@@ -465,10 +481,10 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     return isLeft ? 'top-left' : 'top-right';
   }
 
-  // Special case: HAS_SUBMARKET should be purely horizontal.
+  // Special case: HAS_SUBMARKET / HAS_SUBGROUP should be purely horizontal.
   // - outgoing (parent -> child) => child LEFT
   // - incoming (parent -> child) => parent RIGHT
-  if (t === 'HAS_SUBMARKET') {
+  if (t === 'HAS_SUBMARKET' || t === 'HAS_SUBGROUP') {
     return isOutgoing ? 'top-left' : 'top-right';
   }
 
@@ -519,6 +535,11 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'REGULATES',
     // Gov skeleton hierarchy
     'ADMINISTERS',
+    // Community relationships
+    'OPERATES_VIA',
+    'MEMBER_OF',
+    'AFFILIATED_WITH',
+    'HAS_SUBGROUP',
     // Influence (in/out)
     'INFLUENCES',
     'AFFECTS',
@@ -1094,6 +1115,8 @@ export async function layoutLevelsTwoPane<T = any>(
     if (t === 'DOMINATES') return 260;
     // Market hierarchy (parent -> submarket): strong structural signal.
     if (t === 'HAS_SUBMARKET') return 240;
+    // Community hierarchy (dynasty/tribe): strong structural signal.
+    if (t === 'HAS_SUBGROUP') return 240;
     if (GOVERNANCE_CONTROL_TYPES.has(t)) return 220;
     if (SUPPLY_CHAIN_TYPES.has(t)) return 120;
     if (INFLUENCE_TYPES.has(t)) return 40;
@@ -1466,6 +1489,8 @@ export async function layoutLevelsTwoPane<T = any>(
       // Business Interests
       'ORGANIZATION': 'Business Interests',
       'MEDIA_CHANNEL': 'Business Interests',
+      // Communities & Networks
+      'COMMUNITY': 'Communities & Networks',
       // Key People
       'PERSON': 'Key People',
       // Geographic Presence
@@ -1502,6 +1527,7 @@ export async function layoutLevelsTwoPane<T = any>(
     if (tt === 'ORGANIZATION') return 110;
     if (tt === 'PERSON') return 120;
     if (tt === 'MEDIA_CHANNEL') return 130;
+    if (tt === 'COMMUNITY') return 140;
     // "Places / assets"
     if (tt === 'FACILITY') return 210;
     if (tt === 'DEPOSIT') return 215;
@@ -1585,6 +1611,18 @@ export async function layoutLevelsTwoPane<T = any>(
       INFLUENCES: 'Influences',
       AFFECTS: 'Affects',
       IMPACTS: 'Impacts',
+      // Market / hierarchy
+      PARTICIPATES_IN: 'Participates',
+      DOMINATES: 'Dominates',
+      HAS_SUBMARKET: 'Submarket',
+      HAS_SUBGROUP: 'Subgroup',
+      ADMINISTERS: 'Administers',
+      // Community relationships
+      OPERATES_VIA: 'Via',
+      MEMBER_OF: 'Member',
+      AFFILIATED_WITH: 'Affiliated',
+      // Extractive
+      EXTRACTS_FROM: 'Extracts',
     };
     if (MAP[t]) return MAP[t]!;
     const human = t
@@ -1952,6 +1990,11 @@ export async function layoutLevelsTwoPane<T = any>(
   // IMPORTANT: stacks must be computed before group packing & barycentric sweeps, otherwise hidden stack members
   // keep reserving vertical space and make groups appear "too low" / non-contiguous.
   const STACK_MIN = 2;
+  // Stack group layout constants (used for spacing + container size)
+  const STACK_GROUP_PAD_X = 8;
+  const STACK_GROUP_PAD_TOP = 44; // room for header with collapse button
+  const STACK_GROUP_PAD_BOTTOM = 8;
+  const stackGroupGapY = 22;
   const expandedStackKeys = new Set<string>();
   for (const n of fragments) {
     const d: any = n.data;
@@ -1961,6 +2004,9 @@ export async function layoutLevelsTwoPane<T = any>(
   }
 
   const stackHiddenIds = new Set<string>();
+  const expandedStackMemberIds = new Set<string>();
+  const expandedStackMembersByKey = new Map<string, string[]>();
+  const stackExpandedHeights = new Map<string, number>(); // controllerId -> group height
   const stackMetaById = new Map<
     string,
     { key: string; count: number; expanded: boolean; title: string; subtitle: string; kind: string; visualType: string }
@@ -1979,6 +2025,7 @@ export async function layoutLevelsTwoPane<T = any>(
   const GEO_TYPES = new Set(['GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY']);
   const SUPPLY_EDGE_TYPES = new Set(['SUPPLIES_TO', 'PRODUCES']);
   const DEPENDENCY_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
+  const DOMINATES_EDGE_TYPES = new Set(['DOMINATES']);
   const stackKindOfRightNode = (id: string, relatedId?: string): { kind: string; title: string; visualType: string } | null => {
     const node = fragments.find((x) => x.id === id);
     const d: any = (node as any)?.data;
@@ -2004,6 +2051,21 @@ export async function layoutLevelsTwoPane<T = any>(
         const hasOutgoingDependency = dset ? Array.from(dset).some((x) => DEPENDENCY_EDGE_TYPES.has(normalizeEdgeType(x))) : false;
         if (hasOutgoingDependency) {
           return { kind: 'dependencies', title: 'Dependencies', visualType: 'DEPENDENCY' };
+        }
+      }
+    }
+
+    const isMarketType = (t: string) => t === 'MARKET' || t.startsWith('MARKET_');
+    const isOrgType = (t: string) => t === 'ORGANIZATION' || t === 'COMPANY' || t === 'ORG';
+
+    // Dominates: orgs that dominate a market (stack those orgs together).
+    if (relatedId && pairTypes && pairTypes.size > 0) {
+      const hasDominates = Array.from(pairTypes).some((x) => DOMINATES_EDGE_TYPES.has(normalizeEdgeType(x)));
+      if (hasDominates && isOrgType(tk)) {
+        const rel = fragments.find((x) => x.id === relatedId);
+        const relType = normalizeFragmentType(String((rel as any)?.data?.type || '').trim());
+        if (relType && isMarketType(relType)) {
+          return { kind: 'dominates', title: 'Dominates', visualType: 'ORGANIZATION' };
         }
       }
     }
@@ -2104,6 +2166,62 @@ export async function layoutLevelsTwoPane<T = any>(
     return true;
   };
 
+  const isStackEligibleRightNodeRelaxed = (id: string, allowPinned: boolean) => {
+    if (!id) return false;
+    if (!rightIds.has(id)) return false;
+    const leftKids = downstreamByRight.get(id);
+    if (leftKids && leftKids.length > 0) return false;
+    const node = fragments.find((x) => x.id === id);
+    const d: any = node?.data;
+    if (!allowPinned && d?.pinnedToScope) return false;
+    if (d?.expanded) return false;
+    return true;
+  };
+
+  const parseStackKey = (key: string): { mode: 'rightstack' | 'rightstackp'; pivotId: string; level: number; kind: string } | null => {
+    const parts = String(key || '').split(':');
+    if (parts.length < 5) return null;
+    if (parts[0] !== 'levels') return null;
+    const mode = parts[1] === 'rightstack' ? 'rightstack' : (parts[1] === 'rightstackp' ? 'rightstackp' : null);
+    if (!mode) return null;
+    const pivotId = String(parts[2] || '').trim();
+    const level = parseInt(String(parts[3] || '0'), 10);
+    const kind = String(parts.slice(4).join(':') || '').trim();
+    if (!pivotId || Number.isNaN(level) || !kind) return null;
+    return { mode, pivotId, level, kind };
+  };
+
+  const buildExpandedMembersForKey = (key: string, ordered: string[], metaKind: string): string[] => {
+    const parsed = parseStackKey(key);
+    if (!parsed) return ordered;
+    const { mode, pivotId, level, kind } = parsed;
+    if (kind !== metaKind) return ordered;
+    const baseList = mode === 'rightstack'
+      ? Array.from(childrenOf.get(pivotId) || [])
+      : Array.from(parentsOf.get(pivotId) || []);
+    const candidateIds = baseList.filter((id) => rightIds.has(id) && (hLevel.get(id) || 0) === level);
+    const out = new Set<string>();
+    for (const id of ordered) out.add(id);
+    for (const id of candidateIds) {
+      const mk = stackKindOfRightNode(id, pivotId);
+      if (!mk || mk.kind !== metaKind) continue;
+      if (mode === 'rightstack') {
+        const rightKids = childrenOf.get(id);
+        if (rightKids && rightKids.size > 0) continue;
+      }
+      if (!isStackEligibleRightNodeRelaxed(id, true)) continue;
+      out.add(id);
+    }
+    const list = Array.from(out);
+    return list.sort((a, b) => {
+      const pa = rightPos.get(a);
+      const pb = rightPos.get(b);
+      const ya = (pa?.y ?? 0) + nodeHeight / 2;
+      const yb = (pb?.y ?? 0) + nodeHeight / 2;
+      return ya - yb;
+    });
+  };
+
   // Build candidate groups by (parentId, childLevel)
   for (const [parentId, kidsSet] of childrenOf.entries()) {
     const kids = Array.from(kidsSet || []).filter((id) => rightIds.has(id));
@@ -2163,7 +2281,14 @@ export async function layoutLevelsTwoPane<T = any>(
           if (!stackKeyByMemberId.has(id)) stackKeyByMemberId.set(id, key);
           if (!stackControllerByMemberId.has(id)) stackControllerByMemberId.set(id, controllerId);
         }
-        if (!expanded) {
+        if (expanded) {
+          const expandedMembers = buildExpandedMembersForKey(key, ordered, meta.kind);
+          expandedStackMembersByKey.set(key, expandedMembers);
+          for (const id of expandedMembers) expandedStackMemberIds.add(id);
+          const count = expandedMembers.length;
+          const groupH = (count * nodeHeight) + Math.max(0, count - 1) * stackGroupGapY + STACK_GROUP_PAD_TOP + STACK_GROUP_PAD_BOTTOM;
+          stackExpandedHeights.set(controllerId, groupH);
+        } else {
           for (const id of ordered) {
             if (id === controllerId) continue;
             stackHiddenIds.add(id);
@@ -2229,7 +2354,14 @@ export async function layoutLevelsTwoPane<T = any>(
           if (!stackKeyByMemberId.has(id)) stackKeyByMemberId.set(id, key);
           if (!stackControllerByMemberId.has(id)) stackControllerByMemberId.set(id, controllerId);
         }
-        if (!expanded) {
+        if (expanded) {
+          const expandedMembers = buildExpandedMembersForKey(key, ordered, meta.kind);
+          expandedStackMembersByKey.set(key, expandedMembers);
+          for (const id of expandedMembers) expandedStackMemberIds.add(id);
+          const count = expandedMembers.length;
+          const groupH = (count * nodeHeight) + Math.max(0, count - 1) * stackGroupGapY + STACK_GROUP_PAD_TOP + STACK_GROUP_PAD_BOTTOM;
+          stackExpandedHeights.set(controllerId, groupH);
+        } else {
           for (const id of ordered) {
             if (id === controllerId) continue;
             // Do not hide if it is already a controller for some stack (keeps a single visible toggle per stack).
@@ -2241,11 +2373,19 @@ export async function layoutLevelsTwoPane<T = any>(
     }
   }
 
+  // Snapshot positions before repack so we can preserve vertical centering.
+  const rightPosBeforeRepack = new Map(rightPos);
+
   // Re-pack levels that contain hidden stack members so they don't reserve empty vertical space.
   for (const [lv, ids] of idsByLevel.entries()) {
     const hasHidden = ids.some((id) => stackHiddenIds.has(id));
-    if (!hasHidden) continue;
-    const visible = ids.filter((id) => !stackHiddenIds.has(id) && !preHiddenIds.has(id));
+    const hasExpanded = ids.some((id) => stackExpandedHeights.has(id));
+    if (!hasHidden && !hasExpanded) continue;
+    const visible = ids.filter((id) =>
+      !stackHiddenIds.has(id) &&
+      !preHiddenIds.has(id) &&
+      (!expandedStackMemberIds.has(id) || stackExpandedHeights.has(id)),
+    );
     if (visible.length <= 1) continue;
     const gapY = rightGapY(lv);
     const sortByY = (list: string[]) =>
@@ -2267,12 +2407,60 @@ export async function layoutLevelsTwoPane<T = any>(
     const nonStack = visible.filter((id) => !isCollapsedStackController(id));
     const stacks = visible.filter((id) => isCollapsedStackController(id));
     const ordered = [...sortByY(nonStack), ...sortByY(stacks)];
-    // Reclaim space from hidden nodes ABOVE: start from the top-most position among all ids in this level.
-    const top0 = Math.min(...ids.map((id) => rightPos.get(id)?.y ?? 0));
-    let cursor = top0;
+    // Preserve vertical centers as much as possible while preventing overlaps.
+    const desiredTops = ordered.map((id) => {
+      const base = rightPosBeforeRepack.get(id) || rightPos.get(id);
+      const h = stackExpandedHeights.get(id) || nodeHeight;
+      const center = (base?.y ?? 0) + nodeHeight / 2;
+      return center - h / 2;
+    });
+    let cursor = desiredTops.length > 0 ? Math.min(...desiredTops) : 0;
     for (const id of ordered) {
-      rightPos.set(id, { x: rightPos.get(id)?.x ?? (RIGHT_BASE_X + lv * RIGHT_LEVEL_STEP_X), y: cursor });
-      cursor += nodeHeight + gapY;
+      const base = rightPosBeforeRepack.get(id) || rightPos.get(id);
+      const h = stackExpandedHeights.get(id) || nodeHeight;
+      const center = (base?.y ?? 0) + nodeHeight / 2;
+      const desiredTop = center - h / 2;
+      const top = Math.max(desiredTop, cursor);
+      rightPos.set(id, { x: rightPos.get(id)?.x ?? (RIGHT_BASE_X + lv * RIGHT_LEVEL_STEP_X), y: top });
+      cursor = top + h + gapY;
+    }
+  }
+
+  // === 5.85) Center right column relative to pivot (level 0) node ===
+  // After repack, recalculate the bounding box of the right column and center it
+  // relative to the pivot node's vertical center.
+  const level0Ids = idsByLevel.get(0) || [];
+  if (level0Ids.length > 0 && rightSorted.length > level0Ids.length) {
+    // Find the pivot node (level 0) center
+    const pivotId = level0Ids[0]!;
+    const pivotPos = rightPos.get(pivotId);
+    const pivotCenterY = pivotPos ? pivotPos.y + nodeHeight / 2 : 0;
+
+    // Calculate current bounding box of all non-level-0 right nodes
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const rn of rightSorted) {
+      const lv = hLevel.get(rn.id) || 0;
+      if (lv === 0) continue; // Skip pivot itself
+      const p = rightPos.get(rn.id);
+      if (!p) continue;
+      const h = stackExpandedHeights.get(rn.id) || (unitHeights.get(rn.id) || nodeHeight);
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y + h);
+    }
+
+    if (minY < Infinity && maxY > -Infinity) {
+      const currentCenterY = (minY + maxY) / 2;
+      const shiftY = pivotCenterY - currentCenterY;
+
+      // Apply shift to all non-level-0 nodes
+      for (const rn of rightSorted) {
+        const lv = hLevel.get(rn.id) || 0;
+        if (lv === 0) continue;
+        const p = rightPos.get(rn.id);
+        if (!p) continue;
+        rightPos.set(rn.id, { x: p.x, y: p.y + shiftY });
+      }
     }
   }
 
@@ -2680,14 +2868,17 @@ export async function layoutLevelsTwoPane<T = any>(
       const yTop = Math.max(airTop, PAD_TOP + 18);
       const yBot = Math.min(g.h - Math.max(airBottom, PAD_BOTTOM_BASE + 18), Math.floor(g.h * 0.75));
       const yHi = Math.max(yTop, yBot);
+      // Attach ports to central 50% of the edge.
+      const midStart = yTop;
+      const midEnd = yHi;
       return types.map((et, idx) => {
         const edgeType = normalizeEdgeType(et);
         const targetHandleId = `edge:${edgeType}:target`;
         const sourceHandleId = `edge:${edgeType}:source`;
         const yCenter =
           count <= 1
-            ? Math.round((yTop + yHi) / 2)
-            : Math.round(yTop + (idx * (yHi - yTop)) / Math.max(1, count - 1));
+            ? Math.round((midStart + midEnd) / 2)
+            : Math.round(midStart + (idx * (midEnd - midStart)) / Math.max(1, count - 1));
         const y = Math.max(0, Math.min(g.h - 10, yCenter - 5)); // handle is 10px tall
         return { edgeType, targetHandleId, sourceHandleId, y };
       });
@@ -2849,6 +3040,230 @@ export async function layoutLevelsTwoPane<T = any>(
 
   // NOTE: right-side stacking is computed before groups (see 5.75). Keeping it earlier prevents
   // hidden stack members from reserving vertical space and pushing packed groups downward.
+
+  // === 6.5) Create group containers for EXPANDED right-side stacks ===
+  // When a stack is expanded, wrap its members in a visible group container with a collapse button.
+  for (const [stackKey, memberIds] of stackMembersByKey.entries()) {
+    // Find the controller meta for this stack
+    const controllerEntry = [...stackMetaById.entries()].find(([, m]) => m.key === stackKey);
+    if (!controllerEntry) continue;
+    const [controllerId, meta] = controllerEntry;
+
+    // Only create groups for EXPANDED stacks
+    if (!meta.expanded) continue;
+
+    // Get the ordered list of visible members
+    const orderedMembers = [...memberIds].sort((a, b) => {
+      const pa = rightPos.get(a);
+      const pb = rightPos.get(b);
+      const ya = (pa?.y ?? 0);
+      const yb = (pb?.y ?? 0);
+      return ya - yb;
+    });
+
+    if (orderedMembers.length === 0) continue;
+
+    // Ensure stack members match the intended stack kind (by relation type).
+    const relatedId = (() => {
+      const parts = String(stackKey || '').split(':');
+      if (parts.length < 5) return '';
+      if (parts[0] === 'levels' && parts[1] === 'rightstack') return String(parts[2] || '').trim();
+      if (parts[0] === 'levels' && parts[1] === 'rightstackp') return String(parts[2] || '').trim();
+      return '';
+    })();
+    const expandedMembers = expandedStackMembersByKey.get(stackKey);
+    const filteredMembers = expandedMembers || (relatedId
+      ? orderedMembers.filter((id) => {
+          const mk = stackKindOfRightNode(id, relatedId);
+          return Boolean(mk && mk.kind === meta.kind);
+        })
+      : orderedMembers);
+    if (filteredMembers.length === 0) continue;
+
+    // Controller position becomes the group anchor
+    const controllerPos = rightPos.get(controllerId);
+    if (!controllerPos) continue;
+
+    // Calculate group dimensions (vertical layout)
+    const count = filteredMembers.length;
+    const innerH = count * nodeHeight + Math.max(0, count - 1) * stackGroupGapY;
+    const groupW = nodeWidth + STACK_GROUP_PAD_X * 2;
+    const groupH = innerH + STACK_GROUP_PAD_TOP + STACK_GROUP_PAD_BOTTOM;
+
+    // Find the parent (pivot) node position to center the group relative to it
+    const pivotId = relatedId || '';
+    const pivotPos = pivotId ? rightPos.get(pivotId) : null;
+    const pivotCenterY = pivotPos
+      ? pivotPos.y + nodeHeight / 2
+      : controllerPos.y + nodeHeight / 2;
+
+    // Position group so its vertical center aligns with the pivot node's center
+    const groupX = controllerPos.x - STACK_GROUP_PAD_X;
+    const groupY = pivotCenterY - groupH / 2;
+
+    const stackGroupId = `stack:group:${stackKey}`;
+
+    // Collect unique edge types from all members for handle ports
+    const memberEdgeTypes = new Set<string>();
+    for (const mid of filteredMembers) {
+      const mnode = nodeById.get(mid);
+      const md: any = (mnode as any)?.data || {};
+      const et = normalizeEdgeType(String(md?.edgeTypeFromParent || '').trim());
+      if (et && et !== 'OTHER') memberEdgeTypes.add(et);
+    }
+    const edgeTypesArr = Array.from(memberEdgeTypes);
+
+    // Build edge ports for the group (left side, since stack groups are on right pane)
+    const stackGroupEdgePorts = edgeTypesArr.map((et, idx) => {
+      const innerSpan = Math.max(0, groupH - STACK_GROUP_PAD_TOP - STACK_GROUP_PAD_BOTTOM);
+      const midStart = STACK_GROUP_PAD_TOP + innerSpan * 0.35;
+      const midEnd = STACK_GROUP_PAD_TOP + innerSpan * 0.65;
+      const yCenter = edgeTypesArr.length <= 1
+        ? Math.floor((midStart + midEnd) / 2)
+        : Math.floor(midStart + (idx * (midEnd - midStart)) / Math.max(1, edgeTypesArr.length - 1));
+      return {
+        edgeType: et,
+        targetHandleId: `edge:${et}:target`,
+        sourceHandleId: `edge:${et}:source`,
+        y: yCenter,
+      };
+    });
+
+    // Create the group node
+    groupNodes.push({
+      id: stackGroupId,
+      type: 'horizonGroup' as any,
+      position: { x: groupX, y: groupY },
+      selectable: true,
+      draggable: true,
+      connectable: false,
+      focusable: false,
+      deletable: false,
+      style: { width: groupW, height: groupH, zIndex: 5 } as any,
+      data: {
+        isGroup: true,
+        groupIsBackdrop: false,
+        groupInteractive: true,
+        groupHideHeader: false,
+        groupNoFill: false,
+        groupTitle: meta.title,
+        groupCount: count,
+        groupEdgeTypes: edgeTypesArr,
+        groupEdgePorts: stackGroupEdgePorts,
+        groupAllChildIds: filteredMembers,
+        // Stack group specific fields
+        isStackGroup: true,
+        stackGroupKey: stackKey,
+        stackGroupExpanded: true,
+        // Callback will be attached in LensCanvasCockpit
+      } as any,
+    } as any);
+
+    // Attach children as a vertical list inside the group
+    for (let idx = 0; idx < filteredMembers.length; idx++) {
+      const memberId = filteredMembers[idx]!;
+      const member = nodeById.get(memberId);
+      if (!member) continue;
+
+      const cx = STACK_GROUP_PAD_X;
+      const cy = STACK_GROUP_PAD_TOP + idx * (nodeHeight + stackGroupGapY);
+
+      // Mark as grouped so it doesn't render as standalone
+      groupedChildIds.add(memberId);
+
+      // Clear stale stack fields from member data
+      const d0: any = (member as any)?.data || {};
+      const d: any = { ...d0 };
+      delete d.stackGroupKey;
+      delete d.stackCount;
+      delete d.stackExpanded;
+      delete d.hiddenByStack;
+      delete (d as any).stackControllerId;
+      d.levelsPane = 'right';
+      d.insideStackGroup = true;
+      d.parentStackGroupKey = stackKey;
+
+      childNodes.push({
+        ...(member as any),
+        parentId: stackGroupId,
+        extent: 'parent' as any,
+        zIndex: 1,
+        hidden: preHiddenIds.has(memberId),
+        position: { x: cx, y: cy },
+        data: d,
+      } as any);
+    }
+  }
+
+  // === 6.6) Resolve overlaps between stack groups and other nodes in same column ===
+  // After creating stack groups, ensure no standalone nodes overlap with them.
+  const stackGroupPositions = new Map<string, { x: number; y: number; w: number; h: number; level: number }>();
+  for (const gn of groupNodes) {
+    const gid = String(gn.id || '').trim();
+    if (!gid.startsWith('stack:group:')) continue;
+    const gd: any = gn.data || {};
+    const stackKey = String(gd?.stackGroupKey || '').trim();
+    // Find the controller to get the level
+    const controllerEntry = [...stackMetaById.entries()].find(([, m]) => m.key === stackKey);
+    if (!controllerEntry) continue;
+    const [controllerId] = controllerEntry;
+    const lv = hLevel.get(controllerId) || 0;
+    const pos = gn.position || { x: 0, y: 0 };
+    const style: any = gn.style || {};
+    stackGroupPositions.set(gid, {
+      x: pos.x,
+      y: pos.y,
+      w: style.width || (nodeWidth + STACK_GROUP_PAD_X * 2),
+      h: style.height || nodeHeight,
+      level: lv,
+    });
+  }
+
+  // For each level with a stack group, repack non-grouped nodes to avoid overlap
+  const levelToStackGroups = new Map<number, Array<{ id: string; y: number; h: number }>>();
+  for (const [gid, gpos] of stackGroupPositions.entries()) {
+    const arr = levelToStackGroups.get(gpos.level) || [];
+    arr.push({ id: gid, y: gpos.y, h: gpos.h });
+    levelToStackGroups.set(gpos.level, arr);
+  }
+
+  for (const [lv, stackGroups] of levelToStackGroups.entries()) {
+    if (stackGroups.length === 0) continue;
+    const ids = idsByLevel.get(lv) || [];
+    // Get non-grouped nodes at this level
+    const standaloneIds = ids.filter((id) =>
+      !groupedChildIds.has(id) &&
+      !stackHiddenIds.has(id) &&
+      !preHiddenIds.has(id) &&
+      !stackMetaById.has(id) // Not a controller (controllers become groups)
+    );
+    if (standaloneIds.length === 0) continue;
+
+    // Sort stack groups by Y
+    const sortedGroups = [...stackGroups].sort((a, b) => a.y - b.y);
+
+    // For each standalone node, check if it overlaps with any group
+    for (const nodeId of standaloneIds) {
+      const nodePos = rightPos.get(nodeId);
+      if (!nodePos) continue;
+      const nodeH = unitHeights.get(nodeId) || nodeHeight;
+      const nodeTop = nodePos.y;
+      const nodeBottom = nodeTop + nodeH;
+
+      // Check overlap with each group
+      for (const grp of sortedGroups) {
+        const grpTop = grp.y;
+        const grpBottom = grp.y + grp.h;
+
+        // If node overlaps with group, move it below the group
+        if (nodeBottom > grpTop && nodeTop < grpBottom) {
+          const newY = grpBottom + rightGapY(lv);
+          rightPos.set(nodeId, { x: nodePos.x, y: newY });
+          break; // Only move once
+        }
+      }
+    }
+  }
 
   // === 7) Dock remaining nodes (islands) ===
   // In Levels mode with edge-type filters, the graph can be disconnected. Keep islands visible.

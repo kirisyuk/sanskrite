@@ -81,6 +81,30 @@ type HorizonFragment struct {
 	// This enables administrative hierarchy traversal (superior → subordinate bodies).
 	ParentGovPath string `json:"parentGovPath,omitempty" firestore:"parentGovPath,omitempty"`
 
+	// --- COMMUNITY-specific (when Type == COMMUNITY) ---
+	// CommunityType classifies the nature of the informal community.
+	// Canonical values: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
+	// - trade: commercial networks without formal structure (hawala, informal trade networks)
+	// - activist: political/social activist groups
+	// - professional: professional communities without legal entity (OSINT researchers, open-source maintainers)
+	// - criminal: criminal networks and organizations
+	// - religious: religious communities and congregations
+	// - ethnic: diaspora and ethnic communities
+	// - interest: hobby/interest-based communities
+	// - dynasty: influential families acting as unified actors (political dynasties, business families, royal houses)
+	// - tribe: tribal/clan structures with identified leadership (Middle Eastern tribes, Central Asian zhuz, etc.)
+	CommunityType string `json:"communityType,omitempty" firestore:"communityType,omitempty"`
+	// CommunityPlatforms lists primary platforms/channels used by the community.
+	// These are canonical paths to MEDIA_CHANNEL fragments.
+	// Example: ["/media/telegram/kazan-zakaz", "/media/telegram/kazan-deals"]
+	CommunityPlatforms []string `json:"communityPlatforms,omitempty" firestore:"communityPlatforms,omitempty"`
+	// CommunityEstimatedSize is a rough estimate of community size (number of members).
+	// Use ranges: "small" (<100), "medium" (100-1000), "large" (1000-10000), "massive" (>10000), or "unknown".
+	CommunityEstimatedSize string `json:"communityEstimatedSize,omitempty" firestore:"communityEstimatedSize,omitempty"`
+	// AffiliatedOrgPath is the canonical path of a formal organization the community is affiliated with (if any).
+	// Example: /community/ae/trade/hawala-dubai might be affiliated with /org/ae/exchange-house-xyz
+	AffiliatedOrgPath string `json:"affiliatedOrgPath,omitempty" firestore:"affiliatedOrgPath,omitempty"`
+
 	// IndexPaths — денормализованные "координаты" фрагмента для детерминированного картографирования/фильтрации.
 	// Собирается из canonicalPath + (sectorPath/entityPath + ancestors) + location + tags + identifiers + (optional spheres).
 	// Ограничено по размеру (см. BuildIndexPaths/NormalizeIndexPaths).
@@ -261,6 +285,65 @@ func (f *HorizonFragment) Validate() error {
 		f.ParentGovPath = strings.TrimSpace(f.ParentGovPath)
 		if f.ParentGovPath != "" && !strings.HasPrefix(f.ParentGovPath, "/gov/") {
 			f.ParentGovPath = "" // invalid parent path, clear it
+		}
+	}
+
+	// Best-effort: normalize COMMUNITY-specific fields (when Type == COMMUNITY).
+	if f.Type == FragmentTypeCommunity {
+		// Normalize communityType to lowercase.
+		f.CommunityType = strings.ToLower(strings.TrimSpace(f.CommunityType))
+		// Validate communityType against allowed values (best-effort, non-blocking).
+		allowedCommunityTypes := map[string]struct{}{
+			"trade": {}, "activist": {}, "professional": {}, "criminal": {},
+			"religious": {}, "ethnic": {}, "interest": {}, "dynasty": {}, "tribe": {},
+		}
+		if _, ok := allowedCommunityTypes[f.CommunityType]; !ok && f.CommunityType != "" {
+			// Unknown communityType - keep it but don't block (best-effort).
+		}
+		// Normalize communityEstimatedSize to lowercase.
+		f.CommunityEstimatedSize = strings.ToLower(strings.TrimSpace(f.CommunityEstimatedSize))
+		// Validate against allowed values.
+		allowedSizes := map[string]struct{}{
+			"small": {}, "medium": {}, "large": {}, "massive": {}, "unknown": {},
+		}
+		if _, ok := allowedSizes[f.CommunityEstimatedSize]; !ok && f.CommunityEstimatedSize != "" {
+			f.CommunityEstimatedSize = "unknown"
+		}
+		// Normalize affiliated org path.
+		f.AffiliatedOrgPath = strings.TrimSpace(f.AffiliatedOrgPath)
+		if f.AffiliatedOrgPath != "" && !strings.HasPrefix(f.AffiliatedOrgPath, "/org/") {
+			f.AffiliatedOrgPath = "" // invalid org path, clear it
+		}
+		// Dedupe and normalize community platforms (media channel paths).
+		if len(f.CommunityPlatforms) > 0 {
+			seen := map[string]struct{}{}
+			out := make([]string, 0, len(f.CommunityPlatforms))
+			for _, p := range f.CommunityPlatforms {
+				p = strings.TrimSpace(p)
+				if p == "" || !strings.HasPrefix(p, "/media/") {
+					continue
+				}
+				if _, ok := seen[p]; ok {
+					continue
+				}
+				seen[p] = struct{}{}
+				out = append(out, p)
+			}
+			f.CommunityPlatforms = out
+		}
+
+		// Validate canonical path format: /community/{geo}/{type}/{slug}
+		cp := strings.TrimSpace(f.CanonicalPath)
+		if strings.HasPrefix(cp, "/community/") {
+			parts := strings.Split(strings.Trim(cp, "/"), "/")
+			// community/{geo}/{type}/{slug} = 4 parts
+			if len(parts) == 4 {
+				// Normalize geo to lowercase
+				parts[1] = strings.ToLower(parts[1])
+				// Normalize type to lowercase
+				parts[2] = strings.ToLower(parts[2])
+				f.CanonicalPath = "/" + strings.Join(parts, "/")
+			}
 		}
 	}
 

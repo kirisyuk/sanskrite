@@ -40,6 +40,7 @@ var (
 	tenantID           = flag.String("tenant", "global", "Tenant ID (default: global)")
 	verbose            = flag.Bool("verbose", false, "Verbose logging")
 	typeFilter         = flag.String("type", "", "Filter by fragment type (GEO_REGION, ORGANIZATION, FACILITY, etc.)")
+	maxFragments       = flag.Int("max-fragments", 0, "Stop after loading this many fragments (0 = no limit)")
 	unionClusters      = flag.Bool("union-clusters", true, "Build transitive clusters via union-find across signals (recommended; helps catch chain duplicates). Set false to skip aliasPath-based transitive clustering.")
 	skipVertexSync     = flag.Bool("skip-vertex-sync", false, "Skip Vertex AI Search sync (faster, run bulk sync separately)")
 	skipEdgePass       = flag.Bool("skip-edge-pass", false, "Skip global edge direction fix + symmetric normalization + edge dedup pass (safer for targeted fragment-only dedup runs)")
@@ -287,6 +288,9 @@ func main() {
 	log.Printf("project=%s tenant=%s apply=%v typeFilter=%q", *projectID, *tenantID, *apply, *typeFilter)
 	if strings.TrimSpace(*startAfterDocID) != "" {
 		log.Printf("resume cursor: start-after=%s", strings.TrimSpace(*startAfterDocID))
+	}
+	if *maxFragments > 0 {
+		log.Printf("max-fragments: %d", *maxFragments)
 	}
 	log.Printf("pagination: page-size=%d page-timeout-s=%d", *pageSize, *pageTimeoutSec)
 
@@ -1648,6 +1652,11 @@ func loadAllFragments(ctx context.Context, db *firestore.Client, tenantID, typeF
 
 			if count%1000 == 0 {
 				log.Printf("  ... loaded %d fragments", count)
+			}
+			if *maxFragments > 0 && count >= *maxFragments {
+				globalLastSeen.Store(lastSeen)
+				log.Printf("  ... reached max-fragments=%d, stopping early (resume cursor: start-after=%s)", *maxFragments, lastSeen)
+				return fragments, nil
 			}
 		}
 
@@ -3288,11 +3297,12 @@ func isSpecificProductAliasKey(aliasKey string) bool {
 
 // normalizePhoneticKey normalizes Arabic/transliterated names for phonetic matching.
 // Handles common transliteration variations:
-//   - ou/oo/u → o (Tahnoun/Tahnoon/Tahnun → tahno...)
-//   - ee/i/y → i (Mohammed/Muhammad → mohamid)
+//   - ou/oo/uu/u → o (Tahnoun/Tahnoon/Tahnun → tahno...)
+//   - ee/e/i/y → i (Mohammed/Muhammad → mohamid, Yasser/Yasir → yasir)
 //   - kh → h (Khalid → halid)
 //   - doubled consonants → single (Mohammed → mohamed)
 //   - removes non-letter characters
+//   - removes common Arabic particles (al/el/bin/bint/ibn/ben/abu/banu) when enough tokens remain
 //
 // Example:
 //
@@ -3308,10 +3318,17 @@ func normalizePhoneticKey(name string) string {
 	replacements := []struct{ from, to string }{
 		{"oo", "o"},
 		{"ou", "o"},
+		{"uu", "o"},
 		{"ee", "i"},
+		{"ie", "i"},
+		{"ei", "i"},
+		{"y", "i"},
+		{"e", "i"},
+		{"u", "o"},
 		{"kh", "h"},
 		{"ph", "f"},
 		{"qu", "k"},
+		{"aa", "a"},
 	}
 	for _, r := range replacements {
 		name = strings.ReplaceAll(name, r.from, r.to)
@@ -3339,8 +3356,24 @@ func normalizePhoneticKey(name string) string {
 	result := strings.TrimSpace(b.String())
 
 	// Safety: require at least 3 tokens to avoid overly generic matches
-	if len(strings.Fields(result)) < 3 {
+	tokens := strings.Fields(result)
+	if len(tokens) < 3 {
 		return ""
+	}
+
+	// Step 3: Remove common Arabic particles if we still have >=3 tokens
+	particles := map[string]struct{}{
+		"al": {}, "el": {}, "bin": {}, "bint": {}, "ibn": {}, "ben": {}, "abu": {}, "banu": {},
+	}
+	filtered := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		if _, ok := particles[t]; ok {
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	if len(filtered) >= 3 {
+		return strings.Join(filtered, " ")
 	}
 
 	return result

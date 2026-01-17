@@ -30,6 +30,7 @@ import (
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 var (
@@ -1089,25 +1090,7 @@ func pickDominantByPopulation(results []coreontology.GeoNamesPlace, cityName str
 }
 
 func slugify(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	if s == "" {
-		return ""
-	}
-	var b strings.Builder
-	lastDash := false
-	for _, r := range s {
-		isAlnum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-		if isAlnum {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
+	return taxonomy.Slugify(s)
 }
 
 func minInt(a, b int) int {

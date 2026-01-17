@@ -1113,15 +1113,26 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   type PaletteItem =
     | { kind: 'project'; id: string; title: string; subtitle?: string; project: Project }
     | { kind: 'lens'; id: string; title: string; subtitle?: string; lensId: string }
-    | { kind: 'job'; id: string; title: string; subtitle?: string; taskId: string };
+    | { kind: 'job'; id: string; title: string; subtitle?: string; taskId: string }
+    | { kind: 'create_project'; id: string; title: string; subtitle?: string; name: string };
 
   const [paletteOpen, setPaletteOpen] = React.useState(false);
   const [paletteQuery, setPaletteQuery] = React.useState('');
   const [paletteActiveIndex, setPaletteActiveIndex] = React.useState(0);
+  const [paletteMode, setPaletteMode] = React.useState<'search' | 'create_project'>('search');
   const paletteInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const openPalette = React.useCallback(() => {
     setPaletteOpen(true);
+    setPaletteMode('search');
+    setPaletteQuery('');
+    setPaletteActiveIndex(0);
+    window.setTimeout(() => paletteInputRef.current?.focus(), 0);
+  }, []);
+
+  const openCreateProjectPalette = React.useCallback(() => {
+    setPaletteOpen(true);
+    setPaletteMode('create_project');
     setPaletteQuery('');
     setPaletteActiveIndex(0);
     window.setTimeout(() => paletteInputRef.current?.focus(), 0);
@@ -1129,6 +1140,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
 
   const closePalette = React.useCallback(() => {
     setPaletteOpen(false);
+    setPaletteMode('search');
     setPaletteQuery('');
     setPaletteActiveIndex(0);
   }, []);
@@ -1164,6 +1176,20 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     };
 
     const out: PaletteItem[] = [];
+
+    if (paletteMode === 'create_project') {
+      const name = String(paletteQuery || '').trim();
+      if (name) {
+        out.push({
+          kind: 'create_project',
+          id: `create_project:${name.toLowerCase()}`,
+          title: `Create project “${name}”`,
+          subtitle: 'Horizon',
+          name,
+        });
+      }
+      return out;
+    }
 
     // Projects (pinned first, then recent)
     const allProjects = [...pinnedProjects, ...recentProjects];
@@ -1214,6 +1240,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   }, [
     isModernSidebarMode,
     paletteQuery,
+    paletteMode,
     pinnedProjects,
     recentProjects,
     isHorizonMode,
@@ -1223,6 +1250,35 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     agentJobsProjectId,
     agentJobs,
   ]);
+
+  const createProject = useProjectsStore((s) => s.createProject);
+  const updateProject = useProjectsStore((s) => s.updateProject);
+
+  const handleCreateHorizonProject = React.useCallback(() => {
+    if (isModernSidebarMode) {
+      openCreateProjectPalette();
+      return;
+    }
+    const name = window.prompt('Project name') || '';
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    onCloseAllModals?.();
+    createProject({ displayName: trimmed, view: 'horizon' })
+      .then((project) => updateProject(project.id, { projectType: 'horizon' })
+        .then((updated) => {
+          setCurrentProject(updated);
+        })
+        .catch((e) => {
+          console.error('[SidebarPanel] Failed to set projectType=horizon', e);
+          setCurrentProject({ ...project, projectType: 'horizon' } as Project);
+        }))
+      .catch((e) => {
+        console.error('[SidebarPanel] Failed to create project', e);
+      })
+      .finally(() => {
+        if (isMobile) onClose();
+      });
+  }, [createProject, isMobile, isModernSidebarMode, onClose, onCloseAllModals, openCreateProjectPalette, setCurrentProject]);
 
   const runPaletteSelection = React.useCallback(
     (item: PaletteItem) => {
@@ -1245,8 +1301,30 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         closePalette();
         return;
       }
+      if (item.kind === 'create_project') {
+        const name = String(item.name || '').trim();
+        if (!name) return;
+        onCloseAllModals?.();
+        createProject({ displayName: name, view: 'horizon' })
+          .then((project) => updateProject(project.id, { projectType: 'horizon' })
+            .then((updated) => {
+              setCurrentProject(updated);
+            })
+            .catch((e) => {
+              console.error('[SidebarPanel] Failed to set projectType=horizon', e);
+              setCurrentProject({ ...project, projectType: 'horizon' } as Project);
+            }))
+          .catch((e) => {
+            console.error('[SidebarPanel] Failed to create project', e);
+          })
+          .finally(() => {
+            if (isMobile) onClose();
+            closePalette();
+          });
+        return;
+      }
     },
-    [closePalette, isMobile, onClose, onCloseAllModals, onSelectJob, onSelectLens, setCurrentProject],
+    [closePalette, createProject, isMobile, onClose, onCloseAllModals, onSelectJob, onSelectLens, setCurrentProject],
   );
 
   // Load lenses for the current project in horizon mode
@@ -2176,8 +2254,12 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   }
                   onClick={() => {
                     onCloseAllModals?.();
-                    if (currentMode === 'horizon' && isDetailsView && onNewLens) {
-                      onNewLens();
+                    if (currentMode === 'horizon') {
+                      if (isDetailsView && onNewLens) {
+                        onNewLens();
+                      } else {
+                        handleCreateHorizonProject();
+                      }
                     } else {
                       onResetChat();
                     }
@@ -2298,8 +2380,12 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                       onClick={() => {
                         // Close all modals (workspace, admin, settings, account) when creating new chat/project
                         onCloseAllModals?.();
-                        if (currentMode === 'horizon' && isDetailsView && onNewLens) {
-                          onNewLens();
+                        if (currentMode === 'horizon') {
+                          if (isDetailsView && onNewLens) {
+                            onNewLens();
+                          } else {
+                            handleCreateHorizonProject();
+                          }
                         } else {
                           onResetChat();
                         }
@@ -3211,7 +3297,11 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                     return;
                   }
                 }}
-                placeholder={isHorizonMode ? 'Search projects and lenses…' : 'Search chats and jobs…'}
+                placeholder={
+                  paletteMode === 'create_project'
+                    ? 'Project name…'
+                    : (isHorizonMode ? 'Search projects and lenses…' : 'Search chats and jobs…')
+                }
                 autoComplete="off"
                 spellCheck={false}
                 style={{
@@ -3238,7 +3328,9 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
             <div style={{ maxHeight: 'min(520px, 60vh)', overflow: 'auto', padding: '8px 0' }}>
               {paletteItems.length === 0 ? (
                 <div style={{ padding: '26px 16px', textAlign: 'center', color: 'var(--text-secondary-strong)', fontSize: 13 }}>
-                  No results.
+                  {paletteMode === 'create_project'
+                    ? 'Type a project name to create a new Horizon project.'
+                    : 'No results.'}
                 </div>
               ) : (
                 (() => {
@@ -3248,7 +3340,11 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                     const showHeader = kind !== lastKind;
                     lastKind = kind;
                     const isActive = idx === paletteActiveIndex;
-                    const sectionLabel = kind === 'project' ? 'Projects' : kind === 'lens' ? 'Lenses' : 'Jobs';
+                    const sectionLabel =
+                      kind === 'project' ? 'Projects'
+                      : kind === 'lens' ? 'Lenses'
+                      : kind === 'job' ? 'Jobs'
+                      : 'Create';
 
                     return (
                       <React.Fragment key={item.id}>

@@ -81,6 +81,20 @@ const (
 	// Canonical path format: /deposit/{resource-slug}/{deposit-slug}
 	// Example: /deposit/crude-oil/permian-basin, /deposit/lithium/atacama-salar
 	FragmentTypeDeposit FragmentType = "DEPOSIT"
+	// FragmentTypeCommunity represents an informal social group without legal structure.
+	// Examples: trade networks (hawala), activist groups, criminal networks, diaspora communities.
+	// Unlike ORGANIZATION, communities have no formal legal registration.
+	// Unlike MEDIA_CHANNEL, communities are social entities that *use* channels.
+	// Canonical path format: /community/{geo}/{type}/{slug}
+	// - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
+	// - type: trade | activist | professional | criminal | religious | ethnic | interest
+	// - slug: lowercase-slug derived from community name
+	// Examples:
+	// - /community/ae/trade/hawala-dubai-network
+	// - /community/ru/criminal/kazan-synthetic-dealers
+	// - /community/by/activist/nexta-supporters
+	// - /community/global/professional/osint-researchers
+	FragmentTypeCommunity FragmentType = "COMMUNITY"
 )
 
 // EpistemicStatus статус эпистемической достоверности

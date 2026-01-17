@@ -147,11 +147,13 @@ const ExplainEdgeLabel: React.FC<{
   caption: string;
   theme: 'light' | 'dark';
   onExplain?: (args: EdgeExplainOpenArgs) => void;
+  onHoverEnter?: (edgeId: string) => void;
+  onHoverLeave?: (edgeId: string) => void;
   edgeId: string;
   edgeType?: string;
   sourceNodeId: string;
   targetNodeId: string;
-}> = ({ labelX, labelY, caption, theme, onExplain, edgeId, edgeType, sourceNodeId, targetNodeId }) => {
+}> = ({ labelX, labelY, caption, theme, onExplain, onHoverEnter, onHoverLeave, edgeId, edgeType, sourceNodeId, targetNodeId }) => {
   const labelText = theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.88)';
   const labelBg = theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.86)';
   const labelBorder = theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)';
@@ -162,9 +164,11 @@ const ExplainEdgeLabel: React.FC<{
         style={{
           position: 'absolute',
           transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-          pointerEvents: 'none',
+          pointerEvents: 'auto',
           zIndex: 20,
         }}
+        onMouseEnter={() => onHoverEnter?.(edgeId)}
+        onMouseLeave={() => onHoverLeave?.(edgeId)}
       >
         <div
           style={{
@@ -256,6 +260,8 @@ const HznEdge: React.FC<EdgeProps> = ({
   const showLabel = !!d.showLabel;
   const caption = String(d.edgeCaption || d.edgeLabel || '').trim();
   const onExplain = d.onExplain as undefined | ((args: EdgeExplainOpenArgs) => void);
+  const onLabelHoverEnter = d.onLabelHoverEnter as undefined | ((edgeId: string) => void);
+  const onLabelHoverLeave = d.onLabelHoverLeave as undefined | ((edgeId: string) => void);
   const raiseToFront = !!d.raiseToFront;
 
   return (
@@ -295,6 +301,8 @@ const HznEdge: React.FC<EdgeProps> = ({
           caption={caption}
           theme={theme === 'dark' ? 'dark' : 'light'}
           onExplain={onExplain}
+          onHoverEnter={onLabelHoverEnter}
+          onHoverLeave={onLabelHoverLeave}
           edgeId={id}
           edgeType={String(d.edgeType || '').trim() || undefined}
           sourceNodeId={String(source)}
@@ -330,6 +338,8 @@ const HznArcTopEdge: React.FC<EdgeProps> = ({
   const showLabel = !!d.showLabel;
   const caption = String(d.edgeCaption || d.edgeLabel || '').trim();
   const onExplain = d.onExplain as undefined | ((args: EdgeExplainOpenArgs) => void);
+  const onLabelHoverEnter = d.onLabelHoverEnter as undefined | ((edgeId: string) => void);
+  const onLabelHoverLeave = d.onLabelHoverLeave as undefined | ((edgeId: string) => void);
   const raiseToFront = !!d.raiseToFront;
 
   return (
@@ -367,6 +377,8 @@ const HznArcTopEdge: React.FC<EdgeProps> = ({
           caption={caption}
           theme={theme === 'dark' ? 'dark' : 'light'}
           onExplain={onExplain}
+          onHoverEnter={onLabelHoverEnter}
+          onHoverLeave={onLabelHoverLeave}
           edgeId={id}
           edgeType={String(d.edgeType || '').trim() || undefined}
           sourceNodeId={String(source)}
@@ -473,6 +485,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       AFFECTS: 'Affects',
       REGULATES: 'Regulates',
       IMPACTS: 'Impacts',
+      // Market / hierarchy
+      PARTICIPATES_IN: 'Participates',
+      DOMINATES: 'Dominates',
+      HAS_SUBMARKET: 'Submarket',
+      HAS_SUBGROUP: 'Subgroup',
+      ADMINISTERS: 'Administers',
+      // Community relationships
+      OPERATES_VIA: 'Via',
+      MEMBER_OF: 'Member',
+      AFFILIATED_WITH: 'Affiliated',
+      // Person relationships
+      AUDITED_BY: 'Audited',
+      RELATED_TO: 'Related',
+      RELATIVE_OF: 'Relatives',
     };
     if (MAP[u]) return MAP[u];
     const human = u
@@ -511,6 +537,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [loadingFragmentId, setLoadingFragmentId] = React.useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
   const [expandEmptyToast, setExpandEmptyToast] = React.useState(false);
+  const [expandEmptyContext, setExpandEmptyContext] = React.useState<{
+    fragmentId: string;
+    canonicalPath?: string;
+    isFullNetwork: boolean;
+  } | null>(null);
   const [expandModeGlow, setExpandModeGlow] = React.useState(false);
   const [scopeScoutModal, setScopeScoutModal] = React.useState<{
     fragmentId: string;
@@ -551,6 +582,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     error: string | null;
   } | null>(null);
   const edgeExplainPopoverRef = React.useRef<HTMLDivElement | null>(null);
+  const nodeExplainSessionCacheRef = React.useRef<Map<string, { markdown: string; cachedAt: string }>>(new Map());
+  const [nodeExplainPopover, setNodeExplainPopover] = React.useState<{
+    open: boolean;
+    nodeId: string;
+    fragmentId?: string;
+    label?: string;
+    canonicalPath?: string;
+    nodeType?: string;
+    markdown: string | null;
+    cachedAt: string | null;
+    loading: boolean;
+    error: string | null;
+  } | null>(null);
+  const nodeExplainPopoverRef = React.useRef<HTMLDivElement | null>(null);
   const [gridState, setGridState] = React.useState<GridState>(createEmptyGrid());
 
   // Collapsed subcategories state (Levels layout: left-pane groups can collapse relation-type subsections).
@@ -588,6 +633,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   React.useEffect(() => {
     edgeExplainSessionCacheRef.current.clear();
     setEdgeExplainPopover(null);
+    nodeExplainSessionCacheRef.current.clear();
+    setNodeExplainPopover(null);
     setCollapsedSubcategories(new Set());
   }, [lensId]);
 
@@ -623,6 +670,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setEdgeExplainPopover(null);
   }, []);
 
+  const closeNodeExplainPopover = React.useCallback(() => {
+    setNodeExplainPopover(null);
+  }, []);
+
   React.useEffect(() => {
     if (!edgeExplainPopover?.open) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -641,6 +692,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       window.removeEventListener('mousedown', onMouseDown, true);
     };
   }, [edgeExplainPopover?.open, closeEdgeExplainPopover]);
+
+  React.useEffect(() => {
+    if (!nodeExplainPopover?.open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeNodeExplainPopover();
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      const el = nodeExplainPopoverRef.current;
+      if (!el) return;
+      if (e.target && el.contains(e.target as any)) return;
+      closeNodeExplainPopover();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('mousedown', onMouseDown, true);
+    };
+  }, [nodeExplainPopover?.open, closeNodeExplainPopover]);
 
   const preferredLang = React.useMemo(() => {
     const preferredLanguage =
@@ -841,6 +911,229 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const openEdgeExplainPopoverRef = React.useRef(openEdgeExplainPopover);
   openEdgeExplainPopoverRef.current = openEdgeExplainPopover;
 
+  const generateAndPersistNodeExplanation = React.useCallback(async (args: {
+    nodeId: string;
+    fragmentId?: string;
+    label?: string;
+    canonicalPath?: string;
+    nodeType?: string;
+    lang: string;
+    force?: boolean;
+  }): Promise<{ markdown: string; cachedAt: string | null }> => {
+    const lang = args.lang || 'en';
+    const nodeId = String(args.nodeId || '').trim();
+    const fragmentId = String(args.fragmentId || '').trim();
+    const targetId = fragmentId || nodeId;
+    if (!targetId) throw new Error('Missing node ID');
+
+    const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
+    const currentEdges: Edge[] = edgesStateRef.current || [];
+    const node = currentNodes.find((n) => String(n.id || '').trim() === nodeId)
+      || (fragmentId ? currentNodes.find((n) => String((n.data as any)?.fragmentId || '').trim() === fragmentId) : undefined);
+    const nd: any = node?.data || {};
+
+    const label = String(args.label ?? nd.label ?? '').trim() || null;
+    const canonicalPath = String(args.canonicalPath ?? nd.canonicalPath ?? '').trim() || null;
+    const nodeType = String(args.nodeType ?? nd.type ?? '').trim() || null;
+
+    const incidentEdges = currentEdges
+      .filter((e: any) => e.source === nodeId || e.target === nodeId)
+      .map((e: any) => {
+        const neighborId = e.source === nodeId ? e.target : e.source;
+        const neighborNode = currentNodes.find((n) => n.id === neighborId);
+        return {
+          edgeId: e.id,
+          edgeType: String((e as any)?.data?.edgeType || e.label || 'UNKNOWN'),
+          direction: e.source === nodeId ? 'outgoing' : 'incoming',
+          neighborNodeId: neighborId,
+          neighborLabel: (neighborNode?.data as any)?.label || null,
+          neighborType: (neighborNode?.data as any)?.type || null,
+        };
+      });
+
+    const neighborNodes = Array.from(
+      new Map(
+        incidentEdges.map((e) => [String(e.neighborNodeId || '').trim(), {
+          nodeId: e.neighborNodeId,
+          label: e.neighborLabel || null,
+          type: e.neighborType || null,
+        }]),
+      ).values(),
+    );
+
+    const payload = {
+      preferredLanguage: lang,
+      node: {
+        id: nodeId,
+        fragmentId: targetId,
+        label: label || null,
+        canonicalPath: canonicalPath || null,
+        type: nodeType || null,
+      },
+      context: {
+        incidentEdges: incidentEdges.slice(0, 12),
+        neighborNodes: neighborNodes.slice(0, 12),
+      },
+    };
+
+    const prompt =
+      `Provide a concise corporate profile of this entity for quick user understanding.\n` +
+      `- Output language: ${lang}\n` +
+      `- Use Google Search grounding.\n` +
+      `- Output: Markdown.\n` +
+      `- Be concise and factual (5-8 bullet points max).\n` +
+      `- If you are unsure, say so explicitly.\n\n` +
+      `Entity context (JSON):\n` +
+      `${JSON.stringify(payload, null, 2)}\n`;
+
+    const resp: any = await api.genaiComplete({
+      prompt,
+      options: {
+        profile: 'fast',
+        modelOverride: 'gemini-3-flash-preview',
+        groundingEnabled: true,
+        temperature: 0.2,
+        maxOutputTokens: 2048,
+        systemInstruction:
+          'You are a careful analyst. Provide a concise corporate summary of the entity in Markdown. Do not invent facts. Prefer grounded statements.',
+      },
+    });
+
+    const md = String(resp?.content || '').trim();
+    if (!md) throw new Error('Empty response from model');
+
+    // Persist best-effort
+    try {
+      await api.upsertHorizonAIExplanation(
+        'node',
+        targetId,
+        {
+          markdown: md,
+          language: lang,
+          lensId: lensId || undefined,
+          attrs: {
+            canonicalPath: canonicalPath || undefined,
+            type: nodeType || undefined,
+            label: label || undefined,
+          },
+        },
+        { lang },
+      );
+    } catch {
+      // ignore
+    }
+
+    return { markdown: md, cachedAt: new Date().toISOString() };
+  }, [lensId]);
+
+  const loadNodeExplanation = React.useCallback(async (args: {
+    nodeId: string;
+    fragmentId?: string;
+    label?: string;
+    canonicalPath?: string;
+    nodeType?: string;
+    force?: boolean;
+  }) => {
+    const lang = preferredLang;
+    const targetId = String(args.fragmentId || args.nodeId || '').trim();
+    if (!targetId) return;
+    const cacheKey = `node:${targetId}:${lang}`;
+
+    if (!args.force) {
+      const cached = nodeExplainSessionCacheRef.current.get(cacheKey);
+      if (cached && String(cached.markdown || '').trim()) {
+        setNodeExplainPopover((p) => {
+          if (!p || p.nodeId !== args.nodeId) return p;
+          return { ...p, markdown: cached.markdown, cachedAt: cached.cachedAt, loading: false, error: null };
+        });
+        return;
+      }
+    }
+
+    setNodeExplainPopover((p) => {
+      if (!p || p.nodeId !== args.nodeId) return p;
+      return { ...p, loading: true, error: null };
+    });
+
+    if (!args.force) {
+      try {
+        const cached = await api.getHorizonAIExplanation('node', targetId, { lang });
+        const md = String(cached?.markdown || '').trim();
+        if (md) {
+          boundedMapSet(
+            nodeExplainSessionCacheRef.current,
+            cacheKey,
+            { markdown: md, cachedAt: String(cached.updatedAt || '') || new Date().toISOString() },
+            200,
+          );
+          setNodeExplainPopover((p) => {
+            if (!p || p.nodeId !== args.nodeId) return p;
+            return { ...p, markdown: md, cachedAt: String(cached.updatedAt || ''), loading: false, error: null };
+          });
+          return;
+        }
+      } catch (err: any) {
+        if (err?.response?.status !== 404) {
+          setNodeExplainPopover((p) => {
+            if (!p || p.nodeId !== args.nodeId) return p;
+            return { ...p, loading: false, error: err.response?.data?.error || err.message || 'Failed to load explanation' };
+          });
+          return;
+        }
+      }
+    }
+
+    try {
+      const out = await generateAndPersistNodeExplanation({
+        nodeId: args.nodeId,
+        fragmentId: args.fragmentId,
+        canonicalPath: args.canonicalPath,
+        label: args.label,
+        nodeType: args.nodeType,
+        lang,
+        force: args.force,
+      });
+      boundedMapSet(
+        nodeExplainSessionCacheRef.current,
+        cacheKey,
+        { markdown: out.markdown, cachedAt: out.cachedAt || new Date().toISOString() },
+        200,
+      );
+      setNodeExplainPopover((p) => {
+        if (!p || p.nodeId !== args.nodeId) return p;
+        return { ...p, markdown: out.markdown, cachedAt: out.cachedAt, loading: false, error: null };
+      });
+    } catch (err: any) {
+      setNodeExplainPopover((p) => {
+        if (!p || p.nodeId !== args.nodeId) return p;
+        return { ...p, loading: false, error: err.message || 'Failed to generate explanation' };
+      });
+    }
+  }, [preferredLang, generateAndPersistNodeExplanation]);
+
+  const openNodeExplainPopover = React.useCallback((args: {
+    nodeId: string;
+    fragmentId?: string;
+    label?: string;
+    canonicalPath?: string;
+    nodeType?: string;
+  }) => {
+    setNodeExplainPopover({
+      open: true,
+      nodeId: String(args.nodeId || '').trim(),
+      fragmentId: args.fragmentId,
+      label: args.label,
+      canonicalPath: args.canonicalPath,
+      nodeType: args.nodeType,
+      markdown: null,
+      cachedAt: null,
+      loading: true,
+      error: null,
+    });
+  }, []);
+  const openNodeExplainPopoverRef = React.useRef(openNodeExplainPopover);
+  openNodeExplainPopoverRef.current = openNodeExplainPopover;
+
   React.useEffect(() => {
     if (!edgeExplainPopover?.open) return;
     // Load after open (cache-first)
@@ -852,6 +1145,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       force: false,
     });
   }, [edgeExplainPopover?.open, edgeExplainPopover?.edgeId, loadEdgeExplanation, edgeExplainPopover?.edgeType, edgeExplainPopover?.sourceNodeId, edgeExplainPopover?.targetNodeId]);
+
+  React.useEffect(() => {
+    if (!nodeExplainPopover?.open) return;
+    loadNodeExplanation({
+      nodeId: nodeExplainPopover.nodeId,
+      fragmentId: nodeExplainPopover.fragmentId,
+      label: nodeExplainPopover.label,
+      canonicalPath: nodeExplainPopover.canonicalPath,
+      nodeType: nodeExplainPopover.nodeType,
+      force: false,
+    });
+  }, [nodeExplainPopover?.open, nodeExplainPopover?.nodeId, nodeExplainPopover?.fragmentId, nodeExplainPopover?.label, nodeExplainPopover?.canonicalPath, nodeExplainPopover?.nodeType, loadNodeExplanation]);
 
   React.useEffect(() => {
     return () => {
@@ -965,6 +1270,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'LINKED_TO',
       // Market skeleton
       'HAS_SUBMARKET',
+      // Community hierarchy
+      'HAS_SUBGROUP',
     ];
     const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
 
@@ -1499,14 +1806,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setNodes((prev) => {
       if (!prev || prev.length === 0) return prev;
       let changed = false;
+      const onExplainNode = openNodeExplainPopoverRef.current;
       const next = (prev as any[]).map((n) => {
         const d: any = (n as any)?.data;
         if (!d || d.isGroup) return n;
         const cp = String(d.canonicalPath || '').trim();
         const isPinned = cp ? pinned.has(cp) : false;
-        if (d.pinnedToScope === isPinned && d.onTogglePin === toggleScopePin) return n;
+        if (d.pinnedToScope === isPinned && d.onTogglePin === toggleScopePin && d.onExplainNode === onExplainNode) return n;
         changed = true;
-        return { ...(n as any), data: { ...d, pinnedToScope: isPinned, onTogglePin: toggleScopePin } };
+        return { ...(n as any), data: { ...d, pinnedToScope: isPinned, onTogglePin: toggleScopePin, onExplainNode } };
       });
       return changed ? (next as any) : prev;
     });
@@ -1809,6 +2117,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       };
     }
 
+    // 🟣 Community hierarchy (dynasty/tribe skeleton) — Purple dashed
+    if (type === 'HAS_SUBGROUP') {
+      return {
+        stroke: '#A855F7', // purple-500 (matches COMMUNITY node color)
+        strokeWidth: Math.max(1.2, baseWidth * 0.95),
+        strokeDasharray: '5 4',
+      };
+    }
+
     // 🟦 Government admin hierarchy (skeleton) — Sky dashed
     if (type === 'ADMINISTERS') {
       return {
@@ -1951,7 +2268,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
       const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM'];
       const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
-      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'HAS_SUBMARKET'];
+      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'HAS_SUBMARKET', 'HAS_SUBGROUP'];
       const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
       const out = new Set<string>();
       if (draft.scopes.ownership) for (const t of OWNERSHIP) out.add(t);
@@ -2477,8 +2794,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     'FOUNDED': 3,
     'PARENT_OF': 3,
     'SUBSIDIARY_OF': 3,
-    // 3.5. Hierarchies / skeleton links (market + gov)
+    // 3.5. Hierarchies / skeleton links (market + gov + community)
     'HAS_SUBMARKET': 3,
+    'HAS_SUBGROUP': 3,
     'ADMINISTERS': 3,
     // 4. Партнёрство/Поставки — средний приоритет
     'PARTNERS_WITH': 4,
@@ -2558,11 +2876,42 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const cp = cpOfNode(id);
         return Boolean(cp && cp.startsWith('/market/'));
       };
+      const isTribeLike = (id: string): boolean => {
+        const t = typeOfNode(id);
+        if (t === 'TRIBE' || t === 'COMMUNITY_TRIBE') return true;
+        const cp = cpOfNode(id);
+        if (!cp) return false;
+        // Support both /tribe/... and /community/.../tribe/... formats
+        // Check for /community/{geo}/tribe/{slug} pattern
+        if (cp.startsWith('/community/')) {
+          const parts = cp.split('/').filter(Boolean);
+          if (parts.length >= 3 && parts[2] === 'tribe') return true;
+        }
+        return cp.startsWith('/tribe/') || cp.includes('/tribe/');
+      };
+      const isDynastyLike = (id: string): boolean => {
+        const t = typeOfNode(id);
+        if (t === 'DYNASTY' || t === 'COMMUNITY_DYNASTY') return true;
+        const cp = cpOfNode(id);
+        if (!cp) return false;
+        // Support both /dynasty/... and /community/.../dynasty/... formats
+        // Check for /community/{geo}/dynasty/{slug} pattern
+        if (cp.startsWith('/community/')) {
+          const parts = cp.split('/').filter(Boolean);
+          if (parts.length >= 3 && parts[2] === 'dynasty') return true;
+        }
+        return cp.startsWith('/dynasty/') || cp.includes('/dynasty/');
+      };
 
       const INFL = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES']);
       const DEP = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
       const PARTNER = new Set(['PARTNERS_WITH', 'COOPERATES_WITH']);
       const DOM = new Set(['DOMINATES']);
+      const isInfluenceType = (et: string): boolean => {
+        if (!et) return false;
+        if (INFL.has(et)) return true;
+        return et.includes('INFLUENC');
+      };
       const bestPartner = (types: Set<string>): string => {
         // Prefer PARTNERS_WITH over COOPERATES_WITH for UI stability.
         if (types.has('PARTNERS_WITH')) return 'PARTNERS_WITH';
@@ -2590,6 +2939,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const typesByPair = new Map<string, Set<string>>();
       const hasLocatedOutByPair = new Map<string, boolean>(); // ORG/GOV -> GEO LOCATED_IN exists
       const hasDominatesOrgMarketByPair = new Map<string, boolean>(); // org<->market has DOMINATES
+      const influenceDirByPair = new Map<string, { tribeToDynasty: boolean; dynastyToTribe: boolean }>();
       for (const e of edges as any[]) {
         const s = norm(e?.source);
         const t = norm(e?.target);
@@ -2609,6 +2959,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           if ((isOrgLike(s) && isMarketLike(t)) || (isMarketLike(s) && isOrgLike(t))) {
             hasDominatesOrgMarketByPair.set(k, true);
           }
+        }
+        if (isInfluenceType(et)) {
+          const isTribeToDynasty = isTribeLike(s) && isDynastyLike(t);
+          const isDynastyToTribe = isDynastyLike(s) && isTribeLike(t);
+          if (isTribeToDynasty || isDynastyToTribe) {
+            const cur = influenceDirByPair.get(k) || { tribeToDynasty: false, dynastyToTribe: false };
+            if (isTribeToDynasty) cur.tribeToDynasty = true;
+            if (isDynastyToTribe) cur.dynastyToTribe = true;
+            influenceDirByPair.set(k, cur);
+          }
+        }
+      }
+
+      const mutualInfluenceCommunityPairs = new Set<string>();
+      for (const [k, dir] of influenceDirByPair.entries()) {
+        if (dir.tribeToDynasty && dir.dynastyToTribe) {
+          mutualInfluenceCommunityPairs.add(k);
         }
       }
 
@@ -2639,9 +3006,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       }
 
-      if (winnerByPair.size === 0) return edges;
-
-      // Filter edges by winner.
+      // Filter edges by winner and mutual influence suppression.
       const out: Edge[] = [];
       for (const e of edges as any[]) {
         const s = norm(e?.source);
@@ -2651,12 +3016,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           continue;
         }
         const k = pairKey(s, t);
+        const et = edgeTypeOf(e);
+        // Suppress dynasty -> tribe influence when mutual influence exists (keep only tribe -> dynasty).
+        if (mutualInfluenceCommunityPairs.has(k) && isInfluenceType(et)) {
+          if (!(isTribeLike(s) && isDynastyLike(t))) {
+            continue; // Skip dynasty -> tribe, keep only tribe -> dynasty
+          }
+        }
         const win = winnerByPair.get(k);
         if (!win) {
           out.push(e);
           continue;
         }
-        const et = edgeTypeOf(e);
         if (et === win) {
           out.push(e);
           continue;
@@ -3055,6 +3426,49 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       portHandlesByGroupId.set(gid, m);
     }
 
+    // Helper maps for right-side stack groups (expanded stacks).
+    const stackGroupMemberIds = new Map<string, Set<string>>(); // stackGroupId -> Set of member node ids
+    const stackGroupByMemberId = new Map<string, string>(); // memberId -> stackGroupId
+    const stackGroupPortsByGroupId = new Map<string, Map<string, { sourceHandleId: string; targetHandleId: string }>>();
+    for (const [gid, gnode] of groupMap.entries()) {
+      if (!gid.startsWith('stack:group:')) continue;
+      const gd: any = gnode.data || {};
+      const memberIds = Array.isArray(gd?.groupAllChildIds) ? (gd.groupAllChildIds as string[]) : [];
+      const memberSet = new Set<string>();
+      for (const mid of memberIds) {
+        const id = String(mid || '').trim();
+        if (id) {
+          memberSet.add(id);
+          stackGroupByMemberId.set(id, gid);
+        }
+      }
+      stackGroupMemberIds.set(gid, memberSet);
+
+      // Build port handles for the stack group
+      const ports = Array.isArray(gd?.groupEdgePorts) ? (gd.groupEdgePorts as any[]) : [];
+      const edgeTypesFallback = Array.isArray(gd?.groupEdgeTypes) ? (gd.groupEdgeTypes as any[]) : [];
+      const m = new Map<string, { sourceHandleId: string; targetHandleId: string }>();
+      if (ports.length > 0) {
+        for (const p of ports) {
+          const et = normalizedEdgeTypeOf({ data: { edgeType: p?.edgeType } } as any);
+          const targetHandleId = String(p?.targetHandleId || `edge:${et}:target`).trim();
+          const sourceHandleId = String(p?.sourceHandleId || `edge:${et}:source`).trim();
+          if (et) m.set(et, { sourceHandleId, targetHandleId });
+        }
+      } else {
+        for (const etRaw of edgeTypesFallback) {
+          const et = normalizedEdgeTypeOf({ data: { edgeType: etRaw } } as any);
+          if (!et) continue;
+          m.set(et, { sourceHandleId: `edge:${et}:source`, targetHandleId: `edge:${et}:target` });
+        }
+      }
+      // Add a default handle for any edge type
+      if (!m.has('OTHER')) {
+        m.set('OTHER', { sourceHandleId: 'source-left', targetHandleId: 'target-left' });
+      }
+      stackGroupPortsByGroupId.set(gid, m);
+    }
+
     for (const [gid, gnode] of groupMap.entries()) {
       // Only target the Levels Two-Pane left blocks (created by layoutLevelsTwoPane).
       if (!gid.startsWith('levels:left:')) continue;
@@ -3149,20 +3563,76 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       | { kind: 'group'; groupA: string; groupB: string; edgeType: string; aToB: number; bToA: number }
     >();
 
+    // Stack group proxy buckets (for right-side expanded stacks)
+    const stackGroupProxyBuckets = new Map<
+      string,
+      { groupId: string; outsideId: string; edgeType: string; groupAsSource: number; outsideAsSource: number }
+    >();
+
     for (const e of edgeListWithStackProxy) {
       const eidRaw = String((e as any)?.id || '').trim();
       const ed: any = (e as any)?.data || {};
       if (!eidRaw) continue;
       if (eidRaw.startsWith('levels:agg:')) continue;
       if (eidRaw.startsWith('levels:gproxy:')) continue;
+      if (eidRaw.startsWith('levels:stackgproxy:')) continue;
       if (Boolean(ed.levelsAgg)) continue;
       if (Boolean(ed.levelsGroupProxy)) continue;
+      if (Boolean(ed.levelsStackGroupProxy)) continue;
 
       const s = String((e as any)?.source || '').trim();
       const t = String((e as any)?.target || '').trim();
       if (!s || !t) continue;
       const sg = groupIdByChildId.get(s);
       const tg = groupIdByChildId.get(t);
+
+      // Check for stack group membership
+      const sStackGroup = stackGroupByMemberId.get(s);
+      const tStackGroup = stackGroupByMemberId.get(t);
+      const sInStackGroup = !!sStackGroup && stackGroupPortsByGroupId.has(sStackGroup);
+      const tInStackGroup = !!tStackGroup && stackGroupPortsByGroupId.has(tStackGroup);
+
+      // Handle stack group proxy edges (edges to/from members of expanded stack groups)
+      if (sInStackGroup || tInStackGroup) {
+        const edgeType = normalizedEdgeTypeOf(e);
+        if (!edgeType) continue;
+
+        // If both endpoints are in the same stack group, skip proxying
+        if (sInStackGroup && tInStackGroup && sStackGroup === tStackGroup) continue;
+
+        // If both endpoints are in different stack groups, proxy group-to-group
+        if (sInStackGroup && tInStackGroup && sStackGroup !== tStackGroup) {
+          // Skip for now - complex case, handle as separate edges
+          continue;
+        }
+
+        // Exactly one endpoint is in a stack group -> proxy to stack group
+        const stackGroupId = sInStackGroup ? sStackGroup! : tStackGroup!;
+        const outsideId = sInStackGroup ? t : s;
+        const childId = sInStackGroup ? s : t;
+        const groupIsSource = s === childId;
+
+        const k = `stackgroup:${stackGroupId}::node:${outsideId}::edge:${edgeType}`;
+        const bucket = stackGroupProxyBuckets.get(k);
+        if (!bucket) {
+          stackGroupProxyBuckets.set(k, {
+            groupId: stackGroupId,
+            outsideId,
+            edgeType,
+            groupAsSource: groupIsSource ? 1 : 0,
+            outsideAsSource: groupIsSource ? 0 : 1,
+          });
+        } else {
+          if (groupIsSource) bucket.groupAsSource += 1;
+          else bucket.outsideAsSource += 1;
+        }
+        if (eidRaw) {
+          perChildEdgeIdsToAggKey.set(eidRaw, k);
+          // NOTE: Do NOT add to noHoverRevealEdgeIds - we want to reveal real edges on hover
+        }
+        continue;
+      }
+
       if (!sg && !tg) continue;
       const edgeType = normalizedEdgeTypeOf(e);
       if (!edgeType) continue;
@@ -3315,6 +3785,51 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     }
 
+    // Emit stack group proxy edges (right-side expanded stacks)
+    for (const b of stackGroupProxyBuckets.values()) {
+      const { groupId, outsideId, edgeType, groupAsSource, outsideAsSource } = b;
+      const port = stackGroupPortsByGroupId.get(groupId)?.get(edgeType) ||
+                   stackGroupPortsByGroupId.get(groupId)?.get('OTHER') ||
+                   { sourceHandleId: 'source-left', targetHandleId: 'target-left' };
+      const baseStyle = getEdgeStyle(edgeType, undefined);
+      const stroke = getEdgeStroke(baseStyle);
+      const id = `levels:stackgproxy:${groupId}:node:${outsideId}:edge:${edgeType}`;
+      const aggKey = `stackgroup:${groupId}::node:${outsideId}::edge:${edgeType}`;
+      const groupToOutside = groupAsSource >= outsideAsSource;
+      const gNode = groupMap.get(groupId);
+      const oNode = nodeMap.get(outsideId);
+      const gx = typeof (gNode as any)?.position?.x === 'number' ? (gNode as any).position.x : 0;
+      const ox = typeof (oNode as any)?.position?.x === 'number' ? (oNode as any).position.x : 0;
+      // Stack groups are on the right; edges come from the left (typically)
+      const outsideIsLeftOfGroup = ox < gx - eps;
+      const outsideIsRightOfGroup = ox > gx + eps;
+      const outsideTargetHandle = outsideIsLeftOfGroup ? 'target-right' : (outsideIsRightOfGroup ? 'target-left' : 'target-right');
+      const outsideSourceHandle = outsideIsLeftOfGroup ? 'source-right' : (outsideIsRightOfGroup ? 'source-left' : 'source-right');
+      aggEdges.push({
+        id,
+        source: groupToOutside ? groupId : outsideId,
+        target: groupToOutside ? outsideId : groupId,
+        ...(groupToOutside
+          ? { sourceHandle: port.sourceHandleId, targetHandle: outsideTargetHandle }
+          : { sourceHandle: outsideSourceHandle, targetHandle: port.targetHandleId }),
+        type: 'hzn',
+        interactionWidth: 18,
+        markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+        style: baseStyle,
+        data: {
+          edgeType,
+          edgeCaption: getEdgeCaptionShort(edgeType),
+          baseStyle,
+          levelsAgg: true,
+          levelsAggKey: aggKey,
+          levelsAggEdgeType: edgeType,
+          levelsAggGroupId: groupId,
+          levelsStackGroupProxy: true,
+          levelsStackGroupProxyOutsideId: outsideId,
+        } as any,
+      } as any);
+    }
+
     const mapped = edgeList.map((e) => {
       const sourceNode = nodeMap.get(e.source);
       const targetNode = nodeMap.get(e.target);
@@ -3361,9 +3876,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       let sourceHandle = e.sourceHandle || 'source-right';
       let targetHandle = e.targetHandle || 'target-left';
 
+      const sInStackGroup = Boolean((sourceNode.data as any)?.insideStackGroup) ||
+        String(((sourceNode as any)?.parentId || (sourceNode as any)?.parentNode || '')).startsWith('stack:group:');
+      const tInStackGroup = Boolean((targetNode.data as any)?.insideStackGroup) ||
+        String(((targetNode as any)?.parentId || (targetNode as any)?.parentNode || '')).startsWith('stack:group:');
+
       // Hard rule for Two-Pane:
-      // If an edge connects a right-node to a group-child, it must enter/exit the right-node from the LEFT side
-      // and the group-child from the RIGHT side (groups are on the left).
+      // Left groups: edges attach left on right-side nodes, right on group-children.
+      // Right stack groups: edges attach right on outside nodes, left on stack-children.
       if (!sGrouped && tGrouped) {
         const eid = String((e as any)?.id || '').trim();
         const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
@@ -3372,7 +3892,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const d = aggKey
           ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
           : d0;
-        return { ...e, data: d, sourceHandle: 'source-left', targetHandle: 'target-right' };
+        return {
+          ...e,
+          data: d,
+          ...(tInStackGroup
+            ? { sourceHandle: 'source-right', targetHandle: 'target-left' }
+            : { sourceHandle: 'source-left', targetHandle: 'target-right' }),
+        };
       }
       if (sGrouped && !tGrouped) {
         const eid = String((e as any)?.id || '').trim();
@@ -3382,7 +3908,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const d = aggKey
           ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
           : d0;
-        return { ...e, data: d, sourceHandle: 'source-right', targetHandle: 'target-left' };
+        return {
+          ...e,
+          data: d,
+          ...(sInStackGroup
+            ? { sourceHandle: 'source-left', targetHandle: 'target-right' }
+            : { sourceHandle: 'source-right', targetHandle: 'target-left' }),
+        };
       }
 
       // Group nodes: always right side
@@ -3457,6 +3989,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       let sourceHandle = e.sourceHandle || 'source-right';
       let targetHandle = e.targetHandle || 'target-left';
 
+      const sInStackGroup = Boolean((sourceNode.data as any)?.insideStackGroup) ||
+        String(((sourceNode as any)?.parentId || (sourceNode as any)?.parentNode || '')).startsWith('stack:group:');
+      const tInStackGroup = Boolean((targetNode.data as any)?.insideStackGroup) ||
+        String(((targetNode as any)?.parentId || (targetNode as any)?.parentNode || '')).startsWith('stack:group:');
+
       if (!sGrouped && tGrouped) {
         const eid = String((e as any)?.id || '').trim();
         const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
@@ -3465,7 +4002,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const d = aggKey
           ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
           : stripAggFlags(d0);
-        return { ...e, data: d, sourceHandle: 'source-left', targetHandle: 'target-right' };
+        return {
+          ...e,
+          data: d,
+          ...(tInStackGroup
+            ? { sourceHandle: 'source-right', targetHandle: 'target-left' }
+            : { sourceHandle: 'source-left', targetHandle: 'target-right' }),
+        };
       }
       if (sGrouped && !tGrouped) {
         const eid = String((e as any)?.id || '').trim();
@@ -3475,7 +4018,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const d = aggKey
           ? { ...d0, levelsHiddenByAggregation: true, levelsAggKey: aggKey, ...(noHover ? { levelsNoHoverReveal: true } : {}) }
           : stripAggFlags(d0);
-        return { ...e, data: d, sourceHandle: 'source-right', targetHandle: 'target-left' };
+        return {
+          ...e,
+          data: d,
+          ...(sInStackGroup
+            ? { sourceHandle: 'source-left', targetHandle: 'target-right' }
+            : { sourceHandle: 'source-right', targetHandle: 'target-left' }),
+        };
       }
 
       // Edge no longer points into a group-child: clear any stale aggregation-hiding flags
@@ -4817,6 +5366,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         setLoadingFragmentId(null);
         // Show toast notification for empty expand result + glow on expand mode button
         setExpandEmptyToast(true);
+        setExpandEmptyContext({
+          fragmentId,
+          canonicalPath: (sourceSnapshot?.data as any)?.canonicalPath,
+          isFullNetwork: isLevelsLayout && levelsExpandMode === 'all',
+        });
         setExpandModeGlow(true);
         setTimeout(() => setExpandModeGlow(false), 2500); // Glow fades after toast
         return;
@@ -6764,6 +7318,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     return out;
   }, [stableNodeStructure, visibleEdges]);
 
+  // Keep edge hover when interacting with the HTML caption.
+  const handleEdgeLabelMouseEnter = React.useCallback(
+    (edgeId: string) => {
+      if (perfMode) return;
+      pendingHoverRef.current.hoveredEdgeId = edgeId;
+      scheduleHoverCommit();
+    },
+    [perfMode, scheduleHoverCommit],
+  );
+
+  const handleEdgeLabelMouseLeave = React.useCallback(
+    (edgeId: string) => {
+      if (perfMode) return;
+      if (pendingHoverRef.current.hoveredEdgeId === edgeId) {
+        pendingHoverRef.current.hoveredEdgeId = null;
+      }
+      scheduleHoverCommit();
+    },
+    [perfMode, scheduleHoverCommit],
+  );
+
   // Base edge presentation (labels hidden, dimmed) - computed only when the underlying edge set changes.
   // This avoids O(E) object cloning on every hover state update when nothing is hovered/selected.
   // Note: use openEdgeExplainPopoverRef to avoid dependency on callback identity.
@@ -6779,12 +7354,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return {
         ...e,
         type: isArcTop ? 'hznArcTop' : 'hzn',
-        data: { ...d, onExplain, showLabel: false },
+        data: { ...d, onExplain, showLabel: false, onLabelHoverEnter: handleEdgeLabelMouseEnter, onLabelHoverLeave: handleEdgeLabelMouseLeave },
         label: undefined,
         style: { ...baseStyle, opacity: DIM_OPACITY },
       };
     });
-  }, [visibleEdges, perfMode]);
+  }, [visibleEdges, perfMode, handleEdgeLabelMouseEnter, handleEdgeLabelMouseLeave]);
 
   // Levels: derive aggKeys per node once per edge-set, so hover can suppress aggregated edges without an extra full scan.
   const levelsAggKeysByNodeId = React.useMemo(() => {
@@ -7353,15 +7928,35 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const toggleStackGroup = React.useCallback((stackKey: string, nextExpanded: boolean) => {
     const key = String(stackKey || '').trim();
     if (!key) return;
+    const parseKey = (k: string) => {
+      const parts = String(k || '').split(':');
+      if (parts.length < 5) return null;
+      if (parts[0] !== 'levels') return null;
+      const mode = parts[1] === 'rightstack' ? 'rightstack' : (parts[1] === 'rightstackp' ? 'rightstackp' : null);
+      if (!mode) return null;
+      const pivotId = String(parts[2] || '').trim();
+      return { mode, pivotId };
+    };
+    const parsed = parseKey(key);
     setNodes((prev) =>
       prev.map((n) => {
         const d: any = (n as any)?.data;
         if (!d || d.isGroup) return n;
         const k = String(d.stackGroupKey || '').trim();
-        if (k !== key) return n;
+        if (!k) return n;
         const cur = Boolean(d.stackExpanded);
-        if (cur === nextExpanded) return n;
-        return { ...(n as any), data: { ...d, stackExpanded: nextExpanded } } as any;
+        if (k === key) {
+          if (cur === nextExpanded) return n;
+          return { ...(n as any), data: { ...d, stackExpanded: nextExpanded } } as any;
+        }
+        // Only one expanded stack group per right node (same pivot).
+        if (nextExpanded && parsed) {
+          const other = parseKey(k);
+          if (other && other.pivotId === parsed.pivotId && cur) {
+            return { ...(n as any), data: { ...d, stackExpanded: false } } as any;
+          }
+        }
+        return n;
       }),
     );
     if (layoutMode === 'levels') {
@@ -7896,6 +8491,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const hasStack = !isGroup && !!stackKey && typeof stackCount === 'number' && stackCount > 1;
       const isLevelsRight = !isGroup && layoutMode === 'levels' && String(d0?.levelsPane || '') === 'right';
 
+      // Stack group (expanded stack container)
+      const isStackGroup = isGroup && Boolean(d0?.isStackGroup);
+      const stackGroupKey = isStackGroup ? String(d0?.stackGroupKey || '').trim() : '';
+
       // Only clone data when needed (perf).
       let nextData: any = d0;
       let changed = false;
@@ -7912,7 +8511,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           nextData.onToggleStack = toggleStackGroup;
           changed = true;
         }
-      } else if (!isSubcategoryStack && typeof nextData?.onToggleStack === 'function') {
+      } else if (isStackGroup && stackGroupKey) {
+        // Stack group containers also need the toggle callback
+        if (nextData === d0) {
+          nextData = { ...d0 };
+          changed = true;
+        }
+        if (nextData.onToggleStack !== toggleStackGroup) {
+          nextData.onToggleStack = toggleStackGroup;
+          changed = true;
+        }
+      } else if (!isSubcategoryStack && !isStackGroup && typeof nextData?.onToggleStack === 'function') {
         nextData = { ...d0 };
         delete nextData.onToggleStack;
         changed = true;
@@ -9075,7 +9684,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const miniMapNodeColor = React.useCallback((node: Node<HorizonNodeData>) => {
     const data = node.data as HorizonNodeData;
     if (data.critical) return '#EF4444';
-    const vt = getHorizonNodeVisualType(data.type, (data as any)?.canonicalPath);
+    const vt = getHorizonNodeVisualType(data.type, (data as any)?.canonicalPath, (data as any)?.label);
     return getNodeColors(vt || data.type, theme === 'dark' ? 'dark' : 'light').accent;
   }, [theme]);
 
@@ -11146,6 +11755,159 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           </>
         )}
 
+        {/* Node explanation popover (opened via "i" button on a node) */}
+        {nodeExplainPopover?.open && (
+          <>
+            {/* Backdrop */}
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 1950,
+                background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(15,23,42,0.12)',
+                backdropFilter: 'blur(10px)',
+              }}
+            />
+            <div
+              ref={nodeExplainPopoverRef}
+              style={{
+                position: 'fixed',
+                left: '50%',
+                top: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: 560,
+                maxWidth: 'calc(100vw - 24px)',
+                maxHeight: 'calc(100vh - 24px)',
+                zIndex: 2000,
+                borderRadius: 16,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.10)'}`,
+                background: theme === 'dark' ? 'rgba(10,10,12,0.70)' : 'rgba(255,255,255,0.72)',
+                backdropFilter: 'blur(12px)',
+                boxShadow: theme === 'dark' ? '0 22px 70px rgba(0,0,0,0.60)' : '0 22px 70px rgba(0,0,0,0.18)',
+                overflow: 'hidden',
+              }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 10,
+                  right: 10,
+                  zIndex: 2,
+                  display: 'flex',
+                  gap: 8,
+                }}
+              >
+                <button
+                  type="button"
+                  disabled={nodeExplainPopover.loading}
+                  onClick={() => {
+                    loadNodeExplanation({
+                      nodeId: nodeExplainPopover.nodeId,
+                      fragmentId: nodeExplainPopover.fragmentId,
+                      label: nodeExplainPopover.label,
+                      canonicalPath: nodeExplainPopover.canonicalPath,
+                      nodeType: nodeExplainPopover.nodeType,
+                      force: true,
+                    });
+                  }}
+                  title="Reload"
+                  aria-label="Reload"
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 10,
+                    border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
+                    background: 'transparent',
+                    color: 'var(--text-heading)',
+                    cursor: nodeExplainPopover.loading ? 'not-allowed' : 'pointer',
+                    opacity: nodeExplainPopover.loading ? 0.35 : 0.7,
+                    fontSize: 14,
+                    fontWeight: 900,
+                  }}
+                >
+                  ↻
+                </button>
+                <button
+                  type="button"
+                  onClick={closeNodeExplainPopover}
+                  title="Close"
+                  aria-label="Close"
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 10,
+                    border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
+                    background: 'transparent',
+                    color: 'var(--text-heading)',
+                    cursor: 'pointer',
+                    opacity: 0.7,
+                    fontSize: 16,
+                    fontWeight: 900,
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div
+                style={{
+                  paddingTop: 54,
+                  paddingBottom: 54,
+                  paddingLeft: 18,
+                  paddingRight: 18,
+                  maxHeight: 'calc(100vh - 24px)',
+                  overflow: 'auto',
+                }}
+              >
+                {nodeExplainPopover.error && (
+                  <div style={{ fontSize: 12, color: '#f87171' }}>{nodeExplainPopover.error}</div>
+                )}
+                {!nodeExplainPopover.error && nodeExplainPopover.loading && !nodeExplainPopover.markdown && (
+                  <div
+                    style={{
+                      minHeight: 220,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <style>{`
+                        @keyframes horizon-pulse-dot {
+                          0%, 100% { transform: scale(0.6); opacity: 0.4; }
+                          50% { transform: scale(1); opacity: 1; }
+                        }
+                      `}</style>
+                      {[0, 1, 2].map((i) => (
+                        <div
+                          key={i}
+                          style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: '50%',
+                            background: 'var(--accent-primary, #3B82F6)',
+                            animation: `horizon-pulse-dot 1.2s infinite ease-in-out`,
+                            animationDelay: `${i * 0.2}s`,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {!!nodeExplainPopover.markdown && (
+                  <div style={{ fontSize: 12, color: 'var(--text-heading)', lineHeight: 1.6 }}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{nodeExplainPopover.markdown}</ReactMarkdown>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
         <ReactFlow
             nodes={displayNodes}
             edges={displayEdges}
@@ -12347,9 +13109,28 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       {/* Toast notification for empty expand results */}
       <ExpandEmptyToast
         visible={expandEmptyToast}
-        onHide={() => setExpandEmptyToast(false)}
-        message="No related objects found"
-        subMessage="Try a different expansion mode"
+        onHide={() => {
+          setExpandEmptyToast(false);
+          setExpandEmptyContext(null);
+        }}
+        duration={expandEmptyContext?.isFullNetwork ? 5000 : 2000}
+        message={expandEmptyContext?.isFullNetwork ? 'All available on-the-fly data is loaded.' : 'No related objects found'}
+        subMessage={
+          expandEmptyContext?.isFullNetwork
+            ? 'For additional details, the system can run Scout.'
+            : 'Try a different expansion mode'
+        }
+        actionLabel={expandEmptyContext?.isFullNetwork ? 'Scout' : undefined}
+        onAction={
+          expandEmptyContext?.isFullNetwork && expandEmptyContext.fragmentId
+            ? () => {
+                openScopeScoutModal(expandEmptyContext.fragmentId, expandEmptyContext.canonicalPath);
+                setExpandEmptyToast(false);
+                setExpandEmptyContext(null);
+              }
+            : undefined
+        }
+        actionDisabled={!onScopeScout || Boolean(scopeScoutInFlightId)}
       />
     </div>
   );

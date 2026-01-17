@@ -209,6 +209,8 @@ Choose relationType to match this direction:
 - LOCATED_IN / OPERATES_IN: source located/operates in GEO target.
 - OWNS: source owns target.
   CRITICAL: NEVER output OWNS where targetType=PERSON.
+  CRITICAL: NEVER output OWNS from ORGANIZATION to COMMUNITY if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}.
+    Dynasties and tribes own organizations, not the reverse. If an organization is owned by a dynasty/tribe, use SUBSIDIARY_OF from org to community (will be normalized to OWNS with reversed direction).
   If TARGET is owned/controlled by a person or parent org, use SUBSIDIARY_OF with the owner as target (it will be normalized to OWNS).
   Use OWNS ONLY for equity ownership/control relationships (shareholder, stake, holding company, ultimate beneficial owner).
   Do NOT use OWNS for roles/employment/management like CEO, director, founder, chairman; use INFLUENCES if relevant, or omit the relation.
@@ -223,6 +225,36 @@ Choose relationType to match this direction:
 - PRODUCES: source produces target (target is a product).
 - REGULATES: source regulates target (source is typically a government/agency org).
 - COMPETES_WITH / INFLUENCES: as labeled.
+- OPERATES_VIA: source uses target channel/platform for communication/operations.
+  Direction: COMMUNITY/ORGANIZATION → MEDIA_CHANNEL
+  Example: /community/ru/criminal/kazan-dealers OPERATES_VIA /media/telegram/kazan-zakaz
+- MEMBER_OF: person is a member of a community (not employment).
+  Direction: PERSON → COMMUNITY
+  Example: /person/john-doe MEMBER_OF /community/global/professional/osint-researchers
+- AFFILIATED_WITH: community or person has affiliation with a formal organization.
+  Direction: COMMUNITY/PERSON → ORGANIZATION
+  Example: /community/ae/trade/hawala-network AFFILIATED_WITH /org/ae/exchange-house
+- HAS_SUBGROUP: community hierarchy (parent group → child/narrower group).
+  Used for dynasties, tribes, clans, professional networks with internal structure.
+  Direction: broader community → narrower sub-community/branch/clan.
+  Examples:
+    /community/sa/dynasty/house-of-saud HAS_SUBGROUP /community/sa/dynasty/sudairi-seven
+    /community/af/tribe/pashtun HAS_SUBGROUP /community/af/tribe/durrani
+    /community/kz/tribe/senior-zhuz HAS_SUBGROUP /community/kz/tribe/uysun
+
+DEPENDS_ON FACETS (qualifiers for more granular dependency analysis):
+When outputting DEPENDS_ON relations, you MAY add a "facet" qualifier to specify the nature of dependency:
+- communication: dependency on communication channels/platforms
+- infrastructure: dependency on physical or digital infrastructure
+- payment: dependency on payment/financial mechanisms
+- distribution: dependency on distribution networks/channels
+- logistics: dependency on logistics/transportation
+- supply: dependency on supply of materials/goods
+- labor: dependency on labor/workforce
+- legitimization: dependency on legitimization mechanisms (for illicit activities)
+- enforcement: dependency on enforcement/protection mechanisms
+- regulatory: dependency on regulatory environment/approvals
+Example: { "relationType": "DEPENDS_ON", "qualifiers": { "facet": "communication" } }
 
 OUTPUT:
 Return ONLY JSON with this schema:
@@ -232,8 +264,8 @@ Return ONLY JSON with this schema:
       "targetName": "string",
       "targetLegalName": "string",
       "targetShortName": "string",
-      "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL",
-      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "HAS_SUBMARKET" | "ADMINISTERS",
+      "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "COMMUNITY",
+      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
       "reason": "string",
       "confidence": 0.0,
       "targetCanonicalPath": "string (REQUIRED, stable, NOT /discovered/*)"
@@ -253,6 +285,23 @@ RULES:
     - Use for ministries, regulators, agencies, state bodies. If unknown, use /gov/na/{slug}.
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
+  - Communities (informal social groups): /community/{geo}/{type}/{slug}
+    - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
+    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
+    - Examples:
+      - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
+      - "Kazan drug dealers" -> /community/ru/criminal/kazan-synthetic-dealers
+      - "OSINT community" -> /community/global/professional/osint-researchers
+      - "House of Saud" -> /community/sa/dynasty/house-of-saud
+      - "Pashtun tribes" -> /community/af/tribe/pashtun
+      - "Senior Zhuz (Kazakhstan)" -> /community/kz/tribe/senior-zhuz
+    - CRITICAL: COMMUNITY is for INFORMAL groups WITHOUT legal structure.
+      - If the entity has legal registration → use ORGANIZATION (/org/)
+      - If the entity is a media endpoint (channel/group) → use MEDIA_CHANNEL (/media/)
+    - COMMUNITY HIERARCHY: Use HAS_SUBGROUP to link parent community → narrower sub-community
+      - dynasties: broader family → branch (house-of-saud → sudairi-seven)
+      - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
+      - Direction: broader → narrower
   - Facilities: /fac/{orgSlug}/{slug} when possible (prefer nested over flat /fac/{slug})
   - People: /person/{slug}
   - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}

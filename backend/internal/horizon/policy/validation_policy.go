@@ -489,6 +489,7 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 			horizonmodels.FragmentTypeFacility,
 			horizonmodels.FragmentTypeProduct,
 			horizonmodels.FragmentTypeGeoRegion,
+			horizonmodels.FragmentTypeMarket,
 		},
 		Description: "Regulator (org) regulates regulated entity",
 	},
@@ -626,12 +627,16 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 			horizonmodels.FragmentTypeOrganization,
 			horizonmodels.FragmentTypeFacility,
 			horizonmodels.FragmentTypeProduct,
+			horizonmodels.FragmentTypeCommunity,
+			horizonmodels.FragmentTypeMarket,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{
 			horizonmodels.FragmentTypeOrganization,
 			horizonmodels.FragmentTypeFacility,
 			horizonmodels.FragmentTypeProduct,
 			horizonmodels.FragmentTypeGeoRegion,
+			horizonmodels.FragmentTypeMediaChannel,
+			horizonmodels.FragmentTypeCommunity,
 		},
 		Description: "Dependent entity depends on dependency",
 	},
@@ -663,6 +668,7 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []horizonmodels.FragmentType{
 			horizonmodels.FragmentTypeOrganization,
 			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeCommunity,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
 		Description:      "Entity participates in market",
@@ -672,6 +678,7 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []horizonmodels.FragmentType{
 			horizonmodels.FragmentTypeOrganization,
 			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeCommunity,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
 		Description:      "Entity dominates market (leader)",
@@ -682,12 +689,42 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
 		Description:      "Market has sub-market (hierarchy)",
 	},
+	// HAS_SUBGROUP: community hierarchy (parent group -> child sub-group).
+	horizonmodels.DependencyTypeHasSubgroup: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeCommunity},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeCommunity},
+		Description:      "Community has sub-group (hierarchy)",
+	},
 	// ADMINISTERS: government hierarchy (superior body -> subordinate body).
 	// NOTE: GOV bodies are stored as FragmentTypeOrganization under /gov/... canonical paths.
 	horizonmodels.DependencyTypeAdministers: {
 		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
 		Description:      "Government body administers subordinate body (hierarchy)",
+	},
+	// OPERATES_VIA: community/org uses a channel/platform for communication/operations.
+	horizonmodels.DependencyTypeOperatesVia: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeCommunity,
+			horizonmodels.FragmentTypeOrganization,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMediaChannel},
+		Description:      "Entity operates via media channel",
+	},
+	// MEMBER_OF: person is a member of a community.
+	horizonmodels.DependencyTypeMemberOf: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypePerson},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeCommunity},
+		Description:      "Person is member of community",
+	},
+	// AFFILIATED_WITH: community or person affiliated with organization.
+	horizonmodels.DependencyTypeAffiliatedWith: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeCommunity,
+			horizonmodels.FragmentTypePerson,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
+		Description:      "Entity is affiliated with organization",
 	},
 }
 
@@ -715,6 +752,8 @@ func (p *ValidationPolicy) expectedPathPrefix(fragType horizonmodels.FragmentTyp
 		return "/person/"
 	case horizonmodels.FragmentTypeMediaChannel:
 		return "/media/"
+	case horizonmodels.FragmentTypeCommunity:
+		return "/community/"
 	case horizonmodels.FragmentTypeSupplyLink:
 		return "/supply-link/" // Tenant-specific, format: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}
 	case horizonmodels.FragmentTypeProgram:

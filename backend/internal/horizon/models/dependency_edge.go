@@ -103,6 +103,82 @@ const (
 	DependencyTypeRelativeOf DependencyType = "RELATIVE_OF"
 	// RELATED_TO: symmetric person-person relationship (publicly known associates: friends/partners/classmates).
 	DependencyTypeRelatedTo DependencyType = "RELATED_TO"
+
+	// --- Community relationships ---
+	// OPERATES_VIA: entity uses a channel/platform for communication or operations.
+	// Direction: COMMUNITY/ORGANIZATION → MEDIA_CHANNEL
+	// Example: /community/ru/criminal/kazan-dealers OPERATES_VIA /media/telegram/kazan-zakaz
+	DependencyTypeOperatesVia DependencyType = "OPERATES_VIA"
+	// MEMBER_OF: person is a member of a community (not employment).
+	// Direction: PERSON → COMMUNITY
+	// Example: /person/john-doe MEMBER_OF /community/global/professional/osint-researchers
+	DependencyTypeMemberOf DependencyType = "MEMBER_OF"
+	// AFFILIATED_WITH: community or person has affiliation with a formal organization.
+	// Direction: COMMUNITY/PERSON → ORGANIZATION
+	// Example: /community/ae/trade/hawala-network AFFILIATED_WITH /org/ae/exchange-house
+	DependencyTypeAffiliatedWith DependencyType = "AFFILIATED_WITH"
+
+	// --- Community hierarchy ---
+	// HAS_SUBGROUP: community hierarchy (parent group → child/narrower group).
+	// Used for dynasties, tribes, clans, professional networks with internal structure.
+	// Direction: broader community → narrower sub-community/branch/clan.
+	// Examples:
+	//   /community/sa/dynasty/house-of-saud HAS_SUBGROUP /community/sa/dynasty/sudairi-seven
+	//   /community/af/tribe/pashtun HAS_SUBGROUP /community/af/tribe/durrani
+	//   /community/kz/tribe/senior-zhuz HAS_SUBGROUP /community/kz/tribe/uysun
+	DependencyTypeHasSubgroup DependencyType = "HAS_SUBGROUP"
+)
+
+// =============================================================================
+// DEPENDENCY FACETS (qualifiers for DEPENDS_ON edges)
+// =============================================================================
+// DependencyFacet describes the nature/aspect of a DEPENDS_ON relationship.
+// This is stored in Qualifiers["facet"] on DependencyEdge.
+// Facets enable more granular analysis without proliferating edge types.
+
+// DependencyFacet is a semantic qualifier for DEPENDS_ON edges.
+type DependencyFacet string
+
+const (
+	// FacetCommunication: dependency on communication channels/platforms.
+	// Example: drug market depends on Telegram channels for coordination.
+	FacetCommunication DependencyFacet = "communication"
+
+	// FacetInfrastructure: dependency on physical or digital infrastructure.
+	// Example: e-commerce depends on cloud hosting, logistics depends on ports.
+	FacetInfrastructure DependencyFacet = "infrastructure"
+
+	// FacetPayment: dependency on payment/financial mechanisms.
+	// Example: illicit market depends on crypto, hawala network depends on cash corridors.
+	FacetPayment DependencyFacet = "payment"
+
+	// FacetDistribution: dependency on distribution networks/channels.
+	// Example: drug market depends on local dealer networks.
+	FacetDistribution DependencyFacet = "distribution"
+
+	// FacetLogistics: dependency on logistics/transportation.
+	// Example: supply chain depends on shipping routes, ports, carriers.
+	FacetLogistics DependencyFacet = "logistics"
+
+	// FacetSupply: dependency on supply of materials/goods.
+	// Example: manufacturer depends on raw material suppliers.
+	FacetSupply DependencyFacet = "supply"
+
+	// FacetLabor: dependency on labor/workforce.
+	// Example: factory depends on skilled labor pool.
+	FacetLabor DependencyFacet = "labor"
+
+	// FacetLegitimization: dependency on legitimization mechanisms (for illicit activities).
+	// Example: money laundering depends on shell companies, front businesses.
+	FacetLegitimization DependencyFacet = "legitimization"
+
+	// FacetEnforcement: dependency on enforcement/protection mechanisms.
+	// Example: criminal network depends on corrupt officials, private security.
+	FacetEnforcement DependencyFacet = "enforcement"
+
+	// FacetRegulatory: dependency on regulatory environment/approvals.
+	// Example: pharma company depends on FDA approval process.
+	FacetRegulatory DependencyFacet = "regulatory"
 )
 
 // EdgeProperties свойства ребра зависимости
@@ -206,4 +282,74 @@ func (e *DependencyEdge) GetEdgeModality() string {
 		return "historical"
 	}
 	return "actual"
+}
+
+// =============================================================================
+// DEPENDENCY FACET HELPERS
+// =============================================================================
+
+// GetFacet extracts the dependency facet from edge qualifiers.
+// Returns empty string if no facet is set.
+func (e *DependencyEdge) GetFacet() DependencyFacet {
+	if e.Qualifiers == nil {
+		return ""
+	}
+	if facet, ok := e.Qualifiers["facet"].(string); ok {
+		return DependencyFacet(facet)
+	}
+	return ""
+}
+
+// SetFacet sets the dependency facet in edge qualifiers.
+func (e *DependencyEdge) SetFacet(facet DependencyFacet) {
+	if e.Qualifiers == nil {
+		e.Qualifiers = make(map[string]interface{})
+	}
+	e.Qualifiers["facet"] = string(facet)
+}
+
+// GetSubstitutability extracts the substitutability score from edge qualifiers.
+// Returns 0.0 if not set. Range: 0..1 (0 = irreplaceable, 1 = easily substituted).
+func (e *DependencyEdge) GetSubstitutability() float64 {
+	if e.Qualifiers == nil {
+		return 0.0
+	}
+	if v, ok := e.Qualifiers["substitutability"].(float64); ok {
+		return v
+	}
+	return 0.0
+}
+
+// SetSubstitutability sets the substitutability score in edge qualifiers.
+func (e *DependencyEdge) SetSubstitutability(v float64) {
+	if e.Qualifiers == nil {
+		e.Qualifiers = make(map[string]interface{})
+	}
+	e.Qualifiers["substitutability"] = v
+}
+
+// AllDependencyFacets returns all valid dependency facets.
+func AllDependencyFacets() []DependencyFacet {
+	return []DependencyFacet{
+		FacetCommunication,
+		FacetInfrastructure,
+		FacetPayment,
+		FacetDistribution,
+		FacetLogistics,
+		FacetSupply,
+		FacetLabor,
+		FacetLegitimization,
+		FacetEnforcement,
+		FacetRegulatory,
+	}
+}
+
+// IsValidFacet checks if a facet string is a valid DependencyFacet.
+func IsValidFacet(s string) bool {
+	for _, f := range AllDependencyFacets() {
+		if string(f) == s {
+			return true
+		}
+	}
+	return false
 }

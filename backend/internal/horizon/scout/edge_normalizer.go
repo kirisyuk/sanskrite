@@ -71,6 +71,14 @@ func CanonicalizeEdge(edgeType models.DependencyType, sourceType, targetType mod
 	return models.CanonicalizeEdge(edgeType, sourceType, targetType)
 }
 
+// CanonicalizeEdgeWithPaths rewrites an edge type (and optionally direction) based on endpoint fragment types and canonical paths.
+// This extends CanonicalizeEdge with path-based checks (e.g., for community subtypes).
+// Returns: (newType, shouldSwapEndpoints, changed, reason).
+func CanonicalizeEdgeWithPaths(edgeType models.DependencyType, sourceType, targetType models.FragmentType, sourcePath, targetPath string) (models.DependencyType, bool, bool, string) {
+	// Delegate to models to avoid import cycles
+	return models.CanonicalizeEdgeWithPaths(edgeType, sourceType, targetType, sourcePath, targetPath)
+}
+
 // EdgeDirectionPolicies defines which fragment types are allowed as source/target.
 // If an edge violates these rules, reverse source<->target if the reverse is valid.
 var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
@@ -239,6 +247,7 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypePerson,
 			models.FragmentTypeGeoRegion, // Nested regions: city in state
 			models.FragmentTypeDeposit,   // Deposits are located in regions
+			models.FragmentTypeCommunity, // Communities can be geographically located
 		},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeGeoRegion},
 		Description:      "Entity is located within region",
@@ -272,19 +281,24 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 
 	// DEPENDS_ON: Dependency relationship.
 	// Almost any entity can depend on another.
+	// Communities can also depend on infrastructure, channels, etc.
 	models.DependencyTypeDependsOn: {
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
 			models.FragmentTypeProduct,
+			models.FragmentTypeCommunity, // Communities can depend on infrastructure
+			models.FragmentTypeMarket,    // Markets can depend on infrastructure
 		},
 		ValidTargetTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
 			models.FragmentTypeProduct,
 			models.FragmentTypeGeoRegion,
+			models.FragmentTypeMediaChannel, // Dependency on communication channels
+			models.FragmentTypeCommunity,    // Dependency on other communities
 		},
-		Description: "Dependent entity depends on dependency",
+		Description: "Dependent entity depends on dependency (use facet qualifier for granularity)",
 	},
 
 	// TRANSFORMS_INTO: Value chain transformation (product -> product).
@@ -326,20 +340,22 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		Description:      "Person is related to person (symmetric)",
 	},
 
-	// PARTICIPATES_IN: org/fac participates in a market.
+	// PARTICIPATES_IN: org/fac/community participates in a market.
 	models.DependencyTypeParticipatesIn: {
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
+			models.FragmentTypeCommunity, // Communities can participate in markets
 		},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
 		Description:      "Entity participates in market",
 	},
-	// DOMINATES: org/fac dominates a market (leader).
+	// DOMINATES: org/fac/community dominates a market (leader).
 	models.DependencyTypeDominates: {
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
+			models.FragmentTypeCommunity, // Communities (e.g., cartels) can dominate markets
 		},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
 		Description:      "Entity dominates market (leader)",
@@ -356,6 +372,47 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
 		Description:      "Government body administers subordinate body (hierarchy)",
+	},
+
+	// --- Community relationships ---
+
+	// OPERATES_VIA: entity uses a channel/platform for communication or operations.
+	// Direction: COMMUNITY/ORGANIZATION → MEDIA_CHANNEL
+	models.DependencyTypeOperatesVia: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeCommunity,
+			models.FragmentTypeOrganization,
+		},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMediaChannel},
+		Description:      "Entity operates via media channel",
+	},
+
+	// MEMBER_OF: person is a member of a community (not employment).
+	// Direction: PERSON → COMMUNITY
+	models.DependencyTypeMemberOf: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeCommunity},
+		Description:      "Person is member of community",
+	},
+
+	// AFFILIATED_WITH: community or person has affiliation with a formal organization.
+	// Direction: COMMUNITY/PERSON → ORGANIZATION
+	models.DependencyTypeAffiliatedWith: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeCommunity,
+			models.FragmentTypePerson,
+		},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Entity is affiliated with organization",
+	},
+
+	// HAS_SUBGROUP: community hierarchy (parent group → child/narrower group).
+	// Used for dynasties, tribes, clans, professional networks with internal structure.
+	// Direction: broader community → narrower sub-community/branch/clan.
+	models.DependencyTypeHasSubgroup: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeCommunity},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeCommunity},
+		Description:      "Community has sub-group (hierarchy: dynasty branch, tribe clan)",
 	},
 }
 

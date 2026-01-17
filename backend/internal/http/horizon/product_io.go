@@ -195,6 +195,10 @@ func (h *HorizonHandlers) ApplyProductIO(w http.ResponseWriter, r *http.Request)
 
 	// Materialize through a shared workflow that uses the same repos/rules as Scout.
 	m := materialize.NewProductIOMaterializer(h.service.Fragments(), h.service.Edges())
+	// Best-effort: reuse the same canonicalization/dedup resolver as Scout to keep paths stable.
+	if se := h.service.Scout(); se != nil {
+		m.WithCanonicalPathResolver(se.CanonicalPathResolver())
+	}
 	out, err := m.Apply(r.Context(), &materialize.ProductIOApplyRequest{
 		TenantID:          "global",
 		ProjectID:         lens.ProjectID,

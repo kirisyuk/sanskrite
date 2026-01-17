@@ -441,6 +441,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
    - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
      CRITICAL: NEVER output OWNS where targetType=PERSON.
+     CRITICAL: NEVER output OWNS from ORGANIZATION to COMMUNITY if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}.
+       Dynasties and tribes own organizations, not the reverse. If THIS FRAGMENT (org) is owned by a dynasty/tribe, use SUBSIDIARY_OF from org to community (will be normalized to OWNS with reversed direction).
      If THIS FRAGMENT is owned/controlled by a person or parent org, use SUBSIDIARY_OF with the owner as target (it will be normalized to OWNS).
      Use OWNS ONLY for equity ownership/control relationships (shareholder, stake, holding company, ultimate beneficial owner).
      Do NOT use OWNS for roles/employment/management like CEO, director, founder, chairman; use INFLUENCES if relevant, or omit the relation.
@@ -449,8 +451,14 @@ TASK: Extract all relevant information about this entity and return it as a JSON
        - If THIS FRAGMENT is a PERSON and they own Company X: emit OWNS from Person -> Company X.
    - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
    - MANAGES: source manages target (formal authority: CEO/executive/director/operator). Do NOT use for informal influence.
-   - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
-   - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
+  - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
+  - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
+  - OPERATES_VIA: source uses target channel/platform for communication/operations.
+    Direction: COMMUNITY/ORGANIZATION → MEDIA_CHANNEL
+  - MEMBER_OF: person is a member of a community (not employment).
+    Direction: PERSON → COMMUNITY
+  - AFFILIATED_WITH: community or person has affiliation with a formal organization.
+    Direction: COMMUNITY/PERSON → ORGANIZATION
    - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
    - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
      Include in 'reason': round name/number, investment amount if known.
@@ -477,11 +485,15 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - MANAGES: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PROGRAM
    - EMPLOYED_BY: source MUST be PERSON, target MUST be ORGANIZATION
    - BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION
+  - OPERATES_VIA: source MUST be COMMUNITY or ORGANIZATION, target MUST be MEDIA_CHANNEL
+  - MEMBER_OF: source MUST be PERSON, target MUST be COMMUNITY
+  - AFFILIATED_WITH: source MUST be COMMUNITY or PERSON, target MUST be ORGANIZATION
+  - HAS_SUBGROUP: source MUST be COMMUNITY, target MUST be COMMUNITY (parent group → narrower sub-group/branch/clan)
    - FOUNDED: source MUST be PERSON or ORGANIZATION, target MUST be ORGANIZATION/PROGRAM
    - INVESTS_IN: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/PROGRAM/PRODUCT
    - PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
-   - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
-   - DOMINATES: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
+  - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
+  - DOMINATES: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
    - PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
    - AUDITED_BY: source MUST be ORGANIZATION or FACILITY, target MUST be ORGANIZATION
    - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
@@ -489,7 +501,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - LOCATED_IN: target MUST be GEO_REGION
    - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION, FACILITY, or DEPOSIT
    - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
-   - DEPENDS_ON: source can be ORGANIZATION/FACILITY/PRODUCT, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
+  - DEPENDS_ON: source can be ORGANIZATION/FACILITY/PRODUCT/COMMUNITY/MARKET, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION/MEDIA_CHANNEL/COMMUNITY
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT (e.g., mine extracts from ore deposit, platform extracts from oil field)
    - OWNS: can also target DEPOSIT (org/person owns deposit rights)
    - PRODUCES: source can also be DEPOSIT (deposits produce resources)
@@ -499,8 +511,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - targetName: Full legal/official name where relevant (e.g., "Tesla, Inc.")
    - targetLegalName: Same as targetName (explicit field)
    - targetShortName: Base name without ownership suffix (e.g., "Tesla")
-   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT"
-   - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, COMPETES_WITH, INFLUENCES, EXTRACTS_FROM
+  - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY"
+  - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, COMPETES_WITH, INFLUENCES, EXTRACTS_FROM, OPERATES_VIA, MEMBER_OF, AFFILIATED_WITH, HAS_SUBGROUP
    - reason: Brief evidence/reason for this relation
    - confidence: 0.0 to 1.0
    - targetCanonicalPath: REQUIRED. Suggest a STABLE canonical path.
@@ -513,6 +525,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
      - eventId: "/event/{slug}" (e.g., funding round for INVESTS_IN)
      - round: "Series A" (INVESTS_IN)
      - contractType: "long-term" | "spot" (SUPPLIES_TO)
+    - facet: for DEPENDS_ON, classify dependency nature (communication | infrastructure | payment | distribution | logistics | supply | labor | legitimization | enforcement | regulatory)
    - metrics: (Optional) Map of numerical edge metrics with MetricValue objects.
      Examples:
        - OWNS: ownership_percent (unit="percent", value=45.0), voting_percent
@@ -560,6 +573,24 @@ CANONICAL PATH RULES:
     - IMPORTANT: fixed number of segments after /segment: exactly 3 parts (domain/vertical/geo)
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
+  - Communities (informal social groups): /community/{geo}/{type}/{slug}
+    - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
+    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
+    - Examples:
+      - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
+      - "Kazan drug dealers" -> /community/ru/criminal/kazan-synthetic-dealers
+      - "OSINT community" -> /community/global/professional/osint-researchers
+      - "House of Saud" -> /community/sa/dynasty/house-of-saud
+      - "Pashtun tribes" -> /community/af/tribe/pashtun
+      - "Senior Zhuz (Kazakhstan)" -> /community/kz/tribe/senior-zhuz
+    - CRITICAL: COMMUNITY is for INFORMAL groups WITHOUT legal structure.
+      - If the entity has legal registration → use ORGANIZATION (/org/)
+      - If the entity is a media endpoint (channel/group) → use MEDIA_CHANNEL (/media/)
+      - COMMUNITY is the social entity that *uses* channels, not the channel itself
+    - COMMUNITY HIERARCHY: Use HAS_SUBGROUP to link parent community → narrower sub-community
+      - dynasties: broader family → branch (house-of-saud → sudairi-seven)
+      - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
+      - Direction: broader → narrower (like HAS_SUBMARKET for markets)
   - People: /person/{lowercase-slug}
   - Products (Goods): MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}[/{model-slug}]
     - category: "raw" | "component" | "finished"

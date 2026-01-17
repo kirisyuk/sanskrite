@@ -60,28 +60,33 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 
 	// Policy-based validation if available
 	if r.validationPolicy != nil {
-		// Get source and target fragment types for validation
+		// Get source and target fragment types and paths for validation
 		var sourceType, targetType string
+		var sourcePath, targetPath string
 		if r.fragmentsRepo != nil {
 			if sourceFrag, err := r.fragmentsRepo.Get(ctx, edge.SourceFragmentID); err == nil && sourceFrag != nil {
 				sourceType = string(sourceFrag.Type)
-				log.Printf("%s Source fragment type: %s", logPrefix, sourceType)
+				sourcePath = sourceFrag.CanonicalPath
+				log.Printf("%s Source fragment type: %s, path: %s", logPrefix, sourceType, sourcePath)
 			}
 			if targetFrag, err := r.fragmentsRepo.Get(ctx, edge.TargetFragmentID); err == nil && targetFrag != nil {
 				targetType = string(targetFrag.Type)
-				log.Printf("%s Target fragment type: %s", logPrefix, targetType)
+				targetPath = targetFrag.CanonicalPath
+				log.Printf("%s Target fragment type: %s, path: %s", logPrefix, targetType, targetPath)
 			}
 		}
 
 		// Canonicalize certain mis-modeled edges before running validation policy.
 		// Example: PRODUCT OWNS ORGANIZATION -> ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
+		// Use path-aware canonicalization to handle community subtypes (dynasty/tribe).
 		if sourceType != "" && targetType != "" {
-			if newType, shouldSwap, changed, reason := models.CanonicalizeEdge(edge.Type, models.FragmentType(sourceType), models.FragmentType(targetType)); changed {
+			if newType, shouldSwap, changed, reason := models.CanonicalizeEdgeWithPaths(edge.Type, models.FragmentType(sourceType), models.FragmentType(targetType), sourcePath, targetPath); changed {
 				oldType := edge.Type
 				edge.Type = newType
 				if shouldSwap {
 					edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
 					sourceType, targetType = targetType, sourceType
+					sourcePath, targetPath = targetPath, sourcePath
 				}
 				if edge.Qualifiers == nil {
 					edge.Qualifiers = map[string]interface{}{}

@@ -184,6 +184,31 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - If canonicalPath is legacy (/org/{slug}) or uses /org/na/{slug}, add a question:
 	    - "What is the country of origin / primary jurisdiction for <org>? Prefer canonicalPath /org/{iso2}/{slug} (iso2=ISO3166-1 alpha2)."
 	
+  MANDATORY - Community completeness (for COMMUNITY or /community/*):
+    - If the entity is a COMMUNITY (fragment.type == COMMUNITY OR canonicalPath starts with /community/):
+      - If communityType is empty/missing, add:
+        - "What type of community is <entity>? Return one of trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe."
+      - If communityPlatforms is empty AND there are no OPERATES_VIA edges, add:
+        - "Which specific communication channels does <community> use? Return /media/{platform}/{slug} and OPERATES_VIA edges."
+      - If affiliatedOrgPath is empty AND there are no AFFILIATED_WITH edges, add:
+        - "Is <community> affiliated with any formal organizations? Return /org/... paths and AFFILIATED_WITH edges."
+      - If there is a dependency on a platform by name (e.g., Telegram/WhatsApp) but no specific channels, add:
+        - "Which specific Telegram/WhatsApp/Signal channels or groups does <community> use? Provide /media/... paths."
+      - DYNASTY/TRIBE HIERARCHY (for communityType == dynasty or tribe):
+        - If communityType is "dynasty" or "tribe" and there are no HAS_SUBGROUP edges:
+          - "What are the main branches/sub-clans of <community>? Return /community/{geo}/{type}/{slug} paths and HAS_SUBGROUP edges (broader → narrower)."
+          - For dynasties: "What are the key branches of <dynasty>? (e.g., Sudairi Seven for House of Saud)"
+          - For tribes: "What are the major sub-tribes/clans of <tribe>? (e.g., Durrani/Ghilzai for Pashtun)"
+        - If there are HAS_SUBGROUP children but no parent, check if this is a root community or add:
+          - "Is <community> part of a larger dynasty/tribe? Return parent path and HAS_SUBGROUP edge (parent → this)."
+
+  MANDATORY - PERSON cultural affiliation (dynasty/tribe when relevant):
+    - If the entity is a PERSON and there are cultural signals in the source text OR strong LLM prior knowledge indicates cultural relevance
+      (e.g., titles, clan names, tribal affiliation, royal lineage, dynasty/house membership, "tribe", "clan", "lineage", "house of", "son of"),
+      add a missingInfo item to identify dynasty/tribe membership:
+      - "Is <person> affiliated with a dynasty or tribe? If yes, return /community/{geo}/dynasty|tribe/{slug} and MEMBER_OF edges."
+    - Only ask this when culturally relevant and plausible for the person/context (avoid forcing for modern corporate contexts).
+
 	MANDATORY - Lifecycle stage (always required for FACILITY, DEPOSIT, extractive ORGANIZATION):
 	  - If lifecycleStage is empty/missing for a /fac/, /deposit/, or extractive /org/ (mining/O&G sector), add:
 	    - "What is the operational status of <entity>? Is it: concept/planning/permitting/financing/construction/commissioning/operational/expansion/suspended/decommissioning/closed?"

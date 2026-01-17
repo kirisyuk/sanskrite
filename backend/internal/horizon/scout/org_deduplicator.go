@@ -5,11 +5,27 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
+
+// OrgDeduplicatorStats is a lightweight in-memory counter snapshot for observability.
+type OrgDeduplicatorStats struct {
+	Calls                 int64
+	HitAliasReverseLookup int64
+	HitPathVariant        int64
+	HitCountryAsOrg       int64
+	HitWikidataID         int64
+	HitGovOrgBridge       int64
+	HitLegalName          int64
+	HitLabelEN            int64
+	HitShortName          int64
+	HitNormalizedLegal    int64
+	HitWikidataSearch     int64
+}
 
 func isOrgWikidataSearchDedupEnabled() bool {
 	// Default OFF: avoid false merges due to fuzzy Wikidata search.
@@ -35,6 +51,18 @@ type OrgDeduplicator struct {
 	fragmentsRepo  *repo.HorizonFragmentsRepository
 	wikidataClient coreontology.WikidataClientInterface
 	typeNormalizer *TypeNormalizer
+
+	calls                 int64
+	hitAliasReverseLookup int64
+	hitPathVariant        int64
+	hitCountryAsOrg       int64
+	hitWikidataID         int64
+	hitGovOrgBridge       int64
+	hitLegalName          int64
+	hitLabelEN            int64
+	hitShortName          int64
+	hitNormalizedLegal    int64
+	hitWikidataSearch     int64
 }
 
 // NewOrgDeduplicator creates a new organization deduplicator.
@@ -70,6 +98,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	if fragment == nil || fragment.Type != models.FragmentTypeOrganization {
 		return fragment, nil
 	}
+	atomic.AddInt64(&d.calls, 1)
 	// Government bodies (/gov/{iso2|na}/{slug}) are modeled as ORGANIZATION, but MUST NOT be deduplicated by name-only
 	// across jurisdictions (e.g., "Ministry of Defence").
 	//
@@ -97,6 +126,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 				// If there are multiple candidates (rare), pick the best-quality one.
 				best := chooseBestOrgCandidate(cands)
 				if best != nil && best.ID != "" && best.ID != fragment.ID {
+					atomic.AddInt64(&d.hitAliasReverseLookup, 1)
 					return best, nil
 				}
 			}
@@ -110,6 +140,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 			}
 			existing, err := d.fragmentsRepo.GetByCanonicalPath(ctx, alt)
 			if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID && existing.Type == models.FragmentTypeOrganization {
+				atomic.AddInt64(&d.hitPathVariant, 1)
 				return existing, nil
 			}
 		}
@@ -126,6 +157,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 			// This is actually a country! Find the existing GEO_REGION fragment
 			existing, err := d.fragmentsRepo.GetByCanonicalPath(ctx, normResult.MergeWithPath)
 			if err == nil && existing != nil && existing.ID != fragment.ID {
+				atomic.AddInt64(&d.hitCountryAsOrg, 1)
 				fmt.Printf("[OrgDeduplicator] Detected country-as-org: %s → merging with %s\n",
 					fragment.CanonicalPath, existing.CanonicalPath)
 				return existing, nil
@@ -142,6 +174,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	if wikidataID != "" {
 		existing, err := d.findByWikidataID(ctx, wikidataID)
 		if err == nil && existing != nil && existing.ID != fragment.ID {
+			atomic.AddInt64(&d.hitWikidataID, 1)
 			return existing, nil
 		}
 	}
@@ -150,6 +183,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	// Exception: allow a guarded gov->org bridge for explicit ISO2 when names match strongly.
 	if isGov {
 		if existing, err := d.findGovOrgBridgeCandidate(ctx, fragment); err == nil && existing != nil && existing.ID != fragment.ID {
+			atomic.AddInt64(&d.hitGovOrgBridge, 1)
 			fmt.Printf("[OrgDeduplicator] Gov->Org bridge dedup: %s -> %s\n", fragment.CanonicalPath, existing.CanonicalPath)
 			return existing, nil
 		}
@@ -161,6 +195,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	if legalName != "" {
 		existing, err := d.findByLegalName(ctx, fragment, legalName)
 		if err == nil && existing != nil && existing.ID != fragment.ID {
+			atomic.AddInt64(&d.hitLegalName, 1)
 			return existing, nil
 		}
 	}
@@ -174,6 +209,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	if labelEN != "" {
 		existing, err := d.findByLabelEN(ctx, fragment, labelEN)
 		if err == nil && existing != nil && existing.ID != fragment.ID {
+			atomic.AddInt64(&d.hitLabelEN, 1)
 			return existing, nil
 		}
 	}
@@ -187,6 +223,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 			if normalizedLabel != "" {
 				existing, err := d.findByNormalizedLegalName(ctx, fragment, normalizedLabel)
 				if err == nil && existing != nil && existing.ID != fragment.ID {
+					atomic.AddInt64(&d.hitNormalizedLegal, 1)
 					return existing, nil
 				}
 			}
@@ -198,6 +235,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	if shortName != "" {
 		existing, err := d.findByShortName(ctx, fragment, shortName)
 		if err == nil && existing != nil && existing.ID != fragment.ID {
+			atomic.AddInt64(&d.hitShortName, 1)
 			return existing, nil
 		}
 	}
@@ -208,6 +246,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		if normalizedLegal != "" {
 			existing, err := d.findByNormalizedLegalName(ctx, fragment, normalizedLegal)
 			if err == nil && existing != nil && existing.ID != fragment.ID {
+				atomic.AddInt64(&d.hitNormalizedLegal, 1)
 				return existing, nil
 			}
 		}
@@ -219,6 +258,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		if resolvedID != "" {
 			existing, err := d.findByWikidataID(ctx, resolvedID)
 			if err == nil && existing != nil && existing.ID != fragment.ID {
+				atomic.AddInt64(&d.hitWikidataSearch, 1)
 				return existing, nil
 			}
 			// Store resolved Wikidata ID in the fragment for future use
@@ -659,4 +699,24 @@ func (d *OrgDeduplicator) String() string {
 	}
 	hasClient := d.wikidataClient != nil
 	return fmt.Sprintf("OrgDeduplicator(repo=%v, wikidata=%v)", d.fragmentsRepo != nil, hasClient)
+}
+
+// Stats returns a best-effort snapshot of in-memory counters.
+func (d *OrgDeduplicator) Stats() OrgDeduplicatorStats {
+	if d == nil {
+		return OrgDeduplicatorStats{}
+	}
+	return OrgDeduplicatorStats{
+		Calls:                 atomic.LoadInt64(&d.calls),
+		HitAliasReverseLookup: atomic.LoadInt64(&d.hitAliasReverseLookup),
+		HitPathVariant:        atomic.LoadInt64(&d.hitPathVariant),
+		HitCountryAsOrg:       atomic.LoadInt64(&d.hitCountryAsOrg),
+		HitWikidataID:         atomic.LoadInt64(&d.hitWikidataID),
+		HitGovOrgBridge:       atomic.LoadInt64(&d.hitGovOrgBridge),
+		HitLegalName:          atomic.LoadInt64(&d.hitLegalName),
+		HitLabelEN:            atomic.LoadInt64(&d.hitLabelEN),
+		HitShortName:          atomic.LoadInt64(&d.hitShortName),
+		HitNormalizedLegal:    atomic.LoadInt64(&d.hitNormalizedLegal),
+		HitWikidataSearch:     atomic.LoadInt64(&d.hitWikidataSearch),
+	}
 }

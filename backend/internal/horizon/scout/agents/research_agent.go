@@ -390,6 +390,9 @@ Market Enrichment (MARKET):
 - MARKET HIERARCHY: Use HAS_SUBMARKET to link parent market → narrower sub-market
   - Example: if THIS FRAGMENT is /market/sa/marketing and you discover /market/sa/event-marketing, emit HAS_SUBMARKET relation
   - Direction: broader → narrower (THIS FRAGMENT → sub-market)
+- MARKET → COMMUNITY resolution: If you discover informal operator networks in a market:
+  - Create COMMUNITY targets with /community/{geo}/{type}/{slug} paths
+  - Link via PARTICIPATES_IN (community → market) or DEPENDS_ON with facet qualifiers
 - Market sizing/concentration metrics (HIGH PRIORITY):
   - Store these metrics in fragment.state using CANONICAL keys under /metric/market/... (preferred):
     - "/metric/market/tam_usd": USD TAM (absolute number), unit="usd"
@@ -414,6 +417,8 @@ Choose relationType to match this direction:
 - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
 - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
   CRITICAL: NEVER output OWNS where targetType=PERSON.
+  CRITICAL: NEVER output OWNS from ORGANIZATION to COMMUNITY if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}.
+    Dynasties and tribes own organizations, not the reverse. If THIS FRAGMENT (org) is owned by a dynasty/tribe, use SUBSIDIARY_OF from org to community (will be normalized to OWNS with reversed direction).
   If THIS FRAGMENT is owned/controlled by a person or parent org, use SUBSIDIARY_OF with the owner as target (it will be normalized to OWNS).
   Use OWNS ONLY for equity ownership/control relationships (shareholder, stake, holding company, ultimate beneficial owner).
   Do NOT use OWNS for roles/employment/management like CEO, director, founder, chairman; use INFLUENCES if relevant, or omit the relation.
@@ -459,14 +464,57 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - DOMINATES: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
 - HAS_SUBMARKET: source MUST be MARKET, target MUST be MARKET (parent → narrower sub-market)
 - ADMINISTERS: source MUST be ORGANIZATION (/gov/...), target MUST be ORGANIZATION (/gov/...) (superior → subordinate)
+- OPERATES_VIA: source MUST be COMMUNITY or ORGANIZATION, target MUST be MEDIA_CHANNEL
+- MEMBER_OF: source MUST be PERSON, target MUST be COMMUNITY
+- AFFILIATED_WITH: source MUST be COMMUNITY or PERSON, target MUST be ORGANIZATION
+- HAS_SUBGROUP: source MUST be COMMUNITY, target MUST be COMMUNITY (parent group → narrower sub-group/branch/clan)
+
+Community Enrichment (COMMUNITY - when Type == COMMUNITY or canonicalPath starts with /community/):
+- If the fragment is a COMMUNITY, output (best-effort):
+  - fragment.communityType: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
+  - fragment.communityPlatforms: array of MEDIA_CHANNEL paths (e.g., ["/media/telegram/channel-slug"])
+  - fragment.communityEstimatedSize: small | medium | large | massive | unknown
+  - fragment.affiliatedOrgPath: canonical path of affiliated formal organization (if any)
+- COMMUNITY HIERARCHY:
+  - Use HAS_SUBGROUP to link parent community → narrower sub-community/branch/clan
+    - dynasties: broader family → branch (house-of-saud → sudairi-seven)
+    - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
+    - Direction: broader → narrower (like HAS_SUBMARKET for markets)
+  - Use OPERATES_VIA to link community → media channels it uses for communication
+  - Use PARTICIPATES_IN to link community → markets it operates in
+  - Use AFFILIATED_WITH to link community → formal organizations it's connected to
+- Search for: "X network", "X group members", "X telegram channels", "X operations", "X family branches", "X clan structure"
+
+DEPENDS_ON FACETS (qualifiers for granular dependency analysis):
+When outputting DEPENDS_ON relations, you SHOULD add a "facet" qualifier to specify the nature of dependency:
+- communication: dependency on communication channels/platforms (Telegram, WhatsApp, Signal)
+- infrastructure: dependency on physical or digital infrastructure (servers, logistics hubs)
+- payment: dependency on payment/financial mechanisms (crypto, hawala, cash corridors)
+- distribution: dependency on distribution networks/channels (dealers, couriers)
+- logistics: dependency on logistics/transportation (shipping, smuggling routes)
+- supply: dependency on supply of materials/goods
+- labor: dependency on labor/workforce
+- legitimization: dependency on legitimization mechanisms (shell companies, front businesses)
+- enforcement: dependency on enforcement/protection mechanisms (corruption, private security)
+- regulatory: dependency on regulatory environment/approvals
+Format: { "qualifiers": { "facet": "communication", "substitutability": 0.3 } }
+- substitutability: 0..1 (0 = irreplaceable, 1 = easily substituted)
+
+PLATFORM → CHANNEL RESOLUTION (IMPORTANT):
+When you see a dependency on a platform (e.g., "uses Telegram", "operates via WhatsApp"):
+- DO NOT create a generic dependency on the platform organization (e.g., /org/ae/telegram)
+- INSTEAD, try to identify SPECIFIC channels/groups and create:
+  1. MEDIA_CHANNEL targets: /media/{platform}/{channel-slug}
+  2. OPERATES_VIA edges from source to the specific channels
+  3. If specific channels unknown, create a DEPENDS_ON with facet="communication" and note in reason that specific channels need resolution
 
 DiscoveredRelation Schema:
 {
   "targetName": "string",
   "targetLegalName": "string",
   "targetShortName": "string",
-  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT",
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_SUBMARKET" | "ADMINISTERS",
+  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY",
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED",
@@ -489,6 +537,24 @@ CANONICAL PATH RULES:
     - geo: ISO3166-1 alpha2 lowercase (2 letters) OR "global"
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
+  - Communities (informal social groups): /community/{geo}/{type}/{slug}
+    - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
+    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
+    - Examples:
+      - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
+      - "Kazan drug dealers" -> /community/ru/criminal/kazan-synthetic-dealers
+      - "OSINT community" -> /community/global/professional/osint-researchers
+      - "House of Saud" -> /community/sa/dynasty/house-of-saud
+      - "Pashtun tribes" -> /community/af/tribe/pashtun
+      - "Senior Zhuz (Kazakhstan)" -> /community/kz/tribe/senior-zhuz
+    - CRITICAL: COMMUNITY is for INFORMAL groups WITHOUT legal structure.
+      - If the entity has legal registration → use ORGANIZATION (/org/)
+      - If the entity is a media endpoint (channel/group) → use MEDIA_CHANNEL (/media/)
+      - COMMUNITY is the social entity that *uses* channels, not the channel itself
+    - COMMUNITY HIERARCHY: Use HAS_SUBGROUP to link parent community → narrower sub-community
+      - dynasties: house-of-saud → sudairi-seven
+      - tribes: pashtun → durrani → popalzai
+      - Direction: broader → narrower
   - People: /person/{lowercase-slug}
   - Products (Goods): MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}[/{model-sku-slug}]
     - category: "raw" | "component" | "finished" | "service"

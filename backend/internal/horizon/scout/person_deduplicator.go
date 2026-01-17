@@ -3,7 +3,9 @@ package scout
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -11,11 +13,30 @@ import (
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
 
+// PersonDeduplicatorStats is a lightweight in-memory counter snapshot for observability.
+type PersonDeduplicatorStats struct {
+	Calls            int64
+	MatchWikidataID  int64
+	MatchLegalName   int64
+	MatchShortName   int64
+	MatchLabelEN     int64
+	MatchPhonetic    int64
+	MatchTokenSubset int64
+}
+
 // PersonDeduplicator handles person deduplication using Wikidata, exact name matching,
 // and phonetic matching for Arabic/transliterated names.
 type PersonDeduplicator struct {
 	fragmentsRepo  *repo.HorizonFragmentsRepository
 	wikidataClient coreontology.WikidataClientInterface
+
+	calls            int64
+	matchWikidataID  int64
+	matchLegalName   int64
+	matchShortName   int64
+	matchLabelEN     int64
+	matchPhonetic    int64
+	matchTokenSubset int64
 }
 
 // NewPersonDeduplicator creates a new person deduplicator.
@@ -40,6 +61,10 @@ func NewPersonDeduplicator(fragmentsRepo *repo.HorizonFragmentsRepository, clien
 //
 // Tier 3 (phonetic matching for Arabic/transliterated names):
 //  5. Phonetic name match (catches Tahnoon/Tahnoun, Khalid/Halid, Mohammed/Muhammad)
+//
+// Tier 3.5 (token-subset matching for missing middle names):
+//  6. Token-subset match - one name's tokens are a subset of another's
+//     (catches "Hamed bin Mohamed Al Suwaidi" vs "Hamed bin Mohamed Khalifa Al Suwaidi")
 func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, error) {
 	if d == nil || d.fragmentsRepo == nil {
 		return nil, nil
@@ -47,6 +72,7 @@ func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *mo
 	if fragment == nil || fragment.Type != models.FragmentTypePerson {
 		return nil, nil
 	}
+	atomic.AddInt64(&d.calls, 1)
 
 	// =========================================================================
 	// Tier 1: Wikidata ID match
@@ -55,6 +81,7 @@ func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *mo
 	if wikidataID != "" {
 		existing, err := d.findByWikidataID(ctx, wikidataID)
 		if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
+			atomic.AddInt64(&d.matchWikidataID, 1)
 			fmt.Printf("[PersonDeduplicator] Found by Wikidata ID %s: %s\n", wikidataID, existing.CanonicalPath)
 			return existing, nil
 		}
@@ -68,6 +95,7 @@ func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *mo
 		if err == nil && len(existing) > 0 {
 			for _, e := range existing {
 				if e.ID != "" && e.ID != fragment.ID {
+					atomic.AddInt64(&d.matchLegalName, 1)
 					fmt.Printf("[PersonDeduplicator] Found by legalName %q: %s\n", legalName, e.CanonicalPath)
 					return e, nil
 				}
@@ -83,6 +111,7 @@ func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *mo
 		if err == nil && len(existing) > 0 {
 			for _, e := range existing {
 				if e.ID != "" && e.ID != fragment.ID {
+					atomic.AddInt64(&d.matchShortName, 1)
 					fmt.Printf("[PersonDeduplicator] Found by shortName %q: %s\n", shortName, e.CanonicalPath)
 					return e, nil
 				}
@@ -98,6 +127,7 @@ func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *mo
 		if err == nil && len(existing) > 0 {
 			for _, e := range existing {
 				if e.ID != "" && e.ID != fragment.ID {
+					atomic.AddInt64(&d.matchLabelEN, 1)
 					fmt.Printf("[PersonDeduplicator] Found by label[en] %q: %s\n", labelEN, e.CanonicalPath)
 					return e, nil
 				}
@@ -113,12 +143,46 @@ func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *mo
 	if phoneticKey != "" {
 		existing, err := d.findByPhoneticKey(ctx, phoneticKey, fragment.ID)
 		if err == nil && existing != nil {
+			atomic.AddInt64(&d.matchPhonetic, 1)
 			fmt.Printf("[PersonDeduplicator] Found by phonetic match %q: %s\n", phoneticKey, existing.CanonicalPath)
 			return existing, nil
 		}
 	}
 
+	// =========================================================================
+	// Tier 3.5: Token-subset matching for missing middle names
+	// =========================================================================
+	// This catches cases like:
+	// - "Hamed bin Mohamed Al Suwaidi" vs "Hamed bin Mohamed Khalifa Al Suwaidi"
+	// One name has a middle name/honorific that the other doesn't.
+	// Requires at least 4 tokens and matching first name to avoid false positives.
+	nameTokens := d.buildNameTokenSet(fragment)
+	if len(nameTokens) >= 4 {
+		existing, err := d.findByTokenSubset(ctx, fragment, fragment.ID)
+		if err == nil && existing != nil {
+			atomic.AddInt64(&d.matchTokenSubset, 1)
+			fmt.Printf("[PersonDeduplicator] Found by token-subset match: %s\n", existing.CanonicalPath)
+			return existing, nil
+		}
+	}
+
 	return nil, nil
+}
+
+// Stats returns a best-effort snapshot of in-memory counters.
+func (d *PersonDeduplicator) Stats() PersonDeduplicatorStats {
+	if d == nil {
+		return PersonDeduplicatorStats{}
+	}
+	return PersonDeduplicatorStats{
+		Calls:            atomic.LoadInt64(&d.calls),
+		MatchWikidataID:  atomic.LoadInt64(&d.matchWikidataID),
+		MatchLegalName:   atomic.LoadInt64(&d.matchLegalName),
+		MatchShortName:   atomic.LoadInt64(&d.matchShortName),
+		MatchLabelEN:     atomic.LoadInt64(&d.matchLabelEN),
+		MatchPhonetic:    atomic.LoadInt64(&d.matchPhonetic),
+		MatchTokenSubset: atomic.LoadInt64(&d.matchTokenSubset),
+	}
 }
 
 // buildPhoneticKey creates a phonetic key from the fragment's names.
@@ -198,11 +262,12 @@ func (d *PersonDeduplicator) findByWikidataID(ctx context.Context, wikidataID st
 
 // NormalizePhoneticKey normalizes Arabic/transliterated names for phonetic matching.
 // Handles common transliteration variations:
-//   - ou/oo/u → o (Tahnoun/Tahnoon/Tahnun → tahno...)
-//   - ee/i/y → i (Mohammed/Muhammad → mohamid)
+//   - ou/oo/uu/u → o (Tahnoun/Tahnoon/Tahnun → tahno...)
+//   - ee/e/i/y → i (Mohammed/Muhammad → mohamid, Yasser/Yasir → yasir)
 //   - kh → h (Khalid → halid)
 //   - doubled consonants → single (Mohammed → mohamed)
 //   - removes non-letter characters
+//   - removes common Arabic particles (al/el/bin/bint/ibn/ben/abu/banu) when enough tokens remain
 //
 // Returns empty string if the result has less than 3 tokens (too generic).
 //
@@ -220,10 +285,17 @@ func NormalizePhoneticKey(name string) string {
 	replacements := []struct{ from, to string }{
 		{"oo", "o"},
 		{"ou", "o"},
+		{"uu", "o"},
 		{"ee", "i"},
+		{"ie", "i"},
+		{"ei", "i"},
+		{"y", "i"},
+		{"e", "i"},
+		{"u", "o"},
 		{"kh", "h"},
 		{"ph", "f"},
 		{"qu", "k"},
+		{"aa", "a"},
 	}
 	for _, r := range replacements {
 		name = strings.ReplaceAll(name, r.from, r.to)
@@ -251,8 +323,24 @@ func NormalizePhoneticKey(name string) string {
 	result := strings.TrimSpace(b.String())
 
 	// Safety: require at least 3 tokens to avoid overly generic matches
-	if len(strings.Fields(result)) < 3 {
+	tokens := strings.Fields(result)
+	if len(tokens) < 3 {
 		return ""
+	}
+
+	// Step 3: Remove common Arabic particles if we still have >=3 tokens
+	particles := map[string]struct{}{
+		"al": {}, "el": {}, "bin": {}, "bint": {}, "ibn": {}, "ben": {}, "abu": {}, "banu": {},
+	}
+	filtered := make([]string, 0, len(tokens))
+	for _, t := range tokens {
+		if _, ok := particles[t]; ok {
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	if len(filtered) >= 3 {
+		return strings.Join(filtered, " ")
 	}
 
 	return result
@@ -283,3 +371,281 @@ func NormalizePersonName(name string) string {
 	return strings.TrimSpace(b.String())
 }
 
+// buildNameTokenSet creates a set of normalized tokens from the fragment's names.
+// Used for token-subset matching. Applies phonetic normalization to each token.
+func (d *PersonDeduplicator) buildNameTokenSet(fragment *models.HorizonFragment) map[string]struct{} {
+	if fragment == nil {
+		return nil
+	}
+
+	names := gatherPersonNames(fragment)
+
+	// Build unified token set with phonetic normalization
+	tokenSet := make(map[string]struct{})
+	for _, name := range names {
+		tokens := normalizeNameToTokens(name)
+		for _, t := range tokens {
+			if t != "" {
+				tokenSet[t] = struct{}{}
+			}
+		}
+	}
+
+	return tokenSet
+}
+
+// gatherPersonNames collects all name sources from a person fragment.
+func gatherPersonNames(fragment *models.HorizonFragment) []string {
+	if fragment == nil {
+		return nil
+	}
+	names := []string{
+		fragment.Labels["en"],
+		fragment.Identifiers["legalName"],
+		fragment.Identifiers["shortName"],
+	}
+	// Also try canonical path slug
+	if strings.HasPrefix(fragment.CanonicalPath, "/person/") {
+		parts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
+		if len(parts) >= 2 {
+			names = append(names, strings.ReplaceAll(parts[len(parts)-1], "-", " "))
+		}
+	}
+	return names
+}
+
+// extractFirstName extracts the first core token (first name) from a person fragment.
+// This is used for anchoring token-subset matches.
+func extractFirstName(fragment *models.HorizonFragment) string {
+	if fragment == nil {
+		return ""
+	}
+
+	particles := map[string]struct{}{
+		"al": {}, "il": {}, "bin": {}, "bint": {}, "ibn": {}, "ben": {}, "abu": {}, "banu": {},
+		"sheikh": {}, "dr": {}, "captain": {}, "general": {}, "prince": {}, "princess": {},
+	}
+
+	names := gatherPersonNames(fragment)
+	for _, name := range names {
+		tokens := normalizeNameToTokens(name)
+		for _, t := range tokens {
+			if t == "" {
+				continue
+			}
+			// Skip particles and titles
+			if _, isParticle := particles[t]; isParticle {
+				continue
+			}
+			return t // Return first non-particle token
+		}
+	}
+	return ""
+}
+
+// normalizeNameToTokens normalizes a name and returns phonetically-normalized tokens.
+// Removes Arabic particles and applies phonetic normalization.
+func normalizeNameToTokens(name string) []string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return nil
+	}
+
+	// Apply phonetic replacements
+	replacements := []struct{ from, to string }{
+		{"oo", "o"},
+		{"ou", "o"},
+		{"uu", "o"},
+		{"ee", "i"},
+		{"ie", "i"},
+		{"ei", "i"},
+		{"y", "i"},
+		{"e", "i"},
+		{"u", "o"},
+		{"kh", "h"},
+		{"ph", "f"},
+		{"qu", "k"},
+		{"aa", "a"},
+	}
+	for _, r := range replacements {
+		name = strings.ReplaceAll(name, r.from, r.to)
+	}
+
+	// Remove non-letters, keep spaces
+	var b strings.Builder
+	b.Grow(len(name))
+	prevChar := ' '
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' {
+			// Remove doubled consonants
+			vowels := "aeiou"
+			if r == prevChar && !strings.ContainsRune(vowels, r) {
+				continue
+			}
+			b.WriteRune(r)
+			prevChar = r
+		} else if r == ' ' && prevChar != ' ' {
+			b.WriteRune(r)
+			prevChar = ' '
+		}
+	}
+
+	result := strings.TrimSpace(b.String())
+	tokens := strings.Fields(result)
+
+	// Filter out common Arabic particles (but keep them in the returned set for matching)
+	// We only filter for the "core" tokens check, not the actual matching
+	return tokens
+}
+
+// findByTokenSubset searches for existing person fragments where tokens are subset-related.
+// Returns a match if:
+// - Both names have at least 4 core tokens (non-particles)
+// - First name (first non-particle token) matches exactly
+// - All core tokens of the shorter name appear in the longer name
+// - The difference (extra tokens in larger) is at most 2
+func (d *PersonDeduplicator) findByTokenSubset(ctx context.Context, inputFragment *models.HorizonFragment, excludeID string) (*models.HorizonFragment, error) {
+	inputTokens := d.buildNameTokenSet(inputFragment)
+	// Require at least 4 tokens to avoid false positives on short names
+	if len(inputTokens) < 4 {
+		return nil, nil
+	}
+
+	// Extract first name for anchoring
+	inputFirstName := extractFirstName(inputFragment)
+	if inputFirstName == "" {
+		return nil, nil
+	}
+
+	// Get all PERSON fragments
+	persons, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, "global", models.FragmentTypePerson, 10000)
+	if err != nil {
+		return nil, err
+	}
+
+	// Arabic particles to ignore when counting core tokens
+	particles := map[string]struct{}{
+		"al": {}, "il": {}, "bin": {}, "bint": {}, "ibn": {}, "ben": {}, "abu": {}, "banu": {},
+	}
+
+	// Extract core tokens (non-particles) from input
+	inputCore := extractCoreTokens(inputTokens, particles)
+	if len(inputCore) < 3 {
+		return nil, nil
+	}
+
+	for _, p := range persons {
+		if p.ID == excludeID {
+			continue
+		}
+
+		candidateTokens := d.buildNameTokenSet(p)
+		// Require at least 4 tokens for candidates too
+		if len(candidateTokens) < 4 {
+			continue
+		}
+
+		// First name must match
+		candidateFirstName := extractFirstName(p)
+		if candidateFirstName == "" || candidateFirstName != inputFirstName {
+			continue
+		}
+
+		candidateCore := extractCoreTokens(candidateTokens, particles)
+		if len(candidateCore) < 3 {
+			continue
+		}
+
+		// Check if one is a subset of the other
+		if isTokenSubsetMatchNoFirstCheck(inputCore, candidateCore) {
+			return p, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// extractCoreTokens extracts non-particle tokens from a token set.
+func extractCoreTokens(tokens map[string]struct{}, particles map[string]struct{}) []string {
+	core := make([]string, 0, len(tokens))
+	for t := range tokens {
+		if _, isParticle := particles[t]; !isParticle {
+			core = append(core, t)
+		}
+	}
+	// Sort for deterministic ordering
+	sort.Strings(core)
+	return core
+}
+
+// isTokenSubsetMatch checks if one set of core tokens is a near-subset of another.
+// This version requires first token match (for use by exported wrapper).
+func isTokenSubsetMatch(a, b []string) bool {
+	if len(a) < 3 || len(b) < 3 {
+		return false
+	}
+
+	// First token must match (sorted alphabetically, so this is approximate)
+	if a[0] != b[0] {
+		return false
+	}
+
+	return isTokenSubsetMatchNoFirstCheck(a, b)
+}
+
+// isTokenSubsetMatchNoFirstCheck checks token subset without first-token check.
+// Used internally when first name comparison is done separately.
+// Match criteria:
+// - Both sets must have at least 3 tokens
+// - All tokens from the smaller set must appear in the larger set
+// - The difference (extra tokens in larger) must be at most 2
+// This catches: "hamed mohamid sowaidi" vs "hamed mohamid halifa sowaidi"
+func isTokenSubsetMatchNoFirstCheck(a, b []string) bool {
+	if len(a) < 3 || len(b) < 3 {
+		return false
+	}
+
+	// Ensure a is the smaller set
+	smaller, larger := a, b
+	if len(a) > len(b) {
+		smaller, larger = b, a
+	}
+
+	// Build set from larger
+	largerSet := make(map[string]struct{}, len(larger))
+	for _, t := range larger {
+		largerSet[t] = struct{}{}
+	}
+
+	// Count how many tokens from smaller appear in larger
+	matchCount := 0
+	for _, t := range smaller {
+		if _, ok := largerSet[t]; ok {
+			matchCount++
+		}
+	}
+
+	// All tokens from smaller must be in larger
+	if matchCount < len(smaller) {
+		return false
+	}
+
+	// The difference must be at most 2 (allow 1-2 extra middle names/honorifics)
+	diff := len(larger) - len(smaller)
+	if diff > 2 {
+		return false
+	}
+
+	// Additional safety: at least 3 matching core tokens
+	if matchCount < 3 {
+		return false
+	}
+
+	return true
+}
+
+// IsTokenSubsetMatchExported is an exported wrapper for isTokenSubsetMatch.
+// Used by deduplication scripts.
+func IsTokenSubsetMatchExported(a, b []string) bool {
+	return isTokenSubsetMatch(a, b)
+}

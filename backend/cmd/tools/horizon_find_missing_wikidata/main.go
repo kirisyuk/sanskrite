@@ -858,26 +858,7 @@ func normalizeIndustryKey(s string) string {
 }
 
 func slugify(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	if s == "" {
-		return ""
-	}
-	// Minimal slugifier: keep [a-z0-9-]
-	var b strings.Builder
-	lastDash := false
-	for _, r := range s {
-		isAlnum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-		if isAlnum {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
+	return taxonomy.Slugify(s)
 }
 
 func sortStrings(a []string) {

@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +19,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // Merge organization alias fragments (e.g., /org/ford-motor-company -> /org/ford) using shortName,
@@ -37,15 +37,8 @@ type sameEntityResult struct {
 	Reason     string  `json:"reason"`
 }
 
-var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
-var multiDash = regexp.MustCompile(`-+`)
-
 func slugify(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = nonSlugChars.ReplaceAllString(s, "-")
-	s = multiDash.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	return s
+	return taxonomy.Slugify(s)
 }
 
 func main() {

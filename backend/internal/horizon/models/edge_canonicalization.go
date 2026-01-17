@@ -1,5 +1,27 @@
 package models
 
+import (
+	"strings"
+)
+
+// isDynastyOrTribeCommunity checks if a canonicalPath represents a dynasty or tribe community.
+// Returns true if path matches /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}.
+func isDynastyOrTribeCommunity(canonicalPath string) bool {
+	if canonicalPath == "" {
+		return false
+	}
+	if !strings.HasPrefix(canonicalPath, "/community/") {
+		return false
+	}
+	parts := strings.Split(strings.Trim(canonicalPath, "/"), "/")
+	if len(parts) < 3 {
+		return false
+	}
+	// parts[0] = "community", parts[1] = geo, parts[2] = type
+	communityType := strings.ToLower(strings.TrimSpace(parts[2]))
+	return communityType == "dynasty" || communityType == "tribe"
+}
+
 // CanonicalizeEdge rewrites an edge type (and optionally direction) based on endpoint fragment types.
 // Returns: (newType, shouldSwapEndpoints, changed, reason).
 //
@@ -69,5 +91,42 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET DEPENDS_ON FACILITY -> FACILITY PARTICIPATES_IN MARKET"
 	}
 
+	// REGULATES(MARKET → ORGANIZATION) → REGULATES (swap)
+	// Markets are regulated by authorities; if the edge is reversed, swap it.
+	if edgeType == DependencyTypeRegulates &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypeRegulates, true, true, "canonicalize: MARKET REGULATES ORGANIZATION -> ORGANIZATION REGULATES MARKET"
+	}
+
 	return edgeType, false, false, ""
+}
+
+// CanonicalizeEdgeWithPaths rewrites an edge type (and optionally direction) based on endpoint fragment types and canonical paths.
+// This extends CanonicalizeEdge with path-based checks (e.g., for community subtypes).
+// Returns: (newType, shouldSwapEndpoints, changed, reason).
+func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType FragmentType, sourcePath, targetPath string) (DependencyType, bool, bool, string) {
+	// First apply standard canonicalization
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(edgeType, sourceType, targetType)
+	if changed {
+		// If standard canonicalization changed the edge, use those values
+		// but we may need to adjust paths if swap occurred
+		if shouldSwap {
+			sourcePath, targetPath = targetPath, sourcePath
+			sourceType, targetType = targetType, sourceType
+		}
+		edgeType = newType
+	}
+
+	// Additional path-based canonicalization: OWNS from ORG to COMMUNITY (dynasty/tribe) should be reversed.
+	// Dynasties and tribes own organizations, not the reverse.
+	if edgeType == DependencyTypeOwns &&
+		sourceType == FragmentTypeOrganization &&
+		targetType == FragmentTypeCommunity &&
+		isDynastyOrTribeCommunity(targetPath) {
+		// Reverse the edge: COMMUNITY OWNS ORGANIZATION
+		return edgeType, true, true, "canonicalize: ORGANIZATION OWNS COMMUNITY(dynasty/tribe) -> COMMUNITY(dynasty/tribe) OWNS ORGANIZATION"
+	}
+
+	return edgeType, shouldSwap, changed, reason
 }

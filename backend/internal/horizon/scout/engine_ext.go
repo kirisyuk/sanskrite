@@ -1153,9 +1153,12 @@ func (e *ScoutEngine) processRelationsInternal(
 
 		// Canonicalize certain mis-modeled edges where reversing is not sufficient.
 		// Example: PRODUCT OWNS ORGANIZATION should become ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
+		// Use path-aware canonicalization to handle community subtypes (dynasty/tribe).
+		srcPathActual := resolvePathByID(edgeSourceID)
+		dstPathActual := resolvePathByID(edgeTargetID)
 		canonFromEdgeType := ""
 		canonReason := ""
-		if newType, shouldSwap, changed, reason := CanonicalizeEdge(edgeType, srcTypeActual, dstTypeActual); changed {
+		if newType, shouldSwap, changed, reason := CanonicalizeEdgeWithPaths(edgeType, srcTypeActual, dstTypeActual, srcPathActual, dstPathActual); changed {
 			canonFromEdgeType = string(edgeType)
 			canonReason = reason
 			edgeType = newType
@@ -1163,6 +1166,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			if shouldSwap {
 				edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
 				srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
+				srcPathActual, dstPathActual = dstPathActual, srcPathActual
 			}
 			// Re-apply symmetric normalization after any swap/type-change (noop for non-symmetric).
 			edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
@@ -1529,6 +1533,9 @@ func (e *ScoutEngine) processSupplyChains(
 	if sourceFragment != nil && sourceFragment.ID != "" {
 		pathToID[sourceFragment.CanonicalPath] = sourceFragment.ID
 	}
+	// Track canonical-path rewrites within this supply-chain run so edge endpoints remain consistent
+	// even when we normalize (legacy geo -> /loc, /loc country aliases, product taxonomy upgrades, etc.).
+	pathRewrites := map[string]string{} // originalPath -> canonicalPath
 
 	// Persist fragments discovered in supply chains
 	createdFrags := 0
@@ -1536,8 +1543,17 @@ func (e *ScoutEngine) processSupplyChains(
 	createErrors := 0
 	previewLimit := 20
 	for canonicalPath, frag := range result.Fragments {
+		origPath := strings.TrimSpace(canonicalPath)
+		effectivePath := origPath
+		if frag != nil && strings.TrimSpace(frag.CanonicalPath) != "" {
+			effectivePath = strings.TrimSpace(frag.CanonicalPath)
+		}
+		if effectivePath == "" {
+			continue
+		}
+
 		// Skip the source fragment itself
-		if canonicalPath == sourceFragment.CanonicalPath {
+		if sourceFragment != nil && strings.TrimSpace(sourceFragment.CanonicalPath) != "" && effectivePath == strings.TrimSpace(sourceFragment.CanonicalPath) {
 			continue
 		}
 
@@ -1547,6 +1563,27 @@ func (e *ScoutEngine) processSupplyChains(
 		frag.Status = "active"
 		frag.Governance.Owner = "SYSTEM"
 		frag.Governance.Status = string(models.FragmentStatusActive)
+		// Ensure Type is set (best-effort) before canonicalization/dedup.
+		if frag.Type == "" {
+			frag.Type = InferFragmentTypeFromCanonicalPath(effectivePath)
+		}
+		// Early canonicalization + dedup (best-effort): normalize canonicalPath and reuse existing fragments when found.
+		if e.canonicalPathResolver != nil {
+			if resolved, rerr := e.canonicalPathResolver.Resolve(ctx, effectivePath, frag.Type); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+				if strings.TrimSpace(resolved.CanonicalPath) != strings.TrimSpace(effectivePath) {
+					pathRewrites[effectivePath] = strings.TrimSpace(resolved.CanonicalPath)
+					if origPath != "" {
+						pathRewrites[origPath] = strings.TrimSpace(resolved.CanonicalPath)
+					}
+					effectivePath = strings.TrimSpace(resolved.CanonicalPath)
+				}
+				if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
+					pathToID[effectivePath] = strings.TrimSpace(resolved.ExistingFragment.ID)
+					continue
+				}
+			}
+		}
+		frag.CanonicalPath = effectivePath
 		// Keep LastVerifiedAt zero so freshness checks won't skip scouting for newly discovered nodes.
 		if frag.Metadata.CreatedAt.IsZero() {
 			frag.Metadata.CreatedAt = time.Now().UTC()
@@ -1562,8 +1599,33 @@ func (e *ScoutEngine) processSupplyChains(
 			frag.Provenance.SourceIDs = []string{job.ID}
 		}
 
+		// Pre-create validation/dedup (phonetic persons, org alias, geo enrichment, etc.)
+		if e.preCreateValidator != nil {
+			if pre, perr := e.preCreateValidator.ValidateAndProcess(ctx, frag); perr == nil && pre != nil {
+				if pre.ReplacementFrag != nil && strings.TrimSpace(pre.ReplacementFrag.ID) != "" {
+					cp := strings.TrimSpace(pre.ReplacementFrag.CanonicalPath)
+					if cp != "" {
+						pathToID[cp] = strings.TrimSpace(pre.ReplacementFrag.ID)
+						if origPath != "" {
+							pathRewrites[origPath] = cp
+						}
+						if effectivePath != "" {
+							pathRewrites[effectivePath] = cp
+						}
+					}
+					continue
+				}
+				if !pre.IsValid && strings.TrimSpace(pre.BlockReason) != "" {
+					msg := fmt.Sprintf("[SupplyChainFragmentCreate] BLOCKED canonicalPath=%s reason=%s", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(pre.BlockReason))
+					fmt.Printf("%s\n", msg)
+					e.logLine(ctx, job, "warn", msg)
+					continue
+				}
+			}
+		}
+
 		// Check if fragment already exists
-		existing, err := e.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
+		existing, err := e.fragmentsRepo.GetByCanonicalPath(ctx, frag.CanonicalPath)
 		if err != nil {
 			// Create new fragment
 			frag.Metadata.CreatedAt = time.Now().UTC()
@@ -1573,21 +1635,21 @@ func (e *ScoutEngine) processSupplyChains(
 			id, createErr := e.fragmentsRepo.Create(ctx, frag)
 			if createErr != nil {
 				createErrors++
-				msg := fmt.Sprintf("[SupplyChainFragmentCreate] FAILED canonicalPath=%s err=%v", canonicalPath, createErr)
+				msg := fmt.Sprintf("[SupplyChainFragmentCreate] FAILED canonicalPath=%s err=%v", frag.CanonicalPath, createErr)
 				fmt.Printf("%s\n", msg)
 				e.logLine(ctx, job, "warn", msg)
 				continue
 			}
 			frag.ID = id
-			pathToID[canonicalPath] = id
+			pathToID[frag.CanonicalPath] = id
 			createdFrags++
 			if createdFrags <= previewLimit {
-				msg := fmt.Sprintf("[SupplyChainFragmentCreate] OK canonicalPath=%s id=%s type=%s", canonicalPath, id, frag.Type)
+				msg := fmt.Sprintf("[SupplyChainFragmentCreate] OK canonicalPath=%s id=%s type=%s", frag.CanonicalPath, id, frag.Type)
 				e.logLine(ctx, job, "info", msg)
 			}
 		} else {
 			// Fragment exists, store ID for edge creation
-			pathToID[canonicalPath] = existing.ID
+			pathToID[frag.CanonicalPath] = existing.ID
 
 			// Optionally update labels/identifiers if new info
 			if existing.Labels == nil {
@@ -1612,13 +1674,13 @@ func (e *ScoutEngine) processSupplyChains(
 			if updated {
 				existing.Metadata.LastUpdatedAt = time.Now().UTC()
 				if err := e.fragmentsRepo.Update(ctx, existing); err != nil {
-					msg := fmt.Sprintf("[SupplyChainFragmentUpdate] FAILED canonicalPath=%s id=%s err=%v", canonicalPath, existing.ID, err)
+					msg := fmt.Sprintf("[SupplyChainFragmentUpdate] FAILED canonicalPath=%s id=%s err=%v", frag.CanonicalPath, existing.ID, err)
 					fmt.Printf("%s\n", msg)
 					e.logLine(ctx, job, "warn", msg)
 				} else {
 					updatedFrags++
 					if updatedFrags <= previewLimit {
-						msg := fmt.Sprintf("[SupplyChainFragmentUpdate] OK canonicalPath=%s id=%s", canonicalPath, existing.ID)
+						msg := fmt.Sprintf("[SupplyChainFragmentUpdate] OK canonicalPath=%s id=%s", frag.CanonicalPath, existing.ID)
 						e.logLine(ctx, job, "info", msg)
 					}
 				}
@@ -1635,26 +1697,64 @@ func (e *ScoutEngine) processSupplyChains(
 	edgePenalized := 0
 	edgePreviewLimit := 40
 	for _, chainEdge := range result.Edges {
-		sourceID := pathToID[chainEdge.SourceCanonicalPath]
-		targetID := pathToID[chainEdge.TargetCanonicalPath]
+		srcPath := strings.TrimSpace(chainEdge.SourceCanonicalPath)
+		dstPath := strings.TrimSpace(chainEdge.TargetCanonicalPath)
+		if rp, ok := pathRewrites[srcPath]; ok && strings.TrimSpace(rp) != "" {
+			srcPath = strings.TrimSpace(rp)
+		}
+		if rp, ok := pathRewrites[dstPath]; ok && strings.TrimSpace(rp) != "" {
+			dstPath = strings.TrimSpace(rp)
+		}
+
+		sourceID := pathToID[srcPath]
+		targetID := pathToID[dstPath]
 
 		if sourceID == "" || targetID == "" {
 			// Try to look up missing IDs
 			if sourceID == "" {
-				if frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, chainEdge.SourceCanonicalPath); err == nil && frag != nil {
-					sourceID = frag.ID
-					pathToID[chainEdge.SourceCanonicalPath] = sourceID
+				// Best-effort: resolve canonical path for endpoints not seen in fragment map.
+				if e.canonicalPathResolver != nil && srcPath != "" {
+					if resolved, rerr := e.canonicalPathResolver.Resolve(ctx, srcPath, InferFragmentTypeFromCanonicalPath(srcPath)); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+						if strings.TrimSpace(resolved.CanonicalPath) != srcPath {
+							pathRewrites[srcPath] = strings.TrimSpace(resolved.CanonicalPath)
+							srcPath = strings.TrimSpace(resolved.CanonicalPath)
+						}
+						if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
+							sourceID = strings.TrimSpace(resolved.ExistingFragment.ID)
+							pathToID[srcPath] = sourceID
+						}
+					}
+				}
+				if sourceID == "" {
+					if frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, srcPath); err == nil && frag != nil {
+						sourceID = frag.ID
+						pathToID[srcPath] = sourceID
+					}
 				}
 			}
 			if targetID == "" {
-				if frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, chainEdge.TargetCanonicalPath); err == nil && frag != nil {
-					targetID = frag.ID
-					pathToID[chainEdge.TargetCanonicalPath] = targetID
+				if e.canonicalPathResolver != nil && dstPath != "" {
+					if resolved, rerr := e.canonicalPathResolver.Resolve(ctx, dstPath, InferFragmentTypeFromCanonicalPath(dstPath)); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+						if strings.TrimSpace(resolved.CanonicalPath) != dstPath {
+							pathRewrites[dstPath] = strings.TrimSpace(resolved.CanonicalPath)
+							dstPath = strings.TrimSpace(resolved.CanonicalPath)
+						}
+						if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
+							targetID = strings.TrimSpace(resolved.ExistingFragment.ID)
+							pathToID[dstPath] = targetID
+						}
+					}
+				}
+				if targetID == "" {
+					if frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, dstPath); err == nil && frag != nil {
+						targetID = frag.ID
+						pathToID[dstPath] = targetID
+					}
 				}
 			}
 			if sourceID == "" || targetID == "" {
 				msg := fmt.Sprintf("[SupplyChainEdge] SKIP missingFragmentId source=%s target=%s type=%s",
-					chainEdge.SourceCanonicalPath, chainEdge.TargetCanonicalPath, chainEdge.RelationType)
+					srcPath, dstPath, chainEdge.RelationType)
 				fmt.Printf("%s\n", msg)
 				e.logLine(ctx, job, "warn", msg)
 				continue
@@ -1684,8 +1784,8 @@ func (e *ScoutEngine) processSupplyChains(
 			}
 			return ""
 		}
-		srcTypeActual := resolveTypeByCanonical(chainEdge.SourceCanonicalPath)
-		dstTypeActual := resolveTypeByCanonical(chainEdge.TargetCanonicalPath)
+		srcTypeActual := resolveTypeByCanonical(srcPath)
+		dstTypeActual := resolveTypeByCanonical(dstPath)
 
 		// Policy: direction validation & reversal (best-effort, same behavior as processDiscoveredRelations).
 		edgeCriticality := normalizeEdgeConfidence(chainEdge.Confidence)

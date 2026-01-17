@@ -5,6 +5,45 @@ import { ThemeContext } from './ThemeProvider';
 import type { SemanticGroup, LinearSection } from '../lib/elkLayout';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
 import { RiskSegmentIcon, computeRiskSegments, computeRiskSegmentSource, formatRiskLevel, clamp01, type RiskSegmentId } from '../lib/riskShield';
+import * as CountryFlags from 'country-flag-icons/react/1x1';
+
+// Extract ISO 2-letter country code from canonical path
+// Supports: /org/{cc}/..., /gov/{cc}/..., /market/{cc}/..., /loc/{cc}/...
+const extractCountryCode = (canonicalPath?: string): string | null => {
+  if (!canonicalPath) return null;
+  const parts = canonicalPath.toLowerCase().split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  
+  const namespace = parts[0];
+  // These namespaces have country code as second segment
+  if (['org', 'gov', 'market', 'loc', 'fac', 'deposit', 'community'].includes(namespace)) {
+    const cc = parts[1];
+    // Must be exactly 2 letters and not 'na' (not applicable)
+    if (cc && cc.length === 2 && /^[a-z]{2}$/.test(cc) && cc !== 'na') {
+      return cc.toUpperCase();
+    }
+  }
+  return null;
+};
+
+// Country flag component - renders flag icon from ISO 2-letter code
+const CountryFlag: React.FC<{ countryCode: string | null; size?: number }> = ({ countryCode, size = 14 }) => {
+  if (!countryCode) return null;
+  
+  const FlagComponent = (CountryFlags as Record<string, React.FC<React.SVGProps<SVGSVGElement>>>)[countryCode];
+  if (!FlagComponent) return null;
+  
+  return (
+    <FlagComponent
+      style={{
+        width: size,
+        height: size,
+        borderRadius: 2,
+        flexShrink: 0,
+      }}
+    />
+  );
+};
 
 // Типы нод для Horizon графа (на основе LensItem)
 export interface HorizonNodeData {
@@ -54,6 +93,8 @@ export interface HorizonNodeData {
   onScopeScout?: (fragmentId: string, canonicalPath?: string) => void; // Add to scope + run scouting depth=1
   isScopeScouting?: boolean; // UI: scope-scout request in-flight
   scopeScoutDone?: boolean; // UI: scope-scout already launched (show "+" again)
+  /** UI: open a concise entity summary modal (wired by LensCanvasCockpit). */
+  onExplainNode?: (args: { nodeId: string; fragmentId?: string; canonicalPath?: string; label?: string; type?: string }) => void;
   // Group/container nodes (UI-only, not persisted)
   isGroup?: boolean;
   groupParentId?: string;
@@ -90,7 +131,7 @@ export interface HorizonNodeData {
   stackTitle?: string;
   /** Stack subtitle (context label): e.g. "Dubai Future Foundation" under "Control" */
   stackSubtitle?: string;
-  stackKind?: 'persons' | 'staff' | 'products' | 'control' | 'geolocation' | 'suppliers' | 'dependencies';
+  stackKind?: 'persons' | 'staff' | 'products' | 'control' | 'geolocation' | 'suppliers' | 'dependencies' | 'dominates';
   /** Visual type override for the stack controller node (drives color/icon); e.g. PERSON/PRODUCT/ORGANIZATION/GEO_REGION */
   stackVisualType?: string;
   onToggleStack?: (stackKey: string, nextExpanded: boolean) => void;
@@ -149,11 +190,11 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
   },
   // Market nodes (/market/*). Keep distinct from PRODUCT (amber) and ORG (blue).
   'MARKET': {
-    // Fuchsia palette (economy/market; distinct from TECHNOLOGY purple and SERVICE pink).
-    bg: '#FAE8FF', bgDark: '#2A0A2B',
-    border: '#D946EF', borderDark: '#F0ABFC',
-    text: '#86198F', textDark: '#F5D0FE',
-    accent: '#D946EF', accentDark: '#F0ABFC',
+    // Amber / gold (market = money)
+    bg: '#FEF3C7', bgDark: '#78350F',
+    border: '#F59E0B', borderDark: '#FBBF24',
+    text: '#92400E', textDark: '#FDE68A',
+    accent: '#F59E0B', accentDark: '#FBBF24',
   },
   'GEO_REGION': {
     bg: '#D1FAE5', bgDark: '#064E3B',
@@ -222,6 +263,35 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     border: '#6366F1', borderDark: '#818CF8',
     text: '#3730A3', textDark: '#C7D2FE',
     accent: '#6366F1', accentDark: '#818CF8',
+  },
+  // COMMUNITY: informal social groups (networks, communities, collectives)
+  // Distinct from ORGANIZATION (blue) and PERSON (cyan) — use warm violet/grape palette
+  'COMMUNITY': {
+    bg: '#F3E8FF', bgDark: '#3B0764',
+    border: '#A855F7', borderDark: '#C084FC',
+    text: '#6B21A8', textDark: '#E9D5FF',
+    accent: '#A855F7', accentDark: '#C084FC',
+  },
+  // COMMUNITY_DYNASTY: visual variant for dynasty communities (same palette, different icon)
+  'COMMUNITY_DYNASTY': {
+    bg: '#F3E8FF', bgDark: '#3B0764',
+    border: '#A855F7', borderDark: '#C084FC',
+    text: '#6B21A8', textDark: '#E9D5FF',
+    accent: '#A855F7', accentDark: '#C084FC',
+  },
+  // COMMUNITY_TRIBE: visual variant for tribe communities (same palette, different icon)
+  'COMMUNITY_TRIBE': {
+    bg: '#F3E8FF', bgDark: '#3B0764',
+    border: '#A855F7', borderDark: '#C084FC',
+    text: '#6B21A8', textDark: '#E9D5FF',
+    accent: '#A855F7', accentDark: '#C084FC',
+  },
+  // SACRED_TEXT_QURAN: visual variant for Quran (respectful icon)
+  'SACRED_TEXT_QURAN': {
+    bg: '#FEF3C7', bgDark: '#78350F',
+    border: '#F59E0B', borderDark: '#FBBF24',
+    text: '#92400E', textDark: '#FDE68A',
+    accent: '#F59E0B', accentDark: '#FBBF24',
   },
   'RISK': {
     bg: '#FEE2E2', bgDark: '#450A0A',
@@ -421,9 +491,32 @@ if (typeof document !== 'undefined') {
   ensureHorizonNode2026Styles();
 }
 
-export const formatHorizonFragmentType = (type: string | undefined): string => {
+const normalizeQuranKey = (value: string | null | undefined): { compact: string; words: string[] } => {
+  const raw = String(value || '').toLowerCase();
+  const normalized = raw.replace(/[^a-z]+/g, ' ').trim();
+  const compact = normalized.replace(/\s+/g, '');
+  const words = normalized ? normalized.split(/\s+/g) : [];
+  return { compact, words };
+};
+
+const isQuranReference = (label?: string | null, canonicalPath?: string | null): boolean => {
+  const cp = String(canonicalPath || '').toLowerCase();
+  if (cp.includes('/quran') || cp.includes('/koran')) return true;
+  const { compact, words } = normalizeQuranKey(label);
+  if (compact.includes('quran') || compact.includes('koran')) return true;
+  return words.includes('quran') || words.includes('koran');
+};
+
+export const formatHorizonFragmentType = (
+  type: string | undefined,
+  canonicalPath?: string | null,
+  label?: string | null,
+): string => {
   const t = String(type || '').trim();
   if (!t) return 'Unknown';
+  if (t.toUpperCase() === 'PRODUCT' && isQuranReference(label, canonicalPath)) {
+    return 'Sacred Text';
+  }
   return t.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
@@ -432,6 +525,7 @@ export const formatHorizonFragmentType = (type: string | undefined): string => {
 export const getHorizonNodeVisualType = (
   type: string | undefined,
   canonicalPath?: string | null,
+  label?: string | null,
 ): string => {
   const t = String(type || '').trim();
   const cp = String(canonicalPath || '').trim();
@@ -442,6 +536,36 @@ export const getHorizonNodeVisualType = (
   // Any /market/* fragment should look like a market node, regardless of declared type.
   if (cp.startsWith('/market/')) {
     return 'MARKET';
+  }
+  // Community subtypes can have distinct visuals (e.g., dynasty).
+  if (cp.startsWith('/community/')) {
+    const parts = cp.split('/').filter(Boolean);
+    const communityType = parts[2] || '';
+    if (communityType === 'dynasty') return 'COMMUNITY_DYNASTY';
+    if (communityType === 'tribe') return 'COMMUNITY_TRIBE';
+  }
+  if (String(t).toUpperCase() === 'PRODUCT' && isQuranReference(label, cp)) {
+    return 'SACRED_TEXT_QURAN';
+  }
+  return t;
+};
+
+const getHorizonNodeDisplayType = (
+  type: string | undefined,
+  canonicalPath?: string | null,
+  label?: string | null,
+): string => {
+  const t = String(type || '').trim();
+  const cp = String(canonicalPath || '').trim().toLowerCase();
+  if (!t) return 'Unknown';
+  if (cp.startsWith('/community/')) {
+    const parts = cp.split('/').filter(Boolean);
+    const communityType = parts[2] || '';
+    if (communityType === 'dynasty') return 'DYNASTY';
+    if (communityType === 'tribe') return 'TRIBE';
+  }
+  if (t.toUpperCase() === 'PRODUCT' && isQuranReference(label, canonicalPath)) {
+    return 'SACRED_TEXT';
   }
   return t;
 };
@@ -691,6 +815,56 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
           <path d="M3 11v2a2 2 0 0 0 2 2h2l7 4V3L7 7H5a2 2 0 0 0-2 2z" />
           <path d="M16 8.5a4 4 0 0 1 0 7" />
           <path d="M19 6a8 8 0 0 1 0 12" />
+        </svg>
+      );
+
+    case 'COMMUNITY':
+      // Community / network: group of connected people
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          {/* Central person */}
+          <circle cx="12" cy="8" r="3" />
+          <path d="M12 11v2" />
+          {/* Left person */}
+          <circle cx="5" cy="14" r="2.5" />
+          <path d="M5 16.5v1.5" />
+          {/* Right person */}
+          <circle cx="19" cy="14" r="2.5" />
+          <path d="M19 16.5v1.5" />
+          {/* Connection lines */}
+          <path d="M8 10l-3 4" />
+          <path d="M16 10l3 4" />
+          <path d="M7.5 15.5h9" />
+        </svg>
+      );
+
+    case 'COMMUNITY_DYNASTY': {
+      // Dynasty: crown icon (gold)
+      const crownColor = '#D4AF37';
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={crownColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 6l4 4 5-6 5 6 4-4" />
+          <path d="M4 10l2 8h12l2-8" />
+          <path d="M6 18h12" />
+        </svg>
+      );
+    }
+
+    case 'COMMUNITY_TRIBE':
+      // Tribe: shield icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M12 3l7 3v6c0 5-3.5 8-7 9-3.5-1-7-4-7-9V6l7-3z" />
+          <path d="M8 9h8" />
+          <path d="M12 9v9" />
+        </svg>
+      );
+
+    case 'SACRED_TEXT_QURAN':
+      // Quran: crescent moon icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M15 4a8 8 0 1 0 0 16a6 6 0 1 1 0-16z" />
         </svg>
       );
     
@@ -1476,6 +1650,18 @@ const edgeCaptionShort = (raw: any): string => {
     AFFECTS: 'Affects',
     REGULATES: 'Regulates',
     IMPACTS: 'Impacts',
+    // Market / hierarchy
+    PARTICIPATES_IN: 'Participates',
+    DOMINATES: 'Dominates',
+    HAS_SUBMARKET: 'Submarket',
+    HAS_SUBGROUP: 'Subgroup',
+    ADMINISTERS: 'Administers',
+    // Community relationships
+    OPERATES_VIA: 'Via',
+    MEMBER_OF: 'Member',
+    AFFILIATED_WITH: 'Affiliated',
+    // Extractive
+    EXTRACTS_FROM: 'Extracts',
   };
   if (MAP[u]) return MAP[u];
   const human = u
@@ -1645,6 +1831,12 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
   const hideHeader = Boolean((data as any)?.groupHideHeader);
   const noFill = Boolean((data as any)?.groupNoFill);
 
+  // Stack group (expanded right-side stacks)
+  const isStackGroup = Boolean((data as any)?.isStackGroup);
+  const stackGroupKey = String((data as any)?.stackGroupKey || '').trim();
+  const stackGroupExpanded = Boolean((data as any)?.stackGroupExpanded);
+  const onToggleStack = (data as any)?.onToggleStack as ((key: string, next: boolean) => void) | undefined;
+
   // Get colors based on semantic group or fall back to edge type colors
   let bg: string;
   let border: string;
@@ -1673,10 +1865,18 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
     border = theme === 'dark' ? 'rgba(148, 163, 184, 0.42)' : 'rgba(100, 116, 139, 0.34)';
   }
 
-  const titleColor = theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.85)';
+  // Stack groups use a subtle cold background instead of an outline.
+  if (isStackGroup) {
+    bg = theme === 'dark' ? 'rgba(28, 28, 30, 0.78)' : 'rgba(218, 221, 225, 0.95)';
+    border = 'transparent';
+  }
+
+  const titleColor = theme === 'dark' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.9)';
   const subtitleColor = theme === 'dark' ? 'rgba(255,255,255,0.62)' : 'rgba(15,23,42,0.62)';
   const count = typeof data.groupCount === 'number' ? data.groupCount : undefined;
   const ring = selected ? (theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(15,23,42,0.20)') : undefined;
+  const borderWidth = isStackGroup ? 0 : (noFill ? 2 : 1.5);
+  const borderStyle = isStackGroup ? 'solid' : 'dashed';
 
   // Optional: intra-group subsections (used by Levels Two-Pane left groups to separate children by fragment type).
   const typeBlocks = (data as any)?.groupTypeBlocks as
@@ -1738,7 +1938,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         ? t(`horizon.groups.semantic.${semanticGroup}`, { defaultValue: semanticFallback[semanticGroup] })
         : normalizeEdgeType(data.groupEdgeType));
   // Subtitle: edge types in this group
-  const subtitle = formatEdgeTypes(edgeTypes);
+  const subtitle = isStackGroup ? '' : formatEdgeTypes(edgeTypes);
 
   // Owner chip (single owner by product definition).
   const ownerId = String((data as any)?.groupOwnerFragmentId || data.groupParentId || '').trim();
@@ -1810,12 +2010,14 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         width: '100%',
         height: '100%',
         background: bg,
-        border: `${noFill ? 2 : 1.5}px dashed ${border}`,
+        border: `${borderWidth}px ${borderStyle} ${border}`,
         borderRadius: 12,
-        boxShadow: (noFill && !ring)
+        boxShadow: isStackGroup
           ? 'none'
-          : ((theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)') +
-            (ring ? `, 0 0 0 3px ${ring}` : '')),
+          : ((noFill && !ring)
+            ? 'none'
+            : ((theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)') +
+              (ring ? `, 0 0 0 3px ${ring}` : ''))),
         // Groups are real containers in Freeform/Linear pagination modes; they must allow interaction
         // (pagination buttons). Backdrop-only groups should not intercept clicks.
         pointerEvents: isBackdrop ? 'none' : 'auto',
@@ -2059,8 +2261,8 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         </>
       )}
 
-      {/* Aggregation ports (edge types): always on the RIGHT edge, spaced vertically. */}
-      {showEdgePorts && (
+      {/* Aggregation ports (edge types): on the RIGHT edge for left groups, spaced vertically. */}
+      {showEdgePorts && !isStackGroup && (
         <>
           {edgePorts!.map((p, idx) => {
             const y = typeof p?.y === 'number' ? p.y : undefined;
@@ -2107,6 +2309,54 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         </>
       )}
 
+      {/* Stack group ports: on the LEFT edge (stacks are on right pane, edges come from left). */}
+      {showEdgePorts && isStackGroup && (
+        <>
+          {edgePorts!.map((p, idx) => {
+            const y = typeof p?.y === 'number' ? p.y : undefined;
+            if (typeof y !== 'number') return null;
+            const targetId = String(p?.targetHandleId || '').trim() || `edge:${String(p?.edgeType || 'OTHER').trim()}:target`;
+            const sourceId = String(p?.sourceHandleId || '').trim() || `edge:${String(p?.edgeType || 'OTHER').trim()}:source`;
+            return (
+              <React.Fragment key={`stack-port-${idx}-${targetId}-${sourceId}`}>
+                <Handle
+                  id={targetId}
+                  type="target"
+                  position={Position.Left}
+                  className="hzn-handle"
+                  style={{
+                    background: border,
+                    width: '10px',
+                    height: '10px',
+                    border: `2px solid ${theme === 'dark' ? 'rgba(15,23,42,0.75)' : 'rgba(255,255,255,0.95)'}`,
+                    left: '-5px',
+                    top: `${y}px`,
+                    opacity: 0.85,
+                    pointerEvents: 'none',
+                  }}
+                />
+                <Handle
+                  id={sourceId}
+                  type="source"
+                  position={Position.Left}
+                  className="hzn-handle"
+                  style={{
+                    background: border,
+                    width: '10px',
+                    height: '10px',
+                    border: `2px solid ${theme === 'dark' ? 'rgba(15,23,42,0.75)' : 'rgba(255,255,255,0.95)'}`,
+                    left: '-5px',
+                    top: `${y}px`,
+                    opacity: 0, // hidden but present for correct directionality
+                    pointerEvents: 'none',
+                  }}
+                />
+              </React.Fragment>
+            );
+          })}
+        </>
+      )}
+
       {/* Header (optional) */}
       {!hideHeader && (
         <div
@@ -2116,40 +2366,81 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
             top: 10,
             right: 12,
             display: 'flex',
-            alignItems: 'baseline',
+            alignItems: 'center',
             justifyContent: 'space-between',
             gap: 10,
             whiteSpace: 'nowrap',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-            {icon && <span style={{ fontSize: 12 }}>{icon}</span>}
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.5px', color: titleColor }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, maxWidth: isStackGroup ? '85%' : '70%' }}>
+            {!isStackGroup && icon && <span style={{ fontSize: 12 }}>{icon}</span>}
+            <div style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.5px',
+              color: titleColor,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}>
               {title}
             </div>
-            {count !== undefined && (
+            {!isStackGroup && count !== undefined && (
               <div style={{ fontSize: 11, fontWeight: 600, color: subtitleColor }}>
                 ({count})
               </div>
             )}
           </div>
-          {subtitle && (
-            <div
-              style={{
-                fontSize: 9,
-                fontWeight: 500,
-                color: subtitleColor,
-                textTransform: 'uppercase',
-                letterSpacing: '0.3px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                maxWidth: '50%',
-              }}
-              title={edgeTypes.join(', ')}
-            >
-              {subtitle}
-            </div>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {!isStackGroup && subtitle && (
+              <div
+                style={{
+                  fontSize: 9,
+                  fontWeight: 500,
+                  color: subtitleColor,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.3px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  maxWidth: 110,
+                }}
+                title={edgeTypes.join(', ')}
+              >
+                {subtitle}
+              </div>
+            )}
+            {/* Stack group collapse button */}
+            {isStackGroup && stackGroupExpanded && onToggleStack && stackGroupKey && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleStack(stackGroupKey, false);
+                }}
+                aria-label="Collapse stack"
+                title="Collapse stacked nodes"
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 9,
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                  background: theme === 'dark' ? 'rgba(245, 158, 11, 0.28)' : 'rgba(245, 158, 11, 0.18)',
+                  color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
+                  pointerEvents: 'auto',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 15l-6-6-6 6" />
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -2232,10 +2523,10 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
 });
 
 // Базовый узел для Horizon фрагмента
-const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected }) => {
+const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected, id }) => {
   // Note: ensureHorizonNode2026Styles() is called once on module load (not per render)
   const { theme } = React.useContext(ThemeContext);
-  const baseVisualType = getHorizonNodeVisualType(data.type, data.canonicalPath);
+  const baseVisualType = getHorizonNodeVisualType(data.type, data.canonicalPath, data.label);
   const colors = getNodeColors(baseVisualType, theme);
   const [isHovering, setIsHovering] = React.useState(false);
   // Risk panel (below node): active tab + compact/full toggle.
@@ -2253,6 +2544,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   // Allow Research even if the first "load related" attempt returned empty: in that case the node isn't expanded,
   // but the user should still be able to run scouting from it.
   const isSelected = Boolean(selected);
+  const canExplainNode = Boolean((data as any)?.onExplainNode && (data.fragmentId || id));
   // Node expand/collapse (load related fragments).
   // NOTE:
   // - When a stack is COLLAPSED, the controller node should NOT show "expand relations" because the "N" pill
@@ -2456,7 +2748,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       ? stackTitle
       : (data.label || humanizeCanonicalPath(data.canonicalPath) || 'Fragment');
   const titleLineClamp = isCollapsed ? 2 : (data.showMetrics ? 2 : 6);
-  const displayType = data.type || 'Unknown';
+  const displayType = getHorizonNodeDisplayType(data.type, data.canonicalPath, data.label);
   // Keep node size consistent with ELK layout defaults used in the canvas (see LensCanvasCockpit)
   const NODE_WIDTH_PX = 180;
   const NODE_CARD_HEIGHT_PX = 148;
@@ -2493,10 +2785,14 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       get('market_cagr_percent') ??
       null;
 
+    const MIN_TAM_USD = 1_000_000;
+    const MIN_CAGR_PCT = 1; // hide sub-1% as noise
+
     const formatUSD = (v: number | null): string => {
       if (v == null) return '';
       const x = Number(v);
       if (!Number.isFinite(x)) return '';
+      if (Math.abs(x) < MIN_TAM_USD) return '';
       const abs = Math.abs(x);
       const sign = x < 0 ? '-' : '';
       const fmt = (n: number, suf: string) => {
@@ -2510,12 +2806,18 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       if (abs >= 1e3) return fmt(abs / 1e3, 'K');
       return `${sign}$${abs.toFixed(0)}`;
     };
-    const formatPercent = (v: number | null): string => {
-      if (v == null) return '';
+    const toPercent = (v: number | null): number | null => {
+      if (v == null) return null;
       const x = Number(v);
-      if (!Number.isFinite(x)) return '';
+      if (!Number.isFinite(x)) return null;
       // Heuristic: if it's 0..1, treat as ratio and convert to percent.
       const pct = x > 0 && x < 1 ? x * 100 : x;
+      return pct;
+    };
+    const formatPercent = (v: number | null): string => {
+      const pct = toPercent(v);
+      if (pct == null) return '';
+      if (Math.abs(pct) < MIN_CAGR_PCT) return '';
       const d = Math.abs(pct) >= 10 ? 0 : 1;
       const s = pct.toFixed(d).replace(/\.0$/, '');
       return `${s}%`;
@@ -3097,7 +3399,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         }}
       />
       
-      {/* Left handles: 2 handles для левой группы (market) */}
+      {/* Left handles: 2 handles для левой группы (market) — центральные 50% */}
       <Handle
         id="source-left"
         type="source"
@@ -3109,7 +3411,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           height: '10px',
           border: `2px solid ${surfaceBg}`,
           left: '-5px',
-          top: '40%',
+          top: '35%',
         }}
       />
       <Handle
@@ -3123,7 +3425,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           height: '10px',
           border: `2px solid ${surfaceBg}`,
           left: '-5px',
-          top: '60%',
+          top: '65%',
         }}
       />
       
@@ -3204,6 +3506,26 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                 <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={18} />
               )}
             </div>
+            {/* Country flag as separate icon below type icon */}
+            {!isSubcategoryStackController && extractCountryCode(data.canonicalPath) && (
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 14,
+                  background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.10)'}`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: theme === 'dark'
+                    ? `0 14px 30px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.08)`
+                    : `0 14px 30px rgba(0,0,0,0.10), inset 0 0 0 1px rgba(15,23,42,0.06)`,
+                }}
+              >
+                <CountryFlag countryCode={extractCountryCode(data.canonicalPath)} size={24} />
+              </div>
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, width: '100%' }}>
               <div
@@ -3292,48 +3614,101 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               </div>
             )}
 
-            {/* Pin is not shown for subcategory stacks */}
-            {canTogglePin && !isCollapsedStackController && !isSubcategoryStackController && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const cb = (data as any)?.onTogglePin as
-                    | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
-                    | undefined;
-                  cb?.({ fragmentId: data.fragmentId, canonicalPath: data.canonicalPath, nextPinned: !isPinnedToScope });
-                }}
-                aria-label={isPinnedToScope ? 'Unpin from scope' : 'Pin to scope'}
-                title={isPinnedToScope ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: 8,
-                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
-                  background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
-                  color: isPinnedToScope ? accentColor : (theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)'),
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
-                  pointerEvents: 'auto',
-                }}
-              >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill={isPinnedToScope ? 'currentColor' : 'none'}
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <line x1="12" y1="17" x2="12" y2="22" />
-                  <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-                </svg>
-              </button>
+            {/* Pin + Info stacked (mirror the left icon + flag column) */}
+            {(canTogglePin || canExplainNode) && !isCollapsedStackController && !isSubcategoryStackController && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {canTogglePin && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const cb = (data as any)?.onTogglePin as
+                        | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
+                        | undefined;
+                      cb?.({ fragmentId: data.fragmentId, canonicalPath: data.canonicalPath, nextPinned: !isPinnedToScope });
+                    }}
+                    aria-label={isPinnedToScope ? 'Unpin from scope' : 'Pin to scope'}
+                    title={isPinnedToScope ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 8,
+                      border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                      background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
+                      color: isPinnedToScope ? accentColor : (theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)'),
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                      pointerEvents: 'auto',
+                    }}
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill={isPinnedToScope ? 'currentColor' : 'none'}
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <line x1="12" y1="17" x2="12" y2="22" />
+                      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                    </svg>
+                  </button>
+                )}
+                {canExplainNode && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const cb = (data as any)?.onExplainNode as
+                        | ((args: { nodeId: string; fragmentId?: string; canonicalPath?: string; label?: string; type?: string }) => void)
+                        | undefined;
+                      cb?.({
+                        nodeId: String(id || ''),
+                        fragmentId: data.fragmentId,
+                        canonicalPath: data.canonicalPath,
+                        label: data.label,
+                        type: data.type,
+                      });
+                    }}
+                    aria-label="Explain entity"
+                    title="Explain entity"
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 8,
+                      border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                      background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
+                      color: theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                      pointerEvents: 'auto',
+                    }}
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                  </button>
+                )}
+              </div>
             )}
             {isCritical && (
               <div
@@ -3353,18 +3728,35 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         </>
       ) : (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-          <div
-            style={{
-              padding: '4px',
-              borderRadius: '6px',
-              background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
-            }}
-          >
-            <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={14} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+            <div
+              style={{
+                padding: '4px',
+                borderRadius: '6px',
+                background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
+              }}
+            >
+              <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={14} />
+            </div>
+            {extractCountryCode(data.canonicalPath) && (
+              <div
+                style={{
+                  padding: '4px',
+                  borderRadius: '6px',
+                  background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
+                }}
+              >
+                <CountryFlag countryCode={extractCountryCode(data.canonicalPath)} size={14} />
+              </div>
+            )}
           </div>
           
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -3403,48 +3795,100 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           
           {/* Right-side actions / indicators */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            {/* Pin is not shown for subcategory stacks */}
-            {canTogglePin && !isSubcategoryStackController && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const cb = (data as any)?.onTogglePin as
-                    | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
-                    | undefined;
-                  cb?.({ fragmentId: data.fragmentId, canonicalPath: data.canonicalPath, nextPinned: !isPinnedToScope });
-                }}
-                aria-label={isPinnedToScope ? 'Unpin from scope' : 'Pin to scope'}
-                title={isPinnedToScope ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
-                style={{
-                  width: 22,
-                  height: 22,
-                  borderRadius: 8,
-                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
-                  background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
-                  color: isPinnedToScope ? accentColor : (theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)'),
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
-                }}
-              >
-                {/* Lucide "pin" (thumbtack) */}
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill={isPinnedToScope ? 'currentColor' : 'none'}
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <line x1="12" y1="17" x2="12" y2="22" />
-                  <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-                </svg>
-              </button>
+            {/* Pin + Info stacked (mirror the left icon + flag column) */}
+            {(canTogglePin || canExplainNode) && !isSubcategoryStackController && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {canTogglePin && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const cb = (data as any)?.onTogglePin as
+                        | ((args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => void)
+                        | undefined;
+                      cb?.({ fragmentId: data.fragmentId, canonicalPath: data.canonicalPath, nextPinned: !isPinnedToScope });
+                    }}
+                    aria-label={isPinnedToScope ? 'Unpin from scope' : 'Pin to scope'}
+                    title={isPinnedToScope ? 'Pinned to scope (click to unpin)' : 'Pin to scope'}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 8,
+                      border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                      background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
+                      color: isPinnedToScope ? accentColor : (theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)'),
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                    }}
+                  >
+                    {/* Lucide "pin" (thumbtack) */}
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill={isPinnedToScope ? 'currentColor' : 'none'}
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <line x1="12" y1="17" x2="12" y2="22" />
+                      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                    </svg>
+                  </button>
+                )}
+                {canExplainNode && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const cb = (data as any)?.onExplainNode as
+                        | ((args: { nodeId: string; fragmentId?: string; canonicalPath?: string; label?: string; type?: string }) => void)
+                        | undefined;
+                      cb?.({
+                        nodeId: String(id || ''),
+                        fragmentId: data.fragmentId,
+                        canonicalPath: data.canonicalPath,
+                        label: data.label,
+                        type: data.type,
+                      });
+                    }}
+                    aria-label="Explain entity"
+                    title="Explain entity"
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 8,
+                      border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                      background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
+                      color: theme === 'dark' ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.75)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                    }}
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                  </button>
+                )}
+              </div>
             )}
 
             {/* Индикатор критичности */}

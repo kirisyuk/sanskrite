@@ -66,6 +66,15 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		if canonicalPath == "" || canonicalPath == "/" {
 			return nil, fmt.Errorf("empty canonicalPath")
 		}
+		// Best-effort: normalize/strictify canonicalPath early so we don't create duplicates like /loc/uae vs /loc/ae/na/na.
+		if e.canonicalPathResolver != nil && ftype != "" {
+			if resolved, rerr := e.canonicalPathResolver.Resolve(ctx, canonicalPath, ftype); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+				canonicalPath = strings.TrimSpace(resolved.CanonicalPath)
+				if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
+					return resolved.ExistingFragment, nil
+				}
+			}
+		}
 		ex, err := e.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
 		if err == nil && ex != nil && ex.ID != "" {
 			return ex, nil
@@ -439,6 +448,14 @@ func (e *ScoutEngine) WithCanonizationPolicy(executor *policy.PolicyExecutor) *S
 func (e *ScoutEngine) WithCanonicalPathResolver(resolver *CanonicalPathResolver) *ScoutEngine {
 	e.canonicalPathResolver = resolver
 	return e
+}
+
+// CanonicalPathResolver returns the resolver wired into this engine (may be nil).
+func (e *ScoutEngine) CanonicalPathResolver() *CanonicalPathResolver {
+	if e == nil {
+		return nil
+	}
+	return e.canonicalPathResolver
 }
 
 // WithLensesRepository sets the lenses repository for updating lens ViewConfig on assembly completion.
@@ -876,28 +893,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	var resolvedPath *ResolveResult
 	var effectiveCanonicalPath string
 	if e.canonicalPathResolver != nil {
-		// Determine fragment type from canonical path prefix (best-effort)
-		fragmentType := models.FragmentTypeOrganization // Default
-		switch {
-		case strings.HasPrefix(job.TargetCanonicalPath, "/product/"):
-			fragmentType = models.FragmentTypeProduct
-		case strings.HasPrefix(job.TargetCanonicalPath, "/program/"):
-			fragmentType = models.FragmentTypeProgram
-		case strings.HasPrefix(job.TargetCanonicalPath, "/market/"):
-			fragmentType = models.FragmentTypeMarket
-		case strings.HasPrefix(job.TargetCanonicalPath, "/fac/"):
-			fragmentType = models.FragmentTypeFacility
-		case strings.HasPrefix(job.TargetCanonicalPath, "/loc/") || strings.HasPrefix(job.TargetCanonicalPath, "/region/"):
-			fragmentType = models.FragmentTypeGeoRegion
-		case strings.HasPrefix(job.TargetCanonicalPath, "/event/"):
-			fragmentType = models.FragmentTypeEvent
-		case strings.HasPrefix(job.TargetCanonicalPath, "/org/"):
-			fragmentType = models.FragmentTypeOrganization
-		case strings.HasPrefix(job.TargetCanonicalPath, "/person/"):
-			fragmentType = models.FragmentTypePerson
-		case strings.HasPrefix(job.TargetCanonicalPath, "/media/"):
-			fragmentType = models.FragmentTypeMediaChannel
-		}
+		fragmentType := InferFragmentTypeFromCanonicalPath(job.TargetCanonicalPath)
 
 		resolved, err := e.canonicalPathResolver.Resolve(ctx, job.TargetCanonicalPath, fragmentType)
 		if err == nil && resolved != nil {

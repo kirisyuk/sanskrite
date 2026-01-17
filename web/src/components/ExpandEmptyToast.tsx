@@ -6,6 +6,9 @@ interface ExpandEmptyToastProps {
   message?: string;
   subMessage?: string;
   duration?: number; // ms before auto-hide
+  actionLabel?: string;
+  onAction?: () => void;
+  actionDisabled?: boolean;
 }
 
 /**
@@ -19,10 +22,24 @@ export const ExpandEmptyToast: React.FC<ExpandEmptyToastProps> = ({
   message = 'No related objects found',
   subMessage = 'Try a different expansion mode',
   duration = 2000,
+  actionLabel,
+  onAction,
+  actionDisabled = false,
 }) => {
   const [show, setShow] = useState(false);
   const [opacity, setOpacity] = useState(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleClose = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (hideRef.current) clearTimeout(hideRef.current);
+    setOpacity(0);
+    hideRef.current = setTimeout(() => {
+      setShow(false);
+      onHide();
+    }, 300);
+  };
 
   useEffect(() => {
     if (visible) {
@@ -37,7 +54,7 @@ export const ExpandEmptyToast: React.FC<ExpandEmptyToastProps> = ({
       timerRef.current = setTimeout(() => {
         setOpacity(0);
         // Wait for fade out, then hide and notify parent
-        setTimeout(() => {
+        hideRef.current = setTimeout(() => {
           setShow(false);
           onHide();
         }, 300);
@@ -46,6 +63,7 @@ export const ExpandEmptyToast: React.FC<ExpandEmptyToastProps> = ({
     
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      if (hideRef.current) clearTimeout(hideRef.current);
     };
   }, [visible, duration, onHide]);
 
@@ -64,6 +82,7 @@ export const ExpandEmptyToast: React.FC<ExpandEmptyToastProps> = ({
     >
       <div
         style={{
+          position: 'relative',
           display: 'flex',
           alignItems: 'flex-start',
           gap: 10,
@@ -73,11 +92,47 @@ export const ExpandEmptyToast: React.FC<ExpandEmptyToastProps> = ({
           border: '1px solid var(--border-subtle)',
           background: 'var(--bg-elevated)',
           boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
-          padding: '10px 12px',
+          padding: '10px 34px 10px 12px',
           opacity: opacity,
           transition: 'opacity 0.3s ease',
+          pointerEvents: 'auto',
         }}
       >
+        <button
+          type="button"
+          onClick={handleClose}
+          aria-label="Close"
+          style={{
+            position: 'absolute',
+            top: 6,
+            right: 6,
+            width: 20,
+            height: 20,
+            borderRadius: 6,
+            border: '1px solid transparent',
+            background: 'transparent',
+            color: 'var(--text-secondary-strong)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+          }}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
         {/* Icon */}
         <div
           style={{
@@ -128,6 +183,30 @@ export const ExpandEmptyToast: React.FC<ExpandEmptyToastProps> = ({
             </div>
           )}
         </div>
+        {actionLabel && onAction && (
+          <button
+            type="button"
+            onClick={onAction}
+            disabled={actionDisabled}
+            style={{
+              alignSelf: 'center',
+              padding: '6px 10px',
+              borderRadius: 8,
+              border: '1px solid var(--border-subtle)',
+              background: actionDisabled ? 'transparent' : 'var(--accent-primary, #3B82F6)',
+              color: actionDisabled ? 'var(--text-secondary-strong)' : '#fff',
+              fontSize: 11,
+              fontWeight: 800,
+              cursor: actionDisabled ? 'not-allowed' : 'pointer',
+              opacity: actionDisabled ? 0.6 : 1,
+              transition: 'transform 120ms ease, box-shadow 120ms ease',
+              boxShadow: 'none',
+              pointerEvents: actionDisabled ? 'none' : 'auto',
+            }}
+          >
+            {actionLabel}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -4,15 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
-
-var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
-var multiDash = regexp.MustCompile(`-+`)
 
 // CanonizationPolicy normalizes paths, types, names, and synonyms.
 type CanonizationPolicy struct {
@@ -198,11 +194,8 @@ func (p *CanonizationPolicy) normalizeLegacyGeoPath(path string) string {
 
 // slugify converts a string to a URL-safe slug (hardcoded from canonicalizer.go).
 func (p *CanonizationPolicy) slugify(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = nonSlugChars.ReplaceAllString(s, "-")
-	s = multiDash.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	return s
+	// Keep slugging consistent across Horizon (scout/policies/tools) and Ontology.
+	return taxonomy.Slugify(s)
 }
 
 // matchesPattern checks if value matches pattern.

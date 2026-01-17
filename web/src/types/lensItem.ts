@@ -45,6 +45,12 @@ export type DependencyType =
   | 'EXTRACTS_FROM'
   | 'PARTICIPATES_IN'
   | 'DOMINATES'
+  | 'HAS_SUBMARKET'
+  | 'HAS_SUBGROUP'
+  | 'ADMINISTERS'
+  | 'OPERATES_VIA'
+  | 'MEMBER_OF'
+  | 'AFFILIATED_WITH'
   // Governance / org-person
   | 'MANAGES'
   | 'CONTROLS'

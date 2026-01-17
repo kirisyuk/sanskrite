@@ -444,30 +444,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				p := strings.TrimSpace(j.TargetCanonicalPath)
 				// Normalize job path so we dedupe even if older jobs were created under alias paths.
 				if s.canonicalPathResolver != nil && p != "" {
-					// Best-effort: infer fragment type from path prefix.
-					ft := models.FragmentTypeOrganization
-					switch {
-					case strings.HasPrefix(p, "/product/"):
-						ft = models.FragmentTypeProduct
-					case strings.HasPrefix(p, "/program/"):
-						ft = models.FragmentTypeProgram
-					case strings.HasPrefix(p, "/market/"):
-						ft = models.FragmentTypeMarket
-					case strings.HasPrefix(p, "/fac/"):
-						ft = models.FragmentTypeFacility
-					case strings.HasPrefix(p, "/loc/") || strings.HasPrefix(p, "/region/"):
-						ft = models.FragmentTypeGeoRegion
-					case strings.HasPrefix(p, "/event/"):
-						ft = models.FragmentTypeEvent
-					case strings.HasPrefix(p, "/person/"):
-						ft = models.FragmentTypePerson
-					case strings.HasPrefix(p, "/media/"):
-						ft = models.FragmentTypeMediaChannel
-					case strings.HasPrefix(p, "/org/"):
-						ft = models.FragmentTypeOrganization
-					case strings.HasPrefix(p, "/gov/"):
-						ft = models.FragmentTypeOrganization
-					}
+					ft := scout.InferFragmentTypeFromCanonicalPath(p)
 					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 						p = resolved.CanonicalPath
 					}
@@ -500,30 +477,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		var isCacheHit bool
 
 		if s.canonicalPathResolver != nil {
-			// Determine fragment type from canonical path prefix (best-effort)
-			fragmentType := models.FragmentTypeOrganization // Default
-			switch {
-			case strings.HasPrefix(inputPath, "/product/"):
-				fragmentType = models.FragmentTypeProduct
-			case strings.HasPrefix(inputPath, "/program/"):
-				fragmentType = models.FragmentTypeProgram
-			case strings.HasPrefix(inputPath, "/market/"):
-				fragmentType = models.FragmentTypeMarket
-			case strings.HasPrefix(inputPath, "/fac/"):
-				fragmentType = models.FragmentTypeFacility
-			case strings.HasPrefix(inputPath, "/loc/") || strings.HasPrefix(inputPath, "/region/"):
-				fragmentType = models.FragmentTypeGeoRegion
-			case strings.HasPrefix(inputPath, "/event/"):
-				fragmentType = models.FragmentTypeEvent
-			case strings.HasPrefix(inputPath, "/org/"):
-				fragmentType = models.FragmentTypeOrganization
-			case strings.HasPrefix(inputPath, "/gov/"):
-				fragmentType = models.FragmentTypeOrganization
-			case strings.HasPrefix(inputPath, "/person/"):
-				fragmentType = models.FragmentTypePerson
-			case strings.HasPrefix(inputPath, "/media/"):
-				fragmentType = models.FragmentTypeMediaChannel
-			}
+			fragmentType := scout.InferFragmentTypeFromCanonicalPath(inputPath)
 
 			resolved, err := s.canonicalPathResolver.Resolve(ctx, inputPath, fragmentType)
 			if err == nil && resolved != nil {

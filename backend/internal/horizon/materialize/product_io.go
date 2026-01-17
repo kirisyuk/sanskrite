@@ -36,12 +36,21 @@ type ProductIOApplyResult struct {
 }
 
 type ProductIOMaterializer struct {
-	fragmentsRepo *horizonrepo.HorizonFragmentsRepository
-	edgesRepo     *horizonrepo.DependencyEdgesRepository
+	fragmentsRepo         *horizonrepo.HorizonFragmentsRepository
+	edgesRepo             *horizonrepo.DependencyEdgesRepository
+	canonicalPathResolver *scout.CanonicalPathResolver // Optional: canonicalize/dedup paths before IO materialization
 }
 
 func NewProductIOMaterializer(fragmentsRepo *horizonrepo.HorizonFragmentsRepository, edgesRepo *horizonrepo.DependencyEdgesRepository) *ProductIOMaterializer {
 	return &ProductIOMaterializer{fragmentsRepo: fragmentsRepo, edgesRepo: edgesRepo}
+}
+
+func (m *ProductIOMaterializer) WithCanonicalPathResolver(resolver *scout.CanonicalPathResolver) *ProductIOMaterializer {
+	if m == nil {
+		return m
+	}
+	m.canonicalPathResolver = resolver
+	return m
 }
 
 func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRequest) (*ProductIOApplyResult, error) {
@@ -76,19 +85,33 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 			candidates = []string{"/product/" + scout.Slugify(name)}
 		}
 
-		// Prefer existing fragments in candidate order.
-		for _, cp := range candidates {
-			cp = strings.TrimSpace(cp)
+		// Prefer existing fragments in candidate order (with optional canonicalization/dedup).
+		resolvedCandidates := make([]string, 0, len(candidates))
+		for _, cp0 := range candidates {
+			cp := strings.TrimSpace(cp0)
 			if cp == "" {
 				continue
+			}
+			// Canonicalize/upgrade flat product paths to hierarchical taxonomy when possible.
+			if m.canonicalPathResolver != nil {
+				if resolved, rerr := m.canonicalPathResolver.Resolve(ctx, cp, horizonmodels.FragmentTypeProduct); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+					cp = strings.TrimSpace(resolved.CanonicalPath)
+					if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
+						return resolved.ExistingFragment, nil
+					}
+				}
 			}
 			if ex, err := m.fragmentsRepo.GetByCanonicalPath(ctx, cp); err == nil && ex != nil && ex.ID != "" {
 				return ex, nil
 			}
+			resolvedCandidates = append(resolvedCandidates, cp)
+		}
+		if len(resolvedCandidates) == 0 {
+			return nil, fmt.Errorf("no canonical path candidates for product %q", name)
 		}
 
 		// Create using the primary repo (applies governance + version + indexPaths + vertex export).
-		cp := strings.TrimSpace(candidates[0])
+		cp := strings.TrimSpace(resolvedCandidates[0])
 		frag := &horizonmodels.HorizonFragment{
 			TenantID:      "global",
 			CreatedAt:     now,
