@@ -17,6 +17,7 @@ type HorizonHandlers struct {
 	docsRepo       *corerepo.DocumentsRepository
 	usersRepo      *corerepo.UsersRepository
 	interactions   *corerepo.InteractionsRepository
+	factsRepo      *corerepo.OntologyFactsRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -56,6 +57,12 @@ func (h *HorizonHandlers) WithUsersRepo(users *corerepo.UsersRepository) *Horizo
 	return h
 }
 
+// WithOntologyFactsRepo wires core OntologyFactsRepository (ontology_facts) for debug/manual injections.
+func (h *HorizonHandlers) WithOntologyFactsRepo(facts *corerepo.OntologyFactsRepository) *HorizonHandlers {
+	h.factsRepo = facts
+	return h
+}
+
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Intent precheck (NL -> taxonomy-aligned intent)
@@ -88,6 +95,9 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	// Propagation endpoints
 	mux.Handle("/api/horizon/propagation/status", authMiddleware(http.HandlerFunc(h.GetPropagationStatus)))
 	mux.Handle("/api/horizon/propagation/trigger", authMiddleware(http.HandlerFunc(h.TriggerPropagation)))
+
+	// Debug: inject an event and run SignalDescriptor pipeline (extract → seed → propagate)
+	mux.Handle("/api/horizon/events:inject", authMiddleware(http.HandlerFunc(h.InjectEvent)))
 
 	// Entity search (Live Entity Recognition)
 	mux.Handle("/api/horizon/entities/search", authMiddleware(http.HandlerFunc(h.SearchEntities)))
@@ -273,6 +283,21 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 
 	if strings.HasSuffix(r.URL.Path, "/dependencies") {
 		h.GetFragmentDependencies(w, r)
+		return
+	}
+
+	if strings.HasSuffix(r.URL.Path, "/metrics") {
+		h.GetFragmentMetrics(w, r)
+		return
+	}
+
+	if strings.HasSuffix(r.URL.Path, "/provenance") {
+		h.GetFragmentProvenance(w, r)
+		return
+	}
+
+	if strings.HasSuffix(r.URL.Path, "/interpretation") {
+		h.GetFragmentInterpretation(w, r)
 		return
 	}
 

@@ -12,6 +12,7 @@ import (
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
@@ -1069,6 +1070,30 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 										}
 									}
 								}
+							}
+						}
+					}
+
+					// New Signal Pipeline (SignalDescriptor-based):
+					// Event → SignalDescriptor(s) → Seed Injection → Axis-based Propagation (best-effort).
+					//
+					// This runs alongside legacy synthesis for gradual rollout.
+					if e.aiExecutor != nil && e.fragmentsRepo != nil && e.edgesRepo != nil {
+						signalExtractor := signals.NewSignalExtractor(nil, e.aiExecutor) // LLM-based extraction (rules optional)
+						seedInjector := signals.NewSeedInjector(e.fragmentsRepo, e.edgesRepo)
+						propEngine := propagation.NewPropagationEngine(e.fragmentsRepo, nil, e.edgesRepo, e.lensesRepo, e.realtime)
+						profileLookup := propagation.NewProfileLookup(nil) // defaults-only (Firestore seeding/wiring can be added later)
+						pipeline := NewSignalPipeline(signalExtractor, seedInjector, propEngine, profileLookup, e.factsRepo)
+						for _, fact := range facts {
+							if fact == nil {
+								continue
+							}
+							if strings.TrimSpace(fact.Kind) != "event" {
+								continue
+							}
+							if err := pipeline.ProcessEvent(ctx, fact); err != nil {
+								fmt.Printf("[ScoutEngine] SignalPipeline failed (best-effort): jobId=%s target=%s factId=%s err=%v\n",
+									strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), strings.TrimSpace(fact.ID), err)
 							}
 						}
 					}

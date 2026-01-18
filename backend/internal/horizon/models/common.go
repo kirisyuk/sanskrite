@@ -41,6 +41,9 @@ type Provenance struct {
 	SourceRefs    []SourceRef `json:"sourceRefs,omitempty" firestore:"sourceRefs,omitempty"`
 	DataSourceIDs []string    `json:"dataSourceIds,omitempty" firestore:"dataSourceIds,omitempty"` // DataSource IDs
 	DocumentIDs   []string    `json:"documentIds,omitempty" firestore:"documentIds,omitempty"`     // Document IDs
+	// Contributions is the bounded, structured provenance for this metric path on this node.
+	// It is the primary contract for tracing how a value arrived (risk-architecture.md "Top-K provenance").
+	Contributions []Contribution `json:"contributions,omitempty" firestore:"contributions,omitempty"`
 	ObservedAt    *time.Time  `json:"observedAt,omitempty" firestore:"observedAt,omitempty"`
 	Method        string      `json:"method,omitempty" firestore:"method,omitempty"` // extracted, curated, imported
 }
@@ -50,6 +53,18 @@ type SourceRef struct {
 	SourceID   string  `json:"sourceId" firestore:"sourceId"`                         // DataSource ID или Document ID
 	SourceType string  `json:"sourceType" firestore:"sourceType"`                     // "dataSource", "document", "web", "rss", "telegram_channel"
 	DocumentID *string `json:"documentId,omitempty" firestore:"documentId,omitempty"` // Если SourceType = "dataSource", может быть Document
+}
+
+// Contribution represents a single source contribution to a metric at a node.
+// It stores the source signal, source event, propagation path, and the post-decay amplitude.
+// This matches risk-architecture.md (Lazy Interpretation input contract).
+type Contribution struct {
+	SignalID      string    `json:"signalId" firestore:"signalId"`
+	SourceEventID string    `json:"sourceEventId" firestore:"sourceEventId"`
+	Path          []string  `json:"path" firestore:"path"` // propagation path (canonical paths preferred)
+	Amplitude     float64   `json:"amplitude" firestore:"amplitude"`
+	Hops          int       `json:"hops" firestore:"hops"`
+	ObservedAt    time.Time `json:"observedAt" firestore:"observedAt"`
 }
 
 // Governance управляет жизненным циклом HorizonFragment

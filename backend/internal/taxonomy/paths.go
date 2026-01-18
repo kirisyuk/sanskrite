@@ -114,27 +114,31 @@ func ValidateCanonicalPath(path string) error {
 	// - We enforce stricter shapes for /gov and /segment to avoid ambiguous merges.
 	switch namespace {
 	case "gov":
-		// /gov/{iso2|na}/{slug}
+		// /gov/{geo}/{slug}
+		// geo: ISO3166-1 alpha2 (exactly 2 lowercase letters) OR composite (2-3 ISO2 joined by "-")
+		// Examples: "us", "sa", "tr-sy", "ae-sa-om", "na"
 		if len(parts) != 3 {
-			return fmt.Errorf("gov canonical path must have exactly 3 segments: /gov/{iso2}/{slug}: %s", path)
+			return fmt.Errorf("gov canonical path must have exactly 3 segments: /gov/{geo}/{slug}: %s", path)
 		}
-		cc := strings.ToLower(strings.TrimSpace(parts[1]))
-		if !reCountryAlpha2.MatchString(cc) {
-			return fmt.Errorf("gov canonical path has invalid country code %q (expected ISO3166-1 alpha2 or 'na'): %s", parts[1], path)
+		geo := strings.ToLower(strings.TrimSpace(parts[1]))
+		if geo != "na" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) {
+			return fmt.Errorf("gov canonical path has invalid geo %q (expected ISO3166-1 alpha2 like 'us'/'sa', composite like 'tr-sy'/'ae-sa-om', or 'na'): %s", parts[1], path)
 		}
 	case "org":
 		// Allowed:
 		// - legacy: /org/{slug}
-		// - preferred: /org/{iso2|na}/{slug}
+		// - preferred: /org/{geo}/{slug}
+		// geo: ISO3166-1 alpha2 (exactly 2 lowercase letters) OR composite (2-3 ISO2 joined by "-")
+		// Examples: "us", "sa", "tr-sy", "ae-sa-om", "na"
 		if len(parts) == 2 {
 			return nil
 		}
 		if len(parts) != 3 {
-			return fmt.Errorf("org canonical path must be /org/{slug} (legacy) or /org/{iso2}/{slug}: %s", path)
+			return fmt.Errorf("org canonical path must be /org/{slug} (legacy) or /org/{geo}/{slug}: %s", path)
 		}
-		cc := strings.ToLower(strings.TrimSpace(parts[1]))
-		if !reCountryAlpha2.MatchString(cc) {
-			return fmt.Errorf("org canonical path has invalid country code %q (expected ISO3166-1 alpha2 or 'na'): %s", parts[1], path)
+		geo := strings.ToLower(strings.TrimSpace(parts[1]))
+		if geo != "na" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) {
+			return fmt.Errorf("org canonical path has invalid geo %q (expected ISO3166-1 alpha2 like 'us'/'sa', composite like 'tr-sy'/'ae-sa-om', or 'na'): %s", parts[1], path)
 		}
 	case "segment":
 		// /segment/{domain}/{vertical}/{geo}
@@ -236,28 +240,80 @@ func GeoCanonicalPath(countryAlpha2, admin1, city string) string {
 }
 
 // OrgCanonicalPath returns a Horizon-canonical organization path:
-// /org/{iso2|na}/{slug}
+// /org/{geo}/{name-slug}-{legal-form}
 //
-// iso2 should be the country of origin / primary jurisdiction. If missing/invalid, "na" is used.
+// geo is the geographic jurisdiction:
+//   - Default: ISO3166-1 alpha2 (exactly 2 lowercase letters, e.g., "us", "sa", "kz")
+//   - Composite: 2-3 ISO3166-1 alpha2 codes joined by "-" (e.g., "tr-sy", "ae-sa-om")
+//   - Unknown: "na" if jurisdiction is unknown/invalid
+//
+// Legal form is extracted from orgLabel and normalized to canonical English form (lowercase).
+// If no legal form detected, slug is created without legal form suffix.
+//
+// Legal form is extracted from orgLabel and normalized to canonical English form (lowercase).
+// If no legal form detected, slug is created without legal form suffix.
 func OrgCanonicalPath(countryAlpha2OrNA string, orgLabel string) string {
 	cc := strings.ToLower(strings.TrimSpace(countryAlpha2OrNA))
-	if !reCountryAlpha2.MatchString(cc) {
+	if !reCountryAlpha2.MatchString(cc) && !isCompositeGeo(cc) {
 		cc = "na"
 	}
-	slug := Slugify(orgLabel)
-	if slug == "" {
+
+	// Extract legal form from name
+	nameWithoutForm, legalFormCanonical, _ := extractLegalFormFromName(orgLabel)
+
+	// Create slug from name (without legal form)
+	var nameSlug string
+	if nameWithoutForm != "" {
+		nameSlug = Slugify(nameWithoutForm)
+	} else {
+		nameSlug = Slugify(orgLabel)
+	}
+
+	if nameSlug == "" {
 		return ""
 	}
-	return JoinPath("org", cc, slug)
+
+	// Append legal form if found
+	if legalFormCanonical != "" {
+		nameSlug = nameSlug + "-" + legalFormCanonical
+	}
+
+	return JoinPath("org", cc, nameSlug)
+}
+
+// isCompositeGeo checks if a string is a valid composite geo (e.g., "tr-sy", "ae-sa-om").
+// Composite geo consists of 2-3 ISO3166-1 alpha2 codes joined by hyphens, sorted lexicographically.
+// Each component must be exactly 2 lowercase letters (ISO3166-1 alpha2).
+func isCompositeGeo(s string) bool {
+	if s == "" {
+		return false
+	}
+	parts := strings.Split(s, "-")
+	if len(parts) < 2 || len(parts) > 3 {
+		return false
+	}
+	// Each part must be valid ISO3166-1 alpha2 (exactly 2 lowercase letters)
+	for _, part := range parts {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if !reCountryAlpha2.MatchString(part) {
+			return false
+		}
+	}
+	// Note: Lexicographic sorting is recommended but not enforced here
+	// (can be normalized in a separate step if needed)
+	return true
 }
 
 // GovCanonicalPath returns a Horizon-canonical government body path:
-// /gov/{iso2|na}/{slug}
+// /gov/{geo}/{agency-slug}
 //
-// If country is missing/invalid, "na" is used.
+// geo is the geographic jurisdiction:
+//   - Default: ISO3166-1 alpha2 (exactly 2 lowercase letters, e.g., "us", "sa")
+//   - Composite: 2-3 ISO3166-1 alpha2 codes joined by "-" for intergovernmental bodies (e.g., "ae-sa-om")
+//   - Unknown: "na" if jurisdiction is unknown/invalid
 func GovCanonicalPath(countryAlpha2OrNA string, agencyLabel string) string {
 	cc := strings.ToLower(strings.TrimSpace(countryAlpha2OrNA))
-	if !reCountryAlpha2.MatchString(cc) {
+	if !reCountryAlpha2.MatchString(cc) && !isCompositeGeo(cc) {
 		cc = "na"
 	}
 	slug := Slugify(agencyLabel)
@@ -344,7 +400,7 @@ func EntityCanonicalPath(entityType string, canonicalName string) string {
 		// If jurisdiction is unknown at this stage, use "na".
 		return OrgCanonicalPath("na", canonicalName)
 	case "Person":
-		return JoinPath("person", canonicalName)
+		return PersonCanonicalPath(canonicalName)
 	case "Product":
 		// Prefer a stable nested product path when org context is known elsewhere; here we may only have a label.
 		return ProductCanonicalPath("", canonicalName)
@@ -372,6 +428,42 @@ func EntityCanonicalPath(entityType string, canonicalName string) string {
 	}
 }
 
+// PersonCanonicalPath returns a Horizon-canonical person path:
+// /person/{honorific?}-{name-slug}
+//
+// Note: NO geo token in canonical path for privacy/GDPR compliance.
+// Geographic data should be stored in identifiers/metadata, not in the path.
+//
+// Honorific/title is extracted from personName and normalized to canonical lowercase form (no dots).
+// If no honorific detected, slug is created without honorific prefix.
+func PersonCanonicalPath(personName string) string {
+	if personName == "" {
+		return ""
+	}
+
+	// Extract honorific from name
+	nameWithoutHonorific, honorificCanonical, _ := extractHonorificFromName(personName)
+
+	// Create slug from name (without honorific)
+	var nameSlug string
+	if nameWithoutHonorific != "" {
+		nameSlug = Slugify(nameWithoutHonorific)
+	} else {
+		nameSlug = Slugify(personName)
+	}
+
+	if nameSlug == "" {
+		return ""
+	}
+
+	// Prepend honorific if found
+	if honorificCanonical != "" {
+		nameSlug = honorificCanonical + "-" + nameSlug
+	}
+
+	return JoinPath("person", nameSlug)
+}
+
 // LocationCanonicalPath is legacy and intentionally conservative.
 // Horizon canonical geo taxonomy is /loc/{country}/{admin1}/{city}; ISO6709/name-only inputs are insufficient.
 // Prefer using GeoCanonicalPath.
@@ -379,4 +471,225 @@ func LocationCanonicalPath(name string, iso6709 string) string {
 	_ = name
 	_ = iso6709
 	return ""
+}
+
+// =============================================================================
+// Legal Form Normalization (for Organizations)
+// =============================================================================
+
+// normalizeLegalForm normalizes national legal forms to canonical English equivalents (lowercase).
+// This prevents duplicates when the same entity appears in different languages (e.g., ТОО "Ромашка" = Romashka LLC).
+//
+// Returns: canonical form (lowercase), original form (for storage in identifiers)
+// If no legal form detected, returns empty strings.
+func normalizeLegalForm(legalForm string) (canonical string, original string) {
+	if legalForm == "" {
+		return "", ""
+	}
+
+	// Normalize input: trim, lowercase for matching
+	normalized := strings.ToLower(strings.TrimSpace(legalForm))
+	normalized = strings.Trim(normalized, ".,;:!?()[]{}")
+
+	// Map of national legal forms to canonical equivalents
+	// Key: normalized national form (various languages/scripts)
+	// Value: canonical English form (lowercase)
+	legalFormMap := map[string]string{
+		// LLC equivalents
+		"llc": "llc", "limited liability company": "llc",
+		"тоо": "llc", "товарищество с ограниченной ответственностью": "llc",
+		"ооо": "llc", "общество с ограниченной ответственностью": "llc",
+		"gmbh": "llc", "gesellschaft mit beschränkter haftung": "llc",
+		"sarl": "llc", "société à responsabilité limitée": "llc",
+		"srl": "llc", "società a responsabilità limitata": "llc",
+		"sdn bhd": "llc", "sendirian berhad": "llc",
+		"sp. z o.o.": "llc", "spółka z ograniczoną odpowiedzialnością": "llc",
+		"s.r.o.": "llc", "společnost s ručením omezeným": "llc",
+		"kft.": "llc", "korlátolt felelősségű társaság": "llc",
+		"youxian gongsi": "llc", "有限公司": "llc",
+
+		// JSC/Joint Stock equivalents
+		"jsc": "jsc", "joint stock company": "jsc",
+		"ао": "jsc", "акционерное общество": "jsc",
+		"пао": "pjsc", "публичное акционерное общество": "pjsc",
+		"зао": "cjsc", "закрытое акционерное общество": "cjsc", // legacy, but keep for backward compat
+		"ag": "jsc", "aktiengesellschaft": "jsc",
+		"sa": "jsc", "société anonyme": "jsc", "sociedad anónima": "jsc",
+		"spa": "jsc", "società per azioni": "jsc",
+		"as": "jsc", "aksjeselskap": "jsc", "anonim şirket": "jsc",
+		"ab": "jsc", "aktiebolag": "jsc",
+		"kk": "jsc", "kabushiki kaisha": "jsc", "株式会社": "jsc",
+
+		// LTD/Limited equivalents
+		"ltd": "ltd", "limited": "ltd",
+		"bhd": "ltd", "berhad": "ltd",
+		"plc": "plc", "public limited company": "plc",
+
+		// Corporation equivalents
+		"inc": "inc", "incorporated": "inc",
+		"corp": "corp", "corporation": "corp",
+
+		// Partnership equivalents
+		"llp": "llp", "limited liability partnership": "llp",
+		"lp": "lp", "limited partnership": "lp",
+
+		// Sole proprietorship
+		"ип": "sp", "индивидуальный предприниматель": "sp",
+		"fop": "sp", "фізична особа-підприємець": "sp",
+
+		// State/Government enterprises
+		"гуп": "sup", "государственное унитарное предприятие": "sup",
+		"фгуп": "fsup", "федеральное государственное унитарное предприятие": "fsup",
+		"soe": "soe", "state-owned enterprise": "soe",
+	}
+
+	// Direct match
+	if canonical, ok := legalFormMap[normalized]; ok {
+		return canonical, legalForm
+	}
+
+	// Try removing common suffixes/prefixes and matching again
+	// Remove common punctuation and try again
+	cleaned := strings.ReplaceAll(normalized, ".", "")
+	cleaned = strings.ReplaceAll(cleaned, ",", "")
+	if canonical, ok := legalFormMap[cleaned]; ok {
+		return canonical, legalForm
+	}
+
+	// No match found - return empty (legal form unknown or not recognized)
+	return "", ""
+}
+
+// extractLegalFormFromName attempts to extract legal form from organization name.
+// Returns: (nameWithoutForm, legalFormCanonical, legalFormOriginal)
+// If no legal form detected, returns (originalName, "", "")
+func extractLegalFormFromName(orgName string) (nameWithoutForm string, legalFormCanonical string, legalFormOriginal string) {
+	if orgName == "" {
+		return orgName, "", ""
+	}
+
+	// Common patterns: "Company Name LLC", "Company Name, Inc.", "ТОО \"Ромашка\"", "GmbH Company Name"
+	// Try to find legal form at the end or beginning
+
+	orgName = strings.TrimSpace(orgName)
+
+	// Try end of name first (most common pattern)
+	words := strings.Fields(orgName)
+	if len(words) > 0 {
+		lastWord := strings.Trim(words[len(words)-1], ".,;:!?()[]{}")
+		if canonical, original := normalizeLegalForm(lastWord); canonical != "" {
+			// Found legal form at the end
+			nameWithoutForm = strings.TrimSpace(strings.TrimSuffix(orgName, lastWord))
+			nameWithoutForm = strings.Trim(nameWithoutForm, ".,;:!?()[]{}")
+			return nameWithoutForm, canonical, original
+		}
+	}
+
+	// Try beginning (less common, e.g., "GmbH Company Name")
+	if len(words) > 0 {
+		firstWord := strings.Trim(words[0], ".,;:!?()[]{}")
+		if canonical, original := normalizeLegalForm(firstWord); canonical != "" {
+			// Found legal form at the beginning
+			nameWithoutForm = strings.TrimSpace(strings.TrimPrefix(orgName, firstWord))
+			nameWithoutForm = strings.Trim(nameWithoutForm, ".,;:!?()[]{}")
+			return nameWithoutForm, canonical, original
+		}
+	}
+
+	// No legal form found
+	return orgName, "", ""
+}
+
+// =============================================================================
+// Honorific/Title Normalization (for Persons)
+// =============================================================================
+
+// normalizeHonorific normalizes honorifics/titles to canonical lowercase form (no dots).
+// Returns: canonical form (lowercase), original form
+// If no honorific detected, returns empty strings.
+func normalizeHonorific(honorific string) (canonical string, original string) {
+	if honorific == "" {
+		return "", ""
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(honorific))
+	normalized = strings.Trim(normalized, ".,;:!?()[]{}")
+
+	honorificMap := map[string]string{
+		// Royal titles
+		"hrh": "hrh", "his royal highness": "hrh", "her royal highness": "hrh",
+		"hm": "hm", "his majesty": "hm", "her majesty": "hm",
+		"king": "king", "queen": "queen",
+		"prince": "prince", "princess": "princess",
+		"emir": "emir", "sultan": "sultan",
+
+		// Diplomatic titles
+		"he": "he", "his excellency": "he", "her excellency": "he",
+
+		// Religious titles
+		"pope": "pope",
+		"ayatollah": "ayatollah", "grand ayatollah": "grand-ayatollah",
+		"imam": "imam",
+		"rabbi": "rabbi",
+		"cardinal": "cardinal",
+		"archbishop": "archbishop",
+
+		// Gulf/Arab honorifics
+		"sheikh": "sheikh", "shaikh": "sheikh", "shaykh": "sheikh",
+
+		// Military ranks
+		"gen": "gen", "general": "gen",
+		"adm": "adm", "admiral": "adm",
+		"col": "col", "colonel": "col",
+
+		// Academic/Professional titles
+		"dr": "dr", "doctor": "dr", "dr.": "dr",
+		"prof": "prof", "professor": "prof", "prof.": "prof",
+
+		// British titles
+		"sir": "sir", "dame": "dame",
+		"lord": "lord", "lady": "lady",
+		"baron": "baron", "baroness": "baroness",
+		"count": "count", "countess": "countess",
+		"duke": "duke", "duchess": "duchess",
+	}
+
+	if canonical, ok := honorificMap[normalized]; ok {
+		return canonical, honorific
+	}
+
+	// Try without dots
+	cleaned := strings.ReplaceAll(normalized, ".", "")
+	if canonical, ok := honorificMap[cleaned]; ok {
+		return canonical, honorific
+	}
+
+	return "", ""
+}
+
+// extractHonorificFromName attempts to extract honorific from person name.
+// Returns: (nameWithoutHonorific, honorificCanonical, honorificOriginal)
+// If no honorific detected, returns (originalName, "", "")
+func extractHonorificFromName(personName string) (nameWithoutHonorific string, honorificCanonical string, honorificOriginal string) {
+	if personName == "" {
+		return personName, "", ""
+	}
+
+	personName = strings.TrimSpace(personName)
+	words := strings.Fields(personName)
+
+	if len(words) == 0 {
+		return personName, "", ""
+	}
+
+	// Try first word (most common pattern: "Sheikh Tahnoon", "HRH Mohammed")
+	firstWord := strings.Trim(words[0], ".,;:!?()[]{}")
+	if canonical, original := normalizeHonorific(firstWord); canonical != "" {
+		nameWithoutHonorific = strings.TrimSpace(strings.TrimPrefix(personName, firstWord))
+		nameWithoutHonorific = strings.Trim(nameWithoutHonorific, ".,;:!?()[]{}")
+		return nameWithoutHonorific, canonical, original
+	}
+
+	// No honorific found
+	return personName, "", ""
 }

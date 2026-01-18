@@ -1421,7 +1421,8 @@ func main() {
 				WithDocumentsRepo(docsRepo).
 				WithUsersRepo(s.users).
 				WithGenAIHandler(genaiHandler).
-				WithInteractionsRepo(interactionsRepo)
+				WithInteractionsRepo(interactionsRepo).
+				WithOntologyFactsRepo(ontologyFactsRepo)
 			logger.Printf("Horizon system initialized")
 
 			// Wire Horizon Lens service to projects handler for cascade delete
