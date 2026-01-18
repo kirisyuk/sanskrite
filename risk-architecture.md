@@ -1,8 +1,8 @@
 # Risk & Opportunity Architecture
 ## Horizon Knowledge Graph: Tension Field Propagation System
 
-**Version**: 2.0 (Tension Field Model)
-**Date**: 2026-01-17
+**Version**: 2.1 (Canonical Contracts)
+**Date**: 2026-01-18
 **Status**: Architectural Design
 
 ---
@@ -20,6 +20,7 @@
 9. [Use Cases & Examples](#use-cases--examples)
 10. [Implementation Roadmap](#implementation-roadmap)
 11. [Technical Decisions & Trade-offs](#technical-decisions--trade-offs)
+12. [Canonical Contracts (v2.1)](#canonical-contracts-v21)
 
 ---
 
@@ -1920,6 +1921,338 @@ Confidence: 0.80
 - **Scalability**: Firestore scales horizontally, proven at scale
 
 **Trade-off**: Graph traversal is slightly slower than native graph DB, but acceptable with IndexPaths optimization.
+
+---
+
+## Canonical Contracts (v2.1)
+
+This section defines the **three core contracts** that bind together Actor, Signal, and Medium into a unified, predictable system.
+
+### Contract 1: Signal Descriptor
+
+A **SignalDescriptor** is the canonical object that transforms real-world events into quasi-physical impulses. It bridges semantic extraction (LLM) and deterministic propagation (algorithm).
+
+#### Structure
+
+```go
+// SignalDescriptor is the canonical representation of a quasi-physical impulse.
+// It is extracted from events and stored as OntologyFact(kind=signal).
+type SignalDescriptor struct {
+    // === Identity ===
+    ID        string    `json:"id"`        // Unique identifier
+    FactID    string    `json:"factId"`    // Reference to source OntologyFact(kind=event)
+    CreatedAt time.Time `json:"createdAt"`
+
+    // === Quasi-Physics (the "what") ===
+    Axis      string  `json:"axis"`      // Primary physics axis (see Contract 2)
+    Mechanism string  `json:"mechanism"` // Optional: specific mechanism (e.g., "sanctions", "airspace_closure")
+    Amplitude float64 `json:"amplitude"` // [0.0, 1.0] - strength of the impulse
+    Polarity  string  `json:"polarity"`  // "risk" | "opportunity"
+
+    // === Spatial Binding (the "where") ===
+    ActorPaths    []string `json:"actorPaths"`    // Who caused this (e.g., ["/gov/ir/civil-aviation"])
+    SeedPaths     []string `json:"seedPaths"`     // Where to inject the impulse (initial affected nodes)
+    LocationPath  string   `json:"locationPath"`  // Geographic scope (e.g., "/loc/ir/na/na")
+    SpherePaths   []string `json:"spherePaths"`   // Domain/industry scope
+
+    // === Constraints (the "conditions") ===
+    Constraints SignalConstraints `json:"constraints,omitempty"`
+
+    // === Provenance ===
+    Confidence  float64           `json:"confidence"`  // [0.0, 1.0]
+    SourceRefs  []string          `json:"sourceRefs"`  // Document IDs
+    ObservedAt  time.Time         `json:"observedAt"`  // When the event occurred
+    Provenance  map[string]string `json:"provenance"`  // Additional metadata
+}
+
+// SignalConstraints define optional conditions that affect propagation or interpretation.
+type SignalConstraints struct {
+    DestinationPaths []string `json:"destinationPaths,omitempty"` // For route-dependent signals
+    Timeframe        string   `json:"timeframe,omitempty"`        // "immediate", "short_term", "long_term"
+    Modality         string   `json:"modality,omitempty"`         // "actual", "projected", "potential"
+    Scope            string   `json:"scope,omitempty"`            // "primary", "secondary" (e.g., secondary sanctions)
+}
+```
+
+#### Canonical Metric Path
+
+Each signal maps to a canonical metric path on affected nodes:
+
+```
+/metric/{polarity}/{axis}/{mechanism?}
+
+Examples:
+  /metric/risk/legal/access                    # Legal access restriction
+  /metric/risk/legal/compliance                # Secondary compliance exposure
+  /metric/risk/physical_flow/supply            # Supply disruption
+  /metric/risk/logistics/capacity              # Logistics capacity constraint
+  /metric/opportunity/financial/demand         # Demand increase opportunity
+```
+
+#### Invariants
+
+1. **Axis must be from Contract 2 basis** (no free-form axes)
+2. **Amplitude ∈ [0.0, 1.0]** (normalized)
+3. **Polarity ∈ {"risk", "opportunity"}** (separate fields, not balanced)
+4. **At least one of SeedPaths or LocationPath must be present**
+5. **ActorPaths should be canonical** (`/gov/...`, `/org/...`)
+
+---
+
+### Contract 2: Axis Basis
+
+The **axis basis** is the finite set of quasi-physical dimensions. All signals MUST map to one of these axes. This is the "limited number of ways risks arrive" principle.
+
+#### The 12-Axis Basis
+
+| # | Axis | Description | Nature |
+|---|------|-------------|--------|
+| 1 | `legal/access` | Legal permission to operate/transact (licenses, sanctions, bans) | Binary barrier |
+| 2 | `legal/compliance` | Secondary exposure risk from association with sanctioned/regulated entities | Gradient exposure |
+| 3 | `financial/settlement` | Payment rails, banking access, clearing, FX (ability to move money) | Liquidity flow |
+| 4 | `financial/credit` | Credit availability, counterparty risk, default exposure | Solvency |
+| 5 | `physical_flow/supply` | Physical availability of goods/materials (shortage or glut) | Material flow |
+| 6 | `physical_flow/demand` | Demand changes (surge or collapse) | Market force |
+| 7 | `logistics/capacity` | Transportation/infrastructure capacity (routes, ports, airspace) | Throughput |
+| 8 | `logistics/latency` | Delays, lead time increases (not blockage, but slowdown) | Time cost |
+| 9 | `operational/continuity` | Ability to operate (strikes, failures, disasters) | Uptime |
+| 10 | `info/uncertainty` | Ambiguity of rules, timelines, exceptions (regulatory fog) | Entropy |
+| 11 | `info/reputation` | Public perception, ESG signals, brand impact | Sentiment |
+| 12 | `geo/conflict` | Geopolitical instability, conflict zones, diplomatic friction | Environment |
+
+#### Axis Properties
+
+Each axis has inherent properties that inform default propagation behavior:
+
+```go
+// AxisSpec defines properties of a quasi-physical axis.
+type AxisSpec struct {
+    Key              string   `json:"key"`              // e.g., "legal/access"
+    Label            string   `json:"label"`            // Human-readable
+    DefaultDamping   float64  `json:"defaultDamping"`   // [0.0, 1.0] - how fast it attenuates
+    DefaultMaxHops   int      `json:"defaultMaxHops"`   // Typical propagation depth
+    PropagationMode  string   `json:"propagationMode"`  // "upstream", "downstream", "both"
+    StrongEdgeTypes  []string `json:"strongEdgeTypes"`  // Default strong edges (see Contract 3)
+    TransformsTo     []string `json:"transformsTo"`     // Possible transformations on propagation
+}
+```
+
+#### Axis Selection Rule
+
+When extracting signals from events:
+1. **Primary axis** = the most direct physical effect
+2. **Secondary axes** = consequential effects (may generate separate signals)
+
+Example: "US sanctions on Huawei" →
+- Primary: `legal/access` (direct ban)
+- Secondary: `legal/compliance` (partners at risk), `physical_flow/supply` (chip shortage), `info/uncertainty` (exception ambiguity)
+
+---
+
+### Contract 3: Medium Specification (Axis → Propagation Profile)
+
+The **medium** defines how each axis propagates through the graph. This binds the quasi-physics to the existing taxonomy of edges.
+
+#### Propagation Profiles
+
+```yaml
+# Stored in Firestore: horizon_propagation_profiles/{axis_key}
+# or as part of horizon_taxonomy/v1.signalTypes
+
+legal/access:
+  defaultDamping: 0.95          # Slow decay (legal effects persist)
+  defaultMaxHops: 5             # Far reach (ownership chains are deep)
+  propagationMode: upstream     # Flows UP ownership/control chains
+  strongEdges:
+    - type: OWNS
+      direction: target_to_source   # Child → parent (who owns the affected?)
+      weight: 1.0
+    - type: CONTROLS
+      direction: target_to_source
+      weight: 0.9
+    - type: SUBSIDIARY_OF
+      direction: source_to_target   # Subsidiary → parent
+      weight: 1.0
+    - type: REGULATES
+      direction: source_to_target   # Regulator → regulated
+      weight: 1.2                   # Amplification: regulatory edges are strong
+  transformations:
+    - onEdgeType: PARTNERS_WITH
+      toAxis: legal/compliance
+      factor: 0.8
+
+legal/compliance:
+  defaultDamping: 0.85
+  defaultMaxHops: 3             # Shorter reach (secondary exposure fades)
+  propagationMode: both
+  strongEdges:
+    - type: PARTNERS_WITH
+      weight: 0.9
+    - type: SUPPLIES_TO
+      direction: source_to_target
+      weight: 0.8
+    - type: DEPENDS_ON
+      facet: regulatory
+      weight: 1.0
+
+financial/settlement:
+  defaultDamping: 0.80
+  defaultMaxHops: 4
+  propagationMode: both
+  strongEdges:
+    - type: DEPENDS_ON
+      facet: payment
+      weight: 1.0
+    - type: OWNS
+      weight: 0.7
+    - type: INVESTS_IN
+      direction: source_to_target
+      weight: 0.8
+
+physical_flow/supply:
+  defaultDamping: 0.75          # Faster decay (substitution possible)
+  defaultMaxHops: 4
+  propagationMode: downstream   # Flows DOWN supply chains
+  strongEdges:
+    - type: SUPPLIES_TO
+      direction: source_to_target
+      weight: 1.0
+    - type: DEPENDS_ON
+      facet: supply
+      weight: 1.2
+      amplifyIf:
+        - condition: "substitutability < 0.3"
+          factor: 1.5           # Hard to replace = stronger signal
+    - type: TRANSFORMS_INTO
+      direction: source_to_target
+      weight: 0.9
+    - type: CONSUMES
+      direction: target_to_source
+      weight: 0.8
+
+logistics/capacity:
+  defaultDamping: 0.70          # Fast decay (routes can be rerouted)
+  defaultMaxHops: 3
+  propagationMode: downstream
+  strongEdges:
+    - type: DEPENDS_ON
+      facet: logistics
+      weight: 1.0
+      amplifyIf:
+        - condition: "substitutability < 0.3"
+          factor: 1.4
+    - type: LOCATED_IN
+      direction: target_to_source  # Geo → entities in it
+      weight: 0.8
+    - type: OPERATES_IN
+      direction: target_to_source
+      weight: 0.7
+  geoSeeding:
+    enabled: true                # This axis can seed from /loc/... nodes
+    viaEdgeType: INFLUENCES      # Dimension edges
+
+geo/conflict:
+  defaultDamping: 0.80
+  defaultMaxHops: 2             # Local effect
+  propagationMode: downstream
+  strongEdges:
+    - type: LOCATED_IN
+      direction: target_to_source
+      weight: 1.0
+    - type: OPERATES_IN
+      direction: target_to_source
+      weight: 0.9
+  geoSeeding:
+    enabled: true
+    viaEdgeType: INFLUENCES
+
+operational/continuity:
+  defaultDamping: 0.70
+  defaultMaxHops: 3
+  propagationMode: upstream     # Facility down → owner affected
+  strongEdges:
+    - type: OWNS
+      direction: target_to_source
+      weight: 1.0
+    - type: MANAGES
+      direction: target_to_source
+      weight: 0.9
+    - type: PRODUCES
+      direction: source_to_target
+      weight: 0.8   # Product availability affected
+
+info/uncertainty:
+  defaultDamping: 0.60          # Fast decay (uncertainty resolves)
+  defaultMaxHops: 2
+  propagationMode: both
+  strongEdges:
+    - type: DEPENDS_ON
+      facet: regulatory
+      weight: 1.0
+    - type: PARTNERS_WITH
+      weight: 0.7
+    - type: PARTICIPATES_IN
+      weight: 0.6
+```
+
+#### Edge Physics Accessors
+
+Each edge contributes to propagation via its properties:
+
+```go
+// EdgePhysics extracts propagation-relevant physics from a DependencyEdge.
+func (e *DependencyEdge) Physics() EdgePhysics {
+    return EdgePhysics{
+        Criticality:     e.Properties.Criticality,     // [0, 1] - how "real" is this connection
+        Amplification:   e.Properties.Amplification,   // [0, ∞) - multiplier
+        LatencyHours:    e.Properties.LatencyHours,    // Delay before effect propagates
+        Substitutability: e.GetSubstitutability(),     // [0, 1] - can this be bypassed?
+        Facet:           e.GetFacet(),                 // supply/logistics/payment/etc.
+        Modality:        e.GetModality(),              // actual/projected/historical
+    }
+}
+
+// DampedAmplitude calculates the output amplitude after passing through this edge.
+func (e *DependencyEdge) DampedAmplitude(inputAmplitude float64, profile PropagationProfile) float64 {
+    baseDamping := profile.DefaultDamping
+    
+    // Criticality reduces damping (higher criticality = less loss)
+    effectiveDamping := baseDamping + (1-baseDamping) * e.Properties.Criticality * 0.5
+    
+    // Amplification multiplies
+    amplified := inputAmplitude * effectiveDamping * e.Properties.Amplification
+    
+    // Substitutability reduces signal (easy to bypass = weaker propagation)
+    if sub := e.GetSubstitutability(); sub > 0 {
+        amplified *= (1 - sub*0.5)  // High substitutability reduces by up to 50%
+    }
+    
+    return math.Min(amplified, 1.0)  // Cap at 1.0
+}
+```
+
+#### Invariants
+
+1. **Every axis has a defined PropagationProfile** (no implicit behavior)
+2. **StrongEdges are explicit** - if not listed, edge type is weak for this axis
+3. **Transformations are explicit** - axis changes only via declared rules
+4. **Damping ∈ [0, 1]** - never amplifies on its own (amplification comes from edge properties)
+5. **GeoSeeding requires INFLUENCES edges** - dimension edges must exist for geo-initiated propagation
+
+---
+
+### Contract Summary
+
+| Component | Contract | Key Invariants |
+|-----------|----------|----------------|
+| **Actor** | Canonical paths (`/gov/...`, `/org/...`) | ISO2 jurisdiction, unique slug, dedup rules |
+| **Signal** | SignalDescriptor → `/metric/{polarity}/{axis}/{mechanism?}` | Axis from basis, amplitude [0,1], polarity separate |
+| **Medium** | PropagationProfile per axis | Strong edges explicit, damping/hops/direction defined |
+
+**The system becomes predictable because:**
+- Events → Signals is a **finite mapping** (any event maps to 1-N signals from 12-axis basis)
+- Signals → Propagation is **deterministic** (axis + profile + edge physics)
+- Propagation → Interpretation is **lazy** (only when needed, via LLM)
 
 ---
 
