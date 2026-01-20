@@ -12,6 +12,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
@@ -143,6 +144,13 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		result.BlockReason = "canonical path uses /discovered/ prefix - must be canonicalized first"
 		result.IsValid = false
 		return result, nil
+	}
+
+	// ==========================================================================
+	// Policy 1.5: Validate canonical path format (warnings only; hard errors handled elsewhere)
+	// ==========================================================================
+	if err := taxonomy.ValidateCanonicalPath(strings.TrimSpace(fragment.CanonicalPath)); err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("canonical path validation: %v", err))
 	}
 
 	// ==========================================================================

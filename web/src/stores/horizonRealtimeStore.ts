@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { isSphereCanonicalPath, isSphereEntity } from '../lib/horizonSphere';
 
 export type HorizonAssemblyPhase = 'decomposition' | 'cache_hit' | 'scouting' | 'propagation' | 'ready' | 'failed' | string;
 
@@ -88,6 +89,50 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
 
   handleWsEvent: (type, data) => {
     const now = Date.now();
+
+    if (type === 'horizon.graph.node.upserted') {
+      if (isSphereEntity(data?.type, data?.canonicalPath)) {
+        const k = keyForNode(data);
+        if (!k) return;
+        set((s) => {
+          if (!s.nodes[k]) return s;
+          const next = { ...s.nodes };
+          delete next[k];
+          return { nodes: next };
+        });
+        return;
+      }
+    }
+
+    if (type === 'horizon.graph.edge.upserted') {
+      const resolveNodePath = (id: string): string => {
+        const nodes = get().nodes || {};
+        const node = nodes[id];
+        return typeof node?.canonicalPath === 'string' ? node.canonicalPath : id;
+      };
+      const src = typeof data?.sourceCanonicalPath === 'string' && data.sourceCanonicalPath
+        ? data.sourceCanonicalPath
+        : typeof data?.sourceFragmentId === 'string'
+          ? resolveNodePath(data.sourceFragmentId)
+          : '';
+      const dst = typeof data?.targetCanonicalPath === 'string' && data.targetCanonicalPath
+        ? data.targetCanonicalPath
+        : typeof data?.targetFragmentId === 'string'
+          ? resolveNodePath(data.targetFragmentId)
+          : '';
+      if (isSphereCanonicalPath(src) || isSphereCanonicalPath(dst)) {
+        const edgeId = typeof data?.edgeId === 'string' ? data.edgeId : '';
+        if (edgeId) {
+          set((s) => {
+            if (!s.edges[edgeId]) return s;
+            const next = { ...s.edges };
+            delete next[edgeId];
+            return { edges: next };
+          });
+        }
+        return;
+      }
+    }
 
     // Append a compact event message for UI (bounded).
     try {
@@ -468,8 +513,21 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
         }
       } else if (type === 'horizon.graph.edge.upserted') {
         icon = 'edge';
-        const src = typeof data?.sourceFragmentId === 'string' ? data.sourceFragmentId : '';
-        const dst = typeof data?.targetFragmentId === 'string' ? data.targetFragmentId : '';
+        const resolveNodePath = (id: string): string => {
+          const nodes = get().nodes || {};
+          const node = nodes[id];
+          return typeof node?.canonicalPath === 'string' ? node.canonicalPath : id;
+        };
+        const src = typeof data?.sourceCanonicalPath === 'string' && data.sourceCanonicalPath
+          ? data.sourceCanonicalPath
+          : typeof data?.sourceFragmentId === 'string'
+            ? resolveNodePath(data.sourceFragmentId)
+            : '';
+        const dst = typeof data?.targetCanonicalPath === 'string' && data.targetCanonicalPath
+          ? data.targetCanonicalPath
+          : typeof data?.targetFragmentId === 'string'
+            ? resolveNodePath(data.targetFragmentId)
+            : '';
         const edgeType = typeof data?.type === 'string' ? data.type : 'Connection';
         // Format edge type: "SUPPLIES_TO" -> "Supplies To"
         const formattedType = edgeType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase());
@@ -477,6 +535,82 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
         humanReadable = {
           title: formattedType, // Just the type, UI will render "Link <chip> created"
           description: src && dst ? `${src} → ${dst}` : 'Connection details', // Full canonical paths
+        };
+      } else if (type === 'horizon.policy.check_complete') {
+        // Policy check completed
+        const violations = typeof data?.violationsFound === 'number' ? data.violationsFound : 0;
+        const critical = typeof data?.criticalCount === 'number' ? data.criticalCount : 0;
+        const autoFixable = typeof data?.autoFixableCount === 'number' ? data.autoFixableCount : 0;
+        const sample = Array.isArray(data?.violationsSample) ? data.violationsSample : [];
+        const sampleText = sample
+          .map((v: any) => {
+            const t = typeof v?.type === 'string' ? v.type : '';
+            const s = typeof v?.severity === 'string' ? v.severity : '';
+            const d = typeof v?.description === 'string' ? v.description : '';
+            const tag = [s, t].filter(Boolean).join(': ');
+            return d ? `${tag ? `${tag} — ` : ''}${d}` : tag;
+          })
+          .filter(Boolean)
+          .slice(0, 3)
+          .join(' | ');
+        icon = violations === 0 ? 'success' : critical > 0 ? 'error' : 'info';
+        if (violations === 0) {
+          text = 'Policy check passed';
+          humanReadable = {
+            title: 'Policy Check Passed',
+            description: 'No violations found',
+          };
+        } else {
+          text = `Policy check: ${violations} violation${violations !== 1 ? 's' : ''} found`;
+          const parts = [
+            critical > 0 ? `${critical} critical` : null,
+            autoFixable > 0 ? `${autoFixable} auto-fixable` : null,
+          ].filter(Boolean);
+          humanReadable = {
+            title: 'Policy Check Complete',
+            description: sampleText
+              ? `${parts.length > 0 ? parts.join(' • ') : `${violations} violation${violations !== 1 ? 's' : ''}`} • ${short(sampleText)}`
+              : (parts.length > 0 ? parts.join(' • ') : `${violations} violation${violations !== 1 ? 's' : ''}`),
+          };
+        }
+      } else if (type === 'horizon.policy.violation_detected') {
+        // Individual violation detected
+        icon = 'error';
+        const violationType = typeof data?.violationType === 'string' ? data.violationType : '';
+        const severity = typeof data?.severity === 'string' ? data.severity : '';
+        const description = typeof data?.description === 'string' ? data.description : '';
+        const typeLabel = violationType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase());
+        text = description || `Violation: ${typeLabel}`;
+        humanReadable = {
+          title: severity === 'critical' ? 'Critical Violation' : 'Violation Detected',
+          description: description || typeLabel,
+        };
+      } else if (type === 'horizon.policy.enforcement_progress') {
+        // Enforcement job progress
+        const status = typeof data?.status === 'string' ? data.status : '';
+        const taskType = typeof data?.taskType === 'string' ? data.taskType : '';
+        icon = status === 'completed' ? 'success' : status === 'failed' ? 'error' : 'info';
+        const taskLabel = taskType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c: string) => c.toUpperCase());
+        const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+        text = `Enforcement: ${taskLabel} ${statusLabel}`;
+        humanReadable = {
+          title: `Enforcement ${statusLabel}`,
+          description: taskLabel,
+        };
+      } else if (type === 'horizon.policy.enforcement_batch_complete') {
+        // Enforcement batch completed
+        const completed = typeof data?.completed === 'number' ? data.completed : 0;
+        const failed = typeof data?.failed === 'number' ? data.failed : 0;
+        const total = typeof data?.totalJobs === 'number' ? data.totalJobs : 0;
+        icon = failed === 0 ? 'success' : 'error';
+        text = `Enforcement complete: ${completed}/${total} fixes applied`;
+        const parts = [
+          completed > 0 ? `${completed} fixed` : null,
+          failed > 0 ? `${failed} failed` : null,
+        ].filter(Boolean);
+        humanReadable = {
+          title: 'Enforcement Complete',
+          description: parts.join(' • ') || 'No changes',
         };
       } else if (type.startsWith('horizon.propagation.')) {
         icon = 'propagation';
@@ -493,7 +627,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
       if (humanReadable) event.humanReadable = humanReadable;
 
       set((s) => ({
-        events: [...(s.events || []), event].slice(-400),
+        events: [...(s.events || []), event].slice(-1000),
       }));
     } catch {
       // ignore
@@ -538,7 +672,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>((set, get) =
         if (type === 'horizon.scout.job.log') {
           const line = typeof data?.line === 'string' ? data.line : '';
           if (line) {
-            next.logs = [...(prev.logs || []), { ts: data?.ts, level: data?.level, line }].slice(-200);
+            next.logs = [...(prev.logs || []), { ts: data?.ts, level: data?.level, line }].slice(-1000);
           }
         }
 

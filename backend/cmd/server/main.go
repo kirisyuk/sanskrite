@@ -248,6 +248,7 @@ func main() {
 	var bigqueryAIService *services.BigQueryAIService
 	var horizonService *horizon.HorizonService
 	var horizonHandlers *horizonhttp.HorizonHandlers
+	var enforcementHandlers *horizonhttp.EnforcementHandlers
 	var scoutEngine *horizonscout.ScoutEngine
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
@@ -1020,6 +1021,8 @@ func main() {
 		horizonFramesRepo := horizonrepo.NewFramesRepository(fsClient.Client())
 		horizonLensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
 		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
+		enforcementJobsRepo := horizonrepo.NewEnforcementJobsRepository(fsClient.Client())
+		policyCheckResultsRepo := horizonrepo.NewPolicyCheckResultsRepository(fsClient.Client())
 		horizonCascadeVisitedRepo := horizonrepo.NewCascadeVisitedRepository(fsClient.Client())
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
@@ -1109,15 +1112,23 @@ func main() {
 		if gcsClient != nil && horizonFragmentsBucket != "" {
 			horizonFragmentsRepo.WithStorage(gcsClient, horizonFragmentsBucket)
 			if vertexSearchClient != nil {
-				horizonFragmentsRepo.WithVertexSearchSync(func(ctx context.Context, gcsURI string) (string, error) {
-					// Prefer a dedicated datastore for horizon fragments (store isolation instead of filters).
-					if ds := strings.TrimSpace(getEnv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); ds != "" {
-						return vertexSearchClient.WithDataStore(ds).ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "document")
-					}
-					// Fallback: legacy behavior (shared datastore) — still uses single-file import to avoid >1000 expansion.
-					return vertexSearchClient.ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "document")
-				})
-				logger.Printf("Horizon Fragments: Vertex AI Search sync enabled")
+				// Use batched sync to avoid quota exhaustion (quota is per-request, not per-document).
+				// Default: batch up to 100 URIs, flush every 5 seconds.
+				batchConfig := horizonrepo.DefaultVertexSyncBatcherConfig()
+				vertexSyncBatcher := horizonrepo.NewVertexSyncBatcher(
+					func(ctx context.Context, uris []string) (string, error) {
+						// Prefer a dedicated datastore for horizon fragments (store isolation instead of filters).
+						if ds := strings.TrimSpace(getEnv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); ds != "" {
+							return vertexSearchClient.WithDataStore(ds).ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "document")
+						}
+						// Fallback: legacy behavior (shared datastore)
+						return vertexSearchClient.ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "document")
+					},
+					batchConfig,
+				)
+				horizonFragmentsRepo.WithVertexSyncBatcher(vertexSyncBatcher)
+				logger.Printf("Horizon Fragments: Vertex AI Search batched sync enabled (batch=%d, interval=%v)",
+					batchConfig.MaxBatchSize, batchConfig.FlushInterval)
 			}
 		}
 
@@ -1300,6 +1311,38 @@ func main() {
 			})
 
 			horizonService.SetScoutEngine(scoutEngine)
+
+			// Initialize and wire PolicyChecker for taxonomy/structure validation
+			policyChecker := horizonpolicy.NewPolicyChecker(
+				horizonFragmentsRepo,
+				horizonEdgesRepo,
+				horizonpolicy.WithAIExecutor(exec),
+				horizonpolicy.WithGeoNamesClient(geonamesClientForHorizon),
+			)
+			scoutEngine.WithPolicyChecker(policyChecker)
+			logger.Printf("PolicyChecker initialized and wired to ScoutEngine")
+
+			// Initialize enforcement executor and persistence for policy auto-fixes
+			enforcementExecutor := horizonpolicy.NewEnforcementExecutor(
+				horizonFragmentsRepo,
+				horizonEdgesRepo,
+				enforcementJobsRepo,
+			)
+			// Allow enforcement to rewrite lens scope after path fixes (best-effort).
+			enforcementExecutor.WithLensesRepo(horizonLensesRepo)
+			if geonamesClientForHorizon != nil {
+				enforcementExecutor.WithGeoNamesClient(geonamesClientForHorizon)
+			}
+			scoutEngine.WithEnforcementExecutor(enforcementExecutor)
+			scoutEngine.WithEnforcementJobsRepo(enforcementJobsRepo)
+			scoutEngine.WithPolicyCheckResultsRepo(policyCheckResultsRepo)
+			enforcementHandlers = horizonhttp.NewEnforcementHandlers(
+				enforcementJobsRepo,
+				policyCheckResultsRepo,
+				enforcementExecutor,
+			)
+			logger.Printf("Policy enforcement wired to ScoutEngine")
+
 			logger.Printf("Scout Engine initialized")
 
 			// Wire CanonicalPathResolver into LensService for early canonicalization
@@ -2297,6 +2340,10 @@ func main() {
 	if horizonHandlers != nil {
 		horizonHandlers.RegisterRoutes(mux, authMiddleware)
 		logger.Printf("Horizon routes registered")
+	}
+	if enforcementHandlers != nil {
+		enforcementHandlers.RegisterRoutes(mux, authMiddleware)
+		logger.Printf("Horizon policy enforcement routes registered")
 	}
 
 	// Agents routes (legacy)

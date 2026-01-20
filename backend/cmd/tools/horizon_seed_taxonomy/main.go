@@ -381,6 +381,9 @@ func main() {
 			"electronic",
 			"mechanical",
 			"energy",
+			// Common supply-chain product types that appear in extraction logs.
+			"metal",
+			"magnetic",
 			"hydrocarbon",   // crude oil, condensate, NGL
 			"fuel",          // refined fuels (gasoline, diesel, jet fuel)
 			"petrochemical", // ethylene, propylene, polymers
@@ -390,6 +393,7 @@ func main() {
 		AllowedProductStages: []string{
 			"extraction",
 			"refining",
+			"smelting",     // metallurgical conversion (ore/oxide -> metal/alloy)
 			"processing",
 			"manufacturing",
 			"assembly",
@@ -399,6 +403,7 @@ func main() {
 		ProductStageOrder: []string{
 			"extraction",
 			"refining",
+			"smelting",
 			"liquefaction",
 			"cracking",
 			"processing",

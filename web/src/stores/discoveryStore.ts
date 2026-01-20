@@ -996,8 +996,24 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
         };
 
         wsRef.onmessage = (evt) => {
+          const raw = evt.data;
+          if (typeof raw !== 'string') {
+            console.warn('[WS] Ignoring non-text message', { dataType: typeof raw });
+            return;
+          }
+          const text = raw.trim();
+          if (!text) {
+            console.warn('[WS] Ignoring empty WS message');
+            return;
+          }
+          let msg: any;
           try {
-            const msg = JSON.parse(evt.data);
+            msg = JSON.parse(text);
+          } catch (err) {
+            console.error('[WS] Error parsing message:', { err, preview: text.slice(0, 200) });
+            return;
+          }
+          try {
             import('./wsStore').then(({ useWsStore }) => {
               try { useWsStore.getState().noteMessage(msg?.type, msg?.data); } catch {}
             }).catch(() => {});
@@ -1368,7 +1384,7 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
               });
             }
           } catch (err) {
-            console.error('[WS] Error parsing message:', err);
+            console.error('[WS] Error handling message:', err);
           }
         };
       } catch (e) {

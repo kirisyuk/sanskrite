@@ -11,6 +11,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 )
 
 var ErrEdgeNotFound = errors.New("dependency edge not found")
@@ -166,6 +167,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 		log.Printf("%s ERROR: failed to save edge: %v", logPrefix, err)
 		return "", err
 	}
+	tracking.RecordEdgeCreated(ctx, edge.ID)
 	
 	log.Printf("%s Edge created successfully: id=%s", logPrefix, edge.ID)
 	return edge.ID, nil
@@ -350,7 +352,11 @@ func (r *DependencyEdgesRepository) Update(ctx context.Context, edge *models.Dep
 	edge.Metadata.LastUpdatedAt = now
 
 	_, err := r.col.Doc(edge.ID).Set(ctx, edge)
-	return err
+	if err != nil {
+		return err
+	}
+	tracking.RecordEdgeUpdated(ctx, edge.ID)
+	return nil
 }
 
 // Delete удаляет DependencyEdge

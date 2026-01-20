@@ -127,6 +127,39 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 `, strings.TrimSpace(graphContext))
 	}
 
+	canonicalRules := taxonomy.DefaultCanonicalRules()
+	canonicalValidationBlock := fmt.Sprintf(`  MANDATORY - Canonical path validation (for fragment AND relations):
+    - For the main fragment and EACH relation targetCanonicalPath:
+      - If path is /org/... ensure it is %s; otherwise add a question:
+        - "Confirm legal name, jurisdiction (ISO2), and canonical org path for <entity>. REQUIRED FORMAT: %s where iso2 is ISO3166-1 alpha2 lowercase; slug is hyphenated English name; legal_form suffix in {%s}. Example: %s."
+      - If path is /gov/... ensure it is %s; otherwise add a question:
+        - "Which country/jurisdiction does this government body belong to? REQUIRED FORMAT: %s with iso2 ISO3166-1 alpha2 lowercase, slug hyphenated English name. Example: %s."
+      - If path is /product/... ensure it is either %s or %s; otherwise add a question:
+        - "Resolve canonical product taxonomy for <product>. REQUIRED FORMAT: %s (or %s if unknown). category∈{%s}; type∈{%s}; stage∈{%s}. Example: %s."
+      - If path is /loc/... ensure it is %s; otherwise add a question:
+        - "Resolve canonical GEO path for <location>. REQUIRED FORMAT: %s where cc is ISO3166-1 alpha2 lowercase (or allowed regional token: asean, brics, gcc, eu, eaeu), admin1 is GeoNames admin code or 'na', city is hyphenated English name. Example: %s."
+      - If path is missing segments (e.g., /org/<slug> or /product/<slug> with no taxonomy), treat it as non-canonical and add the appropriate question.
+`,
+		canonicalRules.Org.Format,
+		canonicalRules.Org.Format,
+		strings.Join(canonicalRules.Org.LegalForms, ", "),
+		canonicalRules.Org.Example,
+		canonicalRules.Gov.Format,
+		canonicalRules.Gov.Format,
+		canonicalRules.Gov.Example,
+		canonicalRules.Product.Fallback,
+		canonicalRules.Product.Format,
+		canonicalRules.Product.Format,
+		canonicalRules.Product.Fallback,
+		strings.Join(canonicalRules.Product.Categories, ", "),
+		strings.Join(canonicalRules.Product.Types, ", "),
+		strings.Join(canonicalRules.Product.Stages, ", "),
+		canonicalRules.Product.Example,
+		canonicalRules.Geo.Format,
+		canonicalRules.Geo.Format,
+		canonicalRules.Geo.Example,
+	)
+
 	return fmt.Sprintf(`You are a validation agent (Critic) for a risk analysis system. Your task is to verify that extracted data matches the source content and assess the completeness of the knowledge graph.
 
 EXTRACTED DATA (JSON):
@@ -182,8 +215,9 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - If this looks like a government body (ministry/agency/regulator) but canonicalPath is not /gov/{iso2}/{slug}, add a question:
 	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2}/{slug}. If unknown, /gov/na/{slug}."
 	  - If canonicalPath is legacy (/org/{slug}) or uses /org/na/{slug}, add a question:
-	    - "What is the country of origin / primary jurisdiction for <org>? Prefer canonicalPath /org/{iso2}/{slug} (iso2=ISO3166-1 alpha2)."
+	    - "What is the country of origin / primary jurisdiction (ISO2) for <org>? Use the entity's legalName/shortName/label to disambiguate and update canonicalPath to /org/{iso2}/{slug}-{legal_form}. If truly unknown, keep /org/na/... but state uncertainty."
 	
+%s
   MANDATORY - Community completeness (for COMMUNITY or /community/*):
     - If the entity is a COMMUNITY (fragment.type == COMMUNITY OR canonicalPath starts with /community/):
       - If communityType is empty/missing, add:
@@ -322,5 +356,5 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - "Who are the publicly known close associates of <person> (business partners/friends/classmates)? Return RELATED_TO links with evidence."
 	- If relations seem sparse or inconsistent with the entity's scale, flag it.
 
-	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock)
+	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, canonicalValidationBlock)
 }

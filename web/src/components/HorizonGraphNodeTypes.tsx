@@ -635,6 +635,26 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
         </svg>
       );
 
+    case 'MARKET_MANUFACTURING':
+      // Manufacturing / industry: gear
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M12 8.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z" />
+          <path d="M19.4 15.2l1.1-1.9-1.7-3-2.2.3a7.9 7.9 0 0 0-1.1-1.1l.3-2.2-3-1.7-1.9 1.1a8.2 8.2 0 0 0-1.6 0L6.4 4.6l-3 1.7.3 2.2c-.4.35-.8.7-1.1 1.1l-2.2-.3-1.7 3 1.1 1.9a8.2 8.2 0 0 0 0 1.6l-1.1 1.9 1.7 3 2.2-.3c.35.4.7.8 1.1 1.1l-.3 2.2 3 1.7 1.9-1.1a8.2 8.2 0 0 0 1.6 0l1.9 1.1 3-1.7-.3-2.2c.4-.35.8-.7 1.1-1.1l2.2.3 1.7-3-1.1-1.9c.12-.52.12-1.08 0-1.6z" />
+        </svg>
+      );
+
+    case 'MARKET_CONSUMER_ELECTRONICS':
+      // Consumer electronics: phone + spark (device)
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <rect x="7" y="2.5" width="10" height="19" rx="2.2" />
+          <path d="M11 19h2" />
+          <path d="M4 9l1-1 1 1-1 1-1-1z" />
+          <path d="M19 10l1-1 1 1-1 1-1-1z" />
+        </svg>
+      );
+
     case 'MARKET_LEGAL':
       // Legal: balance scales
       return (
@@ -776,6 +796,15 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
           <path d="M12 20V11" />
           <path d="M16 20V11" />
           <path d="M2 20h20" />
+        </svg>
+      );
+
+    case 'MARKET_EDUCATION':
+      // Education / higher ed: book + bookmark
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M5 4h10a3 3 0 0 1 3 3v13l-3-2-3 2V7a3 3 0 0 0-3-3H5z" />
+          <path d="M5 4v16a2 2 0 0 0 2 2h11" />
         </svg>
       );
 
@@ -1094,6 +1123,31 @@ const segmentIconType = (normDomain: string, normVertical?: string): string | nu
   // Normalize common aliases for segment domain (we see both "finance" and "financial" in the wild).
   const d0 = d === 'financial' ? 'finance' : d;
 
+  // Manufacturing / industrial production (very common in /segment/b2b/*)
+  if (
+    d0 === 'manufacturing' ||
+    d0.includes('manufactur') ||
+    d0 === 'machinery' ||
+    d0.includes('machinery') ||
+    v === 'manufacturing' ||
+    v.includes('manufactur') ||
+    v === 'machinery' ||
+    v.includes('machinery')
+  ) {
+    return 'MARKET_MANUFACTURING';
+  }
+
+  // Consumer electronics (common in /segment/b2c/consumer-electronics/*)
+  if (
+    d0 === 'consumer-electronics' ||
+    d0 === 'consumer-electronic' ||
+    d0.includes('consumer-electronic') ||
+    v === 'consumer-electronics' ||
+    v.includes('consumer-electronic')
+  ) {
+    return 'MARKET_CONSUMER_ELECTRONICS';
+  }
+
   // Renewables / storage: often encoded as vertical under energy domain.
   if (
     d0 === 'energy' &&
@@ -1220,12 +1274,29 @@ const segmentIconType = (normDomain: string, normVertical?: string): string | nu
     return 'MARKET_LOGISTICS';
   }
 
+  // Education (incl. higher-ed / universities / schools)
+  if (
+    d0 === 'education' ||
+    d0 === 'higher-education' ||
+    d0.includes('education') ||
+    v === 'education' ||
+    v === 'higher-education' ||
+    v.includes('education') ||
+    v.includes('university') ||
+    v.includes('college') ||
+    v.includes('school') ||
+    v.includes('academy')
+  ) {
+    return 'MARKET_EDUCATION';
+  }
+
   if (d0 === 'finance') {
     if (v === 'crypto') return 'MARKET_CRYPTO';
     return 'MARKET_FINANCE';
   }
   if (d === 'real-estate') return 'MARKET_REAL_ESTATE';
-  if (d === 'healthcare') return 'MARKET_HEALTHCARE';
+  if (d === 'healthcare' || v.includes('hospital') || v.includes('clinic') || v.includes('healthcare') || v.includes('medical'))
+    return 'MARKET_HEALTHCARE';
   if (d === 'construction') return 'MARKET_CONSTRUCTION';
   if (d === 'retail') return 'MARKET_RETAIL';
   if (d === 'government' || d === 'public-administration' || d === 'defense') return 'MARKET_GOVERNMENT';
@@ -1905,9 +1976,17 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
     typeBlocks.some((b) => Array.isArray((b as any)?.relationBlocks) && ((b as any).relationBlocks as any[]).length > 1);
 
   // Levels Two-Pane: ports for aggregated edges (one per edge type).
-  const edgePorts = (data as any)?.groupEdgePorts as
+  const edgePortsRaw = (data as any)?.groupEdgePorts as
     | Array<{ edgeType: string; targetHandleId: string; sourceHandleId: string; y: number }>
     | undefined;
+  const hasEdgePorts = Array.isArray(edgePortsRaw) && edgePortsRaw.length > 0;
+  // Stack groups (right pane) may omit groupEdgePorts; add a default port so ReactFlow edges always find a handle.
+  const fallbackEdgePorts =
+    !hasEdgePorts && isStackGroup
+      ? [{ edgeType: 'OTHER', targetHandleId: 'target-left', sourceHandleId: 'source-left', y: 60 }]
+      : [];
+  const edgePorts: Array<{ edgeType: string; targetHandleId: string; sourceHandleId: string; y: number }> =
+    hasEdgePorts ? edgePortsRaw! : fallbackEdgePorts;
   const showEdgePorts = Array.isArray(edgePorts) && edgePorts.length > 0;
 
   const semanticFallback: Record<SemanticGroup, string> = {

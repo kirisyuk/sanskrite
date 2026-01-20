@@ -244,10 +244,10 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		if norm := normalizeLegacyGeoPath(rel.TargetCanonicalPath); norm != "" {
 			if e.fragmentsRepo != nil {
 				if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, norm); err == nil && f != nil && f.ID != "" {
-					return norm, nil
+					return e.finalizeRelationCanonicalPath(ctx, rel, norm, relType), nil
 				}
 			}
-			return norm, nil
+			return e.finalizeRelationCanonicalPath(ctx, rel, norm, relType), nil
 		}
 	}
 
@@ -267,11 +267,11 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 				// Check if this canonical path already exists
 				if e.fragmentsRepo != nil {
 					if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, result.CanonicalPath); err == nil && f != nil && f.ID != "" {
-						return result.CanonicalPath, nil
+						return e.finalizeRelationCanonicalPath(ctx, rel, result.CanonicalPath, relType), nil
 					}
 				}
 				// Use canonicalized path
-				return result.CanonicalPath, nil
+				return e.finalizeRelationCanonicalPath(ctx, rel, result.CanonicalPath, relType), nil
 			}
 		}
 	}
@@ -296,11 +296,11 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 					}
 				}
 				if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, pref); err == nil && f != nil && f.ID != "" {
-					return pref, nil
+					return e.finalizeRelationCanonicalPath(ctx, rel, pref, relType), nil
 				}
 			}
 		}
-		return strings.TrimSpace(rel.TargetCanonicalPath), nil
+		return e.finalizeRelationCanonicalPath(ctx, rel, strings.TrimSpace(rel.TargetCanonicalPath), relType), nil
 	}
 
 	// 1.5) Hard preference: if a preferred canonical fragment already exists, use it immediately.
@@ -320,7 +320,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 				}
 			}
 			if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, pref); err == nil && f != nil && f.ID != "" {
-				return pref, nil
+				return e.finalizeRelationCanonicalPath(ctx, rel, pref, relType), nil
 			}
 		}
 	}
@@ -351,7 +351,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 						continue
 					}
 					if cp, ok := r.Document.StructData["canonicalPath"].(string); ok && strings.TrimSpace(cp) == pref {
-						return pref, nil
+						return e.finalizeRelationCanonicalPath(ctx, rel, pref, relType), nil
 					}
 				}
 			}
@@ -366,7 +366,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 						if strings.HasPrefix(cp, "/loc/") {
 							parts := strings.Split(strings.Trim(cp, "/"), "/")
 							if len(parts) == 4 {
-								return cp, nil
+								return e.finalizeRelationCanonicalPath(ctx, rel, cp, relType), nil
 							}
 						}
 					}
@@ -378,7 +378,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 					continue
 				}
 				if cp, ok := r.Document.StructData["canonicalPath"].(string); ok && cp != "" && !strings.HasPrefix(cp, "/discovered/") {
-					return cp, nil
+					return e.finalizeRelationCanonicalPath(ctx, rel, cp, relType), nil
 				}
 			}
 		}
@@ -542,10 +542,66 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 			}
 		}
 	}
-	return out.CanonicalPath, nil
+	return e.finalizeRelationCanonicalPath(ctx, rel, out.CanonicalPath, relType), nil
+}
+
+func (e *ScoutEngine) finalizeRelationCanonicalPath(ctx context.Context, rel agents.DiscoveredRelation, candidate string, relType models.FragmentType) string {
+	if e == nil {
+		return strings.TrimSpace(candidate)
+	}
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || e.canonicalPathResolver == nil || relType == "" {
+		return candidate
+	}
+	if relType == models.FragmentTypeOrganization {
+		label := strings.TrimSpace(rel.TargetLegalName)
+		if label == "" {
+			label = strings.TrimSpace(rel.TargetName)
+		}
+		if label == "" {
+			label = strings.TrimSpace(rel.TargetShortName)
+		}
+		if label != "" && strings.HasPrefix(candidate, "/org/") && looksLikeGovLabel(label) {
+			iso2 := inferISO2FromLabel(label, nil)
+			if iso2 == "" {
+				iso2 = "na"
+			}
+			if govPath := taxonomy.GovCanonicalPath(iso2, label); govPath != "" {
+				return strings.TrimSpace(govPath)
+			}
+		}
+		if legal := strings.TrimSpace(rel.TargetLegalName); legal != "" && strings.HasPrefix(candidate, "/org/") {
+			iso2 := "na"
+			parts := strings.Split(strings.Trim(candidate, "/"), "/")
+			if len(parts) == 3 {
+				iso2 = strings.TrimSpace(parts[1])
+			}
+			if upgraded := taxonomy.OrgCanonicalPath(iso2, legal); upgraded != "" && strings.TrimSpace(upgraded) != candidate {
+				return strings.TrimSpace(upgraded)
+			}
+		}
+		meta := map[string]string{}
+		if v := strings.TrimSpace(rel.TargetShortName); v != "" {
+			meta["shortName"] = v
+		}
+		if v := strings.TrimSpace(rel.TargetLegalName); v != "" {
+			meta["legalName"] = v
+		}
+		if v := strings.TrimSpace(rel.TargetName); v != "" && meta["shortName"] == "" {
+			meta["shortName"] = v
+		}
+		if resolved, err := e.canonicalPathResolver.ResolveWithMetadata(ctx, candidate, relType, meta); err == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+			return strings.TrimSpace(resolved.CanonicalPath)
+		}
+	}
+	if resolved, err := e.canonicalPathResolver.Resolve(ctx, candidate, relType); err == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+		return strings.TrimSpace(resolved.CanonicalPath)
+	}
+	return candidate
 }
 
 func buildCanonicalizationPrompt(rel agents.DiscoveredRelation) string {
+	canonicalRulesBlock := taxonomy.CanonicalPathRulesPrompt()
 	// Strict schema (embedded) as requested.
 	return fmt.Sprintf(`You are a canonicalization agent for a risk analysis system.
 
@@ -569,10 +625,11 @@ RULES:
 - canonicalPath MUST be stable and must NOT start with "/discovered/".
 - legalName MUST include the form of ownership when relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC...).
 - shortName MUST be the base name without ownership suffix.
+- %s
 - canonicalPath slug MUST be derived from shortName (without ownership suffix) to avoid duplicates when legal form changes.
-- ONLY include ownership suffix in canonicalPath if (and only if) it is REQUIRED to disambiguate entities with same shortName.
+- If a legal form is known, append it as -{legal_form} to satisfy org canonical format.
 - Intangible-but-real actors (alliances, coalitions, unions, regulators, ministries, agencies, associations) are ORGANIZATION.
-- Government bodies MUST use /gov/{iso2|na}/{slug} (iso2 = jurisdiction). Other orgs use /org/{iso2|na}/{slug}.
+- Government bodies MUST use /gov/{iso2|na}/{slug} (iso2 = jurisdiction). Other orgs use /org/{iso2|na}/{slug}-{legal_form}.
 - GOV HIERARCHY: Government bodies form administrative hierarchies:
   - government → ministry → department → agency/authority/regulator
   - GovTypes: government, ministry, department, agency, authority, regulator, committee, service, bureau, office, council, commission
@@ -580,9 +637,9 @@ RULES:
   - Example: "Saudi FDA" → /gov/sa/sfda (type: authority), parent would be /gov/sa/ministry-of-health
 - Use these namespaces:
   - ORGANIZATION:
-    - /org/{iso2|na}/{lowercase-slug} (companies, NGOs, etc.)
+    - /org/{iso2|na}/{lowercase-slug}-{legal_form} (companies, NGOs, etc.)
     - /gov/{iso2|na}/{lowercase-slug} (ministries, regulators, agencies, state bodies)
-    - Legacy /org/{lowercase-slug} may exist; prefer /org/{iso2}/{slug} for NEW entities.
+    - Legacy /org/{lowercase-slug} may exist; prefer /org/{iso2}/{slug}-{legal_form} for NEW entities.
   - PERSON: /person/{lowercase-slug}
   - PRODUCT: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
     - category: "raw" | "component" | "finished" | "service"
@@ -621,11 +678,11 @@ RULES:
     - Prefer /fac/{orgSlug}/{facilitySlug} when the org can be inferred from the facility name (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise use /fac/{facilitySlug}
   - GEO_REGION: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase, EXACTLY 2 characters (examples: us, de, ru, fr, br, cn, kz, jp)
+    - country: ISO3166-1 alpha2 lowercase (2 chars), or regional token when ISO2 is insufficient (asean, brics, gcc, eu, eaeu)
     - admin1: state/province/region code or slug lowercase; use "na" if not applicable/unknown
     - city: lowercase slug; use "na" if not applicable/unknown
     - For country-only locations, use: /loc/{country}/na/na
-    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 (exactly 2 lowercase letters). Invalid codes will be REJECTED by validation policy.
+    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 or an allowed regional token.
     Examples (3-position model):
     - USA / Texas / Austin: /loc/us/tx/austin
     - Germany / Bavaria / Munich: /loc/de/by/munich
@@ -669,5 +726,5 @@ RULES:
   - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city}
   - GEO_REGION country code MUST be valid ISO3166-1 alpha2 (2 lowercase letters)
 - Output only JSON, no markdown, no extra text.
-`, rel.TargetName, rel.TargetLegalName, rel.TargetShortName, rel.TargetType)
+`, rel.TargetName, rel.TargetLegalName, rel.TargetShortName, rel.TargetType, canonicalRulesBlock)
 }

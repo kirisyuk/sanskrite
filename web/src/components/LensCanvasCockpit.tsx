@@ -30,6 +30,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
+import { isSphereCanonicalPath, isSphereEntity, isSphereType } from '../lib/horizonSphere';
 import {
   layoutExpansionWithGroups,
   layoutFullGraph,
@@ -2477,6 +2478,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 }
               }
               const fragObj = otherFrag || { id: otherFragId, canonicalPath: '', labels: {} };
+              if (isSphereEntity(fragObj?.type, fragObj?.canonicalPath)) {
+                continue;
+              }
               const stateMetrics: Record<string, number> = {};
               if (fragObj?.state) {
                 Object.entries(fragObj.state).forEach(([k, v]: [string, any]) => {
@@ -2822,14 +2826,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   };
 
   const normalizeEdgeType = useCallback((t: string | undefined) => (t || '').toUpperCase().trim(), []);
-
-  const isSpherePath = useCallback((p: string | undefined | null): boolean => {
-    const cp = String(p || '').trim().toLowerCase();
-    return cp.startsWith('/sphere/');
-  }, []);
-  const isSphereType = useCallback((t: string | undefined | null): boolean => {
-    return String(t || '').trim().toUpperCase() === 'SPHERE';
-  }, []);
 
   // If two nodes are connected by both influence and dependency edges, we should present the influence edge
   // as the primary semantic (per product rules). This applies regardless of direction.
@@ -4279,7 +4275,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const hasFragmentId = !!item.fragmentId;
       const isLikelyNode = !kind && hasFragmentId; // Fallback: if no kind but has fragmentId, treat as node
 
-      if (isSphereType(item.type) || isSpherePath(item.canonicalPath)) {
+      if (isSphereType(item.type) || isSphereCanonicalPath(item.canonicalPath)) {
         return false;
       }
       
@@ -4359,7 +4355,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const srcPath = (item as any)?.sourceCanonicalPath;
         const dstPath = (item as any)?.targetCanonicalPath;
         if (isSphereType(srcType) || isSphereType(dstType)) return;
-        if (isSpherePath(srcPath) || isSpherePath(dstPath)) return;
+        if (isSphereCanonicalPath(srcPath) || isSphereCanonicalPath(dstPath)) return;
         const sourceId = sFrag ? fragmentToNodeId.get(sFrag) : null;
         const targetId = tFrag ? fragmentToNodeId.get(tFrag) : null;
 
@@ -4407,7 +4403,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
       dbg('[Cockpit] Converted to graph:', { nodes: graphNodes.length, edges: filteredEdges.length });
     return { nodes: graphNodes, edges: filteredEdges };
-  }, [norm, dbg, getEdgeStroke, getEdgeCaptionShort, suppressDominatedEdges, isSpherePath, isSphereType]);
+  }, [norm, dbg, getEdgeStroke, getEdgeCaptionShort, suppressDominatedEdges, isSphereCanonicalPath, isSphereType]);
   // Keep proxy ref updated (used by initial-load effect declared above).
   convertLensItemsToGraphRef.current = convertLensItemsToGraph;
 
@@ -4451,10 +4447,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       
       const rawFragments = cockpitData.graph.nodes || [];
       const rawEdges = cockpitData.graph.edges || [];
-      const fragments = rawFragments.filter((f: any) => !(isSphereType(f?.type) || isSpherePath(f?.canonicalPath)));
+      const fragments = rawFragments.filter((f: any) => !(isSphereType(f?.type) || isSphereCanonicalPath(f?.canonicalPath)));
       const edges = rawEdges.filter((e: any) => {
         if (isSphereType(e?.sourceType) || isSphereType(e?.targetType)) return false;
-        if (isSpherePath(e?.sourceCanonicalPath) || isSpherePath(e?.targetCanonicalPath)) return false;
+        if (isSphereCanonicalPath(e?.sourceCanonicalPath) || isSphereCanonicalPath(e?.targetCanonicalPath)) return false;
         return true;
       });
 
@@ -5278,8 +5274,43 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       }
 
-      const relatedFragments = Array.from(byId.values());
+      let relatedFragments = Array.from(byId.values());
+      let filteredDepEdges = depEdges;
+      const sphereIds = new Set<string>();
+      for (const f of relatedFragments) {
+        if (!isSphereEntity(f?.type, f?.canonicalPath)) continue;
+        const fid = norm(f?.id || '');
+        if (fid) sphereIds.add(fid);
+      }
+      if (sphereIds.size > 0) {
+        relatedFragments = relatedFragments.filter((f) => !sphereIds.has(norm(f?.id || '')));
+        filteredDepEdges = depEdges.filter((e) => {
+          const s = norm(e?.sourceFragmentId || '');
+          const t = norm(e?.targetFragmentId || '');
+          return !(sphereIds.has(s) || sphereIds.has(t));
+        });
+      }
       dbg('[Cockpit] Loaded related fragments:', relatedFragments.length);
+
+      if (filteredDepEdges.length === 0 && relatedFragments.length === 0) {
+        setNodes((prev) =>
+          prev.map((n) =>
+            n.id === fragmentId || n.data.fragmentId === fragmentId
+              ? { ...n, data: { ...n.data, isLoadingRelated: false, loadRelatedAttempted: true } }
+              : n,
+          ),
+        );
+        setLoadingFragmentId(null);
+        setExpandEmptyToast(true);
+        setExpandEmptyContext({
+          fragmentId,
+          canonicalPath: (sourceSnapshot?.data as any)?.canonicalPath,
+          isFullNetwork: isLevelsLayout && levelsExpandMode === 'all',
+        });
+        setExpandModeGlow(true);
+        setTimeout(() => setExpandModeGlow(false), 2500);
+        return;
+      }
 
       // Получаем актуальное состояние узлов
       const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
@@ -5580,7 +5611,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       };
       
-      for (const e of depEdges) {
+      for (const e of filteredDepEdges) {
         const s = String(e?.sourceFragmentId || '').trim();
         const t = String(e?.targetFragmentId || '').trim();
         const edgeType = e?.type || e?.edgeType || '';
@@ -5750,14 +5781,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const DEP_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
       const centralFragId = String(fragmentId || '').trim();
       const neighborsWithOutgoingIntoCentral = new Set<string>();
-      for (const e of depEdges) {
+      for (const e of filteredDepEdges) {
         const s0 = String(e?.sourceFragmentId || '').trim();
         const t0 = String(e?.targetFragmentId || '').trim();
         if (!s0 || !t0) continue;
         if (t0 === centralFragId) neighborsWithOutgoingIntoCentral.add(s0);
       }
 
-      for (const e of depEdges) {
+      for (const e of filteredDepEdges) {
         const s = String(e?.sourceFragmentId || '').trim();
         const t = String(e?.targetFragmentId || '').trim();
         if (!s || !t) continue;

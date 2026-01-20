@@ -1228,6 +1228,24 @@
 - **Batching: аккумулировать вызовы Scout и изменения**
   - Очередь/батчинг для ScoutingJob (группировка/дедуп), чтобы один факт не раздувал десятки вызовов.
   - Батч-обработка обновлений в Propagation Engine и (по возможности) batch writes в Firestore.
+- **Consistency: последовательные мутации “по объекту” (anti-race / lost updates)**
+  - **Проблема**: в нагруженном пайплайне один и тот же `HorizonFragment` может **асинхронно** модифицироваться разными воркерами/ветками:
+    - scout jobs (concurrent workers / Cloud Tasks),
+    - policy check → enforcement auto-fixes (async),
+    - propagation trigger (async),
+    - ручной запуск enforcement batch.
+  - При текущей модели записи “прочитал → `Set()` целиком документ” возможен классический **lost update / last-write-wins**:
+    - пример: один агент исправляет `/org/na/...` (iso2), другой добавляет legal form `-ltd` → итог зависит от порядка записи, возможны откаты/потери соседних полей.
+  - **Цель**: убрать зависимость результата от порядка конкурентных записей; добиться того, что “агенты исправляют своё и не ломают другое”.
+  - **Идея решения (тяжёлая задача; планировать отдельно)**:
+    - **Сериализация по `fragmentId`**: все операции, которые могут изменить один и тот же фрагмент, исполняются **строго последовательно**. Следующая операция получает на вход **явный результат** предыдущей (актуальный snapshot/версия).
+    - **Patch-намерение вместо полной перезаписи**: агенты/таски формируют “mutation patch” (какие поля и как изменить), а единый “applier” применяет патч атомарно (transaction/CAS) и не трогает прочие поля.
+    - **Preconditions**: каждая мутация содержит предусловия (например, “fix iso2 только если iso2==na”, “add legalForm только если legalForm пустой”), чтобы ретраи/дубликаты превращались в safe no-op.
+    - **Multi-entity операции** (merge fragments / массовое rewire edges): требуют либо захвата нескольких ключей в детерминированном порядке (`min(id), max(id)`), либо отдельного “агрегата” (root id), иначе сериализация только по одному `fragmentId` не гарантирует консистентность.
+  - **Пример формата мутации (эскиз)**:
+    - `MutationEnvelope{fragmentId, patchId, preconditions, operations[], causedBy(jobId/taskId), createdAt}`
+    - `operations`: `set(path)`, `mergeMap`, `appendUnique`, `rewriteCanonicalPathComponents(...)`, `edgeRewrite(...)`
+    - “applier” возвращает `{beforeVersion, afterVersion, appliedOps, skippedOps, reason}` и кладёт это в очередь следующему шагу.
 - **LLM-free эвристики корректности и “анти-взрыва” графа (graph shaping without LLM)**
   - **Зачем**: уменьшить “мусор” в графе и экспоненциальный рост ScoutingJobs/propagation **без** дополнительных LLM вызовов; сделать поведение предсказуемым (bounded worst-case).
   - `canonicalPath → fragmentType` как **hard rule** (path-based type inference).

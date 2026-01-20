@@ -113,6 +113,14 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 	if main.Identifiers == nil {
 		main.Identifiers = make(map[string]string)
 	}
+	// Merge CanonicalPath: allow Research to upgrade flat/legacy paths to proper canonical form.
+	// Only update if partial provides a non-empty, different path that looks more complete.
+	if partialCP := strings.TrimSpace(partial.CanonicalPath); partialCP != "" {
+		mainCP := strings.TrimSpace(main.CanonicalPath)
+		if partialCP != mainCP && isMoreCanonical(mainCP, partialCP) {
+			main.CanonicalPath = partialCP
+		}
+	}
 	if partial.Type != "" {
 		main.Type = partial.Type
 	}
@@ -196,6 +204,43 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 	if len(partial.KBRefs) > 0 {
 		main.KBRefs = append(main.KBRefs, partial.KBRefs...)
 	}
+}
+
+// isMoreCanonical returns true if newPath is a more complete/canonical version of oldPath.
+// This helps decide whether to upgrade a path during merge.
+func isMoreCanonical(oldPath, newPath string) bool {
+	oldPath = strings.TrimSpace(oldPath)
+	newPath = strings.TrimSpace(newPath)
+	if newPath == "" || oldPath == newPath {
+		return false
+	}
+	// Empty old path -> any new path is better
+	if oldPath == "" {
+		return true
+	}
+	oldParts := strings.Split(strings.Trim(oldPath, "/"), "/")
+	newParts := strings.Split(strings.Trim(newPath, "/"), "/")
+	// More segments = more hierarchical = better
+	if len(newParts) > len(oldParts) {
+		return true
+	}
+	// Product: flat /product/{slug} -> hierarchical /product/{cat}/{type}/{stage}/{slug}
+	if strings.HasPrefix(oldPath, "/product/") && strings.HasPrefix(newPath, "/product/") {
+		if len(oldParts) == 2 && len(newParts) >= 4 {
+			return true
+		}
+	}
+	// Org: /org/na/... -> /org/{iso2}/... (not "na")
+	if strings.HasPrefix(oldPath, "/org/na/") && strings.HasPrefix(newPath, "/org/") {
+		if len(newParts) >= 3 && newParts[1] != "na" && len(newParts[1]) == 2 {
+			return true
+		}
+	}
+	// Legacy /org/{slug} -> /org/{iso2}/{slug}
+	if strings.HasPrefix(oldPath, "/org/") && len(oldParts) == 2 && len(newParts) >= 3 {
+		return true
+	}
+	return false
 }
 
 // buildEnrichmentPrompt строит промпт для дообогащения фрагмента
@@ -341,6 +386,12 @@ Name Normalization Rules:
   - fragment.identifiers.legalName (and/or fragment.labels.en): legal/official name including ownership suffix if relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC...)
   - fragment.identifiers.shortName: base name without ownership suffix
 - For relations, ALWAYS provide targetLegalName and targetShortName in addition to targetName.
+
+Product Canonicalization:
+- If you can resolve a more specific product name/path, update fragment.canonicalPath.
+- Prefer /product/{category}/{type}/{stage}/{slug} or /product/service/{domain}/{subdomain}/{slug}.
+- If the current path is flat or acronym-like, expand to the full product name and ensure relations use the updated canonical path.
+- Examples: rice -> /product/raw/agricultural/extraction/rice; salt -> /product/raw/mineral/extraction/salt; swad (Indian savory snack) -> /product/finished/agricultural/processing/swad; processed/finished goods -> /product/finished/mechanical/assembly/{slug}.
 
 Organization Classification (ORG/FACILITY/GOV) - *** HIGH PRIORITY ***:
 You SHOULD actively research and determine these fields for any organization or government body:

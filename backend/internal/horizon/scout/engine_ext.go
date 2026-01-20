@@ -1385,6 +1385,10 @@ func (e *ScoutEngine) processRelationsInternal(
 				"edgeId":           edge.ID,
 				"sourceFragmentId": edge.SourceFragmentID,
 				"targetFragmentId": edge.TargetFragmentID,
+				"sourceCanonicalPath": strings.TrimSpace(sourceFragment.CanonicalPath),
+				"targetCanonicalPath": strings.TrimSpace(targetPath),
+				"sourceLabel":         strings.TrimSpace(sourceFragment.Labels["en"]),
+				"targetLabel":         strings.TrimSpace(firstNonEmpty(rel.TargetShortName, rel.TargetName, rel.TargetLegalName)),
 				"type":             string(edge.Type),
 				"properties":       edge.Properties,
 				"qualifiers":       edge.Qualifiers,
@@ -1474,6 +1478,15 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 	}
 
 	return sourceID, targetID, edgeType, changed
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // processSupplyChains parses supply chain output from agents and persists fragments/edges.

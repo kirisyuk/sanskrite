@@ -91,18 +91,9 @@ func (s *Subscriber) runWithRetry(ctx context.Context, sub *pubsub.Subscription,
 		}
 
 		// Run subscription
+		// Note: handleMessage has its own defer that always calls m.Ack() even on panic,
+		// so no additional panic recovery/ack needed here to avoid double-ack errors
 		err := sub.Receive(ctx, func(ctx context.Context, m *pubsub.Message) {
-			// CRITICAL: Wrap handleMessage in panic recovery to ensure message is always ack'd
-			// This prevents Pub/Sub ordering key blocking if handleMessage panics
-			defer func() {
-				if r := recover(); r != nil {
-					if s.logger != nil {
-						s.logger.Printf("subscriber: PANIC in handleMessage for topic=%s: %v, acking message to prevent ordering key block", topicName, r)
-					}
-					// Always ack even on panic to prevent ordering key blocking
-					m.Ack()
-				}
-			}()
 			s.handleMessage(ctx, m)
 		})
 
@@ -249,5 +240,7 @@ func (s *Subscriber) handleMessage(_ context.Context, m *pubsub.Message) {
 		return
 	}
 
-	s.logger.Printf("subscriber: json error: %s", string(m.Data))
+	if s.logger != nil {
+		s.logger.Printf("subscriber: json error: %s", string(m.Data))
+	}
 }

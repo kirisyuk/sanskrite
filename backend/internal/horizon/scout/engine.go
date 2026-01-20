@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
@@ -33,6 +35,333 @@ func isLegacyOrgPath(cp string) bool {
 	parts := strings.Split(strings.Trim(cp, "/"), "/")
 	// Legacy: /org/{slug} (2 segments total)
 	return len(parts) == 2 && parts[0] == "org" && strings.TrimSpace(parts[1]) != ""
+}
+
+func isFlatProductPath(cp string) (string, bool) {
+	cp = strings.TrimSpace(cp)
+	if !strings.HasPrefix(cp, "/product/") {
+		return "", false
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) == 2 && parts[0] == "product" && strings.TrimSpace(parts[1]) != "" {
+		return strings.TrimSpace(parts[1]), true
+	}
+	return "", false
+}
+
+func isUpperAcronym(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 || len(s) > 8 {
+		return false
+	}
+	hasLetter := false
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			hasLetter = true
+		case r >= '0' && r <= '9':
+			// ok
+		default:
+			return false
+		}
+	}
+	return hasLetter
+}
+
+func shouldRequestProductCanonicalization(frag *models.HorizonFragment) bool {
+	if frag == nil {
+		return false
+	}
+	slug, flat := isFlatProductPath(frag.CanonicalPath)
+	if !flat {
+		return false
+	}
+	label := strings.TrimSpace(frag.Labels["en"])
+	short := strings.TrimSpace(frag.Identifiers["shortName"])
+	if isUpperAcronym(label) || isUpperAcronym(short) {
+		return true
+	}
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return false
+	}
+	// Any flat /product/{slug} should be canonicalized into taxonomy.
+	return true
+}
+
+func appendMissingInfoUnique(list []string, item string) []string {
+	item = strings.TrimSpace(item)
+	if item == "" {
+		return list
+	}
+	for _, existing := range list {
+		if strings.TrimSpace(existing) == item {
+			return list
+		}
+	}
+	return append(list, item)
+}
+
+func hasLegalFormSuffix(slug string) bool {
+	slug = strings.ToLower(strings.TrimSpace(slug))
+	if slug == "" {
+		return false
+	}
+	legalForms := []string{"inc", "llc", "jsc", "pjsc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa", "as", "ab", "bv", "nv"}
+	for _, lf := range legalForms {
+		if strings.HasSuffix(slug, "-"+lf) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldRequestOrgCanonicalization(frag *models.HorizonFragment) bool {
+	if frag == nil {
+		return false
+	}
+	cp := strings.TrimSpace(frag.CanonicalPath)
+	if !strings.HasPrefix(cp, "/org/") {
+		return false
+	}
+	// If jurisdiction is unknown (/org/na/...) or path is legacy (/org/{slug}),
+	// we should ask missingInfo to resolve country/jurisdiction.
+	if strings.HasPrefix(cp, "/org/na/") || isLegacyOrgPath(cp) {
+		return true
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) < 2 {
+		return true
+	}
+	slug := parts[len(parts)-1]
+	return !hasLegalFormSuffix(slug)
+}
+
+func buildOrgCanonicalizationMissingInfo(fragment *models.HorizonFragment, job *models.ScoutingJob, relations []agents.DiscoveredRelation) string {
+	if fragment == nil {
+		return ""
+	}
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	label := strings.TrimSpace(fragment.Labels["en"])
+	short := strings.TrimSpace(fragment.Identifiers["shortName"])
+	legal := strings.TrimSpace(fragment.Identifiers["legalName"])
+	desc := strings.TrimSpace(fragment.Description)
+	originalQuery := ""
+	if job != nil && job.State != nil {
+		if v, ok := job.State["originalQuery"].(string); ok {
+			originalQuery = strings.TrimSpace(v)
+		}
+	}
+	relContext := relationContextSnippet(relations, 6)
+
+	var sb strings.Builder
+	if strings.HasPrefix(cp, "/org/na/") || isLegacyOrgPath(cp) {
+		sb.WriteString("Resolve the country of origin / primary jurisdiction (ISO2) for this organization and update its canonicalPath.")
+		sb.WriteString(" Current canonicalPath is jurisdiction-unknown (/org/na/...) or legacy (/org/{slug}), which causes cross-country collisions.")
+		sb.WriteString(" Target format: /org/{iso2}/{slug}-{legal_form} (use legalName to pick legal_form suffix when known).")
+	} else {
+		sb.WriteString("Confirm the legal name, jurisdiction (ISO2), and canonical org path for this organization.")
+		sb.WriteString(" Ensure the /org/{iso2}/{slug}-{legal_form} suffix is correct (e.g., -llc, -jsc, -ltd).")
+	}
+	sb.WriteString(" If legal form or country is unclear, resolve it using sources.")
+
+	// Optional hint: if we can infer jurisdiction from existing fragment fields or label, include it.
+	hintISO2 := ""
+	if v := inferOrgISO2(fragment); v != "" {
+		hintISO2 = v
+	} else {
+		for _, cand := range []string{legal, label, short} {
+			if cand == "" {
+				continue
+			}
+			if v := inferISO2FromLabel(cand, fragment); v != "" {
+				hintISO2 = v
+				break
+			}
+		}
+	}
+	sb.WriteString(" Context:")
+	if cp != "" {
+		sb.WriteString(" canonicalPath=" + cp + ";")
+	}
+	if label != "" {
+		sb.WriteString(" label=" + label + ";")
+	}
+	if short != "" {
+		sb.WriteString(" shortName=" + short + ";")
+	}
+	if legal != "" {
+		sb.WriteString(" legalName=" + legal + ";")
+	}
+	if desc != "" {
+		sb.WriteString(" description=" + trace.Trunc(desc, 160) + ";")
+	}
+	if originalQuery != "" {
+		sb.WriteString(" originalQuery=" + trace.Trunc(originalQuery, 140) + ";")
+	}
+	if relContext != "" {
+		sb.WriteString(" relations=[" + relContext + "];")
+	}
+	if hintISO2 != "" {
+		sb.WriteString(" inferredIso2Hint=" + hintISO2 + ";")
+	}
+	return sb.String()
+}
+
+func buildProductCanonicalizationMissingInfo(fragment *models.HorizonFragment, job *models.ScoutingJob, relations []agents.DiscoveredRelation) string {
+	if fragment == nil {
+		return ""
+	}
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	label := strings.TrimSpace(fragment.Labels["en"])
+	short := strings.TrimSpace(fragment.Identifiers["shortName"])
+	desc := strings.TrimSpace(fragment.Description)
+	aliasPath := ""
+	originalQuery := ""
+	if job != nil && job.State != nil {
+		if v, ok := job.State["aliasCanonicalPath"].(string); ok {
+			aliasPath = strings.TrimSpace(v)
+		}
+		if v, ok := job.State["originalQuery"].(string); ok {
+			originalQuery = strings.TrimSpace(v)
+		}
+	}
+	relContext := relationContextSnippet(relations, 6)
+
+	var sb strings.Builder
+	sb.WriteString("Resolve canonical product taxonomy for this product and disambiguate any acronym/short slug.")
+	sb.WriteString(" Provide a precise product name and canonical path using /product/{category}/{type}/{stage}/{slug} (or /product/service/{domain}/{subdomain}/{slug} for services).")
+	sb.WriteString(" If the current path is flat or acronym-like, expand it to the full product name and update fragment.canonicalPath plus labels/identifiers.")
+	sb.WriteString(" Examples: rice -> /product/raw/agricultural/extraction/rice; salt -> /product/raw/mineral/extraction/salt; swad (Indian savory snack) -> /product/finished/agricultural/processing/swad; processed/finished goods -> /product/finished/mechanical/assembly/{slug}.")
+	sb.WriteString(" Context:")
+	if cp != "" {
+		sb.WriteString(" canonicalPath=" + cp + ";")
+	}
+	if aliasPath != "" && aliasPath != cp {
+		sb.WriteString(" aliasPath=" + aliasPath + ";")
+	}
+	if label != "" {
+		sb.WriteString(" label=" + label + ";")
+	}
+	if short != "" {
+		sb.WriteString(" shortName=" + short + ";")
+	}
+	if desc != "" {
+		sb.WriteString(" description=" + trace.Trunc(desc, 160) + ";")
+	}
+	if originalQuery != "" {
+		sb.WriteString(" originalQuery=" + trace.Trunc(originalQuery, 140) + ";")
+	}
+	if relContext != "" {
+		sb.WriteString(" relations=[" + relContext + "];")
+	}
+	return sb.String()
+}
+
+func relationContextSnippet(relations []agents.DiscoveredRelation, limit int) string {
+	if len(relations) == 0 || limit <= 0 {
+		return ""
+	}
+	out := make([]string, 0, limit)
+	for _, rel := range relations {
+		if len(out) >= limit {
+			break
+		}
+		target := strings.TrimSpace(rel.TargetCanonicalPath)
+		if target == "" {
+			target = strings.TrimSpace(rel.TargetName)
+		}
+		edge := strings.TrimSpace(rel.RelationType)
+		if edge == "" {
+			edge = "RELATED_TO"
+		}
+		if target != "" {
+			out = append(out, edge+" -> "+target)
+		}
+	}
+	return strings.Join(out, "; ")
+}
+
+func relationNeedsOrgCanonicalization(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	if !strings.HasPrefix(path, "/org/") {
+		return false
+	}
+	if strings.HasPrefix(path, "/org/na/") || isLegacyOrgPath(path) {
+		return true
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 {
+		return true
+	}
+	slug := parts[len(parts)-1]
+	return !hasLegalFormSuffix(slug)
+}
+
+func relationNeedsGovCanonicalization(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/org/") {
+		return false
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 {
+		return false
+	}
+	slug := parts[len(parts)-1]
+	return looksLikeGovLabel(slug)
+}
+
+func relationNeedsProductCanonicalization(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	if !strings.HasPrefix(path, "/product/") {
+		return false
+	}
+	if _, flat := isFlatProductPath(path); flat {
+		return true
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) < 2
+}
+
+func buildRelationMissingInfo(relations []agents.DiscoveredRelation, limit int) []string {
+	if len(relations) == 0 || limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, limit)
+	seen := map[string]struct{}{}
+
+	for _, rel := range relations {
+		if len(out) >= limit {
+			break
+		}
+		path := strings.TrimSpace(rel.TargetCanonicalPath)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+
+		switch {
+		case relationNeedsGovCanonicalization(path):
+			out = append(out, fmt.Sprintf("Confirm if related entity %s is a government body. If so, use /gov/{iso2}/{slug} canonical path and ensure jurisdiction is correct.", path))
+			seen[path] = struct{}{}
+		case relationNeedsOrgCanonicalization(path):
+			out = append(out, fmt.Sprintf("Confirm the legal name, jurisdiction (ISO2), and canonical org path for related entity %s. Ensure the /org/{iso2}/{slug}-{legal_form} suffix is correct.", path))
+			seen[path] = struct{}{}
+		case relationNeedsProductCanonicalization(path):
+			out = append(out, fmt.Sprintf("Resolve canonical product taxonomy for related product %s. Provide a canonical path using /product/{category}/{type}/{stage}/{slug} (or /product/service/{domain}/{subdomain}/{slug} for services).", path))
+			seen[path] = struct{}{}
+		}
+	}
+
+	return out
 }
 
 func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
@@ -328,6 +657,7 @@ type ScoutEngine struct {
 	preCreateValidator      *PreCreateValidator               // Validates fragments before creation
 	orgHierarchyBuilder     *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
 	marketHierarchyBuilder  *MarketHierarchyBuilder           // Auto-creates market hierarchy (segment-first when possible)
+	marketGeoHierarchy      *MarketGeoHierarchyBuilder        // Auto-creates market geo parent (regional -> global)
 	govHierarchyBuilder     *GovHierarchyBuilder              // Best-effort gov type inference + admin hierarchy helpers
 	productDeduplicator     *ProductDeduplicator              // Deduplicates products by Wikidata/CAS/formula
 	productHierarchyBuilder *ProductHierarchyBuilder          // Auto-creates product value chain hierarchy
@@ -335,6 +665,13 @@ type ScoutEngine struct {
 	canonizationPolicy      *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
 	canonicalPathResolver   *CanonicalPathResolver            // Unified canonicalization and deduplication service
 	missingInfoStatusRepo   *repo.MissingInfoStatusRepository // Tracks missingInfo attempts to prevent infinite loops
+
+	// Policy enforcement (final validation step)
+	policyChecker          *policy.PolicyChecker              // Optional: validates job output before completion
+	enforcementExecutor    *policy.EnforcementExecutor        // Optional: executes auto-fixes for policy violations
+	enforcementJobsRepo    *repo.EnforcementJobsRepository    // Optional: persists enforcement jobs
+	policyCheckResultsRepo *repo.PolicyCheckResultsRepository // Optional: persists policy check results
+	policyWSPublisher      *policy.PolicyWSPublisher          // Optional: publishes policy check results via WebSocket
 }
 
 // bestEffortRewriteLensScope replaces alias canonical paths in lens.Scope with their canonical equivalents.
@@ -496,6 +833,7 @@ func NewScoutEngine(
 	personDedup := NewPersonDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
 	orgHierarchy := NewOrgHierarchyBuilder(fragmentsRepo, edgesRepo)
 	marketHierarchy := NewMarketHierarchyBuilder(fragmentsRepo, edgesRepo)
+	marketGeoHierarchy := NewMarketGeoHierarchyBuilder(fragmentsRepo, edgesRepo)
 	govHierarchy := NewGovHierarchyBuilder(fragmentsRepo, edgesRepo)
 	productDedup := NewProductDeduplicator(fragmentsRepo, nil)                    // WikidataClient set via WithWikidataClient
 	productHierarchy := NewProductHierarchyBuilder(fragmentsRepo, edgesRepo, nil) // WikidataClient set via WithWikidataClient
@@ -524,6 +862,7 @@ func NewScoutEngine(
 		personDeduplicator:      personDedup,
 		orgHierarchyBuilder:     orgHierarchy,
 		marketHierarchyBuilder:  marketHierarchy,
+		marketGeoHierarchy:      marketGeoHierarchy,
 		govHierarchyBuilder:     govHierarchy,
 		productDeduplicator:     productDedup,
 		productHierarchyBuilder: productHierarchy,
@@ -582,6 +921,36 @@ func (e *ScoutEngine) WithGeoNamesClient(client coreontology.GeoNamesClientInter
 	if e.preCreateValidator != nil {
 		e.preCreateValidator.WithGeoNamesClient(client)
 	}
+	return e
+}
+
+// WithPolicyChecker sets the policy checker for final validation of job outputs.
+func (e *ScoutEngine) WithPolicyChecker(checker *policy.PolicyChecker) *ScoutEngine {
+	e.policyChecker = checker
+	return e
+}
+
+// WithEnforcementExecutor sets the enforcement executor for auto-fixing policy violations.
+func (e *ScoutEngine) WithEnforcementExecutor(executor *policy.EnforcementExecutor) *ScoutEngine {
+	e.enforcementExecutor = executor
+	return e
+}
+
+// WithEnforcementJobsRepo sets the repository for persisting enforcement jobs.
+func (e *ScoutEngine) WithEnforcementJobsRepo(repo *repo.EnforcementJobsRepository) *ScoutEngine {
+	e.enforcementJobsRepo = repo
+	return e
+}
+
+// WithPolicyCheckResultsRepo sets the repository for persisting policy check results.
+func (e *ScoutEngine) WithPolicyCheckResultsRepo(repo *repo.PolicyCheckResultsRepository) *ScoutEngine {
+	e.policyCheckResultsRepo = repo
+	return e
+}
+
+// WithPolicyWSPublisher sets the WebSocket publisher for policy check results.
+func (e *ScoutEngine) WithPolicyWSPublisher(publisher *policy.PolicyWSPublisher) *ScoutEngine {
+	e.policyWSPublisher = publisher
 	return e
 }
 
@@ -711,6 +1080,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	if job == nil {
 		return fmt.Errorf("job is nil")
 	}
+	policyTracker := tracking.NewTracker()
+	ctx = tracking.WithTracker(ctx, policyTracker)
 	trace.Log(ctx, "scout_exec", "scout.job.start", map[string]any{
 		"tenantId":            strings.TrimSpace(job.TenantID),
 		"projectId":           strings.TrimSpace(job.ProjectID),
@@ -893,6 +1264,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	// This ensures we operate on canonicalized and deduplicated paths throughout the pipeline
 	var resolvedPath *ResolveResult
 	var effectiveCanonicalPath string
+	var orgLegacyPath string
+	var orgCanonicalizedPath string
 	if e.canonicalPathResolver != nil {
 		fragmentType := InferFragmentTypeFromCanonicalPath(job.TargetCanonicalPath)
 
@@ -1534,6 +1907,36 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	}
 
+	// PRODUCT CANONICALIZATION MISSING INFO (best-effort):
+	// If product path is flat/short or acronym-like, request explicit disambiguation and canonicalization.
+	if validationResult != nil && extractedFragment != nil && shouldRequestProductCanonicalization(extractedFragment) {
+		var rels []agents.DiscoveredRelation
+		if scoutResult != nil {
+			rels = scoutResult.Relations
+		}
+		question := buildProductCanonicalizationMissingInfo(extractedFragment, job, rels)
+		validationResult.MissingInfo = appendMissingInfoUnique(validationResult.MissingInfo, question)
+	}
+
+	// ORG CANONICALIZATION MISSING INFO (best-effort):
+	// If org path lacks legal form or jurisdiction clarity, request explicit canonicalization.
+	if validationResult != nil && extractedFragment != nil && shouldRequestOrgCanonicalization(extractedFragment) {
+		var rels []agents.DiscoveredRelation
+		if scoutResult != nil {
+			rels = scoutResult.Relations
+		}
+		question := buildOrgCanonicalizationMissingInfo(extractedFragment, job, rels)
+		validationResult.MissingInfo = appendMissingInfoUnique(validationResult.MissingInfo, question)
+	}
+
+	// RELATED ENTITIES CANONICALIZATION (best-effort):
+	// If relations include org/product targets with non-canonical paths, request clarification.
+	if validationResult != nil && scoutResult != nil {
+		for _, q := range buildRelationMissingInfo(scoutResult.Relations, 6) {
+			validationResult.MissingInfo = appendMissingInfoUnique(validationResult.MissingInfo, q)
+		}
+	}
+
 	// MARKET METRICS NORMALIZATION (best-effort):
 	// Research currently may emit legacy keys like "market_tam_usd". We canonicalize them into /metric/market/... so:
 	// - Critic can reliably require/check them
@@ -1679,6 +2082,26 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				newCP = strings.TrimSpace(enrichedFragment.CanonicalPath)
 			}
 			extractedFragment = enrichedFragment
+			// Best-effort: if research upgraded canonicalPath (e.g., /product/{slug} -> /product/{cat}/{type}/{stage}/{slug}),
+			// propagate the rewrite into job state + lens scope so UI and in-flight execution follow the canonical path.
+			if oldCP != "" && newCP != "" && oldCP != newCP {
+				if job.State == nil {
+					job.State = make(map[string]interface{})
+				}
+				if _, ok := job.State["aliasCanonicalPath"]; !ok && strings.TrimSpace(oldCP) != "" {
+					job.State["aliasCanonicalPath"] = strings.TrimSpace(oldCP)
+				}
+				// Keep a stable "effective target" in state (used by dedup keys and downstream tooling).
+				job.State["targetCanonicalPath"] = strings.TrimSpace(newCP)
+				// If the job target equals the old canonical path, upgrade it so subsequent steps align.
+				if strings.TrimSpace(job.TargetCanonicalPath) == strings.TrimSpace(oldCP) {
+					job.TargetCanonicalPath = strings.TrimSpace(newCP)
+				}
+				_ = e.scoutingJobsRepo.Update(ctx, job)
+				// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, oldCP, newCP)
+				e.logLine(ctx, job, "info", fmt.Sprintf("> canonicalized canonicalPath: %s -> %s", oldCP, newCP))
+			}
 			if len(newRelations) > 0 {
 				scoutResult.Relations = append(scoutResult.Relations, newRelations...)
 				fmt.Printf("[ScoutEngine] Research found %d new relations.\n", len(newRelations))
@@ -1898,6 +2321,54 @@ SKIP_RESEARCH:
 		})
 	}
 
+	// ORG LEGACY CANONICALIZATION (self-correction):
+	// Upgrade /org/{slug} or /org/na/{slug} to geo-scoped /org/{iso2}/{slug}-{legal_form} when possible.
+	var orgUpgrade *orgPathUpgrade
+	if extractedFragment != nil {
+		orgUpgrade = e.maybeUpgradeLegacyOrgPath(ctx, extractedFragment, effectiveCanonicalPath)
+	}
+	if orgUpgrade == nil && existingFragment != nil {
+		orgUpgrade = e.maybeUpgradeLegacyOrgPath(ctx, existingFragment, effectiveCanonicalPath)
+	}
+	if orgUpgrade != nil && e.fragmentsRepo != nil {
+		if existing, err := e.fragmentsRepo.GetByCanonicalPath(ctx, orgUpgrade.NewPath); err == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
+			if existingFragment == nil || existing.ID != existingFragment.ID {
+				fmt.Printf("[ScoutEngine] Skipping org path upgrade due to existing fragment: old=%s new=%s existingId=%s\n",
+					orgUpgrade.OldPath, orgUpgrade.NewPath, existing.ID)
+				orgUpgrade = nil
+			}
+		}
+	}
+	if orgUpgrade != nil {
+		old := strings.TrimSpace(orgUpgrade.OldPath)
+		effectiveCanonicalPath = strings.TrimSpace(orgUpgrade.NewPath)
+		job.TargetCanonicalPath = effectiveCanonicalPath
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		if _, ok := job.State["aliasCanonicalPath"]; !ok && old != "" {
+			job.State["aliasCanonicalPath"] = old
+		}
+		job.State["targetCanonicalPath"] = effectiveCanonicalPath
+		job.State["orgLegacyCanonicalPath"] = old
+		job.State["orgCanonicalPathUpgradedTo"] = effectiveCanonicalPath
+		if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+			fmt.Printf("[ScoutEngine] Failed to persist org path upgrade (best-effort): jobId=%s from=%s to=%s err=%v\n",
+				strings.TrimSpace(job.ID), old, effectiveCanonicalPath, err)
+		}
+		e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
+		if extractedFragment != nil {
+			extractedFragment.CanonicalPath = effectiveCanonicalPath
+			recordLegacyOrgPath(extractedFragment, old)
+		}
+		if existingFragment != nil {
+			recordLegacyOrgPath(existingFragment, old)
+		}
+		orgLegacyPath = old
+		orgCanonicalizedPath = effectiveCanonicalPath
+		e.logLine(ctx, job, "info", fmt.Sprintf("> canonicalized org path: %s -> %s", old, effectiveCanonicalPath))
+	}
+
 	// VERIFIED: Создание Frame и обновление HorizonFragment
 	if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "verified"); err != nil {
 		return fmt.Errorf("failed to transition to VERIFIED: %w", err)
@@ -1986,6 +2457,9 @@ SKIP_RESEARCH:
 		extractedFragment.Metadata.EpistemicStatus = models.EpistemicStatusVerified
 		if validationResult.Confidence < 0.7 {
 			extractedFragment.Metadata.EpistemicStatus = models.EpistemicStatusLowConfidence
+		}
+		if orgLegacyPath != "" {
+			recordLegacyOrgPath(extractedFragment, orgLegacyPath)
 		}
 
 		// Pre-create validation: check policies and deduplication
@@ -2214,6 +2688,13 @@ SKIP_RESEARCH:
 		}
 	} else {
 		// Обновляем существующий фрагмент
+		if strings.TrimSpace(effectiveCanonicalPath) != "" && strings.TrimSpace(existingFragment.CanonicalPath) != strings.TrimSpace(effectiveCanonicalPath) {
+			legacy := strings.TrimSpace(existingFragment.CanonicalPath)
+			existingFragment.CanonicalPath = strings.TrimSpace(effectiveCanonicalPath)
+			if legacy != "" {
+				recordLegacyOrgPath(existingFragment, legacy)
+			}
+		}
 		existingFragment.State = extractedFragment.State
 
 		// Merge OrgSize: fill if existing is empty/unknown ("na")
@@ -2299,6 +2780,10 @@ SKIP_RESEARCH:
 		e.enrichFragmentHierarchy(ctx, existingFragment, job.ID)
 	}
 
+	if orgLegacyPath != "" && orgCanonicalizedPath != "" && existingFragment != nil {
+		e.runLegacyOrgEdgeCleanup(ctx, job, existingFragment, orgLegacyPath, orgCanonicalizedPath)
+	}
+
 	// Emit minimal ontology facts from Scout's LLM output/state (best-effort).
 	// This is intentionally small-volume: 1 fact per root job, focusing on risk metrics.
 	_ = e.emitMinimalFactsFromScoutRun(ctx, job, existingFragment, frameID)
@@ -2363,6 +2848,10 @@ SKIP_RESEARCH:
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain processing failed: %v", err))
 		}
 	}
+
+	// POLICY ENFORCEMENT: Run final validation on all created/modified entities
+	job.State = policyTracker.ApplyToState(job.State)
+	e.runPolicyCheck(ctx, job)
 
 	// Запускаем распространение изменений в графе
 	if e.propagationTrigger != nil {
@@ -2914,6 +3403,20 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 		}
 		if id, err := e.edgesRepo.Create(ctx, edge); err == nil {
 			edge.ID = id
+			sourcePath := ""
+			targetPath := ""
+			sourceLabel := ""
+			targetLabel := ""
+			if e.fragmentsRepo != nil {
+				if frag, ferr := e.fragmentsRepo.Get(ctx, edge.SourceFragmentID); ferr == nil && frag != nil {
+					sourcePath = strings.TrimSpace(frag.CanonicalPath)
+					sourceLabel = strings.TrimSpace(frag.Labels["en"])
+				}
+				if frag, ferr := e.fragmentsRepo.Get(ctx, edge.TargetFragmentID); ferr == nil && frag != nil {
+					targetPath = strings.TrimSpace(frag.CanonicalPath)
+					targetLabel = strings.TrimSpace(frag.Labels["en"])
+				}
+			}
 			// Realtime: edge materialized/updated for UI graph.
 			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
 				"tenantId":         job.TenantID,
@@ -2922,6 +3425,10 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 				"edgeId":           edge.ID,
 				"sourceFragmentId": edge.SourceFragmentID,
 				"targetFragmentId": edge.TargetFragmentID,
+				"sourceCanonicalPath": sourcePath,
+				"targetCanonicalPath": targetPath,
+				"sourceLabel":         sourceLabel,
+				"targetLabel":         targetLabel,
 				"type":             string(edge.Type),
 				"properties":       edge.Properties,
 				"qualifiers":       edge.Qualifiers,
@@ -3080,6 +3587,12 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 			fmt.Printf("[ScoutEngine] Warning: failed to build market hierarchy for %s: %v\n", fragment.CanonicalPath, err)
 		}
 	}
+	// Auto-create geo market parent for regional MARKET fragments: /market/{geo}/X -> /market/global/X
+	if fragment.Type == models.FragmentTypeMarket && e.marketGeoHierarchy != nil {
+		if err := e.marketGeoHierarchy.EnsureMarketGeoHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
+			fmt.Printf("[ScoutEngine] Warning: failed to build market geo hierarchy for %s: %v\n", fragment.CanonicalPath, err)
+		}
+	}
 
 	// Best-effort gov type inference for /gov/... fragments (stored as ORGANIZATION)
 	if strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/") && e.govHierarchyBuilder != nil {
@@ -3087,4 +3600,325 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 			fmt.Printf("[ScoutEngine] Warning: failed to infer gov hierarchy fields for %s: %v\n", fragment.CanonicalPath, err)
 		}
 	}
+}
+
+// =============================================================================
+// POLICY ENFORCEMENT
+// =============================================================================
+
+// runPolicyCheck runs the policy checker on job output (non-blocking).
+// If violations are found, it creates enforcement jobs for auto-fixable issues
+// and publishes WebSocket messages for real-time UI updates.
+func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob) {
+	if e == nil || e.policyChecker == nil || job == nil {
+		return
+	}
+
+	// Collect created/modified fragment and edge IDs from job state
+	createdFragmentIDs := e.extractStringSlice(job.State, "createdFragmentIds")
+	modifiedFragmentIDs := e.extractStringSlice(job.State, "modifiedFragmentIds")
+	createdEdgeIDs := e.extractStringSlice(job.State, "createdEdgeIds")
+	modifiedEdgeIDs := e.extractStringSlice(job.State, "modifiedEdgeIds")
+
+	// If no entities tracked, skip policy check
+	if len(createdFragmentIDs) == 0 && len(modifiedFragmentIDs) == 0 &&
+		len(createdEdgeIDs) == 0 && len(modifiedEdgeIDs) == 0 {
+		return
+	}
+
+	// Run policy check in background to not block job completion
+	go func() {
+		policyCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		startTime := time.Now()
+		result, err := e.policyChecker.CheckJobOutput(
+			policyCtx,
+			job.TenantID,
+			job.ID,
+			createdFragmentIDs,
+			modifiedFragmentIDs,
+			createdEdgeIDs,
+			modifiedEdgeIDs,
+		)
+		durationMs := time.Since(startTime).Milliseconds()
+
+		if err != nil {
+			fmt.Printf("[ScoutEngine] Policy check failed for job %s: %v\n", job.ID, err)
+			return
+		}
+
+		if result == nil {
+			return
+		}
+
+		if result.TotalViolations == 0 {
+			fmt.Printf("[ScoutEngine] Policy check passed for job %s (no violations)\n", job.ID)
+		} else {
+			fmt.Printf("[ScoutEngine] Policy check found %d violations for job %s (%d auto-fixable)\n",
+				result.TotalViolations, job.ID, result.AutoFixableCount)
+		}
+
+		// Create enforcement jobs for auto-fixable violations
+		if result.AutoFixableCount > 0 && e.enforcementExecutor != nil {
+			enforcementCtx, enforcementCancel := context.WithTimeout(context.Background(), 45*time.Second)
+			enforcementJobs, err := e.enforcementExecutor.CreateEnforcementJobs(enforcementCtx, job.TenantID, job.ID, result.Violations)
+			enforcementCancel()
+			if err != nil {
+				fmt.Printf("[ScoutEngine] Failed to create enforcement jobs for %s: %v\n", job.ID, err)
+				return
+			}
+
+			if len(enforcementJobs) > 0 {
+				// Store enforcement job IDs in result
+				for _, ej := range enforcementJobs {
+					result.EnforcementJobIDs = append(result.EnforcementJobIDs, ej.ID)
+				}
+
+				fmt.Printf("[ScoutEngine] Created %d enforcement jobs for %s\n", len(enforcementJobs), job.ID)
+
+				// Optionally execute auto-fixes immediately (can be configured)
+				if e.shouldAutoExecuteEnforcement() {
+					go func() {
+						execCtx, execCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+						defer execCancel()
+						e.executeEnforcementJobs(execCtx, job)
+					}()
+				}
+			}
+		}
+
+		// Persist policy check results
+		if e.policyCheckResultsRepo != nil {
+			if err := e.policyCheckResultsRepo.Save(policyCtx, result); err != nil {
+				fmt.Printf("[ScoutEngine] Failed to persist policy check result for %s: %v\n", job.ID, err)
+			}
+		}
+
+		// Publish policy check result via realtime (frontend expects horizon.policy.*)
+		violationsSample := make([]map[string]interface{}, 0, 5)
+		for i, v := range result.Violations {
+			if i >= 5 {
+				break
+			}
+			violationsSample = append(violationsSample, map[string]interface{}{
+				"id":          v.ID,
+				"type":        v.Type,
+				"severity":    v.Severity,
+				"description": v.Description,
+				"fragmentId":  v.FragmentID,
+				"edgeId":      v.EdgeID,
+				"actualValue": v.ActualValue,
+				"expectedValue": v.ExpectedValue,
+				"autoFixable": v.AutoFixable,
+			})
+		}
+		payload := policy.NewWSPolicyCheckComplete(result, durationMs)
+		policyEvent := map[string]interface{}{
+			"type":              payload.Type,
+			"tenantId":          payload.TenantID,
+			"jobId":             payload.JobID,
+			"violationsFound":   payload.ViolationsFound,
+			"criticalCount":     payload.CriticalCount,
+			"warningCount":      payload.WarningCount,
+			"infoCount":         payload.InfoCount,
+			"enforcementJobIds": payload.EnforcementJobIDs,
+			"autoFixableCount":  payload.AutoFixableCount,
+			"checkDurationMs":   payload.CheckDurationMs,
+			"timestamp":         payload.Timestamp,
+			"violationsSample":  violationsSample,
+		}
+		if v := strings.TrimSpace(job.ProjectID); v != "" {
+			policyEvent["projectId"] = v
+		}
+		if v := strings.TrimSpace(job.LensID); v != "" {
+			policyEvent["lensId"] = v
+		}
+		e.publish(policyCtx, realtime.EventType("horizon.policy.check_complete"), policyEvent)
+
+		// Optional legacy publisher (non-pubsub, custom topic)
+		if e.policyWSPublisher != nil {
+			_ = e.policyWSPublisher.PublishPolicyCheckComplete(policyCtx, result, durationMs)
+		}
+	}()
+}
+
+// shouldAutoExecuteEnforcement returns true if enforcement jobs should be executed immediately.
+// This can be controlled via configuration (default: false for safety).
+func (e *ScoutEngine) shouldAutoExecuteEnforcement() bool {
+	enabled := strings.TrimSpace(os.Getenv("ENABLE_POLICY_AUTO_ENFORCEMENT"))
+	if enabled == "" {
+		enabled = "1"
+	}
+	return enabled == "1" || strings.EqualFold(enabled, "true") || strings.EqualFold(enabled, "yes")
+}
+
+// executeEnforcementJobs executes all pending enforcement jobs for a parent job.
+func (e *ScoutEngine) executeEnforcementJobs(ctx context.Context, job *models.ScoutingJob) {
+	if e.enforcementExecutor == nil || e.enforcementJobsRepo == nil || job == nil {
+		return
+	}
+
+	startTime := time.Now()
+	jobs, err := e.enforcementJobsRepo.ListByParentJob(ctx, job.ID, 1000)
+	if err != nil {
+		fmt.Printf("[ScoutEngine] Enforcement batch load failed for %s: %v\n", job.ID, err)
+		return
+	}
+
+	completed := 0
+	failed := 0
+	skipped := 0
+
+	for _, ej := range jobs {
+		if ej == nil || ej.Status != policy.EnforcementStatusPending {
+			continue
+		}
+		if !isAutoExecutableTask(ej.Task.Type) {
+			skipped++
+			continue
+		}
+
+		// Publish "in_progress" before execution for UI feedback.
+		inProgress := *ej
+		inProgress.Status = policy.EnforcementStatusInProgress
+		e.publishEnforcementProgress(ctx, &inProgress, job.ProjectID, job.LensID)
+
+		if _, err := e.enforcementExecutor.ExecuteJob(ctx, ej); err != nil {
+			fmt.Printf("[ScoutEngine] Enforcement job failed: parentJob=%s jobId=%s task=%s err=%v\n",
+				job.ID, ej.ID, ej.Task.Type, err)
+			failed++
+		} else if ej.Result != nil && ej.Result.Success {
+			completed++
+		} else {
+			failed++
+		}
+
+		e.publishEnforcementProgress(ctx, ej, job.ProjectID, job.LensID)
+	}
+
+	durationMs := time.Since(startTime).Milliseconds()
+	fmt.Printf("[ScoutEngine] Enforcement batch completed for %s: %d completed, %d failed, %d skipped in %dms\n",
+		job.ID, completed, failed, skipped, durationMs)
+
+	if noPendingEnforcementJobs(jobs) {
+		e.publishEnforcementBatchComplete(ctx, job, jobs, durationMs)
+	}
+}
+
+func isAutoExecutableTask(taskType policy.EnforcementTaskType) bool {
+	switch taskType {
+	case policy.TaskFixPath,
+		policy.TaskResolveGeoNames,
+		policy.TaskFixLegalForm,
+		policy.TaskReverseEdge,
+		policy.TaskCanonicalizeEdge,
+		policy.TaskNormalizeSymmetric:
+		return true
+	default:
+		return false
+	}
+}
+
+func noPendingEnforcementJobs(jobs []*policy.PolicyEnforcementJob) bool {
+	for _, job := range jobs {
+		if job == nil {
+			continue
+		}
+		if job.Status == policy.EnforcementStatusPending || job.Status == policy.EnforcementStatusInProgress {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *ScoutEngine) publishEnforcementProgress(ctx context.Context, job *policy.PolicyEnforcementJob, projectID, lensID string) {
+	if e == nil || job == nil {
+		return
+	}
+	msg := policy.NewWSEnforcementProgress(job)
+	payload := map[string]interface{}{
+		"type":          msg.Type,
+		"jobId":         msg.JobID,
+		"parentJobId":   msg.ParentJobID,
+		"tenantId":      msg.TenantID,
+		"status":        msg.Status,
+		"violationType": msg.ViolationType,
+		"taskType":      msg.TaskType,
+		"targetId":      msg.TargetID,
+		"progress":      msg.Progress,
+		"message":       msg.Message,
+		"timestamp":     msg.Timestamp,
+	}
+	if msg.Success != nil {
+		payload["success"] = *msg.Success
+	}
+	if len(msg.AffectedIDs) > 0 {
+		payload["affectedIds"] = msg.AffectedIDs
+	}
+	if msg.Error != "" {
+		payload["error"] = msg.Error
+	}
+	if v := strings.TrimSpace(projectID); v != "" {
+		payload["projectId"] = v
+	}
+	if v := strings.TrimSpace(lensID); v != "" {
+		payload["lensId"] = v
+	}
+	e.publish(ctx, realtime.EventType("horizon.policy.enforcement_progress"), payload)
+}
+
+func (e *ScoutEngine) publishEnforcementBatchComplete(ctx context.Context, job *models.ScoutingJob, jobs []*policy.PolicyEnforcementJob, durationMs int64) {
+	if e == nil || job == nil {
+		return
+	}
+	msg := policy.NewWSEnforcementBatchComplete(job.ID, job.TenantID, jobs, durationMs)
+	payload := map[string]interface{}{
+		"type":              msg.Type,
+		"parentJobId":       msg.ParentJobID,
+		"tenantId":          msg.TenantID,
+		"totalJobs":         msg.TotalJobs,
+		"completed":         msg.Completed,
+		"failed":            msg.Failed,
+		"skipped":           msg.Skipped,
+		"durationMs":        msg.DurationMs,
+		"timestamp":         msg.Timestamp,
+		"fragmentsMerged":   msg.FragmentsMerged,
+		"pathsFixed":        msg.PathsFixed,
+		"edgesReversed":     msg.EdgesReversed,
+		"edgesCanonicalized": msg.EdgesCanonicalized,
+		"edgesDeleted":      msg.EdgesDeleted,
+	}
+	if v := strings.TrimSpace(job.ProjectID); v != "" {
+		payload["projectId"] = v
+	}
+	if v := strings.TrimSpace(job.LensID); v != "" {
+		payload["lensId"] = v
+	}
+	e.publish(ctx, realtime.EventType("horizon.policy.enforcement_batch_complete"), payload)
+}
+
+// extractStringSlice extracts a string slice from job state.
+func (e *ScoutEngine) extractStringSlice(state map[string]interface{}, key string) []string {
+	if state == nil {
+		return nil
+	}
+	v, ok := state[key]
+	if !ok || v == nil {
+		return nil
+	}
+
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []interface{}:
+		result := make([]string, 0, len(t))
+		for _, item := range t {
+			if s, ok := item.(string); ok && s != "" {
+				result = append(result, s)
+			}
+		}
+		return result
+	}
+	return nil
 }

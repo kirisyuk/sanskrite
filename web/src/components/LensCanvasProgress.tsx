@@ -153,6 +153,27 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
   const hasEvents = filteredEvents.length > 0;
   // Shift input to bottom if we have events or creation is in progress
   const isContentActive = hasEvents || isCreatingLens;
+  const handleSaveLog = React.useCallback(() => {
+    if (!filteredEvents.length) return;
+    const lines = filteredEvents.map((ev) => {
+      const ts = new Date(ev.ts).toISOString();
+      const title = ev.humanReadable?.title || ev.text || '';
+      const description = ev.humanReadable?.description || '';
+      const payload = description ? `${title} — ${description}` : title;
+      return `${ts}\t${ev.type}\t${payload}`.trim();
+    });
+    const content = lines.join('\n') + '\n';
+    const slug = lensId || projectId || 'session';
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `horizon-log-${slug}-${stamp}.txt`;
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filteredEvents, lensId, projectId]);
 
   return (
     <div
@@ -178,6 +199,24 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
         >
           {/* Constrain width to match input field below */}
           <div style={{ maxWidth: 960, margin: '0 auto', position: 'relative', paddingLeft: 36 }}>
+            <div style={{ position: 'sticky', top: 0, zIndex: 2, display: 'flex', justifyContent: 'flex-end', paddingBottom: 8 }}>
+              <button
+                type="button"
+                onClick={handleSaveLog}
+                disabled={!filteredEvents.length}
+                style={{
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-elevated)',
+                  color: 'var(--text-secondary-strong)',
+                  borderRadius: 6,
+                  padding: '6px 10px',
+                  fontSize: 12,
+                  cursor: filteredEvents.length ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Save log
+              </button>
+            </div>
             {/* Timeline line */}
             <div
               style={{
@@ -225,10 +264,10 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, color: 'var(--text-heading)', fontSize: 13, lineHeight: '20px' }}>
-                    Initializing assembly...
+                    Preparing your analysis...
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
-                    Sending request
+                    Request submitted
                   </div>
                 </div>
               </div>
@@ -250,8 +289,18 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
                 edgeTypeForChip = ev.humanReadable?.title || formatEdgeType(type);
                 title = ''; // We'll render custom layout for edges
                 
-                const s = ev.data?.qualifiers?.sourceCanonicalPath || ev.data?.sourceFragmentId || '';
-                const t = ev.data?.qualifiers?.targetCanonicalPath || ev.data?.targetFragmentId || '';
+                const s =
+                  ev.data?.sourceCanonicalPath ||
+                  ev.data?.qualifiers?.sourceCanonicalPath ||
+                  ev.data?.sourceLabel ||
+                  ev.data?.sourceFragmentId ||
+                  '';
+                const t =
+                  ev.data?.targetCanonicalPath ||
+                  ev.data?.qualifiers?.targetCanonicalPath ||
+                  ev.data?.targetLabel ||
+                  ev.data?.targetFragmentId ||
+                  '';
                 
                 if (s && t) {
                    description = `${s} → ${t}`;

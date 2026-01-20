@@ -217,10 +217,24 @@ func (h *HorizonHandlers) publishEdgeUpserted(ctx context.Context, authTenant st
 		"edgeId":           strings.TrimSpace(edge.ID),
 		"sourceFragmentId": strings.TrimSpace(edge.SourceFragmentID),
 		"targetFragmentId": strings.TrimSpace(edge.TargetFragmentID),
+		"sourceCanonicalPath": "",
+		"targetCanonicalPath": "",
+		"sourceLabel":         "",
+		"targetLabel":         "",
 		"type":             string(edge.Type),
 		"properties":       edge.Properties,
 		"qualifiers":       edge.Qualifiers,
 		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if h.service != nil && h.service.Fragments() != nil {
+		if frag, err := h.service.Fragments().Get(ctx, strings.TrimSpace(edge.SourceFragmentID)); err == nil && frag != nil {
+			payload["sourceCanonicalPath"] = strings.TrimSpace(frag.CanonicalPath)
+			payload["sourceLabel"] = strings.TrimSpace(frag.Labels["en"])
+		}
+		if frag, err := h.service.Fragments().Get(ctx, strings.TrimSpace(edge.TargetFragmentID)); err == nil && frag != nil {
+			payload["targetCanonicalPath"] = strings.TrimSpace(frag.CanonicalPath)
+			payload["targetLabel"] = strings.TrimSpace(frag.Labels["en"])
+		}
 	}
 	if correlationID != "" {
 		payload["correlationId"] = correlationID

@@ -19,28 +19,14 @@ import (
 // To avoid duplicates (A->B and B->A), we normalize by always placing the
 // lexicographically smaller ID as source.
 
-// SymmetricEdgeTypes defines edge types where the relationship is reciprocal.
-// For these types, we normalize source/target to ensure consistent representation.
-var SymmetricEdgeTypes = map[models.DependencyType]bool{
-	models.DependencyTypeCompetesWith: true, // "A competes with B" = "B competes with A"
-	models.DependencyTypePartnersWith: true, // "A partners with B" = "B partners with A"
-	// Person-person social graph (directionless by nature).
-	models.DependencyTypeRelativeOf: true, // "A is relative of B" = "B is relative of A"
-	models.DependencyTypeRelatedTo:  true, // "A is related to B" = "B is related to A"
-}
+// SymmetricEdgeTypes delegates to models.SymmetricEdgeTypes.
+// Kept for backwards compatibility.
+var SymmetricEdgeTypes = models.SymmetricEdgeTypes
 
-// NormalizeSymmetricEdge ensures consistent source/target ordering for symmetric edges.
-// Returns: (normalizedSourceID, normalizedTargetID, edgeType, wasSwapped)
+// NormalizeSymmetricEdge delegates to models.NormalizeSymmetricEdge.
+// Kept for backwards compatibility.
 func NormalizeSymmetricEdge(sourceID, targetID string, edgeType models.DependencyType) (string, string, models.DependencyType, bool) {
-	if !SymmetricEdgeTypes[edgeType] {
-		return sourceID, targetID, edgeType, false
-	}
-
-	// Normalize by placing smaller ID as source
-	if strings.Compare(sourceID, targetID) > 0 {
-		return targetID, sourceID, edgeType, true
-	}
-	return sourceID, targetID, edgeType, false
+	return models.NormalizeSymmetricEdge(sourceID, targetID, edgeType)
 }
 
 // =============================================================================
@@ -91,6 +77,7 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeFacility,
 			models.FragmentTypeProduct,
 			models.FragmentTypeGeoRegion,
+			models.FragmentTypeMarket,
 		},
 		Description: "Regulator (org) regulates regulated entity",
 	},
@@ -206,10 +193,14 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
+			models.FragmentTypeGeoRegion,
+			models.FragmentTypeMarket,
 		},
 		ValidTargetTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
+			models.FragmentTypeGeoRegion,
+			models.FragmentTypeMarket,
 		},
 		Description: "Partners collaborate (symmetric)",
 	},
@@ -245,6 +236,7 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeFacility,
 			models.FragmentTypeOrganization,
 			models.FragmentTypePerson,
+			models.FragmentTypeProduct,   // Product origin/production location
 			models.FragmentTypeGeoRegion, // Nested regions: city in state
 			models.FragmentTypeDeposit,   // Deposits are located in regions
 			models.FragmentTypeCommunity, // Communities can be geographically located
@@ -256,7 +248,10 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 	// OPERATES_IN: Organization operates in a region, facility, or deposit.
 	// Only Organizations can operate.
 	models.DependencyTypeOperatesIn: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypePerson,
+		},
 		ValidTargetTypes: []models.FragmentType{
 			models.FragmentTypeGeoRegion,
 			models.FragmentTypeFacility,
@@ -346,6 +341,7 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
 			models.FragmentTypeCommunity, // Communities can participate in markets
+			models.FragmentTypeProduct,
 		},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
 		Description:      "Entity participates in market",
@@ -369,8 +365,8 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 	// ADMINISTERS: government hierarchy (superior body -> subordinate body).
 	// NOTE: GOV bodies are stored as FragmentTypeOrganization under /gov/... canonical paths.
 	models.DependencyTypeAdministers: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization, models.FragmentTypeGeoRegion},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization, models.FragmentTypeProgram, models.FragmentTypeGeoRegion},
 		Description:      "Government body administers subordinate body (hierarchy)",
 	},
 
@@ -466,9 +462,10 @@ func containsType(types []models.FragmentType, t models.FragmentType) bool {
 // =============================================================================
 // Edges where source == target are typically errors and should be rejected.
 
-// IsSelfLoop returns true if the edge points to itself.
+// IsSelfLoop delegates to models.IsSelfLoop.
+// Kept for backwards compatibility.
 func IsSelfLoop(sourceID, targetID string) bool {
-	return strings.TrimSpace(sourceID) == strings.TrimSpace(targetID)
+	return models.IsSelfLoop(sourceID, targetID)
 }
 
 // =============================================================================

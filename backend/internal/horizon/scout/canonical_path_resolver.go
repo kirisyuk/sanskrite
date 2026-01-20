@@ -12,6 +12,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // CanonicalPathResolverStats is a lightweight in-memory counter snapshot for observability.
@@ -549,6 +550,8 @@ func normalizeGeoPathToStrict(path string) string {
 	cc := ""
 	if len(countryRaw) == 2 && reCountryAlpha2.MatchString(strings.ToLower(countryRaw)) {
 		cc = strings.ToLower(countryRaw)
+	} else if taxonomy.IsRegionalGeoToken(countryRaw) {
+		cc = strings.ToLower(countryRaw)
 	} else {
 		// Convert slug-ish to name-ish for lookup.
 		countrySlug := strings.ReplaceAll(countryRaw, "-", " ")
@@ -758,6 +761,25 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 					fmt.Sprintf("canonization_policy: %s -> %s", inputPath, normalized))
 				result.CanonicalPath = normalized
 				log.Printf("%s CanonizationPolicy normalized: %s -> %s", logPrefix, inputPath, normalized)
+			}
+		}
+	}
+
+	// Step 1.2: Government body correction (org path with gov-like label).
+	if fragmentType == models.FragmentTypeOrganization {
+		label := strings.TrimSpace(metadata["legalName"])
+		if label == "" {
+			label = strings.TrimSpace(metadata["shortName"])
+		}
+		if label != "" && strings.HasPrefix(result.CanonicalPath, "/org/") && looksLikeGovLabel(label) {
+			iso2 := inferISO2FromLabel(label, nil)
+			if iso2 == "" {
+				iso2 = "na"
+			}
+			if govPath := taxonomy.GovCanonicalPath(iso2, label); govPath != "" && govPath != result.CanonicalPath {
+				result.NormalizationSteps = append(result.NormalizationSteps,
+					fmt.Sprintf("gov_path_upgrade: %s -> %s", result.CanonicalPath, govPath))
+				result.CanonicalPath = govPath
 			}
 		}
 	}

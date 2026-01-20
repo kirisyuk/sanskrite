@@ -609,15 +609,18 @@ func (h *Hub) BroadcastVerified(verifiedCode string, v interface{}) {
 			h.logger.Printf("ws write error (verified broadcast): %v", err)
 			// Find tenant for this connection to remove it properly
 			h.mu.Lock()
+			var foundTID string
 			for tid, connSet := range h.conns {
 				if _, ok := connSet[c]; ok {
-					h.mu.Unlock()
-					h.removeConn(tid, c)
-					_ = c.Close()
+					foundTID = tid
 					break
 				}
 			}
 			h.mu.Unlock()
+			if foundTID != "" {
+				h.removeConn(foundTID, c)
+				_ = c.Close()
+			}
 		}
 	}
 }

@@ -4,6 +4,45 @@ import (
 	"strings"
 )
 
+// =============================================================================
+// EDGE UTILITY FUNCTIONS
+// =============================================================================
+// These functions are shared across packages (scout, policy, repo) to avoid
+// circular imports.
+
+// SymmetricEdgeTypes defines edge types where the relationship is reciprocal.
+// For these types, we normalize source/target to ensure consistent representation.
+var SymmetricEdgeTypes = map[DependencyType]bool{
+	DependencyTypeCompetesWith: true, // "A competes with B" = "B competes with A"
+	DependencyTypePartnersWith: true, // "A partners with B" = "B partners with A"
+	DependencyTypeRelativeOf:   true, // "A is relative of B" = "B is relative of A"
+	DependencyTypeRelatedTo:    true, // "A is related to B" = "B is related to A"
+}
+
+// IsSelfLoop returns true if the edge points to itself.
+func IsSelfLoop(sourceID, targetID string) bool {
+	return strings.TrimSpace(sourceID) == strings.TrimSpace(targetID)
+}
+
+// NormalizeSymmetricEdge ensures consistent source/target ordering for symmetric edges.
+// Returns: (normalizedSourceID, normalizedTargetID, edgeType, wasSwapped)
+func NormalizeSymmetricEdge(sourceID, targetID string, edgeType DependencyType) (string, string, DependencyType, bool) {
+	if !SymmetricEdgeTypes[edgeType] {
+		return sourceID, targetID, edgeType, false
+	}
+
+	// Normalize by placing smaller ID as source
+	if strings.Compare(sourceID, targetID) > 0 {
+		return targetID, sourceID, edgeType, true
+	}
+	return sourceID, targetID, edgeType, false
+}
+
+// IsSymmetricEdge returns true if the edge type is symmetric.
+func IsSymmetricEdge(edgeType DependencyType) bool {
+	return SymmetricEdgeTypes[edgeType]
+}
+
 // isDynastyOrTribeCommunity checks if a canonicalPath represents a dynasty or tribe community.
 // Returns true if path matches /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}.
 func isDynastyOrTribeCommunity(canonicalPath string) bool {
@@ -27,6 +66,13 @@ func isDynastyOrTribeCommunity(canonicalPath string) bool {
 //
 // Keep this conservative and explicit. This is used at creation time and during cleanup.
 func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentType) (DependencyType, bool, bool, string) {
+	// ORG OWNS PERSON is invalid: ownership should flow from PERSON to ORG.
+	if edgeType == DependencyTypeOwns &&
+		sourceType == FragmentTypeOrganization &&
+		targetType == FragmentTypePerson {
+		return DependencyTypeOwns, true, true, "canonicalize: ORGANIZATION OWNS PERSON -> PERSON OWNS ORGANIZATION"
+	}
+
 	// PRODUCT OWNS ORGANIZATION is almost always a modeling error (product doesn't own a company).
 	// Canonical intent: ORGANIZATION PRODUCES PRODUCT.
 	//
@@ -97,6 +143,82 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		sourceType == FragmentTypeMarket &&
 		targetType == FragmentTypeOrganization {
 		return DependencyTypeRegulates, true, true, "canonicalize: MARKET REGULATES ORGANIZATION -> ORGANIZATION REGULATES MARKET"
+	}
+
+	// PARTICIPATES_IN(MARKET → ORG/FAC/COMMUNITY) → PARTICIPATES_IN (swap)
+	if edgeType == DependencyTypeParticipatesIn &&
+		sourceType == FragmentTypeMarket &&
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility || targetType == FragmentTypeCommunity) {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET PARTICIPATES_IN ENTITY -> ENTITY PARTICIPATES_IN MARKET"
+	}
+
+	// DOMINATES(MARKET → ORG/FAC/COMMUNITY) → DOMINATES (swap)
+	if edgeType == DependencyTypeDominates &&
+		sourceType == FragmentTypeMarket &&
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility || targetType == FragmentTypeCommunity) {
+		return DependencyTypeDominates, true, true, "canonicalize: MARKET DOMINATES ENTITY -> ENTITY DOMINATES MARKET"
+	}
+
+	// PRODUCES(MARKET → PRODUCT) → PARTICIPATES_IN (swap)
+	// A market doesn't "produce" a product; this usually means the product participates in that market.
+	if edgeType == DependencyTypeProduces &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeProduct {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET PRODUCES PRODUCT -> PRODUCT PARTICIPATES_IN MARKET"
+	}
+
+	// SUPPLIES_TO(PRODUCT → PRODUCT) → TRANSFORMS_INTO
+	// If one product supplies to another, it's typically an upstream→downstream transformation/value-add step.
+	if edgeType == DependencyTypeSuppliesTo &&
+		sourceType == FragmentTypeProduct &&
+		targetType == FragmentTypeProduct {
+		return DependencyTypeTransformsInto, false, true, "canonicalize: PRODUCT SUPPLIES_TO PRODUCT -> PRODUCT TRANSFORMS_INTO PRODUCT"
+	}
+
+	// SUPPLIES_TO(PRODUCT → MARKET) → PARTICIPATES_IN
+	// If a product supplies to a market, canonical intent is market participation/coverage.
+	if edgeType == DependencyTypeSuppliesTo &&
+		sourceType == FragmentTypeProduct &&
+		targetType == FragmentTypeMarket {
+		return DependencyTypeParticipatesIn, false, true, "canonicalize: PRODUCT SUPPLIES_TO MARKET -> PRODUCT PARTICIPATES_IN MARKET"
+	}
+
+	// OPERATES_IN(GEO → ENTITY) is reversed; canonicalize to ENTITY LOCATED_IN GEO (swap).
+	// Common LLM error: "Las Vegas operates in Switch Inc" (city → org).
+	if edgeType == DependencyTypeOperatesIn &&
+		sourceType == FragmentTypeGeoRegion &&
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility || targetType == FragmentTypePerson || targetType == FragmentTypeProduct) {
+		return DependencyTypeLocatedIn, true, true, "canonicalize: GEO OPERATES_IN ENTITY -> ENTITY LOCATED_IN GEO"
+	}
+
+	// PARTICIPATES_IN(PRODUCT → MARKET) → DEPENDS_ON (swap)
+	// Market depends on the product category/value chain, not vice versa.
+	// NOTE: per policy, allow PRODUCT PARTICIPATES_IN MARKET (no canonicalization).
+	if edgeType == DependencyTypeParticipatesIn &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeProduct {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET PARTICIPATES_IN PRODUCT -> PRODUCT PARTICIPATES_IN MARKET"
+	}
+
+	// SUPPLIES_TO(PRODUCT → ORGANIZATION) → CONSUMES (swap)
+	if edgeType == DependencyTypeSuppliesTo &&
+		sourceType == FragmentTypeProduct &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypeConsumes, true, true, "canonicalize: PRODUCT SUPPLIES_TO ORGANIZATION -> ORGANIZATION CONSUMES PRODUCT"
+	}
+
+	// OPERATES_IN(PERSON → GEO) → LOCATED_IN
+	if edgeType == DependencyTypeOperatesIn &&
+		sourceType == FragmentTypePerson &&
+		targetType == FragmentTypeGeoRegion {
+		return DependencyTypeLocatedIn, false, true, "canonicalize: PERSON OPERATES_IN GEO -> PERSON LOCATED_IN GEO"
+	}
+
+	// CONTROLS(GEO → ORG) → CONTROLS (swap)
+	if edgeType == DependencyTypeControls &&
+		sourceType == FragmentTypeGeoRegion &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypeControls, true, true, "canonicalize: GEO CONTROLS ORGANIZATION -> ORGANIZATION CONTROLS GEO"
 	}
 
 	return edgeType, false, false, ""

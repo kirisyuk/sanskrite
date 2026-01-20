@@ -2,12 +2,81 @@ package taxonomy
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 )
 
 var reNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
+
+// Regional geo tokens allowed in /loc/{cc}/... when ISO2 is insufficient.
+// This is a conservative allowlist and can be extended via env.
+var regionalGeoTokens = map[string]struct{}{
+	// Regional buckets (shared with /segment geo rules).
+	"global":  {},
+	"mena":    {},
+	"emea":    {},
+	"apac":    {},
+	"latam":   {},
+	"na":      {},
+	"gcc":     {},
+	"eu":      {},
+	"asean":   {},
+	"nordics": {},
+	"benelux": {},
+	"anz":     {},
+	"cis":     {},
+	"ssa":     {},
+	"usmca":   {},
+	"nafta":   {},
+
+	// Common regional blocs / treaties.
+	"brics":          {},
+	"g7":             {},
+	"g20":            {},
+	"opec":           {},
+	"oecd":           {},
+	"apec":           {},
+	"mercosur":       {},
+	"caricom":        {},
+	"au":             {}, // African Union (kept as token; avoid ISO2 conflict via context)
+	"african-union":  {},
+	"arab-league":    {},
+	"eaeu":           {},
+	"csto":           {},
+	"sco":            {},
+	"rcep":           {},
+	"cptpp":          {},
+	"bimstec":        {},
+	"eac":            {},
+	"comesa":         {},
+	"igad":           {},
+	"sadc":           {},
+	"ecowas":         {},
+	"pacific-islands": {},
+}
+
+// IsRegionalGeoToken returns true for allowed non-ISO2 regional geo tokens.
+func IsRegionalGeoToken(token string) bool {
+	token = strings.ToLower(strings.TrimSpace(token))
+	if token == "" {
+		return false
+	}
+	_, ok := regionalGeoTokens[token]
+	if ok {
+		return true
+	}
+	// Allow runtime extensions via env var: HORIZON_REGIONAL_GEO_TOKENS="asean,brics,custom-bloc"
+	if extra := strings.TrimSpace(os.Getenv("HORIZON_REGIONAL_GEO_TOKENS")); extra != "" {
+		for _, part := range strings.Split(extra, ",") {
+			if strings.TrimSpace(strings.ToLower(part)) == token {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Basic Cyrillic -> Latin transliteration (best-effort).
 // Rationale: canonical paths are restricted to ASCII slugs (a-z0-9-), but user inputs and KB labels
@@ -140,6 +209,15 @@ func ValidateCanonicalPath(path string) error {
 		if geo != "na" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) {
 			return fmt.Errorf("org canonical path has invalid geo %q (expected ISO3166-1 alpha2 like 'us'/'sa', composite like 'tr-sy'/'ae-sa-om', or 'na'): %s", parts[1], path)
 		}
+	case "loc":
+		// /loc/{cc}/{admin1}/{city}
+		if len(parts) != 4 {
+			return fmt.Errorf("loc canonical path must have exactly 4 segments: /loc/{cc}/{admin1}/{city}: %s", path)
+		}
+		cc := strings.ToLower(strings.TrimSpace(parts[1]))
+		if !reCountryAlpha2.MatchString(cc) && !IsRegionalGeoToken(cc) && !isCompositeGeo(cc) {
+			return fmt.Errorf("loc canonical path has invalid country/region %q (expected ISO3166-1 alpha2, composite, or regional token): %s", parts[1], path)
+		}
 	case "segment":
 		// /segment/{domain}/{vertical}/{geo}
 		// geo: ISO2 or a regional bucket: global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta
@@ -217,7 +295,7 @@ func JoinPath(parts ...string) string {
 // If countryAlpha2 is missing/invalid, returns empty string (unknown location cannot be canonicalized safely).
 func GeoCanonicalPath(countryAlpha2, admin1, city string) string {
 	c := strings.ToLower(strings.TrimSpace(countryAlpha2))
-	if !reCountryAlpha2.MatchString(c) {
+	if !reCountryAlpha2.MatchString(c) && !IsRegionalGeoToken(c) {
 		return ""
 	}
 	a1 := strings.ToLower(strings.TrimSpace(admin1))
@@ -273,12 +351,38 @@ func OrgCanonicalPath(countryAlpha2OrNA string, orgLabel string) string {
 		return ""
 	}
 
+	// Fix: strip any existing legal form suffix from slug to avoid double suffixes (e.g., "-inc-inc")
+	nameSlug = stripLegalFormSuffix(nameSlug)
+
 	// Append legal form if found
 	if legalFormCanonical != "" {
 		nameSlug = nameSlug + "-" + legalFormCanonical
 	}
 
 	return JoinPath("org", cc, nameSlug)
+}
+
+// stripLegalFormSuffix removes any trailing legal form suffix from a slug to prevent double suffixes.
+// e.g., "amkor-technology-inc" -> "amkor-technology", "canon-inc-inc" -> "canon"
+func stripLegalFormSuffix(slug string) string {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return slug
+	}
+	legalForms := []string{"inc", "llc", "jsc", "pjsc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa", "as", "ab", "bv", "nv", "se", "co", "pty"}
+	changed := true
+	for changed {
+		changed = false
+		for _, lf := range legalForms {
+			suffix := "-" + lf
+			if strings.HasSuffix(slug, suffix) {
+				slug = strings.TrimSuffix(slug, suffix)
+				changed = true
+				break
+			}
+		}
+	}
+	return slug
 }
 
 // isCompositeGeo checks if a string is a valid composite geo (e.g., "tr-sy", "ae-sa-om").

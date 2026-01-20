@@ -815,6 +815,31 @@
       ]
     },
     {
+      "collectionGroup": "horizon_enforcement_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "parentJobId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_enforcement_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_policy_check_results",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "checkedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "external_data_cache",
       "queryScope": "COLLECTION",
       "fields": [

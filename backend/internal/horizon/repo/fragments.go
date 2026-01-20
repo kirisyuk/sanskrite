@@ -16,6 +16,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 )
 
 var ErrFragmentNotFound = errors.New("horizon fragment not found")
@@ -33,7 +34,9 @@ type HorizonFragmentsRepository struct {
 	onUpsert      func(ctx context.Context, fragment *models.HorizonFragment) // Best-effort hook after create/update
 	// vertexSearchSync triggers Vertex AI Search import for specific GCS URIs.
 	// We pass the exact object URI to avoid Discovery Engine file expansion limits (max 1000 files per import).
-	vertexSearchSync func(ctx context.Context, gcsURI string) (operationName string, err error) // Sync trigger
+	vertexSearchSync func(ctx context.Context, gcsURI string) (operationName string, err error) // Sync trigger (legacy, single URI)
+	// vertexSyncBatcher batches multiple URIs to reduce API quota usage
+	vertexSyncBatcher *VertexSyncBatcher
 }
 
 // NewHorizonFragmentsRepository создает новый репозиторий
@@ -56,9 +59,18 @@ func (r *HorizonFragmentsRepository) WithStorage(storage *gcp.GCSClient, bucket 
 	return r
 }
 
-// WithVertexSearchSync настраивает синхронизацию с Vertex AI Search
+// WithVertexSearchSync настраивает синхронизацию с Vertex AI Search (legacy single-URI mode).
+// Deprecated: use WithVertexSyncBatcher for better quota management.
 func (r *HorizonFragmentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, gcsURI string) (operationName string, err error)) *HorizonFragmentsRepository {
 	r.vertexSearchSync = syncFn
+	return r
+}
+
+// WithVertexSyncBatcher configures batched Vertex AI Search sync.
+// This is the preferred method as it batches multiple URIs into single API calls,
+// significantly reducing quota usage (quota is per-request, not per-document).
+func (r *HorizonFragmentsRepository) WithVertexSyncBatcher(batcher *VertexSyncBatcher) *HorizonFragmentsRepository {
+	r.vertexSyncBatcher = batcher
 	return r
 }
 
@@ -134,17 +146,23 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 		return fmt.Errorf("failed to upload fragment to GCS: %w", err)
 	}
 
-	// Триггерим синхронизацию только если не пропущена
-	if !skipSync && r.vertexSearchSync != nil {
-		go func() {
-			syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if op, err := r.vertexSearchSync(syncCtx, gcsURI); err == nil {
-				log.Printf("[HorizonFragments] Vertex AI Sync triggered: %s", op)
-			} else {
-				log.Printf("[HorizonFragments] Vertex AI Sync failed for %s: %v", gcsURI, err)
-			}
-		}()
+	// Trigger Vertex sync (if not skipped)
+	if !skipSync {
+		// Prefer batcher over legacy single-URI sync
+		if r.vertexSyncBatcher != nil {
+			r.vertexSyncBatcher.Add(gcsURI)
+		} else if r.vertexSearchSync != nil {
+			// Legacy: single-URI sync (deprecated, high quota usage)
+			go func() {
+				syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if op, err := r.vertexSearchSync(syncCtx, gcsURI); err == nil {
+					log.Printf("[HorizonFragments] Vertex AI Sync triggered: %s", op)
+				} else {
+					log.Printf("[HorizonFragments] Vertex AI Sync failed for %s: %v", gcsURI, err)
+				}
+			}()
+		}
 	}
 
 	return nil
@@ -189,6 +207,7 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	if _, err := doc.Set(ctx, fragment); err != nil {
 		return "", err
 	}
+	tracking.RecordFragmentCreated(ctx, fragment.ID)
 
 	// Экспорт в GCS для поиска (с синхронизацией)
 	if err := r.uploadToGCS(ctx, fragment, false); err != nil {
@@ -520,6 +539,7 @@ func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *model
 	if err != nil {
 		return err
 	}
+	tracking.RecordFragmentUpdated(ctx, fragment.ID)
 
 	// Экспорт в GCS для поиска (с синхронизацией)
 	if err := r.uploadToGCS(ctx, fragment, false); err != nil {
@@ -845,16 +865,16 @@ func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) erro
 				log.Printf("[HorizonFragments] Deleted fragment %s from GCS: %s", id, objectPath)
 			}
 
-			// Триггерим синхронизацию Vertex AI Search для удаления документа из индекса
-			// При INCREMENTAL режиме удаление файла из GCS приведет к удалению из индекса при следующей синхронизации
-			// Но мы можем триггерить синхронизацию явно
-			if r.vertexSearchSync != nil {
-				gcsURI := fmt.Sprintf("gs://%s/%s", r.bucket, objectPath)
+			// Trigger Vertex AI Search sync for deletion
+			// In INCREMENTAL mode, deletion from GCS will eventually remove from index
+			// But we trigger sync explicitly to speed it up
+			gcsURI := fmt.Sprintf("gs://%s/%s", r.bucket, objectPath)
+			if r.vertexSyncBatcher != nil {
+				r.vertexSyncBatcher.Add(gcsURI)
+			} else if r.vertexSearchSync != nil {
 				go func(uri string) {
 					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
-					// Note: Vertex AI Search использует INCREMENTAL режим, который автоматически удаляет
-					// документы из индекса если файл удален из GCS. Но мы триггерим синхронизацию для ускорения.
 					if op, err := r.vertexSearchSync(syncCtx, uri); err == nil {
 						log.Printf("[HorizonFragments] Vertex AI Search sync triggered for deletion: %s", op)
 					} else {

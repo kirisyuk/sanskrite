@@ -334,6 +334,8 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 		}
 	}
 
+	canonicalRulesBlock := taxonomy.CanonicalPathRulesPrompt()
+
 	return fmt.Sprintf(`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.
 
 TARGET ENTITY:
@@ -353,6 +355,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - canonicalPath: Must match the target canonical path
    - entityPath: Must match the provided entity path
    - sectorPath: Must match the provided sector path
+   - %s
    - legalName: The legal/official name of the entity, INCLUDING the form of ownership when relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC, etc.)
    - shortName: The base name WITHOUT the form of ownership (used for canonicalPath slugging)
    - marketSegments: *** HIGHLY IMPORTANT for ORGANIZATION/FACILITY/GOV ***
@@ -472,7 +475,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - RELATIVE_OF: person-person symmetric relationship (public relatives). Use ONLY when both are PERSON.
    - RELATED_TO: person-person symmetric relationship (publicly known associates: friends/partners/classmates). Use ONLY when both are PERSON.
    - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY -> MARKET).
-     - If THIS FRAGMENT is MARKET, still emit relations with relationType=PARTICIPATES_IN to the player entities; backend will reverse the edge direction.
+    - If THIS FRAGMENT is MARKET, still emit relations with relationType=PARTICIPATES_IN to the player entities; backend will reverse the edge direction.
+    - PRODUCT may also PARTICIPATE_IN a market (product category presence).
      - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
    - DOMINATES: entity dominates a market (leader) (canonical direction: ORG/FACILITY -> MARKET).
      - If THIS FRAGMENT is MARKET, still emit relations with relationType=DOMINATES to the leader entity; backend will reverse the edge direction.
@@ -491,8 +495,10 @@ TASK: Extract all relevant information about this entity and return it as a JSON
   - HAS_SUBGROUP: source MUST be COMMUNITY, target MUST be COMMUNITY (parent group → narrower sub-group/branch/clan)
    - FOUNDED: source MUST be PERSON or ORGANIZATION, target MUST be ORGANIZATION/PROGRAM
    - INVESTS_IN: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/PROGRAM/PRODUCT
-   - PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
+  - PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
+    - GEO_REGION and MARKET are also allowed as partners when describing regional collaboration
   - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
+  - PARTICIPATES_IN: source MAY also be PRODUCT, target MUST be MARKET
   - DOMINATES: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
    - PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
    - AUDITED_BY: source MUST be ORGANIZATION or FACILITY, target MUST be ORGANIZATION
@@ -500,6 +506,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
    - LOCATED_IN: target MUST be GEO_REGION
    - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION, FACILITY, or DEPOSIT
+  - OPERATES_IN: source MAY also be PERSON when referring to location of work/operation
    - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
   - DEPENDS_ON: source can be ORGANIZATION/FACILITY/PRODUCT/COMMUNITY/MARKET, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION/MEDIA_CHANNEL/COMMUNITY
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT (e.g., mine extracts from ore deposit, platform extracts from oil field)
@@ -639,19 +646,19 @@ CANONICAL PATH RULES:
     - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise /fac/{facilitySlug}
   - GEO regions / locations: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase, EXACTLY 2 characters (e.g., us, de, ru, kz, jp)
+    - country: ISO3166-1 alpha2 lowercase (2 chars) or regional token (asean, brics, gcc, eu, eaeu)
     - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
     - city: lowercase slug; use "na" if not applicable/unknown
     - country-only locations: /loc/{country}/na/na
-    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 (exactly 2 lowercase letters). Invalid codes will be REJECTED.
+    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 or an allowed regional token. Invalid codes will be REJECTED.
 - VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
   - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
   - canonicalPath MUST match expected prefix for targetType (see namespaces above)
-  - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code
+  - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code or allowed regional token
   - Facilities: prefer /fac/{orgSlug}/{facilitySlug} over flat /fac/{facilitySlug} (flat paths get penalty)
-- canonicalPath slug SHOULD be derived from shortName (without ownership suffix) to avoid duplicates when legal form changes.
-- ONLY include ownership suffix in canonicalPath if needed to disambiguate between different entities with same shortName.
+- canonicalPath slug MUST be derived from shortName (without ownership suffix) to avoid duplicates when legal form changes.
+- If a legal form is known (Inc., LLC, JSC, GmbH, etc.), append it as -{legal_form} to satisfy org canonical format.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
-Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, canonicalRulesBlock)
 }
