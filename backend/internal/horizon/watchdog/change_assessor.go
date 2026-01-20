@@ -43,7 +43,7 @@ func (c *ChangeAssessor) AssessChangeAmount(ctx context.Context, oldContent stri
 	prompt := c.buildChangeAssessmentPrompt(oldContent, newContent, targetFragmentCanonicalPath)
 
 	// Создаем типизированный верификатор
-	verifier := ai.NewGenericVerifier[ChangeAssessmentResult](func(result ChangeAssessmentResult) error {
+	verifier := ai.NewGenericVerifier(func(result ChangeAssessmentResult) error {
 		if result.ChangeAmount < 0.0 || result.ChangeAmount > 1.0 {
 			return fmt.Errorf("changeAmount must be between 0.0 and 1.0")
 		}
@@ -58,9 +58,9 @@ func (c *ChangeAssessor) AssessChangeAmount(ctx context.Context, oldContent stri
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
-			MinCapabilityScore:       7, // Хорошее качество для оценки изменений
+			MinCapabilityScore:       7,     // Хорошее качество для оценки изменений
 			MinContextWindow:         16000, // Может быть большой контент
-			MaxOutputSize:            256,
+			MaxOutputSize:            4096,
 		},
 		Verifier: verifier,
 	}
@@ -138,4 +138,3 @@ RULES:
 
 Return the change assessment as JSON:`, targetFragmentCanonicalPath, oldPreview, newPreview)
 }
-

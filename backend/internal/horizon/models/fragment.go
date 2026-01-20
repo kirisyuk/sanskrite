@@ -27,10 +27,16 @@ type HorizonFragment struct {
 	Status      string            `json:"status" firestore:"status"` // active, deprecated, draft, archived
 
 	// Основные поля
-	CanonicalPath string       `json:"canonicalPath" firestore:"canonicalPath"`
-	Type          FragmentType `json:"type" firestore:"type"`
-	EntityPath    string       `json:"entityPath" firestore:"entityPath"` // /Organization/Corporation/Public
-	SectorPath    string       `json:"sectorPath" firestore:"sectorPath"` // /Technology/Semiconductors/Manufacturing
+	CanonicalPath string `json:"canonicalPath" firestore:"canonicalPath"`
+	// CanonicalParts is a semantic representation of canonicalPath.
+	// When present, repositories may reassemble canonicalPath from these parts (best-effort)
+	// to avoid clobbering concurrent, independent canonicalization fixes (geo vs legal form vs taxonomy).
+	//
+	// IMPORTANT: canonicalPath remains the read-path across the system for compatibility.
+	CanonicalParts *taxonomy.CanonicalPathParts `json:"canonicalParts,omitempty" firestore:"canonicalParts,omitempty"`
+	Type           FragmentType                 `json:"type" firestore:"type"`
+	EntityPath     string                       `json:"entityPath" firestore:"entityPath"` // /Organization/Corporation/Public
+	SectorPath     string                       `json:"sectorPath" firestore:"sectorPath"` // /Technology/Semiconductors/Manufacturing
 	// IndustryPaths are canonical, multi-valued industry classifications (Horizon-first taxonomy).
 	// Format: /industry/{sector}/{group}/{industry}/{subindustry}
 	IndustryPaths []string `json:"industryPaths,omitempty" firestore:"industryPaths,omitempty"`

@@ -14,16 +14,19 @@ import (
 type PolicyViolationType string
 
 const (
-	ViolationDuplicate       PolicyViolationType = "duplicate"
-	ViolationEdgeDirection   PolicyViolationType = "edge_direction"
-	ViolationPathFormat      PolicyViolationType = "path_format"
-	ViolationGeoNamesAdmin   PolicyViolationType = "geonames_admin_code"
-	ViolationSelfLoop        PolicyViolationType = "self_loop"
-	ViolationTypeMismatch    PolicyViolationType = "type_mismatch"
-	ViolationSymmetricEdge   PolicyViolationType = "symmetric_edge"
+	ViolationDuplicate     PolicyViolationType = "duplicate"
+	ViolationEdgeDirection PolicyViolationType = "edge_direction"
+	ViolationPathFormat    PolicyViolationType = "path_format"
+	ViolationGeoNamesAdmin PolicyViolationType = "geonames_admin_code"
+	// ViolationGeoUnknown indicates that geo/jurisdiction segment is unknown (e.g., /org/na/... or /gov/na/...).
+	// "na" is allowed by taxonomy, but it reduces usefulness for search/grouping and should be fixed when possible.
+	ViolationGeoUnknown       PolicyViolationType = "geo_unknown"
+	ViolationSelfLoop         PolicyViolationType = "self_loop"
+	ViolationTypeMismatch     PolicyViolationType = "type_mismatch"
+	ViolationSymmetricEdge    PolicyViolationType = "symmetric_edge"
 	ViolationMissingLegalForm PolicyViolationType = "missing_legal_form"
-	ViolationInvalidISO2     PolicyViolationType = "invalid_iso2"
-	ViolationOrphanedEdge    PolicyViolationType = "orphaned_edge"
+	ViolationInvalidISO2      PolicyViolationType = "invalid_iso2"
+	ViolationOrphanedEdge     PolicyViolationType = "orphaned_edge"
 )
 
 // PolicyViolationSeverity represents the severity of a violation.
@@ -37,9 +40,9 @@ const (
 
 // PolicyViolation represents a single policy violation found during check.
 type PolicyViolation struct {
-	ID          string                  `json:"id" firestore:"id"`
-	Type        PolicyViolationType     `json:"type" firestore:"type"`
-	Severity    PolicyViolationSeverity `json:"severity" firestore:"severity"`
+	ID       string                  `json:"id" firestore:"id"`
+	Type     PolicyViolationType     `json:"type" firestore:"type"`
+	Severity PolicyViolationSeverity `json:"severity" firestore:"severity"`
 
 	// What's wrong
 	FragmentID    string `json:"fragmentId,omitempty" firestore:"fragmentId,omitempty"`
@@ -73,16 +76,16 @@ type PolicyViolation struct {
 type EnforcementTaskType string
 
 const (
-	TaskMergeFragments    EnforcementTaskType = "merge_fragments"
-	TaskFixPath           EnforcementTaskType = "fix_path"
-	TaskReverseEdge       EnforcementTaskType = "reverse_edge"
-	TaskCanonicalizeEdge  EnforcementTaskType = "canonicalize_edge"
-	TaskDeleteEdge        EnforcementTaskType = "delete_edge"
-	TaskDeleteFragment    EnforcementTaskType = "delete_fragment"
-	TaskResolveGeoNames   EnforcementTaskType = "resolve_geonames"
+	TaskMergeFragments     EnforcementTaskType = "merge_fragments"
+	TaskFixPath            EnforcementTaskType = "fix_path"
+	TaskReverseEdge        EnforcementTaskType = "reverse_edge"
+	TaskCanonicalizeEdge   EnforcementTaskType = "canonicalize_edge"
+	TaskDeleteEdge         EnforcementTaskType = "delete_edge"
+	TaskDeleteFragment     EnforcementTaskType = "delete_fragment"
+	TaskResolveGeoNames    EnforcementTaskType = "resolve_geonames"
 	TaskNormalizeSymmetric EnforcementTaskType = "normalize_symmetric"
-	TaskFixLegalForm      EnforcementTaskType = "fix_legal_form"
-	TaskFixISO2           EnforcementTaskType = "fix_iso2"
+	TaskFixLegalForm       EnforcementTaskType = "fix_legal_form"
+	TaskFixISO2            EnforcementTaskType = "fix_iso2"
 )
 
 // EnforcementTask represents a single enforcement action to fix a violation.

@@ -90,7 +90,7 @@ func (e *EvidenceExtractorLLM) extractRelevantQuote(ctx context.Context, content
 			TextGenerationCapability: true,
 			MinCapabilityScore:       5, // Регулярная задача: gpt-5-nano обычно достаточно
 			MinContextWindow:         8000,
-			MaxOutputSize:            512,
+			MaxOutputSize:            4096,
 		},
 		Verifier: verifier,
 	}
@@ -177,7 +177,7 @@ func (e *EvidenceExtractorLLM) calculateReliabilityScore(ctx context.Context, so
 			TextGenerationCapability: true,
 			MinCapabilityScore:       5, // Регулярная задача: gpt-5-nano обычно достаточно
 			MinContextWindow:         4000,
-			MaxOutputSize:            256,
+			MaxOutputSize:            4096,
 		},
 		Verifier: verifier,
 	}
@@ -252,4 +252,3 @@ func calculateContentHash(content string) string {
 	hash := sha256.Sum256([]byte(content))
 	return fmt.Sprintf("sha256:%x", hash)
 }
-

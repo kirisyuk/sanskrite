@@ -303,7 +303,12 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 			specBlock += "- Represent products and services as targetType=PRODUCT with stable /product/... canonical paths when possible.\n"
 			specBlock += "  - If category/type/stage cannot be determined, use fallback /product/{slug}.\n"
 			specBlock += "- For PRODUCT fragments: extract product-to-product transformations using TRANSFORMS_INTO (source product -> target product).\n"
-			specBlock += "- Prefer canonical names (standard material/product names), not marketing names.\n\n"
+			specBlock += "- Prefer canonical names (standard material/product names), not marketing names.\n"
+			specBlock += "- Product/material naming rules (CRITICAL):\n"
+			specBlock += "  - Use SINGULAR nouns by default (e.g., 'silicon wafer', 'battery cell', 'lithium carbonate'), not plurals.\n"
+			specBlock += "  - Use plural ONLY when plural is the natural/standard product term (e.g., 'solar wafer', not 'solar wafers'; avoid invented plurals).\n"
+			specBlock += "  - Do NOT include a company/brand name in the product name/path unless it is clearly the official and commonly used product name.\n"
+			specBlock += "    Examples: 'IBM watsonx' MAY be ok only if sources consistently use it; otherwise use 'watsonx'.\n\n"
 		}
 		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
 			specBlock += "MODULE: supply_chain (build complete supply chains)\n"
@@ -318,6 +323,9 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 			specBlock += "- Roles: supplier, processor, manufacturer, assembler, distributor, customer, or describe the function.\n"
 			specBlock += "- Multiple chains are expected — different product lines, different suppliers, branching paths.\n"
 			specBlock += "- Canonical paths: /org/{iso2|na}/{slug} for organizations, /fac/{org}/{slug} for facilities, /product/{category}/{type}/{stage}/{slug} for products.\n"
+			specBlock += "- Product/material naming rules apply to supply chains too:\n"
+			specBlock += "  - Use SINGULAR product/material terms by default.\n"
+			specBlock += "  - Avoid including company/brand names in product nodes unless it is an official, widely used product name.\n"
 			specBlock += "- IMPORTANT: Also output individual 'relations' for non-chain relationships (location, ownership, etc.).\n\n"
 		}
 		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) {

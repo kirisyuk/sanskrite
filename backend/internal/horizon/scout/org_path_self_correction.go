@@ -100,7 +100,7 @@ func orgCanonicalizationLabel(fragment *models.HorizonFragment, oldPath string) 
 	return strings.ReplaceAll(slug, "-", " ")
 }
 
-func (e *ScoutEngine) maybeUpgradeLegacyOrgPath(ctx context.Context, fragment *models.HorizonFragment, effectiveCanonicalPath string) *orgPathUpgrade {
+func (e *ScoutEngine) maybeUpgradeLegacyOrgPath(_ context.Context, fragment *models.HorizonFragment, effectiveCanonicalPath string) *orgPathUpgrade {
 	if fragment == nil || fragment.Type != models.FragmentTypeOrganization {
 		return nil
 	}

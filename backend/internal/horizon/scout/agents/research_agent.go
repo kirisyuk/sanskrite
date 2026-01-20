@@ -119,6 +119,10 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 		mainCP := strings.TrimSpace(main.CanonicalPath)
 		if partialCP != mainCP && isMoreCanonical(mainCP, partialCP) {
 			main.CanonicalPath = partialCP
+			// Keep semantic parts in sync for downstream selective canonizers.
+			if parts, err := taxonomy.ParseCanonicalPathParts(partialCP); err == nil && parts != nil {
+				main.CanonicalParts = parts
+			}
 		}
 	}
 	if partial.Type != "" {
@@ -392,6 +396,11 @@ Product Canonicalization:
 - Prefer /product/{category}/{type}/{stage}/{slug} or /product/service/{domain}/{subdomain}/{slug}.
 - If the current path is flat or acronym-like, expand to the full product name and ensure relations use the updated canonical path.
 - Examples: rice -> /product/raw/agricultural/extraction/rice; salt -> /product/raw/mineral/extraction/salt; swad (Indian savory snack) -> /product/finished/agricultural/processing/swad; processed/finished goods -> /product/finished/mechanical/assembly/{slug}.
+- Product/material naming rules (CRITICAL):
+  - Use SINGULAR nouns by default (e.g., "silicon wafer", "battery cell", "lithium carbonate"), not plurals.
+  - Use plural ONLY when plural is the natural/standard product term in industry terminology (avoid invented plurals).
+  - Do NOT include a company/brand name in product names/paths unless it is clearly the official and commonly used product name.
+    - Example: "IBM watsonx" should only be used if sources consistently use that full official name; otherwise use "watsonx".
 
 Organization Classification (ORG/FACILITY/GOV) - *** HIGH PRIORITY ***:
 You SHOULD actively research and determine these fields for any organization or government body:

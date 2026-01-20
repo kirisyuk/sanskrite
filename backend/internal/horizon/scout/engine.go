@@ -18,8 +18,8 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -2359,9 +2359,17 @@ SKIP_RESEARCH:
 		e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 		if extractedFragment != nil {
 			extractedFragment.CanonicalPath = effectiveCanonicalPath
+			// Keep semantic parts in sync so downstream canonizers can apply selective fixes.
+			if parts, err := taxonomy.ParseCanonicalPathParts(effectiveCanonicalPath); err == nil && parts != nil {
+				extractedFragment.CanonicalParts = parts
+			}
 			recordLegacyOrgPath(extractedFragment, old)
 		}
 		if existingFragment != nil {
+			// Best-effort: also keep parts consistent on the existing fragment snapshot.
+			if parts, err := taxonomy.ParseCanonicalPathParts(effectiveCanonicalPath); err == nil && parts != nil {
+				existingFragment.CanonicalParts = parts
+			}
 			recordLegacyOrgPath(existingFragment, old)
 		}
 		orgLegacyPath = old
@@ -3419,19 +3427,19 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 			}
 			// Realtime: edge materialized/updated for UI graph.
 			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
-				"tenantId":         job.TenantID,
-				"projectId":        job.ProjectID,
-				"lensId":           strings.TrimSpace(job.LensID),
-				"edgeId":           edge.ID,
-				"sourceFragmentId": edge.SourceFragmentID,
-				"targetFragmentId": edge.TargetFragmentID,
+				"tenantId":            job.TenantID,
+				"projectId":           job.ProjectID,
+				"lensId":              strings.TrimSpace(job.LensID),
+				"edgeId":              edge.ID,
+				"sourceFragmentId":    edge.SourceFragmentID,
+				"targetFragmentId":    edge.TargetFragmentID,
 				"sourceCanonicalPath": sourcePath,
 				"targetCanonicalPath": targetPath,
 				"sourceLabel":         sourceLabel,
 				"targetLabel":         targetLabel,
-				"type":             string(edge.Type),
-				"properties":       edge.Properties,
-				"qualifiers":       edge.Qualifiers,
+				"type":                string(edge.Type),
+				"properties":          edge.Properties,
+				"qualifiers":          edge.Qualifiers,
 			})
 		}
 	}
@@ -3628,7 +3636,10 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 
 	// Run policy check in background to not block job completion
 	go func() {
-		policyCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		// Policy checks may involve multiple LLM calls (duplicate checks + fallbacks) and must not
+		// be prematurely cancelled, otherwise we get "context deadline exceeded" across all providers
+		// and fail to persist policy check results.
+		policyCtx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 		defer cancel()
 
 		startTime := time.Now()
@@ -3702,15 +3713,15 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 				break
 			}
 			violationsSample = append(violationsSample, map[string]interface{}{
-				"id":          v.ID,
-				"type":        v.Type,
-				"severity":    v.Severity,
-				"description": v.Description,
-				"fragmentId":  v.FragmentID,
-				"edgeId":      v.EdgeID,
-				"actualValue": v.ActualValue,
+				"id":            v.ID,
+				"type":          v.Type,
+				"severity":      v.Severity,
+				"description":   v.Description,
+				"fragmentId":    v.FragmentID,
+				"edgeId":        v.EdgeID,
+				"actualValue":   v.ActualValue,
 				"expectedValue": v.ExpectedValue,
-				"autoFixable": v.AutoFixable,
+				"autoFixable":   v.AutoFixable,
 			})
 		}
 		payload := policy.NewWSPolicyCheckComplete(result, durationMs)
@@ -3808,9 +3819,13 @@ func (e *ScoutEngine) executeEnforcementJobs(ctx context.Context, job *models.Sc
 
 func isAutoExecutableTask(taskType policy.EnforcementTaskType) bool {
 	switch taskType {
+	case policy.TaskMergeFragments:
+		// Auto-merge is allowed only when PolicyChecker marked it auto-fixable (high confidence / strong ID match).
+		return true
 	case policy.TaskFixPath,
 		policy.TaskResolveGeoNames,
 		policy.TaskFixLegalForm,
+		policy.TaskFixISO2,
 		policy.TaskReverseEdge,
 		policy.TaskCanonicalizeEdge,
 		policy.TaskNormalizeSymmetric:
@@ -3874,20 +3889,20 @@ func (e *ScoutEngine) publishEnforcementBatchComplete(ctx context.Context, job *
 	}
 	msg := policy.NewWSEnforcementBatchComplete(job.ID, job.TenantID, jobs, durationMs)
 	payload := map[string]interface{}{
-		"type":              msg.Type,
-		"parentJobId":       msg.ParentJobID,
-		"tenantId":          msg.TenantID,
-		"totalJobs":         msg.TotalJobs,
-		"completed":         msg.Completed,
-		"failed":            msg.Failed,
-		"skipped":           msg.Skipped,
-		"durationMs":        msg.DurationMs,
-		"timestamp":         msg.Timestamp,
-		"fragmentsMerged":   msg.FragmentsMerged,
-		"pathsFixed":        msg.PathsFixed,
-		"edgesReversed":     msg.EdgesReversed,
+		"type":               msg.Type,
+		"parentJobId":        msg.ParentJobID,
+		"tenantId":           msg.TenantID,
+		"totalJobs":          msg.TotalJobs,
+		"completed":          msg.Completed,
+		"failed":             msg.Failed,
+		"skipped":            msg.Skipped,
+		"durationMs":         msg.DurationMs,
+		"timestamp":          msg.Timestamp,
+		"fragmentsMerged":    msg.FragmentsMerged,
+		"pathsFixed":         msg.PathsFixed,
+		"edgesReversed":      msg.EdgesReversed,
 		"edgesCanonicalized": msg.EdgesCanonicalized,
-		"edgesDeleted":      msg.EdgesDeleted,
+		"edgesDeleted":       msg.EdgesDeleted,
 	}
 	if v := strings.TrimSpace(job.ProjectID); v != "" {
 		payload["projectId"] = v

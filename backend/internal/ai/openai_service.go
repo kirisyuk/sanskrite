@@ -46,6 +46,7 @@ func (s *OpenAIService) ExecuteTask(ctx context.Context, task *AITask, model str
 	}
 
 	log.Printf("[OpenAI] ExecuteTask: type=%s, model=%s", task.TaskType, model)
+	debug := aiDebugLogEnabled()
 
 	inputTokensEst := len(task.InputContent) / 4
 	var caps *AIModelCapabilities
@@ -76,6 +77,10 @@ func (s *OpenAIService) ExecuteTask(ctx context.Context, task *AITask, model str
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
+	if debug {
+		log.Printf("[AI DEBUG][OpenAI] request prepared (task=%s model=%s inputChars=%d maxOut=%d requestBytes=%d)",
+			task.TaskType, model, len(task.InputContent), maxOut, len(bodyJSON))
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewReader(bodyJSON))
 	if err != nil {
@@ -85,6 +90,7 @@ func (s *OpenAIService) ExecuteTask(ctx context.Context, task *AITask, model str
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
+	startedAt := time.Now()
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
@@ -94,6 +100,10 @@ func (s *OpenAIService) ExecuteTask(ctx context.Context, task *AITask, model str
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if debug {
+		log.Printf("[AI DEBUG][OpenAI] response received (task=%s model=%s status=%d responseBytes=%d elapsed=%s)",
+			task.TaskType, model, resp.StatusCode, len(body), time.Since(startedAt))
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -113,7 +123,22 @@ func (s *OpenAIService) ExecuteTask(ctx context.Context, task *AITask, model str
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	if len(response.Choices) == 0 || response.Choices[0].Message.Content == "" {
+	if len(response.Choices) == 0 || strings.TrimSpace(response.Choices[0].Message.Content) == "" {
+		finish := ""
+		if len(response.Choices) > 0 {
+			finish = strings.TrimSpace(response.Choices[0].FinishReason)
+		}
+		// This is a systemic/transport/provider issue (not a token-budget issue). Log details.
+		if debug {
+			log.Printf("[AI DEBUG][OpenAI] empty chat response (task=%s model=%s status=%d responseBytes=%d finish=%q bodySha=%s bodyPreview=%s)",
+				task.TaskType, model, resp.StatusCode, len(body), finish, shortHash(string(body)),
+				singleLineForLog(string(body), 2500),
+			)
+		} else {
+			log.Printf("WARNING: [OpenAI] empty chat response (task=%s model=%s status=%d responseBytes=%d finish=%q bodySha=%s)",
+				task.TaskType, model, resp.StatusCode, len(body), finish, shortHash(string(body)),
+			)
+		}
 		return nil, fmt.Errorf("empty response from OpenAI Chat API")
 	}
 	// If the model hit the completion limit, treat as error so executor can fallback.

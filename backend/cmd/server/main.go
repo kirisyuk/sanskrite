@@ -1328,6 +1328,7 @@ func main() {
 				horizonEdgesRepo,
 				enforcementJobsRepo,
 			)
+			enforcementExecutor.WithAIExecutor(exec)
 			// Allow enforcement to rewrite lens scope after path fixes (best-effort).
 			enforcementExecutor.WithLensesRepo(horizonLensesRepo)
 			if geonamesClientForHorizon != nil {

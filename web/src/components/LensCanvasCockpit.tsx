@@ -3380,18 +3380,38 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const perChildEdgeIdsToAggKey = new Map<string, string>(); // edgeId -> aggKey (used for hover reveal)
     const noHoverRevealEdgeIds = new Set<string>(); // edges that should stay hidden even on hover (proxied to group)
 
-    // Build child lookup by groupId (only current nodes).
+    // Build child lookup by *root* Levels-left groupId (levels:left:*), even when nodes are nested
+    // inside additional container nodes (e.g. type columns).
     const childrenByGroupId = new Map<string, Node<HorizonNodeData>[]>();
-    const groupIdByChildId = new Map<string, string>(); // child node id -> groupId
+    const groupIdByChildId = new Map<string, string>(); // child node id -> root groupId
+    const nodeById = new Map<string, any>();
+    for (const n of nodeList) nodeById.set(String(n.id || '').trim(), n);
+    const rootLeftCache = new Map<string, string | null>(); // parentId -> resolved levels:left:* or null
+    const resolveLevelsLeftGroupId = (startPid: string): string | null => {
+      let cur = String(startPid || '').trim();
+      const cached = rootLeftCache.get(cur);
+      if (cached !== undefined) return cached;
+      // Bound the walk to avoid accidental cycles.
+      for (let i = 0; i < 12; i++) {
+        if (!cur) return null;
+        if (cur.startsWith('levels:left:')) return cur;
+        const pn: any = nodeById.get(cur);
+        cur = String(pn?.parentId || pn?.parentNode || '').trim();
+      }
+      rootLeftCache.set(String(startPid || '').trim(), null);
+      return null;
+    };
     for (const n of nodeList) {
       const d: any = n.data;
       if (d?.isGroup) continue;
-      const pid = String((n as any).parentId || (n as any).parentNode || '').trim();
-      if (!pid) continue;
-      const arr = childrenByGroupId.get(pid) || [];
+      const pid0 = String((n as any).parentId || (n as any).parentNode || '').trim();
+      if (!pid0) continue;
+      const rootLeft = resolveLevelsLeftGroupId(pid0);
+      const gid = rootLeft || pid0;
+      const arr = childrenByGroupId.get(gid) || [];
       arr.push(n);
-      childrenByGroupId.set(pid, arr);
-      groupIdByChildId.set(String(n.id || '').trim(), pid);
+      childrenByGroupId.set(gid, arr);
+      groupIdByChildId.set(String(n.id || '').trim(), gid);
     }
 
     // Helper maps for Levels left groups.
@@ -5075,6 +5095,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           maxChildRows: ELK_MAX_CHILD_ROWS,
           collapsedSubcategories,
           onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
+          compactLeftPane: true,
         });
         const withCallbacks = arranged.map((node) => {
           if ((node.data as any)?.isGroup) {
@@ -6290,6 +6311,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           maxChildRows: ELK_MAX_CHILD_ROWS,
           collapsedSubcategories,
           onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
+          compactLeftPane: true,
         });
         linearEdgesAfterLayout = recalculateLevelsTwoPaneHandles(filteredMergedEdges as any, layoutedNodes as any);
       } else {
@@ -8770,6 +8792,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           maxChildRows: ELK_MAX_CHILD_ROWS,
           collapsedSubcategories,
           onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
+          compactLeftPane: true,
         });
 
         const finalFragments = arrangedFragments.map((node) => {
@@ -8897,6 +8920,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             maxChildRows: ELK_MAX_CHILD_ROWS,
             collapsedSubcategories,
             onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
+            compactLeftPane: true,
           });
           nextNodes = laidOut as any;
 

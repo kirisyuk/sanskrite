@@ -48,13 +48,13 @@ type PolicyChecker struct {
 	taxonomyRules  *TaxonomyRules
 
 	// Configuration
-	enableLLMChecks        bool
-	duplicatePrefetchLimit int
-	confidenceThreshold    float64
+	enableLLMChecks            bool
+	duplicatePrefetchLimit     int
+	confidenceThreshold        float64
 	autoFixConfidenceThreshold float64
-	jobContextLimit        int
-	externalContextLimit   int
-	maxDuplicateChecks     int
+	jobContextLimit            int
+	externalContextLimit       int
+	maxDuplicateChecks         int
 }
 
 // PolicyCheckerOption is a functional option for PolicyChecker.
@@ -67,16 +67,16 @@ func NewPolicyChecker(
 	opts ...PolicyCheckerOption,
 ) *PolicyChecker {
 	pc := &PolicyChecker{
-		fragmentsRepo:          fragmentsRepo,
-		edgesRepo:              edgesRepo,
-		taxonomyRules:          DefaultTaxonomyRules(),
-		enableLLMChecks:        true,
-		duplicatePrefetchLimit: 20,
-		confidenceThreshold:    0.7,
+		fragmentsRepo:              fragmentsRepo,
+		edgesRepo:                  edgesRepo,
+		taxonomyRules:              DefaultTaxonomyRules(),
+		enableLLMChecks:            true,
+		duplicatePrefetchLimit:     20,
+		confidenceThreshold:        0.7,
 		autoFixConfidenceThreshold: 0.9,
-		jobContextLimit:        12,
-		externalContextLimit:   8,
-		maxDuplicateChecks:     120,
+		jobContextLimit:            12,
+		externalContextLimit:       8,
+		maxDuplicateChecks:         120,
 	}
 
 	for _, opt := range opts {
@@ -549,6 +549,32 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) >= 2 {
 		iso2 := parts[1]
+		// "/org/na/..." is allowed but means unknown jurisdiction/geo.
+		// We treat it as a warning with an LLM-based auto-fix (infer ISO2 from fragment context).
+		if iso2 == "na" && len(parts) >= 3 && parts[0] == "org" {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationGeoUnknown,
+				Severity:    SeverityWarning,
+				FragmentID:  frag.ID,
+				ActualValue: path,
+				Rule:        "org_geo_unknown",
+				Description: "Organization canonical path uses geo token 'na' (unknown jurisdiction). Try to infer ISO3166-1 alpha-2 from fragment context (labels/identifiers/description/homeLocation and nearby GEO edges like LOCATED_IN / OPERATES_IN).",
+				Confidence:  0.8,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskFixISO2,
+				TargetID: frag.ID,
+				Params: map[string]interface{}{
+					"currentPath": path,
+					"namespace":   "org",
+				},
+			}
+			violations = append(violations, v)
+		}
 		if iso2 != "na" && len(iso2) != 2 && !strings.Contains(iso2, "-") {
 			v := PolicyViolation{
 				ID:          uuid.New().String(),
@@ -630,6 +656,37 @@ func (pc *PolicyChecker) checkGovPath(_ context.Context, frag *horizonmodels.Hor
 			}
 		}
 		violations = append(violations, v)
+	}
+
+	// "/gov/na/..." is allowed but means unknown jurisdiction/geo.
+	// We treat it as a warning with an LLM-based auto-fix (infer ISO2 from fragment context).
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 3 && parts[0] == "gov" {
+		iso2 := parts[1]
+		if iso2 == "na" {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationGeoUnknown,
+				Severity:    SeverityWarning,
+				FragmentID:  frag.ID,
+				ActualValue: path,
+				Rule:        "gov_geo_unknown",
+				Description: "Government canonical path uses geo token 'na' (unknown jurisdiction). Try to infer ISO3166-1 alpha-2 (or a composite like ae-sa-om for intergovernmental bodies) from fragment context and nearby GEO edges.",
+				Confidence:  0.8,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskFixISO2,
+				TargetID: frag.ID,
+				Params: map[string]interface{}{
+					"currentPath": path,
+					"namespace":   "gov",
+				},
+			}
+			violations = append(violations, v)
+		}
 	}
 
 	return violations
@@ -1041,9 +1098,9 @@ func (pc *PolicyChecker) checkForDuplicatesWithContext(ctx context.Context, frag
 				Description:     reason,
 				Confidence:      confidence,
 				AutoFixable:     pc.canAutoFixDuplicate(frag, candidate, confidence),
-				SuggestedFix:   pc.duplicateFixTask(frag, candidate, canonicalID, duplicateID, confidence),
-				DetectedAt: time.Now(),
-				DetectedBy: "llm",
+				SuggestedFix:    pc.duplicateFixTask(frag, candidate, canonicalID, duplicateID, confidence),
+				DetectedAt:      time.Now(),
+				DetectedBy:      "llm",
 			})
 		}
 	}
@@ -1115,12 +1172,18 @@ func (pc *PolicyChecker) llmCheckDuplicateWithContext(ctx context.Context, frag1
 			SearchGroundingCapability: false,
 			MinCapabilityScore:        6,
 			MinContextWindow:          4000,
-			MaxOutputSize:             512,
+			MaxOutputSize:             4096,
 		},
 		Verifier: verifier,
 	}
 
-	raw, err := pc.aiExecutor.ExecuteStructuredTask(ctx, task)
+	// IMPORTANT: policy checks run under an overall timeout (see ScoutEngine.runPolicyCheck).
+	// Use a per-call timeout so one slow/blocked provider doesn't consume the entire budget and
+	// cause all subsequent fallbacks (and result persistence) to fail with DeadlineExceeded.
+	llmCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	raw, err := pc.aiExecutor.ExecuteStructuredTask(llmCtx, task)
 	if err != nil {
 		log.Printf("[PolicyChecker] LLM duplicate check failed: %v", err)
 		return false, 0, ""

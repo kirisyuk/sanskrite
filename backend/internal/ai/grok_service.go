@@ -37,6 +37,7 @@ func (s *GrokService) ExecuteTask(ctx context.Context, task *AITask, model strin
 		return nil, fmt.Errorf("task cannot be nil")
 	}
 	log.Printf("[Grok] ExecuteTask: %s, model=%s", task.TaskType, model)
+	debug := aiDebugLogEnabled()
 
 	inputTokensEst := len(task.InputContent) / 4
 	var caps *AIModelCapabilities
@@ -59,6 +60,10 @@ func (s *GrokService) ExecuteTask(ctx context.Context, task *AITask, model strin
 	if err != nil {
 		return nil, err
 	}
+	if debug {
+		log.Printf("[AI DEBUG][Grok] request prepared (task=%s model=%s inputChars=%d maxOut=%d requestBytes=%d)",
+			task.TaskType, model, len(task.InputContent), maxOut, len(bodyJSON))
+	}
 
 	// Grok uses OpenAI-compatible endpoint
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.x.ai/v1/chat/completions", bytes.NewReader(bodyJSON))
@@ -68,12 +73,17 @@ func (s *GrokService) ExecuteTask(ctx context.Context, task *AITask, model strin
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
+	startedAt := time.Now()
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
+	if debug {
+		log.Printf("[AI DEBUG][Grok] response received (task=%s model=%s status=%d responseBytes=%d elapsed=%s)",
+			task.TaskType, model, resp.StatusCode, len(b), time.Since(startedAt))
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("grok API error %d: %s", resp.StatusCode, string(b))
 	}

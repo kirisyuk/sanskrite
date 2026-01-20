@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -138,6 +139,7 @@ func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, tas
 	inputChars := len(task.InputContent)
 	inputTokens := inputChars / 4 // Approximate token count (4 chars per token)
 	startedAt := time.Now()
+	debug := aiDebugLogEnabled()
 
 	if task.Verifier == nil {
 		return nil, "", fmt.Errorf("ExecuteStructuredTask requires a Verifier in the AITask object, but it was nil")
@@ -146,6 +148,8 @@ func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, tas
 	triedModels := []string{}
 
 	for {
+		attempt := len(triedModels) + 1
+
 		currentModel := e.modelManager.SelectFallbackModel(task.AIRequirements, inputTokens, triedModels)
 		if currentModel == "" {
 			log.Printf("ERROR: All models tried or unavailable for structured task '%s'. Total models tried: %d, Input size: %d chars (%d tokens est)",
@@ -167,19 +171,28 @@ func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, tas
 			continue
 		}
 
-		log.Printf("[%s] Executing structured task with model %s (input: %d chars, %d tokens est)",
-			modelCapabilities.Provider, currentModel, inputChars, inputTokens)
+		deadlineStr := "none"
+		remainingStr := "n/a"
+		if d, ok := ctx.Deadline(); ok {
+			deadlineStr = d.Format(time.RFC3339Nano)
+			remainingStr = time.Until(d).String()
+		}
 
+		log.Printf("[%s] Executing structured task with model %s (attempt=%d input: %d chars, %d tokens est, ctxDeadline=%s, remaining=%s)",
+			modelCapabilities.Provider, currentModel, attempt, inputChars, inputTokens, deadlineStr, remainingStr)
+
+		attemptStartedAt := time.Now()
 		result, err := aiService.ExecuteTask(ctx, task, currentModel)
 		if err != nil {
 			// Log detailed information about the request when it fails
-			log.Printf("WARNING: Task failed with model %s. Error: %v", currentModel, err)
-			log.Printf("WARNING: Request details: TaskType=%s, InputSize=%d chars (%d tokens est), Provider=%s",
-				task.TaskType, inputChars, inputTokens, modelCapabilities.Provider)
+			elapsed := time.Since(attemptStartedAt)
+			log.Printf("WARNING: Task failed with model %s after %s (task=%s provider=%s attempt=%d input=%d chars %d tokens est). Error: %v",
+				currentModel, elapsed, task.TaskType, modelCapabilities.Provider, attempt, inputChars, inputTokens, err)
 
 			// If context was canceled, log a specific message
-			if ctx.Err() != nil {
-				log.Printf("WARNING: Context error detected: %v. This usually means timeout or cancellation.", ctx.Err())
+			if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				log.Printf("WARNING: Context error detected: ctxErr=%v ctxDeadline=%s remaining=%s (this usually means timeout or cancellation)",
+					ctx.Err(), deadlineStr, remainingStr)
 			}
 
 			log.Printf("WARNING: Error executing task with model %s. Message: %v. Attempting fallback.", currentModel, err)
@@ -193,10 +206,28 @@ func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, tas
 			continue
 		}
 
+		if debug && result != nil {
+			out := strings.TrimSpace(result.Content)
+			log.Printf("[AI DEBUG] Structured task raw response received (task=%s provider=%s model=%s outputChars=%d sha=%s)\n%s",
+				task.TaskType,
+				modelCapabilities.Provider,
+				currentModel,
+				len(out),
+				shortHash(out),
+				truncateForLog(out, 6000),
+			)
+		}
+
 		// Extract strict JSON in case provider wrapped it (markdown/code fences, preambles)
 		cleanJSON, err := e.extractValidJSON(result.Content)
 		if err != nil {
-			log.Printf("WARNING: [Raw LLM Response that failed JSON extraction BEGIN]\n%s\n[Raw LLM Response that failed JSON extraction END]", result.Content)
+			if debug {
+				log.Printf("WARNING: [Raw LLM Response that failed JSON extraction BEGIN]\n%s\n[Raw LLM Response that failed JSON extraction END]",
+					truncateForLog(result.Content, 6000))
+			} else {
+				log.Printf("WARNING: LLM response failed JSON extraction (task=%s provider=%s model=%s outputChars=%d sha=%s): %v",
+					task.TaskType, modelCapabilities.Provider, currentModel, len(result.Content), shortHash(result.Content), err)
+			}
 			log.Printf("WARNING: Failed to extract JSON from response with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
@@ -204,7 +235,13 @@ func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, tas
 
 		parsedResult, err := task.Verifier.VerifyAndParse(cleanJSON)
 		if err != nil {
-			log.Printf("WARNING: [Raw LLM Response that failed verification BEGIN]\n%s\n[Raw LLM Response that failed verification END]", result.Content)
+			if debug {
+				log.Printf("WARNING: [Raw LLM Response that failed verification BEGIN]\n%s\n[Raw LLM Response that failed verification END]",
+					truncateForLog(result.Content, 6000))
+			} else {
+				log.Printf("WARNING: LLM response failed verification (task=%s provider=%s model=%s outputChars=%d sha=%s): %v",
+					task.TaskType, modelCapabilities.Provider, currentModel, len(result.Content), shortHash(result.Content), err)
+			}
 			log.Printf("WARNING: Failed to verify result with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue

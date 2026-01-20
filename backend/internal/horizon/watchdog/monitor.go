@@ -313,6 +313,9 @@ func (m *Monitor) getPreviousHash(ctx context.Context, sourceID string) string {
 
 // saveHash сохраняет хеш источника через обновление Document
 func (m *Monitor) saveHash(ctx context.Context, sourceID string, hash string, documentID string) {
+	_ = ctx
+	_ = sourceID
+	_ = hash
 	if documentID == "" {
 		return
 	}

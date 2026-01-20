@@ -14,9 +14,15 @@ import type { Node, Edge } from 'reactflow';
 const elk = new ELK();
 
 // Default node dimensions (should match your HorizonFragmentNode)
-const DEFAULT_NODE_WIDTH = 180;
+export const DEFAULT_NODE_WIDTH = 180;
 // Layout height includes the "+" button protruding half outside the visual card (26px button => +13px).
-const DEFAULT_NODE_HEIGHT = 161;
+export const DEFAULT_NODE_HEIGHT = 161;
+
+// Compact node dimensions (for left pane groups in Levels layout)
+export const COMPACT_NODE_WIDTH = 180;
+// Goal: 3 compact nodes fit into one full (layout) slot: 3*49 + 2*7 = 161
+export const COMPACT_NODE_HEIGHT = 49;
+export const COMPACT_NODE_LAYOUT_HEIGHT = 49;
 
 // Maximum rows for children (3 = more rows, fewer columns)
 const MAX_CHILD_ROWS = 3;
@@ -131,7 +137,19 @@ export const getEdgePriority = (edgeType: string | undefined): number => {
   return EDGE_TYPE_PRIORITY[type] ?? DEFAULT_EDGE_PRIORITY;
 };
 
-const normalizeEdgeType = (t: string | undefined) => (t || '').toUpperCase().trim() || 'OTHER';
+// Hot path: normalizeEdgeType is called a lot during layout + edge aggregation.
+// Cache results to avoid repeated string allocations/uppercasing.
+const _normalizeEdgeTypeCache = new Map<string, string>();
+const normalizeEdgeType = (t: string | undefined) => {
+  const raw = String(t || '');
+  // Preserve legacy behavior: empty -> OTHER
+  const key = raw ? raw.toUpperCase().trim() : 'OTHER';
+  const norm = key || 'OTHER';
+  const hit = _normalizeEdgeTypeCache.get(norm);
+  if (hit) return hit;
+  _normalizeEdgeTypeCache.set(norm, norm);
+  return norm;
+};
 
 /**
  * Semantic groups for business-oriented graph layout.
@@ -1037,6 +1055,7 @@ export async function layoutLevelsTwoPane<T = any>(
     layerSpacing = 150,
     collapsedSubcategories = new Set<string>(),
     onToggleSubcategoryCollapse,
+    compactLeftPane = false,
   } = options;
 
   if (!nodes || nodes.length === 0) return nodes;
@@ -1465,17 +1484,68 @@ export async function layoutLevelsTwoPane<T = any>(
   //   - count > 12  => 3 rows
   const PAD_X = 16;
   // Extra vertical air so the (optional) type headers fit comfortably inside the group.
-  const PAD_TOP = 28;
+  // In compact left pane we render type column headers; give them a bit more breathing room.
+  const PAD_TOP = compactLeftPane ? 34 : 28;
   const PAD_BOTTOM_BASE = 20;
   const REL_SUBTITLE_H = 14; // space for relation subtitles (only used when group is large)
   // Keep left-group grids compact regardless of right-hierarchy spacing.
   const groupChildGapX = Math.min(40, nodeSpacing);
-  const groupChildGapY = 40;
+  // Compact nodes should pack tighter (left pane only). Mixed rows will auto-expand as needed.
+  // Match the 3-per-slot invariant: 3*49 + 2*7 = 161
+  const groupChildGapY = compactLeftPane ? 7 : 40;
 
   const normalizeFragmentType = (t: any): string => {
     const raw = String(t || '').trim();
     if (!raw) return 'UNKNOWN';
     return raw.toUpperCase().replace(/\s+/g, '_');
+  };
+
+  // Left-pane compact test predicate (GEO + MARKET nodes).
+  // When true, we render the node as compact AND pack it with compact height in the left group grid.
+  const isLeftPaneCompactNode = (d: any): boolean => {
+    if (!compactLeftPane) return false;
+    const nodeType = String(d?.type || '').toUpperCase().trim().replace(/\s+/g, '_');
+    const cp = String(d?.canonicalPath || '').trim();
+    return (
+      // Products & Services
+      nodeType === 'PRODUCT' ||
+      nodeType === 'SERVICE' ||
+      nodeType === 'TECHNOLOGY' ||
+      // Facilities / resources (left pane should be mini)
+      nodeType === 'FACILITY' ||
+      nodeType === 'DEPOSIT' ||
+      nodeType === 'MARKET' ||
+      cp.startsWith('/market/') ||
+      nodeType === 'GEO_REGION' ||
+      nodeType === 'LOCATION' ||
+      nodeType === 'COUNTRY' ||
+      nodeType === 'CITY' ||
+      nodeType === 'STATE' ||
+      nodeType === 'PROVINCE'
+    );
+  };
+
+  const leftPaneLayoutHeightFor = (d: any): number => {
+    // Hot path: this is called many times while computing rowHeights/offsets.
+    // Cache by stable fields that affect compactness/height.
+    const key =
+      String(d?.nodeSize || '').toLowerCase().trim() +
+      '|' +
+      String(d?.type || '').toUpperCase().trim().replace(/\s+/g, '_') +
+      '|' +
+      String(d?.canonicalPath || '').trim();
+    const cached = (leftPaneLayoutHeightFor as any)._cache?.get(key);
+    if (typeof cached === 'number') return cached;
+    // Respect explicit nodeSize when present (A/B by node property).
+    // This avoids mismatches where rendering is compact but layout still reserves full height.
+    const out =
+      String(d?.nodeSize || '').toLowerCase().trim() === 'compact'
+        ? COMPACT_NODE_LAYOUT_HEIGHT
+        : (isLeftPaneCompactNode(d) ? COMPACT_NODE_LAYOUT_HEIGHT : nodeHeight);
+    const m = (leftPaneLayoutHeightFor as any)._cache || new Map<string, number>();
+    m.set(key, out);
+    (leftPaneLayoutHeightFor as any)._cache = m;
+    return out;
   };
 
   // Business-friendly labels for type groups in left pane
@@ -1494,12 +1564,12 @@ export async function layoutLevelsTwoPane<T = any>(
       // Key People
       'PERSON': 'Key People',
       // Geographic Presence
-      'GEO_REGION': 'Geographic Presence',
-      'LOCATION': 'Geographic Presence',
-      'COUNTRY': 'Geographic Presence',
-      'STATE': 'Geographic Presence',
-      'PROVINCE': 'Geographic Presence',
-      'CITY': 'Geographic Presence',
+      'GEO_REGION': 'Geo Presence',
+      'LOCATION': 'Geo Presence',
+      'COUNTRY': 'Geo Presence',
+      'STATE': 'Geo Presence',
+      'PROVINCE': 'Geo Presence',
+      'CITY': 'Geo Presence',
       // Facilities
       'FACILITY': 'Facilities',
       // Natural Resources
@@ -1563,6 +1633,8 @@ export async function layoutLevelsTwoPane<T = any>(
     controllerId?: string;
     /** If collapsed, stable key used for stack-proxy edge generation. */
     stackKey?: string;
+    /** Optional override for row count within this subcategory block. */
+    rows?: number;
   };
   type TypeBlock<TNode = any> = {
     typeKey: string;
@@ -1585,7 +1657,7 @@ export async function layoutLevelsTwoPane<T = any>(
       NEEDS: 'Needs',
       USES: 'Uses',
       CONSUMES: 'Consumes',
-      OWNS: 'Owns',
+      OWNS: 'Ownership',
       MANAGES: 'Manages',
       CONTROLS: 'Controls',
       INVESTS_IN: 'Invests',
@@ -1604,7 +1676,7 @@ export async function layoutLevelsTwoPane<T = any>(
       OPERATES_IN: 'Operates',
       BASED_IN: 'Based',
       HEADQUARTERED_IN: 'HQ',
-      COMPETES_WITH: 'Competes',
+      COMPETES_WITH: 'Competitors',
       PARTNERS_WITH: 'Partners',
       COOPERATES_WITH: 'Cooperates',
       REGULATES: 'Regulates',
@@ -1634,6 +1706,10 @@ export async function layoutLevelsTwoPane<T = any>(
       .replace(/\b\w/g, (c) => c.toUpperCase());
     return human.length > 18 ? `${human.slice(0, 18)}…` : human;
   };
+
+  // Visual padding inside relation subcategory containers so nodes don't touch divider lines.
+  // Kept deterministic (constant), independent of zoom.
+  const LEFT_REL_CONTAINER_PAD_X = 14;
 
   const groupDimsWrap = (children: Node<T>[], parentId: string, groupId?: string) => {
     // IMPORTANT: group grid must be computed from VISIBLE children only.
@@ -1672,6 +1748,16 @@ export async function layoutLevelsTwoPane<T = any>(
     };
     const useRelGrouping = safeCount > 4;
 
+    // Cap vertical stacking inside a single column:
+    // - Compact mini-nodes: up to 6 per column.
+    // - Full-size nodes: up to 2 per column (anything beyond spills into next column).
+    const maxVerticalForNodes = (nodes: Array<Node<T> | undefined | null>): number => {
+      const list = (nodes || []).filter(Boolean) as Node<T>[];
+      if (list.length === 0) return 1;
+      const hasFull = list.some((n) => leftPaneLayoutHeightFor((n as any)?.data || {}) > COMPACT_NODE_LAYOUT_HEIGHT + 1);
+      return hasFull ? 2 : 6;
+    };
+
     // Bucket by `data.type` (stable: preserve order within each bucket).
     const byType = new Map<string, Node<T>[]>();
     for (const n of safeChildren) {
@@ -1693,10 +1779,19 @@ export async function layoutLevelsTwoPane<T = any>(
     // If any type block already needs 2 rows, allow other blocks to expand to 2 rows as well.
     // This keeps width compact without increasing overall height (which is already 2 rows).
     const forceTwoRows = Array.from(byType.values()).some((list) => (list?.length || 0) > 4);
-    const minRowsForBlock = forceTwoRows ? 2 : 1;
-    // Make separation visually obvious; a slightly larger gap costs width but greatly helps scanning.
-    const interBlockGapX = Math.max(84, Math.floor(nodeWidth * 0.45));
-    const interRelGapX = Math.max(24, Math.floor(nodeWidth * 0.18));
+    // In compact left pane, vertical density matters more than width — and forcing 2 rows across
+    // *all* type blocks can create "phantom" empty vertical capacity (looks like space for extra mini-nodes).
+    // So only apply the 2-row coercion in non-compact modes.
+    const minRowsForBlock = forceTwoRows && !compactLeftPane ? 2 : 1;
+    // IMPORTANT (Approach #1, nested containers):
+    // Type sections are now real container nodes with crisp vertical dividers (`groupBorderMode: divider-right`).
+    // If we also keep a physical inter-block X gap, the first "segment" becomes narrower (no leading gap),
+    // while middle/last segments include the gap — visually выглядят шире/прилипают.
+    // So in compact left pane we rely on dividers (not empty space) for separation.
+    const interBlockGapX = compactLeftPane ? 0 : Math.max(84, Math.floor(nodeWidth * 0.45));
+    // Same rationale as interBlockGapX: relation subcategories are real containers with dividers.
+    // Avoid "empty space gaps" that make some segments visually wider/narrower.
+    const interRelGapX = compactLeftPane ? 0 : Math.max(24, Math.floor(nodeWidth * 0.18));
 
     const bestRelTypeToParent = (child: Node<T>): string => {
       const cid = String(child?.id || '').trim();
@@ -1750,9 +1845,75 @@ export async function layoutLevelsTwoPane<T = any>(
       const list = byType.get(typeKey) || [];
       if (list.length === 0) continue;
 
+      // Special case: MARKET nodes in the left pane should render as tall columns:
+      // "2 full nodes vertically" == 6 compact nodes per column (3 per full slot).
+      if (compactLeftPane && String(typeKey).toUpperCase().trim() === 'MARKET') {
+        const nodesFlat = list.slice().sort((a, b) => {
+          const al = String((a.data as any)?.label || a.id);
+          const bl = String((b.data as any)?.label || b.id);
+          return al.localeCompare(bl);
+        });
+
+        const rowsForType = Math.max(1, Math.min(6, nodesFlat.length));
+        const cols = Math.max(1, Math.ceil(nodesFlat.length / rowsForType));
+        const minBase = COMPACT_NODE_LAYOUT_HEIGHT;
+        const rowHeights = new Array(rowsForType).fill(minBase);
+        // Column-major fill: row index is idx % rowsForType
+        for (let idx = 0; idx < nodesFlat.length; idx++) {
+          const rowIdx = idx % rowsForType;
+          const nd: any = (nodesFlat[idx] as any)?.data || {};
+          rowHeights[rowIdx] = Math.max(rowHeights[rowIdx], leftPaneLayoutHeightFor(nd));
+        }
+        const innerHForType =
+          rowHeights.reduce((acc, h) => acc + h, 0) +
+          Math.max(0, rowsForType - 1) * groupChildGapY;
+        maxInnerH = Math.max(maxInnerH, innerHForType);
+        maxRows = Math.max(maxRows, rowsForType);
+
+        const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
+        const relBlocks: RelBlock<T>[] = [
+          {
+            edgeTypeKey: '',
+            label: '',
+            nodes: nodesFlat,
+            cols,
+            startX: 0,
+            blockW,
+            nodeCount: nodesFlat.length,
+            collapsed: false,
+          } as any,
+        ];
+        totalCols += cols;
+        blocks.push({ typeKey, rows: rowsForType, cols, startX: cursorX, blockW, relBlocks });
+        cursorX += blockW;
+
+        if (i < typeKeys.length - 1) cursorX += interBlockGapX;
+        continue;
+      }
+
       // Optionally group within the type block by the PRIORITY relation type to the parent.
       const relBlocks: RelBlock<T>[] = [];
-      if (useRelGrouping) {
+      const isProductsServicesType =
+        String(typeKey).toUpperCase().trim() === 'PRODUCT' ||
+        String(typeKey).toUpperCase().trim() === 'SERVICE' ||
+        String(typeKey).toUpperCase().trim() === 'TECHNOLOGY';
+      const isFacilitiesOrDepositType =
+        String(typeKey).toUpperCase().trim() === 'FACILITY' ||
+        String(typeKey).toUpperCase().trim() === 'DEPOSIT';
+      const isGeoType =
+        String(typeKey).toUpperCase().trim() === 'GEO_REGION' ||
+        String(typeKey).toUpperCase().trim() === 'LOCATION' ||
+        String(typeKey).toUpperCase().trim() === 'COUNTRY' ||
+        String(typeKey).toUpperCase().trim() === 'STATE' ||
+        String(typeKey).toUpperCase().trim() === 'PROVINCE' ||
+        String(typeKey).toUpperCase().trim() === 'CITY';
+      // UX: Products & Services should NOT be subdivided by relation edge types.
+      // Render as simple column-major grid (taller columns).
+      // UX: GEO should also NOT be subdivided by relation edge types (LOCATED/OPERATES/etc).
+      // UX: Facilities and Deposits should also NOT be subdivided by relation edge types.
+      const useRelGroupingForType = useRelGrouping && !isProductsServicesType && !isGeoType && !isFacilitiesOrDepositType;
+
+      if (useRelGroupingForType) {
         const byRel = new Map<string, Node<T>[]>();
         for (const n of list) {
           const rel = bestRelTypeToParent(n);
@@ -1765,17 +1926,53 @@ export async function layoutLevelsTwoPane<T = any>(
         // - if a relation subcategory is collapsed, it occupies 1 slot (controller) even if it has many members.
         const baseRowsForType = rowsForCount(list.length);
         let maxRelSizeVisible = 1;
+        let competesMaxVisible = 0;
         for (const [rk, v] of byRel.entries()) {
           const relKey = String(rk || '').trim();
           const nodesRel = (v || []);
           const collapsed = isSubcategoryCollapsed(effectiveGroupId, relKey) && nodesRel.length > 1;
           const visibleSize = collapsed ? 1 : nodesRel.length;
           maxRelSizeVisible = Math.max(maxRelSizeVisible, Math.max(1, visibleSize));
+          if (normalizeEdgeType(relKey) === 'COMPETES_WITH') {
+            competesMaxVisible = Math.max(competesMaxVisible, Math.max(0, visibleSize));
+          }
         }
-        const rowsForType = forceTwoRows
+        let rowsForType = forceTwoRows
           ? Math.max(minRowsForBlock, baseRowsForType)
           : Math.max(1, Math.min(baseRowsForType, maxRelSizeVisible));
-        const innerHForType = rowsForType * nodeHeight + Math.max(0, rowsForType - 1) * groupChildGapY;
+        // UX: if this type-block is ONLY "Competes", render as tall columns (up to 6 compact nodes per column).
+        // This avoids tiny groups becoming a single horizontal row (2+ items side-by-side).
+        if (compactLeftPane) {
+          // In Levels-left, we want deterministic tall columns:
+          // - mini nodes stack vertically up to 6 per column
+          // - full-size nodes stack vertically up to 2 per column
+          const typeMaxV = maxVerticalForNodes(list);
+          rowsForType = Math.max(1, Math.min(typeMaxV, maxRelSizeVisible));
+          // (competesMaxVisible is included in maxRelSizeVisible already; keep for future debugging)
+          void competesMaxVisible;
+        }
+        // Compute per-row max height for this type block (supports mixed compact/full nodes).
+        const minBase = compactLeftPane ? COMPACT_NODE_LAYOUT_HEIGHT : nodeHeight;
+        const rowHeights = new Array(rowsForType).fill(minBase);
+        for (const [rk, v] of byRel.entries()) {
+          const relKey = String(rk || '').trim();
+          const nodesRel = (v || []).slice().sort((a, b) => {
+            const al = String((a.data as any)?.label || a.id);
+            const bl = String((b.data as any)?.label || b.id);
+            return al.localeCompare(bl);
+          });
+          const collapsed = isSubcategoryCollapsed(effectiveGroupId, relKey) && nodesRel.length > 1;
+          const controller = nodesRel[0];
+          const nodesForLayout = collapsed ? (controller ? [controller] : []) : nodesRel;
+          for (let idx = 0; idx < nodesForLayout.length; idx++) {
+            const rowIdx = idx % Math.max(1, rowsForType);
+            const nd: any = (nodesForLayout[idx] as any)?.data || {};
+            rowHeights[rowIdx] = Math.max(rowHeights[rowIdx], leftPaneLayoutHeightFor(nd));
+          }
+        }
+        const innerHForType =
+          rowHeights.reduce((acc, h) => acc + h, 0) +
+          Math.max(0, rowsForType - 1) * groupChildGapY;
         maxInnerH = Math.max(maxInnerH, innerHForType);
         maxRows = Math.max(maxRows, rowsForType);
 
@@ -1805,8 +2002,16 @@ export async function layoutLevelsTwoPane<T = any>(
             : [];
           const nodesForLayout = collapsed ? (controller ? [controller] : []) : nodesRel;
 
-          const cols = collapsed ? 1 : Math.ceil(nodesForLayout.length / Math.max(1, rowsForType));
-          const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
+          const relKeyNorm = normalizeEdgeType(relKey);
+          // UX: "Competes" should stack in a compact column even if other subcategories exist.
+          const rowsForRel =
+            compactLeftPane && relKeyNorm === 'COMPETES_WITH'
+              // NOTE: competitors in Levels-left are always rendered as compact mini-nodes (nodeSize is applied later),
+              // so treat them as compact for row calculation to avoid "full-size" spacing.
+              ? Math.max(1, Math.min(6, nodesForLayout.length))
+              : Math.max(1, rowsForType);
+          const cols = collapsed ? 1 : Math.ceil(nodesForLayout.length / rowsForRel);
+          const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
 
           const controllerId = collapsed ? String(controller?.id || '').trim() : undefined;
           const firstNodeId = String(nodesRel[0]?.id || '').trim() || controllerId;
@@ -1825,6 +2030,7 @@ export async function layoutLevelsTwoPane<T = any>(
             hiddenMemberIds: collapsed ? hiddenMemberIds : undefined,
             controllerId,
             stackKey,
+            rows: rowsForRel,
           });
           relColsTotal += cols;
           relCursor += blockW;
@@ -1835,18 +2041,33 @@ export async function layoutLevelsTwoPane<T = any>(
         blocks.push({ typeKey, rows: rowsForType, cols: relColsTotal, startX: cursorX, blockW: typeBlockW, relBlocks });
         cursorX += typeBlockW;
       } else {
-        const rowsForType = Math.max(minRowsForBlock, rowsForCount(list.length));
-        const innerHForType = rowsForType * nodeHeight + Math.max(0, rowsForType - 1) * groupChildGapY;
-        maxInnerH = Math.max(maxInnerH, innerHForType);
-        maxRows = Math.max(maxRows, rowsForType);
-
+        // For compact Products & Services, make taller columns:
+        // "2 full nodes vertically" == 6 compact nodes per column (3 per full slot).
+        const rowsForType =
+          compactLeftPane && (isProductsServicesType || isGeoType || isFacilitiesOrDepositType)
+            ? Math.max(1, Math.min(maxVerticalForNodes(list), list.length))
+            : Math.max(minRowsForBlock, rowsForCount(list.length));
         const nodesFlat = list.slice().sort((a, b) => {
           const al = String((a.data as any)?.label || a.id);
           const bl = String((b.data as any)?.label || b.id);
           return al.localeCompare(bl);
         });
+        // Compute per-row max height (supports mixed compact/full nodes).
+        const minBase = compactLeftPane ? COMPACT_NODE_LAYOUT_HEIGHT : nodeHeight;
+        const rowHeights = new Array(rowsForType).fill(minBase);
+        for (let idx = 0; idx < nodesFlat.length; idx++) {
+          const rowIdx = idx % Math.max(1, rowsForType);
+          const nd: any = (nodesFlat[idx] as any)?.data || {};
+          rowHeights[rowIdx] = Math.max(rowHeights[rowIdx], leftPaneLayoutHeightFor(nd));
+        }
+        const innerHForType =
+          rowHeights.reduce((acc, h) => acc + h, 0) +
+          Math.max(0, rowsForType - 1) * groupChildGapY;
+        maxInnerH = Math.max(maxInnerH, innerHForType);
+        maxRows = Math.max(maxRows, rowsForType);
+
         const cols = Math.ceil(nodesFlat.length / Math.max(1, rowsForType));
-        const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX;
+        const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
         relBlocks.push({
           edgeTypeKey: '',
           label: '',
@@ -1866,12 +2087,25 @@ export async function layoutLevelsTwoPane<T = any>(
     }
 
     const innerW = cursorX;
-    const innerH = Math.max(nodeHeight, maxInnerH);
-    const w = innerW + PAD_X * 2;
-    const padBottom = PAD_BOTTOM_BASE + (useRelGrouping ? REL_SUBTITLE_H : 0);
+    const minBase = compactLeftPane ? COMPACT_NODE_LAYOUT_HEIGHT : nodeHeight;
+    const innerH = Math.max(minBase, maxInnerH);
+    // Width is a pure function of column counts + fixed widths/gaps.
+    // We include a deterministic *half-gap* on BOTH sides so the content doesn't visually "stick"
+    // to the right edge (group is right-anchored in Levels mode) and borders stay symmetric.
+    const outerPadX = blocks.length > 1 ? Math.max(0, Math.floor(interBlockGapX / 2)) : 0;
+    const w = innerW + PAD_X * 2 + outerPadX * 2;
+    // Height: keep a little air, but don't over-reserve.
+    // In compact left pane, relation labels are rendered INSIDE relation containers (footer),
+    // so we only need enough bottom space to avoid overlap:
+    // footer uses `bottom: 6` and `height: 16` => ~22px, plus a small gap.
+    const LEFT_FOOTER_BLOCK_H = 22;
+    const LEFT_FOOTER_GAP_H = 8;
+    const padBottom = compactLeftPane
+      ? Math.max(PAD_BOTTOM_BASE, LEFT_FOOTER_BLOCK_H + LEFT_FOOTER_GAP_H)
+      : (PAD_BOTTOM_BASE + (useRelGrouping ? REL_SUBTITLE_H : 0));
     const relLabelY = PAD_TOP + innerH + 4;
     const h = innerH + PAD_TOP + padBottom;
-    return { w, h, cols: totalCols, rows: Math.max(1, maxRows), blocks, interBlockGapX, relLabelY, padBottom, interRelGapX };
+    return { w, h, cols: totalCols, rows: Math.max(1, maxRows), blocks, interBlockGapX, relLabelY, padBottom, interRelGapX, outerPadX };
   };
 
   // === 5) Place Right hierarchy nodes ===
@@ -2475,6 +2709,8 @@ export async function layoutLevelsTwoPane<T = any>(
     groupId: string,
     rows: number,
     groupParentId: string,
+    outerPadX: number,
+    groupH: number,
   ) => {
     const pNode = nodeById.get(String(groupParentId || '').trim());
     const pData: any = (pNode as any)?.data || {};
@@ -2483,20 +2719,175 @@ export async function layoutLevelsTwoPane<T = any>(
       String(pData?.canonicalPath || '').trim() ||
       String(groupParentId || '').trim();
 
-    for (const b of blocks) {
+    // IMPORTANT (nested containers):
+    // Root `levels:left:*` groups carry extra symmetric padding (PAD_X + outerPadX) so aggregated edge ports
+    // have breathing room and the group doesn't "stick" to the right band.
+    // If we draw the outline on the ROOT, that padding becomes part of the first/last "column segment",
+    // making крайние визуально шире when every type has exactly 1 column.
+    //
+    // Fix: keep ROOT borderless (ports still attach to it), and draw the outline on an INNER frame
+    // that wraps exactly the content columns (no side padding).
+    const frameId = `levels:leftframe:${groupId}`;
+    // Give a little visual "air" inside the outline without affecting deterministic column math.
+    const FRAME_PAD_X = 14;
+    const contentW = (() => {
+      let maxX = 0;
+      for (const b of (blocks || []) as any[]) {
+        const sx = Math.max(0, Math.floor((b as any)?.startX || 0));
+        const bw = Math.max(0, Math.floor((b as any)?.blockW || 0));
+        maxX = Math.max(maxX, sx + bw);
+      }
+      return Math.max(1, Math.round(maxX));
+    })();
+    groupNodes.push({
+      id: frameId,
+      type: 'horizonGroup' as any,
+      position: { x: Math.round(PAD_X + outerPadX - FRAME_PAD_X), y: 0 },
+      parentId: groupId,
+      extent: 'parent' as any,
+      selectable: false,
+      draggable: false,
+      connectable: false,
+      focusable: false,
+      deletable: false,
+      style: { width: Math.max(1, Math.round(contentW + FRAME_PAD_X * 2)), height: Math.max(1, Math.round(groupH)), zIndex: 0 } as any,
+      data: {
+        isGroup: true,
+        groupIsBackdrop: true,
+        groupInteractive: false,
+        groupHideHeader: true,
+        groupNoFill: true,
+        groupBorderMode: 'none',
+        groupParentId: groupParentId,
+      } as any,
+    } as any);
+
+    for (let bIdx = 0; bIdx < blocks.length; bIdx++) {
+      const b = blocks[bIdx]!;
       const safeRows = Math.max(1, Math.floor((b as any)?.rows || rows || 1));
+      const minBase = compactLeftPane ? COMPACT_NODE_LAYOUT_HEIGHT : nodeHeight;
+      // Compute per-row max height for this type block (supports mixed compact/full nodes).
+      const rowHeights = new Array(safeRows).fill(minBase);
       for (const rb of (b.relBlocks || [])) {
+        for (let idx = 0; idx < (rb.nodes || []).length; idx++) {
+          const childN = rb.nodes[idx]!;
+          const rowIdx = idx % Math.max(1, safeRows);
+          const nd: any = (childN as any)?.data || {};
+          rowHeights[rowIdx] = Math.max(rowHeights[rowIdx], leftPaneLayoutHeightFor(nd));
+        }
+      }
+      const rowOffsets = new Array(safeRows).fill(0);
+      for (let r = 1; r < safeRows; r++) {
+        rowOffsets[r] = rowOffsets[r - 1] + rowHeights[r - 1] + groupChildGapY;
+      }
+
+      // Create a real container for this type section (Approach #1).
+      // Children will be nested under this container, so ReactFlow owns the geometry and dividers stay crisp.
+      const typeKey = String((b as any)?.typeKey || '').trim() || 'UNKNOWN';
+      const typeLabel = getTypeGroupLabel(typeKey);
+      const typeGroupId = `levels:lefttype:${groupId}:${typeKey}`;
+      const typeGroupX = Math.round(FRAME_PAD_X + Math.max(0, Math.floor((b as any)?.startX || 0)));
+      // Container width is derived from column counts (stored in blockW).
+      const typeGroupW = Math.max(1, Math.round(Math.floor((b as any)?.blockW || 0) || 1));
+      groupNodes.push({
+        id: typeGroupId,
+        type: 'horizonGroup' as any,
+        position: { x: typeGroupX, y: 0 },
+        parentId: frameId,
+        extent: 'parent' as any,
+        selectable: false,
+        draggable: false,
+        connectable: false,
+        focusable: false,
+        deletable: false,
+        style: { width: typeGroupW, height: Math.max(1, Math.round(groupH)), zIndex: 0 } as any,
+        data: {
+          isGroup: true,
+          groupIsBackdrop: true,
+          groupInteractive: false,
+          groupHideHeader: false,
+          groupNoFill: true,
+          groupTitle: typeLabel,
+          // Vertical dividers between type columns:
+          groupBorderMode: bIdx < blocks.length - 1 ? 'divider-right' : 'none',
+          // For future: useful for debugging and potential “scroll to section”
+          groupParentId: groupParentId,
+        } as any,
+      } as any);
+
+      const relBlocks = (b.relBlocks || []) as any[];
+      for (let rbIdx = 0; rbIdx < relBlocks.length; rbIdx++) {
+        const rb: any = relBlocks[rbIdx]!;
+        const edgeTypeKey = String((rb as any)?.edgeTypeKey || '').trim();
+        const relKeyNorm = normalizeEdgeType(edgeTypeKey);
+        const isCompetesSubcategory = compactLeftPane && relKeyNorm === 'COMPETES_WITH';
+        // IMPORTANT: competitors are rendered as compact in Levels-left, but nodeSize is applied below,
+        // so we must use compact offsets unconditionally here to avoid full-size row spacing.
+        const competesUseCompactOffsets = isCompetesSubcategory;
+        const relTitle = String((rb as any)?.label || edgeTypeKey || '').trim();
+        const nodeCount = typeof (rb as any)?.nodeCount === 'number' ? (rb as any).nodeCount : (rb?.nodes?.length || 0);
+        const firstNodeId = String((rb as any)?.firstNodeId || '').trim();
+        const collapsed = Boolean((rb as any)?.collapsed);
+
+        // Create a real container for this relation subcategory within the type section.
+        const rbStart = Math.round(Math.max(0, Math.floor((rb as any)?.startX || 0)));
+        const rbW = Math.max(1, Math.round(Math.floor((rb as any)?.blockW || 0) || 1));
+        const relGroupId = `levels:leftrel:${typeGroupId}:${relKeyNorm || 'OTHER'}:${rbIdx}`;
+        groupNodes.push({
+          id: relGroupId,
+          type: 'horizonGroup' as any,
+          position: { x: rbStart, y: 0 },
+          parentId: typeGroupId,
+          extent: 'parent' as any,
+          selectable: false,
+          draggable: false,
+          connectable: false,
+          focusable: false,
+          deletable: false,
+          style: { width: rbW, height: Math.max(1, Math.round(groupH)), zIndex: 0 } as any,
+          data: {
+            isGroup: true,
+            groupIsBackdrop: false,
+            groupInteractive: false,
+            groupHideHeader: true,
+            groupNoFill: true,
+            // Only draw vertical dividers between relation subcategories.
+            groupBorderMode: rbIdx < relBlocks.length - 1 ? 'divider-right' : 'none',
+            // Footer label + collapse control (rendered by HorizonGroupNode).
+            groupFooterTitle: relTitle,
+            groupFooterEdgeTypeKey: relKeyNorm,
+            groupFooterNodeCount: nodeCount,
+            groupFooterCollapsed: collapsed,
+            groupFooterFirstNodeId: firstNodeId,
+            onToggleSubcategoryCollapse,
+            groupId: groupId, // root Levels-left group
+          } as any,
+        } as any);
+
         for (let idx = 0; idx < rb.nodes.length; idx++) {
           const child = rb.nodes[idx]!;
           // Column-major within each relation sub-block: first fill vertical, then move right.
-      const rowIdx = idx % safeRows;
-      const colIdx = Math.floor(idx / safeRows);
-          const cx = PAD_X + b.startX + rb.startX + colIdx * (nodeWidth + groupChildGapX);
-      const cy = PAD_TOP + rowIdx * (nodeHeight + groupChildGapY);
+          // For COMPETES: compute its own compact row offsets so it doesn't inherit tall row heights
+          // from other subcategories (e.g. AUDIT) within the same type block.
+          const rbRows = isCompetesSubcategory
+            ? Math.max(1, Math.floor((rb as any)?.rows || Math.min(6, rb.nodes.length) || 1))
+            : safeRows;
+          const rowIdx = idx % rbRows;
+          const colIdx = Math.floor(idx / rbRows);
+          // Keep some "air" from the left divider inside each relation container.
+          const cx = Math.round(LEFT_REL_CONTAINER_PAD_X + colIdx * (nodeWidth + groupChildGapX));
+          const cy = (() => {
+            if (!competesUseCompactOffsets) return PAD_TOP + (rowOffsets[rowIdx] || 0);
+            // Compact rows: each row is COMPACT_NODE_LAYOUT_HEIGHT + groupChildGapY.
+            const rbRowOffsets = new Array(rbRows).fill(0);
+            for (let r = 1; r < rbRows; r++) {
+              rbRowOffsets[r] = rbRowOffsets[r - 1] + COMPACT_NODE_LAYOUT_HEIGHT + groupChildGapY;
+            }
+            return PAD_TOP + (rbRowOffsets[rowIdx] || 0);
+          })();
           const isCollapsed = Boolean((rb as any)?.collapsed);
           const controllerId = String((rb as any)?.controllerId || '').trim();
           const stackKey = String((rb as any)?.stackKey || '').trim();
-          const edgeTypeKey = String((rb as any)?.edgeTypeKey || '').trim();
           const nodeCount = typeof (rb as any)?.nodeCount === 'number' ? (rb as any).nodeCount : (rb.nodes?.length || 0);
           const isController = Boolean(isCollapsed && controllerId && String(child.id || '').trim() === controllerId);
 
@@ -2533,10 +2924,15 @@ export async function layoutLevelsTwoPane<T = any>(
               };
             }
           }
+          
+          // Apply compact node size for left pane when enabled.
+          if (isCompetesSubcategory || isLeftPaneCompactNode(d)) {
+            d.nodeSize = 'compact';
+          }
 
           childNodes.push({
             ...(child as any),
-            parentId: groupId,
+            parentId: relGroupId,
             extent: 'parent' as any,
             zIndex: 1,
             // Preserve manual hidden state; derived stack hiding is applied below.
@@ -2560,9 +2956,13 @@ export async function layoutLevelsTwoPane<T = any>(
               md.stackExpanded = false;
               md.hiddenByStack = true;
               (md as any).stackControllerId = controllerId;
+              // Apply compact node size for left pane when enabled.
+              if (isCompetesSubcategory || isLeftPaneCompactNode(md)) {
+                md.nodeSize = 'compact';
+              }
               childNodes.push({
                 ...(member as any),
-                parentId: groupId,
+                parentId: relGroupId,
                 extent: 'parent' as any,
                 zIndex: 0,
                 hidden: true,
@@ -2591,6 +2991,7 @@ export async function layoutLevelsTwoPane<T = any>(
     blocks: TypeBlock<T>[];
     interBlockGapX: number;
     relLabelY: number;
+    outerPadX: number;
     edgeTypes: string[];
   };
 
@@ -2668,6 +3069,7 @@ export async function layoutLevelsTwoPane<T = any>(
       blocks: dim.blocks,
       interBlockGapX: dim.interBlockGapX,
       relLabelY: dim.relLabelY,
+      outerPadX: Math.max(0, Math.floor((dim as any)?.outerPadX || 0)),
       edgeTypes,
     });
   }
@@ -2732,10 +3134,11 @@ export async function layoutLevelsTwoPane<T = any>(
   for (const g of groupInfos) {
     const top = g.desiredGy;
     const minTop = isFinite(prevBottom) ? prevBottom + GROUP_STACK_GAP_Y : -Infinity;
-    g.gy = Math.max(top, minTop);
+    // Snap groups to integer pixels to avoid blurry dashed borders / drifting dividers on zoom.
+    g.gy = Math.round(Math.max(top, minTop));
     prevBottom = g.gy + g.h;
     // Keep the parent node strictly aligned to the group's vertical center.
-    const newNodeY = (g.gy + g.h / 2) - nodeHeight / 2;
+    const newNodeY = Math.round((g.gy + g.h / 2) - nodeHeight / 2);
     const rp = rightPos.get(g.parentId);
     if (rp) rightPos.set(g.parentId, { x: rp.x, y: newNodeY });
     anchoredRightIds.add(g.parentId);
@@ -2887,7 +3290,8 @@ export async function layoutLevelsTwoPane<T = any>(
     groupNodes.push({
       id: g.groupId,
       type: 'horizonGroup' as any,
-      position: { x: g.gx, y: g.gy },
+      // Snap to integer pixels to keep dashed outlines/dividers crisp.
+      position: { x: Math.round(g.gx), y: Math.round(g.gy) },
       selectable: false,
       draggable: false,
       connectable: false,
@@ -2900,55 +3304,9 @@ export async function layoutLevelsTwoPane<T = any>(
         groupInteractive: false,
         groupHideHeader: true,
         groupNoFill: true,
-        // Optional: show type subsections inside the group container (visual separators + labels).
-        groupTypeBlocks:
-          (g.blocks || []).map((b, idx) => {
-            const typeKey = String((b as any)?.typeKey || '').trim() || 'UNKNOWN';
-            const label = getTypeGroupLabel(typeKey);
-            const blockW = Math.max(1, Math.floor((b as any)?.blockW || 0)) || (
-              Math.max(1, Math.floor((b as any)?.cols || 1)) * nodeWidth +
-              Math.max(0, Math.max(1, Math.floor((b as any)?.cols || 1)) - 1) * groupChildGapX
-            );
-            const rawStart = Math.max(0, Math.floor((b as any)?.startX || 0));
-            const startX = PAD_X + rawStart;
-            const endX = startX + blockW;
-            const gapX = Math.max(0, Math.floor((g.interBlockGapX || 0) / 2));
-            const hasNext = idx < (g.blocks?.length || 0) - 1;
-
-            // Visual divider lines between horizontal type sections (keep as-is).
-            const dividerX = hasNext ? (endX + gapX) : undefined;
-            const relBlocks = Array.isArray((b as any)?.relBlocks) ? ((b as any).relBlocks as any[]) : [];
-            const relationBlocks =
-              relBlocks.length > 0
-                ? relBlocks.map((rb: any, rIdx: number) => {
-                    const rbStart = Math.max(0, Math.floor(rb?.startX || 0));
-                    const rbW = Math.max(1, Math.floor(rb?.blockW || 0));
-                    const edgeTypeKey = String(rb?.edgeTypeKey || '').trim();
-                    const relLabel = String(rb?.label || edgeTypeKey || '').trim();
-                    const nodeCount = typeof rb?.nodeCount === 'number' ? rb.nodeCount : (rb?.nodes?.length || 0);
-                    const collapsed = Boolean(rb?.collapsed);
-                    const firstNodeId = String((rb as any)?.firstNodeId || '').trim();
-                    const next = relBlocks[rIdx + 1];
-                    const nextStart = next ? Math.max(0, Math.floor(next?.startX || 0)) : undefined;
-                    // Divider between subcategories (center of the gap).
-                    const dividerX =
-                      typeof nextStart === 'number'
-                        ? (startX + Math.floor(((rbStart + rbW) + nextStart) / 2))
-                        : undefined;
-                    return {
-                      label: relLabel,
-                      startX: startX + rbStart,
-                      blockW: rbW,
-                      edgeTypeKey,
-                      nodeCount,
-                      collapsed,
-                      firstNodeId,
-                      dividerX,
-                    };
-                  })
-                : undefined;
-            return { typeKey, label, blockW, startX, dividerX, relationBlocks, relationLabelY: g.relLabelY };
-          }),
+        // Levels root group: no outline; use a subtle background tint for separation.
+        groupBorderMode: 'none',
+        groupBgTint: 'subtle',
         // Callback to toggle subcategory collapse state.
         onToggleSubcategoryCollapse,
         groupId: g.groupId,
@@ -2968,7 +3326,7 @@ export async function layoutLevelsTwoPane<T = any>(
       } as any,
     } as any);
 
-    attachChildrenWrap(g.blocks, g.groupId, g.rows, g.parentId);
+    attachChildrenWrap(g.blocks, g.groupId, g.rows, g.parentId, g.outerPadX || 0, g.h);
   }
 
   // Lens focus objects: far-right group for pinned, disconnected nodes (degree=0).
@@ -3299,6 +3657,9 @@ export async function layoutLevelsTwoPane<T = any>(
       delete d.hiddenByStack;
       delete (d as any).stackControllerId;
       delete d.levelsPane;
+      // IMPORTANT: right-pane (backbone) nodes must render in full size.
+      // If the node was previously compact in the left pane, clear the override.
+      delete d.nodeSize;
 
       // Preserve stack membership for ALL members (not only the controller).
       const memberKey = stackKeyByMemberId.get(n.id);
@@ -3324,7 +3685,7 @@ export async function layoutLevelsTwoPane<T = any>(
       // Stack controllers get higher zIndex so they render above regular nodes when expanded
       const isStackController = !!meta;
       const zIndex = isStackController ? 10 : undefined;
-      return ({ ...n, hidden, data: d, position: { x: p.x, y: p.y }, zIndex } as any);
+      return ({ ...n, hidden, data: d, position: { x: Math.round(p.x), y: Math.round(p.y) }, zIndex } as any);
     }
     if (dockMap.has(n.id)) return dockMap.get(n.id)!;
     return n;
@@ -4059,6 +4420,11 @@ export interface LayoutOptions_Custom {
    * Called from group UI when user clicks the collapse/expand button.
    */
   onToggleSubcategoryCollapse?: (groupId: string, edgeType: string, nextCollapsed: boolean, focusNodeId?: string) => void;
+  /**
+   * Use compact node rendering for left pane groups (Levels layout).
+   * When true, left pane nodes will have nodeSize: 'compact' and use COMPACT_NODE_LAYOUT_HEIGHT.
+   */
+  compactLeftPane?: boolean;
 }
 
 /**
@@ -4546,7 +4912,8 @@ export async function layoutExpansionWithGroups<T = any>(
     } else {
       // Size matches actual item count (max 6 columns)
       nodesPerRow = Math.min(count, GROUP_MAX_COLS);
-      rows = Math.ceil(count / nodesPerRow);
+      // Cap vertical stacking: never more than GROUP_MAX_ROWS per column.
+      rows = Math.min(GROUP_MAX_ROWS, Math.ceil(count / Math.max(1, nodesPerRow)));
     }
 
     const innerW = nodesPerRow * nodeWidth + Math.max(0, nodesPerRow - 1) * childGapX;
@@ -4745,7 +5112,8 @@ export function rebuildGroupContainers<T = any>(
       rows = GROUP_MAX_ROWS;
     } else {
       nodesPerRow = Math.min(g.kids.length, GROUP_MAX_COLS);
-      rows = Math.ceil(g.kids.length / nodesPerRow);
+      // Cap vertical stacking: never more than GROUP_MAX_ROWS per column.
+      rows = Math.min(GROUP_MAX_ROWS, Math.ceil(g.kids.length / Math.max(1, nodesPerRow)));
     }
 
     const innerW = nodesPerRow * nodeWidth + Math.max(0, nodesPerRow - 1) * childGapX;

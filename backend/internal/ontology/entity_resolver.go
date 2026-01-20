@@ -273,8 +273,8 @@ func (r *EntityResolver) normalizeCommonVariations(text string) string {
 		"japan":  "япония",
 		"nippon": "япония",
 		// США
-		"сша":                       "соединенные штаты америки",
-		"usa":                       "соединенные штаты америки",
+		"сша":                      "соединенные штаты америки",
+		"usa":                      "соединенные штаты америки",
 		"united states":            "соединенные штаты америки",
 		"united states of america": "соединенные штаты америки",
 		// Россия
@@ -416,14 +416,14 @@ func (r *EntityResolver) resolveWithLLM(
 ) *models.Entity {
 	// Формируем список существующих entities для контекста (без внутренних ID)
 	entitiesList := make([]string, 0, len(existingEntities))
-	nameToEntity := make(map[string]*models.Entity) // canonicalName -> Entity
+	nameToEntity := make(map[string]*models.Entity)     // canonicalName -> Entity
 	wikidataToEntity := make(map[string]*models.Entity) // Wikidata ID -> Entity
-	
+
 	for _, entity := range existingEntities {
 		if entity.Type != entityType && entityType != models.EntityTypeOther {
 			continue
 		}
-		
+
 		// Формируем описание entity без внутреннего ID
 		entityInfo := fmt.Sprintf("- Name: %s", entity.CanonicalName)
 		if len(entity.Aliases) > 0 {
@@ -437,7 +437,7 @@ func (r *EntityResolver) resolveWithLLM(
 			}
 		}
 		entitiesList = append(entitiesList, entityInfo)
-		
+
 		// Индексируем по canonicalName (normalized)
 		normalizedName := r.normalizeName(entity.CanonicalName)
 		nameToEntity[normalizedName] = entity
@@ -506,7 +506,7 @@ Return JSON strictly matching this schema:
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
 			MinCapabilityScore:       6,
-			MaxOutputSize:            512,
+			MaxOutputSize:            4096,
 			MinContextWindow:         2000,
 		},
 		Verifier: verifier,
@@ -664,4 +664,3 @@ func (r *EntityResolver) MergeEntities(
 
 	return nil
 }
-

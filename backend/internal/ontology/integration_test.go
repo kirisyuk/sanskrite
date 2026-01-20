@@ -749,6 +749,7 @@ The tech industry is experiencing rapid innovation in artificial intelligence.`,
 // Helper functions
 
 func setupDomainService(t *testing.T, fsClient *firestore.Client, genaiClient *gen_combined.Client, executor *ai.AITaskExecutor) *domain.DomainService {
+	t.Helper()
 	conceptsRepo := repo.NewConceptRepository(fsClient)
 	relationsRepo := repo.NewRelationRepository(fsClient)
 	logger := log.New(os.Stdout, "[Test] ", log.LstdFlags)
@@ -756,6 +757,8 @@ func setupDomainService(t *testing.T, fsClient *firestore.Client, genaiClient *g
 }
 
 func setupExtractor(t *testing.T, fsClient *firestore.Client, genaiClient *gen_combined.Client, executor *ai.AITaskExecutor, tenantID string) *OntologyExtractor {
+	t.Helper()
+	_ = tenantID
 	entitiesRepo := repo.NewEntityRepository(fsClient)
 	eventsRepo := repo.NewEventRepository(fsClient)
 	claimsRepo := repo.NewClaimRepository(fsClient)
@@ -964,12 +967,14 @@ func extractDataWithLLM(t *testing.T, ctx context.Context, genaiClient *gen_comb
 }
 
 func getWikidataClientForTest(t *testing.T) WikidataClientInterface {
+	t.Helper()
 	// Можно использовать реальный клиент или mock
 	// Для теста используем реальный если доступен
 	return nil // Пока возвращаем nil, можно добавить реальный клиент
 }
 
 func getEmbeddingProvider(t *testing.T) ai.EmbeddingProvider {
+	t.Helper()
 	ctx := context.Background()
 	projectID := os.Getenv("GCP_PROJECT_ID")
 	if projectID == "" {

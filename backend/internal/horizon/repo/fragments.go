@@ -17,9 +17,58 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 var ErrFragmentNotFound = errors.New("horizon fragment not found")
+
+// bestEffortAssembleCanonicalPathFromParts rebuilds fragment.CanonicalPath from CanonicalParts, if present.
+// It is intentionally fail-open:
+// - If parts are incomplete (or cannot assemble), it keeps the existing canonicalPath and logs a warning.
+// - This allows gradual adoption: callers may start writing canonicalParts, while older code still writes canonicalPath.
+func bestEffortAssembleCanonicalPathFromParts(fragment *models.HorizonFragment) {
+	if fragment == nil || fragment.CanonicalParts == nil {
+		return
+	}
+	parts := fragment.CanonicalParts
+	built, ok := parts.BuildCanonicalPath()
+	if !ok || strings.TrimSpace(built) == "" {
+		log.Printf("[HorizonFragments] WARNING: canonicalParts present but incomplete; keeping canonicalPath=%q fragmentId=%q namespace=%q",
+			strings.TrimSpace(fragment.CanonicalPath), strings.TrimSpace(fragment.ID), strings.TrimSpace(parts.Namespace))
+		return
+	}
+	// Only update when changed to avoid noisy updates/exports.
+	if strings.TrimSpace(fragment.CanonicalPath) != strings.TrimSpace(built) {
+		fragment.CanonicalPath = strings.TrimSpace(built)
+	}
+}
+
+// bestEffortBackfillCanonicalPartsFromPath parses fragment.CanonicalPath into fragment.CanonicalParts.
+// This is intended for gradual migration: most of the pipeline still produces canonicalPath strings,
+// but we want canonicalParts available for selective canonizers and safe, deterministic rewrites.
+//
+// Safety:
+// - Only fills CanonicalParts when it is currently nil.
+// - Fail-open: if parsing fails, keeps CanonicalParts nil and does not block writes.
+func bestEffortBackfillCanonicalPartsFromPath(fragment *models.HorizonFragment) {
+	if fragment == nil {
+		return
+	}
+	if fragment.CanonicalParts != nil {
+		return
+	}
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	if cp == "" {
+		return
+	}
+	parts, err := taxonomy.ParseCanonicalPathParts(cp)
+	if err != nil || parts == nil {
+		log.Printf("[HorizonFragments] WARNING: failed to parse canonicalParts from canonicalPath=%q fragmentId=%q err=%v",
+			cp, strings.TrimSpace(fragment.ID), err)
+		return
+	}
+	fragment.CanonicalParts = parts
+}
 
 // HorizonFragmentsRepository репозиторий для работы с HorizonFragment
 type HorizonFragmentsRepository struct {
@@ -173,6 +222,10 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	if fragment == nil {
 		return "", ErrInvalidDocument
 	}
+	// Best-effort: if only canonicalPath was provided, parse it into canonicalParts for future selective fixes.
+	bestEffortBackfillCanonicalPartsFromPath(fragment)
+	// Best-effort: if canonicalParts were provided, assemble canonicalPath before validation.
+	bestEffortAssembleCanonicalPathFromParts(fragment)
 	if err := fragment.Validate(); err != nil {
 		return "", fmt.Errorf("validation error: %w", err)
 	}
@@ -503,6 +556,10 @@ func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *model
 	if fragment == nil || fragment.ID == "" {
 		return ErrInvalidDocument
 	}
+	// Best-effort: if only canonicalPath was provided, parse it into canonicalParts for future selective fixes.
+	bestEffortBackfillCanonicalPartsFromPath(fragment)
+	// Best-effort: if canonicalParts were provided, assemble canonicalPath before validation.
+	bestEffortAssembleCanonicalPathFromParts(fragment)
 	if err := fragment.Validate(); err != nil {
 		return fmt.Errorf("validation error: %w", err)
 	}
@@ -579,6 +636,10 @@ func (r *HorizonFragmentsRepository) UpdateGovernance(ctx context.Context, id st
 		fragment.Governance = governance
 		fragment.UpdatedAt = now
 		fragment.Metadata.LastUpdatedAt = now
+		// Best-effort: backfill canonicalParts from canonicalPath if missing (gradual migration).
+		bestEffortBackfillCanonicalPartsFromPath(&fragment)
+		// Best-effort: keep canonicalPath consistent with canonicalParts if present.
+		bestEffortAssembleCanonicalPathFromParts(&fragment)
 		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
 		return tx.Set(docRef, fragment)
 	})
@@ -607,6 +668,10 @@ func (r *HorizonFragmentsRepository) IncrementActiveSubscribers(ctx context.Cont
 		}
 		fragment.UpdatedAt = now
 		fragment.Metadata.LastUpdatedAt = now
+		// Best-effort: backfill canonicalParts from canonicalPath if missing (gradual migration).
+		bestEffortBackfillCanonicalPartsFromPath(&fragment)
+		// Best-effort: keep canonicalPath consistent with canonicalParts if present.
+		bestEffortAssembleCanonicalPathFromParts(&fragment)
 		// Best-effort backfill: ensure indexPaths is present on any write-path.
 		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
 		return tx.Set(docRef, fragment)
@@ -638,6 +703,10 @@ func (r *HorizonFragmentsRepository) DecrementActiveSubscribers(ctx context.Cont
 		}
 		fragment.UpdatedAt = now
 		fragment.Metadata.LastUpdatedAt = now
+		// Best-effort: backfill canonicalParts from canonicalPath if missing (gradual migration).
+		bestEffortBackfillCanonicalPartsFromPath(&fragment)
+		// Best-effort: keep canonicalPath consistent with canonicalParts if present.
+		bestEffortAssembleCanonicalPathFromParts(&fragment)
 		// Best-effort backfill: ensure indexPaths is present on any write-path.
 		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
 		return tx.Set(docRef, fragment)

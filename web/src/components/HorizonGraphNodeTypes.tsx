@@ -157,8 +157,21 @@ export interface HorizonNodeData {
   localFilterEdgeTypes?: string[];
   onOpenLocalFilters?: (nodeId: string, nextOpen: boolean) => void;
   onToggleLocalFilter?: (nodeId: string, edgeType: string, nextVisible: boolean) => void;
+  /** Node display size: 'default' (148px height) or 'compact' (48px height). */
+  nodeSize?: 'default' | 'compact';
   [key: string]: any;
 }
+
+// Node dimensions (default / full size)
+export const DEFAULT_NODE_WIDTH = 180;
+export const DEFAULT_NODE_HEIGHT = 148;
+export const DEFAULT_NODE_LAYOUT_HEIGHT = 161; // includes expand button protruding
+
+// Compact node dimensions (used in left pane groups)
+export const COMPACT_NODE_WIDTH = 180;
+// Goal: 3 compact nodes fit into one full (layout) slot: 3*49 + 2*7 = 161
+export const COMPACT_NODE_HEIGHT = 49;
+export const COMPACT_NODE_LAYOUT_HEIGHT = 49;
 
 // Цветовая схема по типам сущностей
 interface NodeColorScheme {
@@ -241,10 +254,11 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     accent: '#8B5CF6', accentDark: '#A78BFA',
   },
   'PRODUCT': {
-    bg: '#FEF3C7', bgDark: '#78350F',
-    border: '#F59E0B', borderDark: '#FBBF24',
-    text: '#92400E', textDark: '#FDE68A',
-    accent: '#F59E0B', accentDark: '#FBBF24',
+    // Steel / slate palette to avoid clashing with MARKET (gold).
+    bg: '#E2E8F0', bgDark: '#0F172A',
+    border: '#64748B', borderDark: '#94A3B8',
+    text: '#334155', textDark: '#E2E8F0',
+    accent: '#64748B', accentDark: '#CBD5E1',
   },
   'SERVICE': {
     bg: '#FCE7F3', bgDark: '#831843',
@@ -315,14 +329,21 @@ export const getNodeColors = (type: string | undefined, theme: 'light' | 'dark')
   accent: string;
 } => {
   const normalizedType = (type || '').toUpperCase().replace(/\s+/g, '_');
+  const cacheKey = `${normalizedType}:${theme}`;
+  const cached = (getNodeColors as any)._cache?.get(cacheKey);
+  if (cached) return cached;
   const scheme = NODE_COLORS[normalizedType] || NODE_COLORS['default'];
   
-  return {
+  const out = {
     bg: theme === 'dark' ? scheme.bgDark : scheme.bg,
     border: theme === 'dark' ? scheme.borderDark : scheme.border,
     text: theme === 'dark' ? scheme.textDark : scheme.text,
     accent: theme === 'dark' ? scheme.accentDark : scheme.accent,
   };
+  const m = (getNodeColors as any)._cache || new Map<string, any>();
+  m.set(cacheKey, out);
+  (getNodeColors as any)._cache = m;
+  return out;
 };
 
 const hexToRgba = (hex: string, alpha: number) => {
@@ -379,6 +400,25 @@ const ensureHorizonNode2026Styles = () => {
     @keyframes hzn-spin {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    /* Compact node styles (for left pane groups in Levels layout) */
+    .hzn-node-compact {
+      transition: box-shadow 0.15s ease, border-color 0.15s ease;
+    }
+    .hzn-node-compact.is-selected {
+      border-color: var(--hzn-accent, #3B82F6);
+    }
+    :root[data-hzn-perf-mode="true"] .hzn-node-compact {
+      transition: none !important;
+      box-shadow: none !important;
+    }
+    :root[data-hzn-perf-mode="true"] .hzn-node-compact.is-selected {
+      box-shadow: 0 0 0 2px var(--hzn-accent-ring) !important;
     }
 
     .hzn-node-2026 {
@@ -1948,6 +1988,20 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
   const ring = selected ? (theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(15,23,42,0.20)') : undefined;
   const borderWidth = isStackGroup ? 0 : (noFill ? 2 : 1.5);
   const borderStyle = isStackGroup ? 'solid' : 'dashed';
+  // Border mode for group containers:
+  // - outline (default): full rectangle
+  // - none: no border
+  // - divider-left / divider-right: only a single vertical dashed divider (used for Levels left-pane columns)
+  const borderMode = String((data as any)?.groupBorderMode || 'outline').trim().toLowerCase();
+  const fullBorderCss = `${borderWidth}px ${borderStyle} ${border}`;
+  const dividerBorderCss = `1px dashed ${border}`;
+
+  // Optional subtle background tint (used for Levels root group instead of an outline).
+  const bgTint = String((data as any)?.groupBgTint || '').trim().toLowerCase();
+  if (bgTint === 'subtle') {
+    // Keep *very* subtle — just enough to separate from pure black.
+    bg = theme === 'dark' ? 'rgba(255,255,255,0.015)' : 'rgba(15,23,42,0.03)';
+  }
 
   // Optional: intra-group subsections (used by Levels Two-Pane left groups to separate children by fragment type).
   const typeBlocks = (data as any)?.groupTypeBlocks as
@@ -2069,6 +2123,16 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
     cursor: 'not-allowed',
   };
 
+  // Optional: footer label (used by nested relation containers in Levels left pane)
+  const footerTitle = String((data as any)?.groupFooterTitle || '').trim();
+  const footerEdgeTypeKey = String((data as any)?.groupFooterEdgeTypeKey || '').trim();
+  const footerNodeCount = typeof (data as any)?.groupFooterNodeCount === 'number' ? (data as any).groupFooterNodeCount : undefined;
+  const footerCollapsed = Boolean((data as any)?.groupFooterCollapsed);
+  const footerFirstNodeId = String((data as any)?.groupFooterFirstNodeId || '').trim();
+  const footerGroupIdForToggle = String((data as any)?.groupId || id).trim();
+  const footerCanToggle = Boolean(footerEdgeTypeKey && typeof (data as any)?.onToggleSubcategoryCollapse === 'function');
+  const showFooterCollapsePill = Boolean(footerCanToggle && !footerCollapsed && typeof footerNodeCount === 'number' && footerNodeCount > 1);
+
   const handlePrevPage = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (currentPage > 0 && onGroupPageChange) {
@@ -2089,8 +2153,10 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         width: '100%',
         height: '100%',
         background: bg,
-        border: `${borderWidth}px ${borderStyle} ${border}`,
-        borderRadius: 12,
+        border: borderMode === 'outline' ? fullBorderCss : 'none',
+        borderLeft: borderMode === 'divider-left' ? dividerBorderCss : undefined,
+        borderRight: borderMode === 'divider-right' ? dividerBorderCss : undefined,
+        borderRadius: (borderMode === 'outline' || isStackGroup || bgTint === 'subtle') ? 12 : 0,
         boxShadow: isStackGroup
           ? 'none'
           : ((noFill && !ring)
@@ -2457,6 +2523,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
               fontSize: 11,
               fontWeight: 700,
               letterSpacing: '0.5px',
+              textTransform: 'uppercase',
               color: titleColor,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -2597,6 +2664,95 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
           </button>
         </div>
       )}
+
+      {/* Footer label (Bottom): used for relation subcategory containers in Levels left pane */}
+      {footerTitle && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 6,
+            left: 0,
+            right: 0,
+            height: 16,
+            fontSize: 10,
+            fontWeight: 800,
+            color: subtitleColor,
+            textTransform: 'uppercase',
+            letterSpacing: '0.25px',
+            opacity: theme === 'dark' ? 0.72 : 0.72,
+            pointerEvents: 'auto',
+            lineHeight: '16px',
+          }}
+          title={footerTitle}
+        >
+          <span
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              textAlign: 'center',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              paddingRight: showFooterCollapsePill ? 34 : 0,
+            }}
+          >
+            {footerTitle}
+          </span>
+
+          {showFooterCollapsePill && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                (data as any)?.onToggleSubcategoryCollapse?.(
+                  footerGroupIdForToggle,
+                  footerEdgeTypeKey,
+                  true,
+                  footerFirstNodeId || undefined,
+                );
+              }}
+              aria-label={`Collapse ${footerTitle} (${footerNodeCount})`}
+              title={`Collapse ${footerTitle} (${footerNodeCount})`}
+              style={{
+                pointerEvents: 'auto',
+                position: 'absolute',
+                right: 10,
+                top: 0,
+                height: 16,
+                padding: '0 6px',
+                borderRadius: 999,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)'}`,
+                background: theme === 'dark' ? 'rgba(0,0,0,0.26)' : 'rgba(255,255,255,0.78)',
+                color: subtitleColor,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 10,
+                fontWeight: 850,
+                lineHeight: 1,
+              }}
+            >
+              <span>{footerNodeCount}</span>
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M18 15l-6-6-6 6" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 });
@@ -2676,7 +2832,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   // For now it's a pure UI affordance; wiring happens later.
   const showRiskShieldButton = Boolean(data.fragmentId && !String((data as any)?.stackGroupKey || '').trim());
   const isRiskShieldOpen = Boolean(data.riskShieldOpen);
-  const segmentNorms = React.useMemo(() => topMarketSegmentNorms(data, 3), [data]);
+  const segmentNorms = React.useMemo(() => topMarketSegmentNorms(data, 3), [(data as any)?.marketSegmentNorms, (data as any)?.marketSegments, (data as any)?.canonicalPath, (data as any)?.type]);
   const segmentIconTypes = React.useMemo(() => {
     const fromNorms = (segmentNorms || [])
       .map((n) => ({ norm: n, iconType: segmentIconType(n.normDomain, n.normVertical) }))
@@ -2734,10 +2890,11 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     if (t === 'ORGANIZATION') return true;
     if (cp.startsWith('/org/') || cp.startsWith('/gov/')) return true;
     return false;
-  }, [showRiskShieldButton, segmentIconTypes, data]);
+  }, [showRiskShieldButton, segmentIconTypes, (data as any)?.type, (data as any)?.canonicalPath]);
 
   // Risk Shield: compute segments from HorizonFragment.state (prefer risk_segment_*; fallback to propagated base metrics)
-  const riskSegments = React.useMemo(() => computeRiskSegments((data as any)?.state), [data]);
+  const riskState = (data as any)?.state;
+  const riskSegments = React.useMemo(() => computeRiskSegments(riskState), [riskState]);
   React.useEffect(() => {
     // Closing panel resets expanded view (tab stays).
     if (!Boolean(data.riskShieldOpen) && riskExpanded) setRiskExpanded(false);
@@ -2921,6 +3078,307 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const formatType = (type: string) => {
     return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   };
+
+  // Compact node rendering (for left pane groups in Levels layout)
+  const isCompact = data.nodeSize === 'compact';
+  
+  if (isCompact) {
+    const compactShadowBase = theme === 'dark' ? '0 8px 22px rgba(0,0,0,0.30)' : '0 8px 22px rgba(0,0,0,0.10)';
+    const compactBaseShadow = isCritical
+      ? `0 0 0 2px ${criticalRing}, ${compactShadowBase}`
+      : (q === 'max' ? `${compactShadowBase}, 0 18px 60px rgba(0,0,0,0.18)` : compactShadowBase);
+    const compactShadow = highlightRing ? `0 0 0 2px ${highlightRing}, ${compactBaseShadow}` : compactBaseShadow;
+
+    return (
+      <>
+        <div
+          className={`hzn-node-2026 hzn-node-compact ${isSelected ? 'is-selected' : ''}`}
+          onMouseEnter={() => setIsHovering(true)}
+          onMouseLeave={() => setIsHovering(false)}
+          style={{
+            // CSS variables for 2026 styles (reuse the same effects as full nodes)
+            ['--hzn-surface' as any]: surfaceBg,
+            ['--hzn-border' as any]: surfaceBorder,
+            ['--hzn-stack-border' as any]: surfaceBorder,
+            ['--hzn-accent' as any]: accentColor,
+            ['--hzn-accent-soft' as any]: accentSoft,
+            ['--hzn-accent-ring' as any]: isCritical ? criticalRing : accentRing,
+            ['--hzn-shadow' as any]: compactShadow,
+
+            width: `${COMPACT_NODE_WIDTH}px`,
+            height: `${COMPACT_NODE_HEIGHT}px`,
+            boxSizing: 'border-box',
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '6px 10px',
+            cursor: 'default',
+            overflow: 'hidden',
+          }}
+        >
+          {/* Handles (match full node IDs + hover behavior). Must be inside `.hzn-node-2026` for CSS to hide them by default. */}
+          {/* Top */}
+          <Handle
+            id="source-top"
+            type="source"
+            position={Position.Top}
+            className="hzn-handle"
+            style={{
+              background: accentColor,
+              width: '10px',
+              height: '10px',
+              border: `2px solid ${surfaceBg}`,
+              top: '-5px',
+              left: '40%',
+            }}
+          />
+          <Handle
+            id="target-top"
+            type="target"
+            position={Position.Top}
+            className="hzn-handle"
+            style={{
+              background: accentColor,
+              width: '10px',
+              height: '10px',
+              border: `2px solid ${surfaceBg}`,
+              top: '-5px',
+              right: '40%',
+            }}
+          />
+          {/* Bottom */}
+          <Handle
+            id="source-bottom"
+            type="source"
+            position={Position.Bottom}
+            className="hzn-handle"
+            style={{
+              background: accentColor,
+              width: '10px',
+              height: '10px',
+              border: `2px solid ${surfaceBg}`,
+              bottom: '-5px',
+              left: '40%',
+            }}
+          />
+          <Handle
+            id="target-bottom"
+            type="target"
+            position={Position.Bottom}
+            className="hzn-handle"
+            style={{
+              background: accentColor,
+              width: '10px',
+              height: '10px',
+              border: `2px solid ${surfaceBg}`,
+              bottom: '-5px',
+              right: '40%',
+            }}
+          />
+          {/* Left */}
+          <Handle
+            id="source-left"
+            type="source"
+            position={Position.Left}
+            className="hzn-handle"
+            style={{
+              background: accentColor,
+              width: '10px',
+              height: '10px',
+              border: `2px solid ${surfaceBg}`,
+              left: '-5px',
+              top: '35%',
+            }}
+          />
+          <Handle
+            id="target-left"
+            type="target"
+            position={Position.Left}
+            className="hzn-handle"
+            style={{
+              background: accentColor,
+              width: '10px',
+              height: '10px',
+              border: `2px solid ${surfaceBg}`,
+              left: '-5px',
+              top: '65%',
+            }}
+          />
+          {/* Right */}
+          <Handle
+            id="source-right"
+            type="source"
+            position={Position.Right}
+            className="hzn-handle"
+            style={{
+              background: accentColor,
+              width: '10px',
+              height: '10px',
+              border: `2px solid ${surfaceBg}`,
+              right: '-5px',
+              top: '40%',
+            }}
+          />
+          <Handle
+            id="target-right"
+            type="target"
+            position={Position.Right}
+            className="hzn-handle"
+            style={{
+              background: accentColor,
+              width: '10px',
+              height: '10px',
+              border: `2px solid ${surfaceBg}`,
+              right: '-5px',
+              top: '60%',
+            }}
+          />
+
+          {/* Type icon with accent background (smaller than full node) */}
+          <div
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: 7,
+              background: accentSoft,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={12} />
+          </div>
+
+          {/* Label (2 lines, clamp) */}
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 11,
+              fontWeight: 650,
+              color: textColor,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'normal',
+              lineHeight: 1.18,
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical' as any,
+            }}
+            title={displayLabel}
+          >
+            {displayLabel}
+          </span>
+
+          {/* Expand/Collapse button (same size/icon/color logic as full nodes) */}
+          {(showExpand || canCollapse) && (
+            <>
+              {showExpand && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!canExpandClick) return;
+                    if (data.fragmentId && data.onLoadRelated) {
+                      data.onLoadRelated(data.fragmentId);
+                    }
+                  }}
+                  aria-label="Expand"
+                  title={isLoadingRelated ? 'Loading related fragments…' : 'Expand (load related fragments)'}
+                  disabled={!canExpandClick}
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: 9,
+                    border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                    background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)',
+                    color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
+                    cursor: isLoadingRelated ? 'wait' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
+                    opacity: isLoadingRelated ? 0.7 : 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  {isLoadingRelated ? (
+                    <span
+                      style={{
+                        width: 14,
+                        height: 14,
+                        borderRadius: '50%',
+                        border: `2px solid ${theme === 'dark' ? 'rgba(255,255,255,0.22)' : 'rgba(15,23,42,0.16)'}`,
+                        borderTopColor: accentColor,
+                        boxSizing: 'border-box',
+                        animation: 'hzn-spin 0.9s linear infinite',
+                      }}
+                    />
+                  ) : (
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M6 9l6 6 6-6" />
+                    </svg>
+                  )}
+                </button>
+              )}
+              {canCollapse && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (data.fragmentId && data.onCollapse) {
+                      data.onCollapse(data.fragmentId);
+                    }
+                  }}
+                  aria-label="Collapse"
+                  title="Collapse"
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: 9,
+                    border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                    // Expanded state: same control, but with an amber fill for better state recognition.
+                    background: theme === 'dark' ? 'rgba(245, 158, 11, 0.28)' : 'rgba(245, 158, 11, 0.18)',
+                    color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M18 15l-6-6-6 6" />
+                  </svg>
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </>
+    );
+  }
 
   return (
     <>

@@ -47,6 +47,12 @@ func computeMaxOutputTokens(model string, caps *AIModelCapabilities, task *AITas
 	}
 
 	desired := target + headroom
+	// GPT-5 family often needs a larger completion budget even for "small" structured tasks,
+	// otherwise we see finish_reason=length with empty content (systemic failure mode observed in prod).
+	// Keep it bounded by model/context clamps below.
+	if strings.HasPrefix(name, "gpt-5") && desired < 4096 {
+		desired = 4096
+	}
 	// Clamp by model/context if present.
 	if maxByModel > 0 {
 		desired = min(desired, maxByModel)
@@ -61,13 +67,3 @@ func computeMaxOutputTokens(model string, caps *AIModelCapabilities, task *AITas
 	}
 	return desired
 }
-
-
-
-
-
-
-
-
-
-

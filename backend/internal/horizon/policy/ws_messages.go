@@ -74,14 +74,14 @@ type WSEnforcementProgress struct {
 // NewWSEnforcementProgress creates a WebSocket message from an enforcement job.
 func NewWSEnforcementProgress(job *PolicyEnforcementJob) WSEnforcementProgress {
 	msg := WSEnforcementProgress{
-		Type:          WSTypeEnforcementProgress,
-		JobID:         job.ID,
-		ParentJobID:   job.ParentJobID,
-		TenantID:      job.TenantID,
-		Status:        string(job.Status),
-		TaskType:      string(job.Task.Type),
-		TargetID:      job.Task.TargetID,
-		Timestamp:     time.Now().UTC().Format(time.RFC3339),
+		Type:        WSTypeEnforcementProgress,
+		JobID:       job.ID,
+		ParentJobID: job.ParentJobID,
+		TenantID:    job.TenantID,
+		Status:      string(job.Status),
+		TaskType:    string(job.Task.Type),
+		TargetID:    job.Task.TargetID,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
 	}
 
 	if job.Violation != nil {
@@ -113,22 +113,22 @@ func NewWSEnforcementProgress(job *PolicyEnforcementJob) WSEnforcementProgress {
 
 // WSEnforcementBatchComplete is sent when all enforcement jobs complete.
 type WSEnforcementBatchComplete struct {
-	Type            string `json:"type"` // "enforcement_batch_complete"
-	ParentJobID     string `json:"parentJobId"`
-	TenantID        string `json:"tenantId"`
-	TotalJobs       int    `json:"totalJobs"`
-	Completed       int    `json:"completed"`
-	Failed          int    `json:"failed"`
-	Skipped         int    `json:"skipped"`
-	DurationMs      int64  `json:"durationMs"`
-	Timestamp       string `json:"timestamp"`
+	Type        string `json:"type"` // "enforcement_batch_complete"
+	ParentJobID string `json:"parentJobId"`
+	TenantID    string `json:"tenantId"`
+	TotalJobs   int    `json:"totalJobs"`
+	Completed   int    `json:"completed"`
+	Failed      int    `json:"failed"`
+	Skipped     int    `json:"skipped"`
+	DurationMs  int64  `json:"durationMs"`
+	Timestamp   string `json:"timestamp"`
 
 	// Summary of actions taken
-	FragmentsMerged   int `json:"fragmentsMerged"`
-	PathsFixed        int `json:"pathsFixed"`
-	EdgesReversed     int `json:"edgesReversed"`
+	FragmentsMerged    int `json:"fragmentsMerged"`
+	PathsFixed         int `json:"pathsFixed"`
+	EdgesReversed      int `json:"edgesReversed"`
 	EdgesCanonicalized int `json:"edgesCanonicalized"`
-	EdgesDeleted      int `json:"edgesDeleted"`
+	EdgesDeleted       int `json:"edgesDeleted"`
 }
 
 // NewWSEnforcementBatchComplete creates a WebSocket message for batch completion.
@@ -151,7 +151,7 @@ func NewWSEnforcementBatchComplete(parentJobID, tenantID string, jobs []*PolicyE
 				switch job.Task.Type {
 				case TaskMergeFragments:
 					msg.FragmentsMerged++
-				case TaskFixPath, TaskResolveGeoNames, TaskFixLegalForm:
+				case TaskFixPath, TaskResolveGeoNames, TaskFixLegalForm, TaskFixISO2:
 					msg.PathsFixed++
 				case TaskReverseEdge:
 					msg.EdgesReversed++
@@ -173,17 +173,17 @@ func NewWSEnforcementBatchComplete(parentJobID, tenantID string, jobs []*PolicyE
 
 // WSViolationDetected is sent when a violation is detected (for real-time monitoring).
 type WSViolationDetected struct {
-	Type        string                  `json:"type"` // "violation_detected"
-	JobID       string                  `json:"jobId"`
-	TenantID    string                  `json:"tenantId"`
-	ViolationID string                  `json:"violationId"`
-	ViolationType PolicyViolationType   `json:"violationType"`
-	Severity    PolicyViolationSeverity `json:"severity"`
-	FragmentID  string                  `json:"fragmentId,omitempty"`
-	EdgeID      string                  `json:"edgeId,omitempty"`
-	Description string                  `json:"description"`
-	AutoFixable bool                    `json:"autoFixable"`
-	Timestamp   string                  `json:"timestamp"`
+	Type          string                  `json:"type"` // "violation_detected"
+	JobID         string                  `json:"jobId"`
+	TenantID      string                  `json:"tenantId"`
+	ViolationID   string                  `json:"violationId"`
+	ViolationType PolicyViolationType     `json:"violationType"`
+	Severity      PolicyViolationSeverity `json:"severity"`
+	FragmentID    string                  `json:"fragmentId,omitempty"`
+	EdgeID        string                  `json:"edgeId,omitempty"`
+	Description   string                  `json:"description"`
+	AutoFixable   bool                    `json:"autoFixable"`
+	Timestamp     string                  `json:"timestamp"`
 }
 
 // NewWSViolationDetected creates a WebSocket message for a detected violation.

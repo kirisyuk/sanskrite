@@ -9,8 +9,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // =============================================================================
@@ -54,6 +56,7 @@ type EnforcementExecutor struct {
 	enforcementRepo EnforcementJobsWriter
 	geonamesClient  ontology.GeoNamesClientInterface
 	lensesRepo      LensesWriter
+	aiExecutor      *ai.AITaskExecutor
 
 	// Event publisher for WebSocket updates
 	publisher EnforcementEventPublisher
@@ -109,6 +112,12 @@ func (e *EnforcementExecutor) WithLensesRepo(repo LensesWriter) *EnforcementExec
 // WithGeoNamesClient sets the GeoNames client.
 func (e *EnforcementExecutor) WithGeoNamesClient(client ontology.GeoNamesClientInterface) *EnforcementExecutor {
 	e.geonamesClient = client
+	return e
+}
+
+// WithAIExecutor wires an AI executor (required for LLM-based auto-fixes like fix_iso2).
+func (e *EnforcementExecutor) WithAIExecutor(executor *ai.AITaskExecutor) *EnforcementExecutor {
+	e.aiExecutor = executor
 	return e
 }
 
@@ -328,7 +337,84 @@ func (e *EnforcementExecutor) reassignEdges(ctx context.Context, tenantID, fromI
 		}
 	}
 
+	// Best-effort: de-duplicate edges that now may overlap with existing canonical edges.
+	// This prevents parallel identical edges after merge (duplicate->canonical reassignment).
+	dedupDeleted, _ := e.bestEffortDedupeEdgesForNode(ctx, tenantID, toID, 2000)
+	deleted += dedupDeleted
+
 	return reassigned, deleted, nil
+}
+
+// bestEffortDedupeEdgesForNode deletes duplicate edges for a fragment based on (source,target,type),
+// keeping one "best" edge per key. This is intentionally conservative and bounded.
+func (e *EnforcementExecutor) bestEffortDedupeEdgesForNode(ctx context.Context, tenantID, fragmentID string, limit int) (deleted int, _ error) {
+	if e == nil || e.edgesRepo == nil {
+		return 0, nil
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	fragmentID = strings.TrimSpace(fragmentID)
+	if tenantID == "" || fragmentID == "" || limit <= 0 {
+		return 0, nil
+	}
+
+	// Pull both directions (bounded).
+	srcEdges, err := e.edgesRepo.ListBySource(ctx, tenantID, fragmentID, nil, limit)
+	if err != nil {
+		return 0, err
+	}
+	tgtEdges, err := e.edgesRepo.ListByTarget(ctx, tenantID, fragmentID, nil, limit)
+	if err != nil {
+		return 0, err
+	}
+
+	// Key on normalized symmetric representation to avoid duplicates across swapped endpoints for symmetric edges.
+	type key struct {
+		s  string
+		t  string
+		ty string
+	}
+	kept := map[key]*horizonmodels.DependencyEdge{}
+
+	consider := func(ed *horizonmodels.DependencyEdge) {
+		if ed == nil {
+			return
+		}
+		s := strings.TrimSpace(ed.SourceFragmentID)
+		t := strings.TrimSpace(ed.TargetFragmentID)
+		ty := ed.Type
+		// Normalize symmetric edges for stable keys.
+		ns, nt, nty, _ := horizonmodels.NormalizeSymmetricEdge(s, t, ty)
+		k := key{s: ns, t: nt, ty: string(nty)}
+
+		if existing, ok := kept[k]; ok && existing != nil {
+			// Choose which to keep: prefer earlier CreatedAt; if equal, prefer lexicographically smaller ID.
+			keep := existing
+			drop := ed
+			if ed.Metadata.CreatedAt.Before(existing.Metadata.CreatedAt) ||
+				(ed.Metadata.CreatedAt.Equal(existing.Metadata.CreatedAt) && strings.TrimSpace(ed.ID) < strings.TrimSpace(existing.ID)) {
+				keep = ed
+				drop = existing
+				kept[k] = keep
+			}
+			// Delete the dropped edge (best-effort).
+			if drop != nil && strings.TrimSpace(drop.ID) != "" {
+				if derr := e.edgesRepo.Delete(ctx, drop.ID); derr == nil {
+					deleted++
+				}
+			}
+			return
+		}
+		kept[k] = ed
+	}
+
+	for _, ed := range srcEdges {
+		consider(ed)
+	}
+	for _, ed := range tgtEdges {
+		consider(ed)
+	}
+
+	return deleted, nil
 }
 
 // executeFixPath fixes a fragment's canonical path.
@@ -345,8 +431,32 @@ func (e *EnforcementExecutor) executeFixPath(ctx context.Context, task Enforceme
 	}
 
 	oldPath := frag.CanonicalPath
-	frag.CanonicalPath = correctPath
 	frag.UpdatedAt = time.Now().UTC()
+
+	// Prefer writing canonicalParts over canonicalPath so independent fixers can safely touch different parts.
+	// For org/gov, apply selectively (geo vs legalForm) rather than overwriting the whole struct.
+	trimmedCorrect := strings.TrimSpace(correctPath)
+	parsed, perr := taxonomy.ParseCanonicalPathParts(trimmedCorrect)
+	if perr == nil && parsed != nil {
+		switch strings.TrimSpace(parsed.Namespace) {
+		case "org":
+			_, _, aerr := (&OrgSelectiveCanonizer{}).ApplyFromCanonicalPath(frag, trimmedCorrect)
+			if aerr != nil {
+				frag.CanonicalParts = parsed // fallback
+			}
+		case "gov":
+			_, _, aerr := (&GovSelectiveCanonizer{}).ApplyFromCanonicalPath(frag, trimmedCorrect)
+			if aerr != nil {
+				frag.CanonicalParts = parsed // fallback
+			}
+		default:
+			// For other namespaces the "fix" is typically a full rewrite; keep it simple for now.
+			frag.CanonicalParts = parsed
+		}
+	} else {
+		// Fail-open: keep old canonicalParts; fall back to legacy behavior (string path update).
+		frag.CanonicalPath = correctPath
+	}
 
 	// Store old path in identifiers
 	if frag.Identifiers == nil {
@@ -363,13 +473,18 @@ func (e *EnforcementExecutor) executeFixPath(ctx context.Context, task Enforceme
 	}
 
 	// Best-effort: rewrite lens scopes referencing the old path to the corrected path.
-	e.bestEffortRewriteLensScopes(ctx, strings.TrimSpace(frag.TenantID), strings.TrimSpace(oldPath), strings.TrimSpace(correctPath))
+	newPath := strings.TrimSpace(correctPath)
+	if frag != nil && strings.TrimSpace(frag.CanonicalPath) != "" {
+		// After Update(), repository may have reassembled canonicalPath from canonicalParts; prefer the persisted value.
+		newPath = strings.TrimSpace(frag.CanonicalPath)
+	}
+	e.bestEffortRewriteLensScopes(ctx, strings.TrimSpace(frag.TenantID), strings.TrimSpace(oldPath), newPath)
 
 	return &EnforcementResult{
 		Success:     true,
 		Action:      "path_fixed",
 		AffectedIDs: []string{fragID},
-		Details:     fmt.Sprintf("Changed path from %s to %s", oldPath, correctPath),
+		Details:     fmt.Sprintf("Changed path from %s to %s", oldPath, newPath),
 	}, nil
 }
 
@@ -516,7 +631,7 @@ func (e *EnforcementExecutor) executeCanonicalizeEdge(ctx context.Context, _ str
 }
 
 // executeDeleteEdge deletes an edge.
-func (e *EnforcementExecutor) executeDeleteEdge(ctx context.Context, tenantID string, task EnforcementTask) (*EnforcementResult, error) {
+func (e *EnforcementExecutor) executeDeleteEdge(ctx context.Context, _ string, task EnforcementTask) (*EnforcementResult, error) {
 	edgeID := task.TargetID
 	reason, _ := task.Params["reason"].(string)
 
@@ -668,12 +783,310 @@ func (e *EnforcementExecutor) executeFixLegalForm(ctx context.Context, task Enfo
 }
 
 // executeFixISO2 fixes an invalid ISO2 code in org path.
-func (e *EnforcementExecutor) executeFixISO2(_ context.Context, _ EnforcementTask) (*EnforcementResult, error) {
-	// This requires manual intervention or additional context
+func (e *EnforcementExecutor) executeFixISO2(ctx context.Context, task EnforcementTask) (*EnforcementResult, error) {
+	if e.aiExecutor == nil {
+		return &EnforcementResult{
+			Success: false,
+			Action:  "fix_iso2",
+			Error:   "AI executor not configured - cannot infer ISO2 automatically",
+		}, nil
+	}
+
+	fragID := task.TargetID
+	frag, err := e.fragmentsRepo.Get(ctx, fragID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load fragment: %w", err)
+	}
+	if frag == nil {
+		return nil, fmt.Errorf("fragment not found: %s", fragID)
+	}
+
+	oldPath := strings.TrimSpace(frag.CanonicalPath)
+	tenantID := strings.TrimSpace(frag.TenantID)
+
+	// Determine namespace (org/gov) and current geo token.
+	namespace := ""
+	if ns, ok := task.Params["namespace"].(string); ok {
+		namespace = strings.ToLower(strings.TrimSpace(ns))
+	}
+	parts, perr := taxonomy.ParseCanonicalPathParts(oldPath)
+	if perr != nil || parts == nil {
+		// Fail-open: try using CanonicalParts if it exists.
+		parts = frag.CanonicalParts
+	}
+	if parts == nil || strings.TrimSpace(parts.Namespace) == "" {
+		return &EnforcementResult{Success: false, Action: "fix_iso2", Error: "cannot parse canonical path for ISO2 fix"}, nil
+	}
+	if namespace == "" {
+		namespace = strings.ToLower(strings.TrimSpace(parts.Namespace))
+	}
+	if namespace != "org" && namespace != "gov" {
+		return &EnforcementResult{Success: false, Action: "fix_iso2", Error: fmt.Sprintf("unsupported namespace for ISO2 fix: %s", namespace)}, nil
+	}
+
+	currentGeo := ""
+	switch namespace {
+	case "org":
+		if parts.Org != nil {
+			currentGeo = strings.ToLower(strings.TrimSpace(parts.Org.Geo))
+		}
+	case "gov":
+		if parts.Gov != nil {
+			currentGeo = strings.ToLower(strings.TrimSpace(parts.Gov.Geo))
+		}
+	}
+	if currentGeo != "na" {
+		return &EnforcementResult{
+			Success: true,
+			Action:  "no_change_needed",
+			Details: fmt.Sprintf("Geo token is not 'na' (current=%s); skipping ISO2 inference", currentGeo),
+		}, nil
+	}
+
+	// Build context from fragment fields.
+	labelEN := ""
+	if frag.Labels != nil {
+		labelEN = strings.TrimSpace(frag.Labels["en"])
+	}
+	legalName := ""
+	shortName := ""
+	if frag.Identifiers != nil {
+		legalName = strings.TrimSpace(frag.Identifiers["legalName"])
+		shortName = strings.TrimSpace(frag.Identifiers["shortName"])
+	}
+	desc := strings.TrimSpace(frag.Description)
+	if len(desc) > 1200 {
+		desc = desc[:1200] + "…"
+	}
+
+	homeISO2 := ""
+	if frag.HomeLocation != nil && frag.HomeLocation.ISO3166_1 != nil {
+		homeISO2 = strings.ToLower(strings.TrimSpace(*frag.HomeLocation.ISO3166_1))
+	}
+
+	// Gather nearby GEO evidence via edges (best-effort).
+	// We intentionally keep it bounded to avoid huge prompts and to keep this fix cheap.
+	type geoHint struct {
+		EdgeType  string `json:"edgeType"`
+		OtherID   string `json:"otherId"`
+		OtherPath string `json:"otherPath"`
+	}
+	geoHints := make([]geoHint, 0, 12)
+	if e.edgesRepo != nil {
+		srcEdges, _ := e.edgesRepo.ListBySource(ctx, tenantID, frag.ID, nil, 200)
+		tgtEdges, _ := e.edgesRepo.ListByTarget(ctx, tenantID, frag.ID, nil, 200)
+		edges := make([]*horizonmodels.DependencyEdge, 0, len(srcEdges)+len(tgtEdges))
+		edges = append(edges, srcEdges...)
+		edges = append(edges, tgtEdges...)
+
+		// Keep only geo-relevant edge types.
+		for _, ed := range edges {
+			if ed == nil {
+				continue
+			}
+			et := strings.ToUpper(strings.TrimSpace(string(ed.Type)))
+			if et != string(horizonmodels.DependencyTypeLocatedIn) &&
+				et != string(horizonmodels.DependencyTypeOperatesIn) &&
+				et != string(horizonmodels.DependencyTypeAdministers) {
+				continue
+			}
+			otherID := ""
+			if ed.SourceFragmentID == frag.ID {
+				otherID = ed.TargetFragmentID
+			} else if ed.TargetFragmentID == frag.ID {
+				otherID = ed.SourceFragmentID
+			}
+			otherID = strings.TrimSpace(otherID)
+			if otherID == "" || otherID == frag.ID {
+				continue
+			}
+			otherFrag, _ := e.fragmentsRepo.Get(ctx, otherID)
+			otherPath := ""
+			if otherFrag != nil {
+				otherPath = strings.TrimSpace(otherFrag.CanonicalPath)
+			}
+			if otherPath == "" {
+				continue
+			}
+			geoHints = append(geoHints, geoHint{EdgeType: et, OtherID: otherID, OtherPath: otherPath})
+			if len(geoHints) >= 10 {
+				break
+			}
+		}
+	}
+
+	// LLM task: infer ISO2/composite geo token.
+	type iso2FixResult struct {
+		ISO2       string   `json:"iso2"`
+		Confidence float64  `json:"confidence"`
+		Reason     string   `json:"reason"`
+		Evidence   []string `json:"evidence,omitempty"`
+	}
+	isISO2OrComposite := func(s string) bool {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "" || s == "na" {
+			return false
+		}
+		// alpha2
+		if len(s) == 2 {
+			return true
+		}
+		// composite like "ae-sa-om"
+		if strings.Contains(s, "-") {
+			segs := strings.Split(s, "-")
+			if len(segs) < 2 {
+				return false
+			}
+			for _, seg := range segs {
+				seg = strings.TrimSpace(seg)
+				if len(seg) != 2 {
+					return false
+				}
+			}
+			return true
+		}
+		return false
+	}
+
+	verifier := ai.NewGenericVerifier(func(r iso2FixResult) error {
+		if r.Confidence < 0 || r.Confidence > 1 {
+			return fmt.Errorf("confidence must be 0..1")
+		}
+		r.ISO2 = strings.ToLower(strings.TrimSpace(r.ISO2))
+		if !isISO2OrComposite(r.ISO2) {
+			return fmt.Errorf("iso2 must be ISO3166-1 alpha2 or composite (got %q)", r.ISO2)
+		}
+		return nil
+	})
+
+	prompt := strings.TrimSpace(fmt.Sprintf(`
+You are fixing a Horizon canonical path geo token.
+
+Context:
+- Canonical path format:
+  - org: /org/{iso2}/{slug}-{legal_form}
+  - gov: /gov/{iso2_or_composite}/{slug}
+- The geo token "na" means "unknown jurisdiction". It is allowed, but we want to infer a better ISO token when possible.
+
+Task:
+- Infer the correct geo token for this fragment.
+- Return STRICT JSON only:
+  {"iso2": "<lowercase iso3166-1 alpha2 like 'kr' OR a composite like 'ae-sa-om'>", "confidence": 0..1, "reason": "...", "evidence": ["..."] }
+- If you are not confident, still output a best guess but lower confidence (<0.7).
+- NEVER output "na".
+
+Fragment:
+- namespace: %s
+- currentCanonicalPath: %s
+- label_en: %s
+- legalName: %s
+- shortName: %s
+- description: %s
+- homeLocation.iso3166_1: %s
+
+Nearby edges that may hint location/jurisdiction (best-effort):
+%v
+`, namespace, oldPath, labelEN, legalName, shortName, desc, homeISO2, geoHints))
+
+	llmTask := &ai.AITask{
+		TaskType:     ai.TaskTypeContentAnalysis,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       6,
+			MinContextWindow:         8000,
+			MaxOutputSize:            4096,
+		},
+		Verifier: verifier,
+	}
+
+	llmCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	raw, err := e.aiExecutor.ExecuteStructuredTask(llmCtx, llmTask)
+	if err != nil {
+		return &EnforcementResult{
+			Success: false,
+			Action:  "fix_iso2",
+			Error:   fmt.Sprintf("LLM iso2 inference failed: %v", err),
+		}, nil
+	}
+	res, ok := raw.(iso2FixResult)
+	if !ok {
+		// Best-effort: convert from map when executor returns an untyped payload.
+		if m, ok2 := raw.(map[string]interface{}); ok2 {
+			res = iso2FixResult{
+				ISO2:       getString(m, "iso2"),
+				Confidence: getFloat(m, "confidence"),
+				Reason:     getString(m, "reason"),
+			}
+		} else {
+			return &EnforcementResult{
+				Success: false,
+				Action:  "fix_iso2",
+				Error:   fmt.Sprintf("LLM iso2 inference returned unexpected type %T", raw),
+			}, nil
+		}
+	}
+	// Re-validate post-conversion (keeps behavior consistent with typed path).
+	if err := verifier.ValidateFunc(res); err != nil {
+		return &EnforcementResult{
+			Success: false,
+			Action:  "fix_iso2",
+			Error:   fmt.Sprintf("LLM iso2 inference parse/validate failed: %v", err),
+		}, nil
+	}
+
+	newGeo := strings.ToLower(strings.TrimSpace(res.ISO2))
+	if norm := normalizeISO2Alias(newGeo); norm != "" {
+		newGeo = norm
+	}
+	if newGeo == "na" || newGeo == "" {
+		return &EnforcementResult{Success: false, Action: "fix_iso2", Error: "LLM returned empty/na iso2"}, nil
+	}
+
+	// Apply selectively to CanonicalParts (only the geo segment).
+	if frag.CanonicalParts == nil {
+		frag.CanonicalParts = parts
+	}
+	switch namespace {
+	case "org":
+		if frag.CanonicalParts.Org == nil {
+			frag.CanonicalParts.Org = &taxonomy.OrgPathParts{}
+		}
+		frag.CanonicalParts.Org.Geo = newGeo
+	case "gov":
+		if frag.CanonicalParts.Gov == nil {
+			frag.CanonicalParts.Gov = &taxonomy.GovPathParts{}
+		}
+		frag.CanonicalParts.Gov.Geo = newGeo
+	}
+
+	// Optional: stash inferred geo in identifiers for traceability (non-blocking).
+	if frag.Identifiers == nil {
+		frag.Identifiers = map[string]string{}
+	}
+	if strings.TrimSpace(frag.Identifiers["jurisdictionIso2"]) == "" {
+		frag.Identifiers["jurisdictionIso2"] = newGeo
+	}
+	frag.Identifiers["jurisdictionIso2InferredBy"] = "policy_fix_iso2_llm"
+
+	frag.UpdatedAt = time.Now().UTC()
+	if err := e.fragmentsRepo.Update(ctx, frag); err != nil {
+		return nil, fmt.Errorf("failed to update fragment: %w", err)
+	}
+
+	// Best-effort: rewrite lens scopes referencing the old path to the new path (post-Update canonicalPath).
+	newPath := strings.TrimSpace(frag.CanonicalPath)
+	if newPath != "" && oldPath != "" && newPath != oldPath {
+		e.bestEffortRewriteLensScopes(ctx, tenantID, oldPath, newPath)
+	}
+
 	return &EnforcementResult{
-		Success: false,
-		Action:  "fix_iso2",
-		Error:   "ISO2 fix requires manual intervention - cannot determine correct country code automatically",
+		Success:     true,
+		Action:      "fix_iso2",
+		AffectedIDs: []string{fragID},
+		Details:     fmt.Sprintf("Inferred geo token %q -> %q (conf=%.2f). %s", currentGeo, newGeo, res.Confidence, strings.TrimSpace(res.Reason)),
 	}, nil
 }
 

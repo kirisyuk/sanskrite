@@ -47,6 +47,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 	}
 
 	log.Printf("[VertexAI] ExecuteTask: %s, model=%s", task.TaskType, model)
+	debug := aiDebugLogEnabled()
 
 	requestBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
@@ -85,6 +86,10 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
+	if debug {
+		log.Printf("[AI DEBUG][VertexAI] request prepared (task=%s model=%s inputChars=%d maxOut=%d requestBytes=%d grounding=%v)",
+			task.TaskType, model, len(task.InputContent), maxOut, len(bodyJSON), task.AIRequirements.SearchGroundingCapability)
+	}
 
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
@@ -95,6 +100,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 	req.Header.Set("x-goog-api-key", s.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
+	startedAt := time.Now()
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
@@ -104,6 +110,10 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if debug {
+		log.Printf("[AI DEBUG][VertexAI] response received (task=%s model=%s status=%d responseBytes=%d elapsed=%s)",
+			task.TaskType, model, resp.StatusCode, len(body), time.Since(startedAt))
 	}
 
 	if resp.StatusCode != http.StatusOK {

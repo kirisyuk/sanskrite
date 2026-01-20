@@ -256,9 +256,14 @@ func (a *IntentResolverAgent) buildPrompt(query string) string {
 			quotedBlock += fmt.Sprintf("- %s\n", q)
 		}
 	}
+	multiHint := ""
+	if looksLikeMultiEntityQuery(query) {
+		multiHint = "\n\nMULTI-ENTITY HINT:\n- This query likely contains multiple distinct real-world entities. Prefer returning multiple separate anchors (2-3) rather than collapsing them into one."
+	}
 	return fmt.Sprintf(`You are an intent resolver for a risk analysis system. You MUST convert a user query into a reusable, taxonomy-aligned intent.
 
 USER QUERY:
+%s
 %s
 %s
 
@@ -291,6 +296,26 @@ RULES:
 - focus MUST be in English (translate from the user query when needed). Keep it short and reusable.
 - keywords SHOULD be in English when possible (translate), but can include raw tokens like handles.
 - spherePaths MUST be canonical under /sphere/... (if unsure, use /sphere/other).
+
+- MULTI-ENTITY ANCHORS (CRITICAL):
+  - If the query clearly mentions multiple different entities (people + organizations, org + product, org + facility, competitors, partners, etc.),
+    you MUST return multiple separate anchors (2-3), one per entity, instead of collapsing them into a single canonicalPath.
+  - Typical patterns that indicate multiple entities:
+    - "X and Y", "X vs Y", "X & Y"
+    - Person name + institution keyword (bank, ministry, company, authority, university, foundation)
+    - Organization + product/brand/facility name
+  - Examples:
+    - "Ibrahim Al Rashid Social Development Bank" → anchors:
+      - PERSON: /person/ibrahim-al-rashid
+      - ORGANIZATION: /org/{iso2|na}/social-development-bank
+    - "Apple and Microsoft cloud partnership" → anchors:
+      - ORGANIZATION: /org/us/apple-inc
+      - ORGANIZATION: /org/us/microsoft-corp
+      - (optional) MARKET: /market/global/technology/cloud-computing
+    - "Tesla Gigafactory Texas Austin" → anchors:
+      - ORGANIZATION: /org/us/tesla-inc
+      - FACILITY: /fac/tesla/gigafactory-texas
+      - GEO_REGION: /loc/us/tx/austin
 - canonicalPath MUST be a valid canonical path with allowed namespaces:
   /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media
 - If the query refers to a media brand/channel (e.g. a Telegram channel), do NOT collapse it to a GEO_REGION just because it contains a city name.
@@ -396,7 +421,35 @@ DECOMPOSITION HINTS (REQUIRED for MARKET/PROGRAM anchors):
   - searchQueries: 3-5 concrete search queries about the program
 - searchQueries MUST be in English and actionable for web search.
 - Return ONLY JSON. No markdown. No commentary.`,
-		query, quotedBlock)
+		query, quotedBlock, multiHint)
+}
+
+// looksLikeMultiEntityQuery is a cheap heuristic to hint the LLM to avoid collapsing multiple entities into one anchor.
+// It is intentionally conservative (best-effort) and is only used for prompt conditioning.
+func looksLikeMultiEntityQuery(query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return false
+	}
+	// Strong separators often mean multiple entities.
+	seps := []string{" and ", " vs ", " versus ", " & ", " + ", ",", " / ", " и ", " против "}
+	for _, s := range seps {
+		if strings.Contains(q, s) {
+			return true
+		}
+	}
+	// Person + institution keyword pattern.
+	institutionWords := []string{
+		" bank", " ministry", " authority", " regulator", " agency", " committee",
+		" company", " inc", " llc", " ltd", " pbc", " corp", " plc",
+		" university", " foundation", " fund",
+	}
+	for _, w := range institutionWords {
+		if strings.Contains(q, w) && len(strings.Fields(q)) >= 3 {
+			return true
+		}
+	}
+	return false
 }
 
 // extractQuotedPhrases returns a best-effort list of quoted substrings, preserving original casing.

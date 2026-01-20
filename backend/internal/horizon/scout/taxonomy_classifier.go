@@ -56,7 +56,7 @@ func (c *TaxonomyClassifier) ClassifyTaxonomy(ctx context.Context, canonicalPath
 			TextGenerationCapability: true,
 			MinCapabilityScore:       7, // Lowered to reduce cost while keeping quality
 			MinContextWindow:         4000,
-			MaxOutputSize:            512,
+			MaxOutputSize:            4096,
 		},
 		Verifier: verifier,
 	}

@@ -2,10 +2,8 @@ package ontology
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
@@ -16,11 +14,11 @@ import (
 
 // CausalDetector автоматически обнаруживает причинно-следственные связи между Events
 type CausalDetector struct {
-	eventsRepo     *repo.EventRepository
+	eventsRepo      *repo.EventRepository
 	causalLinksRepo *repo.CausalLinkRepository
-	genaiClient    *gen_combined.Client
-	executor       *ai.AITaskExecutor
-	logger         *log.Logger
+	genaiClient     *gen_combined.Client
+	executor        *ai.AITaskExecutor
+	logger          *log.Logger
 }
 
 // NewCausalDetector создает новый детектор причинно-следственных связей
@@ -32,11 +30,11 @@ func NewCausalDetector(
 	logger *log.Logger,
 ) *CausalDetector {
 	return &CausalDetector{
-		eventsRepo:     eventsRepo,
+		eventsRepo:      eventsRepo,
 		causalLinksRepo: causalLinksRepo,
-		genaiClient:    genaiClient,
-		executor:       executor,
-		logger:         logger,
+		genaiClient:     genaiClient,
+		executor:        executor,
+		logger:          logger,
 	}
 }
 
@@ -166,7 +164,7 @@ Return JSON strictly matching this schema:
   ]
 }
 
-All fields are required.`, 
+All fields are required.`,
 		effectEvent.Title,
 		formatTime(effectEvent.OccurredAt),
 		effectEvent.Description,
@@ -316,8 +314,8 @@ func (d *CausalDetector) createCausalLink(
 			ID:   candidate.EffectEventID,
 			Kind: models.CausalRefKindEvent,
 		},
-		Sign:       candidate.Sign,
-		Strength:   candidate.Strength,
+		Sign:        candidate.Sign,
+		Strength:    candidate.Strength,
 		Probability: candidate.Probability,
 		Evidence: models.CausalEvidence{
 			Method: stringPtr("LLM_Analysis"),
@@ -338,20 +336,6 @@ func formatTime(t *time.Time) string {
 		return "Unknown"
 	}
 	return t.Format(time.RFC3339)
-}
-
-func parseJSONResponse(content string, result interface{}) error {
-	// Убираем markdown code fences если есть
-	content = removeMarkdownFences(content)
-	return json.Unmarshal([]byte(content), result)
-}
-
-func removeMarkdownFences(content string) string {
-	// Убираем ```json и ``` если есть
-	content = strings.TrimPrefix(content, "```json")
-	content = strings.TrimPrefix(content, "```")
-	content = strings.TrimSuffix(content, "```")
-	return strings.TrimSpace(content)
 }
 
 func stringPtr(s string) *string {
