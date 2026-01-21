@@ -605,6 +605,68 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   // Track whether collapsed subcategories changed (to trigger relayout).
   const collapsedSubcategoriesChangedRef = React.useRef(false);
 
+  // Right Dock state (Levels layout: right pane filters control which upstream categories are promoted to the right).
+  // Per-node: enabled filters among {governance, supply, dependencies, structure}.
+  const [rightDockStateByNodeId, setRightDockStateByNodeId] = React.useState<
+    Record<string, Array<'governance' | 'supply' | 'dependencies' | 'structure'>>
+  >({});
+  const rightDockChangedRef = React.useRef(false);
+  const pendingDockAutoCollapseNodeIdRef = React.useRef<string | null>(null);
+
+  const toggleRightDock = React.useCallback(
+    (nodeId: string, key: 'governance' | 'supply' | 'dependencies' | 'structure', nextEnabled: boolean) => {
+      const nid = String(nodeId || '').trim();
+      if (!nid) return;
+      // Determine whether this node is currently expanded (only then we trigger a relayout).
+      const expandedNow = Boolean(
+        (nodesStateRef.current || []).some((n) => String((n as any)?.id || '').trim() === nid && Boolean((n as any)?.data?.expanded)),
+      );
+
+      let nextOrdered: Array<'governance' | 'supply' | 'dependencies' | 'structure'> = [];
+      setRightDockStateByNodeId((prev) => {
+        // IMPORTANT:
+        // `rightDockStateByNodeId` stores overrides only. When absent, elkLayout falls back to type-based defaults.
+        // So when the user toggles OFF a currently-active default filter, we must start from the *effective* set
+        // (the one currently rendered on the node), not from the override map (which may be empty).
+        const rendered = (nodesStateRef.current || []).find((n) => String((n as any)?.id || '').trim() === nid) as any;
+        const renderedEnabled = Array.isArray(rendered?.data?.rightDockEnabled) ? (rendered.data.rightDockEnabled as any[]) : null;
+        const cur = renderedEnabled ?? (Array.isArray((prev as any)[nid]) ? ([...(prev as any)[nid]] as any[]) : []);
+        const curSet = new Set(cur.map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
+        const k = String(key || '').trim().toLowerCase();
+        if (nextEnabled) curSet.add(k);
+        else curSet.delete(k);
+        // Keep stable ordering
+        const ordered = (['governance', 'supply', 'dependencies', 'structure'] as const).filter((x) => curSet.has(x));
+        nextOrdered = ordered as any;
+
+        // If user toggled everything off on an EXPANDED node: this is equivalent to collapsing it back.
+        // We clear the override so next expansion returns to defaults.
+        if (expandedNow && ordered.length === 0) {
+          const out: any = { ...(prev || {}) };
+          delete out[nid];
+          return out;
+        }
+        return { ...(prev || {}), [nid]: ordered as any };
+      });
+      // Update UI immediately (without waiting for relayout) so icons "depress" right away.
+      setNodes((prevNodes) => {
+        return (prevNodes || []).map((n: any) => {
+          const id = String(n?.id || '').trim();
+          if (id !== nid) return n;
+          if (Boolean(n?.data?.isGroup)) return n;
+          return { ...n, data: { ...(n.data || {}), rightDockEnabled: nextOrdered } };
+        });
+      });
+
+      if (expandedNow && nextOrdered.length === 0) {
+        pendingDockAutoCollapseNodeIdRef.current = nid;
+      }
+      // Only trigger relayout if this node is actually expanded (otherwise it's just a preset).
+      if (expandedNow) rightDockChangedRef.current = true;
+    },
+    [],
+  );
+
   // Callback to toggle subcategory collapse state (passed to layout and group nodes).
   // Uses an `:expanded` marker to override default-collapsed edge types.
   const toggleSubcategoryCollapse = React.useCallback((groupId: string, edgeType: string, nextCollapsed: boolean, focusNodeId?: string) => {
@@ -637,6 +699,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     nodeExplainSessionCacheRef.current.clear();
     setNodeExplainPopover(null);
     setCollapsedSubcategories(new Set());
+    setRightDockStateByNodeId({});
   }, [lensId]);
 
   // Hover updates can fire very frequently; coalesce to 1 update per frame to avoid re-render storms.
@@ -1960,6 +2023,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const invokeCollapse = React.useCallback((id: string) => {
     onCollapseRef.current?.(id);
   }, []);
+
+  // Auto-collapse when user disables the last active dock filter on an expanded node.
+  React.useEffect(() => {
+    const nid = String(pendingDockAutoCollapseNodeIdRef.current || '').trim();
+    if (!nid) return;
+    pendingDockAutoCollapseNodeIdRef.current = null;
+    // Collapse via the same pipeline as manual collapse (removes related fragments / edges).
+    onCollapseRef.current?.(nid);
+  }, [rightDockStateByNodeId]);
   const invokeScopeScout = React.useCallback((fragmentId: string, canonicalPath?: string) => {
     onScopeScoutRef.current?.(fragmentId, canonicalPath);
   }, []);
@@ -1995,6 +2067,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (typeof fn === 'function') fn();
     }
   }, [collapsedSubcategories, layoutMode]);
+
+  // Trigger relayout when right dock state changes (in Levels mode).
+  React.useEffect(() => {
+    if (!rightDockChangedRef.current) return;
+    rightDockChangedRef.current = false;
+    if (layoutMode === 'levels') {
+      const fn = onArrangeRef.current;
+      if (typeof fn === 'function') fn();
+    }
+  }, [rightDockStateByNodeId, layoutMode]);
 
   const stopTrace = React.useCallback(() => {
     traceAbortRef.current?.abort();
@@ -5086,7 +5168,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (isLevelsLayout) {
         // Levels (Hierarchical): contract-driven Two-Pane layout.
         // IMPORTANT: pass through existing group nodes so pagination state can be preserved.
-        const arranged = await layoutLevelsTwoPane(nextNodes as any, nextEdges as any, {
+        const nextNodesNoRightStacks = (nextNodes as any[]).filter((n) => {
+          const id = String((n as any)?.id || '').trim();
+          const d: any = (n as any)?.data;
+          if (id.startsWith('stack:group:')) return false;
+          if (Boolean(d?.isStackGroup)) return false;
+          return true;
+        });
+        const arranged = await layoutLevelsTwoPane(nextNodesNoRightStacks as any, nextEdges as any, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -5096,6 +5185,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           collapsedSubcategories,
           onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
           compactLeftPane: true,
+          rightDockMode: true,
+          rightDockStateByNodeId,
+          onToggleRightDock: toggleRightDock,
         });
         const withCallbacks = arranged.map((node) => {
           if ((node.data as any)?.isGroup) {
@@ -6302,7 +6394,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         // Keep any existing group nodes in the input so pagination state can be preserved.
         const allNodes = [...updatedCurrentNodes, ...newNodes];
         const filteredMergedEdges = suppressDominatedEdges(mergedEdges as any, allNodes as any);
-        layoutedNodes = await layoutLevelsTwoPane(allNodes as any, filteredMergedEdges as any, {
+        const allNodesNoRightStacks = (allNodes as any[]).filter((n) => {
+          const id = String((n as any)?.id || '').trim();
+          const d: any = (n as any)?.data;
+          if (id.startsWith('stack:group:')) return false;
+          if (Boolean(d?.isStackGroup)) return false;
+          return true;
+        });
+        layoutedNodes = await layoutLevelsTwoPane(allNodesNoRightStacks as any, filteredMergedEdges as any, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -6312,6 +6411,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           collapsedSubcategories,
           onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
           compactLeftPane: true,
+          rightDockMode: true,
+          rightDockStateByNodeId,
+          onToggleRightDock: toggleRightDock,
         });
         linearEdgesAfterLayout = recalculateLevelsTwoPaneHandles(filteredMergedEdges as any, layoutedNodes as any);
       } else {
@@ -8783,7 +8885,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       } else if (isLevelsLayout) {
         // Levels (Hierarchical): contract-driven Two-Pane layout.
         // IMPORTANT: pass the current nodes (including existing groups) so pagination can be preserved.
-        arrangedFragments = await layoutLevelsTwoPane(nodes as any, edges as any, {
+        const nodesNoRightStacks = (nodes as any[]).filter((n) => {
+          const id = String((n as any)?.id || '').trim();
+          const d: any = (n as any)?.data;
+          if (id.startsWith('stack:group:')) return false;
+          if (Boolean(d?.isStackGroup)) return false;
+          return true;
+        });
+        arrangedFragments = await layoutLevelsTwoPane(nodesNoRightStacks as any, edges as any, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -8793,6 +8902,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           collapsedSubcategories,
           onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
           compactLeftPane: true,
+          rightDockMode: true,
+          rightDockStateByNodeId,
+          onToggleRightDock: toggleRightDock,
         });
 
         const finalFragments = arrangedFragments.map((node) => {
@@ -8872,7 +8984,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     } finally {
       setArranging(false);
     }
-  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout, collapsedSubcategories, toggleSubcategoryCollapse]);
+  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout, collapsedSubcategories, toggleSubcategoryCollapse, rightDockStateByNodeId, toggleRightDock]);
 
   // Keep ref updated for stack toggle re-layout (avoid TDZ / circular deps).
   onArrangeRef.current = () => { void handleArrange(); };
@@ -8911,7 +9023,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           // Recalculate edge handles for Linear layout based on node positions
           nextEdges = recalculateLinearHandles(nextEdges, nextNodes);
         } else if (isLevelsLayout) {
-          const laidOut = await layoutLevelsTwoPane(fragmentNodes as any, nextEdges as any, {
+          const fragmentNodesNoRightStacks = (fragmentNodes as any[]).filter((n) => {
+            const id = String((n as any)?.id || '').trim();
+            const d: any = (n as any)?.data;
+            if (id.startsWith('stack:group:')) return false;
+            if (Boolean(d?.isStackGroup)) return false;
+            return true;
+          });
+          const laidOut = await layoutLevelsTwoPane(fragmentNodesNoRightStacks as any, nextEdges as any, {
             direction: 'DOWN',
             nodeWidth: ELK_NODE_WIDTH,
             nodeHeight: ELK_NODE_HEIGHT,
@@ -8921,6 +9040,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             collapsedSubcategories,
             onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
             compactLeftPane: true,
+            rightDockMode: true,
+            rightDockStateByNodeId,
+            onToggleRightDock: toggleRightDock,
           });
           nextNodes = laidOut as any;
 

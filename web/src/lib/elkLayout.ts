@@ -1056,6 +1056,9 @@ export async function layoutLevelsTwoPane<T = any>(
     collapsedSubcategories = new Set<string>(),
     onToggleSubcategoryCollapse,
     compactLeftPane = false,
+    rightDockMode = false,
+    rightDockStateByNodeId,
+    onToggleRightDock,
   } = options;
 
   if (!nodes || nodes.length === 0) return nodes;
@@ -1085,7 +1088,8 @@ export async function layoutLevelsTwoPane<T = any>(
   const fragments: Node<T>[] = nodes
     .filter((n) => !isGroup(n))
     .map((n) => {
-      const out: any = { ...n };
+      // Clone node + data to allow deterministic view-only rewrites (without mutating input).
+      const out: any = { ...n, data: { ...(n.data as any) } };
       delete out.parentId;
       delete out.parentNode;
       delete out.extent;
@@ -1094,6 +1098,25 @@ export async function layoutLevelsTwoPane<T = any>(
       // Clear stale `hidden` so the current collapse state can decide visibility deterministically.
       if (Boolean(out.hidden) && Boolean((out?.data as any)?.hiddenByStack)) {
         delete out.hidden;
+      }
+      // When Right Dock mode is enabled, remove stale RIGHT-stack fields so the UI does not show stack toggles.
+      // IMPORTANT: left-pane subcategory stacks must remain intact, so only clear known right-stack keys.
+      if (rightDockMode) {
+        const d: any = out?.data;
+        const k = String(d?.stackGroupKey || '').trim();
+        const isRightStackKey = k.startsWith('levels:rightstack:') || k.startsWith('levels:rightstackp:');
+        if (isRightStackKey) {
+          delete d.hiddenByStack;
+          delete d.stackGroupKey;
+          delete d.stackCount;
+          delete d.stackExpanded;
+          delete (d as any).stackControllerId;
+          delete d.stackTitle;
+          delete d.stackSubtitle;
+          delete d.stackKind;
+          delete d.stackVisualType;
+          delete d.onToggleStack;
+        }
       }
       return out as Node<T>;
     });
@@ -1108,6 +1131,37 @@ export async function layoutLevelsTwoPane<T = any>(
 
   const normId = (v: any) => String(v || '').trim();
   const edgeTypeOf = (e: any): string => normalizeEdgeType(e?.data?.edgeType || e?.data?.subkind || e?.label || e?.type);
+
+  // === Right Dock (4 filters) ===
+  const RIGHT_DOCK_KEYS = ['governance', 'supply', 'dependencies', 'structure'] as const;
+  type RightDockKey = (typeof RIGHT_DOCK_KEYS)[number];
+  const isRightDockKey = (v: any): v is RightDockKey => RIGHT_DOCK_KEYS.includes(v as any);
+
+  const DOCK_GOVERNANCE = new Set([
+    'OWNS',
+    'INVESTS_IN',
+    'CONTROLS',
+    'MANAGES',
+    'BOARD_MEMBER_OF',
+    'EXECUTIVE_OF',
+    'FOUNDED',
+    'PARENT_OF',
+    'SUBSIDIARY_OF',
+    'ADMINISTERS',
+  ]);
+  const DOCK_SUPPLY = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
+  const DOCK_DEPENDENCIES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
+  const DOCK_STRUCTURE = new Set(['DOMINATES', 'HAS_SUBMARKET', 'HAS_SUBGROUP']);
+
+  const rightDockCategoryForEdgeType = (edgeType: string | undefined): RightDockKey | null => {
+    const et = normalizeEdgeType(edgeType);
+    if (!et) return null;
+    if (DOCK_GOVERNANCE.has(et)) return 'governance';
+    if (DOCK_SUPPLY.has(et)) return 'supply';
+    if (DOCK_DEPENDENCIES.has(et)) return 'dependencies';
+    if (DOCK_STRUCTURE.has(et)) return 'structure';
+    return null;
+  };
 
   // Hierarchy edge sets (same intent as `deriveLevelsTreeMetadata`, but local to this layout).
   // Parent is the "more ultimate" entity (should be further RIGHT).
@@ -1271,6 +1325,47 @@ export async function layoutLevelsTwoPane<T = any>(
   if (rightIds.size === 0 && fragments[0]) rightIds.add(fragments[0].id);
 
   const fragmentIdSet = new Set(fragments.map((n) => n.id));
+  const fragmentById = new Map<string, Node<T>>(fragments.map((n) => [String(n.id || '').trim(), n]));
+
+  const rightDockDefaultsForType = (tk: string): RightDockKey[] => {
+    const t = String(tk || '').toUpperCase().trim();
+    if (!t) return ['governance'];
+    const isOrg = t === 'ORGANIZATION' || t === 'ORG' || t === 'COMPANY';
+    const isGov = t === 'GOV' || t === 'GOVERNMENT' || t === 'GOVERNMENT_AGENCY' || t === 'AGENCY' || t === 'MINISTRY';
+    const isPerson = t === 'PERSON';
+    const isProd = t === 'PRODUCT' || t === 'SERVICE' || t === 'TECHNOLOGY';
+    const isFac = t === 'FACILITY' || t === 'DEPOSIT';
+    const isMarket = t === 'MARKET' || t.startsWith('MARKET_');
+    const isGeo = ['GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY'].includes(t) || t.includes('GEO');
+
+    if (isOrg) return ['governance', 'dependencies'];
+    if (isGov) return ['governance', 'structure'];
+    if (isPerson) return ['governance'];
+    if (isProd || isFac) return ['supply', 'dependencies'];
+    if (isMarket) return ['structure'];
+    if (isGeo) return ['structure'];
+    return ['governance'];
+  };
+
+  const rightDockEnabledSetForNode = (id: string): Set<RightDockKey> => {
+    const nid = String(id || '').trim();
+    const fromOpt = rightDockStateByNodeId ? (rightDockStateByNodeId as any)[nid] : undefined;
+    // If the caller provided an explicit array (even empty), treat it as an explicit override.
+    // Empty array means "all filters off".
+    if (Array.isArray(fromOpt)) {
+      const s = new Set<RightDockKey>();
+      for (const k of fromOpt) if (isRightDockKey(k)) s.add(k);
+      return s;
+    }
+    const node = fragmentById.get(nid);
+    const d: any = node?.data;
+    // NOTE: normalizeFragmentType is declared later in this function, so avoid TDZ by normalizing inline here.
+    const tk = String(d?.type || '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '_') || 'UNKNOWN';
+    return new Set(rightDockDefaultsForType(tk));
+  };
 
   // Precompute ALL edge types per undirected node-pair (for robust stacking decisions).
   // We must use real graph edges, not derived metadata like edgeTypeFromParent, because that metadata can be dominated
@@ -1320,6 +1415,14 @@ export async function layoutLevelsTwoPane<T = any>(
       const pid = String(d?.parentFragmentId || '').trim();
       if (!pid || !rightIds.has(pid)) continue;
       const etp = normalizeEdgeType(d?.edgeTypeFromParent);
+      // Right Dock gating: only promote if the parent node has the corresponding dock filter enabled.
+      if (rightDockMode) {
+        const cat = rightDockCategoryForEdgeType(etp);
+        // If we can't categorize the edge, treat it as not promotable by dock (keeps right pane predictable).
+        if (!cat) continue;
+        const enabled = rightDockEnabledSetForNode(pid);
+        if (!enabled.has(cat)) continue;
+      }
       if (
         d?.directionFromParent === 'incoming' &&
         !PEER_TYPES.has(etp) &&
@@ -1335,6 +1438,16 @@ export async function layoutLevelsTwoPane<T = any>(
       if (!fragmentIdSet.has(pc.parent)) continue;
       // Never promote context/geography parents into the right backbone; keep them grouped on the left.
       if (CONTEXT_GROUP_ONLY_TYPES.has(normalizeEdgeType(pc.et))) continue;
+      if (rightDockMode) {
+        const cat = rightDockCategoryForEdgeType(pc.et);
+        if (cat) {
+          const enabled = rightDockEnabledSetForNode(pc.child);
+          if (!enabled.has(cat)) continue;
+        } else {
+          // Unknown category: keep it out of the right backbone in dock mode (stable UX).
+          continue;
+        }
+      }
       if (rightIds.has(pc.child) && !rightIds.has(pc.parent)) {
         rightIds.add(pc.parent);
         changed = true;
@@ -1382,6 +1495,15 @@ export async function layoutLevelsTwoPane<T = any>(
   const focusIslandNodes = focusIslandNodesAll.filter((n) => focusIslandIds.has(n.id));
 
   const rightNodes = fragments.filter((n) => rightIds.has(n.id));
+  // Annotate right-pane nodes with dock state so the node renderer can show the dock panel.
+  if (rightDockMode) {
+    for (const rn of rightNodes) {
+      const d: any = rn.data;
+      const enabled = Array.from(rightDockEnabledSetForNode(rn.id));
+      d.rightDockEnabled = enabled;
+      d.onToggleRightDock = onToggleRightDock;
+    }
+  }
 
   // === 2) Compute RIGHT horizontal levels (hierarchy within right nodes) ===
   // We build hierarchy from real graph edges between right nodes (not from expansion parentFragmentId),
@@ -1470,10 +1592,17 @@ export async function layoutLevelsTwoPane<T = any>(
   // Right-side vertical density:
   // The right hierarchy should be compact (especially the first column / nearest level).
   const RIGHT_GAP_Y_BASE = Math.max(18, Math.floor(nodeSpacing * 0.35)); // ~20-24px with defaults
+  // Right Dock (icons under nodes) needs reserved vertical space:
+  // small gap + icon row (28px) + small gap.
+  const RIGHT_DOCK_ICON_H = 28;
+  const RIGHT_DOCK_ICON_GAP = 6;
+  const RIGHT_DOCK_TOTAL_GAP_Y = RIGHT_DOCK_ICON_GAP * 2 + RIGHT_DOCK_ICON_H; // 40px
   const rightGapY = (level: number) => {
     // Level 1 (closest to the root node) should be tighter.
-    if (level === 1) return Math.max(12, Math.floor(RIGHT_GAP_Y_BASE * 0.65));
-    return RIGHT_GAP_Y_BASE;
+    const base = level === 1 ? Math.max(12, Math.floor(RIGHT_GAP_Y_BASE * 0.65)) : RIGHT_GAP_Y_BASE;
+    // In dock mode, never go below the reserved icon gap, otherwise dock icons overlap the next node.
+    if (rightDockMode) return Math.max(base, RIGHT_DOCK_TOTAL_GAP_Y);
+    return base;
   };
 
   // Group content wrap:
@@ -2296,7 +2425,9 @@ export async function layoutLevelsTwoPane<T = any>(
   // === 5.75) Right-side temporary stacking (compute BEFORE groups) ===
   // IMPORTANT: stacks must be computed before group packing & barycentric sweeps, otherwise hidden stack members
   // keep reserving vertical space and make groups appear "too low" / non-contiguous.
-  const STACK_MIN = 2;
+  // When Right Dock mode is enabled, we disable right-side stack controllers entirely.
+  // (Dock-panel filters replace them.)
+  const STACK_MIN = rightDockMode ? Number.POSITIVE_INFINITY : 2;
   // Stack group layout constants (used for spacing + container size)
   const STACK_GROUP_PAD_X = 8;
   const STACK_GROUP_PAD_TOP = 44; // room for header with collapse button
@@ -4498,6 +4629,20 @@ export interface LayoutOptions_Custom {
    * When true, left pane nodes will have nodeSize: 'compact' and use COMPACT_NODE_LAYOUT_HEIGHT.
    */
   compactLeftPane?: boolean;
+
+  /**
+   * Right Dock mode (Levels layout).
+   * When enabled, right-side "stack controller" nodes are disabled and upstream promotion into the right backbone
+   * is gated by 4 dock filters: Governance / Supply chain / Dependencies / Structure.
+   */
+  rightDockMode?: boolean;
+  /**
+   * Per-node enabled dock filters. Keys are node ids; values are enabled filter keys.
+   * When not provided for a node, defaults are derived from node type (see layoutLevelsTwoPane).
+   */
+  rightDockStateByNodeId?: Record<string, Array<'governance' | 'supply' | 'dependencies' | 'structure'>>;
+  /** Toggle callback used by the node UI (HorizonFragmentNode). */
+  onToggleRightDock?: (nodeId: string, key: 'governance' | 'supply' | 'dependencies' | 'structure', nextEnabled: boolean) => void;
 }
 
 /**

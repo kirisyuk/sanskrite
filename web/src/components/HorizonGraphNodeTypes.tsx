@@ -145,6 +145,9 @@ export interface HorizonNodeData {
   rightFilterHideLoneGovernancePeople?: boolean;
   onOpenRightFilters?: (nodeId: string, nextOpen: boolean) => void;
   onToggleRightFilter?: (nodeId: string, key: 'loneParents' | 'loneChildren' | 'loneGovernancePeople', nextOn: boolean) => void;
+  // Right dock (Levels layout; view-only)
+  rightDockEnabled?: Array<'governance' | 'supply' | 'dependencies' | 'structure'>;
+  onToggleRightDock?: (nodeId: string, key: 'governance' | 'supply' | 'dependencies' | 'structure', nextEnabled: boolean) => void;
   // Right-side node actions (Levels layout; view-only)
   onTrace?: (nodeId: string) => void;
   onUndoTrace?: () => void;
@@ -2790,6 +2793,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const showExpand0 = Boolean(data.fragmentId && data.onLoadRelated && !isExpanded);
   const isPinnedToScope = Boolean((data as any)?.pinnedToScope);
   const canTogglePin = Boolean((data as any)?.onTogglePin && data.canonicalPath);
+  const nodeId = String((data as any)?.id || id || '').trim();
   const stackKey = String((data as any)?.stackGroupKey || '').trim();
   const stackCount = typeof (data as any)?.stackCount === 'number' ? (data as any).stackCount : undefined;
   const stackExpanded = Boolean((data as any)?.stackExpanded);
@@ -2832,6 +2836,19 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   // For now it's a pure UI affordance; wiring happens later.
   const showRiskShieldButton = Boolean(data.fragmentId && !String((data as any)?.stackGroupKey || '').trim());
   const isRiskShieldOpen = Boolean(data.riskShieldOpen);
+
+  // Right Dock (Levels right pane): 4 filters
+  const isLevelsRightPane = String((data as any)?.levelsPane || '').trim() === 'right';
+  const rightDockEnabled = Array.isArray((data as any)?.rightDockEnabled) ? ((data as any)?.rightDockEnabled as any[]) : [];
+  const onToggleRightDock = (data as any)?.onToggleRightDock as
+    | ((nodeId: string, key: 'governance' | 'supply' | 'dependencies' | 'structure', nextEnabled: boolean) => void)
+    | undefined;
+  const canRightDock = Boolean(isLevelsRightPane && typeof onToggleRightDock === 'function' && nodeId);
+  const dockEnabledSet = React.useMemo(() => {
+    const s = new Set<string>();
+    for (const k of rightDockEnabled) s.add(String(k || '').trim().toLowerCase());
+    return s;
+  }, [rightDockEnabled]);
   const segmentNorms = React.useMemo(() => topMarketSegmentNorms(data, 3), [(data as any)?.marketSegmentNorms, (data as any)?.marketSegments, (data as any)?.canonicalPath, (data as any)?.type]);
   const segmentIconTypes = React.useMemo(() => {
     const fromNorms = (segmentNorms || [])
@@ -3403,64 +3420,6 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
 
   return (
     <>
-      {/* Selected-only contextual CTA (no hover): "Scout it" */}
-      {canScopeScout && data.fragmentId && data.onScopeScout && (
-        <NodeToolbar
-          isVisible={isSelected}
-          position={Position.Bottom}
-          // If risk panel is open, push Scout CTA below it (risk mode takes vertical space under node).
-          offset={
-            Boolean(data.riskShieldOpen)
-              ? (riskExpanded ? 260 : 190)
-              : 12
-          }
-        >
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (!data.fragmentId) return;
-              if (data.isScopeScouting) return;
-              data.onScopeScout?.(data.fragmentId, data.canonicalPath);
-            }}
-            disabled={data.isScopeScouting}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '8px 10px',
-              borderRadius: 12,
-              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)'}`,
-              background: theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.82)',
-              color: theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.90)',
-              boxShadow: theme === 'dark' ? '0 10px 24px rgba(0,0,0,0.38)' : '0 10px 24px rgba(0,0,0,0.14)',
-              cursor: data.isScopeScouting ? 'wait' : 'pointer',
-              whiteSpace: 'nowrap',
-              pointerEvents: 'auto',
-            }}
-            title="Scout this fragment (add to scope + scout)"
-            aria-label="Scout it"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke={accentColor}
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <path d="M21 21l-4.3-4.3" />
-            </svg>
-            <span style={{ fontSize: 12, fontWeight: 700 }}>
-              {data.isScopeScouting ? 'Scouting…' : 'Scout it'}
-            </span>
-          </button>
-        </NodeToolbar>
-      )}
-
       {/* Stack preview chips (collapsed stack): show up to 5 hidden members + more.
           IMPORTANT: render INSIDE the node DOM (not NodeToolbar), so it scales with graph zoom. */}
       {canToggleStack && !stackExpanded && stackPreviewOpen && (
@@ -4825,6 +4784,216 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           </span>
         </button>
       )}
+
+      {/* Right Dock: 4 filter icons (Levels right pane). Place BELOW node to avoid edge overlap. */}
+      {canRightDock && (() => {
+        const dockFocus = Boolean(isHovering || isSelected || rightFiltersOpen);
+        // Quiet mode: show only for expanded nodes, and only the enabled modes (prevents visual noise).
+        const quiet = !dockFocus;
+        if (quiet && !isExpanded) return null;
+
+        const itemsAll = ([
+          { key: 'governance', label: 'Governance', icon: 'gavel' },
+          { key: 'supply', label: 'Supply chain', icon: 'supply' },
+          { key: 'dependencies', label: 'Dependencies', icon: 'link' },
+          { key: 'structure', label: 'Structure', icon: 'layers' },
+        ] as const);
+
+        const items = quiet ? itemsAll.filter((it) => dockEnabledSet.has(it.key)) : itemsAll;
+        if (!items || items.length === 0) return null;
+
+        // Scout integration: show only when the node is EXPANDED and SELECTED (clicked).
+        const showScoutDock = Boolean(
+          isSelected &&
+          isExpanded &&
+          canScopeScout &&
+          data.fragmentId &&
+          typeof data.onScopeScout === 'function',
+        );
+        const scoutW = 18; // icon-only (no circular button)
+        const dividerW = 1;
+        const scoutGap = 8;
+        const extraW = showScoutDock ? (dividerW + scoutGap + scoutW) : 0; // [|][gap][scout]
+
+        return (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: '100%',
+              marginTop: 6,
+              transform: 'translateX(-50%)',
+              display: 'flex',
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 0,
+              zIndex: 4,
+              opacity: dockFocus ? 1 : 1,
+              pointerEvents: dockFocus ? 'auto' : 'none',
+              padding: '4px 10px',
+              borderRadius: 999,
+              // Quiet mode: show ONLY icons (no pill outline/background). Keep geometry stable via transparent border.
+              border: `1px solid ${
+                dockFocus ? (theme === 'dark' ? 'rgba(255,255,255,0.16)' : 'rgba(15,23,42,0.12)') : 'transparent'
+              }`,
+              background: dockFocus ? (theme === 'dark' ? 'rgba(0,0,0,0.32)' : 'rgba(255,255,255,0.70)') : 'transparent',
+              backdropFilter: dockFocus ? 'blur(8px)' : 'none',
+              boxShadow: dockFocus ? (theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.32)' : '0 14px 40px rgba(0,0,0,0.14)') : 'none',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {items.map((it) => {
+                const active = dockEnabledSet.has(it.key);
+                // Toggle is allowed in focus mode (hover/selection). Layout changes, if any, are handled upstream.
+                const canToggle = Boolean(dockFocus);
+                // Full-color only when focused (hover/selected). Quiet mode shows only active icons anyway.
+                const fg = dockFocus
+                  ? (active ? accentColor : (theme === 'dark' ? 'rgba(255,255,255,0.70)' : 'rgba(15,23,42,0.62)'))
+                  : (theme === 'dark' ? 'rgba(255,255,255,0.78)' : 'rgba(15,23,42,0.72)');
+                // No per-icon borders/backgrounds (avoids "squares"). Active state is conveyed by color/opacity only.
+                const btnBorder = 'none';
+                const btnBg = 'transparent';
+
+                return (
+                  <button
+                    key={`${nodeId}-dock-${it.key}`}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!canToggle) return;
+                      onToggleRightDock?.(nodeId, it.key, !active);
+                    }}
+                    title={it.label}
+                    aria-label={it.label}
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: 8,
+                      border: btnBorder,
+                      background: btnBg,
+                      color: fg,
+                      cursor: canToggle ? 'pointer' : 'default',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: 'none',
+                      padding: 0,
+                      opacity: dockFocus ? (active ? 1 : 0.66) : 0.92,
+                      transition: 'opacity 120ms ease, transform 120ms ease',
+                      transform: dockFocus && active ? 'translateY(-0.5px)' : 'none',
+                    }}
+                  >
+                    {it.icon === 'gavel' && (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        {/* Courthouse / governance (clear at 14px) */}
+                        <path d="M3 21h18" />
+                        <path d="M4 10h16" />
+                        <path d="M6 10V20" />
+                        <path d="M10 10V20" />
+                        <path d="M14 10V20" />
+                        <path d="M18 10V20" />
+                        <path d="M12 3 3 8h18L12 3Z" />
+                      </svg>
+                    )}
+                    {it.icon === 'supply' && (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 7h11v10H3z" />
+                        <path d="M14 10h4l3 3v4h-7z" />
+                        <path d="M7 17a2 2 0 1 0 0 .01" />
+                        <path d="M17 17a2 2 0 1 0 0 .01" />
+                      </svg>
+                    )}
+                    {it.icon === 'link' && (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M10 13a5 5 0 0 1 0-7l1.2-1.2a5 5 0 0 1 7 7L17 13" />
+                        <path d="M14 11a5 5 0 0 1 0 7L12.8 19.2a5 5 0 0 1-7-7L7 11" />
+                      </svg>
+                    )}
+                    {it.icon === 'layers' && (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 2 2 7l10 5 10-5-10-5Z" />
+                        <path d="M2 12l10 5 10-5" />
+                        <path d="M2 17l10 5 10-5" />
+                      </svg>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Divider + Scout: only on selected expanded nodes; animate in to the RIGHT of icons */}
+            <div
+              style={{
+                width: extraW,
+                opacity: showScoutDock ? 1 : 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'flex-end',
+                overflow: 'hidden',
+                transition: 'width 160ms ease, opacity 140ms ease',
+                pointerEvents: showScoutDock ? 'auto' : 'none',
+                marginLeft: showScoutDock ? 10 : 0,
+              }}
+            >
+              <div
+                aria-hidden="true"
+                style={{
+                  width: dividerW,
+                  height: 16,
+                  borderRadius: 999,
+                  background: theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.16)',
+                  flexShrink: 0,
+                }}
+              />
+              <div style={{ width: scoutGap }} />
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!data.fragmentId) return;
+                  if (data.isScopeScouting) return;
+                  data.onScopeScout?.(data.fragmentId, data.canonicalPath);
+                }}
+                disabled={data.isScopeScouting}
+                aria-label="Scout it"
+                title={data.isScopeScouting ? 'Scouting…' : 'Scout it'}
+                style={{
+                  width: scoutW,
+                  height: 18,
+                  borderRadius: 6,
+                  border: 'none',
+                  background: 'transparent',
+                  color: theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.90)',
+                  cursor: data.isScopeScouting ? 'wait' : 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  padding: 0,
+                  opacity: data.isScopeScouting ? 0.7 : 1,
+                }}
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke={accentColor}
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M21 21l-4.3-4.3" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Right-side hover circle + actions menu (Levels right pane) */}
       {canRightFilters && (
