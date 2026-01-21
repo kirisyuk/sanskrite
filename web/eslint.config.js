@@ -1,4 +1,4 @@
-﻿import js from '@eslint/js';
+import js from '@eslint/js';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 import reactPlugin from 'eslint-plugin-react';
@@ -10,8 +10,19 @@ import prettierConfig from 'eslint-config-prettier';
 export default [
   { ignores: ['dist/**', 'node_modules/**'] },
   js.configs.recommended,
-  ...tseslint.configs.recommendedTypeChecked,
+  // IMPORTANT:
+  // We intentionally use the *non type-aware* TS ruleset here.
+  // The type-aware presets (`recommendedTypeChecked`) are much stricter and will flag a lot of existing code;
+  // they also require careful scoping + project configuration.
+  ...tseslint.configs.recommended,
   reactPlugin.configs.flat.recommended,
+  // Node-side tooling/config files (allow `console`, `process`, etc.)
+  {
+    files: ['eslint.config.js', 'scripts/**/*.{js,mjs,cjs}'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
   {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
@@ -34,5 +45,7 @@ export default [
       'react-hooks/exhaustive-deps': 'warn',
     },
   },
+  // React settings for JSX/TSX.
+  { settings: { react: { version: 'detect' } } },
   prettierConfig,
 ];

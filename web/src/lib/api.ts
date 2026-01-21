@@ -2270,6 +2270,37 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  // --- Horizon Fragment Profiles ---
+  async getFragmentProfile(fragmentId: string): Promise<any> {
+    try {
+      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/profile`);
+      return response.data;
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        return null; // Profile not found
+      }
+      console.error(`[API] getFragmentProfile error:`, error);
+      throw error;
+    }
+  }
+
+  async refreshFragmentProfile(fragmentId: string, force: boolean = false): Promise<{
+    profileId: string;
+    fragmentId: string;
+    created: boolean;
+    durationMs: number;
+    capturedAt: string;
+    sectionsCount: number;
+  }> {
+    try {
+      const response = await this.client.post(`/api/horizon/fragments/${fragmentId}/profile/refresh`, { force });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] refreshFragmentProfile error:`, error);
+      throw error;
+    }
+  }
+
   // --- Horizon Fragment Dependencies (direct edges / neighbors) ---
   async getFragmentDependencies(
     fragmentId: string,

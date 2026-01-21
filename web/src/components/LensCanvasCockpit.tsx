@@ -51,6 +51,7 @@ import {
 import type { LensItem } from '../types/lensItem';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 import { ExpandEmptyToast } from './ExpandEmptyToast';
+import { MarketProfileModal } from './MarketProfileModal';
 
 /**
  * Custom edge that draws an arc (inverted parabola) going UP and over.
@@ -597,6 +598,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     error: string | null;
   } | null>(null);
   const nodeExplainPopoverRef = React.useRef<HTMLDivElement | null>(null);
+  
+  // Market profile modal state
+  const [marketProfileModal, setMarketProfileModal] = React.useState<{
+    open: boolean;
+    fragmentId: string;
+    canonicalPath?: string;
+    label?: string;
+  } | null>(null);
   const [gridState, setGridState] = React.useState<GridState>(createEmptyGrid());
 
   // Collapsed subcategories state (Levels layout: left-pane groups can collapse relation-type subsections).
@@ -1197,6 +1206,22 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     canonicalPath?: string;
     nodeType?: string;
   }) => {
+    // For MARKET fragments, open profile modal instead of explanation popover
+    const nodeType = String(args.nodeType || '').trim().toUpperCase();
+    const canonicalPath = String(args.canonicalPath || '').trim();
+    const isMarket = nodeType === 'MARKET' || canonicalPath.startsWith('/market/');
+    
+    if (isMarket && args.fragmentId) {
+      setMarketProfileModal({
+        open: true,
+        fragmentId: args.fragmentId,
+        canonicalPath: args.canonicalPath,
+        label: args.label,
+      });
+      return;
+    }
+    
+    // For other types, use explanation popover
     setNodeExplainPopover({
       open: true,
       nodeId: String(args.nodeId || '').trim(),
@@ -13408,6 +13433,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         actionDisabled={!onScopeScout || Boolean(scopeScoutInFlightId)}
       />
+
+      {/* Market Profile Modal */}
+      {marketProfileModal && (
+        <MarketProfileModal
+          open={marketProfileModal.open}
+          onClose={() => setMarketProfileModal(null)}
+          fragmentId={marketProfileModal.fragmentId}
+          canonicalPath={marketProfileModal.canonicalPath}
+          label={marketProfileModal.label}
+        />
+      )}
     </div>
   );
 };

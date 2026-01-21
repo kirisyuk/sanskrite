@@ -1200,6 +1200,16 @@
     - Horizon fragments (уже есть),
     - ontology_facts (уже есть),
     - определить, как tenant/scope разделяются и как объединяются в выдаче.
+  - **Идея: Сохранение профилей фрагментов как документов в GCS с синхронизацией в Vertex AI Search**
+    - Сейчас `FragmentProfile` сохраняются только в Firestore (`horizon_fragment_profiles`), в отличие от других сущностей (fragments, documents, ontology_facts), которые также экспортируются в GCS и индексируются в Vertex AI Search.
+    - Добавить в `FragmentProfilesRepository`:
+      - `WithStorage()` — для экспорта в GCS (аналогично `HorizonFragmentsRepository`)
+      - `WithVertexSearchSync()` — для автоматической синхронизации с Vertex AI Search
+      - `uploadToGCS()` — экспорт профиля в JSON формате для Vertex AI Search
+    - Путь в GCS: `{tenantId}/horizon_fragment_profiles/{profileId}.json` (или `global/horizon_fragment_profiles/{profileId}.json` для системного tenant)
+    - Формат документа: JSON с `content` (base64 encoded) и `structData` (metadata: fragmentId, fragmentType, canonicalPath, status, capturedAt и т.д.)
+    - Вызывать экспорт в `Create()` после успешного сохранения в Firestore (асинхронно, не блокируя основной поток)
+    - Преимущества: профили станут доступны для семантического поиска, единообразие с другими сущностями системы, возможность поиска по содержимому профилей (overview, financials, leadership и т.д.)
 - **Мульти‑классификация без взрыва словаря**
   - При необходимости: "primary sector/entity + tags" или аккуратные `[]string` поля, но без попытки сделать дерево бесконечным.
 - **Intent/Keywords Resolution (Lens-driven)**
