@@ -37,6 +37,9 @@ var (
 
 	// Seed defaults
 	seedPolicies = flag.Bool("seed-policies", false, "Seed default refresh policies to Firestore and exit")
+
+	// Safety gate for scheduled runs
+	enableScheduled = flag.Bool("enable-scheduled", false, "Enable scheduled runs (default: false)")
 )
 
 func main() {
@@ -118,6 +121,10 @@ func main() {
 	// Scheduled refresh mode
 	if strings.TrimSpace(*fragmentType) == "" {
 		log.Fatal("Either --type or --fragment-id is required")
+	}
+
+	if !*enableScheduled {
+		log.Fatal("Scheduled runs are disabled by default. Pass --enable-scheduled to proceed.")
 	}
 
 	ft := strings.ToUpper(strings.TrimSpace(*fragmentType))
@@ -295,16 +302,16 @@ Examples:
   horizon_profile_refresh --project=my-project --seed-policies
 
   # Refresh top 10%% of ORGANIZATION fragments
-  horizon_profile_refresh --project=my-project --type=ORGANIZATION
+  horizon_profile_refresh --project=my-project --type=ORGANIZATION --enable-scheduled
 
   # Refresh with custom parameters
-  horizon_profile_refresh --project=my-project --type=MARKET --top-percent=0.05 --max-per-run=100
+  horizon_profile_refresh --project=my-project --type=MARKET --top-percent=0.05 --max-per-run=100 --enable-scheduled
 
   # Refresh a single fragment on demand
   horizon_profile_refresh --project=my-project --fragment-id=abc123
 
   # Refresh all types and output to file
-  horizon_profile_refresh --project=my-project --type=all --out=results.jsonl
+  horizon_profile_refresh --project=my-project --type=all --out=results.jsonl --enable-scheduled
 
 Options:
 `)

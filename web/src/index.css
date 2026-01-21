@@ -1,4 +1,4 @@
-﻿/* Spin animation for loading indicators */
+/* Spin animation for loading indicators */
 @keyframes spin {
   from {
     transform: rotate(0deg);
@@ -120,6 +120,42 @@
 .react-flow__minimap-node {
   stroke: var(--border-subtle) !important;
   stroke-width: 1 !important;
+}
+
+/* ReactFlow Node smooth position transitions (layout changes) */
+.react-flow__node {
+  transition: transform 220ms ease-out, opacity 180ms ease-out;
+  animation: rf-node-fade-in 180ms ease-out;
+}
+@keyframes rf-node-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+/* Disable transition during drag to keep movement instant */
+.react-flow__node.dragging,
+.react-flow__node.selected.dragging {
+  transition: none !important;
+}
+/* Disable transition when pane is being dragged (panning) for performance */
+.react-flow__pane.dragging ~ .react-flow__viewport .react-flow__node {
+  transition: none !important;
+}
+/* Perf mode: disable all node transitions */
+:root[data-hzn-perf-mode="true"] .react-flow__node {
+  transition: none !important;
+}
+
+/* ReactFlow Edge smooth opacity transitions (appear/disappear) */
+.react-flow__edge {
+  transition: opacity 180ms ease-out;
+}
+.react-flow__edge path {
+  transition: stroke 180ms ease-out, stroke-width 180ms ease-out;
+}
+/* Perf mode: disable edge transitions */
+:root[data-hzn-perf-mode="true"] .react-flow__edge,
+:root[data-hzn-perf-mode="true"] .react-flow__edge path {
+  transition: none !important;
 }
 
 /* Gradient border for UnfoldRequest in dark theme */
@@ -500,7 +536,8 @@ p {
 }
 
 .topbar {
-  height: 56px;
+  height: 44px;
+  min-height: 44px;
   background-color: var(--bg-body);
   border-bottom: none;
   padding: 0; /* zero outer padding as requested */

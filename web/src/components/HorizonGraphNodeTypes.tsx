@@ -4802,10 +4802,11 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         const items = quiet ? itemsAll.filter((it) => dockEnabledSet.has(it.key)) : itemsAll;
         if (!items || items.length === 0) return null;
 
-        // Scout integration: show only when the node is EXPANDED and SELECTED (clicked).
+        // Scout integration: show when node is SELECTED and canScopeScout is true.
+        // canScopeScout covers: expanded OR loadRelatedAttempted (tried to expand but nothing to show).
+        // This ensures Scout is available when user needs to fetch more data.
         const showScoutDock = Boolean(
           isSelected &&
-          isExpanded &&
           canScopeScout &&
           data.fragmentId &&
           typeof data.onScopeScout === 'function',
@@ -4822,7 +4823,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               position: 'absolute',
               left: '50%',
               top: '100%',
-              marginTop: 6,
+              marginTop: 3,
               transform: 'translateX(-50%)',
               display: 'flex',
               flexDirection: 'row',
@@ -4834,10 +4835,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               pointerEvents: dockFocus ? 'auto' : 'none',
               padding: '4px 10px',
               borderRadius: 999,
-              // Quiet mode: show ONLY icons (no pill outline/background). Keep geometry stable via transparent border.
-              border: `1px solid ${
-                dockFocus ? (theme === 'dark' ? 'rgba(255,255,255,0.16)' : 'rgba(15,23,42,0.12)') : 'transparent'
-              }`,
+              // No border in any state (user request).
+              border: 'none',
               background: dockFocus ? (theme === 'dark' ? 'rgba(0,0,0,0.32)' : 'rgba(255,255,255,0.70)') : 'transparent',
               backdropFilter: dockFocus ? 'blur(8px)' : 'none',
               boxShadow: dockFocus ? (theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.32)' : '0 14px 40px rgba(0,0,0,0.14)') : 'none',

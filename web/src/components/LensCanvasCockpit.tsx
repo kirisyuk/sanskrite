@@ -622,12 +622,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         (nodesStateRef.current || []).some((n) => String((n as any)?.id || '').trim() === nid && Boolean((n as any)?.data?.expanded)),
       );
 
-      let nextOrdered: Array<'governance' | 'supply' | 'dependencies' | 'structure'> = [];
+      // Compute nextOrdered using functional setState to avoid stale closure issues.
+      // IMPORTANT: `rightDockStateByNodeId` stores overrides only. When absent, elkLayout falls back to type-based defaults.
+      // So when the user toggles OFF a currently-active default filter, we must start from the *effective* set
+      // (the one currently rendered on the node), not from the override map (which may be empty).
+      let computedNextOrdered: Array<'governance' | 'supply' | 'dependencies' | 'structure'> = [];
+      let willBeEmpty = false;
+      
       setRightDockStateByNodeId((prev) => {
-        // IMPORTANT:
-        // `rightDockStateByNodeId` stores overrides only. When absent, elkLayout falls back to type-based defaults.
-        // So when the user toggles OFF a currently-active default filter, we must start from the *effective* set
-        // (the one currently rendered on the node), not from the override map (which may be empty).
         const rendered = (nodesStateRef.current || []).find((n) => String((n as any)?.id || '').trim() === nid) as any;
         const renderedEnabled = Array.isArray(rendered?.data?.rightDockEnabled) ? (rendered.data.rightDockEnabled as any[]) : null;
         const cur = renderedEnabled ?? (Array.isArray((prev as any)[nid]) ? ([...(prev as any)[nid]] as any[]) : []);
@@ -637,30 +639,43 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         else curSet.delete(k);
         // Keep stable ordering
         const ordered = (['governance', 'supply', 'dependencies', 'structure'] as const).filter((x) => curSet.has(x));
-        nextOrdered = ordered as any;
+        computedNextOrdered = ordered as any;
+        willBeEmpty = ordered.length === 0;
 
         // If user toggled everything off on an EXPANDED node: this is equivalent to collapsing it back.
         // We clear the override so next expansion returns to defaults.
-        if (expandedNow && ordered.length === 0) {
+        if (willBeEmpty) {
           const out: any = { ...(prev || {}) };
           delete out[nid];
           return out;
         }
         return { ...(prev || {}), [nid]: ordered as any };
       });
+      
+      // Set pending collapse AFTER state update is scheduled (will trigger useEffect).
+      if (expandedNow && willBeEmpty) {
+        pendingDockAutoCollapseNodeIdRef.current = nid;
+      }
       // Update UI immediately (without waiting for relayout) so icons "depress" right away.
+      // CRITICAL: Preserve expanded flag from expandedNodesRef so collapse button shows correct state.
       setNodes((prevNodes) => {
         return (prevNodes || []).map((n: any) => {
           const id = String(n?.id || '').trim();
           if (id !== nid) return n;
           if (Boolean(n?.data?.isGroup)) return n;
-          return { ...n, data: { ...(n.data || {}), rightDockEnabled: nextOrdered } };
+          const fid = String((n.data as any)?.fragmentId || id || '').trim();
+          const shouldBeExpanded = fid && expandedNodesRef.current.has(fid);
+          return { 
+            ...n, 
+            data: { 
+              ...(n.data || {}), 
+              rightDockEnabled: computedNextOrdered,
+              expanded: shouldBeExpanded ? true : (n.data as any)?.expanded || false,
+            } 
+          };
         });
       });
 
-      if (expandedNow && nextOrdered.length === 0) {
-        pendingDockAutoCollapseNodeIdRef.current = nid;
-      }
       // Only trigger relayout if this node is actually expanded (otherwise it's just a preset).
       if (expandedNow) rightDockChangedRef.current = true;
     },
@@ -2028,9 +2043,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   React.useEffect(() => {
     const nid = String(pendingDockAutoCollapseNodeIdRef.current || '').trim();
     if (!nid) return;
-    pendingDockAutoCollapseNodeIdRef.current = null;
-    // Collapse via the same pipeline as manual collapse (removes related fragments / edges).
-    onCollapseRef.current?.(nid);
+    // Double-check: node should still be expanded and have no active filters.
+    const node = (nodesStateRef.current || []).find((n) => String((n as any)?.id || '').trim() === nid) as any;
+    const isStillExpanded = Boolean(node && (node.data as any)?.expanded);
+    const currentFilters = Array.isArray((node?.data as any)?.rightDockEnabled) ? ((node.data as any).rightDockEnabled as any[]) : [];
+    const hasNoFilters = currentFilters.length === 0;
+    
+    if (isStillExpanded && hasNoFilters) {
+      pendingDockAutoCollapseNodeIdRef.current = null;
+      // Collapse via the same pipeline as manual collapse (removes related fragments / edges).
+      onCollapseRef.current?.(nid);
+    } else {
+      // Reset if conditions changed (e.g., user re-enabled a filter before collapse happened).
+      pendingDockAutoCollapseNodeIdRef.current = null;
+    }
   }, [rightDockStateByNodeId]);
   const invokeScopeScout = React.useCallback((fragmentId: string, canonicalPath?: string) => {
     onScopeScoutRef.current?.(fragmentId, canonicalPath);
@@ -4967,7 +4993,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (!fragmentId) return;
 
     const record = expansionsRef.current.get(fragmentId);
-    if (!record) return;
+    
+    // Fallback: if no expansion record exists but the node is marked as expanded,
+    // still clear the expanded flag so the UI updates correctly.
+    // This can happen if the record was lost due to race conditions or errors.
+    if (!record) {
+      console.warn('[Cockpit] No expansion record found for', fragmentId, '- clearing expanded flag only');
+      setNodes((prev) =>
+        (prev || []).map((n) => {
+          if (n.id === fragmentId || (n.data as any)?.fragmentId === fragmentId) {
+            return { ...n, data: { ...n.data, expanded: false, isLoadingRelated: false } as any };
+          }
+          return n;
+        }),
+      );
+      expandedNodesRef.current.delete(fragmentId);
+      return;
+    }
 
     // Use latest canonical state snapshots to avoid leaking transient (hover-derived) styles from rendered nodes.
     const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
@@ -8826,7 +8868,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       
       if (isFreeformLayout) {
         // Freeform layout: используем текущую логику с ELK и группами
-        arrangedFragments = await layoutFullGraph(fragmentNodes, edges, {
+        // CRITICAL: Restore expanded flag from expandedNodesRef before relayout.
+        const fragmentNodesWithExpanded = fragmentNodes.map((n) => {
+          const fid = String((n.data as any)?.fragmentId || n.id || '').trim();
+          if (!fid) return n;
+          if (expandedNodesRef.current.has(fid) && !(n.data as any)?.expanded) {
+            return { ...n, data: { ...(n.data || {}), expanded: true } as any };
+          }
+          return n;
+        });
+        arrangedFragments = await layoutFullGraph(fragmentNodesWithExpanded, edges, {
         direction: 'DOWN',
         nodeWidth: ELK_NODE_WIDTH,
         nodeHeight: ELK_NODE_HEIGHT,
@@ -8836,15 +8887,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       });
 
       // Сохраняем onLoadRelated callback для каждой ноды
-        const finalFragments = arrangedFragments.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          onLoadRelated: invokeLoadRelated,
-          onCollapse: invokeCollapse,
-          onScopeScout: invokeScopeScout,
-        },
-      }));
+        const finalFragments = arrangedFragments.map((node) => {
+          const fid = String((node.data as any)?.fragmentId || node.id || '').trim();
+          const shouldBeExpanded = fid && expandedNodesRef.current.has(fid);
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              expanded: shouldBeExpanded ? true : (node.data as any)?.expanded || false,
+              onLoadRelated: invokeLoadRelated,
+              onCollapse: invokeCollapse,
+              onScopeScout: invokeScopeScout,
+            },
+          };
+        });
 
         // Пересобираем группы (freeform использует группировку)
         withGroups = rebuildGroupContainers(finalFragments, {
@@ -8857,7 +8913,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         setEdges(updatedEdges);
       } else if (isLinearLayout) {
         // Linear layout: 3-row layout с 4 секциями
-        arrangedFragments = await layoutLinearFullGraph(fragmentNodes, edges, {
+        // CRITICAL: Restore expanded flag from expandedNodesRef before relayout.
+        const fragmentNodesWithExpanded = fragmentNodes.map((n) => {
+          const fid = String((n.data as any)?.fragmentId || n.id || '').trim();
+          if (!fid) return n;
+          if (expandedNodesRef.current.has(fid) && !(n.data as any)?.expanded) {
+            return { ...n, data: { ...(n.data || {}), expanded: true } as any };
+          }
+          return n;
+        });
+        arrangedFragments = await layoutLinearFullGraph(fragmentNodesWithExpanded, edges, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -8866,15 +8931,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           maxChildRows: ELK_MAX_CHILD_ROWS,
         });
 
-        const finalFragments = arrangedFragments.map((node) => ({
-          ...node,
-          data: {
-            ...node.data,
-            onLoadRelated: invokeLoadRelated,
-            onCollapse: invokeCollapse,
-            onScopeScout: invokeScopeScout,
-          },
-        }));
+        const finalFragments = arrangedFragments.map((node) => {
+          const fid = String((node.data as any)?.fragmentId || node.id || '').trim();
+          const shouldBeExpanded = fid && expandedNodesRef.current.has(fid);
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              expanded: shouldBeExpanded ? true : (node.data as any)?.expanded || false,
+              onLoadRelated: invokeLoadRelated,
+              onCollapse: invokeCollapse,
+              onScopeScout: invokeScopeScout,
+            },
+          };
+        });
 
         // Linear layout уже создает группы внутри layoutLinearFullGraph
         withGroups = finalFragments;
@@ -8892,7 +8962,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           if (Boolean(d?.isStackGroup)) return false;
           return true;
         });
-        arrangedFragments = await layoutLevelsTwoPane(nodesNoRightStacks as any, edges as any, {
+        // CRITICAL: Restore expanded flag from expandedNodesRef before relayout.
+        // This ensures nodes that were expanded before filter toggles remain expanded after relayout.
+        const nodesWithExpandedRestored = nodesNoRightStacks.map((n) => {
+          if ((n.data as any)?.isGroup) return n;
+          const fid = String((n.data as any)?.fragmentId || n.id || '').trim();
+          if (!fid) return n;
+          if (expandedNodesRef.current.has(fid) && !(n.data as any)?.expanded) {
+            return { ...n, data: { ...(n.data || {}), expanded: true } as any };
+          }
+          return n;
+        });
+        arrangedFragments = await layoutLevelsTwoPane(nodesWithExpandedRestored as any, edges as any, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -8909,10 +8990,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
         const finalFragments = arrangedFragments.map((node) => {
           if ((node.data as any)?.isGroup) return node as any;
+          const fid = String((node.data as any)?.fragmentId || node.id || '').trim();
+          // Ensure expanded flag is preserved from expandedNodesRef (critical for collapse button to work).
+          const shouldBeExpanded = fid && expandedNodesRef.current.has(fid);
           return {
             ...node,
             data: {
               ...node.data,
+              expanded: shouldBeExpanded ? true : (node.data as any)?.expanded || false,
               onLoadRelated: invokeLoadRelated,
               onCollapse: invokeCollapse,
               onScopeScout: invokeScopeScout,
@@ -8927,7 +9012,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         setEdges(updatedEdges);
       } else {
         // Fallback: используем freeform
-        arrangedFragments = await layoutFullGraph(fragmentNodes, edges, {
+        // CRITICAL: Restore expanded flag from expandedNodesRef before relayout.
+        const fragmentNodesWithExpanded = fragmentNodes.map((n) => {
+          const fid = String((n.data as any)?.fragmentId || n.id || '').trim();
+          if (!fid) return n;
+          if (expandedNodesRef.current.has(fid) && !(n.data as any)?.expanded) {
+            return { ...n, data: { ...(n.data || {}), expanded: true } as any };
+          }
+          return n;
+        });
+        arrangedFragments = await layoutFullGraph(fragmentNodesWithExpanded, edges, {
           direction: 'DOWN',
           nodeWidth: ELK_NODE_WIDTH,
           nodeHeight: ELK_NODE_HEIGHT,
@@ -8936,15 +9030,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           maxChildRows: ELK_MAX_CHILD_ROWS,
         });
 
-        const finalFragments = arrangedFragments.map((node) => ({
-          ...node,
-          data: {
-            ...node.data,
-            onLoadRelated: invokeLoadRelated,
-            onCollapse: invokeCollapse,
-            onScopeScout: invokeScopeScout,
-          },
-        }));
+        const finalFragments = arrangedFragments.map((node) => {
+          const fid = String((node.data as any)?.fragmentId || node.id || '').trim();
+          const shouldBeExpanded = fid && expandedNodesRef.current.has(fid);
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              expanded: shouldBeExpanded ? true : (node.data as any)?.expanded || false,
+              onLoadRelated: invokeLoadRelated,
+              onCollapse: invokeCollapse,
+              onScopeScout: invokeScopeScout,
+            },
+          };
+        });
 
         withGroups = rebuildGroupContainers(finalFragments, {
           nodeWidth: ELK_NODE_WIDTH,

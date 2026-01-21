@@ -1324,6 +1324,32 @@ func (pc *PolicyChecker) checkForDuplicatesWithContext(ctx context.Context, frag
 			break
 		}
 
+		// Deterministic fast-path for common ORG near-duplicates:
+		// e.g. "entourage-marketing-and-events-llc" vs "entourage-marketing-events-llc".
+		// This avoids relying on LLM duplicate checks for simple stopword/formatting differences.
+		if ok, conf, reason := pc.isDeterministicOrgNearDuplicate(frag, candidate); ok {
+			canonicalID, duplicateID := pc.selectCanonical(frag, candidate)
+			canonicalPath := canonicalPathForID(frag, candidate, canonicalID)
+			violations = append(violations, PolicyViolation{
+				ID:              uuid.New().String(),
+				Type:            ViolationDuplicate,
+				Severity:        duplicateSeverity(conf, pc.autoFixConfidenceThreshold),
+				FragmentID:      duplicateID,
+				DuplicateOfID:   canonicalID,
+				DuplicateOfPath: canonicalPath,
+				ActualValue:     frag.CanonicalPath,
+				ExpectedValue:   canonicalPath,
+				Rule:            "no_duplicates",
+				Description:     reason,
+				Confidence:      conf,
+				AutoFixable:     pc.canAutoFixDuplicate(frag, candidate, conf),
+				SuggestedFix:    pc.duplicateFixTask(frag, candidate, canonicalID, duplicateID, conf),
+				DetectedAt:      time.Now(),
+				DetectedBy:      "deterministic",
+			})
+			continue
+		}
+
 		jobContext := pc.jobContextSummaries(frag, candidate, jobCandidates)
 		source := "existing"
 		if isJobCandidate(candidate, jobCandidates) {
@@ -1359,6 +1385,99 @@ func (pc *PolicyChecker) checkForDuplicatesWithContext(ctx context.Context, frag
 	}
 
 	return violations
+}
+
+// isDeterministicOrgNearDuplicate returns true for common ORG path variants that differ only by
+// "and" tokens or embedded legal-form letters (e.g., "...-l-l-c-llc"), while sharing the same geo.
+// This is intentionally narrow to avoid false-positive merges.
+func (pc *PolicyChecker) isDeterministicOrgNearDuplicate(a, b *horizonmodels.HorizonFragment) (bool, float64, string) {
+	if a == nil || b == nil {
+		return false, 0, ""
+	}
+	ap := strings.TrimSpace(a.CanonicalPath)
+	bp := strings.TrimSpace(b.CanonicalPath)
+	if !strings.HasPrefix(ap, "/org/") || !strings.HasPrefix(bp, "/org/") {
+		return false, 0, ""
+	}
+	ageo, aslug, okA := normalizeOrgPathForNearDup(ap)
+	bgeo, bslug, okB := normalizeOrgPathForNearDup(bp)
+	if !okA || !okB {
+		return false, 0, ""
+	}
+	if ageo == "" || bgeo == "" || ageo != bgeo {
+		return false, 0, ""
+	}
+	if aslug == "" || bslug == "" || aslug != bslug {
+		return false, 0, ""
+	}
+	// If canonical paths are already identical, let the canonicalPath collision merge handle it.
+	if ap == bp {
+		return false, 0, ""
+	}
+	return true, 0.95, fmt.Sprintf("Near-duplicate ORGANIZATION canonical paths differ only by stopwords/formatting: %s vs %s", ap, bp)
+}
+
+func normalizeOrgPathForNearDup(path string) (geo string, slug string, ok bool) {
+	path = strings.TrimSpace(path)
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	// /org/{geo}/{slug}
+	if len(parts) < 3 || strings.TrimSpace(parts[0]) != "org" {
+		return "", "", false
+	}
+	geo = strings.ToLower(strings.TrimSpace(parts[1]))
+	slug = strings.ToLower(strings.TrimSpace(parts[len(parts)-1]))
+	if geo == "" || slug == "" {
+		return "", "", false
+	}
+
+	// Strip legalForm suffix if present.
+	allowed := taxonomy.DefaultCanonicalRules().Org.LegalForms
+	for _, lf := range allowed {
+		lf = strings.ToLower(strings.TrimSpace(lf))
+		if lf == "" {
+			continue
+		}
+		if strings.HasSuffix(slug, "-"+lf) {
+			slug = strings.TrimSuffix(slug, "-"+lf)
+			break
+		}
+	}
+
+	toks := strings.Split(slug, "-")
+	out := make([]string, 0, len(toks))
+	for _, t := range toks {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "" {
+			continue
+		}
+		// Ignore a narrow stopword that frequently causes duplicate slugs.
+		if t == "and" {
+			continue
+		}
+		out = append(out, t)
+	}
+
+	// Remove trailing embedded legal-form letters (e.g., "-l-l-c") which can appear before "-llc".
+	// We only do this for a small set of common legal forms to keep it safe.
+	removeTrailingLetters := func(letters string) {
+		letters = strings.ToLower(strings.TrimSpace(letters))
+		if letters == "" || len(out) < len(letters) {
+			return
+		}
+		n := len(letters)
+		start := len(out) - n
+		for i := 0; i < n; i++ {
+			if len(out[start+i]) != 1 || out[start+i] != string(letters[i]) {
+				return
+			}
+		}
+		out = out[:start]
+	}
+	removeTrailingLetters("llc")
+	removeTrailingLetters("ltd")
+
+	slug = strings.Join(out, "-")
+	return geo, slug, slug != ""
 }
 
 // prefetchDuplicateCandidates searches for potential duplicate fragments using Vertex AI Search.

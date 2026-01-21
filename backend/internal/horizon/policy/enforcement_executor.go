@@ -555,6 +555,36 @@ func (e *EnforcementExecutor) bestEffortRewriteLensScopes(ctx context.Context, t
 				}
 			}
 		}
+		// Best-effort: keep ResolvedQueries cache consistent.
+		// This cache stores results of QueryAddress resolution (e.g., /query/sector:/Tech/** -> [paths]).
+		if lens.ResolvedQueries != nil {
+			for queryAddr, resolvedPaths := range lens.ResolvedQueries {
+				updated := false
+				for i, p := range resolvedPaths {
+					if strings.TrimSpace(p) == fromPath {
+						resolvedPaths[i] = toPath
+						updated = true
+					}
+				}
+				if updated {
+					// De-dupe after rewrite.
+					seen := map[string]struct{}{}
+					out := make([]string, 0, len(resolvedPaths))
+					for _, p := range resolvedPaths {
+						p = strings.TrimSpace(p)
+						if p == "" {
+							continue
+						}
+						if _, ok := seen[p]; ok {
+							continue
+						}
+						seen[p] = struct{}{}
+						out = append(out, p)
+					}
+					lens.ResolvedQueries[queryAddr] = out
+				}
+			}
+		}
 		// De-dupe scope after rewrite.
 		seen := map[string]struct{}{}
 		out := make([]string, 0, len(lens.Scope))

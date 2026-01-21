@@ -676,65 +676,132 @@ type ScoutEngine struct {
 
 // bestEffortRewriteLensScope replaces alias canonical paths in lens.Scope with their canonical equivalents.
 // This helps the UI/graph loader, which relies on lens.Scope, not on transient job state.
+//
+// IMPORTANT: This function now updates ALL lenses containing the old path (not just the one specified by lensID).
+// The lensID is used for immediate UI feedback (processed first), but all other lenses are also updated.
 func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, lensID, fromPath, toPath string) {
 	if e == nil || e.lensesRepo == nil {
 		return
 	}
-	lensID = strings.TrimSpace(lensID)
 	tenantID = strings.TrimSpace(tenantID)
 	fromPath = strings.TrimSpace(fromPath)
 	toPath = strings.TrimSpace(toPath)
-	if lensID == "" || fromPath == "" || toPath == "" || fromPath == toPath {
-		return
-	}
-	lens, err := e.lensesRepo.Get(ctx, lensID)
-	if err != nil || lens == nil {
-		return
-	}
-	// Tenant safety: never cross-write.
-	if tenantID != "" && strings.TrimSpace(lens.TenantID) != "" && strings.TrimSpace(lens.TenantID) != tenantID {
+	if tenantID == "" || fromPath == "" || toPath == "" || fromPath == toPath {
 		return
 	}
 
-	changed := false
-	for i, s := range lens.Scope {
-		if strings.TrimSpace(s) == fromPath {
-			lens.Scope[i] = toPath
-			changed = true
+	// Helper to rewrite a single lens scope.
+	rewriteLens := func(lens *models.Lens) bool {
+		if lens == nil {
+			return false
 		}
-	}
-	if !changed {
-		return
+		changed := false
+		for i, s := range lens.Scope {
+			if strings.TrimSpace(s) == fromPath {
+				lens.Scope[i] = toPath
+				changed = true
+			}
+		}
+		if !changed {
+			return false
+		}
+
+		// Best-effort: keep ScopeFragments cache consistent.
+		if lens.ScopeFragments != nil {
+			if fid, ok := lens.ScopeFragments[fromPath]; ok {
+				delete(lens.ScopeFragments, fromPath)
+				// Only set if not already present.
+				if _, ok2 := lens.ScopeFragments[toPath]; !ok2 && strings.TrimSpace(fid) != "" {
+					lens.ScopeFragments[toPath] = fid
+				}
+			}
+		}
+
+		// Best-effort: keep ResolvedQueries cache consistent.
+		// This cache stores results of QueryAddress resolution (e.g., /query/sector:/Tech/** -> [paths]).
+		// If any resolved path matches fromPath, update it to toPath.
+		if lens.ResolvedQueries != nil {
+			for queryAddr, resolvedPaths := range lens.ResolvedQueries {
+				updated := false
+				for i, p := range resolvedPaths {
+					if strings.TrimSpace(p) == fromPath {
+						resolvedPaths[i] = toPath
+						updated = true
+					}
+				}
+				if updated {
+					// De-dupe after rewrite.
+					seen := map[string]struct{}{}
+					out := make([]string, 0, len(resolvedPaths))
+					for _, p := range resolvedPaths {
+						p = strings.TrimSpace(p)
+						if p == "" {
+							continue
+						}
+						if _, ok := seen[p]; ok {
+							continue
+						}
+						seen[p] = struct{}{}
+						out = append(out, p)
+					}
+					lens.ResolvedQueries[queryAddr] = out
+				}
+			}
+		}
+
+		// De-dupe scope after rewrite.
+		seen := map[string]struct{}{}
+		out := make([]string, 0, len(lens.Scope))
+		for _, s := range lens.Scope {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+		lens.Scope = out
+		return true
 	}
 
-	// Best-effort: keep cache consistent.
-	if lens.ScopeFragments != nil {
-		if fid, ok := lens.ScopeFragments[fromPath]; ok {
-			delete(lens.ScopeFragments, fromPath)
-			// Only set if not already present.
-			if _, ok2 := lens.ScopeFragments[toPath]; !ok2 && strings.TrimSpace(fid) != "" {
-				lens.ScopeFragments[toPath] = fid
+	// Track which lenses we've already updated to avoid duplicates.
+	updatedLensIDs := map[string]struct{}{}
+
+	// 1) Fast path: update the specific lens (lensID) first for immediate UI feedback.
+	lensID = strings.TrimSpace(lensID)
+	if lensID != "" {
+		if lens, err := e.lensesRepo.Get(ctx, lensID); err == nil && lens != nil {
+			// Tenant safety: never cross-write.
+			if tenantID == "" || strings.TrimSpace(lens.TenantID) == "" || strings.TrimSpace(lens.TenantID) == tenantID {
+				if rewriteLens(lens) {
+					_ = e.lensesRepo.Update(ctx, lens)
+				}
+				updatedLensIDs[lensID] = struct{}{}
 			}
 		}
 	}
 
-	// De-dupe scope after rewrite.
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(lens.Scope))
-	for _, s := range lens.Scope {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			continue
-		}
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		out = append(out, s)
+	// 2) Find and update ALL other lenses that contain the old path (up to 200).
+	// This ensures canonical path changes propagate to all affected lenses, not just the job's lens.
+	lenses, err := e.lensesRepo.FindByScope(ctx, tenantID, fromPath, 200)
+	if err != nil || len(lenses) == 0 {
+		return
 	}
-	lens.Scope = out
-
-	_ = e.lensesRepo.Update(ctx, lens)
+	for _, lens := range lenses {
+		if lens == nil || strings.TrimSpace(lens.ID) == "" {
+			continue
+		}
+		// Skip if already updated above.
+		if _, ok := updatedLensIDs[lens.ID]; ok {
+			continue
+		}
+		if rewriteLens(lens) {
+			_ = e.lensesRepo.Update(ctx, lens)
+		}
+	}
 }
 
 // WithPropagationTrigger устанавливает триггер для запуска распространения изменений
