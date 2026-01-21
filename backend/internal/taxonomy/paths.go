@@ -121,6 +121,8 @@ var ValidCanonicalPathNamespace = map[string]bool{
 	"product": true,
 	"program": true,
 	"market":  true,
+	// Informal communities (trade/professional/etc.).
+	"community": true,
 	// Market segments (ORG-level classification; may be materialized later).
 	"segment": true,
 	"fac":     true,
@@ -217,6 +219,19 @@ func ValidateCanonicalPath(path string) error {
 		cc := strings.ToLower(strings.TrimSpace(parts[1]))
 		if !reCountryAlpha2.MatchString(cc) && !IsRegionalGeoToken(cc) && !isCompositeGeo(cc) {
 			return fmt.Errorf("loc canonical path has invalid country/region %q (expected ISO3166-1 alpha2, composite, or regional token): %s", parts[1], path)
+		}
+	case "community":
+		// /community/{geo}/{type}/{slug}
+		// Legacy: /community/{geo}/{slug}
+		if len(parts) != 3 && len(parts) != 4 {
+			return fmt.Errorf("community canonical path must be /community/{geo}/{slug} (legacy) or /community/{geo}/{type}/{slug}: %s", path)
+		}
+		geo := strings.ToLower(strings.TrimSpace(parts[1]))
+		if geo == "" {
+			return fmt.Errorf("community canonical path has empty geo: %s", path)
+		}
+		if geo != "global" && !reCountryAlpha2.MatchString(geo) && !IsRegionalGeoToken(geo) && !isCompositeGeo(geo) {
+			return fmt.Errorf("community canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, or regional token): %s", parts[1], path)
 		}
 	case "segment":
 		// /segment/{domain}/{vertical}/{geo}
@@ -406,6 +421,11 @@ func isCompositeGeo(s string) bool {
 	// Note: Lexicographic sorting is recommended but not enforced here
 	// (can be normalized in a separate step if needed)
 	return true
+}
+
+// IsCompositeGeoToken returns true for composite ISO2 geo tokens (e.g., "tr-sy", "ae-sa-om").
+func IsCompositeGeoToken(s string) bool {
+	return isCompositeGeo(strings.ToLower(strings.TrimSpace(s)))
 }
 
 // GovCanonicalPath returns a Horizon-canonical government body path:

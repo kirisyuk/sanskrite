@@ -21,6 +21,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // Smart deduplication tool that:
@@ -177,14 +178,152 @@ func shouldSkipOrgNameCluster(matchType string, frags []*models.HorizonFragment)
 		}
 	}
 
+	// Skip name-based ORG merges when namespaces mix (e.g., /org vs /gov).
+	orgCount := 0
+	govCount := 0
+	for _, f := range frags {
+		if f == nil {
+			continue
+		}
+		switch canonicalNamespace(f) {
+		case "org":
+			orgCount++
+		case "gov":
+			govCount++
+		}
+	}
+	if orgCount > 0 && govCount > 0 {
+		return true, "mixed_org_gov_namespaces"
+	}
+
+	// Skip name-based ORG merges when legal forms conflict (semantic distinction).
+	legalForms := map[string]struct{}{}
+	for _, f := range frags {
+		lf := extractOrgLegalForm(f)
+		if lf == "" {
+			continue
+		}
+		legalForms[lf] = struct{}{}
+	}
+	if len(legalForms) > 1 {
+		return true, fmt.Sprintf("conflicting_legal_forms=%v", keysSorted(legalForms))
+	}
+
 	return false, ""
 }
 
-// extractOrgOrGovSlug extracts last segment slug from:
-// - /org/{iso2}/{slug}
-// - /org/{slug} (legacy)
-// - /gov/{iso2}/{slug}
+func canonicalPartsFromPath(path string) *taxonomy.CanonicalPathParts {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	parts, err := taxonomy.ParseCanonicalPathParts(path)
+	if err != nil {
+		return nil
+	}
+	return parts
+}
+
+func canonicalPartsForFragment(f *models.HorizonFragment) *taxonomy.CanonicalPathParts {
+	if f == nil {
+		return nil
+	}
+	if f.CanonicalParts != nil {
+		return f.CanonicalParts
+	}
+	return canonicalPartsFromPath(f.CanonicalPath)
+}
+
+func canonicalNamespace(f *models.HorizonFragment) string {
+	if f == nil {
+		return ""
+	}
+	if parts := canonicalPartsForFragment(f); parts != nil {
+		return strings.ToLower(strings.TrimSpace(parts.Namespace))
+	}
+	p := strings.TrimSpace(f.CanonicalPath)
+	if p == "" || !strings.HasPrefix(p, "/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parts[0]))
+}
+
+func extractOrgLegalForm(f *models.HorizonFragment) string {
+	parts := canonicalPartsForFragment(f)
+	if parts == nil || parts.Org == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parts.Org.LegalForm))
+}
+
+func keysSorted(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func applyCanonicalPathUpdate(f *models.HorizonFragment, newPath string) bool {
+	if f == nil {
+		return false
+	}
+	newPath = strings.TrimSpace(newPath)
+	if newPath == "" {
+		return false
+	}
+	if strings.TrimSpace(f.CanonicalPath) == newPath {
+		return false
+	}
+	f.CanonicalPath = newPath
+	if parts, err := taxonomy.ParseCanonicalPathParts(newPath); err == nil && parts != nil {
+		f.CanonicalParts = parts
+	}
+	return true
+}
+
+func isCanonicalLocPath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/loc/") {
+		return false
+	}
+	return taxonomy.ValidateCanonicalPath(path) == nil
+}
+
+// extractOrgOrGovSlug extracts the last slug segment from /org or /gov paths.
+// For /org, it reconstructs the slug including legal-form suffix when available.
 func extractOrgOrGovSlug(path string) string {
+	cp := canonicalPartsFromPath(path)
+	if cp != nil {
+		switch cp.Namespace {
+		case "org":
+			if cp.Org == nil {
+				return ""
+			}
+			return strings.ToLower(strings.TrimSpace(buildOrgSlug(cp.Org)))
+		case "gov":
+			if cp.Gov == nil {
+				return ""
+			}
+			return strings.ToLower(strings.TrimSpace(cp.Gov.Slug))
+		default:
+			return ""
+		}
+	}
+
+	// Fallback: best-effort parsing for legacy/invalid paths.
 	p := strings.TrimSpace(path)
 	if p == "" || !strings.HasPrefix(p, "/") {
 		return ""
@@ -197,15 +336,27 @@ func extractOrgOrGovSlug(path string) string {
 	if ns != "org" && ns != "gov" {
 		return ""
 	}
-	// /org/{slug}
 	if ns == "org" && len(parts) == 2 {
 		return strings.ToLower(strings.TrimSpace(parts[1]))
 	}
-	// /org/{iso2}/{slug} or /gov/{iso2}/{slug}
 	if len(parts) >= 3 {
 		return strings.ToLower(strings.TrimSpace(parts[2]))
 	}
 	return ""
+}
+
+func buildOrgSlug(parts *taxonomy.OrgPathParts) string {
+	if parts == nil {
+		return ""
+	}
+	base := strings.TrimSpace(parts.BaseSlug)
+	if base == "" {
+		return ""
+	}
+	if lf := strings.TrimSpace(parts.LegalForm); lf != "" {
+		return base + "-" + lf
+	}
+	return base
 }
 
 // extractLegacyOrgSlugAliases returns slug aliases from identifiers that store historical paths.
@@ -393,9 +544,13 @@ func main() {
 			if f.Type == models.FragmentTypeOrganization {
 				// When explicitly enabled, allow both /org/* and /gov/* to participate (still ISO2-scoped).
 				if *enableOrgNameOnly {
+					ns := canonicalNamespace(f)
+					if ns == "" {
+						continue
+					}
 					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
 					if iso2 != "na" {
-						key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, strings.ToLower(shortName))
+						key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, strings.ToLower(shortName))
 						shortNameIndex[key] = append(shortNameIndex[key], f)
 					}
 				}
@@ -407,12 +562,15 @@ func main() {
 
 		// Index by legalName (type-scoped)
 		if legalName := strings.TrimSpace(f.Identifiers["legalName"]); legalName != "" {
-			// For ORG: only within known ISO2. Include /gov/* here because exact legalName is high-confidence,
-			// and selectCanonical() already prefers /org/* as the stable canonical namespace.
+			// For ORG: only within known ISO2, scoped by namespace to avoid cross-namespace merges.
 			if f.Type == models.FragmentTypeOrganization {
+				ns := canonicalNamespace(f)
+				if ns == "" {
+					continue
+				}
 				iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
 				if iso2 != "na" {
-					key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, strings.ToLower(legalName))
+					key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, strings.ToLower(legalName))
 					legalNameIndex[key] = append(legalNameIndex[key], f)
 				}
 			} else {
@@ -427,9 +585,13 @@ func main() {
 			if f.Type == models.FragmentTypeOrganization {
 				// When explicitly enabled, allow both /org/* and /gov/* to participate (still ISO2-scoped).
 				if *enableOrgNameOnly {
+					ns := canonicalNamespace(f)
+					if ns == "" {
+						continue
+					}
 					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
 					if iso2 != "na" {
-						key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, strings.ToLower(labelEN))
+						key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, strings.ToLower(labelEN))
 						labelENIndex[key] = append(labelENIndex[key], f)
 					}
 				}
@@ -443,12 +605,16 @@ func main() {
 		if legalName := strings.TrimSpace(f.Identifiers["legalName"]); legalName != "" {
 			// For ORG: this is fuzzy-ish; default OFF.
 			if f.Type == models.FragmentTypeOrganization {
-				if !isGovCanonicalPath(f.CanonicalPath) && *enableOrgFuzzyName {
+				if *enableOrgFuzzyName {
+					ns := canonicalNamespace(f)
+					if ns == "" {
+						continue
+					}
 					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
 					if iso2 != "na" {
 						normalized := normalizeLegalName(legalName)
 						if normalized != "" {
-							key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, normalized)
+							key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, normalized)
 							normalizedLegalIndex[key] = append(normalizedLegalIndex[key], f)
 						}
 					}
@@ -502,8 +668,12 @@ func main() {
 		// ORG-only: index normalized label/legal for LOW-signal stub rescue (e.g., "softbank group" → "softbank")
 		// Safety is enforced when creating clusters (must include at least one high-signal org + one low-signal stub).
 		if f.Type == models.FragmentTypeOrganization {
-			// Default OFF: still name-based; also never run for /gov/* and never when country is unknown.
-			if isGovCanonicalPath(f.CanonicalPath) || !*enableOrgFuzzyName {
+			// Default OFF: still name-based; keep namespace-scoped to avoid cross-namespace merges.
+			if !*enableOrgFuzzyName {
+				continue
+			}
+			ns := canonicalNamespace(f)
+			if ns == "" {
 				continue
 			}
 			iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
@@ -519,7 +689,7 @@ func main() {
 			if seed != "" {
 				n := normalizeLegalName(seed)
 				if n != "" {
-					key := fmt.Sprintf("%s:%s:%s", f.Type, iso2, n)
+					key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, n)
 					orgNormalizedNameIndex[key] = append(orgNormalizedNameIndex[key], f)
 				}
 			}
@@ -536,6 +706,7 @@ func main() {
 		// Index PRODUCT by canonical slug (SAFE):
 		// - Flat canonical: /product/{slug}
 		// - Taxonomy canonical: /product/{category}/{type}/{stage}/{slug}
+		// - Service canonical: /product/service/{domain}/{subdomain}/{slug}
 		//
 		// IMPORTANT: Do NOT include legacy org-nested paths (/product/{org}/{slug})
 		// and do NOT use merged_paths here. Both cause massive false-positive merges like:
@@ -621,18 +792,21 @@ func main() {
 		byCanonicalPath[k] = append(byCanonicalPath[k], f)
 	}
 
-	// ORG/GOV slug indexes (for resolving legacy alias /org/{slug} → canonical /org/{iso2}/{slug} and /gov/{iso2}/{slug}).
+	// ORG slug indexes (for resolving legacy alias /org/{slug} → canonical /org/{geo}/{slug}).
 	// This helps catch cases like:
 	//   /org/public-investment-fund with identifiers.merged_paths="/org/pif"
-	//   should merge into /org/sa/pif and/or /gov/sa/pif even if /org/pif doesn't exist as a standalone fragment.
-	orgGovSlugIndex := make(map[string][]*models.HorizonFragment)   // slug -> fragments with /org/{iso2}/{slug} or /gov/{iso2}/{slug} (and legacy /org/{slug})
+	//   should merge into /org/sa/pif even if /org/pif doesn't exist as a standalone fragment.
+	orgSlugIndex := make(map[string][]*models.HorizonFragment)      // slug -> org fragments with /org/{geo}/{slug} (and legacy /org/{slug})
 	orgAliasSlugIndex := make(map[string][]*models.HorizonFragment) // slug -> fragments that declare alias via merged_paths / legacy_org_canonical_path (legacy /org/{slug})
 	for _, f := range fragments {
 		if f == nil || f.Type != models.FragmentTypeOrganization {
 			continue
 		}
+		if canonicalNamespace(f) != "org" {
+			continue
+		}
 		if slug := extractOrgOrGovSlug(f.CanonicalPath); slug != "" {
-			orgGovSlugIndex[slug] = append(orgGovSlugIndex[slug], f)
+			orgSlugIndex[slug] = append(orgSlugIndex[slug], f)
 		}
 		for _, slug := range extractLegacyOrgSlugAliases(f) {
 			if !isSafeOrgSlugAlias(slug) {
@@ -736,7 +910,7 @@ func main() {
 		}
 		// Check if path is non-canonical (not /loc/{cc}/{admin1}/{city})
 		parts := strings.Split(strings.Trim(f.CanonicalPath, "/"), "/")
-		if len(parts) == 2 && parts[0] == "loc" {
+		if !isCanonicalLocPath(f.CanonicalPath) && len(parts) == 2 && parts[0] == "loc" {
 			// This is /loc/{something} — check if {something} is a country name/alias
 			countrySlug := strings.ReplaceAll(parts[1], "-", " ")
 			countrySlug = strings.ReplaceAll(countrySlug, "_", " ")
@@ -813,10 +987,22 @@ func main() {
 				if f.Type != models.FragmentTypeOrganization {
 					continue
 				}
+				ns := canonicalNamespace(f)
+				if ns == "" {
+					continue
+				}
 				for _, alias := range extractAliasCanonicalPathsForDedup(f) {
+					if aliasParts := canonicalPartsFromPath(alias); aliasParts != nil {
+						if strings.ToLower(strings.TrimSpace(aliasParts.Namespace)) != ns {
+							continue
+						}
+					}
 					k := fmt.Sprintf("%s:%s", f.Type, alias) // same type only
 					for _, other := range byCanonicalPath[k] {
 						if other == nil || processedFragmentIDs[other.ID] || other.ID == f.ID {
+							continue
+						}
+						if canonicalNamespace(other) != ns {
 							continue
 						}
 						uf.union(f.ID, other.ID)
@@ -858,7 +1044,7 @@ func main() {
 	}
 	log.Printf("  Found %d aliasPath-based clusters", aliasClusters)
 
-	// Priority 0.775: ORG legacy slug aliases (/org/{slug} in merged_paths) -> canonical /org/{iso2}/{slug} or /gov/{iso2}/{slug}.
+	// Priority 0.775: ORG legacy slug aliases (/org/{slug} in merged_paths) -> canonical /org/{geo}/{slug}.
 	// This is conservative and guarded:
 	// - slug must be short-ish and not generic
 	// - legalName must not conflict across candidates
@@ -869,9 +1055,9 @@ func main() {
 		if !isSafeOrgSlugAlias(slug) {
 			continue
 		}
-		// Candidate set: anything already living under .../{slug} plus the fragments that claim this alias.
-		cands := make([]*models.HorizonFragment, 0, len(orgGovSlugIndex[slug])+len(claimers))
-		cands = append(cands, orgGovSlugIndex[slug]...)
+		// Candidate set: anything already living under /org/.../{slug} plus the fragments that claim this alias.
+		cands := make([]*models.HorizonFragment, 0, len(orgSlugIndex[slug])+len(claimers))
+		cands = append(cands, orgSlugIndex[slug]...)
 		cands = append(cands, claimers...)
 		if len(cands) <= 1 {
 			continue
@@ -1461,13 +1647,16 @@ func main() {
 		// Fix canonical path for GEO_REGION if needed
 		pathFixed := false
 		if canonical.Type == models.FragmentTypeGeoRegion {
-			if !strings.HasPrefix(canonical.CanonicalPath, "/loc/") {
+			if !isCanonicalLocPath(canonical.CanonicalPath) {
 				oldPath := canonical.CanonicalPath
-				canonical.CanonicalPath = fixGeoPath(canonical.CanonicalPath)
-				pathFixed = true
-				stats.PathsFixed++
-				if *verbose {
-					log.Printf("  Path fixed: %s -> %s", oldPath, canonical.CanonicalPath)
+				if fixed := fixGeoPath(canonical.CanonicalPath); fixed != "" {
+					if applyCanonicalPathUpdate(canonical, fixed) {
+						pathFixed = true
+						stats.PathsFixed++
+						if *verbose {
+							log.Printf("  Path fixed: %s -> %s", oldPath, canonical.CanonicalPath)
+						}
+					}
 				}
 			}
 		}
@@ -1774,49 +1963,67 @@ func splitPathTokens(s string) []string {
 // normalizeOrgCanonicalPathForDedup normalizes org canonical paths by treating '_' and '-' as equivalent.
 // This is used only for grouping candidates; canonical selection is still score-based.
 func normalizeOrgCanonicalPathForDedup(canonicalPath string) string {
-	cp := strings.TrimSpace(canonicalPath)
-	if !strings.HasPrefix(cp, "/org/") {
+	cp := canonicalPartsFromPath(canonicalPath)
+	if cp == nil || cp.Namespace != "org" || cp.Org == nil {
 		return ""
 	}
-	parts := strings.Split(strings.Trim(cp, "/"), "/")
-	// Legacy: /org/{slug} → treat as /org/na/{slug} for conservative grouping.
-	if len(parts) == 2 && parts[0] == "org" {
-		slug := strings.ToLower(strings.TrimSpace(parts[1]))
-		if slug == "" {
-			return ""
-		}
-		slug = strings.ReplaceAll(slug, "_", "-")
-		return "/org/na/" + slug
+	slug := buildOrgSlug(cp.Org)
+	if slug == "" {
+		return ""
 	}
-	// Canonical: /org/{iso2}/{slug}
-	if len(parts) >= 3 && parts[0] == "org" {
-		iso2 := extractOrgOrGovISO2ForDedupKey(cp)
-		if iso2 == "" {
-			iso2 = "na"
+	slug = strings.ReplaceAll(strings.ToLower(slug), "_", "-")
+	geo := strings.TrimSpace(cp.Org.Geo)
+	if cp.Org.Legacy || geo == "" {
+		geo = "na"
+	} else {
+		geo = normalizeOrgGovGeoForDedupKey(geo)
+		if geo == "" {
+			geo = "na"
 		}
-		slug := strings.ToLower(strings.TrimSpace(parts[2]))
-		if slug == "" {
-			return ""
-		}
-		slug = strings.ReplaceAll(slug, "_", "-")
-		return "/org/" + iso2 + "/" + slug
 	}
-	return ""
+	return "/org/" + geo + "/" + slug
 }
 
 // isGovCanonicalPath returns true if path is in /gov/* namespace.
 func isGovCanonicalPath(path string) bool {
+	cp := canonicalPartsFromPath(path)
+	if cp != nil {
+		return strings.EqualFold(strings.TrimSpace(cp.Namespace), "gov")
+	}
 	p := strings.TrimSpace(path)
 	return strings.HasPrefix(p, "/gov/")
 }
 
-// extractOrgOrGovISO2ForDedupKey extracts ISO2 from:
-// - /org/{iso2}/{slug}
-// - /gov/{iso2}/{slug}
+// extractOrgOrGovISO2ForDedupKey extracts geo token from:
+// - /org/{geo}/{slug}
+// - /gov/{geo}/{slug}
 // - legacy /org/{slug} (returns "na")
 //
 // Returns "na" when unknown/invalid.
 func extractOrgOrGovISO2ForDedupKey(path string) string {
+	cp := canonicalPartsFromPath(path)
+	if cp != nil {
+		switch cp.Namespace {
+		case "org":
+			if cp.Org == nil {
+				return "na"
+			}
+			geo := strings.TrimSpace(cp.Org.Geo)
+			if cp.Org.Legacy || geo == "" {
+				return "na"
+			}
+			return normalizeOrgGovGeoForDedupKey(geo)
+		case "gov":
+			if cp.Gov == nil {
+				return "na"
+			}
+			return normalizeOrgGovGeoForDedupKey(cp.Gov.Geo)
+		default:
+			return "na"
+		}
+	}
+
+	// Fallback: best-effort parsing for legacy/invalid paths.
 	p := strings.TrimSpace(path)
 	if p == "" {
 		return "na"
@@ -1828,23 +2035,25 @@ func extractOrgOrGovISO2ForDedupKey(path string) string {
 	ns := parts[0]
 	switch ns {
 	case "org", "gov":
-		// Legacy: /org/{slug}
 		if ns == "org" && len(parts) == 2 {
 			return "na"
 		}
 		if len(parts) >= 3 {
-			return normalizeISO2ForDedupKey(parts[1])
+			return normalizeOrgGovGeoForDedupKey(parts[1])
 		}
 	}
 	return "na"
 }
 
-func normalizeISO2ForDedupKey(s string) string {
+func normalizeOrgGovGeoForDedupKey(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "" || s == "na" {
 		return "na"
 	}
 	if len(s) == 2 && s >= "aa" && s <= "zz" {
+		return s
+	}
+	if taxonomy.IsCompositeGeoToken(s) {
 		return s
 	}
 	return "na"
@@ -1968,17 +2177,22 @@ func selectCanonical(fragments []*models.HorizonFragment) string {
 	// For GEO_REGION: first check if any have /loc/ prefix
 	fragType := fragments[0].Type
 	if fragType == models.FragmentTypeGeoRegion {
+		// Prefer canonical /loc/{cc}/{admin1}/{city} when available.
+		var canonicalLocs []*models.HorizonFragment
+		var locFragments []*models.HorizonFragment
 		for _, f := range fragments {
 			if strings.HasPrefix(f.CanonicalPath, "/loc/") {
-				// Found one with /loc/ - use scoring among /loc/ fragments only
-				var locFragments []*models.HorizonFragment
-				for _, ff := range fragments {
-					if strings.HasPrefix(ff.CanonicalPath, "/loc/") {
-						locFragments = append(locFragments, ff)
-					}
+				locFragments = append(locFragments, f)
+				if isCanonicalLocPath(f.CanonicalPath) {
+					canonicalLocs = append(canonicalLocs, f)
 				}
-				return selectCanonicalByScore(locFragments)
 			}
+		}
+		if len(canonicalLocs) > 0 {
+			return selectCanonicalByScore(canonicalLocs)
+		}
+		if len(locFragments) > 0 {
+			return selectCanonicalByScore(locFragments)
 		}
 	}
 
@@ -2019,44 +2233,49 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 			score += 40
 		}
 
-		// Prefer proper /loc/{cc}/{admin1}/{city} format where {cc} is ISO alpha-2
-		// This is the canonical form; /loc/geo/..., /loc/country/..., etc. are legacy
-		if strings.HasPrefix(f.CanonicalPath, "/loc/") {
-			parts := strings.Split(strings.Trim(f.CanonicalPath, "/"), "/")
-			if len(parts) >= 2 {
-				// Check if second part is ISO alpha-2 country code (2 lowercase letters)
-				isISO2 := len(parts[1]) == 2 && parts[1] >= "aa" && parts[1] <= "zz"
-				if isISO2 && len(parts) == 4 {
-					score += 100 // Canonical /loc/{cc}/{admin1}/{city} format — highest priority!
-				} else if isISO2 && len(parts) >= 3 {
-					score += 80 // /loc/{cc}/{admin1}
-				} else if isISO2 {
-					score += 60 // /loc/{cc}
-				} else if len(parts) >= 4 {
-					score += 30 // Legacy /loc/geo/country/usa etc.
-				} else {
-					score += 10 // Other /loc/ paths
-				}
-			}
+		// Prefer proper /loc/{cc}/{admin1}/{city} format (ISO2/composite/regional cc).
+		// This is the canonical form; other /loc/* shapes are legacy.
+		if isCanonicalLocPath(f.CanonicalPath) {
+			score += 100 // Canonical /loc/{cc}/{admin1}/{city} format — highest priority!
+		} else if strings.HasPrefix(f.CanonicalPath, "/loc/") {
+			score += 30 // Legacy /loc/* variants
 		}
 
-		// For PRODUCT: prefer longer/more specific paths (taxonomy paths)
-		// Prefer taxonomy paths, and de-prioritize legacy org-nested paths (/product/{org}/{slug})
-		// which are not part of current product taxonomy.
-		if strings.HasPrefix(f.CanonicalPath, "/product/") {
+		// For PRODUCT: prefer canonical taxonomy shapes (hierarchical/service) over legacy/flat.
+		if cp := canonicalPartsFromPath(f.CanonicalPath); cp != nil && cp.Namespace == "product" && cp.Product != nil {
+			pp := cp.Product
+			switch pp.Shape {
+			case "hierarchical":
+				score += 100 // /product/{category}/{type}/{stage}/{slug}
+				if len(pp.Tail) > 0 {
+					score += 5 * minInt(len(pp.Tail), 3) // extra specificity (model/SKU)
+				}
+			case "service":
+				score += 90 // /product/service/{domain}/{subdomain}/{slug}
+				if len(pp.Tail) > 0 || strings.TrimSpace(pp.ServiceOffering) != "" {
+					score += 5
+				}
+			case "flat":
+				score += 60 // /product/{slug}
+			case "org_scoped_flat":
+				score += 30 // Legacy /product/{org}/{slug}
+			default:
+				score += 10
+			}
+		} else if strings.HasPrefix(f.CanonicalPath, "/product/") {
 			parts := strings.Split(strings.Trim(f.CanonicalPath, "/"), "/")
 			switch len(parts) {
 			case 5:
-				score += 100 // Canonical taxonomy: /product/{category}/{type}/{stage}/{slug}
+				score += 100
 			case 4:
-				score += 80 // Older/partial taxonomy (still more structured than flat)
+				score += 80
 			case 2:
-				score += 60 // Flat fallback: /product/{slug}
+				score += 60
 			case 3:
-				score += 30 // Legacy org-nested: /product/{org}/{slug} (deprioritize)
+				score += 30
 			default:
 				if len(parts) > 5 {
-					score += 70 // Uncommon deeper paths; treat as structured but not canonical
+					score += 70
 				} else {
 					score += 10
 				}
@@ -2065,20 +2284,18 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 
 		// For ORGANIZATION: prefer higher-quality canonical nodes over low-signal LLM stubs.
 		if f.Type == models.FragmentTypeOrganization {
-			// Prefer canonical /org/{iso2}/{slug} over legacy /org/{slug} and /gov/{iso2}/{slug}.
-			// Rationale: /gov/* is a different namespace and frequently appears as an ingestion artifact for org-like entities.
-			// We can merge data from /gov into /org, but the stable canonical for ORG should live under /org/*.
-			cp := strings.TrimSpace(f.CanonicalPath)
-			if strings.HasPrefix(cp, "/org/") {
-				parts := strings.Split(strings.Trim(cp, "/"), "/")
-				if len(parts) >= 3 {
-					score += 60 // /org/{iso2}/{slug} (strong preference: stable canonical namespace)
-				} else if len(parts) == 2 {
-					score += 0 // legacy /org/{slug} (deprioritize; merge into ISO2 canonical if available)
+			// Prefer geo-scoped canonical paths over legacy flat paths (namespace-aware).
+			if cp := canonicalPartsFromPath(f.CanonicalPath); cp != nil {
+				switch cp.Namespace {
+				case "org":
+					if cp.Org != nil && !cp.Org.Legacy && strings.TrimSpace(cp.Org.Geo) != "" {
+						score += 60 // /org/{geo}/{slug}
+					}
+				case "gov":
+					if cp.Gov != nil && strings.TrimSpace(cp.Gov.Geo) != "" {
+						score += 60 // /gov/{geo}/{slug}
+					}
 				}
-			} else if strings.HasPrefix(cp, "/gov/") {
-				// Slight penalty — still can win if much richer, but usually should merge into /org canonical.
-				score -= 5
 			}
 
 			switch strings.ToUpper(strings.TrimSpace(f.Governance.Status)) {
@@ -2204,37 +2421,31 @@ func filterGeoByCountry(fragments []*models.HorizonFragment) []*models.HorizonFr
 // extractNormalizedCountryCode extracts and normalizes country code from GEO path.
 // Handles both ISO2 (/loc/us/...) and ISO3 (/loc/usa/...) formats.
 func extractNormalizedCountryCode(path string) string {
+	if cp := canonicalPartsFromPath(path); cp != nil && cp.Namespace == "loc" && cp.Loc != nil {
+		return normalizeGeoTokenForDedup(strings.TrimSpace(cp.Loc.Country))
+	}
+
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 2 || parts[0] != "loc" {
 		return ""
 	}
+	return normalizeGeoTokenForDedup(parts[1])
+}
 
-	cc := strings.ToLower(parts[1])
-	if cc == "na" || cc == "" {
+func normalizeGeoTokenForDedup(token string) string {
+	token = strings.ToLower(strings.TrimSpace(token))
+	if token == "" || token == "na" {
 		return ""
 	}
-
-	// ISO2 code (2 letters)
-	if len(cc) == 2 && cc >= "aa" && cc <= "zz" {
-		return cc
+	if len(token) == 2 && token >= "aa" && token <= "zz" {
+		return token
 	}
-
-	// ISO3 code — convert to ISO2
-	if iso2 := iso3ToIso2(cc); iso2 != "" {
+	if taxonomy.IsCompositeGeoToken(token) || taxonomy.IsRegionalGeoToken(token) {
+		return token
+	}
+	if iso2 := iso3ToIso2(token); iso2 != "" {
 		return iso2
 	}
-
-	// Other patterns (e.g., "city", "geo", "country") — check if next part is country
-	if len(parts) >= 3 {
-		next := strings.ToLower(parts[2])
-		if len(next) == 2 && next >= "aa" && next <= "zz" {
-			return next
-		}
-		if iso2 := iso3ToIso2(next); iso2 != "" {
-			return iso2
-		}
-	}
-
 	return ""
 }
 
@@ -2259,28 +2470,68 @@ func iso3ToIso2(iso3 string) string {
 	return iso3ToIso2Map[strings.ToLower(iso3)]
 }
 
-// fixGeoPath adds /loc/ prefix to geo paths that don't have it
+// fixGeoPath attempts to normalize a geo path into canonical /loc/{cc}/na/na when possible.
+// Returns empty string when it cannot safely canonicalize.
 func fixGeoPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return "/loc/unknown"
+		return ""
 	}
 
-	// Already has /loc/ prefix
-	if strings.HasPrefix(path, "/loc/") {
+	// Already canonical
+	if isCanonicalLocPath(path) {
 		return path
 	}
 
-	// Remove /region/ prefix if present and add /loc/
-	if strings.HasPrefix(path, "/region/") {
-		return "/loc/" + strings.TrimPrefix(path, "/region/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 2 && parts[0] == "loc" {
+		// /loc/{iso3}/... → normalize to ISO2 when possible
+		if len(parts) >= 4 {
+			cc := strings.ToLower(strings.TrimSpace(parts[1]))
+			if iso2 := iso3ToIso2(cc); iso2 != "" {
+				parts[1] = iso2
+				candidate := "/" + strings.Join(parts, "/")
+				if isCanonicalLocPath(candidate) {
+					return candidate
+				}
+			}
+		}
+		// /loc/{something} — try to resolve {something} as a country name/alias.
+		if len(parts) == 2 {
+			countrySlug := strings.ReplaceAll(parts[1], "-", " ")
+			countrySlug = strings.ReplaceAll(countrySlug, "_", " ")
+			if canonical := scout.GetCountryCanonicalPath(countrySlug); canonical != "" {
+				return canonical
+			}
+		}
+		return ""
 	}
 
-	// Just add /loc/ prefix
-	if strings.HasPrefix(path, "/") {
-		return "/loc" + path
+	// /region/{something} legacy
+	if strings.HasPrefix(path, "/region/") {
+		slug := strings.TrimSpace(strings.TrimPrefix(path, "/region/"))
+		slug = strings.ReplaceAll(slug, "-", " ")
+		slug = strings.ReplaceAll(slug, "_", " ")
+		if canonical := scout.GetCountryCanonicalPath(slug); canonical != "" {
+			return canonical
+		}
+		return ""
 	}
-	return "/loc/" + path
+
+	// Generic "/{something}" fallback: try country resolution.
+	if strings.HasPrefix(path, "/") {
+		slug := strings.TrimSpace(strings.TrimPrefix(path, "/"))
+		if slug == "" || strings.Contains(slug, "/") {
+			return ""
+		}
+		slug = strings.ReplaceAll(slug, "-", " ")
+		slug = strings.ReplaceAll(slug, "_", " ")
+		if canonical := scout.GetCountryCanonicalPath(slug); canonical != "" {
+			return canonical
+		}
+	}
+
+	return ""
 }
 
 // mergeFragmentData merges data from source into target (fill-only, doesn't overwrite)
@@ -3038,11 +3289,21 @@ func normalizeLegalName(name string) string {
 // extractFacilityNameFromPath returns the last slug segment from /fac/{org}/{slug}.
 func extractFacilityNameFromPath(path string) string {
 	path = strings.TrimSpace(path)
-	if path == "" || !strings.HasPrefix(path, "/fac/") {
+	if path == "" {
+		return ""
+	}
+	if cp := canonicalPartsFromPath(path); cp != nil && cp.Namespace == "fac" && cp.Fac != nil {
+		slug := strings.ToLower(strings.TrimSpace(cp.Fac.FacilitySlug))
+		if slug == "" || slug == "fac" || slug == "na" {
+			return ""
+		}
+		return slug
+	}
+	if !strings.HasPrefix(path, "/fac/") {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "fac" {
+	if len(parts) < 2 || parts[0] != "fac" {
 		return ""
 	}
 	slug := strings.ToLower(strings.TrimSpace(parts[len(parts)-1]))
@@ -3123,9 +3384,13 @@ func extractCityFromPath(path string) string {
 			return ""
 		}
 		cc := parts[1]
-		// Must be ISO alpha-2 (2 lowercase letters), but NOT "na" (placeholder)
-		if len(cc) != 2 || cc < "aa" || cc > "zz" || cc == "na" {
+		cc = strings.ToLower(strings.TrimSpace(cc))
+		// Must be ISO alpha-2, composite, or regional token (but NOT "na")
+		if cc == "na" || (len(cc) != 2 && !taxonomy.IsCompositeGeoToken(cc) && !taxonomy.IsRegionalGeoToken(cc)) {
 			return "" // Malformed path like /loc/grapevine/tx/us or /loc/na/us/nv — skip
+		}
+		if len(cc) == 2 && (cc < "aa" || cc > "zz") {
+			return ""
 		}
 		// ONLY index 4-part paths: /loc/{cc}/{admin1}/{city}
 		// Skip 5+ part paths — they are sub-regions (e.g., /loc/cn/gd/shenzhen/futian)
@@ -3159,7 +3424,33 @@ func extractCityFromPath(path string) string {
 //	/product/electronics/semiconductor/gpu → "gpu"
 func extractProductNameFromPath(path string) string {
 	path = strings.TrimSpace(path)
-	if path == "" || !strings.HasPrefix(path, "/product/") {
+	if path == "" {
+		return ""
+	}
+	if cp := canonicalPartsFromPath(path); cp != nil && cp.Namespace == "product" && cp.Product != nil {
+		pp := cp.Product
+		switch pp.Shape {
+		case "hierarchical":
+			if pp.Slug != "" {
+				return strings.ToLower(pp.Slug)
+			}
+		case "service":
+			if pp.ServiceSlug != "" {
+				return strings.ToLower(pp.ServiceSlug)
+			}
+			if pp.Slug != "" {
+				return strings.ToLower(pp.Slug)
+			}
+		case "flat":
+			if pp.Slug != "" {
+				return strings.ToLower(pp.Slug)
+			}
+		case "org_scoped_flat":
+			// Legacy org-scoped product paths are noisy; skip for name extraction.
+			return ""
+		}
+	}
+	if !strings.HasPrefix(path, "/product/") {
 		return ""
 	}
 
@@ -3184,7 +3475,26 @@ func extractProductNameFromPath(path string) string {
 // Returns "" for legacy org-nested paths like /product/{org}/{slug} to avoid false-positive merges.
 func extractCanonicalProductSlugForDedup(path string) string {
 	path = strings.TrimSpace(path)
-	if path == "" || !strings.HasPrefix(path, "/product/") {
+	if path == "" {
+		return ""
+	}
+	if cp := canonicalPartsFromPath(path); cp != nil && cp.Namespace == "product" && cp.Product != nil {
+		pp := cp.Product
+		switch pp.Shape {
+		case "hierarchical":
+			return strings.ToLower(strings.TrimSpace(pp.Slug))
+		case "service":
+			return strings.ToLower(strings.TrimSpace(pp.ServiceSlug))
+		case "flat":
+			return strings.ToLower(strings.TrimSpace(pp.Slug))
+		case "org_scoped_flat":
+			// Legacy org-scoped paths are excluded to avoid false positives.
+			return ""
+		default:
+			return ""
+		}
+	}
+	if !strings.HasPrefix(path, "/product/") {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -3383,7 +3693,13 @@ func normalizePhoneticKey(name string) string {
 // Example: /person/tahnoon-bin-zayed-al-nahyan → "tahnoon-bin-zayed-al-nahyan"
 func extractPersonNameFromPath(path string) string {
 	path = strings.TrimSpace(path)
-	if path == "" || !strings.HasPrefix(path, "/person/") {
+	if path == "" {
+		return ""
+	}
+	if cp := canonicalPartsFromPath(path); cp != nil && cp.Namespace == "person" && cp.Person != nil {
+		return strings.TrimSpace(cp.Person.Slug)
+	}
+	if !strings.HasPrefix(path, "/person/") {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")

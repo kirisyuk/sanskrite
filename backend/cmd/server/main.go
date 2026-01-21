@@ -45,6 +45,7 @@ import (
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/profile"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -239,6 +240,7 @@ func main() {
 	var genaiHandler *httphandlers.GenAIHandler
 	// aiExecHandler will be initialized after AITaskExecutor is created
 	var aiExecHandler *httphandlers.AIExecHandler
+	var aiExec *ai.AITaskExecutor
 	var metaHandler *httphandlers.MetaHandler
 	var agentsHandler *httphandlers.AgentsHandler
 	var agentJobsHandler *httphandlers.AgentJobsHandler
@@ -248,6 +250,9 @@ func main() {
 	var bigqueryAIService *services.BigQueryAIService
 	var horizonService *horizon.HorizonService
 	var horizonHandlers *horizonhttp.HorizonHandlers
+	var profilesHandler *horizonhttp.ProfilesHandler
+	var profileGenerator *horizonprofile.Generator
+	var profileScheduler *horizonprofile.Scheduler
 	var enforcementHandlers *horizonhttp.EnforcementHandlers
 	var scoutEngine *horizonscout.ScoutEngine
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
@@ -296,6 +301,7 @@ func main() {
 
 		exec := ai.NewAITaskExecutor(aiServices, modelManager).
 			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client()))
+		aiExec = exec
 		aiExecHandler = httphandlers.NewAIExecHandler(exec)
 		wc := crawler.NewWebCrawler()
 		tgBase := strings.TrimSpace(os.Getenv("TELEGRAM_SERVICE_URL"))
@@ -1027,6 +1033,8 @@ func main() {
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
 		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
+		horizonProfilesRepo := horizonrepo.NewFragmentProfilesRepository(fsClient.Client())
+		horizonProfilePoliciesRepo := horizonrepo.NewFragmentProfileRefreshPoliciesRepository(fsClient.Client())
 
 		// Horizon spend ledger (actual GenAI $ attribution) for budget enforcement.
 		horizonSpendLedger := horizonrepo.NewHorizonSpendLedger(fsClient.Client())
@@ -1103,6 +1111,33 @@ func main() {
 			}
 		}
 
+		// Cloud Tasks dispatcher for Profile refresh (managed queue + autoscaling + retries).
+		var profileTasksDispatcher *horizontasks.ProfileCloudTasksDispatcher
+		{
+			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_PROFILE", "1"))
+			if enabled == "1" || strings.EqualFold(enabled, "true") {
+				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_PROFILE_QUEUE", "sanskrite-profile-refresh"))
+				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
+				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+				if baseURL != "" && saEmail != "" {
+					targetURL := strings.TrimRight(baseURL, "/") + "/api/v1/internal/tasks/profile/refresh"
+					if aud == "" {
+						aud = strings.TrimRight(baseURL, "/")
+					}
+					if d, err := horizontasks.NewProfileCloudTasksDispatcher(ctx, projectID, location, queue, targetURL, saEmail, aud); err == nil {
+						profileTasksDispatcher = d
+						logger.Printf("Cloud Tasks (Profile) enabled: queue=%s location=%s target=%s", queue, location, targetURL)
+					} else {
+						logger.Printf("WARNING: Cloud Tasks (Profile) disabled due to init error: %v", err)
+					}
+				} else {
+					logger.Printf("WARNING: Cloud Tasks (Profile) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
+				}
+			}
+		}
+
 		// Configure dedicated GCS storage and Vertex AI Search sync for Horizon Fragments
 		// We use a separate bucket to keep Horizon fragment indexing isolated and controllable.
 		horizonFragmentsBucket := strings.TrimSpace(getEnv("HORIZON_FRAGMENTS_BUCKET", ""))
@@ -1113,8 +1148,27 @@ func main() {
 			horizonFragmentsRepo.WithStorage(gcsClient, horizonFragmentsBucket)
 			if vertexSearchClient != nil {
 				// Use batched sync to avoid quota exhaustion (quota is per-request, not per-document).
-				// Default: batch up to 100 URIs, flush every 5 seconds.
+				// Defaults are intentionally conservative to avoid spamming ImportDocuments under high write rates.
 				batchConfig := horizonrepo.DefaultVertexSyncBatcherConfig()
+				// Optional tuning via env:
+				// - VERTEX_SYNC_MAX_BATCH_SIZE (int)
+				// - VERTEX_SYNC_MIN_BATCH_SIZE (int)
+				// - VERTEX_SYNC_FLUSH_INTERVAL_SEC (int)
+				if v := strings.TrimSpace(getEnv("VERTEX_SYNC_MAX_BATCH_SIZE", "")); v != "" {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						batchConfig.MaxBatchSize = n
+					}
+				}
+				if v := strings.TrimSpace(getEnv("VERTEX_SYNC_MIN_BATCH_SIZE", "")); v != "" {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						batchConfig.MinBatchSize = n
+					}
+				}
+				if v := strings.TrimSpace(getEnv("VERTEX_SYNC_FLUSH_INTERVAL_SEC", "")); v != "" {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						batchConfig.FlushInterval = time.Duration(n) * time.Second
+					}
+				}
 				vertexSyncBatcher := horizonrepo.NewVertexSyncBatcher(
 					func(ctx context.Context, uris []string) (string, error) {
 						// Prefer a dedicated datastore for horizon fragments (store isolation instead of filters).
@@ -1127,8 +1181,8 @@ func main() {
 					batchConfig,
 				)
 				horizonFragmentsRepo.WithVertexSyncBatcher(vertexSyncBatcher)
-				logger.Printf("Horizon Fragments: Vertex AI Search batched sync enabled (batch=%d, interval=%v)",
-					batchConfig.MaxBatchSize, batchConfig.FlushInterval)
+				logger.Printf("Horizon Fragments: Vertex AI Search batched sync enabled (maxBatch=%d minBatch=%d interval=%v)",
+					batchConfig.MaxBatchSize, batchConfig.MinBatchSize, batchConfig.FlushInterval)
 			}
 		}
 
@@ -1460,13 +1514,30 @@ func main() {
 				}()
 			}
 
+			// Horizon Fragment Profiles (LLM-based)
+			if aiExec != nil {
+				profileGenerator = horizonprofile.NewGenerator(aiExec, horizonFragmentsRepo, horizonEdgesRepo, horizonProfilesRepo)
+				profileScheduler = horizonprofile.NewScheduler(
+					profileGenerator,
+					horizonFragmentsRepo,
+					horizonEdgesRepo,
+					horizonProfilesRepo,
+					horizonProfilePoliciesRepo,
+					profileTasksDispatcher,
+				)
+				profilesHandler = horizonhttp.NewProfilesHandler(horizonProfilesRepo, profileGenerator, profileScheduler)
+			} else {
+				logger.Printf("WARNING: Profile generator not initialized (ai executor is nil)")
+			}
+
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
 				WithDocumentsRepo(docsRepo).
 				WithUsersRepo(s.users).
 				WithGenAIHandler(genaiHandler).
 				WithInteractionsRepo(interactionsRepo).
-				WithOntologyFactsRepo(ontologyFactsRepo)
+				WithOntologyFactsRepo(ontologyFactsRepo).
+				WithProfilesHandler(profilesHandler)
 			logger.Printf("Horizon system initialized")
 
 			// Wire Horizon Lens service to projects handler for cascade delete
@@ -1596,6 +1667,87 @@ func main() {
 			return
 		}
 
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	// Cloud Tasks -> Profile refresh execution (managed queue + retries + autoscaling).
+	// Secured via OIDC token issued for the configured service account.
+	mux.HandleFunc("/api/v1/internal/tasks/profile/refresh", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if profileGenerator == nil {
+			http.Error(w, "profile generator not initialized", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Verify Cloud Tasks OIDC token.
+		authz := strings.TrimSpace(r.Header.Get("Authorization"))
+		const bearer = "Bearer "
+		if !strings.HasPrefix(authz, bearer) || len(authz) <= len(bearer) {
+			http.Error(w, "missing Authorization bearer token", http.StatusUnauthorized)
+			return
+		}
+		rawTok := strings.TrimSpace(authz[len(bearer):])
+		aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+		if aud == "" {
+			aud = "https://" + r.Host
+		}
+		payload, err := idtoken.Validate(r.Context(), rawTok, aud)
+		if err != nil {
+			http.Error(w, "invalid cloud tasks token", http.StatusUnauthorized)
+			return
+		}
+		expectedSA := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+		if expectedSA != "" {
+			if email, ok := payload.Claims["email"].(string); !ok || !strings.EqualFold(strings.TrimSpace(email), expectedSA) {
+				http.Error(w, "unexpected token identity", http.StatusForbidden)
+				return
+			}
+		}
+
+		var body struct {
+			FragmentID string `json:"fragmentId"`
+			Force      bool   `json:"force"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		fragmentID := strings.TrimSpace(body.FragmentID)
+		if fragmentID == "" {
+			http.Error(w, "fragmentId is required", http.StatusBadRequest)
+			return
+		}
+
+		execCtx, cancel := context.WithTimeout(r.Context(), 45*time.Minute)
+		defer cancel()
+
+		opts := horizonprofile.DefaultGenerateOptions()
+		opts.ForceRegenerate = body.Force
+		result, err := profileGenerator.Generate(execCtx, fragmentID, opts)
+		if err != nil {
+			logger.Printf("ERROR: Profile refresh failed: fragmentId=%s, error=%v", fragmentID, err)
+
+			retryCount := 0
+			if v := strings.TrimSpace(r.Header.Get("X-CloudTasks-TaskRetryCount")); v != "" {
+				if n, perr := strconv.Atoi(v); perr == nil && n >= 0 {
+					retryCount = n
+				}
+			}
+			if retryCount >= 4 {
+				logger.Printf("ERROR: Profile refresh failed after max retries: fragmentId=%s, acking", fragmentID)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("failed (poisoned)"))
+				return
+			}
+			http.Error(w, fmt.Sprintf("profile refresh failed (will retry): %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		logger.Printf("Profile refresh completed: fragmentId=%s profileId=%s created=%t", fragmentID, result.Profile.ID, result.Created)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})

@@ -281,6 +281,57 @@ func (r *DependencyEdgesRepository) ListByTarget(ctx context.Context, tenantID, 
 	return edges, nil
 }
 
+// CountDegreesForFragmentIDs scans edges and counts degrees for the provided fragment IDs.
+// This avoids per-fragment queries by scanning edges once.
+func (r *DependencyEdgesRepository) CountDegreesForFragmentIDs(ctx context.Context, tenantID string, fragmentIDs map[string]struct{}, pageSize int) (map[string]int, error) {
+	if pageSize <= 0 {
+		pageSize = 2000
+	}
+	if pageSize > 5000 {
+		pageSize = 5000
+	}
+
+	counts := make(map[string]int)
+	if len(fragmentIDs) == 0 {
+		return counts, nil
+	}
+
+	q := r.col.Where("tenantId", "==", tenantID).OrderBy(firestore.DocumentID, firestore.Asc)
+	var lastDoc *firestore.DocumentSnapshot
+
+	for {
+		paged := q.Limit(pageSize)
+		if lastDoc != nil {
+			paged = paged.StartAfter(lastDoc)
+		}
+
+		docs, err := paged.Documents(ctx).GetAll()
+		if err != nil {
+			return counts, err
+		}
+		if len(docs) == 0 {
+			break
+		}
+
+		for _, doc := range docs {
+			var edge models.DependencyEdge
+			if err := doc.DataTo(&edge); err != nil {
+				continue
+			}
+			if _, ok := fragmentIDs[edge.SourceFragmentID]; ok {
+				counts[edge.SourceFragmentID]++
+			}
+			if _, ok := fragmentIDs[edge.TargetFragmentID]; ok {
+				counts[edge.TargetFragmentID]++
+			}
+		}
+
+		lastDoc = docs[len(docs)-1]
+	}
+
+	return counts, nil
+}
+
 // EdgeQueryOptions provides optional filtering for edge queries.
 type EdgeQueryOptions struct {
 	IncludeHistorical bool // If false (default), filter out edges where ValidTo < now

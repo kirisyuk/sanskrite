@@ -3,6 +3,8 @@ package repo
 import (
 	"context"
 	"log"
+	"math/rand"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,6 +17,7 @@ type VertexSyncBatcher struct {
 
 	// Pending URIs to sync
 	pendingURIs []string
+	pendingSet  map[string]struct{} // de-dup within the pending batch
 
 	// Import function that accepts batch of URIs
 	importFn func(ctx context.Context, uris []string) (operationName string, err error)
@@ -27,6 +30,14 @@ type VertexSyncBatcher struct {
 	// Flush timer
 	flushTimer *time.Timer
 	timerMu    sync.Mutex
+
+	// Ensure at most one flush is executing at a time.
+	flushMu  sync.Mutex
+	flushing bool
+
+	// Backoff on rate-limit/quota errors (429).
+	nextAllowed time.Time
+	backoff     time.Duration
 
 	// Stats
 	totalBatches   int
@@ -44,9 +55,9 @@ type VertexSyncBatcherConfig struct {
 // DefaultVertexSyncBatcherConfig returns sensible defaults.
 func DefaultVertexSyncBatcherConfig() VertexSyncBatcherConfig {
 	return VertexSyncBatcherConfig{
-		MaxBatchSize:  100,           // Stay well under 1000 limit
-		FlushInterval: 5 * time.Second, // Flush every 5s if not full
-		MinBatchSize:  1,             // Flush even single items after interval
+		MaxBatchSize:  200,              // Stay well under 1000 limit
+		FlushInterval: 30 * time.Second, // Reduce request rate under bursty updates
+		MinBatchSize:  25,               // Avoid single-item batches (common spam source)
 	}
 }
 
@@ -67,6 +78,7 @@ func NewVertexSyncBatcher(
 
 	return &VertexSyncBatcher{
 		pendingURIs:   make([]string, 0, config.MaxBatchSize),
+		pendingSet:    make(map[string]struct{}, config.MaxBatchSize),
 		importFn:      importFn,
 		maxBatchSize:  config.MaxBatchSize,
 		flushInterval: config.FlushInterval,
@@ -78,8 +90,19 @@ func NewVertexSyncBatcher(
 // If the batch reaches maxBatchSize, it triggers an immediate flush.
 // Returns immediately (non-blocking).
 func (b *VertexSyncBatcher) Add(gcsURI string) {
+	gcsURI = strings.TrimSpace(gcsURI)
+	if gcsURI == "" {
+		return
+	}
 	b.mu.Lock()
+	if _, ok := b.pendingSet[gcsURI]; ok {
+		b.mu.Unlock()
+		// Ensure a flush is scheduled even if we got a duplicate.
+		b.scheduleFlush()
+		return
+	}
 	b.pendingURIs = append(b.pendingURIs, gcsURI)
+	b.pendingSet[gcsURI] = struct{}{}
 	shouldFlush := len(b.pendingURIs) >= b.maxBatchSize
 	b.mu.Unlock()
 
@@ -97,7 +120,17 @@ func (b *VertexSyncBatcher) AddBatch(gcsURIs []string) {
 	}
 
 	b.mu.Lock()
-	b.pendingURIs = append(b.pendingURIs, gcsURIs...)
+	for _, u := range gcsURIs {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			continue
+		}
+		if _, ok := b.pendingSet[u]; ok {
+			continue
+		}
+		b.pendingURIs = append(b.pendingURIs, u)
+		b.pendingSet[u] = struct{}{}
+	}
 	shouldFlush := len(b.pendingURIs) >= b.maxBatchSize
 	b.mu.Unlock()
 
@@ -110,14 +143,27 @@ func (b *VertexSyncBatcher) AddBatch(gcsURIs []string) {
 
 // scheduleFlush schedules a flush after flushInterval if not already scheduled.
 func (b *VertexSyncBatcher) scheduleFlush() {
+	b.scheduleFlushAfter(b.flushInterval, false)
+}
+
+// scheduleFlushAfter schedules a flush after the given duration.
+// If forceReset is true, it will replace any existing timer.
+func (b *VertexSyncBatcher) scheduleFlushAfter(d time.Duration, forceReset bool) {
 	b.timerMu.Lock()
 	defer b.timerMu.Unlock()
 
-	if b.flushTimer != nil {
+	if d <= 0 {
+		d = b.flushInterval
+	}
+	if b.flushTimer != nil && !forceReset {
 		return // Timer already scheduled
 	}
+	if b.flushTimer != nil && forceReset {
+		b.flushTimer.Stop()
+		b.flushTimer = nil
+	}
 
-	b.flushTimer = time.AfterFunc(b.flushInterval, func() {
+	b.flushTimer = time.AfterFunc(d, func() {
 		b.timerMu.Lock()
 		b.flushTimer = nil
 		b.timerMu.Unlock()
@@ -128,7 +174,31 @@ func (b *VertexSyncBatcher) scheduleFlush() {
 // Flush sends all pending URIs to Vertex AI Search.
 // Safe to call concurrently.
 func (b *VertexSyncBatcher) Flush() {
+	// Ensure only one flush runs at a time (prevents import spamming under high concurrency).
+	b.flushMu.Lock()
+	if b.flushing {
+		b.flushMu.Unlock()
+		return
+	}
+	b.flushing = true
+	b.flushMu.Unlock()
+	defer func() {
+		b.flushMu.Lock()
+		b.flushing = false
+		b.flushMu.Unlock()
+	}()
+
 	b.mu.Lock()
+	// Respect backoff window (typically from 429 responses).
+	if !b.nextAllowed.IsZero() {
+		now := time.Now()
+		if now.Before(b.nextAllowed) {
+			wait := b.nextAllowed.Sub(now)
+			b.mu.Unlock()
+			b.scheduleFlushAfter(wait, true)
+			return
+		}
+	}
 	if len(b.pendingURIs) < b.minBatchSize {
 		b.mu.Unlock()
 		return
@@ -137,6 +207,7 @@ func (b *VertexSyncBatcher) Flush() {
 	// Take all pending URIs
 	uris := b.pendingURIs
 	b.pendingURIs = make([]string, 0, b.maxBatchSize)
+	b.pendingSet = make(map[string]struct{}, b.maxBatchSize)
 	b.mu.Unlock()
 
 	// Cancel any pending timer
@@ -168,13 +239,56 @@ func (b *VertexSyncBatcher) Flush() {
 		b.totalDocuments += len(batch)
 		if err != nil {
 			b.totalErrors++
+			// Backoff + requeue on 429 to avoid hammering Vertex AI Search import API.
+			if isRateLimit429(err) {
+				// exponential backoff: 5s, 10s, 20s, ... up to 2m (with jitter)
+				if b.backoff <= 0 {
+					b.backoff = 5 * time.Second
+				} else {
+					b.backoff = b.backoff * 2
+				}
+				if b.backoff > 2*time.Minute {
+					b.backoff = 2 * time.Minute
+				}
+				jitter := time.Duration(rand.Intn(500)) * time.Millisecond
+				b.nextAllowed = time.Now().Add(b.backoff + jitter)
+
+				// Requeue failed batch (dedup against current pending).
+				for _, u := range batch {
+					if _, ok := b.pendingSet[u]; ok {
+						continue
+					}
+					b.pendingURIs = append(b.pendingURIs, u)
+					b.pendingSet[u] = struct{}{}
+				}
+				b.mu.Unlock()
+				log.Printf("[VertexSyncBatcher] Batch import failed (count=%d): %v", len(batch), err)
+				b.scheduleFlushAfter(b.backoff, true)
+				return
+			}
 			b.mu.Unlock()
 			log.Printf("[VertexSyncBatcher] Batch import failed (count=%d): %v", len(batch), err)
 		} else {
+			// Success: clear backoff.
+			b.backoff = 0
+			b.nextAllowed = time.Time{}
 			b.mu.Unlock()
 			log.Printf("[VertexSyncBatcher] Batch import success: count=%d operation=%s", len(batch), opName)
 		}
 	}
+}
+
+func isRateLimit429(err error) bool {
+	if err == nil {
+		return false
+	}
+	// We wrap errors as: "vertex AI search import API error 429: ..." in the client.
+	// Also accept common variants.
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "error 429") ||
+		strings.Contains(msg, "code\": 429") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "resource_exhausted")
 }
 
 // FlushSync flushes synchronously and waits for completion.

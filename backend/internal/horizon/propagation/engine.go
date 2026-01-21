@@ -656,6 +656,19 @@ func (e *PropagationEngine) publishPropagationEvents(ctx context.Context, source
 
 	// Публикуем события обновления фрагментов
 	for fragmentID := range affectedFragments {
+		// Best-effort: include canonicalPath (and label) so UI logs are readable.
+		// Propagation previously emitted node_upserted without canonicalPath, which led to "Unknown node".
+		canonicalPath := ""
+		labelEN := ""
+		if e.fragmentsRepo != nil {
+			if frag, err := e.fragmentsRepo.Get(ctx, fragmentID); err == nil && frag != nil {
+				canonicalPath = strings.TrimSpace(frag.CanonicalPath)
+				if frag.Labels != nil {
+					labelEN = strings.TrimSpace(frag.Labels["en"])
+				}
+			}
+		}
+
 		// Granular propagation update
 		nodePayload := map[string]interface{}{
 			"tenantId":         tenantID,
@@ -665,6 +678,12 @@ func (e *PropagationEngine) publishPropagationEvents(ctx context.Context, source
 			"fragmentId":       fragmentID,
 			"ts":               time.Now().UTC().Format(time.RFC3339Nano),
 		}
+		if canonicalPath != "" {
+			nodePayload["canonicalPath"] = canonicalPath
+		}
+		if labelEN != "" {
+			nodePayload["label_en"] = labelEN
+		}
 		if correlationID != "" {
 			nodePayload["correlationId"] = correlationID
 		}
@@ -673,12 +692,15 @@ func (e *PropagationEngine) publishPropagationEvents(ctx context.Context, source
 		}
 		_ = e.realtime.PublishJSON(ctx, realtime.EventType("horizon.propagation.node_updated"), tenantID, nodePayload)
 		_ = e.realtime.PublishJSON(ctx, realtime.EventType("horizon.graph.node.upserted"), tenantID, map[string]interface{}{
-			"tenantId":   tenantID,
-			"projectId":  projectID,
-			"lensId":     originLensID,
-			"fragmentId": fragmentID,
-			"status":     "propagated",
-			"ts":         time.Now().UTC().Format(time.RFC3339Nano),
+			"tenantId":         tenantID,
+			"projectId":        projectID,
+			"lensId":           originLensID,
+			"fragmentId":       fragmentID,
+			"canonicalPath":    canonicalPath,
+			"label_en":         labelEN,
+			"status":           "propagated",
+			"ts":               time.Now().UTC().Format(time.RFC3339Nano),
+			"sourceFragmentId": sourceFragmentID,
 		})
 	}
 

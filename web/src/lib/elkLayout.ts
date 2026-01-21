@@ -2149,15 +2149,83 @@ export async function layoutLevelsTwoPane<T = any>(
     arr.push(rn.id);
     idsByLevel.set(lv, arr);
   }
+
+  // Precompute labels for fast sort
+  const labelById = new Map<string, string>();
+  for (const n of rightNodes) {
+    labelById.set(n.id, String((n.data as any)?.label || n.id));
+  }
+
+  // Helper to sort nodes by clustering related ones together (connected components).
+  // This ensures that partners/related entities stay vertically adjacent.
+  const sortNodesByClusters = (nodeIds: string[]): string[] => {
+    if (nodeIds.length <= 1) return nodeIds;
+    const idSet = new Set(nodeIds);
+    const adj = new Map<string, Set<string>>();
+    for (const id of nodeIds) adj.set(id, new Set());
+
+    // Build adjacency from valid edges (using precomputed pairEdgeTypes)
+    for (const key of pairEdgeTypes.keys()) {
+      const parts = key.split('||');
+      if (parts.length !== 2) continue;
+      const s = parts[0];
+      const t = parts[1];
+      if (idSet.has(s) && idSet.has(t)) {
+        adj.get(s)?.add(t);
+        adj.get(t)?.add(s);
+      }
+    }
+
+    const visited = new Set<string>();
+    const clusters: string[][] = [];
+
+    // Find connected components
+    // Sort initial list alphabetically to ensure deterministic cluster discovery order
+    const sortedIds = [...nodeIds].sort((a, b) => {
+       const al = labelById.get(a) || a;
+       const bl = labelById.get(b) || b;
+       return al.localeCompare(bl);
+    });
+
+    for (const id of sortedIds) {
+      if (visited.has(id)) continue;
+      const cluster: string[] = [];
+      const queue = [id];
+      visited.add(id);
+      
+      while (queue.length > 0) {
+        const curr = queue.shift()!;
+        cluster.push(curr);
+        const neighbors = Array.from(adj.get(curr) || []).sort(); // Deterministic traversal
+        for (const neighbor of neighbors) {
+          if (!visited.has(neighbor)) {
+            visited.add(neighbor);
+            queue.push(neighbor);
+          }
+        }
+      }
+      
+      // Sort nodes within cluster alphabetically
+      cluster.sort((a, b) => {
+         const al = labelById.get(a) || a;
+         const bl = labelById.get(b) || b;
+         return al.localeCompare(bl);
+      });
+      clusters.push(cluster);
+    }
+
+    // Sort clusters by their first element (representative)
+    clusters.sort((a, b) => {
+       const al = labelById.get(a[0]) || a[0];
+       const bl = labelById.get(b[0]) || b[0];
+       return al.localeCompare(bl);
+    });
+
+    return clusters.flat();
+  };
+
   for (const [lv, arr] of idsByLevel.entries()) {
-    idsByLevel.set(
-      lv,
-      [...arr].sort((a, b) => {
-        const al = String((rightNodes.find((n) => n.id === a)?.data as any)?.label || a);
-        const bl = String((rightNodes.find((n) => n.id === b)?.data as any)?.label || b);
-        return al.localeCompare(bl);
-      }),
-    );
+    idsByLevel.set(lv, sortNodesByClusters(arr));
   }
 
   // Compute y-centers by propagating from leaves (level 0) to ultimate nodes (maxLevel).

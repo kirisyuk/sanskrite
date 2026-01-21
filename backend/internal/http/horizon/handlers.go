@@ -14,6 +14,7 @@ type HorizonHandlers struct {
 	service        *horizon.HorizonService
 	lensItemsHandler *LensItemsHandler
 	genAIHandler   *httputil.GenAIHandler
+	profilesHandler *ProfilesHandler
 	docsRepo       *corerepo.DocumentsRepository
 	usersRepo      *corerepo.UsersRepository
 	interactions   *corerepo.InteractionsRepository
@@ -36,6 +37,12 @@ func (h *HorizonHandlers) WithLensItemsHandler(handler *LensItemsHandler) *Horiz
 // WithGenAIHandler добавляет GenAIHandler для вызова LLM
 func (h *HorizonHandlers) WithGenAIHandler(handler *httputil.GenAIHandler) *HorizonHandlers {
 	h.genAIHandler = handler
+	return h
+}
+
+// WithProfilesHandler добавляет ProfilesHandler
+func (h *HorizonHandlers) WithProfilesHandler(handler *ProfilesHandler) *HorizonHandlers {
+	h.profilesHandler = handler
 	return h
 }
 
@@ -78,6 +85,11 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/fragments", authMiddleware(http.HandlerFunc(h.HandleFragmentsRoot)))
 	mux.Handle("/api/horizon/fragments/by-path", authMiddleware(http.HandlerFunc(h.GetFragmentByPath)))
 	mux.Handle("/api/horizon/fragments/", authMiddleware(http.HandlerFunc(h.HandleFragmentRoutes)))
+
+	// Fragment profiles (direct access by profile ID)
+	if h.profilesHandler != nil {
+		mux.Handle("/api/horizon/profiles/", authMiddleware(http.HandlerFunc(h.profilesHandler.handleProfileRoutes)))
+	}
 
 	// Rollup & Explain endpoints (Signals & Semantic Propagation)
 	mux.Handle("/api/horizon/rollup/", authMiddleware(http.HandlerFunc(h.HandleRollupRoutes)))
@@ -259,8 +271,30 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 		http.Error(w, "Fragment ID required", http.StatusBadRequest)
 		return
 	}
+	path = strings.Trim(path, "/")
+	parts := strings.Split(path, "/")
+	fragmentID := strings.TrimSpace(parts[0])
+	if fragmentID == "" {
+		http.Error(w, "Fragment ID required", http.StatusBadRequest)
+		return
+	}
 
 	// Проверяем подпути
+	if h.profilesHandler != nil {
+		if strings.HasSuffix(r.URL.Path, "/profile") {
+			h.profilesHandler.getProfileByFragmentID(w, r, fragmentID)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/profile/refresh") {
+			h.profilesHandler.refreshProfile(w, r, fragmentID)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/profile/versions") {
+			h.profilesHandler.listProfileVersions(w, r, fragmentID)
+			return
+		}
+	}
+
 	if strings.HasSuffix(r.URL.Path, "/ensure-entity") {
 		h.EnsureFragmentEntity(w, r)
 		return
