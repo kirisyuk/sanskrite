@@ -1218,7 +1218,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   // Levels (Hierarchical) expansion filter (controls which edge types are fetched on expand).
   type LevelsExpandMode = 'all' | 'ownership' | 'expansion' | 'dependencies' | 'context' | 'market' | 'influence' | 'balanced';
-  const [levelsExpandMode, setLevelsExpandMode] = React.useState<LevelsExpandMode>('ownership');
+  const [levelsExpandMode, setLevelsExpandMode] = React.useState<LevelsExpandMode>('all');
   const [showLevelsExpandMenu, setShowLevelsExpandMenu] = React.useState(false);
   const levelsExpandMenuRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -10769,6 +10769,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               </div>
               {(
                 [
+                  { key: 'all', label: 'Full network', hint: 'Complete relationship map' },
                   { key: 'ownership', label: 'Control', hint: 'Holdings, subsidiaries, and investment portfolio' },
                   { key: 'expansion', label: 'Expansion', hint: 'Control chains + partners' },
                   { key: 'dependencies', label: 'Supply chain', hint: 'Upstream suppliers and critical inputs' },
@@ -10776,7 +10777,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   { key: 'market', label: 'Competitive landscape', hint: 'Competitors, partners, and market positioning' },
                   { key: 'influence', label: 'Key stakeholders', hint: 'Decision-makers and influencing entities' },
                   { key: 'balanced', label: 'Strategic overview', hint: 'Structure, footprint, and competitive position' },
-                  { key: 'all', label: 'Full network', hint: 'Complete relationship map' },
                 ] as Array<{ key: LevelsExpandMode; label: string; hint: string }>
               ).map((opt) => {
                 const active = levelsExpandMode === opt.key;

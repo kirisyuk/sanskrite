@@ -366,6 +366,22 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - %s
    - legalName: The legal/official name of the entity, INCLUDING the form of ownership when relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC, etc.)
    - shortName: The base name WITHOUT the form of ownership (used for canonicalPath slugging)
+   - IMPORTANT (legal form placement):
+     - Do NOT move the legal form token to the beginning of the name.
+       BAD: "JSC Tochka Bank"
+       GOOD: "Tochka Bank JSC" (only if sources use that ordering) or use the original official name in local language.
+     - legal_form is a SUFFIX in org canonicalPath (/org/{iso2}/{slug}-{legal_form}) and a separate field in canonicalParts.Org.LegalForm.
+   - IMPORTANT (official vs transliteration):
+     - Prefer the OFFICIAL legal name as stated by the company/registry/source.
+     - If the official legal name is not Latin and no established official English name exists:
+       - Keep identifiers.legalName in the original language/script when known.
+       - Use labels.en for transliteration/English display only (do NOT invent an English legalName).
+   - GOV-specific naming (CRITICAL when canonicalPath starts with /gov/):
+     - Always provide BOTH:
+       - labels.en: readable English name (translation if official English exists; otherwise careful transliteration)
+       - identifiers.legalName: official name as in the primary source/registry (often in native script)
+     - If you can identify the native language/script, also set labels.<iso639> (e.g., labels.th, labels.ms, labels.ar, labels.ru).
+     - Do NOT replace native official name with a translated version in identifiers.legalName. Keep translation/transliteration in labels.en.
    - marketSegments: *** HIGHLY IMPORTANT for ORGANIZATION/FACILITY/GOV ***
      You MUST attempt to determine market segments for any org/gov/facility. This is critical for graph analytics.
      Format: Array of canonical paths /segment/{domain}/{vertical}/{geo}

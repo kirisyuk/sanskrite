@@ -2699,6 +2699,15 @@ SKIP_RESEARCH:
 		if strings.TrimSpace(effectiveCanonicalPath) != "" && strings.TrimSpace(existingFragment.CanonicalPath) != strings.TrimSpace(effectiveCanonicalPath) {
 			legacy := strings.TrimSpace(existingFragment.CanonicalPath)
 			existingFragment.CanonicalPath = strings.TrimSpace(effectiveCanonicalPath)
+			// Keep semantic parts in sync so downstream canonizers/fixers operate on the updated entity consistently.
+			if parts, err := taxonomy.ParseCanonicalPathParts(existingFragment.CanonicalPath); err == nil && parts != nil {
+				existingFragment.CanonicalParts = parts
+			}
+			// Best-effort: if the old canonical path was in the lens scope, rewrite it so all subsequent
+			// agents/UI work with the updated canonical path within this job.
+			if legacy != "" && strings.TrimSpace(existingFragment.CanonicalPath) != "" && legacy != strings.TrimSpace(existingFragment.CanonicalPath) {
+				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, legacy, strings.TrimSpace(existingFragment.CanonicalPath))
+			}
 			if legacy != "" {
 				recordLegacyOrgPath(existingFragment, legacy)
 			}
@@ -3707,10 +3716,83 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 		}
 
 		// Publish policy check result via realtime (frontend expects horizon.policy.*)
+		// IMPORTANT: front-end shows only 1-3 sample items; ensure critical violations are surfaced first.
+		violationsForSample := make([]policy.PolicyViolation, 0, len(result.Violations))
+		violationsForSample = append(violationsForSample, result.Violations...)
+		sort.SliceStable(violationsForSample, func(i, j int) bool {
+			si := violationsForSample[i].Severity
+			sj := violationsForSample[j].Severity
+			score := func(s policy.PolicyViolationSeverity) int {
+				switch s {
+				case policy.SeverityCritical:
+					return 3
+				case policy.SeverityWarning:
+					return 2
+				case policy.SeverityInfo:
+					return 1
+				default:
+					return 0
+				}
+			}
+			ai := score(si)
+			aj := score(sj)
+			if ai != aj {
+				return ai > aj
+			}
+			// Within same severity, prefer auto-fixable first for user usefulness.
+			if violationsForSample[i].AutoFixable != violationsForSample[j].AutoFixable {
+				return violationsForSample[i].AutoFixable
+			}
+			return false
+		})
+		// Best-effort: include a small amount of human context in the sample (paths/labels, edge endpoints).
+		fragCache := map[string]struct {
+			path  string
+			label string
+		}{}
+		resolveFrag := func(id string) (path, label string) {
+			id = strings.TrimSpace(id)
+			if id == "" || e.fragmentsRepo == nil {
+				return "", ""
+			}
+			if v, ok := fragCache[id]; ok {
+				return v.path, v.label
+			}
+			frag, err := e.fragmentsRepo.Get(policyCtx, id)
+			if err != nil || frag == nil {
+				fragCache[id] = struct {
+					path  string
+					label string
+				}{}
+				return "", ""
+			}
+			lbl := ""
+			if frag.Labels != nil {
+				lbl = strings.TrimSpace(frag.Labels["en"])
+			}
+			out := struct {
+				path  string
+				label string
+			}{path: strings.TrimSpace(frag.CanonicalPath), label: lbl}
+			fragCache[id] = out
+			return out.path, out.label
+		}
+
 		violationsSample := make([]map[string]interface{}, 0, 5)
-		for i, v := range result.Violations {
+		for i, v := range violationsForSample {
 			if i >= 5 {
 				break
+			}
+			fragPath, fragLabel := resolveFrag(v.FragmentID)
+			edgeType := ""
+			sourcePath := ""
+			targetPath := ""
+			if strings.TrimSpace(v.EdgeID) != "" && e.edgesRepo != nil {
+				if edge, err := e.edgesRepo.Get(policyCtx, strings.TrimSpace(v.EdgeID)); err == nil && edge != nil {
+					edgeType = string(edge.Type)
+					sourcePath, _ = resolveFrag(edge.SourceFragmentID)
+					targetPath, _ = resolveFrag(edge.TargetFragmentID)
+				}
 			}
 			violationsSample = append(violationsSample, map[string]interface{}{
 				"id":            v.ID,
@@ -3718,26 +3800,46 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 				"severity":      v.Severity,
 				"description":   v.Description,
 				"fragmentId":    v.FragmentID,
+				"fragmentPath":  fragPath,
+				"fragmentLabel": fragLabel,
 				"edgeId":        v.EdgeID,
+				"edgeType":      edgeType,
+				"sourcePath":    sourcePath,
+				"targetPath":    targetPath,
 				"actualValue":   v.ActualValue,
 				"expectedValue": v.ExpectedValue,
 				"autoFixable":   v.AutoFixable,
 			})
 		}
+		// Also include the main job target for a nicer header on the frontend.
+		subjectPath := strings.TrimSpace(job.TargetCanonicalPath)
+		subjectLabel := ""
+		if subjectPath != "" && e.fragmentsRepo != nil {
+			if frag, err := e.fragmentsRepo.GetByCanonicalPath(policyCtx, subjectPath); err == nil && frag != nil {
+				if frag.Labels != nil {
+					subjectLabel = strings.TrimSpace(frag.Labels["en"])
+				}
+				if strings.TrimSpace(frag.CanonicalPath) != "" {
+					subjectPath = strings.TrimSpace(frag.CanonicalPath)
+				}
+			}
+		}
 		payload := policy.NewWSPolicyCheckComplete(result, durationMs)
 		policyEvent := map[string]interface{}{
-			"type":              payload.Type,
-			"tenantId":          payload.TenantID,
-			"jobId":             payload.JobID,
-			"violationsFound":   payload.ViolationsFound,
-			"criticalCount":     payload.CriticalCount,
-			"warningCount":      payload.WarningCount,
-			"infoCount":         payload.InfoCount,
-			"enforcementJobIds": payload.EnforcementJobIDs,
-			"autoFixableCount":  payload.AutoFixableCount,
-			"checkDurationMs":   payload.CheckDurationMs,
-			"timestamp":         payload.Timestamp,
-			"violationsSample":  violationsSample,
+			"type":                 payload.Type,
+			"tenantId":             payload.TenantID,
+			"jobId":                payload.JobID,
+			"violationsFound":      payload.ViolationsFound,
+			"criticalCount":        payload.CriticalCount,
+			"warningCount":         payload.WarningCount,
+			"infoCount":            payload.InfoCount,
+			"enforcementJobIds":    payload.EnforcementJobIDs,
+			"autoFixableCount":     payload.AutoFixableCount,
+			"checkDurationMs":      payload.CheckDurationMs,
+			"timestamp":            payload.Timestamp,
+			"violationsSample":     violationsSample,
+			"subjectCanonicalPath": subjectPath,
+			"subjectLabel":         subjectLabel,
 		}
 		if v := strings.TrimSpace(job.ProjectID); v != "" {
 			policyEvent["projectId"] = v
@@ -3852,6 +3954,43 @@ func (e *ScoutEngine) publishEnforcementProgress(ctx context.Context, job *polic
 		return
 	}
 	msg := policy.NewWSEnforcementProgress(job)
+	// Best-effort: enrich message with target object context for UI readability.
+	targetPath := ""
+	targetLabel := ""
+	if e.fragmentsRepo != nil && strings.TrimSpace(msg.TargetID) != "" {
+		if frag, err := e.fragmentsRepo.Get(ctx, strings.TrimSpace(msg.TargetID)); err == nil && frag != nil {
+			targetPath = strings.TrimSpace(frag.CanonicalPath)
+			if frag.Labels != nil {
+				targetLabel = strings.TrimSpace(frag.Labels["en"])
+			}
+		}
+	}
+	isBadLabel := func(s string) bool {
+		s = strings.TrimSpace(strings.ToLower(s))
+		if s == "" {
+			return true
+		}
+		// Avoid "ma", "na", etc. Prefer canonicalPath for such nodes.
+		if len(s) <= 3 {
+			return true
+		}
+		if s == "na" || s == "n/a" {
+			return true
+		}
+		return false
+	}
+	if isBadLabel(targetLabel) {
+		targetLabel = ""
+	}
+	// For edge tasks, we can optionally add edge endpoints later; keep it simple for now.
+	if strings.TrimSpace(msg.Message) == "" {
+		// Make in-progress messages informative.
+		if strings.TrimSpace(targetLabel) != "" && strings.TrimSpace(targetPath) != "" {
+			msg.Message = fmt.Sprintf("%s — %s (%s)", strings.TrimSpace(msg.TaskType), targetLabel, targetPath)
+		} else if strings.TrimSpace(targetPath) != "" {
+			msg.Message = fmt.Sprintf("%s — %s", strings.TrimSpace(msg.TaskType), targetPath)
+		}
+	}
 	payload := map[string]interface{}{
 		"type":          msg.Type,
 		"jobId":         msg.JobID,
@@ -3864,6 +4003,12 @@ func (e *ScoutEngine) publishEnforcementProgress(ctx context.Context, job *polic
 		"progress":      msg.Progress,
 		"message":       msg.Message,
 		"timestamp":     msg.Timestamp,
+	}
+	if targetPath != "" {
+		payload["targetCanonicalPath"] = targetPath
+	}
+	if targetLabel != "" {
+		payload["targetLabel"] = targetLabel
 	}
 	if msg.Success != nil {
 		payload["success"] = *msg.Success
@@ -3888,6 +4033,80 @@ func (e *ScoutEngine) publishEnforcementBatchComplete(ctx context.Context, job *
 		return
 	}
 	msg := policy.NewWSEnforcementBatchComplete(job.ID, job.TenantID, jobs, durationMs)
+	// Best-effort: include a small, user-friendly list of what was fixed/failed.
+	type jobItem struct {
+		Status              string `json:"status"`
+		TaskType            string `json:"taskType"`
+		ViolationType       string `json:"violationType,omitempty"`
+		TargetID            string `json:"targetId,omitempty"`
+		TargetCanonicalPath string `json:"targetCanonicalPath,omitempty"`
+		TargetLabel         string `json:"targetLabel,omitempty"`
+		Success             *bool  `json:"success,omitempty"`
+		Error               string `json:"error,omitempty"`
+		Details             string `json:"details,omitempty"`
+	}
+	jobsSample := make([]jobItem, 0, 8)
+	fragCache := map[string]struct {
+		path  string
+		label string
+	}{}
+	resolveFrag := func(id string) (string, string) {
+		id = strings.TrimSpace(id)
+		if id == "" || e.fragmentsRepo == nil {
+			return "", ""
+		}
+		if v, ok := fragCache[id]; ok {
+			return v.path, v.label
+		}
+		frag, err := e.fragmentsRepo.Get(ctx, id)
+		if err != nil || frag == nil {
+			fragCache[id] = struct {
+				path  string
+				label string
+			}{}
+			return "", ""
+		}
+		lbl := ""
+		if frag.Labels != nil {
+			lbl = strings.TrimSpace(frag.Labels["en"])
+		}
+		out := struct {
+			path  string
+			label string
+		}{path: strings.TrimSpace(frag.CanonicalPath), label: lbl}
+		fragCache[id] = out
+		return out.path, out.label
+	}
+	for _, j := range jobs {
+		if j == nil {
+			continue
+		}
+		// Prioritize failed and completed jobs for the sample.
+		if j.Status != policy.EnforcementStatusFailed && j.Status != policy.EnforcementStatusCompleted {
+			continue
+		}
+		item := jobItem{
+			Status:   string(j.Status),
+			TaskType: string(j.Task.Type),
+			TargetID: j.Task.TargetID,
+			ViolationType: func() string {
+				if j.Violation != nil {
+					return string(j.Violation.Type)
+				}
+				return ""
+			}(),
+		}
+		item.TargetCanonicalPath, item.TargetLabel = resolveFrag(j.Task.TargetID)
+		if j.Result != nil {
+			item.Success = &j.Result.Success
+			item.Error = strings.TrimSpace(j.Result.Error)
+			item.Details = strings.TrimSpace(j.Result.Details)
+		}
+		jobsSample = append(jobsSample, item)
+		if len(jobsSample) >= 8 {
+			break
+		}
+	}
 	payload := map[string]interface{}{
 		"type":               msg.Type,
 		"parentJobId":        msg.ParentJobID,
@@ -3903,6 +4122,7 @@ func (e *ScoutEngine) publishEnforcementBatchComplete(ctx context.Context, job *
 		"edgesReversed":      msg.EdgesReversed,
 		"edgesCanonicalized": msg.EdgesCanonicalized,
 		"edgesDeleted":       msg.EdgesDeleted,
+		"jobsSample":         jobsSample,
 	}
 	if v := strings.TrimSpace(job.ProjectID); v != "" {
 		payload["projectId"] = v

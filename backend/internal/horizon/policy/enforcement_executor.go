@@ -22,6 +22,9 @@ import (
 // FragmentsWriter provides read/write access to HorizonFragments.
 type FragmentsWriter interface {
 	Get(ctx context.Context, id string) (*horizonmodels.HorizonFragment, error)
+	// GetByCanonicalPath returns a fragment by exact canonicalPath (global tenant).
+	// Used for deterministic collision detection after path rewrites.
+	GetByCanonicalPath(ctx context.Context, canonicalPath string) (*horizonmodels.HorizonFragment, error)
 	Update(ctx context.Context, frag *horizonmodels.HorizonFragment) error
 	Delete(ctx context.Context, id string) error
 }
@@ -131,6 +134,15 @@ func (e *EnforcementExecutor) WithPublisher(publisher EnforcementEventPublisher)
 func (e *EnforcementExecutor) ExecuteJob(ctx context.Context, job *PolicyEnforcementJob) (*EnforcementResult, error) {
 	if job == nil {
 		return nil, fmt.Errorf("job is nil")
+	}
+
+	// Enforcement is async/background work. Do not inherit short request/WS deadlines.
+	// Keep context values (trace/request ids) but detach cancellation/deadlines, then apply a bounded timeout.
+	{
+		const enforcementJobTimeout = 2 * time.Minute
+		jobCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), enforcementJobTimeout)
+		defer cancel()
+		ctx = jobCtx
 	}
 
 	log.Printf("[EnforcementExecutor] Executing job %s: type=%s target=%s",
@@ -480,11 +492,26 @@ func (e *EnforcementExecutor) executeFixPath(ctx context.Context, task Enforceme
 	}
 	e.bestEffortRewriteLensScopes(ctx, strings.TrimSpace(frag.TenantID), strings.TrimSpace(oldPath), newPath)
 
+	// Deterministic: if this fix caused a canonicalPath collision (two fragment IDs now share the same canonicalPath),
+	// immediately merge them so edges (which are keyed by fragment IDs) converge to a single node.
+	merged, mergeCanonicalID, mergeDuplicateID := e.bestEffortMergeCanonicalPathCollision(ctx, frag.ID, newPath)
+
 	return &EnforcementResult{
-		Success:     true,
-		Action:      "path_fixed",
-		AffectedIDs: []string{fragID},
-		Details:     fmt.Sprintf("Changed path from %s to %s", oldPath, newPath),
+		Success: true,
+		Action:  "path_fixed",
+		AffectedIDs: func() []string {
+			if merged && strings.TrimSpace(mergeCanonicalID) != "" && strings.TrimSpace(mergeDuplicateID) != "" {
+				return []string{mergeCanonicalID, mergeDuplicateID}
+			}
+			return []string{fragID}
+		}(),
+		Details: func() string {
+			base := fmt.Sprintf("Changed path from %s to %s", oldPath, newPath)
+			if merged && strings.TrimSpace(mergeCanonicalID) != "" && strings.TrimSpace(mergeDuplicateID) != "" {
+				base += fmt.Sprintf(". CanonicalPath collision detected; merged %s into %s.", mergeDuplicateID, mergeCanonicalID)
+			}
+			return base
+		}(),
 	}, nil
 }
 
@@ -769,8 +796,181 @@ func (e *EnforcementExecutor) executeNormalizeSymmetric(ctx context.Context, _ s
 func (e *EnforcementExecutor) executeFixLegalForm(ctx context.Context, task EnforcementTask) (*EnforcementResult, error) {
 	fragID := task.TargetID
 	correctPath, ok := task.Params["correctPath"].(string)
-	if !ok || correctPath == "" {
-		return nil, fmt.Errorf("correctPath not specified")
+	// If correctPath is not provided, attempt to infer legal form via LLM and apply selectively.
+	if !ok || strings.TrimSpace(correctPath) == "" {
+		if e.aiExecutor == nil {
+			return &EnforcementResult{
+				Success: false,
+				Action:  "fix_legal_form",
+				Error:   "AI executor not configured - cannot infer legal form automatically",
+			}, nil
+		}
+
+		frag, err := e.fragmentsRepo.Get(ctx, fragID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load fragment: %w", err)
+		}
+		if frag == nil {
+			return nil, fmt.Errorf("fragment not found: %s", fragID)
+		}
+
+		oldPath := strings.TrimSpace(frag.CanonicalPath)
+		parts, perr := taxonomy.ParseCanonicalPathParts(oldPath)
+		if perr != nil || parts == nil {
+			parts = frag.CanonicalParts
+		}
+		if parts == nil || strings.TrimSpace(parts.Namespace) != "org" {
+			return &EnforcementResult{Success: false, Action: "fix_legal_form", Error: "unsupported namespace for legal form fix"}, nil
+		}
+		if parts.Org != nil && strings.TrimSpace(parts.Org.LegalForm) != "" {
+			return &EnforcementResult{
+				Success: true,
+				Action:  "no_change_needed",
+				Details: "Legal form already present; skipping",
+			}, nil
+		}
+
+		labelEN := ""
+		if frag.Labels != nil {
+			labelEN = strings.TrimSpace(frag.Labels["en"])
+		}
+		legalName := ""
+		shortName := ""
+		if frag.Identifiers != nil {
+			legalName = strings.TrimSpace(frag.Identifiers["legalName"])
+			shortName = strings.TrimSpace(frag.Identifiers["shortName"])
+		}
+
+		type legalFormFixResult struct {
+			LegalForm   string  `json:"legalForm"`
+			Confidence  float64 `json:"confidence"`
+			Reason      string  `json:"reason"`
+			DisplayName string  `json:"displayName,omitempty"`
+		}
+		allowed := taxonomy.DefaultCanonicalRules().Org.LegalForms
+		allowSet := map[string]struct{}{}
+		for _, lf := range allowed {
+			lf = strings.ToLower(strings.TrimSpace(lf))
+			if lf != "" {
+				allowSet[lf] = struct{}{}
+			}
+		}
+		verifier := ai.NewGenericVerifier(func(r legalFormFixResult) error {
+			if r.Confidence < 0 || r.Confidence > 1 {
+				return fmt.Errorf("confidence must be 0..1")
+			}
+			lf := strings.ToLower(strings.TrimSpace(r.LegalForm))
+			if lf == "" {
+				return fmt.Errorf("legalForm is required")
+			}
+			if _, ok := allowSet[lf]; !ok {
+				return fmt.Errorf("legalForm %q not in allowlist", lf)
+			}
+			return nil
+		})
+
+		prompt := strings.TrimSpace(fmt.Sprintf(`
+You are fixing a missing legal form suffix for an organization canonical path.
+
+Canonical org path format: /org/{iso2}/{baseSlug}-{legalForm}
+You must infer the most likely legalForm token from the allowed list.
+
+Allowed legalForm tokens:
+%s
+
+Rules:
+- Output STRICT JSON only: {"legalForm":"<token>","confidence":0..1,"reason":"...","displayName":"optional human readable"}
+- legalForm MUST be lowercase (exact token from the allowed list). Example: "ooo" (NOT "OOO").
+- Prefer high precision. If uncertain, still choose the best guess but reduce confidence (<0.7).
+- Do NOT output "unknown" or empty.
+- Do NOT change geo or baseSlug; only choose legalForm.
+
+Fragment context:
+- currentCanonicalPath: %s
+- label_en: %s
+- legalName: %s
+- shortName: %s
+`, strings.Join(allowed, ", "), oldPath, labelEN, legalName, shortName))
+
+		llmTask := &ai.AITask{
+			TaskType:     ai.TaskTypeContentAnalysis,
+			InputContent: prompt,
+			AIRequirements: ai.AIRequirements{
+				TextGenerationCapability: true,
+				MinCapabilityScore:       6,
+				MinContextWindow:         6000,
+				MaxOutputSize:            4096,
+			},
+			Verifier: verifier,
+		}
+
+		// Detach from any short parent deadline (this task is async) and enforce our own timeout.
+		llmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
+		defer cancel()
+
+		raw, err := e.aiExecutor.ExecuteStructuredTask(llmCtx, llmTask)
+		if err != nil {
+			return &EnforcementResult{
+				Success: false,
+				Action:  "fix_legal_form",
+				Error:   fmt.Sprintf("LLM legal form inference failed: %v", err),
+			}, nil
+		}
+		res, ok := raw.(legalFormFixResult)
+		if !ok {
+			if m, ok2 := raw.(map[string]interface{}); ok2 {
+				res = legalFormFixResult{
+					LegalForm:  getString(m, "legalForm"),
+					Confidence: getFloat(m, "confidence"),
+					Reason:     getString(m, "reason"),
+				}
+			} else {
+				return &EnforcementResult{Success: false, Action: "fix_legal_form", Error: fmt.Sprintf("unexpected LLM response type %T", raw)}, nil
+			}
+		}
+		if err := verifier.ValidateFunc(res); err != nil {
+			return &EnforcementResult{
+				Success: false,
+				Action:  "fix_legal_form",
+				Error:   fmt.Sprintf("LLM legal form inference validate failed: %v", err),
+			}, nil
+		}
+
+		lf := strings.ToLower(strings.TrimSpace(res.LegalForm))
+		// Apply selectively to canonicalParts.
+		if frag.CanonicalParts == nil {
+			frag.CanonicalParts = parts
+		}
+		if frag.CanonicalParts.Org == nil {
+			frag.CanonicalParts.Org = &taxonomy.OrgPathParts{}
+		}
+		frag.CanonicalParts.Org.LegalForm = lf
+
+		frag.UpdatedAt = time.Now().UTC()
+		if err := e.fragmentsRepo.Update(ctx, frag); err != nil {
+			return nil, fmt.Errorf("failed to update fragment: %w", err)
+		}
+
+		newPath := strings.TrimSpace(frag.CanonicalPath)
+		if newPath != "" && oldPath != "" && newPath != oldPath {
+			e.bestEffortRewriteLensScopes(ctx, strings.TrimSpace(frag.TenantID), oldPath, newPath)
+		}
+
+		// Deterministic: merge on canonicalPath collision to avoid duplicate nodes by different IDs.
+		merged, mergeCanonicalID, mergeDuplicateID := e.bestEffortMergeCanonicalPathCollision(ctx, frag.ID, newPath)
+
+		return &EnforcementResult{
+			Success:     true,
+			Action:      "fix_legal_form",
+			AffectedIDs: []string{fragID},
+			Details: func() string {
+				base := fmt.Sprintf("Inferred legal form %q (conf=%.2f). %s", lf, res.Confidence, strings.TrimSpace(res.Reason))
+				if merged && strings.TrimSpace(mergeCanonicalID) != "" && strings.TrimSpace(mergeDuplicateID) != "" {
+					base += fmt.Sprintf(" CanonicalPath collision detected; merged %s into %s.", mergeDuplicateID, mergeCanonicalID)
+				}
+				return base
+			}(),
+		}, nil
 	}
 
 	return e.executeFixPath(ctx, EnforcementTask{
@@ -784,6 +984,7 @@ func (e *EnforcementExecutor) executeFixLegalForm(ctx context.Context, task Enfo
 
 // executeFixISO2 fixes an invalid ISO2 code in org path.
 func (e *EnforcementExecutor) executeFixISO2(ctx context.Context, task EnforcementTask) (*EnforcementResult, error) {
+	const minISO2Confidence = 0.7
 	if e.aiExecutor == nil {
 		return &EnforcementResult{
 			Success: false,
@@ -972,7 +1173,7 @@ Task:
 - Infer the correct geo token for this fragment.
 - Return STRICT JSON only:
   {"iso2": "<lowercase iso3166-1 alpha2 like 'kr' OR a composite like 'ae-sa-om'>", "confidence": 0..1, "reason": "...", "evidence": ["..."] }
-- If you are not confident, still output a best guess but lower confidence (<0.7).
+- If you are not confident, still output a best guess but lower confidence (<0.7). It will NOT be applied automatically.
 - NEVER output "na".
 
 Fragment:
@@ -1000,7 +1201,8 @@ Nearby edges that may hint location/jurisdiction (best-effort):
 		Verifier: verifier,
 	}
 
-	llmCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	// Detach from any short parent deadline (this task is async) and enforce our own timeout.
+	llmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 	defer cancel()
 
 	raw, err := e.aiExecutor.ExecuteStructuredTask(llmCtx, llmTask)
@@ -1034,6 +1236,13 @@ Nearby edges that may hint location/jurisdiction (best-effort):
 			Success: false,
 			Action:  "fix_iso2",
 			Error:   fmt.Sprintf("LLM iso2 inference parse/validate failed: %v", err),
+		}, nil
+	}
+	if res.Confidence < minISO2Confidence {
+		return &EnforcementResult{
+			Success: false,
+			Action:  "fix_iso2",
+			Error:   fmt.Sprintf("low_confidence_iso2_inference (conf=%.2f < %.2f): %s", res.Confidence, minISO2Confidence, strings.TrimSpace(res.Reason)),
 		}, nil
 	}
 
@@ -1082,12 +1291,88 @@ Nearby edges that may hint location/jurisdiction (best-effort):
 		e.bestEffortRewriteLensScopes(ctx, tenantID, oldPath, newPath)
 	}
 
+	// Deterministic: merge on canonicalPath collision to avoid duplicate nodes by different IDs.
+	merged, mergeCanonicalID, mergeDuplicateID := e.bestEffortMergeCanonicalPathCollision(ctx, frag.ID, newPath)
+
 	return &EnforcementResult{
 		Success:     true,
 		Action:      "fix_iso2",
 		AffectedIDs: []string{fragID},
-		Details:     fmt.Sprintf("Inferred geo token %q -> %q (conf=%.2f). %s", currentGeo, newGeo, res.Confidence, strings.TrimSpace(res.Reason)),
+		Details: func() string {
+			base := fmt.Sprintf("Inferred geo token %q -> %q (conf=%.2f). %s", currentGeo, newGeo, res.Confidence, strings.TrimSpace(res.Reason))
+			if merged && strings.TrimSpace(mergeCanonicalID) != "" && strings.TrimSpace(mergeDuplicateID) != "" {
+				base += fmt.Sprintf(" CanonicalPath collision detected; merged %s into %s.", mergeDuplicateID, mergeCanonicalID)
+			}
+			return base
+		}(),
 	}, nil
+}
+
+// bestEffortMergeCanonicalPathCollision checks if another fragment already has the same canonicalPath.
+// If so, it merges the "duplicate" into the "canonical" immediately so edges converge by fragment ID.
+//
+// This is intentionally conservative and fail-open:
+// - If we cannot look up by canonicalPath, or merge fails, we just skip.
+// - We choose canonical deterministically (earlier CreatedAt; tie-break by lexicographic ID).
+func (e *EnforcementExecutor) bestEffortMergeCanonicalPathCollision(ctx context.Context, updatedFragmentID, canonicalPath string) (merged bool, canonicalID string, duplicateID string) {
+	if e == nil || e.fragmentsRepo == nil {
+		return false, "", ""
+	}
+	updatedFragmentID = strings.TrimSpace(updatedFragmentID)
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	if updatedFragmentID == "" || canonicalPath == "" {
+		return false, "", ""
+	}
+	other, err := e.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
+	if err != nil || other == nil {
+		return false, "", ""
+	}
+	if strings.TrimSpace(other.ID) == "" || strings.TrimSpace(other.ID) == updatedFragmentID {
+		return false, "", ""
+	}
+
+	// Load the updated fragment so we can deterministically select canonical vs duplicate.
+	thisFrag, err := e.fragmentsRepo.Get(ctx, updatedFragmentID)
+	if err != nil || thisFrag == nil {
+		// If we can't load, keep existing "other" as canonical and attempt to merge updated into it.
+		canonicalID = strings.TrimSpace(other.ID)
+		duplicateID = updatedFragmentID
+	} else {
+		// Deterministic selection: keep earlier CreatedAt; tie-break by lexicographic ID.
+		a := thisFrag
+		b := other
+		keepA := false
+		if a.CreatedAt.Before(b.CreatedAt) {
+			keepA = true
+		} else if a.CreatedAt.Equal(b.CreatedAt) {
+			keepA = strings.TrimSpace(a.ID) < strings.TrimSpace(b.ID)
+		}
+		if keepA {
+			canonicalID = strings.TrimSpace(a.ID)
+			duplicateID = strings.TrimSpace(b.ID)
+		} else {
+			canonicalID = strings.TrimSpace(b.ID)
+			duplicateID = strings.TrimSpace(a.ID)
+		}
+	}
+	if canonicalID == "" || duplicateID == "" || canonicalID == duplicateID {
+		return false, "", ""
+	}
+
+	// Execute merge immediately (best-effort). This will reassign edges and delete the duplicate fragment.
+	if _, err := e.executeMergeFragments(ctx, EnforcementTask{
+		Type:     TaskMergeFragments,
+		TargetID: duplicateID,
+		Params: map[string]interface{}{
+			"canonicalId": canonicalID,
+		},
+	}); err != nil {
+		log.Printf("[EnforcementExecutor] WARNING: canonicalPath collision merge failed: path=%q canonical=%q duplicate=%q err=%v",
+			canonicalPath, canonicalID, duplicateID, err)
+		return false, "", ""
+	}
+
+	return true, canonicalID, duplicateID
 }
 
 // ExecuteBatch executes all pending enforcement jobs for a parent job.
@@ -1150,10 +1435,68 @@ func (e *EnforcementExecutor) CreateEnforcementJobs(
 	violations []PolicyViolation,
 ) ([]*PolicyEnforcementJob, error) {
 	jobs := make([]*PolicyEnforcementJob, 0)
+	tenantID = strings.TrimSpace(tenantID)
+	parentJobID = strings.TrimSpace(parentJobID)
+
+	// Best-effort: avoid creating duplicate jobs within the same parent job.
+	// Also avoid re-fixing an already-fixed fragment (idempotency).
+	type existingStatus struct {
+		status  EnforcementJobStatus
+		success bool
+	}
+	existing := map[string]existingStatus{}
+	if e.enforcementRepo != nil && parentJobID != "" {
+		if prev, err := e.enforcementRepo.ListByParentJob(ctx, parentJobID, 2000); err == nil {
+			for _, pj := range prev {
+				if pj == nil {
+					continue
+				}
+				k := enforcementTaskKey(pj.Task)
+				if k == "" {
+					continue
+				}
+				st := existingStatus{status: pj.Status}
+				if pj.Result != nil {
+					st.success = pj.Result.Success
+				}
+				existing[k] = st
+			}
+		}
+	}
+	seenInBatch := map[string]struct{}{}
 
 	for _, v := range violations {
 		if !v.AutoFixable || v.SuggestedFix == nil {
 			continue
+		}
+
+		task := *v.SuggestedFix
+
+		// Idempotency guard: if org legal form is already populated in canonicalParts, don't enqueue fix_legal_form.
+		if task.Type == TaskFixLegalForm && strings.TrimSpace(task.TargetID) != "" && e.fragmentsRepo != nil {
+			if frag, err := e.fragmentsRepo.Get(ctx, strings.TrimSpace(task.TargetID)); err == nil && frag != nil {
+				if frag.CanonicalParts != nil && frag.CanonicalParts.Org != nil && strings.TrimSpace(frag.CanonicalParts.Org.LegalForm) != "" {
+					continue
+				}
+			}
+		}
+
+		key := enforcementTaskKey(task)
+		if key != "" {
+			if _, ok := seenInBatch[key]; ok {
+				continue
+			}
+			// If a successful identical task already ran for this parent job, skip.
+			if st, ok := existing[key]; ok {
+				if st.success && st.status == EnforcementStatusCompleted {
+					continue
+				}
+				// Also skip if already pending/in_progress to avoid duplicate concurrent work.
+				if st.status == EnforcementStatusPending || st.status == EnforcementStatusInProgress {
+					continue
+				}
+			}
+			seenInBatch[key] = struct{}{}
 		}
 
 		job := &PolicyEnforcementJob{
@@ -1162,7 +1505,7 @@ func (e *EnforcementExecutor) CreateEnforcementJobs(
 			ParentJobID: parentJobID,
 			ViolationID: v.ID,
 			Violation:   &v,
-			Task:        *v.SuggestedFix,
+			Task:        task,
 			Status:      EnforcementStatusPending,
 			CreatedAt:   time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
@@ -1177,6 +1520,32 @@ func (e *EnforcementExecutor) CreateEnforcementJobs(
 	}
 
 	return jobs, nil
+}
+
+func enforcementTaskKey(t EnforcementTask) string {
+	base := strings.TrimSpace(string(t.Type)) + ":" + strings.TrimSpace(t.TargetID)
+	if strings.TrimSpace(string(t.Type)) == "" || strings.TrimSpace(t.TargetID) == "" {
+		return ""
+	}
+	// Include key params to avoid collapsing distinct fixes of different kinds.
+	switch t.Type {
+	case TaskFixPath:
+		cp, _ := t.Params["correctPath"].(string)
+		reason, _ := t.Params["reason"].(string)
+		return base + ":" + strings.TrimSpace(cp) + ":" + strings.TrimSpace(reason)
+	case TaskFixISO2:
+		ns, _ := t.Params["namespace"].(string)
+		return base + ":" + strings.TrimSpace(ns)
+	case TaskFixLegalForm:
+		lf, _ := t.Params["legalForm"].(string)
+		mode, _ := t.Params["mode"].(string)
+		return base + ":" + strings.TrimSpace(lf) + ":" + strings.TrimSpace(mode)
+	case TaskCanonicalizeEdge:
+		nt, _ := t.Params["newType"].(string)
+		return base + ":" + strings.TrimSpace(nt)
+	default:
+		return base
+	}
 }
 
 // Helper functions

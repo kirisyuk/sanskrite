@@ -83,6 +83,14 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeProduces, true, true, "canonicalize: PRODUCT OWNS ORGANIZATION -> ORGANIZATION PRODUCES PRODUCT"
 	}
 
+	// OWNS(GEO_REGION → ORGANIZATION) → LOCATED_IN (swap)
+	// A location doesn't "own" an organization; best-effort intent is that the org is located in that geo.
+	if edgeType == DependencyTypeOwns &&
+		sourceType == FragmentTypeGeoRegion &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypeLocatedIn, true, true, "canonicalize: GEO_REGION OWNS ORGANIZATION -> ORGANIZATION LOCATED_IN GEO_REGION"
+	}
+
 	// EXTRACTS_FROM is strict by ontology: FACILITY -> DEPOSIT.
 	// However, in practice LLMs often emit ORG -> DEPOSIT when the specific facility is unknown.
 	// Best-effort canonicalization: treat it as ORG OPERATES_IN DEPOSIT (no loss of meaning, keeps graph usable).
@@ -148,8 +156,16 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 	// PARTICIPATES_IN(MARKET → ORG/FAC/COMMUNITY) → PARTICIPATES_IN (swap)
 	if edgeType == DependencyTypeParticipatesIn &&
 		sourceType == FragmentTypeMarket &&
-		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility || targetType == FragmentTypeCommunity) {
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility || targetType == FragmentTypeCommunity || targetType == FragmentTypeProgram) {
 		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET PARTICIPATES_IN ENTITY -> ENTITY PARTICIPATES_IN MARKET"
+	}
+
+	// OWNS(ORG → PROGRAM) → ADMINISTERS
+	// Organizations typically administer/operate programs rather than "own" them.
+	if edgeType == DependencyTypeOwns &&
+		sourceType == FragmentTypeOrganization &&
+		targetType == FragmentTypeProgram {
+		return DependencyTypeAdministers, false, true, "canonicalize: ORGANIZATION OWNS PROGRAM -> ORGANIZATION ADMINISTERS PROGRAM"
 	}
 
 	// DOMINATES(MARKET → ORG/FAC/COMMUNITY) → DOMINATES (swap)
@@ -165,6 +181,22 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		sourceType == FragmentTypeMarket &&
 		targetType == FragmentTypeProduct {
 		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET PRODUCES PRODUCT -> PRODUCT PARTICIPATES_IN MARKET"
+	}
+
+	// PRODUCES(MARKET → FACILITY) → PARTICIPATES_IN (swap)
+	// A market doesn't "produce" a facility; best-effort intent is that the facility participates in that market.
+	if edgeType == DependencyTypeProduces &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeFacility {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET PRODUCES FACILITY -> FACILITY PARTICIPATES_IN MARKET"
+	}
+
+	// LOCATED_IN(ORG → FACILITY) → OPERATES_IN
+	// LOCATED_IN is reserved for GEO_REGION targets; facilities are concrete sites/parks/complexes.
+	if edgeType == DependencyTypeLocatedIn &&
+		sourceType == FragmentTypeOrganization &&
+		targetType == FragmentTypeFacility {
+		return DependencyTypeOperatesIn, false, true, "canonicalize: ORGANIZATION LOCATED_IN FACILITY -> ORGANIZATION OPERATES_IN FACILITY"
 	}
 
 	// SUPPLIES_TO(PRODUCT → PRODUCT) → TRANSFORMS_INTO

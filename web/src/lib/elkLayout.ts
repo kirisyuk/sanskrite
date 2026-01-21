@@ -1488,8 +1488,17 @@ export async function layoutLevelsTwoPane<T = any>(
   const PAD_TOP = compactLeftPane ? 34 : 28;
   const PAD_BOTTOM_BASE = 20;
   const REL_SUBTITLE_H = 14; // space for relation subtitles (only used when group is large)
+  // Visual padding inside relation subcategory containers so nodes don't touch divider lines.
+  // Kept deterministic (constant), independent of zoom.
+  const LEFT_REL_CONTAINER_PAD_X = 14;
   // Keep left-group grids compact regardless of right-hierarchy spacing.
-  const groupChildGapX = Math.min(40, nodeSpacing);
+  // IMPORTANT:
+  // In compact left pane we render relation/type subcategories as real containers with dividers,
+  // and there is no explicit inter-block gap (see interRelGapX/interBlockGapX = 0).
+  // So the visual "gap" between the last node in subcategory A and the first node in subcategory B
+  // is effectively `2 * LEFT_REL_CONTAINER_PAD_X`. To avoid the UX oddity where nodes are closer
+  // across subcategory boundaries than within a subcategory, match the intra-grid gap to that value.
+  const groupChildGapX = compactLeftPane ? LEFT_REL_CONTAINER_PAD_X * 2 : Math.min(40, nodeSpacing);
   // Compact nodes should pack tighter (left pane only). Mixed rows will auto-expand as needed.
   // Match the 3-per-slot invariant: 3*49 + 2*7 = 161
   const groupChildGapY = compactLeftPane ? 7 : 40;
@@ -1706,10 +1715,6 @@ export async function layoutLevelsTwoPane<T = any>(
       .replace(/\b\w/g, (c) => c.toUpperCase());
     return human.length > 18 ? `${human.slice(0, 18)}…` : human;
   };
-
-  // Visual padding inside relation subcategory containers so nodes don't touch divider lines.
-  // Kept deterministic (constant), independent of zoom.
-  const LEFT_REL_CONTAINER_PAD_X = 14;
 
   const groupDimsWrap = (children: Node<T>[], parentId: string, groupId?: string) => {
     // IMPORTANT: group grid must be computed from VISIBLE children only.

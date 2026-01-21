@@ -1379,19 +1379,19 @@ func (e *ScoutEngine) processRelationsInternal(
 			fmt.Printf("Created edge: %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
 			// Realtime: edge materialized/updated for UI graph.
 			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
-				"tenantId":         job.TenantID,
-				"projectId":        job.ProjectID,
-				"lensId":           strings.TrimSpace(job.LensID),
-				"edgeId":           edge.ID,
-				"sourceFragmentId": edge.SourceFragmentID,
-				"targetFragmentId": edge.TargetFragmentID,
+				"tenantId":            job.TenantID,
+				"projectId":           job.ProjectID,
+				"lensId":              strings.TrimSpace(job.LensID),
+				"edgeId":              edge.ID,
+				"sourceFragmentId":    edge.SourceFragmentID,
+				"targetFragmentId":    edge.TargetFragmentID,
 				"sourceCanonicalPath": strings.TrimSpace(sourceFragment.CanonicalPath),
 				"targetCanonicalPath": strings.TrimSpace(targetPath),
 				"sourceLabel":         strings.TrimSpace(sourceFragment.Labels["en"]),
 				"targetLabel":         strings.TrimSpace(firstNonEmpty(rel.TargetShortName, rel.TargetName, rel.TargetLegalName)),
-				"type":             string(edge.Type),
-				"properties":       edge.Properties,
-				"qualifiers":       edge.Qualifiers,
+				"type":                string(edge.Type),
+				"properties":          edge.Properties,
+				"qualifiers":          edge.Qualifiers,
 			})
 		}
 	}
@@ -1963,6 +1963,28 @@ func (e *ScoutEngine) processSupplyChains(
 			createdFrags, updatedFrags, createErrors, createdEdges, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, len(gapHints))
 		fmt.Printf("%s\n", msg)
 		e.logLine(ctx, job, "info", msg)
+	}
+
+	// Best-effort: rewrite lens scope entries if any canonical paths were normalized/deduplicated
+	// during supply-chain persistence.
+	if strings.TrimSpace(lensID) != "" && job != nil && len(pathRewrites) > 0 {
+		tenantID := strings.TrimSpace(job.TenantID)
+		if tenantID != "" {
+			seen := map[string]struct{}{}
+			for from, to := range pathRewrites {
+				from = strings.TrimSpace(from)
+				to = strings.TrimSpace(to)
+				if from == "" || to == "" || from == to {
+					continue
+				}
+				k := from + "->" + to
+				if _, ok := seen[k]; ok {
+					continue
+				}
+				seen[k] = struct{}{}
+				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, from, to)
+			}
+		}
 	}
 
 	return nil

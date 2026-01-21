@@ -44,9 +44,32 @@ type GeoCanonicalRules struct {
 func DefaultCanonicalRules() CanonicalRules {
 	return CanonicalRules{
 		Org: OrgCanonicalRules{
-			Format:     "/org/{iso2|na}/{slug}-{legal_form}",
-			LegalForms: []string{"inc", "llc", "jsc", "pjsc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa", "as", "ab"},
-			Example:    "/org/us/tesla-inc",
+			Format: "/org/{iso2|na}/{slug}-{legal_form}",
+			// NOTE: legal_form tokens are a compact allowlist used by:
+			// - LLM prompts (canonicalization + enforcement)
+			// - deterministic suffix parsing in canonical_parts.go
+			//
+			// This is not meant to be exhaustive, but it must cover common national corporate forms.
+			LegalForms: []string{
+				// US/UK & generic
+				"inc", "llc", "corp", "ltd", "plc", "llp", "lp",
+				// Civil law / EU common
+				"gmbh", "ag", "sarl", "srl", "sa", "sas", "sasu", "spa", "bv", "nv",
+				// Luxembourg / partnerships / funds (common in holding structures)
+				"scs", "sca", "snc", "senc",
+				// Nordics
+				"as", "asa", "ab", // NO/SE/DK common
+				// Norway cooperative / association forms are covered by "sa" above (often written "... SA")
+				// CEE/EEU / post-soviet
+				"jsc", "pjsc", "ao", "oao", "zao", "ooo",
+				// APAC
+				"kk", "oy", "oyj", "pteltd",
+				// LATAM / other
+				"ltda", "sdnbhd", "ptyltd", "spzoo",
+				// Ireland / common offshore-ish corporate suffixes
+				"dac", "teo", "ulc",
+			},
+			Example: "/org/us/tesla-inc",
 		},
 		Gov: GovCanonicalRules{
 			Format:  "/gov/{iso2|na}/{slug}",
@@ -84,8 +107,8 @@ func DefaultCanonicalRules() CanonicalRules {
 				"manufacturing",
 				"assembly",
 			},
-			Example:    "/product/raw/mineral/refining/lithium-carbonate",
-			Fallback:   "/product/{slug}",
+			Example:  "/product/raw/mineral/refining/lithium-carbonate",
+			Fallback: "/product/{slug}",
 		},
 		Geo: GeoCanonicalRules{
 			Format:  "/loc/{cc}/{admin1}/{city}",

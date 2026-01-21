@@ -482,44 +482,55 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 	var violations []PolicyViolation
 	path := frag.CanonicalPath
 
-	valid, reason := pc.taxonomyRules.ValidateOrgPath(path)
-	if !valid {
-		v := PolicyViolation{
-			ID:          uuid.New().String(),
-			Type:        ViolationMissingLegalForm,
-			Severity:    SeverityWarning,
-			FragmentID:  frag.ID,
-			ActualValue: path,
-			Rule:        "org_legal_form",
-			Description: reason,
-			Confidence:  0.9,
-			AutoFixable: false,
-			DetectedAt:  time.Now(),
-			DetectedBy:  "deterministic",
+	// If canonicalParts already has legal form, treat legal-form enforcement as already applied.
+	// We intentionally do NOT try to "fix again" even if the string path is stale or the allowlist
+	// does not cover some national form: a populated struct is a strong signal the system already
+	// checked and decided on legalForm.
+	hasLegalForm := false
+	if frag != nil && frag.CanonicalParts != nil && frag.CanonicalParts.Org != nil {
+		if strings.TrimSpace(frag.CanonicalParts.Org.LegalForm) != "" {
+			hasLegalForm = true
 		}
+	}
 
-		// Try to suggest fix based on legalName
-		// Prefer legalName, but fall back to label/shortName when legalName is missing.
-		candNames := []string{
-			strings.TrimSpace(frag.Identifiers["legalName"]),
-			strings.TrimSpace(frag.Labels["en"]),
-			strings.TrimSpace(frag.Identifiers["shortName"]),
-		}
-		// As a last resort, try to infer from slug-like values.
-		if strings.TrimSpace(path) != "" {
-			parts := strings.Split(strings.Trim(path, "/"), "/")
-			if len(parts) > 0 {
-				candNames = append(candNames, strings.ReplaceAll(strings.TrimSpace(parts[len(parts)-1]), "-", " "))
+	if !hasLegalForm {
+		valid, reason := pc.taxonomyRules.ValidateOrgPath(path)
+		if !valid {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationMissingLegalForm,
+				Severity:    SeverityWarning,
+				FragmentID:  frag.ID,
+				ActualValue: path,
+				Rule:        "org_legal_form",
+				Description: reason,
+				Confidence:  0.9,
+				AutoFixable: false,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
 			}
-		}
-		legalForm := ""
-		for _, nm := range candNames {
-			legalForm = extractLegalForm(nm)
-			if legalForm != "" {
-				break
+
+			// Try to suggest fix based on legalName
+			// Prefer legalName, but fall back to label/shortName when legalName is missing.
+			candNames := []string{
+				strings.TrimSpace(frag.Identifiers["legalName"]),
+				strings.TrimSpace(frag.Labels["en"]),
+				strings.TrimSpace(frag.Identifiers["shortName"]),
 			}
-		}
-		if legalForm != "" {
+			// As a last resort, try to infer from slug-like values.
+			if strings.TrimSpace(path) != "" {
+				parts := strings.Split(strings.Trim(path, "/"), "/")
+				if len(parts) > 0 {
+					candNames = append(candNames, strings.ReplaceAll(strings.TrimSpace(parts[len(parts)-1]), "-", " "))
+				}
+			}
+			legalForm := ""
+			for _, nm := range candNames {
+				legalForm = extractLegalForm(nm)
+				if legalForm != "" {
+					break
+				}
+			}
 			if legalForm != "" {
 				parts := strings.Split(strings.Trim(path, "/"), "/")
 				if len(parts) >= 2 {
@@ -539,10 +550,23 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 						v.AutoFixable = true
 					}
 				}
+			} else {
+				// If we cannot deterministically infer legal form from known suffixes, enqueue an LLM-based fix.
+				// The enforcement executor will infer the most likely legal form and update canonicalParts selectively.
+				v.AutoFixable = true
+				v.Confidence = 0.7
+				v.SuggestedFix = &EnforcementTask{
+					Type:     TaskFixLegalForm,
+					TargetID: frag.ID,
+					Params: map[string]interface{}{
+						"currentPath": path,
+						"mode":        "infer_legal_form_llm",
+					},
+				}
 			}
-		}
 
-		violations = append(violations, v)
+			violations = append(violations, v)
+		}
 	}
 
 	// Check ISO2 validity
@@ -904,6 +928,235 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 	// Check edge direction
 	isValid, shouldReverse, reason := pc.taxonomyRules.ValidateEdgeDirection(edge.Type, sourceType, targetType)
 	if !isValid {
+		// Auto-fix: GEO_REGION → MARKET with DOMINATES is a modeling error.
+		// A location can't "dominate" a market in our ontology; best-effort: treat as GEO influences the market.
+		if !shouldReverse &&
+			edge.Type == horizonmodels.DependencyType("DOMINATES") &&
+			sourceType == horizonmodels.FragmentTypeGeoRegion &&
+			targetType == horizonmodels.FragmentTypeMarket {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationEdgeDirection,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				Rule:        "edge_direction",
+				Description: "Edge DOMINATES is invalid for GEO_REGION → MARKET. Auto-fix: rewrite edge type to INFLUENCES.",
+				Confidence:  0.9,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
+			v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, "INFLUENCES")
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskCanonicalizeEdge,
+				TargetID: edge.ID,
+				Params: map[string]interface{}{
+					"newType":    "INFLUENCES",
+					"shouldSwap": false,
+				},
+			}
+			violations = append(violations, v)
+			return violations
+		}
+
+		// Auto-fix: ORGANIZATION → PROGRAM with OWNS is typically "administers" (government program).
+		if !shouldReverse &&
+			edge.Type == horizonmodels.DependencyType("OWNS") &&
+			sourceType == horizonmodels.FragmentTypeOrganization &&
+			targetType == horizonmodels.FragmentTypeProgram {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationEdgeDirection,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				Rule:        "edge_direction",
+				Description: "Edge OWNS is invalid for ORGANIZATION → PROGRAM. Auto-fix: rewrite edge type to ADMINISTERS.",
+				Confidence:  0.95,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
+			v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, "ADMINISTERS")
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskCanonicalizeEdge,
+				TargetID: edge.ID,
+				Params: map[string]interface{}{
+					"newType":    "ADMINISTERS",
+					"shouldSwap": false,
+				},
+			}
+			violations = append(violations, v)
+			return violations
+		}
+
+		// Auto-fix: MARKET → ORGANIZATION with INVESTS_IN is almost always reversed semantics.
+		// A market cannot "invest in" an organization; instead an organization participates in a market.
+		// Rewrite to ORGANIZATION → MARKET [PARTICIPATES_IN] (swap + type change).
+		if !shouldReverse &&
+			edge.Type == horizonmodels.DependencyType("INVESTS_IN") &&
+			sourceType == horizonmodels.FragmentTypeMarket &&
+			targetType == horizonmodels.FragmentTypeOrganization {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationEdgeDirection,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				Rule:        "edge_direction",
+				Description: "Edge INVESTS_IN is invalid for MARKET → ORGANIZATION. Auto-fix: rewrite to ORGANIZATION → MARKET with edge type PARTICIPATES_IN.",
+				Confidence:  0.95,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
+			v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, "PARTICIPATES_IN")
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskCanonicalizeEdge,
+				TargetID: edge.ID,
+				Params: map[string]interface{}{
+					"newType":    "PARTICIPATES_IN",
+					"shouldSwap": true,
+				},
+			}
+			violations = append(violations, v)
+			// Avoid also emitting a critical direction violation for this obvious case.
+			return violations
+		}
+
+		// Auto-fix: MARKET → FACILITY with PRODUCES is a modeling error.
+		// A market doesn't "produce" a facility; best-effort: the facility participates in that market.
+		// Rewrite to FACILITY → MARKET [PARTICIPATES_IN] (swap + type change).
+		if !shouldReverse &&
+			edge.Type == horizonmodels.DependencyType("PRODUCES") &&
+			sourceType == horizonmodels.FragmentTypeMarket &&
+			targetType == horizonmodels.FragmentTypeFacility {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationEdgeDirection,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				Rule:        "edge_direction",
+				Description: "Edge PRODUCES is invalid for MARKET → FACILITY. Auto-fix: rewrite to FACILITY → MARKET with edge type PARTICIPATES_IN.",
+				Confidence:  0.95,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
+			v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, "PARTICIPATES_IN")
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskCanonicalizeEdge,
+				TargetID: edge.ID,
+				Params: map[string]interface{}{
+					"newType":    "PARTICIPATES_IN",
+					"shouldSwap": true,
+				},
+			}
+			violations = append(violations, v)
+			return violations
+		}
+
+		// Auto-fix: ORGANIZATION → FACILITY with LOCATED_IN is usually "operates in".
+		// LOCATED_IN is reserved for GEO_REGION targets; facilities are concrete sites/parks/complexes.
+		// Rewrite to ORGANIZATION → FACILITY [OPERATES_IN] (type change, no swap).
+		if !shouldReverse &&
+			edge.Type == horizonmodels.DependencyType("LOCATED_IN") &&
+			sourceType == horizonmodels.FragmentTypeOrganization &&
+			targetType == horizonmodels.FragmentTypeFacility {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationEdgeDirection,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				Rule:        "edge_direction",
+				Description: "Edge LOCATED_IN is invalid for ORGANIZATION → FACILITY. Auto-fix: rewrite edge type to OPERATES_IN.",
+				Confidence:  0.95,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
+			v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, "OPERATES_IN")
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskCanonicalizeEdge,
+				TargetID: edge.ID,
+				Params: map[string]interface{}{
+					"newType":    "OPERATES_IN",
+					"shouldSwap": false,
+				},
+			}
+			violations = append(violations, v)
+			return violations
+		}
+
+		// Auto-fix: GEO_REGION → ORGANIZATION with OWNS is almost always a "located in" mistake.
+		// A location doesn't "own" an org; best-effort intent: ORG is located in that GEO_REGION.
+		// Rewrite to ORGANIZATION → GEO_REGION [LOCATED_IN] (swap + type change).
+		if !shouldReverse &&
+			edge.Type == horizonmodels.DependencyType("OWNS") &&
+			sourceType == horizonmodels.FragmentTypeGeoRegion &&
+			targetType == horizonmodels.FragmentTypeOrganization {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationEdgeDirection,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				Rule:        "edge_direction",
+				Description: "Edge OWNS is invalid for GEO_REGION → ORGANIZATION. Auto-fix: rewrite to ORGANIZATION → GEO_REGION with edge type LOCATED_IN.",
+				Confidence:  0.95,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
+			v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, "LOCATED_IN")
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskCanonicalizeEdge,
+				TargetID: edge.ID,
+				Params: map[string]interface{}{
+					"newType":    "LOCATED_IN",
+					"shouldSwap": true,
+				},
+			}
+			violations = append(violations, v)
+			return violations
+		}
+
+		// Special-case auto-fix: dynasties/communities often "own" orgs semantically as "controls".
+		// This is an obvious, safe rewrite for COMMON case: COMMUNITY → ORGANIZATION with OWNS.
+		if !shouldReverse &&
+			edge.Type == horizonmodels.DependencyType("OWNS") &&
+			sourceType == horizonmodels.FragmentTypeCommunity &&
+			targetType == horizonmodels.FragmentTypeOrganization {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationEdgeDirection,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				Rule:        "edge_direction",
+				Description: "Edge OWNS is invalid for COMMUNITY → ORGANIZATION. Auto-fix: rewrite to CONTROLS (dynasty/community controlling an organization).",
+				Confidence:  0.95,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
+			v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, "CONTROLS")
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskCanonicalizeEdge,
+				TargetID: edge.ID,
+				Params: map[string]interface{}{
+					"newType":    "CONTROLS",
+					"shouldSwap": false,
+				},
+			}
+			violations = append(violations, v)
+			// Don't also emit a separate critical direction violation for this case.
+			return violations
+		}
+
 		severity := SeverityWarning
 		if shouldReverse {
 			severity = SeverityWarning // Reversible = less severe
@@ -1360,7 +1613,7 @@ func slugify(s string) string {
 
 func extractLegalForm(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
-	legalForms := []string{"inc", "llc", "jsc", "pjsc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa", "as", "ab"}
+	legalForms := taxonomy.DefaultCanonicalRules().Org.LegalForms
 
 	// Also handle slug-like forms (e.g., "lynas-rare-earths-ltd") and punctuation.
 	slug := strings.ReplaceAll(name, ".", "")

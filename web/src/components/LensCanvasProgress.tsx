@@ -90,6 +90,8 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
 }) => {
   const events = useHorizonRealtimeStore((s) => s.events);
   const feedRef = React.useRef<HTMLDivElement | null>(null);
+  const pinnedToBottomRef = React.useRef<boolean>(true);
+  const [pinnedToBottom, setPinnedToBottom] = React.useState<boolean>(true);
 
   // Filter events by lensId and projectId
   // Show events that match the lensId/projectId
@@ -137,12 +139,35 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
     return base;
   }, [events, lensId, projectId, isCreatingLens, activeCreateCorrelationId, activeCreateSessionId]);
 
-  // Auto-scroll to bottom when new events arrive
+  const updatePinnedState = React.useCallback(() => {
+    const el = feedRef.current;
+    if (!el) return;
+    // If the user is within N px of the bottom, treat it as "pinned".
+    const thresholdPx = 64;
+    const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const nextPinned = remaining <= thresholdPx;
+    if (nextPinned !== pinnedToBottomRef.current) {
+      pinnedToBottomRef.current = nextPinned;
+      setPinnedToBottom(nextPinned);
+    }
+  }, []);
+
+  // Auto-scroll to bottom when new events arrive, but only if user is pinned to the bottom.
   React.useEffect(() => {
     const el = feedRef.current;
     if (!el) return;
+    if (!pinnedToBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
   }, [filteredEvents.length]);
+
+  // When switching lens / creation session, pin to bottom by default.
+  React.useEffect(() => {
+    pinnedToBottomRef.current = true;
+    setPinnedToBottom(true);
+    const el = feedRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [lensId, projectId, isCreatingLens, activeCreateCorrelationId, activeCreateSessionId]);
 
   const handleAssemble = React.useCallback((request: AssembleLensRequest) => {
     if (onAssemble) {
@@ -189,6 +214,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
       {isContentActive && (
         <div
           ref={feedRef}
+          onScroll={updatePinnedState}
           style={{
             flex: 1,
             minHeight: 0,
@@ -200,6 +226,31 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
           {/* Constrain width to match input field below */}
           <div style={{ maxWidth: 960, margin: '0 auto', position: 'relative', paddingLeft: 36 }}>
             <div style={{ position: 'sticky', top: 0, zIndex: 2, display: 'flex', justifyContent: 'flex-end', paddingBottom: 8 }}>
+              {!pinnedToBottom && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    pinnedToBottomRef.current = true;
+                    setPinnedToBottom(true);
+                    const el = feedRef.current;
+                    if (!el) return;
+                    el.scrollTop = el.scrollHeight;
+                  }}
+                  style={{
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-elevated)',
+                    color: 'var(--text-secondary-strong)',
+                    borderRadius: 6,
+                    padding: '6px 10px',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    marginRight: 8,
+                  }}
+                  title="Jump to latest"
+                >
+                  Jump to latest
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleSaveLog}

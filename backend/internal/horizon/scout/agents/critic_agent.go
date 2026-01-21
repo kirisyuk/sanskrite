@@ -131,9 +131,14 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 	canonicalValidationBlock := fmt.Sprintf(`  MANDATORY - Canonical path validation (for fragment AND relations):
     - For the main fragment and EACH relation targetCanonicalPath:
       - If path is /org/... ensure it is %s; otherwise add a question:
-        - "Confirm legal name, jurisdiction (ISO2), and canonical org path for <entity>. REQUIRED FORMAT: %s where iso2 is ISO3166-1 alpha2 lowercase; slug is hyphenated English name; legal_form suffix in {%s}. Example: %s."
+        - "Confirm official legal name, jurisdiction (ISO2), and canonical org path for <entity>. REQUIRED FORMAT: %s where iso2 is ISO3166-1 alpha2 lowercase; slug is hyphenated base name; legal_form is a SUFFIX token in {%s} (e.g., /org/us/tesla-inc). Do NOT rewrite names as 'JSC X' — keep official ordering from sources; legal_form belongs at the end of canonicalPath and in canonicalParts.Org.LegalForm."
       - If path is /gov/... ensure it is %s; otherwise add a question:
         - "Which country/jurisdiction does this government body belong to? REQUIRED FORMAT: %s with iso2 ISO3166-1 alpha2 lowercase, slug hyphenated English name. Example: %s."
+      - GOV NAMING (CRITICAL for /gov/...):
+        - Ensure the government body has BOTH:
+          - labels.en: readable English name (translation if official English exists; otherwise careful transliteration)
+          - identifiers.legalName: official name as in primary source/registry (often native script)
+        - If native language/script is known, also ensure labels.<iso639> is present (e.g., labels.th, labels.ms, labels.ar).
       - If path is /product/... ensure it is either %s or %s; otherwise add a question:
         - "Resolve canonical product taxonomy for <product>. REQUIRED FORMAT: %s (or %s if unknown). category∈{%s}; type∈{%s}; stage∈{%s}. Example: %s."
       - If path is /loc/... ensure it is %s; otherwise add a question:
@@ -143,7 +148,6 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 		canonicalRules.Org.Format,
 		canonicalRules.Org.Format,
 		strings.Join(canonicalRules.Org.LegalForms, ", "),
-		canonicalRules.Org.Example,
 		canonicalRules.Gov.Format,
 		canonicalRules.Gov.Format,
 		canonicalRules.Gov.Example,

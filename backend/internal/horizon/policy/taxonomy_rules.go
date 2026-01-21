@@ -16,15 +16,15 @@ import (
 
 // TaxonomyRules contains all taxonomy rules for policy enforcement.
 type TaxonomyRules struct {
-	Geo            GeoTaxonomyRules            `json:"geo" yaml:"geo"`
-	Org            OrgTaxonomyRules            `json:"org" yaml:"org"`
-	Gov            GovTaxonomyRules            `json:"gov" yaml:"gov"`
-	Person         PersonTaxonomyRules         `json:"person" yaml:"person"`
-	Product        ProductTaxonomyRules        `json:"product" yaml:"product"`
-	Facility       FacilityTaxonomyRules       `json:"facility" yaml:"facility"`
-	Market         MarketTaxonomyRules         `json:"market" yaml:"market"`
-	EdgeDirection  EdgeDirectionRulesLLM       `json:"edgeDirection" yaml:"edgeDirection"`
-	SymmetricEdges []string                    `json:"symmetricEdges" yaml:"symmetricEdges"`
+	Geo            GeoTaxonomyRules      `json:"geo" yaml:"geo"`
+	Org            OrgTaxonomyRules      `json:"org" yaml:"org"`
+	Gov            GovTaxonomyRules      `json:"gov" yaml:"gov"`
+	Person         PersonTaxonomyRules   `json:"person" yaml:"person"`
+	Product        ProductTaxonomyRules  `json:"product" yaml:"product"`
+	Facility       FacilityTaxonomyRules `json:"facility" yaml:"facility"`
+	Market         MarketTaxonomyRules   `json:"market" yaml:"market"`
+	EdgeDirection  EdgeDirectionRulesLLM `json:"edgeDirection" yaml:"edgeDirection"`
+	SymmetricEdges []string              `json:"symmetricEdges" yaml:"symmetricEdges"`
 }
 
 // GeoTaxonomyRules defines rules for GEO_REGION canonical paths.
@@ -109,16 +109,16 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 			Admin1Source: "geonames",
 			Examples: Examples{
 				Correct: []string{
-					"/loc/ae/01/dubai",       // Dubai emirate = admin1 code "01"
-					"/loc/sa/01/riyadh",      // Riyadh province = "01"
-					"/loc/ae/na/na",          // Country-level UAE
-					"/loc/us/tx/austin",      // Texas, Austin
-					"/loc/ru/mow/moscow",     // Moscow city
+					"/loc/ae/01/dubai",   // Dubai emirate = admin1 code "01"
+					"/loc/sa/01/riyadh",  // Riyadh province = "01"
+					"/loc/ae/na/na",      // Country-level UAE
+					"/loc/us/tx/austin",  // Texas, Austin
+					"/loc/ru/mow/moscow", // Moscow city
 				},
 				Incorrect: []string{
-					"/loc/ae/du/dubai",       // "du" is not GeoNames admin code
-					"/loc/ae/dubai/dubai",    // city name in admin1 slot
-					"/loc/uae/na/na",         // "uae" is not valid ISO2
+					"/loc/ae/du/dubai",        // "du" is not GeoNames admin code
+					"/loc/ae/dubai/dubai",     // city name in admin1 slot
+					"/loc/uae/na/na",          // "uae" is not valid ISO2
 					"/loc/saudi-arabia/na/na", // country name instead of ISO2
 				},
 			},
@@ -135,9 +135,9 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 					"/org/de/siemens-ag",
 				},
 				Incorrect: []string{
-					"/org/saudi-aramco",      // missing iso2 and legal form
-					"/org/sa/aramco",         // missing legal form
-					"/org/aramco-jsc",        // missing iso2
+					"/org/saudi-aramco",       // missing iso2 and legal form
+					"/org/sa/aramco",          // missing legal form
+					"/org/aramco-jsc",         // missing iso2
 					"/org/na/unknown-company", // "na" only when jurisdiction unknown
 				},
 			},
@@ -170,8 +170,8 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 					"/person/dr-tedros-adhanom",
 				},
 				Incorrect: []string{
-					"/person/us/elon-musk",    // geo token not allowed
-					"/person/ae/tahnoon",      // geo token not allowed
+					"/person/us/elon-musk", // geo token not allowed
+					"/person/ae/tahnoon",   // geo token not allowed
 				},
 			},
 		},
@@ -187,7 +187,7 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 					"/product/component/electronic/manufacturing/battery-cells",
 				},
 				Incorrect: []string{
-					"/product/lithium",        // missing taxonomy segments
+					"/product/lithium",           // missing taxonomy segments
 					"/product/org/tesla/model-s", // org prefix not allowed
 				},
 			},
@@ -216,8 +216,8 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 					"/market/global/technology/semiconductors",
 				},
 				Incorrect: []string{
-					"/market/banking",         // missing geo and domain
-					"/market/sa/banking",      // missing domain segment
+					"/market/banking",    // missing geo and domain
+					"/market/sa/banking", // missing domain segment
 				},
 			},
 		},
@@ -228,15 +228,18 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "KEY_PERSON", Direction: "PERSON → ORGANIZATION", ValidSource: []string{"PERSON"}, ValidTarget: []string{"ORGANIZATION"}},
 				{EdgeType: "FOUNDED", Direction: "PERSON|ORG → ORGANIZATION|PROGRAM", ValidSource: []string{"PERSON", "ORGANIZATION"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM"}},
 				{EdgeType: "OWNS", Direction: "ORG|PERSON → ORG|FACILITY|PRODUCT|DEPOSIT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "DEPOSIT"}},
-				{EdgeType: "CONTROLS", Direction: "ORG|PERSON → ORG|FACILITY", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"ORGANIZATION", "FACILITY"}},
+				// COMMUNITY can also be an actor (e.g., dynasty) that controls organizations/facilities.
+				{EdgeType: "CONTROLS", Direction: "ORG|PERSON|COMMUNITY → ORG|FACILITY", ValidSource: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY"}},
 				{EdgeType: "REGULATES", Direction: "ORGANIZATION → *", ValidSource: []string{"ORGANIZATION"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "MARKET"}},
-				{EdgeType: "LOCATED_IN", Direction: "* → GEO_REGION", ValidSource: []string{"FACILITY", "ORGANIZATION", "PERSON", "PRODUCT", "GEO_REGION", "DEPOSIT", "COMMUNITY"}, ValidTarget: []string{"GEO_REGION"}},
+				// PROGRAM can also be located in a GEO region (e.g., incubator/government program operating in a city).
+				{EdgeType: "LOCATED_IN", Direction: "* → GEO_REGION", ValidSource: []string{"FACILITY", "ORGANIZATION", "PERSON", "PRODUCT", "PROGRAM", "GEO_REGION", "DEPOSIT", "COMMUNITY"}, ValidTarget: []string{"GEO_REGION"}},
 				{EdgeType: "OPERATES_IN", Direction: "ORGANIZATION|PERSON → GEO_REGION|FACILITY|DEPOSIT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"GEO_REGION", "FACILITY", "DEPOSIT"}},
 				{EdgeType: "SUPPLIES_TO", Direction: "ORG|FACILITY → ORG|FACILITY", ValidSource: []string{"ORGANIZATION", "FACILITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY"}},
 				{EdgeType: "PRODUCES", Direction: "ORG|FACILITY|DEPOSIT → PRODUCT", ValidSource: []string{"ORGANIZATION", "FACILITY", "DEPOSIT"}, ValidTarget: []string{"PRODUCT"}},
 				{EdgeType: "CONSUMES", Direction: "ORG|FACILITY|PRODUCT → PRODUCT", ValidSource: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}, ValidTarget: []string{"PRODUCT"}},
 				{EdgeType: "INVESTS_IN", Direction: "ORG|PERSON → ORG|PROGRAM|PRODUCT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "PRODUCT"}},
-				{EdgeType: "PARTICIPATES_IN", Direction: "ORG|FACILITY|COMMUNITY|PRODUCT → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PRODUCT"}, ValidTarget: []string{"MARKET"}},
+				// PROGRAM can participate in markets (e.g., government programs active in a sector/segment).
+				{EdgeType: "PARTICIPATES_IN", Direction: "ORG|FACILITY|COMMUNITY|PRODUCT|PROGRAM → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PRODUCT", "PROGRAM"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "DOMINATES", Direction: "ORG|FACILITY|COMMUNITY → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "HAS_SUBMARKET", Direction: "MARKET → MARKET", ValidSource: []string{"MARKET"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "ADMINISTERS", Direction: "ORGANIZATION|GEO_REGION → ORGANIZATION|PROGRAM|GEO_REGION", ValidSource: []string{"ORGANIZATION", "GEO_REGION"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "GEO_REGION"}, Description: "Government hierarchy"},

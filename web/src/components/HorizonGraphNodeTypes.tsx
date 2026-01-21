@@ -2905,6 +2905,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     : 0;
 
   const isLevelsRight = String((data as any)?.levelsPane || '') === 'right';
+  const isLevelsLeft = String((data as any)?.levelsPane || '') === 'left';
   const rightFiltersOpen = Boolean((data as any)?.rightFiltersOpen);
   const canRightFilters = isLevelsRight && typeof (data as any)?.onOpenRightFilters === 'function' && typeof (data as any)?.onToggleRightFilter === 'function';
   const rfHideParents = Boolean((data as any)?.rightFilterHideLoneParents);
@@ -2953,9 +2954,14 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const textColor = theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.88)';
   const mutedTextColor = theme === 'dark' ? 'rgba(255,255,255,0.62)' : 'rgba(15,23,42,0.56)';
   // Stack controllers: calm single-surface fill (no gradients).
+  // Left pane groups: lighter background (1 tone lighter for better visibility)
   const surfaceBg = isCollapsedStackController
-    ? (theme === 'dark' ? 'rgba(17,24,39,0.94)' : 'rgba(255,255,255,0.98)')
-    : (theme === 'dark' ? 'rgba(17,24,39,0.90)' : 'rgba(255,255,255,0.96)');
+    ? (isLevelsLeft
+        ? (theme === 'dark' ? 'rgba(27,34,49,0.94)' : 'rgba(255,255,255,0.99)')
+        : (theme === 'dark' ? 'rgba(17,24,39,0.94)' : 'rgba(255,255,255,0.98)'))
+    : (isLevelsLeft
+        ? (theme === 'dark' ? 'rgba(27,34,49,0.90)' : 'rgba(255,255,255,0.98)')
+        : (theme === 'dark' ? 'rgba(17,24,39,0.90)' : 'rgba(255,255,255,0.96)'));
   const surfaceBorder = isCollapsedStackController
     ? (theme === 'dark' ? 'rgba(148,163,184,0.28)' : 'rgba(100,116,139,0.24)') // light graphite
     : (theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)');
@@ -2970,6 +2976,17 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const shadowBase = theme === 'dark' ? '0 8px 22px rgba(0,0,0,0.30)' : '0 8px 22px rgba(0,0,0,0.10)';
   const criticalRing = hexToRgba('#EF4444', theme === 'dark' ? 0.55 : 0.35);
   const q = getHorizonNodeVisualQuality();
+
+  // ReactFlow selects nodes on pointer/mouse down. For in-node controls (expand/collapse, stack toggles)
+  // we want the action without implicitly selecting the node (selection triggers edge highlighting).
+  const stopNodeSelectEvent = React.useCallback((e: any) => {
+    try {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Additional semantic highlights:
   // - Ultimate beneficiaries (PERSON) on upward control traversal: greenish ring
@@ -3278,8 +3295,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               {showExpand && (
                 <button
                   type="button"
+                  onPointerDown={stopNodeSelectEvent as any}
+                  onMouseDown={stopNodeSelectEvent as any}
                   onClick={(e) => {
-                    e.stopPropagation();
+                    stopNodeSelectEvent(e);
                     if (!canExpandClick) return;
                     if (data.fragmentId && data.onLoadRelated) {
                       data.onLoadRelated(data.fragmentId);
@@ -3335,8 +3354,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               {canCollapse && (
                 <button
                   type="button"
+                  onPointerDown={stopNodeSelectEvent as any}
+                  onMouseDown={stopNodeSelectEvent as any}
                   onClick={(e) => {
-                    e.stopPropagation();
+                    stopNodeSelectEvent(e);
                     if (data.fragmentId && data.onCollapse) {
                       data.onCollapse(data.fragmentId);
                     }
@@ -4463,8 +4484,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           {isSubcategoryStackController && canToggleStack && typeof stackCount === 'number' && (
             <button
               type="button"
+              onPointerDown={stopNodeSelectEvent as any}
+              onMouseDown={stopNodeSelectEvent as any}
               onClick={(e) => {
-                e.stopPropagation();
+                stopNodeSelectEvent(e);
                 const cb = (data as any)?.onToggleStack as ((k: string, next: boolean) => void) | undefined;
                 cb?.(stackKey, true);
               }}
@@ -4497,8 +4520,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           {showExpand && (
             <button
               type="button"
+              onPointerDown={stopNodeSelectEvent as any}
+              onMouseDown={stopNodeSelectEvent as any}
               onClick={(e) => {
-                e.stopPropagation();
+                stopNodeSelectEvent(e);
                 if (!canExpandClick) return;
                 if (data.fragmentId && data.onLoadRelated) {
                   data.onLoadRelated(data.fragmentId);
@@ -4553,8 +4578,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           {canCollapse && (
             <button
               type="button"
+              onPointerDown={stopNodeSelectEvent as any}
+              onMouseDown={stopNodeSelectEvent as any}
               onClick={(e) => {
-                e.stopPropagation();
+                stopNodeSelectEvent(e);
                 if (data.fragmentId && data.onCollapse) {
                   data.onCollapse(data.fragmentId);
                 }

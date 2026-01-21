@@ -390,6 +390,21 @@ Name Normalization Rules:
   - fragment.identifiers.legalName (and/or fragment.labels.en): legal/official name including ownership suffix if relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC...)
   - fragment.identifiers.shortName: base name without ownership suffix
 - For relations, ALWAYS provide targetLegalName and targetShortName in addition to targetName.
+  - IMPORTANT (legal form placement):
+    - Do NOT move the legal form token to the beginning of the name. Example: "JSC Tochka Bank" is WRONG.
+    - Keep the official ordering from sources/registries (often "... Bank JSC" or localized equivalents).
+    - legal_form is a SUFFIX in org canonicalPath (/org/{iso2}/{slug}-{legal_form}) and a separate field in canonicalParts.Org.LegalForm.
+  - IMPORTANT (official vs transliteration):
+    - Prefer the OFFICIAL legal name as stated by the company/registry/source.
+    - If the official legal name is not in Latin script and no established official English name exists:
+      - Keep fragment.identifiers.legalName in the original language/script if you can find it.
+      - Put a reasonable transliteration/English display name into fragment.labels.en (do NOT invent a new legalName).
+  - GOV-specific naming (CRITICAL when canonicalPath starts with /gov/):
+    - Always provide BOTH:
+      - fragment.labels.en: readable English name (translation if official English exists; otherwise careful transliteration)
+      - fragment.identifiers.legalName: official name as in primary source/registry (often native script)
+    - If you can identify the native language/script, also set fragment.labels.<iso639> (e.g., labels.th, labels.ms, labels.ar, labels.ru).
+    - Do NOT replace native official name with a translated version in identifiers.legalName. Keep translation/transliteration in labels.en.
 
 Product Canonicalization:
 - If you can resolve a more specific product name/path, update fragment.canonicalPath.
