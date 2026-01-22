@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -93,11 +94,12 @@ func (r *FragmentProfilesRepository) GetByFragmentID(ctx context.Context, fragme
 		return nil, ErrInvalidDocument
 	}
 
+	// NOTE: Prefer reliability over requiring Firestore composite indexes.
+	// Even Where(fragmentId==) + OrderBy(capturedAt) may require a composite index.
+	// We query by fragmentId only and select the latest ACTIVE profile in-memory.
 	docs, err := r.col.
 		Where("fragmentId", "==", fragmentID).
-		Where("status", "==", string(models.ProfileStatusActive)).
-		OrderBy("capturedAt", firestore.Desc).
-		Limit(1).
+		Limit(50).
 		Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
@@ -106,12 +108,25 @@ func (r *FragmentProfilesRepository) GetByFragmentID(ctx context.Context, fragme
 		return nil, ErrFragmentProfileNotFound
 	}
 
-	var profile models.FragmentProfile
-	if err := docs[0].DataTo(&profile); err != nil {
-		return nil, err
+	var best *models.FragmentProfile
+	for _, doc := range docs {
+		var profile models.FragmentProfile
+		if err := doc.DataTo(&profile); err != nil {
+			continue
+		}
+		if !strings.EqualFold(string(profile.Status), string(models.ProfileStatusActive)) {
+			continue
+		}
+		if best == nil || profile.CapturedAt.After(best.CapturedAt) {
+			p := profile
+			best = &p
+		}
 	}
 
-	return &profile, nil
+	if best == nil {
+		return nil, ErrFragmentProfileNotFound
+	}
+	return best, nil
 }
 
 // GetByCanonicalPath retrieves the latest profile by canonical path.
@@ -120,11 +135,10 @@ func (r *FragmentProfilesRepository) GetByCanonicalPath(ctx context.Context, can
 		return nil, ErrInvalidDocument
 	}
 
+	// Same rationale as GetByFragmentID: avoid composite index requirements.
 	docs, err := r.col.
 		Where("canonicalPath", "==", canonicalPath).
-		Where("status", "==", string(models.ProfileStatusActive)).
-		OrderBy("capturedAt", firestore.Desc).
-		Limit(1).
+		Limit(50).
 		Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
@@ -133,12 +147,25 @@ func (r *FragmentProfilesRepository) GetByCanonicalPath(ctx context.Context, can
 		return nil, ErrFragmentProfileNotFound
 	}
 
-	var profile models.FragmentProfile
-	if err := docs[0].DataTo(&profile); err != nil {
-		return nil, err
+	var best *models.FragmentProfile
+	for _, doc := range docs {
+		var profile models.FragmentProfile
+		if err := doc.DataTo(&profile); err != nil {
+			continue
+		}
+		if !strings.EqualFold(string(profile.Status), string(models.ProfileStatusActive)) {
+			continue
+		}
+		if best == nil || profile.CapturedAt.After(best.CapturedAt) {
+			p := profile
+			best = &p
+		}
 	}
 
-	return &profile, nil
+	if best == nil {
+		return nil, ErrFragmentProfileNotFound
+	}
+	return best, nil
 }
 
 // ListByFragmentID retrieves all profile versions for a fragment, ordered by capturedAt desc.
@@ -150,9 +177,11 @@ func (r *FragmentProfilesRepository) ListByFragmentID(ctx context.Context, fragm
 		limit = 10
 	}
 
+	// IMPORTANT:
+	// Avoid composite index requirements by NOT mixing Where(fragmentId==...) with OrderBy(capturedAt).
+	// We fetch up to `limit` docs and sort in-memory by CapturedAt desc.
 	docs, err := r.col.
 		Where("fragmentId", "==", fragmentID).
-		OrderBy("capturedAt", firestore.Desc).
 		Limit(limit).
 		Documents(ctx).GetAll()
 	if err != nil {
@@ -167,6 +196,14 @@ func (r *FragmentProfilesRepository) ListByFragmentID(ctx context.Context, fragm
 		}
 		profiles = append(profiles, &profile)
 	}
+
+	// Sort by capturedAt desc (newest first)
+	sort.Slice(profiles, func(i, j int) bool {
+		if profiles[i] == nil || profiles[j] == nil {
+			return false
+		}
+		return profiles[i].CapturedAt.After(profiles[j].CapturedAt)
+	})
 
 	return profiles, nil
 }
@@ -259,13 +296,21 @@ func (r *FragmentProfilesRepository) DeleteByFragmentID(ctx context.Context, fra
 		return ErrInvalidDocument
 	}
 
-	profiles, err := r.ListByFragmentID(ctx, fragmentID, 1000)
+	// Avoid composite index requirements: fetch by fragmentId only (no OrderBy),
+	// then delete each profile doc.
+	docs, err := r.col.
+		Where("fragmentId", "==", fragmentID).
+		Limit(1000).
+		Documents(ctx).GetAll()
 	if err != nil {
 		return err
 	}
-
-	for _, profile := range profiles {
-		if err := r.Delete(ctx, profile.ID); err != nil {
+	for _, doc := range docs {
+		if doc == nil || doc.Ref == nil {
+			continue
+		}
+		_, err := doc.Ref.Delete(ctx)
+		if err != nil {
 			return err
 		}
 	}

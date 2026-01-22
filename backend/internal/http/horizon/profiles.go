@@ -3,6 +3,7 @@ package horizon
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -101,12 +102,51 @@ func (h *ProfilesHandler) getProfileByFragmentID(w http.ResponseWriter, r *http.
 			})
 			return
 		}
-		http.Error(w, fmt.Sprintf("failed to get profile: %v", err), http.StatusInternalServerError)
+		// IMPORTANT: log server-side cause; return JSON for the UI.
+		log.Printf("[ProfilesHandler] getProfileByFragmentID failed fragmentId=%s path=%s err=%v", fragmentID, r.URL.Path, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":      "failed to get profile",
+			"fragmentId": fragmentID,
+			"details":    fmt.Sprintf("%v", err),
+		})
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(profile)
+}
+
+// deleteProfileByFragmentID deletes all profile versions for a fragment.
+// DELETE /api/horizon/fragments/{fragmentId}/profile
+func (h *ProfilesHandler) deleteProfileByFragmentID(w http.ResponseWriter, r *http.Request, fragmentID string) {
+	ctx := r.Context()
+
+	// List first to report count (best-effort; if listing fails, still attempt delete).
+	deletedCount := 0
+	if profiles, err := h.profilesRepo.ListByFragmentID(ctx, fragmentID, 1000); err == nil {
+		deletedCount = len(profiles)
+	}
+
+	if err := h.profilesRepo.DeleteByFragmentID(ctx, fragmentID); err != nil {
+		log.Printf("[ProfilesHandler] deleteProfileByFragmentID failed fragmentId=%s path=%s err=%v", fragmentID, r.URL.Path, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":      "failed to delete profile(s)",
+			"fragmentId": fragmentID,
+			"details":    fmt.Sprintf("%v", err),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":          true,
+		"fragmentId":  fragmentID,
+		"deletedCount": deletedCount,
+	})
 }
 
 // getProfileByID returns a specific profile by ID.
@@ -120,7 +160,14 @@ func (h *ProfilesHandler) getProfileByID(w http.ResponseWriter, r *http.Request,
 			http.Error(w, "profile not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, fmt.Sprintf("failed to get profile: %v", err), http.StatusInternalServerError)
+		log.Printf("[ProfilesHandler] getProfileByID failed profileId=%s path=%s err=%v", profileID, r.URL.Path, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":     "failed to get profile",
+			"profileId": profileID,
+			"details":   fmt.Sprintf("%v", err),
+		})
 		return
 	}
 
@@ -149,7 +196,15 @@ func (h *ProfilesHandler) refreshProfile(w http.ResponseWriter, r *http.Request,
 	// Generate profile
 	result, err := h.scheduler.RefreshSingleWithOptions(ctx, fragmentID, req.Force)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to generate profile: %v", err), http.StatusInternalServerError)
+		log.Printf("[ProfilesHandler] refreshProfile failed fragmentId=%s path=%s force=%v err=%v", fragmentID, r.URL.Path, req.Force, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":      "failed to generate profile",
+			"fragmentId": fragmentID,
+			"force":      req.Force,
+			"details":    fmt.Sprintf("%v", err),
+		})
 		return
 	}
 

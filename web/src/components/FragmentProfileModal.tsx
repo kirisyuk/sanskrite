@@ -13,10 +13,66 @@ export interface FragmentProfile {
     title: string;
     content: string;
     structured?: Record<string, any>;
+    datasets?: Array<{
+      id: string;
+      title: string;
+      type: 'timeseries' | 'bar' | 'pie' | 'table';
+      description?: string;
+      unit?: string;
+      currency?: string;
+      series?: Array<{
+        name?: string;
+        points: Array<{
+          x: string;
+          y: number;
+          meta?: Record<string, any>;
+        }>;
+      }>;
+      table?: {
+        columns: Array<{ id: string; title: string; format?: string }>;
+        rows: Array<Record<string, any>>;
+      } | null;
+      sources?: string[];
+      confidence?: number;
+    }>;
     sources?: string[];
     confidence: number;
     order: number;
   }>;
+  dashboard?: {
+    thesis?: string;
+    kpis?: Array<{
+      id: string;
+      label: string;
+      value: string;
+      subtext?: string;
+      trendValue?: string;
+      severity?: string;
+      confidence?: number;
+    }>;
+    scenarios?: Array<{
+      id: string;
+      name: string;
+      probability: number;
+      assumptions?: string[];
+      metrics?: Record<string, string>;
+      triggers?: string[];
+    }>;
+    watchlist?: Array<{
+      id: string;
+      indicator: string;
+      current?: string;
+      threshold?: string;
+      signal?: string;
+      frequency?: string;
+      sources?: string[];
+      confidence?: number;
+    }>;
+    charts?: FragmentProfile['sections'][string]['datasets'];
+    tables?: FragmentProfile['sections'][string]['datasets'];
+    notes?: string;
+    confidence?: number;
+  };
   generation: {
     model?: string;
     groundingUsed: boolean;
@@ -32,6 +88,7 @@ export interface FragmentProfile {
     };
     generatedAt: string;
     schemaVersion: string;
+    generationNotes?: string;
   };
   status: string;
   createdAt: string;
@@ -67,6 +124,7 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [creating, setCreating] = React.useState(false);
+  const [refreshing, setRefreshing] = React.useState(false);
 
   // Load or create profile when modal opens
   React.useEffect(() => {
@@ -103,7 +161,12 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
         setProfile(newProfile);
         setCreating(false);
       } catch (err: any) {
-        const errorMessage = err?.response?.data?.error || err?.message || 'Failed to load profile';
+        const respData = err?.response?.data;
+        const errorMessage =
+          (respData && typeof respData === 'object' && respData.error) ? String(respData.error) :
+          (typeof respData === 'string' && respData.trim() ? respData : '') ||
+          err?.message ||
+          'Failed to load profile';
         setError(errorMessage);
         setLoading(false);
         setCreating(false);
@@ -113,23 +176,58 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
     loadProfile();
   }, [open, fragmentId]);
 
+  const handleRefresh = React.useCallback(async () => {
+    if (!fragmentId) return;
+    setError(null);
+    setRefreshing(true);
+    setProfile(null);
+    try {
+      const { api } = await import('../lib/api');
+      // Best-effort: delete existing profile(s) first.
+      try {
+        await api.deleteFragmentProfile(fragmentId);
+      } catch (e: any) {
+        // If deletion fails due to auth or transient issues, surface it; otherwise proceed.
+        // (We want explicit visibility rather than silently hiding problems.)
+        const status = e?.response?.status;
+        if (status && status !== 404) {
+          throw e;
+        }
+      }
+      // Regenerate (force=true) and reload.
+      await api.refreshFragmentProfile(fragmentId, true);
+      const newProfile = await api.getFragmentProfile(fragmentId);
+      setProfile(newProfile);
+    } catch (err: any) {
+      const respData = err?.response?.data;
+      const errorMessage =
+        (respData && typeof respData === 'object' && respData.error) ? String(respData.error) :
+        (typeof respData === 'string' && respData.trim() ? respData : '') ||
+        err?.message ||
+        'Failed to refresh profile';
+      setError(errorMessage);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fragmentId]);
+
   // Close on Escape key
   React.useEffect(() => {
     if (!open) return;
 
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !loading && !creating) {
+      if (e.key === 'Escape' && !loading && !creating && !refreshing) {
         onClose();
       }
     };
 
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [open, loading, creating, onClose]);
+  }, [open, loading, creating, refreshing, onClose]);
 
   if (!open) return null;
 
-  const isLoading = loading || creating;
+  const isLoading = loading || creating || refreshing;
 
   return (
     <>
@@ -158,7 +256,11 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
           transform: 'translate(-50%, -50%)',
           width: 720,
           maxWidth: 'calc(100vw - 24px)',
+          // IMPORTANT: give the modal a definite height so the content area doesn't collapse
+          // when children renders null (e.g., during loading/refresh overlays).
+          height: 'min(720px, calc(100vh - 24px))',
           maxHeight: 'calc(100vh - 24px)',
+          minHeight: 360,
           zIndex: 2000,
           borderRadius: 16,
           border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.10)'}`,
@@ -214,43 +316,74 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
               </div>
             )}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            aria-label="Close"
-            title="Close"
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 10,
-              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
-              background: 'transparent',
-              color: 'var(--text-heading)',
-              cursor: isLoading ? 'not-allowed' : 'pointer',
-              opacity: isLoading ? 0.4 : 0.7,
-              fontSize: 18,
-              fontWeight: 900,
-              lineHeight: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              transition: 'opacity 0.2s',
-            }}
-            onMouseEnter={(e) => {
-              if (!isLoading) {
-                e.currentTarget.style.opacity = '1';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!isLoading) {
-                e.currentTarget.style.opacity = '0.7';
-              }
-            }}
-          >
-            ×
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={isLoading}
+              title="Refresh profile"
+              style={{
+                height: 32,
+                padding: '0 12px',
+                borderRadius: 10,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
+                background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)',
+                color: 'var(--text-heading)',
+                cursor: isLoading ? 'not-allowed' : 'pointer',
+                opacity: isLoading ? 0.4 : 0.85,
+                fontSize: 12,
+                fontWeight: 800,
+                lineHeight: 1,
+                flexShrink: 0,
+              }}
+              onMouseEnter={(e) => {
+                if (!isLoading) e.currentTarget.style.opacity = '1';
+              }}
+              onMouseLeave={(e) => {
+                if (!isLoading) e.currentTarget.style.opacity = '0.85';
+              }}
+            >
+              Refresh
+            </button>
+
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isLoading}
+              aria-label="Close"
+              title="Close"
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 10,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
+                background: 'transparent',
+                color: 'var(--text-heading)',
+                cursor: isLoading ? 'not-allowed' : 'pointer',
+                opacity: isLoading ? 0.4 : 0.7,
+                fontSize: 18,
+                fontWeight: 900,
+                lineHeight: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                transition: 'opacity 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                if (!isLoading) {
+                  e.currentTarget.style.opacity = '1';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isLoading) {
+                  e.currentTarget.style.opacity = '0.7';
+                }
+              }}
+            >
+              ×
+            </button>
+          </div>
         </div>
 
         {/* Content area */}
@@ -312,7 +445,7 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
                     color: 'var(--text-heading)',
                   }}
                 >
-                  {creating ? 'Generating profile...' : 'Loading profile...'}
+                  {refreshing ? 'Refreshing profile...' : creating ? 'Generating profile...' : 'Loading profile...'}
                 </div>
               </div>
             </div>

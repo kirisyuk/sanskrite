@@ -13,17 +13,21 @@ import AssembleLensRequestComponent, { AssembleLensRequest } from '../features/h
 import { api } from '../lib/api';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 import { useWebSocketConnection } from '../hooks/useWebSocketConnection';
+import { HorizonLoading } from '../components/HorizonLoading';
+import { HorizonEmptyState } from '../components/HorizonEmptyState';
 
 const HorizonPage: React.FC = () => {
   const { t } = useTranslation();
   const { currentUser } = useAuth();
   const { theme } = React.useContext(ThemeContext);
   const projects = useProjectsStore((s) => s.projects);
+  const projectsLoading = useProjectsStore((s) => s.loading);
   const fetchProjects = useProjectsStore((s) => s.fetchProjects);
   const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
   const currentProject = useProjectsStore((s) => s.currentProject);
   const deleteProject = useProjectsStore((s) => s.deleteProject);
   const updateProject = useProjectsStore((s) => s.updateProject);
+  const createProject = useProjectsStore((s) => s.createProject);
   
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
   const [showSettings, setShowSettings] = React.useState(false);
@@ -258,6 +262,20 @@ const HorizonPage: React.FC = () => {
     setSelectedLensId(null);
     saveHorizonState(null, null);
   }, [setCurrentProject, setSelectedLensId, saveHorizonState]);
+
+  const handleCreateProject = React.useCallback(async () => {
+    const name = window.prompt('Project name') || '';
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    
+    try {
+      const project = await createProject({ displayName: trimmed, view: 'horizon' });
+      const updated = await updateProject(project.id, { projectType: 'horizon' });
+      setCurrentProject(updated);
+    } catch (e) {
+      console.error('[HorizonPage] Failed to create project', e);
+    }
+  }, [createProject, updateProject, setCurrentProject]);
   
   const handleCloseAllModals = React.useCallback(() => {
     setShowSettings(false);
@@ -462,25 +480,10 @@ const HorizonPage: React.FC = () => {
                 setActiveCreateSessionId(null);
               }}
             />
+          ) : projectsLoading || !hasRestoredProject ? (
+            <HorizonLoading />
           ) : (
-            <div style={{ 
-              flex: 1,
-              display: 'flex',
-              alignItems: 'center', 
-              justifyContent: 'center',
-              padding: '2rem',
-              color: 'var(--text-secondary)'
-            }}>
-              <div style={{ textAlign: 'center' }}>
-                <h1 style={{ fontSize: '2rem', marginBottom: '1rem', color: 'var(--text-primary)' }}>
-                  Horizon
-                </h1>
-                <p>Risk monitoring and dependency analysis</p>
-                <p style={{ marginTop: '1rem', fontSize: '0.875rem' }}>
-                  Select a project from the sidebar to begin.
-                </p>
-              </div>
-            </div>
+            <HorizonEmptyState onCreateProject={handleCreateProject} />
           )}
         </div>
       </div>

@@ -1004,6 +1004,24 @@
       ]
     },
     {
+      "collectionGroup": "horizon_fragment_profiles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fragmentId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "capturedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragment_profiles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "canonicalPath", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "capturedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "horizon_enforcement_jobs",
       "queryScope": "COLLECTION",
       "fields": [

@@ -59,8 +59,6 @@ const ResearchProgressView: React.FC<{ interaction: LocalInteraction }> = ({ int
   const stageStartTimeRef = React.useRef<Record<string, number>>({});
   const [elapsedTime, setElapsedTime] = React.useState(0);
 
-  if (!progress) return null;
-
   // Type assertion to ensure TypeScript knows the full type after null check
   // Use ResearchProgressInteraction type to get the correct stage union type
   const typedProgress: {
@@ -68,18 +66,23 @@ const ResearchProgressView: React.FC<{ interaction: LocalInteraction }> = ({ int
     status: 'in_progress' | 'completed';
     subQueries?: string[];
     sourcesCount?: number;
-  } = progress;
+  } | null = progress || null;
 
   // Track stage start time for timer (using ref to persist across renders)
   React.useEffect(() => {
+    if (!typedProgress) return;
     const currentStage = typedProgress.stage;
     if (currentStage && !stageStartTimeRef.current[currentStage]) {
       stageStartTimeRef.current[currentStage] = Date.now();
     }
-  }, [typedProgress.stage]);
+  }, [typedProgress?.stage]);
 
   // Update elapsed time every second
   React.useEffect(() => {
+    if (!typedProgress) {
+      setElapsedTime(0);
+      return;
+    }
     if (typedProgress.status === 'in_progress' && typedProgress.stage) {
       const startTime = stageStartTimeRef.current[typedProgress.stage] || Date.now();
       // Set initial time immediately
@@ -92,7 +95,9 @@ const ResearchProgressView: React.FC<{ interaction: LocalInteraction }> = ({ int
     } else {
       setElapsedTime(0);
     }
-  }, [typedProgress.stage, typedProgress.status]);
+  }, [typedProgress?.stage, typedProgress?.status]);
+
+  if (!progress || !typedProgress) return null;
 
   const formatTime = (seconds: number) => {
     if (seconds < 60) return `${seconds}s`;

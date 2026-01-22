@@ -2284,6 +2284,16 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  async deleteFragmentProfile(fragmentId: string): Promise<{ ok: boolean; fragmentId: string; deletedCount?: number }> {
+    try {
+      const response = await this.client.delete(`/api/horizon/fragments/${fragmentId}/profile`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] deleteFragmentProfile error:`, error);
+      throw error;
+    }
+  }
+
   async refreshFragmentProfile(fragmentId: string, force: boolean = false): Promise<{
     profileId: string;
     fragmentId: string;

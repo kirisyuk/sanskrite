@@ -13,8 +13,12 @@ const START_MESSAGES = [
   'hatl.one',
   'Pushing boundaries',
   'That one',
-  'Unusual chat',
   'Questions you haven\'t thought of.',
+  'Mapping the landscape',
+  'From fragments to horizons',
+  'Evidence, then insight',
+  'Context becomes clarity',
+  'Find the horizon',
 ];
 
 export const AuthLoading: React.FC<AuthLoadingProps> = ({ message = 'Signing you in…' }) => {
@@ -31,14 +35,6 @@ export const AuthLoading: React.FC<AuthLoadingProps> = ({ message = 'Signing you
       return (
         <>
           hatl<span style={{ color: '#20b2aa' }}>.</span>one
-        </>
-      );
-    }
-    
-    if (randomMessage === 'Unusual chat') {
-      return (
-        <>
-          <span style={{ color: '#20b2aa' }}>Un</span>usual chat
         </>
       );
     }

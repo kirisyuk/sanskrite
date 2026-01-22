@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ThemeContext } from '../../../../components/ThemeProvider';
 import { api } from '../../../../lib/api';
+import { useProjectsStore } from '../../../../stores/projectsStore';
 
 interface AssembleLensRequestProps {
   projectId: string;
@@ -56,6 +57,7 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   pinnedBottom = false,
 }) => {
   const { theme } = React.useContext(ThemeContext);
+  const currentProject = useProjectsStore((s) => s.currentProject);
   const [inputValue, setInputValue] = useState('');
   type PrefetchEntity = { id: string; canonicalPath: string; name: string; type: string };
   const [selectedEntities, setSelectedEntities] = useState<PrefetchEntity[]>([]);
@@ -364,6 +366,27 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
 
   return (
     <div style={containerStyle}>
+      {/* Project indicator */}
+      {currentProject && currentProject.id === projectId && (
+        <div
+          style={{
+            marginBottom: 12,
+            fontSize: 13,
+            color: 'var(--text-secondary-strong)',
+            textAlign: 'center',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+          }}
+        >
+          <span style={{ color: 'var(--text-tertiary)' }}>In</span>
+          <span style={{ fontWeight: 500, color: 'var(--text-heading)' }}>
+            {currentProject.displayName || 'Untitled'}
+          </span>
+          <span style={{ color: 'var(--text-tertiary)' }}>project</span>
+        </div>
+      )}
       <div style={inputContainerStyle} ref={rootRef}>
         <div style={containerStyleForInput}>
           {/* Left Icon */}

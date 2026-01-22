@@ -1039,15 +1039,6 @@ export const Graph: React.FC = () => {
     [setEdges]
   );
   
-  // Цвета для фона графа
-  const bgColor = theme === 'dark' ? 'var(--bg-body)' : 'var(--bg-body)';
-  const bgPatternColor = theme === 'dark' ? 'var(--overlay-line-90)' : 'var(--overlay-line-90)';
-
-  // Empty state - показываем только если нет нод
-  if (reactFlowNodes.length === 0) {
-    return null; // Возвращаем null, чтобы родительский компонент мог показать empty state
-  }
-
   // Обработчик для кнопки Align - улучшенная иерархическая раскладка графа
   const handleAlign = useCallback(() => {
     console.log('[Graph] Arrange button clicked');
@@ -1328,6 +1319,15 @@ export const Graph: React.FC = () => {
       }),
     });
   }, [reactFlowNodes, reactFlowEdges, setNodes]);
+  
+  // Цвета для фона графа
+  const bgColor = theme === 'dark' ? 'var(--bg-body)' : 'var(--bg-body)';
+  const bgPatternColor = theme === 'dark' ? 'var(--overlay-line-90)' : 'var(--overlay-line-90)';
+
+  // Empty state - показываем только если нет нод
+  if (reactFlowNodes.length === 0) {
+    return null; // Возвращаем null, чтобы родительский компонент мог показать empty state
+  }
 
   return (
     <div 

@@ -1210,6 +1210,21 @@
     - Формат документа: JSON с `content` (base64 encoded) и `structData` (metadata: fragmentId, fragmentType, canonicalPath, status, capturedAt и т.д.)
     - Вызывать экспорт в `Create()` после успешного сохранения в Firestore (асинхронно, не блокируя основной поток)
     - Преимущества: профили станут доступны для семантического поиска, единообразие с другими сущностями системы, возможность поиска по содержимому профилей (overview, financials, leadership и т.д.)
+  - **Вернуть “правильный” ордеринг/фильтрацию профилей средствами БД (Firestore)**
+    - Контекст: из‑за отсутствующих composite indexes часть запросов к `horizon_fragment_profiles` была переведена на **in-memory сортировку** (workaround), чтобы избежать `FAILED_PRECONDITION: The query requires an index`.
+    - Цель: восстановить корректные Firestore‑запросы вида:
+      - `Where("fragmentId","==",...)` + `OrderBy("capturedAt", Desc)` (latest first)
+      - `Where("canonicalPath","==",...)` + `Where("status","==","ACTIVE")` + `OrderBy("capturedAt", Desc)` (latest active)
+    - Действия:
+      - Явно описать и держать в репо нужные **composite indexes** (`backend/firestore.indexes.json`) для этих паттернов.
+      - После того как индексы в `READY`, вернуть DB‑ordering в:
+        - `FragmentProfilesRepository.ListByFragmentID()`
+        - `FragmentProfilesRepository.DeleteByFragmentID()` (если нужно детерминированно удалять “latest first”, иначе можно оставить без orderBy)
+        - `GetByFragmentID()/GetByCanonicalPath()` (убрать workaround при наличии индексной поддержки).
+    - Acceptance:
+      - Нет 500/FAILED_PRECONDITION на проде при `GET/DELETE/POST profile`.
+      - Запросы используют Firestore ordering (меньше данных, быстрее, предсказуемо).
+      - Индексы задокументированы и воспроизводимы (infra-as-code).
 - **Мульти‑классификация без взрыва словаря**
   - При необходимости: "primary sector/entity + tags" или аккуратные `[]string` поля, но без попытки сделать дерево бесконечным.
 - **Intent/Keywords Resolution (Lens-driven)**

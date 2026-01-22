@@ -77,6 +77,114 @@ const SectionHeader: React.FC<{ title: string; badge?: number; badgeLoading?: bo
   );
 };
 
+const KindSection: React.FC<{ 
+  kind: Kind; 
+  projectId: string; 
+  countMap: Partial<Record<Kind, number>>; 
+  loadingCounts: Partial<Record<Kind, boolean>>; 
+  onRefresh: (kind: Kind) => void;
+  fmtStatus: (kind: Kind, status: string, count?: number, elapsedMs?: number) => string;
+}> = ({ kind, projectId, countMap, loadingCounts, onRefresh, fmtStatus }) => {
+  const { status, countStatus, elapsedMs, expanded, setExpanded } = useCountAndStatus(kind);
+  const { loading, error, items } = useKindItems(projectId, kind, expanded);
+  const preloaded = countMap[kind];
+  const count = typeof preloaded === 'number' ? preloaded : (typeof countStatus === 'number' ? countStatus : (Array.isArray(items) ? items.length : undefined));
+  
+  return (
+    <div className="rounded">
+      <SectionHeader
+        title={kind.charAt(0).toUpperCase() + kind.slice(1)}
+        badge={typeof count === 'number' ? count : undefined}
+        badgeLoading={!!loadingCounts[kind] && typeof count !== 'number'}
+        status={status ? fmtStatus(kind, status, count, elapsedMs) : ''}
+        onRefresh={() => onRefresh(kind)}
+        expanded={expanded}
+        onToggle={() => setExpanded((v) => !v)}
+      />
+      {expanded && (
+        <div className="px-2 py-2 text-[12px]" style={{ color: 'var(--text-secondary-strong)' }}>
+          {loading && <div>Loading…</div>}
+          {error && <div style={{ color: 'var(--accent-danger)' }}>{error}</div>}
+          {!loading && !error && (
+            <div className="space-y-1">
+              {Array.isArray(items) && items.length === 0 && (
+                <div className="text-[12px]">No {kind} yet. Run "analyze {kind}".</div>
+              )}
+              {Array.isArray(items) && items.length > 0 && (
+                <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
+                  {items.map((it, i) => {
+                    switch (kind) {
+                      case 'entities': {
+                        return (
+                          <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.name}</div>
+                              <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{it.type}</span>
+                            </div>
+                            {it.description && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{it.description}</div>}
+                          </div>
+                        );
+                      }
+                      case 'facts': {
+                        return (
+                          <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-12" style={{ color: 'var(--text-heading)' }}>{it.statement}</div>
+                              {typeof it.confidence === 'number' && (
+                                <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{Math.round(Math.max(0, Math.min(1, it.confidence))*100)}%</span>
+                              )}
+                            </div>
+                            {Array.isArray(it.evidence) && it.evidence.length > 0 && (
+                              <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>Evidence: {it.evidence.join('; ')}</div>
+                            )}
+                          </div>
+                        );
+                      }
+                      case 'events': {
+                        return (
+                          <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
+                            <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.title}</div>
+                            <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{it.ts}</div>
+                            {it.summary && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{it.summary}</div>}
+                          </div>
+                        );
+                      }
+                      case 'metrics': {
+                        return (
+                          <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.label || it.key}</div>
+                              <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{String(it.value)}{it.unit ? ` ${it.unit}` : ''}</div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      case 'decisions': {
+                        return (
+                          <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.title}</div>
+                              {it.selected && (
+                                <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{it.selected}</span>
+                              )}
+                            </div>
+                            {it.rationale && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{it.rationale}</div>}
+                          </div>
+                        );
+                      }
+                    }
+                    return null;
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const FindingsPanel: React.FC<{ projectId: string }> = ({ projectId }) => {
   const apiRef = React.useRef<typeof import('../lib/api') | null>(null);
   React.useEffect(() => { import('../lib/api').then((m) => { apiRef.current = m; }); }, []);
@@ -191,105 +299,17 @@ const FindingsPanel: React.FC<{ projectId: string }> = ({ projectId }) => {
             style={{ border: '1px solid var(--overlay-line-90)', background: 'transparent', color: 'var(--text-heading)' }}>Refresh all</button>
         </div>
       </div>
-      {kinds.map((k) => {
-        const { status, countStatus, elapsedMs, expanded, setExpanded } = useCountAndStatus(k);
-        const { loading, error, items } = useKindItems(projectId, k, expanded);
-        const preloaded = countMap[k];
-        const count = typeof preloaded === 'number' ? preloaded : (typeof countStatus === 'number' ? countStatus : (Array.isArray(items) ? items.length : undefined));
-        return (
-          <div key={k} className="rounded">
-            <SectionHeader
-              title={k.charAt(0).toUpperCase() + k.slice(1)}
-              badge={typeof count === 'number' ? count : undefined}
-              badgeLoading={!!loadingCounts[k] && typeof count !== 'number'}
-              status={status ? fmtStatus(k, status, count, elapsedMs) : ''}
-              onRefresh={() => refresh(k)}
-              expanded={expanded}
-              onToggle={() => setExpanded((v) => !v)}
-            />
-            {expanded && (
-              <div className="px-2 py-2 text-[12px]" style={{ color: 'var(--text-secondary-strong)' }}>
-                {loading && <div>Loading…</div>}
-                {error && <div style={{ color: 'var(--accent-danger)' }}>{error}</div>}
-                {!loading && !error && (
-                  <div className="space-y-1">
-                    {Array.isArray(items) && items.length === 0 && (
-                      <div className="text-[12px]">No {k} yet. Run "analyze {k}".</div>
-                    )}
-                    {Array.isArray(items) && items.length > 0 && (
-                      <div className="grid" style={{ gridTemplateColumns: '1fr', gap: 6 }}>
-                        {items.map((it, i) => {
-                          switch (k) {
-                            case 'entities': {
-                              return (
-                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.name}</div>
-                                    <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{it.type}</span>
-                                  </div>
-                                  {it.description && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{it.description}</div>}
-                                </div>
-                              );
-                            }
-                            case 'facts': {
-                              return (
-                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="text-12" style={{ color: 'var(--text-heading)' }}>{it.statement}</div>
-                                    {typeof it.confidence === 'number' && (
-                                      <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{Math.round(Math.max(0, Math.min(1, it.confidence))*100)}%</span>
-                                    )}
-                                  </div>
-                                  {Array.isArray(it.evidence) && it.evidence.length > 0 && (
-                                    <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>Evidence: {it.evidence.join('; ')}</div>
-                                  )}
-                                </div>
-                              );
-                            }
-                            case 'events': {
-                              return (
-                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
-                                  <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.title}</div>
-                                  <div className="text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{it.ts}</div>
-                                  {it.summary && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{it.summary}</div>}
-                                </div>
-                              );
-                            }
-                            case 'metrics': {
-                              return (
-                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.label || it.key}</div>
-                                    <div className="text-12" style={{ color: 'var(--text-secondary-strong)' }}>{String(it.value)}{it.unit ? ` ${it.unit}` : ''}</div>
-                                  </div>
-                                </div>
-                              );
-                            }
-                            case 'decisions': {
-                              return (
-                                <div key={i} className="p-2 rounded" style={{ background: 'var(--bg-sidebar)', border: '1px solid var(--overlay-line-90)' }}>
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="text-12 font-medium" style={{ color: 'var(--text-heading)' }}>{it.title}</div>
-                                    {it.selected && (
-                                      <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--white-10)', color: 'var(--text-secondary-strong)' }}>{it.selected}</span>
-                                    )}
-                                  </div>
-                                  {it.rationale && <div className="mt-1 text-[11px]" style={{ color: 'var(--text-secondary-strong)' }}>{it.rationale}</div>}
-                                </div>
-                              );
-                            }
-                          }
-                          return null;
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {kinds.map((k) => (
+        <KindSection
+          key={k}
+          kind={k}
+          projectId={projectId}
+          countMap={countMap}
+          loadingCounts={loadingCounts}
+          onRefresh={refresh}
+          fmtStatus={fmtStatus}
+        />
+      ))}
     </div>
   );
 };

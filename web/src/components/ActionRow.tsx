@@ -287,9 +287,6 @@ export const ActionRow: React.FC<{
       console.error('Failed to export to DOCX:', error);
     }
   }, [content, projectId, derivedHeaderText]);
-  // For user messages, only show ActionRow if there's bias evaluation
-  // For assistant messages, show full ActionRow
-  if (!content || !content.trim()) return null;
   
   // Get frame expansions from interactions with subkind 'eval.frame_expansions'
   const frameExpansions = React.useMemo(() => {
@@ -488,6 +485,10 @@ export const ActionRow: React.FC<{
       return null;
     }
   }, [hasEvalBias, evaluations, getInteractions, interactionsLength, messageId, persistedByLocalId, theme]);
+  
+  // For user messages, only show ActionRow if there's bias evaluation
+  // For assistant messages, show full ActionRow
+  if (!content || !content.trim()) return null;
   
   const hasReframeContent = frameExpansions && frameExpansions.length > 0;
   const hasSources = (messageSources.queries.length > 0 || messageSources.sources.length > 0);

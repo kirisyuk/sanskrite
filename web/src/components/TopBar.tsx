@@ -510,16 +510,16 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
             }}
           />
         </a>
-        {/* Link to Unfold chat when logged in */}
-        {currentUser && !isChat && (
+        {/* Link to /discuss (chat) when not in chat, or /horizon when in chat */}
+        {currentUser && (
           <a
-            href="/?app=unfold"
+            href={isChat ? "/horizon" : "/"}
             className="text-12 px-2 py-1 rounded"
             style={{ color: 'var(--text-heading)', textDecoration: 'none' }}
             onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.backgroundColor = 'var(--white-10)'; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.backgroundColor = 'transparent'; }}
           >
-            Unfold
+            {isChat ? "/horizon" : "/discuss"}
           </a>
         )}
       </div>

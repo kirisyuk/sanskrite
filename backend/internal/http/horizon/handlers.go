@@ -282,7 +282,17 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 	// Проверяем подпути
 	if h.profilesHandler != nil {
 		if strings.HasSuffix(r.URL.Path, "/profile") {
-			h.profilesHandler.getProfileByFragmentID(w, r, fragmentID)
+			switch r.Method {
+			case http.MethodGet:
+				h.profilesHandler.getProfileByFragmentID(w, r, fragmentID)
+				return
+			case http.MethodDelete:
+				h.profilesHandler.deleteProfileByFragmentID(w, r, fragmentID)
+				return
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/profile/refresh") {
