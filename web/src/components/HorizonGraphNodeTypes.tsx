@@ -84,6 +84,21 @@ export interface HorizonNodeData {
   critical?: boolean;
   /** UI: risk shield mode for this node (computed in LensCanvasCockpit displayNodes). */
   riskShieldOpen?: boolean;
+  /** Global, precomputed "high-profile" business signals for this fragment (backend-provided). */
+  highProfile?: {
+    version: number;
+    updatedAt: string;
+    signals?: Record<string, {
+      score: number;
+      level?: 'low' | 'medium' | 'high' | 'critical' | string;
+      confidence?: number;
+      evidence?: {
+        edgeIds?: string[];
+        neighborPaths?: string[];
+        note?: string;
+      } | null;
+    }>;
+  } | null;
   /** UI: toggle risk shield for a fragment (wired by LensCanvasCockpit). */
   onToggleRiskShield?: (fragmentId: string) => void;
   onLoadRelated?: (fragmentId: string) => void; // Функция для загрузки связанных элементов

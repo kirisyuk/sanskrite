@@ -238,9 +238,7 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 			for i, res := range resp.Results {
 				// Extract fragment ID
 				id := res.Document.ID
-				if strings.HasSuffix(id, ".json") {
-					id = strings.TrimSuffix(id, ".json")
-				}
+				id = strings.TrimSuffix(id, ".json")
 				log.Printf("[SearchFragments] Result %d: ID=%s, URI=%s", i, id, res.Document.URI)
 
 				fragment, err := s.fragmentsRepo.Get(ctx, id)
@@ -322,6 +320,76 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 		}
 	}
 	return out, nil
+}
+
+// SearchDomainFragments performs best-effort search for DOMAIN fragments.
+// It uses the same underlying search pipeline as SearchFragments (Vertex preferred, Firestore prefix fallback),
+// but filters results to Type==DOMAIN.
+func (s *HorizonService) SearchDomainFragments(ctx context.Context, query string, limit int) ([]*models.HorizonFragment, error) {
+	all, err := s.SearchFragments(ctx, query, limit*3)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.HorizonFragment, 0, limit)
+	seen := map[string]struct{}{}
+	for _, f := range all {
+		if f == nil {
+			continue
+		}
+		if strings.TrimSpace(string(f.Type)) != string(models.FragmentTypeDomain) {
+			continue
+		}
+		cp := strings.TrimSpace(f.CanonicalPath)
+		if cp == "" {
+			cp = strings.TrimSpace(f.ID)
+		}
+		if cp == "" {
+			continue
+		}
+		if _, ok := seen[cp]; ok {
+			continue
+		}
+		seen[cp] = struct{}{}
+		out = append(out, f)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// FindDomainByCanonicalPathBestEffort returns an existing DOMAIN fragment for the given canonicalPath.
+// It first checks Firestore directly (fast exact lookup) and then falls back to a best-effort Vertex search
+// (which may return candidates by similarity, so we validate exact canonicalPath match after loading).
+func (s *HorizonService) FindDomainByCanonicalPathBestEffort(ctx context.Context, canonicalPath string) (*models.HorizonFragment, error) {
+	cp := strings.TrimSpace(canonicalPath)
+	if cp == "" {
+		return nil, nil
+	}
+	// 1) Firestore exact lookup (best).
+	if s != nil && s.fragmentsRepo != nil {
+		if frag, err := s.fragmentsRepo.GetByCanonicalPath(ctx, cp); err == nil && frag != nil {
+			if strings.TrimSpace(string(frag.Type)) == string(models.FragmentTypeDomain) {
+				return frag, nil
+			}
+			// Not a domain; treat as no-match.
+			return nil, nil
+		}
+	}
+	// 2) Vertex-assisted best-effort search (fallback).
+	cands, err := s.SearchDomainFragments(ctx, cp, 10)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range cands {
+		if c == nil {
+			continue
+		}
+		if strings.TrimSpace(c.CanonicalPath) == cp && strings.TrimSpace(string(c.Type)) == string(models.FragmentTypeDomain) {
+			return c, nil
+		}
+	}
+	return nil, nil
 }
 
 // GetFragmentRollup computes aggregated rollup for a fragment and metric kind.

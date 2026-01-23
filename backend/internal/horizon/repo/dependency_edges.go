@@ -16,6 +16,37 @@ import (
 
 var ErrEdgeNotFound = errors.New("dependency edge not found")
 
+// =============================================================================
+// Context hooks (best-effort)
+// =============================================================================
+//
+// These hooks allow higher-level pipelines (e.g. Scout) to collect "affected" fragment IDs
+// while creating edges, without extra Firestore reads or additional plumbing across many call sites.
+// This is intentionally best-effort and must never change persistence semantics.
+
+type edgeAffectCollectorKey struct{}
+
+// WithEdgeAffectCollector attaches a collector to ctx. Repository methods may call it after successful writes.
+// The collector is called with FINAL (possibly canonicalized/swapped) edge endpoints.
+func WithEdgeAffectCollector(ctx context.Context, collector func(sourceFragmentID, targetFragmentID string)) context.Context {
+	if ctx == nil || collector == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, edgeAffectCollectorKey{}, collector)
+}
+
+func getEdgeAffectCollector(ctx context.Context) func(string, string) {
+	if ctx == nil {
+		return nil
+	}
+	if v := ctx.Value(edgeAffectCollectorKey{}); v != nil {
+		if fn, ok := v.(func(string, string)); ok {
+			return fn
+		}
+	}
+	return nil
+}
+
 // DependencyEdgesRepository репозиторий для работы с DependencyEdge
 type DependencyEdgesRepository struct {
 	col            *firestore.CollectionRef
@@ -168,6 +199,11 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 		return "", err
 	}
 	tracking.RecordEdgeCreated(ctx, edge.ID)
+
+	// Best-effort: report affected endpoints to caller (if collector attached to ctx).
+	if fn := getEdgeAffectCollector(ctx); fn != nil {
+		fn(edge.SourceFragmentID, edge.TargetFragmentID)
+	}
 	
 	log.Printf("%s Edge created successfully: id=%s", logPrefix, edge.ID)
 	return edge.ID, nil

@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
@@ -15,6 +16,8 @@ type profileRepairStats struct {
 	sourcesNormalized     int
 	yParsed               int
 	metaWrapped           int
+	scenarioMetricsFixed  int
+	factsFixed            int
 }
 
 func (s *profileRepairStats) bump(n *int) {
@@ -49,6 +52,7 @@ func repairProfileLLMJSON(in map[string]interface{}) (map[string]interface{}, er
 				continue
 			}
 			normalizeProbabilityKey(m, "probability", st)
+			normalizeScenarioMetrics(m, st)
 		}
 	}
 
@@ -66,6 +70,7 @@ func repairProfileLLMJSON(in map[string]interface{}) (map[string]interface{}, er
 			}
 			normalizeConfidenceKey(sec, "confidence", st)
 			normalizeSourcesKey(sec, "sources", st)
+			normalizeFactsContainer(sec, st)
 			normalizeDatasetsContainer(sec, "datasets", st)
 		}
 	}
@@ -74,11 +79,518 @@ func repairProfileLLMJSON(in map[string]interface{}) (map[string]interface{}, er
 	normalizeDatasetsContainer(in, "datasets", st)
 
 	if st.changed > 0 {
-		log.Printf("[ProfileGenerator] Repaired LLM JSON (changed=%d confidenceNorm=%d probNorm=%d sourcesNorm=%d yParsed=%d metaWrapped=%d)",
-			st.changed, st.confidenceNormalized, st.probabilityNormalized, st.sourcesNormalized, st.yParsed, st.metaWrapped)
+		log.Printf("[ProfileGenerator] Repaired LLM JSON (changed=%d confidenceNorm=%d probNorm=%d sourcesNorm=%d yParsed=%d metaWrapped=%d scenarioMetrics=%d facts=%d)",
+			st.changed, st.confidenceNormalized, st.probabilityNormalized, st.sourcesNormalized, st.yParsed, st.metaWrapped, st.scenarioMetricsFixed, st.factsFixed)
 	}
 
 	return in, nil
+}
+
+// normalizeFactsContainer ensures section facts are present/normalized and avoids raw JSON dumps.
+// Preferred: facts: [{key,label,value,unit?,period?,notes?,sources?}]
+// Legacy: structured: { "market_size_2023": "$693.7B", ... } or structured as a JSON string.
+func normalizeFactsContainer(sec map[string]interface{}, st *profileRepairStats) {
+	// If facts missing, derive from structured when possible.
+	if _, ok := sec["facts"]; !ok {
+		if raw, ok := sec["structured"]; ok && raw != nil {
+			items := structuredToFacts(raw, st)
+			if len(items) > 0 {
+				sec["facts"] = items
+				st.bump(&st.factsFixed)
+			}
+		}
+		return
+	}
+
+	raw := sec["facts"]
+	var arr []interface{}
+	switch t := raw.(type) {
+	case []interface{}:
+		arr = t
+	case map[string]interface{}:
+		arr = []interface{}{t}
+		sec["facts"] = arr
+		st.bump(&st.factsFixed)
+	case string:
+		parsed := structuredToFacts(t, st)
+		if len(parsed) > 0 {
+			sec["facts"] = parsed
+			st.bump(&st.factsFixed)
+		} else {
+			delete(sec, "facts")
+			st.bump(&st.factsFixed)
+		}
+		return
+	default:
+		delete(sec, "facts")
+		st.bump(&st.factsFixed)
+		return
+	}
+
+	out := make([]interface{}, 0, len(arr))
+	for _, it := range arr {
+		m, _ := it.(map[string]interface{})
+		if m == nil {
+			continue
+		}
+		normalizeFactItem(m, st)
+		if strings.TrimSpace(fmt.Sprint(m["label"])) == "" {
+			k := strings.TrimSpace(fmt.Sprint(m["key"]))
+			lbl, period, unit := humanizeKey(k)
+			if lbl != "" {
+				m["label"] = lbl
+				st.bump(&st.factsFixed)
+			}
+			if strings.TrimSpace(fmt.Sprint(m["period"])) == "" && period != "" {
+				m["period"] = period
+				st.bump(&st.factsFixed)
+			}
+			if strings.TrimSpace(fmt.Sprint(m["unit"])) == "" && unit != "" {
+				m["unit"] = unit
+				st.bump(&st.factsFixed)
+			}
+		}
+		// Must have label+value to be useful
+		if strings.TrimSpace(fmt.Sprint(m["label"])) == "" || strings.TrimSpace(fmt.Sprint(m["value"])) == "" {
+			continue
+		}
+		out = append(out, m)
+	}
+	sec["facts"] = out
+}
+
+func normalizeFactItem(m map[string]interface{}, st *profileRepairStats) {
+	if v, ok := m["key"]; ok && v != nil {
+		if _, ok := v.(string); !ok {
+			m["key"] = fmt.Sprint(v)
+			st.bump(&st.factsFixed)
+		}
+	}
+	if v, ok := m["label"]; ok && v != nil {
+		if _, ok := v.(string); !ok {
+			m["label"] = fmt.Sprint(v)
+			st.bump(&st.factsFixed)
+		}
+	}
+	if v, ok := m["value"]; ok && v != nil {
+		if _, ok := v.(string); !ok {
+			m["value"] = fmt.Sprint(v)
+			st.bump(&st.factsFixed)
+		}
+	}
+	normalizeSourcesKey(m, "sources", st)
+}
+
+func structuredToFacts(raw interface{}, st *profileRepairStats) []interface{} {
+	switch t := raw.(type) {
+	case map[string]interface{}:
+		out := make([]interface{}, 0, len(t))
+		for k, v := range t {
+			key := strings.TrimSpace(k)
+			if key == "" || v == nil {
+				continue
+			}
+			// keep simple values; complex objects become JSON string
+			val := ""
+			switch vv := v.(type) {
+			case string:
+				val = strings.TrimSpace(vv)
+			case float64, int, int64, bool:
+				val = strings.TrimSpace(fmt.Sprint(v))
+			default:
+				// If it's an array of strings, join.
+				if arr, ok := v.([]interface{}); ok {
+					ss := make([]string, 0, len(arr))
+					for _, it := range arr {
+						if s, ok := it.(string); ok && strings.TrimSpace(s) != "" {
+							ss = append(ss, strings.TrimSpace(s))
+						}
+					}
+					if len(ss) > 0 {
+						val = strings.Join(ss, "; ")
+					}
+				}
+				if val == "" {
+					b, err := fmtJSON(v)
+					if err == nil && strings.TrimSpace(b) != "" {
+						val = b
+					}
+				}
+			}
+			if val == "" {
+				continue
+			}
+			lbl, period, unit := humanizeKey(key)
+			item := map[string]interface{}{
+				"key":   key,
+				"label": firstNonEmpty(lbl, key),
+				"value": val,
+			}
+			if period != "" {
+				item["period"] = period
+			}
+			if unit != "" {
+				item["unit"] = unit
+			}
+			out = append(out, item)
+		}
+		return out
+	case string:
+		// Try parse as JSON object first
+		var obj map[string]interface{}
+		if err := jsonUnmarshalLoose(t, &obj); err == nil && obj != nil {
+			return structuredToFacts(obj, st)
+		}
+		// Fallback: "k: v" lines
+		lines := strings.Split(t, "\n")
+		out := make([]interface{}, 0, len(lines))
+		for _, ln := range lines {
+			ln = strings.TrimSpace(ln)
+			if ln == "" {
+				continue
+			}
+			parts := strings.SplitN(ln, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+			if key == "" || val == "" {
+				continue
+			}
+			lbl, period, unit := humanizeKey(key)
+			item := map[string]interface{}{
+				"key":   key,
+				"label": firstNonEmpty(lbl, key),
+				"value": val,
+			}
+			if period != "" {
+				item["period"] = period
+			}
+			if unit != "" {
+				item["unit"] = unit
+			}
+			out = append(out, item)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func humanizeKey(key string) (label string, period string, unit string) {
+	// Reuse the scenario key humanizer; it's generic enough.
+	return humanizeScenarioMetricKey(key)
+}
+
+// fmtJSON tries to marshal a value into compact JSON string.
+func fmtJSON(v interface{}) (string, error) {
+	// Use fmt.Sprint for non-marshalable (rare), but try best effort.
+	b, err := jsonMarshalLoose(v)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(b), nil
+}
+
+func jsonMarshalLoose(v interface{}) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// jsonUnmarshalLoose tries to parse JSON even if it's wrapped in code fences or contains leading/trailing text.
+func jsonUnmarshalLoose(s string, out interface{}) error {
+	ss := strings.TrimSpace(s)
+	ss = strings.TrimPrefix(ss, "```json")
+	ss = strings.TrimPrefix(ss, "```JSON")
+	ss = strings.TrimPrefix(ss, "```")
+	ss = strings.TrimSuffix(ss, "```")
+	ss = strings.TrimSpace(ss)
+	// If still not pure JSON, try extract first object.
+	if !strings.HasPrefix(ss, "{") {
+		i := strings.Index(ss, "{")
+		j := strings.LastIndex(ss, "}")
+		if i >= 0 && j > i {
+			ss = ss[i : j+1]
+		}
+	}
+	return json.Unmarshal([]byte(ss), out)
+}
+
+
+// normalizeScenarioMetrics converts legacy/LLM-drifting scenario metrics into a stable, human-friendly shape.
+// Expected preferred field: metricItems: [{key,label,value,unit?,period?,notes?,sources?}]
+// Legacy: metrics: { "2032_Market_Valuation": "$1.3T" } OR metrics as a string like "foo: bar".
+func normalizeScenarioMetrics(scenario map[string]interface{}, st *profileRepairStats) {
+	// If metricItems is missing, try to derive it from metrics.
+	if _, ok := scenario["metricItems"]; !ok {
+		if raw, ok := scenario["metrics"]; ok && raw != nil {
+			items := scenarioMetricsToItems(raw, st)
+			if len(items) > 0 {
+				scenario["metricItems"] = items
+				st.bump(&st.scenarioMetricsFixed)
+			}
+		}
+		return
+	}
+
+	// Normalize metricItems container.
+	raw := scenario["metricItems"]
+	var arr []interface{}
+	switch t := raw.(type) {
+	case []interface{}:
+		arr = t
+	case map[string]interface{}:
+		arr = []interface{}{t}
+		scenario["metricItems"] = arr
+		st.bump(&st.scenarioMetricsFixed)
+	case string:
+		// Sometimes emitted as a single string; parse as "k: v" lines.
+		parsed := scenarioMetricsToItems(t, st)
+		if len(parsed) > 0 {
+			scenario["metricItems"] = parsed
+			st.bump(&st.scenarioMetricsFixed)
+		} else {
+			delete(scenario, "metricItems")
+			st.bump(&st.scenarioMetricsFixed)
+		}
+		return
+	default:
+		delete(scenario, "metricItems")
+		st.bump(&st.scenarioMetricsFixed)
+		return
+	}
+
+	out := make([]interface{}, 0, len(arr))
+	for _, it := range arr {
+		m, _ := it.(map[string]interface{})
+		if m == nil {
+			continue
+		}
+		normalizeScenarioMetricItem(m, st)
+		// Must have label+value to be useful.
+		if strings.TrimSpace(fmt.Sprint(m["label"])) == "" && strings.TrimSpace(fmt.Sprint(m["key"])) == "" {
+			continue
+		}
+		if strings.TrimSpace(fmt.Sprint(m["value"])) == "" {
+			// Try fallback from legacy "val" or "metric".
+			if v := strings.TrimSpace(fmt.Sprint(m["val"])); v != "" {
+				m["value"] = v
+				delete(m, "val")
+				st.bump(&st.scenarioMetricsFixed)
+			} else if v := strings.TrimSpace(fmt.Sprint(m["metric"])); v != "" {
+				m["value"] = v
+				delete(m, "metric")
+				st.bump(&st.scenarioMetricsFixed)
+			}
+		}
+		if strings.TrimSpace(fmt.Sprint(m["label"])) == "" {
+			k := strings.TrimSpace(fmt.Sprint(m["key"]))
+			lbl, period, unit := humanizeScenarioMetricKey(k)
+			if lbl != "" {
+				m["label"] = lbl
+				st.bump(&st.scenarioMetricsFixed)
+			}
+			if strings.TrimSpace(fmt.Sprint(m["period"])) == "" && period != "" {
+				m["period"] = period
+				st.bump(&st.scenarioMetricsFixed)
+			}
+			if strings.TrimSpace(fmt.Sprint(m["unit"])) == "" && unit != "" {
+				m["unit"] = unit
+				st.bump(&st.scenarioMetricsFixed)
+			}
+		}
+		out = append(out, m)
+	}
+	scenario["metricItems"] = out
+}
+
+func normalizeScenarioMetricItem(m map[string]interface{}, st *profileRepairStats) {
+	// key/label/value must be strings
+	if v, ok := m["key"]; ok && v != nil {
+		if _, ok := v.(string); !ok {
+			m["key"] = fmt.Sprint(v)
+			st.bump(&st.scenarioMetricsFixed)
+		}
+	}
+	if v, ok := m["label"]; ok && v != nil {
+		if _, ok := v.(string); !ok {
+			m["label"] = fmt.Sprint(v)
+			st.bump(&st.scenarioMetricsFixed)
+		}
+	}
+	if v, ok := m["value"]; ok && v != nil {
+		if _, ok := v.(string); !ok {
+			m["value"] = fmt.Sprint(v)
+			st.bump(&st.scenarioMetricsFixed)
+		}
+	}
+	normalizeSourcesKey(m, "sources", st)
+}
+
+func scenarioMetricsToItems(raw interface{}, st *profileRepairStats) []interface{} {
+	switch t := raw.(type) {
+	case map[string]interface{}:
+		out := make([]interface{}, 0, len(t))
+		for k, v := range t {
+			key := strings.TrimSpace(k)
+			val := strings.TrimSpace(fmt.Sprint(v))
+			if key == "" || val == "" {
+				continue
+			}
+			lbl, period, unit := humanizeScenarioMetricKey(key)
+			item := map[string]interface{}{
+				"key":   key,
+				"label": firstNonEmpty(lbl, key),
+				"value": val,
+			}
+			if period != "" {
+				item["period"] = period
+			}
+			if unit != "" {
+				item["unit"] = unit
+			}
+			out = append(out, item)
+		}
+		return out
+	case map[string]string:
+		out := make([]interface{}, 0, len(t))
+		for k, v := range t {
+			key := strings.TrimSpace(k)
+			val := strings.TrimSpace(v)
+			if key == "" || val == "" {
+				continue
+			}
+			lbl, period, unit := humanizeScenarioMetricKey(key)
+			item := map[string]interface{}{
+				"key":   key,
+				"label": firstNonEmpty(lbl, key),
+				"value": val,
+			}
+			if period != "" {
+				item["period"] = period
+			}
+			if unit != "" {
+				item["unit"] = unit
+			}
+			out = append(out, item)
+		}
+		return out
+	case []interface{}:
+		// Sometimes emitted as list of strings like "k: v"
+		out := make([]interface{}, 0, len(t))
+		for _, it := range t {
+			if s, ok := it.(string); ok {
+				out = append(out, scenarioMetricsToItems(s, st)...)
+			}
+		}
+		return out
+	case string:
+		lines := strings.Split(t, "\n")
+		out := make([]interface{}, 0, len(lines))
+		for _, ln := range lines {
+			ln = strings.TrimSpace(ln)
+			if ln == "" {
+				continue
+			}
+			// allow "key: value" or "key - value"
+			sep := ":"
+			if !strings.Contains(ln, ":") && strings.Contains(ln, " - ") {
+				sep = " - "
+			}
+			parts := strings.SplitN(ln, sep, 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+			if key == "" || val == "" {
+				continue
+			}
+			lbl, period, unit := humanizeScenarioMetricKey(key)
+			item := map[string]interface{}{
+				"key":   key,
+				"label": firstNonEmpty(lbl, key),
+				"value": val,
+			}
+			if period != "" {
+				item["period"] = period
+			}
+			if unit != "" {
+				item["unit"] = unit
+			}
+			out = append(out, item)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func firstNonEmpty(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
+}
+
+// humanizeScenarioMetricKey attempts to turn "2032_Market_Valuation" into ("Market valuation","2032","").
+// Also infers unit if key ends with _usd/_eur/_percent/_pct.
+func humanizeScenarioMetricKey(key string) (label string, period string, unit string) {
+	k := strings.TrimSpace(key)
+	if k == "" {
+		return "", "", ""
+	}
+	// normalize spaces
+	k = strings.ReplaceAll(k, " ", "_")
+	k = strings.ReplaceAll(k, "__", "_")
+	parts := strings.Split(k, "_")
+	if len(parts) == 0 {
+		return "", "", ""
+	}
+	// Leading year
+	if len(parts[0]) == 4 {
+		if _, err := strconv.Atoi(parts[0]); err == nil {
+			period = parts[0]
+			parts = parts[1:]
+		}
+	}
+	// Unit suffix
+	if len(parts) > 0 {
+		last := strings.ToLower(parts[len(parts)-1])
+		switch last {
+		case "usd", "eur", "gbp":
+			unit = strings.ToUpper(last)
+			parts = parts[:len(parts)-1]
+		case "percent", "pct":
+			unit = "percent"
+			parts = parts[:len(parts)-1]
+		}
+	}
+	// Human label: Title-case with some acronym handling.
+	words := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		low := strings.ToLower(p)
+		switch low {
+		case "ai":
+			words = append(words, "AI")
+		case "eu", "us", "sea":
+			words = append(words, strings.ToUpper(low))
+		case "mfg":
+			words = append(words, "Manufacturing")
+		default:
+			words = append(words, strings.ToUpper(low[:1])+low[1:])
+		}
+	}
+	label = strings.Join(words, " ")
+	return strings.TrimSpace(label), strings.TrimSpace(period), strings.TrimSpace(unit)
 }
 
 func normalizeProbabilityKey(m map[string]interface{}, key string, st *profileRepairStats) {

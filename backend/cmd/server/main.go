@@ -255,6 +255,7 @@ func main() {
 	var profileScheduler *horizonprofile.Scheduler
 	var enforcementHandlers *horizonhttp.EnforcementHandlers
 	var scoutEngine *horizonscout.ScoutEngine
+	var horizonTelemetryRepo *horizonrepo.HorizonTelemetryRepository
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger).WithDocuments(sourcesDocsRepo)
@@ -1030,6 +1031,8 @@ func main() {
 		enforcementJobsRepo := horizonrepo.NewEnforcementJobsRepository(fsClient.Client())
 		policyCheckResultsRepo := horizonrepo.NewPolicyCheckResultsRepository(fsClient.Client())
 		horizonCascadeVisitedRepo := horizonrepo.NewCascadeVisitedRepository(fsClient.Client())
+		horizonCanonicalPathRedirectsRepo := horizonrepo.NewCanonicalPathRedirectsRepository(fsClient.Client())
+		horizonTelemetryRepo = horizonrepo.NewHorizonTelemetryRepository(fsClient.Client())
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
 		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
@@ -1351,6 +1354,12 @@ func main() {
 				canonizationPolicyExecutor,
 				orgDeduplicator,
 			)
+			if horizonCanonicalPathRedirectsRepo != nil {
+				canonicalPathResolver.WithCanonicalPathRedirectsRepo(horizonCanonicalPathRedirectsRepo)
+			}
+			if horizonTelemetryRepo != nil {
+				canonicalPathResolver.WithTelemetryRepo(horizonTelemetryRepo)
+			}
 			if geonamesClientForHorizon != nil {
 				canonicalPathResolver.WithGeoNamesClient(geonamesClientForHorizon)
 			}
@@ -1893,6 +1902,10 @@ func main() {
 			httphandlers.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed", nil)
 		}
 	})))
+
+	// Horizon telemetry (admin only)
+	telemetryHandler := httphandlers.NewHorizonTelemetryHandler(horizonTelemetryRepo, s.users, logger)
+	mux.Handle("/api/v1/admin/horizon/telemetry", authMiddleware(http.HandlerFunc(telemetryHandler.List)))
 
 	// Share routes handler (initialized before project sub-routes)
 	shareRepo := repo.NewShareTokensRepository(fsClient.Client())

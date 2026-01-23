@@ -97,6 +97,40 @@ func NewHorizonFragmentsRepository(db *firestore.Client) *HorizonFragmentsReposi
 	}
 }
 
+// UpdateHighProfile updates only the `highProfile` field of a fragment (best-effort, field-level update).
+// This avoids clobbering concurrent writes to other parts of the fragment during background computations.
+//
+// If hp is nil, the field is deleted.
+func (r *HorizonFragmentsRepository) UpdateHighProfile(ctx context.Context, fragmentID string, hp *models.HighProfile) error {
+	if r == nil || r.col == nil {
+		return ErrInvalidDocument
+	}
+	id := strings.TrimSpace(fragmentID)
+	if id == "" {
+		return ErrInvalidDocument
+	}
+
+	now := time.Now().UTC()
+	updates := []firestore.Update{
+		{Path: "updatedAt", Value: now},
+	}
+
+	if hp == nil {
+		updates = append(updates, firestore.Update{Path: "highProfile", Value: firestore.Delete})
+	} else {
+		if hp.Version == 0 {
+			hp.Version = 1
+		}
+		if hp.UpdatedAt.IsZero() {
+			hp.UpdatedAt = now
+		}
+		updates = append(updates, firestore.Update{Path: "highProfile", Value: hp})
+	}
+
+	_, err := r.col.Doc(id).Update(ctx, updates)
+	return err
+}
+
 // WithStorage настраивает GCS хранилище для экспорта фрагментов
 func (r *HorizonFragmentsRepository) WithStorage(storage *gcp.GCSClient, bucket string) *HorizonFragmentsRepository {
 	r.storage = storage

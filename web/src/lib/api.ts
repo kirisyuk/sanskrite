@@ -87,6 +87,28 @@ class ApiClient {
     return response.data;
   }
 
+  async getHorizonTelemetry(params: {
+    component: string;
+    metric: string;
+    limit?: number;
+  }): Promise<{
+    items: Array<{
+      component: string;
+      metric: string;
+      windowStart: string;
+      windowSizeSec: number;
+      dimensions?: Record<string, string>;
+      counters: Record<string, number>;
+      updatedAt: string;
+    }>;
+    summary: Record<string, number>;
+    hitRate: number;
+    tenantId: string;
+  }> {
+    const response = await this.client.get(`/api/v1/admin/horizon/telemetry`, { params });
+    return response.data;
+  }
+
   // Users
   async createUser(data: {
     firebaseUid: string;

@@ -133,6 +133,8 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 					"/org/ae/emirates-llc",
 					"/org/us/tesla-inc",
 					"/org/de/siemens-ag",
+					"/org/int/united-nations",
+					"/org/int/unesco",
 				},
 				Incorrect: []string{
 					"/org/saudi-aramco",       // missing iso2 and legal form
@@ -365,6 +367,12 @@ func (r *TaxonomyRules) ValidateOrgPath(path string) (bool, string) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 3 {
 		return false, "ORGANIZATION path must have at least 3 segments (/org/{iso2}/{slug})"
+	}
+
+	// Special-case: international organizations (/org/int/...) do not require a legal form suffix.
+	// Rationale: many intergovernmental / international bodies are not incorporated as companies.
+	if strings.EqualFold(strings.TrimSpace(parts[1]), "int") {
+		return true, ""
 	}
 
 	// Check for legal form suffix

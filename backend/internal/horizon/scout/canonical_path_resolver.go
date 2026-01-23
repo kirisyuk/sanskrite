@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -26,6 +27,8 @@ type CanonicalPathResolverStats struct {
 	FoundExistingByPath        int64
 	OrgDedupHits               int64
 	FoundExistingAfterDedup    int64
+	RedirectHits               int64
+	RedirectWrites             int64
 }
 
 // CanonicalPathResolver provides unified canonicalization and deduplication for canonical paths.
@@ -36,6 +39,8 @@ type CanonicalPathResolver struct {
 	canonizationPolicy *policy.PolicyExecutor
 	orgDeduplicator    *OrgDeduplicator
 	geonamesClient     coreontology.GeoNamesClientInterface
+	redirectsRepo      *repo.CanonicalPathRedirectsRepository
+	telemetryRepo      *repo.HorizonTelemetryRepository
 
 	// Stats counters (atomic; best-effort only).
 	resolveCalls               int64
@@ -46,6 +51,8 @@ type CanonicalPathResolver struct {
 	foundExistingByPath        int64
 	orgDedupHits               int64
 	foundExistingAfterDedup    int64
+	redirectHits               int64
+	redirectWrites             int64
 }
 
 // NewCanonicalPathResolver creates a new canonical path resolver.
@@ -67,6 +74,24 @@ func (r *CanonicalPathResolver) WithGeoNamesClient(client coreontology.GeoNamesC
 		return r
 	}
 	r.geonamesClient = client
+	return r
+}
+
+// WithCanonicalPathRedirectsRepo wires a Firestore-backed redirect cache.
+func (r *CanonicalPathResolver) WithCanonicalPathRedirectsRepo(repo *repo.CanonicalPathRedirectsRepository) *CanonicalPathResolver {
+	if r == nil {
+		return r
+	}
+	r.redirectsRepo = repo
+	return r
+}
+
+// WithTelemetryRepo wires a unified telemetry sink (best-effort).
+func (r *CanonicalPathResolver) WithTelemetryRepo(repo *repo.HorizonTelemetryRepository) *CanonicalPathResolver {
+	if r == nil {
+		return r
+	}
+	r.telemetryRepo = repo
 	return r
 }
 
@@ -112,24 +137,28 @@ func (r *CanonicalPathResolver) Resolve(
 		Confidence:         1.0,
 	}
 
+	// Step 0: Use known redirect mappings from previous pipeline runs (fast path).
+	redirectHits := r.applyRedirects(ctx, result)
+
 	// Step 1: Normalize path using CanonizationPolicy
 	if r.canonizationPolicy != nil {
+		basePath := strings.TrimSpace(result.CanonicalPath)
 		decision, err := r.canonizationPolicy.Execute(ctx, policy.PolicyInput{
 			Kind: "canonization",
 			Context: map[string]interface{}{
 				"inputType":  "canonical_path",
-				"inputValue": inputPath,
+				"inputValue": basePath,
 			},
 		})
 
 		if err == nil && decision.Action == "normalize_to" {
 			normalized, _ := decision.Params["output"].(string)
-			if normalized != "" && normalized != inputPath {
+			if normalized != "" && normalized != basePath {
 				atomic.AddInt64(&r.canonizationPolicyRewrites, 1)
 				result.NormalizationSteps = append(result.NormalizationSteps,
-					fmt.Sprintf("canonization_policy: %s -> %s", inputPath, normalized))
+					fmt.Sprintf("canonization_policy: %s -> %s", basePath, normalized))
 				result.CanonicalPath = normalized
-				log.Printf("%s CanonizationPolicy normalized: %s -> %s", logPrefix, inputPath, normalized)
+				log.Printf("%s CanonizationPolicy normalized: %s -> %s", logPrefix, basePath, normalized)
 			}
 		} else if err != nil {
 			log.Printf("%s WARNING: CanonizationPolicy failed: %v, using original path", logPrefix, err)
@@ -254,6 +283,10 @@ func (r *CanonicalPathResolver) Resolve(
 		}
 	}
 
+	// Best-effort: record observed redirect so future runs skip redundant work.
+	redirectWrites, redirectStable, redirectVariability := r.recordRedirect(ctx, inputPath, result.CanonicalPath, fragmentType, "canonical_path_resolver")
+	r.recordTelemetry(ctx, fragmentType, redirectHits, redirectWrites, redirectStable, redirectVariability)
+
 	return result, nil
 }
 
@@ -271,6 +304,8 @@ func (r *CanonicalPathResolver) Stats() CanonicalPathResolverStats {
 		FoundExistingByPath:        atomic.LoadInt64(&r.foundExistingByPath),
 		OrgDedupHits:               atomic.LoadInt64(&r.orgDedupHits),
 		FoundExistingAfterDedup:    atomic.LoadInt64(&r.foundExistingAfterDedup),
+		RedirectHits:               atomic.LoadInt64(&r.redirectHits),
+		RedirectWrites:             atomic.LoadInt64(&r.redirectWrites),
 	}
 }
 
@@ -743,24 +778,28 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 		Confidence:         1.0,
 	}
 
+	// Step 0: Use known redirect mappings from previous pipeline runs (fast path).
+	redirectHits := r.applyRedirects(ctx, result)
+
 	// Step 1: Normalize path using CanonizationPolicy (same as Resolve)
 	if r.canonizationPolicy != nil {
+		basePath := strings.TrimSpace(result.CanonicalPath)
 		decision, err := r.canonizationPolicy.Execute(ctx, policy.PolicyInput{
 			Kind: "canonization",
 			Context: map[string]interface{}{
 				"inputType":  "canonical_path",
-				"inputValue": inputPath,
+				"inputValue": basePath,
 			},
 		})
 
 		if err == nil && decision.Action == "normalize_to" {
 			normalized, _ := decision.Params["output"].(string)
-			if normalized != "" && normalized != inputPath {
+			if normalized != "" && normalized != basePath {
 				atomic.AddInt64(&r.canonizationPolicyRewrites, 1)
 				result.NormalizationSteps = append(result.NormalizationSteps,
-					fmt.Sprintf("canonization_policy: %s -> %s", inputPath, normalized))
+					fmt.Sprintf("canonization_policy: %s -> %s", basePath, normalized))
 				result.CanonicalPath = normalized
-				log.Printf("%s CanonizationPolicy normalized: %s -> %s", logPrefix, inputPath, normalized)
+				log.Printf("%s CanonizationPolicy normalized: %s -> %s", logPrefix, basePath, normalized)
 			}
 		}
 	}
@@ -835,5 +874,103 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 		}
 	}
 
+	// Best-effort: record observed redirect so future runs skip redundant work.
+	redirectWrites, redirectStable, redirectVariability := r.recordRedirect(ctx, inputPath, result.CanonicalPath, fragmentType, "canonical_path_resolver")
+	r.recordTelemetry(ctx, fragmentType, redirectHits, redirectWrites, redirectStable, redirectVariability)
+
 	return result, nil
+}
+
+// RecordRedirect stores a canonical path rewrite for future fast-path resolution.
+func (r *CanonicalPathResolver) RecordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string) (bool, bool, bool) {
+	return r.recordRedirect(ctx, fromPath, toPath, fragmentType, reason)
+}
+
+func (r *CanonicalPathResolver) recordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string) (bool, bool, bool) {
+	if r == nil || r.redirectsRepo == nil {
+		return false, false, false
+	}
+	fromPath = strings.TrimSpace(fromPath)
+	toPath = strings.TrimSpace(toPath)
+	if fromPath == "" || toPath == "" || fromPath == toPath {
+		return false, false, false
+	}
+	redirect, becameStable, variability, err := r.redirectsRepo.RecordObservation(
+		ctx,
+		"global",
+		fromPath,
+		toPath,
+		reason,
+		string(fragmentType),
+		5,
+		7*24*time.Hour,
+	)
+	if err == nil && redirect != nil {
+		atomic.AddInt64(&r.redirectWrites, 1)
+		return true, becameStable, variability
+	}
+	return false, false, false
+}
+
+func (r *CanonicalPathResolver) applyRedirects(ctx context.Context, result *ResolveResult) int64 {
+	if r == nil || r.redirectsRepo == nil || result == nil {
+		return 0
+	}
+	current := strings.TrimSpace(result.CanonicalPath)
+	if current == "" {
+		return 0
+	}
+	seen := map[string]struct{}{current: {}}
+	steps := make([]string, 0, 2)
+	for i := 0; i < 4; i++ {
+		redirect, err := r.redirectsRepo.Get(ctx, "global", current)
+		if err != nil || redirect == nil {
+			break
+		}
+		if redirect.StableUntil.IsZero() || redirect.StableUntil.Before(time.Now().UTC()) {
+			break
+		}
+		target := strings.TrimSpace(redirect.StableTarget)
+		if target == "" || target == current {
+			break
+		}
+		if _, ok := seen[target]; ok {
+			break
+		}
+		steps = append(steps, fmt.Sprintf("redirect_cache: %s -> %s", current, target))
+		current = target
+		seen[current] = struct{}{}
+	}
+	if current != strings.TrimSpace(result.CanonicalPath) {
+		atomic.AddInt64(&r.redirectHits, int64(len(steps)))
+		result.CanonicalPath = current
+		result.NormalizationSteps = append(result.NormalizationSteps, steps...)
+	}
+	return int64(len(steps))
+}
+
+func (r *CanonicalPathResolver) recordTelemetry(ctx context.Context, fragmentType models.FragmentType, redirectHits int64, redirectWrites bool, redirectStable bool, redirectVariability bool) {
+	if r == nil || r.telemetryRepo == nil {
+		return
+	}
+	dimensions := map[string]string{}
+	if fragmentType != "" {
+		dimensions["fragmentType"] = string(fragmentType)
+	}
+	counters := map[string]int64{
+		"resolve_calls": 1,
+	}
+	if redirectHits > 0 {
+		counters["redirect_hits"] = redirectHits
+	}
+	if redirectWrites {
+		counters["redirect_writes"] = 1
+	}
+	if redirectStable {
+		counters["redirect_stable"] = 1
+	}
+	if redirectVariability {
+		counters["redirect_variability"] = 1
+	}
+	_ = r.telemetryRepo.Increment(ctx, "global", "canonical_path_resolver", "redirect_cache", time.Hour, dimensions, counters)
 }

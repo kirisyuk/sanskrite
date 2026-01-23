@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	hlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
@@ -19,6 +20,11 @@ type createLensFromQueryRequest struct {
 	Name              string   `json:"name"`
 	ProjectID         string   `json:"projectId"`
 	Query             string   `json:"query"`
+	// Mode controls whether to immediately start scouting/researching after lens creation.
+	// - just_open: create lens + scope, but suppress initial scouting job creation (best-effort)
+	// - research_first: create lens and start jobs (domains first, then anchors)
+	Mode             string   `json:"mode,omitempty"` // just_open|research_first
+	IntentOverride   *agents.IntentResolution `json:"intent,omitempty"` // Optional: edited intent from preflight UI
 	MaxRecursionDepth *int     `json:"maxRecursionDepth,omitempty"`
 	RequestedMetrics  []string `json:"requestedMetrics,omitempty"`
 	// Optional: canonical paths selected from prefetch/autocomplete UI.
@@ -82,8 +88,8 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		http.Error(w, "projectId is required", http.StatusBadRequest)
 		return
 	}
-	if req.Query == "" {
-		http.Error(w, "query is required", http.StatusBadRequest)
+	if req.Query == "" && req.IntentOverride == nil {
+		http.Error(w, "query or intent is required", http.StatusBadRequest)
 		return
 	}
 
@@ -111,6 +117,8 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		"projectId":         req.ProjectID,
 		"queryLen":          len(req.Query),
 		"querySha1":         trace.HashText(req.Query),
+		"mode":              strings.ToLower(strings.TrimSpace(req.Mode)),
+		"intentProvided":    req.IntentOverride != nil,
 		"nameProvided":      req.Name != "",
 		"statusProvided":    req.Status != "",
 		"maxRecursionDepth": req.MaxRecursionDepth,
@@ -119,12 +127,18 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	})
 
 	// 1) Resolve intent (precheck).
-	intentAgent := agents.NewIntentResolverAgent(h.service.AIExecutor())
-	trace.Log(ctx, "intent", "intent.resolve.start", map[string]any{
-		"projectId": req.ProjectID,
-		"queryLen":  len(req.Query),
-	})
-	intent, err := intentAgent.Resolve(ctx, req.Query)
+	intent := (*agents.IntentResolution)(nil)
+	var err error
+	if req.IntentOverride != nil {
+		intent = req.IntentOverride
+	} else {
+		intentAgent := agents.NewIntentResolverAgent(h.service.AIExecutor())
+		trace.Log(ctx, "intent", "intent.resolve.start", map[string]any{
+			"projectId": req.ProjectID,
+			"queryLen":  len(req.Query),
+		})
+		intent, err = intentAgent.Resolve(ctx, req.Query)
+	}
 	if err != nil {
 		trace.Log(ctx, "intent", "intent.resolve.error", map[string]any{
 			"projectId": req.ProjectID,
@@ -173,19 +187,38 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	for _, a := range intent.Anchors {
 		anchorPaths = append(anchorPaths, strings.TrimSpace(a.CanonicalPath))
 	}
+	domainPaths := make([]string, 0, len(intent.Domains))
+	for _, d := range intent.Domains {
+		domainPaths = append(domainPaths, strings.TrimSpace(d.CanonicalPath))
+	}
 	trace.Log(ctx, "intent", "intent.resolve.ok", map[string]any{
 		"projectId":      req.ProjectID,
 		"focus":          trace.Trunc(intent.Focus, 140),
 		"spherePathsN":   len(intent.SpherePaths),
 		"keywordsN":      len(intent.Keywords),
+		"domainsN":       len(intent.Domains),
 		"anchorsN":       len(intent.Anchors),
+		"domainPaths":    trace.StrSlice(domainPaths, 10),
 		"anchorPaths":    trace.StrSlice(anchorPaths, 10),
 		"spherePathsTop": trace.StrSlice(intent.SpherePaths, 10),
 	})
 
 	// 2) Build Lens.
-	scope := make([]string, 0, len(intent.Anchors))
-	seenScope := make(map[string]struct{}, len(intent.Anchors))
+	scope := make([]string, 0, len(intent.Domains)+len(intent.Anchors)+len(req.PrefetchScope))
+	seenScope := make(map[string]struct{}, len(intent.Domains)+len(intent.Anchors)+len(req.PrefetchScope))
+	// Domains go first so their scouting jobs are created first.
+	for _, d := range intent.Domains {
+		cp := strings.TrimSpace(d.CanonicalPath)
+		if cp == "" {
+			continue
+		}
+		if _, ok := seenScope[cp]; ok {
+			continue
+		}
+		seenScope[cp] = struct{}{}
+		scope = append(scope, cp)
+	}
+	// Then anchors (unchanged behavior).
 	for _, a := range intent.Anchors {
 		cp := strings.TrimSpace(a.CanonicalPath)
 		if cp == "" {
@@ -212,9 +245,10 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	if len(scope) == 0 {
 		trace.Log(ctx, "scope", "scope.empty", map[string]any{
 			"projectId": req.ProjectID,
+			"domainsN":  len(intent.Domains),
 			"anchorsN":  len(intent.Anchors),
 		})
-		http.Error(w, "no anchors resolved", http.StatusBadRequest)
+		http.Error(w, "no anchors/domains resolved", http.StatusBadRequest)
 		return
 	}
 
@@ -225,6 +259,12 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		if intent != nil && len(intent.Anchors) > 0 {
 			if n := strings.TrimSpace(intent.Anchors[0].Name); n != "" {
 				name = n
+			} else {
+				name = intent.Focus
+			}
+		} else if intent != nil && len(intent.Domains) > 0 {
+			if t := strings.TrimSpace(intent.Domains[0].Title); t != "" {
+				name = t
 			} else {
 				name = intent.Focus
 			}
@@ -249,6 +289,10 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	// Decomposition hints help research understand how to break down abstract anchors (markets, programs).
 	if len(intent.DecompositionHints) > 0 {
 		viewConfig["decompositionHints"] = intent.DecompositionHints
+	}
+	// Persist domains (contracts) for downstream scout/research.
+	if len(intent.Domains) > 0 {
+		viewConfig["domains"] = intent.Domains
 	}
 	if req.MaxRecursionDepth != nil {
 		viewConfig["maxRecursionDepth"] = *req.MaxRecursionDepth
@@ -285,7 +329,20 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		}(),
 	})
 
-	lensID, err := h.service.Lens().CreateLens(ctx, lens)
+	// Mode semantics:
+	// - just_open: create lens without creating initial scouting jobs (best-effort)
+	// - research_first: normal behavior (jobs created, domains first due to scope ordering)
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if mode == "" {
+		// Default: if domains exist, research first; else keep legacy behavior (research first).
+		mode = "research_first"
+	}
+	createCtx := ctx
+	if mode == "just_open" {
+		createCtx = hlens.WithSkipScouting(createCtx)
+	}
+
+	lensID, err := h.service.Lens().CreateLens(createCtx, lens)
 	if err != nil {
 		trace.Log(ctx, "lens_create", "lens.create.error", map[string]any{
 			"tenantId":  lens.TenantID,

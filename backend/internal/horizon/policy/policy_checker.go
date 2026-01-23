@@ -482,6 +482,12 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 	var violations []PolicyViolation
 	path := frag.CanonicalPath
 
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	geo := ""
+	if len(parts) >= 3 && parts[0] == "org" {
+		geo = strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+
 	// If canonicalParts already has legal form, treat legal-form enforcement as already applied.
 	// We intentionally do NOT try to "fix again" even if the string path is stale or the allowlist
 	// does not cover some national form: a populated struct is a strong signal the system already
@@ -491,6 +497,12 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 		if strings.TrimSpace(frag.CanonicalParts.Org.LegalForm) != "" {
 			hasLegalForm = true
 		}
+	}
+
+	// Special-case: international organizations (/org/int/...) do not require a legal form suffix.
+	// Rationale: many intergovernmental / international bodies are not incorporated as companies.
+	if geo == "int" {
+		hasLegalForm = true
 	}
 
 	if !hasLegalForm {
@@ -570,7 +582,6 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 	}
 
 	// Check ISO2 validity
-	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) >= 2 {
 		iso2 := parts[1]
 		// "/org/na/..." is allowed but means unknown jurisdiction/geo.
@@ -599,7 +610,8 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 			}
 			violations = append(violations, v)
 		}
-		if iso2 != "na" && len(iso2) != 2 && !strings.Contains(iso2, "-") {
+		// "int" is a special geo token for international organizations (UN, UNESCO, etc.).
+		if iso2 != "na" && iso2 != "int" && len(iso2) != 2 && !strings.Contains(iso2, "-") {
 			v := PolicyViolation{
 				ID:          uuid.New().String(),
 				Type:        ViolationInvalidISO2,

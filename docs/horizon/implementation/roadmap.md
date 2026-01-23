@@ -49,6 +49,17 @@
 **Цель**: добавить выразительность “реальности” через универсальные онтологические оси (time/roles/modality/jurisdiction), не пытаясь сделать таксономию полной онтологией мира.
 
 **TODO**:
+- **High-profile signals (global vs lens-specific)**
+  - **Цель (бизнес)**: быстро подсвечивать пользователю “критические участки” (влияние/власть/узкие места), не пересчитывая признаки каждый раз на фронте.
+  - **Global (делаем сразу)**:
+    - В `HorizonFragment` хранить предвычисленные признаки в поле `highProfile` (см. `backend/internal/horizon/models/high_profile.go`).
+    - Формат: `highProfile.signals[<key>] = { score: 0..1, level: low|medium|high|critical, confidence: 0..1, evidence: { edgeIds[], neighborPaths[] } }`.
+    - Пересчёт: детерминированно из графа (edge types + criticality + qualifiers + basic fragment fields), best-effort.
+    - Backfill: отдельный go-tool должен использовать тот же модуль вычисления.
+  - **Lens-specific (временно, до полноценного дизайна)**:
+    - Хранить признаки “в контексте lens” в overlay-артефакте (например `horizon_materialized_artifacts` kind=`cockpit_overlay` или аналог),
+      чтобы не “портить” глобальный смысл меток вроде “на критическом пути”/“ключевой узел именно этого lens”.
+    - Минимум: `lensId + fragmentId -> { flags, score, evidence(edgeIds) }` с TTL/updatedAt.
 - **Market Segments (канон `/segment/...` + признаки организации)**
   - Ввести в `HorizonFragment` (для `ORGANIZATION`/`FACILITY`) поля:
     - `marketSegments: []string` — массив канонических путей сегментов рынка, где работает организация.

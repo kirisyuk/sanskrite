@@ -1,5 +1,6 @@
 import React from 'react';
 import { ThemeContext } from './ThemeProvider';
+import { getHorizonNodeVisualType, getNodeColors, HorizonNodeIcon } from './HorizonGraphNodeTypes';
 
 export interface FragmentProfile {
   id: string;
@@ -12,6 +13,15 @@ export interface FragmentProfile {
     key: string;
     title: string;
     content: string;
+    facts?: Array<{
+      key: string;
+      label: string;
+      value: string;
+      unit?: string;
+      period?: string;
+      notes?: string;
+      sources?: string[];
+    }>;
     structured?: Record<string, any>;
     datasets?: Array<{
       id: string;
@@ -55,6 +65,15 @@ export interface FragmentProfile {
       name: string;
       probability: number;
       assumptions?: string[];
+      metricItems?: Array<{
+        key: string;
+        label: string;
+        value: string;
+        unit?: string;
+        period?: string;
+        notes?: string;
+        sources?: string[];
+      }>;
       metrics?: Record<string, string>;
       triggers?: string[];
     }>;
@@ -125,6 +144,52 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
   const [error, setError] = React.useState<string | null>(null);
   const [creating, setCreating] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
+  const opTokenRef = React.useRef(0);
+
+  const canonicalLower = String(canonicalPath || '').toLowerCase();
+  const isMarket = fragmentType === 'MARKET' || canonicalLower.startsWith('/market/');
+  const isGov = canonicalLower.startsWith('/gov/');
+  const isOrg = fragmentType === 'ORGANIZATION' || canonicalLower.startsWith('/org/') || isGov;
+  
+  // Detect COMMUNITY subtypes: dynasty and tribe
+  // Path patterns: /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}
+  const isCommunity = fragmentType === 'COMMUNITY' || canonicalLower.startsWith('/community/');
+  let isDynasty = false;
+  let isTribe = false;
+  if (isCommunity && canonicalLower.startsWith('/community/')) {
+    const pathParts = canonicalLower.replace(/^\//, '').split('/');
+    // pathParts: ["community", "{geo}", "{type}", "{slug}"]
+    if (pathParts.length >= 3 && pathParts[0] === 'community') {
+      const communityType = pathParts[2];
+      isDynasty = communityType === 'dynasty';
+      isTribe = communityType === 'tribe';
+    }
+  }
+  
+  // Detect PROGRAM type
+  const isProgram = fragmentType === 'PROGRAM' || canonicalLower.startsWith('/program/');
+  
+  const printKind = isMarket ? 'market' : (isDynasty ? 'dynasty' : (isTribe ? 'tribe' : (isProgram ? 'program' : (isGov ? 'gov' : (isOrg ? 'org' : 'market')))));
+
+  // Ensure modal visuals match the originating graph node (e.g. /gov/* uses GOV_ORG).
+  const visualType = getHorizonNodeVisualType(fragmentType, canonicalPath, label);
+  const nodeColors = getNodeColors(visualType, theme === 'dark' ? 'dark' : 'light');
+  const accentColor = nodeColors.accent;
+  const hexToRgba = (hex: string, alpha: number) => {
+    const h = String(hex || '').trim();
+    if (!h.startsWith('#') || h.length !== 7) return `rgba(0,0,0,${alpha})`;
+    const r = parseInt(h.slice(1, 3), 16);
+    const g = parseInt(h.slice(3, 5), 16);
+    const b = parseInt(h.slice(5, 7), 16);
+    const a = Math.max(0, Math.min(1, alpha));
+    if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return `rgba(0,0,0,${a})`;
+    return `rgba(${r},${g},${b},${a})`;
+  };
+  // Match node "accentSoft" feel, but keep it subtle in modal header.
+  const accentSoft = hexToRgba(accentColor, theme === 'dark' ? 0.22 : 0.16);
+  // Header background: mimic Horizon node top overlay (accent soft + subtle highlight).
+  const headerBg = `radial-gradient(260px 120px at 18% 0%, ${hexToRgba(accentColor, theme === 'dark' ? 0.28 : 0.22)} 0%, rgba(0,0,0,0) 70%),
+    linear-gradient(180deg, rgba(255,255,255,${theme === 'dark' ? '0.08' : '0.18'}) 0%, rgba(255,255,255,0.00) 55%)`;
 
   // Load or create profile when modal opens
   React.useEffect(() => {
@@ -135,6 +200,7 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
     }
 
     const loadProfile = async () => {
+      const token = ++opTokenRef.current;
       setLoading(true);
       setError(null);
 
@@ -145,6 +211,7 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
         const existingProfile = await api.getFragmentProfile(fragmentId);
         
         if (existingProfile) {
+          if (opTokenRef.current !== token) return;
           setProfile(existingProfile);
           setLoading(false);
           return;
@@ -154,13 +221,15 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
         setCreating(true);
         setLoading(false); // Switch to creating state
         
-        const result = await api.refreshFragmentProfile(fragmentId, false);
+        await api.refreshFragmentProfile(fragmentId, false);
         
         // Reload the profile after creation
         const newProfile = await api.getFragmentProfile(fragmentId);
+        if (opTokenRef.current !== token) return;
         setProfile(newProfile);
         setCreating(false);
       } catch (err: any) {
+        if (opTokenRef.current !== token) return;
         const respData = err?.response?.data;
         const errorMessage =
           (respData && typeof respData === 'object' && respData.error) ? String(respData.error) :
@@ -174,10 +243,15 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
     };
 
     loadProfile();
+    return () => {
+      // Invalidate any in-flight async work for this modal instance.
+      opTokenRef.current++;
+    };
   }, [open, fragmentId]);
 
   const handleRefresh = React.useCallback(async () => {
     if (!fragmentId) return;
+    const token = ++opTokenRef.current;
     setError(null);
     setRefreshing(true);
     setProfile(null);
@@ -197,8 +271,10 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
       // Regenerate (force=true) and reload.
       await api.refreshFragmentProfile(fragmentId, true);
       const newProfile = await api.getFragmentProfile(fragmentId);
+      if (opTokenRef.current !== token) return;
       setProfile(newProfile);
     } catch (err: any) {
+      if (opTokenRef.current !== token) return;
       const respData = err?.response?.data;
       const errorMessage =
         (respData && typeof respData === 'object' && respData.error) ? String(respData.error) :
@@ -207,6 +283,7 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
         'Failed to refresh profile';
       setError(errorMessage);
     } finally {
+      if (opTokenRef.current !== token) return;
       setRefreshing(false);
     }
   }, [fragmentId]);
@@ -216,14 +293,14 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
     if (!open) return;
 
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !loading && !creating && !refreshing) {
+      if (e.key === 'Escape') {
         onClose();
       }
     };
 
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
-  }, [open, loading, creating, refreshing, onClose]);
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -234,7 +311,7 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
       {/* Backdrop */}
       <div
         onClick={(e) => {
-          if (e.target === e.currentTarget && !isLoading) {
+          if (e.target === e.currentTarget) {
             onClose();
           }
         }}
@@ -281,6 +358,7 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
             position: 'relative',
             padding: '16px 20px',
             borderBottom: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)'}`,
+            background: headerBg,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -290,37 +368,73 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
           <div style={{ minWidth: 0, flex: 1 }}>
             <div
               style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
                 fontSize: 16,
-                fontWeight: 800,
+                fontWeight: 900,
                 color: 'var(--text-heading)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}
             >
-              {label || canonicalPath || `Fragment ${fragmentId.slice(0, 8)}`}
-            </div>
-            {canonicalPath && (
-              <div
+              <span
                 style={{
-                  marginTop: 4,
-                  fontSize: 12,
-                  color: 'var(--text-secondary-strong)',
-                  fontFamily: 'monospace',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+                  width: 22,
+                  height: 22,
+                  borderRadius: 7,
+                  background: accentSoft,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
                 }}
               >
-                {canonicalPath}
-              </div>
-            )}
+                <HorizonNodeIcon type={visualType} color={accentColor} size={12} />
+              </span>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {label || `Fragment ${fragmentId.slice(0, 8)}`}
+              </span>
+            </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <button
               type="button"
+              onClick={() => {
+                const qs = new URLSearchParams();
+                if (label) qs.set('label', label);
+                qs.set('autoprint', '1');
+                const url = `/horizon/print/${printKind}/${encodeURIComponent(fragmentId)}?${qs.toString()}`;
+                window.open(url, '_blank', 'noopener,noreferrer');
+              }}
+              title="Export as PDF"
+              style={{
+                height: 32,
+                padding: '0 12px',
+                borderRadius: 10,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
+                background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)',
+                color: 'var(--text-heading)',
+                cursor: 'pointer',
+                opacity: 0.85,
+                fontSize: 12,
+                fontWeight: 800,
+                lineHeight: 1,
+                flexShrink: 0,
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.opacity = '1';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.opacity = '0.85';
+              }}
+            >
+              Export PDF
+            </button>
+            <button
+              type="button"
               onClick={handleRefresh}
-              disabled={isLoading}
               title="Refresh profile"
               style={{
                 height: 32,
@@ -329,8 +443,8 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
                 border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
                 background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.02)',
                 color: 'var(--text-heading)',
-                cursor: isLoading ? 'not-allowed' : 'pointer',
-                opacity: isLoading ? 0.4 : 0.85,
+                cursor: isLoading ? 'wait' : 'pointer',
+                opacity: isLoading ? 0.65 : 0.85,
                 fontSize: 12,
                 fontWeight: 800,
                 lineHeight: 1,
@@ -349,7 +463,6 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              disabled={isLoading}
               aria-label="Close"
               title="Close"
               style={{
@@ -359,8 +472,8 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
                 border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
                 background: 'transparent',
                 color: 'var(--text-heading)',
-                cursor: isLoading ? 'not-allowed' : 'pointer',
-                opacity: isLoading ? 0.4 : 0.7,
+                cursor: 'pointer',
+                opacity: 0.7,
                 fontSize: 18,
                 fontWeight: 900,
                 lineHeight: 1,
@@ -371,14 +484,10 @@ export const FragmentProfileModal: React.FC<FragmentProfileModalProps> = ({
                 transition: 'opacity 0.2s',
               }}
               onMouseEnter={(e) => {
-                if (!isLoading) {
-                  e.currentTarget.style.opacity = '1';
-                }
+                e.currentTarget.style.opacity = '1';
               }}
               onMouseLeave={(e) => {
-                if (!isLoading) {
-                  e.currentTarget.style.opacity = '0.7';
-                }
+                e.currentTarget.style.opacity = '0.7';
               }}
             >
               ×

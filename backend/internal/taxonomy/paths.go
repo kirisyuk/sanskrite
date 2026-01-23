@@ -121,6 +121,8 @@ var ValidCanonicalPathNamespace = map[string]bool{
 	"product": true,
 	"program": true,
 	"market":  true,
+	// Executable “knowledge contract” nodes (domain/inquiry focus).
+	"domain": true,
 	// Informal communities (trade/professional/etc.).
 	"community": true,
 	// Market segments (ORG-level classification; may be materialized later).
@@ -200,7 +202,7 @@ func ValidateCanonicalPath(path string) error {
 		// - legacy: /org/{slug}
 		// - preferred: /org/{geo}/{slug}
 		// geo: ISO3166-1 alpha2 (exactly 2 lowercase letters) OR composite (2-3 ISO2 joined by "-")
-		// Examples: "us", "sa", "tr-sy", "ae-sa-om", "na"
+		// Examples: "us", "sa", "tr-sy", "ae-sa-om", "na", "int"
 		if len(parts) == 2 {
 			return nil
 		}
@@ -208,8 +210,9 @@ func ValidateCanonicalPath(path string) error {
 			return fmt.Errorf("org canonical path must be /org/{slug} (legacy) or /org/{geo}/{slug}: %s", path)
 		}
 		geo := strings.ToLower(strings.TrimSpace(parts[1]))
-		if geo != "na" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) {
-			return fmt.Errorf("org canonical path has invalid geo %q (expected ISO3166-1 alpha2 like 'us'/'sa', composite like 'tr-sy'/'ae-sa-om', or 'na'): %s", parts[1], path)
+		// "int" is a special token for international organizations (UN, UNESCO, etc.).
+		if geo != "na" && geo != "int" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) {
+			return fmt.Errorf("org canonical path has invalid geo %q (expected ISO3166-1 alpha2 like 'us'/'sa', composite like 'tr-sy'/'ae-sa-om', or 'na'/'int'): %s", parts[1], path)
 		}
 	case "loc":
 		// /loc/{cc}/{admin1}/{city}
@@ -253,9 +256,115 @@ func ValidateCanonicalPath(path string) error {
 		if len(parts) < 2 {
 			return fmt.Errorf("deposit canonical path must have at least 2 segments: /deposit/{slug} (legacy) or /deposit/{resource}/{slug}: %s", path)
 		}
+	case "domain":
+		// /domain/v1/{contractType}/{facetKey}/{facetValue}...
+		// The path is a machine-readable contract; it must be parseable and deterministic.
+		if err := validateDomainCanonicalPathParts(parts, path); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+// =============================================================================
+// DOMAIN canonical paths (/domain/v1/...)
+// =============================================================================
+
+var domainContractTypes = map[string]struct{}{
+	// Supply chain & industry mapping
+	"supply-chain": {},
+	// Risk / geopolitics
+	"risk-assessment":     {},
+	"geopolitical-risk":   {},
+	"bilateral-relations": {},
+	// Markets / opportunity
+	"market-opportunity":      {},
+	"competitive-landscape":   {},
+	"regulatory-impact":       {},
+	"investment-thesis":       {},
+	"technology-landscape":    {},
+	"ecosystem-mapping":       {},
+	"scenario-analysis":       {},
+	"stakeholder-mapping":     {},
+	"policy-and-regulation":   {}, // alias-ish; keep for robustness
+	"macro-trends":            {},
+	"security-and-compliance": {},
+}
+
+var domainFacetKeys = map[string]struct{}{
+	"geo":        {},
+	"topic":      {},
+	"subject":    {},
+	"project":    {},
+	"asset":      {},
+	"material":   {},
+	"application": {},
+	"sector":     {},
+	"industry":   {},
+	"market":     {},
+	"regulation": {},
+	"framework":  {},
+	"time":       {},
+}
+
+func validateDomainCanonicalPathParts(parts []string, originalPath string) error {
+	// parts already trimmed/split from ValidateCanonicalPath
+	// Must be: ["domain","v1",contractType,(k,v)*]
+	if len(parts) < 3 {
+		return fmt.Errorf("domain canonical path must have at least 3 segments: /domain/v1/{contractType}: %s", originalPath)
+	}
+	if parts[1] != "v1" {
+		return fmt.Errorf("domain canonical path must use version v1: %s", originalPath)
+	}
+	ct := strings.ToLower(strings.TrimSpace(parts[2]))
+	if ct == "" {
+		return fmt.Errorf("domain canonical path has empty contractType: %s", originalPath)
+	}
+	if _, ok := domainContractTypes[ct]; !ok {
+		return fmt.Errorf("domain canonical path has invalid contractType %q (allowlist): %s", parts[2], originalPath)
+	}
+	rest := parts[3:]
+	if len(rest)%2 != 0 {
+		return fmt.Errorf("domain canonical path facets must be key/value pairs (even segments after contractType): %s", originalPath)
+	}
+	for i := 0; i < len(rest); i += 2 {
+		k := strings.ToLower(strings.TrimSpace(rest[i]))
+		v := strings.ToLower(strings.TrimSpace(rest[i+1]))
+		if k == "" || v == "" {
+			return fmt.Errorf("domain canonical path has empty facet key/value near %q/%q: %s", rest[i], rest[i+1], originalPath)
+		}
+		if _, ok := domainFacetKeys[k]; !ok {
+			return fmt.Errorf("domain canonical path has invalid facet key %q (allowlist): %s", rest[i], originalPath)
+		}
+		if k == "geo" {
+			if !isValidDomainGeoToken(v) {
+				return fmt.Errorf("domain canonical path has invalid geo facet %q: %s", rest[i+1], originalPath)
+			}
+		}
+	}
+	return nil
+}
+
+func isValidDomainGeoToken(geo string) bool {
+	geo = strings.ToLower(strings.TrimSpace(geo))
+	if geo == "" {
+		return false
+	}
+	// Allow same family as /loc and /org plus "int" for international scope.
+	if geo == "global" || geo == "int" {
+		return true
+	}
+	if reCountryAlpha2.MatchString(geo) {
+		return true
+	}
+	if IsRegionalGeoToken(geo) {
+		return true
+	}
+	if isCompositeGeo(geo) {
+		return true
+	}
+	return false
 }
 
 // getValidNamespaces returns a sorted list of valid namespace names for error messages

@@ -400,7 +400,7 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     // - Market hierarchy: parent should appear to the RIGHT, child to the LEFT.
     case 'HAS_SUBMARKET':
       return isOutgoing ? 'market' : 'context';
-    // - Government admin hierarchy: treat as operating context (right).
+    // - Government admin hierarchy: treat as governance/context for left-group placement.
     case 'ADMINISTERS':
       return 'context';
     
@@ -1176,6 +1176,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'CONTROLS',
     'INVESTS_IN',
     'FOUNDED',
+    'ADMINISTERS',
   ]);
   const GOVERNANCE_CONTROL_TYPES = new Set(['BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY']);
   const SUPPLY_CHAIN_TYPES = new Set(['PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO']);
@@ -1208,6 +1209,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'PRODUCES',
     'SUPPLIES_TO',
     'TRANSFORMS_INTO',
+    'ADMINISTERS',
     'INFLUENCES',
     'AFFECTS',
     'REGULATES',
@@ -1552,15 +1554,44 @@ export async function layoutLevelsTwoPane<T = any>(
   // === 3) Build Left blocks (Downstream only) ===
   // Anything attached to a right node (parentFragmentId == rightId) that is NOT in right backbone
   // stays in the left block. This is the "big group" that may be multi-row.
+  //
+  // IMPORTANT: When dock filters change, a node might be demoted from the right pane to a left group.
+  // In that case, the demoted node's children must ALSO be collected into a left group, recursively.
+  // Otherwise, they become "orphan" passthrough nodes and get placed far off-screen (dock area).
   const downstreamByRight = new Map<string, Node<T>[]>();
+
+  // Build parent->children map for all fragments (needed for recursive collection).
+  const childrenByParent = new Map<string, Node<T>[]>();
   for (const n of fragments) {
-    if (rightIds.has(n.id)) continue;
     const d: any = n.data;
     const pid = String(d?.parentFragmentId || '').trim();
-    if (!pid || !rightIds.has(pid)) continue;
-    const list = downstreamByRight.get(pid) || [];
+    if (!pid) continue;
+    const list = childrenByParent.get(pid) || [];
     list.push(n);
-    downstreamByRight.set(pid, list);
+    childrenByParent.set(pid, list);
+  }
+
+  // Recursively collect all descendants of a node that are NOT in rightIds.
+  // Returns them grouped by the NEAREST right-side ancestor (for proper left-group association).
+  const collectDescendantsNotInRight = (nodeId: string, rightAncestor: string, visited: Set<string>) => {
+    if (visited.has(nodeId)) return;
+    visited.add(nodeId);
+    const children = childrenByParent.get(nodeId) || [];
+    for (const child of children) {
+      if (rightIds.has(child.id)) continue; // Child is on the right, skip
+      // Add this child to the rightAncestor's left group
+      const list = downstreamByRight.get(rightAncestor) || [];
+      list.push(child);
+      downstreamByRight.set(rightAncestor, list);
+      // Recursively collect this child's descendants too
+      collectDescendantsNotInRight(child.id, rightAncestor, visited);
+    }
+  };
+
+  // For each right-side node, collect all its descendants that are not on the right.
+  const collectedIds = new Set<string>();
+  for (const rid of rightIds) {
+    collectDescendantsNotInRight(rid, rid, collectedIds);
   }
 
   const sortByPriorityThenLabel = (list: Node<T>[]) => {
@@ -3962,7 +3993,7 @@ export function deriveLevelsTreeMetadata<T = any>(
   // If we traverse INCOMING edge of this type: Rank - 1
   const HIERARCHY_TYPES = new Set([
     // Corporate structure / control
-    'OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'FOUNDED', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF',
+    'OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'FOUNDED', 'ADMINISTERS', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF',
     'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO',
     // Market-defining (org -> market): treat as hierarchy signal
     'DOMINATES',
@@ -3979,6 +4010,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     'CONTROLS',
     'INVESTS_IN',
     'FOUNDED',
+    'ADMINISTERS',
   ]);
   const INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS']);
   const hierarchyScore = (et: string): number => {

@@ -52,6 +52,11 @@ import type { LensItem } from '../types/lensItem';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 import { ExpandEmptyToast } from './ExpandEmptyToast';
 import { MarketProfileModal } from './MarketProfileModal';
+import { OrgProfileModal } from './OrgProfileModal';
+import { GovProfileModal } from './GovProfileModal';
+import { DynastyProfileModal } from './DynastyProfileModal';
+import { TribeProfileModal } from './TribeProfileModal';
+import { ProgramProfileModal } from './ProgramProfileModal';
 
 /**
  * Custom edge that draws an arc (inverted parabola) going UP and over.
@@ -601,6 +606,36 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   
   // Market profile modal state
   const [marketProfileModal, setMarketProfileModal] = React.useState<{
+    open: boolean;
+    fragmentId: string;
+    canonicalPath?: string;
+    label?: string;
+  } | null>(null);
+  const [orgProfileModal, setOrgProfileModal] = React.useState<{
+    open: boolean;
+    fragmentId: string;
+    canonicalPath?: string;
+    label?: string;
+  } | null>(null);
+  const [govProfileModal, setGovProfileModal] = React.useState<{
+    open: boolean;
+    fragmentId: string;
+    canonicalPath?: string;
+    label?: string;
+  } | null>(null);
+  const [dynastyProfileModal, setDynastyProfileModal] = React.useState<{
+    open: boolean;
+    fragmentId: string;
+    canonicalPath?: string;
+    label?: string;
+  } | null>(null);
+  const [tribeProfileModal, setTribeProfileModal] = React.useState<{
+    open: boolean;
+    fragmentId: string;
+    canonicalPath?: string;
+    label?: string;
+  } | null>(null);
+  const [programProfileModal, setProgramProfileModal] = React.useState<{
     open: boolean;
     fragmentId: string;
     canonicalPath?: string;
@@ -1209,10 +1244,75 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // For MARKET fragments, open profile modal instead of explanation popover
     const nodeType = String(args.nodeType || '').trim().toUpperCase();
     const canonicalPath = String(args.canonicalPath || '').trim();
+    const canonicalPathLower = canonicalPath.toLowerCase();
     const isMarket = nodeType === 'MARKET' || canonicalPath.startsWith('/market/');
+    const isOrg = nodeType === 'ORGANIZATION' || canonicalPath.startsWith('/org/');
+    const isGov = canonicalPath.startsWith('/gov/');
+    
+    // Detect COMMUNITY subtypes: dynasty and tribe
+    // Path patterns: /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}
+    const isCommunity = nodeType === 'COMMUNITY' || canonicalPathLower.startsWith('/community/');
+    let isDynasty = false;
+    let isTribe = false;
+    if (isCommunity && canonicalPathLower.startsWith('/community/')) {
+      const pathParts = canonicalPathLower.replace(/^\//, '').split('/');
+      // pathParts: ["community", "{geo}", "{type}", "{slug}"]
+      if (pathParts.length >= 3 && pathParts[0] === 'community') {
+        const communityType = pathParts[2];
+        isDynasty = communityType === 'dynasty';
+        isTribe = communityType === 'tribe';
+      }
+    }
     
     if (isMarket && args.fragmentId) {
       setMarketProfileModal({
+        open: true,
+        fragmentId: args.fragmentId,
+        canonicalPath: args.canonicalPath,
+        label: args.label,
+      });
+      return;
+    }
+    if (isDynasty && args.fragmentId) {
+      setDynastyProfileModal({
+        open: true,
+        fragmentId: args.fragmentId,
+        canonicalPath: args.canonicalPath,
+        label: args.label,
+      });
+      return;
+    }
+    if (isTribe && args.fragmentId) {
+      setTribeProfileModal({
+        open: true,
+        fragmentId: args.fragmentId,
+        canonicalPath: args.canonicalPath,
+        label: args.label,
+      });
+      return;
+    }
+    // Detect PROGRAM type
+    const isProgram = nodeType === 'PROGRAM' || canonicalPathLower.startsWith('/program/');
+    if (isProgram && args.fragmentId) {
+      setProgramProfileModal({
+        open: true,
+        fragmentId: args.fragmentId,
+        canonicalPath: args.canonicalPath,
+        label: args.label,
+      });
+      return;
+    }
+    if (isGov && args.fragmentId) {
+      setGovProfileModal({
+        open: true,
+        fragmentId: args.fragmentId,
+        canonicalPath: args.canonicalPath,
+        label: args.label,
+      });
+      return;
+    }
+    if (isOrg && !isGov && args.fragmentId) {
+      setOrgProfileModal({
         open: true,
         fragmentId: args.fragmentId,
         canonicalPath: args.canonicalPath,
@@ -4379,15 +4479,22 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           if (reactFlowInstanceRef.current && loadedNodes.length > 0) {
             reactFlowInstanceRef.current.fitView({ padding: 0.1, duration: 300 });
           }
-          // Trigger auto-arrange once on initial load (moved from useEffect to avoid nodes.length dependency).
-          if (!autoArrangeOnceRef.current && loadedNodes.length > 0) {
-            const hasFragments = loadedNodes.some((n) => !((n.data as any)?.isGroup));
+          // Trigger auto-arrange once when nodes actually land in state.
+          const tryAutoArrange = () => {
+            if (autoArrangeOnceRef.current) return;
+            const current = (nodesStateRef.current || []) as any[];
+            if (!current.length) {
+              window.requestAnimationFrame(tryAutoArrange);
+              return;
+            }
+            const hasFragments = current.some((n) => !((n?.data as any)?.isGroup));
             if (!hasFragments) return;
             autoArrangeOnceRef.current = true;
             // Note: invokeArrange -> handleArrange uses current `layoutMode` to choose the algorithm.
             // We keep layoutMode in a ref so we don't re-fetch LensItems on layout mode changes.
             invokeArrange();
-          }
+          };
+          tryAutoArrange();
         }, 100);
       } catch (err: any) {
         console.error('[Cockpit] Failed to load lens items', err);
@@ -12227,8 +12334,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             edgeTypes={CUSTOM_EDGE_TYPES}
             onInit={(instance) => {
               reactFlowInstanceRef.current = instance;
+              // Initial fitView is called manually in the loadLensItems effect, not here,
+              // to avoid viewport jumps during dock filter toggles and other relayouts.
             }}
-            fitView
             style={{ background: bgColor, width: '100%', height: '100%' }}
             minZoom={0.1}
             maxZoom={2}
@@ -13442,6 +13550,56 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           fragmentId={marketProfileModal.fragmentId}
           canonicalPath={marketProfileModal.canonicalPath}
           label={marketProfileModal.label}
+        />
+      )}
+
+      {orgProfileModal && (
+        <OrgProfileModal
+          open={orgProfileModal.open}
+          onClose={() => setOrgProfileModal(null)}
+          fragmentId={orgProfileModal.fragmentId}
+          canonicalPath={orgProfileModal.canonicalPath}
+          label={orgProfileModal.label}
+        />
+      )}
+
+      {govProfileModal && (
+        <GovProfileModal
+          open={govProfileModal.open}
+          onClose={() => setGovProfileModal(null)}
+          fragmentId={govProfileModal.fragmentId}
+          canonicalPath={govProfileModal.canonicalPath}
+          label={govProfileModal.label}
+        />
+      )}
+
+      {dynastyProfileModal && (
+        <DynastyProfileModal
+          open={dynastyProfileModal.open}
+          onClose={() => setDynastyProfileModal(null)}
+          fragmentId={dynastyProfileModal.fragmentId}
+          canonicalPath={dynastyProfileModal.canonicalPath}
+          label={dynastyProfileModal.label}
+        />
+      )}
+
+      {tribeProfileModal && (
+        <TribeProfileModal
+          open={tribeProfileModal.open}
+          onClose={() => setTribeProfileModal(null)}
+          fragmentId={tribeProfileModal.fragmentId}
+          canonicalPath={tribeProfileModal.canonicalPath}
+          label={tribeProfileModal.label}
+        />
+      )}
+
+      {programProfileModal && (
+        <ProgramProfileModal
+          open={programProfileModal.open}
+          onClose={() => setProgramProfileModal(null)}
+          fragmentId={programProfileModal.fragmentId}
+          canonicalPath={programProfileModal.canonicalPath}
+          label={programProfileModal.label}
         />
       )}
     </div>

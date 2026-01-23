@@ -549,6 +549,22 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			})
 		}
 
+		// Scope-only lens creation should not trigger scouting jobs.
+		// We still publish a placeholder node for unknown entities so the UI can render the intent.
+		if SkipScouting(ctx) {
+			if !isCacheHit {
+				s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+					"tenantId":      lens.TenantID,
+					"projectId":     lens.ProjectID,
+					"lensId":        lensID,
+					"canonicalPath": strings.TrimSpace(canonicalPath),
+					"status":        "pending",
+					"hint":          "just_open_skip_scouting",
+				})
+			}
+			continue
+		}
+
 		// Create ScoutingJob only when we DON'T already have sufficiently verified data.
 		// This prevents excessive Cloud Tasks for queries that are already in the system (e.g., Astana/LRT).
 		if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {

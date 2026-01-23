@@ -26,6 +26,60 @@
 @import "@fontsource/inter/500.css";
 @import "@fontsource/inter/600.css";
 
+/* Print / PDF export */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    background: white !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .layout-main,
+  .main-content,
+  .content-area {
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Avoid awkward page breaks inside cards */
+  .hzn-print-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Print-safe rendering (Safari/Chrome PDF can glitch on blur/gradients/shadows) */
+  .hzn-print * {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    filter: none !important;
+    text-shadow: none !important;
+  }
+
+  .hzn-print-surface {
+    background: #ffffff !important;
+    box-shadow: none !important;
+    border-color: rgba(15, 23, 42, 0.12) !important;
+  }
+
+  /* Avoid rendering artifacts from gradients on some engines */
+  .hzn-print svg * {
+    filter: none !important;
+  }
+}
+
 /* Glow utility for artifacts button */
 .etg-glow {
   box-shadow: 0 0 0 0 rgba(56, 161, 105, 0.65);

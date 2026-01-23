@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import './i18n';
 import { BrowserRouter as Router, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { ThemeProvider } from './components/ThemeProvider';
@@ -19,6 +19,12 @@ import PrivacyNotice from './pages/PrivacyNotice';
 import LegalModal from './components/LegalModal';
 import StartupError from './components/StartupError';
 import { getFirebaseInitError } from './lib/firebase';
+import HorizonMarketProfilePrintPage from './pages/HorizonMarketProfilePrintPage';
+import HorizonOrgProfilePrintPage from './pages/HorizonOrgProfilePrintPage';
+import HorizonGovProfilePrintPage from './pages/HorizonGovProfilePrintPage';
+import HorizonDynastyProfilePrintPage from './pages/HorizonDynastyProfilePrintPage';
+import HorizonTribeProfilePrintPage from './pages/HorizonTribeProfilePrintPage';
+import HorizonProgramProfilePrintPage from './pages/HorizonProgramProfilePrintPage';
 
 function AppContent() {
   const location = useLocation();
@@ -37,6 +43,8 @@ function AppContent() {
   const lockContentAreaScroll =
     (location.pathname === '/' && (isUnfold || !!user)) ||
     location.pathname === '/horizon';
+
+  const isPrintRoute = location.pathname.startsWith('/horizon/print/');
   
   // Handle modal from query parameter
   useEffect(() => {
@@ -80,23 +88,29 @@ function AppContent() {
   return (
     <div className="layout-main">
       <div className="main-content">
-        <TopBar />
-        <ServerUnavailableBanner />
+        {!isPrintRoute && <TopBar />}
+        {!isPrintRoute && <ServerUnavailableBanner />}
         <div
           className="content-area"
-          style={lockContentAreaScroll ? { overflowY: 'hidden' } : undefined}
+          style={lockContentAreaScroll && !isPrintRoute ? { overflowY: 'hidden' } : undefined}
         >
           <Routes>
             <Route path="/shared/:token" element={<ShareViewPage />} />
             <Route path="/verified" element={<VerifiedPage />} />
             <Route path="/verified/:code" element={<VerifiedViewPage />} />
+            <Route path="/horizon/print/market/:fragmentId" element={<AuthGuard><HorizonMarketProfilePrintPage /></AuthGuard>} />
+            <Route path="/horizon/print/org/:fragmentId" element={<AuthGuard><HorizonOrgProfilePrintPage /></AuthGuard>} />
+            <Route path="/horizon/print/gov/:fragmentId" element={<AuthGuard><HorizonGovProfilePrintPage /></AuthGuard>} />
+            <Route path="/horizon/print/dynasty/:fragmentId" element={<AuthGuard><HorizonDynastyProfilePrintPage /></AuthGuard>} />
+            <Route path="/horizon/print/tribe/:fragmentId" element={<AuthGuard><HorizonTribeProfilePrintPage /></AuthGuard>} />
+            <Route path="/horizon/print/program/:fragmentId" element={<AuthGuard><HorizonProgramProfilePrintPage /></AuthGuard>} />
             <Route path="/horizon" element={<AuthGuard><HorizonPage /></AuthGuard>} />
             <Route path="/" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />
             <Route path="/terms" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
             <Route path="/privacy" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
           </Routes>
         </div>
-        <BottomBar />
+        {!isPrintRoute && <BottomBar />}
         
         {/* Modal overlay */}
         {showModal && <LegalModal type={showModal} onClose={handleCloseModal} />}

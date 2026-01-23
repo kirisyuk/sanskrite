@@ -16,6 +16,9 @@ type IntentResolution struct {
 	Focus       string   `json:"focus"`
 	SpherePaths []string `json:"spherePaths"`
 	Keywords    []string `json:"keywords"`
+	// Domains are executable “knowledge contracts” that must be expanded into first-order entities.
+	// Canonical path format: /domain/v1/{contractType}/{facetKey}/{facetValue}...
+	Domains []DomainResolution `json:"domains,omitempty"`
 	Anchors     []struct {
 		CanonicalPath string `json:"canonicalPath"`
 		Type          string `json:"type"` // ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL (best-effort)
@@ -28,6 +31,22 @@ type IntentResolution struct {
 	// DecompositionHints describe how abstract anchors (MARKET, PROGRAM) should be decomposed.
 	// These are synthesized by the LLM and passed to downstream research to guide exploration.
 	DecompositionHints []DecompositionHint `json:"decompositionHints,omitempty"`
+}
+
+// DomainResolution describes an executable domain contract extracted from a user query.
+// It is a first-class ontology node (DOMAIN fragment) and is expanded into first-order entities by the pipeline.
+type DomainResolution struct {
+	CanonicalPath string  `json:"canonicalPath"`
+	ContractType  string  `json:"contractType"` // allowlisted, must match /domain/v1/{contractType}/...
+	Title         string  `json:"title"`        // human-readable English title (not a slug)
+	Description   string  `json:"description"`  // actionable contract (“what to reveal/show”)
+	Facets        map[string][]string `json:"facets,omitempty"`
+	Projections   []string `json:"projections,omitempty"`
+	RelatedDomains []string `json:"relatedDomains,omitempty"`  // canonical /domain/... paths
+	AffectedDomains []string `json:"affectedDomains,omitempty"` // canonical /domain/... paths
+	FirstOrderEntities []string `json:"firstOrderEntities,omitempty"` // canonical paths of entities to add to lens scope
+	Confidence    float64 `json:"confidence"`
+	Reason        string  `json:"reason"`
 }
 
 // DecompositionHint describes how to decompose an abstract anchor (MARKET, PROGRAM, etc.)
@@ -70,8 +89,8 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 		if strings.TrimSpace(result.Focus) == "" {
 			return fmt.Errorf("focus is required")
 		}
-		if len(result.Anchors) == 0 {
-			return fmt.Errorf("at least 1 anchor is required")
+		if len(result.Anchors) == 0 && len(result.Domains) == 0 {
+			return fmt.Errorf("at least 1 anchor or 1 domain is required")
 		}
 		return nil
 	})
@@ -169,15 +188,62 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 		}
 	}
 	out.Anchors = nAnchors
-	if len(out.Anchors) == 0 {
-		return nil, fmt.Errorf("no valid anchors after canonical validation")
-	}
 	if out.Focus == "" {
 		out.Focus = query
 	}
 
+	// Normalize domains: canonicalize formatting and drop invalid paths.
+	if len(out.Domains) > 0 {
+		validDomains := make([]DomainResolution, 0, len(out.Domains))
+		for _, d := range out.Domains {
+			orig := strings.TrimSpace(d.CanonicalPath)
+			cp := normalizeCanonicalPathForTools(orig)
+			cp = slugifyCanonicalPath(cp)
+			// Normalize using taxonomy validation (now includes /domain/v1).
+			if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+				fmt.Printf("[IntentResolver] Domain rejected: original=%q, normalized=%q, error=%v\n", orig, cp, err)
+				continue
+			}
+			// Parse contractType + facets from path and treat it as source of truth.
+			ct, facets := parseDomainPathForIntent(cp)
+			if ct != "" {
+				d.ContractType = ct
+			} else {
+				d.ContractType = strings.TrimSpace(d.ContractType)
+			}
+			d.CanonicalPath = cp
+			d.Title = strings.TrimSpace(d.Title)
+			d.Description = strings.TrimSpace(d.Description)
+			d.Reason = strings.TrimSpace(d.Reason)
+			if d.Confidence <= 0 || d.Confidence > 1 {
+				d.Confidence = 0.6
+			}
+			// Always set facets from the path (ensures determinism and dedupe).
+			if len(facets) > 0 {
+				d.Facets = facets
+			}
+			// Normalize related/affected domains (canonical /domain/v1/...).
+			d.RelatedDomains = normalizeDomainPathsList(d.RelatedDomains, 8)
+			d.AffectedDomains = normalizeDomainPathsList(d.AffectedDomains, 8)
+			// Normalize first-order entities canonical paths.
+			d.FirstOrderEntities = normalizeCanonicalPathsList(d.FirstOrderEntities, 16)
+			// Projections are free-form but we cap/dedupe.
+			d.Projections = dedupStrings(d.Projections, 12)
+			validDomains = append(validDomains, d)
+			if len(validDomains) >= 3 {
+				break
+			}
+		}
+		out.Domains = validDomains
+	}
+
+	// Must have at least one valid anchor or domain after normalization.
+	if len(out.Anchors) == 0 && len(out.Domains) == 0 {
+		return nil, fmt.Errorf("no valid anchors/domains after canonical validation")
+	}
+
 	// Normalize decomposition hints: filter to valid anchors, dedupe, cap.
-	if len(out.DecompositionHints) > 0 {
+	if len(out.DecompositionHints) > 0 && len(out.Anchors) > 0 {
 		anchorPathSet := make(map[string]struct{}, len(out.Anchors))
 		for _, a := range out.Anchors {
 			anchorPathSet[a.CanonicalPath] = struct{}{}
@@ -220,6 +286,86 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 	}
 
 	return &out, nil
+}
+
+func parseDomainPathForIntent(canonicalPath string) (contractType string, facets map[string][]string) {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(canonicalPath), "/"), "/")
+	// domain/v1/{contractType}/(k/v)*
+	if len(parts) < 3 {
+		return "", nil
+	}
+	if parts[0] != "domain" || parts[1] != "v1" {
+		return "", nil
+	}
+	contractType = strings.TrimSpace(parts[2])
+	if contractType == "" {
+		return "", nil
+	}
+	rest := parts[3:]
+	if len(rest)%2 != 0 {
+		return contractType, nil
+	}
+	facets = map[string][]string{}
+	for i := 0; i < len(rest); i += 2 {
+		k := strings.TrimSpace(rest[i])
+		v := strings.TrimSpace(rest[i+1])
+		if k == "" || v == "" {
+			continue
+		}
+		facets[k] = append(facets[k], v)
+	}
+	return contractType, facets
+}
+
+func normalizeDomainPathsList(in []string, maxN int) []string {
+	out := make([]string, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, p := range in {
+		p = normalizeCanonicalPathForTools(strings.TrimSpace(p))
+		p = slugifyCanonicalPath(p)
+		if p == "" {
+			continue
+		}
+		if !strings.HasPrefix(p, "/domain/") {
+			continue
+		}
+		if err := taxonomy.ValidateCanonicalPath(p); err != nil {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+		if len(out) >= maxN {
+			break
+		}
+	}
+	return out
+}
+
+func normalizeCanonicalPathsList(in []string, maxN int) []string {
+	out := make([]string, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, p := range in {
+		p = normalizeCanonicalPathForTools(strings.TrimSpace(p))
+		p = slugifyCanonicalPath(p)
+		if p == "" {
+			continue
+		}
+		if err := taxonomy.ValidateCanonicalPath(p); err != nil {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+		if len(out) >= maxN {
+			break
+		}
+	}
+	return out
 }
 
 // dedupStrings deduplicates and caps a string slice.
@@ -272,6 +418,21 @@ OUTPUT JSON SCHEMA:
   "focus": "string (short, reusable intent statement)",
   "spherePaths": ["string (canonical /sphere/... only)"],
   "keywords": ["string (non-canonical tokens)"],
+  "domains": [
+    {
+      "canonicalPath": "string (canonical /domain/v1/... contract path; MUST follow DOMAIN rules below)",
+      "contractType": "string (allowlisted; MUST match the {contractType} in canonicalPath)",
+      "title": "string (English human-readable title; NOT a slug)",
+      "description": "string (actionable contract describing what the system should reveal/show)",
+      "facets": { "geo": ["us"], "material": ["lithium"], "application": ["ev"] },
+      "projections": ["ORGANIZATION", "MARKET", "FACILITY", "GEO_REGION", "PRODUCT"],
+      "relatedDomains": ["string (/domain/v1/... optional)"],
+      "affectedDomains": ["string (/domain/v1/... optional)"],
+      "firstOrderEntities": ["string (canonical paths to add to the Lens scope)"],
+      "confidence": 0.0,
+      "reason": "short reason"
+    }
+  ],
   "anchors": [
     {
       "canonicalPath": "string (canonicalPath, must match the taxonomy rules below)",
@@ -297,6 +458,20 @@ RULES:
 - keywords SHOULD be in English when possible (translate), but can include raw tokens like handles.
 - spherePaths MUST be canonical under /sphere/... (if unsure, use /sphere/other).
 
+- DOMAINS (CRITICAL):
+  - A DOMAIN is an executable knowledge contract: “what the user wants to know about the world” and how to structure exploration.
+  - Use domains when the query is an analytical question or a research focus that must be expanded into multiple entities.
+  - Domain canonicalPath MUST be: /domain/v1/{contractType}/{facetKey}/{facetValue}...
+  - contractType MUST be one of:
+    supply-chain, risk-assessment, geopolitical-risk, bilateral-relations, market-opportunity, competitive-landscape,
+    regulatory-impact, investment-thesis, technology-landscape, ecosystem-mapping, scenario-analysis, stakeholder-mapping,
+    policy-and-regulation, macro-trends, security-and-compliance
+  - facetKey MUST be one of:
+    geo, topic, subject, project, asset, material, application, sector, industry, market, regulation, framework, time
+  - facets MUST match the canonicalPath (best-effort). If you provide facets, keep them consistent with the path.
+  - title MUST follow Title Case and be human-readable (e.g., "US Lithium Supply Chain for Electric Vehicles").
+  - description MUST be actionable (“Map X, identify Y, highlight Z…”).
+
 - MULTI-ENTITY ANCHORS (CRITICAL):
   - If the query clearly mentions multiple different entities (people + organizations, org + product, org + facility, competitors, partners, etc.),
     you MUST return multiple separate anchors (2-3), one per entity, instead of collapsing them into a single canonicalPath.
@@ -317,7 +492,7 @@ RULES:
       - FACILITY: /fac/tesla/gigafactory-texas
       - GEO_REGION: /loc/us/tx/austin
 - canonicalPath MUST be a valid canonical path with allowed namespaces:
-  /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media
+  /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media, /domain
 - If the query refers to a media brand/channel (e.g. a Telegram channel), do NOT collapse it to a GEO_REGION just because it contains a city name.
   - Example: Telegram channel "В казани поймут" should be anchored as a MEDIA_CHANNEL: /media/telegram/{channel-slug}, not as /loc/... for Kazan.
   - Prefer using a stable handle/username if present; otherwise use the quoted title as the slug source.

@@ -18,8 +18,18 @@ type Voucher = {
   updatedAt: string;
 };
 
+type TelemetryItem = {
+  component: string;
+  metric: string;
+  windowStart: string;
+  windowSizeSec: number;
+  dimensions?: Record<string, string>;
+  counters: Record<string, number>;
+  updatedAt: string;
+};
+
 const AdminAccess: React.FC = () => {
-  const [tab, setTab] = React.useState<'waitlist' | 'vouchers' | 'ws'>('waitlist');
+  const [tab, setTab] = React.useState<'waitlist' | 'vouchers' | 'telemetry' | 'ws'>('waitlist');
   const [statusFilter, setStatusFilter] = React.useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
   const [items, setItems] = React.useState<Array<{ id: string; email: string; status: string; note?: string; invitedBy?: string; createdAt: string; updatedAt: string }>>([]);
   const [loading, setLoading] = React.useState(false);
@@ -34,6 +44,16 @@ const AdminAccess: React.FC = () => {
   const [editingVoucher, setEditingVoucher] = React.useState<Voucher | null>(null);
   const [voucherFilter, setVoucherFilter] = React.useState<'all' | 'pro' | 'max'>('all');
   const [voucherActiveFilter, setVoucherActiveFilter] = React.useState<'all' | 'active' | 'inactive'>('all');
+
+  // Telemetry state
+  const [telemetryItems, setTelemetryItems] = React.useState<TelemetryItem[]>([]);
+  const [telemetrySummary, setTelemetrySummary] = React.useState<Record<string, number>>({});
+  const [telemetryHitRate, setTelemetryHitRate] = React.useState<number>(0);
+  const [telemetryLoading, setTelemetryLoading] = React.useState(false);
+  const [telemetryError, setTelemetryError] = React.useState<string | null>(null);
+  const [telemetryLimit, setTelemetryLimit] = React.useState(48);
+  const telemetryComponent = 'canonical_path_resolver';
+  const telemetryMetric = 'redirect_cache';
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -69,10 +89,30 @@ const AdminAccess: React.FC = () => {
     }
   }, [voucherFilter, voucherActiveFilter]);
 
+  const loadTelemetry = React.useCallback(async () => {
+    setTelemetryLoading(true);
+    setTelemetryError(null);
+    try {
+      const data = await api.getHorizonTelemetry({
+        component: telemetryComponent,
+        metric: telemetryMetric,
+        limit: telemetryLimit,
+      });
+      setTelemetryItems(Array.isArray(data?.items) ? data.items : []);
+      setTelemetrySummary(data?.summary || {});
+      setTelemetryHitRate(typeof data?.hitRate === 'number' ? data.hitRate : 0);
+    } catch (e) {
+      setTelemetryError('Failed to load telemetry');
+    } finally {
+      setTelemetryLoading(false);
+    }
+  }, [telemetryLimit, telemetryComponent, telemetryMetric]);
+
   React.useEffect(() => {
     if (tab === 'waitlist') load();
     if (tab === 'vouchers') loadVouchers();
-  }, [tab, statusFilter, voucherFilter, voucherActiveFilter, load, loadVouchers]);
+    if (tab === 'telemetry') loadTelemetry();
+  }, [tab, statusFilter, voucherFilter, voucherActiveFilter, load, loadVouchers, loadTelemetry]);
 
   const approve = async (email: string) => {
     try {
@@ -109,6 +149,13 @@ const AdminAccess: React.FC = () => {
           onClick={() => setTab('ws')}
         >
           WebSocket
+        </button>
+        <button
+          className="px-3 py-1 rounded text-12"
+          style={{ backgroundColor: tab === 'telemetry' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
+          onClick={() => setTab('telemetry')}
+        >
+          Telemetry
         </button>
       </div>
 
@@ -183,6 +230,19 @@ const AdminAccess: React.FC = () => {
           onShowCreateForm={setShowCreateForm}
           editingVoucher={editingVoucher}
           onEdit={setEditingVoucher}
+        />
+      )}
+
+      {tab === 'telemetry' && (
+        <TelemetryTab
+          items={telemetryItems}
+          summary={telemetrySummary}
+          hitRate={telemetryHitRate}
+          loading={telemetryLoading}
+          error={telemetryError}
+          limit={telemetryLimit}
+          onLimitChange={setTelemetryLimit}
+          onRefresh={loadTelemetry}
         />
       )}
 
@@ -666,6 +726,121 @@ const WsDiagnosticsTab: React.FC = () => {
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+const TelemetryTab: React.FC<{
+  items: TelemetryItem[];
+  summary: Record<string, number>;
+  hitRate: number;
+  loading: boolean;
+  error: string | null;
+  limit: number;
+  onLimitChange: (value: number) => void;
+  onRefresh: () => void;
+}> = ({
+  items,
+  summary,
+  hitRate,
+  loading,
+  error,
+  limit,
+  onLimitChange,
+  onRefresh,
+}) => {
+  const resolveCalls = summary?.resolve_calls || 0;
+  const redirectHits = summary?.redirect_hits || 0;
+  const redirectWrites = summary?.redirect_writes || 0;
+  const redirectStable = summary?.redirect_stable || 0;
+  const redirectVariability = summary?.redirect_variability || 0;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-13" style={{ color: 'var(--text-heading)' }}>Canonical path redirect cache</div>
+        <div className="flex items-center gap-2">
+          <select
+            className="text-12 px-2 py-1 rounded"
+            style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)', border: 'none' }}
+            value={limit}
+            onChange={(e) => onLimitChange(parseInt(e.target.value, 10))}
+          >
+            <option value={24}>Last 24h</option>
+            <option value={48}>Last 48h</option>
+            <option value={168}>Last 7d</option>
+          </select>
+          <button className="btn btn-primary text-12" onClick={onRefresh}>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-5 gap-2 mb-3">
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Resolve calls</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{resolveCalls}</div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Redirect hits</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{redirectHits}</div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Redirect writes</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{redirectWrites}</div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Hit rate</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>
+            {(hitRate * 100).toFixed(2)}%
+          </div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Variability</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{redirectVariability}</div>
+          <div className="text-10" style={{ color: 'var(--text-tertiary)' }}>Stable: {redirectStable}</div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)' }}>
+        {loading ? (
+          <div className="p-3 text-12" style={{ color: 'var(--text-secondary)' }}>Loading…</div>
+        ) : error ? (
+          <div className="p-3 text-12" style={{ color: 'var(--text-secondary)' }}>{error}</div>
+        ) : items.length === 0 ? (
+          <div className="p-3 text-12" style={{ color: 'var(--text-secondary)' }}>No telemetry windows</div>
+        ) : (
+          <div className="divide-y" style={{ borderColor: 'var(--overlay-line-90)' }}>
+            {items.map((item) => {
+              const calls = item.counters?.resolve_calls || 0;
+              const hits = item.counters?.redirect_hits || 0;
+              const rate = calls > 0 ? (hits / calls) * 100 : 0;
+              return (
+                <div key={`${item.windowStart}-${item.updatedAt}`} className="p-3" style={{ backgroundColor: 'var(--bg-elevated)' }}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-13" style={{ color: 'var(--text-heading)' }}>
+                        {new Date(item.windowStart).toLocaleString()}
+                      </div>
+                      <div className="text-12" style={{ color: 'var(--text-secondary)' }}>
+                        Calls: {calls} · Hits: {hits} · Writes: {item.counters?.redirect_writes || 0} · Stable: {item.counters?.redirect_stable || 0} · Variability: {item.counters?.redirect_variability || 0} · Hit rate: {rate.toFixed(2)}%
+                      </div>
+                      {item.dimensions?.fragmentType && (
+                        <div className="text-11" style={{ color: 'var(--text-tertiary)' }}>
+                          fragmentType: {item.dimensions.fragmentType}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-11" style={{ color: 'var(--text-secondary)' }}>
+                      window: {Math.round(item.windowSizeSec / 3600)}h
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

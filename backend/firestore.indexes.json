@@ -912,6 +912,16 @@
       ]
     },
     {
+      "collectionGroup": "horizon_telemetry",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "component", "order": "ASCENDING" },
+        { "fieldPath": "metric", "order": "ASCENDING" },
+        { "fieldPath": "windowStart", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "horizon_lens_items",
       "queryScope": "COLLECTION",
       "fields": [

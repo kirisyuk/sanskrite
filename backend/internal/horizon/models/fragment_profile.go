@@ -42,6 +42,9 @@ type ProfileSection struct {
 	Key        string         `json:"key" firestore:"key"`               // Section identifier
 	Title      string         `json:"title" firestore:"title"`           // Human-readable title
 	Content    string         `json:"content" firestore:"content"`       // Markdown/plain text content
+	// Facts are typed, human-readable key-value items for UI rendering (avoid dumping raw JSON).
+	// Prefer this over free-form Structured for decision-support dashboards.
+	Facts      []ProfileFact  `json:"facts,omitempty" firestore:"facts,omitempty"`
 	Structured map[string]any `json:"structured,omitempty" firestore:"structured,omitempty"` // Structured data (metrics, lists, etc.)
 	Datasets   []ProfileDataset `json:"datasets,omitempty" firestore:"datasets,omitempty"`   // Visualization-ready datasets (v2+)
 	Sources    []string       `json:"sources,omitempty" firestore:"sources,omitempty"`       // URLs/references
@@ -132,8 +135,34 @@ type ProfileScenario struct {
 	Name        string            `json:"name" firestore:"name"`                 // "Bull"/"Base"/"Bear"
 	Probability float64           `json:"probability" firestore:"probability"`   // 0..1
 	Assumptions []string          `json:"assumptions,omitempty" firestore:"assumptions,omitempty"`
-	Metrics     map[string]string `json:"metrics,omitempty" firestore:"metrics,omitempty"` // e.g., {"2026_revenue":"$138B"}
+	// Metrics is legacy/compat: machine-keyed map (often contains underscores).
+	// Prefer MetricItems for display and for LLM output (v2+).
+	Metrics     map[string]string `json:"metrics,omitempty" firestore:"metrics,omitempty"` // e.g., {"2032_market_valuation_usd":"1.3T"}
+	MetricItems []ProfileScenarioMetric `json:"metricItems,omitempty" firestore:"metricItems,omitempty"`
 	Triggers    []string          `json:"triggers,omitempty" firestore:"triggers,omitempty"`
+}
+
+// ProfileScenarioMetric is a human-readable + machine-keyed metric for scenarios.
+// This avoids unreadable snake_case keys in UI while preserving stable ids.
+type ProfileScenarioMetric struct {
+	Key        string `json:"key" firestore:"key"`                         // machine id, e.g. "2032_market_valuation_usd"
+	Label      string `json:"label" firestore:"label"`                     // human label, e.g. "Market valuation (USD)"
+	Value      string `json:"value" firestore:"value"`                     // human formatted, e.g. "$1.3T"
+	Unit       string `json:"unit,omitempty" firestore:"unit,omitempty"`   // optional, e.g. "USD", "percent"
+	Period     string `json:"period,omitempty" firestore:"period,omitempty"` // optional, e.g. "2032"
+	Notes      string `json:"notes,omitempty" firestore:"notes,omitempty"`
+	Sources    []string `json:"sources,omitempty" firestore:"sources,omitempty"`
+}
+
+// ProfileFact is a typed fact/value item for a profile section.
+type ProfileFact struct {
+	Key     string   `json:"key" firestore:"key"` // machine id (stable)
+	Label   string   `json:"label" firestore:"label"` // human readable (no underscores)
+	Value   string   `json:"value" firestore:"value"` // formatted value / short text
+	Unit    string   `json:"unit,omitempty" firestore:"unit,omitempty"`
+	Period  string   `json:"period,omitempty" firestore:"period,omitempty"`
+	Notes   string   `json:"notes,omitempty" firestore:"notes,omitempty"`
+	Sources []string `json:"sources,omitempty" firestore:"sources,omitempty"`
 }
 
 type ProfileWatchItem struct {

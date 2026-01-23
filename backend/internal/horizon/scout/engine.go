@@ -7,10 +7,12 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
+	horizonhighprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/highprofile"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
@@ -100,6 +102,22 @@ func appendMissingInfoUnique(list []string, item string) []string {
 		}
 	}
 	return append(list, item)
+}
+
+func (e *ScoutEngine) recordCanonicalPathRedirect(ctx context.Context, fromPath string, toPath string, reason string) {
+	if e == nil || e.canonicalPathResolver == nil {
+		return
+	}
+	fromPath = strings.TrimSpace(fromPath)
+	toPath = strings.TrimSpace(toPath)
+	if fromPath == "" || toPath == "" || fromPath == toPath {
+		return
+	}
+	fragType := InferFragmentTypeFromCanonicalPath(toPath)
+	if fragType == "" {
+		fragType = InferFragmentTypeFromCanonicalPath(fromPath)
+	}
+	_, _, _ = e.canonicalPathResolver.RecordRedirect(ctx, fromPath, toPath, fragType, reason)
 }
 
 func hasLegalFormSuffix(slug string) bool {
@@ -1149,6 +1167,27 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	}
 	policyTracker := tracking.NewTracker()
 	ctx = tracking.WithTracker(ctx, policyTracker)
+
+	// Collect affected fragment IDs from edge writes during this job execution.
+	// This lets us recompute global highProfile signals in one batch AFTER policy/enforcement,
+	// without per-edge recomputation or additional Firestore lookups for endpoints.
+	var hpMu sync.Mutex
+	hpAffected := map[string]struct{}{}
+	ctx = repo.WithEdgeAffectCollector(ctx, func(sourceFragmentID, targetFragmentID string) {
+		sourceFragmentID = strings.TrimSpace(sourceFragmentID)
+		targetFragmentID = strings.TrimSpace(targetFragmentID)
+		if sourceFragmentID == "" && targetFragmentID == "" {
+			return
+		}
+		hpMu.Lock()
+		if sourceFragmentID != "" {
+			hpAffected[sourceFragmentID] = struct{}{}
+		}
+		if targetFragmentID != "" {
+			hpAffected[targetFragmentID] = struct{}{}
+		}
+		hpMu.Unlock()
+	})
 	trace.Log(ctx, "scout_exec", "scout.job.start", map[string]any{
 		"tenantId":            strings.TrimSpace(job.TenantID),
 		"projectId":           strings.TrimSpace(job.ProjectID),
@@ -2167,6 +2206,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				_ = e.scoutingJobsRepo.Update(ctx, job)
 				// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
 				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, oldCP, newCP)
+				e.recordCanonicalPathRedirect(ctx, oldCP, newCP, "scout_research_upgrade")
 				e.logLine(ctx, job, "info", fmt.Sprintf("> canonicalized canonicalPath: %s -> %s", oldCP, newCP))
 			}
 			if len(newRelations) > 0 {
@@ -2379,6 +2419,7 @@ SKIP_RESEARCH:
 		}
 		// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
 		e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
+		e.recordCanonicalPathRedirect(ctx, old, effectiveCanonicalPath, "scout_retarget")
 		trace.Log(ctx, "scout_persist", "scout.retarget.done", map[string]any{
 			"tenantId":            strings.TrimSpace(job.TenantID),
 			"projectId":           strings.TrimSpace(job.ProjectID),
@@ -2424,6 +2465,7 @@ SKIP_RESEARCH:
 				strings.TrimSpace(job.ID), old, effectiveCanonicalPath, err)
 		}
 		e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
+		e.recordCanonicalPathRedirect(ctx, old, effectiveCanonicalPath, "org_path_upgrade")
 		if extractedFragment != nil {
 			extractedFragment.CanonicalPath = effectiveCanonicalPath
 			// Keep semantic parts in sync so downstream canonizers can apply selective fixes.
@@ -2934,7 +2976,44 @@ SKIP_RESEARCH:
 	}
 
 	// POLICY ENFORCEMENT: Run final validation on all created/modified entities
+	// Also persist highProfile affected fragment IDs collected from edge writes during this job.
+	if job.State == nil {
+		job.State = map[string]interface{}{}
+	}
 	job.State = policyTracker.ApplyToState(job.State)
+	{
+		ids := map[string]struct{}{}
+
+		// Primary source: endpoints observed at edge write time (canonicalized/swapped in repo.Create).
+		hpMu.Lock()
+		for id := range hpAffected {
+			ids[id] = struct{}{}
+		}
+		hpMu.Unlock()
+
+		// Baseline: any fragments tracked by policyTracker (covers "node-only" changes).
+		for _, id := range e.extractStringSlice(job.State, "createdFragmentIds") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				ids[id] = struct{}{}
+			}
+		}
+		for _, id := range e.extractStringSlice(job.State, "modifiedFragmentIds") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				ids[id] = struct{}{}
+			}
+		}
+
+		out := make([]string, 0, len(ids))
+		for id := range ids {
+			out = append(out, id)
+		}
+		sort.Strings(out)
+		if len(out) > 0 {
+			job.State["highProfileAffectedFragmentIds"] = out
+		}
+	}
 	e.runPolicyCheck(ctx, job)
 
 	// Запускаем распространение изменений в графе
@@ -3694,23 +3773,28 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 // If violations are found, it creates enforcement jobs for auto-fixable issues
 // and publishes WebSocket messages for real-time UI updates.
 func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob) {
-	if e == nil || e.policyChecker == nil || job == nil {
+	if e == nil || job == nil {
 		return
 	}
 
-	// Collect created/modified fragment and edge IDs from job state
+	// High-profile recompute targets (deduped list collected during edge materialization for this job).
+	highProfileIDs := e.extractStringSlice(job.State, "highProfileAffectedFragmentIds")
+
+	// Collect created/modified fragment and edge IDs from job state (for PolicyChecker).
 	createdFragmentIDs := e.extractStringSlice(job.State, "createdFragmentIds")
 	modifiedFragmentIDs := e.extractStringSlice(job.State, "modifiedFragmentIds")
 	createdEdgeIDs := e.extractStringSlice(job.State, "createdEdgeIds")
 	modifiedEdgeIDs := e.extractStringSlice(job.State, "modifiedEdgeIds")
 
-	// If no entities tracked, skip policy check
-	if len(createdFragmentIDs) == 0 && len(modifiedFragmentIDs) == 0 &&
-		len(createdEdgeIDs) == 0 && len(modifiedEdgeIDs) == 0 {
+	shouldRunPolicy := e.policyChecker != nil &&
+		(len(createdFragmentIDs) > 0 || len(modifiedFragmentIDs) > 0 || len(createdEdgeIDs) > 0 || len(modifiedEdgeIDs) > 0)
+
+	// If nothing to do (no policy checker work and no high-profile recompute targets), skip.
+	if !shouldRunPolicy && len(highProfileIDs) == 0 {
 		return
 	}
 
-	// Run policy check in background to not block job completion
+	// Run in background to not block job completion.
 	go func() {
 		// Policy checks may involve multiple LLM calls (duplicate checks + fallbacks) and must not
 		// be prematurely cancelled, otherwise we get "context deadline exceeded" across all providers
@@ -3718,72 +3802,103 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 		policyCtx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 		defer cancel()
 
-		startTime := time.Now()
-		result, err := e.policyChecker.CheckJobOutput(
-			policyCtx,
-			job.TenantID,
-			job.ID,
-			createdFragmentIDs,
-			modifiedFragmentIDs,
-			createdEdgeIDs,
-			modifiedEdgeIDs,
-		)
-		durationMs := time.Since(startTime).Milliseconds()
-
-		if err != nil {
-			fmt.Printf("[ScoutEngine] Policy check failed for job %s: %v\n", job.ID, err)
-			return
-		}
-
-		if result == nil {
-			return
-		}
-
-		if result.TotalViolations == 0 {
-			fmt.Printf("[ScoutEngine] Policy check passed for job %s (no violations)\n", job.ID)
-		} else {
-			fmt.Printf("[ScoutEngine] Policy check found %d violations for job %s (%d auto-fixable)\n",
-				result.TotalViolations, job.ID, result.AutoFixableCount)
-		}
-
-		// Create enforcement jobs for auto-fixable violations
-		if result.AutoFixableCount > 0 && e.enforcementExecutor != nil {
-			enforcementCtx, enforcementCancel := context.WithTimeout(context.Background(), 45*time.Second)
-			enforcementJobs, err := e.enforcementExecutor.CreateEnforcementJobs(enforcementCtx, job.TenantID, job.ID, result.Violations)
-			enforcementCancel()
+		durationMs := int64(0)
+		var result *policy.PolicyCheckResult
+		if shouldRunPolicy {
+			startTime := time.Now()
+			r, err := e.policyChecker.CheckJobOutput(
+				policyCtx,
+				job.TenantID,
+				job.ID,
+				createdFragmentIDs,
+				modifiedFragmentIDs,
+				createdEdgeIDs,
+				modifiedEdgeIDs,
+			)
+			durationMs = time.Since(startTime).Milliseconds()
 			if err != nil {
-				fmt.Printf("[ScoutEngine] Failed to create enforcement jobs for %s: %v\n", job.ID, err)
-				return
+				fmt.Printf("[ScoutEngine] Policy check failed for job %s: %v\n", job.ID, err)
+			} else {
+				result = r
+			}
+		}
+
+		// If policy result exists, report it + optionally run enforcement.
+		if result != nil {
+			if result.TotalViolations == 0 {
+				fmt.Printf("[ScoutEngine] Policy check passed for job %s (no violations)\n", job.ID)
+			} else {
+				fmt.Printf("[ScoutEngine] Policy check found %d violations for job %s (%d auto-fixable)\n",
+					result.TotalViolations, job.ID, result.AutoFixableCount)
 			}
 
-			if len(enforcementJobs) > 0 {
-				// Store enforcement job IDs in result
-				for _, ej := range enforcementJobs {
-					result.EnforcementJobIDs = append(result.EnforcementJobIDs, ej.ID)
-				}
+			// Create enforcement jobs for auto-fixable violations
+			if result.AutoFixableCount > 0 && e.enforcementExecutor != nil {
+				enforcementCtx, enforcementCancel := context.WithTimeout(context.Background(), 45*time.Second)
+				enforcementJobs, err := e.enforcementExecutor.CreateEnforcementJobs(enforcementCtx, job.TenantID, job.ID, result.Violations)
+				enforcementCancel()
+				if err != nil {
+					fmt.Printf("[ScoutEngine] Failed to create enforcement jobs for %s: %v\n", job.ID, err)
+				} else if len(enforcementJobs) > 0 {
+					// Store enforcement job IDs in result
+					for _, ej := range enforcementJobs {
+						result.EnforcementJobIDs = append(result.EnforcementJobIDs, ej.ID)
+					}
+					fmt.Printf("[ScoutEngine] Created %d enforcement jobs for %s\n", len(enforcementJobs), job.ID)
 
-				fmt.Printf("[ScoutEngine] Created %d enforcement jobs for %s\n", len(enforcementJobs), job.ID)
-
-				// Optionally execute auto-fixes immediately (can be configured)
-				if e.shouldAutoExecuteEnforcement() {
-					go func() {
+					// Optionally execute auto-fixes immediately.
+					if e.shouldAutoExecuteEnforcement() {
 						execCtx, execCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-						defer execCancel()
 						e.executeEnforcementJobs(execCtx, job)
-					}()
+						execCancel()
+					}
 				}
 			}
 		}
 
-		// Persist policy check results
-		if e.policyCheckResultsRepo != nil {
-			if err := e.policyCheckResultsRepo.Save(policyCtx, result); err != nil {
-				fmt.Printf("[ScoutEngine] Failed to persist policy check result for %s: %v\n", job.ID, err)
+		// High-profile recompute step: must run after policy/enforcement to reflect corrected edges.
+		if len(highProfileIDs) > 0 && e.fragmentsRepo != nil && e.edgesRepo != nil {
+			// Dedup + cap to keep runtime bounded.
+			seen := map[string]struct{}{}
+			dedup := make([]string, 0, len(highProfileIDs))
+			for _, id := range highProfileIDs {
+				id = strings.TrimSpace(id)
+				if id == "" {
+					continue
+				}
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				dedup = append(dedup, id)
+				if len(dedup) >= 200 {
+					break
+				}
+			}
+			if len(dedup) > 0 {
+				hpCalc := horizonhighprofile.NewCalculator(e.fragmentsRepo, e.edgesRepo)
+				hpCtx, hpCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+				for _, id := range dedup {
+					_, _ = hpCalc.Apply(hpCtx, id) // best-effort
+				}
+				hpCancel()
+			}
+		}
+
+		// Persist policy check results (best-effort) and publish realtime output.
+		if result != nil {
+			if e.policyCheckResultsRepo != nil {
+				if err := e.policyCheckResultsRepo.Save(policyCtx, result); err != nil {
+					fmt.Printf("[ScoutEngine] Failed to persist policy check result for %s: %v\n", job.ID, err)
+				}
 			}
 		}
 
 		// Publish policy check result via realtime (frontend expects horizon.policy.*)
 		// IMPORTANT: front-end shows only 1-3 sample items; ensure critical violations are surfaced first.
+		if result == nil {
+			return
+		}
 		violationsForSample := make([]policy.PolicyViolation, 0, len(result.Violations))
 		violationsForSample = append(violationsForSample, result.Violations...)
 		sort.SliceStable(violationsForSample, func(i, j int) bool {
@@ -3980,6 +4095,53 @@ func (e *ScoutEngine) executeEnforcementJobs(ctx context.Context, job *models.Sc
 	durationMs := time.Since(startTime).Milliseconds()
 	fmt.Printf("[ScoutEngine] Enforcement batch completed for %s: %d completed, %d failed, %d skipped in %dms\n",
 		job.ID, completed, failed, skipped, durationMs)
+
+	// After enforcement applied, recompute global highProfile for affected fragments (best-effort).
+	// This ensures highProfile reflects corrected edges even when enforcement is executed asynchronously later.
+	if e.fragmentsRepo != nil && e.edgesRepo != nil {
+		affected := map[string]struct{}{}
+		// Primary: explicit affected IDs from enforcement results.
+		for _, ej := range jobs {
+			if ej == nil || ej.Result == nil {
+				continue
+			}
+			for _, id := range ej.Result.AffectedIDs {
+				id = strings.TrimSpace(id)
+				if id != "" {
+					affected[id] = struct{}{}
+				}
+			}
+			// Fallback: violation fragmentId (when present).
+			if ej.Violation != nil {
+				if id := strings.TrimSpace(ej.Violation.FragmentID); id != "" {
+					affected[id] = struct{}{}
+				}
+			}
+		}
+		// Secondary: include pre-collected set from the original scout job (if available).
+		if job.State != nil {
+			for _, id := range e.extractStringSlice(job.State, "highProfileAffectedFragmentIds") {
+				id = strings.TrimSpace(id)
+				if id != "" {
+					affected[id] = struct{}{}
+				}
+			}
+		}
+		// Bound runtime.
+		ids := make([]string, 0, len(affected))
+		for id := range affected {
+			ids = append(ids, id)
+			if len(ids) >= 200 {
+				break
+			}
+		}
+		if len(ids) > 0 {
+			hpCalc := horizonhighprofile.NewCalculator(e.fragmentsRepo, e.edgesRepo)
+			for _, id := range ids {
+				_, _ = hpCalc.Apply(ctx, id)
+			}
+		}
+	}
 
 	if noPendingEnforcementJobs(jobs) {
 		e.publishEnforcementBatchComplete(ctx, job, jobs, durationMs)

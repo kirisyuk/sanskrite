@@ -122,6 +122,10 @@ type HorizonFragment struct {
 	// Гибкие метрики
 	State map[string]MetricValue `json:"state" firestore:"state"`
 
+	// HighProfile stores global, precomputed "high-profile" business signals derived from the graph.
+	// It is optional and may be absent for older fragments or when backfill hasn't run yet.
+	HighProfile *HighProfile `json:"highProfile,omitempty" firestore:"highProfile,omitempty"`
+
 	// Обогащение данными
 	KBRefs      []KBReference     `json:"kbRefs,omitempty" firestore:"kbRefs,omitempty"`
 	Identifiers map[string]string `json:"identifiers,omitempty" firestore:"identifiers,omitempty"`

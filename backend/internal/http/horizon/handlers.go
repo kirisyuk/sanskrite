@@ -77,6 +77,8 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 
 	// Lens endpoints
 	mux.Handle("/api/horizon/lenses", authMiddleware(http.HandlerFunc(h.HandleLensesRoot)))
+	// Lens preflight: resolve intent + recommend mode (no writes)
+	mux.Handle("/api/horizon/lenses/preflight", authMiddleware(http.HandlerFunc(h.LensPreflight)))
 	// Lens creation from NL query (resolve intent -> create lens)
 	mux.Handle("/api/horizon/lenses/from-query", authMiddleware(http.HandlerFunc(h.CreateLensFromQuery)))
 	mux.Handle("/api/horizon/lenses/", authMiddleware(http.HandlerFunc(h.HandleLensRoutes)))
@@ -293,7 +295,6 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
-			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/profile/refresh") {
 			h.profilesHandler.refreshProfile(w, r, fragmentID)
