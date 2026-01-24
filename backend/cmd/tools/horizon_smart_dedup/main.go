@@ -15,12 +15,18 @@ import (
 	"unicode"
 
 	"cloud.google.com/go/firestore"
+	"google.golang.org/api/iterator"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
+	"github.com/igorkirisyuk/sanskrite/internal/geonames"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -48,11 +54,13 @@ var (
 	pageSize           = flag.Int("page-size", 500, "Firestore page size for loading fragments (pagination). Lower = safer, higher = fewer round-trips")
 	startAfterDocID    = flag.String("start-after", "", "Resume cursor: start loading fragments after this Firestore document ID (__name__)")
 	pageTimeoutSec     = flag.Int("page-timeout-s", 90, "Timeout in seconds for each Firestore page fetch while loading fragments (0 disables)")
-	enableProductAlias = flag.Bool("enable-product-alias", false, "Enable PRODUCT alias clustering (model/SKU heuristic). Default OFF: better duplicates than false-positive merges.")
+	enableProductAlias = flag.Bool("enable-product-alias", true, "Enable PRODUCT alias clustering (model/SKU heuristic). Default ON (requested for product-heavy dedup runs).")
 	enableOrgNameOnly  = flag.Bool("enable-org-name-only", false, "Enable ORGANIZATION name-only clustering (shortName/label[en]). Default OFF (too many false merges).")
 	enableOrgFuzzyName = flag.Bool("enable-org-fuzzy-name", false, "Enable ORGANIZATION fuzzy-ish name clustering (normalized legalName + stub-rescue normalized label/legal). Default OFF.")
+	skipOrgLegacyCountryCheck = flag.Bool("skip-org-legacy-country-check", false, "Skip LOCATED_IN country check for legacy /org/{company} → /org/{geo}/{company}-{legalForm} (faster, higher risk).")
 	fixEdgesOnly       = flag.Bool("fix-edges-only", false, "Only fix/normalize edges (direction + symmetric normalization + dedup). Skips fragment dedup/merge even if duplicates are found.")
 	canonicalizeEdges  = flag.Bool("edge-canonicalize", true, "Rewrite mis-modeled edges into canonical types (e.g., MARKET OWNS MARKET -> HAS_SUBMARKET, ORG DEPENDS_ON MARKET -> PARTICIPATES_IN).")
+	skipGeoNames       = flag.Bool("skip-geonames", false, "Skip GeoNames-based /loc normalization (enabled by default).")
 )
 
 // Used to print a reliable resume cursor on Ctrl+C / SIGTERM and on load failures.
@@ -207,6 +215,84 @@ func shouldSkipOrgNameCluster(matchType string, frags []*models.HorizonFragment)
 	}
 	if len(legalForms) > 1 {
 		return true, fmt.Sprintf("conflicting_legal_forms=%v", keysSorted(legalForms))
+	}
+
+	return false, ""
+}
+
+// orgLegacyNoGeoNameKey builds a normalized name key for legacy /org/* (no geo) dedup.
+// We only use the first available strong name signal to avoid merging unrelated entities.
+func orgLegacyNoGeoNameKey(f *models.HorizonFragment) string {
+	if f == nil {
+		return ""
+	}
+	name := strings.TrimSpace(f.Identifiers["legalName"])
+	if name == "" {
+		name = strings.TrimSpace(f.Identifiers["shortName"])
+	}
+	if name == "" {
+		name = strings.TrimSpace(f.Labels["en"])
+	}
+	if name == "" {
+		return ""
+	}
+	return normalizeLegalName(name)
+}
+
+// orgLegacyNoGeoNamesConsistent ensures all non-empty name fields normalize to a single value.
+func orgLegacyNoGeoNamesConsistent(frags []*models.HorizonFragment) bool {
+	if len(frags) == 0 {
+		return false
+	}
+	type getter func(*models.HorizonFragment) string
+	fields := []getter{
+		func(f *models.HorizonFragment) string { return f.Identifiers["legalName"] },
+		func(f *models.HorizonFragment) string { return f.Identifiers["shortName"] },
+		func(f *models.HorizonFragment) string { return f.Labels["en"] },
+	}
+	hasAny := false
+	for _, get := range fields {
+		values := map[string]struct{}{}
+		for _, f := range frags {
+			if f == nil {
+				continue
+			}
+			v := normalizeLegalName(get(f))
+			if v == "" {
+				continue
+			}
+			values[v] = struct{}{}
+			if len(values) > 1 {
+				return false
+			}
+		}
+		if len(values) == 1 {
+			hasAny = true
+		}
+	}
+	return hasAny
+}
+
+// shouldSkipOrgLegacyNoGeoCluster applies conservative guards for legacy /org/* (no geo) merges.
+func shouldSkipOrgLegacyNoGeoCluster(frags []*models.HorizonFragment) (bool, string) {
+	if conflict, ids := orgConflictingWikidataIDs(frags); conflict {
+		return true, fmt.Sprintf("conflicting_wikidata_ids=%v", ids)
+	}
+
+	groupish := 0
+	nonGroupish := 0
+	for _, f := range frags {
+		if f == nil || f.Type != models.FragmentTypeOrganization {
+			continue
+		}
+		if orgGroupishHint(f) {
+			groupish++
+		} else {
+			nonGroupish++
+		}
+	}
+	if groupish > 0 && nonGroupish > 0 {
+		return true, fmt.Sprintf("groupish_mismatch(groupish=%d nonGroupish=%d)", groupish, nonGroupish)
 	}
 
 	return false, ""
@@ -435,6 +521,9 @@ func main() {
 
 	ctx := context.Background()
 
+	// Hardcode GeoNames username as requested.
+	_ = os.Setenv("GEONAMES_USERNAME", "kirisyuk")
+
 	log.Printf("=== Horizon Smart Deduplication Tool ===")
 	log.Printf("project=%s tenant=%s apply=%v typeFilter=%q", *projectID, *tenantID, *apply, *typeFilter)
 	if strings.TrimSpace(*startAfterDocID) != "" {
@@ -500,7 +589,35 @@ func main() {
 	} else {
 		log.Printf("Vertex AI Search sync DISABLED (--skip-vertex-sync). Run bulk sync separately after completion.")
 	}
-	edgesRepo := repo.NewDependencyEdgesRepository(db)
+
+	// Core policies (canonization + validation) — reuse system rules from Firestore
+	canonRulesRepo := repo.NewCanonizationRulesRepository(db)
+	canonPolicy := policy.NewCanonizationPolicy(canonRulesRepo)
+	canonExecutor := policy.NewPolicyExecutor(canonPolicy, nil, nil)
+
+	validationRulesRepo := repo.NewValidationRulesRepository(db)
+	validationPolicy := policy.NewValidationPolicy(validationRulesRepo)
+	validationExecutor := policy.NewPolicyExecutor(validationPolicy, nil, nil)
+
+	edgesRepo := repo.NewDependencyEdgesRepository(db).
+		WithValidationPolicy(validationExecutor).
+		WithFragmentsRepo(fragmentsRepo)
+
+	// GeoNames client (cached) for /loc normalization
+	var geoNamesClient coreontology.GeoNamesClientInterface
+	if !*skipGeoNames {
+		geonamesBaseClient := httphandlers.GetGeoNamesClientFromEnv()
+		if geonamesBaseClient == nil {
+			log.Printf("WARNING: GEONAMES_USERNAME not set; skipping GeoNames normalization")
+		} else {
+			geonamesAdapter := geonames.NewAdapter(geonamesBaseClient)
+			externalCacheRepo := coreRepo.NewExternalDataCacheRepository(db)
+			geoNamesClient = geonames.NewCachedClient(geonamesAdapter, externalCacheRepo, geonames.CacheOptions{
+				Enabled: true,
+				TTL:     7 * 24 * time.Hour,
+			})
+		}
+	}
 
 	stats := &Stats{}
 
@@ -517,6 +634,44 @@ func main() {
 	}
 	stats.TotalFragments = len(fragments)
 	log.Printf("✓ Loaded %d fragments", len(fragments))
+
+	// Step 1.5: Build profile cache (fragments with profiles get priority)
+	log.Printf("\n=== Step 1.5: Building profile cache ===")
+	profileCache := buildProfileCache(ctx, db, fragments)
+	log.Printf("✓ Found %d fragments with profiles", len(profileCache))
+
+	// Step 1.6: Remove placeholder PRODUCT fragments ending with /na
+	log.Printf("\n=== Step 1.6: Removing placeholder PRODUCT fragments (/na) ===")
+	kept := fragments[:0]
+	removed := 0
+	for _, f := range fragments {
+		if f == nil || f.Type != models.FragmentTypeProduct || !isProductPathEndingWithNA(f.CanonicalPath) {
+			kept = append(kept, f)
+			continue
+		}
+		removed++
+		delete(profileCache, f.ID)
+		if *verbose {
+			log.Printf("  PRODUCT remove: %s (%s)", f.CanonicalPath, f.ID)
+		}
+		if *apply {
+			deletedEdges, err := deleteEdgesForFragment(ctx, db, edgesRepo, *tenantID, f.ID)
+			if err != nil {
+				log.Printf("  ERROR: failed to delete edges for %s: %v", f.ID, err)
+			} else {
+				stats.EdgesDeleted += deletedEdges
+			}
+			if err := fragmentsRepo.Delete(ctx, f.ID); err != nil {
+				log.Printf("  ERROR: failed to delete product %s: %v", f.ID, err)
+			} else {
+				stats.FragmentsDeleted++
+			}
+		} else {
+			stats.FragmentsDeleted++
+		}
+	}
+	fragments = kept
+	log.Printf("✓ Removed %d product fragments ending with /na", removed)
 
 	// Step 2: Build indexes for duplicate detection
 	log.Printf("\n=== Step 2: Building indexes ===")
@@ -883,7 +1038,7 @@ func main() {
 							MatchType:   "orgAsCountry",
 							MatchValue:  fmt.Sprintf("%s → %s", f.CanonicalPath, geoPath),
 							Fragments:   []*models.HorizonFragment{geoFrag, f},
-							CanonicalID: geoFrag.ID, // Always prefer the GEO_REGION
+							CanonicalID: selectCanonical([]*models.HorizonFragment{geoFrag, f}, profileCache),
 						}
 						clusters = append(clusters, cluster)
 						processedFragmentIDs[f.ID] = true
@@ -1029,7 +1184,7 @@ func main() {
 					MatchValue: fmt.Sprintf("%s:%s", frs[0].Type, frs[0].ID),
 					Fragments:  frs,
 				}
-				cluster.CanonicalID = selectCanonical(frs)
+				cluster.CanonicalID = selectCanonical(frs, profileCache)
 				clusters = append(clusters, cluster)
 				// Mark only duplicates as processed, so the canonical can still absorb
 				// additional duplicates found by other signals later (transitive merges).
@@ -1113,7 +1268,7 @@ func main() {
 			MatchValue: slug,
 			Fragments:  unprocessed,
 		}
-		cluster.CanonicalID = selectCanonical(unprocessed)
+		cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 		clusters = append(clusters, cluster)
 		for _, f := range unprocessed {
 			if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
@@ -1154,7 +1309,7 @@ func main() {
 				MatchValue: key,
 				Fragments:  frs,
 			}
-			cluster.CanonicalID = selectCanonical(frs)
+			cluster.CanonicalID = selectCanonical(frs, profileCache)
 			clusters = append(clusters, cluster)
 			for _, f := range frs {
 				if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
@@ -1165,6 +1320,274 @@ func main() {
 		}
 	}
 	log.Printf("  Found %d orgPathNorm-based clusters", orgPathNormClusters)
+
+	// Priority 0.825: Legacy /org/{company} vs /org/{company}-{legalForm} (no geo)
+	// Merge only when all name signals agree (ignoring legal form) and country signals don't conflict.
+	orgLegacyNoGeoClusters := 0
+	{
+		legacyNoGeoIndex := make(map[string][]*models.HorizonFragment) // baseName -> legacy /org/* (no geo)
+		for _, f := range fragments {
+			if f == nil {
+				continue
+			}
+			if processedFragmentIDs[f.ID] {
+				continue
+			}
+			if f.Type != models.FragmentTypeOrganization {
+				continue
+			}
+			if canonicalNamespace(f) != "org" {
+				continue
+			}
+			cp := canonicalPartsFromPath(f.CanonicalPath)
+			if cp == nil || cp.Org == nil {
+				continue
+			}
+			if !cp.Org.Legacy && strings.TrimSpace(cp.Org.Geo) != "" {
+				continue // has geo segment
+			}
+			baseName := extractOrgBaseName(f.CanonicalPath)
+			if baseName == "" {
+				continue
+			}
+			legacyNoGeoIndex[baseName] = append(legacyNoGeoIndex[baseName], f)
+		}
+
+		for baseName, frs := range legacyNoGeoIndex {
+			nameGroups := make(map[string][]*models.HorizonFragment)
+			for _, f := range frs {
+				if f == nil {
+					continue
+				}
+				if processedFragmentIDs[f.ID] {
+					continue
+				}
+				nameKey := orgLegacyNoGeoNameKey(f)
+				if nameKey == "" {
+					continue
+				}
+				nameGroups[nameKey] = append(nameGroups[nameKey], f)
+			}
+
+			for nameKey, frs := range nameGroups {
+				// Unique by ID and skip processed
+				seenID := map[string]struct{}{}
+				unprocessed := make([]*models.HorizonFragment, 0, len(frs))
+				for _, f := range frs {
+					if f == nil {
+						continue
+					}
+					id := strings.TrimSpace(f.ID)
+					if id == "" || processedFragmentIDs[id] {
+						continue
+					}
+					if _, ok := seenID[id]; ok {
+						continue
+					}
+					seenID[id] = struct{}{}
+					unprocessed = append(unprocessed, f)
+				}
+				if len(unprocessed) <= 1 {
+					continue
+				}
+
+				if !orgLegacyNoGeoNamesConsistent(unprocessed) {
+					if *verbose {
+						log.Printf("  SKIP ORG cluster (orgLegacyNoGeoLegalForm): baseName=%s reason=names_conflict", baseName)
+					}
+					continue
+				}
+
+				if skip, reason := shouldSkipOrgLegacyNoGeoCluster(unprocessed); skip {
+					if *verbose {
+						log.Printf("  SKIP ORG cluster (orgLegacyNoGeoLegalForm): baseName=%s reason=%s", baseName, reason)
+					}
+					continue
+				}
+
+				// If LOCATED_IN countries exist, they must be consistent.
+				legacyCountry := ""
+				countryConflict := false
+				for _, f := range unprocessed {
+					c, ok := legacyOrgCountryFromEdges(ctx, edgesRepo, *tenantID, f.ID, idToFrag)
+					if !ok {
+						continue
+					}
+					if legacyCountry == "" {
+						legacyCountry = c
+						continue
+					}
+					if legacyCountry != c {
+						countryConflict = true
+						break
+					}
+				}
+				if countryConflict {
+					if *verbose {
+						log.Printf("  SKIP ORG cluster (orgLegacyNoGeoLegalForm): baseName=%s reason=conflicting_located_in", baseName)
+					}
+					continue
+				}
+
+				cluster := &DuplicateCluster{
+					MatchType:  "orgLegacyNoGeoLegalForm",
+					MatchValue: fmt.Sprintf("%s:%s", baseName, nameKey),
+					Fragments:  unprocessed,
+				}
+				cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
+				clusters = append(clusters, cluster)
+				for _, f := range unprocessed {
+					if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
+						processedFragmentIDs[f.ID] = true
+					}
+				}
+				orgLegacyNoGeoClusters++
+			}
+		}
+	}
+	log.Printf("  Found %d orgLegacyNoGeoLegalForm-based clusters", orgLegacyNoGeoClusters)
+
+	// Priority 0.85: Legacy /org/{company} vs /org/{geo}/{company}-{legalForm} deduplication
+	// Matches legacy paths like /org/tesla with canonical paths like /org/us/tesla-inc
+	// when base company name matches (ignoring legal form).
+	//
+	// IMPORTANT SAFETY:
+	// - Do NOT merge /org/{base} with geo-scoped /org/{geo}/{base} unless the legacy fragment
+	//   has explicit LOCATED_IN edges whose country tokens are all the same, and match the geo.
+	// - This prevents cross-country branch merges (e.g., /org/kpmg vs /org/tr/kpmg vs /org/kz/kpmg).
+	// - Can be skipped with --skip-org-legacy-country-check (faster, higher risk).
+	orgLegacyBaseNameClusters := 0
+	{
+		start := time.Now()
+		checkedLegacy := 0
+		// Index by base company name (without legal form)
+		legacyBaseNameIndex := make(map[string][]*models.HorizonFragment)       // baseName -> legacy /org/{company} fragments
+		canonicalBaseNameIndex := make(map[string][]*models.HorizonFragment)    // baseName:iso2 -> canonical /org/{geo}/{company}-{legalForm} fragments
+
+		for _, f := range fragments {
+			if f == nil {
+				continue
+			}
+			if processedFragmentIDs[f.ID] {
+				continue
+			}
+			if f.Type != models.FragmentTypeOrganization {
+				continue
+			}
+			if canonicalNamespace(f) != "org" {
+				continue
+			}
+
+			cp := canonicalPartsFromPath(f.CanonicalPath)
+			if cp == nil || cp.Org == nil {
+				continue
+			}
+
+			// Extract base name (without legal form)
+			baseName := extractOrgBaseName(f.CanonicalPath)
+			if baseName == "" {
+				continue
+			}
+
+			// Check if this is a legacy path (/org/{company}) or canonical path (/org/{geo}/{company}-{legalForm})
+			if cp.Org.Legacy || strings.TrimSpace(cp.Org.Geo) == "" {
+				// Legacy path: /org/{company}
+				legacyBaseNameIndex[baseName] = append(legacyBaseNameIndex[baseName], f)
+			} else {
+				// Canonical path: /org/{geo}/{company}-{legalForm}
+				geo := strings.ToLower(strings.TrimSpace(cp.Org.Geo))
+				if isISO2CountryToken(geo) {
+					key := fmt.Sprintf("%s:%s", baseName, geo)
+					canonicalBaseNameIndex[key] = append(canonicalBaseNameIndex[key], f)
+				}
+			}
+		}
+
+		// Find matches where base name is the same AND legacy has consistent LOCATED_IN country
+		for baseName, legacyFrags := range legacyBaseNameIndex {
+			for _, legacy := range legacyFrags {
+				if legacy == nil || strings.TrimSpace(legacy.ID) == "" || processedFragmentIDs[legacy.ID] {
+					continue
+				}
+				checkedLegacy++
+				if checkedLegacy%500 == 0 {
+					log.Printf("  orgLegacyBaseName progress: checked=%d clusters=%d elapsed=%s", checkedLegacy, orgLegacyBaseNameClusters, time.Since(start).Round(time.Second))
+				}
+				legacyCountry := ""
+				if !*skipOrgLegacyCountryCheck {
+					c, ok := legacyOrgCountryFromEdges(ctx, edgesRepo, *tenantID, legacy.ID, idToFrag)
+					if !ok {
+						if *verbose {
+							log.Printf("  SKIP ORG cluster (orgLegacyBaseName): baseName=%s legacy=%s reason=no_single_country_located_in", baseName, legacy.CanonicalPath)
+						}
+						continue
+					}
+					legacyCountry = c
+				}
+
+				key := fmt.Sprintf("%s:%s", baseName, legacyCountry)
+				canonicalFrags := canonicalBaseNameIndex[key]
+				if len(canonicalFrags) == 0 {
+					continue
+				}
+
+				// Combine legacy and canonical fragments (same ISO2)
+				cands := make([]*models.HorizonFragment, 0, 1+len(canonicalFrags))
+				cands = append(cands, legacy)
+				cands = append(cands, canonicalFrags...)
+
+				// Unique by ID and skip processed
+				seenID := map[string]struct{}{}
+				unprocessed := make([]*models.HorizonFragment, 0, len(cands))
+				for _, f := range cands {
+					if f == nil {
+						continue
+					}
+					id := strings.TrimSpace(f.ID)
+					if id == "" || processedFragmentIDs[id] {
+						continue
+					}
+					if _, ok := seenID[id]; ok {
+						continue
+					}
+					seenID[id] = struct{}{}
+					unprocessed = append(unprocessed, f)
+				}
+
+				if len(unprocessed) <= 1 {
+					continue
+				}
+
+				// Safety checks: skip if conflicting Wikidata IDs or legal names
+				if skip, reason := shouldSkipOrgNameCluster("orgLegacyBaseName", unprocessed); skip {
+					if *verbose {
+						log.Printf("  SKIP ORG cluster (orgLegacyBaseName): baseName=%s reason=%s", baseName, reason)
+					}
+					continue
+				}
+
+				matchValue := baseName
+				if legacyCountry != "" {
+					matchValue = fmt.Sprintf("%s:%s", baseName, legacyCountry)
+				}
+				cluster := &DuplicateCluster{
+					MatchType:  "orgLegacyBaseName",
+					MatchValue: matchValue,
+					Fragments:  unprocessed,
+				}
+				cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
+				clusters = append(clusters, cluster)
+				for _, f := range unprocessed {
+					if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
+						processedFragmentIDs[f.ID] = true
+					}
+				}
+				orgLegacyBaseNameClusters++
+			}
+		}
+		log.Printf("  orgLegacyBaseName scan done: checked=%d clusters=%d elapsed=%s", checkedLegacy, orgLegacyBaseNameClusters, time.Since(start).Round(time.Second))
+	}
+	log.Printf("  Found %d orgLegacyBaseName-based clusters", orgLegacyBaseNameClusters)
 
 	// Priority 1: Wikidata ID matches (highest confidence)
 	for wikidataID, frags := range wikidataIndex {
@@ -1181,7 +1604,7 @@ func main() {
 					MatchValue: wikidataID,
 					Fragments:  unprocessed,
 				}
-				cluster.CanonicalID = selectCanonical(unprocessed)
+				cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 				clusters = append(clusters, cluster)
 				for _, f := range unprocessed {
 					processedFragmentIDs[f.ID] = true
@@ -1224,7 +1647,7 @@ func main() {
 					MatchValue: key,
 					Fragments:  unprocessed,
 				}
-				cluster.CanonicalID = selectCanonical(unprocessed)
+				cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 				clusters = append(clusters, cluster)
 				for _, f := range unprocessed {
 					processedFragmentIDs[f.ID] = true
@@ -1267,7 +1690,7 @@ func main() {
 					MatchValue: key,
 					Fragments:  unprocessed,
 				}
-				cluster.CanonicalID = selectCanonical(unprocessed)
+				cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 				clusters = append(clusters, cluster)
 				for _, f := range unprocessed {
 					processedFragmentIDs[f.ID] = true
@@ -1310,7 +1733,7 @@ func main() {
 					MatchValue: key,
 					Fragments:  unprocessed,
 				}
-				cluster.CanonicalID = selectCanonical(unprocessed)
+				cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 				clusters = append(clusters, cluster)
 				for _, f := range unprocessed {
 					processedFragmentIDs[f.ID] = true
@@ -1361,7 +1784,7 @@ func main() {
 			MatchValue: key,
 			Fragments:  unprocessed,
 		}
-		cluster.CanonicalID = selectCanonical(unprocessed)
+		cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 		clusters = append(clusters, cluster)
 		for _, f := range unprocessed {
 			if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
@@ -1403,7 +1826,7 @@ func main() {
 					MatchValue: key,
 					Fragments:  unprocessed,
 				}
-				cluster.CanonicalID = selectCanonical(unprocessed)
+				cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 				clusters = append(clusters, cluster)
 				for _, f := range unprocessed {
 					processedFragmentIDs[f.ID] = true
@@ -1459,7 +1882,7 @@ func main() {
 			MatchValue: key,
 			Fragments:  unprocessed,
 		}
-		cluster.CanonicalID = selectCanonical(unprocessed)
+		cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 		clusters = append(clusters, cluster)
 		for _, f := range unprocessed {
 			if f != nil && f.ID != "" && f.ID != cluster.CanonicalID {
@@ -1490,7 +1913,7 @@ func main() {
 					MatchValue: cityName,
 					Fragments:  unprocessed,
 				}
-				cluster.CanonicalID = selectCanonical(unprocessed)
+				cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 				clusters = append(clusters, cluster)
 				for _, f := range unprocessed {
 					processedFragmentIDs[f.ID] = true
@@ -1518,7 +1941,7 @@ func main() {
 					MatchValue: productName,
 					Fragments:  unprocessed,
 				}
-				cluster.CanonicalID = selectCanonical(unprocessed)
+				cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 				clusters = append(clusters, cluster)
 				for _, f := range unprocessed {
 					processedFragmentIDs[f.ID] = true
@@ -1555,7 +1978,7 @@ func main() {
 					MatchValue: aliasKey,
 					Fragments:  unprocessed,
 				}
-				cluster.CanonicalID = selectCanonical(unprocessed)
+				cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 				clusters = append(clusters, cluster)
 				for _, f := range unprocessed {
 					processedFragmentIDs[f.ID] = true
@@ -1586,7 +2009,7 @@ func main() {
 				MatchValue: key,
 				Fragments:  unprocessed,
 			}
-			cluster.CanonicalID = selectCanonical(unprocessed)
+			cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
 			clusters = append(clusters, cluster)
 			for _, f := range unprocessed {
 				processedFragmentIDs[f.ID] = true
@@ -1644,9 +2067,35 @@ func main() {
 			}
 		}
 
-		// Fix canonical path for GEO_REGION if needed
+		// Fix canonical path using core canonization policy (if available)
 		pathFixed := false
+		if canonExecutor != nil {
+			if normalized := normalizeCanonicalPathWithPolicy(ctx, canonExecutor, canonical.CanonicalPath); normalized != "" && normalized != canonical.CanonicalPath {
+				oldPath := canonical.CanonicalPath
+				if applyCanonicalPathUpdate(canonical, normalized) {
+					pathFixed = true
+					stats.PathsFixed++
+					if *verbose {
+						log.Printf("  Path fixed (policy): %s -> %s", oldPath, canonical.CanonicalPath)
+					}
+				}
+			}
+		}
+
+		// Fix canonical path for GEO_REGION if needed (legacy geo fallback)
 		if canonical.Type == models.FragmentTypeGeoRegion {
+			if geoNamesClient != nil {
+				if norm, step, _ := scout.NormalizeGeoPathViaGeoNames(ctx, canonical.CanonicalPath, geoNamesClient); norm != "" && norm != canonical.CanonicalPath {
+					oldPath := canonical.CanonicalPath
+					if applyCanonicalPathUpdate(canonical, norm) {
+						pathFixed = true
+						stats.PathsFixed++
+						if *verbose {
+							log.Printf("  Path fixed (geonames): %s -> %s (%s)", oldPath, canonical.CanonicalPath, step)
+						}
+					}
+				}
+			}
 			if !isCanonicalLocPath(canonical.CanonicalPath) {
 				oldPath := canonical.CanonicalPath
 				if fixed := fixGeoPath(canonical.CanonicalPath); fixed != "" {
@@ -1656,6 +2105,20 @@ func main() {
 						if *verbose {
 							log.Printf("  Path fixed: %s -> %s", oldPath, canonical.CanonicalPath)
 						}
+					}
+				}
+			}
+		}
+
+		// Fix canonical path for DOMAIN if needed (normalize facet ordering)
+		if canonical.Type == models.FragmentTypeDomain {
+			if normalized, err := taxonomy.NormalizeDomainCanonicalPath(canonical.CanonicalPath); err == nil && normalized != "" && normalized != canonical.CanonicalPath {
+				oldPath := canonical.CanonicalPath
+				if applyCanonicalPathUpdate(canonical, normalized) {
+					pathFixed = true
+					stats.PathsFixed++
+					if *verbose {
+						log.Printf("  Path fixed: %s -> %s", oldPath, canonical.CanonicalPath)
 					}
 				}
 			}
@@ -1690,7 +2153,7 @@ func main() {
 
 		// 4b. Reassign edges from duplicates to canonical
 		for _, dup := range duplicates {
-			reassigned, deleted, err := reassignEdges(ctx, db, edgesRepo, dup.ID, canonical.ID)
+			reassigned, deleted, err := reassignEdges(ctx, db, edgesRepo, *tenantID, dup.ID, canonical.ID)
 			if err != nil {
 				log.Printf("  ERROR: failed to reassign edges from %s: %v", dup.ID, err)
 				continue
@@ -1727,7 +2190,7 @@ FIX_EDGES:
 	}
 	log.Printf("\n=== Step 5: Fixing edge directions ===")
 	if *apply {
-		fixed, canonicalized, err := fixEdgeDirections(ctx, db, edgesRepo, fragmentTypes, *tenantID, *canonicalizeEdges)
+		fixed, canonicalized, err := fixEdgeDirections(ctx, db, edgesRepo, fragmentTypes, *tenantID, *canonicalizeEdges, validationExecutor, canonExecutor)
 		if err != nil {
 			log.Printf("ERROR: edge direction fix failed: %v", err)
 		} else {
@@ -1894,6 +2357,176 @@ func loadAllFragments(ctx context.Context, db *firestore.Client, tenantID, typeF
 	return fragments, nil
 }
 
+// buildProfileCache builds a cache of fragment IDs that have profiles.
+// Returns a map[fragmentID]bool for fast lookup.
+// Core-first: we scan profiles collection once and map to current fragments.
+func buildProfileCache(ctx context.Context, db *firestore.Client, fragments []*models.HorizonFragment) map[string]bool {
+	cache := make(map[string]bool)
+	if db == nil || len(fragments) == 0 {
+		return cache
+	}
+
+	// Build a set of known fragment IDs to avoid keeping unrelated profiles.
+	fragmentIDSet := make(map[string]struct{}, len(fragments))
+	for _, f := range fragments {
+		if f != nil && strings.TrimSpace(f.ID) != "" {
+			fragmentIDSet[f.ID] = struct{}{}
+		}
+	}
+	if len(fragmentIDSet) == 0 {
+		return cache
+	}
+
+	iter := db.Collection("horizon_fragment_profiles").
+		Select("fragmentId", "status").
+		Documents(ctx)
+	defer iter.Stop()
+
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			log.Printf("WARNING: failed to scan profiles: %v", err)
+			break
+		}
+		var profile models.FragmentProfile
+		if err := doc.DataTo(&profile); err != nil {
+			continue
+		}
+		fragID := strings.TrimSpace(profile.FragmentID)
+		if fragID == "" {
+			continue
+		}
+		if _, ok := fragmentIDSet[fragID]; ok {
+			// Treat any existing profile as "created" for priority purposes.
+			cache[fragID] = true
+		}
+	}
+
+	return cache
+}
+
+// normalizeCanonicalPathWithPolicy uses the core canonization policy to normalize a canonical path.
+// Returns empty string when no normalization is available.
+func normalizeCanonicalPathWithPolicy(ctx context.Context, executor *policy.PolicyExecutor, path string) string {
+	if executor == nil {
+		return ""
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	decision, err := executor.Execute(ctx, policy.PolicyInput{
+		Kind: "canonization",
+		Context: map[string]interface{}{
+			"inputType":  "canonical_path",
+			"inputValue": path,
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	if decision.Action != "normalize_to" {
+		return ""
+	}
+	if output, ok := decision.Params["output"].(string); ok {
+		return strings.TrimSpace(output)
+	}
+	return ""
+}
+
+// normalizeRelationTypeWithPolicy uses the core canonization policy to normalize edge types.
+func normalizeRelationTypeWithPolicy(ctx context.Context, executor *policy.PolicyExecutor, edgeType models.DependencyType) string {
+	if executor == nil {
+		return ""
+	}
+	in := strings.TrimSpace(string(edgeType))
+	if in == "" {
+		return ""
+	}
+	decision, err := executor.Execute(ctx, policy.PolicyInput{
+		Kind: "canonization",
+		Context: map[string]interface{}{
+			"inputType":  "relation_type",
+			"inputValue": in,
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	if decision.Action != "normalize_to" {
+		return ""
+	}
+	if output, ok := decision.Params["output"].(string); ok {
+		return strings.TrimSpace(output)
+	}
+	return ""
+}
+
+func isISO2CountryToken(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if len(s) != 2 {
+		return false
+	}
+	return s >= "aa" && s <= "zz"
+}
+
+func extractCountryFromLocPath(path string) string {
+	cp := canonicalPartsFromPath(path)
+	if cp == nil || cp.Namespace != "loc" || cp.Loc == nil {
+		return ""
+	}
+	c := strings.ToLower(strings.TrimSpace(cp.Loc.Country))
+	if !isISO2CountryToken(c) {
+		return ""
+	}
+	return c
+}
+
+// legacyOrgCountryFromEdges returns a single ISO2 country inferred from LOCATED_IN edges.
+// It returns ok=false if there is no country signal or if multiple countries are present.
+func legacyOrgCountryFromEdges(ctx context.Context, edgesRepo *repo.DependencyEdgesRepository, tenantID, legacyID string, idToFrag map[string]*models.HorizonFragment) (country string, ok bool) {
+	if edgesRepo == nil || strings.TrimSpace(legacyID) == "" {
+		return "", false
+	}
+	edgeType := models.DependencyTypeLocatedIn
+	edges, err := edgesRepo.ListBySource(ctx, tenantID, legacyID, &edgeType, 500)
+	if err != nil {
+		return "", false
+	}
+	countries := map[string]struct{}{}
+	for _, ed := range edges {
+		if ed == nil {
+			continue
+		}
+		targetID := strings.TrimSpace(ed.TargetFragmentID)
+		if targetID == "" {
+			continue
+		}
+		target := idToFrag[targetID]
+		if target == nil || target.Type != models.FragmentTypeGeoRegion {
+			continue
+		}
+		c := extractCountryFromLocPath(target.CanonicalPath)
+		if c == "" {
+			continue
+		}
+		countries[c] = struct{}{}
+		if len(countries) > 1 {
+			return "", false
+		}
+	}
+	if len(countries) != 1 {
+		return "", false
+	}
+	for c := range countries {
+		return c, true
+	}
+	return "", false
+}
+
 // extractWikidataID extracts Wikidata ID from fragment's KBRefs or Identifiers
 func extractWikidataID(f *models.HorizonFragment) string {
 	// Check KBRefs
@@ -1958,6 +2591,64 @@ func splitPathTokens(s string) []string {
 			return false
 		}
 	})
+}
+
+// extractOrgBaseName extracts the base company name from an org canonical path,
+// removing legal form suffix (e.g., "tesla-inc" -> "tesla", "tesla" -> "tesla").
+// Returns empty string if path is invalid or cannot extract base name.
+func extractOrgBaseName(canonicalPath string) string {
+	cp := canonicalPartsFromPath(canonicalPath)
+	if cp == nil || cp.Namespace != "org" || cp.Org == nil {
+		return ""
+	}
+
+	// Use BaseSlug if available (already without legal form)
+	if baseSlug := strings.TrimSpace(cp.Org.BaseSlug); baseSlug != "" {
+		return strings.ToLower(baseSlug)
+	}
+
+	// Fallback: extract from full slug by removing legal form
+	fullSlug := buildOrgSlug(cp.Org)
+	if fullSlug == "" {
+		return ""
+	}
+
+	// Remove legal form suffix if present
+	baseName := stripLegalFormSuffixFromSlug(fullSlug)
+	return strings.ToLower(strings.TrimSpace(baseName))
+}
+
+// stripLegalFormSuffixFromSlug removes legal form suffix from a slug.
+// This is a local implementation similar to taxonomy.stripLegalFormSuffix.
+func stripLegalFormSuffixFromSlug(slug string) string {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return slug
+	}
+
+	// Common legal forms (same list as in taxonomy.stripLegalFormSuffix)
+	legalForms := []string{"inc", "llc", "jsc", "pjsc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa", "as", "ab", "bv", "nv", "se", "co", "pty", "cjsc", "llp", "lp", "sp", "sup", "fsup", "soe"}
+
+	// Sort by length (longest first) to match longer forms first (e.g., "pjsc" before "jsc")
+	sort.Slice(legalForms, func(i, j int) bool {
+		return len(legalForms[i]) > len(legalForms[j])
+	})
+
+	changed := true
+	for changed {
+		changed = false
+		for _, lf := range legalForms {
+			suffix := "-" + lf
+			if strings.HasSuffix(slug, suffix) {
+				slug = strings.TrimSuffix(slug, suffix)
+				slug = strings.TrimSuffix(slug, "-")
+				changed = true
+				break
+			}
+		}
+	}
+
+	return slug
 }
 
 // normalizeOrgCanonicalPathForDedup normalizes org canonical paths by treating '_' and '-' as equivalent.
@@ -2054,6 +2745,9 @@ func normalizeOrgGovGeoForDedupKey(s string) string {
 		return s
 	}
 	if taxonomy.IsCompositeGeoToken(s) {
+		return s
+	}
+	if taxonomy.IsRegionalGeoToken(s) {
 		return s
 	}
 	return "na"
@@ -2166,12 +2860,29 @@ func (u *unionFind) groups(ids []string) [][]string {
 
 // selectCanonical chooses the best fragment to be the canonical one
 // For GEO_REGION: strongly prefers fragments with /loc/ prefix
-func selectCanonical(fragments []*models.HorizonFragment) string {
+// profileCache: map of fragment IDs that have profiles (for priority)
+func selectCanonical(fragments []*models.HorizonFragment, profileCache map[string]bool) string {
 	if len(fragments) == 0 {
 		return ""
 	}
 	if len(fragments) == 1 {
 		return fragments[0].ID
+	}
+
+	// Absolute priority: if any fragment has a profile, only consider those.
+	if profileCache != nil {
+		withProfile := make([]*models.HorizonFragment, 0, len(fragments))
+		for _, f := range fragments {
+			if f == nil || strings.TrimSpace(f.ID) == "" {
+				continue
+			}
+			if profileCache[f.ID] {
+				withProfile = append(withProfile, f)
+			}
+		}
+		if len(withProfile) > 0 {
+			fragments = withProfile
+		}
 	}
 
 	// For GEO_REGION: first check if any have /loc/ prefix
@@ -2189,19 +2900,20 @@ func selectCanonical(fragments []*models.HorizonFragment) string {
 			}
 		}
 		if len(canonicalLocs) > 0 {
-			return selectCanonicalByScore(canonicalLocs)
+			return selectCanonicalByScore(canonicalLocs, profileCache)
 		}
 		if len(locFragments) > 0 {
-			return selectCanonicalByScore(locFragments)
+			return selectCanonicalByScore(locFragments, profileCache)
 		}
 	}
 
 	// Default: score-based selection
-	return selectCanonicalByScore(fragments)
+	return selectCanonicalByScore(fragments, profileCache)
 }
 
 // selectCanonicalByScore chooses canonical based on data quality score
-func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
+// profileCache: map of fragment IDs that have profiles (for priority)
+func selectCanonicalByScore(fragments []*models.HorizonFragment, profileCache map[string]bool) string {
 	if len(fragments) == 0 {
 		return ""
 	}
@@ -2217,6 +2929,12 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment) string {
 
 	for _, f := range fragments {
 		score := 0
+
+		// HIGHEST PRIORITY: Prefer fragments with profiles (+200)
+		// This ensures that fragments with profiles are always chosen over those without
+		if profileCache != nil && profileCache[f.ID] {
+			score += 200
+		}
 
 		// Prefer fragments with Wikidata ID (+100)
 		if extractWikidataID(f) != "" {
@@ -2745,10 +3463,61 @@ func mergeFragmentData(target, source *models.HorizonFragment) bool {
 	return changed
 }
 
-// reassignEdges moves edges from oldFragmentID to newFragmentID
-func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, oldID, newID string) (reassigned, deleted int, err error) {
+// deleteEdgesForFragment removes all edges where fragment is source or target.
+func deleteEdgesForFragment(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, tenantID, fragmentID string) (deleted int, err error) {
+	if db == nil || edgesRepo == nil || strings.TrimSpace(fragmentID) == "" {
+		return 0, nil
+	}
 	edgesCol := db.Collection("horizon_dependency_edges")
-	tenantID := "global"
+
+	q1 := edgesCol.Where("tenantId", "==", tenantID).Where("sourceFragmentId", "==", fragmentID)
+	docs1, err := q1.Documents(ctx).GetAll()
+	if err != nil {
+		return 0, err
+	}
+	for _, d := range docs1 {
+		var edge models.DependencyEdge
+		if err := d.DataTo(&edge); err != nil {
+			continue
+		}
+		if strings.TrimSpace(edge.ID) == "" {
+			edge.ID = d.Ref.ID
+		}
+		if strings.TrimSpace(edge.ID) == "" {
+			continue
+		}
+		if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
+			deleted++
+		}
+	}
+
+	q2 := edgesCol.Where("tenantId", "==", tenantID).Where("targetFragmentId", "==", fragmentID)
+	docs2, err := q2.Documents(ctx).GetAll()
+	if err != nil {
+		return deleted, err
+	}
+	for _, d := range docs2 {
+		var edge models.DependencyEdge
+		if err := d.DataTo(&edge); err != nil {
+			continue
+		}
+		if strings.TrimSpace(edge.ID) == "" {
+			edge.ID = d.Ref.ID
+		}
+		if strings.TrimSpace(edge.ID) == "" {
+			continue
+		}
+		if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
+			deleted++
+		}
+	}
+
+	return deleted, nil
+}
+
+// reassignEdges moves edges from oldFragmentID to newFragmentID
+func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, tenantID, oldID, newID string) (reassigned, deleted int, err error) {
+	edgesCol := db.Collection("horizon_dependency_edges")
 
 	// Process source edges
 	q1 := edgesCol.Where("tenantId", "==", tenantID).Where("sourceFragmentId", "==", oldID)
@@ -3468,6 +4237,20 @@ func extractProductNameFromPath(path string) string {
 	return lastPart
 }
 
+// isProductPathEndingWithNA returns true if canonical path ends with /na (case-insensitive).
+func isProductPathEndingWithNA(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/product/") {
+		return false
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] != "product" {
+		return false
+	}
+	last := strings.ToLower(strings.TrimSpace(parts[len(parts)-1]))
+	return last == "na"
+}
+
 // extractCanonicalProductSlugForDedup returns the product slug ONLY for canonical product namespaces:
 // - /product/{slug}
 // - /product/{category}/{type}/{stage}/{slug}
@@ -3711,7 +4494,7 @@ func extractPersonNameFromPath(path string) string {
 
 // fixEdgeDirections reverses edges that point in the wrong direction
 // Uses pagination (100 edges per page) and pre-built fragment type cache for efficiency
-func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, fragmentTypes map[string]models.FragmentType, tenantID string, canonicalizeTypes bool) (int, int, error) {
+func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, fragmentTypes map[string]models.FragmentType, tenantID string, canonicalizeTypes bool, validationExecutor *policy.PolicyExecutor, canonExecutor *policy.PolicyExecutor) (int, int, error) {
 	log.Printf("Fixing edge directions with pagination (page size: 100)...")
 	log.Printf("Edge canonicalization enabled: %t", canonicalizeTypes)
 	log.Printf("Using pre-loaded fragment type cache with %d entries", len(fragmentTypes))
@@ -3719,6 +4502,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 	const pageSize = 100
 	reversed := 0
 	canonicalized := 0
+	deleted := 0
 	totalChecked := 0
 	var lastDoc *firestore.DocumentSnapshot
 
@@ -3783,6 +4567,61 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 				continue // Skip if we can't determine types (orphaned edge or deleted fragment)
 			}
 
+			updated := false
+			typeNormalized := false
+
+			// Core canonization: normalize relation type
+			if canonExecutor != nil {
+				if normalized := normalizeRelationTypeWithPolicy(ctx, canonExecutor, edge.Type); normalized != "" && normalized != string(edge.Type) {
+					edge.Type = models.DependencyType(normalized)
+					typeNormalized = true
+				}
+			}
+
+			// Core validation: check edge direction using policy rules
+			if validationExecutor != nil {
+				decision, err := validationExecutor.Execute(ctx, policy.PolicyInput{
+					Kind: "validation",
+					Edge: &edge,
+					Context: map[string]interface{}{
+						"sourceType":   string(sourceType),
+						"targetType":   string(targetType),
+						"relationType": string(edge.Type),
+					},
+				})
+				if err == nil {
+					switch decision.Action {
+					case "reverse":
+						oldSource := edge.SourceFragmentID
+						edge.SourceFragmentID = edge.TargetFragmentID
+						edge.TargetFragmentID = oldSource
+						sourceType, targetType = targetType, sourceType
+						if err := edgesRepo.Update(ctx, &edge); err != nil {
+							log.Printf("  ERROR: failed to reverse edge %s (policy): %v", edge.ID, err)
+							continue
+						}
+						if *verbose {
+							log.Printf("  ✓ Reversed edge %s by policy: %s -> %s (%s)",
+								edge.ID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+						}
+						reversed++
+						updated = true
+						continue
+					case "reject":
+						if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
+							deleted++
+							if *verbose {
+								log.Printf("  ✓ Deleted edge %s by policy (reject)", edge.ID)
+							}
+						} else {
+							log.Printf("  ERROR: failed to delete edge %s (policy reject): %v", edge.ID, err)
+						}
+						updated = true
+						continue
+					}
+				}
+			}
+
 			// Canonical representation: SUBSIDIARY_OF is normalized into OWNS (parent -> subsidiary).
 			if edge.Type == models.DependencyTypeSubsidiaryOf {
 				oldSource := edge.SourceFragmentID            // subsidiary
@@ -3794,6 +4633,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 					continue
 				}
 				canonicalized++
+				updated = true
 				continue
 			}
 
@@ -3820,6 +4660,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 					log.Printf("  ✓ Normalized HAS_KEY_PERSON → KEY_PERSON: %s → %s", edge.SourceFragmentID, edge.TargetFragmentID)
 				}
 				canonicalized++
+				updated = true
 				continue
 			}
 
@@ -3865,6 +4706,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 							edge.ID, oldType, edge.Type, edge.TargetFragmentID, edge.SourceFragmentID)
 					}
 					canonicalized++
+					updated = true
 					continue
 				}
 			}
@@ -3887,6 +4729,17 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 						edge.ID, edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Type)
 				}
 				reversed++
+				updated = true
+			}
+
+			// Persist edge type normalization if it was the only change
+			if typeNormalized && !updated {
+				if err := edgesRepo.Update(ctx, &edge); err != nil {
+					log.Printf("  ERROR: failed to persist edge type normalization %s: %v", edge.ID, err)
+					continue
+				}
+				canonicalized++
+				updated = true
 			}
 		}
 
@@ -3900,6 +4753,9 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 		if len(docs) < pageSize {
 			break // Last page
 		}
+	}
+	if deleted > 0 {
+		log.Printf("✓ Policy rejected %d edges", deleted)
 	}
 
 	log.Printf("  Completed: checked %d edges total", totalChecked)

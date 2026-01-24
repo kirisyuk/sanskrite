@@ -415,6 +415,11 @@ func normalizeGeoPathViaGeoNames(ctx context.Context, path string, client coreon
 	return "", "", 0
 }
 
+// NormalizeGeoPathViaGeoNames exposes GeoNames-based /loc normalization for tools.
+func NormalizeGeoPathViaGeoNames(ctx context.Context, path string, client coreontology.GeoNamesClientInterface) (string, string, float64) {
+	return normalizeGeoPathViaGeoNames(ctx, path, client)
+}
+
 func pickUnambiguousCityCandidate(ctx context.Context, client coreontology.GeoNamesClientInterface, cityName, cc, admin string) (*coreontology.GeoNamesPlace, bool) {
 	cityName = strings.TrimSpace(cityName)
 	if client == nil || cityName == "" {
@@ -823,6 +828,63 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 		}
 	}
 
+	// Step 1.3: Market deduplication using tags (metadata-driven).
+	if fragmentType == models.FragmentTypeMarket && r.fragmentsRepo != nil && len(metadata) > 0 {
+		rawTags := parseTagMetadata(metadata["tags"])
+		normalizedTags := taxonomy.NormalizeMarketTags(rawTags)
+		if len(normalizedTags) >= 5 {
+			geo, sector := parseMarketGeoSector(result.CanonicalPath)
+			if geo != "" && sector != "" {
+				searchTokens := taxonomy.MarketTagSearchTokens(normalizedTags, 10)
+				if len(searchTokens) > 0 {
+					candidates, err := r.fragmentsRepo.FindByTags(ctx, searchTokens, 50)
+					if err == nil && len(candidates) > 0 {
+						tagSet := map[string]struct{}{}
+						for _, t := range normalizedTags {
+							tagSet[t] = struct{}{}
+						}
+						var best *models.HorizonFragment
+						bestOverlap := 0
+						for _, cand := range candidates {
+							if cand == nil || cand.ID == "" {
+								continue
+							}
+							if cand.Type != models.FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(cand.CanonicalPath), "/market/") {
+								continue
+							}
+							cGeo, cSector := parseMarketGeoSector(cand.CanonicalPath)
+							if cGeo == "" || cSector == "" || cGeo != geo || cSector != sector {
+								continue
+							}
+							candTags := taxonomy.NormalizeMarketTags(cand.Tags)
+							if len(candTags) == 0 {
+								continue
+							}
+							overlap := 0
+							for _, t := range candTags {
+								if _, ok := tagSet[t]; ok {
+									overlap++
+								}
+							}
+							if overlap >= 5 && overlap > bestOverlap {
+								best = cand
+								bestOverlap = overlap
+							}
+						}
+						if best != nil && strings.TrimSpace(best.CanonicalPath) != "" {
+							result.NormalizationSteps = append(result.NormalizationSteps,
+								fmt.Sprintf("market_tag_dedup: %s -> %s (overlap=%d)", result.CanonicalPath, best.CanonicalPath, bestOverlap))
+							result.CanonicalPath = strings.TrimSpace(best.CanonicalPath)
+							result.ExistingFragment = best
+							log.Printf("%s Market deduplication found existing: %s -> %s (id=%s, overlap=%d)", logPrefix, inputPath, best.CanonicalPath, best.ID, bestOverlap)
+							return result, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Step 2: For organizations with metadata, try deduplication first (before checking by path)
 	if fragmentType == models.FragmentTypeOrganization && r.orgDeduplicator != nil && len(metadata) > 0 {
 		testFragment := &models.HorizonFragment{
@@ -879,6 +941,57 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	r.recordTelemetry(ctx, fragmentType, redirectHits, redirectWrites, redirectStable, redirectVariability)
 
 	return result, nil
+}
+
+func parseTagMetadata(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	split := strings.FieldsFunc(raw, func(r rune) bool {
+		switch r {
+		case ',', ';', '|', '\n', '\t':
+			return true
+		}
+		return false
+	})
+	if len(split) == 1 {
+		if strings.Contains(split[0], " ") {
+			split = strings.Fields(split[0])
+		}
+	}
+	out := make([]string, 0, len(split))
+	for _, s := range split {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func parseMarketGeoSector(canonicalPath string) (string, string) {
+	cp := strings.TrimSpace(canonicalPath)
+	if !strings.HasPrefix(cp, "/market/") {
+		return "", ""
+	}
+	if parts, err := taxonomy.ParseCanonicalPathParts(cp); err == nil && parts != nil && parts.Market != nil {
+		geo := strings.ToLower(strings.TrimSpace(parts.Market.Geo))
+		sector := strings.ToLower(strings.TrimSpace(parts.Market.Domain))
+		if geo != "" && sector != "" {
+			return geo, sector
+		}
+	}
+	trimmed := strings.Trim(cp, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) >= 4 && parts[0] == "market" {
+		return strings.ToLower(strings.TrimSpace(parts[1])), strings.ToLower(strings.TrimSpace(parts[2]))
+	}
+	return "", ""
 }
 
 // RecordRedirect stores a canonical path rewrite for future fast-path resolution.

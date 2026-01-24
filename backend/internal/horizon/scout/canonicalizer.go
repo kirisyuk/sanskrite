@@ -76,6 +76,10 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 		out = append(out, "/fac/"+slug)
 		return out
 	case models.FragmentTypeProduct:
+		ls := strings.TrimSpace(strings.ToLower(short))
+		if ls == "na" || ls == "n/a" || ls == "unknown" || ls == "none" {
+			return nil
+		}
 		// Use ProductCanonicalizer to generate hierarchical paths
 		// Note: preferredCanonicalPaths is called without context, so we use Background
 		// Full canonicalization with context happens in resolveCanonicalPath
@@ -85,6 +89,9 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 			return []string{result.CanonicalPath}
 		}
 		// Final fallback: flat structure
+		if slug == "na" {
+			return nil
+		}
 		return []string{"/product/" + slug}
 	case models.FragmentTypeProgram:
 		// Preferred: /program/{jurisdiction}/{slug} when jurisdiction can be inferred; fallback: /program/{slug}
@@ -217,6 +224,18 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 
 	// Normalize fragment type using CanonizationPolicy if available
 	relType := e.normalizeFragmentType(ctx, rel.TargetType)
+
+	// Align fragment type with any provided canonical path prefix (auto-fix mismatches).
+	if cp := strings.TrimSpace(rel.TargetCanonicalPath); cp != "" {
+		inferred := InferFragmentTypeFromCanonicalPath(cp)
+		if inferred != "" && inferred != relType {
+			fmt.Printf("%s Adjusted targetType based on canonicalPath: %q -> %q (path=%s)\n",
+				logPrefix, relType, inferred, cp)
+			relType = inferred
+		} else if relType == "" && inferred != "" {
+			relType = inferred
+		}
+	}
 
 	// Try CanonizationPolicy for path normalization if available
 	if e.canonizationPolicy != nil && strings.TrimSpace(rel.TargetCanonicalPath) != "" {
@@ -654,14 +673,18 @@ RULES:
     - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
   - PROGRAM:
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known (e.g., "Kazakhstan Alem.ai" -> /program/kazakhstan/alem-ai)
+      - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
+      - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
     - Otherwise use /program/{programSlug}
   - MARKET:
     - Segment-first preferred: /market/{geo}/{domain}/{vertical}
       - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
-      - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global" if unknown
+      - Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
+      - geo: ISO3166-1 alpha2 lowercase, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
+      - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
       - Example: "Saudi event marketing" → /market/sa/professional-services/event-marketing (if domain is known)
-    - Legacy fallback (allowed): /market/{geo}/{marketSlug}
-      - Use when domain/vertical cannot be inferred reliably
+    - Legacy /market/{geo}/{marketSlug} may exist in older data; do NOT emit legacy for new markets.
+      - Always provide domain/vertical for NEW outputs.
       - GEOGRAPHY INFERENCE: Extract geo from the market name/context:
         - If the name mentions a country/region, use that country's ISO2 code
         - "Saudi event marketing" → /market/sa/event-marketing (NOT /market/global/...)
@@ -671,14 +694,16 @@ RULES:
       - Parent relationships are modeled as HAS_SUBMARKET edges (broader → narrower)
       - Example: marketing → digital-marketing → event-marketing
     - Examples:
-      - "SME banking in Iraq" -> /market/iq/finance/banking (segment-first) or /market/iq/sme-banking (legacy)
-      - "Global EV batteries" -> /market/global/automotive/ev-batteries (segment-first) or /market/global/ev-batteries (legacy)
-      - "UAE fintech sector" -> /market/ae/finance/fintech (segment-first) or /market/ae/fintech (legacy)
+      - "SME banking in Iraq" -> /market/iq/finance/banking
+      - "Global EV batteries" -> /market/global/automotive/ev-batteries
+      - "UAE fintech sector" -> /market/ae/finance/fintech
   - FACILITY:
     - Prefer /fac/{orgSlug}/{facilitySlug} when the org can be inferred from the facility name (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise use /fac/{facilitySlug}
   - GEO_REGION: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase (2 chars), or regional token when ISO2 is insufficient (asean, brics, gcc, eu, eaeu)
+    - country: ISO3166-1 alpha2 lowercase, or regional token (asean, brics, gcc, eu, eaeu)
+    - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
+      - GCC → /loc/gcc/na/na (NOT /loc/na/na/gcc)
     - admin1: state/province/region code or slug lowercase; use "na" if not applicable/unknown
     - city: lowercase slug; use "na" if not applicable/unknown
     - For country-only locations, use: /loc/{country}/na/na
@@ -692,7 +717,8 @@ RULES:
     - Kazakhstan / Astana: /loc/kz/na/astana
   - EVENT: /event/{lowercase-slug}
   - COMMUNITY: /community/{geo}/{type}/{slug}
-    - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
+    - geo: ISO2, regional token, or "global"/"int"
+    - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
     - type: trade | activist | professional | criminal | religious | ethnic | interest
       - trade: commercial networks without formal structure (hawala, informal trade networks)
       - activist: political/social activist groups

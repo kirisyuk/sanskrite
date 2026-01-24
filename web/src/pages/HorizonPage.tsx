@@ -87,6 +87,23 @@ const HorizonPage: React.FC = () => {
   const [activeCreateSessionId, setActiveCreateSessionId] = React.useState<string | null>(null);
   const creatingLensRef = React.useRef(false);
   const feedRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Preflight (“How we understood your request”) before starting scouting.
+  const [preflightOpen, setPreflightOpen] = React.useState(false);
+  const [preflightResult, setPreflightResult] = React.useState<any | null>(null);
+  const [preflightMode, setPreflightMode] = React.useState<'just_open' | 'research_first'>('research_first');
+  const [preflightSelectedDomains, setPreflightSelectedDomains] = React.useState<Record<string, boolean>>({});
+  const [preflightSelectedAnchors, setPreflightSelectedAnchors] = React.useState<Record<string, boolean>>({});
+  const [preflightFocus, setPreflightFocus] = React.useState('');
+  const [preflightDomainsDraft, setPreflightDomainsDraft] = React.useState<any[]>([]);
+  const [preflightAnchorsDraft, setPreflightAnchorsDraft] = React.useState<any[]>([]);
+  const pendingCreateRef = React.useRef<{
+    request: AssembleLensRequest;
+    correlationId: string;
+    sessionId: string;
+    query: string;
+    prefetchScope: string[];
+  } | null>(null);
   
   const isAdmin = currentUser?.email === 'igor@hatl.one' || currentUser?.email === 'admin@hatl.one';
   const isMobile = React.useMemo(() => window.innerWidth < 768, []);
@@ -290,6 +307,7 @@ const HorizonPage: React.FC = () => {
     creatingLensRef.current = true;
     setIsCreatingLens(true);
 
+    let openedPreflight = false;
     try {
       // Two creation modes:
       // 1) Prefetch-only (chips only): create lens with explicit scope (no scouting).
@@ -306,6 +324,21 @@ const HorizonPage: React.FC = () => {
 
       resetEvents();
       setLensStarted(true);
+
+      // Show "Initializing..." as a first-class progress event (avoids duplicating a separate preflight header line).
+      try {
+        useHorizonRealtimeStore.getState().handleWsEvent('horizon.intent.initializing', {
+          projectId: request.projectId,
+          correlationId,
+          sessionId,
+          humanReadable: {
+            title: 'Initializing',
+            description: 'Resolving intent…',
+          },
+        });
+      } catch {
+        // ignore
+      }
 
       const q = String(request.query || '').trim();
       const prefetchScope = Array.from(
@@ -328,7 +361,7 @@ const HorizonPage: React.FC = () => {
             scope: prefetchScope,
             status: 'ACTIVE',
           },
-          { correlationId, sessionId },
+          { correlationId, sessionId, skipScouting: true },
         );
 
         if (lens?.id) {
@@ -342,38 +375,166 @@ const HorizonPage: React.FC = () => {
         return;
       }
 
-      // Mode 2: query-based lens creation (scouting) — merge prefetch scope into final scope server-side.
-      const result = await api.createHorizonLensFromQuery(
+      // Mode 2: query-based lens creation — preflight first (“How we understood your request”).
+      const preflight = await api.preflightHorizonLensFromQuery(
         {
           projectId: request.projectId,
           query: q,
-          maxRecursionDepth: request.filters?.maxRecursionDepth ?? 1,
-          prefetchScope: prefetchScope.length > 0 ? prefetchScope : undefined,
           specialties: request.filters?.specialties,
         },
-        { correlationId, sessionId }
+        { correlationId, sessionId },
       );
 
-      // Save new lens ID and open it in Progress view
-      if (result?.lens?.id) {
-        setSelectedLensId(result.lens.id);
-        // Dispatch event to refresh lenses list in SidebarPanel
-        window.dispatchEvent(new CustomEvent('horizon:lens-created', { 
-          detail: { lensId: result.lens.id, projectId: request.projectId } 
-        }));
-      } else {
-        // Keep Hook UI visible; LensCanvas can be opened manually from Sidebar lens list.
-        setSelectedLensId(null);
+      pendingCreateRef.current = {
+        request,
+        correlationId,
+        sessionId,
+        query: q,
+        prefetchScope,
+      };
+      setPreflightResult(preflight);
+      setPreflightMode(
+        String(preflight?.recommendation?.mode || 'research_first') === 'just_open'
+          ? 'just_open'
+          : 'research_first',
+      );
+      const domains = Array.isArray(preflight?.intent?.domains) ? preflight.intent.domains : [];
+      const anchors = Array.isArray(preflight?.intent?.anchors) ? preflight.intent.anchors : [];
+      const domSel: Record<string, boolean> = {};
+      for (const d of domains as any[]) {
+        const cp = String(d?.canonicalPath || '').trim();
+        if (cp) domSel[cp] = true;
       }
+      const ancSel: Record<string, boolean> = {};
+      for (const a of anchors as any[]) {
+        const cp = String(a?.canonicalPath || '').trim();
+        if (cp) ancSel[cp] = true;
+      }
+      setPreflightSelectedDomains(domSel);
+      setPreflightSelectedAnchors(ancSel);
+      setPreflightFocus(String(preflight?.intent?.focus || '').trim());
+      setPreflightDomainsDraft(Array.isArray(preflight?.intent?.domains) ? (preflight.intent.domains as any[]) : []);
+      setPreflightAnchorsDraft(Array.isArray(preflight?.intent?.anchors) ? (preflight.intent.anchors as any[]) : []);
+      setPreflightOpen(true);
+      openedPreflight = true;
     } catch (error) {
       console.error('Failed to assemble lens:', error);
     } finally {
       creatingLensRef.current = false;
       setIsCreatingLens(false);
-      setActiveCreateCorrelationId(null);
-      setActiveCreateSessionId(null);
+      // Keep correlation/session IDs while the preflight modal is open (so the progress feed stays correlated).
+      if (!openedPreflight) {
+        setActiveCreateCorrelationId(null);
+        setActiveCreateSessionId(null);
+      }
     }
   }, [resetEvents]);
+
+  const closePreflight = React.useCallback(() => {
+    setPreflightOpen(false);
+    setPreflightResult(null);
+    pendingCreateRef.current = null;
+    setPreflightDomainsDraft([]);
+    setPreflightAnchorsDraft([]);
+    setPreflightSelectedDomains({});
+    setPreflightSelectedAnchors({});
+    setPreflightFocus('');
+    setActiveCreateCorrelationId(null);
+    setActiveCreateSessionId(null);
+    // Cancel preflight should reset the in-progress lens creation UI back to input.
+    creatingLensRef.current = false;
+    setIsCreatingLens(false);
+    setLensStarted(false);
+    resetEvents();
+    resetRealtime();
+    setSelectedLensId(null);
+  }, [resetEvents, resetRealtime, setSelectedLensId]);
+
+  const confirmPreflightAndCreate = React.useCallback(async (modeOverride?: 'just_open' | 'research_first') => {
+    const pending = pendingCreateRef.current;
+    if (!pending) return;
+    if (!preflightResult?.intent) return;
+    if (creatingLensRef.current) return;
+
+    creatingLensRef.current = true;
+    setIsCreatingLens(true);
+    try {
+      const filteredDomains = (preflightDomainsDraft || []).filter((d: any) => {
+        const cp = String(d?.canonicalPath || '').trim();
+        return cp && preflightSelectedDomains[cp] !== false;
+      });
+      const filteredAnchors = (preflightAnchorsDraft || []).filter((a: any) => {
+        const cp = String(a?.canonicalPath || '').trim();
+        return cp && preflightSelectedAnchors[cp] !== false;
+      });
+      const intentOverride = {
+        ...preflightResult.intent,
+        focus: String(preflightFocus || '').trim() || String(preflightResult?.intent?.focus || '').trim(),
+        domains: filteredDomains,
+        anchors: filteredAnchors,
+      };
+
+      const result = await api.createHorizonLensFromQuery(
+        {
+          projectId: pending.request.projectId,
+          query: pending.query,
+          mode: modeOverride || preflightMode,
+          intent: intentOverride,
+          maxRecursionDepth: pending.request.filters?.maxRecursionDepth ?? 1,
+          prefetchScope: pending.prefetchScope.length > 0 ? pending.prefetchScope : undefined,
+          specialties: pending.request.filters?.specialties,
+        },
+        { correlationId: pending.correlationId, sessionId: pending.sessionId },
+      );
+
+      setPreflightOpen(false);
+      setPreflightResult(null);
+      pendingCreateRef.current = null;
+
+      if (result?.lens?.id) {
+        // Select the newly created lens so Cockpit/Details tabs become available,
+        // but keep the user in Progress while the pipeline is running (lensStarted=true).
+        setSelectedLensId(result.lens.id);
+
+        // Do NOT auto-switch to the lens UI yet: when creating a lens from a query (new objects),
+        // the cockpit is typically empty/unfinished. Keep user in Progress; they can open the lens
+        // manually once they decide it's meaningful.
+        try {
+          useHorizonRealtimeStore.getState().handleWsEvent('horizon.intent.lens_created', {
+            projectId: pending.request.projectId,
+            lensId: result.lens.id,
+            correlationId: pending.correlationId,
+            sessionId: pending.sessionId,
+            humanReadable: {
+              title: 'Lens created',
+              description: `Proceeding with scouting and enrichment… (${String(result?.lens?.name || '').trim() || 'new lens'})`,
+            },
+          });
+        } catch {
+          // ignore
+        }
+        window.dispatchEvent(
+          new CustomEvent('horizon:lens-created', {
+            detail: { lensId: result.lens.id, projectId: pending.request.projectId },
+          }),
+        );
+      }
+    } catch (err) {
+      console.error('[HorizonPage] Failed to create lens after preflight', err);
+    } finally {
+      creatingLensRef.current = false;
+      setIsCreatingLens(false);
+      // Keep correlation/session IDs while we stay in Progress (until user opens the lens).
+    }
+  }, [preflightMode, preflightResult, preflightSelectedAnchors, preflightSelectedDomains, preflightDomainsDraft, preflightAnchorsDraft, preflightFocus, setSelectedLensId]);
+
+  const isValidCanonicalPath = React.useCallback((cp: string) => {
+    const s = String(cp || '').trim();
+    if (!s) return false;
+    if (!s.startsWith('/')) return false;
+    if (/\s/.test(s)) return false;
+    return true;
+  }, []);
 
   // Auto-scroll realtime feed to bottom while started.
   React.useEffect(() => {
@@ -421,6 +582,10 @@ const HorizonPage: React.FC = () => {
         projectId={currentProject?.id || null}
         onSelectLens={(lensId) => {
           setSelectedLensId(lensId);
+          // User explicitly chose to open a lens: stop treating this as an in-progress creation feed.
+          setLensStarted(false);
+          setActiveCreateCorrelationId(null);
+          setActiveCreateSessionId(null);
         }}
         selectedLensId={selectedLensId}
         onNewLens={() => {
@@ -442,7 +607,7 @@ const HorizonPage: React.FC = () => {
         style={{
           position: 'relative',
           display: 'flex',
-          gap: '16px',
+          gap: 0,
         }}
       >
         {/* 2% left margin for breathing room (hidden on smartphones) */}
@@ -464,12 +629,37 @@ const HorizonPage: React.FC = () => {
               isOpen={true}
               lensId={selectedLensId}
               projectId={currentProject.id}
-              initialViewMode={selectedLensId ? 'cockpit' : 'progress'}
+              initialViewMode={lensStarted ? 'progress' : (selectedLensId ? 'cockpit' : 'progress')}
               showInputInProgress={true}
               onAssemble={handleAssembleLens}
-              isCreatingLens={isCreatingLens}
+              // Keep Progress "active" after lens creation until user explicitly opens the lens.
+              isCreatingLens={isCreatingLens || lensStarted}
               activeCreateCorrelationId={activeCreateCorrelationId}
               activeCreateSessionId={activeCreateSessionId}
+              preflight={
+                preflightOpen && preflightResult
+                  ? {
+                      active: true,
+                      reason: String(preflightResult?.recommendation?.reason || '').trim(),
+                      mode: preflightMode,
+                      setMode: setPreflightMode,
+                      focus: preflightFocus,
+                      setFocus: setPreflightFocus,
+                      domainsDraft: preflightDomainsDraft || [],
+                      setDomainsDraft: setPreflightDomainsDraft,
+                      anchorsDraft: preflightAnchorsDraft || [],
+                      setAnchorsDraft: setPreflightAnchorsDraft,
+                      selectedDomains: preflightSelectedDomains || {},
+                      setSelectedDomains: setPreflightSelectedDomains,
+                      selectedAnchors: preflightSelectedAnchors || {},
+                      setSelectedAnchors: setPreflightSelectedAnchors,
+                      isBusy: isCreatingLens,
+                      isValidCanonicalPath,
+                      onCancel: closePreflight,
+                      onContinue: (mode?: 'just_open' | 'research_first') => confirmPreflightAndCreate(mode),
+                    }
+                  : null
+              }
               onClose={() => {
                 // Only close lens if one is selected, otherwise just reset state
                 if (selectedLensId) {
@@ -488,6 +678,8 @@ const HorizonPage: React.FC = () => {
         </div>
       </div>
       
+      {/* Preflight is rendered inline inside LensCanvasProgress. */}
+
       {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />}
       {showAccount && <AccountModal isOpen={showAccount} onClose={() => setShowAccount(false)} />}
       {showAdmin && isAdmin && <AdminModal isOpen={showAdmin} onClose={() => setShowAdmin(false)} />}

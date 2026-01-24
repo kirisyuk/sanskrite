@@ -61,6 +61,14 @@ func (h *HorizonHandlers) CreateLens(w http.ResponseWriter, r *http.Request) {
 		SessionID:     sessionID,
 	})
 
+	// Optional header: suppress scouting for scope-only creates (deterministic UI-selected objects).
+	if v := strings.TrimSpace(r.Header.Get("X-Horizon-Skip-Scouting")); v != "" {
+		v = strings.ToLower(v)
+		if v == "1" || v == "true" || v == "yes" || v == "on" {
+			ctx = hlens.WithSkipScouting(ctx)
+		}
+	}
+
 	trace.Log(ctx, "lens_create", "lens.create.request", map[string]any{
 		"tenantId":  authInfo.TenantID,
 		"projectId": lens.ProjectID,

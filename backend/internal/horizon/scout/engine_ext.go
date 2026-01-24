@@ -2,7 +2,9 @@ package scout
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -10,8 +12,10 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -152,6 +156,183 @@ func bestEffortDisplayLabel(label string, canonicalPath string) string {
 	return bestEffortTitleCase(label)
 }
 
+func buildDomainTitle(contractType string, canonicalPath string, facets map[string][]string) string {
+	ct := strings.ToLower(strings.TrimSpace(contractType))
+	base := ""
+
+	// For "other" contract type, extract custom slug from canonical path.
+	if ct == "other" {
+		slug := extractOtherSlugFromDomainPath(canonicalPath)
+		if slug != "" {
+			base = bestEffortTitleCase(strings.ReplaceAll(slug, "-", " "))
+		} else {
+			base = "Other"
+		}
+	} else {
+		switch ct {
+		// Supply chain / industry
+		case "supply-chain":
+			base = "Supply chain"
+		case "value-chain":
+			base = "Value chain"
+		case "logistics-flow":
+			base = "Logistics flow"
+		case "trade-flow":
+			base = "Trade flow"
+		case "sourcing-map":
+			base = "Sourcing map"
+		case "procurement-map":
+			base = "Procurement map"
+
+		// Risk / geopolitics
+		case "risk-assessment":
+			base = "Risk assessment"
+		case "geopolitical-risk":
+			base = "Geopolitical risk"
+		case "bilateral-relations":
+			base = "Bilateral relations"
+		case "sanctions-exposure":
+			base = "Sanctions exposure"
+		case "conflict-dynamics":
+			base = "Conflict dynamics"
+
+		// Markets / opportunity
+		case "market-opportunity":
+			base = "Market opportunity"
+		case "competitive-landscape":
+			base = "Competitive landscape"
+		case "market-entry":
+			base = "Market entry"
+		case "market-sizing":
+			base = "Market sizing"
+		case "demand-forecast":
+			base = "Demand forecast"
+		case "pricing-dynamics":
+			base = "Pricing dynamics"
+
+		// Investment / finance
+		case "investment-thesis":
+			base = "Investment thesis"
+		case "funding-landscape":
+			base = "Funding landscape"
+		case "exit-strategy":
+			base = "Exit strategy"
+		case "valuation-drivers":
+			base = "Valuation drivers"
+		case "portfolio-exposure":
+			base = "Portfolio exposure"
+
+		// Technology / innovation
+		case "technology-landscape":
+			base = "Technology landscape"
+		case "innovation-map":
+			base = "Innovation map"
+		case "patent-landscape":
+			base = "Patent landscape"
+		case "rd-landscape":
+			base = "R&D landscape"
+		case "adoption-curve":
+			base = "Adoption curve"
+		case "disruption-analysis":
+			base = "Disruption analysis"
+
+		// Ecosystem / stakeholder
+		case "ecosystem-mapping":
+			base = "Ecosystem mapping"
+		case "stakeholder-mapping":
+			base = "Stakeholder mapping"
+		case "partnership-landscape":
+			base = "Partnership landscape"
+		case "influence-network":
+			base = "Influence network"
+		case "power-dynamics":
+			base = "Power dynamics"
+
+		// Policy / regulation
+		case "regulatory-impact":
+			base = "Regulatory impact"
+		case "policy-and-regulation":
+			base = "Policy and regulation"
+		case "compliance-landscape":
+			base = "Compliance landscape"
+		case "security-and-compliance":
+			base = "Security and compliance"
+		case "licensing-requirements":
+			base = "Licensing requirements"
+		case "esg-landscape":
+			base = "ESG landscape"
+
+		// Scenarios / trends
+		case "scenario-analysis":
+			base = "Scenario analysis"
+		case "macro-trends":
+			base = "Macro trends"
+		case "megatrends":
+			base = "Megatrends"
+		case "future-outlook":
+			base = "Future outlook"
+
+		// Sector / industry
+		case "sector-overview":
+			base = "Sector overview"
+		case "industry-structure":
+			base = "Industry structure"
+		case "vertical-deep-dive":
+			base = "Vertical deep-dive"
+
+		default:
+			base = bestEffortTitleCase(strings.ReplaceAll(ct, "-", " "))
+		}
+	}
+
+	if strings.TrimSpace(base) == "" {
+		base = "Domain"
+	}
+
+	// Prefer geo facet as the primary human hint (stable order).
+	gs := []string(nil)
+	if facets != nil {
+		if v, ok := facets["geo"]; ok && len(v) > 0 {
+			gs = append([]string(nil), v...)
+		}
+	}
+	if len(gs) > 0 {
+		seen := map[string]struct{}{}
+		out := make([]string, 0, len(gs))
+		for _, g := range gs {
+			g = strings.TrimSpace(strings.ToLower(g))
+			if len(g) != 2 {
+				continue
+			}
+			if _, ok := seen[g]; ok {
+				continue
+			}
+			seen[g] = struct{}{}
+			out = append(out, strings.ToUpper(g))
+		}
+		sort.Strings(out)
+		if len(out) > 0 {
+			return fmt.Sprintf("%s — %s", base, strings.Join(out, " · "))
+		}
+	}
+
+	return base
+}
+
+// extractOtherSlugFromDomainPath extracts custom slug from /domain/v1/other/{slug}/... paths.
+func extractOtherSlugFromDomainPath(canonicalPath string) string {
+	cp := strings.TrimSpace(canonicalPath)
+	if !strings.HasPrefix(cp, "/domain/v1/other/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	// ["domain", "v1", "other", slug, ...]
+	if len(parts) < 4 {
+		return ""
+	}
+	return strings.TrimSpace(parts[3])
+}
+
 func parseStateString(v interface{}) string {
 	if v == nil {
 		return ""
@@ -240,6 +421,784 @@ func (e *ScoutEngine) processHypothesisRelations(
 	relations []agents.DiscoveredRelation,
 ) error {
 	return e.processRelationsInternal(ctx, job, sourceFragment, relations, "intent_decomposition", map[string]interface{}{"source": "intent_decomposition", "hypothesis": true})
+}
+
+type domainContractForExpansion struct {
+	CanonicalPath      string
+	ContractType       string
+	Title              string
+	Description        string
+	Facets             map[string][]string
+	FirstOrderEntities []string
+	RelatedDomains     []string
+	AffectedDomains    []string
+}
+
+func (e *ScoutEngine) bestEffortFindDomainContract(job *models.ScoutingJob, domainCanonicalPath string) *domainContractForExpansion {
+	cp := strings.TrimSpace(domainCanonicalPath)
+	if job == nil || job.State == nil || cp == "" {
+		return nil
+	}
+	raw, ok := job.State["domains"]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	// NOTE: job.State may contain:
+	// - []interface{} (when loaded from Firestore/JSON)
+	// - []agents.DomainResolution (when created in-process from lens.ViewConfig)
+	// - []map[string]interface{} (various runtime encodings)
+
+	switch t := raw.(type) {
+	case []agents.DomainResolution:
+		for _, d := range t {
+			if strings.TrimSpace(d.CanonicalPath) != cp {
+				continue
+			}
+			return &domainContractForExpansion{
+				CanonicalPath:      strings.TrimSpace(d.CanonicalPath),
+				ContractType:       strings.TrimSpace(d.ContractType),
+				Title:              strings.TrimSpace(d.Title),
+				Description:        strings.TrimSpace(d.Description),
+				Facets:             d.Facets,
+				FirstOrderEntities: append([]string(nil), d.FirstOrderEntities...),
+				RelatedDomains:     append([]string(nil), d.RelatedDomains...),
+				AffectedDomains:    append([]string(nil), d.AffectedDomains...),
+			}
+		}
+		return nil
+	case []map[string]interface{}:
+		list := make([]interface{}, 0, len(t))
+		for _, m := range t {
+			list = append(list, m)
+		}
+		raw = list
+	}
+
+	list, ok := raw.([]interface{})
+	if !ok || len(list) == 0 {
+		return nil
+	}
+	getStringField := func(m map[string]interface{}, keys ...string) string {
+		for _, k := range keys {
+			if s, ok := m[k].(string); ok {
+				if v := strings.TrimSpace(s); v != "" {
+					return v
+				}
+			}
+		}
+		return ""
+	}
+	getMapField := func(m map[string]interface{}, keys ...string) map[string]interface{} {
+		for _, k := range keys {
+			if v, ok := m[k].(map[string]interface{}); ok && v != nil {
+				return v
+			}
+		}
+		return nil
+	}
+	for _, it := range list {
+		m, ok := it.(map[string]interface{})
+		if !ok || m == nil {
+			continue
+		}
+		v := getStringField(m, "canonicalPath", "CanonicalPath")
+		if strings.TrimSpace(v) != cp {
+			continue
+		}
+		out := &domainContractForExpansion{
+			CanonicalPath: strings.TrimSpace(v),
+		}
+		out.ContractType = getStringField(m, "contractType", "ContractType")
+		out.Title = getStringField(m, "title", "Title")
+		out.Description = getStringField(m, "description", "Description")
+		// Facets: map[string][]string
+		if fv := getMapField(m, "facets", "Facets"); fv != nil {
+			fm := map[string][]string{}
+			for k, vv := range fv {
+				kk := strings.TrimSpace(k)
+				if kk == "" {
+					continue
+				}
+				fm[kk] = parseStateStringSlice(vv)
+			}
+			out.Facets = fm
+		}
+		out.FirstOrderEntities = parseStateStringSlice(m["firstOrderEntities"])
+		if len(out.FirstOrderEntities) == 0 {
+			out.FirstOrderEntities = parseStateStringSlice(m["FirstOrderEntities"])
+		}
+		out.RelatedDomains = parseStateStringSlice(m["relatedDomains"])
+		if len(out.RelatedDomains) == 0 {
+			out.RelatedDomains = parseStateStringSlice(m["RelatedDomains"])
+		}
+		out.AffectedDomains = parseStateStringSlice(m["affectedDomains"])
+		if len(out.AffectedDomains) == 0 {
+			out.AffectedDomains = parseStateStringSlice(m["AffectedDomains"])
+		}
+		return out
+	}
+	return nil
+}
+
+func parseDomainPathFacets(domainCP string) (contractType string, facets map[string][]string) {
+	domainCP = strings.TrimSpace(domainCP)
+	if !strings.HasPrefix(domainCP, "/domain/v1/") {
+		return "", nil
+	}
+	parts := strings.Split(strings.Trim(domainCP, "/"), "/")
+	// ["domain","v1",contractType,(k,v)*]
+	if len(parts) < 3 {
+		return "", nil
+	}
+	contractType = strings.ToLower(strings.TrimSpace(parts[2]))
+	rest := parts[3:]
+	if len(rest)%2 != 0 {
+		// invalid shape; ignore
+		return contractType, nil
+	}
+	facets = map[string][]string{}
+	for i := 0; i+1 < len(rest); i += 2 {
+		k := strings.ToLower(strings.TrimSpace(rest[i]))
+		v := strings.ToLower(strings.TrimSpace(rest[i+1]))
+		if k == "" || v == "" {
+			continue
+		}
+		// For geo facets, split composite tokens (ae-sa) into individual ISO2 codes so
+		// domain research + deterministic first-order expansion can work with per-country scope.
+		if k == "geo" && strings.Contains(v, "-") {
+			parts := strings.Split(v, "-")
+			for _, p := range parts {
+				p = strings.ToLower(strings.TrimSpace(p))
+				if len(p) == 2 {
+					facets[k] = append(facets[k], p)
+				}
+			}
+			continue
+		}
+		facets[k] = append(facets[k], v)
+	}
+	return contractType, facets
+}
+
+func (e *ScoutEngine) executeDomainExpansionJob(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	effectiveCanonicalPath string,
+	existingFragment *models.HorizonFragment,
+) error {
+	if e == nil || job == nil {
+		return nil
+	}
+	domainCP := strings.TrimSpace(effectiveCanonicalPath)
+	if domainCP == "" {
+		domainCP = strings.TrimSpace(job.TargetCanonicalPath)
+	}
+	if domainCP == "" || !strings.HasPrefix(domainCP, "/domain/") {
+		return nil
+	}
+
+	_ = e.transition(ctx, job, models.ScoutingJobStateExecution, 0.4, "domain_expansion")
+
+	contract := e.bestEffortFindDomainContract(job, domainCP)
+	title := ""
+	desc := ""
+	contractType := ""
+	firstOrder := []string(nil)
+	related := []string(nil)
+	affected := []string(nil)
+	// Optional per-entity relation hints produced by LLM domain research.
+	type relHint struct {
+		rel    string
+		conf   float64
+		reason string
+	}
+	researchRelByPath := map[string]relHint{}
+	if contract != nil {
+		title = strings.TrimSpace(contract.Title)
+		desc = strings.TrimSpace(contract.Description)
+		contractType = strings.TrimSpace(contract.ContractType)
+		firstOrder = append([]string(nil), contract.FirstOrderEntities...)
+		related = append([]string(nil), contract.RelatedDomains...)
+		affected = append([]string(nil), contract.AffectedDomains...)
+	}
+	// If we couldn't find contract in job.State, parse facets from canonicalPath so domain research
+	// can still do its core job (expand meaning into entities).
+	parsedCT, parsedFacets := parseDomainPathFacets(domainCP)
+	if contractType == "" {
+		contractType = strings.TrimSpace(parsedCT)
+	}
+
+	// Better default title: use contractType + facets rather than the last path token (which is often just a geo code).
+	if title == "" {
+		facetsForTitle := parsedFacets
+		if contract != nil && contract.Facets != nil && len(contract.Facets) > 0 {
+			facetsForTitle = contract.Facets
+		}
+		title = buildDomainTitle(contractType, domainCP, facetsForTitle)
+	}
+
+	if desc == "" {
+		desc = "Executable knowledge contract for exploration."
+	}
+
+	// Deterministic fallback: if intent didn't provide firstOrderEntities, derive a minimal set from facets.
+	if len(firstOrder) == 0 && contract != nil && len(contract.Facets) > 0 {
+		getFacet := func(key string) []string {
+			if contract.Facets == nil {
+				return nil
+			}
+			if v, ok := contract.Facets[key]; ok {
+				return v
+			}
+			// case-insensitive fallback
+			for k, v := range contract.Facets {
+				if strings.EqualFold(strings.TrimSpace(k), key) {
+					return v
+				}
+			}
+			return nil
+		}
+		geoToken := "global"
+		if v := getFacet("geo"); len(v) > 0 {
+			g := strings.TrimSpace(strings.ToLower(v[0]))
+			if g == "int" {
+				geoToken = "global"
+			} else if gg := taxonomy.Slugify(g); gg != "" {
+				geoToken = gg
+			}
+		}
+		switch strings.TrimSpace(strings.ToLower(contractType)) {
+		case "supply-chain", "market-opportunity":
+			// Minimal deterministic market anchor:
+			// - If material present: /market/{geo}/materials/{material}
+			if mats := getFacet("material"); len(mats) > 0 {
+				mat := taxonomy.Slugify(mats[0])
+				if mat != "" {
+					mp := "/market/" + geoToken + "/materials/" + mat
+					if err := taxonomy.ValidateCanonicalPath(mp); err == nil {
+						firstOrder = append(firstOrder, mp)
+					}
+				}
+			}
+			// - If industry present: /market/{geo}/technology/{industry}
+			if inds := getFacet("industry"); len(inds) > 0 {
+				ind := taxonomy.Slugify(inds[0])
+				if ind != "" {
+					mp := "/market/" + geoToken + "/technology/" + ind
+					if err := taxonomy.ValidateCanonicalPath(mp); err == nil {
+						firstOrder = append(firstOrder, mp)
+					}
+				}
+			}
+			// - If sector present: /market/{geo}/technology/{sector}
+			if secs := getFacet("sector"); len(secs) > 0 {
+				sec := taxonomy.Slugify(secs[0])
+				if sec != "" {
+					mp := "/market/" + geoToken + "/technology/" + sec
+					if err := taxonomy.ValidateCanonicalPath(mp); err == nil {
+						firstOrder = append(firstOrder, mp)
+					}
+				}
+			}
+		}
+	}
+
+	// LLM-based domain research: reuse standard ResearchAgent to keep parity with non-domain research.
+	// IntentResolver is NOT required to fully expand domains; this step is responsible for that.
+	var domainResearchRelations []agents.DiscoveredRelation
+	var domainResearchChains []agents.SupplyChain
+	if e.researchAgent != nil {
+		originalQuery := ""
+		if job.State != nil {
+			if v, ok := job.State["originalQuery"].(string); ok {
+				originalQuery = strings.TrimSpace(v)
+			}
+		}
+		e.publish(ctx, realtime.EventType("horizon.domain.research.started"), map[string]interface{}{
+			"tenantId":      job.TenantID,
+			"projectId":     job.ProjectID,
+			"lensId":        strings.TrimSpace(job.LensID),
+			"jobId":         job.ID,
+			"canonicalPath": domainCP,
+			"humanReadable": map[string]interface{}{
+				"title":       "Domain research started",
+				"description": fmt.Sprintf("%s • %s", title, domainCP),
+				"entityName":  title,
+			},
+		})
+
+		// Extract focus signals from job.State (same approach as normal research).
+		focus := ""
+		var spherePaths []string
+		var keywords []string
+		var specialties []string
+		if job.State != nil {
+			if v, ok := job.State["focus"].(string); ok {
+				focus = strings.TrimSpace(v)
+			}
+			if v, ok := job.State["spherePaths"]; ok {
+				switch t := v.(type) {
+				case []string:
+					spherePaths = append(spherePaths, t...)
+				case []interface{}:
+					for _, it := range t {
+						if s, ok2 := it.(string); ok2 {
+							spherePaths = append(spherePaths, s)
+						}
+					}
+				case string:
+					for _, p := range strings.Split(t, ",") {
+						spherePaths = append(spherePaths, p)
+					}
+				}
+			}
+			if v, ok := job.State["keywords"]; ok {
+				switch t := v.(type) {
+				case []string:
+					keywords = append(keywords, t...)
+				case []interface{}:
+					for _, it := range t {
+						if s, ok2 := it.(string); ok2 {
+							keywords = append(keywords, s)
+						}
+					}
+				case string:
+					for _, p := range strings.Split(t, ",") {
+						keywords = append(keywords, p)
+					}
+				}
+			}
+			if v, ok := job.State["specialties"]; ok {
+				specialties = taxonomy.NormalizeSpecialties(parseStateStringSlice(v))
+			}
+		}
+
+		// Domain fragment for research prompt context (same agent, same pipeline).
+		domainFragment := &models.HorizonFragment{
+			TenantID:      strings.TrimSpace(job.TenantID),
+			CanonicalPath: domainCP,
+			Type:          models.FragmentTypeDomain,
+			Labels:        map[string]string{"en": title},
+			Description:   desc,
+			Status:        "active",
+		}
+		domainMissing := []string{
+			fmt.Sprintf("Expand this DOMAIN contract into 5-10 first-order entities and relations. Use DOMAIN relation types (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON) and valid canonical paths only. ContractType=%s; Facets=%v; Title=%s.", strings.TrimSpace(contractType), parsedFacets, title),
+		}
+		enrichedFragment, newRelations, newChains, err := e.researchAgent.EnrichFragment(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, "", originalQuery, nil)
+		_ = enrichedFragment
+		if err != nil {
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> domain research failed: %v", err))
+		} else {
+			domainResearchRelations = append(domainResearchRelations, newRelations...)
+			domainResearchChains = append(domainResearchChains, newChains...)
+			for _, rel := range newRelations {
+				cp := strings.TrimSpace(rel.TargetCanonicalPath)
+				if cp == "" {
+					continue
+				}
+				rt := strings.TrimSpace(rel.RelationType)
+				if rt == "" {
+					rt = string(models.DependencyTypeFocusesOn)
+				}
+				rt = strings.TrimSpace(taxonomy.NormalizeRelationType(rt))
+				switch rt {
+				case string(models.DependencyTypeFocusesOn),
+					string(models.DependencyTypeInvolvesActor),
+					string(models.DependencyTypeInGeoScope),
+					string(models.DependencyTypeAbout),
+					string(models.DependencyTypeDependsOn),
+					string(models.DependencyTypeAffects):
+					// ok
+				default:
+					rt = string(models.DependencyTypeFocusesOn)
+				}
+				researchRelByPath[cp] = relHint{
+					rel:    rt,
+					conf:   normalizeEdgeConfidence(rel.Confidence),
+					reason: strings.TrimSpace(rel.Reason),
+				}
+				firstOrder = append(firstOrder, cp)
+			}
+			if job.State == nil {
+				job.State = map[string]interface{}{}
+			}
+			job.State["domainResearch"] = map[string]interface{}{
+				"relationsN":    len(newRelations),
+				"supplyChainsN": len(newChains),
+			}
+			_ = e.scoutingJobsRepo.Update(ctx, job)
+		}
+
+		e.publish(ctx, realtime.EventType("horizon.domain.research.completed"), map[string]interface{}{
+			"tenantId":      job.TenantID,
+			"projectId":     job.ProjectID,
+			"lensId":        strings.TrimSpace(job.LensID),
+			"jobId":         job.ID,
+			"canonicalPath": domainCP,
+			"humanReadable": map[string]interface{}{
+				"title":       "Domain research complete",
+				"description": fmt.Sprintf("%s • %d entities", title, len(firstOrder)),
+				"entityName":  title,
+			},
+		})
+	}
+
+	// Normalize/validate referenced canonical paths (fail-open, best-effort).
+	filterValidCanonicalPaths := func(in []string) []string {
+		seen := map[string]struct{}{}
+		out := make([]string, 0, len(in))
+		for _, p := range in {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if err := taxonomy.ValidateCanonicalPath(p); err != nil {
+				continue
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+		return out
+	}
+	firstOrder = filterValidCanonicalPaths(firstOrder)
+	related = filterValidCanonicalPaths(related)
+	affected = filterValidCanonicalPaths(affected)
+
+	// Hard cap: domain first-order entities should be small at startup (graph UX).
+	// Keep deterministic order (already deduped by filterValidCanonicalPaths).
+	if len(firstOrder) > 10 {
+		firstOrder = firstOrder[:10]
+	}
+
+	// NOTE: Do not auto-extend lens scope with domain expansion results.
+	// The lens scope should remain anchored to the initial domains & anchors to avoid graph sprawl.
+
+	// Best-effort: publish WS start event (UI log feed).
+	e.publish(ctx, realtime.EventType("horizon.domain.expansion.started"), map[string]interface{}{
+		"tenantId":      job.TenantID,
+		"projectId":     job.ProjectID,
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         job.ID,
+		"canonicalPath": domainCP,
+		"humanReadable": map[string]interface{}{
+			"title":       "Domain expansion started",
+			"description": fmt.Sprintf("%s • %s", title, domainCP),
+			"entityName":  title,
+		},
+	})
+
+	// Create/update DOMAIN fragment (contract node).
+	frag := existingFragment
+	if frag == nil {
+		frag = &models.HorizonFragment{
+			CanonicalPath: domainCP,
+			Type:          models.FragmentTypeDomain,
+			Status:        string(models.FragmentStatusActive),
+			State:         map[string]models.MetricValue{},
+			Governance: models.Governance{
+				Owner:  "SYSTEM",
+				Status: "ACTIVE",
+			},
+		}
+	}
+	// Ensure governance owner is always set (fragment.Validate requires SYSTEM).
+	if strings.TrimSpace(frag.Governance.Owner) == "" {
+		frag.Governance.Owner = "SYSTEM"
+	}
+	if strings.TrimSpace(frag.Governance.Status) == "" {
+		frag.Governance.Status = "ACTIVE"
+	}
+	if frag.Labels == nil {
+		frag.Labels = map[string]string{}
+	}
+	if strings.TrimSpace(frag.Labels["en"]) == "" {
+		frag.Labels["en"] = title
+	} else if title != "" {
+		frag.Labels["en"] = title
+	}
+	if desc != "" {
+		frag.Description = desc
+	}
+	frag.Type = models.FragmentTypeDomain
+	if frag.Identifiers == nil {
+		frag.Identifiers = map[string]string{}
+	}
+	if contractType != "" {
+		frag.Identifiers["domainContractType"] = contractType
+	}
+	if contract != nil && contract.Facets != nil && len(contract.Facets) > 0 {
+		if b, err := json.Marshal(contract.Facets); err == nil && len(b) > 0 && len(b) < 8000 {
+			frag.Identifiers["domainFacetsJson"] = string(b)
+		}
+	}
+
+	var fragmentID string
+	if existingFragment == nil || strings.TrimSpace(existingFragment.ID) == "" {
+		id, err := e.fragmentsRepo.Create(ctx, frag)
+		if err != nil {
+			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_fragment_create_failed")
+			return fmt.Errorf("domain fragment create failed: %w", err)
+		}
+		fragmentID = id
+		// Check if canonical path was changed during creation (e.g., by bestEffortAssembleCanonicalPathFromParts).
+		if strings.TrimSpace(frag.CanonicalPath) != "" && strings.TrimSpace(frag.CanonicalPath) != strings.TrimSpace(domainCP) {
+			oldPath := domainCP
+			domainCP = strings.TrimSpace(frag.CanonicalPath)
+			// Best-effort: update lens scope if path changed.
+			tenantID := strings.TrimSpace(job.TenantID)
+			lensID := strings.TrimSpace(job.LensID)
+			if tenantID != "" && lensID != "" {
+				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, oldPath, domainCP)
+			}
+		}
+	} else {
+		if err := e.fragmentsRepo.Update(ctx, frag); err != nil {
+			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_fragment_update_failed")
+			return fmt.Errorf("domain fragment update failed: %w", err)
+		}
+		fragmentID = existingFragment.ID
+		// Check if canonical path was changed during update.
+		if strings.TrimSpace(frag.CanonicalPath) != "" && strings.TrimSpace(frag.CanonicalPath) != strings.TrimSpace(domainCP) {
+			oldPath := domainCP
+			domainCP = strings.TrimSpace(frag.CanonicalPath)
+			// Best-effort: update lens scope if path changed.
+			tenantID := strings.TrimSpace(job.TenantID)
+			lensID := strings.TrimSpace(job.LensID)
+			if tenantID != "" && lensID != "" {
+				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, oldPath, domainCP)
+			}
+		}
+	}
+
+	// Emit node upsert to UI (use updated domainCP if path changed).
+	e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+		"tenantId":        job.TenantID,
+		"projectId":       job.ProjectID,
+		"lensId":          strings.TrimSpace(job.LensID),
+		"fragmentId":      fragmentID,
+		"canonicalPath":   domainCP,
+		"type":            string(models.FragmentTypeDomain),
+		"label":           title,
+		"status":          "verified",
+		"epistemicStatus": string(frag.Metadata.EpistemicStatus),
+		"version":         frag.Version,
+	})
+
+	// Synthesize relations for decomposition.
+	rels := make([]agents.DiscoveredRelation, 0, len(firstOrder)+len(related)+len(affected)+len(domainResearchRelations))
+
+	// Facet-driven relations (deterministic; best-effort).
+	// - geo -> GEO_REGION via IN_GEO_SCOPE (country-level /loc/{cc}/na/na)
+	// - material/application/topic/subject -> PRODUCT via ABOUT (flat /product/{slug})
+	if contract != nil && contract.Facets != nil && len(contract.Facets) > 0 {
+		// geo facet may have multiple tokens (e.g., bilateral relations)
+		if gs, ok := contract.Facets["geo"]; ok && len(gs) > 0 {
+			for _, g := range gs {
+				g = strings.TrimSpace(strings.ToLower(g))
+				if g == "" || g == "global" || g == "int" {
+					continue
+				}
+				emitLoc := func(cc string) {
+					cc = strings.TrimSpace(strings.ToLower(cc))
+					if len(cc) != 2 {
+						return
+					}
+					loc := "/loc/" + cc + "/na/na"
+					if err := taxonomy.ValidateCanonicalPath(loc); err == nil {
+						rels = append(rels, agents.DiscoveredRelation{
+							TargetName:          bestEffortDisplayLabel("", loc),
+							TargetType:          string(models.FragmentTypeGeoRegion),
+							TargetCanonicalPath: loc,
+							RelationType:        string(models.DependencyTypeInGeoScope),
+							Reason:              "domain_expansion:facet_geo",
+							Confidence:          0.95,
+						})
+					}
+				}
+				// Country-level only (deterministic). Support composite tokens like "ae-sa".
+				if len(g) == 2 {
+					emitLoc(g)
+					continue
+				}
+				if strings.Contains(g, "-") {
+					for _, part := range strings.Split(g, "-") {
+						emitLoc(part)
+					}
+				}
+			}
+		}
+		addAboutProducts := func(key string) {
+			ps, ok := contract.Facets[key]
+			if !ok || len(ps) == 0 {
+				return
+			}
+			for _, raw := range ps {
+				lr := strings.TrimSpace(strings.ToLower(raw))
+				if lr == "" || lr == "na" || lr == "n/a" || lr == "unknown" || lr == "none" {
+					continue
+				}
+				slug := taxonomy.Slugify(raw)
+				if slug == "" || slug == "na" {
+					continue
+				}
+				cp := "/product/" + slug
+				if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+					// /product/{slug} is valid for some paths but if validator rejects due to taxonomy segments,
+					// still allow it (ScoutEngine has a canonicalizer for flat products).
+					// Keep this conservative: only allow flat /product/{slug}.
+					if strings.Count(strings.Trim(cp, "/"), "/") != 1 {
+						continue
+					}
+				}
+				rels = append(rels, agents.DiscoveredRelation{
+					TargetName:          bestEffortDisplayLabel("", cp),
+					TargetType:          string(models.FragmentTypeProduct),
+					TargetCanonicalPath: cp,
+					RelationType:        string(models.DependencyTypeAbout),
+					Reason:              "domain_expansion:facet_" + key,
+					Confidence:          0.85,
+				})
+			}
+		}
+		for _, k := range []string{"material", "application", "asset", "project", "subject", "topic"} {
+			addAboutProducts(k)
+		}
+	}
+
+	for _, p := range firstOrder {
+		ft := InferFragmentTypeFromCanonicalPath(p)
+		rt := string(models.DependencyTypeFocusesOn)
+		conf := 0.90
+		reason := "domain_expansion:first_order_entity"
+		if h, ok := researchRelByPath[strings.TrimSpace(p)]; ok {
+			if strings.TrimSpace(h.rel) != "" {
+				rt = strings.TrimSpace(h.rel)
+			}
+			if h.conf > 0 {
+				conf = h.conf
+			}
+			if strings.TrimSpace(h.reason) != "" {
+				reason = "domain_research:" + strings.TrimSpace(h.reason)
+			} else {
+				reason = "domain_research:first_order_entity"
+			}
+		}
+		rels = append(rels, agents.DiscoveredRelation{
+			TargetName:          bestEffortDisplayLabel("", p),
+			TargetType:          string(ft),
+			TargetCanonicalPath: p,
+			RelationType:        rt,
+			Reason:              reason,
+			Confidence:          conf,
+		})
+	}
+	for _, p := range related {
+		rels = append(rels, agents.DiscoveredRelation{
+			TargetName:          bestEffortDisplayLabel("", p),
+			TargetType:          string(models.FragmentTypeDomain),
+			TargetCanonicalPath: p,
+			RelationType:        string(models.DependencyTypeRelatedDomain),
+			Reason:              "domain_expansion:related_domain",
+			Confidence:          0.50, // keep edge, but avoid recursion breadth
+		})
+	}
+	for _, p := range affected {
+		rels = append(rels, agents.DiscoveredRelation{
+			TargetName:          bestEffortDisplayLabel("", p),
+			TargetType:          string(models.FragmentTypeDomain),
+			TargetCanonicalPath: p,
+			RelationType:        string(models.DependencyTypeAffects),
+			Reason:              "domain_expansion:affected_domain",
+			Confidence:          0.50, // keep edge, but avoid recursion breadth
+		})
+	}
+	if len(domainResearchRelations) > 0 {
+		rels = append(rels, domainResearchRelations...)
+	}
+
+	// Persist tracker state into job.State before policy check.
+	if tr := tracking.FromContext(ctx); tr != nil {
+		job.State = tr.ApplyToState(job.State)
+	}
+	if job.State == nil {
+		job.State = map[string]interface{}{}
+	}
+	job.State["domainExpansion"] = map[string]interface{}{
+		"canonicalPath":       domainCP,
+		"title":               title,
+		"firstOrderEntitiesN": len(firstOrder),
+		"relatedDomainsN":     len(related),
+		"affectedDomainsN":    len(affected),
+		"relationsEmittedN":   len(rels),
+	}
+	_ = e.scoutingJobsRepo.Update(ctx, job)
+
+	_ = e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "domain_expansion_done")
+
+	// Realtime: job completed.
+	e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+		"tenantId":      job.TenantID,
+		"projectId":     job.ProjectID,
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         job.ID,
+		"fragmentId":    fragmentID,
+		"canonicalPath": domainCP,
+		"confidence":    1.0,
+		"hint":          "domain_expansion",
+	})
+
+	// Decomposition: schedule first-order entity scouts.
+	if len(rels) > 0 {
+		_ = e.processDiscoveredRelations(ctx, job, frag, rels)
+	}
+	if len(domainResearchChains) > 0 {
+		_ = e.processSupplyChains(ctx, job, frag, domainResearchChains)
+	}
+
+	// Policy check + optional enforcement.
+	e.runPolicyCheck(ctx, job)
+
+	// Best-effort propagation trigger for the domain node.
+	if e.propagationTrigger != nil {
+		rc, _ := rtctx.Get(ctx)
+		go func(fid string) {
+			propBase := context.Background()
+			if strings.TrimSpace(rc.TenantID) != "" || strings.TrimSpace(rc.ProjectID) != "" || strings.TrimSpace(rc.LensID) != "" || strings.TrimSpace(rc.CorrelationID) != "" || strings.TrimSpace(rc.SessionID) != "" {
+				propBase = rtctx.With(propBase, rc)
+			}
+			propCtx, cancel := context.WithTimeout(propBase, 2*time.Minute)
+			defer cancel()
+			_ = e.propagationTrigger(propCtx, fid)
+		}(fragmentID)
+	}
+
+	e.publish(ctx, realtime.EventType("horizon.domain.expansion.completed"), map[string]interface{}{
+		"tenantId":      job.TenantID,
+		"projectId":     job.ProjectID,
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         job.ID,
+		"canonicalPath": domainCP,
+		"counters": map[string]interface{}{
+			"firstOrderEntities": len(firstOrder),
+			"relatedDomains":     len(related),
+			"affectedDomains":    len(affected),
+			"relations":          len(rels),
+		},
+		"humanReadable": map[string]interface{}{
+			"title":       "Domain expansion complete",
+			"description": fmt.Sprintf("%s • %d entities", title, len(firstOrder)),
+			"entityName":  title,
+		},
+	})
+
+	// Check if all scout jobs for this lens are completed.
+	e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
+	return nil
 }
 
 func (e *ScoutEngine) processRelationsInternal(
@@ -414,6 +1373,10 @@ func (e *ScoutEngine) processRelationsInternal(
 		if err != nil {
 			fmt.Printf("Canonicalization failed for relation target=%q: %v\n", rel.TargetName, err)
 			continue
+		}
+		// Align targetType with canonical path prefix (auto-fix mismatches).
+		if inferred := InferFragmentTypeFromCanonicalPath(targetPath); inferred != "" && inferred != targetType {
+			targetType = inferred
 		}
 
 		// 2. Find or Create Target Fragment

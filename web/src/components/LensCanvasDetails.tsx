@@ -1,5 +1,6 @@
 import React from 'react';
 import { api } from '../lib/api';
+import { humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
 
 function pruneMapToMax<K, V>(m: Map<K, V>, maxSize: number) {
   if (maxSize <= 0) {
@@ -222,7 +223,9 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
               try {
                 const cachedId = scopeFragments?.[path];
                 const frag = cachedId ? await api.getHorizonFragment(cachedId) : await api.getHorizonFragmentByPath(path);
-                const name = frag?.name || frag?.displayLabel || frag?.label || undefined;
+                const rawName = frag?.name || frag?.displayLabel || frag?.label || undefined;
+                const preferred = preferDisplayLabel(rawName, frag?.canonicalPath, frag?.type);
+                const name = preferred || humanizeCanonicalPath(frag?.canonicalPath) || rawName || undefined;
                 const type = frag?.type || frag?.displayType || undefined;
                 const fragmentId = frag?.id || cachedId || undefined;
                 return { path, data: { name, type, fragmentId, status: 'resolved' as const } };
@@ -606,7 +609,9 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                             <Pill text={String(resolved.type)} />
                           ) : null}
                           <div style={{ minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {!isQuery && resolved?.name ? resolved.name : (!isQuery ? '—' : '—')}
+                            {!isQuery
+                              ? (resolved?.name ? resolved.name : humanizeCanonicalPath(path) || '—')
+                              : '—'}
                           </div>
                           {isQuery && resolvedList.length > 0 && (
                             <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', flexShrink: 0 }}>

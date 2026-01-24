@@ -26,6 +26,27 @@ export interface LensCanvasProps {
   /** When creating a new lens (lensId=null), filter progress events to only those matching this creation attempt. */
   activeCreateCorrelationId?: string | null;
   activeCreateSessionId?: string | null;
+  /** Optional preflight UI (inlined into progress view). */
+  preflight?: {
+    active: boolean;
+    reason?: string;
+    mode: 'just_open' | 'research_first';
+    setMode: (mode: 'just_open' | 'research_first') => void;
+    focus: string;
+    setFocus: (focus: string) => void;
+    domainsDraft: any[];
+    setDomainsDraft: (next: any[]) => void;
+    anchorsDraft: any[];
+    setAnchorsDraft: (next: any[]) => void;
+    selectedDomains: Record<string, boolean>;
+    setSelectedDomains: (next: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)) => void;
+    selectedAnchors: Record<string, boolean>;
+    setSelectedAnchors: (next: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)) => void;
+    isBusy: boolean;
+    isValidCanonicalPath: (cp: string) => boolean;
+    onCancel: () => void;
+    onContinue: (mode?: 'just_open' | 'research_first') => void;
+  } | null;
   onClose: () => void;
 }
 
@@ -39,6 +60,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   isCreatingLens = false,
   activeCreateCorrelationId = null,
   activeCreateSessionId = null,
+  preflight = null,
   onClose,
 }) => {
   const { theme } = React.useContext(ThemeContext);
@@ -86,9 +108,11 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     if (!lensId) {
       setViewMode('progress');
     } else {
-      setViewMode('cockpit');
+      // When a lens is created from a query, HorizonPage keeps initialViewMode='progress'
+      // so the user stays in the progress feed. Respect that choice and do not auto-switch.
+      setViewMode(initialViewMode === 'progress' ? 'progress' : 'cockpit');
     }
-  }, [lensId]);
+  }, [lensId, initialViewMode]);
 
   // If no lens is selected and user tries to switch to details/cockpit, switch back to progress
   React.useEffect(() => {
@@ -263,7 +287,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
             pointerEvents: 'auto',
           }}
         >
-          {lens && (
+          {(lensId || lens) && (
             <>
               <button
                 type="button"
@@ -425,6 +449,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 isCreatingLens={isCreatingLens}
                 activeCreateCorrelationId={activeCreateCorrelationId}
                 activeCreateSessionId={activeCreateSessionId}
+                preflight={preflight}
               />
             )}
             {viewMode === 'details' && lens && (
@@ -443,7 +468,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 minHeight: 0, 
                 display: 'flex', 
                 flexDirection: 'row',
-                gap: '12px',
+                gap: 0,
                 width: '100%', 
                 height: '100%' 
               }}>

@@ -118,6 +118,18 @@ const (
 	// Example: /community/ae/trade/hawala-network AFFILIATED_WITH /org/ae/exchange-house
 	DependencyTypeAffiliatedWith DependencyType = "AFFILIATED_WITH"
 
+	// --- DOMAIN relationships (executable knowledge contracts) ---
+	// Domain ↔ Entity
+	DependencyTypeFocusesOn     DependencyType = "FOCUSES_ON"
+	DependencyTypeInvolvesActor DependencyType = "INVOLVES_ACTOR"
+	DependencyTypeInGeoScope    DependencyType = "IN_GEO_SCOPE"
+	DependencyTypeAbout         DependencyType = "ABOUT"
+	// Domain ↔ Domain
+	DependencyTypeRelatedDomain DependencyType = "RELATED_DOMAIN" // symmetric
+	DependencyTypeBroadensTo    DependencyType = "BROADENS_TO"
+	DependencyTypeNarrowsTo     DependencyType = "NARROWS_TO"
+	DependencyTypeAffects       DependencyType = "AFFECTS"
+
 	// --- Community hierarchy ---
 	// HAS_SUBGROUP: community hierarchy (parent group → child/narrower group).
 	// Used for dynasties, tribes, clans, professional networks with internal structure.

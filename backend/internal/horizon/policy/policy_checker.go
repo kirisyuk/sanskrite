@@ -1362,7 +1362,7 @@ func (pc *PolicyChecker) checkForDuplicatesWithContext(ctx context.Context, frag
 			continue
 		}
 
-		jobContext := pc.jobContextSummaries(frag, candidate, jobCandidates)
+		jobContext := pc.jobContextSummaries(candidate, jobCandidates)
 		source := "existing"
 		if isJobCandidate(candidate, jobCandidates) {
 			source = "job"
@@ -1852,7 +1852,7 @@ func (pc *PolicyChecker) jobContextCandidates(frag *horizonmodels.HorizonFragmen
 	return out
 }
 
-func (pc *PolicyChecker) jobContextSummaries(frag *horizonmodels.HorizonFragment, candidate *horizonmodels.HorizonFragment, jobCandidates []*horizonmodels.HorizonFragment) []string {
+func (pc *PolicyChecker) jobContextSummaries(candidate *horizonmodels.HorizonFragment, jobCandidates []*horizonmodels.HorizonFragment) []string {
 	out := make([]string, 0, len(jobCandidates))
 	for _, jf := range jobCandidates {
 		if jf == nil {

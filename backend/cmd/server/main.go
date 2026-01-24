@@ -1028,6 +1028,7 @@ func main() {
 		horizonFramesRepo := horizonrepo.NewFramesRepository(fsClient.Client())
 		horizonLensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
 		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
+		horizonFragmentsRepo.WithEdgesRepo(horizonEdgesRepo)
 		enforcementJobsRepo := horizonrepo.NewEnforcementJobsRepository(fsClient.Client())
 		policyCheckResultsRepo := horizonrepo.NewPolicyCheckResultsRepository(fsClient.Client())
 		horizonCascadeVisitedRepo := horizonrepo.NewCascadeVisitedRepository(fsClient.Client())

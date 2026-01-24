@@ -1597,7 +1597,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     viewConfig?: Record<string, any>;
     alertConfig?: Record<string, any>;
     status?: string;
-  }, options?: { correlationId?: string; sessionId?: string }): Promise<{
+  }, options?: { correlationId?: string; sessionId?: string; skipScouting?: boolean }): Promise<{
     id: string;
     tenantId: string;
     projectId: string;
@@ -1613,6 +1613,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       const headers: Record<string, string> = {};
       if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
       if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      if (options?.skipScouting) headers['X-Horizon-Skip-Scouting'] = 'true';
       const response = await this.client.post('/api/horizon/lenses', input, { headers });
       return response.data;
     } catch (error: any) {
@@ -1639,12 +1640,68 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  // Horizon - Lens preflight (resolve intent + recommend just_open vs research_first; no writes)
+  async preflightHorizonLensFromQuery(
+    input: {
+      projectId: string;
+      query: string;
+      specialties?: string[];
+    },
+    options?: { correlationId?: string; sessionId?: string }
+  ): Promise<{
+    intent: {
+      focus: string;
+      spherePaths: string[];
+      keywords: string[];
+      domains?: Array<{
+        canonicalPath: string;
+        contractType?: string;
+        title?: string;
+        description?: string;
+        facets?: Record<string, string[]>;
+        projections?: string[];
+        relatedDomains?: string[];
+        affectedDomains?: string[];
+        firstOrderEntities?: string[];
+        confidence?: number;
+        reason?: string;
+      }>;
+      anchors: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
+      decompositionHints?: string[];
+    };
+    recommendation: {
+      mode: 'just_open' | 'research_first' | string;
+      reason: string;
+      stats: {
+        anchorsTotal: number;
+        anchorsKnown: number;
+        anchorsFresh: number;
+        domainsTotal: number;
+        domainsKnown: number;
+        hasDomains: boolean;
+      };
+    };
+  }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      const response = await this.client.post('/api/horizon/lenses/preflight', input, { headers });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] preflightHorizonLensFromQuery error:`, error);
+      throw error;
+    }
+  }
+
   // Horizon - Create Lens from NL query (resolve intent -> create lens)
   async createHorizonLensFromQuery(
     input: {
       projectId: string;
       query: string;
       name?: string;
+      mode?: 'just_open' | 'research_first' | string;
+      intent?: any; // Optional: edited intent override from preflight UI
       maxRecursionDepth?: number;
       requestedMetrics?: string[];
       prefetchScope?: string[];
@@ -1657,7 +1714,21 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       focus: string;
       spherePaths: string[];
       keywords: string[];
+      domains?: Array<{
+        canonicalPath: string;
+        contractType?: string;
+        title?: string;
+        description?: string;
+        facets?: Record<string, string[]>;
+        projections?: string[];
+        relatedDomains?: string[];
+        affectedDomains?: string[];
+        firstOrderEntities?: string[];
+        confidence?: number;
+        reason?: string;
+      }>;
       anchors: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
+      decompositionHints?: string[];
     };
     lens: {
       id: string;
@@ -2034,6 +2105,19 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return response.data;
     } catch (error: any) {
       console.error(`[API] listHorizonFragments error:`, error);
+      throw error;
+    }
+  }
+
+  async deleteHorizonFragment(fragmentId: string): Promise<{ ok: boolean; fragmentId: string }> {
+    try {
+      const response = await this.client.delete(`/api/horizon/fragments/${fragmentId}`);
+      if (response?.data && typeof response.data === 'object') {
+        return response.data as { ok: boolean; fragmentId: string };
+      }
+      return { ok: true, fragmentId };
+    } catch (error: any) {
+      console.error(`[API] deleteHorizonFragment error:`, error);
       throw error;
     }
   }

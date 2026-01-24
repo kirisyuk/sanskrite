@@ -3,6 +3,7 @@ package horizon
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
 
 type lensPreflightRequest struct {
@@ -207,6 +209,32 @@ func (h *HorizonHandlers) LensPreflight(w http.ResponseWriter, r *http.Request) 
 	resp.Recommendation.Stats.DomainsTotal = len(intent.Domains)
 	resp.Recommendation.Stats.DomainsKnown = domainsKnown
 	resp.Recommendation.Stats.HasDomains = hasDomains
+
+	// Best-effort: emit a WS event so the UI progress feed can show the preflight in human-readable form.
+	if pub := h.service.RealtimePublisher(); pub != nil {
+		_ = pub.PublishJSON(ctx, realtime.EventType("horizon.intent.preflight"), authInfo.TenantID, map[string]interface{}{
+			"tenantId":      authInfo.TenantID,
+			"projectId":     req.ProjectID,
+			"correlationId": correlationID,
+			"sessionId":     sessionID,
+			"humanReadable": map[string]interface{}{
+				"title": "How we understood your request",
+				"description": func() string {
+					parts := []string{}
+					if len(intent.Domains) > 0 {
+						parts = append(parts, "Domains: "+strconv.Itoa(len(intent.Domains)))
+					}
+					if len(intent.Anchors) > 0 {
+						parts = append(parts, "Anchors: "+strconv.Itoa(len(intent.Anchors)))
+					}
+					parts = append(parts, "Recommended: "+mode)
+					return strings.Join(parts, " • ")
+				}(),
+			},
+			"intent":          intent,
+			"recommendation":  resp.Recommendation,
+		})
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Correlation-Id", correlationID)

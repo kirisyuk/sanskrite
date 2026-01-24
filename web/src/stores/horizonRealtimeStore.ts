@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { isSphereCanonicalPath, isSphereEntity } from '../lib/horizonSphere';
+import { humanizeCanonicalPath } from '../lib/uiUtils';
 
 export type HorizonAssemblyPhase =
   | 'decomposition'
@@ -34,6 +35,10 @@ export interface HorizonScoutJobState {
 export interface HorizonNodeState {
   fragmentId?: string;
   canonicalPath?: string;
+  /** Optional label/name provided by backend for better UX (esp. /domain/... nodes). */
+  label?: string;
+  /** Optional fragment type (e.g. "DOMAIN"). */
+  type?: string;
   status?: string;
   epistemicStatus?: string;
   version?: number;
@@ -103,8 +108,9 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
     reset: () => set({ assembly: {}, jobs: {}, nodes: {}, edges: {} }),
     resetEvents: () => set({ events: [] }),
 
-    handleWsEvent: (type, data) => {
+    handleWsEvent: (type, dataIn) => {
       const now = Date.now();
+      let data = dataIn;
       const resolveNodePath = (id: string): string => {
         const nodes = get().nodes || {};
         const node = nodes[id];
@@ -169,14 +175,14 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
           typeof data?.projectId === 'string' ? data.projectId : undefined;
         const lensId =
           typeof data?.lensId === 'string' ? data.lensId : undefined;
-        const mk = (text: string): HorizonRealtimeEvent => ({
+        const mk = (text: string, dataOverride?: any): HorizonRealtimeEvent => ({
           id: `${now}-${Math.random().toString(16).slice(2)}`,
           ts: now,
           type,
           projectId,
           lensId,
           text,
-          data,
+          data: dataOverride ?? data,
         });
 
         const short = (s: any) => {
@@ -186,15 +192,10 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
 
         // Helper to extract human-readable name from canonical path
         const getEntityName = (canonicalPath: string): string => {
-          if (!canonicalPath) return '';
-          // Extract last meaningful part: /org/tesla -> tesla, /fac/tsmc/fab-21 -> fab-21
-          const parts = canonicalPath.split('/').filter((p) => p);
-          if (parts.length === 0) return canonicalPath;
-          const last = parts[parts.length - 1];
-          // Capitalize first letter and replace dashes/underscores with spaces
-          return last
-            .replace(/[-_]/g, ' ')
-            .replace(/\b\w/g, (l) => l.toUpperCase());
+          const s = String(canonicalPath || '').trim();
+          if (!s) return '';
+          // Centralize canonical-path-to-title fallback (DOMAIN-aware).
+          return humanizeCanonicalPath(s) || s;
         };
 
         // Helper to get phase display name
@@ -268,6 +269,20 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
               return 'influences';
             case 'AFFECTS':
               return 'affects';
+            case 'FOCUSES_ON':
+              return 'focuses on';
+            case 'INVOLVES_ACTOR':
+              return 'involves';
+            case 'IN_GEO_SCOPE':
+              return 'in geo scope';
+            case 'ABOUT':
+              return 'about';
+            case 'RELATED_DOMAIN':
+              return 'related to';
+            case 'BROADENS_TO':
+              return 'broadens to';
+            case 'NARROWS_TO':
+              return 'narrows to';
             case 'IMPACTS':
               return 'impacts';
             case 'REGULATES':
@@ -304,6 +319,69 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             title: phaseName,
             description: progress ? `Progress: ${progress}` : undefined,
           };
+        } else if (type.startsWith('horizon.intent.')) {
+          icon = 'info';
+          if (type === 'horizon.intent.preflight') {
+            const intent = data?.intent || {};
+            const domainsN = Array.isArray(intent?.domains) ? intent.domains.length : 0;
+            const anchorsN = Array.isArray(intent?.anchors) ? intent.anchors.length : 0;
+            const mode =
+              typeof data?.recommendation?.mode === 'string'
+                ? data.recommendation.mode
+                : '';
+            const modeLabel =
+              mode === 'just_open'
+                ? 'Just open'
+                : mode === 'research_first'
+                  ? 'Research'
+                  : '';
+
+            const parts: string[] = [];
+            parts.push(`${domainsN} domain${domainsN === 1 ? '' : 's'}`);
+            parts.push(`${anchorsN} anchor${anchorsN === 1 ? '' : 's'}`);
+            if (modeLabel) parts.push(`recommended: ${modeLabel}`);
+
+            text = `Intent resolved — ${parts.join(' • ')}`;
+            humanReadable = {
+              title: 'Intent resolved',
+              description: parts.join(' • '),
+            };
+          } else {
+            const hr = data?.humanReadable;
+            if (hr && typeof hr?.title === 'string' && hr.title.trim()) {
+              const title = hr.title.trim();
+              const description =
+                typeof hr?.description === 'string' ? hr.description.trim() : '';
+              text = description ? `${title} — ${short(description)}` : title;
+              humanReadable = {
+                title,
+                description: description ? short(description) : undefined,
+                entityName:
+                  typeof hr?.entityName === 'string' ? hr.entityName : undefined,
+              };
+            } else {
+              text = 'Intent';
+              humanReadable = { title: 'Intent' };
+            }
+          }
+        } else if (type.startsWith('horizon.domain.research.')) {
+          icon = 'info';
+          const hr = data?.humanReadable;
+          if (hr && typeof hr?.title === 'string' && hr.title.trim()) {
+            const title = hr.title.trim();
+            const description =
+              typeof hr?.description === 'string' ? hr.description.trim() : '';
+            text = description ? `${title} — ${short(description)}` : title;
+            humanReadable = {
+              title,
+              description: description ? short(description) : undefined,
+              entityName:
+                typeof hr?.entityName === 'string' ? hr.entityName : undefined,
+            };
+          } else {
+            text = 'Domain research';
+            humanReadable = { title: 'Domain research' };
+          }
         } else if (type === 'horizon.scout.job.log') {
           const rawLine = typeof data?.line === 'string' ? data.line : '';
           const level =
@@ -321,6 +399,22 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
                 return 'transforms into';
               case 'DEPENDS_ON':
                 return 'depends on';
+              case 'FOCUSES_ON':
+                return 'focuses on';
+              case 'INVOLVES_ACTOR':
+                return 'involves';
+              case 'IN_GEO_SCOPE':
+                return 'in geo scope';
+              case 'ABOUT':
+                return 'about';
+              case 'RELATED_DOMAIN':
+                return 'related to';
+              case 'BROADENS_TO':
+                return 'broadens to';
+              case 'NARROWS_TO':
+                return 'narrows to';
+              case 'AFFECTS':
+                return 'affects';
               case 'REQUIRES':
                 return 'requires';
               case 'USES':
@@ -363,6 +457,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
                 title: string;
                 description?: string;
                 text: string;
+                canonicalPath?: string;
               };
 
             // Supply chain parse summary
@@ -419,7 +514,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
                 const description = ok
                   ? `${typeName(t)} • ${prettyCP(cp)}`
                   : `${prettyCP(cp)} • ${short(l)}`;
-                return { title, description: short(description), text: title };
+                return { title, description: short(description), text: title, canonicalPath: cp || undefined };
               }
             }
             {
@@ -433,7 +528,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
                 const description = ok
                   ? prettyCP(cp)
                   : `${prettyCP(cp)} • ${short(l)}`;
-                return { title, description: short(description), text: title };
+                return { title, description: short(description), text: title, canonicalPath: cp || undefined };
               }
             }
 
@@ -490,6 +585,12 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
           if (fmt) {
             text = fmt.text;
             humanReadable = { title: fmt.title, description: fmt.description };
+
+            // IMPORTANT: for log-derived "Entity added/updated" events, show the created entity's canonicalPath,
+            // not the scout job targetCanonicalPath (which is often /loc/{cc}/na/na for geo scope jobs).
+            if (fmt.canonicalPath) {
+              data = { ...(data || {}), canonicalPath: fmt.canonicalPath };
+            }
           } else {
             const line = short(rawLine);
             text = line || 'Scout activity';
@@ -824,6 +925,23 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
           };
         }
 
+        // If backend provided a humanReadable envelope and we didn't format one above, use it.
+        if (!humanReadable) {
+          const hr = data?.humanReadable;
+          if (hr && typeof hr?.title === 'string' && hr.title.trim()) {
+            const title = hr.title.trim();
+            const description =
+              typeof hr?.description === 'string' ? hr.description.trim() : '';
+            text = description ? `${title} — ${short(description)}` : title;
+            humanReadable = {
+              title,
+              description: description ? short(description) : undefined,
+              entityName:
+                typeof hr?.entityName === 'string' ? hr.entityName : undefined,
+            };
+          }
+        }
+
         const event: HorizonRealtimeEvent = mk(text);
         if (icon) event.icon = icon;
         if (humanReadable) event.humanReadable = humanReadable;
@@ -915,6 +1033,8 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
               ...s.nodes[k],
               fragmentId: data?.fragmentId ?? s.nodes[k]?.fragmentId,
               canonicalPath: data?.canonicalPath ?? s.nodes[k]?.canonicalPath,
+              type: data?.type ?? s.nodes[k]?.type,
+              label: data?.label ?? s.nodes[k]?.label,
               status: data?.status ?? s.nodes[k]?.status,
               epistemicStatus:
                 data?.epistemicStatus ?? s.nodes[k]?.epistemicStatus,

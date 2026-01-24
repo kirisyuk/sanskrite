@@ -203,7 +203,34 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 		}
 	}
 	if len(partial.Tags) > 0 {
-		main.Tags = append(main.Tags, partial.Tags...)
+		seen := map[string]struct{}{}
+		out := make([]string, 0, len(main.Tags)+len(partial.Tags))
+		for _, t := range main.Tags {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			if _, ok := seen[t]; ok {
+				continue
+			}
+			seen[t] = struct{}{}
+			out = append(out, t)
+		}
+		for _, t := range partial.Tags {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			if _, ok := seen[t]; ok {
+				continue
+			}
+			seen[t] = struct{}{}
+			out = append(out, t)
+		}
+		main.Tags = out
+		if main.Type == models.FragmentTypeMarket {
+			main.Tags = taxonomy.NormalizeMarketTags(main.Tags)
+		}
 	}
 	if len(partial.KBRefs) > 0 {
 		main.KBRefs = append(main.KBRefs, partial.KBRefs...)
@@ -256,6 +283,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 	spheresLine := strings.Join(dedupNonEmptyStrings(spherePaths), ", ")
 	keywordsLine := strings.Join(dedupNonEmptyStrings(keywords), ", ")
 	specialties = taxonomy.NormalizeSpecialties(specialties)
+	isDomain := fragment != nil && (fragment.Type == models.FragmentTypeDomain || strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/domain/"))
 	chainBlock := ""
 	if strings.TrimSpace(chainContext) != "" {
 		chainBlock = strings.TrimSpace(chainContext) + "\n"
@@ -280,7 +308,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 
 	// Add MARKET decomposition block if applicable
 	decompositionBlock := ""
-	if fragment != nil && (fragment.Type == models.FragmentTypeMarket || fragment.Type == models.FragmentTypeProgram || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/program/")) {
+	if !isDomain && fragment != nil && (fragment.Type == models.FragmentTypeMarket || fragment.Type == models.FragmentTypeProgram || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/program/")) {
 		// Find matching decomposition hint
 		var hint *DecompositionHint
 		for i := range decompositionHints {
@@ -323,6 +351,16 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 			decompositionBlock += "Output discovered entities as relations with confidence >= 0.7.\n"
 			decompositionBlock += "IMPORTANT: Prefer extracting REAL-WORLD ENTITIES (players) first. If you also find market metrics (TAM/CAGR/HHI/CR4) or market shares, include them in fragment.state / relation.metrics as best-effort.\n\n"
 		}
+	}
+	domainBlock := ""
+	if isDomain {
+		domainBlock = "DOMAIN EXPANSION GUIDANCE (CRITICAL OVERRIDE):\n"
+		domainBlock += "This fragment is a DOMAIN contract. Your primary goal is to expand it into first-order entities.\n"
+		domainBlock += "Use ONLY domain relation types: FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON.\n"
+		domainBlock += "Target canonicalPath MUST match targetType:\n"
+		domainBlock += "  ORGANIZATION->/org or /gov, PERSON->/person, PRODUCT->/product, PROGRAM->/program, MARKET->/market, FACILITY->/fac, GEO_REGION->/loc, EVENT->/event, MEDIA_CHANNEL->/media, COMMUNITY->/community, DOMAIN->/domain\n"
+		domainBlock += "If the user asks about a market, use /market/... as a TARGET (anchor), NOT as a DOMAIN.\n"
+		domainBlock += "Do NOT output placeholder names like NA/N-A/Unknown. Use fewer entities instead.\n\n"
 	}
 	specBlock := ""
 	if len(specialties) > 0 {
@@ -373,6 +411,7 @@ CURRENT FRAGMENT DATA:
 %s
 %s
 %s
+%s
 CRITICAL MISSING INFORMATION (QUESTIONS TO ANSWER):
 - %s
 
@@ -399,6 +438,7 @@ Name Normalization Rules:
     - If the official legal name is not in Latin script and no established official English name exists:
       - Keep fragment.identifiers.legalName in the original language/script if you can find it.
       - Put a reasonable transliteration/English display name into fragment.labels.en (do NOT invent a new legalName).
+    - fragment.labels.en MUST be Latin-script only (broad Latin is OK: diacritics, Scandinavian, Turkish, etc.). No non-Latin scripts in labels.en.
   - GOV-specific naming (CRITICAL when canonicalPath starts with /gov/):
     - Always provide BOTH:
       - fragment.labels.en: readable English name (translation if official English exists; otherwise careful transliteration)
@@ -461,6 +501,11 @@ Market Enrichment (MARKET):
   - fragment.marketDomain: finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate
   - fragment.marketVertical: specific vertical (banking, semiconductors, ev-batteries, ...)
   - fragment.marketChannels: array (can include b2b, b2c, public-sector, ...)
+  - fragment.tags: REQUIRED 5-8 tags (dedup/search)
+    - Use GICS terminology (no numeric codes) where possible.
+    - Expanded terms ONLY (no abbreviations): "real-world-asset", NOT "rwa".
+    - Singular, lowercase, hyphenated slugs.
+    - Include sector/industry terms + key technologies/materials + common synonyms.
   - fragment.parentMarketPath: canonical path of broader/parent market (e.g., /market/sa/event-marketing → parent: /market/sa/marketing)
 - MARKET HIERARCHY: Use HAS_SUBMARKET to link parent market → narrower sub-market
   - Example: if THIS FRAGMENT is /market/sa/marketing and you discover /market/sa/event-marketing, emit HAS_SUBMARKET relation
@@ -613,7 +658,8 @@ CANONICAL PATH RULES:
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - Communities (informal social groups): /community/{geo}/{type}/{slug}
-    - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
+    - geo: ISO3166-1 alpha2 lowercase, regional token, or "global"/"int"
+    - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
     - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
     - Examples:
       - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
@@ -663,26 +709,31 @@ METRIC VALUE FORMAT (IMPORTANT):
 - observedAt MUST be ISO8601 (\"YYYY-MM-DD\" or RFC3339)
   - Programs:
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
+      - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
+      - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
     - Otherwise /program/{programSlug}
   - Markets:
     - Prefer (segment-first): /market/{geo}/{domain}/{vertical}
       - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
       - This enables consistent market hierarchy + aggregation
-    - Legacy fallback (allowed): /market/{geo}/{marketSlug}
-      - geo: ISO3166-1 alpha2 lowercase OR "global" if unknown
+    - Legacy /market/{geo}/{marketSlug} may exist in older data; do NOT emit legacy for new markets.
+      - Always provide domain/vertical for NEW outputs.
+      - geo: ISO2, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
+      - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
       - GEOGRAPHY INHERITANCE: If THIS FRAGMENT is a regional market (e.g., /market/sa/...), 
         new MARKET relations MUST inherit that geo, not default to "global"
       - Extract geo from market name context when present:
         - "Saudi event marketing" → /market/sa/event-marketing (NOT /market/global/...)
         - "German automotive" → /market/de/automotive
-      - Examples (legacy): /market/iq/sme-banking, /market/ae/fintech, /market/global/ev-batteries
       - Examples (segment-first): /market/sa/professional-services/marketing, /market/sa/professional-services/event-marketing
-    - Legacy /market/{marketSlug} may exist; prefer segment-first /market/{geo}/{domain}/{vertical} for NEW markets when possible
+    - If you encounter a legacy market path in sources, map it to segment-first /market/{geo}/{domain}/{vertical}.
   - Facilities:
     - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred
     - Otherwise /fac/{facilitySlug}
   - GEO regions / locations: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase, EXACTLY 2 characters (e.g., us, de, ru, kz, jp)
+    - country: ISO3166-1 alpha2 lowercase OR regional token (e.g., gcc, eu, asean, opec)
+    - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
+      - GCC → /loc/gcc/na/na (NOT /loc/na/na/gcc)
     - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
     - city: lowercase slug; use "na" if not applicable/unknown
     - country-only locations: /loc/{country}/na/na
@@ -697,7 +748,7 @@ METRIC VALUE FORMAT (IMPORTANT):
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, specBlock, decompositionBlock, questions)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, decompositionBlock, domainBlock, specBlock, questions)
 }
 
 func dedupNonEmptyStrings(in []string) []string {

@@ -1432,6 +1432,12 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	}
 
+	// DOMAIN jobs are handled by a deterministic domain-expansion runner (no heavy LLM scouting).
+	// This runs before freshness checks because domains are contracts, not real-world entities.
+	if strings.HasPrefix(strings.TrimSpace(effectiveCanonicalPath), "/domain/") {
+		return e.executeDomainExpansionJob(ctx, job, effectiveCanonicalPath, existingFragment)
+	}
+
 	if existingFragment != nil {
 		freshnessThreshold := 1 * time.Hour // Для теста. В проде может быть конфигурируемо.
 		isFresh := !existingFragment.Metadata.LastVerifiedAt.IsZero() && time.Since(existingFragment.Metadata.LastVerifiedAt) < freshnessThreshold
@@ -1848,6 +1854,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		// Choose a sensible default type from canonicalPath prefix (no LLM needed for this deterministic mapping).
 		defaultType := models.FragmentTypeOrganization
 		switch {
+		case strings.HasPrefix(job.TargetCanonicalPath, "/domain/"):
+			defaultType = models.FragmentTypeDomain
 		case strings.HasPrefix(job.TargetCanonicalPath, "/product/"):
 			defaultType = models.FragmentTypeProduct
 		case strings.HasPrefix(job.TargetCanonicalPath, "/program/"):
@@ -2579,6 +2587,35 @@ SKIP_RESEARCH:
 			recordLegacyOrgPath(extractedFragment, orgLegacyPath)
 		}
 
+		// Market deduplication via canonical path resolver (tag-based).
+		if e.canonicalPathResolver != nil && extractedFragment.Type == models.FragmentTypeMarket && len(extractedFragment.Tags) > 0 {
+			meta := map[string]string{
+				"tags": strings.Join(extractedFragment.Tags, ","),
+			}
+			if resolved, rerr := e.canonicalPathResolver.ResolveWithMetadata(ctx, extractedFragment.CanonicalPath, extractedFragment.Type, meta); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+				if strings.TrimSpace(resolved.CanonicalPath) != strings.TrimSpace(extractedFragment.CanonicalPath) {
+					old := strings.TrimSpace(extractedFragment.CanonicalPath)
+					extractedFragment.CanonicalPath = strings.TrimSpace(resolved.CanonicalPath)
+					if effectiveCanonicalPath != extractedFragment.CanonicalPath {
+						effectiveCanonicalPath = extractedFragment.CanonicalPath
+						job.TargetCanonicalPath = effectiveCanonicalPath
+						if job.State == nil {
+							job.State = map[string]interface{}{}
+						}
+						job.State["targetCanonicalPath"] = effectiveCanonicalPath
+						if _, ok := job.State["aliasCanonicalPath"]; !ok && old != "" {
+							job.State["aliasCanonicalPath"] = old
+						}
+						fmt.Printf("[ScoutEngine] Retargeting job %s to market dedup canonicalPath: %s -> %s\n",
+							strings.TrimSpace(job.ID), old, effectiveCanonicalPath)
+						_ = e.scoutingJobsRepo.Update(ctx, job)
+						// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+						e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
+					}
+				}
+			}
+		}
+
 		// Pre-create validation: check policies and deduplication
 		usedExistingDuplicate := false
 		if e.preCreateValidator != nil {
@@ -2657,6 +2694,32 @@ SKIP_RESEARCH:
 							}
 							seen[s] = true
 							existingFragment.MarketSegments = append(existingFragment.MarketSegments, s)
+						}
+					}
+					if len(extractedFragment.Tags) > 0 {
+						if existingFragment.Tags == nil {
+							existingFragment.Tags = make([]string, 0, len(extractedFragment.Tags))
+						}
+						seen := make(map[string]bool)
+						for _, t := range existingFragment.Tags {
+							t = strings.TrimSpace(t)
+							if t != "" {
+								seen[t] = true
+							}
+						}
+						for _, t := range extractedFragment.Tags {
+							t = strings.TrimSpace(t)
+							if t == "" {
+								continue
+							}
+							if seen[t] {
+								continue
+							}
+							seen[t] = true
+							existingFragment.Tags = append(existingFragment.Tags, t)
+						}
+						if existingFragment.Type == models.FragmentTypeMarket {
+							existingFragment.Tags = taxonomy.NormalizeMarketTags(existingFragment.Tags)
 						}
 					}
 

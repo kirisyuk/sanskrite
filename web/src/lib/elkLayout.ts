@@ -123,6 +123,14 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'INFLUENCES': 4,
   'AFFECTS': 4,
   'IMPACTS': 4,
+  // Domain contract relations (treat as high-level context)
+  'FOCUSES_ON': 4,
+  'INVOLVES_ACTOR': 4,
+  'IN_GEO_SCOPE': 4,
+  'ABOUT': 4,
+  'RELATED_DOMAIN': 4,
+  'BROADENS_TO': 4,
+  'NARROWS_TO': 4,
 
   // 5) Context / geography (weakest)
   'LOCATED_IN': 5,
@@ -380,6 +388,17 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
   const type = normalizeEdgeType(edgeType);
   
   switch (type) {
+    // Domain contract relations should be placed to the RIGHT (context).
+    // Domains are "meta" anchors, not supply-chain nor market peers.
+    case 'FOCUSES_ON':
+    case 'INVOLVES_ACTOR':
+    case 'IN_GEO_SCOPE':
+    case 'ABOUT':
+    case 'RELATED_DOMAIN':
+    case 'BROADENS_TO':
+    case 'NARROWS_TO':
+      return 'context';
+
     // Market-defining relation:
     // - If the central node DOMINATES the neighbor (outgoing), the neighbor is "market" (left).
     // - If the neighbor DOMINATES the central node (incoming), the neighbor is "context" (right).
@@ -1214,6 +1233,14 @@ export async function layoutLevelsTwoPane<T = any>(
     'AFFECTS',
     'REGULATES',
     'IMPACTS',
+    // Domain contract relations (DOMAIN should be to the RIGHT of its entities)
+    'FOCUSES_ON',
+    'INVOLVES_ACTOR',
+    'IN_GEO_SCOPE',
+    'ABOUT',
+    'RELATED_DOMAIN',
+    'BROADENS_TO',
+    'NARROWS_TO',
     // Market-defining relations (org -> market): treat as hierarchy signal so the org is placed to the RIGHT.
     'DOMINATES',
     // Market hierarchy (parent -> submarket).

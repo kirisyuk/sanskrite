@@ -365,6 +365,8 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 	switch r.Method {
 	case http.MethodGet:
 		h.GetFragment(w, r)
+	case http.MethodDelete:
+		h.DeleteFragment(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}

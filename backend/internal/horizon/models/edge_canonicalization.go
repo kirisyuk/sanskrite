@@ -17,6 +17,7 @@ var SymmetricEdgeTypes = map[DependencyType]bool{
 	DependencyTypePartnersWith: true, // "A partners with B" = "B partners with A"
 	DependencyTypeRelativeOf:   true, // "A is relative of B" = "B is relative of A"
 	DependencyTypeRelatedTo:    true, // "A is related to B" = "B is related to A"
+	DependencyTypeRelatedDomain: true, // "D1 related domain D2" = "D2 related domain D1"
 }
 
 // IsSelfLoop returns true if the edge points to itself.
@@ -66,6 +67,26 @@ func isDynastyOrTribeCommunity(canonicalPath string) bool {
 //
 // Keep this conservative and explicit. This is used at creation time and during cleanup.
 func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentType) (DependencyType, bool, bool, string) {
+	// =============================================================================
+	// DOMAIN-related canonicalization (pre-policy)
+	// =============================================================================
+	// If a DOMAIN ↔ DOMAIN edge uses an unknown/non-allowlisted type, rewrite it into FOCUSES_ON.
+	// This keeps the graph usable and prevents policy failures from arbitrary LLM relation types.
+	if sourceType == FragmentTypeDomain && targetType == FragmentTypeDomain {
+		switch edgeType {
+		case DependencyTypeFocusesOn,
+			DependencyTypeRelatedDomain,
+			DependencyTypeBroadensTo,
+			DependencyTypeNarrowsTo,
+			DependencyTypeAffects,
+			DependencyTypeDependsOn:
+			// Allowlisted domain-domain relations.
+			return edgeType, false, false, ""
+		default:
+			return DependencyTypeFocusesOn, false, true, "canonicalize: DOMAIN→DOMAIN unknown edge type -> DOMAIN FOCUSES_ON DOMAIN"
+		}
+	}
+
 	// ORG OWNS PERSON is invalid: ownership should flow from PERSON to ORG.
 	if edgeType == DependencyTypeOwns &&
 		sourceType == FragmentTypeOrganization &&

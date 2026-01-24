@@ -276,6 +276,9 @@ func (f *HorizonFragment) Validate() error {
 		if f.ParentMarketPath != "" && !strings.HasPrefix(f.ParentMarketPath, "/market/") {
 			f.ParentMarketPath = "" // invalid parent path, clear it
 		}
+
+		// Normalize market tags (expanded terms, singular, slugged).
+		f.Tags = taxonomy.NormalizeMarketTags(f.Tags)
 	}
 
 	// Best-effort: normalize GOV-specific fields (when canonicalPath starts with /gov/).

@@ -286,6 +286,8 @@ RULES:
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - Communities (informal social groups): /community/{geo}/{type}/{slug}
+    - geo: ISO2, regional token, or "global"/"int"
+    - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
     - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
     - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
     - Examples:
@@ -311,7 +313,9 @@ RULES:
     - slug: lowercase-slug derived from product name
     - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
   - GEO regions/locations: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase, EXACTLY 2 characters (e.g., us, de, ru, kz, jp)
+    - country: ISO3166-1 alpha2 lowercase OR regional token (e.g., gcc, eu, asean, opec)
+    - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
+      - GCC → /loc/gcc/na/na (NOT /loc/na/na/gcc)
     - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
     - city: lowercase slug; use "na" if not applicable/unknown
     - country-only locations: /loc/{country}/na/na
@@ -319,8 +323,10 @@ RULES:
   - MARKET (segment-first preferred):
     - Preferred: /market/{geo}/{domain}/{vertical}
       - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
-    - Legacy fallback (allowed): /market/{geo}/{marketSlug}
-    - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
+    - Legacy /market/{geo}/{marketSlug} may exist in older data; do NOT emit legacy for new markets.
+      - Always provide domain/vertical for NEW outputs.
+    - geo: ISO2, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
+    - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
     - GEOGRAPHY INHERITANCE: If TARGET is a regional market (e.g., /market/sa/...), new MARKET relations MUST inherit that geo
       - Example: decomposing /market/sa/event-marketing → sub-markets should be /market/sa/... (NOT /market/global/...)
     - Use "global" ONLY when the market is truly global or no geographic context exists
@@ -328,6 +334,8 @@ RULES:
       - Example: /market/sa/marketing HAS_SUBMARKET /market/sa/event-marketing
       - Direction: broader → narrower
   - PROGRAM: /program/{jurisdictionSlug}/{programSlug}
+    - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
+    - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
     - If TARGET is a regional program, new related entities should reflect that jurisdiction context
   - GOV: /gov/{iso2}/{slug}
     - GOV HIERARCHY: Use ADMINISTERS to link superior gov body → subordinate body

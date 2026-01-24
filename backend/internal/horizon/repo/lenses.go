@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -156,6 +157,39 @@ func (r *LensesRepository) Delete(ctx context.Context, id string) error {
 		return ErrInvalidDocument
 	}
 	_, err := r.col.Doc(id).Delete(ctx)
+	return err
+}
+
+// AddScopeCanonicalPaths appends canonical paths to lens.scope using array union.
+// This is intentionally partial (does not validate full Lens), to support incremental workflows (e.g., domain expansion).
+func (r *LensesRepository) AddScopeCanonicalPaths(ctx context.Context, lensID string, canonicalPaths []string) error {
+	if lensID == "" {
+		return ErrInvalidDocument
+	}
+	if len(canonicalPaths) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	unionArgs := make([]interface{}, 0, len(canonicalPaths))
+	for _, p := range canonicalPaths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		unionArgs = append(unionArgs, p)
+	}
+	if len(unionArgs) == 0 {
+		return nil
+	}
+	updates := map[string]interface{}{
+		"scope":     firestore.ArrayUnion(unionArgs...),
+		"updatedAt": time.Now().UTC(),
+	}
+	_, err := r.col.Doc(lensID).Set(ctx, updates, firestore.MergeAll)
 	return err
 }
 

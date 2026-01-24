@@ -11,6 +11,27 @@ export interface LensCanvasProgressProps {
   /** When creating a new lens (lensId=null), filter progress events to only those matching this creation attempt. */
   activeCreateCorrelationId?: string | null;
   activeCreateSessionId?: string | null;
+  /** Optional preflight UI (inlined). */
+  preflight?: {
+    active: boolean;
+    reason?: string;
+    mode: 'just_open' | 'research_first';
+    setMode: (mode: 'just_open' | 'research_first') => void;
+    focus: string;
+    setFocus: (focus: string) => void;
+    domainsDraft: any[];
+    setDomainsDraft: (next: any[]) => void;
+    anchorsDraft: any[];
+    setAnchorsDraft: (next: any[]) => void;
+    selectedDomains: Record<string, boolean>;
+    setSelectedDomains: (next: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)) => void;
+    selectedAnchors: Record<string, boolean>;
+    setSelectedAnchors: (next: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)) => void;
+    isBusy: boolean;
+    isValidCanonicalPath: (cp: string) => boolean;
+    onCancel: () => void;
+    onContinue: (mode?: 'just_open' | 'research_first') => void;
+  } | null;
 }
 
 const formatEdgeType = (type: string) => {
@@ -87,11 +108,103 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
   isCreatingLens = false,
   activeCreateCorrelationId = null,
   activeCreateSessionId = null,
+  preflight = null,
 }) => {
   const events = useHorizonRealtimeStore((s) => s.events);
   const feedRef = React.useRef<HTMLDivElement | null>(null);
   const pinnedToBottomRef = React.useRef<boolean>(true);
   const [pinnedToBottom, setPinnedToBottom] = React.useState<boolean>(true);
+
+  const preflightActive = !!(preflight && preflight.active);
+
+  const [preflightExpanded, setPreflightExpanded] = React.useState<boolean>(true);
+  const [domainDetailsOpen, setDomainDetailsOpen] = React.useState<Record<string, boolean>>({});
+
+  React.useEffect(() => {
+    if (preflightActive) {
+      setPreflightExpanded(true);
+      setDomainDetailsOpen({});
+    } else {
+      setPreflightExpanded(true);
+      setDomainDetailsOpen({});
+    }
+  }, [preflightActive]);
+
+  const selectedCounts = React.useMemo(() => {
+    if (!preflightActive || !preflight) return { domains: 0, anchors: 0 };
+    const domainsDraft = Array.isArray(preflight.domainsDraft) ? preflight.domainsDraft : [];
+    const anchorsDraft = Array.isArray(preflight.anchorsDraft) ? preflight.anchorsDraft : [];
+
+    let domains = 0;
+    for (const d of domainsDraft) {
+      const cp = String(d?.canonicalPath || '').trim();
+      if (!cp) continue;
+      if (preflight.selectedDomains?.[cp] === false) continue;
+      domains += 1;
+    }
+    let anchors = 0;
+    for (const a of anchorsDraft) {
+      const cp = String(a?.canonicalPath || '').trim();
+      if (!cp) continue;
+      if (preflight.selectedAnchors?.[cp] === false) continue;
+      anchors += 1;
+    }
+    return { domains, anchors };
+  }, [preflightActive, preflight]);
+
+  const selectedAnchorCountryCodes = React.useMemo(() => {
+    if (!preflightActive || !preflight) return [];
+    const anchorsDraft = Array.isArray(preflight.anchorsDraft) ? preflight.anchorsDraft : [];
+    const out: string[] = [];
+    for (const a of anchorsDraft) {
+      const cp = String(a?.canonicalPath || '').trim();
+      if (!cp) continue;
+      if (preflight.selectedAnchors?.[cp] === false) continue;
+      if (!cp.startsWith('/loc/')) continue;
+      const parts = cp.split('/').filter(Boolean);
+      const iso2 = String(parts[1] || '').trim().toLowerCase();
+      if (iso2.length === 2 && /^[a-z]{2}$/.test(iso2)) out.push(iso2);
+    }
+    return Array.from(new Set(out)).slice(0, 10);
+  }, [preflightActive, preflight]);
+
+  const parseDomainGeoTokens = (cp: string): string[] => {
+    const s = String(cp || '').trim();
+    if (!s.startsWith('/domain/v1/')) return [];
+    const parts = s.split('/').filter(Boolean);
+    // parts: ["domain","v1","{contractType}", k1, v1, k2, v2...]
+    const kv = parts.slice(3);
+    const geos: string[] = [];
+    for (let i = 0; i + 1 < kv.length; i += 2) {
+      const k = String(kv[i] || '').trim().toLowerCase();
+      const v = String(kv[i + 1] || '').trim().toLowerCase();
+      if (k === 'geo' && v) {
+        // Support composite geo tokens (ae-sa) as well as repeated geo pairs.
+        if (v.includes('-')) {
+          for (const p of v.split('-')) {
+            const cc = String(p || '').trim().toLowerCase();
+            if (cc.length === 2 && /^[a-z]{2}$/.test(cc)) geos.push(cc);
+          }
+        } else {
+          geos.push(v);
+        }
+      }
+    }
+    return geos;
+  };
+
+  const buildBilateralDomain = (ccA: string, ccB: string, aName?: string, bName?: string) => {
+    const a = String(ccA || '').toLowerCase();
+    const b = String(ccB || '').toLowerCase();
+    const [x, y] = [a, b].sort();
+    const canonicalPath = `/domain/v1/bilateral-relations/geo/${x}-${y}`;
+    const left = String(aName || '').trim();
+    const right = String(bName || '').trim();
+    const title =
+      left && right ? `Bilateral relations: ${left} ↔ ${right}` : `Bilateral relations: ${x.toUpperCase()} ↔ ${y.toUpperCase()}`;
+    const description = 'Research bilateral relations and first-order entities implied by this relationship.';
+    return { canonicalPath, title, description };
+  };
 
   // Filter events by lensId and projectId
   // Show events that match the lensId/projectId
@@ -122,7 +235,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
     // - when NOT creating: show no events at all (keep the creation UX clean)
     // - when creating: show only events belonging to this creation attempt (correlation/session ID)
     if (!lensId) {
-      if (!isCreatingLens) return [];
+      if (!isCreatingLens && !preflightActive) return [];
       const cid = String(activeCreateCorrelationId || '').trim();
       const sid = String(activeCreateSessionId || '').trim();
       if (!cid && !sid) return [];
@@ -137,7 +250,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
     }
 
     return base;
-  }, [events, lensId, projectId, isCreatingLens, activeCreateCorrelationId, activeCreateSessionId]);
+  }, [events, lensId, projectId, isCreatingLens, preflightActive, activeCreateCorrelationId, activeCreateSessionId]);
 
   const updatePinnedState = React.useCallback(() => {
     const el = feedRef.current;
@@ -177,7 +290,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
 
   const hasEvents = filteredEvents.length > 0;
   // Shift input to bottom if we have events or creation is in progress
-  const isContentActive = hasEvents || isCreatingLens;
+  const isContentActive = hasEvents || isCreatingLens || preflightActive;
   const handleSaveLog = React.useCallback(() => {
     if (!filteredEvents.length) return;
     const lines = filteredEvents.map((ev) => {
@@ -225,6 +338,548 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
         >
           {/* Constrain width to match input field below */}
           <div style={{ maxWidth: 960, margin: '0 auto', position: 'relative', paddingLeft: 36 }}>
+            {preflightActive && preflight && (
+              <div
+                style={{
+                  marginBottom: 14,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-elevated)',
+                  borderRadius: 14,
+                  padding: 16,
+                  boxShadow: '0 12px 28px rgba(0,0,0,0.12)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>
+                      {preflightExpanded ? 'Confirm intent' : 'Intent confirmed'}
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-tertiary)', lineHeight: 1.35 }}>
+                      {preflightExpanded
+                        ? (String(preflight.reason || '').trim() || 'Review and adjust what we will research before starting.')
+                        : `${selectedCounts.domains} domain${selectedCounts.domains === 1 ? '' : 's'}, ${selectedCounts.anchors} anchor${selectedCounts.anchors === 1 ? '' : 's'}`}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                    {!preflightExpanded && (
+                      <button
+                        type="button"
+                        onClick={() => setPreflightExpanded(true)}
+                        disabled={preflight.isBusy}
+                        style={{
+                          border: '1px solid var(--border-subtle)',
+                          background: 'transparent',
+                          color: 'var(--text-secondary-strong)',
+                          borderRadius: 10,
+                          padding: '8px 10px',
+                          fontSize: 12,
+                          fontWeight: 700,
+                          cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                          opacity: preflight.isBusy ? 0.6 : 1,
+                        }}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {preflightExpanded && (
+                  <div style={{ marginTop: 14, display: 'grid', gap: 12 }}>
+
+                  <div
+                    style={{
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 12,
+                      padding: 12,
+                      background: 'var(--bg-subtle)',
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary-strong)' }}>
+                      Focus
+                    </div>
+                    <input
+                      value={preflight.focus}
+                      onChange={(e) => preflight.setFocus(e.target.value)}
+                      disabled={preflight.isBusy}
+                      placeholder="Short reusable intent statement"
+                      style={{
+                        marginTop: 8,
+                        width: '100%',
+                        borderRadius: 10,
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-elevated)',
+                        color: 'var(--text-primary)',
+                        padding: '10px 12px',
+                        fontSize: 13,
+                        outline: 'none',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr', alignItems: 'start' }}>
+                    <div
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 12,
+                        padding: 12,
+                        background: 'var(--bg-subtle)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-secondary-strong)' }}>
+                          Domains
+                        </div>
+                        <button
+                          type="button"
+                          disabled={preflight.isBusy}
+                          onClick={() => preflight.setDomainsDraft([...(preflight.domainsDraft || []), { canonicalPath: '', title: '', description: '' }])}
+                          style={{
+                            border: '1px solid var(--border-subtle)',
+                            background: 'transparent',
+                            color: 'var(--text-tertiary)',
+                            borderRadius: 10,
+                            padding: '6px 10px',
+                            fontSize: 12,
+                            fontWeight: 650,
+                            cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                            opacity: preflight.isBusy ? 0.6 : 1,
+                          }}
+                        >
+                          + Add domain
+                        </button>
+                      </div>
+                      {selectedAnchorCountryCodes.length === 2 && (
+                        <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            disabled={preflight.isBusy}
+                            onClick={() => {
+                              const [cc1, cc2] = selectedAnchorCountryCodes;
+                              const anchorsDraft = Array.isArray(preflight.anchorsDraft) ? preflight.anchorsDraft : [];
+                              const nameByCc: Record<string, string> = {};
+                              for (const a of anchorsDraft) {
+                                const cp = String(a?.canonicalPath || '').trim();
+                                if (!cp.startsWith('/loc/')) continue;
+                                const parts = cp.split('/').filter(Boolean);
+                                const iso2 = String(parts[1] || '').trim().toLowerCase();
+                                if (iso2 && String(a?.name || '').trim()) nameByCc[iso2] = String(a?.name || '').trim();
+                              }
+                              const built = buildBilateralDomain(cc1, cc2, nameByCc[cc1], nameByCc[cc2]);
+
+                              const next = [...(preflight.domainsDraft || [])];
+                              next.unshift(built);
+                              preflight.setDomainsDraft(next);
+                              preflight.setSelectedDomains((prev) => ({ ...(prev || {}), [built.canonicalPath]: true }));
+                            }}
+                            style={{
+                              border: '1px solid rgba(59,130,246,0.35)',
+                              background: 'rgba(59,130,246,0.10)',
+                              color: 'var(--text-secondary-strong)',
+                              borderRadius: 999,
+                              padding: '6px 10px',
+                              fontSize: 12,
+                              fontWeight: 700,
+                              cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                              opacity: preflight.isBusy ? 0.6 : 1,
+                            }}
+                          >
+                            Create bilateral-relations domain from anchors
+                          </button>
+                          {(() => {
+                            const domainsDraft = Array.isArray(preflight.domainsDraft) ? preflight.domainsDraft : [];
+                            const idx = domainsDraft.findIndex((d: any) =>
+                              String(d?.canonicalPath || '').trim().startsWith('/domain/v1/bilateral-relations/'),
+                            );
+                            if (idx < 0) return null;
+                            const cp = String(domainsDraft[idx]?.canonicalPath || '').trim();
+                            const geos = parseDomainGeoTokens(cp);
+                            const want = [...selectedAnchorCountryCodes].map((x) => x.toLowerCase()).sort().join(',');
+                            const have = [...geos].map((x) => x.toLowerCase()).sort().join(',');
+                            if (!want || want === have) return null;
+
+                            return (
+                              <button
+                                type="button"
+                                disabled={preflight.isBusy}
+                                onClick={() => {
+                                  const [cc1, cc2] = selectedAnchorCountryCodes;
+                                  const anchorsDraft = Array.isArray(preflight.anchorsDraft) ? preflight.anchorsDraft : [];
+                                  const nameByCc: Record<string, string> = {};
+                                  for (const a of anchorsDraft) {
+                                    const acp = String(a?.canonicalPath || '').trim();
+                                    if (!acp.startsWith('/loc/')) continue;
+                                    const parts = acp.split('/').filter(Boolean);
+                                    const iso2 = String(parts[1] || '').trim().toLowerCase();
+                                    if (iso2 && String(a?.name || '').trim()) nameByCc[iso2] = String(a?.name || '').trim();
+                                  }
+                                  const built = buildBilateralDomain(cc1, cc2, nameByCc[cc1], nameByCc[cc2]);
+
+                                  const next = [...(preflight.domainsDraft || [])];
+                                  const prevCp = String(next[idx]?.canonicalPath || '').trim();
+                                  next[idx] = { ...(next[idx] || {}), ...built };
+                                  preflight.setDomainsDraft(next);
+                                  preflight.setSelectedDomains((prev) => {
+                                    const p = { ...(prev || {}) };
+                                    if (prevCp && prevCp !== built.canonicalPath) delete p[prevCp];
+                                    p[built.canonicalPath] = true;
+                                    return p;
+                                  });
+                                }}
+                                style={{
+                                  border: '1px solid rgba(234,179,8,0.45)',
+                                  background: 'rgba(234,179,8,0.10)',
+                                  color: 'var(--text-secondary-strong)',
+                                  borderRadius: 999,
+                                  padding: '6px 10px',
+                                  fontSize: 12,
+                                  fontWeight: 700,
+                                  cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                                  opacity: preflight.isBusy ? 0.6 : 1,
+                                }}
+                              >
+                                Fix domain geo to match anchors
+                              </button>
+                            );
+                          })()}
+                        </div>
+                      )}
+                      <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+                        {(preflight.domainsDraft || []).length === 0 ? (
+                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No domains detected.</div>
+                        ) : (
+                          (preflight.domainsDraft || []).map((d: any, idx: number) => {
+                            const cp = String(d?.canonicalPath || '');
+                            const ok = !cp.trim() || preflight.isValidCanonicalPath(cp);
+                            const checked = preflight.selectedDomains[String(cp || '').trim()] !== false;
+                            const detailKey = String(cp || '').trim() || `d-${idx}`;
+                            const detailsOpen = !!domainDetailsOpen[detailKey];
+                            return (
+                              <div key={`d-${idx}`} style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10, background: 'var(--bg-elevated)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) => {
+                                      const key = String(cp || '').trim();
+                                      if (!key) return;
+                                      preflight.setSelectedDomains((prev) => ({ ...(prev || {}), [key]: e.target.checked }));
+                                    }}
+                                    disabled={preflight.isBusy || !String(cp || '').trim()}
+                                  />
+                                  <input
+                                    value={cp}
+                                    onChange={(e) => {
+                                      const next = [...(preflight.domainsDraft || [])];
+                                      next[idx] = { ...(next[idx] || {}), canonicalPath: e.target.value };
+                                      preflight.setDomainsDraft(next);
+                                    }}
+                                    disabled={preflight.isBusy}
+                                    placeholder="/domain/v1/..."
+                                    style={{
+                                      flex: 1,
+                                      borderRadius: 10,
+                                      border: `1px solid ${ok ? 'var(--border-subtle)' : 'rgba(239,68,68,0.5)'}`,
+                                      background: 'transparent',
+                                      color: 'var(--text-primary)',
+                                      padding: '8px 10px',
+                                      fontSize: 12,
+                                      fontFamily: 'monospace',
+                                      outline: 'none',
+                                    }}
+                                  />
+                                </div>
+                                {!detailsOpen ? (
+                                  <div style={{ marginTop: 8 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline' }}>
+                                      <div style={{ fontSize: 12, fontWeight: 750, color: 'var(--text-primary)' }}>
+                                        {String(d?.title || '').trim() || 'Untitled domain'}
+                                      </div>
+                                      <button
+                                        type="button"
+                                        disabled={preflight.isBusy}
+                                        onClick={() =>
+                                          setDomainDetailsOpen((prev) => ({ ...(prev || {}), [detailKey]: true }))
+                                        }
+                                        style={{
+                                          border: '1px solid var(--border-subtle)',
+                                          background: 'transparent',
+                                          color: 'var(--text-tertiary)',
+                                          borderRadius: 10,
+                                          padding: '6px 10px',
+                                          fontSize: 12,
+                                          fontWeight: 650,
+                                          cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                                          opacity: preflight.isBusy ? 0.6 : 1,
+                                        }}
+                                      >
+                                        Edit details
+                                      </button>
+                                    </div>
+                                    {!!String(d?.description || '').trim() && (
+                                      <div
+                                        style={{
+                                          marginTop: 4,
+                                          fontSize: 12,
+                                          color: 'var(--text-tertiary)',
+                                          display: '-webkit-box',
+                                          WebkitLineClamp: 2,
+                                          WebkitBoxOrient: 'vertical' as any,
+                                          overflow: 'hidden',
+                                        }}
+                                      >
+                                        {String(d?.description || '').trim()}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
+                                    <input
+                                      value={String(d?.title || '')}
+                                      onChange={(e) => {
+                                        const next = [...(preflight.domainsDraft || [])];
+                                        next[idx] = { ...(next[idx] || {}), title: e.target.value };
+                                        preflight.setDomainsDraft(next);
+                                      }}
+                                      disabled={preflight.isBusy}
+                                      placeholder="Title"
+                                      style={{
+                                        width: '100%',
+                                        borderRadius: 10,
+                                        border: '1px solid var(--border-subtle)',
+                                        background: 'transparent',
+                                        color: 'var(--text-primary)',
+                                        padding: '8px 10px',
+                                        fontSize: 12,
+                                        outline: 'none',
+                                      }}
+                                    />
+                                    <input
+                                      value={String(d?.description || '')}
+                                      onChange={(e) => {
+                                        const next = [...(preflight.domainsDraft || [])];
+                                        next[idx] = { ...(next[idx] || {}), description: e.target.value };
+                                        preflight.setDomainsDraft(next);
+                                      }}
+                                      disabled={preflight.isBusy}
+                                      placeholder="Description"
+                                      style={{
+                                        width: '100%',
+                                        borderRadius: 10,
+                                        border: '1px solid var(--border-subtle)',
+                                        background: 'transparent',
+                                        color: 'var(--text-primary)',
+                                        padding: '8px 10px',
+                                        fontSize: 12,
+                                        outline: 'none',
+                                      }}
+                                    />
+                                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                      <button
+                                        type="button"
+                                        disabled={preflight.isBusy}
+                                        onClick={() =>
+                                          setDomainDetailsOpen((prev) => ({ ...(prev || {}), [detailKey]: false }))
+                                        }
+                                        style={{
+                                          border: '1px solid var(--border-subtle)',
+                                          background: 'transparent',
+                                          color: 'var(--text-tertiary)',
+                                          borderRadius: 10,
+                                          padding: '6px 10px',
+                                          fontSize: 12,
+                                          fontWeight: 650,
+                                          cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                                          opacity: preflight.isBusy ? 0.6 : 1,
+                                        }}
+                                      >
+                                        Collapse
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 12,
+                        padding: 12,
+                        background: 'var(--bg-subtle)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-secondary-strong)' }}>
+                          Anchors
+                        </div>
+                        <button
+                          type="button"
+                          disabled={preflight.isBusy}
+                          onClick={() => preflight.setAnchorsDraft([...(preflight.anchorsDraft || []), { canonicalPath: '', name: '' }])}
+                          style={{
+                            border: '1px solid var(--border-subtle)',
+                            background: 'transparent',
+                            color: 'var(--text-tertiary)',
+                            borderRadius: 10,
+                            padding: '6px 10px',
+                            fontSize: 12,
+                            fontWeight: 650,
+                            cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                            opacity: preflight.isBusy ? 0.6 : 1,
+                          }}
+                        >
+                          + Add anchor
+                        </button>
+                      </div>
+                      <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+                        {(preflight.anchorsDraft || []).length === 0 ? (
+                          <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>No anchors detected.</div>
+                        ) : (
+                          (preflight.anchorsDraft || []).map((a: any, idx: number) => {
+                            const cp = String(a?.canonicalPath || '');
+                            const ok = !cp.trim() || preflight.isValidCanonicalPath(cp);
+                            const checked = preflight.selectedAnchors[String(cp || '').trim()] !== false;
+                            return (
+                              <div key={`a-${idx}`} style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10, background: 'var(--bg-elevated)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) => {
+                                      const key = String(cp || '').trim();
+                                      if (!key) return;
+                                      preflight.setSelectedAnchors((prev) => ({ ...(prev || {}), [key]: e.target.checked }));
+                                    }}
+                                    disabled={preflight.isBusy || !String(cp || '').trim()}
+                                  />
+                                  <input
+                                    value={String(a?.name || '')}
+                                    onChange={(e) => {
+                                      const next = [...(preflight.anchorsDraft || [])];
+                                      next[idx] = { ...(next[idx] || {}), name: e.target.value };
+                                      preflight.setAnchorsDraft(next);
+                                    }}
+                                    disabled={preflight.isBusy}
+                                    placeholder="Anchor name"
+                                    style={{
+                                      flex: 1,
+                                      borderRadius: 10,
+                                      border: '1px solid var(--border-subtle)',
+                                      background: 'transparent',
+                                      color: 'var(--text-primary)',
+                                      padding: '9px 10px',
+                                      fontSize: 13,
+                                      fontWeight: 750,
+                                      outline: 'none',
+                                    }}
+                                  />
+                                </div>
+                                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <input
+                                    value={cp}
+                                    onChange={(e) => {
+                                      const next = [...(preflight.anchorsDraft || [])];
+                                      next[idx] = { ...(next[idx] || {}), canonicalPath: e.target.value };
+                                      preflight.setAnchorsDraft(next);
+                                    }}
+                                    disabled={preflight.isBusy}
+                                    placeholder="/loc/... /org/... /gov/... /domain/..."
+                                    style={{
+                                      flex: 1,
+                                      borderRadius: 10,
+                                      border: `1px solid ${ok ? 'var(--border-subtle)' : 'rgba(239,68,68,0.5)'}`,
+                                      background: 'rgba(255,255,255,0.02)',
+                                      color: 'var(--text-primary)',
+                                      padding: '7px 10px',
+                                      fontSize: 12,
+                                      fontFamily: 'monospace',
+                                      outline: 'none',
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <button
+                      type="button"
+                      onClick={preflight.onCancel}
+                      disabled={preflight.isBusy}
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        background: 'transparent',
+                        color: 'var(--text-secondary-strong)',
+                        borderRadius: 10,
+                        padding: '9px 12px',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                        opacity: preflight.isBusy ? 0.6 : 1,
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreflightExpanded(false);
+                          preflight.setMode('just_open');
+                          preflight.onContinue('just_open');
+                        }}
+                        disabled={preflight.isBusy}
+                        style={{
+                          border: '1px solid rgba(59,130,246,0.35)',
+                          background: 'rgba(59,130,246,0.10)',
+                          color: 'var(--text-primary)',
+                          borderRadius: 10,
+                          padding: '9px 12px',
+                          fontSize: 12,
+                          fontWeight: 750,
+                          cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                          opacity: preflight.isBusy ? 0.6 : 1,
+                        }}
+                      >
+                        Just open
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreflightExpanded(false);
+                          preflight.setMode('research_first');
+                          preflight.onContinue('research_first');
+                        }}
+                        disabled={preflight.isBusy}
+                        style={{
+                          border: '1px solid rgba(59,130,246,0.45)',
+                          background: 'rgba(59,130,246,0.16)',
+                          color: 'var(--text-primary)',
+                          borderRadius: 10,
+                          padding: '9px 12px',
+                          fontSize: 12,
+                          fontWeight: 800,
+                          cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                          opacity: preflight.isBusy ? 0.6 : 1,
+                        }}
+                      >
+                        Research
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                )}
+              </div>
+            )}
+
             <div style={{ position: 'sticky', top: 0, zIndex: 2, display: 'flex', justifyContent: 'flex-end', paddingBottom: 8 }}>
               {!pinnedToBottom && (
                 <button
@@ -500,7 +1155,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
           <AssembleLensRequestComponent
             projectId={projectId}
             onAssemble={handleAssemble}
-            disabled={isCreatingLens}
+            disabled={isCreatingLens || preflightActive}
             pinnedBottom={isContentActive}
           />
         </div>

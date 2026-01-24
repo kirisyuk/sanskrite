@@ -6,7 +6,7 @@ import { ThemeContext } from './ThemeProvider';
 import { HorizonNodeIcon, getNodeColors, formatHorizonFragmentType, getMetricColor, getHorizonNodeVisualType } from './HorizonGraphNodeTypes';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { humanizeCanonicalPath } from '../lib/uiUtils';
+import { humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
 import { HorizonOnDemandDependencyResolverModal, type HorizonOnDemandContext } from './HorizonOnDemandDependencyResolverModal';
 import { RISK_SEGMENTS, RiskSegmentIcon, segmentForMetricBaseKey } from '../lib/riskShield';
 
@@ -209,9 +209,17 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           return;
         }
         
-        // Load fragment
-        const fragmentData = await api.getHorizonFragment(fragmentId);
-        setFragment(fragmentData);
+        // Load fragment by ID first.
+        // Fallback: if graph node IDs are canonical paths (or fragmentId is missing), try loading by path.
+        try {
+          const fragmentData = await api.getHorizonFragment(fragmentId);
+          setFragment(fragmentData);
+        } catch (e1: any) {
+          const cp = String(nodeData?.canonicalPath || '').trim();
+          if (!cp || !cp.startsWith('/')) throw e1;
+          const fragmentData = await api.getHorizonFragmentByPath(cp);
+          setFragment(fragmentData);
+        }
       } catch (err: any) {
         console.error('[ObjectInspector] Failed to load data', err);
         setError(err.response?.data?.error || err.message || 'Failed to load data');
@@ -222,6 +230,69 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
     loadData();
   }, [nodeId, nodeData]);
+
+  const domainContract = React.useMemo(() => {
+    const cp = String(fragment?.canonicalPath || nodeData?.canonicalPath || '').trim();
+    const t = String(fragment?.type || nodeData?.type || '').trim().toUpperCase();
+    const isDomain = t === 'DOMAIN' || cp.startsWith('/domain/');
+    if (!isDomain || !cp) return null;
+
+    const identifiers: any = fragment?.identifiers && typeof fragment.identifiers === 'object' ? fragment.identifiers : {};
+    const fromId = (k: string) => String(identifiers?.[k] || '').trim();
+
+    const parsedFromPath = (() => {
+      if (!cp.startsWith('/domain/v1/')) return { contractType: '', facets: {} as Record<string, string[]> };
+      const parts = cp.split('/').filter(Boolean);
+      if (parts.length < 3) return { contractType: '', facets: {} as Record<string, string[]> };
+      const contractType = String(parts[2] || '').trim();
+      const rest = parts.slice(3);
+      const facets: Record<string, string[]> = {};
+      if (rest.length % 2 !== 0) return { contractType, facets };
+      for (let i = 0; i + 1 < rest.length; i += 2) {
+        const k = String(rest[i] || '').trim();
+        const v = String(rest[i + 1] || '').trim();
+        if (!k || !v) continue;
+        if (!facets[k]) facets[k] = [];
+        facets[k].push(v);
+      }
+      return { contractType, facets };
+    })();
+
+    const facetsFromIdentifiers = (() => {
+      const raw = fromId('domainFacetsJson');
+      if (!raw) return null as Record<string, string[]> | null;
+      try {
+        const obj = JSON.parse(raw);
+        if (!obj || typeof obj !== 'object') return null;
+        const out: Record<string, string[]> = {};
+        for (const [k, v] of Object.entries(obj as any)) {
+          const kk = String(k || '').trim();
+          if (!kk) continue;
+          if (Array.isArray(v)) {
+            out[kk] = v.map((x) => String(x || '').trim()).filter(Boolean);
+          }
+        }
+        return out;
+      } catch {
+        return null;
+      }
+    })();
+
+    const contractType = fromId('domainContractType') || parsedFromPath.contractType;
+    const facets = facetsFromIdentifiers || parsedFromPath.facets;
+
+    return {
+      canonicalPath: cp,
+      title: String(fragment?.labels?.en || '').trim() || '',
+      description: String(fragment?.description || '').trim() || '',
+      contractType,
+      facets,
+      source: {
+        contractType: fromId('domainContractType') ? 'identifiers.domainContractType' : 'canonicalPath',
+        facets: facetsFromIdentifiers ? 'identifiers.domainFacetsJson' : 'canonicalPath',
+      },
+    };
+  }, [fragment, nodeData?.canonicalPath, nodeData?.type]);
 
   const handleExplainNode = React.useCallback(async () => {
     if (!nodeId) return;
@@ -241,9 +312,9 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           nodeId,
           fragmentId,
           label:
-            nodeData?.label ||
-            fragment?.labels?.en ||
-            fragment?.canonicalPath?.split('/')?.pop() ||
+            preferDisplayLabel(nodeData?.label, nodeData?.canonicalPath, nodeData?.type) ||
+            preferDisplayLabel(fragment?.labels?.en, fragment?.canonicalPath, fragment?.type) ||
+            humanizeCanonicalPath(nodeData?.canonicalPath || fragment?.canonicalPath) ||
             null,
           canonicalPath: nodeData?.canonicalPath || fragment?.canonicalPath || null,
           type: nodeData?.type || fragment?.type || null,
@@ -1044,13 +1115,24 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     }, []);
 
   const nodeDisplayName = React.useMemo(() => {
-    const fromNode = String(nodeData?.label || '').trim();
-    if (fromNode) return fromNode;
+    const fromNodePreferred = preferDisplayLabel(
+      nodeData?.label,
+      nodeData?.canonicalPath,
+      nodeData?.type,
+    );
+    if (fromNodePreferred) return fromNodePreferred;
     const wantId = String(nodeData?.fragmentId || nodeId || '').trim();
     const loadedId = String((fragment as any)?.id || (fragment as any)?.ID || '').trim();
     const canUseFragment = Boolean(!edgeId && wantId && loadedId && loadedId === wantId);
     const fromFrag = canUseFragment
-      ? (String(fragment?.labels?.en || '').trim() || humanizeCanonicalPath(fragment?.canonicalPath) || '')
+      ? (() => {
+          const preferred = preferDisplayLabel(
+            fragment?.labels?.en,
+            fragment?.canonicalPath,
+            fragment?.type,
+          );
+          return preferred || humanizeCanonicalPath(fragment?.canonicalPath) || '';
+        })()
       : '';
     if (fromFrag) return fromFrag;
     const fromPath = humanizeCanonicalPath(nodeData?.canonicalPath) || '';
@@ -2640,6 +2722,49 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                           <KV key={k} k={k} v={<span style={mono}>{String(v)}</span>} copyText={String(v)} />
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {/* DOMAIN contract (best-effort): show what we actually have on the fragment */}
+                  {domainContract && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)', marginBottom: 10 }}>
+                        Domain contract
+                      </div>
+                      {domainContract.contractType && (
+                        <KV
+                          k="Contract type"
+                          v={
+                            <span style={mono} title={domainContract.source.contractType}>
+                              {domainContract.contractType}
+                            </span>
+                          }
+                          copyText={domainContract.contractType}
+                        />
+                      )}
+                      {domainContract.title && <KV k="Title (labels.en)" v={<span>{domainContract.title}</span>} />}
+                      {domainContract.description && (
+                        <KV
+                          k="Description"
+                          v={<span style={{ whiteSpace: 'pre-wrap' }}>{domainContract.description}</span>}
+                        />
+                      )}
+                      {domainContract.facets && Object.keys(domainContract.facets).length > 0 && (
+                        <KV
+                          k="Facets"
+                          v={
+                            <span style={mono} title={domainContract.source.facets}>
+                              {JSON.stringify(domainContract.facets)}
+                            </span>
+                          }
+                          copyText={JSON.stringify(domainContract.facets)}
+                        />
+                      )}
+                      {!domainContract.title && !domainContract.description && (
+                        <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-secondary)', fontWeight: 650 }}>
+                          Note: title/description are not stored on this fragment yet. UI will use a deterministic fallback from canonicalPath.
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

@@ -171,7 +171,7 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify and parse structured output.
-	ver := ai.NewGenericVerifier[graphQueryLLMResponse](func(out graphQueryLLMResponse) error {
+	ver := ai.NewGenericVerifier(func(out graphQueryLLMResponse) error {
 		if strings.TrimSpace(out.Answer) == "" {
 			return fmt.Errorf("answer is required")
 		}

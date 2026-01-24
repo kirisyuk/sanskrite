@@ -38,34 +38,6 @@ func (h *ProfilesHandler) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/profiles/", authMiddleware(http.HandlerFunc(h.handleProfileRoutes)))
 }
 
-// handleFragmentProfileRoutes handles routes like /api/horizon/fragments/{id}/profile
-func (h *ProfilesHandler) handleFragmentProfileRoutes(w http.ResponseWriter, r *http.Request) {
-	// Extract fragment ID and sub-path
-	path := strings.TrimPrefix(r.URL.Path, "/api/horizon/fragments/")
-	parts := strings.SplitN(path, "/", 2)
-	
-	if len(parts) < 2 || parts[1] != "profile" {
-		// Not a profile route, pass through
-		http.NotFound(w, r)
-		return
-	}
-
-	fragmentID := parts[0]
-	if fragmentID == "" {
-		http.Error(w, "fragment ID is required", http.StatusBadRequest)
-		return
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		h.getProfileByFragmentID(w, r, fragmentID)
-	case http.MethodPost:
-		h.refreshProfile(w, r, fragmentID)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
 // handleProfileRoutes handles routes like /api/horizon/profiles/{id}
 func (h *ProfilesHandler) handleProfileRoutes(w http.ResponseWriter, r *http.Request) {
 	profileID := strings.TrimPrefix(r.URL.Path, "/api/horizon/profiles/")

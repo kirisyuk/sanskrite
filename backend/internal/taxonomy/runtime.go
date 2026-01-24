@@ -103,6 +103,7 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"COMPETES_WITH":   {},
 	"INFLUENCES":      {},
 	"DEPENDS_ON":      {},
+	"AFFECTS":         {},
 	"TRANSFORMS_INTO": {},
 	"EXTRACTS_FROM":   {}, // FACILITY → DEPOSIT
 	// Market participation
@@ -126,6 +127,14 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"AUDITED_BY":  {},
 	"RELATIVE_OF": {},
 	"RELATED_TO":  {},
+	// Domain contracts
+	"FOCUSES_ON":     {},
+	"INVOLVES_ACTOR": {},
+	"IN_GEO_SCOPE":   {},
+	"ABOUT":          {},
+	"RELATED_DOMAIN": {},
+	"BROADENS_TO":    {},
+	"NARROWS_TO":     {},
 }
 
 func isBuiltInAllowedRelationType(s string) bool {

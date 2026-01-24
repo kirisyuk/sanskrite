@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -273,23 +274,73 @@ func ValidateCanonicalPath(path string) error {
 
 var domainContractTypes = map[string]struct{}{
 	// Supply chain & industry mapping
-	"supply-chain": {},
+	"supply-chain":    {},
+	"value-chain":     {},
+	"logistics-flow":  {},
+	"trade-flow":      {},
+	"sourcing-map":    {},
+	"procurement-map": {},
+
 	// Risk / geopolitics
 	"risk-assessment":     {},
 	"geopolitical-risk":   {},
 	"bilateral-relations": {},
-	// Markets / opportunity
-	"market-opportunity":      {},
-	"competitive-landscape":   {},
+	"sanctions-exposure":  {},
+	"conflict-dynamics":   {},
+
+	// Markets / opportunity / competitive
+	"market-opportunity":    {},
+	"competitive-landscape": {},
+	"market-entry":          {},
+	"market-sizing":         {},
+	"demand-forecast":       {},
+	"pricing-dynamics":      {},
+
+	// Investment / finance
+	"investment-thesis":  {},
+	"funding-landscape":  {},
+	"exit-strategy":      {},
+	"valuation-drivers":  {},
+	"portfolio-exposure": {},
+
+	// Technology / innovation
+	"technology-landscape": {},
+	"innovation-map":       {},
+	"patent-landscape":     {},
+	"rd-landscape":         {},
+	"adoption-curve":       {},
+	"disruption-analysis":  {},
+
+	// Ecosystem / stakeholder / network
+	"ecosystem-mapping":     {},
+	"stakeholder-mapping":   {},
+	"partnership-landscape": {},
+	"influence-network":     {},
+	"power-dynamics":        {},
+
+	// Policy / regulation / compliance
 	"regulatory-impact":       {},
-	"investment-thesis":       {},
-	"technology-landscape":    {},
-	"ecosystem-mapping":       {},
-	"scenario-analysis":       {},
-	"stakeholder-mapping":     {},
-	"policy-and-regulation":   {}, // alias-ish; keep for robustness
-	"macro-trends":            {},
+	"policy-and-regulation":   {},
+	"compliance-landscape":    {},
 	"security-and-compliance": {},
+	"licensing-requirements":  {},
+	"esg-landscape":           {},
+
+	// Scenarios / trends / forecasting
+	"scenario-analysis": {},
+	"macro-trends":      {},
+	"megatrends":        {},
+	"future-outlook":    {},
+
+	// Sector / industry specific
+	"sector-overview":    {},
+	"industry-structure": {},
+	"vertical-deep-dive": {},
+
+	// Catch-all: /domain/v1/other/{custom-slug}
+	// When the user's intent doesn't fit any predefined contract type,
+	// the LLM can use "other" and provide a descriptive slug.
+	"other": {},
 }
 
 var domainFacetKeys = map[string]struct{}{
@@ -311,6 +362,7 @@ var domainFacetKeys = map[string]struct{}{
 func validateDomainCanonicalPathParts(parts []string, originalPath string) error {
 	// parts already trimmed/split from ValidateCanonicalPath
 	// Must be: ["domain","v1",contractType,(k,v)*]
+	// Special case: ["domain","v1","other",{custom-slug}] — allows any slug after "other"
 	if len(parts) < 3 {
 		return fmt.Errorf("domain canonical path must have at least 3 segments: /domain/v1/{contractType}: %s", originalPath)
 	}
@@ -324,6 +376,46 @@ func validateDomainCanonicalPathParts(parts []string, originalPath string) error
 	if _, ok := domainContractTypes[ct]; !ok {
 		return fmt.Errorf("domain canonical path has invalid contractType %q (allowlist): %s", parts[2], originalPath)
 	}
+
+	// Special handling for "other" contract type:
+	// Format: /domain/v1/other/{custom-slug}[/{facetKey}/{facetValue}]*
+	// The custom-slug is required (must be a valid slug: lowercase, hyphens allowed, no spaces).
+	if ct == "other" {
+		if len(parts) < 4 {
+			return fmt.Errorf("domain canonical path with contractType 'other' must have a custom slug: /domain/v1/other/{custom-slug}: %s", originalPath)
+		}
+		customSlug := strings.ToLower(strings.TrimSpace(parts[3]))
+		if customSlug == "" {
+			return fmt.Errorf("domain canonical path with contractType 'other' has empty custom slug: %s", originalPath)
+		}
+		// Validate custom slug format: only lowercase alphanumeric and hyphens, no leading/trailing hyphens.
+		if !isValidDomainOtherSlug(customSlug) {
+			return fmt.Errorf("domain canonical path 'other' has invalid custom slug %q (must be lowercase alphanumeric with hyphens): %s", customSlug, originalPath)
+		}
+		// After custom slug, optional facets are allowed (standard key/value pairs).
+		rest := parts[4:]
+		if len(rest)%2 != 0 {
+			return fmt.Errorf("domain canonical path facets must be key/value pairs (even segments after custom slug): %s", originalPath)
+		}
+		for i := 0; i < len(rest); i += 2 {
+			k := strings.ToLower(strings.TrimSpace(rest[i]))
+			v := strings.ToLower(strings.TrimSpace(rest[i+1]))
+			if k == "" || v == "" {
+				return fmt.Errorf("domain canonical path has empty facet key/value near %q/%q: %s", rest[i], rest[i+1], originalPath)
+			}
+			if _, ok := domainFacetKeys[k]; !ok {
+				return fmt.Errorf("domain canonical path has invalid facet key %q (allowlist): %s", rest[i], originalPath)
+			}
+			if k == "geo" {
+				if !isValidDomainGeoToken(v) {
+					return fmt.Errorf("domain canonical path has invalid geo facet %q: %s", rest[i+1], originalPath)
+				}
+			}
+		}
+		return nil
+	}
+
+	// Standard contract types: facets are key/value pairs.
 	rest := parts[3:]
 	if len(rest)%2 != 0 {
 		return fmt.Errorf("domain canonical path facets must be key/value pairs (even segments after contractType): %s", originalPath)
@@ -344,6 +436,179 @@ func validateDomainCanonicalPathParts(parts []string, originalPath string) error
 		}
 	}
 	return nil
+}
+
+// isValidDomainOtherSlug validates custom slugs for /domain/v1/other/{slug}.
+// Rules: lowercase alphanumeric and hyphens; no leading/trailing/consecutive hyphens; min 2 chars.
+func isValidDomainOtherSlug(slug string) bool {
+	if len(slug) < 2 {
+		return false
+	}
+	if strings.HasPrefix(slug, "-") || strings.HasSuffix(slug, "-") {
+		return false
+	}
+	if strings.Contains(slug, "--") {
+		return false
+	}
+	for _, r := range slug {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// NormalizeDomainCanonicalPath canonicalizes the ordering of facets for /domain/v1/... paths.
+//
+// Goal: deterministic canonical paths for deduplication and stable identity.
+// Rules:
+// - The path MUST already be a valid canonical path (ValidateCanonicalPath).
+// - Facet key/value pairs are normalized to lowercase.
+// - Facets are re-ordered deterministically by (key, value).
+// - Special case: bilateral-relations domains normalize geo facets into ONE composite token: geo/{sorted-joined}.
+// - Special case: "other" contract type has custom slug at index 3, then optional facets.
+func NormalizeDomainCanonicalPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("domain path is empty")
+	}
+	if !strings.HasPrefix(path, "/domain/") {
+		return "", fmt.Errorf("not a domain canonical path: %s", path)
+	}
+	if err := ValidateCanonicalPath(path); err != nil {
+		return "", err
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	// ["domain","v1",contractType,(k,v)*] OR ["domain","v1","other",customSlug,(k,v)*]
+	if len(parts) < 3 {
+		return "", fmt.Errorf("domain canonical path must have at least 3 segments: %s", path)
+	}
+	contractType := strings.ToLower(strings.TrimSpace(parts[2]))
+
+	type kv struct {
+		k string
+		v string
+	}
+
+	// Special handling for "other" contract type:
+	// Format: /domain/v1/other/{custom-slug}[/{facetKey}/{facetValue}]*
+	if contractType == "other" {
+		if len(parts) < 4 {
+			return "", fmt.Errorf("domain 'other' must have custom slug: %s", path)
+		}
+		customSlug := strings.ToLower(strings.TrimSpace(parts[3]))
+		rest := parts[4:]
+		if len(rest)%2 != 0 {
+			return "", fmt.Errorf("domain canonical path facets must be key/value pairs: %s", path)
+		}
+		pairs := make([]kv, 0, len(rest)/2)
+		for i := 0; i < len(rest); i += 2 {
+			k := strings.ToLower(strings.TrimSpace(rest[i]))
+			v := strings.ToLower(strings.TrimSpace(rest[i+1]))
+			if k == "" || v == "" {
+				continue
+			}
+			pairs = append(pairs, kv{k: k, v: v})
+		}
+		// Sort facets deterministically.
+		sort.SliceStable(pairs, func(i, j int) bool {
+			if pairs[i].k != pairs[j].k {
+				return pairs[i].k < pairs[j].k
+			}
+			return pairs[i].v < pairs[j].v
+		})
+		var out strings.Builder
+		out.WriteString("/domain/v1/other/")
+		out.WriteString(customSlug)
+		for _, p := range pairs {
+			out.WriteString("/")
+			out.WriteString(p.k)
+			out.WriteString("/")
+			out.WriteString(p.v)
+		}
+		return out.String(), nil
+	}
+
+	// Standard contract types.
+	rest := parts[3:]
+	if len(rest)%2 != 0 {
+		return "", fmt.Errorf("domain canonical path facets must be key/value pairs: %s", path)
+	}
+	pairs := make([]kv, 0, len(rest)/2)
+	for i := 0; i < len(rest); i += 2 {
+		k := strings.ToLower(strings.TrimSpace(rest[i]))
+		v := strings.ToLower(strings.TrimSpace(rest[i+1]))
+		if k == "" || v == "" {
+			continue
+		}
+		pairs = append(pairs, kv{k: k, v: v})
+	}
+
+	// Contract-specific normalization.
+	if contractType == "bilateral-relations" {
+		geoSet := map[string]struct{}{}
+		others := make([]kv, 0, len(pairs))
+		for _, p := range pairs {
+			if p.k == "geo" {
+				// Accept both repeated geo tokens and composite geo tokens (ae-sa).
+				// Expand composite into individual ISO2s for deterministic ordering.
+				if strings.Contains(p.v, "-") {
+					parts := strings.Split(p.v, "-")
+					for _, part := range parts {
+						part = strings.ToLower(strings.TrimSpace(part))
+						if reCountryAlpha2.MatchString(part) {
+							geoSet[part] = struct{}{}
+						}
+					}
+				} else if reCountryAlpha2.MatchString(p.v) {
+					geoSet[p.v] = struct{}{}
+				} else if isCompositeGeo(p.v) {
+					// Fallback for composites that include regional tokens; keep as-is.
+					geoSet[p.v] = struct{}{}
+				}
+				continue
+			}
+			others = append(others, p)
+		}
+		// Sort geo values and join into one composite token.
+		geos := make([]string, 0, len(geoSet))
+		for g := range geoSet {
+			geos = append(geos, g)
+		}
+		sort.Strings(geos)
+		compositeGeo := strings.Join(geos, "-")
+
+		sort.SliceStable(others, func(i, j int) bool {
+			if others[i].k != others[j].k {
+				return others[i].k < others[j].k
+			}
+			return others[i].v < others[j].v
+		})
+		pairs = pairs[:0]
+		if compositeGeo != "" {
+			pairs = append(pairs, kv{k: "geo", v: compositeGeo})
+		}
+		pairs = append(pairs, others...)
+	} else {
+		// Default deterministic ordering.
+		sort.SliceStable(pairs, func(i, j int) bool {
+			if pairs[i].k != pairs[j].k {
+				return pairs[i].k < pairs[j].k
+			}
+			return pairs[i].v < pairs[j].v
+		})
+	}
+
+	var out strings.Builder
+	out.WriteString("/domain/v1/")
+	out.WriteString(contractType)
+	for _, p := range pairs {
+		out.WriteString("/")
+		out.WriteString(p.k)
+		out.WriteString("/")
+		out.WriteString(p.v)
+	}
+	return out.String(), nil
 }
 
 func isValidDomainGeoToken(geo string) bool {
@@ -603,7 +868,7 @@ func ProgramCanonicalPath(jurisdiction string, programLabel string) string {
 
 // MarketCanonicalPath returns a Horizon-canonical market path.
 // Canonical format: /market/{geo}/{marketSlug}
-// - geo: ISO3166-1 alpha2 lowercase (2 chars) or "global"
+// - geo: ISO3166-1 alpha2 lowercase (2 chars), composite ISO2, regional token, or "global"/"int"
 // - marketSlug: lowercase slug derived from market label
 //
 // NOTE:
@@ -614,7 +879,7 @@ func MarketCanonicalPath(geo string, marketLabel string) string {
 	if g == "" {
 		g = "global"
 	}
-	if g != "global" && !reCountryAlpha2.MatchString(g) {
+	if g != "global" && g != "int" && !reCountryAlpha2.MatchString(g) && !IsRegionalGeoToken(g) && !isCompositeGeo(g) {
 		g = "global"
 	}
 	mSlug := Slugify(marketLabel)

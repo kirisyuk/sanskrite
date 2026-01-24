@@ -770,10 +770,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }>({ hoveredGroupId: null, hoveredNodeId: null, hoveredEdgeId: null });
 
   const scheduleHoverCommit = React.useCallback(() => {
-    if (hoverRafRef.current !== null) return;
+    // Always read the latest value at execution time, not at scheduling time.
+    // If RAF is already scheduled, cancel it and schedule a new one to ensure we get the latest state.
+    if (hoverRafRef.current !== null) {
+      window.cancelAnimationFrame(hoverRafRef.current);
+    }
     hoverRafRef.current = window.requestAnimationFrame(() => {
       hoverRafRef.current = null;
-      const next = pendingHoverRef.current;
+      // Read the latest value at execution time to avoid stale state
+      const next = { ...pendingHoverRef.current };
       const batched = (ReactDOM as any)?.unstable_batchedUpdates;
       if (typeof batched === 'function') {
         batched(() => {
@@ -1875,6 +1880,51 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setHoveredNodeId(null);
     setHoveredEdgeId(null);
   }, [perfMode]);
+
+  // Sync hover state with actual nodes/edges to prevent "sticky" hover when nodes are removed/changed
+  React.useEffect(() => {
+    if (perfMode) return;
+    const currentHoveredNodeId = hoveredNodeId;
+    const currentHoveredGroupId = hoveredGroupId;
+    const currentHoveredEdgeId = hoveredEdgeId;
+    
+    let needsUpdate = false;
+    const nextHover: typeof pendingHoverRef.current = { ...pendingHoverRef.current };
+    
+    // Check if hovered node still exists
+    if (currentHoveredNodeId) {
+      const nodeExists = nodes.some((n) => String(n.id || '').trim() === currentHoveredNodeId);
+      if (!nodeExists) {
+        nextHover.hoveredNodeId = null;
+        needsUpdate = true;
+      }
+    }
+    
+    // Check if hovered group still exists
+    if (currentHoveredGroupId) {
+      const groupExists = nodes.some((n) => String(n.id || '').trim() === currentHoveredGroupId);
+      if (!groupExists) {
+        nextHover.hoveredGroupId = null;
+        needsUpdate = true;
+      }
+    }
+    
+    // Check if hovered edge still exists
+    if (currentHoveredEdgeId) {
+      const edgeExists = edges.some((e) => String(e.id || '').trim() === currentHoveredEdgeId);
+      if (!edgeExists) {
+        nextHover.hoveredEdgeId = null;
+        needsUpdate = true;
+      }
+    }
+    
+    if (needsUpdate) {
+      pendingHoverRef.current = nextHover;
+      setHoveredGroupId(nextHover.hoveredGroupId);
+      setHoveredNodeId(nextHover.hoveredNodeId);
+      setHoveredEdgeId(nextHover.hoveredEdgeId);
+    }
+  }, [nodes, edges, hoveredNodeId, hoveredGroupId, hoveredEdgeId, perfMode]);
 
   // Set CSS perf-mode attribute for disabling transitions (better paint performance on large graphs)
   React.useEffect(() => {
@@ -3954,13 +4004,22 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     }
 
+    const resolveGroupPort = (gid: string, edgeType: string) => {
+      const portMap = portHandlesByGroupId.get(gid);
+      if (!portMap || portMap.size === 0) return null;
+      if (portMap.has(edgeType)) return portMap.get(edgeType) || null;
+      if (portMap.has('OTHER')) return portMap.get('OTHER') || null;
+      const first = portMap.values().next();
+      return first && !first.done ? first.value : null;
+    };
+
     // Emit group-proxy edges as levelsAgg edges (but they won't be suppressed on hover; originals never reveal).
     for (const b of groupProxyBuckets.values()) {
       if (b.kind === 'node') {
         const groupId = b.groupId;
         const outsideId = b.outsideId;
         const edgeType = b.edgeType;
-        const port = portHandlesByGroupId.get(groupId)?.get(edgeType) || { sourceHandleId: `edge:${edgeType}:source`, targetHandleId: `edge:${edgeType}:target` };
+        const port = resolveGroupPort(groupId, edgeType) || { sourceHandleId: `edge:${edgeType}:source`, targetHandleId: `edge:${edgeType}:target` };
         const baseStyle = getEdgeStyle(edgeType, undefined);
         const stroke = getEdgeStroke(baseStyle);
         const id = `levels:gproxy:${groupId}:node:${outsideId}:edge:${edgeType}`;
@@ -4001,8 +4060,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const a = b.groupA;
         const c = b.groupB;
         const edgeType = b.edgeType;
-        const portA = portHandlesByGroupId.get(a)?.get(edgeType) || { sourceHandleId: `edge:${edgeType}:source`, targetHandleId: `edge:${edgeType}:target` };
-        const portB = portHandlesByGroupId.get(c)?.get(edgeType) || { sourceHandleId: `edge:${edgeType}:source`, targetHandleId: `edge:${edgeType}:target` };
+        const portA = resolveGroupPort(a, edgeType) || { sourceHandleId: `edge:${edgeType}:source`, targetHandleId: `edge:${edgeType}:target` };
+        const portB = resolveGroupPort(c, edgeType) || { sourceHandleId: `edge:${edgeType}:source`, targetHandleId: `edge:${edgeType}:target` };
         const baseStyle = getEdgeStyle(edgeType, undefined);
         const stroke = getEdgeStroke(baseStyle);
         const id = `levels:gproxy:${a}<->${c}:edge:${edgeType}`;
@@ -4646,6 +4705,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               amplification: item.amplification,
               latencyHours: item.latencyHours,
               direction: item.direction,
+              // Endpoint context (used for UI heuristics, e.g. dimming DOMAIN edges by default).
+              sourceType: srcType,
+              targetType: dstType,
+              sourceCanonicalPath: srcPath,
+              targetCanonicalPath: dstPath,
               baseStyle,
             },
           });
@@ -7673,6 +7737,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   // Note: use openEdgeExplainPopoverRef to avoid dependency on callback identity.
   const baseVisibleEdges = React.useMemo(() => {
     const DIM_OPACITY = 0.22;
+    const DOMAIN_DIM_OPACITY = 0.08;
     if (perfMode) return visibleEdges;
     // Capture ref value once for this computation (stable across renders)
     const onExplain = openEdgeExplainPopoverRef.current;
@@ -7680,12 +7745,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
       const isArcTop = e.type === 'arcTop';
       const d: any = (e as any)?.data || {};
+      const srcType = String(d?.sourceType || '').toUpperCase().trim();
+      const dstType = String(d?.targetType || '').toUpperCase().trim();
+      const srcPath = String(d?.sourceCanonicalPath || '').trim();
+      const dstPath = String(d?.targetCanonicalPath || '').trim();
+      const isDomainIncident =
+        srcType === 'DOMAIN' ||
+        dstType === 'DOMAIN' ||
+        srcPath.startsWith('/domain/') ||
+        dstPath.startsWith('/domain/');
+      const opacity = isDomainIncident ? DOMAIN_DIM_OPACITY : DIM_OPACITY;
       return {
         ...e,
         type: isArcTop ? 'hznArcTop' : 'hzn',
         data: { ...d, onExplain, showLabel: false, onLabelHoverEnter: handleEdgeLabelMouseEnter, onLabelHoverLeave: handleEdgeLabelMouseLeave },
         label: undefined,
-        style: { ...baseStyle, opacity: DIM_OPACITY },
+        // Default edge rendering should be quiet; DOMAIN edges are even quieter unless user hovers/selects.
+        style: isDomainIncident
+          ? { ...baseStyle, opacity, strokeOpacity: opacity }
+          : { ...baseStyle, opacity },
       };
     });
   }, [visibleEdges, perfMode, handleEdgeLabelMouseEnter, handleEdgeLabelMouseLeave]);
@@ -10427,6 +10505,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return;
     }
     if (import.meta.env.DEV) console.log('[Cockpit] Pane clicked - clearing selection');
+    // Clear hover states to prevent "sticky" hover behavior
+    pendingHoverRef.current = { hoveredGroupId: null, hoveredNodeId: null, hoveredEdgeId: null };
+    setHoveredGroupId(null);
+    setHoveredNodeId(null);
+    setHoveredEdgeId(null);
     // Risk Shield: pane click closes it.
     if (riskShieldActiveNodeId) setRiskShieldActiveNodeId(null);
     if (onNodeSelect) {
@@ -11286,12 +11369,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     (_: any, node: Node<HorizonNodeData>) => {
       if (perfMode) return;
       const d: any = node?.data;
+      const nodeId = String(node?.id || '').trim();
+      if (!nodeId) return;
+      
       if (d?.isGroup) {
-        if (pendingHoverRef.current.hoveredGroupId === node.id) {
+        // Only clear if this is still the hovered group (avoid clearing if mouse moved to another group)
+        if (pendingHoverRef.current.hoveredGroupId === nodeId) {
           pendingHoverRef.current.hoveredGroupId = null;
         }
       } else {
-        if (pendingHoverRef.current.hoveredNodeId === node.id) {
+        // Only clear if this is still the hovered node (avoid clearing if mouse moved to another node)
+        if (pendingHoverRef.current.hoveredNodeId === nodeId) {
           pendingHoverRef.current.hoveredNodeId = null;
         }
       }

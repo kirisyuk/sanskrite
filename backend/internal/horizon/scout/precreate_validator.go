@@ -228,6 +228,20 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("GEO_REGION canonicalPath %q should use /loc/ prefix - will be fixed post-factum", fragment.CanonicalPath))
 		} else {
+			// Best-effort: strictify any /loc path (e.g., /loc/id/na -> /loc/id/na/na) before validation.
+			if norm := normalizeGeoPathToStrict(fragment.CanonicalPath); norm != "" && norm != fragment.CanonicalPath {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("non-canonical GEO path %q → %q", fragment.CanonicalPath, norm))
+				fragment.CanonicalPath = norm
+				if v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil {
+					existing, err := v.geoBuilder.fragmentsRepo.GetByCanonicalPath(context.Background(), norm)
+					if err == nil && existing != nil && existing.ID != fragment.ID {
+						result.ReplacementFrag = existing
+						result.Warnings = append(result.Warnings,
+							fmt.Sprintf("found existing GEO_REGION %q (%s) - using instead", existing.CanonicalPath, existing.ID))
+					}
+				}
+			}
 			// Enforce strict 3-position geo model: /loc/{country}/{admin1}/{city}
 			parts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
 			if len(parts) == 2 && parts[0] == "loc" {
@@ -393,6 +407,66 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	}
 
 	// ==========================================================================
+	// Policy 7.5: Market deduplication (tag-based, auto when overlap >= 5)
+	// ==========================================================================
+	if fragment.Type == models.FragmentTypeMarket && v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil {
+		fragment.Tags = taxonomy.NormalizeMarketTags(fragment.Tags)
+		if len(fragment.Tags) >= 5 {
+			geo, sector := parseMarketGeoSectorForDedup(fragment.CanonicalPath)
+			if geo != "" && sector != "" {
+				searchTokens := taxonomy.MarketTagSearchTokens(fragment.Tags, 10)
+				if len(searchTokens) > 0 {
+					candidates, err := v.geoBuilder.fragmentsRepo.FindByTags(ctx, searchTokens, 50)
+					if err == nil && len(candidates) > 0 {
+						fragTagSet := map[string]struct{}{}
+						for _, t := range fragment.Tags {
+							fragTagSet[t] = struct{}{}
+						}
+						var best *models.HorizonFragment
+						bestOverlap := 0
+						for _, cand := range candidates {
+							if cand == nil || cand.ID == "" || cand.ID == fragment.ID {
+								continue
+							}
+							if cand.Type != models.FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(cand.CanonicalPath), "/market/") {
+								continue
+							}
+							cGeo, cSector := parseMarketGeoSectorForDedup(cand.CanonicalPath)
+							if cGeo == "" || cSector == "" {
+								continue
+							}
+							if cGeo != geo || cSector != sector {
+								continue
+							}
+							candTags := taxonomy.NormalizeMarketTags(cand.Tags)
+							if len(candTags) == 0 {
+								continue
+							}
+							overlap := 0
+							for _, t := range candTags {
+								if _, ok := fragTagSet[t]; ok {
+									overlap++
+								}
+							}
+							if overlap >= 5 && overlap > bestOverlap {
+								best = cand
+								bestOverlap = overlap
+							}
+						}
+						if best != nil && strings.TrimSpace(best.CanonicalPath) != "" {
+							fragment.CanonicalPath = strings.TrimSpace(best.CanonicalPath)
+							result.ReplacementFrag = best
+							result.Warnings = append(result.Warnings,
+								fmt.Sprintf("found existing market %q (%s) - using instead of creating new (tag overlap=%d)",
+									best.CanonicalPath, best.ID, bestOverlap))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// ==========================================================================
 	// Policy 8: Required fields validation
 	// ==========================================================================
 	if strings.TrimSpace(fragment.CanonicalPath) == "" {
@@ -425,9 +499,32 @@ func (v *PreCreateValidator) expectedPathPrefix(fragType models.FragmentType) st
 		return "/person/"
 	case models.FragmentTypeMediaChannel:
 		return "/media/"
+	case models.FragmentTypeMarket:
+		return "/market/"
 	default:
 		return ""
 	}
+}
+
+func parseMarketGeoSectorForDedup(canonicalPath string) (string, string) {
+	cp := strings.TrimSpace(canonicalPath)
+	if !strings.HasPrefix(cp, "/market/") {
+		return "", ""
+	}
+	if parts, err := taxonomy.ParseCanonicalPathParts(cp); err == nil && parts != nil && parts.Market != nil {
+		geo := strings.ToLower(strings.TrimSpace(parts.Market.Geo))
+		sector := strings.ToLower(strings.TrimSpace(parts.Market.Domain))
+		if geo != "" && sector != "" {
+			return geo, sector
+		}
+	}
+	trimmed := strings.Trim(cp, "/")
+	parts := strings.Split(trimmed, "/")
+	// /market/{geo}/{domain}/{vertical}
+	if len(parts) >= 4 && parts[0] == "market" {
+		return strings.ToLower(strings.TrimSpace(parts[1])), strings.ToLower(strings.TrimSpace(parts[2]))
+	}
+	return "", ""
 }
 
 // =============================================================================

@@ -131,18 +131,20 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 	canonicalValidationBlock := fmt.Sprintf(`  MANDATORY - Canonical path validation (for fragment AND relations):
     - For the main fragment and EACH relation targetCanonicalPath:
       - If path is /org/... ensure it is %s; otherwise add a question:
-        - "Confirm official legal name, jurisdiction (ISO2), and canonical org path for <entity>. REQUIRED FORMAT: %s where iso2 is ISO3166-1 alpha2 lowercase; slug is hyphenated base name; legal_form is a SUFFIX token in {%s} (e.g., /org/us/tesla-inc). Do NOT rewrite names as 'JSC X' — keep official ordering from sources; legal_form belongs at the end of canonicalPath and in canonicalParts.Org.LegalForm."
+        - "Confirm official legal name, jurisdiction (ISO2 or regional token), and canonical org path for <entity>. REQUIRED FORMAT: %s where iso2 is ISO3166-1 alpha2 lowercase; regional tokens (e.g., gcc, eu) go in the geo slot (2nd segment); slug is hyphenated base name; legal_form is a SUFFIX token in {%s} (e.g., /org/us/tesla-inc). Do NOT rewrite names as 'JSC X' — keep official ordering from sources; legal_form belongs at the end of canonicalPath and in canonicalParts.Org.LegalForm."
       - If path is /gov/... ensure it is %s; otherwise add a question:
-        - "Which country/jurisdiction does this government body belong to? REQUIRED FORMAT: %s with iso2 ISO3166-1 alpha2 lowercase, slug hyphenated English name. Example: %s."
+        - "Which country/jurisdiction does this government body belong to? REQUIRED FORMAT: %s with iso2 ISO3166-1 alpha2 lowercase OR regional token (gcc, eu, asean); regional tokens go in the geo slot (2nd segment). Example: %s."
       - GOV NAMING (CRITICAL for /gov/...):
         - Ensure the government body has BOTH:
-          - labels.en: readable English name (translation if official English exists; otherwise careful transliteration)
+          - labels.en: readable English name (translation if official English exists; otherwise careful transliteration). MUST be Latin-script only (broad Latin is OK).
           - identifiers.legalName: official name as in primary source/registry (often native script)
         - If native language/script is known, also ensure labels.<iso639> is present (e.g., labels.th, labels.ms, labels.ar).
       - If path is /product/... ensure it is either %s or %s; otherwise add a question:
         - "Resolve canonical product taxonomy for <product>. REQUIRED FORMAT: %s (or %s if unknown). category∈{%s}; type∈{%s}; stage∈{%s}. Example: %s."
       - If path is /loc/... ensure it is %s; otherwise add a question:
         - "Resolve canonical GEO path for <location>. REQUIRED FORMAT: %s where cc is ISO3166-1 alpha2 lowercase (or allowed regional token: asean, brics, gcc, eu, eaeu), admin1 is GeoNames admin code or 'na', city is hyphenated English name. Example: %s."
+      - If path is /program/... ensure it is /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known:
+        - "Confirm program jurisdiction and canonicalPath. REQUIRED FORMAT: /program/{jurisdiction}/{slug} where jurisdiction is ISO2 or regional token (gcc, eu, asean) and always goes in the 2nd segment."
       - If path is missing segments (e.g., /org/<slug> or /product/<slug> with no taxonomy), treat it as non-canonical and add the appropriate question.
 `,
 		canonicalRules.Org.Format,
@@ -217,13 +219,14 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      Search for annual reports, Wikipedia infobox, LinkedIn company page, or news about company size."
 	  
 	  - If this looks like a government body (ministry/agency/regulator) but canonicalPath is not /gov/{iso2}/{slug}, add a question:
-	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2}/{slug}. If unknown, /gov/na/{slug}."
+	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2|regional}/{slug} where regional tokens (gcc, eu, asean) go in the geo slot (2nd segment). If unknown, /gov/na/{slug}."
 	  - If canonicalPath is legacy (/org/{slug}) or uses /org/na/{slug}, add a question:
-	    - "What is the country of origin / primary jurisdiction (ISO2) for <org>? Use the entity's legalName/shortName/label to disambiguate and update canonicalPath to /org/{iso2}/{slug}-{legal_form}. If truly unknown, keep /org/na/... but state uncertainty."
+	    - "What is the country of origin / primary jurisdiction (ISO2 or regional token) for <org>? Use the entity's legalName/shortName/label to disambiguate and update canonicalPath to /org/{iso2|regional}/{slug}-{legal_form}. If truly unknown, keep /org/na/... but state uncertainty."
 	
 %s
   MANDATORY - Community completeness (for COMMUNITY or /community/*):
     - If the entity is a COMMUNITY (fragment.type == COMMUNITY OR canonicalPath starts with /community/):
+      - Community geo MUST be in the 2nd segment: /community/{geo}/{type}/{slug} where geo is ISO2 or regional token (gcc, eu, asean). Never put geo at the end.
       - If communityType is empty/missing, add:
         - "What type of community is <entity>? Return one of trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe."
       - If communityPlatforms is empty AND there are no OPERATES_VIA edges, add:
@@ -312,12 +315,12 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - Your goal is to ensure the market is CONNECTED into a regional/global hierarchy (skeleton), not just populated with players.
 	    - If parentEdges is empty AND expectedParentPath is present:
 	      - Add a missingInfo item to find/confirm the correct parent market and create HAS_SUBMARKET edge parent -> this.
-	      - Prefer segment-first paths: /market/{geo}/{domain}/{vertical} where possible; avoid creating new legacy /market/{geo}/{slug} if a v2 path exists.
+	      - Always use segment-first paths: /market/{geo}/{domain}/{vertical}. Do NOT emit legacy for NEW markets.
 	    - If childEdges is empty:
 	      - Add a missingInfo item: "What are the key immediate sub-markets of <market> in this geography? Return 5-10 /market/... canonical paths and HAS_SUBMARKET edges (broader -> narrower)."
 	    - If nearbyPaths suggests many related markets exist but this node has no parent/children, add a missingInfo item:
 	      - "How should <market> be placed within the existing market skeleton for <geo>? Use nearbyPaths as candidates; add HAS_SUBMARKET edges."
-	    - If the market path appears legacy (/market/{geo}/{slug}) and nearbyPaths includes segment-first v2 nodes, add a missingInfo item:
+	    - If the market path appears legacy (/market/{geo}/{slug}), add a missingInfo item:
 	      - "Map legacy market <market> to segment-first /market/{geo}/{domain}/{vertical} (or propose segment dictionary synonyms/parents) and create bridging edges."
 	  - If GRAPH SKELETON CONTEXT.kind == "gov_skeleton":
 	    - Your goal is to ensure the government body is CONNECTED into an administrative hierarchy (skeleton).

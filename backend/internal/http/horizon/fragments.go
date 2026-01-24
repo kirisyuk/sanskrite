@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -97,6 +98,61 @@ func (h *HorizonHandlers) GetFragment(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(fragment)
+}
+
+// DeleteFragment deletes a HorizonFragment by ID (best-effort cleanup of related edges/profiles).
+func (h *HorizonHandlers) DeleteFragment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract fragment ID from path: /api/horizon/fragments/{id}
+	fragmentID := extractIDFromPath(r, "/api/horizon/fragments/")
+	if fragmentID == "" {
+		http.Error(w, "Fragment ID required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	fragment, err := h.service.Fragments().Get(ctx, fragmentID)
+	if err != nil || fragment == nil {
+		http.Error(w, "Fragment not found", http.StatusNotFound)
+		return
+	}
+
+	// Access control: allow tenant owner, otherwise require admin (HITL policy).
+	if strings.TrimSpace(fragment.TenantID) != "" && strings.TrimSpace(fragment.TenantID) != strings.TrimSpace(authInfo.TenantID) {
+		p := &horizonpolicy.HumanInTheLoopPolicy{UsersRepo: h.usersRepo}
+		if !p.IsAdmin(ctx, authInfo.TenantID, authInfo.UID) {
+			http.Error(w, "Access denied", http.StatusForbidden)
+			return
+		}
+	}
+
+	// Best-effort: delete fragment profiles (if configured).
+	if h.profilesHandler != nil && h.profilesHandler.profilesRepo != nil {
+		if err := h.profilesHandler.profilesRepo.DeleteByFragmentID(ctx, fragmentID); err != nil {
+			log.Printf("[DeleteFragment] WARNING: failed to delete profiles fragmentId=%s err=%v", fragmentID, err)
+		}
+	}
+
+	if err := h.service.Fragments().Delete(ctx, fragmentID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"fragmentId": fragmentID,
+	})
 }
 
 // GetFragmentByPath получает HorizonFragment по canonicalPath

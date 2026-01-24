@@ -251,9 +251,22 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     const prefetchScope = selectedEntities.map((e) => e.canonicalPath).filter(Boolean);
     if (!q && prefetchScope.length === 0) return;
 
+    const buildPrefetchLensName = () => {
+      if (q) return '';
+      const names = selectedEntities
+        .map((e) => String(e?.name || '').trim())
+        .filter(Boolean);
+      if (names.length === 0) return '';
+      const first = names[0];
+      const second = names.length > 1 ? names[1] : '';
+      const suffix = names.length > 2 ? ` (+${names.length - 2})` : '';
+      return second ? `${first} · ${second}${suffix}` : `${first}${suffix}`;
+    };
+
     const request: AssembleLensRequest = {
       projectId,
       query: q,
+      name: buildPrefetchLensName() || undefined,
       prefetchScope,
       filters,
     };

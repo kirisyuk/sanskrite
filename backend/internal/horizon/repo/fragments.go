@@ -75,6 +75,7 @@ type HorizonFragmentsRepository struct {
 	col           *firestore.CollectionRef
 	db            *firestore.Client
 	versionsRepo  *HorizonFragmentVersionsRepository // Репозиторий для версий
+	edgesRepo     *DependencyEdgesRepository
 	storage       *gcp.GCSClient
 	bucket        string
 	useGCS        bool
@@ -139,6 +140,12 @@ func (r *HorizonFragmentsRepository) WithStorage(storage *gcp.GCSClient, bucket 
 	if r.useGCS {
 		r.uploadLimiter = rate.NewLimiter(rate.Limit(10), 10)
 	}
+	return r
+}
+
+// WithEdgesRepo attaches DependencyEdgesRepository for best-effort edge cleanup on delete.
+func (r *HorizonFragmentsRepository) WithEdgesRepo(edgesRepo *DependencyEdgesRepository) *HorizonFragmentsRepository {
+	r.edgesRepo = edgesRepo
 	return r
 }
 
@@ -352,6 +359,43 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 		return nil, err
 	}
 	return &fragment, nil
+}
+
+// FindByTags returns fragments that match any of the provided tags (best-effort).
+// Note: uses array-contains-any and is capped by limit.
+func (r *HorizonFragmentsRepository) FindByTags(ctx context.Context, tags []string, limit int) ([]*models.HorizonFragment, error) {
+	if r == nil || r.col == nil {
+		return nil, ErrInvalidDocument
+	}
+	if len(tags) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	q := r.col.Where("tags", "array-contains-any", tags).Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	out := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		if doc == nil || !doc.Exists() {
+			continue
+		}
+		var f models.HorizonFragment
+		if err := doc.DataTo(&f); err != nil {
+			continue
+		}
+		if f.ID == "" {
+			f.ID = doc.Ref.ID
+		}
+		out = append(out, &f)
+	}
+	return out, nil
 }
 
 // GetMany fetches multiple fragments by IDs (best-effort).
@@ -958,6 +1002,46 @@ func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) erro
 	// Получаем фрагмент перед удалением, чтобы удалить файл из GCS
 	fragment, err := r.Get(ctx, id)
 	if err == nil && fragment != nil {
+		// Best-effort: delete dependency edges referencing this fragment.
+		if r.edgesRepo != nil {
+			tenantID := strings.TrimSpace(fragment.TenantID)
+			if tenantID == "" {
+				tenantID = "global"
+			}
+			edgesByID := map[string]struct{}{}
+			srcEdges, srcErr := r.edgesRepo.ListBySource(ctx, tenantID, fragment.ID, nil, 5000)
+			if srcErr != nil {
+				log.Printf("[HorizonFragments] WARNING: failed to list source edges for fragment %s: %v", id, srcErr)
+			} else {
+				for _, e := range srcEdges {
+					if e != nil && strings.TrimSpace(e.ID) != "" {
+						edgesByID[e.ID] = struct{}{}
+					}
+				}
+			}
+			tgtEdges, tgtErr := r.edgesRepo.ListByTarget(ctx, tenantID, fragment.ID, nil, 5000)
+			if tgtErr != nil {
+				log.Printf("[HorizonFragments] WARNING: failed to list target edges for fragment %s: %v", id, tgtErr)
+			} else {
+				for _, e := range tgtEdges {
+					if e != nil && strings.TrimSpace(e.ID) != "" {
+						edgesByID[e.ID] = struct{}{}
+					}
+				}
+			}
+			deleted := 0
+			for edgeID := range edgesByID {
+				if err := r.edgesRepo.Delete(ctx, edgeID); err != nil {
+					log.Printf("[HorizonFragments] WARNING: failed to delete edge %s for fragment %s: %v", edgeID, id, err)
+					continue
+				}
+				deleted++
+			}
+			if deleted > 0 {
+				log.Printf("[HorizonFragments] Deleted %d edges for fragment %s", deleted, id)
+			}
+		}
+
 		// Удаляем файл из GCS если настроено хранилище
 		if r.useGCS && r.storage != nil {
 			objectPath := fmt.Sprintf("%s/horizon_fragments/%s.json", fragment.TenantID, fragment.ID)

@@ -250,6 +250,23 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "HAS_SUBGROUP", Direction: "COMMUNITY → COMMUNITY", ValidSource: []string{"COMMUNITY"}, ValidTarget: []string{"COMMUNITY"}},
 				{EdgeType: "OPERATES_VIA", Direction: "COMMUNITY|ORG → MEDIA_CHANNEL", ValidSource: []string{"COMMUNITY", "ORGANIZATION"}, ValidTarget: []string{"MEDIA_CHANNEL"}},
 				{EdgeType: "AFFILIATED_WITH", Direction: "COMMUNITY|PERSON → ORGANIZATION", ValidSource: []string{"COMMUNITY", "PERSON"}, ValidTarget: []string{"ORGANIZATION"}},
+
+				// --- DOMAIN edges (knowledge contracts) ---
+				// Domain → Entity/Domain (generic “focus” link).
+				{EdgeType: "FOCUSES_ON", Direction: "DOMAIN → *", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
+				// Domain → Actor (principal entities involved in a domain).
+				{EdgeType: "INVOLVES_ACTOR", Direction: "DOMAIN → ORG|PERSON|COMMUNITY", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}},
+				// Domain → Geo scope.
+				{EdgeType: "IN_GEO_SCOPE", Direction: "DOMAIN → GEO_REGION", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"GEO_REGION"}},
+				// Domain → About (topic/subject matter).
+				{EdgeType: "ABOUT", Direction: "DOMAIN → *", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
+				// Domain → Domain (contract relationships).
+				{EdgeType: "RELATED_DOMAIN", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
+				{EdgeType: "BROADENS_TO", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
+				{EdgeType: "NARROWS_TO", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
+				{EdgeType: "AFFECTS", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
+				// DEPENDS_ON is broadly used; allow DOMAIN and existing entity usage.
+				{EdgeType: "DEPENDS_ON", Direction: "* → *", ValidSource: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
 			},
 		},
 		SymmetricEdges: []string{

@@ -13,6 +13,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -79,6 +80,127 @@ func parseInt(v interface{}, def int) int {
 		return def
 	default:
 		return def
+	}
+}
+
+func normalizeDomainContractMap(m map[string]interface{}) map[string]interface{} {
+	if m == nil {
+		return nil
+	}
+	out := map[string]interface{}{}
+	get := func(keys ...string) (interface{}, bool) {
+		for _, k := range keys {
+			if v, ok := m[k]; ok {
+				return v, true
+			}
+		}
+		return nil, false
+	}
+	setString := func(key string, v interface{}) {
+		if s, ok := v.(string); ok {
+			if trimmed := strings.TrimSpace(s); trimmed != "" {
+				out[key] = trimmed
+			}
+		}
+	}
+	if v, ok := get("canonicalPath", "CanonicalPath"); ok {
+		setString("canonicalPath", v)
+	}
+	if v, ok := get("contractType", "ContractType"); ok {
+		setString("contractType", v)
+	}
+	if v, ok := get("title", "Title"); ok {
+		setString("title", v)
+	}
+	if v, ok := get("description", "Description"); ok {
+		setString("description", v)
+	}
+	if v, ok := get("facets", "Facets"); ok && v != nil {
+		out["facets"] = v
+	}
+	if v, ok := get("projections", "Projections"); ok && v != nil {
+		out["projections"] = v
+	}
+	if v, ok := get("relatedDomains", "RelatedDomains"); ok && v != nil {
+		out["relatedDomains"] = v
+	}
+	if v, ok := get("affectedDomains", "AffectedDomains"); ok && v != nil {
+		out["affectedDomains"] = v
+	}
+	if v, ok := get("firstOrderEntities", "FirstOrderEntities"); ok && v != nil {
+		out["firstOrderEntities"] = v
+	}
+	if v, ok := get("confidence", "Confidence"); ok && v != nil {
+		out["confidence"] = v
+	}
+	if v, ok := get("reason", "Reason"); ok && v != nil {
+		out["reason"] = v
+	}
+	known := map[string]struct{}{
+		"canonicalpath": {}, "contracttype": {}, "title": {}, "description": {}, "facets": {}, "projections": {},
+		"relateddomains": {}, "affecteddomains": {}, "firstorderentities": {}, "confidence": {}, "reason": {},
+	}
+	for k, v := range m {
+		lk := strings.ToLower(strings.TrimSpace(k))
+		if _, ok := known[lk]; ok {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func normalizeDomainContractsForState(raw interface{}) []map[string]interface{} {
+	switch t := raw.(type) {
+	case []agents.DomainResolution:
+		out := make([]map[string]interface{}, 0, len(t))
+		for _, d := range t {
+			m := map[string]interface{}{
+				"canonicalPath": strings.TrimSpace(d.CanonicalPath),
+				"contractType":  strings.TrimSpace(d.ContractType),
+				"title":         strings.TrimSpace(d.Title),
+				"description":   strings.TrimSpace(d.Description),
+				"confidence":    d.Confidence,
+				"reason":        strings.TrimSpace(d.Reason),
+			}
+			if len(d.Facets) > 0 {
+				m["facets"] = d.Facets
+			}
+			if len(d.Projections) > 0 {
+				m["projections"] = d.Projections
+			}
+			if len(d.RelatedDomains) > 0 {
+				m["relatedDomains"] = d.RelatedDomains
+			}
+			if len(d.AffectedDomains) > 0 {
+				m["affectedDomains"] = d.AffectedDomains
+			}
+			if len(d.FirstOrderEntities) > 0 {
+				m["firstOrderEntities"] = d.FirstOrderEntities
+			}
+			out = append(out, m)
+		}
+		return out
+	case []map[string]interface{}:
+		out := make([]map[string]interface{}, 0, len(t))
+		for _, m := range t {
+			if norm := normalizeDomainContractMap(m); norm != nil {
+				out = append(out, norm)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(t))
+		for _, item := range t {
+			if m, ok := item.(map[string]interface{}); ok {
+				if norm := normalizeDomainContractMap(m); norm != nil {
+					out = append(out, norm)
+				}
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
@@ -514,6 +636,12 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				isFragmentFreshEnough = true
 			}
 		}
+		// Domains are *contracts* whose expansion is lens-context-sensitive (it can add first-order
+		// entities into this lens scope). Therefore, even if the DOMAIN fragment itself looks "fresh",
+		// we still want to schedule a domain job when a domain is explicitly in scope.
+		if strings.HasPrefix(strings.TrimSpace(canonicalPath), "/domain/") {
+			isFragmentFreshEnough = false
+		}
 		if isCacheHit && fragment != nil {
 			cacheHits++
 			// Сохраняем в кэш для будущих операций
@@ -647,6 +775,10 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			}
 			if dh, ok := lens.ViewConfig["decompositionHints"]; ok && dh != nil {
 				state["decompositionHints"] = dh
+			}
+			// Pass through resolved domains (knowledge contracts) so domain jobs can expand deterministically.
+			if ds, ok := lens.ViewConfig["domains"]; ok && ds != nil {
+				state["domains"] = normalizeDomainContractsForState(ds)
 			}
 			scoutingJob := &models.ScoutingJob{
 				AgentJob: agentmodels.AgentJob{
@@ -1145,6 +1277,12 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 					isFragmentFreshEnough = true
 				}
 			}
+			// Domains are contracts; even if the DOMAIN fragment itself looks "fresh", expansion is
+			// lens-context-sensitive (it can add first-order entities into this lens scope), so
+			// we still schedule a job when a domain is explicitly in scope.
+			if strings.HasPrefix(strings.TrimSpace(canonicalPath), "/domain/") {
+				isFragmentFreshEnough = false
+			}
 			if isCacheHit && fragment != nil {
 				// Обновляем кэш для нового узла
 				lens.ScopeFragments[canonicalPath] = fragment.ID
@@ -1209,6 +1347,18 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				}
 				if len(specialties) > 0 {
 					state["specialties"] = specialties
+				}
+				// Pass through originalQuery + decompositionHints + domains for consistency with CreateLens jobs.
+				if lens.ViewConfig != nil {
+					if oq, ok := lens.ViewConfig["originalQuery"].(string); ok && strings.TrimSpace(oq) != "" {
+						state["originalQuery"] = strings.TrimSpace(oq)
+					}
+					if dh, ok := lens.ViewConfig["decompositionHints"]; ok && dh != nil {
+						state["decompositionHints"] = dh
+					}
+					if ds, ok := lens.ViewConfig["domains"]; ok && ds != nil {
+						state["domains"] = normalizeDomainContractsForState(ds)
+					}
 				}
 				scoutingJob := &models.ScoutingJob{
 					AgentJob: agentmodels.AgentJob{

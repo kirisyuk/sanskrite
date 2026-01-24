@@ -3,7 +3,7 @@ import { NodeTypes, Handle, Position, NodeProps, NodeToolbar, useReactFlow } fro
 import { useTranslation } from 'react-i18next';
 import { ThemeContext } from './ThemeProvider';
 import type { SemanticGroup, LinearSection } from '../lib/elkLayout';
-import { humanizeCanonicalPath } from '../lib/uiUtils';
+import { humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
 import { RiskSegmentIcon, computeRiskSegments, computeRiskSegmentSource, formatRiskLevel, clamp01, type RiskSegmentId } from '../lib/riskShield';
 import * as CountryFlags from 'country-flag-icons/react/1x1';
 
@@ -227,6 +227,13 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     text: '#92400E', textDark: '#FDE68A',
     accent: '#F59E0B', accentDark: '#FBBF24',
   },
+  // DOMAIN: "Foundation plate" — warm stone/paper palette with stronger accent for left spine
+  'DOMAIN': {
+    bg: '#FAF7F4', bgDark: '#1F1B18',
+    border: '#D4C8BE', borderDark: '#6B5F55',
+    text: '#5C4F44', textDark: '#F0EAE5',
+    accent: '#9C8574', accentDark: '#A89484', // warmer brown for left spine
+  },
   'GEO_REGION': {
     bg: '#D1FAE5', bgDark: '#064E3B',
     border: '#10B981', borderDark: '#34D399',
@@ -444,13 +451,19 @@ const ensureHorizonNode2026Styles = () => {
       overflow: hidden;
       border-radius: 14px;
       background: var(--hzn-surface);
-      border: 1px solid var(--hzn-border);
+      border: var(--hzn-border-width, 1px) solid var(--hzn-border);
       box-shadow: var(--hzn-shadow);
       transition: box-shadow 140ms ease, border-color 140ms ease, opacity 140ms ease;
       /* CSS containment for better performance.
          IMPORTANT: do NOT use paint here — nodes intentionally render UI that can extend outside
          the card bounds (stack previews, bottom controls). paint would clip them. */
       contain: layout style;
+    }
+    /* Domain nodes: "Foundation plate" style - double border + thick left spine */
+    .hzn-node-2026.is-domain {
+      border: 2px double var(--hzn-border);
+      border-left: 4px solid var(--hzn-accent, var(--hzn-border));
+      border-radius: 12px 14px 14px 12px;
     }
 
     /* Stack controllers (containers): visually distinct from entity nodes.
@@ -494,6 +507,10 @@ const ensureHorizonNode2026Styles = () => {
     :root[data-hzn-node-visuals="minimal"] .hzn-node-2026::before,
     :root[data-hzn-node-visuals="minimal"] .hzn-node-2026::after {
       display: none !important;
+    }
+    :root[data-hzn-node-visuals="minimal"] .hzn-node-2026.is-domain {
+      border: 2px double var(--hzn-border);
+      border-left: 4px solid var(--hzn-accent, var(--hzn-border));
     }
     :root[data-hzn-node-visuals="minimal"] .hzn-node-2026 .hzn-metrics {
       display: none !important;
@@ -1086,6 +1103,24 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
           <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
           <line x1="12" y1="9" x2="12" y2="13" />
           <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+      );
+    
+    case 'DOMAIN':
+      // Domain: Capitol/Columns (foundation/institution)
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          {/* Pediment (roof triangle) */}
+          <path d="M3 10L12 4L21 10" />
+          {/* Entablature (horizontal beam) */}
+          <path d="M4 10h16v1H4z" fill={color} stroke="none" />
+          {/* Columns */}
+          <path d="M6 11v8" />
+          <path d="M10 11v8" />
+          <path d="M14 11v8" />
+          <path d="M18 11v8" />
+          {/* Base/Stylobate */}
+          <path d="M3 19h18" strokeWidth="2" />
         </svg>
       );
     
@@ -2053,10 +2088,23 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
     | undefined;
   const hasEdgePorts = Array.isArray(edgePortsRaw) && edgePortsRaw.length > 0;
   // Stack groups (right pane) may omit groupEdgePorts; add a default port so ReactFlow edges always find a handle.
+  const fallbackEdgePortsFromTypes =
+    !hasEdgePorts && edgeTypes.length > 0
+      ? edgeTypes.map((et, idx) => {
+          const edgeType = normalizeEdgeType(et);
+          return {
+            edgeType,
+            targetHandleId: `edge:${edgeType}:target`,
+            sourceHandleId: `edge:${edgeType}:source`,
+            // Approximate vertical placement; exact position is less critical than having a stable handle.
+            y: 40 + idx * 18,
+          };
+        })
+      : [];
   const fallbackEdgePorts =
     !hasEdgePorts && isStackGroup
       ? [{ edgeType: 'OTHER', targetHandleId: 'target-left', sourceHandleId: 'source-left', y: 60 }]
-      : [];
+      : fallbackEdgePortsFromTypes;
   const edgePorts: Array<{ edgeType: string; targetHandleId: string; sourceHandleId: string; y: number }> =
     hasEdgePorts ? edgePortsRaw! : fallbackEdgePorts;
   const showEdgePorts = Array.isArray(edgePorts) && edgePorts.length > 0;
@@ -2980,6 +3028,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   // Stack controllers can have a separate visual type (Persons/Products/Control/Geolocation).
   const visualType = isCollapsedStackController && stackVisualType ? stackVisualType : baseVisualType;
   const colorsForVisual = visualType ? getNodeColors(visualType, theme) : colors;
+  const isDomainVisual = String(visualType || '').toUpperCase() === 'DOMAIN';
 
   // 2026 visual style: neutral surface with tinted accent (less "dashboardy", more product-like)
   const accentColor = isCritical ? '#EF4444' : (colorsForVisual?.accent || colors.accent);
@@ -2997,6 +3046,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const surfaceBorder = isCollapsedStackController
     ? (theme === 'dark' ? 'rgba(148,163,184,0.28)' : 'rgba(100,116,139,0.24)') // light graphite
     : (theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)');
+  const domainBorder = isDomainVisual
+    ? (theme === 'dark'
+        ? hexToRgba(colorsForVisual?.border || '#8A7E74', 0.6)
+        : hexToRgba(colorsForVisual?.border || '#C4B7AE', 0.65))
+    : surfaceBorder;
+  const nodeBorder = isDomainVisual ? domainBorder : surfaceBorder;
   const stackBorderColor =
     isCollapsedStackController
       ? (isSubcategoryStackController
@@ -3031,7 +3086,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const displayLabel =
     (isCollapsedStackController && stackTitle)
       ? stackTitle
-      : (data.label || humanizeCanonicalPath(data.canonicalPath) || 'Fragment');
+      : ((() => {
+          const preferred = preferDisplayLabel(data.label, data.canonicalPath, data.type);
+          return preferred || humanizeCanonicalPath(data.canonicalPath) || 'Fragment';
+        })());
   const titleLineClamp = isCollapsed ? 2 : (data.showMetrics ? 2 : 6);
   const displayType = getHorizonNodeDisplayType(data.type, data.canonicalPath, data.label);
   // Keep node size consistent with ELK layout defaults used in the canvas (see LensCanvasCockpit)
@@ -3141,14 +3199,17 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     return (
       <>
         <div
-          className={`hzn-node-2026 hzn-node-compact ${isSelected ? 'is-selected' : ''}`}
+          className={`hzn-node-2026 hzn-node-compact ${isDomainVisual ? 'is-domain' : ''} ${isSelected ? 'is-selected' : ''}`}
           onMouseEnter={() => setIsHovering(true)}
           onMouseLeave={() => setIsHovering(false)}
           style={{
             // CSS variables for 2026 styles (reuse the same effects as full nodes)
             ['--hzn-surface' as any]: surfaceBg,
-            ['--hzn-border' as any]: surfaceBorder,
-            ['--hzn-stack-border' as any]: surfaceBorder,
+            ['--hzn-border' as any]: nodeBorder,
+            ['--hzn-stack-border' as any]: nodeBorder,
+            ['--hzn-border-width' as any]: '1px',
+            ['--hzn-dash-size' as any]: '6px',
+            ['--hzn-dash-gap' as any]: '6px',
             ['--hzn-accent' as any]: accentColor,
             ['--hzn-accent-soft' as any]: accentSoft,
             ['--hzn-accent-ring' as any]: isCritical ? criticalRing : accentRing,
@@ -3594,14 +3655,17 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       )}
 
       <div
-        className={`hzn-node-2026 ${isSelected ? 'is-selected' : ''} ${isCollapsedStackController ? 'is-stack' : ''}`}
+        className={`hzn-node-2026 ${isDomainVisual ? 'is-domain' : ''} ${isSelected ? 'is-selected' : ''} ${isCollapsedStackController ? 'is-stack' : ''}`}
         onMouseEnter={() => setIsHovering(true)}
         onMouseLeave={() => setIsHovering(false)}
         style={{
           // CSS variables for 2026 styles
           ['--hzn-surface' as any]: surfaceBg,
-          ['--hzn-border' as any]: surfaceBorder,
+          ['--hzn-border' as any]: nodeBorder,
           ['--hzn-stack-border' as any]: stackBorderColor,
+          ['--hzn-border-width' as any]: '1px',
+          ['--hzn-dash-size' as any]: '6px',
+          ['--hzn-dash-gap' as any]: '6px',
           ['--hzn-accent' as any]: accentColor,
           ['--hzn-accent-soft' as any]: accentSoft,
           ['--hzn-accent-ring' as any]: isCritical ? criticalRing : accentRing,

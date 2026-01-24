@@ -16,6 +16,137 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
+func sanitizeIntentForLensCreation(in *agents.IntentResolution) *agents.IntentResolution {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Focus = strings.TrimSpace(out.Focus)
+	out.SpherePaths = dedupStrings(trimStrings(out.SpherePaths))
+	out.Keywords = dedupStrings(trimStrings(out.Keywords))
+
+	// Domains: keep only valid /domain/v1/... paths (taxonomy validated).
+	if len(out.Domains) > 0 {
+		seen := map[string]struct{}{}
+		domains := make([]agents.DomainResolution, 0, len(out.Domains))
+		for _, d := range out.Domains {
+			cp := strings.TrimSpace(d.CanonicalPath)
+			if cp == "" || !strings.HasPrefix(cp, "/domain/") {
+				continue
+			}
+			if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+				continue
+			}
+			if norm, nerr := taxonomy.NormalizeDomainCanonicalPath(cp); nerr == nil && strings.TrimSpace(norm) != "" {
+				cp = norm
+			}
+			if _, ok := seen[cp]; ok {
+				continue
+			}
+			seen[cp] = struct{}{}
+			d.CanonicalPath = cp
+			d.ContractType = strings.TrimSpace(d.ContractType)
+			d.Title = strings.TrimSpace(d.Title)
+			d.Description = strings.TrimSpace(d.Description)
+			// Best-effort trimming/dedup for lists
+			d.Projections = dedupStrings(trimStrings(d.Projections))
+			d.RelatedDomains = dedupStrings(trimStrings(d.RelatedDomains))
+			d.AffectedDomains = dedupStrings(trimStrings(d.AffectedDomains))
+			d.FirstOrderEntities = dedupStrings(trimStrings(d.FirstOrderEntities))
+			domains = append(domains, d)
+		}
+		out.Domains = domains
+	}
+
+	// Anchors: keep only taxonomy-valid canonical paths (any namespace).
+	if len(out.Anchors) > 0 {
+		seen := map[string]struct{}{}
+		anchors := out.Anchors[:0]
+		for _, a := range out.Anchors {
+			cp := strings.TrimSpace(a.CanonicalPath)
+			if cp == "" {
+				continue
+			}
+			if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+				continue
+			}
+			if _, ok := seen[cp]; ok {
+				continue
+			}
+			seen[cp] = struct{}{}
+			a.CanonicalPath = cp
+			a.Type = strings.TrimSpace(a.Type)
+			a.Name = strings.TrimSpace(a.Name)
+			a.Reason = strings.TrimSpace(a.Reason)
+			anchors = append(anchors, a)
+		}
+		out.Anchors = anchors
+	}
+
+	// Decomposition hints: keep only those with a valid anchorPath; trim lists.
+	if len(out.DecompositionHints) > 0 {
+		seen := map[string]struct{}{}
+		hints := out.DecompositionHints[:0]
+		for _, h := range out.DecompositionHints {
+			ap := strings.TrimSpace(h.AnchorPath)
+			if ap == "" {
+				continue
+			}
+			if err := taxonomy.ValidateCanonicalPath(ap); err != nil {
+				continue
+			}
+			// Best-effort dedupe by anchorPath + joined entityTypes
+			h.AnchorPath = ap
+			h.EntityTypes = dedupStrings(trimStrings(h.EntityTypes))
+			h.SubMarkets = dedupStrings(trimStrings(h.SubMarkets))
+			h.PlayerCategories = dedupStrings(trimStrings(h.PlayerCategories))
+			h.SearchQueries = dedupStrings(trimStrings(h.SearchQueries))
+			key := ap + "|" + strings.Join(h.EntityTypes, ",")
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			hints = append(hints, h)
+		}
+		out.DecompositionHints = hints
+	}
+	return &out
+}
+
+func trimStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func dedupStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
 type createLensFromQueryRequest struct {
 	Name              string   `json:"name"`
 	ProjectID         string   `json:"projectId"`
@@ -130,7 +261,7 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	intent := (*agents.IntentResolution)(nil)
 	var err error
 	if req.IntentOverride != nil {
-		intent = req.IntentOverride
+		intent = sanitizeIntentForLensCreation(req.IntentOverride)
 	} else {
 		intentAgent := agents.NewIntentResolverAgent(h.service.AIExecutor())
 		trace.Log(ctx, "intent", "intent.resolve.start", map[string]any{

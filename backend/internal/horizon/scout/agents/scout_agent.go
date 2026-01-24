@@ -229,6 +229,8 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 	if scoutResult.Fragment.Type == "" {
 		// Infer type from canonicalPath (stable namespaces) or default to Organization.
 		switch {
+		case strings.Contains(targetCanonicalPath, "/domain/"):
+			scoutResult.Fragment.Type = models.FragmentTypeDomain
 		case strings.Contains(targetCanonicalPath, "/media/"):
 			scoutResult.Fragment.Type = models.FragmentTypeMediaChannel
 		case strings.Contains(targetCanonicalPath, "/person/"):
@@ -375,7 +377,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
      - Prefer the OFFICIAL legal name as stated by the company/registry/source.
      - If the official legal name is not Latin and no established official English name exists:
        - Keep identifiers.legalName in the original language/script when known.
-       - Use labels.en for transliteration/English display only (do NOT invent an English legalName).
+      - Use labels.en for transliteration/English display only (do NOT invent an English legalName).
+    - labels.en MUST be Latin-script only (broad Latin is OK: diacritics, Scandinavian, Turkish, etc.). No non-Latin scripts in labels.en.
    - GOV-specific naming (CRITICAL when canonicalPath starts with /gov/):
      - Always provide BOTH:
        - labels.en: readable English name (translation if official English exists; otherwise careful transliteration)
@@ -427,9 +430,15 @@ TASK: Extract all relevant information about this entity and return it as a JSON
        - International organizations (UN, WTO, IMF) → "mega"
      
      PREFER to classify rather than use "na". Even rough estimates are valuable.
-   - marketDomain: (MARKET only) canonical domain family for the market (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate).
-   - marketVertical: (MARKET only) specific vertical (e.g., banking, semiconductors, ev-batteries).
-   - marketChannels: (MARKET only) array of channels (best-effort): ["b2b","b2c","public-sector",...]. Can be empty/omitted.
+  - marketDomain: (MARKET only) canonical domain family for the market (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate).
+  - marketVertical: (MARKET only) specific vertical (e.g., banking, semiconductors, ev-batteries).
+  - marketChannels: (MARKET only) array of channels (best-effort): ["b2b","b2c","public-sector",...]. Can be empty/omitted.
+  - tags: (MARKET only) REQUIRED 5-8 tags for deduplication and search.
+    - Use GICS terminology (no numeric codes) as the base vocabulary.
+    - Expanded terms ONLY (no abbreviations): "real-world-asset", NOT "rwa".
+    - Singular form: "semiconductor", "battery", "token", NOT plurals.
+    - Lowercase, hyphenated slugs.
+    - Include sector/industry terms + key technologies/materials + common synonyms users search for.
    - state: Map of metrics with MetricValue objects.
      IMPORTANT: there are two common classes of metrics:
        A) Normalized risk metrics under /metric/risk/... where value is a score:
@@ -605,7 +614,8 @@ CANONICAL PATH RULES:
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - Communities (informal social groups): /community/{geo}/{type}/{slug}
-    - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
+    - geo: ISO3166-1 alpha2 lowercase, regional token, or "global"/"int"
+    - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
     - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
     - Examples:
       - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
@@ -660,17 +670,23 @@ CANONICAL PATH RULES:
       - "Ghawar Field" -> /deposit/crude-oil/ghawar
   - Programs:
     - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
+      - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
+      - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
     - Otherwise /program/{programSlug}
   - Markets:
     - Prefer /market/{geo}/{marketSlug}
-      - geo: ISO3166-1 alpha2 lowercase OR "global" if unknown
+      - geo: ISO3166-1 alpha2 lowercase, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
+      - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{slug} (NOT /market/na/{slug}/gcc)
       - Examples: /market/iq/sme-banking, /market/global/ev-batteries
-    - Legacy /market/{marketSlug} may exist; prefer /market/{geo}/{slug} for NEW markets
+    - Legacy /market/{marketSlug} may exist in older data; do NOT emit legacy for new markets.
+      - Always provide geo for NEW outputs.
   - Facilities:
     - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise /fac/{facilitySlug}
   - GEO regions / locations: MUST be /loc/{country}/{admin1}/{city}
     - country: ISO3166-1 alpha2 lowercase (2 chars) or regional token (asean, brics, gcc, eu, eaeu)
+    - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
+      - GCC → /loc/gcc/na/na (NOT /loc/na/na/gcc)
     - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
     - city: lowercase slug; use "na" if not applicable/unknown
     - country-only locations: /loc/{country}/na/na
