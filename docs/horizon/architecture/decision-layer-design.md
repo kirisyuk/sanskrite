@@ -59,8 +59,7 @@ This answers: "Who decides what?"
 │    agent: "/gov/us/bis"                                  │
 │    role: "gatekeeper"                                    │
 │    mechanism: "/mechanism/regulatory/export-control"    │
-│    canBlock: ["/org/nl/asml" → "/org/cn/smic"]          │
-│    canEnable: ["/org/nl/asml" → "/org/jp/rapidus"]      │
+│    controlsAccess: ["/org/nl/asml" → "/org/cn/smic"]     │
 │    evidence: [...]                                       │
 │  }                                                       │
 ├─────────────────────────────────────────────────────────┤
@@ -75,6 +74,7 @@ This answers: "Who decides what?"
 ## Key Concept: Domains as Crystallization Points
 
 Domains are not just query classifiers — they are **crystallization points** for the graph.
+They already exist in the pipeline and graph; the proposal **extends their semantic role** rather than replacing or recreating them.
 
 ### Current Model (bottom-up)
 - Graph grows from fragments to relations
@@ -103,7 +103,7 @@ Domains are not just query classifiers — they are **crystallization points** f
 │  - DecisionPoint entities                                    │
 │  - Agent entities with roles                                  │
 │  - Mechanism entities                                         │
-│  - CAN_BLOCK / CAN_ENABLE edges                              │
+│  - CONTROLS_ACCESS edges                                     │
 │  - Evidence for each claim                                    │
 │                                                              │
 │  Crystallizes:                                                │
@@ -111,7 +111,7 @@ Domains are not just query classifiers — they are **crystallization points** f
 │  ├── /gov/us/bis (role: gatekeeper)                          │
 │  ├── /mechanism/regulatory/export-control                    │
 │  ├── /org/nl/asml (role: supplier, can_be_blocked)           │
-│  └── /org/cn/smic (role: target, is_blocked)                 │
+│  └── /org/cn/smic (role: target, access-controlled)          │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -176,7 +176,7 @@ Types:
 ```go
 type DecisionPoint struct {
     ID           string   // /decision/{domain-slug}/{decision-slug}
-    Domain       string   // /domain/v1/power-dynamics/sector/ai-chips
+    Domain       string   // /domain/v1/power-dynamics/sector/ai-chips (existing domain node; reused)
     Title        string   // "EUV lithography export to China"
     
     // Who decides
@@ -190,8 +190,7 @@ type DecisionPoint struct {
     Subject      string   // /product/.../euv-lithography
     
     // What can happen
-    CanBlock     []Edge   // [/org/nl/asml → /org/cn/smic]
-    CanEnable    []Edge   // [/org/nl/asml → /org/jp/rapidus]
+    ControlsAccess []Edge // [/org/nl/asml → /org/cn/smic]
     Status       string   // "blocked" | "enabled" | "conditional" | "pending"
     
     // Provenance
@@ -306,9 +305,9 @@ This is at the cognitive limit for LLMs.
 
 ### 3. Scout
 - For power-dynamics domain:
-  - Special prompt: "Extract decision points, mechanisms, block/enable"
+  - Special prompt: "Extract decision points, mechanisms, controls-access"
   - Creates DecisionPoint, Mechanism entities
-  - Creates CAN_BLOCK, USES_MECHANISM edges
+  - Creates CONTROLS_ACCESS, USES_MECHANISM edges
 
 ### 4. Research
 - For power-dynamics domain:
@@ -323,6 +322,21 @@ This is at the cognitive limit for LLMs.
 ### 6. Policy
 - Validates: DecisionPoint correctly linked to domain
 - Validates: Evidence exists for each claim
+
+---
+
+## Implementation Constraint: Unified Canonicalization & Prompts
+
+All agents and phases (Scout, Research, Critic, Policy, domain phase 1/2) **must reuse the same taxonomy, canonicalization, and prompt logic**.  
+No parallel pipelines, no divergent rules, and no “almost the same” prompt forks.
+
+**Implications:**
+- **Canonical paths** for `/decision` and `/mechanism` must be validated by the **same** taxonomy validator used elsewhere (`ValidateCanonicalPath`).
+- **Policy checks** apply uniformly to all new fragments/edges, regardless of phase.
+- **Prompt templates** should be extended/composed, not duplicated (reuse core entity extraction rules, append domain-specific modules).
+- **Domain phase 2** must route through the same normalization and validation functions as phase 1.
+
+This prevents drift and keeps the graph consistent across all layers.
 
 ---
 
@@ -353,6 +367,39 @@ Strategic relations require more nuance than simple binary "block/enable".
 **`APPLIES_TO`**
 - Mechanism → Entity/Edge
 - Shows the scope of a mechanism.
+
+---
+
+## Domain Analysis "On-the-Fly"
+
+To support user-driven strategic analysis, we introduce on-the-fly domain analysis for existing graphs.
+
+**Scenario**:
+1. User loads an existing Lens (graph already populated with entities/relations).
+2. User asks a strategic question (e.g., "Who controls this supply chain?").
+3. System triggers **Phase 2 (Strategic Overlay)** explicitly.
+4. **Input**: Existing Lens Graph + New Domain Contract.
+5. **Output**: New `DecisionPoint` and `Mechanism` nodes are added to the graph, enriching the existing view.
+
+**Architectural Implication**:
+- Phase 2 logic must be decoupled from the initial pipeline.
+- It can be triggered as a standalone `ScoutingJob` targeting an existing Lens.
+- This allows iterative enrichment: users can ask different strategic questions about the same graph, adding layers of insight.
+
+### Scope & Deduplication
+
+1. **Input Scope**: Nodes within the Lens scope + their immediate relations. Domain research extends the graph but **does not create duplicates**.
+2. **Domain Context**: When launching domain addition, the LLM receives a list of **existing domains in nearby connections**. This prevents domain duplication. Enrichment of existing domains is allowed — dedup logic and freshness constraints (already in codebase) handle this.
+
+### UI Flow (Command Palette)
+
+This is a dedicated mode within the Command Palette with staged interaction:
+
+1. **System prepares**: Retrieves nearby domains and current scope.
+2. **User inputs**: Strategic question.
+3. **System confirms**: Displays interpretation under the input field ("Understood as: power-dynamics analysis for AI chip supply chain").
+4. **User approves**: Clicks OK.
+5. **Execution**: Phase 2 job runs, enriching the graph with strategic layer.
 
 ---
 
@@ -424,7 +471,7 @@ case "regulatory-impact", "policy-and-regulation":
 ```go
 case "decision-analysis":
     return "Expand into: decision points, agents, mechanisms of control, 
-            block/enable capabilities, and supporting evidence."
+            controls-access capabilities, and supporting evidence."
 ```
 
 ---
@@ -446,7 +493,7 @@ case "decision-analysis":
 ### Phase 3: DecisionPoint Entity
 - [ ] Define /decision namespace in taxonomy
 - [ ] Add FragmentTypeDecisionPoint
-- [ ] Add CAN_BLOCK, CAN_ENABLE edge types
+- [ ] Add CONTROLS_ACCESS edge type (qualifiers for block/enable/delay/monitor)
 - [ ] Add AgentRole taxonomy
 - [ ] Update Scout prompts for decision extraction
 
