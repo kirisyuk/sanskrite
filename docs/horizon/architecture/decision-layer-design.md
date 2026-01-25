@@ -263,6 +263,35 @@ This is at the cognitive limit for LLMs.
 
 ---
 
+## Risk Mitigation: Two-Phase Domain Execution
+
+**Problem**: It is difficult for LLMs to extract abstract "decision points" in the early pipeline stages when context is sparse.
+
+**Solution**: Split domain execution into two phases. The domain contract dictates both.
+
+### Phase 1: Physical Layer Discovery (Traditional)
+- **Goal**: "Draw the map."
+- **Input**: Domain + Query.
+- **Action**: Scout/Research identify entities (Org, Facility, Product) and "hard" relations (Supplies, Located, Owns).
+- **Output**: **Relation Graph**.
+
+### Phase 2: Strategic Layer Overlay (New)
+- **Goal**: "Place flags on the map."
+- **Input**: Domain + **Existing Relation Graph** (context).
+- **Action**: 
+  - Look at specific edges (e.g., `ASML -> SMIC`).
+  - Ask: "Who can block this specific connection?"
+  - Find: Agents (US BIS) and Mechanisms (Export Control).
+  - Create: `DecisionPoint` entities linked to the Relation Graph.
+- **Output**: **Decision Graph** overlay.
+
+**Benefits**:
+1.  **Grounding**: Strategic search is grounded in real, verified entities.
+2.  **Focus**: LLM context window is filled with the graph structure, reducing noise.
+3.  **Efficiency**: Targeted "deep dives" on critical nodes instead of broad scanning.
+
+---
+
 ## Pipeline Impact
 
 ### 1. DomainResolver
@@ -294,6 +323,36 @@ This is at the cognitive limit for LLMs.
 ### 6. Policy
 - Validates: DecisionPoint correctly linked to domain
 - Validates: Evidence exists for each claim
+
+---
+
+## Strategic Edge Types
+
+Strategic relations require more nuance than simple binary "block/enable".
+
+### 1. Control Access (Gatekeeping)
+**`CONTROLS_ACCESS`**
+- Universal "gatekeeper" relation.
+- **Qualifiers**:
+  - `type`: `block` (veto), `enable` (grant), `delay` (bureaucracy), `monitor` (surveillance)
+  - `mechanism`: reference to mechanism ID
+  - `condition`: what triggers the control
+
+### 2. Impose Conditions (Soft Power)
+**`IMPOSES_CONDITION`**
+- Subject forces object to comply with rules/costs.
+- **Qualifiers**:
+  - `type`: `cost` (tariffs), `compliance` (ESG/standards), `technical` (specs)
+  - `impact`: description of impact
+
+### 3. Instrumental Relations
+**`USES_MECHANISM`**
+- Agent → Mechanism
+- Shows which tools an agent possesses.
+
+**`APPLIES_TO`**
+- Mechanism → Entity/Edge
+- Shows the scope of a mechanism.
 
 ---
 
