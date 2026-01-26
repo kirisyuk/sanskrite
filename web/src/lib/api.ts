@@ -2568,6 +2568,147 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       throw error;
     }
   }
+
+  // --- Horizon Lens Artifacts ---
+  /**
+   * List artifacts for a lens
+   * GET /api/horizon/lenses/{lensId}/artifacts
+   */
+  async listHorizonLensArtifacts(
+    lensId: string,
+    options?: { type?: 'fragment' | 'edge'; limit?: number }
+  ): Promise<{
+    artifacts: Array<{
+      id: string;
+      tenantId: string;
+      lensId: string;
+      type: 'fragment' | 'edge';
+      fragmentId?: string;
+      canonicalPath?: string;
+      fragmentType?: string;
+      edgeId?: string;
+      edgeType?: string;
+      sourcePath?: string;
+      targetPath?: string;
+      sourceFragId?: string;
+      targetFragId?: string;
+      sourceJobID: string;
+      addedAt: string;
+      updatedAt: string;
+      processedForStrategicAt?: string | null;
+      displayLabel?: string;
+    }>;
+    total: number;
+  }> {
+    try {
+      const params: Record<string, string> = {};
+      if (options?.type) params.type = options.type;
+      if (options?.limit) params.limit = options.limit.toString();
+      const response = await this.client.get(`/api/horizon/lenses/${lensId}/artifacts`, { params });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] listHorizonLensArtifacts error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get artifact statistics for a lens
+   * GET /api/horizon/lenses/{lensId}/artifacts/stats
+   */
+  async getHorizonLensArtifactStats(lensId: string): Promise<{
+    total: number;
+    fragments: number;
+    edges: number;
+    processed: number;
+    unprocessed: number;
+  }> {
+    try {
+      const response = await this.client.get(`/api/horizon/lenses/${lensId}/artifacts/stats`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getHorizonLensArtifactStats error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get simplified context for LLM (connectivity-paginated)
+   * GET /api/horizon/lenses/{lensId}/artifacts/context
+   */
+  async getHorizonLensArtifactContext(
+    lensId: string,
+    options?: { page?: number; pageSize?: number }
+  ): Promise<{
+    pages: Array<{
+      pageNumber: number;
+      items: Array<{
+        id: string;
+        type: 'fragment' | 'edge';
+        fragmentId?: string;
+        canonicalPath?: string;
+        fragmentType?: string;
+        edgeId?: string;
+        edgeType?: string;
+        sourcePath?: string;
+        targetPath?: string;
+        sourceFragId?: string;
+        targetFragId?: string;
+        displayLabel?: string;
+      }>;
+    }>;
+    totalPages: number;
+    totalItems: number;
+  }> {
+    try {
+      const params: Record<string, string> = {};
+      if (options?.page !== undefined) params.page = options.page.toString();
+      if (options?.pageSize !== undefined) params.pageSize = options.pageSize.toString();
+      const response = await this.client.get(`/api/horizon/lenses/${lensId}/artifacts/context`, { params });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getHorizonLensArtifactContext error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Trigger Phase 2 strategic overlay for a lens
+   * POST /api/horizon/lenses/{lensId}/trigger-phase2
+   */
+  async triggerHorizonPhase2StrategicOverlay(
+    lensId: string,
+    input?: { domainCanonicalPaths?: string[] },
+    options?: { correlationId?: string; sessionId?: string }
+  ): Promise<{
+    jobId: string;
+    domainCanonicalPaths: string[];
+  }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/trigger-phase2`, input || {}, { headers });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] triggerHorizonPhase2StrategicOverlay error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete all artifacts for a lens
+   * DELETE /api/horizon/lenses/{lensId}/artifacts
+   */
+  async deleteHorizonLensArtifacts(lensId: string): Promise<{ success: boolean; deletedCount: number }> {
+    try {
+      const response = await this.client.delete(`/api/horizon/lenses/${lensId}/artifacts`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] deleteHorizonLensArtifacts error:`, error);
+      throw error;
+    }
+  }
 }
 
 export const api = new ApiClient();

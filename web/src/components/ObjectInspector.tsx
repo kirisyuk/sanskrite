@@ -767,6 +767,12 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       'IMPACTS',
       'SUPPORTS',
       'EXTRACTS_FROM',
+      // Strategic overlay relations
+      'CONTROLS_ACCESS',
+      'IMPOSES_CONDITION',
+      'USES_MECHANISM',
+      'APPLIES_TO',
+      'SURFACES',
     ];
     // De-dupe + stable sort
     return Array.from(new Set(all)).sort((a, b) => a.localeCompare(b));

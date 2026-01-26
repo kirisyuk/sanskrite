@@ -11,14 +11,14 @@ import (
 
 // HorizonHandlers содержит все HTTP handlers для Horizon API
 type HorizonHandlers struct {
-	service          *horizon.HorizonService
+	service        *horizon.HorizonService
 	lensItemsHandler *LensItemsHandler
-	genAIHandler     *httputil.GenAIHandler
-	profilesHandler  *ProfilesHandler
-	docsRepo         *corerepo.DocumentsRepository
-	usersRepo        *corerepo.UsersRepository
-	interactions     *corerepo.InteractionsRepository
-	factsRepo        *corerepo.OntologyFactsRepository
+	genAIHandler   *httputil.GenAIHandler
+	profilesHandler *ProfilesHandler
+	docsRepo       *corerepo.DocumentsRepository
+	usersRepo      *corerepo.UsersRepository
+	interactions   *corerepo.InteractionsRepository
+	factsRepo      *corerepo.OntologyFactsRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -450,3 +450,4 @@ func (h *HorizonHandlers) HandleScoutRoutes(w http.ResponseWriter, r *http.Reque
 }
 
 // GetAssemblyStatus, GetCockpitData, SimulateWhatIf реализованы в assembly.go и cockpit.go
+

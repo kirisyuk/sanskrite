@@ -1952,6 +1952,37 @@ const EDGE_GROUP_COLORS: Record<
     borderLight: 'rgba(59, 130, 246, 0.45)',
     borderDark: 'rgba(96, 165, 250, 0.55)',
   },
+  // Strategic overlay relations
+  CONTROLS_ACCESS: {
+    light: 'rgba(168, 85, 247, 0.10)',
+    dark: 'rgba(168, 85, 247, 0.12)',
+    borderLight: 'rgba(168, 85, 247, 0.50)',
+    borderDark: 'rgba(192, 132, 252, 0.55)',
+  },
+  IMPOSES_CONDITION: {
+    light: 'rgba(168, 85, 247, 0.10)',
+    dark: 'rgba(168, 85, 247, 0.12)',
+    borderLight: 'rgba(168, 85, 247, 0.50)',
+    borderDark: 'rgba(192, 132, 252, 0.55)',
+  },
+  USES_MECHANISM: {
+    light: 'rgba(168, 85, 247, 0.10)',
+    dark: 'rgba(168, 85, 247, 0.12)',
+    borderLight: 'rgba(168, 85, 247, 0.50)',
+    borderDark: 'rgba(192, 132, 252, 0.55)',
+  },
+  APPLIES_TO: {
+    light: 'rgba(168, 85, 247, 0.10)',
+    dark: 'rgba(168, 85, 247, 0.12)',
+    borderLight: 'rgba(168, 85, 247, 0.50)',
+    borderDark: 'rgba(192, 132, 252, 0.55)',
+  },
+  SURFACES: {
+    light: 'rgba(234, 179, 8, 0.10)',
+    dark: 'rgba(234, 179, 8, 0.12)',
+    borderLight: 'rgba(234, 179, 8, 0.50)',
+    borderDark: 'rgba(250, 204, 21, 0.55)',
+  },
   // Default / other
   OTHER: {
     light: 'rgba(100, 116, 139, 0.08)',

@@ -4062,11 +4062,11 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 	// (power dynamics, risk assessment, competitive analysis, etc.)
 	strategicContractTypes := map[string]bool{
 		// Risk / geopolitics
-		"risk-assessment":     true,
-		"geopolitical-risk":   true,
-		"bilateral-relations": true,
-		"sanctions-exposure":  true,
-		"conflict-dynamics":   true,
+		"risk-assessment":      true,
+		"geopolitical-risk":    true,
+		"bilateral-relations":  true,
+		"sanctions-exposure":   true,
+		"conflict-dynamics":    true,
 		// Supply chain / value chain (control points matter)
 		"supply-chain":    true,
 		"value-chain":     true,

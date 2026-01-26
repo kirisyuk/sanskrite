@@ -4061,6 +4061,8 @@ export function deriveLevelsTreeMetadata<T = any>(
     'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS',
     // Strategic overlay relations (control/conditions/mechanisms)
     'CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'USES_MECHANISM', 'APPLIES_TO',
+    // Domain surfaces strategic entities
+    'SURFACES',
   ]);
   const STRONG_CONTROL_TYPES = new Set([
     'OWNS',
@@ -4073,7 +4075,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     'ADMINISTERS',
   ]);
   const INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS']);
-  const STRATEGIC_TYPES = new Set(['CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'USES_MECHANISM', 'APPLIES_TO']);
+  const STRATEGIC_TYPES = new Set(['CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'USES_MECHANISM', 'APPLIES_TO', 'SURFACES']);
   const hierarchyScore = (et: string): number => {
     const t = String(et || '').toUpperCase().trim();
     if (!t) return 0;

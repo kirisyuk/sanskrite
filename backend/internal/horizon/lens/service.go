@@ -240,12 +240,12 @@ type LensService struct {
 	canonicalPathResolver *scout.CanonicalPathResolver    // Optional: for early canonicalization and deduplication
 
 	// Optional cleanup repos for cascade delete (best-effort, non-critical)
-	lensItemsRepo     *repo.LensItemsRepository
-	exposurePathsRepo *repo.ExposurePathsRepository
-	materializedRepo  *repo.MaterializedArtifactsRepository
-	lensArtifactsRepo *repo.LensArtifactsRepository
-	spendLedger       *repo.HorizonSpendLedger
-	agentJobsRepo     AgentJobsDeleter // interface for deleting agent jobs by ID
+	lensItemsRepo        *repo.LensItemsRepository
+	exposurePathsRepo    *repo.ExposurePathsRepository
+	materializedRepo     *repo.MaterializedArtifactsRepository
+	lensArtifactsRepo    *repo.LensArtifactsRepository
+	spendLedger          *repo.HorizonSpendLedger
+	agentJobsRepo        AgentJobsDeleter // interface for deleting agent jobs by ID
 }
 
 // NewLensService создает новый Lens Service
