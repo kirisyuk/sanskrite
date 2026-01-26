@@ -267,6 +267,19 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "AFFECTS", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
 				// DEPENDS_ON is broadly used; allow DOMAIN and existing entity usage.
 				{EdgeType: "DEPENDS_ON", Direction: "* → *", ValidSource: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
+
+				// --- STRATEGIC DECISION LAYER edges ---
+				// SURFACES: domain crystallizes/surfaces decision points and mechanisms during Phase 2 strategic overlay.
+				{EdgeType: "SURFACES", Direction: "DOMAIN → DECISION_POINT|MECHANISM", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DECISION_POINT", "MECHANISM"}, Description: "Domain surfaces strategic decision points"},
+				// CONTROLS_ACCESS: strategic gatekeeping (block/enable/delay/monitor).
+				// Source: DECISION_POINT or GOV/ORG (gatekeeper). Target: entity being controlled.
+				{EdgeType: "CONTROLS_ACCESS", Direction: "DECISION_POINT|ORG → ORG|FACILITY|PRODUCT|MARKET|PROGRAM", ValidSource: []string{"DECISION_POINT", "ORGANIZATION"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "PROGRAM"}, Description: "Strategic gatekeeping relation"},
+				// IMPOSES_CONDITION: soft power / compliance requirements.
+				{EdgeType: "IMPOSES_CONDITION", Direction: "ORG|DECISION_POINT → ORG|FACILITY|PRODUCT", ValidSource: []string{"ORGANIZATION", "DECISION_POINT"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}, Description: "Imposing rules/costs/compliance"},
+				// USES_MECHANISM: agent possesses/uses a control mechanism.
+				{EdgeType: "USES_MECHANISM", Direction: "DECISION_POINT|ORG → MECHANISM", ValidSource: []string{"DECISION_POINT", "ORGANIZATION"}, ValidTarget: []string{"MECHANISM"}, Description: "Agent uses control mechanism"},
+				// APPLIES_TO: mechanism scope.
+				{EdgeType: "APPLIES_TO", Direction: "MECHANISM → ORG|FACILITY|PRODUCT|MARKET", ValidSource: []string{"MECHANISM"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET"}, Description: "Mechanism applies to entity"},
 			},
 		},
 		SymmetricEdges: []string{

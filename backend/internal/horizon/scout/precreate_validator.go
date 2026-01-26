@@ -501,6 +501,10 @@ func (v *PreCreateValidator) expectedPathPrefix(fragType models.FragmentType) st
 		return "/media/"
 	case models.FragmentTypeMarket:
 		return "/market/"
+	case models.FragmentTypeDecisionPoint:
+		return "/decision/"
+	case models.FragmentTypeMechanism:
+		return "/mechanism/"
 	default:
 		return ""
 	}
@@ -570,6 +574,16 @@ var CanonicalPathPolicies = map[models.FragmentType]CanonicalPathPolicy{
 		Prefix:      "/media/",
 		Example:     "/media/telegram/v-kazani-poymut",
 		Description: "Media channel endpoints (e.g., Telegram) use /media/{platform}/{slug}",
+	},
+	models.FragmentTypeDecisionPoint: {
+		Prefix:      "/decision/",
+		Example:     "/decision/ai-chips/euv-export-control",
+		Description: "Decision points are domain-scoped: /decision/{domain-slug}/{decision-slug}",
+	},
+	models.FragmentTypeMechanism: {
+		Prefix:      "/mechanism/",
+		Example:     "/mechanism/regulatory/export-control",
+		Description: "Mechanisms are reusable control tools: /mechanism/{category}/{slug}",
 	},
 }
 

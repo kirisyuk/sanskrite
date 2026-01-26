@@ -1081,6 +1081,63 @@
         { "fieldPath": "types", "arrayConfig": "CONTAINS" },
         { "fieldPath": "updatedAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "addedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "type", "order": "ASCENDING" },
+        { "fieldPath": "addedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "processedForStrategicAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "canonicalPath", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "edgeId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fragmentId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "addedAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

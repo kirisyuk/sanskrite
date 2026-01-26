@@ -240,11 +240,12 @@ type LensService struct {
 	canonicalPathResolver *scout.CanonicalPathResolver    // Optional: for early canonicalization and deduplication
 
 	// Optional cleanup repos for cascade delete (best-effort, non-critical)
-	lensItemsRepo        *repo.LensItemsRepository
-	exposurePathsRepo    *repo.ExposurePathsRepository
-	materializedRepo     *repo.MaterializedArtifactsRepository
-	spendLedger          *repo.HorizonSpendLedger
-	agentJobsRepo        AgentJobsDeleter // interface for deleting agent jobs by ID
+	lensItemsRepo     *repo.LensItemsRepository
+	exposurePathsRepo *repo.ExposurePathsRepository
+	materializedRepo  *repo.MaterializedArtifactsRepository
+	lensArtifactsRepo *repo.LensArtifactsRepository
+	spendLedger       *repo.HorizonSpendLedger
+	agentJobsRepo     AgentJobsDeleter // interface for deleting agent jobs by ID
 }
 
 // NewLensService создает новый Lens Service
@@ -274,6 +275,12 @@ func NewLensService(
 func (s *LensService) WithCriticalPathDetector(detector *critical_path.Detector, edgesRepo *repo.DependencyEdgesRepository) *LensService {
 	s.criticalPathDetector = detector
 	s.edgesRepo = edgesRepo
+	return s
+}
+
+// WithLensArtifactsRepo wires LensArtifactsRepository for cascade deletion.
+func (s *LensService) WithLensArtifactsRepo(repo *repo.LensArtifactsRepository) *LensService {
+	s.lensArtifactsRepo = repo
 	return s
 }
 
@@ -1507,6 +1514,13 @@ func (s *LensService) cascadeDeleteLensData(ctx context.Context, tenantID, proje
 			if _, err := s.materializedRepo.DeleteByLens(ctx, lensID); err != nil {
 				log.Printf("[LensService] cascadeDeleteLensData: failed to delete materialized artifacts for %s: %v", lensID, err)
 			}
+		}
+	}
+
+	// 2.5. LensArtifacts (horizon_lens_artifacts)
+	if s.lensArtifactsRepo != nil {
+		if err := s.lensArtifactsRepo.DeleteByLens(ctx, lensID); err != nil {
+			log.Printf("[LensService] cascadeDeleteLensData: failed to delete lens artifacts for %s: %v", lensID, err)
 		}
 	}
 

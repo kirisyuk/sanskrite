@@ -97,6 +97,12 @@ const (
 	// FragmentTypeMediaChannel represents a "last-mile" media endpoint (e.g., a specific public Telegram channel),
 	// not a media holding/company. This helps model narratives and distribution channels separately from owners.
 	FragmentTypeMediaChannel FragmentType = "MEDIA_CHANNEL"
+	// FragmentTypeDecisionPoint represents a strategic decision point (domain-scoped).
+	// Canonical path format: /decision/{domain-slug}/{decision-slug}
+	FragmentTypeDecisionPoint FragmentType = "DECISION_POINT"
+	// FragmentTypeMechanism represents a control mechanism (global, reusable).
+	// Canonical path format: /mechanism/{category}/{slug}
+	FragmentTypeMechanism FragmentType = "MECHANISM"
 	FragmentTypeSupplyLink   FragmentType = "SUPPLY_LINK" // Tenant-specific supply chain link
 	// FragmentTypeDeposit represents a natural resource deposit (oil field, mine, basin, etc.).
 	// Canonical path format: /deposit/{resource-slug}/{deposit-slug}
@@ -145,3 +151,115 @@ const (
 	ExtractionMethodAPI     ExtractionMethod = "API"
 	ExtractionMethodKBAlign ExtractionMethod = "KBAlign"
 )
+
+// AgentRole represents the role of an agent in a decision context.
+// Used in DecisionPoint entities to describe how an agent participates in a decision.
+type AgentRole string
+
+const (
+	// AgentRoleGatekeeper can block/enable access (export control, licensing).
+	AgentRoleGatekeeper AgentRole = "gatekeeper"
+	// AgentRoleApprover must approve before action (regulatory approval).
+	AgentRoleApprover AgentRole = "approver"
+	// AgentRoleInfluencer can affect but not block (lobbying, standards bodies).
+	AgentRoleInfluencer AgentRole = "influencer"
+	// AgentRoleEnforcer ensures compliance (audit, inspection).
+	AgentRoleEnforcer AgentRole = "enforcer"
+	// AgentRoleArbiter resolves disputes (courts, arbitration).
+	AgentRoleArbiter AgentRole = "arbiter"
+)
+
+// ValidAgentRoles is a set of all valid agent roles for validation.
+var ValidAgentRoles = map[AgentRole]bool{
+	AgentRoleGatekeeper: true,
+	AgentRoleApprover:   true,
+	AgentRoleInfluencer: true,
+	AgentRoleEnforcer:   true,
+	AgentRoleArbiter:    true,
+}
+
+// IsValidAgentRole checks if the given role is a valid AgentRole.
+func IsValidAgentRole(role string) bool {
+	return ValidAgentRoles[AgentRole(role)]
+}
+
+// MechanismCategory represents the category/type of a control mechanism.
+type MechanismCategory string
+
+const (
+	// MechanismCategoryRegulatory - Export control, licensing, certification.
+	MechanismCategoryRegulatory MechanismCategory = "regulatory"
+	// MechanismCategoryEconomic - Pricing power, capacity allocation.
+	MechanismCategoryEconomic MechanismCategory = "economic"
+	// MechanismCategoryTechnological - IP lock-in, standards control.
+	MechanismCategoryTechnological MechanismCategory = "technological"
+	// MechanismCategoryContractual - Exclusivity, long-term agreements.
+	MechanismCategoryContractual MechanismCategory = "contractual"
+	// MechanismCategoryPolitical - Sanctions, diplomatic pressure.
+	MechanismCategoryPolitical MechanismCategory = "political"
+)
+
+// ValidMechanismCategories is a set of all valid mechanism categories.
+var ValidMechanismCategories = map[MechanismCategory]bool{
+	MechanismCategoryRegulatory:    true,
+	MechanismCategoryEconomic:      true,
+	MechanismCategoryTechnological: true,
+	MechanismCategoryContractual:   true,
+	MechanismCategoryPolitical:     true,
+}
+
+// IsValidMechanismCategory checks if the given category is valid.
+func IsValidMechanismCategory(category string) bool {
+	return ValidMechanismCategories[MechanismCategory(category)]
+}
+
+// ControlAccessType represents the type of control in a CONTROLS_ACCESS relation.
+type ControlAccessType string
+
+const (
+	// ControlAccessTypeBlock - veto power, can completely block.
+	ControlAccessTypeBlock ControlAccessType = "block"
+	// ControlAccessTypeEnable - grant access, can enable.
+	ControlAccessTypeEnable ControlAccessType = "enable"
+	// ControlAccessTypeDelay - bureaucratic delay, slows down.
+	ControlAccessTypeDelay ControlAccessType = "delay"
+	// ControlAccessTypeMonitor - surveillance, observes but doesn't block.
+	ControlAccessTypeMonitor ControlAccessType = "monitor"
+)
+
+// ValidControlAccessTypes is a set of all valid control access types.
+var ValidControlAccessTypes = map[ControlAccessType]bool{
+	ControlAccessTypeBlock:   true,
+	ControlAccessTypeEnable:  true,
+	ControlAccessTypeDelay:   true,
+	ControlAccessTypeMonitor: true,
+}
+
+// IsValidControlAccessType checks if the given type is valid.
+func IsValidControlAccessType(t string) bool {
+	return ValidControlAccessTypes[ControlAccessType(t)]
+}
+
+// ConditionType represents the type of condition in an IMPOSES_CONDITION relation.
+type ConditionType string
+
+const (
+	// ConditionTypeCost - tariffs, fees, economic burden.
+	ConditionTypeCost ConditionType = "cost"
+	// ConditionTypeCompliance - ESG, standards, regulatory compliance.
+	ConditionTypeCompliance ConditionType = "compliance"
+	// ConditionTypeTechnical - technical specifications, compatibility requirements.
+	ConditionTypeTechnical ConditionType = "technical"
+)
+
+// ValidConditionTypes is a set of all valid condition types.
+var ValidConditionTypes = map[ConditionType]bool{
+	ConditionTypeCost:       true,
+	ConditionTypeCompliance: true,
+	ConditionTypeTechnical:  true,
+}
+
+// IsValidConditionType checks if the given type is valid.
+func IsValidConditionType(t string) bool {
+	return ValidConditionTypes[ConditionType(t)]
+}

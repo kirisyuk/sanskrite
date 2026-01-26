@@ -382,6 +382,24 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             text = 'Domain research';
             humanReadable = { title: 'Domain research' };
           }
+        } else if (type.startsWith('horizon.domain.overlay.')) {
+          icon = type.includes('completed') ? 'success' : 'info';
+          const hr = data?.humanReadable;
+          if (hr && typeof hr?.title === 'string' && hr.title.trim()) {
+            const title = hr.title.trim();
+            const description =
+              typeof hr?.description === 'string' ? hr.description.trim() : '';
+            text = description ? `${title} — ${short(description)}` : title;
+            humanReadable = {
+              title,
+              description: description ? short(description) : undefined,
+              entityName:
+                typeof hr?.entityName === 'string' ? hr.entityName : undefined,
+            };
+          } else {
+            text = 'Domain overlay';
+            humanReadable = { title: 'Domain overlay' };
+          }
         } else if (type === 'horizon.scout.job.log') {
           const rawLine = typeof data?.line === 'string' ? data.line : '';
           const level =

@@ -363,5 +363,34 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - "Who are the publicly known close associates of <person> (business partners/friends/classmates)? Return RELATED_TO links with evidence."
 	- If relations seem sparse or inconsistent with the entity's scale, flag it.
 
+	MANDATORY - Strategic layer completeness (for DECISION_POINT and MECHANISM):
+	  - If the entity is a DECISION_POINT (fragment.type == DECISION_POINT OR canonicalPath starts with /decision/):
+	    - DECISION_POINT path MUST be /decision/{domain-slug}/{decision-slug}. If malformed, add conflict.
+	    - If no CONTROLS_ACCESS edges exist (this decision point controlling something), add:
+	      - "What does <decision_point> control or block access to? Return CONTROLS_ACCESS edges with qualifiers (type: block|enable|delay|monitor, mechanism, condition)."
+	    - If no USES_MECHANISM edges exist (linking to a mechanism), add:
+	      - "What mechanism does <decision_point> use to exercise control? Return /mechanism/{category}/{slug} path and USES_MECHANISM edge."
+	    - If agent/gatekeeper is not identified in relations, add:
+	      - "Who is the agent/gatekeeper for <decision_point>? Return /org/... or /gov/... path with role (gatekeeper|approver|influencer|enforcer|arbiter)."
+	    - If no evidence/provenance is linked, add:
+	      - "What is the evidence for <decision_point> existence? Return specific regulatory actions, documents, or events with dates."
+	    - Decision points without any connected edges are HIGH SEVERITY conflicts.
+
+	  - If the entity is a MECHANISM (fragment.type == MECHANISM OR canonicalPath starts with /mechanism/):
+	    - MECHANISM path MUST be /mechanism/{category}/{slug} where category is one of: regulatory, economic, technological, contractual, political.
+	    - If category is not valid, add conflict with HIGH severity.
+	    - If no USES_MECHANISM edges exist (agents using this mechanism), add:
+	      - "What agents/organizations use <mechanism>? Return USES_MECHANISM edges from /org/... or /gov/... paths."
+	    - If no APPLIES_TO edges exist (what the mechanism affects), add:
+	      - "What does <mechanism> apply to? Return APPLIES_TO edges to affected entities (org/product/facility/market)."
+	    - Orphan mechanisms (no incoming or outgoing edges) are HIGH SEVERITY conflicts.
+
+	  - For strategic relations (CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO):
+	    - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION/GOV; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM.
+	      - Qualifiers MUST include 'type' (block|enable|delay|monitor). Missing qualifiers = MEDIUM severity conflict.
+	    - IMPOSES_CONDITION: qualifiers MUST include 'type' (cost|compliance|technical) and 'impact'.
+	    - USES_MECHANISM: source MUST be DECISION_POINT/ORGANIZATION/GOV; target MUST be MECHANISM.
+	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET.
+
 	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, canonicalValidationBlock)
 }

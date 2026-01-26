@@ -124,3 +124,29 @@ func TestCanonicalPathParts_CommunityLegacy(t *testing.T) {
 		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, "/community/global/osint-researchers")
 	}
 }
+
+func TestCanonicalPathParts_Decision(t *testing.T) {
+	p, err := ParseCanonicalPathParts("/decision/ai-chips/euv-export-control")
+	if err != nil {
+		t.Fatalf("ParseCanonicalPathParts(decision) error: %v", err)
+	}
+	if p == nil || p.Namespace != "decision" || p.Decision == nil {
+		t.Fatalf("unexpected parts: %#v", p)
+	}
+	if got, ok := p.BuildCanonicalPath(); !ok || got != "/decision/ai-chips/euv-export-control" {
+		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, "/decision/ai-chips/euv-export-control")
+	}
+}
+
+func TestCanonicalPathParts_Mechanism(t *testing.T) {
+	p, err := ParseCanonicalPathParts("/mechanism/regulatory/export-control")
+	if err != nil {
+		t.Fatalf("ParseCanonicalPathParts(mechanism) error: %v", err)
+	}
+	if p == nil || p.Namespace != "mechanism" || p.Mechanism == nil {
+		t.Fatalf("unexpected parts: %#v", p)
+	}
+	if got, ok := p.BuildCanonicalPath(); !ok || got != "/mechanism/regulatory/export-control" {
+		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, "/mechanism/regulatory/export-control")
+	}
+}

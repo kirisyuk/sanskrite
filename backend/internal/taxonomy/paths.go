@@ -136,6 +136,10 @@ var ValidCanonicalPathNamespace = map[string]bool{
 	"media": true,
 	// Natural resource deposits (e.g., oil field, mine).
 	"deposit": true,
+	// Strategic decision layer (domain-scoped decision points).
+	"decision": true,
+	// Strategic mechanisms of control (global tools of control).
+	"mechanism": true,
 }
 
 // ValidateCanonicalPath validates that a canonical path matches the expected format.
@@ -262,6 +266,16 @@ func ValidateCanonicalPath(path string) error {
 		// The path is a machine-readable contract; it must be parseable and deterministic.
 		if err := validateDomainCanonicalPathParts(parts, path); err != nil {
 			return err
+		}
+	case "decision":
+		// /decision/{domain-slug}/{decision-slug}
+		if len(parts) != 3 {
+			return fmt.Errorf("decision canonical path must have exactly 3 segments: /decision/{domain-slug}/{decision-slug}: %s", path)
+		}
+	case "mechanism":
+		// /mechanism/{category}/{slug}
+		if len(parts) != 3 {
+			return fmt.Errorf("mechanism canonical path must have exactly 3 segments: /mechanism/{category}/{slug}: %s", path)
 		}
 	}
 

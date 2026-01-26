@@ -1039,6 +1039,7 @@ func main() {
 		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
 		horizonProfilesRepo := horizonrepo.NewFragmentProfilesRepository(fsClient.Client())
 		horizonProfilePoliciesRepo := horizonrepo.NewFragmentProfileRefreshPoliciesRepository(fsClient.Client())
+		horizonLensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(fsClient.Client())
 
 		// Horizon spend ledger (actual GenAI $ attribution) for budget enforcement.
 		horizonSpendLedger := horizonrepo.NewHorizonSpendLedger(fsClient.Client())
@@ -1240,7 +1241,8 @@ func main() {
 			// Initialize Lens subsystem
 			lensLifecycle := horizonlens.NewLifecycleManager(horizonFragmentsRepo)
 			lensCalculator := horizonlens.NewMetricsCalculator(horizonFragmentsRepo)
-			lensService := horizonlens.NewLensService(horizonLensesRepo, horizonFragmentsRepo, horizonScoutingJobsRepo, ontologyFactsRepo, lensLifecycle, lensCalculator, pub)
+			lensService := horizonlens.NewLensService(horizonLensesRepo, horizonFragmentsRepo, horizonScoutingJobsRepo, ontologyFactsRepo, lensLifecycle, lensCalculator, pub).
+				WithLensArtifactsRepo(horizonLensArtifactsRepo)
 
 			// Wire cascade cleanup repos for lens deletion (best-effort orphan cleanup)
 			horizonLensItemsRepo := horizonrepo.NewLensItemsRepository(fsClient.Client())
@@ -1255,6 +1257,7 @@ func main() {
 			)
 
 			horizonService.SetLensService(lensService)
+			horizonService.SetLensArtifactsRepo(horizonLensArtifactsRepo)
 
 			// Initialize Propagation subsystem
 			propagationEngine := horizonpropagation.NewPropagationEngine(
@@ -1367,6 +1370,8 @@ func main() {
 			scoutEngine.WithCanonicalPathResolver(canonicalPathResolver)
 			// Wire LensesRepository for updating lens ViewConfig on assembly completion
 			scoutEngine.WithLensesRepository(horizonLensesRepo)
+			// Wire LensArtifactsRepository for Phase 2 Strategic Overlay
+			scoutEngine.WithLensArtifactsRepo(horizonLensArtifactsRepo)
 
 			// Подключаем триггер распространения изменений
 			scoutEngine.WithPropagationTrigger(func(ctx context.Context, fragmentID string) error {

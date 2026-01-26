@@ -486,6 +486,10 @@ TASK: Extract all relevant information about this entity and return it as a JSON
        - If "Company X is owned by John Doe": emit SUBSIDIARY_OF from Company X -> John Doe (NOT OWNS from Company X -> John Doe).
        - If THIS FRAGMENT is a PERSON and they own Company X: emit OWNS from Person -> Company X.
    - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
+  - CONTROLS_ACCESS: strategic gatekeeping (block/enable/delay/monitor). Use ONLY when modeling decision points or explicit gatekeepers.
+  - IMPOSES_CONDITION: source forces target to comply with rules/costs/technical constraints (strategic overlay).
+  - USES_MECHANISM: source possesses/uses a mechanism of control (strategic overlay).
+  - APPLIES_TO: mechanism applies to target entity or relation scope (strategic overlay).
    - MANAGES: source manages target (formal authority: CEO/executive/director/operator). Do NOT use for informal influence.
   - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
   - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
@@ -519,6 +523,10 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
    - OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT
    - CONTROLS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY
+  - CONTROLS_ACCESS: source SHOULD be DECISION_POINT or ORGANIZATION/GOV, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
+  - IMPOSES_CONDITION: source SHOULD be DECISION_POINT or ORGANIZATION/GOV, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
+  - USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION/GOV, target MUST be MECHANISM
+  - APPLIES_TO: source MUST be MECHANISM, target can be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM/DOMAIN
    - MANAGES: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PROGRAM
    - EMPLOYED_BY: source MUST be PERSON, target MUST be ORGANIZATION
    - BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION

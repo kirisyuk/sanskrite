@@ -63,21 +63,49 @@ func main() {
 		string(horizonmodels.DependencyTypeCompetesWith),
 		string(horizonmodels.DependencyTypeInfluences),
 		string(horizonmodels.DependencyTypeDependsOn),
+		string(horizonmodels.DependencyTypeAffects),
 		string(horizonmodels.DependencyTypeTransformsInto),
+		string(horizonmodels.DependencyTypeExtractsFrom),
+		// Market participation
+		string(horizonmodels.DependencyTypeParticipatesIn),
+		string(horizonmodels.DependencyTypeDominates),
+		// Market hierarchy
+		string(horizonmodels.DependencyTypeHasSubmarket),
+		// Government hierarchy
+		string(horizonmodels.DependencyTypeAdministers),
 		// Governance / org-person
 		string(horizonmodels.DependencyTypeManages),
 		string(horizonmodels.DependencyTypeControls),
+		string(horizonmodels.DependencyTypeControlsAccess),
 		string(horizonmodels.DependencyTypeEmployedBy),
 		string(horizonmodels.DependencyTypeBoardMemberOf),
 		string(horizonmodels.DependencyTypeFounded),
 		string(horizonmodels.DependencyTypeInvestsIn),
 		string(horizonmodels.DependencyTypePartnersWith),
+		// Strategic decision layer
+		string(horizonmodels.DependencyTypeImposesCondition),
+		string(horizonmodels.DependencyTypeUsesMechanism),
+		string(horizonmodels.DependencyTypeAppliesTo),
 		// People/org meta-relations
 		string(horizonmodels.DependencyTypeKeyPerson),
 		// OSINT-lite / governance extensions
 		string(horizonmodels.DependencyTypeAuditedBy),
 		string(horizonmodels.DependencyTypeRelativeOf),
 		string(horizonmodels.DependencyTypeRelatedTo),
+		// Community relationships
+		string(horizonmodels.DependencyTypeOperatesVia),
+		string(horizonmodels.DependencyTypeMemberOf),
+		string(horizonmodels.DependencyTypeAffiliatedWith),
+		// Community hierarchy
+		string(horizonmodels.DependencyTypeHasSubgroup),
+		// Domain contracts
+		string(horizonmodels.DependencyTypeFocusesOn),
+		string(horizonmodels.DependencyTypeInvolvesActor),
+		string(horizonmodels.DependencyTypeInGeoScope),
+		string(horizonmodels.DependencyTypeAbout),
+		string(horizonmodels.DependencyTypeRelatedDomain),
+		string(horizonmodels.DependencyTypeBroadensTo),
+		string(horizonmodels.DependencyTypeNarrowsTo),
 	}
 
 	seen := map[string]struct{}{}

@@ -35,6 +35,7 @@ type HorizonService struct {
 	watchdogRepo         *repo.WatchdogConfigsRepository
 	scoutingJobsRepo     *repo.ScoutingJobsRepository
 	fragmentVersionsRepo *repo.HorizonFragmentVersionsRepository
+	lensArtifactsRepo    *repo.LensArtifactsRepository // Phase 2 Strategic Overlay artifacts
 }
 
 // NewHorizonService создает новый экземпляр HorizonService с валидацией зависимостей
@@ -180,6 +181,16 @@ func (s *HorizonService) Edges() *repo.DependencyEdgesRepository {
 // FragmentVersions возвращает HorizonFragmentVersionsRepository
 func (s *HorizonService) FragmentVersions() *repo.HorizonFragmentVersionsRepository {
 	return s.fragmentVersionsRepo
+}
+
+// LensArtifacts возвращает LensArtifactsRepository for Phase 2 Strategic Overlay
+func (s *HorizonService) LensArtifacts() *repo.LensArtifactsRepository {
+	return s.lensArtifactsRepo
+}
+
+// SetLensArtifactsRepo устанавливает LensArtifactsRepository (optional, for Phase 2 Strategic Overlay)
+func (s *HorizonService) SetLensArtifactsRepo(repo *repo.LensArtifactsRepository) {
+	s.lensArtifactsRepo = repo
 }
 
 // RealtimePublisher exposes the underlying realtime publisher for HTTP handlers that need to emit

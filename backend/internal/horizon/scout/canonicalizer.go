@@ -198,6 +198,10 @@ func normalizeFragmentTypeHardcoded(s string) models.FragmentType {
 		return models.FragmentTypePerson
 	case string(models.FragmentTypeMediaChannel), "MEDIA", "CHANNEL":
 		return models.FragmentTypeMediaChannel
+	case string(models.FragmentTypeDecisionPoint), "DECISIONPOINT", "DECISION":
+		return models.FragmentTypeDecisionPoint
+	case string(models.FragmentTypeMechanism):
+		return models.FragmentTypeMechanism
 	case string(models.FragmentTypeSupplyLink), "SUPPLYLINK":
 		return models.FragmentTypeSupplyLink
 	case string(models.FragmentTypeDeposit), "MINE", "FIELD", "BASIN", "RESERVOIR":

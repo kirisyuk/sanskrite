@@ -234,6 +234,18 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     text: '#5C4F44', textDark: '#F0EAE5',
     accent: '#9C8574', accentDark: '#A89484', // warmer brown for left spine
   },
+  'DECISION_POINT': {
+    bg: '#FEF9C3', bgDark: '#422006',
+    border: '#EAB308', borderDark: '#FACC15',
+    text: '#854D0E', textDark: '#FEF08A',
+    accent: '#EAB308', accentDark: '#FACC15',
+  },
+  'MECHANISM': {
+    bg: '#E0F2FE', bgDark: '#0C4A6E',
+    border: '#38BDF8', borderDark: '#7DD3FC',
+    text: '#075985', textDark: '#BAE6FD',
+    accent: '#38BDF8', accentDark: '#7DD3FC',
+  },
   'GEO_REGION': {
     bg: '#D1FAE5', bgDark: '#064E3B',
     border: '#10B981', borderDark: '#34D399',
@@ -1106,6 +1118,29 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
         </svg>
       );
     
+    case 'DECISION_POINT':
+      // Decision point: compass/target
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <circle cx="12" cy="12" r="8" />
+          <circle cx="12" cy="12" r="2.5" fill={color} />
+          <path d="M12 4v2" />
+          <path d="M12 18v2" />
+          <path d="M4 12h2" />
+          <path d="M18 12h2" />
+        </svg>
+      );
+
+    case 'MECHANISM':
+      // Mechanism: wrench
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M22 19l-6.5-6.5" />
+          <path d="M16 10a5 5 0 1 1-2-4l-3 3 3 3 3-3z" />
+          <path d="M2 22l4-4" />
+        </svg>
+      );
+
     case 'DOMAIN':
       // Domain: Capitol/Columns (foundation/institution)
       return (

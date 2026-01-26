@@ -35,6 +35,8 @@ type CanonicalPathParts struct {
 	Deposit   *DepositPathParts
 	Sphere    *SpherePathParts
 	Event     *EventPathParts
+	Decision  *DecisionPathParts
+	Mechanism *MechanismPathParts
 }
 
 // OrgPathParts represents /org paths. Canonical string form remains:
@@ -170,6 +172,18 @@ type SpherePathParts struct {
 // EventPathParts represents /event/{slug}.
 type EventPathParts struct {
 	Slug string
+}
+
+// DecisionPathParts represents /decision/{domain-slug}/{decision-slug}.
+type DecisionPathParts struct {
+	DomainSlug   string
+	DecisionSlug string
+}
+
+// MechanismPathParts represents /mechanism/{category}/{slug}.
+type MechanismPathParts struct {
+	Category string
+	Slug     string
 }
 
 // ParseCanonicalPathParts parses a canonical path string into semantic parts.
@@ -369,6 +383,20 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 		out.Event = &EventPathParts{Slug: parts[1]}
 		return out, nil
 
+	case "decision":
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("decision path must be /decision/{domain-slug}/{decision-slug}: %q", path)
+		}
+		out.Decision = &DecisionPathParts{DomainSlug: parts[1], DecisionSlug: parts[2]}
+		return out, nil
+
+	case "mechanism":
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("mechanism path must be /mechanism/{category}/{slug}: %q", path)
+		}
+		out.Mechanism = &MechanismPathParts{Category: parts[1], Slug: parts[2]}
+		return out, nil
+
 	default:
 		// Unknown namespace: return a minimal struct. Validation is handled elsewhere.
 		return out, nil
@@ -535,6 +563,18 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 			return "", false
 		}
 		return JoinPath("event", p.Event.Slug), true
+
+	case "decision":
+		if p.Decision == nil || strings.TrimSpace(p.Decision.DomainSlug) == "" || strings.TrimSpace(p.Decision.DecisionSlug) == "" {
+			return "", false
+		}
+		return JoinPath("decision", p.Decision.DomainSlug, p.Decision.DecisionSlug), true
+
+	case "mechanism":
+		if p.Mechanism == nil || strings.TrimSpace(p.Mechanism.Category) == "" || strings.TrimSpace(p.Mechanism.Slug) == "" {
+			return "", false
+		}
+		return JoinPath("mechanism", p.Mechanism.Category, p.Mechanism.Slug), true
 	}
 	return "", false
 }

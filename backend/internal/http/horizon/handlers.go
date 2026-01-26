@@ -11,14 +11,14 @@ import (
 
 // HorizonHandlers содержит все HTTP handlers для Horizon API
 type HorizonHandlers struct {
-	service        *horizon.HorizonService
+	service          *horizon.HorizonService
 	lensItemsHandler *LensItemsHandler
-	genAIHandler   *httputil.GenAIHandler
-	profilesHandler *ProfilesHandler
-	docsRepo       *corerepo.DocumentsRepository
-	usersRepo      *corerepo.UsersRepository
-	interactions   *corerepo.InteractionsRepository
-	factsRepo      *corerepo.OntologyFactsRepository
+	genAIHandler     *httputil.GenAIHandler
+	profilesHandler  *ProfilesHandler
+	docsRepo         *corerepo.DocumentsRepository
+	usersRepo        *corerepo.UsersRepository
+	interactions     *corerepo.InteractionsRepository
+	factsRepo        *corerepo.OntologyFactsRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -247,6 +247,37 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 		case "graph-query":
 			h.QueryGraph(w, r)
 			return
+		case "domain-overlay-preview":
+			h.PreviewDomainOverlay(w, r)
+			return
+		case "domain-overlay-execute":
+			h.ExecuteDomainOverlay(w, r)
+			return
+		case "artifacts":
+			// Check for /artifacts/stats or /artifacts/context
+			if len(pathParts) > 2 {
+				switch pathParts[2] {
+				case "stats":
+					h.GetLensArtifactStats(w, r)
+					return
+				case "context":
+					h.GetLensArtifactContext(w, r)
+					return
+				}
+			}
+			// /api/horizon/lenses/{lensId}/artifacts
+			switch r.Method {
+			case http.MethodGet:
+				h.ListLensArtifacts(w, r)
+			case http.MethodDelete:
+				h.DeleteLensArtifacts(w, r)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		case "trigger-phase2":
+			h.TriggerPhase2StrategicOverlay(w, r)
+			return
 		default:
 			http.Error(w, "Unknown subpath", http.StatusNotFound)
 			return
@@ -419,4 +450,3 @@ func (h *HorizonHandlers) HandleScoutRoutes(w http.ResponseWriter, r *http.Reque
 }
 
 // GetAssemblyStatus, GetCockpitData, SimulateWhatIf реализованы в assembly.go и cockpit.go
-

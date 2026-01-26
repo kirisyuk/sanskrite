@@ -13,6 +13,10 @@ func InferFragmentTypeFromCanonicalPath(path string) models.FragmentType {
 	switch {
 	case strings.HasPrefix(p, "/domain/"):
 		return models.FragmentTypeDomain
+	case strings.HasPrefix(p, "/decision/"):
+		return models.FragmentTypeDecisionPoint
+	case strings.HasPrefix(p, "/mechanism/"):
+		return models.FragmentTypeMechanism
 	case strings.HasPrefix(p, "/product/"):
 		return models.FragmentTypeProduct
 	case strings.HasPrefix(p, "/program/"):

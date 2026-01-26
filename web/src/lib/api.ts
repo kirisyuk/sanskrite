@@ -1980,6 +1980,51 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  /**
+   * Horizon - Preview strategic domain overlay (no job creation).
+   * POST /api/horizon/lenses/{lensId}/domain-overlay-preview
+   */
+  async previewDomainOverlay(
+    lensId: string,
+    input: { query: string }
+  ): Promise<{
+    intent: any;
+    existingDomains?: string[];
+  }> {
+    try {
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/domain-overlay-preview`, input);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] previewDomainOverlay error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Horizon - Execute strategic domain overlay job.
+   * POST /api/horizon/lenses/{lensId}/domain-overlay-execute
+   */
+  async executeDomainOverlay(
+    lensId: string,
+    input: { query: string; domainCanonicalPath?: string; specialties?: string[] },
+    options?: { correlationId?: string; sessionId?: string }
+  ): Promise<{
+    jobId: string;
+    domainCanonicalPath: string;
+    existingDomains?: string[];
+  }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/domain-overlay-execute`, input, { headers });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] executeDomainOverlay error:`, error);
+      throw error;
+    }
+  }
+
   async getHorizonLensAssemblyStatus(lensId: string): Promise<{
     status: string;
     phase: string;

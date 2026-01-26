@@ -487,6 +487,12 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'AFFECTS':
     case 'IMPACTS':
       return 'context';
+    // Strategic overlay relations (decision/mechanism layer)
+    case 'CONTROLS_ACCESS':
+    case 'IMPOSES_CONDITION':
+    case 'USES_MECHANISM':
+    case 'APPLIES_TO':
+      return 'context';
     
     default:
       // Unknown types: use direction as hint
@@ -581,6 +587,11 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'INFLUENCES',
     'AFFECTS',
     'IMPACTS',
+    // Strategic overlay relations
+    'CONTROLS_ACCESS',
+    'IMPOSES_CONDITION',
+    'USES_MECHANISM',
+    'APPLIES_TO',
   ]);
 
   const isLeft = LEFT.has(t);
@@ -608,6 +619,11 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'OPERATES_IN',
     'BASED_IN',
     'HEADQUARTERED_IN',
+    // Strategic overlay relations: treat as context (top band)
+    'CONTROLS_ACCESS',
+    'IMPOSES_CONDITION',
+    'USES_MECHANISM',
+    'APPLIES_TO',
   ]);
 
   if (REVERSE_VERTICAL.has(t)) {
@@ -1167,6 +1183,11 @@ export async function layoutLevelsTwoPane<T = any>(
     'PARENT_OF',
     'SUBSIDIARY_OF',
     'ADMINISTERS',
+    // Strategic overlay relations
+    'CONTROLS_ACCESS',
+    'IMPOSES_CONDITION',
+    'USES_MECHANISM',
+    'APPLIES_TO',
   ]);
   const DOCK_SUPPLY = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
   const DOCK_DEPENDENCIES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
@@ -1241,6 +1262,11 @@ export async function layoutLevelsTwoPane<T = any>(
     'RELATED_DOMAIN',
     'BROADENS_TO',
     'NARROWS_TO',
+    // Strategic overlay relations (keep to the RIGHT backbone)
+    'CONTROLS_ACCESS',
+    'IMPOSES_CONDITION',
+    'USES_MECHANISM',
+    'APPLIES_TO',
     // Market-defining relations (org -> market): treat as hierarchy signal so the org is placed to the RIGHT.
     'DOMINATES',
     // Market hierarchy (parent -> submarket).
@@ -1774,6 +1800,9 @@ export async function layoutLevelsTwoPane<T = any>(
       'EVENT': 'Milestones',
       // Threats
       'RISK': 'Threats',
+      // Strategic layer
+      'DECISION_POINT': 'Strategic Layer',
+      'MECHANISM': 'Strategic Layer',
     };
     return TYPE_LABEL_MAP[tt] || typeKey
       .replace(/_/g, ' ')
@@ -1802,6 +1831,8 @@ export async function layoutLevelsTwoPane<T = any>(
     // Other domain objects
     if (tt === 'EVENT') return 310;
     if (tt === 'RISK') return 320;
+    if (tt === 'DECISION_POINT') return 340;
+    if (tt === 'MECHANISM') return 350;
     if (tt === 'UNKNOWN') return 900;
     return 500; // stable middle bucket for new/unknown types
   };
@@ -4027,7 +4058,9 @@ export function deriveLevelsTreeMetadata<T = any>(
     // Market hierarchy (parent -> submarket)
     'HAS_SUBMARKET',
     // Influence is usually Top-Down: Regulator (Parent) -> Company (Child)
-    'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'
+    'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS',
+    // Strategic overlay relations (control/conditions/mechanisms)
+    'CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'USES_MECHANISM', 'APPLIES_TO',
   ]);
   const STRONG_CONTROL_TYPES = new Set([
     'OWNS',
@@ -4040,6 +4073,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     'ADMINISTERS',
   ]);
   const INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS']);
+  const STRATEGIC_TYPES = new Set(['CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'USES_MECHANISM', 'APPLIES_TO']);
   const hierarchyScore = (et: string): number => {
     const t = String(et || '').toUpperCase().trim();
     if (!t) return 0;
@@ -4049,6 +4083,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     if (t === 'BOARD_MEMBER_OF' || t === 'EXECUTIVE_OF') return 220;
     if (t === 'PRODUCES' || t === 'SUPPLIES_TO' || t === 'TRANSFORMS_INTO') return 120;
     if (INFLUENCE_TYPES.has(t)) return 40;
+    if (STRATEGIC_TYPES.has(t)) return 160;
     return 80;
   };
   

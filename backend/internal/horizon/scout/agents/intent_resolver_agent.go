@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -77,6 +76,11 @@ func NewIntentResolverAgent(executor *ai.AITaskExecutor) *IntentResolverAgent {
 }
 
 func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*IntentResolution, error) {
+	return a.ResolveWithContext(ctx, query, nil)
+}
+
+// ResolveWithContext resolves intent with optional existing domain context to avoid duplicates.
+func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query string, existingDomains []string) (*IntentResolution, error) {
 	if a == nil || a.executor == nil {
 		return nil, fmt.Errorf("intent resolver not configured")
 	}
@@ -85,43 +89,47 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 		return nil, fmt.Errorf("query is required")
 	}
 
-	prompt := a.buildPrompt(query)
-	verifier := ai.NewGenericVerifier(func(result IntentResolution) error {
-		// Basic structural checks; deeper normalization happens after.
-		if strings.TrimSpace(result.Focus) == "" {
-			return fmt.Errorf("focus is required")
-		}
-		if len(result.Anchors) == 0 && len(result.Domains) == 0 {
-			return fmt.Errorf("at least 1 anchor or 1 domain is required")
-		}
-		return nil
-	})
-
-	task := &ai.AITask{
-		TaskType:     ai.TaskTypeContentAnalysis,
-		InputContent: prompt,
-		AIRequirements: ai.AIRequirements{
-			TextGenerationCapability:  true,
-			SearchGroundingCapability: false,
-			MinCapabilityScore:        7,
-			MinContextWindow:          4000,
-			MaxOutputSize:             1536,
-		},
-		Verifier: verifier,
+	domainAgent := NewDomainResolverAgent(a.executor)
+	domainPhase, err := domainAgent.ResolveWithContext(ctx, query, existingDomains)
+	if err != nil {
+		return nil, err
+	}
+	anchorAgent := NewAnchorResolverAgent(a.executor)
+	anchorPhase, err := anchorAgent.ResolveWithContext(ctx, query, domainPhase.Domains)
+	if err != nil {
+		return nil, err
 	}
 
-	raw, err := a.executor.ExecuteStructuredTask(ctx, task)
-	if err != nil {
-		return nil, fmt.Errorf("intent resolve failed: %w", err)
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("marshal intent result: %w", err)
-	}
 	var out IntentResolution
-	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, fmt.Errorf("unmarshal intent result: %w", err)
+	out.Focus = strings.TrimSpace(domainPhase.Focus)
+	out.SpherePaths = append([]string(nil), domainPhase.SpherePaths...)
+	out.Keywords = append([]string(nil), domainPhase.Keywords...)
+	out.Domains = append([]DomainResolution(nil), domainPhase.Domains...)
+	if len(anchorPhase.Anchors) > 0 {
+		out.Anchors = make([]struct {
+			CanonicalPath string  `json:"canonicalPath"`
+			Type          string  `json:"type"`
+			Name          string  `json:"name,omitempty"`
+			Confidence    float64 `json:"confidence"`
+			Reason        string  `json:"reason"`
+		}, 0, len(anchorPhase.Anchors))
+		for _, a := range anchorPhase.Anchors {
+			out.Anchors = append(out.Anchors, struct {
+				CanonicalPath string  `json:"canonicalPath"`
+				Type          string  `json:"type"`
+				Name          string  `json:"name,omitempty"`
+				Confidence    float64 `json:"confidence"`
+				Reason        string  `json:"reason"`
+			}{
+				CanonicalPath: a.CanonicalPath,
+				Type:          a.Type,
+				Name:          a.Name,
+				Confidence:    a.Confidence,
+				Reason:        a.Reason,
+			})
+		}
 	}
+	out.DecompositionHints = append([]DecompositionHint(nil), anchorPhase.DecompositionHints...)
 
 	// Normalize + validate (taxonomy-first).
 	out.Focus = strings.TrimSpace(out.Focus)
@@ -196,6 +204,27 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 
 	// Normalize domains: canonicalize formatting and drop invalid paths.
 	_, countryNameByCC := extractCountryAnchors(out.Anchors)
+	existingDomainMap := make(map[string]string, len(existingDomains))
+	if len(existingDomains) > 0 {
+		for _, p := range existingDomains {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			p = normalizeCanonicalPathForTools(p)
+			p = slugifyCanonicalPath(p)
+			if !strings.HasPrefix(p, "/domain/") {
+				continue
+			}
+			if err := taxonomy.ValidateCanonicalPath(p); err != nil {
+				continue
+			}
+			if norm, nerr := taxonomy.NormalizeDomainCanonicalPath(p); nerr == nil && strings.TrimSpace(norm) != "" {
+				p = norm
+			}
+			existingDomainMap[p] = p
+		}
+	}
 	if len(out.Domains) > 0 {
 		validDomains := make([]DomainResolution, 0, len(out.Domains))
 		for _, d := range out.Domains {
@@ -215,6 +244,9 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 				if norm, nerr := taxonomy.NormalizeDomainCanonicalPath(cp); nerr == nil && strings.TrimSpace(norm) != "" {
 					cp = norm
 				}
+			}
+			if existing, ok := existingDomainMap[cp]; ok && strings.TrimSpace(existing) != "" {
+				cp = existing
 			}
 			// Parse contractType + facets from path and treat it as source of truth.
 			ct, facets := parseDomainPathForIntent(cp)
@@ -321,6 +353,14 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 	if len(out.Domains) == 0 {
 		if inferred := bestEffortInferDomainsFromQuery(query, out.Focus, out.Anchors); len(inferred) > 0 {
 			out.Domains = inferred
+		}
+	}
+	if len(existingDomainMap) > 0 && len(out.Domains) > 0 {
+		for i := range out.Domains {
+			cp := strings.TrimSpace(out.Domains[i].CanonicalPath)
+			if existing, ok := existingDomainMap[cp]; ok && strings.TrimSpace(existing) != "" {
+				out.Domains[i].CanonicalPath = existing
+			}
 		}
 	}
 
@@ -915,7 +955,13 @@ func dedupStrings(in []string, maxN int) []string {
 	return out
 }
 
-func (a *IntentResolverAgent) buildPrompt(query string) string {
+// Legacy: buildPrompt is the pre-refactor monolithic intent prompt builder.
+// ResolveWithContext no longer uses it (split into DomainResolverAgent + AnchorResolverAgent),
+// but we keep it for reference while the migration settles. The blank identifier assignment
+// prevents editor "unusedfunc" warnings from gopls.
+var _ = (*IntentResolverAgent).buildPrompt
+
+func (a *IntentResolverAgent) buildPrompt(query string, existingDomains []string) string {
 	quoted := extractQuotedPhrases(query)
 	quotedBlock := ""
 	if len(quoted) > 0 {
@@ -931,9 +977,20 @@ func (a *IntentResolverAgent) buildPrompt(query string) string {
 	if looksLikeMultiEntityQuery(query) {
 		multiHint = "\n\nMULTI-ENTITY HINT:\n- This query likely contains multiple distinct real-world entities. Prefer returning multiple separate anchors (2-3) rather than collapsing them into one."
 	}
+	existingDomainsBlock := ""
+	if len(existingDomains) > 0 {
+		existing := normalizeDomainPathsList(existingDomains, 10)
+		if len(existing) > 0 {
+			existingDomainsBlock = "\n\nEXISTING DOMAINS (reuse if matches; do not create duplicates):\n"
+			for _, d := range existing {
+				existingDomainsBlock += fmt.Sprintf("- %s\n", d)
+			}
+		}
+	}
 	return fmt.Sprintf(`You are an intent resolver for a risk analysis system. You MUST convert a user query into a reusable, taxonomy-aligned intent.
 
 USER QUERY:
+%s
 %s
 %s
 %s
@@ -986,6 +1043,7 @@ RULES:
 - DOMAINS (CRITICAL):
   - A DOMAIN is an executable knowledge contract: “what the user wants to know about the world” and how to structure exploration.
   - Use domains when the query is an analytical question or a research focus that must be expanded into multiple entities.
+  - If a matching DOMAIN already exists in the context list, reuse the SAME canonicalPath (do NOT create duplicates).
   - If the query is about relations/interaction between two countries or actors, you MUST create a DOMAIN of contractType bilateral-relations (in addition to anchors).
     Example: "Saudi Arabia and Yemen bilateral relations" -> domain:
       /domain/v1/bilateral-relations/geo/sa/geo/ye
@@ -1166,7 +1224,7 @@ DECOMPOSITION HINTS (REQUIRED for MARKET/PROGRAM anchors):
   - searchQueries: 3-5 concrete search queries about the program
 - searchQueries MUST be in English and actionable for web search.
 - Return ONLY JSON. No markdown. No commentary.`,
-		query, quotedBlock, multiHint)
+		query, quotedBlock, multiHint, existingDomainsBlock)
 }
 
 // looksLikeMultiEntityQuery is a cheap heuristic to hint the LLM to avoid collapsing multiple entities into one anchor.

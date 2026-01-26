@@ -338,6 +338,12 @@ func (pc *PolicyChecker) checkFragmentPath(ctx context.Context, frag *horizonmod
 
 	case horizonmodels.FragmentTypePerson:
 		violations = append(violations, pc.checkPersonPath(ctx, frag)...)
+
+	case horizonmodels.FragmentTypeDecisionPoint:
+		violations = append(violations, pc.checkDecisionPointPath(ctx, frag)...)
+
+	case horizonmodels.FragmentTypeMechanism:
+		violations = append(violations, pc.checkMechanismPath(ctx, frag)...)
 	}
 
 	return violations
@@ -357,7 +363,9 @@ func shouldValidateCanonicalPath(path string) bool {
 		strings.HasPrefix(path, "/sphere/"),
 		strings.HasPrefix(path, "/event/"),
 		strings.HasPrefix(path, "/media/"),
-		strings.HasPrefix(path, "/deposit/"):
+		strings.HasPrefix(path, "/deposit/"),
+		strings.HasPrefix(path, "/decision/"),
+		strings.HasPrefix(path, "/mechanism/"):
 		return true
 	default:
 		return false
@@ -881,6 +889,185 @@ func (pc *PolicyChecker) checkPersonPath(_ context.Context, frag *horizonmodels.
 	return violations
 }
 
+// checkDecisionPointPath validates a DECISION_POINT canonical path.
+// Format: /decision/{domain-slug}/{decision-slug}
+func (pc *PolicyChecker) checkDecisionPointPath(_ context.Context, frag *horizonmodels.HorizonFragment) []PolicyViolation {
+	var violations []PolicyViolation
+	path := frag.CanonicalPath
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	// /decision/{domain-slug}/{decision-slug} = 3 parts
+	if len(parts) != 3 || parts[0] != "decision" {
+		violations = append(violations, PolicyViolation{
+			ID:          uuid.New().String(),
+			Type:        ViolationPathFormat,
+			Severity:    SeverityCritical,
+			FragmentID:  frag.ID,
+			ActualValue: path,
+			Rule:        "decision_point_path_format",
+			Description: fmt.Sprintf("DECISION_POINT path must be /decision/{domain-slug}/{decision-slug}, got: %s", path),
+			Confidence:  1.0,
+			AutoFixable: false,
+			DetectedAt:  time.Now(),
+			DetectedBy:  "deterministic",
+		})
+		return violations
+	}
+
+	domainSlug := parts[1]
+	decisionSlug := parts[2]
+
+	// Validate slugs are lowercase kebab-case
+	if domainSlug != strings.ToLower(domainSlug) || strings.Contains(domainSlug, " ") {
+		violations = append(violations, PolicyViolation{
+			ID:          uuid.New().String(),
+			Type:        ViolationPathFormat,
+			Severity:    SeverityWarning,
+			FragmentID:  frag.ID,
+			ActualValue: path,
+			Rule:        "decision_point_domain_slug",
+			Description: fmt.Sprintf("Domain slug must be lowercase kebab-case: %s", domainSlug),
+			Confidence:  1.0,
+			AutoFixable: true,
+			DetectedAt:  time.Now(),
+			DetectedBy:  "deterministic",
+		})
+	}
+
+	if decisionSlug != strings.ToLower(decisionSlug) || strings.Contains(decisionSlug, " ") {
+		violations = append(violations, PolicyViolation{
+			ID:          uuid.New().String(),
+			Type:        ViolationPathFormat,
+			Severity:    SeverityWarning,
+			FragmentID:  frag.ID,
+			ActualValue: path,
+			Rule:        "decision_point_decision_slug",
+			Description: fmt.Sprintf("Decision slug must be lowercase kebab-case: %s", decisionSlug),
+			Confidence:  1.0,
+			AutoFixable: true,
+			DetectedAt:  time.Now(),
+			DetectedBy:  "deterministic",
+		})
+	}
+
+	// Check that DecisionPoint has a title and description
+	if strings.TrimSpace(frag.Labels["en"]) == "" {
+		violations = append(violations, PolicyViolation{
+			ID:          uuid.New().String(),
+			Type:        ViolationMissingField,
+			Severity:    SeverityWarning,
+			FragmentID:  frag.ID,
+			ActualValue: "",
+			Rule:        "decision_point_title",
+			Description: "DECISION_POINT must have a title in labels.en",
+			Confidence:  1.0,
+			AutoFixable: false,
+			DetectedAt:  time.Now(),
+			DetectedBy:  "deterministic",
+		})
+	}
+
+	if strings.TrimSpace(frag.Description) == "" {
+		violations = append(violations, PolicyViolation{
+			ID:          uuid.New().String(),
+			Type:        ViolationMissingField,
+			Severity:    SeverityWarning,
+			FragmentID:  frag.ID,
+			ActualValue: "",
+			Rule:        "decision_point_description",
+			Description: "DECISION_POINT should have a description explaining what it controls",
+			Confidence:  0.9,
+			AutoFixable: false,
+			DetectedAt:  time.Now(),
+			DetectedBy:  "deterministic",
+		})
+	}
+
+	return violations
+}
+
+// checkMechanismPath validates a MECHANISM canonical path.
+// Format: /mechanism/{category}/{slug}
+func (pc *PolicyChecker) checkMechanismPath(_ context.Context, frag *horizonmodels.HorizonFragment) []PolicyViolation {
+	var violations []PolicyViolation
+	path := frag.CanonicalPath
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	// /mechanism/{category}/{slug} = 3 parts
+	if len(parts) != 3 || parts[0] != "mechanism" {
+		violations = append(violations, PolicyViolation{
+			ID:          uuid.New().String(),
+			Type:        ViolationPathFormat,
+			Severity:    SeverityCritical,
+			FragmentID:  frag.ID,
+			ActualValue: path,
+			Rule:        "mechanism_path_format",
+			Description: fmt.Sprintf("MECHANISM path must be /mechanism/{category}/{slug}, got: %s", path),
+			Confidence:  1.0,
+			AutoFixable: false,
+			DetectedAt:  time.Now(),
+			DetectedBy:  "deterministic",
+		})
+		return violations
+	}
+
+	category := parts[1]
+	slug := parts[2]
+
+	// Validate category is one of the allowed values
+	if !horizonmodels.IsValidMechanismCategory(category) {
+		violations = append(violations, PolicyViolation{
+			ID:          uuid.New().String(),
+			Type:        ViolationPathFormat,
+			Severity:    SeverityCritical,
+			FragmentID:  frag.ID,
+			ActualValue: path,
+			Rule:        "mechanism_category",
+			Description: fmt.Sprintf("MECHANISM category must be one of: regulatory, economic, technological, contractual, political. Got: %s", category),
+			Confidence:  1.0,
+			AutoFixable: false,
+			DetectedAt:  time.Now(),
+			DetectedBy:  "deterministic",
+		})
+	}
+
+	// Validate slug is lowercase kebab-case
+	if slug != strings.ToLower(slug) || strings.Contains(slug, " ") {
+		violations = append(violations, PolicyViolation{
+			ID:          uuid.New().String(),
+			Type:        ViolationPathFormat,
+			Severity:    SeverityWarning,
+			FragmentID:  frag.ID,
+			ActualValue: path,
+			Rule:        "mechanism_slug",
+			Description: fmt.Sprintf("Mechanism slug must be lowercase kebab-case: %s", slug),
+			Confidence:  1.0,
+			AutoFixable: true,
+			DetectedAt:  time.Now(),
+			DetectedBy:  "deterministic",
+		})
+	}
+
+	// Check that Mechanism has a title
+	if strings.TrimSpace(frag.Labels["en"]) == "" {
+		violations = append(violations, PolicyViolation{
+			ID:          uuid.New().String(),
+			Type:        ViolationMissingField,
+			Severity:    SeverityWarning,
+			FragmentID:  frag.ID,
+			ActualValue: "",
+			Rule:        "mechanism_title",
+			Description: "MECHANISM must have a title in labels.en",
+			Confidence:  1.0,
+			AutoFixable: false,
+			DetectedAt:  time.Now(),
+			DetectedBy:  "deterministic",
+		})
+	}
+
+	return violations
+}
+
 // checkEdge validates an edge against direction and type rules.
 func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonmodels.DependencyEdge) []PolicyViolation {
 	var violations []PolicyViolation
@@ -1255,6 +1442,131 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 				DetectedBy: "deterministic",
 			})
 		}
+	}
+
+	// Check strategic edge qualifiers
+	violations = append(violations, pc.checkStrategicEdgeQualifiers(edge)...)
+
+	return violations
+}
+
+// checkStrategicEdgeQualifiers validates qualifiers for strategic layer edges.
+func (pc *PolicyChecker) checkStrategicEdgeQualifiers(edge *horizonmodels.DependencyEdge) []PolicyViolation {
+	var violations []PolicyViolation
+
+	// Early return for non-strategic edges
+	switch edge.Type {
+	case horizonmodels.DependencyTypeControlsAccess,
+		horizonmodels.DependencyTypeImposesCondition,
+		horizonmodels.DependencyTypeUsesMechanism,
+		horizonmodels.DependencyTypeAppliesTo:
+		// Continue to validation
+	default:
+		return violations // Not a strategic edge, no qualifiers needed
+	}
+
+	// Ensure Qualifiers map exists for safe access
+	qualifiers := edge.Qualifiers
+	if qualifiers == nil {
+		qualifiers = make(map[string]interface{})
+	}
+
+	switch edge.Type {
+	case horizonmodels.DependencyTypeControlsAccess:
+		// CONTROLS_ACCESS requires 'type' qualifier (block|enable|delay|monitor)
+		typeVal, hasType := qualifiers["type"]
+		if !hasType {
+			violations = append(violations, PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationMissingField,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: "",
+				Rule:        "controls_access_type_qualifier",
+				Description: "CONTROLS_ACCESS edge missing required 'type' qualifier (block|enable|delay|monitor)",
+				Confidence:  1.0,
+				AutoFixable: false,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			})
+		} else if typeStr, ok := typeVal.(string); ok {
+			if !horizonmodels.IsValidControlAccessType(typeStr) {
+				violations = append(violations, PolicyViolation{
+					ID:          uuid.New().String(),
+					Type:        ViolationTypeMismatch,
+					Severity:    SeverityWarning,
+					EdgeID:      edge.ID,
+					ActualValue: typeStr,
+					Rule:        "controls_access_type_value",
+					Description: fmt.Sprintf("CONTROLS_ACCESS 'type' must be one of: block, enable, delay, monitor. Got: %s", typeStr),
+					Confidence:  1.0,
+					AutoFixable: false,
+					DetectedAt:  time.Now(),
+					DetectedBy:  "deterministic",
+				})
+			}
+		}
+
+	case horizonmodels.DependencyTypeImposesCondition:
+		// IMPOSES_CONDITION requires 'type' qualifier (cost|compliance|technical)
+		typeVal, hasType := qualifiers["type"]
+		if !hasType {
+			violations = append(violations, PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationMissingField,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: "",
+				Rule:        "imposes_condition_type_qualifier",
+				Description: "IMPOSES_CONDITION edge missing required 'type' qualifier (cost|compliance|technical)",
+				Confidence:  1.0,
+				AutoFixable: false,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			})
+		} else if typeStr, ok := typeVal.(string); ok {
+			if !horizonmodels.IsValidConditionType(typeStr) {
+				violations = append(violations, PolicyViolation{
+					ID:          uuid.New().String(),
+					Type:        ViolationTypeMismatch,
+					Severity:    SeverityWarning,
+					EdgeID:      edge.ID,
+					ActualValue: typeStr,
+					Rule:        "imposes_condition_type_value",
+					Description: fmt.Sprintf("IMPOSES_CONDITION 'type' must be one of: cost, compliance, technical. Got: %s", typeStr),
+					Confidence:  1.0,
+					AutoFixable: false,
+					DetectedAt:  time.Now(),
+					DetectedBy:  "deterministic",
+				})
+			}
+		}
+		// 'impact' is recommended but not strictly required
+		if _, hasImpact := qualifiers["impact"]; !hasImpact {
+			violations = append(violations, PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationMissingField,
+				Severity:    SeverityInfo, // Info level since it's recommended, not required
+				EdgeID:      edge.ID,
+				ActualValue: "",
+				Rule:        "imposes_condition_impact_qualifier",
+				Description: "IMPOSES_CONDITION edge should have 'impact' qualifier describing the effect",
+				Confidence:  0.8,
+				AutoFixable: false,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			})
+		}
+
+	case horizonmodels.DependencyTypeUsesMechanism:
+		// USES_MECHANISM: target should be a /mechanism/... path
+		// This is validated by edge direction rules, no extra qualifiers needed
+		break
+
+	case horizonmodels.DependencyTypeAppliesTo:
+		// APPLIES_TO: source should be a /mechanism/... path
+		// This is validated by edge direction rules, no extra qualifiers needed
+		break
 	}
 
 	return violations

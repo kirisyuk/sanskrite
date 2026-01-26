@@ -116,11 +116,16 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	// Governance / org-person
 	"MANAGES":         {},
 	"CONTROLS":        {},
+	"CONTROLS_ACCESS": {},
 	"EMPLOYED_BY":     {},
 	"BOARD_MEMBER_OF": {},
 	"FOUNDED":         {},
 	"INVESTS_IN":      {},
 	"PARTNERS_WITH":   {},
+	// Strategic decision layer
+	"IMPOSES_CONDITION": {},
+	"USES_MECHANISM":    {},
+	"APPLIES_TO":        {},
 	// People/org meta-relations
 	"KEY_PERSON": {},
 	// OSINT-lite / governance extensions

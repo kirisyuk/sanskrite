@@ -55,7 +55,7 @@ type VertexSyncBatcherConfig struct {
 // DefaultVertexSyncBatcherConfig returns sensible defaults.
 func DefaultVertexSyncBatcherConfig() VertexSyncBatcherConfig {
 	return VertexSyncBatcherConfig{
-		MaxBatchSize:  200,              // Stay well under 1000 limit
+		MaxBatchSize:  90,               // Discovery Engine limit is 100; use 90 for safety margin
 		FlushInterval: 30 * time.Second, // Reduce request rate under bursty updates
 		MinBatchSize:  25,               // Avoid single-item batches (common spam source)
 	}

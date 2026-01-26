@@ -690,6 +690,9 @@ type ScoutEngine struct {
 	enforcementJobsRepo    *repo.EnforcementJobsRepository    // Optional: persists enforcement jobs
 	policyCheckResultsRepo *repo.PolicyCheckResultsRepository // Optional: persists policy check results
 	policyWSPublisher      *policy.PolicyWSPublisher          // Optional: publishes policy check results via WebSocket
+
+	// Lens artifacts for Phase 2 Strategic Overlay
+	lensArtifactsRepo *repo.LensArtifactsRepository // Optional: accumulates finalized fragments/edges per lens
 }
 
 // bestEffortRewriteLensScope replaces alias canonical paths in lens.Scope with their canonical equivalents.
@@ -796,6 +799,10 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 			if tenantID == "" || strings.TrimSpace(lens.TenantID) == "" || strings.TrimSpace(lens.TenantID) == tenantID {
 				if rewriteLens(lens) {
 					_ = e.lensesRepo.Update(ctx, lens)
+					// Keep LensArtifacts canonical paths consistent with lens scope rewrites.
+					if e.lensArtifactsRepo != nil {
+						_ = e.lensArtifactsRepo.UpdateCanonicalPath(ctx, lens.ID, fromPath, toPath)
+					}
 				}
 				updatedLensIDs[lensID] = struct{}{}
 			}
@@ -818,6 +825,10 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 		}
 		if rewriteLens(lens) {
 			_ = e.lensesRepo.Update(ctx, lens)
+			// Keep LensArtifacts canonical paths consistent with lens scope rewrites.
+			if e.lensArtifactsRepo != nil {
+				_ = e.lensArtifactsRepo.UpdateCanonicalPath(ctx, lens.ID, fromPath, toPath)
+			}
 		}
 	}
 }
@@ -1037,6 +1048,145 @@ func (e *ScoutEngine) WithPolicyCheckResultsRepo(repo *repo.PolicyCheckResultsRe
 func (e *ScoutEngine) WithPolicyWSPublisher(publisher *policy.PolicyWSPublisher) *ScoutEngine {
 	e.policyWSPublisher = publisher
 	return e
+}
+
+// WithLensArtifactsRepo sets the repository for accumulating finalized fragments/edges per lens.
+// Used by Phase 2 Strategic Overlay to build decision layer from lens job outputs.
+func (e *ScoutEngine) WithLensArtifactsRepo(repo *repo.LensArtifactsRepository) *ScoutEngine {
+	e.lensArtifactsRepo = repo
+	return e
+}
+
+// persistLensArtifactsFromJobState persists finalized fragments and edges created/modified by this job
+// into the lens-owned artifacts collection.
+//
+// IMPORTANT:
+// - We persist ONLY objects tracked in job.State by the tracking policy (created/modified IDs).
+// - We do NOT persist during mid-job execution, to avoid leaking partial outputs from failed/rejected jobs.
+func (e *ScoutEngine) persistLensArtifactsFromJobState(ctx context.Context, job *models.ScoutingJob) {
+	if e == nil || e.lensArtifactsRepo == nil || e.fragmentsRepo == nil || e.edgesRepo == nil || job == nil {
+		return
+	}
+	lensID := strings.TrimSpace(job.LensID)
+	if lensID == "" {
+		return
+	}
+	if job.State == nil {
+		return
+	}
+	tenantID := strings.TrimSpace(job.TenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+
+	// 1) Fragments
+	fragIDs := make([]string, 0, 64)
+	fragSeen := map[string]struct{}{}
+	for _, id := range append(
+		e.extractStringSlice(job.State, "createdFragmentIds"),
+		e.extractStringSlice(job.State, "modifiedFragmentIds")...,
+	) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := fragSeen[id]; ok {
+			continue
+		}
+		fragSeen[id] = struct{}{}
+		fragIDs = append(fragIDs, id)
+	}
+
+	fragsByID, _ := e.fragmentsRepo.GetMany(ctx, fragIDs)
+	for _, fid := range fragIDs {
+		f := fragsByID[strings.TrimSpace(fid)]
+		if f == nil || strings.TrimSpace(f.ID) == "" || strings.TrimSpace(f.CanonicalPath) == "" {
+			continue
+		}
+		displayLabel := strings.TrimSpace(f.Labels["en"])
+		if displayLabel == "" {
+			displayLabel = strings.TrimSpace(f.CanonicalPath)
+		}
+		artifact := models.NewFragmentArtifact(
+			tenantID,
+			lensID,
+			strings.TrimSpace(f.ID),
+			strings.TrimSpace(f.CanonicalPath),
+			string(f.Type),
+			strings.TrimSpace(job.ID),
+			displayLabel,
+		)
+		if _, err := e.lensArtifactsRepo.UpsertFragment(ctx, artifact); err != nil {
+			fmt.Printf("[ScoutEngine] persistLensArtifacts: UpsertFragment failed lensId=%s path=%s err=%v\n",
+				lensID, strings.TrimSpace(f.CanonicalPath), err)
+		}
+	}
+
+	// 2) Edges
+	edgeIDs := make([]string, 0, 128)
+	edgeSeen := map[string]struct{}{}
+	for _, id := range append(
+		e.extractStringSlice(job.State, "createdEdgeIds"),
+		e.extractStringSlice(job.State, "modifiedEdgeIds")...,
+	) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := edgeSeen[id]; ok {
+			continue
+		}
+		edgeSeen[id] = struct{}{}
+		edgeIDs = append(edgeIDs, id)
+	}
+
+	// Fetch edges and collect endpoint fragment IDs for batched fragment reads.
+	edges := make([]*models.DependencyEdge, 0, len(edgeIDs))
+	endpointIDs := make([]string, 0, len(edgeIDs)*2)
+	for _, eid := range edgeIDs {
+		ed, err := e.edgesRepo.Get(ctx, strings.TrimSpace(eid))
+		if err != nil || ed == nil {
+			continue
+		}
+		edges = append(edges, ed)
+		if strings.TrimSpace(ed.SourceFragmentID) != "" {
+			endpointIDs = append(endpointIDs, strings.TrimSpace(ed.SourceFragmentID))
+		}
+		if strings.TrimSpace(ed.TargetFragmentID) != "" {
+			endpointIDs = append(endpointIDs, strings.TrimSpace(ed.TargetFragmentID))
+		}
+	}
+	endpointsByID, _ := e.fragmentsRepo.GetMany(ctx, endpointIDs)
+
+	for _, ed := range edges {
+		if ed == nil || strings.TrimSpace(ed.ID) == "" {
+			continue
+		}
+		srcPath := ""
+		tgtPath := ""
+		if src := endpointsByID[strings.TrimSpace(ed.SourceFragmentID)]; src != nil {
+			srcPath = strings.TrimSpace(src.CanonicalPath)
+		}
+		if tgt := endpointsByID[strings.TrimSpace(ed.TargetFragmentID)]; tgt != nil {
+			tgtPath = strings.TrimSpace(tgt.CanonicalPath)
+		}
+
+		artifact := models.NewEdgeArtifact(
+			tenantID,
+			lensID,
+			strings.TrimSpace(ed.ID),
+			string(ed.Type),
+			srcPath,
+			tgtPath,
+			strings.TrimSpace(ed.SourceFragmentID),
+			strings.TrimSpace(ed.TargetFragmentID),
+			strings.TrimSpace(job.ID),
+		)
+		if _, err := e.lensArtifactsRepo.UpsertEdge(ctx, artifact); err != nil {
+			fmt.Printf("[ScoutEngine] persistLensArtifacts: UpsertEdge failed lensId=%s edgeId=%s err=%v\n",
+				lensID, strings.TrimSpace(ed.ID), err)
+		}
+	}
 }
 
 func (e *ScoutEngine) publish(ctx context.Context, et realtime.EventType, data map[string]interface{}) {
@@ -1435,6 +1585,20 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	// DOMAIN jobs are handled by a deterministic domain-expansion runner (no heavy LLM scouting).
 	// This runs before freshness checks because domains are contracts, not real-world entities.
 	if strings.HasPrefix(strings.TrimSpace(effectiveCanonicalPath), "/domain/") {
+		overlayMode := false
+		if job.State != nil {
+			if v, ok := job.State["domainOverlayMode"]; ok {
+				overlayMode = parseStateBool(v, false)
+			}
+			if !overlayMode {
+				if v, ok := job.State["phase2Overlay"]; ok {
+					overlayMode = parseStateBool(v, false)
+				}
+			}
+		}
+		if overlayMode {
+			return e.executeDomainStrategicOverlayJob(ctx, job, effectiveCanonicalPath, existingFragment)
+		}
 		return e.executeDomainExpansionJob(ctx, job, effectiveCanonicalPath, existingFragment)
 	}
 
@@ -3044,6 +3208,8 @@ SKIP_RESEARCH:
 		job.State = map[string]interface{}{}
 	}
 	job.State = policyTracker.ApplyToState(job.State)
+	// Persist finalized job outputs into LensArtifacts (Phase 2 input).
+	e.persistLensArtifactsFromJobState(ctx, job)
 	{
 		ids := map[string]struct{}{}
 

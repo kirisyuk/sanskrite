@@ -27,6 +27,8 @@ const (
 	ViolationMissingLegalForm PolicyViolationType = "missing_legal_form"
 	ViolationInvalidISO2      PolicyViolationType = "invalid_iso2"
 	ViolationOrphanedEdge     PolicyViolationType = "orphaned_edge"
+	// ViolationMissingField indicates a required field is missing (e.g., title for DecisionPoint).
+	ViolationMissingField PolicyViolationType = "missing_field"
 )
 
 // PolicyViolationSeverity represents the severity of a violation.

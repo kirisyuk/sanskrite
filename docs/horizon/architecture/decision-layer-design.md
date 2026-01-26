@@ -1,7 +1,7 @@
 # Decision Layer Design
 
-> **Status**: RFC / Design Discussion  
-> **Date**: 2026-01-24  
+> **Status**: ✅ Implemented  
+> **Date**: 2026-01-24 (RFC) → 2026-01-25 (Implemented)  
 > **Context**: Triggered by user query analysis
 
 ## Triggering Query
@@ -476,32 +476,43 @@ case "decision-analysis":
 
 ---
 
-## Implementation Roadmap (Proposed)
+## Implementation Roadmap
 
-### Phase 1: Intent Resolver Split
-- [ ] Create DomainResolverAgent
-- [ ] Create AnchorResolverAgent  
-- [ ] Create IntentMerger (deterministic)
-- [ ] Migrate existing IntentResolverAgent
+### Phase 1: Intent Resolver Split ✓
+- [x] Create DomainResolverAgent
+- [x] Create AnchorResolverAgent  
+- [x] Create IntentMerger (deterministic)
+- [x] Migrate existing IntentResolverAgent
 
-### Phase 2: Mechanism Entity
-- [ ] Define /mechanism namespace in taxonomy
-- [ ] Add FragmentTypeMechanism
-- [ ] Add USES_MECHANISM edge type
-- [ ] Update Scout prompts for mechanism extraction
+### Phase 2: Mechanism Entity ✓
+- [x] Define /mechanism namespace in taxonomy (`paths.go`, `canonical_parts.go`)
+- [x] Add FragmentTypeMechanism (`models/common.go`)
+- [x] Add USES_MECHANISM edge type (`dependency_edge.go`)
+- [x] Add APPLIES_TO edge type for mechanism scope
+- [x] Update Scout prompts for mechanism extraction
 
-### Phase 3: DecisionPoint Entity
-- [ ] Define /decision namespace in taxonomy
-- [ ] Add FragmentTypeDecisionPoint
-- [ ] Add CONTROLS_ACCESS edge type (qualifiers for block/enable/delay/monitor)
-- [ ] Add AgentRole taxonomy
-- [ ] Update Scout prompts for decision extraction
+### Phase 3: DecisionPoint Entity ✓
+- [x] Define /decision namespace in taxonomy (`paths.go`, `canonical_parts.go`)
+- [x] Add FragmentTypeDecisionPoint (`models/common.go`)
+- [x] Add CONTROLS_ACCESS edge type with qualifiers (block/enable/delay/monitor)
+- [x] Add IMPOSES_CONDITION edge type with qualifiers (cost/compliance/technical)
+- [x] Add AgentRole taxonomy (`models/common.go`: gatekeeper, approver, influencer, enforcer, arbiter)
+- [x] Add MechanismCategory enum (regulatory, economic, technological, contractual, political)
+- [x] Add ControlAccessType enum (block, enable, delay, monitor)
+- [x] Add ConditionType enum (cost, compliance, technical)
+- [x] Update Scout prompts for decision extraction
 
-### Phase 4: Domain-Aware Pipeline
-- [ ] Scout: domain-specific prompts
-- [ ] Research: domain-specific search strategies
-- [ ] Critic: domain-specific validation rules
-- [ ] Policy: domain-specific enforcement
+### Phase 4: Domain-Aware Pipeline ✓
+- [x] StrategicOverlayAgent: domain-specific prompts with full taxonomy rules
+- [x] Critic: domain-specific validation for DECISION_POINT/MECHANISM
+  - Missing CONTROLS_ACCESS/USES_MECHANISM edges → missingInfo
+  - Orphan decision points/mechanisms → HIGH severity conflicts
+  - Strategic edge qualifier validation
+- [x] Policy: domain-specific enforcement
+  - Edge direction rules for CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO
+  - Qualifier validation for strategic edges (type is required)
+  - Fragment path validation for /decision/ and /mechanism/
+- [x] PreCreateValidator: path prefix rules for DECISION_POINT, MECHANISM
 
 ---
 

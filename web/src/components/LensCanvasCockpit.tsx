@@ -1841,6 +1841,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [graphQueryActiveChipId, setGraphQueryActiveChipId] = React.useState<string | null>(null);
   const [graphQueryHighlightIds, setGraphQueryHighlightIds] = React.useState<Set<string> | null>(null);
 
+  const [domainOverlayOpen, setDomainOverlayOpen] = React.useState(false);
+  const [domainOverlayQuery, setDomainOverlayQuery] = React.useState('');
+  const [domainOverlayPreview, setDomainOverlayPreview] = React.useState<any | null>(null);
+  const [domainOverlayLoading, setDomainOverlayLoading] = React.useState(false);
+  const [domainOverlayExecuting, setDomainOverlayExecuting] = React.useState(false);
+  const [domainOverlayError, setDomainOverlayError] = React.useState<string | null>(null);
+  const domainOverlayInputRef = React.useRef<HTMLInputElement | null>(null);
+
   // Lens scope preview (empty state)
   const [lensName, setLensName] = React.useState<string | null>(null);
   const [lensScopePaths, setLensScopePaths] = React.useState<string[]>([]);
@@ -1955,6 +1963,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const t = window.setTimeout(() => askGraphInputRef.current?.focus(), 0);
     return () => window.clearTimeout(t);
   }, [askGraphOpen]);
+
+  React.useEffect(() => {
+    if (!domainOverlayOpen) return;
+    const t = window.setTimeout(() => domainOverlayInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, [domainOverlayOpen]);
 
   // Lens scope preview: load lens metadata (name + scope canonical paths)
   React.useEffect(() => {
@@ -10709,7 +10723,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (askGraphOpen || addNodeOpen) return;
+      if (askGraphOpen || addNodeOpen || domainOverlayOpen) return;
       if (graphQueryHighlightIds && graphQueryHighlightIds.size > 0) {
         e.preventDefault();
         clearGraphQueryHighlight();
@@ -10717,7 +10731,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [askGraphOpen, addNodeOpen, graphQueryHighlightIds, clearGraphQueryHighlight]);
+  }, [askGraphOpen, addNodeOpen, domainOverlayOpen, graphQueryHighlightIds, clearGraphQueryHighlight]);
 
   const submitAskGraph = React.useCallback(async () => {
     const q = String(askGraphQuery || '').trim();
@@ -10803,6 +10817,57 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setAskGraphLoading(false);
     }
   }, [askGraphQuery, askGraphLoading, lensId, clearGraphQueryHighlight]);
+
+  const closeDomainOverlay = React.useCallback(() => {
+    setDomainOverlayOpen(false);
+    setDomainOverlayQuery('');
+    setDomainOverlayPreview(null);
+    setDomainOverlayLoading(false);
+    setDomainOverlayExecuting(false);
+    setDomainOverlayError(null);
+  }, []);
+
+  const submitDomainOverlayPreview = React.useCallback(async () => {
+    const q = String(domainOverlayQuery || '').trim();
+    if (!lensId || !q || domainOverlayLoading || domainOverlayExecuting) return;
+    setDomainOverlayLoading(true);
+    setDomainOverlayError(null);
+    try {
+      const res = await api.previewDomainOverlay(lensId, { query: q });
+      const intent = (res as any)?.intent || null;
+      setDomainOverlayPreview({ intent, existingDomains: (res as any)?.existingDomains || [] });
+      if (!intent?.domains || intent.domains.length === 0) {
+        setDomainOverlayError('No domain detected for this query.');
+      }
+    } catch (err: any) {
+      console.error('[LensCanvas] previewDomainOverlay error:', err);
+      setDomainOverlayError('Failed to interpret the query.');
+    } finally {
+      setDomainOverlayLoading(false);
+    }
+  }, [domainOverlayQuery, lensId, domainOverlayLoading, domainOverlayExecuting]);
+
+  const executeDomainOverlay = React.useCallback(async () => {
+    const q = String(domainOverlayQuery || '').trim();
+    if (!lensId || !q || domainOverlayExecuting) return;
+    const domainPath = String(domainOverlayPreview?.intent?.domains?.[0]?.canonicalPath || '').trim();
+    if (!domainPath) {
+      setDomainOverlayError('Check the domain first.');
+      return;
+    }
+    const correlationId = genCorrelationId();
+    setDomainOverlayExecuting(true);
+    setDomainOverlayError(null);
+    try {
+      await api.executeDomainOverlay(lensId, { query: q, domainCanonicalPath: domainPath }, { correlationId });
+      closeDomainOverlay();
+    } catch (err: any) {
+      console.error('[LensCanvas] executeDomainOverlay error:', err);
+      setDomainOverlayError('Failed to start overlay job.');
+    } finally {
+      setDomainOverlayExecuting(false);
+    }
+  }, [domainOverlayQuery, lensId, domainOverlayExecuting, domainOverlayPreview, genCorrelationId, closeDomainOverlay]);
 
   const truncateChip = React.useCallback((s: string, max: number) => {
     const t = String(s || '').trim();
@@ -12642,6 +12707,41 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               e.stopPropagation();
               e.preventDefault();
               if (!lensId) return;
+              setDomainOverlayError(null);
+              setDomainOverlayOpen(true);
+            }}
+            disabled={!lensId || domainOverlayLoading || domainOverlayExecuting}
+            title="Strategic overlay"
+            style={{
+              pointerEvents: 'auto',
+              width: 44,
+              height: 44,
+              borderRadius: 999,
+              border: '1px solid var(--border-subtle)',
+              background: theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.80)',
+              color: 'var(--text-heading)',
+              cursor: (!lensId || domainOverlayLoading || domainOverlayExecuting) ? 'not-allowed' : 'pointer',
+              opacity: (!lensId || domainOverlayLoading || domainOverlayExecuting) ? 0.55 : 1,
+              boxShadow: 'none',
+              filter: theme === 'dark' ? 'drop-shadow(0 16px 40px rgba(0,0,0,0.55))' : 'drop-shadow(0 16px 40px rgba(0,0,0,0.18))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 16,
+              fontWeight: 900,
+              lineHeight: 1,
+              backdropFilter: 'blur(8px)',
+            }}
+          >
+            S
+          </button>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              if (!lensId) return;
               setAskGraphError(null);
               setAskGraphOpen(true);
             }}
@@ -13279,6 +13379,180 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <kbd style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '1px 4px', fontSize: 10 }}>esc</kbd>
                 <span>to close</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Domain Overlay Command Palette Overlay */}
+      {domainOverlayOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9998,
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'center',
+            paddingTop: '15vh',
+            background: theme === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)',
+            backdropFilter: 'blur(4px)',
+          }}
+          onClick={() => closeDomainOverlay()}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 640,
+              maxWidth: '92vw',
+              display: 'flex',
+              flexDirection: 'column',
+              background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 16,
+              boxShadow: theme === 'dark' ? '0 20px 60px rgba(0,0,0,0.6)' : '0 20px 60px rgba(0,0,0,0.2)',
+              overflow: 'hidden',
+              animation: 'horizon-command-pop 0.15s ease-out',
+            }}
+          >
+            <style>{`
+              @keyframes horizon-command-pop {
+                from { opacity: 0; transform: scale(0.96) translateY(10px); }
+                to { opacity: 1; transform: scale(1) translateY(0); }
+              }
+            `}</style>
+            <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div style={{ marginRight: 12, color: 'var(--text-secondary-strong)', display: 'flex', fontWeight: 900 }}>
+                S
+              </div>
+              <input
+                ref={domainOverlayInputRef}
+                value={domainOverlayQuery}
+                onChange={(e) => {
+                  setDomainOverlayQuery(e.target.value);
+                  setDomainOverlayPreview(null);
+                  setDomainOverlayError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closeDomainOverlay();
+                    return;
+                  }
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (domainOverlayPreview?.intent?.domains?.length) {
+                      void executeDomainOverlay();
+                    } else {
+                      void submitDomainOverlayPreview();
+                    }
+                    return;
+                  }
+                }}
+                placeholder="Describe how control or influence works here… (Enter to check)"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={domainOverlayLoading || domainOverlayExecuting}
+                style={{
+                  flex: 1,
+                  border: 'none',
+                  outline: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-heading)',
+                  fontSize: 16,
+                  fontWeight: 550,
+                }}
+              />
+              {(domainOverlayLoading || domainOverlayExecuting) && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                  {domainOverlayExecuting ? 'Starting…' : 'Analyzing…'}
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: 14 }}>
+              {domainOverlayError && (
+                <div style={{ padding: '10px 12px', borderRadius: 12, background: theme === 'dark' ? 'rgba(239,68,68,0.10)' : 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.22)', color: '#EF4444', fontSize: 13 }}>
+                  {domainOverlayError}
+                </div>
+              )}
+
+              {!domainOverlayError && domainOverlayPreview?.intent?.domains?.length > 0 && (
+                <div style={{ padding: 12, borderRadius: 12, border: '1px solid var(--border-subtle)', background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginBottom: 6 }}>We’ll analyze as</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-heading)' }}>
+                    {String(domainOverlayPreview.intent.domains[0]?.title || domainOverlayPreview.intent.domains[0]?.canonicalPath || 'Domain')}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginTop: 6, lineHeight: 1.4 }}>
+                    <div>{String(domainOverlayPreview.intent.domains[0]?.canonicalPath || '').trim()}</div>
+                    {domainOverlayPreview.intent.domains[0]?.contractType && (
+                      <div>Type: {String(domainOverlayPreview.intent.domains[0]?.contractType || '').trim()}</div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {!domainOverlayError && (!domainOverlayPreview?.intent?.domains?.length) && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', lineHeight: 1.5 }}>
+                  This graph shows the baseline relationships. Your question defines a domain; we’ll identify it and suggest the actions to build that domain automatically.
+                </div>
+              )}
+
+              <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => closeDomainOverlay()}
+                  disabled={domainOverlayLoading || domainOverlayExecuting}
+                  style={{
+                    height: 36,
+                    padding: '0 14px',
+                    borderRadius: 12,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'transparent',
+                    color: 'var(--text-secondary-strong)',
+                    cursor: (domainOverlayLoading || domainOverlayExecuting) ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void submitDomainOverlayPreview()}
+                  disabled={domainOverlayLoading || domainOverlayExecuting || !domainOverlayQuery.trim() || !lensId}
+                  style={{
+                    height: 36,
+                    padding: '0 16px',
+                    borderRadius: 12,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'transparent',
+                    color: 'var(--text-heading)',
+                    fontWeight: 700,
+                    cursor: (domainOverlayLoading || domainOverlayExecuting || !domainOverlayQuery.trim() || !lensId) ? 'not-allowed' : 'pointer',
+                    opacity: (domainOverlayLoading || domainOverlayExecuting || !domainOverlayQuery.trim() || !lensId) ? 0.6 : 1,
+                  }}
+                >
+                  Check
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void executeDomainOverlay()}
+                  disabled={domainOverlayExecuting || domainOverlayLoading || !domainOverlayPreview?.intent?.domains?.length}
+                  style={{
+                    height: 36,
+                    padding: '0 16px',
+                    borderRadius: 12,
+                    border: 'none',
+                    background: 'var(--accent-primary, #3B82F6)',
+                    color: '#fff',
+                    fontWeight: 800,
+                    cursor: (domainOverlayExecuting || domainOverlayLoading || !domainOverlayPreview?.intent?.domains?.length) ? 'not-allowed' : 'pointer',
+                    opacity: (domainOverlayExecuting || domainOverlayLoading || !domainOverlayPreview?.intent?.domains?.length) ? 0.6 : 1,
+                    boxShadow: '0 8px 20px rgba(59,130,246,0.25)',
+                  }}
+                >
+                  Analyze
+                </button>
               </div>
             </div>
           </div>

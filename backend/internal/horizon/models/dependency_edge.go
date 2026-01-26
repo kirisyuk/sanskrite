@@ -77,6 +77,8 @@ const (
 	DependencyTypeManages DependencyType = "MANAGES"
 	// CONTROLS: control without necessarily direct equity ownership (voting control, state control, contractual control).
 	DependencyTypeControls DependencyType = "CONTROLS"
+	// CONTROLS_ACCESS: strategic gatekeeping (block/enable/delay/monitor) over an existing relation.
+	DependencyTypeControlsAccess DependencyType = "CONTROLS_ACCESS"
 	// EMPLOYED_BY: employment relationship (person is employed by an organization).
 	DependencyTypeEmployedBy DependencyType = "EMPLOYED_BY"
 	// BOARD_MEMBER_OF: person is a board member of an organization.
@@ -87,6 +89,14 @@ const (
 	DependencyTypeInvestsIn DependencyType = "INVESTS_IN"
 	// PARTNERS_WITH: symmetric partnership relationship (peer collaboration).
 	DependencyTypePartnersWith DependencyType = "PARTNERS_WITH"
+
+	// --- Strategic decision layer ---
+	// IMPOSES_CONDITION: subject forces object to comply with rules/costs/technical constraints.
+	DependencyTypeImposesCondition DependencyType = "IMPOSES_CONDITION"
+	// USES_MECHANISM: agent possesses a mechanism of control.
+	DependencyTypeUsesMechanism DependencyType = "USES_MECHANISM"
+	// APPLIES_TO: mechanism applies to entity or relation scope.
+	DependencyTypeAppliesTo DependencyType = "APPLIES_TO"
 
 	// --- Legacy types for migration ---
 	// WORKS_FOR: legacy employment (prefer EMPLOYED_BY). Person works for org.
@@ -124,6 +134,9 @@ const (
 	DependencyTypeInvolvesActor DependencyType = "INVOLVES_ACTOR"
 	DependencyTypeInGeoScope    DependencyType = "IN_GEO_SCOPE"
 	DependencyTypeAbout         DependencyType = "ABOUT"
+	// Domain → Strategic entities (Phase 2 overlay results).
+	// SURFACES: domain "surfaces" (crystallizes) decision points and mechanisms during strategic analysis.
+	DependencyTypeSurfaces DependencyType = "SURFACES"
 	// Domain ↔ Domain
 	DependencyTypeRelatedDomain DependencyType = "RELATED_DOMAIN" // symmetric
 	DependencyTypeBroadensTo    DependencyType = "BROADENS_TO"
