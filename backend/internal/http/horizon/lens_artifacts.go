@@ -13,21 +13,21 @@ import (
 
 // LensArtifactsListResponse is the response for listing lens artifacts.
 type LensArtifactsListResponse struct {
-	Artifacts      []*models.LensArtifact `json:"artifacts"`
-	TotalCount     int                    `json:"totalCount"`
-	FragmentCount  int                    `json:"fragmentCount"`
-	EdgeCount      int                    `json:"edgeCount"`
-	UnprocessedCount int                  `json:"unprocessedCount"`
+	Artifacts        []*models.LensArtifact `json:"artifacts"`
+	TotalCount       int                    `json:"totalCount"`
+	FragmentCount    int                    `json:"fragmentCount"`
+	EdgeCount        int                    `json:"edgeCount"`
+	UnprocessedCount int                    `json:"unprocessedCount"`
 }
 
 // LensArtifactStatsResponse is the response for artifact statistics.
 type LensArtifactStatsResponse struct {
-	TotalArtifacts     int       `json:"totalArtifacts"`
-	FragmentArtifacts  int       `json:"fragmentArtifacts"`
-	EdgeArtifacts      int       `json:"edgeArtifacts"`
-	ProcessedForPhase2 int       `json:"processedForPhase2"`
-	UnprocessedForPhase2 int     `json:"unprocessedForPhase2"`
-	LastUpdated        *time.Time `json:"lastUpdated,omitempty"`
+	TotalArtifacts       int        `json:"totalArtifacts"`
+	FragmentArtifacts    int        `json:"fragmentArtifacts"`
+	EdgeArtifacts        int        `json:"edgeArtifacts"`
+	ProcessedForPhase2   int        `json:"processedForPhase2"`
+	UnprocessedForPhase2 int        `json:"unprocessedForPhase2"`
+	LastUpdated          *time.Time `json:"lastUpdated,omitempty"`
 }
 
 // Phase2TriggerRequest is the request to trigger Phase 2 Strategic Overlay.
@@ -38,9 +38,9 @@ type Phase2TriggerRequest struct {
 
 // Phase2TriggerResponse is the response after triggering Phase 2.
 type Phase2TriggerResponse struct {
-	JobIDs     []string `json:"jobIds"`
-	Message    string   `json:"message"`
-	Queued     int      `json:"queued"`
+	JobIDs  []string `json:"jobIds"`
+	Message string   `json:"message"`
+	Queued  int      `json:"queued"`
 }
 
 // ListLensArtifacts returns the artifacts accumulated for a lens.
@@ -239,6 +239,16 @@ func (h *HorizonHandlers) TriggerPhase2StrategicOverlay(w http.ResponseWriter, r
 		return
 	}
 
+	// Correlation/session IDs (optional, but improves realtime UX and filtering).
+	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+	if correlationID == "" {
+		correlationID = strings.TrimSpace(r.Header.Get("X-Correlation-ID"))
+	}
+	sessionID := strings.TrimSpace(r.Header.Get("X-Session-Id"))
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(r.Header.Get("X-Session-ID"))
+	}
+
 	// Find domains in lens scope to trigger Phase 2
 	domainPaths := body.DomainPaths
 	if len(domainPaths) == 0 {
@@ -254,6 +264,33 @@ func (h *HorizonHandlers) TriggerPhase2StrategicOverlay(w http.ResponseWriter, r
 	if len(domainPaths) == 0 {
 		http.Error(w, "No domains found in lens scope", http.StatusBadRequest)
 		return
+	}
+
+	// Ensure domains are present in lens scope (idempotent; improves UI visibility).
+	{
+		seen := map[string]struct{}{}
+		for _, p := range lens.Scope {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				seen[p] = struct{}{}
+			}
+		}
+		changed := false
+		for _, p := range domainPaths {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			lens.Scope = append(lens.Scope, p)
+			changed = true
+		}
+		if changed {
+			_ = h.service.Lens().UpdateLens(r.Context(), lens) // best-effort
+		}
 	}
 
 	// Create Phase 2 jobs for each domain
@@ -282,6 +319,12 @@ func (h *HorizonHandlers) TriggerPhase2StrategicOverlay(w http.ResponseWriter, r
 			"phase2Overlay":       true,
 			"trigger":             "api.trigger_phase2",
 			"force":               body.Force,
+		}
+		if correlationID != "" {
+			state["correlationId"] = correlationID
+		}
+		if sessionID != "" {
+			state["sessionId"] = sessionID
 		}
 
 		scoutingJob := &models.ScoutingJob{

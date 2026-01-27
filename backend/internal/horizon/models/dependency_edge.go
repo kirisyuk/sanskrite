@@ -93,6 +93,8 @@ const (
 	// --- Strategic decision layer ---
 	// IMPOSES_CONDITION: subject forces object to comply with rules/costs/technical constraints.
 	DependencyTypeImposesCondition DependencyType = "IMPOSES_CONDITION"
+	// GATEKEEPS_DECISION: actor controls a strategic decision point (strong gatekeeping).
+	DependencyTypeGatekeepsDecision DependencyType = "GATEKEEPS_DECISION"
 	// USES_MECHANISM: agent possesses a mechanism of control.
 	DependencyTypeUsesMechanism DependencyType = "USES_MECHANISM"
 	// APPLIES_TO: mechanism applies to entity or relation scope.

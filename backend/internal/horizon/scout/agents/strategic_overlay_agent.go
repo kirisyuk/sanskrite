@@ -151,34 +151,84 @@ DOMAIN:
   ]
 }
 
-DECISION POINT RULES:
-- canonicalPath MUST be: /decision/{domain-slug}/{decision-slug}
-  - domain-slug: extract from the domain path (e.g., "ai-chips" from /domain/v1/power-dynamics/sector/ai-chips)
-  - decision-slug: lowercase kebab-case describing the decision (e.g., "euv-export-to-china")
-- title MUST be specific: "EUV Lithography Export to China" not "Export Control"
-- description MUST answer: "What can be blocked/enabled/delayed here?"
-- Examples:
-  - /decision/ai-chips/euv-export-to-china
-  - /decision/ai-chips/advanced-node-fab-licensing
-  - /decision/bilateral-relations/oil-transit-agreement
+═══════════════════════════════════════════════════════════════════════════════
+CORE SEMANTIC DISTINCTION: DECISION POINT vs MECHANISM
+═══════════════════════════════════════════════════════════════════════════════
 
-MECHANISM RULES:
-- canonicalPath MUST be: /mechanism/{category}/{slug}
+DECISION POINT = A CONCRETE DECISION/ACTION (verb-based)
+  - Answers: "What decision is being made?"
+  - Title is an ACTION (verb phrase): "Grant License", "Approve Export", "Block Access"
+  - Represents a MOMENT of choice where something can be blocked/enabled/delayed
+  - Scoped to a domain context (domain-slug in path)
+  - Examples of GOOD titles:
+    ✓ "Grant Banking License" (action: grant)
+    ✓ "Approve EUV Export to China" (action: approve)
+    ✓ "Block Maritime Transit" (action: block)
+    ✓ "Authorize Capital Market Operations" (action: authorize)
+  - Examples of BAD titles (too abstract, not actionable):
+    ✗ "Export Control" (noun, not action)
+    ✗ "Banking Oversight" (noun, not action)
+    ✗ "Regulatory Supervision" (noun, not action)
+    ✗ "Compliance" (noun, not action)
+
+MECHANISM = A SPECIFIC INSTRUMENT/REGIME OF CONTROL (noun-based)
+  - Answers: "What tool/regime is used to exercise control?"
+  - Title is an INSTRUMENT (noun phrase): "Export Control Regime", "Entity List", "Banking License"
+  - Represents a REUSABLE tool that agents possess and apply
+  - NOT scoped to domain (mechanisms are shared across domains)
+  - MUST specify the object ("license WHAT?", "controls WHAT?")
+  - Examples of GOOD titles:
+    ✓ "Banking License" (specific: license for banking)
+    ✓ "EUV Export Control" (specific: export control for EUV)
+    ✓ "Entity List" (specific sanction mechanism)
+    ✓ "Capital Market Service Licensing" (specific: licensing for capital market services)
+  - Examples of BAD titles (too abstract):
+    ✗ "Licensing" (license what?)
+    ✗ "Regulation" (regulate what?)
+    ✗ "Oversight" (oversight of what?)
+    ✗ "Compliance" (compliance with what?)
+
+KEY DIFFERENCE:
+  - DECISION POINT: "The act of granting a banking license" (verb: grant)
+  - MECHANISM: "The banking license regime" (noun: the regime itself)
+  - One agent GATEKEEPS the decision, another agent USES the mechanism to enforce it.
+
+═══════════════════════════════════════════════════════════════════════════════
+DECISION POINT PATH & FORMAT RULES
+═══════════════════════════════════════════════════════════════════════════════
+
+- canonicalPath: /decision/{domain-slug}/{decision-slug}
+  - domain-slug: extract from the domain contract (e.g., "ai-chips" from /domain/v1/power-dynamics/sector/ai-chips)
+  - If the domain facet is geo (e.g., /domain/.../geo/ye), do NOT use the geo slug as domain-slug.
+    Instead use the contract/topic slug (e.g., "geopolitical-risk") and include geo in decision-slug if needed.
+  - decision-slug: lowercase kebab-case describing the decision action (e.g., "approve-euv-export-to-china")
+- title: MUST start with a verb (Grant, Approve, Block, Authorize, Deny, Permit, Revoke, Suspend)
+- description: MUST answer "What can be blocked/enabled/delayed here?"
+- Examples:
+  - /decision/ai-chips/approve-euv-export-to-china → "Approve EUV Export to China"
+  - /decision/ai-chips/grant-advanced-fab-license → "Grant Advanced Fab License"
+  - /decision/geopolitical-risk/authorize-ye-port-transit → "Authorize Yemen Port Transit"
+
+═══════════════════════════════════════════════════════════════════════════════
+MECHANISM PATH & FORMAT RULES
+═══════════════════════════════════════════════════════════════════════════════
+
+- canonicalPath: /mechanism/{category}/{slug}
 - category MUST be one of:
   - regulatory: export control, licensing, certification, sanctions
   - economic: pricing power, capacity allocation, subsidies
   - technological: IP lock-in, standards control, patent portfolio
   - contractual: exclusivity, long-term agreements, joint ventures
   - political: diplomatic pressure, trade negotiations, alliances
-- slug: lowercase kebab-case (e.g., "export-control", "entity-list")
+- slug: lowercase kebab-case, MUST include the object (e.g., "banking-license" not "licensing")
+- VALIDATION: If slug is generic (licensing, regulation, oversight, supervision, compliance, monitoring, enforcement), REJECT and rephrase with object.
 - Mechanisms are REUSABLE across domains. Same mechanism can be used by multiple agents.
 - Examples:
-  - /mechanism/regulatory/export-control
-  - /mechanism/regulatory/entity-list
-  - /mechanism/economic/capacity-allocation
-  - /mechanism/technological/ip-lock-in
-  - /mechanism/contractual/exclusivity-agreement
-  - /mechanism/political/diplomatic-pressure
+  - /mechanism/regulatory/euv-export-control → "EUV Export Control Regime"
+  - /mechanism/regulatory/entity-list → "Entity List"
+  - /mechanism/regulatory/banking-license → "Banking License"
+  - /mechanism/economic/capacity-allocation → "Capacity Allocation"
+  - /mechanism/contractual/exclusivity-agreement → "Exclusivity Agreement"
 
 AGENT ROLES (for context, not in output):
 - gatekeeper: Can block/enable access (export control authority)
@@ -190,7 +240,7 @@ AGENT ROLES (for context, not in output):
 STRATEGIC EDGE RULES:
 
 1. CONTROLS_ACCESS (gatekeeping):
-   - Source: DECISION_POINT, ORGANIZATION, or GOV
+   - Source: DECISION_POINT, ORGANIZATION, GOV, or COMMUNITY
    - Target: ORGANIZATION, FACILITY, PRODUCT, MARKET, or PROGRAM
    - Qualifiers (REQUIRED):
      - type: "block" | "enable" | "delay" | "monitor"
@@ -200,7 +250,7 @@ STRATEGIC EDGE RULES:
      {"type": "block", "mechanism": "/mechanism/regulatory/export-control", "condition": "advanced EUV equipment"}
 
 2. IMPOSES_CONDITION (soft power):
-   - Source: ORGANIZATION, GOV, or DECISION_POINT
+   - Source: ORGANIZATION, GOV, COMMUNITY, or DECISION_POINT
    - Target: ORGANIZATION, FACILITY, or PRODUCT
    - Qualifiers (REQUIRED):
      - type: "cost" | "compliance" | "technical"
@@ -208,17 +258,30 @@ STRATEGIC EDGE RULES:
    - Example: EU --[IMPOSES_CONDITION]--> TSMC
      {"type": "compliance", "impact": "ESG reporting requirements for EU market access"}
 
-3. USES_MECHANISM (tool possession):
-   - Source: DECISION_POINT, ORGANIZATION, or GOV
-   - Target: MECHANISM
+3. GATEKEEPS_DECISION (strong control over a decision point):
+   - Source: ORGANIZATION, GOV, or COMMUNITY
+   - Target: DECISION_POINT
+   - Qualifiers (REQUIRED):
+     - mode: "block" | "enable" | "delay" | "monitor"
+     - mechanism: /mechanism/... canonical path (if known)
+     - reason: short rationale (optional)
+   - Example: /gov/sa/sama --[GATEKEEPS_DECISION]--> /decision/sa-banking/grant-banking-license
+
+4. USES_MECHANISM (tool possession):
+   - Source: DECISION_POINT, ORGANIZATION, GOV, or COMMUNITY
+   - Target: MECHANISM (MUST be /mechanism/...)
    - Indicates which tools an agent possesses to exercise control.
    - Example: /gov/us/bis --[USES_MECHANISM]--> /mechanism/regulatory/entity-list
 
-4. APPLIES_TO (mechanism scope):
+5. APPLIES_TO (mechanism scope):
    - Source: MECHANISM
    - Target: ORGANIZATION, FACILITY, PRODUCT, or MARKET
    - Shows where a mechanism has effect.
    - Example: /mechanism/regulatory/export-control --[APPLIES_TO]--> /product/.../euv-lithography
+
+EDGE TYPE SAFETY:
+- Never connect /org or /gov directly to /decision via USES_MECHANISM (use GATEKEEPS_DECISION instead).
+- Never use USES_MECHANISM unless target is /mechanism/...
 
 CANONICAL PATH REMINDERS:
 - ALL paths must be lowercase with hyphens (not spaces or underscores)

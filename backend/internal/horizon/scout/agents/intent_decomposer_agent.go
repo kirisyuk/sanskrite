@@ -225,6 +225,7 @@ Choose relationType to match this direction:
 - PRODUCES: source produces target (target is a product).
 - REGULATES: source regulates target (source is typically a government/agency org).
 - COMPETES_WITH / INFLUENCES: as labeled.
+- GATEKEEPS_DECISION: source (ORG/GOV/COMMUNITY) gatekeeps target (DECISION_POINT).
 - OPERATES_VIA: source uses target channel/platform for communication/operations.
   Direction: COMMUNITY/ORGANIZATION → MEDIA_CHANNEL
   Example: /community/ru/criminal/kazan-dealers OPERATES_VIA /media/telegram/kazan-zakaz
@@ -265,7 +266,7 @@ Return ONLY JSON with this schema:
       "targetLegalName": "string",
       "targetShortName": "string",
       "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "COMMUNITY",
-      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
+      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "SURFACES",
       "reason": "string",
       "confidence": 0.0,
       "targetCanonicalPath": "string (REQUIRED, stable, NOT /discovered/*)"
@@ -352,6 +353,11 @@ RULES:
   - PRODUCES: source MUST be ORGANIZATION or FACILITY (only orgs/facilities can produce)
   - LOCATED_IN: target MUST be GEO_REGION
   - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
+  - GATEKEEPS_DECISION: source MUST be ORGANIZATION or GOV or COMMUNITY, target MUST be DECISION_POINT
+  - USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be MECHANISM
+  - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
+  - IMPOSES_CONDITION: source MUST be ORGANIZATION or GOV or COMMUNITY or DECISION_POINT, target MUST be ORGANIZATION/FACILITY/PRODUCT
+  - APPLIES_TO: source MUST be MECHANISM, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET
 - NEVER use "/discovered/*".
 - Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock, decompositionBlock)
 }

@@ -1965,6 +1965,12 @@ const EDGE_GROUP_COLORS: Record<
     borderLight: 'rgba(168, 85, 247, 0.50)',
     borderDark: 'rgba(192, 132, 252, 0.55)',
   },
+  GATEKEEPS_DECISION: {
+    light: 'rgba(168, 85, 247, 0.10)',
+    dark: 'rgba(168, 85, 247, 0.12)',
+    borderLight: 'rgba(168, 85, 247, 0.50)',
+    borderDark: 'rgba(192, 132, 252, 0.55)',
+  },
   USES_MECHANISM: {
     light: 'rgba(168, 85, 247, 0.10)',
     dark: 'rgba(168, 85, 247, 0.12)',

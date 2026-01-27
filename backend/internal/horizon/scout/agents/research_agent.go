@@ -527,8 +527,11 @@ OUTPUT BUDGET RULES (CRITICAL):
 - If you cannot fit everything, prioritize answering the missingInfo questions and producing VALID JSON with closed braces.
 
 RELATION DIRECTION RULES (STRICT):
-Each relation object describes a directed edge FROM THIS FRAGMENT (source) TO targetCanonicalPath (target).
-Choose relationType to match this direction:
+By default, each relation object describes a directed edge FROM THIS FRAGMENT (source) TO targetCanonicalPath (target).
+For STRATEGIC edge types, use EXPLICIT SOURCE (sourceCanonicalPath) when THIS FRAGMENT would be wrong as source.
+Choose relationType to match the CORRECT semantic direction:
+
+=== PHASE 1 RELATIONS (default: FROM THIS FRAGMENT → target) ===
 - DEPENDS_ON: source depends on target (use for suppliers, contractors, infrastructure dependencies).
   Example: If CRRC supplies trains for the Astana LRT project, Astana/CTS may DEPEND_ON CRRC.
 - SUPPLIES_TO: source supplies goods/services to target (use for customers/recipients).
@@ -561,6 +564,48 @@ Choose relationType to match this direction:
   - If THIS FRAGMENT is MARKET, you may still emit DOMINATES relations to leader entities; backend will reverse the edge direction.
   - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
 
+=== PHASE 2 STRATEGIC RELATIONS (may require EXPLICIT SOURCE) ===
+These edge types have strict direction rules. Use sourceCanonicalPath when THIS FRAGMENT is NOT the correct semantic source.
+
+- GATEKEEPS_DECISION: source MUST be ORG/GOV/COMMUNITY, target MUST be DECISION_POINT
+  *** CRITICAL: If THIS FRAGMENT is DECISION_POINT ***:
+    When answering "Who gatekeeps this decision?", you MUST use explicit source:
+    - sourceCanonicalPath = gatekeeper path (e.g., /gov/sa/sama)
+    - sourceType = ORGANIZATION (or GOV/COMMUNITY)
+    - sourceName = gatekeeper name
+    - targetCanonicalPath = THIS FRAGMENT's path (the decision point being gatekept)
+    - targetType = DECISION_POINT
+    DO NOT output DECISION_POINT as source for GATEKEEPS_DECISION - this is semantically wrong!
+
+- USES_MECHANISM: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY, target MUST be MECHANISM (/mechanism/...)
+  *** CRITICAL: If THIS FRAGMENT is MECHANISM ***:
+    When answering "Who uses this mechanism?", you MUST use explicit source:
+    - sourceCanonicalPath = user path (e.g., /gov/sa/sama or /decision/...)
+    - targetCanonicalPath = THIS FRAGMENT's path (the mechanism being used)
+  If THIS FRAGMENT is DECISION_POINT:
+    When answering "What mechanism does this decision use?":
+    - No sourceCanonicalPath needed (THIS FRAGMENT is correct source)
+    - targetCanonicalPath = mechanism path
+
+- APPLIES_TO: source MUST be MECHANISM, target MUST be entity (ORG/FACILITY/PRODUCT/MARKET)
+  *** CRITICAL: If THIS FRAGMENT is ORG/FACILITY/PRODUCT/MARKET ***:
+    When answering "What mechanism applies to this entity?", you MUST use explicit source:
+    - sourceCanonicalPath = mechanism path
+    - targetCanonicalPath = THIS FRAGMENT's path
+  If THIS FRAGMENT is MECHANISM:
+    - No sourceCanonicalPath needed
+    - targetCanonicalPath = affected entity path
+
+- CONTROLS_ACCESS: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY, target MUST be entity
+  If THIS FRAGMENT is the controlled entity:
+    - Use explicit sourceCanonicalPath = controller path
+    - targetCanonicalPath = THIS FRAGMENT's path
+
+- IMPOSES_CONDITION: source MUST be ORG/GOV/COMMUNITY/DECISION_POINT, target MUST be entity
+  If THIS FRAGMENT is the affected entity:
+    - Use explicit sourceCanonicalPath = imposer path
+    - targetCanonicalPath = THIS FRAGMENT's path
+
 EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
 - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
 - OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT/DEPOSIT
@@ -588,6 +633,11 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - MEMBER_OF: source MUST be PERSON, target MUST be COMMUNITY
 - AFFILIATED_WITH: source MUST be COMMUNITY or PERSON, target MUST be ORGANIZATION
 - HAS_SUBGROUP: source MUST be COMMUNITY, target MUST be COMMUNITY (parent group → narrower sub-group/branch/clan)
+- GATEKEEPS_DECISION: source MUST be ORGANIZATION or GOV or COMMUNITY, target MUST be DECISION_POINT
+- USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be MECHANISM (path starts with /mechanism/)
+- CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
+- IMPOSES_CONDITION: source MUST be ORGANIZATION or GOV or COMMUNITY or DECISION_POINT, target MUST be ORGANIZATION/FACILITY/PRODUCT
+- APPLIES_TO: source MUST be MECHANISM, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET
 
 Community Enrichment (COMMUNITY - when Type == COMMUNITY or canonicalPath starts with /community/):
 - If the fragment is a COMMUNITY, output (best-effort):
@@ -630,11 +680,14 @@ When you see a dependency on a platform (e.g., "uses Telegram", "operates via Wh
 
 DiscoveredRelation Schema:
 {
+  "sourceCanonicalPath": "string (OPTIONAL - see EXPLICIT SOURCE RULES below)",
+  "sourceType": "string (OPTIONAL - required when sourceCanonicalPath is set)",
+  "sourceName": "string (OPTIONAL - required when sourceCanonicalPath is set)",
   "targetName": "string",
   "targetLegalName": "string",
   "targetShortName": "string",
-  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY",
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
+  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY" | "DECISION_POINT" | "MECHANISM",
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED",
@@ -643,6 +696,50 @@ DiscoveredRelation Schema:
   "qualifiers": { "edgeModality": "actual|projected|historical|potential", "eventId": "/event/{slug}" },
   "metrics": { "ownership_percent": { "value": 45.0, "unit": "percent", "confidence": 0.9, "observedAt": "YYYY-MM-DD", "provenance": {"sourceIds":["..."], "method":"extracted"} } }
 }
+
+EXPLICIT SOURCE RULES (CRITICAL for Phase 2 strategic relations):
+By default, edges originate FROM THIS FRAGMENT (the fragment you are enriching).
+However, for STRATEGIC EDGE TYPES where the semantic direction REQUIRES a different source, you MUST use explicit sourceCanonicalPath.
+
+WHEN TO USE sourceCanonicalPath (MANDATORY):
+
+1. GATEKEEPS_DECISION: source MUST be ORG/GOV/COMMUNITY, target MUST be DECISION_POINT
+   - If THIS FRAGMENT is DECISION_POINT and you are answering "Who gatekeeps this decision?":
+     - Set sourceCanonicalPath = gatekeeper's path (e.g., /gov/sa/sama)
+     - Set sourceType = ORGANIZATION or GOV
+     - Set sourceName = gatekeeper's name
+     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the decision point)
+     - Set targetType = DECISION_POINT
+   - Example: { "sourceCanonicalPath": "/gov/sa/sama", "sourceType": "ORGANIZATION", "sourceName": "SAMA",
+               "targetCanonicalPath": "/decision/islamic-finance/grant-banking-license", "targetType": "DECISION_POINT",
+               "relationType": "GATEKEEPS_DECISION" }
+
+2. USES_MECHANISM: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY, target MUST be MECHANISM
+   - If THIS FRAGMENT is MECHANISM and you are answering "Who uses this mechanism?":
+     - Set sourceCanonicalPath = user's path
+     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the mechanism)
+   - If THIS FRAGMENT is DECISION_POINT and you are answering "What mechanism does this decision use?":
+     - Do NOT set sourceCanonicalPath (default = THIS FRAGMENT is correct)
+     - Set targetCanonicalPath = mechanism path
+
+3. APPLIES_TO: source MUST be MECHANISM, target MUST be entity
+   - If THIS FRAGMENT is MECHANISM and you are answering "What does this mechanism apply to?":
+     - Do NOT set sourceCanonicalPath (default = THIS FRAGMENT is correct)
+     - Set targetCanonicalPath = affected entity path
+   - If THIS FRAGMENT is an ORG/FACILITY and you are answering "What mechanism applies to this entity?":
+     - Set sourceCanonicalPath = mechanism's path
+     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath
+
+4. CONTROLS_ACCESS / IMPOSES_CONDITION:
+   - If THIS FRAGMENT is the controlled/affected entity:
+     - Set sourceCanonicalPath = controller's path
+     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath
+
+WHEN NOT TO USE sourceCanonicalPath:
+- For most Phase 1 relations (DEPENDS_ON, SUPPLIES_TO, LOCATED_IN, OWNS, etc.) the default "FROM THIS FRAGMENT" is correct.
+- When the semantic direction naturally flows FROM THIS FRAGMENT TO target.
+
+CRITICAL: Always verify that the resulting edge direction matches EDGE DIRECTION VALIDATION RULES below.
 
 CANONICAL PATH RULES:
 - NEVER use "/discovered/*" (not allowed).

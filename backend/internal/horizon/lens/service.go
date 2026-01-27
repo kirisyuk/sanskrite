@@ -240,12 +240,12 @@ type LensService struct {
 	canonicalPathResolver *scout.CanonicalPathResolver    // Optional: for early canonicalization and deduplication
 
 	// Optional cleanup repos for cascade delete (best-effort, non-critical)
-	lensItemsRepo        *repo.LensItemsRepository
-	exposurePathsRepo    *repo.ExposurePathsRepository
-	materializedRepo     *repo.MaterializedArtifactsRepository
-	lensArtifactsRepo    *repo.LensArtifactsRepository
-	spendLedger          *repo.HorizonSpendLedger
-	agentJobsRepo        AgentJobsDeleter // interface for deleting agent jobs by ID
+	lensItemsRepo     *repo.LensItemsRepository
+	exposurePathsRepo *repo.ExposurePathsRepository
+	materializedRepo  *repo.MaterializedArtifactsRepository
+	lensArtifactsRepo *repo.LensArtifactsRepository
+	spendLedger       *repo.HorizonSpendLedger
+	agentJobsRepo     AgentJobsDeleter // interface for deleting agent jobs by ID
 }
 
 // NewLensService создает новый Lens Service
@@ -1611,4 +1611,66 @@ func (s *LensService) CalculateMetrics(ctx context.Context, lensID string) (map[
 	}
 
 	return s.calculator.CalculateLensMetrics(ctx, lens)
+}
+
+// TransferLens moves a lens from one project to another within the same tenant.
+// This updates the lens's projectId and preserves all associated data (artifacts, scope, etc.).
+// Scout jobs remain in the original project as historical records.
+func (s *LensService) TransferLens(ctx context.Context, lensID, targetProjectID string) (*models.Lens, error) {
+	lensID = strings.TrimSpace(lensID)
+	targetProjectID = strings.TrimSpace(targetProjectID)
+
+	if lensID == "" {
+		return nil, fmt.Errorf("lensId is required")
+	}
+	if targetProjectID == "" {
+		return nil, fmt.Errorf("targetProjectId is required")
+	}
+
+	// Get the lens
+	lens, err := s.lensesRepo.Get(ctx, lensID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get lens: %w", err)
+	}
+	if lens == nil {
+		return nil, fmt.Errorf("lens not found")
+	}
+
+	// Check if already in target project
+	if lens.ProjectID == targetProjectID {
+		return lens, nil // Already in target project, no-op
+	}
+
+	sourceProjectID := lens.ProjectID
+
+	// Update the project ID
+	lens.ProjectID = targetProjectID
+	lens.UpdatedAt = time.Now().UTC()
+
+	// Save the updated lens
+	if err := s.lensesRepo.Update(ctx, lens); err != nil {
+		return nil, fmt.Errorf("failed to update lens: %w", err)
+	}
+
+	// Log the transfer
+	trace.Log(ctx, "lens_transfer", "lens.transfer.ok", map[string]any{
+		"tenantId":        lens.TenantID,
+		"lensId":          lensID,
+		"sourceProjectId": sourceProjectID,
+		"targetProjectId": targetProjectID,
+		"scopeN":          len(lens.Scope),
+	})
+
+	// Best-effort: publish realtime event for UI updates
+	if s.realtime != nil {
+		_ = s.realtime.PublishJSON(ctx, realtime.EventType("horizon.lens.transferred"), lens.TenantID, map[string]interface{}{
+			"tenantId":        lens.TenantID,
+			"lensId":          lensID,
+			"lensName":        lens.Name,
+			"sourceProjectId": sourceProjectID,
+			"targetProjectId": targetProjectID,
+		})
+	}
+
+	return lens, nil
 }

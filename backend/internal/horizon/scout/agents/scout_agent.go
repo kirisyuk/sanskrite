@@ -26,6 +26,17 @@ func NewScoutAgent(executor *ai.AITaskExecutor) *ScoutAgent {
 
 // DiscoveredRelation описывает найденную зависимость
 type DiscoveredRelation struct {
+	// SourceCanonicalPath is an OPTIONAL explicit source path.
+	// When set, overrides the default "THIS FRAGMENT" as edge source.
+	// MUST be used for Phase 2 strategic relations where edge direction requires a different source.
+	// Example: GATEKEEPS_DECISION edge must originate from ORG/GOV, not from the DECISION_POINT.
+	// When answering "Who gatekeeps X?", set SourceCanonicalPath to the gatekeeper's path.
+	SourceCanonicalPath string `json:"sourceCanonicalPath,omitempty"`
+	// SourceType is the type of the source entity (ORGANIZATION, GOV, etc.) when SourceCanonicalPath is set.
+	SourceType string `json:"sourceType,omitempty"`
+	// SourceName is the name of the source entity when SourceCanonicalPath is set.
+	SourceName string `json:"sourceName,omitempty"`
+
 	// TargetName SHOULD be the full legal/official name where relevant (e.g., "Tesla, Inc.")
 	TargetName string `json:"targetName"`
 	// TargetLegalName is the legal/official name (with form of ownership where relevant).
@@ -523,9 +534,10 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
    - OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT
    - CONTROLS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY
-  - CONTROLS_ACCESS: source SHOULD be DECISION_POINT or ORGANIZATION/GOV, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
-  - IMPOSES_CONDITION: source SHOULD be DECISION_POINT or ORGANIZATION/GOV, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
-  - USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION/GOV, target MUST be MECHANISM
+  - CONTROLS_ACCESS: source SHOULD be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
+  - IMPOSES_CONDITION: source SHOULD be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
+  - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY, target MUST be DECISION_POINT
+  - USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be MECHANISM
   - APPLIES_TO: source MUST be MECHANISM, target can be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM/DOMAIN
    - MANAGES: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PROGRAM
    - EMPLOYED_BY: source MUST be PERSON, target MUST be ORGANIZATION
@@ -560,7 +572,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - targetLegalName: Same as targetName (explicit field)
    - targetShortName: Base name without ownership suffix (e.g., "Tesla")
   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY"
-  - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, COMPETES_WITH, INFLUENCES, EXTRACTS_FROM, OPERATES_VIA, MEMBER_OF, AFFILIATED_WITH, HAS_SUBGROUP
+  - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, COMPETES_WITH, INFLUENCES, EXTRACTS_FROM, OPERATES_VIA, MEMBER_OF, AFFILIATED_WITH, HAS_SUBGROUP, CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO, SURFACES
    - reason: Brief evidence/reason for this relation
    - confidence: 0.0 to 1.0
    - targetCanonicalPath: REQUIRED. Suggest a STABLE canonical path.

@@ -490,6 +490,7 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     // Strategic overlay relations (decision/mechanism layer)
     case 'CONTROLS_ACCESS':
     case 'IMPOSES_CONDITION':
+    case 'GATEKEEPS_DECISION':
     case 'USES_MECHANISM':
     case 'APPLIES_TO':
       return 'context';
@@ -590,6 +591,7 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     // Strategic overlay relations
     'CONTROLS_ACCESS',
     'IMPOSES_CONDITION',
+    'GATEKEEPS_DECISION',
     'USES_MECHANISM',
     'APPLIES_TO',
   ]);
@@ -622,6 +624,7 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     // Strategic overlay relations: treat as context (top band)
     'CONTROLS_ACCESS',
     'IMPOSES_CONDITION',
+    'GATEKEEPS_DECISION',
     'USES_MECHANISM',
     'APPLIES_TO',
   ]);
@@ -1186,6 +1189,7 @@ export async function layoutLevelsTwoPane<T = any>(
     // Strategic overlay relations
     'CONTROLS_ACCESS',
     'IMPOSES_CONDITION',
+    'GATEKEEPS_DECISION',
     'USES_MECHANISM',
     'APPLIES_TO',
   ]);
@@ -1265,6 +1269,7 @@ export async function layoutLevelsTwoPane<T = any>(
     // Strategic overlay relations (keep to the RIGHT backbone)
     'CONTROLS_ACCESS',
     'IMPOSES_CONDITION',
+    'GATEKEEPS_DECISION',
     'USES_MECHANISM',
     'APPLIES_TO',
     // Market-defining relations (org -> market): treat as hierarchy signal so the org is placed to the RIGHT.
@@ -4060,7 +4065,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     // Influence is usually Top-Down: Regulator (Parent) -> Company (Child)
     'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS',
     // Strategic overlay relations (control/conditions/mechanisms)
-    'CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'USES_MECHANISM', 'APPLIES_TO',
+    'CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'GATEKEEPS_DECISION', 'USES_MECHANISM', 'APPLIES_TO',
     // Domain surfaces strategic entities
     'SURFACES',
   ]);
@@ -4075,7 +4080,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     'ADMINISTERS',
   ]);
   const INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS']);
-  const STRATEGIC_TYPES = new Set(['CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'USES_MECHANISM', 'APPLIES_TO', 'SURFACES']);
+  const STRATEGIC_TYPES = new Set(['CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'GATEKEEPS_DECISION', 'USES_MECHANISM', 'APPLIES_TO', 'SURFACES']);
   const hierarchyScore = (et: string): number => {
     const t = String(et || '').toUpperCase().trim();
     if (!t) return 0;

@@ -456,6 +456,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (!t) return undefined;
     const u = t.toUpperCase();
     const MAP: Record<string, string> = {
+      // Strategic overlay
+      SURFACES: 'Surfaces',
+      CONTROLS_ACCESS: 'Controls',
+      IMPOSES_CONDITION: 'Condition',
+      GATEKEEPS_DECISION: 'Gatekeeps',
+      USES_MECHANISM: 'Mechanism',
+      APPLIES_TO: 'Applies',
       // Dependency / usage
       DEPENDS_ON: 'Depends',
       REQUIRES: 'Requires',
@@ -9805,6 +9812,37 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       closeAddNode();
 
       try {
+        // Special-case DOMAIN queries: "Scout it" should run Phase 2 strategic overlay (not generic scope scout).
+        // We detect a domain intent best-effort via the overlay preview endpoint (no writes).
+        try {
+          const preview = await api.previewDomainOverlay(lensId, { query: q });
+          const domainCp = String((preview as any)?.intent?.domains?.[0]?.canonicalPath || '').trim();
+          if (domainCp && domainCp.startsWith('/domain/')) {
+            // Optimistic scope preview update (pin state and UI consistency).
+            setLensScopePaths((prev) => (prev.includes(domainCp) ? prev : [...prev, domainCp]));
+
+            // Update placeholder node with canonicalPath to enable WS reconciliation.
+            setNodes((prev) =>
+              (prev || []).map((n) => {
+                if (String((n as any)?.id || '').trim() !== placeholderId) return n;
+                const d0: any = (n as any)?.data || {};
+                const d = { ...d0, canonicalPath: domainCp, label: d0?.label || `Phase 2: ${q}` };
+                return { ...(n as any), data: d } as any;
+              }),
+            );
+            const st = pendingScoutRef.current.get(correlationId);
+            if (st) pendingScoutRef.current.set(correlationId, { ...st, canonicalPath: domainCp });
+
+            // Trigger Phase 2 job(s) for this domain.
+            const sessionId = (window as any).__horizonSessionId || correlationId;
+            (window as any).__horizonSessionId = sessionId;
+            await api.triggerHorizonPhase2StrategicOverlay(lensId, { domainPaths: [domainCp] }, { correlationId, sessionId });
+            return;
+          }
+        } catch {
+          // ignore: fall back to normal scope-scout-query
+        }
+
         const res = await api.scopeScoutHorizonLensQuery(lensId, { query: q }, { correlationId });
         const cp = String(res?.targetCanonicalPath || '').trim();
         if (cp) {
@@ -10636,7 +10674,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const confirmScopeScout = React.useCallback(async () => {
     if (!lensId) return;
     if (!scopeScoutModal?.fragmentId) return;
-    if (!onScopeScout) return;
     const fragmentId = String(scopeScoutModal.fragmentId || '').trim();
     if (!fragmentId) return;
 
@@ -10652,8 +10689,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     let ok = false;
     try {
-      await onScopeScout({ fragmentId, canonicalPath: scopeScoutModal.canonicalPath, maxRecursionDepth: scopeScoutDepth });
-      ok = true;
+      const cp = String(scopeScoutModal.canonicalPath || '').trim();
+      const isDomain = cp.startsWith('/domain/');
+
+      if (isDomain) {
+        const correlationId = genCorrelationId();
+        const sessionId = (window as any).__horizonSessionId || correlationId;
+        (window as any).__horizonSessionId = sessionId;
+        await api.triggerHorizonPhase2StrategicOverlay(lensId, { domainPaths: [cp] }, { correlationId, sessionId });
+        ok = true;
+      } else {
+        if (!onScopeScout) return;
+        await onScopeScout({ fragmentId, canonicalPath: scopeScoutModal.canonicalPath, maxRecursionDepth: scopeScoutDepth });
+        ok = true;
+      }
     } catch (e) {
       console.warn('[Cockpit] scope-scout failed', e);
     } finally {
@@ -10667,7 +10716,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setScopeScoutInFlightId(null);
       setScopeScoutModal(null);
     }
-  }, [lensId, onScopeScout, scopeScoutModal, scopeScoutDepth, setNodes]);
+  }, [lensId, onScopeScout, scopeScoutModal, scopeScoutDepth, setNodes, genCorrelationId]);
 
   // Scope-scout modal: Esc to close + basic focus management.
   React.useEffect(() => {
@@ -10859,7 +10908,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setDomainOverlayExecuting(true);
     setDomainOverlayError(null);
     try {
-      await api.executeDomainOverlay(lensId, { query: q, domainCanonicalPath: domainPath }, { correlationId });
+      // Phase 2 overlay now triggers via dedicated endpoint (jobs are created per domain).
+      await api.triggerHorizonPhase2StrategicOverlay(lensId, { domainPaths: [domainPath] }, { correlationId });
       closeDomainOverlay();
     } catch (err: any) {
       console.error('[LensCanvas] executeDomainOverlay error:', err);

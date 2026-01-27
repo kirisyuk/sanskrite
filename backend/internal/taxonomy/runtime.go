@@ -124,6 +124,7 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"PARTNERS_WITH":   {},
 	// Strategic decision layer
 	"IMPOSES_CONDITION": {},
+	"GATEKEEPS_DECISION": {},
 	"USES_MECHANISM":    {},
 	"APPLIES_TO":        {},
 	// People/org meta-relations

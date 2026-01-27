@@ -1865,6 +1865,32 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   /**
+   * Transfer a lens from one project to another
+   * POST /api/horizon/lenses/{lensId}/transfer
+   */
+  async transferHorizonLens(
+    lensId: string,
+    targetProjectId: string
+  ): Promise<{
+    id: string;
+    tenantId: string;
+    projectId: string;
+    name: string;
+    scope: string[];
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    try {
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/transfer`, { targetProjectId });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] transferHorizonLens error:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Horizon - Add node to lens scope + run additional scouting (depth=1 by default)
    * POST /api/horizon/lenses/{lensId}/scope-scout
    */
@@ -2576,33 +2602,17 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async listHorizonLensArtifacts(
     lensId: string,
-    options?: { type?: 'fragment' | 'edge'; limit?: number }
+    options?: { type?: 'fragment' | 'edge' | 'FRAGMENT' | 'EDGE'; limit?: number }
   ): Promise<{
-    artifacts: Array<{
-      id: string;
-      tenantId: string;
-      lensId: string;
-      type: 'fragment' | 'edge';
-      fragmentId?: string;
-      canonicalPath?: string;
-      fragmentType?: string;
-      edgeId?: string;
-      edgeType?: string;
-      sourcePath?: string;
-      targetPath?: string;
-      sourceFragId?: string;
-      targetFragId?: string;
-      sourceJobID: string;
-      addedAt: string;
-      updatedAt: string;
-      processedForStrategicAt?: string | null;
-      displayLabel?: string;
-    }>;
-    total: number;
+    artifacts: any[];
+    totalCount: number;
+    fragmentCount: number;
+    edgeCount: number;
+    unprocessedCount: number;
   }> {
     try {
       const params: Record<string, string> = {};
-      if (options?.type) params.type = options.type;
+      if (options?.type) params.type = String(options.type).toUpperCase();
       if (options?.limit) params.limit = options.limit.toString();
       const response = await this.client.get(`/api/horizon/lenses/${lensId}/artifacts`, { params });
       return response.data;
@@ -2617,11 +2627,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    * GET /api/horizon/lenses/{lensId}/artifacts/stats
    */
   async getHorizonLensArtifactStats(lensId: string): Promise<{
-    total: number;
-    fragments: number;
-    edges: number;
-    processed: number;
-    unprocessed: number;
+    totalArtifacts: number;
+    fragmentArtifacts: number;
+    edgeArtifacts: number;
+    processedForPhase2: number;
+    unprocessedForPhase2: number;
+    lastUpdated?: string | null;
   }> {
     try {
       const response = await this.client.get(`/api/horizon/lenses/${lensId}/artifacts/stats`);
@@ -2640,25 +2651,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     lensId: string,
     options?: { page?: number; pageSize?: number }
   ): Promise<{
-    pages: Array<{
-      pageNumber: number;
-      items: Array<{
-        id: string;
-        type: 'fragment' | 'edge';
-        fragmentId?: string;
-        canonicalPath?: string;
-        fragmentType?: string;
-        edgeId?: string;
-        edgeType?: string;
-        sourcePath?: string;
-        targetPath?: string;
-        sourceFragId?: string;
-        targetFragId?: string;
-        displayLabel?: string;
-      }>;
-    }>;
+    fragments: any[];
+    edges: any[];
+    pageNumber: number;
     totalPages: number;
-    totalItems: number;
+    totalArtifacts: number;
+    nextCursor?: string | null;
   }> {
     try {
       const params: Record<string, string> = {};
@@ -2678,11 +2676,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async triggerHorizonPhase2StrategicOverlay(
     lensId: string,
-    input?: { domainCanonicalPaths?: string[] },
+    input?: { domainPaths?: string[]; force?: boolean },
     options?: { correlationId?: string; sessionId?: string }
   ): Promise<{
-    jobId: string;
-    domainCanonicalPaths: string[];
+    jobIds: string[];
+    message: string;
+    queued: number;
   }> {
     try {
       const headers: Record<string, string> = {};
@@ -2700,7 +2699,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    * Delete all artifacts for a lens
    * DELETE /api/horizon/lenses/{lensId}/artifacts
    */
-  async deleteHorizonLensArtifacts(lensId: string): Promise<{ success: boolean; deletedCount: number }> {
+  async deleteHorizonLensArtifacts(lensId: string): Promise<{ message: string; lensId: string }> {
     try {
       const response = await this.client.delete(`/api/horizon/lenses/${lensId}/artifacts`);
       return response.data;

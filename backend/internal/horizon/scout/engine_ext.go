@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
@@ -444,8 +445,10 @@ func (e *ScoutEngine) buildLensGraphContext(ctx context.Context, lens *models.Le
 	if maxEdges <= 0 {
 		maxEdges = 120
 	}
-	scope := make([]string, 0, len(lens.Scope))
-	seen := map[string]struct{}{}
+
+	// 1) Direct scope nodes (exclude domains; Phase2 job already has the domain fragment).
+	directPaths := make([]string, 0, len(lens.Scope))
+	seenPath := map[string]struct{}{}
 	for _, p := range lens.Scope {
 		p = strings.TrimSpace(p)
 		if p == "" || strings.HasPrefix(p, "/domain/") {
@@ -454,26 +457,52 @@ func (e *ScoutEngine) buildLensGraphContext(ctx context.Context, lens *models.Le
 		if err := taxonomy.ValidateCanonicalPath(p); err != nil {
 			continue
 		}
-		if _, ok := seen[p]; ok {
+		if _, ok := seenPath[p]; ok {
 			continue
 		}
-		seen[p] = struct{}{}
-		scope = append(scope, p)
-		if len(scope) >= maxNodes {
+		seenPath[p] = struct{}{}
+		directPaths = append(directPaths, p)
+		if len(directPaths) >= maxNodes {
 			break
 		}
 	}
-	if len(scope) == 0 {
+	if len(directPaths) == 0 {
 		return ""
 	}
-	frags, err := e.fragmentsRepo.ListByCanonicalPaths(ctx, scope)
-	if err != nil || len(frags) == 0 {
+
+	directFragsRaw, err := e.fragmentsRepo.ListByCanonicalPaths(ctx, directPaths)
+	if err != nil || len(directFragsRaw) == 0 {
 		return ""
 	}
-	nodeByID := make(map[string]*models.HorizonFragment, len(frags))
-	nodeByPath := make(map[string]*models.HorizonFragment, len(frags))
-	nodes := make([]overlayGraphContextNode, 0, len(frags))
-	for _, f := range frags {
+
+	// Keep direct node order aligned to lens.Scope (ListByCanonicalPaths doesn't guarantee ordering).
+	fragByPath := make(map[string]*models.HorizonFragment, len(directFragsRaw))
+	for _, f := range directFragsRaw {
+		if f == nil {
+			continue
+		}
+		cp := strings.TrimSpace(f.CanonicalPath)
+		if cp == "" {
+			continue
+		}
+		if _, ok := fragByPath[cp]; ok {
+			continue
+		}
+		fragByPath[cp] = f
+	}
+	directFrags := make([]*models.HorizonFragment, 0, len(directPaths))
+	for _, cp := range directPaths {
+		if f := fragByPath[strings.TrimSpace(cp)]; f != nil {
+			directFrags = append(directFrags, f)
+		}
+	}
+	if len(directFrags) == 0 {
+		return ""
+	}
+
+	nodeByID := make(map[string]*models.HorizonFragment, len(directFrags))
+	nodes := make([]overlayGraphContextNode, 0, maxNodes)
+	for _, f := range directFrags {
 		if f == nil || strings.TrimSpace(f.ID) == "" || strings.TrimSpace(f.CanonicalPath) == "" {
 			continue
 		}
@@ -481,7 +510,6 @@ func (e *ScoutEngine) buildLensGraphContext(ctx context.Context, lens *models.Le
 			continue
 		}
 		nodeByID[f.ID] = f
-		nodeByPath[strings.TrimSpace(f.CanonicalPath)] = f
 		label := strings.TrimSpace(f.Labels["en"])
 		if label == "" {
 			label = strings.TrimSpace(f.CanonicalPath)
@@ -496,38 +524,127 @@ func (e *ScoutEngine) buildLensGraphContext(ctx context.Context, lens *models.Le
 		return ""
 	}
 
-	edgeKeySeen := map[string]struct{}{}
-	edges := make([]overlayGraphContextEdge, 0, maxEdges)
-	for _, f := range frags {
+	// 2) Expand with 1st-order neighbors (only via "strong" edges) until we hit maxNodes.
+	// This provides more useful context when LensArtifacts are empty / unavailable.
+	strongTypes := make(map[models.DependencyType]struct{})
+	for _, spec := range models.DefaultAxisSpecs() {
+		for _, t := range spec.StrongEdgeTypes {
+			tt := models.DependencyType(strings.TrimSpace(t))
+			if tt != "" {
+				strongTypes[tt] = struct{}{}
+			}
+		}
+	}
+	edgeScanLimit := 60 // per direct node (out + in), sorted by criticality on backend
+	edgesPool := make([]*models.DependencyEdge, 0, len(directFrags)*8)
+	edgePoolSeen := map[string]struct{}{}
+
+	neighborsSeen := map[string]struct{}{}
+	for id := range nodeByID {
+		neighborsSeen[id] = struct{}{}
+	}
+
+	for _, f := range directFrags {
 		if f == nil || strings.TrimSpace(f.ID) == "" {
 			continue
 		}
-		outEdges, _ := e.edgesRepo.ListBySource(ctx, "global", f.ID, nil, 25)
-		inEdges, _ := e.edgesRepo.ListByTarget(ctx, "global", f.ID, nil, 25)
+
+		outEdges, _ := e.edgesRepo.ListBySource(ctx, "global", f.ID, nil, edgeScanLimit)
+		inEdges, _ := e.edgesRepo.ListByTarget(ctx, "global", f.ID, nil, edgeScanLimit)
 		all := append(outEdges, inEdges...)
+
 		for _, ed := range all {
 			if ed == nil {
 				continue
 			}
-			src := nodeByID[ed.SourceFragmentID]
-			tgt := nodeByID[ed.TargetFragmentID]
-			if src == nil || tgt == nil {
+
+			// Keep a pool for later edge selection (no extra reads).
+			pk := fmt.Sprintf("%s|%s|%s", ed.SourceFragmentID, ed.TargetFragmentID, ed.Type)
+			if _, ok := edgePoolSeen[pk]; !ok {
+				edgePoolSeen[pk] = struct{}{}
+				edgesPool = append(edgesPool, ed)
+			}
+
+			if len(nodeByID) >= maxNodes {
 				continue
 			}
-			key := fmt.Sprintf("%s|%s|%s", ed.SourceFragmentID, ed.TargetFragmentID, ed.Type)
-			if _, ok := edgeKeySeen[key]; ok {
+			if _, ok := strongTypes[ed.Type]; !ok {
 				continue
 			}
-			edgeKeySeen[key] = struct{}{}
-			edges = append(edges, overlayGraphContextEdge{
-				Source: strings.TrimSpace(src.CanonicalPath),
-				Target: strings.TrimSpace(tgt.CanonicalPath),
-				Type:   string(ed.Type),
+
+			otherID := ""
+			if ed.SourceFragmentID == f.ID {
+				otherID = ed.TargetFragmentID
+			} else if ed.TargetFragmentID == f.ID {
+				otherID = ed.SourceFragmentID
+			}
+			otherID = strings.TrimSpace(otherID)
+			if otherID == "" {
+				continue
+			}
+			if _, ok := neighborsSeen[otherID]; ok {
+				continue
+			}
+
+			nf, nerr := e.fragmentsRepo.Get(ctx, otherID)
+			if nerr != nil || nf == nil {
+				continue
+			}
+			if strings.TrimSpace(nf.ID) == "" || strings.TrimSpace(nf.CanonicalPath) == "" {
+				continue
+			}
+			cp := strings.TrimSpace(nf.CanonicalPath)
+			if strings.HasPrefix(cp, "/domain/") {
+				// Avoid dragging other domains into the fallback context.
+				continue
+			}
+			if taxonomy.ValidateCanonicalPath(cp) != nil {
+				continue
+			}
+
+			neighborsSeen[otherID] = struct{}{}
+			nodeByID[otherID] = nf
+
+			label := strings.TrimSpace(nf.Labels["en"])
+			if label == "" {
+				label = cp
+			}
+			nodes = append(nodes, overlayGraphContextNode{
+				CanonicalPath: cp,
+				Type:          string(nf.Type),
+				Label:         label,
 			})
-			if len(edges) >= maxEdges {
+			if len(nodeByID) >= maxNodes {
 				break
 			}
 		}
+		if len(nodeByID) >= maxNodes {
+			break
+		}
+	}
+
+	// 3) Build edge list from pooled direct-node edges (and only those that connect included nodes).
+	outEdgeSeen := map[string]struct{}{}
+	edges := make([]overlayGraphContextEdge, 0, maxEdges)
+	for _, ed := range edgesPool {
+		if ed == nil {
+			continue
+		}
+		src := nodeByID[ed.SourceFragmentID]
+		tgt := nodeByID[ed.TargetFragmentID]
+		if src == nil || tgt == nil {
+			continue
+		}
+		key := fmt.Sprintf("%s|%s|%s", ed.SourceFragmentID, ed.TargetFragmentID, ed.Type)
+		if _, ok := outEdgeSeen[key]; ok {
+			continue
+		}
+		outEdgeSeen[key] = struct{}{}
+		edges = append(edges, overlayGraphContextEdge{
+			Source: strings.TrimSpace(src.CanonicalPath),
+			Target: strings.TrimSpace(tgt.CanonicalPath),
+			Type:   string(ed.Type),
+		})
 		if len(edges) >= maxEdges {
 			break
 		}
@@ -1728,6 +1845,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	mechanismCount := 0
 	edgesEmitted := 0
 	overlayScopePaths := make([]string, 0, 32)
+	overlayFragments := map[string]*models.HorizonFragment{}
 
 	for _, dp := range overlayResult.DecisionPoints {
 		cp := strings.TrimSpace(dp.CanonicalPath)
@@ -1742,6 +1860,30 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 			}
 			decisionCount++
 			overlayScopePaths = append(overlayScopePaths, cp)
+			overlayFragments[cp] = f
+
+			// Realtime: emit node upsert for newly surfaced strategic entities.
+			if strings.TrimSpace(f.ID) != "" {
+				label := strings.TrimSpace("")
+				if f.Labels != nil {
+					label = strings.TrimSpace(f.Labels["en"])
+				}
+				if label == "" {
+					label = strings.TrimSpace(dp.Title)
+				}
+				e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+					"tenantId":        job.TenantID,
+					"projectId":       job.ProjectID,
+					"lensId":          strings.TrimSpace(job.LensID),
+					"fragmentId":      strings.TrimSpace(f.ID),
+					"canonicalPath":   cp,
+					"type":            string(models.FragmentTypeDecisionPoint),
+					"label":           label,
+					"status":          "verified",
+					"epistemicStatus": string(f.Metadata.EpistemicStatus),
+					"version":         f.Version,
+				})
+			}
 		}
 	}
 	for _, mech := range overlayResult.Mechanisms {
@@ -1757,6 +1899,30 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 			}
 			mechanismCount++
 			overlayScopePaths = append(overlayScopePaths, cp)
+			overlayFragments[cp] = f
+
+			// Realtime: emit node upsert for newly surfaced strategic entities.
+			if strings.TrimSpace(f.ID) != "" {
+				label := strings.TrimSpace("")
+				if f.Labels != nil {
+					label = strings.TrimSpace(f.Labels["en"])
+				}
+				if label == "" {
+					label = strings.TrimSpace(mech.Title)
+				}
+				e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+					"tenantId":        job.TenantID,
+					"projectId":       job.ProjectID,
+					"lensId":          strings.TrimSpace(job.LensID),
+					"fragmentId":      strings.TrimSpace(f.ID),
+					"canonicalPath":   cp,
+					"type":            string(models.FragmentTypeMechanism),
+					"label":           label,
+					"status":          "verified",
+					"epistemicStatus": string(f.Metadata.EpistemicStatus),
+					"version":         f.Version,
+				})
+			}
 		}
 	}
 
@@ -1795,6 +1961,19 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		if edgeID, err := e.edgesRepo.Create(ctx, surfaceEdge); err == nil {
 			surfaceEdge.ID = edgeID
 			surfacesCount++
+			// Realtime: update graph edges (this is what Cockpit subscribes to).
+			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
+				"tenantId":            job.TenantID,
+				"projectId":           job.ProjectID,
+				"lensId":              strings.TrimSpace(job.LensID),
+				"edgeId":              surfaceEdge.ID,
+				"sourceFragmentId":    surfaceEdge.SourceFragmentID,
+				"targetFragmentId":    surfaceEdge.TargetFragmentID,
+				"sourceCanonicalPath": domainCP,
+				"targetCanonicalPath": path,
+				"type":                string(surfaceEdge.Type),
+				"properties":          surfaceEdge.Properties,
+			})
 			e.publish(ctx, realtime.EventType("horizon.edge.created"), map[string]interface{}{
 				"tenantId":   job.TenantID,
 				"projectId":  job.ProjectID,
@@ -1836,6 +2015,27 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		if relType == "" {
 			continue
 		}
+		// Strategic overlay guardrails: fix or drop invalid endpoint combinations early.
+		if relType == string(models.DependencyTypeUsesMechanism) {
+			if !strings.HasPrefix(tgt, "/mechanism/") {
+				// If LLM linked to a decision point, reinterpret as GATEKEEPS_DECISION.
+				if strings.HasPrefix(tgt, "/decision/") {
+					relType = string(models.DependencyTypeGatekeepsDecision)
+				} else {
+					continue
+				}
+			}
+		}
+		if relType == string(models.DependencyTypeGatekeepsDecision) {
+			if !strings.HasPrefix(tgt, "/decision/") {
+				continue
+			}
+		}
+		if relType == string(models.DependencyTypeAppliesTo) {
+			if strings.HasPrefix(tgt, "/decision/") || strings.HasPrefix(tgt, "/mechanism/") {
+				continue
+			}
+		}
 		targetType := strings.TrimSpace(ed.TargetType)
 		if targetType == "" {
 			targetType = string(InferFragmentTypeFromCanonicalPath(tgt))
@@ -1866,6 +2066,18 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		}
 		if err := e.processRelationsInternal(ctx, job, sourceFrag, rels, "strategic_overlay", map[string]interface{}{"source": "strategic_overlay", "domainOverlay": true}); err == nil {
 			edgesEmitted += len(rels)
+		}
+	}
+
+	// Phase 2 critic + research enrichment (best-effort).
+	if e.criticAgent != nil && e.researchAgent != nil && len(overlayFragments) > 0 {
+		enrichedCount, addedEdges := e.runStrategicOverlayCritic(ctx, job, graphContext, overlayFragments, relationsBySource)
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		job.State["domainOverlayCritic"] = map[string]interface{}{
+			"enriched":   enrichedCount,
+			"edgesAdded": addedEdges,
 		}
 	}
 
@@ -3106,6 +3318,125 @@ func (e *ScoutEngine) processRelationsInternal(
 	return nil
 }
 
+// runStrategicOverlayCritic runs Critic/Research over strategic overlay nodes (decision points, mechanisms).
+// It uses missingInfo to trigger best-effort enrichment in Phase 2 without changing global policy rules.
+func (e *ScoutEngine) runStrategicOverlayCritic(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	graphContext string,
+	fragments map[string]*models.HorizonFragment,
+	relationsBySource map[string][]agents.DiscoveredRelation,
+) (int, int) {
+	if e == nil || job == nil || e.criticAgent == nil || e.researchAgent == nil {
+		return 0, 0
+	}
+	tenantID := strings.TrimSpace(job.TenantID)
+	projectID := strings.TrimSpace(job.ProjectID)
+	lensID := strings.TrimSpace(job.LensID)
+	cascadeID := ""
+	if job.State != nil {
+		if v, ok := job.State["cascadeId"].(string); ok {
+			cascadeID = strings.TrimSpace(v)
+		}
+	}
+
+	enriched := 0
+	addedEdges := 0
+
+	for _, frag := range fragments {
+		if frag == nil {
+			continue
+		}
+		if frag.Type != models.FragmentTypeDecisionPoint && frag.Type != models.FragmentTypeMechanism {
+			continue
+		}
+		rel := relationsBySource[strings.TrimSpace(frag.CanonicalPath)]
+		// Use dedicated Phase 2 strategic validation (focused prompt, no org/fac/person rules).
+		validation, err := e.criticAgent.ValidateStrategicOverlay(ctx, frag, rel, graphContext)
+		if err != nil || validation == nil {
+			continue
+		}
+		if len(validation.MissingInfo) == 0 {
+			continue
+		}
+		missing := validation.MissingInfo
+		// Filter out exhausted/cooldown missingInfo items (reuse global repo).
+		if e.missingInfoStatusRepo != nil && strings.TrimSpace(frag.ID) != "" {
+			searchable, _, err := e.missingInfoStatusRepo.FilterSearchable(ctx, strings.TrimSpace(frag.ID), missing)
+			if err == nil && len(searchable) > 0 {
+				missing = searchable
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+
+		// Run grounded research to enrich strategic fragment.
+		researchCtx := ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.strategic.research", lensID, cascadeID)
+		enrichedFrag, newRelations, _, err := e.researchAgent.EnrichFragment(
+			researchCtx,
+			frag,
+			missing,
+			"",
+			nil,
+			nil,
+			[]string{"strategic"},
+			"",
+			"",
+			nil,
+		)
+		if err != nil {
+			continue
+		}
+
+		// Sanitize edges from Research Agent (same rules as Overlay Agent).
+		// Research might hallucinate USES_MECHANISM -> DECISION_POINT or other invalid paths.
+		sanitizedRelations := make([]agents.DiscoveredRelation, 0, len(newRelations))
+		for _, rel := range newRelations {
+			targetPath := strings.TrimSpace(rel.TargetCanonicalPath)
+			rt := rel.RelationType
+
+			// FIX: USES_MECHANISM -> DECISION_POINT is invalid policy.
+			// If actor controls decision, it must be GATEKEEPS_DECISION.
+			if rt == "USES_MECHANISM" && strings.HasPrefix(targetPath, "/decision/") {
+				rel.RelationType = "GATEKEEPS_DECISION"
+				rt = "GATEKEEPS_DECISION"
+			}
+
+			// DROP: USES_MECHANISM must target /mechanism/...
+			if rt == "USES_MECHANISM" && !strings.HasPrefix(targetPath, "/mechanism/") {
+				continue
+			}
+			// DROP: APPLIES_TO must target entities, not other mechanisms (usually)
+			if rt == "APPLIES_TO" && strings.HasPrefix(targetPath, "/mechanism/") {
+				continue
+			}
+
+			sanitizedRelations = append(sanitizedRelations, rel)
+		}
+		newRelations = sanitizedRelations
+
+		if enrichedFrag != nil && strings.TrimSpace(enrichedFrag.ID) != "" {
+			_ = e.fragmentsRepo.Update(ctx, enrichedFrag)
+		}
+		if len(newRelations) > 0 && enrichedFrag != nil {
+			if err := e.processRelationsInternal(ctx, job, enrichedFrag, newRelations, "strategic_overlay", map[string]interface{}{"source": "strategic_overlay", "domainOverlay": true}); err == nil {
+				addedEdges += len(newRelations)
+			}
+		}
+		enriched++
+
+		if e.missingInfoStatusRepo != nil && strings.TrimSpace(frag.ID) != "" {
+			foundSomething := len(newRelations) > 0
+			for _, q := range missing {
+				_ = e.missingInfoStatusRepo.RecordAttempt(ctx, strings.TrimSpace(frag.ID), q, foundSomething, 0)
+			}
+		}
+	}
+
+	return enriched, addedEdges
+}
+
 // NOTE: legacy sanitizePathName removed.
 
 // normalizeRelationEdge enforces directional semantics for common relation types.
@@ -4062,11 +4393,11 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 	// (power dynamics, risk assessment, competitive analysis, etc.)
 	strategicContractTypes := map[string]bool{
 		// Risk / geopolitics
-		"risk-assessment":      true,
-		"geopolitical-risk":    true,
-		"bilateral-relations":  true,
-		"sanctions-exposure":   true,
-		"conflict-dynamics":    true,
+		"risk-assessment":     true,
+		"geopolitical-risk":   true,
+		"bilateral-relations": true,
+		"sanctions-exposure":  true,
+		"conflict-dynamics":   true,
 		// Supply chain / value chain (control points matter)
 		"supply-chain":    true,
 		"value-chain":     true,

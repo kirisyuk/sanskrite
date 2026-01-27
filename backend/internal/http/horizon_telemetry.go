@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -99,8 +100,37 @@ func (h *HorizonTelemetryHandler) List(w http.ResponseWriter, r *http.Request) {
 		hitRate = float64(summary["redirect_hits"]) / float64(total)
 	}
 
+	// IMPORTANT: Return JSON keys in lowerCamelCase as expected by the frontend.
+	// Do NOT expose internal Go struct field names (WindowStart, Counters, etc).
+	type telemetryItemDTO struct {
+		Component     string            `json:"component"`
+		Metric        string            `json:"metric"`
+		WindowStart   string            `json:"windowStart"`
+		WindowSizeSec int               `json:"windowSizeSec"`
+		Dimensions    map[string]string `json:"dimensions,omitempty"`
+		Counters      map[string]int64  `json:"counters"`
+		UpdatedAt     string            `json:"updatedAt"`
+	}
+	out := make([]telemetryItemDTO, 0, len(items))
+	for _, it := range items {
+		if it == nil {
+			continue
+		}
+		ws := it.WindowStart.UTC().Format(time.RFC3339Nano)
+		ua := it.UpdatedAt.UTC().Format(time.RFC3339Nano)
+		out = append(out, telemetryItemDTO{
+			Component:     it.Component,
+			Metric:        it.Metric,
+			WindowStart:   ws,
+			WindowSizeSec: it.WindowSizeSec,
+			Dimensions:    it.Dimensions,
+			Counters:      it.Counters,
+			UpdatedAt:     ua,
+		})
+	}
+
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"items":    items,
+		"items":    out,
 		"summary":  summary,
 		"hitRate":  hitRate,
 		"tenantId": tenantID,

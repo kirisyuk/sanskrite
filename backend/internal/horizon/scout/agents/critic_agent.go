@@ -92,6 +92,191 @@ func (a *CriticAgent) ValidateWithGraphContext(
 	return &validationResult, nil
 }
 
+// ValidateStrategicOverlay validates DECISION_POINT and MECHANISM entities in Phase 2.
+// This is a dedicated method with a focused prompt that only covers strategic layer rules,
+// without the general org/fac/person/market validation logic.
+func (a *CriticAgent) ValidateStrategicOverlay(
+	ctx context.Context,
+	fragment *models.HorizonFragment,
+	relations []DiscoveredRelation,
+	graphContext string,
+) (*ValidationResult, error) {
+	if a == nil || a.executor == nil {
+		return nil, fmt.Errorf("critic agent not configured")
+	}
+	if fragment == nil {
+		return nil, fmt.Errorf("fragment is required")
+	}
+
+	prompt := a.buildStrategicValidationPrompt(fragment, relations, graphContext)
+
+	verifier := ai.NewSimpleJSONVerifier()
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContentGeneration,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       7,
+			MinContextWindow:         8000,
+			MaxOutputSize:            2048,
+		},
+		Verifier: verifier,
+	}
+
+	result, err := a.executor.ExecuteStructuredTask(ctx, task)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate strategic entity: %w", err)
+	}
+
+	jsonData, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal result: %w", err)
+	}
+
+	var validationResult ValidationResult
+	if err := json.Unmarshal(jsonData, &validationResult); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal validation result: %w", err)
+	}
+
+	return &validationResult, nil
+}
+
+// buildStrategicValidationPrompt builds a focused prompt for Phase 2 strategic entity validation.
+func (a *CriticAgent) buildStrategicValidationPrompt(fragment *models.HorizonFragment, relations []DiscoveredRelation, graphContext string) string {
+	fragmentJSON, _ := json.MarshalIndent(fragment, "", "  ")
+	relationsJSON, _ := json.MarshalIndent(relations, "", "  ")
+
+	graphContextBlock := ""
+	if strings.TrimSpace(graphContext) != "" {
+		graphContextBlock = fmt.Sprintf(`
+GRAPH CONTEXT (existing Lens graph):
+%s
+
+`, strings.TrimSpace(graphContext))
+	}
+
+	var entityType string
+	switch fragment.Type {
+	case models.FragmentTypeDecisionPoint:
+		entityType = "DECISION_POINT"
+	case models.FragmentTypeMechanism:
+		entityType = "MECHANISM"
+	default:
+		entityType = "UNKNOWN"
+	}
+
+	return fmt.Sprintf(`You are a Phase 2 Strategic Overlay Critic. Your task is to validate DECISION_POINT and MECHANISM entities.
+
+ENTITY TYPE: %s
+
+ENTITY (JSON):
+%s
+
+CONNECTED RELATIONS (JSON):
+%s
+%s
+═══════════════════════════════════════════════════════════════════════════════
+CORE SEMANTIC DISTINCTION: DECISION POINT vs MECHANISM
+═══════════════════════════════════════════════════════════════════════════════
+
+DECISION POINT = A CONCRETE DECISION/ACTION (verb-based)
+  - Title MUST be an ACTION (verb phrase): "Grant License", "Approve Export", "Block Access"
+  - Represents a MOMENT of choice where something can be blocked/enabled/delayed
+  - Path format: /decision/{domain-slug}/{decision-slug}
+  - GOOD titles: "Grant Banking License", "Approve EUV Export", "Block Maritime Transit"
+  - BAD titles: "Export Control" (noun), "Banking Oversight" (noun), "Regulatory Supervision" (noun)
+
+MECHANISM = A SPECIFIC INSTRUMENT/REGIME OF CONTROL (noun-based)
+  - Title MUST be an INSTRUMENT (noun phrase): "Banking License", "Entity List", "Export Control Regime"
+  - Represents a REUSABLE tool that agents possess and apply
+  - Path format: /mechanism/{category}/{slug}
+  - category MUST be: regulatory | economic | technological | contractual | political
+  - slug MUST specify the object ("license WHAT?", "controls WHAT?")
+  - GOOD slugs: "banking-license", "euv-export-control", "entity-list"
+  - BAD slugs: "licensing", "regulation", "oversight", "supervision" (too abstract)
+
+═══════════════════════════════════════════════════════════════════════════════
+VALIDATION RULES
+═══════════════════════════════════════════════════════════════════════════════
+
+For DECISION_POINT:
+1. PATH VALIDATION:
+   - Path MUST match /decision/{domain-slug}/{decision-slug}
+   - If malformed → conflict with HIGH severity
+
+2. TITLE VALIDATION:
+   - Title MUST start with an action verb (Grant, Approve, Block, Authorize, Deny, Permit, Revoke, Suspend)
+   - If title is a noun phrase (e.g., "Export Control", "Banking Supervision") → conflict with MEDIUM severity
+   - Suggest rephrasing: "Export Control" → "Approve Export" or "Block Export"
+
+3. EDGE COMPLETENESS:
+   - MUST have at least one CONTROLS_ACCESS or IMPOSES_CONDITION edge (what does this decision control?)
+   - If missing → missingInfo: "What does <decision_point> control or block access to? Return CONTROLS_ACCESS edges with targetCanonicalPath = controlled entity."
+   - MUST have at least one GATEKEEPS_DECISION edge pointing TO this decision (who decides?)
+   - If missing → missingInfo: "Who gatekeeps <decision_point>? Return GATEKEEPS_DECISION edge with EXPLICIT SOURCE: sourceCanonicalPath=/org/... or /gov/... or /community/... (the gatekeeper), sourceType=ORGANIZATION or GOV, sourceName=gatekeeper name. Target is THIS DECISION POINT. CRITICAL: The gatekeeper MUST be the source, NOT the decision point."
+   - SHOULD have USES_MECHANISM edge (how is control exercised?)
+   - If missing → missingInfo: "What mechanism does <decision_point> use? Return USES_MECHANISM edge with targetCanonicalPath=/mechanism/{category}/{slug}."
+
+4. ISOLATED DECISION POINTS:
+   - Decision point with NO connected edges → HIGH severity conflict
+   - Decision point must be connected to the graph
+
+For MECHANISM:
+1. PATH VALIDATION:
+   - Path MUST match /mechanism/{category}/{slug}
+   - category MUST be one of: regulatory, economic, technological, contractual, political
+   - If invalid category → conflict with HIGH severity
+
+2. SLUG SPECIFICITY:
+   - Slug MUST specify the object (what is being licensed/regulated/controlled?)
+   - FORBIDDEN generic slugs: licensing, regulation, oversight, supervision, compliance, monitoring, enforcement
+   - If slug is generic → conflict with MEDIUM severity + missingInfo:
+     "Specify what <mechanism> applies to (license what / regulate what) and update slug to be concrete."
+
+3. EDGE COMPLETENESS:
+   - MUST have at least one USES_MECHANISM edge pointing TO this mechanism (who uses it?)
+   - If missing → missingInfo: "What agents/organizations use <mechanism>? Return USES_MECHANISM edges with EXPLICIT SOURCE: sourceCanonicalPath=/org/... or /gov/... or /decision/... (the user), sourceType=ORGANIZATION or GOV or DECISION_POINT, sourceName=user name. Target is THIS MECHANISM. CRITICAL: The user/agent MUST be the source, NOT the mechanism."
+   - SHOULD have APPLIES_TO edges (what does it affect?)
+   - If missing → missingInfo: "What does <mechanism> apply to? Return APPLIES_TO edges with targetCanonicalPath = affected entity (org/facility/product/market). Source is THIS MECHANISM."
+
+4. ORPHAN MECHANISMS:
+   - Mechanism with NO incoming and NO outgoing edges → HIGH severity conflict
+   - Every mechanism must be used by someone and apply to something
+
+STRATEGIC EDGE TYPE VALIDATION:
+- CONTROLS_ACCESS: source = DECISION_POINT/ORG/GOV/COMMUNITY, target = ORG/FACILITY/PRODUCT/MARKET/PROGRAM
+- IMPOSES_CONDITION: source = ORG/GOV/COMMUNITY/DECISION_POINT, target = ORG/FACILITY/PRODUCT
+- GATEKEEPS_DECISION: source = ORG/GOV/COMMUNITY, target = DECISION_POINT
+- USES_MECHANISM: source = DECISION_POINT/ORG/GOV/COMMUNITY, target = MECHANISM (MUST be /mechanism/...)
+- APPLIES_TO: source = MECHANISM, target = ORG/FACILITY/PRODUCT/MARKET
+
+CRITICAL: USES_MECHANISM target MUST be /mechanism/... (never /decision/...)
+
+═══════════════════════════════════════════════════════════════════════════════
+OUTPUT
+═══════════════════════════════════════════════════════════════════════════════
+
+Return a JSON object:
+{
+  "hasConflicts": boolean,
+  "conflicts": [
+    {
+      "field": "string (e.g., 'title', 'canonicalPath', 'slug', 'edges')",
+      "extractedValue": "current value",
+      "sourceValue": "expected/suggested value",
+      "reason": "explanation",
+      "severity": "low" | "medium" | "high"
+    }
+  ],
+  "confidence": 0.0-1.0,
+  "isValid": boolean,
+  "missingInfo": ["specific question to enrich this entity..."]
+}
+
+Return ONLY valid JSON. No markdown fences.
+`, entityType, string(fragmentJSON), string(relationsJSON), graphContextBlock)
+}
+
 // buildValidationPrompt строит промпт для валидации данных
 func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string, graphContext string) string {
 	extractedJSON, _ := json.MarshalIndent(extractedData, "", "  ")
@@ -370,8 +555,8 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      - "What does <decision_point> control or block access to? Return CONTROLS_ACCESS edges with qualifiers (type: block|enable|delay|monitor, mechanism, condition)."
 	    - If no USES_MECHANISM edges exist (linking to a mechanism), add:
 	      - "What mechanism does <decision_point> use to exercise control? Return /mechanism/{category}/{slug} path and USES_MECHANISM edge."
-	    - If agent/gatekeeper is not identified in relations, add:
-	      - "Who is the agent/gatekeeper for <decision_point>? Return /org/... or /gov/... path with role (gatekeeper|approver|influencer|enforcer|arbiter)."
+    - If no GATEKEEPS_DECISION edges exist, add:
+      - "Who gatekeeps <decision_point>? Return /org/... or /gov/... or /community/... path and a GATEKEEPS_DECISION edge with qualifiers (mode, mechanism)."
 	    - If no evidence/provenance is linked, add:
 	      - "What is the evidence for <decision_point> existence? Return specific regulatory actions, documents, or events with dates."
 	    - Decision points without any connected edges are HIGH SEVERITY conflicts.
@@ -379,6 +564,9 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - If the entity is a MECHANISM (fragment.type == MECHANISM OR canonicalPath starts with /mechanism/):
 	    - MECHANISM path MUST be /mechanism/{category}/{slug} where category is one of: regulatory, economic, technological, contractual, political.
 	    - If category is not valid, add conflict with HIGH severity.
+    - Mechanism slugs MUST be specific about the object ("license what? / controls what?").
+      - If slug is generic (licensing, regulation, oversight, supervision, compliance, monitoring, enforcement) without object, add:
+        - "Specify what <mechanism> applies to (license what / regulate what) and update to a concrete mechanism slug (e.g., banking-license, capital-market-service-licensing)."
 	    - If no USES_MECHANISM edges exist (agents using this mechanism), add:
 	      - "What agents/organizations use <mechanism>? Return USES_MECHANISM edges from /org/... or /gov/... paths."
 	    - If no APPLIES_TO edges exist (what the mechanism affects), add:
@@ -389,7 +577,8 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION/GOV; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM.
 	      - Qualifiers MUST include 'type' (block|enable|delay|monitor). Missing qualifiers = MEDIUM severity conflict.
 	    - IMPOSES_CONDITION: qualifiers MUST include 'type' (cost|compliance|technical) and 'impact'.
-	    - USES_MECHANISM: source MUST be DECISION_POINT/ORGANIZATION/GOV; target MUST be MECHANISM.
+    - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY; target MUST be DECISION_POINT.
+    - USES_MECHANISM: source MUST be DECISION_POINT/ORGANIZATION/GOV/COMMUNITY; target MUST be MECHANISM.
 	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET.
 
 	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, canonicalValidationBlock)

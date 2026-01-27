@@ -1109,6 +1109,47 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     }
   }, [onSelectLens, selectedLensId]);
 
+  // Transfer lens state
+  const [transferringLens, setTransferringLens] = React.useState<{ id: string; name: string; projectId: string } | null>(null);
+  const [transferInProgress, setTransferInProgress] = React.useState(false);
+
+  const openTransferDialog = React.useCallback((lens: any) => {
+    const id = String(lens?.id || '').trim();
+    const name = String(lens?.name || 'Untitled Lens');
+    const pid = String(lens?.projectId || '').trim();
+    if (!id) return;
+    setTransferringLens({ id, name, projectId: pid });
+  }, []);
+
+  const closeTransferDialog = React.useCallback(() => {
+    setTransferringLens(null);
+  }, []);
+
+  const transferLens = React.useCallback(async (targetProjectId: string) => {
+    if (!transferringLens) return;
+    const { id, name, projectId: sourceProjectId } = transferringLens;
+    if (!targetProjectId || targetProjectId === sourceProjectId) {
+      closeTransferDialog();
+      return;
+    }
+
+    setTransferInProgress(true);
+    try {
+      await api.transferHorizonLens(id, targetProjectId);
+      // Remove lens from current project's list
+      setLenses((prev) => prev.filter((l) => l.id !== id));
+      if (selectedLensId === id) {
+        onSelectLens?.(null);
+      }
+      closeTransferDialog();
+    } catch (err) {
+      console.error(`[Sidebar] Failed to transfer lens "${name}":`, err);
+      alert(`Failed to transfer lens: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setTransferInProgress(false);
+    }
+  }, [transferringLens, closeTransferDialog, onSelectLens, selectedLensId]);
+
   // Command palette (sidebar)
   type PaletteItem =
     | { kind: 'project'; id: string; title: string; subtitle?: string; project: Project }
@@ -3028,6 +3069,20 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                             <button
                                               type="button"
                                               className="sidebar-icon-btn"
+                                              title="Transfer to another project"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                openTransferDialog(lens);
+                                              }}
+                                            >
+                                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M18 8L22 12L18 16" />
+                                                <path d="M2 12H22" />
+                                              </svg>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="sidebar-icon-btn"
                                               title="Delete lens"
                                               onClick={(e) => {
                                                 e.stopPropagation();
@@ -3602,6 +3657,110 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                 }}
               >
                 {creatingScenario ? t('unfold.sections.creating') : t('unfold.sections.create')}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Transfer lens dialog */}
+      {transferringLens && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => closeTransferDialog()}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.6)',
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: 'var(--surface-strong)',
+              borderRadius: 12,
+              padding: 20,
+              minWidth: 320,
+              maxWidth: 400,
+              maxHeight: '80vh',
+              overflow: 'auto',
+              boxShadow: '0 10px 40px rgba(0,0,0,0.3)',
+            }}
+          >
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 12, color: 'var(--text-heading)' }}>
+              Transfer Lens
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary-strong)', marginBottom: 16 }}>
+              Move "<strong>{transferringLens.name}</strong>" to another project:
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto' }}>
+              {memoizedProjects
+                .filter((p) => p.id !== transferringLens.projectId)
+                .map((project) => (
+                  <button
+                    key={project.id}
+                    type="button"
+                    disabled={transferInProgress}
+                    onClick={() => void transferLens(project.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: 'none',
+                      backgroundColor: 'var(--white-06)',
+                      color: 'var(--text-heading)',
+                      cursor: transferInProgress ? 'not-allowed' : 'pointer',
+                      textAlign: 'left',
+                      fontSize: 13,
+                      opacity: transferInProgress ? 0.6 : 1,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!transferInProgress) {
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-06)';
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                    </svg>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {project.displayName || 'Untitled Project'}
+                    </span>
+                  </button>
+                ))}
+              {memoizedProjects.filter((p) => p.id !== transferringLens.projectId).length === 0 && (
+                <div style={{ fontSize: 13, color: 'var(--text-tertiary-weak)', textAlign: 'center', padding: 20 }}>
+                  No other projects available
+                </div>
+              )}
+            </div>
+            <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => closeTransferDialog()}
+                disabled={transferInProgress}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 6,
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  color: 'var(--text-secondary-strong)',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                }}
+              >
+                Cancel
               </button>
             </div>
           </div>

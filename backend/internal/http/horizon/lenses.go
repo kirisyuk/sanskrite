@@ -329,3 +329,62 @@ func (h *HorizonHandlers) RecalculateLens(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(response)
 }
+
+// TransferLens moves a lens from one project to another
+func (h *HorizonHandlers) TransferLens(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	lensID := extractIDFromPath(r, "/api/horizon/lenses/")
+	if lensID == "" {
+		http.Error(w, "lensId required in path", http.StatusBadRequest)
+		return
+	}
+
+	// Remove /transfer suffix from lensID if present
+	lensID = strings.TrimSuffix(lensID, "/transfer")
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	// Parse request body
+	var req struct {
+		TargetProjectID string `json:"targetProjectId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.TargetProjectID) == "" {
+		http.Error(w, "targetProjectId is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get the lens and verify access
+	lens, err := h.service.Lens().GetLens(r.Context(), lensID)
+	if err != nil {
+		http.Error(w, "Lens not found", http.StatusNotFound)
+		return
+	}
+
+	if lens.TenantID != authInfo.TenantID {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// Transfer the lens
+	updatedLens, err := h.service.Lens().TransferLens(r.Context(), lensID, req.TargetProjectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(updatedLens)
+}

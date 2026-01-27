@@ -770,6 +770,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       // Strategic overlay relations
       'CONTROLS_ACCESS',
       'IMPOSES_CONDITION',
+      'GATEKEEPS_DECISION',
       'USES_MECHANISM',
       'APPLIES_TO',
       'SURFACES',
