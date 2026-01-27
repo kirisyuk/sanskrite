@@ -2974,9 +2974,73 @@ func (e *ScoutEngine) processRelationsInternal(
 		edgeSourceID := sourceFragment.ID
 		edgeTargetID := targetID
 
+		// === EXPLICIT SOURCE HANDLING (Phase 2 strategic relations) ===
+		// If SourceCanonicalPath is set, the edge should originate from a different entity
+		// than the default sourceFragment. This is used for strategic edges like GATEKEEPS_DECISION
+		// where the semantic direction requires an ORG/GOV as source, not the DECISION_POINT.
+		explicitSourceFragment := sourceFragment
+		if explicitSourcePath := strings.TrimSpace(rel.SourceCanonicalPath); explicitSourcePath != "" {
+			// Find or create the explicit source fragment
+			if existingSrc, err := e.fragmentsRepo.GetByCanonicalPath(ctx, explicitSourcePath); err == nil && existingSrc != nil {
+				explicitSourceFragment = existingSrc
+				edgeSourceID = existingSrc.ID
+				fmt.Printf("[ScoutEngine] Using explicit source for edge: %s -> %s [%s]\n", explicitSourcePath, targetPath, edgeType)
+			} else {
+				// Create minimal fragment for explicit source
+				srcType := e.normalizeFragmentType(ctx, rel.SourceType)
+				if srcType == "" {
+					srcType = InferFragmentTypeFromCanonicalPath(explicitSourcePath)
+				}
+				if srcType == "" {
+					srcType = models.FragmentTypeOrganization
+				}
+				now := time.Now().UTC()
+				srcName := rel.SourceName
+				if srcName == "" {
+					// Extract name from path as fallback
+					parts := strings.Split(strings.Trim(explicitSourcePath, "/"), "/")
+					if len(parts) > 0 {
+						srcName = parts[len(parts)-1]
+					}
+				}
+				newSrcFrag := &models.HorizonFragment{
+					TenantID:      "global",
+					CanonicalPath: explicitSourcePath,
+					Type:          srcType,
+					Labels:        map[string]string{"en": srcName},
+					Status:        "active",
+					Metadata: models.FragmentMetadata{
+						CreatedAt:       now,
+						LastUpdatedAt:   now,
+						SourceFrameID:   provenanceMethod,
+						EpistemicStatus: models.EpistemicStatusLowConfidence,
+					},
+					Provenance: models.Provenance{
+						SourceIDs: []string{"explicit_source_" + provenanceMethod},
+						Method:    provenanceMethod,
+					},
+				}
+				if createdID, createErr := e.fragmentsRepo.Create(ctx, newSrcFrag); createErr == nil {
+					edgeSourceID = createdID
+					explicitSourceFragment = newSrcFrag
+					fmt.Printf("[ScoutEngine] Created explicit source fragment: %s (%s)\n", explicitSourcePath, srcType)
+				} else {
+					fmt.Printf("[ScoutEngine] Failed to create explicit source fragment %s: %v\n", explicitSourcePath, createErr)
+					// Fall back to default source
+					explicitSourceFragment = sourceFragment
+					edgeSourceID = sourceFragment.ID
+				}
+			}
+			// When explicit source is used and target is THIS FRAGMENT, swap target to sourceFragment
+			if strings.TrimSpace(rel.TargetCanonicalPath) == strings.TrimSpace(sourceFragment.CanonicalPath) {
+				edgeTargetID = sourceFragment.ID
+				targetType = sourceFragment.Type
+			}
+		}
+
 		// Enforce directional semantics for common relations (best-effort, heuristic).
 		// This prevents obviously inverted edges like "/loc/astana SUPPLIES_TO /org/crrc".
-		edgeSourceID, edgeTargetID, edgeType, directionChanged := normalizeRelationEdge(sourceFragment, edgeSourceID, edgeTargetID, edgeType, targetType, enableManagement)
+		edgeSourceID, edgeTargetID, edgeType, directionChanged := normalizeRelationEdge(explicitSourceFragment, edgeSourceID, edgeTargetID, edgeType, targetType, enableManagement)
 		switch edgeType {
 		case "SUBSIDIARY_OF":
 			// Canonical representation: OWNS from parent -> subsidiary.
@@ -3004,6 +3068,10 @@ func (e *ScoutEngine) processRelationsInternal(
 			if id == "" {
 				return ""
 			}
+			// Check explicit source fragment first (Phase 2 strategic relations)
+			if explicitSourceFragment != nil && strings.TrimSpace(explicitSourceFragment.ID) == id {
+				return explicitSourceFragment.Type
+			}
 			if sourceFragment != nil && strings.TrimSpace(sourceFragment.ID) == id {
 				return sourceFragment.Type
 			}
@@ -3024,6 +3092,10 @@ func (e *ScoutEngine) processRelationsInternal(
 			id = strings.TrimSpace(id)
 			if id == "" {
 				return ""
+			}
+			// Check explicit source fragment first (Phase 2 strategic relations)
+			if explicitSourceFragment != nil && strings.TrimSpace(explicitSourceFragment.ID) == id {
+				return strings.TrimSpace(explicitSourceFragment.CanonicalPath)
 			}
 			if sourceFragment != nil && strings.TrimSpace(sourceFragment.ID) == id {
 				return strings.TrimSpace(sourceFragment.CanonicalPath)
@@ -3511,6 +3583,63 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 		// When scouting an ORGANIZATION, LLM output may attach PERSON targets with these types;
 		// when the "management" specialty is enabled, we normalize the direction by swapping endpoints.
 		if enableManagement && isOrg(srcType) && isPerson(targetType) {
+			sourceID, targetID = targetID, sourceID
+			changed = true
+		}
+
+	// === STRATEGIC EDGE TYPE NORMALIZATION (Phase 2) ===
+	// These edge types have strict directional semantics that must be enforced.
+
+	case models.DependencyTypeGatekeepsDecision:
+		// GATEKEEPS_DECISION: source MUST be ORG/GOV/COMMUNITY, target MUST be DECISION_POINT
+		// If source is DECISION_POINT, the edge is inverted and must be swapped.
+		isDecisionPoint := func(t models.FragmentType) bool { return t == models.FragmentTypeDecisionPoint }
+		if isDecisionPoint(srcType) && (isOrg(targetType) || targetType == models.FragmentTypeCommunity) {
+			// Inverted: DECISION_POINT → ORG [GATEKEEPS_DECISION] should be ORG → DECISION_POINT
+			sourceID, targetID = targetID, sourceID
+			changed = true
+		}
+		// Also catch MECHANISM as source (completely invalid)
+		isMechanism := func(t models.FragmentType) bool { return t == models.FragmentTypeMechanism }
+		if isMechanism(srcType) {
+			// MECHANISM cannot gatekeep decisions. This is likely a semantic error.
+			// Swap and hope target is a decision point.
+			sourceID, targetID = targetID, sourceID
+			changed = true
+		}
+
+	case models.DependencyTypeUsesMechanism:
+		// USES_MECHANISM: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY, target MUST be MECHANISM
+		// If source is MECHANISM and target is something else, swap.
+		isMechanism := func(t models.FragmentType) bool { return t == models.FragmentTypeMechanism }
+		if isMechanism(srcType) && !isMechanism(targetType) {
+			// Inverted: MECHANISM → DECISION_POINT [USES_MECHANISM] should be DECISION_POINT → MECHANISM
+			sourceID, targetID = targetID, sourceID
+			changed = true
+		}
+
+	case models.DependencyTypeAppliesTo:
+		// APPLIES_TO: source MUST be MECHANISM, target MUST be entity (ORG/FACILITY/PRODUCT/MARKET)
+		// If source is NOT MECHANISM and target IS MECHANISM, swap.
+		isMechanism := func(t models.FragmentType) bool { return t == models.FragmentTypeMechanism }
+		if !isMechanism(srcType) && isMechanism(targetType) {
+			// Inverted: ORG → MECHANISM [APPLIES_TO] should be MECHANISM → ORG
+			sourceID, targetID = targetID, sourceID
+			changed = true
+		}
+
+	case models.DependencyTypeControlsAccess, models.DependencyTypeImposesCondition:
+		// CONTROLS_ACCESS / IMPOSES_CONDITION: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY
+		// Target MUST be entity (ORG/FACILITY/PRODUCT/MARKET/PROGRAM)
+		// If source is a "controlled" entity type and target is a controller type, swap.
+		isController := func(t models.FragmentType) bool {
+			return t == models.FragmentTypeDecisionPoint || isOrg(t) || t == models.FragmentTypeCommunity
+		}
+		isControlled := func(t models.FragmentType) bool {
+			return isFac(t) || isProd(t) || t == models.FragmentTypeMarket || t == models.FragmentTypeProgram
+		}
+		if isControlled(srcType) && isController(targetType) {
+			// Inverted: FACILITY → ORG [CONTROLS_ACCESS] should be ORG → FACILITY
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}

@@ -123,16 +123,23 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"INVESTS_IN":      {},
 	"PARTNERS_WITH":   {},
 	// Strategic decision layer
-	"IMPOSES_CONDITION": {},
+	"IMPOSES_CONDITION":  {},
 	"GATEKEEPS_DECISION": {},
-	"USES_MECHANISM":    {},
-	"APPLIES_TO":        {},
+	"USES_MECHANISM":     {},
+	"APPLIES_TO":         {},
+	// Domain-to-strategic entities (Phase 2 overlay)
+	"SURFACES": {},
 	// People/org meta-relations
 	"KEY_PERSON": {},
 	// OSINT-lite / governance extensions
 	"AUDITED_BY":  {},
 	"RELATIVE_OF": {},
 	"RELATED_TO":  {},
+	// Community relations
+	"OPERATES_VIA":    {},
+	"MEMBER_OF":       {},
+	"AFFILIATED_WITH": {},
+	"HAS_SUBGROUP":    {},
 	// Domain contracts
 	"FOCUSES_ON":     {},
 	"INVOLVES_ACTOR": {},
@@ -141,6 +148,9 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"RELATED_DOMAIN": {},
 	"BROADENS_TO":    {},
 	"NARROWS_TO":     {},
+	// Legacy types (for migration compatibility)
+	"WORKS_FOR":      {},
+	"HAS_KEY_PERSON": {},
 }
 
 func isBuiltInAllowedRelationType(s string) bool {

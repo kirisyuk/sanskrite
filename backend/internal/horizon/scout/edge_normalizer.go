@@ -410,6 +410,92 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeCommunity},
 		Description:      "Community has sub-group (hierarchy: dynasty branch, tribe clan)",
 	},
+
+	// --- Strategic Decision Layer (Phase 2) ---
+
+	// GATEKEEPS_DECISION: Actor controls a strategic decision point.
+	// Direction: ORG/GOV/COMMUNITY → DECISION_POINT
+	// CRITICAL: DECISION_POINT cannot be source, only target.
+	models.DependencyTypeGatekeepsDecision: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization, // Includes /gov/ bodies
+			models.FragmentTypeCommunity,
+		},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDecisionPoint},
+		Description:      "Actor gatekeeps decision point (strong control over strategic choice)",
+	},
+
+	// USES_MECHANISM: Agent possesses/uses a mechanism of control.
+	// Direction: DECISION_POINT/ORG/GOV/COMMUNITY → MECHANISM
+	// CRITICAL: MECHANISM cannot be source for this edge type.
+	models.DependencyTypeUsesMechanism: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeDecisionPoint,
+			models.FragmentTypeOrganization, // Includes /gov/ bodies
+			models.FragmentTypeCommunity,
+		},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMechanism},
+		Description:      "Agent uses mechanism (tool possession for control)",
+	},
+
+	// APPLIES_TO: Mechanism applies to an entity or relation scope.
+	// Direction: MECHANISM → entity (ORG/FACILITY/PRODUCT/MARKET)
+	// CRITICAL: Only MECHANISM can be source for this edge type.
+	models.DependencyTypeAppliesTo: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeMechanism},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypeProduct,
+			models.FragmentTypeMarket,
+		},
+		Description: "Mechanism applies to entity (regulatory/contractual scope)",
+	},
+
+	// CONTROLS_ACCESS: Strategic gatekeeping (block/enable/delay/monitor) over access.
+	// Direction: DECISION_POINT/ORG/GOV/COMMUNITY → controlled entity
+	models.DependencyTypeControlsAccess: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeDecisionPoint,
+			models.FragmentTypeOrganization, // Includes /gov/ bodies
+			models.FragmentTypeCommunity,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypeProduct,
+			models.FragmentTypeMarket,
+			models.FragmentTypeProgram,
+		},
+		Description: "Controller controls access to target (strategic gatekeeping)",
+	},
+
+	// IMPOSES_CONDITION: Entity forces compliance with rules/costs/constraints.
+	// Direction: ORG/GOV/COMMUNITY/DECISION_POINT → affected entity
+	models.DependencyTypeImposesCondition: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization, // Includes /gov/ bodies
+			models.FragmentTypeCommunity,
+			models.FragmentTypeDecisionPoint,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypeProduct,
+		},
+		Description: "Entity imposes condition on target (compliance/cost/technical)",
+	},
+
+	// SURFACES: Domain "surfaces" strategic entities during Phase 2 overlay.
+	// Direction: DOMAIN → DECISION_POINT/MECHANISM
+	models.DependencyTypeSurfaces: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeDecisionPoint,
+			models.FragmentTypeMechanism,
+		},
+		Description: "Domain surfaces strategic entities (Phase 2 overlay result)",
+	},
 }
 
 // ValidateEdgeDirection checks if an edge has correct direction according to policies.

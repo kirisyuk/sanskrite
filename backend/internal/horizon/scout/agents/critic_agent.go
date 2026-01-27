@@ -552,11 +552,11 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - If the entity is a DECISION_POINT (fragment.type == DECISION_POINT OR canonicalPath starts with /decision/):
 	    - DECISION_POINT path MUST be /decision/{domain-slug}/{decision-slug}. If malformed, add conflict.
 	    - If no CONTROLS_ACCESS edges exist (this decision point controlling something), add:
-	      - "What does <decision_point> control or block access to? Return CONTROLS_ACCESS edges with qualifiers (type: block|enable|delay|monitor, mechanism, condition)."
+	      - "What does <decision_point> control or block access to? Return CONTROLS_ACCESS edges with targetCanonicalPath = controlled entity."
 	    - If no USES_MECHANISM edges exist (linking to a mechanism), add:
-	      - "What mechanism does <decision_point> use to exercise control? Return /mechanism/{category}/{slug} path and USES_MECHANISM edge."
-    - If no GATEKEEPS_DECISION edges exist, add:
-      - "Who gatekeeps <decision_point>? Return /org/... or /gov/... or /community/... path and a GATEKEEPS_DECISION edge with qualifiers (mode, mechanism)."
+	      - "What mechanism does <decision_point> use to exercise control? Return USES_MECHANISM edge with targetCanonicalPath=/mechanism/{category}/{slug}."
+	    - If no GATEKEEPS_DECISION edges exist, add:
+	      - "Who gatekeeps <decision_point>? Return GATEKEEPS_DECISION edge with EXPLICIT SOURCE: sourceCanonicalPath=/org/... or /gov/... or /community/... (the gatekeeper), sourceType=ORGANIZATION or GOV, sourceName=gatekeeper name. Target is THIS DECISION POINT. CRITICAL: The gatekeeper MUST be the source, NOT the decision point."
 	    - If no evidence/provenance is linked, add:
 	      - "What is the evidence for <decision_point> existence? Return specific regulatory actions, documents, or events with dates."
 	    - Decision points without any connected edges are HIGH SEVERITY conflicts.
@@ -564,21 +564,23 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - If the entity is a MECHANISM (fragment.type == MECHANISM OR canonicalPath starts with /mechanism/):
 	    - MECHANISM path MUST be /mechanism/{category}/{slug} where category is one of: regulatory, economic, technological, contractual, political.
 	    - If category is not valid, add conflict with HIGH severity.
-    - Mechanism slugs MUST be specific about the object ("license what? / controls what?").
-      - If slug is generic (licensing, regulation, oversight, supervision, compliance, monitoring, enforcement) without object, add:
-        - "Specify what <mechanism> applies to (license what / regulate what) and update to a concrete mechanism slug (e.g., banking-license, capital-market-service-licensing)."
+	    - Mechanism slugs MUST be specific about the object ("license what? / controls what?").
+	      - If slug is generic (licensing, regulation, oversight, supervision, compliance, monitoring, enforcement) without object, add:
+	        - "Specify what <mechanism> applies to (license what / regulate what) and update to a concrete mechanism slug (e.g., banking-license, capital-market-service-licensing)."
 	    - If no USES_MECHANISM edges exist (agents using this mechanism), add:
-	      - "What agents/organizations use <mechanism>? Return USES_MECHANISM edges from /org/... or /gov/... paths."
+	      - "What agents/organizations use <mechanism>? Return USES_MECHANISM edges with EXPLICIT SOURCE: sourceCanonicalPath=/org/... or /gov/... or /decision/... (the user), sourceType, sourceName. Target is THIS MECHANISM."
 	    - If no APPLIES_TO edges exist (what the mechanism affects), add:
-	      - "What does <mechanism> apply to? Return APPLIES_TO edges to affected entities (org/product/facility/market)."
+	      - "What does <mechanism> apply to? Return APPLIES_TO edges with targetCanonicalPath = affected entity. Source is THIS MECHANISM."
 	    - Orphan mechanisms (no incoming or outgoing edges) are HIGH SEVERITY conflicts.
 
-	  - For strategic relations (CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO):
+	  - For strategic relations (CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO, GATEKEEPS_DECISION):
 	    - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION/GOV; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM.
 	      - Qualifiers MUST include 'type' (block|enable|delay|monitor). Missing qualifiers = MEDIUM severity conflict.
 	    - IMPOSES_CONDITION: qualifiers MUST include 'type' (cost|compliance|technical) and 'impact'.
-    - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY; target MUST be DECISION_POINT.
-    - USES_MECHANISM: source MUST be DECISION_POINT/ORGANIZATION/GOV/COMMUNITY; target MUST be MECHANISM.
+	    - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY; target MUST be DECISION_POINT.
+	      - When asking for gatekeeper, ALWAYS request EXPLICIT SOURCE (sourceCanonicalPath) in missingInfo.
+	    - USES_MECHANISM: source MUST be DECISION_POINT/ORGANIZATION/GOV/COMMUNITY; target MUST be MECHANISM.
+	      - When asking for mechanism user (from MECHANISM fragment), ALWAYS request EXPLICIT SOURCE in missingInfo.
 	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET.
 
 	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, canonicalValidationBlock)
