@@ -183,6 +183,21 @@ func lastCanonicalSegment(cp string) string {
 
 func bestEffortDisplayLabel(label string, canonicalPath string) string {
 	label = strings.TrimSpace(label)
+	if strings.HasPrefix(canonicalPath, "/loc/") {
+		parts := strings.Split(strings.Trim(canonicalPath, "/"), "/")
+		if len(parts) >= 4 {
+			cc := strings.TrimSpace(strings.ToLower(parts[1]))
+			admin1 := strings.TrimSpace(strings.ToLower(parts[2]))
+			city := strings.TrimSpace(strings.ToLower(parts[3]))
+			if cc != "" && admin1 == "na" && city == "na" {
+				if label == "" || len(label) <= 2 || strings.EqualFold(label, cc) {
+					if n := countryNameByISO2(cc); n != "" {
+						return n
+					}
+				}
+			}
+		}
+	}
 	if label == "" {
 		label = lastCanonicalSegment(canonicalPath)
 	}

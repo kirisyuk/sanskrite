@@ -54,6 +54,123 @@ func parseStringSlice(v interface{}) []string {
 	}
 }
 
+func inferFragmentTypeFromPath(path string) models.FragmentType {
+	switch {
+	case strings.HasPrefix(path, "/product/"):
+		return models.FragmentTypeProduct
+	case strings.HasPrefix(path, "/program/"):
+		return models.FragmentTypeProgram
+	case strings.HasPrefix(path, "/market/"):
+		return models.FragmentTypeMarket
+	case strings.HasPrefix(path, "/fac/"):
+		return models.FragmentTypeFacility
+	case strings.HasPrefix(path, "/loc/"), strings.HasPrefix(path, "/region/"):
+		return models.FragmentTypeGeoRegion
+	case strings.HasPrefix(path, "/event/"):
+		return models.FragmentTypeEvent
+	case strings.HasPrefix(path, "/person/"):
+		return models.FragmentTypePerson
+	case strings.HasPrefix(path, "/media/"):
+		return models.FragmentTypeMediaChannel
+	case strings.HasPrefix(path, "/org/"), strings.HasPrefix(path, "/gov/"):
+		return models.FragmentTypeOrganization
+	case strings.HasPrefix(path, "/domain/"):
+		return models.FragmentTypeDomain
+	default:
+		return models.FragmentTypeOrganization
+	}
+}
+
+func (s *LensService) canonicalizeScopeEntries(ctx context.Context, lens *models.Lens) bool {
+	if s == nil || lens == nil || len(lens.Scope) == 0 {
+		return false
+	}
+	changed := false
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(lens.Scope))
+	for _, raw := range lens.Scope {
+		orig := strings.TrimSpace(raw)
+		if orig == "" {
+			changed = true
+			continue
+		}
+		cp := orig
+
+		// Query scopes are kept as-is; they resolve later.
+		if strings.HasPrefix(cp, "/query/") {
+			if _, ok := seen[cp]; ok {
+				changed = true
+				continue
+			}
+			seen[cp] = struct{}{}
+			out = append(out, cp)
+			continue
+		}
+
+		// Domains are contract paths; normalize but do not require fragments to exist.
+		if strings.HasPrefix(cp, "/domain/") {
+			if norm, nerr := taxonomy.NormalizeDomainCanonicalPath(cp); nerr == nil && strings.TrimSpace(norm) != "" {
+				cp = strings.TrimSpace(norm)
+			}
+		}
+
+		// Validate canonical path syntax; invalid paths are dropped.
+		if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+			changed = true
+			continue
+		}
+
+		// Canonicalize only when we can verify an existing fragment.
+		if !strings.HasPrefix(cp, "/domain/") && s.canonicalPathResolver != nil {
+			ft := inferFragmentTypeFromPath(cp)
+			if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, cp, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+				candidate := strings.TrimSpace(resolved.CanonicalPath)
+				if resolved.ExistingFragment != nil {
+					cp = candidate
+				} else if s.fragmentsRepo != nil {
+					if f, ferr := s.fragmentsRepo.GetByCanonicalPath(ctx, candidate); ferr == nil && f != nil {
+						cp = candidate
+					}
+				}
+			}
+		}
+
+		if cp != orig {
+			changed = true
+			if lens.ScopeFragments != nil {
+				if fid, ok := lens.ScopeFragments[orig]; ok {
+					delete(lens.ScopeFragments, orig)
+					if _, ok2 := lens.ScopeFragments[cp]; !ok2 && strings.TrimSpace(fid) != "" {
+						lens.ScopeFragments[cp] = fid
+					}
+				}
+			}
+		}
+
+		// If scope fragment mapping points to a missing fragment, drop it (safe cleanup).
+		if lens.ScopeFragments != nil && s.fragmentsRepo != nil && !strings.HasPrefix(cp, "/domain/") {
+			if fid := strings.TrimSpace(lens.ScopeFragments[cp]); fid != "" {
+				if f, ferr := s.fragmentsRepo.Get(ctx, fid); ferr != nil || f == nil {
+					delete(lens.ScopeFragments, cp)
+					changed = true
+					continue
+				}
+			}
+		}
+
+		if _, ok := seen[cp]; ok {
+			changed = true
+			continue
+		}
+		seen[cp] = struct{}{}
+		out = append(out, cp)
+	}
+	if changed {
+		lens.Scope = out
+	}
+	return changed
+}
+
 func parseInt(v interface{}, def int) int {
 	switch t := v.(type) {
 	case int:
@@ -976,18 +1093,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 		return fmt.Errorf("failed to get old lens: %w", err)
 	}
 
-	// Управляем подписками: отписываемся от старых, подписываемся на новые
-	oldScope := make(map[string]bool)
-	for _, path := range oldLens.Scope {
-		oldScope[path] = true
-	}
-
-	newScope := make(map[string]bool)
-	for _, path := range lens.Scope {
-		newScope[path] = true
-	}
-
-	// Инициализируем кэш если отсутствует
+	// Инициализируем кэш если отсутствует (нужно для канонизации).
 	if lens.ScopeFragments == nil {
 		lens.ScopeFragments = make(map[string]string)
 	}
@@ -1004,6 +1110,20 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 		for k, v := range oldLens.ResolvedQueries {
 			lens.ResolvedQueries[k] = v
 		}
+	}
+
+	// Canonicalize/cleanup scope entries (best-effort) before diffing.
+	_ = s.canonicalizeScopeEntries(ctx, lens)
+
+	// Управляем подписками: отписываемся от старых, подписываемся на новые
+	oldScope := make(map[string]bool)
+	for _, path := range oldLens.Scope {
+		oldScope[path] = true
+	}
+
+	newScope := make(map[string]bool)
+	for _, path := range lens.Scope {
+		newScope[path] = true
 	}
 
 	// Разделяем новый Scope на статические пути и QueryAddress

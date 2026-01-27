@@ -1,6 +1,7 @@
 package horizon
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	hlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
@@ -145,6 +147,114 @@ func dedupStrings(in []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+func inferFragmentTypeFromPath(cp string) models.FragmentType {
+	switch {
+	case strings.HasPrefix(cp, "/product/"):
+		return models.FragmentTypeProduct
+	case strings.HasPrefix(cp, "/program/"):
+		return models.FragmentTypeProgram
+	case strings.HasPrefix(cp, "/market/"):
+		return models.FragmentTypeMarket
+	case strings.HasPrefix(cp, "/fac/"):
+		return models.FragmentTypeFacility
+	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"):
+		return models.FragmentTypeGeoRegion
+	case strings.HasPrefix(cp, "/event/"):
+		return models.FragmentTypeEvent
+	case strings.HasPrefix(cp, "/person/"):
+		return models.FragmentTypePerson
+	case strings.HasPrefix(cp, "/media/"):
+		return models.FragmentTypeMediaChannel
+	case strings.HasPrefix(cp, "/org/"), strings.HasPrefix(cp, "/gov/"):
+		return models.FragmentTypeOrganization
+	case strings.HasPrefix(cp, "/domain/"):
+		return models.FragmentTypeDomain
+	default:
+		return models.FragmentTypeOrganization
+	}
+}
+
+func canonicalizeScopeWithFirestore(
+	ctx context.Context,
+	scope []string,
+	h *HorizonHandlers,
+) ([]string, map[string]string) {
+	if h == nil || h.service == nil || len(scope) == 0 {
+		return scope, nil
+	}
+	rewrites := map[string]string{}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(scope))
+
+	var resolver interface {
+		Resolve(ctx context.Context, canonicalPath string, fragmentType models.FragmentType) (*scout.ResolveResult, error)
+	}
+	if eng := h.service.Scout(); eng != nil && eng.CanonicalPathResolver() != nil {
+		resolver = eng.CanonicalPathResolver()
+	}
+	fragments := h.service.Fragments()
+
+	for _, raw := range scope {
+		orig := strings.TrimSpace(raw)
+		if orig == "" {
+			continue
+		}
+		cp := orig
+
+		// Query scopes are kept as-is; they are resolved later.
+		if strings.HasPrefix(cp, "/query/") {
+			if _, ok := seen[cp]; ok {
+				continue
+			}
+			seen[cp] = struct{}{}
+			out = append(out, cp)
+			continue
+		}
+
+		// Domains: normalize path, but do not require an existing fragment.
+		if strings.HasPrefix(cp, "/domain/") {
+			if norm, nerr := taxonomy.NormalizeDomainCanonicalPath(cp); nerr == nil && strings.TrimSpace(norm) != "" {
+				cp = norm
+			}
+		}
+
+		// Validate path syntax (fail-open for empty/invalid — skip).
+		if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+			continue
+		}
+
+		// Canonicalize only when we can verify an existing fragment in Firestore.
+		if resolver != nil && !strings.HasPrefix(cp, "/domain/") {
+			ft := inferFragmentTypeFromPath(cp)
+			if resolved, rerr := resolver.Resolve(ctx, cp, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+				candidate := strings.TrimSpace(resolved.CanonicalPath)
+				if resolved.ExistingFragment != nil {
+					cp = candidate
+				} else if fragments != nil {
+					if f, ferr := fragments.GetByCanonicalPath(ctx, candidate); ferr == nil && f != nil {
+						cp = candidate
+					}
+				}
+			}
+		} else if fragments != nil && !strings.HasPrefix(cp, "/domain/") {
+			// If we don't have a resolver, still verify the object exists.
+			if f, ferr := fragments.GetByCanonicalPath(ctx, cp); ferr != nil || f == nil {
+				// Keep original to allow scouting to create it later.
+			}
+		}
+
+		if cp != orig {
+			rewrites[orig] = cp
+		}
+		if _, ok := seen[cp]; ok {
+			continue
+		}
+		seen[cp] = struct{}{}
+		out = append(out, cp)
+	}
+	return out, rewrites
 }
 
 type createLensFromQueryRequest struct {
@@ -372,6 +482,26 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		}
 		seenScope[cp] = struct{}{}
 		scope = append(scope, cp)
+	}
+	// Canonicalize scope entries against Firestore (best-effort).
+	if len(scope) > 0 {
+		var rewrites map[string]string
+		scope, rewrites = canonicalizeScopeWithFirestore(ctx, scope, h)
+		if len(rewrites) > 0 {
+			// Keep intent domains/anchors in sync with canonicalized scope.
+			for i := range intent.Domains {
+				cp := strings.TrimSpace(intent.Domains[i].CanonicalPath)
+				if next, ok := rewrites[cp]; ok && strings.TrimSpace(next) != "" {
+					intent.Domains[i].CanonicalPath = next
+				}
+			}
+			for i := range intent.Anchors {
+				cp := strings.TrimSpace(intent.Anchors[i].CanonicalPath)
+				if next, ok := rewrites[cp]; ok && strings.TrimSpace(next) != "" {
+					intent.Anchors[i].CanonicalPath = next
+				}
+			}
+		}
 	}
 	if len(scope) == 0 {
 		trace.Log(ctx, "scope", "scope.empty", map[string]any{
