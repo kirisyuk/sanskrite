@@ -90,21 +90,21 @@ POST /api/horizon/lenses
 
 **Экран «Сборки» (The Assembly View)**: Пользователь видит, как из пустоты проявляется граф.
 
-#### Phase 1: Decomposition
+#### Stage 1: Decomposition
 В центре появляется логотип Tesla. От него отстреливают лучи:
 - `"Batteries"`
 - `"Chips"`
 - `"Logistics"`
 - `"Energy"`
 
-#### Phase 2: Cache Hit
+#### Stage 2: Cache Hit
 Часть узлов мгновенно становится твердой и цветной (это HorizonFragment, которые мы взяли из кэша). 
 
 **Подпись**: `«Restored from System Memory»`
 
 **Визуально**: Узлы имеют зеленый цвет, анимация появления плавная.
 
-#### Phase 3: Scouting
+#### Stage 3: Scouting
 Другие ветки полупрозрачные, пульсируют. Рядом бегут логи:
 
 ```
@@ -120,7 +120,7 @@ POST /api/horizon/lenses
 - Лог-панель справа с прокруткой
 - Прогресс-бар: `Scouting: 3/7 sources completed`
 
-#### Phase 4: Ready
+#### Stage 4: Ready
 Граф стабилизируется. Появляется кнопка `"Enter Cockpit"`.
 
 **Психология**: Мы показали работу. Пользователь понимает, почему это стоило денег/времени.
@@ -140,9 +140,10 @@ POST /api/horizon/lenses
 GET /api/horizon/lenses/:lensId/assembly-status
 {
   "status": "scouting",
+  "stage": "scouting",
   "phase": "scouting",
   "progress": 0.43,
-  "phases": {
+  "stages": {
     "decomposition": { "status": "completed", "nodes": 5 },
     "cacheHit": { "status": "completed", "nodes": 12 },
     "scouting": { 
@@ -156,6 +157,7 @@ GET /api/horizon/lenses/:lensId/assembly-status
     },
     "ready": { "status": "pending" }
   },
+  "phases": { "...": "legacy alias of stages" },
   "graph": {
     "nodes": [...],
     "edges": [...]

@@ -338,6 +338,12 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
         >
           {/* Constrain width to match input field below */}
           <div style={{ maxWidth: 960, margin: '0 auto', position: 'relative', paddingLeft: 36 }}>
+            <style>{`
+              @keyframes horizon-progress-dot {
+                0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+                40% { transform: translateY(-4px); opacity: 1; }
+              }
+            `}</style>
             {preflightActive && preflight && (
               <div
                 style={{
@@ -981,6 +987,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
 
             {filteredEvents.map((ev) => {
               const isEdge = ev.icon === 'edge' || ev.type === 'horizon.graph.edge.upserted';
+              const isInitializing = ev.type === 'horizon.intent.initializing';
               let title = ev.humanReadable?.title || ev.text;
               let description = ev.humanReadable?.description;
               let entityPath = ev.data?.canonicalPath || ev.data?.targetCanonicalPath || '';
@@ -1114,6 +1121,31 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
                         {ev.humanReadable?.entityName && !description && (
                           <span style={{ fontStyle: 'italic' }}>{ev.humanReadable?.entityName}</span>
                         )}
+                      </div>
+                    )}
+
+                    {isInitializing && (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          display: 'flex',
+                          gap: 6,
+                          alignItems: 'center',
+                        }}
+                      >
+                        {[0, 1, 2].map((i) => (
+                          <div
+                            key={i}
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: '50%',
+                              background: 'var(--text-secondary-strong)',
+                              animation: 'horizon-progress-dot 1.1s infinite ease-in-out',
+                              animationDelay: `${i * 0.14}s`,
+                            }}
+                          />
+                        ))}
                       </div>
                     )}
                     

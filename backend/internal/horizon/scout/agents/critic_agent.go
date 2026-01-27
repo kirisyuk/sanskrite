@@ -381,6 +381,10 @@ TASK: Compare the extracted data with the source content and identify any confli
 	Missing Info logic:
 	- If important fields (like location, key metrics for the sector) are empty or unknown, add a specific question to 'missingInfo'.
 	- If the entity is an Organization or Facility, and NO supply chain relations (suppliers, customers, competitors) were found, you MUST add a question to find them. Example: "Who are the key suppliers for Tesla?" or "What are the major competitors of this entity?"
+	- RELATION SEMANTICS (CRITICAL):
+	  - CONTROLS: authority without clear equity ownership (state control, voting rights, contractual control). Do NOT use for formal regulation (REGULATES) or ownership (OWNS).
+	  - FOUNDED: historical origin event; does NOT imply ongoing ownership or control.
+	  - INFLUENCES: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
 	- If the entity is an Organization, Facility, or Government body (/org/, /fac/, /gov/):
 	  - If no external auditor is present (AUDITED_BY), add a question:
 	    - "Who is the external auditor of <org> (as of YYYY)? Provide audit firm and source."

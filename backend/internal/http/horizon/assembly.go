@@ -94,12 +94,12 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 
 	// Определяем общий статус сборки
 	status := "ready"
-	phase := "ready"
+	stage := "ready"
 	progress := 1.0
 
 	if totalJobs > 0 && (pendingJobs > 0 || runningJobs > 0) {
 		status = "scouting"
-		phase = "scouting"
+		stage = "scouting"
 	}
 	if totalJobs > 0 {
 		progress = float64(completedJobs+failedJobs) / float64(totalJobs)
@@ -107,7 +107,7 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 	// If all jobs are terminal (completed/failed), we are ready.
 	if totalJobs > 0 && pendingJobs == 0 && runningJobs == 0 {
 		status = "ready"
-		phase = "ready"
+		stage = "ready"
 	}
 
 	// Формируем ответ согласно документации
@@ -116,32 +116,36 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 		scoutingPhaseStatus = "scouting"
 	}
 	readyPhaseStatus := "pending"
-	if phase == "ready" {
+	if stage == "ready" {
 		readyPhaseStatus = "ready"
+	}
+	stageMap := map[string]interface{}{
+		"decomposition": map[string]interface{}{
+			"status": "completed",
+			"nodes":  len(lens.Scope),
+		},
+		"cacheHit": map[string]interface{}{
+			"status": "completed",
+			"nodes":  0, // TODO: Подсчитать узлы из кэша
+		},
+		"scouting": map[string]interface{}{
+			"status":    scoutingPhaseStatus,
+			"completed": completedJobs + failedJobs,
+			"total":     totalJobs,
+			"logs":      []string{}, // TODO: Получить логи из ScoutingJob
+		},
+		"ready": map[string]interface{}{
+			"status": readyPhaseStatus,
+		},
 	}
 	response := map[string]interface{}{
 		"status":   status,
-		"phase":    phase,
+		"stage":    stage,
 		"progress": progress,
-		"phases": map[string]interface{}{
-			"decomposition": map[string]interface{}{
-				"status": "completed",
-				"nodes":  len(lens.Scope),
-			},
-			"cacheHit": map[string]interface{}{
-				"status": "completed",
-				"nodes":  0, // TODO: Подсчитать узлы из кэша
-			},
-			"scouting": map[string]interface{}{
-				"status":    scoutingPhaseStatus,
-				"completed": completedJobs + failedJobs,
-				"total":     totalJobs,
-				"logs":      []string{}, // TODO: Получить логи из ScoutingJob
-			},
-			"ready": map[string]interface{}{
-				"status": readyPhaseStatus,
-			},
-		},
+		"stages":   stageMap,
+		// Backward compatibility: keep old field names for a deprecation window.
+		"phase":  stage,
+		"phases": stageMap,
 		"graph": map[string]interface{}{
 			"nodes": []interface{}{}, // TODO: Получить узлы графа
 			"edges": []interface{}{}, // TODO: Получить рёбра графа

@@ -50,59 +50,180 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	filteredFragments := make([]*models.HorizonFragment, 0, len(fragments))
-	allowedFragmentIDs := make(map[string]struct{}, len(fragments))
+	// Root nodes = scope fragments (filtered). Graph will be expanded by 1 hop from these roots,
+	// but we will NOT mutate lens.Scope (scope should remain clean: domains/subdomains + user anchors).
+	rootFragments := make([]*models.HorizonFragment, 0, len(fragments))
+	nodeByID := make(map[string]*models.HorizonFragment, len(fragments))
+	rootIDs := make(map[string]struct{}, len(fragments))
 	for _, fragment := range fragments {
 		if fragment == nil || isSphereFragment(fragment) {
 			continue
 		}
-		filteredFragments = append(filteredFragments, fragment)
-		allowedFragmentIDs[fragment.ID] = struct{}{}
+		rootFragments = append(rootFragments, fragment)
+		if fragment.ID != "" {
+			nodeByID[fragment.ID] = fragment
+			rootIDs[fragment.ID] = struct{}{}
+		}
 	}
 
-	// Получаем DependencyEdge для всех фрагментов
+	// Expand graph by one hop around scope roots:
+	// - include neighbor nodes connected by edges to any root
+	// - include edges among expanded nodes (second pass, limited), so strategic layer edges remain visible
 	edgesRepo := h.service.Edges()
 	var allEdges []interface{}
-	seen := make(map[string]struct{}, 1024)
-	for _, fragment := range filteredFragments {
-		// Получаем исходящие рёбра
-		outgoingEdges, err := edgesRepo.ListBySource(r.Context(), "global", fragment.ID, nil, 100)
+	seenEdges := make(map[string]struct{}, 2048)
+	expandedIDs := make(map[string]struct{}, len(nodeByID))
+	for id := range nodeByID {
+		expandedIDs[id] = struct{}{}
+	}
+
+	// Hard caps to prevent runaway expansion on huge graphs.
+	const (
+		maxEdgesPass1     = 800
+		maxNeighborsPass1 = 400
+		maxEdgesPass2     = 1200
+		limitEdgesPerDir1 = 200
+		limitEdgesPerDir2 = 80
+	)
+
+	addEdge := func(edge *models.DependencyEdge) {
+		if edge == nil {
+			return
+		}
+		k := edge.SourceFragmentID + "|" + edge.TargetFragmentID + "|" + string(edge.Type)
+		if _, ok := seenEdges[k]; ok {
+			return
+		}
+		seenEdges[k] = struct{}{}
+		allEdges = append(allEdges, edge)
+	}
+
+	// PASS 1: edges adjacent to roots → discover neighbor node IDs
+	neighborIDs := make([]string, 0, 128)
+	seenNeighbor := make(map[string]struct{}, 256)
+	for _, fragment := range rootFragments {
+		if fragment == nil || fragment.ID == "" {
+			continue
+		}
+		// outgoing
+		outgoingEdges, err := edgesRepo.ListBySource(r.Context(), "global", fragment.ID, nil, limitEdgesPerDir1)
 		if err == nil {
 			for _, edge := range outgoingEdges {
-				if _, ok := allowedFragmentIDs[edge.SourceFragmentID]; !ok {
+				if len(allEdges) >= maxEdgesPass1 {
+					break
+				}
+				addEdge(edge)
+				other := strings.TrimSpace(edge.TargetFragmentID)
+				if other == "" {
 					continue
 				}
-				if _, ok := allowedFragmentIDs[edge.TargetFragmentID]; !ok {
+				if _, ok := expandedIDs[other]; ok {
 					continue
 				}
-				// Dedup: edges can be returned twice (source list + target list) or via multiple scope nodes.
-				// Key: source|target|type to avoid duplicates in UI (ReactFlow requires unique ids).
-				k := edge.SourceFragmentID + "|" + edge.TargetFragmentID + "|" + string(edge.Type)
-				if _, ok := seen[k]; ok {
+				if _, ok := seenNeighbor[other]; ok {
 					continue
 				}
-				seen[k] = struct{}{}
-				allEdges = append(allEdges, edge)
+				if len(neighborIDs) >= maxNeighborsPass1 {
+					continue
+				}
+				seenNeighbor[other] = struct{}{}
+				neighborIDs = append(neighborIDs, other)
 			}
 		}
-		// Получаем входящие рёбра
-		incomingEdges, err := edgesRepo.ListByTarget(r.Context(), "global", fragment.ID, nil, 100)
+		// incoming
+		incomingEdges, err := edgesRepo.ListByTarget(r.Context(), "global", fragment.ID, nil, limitEdgesPerDir1)
 		if err == nil {
 			for _, edge := range incomingEdges {
-				if _, ok := allowedFragmentIDs[edge.SourceFragmentID]; !ok {
+				if len(allEdges) >= maxEdgesPass1 {
+					break
+				}
+				addEdge(edge)
+				other := strings.TrimSpace(edge.SourceFragmentID)
+				if other == "" {
 					continue
 				}
-				if _, ok := allowedFragmentIDs[edge.TargetFragmentID]; !ok {
+				if _, ok := expandedIDs[other]; ok {
 					continue
 				}
-				k := edge.SourceFragmentID + "|" + edge.TargetFragmentID + "|" + string(edge.Type)
-				if _, ok := seen[k]; ok {
+				if _, ok := seenNeighbor[other]; ok {
 					continue
 				}
-				seen[k] = struct{}{}
-				allEdges = append(allEdges, edge)
+				if len(neighborIDs) >= maxNeighborsPass1 {
+					continue
+				}
+				seenNeighbor[other] = struct{}{}
+				neighborIDs = append(neighborIDs, other)
 			}
 		}
+	}
+
+	// Fetch neighbor fragments by ID (best-effort).
+	for _, nid := range neighborIDs {
+		if strings.TrimSpace(nid) == "" {
+			continue
+		}
+		f, ferr := h.service.Fragments().Get(r.Context(), nid)
+		if ferr != nil || f == nil || f.ID == "" || isSphereFragment(f) {
+			continue
+		}
+		nodeByID[f.ID] = f
+		expandedIDs[f.ID] = struct{}{}
+	}
+
+	// PASS 2: include edges among expanded nodes (limited), so strategic-layer relations show up.
+	// We only keep edges where both endpoints are in expandedIDs.
+	expandedList := make([]*models.HorizonFragment, 0, len(nodeByID))
+	for _, f := range nodeByID {
+		if f != nil {
+			expandedList = append(expandedList, f)
+		}
+	}
+	for _, fragment := range expandedList {
+		if fragment == nil || fragment.ID == "" {
+			continue
+		}
+		if len(allEdges) >= maxEdgesPass2 {
+			break
+		}
+		outgoingEdges, err := edgesRepo.ListBySource(r.Context(), "global", fragment.ID, nil, limitEdgesPerDir2)
+		if err == nil {
+			for _, edge := range outgoingEdges {
+				if len(allEdges) >= maxEdgesPass2 {
+					break
+				}
+				if _, ok := expandedIDs[edge.SourceFragmentID]; !ok {
+					continue
+				}
+				if _, ok := expandedIDs[edge.TargetFragmentID]; !ok {
+					continue
+				}
+				addEdge(edge)
+			}
+		}
+		incomingEdges, err := edgesRepo.ListByTarget(r.Context(), "global", fragment.ID, nil, limitEdgesPerDir2)
+		if err == nil {
+			for _, edge := range incomingEdges {
+				if len(allEdges) >= maxEdgesPass2 {
+					break
+				}
+				if _, ok := expandedIDs[edge.SourceFragmentID]; !ok {
+					continue
+				}
+				if _, ok := expandedIDs[edge.TargetFragmentID]; !ok {
+					continue
+				}
+				addEdge(edge)
+			}
+		}
+	}
+
+	// Final node list
+	filteredFragments := make([]*models.HorizonFragment, 0, len(nodeByID))
+	for _, f := range nodeByID {
+		if f == nil || f.ID == "" || isSphereFragment(f) {
+			continue
+		}
+		filteredFragments = append(filteredFragments, f)
 	}
 
 	// Вычисляем метрики Lens через MetricsCalculator

@@ -77,7 +77,8 @@ Envelope всегда одинаковый:
 ### Assembly (Sled)
 
 - `horizon.assembly.started`
-- `horizon.assembly.phase`
+- `horizon.assembly.stage` (preferred)
+- `horizon.assembly.phase` (legacy alias)
 - `horizon.assembly.progress`
 - `horizon.assembly.ready`
 - `horizon.assembly.failed`
@@ -88,6 +89,34 @@ Envelope всегда одинаковый:
 - `horizon.scout.job.state`
 - `horizon.scout.job.log`
 - `horizon.scout.job.completed`
+
+### Domain pipeline passes (preferred)
+
+- `horizon.domain.base_enrichment.started`
+- `horizon.domain.base_enrichment.completed`
+- `horizon.domain.strategic_projection.scheduled`
+- `horizon.domain.strategic_projection.started`
+- `horizon.domain.strategic_projection.completed`
+
+Legacy (kept during migration):
+
+- `horizon.domain.expansion.started`
+- `horizon.domain.expansion.completed`
+- `horizon.domain.overlay.scheduled`
+- `horizon.domain.overlay.started`
+- `horizon.domain.overlay.completed`
+
+### Deprecations / rollout notes
+
+- **Assembly naming**
+  - Preferred: `horizon.assembly.stage` + `data.stage`
+  - Legacy: `horizon.assembly.phase` + `data.phase` (still emitted/accepted for compatibility)
+- **Domain pass naming**
+  - Preferred: `horizon.domain.base_enrichment.*`, `horizon.domain.strategic_projection.*`
+  - Legacy: `horizon.domain.expansion.*`, `horizon.domain.overlay.*`
+- **Scout job hints**
+  - Preferred: `hint=base_enrichment`, `hint=strategic_projection`
+  - Legacy: `legacyHint=domain_expansion`, `legacyHint=domain_overlay`
 
 ### Graph materialization
 
@@ -135,7 +164,7 @@ Envelope всегда одинаковый:
 
 ### Hook → Assemble (создание Lens) / Assembly events
 
-- **`horizon.assembly.started` / `horizon.assembly.phase` / `horizon.assembly.progress` / `horizon.assembly.ready`**
+- **`horizon.assembly.started` / `horizon.assembly.stage` (preferred) / `horizon.assembly.phase` (legacy) / `horizon.assembly.progress` / `horizon.assembly.ready`**
   - `backend/internal/horizon/lens/service.go`
     - `(*LensService).CreateLens(...)`
   - Триггер: `POST /api/horizon/lenses` (`backend/internal/http/horizon/lenses.go`)

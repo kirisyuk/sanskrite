@@ -1071,7 +1071,7 @@ Confidence: 0.85
 
 ## Roadmap
 
-### Phase 1: Signal Infrastructure (2-3 weeks)
+### Milestone 1: Signal Infrastructure (2-3 weeks)
 
 **Goal**: SignalDescriptor model + axis profiles + basic extraction
 
@@ -1087,7 +1087,7 @@ Confidence: 0.85
 - Axis correctly selected from 12-axis basis
 - Signal stored as OntologyFact(kind=signal)
 
-### Phase 2: Bounded Propagation (2-3 weeks)
+### Milestone 2: Bounded Propagation (2-3 weeks)
 
 **Goal**: Propagation engine with complexity contracts
 
@@ -1103,7 +1103,7 @@ Confidence: 0.85
 - Provenance traceable from any node metric to source
 - No unbounded propagation (verified by tests)
 
-### Phase 3: Triggers & Interpretation (2-3 weeks)
+### Milestone 3: Triggers & Interpretation (2-3 weeks)
 
 **Goal**: Threshold detection + lazy LLM interpretation
 
@@ -1119,7 +1119,7 @@ Confidence: 0.85
 - VIP nodes always interpreted if any metric > 0.1
 - Interpretations cached and refreshed on TTL
 
-### Phase 4: Integration & UI (2-3 weeks)
+### Milestone 4: Integration & UI (2-3 weeks)
 
 **Goal**: End-to-end flow + basic visualization
 

@@ -357,10 +357,10 @@ func (s *ArtifactService) GenerateVersion(
 
 ## Next Steps
 
-1. **Phase 2**: Implement basic CRUD endpoints
-2. **Phase 3**: Build generation service
-3. **Phase 4**: Add auto-update logic
-4. **Phase 5**: Build UI components
+1. **Milestone 2**: Implement basic CRUD endpoints
+2. **Milestone 3**: Build generation service
+3. **Milestone 4**: Add auto-update logic
+4. **Milestone 5**: Build UI components
 
 See [Artifacts Data Model](./artifacts-data-model.md) for full details.
 

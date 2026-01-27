@@ -607,15 +607,16 @@ X-Tenant-ID: <tenant_id>
 **События**:
 
 #### `horizon.assembly.*`
-События сборки (Hook → Sled): фазы и прогресс.
+События сборки (Hook → Sled): stages (preferred) и прогресс.
 
 ```json
 {
-  "type": "horizon.assembly.phase",
+  "type": "horizon.assembly.stage",
   "data": {
     "tenantId": "uuid",
     "projectId": "uuid",
     "lensId": "uuid",
+    "stage": "scouting",
     "phase": "scouting",
     "progress": 0.43,
     "correlationId": "uuid",

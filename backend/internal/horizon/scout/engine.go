@@ -19,6 +19,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
@@ -1585,21 +1586,40 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	// DOMAIN jobs are handled by a deterministic domain-expansion runner (no heavy LLM scouting).
 	// This runs before freshness checks because domains are contracts, not real-world entities.
 	if strings.HasPrefix(strings.TrimSpace(effectiveCanonicalPath), "/domain/") {
-		overlayMode := false
+		// Select which pipeline pass to execute for this domain job.
+		pass := pipeline.PassBaseEnrichment
 		if job.State != nil {
-			if v, ok := job.State["domainOverlayMode"]; ok {
-				overlayMode = parseStateBool(v, false)
-			}
-			if !overlayMode {
-				if v, ok := job.State["phase2Overlay"]; ok {
-					overlayMode = parseStateBool(v, false)
+			if v, ok := job.State[pipeline.StateKeyPipelinePass]; ok {
+				if s := strings.TrimSpace(parseStateString(v)); s != "" {
+					pass = pipeline.PassName(s)
 				}
 			}
 		}
-		if overlayMode {
-			return e.executeDomainStrategicOverlayJob(ctx, job, effectiveCanonicalPath, existingFragment)
+		// Backward compatibility: old flags used to route to overlay executor.
+		// If present, treat it as strategic projection pass.
+		if pass == pipeline.PassBaseEnrichment {
+			overlayMode := false
+			if job.State != nil {
+				if v, ok := job.State["domainOverlayMode"]; ok {
+					overlayMode = parseStateBool(v, false)
+				}
+				if !overlayMode {
+					if v, ok := job.State["phase2Overlay"]; ok {
+						overlayMode = parseStateBool(v, false)
+					}
+				}
+			}
+			if overlayMode {
+				pass = pipeline.PassStrategicProjection
+			}
 		}
-		return e.executeDomainExpansionJob(ctx, job, effectiveCanonicalPath, existingFragment)
+
+		r := pipeline.DefaultRunner()
+		return r.Run(ctx, e, pass, pipeline.PassInput{
+			Job:                    job,
+			EffectiveCanonicalPath: effectiveCanonicalPath,
+			ExistingFragment:       existingFragment,
+		})
 	}
 
 	if existingFragment != nil {
@@ -3243,7 +3263,7 @@ SKIP_RESEARCH:
 			job.State["highProfileAffectedFragmentIds"] = out
 		}
 	}
-	e.runPolicyCheck(ctx, job)
+	e.runPolicyAudit(ctx, job)
 
 	// Запускаем распространение изменений в графе
 	if e.propagationTrigger != nil {

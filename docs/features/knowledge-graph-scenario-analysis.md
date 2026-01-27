@@ -1,8 +1,8 @@
 # Knowledge Graph & Scenario Analysis System
 
-**Status:** Design Phase  
+**Status:** Design  
 **Priority:** High  
-**Estimate:** 3-6 months (phased approach)
+**Estimate:** 3-6 months (milestone-based rollout)
 
 ## Executive Summary
 
@@ -326,8 +326,8 @@ type CrossDomainTrend struct {
 
 ```go
 type ScenarioAnalysis struct {
-    // Phase information
-    Phase               string                  `json:"phase"`      // "quick_scan" or "enriched"
+    // Stage information
+    Stage               string                  `json:"stage"`      // "quick_scan" or "enriched"
     Status              string                  `json:"status"`     // "preliminary" or "final"
     Confidence          float64                 `json:"confidence"` // Overall confidence
     
@@ -345,10 +345,10 @@ type ScenarioAnalysis struct {
     Risks               []RiskAssessment        `json:"risks,omitempty"`
     Uncertainty         *UncertaintyAnalysis    `json:"uncertainty,omitempty"`
     
-    // For Phase 1 (preliminary) only
+    // For Stage 1 (preliminary) only
     PendingTasks        []TaskSpec              `json:"pendingTasks,omitempty"`
     
-    // For Phase 2 (enriched) only
+    // For Stage 2 (enriched) only
     Enrichment          *EnrichmentInfo         `json:"enrichment,omitempty"`
 }
 
@@ -358,7 +358,7 @@ type KnowledgeBaseSnapshot struct {
     Trends      []Trend             `json:"trends"`
     Events      []KnowledgeEvent    `json:"events,omitempty"`
     Metrics     []KnowledgeMetric   `json:"metrics,omitempty"`
-    AgentResults map[string]AgentResult `json:"agentResults,omitempty"` // Only in enriched phase
+    AgentResults map[string]AgentResult `json:"agentResults,omitempty"` // Only in enriched stage
 }
 
 type EnrichmentInfo struct {
@@ -414,8 +414,8 @@ type Scenario struct {
 
 ```typescript
 interface ScenarioAnalysis {
-  // Phase information
-  phase: "quick_scan" | "enriched";
+  // Stage information
+  stage: "quick_scan" | "enriched";
   status: "preliminary" | "final";
   confidence: number; // 0-1
   
@@ -433,10 +433,10 @@ interface ScenarioAnalysis {
   risks?: RiskAssessment[];
   uncertainty?: UncertaintyAnalysis;
   
-  // For Phase 1 (preliminary) only
+  // For Stage 1 (preliminary) only
   pendingTasks?: TaskSpec[];
   
-  // For Phase 2 (enriched) only
+  // For Stage 2 (enriched) only
   enrichment?: EnrichmentInfo;
 }
 
@@ -446,7 +446,7 @@ interface KnowledgeBaseSnapshot {
   trends: Trend[];
   events?: KnowledgeEvent[];
   metrics?: KnowledgeMetric[];
-  agentResults?: Record<string, AgentResult>; // Only in enriched phase
+  agentResults?: Record<string, AgentResult>; // Only in enriched stage
 }
 
 interface EnrichmentInfo {
@@ -570,7 +570,7 @@ interface TaskSpec {
 │  Scenario Analysis Flow                                 │
 ├─────────────────────────────────────────────────────────┤
 │                                                          │
-│  Phase 1: Quick Scanner (< 1 min)                      │
+│  Stage 1: Quick Scanner (< 1 min)                      │
 │  ┌──────────────────────────────────────────────────┐  │
 │  │ QuickAnalyzer                                    │  │
 │  │ ├─ Query Analysis (LLM, fast)                  │  │
@@ -582,7 +582,7 @@ interface TaskSpec {
 │            ▼                                            │
 │  Return preliminary Interaction                        │
 │                                                          │
-│  Phase 2: Agent Orchestration (async, 2-10 min)       │
+│  Stage 2: Agent Orchestration (async, 2-10 min)       │
 │  ┌──────────────────────────────────────────────────┐  │
 │  │ ScenarioOrchestrator                             │  │
 │  │ ├─ Agent Task Distribution                      │  │
@@ -604,8 +604,8 @@ interface TaskSpec {
 type KnowledgeRouter struct {
     agents              map[string]DomainAgent
     crossDomainService  *CrossDomainService
-    quickAnalyzer       *QuickAnalyzer          // Phase 1
-    scenarioOrchestrator *ScenarioOrchestrator   // Phase 2
+    quickAnalyzer       *QuickAnalyzer          // Stage 1
+    scenarioOrchestrator *ScenarioOrchestrator   // Stage 2
     intentClassifier    *IntentClassifier
 }
 
@@ -787,15 +787,15 @@ func (o *ScenarioOrchestrator) publishProgress(ctx context.Context, projectID, a
 
 1. User query → Chat Interface (UnfoldRequest, mode="scenario")
 2. POST `/api/v1/chat/knowledge/scenario`
-3. **Phase 1: Quick Scan (< 1 min)**
+3. **Stage 1: Quick Scan (< 1 min)**
    - QuickAnalyzer.QuickScan()
      - Query Analysis (LLM, fast) → domains, entities, tasks
      - Knowledge Lookup (Firestore) → existing knowledge
      - Quick Scenario Gen (LLM, fast) → preliminary scenarios
      - Task Planning → agent tasks
    - Return Interaction (preliminary, confidence ~0.55)
-   - Start Phase 2 async (не блокируем ответ)
-4. **Phase 2: Agent Orchestration (async, 2-10 min)**
+   - Start Stage 2 async (не блокируем ответ)
+4. **Stage 2: Agent Orchestration (async, 2-10 min)**
    - ScenarioOrchestrator.OrchestrateAgents()
      - Запуск агентов параллельно
      - WebSocket progress updates
@@ -909,9 +909,9 @@ if (interaction.subkind === 'scenario.analysis') {
 - **DiscoveryPage.tsx** - обработка scenario-сообщений
 - **UnfoldRequest.tsx** - добавление режима "scenario"
 
-### Two-Phase Processing
+### Two-Stage Processing
 
-**Фаза 1: Быстрый скрининг (< 1 минута)**
+**Этап 1: Быстрый скрининг (< 1 минута)**
 
 Цель: Быстро дать пользователю ответ на основе существующих знаний и определить задачи для агентов.
 
@@ -939,7 +939,7 @@ Interaction {
     kind: "note",
     subkind: "scenario.analysis",
     content: JSON.stringify(ScenarioAnalysis{
-        Phase: "quick_scan",
+        Stage: "quick_scan",
         Status: "preliminary",
         Confidence: 0.55,
         
@@ -980,7 +980,7 @@ Interaction {
 }
 ```
 
-**Фаза 2: Асинхронная оркестрация агентов**
+**Этап 2: Асинхронная оркестрация агентов**
 
 Цель: Обогатить быстрый скрининг данными от агентов.
 
@@ -1009,7 +1009,7 @@ Interaction {
     kind: "note",
     subkind: "scenario.analysis",
     content: JSON.stringify(ScenarioAnalysis{
-        Phase: "enriched",
+        Stage: "enriched",
         Status: "final",
         Confidence: 0.82,
         
@@ -1093,7 +1093,7 @@ Interaction {
 1. Пользователь выбирает режим "scenario" в UnfoldRequest
 2. Вводит запрос: "Как экономический кризис влияет на политическую стабильность?"
 
-**Phase 1: Quick Scan (< 1 минута)**
+**Stage 1: Quick Scan (< 1 минута)**
 ```
 POST /api/v1/chat/knowledge/scenario
 {
@@ -1124,7 +1124,7 @@ POST /api/v1/chat/knowledge/scenario
    Interaction {
      subkind: "scenario.analysis",
      content: {
-       phase: "quick_scan",
+       stage: "quick_scan",
        scenarios: [...], // Базовые
        pendingTasks: [...],
        status: "preliminary"
@@ -1132,7 +1132,7 @@ POST /api/v1/chat/knowledge/scenario
    }
 ```
 
-**Phase 2: Agent Orchestration (асинхронно, 2-10 минут)**
+**Stage 2: Agent Orchestration (асинхронно, 2-10 минут)**
 ```
 → WebSocket: "Starting agent orchestration..."
 
@@ -1161,7 +1161,7 @@ POST /api/v1/chat/knowledge/scenario
 → Final Update (через 3-5 минут):
    Interaction.update() {
      content: {
-       phase: "enriched",
+       stage: "enriched",
        scenarios: [...], // Обогащенные
        confidence: 0.82,
        status: "final",
@@ -1197,7 +1197,7 @@ POST /api/v1/chat/knowledge/scenario
 
 **ScenarioMessage отображает:**
 
-**Phase 1 (Preliminary):**
+**Stage 1 (Preliminary):**
 ```
 ┌─────────────────────────────────────────────────┐
 │ ⚡ Quick Scan Results (20-40s)                  │
@@ -1217,7 +1217,7 @@ POST /api/v1/chat/knowledge/scenario
 └─────────────────────────────────────────────────┘
 ```
 
-**Phase 2 (Enriched):**
+**Stage 2 (Enriched):**
 ```
 ┌─────────────────────────────────────────────────┐
 │ ✅ Enriched Analysis (3-5 min)                  │
@@ -3079,12 +3079,12 @@ GET  /api/v1/knowledge/scenarios/{id}
 **Chat Integration:**
 ```
 POST /api/v1/chat/knowledge          # Text mode (existing)
-POST /api/v1/chat/knowledge/scenario # Scenario mode (two-phase)
+POST /api/v1/chat/knowledge/scenario # Scenario mode (two-stage)
 ```
 
 ### WebSocket Events (Scenario Mode)
 
-**Phase 1: Quick Scan**
+**Stage 1: Quick Scan**
 ```
 # Client sends:
 POST /api/v1/chat/knowledge/scenario
@@ -3098,14 +3098,14 @@ POST /api/v1/chat/knowledge/scenario
 {
   "interactionId": "...",
   "status": "preliminary",
-  "phase": "quick_scan",
+  "stage": "quick_scan",
   "confidence": 0.55
 }
 
-# Phase 2 starts automatically (async)
+# Stage 2 starts automatically (async)
 ```
 
-**Phase 2: Agent Orchestration**
+**Stage 2: Agent Orchestration**
 ```
 # WebSocket Events (via existing realtime.Publisher):
 

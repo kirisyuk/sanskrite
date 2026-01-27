@@ -669,9 +669,9 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
             >
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Phase</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Stage</div>
                   <div style={{ fontSize: 12, color: 'var(--text-heading)', fontWeight: 650 }}>
-                    {String(assemblyStatus?.phase || '—')}
+                    {String((assemblyStatus as any)?.stage || assemblyStatus?.phase || '—')}
                   </div>
                 </div>
                 {assemblyStatus?.progress !== undefined && (
@@ -687,11 +687,11 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                     </div>
                   </div>
                 )}
-                {assemblyStatus?.phases?.scouting && (
+                {((assemblyStatus as any)?.stages?.scouting || assemblyStatus?.phases?.scouting) && (
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '8px 10px', borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--white-06)' }}>
                     <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Scouting</div>
                     <div style={{ fontSize: 12, color: 'var(--text-heading)', fontWeight: 750 }}>
-                      {assemblyStatus.phases.scouting.completed} / {assemblyStatus.phases.scouting.total}
+                      {((assemblyStatus as any)?.stages?.scouting?.completed ?? assemblyStatus.phases.scouting.completed)} / {((assemblyStatus as any)?.stages?.scouting?.total ?? assemblyStatus.phases.scouting.total)}
                     </div>
                   </div>
                 )}

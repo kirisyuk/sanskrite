@@ -15,6 +15,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -186,6 +187,26 @@ func bestEffortDisplayLabel(label string, canonicalPath string) string {
 		label = lastCanonicalSegment(canonicalPath)
 	}
 	return bestEffortTitleCase(label)
+}
+
+func isPlaceholderLabel(label string) bool {
+	l := strings.TrimSpace(label)
+	if l == "" {
+		return true
+	}
+	if len(l) <= 2 {
+		return true
+	}
+	if strings.EqualFold(l, "na") || strings.EqualFold(l, "n/a") || strings.EqualFold(l, "n.a.") {
+		return true
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) {
+			return unicode.ToLower(r)
+		}
+		return -1
+	}, l)
+	return cleaned == "na"
 }
 
 func buildDomainTitle(contractType string, canonicalPath string, facets map[string][]string) string {
@@ -1342,6 +1363,19 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			"entityName":  title,
 		},
 	})
+	// New event namespace (preferred): base enrichment pass.
+	e.publish(ctx, realtime.EventType("horizon.domain.base_enrichment.started"), map[string]interface{}{
+		"tenantId":      job.TenantID,
+		"projectId":     job.ProjectID,
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         job.ID,
+		"canonicalPath": domainCP,
+		"humanReadable": map[string]interface{}{
+			"title":       "Base enrichment started",
+			"description": fmt.Sprintf("%s • %s", title, domainCP),
+			"entityName":  title,
+		},
+	})
 
 	// Create/update DOMAIN fragment (contract node).
 	frag := existingFragment
@@ -1367,9 +1401,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	if frag.Labels == nil {
 		frag.Labels = map[string]string{}
 	}
-	if strings.TrimSpace(frag.Labels["en"]) == "" {
-		frag.Labels["en"] = title
-	} else if title != "" {
+	if isPlaceholderLabel(frag.Labels["en"]) {
 		frag.Labels["en"] = title
 	}
 	if desc != "" {
@@ -1602,7 +1634,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		"fragmentId":    fragmentID,
 		"canonicalPath": domainCP,
 		"confidence":    1.0,
-		"hint":          "domain_expansion",
+		"hint":          "base_enrichment",
+		"legacyHint":    "domain_expansion",
 	})
 
 	// Decomposition: schedule first-order entity scouts.
@@ -1613,8 +1646,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		_ = e.processSupplyChains(ctx, job, frag, domainResearchChains)
 	}
 
-	// Policy check + optional enforcement.
-	e.runPolicyCheck(ctx, job)
+	// Policy audit + optional enforcement (best-effort).
+	e.runPolicyAudit(ctx, job)
 
 	// Best-effort propagation trigger for the domain node.
 	if e.propagationTrigger != nil {
@@ -1644,6 +1677,25 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		},
 		"humanReadable": map[string]interface{}{
 			"title":       "Domain expansion complete",
+			"description": fmt.Sprintf("%s • %d entities", title, len(firstOrder)),
+			"entityName":  title,
+		},
+	})
+	// New event namespace (preferred): base enrichment pass.
+	e.publish(ctx, realtime.EventType("horizon.domain.base_enrichment.completed"), map[string]interface{}{
+		"tenantId":      job.TenantID,
+		"projectId":     job.ProjectID,
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         job.ID,
+		"canonicalPath": domainCP,
+		"counters": map[string]interface{}{
+			"firstOrderEntities": len(firstOrder),
+			"relatedDomains":     len(related),
+			"affectedDomains":    len(affected),
+			"relations":          len(rels),
+		},
+		"humanReadable": map[string]interface{}{
+			"title":       "Base enrichment complete",
 			"description": fmt.Sprintf("%s • %d entities", title, len(firstOrder)),
 			"entityName":  title,
 		},
@@ -1800,6 +1852,19 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		"canonicalPath": domainCP,
 		"humanReadable": map[string]interface{}{
 			"title":       "Strategic overlay started",
+			"description": fmt.Sprintf("%s • %s", title, domainCP),
+			"entityName":  title,
+		},
+	})
+	// New event namespace (preferred): strategic projection pass.
+	e.publish(ctx, realtime.EventType("horizon.domain.strategic_projection.started"), map[string]interface{}{
+		"tenantId":      job.TenantID,
+		"projectId":     job.ProjectID,
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         job.ID,
+		"canonicalPath": domainCP,
+		"humanReadable": map[string]interface{}{
+			"title":       "Strategic projection started",
 			"description": fmt.Sprintf("%s • %s", title, domainCP),
 			"entityName":  title,
 		},
@@ -1990,12 +2055,10 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		}
 	}
 
-	// Ensure strategic overlay nodes are visible in the lens scope (UI loads from scope only).
-	if e.lensesRepo != nil && len(overlayScopePaths) > 0 && strings.TrimSpace(job.LensID) != "" {
-		if err := e.lensesRepo.AddScopeCanonicalPaths(ctx, strings.TrimSpace(job.LensID), overlayScopePaths); err != nil {
-			fmt.Printf("[ScoutEngine] Failed to append overlay nodes to lens scope: %v\n", err)
-		}
-	}
+	// IMPORTANT:
+	// Do NOT append strategic overlay nodes (DECISION_POINT / MECHANISM) to lens.Scope.
+	// Scope is meant to stay anchored on domains/subdomains (and user-selected anchors), otherwise the UI becomes noisy.
+	// The Cockpit loader should include strategic nodes via graph expansion (neighbors), not by inflating scope.
 
 	relationsBySource := map[string][]agents.DiscoveredRelation{}
 	sourceTypeByPath := map[string]models.FragmentType{}
@@ -2047,15 +2110,16 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		} else if _, ok := sourceTypeByPath[src]; !ok {
 			sourceTypeByPath[src] = InferFragmentTypeFromCanonicalPath(src)
 		}
-		rel := agents.DiscoveredRelation{
-			TargetName:          bestEffortDisplayLabel("", tgt),
-			TargetType:          targetType,
-			RelationType:        relType,
-			Reason:              strings.TrimSpace(ed.Reason),
-			Confidence:          ed.Confidence,
-			TargetCanonicalPath: tgt,
-			Qualifiers:          ed.Qualifiers,
-		}
+		rel := claimFromStrategicEdge(
+			src,
+			strings.TrimSpace(ed.SourceType),
+			tgt,
+			targetType,
+			relType,
+			strings.TrimSpace(ed.Reason),
+			ed.Confidence,
+			ed.Qualifiers,
+		)
 		relationsBySource[src] = append(relationsBySource[src], rel)
 	}
 	for sourcePath, rels := range relationsBySource {
@@ -2124,9 +2188,10 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		"fragmentId":    fragmentID,
 		"canonicalPath": domainCP,
 		"confidence":    1.0,
-		"hint":          "domain_overlay",
+		"hint":          "strategic_projection",
+		"legacyHint":    "domain_overlay",
 	})
-	e.runPolicyCheck(ctx, job)
+	e.runPolicyAudit(ctx, job)
 	e.publish(ctx, realtime.EventType("horizon.domain.overlay.completed"), map[string]interface{}{
 		"tenantId":      job.TenantID,
 		"projectId":     job.ProjectID,
@@ -2140,6 +2205,24 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		},
 		"humanReadable": map[string]interface{}{
 			"title":       "Strategic overlay complete",
+			"description": fmt.Sprintf("%s • %d decisions", title, decisionCount),
+			"entityName":  title,
+		},
+	})
+	// New event namespace (preferred): strategic projection pass.
+	e.publish(ctx, realtime.EventType("horizon.domain.strategic_projection.completed"), map[string]interface{}{
+		"tenantId":      job.TenantID,
+		"projectId":     job.ProjectID,
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         job.ID,
+		"canonicalPath": domainCP,
+		"counters": map[string]interface{}{
+			"decisionPoints": decisionCount,
+			"mechanisms":     mechanismCount,
+			"relations":      edgesEmitted,
+		},
+		"humanReadable": map[string]interface{}{
+			"title":       "Strategic projection complete",
 			"description": fmt.Sprintf("%s • %d decisions", title, decisionCount),
 			"entityName":  title,
 		},
@@ -2968,6 +3051,30 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 		}
 
+		// 3. Materialize edge (centralized path).
+		// NOTE: This is the unified edge materializer used for both base enrichment and strategic projection.
+		// The legacy inline materialization block below is kept temporarily for safe diffing/migration,
+		// but is bypassed via continue.
+		_ = e.materializeRelationEdge(
+			ctx,
+			job,
+			sourceFragment,
+			targetFragment,
+			targetID,
+			targetType,
+			targetPath,
+			rel,
+			rawRelationType,
+			normalizedRelationType,
+			provenanceMethod,
+			baseQualifiers,
+			enableManagement,
+			seenEdgeKeys,
+		)
+		continue
+
+		/* LEGACY INLINE EDGE MATERIALIZER (disabled; kept for reference during migration)
+
 		// 3. Create Dependency Edge
 		// Normalize and validate relation types against runtime taxonomy (Firestore-backed).
 		edgeType := models.DependencyType(strings.TrimSpace(rel.RelationType))
@@ -2980,6 +3087,12 @@ func (e *ScoutEngine) processRelationsInternal(
 		// where the semantic direction requires an ORG/GOV as source, not the DECISION_POINT.
 		explicitSourceFragment := sourceFragment
 		if explicitSourcePath := strings.TrimSpace(rel.SourceCanonicalPath); explicitSourcePath != "" {
+			// Fast-path: if the explicit source matches the current source fragment, don't do extra lookups.
+			if sourceFragment != nil && strings.TrimSpace(sourceFragment.CanonicalPath) == explicitSourcePath {
+				// Keep edgeSourceID as sourceFragment.ID
+			} else if e.fragmentsRepo == nil {
+				// No repo available; fall back to default source.
+			} else {
 			// Find or create the explicit source fragment
 			if existingSrc, err := e.fragmentsRepo.GetByCanonicalPath(ctx, explicitSourcePath); err == nil && existingSrc != nil {
 				explicitSourceFragment = existingSrc
@@ -3030,6 +3143,7 @@ func (e *ScoutEngine) processRelationsInternal(
 					explicitSourceFragment = sourceFragment
 					edgeSourceID = sourceFragment.ID
 				}
+			}
 			}
 			// When explicit source is used and target is THIS FRAGMENT, swap target to sourceFragment
 			if strings.TrimSpace(rel.TargetCanonicalPath) == strings.TrimSpace(sourceFragment.CanonicalPath) {
@@ -3386,6 +3500,7 @@ func (e *ScoutEngine) processRelationsInternal(
 				"qualifiers":          edge.Qualifiers,
 			})
 		}
+		*/
 	}
 	return nil
 }
@@ -4547,6 +4662,12 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 		// Regulatory
 		"regulatory-landscape": true,
 		"compliance-map":       true,
+	"policy-and-regulation": true,
+	"regulatory-impact":     true,
+	"compliance-landscape":  true,
+	"security-and-compliance": true,
+	"licensing-requirements":  true,
+	"esg-landscape":           true,
 		// Ecosystem mapping (general)
 		"ecosystem-mapping": true,
 		// Power dynamics (explicit)
@@ -4557,11 +4678,20 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 	}
 
 	ct := strings.ToLower(strings.TrimSpace(contractType))
-	return strategicContractTypes[ct]
+	if strategicContractTypes[ct] {
+		return true
+	}
+	// Default fallback: best-effort strategic overlay for unknown/other contracts.
+	// This avoids surprises when new contract types are introduced.
+	return true
 }
 
-// triggerPhase2StrategicOverlay creates a new ScoutingJob for Phase 2 (Strategic Overlay).
-// This runs asynchronously after Phase 1 completes.
+// triggerPhase2StrategicOverlay creates a new ScoutingJob for the strategic projection pass
+// (decision/mechanism layer overlay).
+//
+// Backward-compatibility note:
+// - The name still mentions "phase2" because older deployments and UI code may rely on it.
+// - The actual routing is now done via job.State["pipelinePass"].
 func (e *ScoutEngine) triggerPhase2StrategicOverlay(
 	ctx context.Context,
 	phase1Job *models.ScoutingJob,
@@ -4588,7 +4718,7 @@ func (e *ScoutEngine) triggerPhase2StrategicOverlay(
 		}
 	}
 
-	// Build Phase 2 job state
+	// Build strategic projection job state
 	now := time.Now().UTC()
 	state := map[string]interface{}{
 		"targetCanonicalPath": domainCP,
@@ -4597,10 +4727,14 @@ func (e *ScoutEngine) triggerPhase2StrategicOverlay(
 		"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
 		"recursionDepth":      0.0,
 		"maxRecursionDepth":   0.0,
-		"domainOverlayMode":   true, // Key flag: this triggers executeDomainStrategicOverlayJob
-		"phase2Overlay":       true,
+		// New routing key (preferred):
+		pipeline.StateKeyPipelinePass: string(pipeline.PassStrategicProjection),
+		// Legacy routing flags (kept temporarily):
+		"domainOverlayMode": true,
+		"phase2Overlay":     true,
 		"phase1JobId":         phase1Job.ID,
-		"trigger":             "auto.phase2.after_domain_expansion",
+		"trigger":             "auto.strategic_projection.after_base_enrichment",
+		"triggerLegacy":       "auto.phase2.after_domain_expansion",
 	}
 	if correlationID != "" {
 		state["correlationId"] = correlationID
@@ -4646,11 +4780,11 @@ func (e *ScoutEngine) triggerPhase2StrategicOverlay(
 	// Create job (Cloud Tasks dispatcher will pick it up)
 	jobID, err := e.scoutingJobsRepo.Create(ctx, phase2Job)
 	if err != nil {
-		fmt.Printf("[ScoutEngine] Phase 2 job creation failed for %s: %v\n", domainCP, err)
+		fmt.Printf("[ScoutEngine] Strategic projection job creation failed for %s: %v\n", domainCP, err)
 		return
 	}
 
-	fmt.Printf("[ScoutEngine] Phase 2 (Strategic Overlay) triggered: jobId=%s domain=%s phase1JobId=%s\n",
+	fmt.Printf("[ScoutEngine] Strategic projection triggered: jobId=%s domain=%s baseJobId=%s\n",
 		jobID, domainCP, phase1Job.ID)
 
 	// Publish realtime event
@@ -4663,7 +4797,20 @@ func (e *ScoutEngine) triggerPhase2StrategicOverlay(
 		"canonicalPath": domainCP,
 		"humanReadable": map[string]interface{}{
 			"title":       "Strategic overlay scheduled",
-			"description": fmt.Sprintf("Phase 2 analysis for %s", domainCP),
+			"description": fmt.Sprintf("Strategic projection scheduled for %s", domainCP),
+		},
+	})
+	// New event namespace (preferred): strategic projection scheduling.
+	e.publish(ctx, realtime.EventType("horizon.domain.strategic_projection.scheduled"), map[string]interface{}{
+		"tenantId":      phase1Job.TenantID,
+		"projectId":     phase1Job.ProjectID,
+		"lensId":        lensID,
+		"jobId":         jobID,
+		"baseJobId":     phase1Job.ID,
+		"canonicalPath": domainCP,
+		"humanReadable": map[string]interface{}{
+			"title":       "Strategic projection scheduled",
+			"description": fmt.Sprintf("Strategic projection scheduled for %s", domainCP),
 		},
 	})
 }

@@ -282,23 +282,23 @@ Risk Shield скрывается:
 
 ## Приоритеты реализации
 
-### Phase 1: Visual MVP
+### Milestone 1: Visual MVP
 - [ ] Компонент `RiskShield` с 8 сегментами
 - [ ] Статические цвета и иконки
 - [ ] Hover tooltips
 - [ ] Интеграция с ReactFlow
 
-### Phase 2: Data Integration
+### Milestone 2: Data Integration
 - [ ] `RiskAssessment` модель в Firestore
 - [ ] API endpoint `/api/horizon/entities/{id}/risk-assessment`
 - [ ] Базовый scoring по доступным данным
 
-### Phase 3: Segment Expansion
+### Milestone 3: Segment Expansion
 - [ ] Клик на сегмент → раскрытие подграфа
 - [ ] Фильтрация edges по категории риска
 - [ ] Боковая панель с деталями
 
-### Phase 4: Advanced Features
+### Milestone 4: Advanced Features
 - [ ] Real-time risk updates
 - [ ] Historical risk trends
 - [ ] Risk propagation по графу (каскадные риски)

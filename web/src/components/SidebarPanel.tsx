@@ -3076,8 +3076,10 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                               }}
                                             >
                                               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                <path d="M18 8L22 12L18 16" />
-                                                <path d="M2 12H22" />
+                                                <path d="m16 3 4 4-4 4" />
+                                                <path d="M20 7H4" />
+                                                <path d="m8 21-4-4 4-4" />
+                                                <path d="M4 17h16" />
                                               </svg>
                                             </button>
                                             <button
@@ -3683,14 +3685,15 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              backgroundColor: 'var(--surface-strong)',
+              backgroundColor: 'var(--bg-elevated)',
               borderRadius: 12,
               padding: 20,
               minWidth: 320,
               maxWidth: 400,
               maxHeight: '80vh',
               overflow: 'auto',
-              boxShadow: '0 10px 40px rgba(0,0,0,0.3)',
+              border: '1px solid var(--border-subtle)',
+              boxShadow: '0 18px 50px rgba(0,0,0,0.35)',
             }}
           >
             <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 12, color: 'var(--text-heading)' }}>

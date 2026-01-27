@@ -262,19 +262,19 @@ This is at the cognitive limit for LLMs.
 
 ---
 
-## Risk Mitigation: Two-Phase Domain Execution
+## Risk Mitigation: Two-Pass Domain Execution
 
 **Problem**: It is difficult for LLMs to extract abstract "decision points" in the early pipeline stages when context is sparse.
 
-**Solution**: Split domain execution into two phases. The domain contract dictates both.
+**Solution**: Split domain execution into two passes. The domain contract dictates both.
 
-### Phase 1: Physical Layer Discovery (Traditional)
+### Pass 1: Base Enrichment (Physical Layer Discovery)
 - **Goal**: "Draw the map."
 - **Input**: Domain + Query.
 - **Action**: Scout/Research identify entities (Org, Facility, Product) and "hard" relations (Supplies, Located, Owns).
 - **Output**: **Relation Graph**.
 
-### Phase 2: Strategic Layer Overlay (New)
+### Pass 2: Strategic Projection (Decision/Mechanism Layer)
 - **Goal**: "Place flags on the map."
 - **Input**: Domain + **Existing Relation Graph** (context).
 - **Action**: 
@@ -327,14 +327,14 @@ This is at the cognitive limit for LLMs.
 
 ## Implementation Constraint: Unified Canonicalization & Prompts
 
-All agents and phases (Scout, Research, Critic, Policy, domain phase 1/2) **must reuse the same taxonomy, canonicalization, and prompt logic**.  
+All agents and passes (Scout, Research, Critic, Policy, base enrichment + strategic projection) **must reuse the same taxonomy, canonicalization, and prompt logic**.  
 No parallel pipelines, no divergent rules, and no “almost the same” prompt forks.
 
 **Implications:**
 - **Canonical paths** for `/decision` and `/mechanism` must be validated by the **same** taxonomy validator used elsewhere (`ValidateCanonicalPath`).
-- **Policy checks** apply uniformly to all new fragments/edges, regardless of phase.
+- **Policy checks** apply uniformly to all new fragments/edges, regardless of pass.
 - **Prompt templates** should be extended/composed, not duplicated (reuse core entity extraction rules, append domain-specific modules).
-- **Domain phase 2** must route through the same normalization and validation functions as phase 1.
+- **Strategic projection** must route through the same normalization and validation functions as base enrichment.
 
 This prevents drift and keeps the graph consistent across all layers.
 
@@ -377,13 +377,13 @@ To support user-driven strategic analysis, we introduce on-the-fly domain analys
 **Scenario**:
 1. User loads an existing Lens (graph already populated with entities/relations).
 2. User asks a strategic question (e.g., "Who controls this supply chain?").
-3. System triggers **Phase 2 (Strategic Overlay)** explicitly.
+3. System triggers **Strategic Projection** explicitly.
 4. **Input**: Existing Lens Graph + New Domain Contract.
 5. **Output**: New `DecisionPoint` and `Mechanism` nodes are added to the graph, enriching the existing view.
 
 **Architectural Implication**:
-- Phase 2 logic must be decoupled from the initial pipeline.
-- It can be triggered as a standalone `ScoutingJob` targeting an existing Lens.
+- Strategic projection logic must be decoupled from the initial enrichment pass.
+- It can be triggered as a standalone `ScoutingJob` (pipeline pass) targeting an existing Lens.
 - This allows iterative enrichment: users can ask different strategic questions about the same graph, adding layers of insight.
 
 ### Scope & Deduplication
@@ -399,7 +399,7 @@ This is a dedicated mode within the Command Palette with staged interaction:
 2. **User inputs**: Strategic question.
 3. **System confirms**: Displays interpretation under the input field ("Understood as: power-dynamics analysis for AI chip supply chain").
 4. **User approves**: Clicks OK.
-5. **Execution**: Phase 2 job runs, enriching the graph with strategic layer.
+5. **Execution**: Strategic projection runs, enriching the graph with the decision/mechanism layer.
 
 ---
 
@@ -478,20 +478,20 @@ case "decision-analysis":
 
 ## Implementation Roadmap
 
-### Phase 1: Intent Resolver Split ✓
+### Milestone 1: Intent Resolver Split ✓
 - [x] Create DomainResolverAgent
 - [x] Create AnchorResolverAgent  
 - [x] Create IntentMerger (deterministic)
 - [x] Migrate existing IntentResolverAgent
 
-### Phase 2: Mechanism Entity ✓
+### Milestone 2: Mechanism Entity ✓
 - [x] Define /mechanism namespace in taxonomy (`paths.go`, `canonical_parts.go`)
 - [x] Add FragmentTypeMechanism (`models/common.go`)
 - [x] Add USES_MECHANISM edge type (`dependency_edge.go`)
 - [x] Add APPLIES_TO edge type for mechanism scope
 - [x] Update Scout prompts for mechanism extraction
 
-### Phase 3: DecisionPoint Entity ✓
+### Milestone 3: DecisionPoint Entity ✓
 - [x] Define /decision namespace in taxonomy (`paths.go`, `canonical_parts.go`)
 - [x] Add FragmentTypeDecisionPoint (`models/common.go`)
 - [x] Add CONTROLS_ACCESS edge type with qualifiers (block/enable/delay/monitor)
@@ -502,7 +502,7 @@ case "decision-analysis":
 - [x] Add ConditionType enum (cost, compliance, technical)
 - [x] Update Scout prompts for decision extraction
 
-### Phase 4: Domain-Aware Pipeline ✓
+### Milestone 4: Domain-Aware Pipeline ✓
 - [x] StrategicOverlayAgent: domain-specific prompts with full taxonomy rules
 - [x] Critic: domain-specific validation for DECISION_POINT/MECHANISM
   - Missing CONTROLS_ACCESS/USES_MECHANISM edges → missingInfo

@@ -2671,7 +2671,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   /**
-   * Trigger Phase 2 strategic overlay for a lens
+   * Trigger strategic projection (decision/mechanism layer) for a lens
    * POST /api/horizon/lenses/{lensId}/trigger-phase2
    */
   async triggerHorizonPhase2StrategicOverlay(

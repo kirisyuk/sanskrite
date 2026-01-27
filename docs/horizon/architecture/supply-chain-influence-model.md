@@ -450,7 +450,7 @@ const (
 
 ## План реализации
 
-### Phase 1: SupplyLink (High Priority)
+### Milestone 1: SupplyLink (High Priority)
 - [x] Добавить `FragmentTypeSupplyLink`
 - [x] Добавить поля `SupplierRef`, `CustomerRef`, `ProductRef` в HorizonFragment
 - [x] Валидация: SupplyLink требует `tenantId` (может быть tenant или "global" как assumption-layer)
@@ -458,21 +458,21 @@ const (
 - [ ] API endpoint для создания SupplyLink
 - [ ] Интеграция с Scout для автоматического обнаружения
 
-### Phase 2: Path Building
+### Milestone 2: Path Building
 - [x] Функция `BuildUpstreamPath(customer, opts)` с confidence propagation
 - [x] Tenant-first, global-fallback precedence на уровне сегмента
 - [x] Интеграция с MaterializedArtifact для сохранения путей
 - [ ] Кэширование построенных путей
 - [ ] API endpoint для получения upstream/downstream paths
 
-### Phase 3: Influence Links
+### Milestone 3: Influence Links
 - [x] Стандартизация qualifiers для INFLUENCES edges (`via`, `mechanism`, `direction`, `reversible`, `conditionality`, `strength`)
 - [x] Поддержка influence qualifiers в ValidationPolicy
 - [x] Helper functions: ExtractInfluenceQualifiers, SetInfluenceQualifiers, ValidateInfluenceQualifiers
 - [ ] API для запроса influence paths
 - [ ] Визуализация в UI
 
-### Phase 4: HIL Integration
+### Milestone 4: HIL Integration
 - [ ] Draft SupplyLink workflow
 - [ ] UI для подтверждения/корректировки
 - [ ] Confidence upgrade при верификации

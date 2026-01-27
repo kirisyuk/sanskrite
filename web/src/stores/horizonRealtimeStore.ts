@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { isSphereCanonicalPath, isSphereEntity } from '../lib/horizonSphere';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
 
-export type HorizonAssemblyPhase =
+export type HorizonAssemblyStage =
   | 'decomposition'
   | 'cache_hit'
   | 'scouting'
@@ -11,7 +11,13 @@ export type HorizonAssemblyPhase =
   | 'failed'
   | string;
 
+/** @deprecated Use `HorizonAssemblyStage` instead. */
+export type HorizonAssemblyPhase = HorizonAssemblyStage;
+
 export interface HorizonAssemblyState {
+  /** Preferred field name (new). */
+  stage?: HorizonAssemblyStage;
+  /** @deprecated Backward compat for older payloads/UI. */
   phase?: HorizonAssemblyPhase;
   progress?: number;
   counters?: Record<string, any>;
@@ -198,9 +204,9 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
           return humanizeCanonicalPath(s) || s;
         };
 
-        // Helper to get phase display name
-        const getPhaseName = (phase: string): string => {
-          const phaseMap: Record<string, string> = {
+        // Helper to get stage display name
+        const getStageName = (stage: string): string => {
+          const stageMap: Record<string, string> = {
             decomposition: 'Decomposing',
             cache_hit: 'Loading from cache',
             scouting: 'Scouting',
@@ -209,7 +215,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             failed: 'Failed',
           };
           return (
-            phaseMap[phase] || phase.charAt(0).toUpperCase() + phase.slice(1)
+            stageMap[stage] || stage.charAt(0).toUpperCase() + stage.slice(1)
           );
         };
 
@@ -308,15 +314,20 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             : type.includes('ready')
               ? 'success'
               : 'assembly';
-          const phase = typeof data?.phase === 'string' ? data.phase : '';
+          const stage =
+            typeof data?.stage === 'string'
+              ? data.stage
+              : typeof data?.phase === 'string'
+                ? data.phase
+                : '';
           const progress =
             typeof data?.progress === 'number'
               ? `${Math.round(data.progress * 100)}%`
               : '';
-          const phaseName = phase ? getPhaseName(phase) : 'Assembly';
-          text = `${phaseName}${progress ? ` (${progress})` : ''}`;
+          const stageName = stage ? getStageName(stage) : 'Assembly';
+          text = `${stageName}${progress ? ` (${progress})` : ''}`;
           humanReadable = {
-            title: phaseName,
+            title: stageName,
             description: progress ? `Progress: ${progress}` : undefined,
           };
         } else if (type.startsWith('horizon.intent.')) {
@@ -381,6 +392,42 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
           } else {
             text = 'Domain research';
             humanReadable = { title: 'Domain research' };
+          }
+        } else if (type.startsWith('horizon.domain.base_enrichment.')) {
+          icon = type.includes('completed') ? 'success' : 'info';
+          const hr = data?.humanReadable;
+          if (hr && typeof hr?.title === 'string' && hr.title.trim()) {
+            const title = hr.title.trim();
+            const description =
+              typeof hr?.description === 'string' ? hr.description.trim() : '';
+            text = description ? `${title} — ${short(description)}` : title;
+            humanReadable = {
+              title,
+              description: description ? short(description) : undefined,
+              entityName:
+                typeof hr?.entityName === 'string' ? hr.entityName : undefined,
+            };
+          } else {
+            text = 'Base enrichment';
+            humanReadable = { title: 'Base enrichment' };
+          }
+        } else if (type.startsWith('horizon.domain.strategic_projection.')) {
+          icon = type.includes('completed') ? 'success' : 'info';
+          const hr = data?.humanReadable;
+          if (hr && typeof hr?.title === 'string' && hr.title.trim()) {
+            const title = hr.title.trim();
+            const description =
+              typeof hr?.description === 'string' ? hr.description.trim() : '';
+            text = description ? `${title} — ${short(description)}` : title;
+            humanReadable = {
+              title,
+              description: description ? short(description) : undefined,
+              entityName:
+                typeof hr?.entityName === 'string' ? hr.entityName : undefined,
+            };
+          } else {
+            text = 'Strategic projection';
+            humanReadable = { title: 'Strategic projection' };
           }
         } else if (type.startsWith('horizon.domain.overlay.')) {
           icon = type.includes('completed') ? 'success' : 'info';
@@ -974,15 +1021,24 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
       // Assembly orchestration
       if (
         type === 'horizon.assembly.started' ||
-        type === 'horizon.assembly.phase' ||
+        type === 'horizon.assembly.phase' || // legacy
+        type === 'horizon.assembly.stage' || // preferred
         type === 'horizon.assembly.progress' ||
         type === 'horizon.assembly.ready' ||
         type === 'horizon.assembly.failed'
       ) {
+        const stage =
+          typeof data?.stage === 'string'
+            ? data.stage
+            : typeof data?.phase === 'string'
+              ? data.phase
+              : '';
         set((s) => ({
           assembly: {
             ...s.assembly,
-            phase: data?.phase ?? s.assembly.phase,
+            stage: stage || s.assembly.stage || s.assembly.phase,
+            // Keep legacy field in sync for older UI code paths.
+            phase: (stage || data?.phase) ?? s.assembly.phase,
             progress:
               typeof data?.progress === 'number'
                 ? data.progress
@@ -1094,14 +1150,14 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
       // Propagation + lens updates can be treated as assembly progress hints for now
       if (type === 'horizon.propagation.started') {
         set((s) => ({
-          assembly: { ...s.assembly, phase: 'propagation', lastEventAt: now },
+          assembly: { ...s.assembly, stage: 'propagation', phase: 'propagation', lastEventAt: now },
         }));
         return;
       }
       if (type === 'horizon.propagation.node_updated') {
         // Best-effort: bump activity timestamp; UI can infer progress from node upserts + job states
         set((s) => ({
-          assembly: { ...s.assembly, phase: 'propagation', lastEventAt: now },
+          assembly: { ...s.assembly, stage: 'propagation', phase: 'propagation', lastEventAt: now },
         }));
         return;
       }
@@ -1110,6 +1166,11 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
         set((s) => ({
           assembly: {
             ...s.assembly,
+            stage:
+              (s.assembly.stage || s.assembly.phase) === 'propagation'
+                ? 'scouting'
+                : (s.assembly.stage || s.assembly.phase),
+            // Keep legacy field in sync.
             phase:
               s.assembly.phase === 'propagation'
                 ? 'scouting'

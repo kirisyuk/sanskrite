@@ -1507,33 +1507,33 @@ type PolicyDecision struct {
 
 **TODO**:
 
-- **Phase 0: MaterializedArtifact (базовый тип для слоёв/оверлеев)**
+- **Milestone 0: MaterializedArtifact (базовый тип для слоёв/оверлеев)**
   - [x] Ввести `MaterializedArtifact` как отдельную коллекцию/тип (tenant/global)
   - [x] Enum `MaterializedKind`, первый kind: `SUPPLY_CHAIN_PATH`
   - [x] Payload v1: упорядоченный массив узлов пути + опциональные "ребра" (supply-link / ontology transitions)
   - [x] Ссылки на метрики/observations + evidence refs (ontology_facts) без смешивания ответственности
 
-- **Phase 1: SupplyLink (высокий приоритет)**
+- **Milestone 1: SupplyLink (высокий приоритет)**
   - [x] Добавить `FragmentTypeSupplyLink`
   - [x] Добавить поля `SupplierRef`, `CustomerRef`, `ProductRef` в HorizonFragment
   - [x] Валидация: SupplyLink требует `tenantId` (может быть tenant или "global" как assumption-layer)
   - [ ] API endpoint для создания SupplyLink
   - [ ] Интеграция с Scout для автоматического обнаружения
 
-- **Phase 2: Path Building**
+- **Milestone 2: Path Building**
   - [x] Функция `BuildUpstreamPath(customer, opts)` с confidence propagation
   - [x] Tenant-first, global-fallback precedence на уровне сегмента
   - [x] Интеграция с MaterializedArtifact для сохранения путей
   - [ ] API endpoint для получения upstream/downstream paths
   - [ ] Кэширование построенных путей
 
-- **Phase 3: Influence Links**
+- **Milestone 3: Influence Links**
   - [x] Стандартизация qualifiers (`via`, `mechanism`, `direction`, `reversible`, `conditionality`, `strength`)
   - [x] Поддержка influence qualifiers в ValidationPolicy
   - [x] Helper functions для ExtractInfluenceQualifiers, SetInfluenceQualifiers, ValidateInfluenceQualifiers
   - [ ] API для запроса influence paths
 
-- **Phase 4: HIL Integration**
+- **Milestone 4: HIL Integration**
   - [ ] Draft SupplyLink workflow (LLM inference → HIL verification)
   - [ ] UI для подтверждения/корректировки
   - [ ] Confidence upgrade при верификации

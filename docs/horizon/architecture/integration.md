@@ -235,7 +235,7 @@ if entity := findEntityByCanonicalPath(path); entity != nil {
 
 **События для Horizon (актуально)**:
 
-- `horizon.assembly.*` — сборка Lens (Hook → Sled: phase/progress/ready)
+- `horizon.assembly.*` — сборка Lens (Hook → Sled: stage/progress/ready; `phase` is legacy alias)
 - `horizon.scout.job.*` — создание и выполнение Scout jobs (state/log/completed)
 - `horizon.graph.node.upserted` — материализация/обновление узла в графе
 - `horizon.propagation.started` — начало распространения

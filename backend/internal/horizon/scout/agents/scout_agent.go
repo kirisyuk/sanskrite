@@ -347,10 +347,14 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 			specBlock += "- Focus on equity relationships (shareholders, subsidiaries, parent companies, ultimate beneficial owners, state ownership).\n"
 			specBlock += "- Use relation types:\n"
 			specBlock += "  - OWNS: owner -> owned entity (equity ownership/control)\n"
+			specBlock += "    - Clarification: ownership flows from the higher/parent entity to the lower/subordinate entity in the corporate hierarchy.\n"
+			specBlock += "      Use OWNS only when the source is the true owner/controller of the target (parent → subsidiary, owner → asset).\n"
 			specBlock += "  - SUBSIDIARY_OF: owned entity -> owner (inverse; backend will normalize to OWNS)\n"
 			specBlock += "  - CONTROLS: controller -> controlled entity (non-equity/indirect control when ownership is unclear)\n"
+			specBlock += "    - Clarification: authority without clear equity ownership (state control, voting rights, contractual control).\n"
 			specBlock += "  - INVESTS_IN: investor -> investee (minority investment; not necessarily control)\n"
 			specBlock += "- IMPORTANT: Do NOT use OWNS for employment/management roles (CEO/board). That belongs to management module.\n"
+			specBlock += "- IMPORTANT: Facilities/products/deposits do NOT own organizations. If a facility/product/deposit is owned by an org/person, use SUBSIDIARY_OF (source=facility/product/deposit, target=owner).\n"
 			specBlock += "- Put stake/percent/voting rights (if known) and evidence in 'reason'.\n\n"
 		}
 	}
@@ -496,7 +500,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
      Examples:
        - If "Company X is owned by John Doe": emit SUBSIDIARY_OF from Company X -> John Doe (NOT OWNS from Company X -> John Doe).
        - If THIS FRAGMENT is a PERSON and they own Company X: emit OWNS from Person -> Company X.
-   - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
+  - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
+    Clarification: authority without clear equity ownership (state control, voting).
   - CONTROLS_ACCESS: strategic gatekeeping (block/enable/delay/monitor). Use ONLY when modeling decision points or explicit gatekeepers.
   - IMPOSES_CONDITION: source forces target to comply with rules/costs/technical constraints (strategic overlay).
   - USES_MECHANISM: source possesses/uses a mechanism of control (strategic overlay).
@@ -510,7 +515,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
     Direction: PERSON → COMMUNITY
   - AFFILIATED_WITH: community or person has affiliation with a formal organization.
     Direction: COMMUNITY/PERSON → ORGANIZATION
-   - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
+  - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
+    Clarification: historical origin event; does NOT imply ongoing ownership or control.
    - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
      Include in 'reason': round name/number, investment amount if known.
      If a specific funding event exists (with date, participants), consider linking to /event/funding-round/{slug} via Qualifiers["eventId"].
@@ -518,7 +524,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
    - AUDITED_BY: source (ORGANIZATION/FACILITY) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
    - COMPETES_WITH: competitor relationship (direction is not important, but still output as source->target).
-   - INFLUENCES: source influences target.
+  - INFLUENCES: source influences target.
+    Clarification: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
    - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
    - RELATIVE_OF: person-person symmetric relationship (public relatives). Use ONLY when both are PERSON.
    - RELATED_TO: person-person symmetric relationship (publicly known associates: friends/partners/classmates). Use ONLY when both are PERSON.

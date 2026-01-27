@@ -659,6 +659,7 @@
       "type": "string",
       "enum": [
         "horizon.assembly.started",
+        "horizon.assembly.stage",
         "horizon.assembly.phase",
         "horizon.assembly.progress",
         "horizon.assembly.ready",

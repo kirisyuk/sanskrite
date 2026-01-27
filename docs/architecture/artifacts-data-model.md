@@ -298,33 +298,33 @@ Located on the right side (pastel green button), displays:
 - Quality delta indicators
 - Cherry-pick buttons
 
-## Implementation Phases
+## Implementation Milestones
 
-### Phase 1: Data Model ✅
+### Milestone 1: Data Model ✅
 - [x] Backend types (Go)
 - [x] Frontend types (TypeScript)
 - [x] JSON Schema generation
 - [x] Type utilities
 
-### Phase 2: Basic CRUD (next)
+### Milestone 2: Basic CRUD (next)
 - [ ] Create artifact endpoint
 - [ ] List/filter artifacts
 - [ ] Update artifact config
 - [ ] Delete artifact
 
-### Phase 3: Generation (future)
+### Milestone 3: Generation (future)
 - [ ] Section generation
 - [ ] Orchestrator assembly
 - [ ] Version creation
 - [ ] Quality evaluation
 
-### Phase 4: Auto-Update (future)
+### Milestone 4: Auto-Update (future)
 - [ ] Trigger detection
 - [ ] Condition evaluation
 - [ ] Smart update logic
 - [ ] User notifications
 
-### Phase 5: Advanced Features (future)
+### Milestone 5: Advanced Features (future)
 - [ ] Version comparison
 - [ ] Cherry-picking
 - [ ] Hybrid versions

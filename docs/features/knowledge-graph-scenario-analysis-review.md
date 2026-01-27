@@ -10,8 +10,8 @@
 ## ✅ Что соответствует идее
 
 ### 1. Двухэтапный процесс
-- ✅ **Phase 1 (Quick Scan):** Быстрый ответ (<1 минута) на основе существующих знаний
-- ✅ **Phase 2 (Agent Orchestration):** Асинхронное обогащение данными от агентов (2-10 минут)
+- ✅ **Stage 1 (Quick Scan):** Быстрый ответ (<1 минута) на основе существующих знаний
+- ✅ **Stage 2 (Agent Orchestration):** Асинхронное обогащение данными от агентов (2-10 минут)
 - ✅ WebSocket для прогресса
 - ✅ Обновление существующего Interaction (preliminary → enriched)
 
@@ -72,7 +72,7 @@ type ScenarioAnalysis struct {
 **JSON content (строки 727, 773):**
 ```json
 {
-  "phase": "quick_scan",
+  "stage": "quick_scan",
   "scenarios": [...],
   "knowledgeBase": {        // ❌ НЕТ в Go структуре
     "entities": [...],
@@ -93,8 +93,8 @@ scenario.knowledgeBase.entities.forEach(entity => {  // ❌ Ожидает knowl
 **Исправление:**
 ```go
 type ScenarioAnalysis struct {
-    // Phase information
-    Phase               string              // "quick_scan" or "enriched"
+    // Stage information
+    Stage               string              // "quick_scan" or "enriched"
     Status              string              // "preliminary" or "final"
     Confidence          float64
     
@@ -112,11 +112,11 @@ type ScenarioAnalysis struct {
     Risks               []RiskAssessment
     Uncertainty         UncertaintyAnalysis
     
-    // For Phase 1 (preliminary)
-    PendingTasks        []TaskSpec          // Only in Phase 1
+    // For Stage 1 (preliminary)
+    PendingTasks        []TaskSpec          // Only in Stage 1
     
-    // For Phase 2 (enriched)
-    Enrichment          *EnrichmentInfo     // Only in Phase 2
+    // For Stage 2 (enriched)
+    Enrichment          *EnrichmentInfo     // Only in Stage 2
 }
 
 type KnowledgeBaseSnapshot struct {
@@ -282,7 +282,7 @@ sources: scenarioItem.sources,  // ❌ НЕТ в Go Scenario
 **Исправление:** Добавить JSON tags:
 ```go
 type ScenarioAnalysis struct {
-    Phase               string                  `json:"phase"`
+    Stage               string                  `json:"stage"`
     Status              string                  `json:"status"`
     Confidence          float64                 `json:"confidence"`
     KnowledgeBase       KnowledgeBaseSnapshot   `json:"knowledgeBase"`
@@ -298,7 +298,7 @@ type ScenarioAnalysis struct {
 
 ### Приоритет 1 (Критично)
 1. ✅ Добавить `KnowledgeBase` в `ScenarioAnalysis`
-2. ✅ Добавить `Phase`, `Status`, `Confidence` в `ScenarioAnalysis`
+2. ✅ Добавить `Stage`, `Status`, `Confidence` в `ScenarioAnalysis`
 3. ✅ Добавить `ContributingFacts`, `ContributingTrends` в `Scenario`
 4. ✅ Изменить `Likelihood` с `string` на `float64`
 5. ✅ Добавить определение `QuickScanResult`
@@ -336,12 +336,12 @@ type ScenarioAnalysis struct {
 
 ### 1. Структура ScenarioAnalysis
 ✅ **Добавлены поля:**
-- `Phase string` ("quick_scan" or "enriched")
+- `Stage string` ("quick_scan" or "enriched")
 - `Status string` ("preliminary" or "final")
 - `Confidence float64` (общий уровень уверенности)
 - `KnowledgeBase KnowledgeBaseSnapshot` (для графового представления)
-- `PendingTasks []TaskSpec` (для Phase 1)
-- `Enrichment *EnrichmentInfo` (для Phase 2)
+- `PendingTasks []TaskSpec` (для Stage 1)
+- `Enrichment *EnrichmentInfo` (для Stage 2)
 - `CrossDomainLinks []CrossDomainLink` (вместо CrossDomainAnalysis)
 
 ✅ **Добавлены новые типы:**
@@ -378,8 +378,8 @@ type ScenarioAnalysis struct {
 
 ### 6. JSON Examples
 ✅ Обновлены все JSON примеры для соответствия новым структурам:
-- Phase 1 (preliminary) пример
-- Phase 2 (enriched) пример
+- Stage 1 (preliminary) пример
+- Stage 2 (enriched) пример
 
 ---
 

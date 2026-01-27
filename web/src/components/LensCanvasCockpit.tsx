@@ -4792,12 +4792,45 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       
       const rawFragments = cockpitData.graph.nodes || [];
       const rawEdges = cockpitData.graph.edges || [];
-      const fragments = rawFragments.filter((f: any) => !(isSphereType(f?.type) || isSphereCanonicalPath(f?.canonicalPath)));
-      const edges = rawEdges.filter((e: any) => {
+      const scopePaths = new Set(
+        (Array.isArray(cockpitData?.lens?.scope) ? cockpitData.lens.scope : [])
+          .map((s: any) => String(s || '').trim())
+          .filter(Boolean),
+      );
+
+      let fragments = rawFragments.filter((f: any) => {
+        if (isSphereType(f?.type) || isSphereCanonicalPath(f?.canonicalPath)) return false;
+        const cp = String(f?.canonicalPath || '').trim();
+        return cp && scopePaths.has(cp);
+      });
+      let allowedIds = new Set(fragments.map((f: any) => String(f?.id || '').trim()).filter(Boolean));
+      let edges = rawEdges.filter((e: any) => {
         if (isSphereType(e?.sourceType) || isSphereType(e?.targetType)) return false;
         if (isSphereCanonicalPath(e?.sourceCanonicalPath) || isSphereCanonicalPath(e?.targetCanonicalPath)) return false;
-        return true;
+        const src = String(e?.sourceFragmentId || e?.source || '').trim();
+        const dst = String(e?.targetFragmentId || e?.target || '').trim();
+        if (!src || !dst) return false;
+        return allowedIds.has(src) && allowedIds.has(dst);
       });
+
+      // If scope is empty, fall back to previous behavior (avoid showing an empty graph).
+      if (scopePaths.size === 0) {
+        const fallbackFragments = rawFragments.filter((f: any) => !(isSphereType(f?.type) || isSphereCanonicalPath(f?.canonicalPath)));
+        const fallbackIds = new Set(fallbackFragments.map((f: any) => String(f?.id || '').trim()).filter(Boolean));
+        const fallbackEdges = rawEdges.filter((e: any) => {
+          if (isSphereType(e?.sourceType) || isSphereType(e?.targetType)) return false;
+          if (isSphereCanonicalPath(e?.sourceCanonicalPath) || isSphereCanonicalPath(e?.targetCanonicalPath)) return false;
+          const src = String(e?.sourceFragmentId || e?.source || '').trim();
+          const dst = String(e?.targetFragmentId || e?.target || '').trim();
+          if (!src || !dst) return false;
+          return fallbackIds.has(src) && fallbackIds.has(dst);
+        });
+        dbg('[Cockpit] Scope empty; using fallback graph.');
+        fragments = fallbackFragments;
+        allowedIds = fallbackIds;
+        edges = fallbackEdges;
+      }
+      
 
       dbg('[Cockpit] Loaded graph:', { fragments: fragments.length, edges: edges.length });
 
@@ -9812,7 +9845,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       closeAddNode();
 
       try {
-        // Special-case DOMAIN queries: "Scout it" should run Phase 2 strategic overlay (not generic scope scout).
+        // Special-case DOMAIN queries: "Scout it" should run strategic projection (decision layer), not generic scope scout.
         // We detect a domain intent best-effort via the overlay preview endpoint (no writes).
         try {
           const preview = await api.previewDomainOverlay(lensId, { query: q });
@@ -9826,14 +9859,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               (prev || []).map((n) => {
                 if (String((n as any)?.id || '').trim() !== placeholderId) return n;
                 const d0: any = (n as any)?.data || {};
-                const d = { ...d0, canonicalPath: domainCp, label: d0?.label || `Phase 2: ${q}` };
+                const d = { ...d0, canonicalPath: domainCp, label: d0?.label || `Strategic projection: ${q}` };
                 return { ...(n as any), data: d } as any;
               }),
             );
             const st = pendingScoutRef.current.get(correlationId);
             if (st) pendingScoutRef.current.set(correlationId, { ...st, canonicalPath: domainCp });
 
-            // Trigger Phase 2 job(s) for this domain.
+            // Trigger strategic projection job(s) for this domain.
             const sessionId = (window as any).__horizonSessionId || correlationId;
             (window as any).__horizonSessionId = sessionId;
             await api.triggerHorizonPhase2StrategicOverlay(lensId, { domainPaths: [domainCp] }, { correlationId, sessionId });
@@ -10908,7 +10941,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setDomainOverlayExecuting(true);
     setDomainOverlayError(null);
     try {
-      // Phase 2 overlay now triggers via dedicated endpoint (jobs are created per domain).
+      // Strategic projection triggers via dedicated endpoint (jobs are created per domain).
       await api.triggerHorizonPhase2StrategicOverlay(lensId, { domainPaths: [domainPath] }, { correlationId });
       closeDomainOverlay();
     } catch (err: any) {

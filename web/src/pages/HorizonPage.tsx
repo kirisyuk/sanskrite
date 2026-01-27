@@ -333,7 +333,7 @@ const HorizonPage: React.FC = () => {
           sessionId,
           humanReadable: {
             title: 'Initializing',
-            description: 'Resolving intent…',
+            description: 'The system is determining how best to fulfill your request. This may take a few minutes depending on its complexity. Please keep this screen open until you receive confirmation.',
           },
         });
       } catch {

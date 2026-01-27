@@ -534,33 +534,56 @@ Choose relationType to match the CORRECT semantic direction:
 === PHASE 1 RELATIONS (default: FROM THIS FRAGMENT → target) ===
 - DEPENDS_ON: source depends on target (use for suppliers, contractors, infrastructure dependencies).
   Example: If CRRC supplies trains for the Astana LRT project, Astana/CTS may DEPEND_ON CRRC.
+-  Clarification: use when the source requires the target to operate or deliver outcomes.
+-  Do NOT use when the source is the supplier and the target is the customer (use SUPPLIES_TO).
 - SUPPLIES_TO: source supplies goods/services to target (use for customers/recipients).
+-  Clarification: commercial flow from supplier -> customer/recipient; not ownership or control.
 - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
+-  Clarification: physical/geographic location only (HQ, plant site, office presence).
 - OPERATES_IN: source operates in target (source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY).
+-  Clarification: operational activity or facility operation; not just a registered address.
 - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
+-  Clarification: formal authority imposing rules/compliance (government or regulator), not soft influence.
 - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
+  Clarification: ownership flows from the higher/parent entity to the lower/subordinate entity in the corporate hierarchy.
+  Use OWNS only when the source is the true owner/controller of the target (parent → subsidiary, owner → asset).
   CRITICAL: NEVER output OWNS where targetType=PERSON.
+  CRITICAL: NEVER output OWNS where sourceType=FACILITY/PRODUCT/DEPOSIT.
+    Facilities/products/deposits do not own organizations. If a facility/product/deposit is owned by an org/person,
+    use SUBSIDIARY_OF with the owner as target (will be normalized to OWNS in graph).
   CRITICAL: NEVER output OWNS from ORGANIZATION to COMMUNITY if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}.
     Dynasties and tribes own organizations, not the reverse. If THIS FRAGMENT (org) is owned by a dynasty/tribe, use SUBSIDIARY_OF from org to community (will be normalized to OWNS with reversed direction).
   If THIS FRAGMENT is owned/controlled by a person or parent org, use SUBSIDIARY_OF with the owner as target (it will be normalized to OWNS).
   Use OWNS ONLY for equity ownership/control relationships (shareholder, stake, holding company, ultimate beneficial owner).
   Do NOT use OWNS for roles/employment/management like CEO, director, founder, chairman; use INFLUENCES if relevant, or omit the relation.
 - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
+-  Clarification: inverse of OWNS (child -> parent). Use when describing who owns THIS FRAGMENT.
 - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
+-  Clarification: authority without clear equity ownership (e.g., state control, voting rights, contractual control).
 - MANAGES: source manages target (formal authority: CEO/executive/director/operator). Do NOT use for informal influence.
+-  Clarification: formal management authority or operational responsibility, not ownership.
 - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
 - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
 - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
+-  Clarification: historical origin event; does NOT imply ongoing ownership or control.
 - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
+-  Clarification: funding/minority stake; do not use unless investment is explicit.
 - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
+-  Clarification: peer collaboration (joint venture, MoU, alliance). Not ownership or supply-chain.
 - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
+-  Clarification: manufacturer/producer -> product output.
 - EXTRACTS_FROM: source (FACILITY) extracts from target (DEPOSIT). Use for mines/oil fields/ore bodies.
+-  Clarification: extraction relationship (facility/mine -> resource deposit).
 - AUDITED_BY: source (ORGANIZATION/FACILITY) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
-- COMPETES_WITH / INFLUENCES: as labeled.
+-  Clarification: external audit relationship (audit firm reviews source entity).
+- COMPETES_WITH: market rivalry/competition (symmetric); not collaboration or supply.
+- INFLUENCES: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
 - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY -> MARKET).
+  Clarification: entity is an active market participant (player).
   - If THIS FRAGMENT is MARKET, you may still emit PARTICIPATES_IN relations to player entities; backend will reverse the edge direction.
   - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
 - DOMINATES: entity dominates a market (leader) (canonical direction: ORG/FACILITY -> MARKET).
+  Clarification: entity is a market leader with outsized share/influence (not just participant).
   - If THIS FRAGMENT is MARKET, you may still emit DOMINATES relations to leader entities; backend will reverse the edge direction.
   - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
 

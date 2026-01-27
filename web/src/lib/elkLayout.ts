@@ -1727,7 +1727,7 @@ export async function layoutLevelsTwoPane<T = any>(
     return raw.toUpperCase().replace(/\s+/g, '_');
   };
 
-  // Left-pane compact test predicate (GEO + MARKET nodes).
+  // Left-pane compact test predicate (GEO + MARKET + Strategic Layer nodes).
   // When true, we render the node as compact AND pack it with compact height in the left group grid.
   const isLeftPaneCompactNode = (d: any): boolean => {
     if (!compactLeftPane) return false;
@@ -1743,6 +1743,9 @@ export async function layoutLevelsTwoPane<T = any>(
       nodeType === 'DEPOSIT' ||
       nodeType === 'MARKET' ||
       cp.startsWith('/market/') ||
+      // Strategic layer (decision points & mechanisms)
+      nodeType === 'DECISION_POINT' ||
+      nodeType === 'MECHANISM' ||
       nodeType === 'GEO_REGION' ||
       nodeType === 'LOCATION' ||
       nodeType === 'COUNTRY' ||
@@ -2135,11 +2138,15 @@ export async function layoutLevelsTwoPane<T = any>(
         String(typeKey).toUpperCase().trim() === 'STATE' ||
         String(typeKey).toUpperCase().trim() === 'PROVINCE' ||
         String(typeKey).toUpperCase().trim() === 'CITY';
+      const isStrategicType =
+        String(typeKey).toUpperCase().trim() === 'DECISION_POINT' ||
+        String(typeKey).toUpperCase().trim() === 'MECHANISM';
       // UX: Products & Services should NOT be subdivided by relation edge types.
       // Render as simple column-major grid (taller columns).
       // UX: GEO should also NOT be subdivided by relation edge types (LOCATED/OPERATES/etc).
       // UX: Facilities and Deposits should also NOT be subdivided by relation edge types.
-      const useRelGroupingForType = useRelGrouping && !isProductsServicesType && !isGeoType && !isFacilitiesOrDepositType;
+      // UX: Strategic layer should also remain compact (no subcategory split).
+      const useRelGroupingForType = useRelGrouping && !isProductsServicesType && !isGeoType && !isFacilitiesOrDepositType && !isStrategicType;
 
       if (useRelGroupingForType) {
         const byRel = new Map<string, Node<T>[]>();
@@ -2272,7 +2279,7 @@ export async function layoutLevelsTwoPane<T = any>(
         // For compact Products & Services, make taller columns:
         // "2 full nodes vertically" == 6 compact nodes per column (3 per full slot).
         const rowsForType =
-          compactLeftPane && (isProductsServicesType || isGeoType || isFacilitiesOrDepositType)
+          compactLeftPane && (isProductsServicesType || isGeoType || isFacilitiesOrDepositType || isStrategicType)
             ? Math.max(1, Math.min(maxVerticalForNodes(list), list.length))
             : Math.max(minRowsForBlock, rowsForCount(list.length));
         const nodesFlat = list.slice().sort((a, b) => {
