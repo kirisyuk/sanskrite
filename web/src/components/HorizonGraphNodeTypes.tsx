@@ -476,6 +476,30 @@ const ensureHorizonNode2026Styles = () => {
       border: 2px double var(--hzn-border);
       border-left: 4px solid var(--hzn-accent, var(--hzn-border));
       border-radius: 12px 14px 14px 12px;
+      /* Ensure domains don't get the sharp corners if they overlap classes */
+    }
+
+    /* Strategic layer: Technical/Schematic look (Decision Points & Mechanisms).
+       Goal: Look like a "logic layer" or "annotation" on top of the entity graph.
+       Flat, sharp corners, high-contrast border, no shadow. */
+    .hzn-node-2026.is-decision,
+    .hzn-node-2026.is-mechanism,
+    .hzn-node-compact.is-decision,
+    .hzn-node-compact.is-mechanism {
+      border-radius: 1px; /* Sharp, technical corners */
+      box-shadow: none !important; /* Flat */
+      /* Override the semantic colored border with a "ink" border */
+      border: 1px solid var(--text-primary) !important;
+      /* Ensure text is distinct */
+      font-family: 'JetBrains Mono', monospace, ui-monospace; /* Optional: adds to technical feel */
+    }
+
+    /* Specific nuances if needed */
+    .hzn-node-2026.is-decision {
+      /* Decision: Keep the warm background but make it flat */
+    }
+    .hzn-node-2026.is-mechanism {
+      /* Mechanism: Keep the cool background but make it flat */
     }
 
     /* Stack controllers (containers): visually distinct from entity nodes.
@@ -3101,6 +3125,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const visualType = isCollapsedStackController && stackVisualType ? stackVisualType : baseVisualType;
   const colorsForVisual = visualType ? getNodeColors(visualType, theme) : colors;
   const isDomainVisual = String(visualType || '').toUpperCase() === 'DOMAIN';
+  const isDecisionVisual = String(visualType || data.type || '').toUpperCase() === 'DECISION_POINT';
+  const isMechanismVisual = String(visualType || data.type || '').toUpperCase() === 'MECHANISM';
 
   // 2026 visual style: neutral surface with tinted accent (less "dashboardy", more product-like)
   const accentColor = isCritical ? '#EF4444' : (colorsForVisual?.accent || colors.accent);
@@ -3271,7 +3297,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     return (
       <>
         <div
-          className={`hzn-node-2026 hzn-node-compact ${isDomainVisual ? 'is-domain' : ''} ${isSelected ? 'is-selected' : ''}`}
+          className={`hzn-node-2026 hzn-node-compact ${isDomainVisual ? 'is-domain' : ''} ${isDecisionVisual ? 'is-decision' : ''} ${isMechanismVisual ? 'is-mechanism' : ''} ${isSelected ? 'is-selected' : ''}`}
           onMouseEnter={() => setIsHovering(true)}
           onMouseLeave={() => setIsHovering(false)}
           style={{
@@ -3727,7 +3753,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       )}
 
       <div
-        className={`hzn-node-2026 ${isDomainVisual ? 'is-domain' : ''} ${isSelected ? 'is-selected' : ''} ${isCollapsedStackController ? 'is-stack' : ''}`}
+        className={`hzn-node-2026 ${isDomainVisual ? 'is-domain' : ''} ${isDecisionVisual ? 'is-decision' : ''} ${isMechanismVisual ? 'is-mechanism' : ''} ${isSelected ? 'is-selected' : ''} ${isCollapsedStackController ? 'is-stack' : ''}`}
         onMouseEnter={() => setIsHovering(true)}
         onMouseLeave={() => setIsHovering(false)}
         style={{
