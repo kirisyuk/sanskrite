@@ -31,6 +31,7 @@ type researchResult struct {
 // EnrichFragment обогащает HorizonFragment и находит новые связи.
 // focus/spherePaths/keywords are optional steering signals for grounded search (they may be non-canonical).
 // originalQuery and decompositionHints are additional context for MARKET-aware research.
+// existingEntities is a compact list of already-discovered entities in the current session (to avoid duplicates).
 // Returns: enriched fragment, discovered relations, discovered supply chains (if supply_chain mode), error
 func (a *ResearchAgent) EnrichFragment(
 	ctx context.Context,
@@ -43,12 +44,13 @@ func (a *ResearchAgent) EnrichFragment(
 	chainContext string,
 	originalQuery string,
 	decompositionHints []DecompositionHint,
+	existingEntities []string,
 ) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, error) {
 	if len(missingInfo) == 0 {
 		return fragment, nil, nil, nil
 	}
 
-	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints)
+	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -275,7 +277,7 @@ func isMoreCanonical(oldPath, newPath string) bool {
 }
 
 // buildEnrichmentPrompt строит промпт для дообогащения фрагмента
-func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, missingInfo []string, focus string, spherePaths []string, keywords []string, specialties []string, chainContext string, originalQuery string, decompositionHints []DecompositionHint) string {
+func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, missingInfo []string, focus string, spherePaths []string, keywords []string, specialties []string, chainContext string, originalQuery string, decompositionHints []DecompositionHint, existingEntities []string) string {
 	fragmentJSON, _ := json.MarshalIndent(fragment, "", "  ")
 	questions := strings.Join(missingInfo, "\n- ")
 	focus = strings.TrimSpace(focus)
@@ -304,6 +306,23 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 			focusBlock += fmt.Sprintf("- keywords: %s\n", keywordsLine)
 		}
 		focusBlock += "\n"
+	}
+
+	// EXISTING ENTITIES: Compact list of already-discovered entities in this session.
+	// This helps avoid duplicates and enables referencing existing entities by their canonical paths.
+	existingEntitiesBlock := ""
+	if len(existingEntities) > 0 {
+		// Limit to 50 entities to avoid prompt bloat
+		ents := existingEntities
+		if len(ents) > 50 {
+			ents = ents[:50]
+		}
+		existingEntitiesBlock = "EXISTING ENTITIES (already discovered in this session - reference these instead of creating duplicates):\n"
+		for _, e := range ents {
+			existingEntitiesBlock += fmt.Sprintf("  - %s\n", e)
+		}
+		existingEntitiesBlock += "\nWhen outputting relations, prefer using these existing paths as targetCanonicalPath if they match your discoveries.\n"
+		existingEntitiesBlock += "If an entity with the same name exists, use the EXISTING path to avoid duplicates.\n\n"
 	}
 
 	// Add MARKET decomposition block if applicable
@@ -407,6 +426,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 CURRENT FRAGMENT DATA:
 %s
 
+%s
 %s
 %s
 %s
@@ -768,11 +788,14 @@ CANONICAL PATH RULES:
 - NEVER use "/discovered/*" (not allowed).
 - Prefer stable namespaces:
   - Organizations: /org/{iso2|na}/{slug}
-    - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase). If unknown use "na".
+    - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase).
+    - CRITICAL: If the country is mentioned or clearly implied in the name/context, infer ISO2 and use it.
+    - Use "na" ONLY when you truly cannot infer ISO2 from name/context/sources.
     - Legacy /org/{slug} may exist; prefer /org/{iso2}/{slug} for NEW entities to reduce collisions.
   - Government bodies: /gov/{iso2|na}/{slug}
     - Use for ministries, regulators, agencies, state bodies.
-    - If jurisdiction is unknown, use /gov/na/{slug} and explicitly ask to resolve country via missingInfo.
+    - CRITICAL: If country is mentioned or clearly implied in the name/context, infer ISO2 and use it.
+    - Use /gov/na/{slug} ONLY when you truly cannot infer ISO2, and then explicitly ask to resolve country via missingInfo.
   - Market segments (ORG-level classification): /segment/{domain}/{vertical}/{geo}
     - geo: ISO3166-1 alpha2 lowercase (2 letters) OR "global"
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
@@ -868,7 +891,7 @@ METRIC VALUE FORMAT (IMPORTANT):
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, decompositionBlock, domainBlock, specBlock, questions)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, decompositionBlock, domainBlock, specBlock, questions)
 }
 
 func dedupNonEmptyStrings(in []string) []string {

@@ -1273,7 +1273,32 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		domainMissing := []string{
 			fmt.Sprintf("Expand this DOMAIN contract into 5-10 first-order entities and relations. Use DOMAIN relation types (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON) and valid canonical paths only. ContractType=%s; Facets=%v; Title=%s.", strings.TrimSpace(contractType), parsedFacets, title),
 		}
-		enrichedFragment, newRelations, newChains, err := e.researchAgent.EnrichFragment(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, "", originalQuery, nil)
+		// Collect existing entities from session graph for duplicate prevention
+		var existingEntities []string
+		if sg := SessionGraphFromContext(ctx); sg != nil {
+			for _, frag := range sg.AllFragments() {
+				if frag == nil {
+					continue
+				}
+				path := strings.TrimSpace(frag.CanonicalPath)
+				if path == "" {
+					continue
+				}
+				label := ""
+				if frag.Labels != nil {
+					label = strings.TrimSpace(frag.Labels["en"])
+				}
+				if label == "" && frag.Identifiers != nil {
+					label = strings.TrimSpace(frag.Identifiers["shortName"])
+				}
+				if label == "" {
+					existingEntities = append(existingEntities, path)
+				} else {
+					existingEntities = append(existingEntities, fmt.Sprintf("%s | %s", path, label))
+				}
+			}
+		}
+		enrichedFragment, newRelations, newChains, err := e.researchAgent.EnrichFragment(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, "", originalQuery, nil, existingEntities)
 		_ = enrichedFragment
 		if err != nil {
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> domain research failed: %v", err))
@@ -3575,6 +3600,31 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 
 		// Run grounded research to enrich strategic fragment.
 		researchCtx := ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.strategic.research", lensID, cascadeID)
+		// Collect existing entities from session graph for duplicate prevention
+		var existingEntities []string
+		if sg := SessionGraphFromContext(ctx); sg != nil {
+			for _, frag := range sg.AllFragments() {
+				if frag == nil {
+					continue
+				}
+				path := strings.TrimSpace(frag.CanonicalPath)
+				if path == "" {
+					continue
+				}
+				label := ""
+				if frag.Labels != nil {
+					label = strings.TrimSpace(frag.Labels["en"])
+				}
+				if label == "" && frag.Identifiers != nil {
+					label = strings.TrimSpace(frag.Identifiers["shortName"])
+				}
+				if label == "" {
+					existingEntities = append(existingEntities, path)
+				} else {
+					existingEntities = append(existingEntities, fmt.Sprintf("%s | %s", path, label))
+				}
+			}
+		}
 		enrichedFrag, newRelations, _, err := e.researchAgent.EnrichFragment(
 			researchCtx,
 			frag,
@@ -3586,6 +3636,7 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 			"",
 			"",
 			nil,
+			existingEntities,
 		)
 		if err != nil {
 			continue

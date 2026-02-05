@@ -299,6 +299,41 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		}
 	}
 
+	// 0) SESSION GRAPH: Check in-memory cache first (solves Vertex indexing delay + duplicate prevention).
+	// This is the fastest path and catches entities created earlier in the same job.
+	if sg := SessionGraphFromContext(ctx); sg != nil {
+		// Try exact path lookup first
+		for _, pref := range preferredCanonicalPaths(rel) {
+			if strings.TrimSpace(pref) == "" {
+				continue
+			}
+			// Resolve any path aliases (in case path was updated within this job)
+			resolved := sg.ResolvePath(pref)
+			if frag := sg.GetByPath(resolved); frag != nil && frag.ID != "" {
+				fmt.Printf("%s Session graph hit (path): %s\n", logPrefix, resolved)
+				return e.finalizeRelationCanonicalPath(ctx, rel, frag.CanonicalPath, relType), nil
+			}
+		}
+
+		// Try name lookup with jurisdiction preference
+		targetName := strings.TrimSpace(rel.TargetShortName)
+		if targetName == "" {
+			targetName = strings.TrimSpace(rel.TargetLegalName)
+		}
+		if targetName == "" {
+			targetName = rel.TargetName
+		}
+		if targetName != "" {
+			// Extract source jurisdiction from SourceCanonicalPath if available
+			sourceJurisdiction := extractJurisdiction(strings.TrimSpace(rel.SourceCanonicalPath))
+			if frag := sg.GetByNamePreferJurisdiction(targetName, sourceJurisdiction); frag != nil && frag.ID != "" {
+				fmt.Printf("%s Session graph hit (name+jurisdiction): %q -> %s (sourceJurisdiction=%s)\n",
+					logPrefix, targetName, frag.CanonicalPath, sourceJurisdiction)
+				return e.finalizeRelationCanonicalPath(ctx, rel, frag.CanonicalPath, relType), nil
+			}
+		}
+	}
+
 	// 1) Use provided path if it's already stable
 	if strings.TrimSpace(rel.TargetCanonicalPath) != "" && !strings.HasPrefix(strings.TrimSpace(rel.TargetCanonicalPath), "/discovered/") {
 		// Hard preference: if preferred shortName path exists, use it to avoid duplicates like /org/tesla-inc vs /org/tesla.
@@ -348,7 +383,67 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		}
 	}
 
-	// 2) Try Vertex AI Search over already indexed fragments
+	// 1.8) FIRESTORE-FIRST: Try name-based lookup in Firestore before Vertex (faster, no indexing delay).
+	// This is more reliable than Vertex for recently created entities.
+	if e.fragmentsRepo != nil {
+		targetName := strings.TrimSpace(rel.TargetShortName)
+		if targetName == "" {
+			targetName = strings.TrimSpace(rel.TargetLegalName)
+		}
+		if targetName == "" {
+			targetName = rel.TargetName
+		}
+		if targetName != "" {
+			// Extract source jurisdiction for preference
+			sourceJurisdiction := extractJurisdiction(strings.TrimSpace(rel.SourceCanonicalPath))
+
+			// Search Firestore by label (exact match, but fast and always up-to-date)
+			var candidates []*models.HorizonFragment
+			var err error
+			if relType != "" {
+				candidates, err = e.fragmentsRepo.FindByLabel(ctx, "en", targetName, relType)
+				if err != nil || len(candidates) == 0 {
+					candidates, err = e.fragmentsRepo.FindByLabel(ctx, "en", targetName, "")
+				}
+			} else {
+				candidates, err = e.fragmentsRepo.FindByLabel(ctx, "en", targetName, "")
+			}
+			if err == nil && len(candidates) > 0 {
+				// Apply jurisdiction preference: prefer same jurisdiction, then global, then any
+				var exactMatch, globalMatch, anyMatch *models.HorizonFragment
+				for _, cand := range candidates {
+					candJurisdiction := extractJurisdiction(cand.CanonicalPath)
+					if sourceJurisdiction != "" && candJurisdiction == sourceJurisdiction {
+						exactMatch = cand
+						break
+					}
+					if candJurisdiction == "" || candJurisdiction == "global" {
+						if globalMatch == nil {
+							globalMatch = cand
+						}
+					}
+					if anyMatch == nil {
+						anyMatch = cand
+					}
+				}
+				var bestMatch *models.HorizonFragment
+				if exactMatch != nil {
+					bestMatch = exactMatch
+				} else if globalMatch != nil {
+					bestMatch = globalMatch
+				} else {
+					bestMatch = anyMatch
+				}
+				if bestMatch != nil && bestMatch.ID != "" {
+					fmt.Printf("%s Firestore-first hit (label+jurisdiction): %q -> %s (sourceJurisdiction=%s)\n",
+						logPrefix, targetName, bestMatch.CanonicalPath, sourceJurisdiction)
+					return e.finalizeRelationCanonicalPath(ctx, rel, bestMatch.CanonicalPath, relType), nil
+				}
+			}
+		}
+	}
+
+	// 2) Try Vertex AI Search over already indexed fragments (with jurisdiction preference)
 	if e.planner != nil && e.planner.vertexSearchClient != nil && e.planner.vertexSearchClient.IsConfigured() {
 		query := strings.TrimSpace(rel.TargetShortName)
 		if query == "" {
@@ -364,6 +459,9 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		}
 		resp, err := e.planner.vertexSearchClient.Search(ctx, req)
 		if err == nil && resp != nil {
+			// Extract source jurisdiction for filtering
+			sourceJurisdiction := extractJurisdiction(strings.TrimSpace(rel.SourceCanonicalPath))
+
 			// Prefer search hit that matches our shortName-derived canonicalPath
 			for _, pref := range preferredCanonicalPaths(rel) {
 				if strings.TrimSpace(pref) == "" {
@@ -395,7 +493,37 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 					}
 				}
 			}
-			// Pick the first result with a usable canonicalPath
+
+			// JURISDICTION-AWARE: Prefer results from the same jurisdiction as source
+			if sourceJurisdiction != "" {
+				for _, r := range resp.Results {
+					if r.Document.StructData == nil {
+						continue
+					}
+					if cp, ok := r.Document.StructData["canonicalPath"].(string); ok && cp != "" && !strings.HasPrefix(cp, "/discovered/") {
+						resultJurisdiction := extractJurisdiction(cp)
+						if resultJurisdiction == sourceJurisdiction {
+							fmt.Printf("%s Vertex hit with matching jurisdiction: %s (source=%s)\n", logPrefix, cp, sourceJurisdiction)
+							return e.finalizeRelationCanonicalPath(ctx, rel, cp, relType), nil
+						}
+					}
+				}
+				// Fallback: global/empty jurisdiction
+				for _, r := range resp.Results {
+					if r.Document.StructData == nil {
+						continue
+					}
+					if cp, ok := r.Document.StructData["canonicalPath"].(string); ok && cp != "" && !strings.HasPrefix(cp, "/discovered/") {
+						resultJurisdiction := extractJurisdiction(cp)
+						if resultJurisdiction == "" || resultJurisdiction == "global" {
+							fmt.Printf("%s Vertex hit with global jurisdiction: %s\n", logPrefix, cp)
+							return e.finalizeRelationCanonicalPath(ctx, rel, cp, relType), nil
+						}
+					}
+				}
+			}
+
+			// Pick the first result with a usable canonicalPath (fallback)
 			for _, r := range resp.Results {
 				if r.Document.StructData == nil {
 					continue

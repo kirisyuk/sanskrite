@@ -451,6 +451,10 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 			return nil, err
 		}
 		frag.ID = id
+		// Add to session graph for duplicate prevention within job
+		if sg := SessionGraphFromContext(ctx); sg != nil {
+			sg.Add(frag)
+		}
 		return frag, nil
 	}
 
@@ -1339,6 +1343,12 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		hpMu.Unlock()
 	})
+
+	// SESSION GRAPH: In-memory cache for fragments discovered/created during this job.
+	// Solves: Vertex indexing delay, duplicate creation, path update tracking.
+	sessionGraph := NewSessionGraph()
+	ctx = WithSessionGraph(ctx, sessionGraph)
+
 	trace.Log(ctx, "scout_exec", "scout.job.start", map[string]any{
 		"tenantId":            strings.TrimSpace(job.TenantID),
 		"projectId":           strings.TrimSpace(job.ProjectID),
@@ -2368,7 +2378,32 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			"originalQueryLen":    len(originalQuery),
 			"decompositionHintsN": len(decompositionHints),
 		})
-		enrichedFragment, newRelations, newSupplyChains, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints)
+		// Collect existing entities from session graph for duplicate prevention
+		var existingEntities []string
+		if sg := SessionGraphFromContext(ctx); sg != nil {
+			for _, frag := range sg.AllFragments() {
+				if frag == nil {
+					continue
+				}
+				path := strings.TrimSpace(frag.CanonicalPath)
+				if path == "" {
+					continue
+				}
+				label := ""
+				if frag.Labels != nil {
+					label = strings.TrimSpace(frag.Labels["en"])
+				}
+				if label == "" && frag.Identifiers != nil {
+					label = strings.TrimSpace(frag.Identifiers["shortName"])
+				}
+				if label == "" {
+					existingEntities = append(existingEntities, path)
+				} else {
+					existingEntities = append(existingEntities, fmt.Sprintf("%s | %s", path, label))
+				}
+			}
+		}
+		enrichedFragment, newRelations, newSupplyChains, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities)
 		if err == nil {
 			// Capture canonicalPath drift introduced by research (aliasing).
 			oldCP := ""
@@ -2923,6 +2958,8 @@ SKIP_RESEARCH:
 					// Best-effort: save the merged OrgSize/MarketSegments back to Firestore
 					if uerr := e.fragmentsRepo.Update(ctx, existingFragment); uerr != nil {
 						fmt.Printf("[ScoutEngine] Warning: failed to update fragment after dedup merge: %v\n", uerr)
+					} else if sg := SessionGraphFromContext(ctx); sg != nil {
+						sg.Add(existingFragment)
 					}
 
 					// If dedup selected a replacement fragment, we must retarget the job to it as well.
@@ -3029,6 +3066,8 @@ SKIP_RESEARCH:
 
 					if uerr := e.fragmentsRepo.Update(ctx, existingFragment); uerr != nil {
 						return fmt.Errorf("failed to update fragment after race-guard hit: %w", uerr)
+					} else if sg := SessionGraphFromContext(ctx); sg != nil {
+						sg.Add(existingFragment)
 					}
 				}
 			}
@@ -3041,6 +3080,11 @@ SKIP_RESEARCH:
 				}
 				extractedFragment.ID = fragmentID
 				existingFragment = extractedFragment
+
+				// Add to session graph for duplicate prevention within job
+				if sg := SessionGraphFromContext(ctx); sg != nil {
+					sg.Add(extractedFragment)
+				}
 
 				// Segment-first linking: materialize derived market nodes from org/fac marketSegments (best-effort).
 				e.ensureSegmentDerivedMarketLinks(ctx, existingFragment, "scout_job", job.ID)
@@ -3063,6 +3107,10 @@ SKIP_RESEARCH:
 			// agents/UI work with the updated canonical path within this job.
 			if legacy != "" && strings.TrimSpace(existingFragment.CanonicalPath) != "" && legacy != strings.TrimSpace(existingFragment.CanonicalPath) {
 				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, legacy, strings.TrimSpace(existingFragment.CanonicalPath))
+				// Track path change in session graph
+				if sg := SessionGraphFromContext(ctx); sg != nil {
+					sg.RecordPathChange(legacy, strings.TrimSpace(existingFragment.CanonicalPath))
+				}
 			}
 			if legacy != "" {
 				recordLegacyOrgPath(existingFragment, legacy)
@@ -3140,6 +3188,9 @@ SKIP_RESEARCH:
 
 		if err := e.fragmentsRepo.Update(ctx, existingFragment); err != nil {
 			return fmt.Errorf("failed to update fragment: %w", err)
+		}
+		if sg := SessionGraphFromContext(ctx); sg != nil {
+			sg.Add(existingFragment)
 		}
 		fragmentID = existingFragment.ID
 
@@ -3752,6 +3803,10 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 				}
 			} else {
 				sfrag.ID = id
+				// Add to session graph for duplicate prevention within job
+				if sg := SessionGraphFromContext(ctx); sg != nil {
+					sg.Add(sfrag)
+				}
 			}
 		}
 

@@ -61,6 +61,9 @@ func (e *ScoutEngine) materializeRelationEdge(
 			if existingSrc, err := e.fragmentsRepo.GetByCanonicalPath(ctx, explicitSourcePath); err == nil && existingSrc != nil {
 				explicitSourceFragment = existingSrc
 				edgeSourceID = existingSrc.ID
+				if sg := SessionGraphFromContext(ctx); sg != nil {
+					sg.Add(existingSrc)
+				}
 				fmt.Printf("[ScoutEngine] Using explicit source for edge: %s -> %s [%s]\n", explicitSourcePath, targetPath, edgeType)
 			} else {
 				// Create minimal fragment for explicit source
@@ -99,6 +102,9 @@ func (e *ScoutEngine) materializeRelationEdge(
 				if createdID, createErr := e.fragmentsRepo.Create(ctx, newSrcFrag); createErr == nil {
 					edgeSourceID = createdID
 					explicitSourceFragment = newSrcFrag
+					if sg := SessionGraphFromContext(ctx); sg != nil {
+						sg.Add(newSrcFrag)
+					}
 					fmt.Printf("[ScoutEngine] Created explicit source fragment: %s (%s)\n", explicitSourcePath, srcType)
 				} else {
 					fmt.Printf("[ScoutEngine] Failed to create explicit source fragment %s: %v\n", explicitSourcePath, createErr)
@@ -291,6 +297,17 @@ func (e *ScoutEngine) materializeRelationEdge(
 		resolvedTargetPath = strings.TrimSpace(targetPath)
 	}
 
+	// POST-RESOLUTION SANITY CHECK: Flag suspicious cross-jurisdiction edges.
+	// For "local" relation types (REGULATES, CONTROLS_ACCESS, etc.), source and target
+	// jurisdictions should typically match. Log a warning if they differ.
+	if isCrossJurisdictionSuspicious(edgeType, resolvedSourcePath, resolvedTargetPath) {
+		srcJurisdiction := extractJurisdiction(resolvedSourcePath)
+		dstJurisdiction := extractJurisdiction(resolvedTargetPath)
+		fmt.Printf("[CrossJurisdiction] SUSPICIOUS edge: %s (%s) -> %s (%s) [%s]. Proceeding with caution.\n",
+			resolvedSourcePath, srcJurisdiction, resolvedTargetPath, dstJurisdiction, edgeType)
+		// We log but don't reject - let the edge be created, but it may need manual review.
+	}
+
 	edge := &models.DependencyEdge{
 		TenantID:         "global",
 		SourceFragmentID: edgeSourceID,
@@ -391,3 +408,40 @@ func (e *ScoutEngine) materializeRelationEdge(
 	return nil
 }
 
+// isCrossJurisdictionSuspicious checks if an edge between two jurisdictions is suspicious
+// based on the edge type. For "local" relations like REGULATES, CONTROLS_ACCESS, etc.,
+// cross-jurisdiction edges are likely errors (e.g., Indian regulator controlling Saudi company).
+func isCrossJurisdictionSuspicious(edgeType models.DependencyType, srcPath, dstPath string) bool {
+	srcJurisdiction := extractJurisdiction(srcPath)
+	dstJurisdiction := extractJurisdiction(dstPath)
+
+	// If either jurisdiction is empty/global, not suspicious
+	if srcJurisdiction == "" || dstJurisdiction == "" {
+		return false
+	}
+	if srcJurisdiction == "global" || dstJurisdiction == "global" {
+		return false
+	}
+
+	// If jurisdictions match, not suspicious
+	if srcJurisdiction == dstJurisdiction {
+		return false
+	}
+
+	// Check if edge type is "local" (should typically be same jurisdiction)
+	localEdgeTypes := map[models.DependencyType]bool{
+		models.DependencyTypeRegulates:      true,
+		models.DependencyTypeControlsAccess: true,
+		"GATEKEEPS":                         true,
+		"GATEKEEPS_DECISION":                true,
+		"LICENSED_BY":                       true,
+		"APPROVED_BY":                       true,
+		"CONTROLLED_BY":                     true,
+	}
+
+	if localEdgeTypes[edgeType] {
+		return true
+	}
+
+	return false
+}
