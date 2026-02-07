@@ -197,9 +197,25 @@ func TestJoinPath_UsesSlugify(t *testing.T) {
 	}
 }
 
-
-
-
+func TestOrgCanonicalPath_ParentheticalAnnotations(t *testing.T) {
+	cases := []struct {
+		cc, name, want string
+	}{
+		{"sa", "STC Bank PJSC", "/org/sa/stc-bank-pjsc"},
+		{"na", "stc Bank PLC", "/org/na/stc-bank-plc"},
+		{"sa", "Stc Bank Jsc", "/org/sa/stc-bank-jsc"},
+		// Parenthetical "(formerly ...)" must be stripped — slug core should be "stc-bank".
+		{"sa", "STC Bank (formerly stc pay) PJSC", "/org/sa/stc-bank-pjsc"},
+		// No legal form after stripping parenthetical — slug is plain "stc-bank".
+		{"sa", "STC Bank (formerly stc pay)", "/org/sa/stc-bank"},
+	}
+	for _, c := range cases {
+		got := OrgCanonicalPath(c.cc, c.name)
+		if got != c.want {
+			t.Errorf("OrgCanonicalPath(%q, %q) = %q, want %q", c.cc, c.name, got, c.want)
+		}
+	}
+}
 
 
 

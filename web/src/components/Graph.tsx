@@ -1040,6 +1040,7 @@ export const Graph: React.FC = () => {
   );
   
   // Обработчик для кнопки Align - улучшенная иерархическая раскладка графа
+  // v2: добавлен wrapping (разбиение переполненных колонок) и barycenter sorting
   const handleAlign = useCallback(() => {
     console.log('[Graph] Arrange button clicked');
     
@@ -1055,9 +1056,11 @@ export const Graph: React.FC = () => {
     const nodeWidth = 180;
     const nodeHeight = 120;
     const padding = 120;
-    const layerSpacing = 450; // Расстояние между слоями (увеличено для подписей рёбер)
-    const nodeSpacing = 100; // Расстояние между нодами в слое (увеличено для подписей рёбер)
+    const layerSpacing = 350; // Расстояние между слоями (X)
+    const nodeSpacing = 80; // Расстояние между нодами в слое (Y)
+    const wrapSpacing = 120; // Дополнительный отступ между "wrapped" блоками по X
     const componentSpacing = 200; // Расстояние между компонентами
+    const maxNodesPerColumn = 6; // Максимум нод в одной колонке перед wrapping
     
     // Создаем граф связей
     const nodeMap = new Map<string, Node>();
@@ -1184,23 +1187,124 @@ export const Graph: React.FC = () => {
       return layerMap;
     };
     
-    // Функция для размещения нод в слое
-    const positionNodesInLayer = (
+    // Barycenter sorting: сортировка по средней позиции соседей в предыдущем слое
+    // Это группирует детей одного родителя вместе
+    const barycenterSort = (
+      layers: string[][],
+      nodeYPositions: Map<string, number>
+    ): void => {
+      // Проходим слева направо (от корней к листьям)
+      for (let layerIdx = 1; layerIdx < layers.length; layerIdx++) {
+        const layer = layers[layerIdx];
+        
+        // Вычисляем barycenter для каждой ноды
+        const barycenters = new Map<string, number>();
+        layer.forEach((nodeId) => {
+          const predecessors = incomingEdges.get(nodeId) || [];
+          const predPositions = predecessors
+            .map(p => nodeYPositions.get(p))
+            .filter((y): y is number => y !== undefined);
+          
+          if (predPositions.length > 0) {
+            // Среднее Y всех предшественников
+            const avg = predPositions.reduce((a, b) => a + b, 0) / predPositions.length;
+            barycenters.set(nodeId, avg);
+          } else {
+            // Нет предшественников - ставим в середину
+            barycenters.set(nodeId, Infinity);
+          }
+        });
+        
+        // Сортируем по barycenter
+        layer.sort((a, b) => {
+          const aBar = barycenters.get(a) ?? Infinity;
+          const bBar = barycenters.get(b) ?? Infinity;
+          return aBar - bBar;
+        });
+        
+        // Обновляем Y позиции для текущего слоя (для следующей итерации)
+        layer.forEach((nodeId, idx) => {
+          nodeYPositions.set(nodeId, idx);
+        });
+      }
+      
+      // Обратный проход: справа налево (улучшает размещение)
+      for (let layerIdx = layers.length - 2; layerIdx >= 0; layerIdx--) {
+        const layer = layers[layerIdx];
+        
+        const barycenters = new Map<string, number>();
+        layer.forEach((nodeId) => {
+          const successors = outgoingEdges.get(nodeId) || [];
+          const succPositions = successors
+            .map(s => nodeYPositions.get(s))
+            .filter((y): y is number => y !== undefined);
+          
+          if (succPositions.length > 0) {
+            const avg = succPositions.reduce((a, b) => a + b, 0) / succPositions.length;
+            barycenters.set(nodeId, avg);
+          } else {
+            // Сохраняем текущую позицию
+            barycenters.set(nodeId, nodeYPositions.get(nodeId) ?? Infinity);
+          }
+        });
+        
+        layer.sort((a, b) => {
+          const aBar = barycenters.get(a) ?? Infinity;
+          const bBar = barycenters.get(b) ?? Infinity;
+          return aBar - bBar;
+        });
+        
+        layer.forEach((nodeId, idx) => {
+          nodeYPositions.set(nodeId, idx);
+        });
+      }
+    };
+    
+    // Функция для размещения нод в слое с учетом wrapping
+    const positionNodesInLayerWithWrap = (
       layerNodes: string[],
       layerIndex: number,
       componentStartX: number,
-      componentStartY: number
-    ): Map<string, { x: number; y: number }> => {
+      componentStartY: number,
+      wrapOffsets: Map<number, number> // layerIndex -> accumulated X offset from wrapping
+    ): { positions: Map<string, { x: number; y: number }>; totalHeight: number; wrapCount: number } => {
       const positions = new Map<string, { x: number; y: number }>();
-      const layerHeight = layerNodes.length * (nodeHeight + nodeSpacing) - nodeSpacing;
       
-      layerNodes.forEach((nodeId, index) => {
-        const x = componentStartX + layerIndex * layerSpacing;
-        const y = componentStartY + (layerHeight / 2) - (layerNodes.length - 1 - index) * (nodeHeight + nodeSpacing) + (nodeHeight / 2);
-        positions.set(nodeId, { x, y });
+      // Разбиваем на группы по maxNodesPerColumn
+      const chunks: string[][] = [];
+      for (let i = 0; i < layerNodes.length; i += maxNodesPerColumn) {
+        chunks.push(layerNodes.slice(i, i + maxNodesPerColumn));
+      }
+      
+      const wrapCount = chunks.length;
+      let maxChunkHeight = 0;
+      
+      chunks.forEach((chunk, chunkIdx) => {
+        const chunkHeight = chunk.length * (nodeHeight + nodeSpacing) - nodeSpacing;
+        maxChunkHeight = Math.max(maxChunkHeight, chunkHeight);
+        
+        // X позиция: базовая + смещение от предыдущих wrapped слоев + смещение внутри слоя
+        const prevWrapOffset = wrapOffsets.get(layerIndex) || 0;
+        const xOffset = prevWrapOffset + chunkIdx * (nodeWidth + wrapSpacing);
+        const x = componentStartX + layerIndex * layerSpacing + xOffset;
+        
+        chunk.forEach((nodeId, index) => {
+          const y = componentStartY + index * (nodeHeight + nodeSpacing);
+          positions.set(nodeId, { x, y });
+        });
       });
       
-      return positions;
+      // Обновляем wrapOffsets для следующих слоев
+      if (wrapCount > 1) {
+        const additionalOffset = (wrapCount - 1) * (nodeWidth + wrapSpacing);
+        // Все последующие слои должны учитывать этот offset
+        for (let i = layerIndex + 1; i < 100; i++) { // 100 - достаточно большое число
+          const current = wrapOffsets.get(i) || 0;
+          wrapOffsets.set(i, current + additionalOffset);
+        }
+      }
+      
+      return { positions, totalHeight: maxChunkHeight, wrapCount };
     };
     
     // Размещаем каждый компонент
@@ -1217,7 +1321,7 @@ export const Graph: React.FC = () => {
         const col = compIndex % cols;
         const row = Math.floor(compIndex / cols);
         const areaWidth = cols * (nodeWidth + nodeSpacing * 2) - nodeSpacing * 2;
-        const graphWidth = Math.max(1600, 1200); // Увеличена минимальная ширина
+        const graphWidth = Math.max(1600, 1200);
         const startX = padding + (graphWidth - padding * 2 - areaWidth) / 2;
         
         nodePositions.set(nodeId, {
@@ -1241,41 +1345,66 @@ export const Graph: React.FC = () => {
         layers[layer].push(nodeId);
       });
       
-      // Сортируем ноды внутри каждого слоя для лучшей визуализации
+      // Инициализируем Y позиции для barycenter (индекс в слое)
+      const nodeYPositions = new Map<string, number>();
       layers.forEach((layer) => {
-        layer.sort((a, b) => {
-          // Сортируем по количеству связей (более связанные - выше)
-          const aConnections = (outgoingEdges.get(a)?.length || 0) + (incomingEdges.get(a)?.length || 0);
-          const bConnections = (outgoingEdges.get(b)?.length || 0) + (incomingEdges.get(b)?.length || 0);
-          return bConnections - aConnections;
+        layer.forEach((nodeId, idx) => {
+          nodeYPositions.set(nodeId, idx);
         });
       });
       
-      // Вычисляем размеры компонента
-      const maxLayerHeight = Math.max(...layers.map(l => l.length * (nodeHeight + nodeSpacing) - nodeSpacing));
-      const componentWidth = (maxLayer + 1) * layerSpacing;
-      const componentHeight = maxLayerHeight;
+      // Применяем barycenter sorting (несколько итераций для лучшего результата)
+      for (let iter = 0; iter < 4; iter++) {
+        barycenterSort(layers, nodeYPositions);
+      }
       
-      // Центрируем компонент (используем динамическую ширину)
+      // Вычисляем размеры компонента с учетом wrapping
+      const wrapOffsets = new Map<number, number>();
+      let componentMaxHeight = 0;
+      let totalWrapOffset = 0;
+      
+      // Первый проход: вычисляем размеры
+      layers.forEach((layerNodes, layerIndex) => {
+        const wrapCount = Math.ceil(layerNodes.length / maxNodesPerColumn);
+        const effectiveHeight = Math.min(layerNodes.length, maxNodesPerColumn) * (nodeHeight + nodeSpacing) - nodeSpacing;
+        componentMaxHeight = Math.max(componentMaxHeight, effectiveHeight);
+        
+        if (wrapCount > 1) {
+          const additionalOffset = (wrapCount - 1) * (nodeWidth + wrapSpacing);
+          for (let i = layerIndex + 1; i <= maxLayer; i++) {
+            const current = wrapOffsets.get(i) || 0;
+            wrapOffsets.set(i, current + additionalOffset);
+          }
+          totalWrapOffset += additionalOffset;
+        }
+      });
+      
+      const componentWidth = (maxLayer + 1) * layerSpacing + totalWrapOffset;
+      
+      // Центрируем компонент
       const graphWidth = Math.max(1600, componentWidth + padding * 2);
       const componentStartX = padding + (graphWidth - padding * 2 - componentWidth) / 2;
       const componentStartY = currentY;
       
+      // Сбрасываем wrapOffsets для финального позиционирования
+      wrapOffsets.clear();
+      
       // Размещаем ноды
       layers.forEach((layerNodes, layerIndex) => {
-        const layerPositions = positionNodesInLayer(
+        const { positions } = positionNodesInLayerWithWrap(
           layerNodes,
           layerIndex,
           componentStartX,
-          componentStartY
+          componentStartY,
+          wrapOffsets
         );
-        layerPositions.forEach((pos, nodeId) => {
+        positions.forEach((pos, nodeId) => {
           nodePositions.set(nodeId, pos);
         });
       });
       
       // Обновляем текущую Y позицию для следующего компонента
-      currentY += componentHeight + componentSpacing;
+      currentY += componentMaxHeight + componentSpacing;
     });
     
     // Применяем позиции к нодам

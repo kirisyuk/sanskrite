@@ -18,6 +18,7 @@ TARGET_WS=0
 TARGET_HATLONE_WS=0
 TARGET_VERIFIED_PROXY=0
 TARGET_CHECK_INFRA=0
+TARGET_SETUP_HATLONE_INFRA=0
 TARGET_HORIZON_WATCHDOG=0
 TARGET_HORIZON_WATCHDOG_ONLY=0
 TARGET_CLEANUP_REVISIONS=0
@@ -59,7 +60,7 @@ while [[ $# -gt 0 ]]; do
     --api) TARGET_WEB=0; TARGET_CHECK_INFRA=0 ;;
     --py) TARGET_WEB=0; TARGET_API=0; TARGET_CHECK_INFRA=0 ;;
     --ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=1; TARGET_HATLONE_WS=0; TARGET_CHECK_INFRA=0 ;;
-    --hatlone-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=1; TARGET_CHECK_INFRA=0 ;;
+    --hatlone-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=1; TARGET_CHECK_INFRA=0; TARGET_SETUP_HATLONE_INFRA=1 ;;
     --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
     --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
     --horizon-watchdog) TARGET_HORIZON_WATCHDOG=1 ;;
@@ -308,6 +309,27 @@ setup_infrastructure() {
     --quiet >/dev/null 2>&1 || true
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $scout_queue (maxAttempts=5)"
 
+  # 3.4.1 Ensure Cloud Tasks queue for Profile refresh exists
+  local profile_queue="${CLOUD_TASKS_PROFILE_QUEUE:-sanskrite-profile-refresh}"
+  if gcloud tasks queues describe "$profile_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $profile_queue"
+  else
+    gcloud tasks queues create "$profile_queue" --location="$REGION" --project="$PROJECT_ID" --quiet || true
+    echo -e "${GREEN}[infra] Created Cloud Tasks queue:${NC} $profile_queue"
+  fi
+  # Configure for profile refresh (higher concurrency for parallel profile updates)
+  gcloud tasks queues update "$profile_queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=10s \
+    --max-backoff=600s \
+    --max-retry-duration=3600s \
+    --max-dispatches-per-second=100 \
+    --max-concurrent-dispatches=1000 \
+    --quiet >/dev/null 2>&1 || true
+  echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $profile_queue (maxConcurrentDispatches=1000)"
+
   # 3.5 Ensure GCS bucket for core docs exists
   local docs_bucket="gs://${PROJECT_ID}-core-docs"
   if gcloud storage buckets describe "$docs_bucket" >/dev/null 2>&1; then
@@ -324,6 +346,29 @@ setup_infrastructure() {
   else
     gcloud storage buckets create "gs://${rag_docs_bucket}" --location=US --uniform-bucket-level-access
     echo -e "${GREEN}[infra] Created RAG documents bucket:${NC} gs://${rag_docs_bucket}"
+  fi
+  
+  # 3.6.1 Ensure GCS bucket for Horizon fragments exists
+  local horizon_fragments_bucket="${PROJECT_ID}-horizon-fragments"
+  if gcloud storage buckets describe "gs://${horizon_fragments_bucket}" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Horizon fragments bucket exists:${NC} gs://${horizon_fragments_bucket}"
+  else
+    gcloud storage buckets create "gs://${horizon_fragments_bucket}" --location=US --uniform-bucket-level-access
+    echo -e "${GREEN}[infra] Created Horizon fragments bucket:${NC} gs://${horizon_fragments_bucket}"
+  fi
+  
+  # 3.6.2 Ensure GCS bucket for web static files exists (optional, may be created by Firebase Hosting)
+  local web_static_bucket="${PROJECT_ID}-web-static"
+  if gcloud storage buckets describe "gs://${web_static_bucket}" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Web static bucket exists:${NC} gs://${web_static_bucket}"
+  else
+    # Only create if explicitly requested via env var
+    if [[ "${CREATE_WEB_STATIC_BUCKET:-0}" == "1" ]]; then
+      gcloud storage buckets create "gs://${web_static_bucket}" --location=US --uniform-bucket-level-access
+      echo -e "${GREEN}[infra] Created web static bucket:${NC} gs://${web_static_bucket}"
+    else
+      echo -e "${BLUE}[infra] Web static bucket not created (set CREATE_WEB_STATIC_BUCKET=1 to create)${NC}"
+    fi
   fi
   
   # 3.7 Setup Vertex AI Search permissions and Data Store
@@ -884,12 +929,13 @@ except:
   for topic in \
     discovery.status discovery.profile discovery.answer discovery.project \
     document.process ground.refresh source.poll source.poll.due \
-    genai.stream \
+    genai.stream genai.stream.error genai.stream.tool_call genai.stream.tool_result \
     artifact.generation.started artifact.section.generating artifact.section.chunk artifact.section.completed \
     artifact.assembly.started artifact.assembly.chunk artifact.assembly.completed \
     artifact.generation.completed artifact.generation.error \
     analysis.status \
     agent.update \
+    interaction.created interaction.updated \
     verified.stream; do
     if ! gcloud pubsub topics describe "$topic" >/dev/null 2>&1; then
       gcloud pubsub topics create "$topic" --quiet
@@ -924,6 +970,38 @@ except:
   # 4.2 Ensure ws-broker subscriptions exist for aggregated topics (Subscriber uses <topic>-ws-broker)
   echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for ws-broker...${NC}"
   for topic in "${agg_topics[@]}"; do
+    local sub_id="${topic}-ws-broker"
+    if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      # Ensure message ordering is enabled (recreate if needed)
+      local ordering
+      ordering=$(gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" --format="value(enableMessageOrdering)" 2>/dev/null || echo "False")
+      if [[ "$ordering" != "True" ]]; then
+        echo -e "${YELLOW}[infra] Recreating subscription with ordering enabled:${NC} $sub_id"
+        gcloud pubsub subscriptions delete "$sub_id" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+        gcloud pubsub subscriptions create "$sub_id" \
+          --project="$PROJECT_ID" \
+          --topic="$topic" \
+          --enable-message-ordering \
+          --quiet >/dev/null 2>&1 || true
+      fi
+      echo -e "${GREEN}  ✓${NC} $sub_id exists"
+    else
+      gcloud pubsub subscriptions create "$sub_id" \
+        --project="$PROJECT_ID" \
+        --topic="$topic" \
+        --enable-message-ordering \
+        --quiet >/dev/null 2>&1 || true
+      echo -e "${GREEN}  ✓${NC} Created subscription: $sub_id"
+    fi
+  done
+
+  # 4.3 Ensure ws-broker subscriptions exist for interaction topics
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for interaction topics...${NC}"
+  local interaction_topics=(
+    "interaction.created"
+    "interaction.updated"
+  )
+  for topic in "${interaction_topics[@]}"; do
     local sub_id="${topic}-ws-broker"
     if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
       # Ensure message ordering is enabled (recreate if needed)
@@ -1017,7 +1095,32 @@ except:
         fi
         echo -e "${GREEN}[infra] ✓${NC} Artifact scheduler job ensured (runs hourly)"
 
-        # 5c. Horizon Watchdog job (optional; enabled via --horizon-watchdog)
+        # 5c. Subscription billing job (daily billing cycle)
+        JOB_NAME="subscription-billing-daily"
+        if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
+          gcloud scheduler jobs update http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="0 2 * * *" \
+            --uri="$SVC_URL/api/v1/subscriptions/billing" \
+            --http-method=POST \
+            --update-headers="User-Agent=Google-Cloud-Scheduler" \
+            --attempt-deadline=300s \
+            --time-zone="UTC" \
+            --quiet || true
+        else
+          gcloud scheduler jobs create http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="0 2 * * *" \
+            --uri="$SVC_URL/api/v1/subscriptions/billing" \
+            --http-method=POST \
+            --headers="User-Agent=Google-Cloud-Scheduler" \
+            --attempt-deadline=300s \
+            --time-zone="UTC" \
+            --quiet || true
+        fi
+        echo -e "${GREEN}[infra] ✓${NC} Subscription billing scheduler job ensured (runs daily at 02:00 UTC)"
+
+        # 5d. Horizon Watchdog job (optional; enabled via --horizon-watchdog)
         if [[ "${TARGET_HORIZON_WATCHDOG}" -eq 1 ]]; then
           echo -e "${BLUE}[infra] Ensuring Horizon Watchdog scheduler job...${NC}"
 
@@ -1784,6 +1887,58 @@ elif [[ "$TARGET_HORIZON_WATCHDOG" -eq 1 ]]; then
 elif [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_WS" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
   # Full deploy: run infrastructure checks
   setup_infrastructure
+elif [[ "$TARGET_SETUP_HATLONE_INFRA" -eq 1 ]]; then
+  # Deploy hatlone-ws: ensure Pub/Sub topics and subscriptions exist
+  # Call the same setup function but only for hatlone-ws infrastructure
+  echo -e "${BLUE}[infra] Setting up infrastructure for hatlone-ws...${NC}"
+  # Ensure aggregated topics and subscriptions (reuse logic from setup_infrastructure)
+  local agg_topics=(
+    "hatlone.genai.streams"
+    "hatlone.discovery.events"
+    "hatlone.artifact.events"
+    "hatlone.interaction.events"
+    "hatlone.analysis.events"
+    "hatlone.verified.streams"
+    "hatlone.horizon.events"
+    "hatlone.operations.events"
+    "source.poll"
+  )
+  # 4.1 Ensure aggregated topics
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for hatlone-ws...${NC}"
+  for topic in "${agg_topics[@]}"; do
+    if ! gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      gcloud pubsub topics create "$topic" --project="$PROJECT_ID" --message-ordering --quiet || true
+      echo -e "${GREEN}  ✓${NC} Created topic: $topic"
+    else
+      echo -e "${GREEN}  ✓${NC} $topic exists"
+    fi
+  done
+  # 4.2 Ensure ws-broker subscriptions
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for ws-broker...${NC}"
+  for topic in "${agg_topics[@]}"; do
+    local sub_id="${topic}-ws-broker"
+    if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      local ordering
+      ordering=$(gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" --format="value(enableMessageOrdering)" 2>/dev/null || echo "False")
+      if [[ "$ordering" != "True" ]]; then
+        echo -e "${YELLOW}[infra] Recreating subscription with ordering enabled:${NC} $sub_id"
+        gcloud pubsub subscriptions delete "$sub_id" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+        gcloud pubsub subscriptions create "$sub_id" \
+          --project="$PROJECT_ID" \
+          --topic="$topic" \
+          --enable-message-ordering \
+          --quiet >/dev/null 2>&1 || true
+      fi
+      echo -e "${GREEN}  ✓${NC} $sub_id exists"
+    else
+      gcloud pubsub subscriptions create "$sub_id" \
+        --project="$PROJECT_ID" \
+        --topic="$topic" \
+        --enable-message-ordering \
+        --quiet >/dev/null 2>&1 || true
+      echo -e "${GREEN}  ✓${NC} Created subscription: $sub_id"
+    fi
+  done
 fi
 
 if [[ "$TARGET_WEB" -eq 1 ]]; then

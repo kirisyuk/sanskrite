@@ -413,9 +413,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 // cross-jurisdiction edges are likely errors (e.g., Indian regulator controlling Saudi company).
 func isCrossJurisdictionSuspicious(edgeType models.DependencyType, srcPath, dstPath string) bool {
 	srcJurisdiction := extractJurisdiction(srcPath)
-	dstJurisdiction := extractJurisdiction(dstPath)
-
-	// If either jurisdiction is empty/global, not suspicious
+	dstJurisdiction := extractJurisdiction(dstPath)	// If either jurisdiction is empty/global, not suspicious
 	if srcJurisdiction == "" || dstJurisdiction == "" {
 		return false
 	}

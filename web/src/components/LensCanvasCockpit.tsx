@@ -9705,7 +9705,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       const label =
         String(fragment?.labels?.en || fragment?.label || '').trim() ||
-        canonicalPath.split('/').filter(Boolean).slice(-1)[0] ||
+        humanizeCanonicalPath(canonicalPath) ||
         fragmentId;
       const type = String(fragment?.type || '').trim() || undefined;
       const state = extractStateMetrics(fragment?.state);
@@ -9955,7 +9955,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       const label =
         String(fragment?.labels?.en || fragment?.label || entity?.name || '').trim() ||
-        canonicalPath.split('/').pop() ||
+        humanizeCanonicalPath(canonicalPath) ||
         fragmentId;
       const type = String(fragment?.type || entity?.type || '').trim() || undefined;
       const state = extractStateMetrics(fragment?.state);

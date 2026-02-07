@@ -1441,7 +1441,10 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	if frag.Labels == nil {
 		frag.Labels = map[string]string{}
 	}
-	if isPlaceholderLabel(frag.Labels["en"]) {
+	// Domain labels from intent resolution should always win over stale/fallback labels.
+	// Unlike entity fragments, domain titles are deterministic (contractType + facets) and
+	// the intent-resolved title carries richer context (e.g., full country names vs geo codes).
+	if strings.TrimSpace(title) != "" {
 		frag.Labels["en"] = title
 	}
 	if desc != "" {

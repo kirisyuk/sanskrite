@@ -680,6 +680,7 @@ func main() {
 	legalNameIndex := make(map[string][]*models.HorizonFragment)              // type:legalName -> fragments
 	labelENIndex := make(map[string][]*models.HorizonFragment)                // type:label_en -> fragments (Tier 2)
 	normalizedLegalIndex := make(map[string][]*models.HorizonFragment)        // type:normalized_legal -> fragments
+	normalizedLegalNAIndex := make(map[string][]*models.HorizonFragment)     // type:ns:na:normalized -> ORG fragments with unknown jurisdiction (for cross-match into iso2-scoped clusters)
 	orgNormalizedNameIndex := make(map[string][]*models.HorizonFragment)      // type:normalized(label/legal) -> org fragments (LOW-signal stub rescue)
 	facilityNormalizedNameIndex := make(map[string][]*models.HorizonFragment) // facility_key -> facility fragments (normalized name; scoped by /fac/{org}/)
 	geoCityIndex := make(map[string][]*models.HorizonFragment)                // city_name -> geo fragments
@@ -766,11 +767,16 @@ func main() {
 						continue
 					}
 					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
-					if iso2 != "na" {
-						normalized := normalizeLegalName(legalName)
-						if normalized != "" {
+					normalized := normalizeLegalName(legalName)
+					if normalized != "" {
+						if iso2 != "na" {
 							key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, normalized)
 							normalizedLegalIndex[key] = append(normalizedLegalIndex[key], f)
+						} else {
+							// Index "na" ORG fragments separately — they'll be merged into
+							// iso2-scoped clusters during cluster building (Priority 5).
+							naKey := fmt.Sprintf("%s:%s:na:%s", f.Type, ns, normalized)
+							normalizedLegalNAIndex[naKey] = append(normalizedLegalNAIndex[naKey], f)
 						}
 					}
 				}
@@ -976,6 +982,7 @@ func main() {
 	log.Printf("✓ LegalName index: %d unique keys", len(legalNameIndex))
 	log.Printf("✓ Label[en] index: %d unique keys", len(labelENIndex))
 	log.Printf("✓ Normalized legal index: %d unique keys", len(normalizedLegalIndex))
+	log.Printf("✓ Normalized legal NA index: %d unique keys (org fragments with unknown jurisdiction)", len(normalizedLegalNAIndex))
 	log.Printf("✓ ORG normalized name index: %d unique keys", len(orgNormalizedNameIndex))
 	log.Printf("✓ FACILITY normalized name index: %d unique keys", len(facilityNormalizedNameIndex))
 	log.Printf("✓ GEO city index: %d unique cities", len(geoCityIndex))
@@ -1799,9 +1806,21 @@ func main() {
 	// NOTE: Skip for GEO_REGION — normalization is too aggressive (e.g., "City of London" → "London")
 	normalizedLegalClusters := 0
 	for key, frags := range normalizedLegalIndex {
-		if len(frags) > 1 {
+		// Also pull in "na" (unknown jurisdiction) fragments whose normalized name matches.
+		// Key format: "ORGANIZATION:org:sa:stc bank" → extract type, ns, normalized → look up "ORGANIZATION:org:na:stc bank".
+		allFrags := frags
+		if parts := strings.SplitN(key, ":", 4); len(parts) == 4 {
+			naKey := fmt.Sprintf("%s:%s:na:%s", parts[0], parts[1], parts[3])
+			if naFrags, ok := normalizedLegalNAIndex[naKey]; ok && len(naFrags) > 0 {
+				allFrags = make([]*models.HorizonFragment, 0, len(frags)+len(naFrags))
+				allFrags = append(allFrags, frags...)
+				allFrags = append(allFrags, naFrags...)
+			}
+		}
+
+		if len(allFrags) > 1 {
 			var unprocessed []*models.HorizonFragment
-			for _, f := range frags {
+			for _, f := range allFrags {
 				if !processedFragmentIDs[f.ID] {
 					unprocessed = append(unprocessed, f)
 				}
@@ -1834,6 +1853,41 @@ func main() {
 				normalizedLegalClusters++
 			}
 		}
+	}
+	// Also check "na" groups that didn't match any iso2-scoped group (e.g., multiple legacy orgs with same name).
+	for naKey, naFrags := range normalizedLegalNAIndex {
+		if len(naFrags) <= 1 {
+			continue
+		}
+		var unprocessed []*models.HorizonFragment
+		for _, f := range naFrags {
+			if !processedFragmentIDs[f.ID] {
+				unprocessed = append(unprocessed, f)
+			}
+		}
+		if len(unprocessed) <= 1 {
+			continue
+		}
+		fragType := unprocessed[0].Type
+		if fragType == models.FragmentTypeOrganization {
+			if skip, reason := shouldSkipOrgNameCluster("normalizedLegal", unprocessed); skip {
+				if *verbose {
+					log.Printf("  SKIP ORG cluster (normalizedLegal/na): key=%s reason=%s", naKey, reason)
+				}
+				continue
+			}
+		}
+		cluster := &DuplicateCluster{
+			MatchType:  "normalizedLegal",
+			MatchValue: naKey,
+			Fragments:  unprocessed,
+		}
+		cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
+		clusters = append(clusters, cluster)
+		for _, f := range unprocessed {
+			processedFragmentIDs[f.ID] = true
+		}
+		normalizedLegalClusters++
 	}
 	log.Printf("  Found %d normalizedLegal-based clusters", normalizedLegalClusters)
 
@@ -2626,6 +2680,11 @@ func stripLegalFormSuffixFromSlug(slug string) string {
 		return slug
 	}
 
+	// Strip slugified parenthetical annotations first, e.g.:
+	//   "stc-bank-formerly-stc-pay-pjsc" → "stc-bank-pjsc"
+	// Handles patterns like "-formerly-...", "-previously-...", "-now-..."
+	slug = stripSlugParenthetical(slug)
+
 	// Common legal forms (same list as in taxonomy.stripLegalFormSuffix)
 	legalForms := []string{"inc", "llc", "jsc", "pjsc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa", "as", "ab", "bv", "nv", "se", "co", "pty", "cjsc", "llp", "lp", "sp", "sup", "fsup", "soe"}
 
@@ -2651,6 +2710,46 @@ func stripLegalFormSuffixFromSlug(slug string) string {
 	return slug
 }
 
+// stripSlugParenthetical removes slugified parenthetical annotations from slugs.
+// These arise from LLM-generated names like "STC Bank (formerly stc pay)" that get
+// slugified to "stc-bank-formerly-stc-pay-pjsc".
+//
+// Detected patterns: -formerly-..., -previously-..., -now-..., -aka-..., -fka-..., -dba-...
+// The annotation runs from the trigger word to the end of the slug or to the last legal form token.
+func stripSlugParenthetical(slug string) string {
+	triggers := []string{"-formerly-", "-previously-", "-now-", "-aka-", "-fka-", "-dba-"}
+	for _, t := range triggers {
+		idx := strings.Index(slug, t)
+		if idx < 0 {
+			continue
+		}
+		// Everything before the trigger is the "clean" part.
+		// Everything after might end with a legal form suffix — we need to keep that.
+		before := slug[:idx]
+		after := slug[idx+len(t):]
+		// Check if there's a legal form at the very end of 'after'.
+		legalTail := extractTrailingLegalForm(after)
+		if legalTail != "" {
+			return before + "-" + legalTail
+		}
+		return before
+	}
+	return slug
+}
+
+// extractTrailingLegalForm returns the legal form suffix at the very end of a slug segment, if any.
+// E.g., "stc-pay-pjsc" → "pjsc", "stc-pay" → "".
+func extractTrailingLegalForm(slug string) string {
+	legalForms := []string{"pjsc", "cjsc", "ojsc", "gmbh", "sarl", "corp", "pllc", "fsup", "llc", "jsc", "ltd", "plc", "inc", "srl", "spa", "sup", "soe", "llp", "pty", "ag", "sa", "as", "ab", "bv", "nv", "se", "co", "lp", "sp"}
+	for _, lf := range legalForms {
+		suffix := "-" + lf
+		if strings.HasSuffix(slug, suffix) {
+			return lf
+		}
+	}
+	return ""
+}
+
 // normalizeOrgCanonicalPathForDedup normalizes org canonical paths by treating '_' and '-' as equivalent.
 // This is used only for grouping candidates; canonical selection is still score-based.
 func normalizeOrgCanonicalPathForDedup(canonicalPath string) string {
@@ -2663,6 +2762,8 @@ func normalizeOrgCanonicalPathForDedup(canonicalPath string) string {
 		return ""
 	}
 	slug = strings.ReplaceAll(strings.ToLower(slug), "_", "-")
+	// Strip slugified parenthetical annotations (e.g., "-formerly-stc-pay") before comparison.
+	slug = stripSlugParenthetical(slug)
 	geo := strings.TrimSpace(cp.Org.Geo)
 	if cp.Org.Legacy || geo == "" {
 		geo = "na"
@@ -4023,32 +4124,34 @@ func getEnvDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-// normalizeLegalName removes common suffixes like JSC, LLC, Inc, etc.
+// normalizeLegalName removes common suffixes like JSC, PJSC, LLC, Inc, etc.,
+// strips parenthetical annotations like "(formerly ...)", and normalizes spacing/punctuation.
+// Delegates to scout.NormalizeLegalName for consistency with the ingestion-time deduplicator.
+// Additional suffixes (holding, group, international) are stripped on top for the batch tool's
+// more aggressive dedup context (these are intentionally excluded from the ingestion-time normalizer
+// to avoid false merges on the hot path).
 func normalizeLegalName(name string) string {
-	name = strings.TrimSpace(strings.ToLower(name))
+	// Use the canonical normalizer (strips legal suffixes + parenthetical annotations).
+	normalized := scout.NormalizeLegalName(name)
+	if normalized == "" {
+		return ""
+	}
 
-	// Common suffixes to remove
-	suffixes := []string{
-		" jsc", " llc", " inc", " inc.", " ltd", " ltd.", " limited",
-		" corp", " corp.", " corporation", " co", " co.", " company",
-		" plc", " ag", " gmbh", " sa", " sas", " bv", " nv", " ab",
-		" oy", " as", " a/s", " kft", " zrt", " sp. z o.o.", " sp.zo.o",
-		" pty", " pty.", " pty ltd", " pte", " pte.", " pte ltd",
+	// Additional aggressive suffixes for batch dedup (not safe for real-time ingestion).
+	extraSuffixes := []string{
 		" holding", " holdings", " group", " international",
+		" sas", " a/s", " kft", " zrt",
+		" sp z oo", " spzoo",
+		" pty", " pte", " pte ltd",
+	}
+	for _, suffix := range extraSuffixes {
+		if strings.HasSuffix(normalized, suffix) {
+			normalized = strings.TrimSuffix(normalized, suffix)
+			break
+		}
 	}
 
-	for _, suffix := range suffixes {
-		name = strings.TrimSuffix(name, suffix)
-	}
-
-	// Remove punctuation and extra spaces
-	name = strings.ReplaceAll(name, ",", "")
-	name = strings.ReplaceAll(name, ".", "")
-	name = strings.ReplaceAll(name, "'", "")
-	name = strings.ReplaceAll(name, "-", " ")
-	name = strings.Join(strings.Fields(name), " ")
-
-	return strings.TrimSpace(name)
+	return strings.TrimSpace(normalized)
 }
 
 // =============================================================================

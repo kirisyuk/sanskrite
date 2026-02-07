@@ -1023,8 +1023,11 @@ func normalizeLegalForm(legalForm string) (canonical string, original string) {
 		// JSC/Joint Stock equivalents
 		"jsc": "jsc", "joint stock company": "jsc",
 		"ао": "jsc", "акционерное общество": "jsc",
+		"pjsc": "pjsc", "public joint stock company": "pjsc", "public joint-stock company": "pjsc",
 		"пао": "pjsc", "публичное акционерное общество": "pjsc",
+		"cjsc": "cjsc", "closed joint stock company": "cjsc", "closed joint-stock company": "cjsc",
 		"зао": "cjsc", "закрытое акционерное общество": "cjsc", // legacy, but keep for backward compat
+		"ojsc": "jsc", "open joint stock company": "jsc", "open joint-stock company": "jsc",
 		"ag": "jsc", "aktiengesellschaft": "jsc",
 		"sa": "jsc", "société anonyme": "jsc", "sociedad anónima": "jsc",
 		"spa": "jsc", "società per azioni": "jsc",
@@ -1072,6 +1075,17 @@ func normalizeLegalForm(legalForm string) (canonical string, original string) {
 	return "", ""
 }
 
+// reOrgParenthetical matches parenthetical annotations LLMs often inject into org names.
+// Examples: "(formerly stc pay)", "(ex-Aramex)", "(now STC Bank)", "(fka STC Pay)", "(dba ...)"
+var reOrgParenthetical = regexp.MustCompile(`(?i)\s*\((?:formerly|previously|ex-?|now|fka|dba|aka|trading as|prev\.?|f/k/a|d/b/a|a/k/a)\s[^)]*\)`)
+
+// stripOrgParenthetical removes LLM-injected parenthetical annotations from org names.
+// e.g., "STC Bank (formerly stc pay) PJSC" → "STC Bank PJSC"
+func stripOrgParenthetical(name string) string {
+	cleaned := reOrgParenthetical.ReplaceAllString(name, "")
+	return strings.TrimSpace(cleaned)
+}
+
 // extractLegalFormFromName attempts to extract legal form from organization name.
 // Returns: (nameWithoutForm, legalFormCanonical, legalFormOriginal)
 // If no legal form detected, returns (originalName, "", "")
@@ -1084,6 +1098,14 @@ func extractLegalFormFromName(orgName string) (nameWithoutForm string, legalForm
 	// Try to find legal form at the end or beginning
 
 	orgName = strings.TrimSpace(orgName)
+
+	// Strip parenthetical annotations before legal form extraction.
+	// e.g., "STC Bank (formerly stc pay) PJSC" → "STC Bank PJSC"
+	// This prevents "(formerly ...)" from polluting the slug.
+	cleaned := stripOrgParenthetical(orgName)
+	if cleaned != "" {
+		orgName = cleaned
+	}
 
 	// Try end of name first (most common pattern)
 	words := strings.Fields(orgName)

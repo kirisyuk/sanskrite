@@ -284,7 +284,7 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	// Best-effort: record observed redirect so future runs skip redundant work.
-	redirectWrites, redirectStable, redirectVariability := r.recordRedirect(ctx, inputPath, result.CanonicalPath, fragmentType, "canonical_path_resolver")
+	redirectWrites, redirectStable, redirectVariability := r.recordRedirect(ctx, inputPath, result.CanonicalPath, fragmentType, "canonical_path_resolver", 5)
 	r.recordTelemetry(ctx, fragmentType, redirectHits, redirectWrites, redirectStable, redirectVariability)
 
 	return result, nil
@@ -937,7 +937,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	}
 
 	// Best-effort: record observed redirect so future runs skip redundant work.
-	redirectWrites, redirectStable, redirectVariability := r.recordRedirect(ctx, inputPath, result.CanonicalPath, fragmentType, "canonical_path_resolver")
+	redirectWrites, redirectStable, redirectVariability := r.recordRedirect(ctx, inputPath, result.CanonicalPath, fragmentType, "canonical_path_resolver", 5)
 	r.recordTelemetry(ctx, fragmentType, redirectHits, redirectWrites, redirectStable, redirectVariability)
 
 	return result, nil
@@ -995,11 +995,19 @@ func parseMarketGeoSector(canonicalPath string) (string, string) {
 }
 
 // RecordRedirect stores a canonical path rewrite for future fast-path resolution.
+// Uses warmup threshold of 5 observations before becoming stable (suitable for heuristic rewrites).
 func (r *CanonicalPathResolver) RecordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string) (bool, bool, bool) {
-	return r.recordRedirect(ctx, fromPath, toPath, fragmentType, reason)
+	return r.recordRedirect(ctx, fromPath, toPath, fragmentType, reason, 5)
 }
 
-func (r *CanonicalPathResolver) recordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string) (bool, bool, bool) {
+// RecordDeterministicRedirect stores a canonical path redirect that becomes immediately stable.
+// Use for deterministic pipeline decisions (dedup, org upgrade, scope rewrite) where the redirect
+// is authoritative and should be applied on the next Resolve() call without warmup.
+func (r *CanonicalPathResolver) RecordDeterministicRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string) (bool, bool, bool) {
+	return r.recordRedirect(ctx, fromPath, toPath, fragmentType, reason, 1)
+}
+
+func (r *CanonicalPathResolver) recordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string, warmupThreshold int) (bool, bool, bool) {
 	if r == nil || r.redirectsRepo == nil {
 		return false, false, false
 	}
@@ -1015,7 +1023,7 @@ func (r *CanonicalPathResolver) recordRedirect(ctx context.Context, fromPath str
 		toPath,
 		reason,
 		string(fragmentType),
-		5,
+		warmupThreshold,
 		7*24*time.Hour,
 	)
 	if err == nil && redirect != nil {

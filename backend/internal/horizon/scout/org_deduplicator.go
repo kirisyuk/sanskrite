@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 
@@ -465,6 +466,11 @@ func isExplicitCountryCode(cc string) bool {
 
 // filterOrgDedupCandidates applies jurisdiction-aware filtering to prevent false cross-country merges.
 // This is intentionally conservative: it may reduce merging, but it preserves correctness.
+//
+// Exception: when one side is /org/na/... (unknown jurisdiction) and the other is /org/{cc}/...,
+// we allow the merge if the slug cores (name without legal form suffix) are identical.
+// This catches duplicates like /org/na/stc-bank-plc vs /org/sa/stc-bank-pjsc where the
+// same entity was ingested with different legal forms and missing jurisdiction.
 func filterOrgDedupCandidates(fragment *models.HorizonFragment, cands []*models.HorizonFragment, strength string) []*models.HorizonFragment {
 	if fragment == nil || len(cands) == 0 {
 		return cands
@@ -488,11 +494,16 @@ func filterOrgDedupCandidates(fragment *models.HorizonFragment, cands []*models.
 		if isExplicitCountryCode(fs.cc) && isExplicitCountryCode(cs.cc) && fs.cc != cs.cc {
 			continue
 		}
-		// For weaker signals, avoid merging unknown-jurisdiction orgs (/org/na/...) into country-scoped ones.
+		// For weaker signals, avoid merging unknown-jurisdiction orgs (/org/na/...) into country-scoped ones
+		// UNLESS slug cores (name without legal form) are identical — strong evidence of same entity.
 		switch strength {
 		case "short", "label", "normalized":
 			if strings.ToLower(strings.TrimSpace(fs.cc)) == "na" && isExplicitCountryCode(cs.cc) {
-				continue
+				if !slugCoresMatch(fs.slug, cs.slug) {
+					continue
+				}
+				// Slug cores match (e.g. "stc-bank-plc" and "stc-bank-pjsc" both have core "stc-bank").
+				// Allow the merge — the country-scoped path is the better canonical.
 			}
 		}
 		out = append(out, c)
@@ -501,6 +512,38 @@ func filterOrgDedupCandidates(fragment *models.HorizonFragment, cands []*models.
 		return nil
 	}
 	return out
+}
+
+// slugCoresMatch compares two org slug strings after stripping legal form suffixes.
+// e.g., "stc-bank-pjsc" and "stc-bank-plc" both reduce to "stc-bank" → match.
+func slugCoresMatch(slugA, slugB string) bool {
+	coreA := stripSlugLegalForm(strings.ToLower(strings.TrimSpace(slugA)))
+	coreB := stripSlugLegalForm(strings.ToLower(strings.TrimSpace(slugB)))
+	return coreA != "" && coreB != "" && coreA == coreB
+}
+
+// stripSlugLegalForm removes trailing legal form suffixes from a slug.
+// Uses the same forms as normalizeLegalForm but operates on hyphenated slugs.
+func stripSlugLegalForm(slug string) string {
+	legalForms := []string{
+		"pjsc", "cjsc", "ojsc", "jsc",
+		"pllc", "llc", "inc", "ltd", "co", "corp",
+		"plc", "gmbh", "sarl", "srl", "ag", "sa", "spa", "as", "ab",
+		"bv", "nv", "se", "lp", "llp", "soe", "sup", "fsup", "sp",
+	}
+	changed := true
+	for changed {
+		changed = false
+		for _, lf := range legalForms {
+			suffix := "-" + lf
+			if strings.HasSuffix(slug, suffix) {
+				slug = strings.TrimSuffix(slug, suffix)
+				changed = true
+				break
+			}
+		}
+	}
+	return slug
 }
 
 // orgCanonicalVariants returns alternative canonical path variants for org slugs
@@ -661,19 +704,37 @@ func extractWikidataIDFromFragment(f *models.HorizonFragment) string {
 
 // LegalSuffixesToRemove defines common legal suffixes to strip during normalization.
 var LegalSuffixesToRemove = []string{
-	" jsc", " llc", " inc", " ltd", " co", " corp", " corporation",
+	" jsc", " pjsc", " cjsc", " ojsc",
+	" llc", " pllc", " inc", " ltd", " co", " corp", " corporation",
 	" group", " holdings", " limited", " company", " pty ltd",
 	" sa", " ag", " se", " gmbh", " ab", " oy", " as", " spa",
-	" nv", " bv", " sarl", " plc", " lp", " llp",
+	" nv", " bv", " sarl", " srl", " plc", " lp", " llp",
 	" s.a.", " a.g.", " s.p.a.", " n.v.", " b.v.", " s.à r.l.", " p.l.c.",
+	" p.j.s.c.", " c.j.s.c.",
 }
 
-// NormalizeLegalName removes common legal suffixes and normalizes spacing/punctuation.
+// reParenthetical matches parenthetical annotations that LLMs often inject into org names.
+// Examples: "(formerly stc pay)", "(ex-Aramex)", "(now STC Bank)", "(fka STC Pay)", "(dba ...)"
+var reParenthetical = regexp.MustCompile(`\s*\((?:formerly|previously|ex-?|now|fka|dba|aka|trading as|prev\.?|f/k/a|d/b/a|a/k/a)\s[^)]*\)`)
+
+// stripParentheticalAnnotations removes LLM-injected parenthetical annotations from org names.
+// e.g., "STC Bank (formerly stc pay)" → "STC Bank"
+func stripParentheticalAnnotations(name string) string {
+	cleaned := reParenthetical.ReplaceAllString(name, "")
+	return strings.TrimSpace(cleaned)
+}
+
+// NormalizeLegalName removes common legal suffixes, parenthetical annotations,
+// and normalizes spacing/punctuation for deduplication matching.
 func NormalizeLegalName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name == "" {
 		return ""
 	}
+
+	// Remove parenthetical annotations like "(formerly stc pay)" before suffix stripping.
+	// This prevents "(formerly ...)" from masking the legal suffix at the end.
+	name = stripParentheticalAnnotations(name)
 
 	// Remove common legal suffixes
 	for _, suffix := range LegalSuffixesToRemove {

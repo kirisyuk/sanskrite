@@ -388,8 +388,8 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
   const type = normalizeEdgeType(edgeType);
   
   switch (type) {
-    // Domain contract relations should be placed to the RIGHT (context).
-    // Domains are "meta" anchors, not supply-chain nor market peers.
+    // Domain contract relations — placed to the LEFT (market group) as compact mini-nodes.
+    // Domains are "meta" anchors shown in the left pane without subcategory expansion.
     case 'FOCUSES_ON':
     case 'INVOLVES_ACTOR':
     case 'IN_GEO_SCOPE':
@@ -397,7 +397,7 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'RELATED_DOMAIN':
     case 'BROADENS_TO':
     case 'NARROWS_TO':
-      return 'context';
+      return 'market';
 
     // Market-defining relation:
     // - If the central node DOMINATES the neighbor (outgoing), the neighbor is "market" (left).
@@ -565,6 +565,14 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'USES',
     'NEEDS',
     'EXTRACTS_FROM',
+    // Domain contract relations (compact mini-nodes in left pane)
+    'FOCUSES_ON',
+    'INVOLVES_ACTOR',
+    'IN_GEO_SCOPE',
+    'ABOUT',
+    'RELATED_DOMAIN',
+    'BROADENS_TO',
+    'NARROWS_TO',
   ]);
 
   // RIGHT side: environment (context/regulation/competition/influence).
@@ -1258,7 +1266,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'AFFECTS',
     'REGULATES',
     'IMPACTS',
-    // Domain contract relations (DOMAIN should be to the RIGHT of its entities)
+    // Domain contract relations (hierarchy signal, but DOMAIN nodes stay in left pane as compact mini-nodes)
     'FOCUSES_ON',
     'INVOLVES_ACTOR',
     'IN_GEO_SCOPE',
@@ -1327,6 +1335,15 @@ export async function layoutLevelsTwoPane<T = any>(
     'INFLUENCES',
     'AFFECTS',
     'IMPACTS',
+    // Domain contract relations: keep DOMAIN nodes in the left group (compact mini-nodes).
+    // Never promote them into the right backbone.
+    'FOCUSES_ON',
+    'INVOLVES_ACTOR',
+    'IN_GEO_SCOPE',
+    'ABOUT',
+    'RELATED_DOMAIN',
+    'BROADENS_TO',
+    'NARROWS_TO',
   ]);
 
   const getParentChild = (e: any): { parent: string; child: string } | null => {
@@ -1743,6 +1760,9 @@ export async function layoutLevelsTwoPane<T = any>(
       nodeType === 'DEPOSIT' ||
       nodeType === 'MARKET' ||
       cp.startsWith('/market/') ||
+      // Domains — always compact mini-nodes in left pane (no subcategory expansion)
+      nodeType === 'DOMAIN' ||
+      cp.startsWith('/domain/') ||
       // Strategic layer (decision points & mechanisms)
       nodeType === 'DECISION_POINT' ||
       nodeType === 'MECHANISM' ||
@@ -1804,6 +1824,8 @@ export async function layoutLevelsTwoPane<T = any>(
       'FACILITY': 'Facilities',
       // Natural Resources
       'DEPOSIT': 'Natural Resources',
+      // Domains (meta-anchors, shown as compact mini-nodes)
+      'DOMAIN': 'Domains',
       // Milestones
       'EVENT': 'Milestones',
       // Threats
@@ -1836,6 +1858,8 @@ export async function layoutLevelsTwoPane<T = any>(
     if (tt === 'DEPOSIT') return 215;
     if (tt === 'GEO_REGION') return 220;
     if (tt === 'LOCATION') return 230;
+    // Domains (meta-anchors, compact in left pane)
+    if (tt === 'DOMAIN') return 250;
     // Other domain objects
     if (tt === 'EVENT') return 310;
     if (tt === 'RISK') return 320;
