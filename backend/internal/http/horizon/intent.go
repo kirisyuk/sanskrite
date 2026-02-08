@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
@@ -62,26 +63,42 @@ func (h *HorizonHandlers) ResolveIntent(w http.ResponseWriter, r *http.Request) 
 
 	// Best-effort: if anchors already exist in our graph, fill anchor.name from the stored English label.
 	// This improves linking and makes UI/lens naming more stable without requiring extra LLM grounding.
+	// Parallelized: all GetByCanonicalPath calls run concurrently.
 	if intent != nil && h.service != nil && h.service.Fragments() != nil && len(intent.Anchors) > 0 {
+		type anchorNameResult struct {
+			idx  int
+			name string
+		}
+		results := make(chan anchorNameResult, len(intent.Anchors))
+		var wg sync.WaitGroup
 		for i := range intent.Anchors {
 			cp := strings.TrimSpace(intent.Anchors[i].CanonicalPath)
 			if cp == "" {
 				continue
 			}
-			frag, ferr := h.service.Fragments().GetByCanonicalPath(r.Context(), cp)
-			if ferr != nil || frag == nil {
-				continue
-			}
-			n := strings.TrimSpace(frag.Labels["en"])
-			if n == "" {
-				n = strings.TrimSpace(frag.Identifiers["shortName"])
-			}
-			if n == "" {
-				n = strings.TrimSpace(frag.Identifiers["legalName"])
-			}
-			if n != "" {
-				intent.Anchors[i].Name = n
-			}
+			wg.Add(1)
+			go func(idx int, canonicalPath string) {
+				defer wg.Done()
+				frag, ferr := h.service.Fragments().GetByCanonicalPath(r.Context(), canonicalPath)
+				if ferr != nil || frag == nil {
+					return
+				}
+				n := strings.TrimSpace(frag.Labels["en"])
+				if n == "" {
+					n = strings.TrimSpace(frag.Identifiers["shortName"])
+				}
+				if n == "" {
+					n = strings.TrimSpace(frag.Identifiers["legalName"])
+				}
+				if n != "" {
+					results <- anchorNameResult{idx: idx, name: n}
+				}
+			}(i, cp)
+		}
+		wg.Wait()
+		close(results)
+		for r := range results {
+			intent.Anchors[r.idx].Name = r.name
 		}
 	}
 	trace.Log(r.Context(), "intent", "intent.resolve.http.ok", map[string]any{

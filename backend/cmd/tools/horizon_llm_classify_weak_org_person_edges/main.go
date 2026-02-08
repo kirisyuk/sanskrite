@@ -378,7 +378,7 @@ func newGenAIClient() *gen_combined.Client {
 }
 
 func newTaskExecutor(mm *ai.AIModelManager) *ai.AITaskExecutor {
-	// VertexAIService currently uses GEMINI_API_KEY (Generative Language API).
+	// GeminiService uses GEMINI_API_KEY (Generative Language API).
 	// In server environments this is normally configured.
 	ctx := context.Background()
 	apiKey := loadGeminiOrVertexAPIKey(ctx, strings.TrimSpace(*projectID), false /* allowTest */)
@@ -389,7 +389,7 @@ func newTaskExecutor(mm *ai.AIModelManager) *ai.AITaskExecutor {
 	if apiKey != "" {
 		_ = os.Setenv("GEMINI_API_KEY", apiKey)
 	}
-	vertex := ai.NewVertexAIService(apiKey, mm)
+	vertex := ai.NewGeminiService(apiKey, mm)
 	return ai.NewAITaskExecutor([]ai.AIService{vertex}, mm)
 }
 
@@ -677,7 +677,7 @@ func classifyBatch(ctx context.Context, client *gen_combined.Client, exec *ai.AI
 			return nil
 		})
 
-		// NOTE: task_executor/VertexAIService does not support tool calling; require raw JSON output.
+		// NOTE: task_executor/GeminiService does not support tool calling; require raw JSON output.
 		fullInput := buildTaskExecutorPrompt(llmBatch)
 
 		task := &ai.AITask{

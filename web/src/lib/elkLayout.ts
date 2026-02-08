@@ -1101,6 +1101,8 @@ export async function layoutLevelsTwoPane<T = any>(
     layerSpacing = 150,
     collapsedSubcategories = new Set<string>(),
     onToggleSubcategoryCollapse,
+    expandedRoleGroups = new Set<string>(),
+    onToggleRoleOverflow,
     compactLeftPane = false,
     rightDockMode = false,
     rightDockStateByNodeId,
@@ -1121,6 +1123,8 @@ export async function layoutLevelsTwoPane<T = any>(
     if (collapsedSubcategories.has(expandedKey)) return false;
     // Explicit collapse marker
     if (collapsedSubcategories.has(perGroupKey)) return true;
+    // Business block cards: collapsed by default (expand via "Show details").
+    if (edgeType.startsWith('__block__:')) return true;
     // Check global default (edge type alone)
     if (collapsedSubcategories.has(edgeType)) return true;
     // Check default-collapsed edge types (e.g., RELATIVE_OF)
@@ -1133,6 +1137,8 @@ export async function layoutLevelsTwoPane<T = any>(
   // Strip any prior grouping from fragment nodes (ReactFlow parent linkage must be rebuilt deterministically).
   const fragments: Node<T>[] = nodes
     .filter((n) => !isGroup(n))
+    // Drop derived context-card nodes; they are re-created deterministically by layout.
+    .filter((n) => !String((n as any)?.id || '').trim().startsWith('levels:leftblock:card:'))
     .map((n) => {
       // Clone node + data to allow deterministic view-only rewrites (without mutating input).
       const out: any = { ...n, data: { ...(n.data as any) } };
@@ -1144,25 +1150,6 @@ export async function layoutLevelsTwoPane<T = any>(
       // Clear stale `hidden` so the current collapse state can decide visibility deterministically.
       if (Boolean(out.hidden) && Boolean((out?.data as any)?.hiddenByStack)) {
         delete out.hidden;
-      }
-      // When Right Dock mode is enabled, remove stale RIGHT-stack fields so the UI does not show stack toggles.
-      // IMPORTANT: left-pane subcategory stacks must remain intact, so only clear known right-stack keys.
-      if (rightDockMode) {
-        const d: any = out?.data;
-        const k = String(d?.stackGroupKey || '').trim();
-        const isRightStackKey = k.startsWith('levels:rightstack:') || k.startsWith('levels:rightstackp:');
-        if (isRightStackKey) {
-          delete d.hiddenByStack;
-          delete d.stackGroupKey;
-          delete d.stackCount;
-          delete d.stackExpanded;
-          delete (d as any).stackControllerId;
-          delete d.stackTitle;
-          delete d.stackSubtitle;
-          delete d.stackKind;
-          delete d.stackVisualType;
-          delete d.onToggleStack;
-        }
       }
       return out as Node<T>;
     });
@@ -1783,11 +1770,16 @@ export async function layoutLevelsTwoPane<T = any>(
       '|' +
       String(d?.type || '').toUpperCase().trim().replace(/\s+/g, '_') +
       '|' +
-      String(d?.canonicalPath || '').trim();
+      String(d?.canonicalPath || '').trim() +
+      '|' +
+      String(Boolean(d?.contextCard));
     const cached = (leftPaneLayoutHeightFor as any)._cache?.get(key);
     if (typeof cached === 'number') return cached;
     // Respect explicit nodeSize when present (A/B by node property).
     // This avoids mismatches where rendering is compact but layout still reserves full height.
+    if (Boolean(d?.contextCard)) {
+      return nodeHeight * 2;
+    }
     const out =
       String(d?.nodeSize || '').toLowerCase().trim() === 'compact'
         ? COMPACT_NODE_LAYOUT_HEIGHT
@@ -1795,6 +1787,31 @@ export async function layoutLevelsTwoPane<T = any>(
     const m = (leftPaneLayoutHeightFor as any)._cache || new Map<string, number>();
     m.set(key, out);
     (leftPaneLayoutHeightFor as any)._cache = m;
+    return out;
+  };
+
+  const leftPaneLayoutWidthFor = (d: any): number => {
+    // Cache by stable fields that affect compactness/width.
+    const key =
+      String(d?.nodeSize || '').toLowerCase().trim() +
+      '|' +
+      String(d?.type || '').toUpperCase().trim().replace(/\s+/g, '_') +
+      '|' +
+      String(d?.canonicalPath || '').trim() +
+      '|' +
+      String(Boolean(d?.contextCard));
+    const cached = (leftPaneLayoutWidthFor as any)._cache?.get(key);
+    if (typeof cached === 'number') return cached;
+    if (Boolean(d?.contextCard)) {
+      return nodeWidth;
+    }
+    const out =
+      String(d?.nodeSize || '').toLowerCase().trim() === 'compact'
+        ? COMPACT_NODE_WIDTH
+        : (isLeftPaneCompactNode(d) ? COMPACT_NODE_WIDTH : nodeWidth);
+    const m = (leftPaneLayoutWidthFor as any)._cache || new Map<string, number>();
+    m.set(key, out);
+    (leftPaneLayoutWidthFor as any)._cache = m;
     return out;
   };
 
@@ -1869,6 +1886,137 @@ export async function layoutLevelsTwoPane<T = any>(
     return 500; // stable middle bucket for new/unknown types
   };
 
+  // === Semantic role bucketing for left-pane groups ===
+  // Groups children by business role (derived from edge type + node type) instead of entity type.
+  // This gives the left group business meaning: "Governance", "Supply Chain", "Market", etc.
+
+  const GOVERNANCE_EDGE_SET = new Set([
+    'OWNS', 'CONTROLS', 'MANAGES', 'INVESTS_IN', 'PARENT_OF', 'SUBSIDIARY_OF',
+    'BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY', 'FOUNDED', 'ADMINISTERS',
+    'AUDITED_BY',
+  ]);
+  const SUPPLY_EDGE_SET = new Set([
+    'SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES',
+    'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM',
+  ]);
+  const MARKET_EDGE_SET = new Set([
+    'COMPETES_WITH', 'PARTICIPATES_IN', 'DOMINATES', 'HAS_SUBMARKET',
+  ]);
+  const REGULATORY_EDGE_SET = new Set([
+    'REGULATES', 'INFLUENCES', 'AFFECTS', 'IMPACTS',
+    'CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'GATEKEEPS_DECISION', 'USES_MECHANISM', 'APPLIES_TO',
+  ]);
+  const PARTNERSHIP_EDGE_SET = new Set([
+    'PARTNERS_WITH', 'COOPERATES_WITH', 'AFFILIATED_WITH', 'MEMBER_OF', 'OPERATES_VIA',
+  ]);
+  const GEO_EDGE_SET = new Set([
+    'LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'IN_GEO_SCOPE',
+  ]);
+  const LEFT_GEO_TYPES = new Set([
+    'GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY',
+  ]);
+  const LEFT_REGULATORY_TYPES = new Set(['MECHANISM', 'DECISION_POINT']);
+  const LEFT_MARKET_TYPES = new Set(['MARKET']);
+  const LEFT_PRODUCT_TYPES = new Set(['PRODUCT', 'SERVICE', 'TECHNOLOGY']);
+
+  const SEMANTIC_ROLE_LABEL: Record<string, string> = {
+    'governance': 'Governance',
+    'supply_chain': 'Supply Chain',
+    'market': 'Market',
+    'regulatory': 'Regulatory',
+    'partnerships': 'Partnerships',
+    // Business block labels (compact left pane)
+    'market_regulation': 'Market & Regulation',
+    'products_supply': 'Products & Supply',
+    'ownership_governance': 'Ownership & Governance',
+    'products': 'Products',
+    'people': 'People',
+    'geography': 'Geography',
+    'other': 'Context',
+    // Compact role labels (used in compact left pane)
+    'supply': 'Supply',
+    'context': 'Context',
+  };
+  const SEMANTIC_ROLE_ORDER: Record<string, number> = {
+    'governance': 100,
+    'supply_chain': 200,
+    'products': 250,
+    'market': 300,
+    'partnerships': 400,
+    'regulatory': 500,
+    'people': 600,
+    'geography': 700,
+    'other': 900,
+    // Compact role ordering (business blocks)
+    'market_regulation': 100,
+    'products_supply': 200,
+    'ownership_governance': 300,
+  };
+
+  // Maximum visible nodes per semantic category in left group.
+  // Beyond this, a "+N more" pill is shown.
+  const MAX_VISIBLE_PER_CATEGORY = 6;
+
+  /** Assign a semantic business role to a left-pane child based on its edge type to the parent + node type. */
+  const semanticRoleOf = (child: Node<T>, pid: string): string => {
+    const d: any = child.data;
+    const tk = normalizeFragmentType(d?.type);
+
+    // Type-first overrides: certain node types always map to a specific role.
+    // NOTE: Products should follow edge-type semantics (e.g. DOMINATES -> market/regulation),
+    // so we do NOT force product types into the products bucket here.
+    if (LEFT_GEO_TYPES.has(tk)) return 'geography';
+    if (LEFT_REGULATORY_TYPES.has(tk)) return 'regulatory';
+    if (LEFT_MARKET_TYPES.has(tk)) return 'market';
+
+    // Edge-type-based: find the best relation to the parent.
+    const cid = String(child?.id || '').trim();
+    const parentIdStr = String(pid || '').trim();
+    let bestEdge = normalizeEdgeType(String(d?.edgeTypeFromParent || '').trim());
+    if (parentIdStr && cid) {
+      for (const e of (edges || []) as any[]) {
+        const eid = String(e?.id || '').trim();
+        if (eid.startsWith('levels:agg:')) continue;
+        if (Boolean(e?.data?.levelsAgg)) continue;
+        if (Boolean(e?.data?.levelsStackProxy)) continue;
+        const s = normId(e?.source);
+        const t = normId(e?.target);
+        if (!s || !t) continue;
+        if ((s === parentIdStr && t === cid) || (s === cid && t === parentIdStr)) {
+          const et = edgeTypeOf(e);
+          if (et) { bestEdge = et; break; }
+        }
+      }
+    }
+
+    let role: string;
+    if (GOVERNANCE_EDGE_SET.has(bestEdge)) role = 'governance';
+    else if (SUPPLY_EDGE_SET.has(bestEdge)) role = 'supply_chain';
+    else if (MARKET_EDGE_SET.has(bestEdge)) role = 'market';
+    else if (REGULATORY_EDGE_SET.has(bestEdge)) role = 'regulatory';
+    else if (PARTNERSHIP_EDGE_SET.has(bestEdge)) role = 'partnerships';
+    else if (GEO_EDGE_SET.has(bestEdge)) role = 'geography';
+    else if (tk === 'PERSON') role = 'people';
+    else role = 'other';
+
+    // Compact left-pane mode: merge roles into 3 executive business blocks
+    if (compactLeftPane) {
+      if (role === 'market' || role === 'regulatory' || role === 'geography') return 'market_regulation';
+      if (role === 'supply_chain' || role === 'products' || role === 'partnerships') return 'products_supply';
+      if (role === 'governance' || role === 'people') return 'ownership_governance';
+      return 'other';
+    }
+
+    return role;
+  };
+
+  const getRoleGroupLabel = (role: string): string => SEMANTIC_ROLE_LABEL[role] || role
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+  const roleOrderScore = (role: string): number => SEMANTIC_ROLE_ORDER[role] ?? 900;
+
   type RelBlock<TNode = any> = {
     edgeTypeKey: string;
     label: string;
@@ -1894,6 +2042,13 @@ export async function layoutLevelsTwoPane<T = any>(
     stackKey?: string;
     /** Optional override for row count within this subcategory block. */
     rows?: number;
+    // Per-block node width for compact packing
+    nodeW?: number;
+    // Business block card metadata (compact left pane summary)
+    businessBlock?: boolean;
+    blockKey?: string;
+    factLines?: Array<{ label: string; items: Array<{ id: string; label: string; type: string }> }>;
+    blockTitle?: string;
   };
   type TypeBlock<TNode = any> = {
     typeKey: string;
@@ -1902,6 +2057,12 @@ export async function layoutLevelsTwoPane<T = any>(
     startX: number;
     blockW: number;
     relBlocks: RelBlock<TNode>[];
+    /** How many nodes are hidden behind the per-category cap (0 = no overflow). */
+    overflowCount?: number;
+    // Per-block node width for compact packing (non-rel blocks)
+    nodeW?: number;
+    // Business block card (compact left pane: one card replaces all nodes in the block)
+    businessBlockCard?: boolean;
   };
 
   // Default-collapsed edge types (subcategories that start collapsed by default).
@@ -1966,13 +2127,158 @@ export async function layoutLevelsTwoPane<T = any>(
     return human.length > 18 ? `${human.slice(0, 18)}…` : human;
   };
 
+  const contextNounForNodes = (nodes: Node<T>[]): string => {
+    const list = (nodes || []).filter(Boolean) as Node<T>[];
+    if (list.length === 0) return 'items';
+    const types = new Set<string>();
+    for (const n of list) {
+      const d: any = (n as any)?.data || {};
+      const t = normalizeFragmentType(String(d?.type || '').trim());
+      if (t) types.add(t);
+    }
+    if (types.size !== 1) return 'items';
+    const only = Array.from(types)[0]!;
+    switch (only) {
+      case 'PERSON':
+        return 'people';
+      case 'ORGANIZATION':
+      case 'COMPANY':
+      case 'ORG':
+        return 'organizations';
+      case 'MARKET':
+        return 'markets';
+      case 'PRODUCT':
+        return 'products';
+      case 'COUNTRY':
+      case 'STATE':
+      case 'PROVINCE':
+      case 'CITY':
+      case 'LOCATION':
+      case 'GEO_REGION':
+        return 'locations';
+      case 'FACILITY':
+        return 'facilities';
+      case 'MECHANISM':
+        return 'mechanisms';
+      case 'DECISION_POINT':
+        return 'decisions';
+      default:
+        return 'items';
+    }
+  };
+
+  const contextExamplesForNodes = (nodes: Node<T>[], max = 3): string[] => {
+    const list = (nodes || []).filter(Boolean) as Node<T>[];
+    if (list.length === 0) return [];
+    const names = list
+      .map((n) => {
+        const d: any = (n as any)?.data || {};
+        const label = String(d?.label || '').trim();
+        if (label) return label;
+        const cp = String(d?.canonicalPath || '').trim();
+        if (cp) {
+          const last = cp.split('/').filter(Boolean).slice(-1)[0] || '';
+          return last ? last.replace(/[-_]/g, ' ') : '';
+        }
+        return String(n.id || '').trim();
+      })
+      .filter(Boolean);
+    return names.slice(0, Math.max(0, max));
+  };
+
+  // Business block titles for context cards
+  const BUSINESS_BLOCK_TITLES: Record<string, string> = {
+    'market_regulation': 'Market & Regulation',
+    'products_supply': 'Products & Supply',
+    'ownership_governance': 'Ownership & Governance',
+    'other': 'Context',
+  };
+  const BUSINESS_BLOCK_KEYS = new Set(Object.keys(BUSINESS_BLOCK_TITLES));
+
+  // Fixed dimensions for business block context cards
+  const CONTEXT_CARD_HEIGHT = nodeHeight * 2;
+  const CONTEXT_CARD_WIDTH = nodeWidth; // ~200px
+
+  // Edge-type templates for business-fact line generation
+  // Supports bidirectional mapping: { edgeType: { outgoing: label, incoming: label } }
+  const EDGE_FACT_TEMPLATES: Record<string, { outgoing: string; incoming: string } | string> = {
+    'HEADQUARTERED_IN': { outgoing: 'HQ in', incoming: 'HQ in' },
+    'OPERATES_IN': { outgoing: 'Operates in', incoming: 'Operates in' },
+    'LOCATED_IN': { outgoing: 'Located in', incoming: 'Located in' },
+    'BASED_IN': { outgoing: 'Based in', incoming: 'Based in' },
+    'IN_GEO_SCOPE': { outgoing: 'Operates in', incoming: 'Operates in' },
+    'COMPETES_WITH': { outgoing: 'Competes with', incoming: 'Competes with' },
+    'PARTICIPATES_IN': { outgoing: 'Participates in', incoming: 'Participates in' },
+    'DOMINATES': { outgoing: 'Dominates in markets', incoming: 'Dominated in markets by' },
+    'HAS_SUBMARKET': { outgoing: 'Submarkets:', incoming: 'Submarket of' },
+    'REGULATES': { outgoing: 'Regulates', incoming: 'Regulated by' },
+    'INFLUENCES': { outgoing: 'Influences', incoming: 'Influenced by' },
+    'AFFECTS': { outgoing: 'Affects', incoming: 'Affected by' },
+    'USES_MECHANISM': { outgoing: 'Uses', incoming: 'Used by' },
+    'APPLIES_TO': { outgoing: 'Applies to', incoming: 'Applied by' },
+    'OWNS': { outgoing: 'Owns', incoming: 'Owned by' },
+    'PARENT_OF': { outgoing: 'Parent of', incoming: 'Child of' },
+    'SUBSIDIARY_OF': { outgoing: 'Subsidiary of', incoming: 'Parent of' },
+    'INVESTS_IN': { outgoing: 'Invests in', incoming: 'Invested by' },
+    'CONTROLS': { outgoing: 'Controls', incoming: 'Controlled by' },
+    'MANAGES': { outgoing: 'Manages', incoming: 'Managed by' },
+    'FOUNDED': { outgoing: 'Founded', incoming: 'Founded by' },
+    'BOARD_MEMBER_OF': { outgoing: 'Board:', incoming: 'Board member of' },
+    'EXECUTIVE_OF': { outgoing: 'Executives:', incoming: 'Executive of' },
+    'EMPLOYED_BY': { outgoing: 'Employees:', incoming: 'Employed by' },
+    'ADMINISTERS': { outgoing: 'Administers', incoming: 'Administered by' },
+    'AUDITED_BY': { outgoing: 'Audited by', incoming: 'Audits' },
+    'PRODUCES': { outgoing: 'Products:', incoming: 'Produced by' },
+    'TRANSFORMS_INTO': { outgoing: 'Transforms into', incoming: 'Transformed from' },
+    'SUPPLIES_TO': { outgoing: 'Supplies', incoming: 'Supplied by' },
+    'EXTRACTS_FROM': { outgoing: 'Extracts from', incoming: 'Extracted by' },
+    'DEPENDS_ON': { outgoing: 'Depends on', incoming: 'Dependency of' },
+    'REQUIRES': { outgoing: 'Requires', incoming: 'Required by' },
+    'NEEDS': { outgoing: 'Needs', incoming: 'Needed by' },
+    'USES': { outgoing: 'Uses', incoming: 'Used by' },
+    'CONSUMES': { outgoing: 'Consumes', incoming: 'Consumed by' },
+    'PARTNERS_WITH': { outgoing: 'Partners:', incoming: 'Partners:' },
+    'COOPERATES_WITH': { outgoing: 'Partners:', incoming: 'Partners:' },
+    'AFFILIATED_WITH': { outgoing: 'Affiliated with', incoming: 'Affiliated with' },
+    'MEMBER_OF': { outgoing: 'Member of', incoming: 'Has member' },
+    'OPERATES_VIA': { outgoing: 'Via', incoming: 'Via' },
+  };
+
+  // Helper to get label for edge type based on direction
+  const getEdgeFactLabel = (edgeType: string, isOutgoing: boolean): string => {
+    const etNorm = normalizeEdgeType(edgeType);
+    const template = EDGE_FACT_TEMPLATES[etNorm];
+    if (!template) {
+      return edgeTypeCaptionShortLocal(edgeType);
+    }
+    if (typeof template === 'string') {
+      return template;
+    }
+    return isOutgoing ? template.outgoing : template.incoming;
+  };
+
   const groupDimsWrap = (children: Node<T>[], parentId: string, groupId?: string) => {
+    // Use provided groupId or construct a default one for collapse state lookup.
+    const effectiveGroupId = groupId || `levels:left:${parentId}:down`;
+
     // IMPORTANT: group grid must be computed from VISIBLE children only.
     // If we include `hidden` nodes (e.g. local relation filters), we can end up reserving empty rows/slots.
+    // Exception: nodes hidden ONLY by a collapsed business-block should reappear once that block is expanded.
     const safeChildren = Array.isArray(children)
       ? children
           .filter(Boolean)
-          .filter((n) => !preHiddenIds.has(n.id) && !Boolean((n as any).hidden))
+          .filter((n) => {
+            if (preHiddenIds.has(n.id)) return false;
+            if (!Boolean((n as any).hidden)) return true;
+            const d: any = (n as any)?.data || {};
+            if (!d?.hiddenByStack) return false;
+            const stackGroupKey = String(d?.stackGroupKey || '').trim();
+            const prefix = `levels:leftblock:${effectiveGroupId}:`;
+            if (!stackGroupKey.startsWith(prefix)) return false;
+            const blockKey = stackGroupKey.slice(prefix.length).trim();
+            if (!blockKey) return false;
+            return !isSubcategoryCollapsed(effectiveGroupId, `__block__:${blockKey}`);
+          })
       : [];
     const safeCount = safeChildren.length;
     if (safeCount <= 0) {
@@ -1987,9 +2293,6 @@ export async function layoutLevelsTwoPane<T = any>(
         padBottom: PAD_BOTTOM_BASE,
       };
     }
-
-    // Use provided groupId or construct a default one for collapse state lookup.
-    const effectiveGroupId = groupId || `levels:left:${parentId}:down`;
 
     // Row policy is applied PER TYPE BLOCK (otherwise splitting into types can create "empty rows").
     // 2026 UX: cap at 2 rows max — 3 rows make groups too tall on laptops.
@@ -2013,41 +2316,6 @@ export async function layoutLevelsTwoPane<T = any>(
       return hasFull ? 2 : 6;
     };
 
-    // Bucket by `data.type` (stable: preserve order within each bucket).
-    const byType = new Map<string, Node<T>[]>();
-    for (const n of safeChildren) {
-      const d: any = n.data;
-      const tk = normalizeFragmentType(d?.type);
-      const arr = byType.get(tk) || [];
-      arr.push(n);
-      byType.set(tk, arr);
-    }
-
-    const typeKeys = Array.from(byType.keys()).sort((a, b) => {
-      const sa = typeOrderScore(a);
-      const sb = typeOrderScore(b);
-      if (sa !== sb) return sa - sb;
-      return a.localeCompare(b);
-    });
-
-    const blocks: TypeBlock<T>[] = [];
-    // If any type block already needs 2 rows, allow other blocks to expand to 2 rows as well.
-    // This keeps width compact without increasing overall height (which is already 2 rows).
-    const forceTwoRows = Array.from(byType.values()).some((list) => (list?.length || 0) > 4);
-    // In compact left pane, vertical density matters more than width — and forcing 2 rows across
-    // *all* type blocks can create "phantom" empty vertical capacity (looks like space for extra mini-nodes).
-    // So only apply the 2-row coercion in non-compact modes.
-    const minRowsForBlock = forceTwoRows && !compactLeftPane ? 2 : 1;
-    // IMPORTANT (Approach #1, nested containers):
-    // Type sections are now real container nodes with crisp vertical dividers (`groupBorderMode: divider-right`).
-    // If we also keep a physical inter-block X gap, the first "segment" becomes narrower (no leading gap),
-    // while middle/last segments include the gap — visually выглядят шире/прилипают.
-    // So in compact left pane we rely on dividers (not empty space) for separation.
-    const interBlockGapX = compactLeftPane ? 0 : Math.max(84, Math.floor(nodeWidth * 0.45));
-    // Same rationale as interBlockGapX: relation subcategories are real containers with dividers.
-    // Avoid "empty space gaps" that make some segments visually wider/narrower.
-    const interRelGapX = compactLeftPane ? 0 : Math.max(24, Math.floor(nodeWidth * 0.18));
-
     const bestRelTypeToParent = (child: Node<T>): string => {
       const cid = String(child?.id || '').trim();
       const pid = String(parentId || '').trim();
@@ -2068,7 +2336,6 @@ export async function layoutLevelsTwoPane<T = any>(
       }
       // Product rule: if the expanded node (group parent) has an OUTGOING PRODUCES edge to this child,
       // it must dominate relation grouping even if other edge types exist between the same nodes.
-      // (UX: products should always be surfaced as "Produces" when present.)
       if (found.size > 0 && found.has('PRODUCES')) {
         for (const e of (edges || []) as any[]) {
           const eid = String(e?.id || '').trim();
@@ -2091,6 +2358,303 @@ export async function layoutLevelsTwoPane<T = any>(
       return ordered[0] || normalizeEdgeType((child.data as any)?.edgeTypeFromParent);
     };
 
+    // Get edge type and direction for a child relative to parent
+    const getEdgeTypeAndDirection = (child: Node<T>): { edgeType: string; isOutgoing: boolean } => {
+      const cid = String(child?.id || '').trim();
+      const pid = String(parentId || '').trim();
+      if (!pid || !cid) {
+        const et = normalizeEdgeType((child.data as any)?.edgeTypeFromParent);
+        const dir = (child.data as any)?.directionFromParent === 'incoming' ? false : true;
+        return { edgeType: et, isOutgoing: dir };
+      }
+      
+      // Find the best edge between parent and child
+      let bestEdge: { edgeType: string; isOutgoing: boolean } | null = null;
+      let bestPriority = Infinity;
+      
+      for (const e of (edges || []) as any[]) {
+        const eid = String(e?.id || '').trim();
+        if (eid.startsWith('levels:agg:')) continue;
+        if (Boolean(e?.data?.levelsAgg)) continue;
+        if (Boolean(e?.data?.levelsStackProxy)) continue;
+        const s = normId(e?.source);
+        const t = normId(e?.target);
+        if (!s || !t) continue;
+        
+        const isOutgoing = s === pid && t === cid;
+        const isIncoming = s === cid && t === pid;
+        if (!isOutgoing && !isIncoming) continue;
+        
+        const et = edgeTypeOf(e);
+        if (!et) continue;
+        
+        const priority = getEdgePriority(et);
+        if (priority < bestPriority) {
+          bestPriority = priority;
+          bestEdge = { edgeType: et, isOutgoing: isOutgoing };
+        }
+      }
+      
+      // Product rule: prefer OUTGOING PRODUCES edge
+      if (bestEdge && bestEdge.edgeType === 'PRODUCES' && !bestEdge.isOutgoing) {
+        for (const e of (edges || []) as any[]) {
+          const eid = String(e?.id || '').trim();
+          if (eid.startsWith('levels:agg:')) continue;
+          if (Boolean(e?.data?.levelsAgg)) continue;
+          if (Boolean(e?.data?.levelsStackProxy)) continue;
+          const s = normId(e?.source);
+          const t = normId(e?.target);
+          if (s === pid && t === cid && edgeTypeOf(e) === 'PRODUCES') {
+            return { edgeType: 'PRODUCES', isOutgoing: true };
+          }
+        }
+      }
+      
+      if (bestEdge) {
+        return bestEdge;
+      }
+      
+      const et = normalizeEdgeType((child.data as any)?.edgeTypeFromParent);
+      const dir = (child.data as any)?.directionFromParent === 'incoming' ? false : true;
+      return { edgeType: et, isOutgoing: dir };
+    };
+
+    const blockRoleForChild = (child: Node<T>): string => {
+      const rel = bestRelTypeToParent(child);
+      if (MARKET_EDGE_SET.has(rel) || REGULATORY_EDGE_SET.has(rel) || GEO_EDGE_SET.has(rel)) {
+        return 'market_regulation';
+      }
+      if (SUPPLY_EDGE_SET.has(rel) || PARTNERSHIP_EDGE_SET.has(rel)) {
+        return 'products_supply';
+      }
+      if (GOVERNANCE_EDGE_SET.has(rel)) {
+        return 'ownership_governance';
+      }
+      return 'other';
+    };
+
+    // Bucket by semantic business role (edge type + node type → Governance, Supply Chain, etc.).
+    // This gives the left group business meaning instead of raw entity-type grouping.
+    const byType = new Map<string, Node<T>[]>();
+    for (const n of safeChildren) {
+      const role = compactLeftPane ? blockRoleForChild(n) : semanticRoleOf(n, parentId);
+      const arr = byType.get(role) || [];
+      arr.push(n);
+      byType.set(role, arr);
+    }
+
+    // Safety: in compact mode, ensure any legacy roles are merged into the 3 business blocks.
+    if (compactLeftPane) {
+      const mergeRole = (from: string, to: string) => {
+        const list = byType.get(from) || [];
+        if (list.length === 0) return;
+        const target = byType.get(to) || [];
+        target.push(...list);
+        byType.set(to, target);
+        byType.delete(from);
+      };
+      mergeRole('market', 'market_regulation');
+      mergeRole('regulatory', 'market_regulation');
+      mergeRole('geography', 'market_regulation');
+      mergeRole('products', 'products_supply');
+      mergeRole('supply_chain', 'products_supply');
+      mergeRole('partnerships', 'products_supply');
+      mergeRole('governance', 'ownership_governance');
+      mergeRole('people', 'ownership_governance');
+      mergeRole('context', 'other');
+    }
+
+    const typeKeys = Array.from(byType.keys()).sort((a, b) => {
+      const sa = roleOrderScore(a);
+      const sb = roleOrderScore(b);
+      if (sa !== sb) return sa - sb;
+      return a.localeCompare(b);
+    });
+
+    // Per-category cap: limit visible nodes to prevent horizontal sprawl.
+    // Store overflow counts for "+N more" pill rendering.
+    const overflowByRole = new Map<string, number>();
+    for (const [role, nodes] of byType.entries()) {
+      const overflowKey = `levels:lefttype:${effectiveGroupId}:${role}`;
+      const isExpanded = expandedRoleGroups instanceof Set && expandedRoleGroups.has(overflowKey);
+      if (!isExpanded && nodes.length > MAX_VISIBLE_PER_CATEGORY) {
+        overflowByRole.set(role, nodes.length - MAX_VISIBLE_PER_CATEGORY);
+        byType.set(role, nodes.slice(0, MAX_VISIBLE_PER_CATEGORY));
+      }
+    }
+
+    const blocks: TypeBlock<T>[] = [];
+    // If any type block already needs 2 rows, allow other blocks to expand to 2 rows as well.
+    // This keeps width compact without increasing overall height (which is already 2 rows).
+    const forceTwoRows = Array.from(byType.values()).some((list) => (list?.length || 0) > 4);
+    // In compact left pane, vertical density matters more than width — and forcing 2 rows across
+    // *all* type blocks can create "phantom" empty vertical capacity (looks like space for extra mini-nodes).
+    // So only apply the 2-row coercion in non-compact modes.
+    const minRowsForBlock = forceTwoRows && !compactLeftPane ? 2 : 1;
+    // IMPORTANT (Approach #1, nested containers):
+    // Type sections are now real container nodes with crisp vertical dividers (`groupBorderMode: divider-right`).
+    // If we also keep a physical inter-block X gap, the first "segment" becomes narrower (no leading gap),
+    // while middle/last segments include the gap — visually выглядят шире/прилипают.
+    // So in compact left pane we rely on dividers (not empty space) for separation.
+    const interBlockGapX = compactLeftPane ? 0 : Math.max(84, Math.floor(nodeWidth * 0.45));
+    // Same rationale as interBlockGapX: relation subcategories are real containers with dividers.
+    // Avoid "empty space gaps" that make some segments visually wider/narrower.
+    const interRelGapX = compactLeftPane ? 0 : Math.max(24, Math.floor(nodeWidth * 0.18));
+
+    /** Build structured business facts for a block context card. */
+    const buildBusinessFacts = (children: Node<T>[]): Array<{ label: string; items: Array<{ id: string; label: string; type: string }> }> => {
+      const facts: Array<{ label: string; items: Array<{ id: string; label: string; type: string }> }> = [];
+      
+      // Group by resolved label (merging different edge types that map to the same label)
+      const byLabel = new Map<string, { label: string; nodes: Node<T>[] }>();
+      
+      for (const n of children) {
+        const { edgeType, isOutgoing } = getEdgeTypeAndDirection(n);
+        const label = getEdgeFactLabel(edgeType, isOutgoing);
+        
+        const existing = byLabel.get(label);
+        if (existing) {
+          existing.nodes.push(n);
+        } else {
+          byLabel.set(label, { label, nodes: [n] });
+        }
+      }
+
+      // Sort labels for consistent display
+      const sortedLabels = Array.from(byLabel.keys()).sort((a, b) => a.localeCompare(b));
+      
+      for (const labelKey of sortedLabels) {
+        const { label, nodes } = byLabel.get(labelKey)!;
+        if (nodes.length === 0) continue;
+        
+        // Pre-process nodes: extract labels and metadata
+        const nodeData: Array<{ node: Node<T>; label: string; type: string; id: string }> = [];
+        for (const n of nodes) {
+          const d: any = (n as any)?.data || {};
+          const nodeLabel = String(d?.label || '').trim() || 
+            (() => {
+              const cp = String(d?.canonicalPath || '').trim();
+              if (cp) {
+                const last = cp.split('/').filter(Boolean).slice(-1)[0] || '';
+                return last ? last.replace(/[-_]/g, ' ') : '';
+              }
+              return String(n.id || '').trim();
+            })();
+          const nodeType = String(d?.type || '').trim() || '';
+          nodeData.push({
+            node: n,
+            label: nodeLabel,
+            type: nodeType,
+            id: String(n.id || '').trim(),
+          });
+        }
+        
+        // Smart grouping: find groups sharing common prefix (min 2 words, length > 10 chars)
+        const processedItems: Array<{ id: string; label: string; type: string }> = [];
+        const used = new Set<number>();
+        
+        for (let i = 0; i < nodeData.length; i++) {
+          if (used.has(i)) continue;
+          
+          const current = nodeData[i]!;
+          const currentWords = current.label.split(/\s+/).filter(Boolean);
+          
+          // Need at least 2 words and length > 10 chars for grouping
+          if (currentWords.length < 2 || current.label.length <= 10) {
+            processedItems.push({
+              id: current.id,
+              label: current.label,
+              type: current.type,
+            });
+            used.add(i);
+            continue;
+          }
+          
+          // Find nodes with matching prefix (first 2 words)
+          const prefix = currentWords.slice(0, 2).join(' ');
+          const group: typeof nodeData = [current];
+          const groupIndices = [i];
+          
+          for (let j = i + 1; j < nodeData.length; j++) {
+            if (used.has(j)) continue;
+            const other = nodeData[j]!;
+            const otherWords = other.label.split(/\s+/).filter(Boolean);
+            if (otherWords.length >= 2 && otherWords.slice(0, 2).join(' ') === prefix) {
+              group.push(other);
+              groupIndices.push(j);
+            }
+          }
+          
+          // If group has > 1 item, collapse them
+          if (group.length > 1) {
+            processedItems.push({
+              id: group[0]!.id,
+              label: `${prefix} +${group.length - 1}`,
+              type: group[0]!.type,
+            });
+            groupIndices.forEach(idx => used.add(idx));
+          } else {
+            processedItems.push({
+              id: current.id,
+              label: current.label,
+              type: current.type,
+            });
+            used.add(i);
+          }
+        }
+        
+        // Build items array with processed items (respect maxItems limit)
+        const items: Array<{ id: string; label: string; type: string }> = [];
+        const maxItems = 5; // Slightly relaxed limit for badges
+        for (let i = 0; i < Math.min(processedItems.length, maxItems); i++) {
+          items.push(processedItems[i]!);
+        }
+        
+        // Add overflow indicator if needed
+        const overflow = Math.max(0, nodes.length - maxItems);
+        if (overflow > 0) {
+          items.push({
+            id: `__overflow__${labelKey}`,
+            label: `+${overflow}`,
+            type: '',
+          });
+        }
+        
+        if (items.length > 0) {
+          facts.push({ label, items });
+        }
+      }
+      return facts.slice(0, 6); // Max 6 fact groups per card
+    };
+
+    const buildBusinessBlockCard = (blockKey: string, nodesInBlock: Node<T>[], collapsed: boolean): Node<T> => {
+      const list = Array.isArray(nodesInBlock) ? nodesInBlock : [];
+      const blockTitle = BUSINESS_BLOCK_TITLES[blockKey] || getRoleGroupLabel(blockKey);
+      const factLines = buildBusinessFacts(list);
+      const contextId = `levels:leftblock:card:${effectiveGroupId}:${blockKey}`;
+      const data: any = {
+        contextCard: true,
+        contextTitle: blockTitle,
+        contextLines: factLines,
+        contextCount: list.length,
+        contextBlockKey: blockKey,
+        contextGroupId: effectiveGroupId,
+        contextExpanded: !collapsed,
+      };
+      if (typeof onToggleSubcategoryCollapse === 'function') {
+        data.onToggleContextDetails = () => {
+          onToggleSubcategoryCollapse(effectiveGroupId, `__block__:${blockKey}`, !collapsed);
+        };
+      }
+      return {
+        id: contextId,
+        type: 'horizonContextCard' as any,
+        position: { x: 0, y: 0 },
+        data,
+        style: { width: CONTEXT_CARD_WIDTH, height: CONTEXT_CARD_HEIGHT },
+      } as any;
+    };
+
     let cursorX = 0;
     let totalCols = 0;
     let maxInnerH = 0;
@@ -2100,16 +2664,165 @@ export async function layoutLevelsTwoPane<T = any>(
       const list = byType.get(typeKey) || [];
       if (list.length === 0) continue;
 
-      // Special case: MARKET nodes in the left pane should render as tall columns:
-      // "2 full nodes vertically" == 6 compact nodes per column (3 per full slot).
-      if (compactLeftPane && String(typeKey).toUpperCase().trim() === 'MARKET') {
+      // === Business block context cards (compact left pane) ===
+      // Known business block types are shown as a single context card when collapsed.
+      const isBusinessBlockType = compactLeftPane && BUSINESS_BLOCK_KEYS.has(typeKey);
+      const blockCollapseKey = `__block__:${typeKey}`;
+      const isBlockCollapsed = isBusinessBlockType && isSubcategoryCollapsed(effectiveGroupId, blockCollapseKey);
+
+      if (isBusinessBlockType) {
         const nodesFlat = list.slice().sort((a, b) => {
           const al = String((a.data as any)?.label || a.id);
           const bl = String((b.data as any)?.label || b.id);
           return al.localeCompare(bl);
         });
+        const contextCard = buildBusinessBlockCard(typeKey, nodesFlat, isBlockCollapsed);
+        const cardW = CONTEXT_CARD_WIDTH + LEFT_REL_CONTAINER_PAD_X * 2;
 
-        const rowsForType = Math.max(1, Math.min(6, nodesFlat.length));
+        const hasFull = nodesFlat.some(
+          (n) => leftPaneLayoutHeightFor((n as any)?.data || {}) > COMPACT_NODE_LAYOUT_HEIGHT + 1,
+        );
+        const rowsForNodes = (() => {
+          if (compactLeftPane && (typeKey === 'market' || typeKey === 'market_regulation')) {
+            const maxMarketRows = hasFull ? 3 : 9;
+            return Math.max(1, Math.min(maxMarketRows, nodesFlat.length));
+          }
+          if (compactLeftPane) {
+            return Math.max(1, Math.min(maxVerticalForNodes(nodesFlat), nodesFlat.length));
+          }
+          return Math.max(minRowsForBlock, rowsForCount(nodesFlat.length));
+        })();
+        const rowsForType = Math.max(1, rowsForNodes);
+
+        // Height policy:
+        // - collapsed: card-only
+        // - expanded: max(cardHeight, node-grid height)  (card is a left column, not an extra row)
+        // Packing policy (expanded): use a simple masonry layout (per-column y cursors) so compact pills
+        // don't "inherit" full-row height when mixed with full-size nodes.
+        const colsForGrid = isBlockCollapsed ? 0 : Math.max(1, Math.ceil(nodesFlat.length / rowsForType));
+        const masonryH = (() => {
+          if (isBlockCollapsed) return 0;
+          const cols = Math.max(1, colsForGrid);
+          const colHeights = new Array(cols).fill(0);
+          for (const n of nodesFlat) {
+            const nd: any = (n as any)?.data || {};
+            const h = leftPaneLayoutHeightFor(nd);
+            let bestCol = 0;
+            let bestY = colHeights[0] ?? 0;
+            for (let c = 1; c < colHeights.length; c++) {
+              const y = colHeights[c] ?? 0;
+              if (y < bestY) { bestY = y; bestCol = c; }
+            }
+            colHeights[bestCol] = (colHeights[bestCol] ?? 0) + h + groupChildGapY;
+          }
+          const maxY = Math.max(...colHeights);
+          return Math.max(COMPACT_NODE_LAYOUT_HEIGHT, maxY - groupChildGapY);
+        })();
+        const innerHForType = isBlockCollapsed
+          ? CONTEXT_CARD_HEIGHT
+          : Math.max(CONTEXT_CARD_HEIGHT, masonryH);
+        maxInnerH = Math.max(maxInnerH, innerHForType);
+        maxRows = Math.max(maxRows, Math.max(1, rowsForType));
+
+        const relBlocks: RelBlock<T>[] = [];
+        let relCursor = 0;
+        let relColsTotal = 0;
+
+        const hiddenMemberIds = isBlockCollapsed
+          ? nodesFlat.map((n) => String(n.id || '').trim()).filter(Boolean)
+          : [];
+        const controllerId = String((contextCard as any)?.id || '').trim();
+        const stackKey = `levels:leftblock:${effectiveGroupId}:${typeKey}`;
+
+        relBlocks.push({
+          edgeTypeKey: blockCollapseKey,
+          label: BUSINESS_BLOCK_TITLES[typeKey] || typeKey,
+          nodes: [contextCard],
+          cols: 1,
+          startX: relCursor,
+          blockW: cardW,
+          nodeCount: nodesFlat.length,
+          collapsed: isBlockCollapsed,
+          controllerId,
+          hiddenMemberIds,
+          stackKey,
+          rows: 1,
+          nodeW: CONTEXT_CARD_WIDTH,
+          businessBlock: true,
+          blockKey: typeKey,
+          blockTitle: BUSINESS_BLOCK_TITLES[typeKey] || getRoleGroupLabel(typeKey),
+        } as any);
+        relCursor += cardW;
+        relColsTotal += 1;
+
+        let typeBlockW = relCursor;
+        let nodeWForBlock = CONTEXT_CARD_WIDTH;
+
+        if (!isBlockCollapsed) {
+          if (nodesFlat.length > 0) relCursor += interRelGapX;
+          const nodeW = nodesFlat.length > 0
+            ? Math.max(
+                COMPACT_NODE_WIDTH,
+                ...nodesFlat.map((n) => leftPaneLayoutWidthFor((n as any)?.data || {})),
+              )
+            : COMPACT_NODE_WIDTH;
+          const cols = Math.max(1, colsForGrid || Math.ceil(nodesFlat.length / rowsForType));
+          const blockW = cols * nodeW + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
+          relBlocks.push({
+            edgeTypeKey: '',
+            label: '',
+            nodes: nodesFlat,
+            cols,
+            startX: relCursor,
+            blockW,
+            nodeCount: nodesFlat.length,
+            collapsed: false,
+            nodeW,
+            masonry: true,
+            businessBlock: true,
+            blockKey: typeKey,
+          } as any);
+          relColsTotal += cols;
+          typeBlockW = relCursor + blockW;
+          nodeWForBlock = nodeW;
+        }
+
+        totalCols += relColsTotal;
+        blocks.push({
+          typeKey,
+          rows: Math.max(1, rowsForType),
+          cols: relColsTotal,
+          startX: cursorX,
+          blockW: typeBlockW,
+          relBlocks,
+          overflowCount: overflowByRole.get(typeKey) || 0,
+          nodeW: nodeWForBlock,
+          businessBlockCard: isBlockCollapsed,
+        });
+        cursorX += typeBlockW;
+        if (i < typeKeys.length - 1) cursorX += interBlockGapX;
+        continue;
+      }
+
+      // Special case: Market-related nodes in the left pane should render as wider grids:
+      // - Full-size cards: cap at 3 rows (force 2+ columns above that).
+      // - Compact mini-cards: 3 full rows == 9 compact rows per column.
+      if (compactLeftPane && (typeKey === 'market' || typeKey === 'market_regulation')) {
+        const nodesFlat = list.slice().sort((a, b) => {
+          const al = String((a.data as any)?.label || a.id);
+          const bl = String((b.data as any)?.label || b.id);
+          return al.localeCompare(bl);
+        });
+        const nodeW = Math.max(
+          COMPACT_NODE_WIDTH,
+          ...nodesFlat.map((n) => leftPaneLayoutWidthFor((n as any)?.data || {})),
+        );
+
+        const hasFull = nodesFlat.some(
+          (n) => leftPaneLayoutHeightFor((n as any)?.data || {}) > COMPACT_NODE_LAYOUT_HEIGHT + 1,
+        );
+        const maxMarketRows = hasFull ? 3 : 9;
+        const rowsForType = Math.max(1, Math.min(maxMarketRows, nodesFlat.length));
         const cols = Math.max(1, Math.ceil(nodesFlat.length / rowsForType));
         const minBase = COMPACT_NODE_LAYOUT_HEIGHT;
         const rowHeights = new Array(rowsForType).fill(minBase);
@@ -2125,7 +2838,7 @@ export async function layoutLevelsTwoPane<T = any>(
         maxInnerH = Math.max(maxInnerH, innerHForType);
         maxRows = Math.max(maxRows, rowsForType);
 
-        const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
+        const blockW = cols * nodeW + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
         const relBlocks: RelBlock<T>[] = [
           {
             edgeTypeKey: '',
@@ -2136,10 +2849,11 @@ export async function layoutLevelsTwoPane<T = any>(
             blockW,
             nodeCount: nodesFlat.length,
             collapsed: false,
+            nodeW,
           } as any,
         ];
         totalCols += cols;
-        blocks.push({ typeKey, rows: rowsForType, cols, startX: cursorX, blockW, relBlocks });
+        blocks.push({ typeKey, rows: rowsForType, cols, startX: cursorX, blockW, relBlocks, overflowCount: overflowByRole.get(typeKey) || 0, nodeW });
         cursorX += blockW;
 
         if (i < typeKeys.length - 1) cursorX += interBlockGapX;
@@ -2148,29 +2862,16 @@ export async function layoutLevelsTwoPane<T = any>(
 
       // Optionally group within the type block by the PRIORITY relation type to the parent.
       const relBlocks: RelBlock<T>[] = [];
-      const isProductsServicesType =
-        String(typeKey).toUpperCase().trim() === 'PRODUCT' ||
-        String(typeKey).toUpperCase().trim() === 'SERVICE' ||
-        String(typeKey).toUpperCase().trim() === 'TECHNOLOGY';
-      const isFacilitiesOrDepositType =
-        String(typeKey).toUpperCase().trim() === 'FACILITY' ||
-        String(typeKey).toUpperCase().trim() === 'DEPOSIT';
-      const isGeoType =
-        String(typeKey).toUpperCase().trim() === 'GEO_REGION' ||
-        String(typeKey).toUpperCase().trim() === 'LOCATION' ||
-        String(typeKey).toUpperCase().trim() === 'COUNTRY' ||
-        String(typeKey).toUpperCase().trim() === 'STATE' ||
-        String(typeKey).toUpperCase().trim() === 'PROVINCE' ||
-        String(typeKey).toUpperCase().trim() === 'CITY';
-      const isStrategicType =
-        String(typeKey).toUpperCase().trim() === 'DECISION_POINT' ||
-        String(typeKey).toUpperCase().trim() === 'MECHANISM';
-      // UX: Products & Services should NOT be subdivided by relation edge types.
-      // Render as simple column-major grid (taller columns).
-      // UX: GEO should also NOT be subdivided by relation edge types (LOCATED/OPERATES/etc).
-      // UX: Facilities and Deposits should also NOT be subdivided by relation edge types.
-      // UX: Strategic layer should also remain compact (no subcategory split).
-      const useRelGroupingForType = useRelGrouping && !isProductsServicesType && !isGeoType && !isFacilitiesOrDepositType && !isStrategicType;
+      // Semantic roles that should NOT be subdivided by relation edge types — render as simple column-major grids.
+      // Products, Geography, Regulatory: keep compact, no subcategory split.
+      const NO_REL_GROUPING_ROLES = new Set([
+        'products', 'geography', 'regulatory', 'market', 'context', 'supply',
+        'market_regulation', 'products_supply', 'ownership_governance',
+      ]);
+      const isCompactGridRole = NO_REL_GROUPING_ROLES.has(typeKey);
+      // In compact left pane, avoid relation subcategories to keep cards short.
+      const useRelGroupingForType =
+        useRelGrouping && !compactLeftPane && !isCompactGridRole;
 
       if (useRelGroupingForType) {
         const byRel = new Map<string, Node<T>[]>();
@@ -2270,7 +2971,11 @@ export async function layoutLevelsTwoPane<T = any>(
               ? Math.max(1, Math.min(6, nodesForLayout.length))
               : Math.max(1, rowsForType);
           const cols = collapsed ? 1 : Math.ceil(nodesForLayout.length / rowsForRel);
-          const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
+          const relNodeW = Math.max(
+            COMPACT_NODE_WIDTH,
+            ...nodesForLayout.map((n) => leftPaneLayoutWidthFor((n as any)?.data || {})),
+          );
+          const blockW = cols * relNodeW + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
 
           const controllerId = collapsed ? String(controller?.id || '').trim() : undefined;
           const firstNodeId = String(nodesRel[0]?.id || '').trim() || controllerId;
@@ -2290,6 +2995,7 @@ export async function layoutLevelsTwoPane<T = any>(
             controllerId,
             stackKey,
             rows: rowsForRel,
+            nodeW: relNodeW,
           });
           relColsTotal += cols;
           relCursor += blockW;
@@ -2297,13 +3003,13 @@ export async function layoutLevelsTwoPane<T = any>(
         }
         totalCols += relColsTotal;
         const typeBlockW = relCursor;
-        blocks.push({ typeKey, rows: rowsForType, cols: relColsTotal, startX: cursorX, blockW: typeBlockW, relBlocks });
+        blocks.push({ typeKey, rows: rowsForType, cols: relColsTotal, startX: cursorX, blockW: typeBlockW, relBlocks, overflowCount: overflowByRole.get(typeKey) || 0 });
         cursorX += typeBlockW;
       } else {
-        // For compact Products & Services, make taller columns:
+        // For compact roles (products, geography, regulatory, market), make taller columns:
         // "2 full nodes vertically" == 6 compact nodes per column (3 per full slot).
         const rowsForType =
-          compactLeftPane && (isProductsServicesType || isGeoType || isFacilitiesOrDepositType || isStrategicType)
+          compactLeftPane && isCompactGridRole
             ? Math.max(1, Math.min(maxVerticalForNodes(list), list.length))
             : Math.max(minRowsForBlock, rowsForCount(list.length));
         const nodesFlat = list.slice().sort((a, b) => {
@@ -2325,8 +3031,12 @@ export async function layoutLevelsTwoPane<T = any>(
         maxInnerH = Math.max(maxInnerH, innerHForType);
         maxRows = Math.max(maxRows, rowsForType);
 
+        const nodeW = Math.max(
+          COMPACT_NODE_WIDTH,
+          ...nodesFlat.map((n) => leftPaneLayoutWidthFor((n as any)?.data || {})),
+        );
         const cols = Math.ceil(nodesFlat.length / Math.max(1, rowsForType));
-        const blockW = cols * nodeWidth + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
+        const blockW = cols * nodeW + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
         relBlocks.push({
           edgeTypeKey: '',
           label: '',
@@ -2336,9 +3046,10 @@ export async function layoutLevelsTwoPane<T = any>(
           blockW,
           nodeCount: nodesFlat.length,
           collapsed: false, // Non-grouped blocks are never collapsed
+          nodeW,
         });
         totalCols += cols;
-        blocks.push({ typeKey, rows: rowsForType, cols, startX: cursorX, blockW, relBlocks });
+        blocks.push({ typeKey, rows: rowsForType, cols, startX: cursorX, blockW, relBlocks, overflowCount: overflowByRole.get(typeKey) || 0, nodeW });
         cursorX += blockW;
       }
 
@@ -2404,10 +3115,12 @@ export async function layoutLevelsTwoPane<T = any>(
     idsByLevel.set(lv, arr);
   }
 
-  // Precompute labels for fast sort
+  // Precompute labels and type scores for fast sort
   const labelById = new Map<string, string>();
+  const typeScoreById = new Map<string, number>();
   for (const n of rightNodes) {
     labelById.set(n.id, String((n.data as any)?.label || n.id));
+    typeScoreById.set(n.id, typeOrderScore(normalizeFragmentType((n.data as any)?.type)));
   }
 
   // Helper to sort nodes by clustering related ones together (connected components).
@@ -2459,8 +3172,11 @@ export async function layoutLevelsTwoPane<T = any>(
         }
       }
       
-      // Sort nodes within cluster alphabetically
+      // Sort nodes within cluster by type, then alphabetically
       cluster.sort((a, b) => {
+         const ta = typeScoreById.get(a) ?? 500;
+         const tb = typeScoreById.get(b) ?? 500;
+         if (ta !== tb) return ta - tb;
          const al = labelById.get(a) || a;
          const bl = labelById.get(b) || b;
          return al.localeCompare(bl);
@@ -2468,8 +3184,11 @@ export async function layoutLevelsTwoPane<T = any>(
       clusters.push(cluster);
     }
 
-    // Sort clusters by their first element (representative)
+    // Sort clusters by type of their first element (representative), then alphabetically
     clusters.sort((a, b) => {
+       const ta = typeScoreById.get(a[0]) ?? 500;
+       const tb = typeScoreById.get(b[0]) ?? 500;
+       if (ta !== tb) return ta - tb;
        const al = labelById.get(a[0]) || a[0];
        const bl = labelById.get(b[0]) || b[0];
        return al.localeCompare(bl);
@@ -2552,7 +3271,6 @@ export async function layoutLevelsTwoPane<T = any>(
   // keep reserving vertical space and make groups appear "too low" / non-contiguous.
   // When Right Dock mode is enabled, we disable right-side stack controllers entirely.
   // (Dock-panel filters replace them.)
-  const STACK_MIN = rightDockMode ? Number.POSITIVE_INFINITY : 2;
   // Stack group layout constants (used for spacing + container size)
   const STACK_GROUP_PAD_X = 8;
   const STACK_GROUP_PAD_TOP = 44; // room for header with collapse button
@@ -2697,6 +3415,11 @@ export async function layoutLevelsTwoPane<T = any>(
         }
       }
     }
+    // Regulatory / strategic layer: mechanisms and decision points.
+    // Stack them together so the right backbone doesn't become a tall wall of regulatory nodes.
+    if (tk === 'MECHANISM' || tk === 'DECISION_POINT') {
+      return { kind: 'regulatory', title: 'Regulatory', visualType: 'MECHANISM' };
+    }
     return null;
   };
 
@@ -2739,6 +3462,41 @@ export async function layoutLevelsTwoPane<T = any>(
     if (!allowPinned && d?.pinnedToScope) return false;
     if (d?.expanded) return false;
     return true;
+  };
+
+  const getMinStackCount = (anchorId: string, stackKind: string): number => {
+    if (!rightDockMode) return 2;
+    let dockKey: string | null = null;
+    switch (stackKind) {
+      case 'persons':
+      case 'control':
+      case 'staff':
+        dockKey = 'governance';
+        break;
+      case 'suppliers':
+      case 'products':
+        dockKey = 'supply';
+        break;
+      case 'dependencies':
+        dockKey = 'dependencies';
+        break;
+      case 'geolocation':
+      case 'dominates':
+      case 'submarket':
+      case 'subgroup':
+        dockKey = 'structure';
+        break;
+      case 'regulatory':
+        dockKey = null;
+        break;
+    }
+    if (dockKey) {
+      const enabledKeys = rightDockStateByNodeId ? (rightDockStateByNodeId as any)[anchorId] : [];
+      if (enabledKeys && Array.isArray(enabledKeys) && enabledKeys.includes(dockKey)) {
+        return Number.POSITIVE_INFINITY;
+      }
+    }
+    return 2;
   };
 
   const parseStackKey = (key: string): { mode: 'rightstack' | 'rightstackp'; pivotId: string; level: number; kind: string } | null => {
@@ -2814,7 +3572,8 @@ export async function layoutLevelsTwoPane<T = any>(
           if (rightKids && rightKids.size > 0) return false;
           return true;
         });
-        if (eligible.length < STACK_MIN) continue;
+        const minCount = getMinStackCount(parentId, meta.kind);
+        if (eligible.length < minCount) continue;
 
         const key = `levels:rightstack:${parentId}:${lv}:${meta.kind}`;
         stackMembersByKey.set(key, eligible);
@@ -2849,7 +3608,9 @@ export async function layoutLevelsTwoPane<T = any>(
           expandedStackMembersByKey.set(key, expandedMembers);
           for (const id of expandedMembers) expandedStackMemberIds.add(id);
           const count = expandedMembers.length;
-          const groupH = (count * nodeHeight) + Math.max(0, count - 1) * stackGroupGapY + STACK_GROUP_PAD_TOP + STACK_GROUP_PAD_BOTTOM;
+          const stackCols = count >= 4 ? 2 : 1;
+          const stackRows = Math.ceil(count / stackCols);
+          const groupH = stackRows * nodeHeight + Math.max(0, stackRows - 1) * stackGroupGapY + STACK_GROUP_PAD_TOP + STACK_GROUP_PAD_BOTTOM;
           stackExpandedHeights.set(controllerId, groupH);
         } else {
           for (const id of ordered) {
@@ -2887,7 +3648,8 @@ export async function layoutLevelsTwoPane<T = any>(
           if (!isStackEligibleRightNode(pid)) return false;
           return true;
         });
-        if (eligible.length < STACK_MIN) continue;
+        const minCount = getMinStackCount(childId, meta.kind);
+        if (eligible.length < minCount) continue;
         const key = `levels:rightstackp:${childId}:${lv}:${meta.kind}`;
         stackMembersByKey.set(key, eligible);
         const expanded = expandedStackKeys.has(key);
@@ -2922,7 +3684,9 @@ export async function layoutLevelsTwoPane<T = any>(
           expandedStackMembersByKey.set(key, expandedMembers);
           for (const id of expandedMembers) expandedStackMemberIds.add(id);
           const count = expandedMembers.length;
-          const groupH = (count * nodeHeight) + Math.max(0, count - 1) * stackGroupGapY + STACK_GROUP_PAD_TOP + STACK_GROUP_PAD_BOTTOM;
+          const stackCols = count >= 4 ? 2 : 1;
+          const stackRows = Math.ceil(count / stackCols);
+          const groupH = stackRows * nodeHeight + Math.max(0, stackRows - 1) * stackGroupGapY + STACK_GROUP_PAD_TOP + STACK_GROUP_PAD_BOTTOM;
           stackExpandedHeights.set(controllerId, groupH);
         } else {
           for (const id of ordered) {
@@ -2936,93 +3700,97 @@ export async function layoutLevelsTwoPane<T = any>(
     }
   }
 
-  // Snapshot positions before repack so we can preserve vertical centering.
-  const rightPosBeforeRepack = new Map(rightPos);
-
-  // Re-pack levels that contain hidden stack members so they don't reserve empty vertical space.
-  for (const [lv, ids] of idsByLevel.entries()) {
-    const hasHidden = ids.some((id) => stackHiddenIds.has(id));
-    const hasExpanded = ids.some((id) => stackExpandedHeights.has(id));
-    if (!hasHidden && !hasExpanded) continue;
-    const visible = ids.filter((id) =>
-      !stackHiddenIds.has(id) &&
-      !preHiddenIds.has(id) &&
-      (!expandedStackMemberIds.has(id) || stackExpandedHeights.has(id)),
-    );
-    if (visible.length <= 1) continue;
-    const gapY = rightGapY(lv);
-    const sortByY = (list: string[]) =>
-      [...list].sort((a, b) => {
-        const pa = rightPos.get(a);
-        const pb = rightPos.get(b);
-        const ya = (pa?.y ?? 0) + nodeHeight / 2;
-        const yb = (pb?.y ?? 0) + nodeHeight / 2;
-        return ya - yb;
-      });
-
-    const isCollapsedStackController = (id: string) => {
-      const meta = stackMetaById.get(id);
-      return Boolean(meta && !meta.expanded && (meta.count || 0) > 1);
+  // === 5.8) Full re-positioning excluding stacked-hidden nodes ===
+  // The initial y-positioning (section 5) ran BEFORE stacks were computed, so hidden stack
+  // members reserved vertical space in their columns. Instead of a shallow per-level repack,
+  // we re-run the ENTIRE vertical positioning from scratch, this time excluding hidden nodes
+  // from both the spacing and the barycentric centering. This eliminates wasted gaps and
+  // propagates the changes to parent levels correctly.
+  {
+    const isVisibleRight = (id: string) => {
+      if (stackHiddenIds.has(id)) return false;
+      if (preHiddenIds.has(id)) return false;
+      // Expanded stack members live inside the group container, not as standalone nodes.
+      // Only the controller (which has stackExpandedHeights) occupies a slot.
+      if (expandedStackMemberIds.has(id) && !stackExpandedHeights.has(id)) return false;
+      return true;
     };
 
-    // UX: when a column mixes stacks and non-stacks, place non-stack nodes first,
-    // then collapsed stack controllers. (If a stack is expanded, its members are visible and behave like normal nodes.)
-    const nonStack = visible.filter((id) => !isCollapsedStackController(id));
-    const stacks = visible.filter((id) => isCollapsedStackController(id));
-    const ordered = [...sortByY(nonStack), ...sortByY(stacks)];
-    // Preserve vertical centers as much as possible while preventing overlaps.
-    const desiredTops = ordered.map((id) => {
-      const base = rightPosBeforeRepack.get(id) || rightPos.get(id);
-      const h = stackExpandedHeights.get(id) || nodeHeight;
-      const center = (base?.y ?? 0) + nodeHeight / 2;
-      return center - h / 2;
-    });
-    let cursor = desiredTops.length > 0 ? Math.min(...desiredTops) : 0;
-    for (const id of ordered) {
-      const base = rightPosBeforeRepack.get(id) || rightPos.get(id);
-      const h = stackExpandedHeights.get(id) || nodeHeight;
-      const center = (base?.y ?? 0) + nodeHeight / 2;
-      const desiredTop = center - h / 2;
-      const top = Math.max(desiredTop, cursor);
-      rightPos.set(id, { x: rightPos.get(id)?.x ?? (RIGHT_BASE_X + lv * RIGHT_LEVEL_STEP_X), y: top });
-      cursor = top + h + gapY;
-    }
-  }
+    // Effective height: expanded stack controllers use group height, everything else uses unitH.
+    const effectiveH = (id: string) => stackExpandedHeights.get(id) || unitH(id);
 
-  // === 5.85) Center right column relative to pivot (level 0) node ===
-  // After repack, recalculate the bounding box of the right column and center it
-  // relative to the pivot node's vertical center.
-  const level0Ids = idsByLevel.get(0) || [];
-  if (level0Ids.length > 0 && rightSorted.length > level0Ids.length) {
-    // Find the pivot node (level 0) center
-    const pivotId = level0Ids[0]!;
-    const pivotPos = rightPos.get(pivotId);
-    const pivotCenterY = pivotPos ? pivotPos.y + nodeHeight / 2 : 0;
+    yCenter.clear();
+    let reposCursor = 0;
 
-    // Calculate current bounding box of all non-level-0 right nodes
-    let minY = Infinity;
-    let maxY = -Infinity;
+    const ensureLevelVisible = (level: number) => {
+      const allIds = idsByLevel.get(level) || [];
+      const ids = allIds.filter(isVisibleRight);
+      if (ids.length === 0) return;
+      const gapY = rightGapY(level);
+
+      const desired = new Map<string, number>();
+      for (const id of ids) {
+        // Barycentric: center around VISIBLE children only.
+        const kids = Array.from(childrenOf.get(id) || []).filter(
+          (k) => isVisibleRight(k) && typeof yCenter.get(k) === 'number',
+        );
+        if (kids.length > 0) {
+          const avg = kids.reduce((s, k) => s + (yCenter.get(k) || 0), 0) / kids.length;
+          desired.set(id, avg);
+          continue;
+        }
+        // Leaf / stack controller: append sequentially.
+        const h = effectiveH(id);
+        desired.set(id, reposCursor + h / 2);
+        reposCursor += h + gapY;
+      }
+
+      // Resolve overlaps (preserves relative order).
+      const sorted = [...ids].sort((a, b) => (desired.get(a)! - desired.get(b)!));
+      let prevBottom = -Infinity;
+      for (const id of sorted) {
+        const h = effectiveH(id);
+        const half = h / 2;
+        const minY = isFinite(prevBottom) ? prevBottom + gapY + half : -Infinity;
+        const yc = Math.max(desired.get(id)!, minY);
+        yCenter.set(id, yc);
+        prevBottom = yc + half;
+      }
+    };
+
+    // Level 0 first (leaves/deterministic), then upward.
+    ensureLevelVisible(0);
+    for (let lv = 1; lv <= maxLevel; lv++) ensureLevelVisible(lv);
+
+    // Commit to rightPos.
     for (const rn of rightSorted) {
+      if (!isVisibleRight(rn.id)) continue;
       const lv = hLevel.get(rn.id) || 0;
-      if (lv === 0) continue; // Skip pivot itself
-      const p = rightPos.get(rn.id);
-      if (!p) continue;
-      const h = stackExpandedHeights.get(rn.id) || (unitHeights.get(rn.id) || nodeHeight);
-      minY = Math.min(minY, p.y);
-      maxY = Math.max(maxY, p.y + h);
+      const x = RIGHT_BASE_X + lv * RIGHT_LEVEL_STEP_X;
+      const yc = yCenter.get(rn.id) ?? 0;
+      rightPos.set(rn.id, { x, y: yc - nodeHeight / 2 });
     }
 
-    if (minY < Infinity && maxY > -Infinity) {
-      const currentCenterY = (minY + maxY) / 2;
-      const shiftY = pivotCenterY - currentCenterY;
-
-      // Apply shift to all non-level-0 nodes
+    // Re-center all visible right nodes around Y=0.
+    {
+      let minY = Infinity;
+      let maxY = -Infinity;
       for (const rn of rightSorted) {
-        const lv = hLevel.get(rn.id) || 0;
-        if (lv === 0) continue;
+        if (!isVisibleRight(rn.id)) continue;
         const p = rightPos.get(rn.id);
         if (!p) continue;
-        rightPos.set(rn.id, { x: p.x, y: p.y + shiftY });
+        const h = effectiveH(rn.id);
+        minY = Math.min(minY, p.y);
+        maxY = Math.max(maxY, p.y + h);
+      }
+      if (minY < Infinity && maxY > -Infinity) {
+        const shiftY = -((minY + maxY) / 2);
+        for (const rn of rightSorted) {
+          if (!isVisibleRight(rn.id)) continue;
+          const p = rightPos.get(rn.id);
+          if (!p) continue;
+          rightPos.set(rn.id, { x: p.x, y: p.y + shiftY });
+        }
       }
     }
   }
@@ -3093,16 +3861,23 @@ export async function layoutLevelsTwoPane<T = any>(
 
     for (let bIdx = 0; bIdx < blocks.length; bIdx++) {
       const b = blocks[bIdx]!;
+      const isBusinessBlock = Boolean((b as any)?.businessBlockCard);
       const safeRows = Math.max(1, Math.floor((b as any)?.rows || rows || 1));
       const minBase = compactLeftPane ? COMPACT_NODE_LAYOUT_HEIGHT : nodeHeight;
       // Compute per-row max height for this type block (supports mixed compact/full nodes).
       const rowHeights = new Array(safeRows).fill(minBase);
-      for (const rb of (b.relBlocks || [])) {
-        for (let idx = 0; idx < (rb.nodes || []).length; idx++) {
-          const childN = rb.nodes[idx]!;
-          const rowIdx = idx % Math.max(1, safeRows);
-          const nd: any = (childN as any)?.data || {};
-          rowHeights[rowIdx] = Math.max(rowHeights[rowIdx], leftPaneLayoutHeightFor(nd));
+      if (isBusinessBlock) {
+        rowHeights[0] = CONTEXT_CARD_HEIGHT;
+      } else {
+        for (const rb of (b.relBlocks || [])) {
+          for (let idx = 0; idx < (rb.nodes || []).length; idx++) {
+            const childN = rb.nodes[idx]!;
+            // Synthetic business-block cards are placed separately and must NOT influence row heights/offsets.
+            if (String((childN as any)?.id || '').startsWith('levels:leftblock:card:')) continue;
+            const rowIdx = idx % Math.max(1, safeRows);
+            const nd: any = (childN as any)?.data || {};
+            rowHeights[rowIdx] = Math.max(rowHeights[rowIdx], leftPaneLayoutHeightFor(nd));
+          }
         }
       }
       const rowOffsets = new Array(safeRows).fill(0);
@@ -3113,7 +3888,7 @@ export async function layoutLevelsTwoPane<T = any>(
       // Create a real container for this type section (Approach #1).
       // Children will be nested under this container, so ReactFlow owns the geometry and dividers stay crisp.
       const typeKey = String((b as any)?.typeKey || '').trim() || 'UNKNOWN';
-      const typeLabel = getTypeGroupLabel(typeKey);
+      const typeLabel = getRoleGroupLabel(typeKey);
       const typeGroupId = `levels:lefttype:${groupId}:${typeKey}`;
       const typeGroupX = Math.round(FRAME_PAD_X + Math.max(0, Math.floor((b as any)?.startX || 0)));
       // Container width is derived from column counts (stored in blockW).
@@ -3134,19 +3909,33 @@ export async function layoutLevelsTwoPane<T = any>(
           isGroup: true,
           groupIsBackdrop: true,
           groupInteractive: false,
-          groupHideHeader: false,
+          groupHideHeader: isBusinessBlock,
           groupNoFill: true,
-          groupTitle: typeLabel,
+          groupTitle: isBusinessBlock ? '' : typeLabel,
           // Vertical dividers between type columns:
           groupBorderMode: bIdx < blocks.length - 1 ? 'divider-right' : 'none',
           // For future: useful for debugging and potential “scroll to section”
           groupParentId: groupParentId,
+          // Overflow pill: how many nodes are hidden behind the per-category cap
+          groupOverflowCount: isBusinessBlock ? 0 : ((b as any)?.overflowCount || 0),
+          groupOverflowKey: typeGroupId,
+          groupOverflowExpanded: expandedRoleGroups instanceof Set && expandedRoleGroups.has(typeGroupId),
+          onToggleRoleOverflow,
+          // Expanded business block: show a "← Summary" collapse affordance in header
+          ...((!isBusinessBlock && BUSINESS_BLOCK_KEYS.has(typeKey)) ? {
+            groupBlockCollapseKey: `__block__:${typeKey}`,
+            groupBlockCollapseGroupId: groupId,
+            onToggleSubcategoryCollapse,
+          } : {}),
         } as any,
       } as any);
 
       const relBlocks = (b.relBlocks || []) as any[];
+      const businessBlockRelGroupId = `levels:leftrel:${typeGroupId}:__block__:${typeKey}`;
+      let businessBlockRelGroupCreated = false;
       for (let rbIdx = 0; rbIdx < relBlocks.length; rbIdx++) {
         const rb: any = relBlocks[rbIdx]!;
+        const isBusinessBlockRb = Boolean((rb as any)?.businessBlock);
         const edgeTypeKey = String((rb as any)?.edgeTypeKey || '').trim();
         const relKeyNorm = normalizeEdgeType(edgeTypeKey);
         const isCompetesSubcategory = compactLeftPane && relKeyNorm === 'COMPETES_WITH';
@@ -3161,40 +3950,106 @@ export async function layoutLevelsTwoPane<T = any>(
         // Create a real container for this relation subcategory within the type section.
         const rbStart = Math.round(Math.max(0, Math.floor((rb as any)?.startX || 0)));
         const rbW = Math.max(1, Math.round(Math.floor((rb as any)?.blockW || 0) || 1));
-        const relGroupId = `levels:leftrel:${typeGroupId}:${relKeyNorm || 'OTHER'}:${rbIdx}`;
-        groupNodes.push({
-          id: relGroupId,
-          type: 'horizonGroup' as any,
-          position: { x: rbStart, y: 0 },
-          parentId: typeGroupId,
-          extent: 'parent' as any,
-          selectable: false,
-          draggable: false,
-          connectable: false,
-          focusable: false,
-          deletable: false,
-          style: { width: rbW, height: Math.max(1, Math.round(groupH)), zIndex: 0 } as any,
-          data: {
-            isGroup: true,
-            groupIsBackdrop: false,
-            groupInteractive: false,
-            groupHideHeader: true,
-            groupNoFill: true,
-            // Only draw vertical dividers between relation subcategories.
-            groupBorderMode: rbIdx < relBlocks.length - 1 ? 'divider-right' : 'none',
-            // Footer label + collapse control (rendered by HorizonGroupNode).
-            groupFooterTitle: relTitle,
-            groupFooterEdgeTypeKey: relKeyNorm,
-            groupFooterNodeCount: nodeCount,
-            groupFooterCollapsed: collapsed,
-            groupFooterFirstNodeId: firstNodeId,
-            onToggleSubcategoryCollapse,
-            groupId: groupId, // root Levels-left group
-          } as any,
-        } as any);
+        const relGroupId = isBusinessBlockRb ? businessBlockRelGroupId : `levels:leftrel:${typeGroupId}:${relKeyNorm || 'OTHER'}:${rbIdx}`;
+        const relGroupCreatedNow = (() => {
+          if (!isBusinessBlockRb) return true;
+          if (businessBlockRelGroupCreated) return false;
+          businessBlockRelGroupCreated = true;
+          return true;
+        })();
+        if (relGroupCreatedNow) {
+          groupNodes.push({
+            id: relGroupId,
+            type: 'horizonGroup' as any,
+            position: { x: isBusinessBlockRb ? 0 : rbStart, y: 0 },
+            parentId: typeGroupId,
+            extent: 'parent' as any,
+            selectable: false,
+            draggable: false,
+            connectable: false,
+            focusable: false,
+            deletable: false,
+            style: { width: isBusinessBlockRb ? typeGroupW : rbW, height: Math.max(1, Math.round(groupH)), zIndex: 0 } as any,
+            data: {
+              isGroup: true,
+              groupIsBackdrop: true,
+              groupInteractive: false,
+              groupHideHeader: true,
+              groupNoFill: true,
+              // Only draw vertical dividers between relation subcategories.
+              // Business-block cards use internal columns (card + items) and should read as ONE subgroup.
+              groupBorderMode: isBusinessBlockRb ? 'none' : (rbIdx < relBlocks.length - 1 ? 'divider-right' : 'none'),
+              // Footer label + collapse control (rendered by HorizonGroupNode).
+              // No footer for business block context cards.
+              groupFooterTitle: isBusinessBlockRb ? '' : relTitle,
+              groupFooterEdgeTypeKey: isBusinessBlockRb ? '' : relKeyNorm,
+              groupFooterNodeCount: isBusinessBlockRb ? 0 : nodeCount,
+              groupFooterCollapsed: isBusinessBlockRb ? false : collapsed,
+              groupFooterFirstNodeId: isBusinessBlockRb ? '' : firstNodeId,
+              onToggleSubcategoryCollapse,
+              groupId: groupId, // root Levels-left group
+            } as any,
+          } as any);
+        }
 
         for (let idx = 0; idx < rb.nodes.length; idx++) {
           const child = rb.nodes[idx]!;
+
+          // Detect synthetic expanded context card created by buildExpandedContextCard.
+          // IMPORTANT: do NOT treat "old" controller nodes (which may still have type=horizonContextCard from
+          // previous layout runs) as synthetic — that causes duplicates.
+          const isSyntheticContextCard =
+            String((child as any)?.id || '').startsWith('levels:leftblock:card:');
+
+          const rbStartX = isBusinessBlockRb ? rbStart : 0;
+          if (isSyntheticContextCard) {
+            // Render the synthetic context card directly — preserve its data as-is.
+            const cx = LEFT_REL_CONTAINER_PAD_X + rbStartX;
+            const cy = PAD_TOP;
+            childNodes.push({
+              ...(child as any),
+              type: 'horizonContextCard' as any,
+              parentId: relGroupId,
+              extent: 'parent' as any,
+              zIndex: 1,
+              hidden: false,
+              data: (child as any)?.data || {},
+              position: { x: cx, y: cy },
+              style: { width: CONTEXT_CARD_WIDTH, height: CONTEXT_CARD_HEIGHT },
+            } as any);
+
+            // If collapsed: add hidden members for stack-proxy edges (controller = this card).
+            const rbCollapsed = Boolean((rb as any)?.collapsed);
+            const hiddenIds: string[] = Array.isArray((rb as any)?.hiddenMemberIds) ? (rb as any).hiddenMemberIds : [];
+            const controllerId = String((rb as any)?.controllerId || String((child as any)?.id || '')).trim();
+            const stackKey = String((rb as any)?.stackKey || '').trim();
+            const nodeCount = typeof (rb as any)?.nodeCount === 'number' ? (rb as any).nodeCount : hiddenIds.length;
+            if (rbCollapsed && hiddenIds.length > 0 && controllerId) {
+              for (const hid of hiddenIds) {
+                const member = nodeById.get(String(hid || '').trim());
+                if (!member) continue;
+                const md0: any = (member as any)?.data || {};
+                const md: any = { ...md0 };
+                md.stackGroupKey = stackKey;
+                md.stackCount = nodeCount;
+                md.stackExpanded = false;
+                md.hiddenByStack = true;
+                (md as any).stackControllerId = controllerId;
+                if (isLeftPaneCompactNode(md)) md.nodeSize = 'compact';
+                childNodes.push({
+                  ...(member as any),
+                  parentId: relGroupId,
+                  extent: 'parent' as any,
+                  zIndex: 0,
+                  hidden: true,
+                  data: md,
+                  position: { x: cx, y: cy },
+                } as any);
+              }
+            }
+            continue;
+          }
+
           // Column-major within each relation sub-block: first fill vertical, then move right.
           // For COMPETES: compute its own compact row offsets so it doesn't inherit tall row heights
           // from other subcategories (e.g. AUDIT) within the same type block.
@@ -3204,7 +4059,9 @@ export async function layoutLevelsTwoPane<T = any>(
           const rowIdx = idx % rbRows;
           const colIdx = Math.floor(idx / rbRows);
           // Keep some "air" from the left divider inside each relation container.
-          const cx = Math.round(LEFT_REL_CONTAINER_PAD_X + colIdx * (nodeWidth + groupChildGapX));
+          const rbNodeW = (rb as any)?.nodeW || (b as any)?.nodeW || nodeWidth;
+          const cxBase = LEFT_REL_CONTAINER_PAD_X + rbStartX;
+          const cx = Math.round(cxBase + colIdx * (rbNodeW + groupChildGapX));
           const cy = (() => {
             if (!competesUseCompactOffsets) return PAD_TOP + (rowOffsets[rowIdx] || 0);
             // Compact rows: each row is COMPACT_NODE_LAYOUT_HEIGHT + groupChildGapY.
@@ -3233,6 +4090,16 @@ export async function layoutLevelsTwoPane<T = any>(
           delete d.stackTitle;
           delete d.stackSubtitle;
 
+          // Clear any stale context card fields on real nodes.
+          delete d.contextCard;
+          delete d.contextTitle;
+          delete d.contextLines;
+          delete d.contextCount;
+          delete d.contextBlockKey;
+          delete d.contextGroupId;
+          delete (d as any).contextExpanded;
+          delete d.onToggleContextDetails;
+
           if (isController && isCollapsed && stackKey && edgeTypeKey && nodeCount > 1) {
             d.stackGroupKey = stackKey;
             d.stackCount = nodeCount;
@@ -3259,15 +4126,67 @@ export async function layoutLevelsTwoPane<T = any>(
             d.nodeSize = 'compact';
           }
 
+          const allowHiddenByStack = (() => {
+            const dHidden: any = (child as any)?.data || {};
+            if (!dHidden?.hiddenByStack) return false;
+            const stackGroupKey = String(dHidden?.stackGroupKey || '').trim();
+            const prefix = `levels:leftblock:${groupId}:`;
+            if (!stackGroupKey.startsWith(prefix)) return false;
+            const blockKey = stackGroupKey.slice(prefix.length).trim();
+            if (!blockKey) return false;
+            return !isSubcategoryCollapsed(groupId, `__block__:${blockKey}`);
+          })();
+
+          const originalType = String((child as any)?.type || '').trim();
+          const nextType = originalType === 'horizonContextCard' ? 'horizonFragment' : (originalType || (child as any).type);
+          const nextStyle = originalType === 'horizonContextCard' ? undefined : (child as any).style;
+
+          // Masonry packing (expanded business blocks): per-column y cursors based on true node heights.
+          const useMasonry = Boolean((rb as any)?.masonry);
+          if (useMasonry) {
+            const cols = Math.max(1, Math.floor((rb as any)?.cols || 1));
+            const colHeights = ((rb as any)._masonryColHeights as number[] | undefined) || new Array(cols).fill(0);
+            let bestCol = 0;
+            let bestY = colHeights[0] ?? 0;
+            for (let c = 1; c < colHeights.length; c++) {
+              const y = colHeights[c] ?? 0;
+              if (y < bestY) { bestY = y; bestCol = c; }
+            }
+            // Apply compact node size for left pane when enabled BEFORE measuring height.
+            if (isCompetesSubcategory || isLeftPaneCompactNode(d)) {
+              d.nodeSize = 'compact';
+            }
+            const h = leftPaneLayoutHeightFor(d);
+            const mx = Math.round(cxBase + bestCol * (rbNodeW + groupChildGapX));
+            const my = Math.round(PAD_TOP + bestY);
+            colHeights[bestCol] = (colHeights[bestCol] ?? 0) + h + groupChildGapY;
+            (rb as any)._masonryColHeights = colHeights;
+
+            childNodes.push({
+              ...(child as any),
+              type: nextType as any,
+              parentId: relGroupId,
+              extent: 'parent' as any,
+              zIndex: 1,
+              hidden: preHiddenIds.has(child.id) || (Boolean((child as any).hidden) && !allowHiddenByStack),
+              data: d,
+              position: { x: mx, y: my },
+              ...(typeof nextStyle !== 'undefined' ? { style: nextStyle } : { style: undefined }),
+            } as any);
+            continue;
+          }
+
           childNodes.push({
             ...(child as any),
+            type: nextType as any,
             parentId: relGroupId,
             extent: 'parent' as any,
             zIndex: 1,
             // Preserve manual hidden state; derived stack hiding is applied below.
-            hidden: preHiddenIds.has(child.id) || Boolean((child as any).hidden),
+            hidden: preHiddenIds.has(child.id) || (Boolean((child as any).hidden) && !allowHiddenByStack),
             data: d,
             position: { x: cx, y: cy },
+            ...(typeof nextStyle !== 'undefined' ? { style: nextStyle } : { style: undefined }),
           } as any);
 
           // If collapsed: add hidden stack members so LensCanvasCockpit can generate stackproxy edges.
@@ -3771,10 +4690,13 @@ export async function layoutLevelsTwoPane<T = any>(
     const controllerPos = rightPos.get(controllerId);
     if (!controllerPos) continue;
 
-    // Calculate group dimensions (vertical layout)
+    // Calculate group dimensions (2-column grid when >= 4 members, else single column)
     const count = filteredMembers.length;
-    const innerH = count * nodeHeight + Math.max(0, count - 1) * stackGroupGapY;
-    const groupW = nodeWidth + STACK_GROUP_PAD_X * 2;
+    const stackCols = count >= 4 ? 2 : 1;
+    const stackRows = Math.ceil(count / stackCols);
+    const STACK_GROUP_GAP_X = 16;
+    const innerH = stackRows * nodeHeight + Math.max(0, stackRows - 1) * stackGroupGapY;
+    const groupW = stackCols * nodeWidth + Math.max(0, stackCols - 1) * STACK_GROUP_GAP_X + STACK_GROUP_PAD_X * 2;
     const groupH = innerH + STACK_GROUP_PAD_TOP + STACK_GROUP_PAD_BOTTOM;
 
     // Find the parent (pivot) node position to center the group relative to it
@@ -3842,18 +4764,21 @@ export async function layoutLevelsTwoPane<T = any>(
         isStackGroup: true,
         stackGroupKey: stackKey,
         stackGroupExpanded: true,
+        stackVisualType: meta.visualType,
         // Callback will be attached in LensCanvasCockpit
       } as any,
     } as any);
 
-    // Attach children as a vertical list inside the group
+    // Attach children in a column-major grid inside the group
     for (let idx = 0; idx < filteredMembers.length; idx++) {
       const memberId = filteredMembers[idx]!;
       const member = nodeById.get(memberId);
       if (!member) continue;
 
-      const cx = STACK_GROUP_PAD_X;
-      const cy = STACK_GROUP_PAD_TOP + idx * (nodeHeight + stackGroupGapY);
+      const col = Math.floor(idx / stackRows);
+      const row = idx % stackRows;
+      const cx = STACK_GROUP_PAD_X + col * (nodeWidth + STACK_GROUP_GAP_X);
+      const cy = STACK_GROUP_PAD_TOP + row * (nodeHeight + stackGroupGapY);
 
       // Mark as grouped so it doesn't render as standalone
       groupedChildIds.add(memberId);
@@ -3883,9 +4808,12 @@ export async function layoutLevelsTwoPane<T = any>(
   }
 
   // === 6.6) Resolve overlaps between stack groups and other nodes in same column ===
-  // After creating stack groups, ensure no standalone nodes overlap with them.
+  // After creating stack groups, repack all items (groups + standalone nodes) in each level.
+  // This prevents overlaps between expanded stacks and other nodes in the same column.
   const stackGroupPositions = new Map<string, { x: number; y: number; w: number; h: number; level: number }>();
-  for (const gn of groupNodes) {
+  const stackGroupIndex = new Map<string, number>();
+  for (let i = 0; i < groupNodes.length; i++) {
+    const gn = groupNodes[i]!;
     const gid = String(gn.id || '').trim();
     if (!gid.startsWith('stack:group:')) continue;
     const gd: any = gn.data || {};
@@ -3904,51 +4832,54 @@ export async function layoutLevelsTwoPane<T = any>(
       h: style.height || nodeHeight,
       level: lv,
     });
+    stackGroupIndex.set(gid, i);
   }
 
-  // For each level with a stack group, repack non-grouped nodes to avoid overlap
-  const levelToStackGroups = new Map<number, Array<{ id: string; y: number; h: number }>>();
+  type LevelItem = { kind: 'group' | 'node'; id: string; y: number; h: number };
+  const levelToItems = new Map<number, LevelItem[]>();
   for (const [gid, gpos] of stackGroupPositions.entries()) {
-    const arr = levelToStackGroups.get(gpos.level) || [];
-    arr.push({ id: gid, y: gpos.y, h: gpos.h });
-    levelToStackGroups.set(gpos.level, arr);
+    const arr = levelToItems.get(gpos.level) || [];
+    arr.push({ kind: 'group', id: gid, y: gpos.y, h: gpos.h });
+    levelToItems.set(gpos.level, arr);
   }
 
-  for (const [lv, stackGroups] of levelToStackGroups.entries()) {
-    if (stackGroups.length === 0) continue;
+  for (const [lv, items] of levelToItems.entries()) {
     const ids = idsByLevel.get(lv) || [];
-    // Get non-grouped nodes at this level
-    const standaloneIds = ids.filter((id) =>
-      !groupedChildIds.has(id) &&
-      !stackHiddenIds.has(id) &&
-      !preHiddenIds.has(id) &&
-      !stackMetaById.has(id) // Not a controller (controllers become groups)
-    );
-    if (standaloneIds.length === 0) continue;
-
-    // Sort stack groups by Y
-    const sortedGroups = [...stackGroups].sort((a, b) => a.y - b.y);
-
-    // For each standalone node, check if it overlaps with any group
-    for (const nodeId of standaloneIds) {
+    // Add standalone nodes at this level (non-grouped, visible)
+    for (const nodeId of ids) {
+      if (
+        groupedChildIds.has(nodeId) ||
+        stackHiddenIds.has(nodeId) ||
+        preHiddenIds.has(nodeId) ||
+        stackMetaById.has(nodeId) // Not a controller (controllers become groups)
+      ) continue;
       const nodePos = rightPos.get(nodeId);
       if (!nodePos) continue;
       const nodeH = unitHeights.get(nodeId) || nodeHeight;
-      const nodeTop = nodePos.y;
-      const nodeBottom = nodeTop + nodeH;
+      items.push({ kind: 'node', id: nodeId, y: nodePos.y, h: nodeH });
+    }
+    if (items.length <= 1) continue;
 
-      // Check overlap with each group
-      for (const grp of sortedGroups) {
-        const grpTop = grp.y;
-        const grpBottom = grp.y + grp.h;
-
-        // If node overlaps with group, move it below the group
-        if (nodeBottom > grpTop && nodeTop < grpBottom) {
-          const newY = grpBottom + rightGapY(lv);
-          rightPos.set(nodeId, { x: nodePos.x, y: newY });
-          break; // Only move once
+    // Repack by current Y, preserving order as much as possible
+    const gapY = rightGapY(lv);
+    const ordered = [...items].sort((a, b) => a.y - b.y);
+    let cursor = ordered[0] ? ordered[0].y : 0;
+    for (const item of ordered) {
+      const top = Math.max(item.y, cursor);
+      if (item.kind === 'group') {
+        const idx = stackGroupIndex.get(item.id);
+        if (typeof idx === 'number') {
+          const gn = groupNodes[idx]!;
+          groupNodes[idx] = { ...gn, position: { x: (gn.position as any)?.x ?? 0, y: Math.round(top) } } as any;
+          // Keep stackGroupPositions in sync for any later uses
+          const gpos = stackGroupPositions.get(item.id);
+          if (gpos) gpos.y = top;
         }
+      } else {
+        const p = rightPos.get(item.id);
+        if (p) rightPos.set(item.id, { x: p.x, y: Math.round(top) });
       }
+      cursor = top + item.h + gapY;
     }
   }
 
@@ -4006,6 +4937,10 @@ export async function layoutLevelsTwoPane<T = any>(
         (d as any).stackSubtitle = meta.subtitle;
         (d as any).stackKind = meta.kind;
         (d as any).stackVisualType = meta.visualType;
+        // Stack controllers should not show the dock panel (filter icons below the node).
+        // The dock is for individual nodes; stacks have their own expand/collapse UI.
+        delete d.rightDockEnabled;
+        delete d.onToggleRightDock;
       }
       const hiddenByStack = stackHiddenIds.has(n.id);
       d.hiddenByStack = hiddenByStack;
@@ -4745,6 +5680,8 @@ export interface LayoutOptions_Custom {
   maxNodesPerRow?: number;
   /** Maximum number of rows for children (default 3) */
   maxChildRows?: number;
+  /** Optional hierarchy axis override (e.g., "ownership") */
+  hierarchyAxis?: string;
   /**
    * Collapsed subcategories in left-pane groups (Levels layout).
    * Key format: `${groupId}:${edgeType}` for per-group state, or just `edgeType` for global default.
@@ -4756,6 +5693,15 @@ export interface LayoutOptions_Custom {
    * Called from group UI when user clicks the collapse/expand button.
    */
   onToggleSubcategoryCollapse?: (groupId: string, edgeType: string, nextCollapsed: boolean, focusNodeId?: string) => void;
+  /**
+   * Expanded role groups (left pane, compact mode). Keys are type-group IDs:
+   * `levels:lefttype:${groupId}:${role}`
+   */
+  expandedRoleGroups?: Set<string>;
+  /**
+   * Callback to toggle role overflow (left pane, compact mode).
+   */
+  onToggleRoleOverflow?: (groupKey: string, nextExpanded: boolean) => void;
   /**
    * Use compact node rendering for left pane groups (Levels layout).
    * When true, left pane nodes will have nodeSize: 'compact' and use COMPACT_NODE_LAYOUT_HEIGHT.
@@ -5608,6 +6554,7 @@ async function layoutWithHierarchy<T = any>(
     layerSpacing = 150, // Extra space for incoming/outgoing children
     maxNodesPerRow = DEFAULT_MAX_NODES_PER_ROW,
     maxChildRows = MAX_CHILD_ROWS,
+    hierarchyAxis,
   } = options;
 
   // First pass: build node map
@@ -5617,17 +6564,53 @@ async function layoutWithHierarchy<T = any>(
   }
 
   // Second pass: build hierarchy
+  const axis = String(hierarchyAxis || '').toLowerCase().trim();
+  const ownershipEdgeTypes = new Set(['OWNS', 'SUBSIDIARY_OF', 'CONTROLS', 'INVESTS_IN']);
+  const ownershipPriority: Record<string, number> = {
+    OWNS: 1,
+    SUBSIDIARY_OF: 1,
+    CONTROLS: 2,
+    INVESTS_IN: 3,
+  };
+  const parentByNodeId = new Map<string, string>();
+  const parentPriorityByNodeId = new Map<string, number>();
+  if (axis === 'ownership') {
+    for (const edge of edges) {
+      const et = normalizeEdgeType((edge as any)?.data?.edgeType || (edge as any)?.label || (edge as any)?.type);
+      if (!ownershipEdgeTypes.has(et)) continue;
+      const sourceId = String((edge as any)?.source || '').trim();
+      const targetId = String((edge as any)?.target || '').trim();
+      if (!sourceId || !targetId) continue;
+      const priority = ownershipPriority[et] ?? 99;
+      const setParent = (childId: string, parentId: string) => {
+        const existing = parentPriorityByNodeId.get(childId);
+        if (existing == null || priority < existing) {
+          parentByNodeId.set(childId, parentId);
+          parentPriorityByNodeId.set(childId, priority);
+        }
+      };
+      if (et === 'SUBSIDIARY_OF') {
+        setParent(sourceId, targetId);
+      } else {
+        setParent(targetId, sourceId);
+      }
+    }
+  }
+
   const childrenMap = new Map<string, Node<T>[]>(); // parentId -> children
   const rootNodes: Node<T>[] = [];
   const processedIds = new Set<string>();
 
   for (const node of nodes) {
     const nodeData = node.data as any;
-    const parentId = nodeData?.parentFragmentId;
+    const ownershipParent = parentByNodeId.get(node.id);
+    const parentId = ownershipParent || nodeData?.parentFragmentId;
     const depth = nodeData?.depth;
     
-    // Node is root if: no parentId, or parentId doesn't exist, or depth=0
-    const isRoot = !parentId || !nodeMap.has(parentId) || depth === 0;
+    // Node is root if: no parentId, or parentId doesn't exist in nodeMap.
+    // When ownership axis provides an explicit parent, depth=0 does NOT override it —
+    // the ownership tree takes priority over the default expansion depth.
+    const isRoot = !parentId || !nodeMap.has(parentId) || (depth === 0 && !ownershipParent);
     
     if (isRoot) {
       rootNodes.push(node);

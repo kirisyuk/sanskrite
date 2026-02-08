@@ -2560,6 +2560,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       name: string;
       scope: string[];
       metrics: Record<string, number>;
+      viewConfig?: Record<string, any>;
     };
     graph: {
       nodes: any[];

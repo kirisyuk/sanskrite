@@ -127,13 +127,17 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Формируем ответ для Cockpit UI
+	lensPayload := map[string]interface{}{
+		"id":      lens.ID,
+		"name":    lens.Name,
+		"scope":   lens.Scope,
+		"metrics": metrics,
+	}
+	if len(lens.ViewConfig) > 0 {
+		lensPayload["viewConfig"] = lens.ViewConfig
+	}
 	response := map[string]interface{}{
-		"lens": map[string]interface{}{
-			"id":      lens.ID,
-			"name":    lens.Name,
-			"scope":   lens.Scope,
-			"metrics": metrics,
-		},
+		"lens": lensPayload,
 		"graph": map[string]interface{}{
 			"nodes": rootFragments,
 			"edges": allEdges,

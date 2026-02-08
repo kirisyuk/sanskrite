@@ -192,7 +192,7 @@ func main() {
 
 	var services []ai.AIService
 
-	vertexService := ai.NewVertexAIService(apiKey, modelManager)
+	vertexService := ai.NewGeminiService(apiKey, modelManager)
 	services = append(services, vertexService)
 
 	if openaiKey != "" {

@@ -952,7 +952,7 @@ INPUT ORGANIZATIONS (JSON array):
 }
 
 func buildTaskExecutorPrompt(items []ItemInput) string {
-	// VertexAIService task_executor mode expects raw JSON output (no tool calling).
+	// GeminiService task_executor mode expects raw JSON output (no tool calling).
 	b, _ := json.MarshalIndent(items, "", "  ")
 	return fmt.Sprintf(`Return ONLY valid JSON (no markdown, no code fences) matching schema:
 {
@@ -1039,7 +1039,7 @@ func newGenAIClient() *gen_combined.Client {
 }
 
 func newTaskExecutor(mm *ai.AIModelManager) *ai.AITaskExecutor {
-	// VertexAIService currently uses GEMINI_API_KEY (Generative Language API).
+	// GeminiService uses GEMINI_API_KEY (Generative Language API).
 	ctx := context.Background()
 	apiKey := loadGeminiOrVertexAPIKey(ctx, strings.TrimSpace(*projectID), false /* allowTest */)
 	if apiKey == "" {
@@ -1048,7 +1048,7 @@ func newTaskExecutor(mm *ai.AIModelManager) *ai.AITaskExecutor {
 	if apiKey != "" {
 		_ = os.Setenv("GEMINI_API_KEY", apiKey)
 	}
-	vertex := ai.NewVertexAIService(apiKey, mm)
+	vertex := ai.NewGeminiService(apiKey, mm)
 	return ai.NewAITaskExecutor([]ai.AIService{vertex}, mm)
 }
 

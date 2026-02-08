@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -80,6 +81,7 @@ func (a *IntentResolverAgent) Resolve(ctx context.Context, query string) (*Inten
 }
 
 // ResolveWithContext resolves intent with optional existing domain context to avoid duplicates.
+// Uses a single unified LLM call (gemini-3-flash-preview) to extract domains, anchors, and decomposition hints simultaneously.
 func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query string, existingDomains []string) (*IntentResolution, error) {
 	if a == nil || a.executor == nil {
 		return nil, fmt.Errorf("intent resolver not configured")
@@ -89,47 +91,45 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 		return nil, fmt.Errorf("query is required")
 	}
 
-	domainAgent := NewDomainResolverAgent(a.executor)
-	domainPhase, err := domainAgent.ResolveWithContext(ctx, query, existingDomains)
-	if err != nil {
-		return nil, err
-	}
-	anchorAgent := NewAnchorResolverAgent(a.executor)
-	anchorPhase, err := anchorAgent.ResolveWithContext(ctx, query, domainPhase.Domains)
-	if err != nil {
-		return nil, err
+	prompt := buildUnifiedIntentPrompt(query, existingDomains)
+
+	verifier := ai.NewGenericVerifier(func(result IntentResolution) error {
+		if strings.TrimSpace(result.Focus) == "" {
+			return fmt.Errorf("focus is required")
+		}
+		if len(result.Anchors) == 0 && len(result.Domains) == 0 {
+			return fmt.Errorf("at least 1 anchor or domain is required")
+		}
+		return nil
+	})
+
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContentAnalysis,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			PreferredModel:               "gemini-3-flash-preview",
+			TextGenerationCapability:     true,
+			SearchGroundingCapability:    false,
+			MinCapabilityScore:           7,
+			MinContextWindow:             8000,
+			MaxOutputSize:                4096, // domains + anchors + hints in one response
+		},
+		Verifier: verifier,
 	}
 
-	var out IntentResolution
-	out.Focus = strings.TrimSpace(domainPhase.Focus)
-	out.SpherePaths = append([]string(nil), domainPhase.SpherePaths...)
-	out.Keywords = append([]string(nil), domainPhase.Keywords...)
-	out.Domains = append([]DomainResolution(nil), domainPhase.Domains...)
-	if len(anchorPhase.Anchors) > 0 {
-		out.Anchors = make([]struct {
-			CanonicalPath string  `json:"canonicalPath"`
-			Type          string  `json:"type"`
-			Name          string  `json:"name,omitempty"`
-			Confidence    float64 `json:"confidence"`
-			Reason        string  `json:"reason"`
-		}, 0, len(anchorPhase.Anchors))
-		for _, a := range anchorPhase.Anchors {
-			out.Anchors = append(out.Anchors, struct {
-				CanonicalPath string  `json:"canonicalPath"`
-				Type          string  `json:"type"`
-				Name          string  `json:"name,omitempty"`
-				Confidence    float64 `json:"confidence"`
-				Reason        string  `json:"reason"`
-			}{
-				CanonicalPath: a.CanonicalPath,
-				Type:          a.Type,
-				Name:          a.Name,
-				Confidence:    a.Confidence,
-				Reason:        a.Reason,
-			})
-		}
+	raw, err := a.executor.ExecuteStructuredTask(ctx, task)
+	if err != nil {
+		return nil, fmt.Errorf("unified intent resolve failed: %w", err)
 	}
-	out.DecompositionHints = append([]DecompositionHint(nil), anchorPhase.DecompositionHints...)
+
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("marshal intent result: %w", err)
+	}
+	var out IntentResolution
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, fmt.Errorf("decode intent result: %w", err)
+	}
 
 	// Normalize + validate (taxonomy-first).
 	out.Focus = strings.TrimSpace(out.Focus)
@@ -413,6 +413,143 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 	}
 
 	return &out, nil
+}
+
+// buildUnifiedIntentPrompt creates a single combined prompt that extracts domains, anchors,
+// and decomposition hints in one LLM call. This eliminates the sequential dependency between
+// the old DomainResolver and AnchorResolver phases.
+func buildUnifiedIntentPrompt(query string, existingDomains []string) string {
+	existingDomainsBlock := ""
+	if len(existingDomains) > 0 {
+		existingDomainsBlock = "EXISTING DOMAINS (reuse if matches; do not duplicate):\n"
+		for _, d := range normalizeDomainPathsList(existingDomains, 10) {
+			existingDomainsBlock += fmt.Sprintf("- %s\n", d)
+		}
+		if existingDomainsBlock != "" {
+			existingDomainsBlock = "\n" + existingDomainsBlock
+		}
+	}
+	quoted := extractQuotedPhrases(query)
+	quotedBlock := ""
+	if len(quoted) > 0 {
+		quotedBlock = "QUOTED PHRASES (treat each as a likely standalone entity name):\n"
+		for i, q := range quoted {
+			if i >= 5 {
+				break
+			}
+			quotedBlock += fmt.Sprintf("- %s\n", q)
+		}
+		quotedBlock += "\n"
+	}
+	multiHint := ""
+	if looksLikeMultiEntityQuery(query) {
+		multiHint = `MULTI-ENTITY HINT:
+- This query likely contains multiple distinct real-world entities. Prefer returning multiple separate anchors (2-3) rather than collapsing them into one.
+- Typical patterns: "X and Y", "X vs Y", person name + institution keyword, organization + product.
+
+`
+	}
+	return fmt.Sprintf(`You are an INTENT RESOLVER for a risk/intelligence analysis system. Output ONLY JSON.
+
+USER QUERY:
+%s
+%s
+%s%sOUTPUT JSON SCHEMA:
+{
+  "focus": "string (short, reusable intent statement, English)",
+  "spherePaths": ["string (canonical /sphere/... only)"],
+  "keywords": ["string (non-canonical tokens for search)"],
+  "domains": [
+    {
+      "canonicalPath": "string (/domain/v1/{contractType}/{facetKey}/{facetValue}...)",
+      "contractType": "string (allowlisted — see DOMAIN RULES)",
+      "title": "string (English human-readable Title Case; NOT a slug; 6-10 words max)",
+      "description": "string (actionable: Map X, identify Y, highlight Z...)",
+      "facets": { "geo": ["us"], "material": ["lithium"], "application": ["ev"] },
+      "projections": ["ORGANIZATION", "MARKET", "FACILITY", "GEO_REGION", "PRODUCT"],
+      "relatedDomains": ["string (/domain/v1/... optional)"],
+      "affectedDomains": ["string (/domain/v1/... optional)"],
+      "firstOrderEntities": ["string (canonical paths to add to Lens scope)"],
+      "confidence": 0.0,
+      "reason": "short reason"
+    }
+  ],
+  "anchors": [
+    {
+      "canonicalPath": "string (must match ANCHOR TAXONOMY below)",
+      "type": "ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL",
+      "name": "string (preferred English display name; NOT a slug; translate when possible)",
+      "confidence": 0.0,
+      "reason": "short reason"
+    }
+  ],
+  "decompositionHints": [
+    {
+      "anchorPath": "string (must match one anchor's canonicalPath)",
+      "entityTypes": ["ORGANIZATION", "PRODUCT", ...],
+      "subMarkets": ["segment1", ...],
+      "playerCategories": ["category1", ...],
+      "searchQueries": ["concrete English search query 1", ...]
+    }
+  ]
+}
+
+═══════════════════════════════════════════
+DOMAIN RULES
+═══════════════════════════════════════════
+- A DOMAIN is an executable knowledge contract: "what the user wants to know" and how to explore it.
+- Use domains when the query is analytical or a research focus that must be expanded into multiple entities.
+- If a matching DOMAIN already exists, reuse the SAME canonicalPath.
+- DOMAIN canonicalPath: /domain/v1/{contractType}/{facetKey}/{facetValue}...
+  Examples: /domain/v1/ecosystem-mapping/geo/my/sector/energy, /domain/v1/bilateral-relations/geo/sa-ye
+- facetKey MUST be one of: geo, topic, subject, project, asset, material, application, sector, industry, market, regulation, framework, time
+- contractType MUST be one of:
+  SUPPLY CHAIN: supply-chain, value-chain, logistics-flow, trade-flow, sourcing-map, procurement-map
+  RISK/GEOPOLITICS: risk-assessment, geopolitical-risk, bilateral-relations, sanctions-exposure, conflict-dynamics
+  MARKETS: market-opportunity, competitive-landscape, market-entry, market-sizing, demand-forecast, pricing-dynamics
+  INVESTMENT: investment-thesis, funding-landscape, exit-strategy, valuation-drivers, portfolio-exposure
+  OWNERSHIP/STRUCTURE: ownership-structure, control-map
+  TECHNOLOGY: technology-landscape, innovation-map, patent-landscape, rd-landscape, adoption-curve, disruption-analysis
+  ECOSYSTEM: ecosystem-mapping, stakeholder-mapping, partnership-landscape, influence-network, power-dynamics
+  RELATIONSHIP/COMMONALITY: commonality-analysis
+  POLICY: regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
+  SCENARIOS: scenario-analysis, macro-trends, megatrends, future-outlook
+  SECTOR: sector-overview, industry-structure, vertical-deep-dive
+  FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
+- BILATERAL: If query is about relations between two countries → contractType bilateral-relations, geo = {cc1}-{cc2} (alphabetically sorted lowercase ISO2).
+- OWNERSHIP: If query asks who owns/controls an entity → contractType ownership-structure, facet subject.
+- COMMONALITY: If query asks what connects/unifies X and Y → contractType commonality-analysis, facets subject.
+- title: Title Case, specific to query (BAD: "Market Landscape", GOOD: "EV Lithium Batteries Market Landscape"), Latin-script only, 6-10 words.
+- description: actionable ("Map X, identify Y, highlight Z...").
+- projections: ORGANIZATION, MARKET, FACILITY, GEO_REGION, PRODUCT, PERSON, EVENT, PROGRAM, GOV.
+
+═══════════════════════════════════════════
+ANCHOR TAXONOMY
+═══════════════════════════════════════════
+- Anchors are concrete real-world entities. Do NOT create domains as anchors.
+- canonicalPath namespaces: /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media
+- ALL path segments MUST be lowercase slugs (hyphens, no spaces).
+
+ORGANIZATION: /org/{iso2|na}/{slug} (e.g., /org/sa/saudi-aramco). GOV bodies: /gov/{iso2|na}/{slug}.
+FACILITY: /fac/{orgSlug}/{facilitySlug} or /fac/{facilitySlug}
+GEO_REGION: /loc/{countryAlpha2}/{admin1}/{city} — use "na" for unknown segments. Country-only: /loc/{cc}/na/na. Regional: /loc/gcc/na/na.
+PRODUCT: /product/{category}/{type}/{stage}/{slug} — category: raw|component|finished|service. Fallback: /product/{slug}.
+MARKET: /market/{geo}/{domain}/{vertical} — geo: ISO2, composite, regional (gcc, eu), or "global". Inherit country ISO2 from query when geographic context is present.
+PROGRAM: /program/{jurisdictionSlug}/{programSlug} or /program/{slug}
+PERSON: /person/{slug}
+EVENT: /event/{slug}
+MEDIA_CHANNEL: /media/{platform}/{slug}
+
+MARKET GEOGRAPHY: When query mentions a specific country AND a market → MARKET anchor MUST use that country's ISO2 as geo (NOT "global").
+
+DECOMPOSITION HINTS (REQUIRED for MARKET/PROGRAM anchors):
+- entityTypes: what to discover. subMarkets: segments. playerCategories: player types.
+- searchQueries: 3-5 concrete English web search queries designed to yield real-world entity names (NOT abstract "market size" queries).
+
+GENERAL:
+- Provide 1-3 anchors (what the Lens should attach to).
+- Prefer stable, specific anchors.
+- Return ONLY JSON. No markdown. No commentary.`, query, existingDomainsBlock, quotedBlock, multiHint)
 }
 
 func parseDomainPathForIntent(canonicalPath string) (contractType string, facets map[string][]string) {
@@ -1047,6 +1184,8 @@ RULES:
   - If the query is about relations/interaction between two countries or actors, you MUST create a DOMAIN of contractType bilateral-relations (in addition to anchors).
     Example: "Saudi Arabia and Yemen bilateral relations" -> domain:
       /domain/v1/bilateral-relations/geo/sa/geo/ye
+  - If the query asks who owns/controls an entity, you MUST create a DOMAIN of contractType ownership-structure.
+  - If the query asks what connects/unifies two entities, you MUST create a DOMAIN of contractType commonality-analysis (in addition to anchors).
   - DOMAIN canonicalPath MUST start with /domain/ and follow the DOMAIN taxonomy. /market/... is NEVER a DOMAIN path.
   - /market/... CAN be used as an ANCHOR when the user asks about a market as a concrete entity.
   - Domain canonicalPath MUST be: /domain/v1/{contractType}/{facetKey}/{facetValue}...
@@ -1065,10 +1204,14 @@ RULES:
       market-opportunity, competitive-landscape, market-entry, market-sizing, demand-forecast, pricing-dynamics
     INVESTMENT / FINANCE:
       investment-thesis, funding-landscape, exit-strategy, valuation-drivers, portfolio-exposure
+    OWNERSHIP / STRUCTURE:
+      ownership-structure, control-map
     TECHNOLOGY / INNOVATION:
       technology-landscape, innovation-map, patent-landscape, rd-landscape, adoption-curve, disruption-analysis
     ECOSYSTEM / STAKEHOLDER:
       ecosystem-mapping, stakeholder-mapping, partnership-landscape, influence-network, power-dynamics
+    RELATIONSHIP / COMMONALITY:
+      commonality-analysis
     POLICY / REGULATION:
       regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
     SCENARIOS / TRENDS:

@@ -335,7 +335,7 @@ func buildAITaskExecutorOrFatal() *ai.AITaskExecutor {
 	modelManager := ai.NewAIModelManager()
 
 	var services []ai.AIService
-	services = append(services, ai.NewVertexAIService(apiKey, modelManager))
+	services = append(services, ai.NewGeminiService(apiKey, modelManager))
 
 	if openaiKey := firstNonEmpty(getSecret("OPENAI_API_KEY"), getSecret("openai_api_key")); openaiKey != "" {
 		services = append(services, ai.NewOpenAIService(openaiKey, modelManager))

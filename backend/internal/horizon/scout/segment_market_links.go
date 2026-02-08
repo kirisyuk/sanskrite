@@ -41,6 +41,16 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 		segs = segs[:12]
 	}
 
+	// Extract org jurisdiction for geo-validation.
+	// An org should only be linked to markets in its own geo or "global"/"int".
+	orgGeo := strings.ToLower(strings.TrimSpace(extractJurisdiction(fragment.CanonicalPath)))
+	// Also accept the explicit jurisdictionIso2 identifier if canonical path has no geo.
+	if orgGeo == "" || orgGeo == "na" {
+		if iso2 := strings.ToLower(strings.TrimSpace(fragment.Identifiers["jurisdictionIso2"])); len(iso2) == 2 {
+			orgGeo = iso2
+		}
+	}
+
 	now := time.Now().UTC()
 	for _, rawSeg := range segs {
 		rawSeg = strings.TrimSpace(rawSeg)
@@ -55,6 +65,24 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 		marketPath, ok := taxonomy.MarketPathFromSegmentPath(seg)
 		if !ok || strings.TrimSpace(marketPath) == "" {
 			continue
+		}
+
+		// Geo-validation: org can only participate in markets matching its own geo or "global"/"int".
+		// This prevents a Saudi org from being linked to /market/kz/... just because
+		// the LLM generated a segment with geo=kz.
+		// Skip for global/int/regional orgs — they can participate in any market.
+		if orgGeo != "" && orgGeo != "na" && orgGeo != "global" && orgGeo != "int" &&
+			orgGeo != "gcc" && orgGeo != "eu" && orgGeo != "eaeu" && orgGeo != "asean" &&
+			orgGeo != "brics" && orgGeo != "opec" {
+			marketGeo := extractMarketGeo(marketPath)
+			if marketGeo != "" && marketGeo != "global" && marketGeo != "int" && marketGeo != orgGeo &&
+				!taxonomy.IsCountryInRegion(marketGeo, orgGeo) {
+				// Mismatch: rewrite market path to use org's geo instead.
+				marketPath = rewriteMarketGeo(marketPath, orgGeo)
+				if marketPath == "" {
+					continue
+				}
+			}
 		}
 
 		// Ensure market fragment exists.
@@ -155,4 +183,23 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 			_ = err
 		}
 	}
+}
+
+// extractMarketGeo returns the geo segment from a /market/{geo}/... path.
+func extractMarketGeo(marketPath string) string {
+	parts := strings.Split(strings.Trim(marketPath, "/"), "/")
+	if len(parts) >= 2 && parts[0] == "market" {
+		return strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+	return ""
+}
+
+// rewriteMarketGeo replaces the geo segment in a /market/{geo}/{domain}/{vertical} path.
+func rewriteMarketGeo(marketPath, newGeo string) string {
+	parts := strings.Split(strings.Trim(marketPath, "/"), "/")
+	if len(parts) < 3 || parts[0] != "market" {
+		return ""
+	}
+	parts[1] = strings.ToLower(strings.TrimSpace(newGeo))
+	return "/" + strings.Join(parts, "/")
 }

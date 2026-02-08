@@ -17,7 +17,7 @@ func ExampleBasicUsage() {
 	// Создаем сервисы для различных провайдеров
 	openAIService := NewOpenAIService("your-openai-api-key", modelManager)
 	claudeService := NewClaudeService("your-claude-api-key", modelManager)
-	vertexService := NewVertexAIService("your-vertex-api-key", modelManager)
+	vertexService := NewGeminiService("your-gemini-api-key", modelManager)
 
 	// Создаем executor с доступными сервисами
 	executor := NewAITaskExecutor(

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	hlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
@@ -184,9 +185,6 @@ func canonicalizeScopeWithFirestore(
 	if h == nil || h.service == nil || len(scope) == 0 {
 		return scope, nil
 	}
-	rewrites := map[string]string{}
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(scope))
 
 	var resolver interface {
 		Resolve(ctx context.Context, canonicalPath string, fragmentType models.FragmentType) (*scout.ResolveResult, error)
@@ -196,57 +194,78 @@ func canonicalizeScopeWithFirestore(
 	}
 	fragments := h.service.Fragments()
 
+	// Phase 1: Pre-filter and classify scope entries (no DB calls, fast).
+	type scopeEntry struct {
+		orig     string
+		cp       string // after local normalization
+		isQuery  bool
+		isDomain bool
+	}
+	entries := make([]scopeEntry, 0, len(scope))
 	for _, raw := range scope {
 		orig := strings.TrimSpace(raw)
 		if orig == "" {
 			continue
 		}
 		cp := orig
-
-		// Query scopes are kept as-is; they are resolved later.
-		if strings.HasPrefix(cp, "/query/") {
-			if _, ok := seen[cp]; ok {
-				continue
-			}
-			seen[cp] = struct{}{}
-			out = append(out, cp)
-			continue
-		}
-
-		// Domains: normalize path, but do not require an existing fragment.
-		if strings.HasPrefix(cp, "/domain/") {
+		isQuery := strings.HasPrefix(cp, "/query/")
+		isDomain := strings.HasPrefix(cp, "/domain/")
+		if isDomain {
 			if norm, nerr := taxonomy.NormalizeDomainCanonicalPath(cp); nerr == nil && strings.TrimSpace(norm) != "" {
 				cp = norm
 			}
 		}
-
-		// Validate path syntax (fail-open for empty/invalid — skip).
-		if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
-			continue
+		if !isQuery {
+			if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+				continue
+			}
 		}
+		entries = append(entries, scopeEntry{orig: orig, cp: cp, isQuery: isQuery, isDomain: isDomain})
+	}
 
-		// Canonicalize only when we can verify an existing fragment in Firestore.
-		if resolver != nil && !strings.HasPrefix(cp, "/domain/") {
-			ft := inferFragmentTypeFromPath(cp)
-			if resolved, rerr := resolver.Resolve(ctx, cp, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
-				candidate := strings.TrimSpace(resolved.CanonicalPath)
-				if resolved.ExistingFragment != nil {
-					cp = candidate
-				} else if fragments != nil {
-					if f, ferr := fragments.GetByCanonicalPath(ctx, candidate); ferr == nil && f != nil {
-						cp = candidate
+	// Phase 2: Resolve non-domain, non-query entries in parallel.
+	type resolveResult struct {
+		idx        int
+		resolvedCP string
+	}
+	results := make([]resolveResult, len(entries))
+	var wg sync.WaitGroup
+	for i := range entries {
+		e := &entries[i]
+		results[i] = resolveResult{idx: i, resolvedCP: e.cp}
+		if e.isQuery || e.isDomain {
+			continue // no DB resolution needed
+		}
+		wg.Add(1)
+		go func(idx int, cp string) {
+			defer wg.Done()
+			resolved := cp
+			if resolver != nil {
+				ft := inferFragmentTypeFromPath(cp)
+				if rr, rerr := resolver.Resolve(ctx, cp, ft); rerr == nil && rr != nil && strings.TrimSpace(rr.CanonicalPath) != "" {
+					candidate := strings.TrimSpace(rr.CanonicalPath)
+					if rr.ExistingFragment != nil {
+						resolved = candidate
+					} else if fragments != nil {
+						if f, ferr := fragments.GetByCanonicalPath(ctx, candidate); ferr == nil && f != nil {
+							resolved = candidate
+						}
 					}
 				}
 			}
-		} else if fragments != nil && !strings.HasPrefix(cp, "/domain/") {
-			// If we don't have a resolver, still verify the object exists.
-			if f, ferr := fragments.GetByCanonicalPath(ctx, cp); ferr != nil || f == nil {
-				// Keep original to allow scouting to create it later.
-			}
-		}
+			results[idx].resolvedCP = resolved
+		}(i, e.cp)
+	}
+	wg.Wait()
 
-		if cp != orig {
-			rewrites[orig] = cp
+	// Phase 3: Collect results preserving order, dedup.
+	rewrites := map[string]string{}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(entries))
+	for i, e := range entries {
+		cp := results[i].resolvedCP
+		if cp != e.orig {
+			rewrites[e.orig] = cp
 		}
 		if _, ok := seen[cp]; ok {
 			continue
@@ -402,26 +421,42 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 
 	// Best-effort: if anchors already exist in our graph, fill anchor.name from the stored English label.
 	// This helps prefer known English names (often Wikidata-backed) over freshly generated/transliterated ones.
+	// Parallelized: all GetByCanonicalPath calls run concurrently to reduce total latency.
 	if intent != nil && h.service != nil && h.service.Fragments() != nil && len(intent.Anchors) > 0 {
+		type anchorNameResult struct {
+			idx  int
+			name string
+		}
+		results := make(chan anchorNameResult, len(intent.Anchors))
+		var wg sync.WaitGroup
 		for i := range intent.Anchors {
 			cp := strings.TrimSpace(intent.Anchors[i].CanonicalPath)
 			if cp == "" {
 				continue
 			}
-			frag, ferr := h.service.Fragments().GetByCanonicalPath(ctx, cp)
-			if ferr != nil || frag == nil {
-				continue
-			}
-			n := strings.TrimSpace(frag.Labels["en"])
-			if n == "" {
-				n = strings.TrimSpace(frag.Identifiers["shortName"])
-			}
-			if n == "" {
-				n = strings.TrimSpace(frag.Identifiers["legalName"])
-			}
-			if n != "" {
-				intent.Anchors[i].Name = n
-			}
+			wg.Add(1)
+			go func(idx int, canonicalPath string) {
+				defer wg.Done()
+				frag, ferr := h.service.Fragments().GetByCanonicalPath(ctx, canonicalPath)
+				if ferr != nil || frag == nil {
+					return
+				}
+				n := strings.TrimSpace(frag.Labels["en"])
+				if n == "" {
+					n = strings.TrimSpace(frag.Identifiers["shortName"])
+				}
+				if n == "" {
+					n = strings.TrimSpace(frag.Identifiers["legalName"])
+				}
+				if n != "" {
+					results <- anchorNameResult{idx: idx, name: n}
+				}
+			}(i, cp)
+		}
+		wg.Wait()
+		close(results)
+		for r := range results {
+			intent.Anchors[r.idx].Name = r.name
 		}
 	}
 	anchorPaths := make([]string, 0, len(intent.Anchors))

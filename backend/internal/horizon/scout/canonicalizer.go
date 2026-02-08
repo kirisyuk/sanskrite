@@ -617,6 +617,12 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		}
 	}
 
+	// Normalize market domain segment (e.g., "financials" → "finance") to prevent
+	// near-duplicate markets with variant domain names.
+	if relType == models.FragmentTypeMarket && strings.HasPrefix(out.CanonicalPath, "/market/") {
+		out.CanonicalPath = normalizeMarketCanonicalDomain(out.CanonicalPath)
+	}
+
 	// Validate LLM output through ValidationPolicy if available
 	if e.validationPolicy != nil {
 		// Create a test fragment to validate the canonical path
@@ -885,4 +891,22 @@ RULES:
   - GEO_REGION country code MUST be valid ISO3166-1 alpha2 (2 lowercase letters)
 - Output only JSON, no markdown, no extra text.
 `, rel.TargetName, rel.TargetLegalName, rel.TargetShortName, rel.TargetType, canonicalRulesBlock)
+}
+
+// normalizeMarketCanonicalDomain rewrites the domain segment of a /market/{geo}/{domain}/{vertical}
+// path using taxonomy.NormalizeMarketDomain. This prevents LLM from creating near-duplicate
+// markets with variant domain names (e.g., /market/sa/financials/fintech → /market/sa/finance/fintech).
+func normalizeMarketCanonicalDomain(cp string) string {
+	trimmed := strings.Trim(cp, "/")
+	parts := strings.Split(trimmed, "/")
+	// /market/{geo}/{domain}/{vertical} → need at least 4 parts
+	if len(parts) < 4 || parts[0] != "market" {
+		return cp // legacy 2-segment or malformed — leave as-is
+	}
+	normalized := taxonomy.NormalizeMarketDomain(parts[2])
+	if normalized == parts[2] {
+		return cp // no change
+	}
+	parts[2] = normalized
+	return "/" + strings.Join(parts, "/")
 }

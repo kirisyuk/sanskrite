@@ -204,25 +204,6 @@ func bestEffortDisplayLabel(label string, canonicalPath string) string {
 	return bestEffortTitleCase(label)
 }
 
-func isPlaceholderLabel(label string) bool {
-	l := strings.TrimSpace(label)
-	if l == "" {
-		return true
-	}
-	if len(l) <= 2 {
-		return true
-	}
-	if strings.EqualFold(l, "na") || strings.EqualFold(l, "n/a") || strings.EqualFold(l, "n.a.") {
-		return true
-	}
-	cleaned := strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) {
-			return unicode.ToLower(r)
-		}
-		return -1
-	}, l)
-	return cleaned == "na"
-}
 
 func buildDomainTitle(contractType string, canonicalPath string, facets map[string][]string) string {
 	ct := strings.ToLower(strings.TrimSpace(contractType))
@@ -896,7 +877,21 @@ func (e *ScoutEngine) processDiscoveredRelations(
 	sourceFragment *models.HorizonFragment,
 	relations []agents.DiscoveredRelation,
 ) error {
-	return e.processRelationsInternal(ctx, job, sourceFragment, relations, "scout_discovery", map[string]interface{}{"source": "scout"})
+	return e.processRelationsInternal(ctx, job, sourceFragment, relations, "scout_discovery", map[string]interface{}{"source": "scout"}, nil)
+}
+
+// processDiscoveredRelationsWithGrounding is like processDiscoveredRelations but also accepts
+// a ResolvedGroundingContext from Vertex AI Search. When a relation target matches a grounded
+// fragment, the system uses the DB entity directly (canonical path, identifiers) instead of
+// creating a new fragment. This eliminates duplicate creation at the source.
+func (e *ScoutEngine) processDiscoveredRelationsWithGrounding(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	sourceFragment *models.HorizonFragment,
+	relations []agents.DiscoveredRelation,
+	groundingCtx *ResolvedGroundingContext,
+) error {
+	return e.processRelationsInternal(ctx, job, sourceFragment, relations, "scout_discovery", map[string]interface{}{"source": "scout"}, groundingCtx)
 }
 
 // processHypothesisRelations materializes relations produced from intent decomposition.
@@ -907,19 +902,10 @@ func (e *ScoutEngine) processHypothesisRelations(
 	sourceFragment *models.HorizonFragment,
 	relations []agents.DiscoveredRelation,
 ) error {
-	return e.processRelationsInternal(ctx, job, sourceFragment, relations, "intent_decomposition", map[string]interface{}{"source": "intent_decomposition", "hypothesis": true})
+	return e.processRelationsInternal(ctx, job, sourceFragment, relations, "intent_decomposition", map[string]interface{}{"source": "intent_decomposition", "hypothesis": true}, nil)
 }
 
-type domainContractForExpansion struct {
-	CanonicalPath      string
-	ContractType       string
-	Title              string
-	Description        string
-	Facets             map[string][]string
-	FirstOrderEntities []string
-	RelatedDomains     []string
-	AffectedDomains    []string
-}
+type domainContractForExpansion = pipeline.DomainContract
 
 func (e *ScoutEngine) bestEffortFindDomainContract(job *models.ScoutingJob, domainCanonicalPath string) *domainContractForExpansion {
 	cp := strings.TrimSpace(domainCanonicalPath)
@@ -1298,7 +1284,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				}
 			}
 		}
-		enrichedFragment, newRelations, newChains, err := e.researchAgent.EnrichFragment(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, "", originalQuery, nil, existingEntities)
+		enrichedFragment, newRelations, newChains, _, err := e.researchAgent.EnrichFragment(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, "", originalQuery, nil, existingEntities)
 		_ = enrichedFragment
 		if err != nil {
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> domain research failed: %v", err))
@@ -2171,7 +2157,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		if err != nil || sourceFrag == nil {
 			continue
 		}
-		if err := e.processRelationsInternal(ctx, job, sourceFrag, rels, "strategic_overlay", map[string]interface{}{"source": "strategic_overlay", "domainOverlay": true}); err == nil {
+		if err := e.processRelationsInternal(ctx, job, sourceFrag, rels, "strategic_overlay", map[string]interface{}{"source": "strategic_overlay", "domainOverlay": true}, nil); err == nil {
 			edgesEmitted += len(rels)
 		}
 	}
@@ -2281,6 +2267,7 @@ func (e *ScoutEngine) processRelationsInternal(
 	relations []agents.DiscoveredRelation,
 	provenanceMethod string,
 	baseQualifiers map[string]interface{},
+	groundingCtx *ResolvedGroundingContext,
 ) error {
 	if len(relations) == 0 {
 		return nil
@@ -2453,10 +2440,47 @@ func (e *ScoutEngine) processRelationsInternal(
 		}
 
 		// 2. Find or Create Target Fragment
-		targetFragment, err := e.fragmentsRepo.GetByCanonicalPath(ctx, targetPath)
+		//
+		// GROUNDING-AWARE ENTITY RESOLUTION (Phase 2):
+		// Before looking up by canonical path, check if this entity was grounded by Vertex AI Search.
+		// If the LLM's grounding metadata referenced a fragment from our datastore, we use
+		// the DB entity directly (with its real canonical path, identifiers, labels).
+		// This eliminates a major source of duplicates: the LLM may generate a slightly different
+		// canonical path than what's in the DB, but the grounding evidence contains the exact fragment ID.
+		var targetFragment *models.HorizonFragment
 		var targetID string
 
-		if err != nil {
+		if groundingCtx != nil && !groundingCtx.IsEmpty() {
+			identifiers := map[string]string{}
+			if rel.TargetLegalName != "" {
+				identifiers["legalName"] = rel.TargetLegalName
+			}
+			if rel.TargetShortName != "" {
+				identifiers["shortName"] = rel.TargetShortName
+			}
+			if grounded := groundingCtx.FindBestMatch(targetPath, rel.TargetName, identifiers); grounded != nil {
+				// Entity EXISTS in our database — use it directly.
+				targetFragment = grounded
+				targetID = grounded.ID
+				groundedCP := strings.TrimSpace(grounded.CanonicalPath)
+				if groundedCP != "" && groundedCP != targetPath {
+					// The DB canonical path differs from LLM-generated one → record redirect.
+					fmt.Printf("[ScoutEngine] Grounding match: LLM path %q → DB path %q (fragmentId=%s)\n",
+						targetPath, groundedCP, grounded.ID)
+					e.recordDeterministicRedirect(ctx, targetPath, groundedCP, "grounding_evidence")
+					targetPath = groundedCP
+				} else {
+					fmt.Printf("[ScoutEngine] Grounding match: path %q → existing fragmentId=%s\n",
+						targetPath, grounded.ID)
+				}
+			}
+		}
+
+		if targetFragment == nil {
+			targetFragment, _ = e.fragmentsRepo.GetByCanonicalPath(ctx, targetPath)
+		}
+
+		if targetFragment == nil {
 			// Fragment doesn't exist -> Create minimal fragment (low confidence) and schedule scouting to fill it.
 			// We do NOT use /discovered paths; canonicalPath must already be stable here.
 			ft := e.normalizeFragmentType(ctx, rel.TargetType)
@@ -2862,11 +2886,11 @@ func (e *ScoutEngine) processRelationsInternal(
 				}
 			}
 
-		} else {
-			targetID = targetFragment.ID
-			if targetFragment != nil && targetFragment.Type != "" {
-				targetType = targetFragment.Type
-			}
+	} else {
+		targetID = targetFragment.ID
+		if targetFragment.Type != "" {
+			targetType = targetFragment.Type
+		}
 
 			// If fragment exists but is not verified (or never verified), schedule scouting to enrich it.
 			// This is what makes the graph "expand" beyond already-known nodes (e.g., Panasonic) when needed.
@@ -2956,26 +2980,26 @@ func (e *ScoutEngine) processRelationsInternal(
 						shouldSkipJob = true
 					}
 
-					// CRITICAL: Skip if target fragment is already verified (regardless of edge existence)
-					// This prevents re-scouting entities that were just processed
-					if !shouldSkipJob && targetFragment != nil && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
-						trace.Log(ctx, "scout_decompose", "child_job.skip.target_verified", map[string]any{
-							"tenantId":            strings.TrimSpace(job.TenantID),
-							"projectId":           strings.TrimSpace(job.ProjectID),
-							"lensId":              strings.TrimSpace(job.LensID),
-							"jobId":               strings.TrimSpace(job.ID),
-							"targetCanonicalPath": strings.TrimSpace(targetPath),
-							"epistemicStatus":     string(targetFragment.Metadata.EpistemicStatus),
-						})
-						fmt.Printf("[ScoutEngine] Target fragment already verified: %s (status=%s). Skipping scouting job.\n",
-							targetPath, targetFragment.Metadata.EpistemicStatus)
-						shouldSkipJob = true
-					}
+				// CRITICAL: Skip if target fragment is already verified (regardless of edge existence)
+				// This prevents re-scouting entities that were just processed
+				if !shouldSkipJob && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
+					trace.Log(ctx, "scout_decompose", "child_job.skip.target_verified", map[string]any{
+						"tenantId":            strings.TrimSpace(job.TenantID),
+						"projectId":           strings.TrimSpace(job.ProjectID),
+						"lensId":              strings.TrimSpace(job.LensID),
+						"jobId":               strings.TrimSpace(job.ID),
+						"targetCanonicalPath": strings.TrimSpace(targetPath),
+						"epistemicStatus":     string(targetFragment.Metadata.EpistemicStatus),
+					})
+					fmt.Printf("[ScoutEngine] Target fragment already verified: %s (status=%s). Skipping scouting job.\n",
+						targetPath, targetFragment.Metadata.EpistemicStatus)
+					shouldSkipJob = true
+				}
 
 					// Check if edge already exists and target fragment is verified
 					if !shouldSkipJob {
 						edgeType := models.DependencyType(rel.RelationType)
-						if e.edgesRepo != nil && sourceFragment != nil && sourceFragment.ID != "" && targetFragment != nil && targetFragment.ID != "" {
+						if e.edgesRepo != nil && sourceFragment != nil && sourceFragment.ID != "" && targetFragment.ID != "" {
 							if existingEdge, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceFragment.ID, targetFragment.ID, edgeType); err == nil && existingEdge != nil {
 								if targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
 									fmt.Printf("[ScoutEngine] Edge already exists and target fragment is verified: %s -> %s (%s). Skipping scouting job.\n",
@@ -3628,7 +3652,7 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 				}
 			}
 		}
-		enrichedFrag, newRelations, _, err := e.researchAgent.EnrichFragment(
+		enrichedFrag, newRelations, _, _, err := e.researchAgent.EnrichFragment(
 			researchCtx,
 			frag,
 			missing,
@@ -3676,7 +3700,7 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 			_ = e.fragmentsRepo.Update(ctx, enrichedFrag)
 		}
 		if len(newRelations) > 0 && enrichedFrag != nil {
-			if err := e.processRelationsInternal(ctx, job, enrichedFrag, newRelations, "strategic_overlay", map[string]interface{}{"source": "strategic_overlay", "domainOverlay": true}); err == nil {
+			if err := e.processRelationsInternal(ctx, job, enrichedFrag, newRelations, "strategic_overlay", map[string]interface{}{"source": "strategic_overlay", "domainOverlay": true}, nil); err == nil {
 				addedEdges += len(newRelations)
 			}
 		}

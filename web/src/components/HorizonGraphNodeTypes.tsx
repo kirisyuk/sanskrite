@@ -131,11 +131,24 @@ export interface HorizonNodeData {
   groupPageSize?: number;     // Items per page (default 12)
   groupAllChildIds?: string[]; // All child IDs for edge filtering
   onGroupPageChange?: (groupId: string, page: number) => void; // Callback for page change
+  // Role overflow (left pane compact categories)
+  groupOverflowCount?: number;
+  groupOverflowKey?: string;
+  groupOverflowExpanded?: boolean;
+  onToggleRoleOverflow?: (groupKey: string, nextExpanded: boolean) => void;
   // Collapsible subcategories (Left pane: subcategories by relation type)
   // Each subcategory (relBlock) can be collapsed into a compact stack representation.
   // Key format: `${groupId}:${edgeType}` or just edgeType within the group.
   groupCollapsedSubcategories?: Set<string> | string[];  // Edge types that are collapsed in this group
   onToggleSubcategoryCollapse?: (groupId: string, edgeType: string, nextCollapsed: boolean) => void;
+  // Business block context cards (left pane compact summary)
+  contextCard?: boolean;
+  contextTitle?: string;
+  contextCount?: number;
+  contextLines?: string[];
+  contextBlockKey?: string;
+  contextGroupId?: string;
+  onToggleContextDetails?: () => void;
   // Right-side temporary stacking (Levels/Hierarchical UX)
   // When many leaf right-nodes form a tall vertical column, we can collapse them into a single "stack"
   // and expand on demand. These fields are view-only (not persisted).
@@ -482,8 +495,8 @@ const ensureHorizonNode2026Styles = () => {
     /* Strategic layer: Technical/Schematic look (Decision Points & Mechanisms).
        Goal: Look like a "logic layer" or "annotation" on top of the entity graph.
        Flat, sharp corners, high-contrast border, no shadow. */
-    .hzn-node-2026.is-decision,
-    .hzn-node-2026.is-mechanism,
+    .hzn-node-2026.is-decision:not(.is-stack),
+    .hzn-node-2026.is-mechanism:not(.is-stack),
     .hzn-node-compact.is-decision,
     .hzn-node-compact.is-mechanism {
       border-radius: 1px; /* Sharp, technical corners */
@@ -507,11 +520,15 @@ const ensureHorizonNode2026Styles = () => {
     .hzn-node-2026.is-stack {
       /* Stack controllers (group-like nodes): calm, single-surface card.
          No backplates, no inner chrome. Border width matches selected edge weight. */
+      --hzn-stack-accent: #38BDF8;
       border-radius: 14px;
       border: 2px solid var(--hzn-stack-border, rgba(148,163,184,0.26));
+      border-left: 6px solid var(--hzn-stack-accent);
+      box-shadow: var(--hzn-shadow);
     }
     .hzn-node-2026.is-stack::after { display: none; }
     [data-theme="light"] .hzn-node-2026.is-stack {
+      --hzn-stack-accent: #1D4ED8;
       border-color: rgba(100,116,139,0.26);
     }
     [data-theme="light"] .hzn-node-2026.is-stack::after { display: none; }
@@ -2125,10 +2142,14 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
     border = theme === 'dark' ? 'rgba(148, 163, 184, 0.42)' : 'rgba(100, 116, 139, 0.34)';
   }
 
-  // Stack groups use a subtle cold background instead of an outline.
+  // Stack groups should be visually lightweight (closer to left-pane groups).
+  const stackGroupVisualType = isStackGroup ? String((data as any)?.stackVisualType || '').trim() : '';
+  const stackGroupAccent = stackGroupVisualType
+    ? getNodeColors(stackGroupVisualType, theme).accent
+    : (theme === 'dark' ? '#38BDF8' : '#0284C7');
   if (isStackGroup) {
-    bg = theme === 'dark' ? 'rgba(28, 28, 30, 0.78)' : 'rgba(218, 221, 225, 0.95)';
-    border = 'transparent';
+    bg = theme === 'dark' ? 'rgba(148, 163, 184, 0.12)' : 'rgba(15, 23, 42, 0.06)';
+    border = theme === 'dark' ? 'rgba(148, 163, 184, 0.42)' : 'rgba(100, 116, 139, 0.34)';
   }
 
   const titleColor = theme === 'dark' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.9)';
@@ -2294,6 +2315,10 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
   const footerGroupIdForToggle = String((data as any)?.groupId || id).trim();
   const footerCanToggle = Boolean(footerEdgeTypeKey && typeof (data as any)?.onToggleSubcategoryCollapse === 'function');
   const showFooterCollapsePill = Boolean(footerCanToggle && !footerCollapsed && typeof footerNodeCount === 'number' && footerNodeCount > 1);
+  const overflowCount = typeof (data as any)?.groupOverflowCount === 'number' ? (data as any).groupOverflowCount : 0;
+  const overflowKey = String((data as any)?.groupOverflowKey || '').trim();
+  const overflowExpanded = Boolean((data as any)?.groupOverflowExpanded);
+  const canToggleOverflow = Boolean(overflowKey && typeof (data as any)?.onToggleRoleOverflow === 'function');
 
   const handlePrevPage = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -2315,8 +2340,12 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         width: '100%',
         height: '100%',
         background: bg,
-        border: borderMode === 'outline' ? fullBorderCss : 'none',
-        borderLeft: borderMode === 'divider-left' ? dividerBorderCss : undefined,
+        border: borderMode === 'outline'
+          ? (isStackGroup ? `1px solid ${border}` : fullBorderCss)
+          : 'none',
+        borderLeft: isStackGroup
+          ? `6px solid ${stackGroupAccent}`
+          : (borderMode === 'divider-left' ? dividerBorderCss : undefined),
         borderRight: borderMode === 'divider-right' ? dividerBorderCss : undefined,
         borderRadius: (borderMode === 'outline' || isStackGroup || bgTint === 'subtle') ? 12 : 0,
         boxShadow: isStackGroup
@@ -2326,8 +2355,9 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
             : ((theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)') +
               (ring ? `, 0 0 0 3px ${ring}` : ''))),
         // Groups are real containers in Freeform/Linear pagination modes; they must allow interaction
-        // (pagination buttons). Backdrop-only groups should not intercept clicks.
-        pointerEvents: isBackdrop ? 'none' : 'auto',
+        // (pagination buttons). Backdrop-only groups should not intercept clicks unless they contain
+        // an interactive overflow pill.
+        pointerEvents: (isBackdrop && !canToggleOverflow) ? 'none' : 'auto',
         position: 'relative',
         // Allow the owner chip to sit on the border without being clipped.
         overflow: 'visible',
@@ -2663,6 +2693,40 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
           })}
         </>
       )}
+      {/* Fallback source-left / target-left handles for stack groups.
+          Proxy edges fall back to these IDs when the specific edge type isn't in the port map.
+          Always render them so React Flow can resolve the handle reference. */}
+      {isStackGroup && (() => {
+        const hasSourceLeft = edgePorts.some((p) => p?.sourceHandleId === 'source-left');
+        const hasTargetLeft = edgePorts.some((p) => p?.targetHandleId === 'target-left');
+        if (hasSourceLeft && hasTargetLeft) return null;
+        return (
+          <>
+            {!hasTargetLeft && (
+              <Handle
+                id="target-left"
+                type="target"
+                position={Position.Left}
+                className="hzn-handle"
+                style={{ background: border, width: '10px', height: '10px',
+                  border: `2px solid ${theme === 'dark' ? 'rgba(15,23,42,0.75)' : 'rgba(255,255,255,0.95)'}`,
+                  left: '-5px', top: '50%', opacity: 0, pointerEvents: 'none' }}
+              />
+            )}
+            {!hasSourceLeft && (
+              <Handle
+                id="source-left"
+                type="source"
+                position={Position.Left}
+                className="hzn-handle"
+                style={{ background: border, width: '10px', height: '10px',
+                  border: `2px solid ${theme === 'dark' ? 'rgba(15,23,42,0.75)' : 'rgba(255,255,255,0.95)'}`,
+                  left: '-5px', top: '50%', opacity: 0, pointerEvents: 'none' }}
+              />
+            )}
+          </>
+        );
+      })()}
 
       {/* Header (optional) */}
       {!hideHeader && (
@@ -2748,6 +2812,39 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                 </svg>
               </button>
             )}
+            {/* Expanded business block: collapse-back to summary card */}
+            {(() => {
+              const blockCollapseKey = String((data as any)?.groupBlockCollapseKey || '').trim();
+              const blockCollapseGroupId = String((data as any)?.groupBlockCollapseGroupId || '').trim();
+              const toggleFn = (data as any)?.onToggleSubcategoryCollapse as ((gid: string, et: string, collapsed: boolean) => void) | undefined;
+              if (!blockCollapseKey || !blockCollapseGroupId || typeof toggleFn !== 'function') return null;
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    toggleFn(blockCollapseGroupId, blockCollapseKey, true);
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  title="Collapse back"
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 8,
+                    border: `1px solid ${theme === 'dark' ? 'rgba(148,163,184,0.35)' : 'rgba(148,163,184,0.4)'}`,
+                    background: theme === 'dark' ? 'rgba(15,23,42,0.55)' : 'rgba(241,245,249,0.9)',
+                    color: theme === 'dark' ? 'rgba(226,232,240,0.9)' : 'rgba(30,41,59,0.9)',
+                    fontSize: 10,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    pointerEvents: 'auto',
+                    letterSpacing: '0.2px',
+                  }}
+                >
+                  Collapse back
+                </button>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -2915,6 +3012,305 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
           )}
         </div>
       )}
+
+      {/* "+N more" overflow pill: shown when a semantic category has been capped */}
+      {(overflowCount > 0 || overflowExpanded) && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 4,
+            left: 0,
+            right: 0,
+            display: 'flex',
+            justifyContent: 'center',
+            pointerEvents: canToggleOverflow ? 'auto' : 'none',
+          }}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!canToggleOverflow) return;
+              (data as any)?.onToggleRoleOverflow?.(overflowKey, !overflowExpanded);
+            }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '2px 8px',
+              borderRadius: 999,
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.2px',
+              color: theme === 'dark' ? 'rgba(255,255,255,0.78)' : 'rgba(15,23,42,0.68)',
+              background: theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)',
+              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)'}`,
+              cursor: canToggleOverflow ? 'pointer' : 'default',
+              pointerEvents: canToggleOverflow ? 'auto' : 'none',
+            }}
+            title={overflowExpanded ? 'Show less' : `Show ${overflowCount} more`}
+          >
+            {overflowExpanded ? 'Show less' : `+${overflowCount} more`}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+});
+
+// Business block context card: rich-text summary for left pane (Market & Regulation, Products & Supply, etc.)
+const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, id }) => {
+  const { theme } = React.useContext(ThemeContext);
+  const [isHoveringButton, setIsHoveringButton] = React.useState(false);
+  const title = String((data as any)?.contextTitle || 'Context').trim();
+  const contextLines = (data as any)?.contextLines;
+  // Support both old format (string[]) and new format (structured data)
+  const isOldFormat = Array.isArray(contextLines) && contextLines.length > 0 && typeof contextLines[0] === 'string';
+  const facts: Array<{ label: string; items: Array<{ id: string; label: string; type: string }> }> = isOldFormat
+    ? []
+    : (Array.isArray(contextLines) ? contextLines : []);
+  const oldLines: string[] = isOldFormat ? (contextLines as string[]) : [];
+  const count = typeof (data as any)?.contextCount === 'number' ? (data as any).contextCount : 0;
+  const onShowDetails = (data as any)?.onToggleContextDetails as (() => void) | undefined;
+  const contextExpanded = Boolean((data as any)?.contextExpanded);
+  const ctaLabel = contextExpanded ? 'Collapse back' : 'Show details';
+
+  const isDark = theme === 'dark';
+  const bg = isDark ? 'rgba(30,41,59,0.95)' : 'rgba(248,250,252,0.97)';
+  const border = isDark ? 'rgba(148,163,184,0.25)' : 'rgba(148,163,184,0.3)';
+  const titleColor = isDark ? 'rgba(248,250,252,0.88)' : 'rgba(15,23,42,0.82)';
+  const labelColor = isDark ? 'rgba(148,163,184,0.65)' : 'rgba(71,85,105,0.65)';
+  const headerBorderColor = isDark ? 'rgba(148,163,184,0.2)' : 'rgba(148,163,184,0.25)';
+  const lineColor = isDark ? 'rgba(148,163,184,0.82)' : 'rgba(71,85,105,0.78)';
+  // CTA styling: match node expand/collapse affordance (same border, shadow, amber active state).
+  const ctaBorder = isDark ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)';
+  const ctaBgIdle = isDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)';
+  const ctaBgActive = isDark ? 'rgba(245, 158, 11, 0.28)' : 'rgba(245, 158, 11, 0.18)';
+  const ctaText = isDark ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)';
+  const ctaShadow = isDark ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)';
+
+  return (
+    <div
+      style={{
+        width: '100%',
+        height: '100%',
+        borderRadius: 10,
+        border: `1px solid ${border}`,
+        background: bg,
+        padding: '10px 12px 8px',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between',
+        boxShadow: isDark ? '0 2px 8px rgba(0,0,0,0.25)' : '0 1px 4px rgba(0,0,0,0.06)',
+        overflow: 'hidden',
+        pointerEvents: 'auto',
+      }}
+    >
+      {/* Title row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8, marginBottom: 8, borderBottom: `1px solid ${headerBorderColor}` }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            color: titleColor,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+            lineHeight: 1.2,
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {title}
+        </div>
+        {count > 0 && (
+          <div
+            style={{
+              fontSize: 9,
+              fontWeight: 600,
+              color: lineColor,
+              opacity: 0.7,
+              flexShrink: 0,
+            }}
+          >
+            {count}
+          </div>
+        )}
+      </div>
+      {/* Fact lines / Structured facts */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0 }}>
+        {isOldFormat ? (
+          // Legacy format: plain text lines
+          <>
+            {oldLines.slice(0, 6).map((line: string, idx: number) => (
+              <div
+                key={idx}
+                style={{
+                  fontSize: 11,
+                  color: lineColor,
+                  lineHeight: 1.35,
+                  whiteSpace: 'normal',
+                  wordBreak: 'break-word',
+                }}
+                title={line}
+              >
+                {line}
+              </div>
+            ))}
+            {oldLines.length === 0 && count > 0 && (
+              <div style={{ fontSize: 11, color: lineColor, opacity: 0.6 }}>
+                {count} related items
+              </div>
+            )}
+          </>
+        ) : (
+          // New format: structured facts with badges
+          <>
+            {facts.slice(0, 6).map((fact, factIdx, arr) => (
+              <div
+                key={factIdx}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  paddingBottom: factIdx < arr.length - 1 ? 6 : 0,
+                  borderBottom: factIdx < arr.length - 1 ? `1px solid ${headerBorderColor}` : 'none',
+                }}
+              >
+                {/* Label row */}
+                <div
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    color: labelColor,
+                    letterSpacing: '0.2px',
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {fact.label}
+                </div>
+                {/* Badges row */}
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 4,
+                    alignItems: 'center',
+                  }}
+                >
+                  {fact.items.map((item) => {
+                    const isOverflow = item.id.startsWith('__overflow__');
+                    const nodeType = item.type || 'UNKNOWN';
+                    const visualType = getHorizonNodeVisualType(nodeType, '', item.label);
+                    const colors = getNodeColors(visualType, theme);
+                    const badgeAccent = colors.accent;
+                    // Mute the accent color for border (reduce opacity)
+                    const badgeAccentMuted = hexToRgba(badgeAccent, isDark ? 0.4 : 0.5);
+                    // Very low opacity background using accent color
+                    const badgeBgSubtle = hexToRgba(badgeAccent, 0.05);
+                    const badgeTextColorBright = isDark ? 'rgba(255,255,255,0.95)' : 'rgba(15,23,42,0.95)';
+                    
+                    return (
+                      <div
+                        key={item.id}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '3px 6px',
+                          borderRadius: 6,
+                          border: `1px solid ${badgeAccentMuted}`,
+                          background: badgeBgSubtle,
+                          fontSize: 10,
+                          color: isOverflow ? labelColor : badgeTextColorBright,
+                          fontWeight: isOverflow ? 600 : 500,
+                          lineHeight: 1.2,
+                          whiteSpace: 'nowrap',
+                          maxWidth: '100%',
+                        }}
+                        title={isOverflow ? undefined : `${item.label} (${nodeType})`}
+                      >
+                        {!isOverflow && (
+                          <HorizonNodeIcon type={visualType || nodeType} color={badgeAccent} size={10} />
+                        )}
+                        <span
+                          style={{
+                            maxWidth: '100%',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {item.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {facts.length === 0 && count > 0 && (
+              <div style={{ fontSize: 11, color: lineColor, opacity: 0.6 }}>
+                {count} related items
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      {/* Show details CTA */}
+      {typeof onShowDetails === 'function' && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            onShowDetails();
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseEnter={() => setIsHoveringButton(true)}
+          onMouseLeave={() => setIsHoveringButton(false)}
+          style={{
+            width: '100%',
+            marginTop: 'auto',
+            height: 26,
+            padding: '0 10px',
+            borderRadius: 9,
+            border: `1px solid ${ctaBorder}`,
+            background: contextExpanded ? ctaBgActive : ctaBgIdle,
+            color: ctaText,
+            fontSize: 11,
+            fontWeight: 700,
+            cursor: 'pointer',
+            letterSpacing: '0.2px',
+            transition: 'transform 120ms ease, opacity 120ms ease',
+            boxShadow: ctaShadow,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            opacity: isHoveringButton ? 0.95 : 1,
+            transform: isHoveringButton ? 'translateY(-0.5px)' : 'none',
+          }}
+        >
+          {contextExpanded && (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          )}
+          <span style={{ lineHeight: 1 }}>{ctaLabel}</span>
+          {!contextExpanded && (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          )}
+        </button>
+      )}
+      {/* Hidden handles for edge routing (context card acts as a proxy for the first child node) */}
+      <Handle type="source" position={Position.Right} id="source-right" style={{ opacity: 0, width: 1, height: 1 }} />
+      <Handle type="target" position={Position.Left} id="target-left" style={{ opacity: 0, width: 1, height: 1 }} />
+      <Handle type="source" position={Position.Left} id="source-left" style={{ opacity: 0, width: 1, height: 1 }} />
+      <Handle type="target" position={Position.Right} id="target-right" style={{ opacity: 0, width: 1, height: 1 }} />
     </div>
   );
 });
@@ -3154,7 +3550,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     isCollapsedStackController
       ? (isSubcategoryStackController
           ? getEdgeColor(subcategoryEdgeType || 'RELATED_TO')
-          : accentColor)
+          : surfaceBorder)
       : surfaceBorder;
   const accentSoft = hexToRgba(accentColor, theme === 'dark' ? 0.22 : 0.16);
   const accentRing = hexToRgba(accentColor, theme === 'dark' ? 0.55 : 0.34);
@@ -3767,6 +4163,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           ['--hzn-accent' as any]: accentColor,
           ['--hzn-accent-soft' as any]: accentSoft,
           ['--hzn-accent-ring' as any]: isCritical ? criticalRing : accentRing,
+          ['--hzn-stack-accent' as any]: accentColor,
           ['--hzn-shadow' as any]: (() => {
             const baseShadow = isCritical
               ? `0 0 0 2px ${criticalRing}, ${shadowBase}`
@@ -5439,4 +5836,5 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
 export const HORIZON_NODE_TYPES: NodeTypes = Object.freeze({
   horizonFragment: HorizonFragmentNode,
   horizonGroup: HorizonGroupNode,
+  horizonContextCard: HorizonContextCardNode,
 });

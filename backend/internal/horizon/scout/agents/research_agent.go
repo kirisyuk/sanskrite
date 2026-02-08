@@ -32,7 +32,7 @@ type researchResult struct {
 // focus/spherePaths/keywords are optional steering signals for grounded search (they may be non-canonical).
 // originalQuery and decompositionHints are additional context for MARKET-aware research.
 // existingEntities is a compact list of already-discovered entities in the current session (to avoid duplicates).
-// Returns: enriched fragment, discovered relations, discovered supply chains (if supply_chain mode), error
+// Returns: enriched fragment, discovered relations, discovered supply chains (if supply_chain mode), grounding evidence, error
 func (a *ResearchAgent) EnrichFragment(
 	ctx context.Context,
 	fragment *models.HorizonFragment,
@@ -45,9 +45,9 @@ func (a *ResearchAgent) EnrichFragment(
 	originalQuery string,
 	decompositionHints []DecompositionHint,
 	existingEntities []string,
-) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, error) {
+) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
 	if len(missingInfo) == 0 {
-		return fragment, nil, nil, nil
+		return fragment, nil, nil, nil, nil
 	}
 
 	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
@@ -71,15 +71,24 @@ func (a *ResearchAgent) EnrichFragment(
 		Verifier: verifier,
 	}
 
-	result, err := a.executor.ExecuteStructuredTask(ctx, task)
+	// Use ExecuteStructuredTaskFull to get GroundingEvidence alongside the parsed result.
+	// GroundingEvidence carries system-level provenance: which fragment IDs from the datastore
+	// were used during generation. This is the source of truth for entity resolution.
+	result, fullResult, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to enrich fragment with research: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to enrich fragment with research: %w", err)
+	}
+
+	// Extract grounding evidence from the full AI result
+	var evidence *ai.GroundingEvidence
+	if fullResult != nil {
+		evidence = fullResult.GroundingEvidence
 	}
 
 	// Преобразуем результат
 	jsonData, err := json.Marshal(result)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to marshal research result: %w", err)
+		return nil, nil, nil, evidence, fmt.Errorf("failed to marshal research result: %w", err)
 	}
 	fmt.Printf("[ResearchAgent] Raw Result: %s\n", jsonData)
 
@@ -90,9 +99,9 @@ func (a *ResearchAgent) EnrichFragment(
 		if err2 := json.Unmarshal(jsonData, &partialFrag); err2 == nil {
 			// Merge only fragment, no relations
 			a.mergeFragment(fragment, &partialFrag)
-			return fragment, nil, nil, nil
+			return fragment, nil, nil, evidence, nil
 		}
-		return nil, nil, nil, fmt.Errorf("failed to unmarshal enriched result: %w", err)
+		return nil, nil, nil, evidence, fmt.Errorf("failed to unmarshal enriched result: %w", err)
 	}
 
 	// Merge Fragment
@@ -104,7 +113,7 @@ func (a *ResearchAgent) EnrichFragment(
 		}
 	}
 
-	return fragment, res.Relations, res.SupplyChains, nil
+	return fragment, res.Relations, res.SupplyChains, evidence, nil
 }
 
 // mergeFragment merges partial data into the main fragment

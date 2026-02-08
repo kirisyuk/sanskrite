@@ -61,6 +61,7 @@ var (
 	fixEdgesOnly       = flag.Bool("fix-edges-only", false, "Only fix/normalize edges (direction + symmetric normalization + dedup). Skips fragment dedup/merge even if duplicates are found.")
 	canonicalizeEdges  = flag.Bool("edge-canonicalize", true, "Rewrite mis-modeled edges into canonical types (e.g., MARKET OWNS MARKET -> HAS_SUBMARKET, ORG DEPENDS_ON MARKET -> PARTICIPATES_IN).")
 	skipGeoNames       = flag.Bool("skip-geonames", false, "Skip GeoNames-based /loc normalization (enabled by default).")
+	marketCleanupOnly  = flag.Bool("market-cleanup-only", false, "Only run Step 7 (market geo-mismatch cleanup + domain normalization). Skips all fragment dedup and edge fixing.")
 )
 
 // Used to print a reliable resume cursor on Ctrl+C / SIGTERM and on load failures.
@@ -76,16 +77,18 @@ type DuplicateCluster struct {
 }
 
 type Stats struct {
-	TotalFragments      int
-	ClustersFound       int
-	FragmentsMerged     int
-	FragmentsDeleted    int
-	PathsFixed          int
-	EdgesReassigned     int
-	EdgesDeleted        int
-	EdgesDeduplicated   int
-	EdgesDirectionFixed int
-	EdgesCanonicalized  int
+	TotalFragments             int
+	ClustersFound              int
+	FragmentsMerged            int
+	FragmentsDeleted           int
+	PathsFixed                 int
+	EdgesReassigned            int
+	EdgesDeleted               int
+	EdgesDeduplicated          int
+	EdgesDirectionFixed        int
+	EdgesCanonicalized         int
+	MarketGeoMismatchCleaned   int
+	MarketDomainNormalized     int
 }
 
 // =============================================================================
@@ -620,6 +623,21 @@ func main() {
 	}
 
 	stats := &Stats{}
+
+	// Fast path: --market-cleanup-only skips all fragment dedup/edge fixing
+	if *marketCleanupOnly {
+		log.Printf("\n=== Market cleanup only mode (--market-cleanup-only) ===")
+		geoMismatch, domainNorm := cleanMarketEdgesAndDomains(ctx, db, edgesRepo, *tenantID, *apply, *verbose)
+		stats.MarketGeoMismatchCleaned = geoMismatch
+		stats.MarketDomainNormalized = domainNorm
+		log.Printf("\n=== Summary (market cleanup only) ===")
+		log.Printf("Market geo-mismatch edges cleaned: %d", stats.MarketGeoMismatchCleaned)
+		log.Printf("Market domains normalized: %d", stats.MarketDomainNormalized)
+		if !*apply {
+			log.Printf("\n[DRY-RUN] No changes made. Use --apply to execute.")
+		}
+		return
+	}
 
 	// Step 1: Load all fragments
 	log.Printf("\n=== Step 1: Loading fragments ===")
@@ -2282,6 +2300,14 @@ FIX_EDGES:
 		log.Printf("[DRY-RUN] Would normalize symmetric edges and deduplicate edges after merge")
 	}
 
+	// Step 7: Market geo-mismatch cleanup + market domain normalization
+	log.Printf("\n=== Step 7: Market geo-mismatch & domain normalization ===")
+	{
+		geoMismatch, domainNorm := cleanMarketEdgesAndDomains(ctx, db, edgesRepo, *tenantID, *apply, *verbose)
+		stats.MarketGeoMismatchCleaned = geoMismatch
+		stats.MarketDomainNormalized = domainNorm
+	}
+
 	// Print summary
 SUMMARY:
 	log.Printf("\n=== Summary ===")
@@ -2295,6 +2321,8 @@ SUMMARY:
 	log.Printf("Edges deduplicated: %d", stats.EdgesDeduplicated)
 	log.Printf("Edges direction fixed: %d", stats.EdgesDirectionFixed)
 	log.Printf("Edges canonicalized: %d", stats.EdgesCanonicalized)
+	log.Printf("Market geo-mismatch edges cleaned: %d", stats.MarketGeoMismatchCleaned)
+	log.Printf("Market domains normalized: %d", stats.MarketDomainNormalized)
 	if !*apply {
 		log.Printf("\n[DRY-RUN] No changes made. Use --apply to execute.")
 	}
@@ -4863,4 +4891,274 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 
 	log.Printf("  Completed: checked %d edges total", totalChecked)
 	return reversed, canonicalized, nil
+}
+
+// =============================================================================
+// Step 7: Market geo-mismatch cleanup + market domain normalization
+// =============================================================================
+//
+// 7a) For each ORG fragment, check its PARTICIPATES_IN edges to MARKET fragments.
+//     If the market's geo doesn't match the org's geo AND isn't "global"/"int" → delete the edge.
+//
+// 7b) For each MARKET fragment with non-canonical domain (e.g., /market/sa/financials/fintech),
+//     rewrite the canonical path to use the normalized domain (/market/sa/finance/fintech),
+//     and merge with existing fragment at the canonical path if one exists.
+
+func cleanMarketEdgesAndDomains(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, tenantID string, apply bool, verbose bool) (geoMismatchCleaned int, domainNormalized int) {
+	fragmentsRepo := repo.NewHorizonFragmentsRepository(db)
+	participatesIn := models.DependencyTypeParticipatesIn
+
+	// -------------------------------------------------------------------------
+	// 7a: Market geo-mismatch cleanup
+	// -------------------------------------------------------------------------
+	log.Printf("  Step 7a: Checking org→market geo-mismatch edges...")
+
+	// Load all ORG fragments (only need ID + canonical path)
+	orgCol := db.Collection("horizon_fragments")
+	orgQuery := orgCol.Where("tenantId", "==", tenantID).Where("type", "==", string(models.FragmentTypeOrganization))
+	orgIter := orgQuery.Documents(ctx)
+	defer orgIter.Stop()
+
+	orgChecked := 0
+	for {
+		snap, err := orgIter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			log.Printf("  ERROR loading org fragment: %v", err)
+			break
+		}
+		if snap == nil || !snap.Exists() {
+			continue
+		}
+		orgID := snap.Ref.ID
+		cpRaw, _ := snap.Data()["canonicalPath"].(string)
+		orgGeo := extractGeoFromCanonicalPath(cpRaw)
+		if orgGeo == "" || orgGeo == "na" {
+			// Also try jurisdictionIso2 identifier
+			if ids, ok := snap.Data()["identifiers"].(map[string]interface{}); ok {
+				if iso2, ok := ids["jurisdictionIso2"].(string); ok && len(strings.TrimSpace(iso2)) == 2 {
+					orgGeo = strings.ToLower(strings.TrimSpace(iso2))
+				}
+			}
+		}
+		if orgGeo == "" || orgGeo == "na" {
+			continue // Can't validate without known org geo
+		}
+		// Global/international orgs can participate in ANY regional market — skip them.
+		if orgGeo == "global" || orgGeo == "int" {
+			continue
+		}
+		// Regional tokens (gcc, eu, asean, etc.) — these orgs operate across multiple countries,
+		// so we also skip them (they can legitimately participate in any member-country market).
+		switch orgGeo {
+		case "gcc", "eu", "eaeu", "asean", "brics", "opec", "nafta", "mercosur", "cis", "apac", "latam", "mena", "emea":
+			continue
+		}
+
+		orgChecked++
+		if orgChecked%2000 == 0 {
+			log.Printf("  7a progress: checked %d orgs, cleaned %d edges", orgChecked, geoMismatchCleaned)
+		}
+
+		// Get PARTICIPATES_IN edges from this org
+		edges, err := edgesRepo.ListBySource(ctx, tenantID, orgID, &participatesIn, 100)
+		if err != nil {
+			continue
+		}
+		for _, edge := range edges {
+			if edge == nil || strings.TrimSpace(edge.TargetFragmentID) == "" {
+				continue
+			}
+			// Look up target (market) fragment canonical path
+			targetSnap, err := db.Collection("horizon_fragments").Doc(edge.TargetFragmentID).Get(ctx)
+			if err != nil || targetSnap == nil || !targetSnap.Exists() {
+				continue
+			}
+			targetCP, _ := targetSnap.Data()["canonicalPath"].(string)
+			if !strings.HasPrefix(targetCP, "/market/") {
+				continue // Not a market
+			}
+			marketGeo := extractGeoFromCanonicalPath(targetCP)
+			if marketGeo == "" || marketGeo == "global" || marketGeo == "int" {
+				continue // Global market — always OK
+			}
+			if marketGeo == orgGeo {
+				continue // Same geo — OK
+			}
+			// Regional market: allow if org's country is a member of that region.
+			// E.g. BH org → /market/gcc/… is OK because Bahrain is a GCC member.
+			if taxonomy.IsCountryInRegion(marketGeo, orgGeo) {
+				continue
+			}
+
+			// Mismatch: org(sa) → market(kz) — delete this edge
+			if verbose {
+				log.Printf("  7a: GEO MISMATCH org=%s (geo=%s) → market=%s (geo=%s) — %s edge %s",
+					cpRaw, orgGeo, targetCP, marketGeo,
+					func() string {
+						if apply {
+							return "DELETING"
+						}
+						return "would delete"
+					}(), edge.ID)
+			}
+			if apply {
+				if err := edgesRepo.Delete(ctx, edge.ID); err != nil {
+					if verbose {
+						log.Printf("  7a: ERROR deleting edge %s: %v", edge.ID, err)
+					}
+					continue
+				}
+			}
+			geoMismatchCleaned++
+		}
+	}
+	log.Printf("  7a: Checked %d orgs, cleaned %d geo-mismatch edges", orgChecked, geoMismatchCleaned)
+
+	// -------------------------------------------------------------------------
+	// 7b: Market domain normalization
+	// -------------------------------------------------------------------------
+	log.Printf("  Step 7b: Normalizing market fragment domains...")
+
+	marketCol := db.Collection("horizon_fragments")
+	marketQuery := marketCol.Where("tenantId", "==", tenantID).Where("type", "==", string(models.FragmentTypeMarket))
+	marketIter := marketQuery.Documents(ctx)
+	defer marketIter.Stop()
+
+	marketChecked := 0
+	for {
+		snap, err := marketIter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			log.Printf("  ERROR loading market fragment: %v", err)
+			break
+		}
+		if snap == nil || !snap.Exists() {
+			continue
+		}
+		marketID := snap.Ref.ID
+		cpRaw, _ := snap.Data()["canonicalPath"].(string)
+		cpRaw = strings.TrimSpace(cpRaw)
+		if cpRaw == "" || !strings.HasPrefix(cpRaw, "/market/") {
+			continue
+		}
+
+		parts := strings.Split(strings.Trim(cpRaw, "/"), "/")
+		// /market/{geo}/{domain}/{vertical} — need at least 4 parts
+		if len(parts) < 4 || parts[0] != "market" {
+			continue
+		}
+		rawDomain := parts[2]
+		normDomain := taxonomy.NormalizeMarketDomain(rawDomain)
+		if normDomain == rawDomain {
+			continue // Already canonical
+		}
+
+		// Build new canonical path
+		parts[2] = normDomain
+		newCP := "/" + strings.Join(parts, "/")
+
+		marketChecked++
+		if verbose {
+			log.Printf("  7b: DOMAIN NORMALIZE %s → %s (%s)", cpRaw, newCP,
+				func() string {
+					if apply {
+						return "APPLYING"
+					}
+					return "dry-run"
+				}())
+		}
+
+		if !apply {
+			domainNormalized++
+			continue
+		}
+
+		// Check if a fragment with the canonical path already exists → merge into it
+		existing, err := fragmentsRepo.GetByCanonicalPath(ctx, newCP)
+		if err == nil && existing != nil && strings.TrimSpace(existing.ID) != "" && existing.ID != marketID {
+			// Merge: reassign edges from current to existing, then delete current
+			if verbose {
+				log.Printf("  7b: MERGE %s (%s) → existing %s (%s)", cpRaw, marketID, newCP, existing.ID)
+			}
+			// Reassign inbound edges
+			inEdges, _ := edgesRepo.ListByTarget(ctx, tenantID, marketID, nil, 500)
+			for _, e := range inEdges {
+				if e == nil {
+					continue
+				}
+				// Check if the same edge already exists to the target
+				if _, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, e.SourceFragmentID, existing.ID, e.Type); err == nil {
+					// Already exists — just delete the old edge
+					_ = edgesRepo.Delete(ctx, e.ID)
+					continue
+				}
+				e.TargetFragmentID = existing.ID
+				_ = edgesRepo.Update(ctx, e)
+			}
+			// Reassign outbound edges
+			outEdges, _ := edgesRepo.ListBySource(ctx, tenantID, marketID, nil, 500)
+			for _, e := range outEdges {
+				if e == nil {
+					continue
+				}
+				if _, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, existing.ID, e.TargetFragmentID, e.Type); err == nil {
+					_ = edgesRepo.Delete(ctx, e.ID)
+					continue
+				}
+				e.SourceFragmentID = existing.ID
+				_ = edgesRepo.Update(ctx, e)
+			}
+			// Delete the non-canonical market fragment
+			_ = fragmentsRepo.Delete(ctx, marketID)
+		} else {
+			// No existing fragment at canonical path — just rename
+			_, err := db.Collection("horizon_fragments").Doc(marketID).Set(ctx, map[string]interface{}{
+				"canonicalPath": newCP,
+			}, firestore.MergeAll)
+			if err != nil {
+				if verbose {
+					log.Printf("  7b: ERROR renaming %s: %v", marketID, err)
+				}
+				continue
+			}
+		}
+		domainNormalized++
+	}
+	log.Printf("  7b: Normalized %d market domains", domainNormalized)
+
+	return
+}
+
+// extractGeoFromCanonicalPath extracts the geo (2nd segment) from canonical paths like
+// /org/{geo}/..., /market/{geo}/..., /gov/{geo}/..., /loc/{geo}/...
+// Only returns valid geo tokens: 2-letter ISO2 codes, regional tokens (gcc, eu, asean, etc.),
+// "global", or "int". Returns "" for legacy paths like /org/repsol where 2nd segment is not a geo.
+func extractGeoFromCanonicalPath(cp string) string {
+	cp = strings.TrimSpace(cp)
+	if cp == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	geo := strings.ToLower(strings.TrimSpace(parts[1]))
+	// Validate: must be 2-letter ISO2, known regional token, "global", or "int"
+	if geo == "global" || geo == "int" || geo == "na" {
+		return geo
+	}
+	if len(geo) == 2 && geo[0] >= 'a' && geo[0] <= 'z' && geo[1] >= 'a' && geo[1] <= 'z' {
+		return geo // Valid ISO2
+	}
+	// Known regional tokens
+	switch geo {
+	case "gcc", "eu", "eaeu", "asean", "brics", "opec", "nafta", "mercosur", "cis", "apac", "latam", "mena", "emea":
+		return geo
+	}
+	return "" // Not a valid geo (e.g., /org/repsol → "repsol" is not a geo)
 }

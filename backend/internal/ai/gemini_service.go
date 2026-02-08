@@ -13,20 +13,24 @@ import (
 	"time"
 )
 
-// VertexAIService сервис-обёртка для Google Vertex AI (Gemini)
-// Поддерживает текстовую генерацию и встроенный веб-поиск (Grounding with Google Search)
-type VertexAIService struct {
+// GeminiService — обёртка для Google AI (Gemini) через generativelanguage.googleapis.com.
+// Аутентификация по API-ключу. Поддерживает текстовую генерацию, Google Search Grounding
+// и базовый tool-calling.
+//
+// НЕ является Vertex AI Platform клиентом — для Vertex AI (aiplatform.googleapis.com)
+// с поддержкой Vertex AI Search grounding используйте VertexAIService.
+type GeminiService struct {
 	*BaseAIService
 	apiKey     string
 	httpClient *http.Client
 }
 
-// NewVertexAIService создает новый экземпляр VertexAIService
-func NewVertexAIService(apiKey string, modelManager *AIModelManager) *VertexAIService {
+// NewGeminiService создаёт экземпляр GeminiService.
+func NewGeminiService(apiKey string, modelManager *AIModelManager) *GeminiService {
 	// Sanitize API key to avoid invalid header values
 	sanitizedKey := strings.TrimSpace(apiKey)
 	sanitizedKey = strings.Trim(sanitizedKey, "\"'")
-	return &VertexAIService{
+	return &GeminiService{
 		BaseAIService: NewBaseAIService(modelManager),
 		apiKey:        sanitizedKey,
 		httpClient: &http.Client{
@@ -36,17 +40,17 @@ func NewVertexAIService(apiKey string, modelManager *AIModelManager) *VertexAISe
 }
 
 // Provider возвращает идентификатор провайдера
-func (s *VertexAIService) Provider() AIProvider {
+func (s *GeminiService) Provider() AIProvider {
 	return AIProviderGemini
 }
 
 // ExecuteTask выполняет основную задачу по генерации текста
-func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model string) (*AITaskResult, error) {
+func (s *GeminiService) ExecuteTask(ctx context.Context, task *AITask, model string) (*AITaskResult, error) {
 	if task == nil {
 		return nil, fmt.Errorf("task cannot be nil")
 	}
 
-	log.Printf("[VertexAI] ExecuteTask: %s, model=%s", task.TaskType, model)
+	log.Printf("[GeminiAPI] ExecuteTask: %s, model=%s", task.TaskType, model)
 	debug := aiDebugLogEnabled()
 
 	requestBody := map[string]interface{}{
@@ -73,10 +77,8 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		"maxOutputTokens": maxOut,
 	}
 	// If task requests Search Grounding, enable googleSearch tool for Gemini.
-	// This is critical: previously we only *filtered* for grounding-capable models,
-	// but didn't actually enable grounding in the request.
 	if task.AIRequirements.SearchGroundingCapability {
-		log.Printf("[VertexAI] Grounding enabled via tools.googleSearch")
+		log.Printf("[GeminiAPI] Grounding enabled via tools.googleSearch")
 		requestBody["tools"] = []map[string]interface{}{
 			{"googleSearch": map[string]interface{}{}},
 		}
@@ -87,7 +89,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 	if debug {
-		log.Printf("[AI DEBUG][VertexAI] request prepared (task=%s model=%s inputChars=%d maxOut=%d requestBytes=%d grounding=%v)",
+		log.Printf("[AI DEBUG][GeminiAPI] request prepared (task=%s model=%s inputChars=%d maxOut=%d requestBytes=%d grounding=%v)",
 			task.TaskType, model, len(task.InputContent), maxOut, len(bodyJSON), task.AIRequirements.SearchGroundingCapability)
 	}
 
@@ -112,12 +114,12 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 	if debug {
-		log.Printf("[AI DEBUG][VertexAI] response received (task=%s model=%s status=%d responseBytes=%d elapsed=%s)",
+		log.Printf("[AI DEBUG][GeminiAPI] response received (task=%s model=%s status=%d responseBytes=%d elapsed=%s)",
 			task.TaskType, model, resp.StatusCode, len(body), time.Since(startedAt))
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("vertex AI API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("Gemini API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	// Grounding visibility: if grounding is requested, we should typically see groundingMetadata in candidates.
@@ -134,7 +136,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 				}
 			}
 			if hasGrounding {
-				log.Printf("[VertexAI] GroundingMetadata present in response")
+				log.Printf("[GeminiAPI] GroundingMetadata present in response")
 			} else {
 				// Some responses include promptFeedback with safety blocks; log keys for debugging.
 				keys := make([]string, 0, len(root))
@@ -142,7 +144,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 					keys = append(keys, k)
 				}
 				sort.Strings(keys)
-				log.Printf("[VertexAI] GroundingMetadata NOT present in response (keys=%v). Grounding may have been skipped or blocked.", keys)
+				log.Printf("[GeminiAPI] GroundingMetadata NOT present in response (keys=%v). Grounding may have been skipped or blocked.", keys)
 			}
 		}
 	}
@@ -166,7 +168,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		if len(preview) > 1200 {
 			preview = preview[:1200] + "..."
 		}
-		return nil, fmt.Errorf("empty response from vertex AI (no candidates/parts). raw=%s", preview)
+		return nil, fmt.Errorf("empty response from Gemini API (no candidates/parts). raw=%s", preview)
 	}
 
 	content := result.Candidates[0].Content.Parts[0].Text
@@ -175,7 +177,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		if len(preview) > 1200 {
 			preview = preview[:1200] + "..."
 		}
-		return nil, fmt.Errorf("empty response from vertex AI (empty text). raw=%s", preview)
+		return nil, fmt.Errorf("empty response from Gemini API (empty text). raw=%s", preview)
 	}
 
 	return &AITaskResult{
@@ -187,7 +189,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 }
 
 // ExecuteSearch выполняет веб-поиск с помощью встроенных возможностей Gemini
-func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, modelName string) (*AITaskResult, error) {
+func (s *GeminiService) ExecuteSearch(ctx context.Context, query string, modelName string) (*AITaskResult, error) {
 	if query == "" || modelName == "" {
 		return nil, fmt.Errorf("query and modelName are required")
 	}
@@ -196,12 +198,11 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 	if err != nil {
 		return nil, err
 	}
-	// Для Vertex/Gemini требуется поддержка Search Grounding, а не общий веб-поиск
 	if !caps.SearchGroundingCapability {
 		return nil, fmt.Errorf("model %s does not support search grounding", modelName)
 	}
 
-	log.Printf("[VertexAI] ExecuteSearch. model=%s, q=\"%s\"", modelName, query)
+	log.Printf("[GeminiAPI] ExecuteSearch. model=%s, q=\"%s\"", modelName, query)
 
 	requestBody := map[string]interface{}{
 		"model": fmt.Sprintf("models/%s", modelName),
@@ -215,7 +216,6 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 		},
 		"tools": []map[string]interface{}{
 			{
-				// Современный инструмент Grounding
 				"googleSearch": map[string]interface{}{},
 			},
 		},
@@ -247,7 +247,7 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("vertex AI search error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("Gemini API search error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var root map[string]interface{}
@@ -272,7 +272,7 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 	}
 
 	if content == "" {
-		return nil, fmt.Errorf("empty Search response from Vertex AI")
+		return nil, fmt.Errorf("empty search response from Gemini API")
 	}
 
 	// Extract citations
@@ -284,16 +284,16 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 				if attributions, ok := groundingMeta["groundingAttributions"].([]interface{}); ok {
 					for _, g := range attributions {
 						if gMap, ok := g.(map[string]interface{}); ok {
-							url := ""
+							cURL := ""
 							title := ""
 							if u, ok := gMap["sourceUrl"].(string); ok {
-								url = u
+								cURL = u
 							}
 							if t, ok := gMap["sourceTitle"].(string); ok {
 								title = t
 							}
 							citations = append(citations, WebCitation{
-								URL:        url,
+								URL:        cURL,
 								Title:      title,
 								StartIndex: -1,
 								EndIndex:   -1,
@@ -309,12 +309,12 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 					if citationSources, ok := citationMeta["citationSources"].([]interface{}); ok {
 						for _, src := range citationSources {
 							if srcMap, ok := src.(map[string]interface{}); ok {
-								url := ""
+								cURL := ""
 								title := ""
 								startIndex := -1
 								endIndex := -1
 								if u, ok := srcMap["uri"].(string); ok {
-									url = u
+									cURL = u
 								}
 								if l, ok := srcMap["license"].(string); ok {
 									title = l
@@ -326,7 +326,7 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 									endIndex = int(ei)
 								}
 								citations = append(citations, WebCitation{
-									URL:        url,
+									URL:        cURL,
 									Title:      title,
 									StartIndex: startIndex,
 									EndIndex:   endIndex,
@@ -348,18 +348,18 @@ func (s *VertexAIService) ExecuteSearch(ctx context.Context, query string, model
 	}, nil
 }
 
-// ExecuteEmbeddingTask генерация эмбеддингов не поддерживается в данной реализации
-func (s *VertexAIService) ExecuteEmbeddingTask(ctx context.Context, inputText string, modelName string) (*AITaskResult, error) {
-	return nil, fmt.Errorf("vertex AI does not support embedding generation in this implementation")
+// ExecuteEmbeddingTask генерация эмбеддингов не поддерживается через Gemini API в данной реализации
+func (s *GeminiService) ExecuteEmbeddingTask(ctx context.Context, inputText string, modelName string) (*AITaskResult, error) {
+	return nil, fmt.Errorf("Gemini API does not support embedding generation in this implementation")
 }
 
-// ExecuteImageAnalysisByLinkTask анализ изображений не поддерживается в данной реализации
-func (s *VertexAIService) ExecuteImageAnalysisByLinkTask(ctx context.Context, inputText string, imageLink string, modelName string) (*AITaskResult, error) {
-	return nil, fmt.Errorf("vertex AI does not support image analysis in this implementation")
+// ExecuteImageAnalysisByLinkTask анализ изображений не поддерживается через Gemini API в данной реализации
+func (s *GeminiService) ExecuteImageAnalysisByLinkTask(ctx context.Context, inputText string, imageLink string, modelName string) (*AITaskResult, error) {
+	return nil, fmt.Errorf("Gemini API does not support image analysis in this implementation")
 }
 
 // BeginChatWithTools начинает диалог с поддержкой tool-calling (Gemini tools)
-func (s *VertexAIService) BeginChatWithTools(ctx context.Context, task *AITask, model string, tools []ToolSchema) (*ToolChatStep, error) {
+func (s *GeminiService) BeginChatWithTools(ctx context.Context, task *AITask, model string, tools []ToolSchema) (*ToolChatStep, error) {
 	functionDecls := make([]map[string]interface{}, 0, len(tools))
 	for _, t := range tools {
 		functionDecls = append(functionDecls, map[string]interface{}{
@@ -419,7 +419,7 @@ func (s *VertexAIService) BeginChatWithTools(ctx context.Context, task *AITask, 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("vertex AI tool chat error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("Gemini API tool chat error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var root map[string]interface{}
@@ -428,7 +428,7 @@ func (s *VertexAIService) BeginChatWithTools(ctx context.Context, task *AITask, 
 	}
 
 	step := &ToolChatStep{
-		SessionID: fmt.Sprintf("vertex-session-%d", time.Now().UnixNano()),
+		SessionID: fmt.Sprintf("gemini-session-%d", time.Now().UnixNano()),
 		Content:   "",
 		ToolCalls: []ToolCallRequest{},
 		IsFinal:   true,
@@ -473,7 +473,7 @@ func (s *VertexAIService) BeginChatWithTools(ctx context.Context, task *AITask, 
 }
 
 // ContinueWithToolResults продолжает диалог с результатами выполнения инструментов
-func (s *VertexAIService) ContinueWithToolResults(ctx context.Context, sessionID string, model string, toolResults []ToolExecutionResult) (*ToolChatStep, error) {
+func (s *GeminiService) ContinueWithToolResults(ctx context.Context, sessionID string, model string, toolResults []ToolExecutionResult) (*ToolChatStep, error) {
 	toolMsgs := make([]map[string]interface{}, 0, len(toolResults))
 	for _, r := range toolResults {
 		toolMsgs = append(toolMsgs, map[string]interface{}{
@@ -514,7 +514,7 @@ func (s *VertexAIService) ContinueWithToolResults(ctx context.Context, sessionID
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("vertex AI tool continue error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("Gemini API tool continue error %d: %s", resp.StatusCode, string(body))
 	}
 
 	var root map[string]interface{}

@@ -266,7 +266,7 @@ func buildAIServices(mm *ai.AIModelManager) []ai.AIService {
 		apiKey = os.Getenv("GEMINI_API_KEY")
 	}
 	if apiKey != "" {
-		services = append(services, ai.NewVertexAIService(apiKey, mm))
+		services = append(services, ai.NewGeminiService(apiKey, mm))
 	}
 
 	// Try Grok (optional)

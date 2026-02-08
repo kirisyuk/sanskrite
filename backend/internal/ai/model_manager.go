@@ -609,11 +609,24 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 	// Нормализация взаимоисключающих флагов
 	mm.normalizeCapabilities(&requirements)
 
-	log.Printf("AIModelManager SelectModel called with requirements: MinContextWindow=%d, InputTokens=%d, PreferNearlyRealTime=%v, MinCapabilityScore=%d",
-		requirements.MinContextWindow, inputTokens, preferNearlyRealTime, requirements.MinCapabilityScore)
+	log.Printf("AIModelManager SelectModel called with requirements: MinContextWindow=%d, InputTokens=%d, PreferNearlyRealTime=%v, MinCapabilityScore=%d, PreferredModel=%s",
+		requirements.MinContextWindow, inputTokens, preferNearlyRealTime, requirements.MinCapabilityScore, requirements.PreferredModel)
 
 	if excludeModels == nil {
 		excludeModels = []string{}
+	}
+
+	// Fast path: if PreferredModel is set, not excluded, and meets basic requirements — use it directly.
+	if pm := strings.TrimSpace(requirements.PreferredModel); pm != "" && !contains(excludeModels, pm) {
+		if m, ok := mm.models[pm]; ok {
+			if m.ContextWindow >= inputTokens && m.TextGenerationCapability {
+				log.Printf("AIModelManager: using PreferredModel %s", pm)
+				return pm
+			}
+			log.Printf("AIModelManager: PreferredModel %s does not meet requirements (contextWindow=%d < inputTokens=%d), falling back", pm, m.ContextWindow, inputTokens)
+		} else {
+			log.Printf("AIModelManager: PreferredModel %s not found in model registry, falling back", pm)
+		}
 	}
 
 	// Минимально необходимый размер контекстного окна

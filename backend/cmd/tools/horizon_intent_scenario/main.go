@@ -70,7 +70,7 @@ func main() {
 
 	// AI executor
 	modelManager := ai.NewAIModelManager()
-	vertexService := ai.NewVertexAIService(apiKey, modelManager)
+	vertexService := ai.NewGeminiService(apiKey, modelManager)
 	execAI := ai.NewAITaskExecutor([]ai.AIService{vertexService}, modelManager)
 
 	// Intent resolve (LLM → taxonomy-aligned intent)

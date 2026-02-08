@@ -177,7 +177,7 @@ func main() {
 		emb = ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
 		logger.Printf("Using OpenAI for embeddings")
 	} else {
-		aiServices := []ai.AIService{ai.NewVertexAIService(geminiAPIKey, modelManager)}
+		aiServices := []ai.AIService{ai.NewGeminiService(geminiAPIKey, modelManager)}
 		exec := ai.NewAITaskExecutor(aiServices, modelManager)
 		emb = ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
 		logger.Printf("Using Vertex AI (Gemini) for embeddings")
@@ -255,7 +255,7 @@ func main() {
 	// EntityResolver для дедупликации
 	aiServices := []ai.AIService{}
 	if geminiAPIKey != "" {
-		aiServices = append(aiServices, ai.NewVertexAIService(geminiAPIKey, modelManager))
+		aiServices = append(aiServices, ai.NewGeminiService(geminiAPIKey, modelManager))
 	}
 	if openaiAPIKey != "" {
 		aiServices = append(aiServices, ai.NewOpenAIService(openaiAPIKey, modelManager))

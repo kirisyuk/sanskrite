@@ -53,7 +53,7 @@ func newTaskExecutor(projectID string, mm *ai.AIModelManager) *ai.AITaskExecutor
 	}
 	services := make([]ai.AIService, 0, 3)
 	// Vertex/Gemini (default provider for this repo)
-	vertex := ai.NewVertexAIService(apiKey, mm)
+	vertex := ai.NewGeminiService(apiKey, mm)
 	services = append(services, vertex)
 
 	// OpenAI fallback (for cases where Gemini response cannot be parsed/verified).

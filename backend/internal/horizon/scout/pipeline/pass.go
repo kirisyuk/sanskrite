@@ -29,6 +29,9 @@ const (
 type Engine interface {
 	ExecuteDomainExpansionPass(ctx context.Context, job *models.ScoutingJob, effectiveCanonicalPath string, existingFragment *models.HorizonFragment) error
 	ExecuteStrategicProjectionPass(ctx context.Context, job *models.ScoutingJob, effectiveCanonicalPath string, existingFragment *models.HorizonFragment) error
+	ContractRegistry() ContractRegistry
+	BuildContractInput(ctx context.Context, in PassInput) (*ContractInput, error)
+	PersistViewDirective(ctx context.Context, job *models.ScoutingJob, directive *models.ViewDirective) error
 }
 
 type PassInput struct {

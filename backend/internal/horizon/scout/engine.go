@@ -105,21 +105,6 @@ func appendMissingInfoUnique(list []string, item string) []string {
 	return append(list, item)
 }
 
-func (e *ScoutEngine) recordCanonicalPathRedirect(ctx context.Context, fromPath string, toPath string, reason string) {
-	if e == nil || e.canonicalPathResolver == nil {
-		return
-	}
-	fromPath = strings.TrimSpace(fromPath)
-	toPath = strings.TrimSpace(toPath)
-	if fromPath == "" || toPath == "" || fromPath == toPath {
-		return
-	}
-	fragType := InferFragmentTypeFromCanonicalPath(toPath)
-	if fragType == "" {
-		fragType = InferFragmentTypeFromCanonicalPath(fromPath)
-	}
-	_, _, _ = e.canonicalPathResolver.RecordRedirect(ctx, fromPath, toPath, fragType, reason)
-}
 
 // recordDeterministicRedirect records a redirect that becomes immediately stable.
 // Use for authoritative pipeline decisions (dedup, org path upgrade, scope rewrite)
@@ -707,6 +692,7 @@ type ScoutEngine struct {
 	canonizationPolicy      *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
 	canonicalPathResolver   *CanonicalPathResolver            // Unified canonicalization and deduplication service
 	missingInfoStatusRepo   *repo.MissingInfoStatusRepository // Tracks missingInfo attempts to prevent infinite loops
+	groundingResolver       *GroundingEvidenceResolver        // Resolves Vertex AI grounding evidence → real fragments from DB
 
 	// Policy enforcement (final validation step)
 	policyChecker          *policy.PolicyChecker              // Optional: validates job output before completion
@@ -1012,6 +998,7 @@ func NewScoutEngine(
 		productHierarchyBuilder: productHierarchy,
 	}
 	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup, productDedup).WithPersonDedup(personDedup)
+	engine.groundingResolver = NewGroundingEvidenceResolver(fragmentsRepo)
 	return engine
 }
 
@@ -2297,6 +2284,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		normalizeMarketMetricKeys(extractedFragment)
 	}
 
+	// resolvedGrounding is populated by the Research Agent's Vertex AI grounding evidence.
+	// Declared here so it's available in the DECOMPOSITION phase (after SKIP_RESEARCH label).
+	var resolvedGrounding *ResolvedGroundingContext
+
 	// RESEARCH: Дообогащение данных через Research Agent
 	if len(validationResult.MissingInfo) > 0 {
 		// Filter out missingInfo items that are exhausted or in cooldown to prevent infinite loops.
@@ -2446,7 +2437,17 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				}
 			}
 		}
-		enrichedFragment, newRelations, newSupplyChains, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities)
+		enrichedFragment, newRelations, newSupplyChains, groundingEvidence, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities)
+		// Resolve grounding evidence into real fragments from DB.
+		// This gives us system-level provenance: which entities the LLM referenced actually exist in our database.
+		if groundingEvidence != nil && e.groundingResolver != nil {
+			resolvedGrounding = e.groundingResolver.Resolve(ctx, groundingEvidence)
+			if !resolvedGrounding.IsEmpty() {
+				fmt.Printf("[ScoutEngine] GroundingEvidence resolved: %d fragments from datastore (paths=%v)\n",
+					resolvedGrounding.Size(), resolvedGrounding.CanonicalPaths())
+				e.logLine(ctx, job, "info", fmt.Sprintf("> grounding: %d existing entities found in datastore", resolvedGrounding.Size()))
+			}
+		}
 		if err == nil {
 			// Capture canonicalPath drift introduced by research (aliasing).
 			oldCP := ""
@@ -3302,9 +3303,16 @@ SKIP_RESEARCH:
 
 	// DECOMPOSITION: Обработка найденных связей (рекурсивный скаутинг)
 	if len(scoutResult.Relations) > 0 {
-		// Используем existingFragment, так как он содержит актуальный ID после сохранения
-		if err := e.processDiscoveredRelations(ctx, job, existingFragment, scoutResult.Relations); err != nil {
-			fmt.Printf("Decomposition failed: %v\n", err)
+		// Используем existingFragment, так как он содержит актуальный ID после сохранения.
+		// Pass resolvedGrounding so that targets matching DB fragments skip duplicate creation.
+		if resolvedGrounding != nil && !resolvedGrounding.IsEmpty() {
+			if err := e.processDiscoveredRelationsWithGrounding(ctx, job, existingFragment, scoutResult.Relations, resolvedGrounding); err != nil {
+				fmt.Printf("Decomposition failed: %v\n", err)
+			}
+		} else {
+			if err := e.processDiscoveredRelations(ctx, job, existingFragment, scoutResult.Relations); err != nil {
+				fmt.Printf("Decomposition failed: %v\n", err)
+			}
 		}
 	}
 

@@ -57,7 +57,7 @@ func main() {
 	if len(aiServices) == 0 {
 		geminiAPIKey := gcp.GetEnvOrSecret(ctx, *projectID, "GEMINI_API_KEY", "gemini_api_key")
 		if geminiAPIKey != "" {
-			aiServices = append(aiServices, ai.NewVertexAIService(geminiAPIKey, modelManager))
+			aiServices = append(aiServices, ai.NewGeminiService(geminiAPIKey, modelManager))
 			log.Printf("Using Vertex AI (Gemini) for embeddings")
 		}
 	}

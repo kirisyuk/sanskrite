@@ -655,6 +655,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [collapsedSubcategories, setCollapsedSubcategories] = React.useState<Set<string>>(new Set());
   // Track whether collapsed subcategories changed (to trigger relayout).
   const collapsedSubcategoriesChangedRef = React.useRef(false);
+  // Expanded role groups (Levels layout: left-pane compact categories can expand beyond cap).
+  // Key format: `levels:lefttype:${groupId}:${role}`
+  const [expandedRoleGroups, setExpandedRoleGroups] = React.useState<Set<string>>(new Set());
+  const expandedRoleGroupsChangedRef = React.useRef(false);
 
   // Right Dock state (Levels layout: right pane filters control which upstream categories are promoted to the right).
   // Per-node: enabled filters among {governance, supply, dependencies, structure}.
@@ -757,6 +761,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     collapsedSubcategoriesChangedRef.current = true;
   }, []);
 
+  const toggleRoleOverflow = React.useCallback((groupKey: string, nextExpanded: boolean) => {
+    if (!groupKey) return;
+    setExpandedRoleGroups((prev) => {
+      const next = new Set(prev);
+      if (nextExpanded) next.add(groupKey);
+      else next.delete(groupKey);
+      return next;
+    });
+    expandedRoleGroupsChangedRef.current = true;
+  }, []);
+
   // Avoid unbounded growth across long sessions / lens switches.
   // Also reset collapsed subcategories to defaults when lens changes.
   React.useEffect(() => {
@@ -765,6 +780,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     nodeExplainSessionCacheRef.current.clear();
     setNodeExplainPopover(null);
     setCollapsedSubcategories(new Set());
+    setExpandedRoleGroups(new Set());
     setRightDockStateByNodeId({});
   }, [lensId]);
 
@@ -1839,6 +1855,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     createdAt: number;
   };
 
+  type ViewDirective = {
+    contractType?: string;
+    hierarchyAxis?: string;
+    highlightPaths?: Array<{ nodePaths?: string[] }>;
+    filterRelTypes?: string[];
+    excludeRelTypes?: string[];
+    focusNodePaths?: string[];
+    summary?: string;
+  };
+
   const [askGraphOpen, setAskGraphOpen] = React.useState(false);
   const [askGraphQuery, setAskGraphQuery] = React.useState('');
   const [askGraphLoading, setAskGraphLoading] = React.useState(false);
@@ -1847,6 +1873,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [graphQueryChips, setGraphQueryChips] = React.useState<GraphQueryChip[]>([]);
   const [graphQueryActiveChipId, setGraphQueryActiveChipId] = React.useState<string | null>(null);
   const [graphQueryHighlightIds, setGraphQueryHighlightIds] = React.useState<Set<string> | null>(null);
+  const [viewDirective, setViewDirective] = React.useState<ViewDirective | null>(null);
 
   const [domainOverlayOpen, setDomainOverlayOpen] = React.useState(false);
   const [domainOverlayQuery, setDomainOverlayQuery] = React.useState('');
@@ -2289,6 +2316,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (typeof fn === 'function') fn();
     }
   }, [collapsedSubcategories, layoutMode]);
+
+  // Trigger relayout when role overflow expansion changes (in Levels mode).
+  React.useEffect(() => {
+    if (!expandedRoleGroupsChangedRef.current) return;
+    expandedRoleGroupsChangedRef.current = false;
+    if (layoutMode === 'levels') {
+      const fn = onArrangeRef.current;
+      if (typeof fn === 'function') fn();
+    }
+  }, [expandedRoleGroups, layoutMode]);
 
   // Trigger relayout when right dock state changes (in Levels mode).
   React.useEffect(() => {
@@ -4535,6 +4572,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       try {
         // New lens / reload: reset risk shield state.
         setRiskShieldActiveNodeId(null);
+        // New lens / reload: reset context-card state (collapsed blocks + overflow).
+        setCollapsedSubcategories(new Set());
+        setExpandedRoleGroups(new Set());
+        collapsedSubcategoriesChangedRef.current = false;
+        expandedRoleGroupsChangedRef.current = false;
         // New lens / reload: allow a single auto-arrange on initial load (whatever the current layout mode is).
         autoArrangeOnceRef.current = false;
         const itemsRaw = await api.getLensItems(lensId);
@@ -4789,6 +4831,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // 2. Загружаем граф из Cockpit API
       dbg('[Cockpit] Loading graph from cockpit API...');
       const cockpitData = await api.getHorizonLensCockpit(lensId);
+      const viewDirectiveRaw = (cockpitData?.lens?.viewConfig?.viewDirective || null) as ViewDirective | null;
+      setViewDirective(viewDirectiveRaw);
       
       const rawFragments = cockpitData.graph.nodes || [];
       const rawEdges = cockpitData.graph.edges || [];
@@ -4838,12 +4882,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const graphNodes: Node<HorizonNodeData>[] = [];
       const graphEdges: Edge[] = [];
       const fragmentToNodeId = new Map<string, string>();
+      const canonicalToNodeId = new Map<string, string>();
 
       // Создаём узлы из fragments (с временными позициями, ELK пересчитает)
       fragments.forEach((fragment: any, index: number) => {
         const nodeId = norm(fragment.id);
         const fragmentId = nodeId;
         fragmentToNodeId.set(fragmentId, nodeId);
+        const canonicalPath = String(fragment?.canonicalPath || '').trim();
+        if (canonicalPath) {
+          canonicalToNodeId.set(canonicalPath, nodeId);
+        }
 
         // Извлекаем метрики из state
         const stateMetrics: Record<string, number> = {};
@@ -4951,6 +5000,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Suppress dominated edges (partners > influence > depends, located_in > depends when directed correctly)
       const filteredEdges = suppressDominatedEdges(graphEdges, graphNodes);
 
+      const viewHighlightIds = new Set<string>();
+      const viewFocusIds = new Set<string>();
+      if (viewDirectiveRaw?.highlightPaths) {
+        for (const p of viewDirectiveRaw.highlightPaths) {
+          const nodePaths = Array.isArray(p?.nodePaths) ? p.nodePaths : [];
+          for (const cp of nodePaths) {
+            const id = canonicalToNodeId.get(String(cp || '').trim());
+            if (id) viewHighlightIds.add(id);
+          }
+        }
+      }
+      if (Array.isArray(viewDirectiveRaw?.focusNodePaths)) {
+        for (const cp of viewDirectiveRaw?.focusNodePaths || []) {
+          const id = canonicalToNodeId.get(String(cp || '').trim());
+          if (id) viewFocusIds.add(id);
+        }
+      }
+
       // 4. Применяем ELK layout и отображаем граф
       dbg('[Cockpit] Applying ELK layout to nodes:', graphNodes.length);
       const layoutedNodes = await layoutFullGraph(graphNodes, filteredEdges, {
@@ -4960,6 +5027,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         nodeSpacing: ELK_NODE_SPACING,
         layerSpacing: ELK_LAYER_SPACING,
         maxChildRows: ELK_MAX_CHILD_ROWS,
+        hierarchyAxis: String(viewDirectiveRaw?.hierarchyAxis || '').trim() || undefined,
       });
 
       dbg('[Cockpit] Setting nodes and edges:', { nodes: layoutedNodes.length, edges: filteredEdges.length });
@@ -4978,6 +5046,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setNodes(withCallbacks as any);
       setEdges(filteredEdges);
       setLoading(false);
+      if (viewHighlightIds.size > 0) {
+        setGraphQueryHighlightIds(new Set(viewHighlightIds));
+        setGraphQueryActiveChipId('view-directive');
+      } else {
+        setGraphQueryHighlightIds(null);
+        setGraphQueryActiveChipId(null);
+      }
 
         // Initialize grid cells for all central nodes (depth=0) so second-order expansions
         // can place new centers relative to the correct parent, not (0,0).
@@ -5015,7 +5090,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Fit view after a short delay
       setTimeout(() => {
         if (reactFlowInstanceRef.current && layoutedNodes.length > 0) {
-          reactFlowInstanceRef.current.fitView({ padding: 0.1, duration: 300 });
+          const toFit =
+            viewFocusIds.size > 0
+              ? layoutedNodes.filter((n) => viewFocusIds.has(String(n.id || '').trim()))
+              : layoutedNodes;
+          reactFlowInstanceRef.current.fitView({ nodes: toFit, padding: 0.1, duration: 300 });
         }
       }, 100);
 
@@ -5476,6 +5555,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           maxChildRows: ELK_MAX_CHILD_ROWS,
           collapsedSubcategories,
           onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
+          expandedRoleGroups,
+          onToggleRoleOverflow: toggleRoleOverflow,
           compactLeftPane: true,
           rightDockMode: true,
           rightDockStateByNodeId,
@@ -6691,6 +6772,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           const d: any = (n as any)?.data;
           if (id.startsWith('stack:group:')) return false;
           if (Boolean(d?.isStackGroup)) return false;
+          // Derived context-card nodes are re-created by layout; don't persist them in state.
+          if (id.startsWith('levels:leftblock:card:')) return false;
           return true;
         });
         layoutedNodes = await layoutLevelsTwoPane(allNodesNoRightStacks as any, filteredMergedEdges as any, {
@@ -6702,6 +6785,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           maxChildRows: ELK_MAX_CHILD_ROWS,
           collapsedSubcategories,
           onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
+          expandedRoleGroups,
+          onToggleRoleOverflow: toggleRoleOverflow,
           compactLeftPane: true,
           rightDockMode: true,
           rightDockStateByNodeId,
@@ -6976,6 +7061,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     handleGroupPageChange,
     recalculateLinearHandles,
     recalculateFreeformHandles,
+    expandedRoleGroups,
+    toggleRoleOverflow,
   ]);
 
   // Keep ref updated for proxies (avoid circular deps)
@@ -7717,8 +7804,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     }
 
-    return base;
-  }, [edges, hiddenNodeIds, nodes, isLevelsLayout]);
+    const filterRelTypes = Array.isArray(viewDirective?.filterRelTypes)
+      ? new Set(viewDirective?.filterRelTypes.map((t) => String(t || '').toUpperCase().trim()).filter(Boolean))
+      : null;
+    const excludeRelTypes = Array.isArray(viewDirective?.excludeRelTypes)
+      ? new Set(viewDirective?.excludeRelTypes.map((t) => String(t || '').toUpperCase().trim()).filter(Boolean))
+      : null;
+
+    let filtered = base;
+    if (filterRelTypes && filterRelTypes.size > 0) {
+      filtered = filtered.filter((e) => filterRelTypes.has(edgeTypeOf(e)));
+    }
+    if (excludeRelTypes && excludeRelTypes.size > 0) {
+      filtered = filtered.filter((e) => !excludeRelTypes.has(edgeTypeOf(e)));
+    }
+
+    return filtered;
+  }, [edges, hiddenNodeIds, nodes, isLevelsLayout, viewDirective]);
 
   // Stable node structure info (only changes when nodes are added/removed/hidden, NOT on style changes).
   // This prevents hubNodeIds from re-computing on every hover/style update.
@@ -9246,6 +9348,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           maxChildRows: ELK_MAX_CHILD_ROWS,
           collapsedSubcategories,
           onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
+          expandedRoleGroups,
+          onToggleRoleOverflow: toggleRoleOverflow,
           compactLeftPane: true,
           rightDockMode: true,
           rightDockStateByNodeId,
@@ -9347,7 +9451,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     } finally {
       setArranging(false);
     }
-  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout, collapsedSubcategories, toggleSubcategoryCollapse, rightDockStateByNodeId, toggleRightDock]);
+  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout, collapsedSubcategories, toggleSubcategoryCollapse, rightDockStateByNodeId, toggleRightDock, expandedRoleGroups, toggleRoleOverflow]);
 
   // Keep ref updated for stack toggle re-layout (avoid TDZ / circular deps).
   onArrangeRef.current = () => { void handleArrange(); };
@@ -9402,6 +9506,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             maxChildRows: ELK_MAX_CHILD_ROWS,
             collapsedSubcategories,
             onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
+            expandedRoleGroups,
+            onToggleRoleOverflow: toggleRoleOverflow,
             compactLeftPane: true,
             rightDockMode: true,
             rightDockStateByNodeId,
@@ -11501,6 +11607,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     (_: any, node: Node<HorizonNodeData>) => {
       if (perfMode) return;
       const d: any = node?.data;
+      // Entering a node/group should exit "edge hover" mode (edge leave can be unreliable).
+      pendingHoverRef.current.hoveredEdgeId = null;
       if (d?.isGroup) {
         pendingHoverRef.current.hoveredGroupId = node.id;
         pendingHoverRef.current.hoveredNodeId = null;
@@ -11539,6 +11647,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const handleEdgeMouseEnter = React.useCallback(
     (_: any, edge: Edge) => {
       if (perfMode) return;
+      // Edge-hover mode intentionally fades everything else; clear node/group hover.
+      pendingHoverRef.current.hoveredNodeId = null;
+      pendingHoverRef.current.hoveredGroupId = null;
       pendingHoverRef.current.hoveredEdgeId = edge.id;
       scheduleHoverCommit();
     },
@@ -12550,6 +12661,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               </div>
             </div>
           </>
+        )}
+
+        {viewDirective?.summary && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 12,
+              left: 12,
+              zIndex: 180,
+              maxWidth: 420,
+              padding: '8px 12px',
+              borderRadius: 10,
+              background: theme === 'dark' ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255, 255, 255, 0.94)',
+              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.12)'}`,
+              color: 'var(--text-heading)',
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+          >
+            {String(viewDirective.summary || '').trim()}
+          </div>
         )}
 
         <ReactFlow

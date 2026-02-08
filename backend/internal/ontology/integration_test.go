@@ -123,7 +123,7 @@ func setupTestClients(t *testing.T) (*gen_combined.Client, ai.EmbeddingProvider,
 	// Создаем AITaskExecutor для тестов (если еще не создан через OpenAI)
 	if executor == nil && apiKey != "" {
 		modelManager := ai.NewAIModelManager()
-		vertexService := ai.NewVertexAIService(apiKey, modelManager)
+		vertexService := ai.NewGeminiService(apiKey, modelManager)
 		executor = ai.NewAITaskExecutor([]ai.AIService{vertexService}, modelManager)
 	}
 

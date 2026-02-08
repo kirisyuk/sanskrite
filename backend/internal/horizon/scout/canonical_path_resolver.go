@@ -981,7 +981,7 @@ func parseMarketGeoSector(canonicalPath string) (string, string) {
 	}
 	if parts, err := taxonomy.ParseCanonicalPathParts(cp); err == nil && parts != nil && parts.Market != nil {
 		geo := strings.ToLower(strings.TrimSpace(parts.Market.Geo))
-		sector := strings.ToLower(strings.TrimSpace(parts.Market.Domain))
+		sector := taxonomy.NormalizeMarketDomain(parts.Market.Domain)
 		if geo != "" && sector != "" {
 			return geo, sector
 		}
@@ -989,7 +989,7 @@ func parseMarketGeoSector(canonicalPath string) (string, string) {
 	trimmed := strings.Trim(cp, "/")
 	parts := strings.Split(trimmed, "/")
 	if len(parts) >= 4 && parts[0] == "market" {
-		return strings.ToLower(strings.TrimSpace(parts[1])), strings.ToLower(strings.TrimSpace(parts[2]))
+		return strings.ToLower(strings.TrimSpace(parts[1])), taxonomy.NormalizeMarketDomain(parts[2])
 	}
 	return "", ""
 }

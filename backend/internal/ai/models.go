@@ -65,7 +65,8 @@ type AIProvider string
 const (
 	AIProviderOpenAI   AIProvider = "OpenAI"
 	AIProviderClaude   AIProvider = "Claude"
-	AIProviderGemini   AIProvider = "Gemini"
+	AIProviderGemini   AIProvider = "Gemini"   // Google AI (generativelanguage.googleapis.com) — API key auth
+	AIProviderVertexAI AIProvider = "VertexAI"  // Vertex AI Platform (aiplatform.googleapis.com) — OAuth2, supports Vertex AI Search grounding
 	AIProviderDeepSeek AIProvider = "DeepSeek"
 	AIProviderGrok     AIProvider = "Grok"
 )
@@ -292,6 +293,33 @@ type AITaskResult struct {
 
 	// FinishReason причина завершения
 	FinishReason string `json:"finishReason,omitempty"`
+
+	// GroundingEvidence — свидетельства из Vertex AI grounding: какие фрагменты из базы и веб-источники
+	// были использованы моделью. Заполняется только VertexAIService.
+	// Система (не модель) определяет provenance по groundingMetadata.
+	GroundingEvidence *GroundingEvidence `json:"groundingEvidence,omitempty"`
+}
+
+// GroundingEvidence содержит системно извлечённые свидетельства из Vertex AI grounding metadata.
+// Позволяет надёжно определить, какие данные из собственной базы (datastore) и какие из интернета (web)
+// были использованы при генерации ответа.
+type GroundingEvidence struct {
+	// DatastoreFragmentIDs — ID фрагментов из Firestore, извлечённые из retrievedContext URIs.
+	// Формат URI: gs://bucket/tenantId/horizon_fragments/{fragmentId}.json
+	// Это надёжный источник правды: если fragment ID найден → entity точно в базе.
+	DatastoreFragmentIDs []string `json:"datastoreFragmentIds,omitempty"`
+
+	// DatastoreURIs — сырые GCS URI из retrievedContext chunks (для отладки).
+	DatastoreURIs []string `json:"datastoreUris,omitempty"`
+
+	// WebSources — источники из Google Search grounding (URL + title).
+	WebSources []WebCitation `json:"webSources,omitempty"`
+
+	// HasDatastoreResults — были ли результаты из собственной базы.
+	HasDatastoreResults bool `json:"hasDatastoreResults"`
+
+	// HasWebResults — были ли результаты из Google Search.
+	HasWebResults bool `json:"hasWebResults"`
 }
 
 // ImageAnalysisInput структура входных данных для анализа изображения

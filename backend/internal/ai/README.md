@@ -26,7 +26,8 @@
 Реализации для различных провайдеров:
 - **OpenAIService**: GPT-4, GPT-4o, embeddings, vision, search
 - **ClaudeService**: Claude Sonnet, Opus
-- **VertexAIService**: Gemini 2.0 Flash, Pro
+- **GeminiService**: Gemini (через Google AI / generativelanguage.googleapis.com)
+- **VertexAIService**: Gemini (через Vertex AI Platform / aiplatform.googleapis.com, с поддержкой Vertex AI Search grounding)
 
 ### 4. Система верификаторов
 Мощная система проверки и исправления результатов:
@@ -50,7 +51,7 @@
 └─────────────────────────────────────────────────────────┘
                           ↓
 ┌────────────────────┬──────────────────┬──────────────────┐
-│   OpenAIService    │  ClaudeService   │ VertexAIService  │
+│   OpenAIService    │  ClaudeService   │  GeminiService   │VertexAIService│
 └────────────────────┴──────────────────┴──────────────────┘
                           ↓
 ┌─────────────────────────────────────────────────────────┐

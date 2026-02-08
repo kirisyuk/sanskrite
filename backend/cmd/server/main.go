@@ -288,7 +288,7 @@ func main() {
 		aiServices := []ai.AIService{}
 
 		if v := os.Getenv("GEMINI_API_KEY"); v != "" {
-			aiServices = append(aiServices, ai.NewVertexAIService(v, modelManager))
+			aiServices = append(aiServices, ai.NewGeminiService(v, modelManager))
 		}
 		if k := os.Getenv("OPENAI_API_KEY"); k != "" {
 			aiServices = append(aiServices, ai.NewOpenAIService(k, modelManager))

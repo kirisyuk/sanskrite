@@ -97,7 +97,7 @@ func main() {
 
 	// AI
 	modelManager := ai.NewAIModelManager()
-	vertexService := ai.NewVertexAIService(apiKey, modelManager)
+	vertexService := ai.NewGeminiService(apiKey, modelManager)
 	aiExecutor := ai.NewAITaskExecutor([]ai.AIService{vertexService}, modelManager)
 
 	scoutAgent := horizonagents.NewScoutAgent(aiExecutor)

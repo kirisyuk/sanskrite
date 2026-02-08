@@ -133,8 +133,22 @@ func (e *AITaskExecutor) ExecuteStructuredTask(ctx context.Context, task *AITask
 	return parsed, err
 }
 
+// ExecuteStructuredTaskFull is like ExecuteStructuredTask but also returns the full AITaskResult.
+// This is essential for callers that need GroundingEvidence (Vertex AI Search provenance).
+func (e *AITaskExecutor) ExecuteStructuredTaskFull(ctx context.Context, task *AITask) (interface{}, *AITaskResult, error) {
+	parsed, fullResult, _, err := e.executeStructuredTaskInternal(ctx, task)
+	return parsed, fullResult, err
+}
+
 // ExecuteStructuredTaskWithModel returns the parsed result and the actual model used.
 func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, task *AITask) (interface{}, string, error) {
+	parsed, _, model, err := e.executeStructuredTaskInternal(ctx, task)
+	return parsed, model, err
+}
+
+// executeStructuredTaskInternal is the core implementation for structured task execution.
+// Returns: parsed result, full AITaskResult (with GroundingEvidence), model used, error.
+func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task *AITask) (interface{}, *AITaskResult, string, error) {
 	log.Printf("ExecuteStructuredTask called with task type: %s", task.TaskType)
 	inputChars := len(task.InputContent)
 	inputTokens := inputChars / 4 // Approximate token count (4 chars per token)
@@ -142,7 +156,7 @@ func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, tas
 	debug := aiDebugLogEnabled()
 
 	if task.Verifier == nil {
-		return nil, "", fmt.Errorf("ExecuteStructuredTask requires a Verifier in the AITask object, but it was nil")
+		return nil, nil, "", fmt.Errorf("ExecuteStructuredTask requires a Verifier in the AITask object, but it was nil")
 	}
 
 	triedModels := []string{}
@@ -154,7 +168,7 @@ func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, tas
 		if currentModel == "" {
 			log.Printf("ERROR: All models tried or unavailable for structured task '%s'. Total models tried: %d, Input size: %d chars (%d tokens est)",
 				task.TaskType, len(triedModels), inputChars, inputTokens)
-			return nil, "", fmt.Errorf("unable to complete structured task '%s': No suitable AI models available after all fallbacks (windowChars=%d)", task.TaskType, inputChars)
+			return nil, nil, "", fmt.Errorf("unable to complete structured task '%s': No suitable AI models available after all fallbacks (windowChars=%d)", task.TaskType, inputChars)
 		}
 
 		modelCapabilities, err := e.modelManager.GetModelCapabilities(currentModel)
@@ -257,7 +271,7 @@ func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, tas
 		}
 
 		_ = startedAt // для телеметрии
-		return parsedResult, currentModel, nil
+		return parsedResult, result, currentModel, nil
 	}
 }
 
