@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
 
@@ -44,8 +46,83 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Получаем все HorizonFragment из scope
-	fragments, err := h.service.Fragments().ListByCanonicalPaths(r.Context(), lens.Scope)
+	// Resolve scope to canonical paths (best-effort).
+	// Cockpit loads root nodes strictly from lens.Scope, so any canonical path rewrite/retarget must be reflected here,
+	// otherwise the node "disappears" even though it exists under a new canonicalPath.
+	rawScope := append([]string(nil), lens.Scope...)
+	scopePaths := make([]string, 0, len(rawScope)+8)
+	seen := map[string]struct{}{}
+	for _, s := range rawScope {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		// Expand QueryAddress scope entries if cached.
+		if strings.HasPrefix(s, "/query/") && lens.ResolvedQueries != nil {
+			if resolved := lens.ResolvedQueries[s]; len(resolved) > 0 {
+				for _, rp := range resolved {
+					rp = strings.TrimSpace(rp)
+					if rp == "" {
+						continue
+					}
+					if _, ok := seen[rp]; ok {
+						continue
+					}
+					seen[rp] = struct{}{}
+					scopePaths = append(scopePaths, rp)
+				}
+				continue
+			}
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		scopePaths = append(scopePaths, s)
+	}
+
+	resolvedScope := make([]string, 0, len(scopePaths))
+	scopeRewrites := map[string]string{}
+	if se := h.service.Scout(); se != nil {
+		if resolver := se.CanonicalPathResolver(); resolver != nil {
+			for _, p := range scopePaths {
+				ft := scout.InferFragmentTypeFromCanonicalPath(p)
+				if ft == "" {
+					ft = models.FragmentTypeOrganization
+				}
+				if rr, rerr := resolver.Resolve(r.Context(), p, ft); rerr == nil && rr != nil && strings.TrimSpace(rr.CanonicalPath) != "" {
+					cp := strings.TrimSpace(rr.CanonicalPath)
+					if cp != "" && cp != p {
+						scopeRewrites[p] = cp
+					}
+					resolvedScope = append(resolvedScope, cp)
+				} else {
+					resolvedScope = append(resolvedScope, p)
+				}
+			}
+		}
+	}
+	if len(resolvedScope) == 0 {
+		resolvedScope = scopePaths
+	}
+
+	// De-dupe resolved scope while preserving order.
+	seen2 := map[string]struct{}{}
+	outScope := make([]string, 0, len(resolvedScope))
+	for _, p := range resolvedScope {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen2[p]; ok {
+			continue
+		}
+		seen2[p] = struct{}{}
+		outScope = append(outScope, p)
+	}
+
+	// Получаем все HorizonFragment из scope (resolved)
+	fragments, err := h.service.Fragments().ListByCanonicalPaths(r.Context(), outScope)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -126,12 +203,36 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 		metrics["totalFragments"] = len(rootFragments)
 	}
 
+	// If scope rewrites happened, log once (best-effort) for debugging.
+	if len(scopeRewrites) > 0 {
+		sample := make([]string, 0, 12)
+		i := 0
+		for k, v := range scopeRewrites {
+			if i >= 12 {
+				break
+			}
+			sample = append(sample, strings.TrimSpace(k)+" -> "+strings.TrimSpace(v))
+			i++
+		}
+		trace.Log(r.Context(), "cockpit", "cockpit.scope.rewritten", map[string]any{
+			"tenantId":    strings.TrimSpace(lens.TenantID),
+			"lensId":      strings.TrimSpace(lens.ID),
+			"rawScopeN":   len(rawScope),
+			"resolvedN":   len(outScope),
+			"rewritesN":   len(scopeRewrites),
+			"rewritesTop": sample,
+		})
+	}
+
 	// Формируем ответ для Cockpit UI
 	lensPayload := map[string]interface{}{
-		"id":      lens.ID,
-		"name":    lens.Name,
-		"scope":   lens.Scope,
-		"metrics": metrics,
+		"id":   lens.ID,
+		"name": lens.Name,
+		// For Cockpit, scope is the resolved (canonical) scope.
+		"scope": outScope,
+		// Keep raw scope for debugging/traceability (optional; UI may ignore it).
+		"scopeRaw": rawScope,
+		"metrics":  metrics,
 	}
 	if len(lens.ViewConfig) > 0 {
 		lensPayload["viewConfig"] = lens.ViewConfig

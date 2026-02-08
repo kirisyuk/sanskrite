@@ -105,7 +105,6 @@ func appendMissingInfoUnique(list []string, item string) []string {
 	return append(list, item)
 }
 
-
 // recordDeterministicRedirect records a redirect that becomes immediately stable.
 // Use for authoritative pipeline decisions (dedup, org path upgrade, scope rewrite)
 // where the system made a definitive canonical path change.
@@ -717,9 +716,17 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 	tenantID = strings.TrimSpace(tenantID)
 	fromPath = strings.TrimSpace(fromPath)
 	toPath = strings.TrimSpace(toPath)
-	if tenantID == "" || fromPath == "" || toPath == "" || fromPath == toPath {
+	if fromPath == "" || toPath == "" || fromPath == toPath {
 		return
 	}
+
+	trace.Log(ctx, "scope", "scope.rewrite.start", map[string]any{
+		"tenantId": tenantID,
+		"lensId":   strings.TrimSpace(lensID),
+		"fromPath": fromPath,
+		"toPath":   toPath,
+		"hint":     "best_effort_scope_rewrite",
+	})
 
 	// Helper to rewrite a single lens scope.
 	rewriteLens := func(lens *models.Lens) bool {
@@ -814,13 +821,33 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 		for attempt := 0; attempt < maxRetries; attempt++ {
 			lens, err := e.lensesRepo.Get(ctx, lensID)
 			if err != nil || lens == nil {
+				trace.Log(ctx, "scope", "scope.rewrite.primary_lens.get_failed", map[string]any{
+					"tenantId": tenantID,
+					"lensId":   lensID,
+					"fromPath": fromPath,
+					"toPath":   toPath,
+					"error":    fmt.Sprint(err),
+				})
 				break
 			}
 			// Tenant safety: never cross-write.
 			if tenantID != "" && strings.TrimSpace(lens.TenantID) != "" && strings.TrimSpace(lens.TenantID) != tenantID {
+				trace.Log(ctx, "scope", "scope.rewrite.primary_lens.tenant_mismatch", map[string]any{
+					"tenantId":     tenantID,
+					"lensId":       lensID,
+					"lensTenantId": strings.TrimSpace(lens.TenantID),
+					"fromPath":     fromPath,
+					"toPath":       toPath,
+				})
 				break
 			}
 			if !rewriteLens(lens) {
+				trace.Log(ctx, "scope", "scope.rewrite.primary_lens.noop", map[string]any{
+					"tenantId": tenantID,
+					"lensId":   lensID,
+					"fromPath": fromPath,
+					"toPath":   toPath,
+				})
 				break // nothing to rewrite (already done or path not found)
 			}
 			if err := e.lensesRepo.Update(ctx, lens); err != nil {
@@ -832,11 +859,25 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 				}
 				fmt.Printf("[ScoutEngine] bestEffortRewriteLensScope FAILED after %d retries: lensId=%s from=%s to=%s err=%v\n",
 					maxRetries, lensID, fromPath, toPath, err)
+				trace.Log(ctx, "scope", "scope.rewrite.primary_lens.update_failed", map[string]any{
+					"tenantId": tenantID,
+					"lensId":   lensID,
+					"fromPath": fromPath,
+					"toPath":   toPath,
+					"error":    err.Error(),
+					"retries":  maxRetries,
+				})
 			} else {
 				// Keep LensArtifacts canonical paths consistent with lens scope rewrites.
 				if e.lensArtifactsRepo != nil {
 					_ = e.lensArtifactsRepo.UpdateCanonicalPath(ctx, lens.ID, fromPath, toPath)
 				}
+				trace.Log(ctx, "scope", "scope.rewrite.primary_lens.ok", map[string]any{
+					"tenantId": tenantID,
+					"lensId":   lensID,
+					"fromPath": fromPath,
+					"toPath":   toPath,
+				})
 			}
 			break
 		}
@@ -865,6 +906,14 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 			}
 		}
 	}
+
+	trace.Log(ctx, "scope", "scope.rewrite.done", map[string]any{
+		"tenantId":       tenantID,
+		"primaryLensId":  lensID,
+		"fromPath":       fromPath,
+		"toPath":         toPath,
+		"updatedLensesN": len(updatedLensIDs),
+	})
 }
 
 // WithPropagationTrigger устанавливает триггер для запуска распространения изменений
