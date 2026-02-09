@@ -707,8 +707,8 @@ type ScoutEngine struct {
 // bestEffortRewriteLensScope replaces alias canonical paths in lens.Scope with their canonical equivalents.
 // This helps the UI/graph loader, which relies on lens.Scope, not on transient job state.
 //
-// IMPORTANT: This function now updates ALL lenses containing the old path (not just the one specified by lensID).
-// The lensID is used for immediate UI feedback (processed first), but all other lenses are also updated.
+// IMPORTANT: The primary lens is updated first, but errors are best-effort (no pipeline stop).
+// Other lenses are updated best-effort as well.
 func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, lensID, fromPath, toPath string) {
 	if e == nil || e.lensesRepo == nil {
 		return
@@ -729,15 +729,61 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 	})
 
 	// Helper to rewrite a single lens scope.
+	// Returns true if a rewrite happened.
 	rewriteLens := func(lens *models.Lens) bool {
 		if lens == nil {
 			return false
 		}
 		changed := false
+		replaced := map[string]string{}
+		resolvedCache := map[string]string{}
+		resolvePath := func(p string) string {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				return ""
+			}
+			if v, ok := resolvedCache[p]; ok {
+				return v
+			}
+			if e.canonicalPathResolver == nil || strings.HasPrefix(p, "/query/") {
+				resolvedCache[p] = p
+				return p
+			}
+			ft := InferFragmentTypeFromCanonicalPath(p)
+			if ft == "" {
+				ft = models.FragmentTypeOrganization
+			}
+			if resolved, rerr := e.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+				cp := strings.TrimSpace(resolved.CanonicalPath)
+				resolvedCache[p] = cp
+				return cp
+			}
+			resolvedCache[p] = p
+			return p
+		}
 		for i, s := range lens.Scope {
-			if strings.TrimSpace(s) == fromPath {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if s == fromPath {
 				lens.Scope[i] = toPath
 				changed = true
+				replaced[s] = toPath
+			}
+		}
+		// If direct match didn't happen, try resolving aliases to the new canonical path.
+		if !changed && e.canonicalPathResolver != nil {
+			for i, s := range lens.Scope {
+				s = strings.TrimSpace(s)
+				if s == "" || s == toPath || strings.HasPrefix(s, "/query/") {
+					continue
+				}
+				if resolvePath(s) == toPath {
+					lens.Scope[i] = toPath
+					changed = true
+					replaced[s] = toPath
+				}
 			}
 		}
 		if !changed {
@@ -745,12 +791,14 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 		}
 
 		// Best-effort: keep ScopeFragments cache consistent.
-		if lens.ScopeFragments != nil {
-			if fid, ok := lens.ScopeFragments[fromPath]; ok {
-				delete(lens.ScopeFragments, fromPath)
-				// Only set if not already present.
-				if _, ok2 := lens.ScopeFragments[toPath]; !ok2 && strings.TrimSpace(fid) != "" {
-					lens.ScopeFragments[toPath] = fid
+		if lens.ScopeFragments != nil && len(replaced) > 0 {
+			for old := range replaced {
+				if fid, ok := lens.ScopeFragments[old]; ok {
+					delete(lens.ScopeFragments, old)
+					// Only set if not already present.
+					if _, ok2 := lens.ScopeFragments[toPath]; !ok2 && strings.TrimSpace(fid) != "" {
+						lens.ScopeFragments[toPath] = fid
+					}
 				}
 			}
 		}
@@ -762,7 +810,11 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 			for queryAddr, resolvedPaths := range lens.ResolvedQueries {
 				updated := false
 				for i, p := range resolvedPaths {
-					if strings.TrimSpace(p) == fromPath {
+					p = strings.TrimSpace(p)
+					if p == "" {
+						continue
+					}
+					if p == fromPath || replaced[p] != "" || resolvePath(p) == toPath {
 						resolvedPaths[i] = toPath
 						updated = true
 					}
@@ -816,7 +868,13 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 	// 1) Fast path: update the specific lens (lensID) first for immediate UI feedback.
 	//    Uses retry to make the scope rewrite reliable (not truly "best-effort" for the primary lens).
 	lensID = strings.TrimSpace(lensID)
-	if lensID != "" {
+	if lensID == "" {
+		trace.Log(ctx, "scope", "scope.rewrite.primary_lens.missing_lens_id", map[string]any{
+			"tenantId": tenantID,
+			"fromPath": fromPath,
+			"toPath":   toPath,
+		})
+	} else {
 		const maxRetries = 3
 		for attempt := 0; attempt < maxRetries; attempt++ {
 			lens, err := e.lensesRepo.Get(ctx, lensID)
@@ -1645,7 +1703,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				}
 				job.State["targetCanonicalPath"] = effectiveCanonicalPath
 				_ = e.scoutingJobsRepo.Update(ctx, job)
-				// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+				// Update lens scope so UI/graph doesn't keep alias paths.
 				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, oldPath, effectiveCanonicalPath)
 			}
 		} else {
@@ -2524,7 +2582,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					job.TargetCanonicalPath = strings.TrimSpace(newCP)
 				}
 				_ = e.scoutingJobsRepo.Update(ctx, job)
-				// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+				// Update lens scope so UI/graph doesn't keep alias paths.
 				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, oldCP, newCP)
 				e.recordDeterministicRedirect(ctx, oldCP, newCP, "scout_research_upgrade")
 				e.logLine(ctx, job, "info", fmt.Sprintf("> canonicalized canonicalPath: %s -> %s", oldCP, newCP))
@@ -2737,7 +2795,7 @@ SKIP_RESEARCH:
 			fmt.Printf("[ScoutEngine] Failed to persist job retarget (best-effort): jobId=%s from=%s to=%s err=%v\n",
 				strings.TrimSpace(job.ID), old, effectiveCanonicalPath, err)
 		}
-		// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+		// Update lens scope so UI/graph doesn't keep alias paths.
 		e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 		e.recordDeterministicRedirect(ctx, old, effectiveCanonicalPath, "scout_retarget")
 		trace.Log(ctx, "scout_persist", "scout.retarget.done", map[string]any{
@@ -2921,7 +2979,7 @@ SKIP_RESEARCH:
 						fmt.Printf("[ScoutEngine] Retargeting job %s to market dedup canonicalPath: %s -> %s\n",
 							strings.TrimSpace(job.ID), old, effectiveCanonicalPath)
 						_ = e.scoutingJobsRepo.Update(ctx, job)
-						// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+						// Update lens scope so UI/graph doesn't keep alias paths.
 						e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 					}
 				}
@@ -2955,7 +3013,7 @@ SKIP_RESEARCH:
 					fmt.Printf("[ScoutEngine] Retargeting job %s to normalized canonicalPath: %s -> %s\n",
 						strings.TrimSpace(job.ID), strings.TrimSpace(old), effectiveCanonicalPath)
 					_ = e.scoutingJobsRepo.Update(ctx, job)
-					// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+					// Update lens scope so UI/graph doesn't keep alias paths.
 					e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 				}
 				// Only block on critical issues (empty path/type, /discovered/ paths)
@@ -3072,7 +3130,7 @@ SKIP_RESEARCH:
 								job.State["aliasCanonicalPath"] = strings.TrimSpace(old)
 							}
 							_ = e.scoutingJobsRepo.Update(ctx, job)
-							// Best-effort: update lens scope so UI/graph doesn't keep alias paths.
+							// Update lens scope so UI/graph doesn't keep alias paths.
 							e.bestEffortRewriteLensScope(ctx, tenantID, lensID, strings.TrimSpace(old), effectiveCanonicalPath)
 						}
 					}
@@ -3196,7 +3254,7 @@ SKIP_RESEARCH:
 			if parts, err := taxonomy.ParseCanonicalPathParts(existingFragment.CanonicalPath); err == nil && parts != nil {
 				existingFragment.CanonicalParts = parts
 			}
-			// Best-effort: if the old canonical path was in the lens scope, rewrite it so all subsequent
+			// If the old canonical path was in the lens scope, rewrite it so all subsequent
 			// agents/UI work with the updated canonical path within this job.
 			if legacy != "" && strings.TrimSpace(existingFragment.CanonicalPath) != "" && legacy != strings.TrimSpace(existingFragment.CanonicalPath) {
 				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, legacy, strings.TrimSpace(existingFragment.CanonicalPath))

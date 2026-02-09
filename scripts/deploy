@@ -58,7 +58,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --web) TARGET_API=0 ;;
     --api) TARGET_WEB=0; TARGET_CHECK_INFRA=0 ;;
-    --py) TARGET_WEB=0; TARGET_API=0; TARGET_CHECK_INFRA=0 ;;
+    --py) TARGET_WEB=0; TARGET_API=0; TARGET_PY=1; TARGET_CHECK_INFRA=0 ;;
     --ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=1; TARGET_HATLONE_WS=0; TARGET_CHECK_INFRA=0 ;;
     --hatlone-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=1; TARGET_CHECK_INFRA=0; TARGET_SETUP_HATLONE_INFRA=1 ;;
     --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
@@ -84,9 +84,9 @@ require() {
 require gcloud
 ## gsutil not required; use gcloud storage to avoid Python dependency
 
-# Get Firebase Project ID from .firebaserc if available
-FIREBASE_PROJECT_ID=""
-if [[ -f "$WEB_DIR/.firebaserc" ]]; then
+# Get Firebase Project ID from env or .firebaserc if available
+FIREBASE_PROJECT_ID="${FIREBASE_PROJECT_ID:-}"
+if [[ -z "$FIREBASE_PROJECT_ID" && -f "$WEB_DIR/.firebaserc" ]]; then
   FIREBASE_PROJECT_ID=$(grep -o '"default": "[^"]*' "$WEB_DIR/.firebaserc" | cut -d'"' -f4 || echo "")
 fi
 if [[ -z "$FIREBASE_PROJECT_ID" ]]; then
@@ -947,7 +947,7 @@ except:
 
   # 4.1 Ensure aggregated topics used by hatlone-ws exist (Horizon realtime depends on hatlone.horizon.events)
   echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for hatlone-ws...${NC}"
-  local agg_topics=(
+  agg_topics=(
     "hatlone.genai.streams"
     "hatlone.discovery.events"
     "hatlone.artifact.events"
@@ -960,7 +960,7 @@ except:
   )
   for topic in "${agg_topics[@]}"; do
     if ! gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      gcloud pubsub topics create "$topic" --project="$PROJECT_ID" --message-ordering --quiet || true
+      gcloud pubsub topics create "$topic" --project="$PROJECT_ID" --quiet || true
       echo -e "${GREEN}  ✓${NC} Created topic: $topic"
     else
       echo -e "${GREEN}  ✓${NC} $topic exists"
@@ -970,10 +970,9 @@ except:
   # 4.2 Ensure ws-broker subscriptions exist for aggregated topics (Subscriber uses <topic>-ws-broker)
   echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for ws-broker...${NC}"
   for topic in "${agg_topics[@]}"; do
-    local sub_id="${topic}-ws-broker"
+    sub_id="${topic}-ws-broker"
     if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
       # Ensure message ordering is enabled (recreate if needed)
-      local ordering
       ordering=$(gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" --format="value(enableMessageOrdering)" 2>/dev/null || echo "False")
       if [[ "$ordering" != "True" ]]; then
         echo -e "${YELLOW}[infra] Recreating subscription with ordering enabled:${NC} $sub_id"
@@ -1365,7 +1364,7 @@ deploy_api() {
     existing_api_url=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)' 2>/dev/null || echo "")
   fi
 
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_HORIZON_WATCHDOG=0,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|https://hatlone-test.web.app|https://hatlone-test.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_HORIZON_WATCHDOG=0,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
   # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Store
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
   local horizon_fragments_bucket="${HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-horizon-fragments}"
@@ -1508,7 +1507,6 @@ deploy_verified_proxy() {
     gcloud run deploy "$service" \
       --source "$API_DIR/cmd/verified-proxy" \
       --region "$REGION" \
-      --allow-unauthenticated \
       --service-account "$SA_BACKEND" \
       --min-instances=0 \
       --max-instances=10 \
@@ -1892,7 +1890,7 @@ elif [[ "$TARGET_SETUP_HATLONE_INFRA" -eq 1 ]]; then
   # Call the same setup function but only for hatlone-ws infrastructure
   echo -e "${BLUE}[infra] Setting up infrastructure for hatlone-ws...${NC}"
   # Ensure aggregated topics and subscriptions (reuse logic from setup_infrastructure)
-  local agg_topics=(
+  agg_topics=(
     "hatlone.genai.streams"
     "hatlone.discovery.events"
     "hatlone.artifact.events"
@@ -1907,7 +1905,7 @@ elif [[ "$TARGET_SETUP_HATLONE_INFRA" -eq 1 ]]; then
   echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for hatlone-ws...${NC}"
   for topic in "${agg_topics[@]}"; do
     if ! gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      gcloud pubsub topics create "$topic" --project="$PROJECT_ID" --message-ordering --quiet || true
+      gcloud pubsub topics create "$topic" --project="$PROJECT_ID" --quiet || true
       echo -e "${GREEN}  ✓${NC} Created topic: $topic"
     else
       echo -e "${GREEN}  ✓${NC} $topic exists"
@@ -1916,9 +1914,8 @@ elif [[ "$TARGET_SETUP_HATLONE_INFRA" -eq 1 ]]; then
   # 4.2 Ensure ws-broker subscriptions
   echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for ws-broker...${NC}"
   for topic in "${agg_topics[@]}"; do
-    local sub_id="${topic}-ws-broker"
+    sub_id="${topic}-ws-broker"
     if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      local ordering
       ordering=$(gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" --format="value(enableMessageOrdering)" 2>/dev/null || echo "False")
       if [[ "$ordering" != "True" ]]; then
         echo -e "${YELLOW}[infra] Recreating subscription with ordering enabled:${NC} $sub_id"

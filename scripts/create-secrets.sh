@@ -31,6 +31,16 @@ create_secret() {
   local secret_name=$1
   local secret_value=$2
   local description="${3:-}"
+  local label_arg=()
+  
+  if [ -n "$description" ]; then
+    # Labels must be lowercase and contain only [a-z0-9_-]
+    local label_value
+    label_value=$(echo "$description" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^-+//; s/-+$//')
+    if [ -n "$label_value" ]; then
+      label_arg=(--labels="description=$label_value")
+    fi
+  fi
   
   if [ -z "$secret_value" ] || [ "$secret_value" = "null" ]; then
     echo -e "${YELLOW}⚠ Skipping ${secret_name} - value is empty${NC}"
@@ -49,7 +59,7 @@ create_secret() {
       --project="$PROJECT_ID" \
       --data-file=- \
       --replication-policy="automatic" \
-      ${description:+"--labels=description=$description"} \
+      "${label_arg[@]}" \
       --quiet || true
     echo -e "${GREEN}  ✓${NC} Created ${secret_name}"
   fi

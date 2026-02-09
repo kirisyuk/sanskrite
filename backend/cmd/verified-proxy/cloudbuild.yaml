@@ -23,7 +23,6 @@ steps:
       - 'us-central1'
       - '--platform'
       - 'managed'
-      - '--allow-unauthenticated'
       - '--service-account'
       - 'backend@$PROJECT_ID.iam.gserviceaccount.com'
       - '--memory'
