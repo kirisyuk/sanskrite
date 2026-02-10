@@ -644,19 +644,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 			fmt.Printf("%s ValidationPolicy check for LLM output: action=%s, path=%s\n",
 				logPrefix, decision.Action, decision.DecisionPath)
 
-			// Don't block execution - only log warnings/penalties
-			// ValidationPolicy "reject" is treated as warning, not blocker
-			switch decision.Action {
-			case "reject":
-				reason, _ := decision.Params["reason"].(string)
-				fmt.Printf("%s WARNING: ValidationPolicy would reject LLM output (non-blocking): %s (canonicalPath=%s)\n",
-					logPrefix, reason, out.CanonicalPath)
-				// Continue - let hardcoded validation handle critical cases
-			case "penalty":
-				penalty, _ := decision.Params["penalty"].(float64)
-				reason, _ := decision.Params["reason"].(string)
-				fmt.Printf("%s PENALTY from ValidationPolicy: %.2f, reason: %s\n", logPrefix, penalty, reason)
-			}
+			policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{})
 		}
 	}
 

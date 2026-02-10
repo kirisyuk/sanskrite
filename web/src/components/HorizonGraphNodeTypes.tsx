@@ -2827,21 +2827,30 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                     toggleFn(blockCollapseGroupId, blockCollapseKey, true);
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
+                  aria-label="Collapse back"
                   title="Collapse back"
                   style={{
-                    padding: '2px 8px',
-                    borderRadius: 8,
-                    border: `1px solid ${theme === 'dark' ? 'rgba(148,163,184,0.35)' : 'rgba(148,163,184,0.4)'}`,
-                    background: theme === 'dark' ? 'rgba(15,23,42,0.55)' : 'rgba(241,245,249,0.9)',
-                    color: theme === 'dark' ? 'rgba(226,232,240,0.9)' : 'rgba(30,41,59,0.9)',
-                    fontSize: 10,
-                    fontWeight: 600,
+                    width: 24,
+                    height: 24,
+                    position: 'absolute',
+                    right: 12,
+                    bottom: 12,
+                    borderRadius: 9,
+                    border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                    background: theme === 'dark' ? 'rgba(245, 158, 11, 0.28)' : 'rgba(245, 158, 11, 0.18)',
+                    color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
                     cursor: 'pointer',
                     pointerEvents: 'auto',
-                    letterSpacing: '0.2px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
+                    zIndex: 3,
                   }}
                 >
-                  Collapse back
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
                 </button>
               );
             })()}
@@ -3061,7 +3070,6 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
 // Business block context card: rich-text summary for left pane (Market & Regulation, Products & Supply, etc.)
 const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, id }) => {
   const { theme } = React.useContext(ThemeContext);
-  const [isHoveringButton, setIsHoveringButton] = React.useState(false);
   const title = String((data as any)?.contextTitle || 'Context').trim();
   const contextLines = (data as any)?.contextLines;
   // Support both old format (string[]) and new format (structured data)
@@ -3073,7 +3081,6 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
   const count = typeof (data as any)?.contextCount === 'number' ? (data as any).contextCount : 0;
   const onShowDetails = (data as any)?.onToggleContextDetails as (() => void) | undefined;
   const contextExpanded = Boolean((data as any)?.contextExpanded);
-  const ctaLabel = contextExpanded ? 'Collapse back' : 'Show details';
 
   const isDark = theme === 'dark';
   const bg = isDark ? 'rgba(30,41,59,0.95)' : 'rgba(248,250,252,0.97)';
@@ -3100,7 +3107,6 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
         padding: '10px 12px 8px',
         display: 'flex',
         flexDirection: 'column',
-        justifyContent: 'space-between',
         boxShadow: isDark ? '0 2px 8px rgba(0,0,0,0.25)' : '0 1px 4px rgba(0,0,0,0.06)',
         overflow: 'hidden',
         pointerEvents: 'auto',
@@ -3139,11 +3145,15 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
         )}
       </div>
       {/* Fact lines / Structured facts */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0 }}>
+      <div
+        className="nowheel nodrag nopan"
+        onWheelCapture={(e) => e.stopPropagation()}
+        style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 2 }}
+      >
         {isOldFormat ? (
           // Legacy format: plain text lines
           <>
-            {oldLines.slice(0, 6).map((line: string, idx: number) => (
+            {oldLines.map((line: string, idx: number) => (
               <div
                 key={idx}
                 style={{
@@ -3167,7 +3177,7 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
         ) : (
           // New format: structured facts with badges
           <>
-            {facts.slice(0, 6).map((fact, factIdx, arr) => (
+            {facts.map((fact, factIdx, arr) => (
               <div
                 key={factIdx}
                 style={{
@@ -3210,7 +3220,7 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
                     // Very low opacity background using accent color
                     const badgeBgSubtle = hexToRgba(badgeAccent, 0.05);
                     const badgeTextColorBright = isDark ? 'rgba(255,255,255,0.95)' : 'rgba(15,23,42,0.95)';
-                    
+
                     return (
                       <div
                         key={item.id}
@@ -3258,54 +3268,50 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
           </>
         )}
       </div>
-      {/* Show details CTA */}
-      {typeof onShowDetails === 'function' && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            onShowDetails();
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-          onMouseEnter={() => setIsHoveringButton(true)}
-          onMouseLeave={() => setIsHoveringButton(false)}
-          style={{
-            width: '100%',
-            marginTop: 'auto',
-            height: 26,
-            padding: '0 10px',
-            borderRadius: 9,
-            border: `1px solid ${ctaBorder}`,
-            background: contextExpanded ? ctaBgActive : ctaBgIdle,
-            color: ctaText,
-            fontSize: 11,
-            fontWeight: 700,
-            cursor: 'pointer',
-            letterSpacing: '0.2px',
-            transition: 'transform 120ms ease, opacity 120ms ease',
-            boxShadow: ctaShadow,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-            opacity: isHoveringButton ? 0.95 : 1,
-            transform: isHoveringButton ? 'translateY(-0.5px)' : 'none',
-          }}
-        >
-          {contextExpanded && (
+      {/* Fixed bottom action row so the contextual toggle is always visible. */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          minHeight: 28,
+          marginTop: 6,
+          paddingTop: 6,
+          borderTop: `1px solid ${headerBorderColor}`,
+          flexShrink: 0,
+        }}
+      >
+        {typeof onShowDetails === 'function' && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              onShowDetails();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            aria-label={contextExpanded ? 'Collapse back' : 'Show details'}
+            title={contextExpanded ? 'Collapse back' : 'Show details'}
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: 9,
+              border: `1px solid ${ctaBorder}`,
+              background: contextExpanded ? ctaBgActive : ctaBgIdle,
+              color: ctaText,
+              cursor: 'pointer',
+              boxShadow: ctaShadow,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 18l-6-6 6-6" />
+              {contextExpanded ? <path d="M15 18l-6-6 6-6" /> : <path d="M9 18l6-6-6-6" />}
             </svg>
-          )}
-          <span style={{ lineHeight: 1 }}>{ctaLabel}</span>
-          {!contextExpanded && (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 18l6-6-6-6" />
-            </svg>
-          )}
-        </button>
-      )}
+          </button>
+        )}
+      </div>
       {/* Hidden handles for edge routing (context card acts as a proxy for the first child node) */}
       <Handle type="source" position={Position.Right} id="source-right" style={{ opacity: 0, width: 1, height: 1 }} />
       <Handle type="target" position={Position.Left} id="target-left" style={{ opacity: 0, width: 1, height: 1 }} />

@@ -47,6 +47,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 	edgeType := models.DependencyType(strings.TrimSpace(rel.RelationType))
 	edgeSourceID := sourceFragment.ID
 	edgeTargetID := targetID
+	relConfidence := rel.Confidence
 
 	// === EXPLICIT SOURCE HANDLING (Phase 2 strategic relations) ===
 	explicitSourceFragment := sourceFragment
@@ -88,6 +89,10 @@ func (e *ScoutEngine) materializeRelationEdge(
 					Type:          srcType,
 					Labels:        map[string]string{"en": srcName},
 					Status:        "active",
+					Governance: models.Governance{
+						Owner:  "SYSTEM",
+						Status: string(models.FragmentStatusActive),
+					},
 					Metadata: models.FragmentMetadata{
 						CreatedAt:       now,
 						LastUpdatedAt:   now,
@@ -237,18 +242,19 @@ func (e *ScoutEngine) materializeRelationEdge(
 			Fragment: nil,
 		})
 		if err == nil {
-			switch decision.Action {
-			case "reverse":
-				shouldReverse, _ := decision.Params["shouldReverse"].(bool)
-				if shouldReverse {
-					fmt.Printf("%s REVERSING edge direction by ValidationPolicy\n", logPrefix)
+			policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
+				Reverse: func() {
 					edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
 					directionChanged = true
 					edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
-				}
-			case "reject":
-				// Non-blocking here as well (penalty handled by existing criticality logic elsewhere).
-			}
+				},
+				ApplyPenalty: func(penalty float64, _ string) {
+					relConfidence = relConfidence * (1.0 - penalty)
+					if relConfidence < 0 {
+						relConfidence = 0
+					}
+				},
+			})
 		}
 	} else {
 		st := srcTypeActual
@@ -314,7 +320,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 		TargetFragmentID: edgeTargetID,
 		Type:             edgeType,
 		Properties: models.EdgeProperties{
-			Criticality:   normalizeEdgeConfidence(rel.Confidence),
+			Criticality:   normalizeEdgeConfidence(relConfidence),
 			Amplification: 1.0,
 			LatencyHours:  24,
 		},
@@ -322,7 +328,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 			"reason":                 strings.TrimSpace(rel.Reason),
 			"rawRelationType":        rawRelationType,
 			"normalizedRelationType": normalizedRelationType,
-			"rawConfidence":          rel.Confidence,
+			"rawConfidence":          relConfidence,
 			"targetName":             strings.TrimSpace(rel.TargetName),
 			"targetCanonicalPath":    resolvedTargetPath,
 			"sourceCanonicalPath":    resolvedSourcePath,
@@ -367,6 +373,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 		edge.Qualifiers["canonicalizedGovRegulatesSwap"] = true
 		edge.Qualifiers["govRegulatesSwapReason"] = govRegulatesSwapReason
 	}
+	applyBestEffortEdgeEnrichment(edge)
 
 	if existing, _ := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", edge.SourceFragmentID, edge.TargetFragmentID, edge.Type); existing != nil {
 		return nil
@@ -378,7 +385,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 			strings.TrimSpace(resolvedTargetPath),
 			string(edgeType),
 			edge.Properties.Criticality,
-			rel.Confidence,
+			relConfidence,
 			strings.TrimSpace(rel.RelationType),
 			err,
 		)
@@ -413,7 +420,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 // cross-jurisdiction edges are likely errors (e.g., Indian regulator controlling Saudi company).
 func isCrossJurisdictionSuspicious(edgeType models.DependencyType, srcPath, dstPath string) bool {
 	srcJurisdiction := extractJurisdiction(srcPath)
-	dstJurisdiction := extractJurisdiction(dstPath)	// If either jurisdiction is empty/global, not suspicious
+	dstJurisdiction := extractJurisdiction(dstPath) // If either jurisdiction is empty/global, not suspicious
 	if srcJurisdiction == "" || dstJurisdiction == "" {
 		return false
 	}

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"unicode"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -253,6 +254,16 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		}
 	}
 
+	// Strategy 5.5: Alnum fingerprint fallback (e.g., "B.M.W." vs "BMW").
+	// This is STRICTLY gated:
+	// - same explicit jurisdiction (ISO2/composite), or no merge
+	// - no conflicting Wikidata IDs
+	// - for short fingerprints (<=4), require slug-core match too
+	if existing, err := d.findByAlnumFingerprint(ctx, fragment); err == nil && existing != nil && existing.ID != fragment.ID {
+		atomic.AddInt64(&d.hitNormalizedLegal, 1)
+		return existing, nil
+	}
+
 	// Strategy 6: Try to resolve Wikidata ID via API if we have a client
 	if isOrgWikidataSearchDedupEnabled() && d.wikidataClient != nil && wikidataID == "" {
 		resolvedID := d.resolveWikidataID(ctx, fragment)
@@ -370,7 +381,20 @@ func (d *OrgDeduplicator) findByShortName(ctx context.Context, fragment *models.
 	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, models.FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
 		existing = filterOrgDedupCandidates(fragment, existing, "short")
+		existing = filterSelfConsistentOrgCandidates(existing)
 		return chooseBestOrgCandidate(existing), nil
+	}
+
+	// Fallback: best-effort normalization for legal-form variants in shortName
+	// (e.g., "Vianode AS" vs "Vianode JSC").
+	normalizedShort := NormalizeLegalName(shortName)
+	if normalizedShort != "" {
+		existingNorm, errNorm := d.fragmentsRepo.FindByNormalizedLegalName(ctx, normalizedShort)
+		if errNorm == nil && len(existingNorm) > 0 {
+			existingNorm = filterOrgDedupCandidates(fragment, existingNorm, "normalized")
+			existingNorm = filterSelfConsistentOrgCandidates(existingNorm)
+			return chooseBestOrgCandidate(existingNorm), nil
+		}
 	}
 
 	return nil, nil
@@ -385,6 +409,7 @@ func (d *OrgDeduplicator) findByLegalName(ctx context.Context, fragment *models.
 	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", legalName, models.FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
 		existing = filterOrgDedupCandidates(fragment, existing, "legal")
+		existing = filterSelfConsistentOrgCandidates(existing)
 		return chooseBestOrgCandidate(existing), nil
 	}
 
@@ -400,6 +425,7 @@ func (d *OrgDeduplicator) findByLabelEN(ctx context.Context, fragment *models.Ho
 	existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, models.FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
 		existing = filterOrgDedupCandidates(fragment, existing, "label")
+		existing = filterSelfConsistentOrgCandidates(existing)
 		return chooseBestOrgCandidate(existing), nil
 	}
 
@@ -419,6 +445,7 @@ func (d *OrgDeduplicator) findByNormalizedLegalName(ctx context.Context, fragmen
 	if err == nil && len(existing) > 0 {
 		// FindByNormalizedLegalName is already org-scoped, but we still select best in case of multiple.
 		existing = filterOrgDedupCandidates(fragment, existing, "normalized")
+		existing = filterSelfConsistentOrgCandidates(existing)
 		return chooseBestOrgCandidate(existing), nil
 	}
 
@@ -543,6 +570,13 @@ func stripSlugLegalForm(slug string) string {
 			}
 		}
 	}
+	// Normalize common corp filler tokens that often appear before legal form
+	// and should not split identity cores (e.g., wingtech-technology-co-ltd vs wingtech-technology-ltd).
+	for _, filler := range []string{"-co", "-company", "-group", "-holding", "-holdings"} {
+		if strings.HasSuffix(slug, filler) {
+			slug = strings.TrimSuffix(slug, filler)
+		}
+	}
 	return slug
 }
 
@@ -622,6 +656,175 @@ func chooseBestOrgCandidate(cands []*models.HorizonFragment) *models.HorizonFrag
 		}
 	}
 	return best
+}
+
+func (d *OrgDeduplicator) findByAlnumFingerprint(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, error) {
+	if d == nil || d.fragmentsRepo == nil || fragment == nil {
+		return nil, nil
+	}
+	fs := parseOrgPathScope(fragment.CanonicalPath)
+	if !isExplicitCountryCode(fs.cc) {
+		return nil, nil
+	}
+	fp := orgNameAlnumFingerprint(fragment)
+	if fp == "" {
+		return nil, nil
+	}
+
+	cands, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, "global", models.FragmentTypeOrganization, 800)
+	if err != nil || len(cands) == 0 {
+		return nil, err
+	}
+
+	fragQID := strings.TrimSpace(extractWikidataIDFromFragment(fragment))
+	matches := make([]*models.HorizonFragment, 0, 8)
+	for _, c := range cands {
+		if c == nil || c.ID == "" || c.ID == fragment.ID || c.Type != models.FragmentTypeOrganization {
+			continue
+		}
+		cs := parseOrgPathScope(c.CanonicalPath)
+		if !isExplicitCountryCode(cs.cc) || cs.cc != fs.cc {
+			continue
+		}
+		cfp := orgNameAlnumFingerprint(c)
+		if cfp == "" || cfp != fp {
+			continue
+		}
+		cQID := strings.TrimSpace(extractWikidataIDFromFragment(c))
+		if fragQID != "" && cQID != "" && !strings.EqualFold(fragQID, cQID) {
+			continue
+		}
+		if !orgSelfConsistent(c) {
+			continue
+		}
+		if len(fp) <= 4 && !slugCoresMatch(fs.slug, cs.slug) {
+			continue
+		}
+		matches = append(matches, c)
+	}
+	if len(matches) == 0 {
+		return nil, nil
+	}
+	return chooseBestOrgCandidate(matches), nil
+}
+
+func filterSelfConsistentOrgCandidates(cands []*models.HorizonFragment) []*models.HorizonFragment {
+	if len(cands) == 0 {
+		return cands
+	}
+	out := make([]*models.HorizonFragment, 0, len(cands))
+	for _, c := range cands {
+		if c == nil {
+			continue
+		}
+		if orgSelfConsistent(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func orgSelfConsistent(f *models.HorizonFragment) bool {
+	if f == nil {
+		return false
+	}
+	scope := parseOrgPathScope(strings.TrimSpace(f.CanonicalPath))
+	if scope.ns != "org" && scope.ns != "gov" {
+		return true
+	}
+	slug := strings.TrimSpace(scope.slug)
+	if slug == "" {
+		return true
+	}
+	name := strings.TrimSpace(f.Identifiers["legalName"])
+	if name == "" {
+		name = strings.TrimSpace(f.Labels["en"])
+	}
+	if name == "" {
+		name = strings.TrimSpace(f.Identifiers["shortName"])
+	}
+	if name == "" {
+		return true
+	}
+	slugTokens := meaningfulTokens(strings.ReplaceAll(stripSlugLegalForm(strings.ToLower(slug)), "-", " "))
+	nameTokens := meaningfulTokens(NormalizeLegalName(name))
+	if len(slugTokens) == 0 || len(nameTokens) == 0 {
+		return true
+	}
+	nameSet := make(map[string]struct{}, len(nameTokens))
+	for _, t := range nameTokens {
+		nameSet[t] = struct{}{}
+	}
+	for _, t := range slugTokens {
+		if _, ok := nameSet[t]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func meaningfulTokens(s string) []string {
+	raw := strings.Fields(strings.ToLower(strings.TrimSpace(s)))
+	if len(raw) == 0 {
+		return nil
+	}
+	stop := map[string]struct{}{
+		"the": {}, "and": {}, "of": {}, "for": {}, "in": {},
+		"group": {}, "holding": {}, "holdings": {}, "company": {}, "co": {}, "corp": {}, "corporation": {},
+		"inc": {}, "llc": {}, "ltd": {}, "plc": {}, "llp": {}, "lp": {}, "gmbh": {}, "ag": {}, "sa": {}, "sarl": {}, "srl": {},
+		"spa": {}, "bv": {}, "nv": {}, "ab": {}, "as": {}, "jsc": {}, "pjsc": {}, "oy": {}, "oyj": {}, "ao": {}, "ooo": {},
+		"ministry": {}, "ministerie": {}, "department": {}, "authority": {}, "agency": {}, "bureau": {}, "office": {},
+		"state": {}, "national": {}, "federal": {}, "government": {},
+	}
+	out := make([]string, 0, len(raw))
+	for _, t := range raw {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		var b strings.Builder
+		for _, r := range t {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				b.WriteRune(unicode.ToLower(r))
+			}
+		}
+		t = b.String()
+		if t == "" || len(t) < 3 {
+			continue
+		}
+		if _, skip := stop[t]; skip {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+func orgNameAlnumFingerprint(f *models.HorizonFragment) string {
+	if f == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(f.Identifiers["legalName"])
+	if raw == "" {
+		raw = strings.TrimSpace(f.Identifiers["shortName"])
+	}
+	if raw == "" {
+		raw = strings.TrimSpace(f.Labels["en"])
+	}
+	if raw == "" {
+		return ""
+	}
+	norm := NormalizeLegalName(raw)
+	if norm == "" {
+		norm = strings.ToLower(strings.TrimSpace(raw))
+	}
+	var b strings.Builder
+	for _, r := range norm {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
 }
 
 func isLowSignalOrgStub(f *models.HorizonFragment) bool {
@@ -736,19 +939,42 @@ func NormalizeLegalName(name string) string {
 	// This prevents "(formerly ...)" from masking the legal suffix at the end.
 	name = stripParentheticalAnnotations(name)
 
-	// Remove common legal suffixes
-	for _, suffix := range LegalSuffixesToRemove {
-		if strings.HasSuffix(name, suffix) {
-			name = strings.TrimSuffix(name, suffix)
-			break
-		}
-	}
-
 	// Normalize punctuation and spacing
 	name = strings.ReplaceAll(name, ".", "")
 	name = strings.ReplaceAll(name, ",", "")
 	name = strings.ReplaceAll(name, "&", "and")
 	name = strings.ReplaceAll(name, "-", " ")
+	name = strings.Join(strings.Fields(name), " ")
+
+	// Remove legal suffixes iteratively after punctuation normalization.
+	// This handles variants like:
+	// - "co ltd"
+	// - "co., ltd."
+	// - "inc ltd" (stacked noise)
+	changed := true
+	for changed {
+		changed = false
+		for _, suffix := range LegalSuffixesToRemove {
+			sfx := strings.ToLower(strings.TrimSpace(suffix))
+			sfx = strings.ReplaceAll(sfx, ".", "")
+			sfx = strings.ReplaceAll(sfx, ",", "")
+			sfx = strings.Join(strings.Fields(sfx), " ")
+			if sfx == "" {
+				continue
+			}
+			if strings.HasSuffix(name, " "+sfx) {
+				name = strings.TrimSpace(strings.TrimSuffix(name, " "+sfx))
+				changed = true
+				break
+			}
+			if name == sfx {
+				name = ""
+				changed = true
+				break
+			}
+		}
+	}
+
 	name = strings.Join(strings.Fields(name), " ")
 
 	return name

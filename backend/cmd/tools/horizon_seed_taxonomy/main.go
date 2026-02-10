@@ -348,6 +348,14 @@ func main() {
 			"RELATIVE_OF",
 			"RELATED_TO",
 		},
+		AllowedSignalKinds: []string{
+			"risk",
+			"opportunity",
+			"trend",
+			"direction",
+		},
+		SignalTypes:        map[string]models.SignalTypeSpecData{},
+		SignalTypeSynonyms: map[string]string{},
 		AllowedMetricUnits: []string{
 			// General
 			"usd", "eur", "rub", "units", "units_per_day", "days", "hours", "ratio", "index_point", "code",
@@ -654,6 +662,12 @@ func main() {
 			"historical", // relationship existed in the past
 			"potential",  // relationship is possible but not confirmed
 		},
+		KnownProductModels: map[string]models.ProductModelSpecData{},
+		SegmentChannelDomains:   []string{},
+		SegmentDomainAliases:    map[string]string{},
+		SegmentVerticalAliases:  map[string]string{},
+		SegmentVerticalFamilies: map[string]string{},
+		SegmentNormRules:        map[string]models.SegmentNormRuleData{},
 
 		// Service taxonomy (/product/service/{domain}/{subdomain}/{slug})
 		AllowedServiceDomains: []string{
@@ -682,6 +696,12 @@ func main() {
 			"engineering": {"design", "rd", "testing", "certification", "maintenance"},
 			"media":       {"advertising", "pr", "content", "broadcasting", "production"},
 			"telecom":     {"mobile", "fixed", "internet", "satellite", "voip"},
+			"education":   {"training", "certification", "academic", "other"},
+			"healthcare":  {"medical", "pharma", "clinical", "other"},
+			"construction": {"building", "civil", "engineering", "other"},
+			"security":    {"physical", "cyber", "investigation", "other"},
+			"hr":          {"recruitment", "staffing", "payroll", "other"},
+			"real-estate": {"brokerage", "property-management", "other"},
 			"other":       {"other"},
 		},
 		KnownServices: map[string]models.ServiceSpecData{

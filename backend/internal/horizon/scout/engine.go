@@ -351,6 +351,40 @@ func relationNeedsProductCanonicalization(path string) bool {
 	return len(parts) < 2
 }
 
+func relationNeedsGeoDisambiguation(path string) bool {
+	path = strings.TrimSpace(strings.ToLower(path))
+	if path == "" {
+		return false
+	}
+	if strings.HasPrefix(path, "/loc/") {
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		// /loc/{country}/{admin1}/{city}
+		if len(parts) >= 4 {
+			return parts[2] == "na" || parts[3] == "na"
+		}
+		return true
+	}
+	if strings.HasPrefix(path, "/market/") {
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		// /market/{geo}/{...}; "na" here is ambiguous (North America bucket vs unknown marker in noisy outputs).
+		if len(parts) >= 2 {
+			return parts[1] == "na"
+		}
+	}
+	return false
+}
+
+func relationNeedsJurisdictionDisambiguation(path string) bool {
+	path = strings.TrimSpace(strings.ToLower(path))
+	if path == "" {
+		return false
+	}
+	if strings.HasPrefix(path, "/org/na/") || strings.HasPrefix(path, "/gov/na/") {
+		return true
+	}
+	return false
+}
+
 func buildRelationMissingInfo(relations []agents.DiscoveredRelation, limit int) []string {
 	if len(relations) == 0 || limit <= 0 {
 		return nil
@@ -371,6 +405,9 @@ func buildRelationMissingInfo(relations []agents.DiscoveredRelation, limit int) 
 		}
 
 		switch {
+		case relationNeedsJurisdictionDisambiguation(path):
+			out = append(out, fmt.Sprintf("Resolve jurisdiction for related entity %s and replace unknown country segment with explicit ISO2 in canonicalPath when possible. Keep fail-open behavior, but enrich legal name and jurisdiction evidence.", path))
+			seen[path] = struct{}{}
 		case relationNeedsGovCanonicalization(path):
 			out = append(out, fmt.Sprintf("Confirm if related entity %s is a government body. If so, use /gov/{iso2}/{slug} canonical path and ensure jurisdiction is correct.", path))
 			seen[path] = struct{}{}
@@ -379,6 +416,9 @@ func buildRelationMissingInfo(relations []agents.DiscoveredRelation, limit int) 
 			seen[path] = struct{}{}
 		case relationNeedsProductCanonicalization(path):
 			out = append(out, fmt.Sprintf("Resolve canonical product taxonomy for related product %s. Provide a canonical path using /product/{category}/{type}/{stage}/{slug} (or /product/service/{domain}/{subdomain}/{slug} for services).", path))
+			seen[path] = struct{}{}
+		case relationNeedsGeoDisambiguation(path):
+			out = append(out, fmt.Sprintf("Clarify geo scope for related entity %s and enrich display title. Keep canonicalPath best-effort, but resolve explicit country/region/city names and disambiguate placeholder-like segments.", path))
 			seen[path] = struct{}{}
 		}
 	}
@@ -429,6 +469,18 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		}
 		ex, err := e.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
 		if err == nil && ex != nil && ex.ID != "" {
+			// Keep GEO dimension labels human-readable even for existing taxonomy stubs.
+			if ftype == models.FragmentTypeGeoRegion {
+				if ex.Labels == nil {
+					ex.Labels = map[string]string{}
+				}
+				if shouldRefreshDisplayLabel(ex.Labels["en"], canonicalPath) {
+					if next := bestEffortDisplayLabel("", canonicalPath); strings.TrimSpace(next) != "" {
+						ex.Labels["en"] = next
+						_ = e.fragmentsRepo.Update(ctx, ex)
+					}
+				}
+			}
 			return ex, nil
 		}
 		frag := &models.HorizonFragment{
@@ -448,6 +500,28 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 			Provenance:    models.Provenance{Method: "taxonomy_dimension_seed", SourceIDs: []string{}, SourceRefs: []models.SourceRef{}},
 			Metadata:      models.FragmentMetadata{CreatedAt: now, LastUpdatedAt: now, LastVerifiedAt: now, LastFactsSeenAt: now, LastFactsAppliedAt: now, EpistemicStatus: models.EpistemicStatusVerified},
 			Governance:    models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
+		}
+		if e.preCreateValidator != nil {
+			if pre, perr := e.preCreateValidator.ValidateAndProcess(ctx, frag); perr == nil && pre != nil {
+				if pre.ReplacementFrag != nil && strings.TrimSpace(pre.ReplacementFrag.ID) != "" {
+					return pre.ReplacementFrag, nil
+				}
+				// Keep fail-open behavior: block only for truly critical path issues.
+				if !pre.IsValid && strings.TrimSpace(pre.BlockReason) != "" {
+					reason := strings.TrimSpace(pre.BlockReason)
+					if strings.Contains(reason, "/discovered/") || strings.Contains(strings.ToLower(reason), "canonical path is required") {
+						return nil, fmt.Errorf("dimension seed blocked: %s", reason)
+					}
+				}
+			}
+		}
+		// Validation may rewrite canonicalPath; re-check after normalization to avoid duplicate create.
+		canonicalPath = strings.TrimSpace(frag.CanonicalPath)
+		if canonicalPath == "" || canonicalPath == "/" {
+			return nil, fmt.Errorf("empty canonicalPath after normalization")
+		}
+		if ex2, exErr := e.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath); exErr == nil && ex2 != nil && ex2.ID != "" {
+			return ex2, nil
 		}
 		id, err := e.fragmentsRepo.Create(ctx, frag)
 		if err != nil {
@@ -617,7 +691,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		if f.LocationPath != nil {
 			lp := strings.TrimSpace(*f.LocationPath)
 			if lp != "" {
-				gfrag, err := ensureFragment(lp, models.FragmentTypeGeoRegion, lp, "/Geo/Region", "/Geography")
+				gfrag, err := ensureFragment(lp, models.FragmentTypeGeoRegion, "", "/Geo/Region", "/Geography")
 				if err == nil && gfrag != nil {
 					ensureInfluenceEdge(gfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "geo", "path": lp, "factId": f.ID})
 					// Metric updates are optional; geo linkage should exist even without metrics.
@@ -665,6 +739,7 @@ type ScoutEngine struct {
 	edgesRepo               *repo.DependencyEdgesRepository
 	scoutingJobsRepo        *repo.ScoutingJobsRepository
 	cascadeVisitedRepo      *repo.CascadeVisitedRepository
+	cascadeEntityRegistry   *repo.CascadeEntityRegistryRepository
 	lensesRepo              *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
 	realtime                *realtime.Publisher
 	taxonomyClassifier      *TaxonomyClassifier
@@ -993,6 +1068,14 @@ func (e *ScoutEngine) WithCascadeVisitedRepo(r *repo.CascadeVisitedRepository) *
 	return e
 }
 
+// WithCascadeEntityRegistry wires cascade-level identity registry (optional).
+// Used to remember which entities were already resolved/created inside one cascade,
+// even when canonical paths differ across child jobs.
+func (e *ScoutEngine) WithCascadeEntityRegistry(r *repo.CascadeEntityRegistryRepository) *ScoutEngine {
+	e.cascadeEntityRegistry = r
+	return e
+}
+
 func (e *ScoutEngine) WithBudgetPolicy(policy BudgetPolicy) *ScoutEngine {
 	e.budgetPolicy = policy
 	return e
@@ -1089,6 +1172,7 @@ func NewScoutEngine(
 		edgesRepo:               edgesRepo,
 		scoutingJobsRepo:        scoutingJobsRepo,
 		cascadeVisitedRepo:      nil,
+		cascadeEntityRegistry:   nil,
 		realtime:                realtime,
 		taxonomyClassifier:      NewTaxonomyClassifier(aiExecutor),
 		aiExecutor:              aiExecutor,
@@ -2161,6 +2245,25 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		"documentIdsN":          len(allDocumentIDs),
 	})
 
+	// Hybrid internal-content fallback:
+	// If source/doc aggregation is empty, try deterministic graph-backed context
+	// (fragments + edges + facts) before switching to full web research.
+	if strings.TrimSpace(aggregatedContent) == "" {
+		if graphCtx := e.buildGraphBackedInternalContext(ctx, tenantID, job.TargetCanonicalPath); strings.TrimSpace(graphCtx) != "" {
+			aggregatedContent = graphCtx
+			e.logLine(ctx, job, "info", "> no source content; using graph-backed internal context")
+			trace.Log(ctx, "scout_exec", "scout.internal_context.graph_fallback", map[string]any{
+				"tenantId":            strings.TrimSpace(job.TenantID),
+				"projectId":           strings.TrimSpace(job.ProjectID),
+				"lensId":              strings.TrimSpace(lensID),
+				"jobId":               strings.TrimSpace(job.ID),
+				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+				"contextLen":          len(aggregatedContent),
+				"contextSha1":         trace.HashText(aggregatedContent),
+			})
+		}
+	}
+
 	var scoutResult *agents.ScoutResult
 	var extractedFragment *models.HorizonFragment
 	var validationResult *agents.ValidationResult
@@ -2391,10 +2494,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		normalizeMarketMetricKeys(extractedFragment)
 	}
 
-	// resolvedGrounding is populated by the Research Agent's Vertex AI grounding evidence.
-	// Declared here so it's available in the DECOMPOSITION phase (after SKIP_RESEARCH label).
-	var resolvedGrounding *ResolvedGroundingContext
-
+	researchSucceeded := false
 	// RESEARCH: Дообогащение данных через Research Agent
 	if len(validationResult.MissingInfo) > 0 {
 		// Filter out missingInfo items that are exhausted or in cooldown to prevent infinite loops.
@@ -2544,18 +2644,9 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				}
 			}
 		}
-		enrichedFragment, newRelations, newSupplyChains, groundingEvidence, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities)
-		// Resolve grounding evidence into real fragments from DB.
-		// This gives us system-level provenance: which entities the LLM referenced actually exist in our database.
-		if groundingEvidence != nil && e.groundingResolver != nil {
-			resolvedGrounding = e.groundingResolver.Resolve(ctx, groundingEvidence)
-			if !resolvedGrounding.IsEmpty() {
-				fmt.Printf("[ScoutEngine] GroundingEvidence resolved: %d fragments from datastore (paths=%v)\n",
-					resolvedGrounding.Size(), resolvedGrounding.CanonicalPaths())
-				e.logLine(ctx, job, "info", fmt.Sprintf("> grounding: %d existing entities found in datastore", resolvedGrounding.Size()))
-			}
-		}
+		enrichedFragment, newRelations, newSupplyChains, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities)
 		if err == nil {
+			researchSucceeded = true
 			// Capture canonicalPath drift introduced by research (aliasing).
 			oldCP := ""
 			if extractedFragment != nil {
@@ -2655,8 +2746,31 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	}
 SKIP_RESEARCH:
 
+	// RE-VALIDATION: run Critic once after Research (best-effort).
+	if researchSucceeded && extractedFragment != nil && validationResult != nil {
+		e.logLine(ctx, job, "info", "> critic re-validating enriched data")
+		graphContext := ""
+		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") {
+			graphContext = e.buildGraphSkeletonContext(ctx, job.TargetCanonicalPath)
+		}
+		var rels []agents.DiscoveredRelation
+		var chains []agents.SupplyChain
+		if scoutResult != nil {
+			rels = scoutResult.Relations
+			chains = scoutResult.SupplyChains
+		}
+		revalidationResult, err := e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, rels, chains, aggregatedContent, specialties, graphContext)
+		if err != nil {
+			fmt.Printf("[ScoutEngine] critic re-validation error (fail-open): jobId=%s target=%s err=%v\n",
+				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> critic re-validation error (fail-open): %v", err))
+		} else {
+			validationResult = revalidationResult
+		}
+	}
+
 	// RESOLUTION: Разрешение конфликтов если необходимо
-	if validationResult.HasConflicts {
+	if validationResult != nil && validationResult.HasConflicts {
 		if err := e.transition(ctx, job, models.ScoutingJobStateResolution, 0.85, "resolution"); err != nil {
 			return fmt.Errorf("failed to transition to RESOLUTION: %w", err)
 		}
@@ -2981,6 +3095,7 @@ SKIP_RESEARCH:
 						_ = e.scoutingJobsRepo.Update(ctx, job)
 						// Update lens scope so UI/graph doesn't keep alias paths.
 						e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
+						e.recordDeterministicRedirect(ctx, old, effectiveCanonicalPath, "market_dedup")
 					}
 				}
 			}
@@ -3015,6 +3130,7 @@ SKIP_RESEARCH:
 					_ = e.scoutingJobsRepo.Update(ctx, job)
 					// Update lens scope so UI/graph doesn't keep alias paths.
 					e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
+					e.recordDeterministicRedirect(ctx, old, effectiveCanonicalPath, "precreate_normalization")
 				}
 				// Only block on critical issues (empty path/type, /discovered/ paths)
 				// Warnings don't block creation - they're logged for post-factum fixes
@@ -3379,14 +3495,15 @@ SKIP_RESEARCH:
 
 	// Realtime: job completed + node materialized/updated.
 	e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-		"tenantId":        tenantID,
-		"projectId":       projectID,
-		"lensId":          lensID,
-		"jobId":           job.ID,
-		"fragmentId":      fragmentID,
-		"canonicalPath":   strings.TrimSpace(job.TargetCanonicalPath),
-		"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
-		"confidence":      validationResult.Confidence,
+		"tenantId":            tenantID,
+		"projectId":           projectID,
+		"lensId":              lensID,
+		"jobId":               job.ID,
+		"fragmentId":          fragmentID,
+		"canonicalPath":       strings.TrimSpace(job.TargetCanonicalPath),
+		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"epistemicStatus":     string(existingFragment.Metadata.EpistemicStatus),
+		"confidence":          validationResult.Confidence,
 	})
 
 	// Check if all scout jobs for this lens are completed and publish final assembly.ready event
@@ -3411,15 +3528,8 @@ SKIP_RESEARCH:
 	// DECOMPOSITION: Обработка найденных связей (рекурсивный скаутинг)
 	if len(scoutResult.Relations) > 0 {
 		// Используем existingFragment, так как он содержит актуальный ID после сохранения.
-		// Pass resolvedGrounding so that targets matching DB fragments skip duplicate creation.
-		if resolvedGrounding != nil && !resolvedGrounding.IsEmpty() {
-			if err := e.processDiscoveredRelationsWithGrounding(ctx, job, existingFragment, scoutResult.Relations, resolvedGrounding); err != nil {
-				fmt.Printf("Decomposition failed: %v\n", err)
-			}
-		} else {
-			if err := e.processDiscoveredRelations(ctx, job, existingFragment, scoutResult.Relations); err != nil {
-				fmt.Printf("Decomposition failed: %v\n", err)
-			}
+		if err := e.processDiscoveredRelations(ctx, job, existingFragment, scoutResult.Relations); err != nil {
+			fmt.Printf("Decomposition failed: %v\n", err)
 		}
 	}
 

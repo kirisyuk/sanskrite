@@ -15,6 +15,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -267,8 +268,18 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	bestEffortBackfillCanonicalPartsFromPath(fragment)
 	// Best-effort: if canonicalParts were provided, assemble canonicalPath before validation.
 	bestEffortAssembleCanonicalPathFromParts(fragment)
+	// Best-effort: shared canonical-path normalization at repository boundary.
+	canonical.NormalizeFragmentForPersist(fragment)
 	if err := fragment.Validate(); err != nil {
 		return "", fmt.Errorf("validation error: %w", err)
+	}
+	if cp := strings.TrimSpace(fragment.CanonicalPath); cp != "" {
+		// Best-effort de-dup at repository boundary:
+		// if canonicalPath already exists, reuse existing fragment ID instead of creating a duplicate.
+		if existing, err := r.GetByCanonicalPath(ctx, cp); err == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
+			log.Printf("[HorizonFragments] Reusing existing fragment for canonicalPath=%q id=%s", cp, strings.TrimSpace(existing.ID))
+			return strings.TrimSpace(existing.ID), nil
+		}
 	}
 
 	now := time.Now().UTC()
@@ -605,7 +616,14 @@ func normalizeLegalNameForSearch(name string) string {
 	if name == "" {
 		return ""
 	}
-	// Remove common legal suffixes
+	// Normalize punctuation and spacing first to stabilize suffix matching.
+	name = strings.ReplaceAll(name, ".", "")
+	name = strings.ReplaceAll(name, ",", "")
+	name = strings.ReplaceAll(name, "&", "and")
+	name = strings.ReplaceAll(name, "-", " ")
+	name = strings.Join(strings.Fields(name), " ")
+
+	// Remove legal suffixes iteratively (same semantics as scout.NormalizeLegalName).
 	suffixes := []string{
 		" jsc", " llc", " inc", " ltd", " co", " corp", " corporation",
 		" group", " holdings", " limited", " company", " pty ltd",
@@ -614,17 +632,29 @@ func normalizeLegalNameForSearch(name string) string {
 		" s.a.", " a.g.", " s.p.a.", " n.v.", " b.v.", " s.à r.l.", " p.l.c.",
 		" co., ltd.", " co.,ltd.", " co., ltd", " co.,ltd",
 	}
-	for _, suffix := range suffixes {
-		if strings.HasSuffix(name, suffix) {
-			name = strings.TrimSuffix(name, suffix)
-			break
+	changed := true
+	for changed {
+		changed = false
+		for _, suffix := range suffixes {
+			sfx := strings.ToLower(strings.TrimSpace(suffix))
+			sfx = strings.ReplaceAll(sfx, ".", "")
+			sfx = strings.ReplaceAll(sfx, ",", "")
+			sfx = strings.Join(strings.Fields(sfx), " ")
+			if sfx == "" {
+				continue
+			}
+			if strings.HasSuffix(name, " "+sfx) {
+				name = strings.TrimSpace(strings.TrimSuffix(name, " "+sfx))
+				changed = true
+				break
+			}
+			if name == sfx {
+				name = ""
+				changed = true
+				break
+			}
 		}
 	}
-	// Normalize punctuation and spacing
-	name = strings.ReplaceAll(name, ".", "")
-	name = strings.ReplaceAll(name, ",", "")
-	name = strings.ReplaceAll(name, "&", "and")
-	name = strings.ReplaceAll(name, "-", " ")
 	name = strings.Join(strings.Fields(name), " ")
 	return name
 }
@@ -638,6 +668,8 @@ func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *model
 	bestEffortBackfillCanonicalPartsFromPath(fragment)
 	// Best-effort: if canonicalParts were provided, assemble canonicalPath before validation.
 	bestEffortAssembleCanonicalPathFromParts(fragment)
+	// Best-effort: shared canonical-path normalization at repository boundary.
+	canonical.NormalizeFragmentForPersist(fragment)
 	if err := fragment.Validate(); err != nil {
 		return fmt.Errorf("validation error: %w", err)
 	}
@@ -718,6 +750,8 @@ func (r *HorizonFragmentsRepository) UpdateGovernance(ctx context.Context, id st
 		bestEffortBackfillCanonicalPartsFromPath(&fragment)
 		// Best-effort: keep canonicalPath consistent with canonicalParts if present.
 		bestEffortAssembleCanonicalPathFromParts(&fragment)
+		// Best-effort: shared canonical-path normalization at repository boundary.
+		canonical.NormalizeFragmentForPersist(&fragment)
 		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
 		return tx.Set(docRef, fragment)
 	})
@@ -750,6 +784,8 @@ func (r *HorizonFragmentsRepository) IncrementActiveSubscribers(ctx context.Cont
 		bestEffortBackfillCanonicalPartsFromPath(&fragment)
 		// Best-effort: keep canonicalPath consistent with canonicalParts if present.
 		bestEffortAssembleCanonicalPathFromParts(&fragment)
+		// Best-effort: shared canonical-path normalization at repository boundary.
+		canonical.NormalizeFragmentForPersist(&fragment)
 		// Best-effort backfill: ensure indexPaths is present on any write-path.
 		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
 		return tx.Set(docRef, fragment)
@@ -785,6 +821,8 @@ func (r *HorizonFragmentsRepository) DecrementActiveSubscribers(ctx context.Cont
 		bestEffortBackfillCanonicalPartsFromPath(&fragment)
 		// Best-effort: keep canonicalPath consistent with canonicalParts if present.
 		bestEffortAssembleCanonicalPathFromParts(&fragment)
+		// Best-effort: shared canonical-path normalization at repository boundary.
+		canonical.NormalizeFragmentForPersist(&fragment)
 		// Best-effort backfill: ensure indexPaths is present on any write-path.
 		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
 		return tx.Set(docRef, fragment)

@@ -694,6 +694,8 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
           const target =
             typeof data?.targetCanonicalPath === 'string'
               ? data.targetCanonicalPath
+              : typeof data?.canonicalPath === 'string'
+                ? data.canonicalPath
               : '';
           const entityName = target ? getEntityName(target) : 'Unknown entity';
           text = `Scout job completed for ${entityName}`;

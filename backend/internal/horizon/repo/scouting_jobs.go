@@ -129,8 +129,53 @@ func (r *ScoutingJobsRepository) Create(ctx context.Context, job *models.Scoutin
 			})
 			_ = r.agentJobsRepo.MergeStateStringArray(ctx, id, "specialties", specs)
 		}
+		// Keep reused job state aligned with the latest intent payload.
+		// Without this, an active deduped job may continue with stale domains/title from a previous request.
+		if err := r.syncReusedJobIntentState(ctx, id, job); err != nil {
+			trace.Log(ctx, "root_jobs", "scout_job.create.dedup.sync_intent_state.error", map[string]any{
+				"tenantId":            strings.TrimSpace(job.TenantID),
+				"projectId":           strings.TrimSpace(job.ProjectID),
+				"lensId":              strings.TrimSpace(job.LensID),
+				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+				"jobId":               id,
+				"error":               err.Error(),
+			})
+		}
 	}
 	return id, nil
+}
+
+func (r *ScoutingJobsRepository) syncReusedJobIntentState(ctx context.Context, jobID string, incoming *models.ScoutingJob) error {
+	if r == nil || r.agentJobsRepo == nil || incoming == nil || incoming.State == nil || strings.TrimSpace(jobID) == "" {
+		return nil
+	}
+	existing, err := r.agentJobsRepo.Get(ctx, jobID)
+	if err != nil || existing == nil {
+		return err
+	}
+	if existing.State == nil {
+		existing.State = map[string]interface{}{}
+	}
+	changed := false
+	copyIfPresent := func(key string) {
+		if v, ok := incoming.State[key]; ok && v != nil {
+			existing.State[key] = v
+			changed = true
+		}
+	}
+	// Intent payload keys that should reflect the latest request when job is reused.
+	copyIfPresent("domains")
+	copyIfPresent("focus")
+	copyIfPresent("spherePaths")
+	copyIfPresent("keywords")
+	copyIfPresent("originalQuery")
+	copyIfPresent("decompositionHints")
+	copyIfPresent("requestedMetrics")
+	copyIfPresent("targetIdentityKey")
+	if !changed {
+		return nil
+	}
+	return r.agentJobsRepo.Update(ctx, existing)
 }
 
 func buildScoutJobDedupKey(job *models.ScoutingJob) string {
@@ -156,10 +201,19 @@ func buildScoutJobDedupKey(job *models.ScoutingJob) string {
 			target = strings.TrimSpace(v)
 		}
 	}
+	identityKey := ""
+	if job.State != nil {
+		if v, ok := job.State["targetIdentityKey"].(string); ok {
+			identityKey = strings.TrimSpace(v)
+		}
+	}
 
 	// The core idempotency scope:
-	// (tenant, project, lens, agent, canonicalPath)
+	// (tenant, project, lens, agent, identityKey|canonicalPath)
 	// NOTE: We intentionally do NOT include sourceIds here. If a job already exists, we merge sourceIds.
+	if identityKey != "" {
+		return fmt.Sprintf("agent_job_dedup|tenant=%s|project=%s|lens=%s|agent=%s|identity=%s", tenantID, projectID, lensID, agentID, identityKey)
+	}
 	return fmt.Sprintf("agent_job_dedup|tenant=%s|project=%s|lens=%s|agent=%s|target=%s", tenantID, projectID, lensID, agentID, target)
 }
 

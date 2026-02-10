@@ -146,6 +146,9 @@ func (p *SupplyChainParser) createFragmentFromNode(node agents.SupplyChainNode) 
 	if name != "" {
 		frag.Labels["en"] = name
 		frag.Identifiers["shortName"] = name
+		if fragType == models.FragmentTypeOrganization && strings.TrimSpace(frag.Identifiers["legalName"]) == "" {
+			frag.Identifiers["legalName"] = name
+		}
 	}
 
 	// Set role in identifiers if present
@@ -409,4 +412,3 @@ func (cc *ChainContext) ToPromptContext() string {
 
 	return sb.String()
 }
-

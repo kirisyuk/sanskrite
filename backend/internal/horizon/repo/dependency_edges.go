@@ -153,37 +153,20 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 			return "", fmt.Errorf("policy validation error: %w", err)
 		}
 
-		log.Printf("%s Policy decision: action=%s, path=%s, confidence=%.2f", 
+		log.Printf("%s Policy decision: action=%s, path=%s, confidence=%.2f",
 			logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
 
-		switch decision.Action {
-		case "reject":
-			// Don't block - treat as warning instead
-			// ValidationPolicy "reject" is advisory, not a blocker
-			reason, _ := decision.Params["reason"].(string)
-			log.Printf("%s WARNING: ValidationPolicy would reject edge (non-blocking): %s", logPrefix, reason)
-			log.Printf("%s Edge will be created with warning - can be fixed post-factum", logPrefix)
-			// Continue - don't block edge creation
-		case "reverse":
-			shouldReverse, _ := decision.Params["shouldReverse"].(bool)
-			if shouldReverse {
-				log.Printf("%s REVERSING edge direction", logPrefix)
+		policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
+			Reverse: func() {
 				edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
-			}
-		case "penalty":
-			penalty, _ := decision.Params["penalty"].(float64)
-			reason, _ := decision.Params["reason"].(string)
-			log.Printf("%s PENALTY applied: %.2f, reason: %s", logPrefix, penalty, reason)
-			// Apply penalty to confidence
-			if edge.Properties.Criticality > 0 {
-				edge.Properties.Criticality *= (1.0 - penalty)
-				log.Printf("%s Adjusted criticality: %.4f", logPrefix, edge.Properties.Criticality)
-			}
-		case "allow":
-			log.Printf("%s ALLOWED by policy", logPrefix)
-		default:
-			log.Printf("%s WARNING: unknown policy action: %s, allowing", logPrefix, decision.Action)
-		}
+			},
+			ApplyPenalty: func(penalty float64, _ string) {
+				if edge.Properties.Criticality > 0 {
+					edge.Properties.Criticality *= (1.0 - penalty)
+					log.Printf("%s Adjusted criticality: %.4f", logPrefix, edge.Properties.Criticality)
+				}
+			},
+		})
 	}
 
 	now := time.Now().UTC()

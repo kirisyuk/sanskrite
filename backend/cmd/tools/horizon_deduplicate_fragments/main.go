@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/iterator"
@@ -126,7 +127,7 @@ func main() {
 			}
 
 			// Migrate all references from duplicates to primary
-			if err := migrateReferences(ctx, primaryID, duplicateIDs, edgesRepo, watchdogRepo, lensesRepo, versionsRepo, fsClient, canonicalPath); err != nil {
+			if err := migrateReferences(ctx, primaryID, duplicateIDs, edgesRepo, watchdogRepo, lensesRepo, versionsRepo, fsClient, canonicalPath, stats); err != nil {
 				log.Printf("ERROR: Failed to migrate references for %s: %v", canonicalPath, err)
 				continue
 			}
@@ -168,6 +169,11 @@ func main() {
 		log.Printf("Updated %d edges", stats.UpdatedEdges)
 		log.Printf("Updated %d watchdog configs", stats.UpdatedWatchdogs)
 		log.Printf("Updated %d lenses", stats.UpdatedLenses)
+		log.Printf("Updated %d lens artifacts", stats.UpdatedLensArtifacts)
+		log.Printf("Updated %d lens items", stats.UpdatedLensItems)
+		log.Printf("Updated %d fragment profiles", stats.UpdatedProfiles)
+		log.Printf("Updated %d missing info statuses", stats.UpdatedMissingInfo)
+		log.Printf("Updated %d cascade entity records", stats.UpdatedCascadeEntity)
 		log.Printf("Deleted %d fragment versions", stats.DeletedVersions)
 		if gcsClient != nil {
 			log.Printf("Re-exported %d fragments to GCS", stats.ReExported)
@@ -417,14 +423,19 @@ func betterMetricValue(a, b models.MetricValue) bool {
 }
 
 type DeduplicationStats struct {
-	MergedGroups     int
-	DeletedFragments int
-	UpdatedEdges     int
-	UpdatedWatchdogs int
-	UpdatedLenses    int
-	DeletedVersions  int
-	ReExported       int
-	DryRunDuplicates int
+	MergedGroups         int
+	DeletedFragments     int
+	UpdatedEdges         int
+	UpdatedWatchdogs     int
+	UpdatedLenses        int
+	UpdatedLensArtifacts int
+	UpdatedLensItems     int
+	UpdatedProfiles      int
+	UpdatedMissingInfo   int
+	UpdatedCascadeEntity int
+	DeletedVersions      int
+	ReExported           int
+	DryRunDuplicates     int
 }
 
 // findDuplicates finds all canonical paths that have multiple fragments
@@ -534,9 +545,8 @@ func migrateReferences(
 	versionsRepo *repo.HorizonFragmentVersionsRepository,
 	fsClient *firestore.Client,
 	canonicalPath string,
+	stats *DeduplicationStats,
 ) error {
-	stats := &DeduplicationStats{}
-
 	// 1. Update DependencyEdges
 	if err := migrateEdges(ctx, primaryID, duplicateIDs, edgesRepo, fsClient, stats); err != nil {
 		return fmt.Errorf("migrate edges: %w", err)
@@ -552,7 +562,32 @@ func migrateReferences(
 		return fmt.Errorf("migrate lenses: %w", err)
 	}
 
-	// 4. Delete fragment versions for duplicates (they're tied to specific fragment IDs)
+	// 4. Update LensArtifacts (fragment + edge references)
+	if err := migrateLensArtifacts(ctx, primaryID, duplicateIDs, canonicalPath, fsClient, stats); err != nil {
+		return fmt.Errorf("migrate lens artifacts: %w", err)
+	}
+
+	// 5. Update LensItems (node + edge references)
+	if err := migrateLensItems(ctx, primaryID, duplicateIDs, fsClient, stats); err != nil {
+		return fmt.Errorf("migrate lens items: %w", err)
+	}
+
+	// 6. Update FragmentProfiles (fragmentId references)
+	if err := migrateFragmentProfiles(ctx, primaryID, duplicateIDs, fsClient, stats); err != nil {
+		return fmt.Errorf("migrate fragment profiles: %w", err)
+	}
+
+	// 7. Update MissingInfoStatus (fragmentId + deterministic ID)
+	if err := migrateMissingInfoStatus(ctx, primaryID, duplicateIDs, fsClient, stats); err != nil {
+		return fmt.Errorf("migrate missing info status: %w", err)
+	}
+
+	// 8. Update CascadeEntityRegistry (fragmentId bindings)
+	if err := migrateCascadeEntityRegistry(ctx, primaryID, duplicateIDs, fsClient, stats); err != nil {
+		return fmt.Errorf("migrate cascade entity registry: %w", err)
+	}
+
+	// 9. Delete fragment versions for duplicates (they're tied to specific fragment IDs)
 	if err := deleteVersions(ctx, duplicateIDs, versionsRepo, fsClient, stats); err != nil {
 		return fmt.Errorf("delete versions: %w", err)
 	}
@@ -803,25 +838,476 @@ func migrateWatchdogs(ctx context.Context, primaryID string, duplicateIDs []stri
 }
 
 func migrateLenses(ctx context.Context, primaryID string, duplicateIDs []string, canonicalPath string, lensesRepo *repo.LensesRepository, stats *DeduplicationStats) error {
-	// Note: Lenses have scopeFragments map (canonicalPath -> fragmentID)
-	// We need to update this map for all lenses that reference duplicate fragment IDs
+	// We update only lenses that explicitly include this canonicalPath in scope.
+	// For canonicalPath-level dedup this is sufficient and avoids full collection scans.
+	lenses, err := lensesRepo.FindByScope(ctx, "global", canonicalPath, 10000)
+	if err != nil {
+		return err
+	}
+	if len(lenses) == 0 {
+		return nil
+	}
+	dupSet := make(map[string]struct{}, len(duplicateIDs))
+	for _, id := range duplicateIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			dupSet[id] = struct{}{}
+		}
+	}
+	for _, lens := range lenses {
+		if lens == nil || strings.TrimSpace(lens.ID) == "" {
+			continue
+		}
+		changed := false
 
-	// Since we can't easily query by map values, we'll need to iterate all lenses
-	// For efficiency, we'll use Firestore directly to iterate and update
+		// ScopeFragments: canonicalPath -> fragmentID cache
+		if lens.ScopeFragments != nil {
+			if fid := strings.TrimSpace(lens.ScopeFragments[canonicalPath]); fid != "" {
+				if _, ok := dupSet[fid]; ok {
+					lens.ScopeFragments[canonicalPath] = primaryID
+					changed = true
+				}
+			}
+		}
 
-	// This is a simplified approach - in production you might want to:
-	// 1. Query lenses by project/tenant if you know them
-	// 2. Use a more efficient indexing strategy
+		// ResolvedQueries: ensure canonicalPath de-dup and keep stable.
+		if lens.ResolvedQueries != nil {
+			for q, paths := range lens.ResolvedQueries {
+				if len(paths) == 0 {
+					continue
+				}
+				seen := make(map[string]struct{}, len(paths))
+				out := make([]string, 0, len(paths))
+				localChanged := false
+				for _, p := range paths {
+					p = strings.TrimSpace(p)
+					if p == "" {
+						localChanged = true
+						continue
+					}
+					if _, ok := seen[p]; ok {
+						localChanged = true
+						continue
+					}
+					seen[p] = struct{}{}
+					out = append(out, p)
+				}
+				if localChanged {
+					lens.ResolvedQueries[q] = out
+					changed = true
+				}
+			}
+		}
 
-	// For now, we'll use a Firestore query to get all lenses and check their scopeFragments
-	// This requires direct Firestore access, which we'll get from the repository's collection
+		if !changed {
+			continue
+		}
+		if err := lensesRepo.Update(ctx, lens); err != nil {
+			log.Printf("WARNING: Failed to update lens %s: %v", lens.ID, err)
+			continue
+		}
+		stats.UpdatedLenses++
+	}
+	return nil
+}
 
-	log.Printf("NOTE: Lens scopeFragments migration requires iterating all lenses - skipping for now")
-	log.Printf("      Manual update needed: update scopeFragments['%s'] from duplicate IDs to %s", canonicalPath, primaryID)
+func migrateLensArtifacts(ctx context.Context, primaryID string, duplicateIDs []string, canonicalPath string, fsClient *firestore.Client, stats *DeduplicationStats) error {
+	col := fsClient.Collection("horizon_lens_artifacts")
+	dupSet := make(map[string]struct{}, len(duplicateIDs))
+	for _, id := range duplicateIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			dupSet[id] = struct{}{}
+		}
+	}
 
-	// TODO: Implement full lens migration if needed
-	// Would require: 1) Get Firestore client, 2) Query all lenses, 3) Check scopeFragments map, 4) Update
+	for _, dupID := range duplicateIDs {
+		dupID = strings.TrimSpace(dupID)
+		if dupID == "" {
+			continue
+		}
 
+		// FRAGMENT artifacts
+		docs, err := col.Where("type", "==", string(models.LensArtifactTypeFragment)).Where("fragmentId", "==", dupID).Limit(10000).Documents(ctx).GetAll()
+		if err != nil {
+			return fmt.Errorf("list fragment artifacts for %s: %w", dupID, err)
+		}
+		for _, d := range docs {
+			var a models.LensArtifact
+			if err := d.DataTo(&a); err != nil {
+				continue
+			}
+
+			// De-dupe by (lensId, canonicalPath): if canonical artifact already exists with primaryID, drop duplicate doc.
+			existing, err := col.Where("lensId", "==", strings.TrimSpace(a.LensID)).
+				Where("type", "==", string(models.LensArtifactTypeFragment)).
+				Where("canonicalPath", "==", canonicalPath).
+				Limit(5).
+				Documents(ctx).GetAll()
+			if err == nil {
+				shouldDelete := false
+				for _, e := range existing {
+					if e.Ref.ID == d.Ref.ID {
+						continue
+					}
+					var ex models.LensArtifact
+					if err := e.DataTo(&ex); err != nil {
+						continue
+					}
+					if strings.TrimSpace(ex.FragmentID) == primaryID {
+						shouldDelete = true
+						break
+					}
+				}
+				if shouldDelete {
+					if _, err := d.Ref.Delete(ctx); err == nil {
+						stats.UpdatedLensArtifacts++
+					}
+					continue
+				}
+			}
+
+			updates := []firestore.Update{
+				{Path: "fragmentId", Value: primaryID},
+				{Path: "canonicalPath", Value: canonicalPath},
+				{Path: "updatedAt", Value: firestore.ServerTimestamp},
+			}
+			if _, err := d.Ref.Update(ctx, updates); err != nil {
+				log.Printf("WARNING: Failed to update lens artifact %s: %v", d.Ref.ID, err)
+				continue
+			}
+			stats.UpdatedLensArtifacts++
+		}
+
+		// EDGE artifacts by sourceFragId
+		srcDocs, err := col.Where("type", "==", string(models.LensArtifactTypeEdge)).Where("sourceFragId", "==", dupID).Limit(10000).Documents(ctx).GetAll()
+		if err != nil {
+			return fmt.Errorf("list edge artifacts by source for %s: %w", dupID, err)
+		}
+		for _, d := range srcDocs {
+			var a models.LensArtifact
+			if err := d.DataTo(&a); err != nil {
+				continue
+			}
+			targetID := strings.TrimSpace(a.TargetFragID)
+			if _, ok := dupSet[targetID]; ok {
+				targetID = primaryID
+			}
+			if targetID == primaryID {
+				// collapse into self-loop edge artifact -> delete
+				if _, err := d.Ref.Delete(ctx); err == nil {
+					stats.UpdatedLensArtifacts++
+				}
+				continue
+			}
+			updates := []firestore.Update{
+				{Path: "sourceFragId", Value: primaryID},
+				{Path: "updatedAt", Value: firestore.ServerTimestamp},
+			}
+			if _, err := d.Ref.Update(ctx, updates); err != nil {
+				log.Printf("WARNING: Failed to update edge artifact(source) %s: %v", d.Ref.ID, err)
+				continue
+			}
+			stats.UpdatedLensArtifacts++
+		}
+
+		// EDGE artifacts by targetFragId
+		tgtDocs, err := col.Where("type", "==", string(models.LensArtifactTypeEdge)).Where("targetFragId", "==", dupID).Limit(10000).Documents(ctx).GetAll()
+		if err != nil {
+			return fmt.Errorf("list edge artifacts by target for %s: %w", dupID, err)
+		}
+		for _, d := range tgtDocs {
+			var a models.LensArtifact
+			if err := d.DataTo(&a); err != nil {
+				continue
+			}
+			sourceID := strings.TrimSpace(a.SourceFragID)
+			if _, ok := dupSet[sourceID]; ok {
+				sourceID = primaryID
+			}
+			if sourceID == primaryID {
+				if _, err := d.Ref.Delete(ctx); err == nil {
+					stats.UpdatedLensArtifacts++
+				}
+				continue
+			}
+			updates := []firestore.Update{
+				{Path: "targetFragId", Value: primaryID},
+				{Path: "updatedAt", Value: firestore.ServerTimestamp},
+			}
+			if _, err := d.Ref.Update(ctx, updates); err != nil {
+				log.Printf("WARNING: Failed to update edge artifact(target) %s: %v", d.Ref.ID, err)
+				continue
+			}
+			stats.UpdatedLensArtifacts++
+		}
+	}
+	return nil
+}
+
+func migrateLensItems(ctx context.Context, primaryID string, duplicateIDs []string, fsClient *firestore.Client, stats *DeduplicationStats) error {
+	col := fsClient.Collection("horizon_lens_items")
+	dupSet := make(map[string]struct{}, len(duplicateIDs))
+	for _, id := range duplicateIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			dupSet[id] = struct{}{}
+		}
+	}
+
+	for _, dupID := range duplicateIDs {
+		dupID = strings.TrimSpace(dupID)
+		if dupID == "" {
+			continue
+		}
+
+		// node items
+		nodeDocs, err := col.Where("kind", "==", "node").Where("fragmentId", "==", dupID).Limit(10000).Documents(ctx).GetAll()
+		if err != nil {
+			return fmt.Errorf("list node lens items for %s: %w", dupID, err)
+		}
+		for _, d := range nodeDocs {
+			updates := []firestore.Update{
+				{Path: "fragmentId", Value: primaryID},
+				{Path: "updatedAt", Value: firestore.ServerTimestamp},
+			}
+			if _, err := d.Ref.Update(ctx, updates); err != nil {
+				log.Printf("WARNING: Failed to update lens item(node) %s: %v", d.Ref.ID, err)
+				continue
+			}
+			stats.UpdatedLensItems++
+		}
+
+		// edge items by source
+		srcDocs, err := col.Where("kind", "==", "edge").Where("sourceFragmentId", "==", dupID).Limit(10000).Documents(ctx).GetAll()
+		if err != nil {
+			return fmt.Errorf("list edge lens items by source for %s: %w", dupID, err)
+		}
+		for _, d := range srcDocs {
+			data := d.Data()
+			targetID, _ := data["targetFragmentId"].(string)
+			targetID = strings.TrimSpace(targetID)
+			if _, ok := dupSet[targetID]; ok {
+				targetID = primaryID
+			}
+			if targetID == primaryID {
+				if _, err := d.Ref.Delete(ctx); err == nil {
+					stats.UpdatedLensItems++
+				}
+				continue
+			}
+			updates := []firestore.Update{
+				{Path: "sourceFragmentId", Value: primaryID},
+				{Path: "updatedAt", Value: firestore.ServerTimestamp},
+			}
+			if _, err := d.Ref.Update(ctx, updates); err != nil {
+				log.Printf("WARNING: Failed to update lens item(edge source) %s: %v", d.Ref.ID, err)
+				continue
+			}
+			stats.UpdatedLensItems++
+		}
+
+		// edge items by target
+		tgtDocs, err := col.Where("kind", "==", "edge").Where("targetFragmentId", "==", dupID).Limit(10000).Documents(ctx).GetAll()
+		if err != nil {
+			return fmt.Errorf("list edge lens items by target for %s: %w", dupID, err)
+		}
+		for _, d := range tgtDocs {
+			data := d.Data()
+			sourceID, _ := data["sourceFragmentId"].(string)
+			sourceID = strings.TrimSpace(sourceID)
+			if _, ok := dupSet[sourceID]; ok {
+				sourceID = primaryID
+			}
+			if sourceID == primaryID {
+				if _, err := d.Ref.Delete(ctx); err == nil {
+					stats.UpdatedLensItems++
+				}
+				continue
+			}
+			updates := []firestore.Update{
+				{Path: "targetFragmentId", Value: primaryID},
+				{Path: "updatedAt", Value: firestore.ServerTimestamp},
+			}
+			if _, err := d.Ref.Update(ctx, updates); err != nil {
+				log.Printf("WARNING: Failed to update lens item(edge target) %s: %v", d.Ref.ID, err)
+				continue
+			}
+			stats.UpdatedLensItems++
+		}
+	}
+	return nil
+}
+
+func migrateFragmentProfiles(ctx context.Context, primaryID string, duplicateIDs []string, fsClient *firestore.Client, stats *DeduplicationStats) error {
+	col := fsClient.Collection("horizon_fragment_profiles")
+	for _, dupID := range duplicateIDs {
+		dupID = strings.TrimSpace(dupID)
+		if dupID == "" {
+			continue
+		}
+		docs, err := col.Where("fragmentId", "==", dupID).Limit(10000).Documents(ctx).GetAll()
+		if err != nil {
+			return fmt.Errorf("list fragment profiles for %s: %w", dupID, err)
+		}
+		for _, d := range docs {
+			updates := []firestore.Update{
+				{Path: "fragmentId", Value: primaryID},
+				{Path: "updatedAt", Value: firestore.ServerTimestamp},
+			}
+			if _, err := d.Ref.Update(ctx, updates); err != nil {
+				log.Printf("WARNING: Failed to update fragment profile %s: %v", d.Ref.ID, err)
+				continue
+			}
+			stats.UpdatedProfiles++
+		}
+	}
+	return nil
+}
+
+func migrateMissingInfoStatus(ctx context.Context, primaryID string, duplicateIDs []string, fsClient *firestore.Client, stats *DeduplicationStats) error {
+	col := fsClient.Collection("horizon_missing_info_status")
+	for _, dupID := range duplicateIDs {
+		dupID = strings.TrimSpace(dupID)
+		if dupID == "" {
+			continue
+		}
+		docs, err := col.Where("fragmentId", "==", dupID).Limit(10000).Documents(ctx).GetAll()
+		if err != nil {
+			return fmt.Errorf("list missing info statuses for %s: %w", dupID, err)
+		}
+		for _, d := range docs {
+			var old models.MissingInfoStatus
+			if err := d.DataTo(&old); err != nil {
+				continue
+			}
+			newID := repo.GenerateMissingInfoID(primaryID, old.QuestionText)
+			if strings.TrimSpace(newID) == "" {
+				continue
+			}
+			oldFragmentID := old.FragmentID
+			old.FragmentID = primaryID
+			old.ID = newID
+			old.UpdatedAt = old.UpdatedAt.UTC()
+			if old.CreatedAt.IsZero() {
+				old.CreatedAt = time.Now().UTC()
+			}
+
+			targetRef := col.Doc(newID)
+			targetSnap, err := targetRef.Get(ctx)
+			if err == nil && targetSnap.Exists() {
+				var cur models.MissingInfoStatus
+				if err := targetSnap.DataTo(&cur); err == nil {
+					merged := mergeMissingInfoStatus(cur, old)
+					merged.ID = newID
+					merged.FragmentID = primaryID
+					if _, err := targetRef.Set(ctx, &merged); err != nil {
+						log.Printf("WARNING: Failed to merge missing info status %s into %s: %v", d.Ref.ID, newID, err)
+						continue
+					}
+					if d.Ref.ID != newID {
+						_, _ = d.Ref.Delete(ctx)
+					}
+					stats.UpdatedMissingInfo++
+					continue
+				}
+			}
+
+			if _, err := targetRef.Set(ctx, &old); err != nil {
+				log.Printf("WARNING: Failed to move missing info status %s -> %s: %v", d.Ref.ID, newID, err)
+				continue
+			}
+			if d.Ref.ID != newID || oldFragmentID != primaryID {
+				_, _ = d.Ref.Delete(ctx)
+			}
+			stats.UpdatedMissingInfo++
+		}
+	}
+	return nil
+}
+
+func mergeMissingInfoStatus(a, b models.MissingInfoStatus) models.MissingInfoStatus {
+	out := a
+	if strings.TrimSpace(out.QuestionText) == "" && strings.TrimSpace(b.QuestionText) != "" {
+		out.QuestionText = b.QuestionText
+	}
+	if strings.TrimSpace(out.QuestionHash) == "" && strings.TrimSpace(b.QuestionHash) != "" {
+		out.QuestionHash = b.QuestionHash
+	}
+	if b.Attempts > out.Attempts {
+		out.Attempts = b.Attempts
+	}
+	if out.CreatedAt.IsZero() || (!b.CreatedAt.IsZero() && b.CreatedAt.Before(out.CreatedAt)) {
+		out.CreatedAt = b.CreatedAt
+	}
+	if b.UpdatedAt.After(out.UpdatedAt) {
+		out.UpdatedAt = b.UpdatedAt
+	}
+	if b.LastAttemptAt != nil && (out.LastAttemptAt == nil || b.LastAttemptAt.After(*out.LastAttemptAt)) {
+		t := *b.LastAttemptAt
+		out.LastAttemptAt = &t
+	}
+	if b.NextAttemptAt != nil && (out.NextAttemptAt == nil || b.NextAttemptAt.After(*out.NextAttemptAt)) {
+		t := *b.NextAttemptAt
+		out.NextAttemptAt = &t
+	}
+	if b.ExhaustedAt != nil && (out.ExhaustedAt == nil || b.ExhaustedAt.After(*out.ExhaustedAt)) {
+		t := *b.ExhaustedAt
+		out.ExhaustedAt = &t
+	}
+	if b.ResolvedAt != nil && (out.ResolvedAt == nil || b.ResolvedAt.After(*out.ResolvedAt)) {
+		t := *b.ResolvedAt
+		out.ResolvedAt = &t
+	}
+	if strings.TrimSpace(out.SourceFingerprint) == "" && strings.TrimSpace(b.SourceFingerprint) != "" {
+		out.SourceFingerprint = b.SourceFingerprint
+	}
+	out.Status = pickMissingInfoStatus(out.Status, b.Status)
+	return out
+}
+
+func pickMissingInfoStatus(a, b string) string {
+	rank := func(s string) int {
+		switch strings.TrimSpace(strings.ToLower(s)) {
+		case models.MissingInfoStatusResolved:
+			return 3
+		case models.MissingInfoStatusExhausted:
+			return 2
+		case models.MissingInfoStatusOpen:
+			return 1
+		default:
+			return 0
+		}
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
+}
+
+func migrateCascadeEntityRegistry(ctx context.Context, primaryID string, duplicateIDs []string, fsClient *firestore.Client, stats *DeduplicationStats) error {
+	col := fsClient.Collection("horizon_cascade_entities")
+	for _, dupID := range duplicateIDs {
+		dupID = strings.TrimSpace(dupID)
+		if dupID == "" {
+			continue
+		}
+		docs, err := col.Where("fragmentId", "==", dupID).Limit(10000).Documents(ctx).GetAll()
+		if err != nil {
+			return fmt.Errorf("list cascade entities for %s: %w", dupID, err)
+		}
+		for _, d := range docs {
+			updates := []firestore.Update{
+				{Path: "fragmentId", Value: primaryID},
+				{Path: "lastSeenAt", Value: firestore.ServerTimestamp},
+			}
+			if _, err := d.Ref.Update(ctx, updates); err != nil {
+				log.Printf("WARNING: Failed to update cascade entity %s: %v", d.Ref.ID, err)
+				continue
+			}
+			stats.UpdatedCascadeEntity++
+		}
+	}
 	return nil
 }
 

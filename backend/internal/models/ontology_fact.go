@@ -67,46 +67,59 @@ func (f *OntologyFact) GenerateVectorText() string {
 		}
 	}
 
-	add(fmt.Sprintf("kind: %s", f.Kind))
-	add(fmt.Sprintf("type: %s", f.Type))
-	add(f.Title)
-	add(f.Summary)
+	if f.Title != "" {
+		add(f.Title)
+	}
+	if f.Summary != "" {
+		add(f.Summary)
+	}
+	if f.Kind != "" || f.Type != "" {
+		kindType := []string{}
+		if f.Kind != "" {
+			kindType = append(kindType, fmt.Sprintf("kind %s", f.Kind))
+		}
+		if f.Type != "" {
+			kindType = append(kindType, fmt.Sprintf("type %s", f.Type))
+		}
+		add("Fact classification: " + strings.Join(kindType, ", "))
+	}
 	if f.Confidence > 0 {
-		add(fmt.Sprintf("confidence: %.3f", f.Confidence))
+		add(fmt.Sprintf("Confidence: %.3f", f.Confidence))
 	}
 
 	if len(f.CanonicalPaths) > 0 {
-		add("canonicalPaths: " + strings.Join(f.CanonicalPaths, ", "))
+		add("Canonical paths: " + strings.Join(f.CanonicalPaths, ", "))
 	}
 	if f.LocationPath != nil && strings.TrimSpace(*f.LocationPath) != "" {
-		add("locationPath: " + strings.TrimSpace(*f.LocationPath))
+		add("Location path: " + strings.TrimSpace(*f.LocationPath))
 	}
 	if len(f.ActorPaths) > 0 {
-		add("actorPaths: " + strings.Join(f.ActorPaths, ", "))
+		add("Actor paths: " + strings.Join(f.ActorPaths, ", "))
 	}
 	if len(f.SpherePaths) > 0 {
-		add("spherePaths: " + strings.Join(f.SpherePaths, ", "))
+		add("Sphere paths: " + strings.Join(f.SpherePaths, ", "))
 	}
 	if f.OccurredAt != nil {
-		add("occurredAt: " + f.OccurredAt.UTC().Format(time.RFC3339))
+		add("Occurred at: " + f.OccurredAt.UTC().Format(time.RFC3339))
 	}
 	if f.ObservedAt != nil {
-		add("observedAt: " + f.ObservedAt.UTC().Format(time.RFC3339))
+		add("Observed at: " + f.ObservedAt.UTC().Format(time.RFC3339))
 	}
 	if len(f.SourceIDs) > 0 {
-		add("sourceIds: " + strings.Join(f.SourceIDs, ", "))
+		add("Source IDs: " + strings.Join(f.SourceIDs, ", "))
 	}
 	if len(f.MetricUpdates) > 0 {
 		for _, mu := range f.MetricUpdates {
 			if strings.TrimSpace(mu.MetricName) == "" {
 				continue
 			}
-			add(fmt.Sprintf("metric: %s=%.6f", strings.TrimSpace(mu.MetricName), mu.Value))
+			metricLine := fmt.Sprintf("Metric %s value %.6f", strings.TrimSpace(mu.MetricName), mu.Value)
 			if mu.Unit != nil && strings.TrimSpace(*mu.Unit) != "" {
-				add(fmt.Sprintf("metricUnit: %s", strings.TrimSpace(*mu.Unit)))
+				metricLine += " " + strings.TrimSpace(*mu.Unit)
 			}
+			add(metricLine)
 			if mu.Confidence > 0 {
-				add(fmt.Sprintf("metricConfidence: %.3f", mu.Confidence))
+				add(fmt.Sprintf("Metric confidence: %.3f", mu.Confidence))
 			}
 		}
 	}

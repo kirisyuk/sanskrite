@@ -208,6 +208,15 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 			wantChange: false,
 		},
 		{
+			name:       "PRODUCT PRODUCES PRODUCT -> TRANSFORMS_INTO",
+			edgeType:   models.DependencyTypeProduces,
+			sourceType: models.FragmentTypeProduct,
+			targetType: models.FragmentTypeProduct,
+			wantType:   models.DependencyTypeTransformsInto,
+			wantSwap:   false,
+			wantChange: true,
+		},
+		{
 			name:       "ORGANIZATION EXTRACTS_FROM DEPOSIT -> OPERATES_IN (best-effort)",
 			edgeType:   models.DependencyTypeExtractsFrom,
 			sourceType: models.FragmentTypeOrganization,
@@ -223,6 +232,24 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 			targetType: models.FragmentTypeOrganization,
 			wantType:   models.DependencyTypeOperatesIn,
 			wantSwap:   true,
+			wantChange: true,
+		},
+		{
+			name:       "ENTITY APPLIES_TO MECHANISM -> swap to MECHANISM APPLIES_TO ENTITY",
+			edgeType:   models.DependencyTypeAppliesTo,
+			sourceType: models.FragmentTypeOrganization,
+			targetType: models.FragmentTypeMechanism,
+			wantType:   models.DependencyTypeAppliesTo,
+			wantSwap:   true,
+			wantChange: true,
+		},
+		{
+			name:       "Non-mechanism APPLIES_TO -> INFLUENCES",
+			edgeType:   models.DependencyTypeAppliesTo,
+			sourceType: models.FragmentTypeOrganization,
+			targetType: models.FragmentTypeMarket,
+			wantType:   models.DependencyTypeInfluences,
+			wantSwap:   false,
 			wantChange: true,
 		},
 	}
@@ -242,4 +269,3 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 		})
 	}
 }
-

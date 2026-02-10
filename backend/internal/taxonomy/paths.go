@@ -277,6 +277,13 @@ func ValidateCanonicalPath(path string) error {
 		if len(parts) != 3 {
 			return fmt.Errorf("mechanism canonical path must have exactly 3 segments: /mechanism/{category}/{slug}: %s", path)
 		}
+		category := strings.ToLower(strings.TrimSpace(parts[1]))
+		switch category {
+		case "regulatory", "economic", "technological", "contractual", "political":
+			// ok
+		default:
+			return fmt.Errorf("mechanism canonical path has invalid category %q (expected one of: regulatory, economic, technological, contractual, political): %s", parts[1], path)
+		}
 	}
 
 	return nil

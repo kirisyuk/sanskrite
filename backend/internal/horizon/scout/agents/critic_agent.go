@@ -154,7 +154,6 @@ GRAPH CONTEXT (existing Lens graph):
 
 `, strings.TrimSpace(graphContext))
 	}
-
 	var entityType string
 	switch fragment.Type {
 	case models.FragmentTypeDecisionPoint:
@@ -279,6 +278,9 @@ Return ONLY valid JSON. No markdown fences.
 
 // buildValidationPrompt строит промпт для валидации данных
 func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string, graphContext string) string {
+	if extractedData == nil {
+		extractedData = &models.HorizonFragment{}
+	}
 	extractedJSON, _ := json.MarshalIndent(extractedData, "", "  ")
 	relationsJSON, _ := json.MarshalIndent(relations, "", "  ")
 	supplyChainsJSON := "[]"
@@ -311,6 +313,9 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 
 `, strings.TrimSpace(graphContext))
 	}
+	businessRulesBlock := taxonomy.BusinessTagRulesPrompt() + "\n\n"
+	profile := ResolveResearchProfile(extractedData.Type, extractedData.CanonicalPath, extractedData.CommunityType)
+	profileBlock := BuildResearchProfilePromptBlock(profile) + "\n\n"
 
 	canonicalRules := taxonomy.DefaultCanonicalRules()
 	canonicalValidationBlock := fmt.Sprintf(`  MANDATORY - Canonical path validation (for fragment AND relations):
@@ -364,6 +369,8 @@ SOURCE CONTENT:
 %s
 
 %s
+%s
+%s
 TASK: Compare the extracted data with the source content and identify any conflicts, inconsistencies, or missing information. Pay close attention to missing relationships.
 
 	Return a JSON object with:
@@ -406,6 +413,9 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      - mega: >50000 employees or >$10B revenue (global giant)
 	      For government: federal ministries of G20 countries = enterprise/mega, regional agencies = le/enterprise, municipal = sme/le.
 	      Search for annual reports, Wikipedia infobox, LinkedIn company page, or news about company size."
+	  - If fragment.tags has no /biz/... business tags, add this question:
+	    - "What business role profile best describes <entity>? Return 3-6 tags in fragment.tags using:
+	      /biz/function/{slug}, /biz/economic-role/{slug}, /biz/risk-exposure/{slug}, /biz/value-pool/{slug}, /biz/replaceability/{low|medium|high|variable}."
 	  
 	  - If this looks like a government body (ministry/agency/regulator) but canonicalPath is not /gov/{iso2}/{slug}, add a question:
 	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2|regional}/{slug} where regional tokens (gcc, eu, asean) go in the geo slot (2nd segment). If unknown, /gov/na/{slug}."
@@ -587,5 +597,5 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      - When asking for mechanism user (from MECHANISM fragment), ALWAYS request EXPLICIT SOURCE in missingInfo.
 	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET.
 
-	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, canonicalValidationBlock)
+	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, canonicalValidationBlock)
 }

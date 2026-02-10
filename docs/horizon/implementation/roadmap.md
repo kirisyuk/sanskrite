@@ -4,6 +4,52 @@
 
 Данный документ описывает план реализации системы мониторинга горизонта по этапам. Реализация разбита на логические этапы, каждый из которых добавляет новую функциональность и может быть развернут независимо.
 
+## Статус реализации (сводка)
+
+| Компонент | Статус | Комментарий |
+|-----------|--------|--------------|
+| expand-materials | ✅ | POST `/api/horizon/fragments/{id}/expand-materials` |
+| highProfile (global) | ✅ | `models/high_profile.go`, `highprofile/calculator.go`, `horizon_backfill_high_profile` |
+| marketSegments, orgSize | ✅ | `models/fragment.go`, Scout/Critic/Research, `segment_market_links.go`, `horizon_llm_backfill_org_segments_size` |
+| AUDITED_BY, RELATIVE_OF, RELATED_TO | ✅ | taxonomy, edge_normalizer, промпты Scout/Critic/Research |
+| DEPOSIT, EXTRACTS_FROM | ✅ | `FragmentTypeDeposit`, validation_policy, edge_normalizer, supply_chain_parser |
+| edgeModality, ValidFrom/ValidTo | ✅ | qualifiers, `normalizeTemporalModality`, policy_checker |
+| QueryAddress | ✅ | `query_address.go`, `query_resolver.go`, `query_refresh_job.go` |
+| Policy infrastructure | ✅ | Policy interface, PolicyExecutor, Firestore collections |
+| MaterializedArtifact, SupplyLink | ✅ | см. секцию D) |
+| Lens-specific highProfile | ❌ | отложено до полноценного дизайна |
+| Метрики в оверлей | ❌ | метрики пока в `State` фрагментов |
+
+## Пайплайн Scout → Critic → Research → Policy
+
+**Контекст**: Анализ пайплайна Horizon в `engine.go` (см. `HORIZON_PIPELINE_ANALYSIS.md`).
+
+**Текущий порядок** (соблюдён): Intent Resolution → Scout → Critic → Research → Critic Re-validation → Conflict Resolution → Metrics → Persistence → Policy Check.
+
+**Готово**: Conflict Resolution перенесён после Research; добавлена re-validation после Research.
+
+**TODO для проверки и реализации**:
+
+| Приоритет | Задача | Описание |
+|-----------|--------|----------|
+| P1 | Унифицировать Policy | Policy применяется в 3+ местах (`edge_materializer`, `precreate_validator`, `dependency_edges`, `runPolicyCheck`) с разной логикой. Одинаковые action handlers (reject/reverse/penalty) во всех точках, best-effort. |
+| P1 | `recordDeterministicRedirect` везде | Вызывать при любом изменении path. Сейчас не вызывается при: Market deduplication, Pre-create validation. |
+| P2 | Централизовать canonicalization | `canonicalPath` меняется в 6 местах → множество вызовов `bestEffortRewriteLensScope`. Рассмотреть накопление изменений и один финальный rewrite. |
+| P2 | История aliases | `aliasCanonicalPath` хранит только первый alias. При цепочке `/org/tesla` → `/org/us/tesla` → `/org/us/tesla-inc` сохранять массив aliases. |
+| P2 | Budget checks раньше | Проверка бюджета только перед Research. Scout и Critic могут потратить до проверки. При масштабировании добавить проверки на ранних этапах. |
+
+## Markets (MARKET) — high-level
+
+- **Market↔Market relations (future, not MVP)**:
+  - **Goal**: model value-chain / dependency structure between markets (e.g., "EV batteries market depends on lithium chemicals market").
+  - **Default in MVP**: use `DEPENDS_ON` if needed (MARKET → MARKET) as a generic relationship.
+  - **Possible dedicated edge types (later)**:
+    - `UPSTREAM_OF` / `DOWNSTREAM_OF` (explicit value chain semantics)
+    - `SUBMARKET_OF` (taxonomy hierarchy / market decomposition)
+  - **Reason to defer**: requires clear semantics + direction rules + UI/analytics decisions; MVP focus is market metrics + participants/share.
+
+---
+
 ## Текущий план: стабилизация → улучшения (backend-first)
 
 Ниже — актуальный TODO-план, который отражает **текущее состояние реализации** (код уже в основном готов) и следующие шаги.
@@ -25,11 +71,10 @@
   - Добавить режим **auto-apply** только под feature-flag + строгие пороги/правила + dry-run.
   - Перед включением auto-apply: прогнать тщательную проверку качества на репрезентативной выборке (precision/recall, ручной аудит top ошибок).
 - **Vertex AI Search для Horizon fragments**
-  - Завершить overwrite re-export всех фрагментов в GCS в финальном формате Discovery Engine.
-  - Перезапустить backfill (батчи) и убедиться, что поиск по fragments возвращает результаты.
+  - ✅ Инфра реализована: sync в GCS, `VERTEX_SEARCH_HORIZON_DATA_STORE_ID`, PolicyChecker prefetch. TODO (операционные): завершить overwrite re-export, перезапустить backfill (батчи), убедиться что поиск по fragments возвращает результаты.
   - Зафиксировать/проверить необходимые Firestore индексы под запросы Horizon.
 - **QueryAddress**
-  - Задеплоить “adult” реализацию QueryAddress (AST, скобки, NOT, корректный OR).
+  - ✅ Реализовано: `query_address.go`, `query_resolver.go`, `query_refresh_job.go`, `splitScope`, lens service. TODO: подтвердить полноту “adult” (AST, скобки, NOT, корректный OR).
   - Подтвердить поведение `sphere:`: работает через `ontology_facts` и поддерживает только exact match (без wildcard).
   - Подтвердить поведение `location:`: best-effort `/loc/{country}/{admin1}/na` из `homeLocation`.
   - Убедиться, что background refresh корректно управляет подписками (added/removed paths) и не оставляет “мёртвых” подписок.
@@ -49,50 +94,35 @@
 **Цель**: добавить выразительность “реальности” через универсальные онтологические оси (time/roles/modality/jurisdiction), не пытаясь сделать таксономию полной онтологией мира.
 
 **TODO**:
-- **High-profile signals (global vs lens-specific)**
+- **High-profile signals (global vs lens-specific)** — ✅ **Global реализован**
   - **Цель (бизнес)**: быстро подсвечивать пользователю “критические участки” (влияние/власть/узкие места), не пересчитывая признаки каждый раз на фронте.
-  - **Global (делаем сразу)**:
-    - В `HorizonFragment` хранить предвычисленные признаки в поле `highProfile` (см. `backend/internal/horizon/models/high_profile.go`).
-    - Формат: `highProfile.signals[<key>] = { score: 0..1, level: low|medium|high|critical, confidence: 0..1, evidence: { edgeIds[], neighborPaths[] } }`.
-    - Пересчёт: детерминированно из графа (edge types + criticality + qualifiers + basic fragment fields), best-effort.
-    - Backfill: отдельный go-tool должен использовать тот же модуль вычисления.
-  - **Lens-specific (временно, до полноценного дизайна)**:
+  - **Global (✅ сделано)**:
+    - В `HorizonFragment` хранится `highProfile` (`backend/internal/horizon/models/high_profile.go`).
+    - Формат: `highProfile.signals[<key>] = { score, level, confidence, evidence }`. Пересчёт через `highprofile.Calculator`, backfill через `horizon_backfill_high_profile`.
+  - **Lens-specific (❌ отложено)**:
     - Хранить признаки “в контексте lens” в overlay-артефакте (например `horizon_materialized_artifacts` kind=`cockpit_overlay` или аналог),
       чтобы не “портить” глобальный смысл меток вроде “на критическом пути”/“ключевой узел именно этого lens”.
     - Минимум: `lensId + fragmentId -> { flags, score, evidence(edgeIds) }` с TTL/updatedAt.
-- **Market Segments (канон `/segment/...` + признаки организации)**
-  - Ввести в `HorizonFragment` (для `ORGANIZATION`/`FACILITY`) поля:
-    - `marketSegments: []string` — массив канонических путей сегментов рынка, где работает организация.
-    - `orgSize: string` — размер организации (например: `sme` | `le` | `enterprise` | `mega` | `na`).
-  - Зафиксировать **плоский канонический путь фиксированной длины** для сегмента рынка:
-    - формат: `/segment/{domain}/{vertical}/{geo}`
-    - `geo`: либо ISO3166-1 alpha2 lowercase (2 символа), либо `global`.
-    - `domain`/`vertical`: контролируемый словарь + synonyms (runtime taxonomy / справочник).
-  - Обновить Scout/Research промпты: при разведке `ORGANIZATION`/`FACILITY` извлекать `marketSegments[]` и `orgSize` (роль не атрибут сущности; контекст выражается типом/направлением связи и `reason`).
-  - Обновить Critic: если `marketSegments[]` пуст (или очевидно неполон относительно контекста) — добавлять в `missingInfo` точные вопросы/поисковые запросы для сегментов и размера организации.
-  - (Опционально позже) Материализовать сегменты отдельными фрагментами с тем же canonical path (`/segment/...`) и продублировать связь “org → segment” через отдельный edge type (для индексации/UX).
-- **Time (единый контракт времени)**
-  - Формализовать и использовать консистентно: `occurredAt` (мир), `observedAt` (данные), `effectiveFrom/effectiveTo` (модель).
-  - Добавить `effectiveFrom/effectiveTo` для отношений (edges/relations), чтобы связи не были “вечными”.
-- **Modality (наблюдаемость/сценарность)**
-  - Добавить `modality` на уровень фактов/утверждений (например: observed / reported / predicted / hypothetical).
-  - Обновить Watchdog/Scout правила, чтобы propagation/обновления учитывали modality (например, predicted не всегда должен менять state).
+- **Market Segments (канон `/segment/...` + признаки организации)** — ✅ **Реализовано**
+  - В `HorizonFragment` есть `marketSegments: []string` и `orgSize`. Формат сегмента: `/segment/{domain}/{vertical}/{geo}`. Scout/Critic/Research извлекают и требуют эти поля. Backfill: `horizon_llm_backfill_org_segments_size`. `segment_market_links.go` материализует derived market nodes.
+  - **TODO (опционально)**: Материализовать сегменты отдельными фрагментами с тем же canonical path (`/segment/...`) и продублировать связь “org → segment” через отдельный edge type (для индексации/UX).
+- **Time (единый контракт времени)** — частично
+  - `observedAt` есть в `MetricValue`, `OntologyFact`. `ValidFrom`/`ValidTo` есть на `DependencyEdge`. TODO: формализовать `effectiveFrom`/`effectiveTo` для всех relations и задокументировать контракт.
+- **Modality (наблюдаемость/сценарность)** — частично
+  - `edgeModality` (actual/projected/historical/potential) есть в qualifiers edges, `normalizeTemporalModality`, policy_checker. TODO: добавить `modality` на уровень фактов/утверждений; обновить Watchdog/Scout правила для propagation.
 - **Jurisdiction / Scope**
   - Явно договориться, что такое `locationPath`/`jurisdictionPath` для фактов и как он соотносится с `/loc/...`.
   - Свести к одному каноническому формату и задокументировать.
-- **Roles/Relations как слой реальности**
-  - Для `DependencyEdge`/relations добавить временной диапазон + минимальные атрибуты (confidence/sourceRef) при необходимости.
-  - Расширить типы связей (минимальный OSINT‑слой, без “ролей” как атрибута человека):
-    - `AUDITED_BY` (ORGANIZATION/FACILITY → ORGANIZATION): внешний аудитор компании.
-    - `RELATIVE_OF` (PERSON ↔ PERSON): прямое родство (публичные родственники).
-    - `RELATED_TO` (PERSON ↔ PERSON): прочие общеизвестные связи (бизнес‑партнёры/друзья/однокурсники и т.п.), контекст в `reason`/qualifiers.
-  - Обновить Scout/Research промпты и Critic `missingInfo` под новые связи (аудитор компании; публичные родственники; public "related" связи) с жёсткими правилами по направлению/типам.
+- **Roles/Relations как слой реальности** — ✅ **AUDITED_BY, RELATIVE_OF, RELATED_TO реализованы**
+  - В taxonomy и edge_normalizer добавлены: `AUDITED_BY` (ORG/FACILITY → ORG), `RELATIVE_OF` (PERSON ↔ PERSON), `RELATED_TO` (PERSON ↔ PERSON). Scout/Critic/Research промпты обновлены.
   - **TODO (stability)**: разобраться, почему LLM/пайплайн регулярно эмитит `REGULATES` в виде `/org/... → /gov/...` (инверсия “regulated → regulator”). Сейчас это нужно best-effort канонизировать свапом в `/gov/... → /org/...`, но первопричину (промпты/инструкции/пример) стоит исправить.
 
 ---
 ### Большой раздел работ (единый блок): расширение онтологии/таксономии Horizon
 Отсюда и до секции **“Обработка метрик при propagation (семантика поверх "доставки дельт")”** включительно — один целостный блок работ: новые canonical paths, новые fragment/edge types, нормализация, требования Critic/Scout, lifecycle/time, edge metrics/temporal validity, и интеграция с propagation.
 ---
+- **Natural Resource Deposit (`/deposit/`) и EXTRACTS_FROM** — ✅ **Реализовано**
+  - `FragmentTypeDeposit`, canonical path `/deposit/{resource-slug}/{deposit-slug}`, validation_policy, edge_normalizer, supply_chain_parser, research_profile. EXTRACTS_FROM (FACILITY → DEPOSIT), OPERATES_IN (ORG → DEPOSIT), PRODUCES (DEPOSIT → PRODUCT), LOCATED_IN (DEPOSIT → GEO_REGION). Канонизация ORG EXTRACTS_FROM DEPOSIT → OPERATES_IN (best-effort).
 - **Требования к скаутингу металлургических и горнодобывающих компаний (metal & mining)**
   - При скаутинге компаний из секторов `/Materials/Mining/*` (Precious_Metals, Industrial_Metals, Rare_Earths) scout-critic **обязательно должен требовать наличие связанных объектов типа `/fac`** (Facility) и/или `/deposit/` (Natural Resource Deposit).
   - Для каждого связанного `/fac` требуется следующая информация:
@@ -128,6 +158,7 @@
   - Обновить Critic Agent: если для O&G upstream компании отсутствуют связанные `/deposit/` или `/fac/`, или отсутствует информация о reserves/production — добавлять в `missingInfo` конкретные вопросы.
   - Обновить Scout/Research промпты: при разведке O&G компаний явно извлекать информацию о месторождениях (`/deposit/`), производственных объектах (`/fac/`), и reserves/production **с корректными единицами измерения**.
 - **Новый тип сущности: Natural Resource Deposit (`/deposit/`)**
+  - ✅ **Реализовано** (см. выше). Ниже — спецификация для справки.
   - **Назначение**: моделирование геологических единиц (месторождения, бассейны, формации) с ресурсными характеристиками. Отличается от `/loc/` (административно-географическая единица) и `/fac/` (производственный объект).
   - **Canonical path format**: `/deposit/{resource-slug}/{deposit-slug}`
     - `{resource-slug}`: основной (primary) тип ресурса в deposit'е

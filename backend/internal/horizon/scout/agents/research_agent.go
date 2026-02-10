@@ -32,7 +32,7 @@ type researchResult struct {
 // focus/spherePaths/keywords are optional steering signals for grounded search (they may be non-canonical).
 // originalQuery and decompositionHints are additional context for MARKET-aware research.
 // existingEntities is a compact list of already-discovered entities in the current session (to avoid duplicates).
-// Returns: enriched fragment, discovered relations, discovered supply chains (if supply_chain mode), grounding evidence, error
+// Returns: enriched fragment, discovered relations, discovered supply chains (if supply_chain mode), error
 func (a *ResearchAgent) EnrichFragment(
 	ctx context.Context,
 	fragment *models.HorizonFragment,
@@ -45,9 +45,9 @@ func (a *ResearchAgent) EnrichFragment(
 	originalQuery string,
 	decompositionHints []DecompositionHint,
 	existingEntities []string,
-) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
+) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, error) {
 	if len(missingInfo) == 0 {
-		return fragment, nil, nil, nil, nil
+		return fragment, nil, nil, nil
 	}
 
 	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
@@ -71,24 +71,15 @@ func (a *ResearchAgent) EnrichFragment(
 		Verifier: verifier,
 	}
 
-	// Use ExecuteStructuredTaskFull to get GroundingEvidence alongside the parsed result.
-	// GroundingEvidence carries system-level provenance: which fragment IDs from the datastore
-	// were used during generation. This is the source of truth for entity resolution.
-	result, fullResult, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
+	result, err := a.executor.ExecuteStructuredTask(ctx, task)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("failed to enrich fragment with research: %w", err)
-	}
-
-	// Extract grounding evidence from the full AI result
-	var evidence *ai.GroundingEvidence
-	if fullResult != nil {
-		evidence = fullResult.GroundingEvidence
+		return nil, nil, nil, fmt.Errorf("failed to enrich fragment with research: %w", err)
 	}
 
 	// Преобразуем результат
 	jsonData, err := json.Marshal(result)
 	if err != nil {
-		return nil, nil, nil, evidence, fmt.Errorf("failed to marshal research result: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to marshal research result: %w", err)
 	}
 	fmt.Printf("[ResearchAgent] Raw Result: %s\n", jsonData)
 
@@ -99,9 +90,9 @@ func (a *ResearchAgent) EnrichFragment(
 		if err2 := json.Unmarshal(jsonData, &partialFrag); err2 == nil {
 			// Merge only fragment, no relations
 			a.mergeFragment(fragment, &partialFrag)
-			return fragment, nil, nil, evidence, nil
+			return fragment, nil, nil, nil
 		}
-		return nil, nil, nil, evidence, fmt.Errorf("failed to unmarshal enriched result: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to unmarshal enriched result: %w", err)
 	}
 
 	// Merge Fragment
@@ -113,7 +104,7 @@ func (a *ResearchAgent) EnrichFragment(
 		}
 	}
 
-	return fragment, res.Relations, res.SupplyChains, evidence, nil
+	return fragment, res.Relations, res.SupplyChains, nil
 }
 
 // mergeFragment merges partial data into the main fragment
@@ -429,12 +420,17 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 			specBlock += "- Put stake/percent/voting rights and source evidence in 'reason'.\n\n"
 		}
 	}
+	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
+	profile := ResolveResearchProfile(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
+	profileBlock := BuildResearchProfilePromptBlock(profile)
 
 	return fmt.Sprintf(`You are a research agent. Your task is to find missing information about the provided fragment using your search capabilities.
 
 CURRENT FRAGMENT DATA:
 %s
 
+%s
+%s
 %s
 %s
 %s
@@ -514,6 +510,15 @@ You SHOULD actively research and determine these fields for any organization or 
   Search for: "X employees", "X revenue", "X company size", "X annual report"
   
   Use "na" ONLY if no size information can be found after searching.
+
+Business Relevance Enrichment (ORG/FAC/GOV/PRODUCT/MARKET):
+- Populate fragment.tags with 3-6 canonical /biz/... tags when evidence exists:
+  - /biz/function/{slug}
+  - /biz/economic-role/{slug}
+  - /biz/risk-exposure/{slug}
+  - /biz/value-pool/{slug}
+  - /biz/replaceability/{low|medium|high|variable}
+- Prefer stable business semantics (operator, regulator, market-space, commodity-risk, etc.), not marketing slogans.
 
 Government Body Enrichment (GOV - when canonicalPath starts with /gov/):
 - If the fragment is a government body (/gov/...), output (best-effort):
@@ -599,7 +604,8 @@ Choose relationType to match the CORRECT semantic direction:
 -  Clarification: funding/minority stake; do not use unless investment is explicit.
 - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
 -  Clarification: peer collaboration (joint venture, MoU, alliance). Not ownership or supply-chain.
-- PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
+- PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
+  For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO (NOT PRODUCES).
 -  Clarification: manufacturer/producer -> product output.
 - EXTRACTS_FROM: source (FACILITY) extracts from target (DEPOSIT). Use for mines/oil fields/ore bodies.
 -  Clarification: extraction relationship (facility/mine -> resource deposit).
@@ -900,7 +906,7 @@ METRIC VALUE FORMAT (IMPORTANT):
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, decompositionBlock, domainBlock, specBlock, questions)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions)
 }
 
 func dedupNonEmptyStrings(in []string) []string {

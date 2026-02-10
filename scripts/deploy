@@ -84,13 +84,18 @@ require() {
 require gcloud
 ## gsutil not required; use gcloud storage to avoid Python dependency
 
-# Get Firebase Project ID from env or .firebaserc if available
+# Get Firebase Project ID from env, with safe defaults.
+# IMPORTANT: for API-only deploys, auth tokens should usually match the active GCP project.
+# Reading web/.firebaserc here can accidentally bind API auth to a different Firebase project.
 FIREBASE_PROJECT_ID="${FIREBASE_PROJECT_ID:-}"
-if [[ -z "$FIREBASE_PROJECT_ID" && -f "$WEB_DIR/.firebaserc" ]]; then
-  FIREBASE_PROJECT_ID=$(grep -o '"default": "[^"]*' "$WEB_DIR/.firebaserc" | cut -d'"' -f4 || echo "")
+if [[ -z "$FIREBASE_PROJECT_ID" ]]; then
+  if [[ "$TARGET_API" -eq 1 && "$TARGET_WEB" -eq 0 ]]; then
+    FIREBASE_PROJECT_ID="$PROJECT_ID"
+  elif [[ -f "$WEB_DIR/.firebaserc" ]]; then
+    FIREBASE_PROJECT_ID=$(grep -o '"default": "[^"]*' "$WEB_DIR/.firebaserc" | cut -d'"' -f4 || echo "")
+  fi
 fi
 if [[ -z "$FIREBASE_PROJECT_ID" ]]; then
-  # Fallback to GCP Project ID if not found (assume same project)
   FIREBASE_PROJECT_ID="$PROJECT_ID"
 fi
 echo -e "${BLUE}Firebase Project ID:${NC} $FIREBASE_PROJECT_ID"
@@ -1330,10 +1335,25 @@ deploy_api() {
   fi
 
   # Build and push to Artifact Registry
-  gcloud builds submit "$API_DIR" \
-    --project "$PROJECT_ID" \
-    --tag "$image" \
-    --quiet
+  local cloud_build_args=()
+  if [[ -n "${CLOUD_BUILD_TIMEOUT:-}" ]]; then
+    cloud_build_args+=(--timeout "$CLOUD_BUILD_TIMEOUT")
+  fi
+  if [[ -n "${CLOUD_BUILD_MACHINE_TYPE:-}" ]]; then
+    cloud_build_args+=(--machine-type "$CLOUD_BUILD_MACHINE_TYPE")
+  fi
+  if [[ ${#cloud_build_args[@]} -gt 0 ]]; then
+    gcloud builds submit "$API_DIR" \
+      --project "$PROJECT_ID" \
+      "${cloud_build_args[@]}" \
+      --tag "$image" \
+      --quiet
+  else
+    gcloud builds submit "$API_DIR" \
+      --project "$PROJECT_ID" \
+      --tag "$image" \
+      --quiet
+  fi
 
   # Check if Redis exists and get connection info
   local redis_host=""
@@ -2031,4 +2051,3 @@ echo -e "  ☐ Test API health: curl \$API_URL/api/v1/healthz"
 echo -e "  ☐ Check Cloud Run logs for errors"
 echo -e "  ☐ Verify traffic is on latest revision"
 echo ""
-

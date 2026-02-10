@@ -193,6 +193,8 @@ func (e *EnforcementExecutor) ExecuteJob(ctx context.Context, job *PolicyEnforce
 		result, err = e.executeFixLegalForm(ctx, job.Task)
 	case TaskFixISO2:
 		result, err = e.executeFixISO2(ctx, job.Task)
+	case TaskEnrichEdge:
+		result, err = e.executeEnrichEdge(ctx, job.Task)
 	default:
 		err = fmt.Errorf("unknown task type: %s", job.Task.Type)
 		result = &EnforcementResult{
@@ -899,6 +901,11 @@ func (e *EnforcementExecutor) executeFixLegalForm(ctx context.Context, task Enfo
 			return nil
 		})
 
+		orgGeo := ""
+		if parts != nil && parts.Org != nil {
+			orgGeo = strings.ToLower(strings.TrimSpace(parts.Org.Geo))
+		}
+
 		prompt := strings.TrimSpace(fmt.Sprintf(`
 You are fixing a missing legal form suffix for an organization canonical path.
 
@@ -967,6 +974,14 @@ Fragment context:
 		}
 
 		lf := strings.ToLower(strings.TrimSpace(res.LegalForm))
+		if !isLegalFormCompatibleWithGeo(orgGeo, lf) {
+			// Safety: avoid clearly wrong jurisdiction-specific forms (e.g. kk for cn).
+			if fallback := fallbackLegalFormForGeo(orgGeo); fallback != "" {
+				log.Printf("[EnforcementExecutor] fix_legal_form: geo/legal mismatch geo=%q inferred=%q -> fallback=%q for fragment=%s",
+					orgGeo, lf, fallback, strings.TrimSpace(frag.ID))
+				lf = fallback
+			}
+		}
 		// Apply selectively to canonicalParts.
 		if frag.CanonicalParts == nil {
 			frag.CanonicalParts = parts
@@ -1010,6 +1025,58 @@ Fragment context:
 			"correctPath": correctPath,
 		},
 	})
+}
+
+func isLegalFormCompatibleWithGeo(geo, legalForm string) bool {
+	geo = strings.ToLower(strings.TrimSpace(geo))
+	lf := strings.ToLower(strings.TrimSpace(legalForm))
+	if geo == "" || geo == "na" || lf == "" {
+		return true
+	}
+	switch lf {
+	case "kk":
+		return geo == "jp"
+	case "oy", "oyj":
+		return geo == "fi"
+	case "ab":
+		return geo == "se"
+	case "as", "asa":
+		return geo == "no"
+	case "pteltd":
+		return geo == "sg"
+	case "sdnbhd":
+		return geo == "my"
+	case "spzoo":
+		return geo == "pl"
+	case "ooo", "oao", "zao", "ao":
+		return geo == "ru" || geo == "kz" || geo == "ua" || geo == "by"
+	default:
+		return true
+	}
+}
+
+func fallbackLegalFormForGeo(geo string) string {
+	geo = strings.ToLower(strings.TrimSpace(geo))
+	switch geo {
+	case "cn":
+		return "ltd"
+	case "jp":
+		return "kk"
+	case "us":
+		return "inc"
+	case "gb":
+		return "ltd"
+	case "de":
+		return "gmbh"
+	case "fr":
+		return "sa"
+	case "it":
+		return "spa"
+	case "nl":
+		return "bv"
+	default:
+		return "ltd"
+	}
 }
 
 // executeFixISO2 fixes an invalid ISO2 code in org path.
@@ -1496,11 +1563,10 @@ func (e *EnforcementExecutor) CreateEnforcementJobs(
 	seenInBatch := map[string]struct{}{}
 
 	for _, v := range violations {
-		if !v.AutoFixable || v.SuggestedFix == nil {
+		task, ok := e.resolveEnforcementTaskForViolation(v)
+		if !ok {
 			continue
 		}
-
-		task := *v.SuggestedFix
 
 		// Idempotency guard: if org legal form is already populated in canonicalParts, don't enqueue fix_legal_form.
 		if task.Type == TaskFixLegalForm && strings.TrimSpace(task.TargetID) != "" && e.fragmentsRepo != nil {
@@ -1573,8 +1639,127 @@ func enforcementTaskKey(t EnforcementTask) string {
 	case TaskCanonicalizeEdge:
 		nt, _ := t.Params["newType"].(string)
 		return base + ":" + strings.TrimSpace(nt)
+	case TaskEnrichEdge:
+		rule, _ := t.Params["rule"].(string)
+		return base + ":" + strings.TrimSpace(rule)
 	default:
 		return base
+	}
+}
+
+func (e *EnforcementExecutor) resolveEnforcementTaskForViolation(v PolicyViolation) (EnforcementTask, bool) {
+	if v.AutoFixable && v.SuggestedFix != nil {
+		return *v.SuggestedFix, true
+	}
+	if strings.TrimSpace(v.EdgeID) != "" && isEdgeCompletenessRule(v.Rule) {
+		return EnforcementTask{
+			Type:     TaskEnrichEdge,
+			TargetID: strings.TrimSpace(v.EdgeID),
+			Params: map[string]interface{}{
+				"rule":          v.Rule,
+				"description":   v.Description,
+				"expectedValue": v.ExpectedValue,
+			},
+		}, true
+	}
+	return EnforcementTask{}, false
+}
+
+func isEdgeCompletenessRule(rule string) bool {
+	r := strings.TrimSpace(strings.ToLower(rule))
+	return strings.HasPrefix(r, "edge_completeness_") || strings.HasPrefix(r, "edge_temporal_")
+}
+
+func (e *EnforcementExecutor) executeEnrichEdge(ctx context.Context, task EnforcementTask) (*EnforcementResult, error) {
+	if e.edgesRepo == nil {
+		return nil, fmt.Errorf("edges repo is not configured")
+	}
+	edgeID := strings.TrimSpace(task.TargetID)
+	if edgeID == "" {
+		return nil, fmt.Errorf("target edge id is required")
+	}
+	edge, err := e.edgesRepo.Get(ctx, edgeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load edge: %w", err)
+	}
+	if edge == nil {
+		return nil, fmt.Errorf("edge not found: %s", edgeID)
+	}
+	if edge.Qualifiers == nil {
+		edge.Qualifiers = map[string]interface{}{}
+	}
+
+	hints := []string{}
+	if desc, _ := task.Params["description"].(string); strings.TrimSpace(desc) != "" {
+		hints = append(hints, strings.TrimSpace(desc))
+	}
+	if exp, _ := task.Params["expectedValue"].(string); strings.TrimSpace(exp) != "" {
+		hints = append(hints, "Missing: "+strings.TrimSpace(exp))
+	}
+	if rule, _ := task.Params["rule"].(string); strings.TrimSpace(rule) != "" {
+		edge.Qualifiers["policyEnrichmentRule"] = strings.TrimSpace(rule)
+	}
+	for _, h := range hints {
+		appendUniqueStringQualifier(edge.Qualifiers, "enrichmentHints", h)
+	}
+	appendUniqueStringQualifier(edge.Qualifiers, "enrichmentHints", "Best-effort enrichment requested by policy enforcement.")
+	edge.Qualifiers["needsEnrichment"] = true
+
+	if err := e.edgesRepo.Update(ctx, edge); err != nil {
+		return nil, fmt.Errorf("failed to update edge with enrichment hints: %w", err)
+	}
+
+	return &EnforcementResult{
+		Success:     true,
+		Action:      "edge_enrichment_marked",
+		AffectedIDs: []string{edge.ID},
+		Details:     "Marked edge for best-effort enrichment and attached policy hints",
+	}, nil
+}
+
+func appendUniqueStringQualifier(qualifiers map[string]interface{}, key, val string) {
+	val = strings.TrimSpace(val)
+	if qualifiers == nil || key == "" || val == "" {
+		return
+	}
+	raw, ok := qualifiers[key]
+	if !ok {
+		qualifiers[key] = []string{val}
+		return
+	}
+	switch v := raw.(type) {
+	case []string:
+		for _, s := range v {
+			if strings.TrimSpace(s) == val {
+				return
+			}
+		}
+		qualifiers[key] = append(v, val)
+	case []interface{}:
+		out := make([]string, 0, len(v)+1)
+		seen := map[string]struct{}{}
+		for _, item := range v {
+			s := strings.TrimSpace(fmt.Sprint(item))
+			if s == "" {
+				continue
+			}
+			if _, exists := seen[s]; exists {
+				continue
+			}
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+		if _, exists := seen[val]; !exists {
+			out = append(out, val)
+		}
+		qualifiers[key] = out
+	default:
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if s == "" || s == val {
+			qualifiers[key] = []string{val}
+		} else {
+			qualifiers[key] = []string{s, val}
+		}
 	}
 }
 

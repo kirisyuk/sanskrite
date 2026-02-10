@@ -88,6 +88,7 @@ const (
 	TaskNormalizeSymmetric EnforcementTaskType = "normalize_symmetric"
 	TaskFixLegalForm       EnforcementTaskType = "fix_legal_form"
 	TaskFixISO2            EnforcementTaskType = "fix_iso2"
+	TaskEnrichEdge         EnforcementTaskType = "enrich_edge"
 )
 
 // EnforcementTask represents a single enforcement action to fix a violation.

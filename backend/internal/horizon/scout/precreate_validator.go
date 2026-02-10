@@ -114,24 +114,16 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 			log.Printf("%s ValidationPolicy decision: action=%s, path=%s, confidence=%.2f",
 				logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
 
-			switch decision.Action {
-			case "reject":
-				// Don't block - treat as warning instead
-				// ValidationPolicy "reject" is advisory, not a blocker
-				reason, _ := decision.Params["reason"].(string)
-				log.Printf("%s WARNING: ValidationPolicy would reject fragment (non-blocking): %s", logPrefix, reason)
-				result.Warnings = append(result.Warnings, fmt.Sprintf("ValidationPolicy warning: %s", reason))
-				// Continue validation - don't block creation
-			case "penalty":
-				penalty, _ := decision.Params["penalty"].(float64)
-				reason, _ := decision.Params["reason"].(string)
-				log.Printf("%s PENALTY by ValidationPolicy: %.2f, reason: %s", logPrefix, penalty, reason)
-				result.Warnings = append(result.Warnings, reason)
-				// Continue with validation, but log penalty
-			case "allow":
-				log.Printf("%s ALLOWED by ValidationPolicy", logPrefix)
-				// Continue with additional hardcoded checks for compatibility
-			}
+			policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
+				Warn: func(msg string) {
+					result.Warnings = append(result.Warnings, fmt.Sprintf("ValidationPolicy warning: %s", msg))
+				},
+				ApplyPenalty: func(_ float64, reason string) {
+					if reason != "" {
+						result.Warnings = append(result.Warnings, reason)
+					}
+				},
+			})
 		}
 	}
 
@@ -163,9 +155,20 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		if fragment.Type == models.FragmentTypeOrganization && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/") {
 			// ok
 		} else {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s",
-				fragment.CanonicalPath, prefix, fragment.Type))
+			// Best-effort auto-correction for obvious namespace/type mismatch.
+			if fixed, changed := coerceCanonicalPathForType(fragment.CanonicalPath, fragment.Type, firstNonEmpty(
+				strings.TrimSpace(fragment.Identifiers["legalName"]),
+				strings.TrimSpace(fragment.Labels["en"]),
+				strings.TrimSpace(fragment.Identifiers["shortName"]),
+			)); changed && strings.TrimSpace(fixed) != "" {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("canonical path %q auto-corrected to %q for type %s",
+						fragment.CanonicalPath, fixed, fragment.Type))
+				fragment.CanonicalPath = fixed
+			}
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s",
+					fragment.CanonicalPath, prefix, fragment.Type))
 		}
 	}
 
@@ -480,6 +483,13 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		result.IsValid = false
 		return result, nil
 	}
+	if result.ReplacementFrag != nil && !isReplacementCompatible(fragment, result.ReplacementFrag) {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("replacement %q (%s) is incompatible with requested %q (%s) - ignored",
+				strings.TrimSpace(result.ReplacementFrag.CanonicalPath), result.ReplacementFrag.Type,
+				strings.TrimSpace(fragment.CanonicalPath), fragment.Type))
+		result.ReplacementFrag = nil
+	}
 
 	return result, nil
 }
@@ -529,6 +539,53 @@ func parseMarketGeoSectorForDedup(canonicalPath string) (string, string) {
 		return strings.ToLower(strings.TrimSpace(parts[1])), taxonomy.NormalizeMarketDomain(parts[2])
 	}
 	return "", ""
+}
+
+func canonicalNamespaceFamily(canonicalPath string) string {
+	cp := strings.TrimSpace(canonicalPath)
+	if cp == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	ns := strings.ToLower(strings.TrimSpace(parts[0]))
+	switch ns {
+	case "gov":
+		return "org"
+	case "region":
+		return "loc"
+	default:
+		return ns
+	}
+}
+
+func fragmentTypeForCompatibility(f *models.HorizonFragment) models.FragmentType {
+	if f == nil {
+		return ""
+	}
+	if strings.TrimSpace(string(f.Type)) != "" {
+		return f.Type
+	}
+	return InferFragmentTypeFromCanonicalPath(strings.TrimSpace(f.CanonicalPath))
+}
+
+func isReplacementCompatible(requested *models.HorizonFragment, replacement *models.HorizonFragment) bool {
+	if requested == nil || replacement == nil {
+		return false
+	}
+	reqType := fragmentTypeForCompatibility(requested)
+	repType := fragmentTypeForCompatibility(replacement)
+	if reqType != "" && repType != "" && reqType != repType {
+		return false
+	}
+	reqNS := canonicalNamespaceFamily(requested.CanonicalPath)
+	repNS := canonicalNamespaceFamily(replacement.CanonicalPath)
+	if reqNS != "" && repNS != "" && reqNS != repNS {
+		return false
+	}
+	return true
 }
 
 // =============================================================================

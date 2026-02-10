@@ -360,6 +360,9 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 	}
 
 	canonicalRulesBlock := taxonomy.CanonicalPathRulesPrompt()
+	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
+	profile := ResolveResearchProfile("", targetCanonicalPath, "")
+	profileBlock := BuildResearchProfilePromptBlock(profile)
 
 	return fmt.Sprintf(`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.
 
@@ -371,6 +374,8 @@ TARGET ENTITY:
 CONTENT TO ANALYZE:
 %s
 
+%s
+%s
 %s
 %s
 TASK: Extract all relevant information about this entity and return it as a JSON object with fields: "fragment", "relations", and optionally "supplyChains" (if supply_chain module is enabled).
@@ -445,6 +450,14 @@ TASK: Extract all relevant information about this entity and return it as a JSON
        - International organizations (UN, WTO, IMF) → "mega"
      
      PREFER to classify rather than use "na". Even rough estimates are valuable.
+  - tags: (ALL business entities: ORG/FAC/GOV/PRODUCT/MARKET) include business relevance taxonomy in /biz/... paths.
+    - Use 3-6 paths where evidence exists:
+      - /biz/function/{slug}
+      - /biz/economic-role/{slug}
+      - /biz/risk-exposure/{slug}
+      - /biz/value-pool/{slug}
+      - /biz/replaceability/{low|medium|high|variable}
+    - Keep tags stable and business-meaningful (avoid marketing wording).
   - marketDomain: (MARKET only) canonical domain family for the market (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate).
   - marketVertical: (MARKET only) specific vertical (e.g., banking, semiconductors, ev-batteries).
   - marketChannels: (MARKET only) array of channels (best-effort): ["b2b","b2c","public-sector",...]. Can be empty/omitted.
@@ -521,7 +534,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
      Include in 'reason': round name/number, investment amount if known.
      If a specific funding event exists (with date, participants), consider linking to /event/funding-round/{slug} via Qualifiers["eventId"].
    - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
-   - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT).
+   - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
+     For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO (NOT PRODUCES).
    - AUDITED_BY: source (ORGANIZATION/FACILITY) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
    - COMPETES_WITH: competitor relationship (direction is not important, but still output as source->target).
   - INFLUENCES: source influences target.
@@ -545,7 +559,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
   - IMPOSES_CONDITION: source SHOULD be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
   - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY, target MUST be DECISION_POINT
   - USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be MECHANISM
-  - APPLIES_TO: source MUST be MECHANISM, target can be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM/DOMAIN
+  - APPLIES_TO: source MUST be MECHANISM, target can be ORGANIZATION/FACILITY/PRODUCT/MARKET
    - MANAGES: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PROGRAM
    - EMPLOYED_BY: source MUST be PERSON, target MUST be ORGANIZATION
    - BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION
@@ -556,7 +570,6 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - FOUNDED: source MUST be PERSON or ORGANIZATION, target MUST be ORGANIZATION/PROGRAM
    - INVESTS_IN: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/PROGRAM/PRODUCT
   - PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
-    - GEO_REGION and MARKET are also allowed as partners when describing regional collaboration
   - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
   - PARTICIPATES_IN: source MAY also be PRODUCT, target MUST be MARKET
   - DOMINATES: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
@@ -701,12 +714,13 @@ CANONICAL PATH RULES:
       - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
     - Otherwise /program/{programSlug}
   - Markets:
-    - Prefer /market/{geo}/{marketSlug}
+    - Prefer (segment-first): /market/{geo}/{domain}/{vertical}
+      - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
       - geo: ISO3166-1 alpha2 lowercase, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
-      - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{slug} (NOT /market/na/{slug}/gcc)
-      - Examples: /market/iq/sme-banking, /market/global/ev-batteries
-    - Legacy /market/{marketSlug} may exist in older data; do NOT emit legacy for new markets.
-      - Always provide geo for NEW outputs.
+      - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
+      - Examples: /market/sa/professional-services/marketing, /market/global/technology/ev-batteries
+    - Legacy /market/{geo}/{marketSlug} may exist in older data; do NOT emit legacy for NEW markets.
+      - Always provide geo + domain + vertical for NEW outputs.
   - Facilities:
     - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
     - Otherwise /fac/{facilitySlug}
@@ -727,5 +741,5 @@ CANONICAL PATH RULES:
 - If a legal form is known (Inc., LLC, JSC, GmbH, etc.), append it as -{legal_form} to satisfy org canonical format.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
-Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, canonicalRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, businessRulesBlock, profileBlock, canonicalRulesBlock)
 }

@@ -193,16 +193,25 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeMarket,
 		},
 		ValidTargetTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeMarket,
 		},
 		Description: "Partners collaborate (symmetric)",
+	},
+
+	// COMPETES_WITH: Symmetric competitive relationship between peer actors.
+	models.DependencyTypeCompetesWith: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+		},
+		Description: "Competitors compete in the same arena (symmetric)",
 	},
 
 	// PRODUCES: Production flows from producer to product.

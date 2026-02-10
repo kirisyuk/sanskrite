@@ -129,6 +129,76 @@ func parseStateBool(v interface{}, def bool) bool {
 	}
 }
 
+func normalizeStrategicMechanismPath(path, title, description string) (string, bool) {
+	cp := strings.TrimSpace(path)
+	if cp == "" {
+		slug := taxonomy.Slugify(strings.TrimSpace(title))
+		if slug == "" {
+			return "", false
+		}
+		cat := inferMechanismCategoryFromText(title, description)
+		return taxonomy.JoinPath("mechanism", cat, slug), true
+	}
+	if !strings.HasPrefix(cp, "/mechanism/") {
+		return cp, false
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) != 3 {
+		slug := taxonomy.Slugify(strings.TrimSpace(title))
+		if slug == "" {
+			slug = lastPathSlug(cp)
+		}
+		if slug == "" {
+			return cp, false
+		}
+		cat := inferMechanismCategoryFromText(title, description)
+		fixed := taxonomy.JoinPath("mechanism", cat, slug)
+		return fixed, fixed != cp
+	}
+
+	cat := strings.ToLower(strings.TrimSpace(parts[1]))
+	slug := taxonomy.Slugify(strings.TrimSpace(parts[2]))
+	if slug == "" {
+		slug = taxonomy.Slugify(strings.TrimSpace(title))
+	}
+	if slug == "" {
+		return cp, false
+	}
+
+	if !isValidMechanismCategory(cat) {
+		cat = inferMechanismCategoryFromText(title, description)
+	}
+	fixed := taxonomy.JoinPath("mechanism", cat, slug)
+	return fixed, fixed != cp
+}
+
+func isValidMechanismCategory(cat string) bool {
+	switch strings.ToLower(strings.TrimSpace(cat)) {
+	case "regulatory", "economic", "technological", "contractual", "political":
+		return true
+	default:
+		return false
+	}
+}
+
+func inferMechanismCategoryFromText(title, description string) string {
+	text := strings.ToLower(strings.TrimSpace(title + " " + description))
+	switch {
+	case strings.Contains(text, "license"), strings.Contains(text, "regulat"), strings.Contains(text, "sanction"), strings.Contains(text, "permit"), strings.Contains(text, "compliance"), strings.Contains(text, "approval"), strings.Contains(text, "export control"):
+		return "regulatory"
+	case strings.Contains(text, "subsid"), strings.Contains(text, "pricing"), strings.Contains(text, "capacity"), strings.Contains(text, "allocation"), strings.Contains(text, "tariff"), strings.Contains(text, "tax"), strings.Contains(text, "incentive"), strings.Contains(text, "funding"):
+		return "economic"
+	case strings.Contains(text, "patent"), strings.Contains(text, "standard"), strings.Contains(text, "ip "), strings.Contains(text, "intellectual property"), strings.Contains(text, "technology"), strings.Contains(text, "proprietary"):
+		return "technological"
+	case strings.Contains(text, "contract"), strings.Contains(text, "agreement"), strings.Contains(text, "exclusiv"), strings.Contains(text, "offtake"), strings.Contains(text, "joint venture"):
+		return "contractual"
+	case strings.Contains(text, "diplomat"), strings.Contains(text, "alliance"), strings.Contains(text, "geopolit"), strings.Contains(text, "treaty"), strings.Contains(text, "politic"):
+		return "political"
+	default:
+		return "regulatory"
+	}
+}
+
 func containsUpperLetter(s string) bool {
 	for _, r := range s {
 		if unicode.IsUpper(r) {
@@ -181,6 +251,73 @@ func lastCanonicalSegment(cp string) string {
 	return ""
 }
 
+func isPlaceholderToken(label string) bool {
+	l := strings.ToLower(strings.TrimSpace(label))
+	switch l {
+	case "", "na", "n/a", "none", "null", "unknown", "tbd":
+		return true
+	default:
+		return false
+	}
+}
+
+func bestEffortLabelFromCanonicalPath(cp string) string {
+	cp = strings.TrimSpace(cp)
+	if cp == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		seg := strings.TrimSpace(parts[i])
+		if seg == "" || isPlaceholderToken(seg) {
+			continue
+		}
+		return seg
+	}
+	return ""
+}
+
+func hasUnknownGeoSegments(path string) bool {
+	p := strings.ToLower(strings.TrimSpace(path))
+	if !strings.HasPrefix(p, "/loc/") {
+		return false
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	// Strict geo shape: /loc/{country}/{admin1}/{city}
+	if len(parts) < 4 {
+		return true
+	}
+	return parts[2] == "na" || parts[3] == "na"
+}
+
+func hasUnknownJurisdiction(path string) bool {
+	p := strings.ToLower(strings.TrimSpace(path))
+	return strings.HasPrefix(p, "/org/na/") || strings.HasPrefix(p, "/gov/na/")
+}
+
+func shouldSkipRecursivePlaceholderTarget(path string) bool {
+	return hasUnknownGeoSegments(path) || hasUnknownJurisdiction(path)
+}
+
+func isSoftDeniedRelationForRecurse(sourceType, targetType models.FragmentType, sourcePath, targetPath, relationType string) bool {
+	rt := strings.TrimSpace(relationType)
+	if rt == "" {
+		return false
+	}
+	if shouldSkipRecursivePlaceholderTarget(targetPath) {
+		return true
+	}
+	if sourceType == models.FragmentTypeGeoRegion {
+		switch rt {
+		case string(models.DependencyTypeOperatesIn), string(models.DependencyTypeParticipatesIn):
+			if targetType == models.FragmentTypeMarket || strings.HasPrefix(strings.TrimSpace(targetPath), "/market/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func bestEffortDisplayLabel(label string, canonicalPath string) string {
 	label = strings.TrimSpace(label)
 	if strings.HasPrefix(canonicalPath, "/loc/") {
@@ -199,11 +336,42 @@ func bestEffortDisplayLabel(label string, canonicalPath string) string {
 		}
 	}
 	if label == "" {
-		label = lastCanonicalSegment(canonicalPath)
+		label = bestEffortLabelFromCanonicalPath(canonicalPath)
 	}
 	return bestEffortTitleCase(label)
 }
 
+func isPlaceholderDisplayLabel(label string) bool {
+	return isPlaceholderToken(label)
+}
+
+func shouldRefreshDisplayLabel(current string, canonicalPath string) bool {
+	cur := strings.TrimSpace(current)
+	cp := strings.TrimSpace(canonicalPath)
+	if cur == "" {
+		return true
+	}
+	if isPlaceholderDisplayLabel(cur) {
+		return true
+	}
+	if strings.HasPrefix(cur, "/") || strings.EqualFold(cur, cp) {
+		return true
+	}
+	if strings.HasPrefix(cp, "/loc/") {
+		lcur := strings.ToLower(cur)
+		parts := strings.Split(strings.Trim(cp, "/"), "/")
+		if len(parts) >= 4 {
+			cc := strings.ToLower(strings.TrimSpace(parts[1]))
+			admin1 := strings.ToLower(strings.TrimSpace(parts[2]))
+			city := strings.ToLower(strings.TrimSpace(parts[3]))
+			// /loc/{cc}/na/na is valid taxonomy, but never a good display label.
+			if (admin1 == "na" && city == "na") && (lcur == "na" || lcur == cc || lcur == city) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func buildDomainTitle(contractType string, canonicalPath string, facets map[string][]string) string {
 	ct := strings.ToLower(strings.TrimSpace(contractType))
@@ -809,8 +977,9 @@ func (e *ScoutEngine) getOrCreateFragmentByPath(
 		if frag.Labels == nil {
 			frag.Labels = map[string]string{}
 		}
-		if strings.TrimSpace(label) != "" && strings.TrimSpace(frag.Labels["en"]) == "" {
-			frag.Labels["en"] = strings.TrimSpace(label)
+		candidateLabel := bestEffortDisplayLabel(label, cp)
+		if shouldRefreshDisplayLabel(frag.Labels["en"], cp) && strings.TrimSpace(candidateLabel) != "" {
+			frag.Labels["en"] = strings.TrimSpace(candidateLabel)
 			updated = true
 		}
 		if strings.TrimSpace(description) != "" && strings.TrimSpace(frag.Description) == "" {
@@ -820,14 +989,13 @@ func (e *ScoutEngine) getOrCreateFragmentByPath(
 		if updated {
 			_ = e.fragmentsRepo.Update(ctx, frag)
 		}
+		e.ensureOrgGeoFallbackLink(ctx, frag, provenanceMethod, sourceID)
 		return frag, nil
 	}
 	if fragType == "" {
 		fragType = InferFragmentTypeFromCanonicalPath(cp)
 	}
-	if strings.TrimSpace(label) == "" {
-		label = bestEffortDisplayLabel("", cp)
-	}
+	label = bestEffortDisplayLabel(label, cp)
 	now := time.Now().UTC()
 	newFrag := &models.HorizonFragment{
 		TenantID:      "global",
@@ -851,7 +1019,150 @@ func (e *ScoutEngine) getOrCreateFragmentByPath(
 	if _, err := e.fragmentsRepo.Create(ctx, newFrag); err != nil {
 		return nil, err
 	}
+	e.ensureOrgGeoFallbackLink(ctx, newFrag, provenanceMethod, sourceID)
 	return newFrag, nil
+}
+
+// ensureOrgGeoFallbackLink guarantees a minimum geo anchoring edge for country-scoped organizations
+// and government bodies (/gov/{geo}/{slug}, modeled as ORGANIZATION).
+// Rule:
+// - if fragment is /org/{geo}/{slug} or /gov/{geo}/{slug}, and geo != "na"
+// - and organization has no outgoing LOCATED_IN/OPERATES_IN geo edges yet
+// then create LOCATED_IN -> /loc/{geo}/na/na (best effort).
+// Special-case:
+// - /org/int/... maps to /loc/global/na/na as the international bucket.
+func (e *ScoutEngine) ensureOrgGeoFallbackLink(ctx context.Context, frag *models.HorizonFragment, provenanceMethod, sourceID string) {
+	if e == nil || e.fragmentsRepo == nil || e.edgesRepo == nil || frag == nil {
+		return
+	}
+	if frag.Type != models.FragmentTypeOrganization {
+		return
+	}
+	orgID := strings.TrimSpace(frag.ID)
+	if orgID == "" {
+		if loaded, err := e.fragmentsRepo.GetByCanonicalPath(ctx, strings.TrimSpace(frag.CanonicalPath)); err == nil && loaded != nil {
+			orgID = strings.TrimSpace(loaded.ID)
+			frag = loaded
+		}
+	}
+	if orgID == "" {
+		return
+	}
+
+	parts := strings.Split(strings.Trim(strings.TrimSpace(frag.CanonicalPath), "/"), "/")
+	if len(parts) < 3 {
+		return
+	}
+	ns := strings.ToLower(strings.TrimSpace(parts[0]))
+	if ns != "org" && ns != "gov" {
+		return
+	}
+	if ns == "org" && len(parts) < 3 {
+		return // legacy /org/{slug} has no explicit geo token
+	}
+	geo := strings.ToLower(strings.TrimSpace(parts[1]))
+	if geo == "" || geo == "na" {
+		return
+	}
+
+	// If any geo edge already exists, do not add fallback.
+	if e.orgHasAnyGeoLocationEdge(ctx, orgID) {
+		return
+	}
+
+	geoToken := geo
+	if geoToken == "int" {
+		geoToken = "global"
+	}
+	if !taxonomy.IsRegionalGeoToken(geoToken) && !taxonomy.IsCompositeGeoToken(geoToken) && len(geoToken) != 2 {
+		return
+	}
+	targetPath := fmt.Sprintf("/loc/%s/na/na", geoToken)
+	if err := taxonomy.ValidateCanonicalPath(targetPath); err != nil {
+		return
+	}
+
+	geoFrag, err := e.getOrCreateFragmentByPath(ctx, targetPath, models.FragmentTypeGeoRegion, bestEffortGeoLabel(geoToken), "", "org_geo_fallback", sourceID)
+	if err != nil || geoFrag == nil || strings.TrimSpace(geoFrag.ID) == "" {
+		return
+	}
+	geoID := strings.TrimSpace(geoFrag.ID)
+
+	if existing, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", orgID, geoID, models.DependencyTypeLocatedIn); err == nil && existing != nil {
+		return
+	}
+	now := time.Now().UTC()
+	edge := &models.DependencyEdge{
+		TenantID:         "global",
+		SourceFragmentID: orgID,
+		TargetFragmentID: geoID,
+		Type:             models.DependencyTypeLocatedIn,
+		Properties: models.EdgeProperties{
+			Criticality:   0.45,
+			Amplification: 1.0,
+		},
+		Qualifiers: map[string]interface{}{
+			"source": "org_path_geo_fallback",
+		},
+		Provenance: models.Provenance{
+			Method:    firstNonEmpty(strings.TrimSpace(provenanceMethod), "org_geo_fallback"),
+			SourceIDs: []string{strings.TrimSpace(sourceID)},
+		},
+		Metadata: models.EdgeMetadata{
+			CreatedAt:     now,
+			LastUpdatedAt: now,
+		},
+	}
+	_, _ = e.edgesRepo.Create(ctx, edge)
+}
+
+func (e *ScoutEngine) orgHasAnyGeoLocationEdge(ctx context.Context, orgID string) bool {
+	if e == nil || e.edgesRepo == nil || strings.TrimSpace(orgID) == "" {
+		return false
+	}
+	types := []models.DependencyType{
+		models.DependencyTypeLocatedIn,
+		models.DependencyTypeOperatesIn,
+	}
+	for _, t := range types {
+		tt := t
+		edges, err := e.edgesRepo.ListBySource(ctx, "global", orgID, &tt, 5)
+		if err != nil || len(edges) == 0 {
+			continue
+		}
+		for _, edge := range edges {
+			if edge == nil || strings.TrimSpace(edge.TargetFragmentID) == "" {
+				continue
+			}
+			target, gerr := e.fragmentsRepo.Get(ctx, strings.TrimSpace(edge.TargetFragmentID))
+			if gerr != nil || target == nil {
+				continue
+			}
+			if target.Type == models.FragmentTypeGeoRegion || strings.HasPrefix(strings.TrimSpace(target.CanonicalPath), "/loc/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func bestEffortGeoLabel(token string) string {
+	t := strings.TrimSpace(strings.ToLower(token))
+	if t == "" {
+		return "Location"
+	}
+	if t == "global" {
+		return "Global"
+	}
+	if len(t) == 2 {
+		return strings.ToUpper(t)
+	}
+	s := strings.ReplaceAll(t, "-", " ")
+	s = strings.ReplaceAll(s, "_", " ")
+	if s == "" {
+		return "Location"
+	}
+	return strings.Title(strings.TrimSpace(s))
 }
 
 func normalizeEdgeConfidence(in float64) float64 {
@@ -907,15 +1218,113 @@ func (e *ScoutEngine) processHypothesisRelations(
 
 type domainContractForExpansion = pipeline.DomainContract
 
+func normalizeDomainPathForMatch(cp string) string {
+	cp = strings.TrimSpace(cp)
+	if cp == "" {
+		return ""
+	}
+	if strings.HasPrefix(cp, "/domain/") {
+		if norm, err := taxonomy.NormalizeDomainCanonicalPath(cp); err == nil && strings.TrimSpace(norm) != "" {
+			return strings.TrimSpace(norm)
+		}
+	}
+	return cp
+}
+
+func domainFacetSignature(contractType string, facets map[string][]string) string {
+	ct := strings.ToLower(strings.TrimSpace(contractType))
+	keys := make([]string, 0, len(facets))
+	for k := range facets {
+		kk := strings.ToLower(strings.TrimSpace(k))
+		if kk != "" {
+			keys = append(keys, kk)
+		}
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys)+1)
+	parts = append(parts, "ct="+ct)
+	for _, k := range keys {
+		seen := map[string]struct{}{}
+		vals := make([]string, 0, len(facets[k]))
+		for _, v := range facets[k] {
+			vv := strings.ToLower(strings.TrimSpace(v))
+			if vv == "" {
+				continue
+			}
+			if _, ok := seen[vv]; ok {
+				continue
+			}
+			seen[vv] = struct{}{}
+			vals = append(vals, vv)
+		}
+		sort.Strings(vals)
+		parts = append(parts, k+"="+strings.Join(vals, ","))
+	}
+	return strings.Join(parts, "|")
+}
+
+func domainContractQualityScore(c *domainContractForExpansion) int {
+	if c == nil {
+		return 0
+	}
+	score := 0
+	if strings.TrimSpace(c.Title) != "" {
+		score += 10
+	}
+	if strings.TrimSpace(c.Description) != "" {
+		score += 6
+	}
+	score += len(c.Facets)
+	score += len(c.FirstOrderEntities)
+	score += len(c.RelatedDomains)
+	score += len(c.AffectedDomains)
+	return score
+}
+
+func bestEffortDomainTitleFromJobState(job *models.ScoutingJob) string {
+	if job == nil || job.State == nil {
+		return ""
+	}
+	for _, key := range []string{"focus", "originalQuery", "query"} {
+		raw := parseStateString(job.State[key])
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		words := strings.Fields(raw)
+		if len(words) > 10 {
+			words = words[:10]
+		}
+		raw = strings.TrimSpace(strings.Join(words, " "))
+		if len(raw) < 4 {
+			continue
+		}
+		return bestEffortTitleCase(raw)
+	}
+	return ""
+}
+
 func (e *ScoutEngine) bestEffortFindDomainContract(job *models.ScoutingJob, domainCanonicalPath string) *domainContractForExpansion {
 	cp := strings.TrimSpace(domainCanonicalPath)
 	if job == nil || job.State == nil || cp == "" {
 		return nil
 	}
+	cpNorm := normalizeDomainPathForMatch(cp)
+	cpCT, cpFacets := parseDomainPathFacets(cpNorm)
+	cpSig := domainFacetSignature(cpCT, cpFacets)
+	matchPaths := map[string]struct{}{cpNorm: {}}
+	if st := parseStateString(job.State["targetCanonicalPath"]); st != "" {
+		matchPaths[normalizeDomainPathForMatch(st)] = struct{}{}
+	}
+	if st := parseStateString(job.State["aliasCanonicalPath"]); st != "" {
+		matchPaths[normalizeDomainPathForMatch(st)] = struct{}{}
+	}
+
 	raw, ok := job.State["domains"]
 	if !ok || raw == nil {
 		return nil
 	}
+	var bySignature *domainContractForExpansion
 
 	// NOTE: job.State may contain:
 	// - []interface{} (when loaded from Firestore/JSON)
@@ -925,10 +1334,7 @@ func (e *ScoutEngine) bestEffortFindDomainContract(job *models.ScoutingJob, doma
 	switch t := raw.(type) {
 	case []agents.DomainResolution:
 		for _, d := range t {
-			if strings.TrimSpace(d.CanonicalPath) != cp {
-				continue
-			}
-			return &domainContractForExpansion{
+			c := &domainContractForExpansion{
 				CanonicalPath:      strings.TrimSpace(d.CanonicalPath),
 				ContractType:       strings.TrimSpace(d.ContractType),
 				Title:              strings.TrimSpace(d.Title),
@@ -938,8 +1344,18 @@ func (e *ScoutEngine) bestEffortFindDomainContract(job *models.ScoutingJob, doma
 				RelatedDomains:     append([]string(nil), d.RelatedDomains...),
 				AffectedDomains:    append([]string(nil), d.AffectedDomains...),
 			}
+			cn := normalizeDomainPathForMatch(c.CanonicalPath)
+			if _, ok := matchPaths[cn]; ok {
+				return c
+			}
+			ct, facets := parseDomainPathFacets(cn)
+			if cpSig != "" && domainFacetSignature(ct, facets) == cpSig {
+				if bySignature == nil || domainContractQualityScore(c) > domainContractQualityScore(bySignature) {
+					bySignature = c
+				}
+			}
 		}
-		return nil
+		return bySignature
 	case []map[string]interface{}:
 		list := make([]interface{}, 0, len(t))
 		for _, m := range t {
@@ -976,9 +1392,6 @@ func (e *ScoutEngine) bestEffortFindDomainContract(job *models.ScoutingJob, doma
 			continue
 		}
 		v := getStringField(m, "canonicalPath", "CanonicalPath")
-		if strings.TrimSpace(v) != cp {
-			continue
-		}
 		out := &domainContractForExpansion{
 			CanonicalPath: strings.TrimSpace(v),
 		}
@@ -1009,9 +1422,18 @@ func (e *ScoutEngine) bestEffortFindDomainContract(job *models.ScoutingJob, doma
 		if len(out.AffectedDomains) == 0 {
 			out.AffectedDomains = parseStateStringSlice(m["AffectedDomains"])
 		}
-		return out
+		cn := normalizeDomainPathForMatch(out.CanonicalPath)
+		if _, ok := matchPaths[cn]; ok {
+			return out
+		}
+		ct, facets := parseDomainPathFacets(cn)
+		if cpSig != "" && domainFacetSignature(ct, facets) == cpSig {
+			if bySignature == nil || domainContractQualityScore(out) > domainContractQualityScore(bySignature) {
+				bySignature = out
+			}
+		}
 	}
-	return nil
+	return bySignature
 }
 
 func parseDomainPathFacets(domainCP string) (contractType string, facets map[string][]string) {
@@ -1102,13 +1524,20 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		contractType = strings.TrimSpace(parsedCT)
 	}
 
-	// Better default title: use contractType + facets rather than the last path token (which is often just a geo code).
-	if title == "" {
-		facetsForTitle := parsedFacets
-		if contract != nil && contract.Facets != nil && len(contract.Facets) > 0 {
-			facetsForTitle = contract.Facets
+	// Prefer intent-derived human title from job state over generic contractType auto-title.
+	facetsForTitle := parsedFacets
+	if contract != nil && contract.Facets != nil && len(contract.Facets) > 0 {
+		facetsForTitle = contract.Facets
+	}
+	autoTitle := buildDomainTitle(contractType, domainCP, facetsForTitle)
+	if focusTitle := bestEffortDomainTitleFromJobState(job); focusTitle != "" {
+		if strings.TrimSpace(title) == "" || strings.EqualFold(strings.TrimSpace(title), strings.TrimSpace(autoTitle)) {
+			title = focusTitle
 		}
-		title = buildDomainTitle(contractType, domainCP, facetsForTitle)
+	}
+	// Final fallback: deterministic contractType/facets title.
+	if title == "" {
+		title = autoTitle
 	}
 
 	if desc == "" {
@@ -1284,7 +1713,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				}
 			}
 		}
-		enrichedFragment, newRelations, newChains, _, err := e.researchAgent.EnrichFragment(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, "", originalQuery, nil, existingEntities)
+		enrichedFragment, newRelations, newChains, err := e.researchAgent.EnrichFragment(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, "", originalQuery, nil, existingEntities)
 		_ = enrichedFragment
 		if err != nil {
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> domain research failed: %v", err))
@@ -1773,12 +2202,18 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	if contractType == "" {
 		contractType = strings.TrimSpace(parsedCT)
 	}
-	if title == "" {
-		facetsForTitle := parsedFacets
-		if contract != nil && contract.Facets != nil && len(contract.Facets) > 0 {
-			facetsForTitle = contract.Facets
+	facetsForTitle := parsedFacets
+	if contract != nil && contract.Facets != nil && len(contract.Facets) > 0 {
+		facetsForTitle = contract.Facets
+	}
+	autoTitle := buildDomainTitle(contractType, domainCP, facetsForTitle)
+	if focusTitle := bestEffortDomainTitleFromJobState(job); focusTitle != "" {
+		if strings.TrimSpace(title) == "" || strings.EqualFold(strings.TrimSpace(title), strings.TrimSpace(autoTitle)) {
+			title = focusTitle
 		}
-		title = buildDomainTitle(contractType, domainCP, facetsForTitle)
+	}
+	if title == "" {
+		title = autoTitle
 	}
 	if desc == "" {
 		desc = "Executable knowledge contract for strategic overlay."
@@ -1982,6 +2417,9 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	}
 	for _, mech := range overlayResult.Mechanisms {
 		cp := strings.TrimSpace(mech.CanonicalPath)
+		if fixed, changed := normalizeStrategicMechanismPath(cp, mech.Title, mech.Description); changed {
+			cp = fixed
+		}
 		if cp == "" || taxonomy.ValidateCanonicalPath(cp) != nil {
 			continue
 		}
@@ -2287,11 +2725,17 @@ func (e *ScoutEngine) processRelationsInternal(
 		maxChildren = 0
 	}
 	scheduledChildren := map[string]struct{}{}
+	scheduledIdentityChildren := map[string]struct{}{}
+	hasScheduledIdentity := func(k string) bool {
+		_, ok := scheduledIdentityChildren[k]
+		return ok
+	}
 	scheduledCount := 0
 
 	// Best-effort: prefetch active (pending/running) scout jobs for this project/lens,
 	// so we can avoid enqueueing duplicate child jobs for the same canonicalPath.
-	activeJobByPath := map[string]string{} // canonicalPath -> jobId
+	activeJobByPath := map[string]string{}     // canonicalPath -> jobId
+	activeJobByIdentity := map[string]string{} // targetIdentityKey -> jobId
 	if e != nil && e.scoutingJobsRepo != nil && job != nil && strings.TrimSpace(job.TenantID) != "" && strings.TrimSpace(job.ProjectID) != "" {
 		lensID := strings.TrimSpace(job.LensID)
 		if lensID == "" && job.State != nil {
@@ -2313,6 +2757,16 @@ func (e *ScoutEngine) processRelationsInternal(
 				}
 				if _, ok := activeJobByPath[p]; !ok {
 					activeJobByPath[p] = j.ID
+				}
+				if j.State != nil {
+					if v, ok := j.State["targetIdentityKey"].(string); ok {
+						idk := strings.TrimSpace(v)
+						if idk != "" {
+							if _, exists := activeJobByIdentity[idk]; !exists {
+								activeJobByIdentity[idk] = j.ID
+							}
+						}
+					}
 				}
 			}
 		}
@@ -2351,6 +2805,9 @@ func (e *ScoutEngine) processRelationsInternal(
 	shouldRecurse := func(relType string, conf float64, targetPath string, targetType models.FragmentType) bool {
 		rt := strings.TrimSpace(relType)
 		if rt == "" {
+			return false
+		}
+		if sourceFragment != nil && isSoftDeniedRelationForRecurse(sourceFragment.Type, targetType, sourceFragment.CanonicalPath, targetPath, rt) {
 			return false
 		}
 		if conf > 0 && conf < 0.55 {
@@ -2429,15 +2886,23 @@ func (e *ScoutEngine) processRelationsInternal(
 		targetType := targetTypeHint
 
 		// 1. Determine target canonical path
-		targetPath, err := e.resolveCanonicalPath(ctx, rel)
-		if err != nil {
-			fmt.Printf("Canonicalization failed for relation target=%q: %v\n", rel.TargetName, err)
-			continue
-		}
-		// Align targetType with canonical path prefix (auto-fix mismatches).
-		if inferred := InferFragmentTypeFromCanonicalPath(targetPath); inferred != "" && inferred != targetType {
-			targetType = inferred
-		}
+			targetPath, err := e.resolveCanonicalPath(ctx, rel)
+			if err != nil {
+				fmt.Printf("Canonicalization failed for relation target=%q: %v\n", rel.TargetName, err)
+				continue
+			}
+			// Align targetType with canonical path prefix (auto-fix mismatches).
+			if inferred := InferFragmentTypeFromCanonicalPath(targetPath); inferred != "" && inferred != targetType {
+				targetType = inferred
+			}
+			// Early strictification for GEO paths to avoid creating legacy non-strict nodes
+			// like /loc/{cc}/{admin1}. Reuse shared canonicalization helper.
+			if targetType == models.FragmentTypeGeoRegion {
+				if norm := normalizeGeoPathToStrict(targetPath); norm != "" && norm != targetPath {
+					targetPath = norm
+				}
+			}
+			targetIdentityKey := buildRelationTargetIdentityKey(rel, targetPath, targetType)
 
 		// 2. Find or Create Target Fragment
 		//
@@ -2472,6 +2937,43 @@ func (e *ScoutEngine) processRelationsInternal(
 				} else {
 					fmt.Printf("[ScoutEngine] Grounding match: path %q → existing fragmentId=%s\n",
 						targetPath, grounded.ID)
+				}
+			}
+		}
+		targetIdentityKey = buildRelationTargetIdentityKey(rel, targetPath, targetType)
+
+		// Cascade-level identity memory: if this identity was already resolved in this cascade,
+		// reuse that fragment/path even when current relation emits a different canonical path.
+		if targetFragment == nil && e != nil && e.cascadeEntityRegistry != nil && job != nil && targetIdentityKey != "" && cascadeID != "" {
+			rec, rerr := e.cascadeEntityRegistry.Touch(
+				ctx,
+				job.TenantID,
+				job.ProjectID,
+				strings.TrimSpace(job.LensID),
+				cascadeID,
+				targetIdentityKey,
+				targetPath,
+				job.ID,
+			)
+			if rerr == nil && rec != nil {
+				boundID := strings.TrimSpace(rec.FragmentID)
+				boundPath := strings.TrimSpace(rec.CanonicalPath)
+				if boundID != "" {
+					if existing, gerr := e.fragmentsRepo.Get(ctx, boundID); gerr == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
+						targetFragment = existing
+						targetID = existing.ID
+						if cp := strings.TrimSpace(existing.CanonicalPath); cp != "" && cp != targetPath {
+							e.recordDeterministicRedirect(ctx, targetPath, cp, "cascade_identity_registry")
+							targetPath = cp
+						}
+					}
+				} else if boundPath != "" && boundPath != targetPath {
+					if existing, gerr := e.fragmentsRepo.GetByCanonicalPath(ctx, boundPath); gerr == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
+						targetFragment = existing
+						targetID = existing.ID
+						e.recordDeterministicRedirect(ctx, targetPath, boundPath, "cascade_identity_registry")
+						targetPath = boundPath
+					}
 				}
 			}
 		}
@@ -2640,6 +3142,9 @@ func (e *ScoutEngine) processRelationsInternal(
 					// skip recursive expansion
 				} else if _, ok := scheduledChildren[targetPath]; ok {
 					// already scheduled from another relation in the same job
+				} else if targetIdentityKey != "" && hasScheduledIdentity(targetIdentityKey) {
+					// already scheduled by identity from another relation in the same job
+					continue
 				} else if !shouldRecurse(rel.RelationType, rel.Confidence, targetPath, targetType) {
 					// relation type / confidence not eligible for recursion
 				} else {
@@ -2685,6 +3190,15 @@ func (e *ScoutEngine) processRelationsInternal(
 							fmt.Printf("[ScoutEngine] Active scouting job already exists for %s (jobId=%s). Skipping duplicate.\n",
 								targetPath, existingJobID)
 							scheduledChildren[targetPath] = struct{}{}
+							shouldSkipJob = true
+						}
+					}
+					if !shouldSkipJob && targetIdentityKey != "" {
+						if existingJobID, ok := activeJobByIdentity[targetIdentityKey]; ok && strings.TrimSpace(existingJobID) != "" {
+							fmt.Printf("[ScoutEngine] Active scouting job already exists for identity %s (jobId=%s). Skipping duplicate for path=%s.\n",
+								targetIdentityKey, existingJobID, targetPath)
+							scheduledChildren[targetPath] = struct{}{}
+							scheduledIdentityChildren[targetIdentityKey] = struct{}{}
 							shouldSkipJob = true
 						}
 					}
@@ -2739,6 +3253,9 @@ func (e *ScoutEngine) processRelationsInternal(
 					}
 
 					scheduledChildren[targetPath] = struct{}{}
+					if targetIdentityKey != "" {
+						scheduledIdentityChildren[targetIdentityKey] = struct{}{}
+					}
 					scheduledCount++
 
 					agentID := job.AgentID
@@ -2753,6 +3270,9 @@ func (e *ScoutEngine) processRelationsInternal(
 						"recursionDepth":      float64(currentDepth + 1),
 						"maxRecursionDepth":   float64(maxDepth),
 						"parentJobId":         job.ID,
+					}
+					if targetIdentityKey != "" {
+						childState["targetIdentityKey"] = targetIdentityKey
 					}
 					// Propagate lens id (critical for assembly tracking, budgets, and UI filtering).
 					if job != nil {
@@ -2886,11 +3406,11 @@ func (e *ScoutEngine) processRelationsInternal(
 				}
 			}
 
-	} else {
-		targetID = targetFragment.ID
-		if targetFragment.Type != "" {
-			targetType = targetFragment.Type
-		}
+		} else {
+			targetID = targetFragment.ID
+			if targetFragment.Type != "" {
+				targetType = targetFragment.Type
+			}
 
 			// If fragment exists but is not verified (or never verified), schedule scouting to enrich it.
 			// This is what makes the graph "expand" beyond already-known nodes (e.g., Panasonic) when needed.
@@ -2959,6 +3479,8 @@ func (e *ScoutEngine) processRelationsInternal(
 					// skip recursive expansion
 				} else if _, ok := scheduledChildren[targetPath]; ok {
 					// already scheduled from another relation in the same job
+				} else if targetIdentityKey != "" && hasScheduledIdentity(targetIdentityKey) {
+					continue
 				} else if !shouldRecurse(rel.RelationType, rel.Confidence, targetPath, targetType) {
 					// relation type / confidence not eligible for recursion
 				} else {
@@ -2980,21 +3502,21 @@ func (e *ScoutEngine) processRelationsInternal(
 						shouldSkipJob = true
 					}
 
-				// CRITICAL: Skip if target fragment is already verified (regardless of edge existence)
-				// This prevents re-scouting entities that were just processed
-				if !shouldSkipJob && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
-					trace.Log(ctx, "scout_decompose", "child_job.skip.target_verified", map[string]any{
-						"tenantId":            strings.TrimSpace(job.TenantID),
-						"projectId":           strings.TrimSpace(job.ProjectID),
-						"lensId":              strings.TrimSpace(job.LensID),
-						"jobId":               strings.TrimSpace(job.ID),
-						"targetCanonicalPath": strings.TrimSpace(targetPath),
-						"epistemicStatus":     string(targetFragment.Metadata.EpistemicStatus),
-					})
-					fmt.Printf("[ScoutEngine] Target fragment already verified: %s (status=%s). Skipping scouting job.\n",
-						targetPath, targetFragment.Metadata.EpistemicStatus)
-					shouldSkipJob = true
-				}
+					// CRITICAL: Skip if target fragment is already verified (regardless of edge existence)
+					// This prevents re-scouting entities that were just processed
+					if !shouldSkipJob && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
+						trace.Log(ctx, "scout_decompose", "child_job.skip.target_verified", map[string]any{
+							"tenantId":            strings.TrimSpace(job.TenantID),
+							"projectId":           strings.TrimSpace(job.ProjectID),
+							"lensId":              strings.TrimSpace(job.LensID),
+							"jobId":               strings.TrimSpace(job.ID),
+							"targetCanonicalPath": strings.TrimSpace(targetPath),
+							"epistemicStatus":     string(targetFragment.Metadata.EpistemicStatus),
+						})
+						fmt.Printf("[ScoutEngine] Target fragment already verified: %s (status=%s). Skipping scouting job.\n",
+							targetPath, targetFragment.Metadata.EpistemicStatus)
+						shouldSkipJob = true
+					}
 
 					// Check if edge already exists and target fragment is verified
 					if !shouldSkipJob {
@@ -3027,12 +3549,31 @@ func (e *ScoutEngine) processRelationsInternal(
 							shouldSkipJob = true
 						}
 					}
+					if !shouldSkipJob && targetIdentityKey != "" {
+						if existingJobID, ok := activeJobByIdentity[targetIdentityKey]; ok && strings.TrimSpace(existingJobID) != "" {
+							trace.Log(ctx, "scout_decompose", "child_job.skip.active_identity_exists", map[string]any{
+								"tenantId":            strings.TrimSpace(job.TenantID),
+								"projectId":           strings.TrimSpace(job.ProjectID),
+								"lensId":              strings.TrimSpace(job.LensID),
+								"jobId":               strings.TrimSpace(job.ID),
+								"targetIdentityKey":   targetIdentityKey,
+								"targetCanonicalPath": strings.TrimSpace(targetPath),
+								"existingJobId":       strings.TrimSpace(existingJobID),
+							})
+							scheduledChildren[targetPath] = struct{}{}
+							scheduledIdentityChildren[targetIdentityKey] = struct{}{}
+							shouldSkipJob = true
+						}
+					}
 
 					if shouldSkipJob {
 						continue // Skip to next relation
 					}
 
 					scheduledChildren[targetPath] = struct{}{}
+					if targetIdentityKey != "" {
+						scheduledIdentityChildren[targetIdentityKey] = struct{}{}
+					}
 					scheduledCount++
 
 					agentID := job.AgentID
@@ -3047,6 +3588,9 @@ func (e *ScoutEngine) processRelationsInternal(
 						"recursionDepth":      float64(currentDepth + 1),
 						"maxRecursionDepth":   float64(maxDepth),
 						"parentJobId":         job.ID,
+					}
+					if targetIdentityKey != "" {
+						childState["targetIdentityKey"] = targetIdentityKey
 					}
 					if job != nil {
 						if strings.TrimSpace(job.LensID) != "" {
@@ -3114,6 +3658,28 @@ func (e *ScoutEngine) processRelationsInternal(
 							})
 						}
 					}
+				}
+			}
+		}
+
+		if targetIdentityKey == "" && targetFragment != nil {
+			targetIdentityKey = buildFragmentIdentityKey(targetFragment)
+		}
+		if targetFragment != nil && targetIdentityKey != "" && e != nil && e.cascadeEntityRegistry != nil && job != nil && cascadeID != "" {
+			if rec, berr := e.cascadeEntityRegistry.BindFragment(
+				ctx,
+				job.TenantID,
+				job.ProjectID,
+				strings.TrimSpace(job.LensID),
+				cascadeID,
+				targetIdentityKey,
+				targetFragment.ID,
+				strings.TrimSpace(targetFragment.CanonicalPath),
+				job.ID,
+			); berr == nil && rec != nil {
+				if bound := strings.TrimSpace(rec.CanonicalPath); bound != "" && bound != strings.TrimSpace(targetPath) {
+					e.recordDeterministicRedirect(ctx, targetPath, bound, "cascade_identity_registry_bind")
+					targetPath = bound
 				}
 			}
 		}
@@ -3335,6 +3901,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
 		}
 
+		relConfidence := rel.Confidence
 		// Policy: direction validation and reversal (enforced for known edge types).
 		// Use unified ValidationPolicy if available, otherwise fallback to hardcoded rules
 		if e.validationPolicy != nil && sourceFragment != nil {
@@ -3362,30 +3929,19 @@ func (e *ScoutEngine) processRelationsInternal(
 				fmt.Printf("%s ValidationPolicy decision: action=%s, path=%s, confidence=%.2f\n",
 					logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
 
-				switch decision.Action {
-				case "reject":
-					// Don't block - treat as warning/penalty instead
-					reason, _ := decision.Params["reason"].(string)
-					fmt.Printf("%s WARNING: ValidationPolicy would reject edge (non-blocking): %s\n", logPrefix, reason)
-					fmt.Printf("%s Applying penalty instead of blocking - edge will be created with low confidence\n", logPrefix)
-					// Apply penalty to edge confidence instead of blocking
-					// Continue processing - edge will be created but with lower confidence
-				case "reverse":
-					shouldReverse, _ := decision.Params["shouldReverse"].(bool)
-					if shouldReverse {
-						fmt.Printf("%s REVERSING edge direction by ValidationPolicy\n", logPrefix)
+				policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
+					Reverse: func() {
 						edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
 						directionChanged = true
 						edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
-					}
-				case "penalty":
-					penalty, _ := decision.Params["penalty"].(float64)
-					reason, _ := decision.Params["reason"].(string)
-					fmt.Printf("%s PENALTY by ValidationPolicy: %.2f, reason: %s\n", logPrefix, penalty, reason)
-					// Penalty will be applied to edge.Properties.Criticality later
-				case "allow":
-					fmt.Printf("%s ALLOWED by ValidationPolicy\n", logPrefix)
-				}
+					},
+					ApplyPenalty: func(penalty float64, _ string) {
+						relConfidence = relConfidence * (1.0 - penalty)
+						if relConfidence < 0 {
+							relConfidence = 0
+						}
+					},
+				})
 			}
 		} else if sourceFragment != nil {
 			// Fallback to hardcoded validation
@@ -3461,7 +4017,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			TargetFragmentID: edgeTargetID,
 			Type:             edgeType,
 			Properties: models.EdgeProperties{
-				Criticality:   normalizeEdgeConfidence(rel.Confidence),
+				Criticality:   normalizeEdgeConfidence(relConfidence),
 				Amplification: 1.0,
 				LatencyHours:  24,
 			},
@@ -3469,7 +4025,7 @@ func (e *ScoutEngine) processRelationsInternal(
 				"reason":                 strings.TrimSpace(rel.Reason),
 				"rawRelationType":        rawRelationType,
 				"normalizedRelationType": normalizedRelationType,
-				"rawConfidence":          rel.Confidence,
+				"rawConfidence":          relConfidence,
 				"targetName":             strings.TrimSpace(rel.TargetName),
 				"targetCanonicalPath":    strings.TrimSpace(resolvedTargetPath),
 				"sourceCanonicalPath":    strings.TrimSpace(resolvedSourcePath),
@@ -3520,6 +4076,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			edge.Qualifiers["canonicalizedGovRegulatesSwap"] = true
 			edge.Qualifiers["govRegulatesSwapReason"] = govRegulatesSwapReason
 		}
+		applyBestEffortEdgeEnrichment(edge)
 
 		// Check if edge already exists to prevent duplicates (idempotency)
 		if e.edgesRepo != nil {
@@ -3541,7 +4098,7 @@ func (e *ScoutEngine) processRelationsInternal(
 				strings.TrimSpace(targetPath),
 				string(edgeType),
 				edge.Properties.Criticality,
-				rel.Confidence,
+				relConfidence,
 				strings.TrimSpace(rel.RelationType),
 				err,
 			)
@@ -3652,7 +4209,7 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 				}
 			}
 		}
-		enrichedFrag, newRelations, _, _, err := e.researchAgent.EnrichFragment(
+		enrichedFrag, newRelations, _, err := e.researchAgent.EnrichFragment(
 			researchCtx,
 			frag,
 			missing,
@@ -4031,6 +4588,7 @@ func (e *ScoutEngine) processSupplyChains(
 			}
 			frag.ID = id
 			pathToID[frag.CanonicalPath] = id
+			e.ensureOrgGeoFallbackLink(ctx, frag, "scout_supply_chain", job.ID)
 			createdFrags++
 			if createdFrags <= previewLimit {
 				msg := fmt.Sprintf("[SupplyChainFragmentCreate] OK canonicalPath=%s id=%s type=%s", frag.CanonicalPath, id, frag.Type)
@@ -4039,6 +4597,7 @@ func (e *ScoutEngine) processSupplyChains(
 		} else {
 			// Fragment exists, store ID for edge creation
 			pathToID[frag.CanonicalPath] = existing.ID
+			e.ensureOrgGeoFallbackLink(ctx, existing, "scout_supply_chain", job.ID)
 
 			// Optionally update labels/identifiers if new info
 			if existing.Labels == nil {
@@ -4193,25 +4752,28 @@ func (e *ScoutEngine) processSupplyChains(
 				Fragment: nil,
 			})
 			if derr == nil {
-				switch decision.Action {
-				case "reject":
-					// Non-blocking: apply penalty to criticality to de-prioritize doubtful edges.
-					edgeCriticality = edgeCriticality * 0.35
-					edgePenalized++
-					msg := fmt.Sprintf("[SupplyChainPolicy] PENALTY action=reject edge=%s -[%s]-> %s path=%s conf=%.3f->%.3f",
-						chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, decision.DecisionPath, normalizeEdgeConfidence(chainEdge.Confidence), edgeCriticality)
-					e.logLine(ctx, job, "warn", msg)
-				case "reverse":
-					shouldReverse, _ := decision.Params["shouldReverse"].(bool)
-					if shouldReverse {
+				logPrefix := "[SupplyChainPolicy]"
+				policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
+					Reverse: func() {
 						sourceID, targetID = targetID, sourceID
 						directionChanged = true
 						edgeReversed++
-						msg := fmt.Sprintf("[SupplyChainPolicy] REVERSE edge=%s -[%s]-> %s path=%s",
-							chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, decision.DecisionPath)
+						msg := fmt.Sprintf("%s REVERSE edge=%s -[%s]-> %s path=%s",
+							logPrefix, chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, decision.DecisionPath)
 						e.logLine(ctx, job, "info", msg)
-					}
-				}
+					},
+					ApplyPenalty: func(penalty float64, _ string) {
+						before := edgeCriticality
+						edgeCriticality = edgeCriticality * (1.0 - penalty)
+						edgePenalized++
+						msg := fmt.Sprintf("%s PENALTY edge=%s -[%s]-> %s path=%s conf=%.3f->%.3f",
+							logPrefix, chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, decision.DecisionPath, before, edgeCriticality)
+						e.logLine(ctx, job, "warn", msg)
+					},
+					Warn: func(msg string) {
+						e.logLine(ctx, job, "warn", fmt.Sprintf("%s %s", logPrefix, msg))
+					},
+				})
 			} else {
 				msg := fmt.Sprintf("[SupplyChainPolicy] ERROR validationPolicy err=%v", derr)
 				e.logLine(ctx, job, "warn", msg)
@@ -4255,6 +4817,7 @@ func (e *ScoutEngine) processSupplyChains(
 			edge.Qualifiers["normalizedDirection"] = true
 			edge.Qualifiers["normalizedEdgeType"] = string(edgeType)
 		}
+		applyBestEffortEdgeEnrichment(edge)
 
 		if id, createErr := e.edgesRepo.Create(ctx, edge); createErr != nil {
 			edgeCreateErrors++
@@ -4410,7 +4973,8 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 	}
 
 	// Best-effort: prefetch active (pending/running) scout jobs for this project/lens
-	activeJobByPath := map[string]string{} // canonicalPath -> jobId
+	activeJobByPath := map[string]string{}     // canonicalPath -> jobId
+	activeJobByIdentity := map[string]string{} // targetIdentityKey -> jobId
 	{
 		lensID := strings.TrimSpace(job.LensID)
 		if lensID == "" {
@@ -4430,6 +4994,16 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 				}
 				if _, ok := activeJobByPath[p]; !ok {
 					activeJobByPath[p] = j.ID
+				}
+				if j.State != nil {
+					if v, ok := j.State["targetIdentityKey"].(string); ok {
+						idk := strings.TrimSpace(v)
+						if idk != "" {
+							if _, exists := activeJobByIdentity[idk]; !exists {
+								activeJobByIdentity[idk] = j.ID
+							}
+						}
+					}
 				}
 			}
 		}
@@ -4494,11 +5068,13 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 
 	scheduled := 0
 	scheduledChildren := map[string]struct{}{}
+	scheduledIdentityChildren := map[string]struct{}{}
 	skippedActive := 0
 	skippedMissingFrag := 0
 	skippedVerified := 0
 	skippedDup := 0
 	skippedVisited := 0
+	skippedPlaceholder := 0
 
 	cascadeID := ""
 	if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
@@ -4510,6 +5086,10 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 	for _, targetPath := range candidates {
 		if scheduled >= maxChildren {
 			break
+		}
+		if shouldSkipRecursivePlaceholderTarget(targetPath) {
+			skippedPlaceholder++
+			continue
 		}
 		if _, ok := scheduledChildren[targetPath]; ok {
 			skippedDup++
@@ -4525,6 +5105,17 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 			// If the fragment isn't there for some reason, skip; supplyChains materialization should have created it.
 			skippedMissingFrag++
 			continue
+		}
+		targetIdentityKey := buildFragmentIdentityKey(frag)
+		if targetIdentityKey != "" {
+			if _, ok := scheduledIdentityChildren[targetIdentityKey]; ok {
+				skippedDup++
+				continue
+			}
+			if existingJobID, ok := activeJobByIdentity[targetIdentityKey]; ok && strings.TrimSpace(existingJobID) != "" {
+				skippedActive++
+				continue
+			}
 		}
 
 		// Skip if already verified (consistent with relation-driven recursion)
@@ -4553,6 +5144,9 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 		}
 
 		scheduledChildren[targetPath] = struct{}{}
+		if targetIdentityKey != "" {
+			scheduledIdentityChildren[targetIdentityKey] = struct{}{}
+		}
 		scheduled++
 
 		agentID := job.AgentID
@@ -4567,6 +5161,9 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 			"recursionDepth":      float64(currentDepth + 1),
 			"maxRecursionDepth":   float64(maxDepth),
 			"parentJobId":         job.ID,
+		}
+		if targetIdentityKey != "" {
+			childState["targetIdentityKey"] = targetIdentityKey
 		}
 		// Propagate lens id
 		if strings.TrimSpace(job.LensID) != "" {
@@ -4644,8 +5241,8 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 	}
 
 	if scheduled > 0 {
-		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=%d candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d) depth=%d/%d cap=%d",
-			scheduled, len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, currentDepth, maxDepth, maxChildren)
+		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=%d candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d placeholder=%d) depth=%d/%d cap=%d",
+			scheduled, len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, skippedPlaceholder, currentDepth, maxDepth, maxChildren)
 		fmt.Printf("%s\n", msg)
 		e.logLine(ctx, job, "info", msg)
 		trace.Log(ctx, "SupplyChain", "SupplyChain.schedule.children", map[string]any{
@@ -4660,13 +5257,14 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 			"skippedMissingN":  skippedMissingFrag,
 			"skippedDupN":      skippedDup,
 			"skippedVisitedN":  skippedVisited,
+			"skippedPlaceN":    skippedPlaceholder,
 			"depth":            currentDepth,
 			"maxDepth":         maxDepth,
 			"cap":              maxChildren,
 		})
 	} else {
-		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=0 candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d) depth=%d/%d cap=%d",
-			len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, currentDepth, maxDepth, maxChildren)
+		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=0 candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d placeholder=%d) depth=%d/%d cap=%d",
+			len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, skippedPlaceholder, currentDepth, maxDepth, maxChildren)
 		fmt.Printf("%s\n", msg)
 		e.logLine(ctx, job, "info", msg)
 	}
@@ -4753,14 +5351,14 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 		"innovation-map":       true,
 		"ip-landscape":         true,
 		// Regulatory
-		"regulatory-landscape": true,
-		"compliance-map":       true,
-	"policy-and-regulation": true,
-	"regulatory-impact":     true,
-	"compliance-landscape":  true,
-	"security-and-compliance": true,
-	"licensing-requirements":  true,
-	"esg-landscape":           true,
+		"regulatory-landscape":    true,
+		"compliance-map":          true,
+		"policy-and-regulation":   true,
+		"regulatory-impact":       true,
+		"compliance-landscape":    true,
+		"security-and-compliance": true,
+		"licensing-requirements":  true,
+		"esg-landscape":           true,
 		// Ecosystem mapping (general)
 		"ecosystem-mapping": true,
 		// Power dynamics (explicit)
@@ -4825,9 +5423,9 @@ func (e *ScoutEngine) triggerPhase2StrategicOverlay(
 		// Legacy routing flags (kept temporarily):
 		"domainOverlayMode": true,
 		"phase2Overlay":     true,
-		"phase1JobId":         phase1Job.ID,
-		"trigger":             "auto.strategic_projection.after_base_enrichment",
-		"triggerLegacy":       "auto.phase2.after_domain_expansion",
+		"phase1JobId":       phase1Job.ID,
+		"trigger":           "auto.strategic_projection.after_base_enrichment",
+		"triggerLegacy":     "auto.phase2.after_domain_expansion",
 	}
 	if correlationID != "" {
 		state["correlationId"] = correlationID

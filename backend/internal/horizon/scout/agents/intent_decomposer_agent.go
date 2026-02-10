@@ -222,7 +222,8 @@ Choose relationType to match this direction:
 - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
 - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
 - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
-- PRODUCES: source produces target (target is a product).
+- PRODUCES: source produces target (source MUST be ORGANIZATION/FACILITY/DEPOSIT; target is a PRODUCT).
+  For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO (NOT PRODUCES).
 - REGULATES: source regulates target (source is typically a government/agency org).
 - COMPETES_WITH / INFLUENCES: as labeled.
 - GATEKEEPS_DECISION: source (ORG/GOV/COMMUNITY) gatekeeps target (DECISION_POINT).
@@ -350,7 +351,8 @@ RULES:
 - EDGE DIRECTION VALIDATION RULES (edges violating these will be REJECTED or REVERSED):
   - REGULATES: source MUST be ORGANIZATION (only orgs can regulate)
   - OWNS: source MUST be ORGANIZATION or PERSON (only orgs/persons can own)
-  - PRODUCES: source MUST be ORGANIZATION or FACILITY (only orgs/facilities can produce)
+  - PRODUCES: source MUST be ORGANIZATION or FACILITY or DEPOSIT (producer actor/resource), target MUST be PRODUCT
+    - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO
   - LOCATED_IN: target MUST be GEO_REGION
   - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
   - GATEKEEPS_DECISION: source MUST be ORGANIZATION or GOV or COMMUNITY, target MUST be DECISION_POINT

@@ -30,8 +30,23 @@ func sanitizeIntentForLensCreation(in *agents.IntentResolution) *agents.IntentRe
 
 	// Domains: keep only valid /domain/v1/... paths (taxonomy validated).
 	if len(out.Domains) > 0 {
-		seen := map[string]struct{}{}
-		domains := make([]agents.DomainResolution, 0, len(out.Domains))
+		bestByPath := map[string]agents.DomainResolution{}
+		order := make([]string, 0, len(out.Domains))
+		domainScore := func(d agents.DomainResolution) int {
+			score := 0
+			if strings.TrimSpace(d.Title) != "" {
+				score += 8
+			}
+			if strings.TrimSpace(d.Description) != "" {
+				score += 4
+			}
+			score += len(d.FirstOrderEntities)
+			score += len(d.Projections)
+			score += len(d.RelatedDomains)
+			score += len(d.AffectedDomains)
+			score += len(d.Facets)
+			return score
+		}
 		for _, d := range out.Domains {
 			cp := strings.TrimSpace(d.CanonicalPath)
 			if cp == "" || !strings.HasPrefix(cp, "/domain/") {
@@ -43,10 +58,6 @@ func sanitizeIntentForLensCreation(in *agents.IntentResolution) *agents.IntentRe
 			if norm, nerr := taxonomy.NormalizeDomainCanonicalPath(cp); nerr == nil && strings.TrimSpace(norm) != "" {
 				cp = norm
 			}
-			if _, ok := seen[cp]; ok {
-				continue
-			}
-			seen[cp] = struct{}{}
 			d.CanonicalPath = cp
 			d.ContractType = strings.TrimSpace(d.ContractType)
 			d.Title = strings.TrimSpace(d.Title)
@@ -56,7 +67,20 @@ func sanitizeIntentForLensCreation(in *agents.IntentResolution) *agents.IntentRe
 			d.RelatedDomains = dedupStrings(trimStrings(d.RelatedDomains))
 			d.AffectedDomains = dedupStrings(trimStrings(d.AffectedDomains))
 			d.FirstOrderEntities = dedupStrings(trimStrings(d.FirstOrderEntities))
-			domains = append(domains, d)
+			if prev, ok := bestByPath[cp]; ok {
+				if domainScore(d) > domainScore(prev) {
+					bestByPath[cp] = d
+				}
+				continue
+			}
+			order = append(order, cp)
+			bestByPath[cp] = d
+		}
+		domains := make([]agents.DomainResolution, 0, len(order))
+		for _, cp := range order {
+			if d, ok := bestByPath[cp]; ok {
+				domains = append(domains, d)
+			}
 		}
 		out.Domains = domains
 	}
@@ -277,16 +301,16 @@ func canonicalizeScopeWithFirestore(
 }
 
 type createLensFromQueryRequest struct {
-	Name              string   `json:"name"`
-	ProjectID         string   `json:"projectId"`
-	Query             string   `json:"query"`
+	Name      string `json:"name"`
+	ProjectID string `json:"projectId"`
+	Query     string `json:"query"`
 	// Mode controls whether to immediately start scouting/researching after lens creation.
 	// - just_open: create lens + scope, but suppress initial scouting job creation (best-effort)
 	// - research_first: create lens and start jobs (domains first, then anchors)
-	Mode             string   `json:"mode,omitempty"` // just_open|research_first
-	IntentOverride   *agents.IntentResolution `json:"intent,omitempty"` // Optional: edited intent from preflight UI
-	MaxRecursionDepth *int     `json:"maxRecursionDepth,omitempty"`
-	RequestedMetrics  []string `json:"requestedMetrics,omitempty"`
+	Mode              string                   `json:"mode,omitempty"`   // just_open|research_first
+	IntentOverride    *agents.IntentResolution `json:"intent,omitempty"` // Optional: edited intent from preflight UI
+	MaxRecursionDepth *int                     `json:"maxRecursionDepth,omitempty"`
+	RequestedMetrics  []string                 `json:"requestedMetrics,omitempty"`
 	// Optional: canonical paths selected from prefetch/autocomplete UI.
 	// These are merged into the final lens scope (deduped).
 	PrefetchScope []string `json:"prefetchScope,omitempty"`

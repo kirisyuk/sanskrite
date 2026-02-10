@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -200,6 +201,14 @@ func (r *CanonicalPathResolver) Resolve(
 				fmt.Sprintf("product_taxonomy: %s -> %s", result.CanonicalPath, norm))
 			result.CanonicalPath = norm
 		}
+	}
+
+	// Step 1.7: Best-effort namespace/type coercion for obvious mismatches.
+	// Example: type=ORGANIZATION with path=/product/... should be rewritten to /org/na/{slug}.
+	if fixed, changed := coerceCanonicalPathForType(result.CanonicalPath, fragmentType, ""); changed {
+		result.NormalizationSteps = append(result.NormalizationSteps,
+			fmt.Sprintf("type_prefix_coercion: %s -> %s", result.CanonicalPath, fixed))
+		result.CanonicalPath = fixed
 	}
 
 	// Step 2: Check for existing fragment by canonical path
@@ -576,6 +585,12 @@ func pickDominantByPopulation(results []coreontology.GeoNamesPlace, cityName str
 // - /loc/{country}/{adm1}/{city}     -> /loc/{cc}/{adm1}/{city} (when safe)
 // Returns "" if no safe normalization is possible.
 func normalizeGeoPathToStrict(path string) string {
+	// Shared baseline normalization used across repo/scout.
+	// Keep scout-specific fallback below for country-name inputs (e.g., /loc/morocco).
+	if norm := canonical.NormalizeGeoPathToStrict(path); norm != "" {
+		return norm
+	}
+
 	p := strings.TrimSpace(path)
 	if !strings.HasPrefix(p, "/loc/") {
 		return ""

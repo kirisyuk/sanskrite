@@ -228,6 +228,14 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeTransformsInto, false, true, "canonicalize: PRODUCT SUPPLIES_TO PRODUCT -> PRODUCT TRANSFORMS_INTO PRODUCT"
 	}
 
+	// PRODUCES(PRODUCT → PRODUCT) → TRANSFORMS_INTO
+	// Product-to-product "produces" usually describes value-chain transformation.
+	if edgeType == DependencyTypeProduces &&
+		sourceType == FragmentTypeProduct &&
+		targetType == FragmentTypeProduct {
+		return DependencyTypeTransformsInto, false, true, "canonicalize: PRODUCT PRODUCES PRODUCT -> PRODUCT TRANSFORMS_INTO PRODUCT"
+	}
+
 	// SUPPLIES_TO(PRODUCT → MARKET) → PARTICIPATES_IN
 	// If a product supplies to a market, canonical intent is market participation/coverage.
 	if edgeType == DependencyTypeSuppliesTo &&
@@ -258,6 +266,21 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		sourceType == FragmentTypeProduct &&
 		targetType == FragmentTypeOrganization {
 		return DependencyTypeConsumes, true, true, "canonicalize: PRODUCT SUPPLIES_TO ORGANIZATION -> ORGANIZATION CONSUMES PRODUCT"
+	}
+
+	// APPLIES_TO(ENTITY → MECHANISM) is inverted; canonical direction is MECHANISM → ENTITY.
+	if edgeType == DependencyTypeAppliesTo &&
+		sourceType != FragmentTypeMechanism &&
+		targetType == FragmentTypeMechanism {
+		return DependencyTypeAppliesTo, true, true, "canonicalize: ENTITY APPLIES_TO MECHANISM -> MECHANISM APPLIES_TO ENTITY"
+	}
+
+	// APPLIES_TO with non-mechanism source is usually a wrong relation label.
+	// Best-effort fallback: recast as INFLUENCES to preserve weak effect semantics.
+	if edgeType == DependencyTypeAppliesTo &&
+		sourceType != FragmentTypeMechanism &&
+		targetType != FragmentTypeMechanism {
+		return DependencyTypeInfluences, false, true, "canonicalize: non-mechanism APPLIES_TO -> INFLUENCES"
 	}
 
 	// OPERATES_IN(PERSON → GEO) → LOCATED_IN

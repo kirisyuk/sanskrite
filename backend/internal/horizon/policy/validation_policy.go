@@ -452,7 +452,9 @@ func (p *ValidationPolicy) matchRule(rules []*ValidationRule, sourceType, target
 func (p *ValidationPolicy) validateEdgeDirection(edgeType horizonmodels.DependencyType, sourceType, targetType horizonmodels.FragmentType) (bool, bool, *EdgeDirectionRule) {
 	rule, exists := edgeDirectionPolicies[edgeType]
 	if !exists {
-		return true, false, nil // No rule = valid
+		return false, false, &EdgeDirectionRule{
+			Description: fmt.Sprintf("unknown edge type %s: missing direction policy", edgeType),
+		}
 	}
 
 	sourceValid := containsFragmentType(rule.ValidSourceTypes, sourceType)
@@ -510,6 +512,7 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []horizonmodels.FragmentType{
 			horizonmodels.FragmentTypeOrganization,
 			horizonmodels.FragmentTypePerson,
+			horizonmodels.FragmentTypeCommunity,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{
 			horizonmodels.FragmentTypeOrganization,
@@ -538,6 +541,11 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypePerson},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
 		Description:      "Person is board member of organization",
+	},
+	horizonmodels.DependencyTypeKeyPerson: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypePerson},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
+		Description:      "Person is key person of organization",
 	},
 	horizonmodels.DependencyTypeFounded: {
 		ValidSourceTypes: []horizonmodels.FragmentType{
@@ -573,6 +581,17 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		},
 		Description: "Partners collaborate (symmetric)",
 	},
+	horizonmodels.DependencyTypeCompetesWith: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+		},
+		Description: "Competitors compete in the same arena (symmetric)",
+	},
 	horizonmodels.DependencyTypeProduces: {
 		ValidSourceTypes: []horizonmodels.FragmentType{
 			horizonmodels.FragmentTypeOrganization,
@@ -596,14 +615,20 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 			horizonmodels.FragmentTypeFacility,
 			horizonmodels.FragmentTypeOrganization,
 			horizonmodels.FragmentTypePerson,
+			horizonmodels.FragmentTypeProduct,
+			horizonmodels.FragmentTypeProgram,
 			horizonmodels.FragmentTypeGeoRegion,
 			horizonmodels.FragmentTypeDeposit,
+			horizonmodels.FragmentTypeCommunity,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeGeoRegion},
 		Description:      "Entity is located within region",
 	},
 	horizonmodels.DependencyTypeOperatesIn: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypePerson,
+		},
 		ValidTargetTypes: []horizonmodels.FragmentType{
 			horizonmodels.FragmentTypeGeoRegion,
 			horizonmodels.FragmentTypeFacility,
@@ -624,19 +649,29 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 	},
 	horizonmodels.DependencyTypeDependsOn: {
 		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeDomain,
 			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypePerson,
+			horizonmodels.FragmentTypeProgram,
 			horizonmodels.FragmentTypeFacility,
 			horizonmodels.FragmentTypeProduct,
 			horizonmodels.FragmentTypeCommunity,
+			horizonmodels.FragmentTypeMediaChannel,
+			horizonmodels.FragmentTypeDeposit,
 			horizonmodels.FragmentTypeMarket,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeDomain,
 			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypePerson,
+			horizonmodels.FragmentTypeMarket,
+			horizonmodels.FragmentTypeProgram,
 			horizonmodels.FragmentTypeFacility,
 			horizonmodels.FragmentTypeProduct,
 			horizonmodels.FragmentTypeGeoRegion,
 			horizonmodels.FragmentTypeMediaChannel,
 			horizonmodels.FragmentTypeCommunity,
+			horizonmodels.FragmentTypeDeposit,
 		},
 		Description: "Dependent entity depends on dependency",
 	},
@@ -644,6 +679,19 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
 		Description:      "Product transforms into downstream product",
+	},
+	horizonmodels.DependencyTypeExtractsFrom: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeFacility},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDeposit},
+		Description:      "Facility extracts from deposit",
+	},
+	horizonmodels.DependencyTypeAuditedBy: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
+		Description:      "Entity is audited by an external audit firm",
 	},
 	horizonmodels.DependencyTypeInfluences: {
 		ValidSourceTypes: []horizonmodels.FragmentType{
@@ -669,6 +717,8 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 			horizonmodels.FragmentTypeOrganization,
 			horizonmodels.FragmentTypeFacility,
 			horizonmodels.FragmentTypeCommunity,
+			horizonmodels.FragmentTypeProduct,
+			horizonmodels.FragmentTypeProgram,
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
 		Description:      "Entity participates in market",
@@ -698,8 +748,15 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 	// ADMINISTERS: government hierarchy (superior body -> subordinate body).
 	// NOTE: GOV bodies are stored as FragmentTypeOrganization under /gov/... canonical paths.
 	horizonmodels.DependencyTypeAdministers: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeGeoRegion,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeProgram,
+			horizonmodels.FragmentTypeGeoRegion,
+		},
 		Description:      "Government body administers subordinate body (hierarchy)",
 	},
 	// OPERATES_VIA: community/org uses a channel/platform for communication/operations.
@@ -725,6 +782,139 @@ var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
 		},
 		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
 		Description:      "Entity is affiliated with organization",
+	},
+	// DOMAIN edges
+	horizonmodels.DependencyTypeFocusesOn: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeDomain,
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypePerson,
+			horizonmodels.FragmentTypeMarket,
+			horizonmodels.FragmentTypeProduct,
+			horizonmodels.FragmentTypeProgram,
+			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeGeoRegion,
+			horizonmodels.FragmentTypeCommunity,
+			horizonmodels.FragmentTypeMediaChannel,
+			horizonmodels.FragmentTypeDeposit,
+		},
+		Description: "Domain focuses on an entity/domain",
+	},
+	horizonmodels.DependencyTypeInvolvesActor: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypePerson,
+			horizonmodels.FragmentTypeCommunity,
+		},
+		Description: "Domain involves principal actor",
+	},
+	horizonmodels.DependencyTypeInGeoScope: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeGeoRegion},
+		Description:      "Domain is in geo scope",
+	},
+	horizonmodels.DependencyTypeAbout: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeDomain,
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypePerson,
+			horizonmodels.FragmentTypeMarket,
+			horizonmodels.FragmentTypeProduct,
+			horizonmodels.FragmentTypeProgram,
+			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeGeoRegion,
+			horizonmodels.FragmentTypeCommunity,
+			horizonmodels.FragmentTypeMediaChannel,
+			horizonmodels.FragmentTypeDeposit,
+		},
+		Description: "Domain describes subject entities",
+	},
+	horizonmodels.DependencyTypeRelatedDomain: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		Description:      "Related domains (symmetric)",
+	},
+	horizonmodels.DependencyTypeBroadensTo: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		Description:      "Domain broadens to another domain",
+	},
+	horizonmodels.DependencyTypeNarrowsTo: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		Description:      "Domain narrows to another domain",
+	},
+	horizonmodels.DependencyTypeAffects: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		Description:      "Domain affects another domain",
+	},
+	horizonmodels.DependencyTypeSurfaces: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeDecisionPoint,
+			horizonmodels.FragmentTypeMechanism,
+		},
+		Description: "Domain surfaces strategic entities",
+	},
+	// Strategic decision layer
+	horizonmodels.DependencyTypeControlsAccess: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeDecisionPoint,
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeCommunity,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeProduct,
+			horizonmodels.FragmentTypeMarket,
+			horizonmodels.FragmentTypeProgram,
+		},
+		Description: "Strategic gatekeeping relation",
+	},
+	horizonmodels.DependencyTypeImposesCondition: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeDecisionPoint,
+			horizonmodels.FragmentTypeCommunity,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeProduct,
+		},
+		Description: "Imposes compliance/cost constraints",
+	},
+	horizonmodels.DependencyTypeGatekeepsDecision: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeCommunity,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDecisionPoint},
+		Description:      "Actor gatekeeps a strategic decision",
+	},
+	horizonmodels.DependencyTypeUsesMechanism: {
+		ValidSourceTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeDecisionPoint,
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeCommunity,
+		},
+		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMechanism},
+		Description:      "Agent uses control mechanism",
+	},
+	horizonmodels.DependencyTypeAppliesTo: {
+		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMechanism},
+		ValidTargetTypes: []horizonmodels.FragmentType{
+			horizonmodels.FragmentTypeOrganization,
+			horizonmodels.FragmentTypeFacility,
+			horizonmodels.FragmentTypeProduct,
+			horizonmodels.FragmentTypeMarket,
+		},
+		Description: "Mechanism applies to entity",
 	},
 }
 
@@ -754,6 +944,10 @@ func (p *ValidationPolicy) expectedPathPrefix(fragType horizonmodels.FragmentTyp
 		return "/media/"
 	case horizonmodels.FragmentTypeCommunity:
 		return "/community/"
+	case horizonmodels.FragmentTypeDomain:
+		return "/domain/"
+	case horizonmodels.FragmentTypeSphere:
+		return "/sphere/"
 	case horizonmodels.FragmentTypeSupplyLink:
 		return "/supply-link/" // Tenant-specific, format: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}
 	case horizonmodels.FragmentTypeProgram:
@@ -764,6 +958,10 @@ func (p *ValidationPolicy) expectedPathPrefix(fragType horizonmodels.FragmentTyp
 		return "/event/"
 	case horizonmodels.FragmentTypeDeposit:
 		return "/deposit/"
+	case horizonmodels.FragmentTypeDecisionPoint:
+		return "/decision/"
+	case horizonmodels.FragmentTypeMechanism:
+		return "/mechanism/"
 	default:
 		return ""
 	}

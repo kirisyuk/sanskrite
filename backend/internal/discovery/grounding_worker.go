@@ -9,6 +9,7 @@ import (
 )
 
 // GroundingProcessor consumes ground.refresh events and revalidates documents
+// from the aggregated operations topic.
 type GroundingProcessor struct {
 	sub          *pubsub.Subscription
 	orchestrator *Orchestrator
@@ -27,6 +28,11 @@ func (w *GroundingProcessor) Start(ctx context.Context) error {
 	w.sub.ReceiveSettings.Synchronous = false
 	w.sub.ReceiveSettings.MaxOutstandingMessages = 16
 	return w.sub.Receive(ctx, func(ctx context.Context, m *pubsub.Message) {
+		// Only handle ground.refresh when subscribed to aggregated topics.
+		if m.Attributes["eventType"] != "ground.refresh" {
+			m.Ack()
+			return
+		}
 		var payload struct {
 			TenantID   string `json:"tenantId"`
 			SourceID   string `json:"sourceId"`

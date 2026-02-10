@@ -353,9 +353,11 @@ func shouldValidateCanonicalPath(path string) bool {
 	switch {
 	case strings.HasPrefix(path, "/org/"),
 		strings.HasPrefix(path, "/gov/"),
+		strings.HasPrefix(path, "/community/"),
 		strings.HasPrefix(path, "/person/"),
 		strings.HasPrefix(path, "/product/"),
 		strings.HasPrefix(path, "/program/"),
+		strings.HasPrefix(path, "/domain/"),
 		strings.HasPrefix(path, "/market/"),
 		strings.HasPrefix(path, "/segment/"),
 		strings.HasPrefix(path, "/fac/"),
@@ -1446,6 +1448,117 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 
 	// Check strategic edge qualifiers
 	violations = append(violations, pc.checkStrategicEdgeQualifiers(edge)...)
+	// Soft completeness checks for business-critical edges (best-effort; no hard reject).
+	violations = append(violations, pc.checkEdgeCompleteness(edge)...)
+
+	return violations
+}
+
+// checkEdgeCompleteness adds best-effort enrichment hints for incomplete business-critical edges.
+// These are warnings/info only and do not block the pipeline.
+func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdge) []PolicyViolation {
+	var violations []PolicyViolation
+	if edge == nil {
+		return violations
+	}
+	now := time.Now()
+
+	add := func(sev PolicyViolationSeverity, rule, desc, expected string) {
+		violations = append(violations, PolicyViolation{
+			ID:            uuid.New().String(),
+			Type:          ViolationMissingField,
+			Severity:      sev,
+			EdgeID:        edge.ID,
+			ActualValue:   fmt.Sprintf("%s", edge.Type),
+			ExpectedValue: expected,
+			Rule:          rule,
+			Description:   desc,
+			Confidence:    0.95,
+			AutoFixable:   false,
+			DetectedAt:    now,
+			DetectedBy:    "deterministic",
+		})
+	}
+
+	hasQualifier := func(keys ...string) bool {
+		if edge.Qualifiers == nil {
+			return false
+		}
+		for _, k := range keys {
+			if v, ok := edge.Qualifiers[k]; ok && strings.TrimSpace(fmt.Sprint(v)) != "" {
+				return true
+			}
+		}
+		return false
+	}
+	hasMetric := func(keys ...string) bool {
+		if edge.Metrics == nil {
+			return false
+		}
+		for _, k := range keys {
+			if _, ok := edge.Metrics[k]; ok {
+				return true
+			}
+		}
+		return false
+	}
+
+	switch edge.Type {
+	case horizonmodels.DependencyTypeOwns:
+		if !hasMetric("ownership_percent") && !hasQualifier("ownership_percent", "stake_pct") {
+			add(
+				SeverityWarning,
+				"edge_completeness_owns_percent",
+				"OWNS edge missing ownership percentage. Enrichment recommended: capture stake/share percent.",
+				"metrics.ownership_percent or qualifiers.ownership_percent",
+			)
+		}
+
+	case horizonmodels.DependencyTypeInvestsIn:
+		if !hasMetric("investment_amount", "round_size_total") {
+			add(
+				SeverityWarning,
+				"edge_completeness_invests_amount",
+				"INVESTS_IN edge missing investment amount. Enrichment recommended: capture investment_amount/round_size_total.",
+				"metrics.investment_amount",
+			)
+		}
+		if !hasQualifier("round", "fundingRound", "roundType") {
+			add(
+				SeverityInfo,
+				"edge_completeness_invests_round",
+				"INVESTS_IN edge missing round qualifier. Enrichment recommended: seed/series_a/series_b/etc.",
+				"qualifiers.round",
+			)
+		}
+
+	case horizonmodels.DependencyTypeEmployedBy, horizonmodels.DependencyTypeBoardMemberOf, horizonmodels.DependencyTypeManages:
+		modality := ""
+		if edge.Qualifiers != nil {
+			if raw, ok := edge.Qualifiers["edgeModality"]; ok {
+				modality = strings.ToLower(strings.TrimSpace(fmt.Sprint(raw)))
+				if modality == "<nil>" {
+					modality = ""
+				}
+			}
+		}
+		if modality == "historical" && edge.ValidTo == nil {
+			add(
+				SeverityWarning,
+				"edge_temporal_historical_without_end",
+				"Historical relation lacks ValidTo. Enrichment recommended: set relationship end date.",
+				"validTo (YYYY-MM-DD)",
+			)
+		}
+		if modality == "" && edge.ValidFrom == nil && edge.ValidTo == nil {
+			add(
+				SeverityInfo,
+				"edge_temporal_unknown_modality",
+				"Relation has no temporal modality or validity window. Enrichment recommended: mark actual/projected/historical and add validFrom/validTo when known.",
+				"qualifiers.edgeModality and/or validFrom/validTo",
+			)
+		}
+	}
 
 	return violations
 }

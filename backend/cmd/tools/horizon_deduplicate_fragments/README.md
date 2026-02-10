@@ -17,7 +17,12 @@
 3. **Мигрирует все связи**:
    - `DependencyEdges` (source/target fragment IDs)
    - `WatchdogConfigs` (target fragment ID)
-   - `Lens.scopeFragments` map (canonicalPath → fragmentID) - требует ручного обновления
+   - `Lenses`: `scopeFragments` (canonicalPath → fragmentID), плюс дедуп `resolvedQueries`
+   - `LensArtifacts`: `fragmentId`, `sourceFragId`, `targetFragId`
+   - `LensItems`: `fragmentId`, `sourceFragmentId`, `targetFragmentId`
+   - `FragmentProfiles`: `fragmentId`
+   - `MissingInfoStatus`: `fragmentId` + deterministic ID re-key
+   - `CascadeEntityRegistry`: `fragmentId`
    - `FragmentVersions` (удаляются вместе с дубликатами)
 4. **Удаляет дубликаты** из Firestore
 5. **Реэкспортирует** главный фрагмент в GCS (опционально)
@@ -59,13 +64,23 @@ go run backend/cmd/tools/horizon_deduplicate_fragments/main.go \
 
 ✅ **WatchdogConfigs**: Конфиги мониторинга перенаправляются на главный фрагмент. Если у главного уже есть конфиг - дубликат удаляется.
 
+✅ **Lenses**: Для линз, где есть `canonicalPath` в `scope`, обновляется `scopeFragments[canonicalPath]` на главный `fragmentId`. В `resolvedQueries` выполняется дедуп путей.
+
+✅ **LensArtifacts**: Переназначаются `fragmentId` для FRAGMENT-артефактов и `sourceFragId`/`targetFragId` для EDGE-артефактов. Self-loop после коллапса удаляются.
+
+✅ **LensItems**: Переназначаются `fragmentId` (node) и `sourceFragmentId`/`targetFragmentId` (edge). Self-loop после коллапса удаляются.
+
+✅ **FragmentProfiles**: Все профили дубликатов переводятся на главный `fragmentId`.
+
+✅ **MissingInfoStatus**: Статусы переносятся на главный `fragmentId` с пересчётом deterministic ID (`hash(fragmentId + question)`), с merge при коллизии.
+
+✅ **CascadeEntityRegistry**: Привязки `fragmentId` внутри `horizon_cascade_entities` обновляются на главный фрагмент.
+
 ✅ **FragmentVersions**: Версии дубликатов удаляются (они привязаны к конкретному fragment ID).
 
 ✅ **GCS Files**: Файлы удалённых дубликатов автоматически удаляются из GCS bucket.
 
 ✅ **Vertex AI Search**: При удалении файла из GCS триггерится синхронизация с Vertex AI Search. При INCREMENTAL режиме удалённые файлы автоматически удаляются из индекса при следующей синхронизации.
-
-⚠️ **Lenses**: `scopeFragments` map требует ручного обновления или дополнительной реализации (см. TODO в коде).
 
 ## Пример вывода
 
@@ -91,7 +106,7 @@ Run with --dry-run=false to apply changes
 
 ## Ограничения
 
-1. **Lens scopeFragments**: Требует итерации по всем lenses, что может быть медленно. Сейчас пропускается с предупреждением.
+1. **Lenses migration scope**: обновляются линзы, где `canonicalPath` присутствует в `scope` (`FindByScope`), а не полный скан коллекции.
 
 2. **GCS/Vertex**: Скрипт автоматически определяет bucket из переменной окружения `HORIZON_FRAGMENTS_BUCKET` или использует дефолтный `{project}-horizon-fragments`. При удалении дубликатов файлы автоматически удаляются из GCS, и триггерится синхронизация с Vertex AI Search.
 
@@ -99,8 +114,6 @@ Run with --dry-run=false to apply changes
 
 ## TODO
 
-- [ ] Реализовать полную миграцию Lens.scopeFragments
 - [ ] Добавить транзакционную безопасность для критичных операций
 - [ ] Добавить возможность отката изменений (backup перед удалением)
 - [ ] Поддержка батч-обработки для больших объемов данных
-

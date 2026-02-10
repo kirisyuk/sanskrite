@@ -2195,8 +2195,8 @@ export async function layoutLevelsTwoPane<T = any>(
   };
   const BUSINESS_BLOCK_KEYS = new Set(Object.keys(BUSINESS_BLOCK_TITLES));
 
-  // Fixed dimensions for business block context cards
-  const CONTEXT_CARD_HEIGHT = nodeHeight * 2;
+  // Fixed dimensions for business block context cards (same visual height as regular nodes).
+  const CONTEXT_CARD_HEIGHT = nodeHeight;
   const CONTEXT_CARD_WIDTH = nodeWidth; // ~200px
 
   // Edge-type templates for business-fact line generation
@@ -2624,7 +2624,7 @@ export async function layoutLevelsTwoPane<T = any>(
           facts.push({ label, items });
         }
       }
-      return facts.slice(0, 6); // Max 6 fact groups per card
+      return facts;
     };
 
     const buildBusinessBlockCard = (blockKey: string, nodesInBlock: Node<T>[], collapsed: boolean): Node<T> => {
@@ -6792,4 +6792,3 @@ async function layoutWithHierarchy<T = any>(
     return { ...node, position: { x: 0, y: 0 } };
   });
 }
-

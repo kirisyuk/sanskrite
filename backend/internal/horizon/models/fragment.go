@@ -2,6 +2,7 @@ package models
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -277,8 +278,6 @@ func (f *HorizonFragment) Validate() error {
 			f.ParentMarketPath = "" // invalid parent path, clear it
 		}
 
-		// Normalize market tags (expanded terms, singular, slugged).
-		f.Tags = taxonomy.NormalizeMarketTags(f.Tags)
 	}
 
 	// Best-effort: normalize GOV-specific fields (when canonicalPath starts with /gov/).
@@ -363,6 +362,17 @@ func (f *HorizonFragment) Validate() error {
 	// Best-effort: compute derived market segment normals for stable UI + indexing.
 	f.MarketSegmentNorms, f.MarketSegmentNormDomains, f.MarketSegmentNormVerticals, f.MarketSegmentNormPairs =
 		taxonomy.NormalizeMarketSegments(f.MarketSegments)
+
+	// Best-effort: normalize user-provided tags and inject deterministic business-relevance taxonomy tags.
+	// This is intentionally fail-open and does not block persistence.
+	f.Tags = taxonomy.NormalizeFragmentTagsWithBusiness(
+		f.Tags,
+		string(f.Type),
+		f.CanonicalPath,
+		f.MarketSegments,
+		f.OrgSize,
+		f.MarketDomain,
+	)
 
 	// Best-effort: ensure indexPaths is always present for new/updated fragments.
 	// This keeps expand/graph filtering deterministic without requiring backfills.
@@ -509,97 +519,183 @@ func (f *HorizonFragment) ensureGeoNamesMirroring() {
 // См. docs/horizon/architecture/semantic-search.md
 func (f *HorizonFragment) GenerateVectorText() string {
 	var parts []string
-
-	// Канонический путь и имя
-	parts = append(parts, f.CanonicalPath)
-	if name, ok := f.Labels["en"]; ok && name != "" {
-		parts = append(parts, name)
-	}
-	// Добавляем статус для контекста
-	parts = append(parts, fmt.Sprintf("Status: %s", f.Status))
-	if f.Metadata.EpistemicStatus != "" {
-		parts = append(parts, fmt.Sprintf("Epistemic Status: %s", f.Metadata.EpistemicStatus))
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			parts = append(parts, s)
+		}
 	}
 
+	primaryLabel := ""
+	if name, ok := f.Labels["en"]; ok && strings.TrimSpace(name) != "" {
+		primaryLabel = strings.TrimSpace(name)
+	} else {
+		for _, label := range f.Labels {
+			if strings.TrimSpace(label) != "" {
+				primaryLabel = strings.TrimSpace(label)
+				break
+			}
+		}
+	}
+
+	// Основная идентичность
+	if primaryLabel != "" {
+		add(primaryLabel)
+	}
 	if f.Description != "" {
-		parts = append(parts, f.Description)
+		add(f.Description)
+	}
+
+	// Классификация и путь
+	if f.Type != "" || f.EntityPath != "" || f.SectorPath != "" {
+		classParts := []string{}
+		if f.Type != "" {
+			classParts = append(classParts, fmt.Sprintf("type %s", f.Type))
+		}
+		if f.EntityPath != "" {
+			classParts = append(classParts, fmt.Sprintf("entity %s", f.EntityPath))
+		}
+		if f.SectorPath != "" {
+			classParts = append(classParts, fmt.Sprintf("sector %s", f.SectorPath))
+		}
+		add("Classification: " + strings.Join(classParts, ", "))
+	}
+	if f.CanonicalPath != "" {
+		add("Canonical path: " + f.CanonicalPath)
 	}
 
 	// Алиасы из labels
-	for lang, label := range f.Labels {
-		if lang != "en" && label != "" {
-			parts = append(parts, label)
+	if len(f.Labels) > 0 {
+		langs := make([]string, 0, len(f.Labels))
+		for lang := range f.Labels {
+			langs = append(langs, lang)
+		}
+		sort.Strings(langs)
+		aliases := make([]string, 0, len(langs))
+		for _, lang := range langs {
+			if lang == "en" {
+				continue
+			}
+			if label := strings.TrimSpace(f.Labels[lang]); label != "" {
+				aliases = append(aliases, label)
+			}
+		}
+		if len(aliases) > 0 {
+			add("Aliases: " + strings.Join(aliases, ", "))
 		}
 	}
 
 	// Иерархические пути (дублируются в разных форматах)
 	if f.EntityPath != "" {
-		parts = append(parts, f.EntityPath)
-		// Разбиваем путь и добавляем варианты
 		pathParts := strings.Split(strings.Trim(f.EntityPath, "/"), "/")
-		parts = append(parts, strings.Join(pathParts, " "))
 		if len(pathParts) > 0 {
-			parts = append(parts, pathParts[len(pathParts)-1]) // Последний элемент
+			add("Entity path tokens: " + strings.Join(pathParts, " "))
+			add("Entity leaf: " + pathParts[len(pathParts)-1])
 		}
 	}
-
-	// Отраслевой путь
 	if f.SectorPath != "" {
-		parts = append(parts, f.SectorPath)
 		sectorParts := strings.Split(strings.Trim(f.SectorPath, "/"), "/")
-		parts = append(parts, strings.Join(sectorParts, " "))
 		if len(sectorParts) > 0 {
-			parts = append(parts, sectorParts[len(sectorParts)-1])
+			add("Sector path tokens: " + strings.Join(sectorParts, " "))
+			add("Sector leaf: " + sectorParts[len(sectorParts)-1])
 		}
+	}
+	if len(f.IndustryPaths) > 0 {
+		add("Industry paths: " + strings.Join(f.IndustryPaths, ", "))
+	}
+
+	// Маркет-сегменты и нормализации
+	if len(f.MarketSegments) > 0 {
+		add("Market segments: " + strings.Join(f.MarketSegments, ", "))
+	}
+	if len(f.MarketSegmentNormPairs) > 0 {
+		add("Market segment norms: " + strings.Join(f.MarketSegmentNormPairs, ", "))
+	}
+	if f.OrgSize != "" {
+		add("Organization size: " + f.OrgSize)
 	}
 
 	// Локация
 	if f.HomeLocation != nil {
+		locParts := []string{}
 		if f.HomeLocation.Name != "" {
-			parts = append(parts, f.HomeLocation.Name)
+			locParts = append(locParts, f.HomeLocation.Name)
 		}
-		if f.HomeLocation.ISO3166_1 != nil {
-			parts = append(parts, fmt.Sprintf("ISO3166-1: %s", *f.HomeLocation.ISO3166_1))
-			parts = append(parts, *f.HomeLocation.ISO3166_1)
+		if f.HomeLocation.ISO3166_1 != nil && strings.TrimSpace(*f.HomeLocation.ISO3166_1) != "" {
+			locParts = append(locParts, fmt.Sprintf("ISO3166-1 %s", strings.TrimSpace(*f.HomeLocation.ISO3166_1)))
 		}
-		if f.HomeLocation.ISO3166_2 != nil {
-			parts = append(parts, fmt.Sprintf("ISO3166-2: %s", *f.HomeLocation.ISO3166_2))
-			parts = append(parts, *f.HomeLocation.ISO3166_2)
+		if f.HomeLocation.ISO3166_2 != nil && strings.TrimSpace(*f.HomeLocation.ISO3166_2) != "" {
+			locParts = append(locParts, fmt.Sprintf("ISO3166-2 %s", strings.TrimSpace(*f.HomeLocation.ISO3166_2)))
 		}
-		if f.HomeLocation.ISO6709 != nil {
-			parts = append(parts, fmt.Sprintf("ISO6709: %s", *f.HomeLocation.ISO6709))
+		if f.HomeLocation.ISO6709 != nil && strings.TrimSpace(*f.HomeLocation.ISO6709) != "" {
+			locParts = append(locParts, fmt.Sprintf("ISO6709 %s", strings.TrimSpace(*f.HomeLocation.ISO6709)))
+		}
+		if len(locParts) > 0 {
+			add("Location: " + strings.Join(locParts, ", "))
 		}
 	}
 
-	// Метрики (название и значение)
-	for metricName, metricValue := range f.State {
-		parts = append(parts, fmt.Sprintf("%s: %.2f", metricName, metricValue.Value))
-		// Добавляем человекочитаемый вариант
-		metricNameHuman := strings.ReplaceAll(metricName, "_", " ")
-		parts = append(parts, fmt.Sprintf("%s %.0f%%", metricNameHuman, metricValue.Value*100))
-		if metricValue.Unit != nil {
-			parts = append(parts, fmt.Sprintf("%s %s", metricNameHuman, *metricValue.Unit))
+	// Метрики
+	if len(f.State) > 0 {
+		metricKeys := make([]string, 0, len(f.State))
+		for key := range f.State {
+			metricKeys = append(metricKeys, key)
+		}
+		sort.Strings(metricKeys)
+		for _, metricName := range metricKeys {
+			metricValue := f.State[metricName]
+			metricNameHuman := strings.ReplaceAll(metricName, "_", " ")
+			line := fmt.Sprintf("Metric %s value %.4f", metricNameHuman, metricValue.Value)
+			if metricValue.Unit != nil && strings.TrimSpace(*metricValue.Unit) != "" {
+				line += " " + strings.TrimSpace(*metricValue.Unit)
+			}
+			add(line)
 		}
 	}
 
 	// Идентификаторы
-	for key, value := range f.Identifiers {
-		parts = append(parts, fmt.Sprintf("%s: %s", key, value))
-		parts = append(parts, value) // Только значение тоже добавляем
+	if len(f.Identifiers) > 0 {
+		keys := make([]string, 0, len(f.Identifiers))
+		for key := range f.Identifiers {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		pairs := make([]string, 0, len(keys))
+		for _, key := range keys {
+			if value := strings.TrimSpace(f.Identifiers[key]); value != "" {
+				pairs = append(pairs, fmt.Sprintf("%s=%s", key, value))
+			}
+		}
+		if len(pairs) > 0 {
+			add("Identifiers: " + strings.Join(pairs, ", "))
+		}
 	}
 
 	// Теги и метки
 	if len(f.Tags) > 0 {
-		parts = append(parts, fmt.Sprintf("Tags: %s", strings.Join(f.Tags, " ")))
-		for _, tag := range f.Tags {
-			parts = append(parts, tag)
-		}
+		add("Tags: " + strings.Join(f.Tags, ", "))
 	}
 
 	// KBRefs
-	for _, kbRef := range f.KBRefs {
-		parts = append(parts, fmt.Sprintf("%s: %s", kbRef.KB, kbRef.ExternalID))
-		parts = append(parts, kbRef.ExternalID)
+	if len(f.KBRefs) > 0 {
+		kbParts := make([]string, 0, len(f.KBRefs))
+		for _, kbRef := range f.KBRefs {
+			if strings.TrimSpace(kbRef.KB) == "" && strings.TrimSpace(kbRef.ExternalID) == "" {
+				continue
+			}
+			kbParts = append(kbParts, fmt.Sprintf("%s:%s", strings.TrimSpace(kbRef.KB), strings.TrimSpace(kbRef.ExternalID)))
+		}
+		if len(kbParts) > 0 {
+			add("Knowledge bases: " + strings.Join(kbParts, ", "))
+		}
+	}
+
+	// Статус и эпистемика
+	if f.Status != "" {
+		add("Status: " + f.Status)
+	}
+	if f.Metadata.EpistemicStatus != "" {
+		add("Epistemic status: " + string(f.Metadata.EpistemicStatus))
 	}
 
 	return strings.Join(parts, "\n")

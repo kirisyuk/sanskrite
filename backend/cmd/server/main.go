@@ -45,8 +45,8 @@ import (
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	horizonprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/profile"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	horizonprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/profile"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
@@ -652,7 +652,8 @@ func main() {
 			}()
 
 			// Start grounding processor worker (background)
-			grounder := discovery.NewGroundingProcessor(psClient, string(realtime.EventGroundRefresh), orchestrator, logger)
+			// Subscribe to aggregated operations topic and filter by eventType in the worker.
+			grounder := discovery.NewGroundingProcessor(psClient, string(realtime.TopicOperationsEvents), orchestrator, logger)
 			go func() {
 				ctxG, cancelG := context.WithCancel(ctx)
 				defer cancelG()
@@ -1032,6 +1033,7 @@ func main() {
 		enforcementJobsRepo := horizonrepo.NewEnforcementJobsRepository(fsClient.Client())
 		policyCheckResultsRepo := horizonrepo.NewPolicyCheckResultsRepository(fsClient.Client())
 		horizonCascadeVisitedRepo := horizonrepo.NewCascadeVisitedRepository(fsClient.Client())
+		horizonCascadeEntityRegistryRepo := horizonrepo.NewCascadeEntityRegistryRepository(fsClient.Client())
 		horizonCanonicalPathRedirectsRepo := horizonrepo.NewCanonicalPathRedirectsRepository(fsClient.Client())
 		horizonTelemetryRepo = horizonrepo.NewHorizonTelemetryRepository(fsClient.Client())
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
@@ -1344,6 +1346,8 @@ func main() {
 			scoutEngine.WithSpendLedger(horizonSpendLedger)
 			// Cascade-level visited set (guardrail against cycles/avalanche fanout).
 			scoutEngine.WithCascadeVisitedRepo(horizonCascadeVisitedRepo)
+			// Cascade-level entity identity memory (dedup across child jobs even with path variants).
+			scoutEngine.WithCascadeEntityRegistry(horizonCascadeEntityRegistryRepo)
 
 			// Wire CanonizationPolicy and ValidationPolicy for normalization and validation
 			scoutEngine.WithCanonizationPolicy(canonizationPolicyExecutor)

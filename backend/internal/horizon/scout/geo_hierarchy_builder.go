@@ -48,24 +48,49 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 	if !strings.HasPrefix(leafCanonicalPath, "/loc/") {
 		return nil
 	}
-
-	// Build parent chain by canonicalPath prefixes.
-	trimmed := strings.Trim(strings.TrimPrefix(leafCanonicalPath, "/loc/"), "/")
-	if trimmed == "" {
+	// Early canonicalization: always operate on strict geo path shape.
+	// This prevents creating legacy parents like /loc/{cc}/{admin1} and /loc/{cc}.
+	if norm := normalizeGeoPathToStrict(leafCanonicalPath); norm != "" {
+		leafCanonicalPath = norm
+	}
+	parts := strings.Split(strings.Trim(leafCanonicalPath, "/"), "/")
+	// Strict geo shape only: /loc/{cc}/{admin1}/{city}
+	if len(parts) != 4 || parts[0] != "loc" {
 		return nil
 	}
-	parts := strings.Split(trimmed, "/")
-	if len(parts) < 2 {
-		// Nothing to link (e.g., /loc/us)
+	cc := strings.TrimSpace(parts[1])
+	admin1 := strings.TrimSpace(parts[2])
+	city := strings.TrimSpace(parts[3])
+	if cc == "" {
+		return nil
+	}
+
+	// Build strict parent chain:
+	// /loc/{cc}/{admin1}/{city} -> /loc/{cc}/{admin1}/na -> /loc/{cc}/na/na
+	parents := make([]string, 0, 2)
+	if city != "" && city != "na" {
+		parents = append(parents, fmt.Sprintf("/loc/%s/%s/na", cc, admin1))
+	}
+	if admin1 != "na" || (city != "" && city != "na") {
+		parents = append(parents, fmt.Sprintf("/loc/%s/na/na", cc))
+	}
+	if len(parents) == 0 {
+		// Country-level node (/loc/{cc}/na/na) has no parent in strict model.
 		return nil
 	}
 
 	// Ensure all parent fragments exist and capture their IDs.
-	parentIDs := make(map[string]string, len(parts))
-	for i := 1; i < len(parts); i++ {
-		parentPath := "/loc/" + strings.Join(parts[:i], "/")
-		parentPath = strings.TrimSpace(parentPath)
+	parentIDs := make(map[string]string, len(parents))
+	for _, parentPathRaw := range parents {
+		parentPath := strings.TrimSpace(parentPathRaw)
 		if parentPath == "" {
+			continue
+		}
+		// Reuse common canonicalization for safety and de-dup.
+		if norm := normalizeGeoPathToStrict(parentPath); norm != "" {
+			parentPath = norm
+		}
+		if parentPath == leafCanonicalPath {
 			continue
 		}
 
@@ -80,7 +105,17 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 		}
 
 		// Create a minimal GEO_REGION fragment.
-		label := parts[i-1]
+		parentParts := strings.Split(strings.Trim(parentPath, "/"), "/")
+		if len(parentParts) != 4 || parentParts[0] != "loc" {
+			continue
+		}
+		label := parentParts[3]
+		if strings.TrimSpace(label) == "" || strings.TrimSpace(label) == "na" {
+			label = parentParts[2]
+		}
+		if strings.TrimSpace(label) == "" || strings.TrimSpace(label) == "na" {
+			label = parentParts[1]
+		}
 		label = strings.ReplaceAll(label, "-", " ")
 		f := &models.HorizonFragment{
 			CanonicalPath: parentPath,
@@ -118,11 +153,17 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 	// Start from leaf, then each parent to its parent.
 	childID := leafFragmentID
 	childPath := leafCanonicalPath
-	for i := len(parts) - 1; i >= 1; i-- {
-		parentPath := "/loc/" + strings.Join(parts[:i], "/")
+	for _, parentPathRaw := range parents {
+		parentPath := strings.TrimSpace(parentPathRaw)
+		if norm := normalizeGeoPathToStrict(parentPath); norm != "" {
+			parentPath = norm
+		}
 		parentID := strings.TrimSpace(parentIDs[parentPath])
 		if parentID == "" || childID == "" {
 			break
+		}
+		if parentID == childID {
+			continue
 		}
 
 		// Skip if edge already exists.
@@ -173,5 +214,4 @@ func (b *GeoHierarchyBuilder) String() string {
 	}
 	return fmt.Sprintf("GeoHierarchyBuilder(repo=%v, edges=%v)", b.fragmentsRepo != nil, b.edgesRepo != nil)
 }
-
 

@@ -267,9 +267,20 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 				d.Facets = facets
 			}
 			// Ensure a stable human-readable title/description for UX.
-			// LLMs sometimes omit these; they should not be empty in the normal pipeline.
-			if strings.TrimSpace(d.Title) == "" {
-				d.Title = buildDomainTitleForIntent(d.ContractType, d.CanonicalPath, d.Facets, countryNameByCC)
+			// If the model omits title or returns a generic fallback ("Supply chain — BR"),
+			// prefer the query-level focus text over contractType-based auto-titles.
+			title := strings.TrimSpace(d.Title)
+			focusTitle := buildDomainTitleFromFocusForIntent(out.Focus)
+			if title == "" {
+				if focusTitle != "" {
+					d.Title = focusTitle
+				} else {
+					d.Title = buildDomainTitleForIntent(d.ContractType, d.CanonicalPath, d.Facets, countryNameByCC)
+				}
+			} else if isGenericDomainTitleForIntent(title, d.ContractType, d.CanonicalPath, d.Facets, countryNameByCC) {
+				if focusTitle != "" {
+					d.Title = focusTitle
+				}
 			}
 			if strings.TrimSpace(d.Description) == "" {
 				d.Description = buildDomainDescriptionForIntent(d.ContractType, d.Title)
@@ -785,6 +796,46 @@ func buildDomainTitleForIntent(contractType string, canonicalPath string, facets
 		return base
 	}
 	return fmt.Sprintf("%s — %s", base, strings.Join(out, " · "))
+}
+
+func isGenericDomainTitleForIntent(title, contractType, canonicalPath string, facets map[string][]string, countryNameByCC map[string]string) bool {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return true
+	}
+	base := strings.TrimSpace(baseDomainTitle(contractType))
+	if base != "" && strings.EqualFold(t, base) {
+		return true
+	}
+	auto := strings.TrimSpace(buildDomainTitleForIntent(contractType, canonicalPath, facets, countryNameByCC))
+	if auto != "" && strings.EqualFold(t, auto) {
+		return true
+	}
+	return false
+}
+
+func buildDomainTitleFromFocusForIntent(focus string) string {
+	s := strings.TrimSpace(focus)
+	if s == "" {
+		return ""
+	}
+	s = strings.Trim(s, " \t\r\n.,;:!?-")
+	if s == "" {
+		return ""
+	}
+	parts := strings.Fields(s)
+	if len(parts) > 10 {
+		parts = parts[:10]
+	}
+	s = strings.Join(parts, " ")
+	if s == "" {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) > 0 {
+		r[0] = unicode.ToUpper(r[0])
+	}
+	return strings.TrimSpace(string(r))
 }
 
 func buildDomainDescriptionForIntent(contractType string, title string) string {
