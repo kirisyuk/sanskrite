@@ -388,6 +388,11 @@ TASK: Compare the extracted data with the source content and identify any confli
 	Missing Info logic:
 	- If important fields (like location, key metrics for the sector) are empty or unknown, add a specific question to 'missingInfo'.
 	- If the entity is an Organization or Facility, and NO supply chain relations (suppliers, customers, competitors) were found, you MUST add a question to find them. Example: "Who are the key suppliers for Tesla?" or "What are the major competitors of this entity?"
+	- If DEPENDS_ON relations exist with facet=logistics|supply|infrastructure|distribution but transmission qualifiers are missing, you MUST add targeted questions:
+	  - "What share of flow depends on this route/channel (throughput_share 0..1)?"
+	  - "How constrained is capacity (capacity_constraint 0..1)?"
+	  - "What is reroute penalty and reroute latency/cost delta (reroute_penalty, reroute_latency_delta_hours, reroute_cost_delta_pct)?"
+	  - Also require transmission-contract completeness evidence: explicitly mark whether available data is complete, partial, or missing.
 	- RELATION SEMANTICS (CRITICAL):
 	  - CONTROLS: authority without clear equity ownership (state control, voting rights, contractual control). Do NOT use for formal regulation (REGULATES) or ownership (OWNS).
 	  - FOUNDED: historical origin event; does NOT imply ongoing ownership or control.

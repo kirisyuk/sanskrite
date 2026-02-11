@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	signalsys "github.com/igorkirisyuk/sanskrite/internal/horizon/signal"
+	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
 // SignalExtractor extracts SignalDescriptor from events using rule-based and LLM-based methods.
@@ -26,14 +26,14 @@ type SignalExtractionRulesRepo interface {
 
 // SignalExtractionRule defines a rule-based event → signal transformation.
 type SignalExtractionRule struct {
-	ID                 string   `json:"id"`
-	FactKind           string   `json:"factKind"`           // "event" | "claim" | "metric"
-	FactTypePattern    string   `json:"factTypePattern"`    // "port_closure" | "sanction_*"
-	SpherePattern      string   `json:"spherePattern"`      // "/sphere/logistics/*"
-	Axis               string   `json:"axis"`               // Axis from 12-axis basis (e.g., "logistics/capacity")
-	Mechanism          string   `json:"mechanism,omitempty"` // Optional mechanism (e.g., "airspace_closure")
-	Polarity           string   `json:"polarity"`            // "risk" | "opportunity"
-	Amplitude          float64  `json:"amplitude"`          // [0.0, 1.0] - default amplitude
+	ID                   string  `json:"id"`
+	FactKind             string  `json:"factKind"`             // "event" | "claim" | "metric"
+	FactTypePattern      string  `json:"factTypePattern"`      // "port_closure" | "sanction_*"
+	SpherePattern        string  `json:"spherePattern"`        // "/sphere/logistics/*"
+	Axis                 string  `json:"axis"`                 // Axis from 12-axis basis (e.g., "logistics/capacity")
+	Mechanism            string  `json:"mechanism,omitempty"`  // Optional mechanism (e.g., "airspace_closure")
+	Polarity             string  `json:"polarity"`             // "risk" | "opportunity"
+	Amplitude            float64 `json:"amplitude"`            // [0.0, 1.0] - default amplitude
 	ConfidenceMultiplier float64 `json:"confidenceMultiplier"` // Multiplier for fact confidence
 }
 
@@ -215,10 +215,16 @@ func (e *SignalExtractor) createSignalFromRule(fact *coremodels.OntologyFact, ru
 		SeedPaths:    fact.CanonicalPaths, // Use canonical paths as seed paths
 		LocationPath: locationPath,
 		SpherePaths:  fact.SpherePaths,
-		Constraints:  horizonmodels.SignalConstraints{}, // Can be extended later
-		Confidence:   fact.Confidence * rule.ConfidenceMultiplier,
-		SourceRefs:   sourceRefs,
-		ObservedAt:   observedAt,
+		Constraints: horizonmodels.SignalConstraints{
+			TimeHorizon: horizonmodels.SignalTimeHorizonShortTerm,
+			Timeframe:   horizonmodels.SignalTimeHorizonShortTerm,
+			Modality:    horizonmodels.SignalModalityActual,
+			Likelihood:  fact.Confidence,
+			Impact:      amplitude,
+		},
+		Confidence: fact.Confidence * rule.ConfidenceMultiplier,
+		SourceRefs: sourceRefs,
+		ObservedAt: observedAt,
 	}
 }
 
@@ -237,9 +243,9 @@ func (e *SignalExtractor) extractWithLLM(ctx context.Context, fact *coremodels.O
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
-			MinCapabilityScore:        6,
-			MaxOutputSize:             2048,
-			MinContextWindow:          4000,
+			MinCapabilityScore:       6,
+			MaxOutputSize:            2048,
+			MinContextWindow:         4000,
 		},
 		Verifier: ai.NewMapVerifier([]string{"signals"}, nil),
 	}
@@ -328,10 +334,14 @@ OUTPUT FORMAT (strict JSON):
       "axis": "one of the 12 axes above",
       "mechanism": "optional specific mechanism (e.g., 'sanctions', 'airspace_closure')",
       "amplitude": 0.0-1.0,
+      "impact": 0.0-1.0,
+      "likelihood": 0.0-1.0,
       "polarity": "risk" | "opportunity",
       "seedPaths": ["canonical paths of directly affected entities"],
       "locationPath": "canonical location path if applicable",
       "spherePaths": ["sphere paths if applicable"],
+      "timeHorizon": "immediate|short_term|medium_term|long_term",
+      "modality": "actual|confirmed|disruption|escalation|projected|potential|rhetoric",
       "confidence": 0.0-1.0
     }
   ]
@@ -420,6 +430,39 @@ func (e *SignalExtractor) parseLLMSignal(fact *coremodels.OntologyFact, sMap map
 		}
 	}
 
+	impact := amplitude
+	if raw, ok := sMap["impact"].(float64); ok {
+		impact = raw
+		if impact > 1.0 {
+			impact = 1.0
+		}
+		if impact < 0.0 {
+			impact = 0.0
+		}
+	}
+	likelihood := confidence
+	if raw, ok := sMap["likelihood"].(float64); ok {
+		likelihood = raw
+		if likelihood > 1.0 {
+			likelihood = 1.0
+		}
+		if likelihood < 0.0 {
+			likelihood = 0.0
+		}
+	}
+	timeHorizon := horizonmodels.SignalTimeHorizonShortTerm
+	if raw, ok := sMap["timeHorizon"].(string); ok && strings.TrimSpace(raw) != "" {
+		if h := horizonmodels.NormalizeSignalTimeHorizon(raw); h != "" {
+			timeHorizon = h
+		}
+	}
+	modality := horizonmodels.SignalModalityPotential
+	if raw, ok := sMap["modality"].(string); ok && strings.TrimSpace(raw) != "" {
+		if m := horizonmodels.NormalizeSignalModality(raw); m != "" {
+			modality = m
+		}
+	}
+
 	// Build source refs
 	sourceRefs := make([]string, 0)
 	for _, ref := range fact.SourceRefs {
@@ -448,9 +491,15 @@ func (e *SignalExtractor) parseLLMSignal(fact *coremodels.OntologyFact, sMap map
 		SeedPaths:    seedPaths,
 		LocationPath: locationPath,
 		SpherePaths:  spherePaths,
-		Constraints:  horizonmodels.SignalConstraints{},
-		Confidence:   confidence,
-		SourceRefs:   sourceRefs,
-		ObservedAt:   observedAt,
+		Constraints: horizonmodels.SignalConstraints{
+			TimeHorizon: timeHorizon,
+			Timeframe:   timeHorizon,
+			Modality:    modality,
+			Likelihood:  likelihood,
+			Impact:      impact,
+		},
+		Confidence: confidence,
+		SourceRefs: sourceRefs,
+		ObservedAt: observedAt,
 	}
 }

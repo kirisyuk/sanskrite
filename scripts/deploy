@@ -335,6 +335,27 @@ setup_infrastructure() {
     --quiet >/dev/null 2>&1 || true
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $profile_queue (maxConcurrentDispatches=1000)"
 
+  # 3.4.2 Ensure Cloud Tasks queue for Risk pipeline exists
+  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-sanskrite-risk-v1}"
+  if gcloud tasks queues describe "$risk_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $risk_queue"
+  else
+    gcloud tasks queues create "$risk_queue" --location="$REGION" --project="$PROJECT_ID" --quiet || true
+    echo -e "${GREEN}[infra] Created Cloud Tasks queue:${NC} $risk_queue"
+  fi
+  # Configure for risk pipeline (separate from scout/profile).
+  gcloud tasks queues update "$risk_queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=10s \
+    --max-backoff=600s \
+    --max-retry-duration=3600s \
+    --max-dispatches-per-second=20 \
+    --max-concurrent-dispatches=100 \
+    --quiet >/dev/null 2>&1 || true
+  echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $risk_queue (maxConcurrentDispatches=100)"
+
   # 3.5 Ensure GCS bucket for core docs exists
   local docs_bucket="gs://${PROJECT_ID}-core-docs"
   if gcloud storage buckets describe "$docs_bucket" >/dev/null 2>&1; then
@@ -1131,7 +1152,7 @@ except:
           # Ensure API env vars aligned with Cloud Scheduler mode
           # (disable any internal ticker if introduced later; keep knobs explicit)
           gcloud run services update sanskrite-api --region "$REGION" \
-            --update-env-vars "DISABLE_HORIZON_WATCHDOG_TICKER=true,HORIZON_WATCHDOG_CRON_LIMIT=200,HORIZON_WATCHDOG_CRON_LOCK_TTL=9m" \
+            --update-env-vars "ENABLE_HORIZON_WATCHDOG=1,DISABLE_HORIZON_WATCHDOG_TICKER=true,HORIZON_WATCHDOG_CRON_LIMIT=200,HORIZON_WATCHDOG_CRON_LOCK_TTL=9m" \
             --quiet || true
 
           JOB_NAME="sanskrite-horizon-watchdog"
@@ -1303,6 +1324,23 @@ deploy_api() {
     --max-concurrent-dispatches=50 \
     --quiet >/dev/null 2>&1 || true
 
+  # Ensure Cloud Tasks queue exists for risk pipeline as well.
+  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-sanskrite-risk-v1}"
+  if ! gcloud tasks queues describe "$risk_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $risk_queue"
+    gcloud tasks queues create "$risk_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+  fi
+  gcloud tasks queues update "$risk_queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=10s \
+    --max-backoff=600s \
+    --max-retry-duration=3600s \
+    --max-dispatches-per-second=20 \
+    --max-concurrent-dispatches=100 \
+    --quiet >/dev/null 2>&1 || true
+
   # Ensure backend service account can enqueue tasks (idempotent; safe to call on --api-only).
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:$SA_BACKEND" \
@@ -1384,7 +1422,11 @@ deploy_api() {
     existing_api_url=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)' 2>/dev/null || echo "")
   fi
 
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|https://hatlone-test.web.app|https://hatlone-test.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_HORIZON_WATCHDOG=0,PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  local enable_horizon_watchdog="${ENABLE_HORIZON_WATCHDOG:-0}"
+  if [[ "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
+    enable_horizon_watchdog="1"
+  fi
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|https://hatlone-test.web.app|https://hatlone-test.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_HORIZON_WATCHDOG=${enable_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
   # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Store
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
   local horizon_fragments_bucket="${HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-horizon-fragments}"

@@ -2,7 +2,9 @@ package repo
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,8 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"golang.org/x/time/rate"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
@@ -69,6 +73,12 @@ func bestEffortBackfillCanonicalPartsFromPath(fragment *models.HorizonFragment) 
 		return
 	}
 	fragment.CanonicalParts = parts
+}
+
+func canonicalPathDocID(tenantID, canonicalPath string) string {
+	raw := strings.TrimSpace(tenantID) + "|" + strings.TrimSpace(canonicalPath)
+	sum := sha1.Sum([]byte(raw))
+	return "cp_" + hex.EncodeToString(sum[:10])
 }
 
 // HorizonFragmentsRepository репозиторий для работы с HorizonFragment
@@ -273,7 +283,13 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	if err := fragment.Validate(); err != nil {
 		return "", fmt.Errorf("validation error: %w", err)
 	}
-	if cp := strings.TrimSpace(fragment.CanonicalPath); cp != "" {
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	if cp != "" && !strings.HasPrefix(cp, "/supply-link/") {
+		if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+			return "", fmt.Errorf("canonical path validation error: %w", err)
+		}
+	}
+	if cp != "" {
 		// Best-effort de-dup at repository boundary:
 		// if canonicalPath already exists, reuse existing fragment ID instead of creating a duplicate.
 		if existing, err := r.GetByCanonicalPath(ctx, cp); err == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
@@ -304,13 +320,39 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	}
 
 	doc := r.col.NewDoc()
+	if cp != "" {
+		tenantKey := strings.TrimSpace(fragment.TenantID)
+		if fragment.Type != models.FragmentTypeSupplyLink {
+			tenantKey = "global"
+		}
+		if tenantKey == "" {
+			tenantKey = "global"
+		}
+		doc = r.col.Doc(canonicalPathDocID(tenantKey, cp))
+	}
 	fragment.ID = doc.ID
 
 	// Build index paths for search/filtering
 	fragment.IndexPaths = models.BuildIndexPaths(fragment, nil)
 
-	if _, err := doc.Set(ctx, fragment); err != nil {
-		return "", err
+	if cp != "" {
+		if _, err := doc.Create(ctx, fragment); err != nil {
+			if status.Code(err) == codes.AlreadyExists {
+				if existing, gerr := r.GetByCanonicalPath(ctx, cp); gerr == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
+					log.Printf("[HorizonFragments] Reusing existing fragment after collision for canonicalPath=%q id=%s", cp, strings.TrimSpace(existing.ID))
+					return strings.TrimSpace(existing.ID), nil
+				}
+				if existing, gerr := r.Get(ctx, doc.ID); gerr == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
+					log.Printf("[HorizonFragments] Reusing deterministic fragment after collision for canonicalPath=%q id=%s", cp, strings.TrimSpace(existing.ID))
+					return strings.TrimSpace(existing.ID), nil
+				}
+			}
+			return "", err
+		}
+	} else {
+		if _, err := doc.Set(ctx, fragment); err != nil {
+			return "", err
+		}
 	}
 	tracking.RecordFragmentCreated(ctx, fragment.ID)
 
@@ -357,7 +399,8 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	if canonicalPath == "" {
 		return nil, ErrInvalidDocument
 	}
-	q := r.col.Where("tenantId", "==", "global").Where("canonicalPath", "==", canonicalPath).Limit(1)
+	cp := strings.TrimSpace(canonicalPath)
+	q := r.col.Where("tenantId", "==", "global").Where("canonicalPath", "==", cp)
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
@@ -365,11 +408,44 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	if len(docs) == 0 {
 		return nil, ErrFragmentNotFound
 	}
-	var fragment models.HorizonFragment
-	if err := docs[0].DataTo(&fragment); err != nil {
-		return nil, err
+	preferredID := canonicalPathDocID("global", cp)
+	var best *models.HorizonFragment
+	bestRank := 3
+	bestID := ""
+	for _, doc := range docs {
+		if doc == nil || !doc.Exists() {
+			continue
+		}
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(fragment.ID) == "" {
+			fragment.ID = strings.TrimSpace(doc.Ref.ID)
+		}
+		rank := 2
+		if strings.TrimSpace(doc.Ref.ID) == preferredID {
+			rank = 0
+		} else if !fragment.CreatedAt.IsZero() {
+			rank = 1
+		}
+		if best == nil ||
+			rank < bestRank ||
+			(rank == bestRank && !fragment.CreatedAt.IsZero() && (best.CreatedAt.IsZero() || fragment.CreatedAt.Before(best.CreatedAt))) ||
+			(rank == bestRank && fragment.CreatedAt.Equal(best.CreatedAt) && strings.TrimSpace(doc.Ref.ID) < bestID) {
+			frag := fragment
+			best = &frag
+			bestRank = rank
+			bestID = strings.TrimSpace(doc.Ref.ID)
+		}
 	}
-	return &fragment, nil
+	if best == nil {
+		return nil, ErrFragmentNotFound
+	}
+	if len(docs) > 1 {
+		log.Printf("[HorizonFragments] WARNING: duplicate canonicalPath detected canonicalPath=%q matches=%d selectedId=%s", cp, len(docs), strings.TrimSpace(best.ID))
+	}
+	return best, nil
 }
 
 // FindByTags returns fragments that match any of the provided tags (best-effort).

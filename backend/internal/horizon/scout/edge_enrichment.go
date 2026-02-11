@@ -32,6 +32,10 @@ func applyBestEffortEdgeEnrichment(edge *models.DependencyEdge) {
 		if !hasRoundQualifier(edge) {
 			addEdgeEnrichmentHint(edge, "What investment round was this (seed/series_a/series_b/etc.)?")
 		}
+	case models.DependencyTypeDependsOn:
+		normalizeTransmissionQualifiers(edge)
+		applyTransmissionContractMetadata(edge)
+		addTransmissionHints(edge)
 	case models.DependencyTypeEmployedBy, models.DependencyTypeBoardMemberOf, models.DependencyTypeManages:
 		normalizeTemporalModality(edge)
 		if lacksTemporalClarity(edge) {
@@ -252,4 +256,214 @@ func parseNumericQualifier(raw interface{}) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+func normalizeTransmissionQualifiers(edge *models.DependencyEdge) {
+	if edge == nil {
+		return
+	}
+	if edge.Qualifiers == nil {
+		edge.Qualifiers = map[string]interface{}{}
+	}
+
+	// Canonical key <- aliases
+	normalizeNumericAlias(edge.Qualifiers, models.QualifierThroughputShare, "flow_share", "shipment_share", "route_share", "throughputShare")
+	normalizeNumericAlias(edge.Qualifiers, models.QualifierReroutePenalty, "reroute_penalty_score", "substitution_penalty", "reroutePenalty")
+	normalizeNumericAlias(edge.Qualifiers, models.QualifierRerouteLatencyDeltaHrs, "latency_delta_hours", "reroute_delay_hours", "rerouteLatencyDeltaHours")
+	normalizeNumericAlias(edge.Qualifiers, models.QualifierRerouteCostDeltaPct, "cost_delta_pct", "reroute_cost_percent", "rerouteCostDeltaPct")
+	normalizeNumericAlias(edge.Qualifiers, models.QualifierCapacityConstraint, "capacity_utilization", "congestion_score", "capacityUtilization")
+
+	if edge.Metrics == nil {
+		edge.Metrics = map[string]models.MetricValue{}
+	}
+
+	// Metrics -> qualifiers (prefer canonical keys)
+	metricToQualifier(edge, models.QualifierThroughputShare)
+	metricToQualifier(edge, models.QualifierReroutePenalty)
+	metricToQualifier(edge, models.QualifierRerouteLatencyDeltaHrs)
+	metricToQualifier(edge, models.QualifierRerouteCostDeltaPct)
+	metricToQualifier(edge, models.QualifierCapacityConstraint)
+
+	// Qualifiers -> metrics for auditability/reuse.
+	qualifierToMetric(edge, models.QualifierThroughputShare, nil)
+	qualifierToMetric(edge, models.QualifierReroutePenalty, nil)
+	unitHours := "hours"
+	unitPct := "percent"
+	qualifierToMetric(edge, models.QualifierRerouteLatencyDeltaHrs, &unitHours)
+	qualifierToMetric(edge, models.QualifierRerouteCostDeltaPct, &unitPct)
+	qualifierToMetric(edge, models.QualifierCapacityConstraint, nil)
+}
+
+func addTransmissionHints(edge *models.DependencyEdge) {
+	if edge == nil {
+		return
+	}
+	facet := edge.GetFacet()
+	if facet == "" {
+		addEdgeEnrichmentHint(edge, "Classify DEPENDS_ON facet (logistics/infrastructure/supply/payment/distribution/regulatory/...) to improve transmission reasoning.")
+		return
+	}
+
+	needsTransmissionQualifiers := facet == models.FacetLogistics || facet == models.FacetInfrastructure || facet == models.FacetSupply || facet == models.FacetDistribution
+	if !needsTransmissionQualifiers {
+		return
+	}
+
+	if !hasAnyNumericQualifier(edge, models.QualifierThroughputShare, models.QualifierCapacityConstraint, "substitutability") {
+		addEdgeEnrichmentHint(edge, "Add at least one transmission qualifier: throughput_share (0..1), capacity_constraint (0..1), or substitutability (0..1).")
+	}
+	if facet == models.FacetLogistics {
+		if !hasAnyNumericQualifier(edge, models.QualifierReroutePenalty, models.QualifierRerouteLatencyDeltaHrs, models.QualifierRerouteCostDeltaPct) {
+			addEdgeEnrichmentHint(edge, "For logistics dependencies, add reroute_penalty (0..1) and reroute latency/cost deltas (hours/percent).")
+		}
+	}
+}
+
+func applyTransmissionContractMetadata(edge *models.DependencyEdge) {
+	if edge == nil || edge.Type != models.DependencyTypeDependsOn {
+		return
+	}
+	if edge.Qualifiers == nil {
+		edge.Qualifiers = map[string]interface{}{}
+	}
+
+	facet := edge.GetFacet()
+	needsContract := edge.IsTransmissionSensitive() || facet == ""
+	if !needsContract {
+		// For explicitly non-transmission facets, avoid noisy metadata.
+		return
+	}
+
+	hasBase := hasAnyNumericQualifier(
+		edge,
+		models.QualifierThroughputShare,
+		models.QualifierCapacityConstraint,
+		"substitutability",
+	)
+	hasReroute := hasAnyNumericQualifier(
+		edge,
+		models.QualifierReroutePenalty,
+		models.QualifierRerouteLatencyDeltaHrs,
+		models.QualifierRerouteCostDeltaPct,
+	)
+	hasAny := hasBase || hasReroute
+
+	status := models.TransmissionContractStatusComplete
+	missing := make([]string, 0, 3)
+	if facet == "" {
+		missing = appendMissingTransmissionField(missing, "facet")
+	}
+	if !hasBase {
+		missing = appendMissingTransmissionField(missing, "throughput_share|capacity_constraint|substitutability")
+	}
+	if facet == models.FacetLogistics && !hasReroute {
+		missing = appendMissingTransmissionField(missing, "reroute_penalty|reroute_latency_delta_hours|reroute_cost_delta_pct")
+	}
+
+	if len(missing) > 0 {
+		if hasAny {
+			status = models.TransmissionContractStatusPartial
+		} else {
+			status = models.TransmissionContractStatusMissing
+		}
+	}
+
+	mode := models.TransmissionContractModeInferred
+	if edge.HasAnyTransmissionQualifier() {
+		mode = models.TransmissionContractModeExplicit
+	}
+
+	edge.Qualifiers[models.QualifierTransmissionContractVersion] = models.TransmissionContractVersionV1
+	edge.Qualifiers[models.QualifierTransmissionContractStatus] = status
+	edge.Qualifiers[models.QualifierTransmissionContractMode] = mode
+	if len(missing) > 0 {
+		edge.Qualifiers[models.QualifierTransmissionContractMissing] = missing
+	} else {
+		delete(edge.Qualifiers, models.QualifierTransmissionContractMissing)
+	}
+}
+
+func appendMissingTransmissionField(fields []string, field string) []string {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return fields
+	}
+	for _, existing := range fields {
+		if existing == field {
+			return fields
+		}
+	}
+	return append(fields, field)
+}
+
+func normalizeNumericAlias(dst map[string]interface{}, canonical string, aliases ...string) {
+	if dst == nil {
+		return
+	}
+	if v, ok := parseNumericQualifier(dst[canonical]); ok {
+		dst[canonical] = v
+		return
+	}
+	for _, alias := range aliases {
+		if v, ok := parseNumericQualifier(dst[alias]); ok {
+			dst[canonical] = v
+			return
+		}
+	}
+}
+
+func metricToQualifier(edge *models.DependencyEdge, key string) {
+	if edge == nil || edge.Metrics == nil || edge.Qualifiers == nil {
+		return
+	}
+	if _, exists := edge.Qualifiers[key]; exists {
+		return
+	}
+	if mv, ok := edge.Metrics[key]; ok {
+		edge.Qualifiers[key] = mv.Value
+	}
+}
+
+func qualifierToMetric(edge *models.DependencyEdge, key string, unit *string) {
+	if edge == nil || edge.Metrics == nil {
+		return
+	}
+	if _, exists := edge.Metrics[key]; exists {
+		return
+	}
+	v, ok := parseNumericQualifier(edge.Qualifiers[key])
+	if !ok {
+		return
+	}
+	conf := edge.Properties.Criticality
+	if conf <= 0 || conf > 1 {
+		conf = 0.7
+	}
+	now := time.Now().UTC()
+	edge.Metrics[key] = models.MetricValue{
+		Value:      v,
+		Unit:       unit,
+		Confidence: conf,
+		ObservedAt: now,
+		Provenance: models.Provenance{
+			Method: "best_effort_transmission_sync",
+		},
+	}
+}
+
+func hasAnyNumericQualifier(edge *models.DependencyEdge, keys ...string) bool {
+	if edge == nil {
+		return false
+	}
+	for _, key := range keys {
+		if _, ok := parseNumericQualifier(edge.Qualifiers[key]); ok {
+			return true
+		}
+		if edge.Metrics != nil {
+			if _, ok := edge.Metrics[key]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }

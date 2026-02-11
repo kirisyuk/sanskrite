@@ -139,10 +139,20 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	}
 
 	// ==========================================================================
-	// Policy 1.5: Validate canonical path format (warnings only; hard errors handled elsewhere)
+	// Policy 1.5: Validate canonical path format (fail-open with deterministic repair)
 	// ==========================================================================
-	if err := taxonomy.ValidateCanonicalPath(strings.TrimSpace(fragment.CanonicalPath)); err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("canonical path validation: %v", err))
+	trimmedCanonicalPath := strings.TrimSpace(fragment.CanonicalPath)
+	if fragment.Type != models.FragmentTypeSupplyLink {
+		if err := taxonomy.ValidateCanonicalPath(trimmedCanonicalPath); err != nil {
+			// Keep scouting pipeline fail-open: try deterministic repair before any hard block.
+			if fixed, ok := repairInvalidCanonicalPath(fragment); ok {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("canonical path validation failed (%v), repaired to %q", err, fixed))
+			} else {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("canonical path validation failed (non-blocking): %v", err))
+			}
+		}
 	}
 
 	// ==========================================================================
@@ -539,6 +549,68 @@ func parseMarketGeoSectorForDedup(canonicalPath string) (string, string) {
 		return strings.ToLower(strings.TrimSpace(parts[1])), taxonomy.NormalizeMarketDomain(parts[2])
 	}
 	return "", ""
+}
+
+// repairInvalidCanonicalPath tries to deterministically map an invalid canonical path
+// into a valid, type-compatible fallback path so creation can proceed without breaking
+// the scouting -> research -> critic -> policy chain.
+func repairInvalidCanonicalPath(fragment *models.HorizonFragment) (string, bool) {
+	if fragment == nil || fragment.Type == "" {
+		return "", false
+	}
+
+	seed := firstNonEmpty(
+		strings.TrimSpace(fragment.Identifiers["legalName"]),
+		strings.TrimSpace(fragment.Labels["en"]),
+		strings.TrimSpace(fragment.Identifiers["shortName"]),
+		lastPathSlug(strings.TrimSpace(fragment.CanonicalPath)),
+	)
+	slug := taxonomy.Slugify(seed)
+	if slug == "" {
+		slug = "unknown"
+	}
+
+	var candidate string
+	switch fragment.Type {
+	case models.FragmentTypeOrganization:
+		candidate = taxonomy.JoinPath("org", "na", slug)
+	case models.FragmentTypeFacility:
+		candidate = taxonomy.JoinPath("fac", "na", slug)
+	case models.FragmentTypeGeoRegion:
+		candidate = taxonomy.JoinPath("loc", "na", "na", slug)
+	case models.FragmentTypeProduct:
+		candidate = taxonomy.JoinPath("product", slug)
+	case models.FragmentTypeProgram:
+		candidate = taxonomy.JoinPath("program", "na", slug)
+	case models.FragmentTypeMarket:
+		candidate = taxonomy.JoinPath("market", "global", slug)
+	case models.FragmentTypePerson:
+		candidate = taxonomy.JoinPath("person", slug)
+	case models.FragmentTypeMediaChannel:
+		candidate = taxonomy.JoinPath("media", slug)
+	case models.FragmentTypeDecisionPoint:
+		candidate = taxonomy.JoinPath("decision", "general", slug)
+	case models.FragmentTypeMechanism:
+		candidate = taxonomy.JoinPath("mechanism", "political", slug)
+	case models.FragmentTypeDomain:
+		candidate = taxonomy.JoinPath("domain", "v1", "other", slug)
+	case models.FragmentTypeDeposit:
+		candidate = taxonomy.JoinPath("deposit", "unknown", slug)
+	case models.FragmentTypeCommunity:
+		candidate = taxonomy.JoinPath("community", "global", "interest", slug)
+	case models.FragmentTypeEvent:
+		candidate = taxonomy.JoinPath("event", slug)
+	case models.FragmentTypeSphere:
+		candidate = taxonomy.JoinPath("sphere", slug)
+	default:
+		return "", false
+	}
+
+	if err := taxonomy.ValidateCanonicalPath(candidate); err != nil {
+		return "", false
+	}
+	fragment.CanonicalPath = candidate
+	return candidate, true
 }
 
 func canonicalNamespaceFamily(canonicalPath string) string {

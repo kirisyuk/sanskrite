@@ -741,6 +741,7 @@ type ScoutEngine struct {
 	cascadeVisitedRepo      *repo.CascadeVisitedRepository
 	cascadeEntityRegistry   *repo.CascadeEntityRegistryRepository
 	lensesRepo              *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
+	exposurePathsRepo       *repo.ExposurePathsRepository
 	realtime                *realtime.Publisher
 	taxonomyClassifier      *TaxonomyClassifier
 	aiExecutor              *ai.AITaskExecutor
@@ -749,6 +750,8 @@ type ScoutEngine struct {
 	spendLedger             *repo.HorizonSpendLedger
 	budgetPolicy            BudgetPolicy
 	propagationTrigger      func(ctx context.Context, fragmentID string) error
+	signalPropagationEngine *propagation.PropagationEngine
+	signalProfileLookup     *propagation.ProfileLookup
 	signalSynthesizer       *signals.Synthesizer              // Optional: for signal synthesis from facts
 	factsRepo               *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
 	factEmitter             *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
@@ -1055,6 +1058,14 @@ func (e *ScoutEngine) WithPropagationTrigger(trigger func(ctx context.Context, f
 	return e
 }
 
+// WithSignalPropagation wires shared signal propagation components.
+// This avoids ad-hoc defaults-only engines during Scout fast-path processing.
+func (e *ScoutEngine) WithSignalPropagation(engine *propagation.PropagationEngine, lookup *propagation.ProfileLookup) *ScoutEngine {
+	e.signalPropagationEngine = engine
+	e.signalProfileLookup = lookup
+	return e
+}
+
 // WithSpendLedger wires spend attribution ledger used for budget enforcement (optional).
 func (e *ScoutEngine) WithSpendLedger(ledger *repo.HorizonSpendLedger) *ScoutEngine {
 	e.spendLedger = ledger
@@ -1119,6 +1130,12 @@ func (e *ScoutEngine) CanonicalPathResolver() *CanonicalPathResolver {
 // WithLensesRepository sets the lenses repository for updating lens ViewConfig on assembly completion.
 func (e *ScoutEngine) WithLensesRepository(lensesRepo *repo.LensesRepository) *ScoutEngine {
 	e.lensesRepo = lensesRepo
+	return e
+}
+
+// WithExposurePathsRepository sets the exposure paths repo for strict applicability gating.
+func (e *ScoutEngine) WithExposurePathsRepository(exposurePathsRepo *repo.ExposurePathsRepository) *ScoutEngine {
+	e.exposurePathsRepo = exposurePathsRepo
 	return e
 }
 
@@ -1978,12 +1995,19 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					// Event → SignalDescriptor(s) → Seed Injection → Axis-based Propagation (best-effort).
 					//
 					// This runs alongside legacy synthesis for gradual rollout.
-					if e.aiExecutor != nil && e.fragmentsRepo != nil && e.edgesRepo != nil {
+					if e.aiExecutor != nil && e.fragmentsRepo != nil && e.edgesRepo != nil &&
+						e.signalPropagationEngine != nil && e.signalProfileLookup != nil {
 						signalExtractor := signals.NewSignalExtractor(nil, e.aiExecutor) // LLM-based extraction (rules optional)
-						seedInjector := signals.NewSeedInjector(e.fragmentsRepo, e.edgesRepo)
-						propEngine := propagation.NewPropagationEngine(e.fragmentsRepo, nil, e.edgesRepo, e.lensesRepo, e.realtime)
-						profileLookup := propagation.NewProfileLookup(nil) // defaults-only (Firestore seeding/wiring can be added later)
-						pipeline := NewSignalPipeline(signalExtractor, seedInjector, propEngine, profileLookup, e.factsRepo)
+						applicability := signals.NewExternalApplicabilityEvaluator().
+							WithFragmentsRepo(e.fragmentsRepo).
+							WithEdgesRepo(e.edgesRepo)
+						if e.exposurePathsRepo != nil {
+							applicability = applicability.WithExposurePathsRepo(e.exposurePathsRepo)
+						}
+						seedInjector := signals.NewSeedInjector(e.fragmentsRepo, e.edgesRepo).
+							WithApplicabilityEvaluator(applicability)
+						pipeline := NewSignalPipeline(signalExtractor, seedInjector, e.signalPropagationEngine, e.signalProfileLookup, e.factsRepo).
+							WithEscalationLLM(e.aiExecutor)
 						for _, fact := range facts {
 							if fact == nil {
 								continue

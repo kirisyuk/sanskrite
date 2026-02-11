@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -18,7 +19,9 @@ type HorizonHandlers struct {
 	docsRepo         *corerepo.DocumentsRepository
 	usersRepo        *corerepo.UsersRepository
 	interactions     *corerepo.InteractionsRepository
-	factsRepo        *corerepo.OntologyFactsRepository
+	factsRepo           *corerepo.OntologyFactsRepository
+	exposurePathsRepo   *horizonrepo.ExposurePathsRepository
+	riskJobsRepo        *horizonrepo.RiskJobsRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -70,6 +73,17 @@ func (h *HorizonHandlers) WithOntologyFactsRepo(facts *corerepo.OntologyFactsRep
 	return h
 }
 
+// WithExposurePathsRepo wires ExposurePathsRepository for strict applicability gating in events:inject.
+func (h *HorizonHandlers) WithExposurePathsRepo(r *horizonrepo.ExposurePathsRepository) *HorizonHandlers {
+	h.exposurePathsRepo = r
+	return h
+}
+
+func (h *HorizonHandlers) WithRiskJobsRepo(r *horizonrepo.RiskJobsRepository) *HorizonHandlers {
+	h.riskJobsRepo = r
+	return h
+}
+
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Intent precheck (NL -> taxonomy-aligned intent)
@@ -95,6 +109,9 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 
 	// Rollup & Explain endpoints (Signals & Semantic Propagation)
 	mux.Handle("/api/horizon/rollup/", authMiddleware(http.HandlerFunc(h.HandleRollupRoutes)))
+	mux.Handle("/api/horizon/risk/concentration", authMiddleware(http.HandlerFunc(h.GetRiskConcentration)))
+	mux.Handle("/api/horizon/risk/jobs", authMiddleware(http.HandlerFunc(h.HandleRiskJobsRoot)))
+	mux.Handle("/api/horizon/risk/jobs/", authMiddleware(http.HandlerFunc(h.HandleRiskJobRoutes)))
 
 	// AI explanations (cached markdown explanations for nodes/edges)
 	mux.Handle("/api/horizon/ai-explanations/", authMiddleware(http.HandlerFunc(h.HandleAIExplanationsRoutes)))

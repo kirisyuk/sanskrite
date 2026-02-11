@@ -2,6 +2,9 @@ package models
 
 import (
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -208,6 +211,30 @@ const (
 	FacetRegulatory DependencyFacet = "regulatory"
 )
 
+// Transmission qualifier keys for systemic transmission modeling.
+const (
+	QualifierThroughputShare        = "throughput_share" // 0..1 share of flow routed through this edge
+	QualifierReroutePenalty         = "reroute_penalty"  // 0..1 substitution/reroute friction
+	QualifierRerouteLatencyDeltaHrs = "reroute_latency_delta_hours"
+	QualifierRerouteCostDeltaPct    = "reroute_cost_delta_pct"
+	QualifierCapacityConstraint     = "capacity_constraint" // 0..1 where 1 means severe capacity bottleneck
+
+	// Transmission contract metadata (soft mandatory in best-effort mode).
+	QualifierTransmissionContractVersion = "transmission_contract_version"
+	QualifierTransmissionContractStatus  = "transmission_contract_status"
+	QualifierTransmissionContractMode    = "transmission_contract_mode"
+	QualifierTransmissionContractMissing = "transmission_contract_missing"
+
+	TransmissionContractVersionV1 = "v1"
+
+	TransmissionContractStatusComplete = "complete"
+	TransmissionContractStatusPartial  = "partial"
+	TransmissionContractStatusMissing  = "missing"
+
+	TransmissionContractModeExplicit = "explicit"
+	TransmissionContractModeInferred = "inferred"
+)
+
 // EdgeProperties свойства ребра зависимости
 type EdgeProperties struct {
 	Criticality   float64 `json:"criticality" firestore:"criticality"`     // 0..1
@@ -353,6 +380,205 @@ func (e *DependencyEdge) SetSubstitutability(v float64) {
 		e.Qualifiers = make(map[string]interface{})
 	}
 	e.Qualifiers["substitutability"] = v
+}
+
+// GetThroughputShare extracts share of flow transmitted through this dependency.
+// Range: 0..1. Returns 0 when unknown.
+func (e *DependencyEdge) GetThroughputShare() float64 {
+	if e == nil {
+		return 0
+	}
+	v := e.getQualifierFloat(
+		QualifierThroughputShare,
+		"flow_share",
+		"shipment_share",
+		"route_share",
+	)
+	return clamp01(v)
+}
+
+// GetReroutePenalty extracts reroute friction score.
+// Range: 0..1. Returns 0 when unknown.
+func (e *DependencyEdge) GetReroutePenalty() float64 {
+	if e == nil {
+		return 0
+	}
+	v := e.getQualifierFloat(
+		QualifierReroutePenalty,
+		"reroute_penalty_score",
+		"substitution_penalty",
+	)
+	return clamp01(v)
+}
+
+// GetCapacityConstraint extracts capacity bottleneck score.
+// Range: 0..1. Returns 0 when unknown.
+func (e *DependencyEdge) GetCapacityConstraint() float64 {
+	if e == nil {
+		return 0
+	}
+	v := e.getQualifierFloat(
+		QualifierCapacityConstraint,
+		"capacity_utilization",
+		"congestion_score",
+	)
+	// Some sources provide capacity_utilization as 0..100.
+	if v > 1 && v <= 100 {
+		v = v / 100
+	}
+	return clamp01(v)
+}
+
+// GetRerouteLatencyDeltaHours extracts additional latency expected when rerouting.
+// Returns hours (>=0). Returns 0 when unknown.
+func (e *DependencyEdge) GetRerouteLatencyDeltaHours() float64 {
+	if e == nil {
+		return 0
+	}
+	v := e.getQualifierFloat(
+		QualifierRerouteLatencyDeltaHrs,
+		"latency_delta_hours",
+		"reroute_delay_hours",
+	)
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+// GetRerouteCostDeltaPct extracts reroute cost increase percent.
+// Returns percent in [0..+inf). Returns 0 when unknown.
+func (e *DependencyEdge) GetRerouteCostDeltaPct() float64 {
+	if e == nil {
+		return 0
+	}
+	v := e.getQualifierFloat(
+		QualifierRerouteCostDeltaPct,
+		"cost_delta_pct",
+		"reroute_cost_percent",
+	)
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
+func (e *DependencyEdge) getQualifierFloat(keys ...string) float64 {
+	if e == nil {
+		return 0
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if e.Qualifiers != nil {
+			if v, ok := parseFloatAny(e.Qualifiers[key]); ok {
+				return v
+			}
+		}
+		if e.Metrics != nil {
+			if mv, ok := e.Metrics[key]; ok {
+				return mv.Value
+			}
+		}
+	}
+	return 0
+}
+
+func parseFloatAny(raw interface{}) (float64, bool) {
+	switch v := raw.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case string:
+		s := strings.TrimSpace(strings.ToLower(v))
+		s = strings.TrimSuffix(s, "%")
+		s = strings.ReplaceAll(s, ",", "")
+		if s == "" {
+			return 0, false
+		}
+		n, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
+func clamp01(v float64) float64 {
+	return math.Max(0, math.Min(1, v))
+}
+
+// HasAnyTransmissionQualifier checks whether edge has at least one transmission-related qualifier/metric.
+func (e *DependencyEdge) HasAnyTransmissionQualifier() bool {
+	if e == nil {
+		return false
+	}
+	keys := []string{
+		QualifierThroughputShare,
+		QualifierReroutePenalty,
+		QualifierRerouteLatencyDeltaHrs,
+		QualifierRerouteCostDeltaPct,
+		QualifierCapacityConstraint,
+		"substitutability",
+		"flow_share",
+		"shipment_share",
+		"route_share",
+		"reroute_penalty_score",
+		"substitution_penalty",
+		"latency_delta_hours",
+		"reroute_delay_hours",
+		"cost_delta_pct",
+		"reroute_cost_percent",
+		"capacity_utilization",
+		"congestion_score",
+	}
+	for _, key := range keys {
+		if e.Qualifiers != nil {
+			if _, ok := parseFloatAny(e.Qualifiers[key]); ok {
+				return true
+			}
+		}
+		if e.Metrics != nil {
+			if _, ok := e.Metrics[key]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsTransmissionSensitive returns true for DEPENDS_ON edges that likely need transmission semantics.
+func (e *DependencyEdge) IsTransmissionSensitive() bool {
+	if e == nil || e.Type != DependencyTypeDependsOn {
+		return false
+	}
+	facet := e.GetFacet()
+	if facet == "" {
+		// Unknown facet is still treated as sensitive when transmission qualifiers already exist.
+		return e.HasAnyTransmissionQualifier()
+	}
+	switch facet {
+	case FacetLogistics, FacetInfrastructure, FacetSupply, FacetDistribution:
+		return true
+	default:
+		return e.HasAnyTransmissionQualifier()
+	}
 }
 
 // AllDependencyFacets returns all valid dependency facets.

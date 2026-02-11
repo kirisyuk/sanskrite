@@ -20,6 +20,49 @@
 | Lens-specific highProfile | ❌ | отложено до полноценного дизайна |
 | Метрики в оверлей | ❌ | метрики пока в `State` фрагментов |
 
+## External Risk Maturity Plan (без миграций данных)
+
+Фокус: только внешний контур (global/external drivers). Внутренние операционные и договорные риски остаются за владельцами соответствующих систем.
+
+### Целевая цепочка (signal-first)
+
+`event -> signal descriptor -> applicability -> seed injection -> axis propagation -> rollup/explain -> interpretation -> concentration`
+
+### Реализовано в runtime
+
+- Signal-first propagation: распространяются только канонические метрики `/metric/{risk|opportunity}/{axis}/{mechanism?}`.
+- Shared axis propagation profile lookup (без локальных defaults-only движков в Scout fast-path).
+- Auto interpretation runtime:
+  - trigger evaluator + queue + processor + cache;
+  - enqueue после обновления узлов propagation.
+- Applicability перед seed injection:
+  - типовая, гео- и sphere-оценка применимости внешнего сигнала к узлу;
+  - неприменимые seed-узлы отбрасываются.
+- Risk appetite:
+  - канонический профиль `RiskAppetiteProfile` по scope (`/market/...`, `/loc/...`);
+  - auto-default seeding;
+  - соседи/зависимые рынки учитываются через графовые связи (neighbor scopes).
+- Rollup/Explain:
+  - strict canonical signal metrics;
+  - top contributors и propagation paths из provenance.
+- Concentration snapshot API:
+  - `GET /api/horizon/risk/concentration?polarity=risk&limit=10`.
+
+### Оставшиеся шаги (без миграций)
+
+1. Усилить applicability policy:
+   - добавить конфигурируемые правила по vertical/geo/axis;
+   - включить policy-backed explain reasons.
+2. Appetite governance:
+   - UI/endpoint для analyst override профилей аппетита;
+   - audit trail для изменений порогов.
+3. Quality loop:
+   - регулярные backtest job’ы (precision/recall/false alerts);
+   - drift monitoring по axis amplitude/confidence.
+4. Alerting hardening:
+   - dead-letter и retry policy для interpretation queue;
+   - SLO-мониторинг latency event->alert.
+
 ## Пайплайн Scout → Critic → Research → Policy
 
 **Контекст**: Анализ пайплайна Horizon в `engine.go` (см. `HORIZON_PIPELINE_ANALYSIS.md`).
@@ -1869,4 +1912,3 @@ type PolicyDecision struct {
 - [Технические решения](technical-decisions.md)
 - [Архитектурный обзор](../architecture/overview.md)
 - [Supply Chain & Influence Model](../architecture/supply-chain-influence-model.md)
-

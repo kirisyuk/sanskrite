@@ -240,3 +240,90 @@ func timePtr(t time.Time) *time.Time {
 	return &t
 }
 
+func TestDependencyEdge_TransmissionQualifiers(t *testing.T) {
+	edge := &DependencyEdge{
+		Qualifiers: map[string]interface{}{
+			QualifierThroughputShare:        "0.75",
+			QualifierReroutePenalty:         0.4,
+			QualifierRerouteLatencyDeltaHrs: "48",
+			QualifierRerouteCostDeltaPct:    "35%",
+			QualifierCapacityConstraint:     82.0, // percent style should normalize to 0.82
+		},
+	}
+
+	if got := edge.GetThroughputShare(); got != 0.75 {
+		t.Fatalf("GetThroughputShare() = %.2f, want 0.75", got)
+	}
+	if got := edge.GetReroutePenalty(); got != 0.4 {
+		t.Fatalf("GetReroutePenalty() = %.2f, want 0.40", got)
+	}
+	if got := edge.GetRerouteLatencyDeltaHours(); got != 48 {
+		t.Fatalf("GetRerouteLatencyDeltaHours() = %.2f, want 48", got)
+	}
+	if got := edge.GetRerouteCostDeltaPct(); got != 35 {
+		t.Fatalf("GetRerouteCostDeltaPct() = %.2f, want 35", got)
+	}
+	if got := edge.GetCapacityConstraint(); got < 0.819 || got > 0.821 {
+		t.Fatalf("GetCapacityConstraint() = %.4f, want ~0.82", got)
+	}
+}
+
+func TestDependencyEdge_HasAnyTransmissionQualifier(t *testing.T) {
+	edge := &DependencyEdge{
+		Qualifiers: map[string]interface{}{
+			QualifierThroughputShare: "0.0",
+		},
+	}
+	if !edge.HasAnyTransmissionQualifier() {
+		t.Fatalf("expected HasAnyTransmissionQualifier to detect numeric qualifier even when value is 0")
+	}
+}
+
+func TestDependencyEdge_IsTransmissionSensitive(t *testing.T) {
+	tests := []struct {
+		name string
+		edge *DependencyEdge
+		want bool
+	}{
+		{
+			name: "depends_on logistics facet",
+			edge: &DependencyEdge{
+				Type:       DependencyTypeDependsOn,
+				Qualifiers: map[string]interface{}{"facet": string(FacetLogistics)},
+			},
+			want: true,
+		},
+		{
+			name: "depends_on non transmission facet",
+			edge: &DependencyEdge{
+				Type:       DependencyTypeDependsOn,
+				Qualifiers: map[string]interface{}{"facet": string(FacetCommunication)},
+			},
+			want: false,
+		},
+		{
+			name: "depends_on unknown facet but with transmission qualifier",
+			edge: &DependencyEdge{
+				Type:       DependencyTypeDependsOn,
+				Qualifiers: map[string]interface{}{QualifierReroutePenalty: 0.2},
+			},
+			want: true,
+		},
+		{
+			name: "non depends_on never transmission sensitive",
+			edge: &DependencyEdge{
+				Type:       DependencyTypeSuppliesTo,
+				Qualifiers: map[string]interface{}{"facet": string(FacetLogistics)},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.edge.IsTransmissionSensitive(); got != tt.want {
+				t.Fatalf("IsTransmissionSensitive()=%v, want %v", got, tt.want)
+			}
+		})
+	}
+}

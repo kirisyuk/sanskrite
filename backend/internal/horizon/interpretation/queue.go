@@ -128,3 +128,24 @@ func (q *InterpretationQueue) MarkFailed(ctx context.Context, requestID string, 
 	})
 	return err
 }
+
+// HasPending checks whether a pending request already exists for the same fragment+polarity.
+func (q *InterpretationQueue) HasPending(ctx context.Context, fragmentID, polarity string) (bool, error) {
+	fragmentID = strings.TrimSpace(fragmentID)
+	polarity = strings.TrimSpace(polarity)
+	if fragmentID == "" || polarity == "" {
+		return false, nil
+	}
+
+	qry := q.col.
+		Where("fragmentId", "==", fragmentID).
+		Where("polarity", "==", polarity).
+		Where("status", "==", "pending").
+		Limit(1)
+
+	docs, err := qry.Documents(ctx).GetAll()
+	if err != nil {
+		return false, err
+	}
+	return len(docs) > 0, nil
+}

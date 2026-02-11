@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/feedback"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	signalsys "github.com/igorkirisyuk/sanskrite/internal/horizon/signal"
@@ -16,17 +17,17 @@ import (
 
 // RiskInterpretation represents a human-readable interpretation of risk/opportunity signals.
 type RiskInterpretation struct {
-	NodeID         string          `json:"nodeId" firestore:"nodeId"`
-	CanonicalPath  string          `json:"canonicalPath" firestore:"canonicalPath"`
-	Polarity       string          `json:"polarity" firestore:"polarity"` // "risk" | "opportunity"
-	Summary        string          `json:"summary" firestore:"summary"` // 2-3 sentence human-readable summary
-	AxisBreakdown  []AxisContribution `json:"axisBreakdown" firestore:"axisBreakdown"`
-	TopEvents      []EventProvenance  `json:"topEvents" firestore:"topEvents"`
-	Impact         ImpactEstimate     `json:"impact" firestore:"impact"`
-	Mitigations    []Mitigation       `json:"mitigations" firestore:"mitigations"`
-	Confidence     float64            `json:"confidence" firestore:"confidence"`
-	GeneratedAt    time.Time          `json:"generatedAt" firestore:"generatedAt"`
-	ExpiresAt      time.Time          `json:"expiresAt" firestore:"expiresAt"` // TTL for cache
+	NodeID        string             `json:"nodeId" firestore:"nodeId"`
+	CanonicalPath string             `json:"canonicalPath" firestore:"canonicalPath"`
+	Polarity      string             `json:"polarity" firestore:"polarity"` // "risk" | "opportunity"
+	Summary       string             `json:"summary" firestore:"summary"`   // 2-3 sentence human-readable summary
+	AxisBreakdown []AxisContribution `json:"axisBreakdown" firestore:"axisBreakdown"`
+	TopEvents     []EventProvenance  `json:"topEvents" firestore:"topEvents"`
+	Impact        ImpactEstimate     `json:"impact" firestore:"impact"`
+	Mitigations   []Mitigation       `json:"mitigations" firestore:"mitigations"`
+	Confidence    float64            `json:"confidence" firestore:"confidence"`
+	GeneratedAt   time.Time          `json:"generatedAt" firestore:"generatedAt"`
+	ExpiresAt     time.Time          `json:"expiresAt" firestore:"expiresAt"` // TTL for cache
 }
 
 // AxisContribution represents contribution from a specific axis.
@@ -60,9 +61,10 @@ type Mitigation struct {
 
 // Interpreter generates human-readable risk/opportunity interpretations using LLM.
 type Interpreter struct {
-	aiExecutor   *ai.AITaskExecutor
-	fragmentsRepo *repo.HorizonFragmentsRepository
-	signalsRepo  SignalsRepo // For retrieving signal details
+	aiExecutor      *ai.AITaskExecutor
+	fragmentsRepo   *repo.HorizonFragmentsRepository
+	signalsRepo     SignalsRepo // For retrieving signal details
+	feedbackEmitter feedback.Emitter
 }
 
 // SignalsRepo provides access to signal descriptors.
@@ -77,10 +79,15 @@ func NewInterpreter(
 	signalsRepo SignalsRepo,
 ) *Interpreter {
 	return &Interpreter{
-		aiExecutor:   aiExecutor,
+		aiExecutor:    aiExecutor,
 		fragmentsRepo: fragmentsRepo,
-		signalsRepo:  signalsRepo,
+		signalsRepo:   signalsRepo,
 	}
+}
+
+func (i *Interpreter) WithFeedbackEmitter(emitter feedback.Emitter) *Interpreter {
+	i.feedbackEmitter = emitter
+	return i
 }
 
 // Interpret generates an interpretation for a node.
@@ -125,9 +132,9 @@ func (i *Interpreter) Interpret(ctx context.Context, request *InterpretationRequ
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
-			MinCapabilityScore:        6,
-			MaxOutputSize:             4096,
-			MinContextWindow:          8000,
+			MinCapabilityScore:       6,
+			MaxOutputSize:            4096,
+			MinContextWindow:         8000,
 		},
 		Verifier: ai.NewMapVerifier([]string{"summary", "impact", "mitigations"}, nil),
 	}
@@ -192,7 +199,35 @@ func (i *Interpreter) Interpret(ctx context.Context, request *InterpretationRequ
 	}
 
 	log.Printf("%s done fragmentId=%s polarity=%s axes=%d topEvents=%d", signalsys.LogInterpret, strings.TrimSpace(request.FragmentID), strings.TrimSpace(request.Polarity), len(axisBreakdown), len(topEvents))
+	i.emitFeedbackIfNeeded(ctx, request, interpretation)
 	return interpretation, nil
+}
+
+func (i *Interpreter) emitFeedbackIfNeeded(ctx context.Context, request *InterpretationRequest, interpretation *RiskInterpretation) {
+	if i == nil || i.feedbackEmitter == nil || request == nil || interpretation == nil {
+		return
+	}
+	maxAxisAmp := 0.0
+	for _, a := range interpretation.AxisBreakdown {
+		if a.Amplitude > maxAxisAmp {
+			maxAxisAmp = a.Amplitude
+		}
+	}
+	if interpretation.Confidence >= 0.55 || maxAxisAmp < 0.7 {
+		return
+	}
+	_ = i.feedbackEmitter.Emit(ctx, feedback.Event{
+		Type:          "re_evaluate",
+		FragmentID:    strings.TrimSpace(request.FragmentID),
+		CanonicalPath: strings.TrimSpace(request.CanonicalPath),
+		Polarity:      strings.TrimSpace(request.Polarity),
+		Reason:        "low_confidence_high_impact_combination",
+		Payload: map[string]any{
+			"interpretationConfidence": interpretation.Confidence,
+			"maxAxisAmplitude":         maxAxisAmp,
+		},
+		EmittedAt: time.Now().UTC(),
+	})
 }
 
 // buildTopEvents builds top contributing events from fragment provenance.

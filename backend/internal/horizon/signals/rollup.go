@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,19 +37,19 @@ func NewRollupService(
 
 // Rollup represents an aggregated metric value with explain trace.
 type Rollup struct {
-	MetricName   string          `json:"metricName"`
-	Value        float64         `json:"value"`
-	Confidence   float64         `json:"confidence"`
-	InputCount   int             `json:"inputCount"`
-	LastUpdated  time.Time       `json:"lastUpdated"`
-	ExplainTrace *ExplainTrace   `json:"explainTrace,omitempty"`
+	MetricName   string        `json:"metricName"`
+	Value        float64       `json:"value"`
+	Confidence   float64       `json:"confidence"`
+	InputCount   int           `json:"inputCount"`
+	LastUpdated  time.Time     `json:"lastUpdated"`
+	ExplainTrace *ExplainTrace `json:"explainTrace,omitempty"`
 }
 
 // ExplainTrace explains how a rollup was computed.
 type ExplainTrace struct {
 	TopContributors []ExplainContributor `json:"topContributors"`
-	PropagationPath []string              `json:"propagationPath"` // Fragment IDs
-	RulesApplied    []string              `json:"rulesApplied"`     // Synthesis rule IDs
+	PropagationPath []string             `json:"propagationPath"` // Fragment IDs
+	RulesApplied    []string             `json:"rulesApplied"`    // Synthesis rule IDs
 }
 
 // ExplainContributor represents a contributing signal.
@@ -106,18 +107,27 @@ func (s *RollupService) GetFragmentRollup(ctx context.Context, fragmentID, metri
 	contributors := make([]ExplainContributor, 0, len(filtered))
 
 	for _, sig := range filtered {
-		if len(sig.MetricUpdates) == 0 {
-			continue
-		}
-		mu := sig.MetricUpdates[0]
-		observedAt := time.Now()
-		if mu.ObservedAt != nil {
-			observedAt = *mu.ObservedAt
-		}
-		mv := horizonmodels.MetricValue{
-			Value:      mu.Value,
-			Confidence: mu.Confidence,
-			ObservedAt: observedAt,
+		var mv horizonmodels.MetricValue
+		contribution := 0.0
+		if len(sig.MetricUpdates) > 0 {
+			mu := sig.MetricUpdates[0]
+			observedAt := time.Now()
+			if mu.ObservedAt != nil {
+				observedAt = *mu.ObservedAt
+			}
+			mv = horizonmodels.MetricValue{
+				Value:      mu.Value,
+				Confidence: mu.Confidence,
+				ObservedAt: observedAt,
+			}
+			contribution = mu.Value
+		} else {
+			derived, ok := semanticMetricValue(sig)
+			if !ok {
+				continue
+			}
+			mv = derived
+			contribution = derived.Value
 		}
 		decayed := handler.Decay(mv, now)
 		decayedValues = append(decayedValues, decayed)
@@ -131,7 +141,7 @@ func (s *RollupService) GetFragmentRollup(ctx context.Context, fragmentID, metri
 			SignalID:     sig.ID,
 			SignalType:   sig.Type,
 			SourcePath:   sourcePath,
-			Contribution: mu.Value,
+			Contribution: contribution,
 			Reasoning:    "synthesis_rule",
 		})
 	}
@@ -166,7 +176,7 @@ func (s *RollupService) GetFragmentRollup(ctx context.Context, fragmentID, metri
 		ExplainTrace: &ExplainTrace{
 			TopContributors: topContributors,
 			PropagationPath: propagationPath,
-			RulesApplied:     []string{"synthesis_rule"},
+			RulesApplied:    []string{"synthesis_rule"},
 		},
 	}, nil
 }
@@ -196,3 +206,102 @@ func (s *RollupService) topContributors(contributors []ExplainContributor, n int
 	return sorted[:n]
 }
 
+func semanticMetricValue(f *coremodels.OntologyFact) (horizonmodels.MetricValue, bool) {
+	if f == nil {
+		return horizonmodels.MetricValue{}, false
+	}
+	summaryKV := parseSummaryKeyValues(strings.TrimSpace(f.Summary))
+	impact := semanticFloat(f.Tags, "signal_impact:", summaryKV, "impact", -1)
+	likelihood := semanticFloat(f.Tags, "signal_likelihood:", summaryKV, "likelihood", -1)
+	amplitude := semanticFloat(f.Tags, "signal_amplitude:", summaryKV, "amplitude", -1)
+	confidence := semanticFloat(f.Tags, "signal_confidence:", summaryKV, "confidence", f.Confidence)
+
+	if impact < 0 {
+		impact = amplitude
+	}
+	if impact < 0 {
+		impact = clamp01Rollup(f.Confidence)
+	}
+	if likelihood < 0 {
+		likelihood = clamp01Rollup(f.Confidence)
+	}
+	expected := impact*likelihood + 0.35*impact*(1.0-likelihood)
+	obs := f.UpdatedAt
+	if f.ObservedAt != nil {
+		obs = *f.ObservedAt
+	}
+	return horizonmodels.MetricValue{
+		Value:      clamp01Rollup(expected),
+		Confidence: clamp01Rollup(confidence),
+		ObservedAt: obs,
+	}, true
+}
+
+func parseSummaryKeyValues(summary string) map[string]string {
+	if summary == "" {
+		return nil
+	}
+	parts := strings.Split(summary, ";")
+	out := make(map[string]string, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		i := strings.Index(p, ":")
+		if i <= 0 || i >= len(p)-1 {
+			continue
+		}
+		k := strings.ToLower(strings.TrimSpace(p[:i]))
+		v := strings.TrimSpace(p[i+1:])
+		if k == "" || v == "" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func semanticFloat(tags []string, tagPrefix string, summaryKV map[string]string, summaryKey string, fallback float64) float64 {
+	if raw, ok := getTagValue(tags, tagPrefix); ok {
+		return parseClampedFloat(raw, fallback)
+	}
+	if summaryKV != nil {
+		if raw, ok := summaryKV[strings.ToLower(strings.TrimSpace(summaryKey))]; ok {
+			return parseClampedFloat(raw, fallback)
+		}
+	}
+	return fallback
+}
+
+func getTagValue(tags []string, prefix string) (string, bool) {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	if prefix == "" {
+		return "", false
+	}
+	for _, t := range tags {
+		tt := strings.TrimSpace(t)
+		if strings.HasPrefix(strings.ToLower(tt), prefix) {
+			return strings.TrimSpace(tt[len(prefix):]), true
+		}
+	}
+	return "", false
+}
+
+func parseClampedFloat(raw string, fallback float64) float64 {
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return fallback
+	}
+	return clamp01Rollup(v)
+}
+
+func clamp01Rollup(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}

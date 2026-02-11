@@ -61,7 +61,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 	startTime := time.Now()
 
 	// Get propagation profile for this axis
-	profile, err := profileLookup.Get(signal.Axis)
+	profile, err := profileLookup.GetForSignal(signal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get propagation profile: %w", err)
 	}
@@ -147,6 +147,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 		if err := e.fragmentsRepo.Update(ctx, frag); err == nil {
 			affectedFragments[item.fragmentID] = true
 			propagationPaths = append(propagationPaths, append([]string{}, item.pathCanon...))
+			e.fireFragmentChangedHook(ctx, item.fragmentID)
 		}
 
 		// Hop limit: we still update the current node at max hops, but we do not expand further.
@@ -360,6 +361,26 @@ func (e *PropagationEngine) calculateDampedAmplitude(
 		out *= (1 - sub*0.5)
 	}
 
+	// Transmission semantics: the more flow concentrated on this edge and the harder
+	// it is to reroute, the stronger the propagated systemic signal.
+	if share := edge.GetThroughputShare(); share > 0 {
+		out *= 1 + share*0.35
+	}
+	if pen := edge.GetReroutePenalty(); pen > 0 {
+		out *= 1 + pen*0.30
+	}
+	if cap := edge.GetCapacityConstraint(); cap > 0 {
+		out *= 1 + cap*0.25
+	}
+	if deltaH := edge.GetRerouteLatencyDeltaHours(); deltaH > 0 {
+		latencyFactor := math.Min(deltaH/240.0, 1.0) // saturates around +10 days
+		out *= 1 + latencyFactor*0.20
+	}
+	if deltaPct := edge.GetRerouteCostDeltaPct(); deltaPct > 0 {
+		costFactor := math.Min(deltaPct/100.0, 1.0) // 100%+ cost increase saturates
+		out *= 1 + costFactor*0.20
+	}
+
 	return math.Min(out, 1.0)
 }
 
@@ -408,7 +429,7 @@ func (e *PropagationEngine) updateNodeMetric(
 			ObservedAt: signal.ObservedAt,
 			Provenance: horizonmodels.Provenance{
 				ObservedAt: &signal.ObservedAt,
-				Method:    "signal_propagation",
+				Method:     "signal_propagation",
 			},
 		}
 	}

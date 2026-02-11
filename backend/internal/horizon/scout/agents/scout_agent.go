@@ -597,7 +597,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - confidence: 0.0 to 1.0
    - targetCanonicalPath: REQUIRED. Suggest a STABLE canonical path.
 
-   Optional edge enrichment fields (HIGHLY RECOMMENDED when available):
+   Optional edge enrichment fields (REQUIRED WHEN AVAILABLE; if unknown, keep edge and set unknown/null instead of dropping relation):
    - validFrom: (Optional) Relationship start date in real world. Prefer "YYYY-MM-DD" (or RFC3339 if needed).
    - validTo: (Optional) Relationship end date in real world (for historical relations). Prefer "YYYY-MM-DD".
    - qualifiers: (Optional) Map of categorical qualifiers, e.g.:
@@ -606,11 +606,19 @@ TASK: Extract all relevant information about this entity and return it as a JSON
      - round: "Series A" (INVESTS_IN)
      - contractType: "long-term" | "spot" (SUPPLIES_TO)
     - facet: for DEPENDS_ON, classify dependency nature (communication | infrastructure | payment | distribution | logistics | supply | labor | legitimization | enforcement | regulatory)
+    - transmission qualifiers for DEPENDS_ON (especially logistics/supply/infrastructure/distribution):
+      - throughput_share: 0..1 (share of flow transmitted through this dependency)
+      - capacity_constraint: 0..1 (how severe bottleneck is; 1 = severe)
+      - reroute_penalty: 0..1 (difficulty/cost of substitution)
+      - reroute_latency_delta_hours: number (extra hours if rerouted)
+      - reroute_cost_delta_pct: number (extra percent cost if rerouted)
+      - if transmission qualifiers are unknown, preserve relation and include facet + reason with explicit uncertainty.
    - metrics: (Optional) Map of numerical edge metrics with MetricValue objects.
      Examples:
        - OWNS: ownership_percent (unit="percent", value=45.0), voting_percent
        - INVESTS_IN: investment_amount (unit like "usd" / any ticker code), round_size_total
        - SUPPLIES_TO: annual_volume, contract_value
+       - DEPENDS_ON (logistics/supply): throughput_share, route_capacity, reroute_latency_delta_hours, reroute_cost_delta_pct
      MetricValue format:
        - value MUST be a JSON number (no commas; expand "10M" to 10000000)
        - unit MUST be lowercase (e.g., "percent", "usd", "bbl", "metric_tons_per_year")

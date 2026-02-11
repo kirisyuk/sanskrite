@@ -727,6 +727,13 @@ When outputting DEPENDS_ON relations, you SHOULD add a "facet" qualifier to spec
 - regulatory: dependency on regulatory environment/approvals
 Format: { "qualifiers": { "facet": "communication", "substitutability": 0.3 } }
 - substitutability: 0..1 (0 = irreplaceable, 1 = easily substituted)
+- transmission qualifiers for systemic-risk edges (required when available for logistics/supply/infrastructure/distribution):
+  - throughput_share: 0..1 (share of total flow routed through this dependency)
+  - capacity_constraint: 0..1 (how constrained the route/channel is)
+  - reroute_penalty: 0..1 (difficulty of substitution/rerouting)
+  - reroute_latency_delta_hours: extra delay in hours under reroute
+  - reroute_cost_delta_pct: extra cost percent under reroute
+  - if unknown, do not remove relation; keep DEPENDS_ON with facet and explicit uncertainty in reason.
 
 PLATFORM → CHANNEL RESOLUTION (IMPORTANT):
 When you see a dependency on a platform (e.g., "uses Telegram", "operates via WhatsApp"):

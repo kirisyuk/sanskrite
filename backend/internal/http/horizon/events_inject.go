@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	signalsys "github.com/igorkirisyuk/sanskrite/internal/horizon/signal"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
+	signalsys "github.com/igorkirisyuk/sanskrite/internal/horizon/signal"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -19,17 +19,18 @@ import (
 // POST /api/horizon/events:inject
 //
 // Body (minimal):
-// {
-//   "title": "...",
-//   "summary": "...",
-//   "canonicalPaths": ["/org/ae/flydubai-llc"],   // used as default seedPaths by extractor
-//   "locationPath": "/loc/ir/na/na",
-//   "actorPaths": ["/gov/ir/civil-aviation"],
-//   "spherePaths": ["/sphere/logistics"],
-//   "occurredAt": "2026-01-18T12:00:00Z",
-//   "confidence": 0.8,
-//   "sourceUrl": "https://..."
-// }
+//
+//	{
+//	  "title": "...",
+//	  "summary": "...",
+//	  "canonicalPaths": ["/org/ae/flydubai-llc"],   // used as default seedPaths by extractor
+//	  "locationPath": "/loc/ir/na/na",
+//	  "actorPaths": ["/gov/ir/civil-aviation"],
+//	  "spherePaths": ["/sphere/logistics"],
+//	  "occurredAt": "2026-01-18T12:00:00Z",
+//	  "confidence": 0.8,
+//	  "sourceUrl": "https://..."
+//	}
 func (h *HorizonHandlers) InjectEvent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -153,7 +154,14 @@ func (h *HorizonHandlers) InjectEvent(w http.ResponseWriter, r *http.Request) {
 
 	// Run pipeline synchronously (debug/inspection).
 	extractor := signals.NewSignalExtractor(nil, h.service.AIExecutor())
-	seedInjector := signals.NewSeedInjector(h.service.Fragments(), h.service.Edges())
+	applicability := signals.NewExternalApplicabilityEvaluator().
+		WithFragmentsRepo(h.service.Fragments()).
+		WithEdgesRepo(h.service.Edges())
+	if h.exposurePathsRepo != nil {
+		applicability = applicability.WithExposurePathsRepo(h.exposurePathsRepo)
+	}
+	seedInjector := signals.NewSeedInjector(h.service.Fragments(), h.service.Edges()).
+		WithApplicabilityEvaluator(applicability)
 	propEngine := propagation.NewPropagationEngine(h.service.Fragments(), nil, h.service.Edges(), nil, h.service.RealtimePublisher())
 	profiles := propagation.NewProfileLookup(nil) // defaults-only for now
 
@@ -164,9 +172,9 @@ func (h *HorizonHandlers) InjectEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type signalOut struct {
-		Signal       any   `json:"signal"`
+		Signal        any      `json:"signal"`
 		SeedFragments []string `json:"seedFragments"`
-		Propagation  any   `json:"propagation,omitempty"`
+		Propagation   any      `json:"propagation,omitempty"`
 	}
 
 	out := make([]signalOut, 0, len(extracted))
@@ -201,4 +209,3 @@ func (h *HorizonHandlers) InjectEvent(w http.ResponseWriter, r *http.Request) {
 		"signals":     out,
 	})
 }
-

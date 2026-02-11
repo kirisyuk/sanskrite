@@ -18,6 +18,7 @@ import (
 type SeedInjector struct {
 	fragmentsRepo *repo.HorizonFragmentsRepository
 	edgesRepo     *repo.DependencyEdgesRepository
+	applicability ApplicabilityEvaluator
 }
 
 // NewSeedInjector creates a new SeedInjector.
@@ -26,6 +27,11 @@ func NewSeedInjector(fragmentsRepo *repo.HorizonFragmentsRepository, edgesRepo *
 		fragmentsRepo: fragmentsRepo,
 		edgesRepo:     edgesRepo,
 	}
+}
+
+func (s *SeedInjector) WithApplicabilityEvaluator(evaluator ApplicabilityEvaluator) *SeedInjector {
+	s.applicability = evaluator
+	return s
 }
 
 // Inject injects signal metrics into seed nodes.
@@ -57,11 +63,11 @@ func (s *SeedInjector) Inject(ctx context.Context, signal *horizonmodels.SignalD
 	if len(seedFragmentIDs) == 0 && signal.LocationPath != "" {
 		locationFrag, err := s.fragmentsRepo.GetByCanonicalPath(ctx, signal.LocationPath)
 		if err == nil && locationFrag != nil {
-		// Find fragments that OPERATE_IN or are LOCATED_IN this location
-		operatesInType := horizonmodels.DependencyTypeOperatesIn
-		locatedInType := horizonmodels.DependencyTypeLocatedIn
-		operatesInEdges, _ := s.edgesRepo.ListByTarget(ctx, "global", locationFrag.ID, &operatesInType, 100)
-		locatedInEdges, _ := s.edgesRepo.ListByTarget(ctx, "global", locationFrag.ID, &locatedInType, 100)
+			// Find fragments that OPERATE_IN or are LOCATED_IN this location
+			operatesInType := horizonmodels.DependencyTypeOperatesIn
+			locatedInType := horizonmodels.DependencyTypeLocatedIn
+			operatesInEdges, _ := s.edgesRepo.ListByTarget(ctx, "global", locationFrag.ID, &operatesInType, 100)
+			locatedInEdges, _ := s.edgesRepo.ListByTarget(ctx, "global", locationFrag.ID, &locatedInType, 100)
 
 			seen := make(map[string]bool)
 			for _, edge := range operatesInEdges {
@@ -101,6 +107,25 @@ func (s *SeedInjector) Inject(ctx context.Context, signal *horizonmodels.SignalD
 		if err != nil {
 			continue
 		}
+		penalty := 1.0
+		sparsePenalty := false
+		if s.applicability != nil {
+			decision := s.applicability.Evaluate(ctx, signal, frag)
+			if !decision.Applicable {
+				log.Printf("%s skipped_not_applicable signalId=%s fragmentId=%s axis=%s score=%.3f",
+					signalsys.LogSeed,
+					strings.TrimSpace(signal.ID),
+					strings.TrimSpace(frag.ID),
+					strings.TrimSpace(signal.Axis),
+					decision.Score,
+				)
+				continue
+			}
+			if decision.ConfidencePenalty > 0 && decision.ConfidencePenalty < 1 {
+				penalty = decision.ConfidencePenalty
+				sparsePenalty = true
+			}
+		}
 
 		// Initialize State if nil
 		if frag.State == nil {
@@ -119,17 +144,32 @@ func (s *SeedInjector) Inject(ctx context.Context, signal *horizonmodels.SignalD
 			}
 		}
 
-		// Update metric value (max; deterministic, bounded).
-		if signal.Amplitude > existing.Value {
-			existing.Value = signal.Amplitude
+		effectiveAmplitude := signal.Amplitude * penalty
+		if effectiveAmplitude < 0 {
+			effectiveAmplitude = 0
 		}
-		if signal.Confidence > existing.Confidence {
-			existing.Confidence = signal.Confidence
+		effectiveConfidence := signal.Confidence * penalty
+		if effectiveConfidence < 0 {
+			effectiveConfidence = 0
+		}
+		if effectiveConfidence > 1 {
+			effectiveConfidence = 1
+		}
+
+		// Update metric value (max; deterministic, bounded).
+		if effectiveAmplitude > existing.Value {
+			existing.Value = effectiveAmplitude
+		}
+		if effectiveConfidence > existing.Confidence {
+			existing.Confidence = effectiveConfidence
 		}
 		existing.ObservedAt = signal.ObservedAt
 
 		// Update provenance: keep SourceIDs (compat) + structured top-K Contributions.
 		existing.Provenance.Method = "signal_injection"
+		if sparsePenalty {
+			existing.Provenance.Method = "signal_injection_sparse_graph"
+		}
 		existing.Provenance.ObservedAt = &signal.ObservedAt
 		existing.Provenance.SourceIDs = append(existing.Provenance.SourceIDs, strings.TrimSpace(signal.ID))
 		if len(existing.Provenance.SourceIDs) > propagation.TopKContributions {
@@ -144,7 +184,7 @@ func (s *SeedInjector) Inject(ctx context.Context, signal *horizonmodels.SignalD
 			SignalID:      strings.TrimSpace(signal.ID),
 			SourceEventID: strings.TrimSpace(signal.FactID),
 			Path:          []string{strings.TrimSpace(frag.CanonicalPath)},
-			Amplitude:     signal.Amplitude,
+			Amplitude:     effectiveAmplitude,
 			Hops:          0,
 			ObservedAt:    signal.ObservedAt,
 		}

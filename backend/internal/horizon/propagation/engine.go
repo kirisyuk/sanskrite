@@ -30,6 +30,7 @@ type PropagationEngine struct {
 	lazyEval             *LazyEvaluator
 	policyExecutor       *policy.PolicyExecutor // Optional: for semantic propagation policies
 	criticalPathDetector *criticalpath.Detector // Optional: for critical path detection
+	fragmentChangedHook  func(ctx context.Context, fragmentID string)
 
 	// Трекинг активных распространений
 	activePropagations map[string]*PropagationStatus
@@ -82,6 +83,13 @@ func (e *PropagationEngine) WithPolicyExecutor(executor *policy.PolicyExecutor) 
 // WithCriticalPathDetector sets the critical path detector.
 func (e *PropagationEngine) WithCriticalPathDetector(detector *criticalpath.Detector) *PropagationEngine {
 	e.criticalPathDetector = detector
+	return e
+}
+
+// WithFragmentChangedHook wires a best-effort callback for nodes touched by propagation.
+// The hook is intended for downstream pipelines (e.g., interpretation trigger queue).
+func (e *PropagationEngine) WithFragmentChangedHook(hook func(ctx context.Context, fragmentID string)) *PropagationEngine {
+	e.fragmentChangedHook = hook
 	return e
 }
 
@@ -149,6 +157,12 @@ func (e *PropagationEngine) PropagateChange(ctx context.Context, fragmentID stri
 		affectedLensesList = append(affectedLensesList, id)
 	}
 
+	// Best-effort downstream hook for changed nodes.
+	e.fireFragmentChangedHook(ctx, fragmentID)
+	for id := range affectedFragments {
+		e.fireFragmentChangedHook(ctx, id)
+	}
+
 	return &PropagationResult{
 		AffectedFragments: affectedFragmentsList,
 		AffectedLenses:    affectedLensesList,
@@ -159,6 +173,17 @@ func (e *PropagationEngine) PropagateChange(ctx context.Context, fragmentID stri
 			"affectedLenses":   float64(len(affectedLenses)),
 		},
 	}, nil
+}
+
+func (e *PropagationEngine) fireFragmentChangedHook(ctx context.Context, fragmentID string) {
+	if e == nil || e.fragmentChangedHook == nil || strings.TrimSpace(fragmentID) == "" {
+		return
+	}
+	go func(fid string) {
+		hctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		e.fragmentChangedHook(hctx, fid)
+	}(strings.TrimSpace(fragmentID))
 }
 
 // updatePropagationStatus обновляет статус распространения для фрагмента
@@ -230,7 +255,18 @@ func (e *PropagationEngine) TriggerPropagation(ctx context.Context, fragmentID s
 
 	// Запускаем распространение для всех метрик фрагмента
 	var result *PropagationResult
+	processedMetrics := 0
+	skippedLegacyMetrics := 0
 	for metricName, metricValue := range fragment.State {
+		// Signal-first mode by default:
+		// only propagate canonical signal metrics (/metric/{risk|opportunity}/{axis}[/mechanism]).
+		// Legacy scalar metrics can be temporarily enabled via env for migration/backfill.
+		if !shouldPropagateMetricPath(metricName) {
+			skippedLegacyMetrics++
+			continue
+		}
+		processedMetrics++
+
 		// IMPORTANT:
 		// - If we don't have a previous version (prevState == nil), we must NOT treat the metric as changed from 0.
 		//   That would trigger massive propagation waves on first trigger, even when no "change" actually happened.
@@ -273,11 +309,41 @@ func (e *PropagationEngine) TriggerPropagation(ctx context.Context, fragmentID s
 			AffectedLenses:    []string{},
 			PropagationPaths:  [][]string{},
 			PropagationTime:   0,
-			Metrics:           map[string]float64{},
+			Metrics: map[string]float64{
+				"processedMetrics":     float64(processedMetrics),
+				"skippedLegacyMetrics": float64(skippedLegacyMetrics),
+			},
 		}, nil
 	}
+	if result.Metrics == nil {
+		result.Metrics = map[string]float64{}
+	}
+	result.Metrics["processedMetrics"] = float64(processedMetrics)
+	result.Metrics["skippedLegacyMetrics"] = float64(skippedLegacyMetrics)
 
 	return result, nil
+}
+
+func isCanonicalSignalMetricPath(metricName string) bool {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(metricName), "/"), "/")
+	// /metric/{risk|opportunity}/{axis...}
+	if len(parts) < 4 {
+		return false
+	}
+	if parts[0] != "metric" {
+		return false
+	}
+	if parts[1] != "risk" && parts[1] != "opportunity" {
+		return false
+	}
+	if strings.TrimSpace(parts[2]) == "" || strings.TrimSpace(parts[3]) == "" {
+		return false
+	}
+	return true
+}
+
+func shouldPropagateMetricPath(metricName string) bool {
+	return isCanonicalSignalMetricPath(metricName)
 }
 
 // processColdPathIfReady обрабатывает Cold Path задачи, если они готовы

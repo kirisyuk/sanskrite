@@ -60,3 +60,113 @@ func TestApplyBestEffortEdgeEnrichment_SetsHistoricalFromDates(t *testing.T) {
 		t.Fatalf("expected edgeModality=historical, got %v", got)
 	}
 }
+
+func TestApplyBestEffortEdgeEnrichment_DependsOnNormalizesTransmissionQualifiers(t *testing.T) {
+	edge := &models.DependencyEdge{
+		Type: models.DependencyTypeDependsOn,
+		Qualifiers: map[string]interface{}{
+			"facet":               "logistics",
+			"throughputShare":     "0.72",
+			"reroutePenalty":      "0.40",
+			"latency_delta_hours": 36,
+			"rerouteCostDeltaPct": "18",
+			"capacityUtilization": "0.81",
+			"substitutability":    0.2,
+		},
+	}
+
+	applyBestEffortEdgeEnrichment(edge)
+
+	assertHasNumericQualifier(t, edge, models.QualifierThroughputShare)
+	assertHasNumericQualifier(t, edge, models.QualifierReroutePenalty)
+	assertHasNumericQualifier(t, edge, models.QualifierRerouteLatencyDeltaHrs)
+	assertHasNumericQualifier(t, edge, models.QualifierRerouteCostDeltaPct)
+	assertHasNumericQualifier(t, edge, models.QualifierCapacityConstraint)
+
+	if _, ok := edge.Metrics[models.QualifierThroughputShare]; !ok {
+		t.Fatalf("expected metrics.%s to be synced", models.QualifierThroughputShare)
+	}
+}
+
+func TestApplyBestEffortEdgeEnrichment_DependsOnAddsTransmissionHintsWhenMissing(t *testing.T) {
+	edge := &models.DependencyEdge{
+		Type: models.DependencyTypeDependsOn,
+		Qualifiers: map[string]interface{}{
+			"facet": "logistics",
+		},
+	}
+	applyBestEffortEdgeEnrichment(edge)
+	if _, ok := edge.Qualifiers["enrichmentHints"]; !ok {
+		t.Fatalf("expected enrichmentHints for missing transmission qualifiers")
+	}
+}
+
+func TestApplyBestEffortEdgeEnrichment_DependsOnSetsTransmissionContractComplete(t *testing.T) {
+	edge := &models.DependencyEdge{
+		Type: models.DependencyTypeDependsOn,
+		Qualifiers: map[string]interface{}{
+			"facet":                         "logistics",
+			models.QualifierThroughputShare: 0.62,
+			models.QualifierReroutePenalty:  0.35,
+		},
+	}
+
+	applyBestEffortEdgeEnrichment(edge)
+
+	if got := edge.Qualifiers[models.QualifierTransmissionContractStatus]; got != models.TransmissionContractStatusComplete {
+		t.Fatalf("expected contract status complete, got %v", got)
+	}
+	if got := edge.Qualifiers[models.QualifierTransmissionContractMode]; got != models.TransmissionContractModeExplicit {
+		t.Fatalf("expected contract mode explicit, got %v", got)
+	}
+	if got := edge.Qualifiers[models.QualifierTransmissionContractVersion]; got != models.TransmissionContractVersionV1 {
+		t.Fatalf("expected contract version %s, got %v", models.TransmissionContractVersionV1, got)
+	}
+}
+
+func TestApplyBestEffortEdgeEnrichment_DependsOnSetsTransmissionContractPartial(t *testing.T) {
+	edge := &models.DependencyEdge{
+		Type: models.DependencyTypeDependsOn,
+		Qualifiers: map[string]interface{}{
+			"facet":                         "logistics",
+			models.QualifierThroughputShare: 0.62,
+		},
+	}
+
+	applyBestEffortEdgeEnrichment(edge)
+
+	if got := edge.Qualifiers[models.QualifierTransmissionContractStatus]; got != models.TransmissionContractStatusPartial {
+		t.Fatalf("expected contract status partial, got %v", got)
+	}
+	missing, ok := edge.Qualifiers[models.QualifierTransmissionContractMissing]
+	if !ok || missing == nil {
+		t.Fatalf("expected missing fields for partial contract")
+	}
+}
+
+func TestApplyBestEffortEdgeEnrichment_DependsOnSetsTransmissionContractMissing(t *testing.T) {
+	edge := &models.DependencyEdge{
+		Type:       models.DependencyTypeDependsOn,
+		Qualifiers: map[string]interface{}{},
+	}
+
+	applyBestEffortEdgeEnrichment(edge)
+
+	if got := edge.Qualifiers[models.QualifierTransmissionContractStatus]; got != models.TransmissionContractStatusMissing {
+		t.Fatalf("expected contract status missing, got %v", got)
+	}
+	if got := edge.Qualifiers[models.QualifierTransmissionContractMode]; got != models.TransmissionContractModeInferred {
+		t.Fatalf("expected contract mode inferred, got %v", got)
+	}
+}
+
+func assertHasNumericQualifier(t *testing.T, edge *models.DependencyEdge, key string) {
+	t.Helper()
+	raw, ok := edge.Qualifiers[key]
+	if !ok {
+		t.Fatalf("missing qualifier %s", key)
+	}
+	if _, ok := parseNumericQualifier(raw); !ok {
+		t.Fatalf("qualifier %s is not numeric: %v", key, raw)
+	}
+}

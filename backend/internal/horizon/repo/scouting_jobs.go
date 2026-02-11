@@ -359,6 +359,57 @@ func (r *ScoutingJobsRepository) populateFromState(job *models.ScoutingJob) {
 			}
 		}
 	}
+	// Compatibility: some producers keep sourceIds in AgentJob.Task, not State.
+	if len(job.SourceIDs) == 0 && job.Task != nil {
+		if v, ok := job.Task["sourceIds"]; ok {
+			switch t := v.(type) {
+			case []string:
+				job.SourceIDs = t
+			case []interface{}:
+				out := make([]string, 0, len(t))
+				for _, it := range t {
+					if s, ok2 := it.(string); ok2 {
+						s = strings.TrimSpace(s)
+						if s != "" {
+							out = append(out, s)
+						}
+					}
+				}
+				if len(out) > 0 {
+					job.SourceIDs = out
+				}
+			case string:
+				parts := strings.Split(t, ",")
+				out := make([]string, 0, len(parts))
+				for _, p := range parts {
+					p = strings.TrimSpace(p)
+					if p != "" {
+						out = append(out, p)
+					}
+				}
+				if len(out) > 0 {
+					job.SourceIDs = out
+				}
+			}
+		}
+	}
+	if len(job.SourceIDs) > 1 {
+		seen := map[string]struct{}{}
+		dedup := make([]string, 0, len(job.SourceIDs))
+		for _, s := range job.SourceIDs {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			seen[s] = struct{}{}
+			dedup = append(dedup, s)
+		}
+		sort.Strings(dedup)
+		job.SourceIDs = dedup
+	}
 }
 
 // ListByProjectAndLens lists scout jobs for a given project and (optionally) lensId.

@@ -3,6 +3,7 @@ package scout
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
@@ -2886,23 +2888,23 @@ func (e *ScoutEngine) processRelationsInternal(
 		targetType := targetTypeHint
 
 		// 1. Determine target canonical path
-			targetPath, err := e.resolveCanonicalPath(ctx, rel)
-			if err != nil {
-				fmt.Printf("Canonicalization failed for relation target=%q: %v\n", rel.TargetName, err)
-				continue
+		targetPath, err := e.resolveCanonicalPath(ctx, rel)
+		if err != nil {
+			fmt.Printf("Canonicalization failed for relation target=%q: %v\n", rel.TargetName, err)
+			continue
+		}
+		// Align targetType with canonical path prefix (auto-fix mismatches).
+		if inferred := InferFragmentTypeFromCanonicalPath(targetPath); inferred != "" && inferred != targetType {
+			targetType = inferred
+		}
+		// Early strictification for GEO paths to avoid creating legacy non-strict nodes
+		// like /loc/{cc}/{admin1}. Reuse shared canonicalization helper.
+		if targetType == models.FragmentTypeGeoRegion {
+			if norm := normalizeGeoPathToStrict(targetPath); norm != "" && norm != targetPath {
+				targetPath = norm
 			}
-			// Align targetType with canonical path prefix (auto-fix mismatches).
-			if inferred := InferFragmentTypeFromCanonicalPath(targetPath); inferred != "" && inferred != targetType {
-				targetType = inferred
-			}
-			// Early strictification for GEO paths to avoid creating legacy non-strict nodes
-			// like /loc/{cc}/{admin1}. Reuse shared canonicalization helper.
-			if targetType == models.FragmentTypeGeoRegion {
-				if norm := normalizeGeoPathToStrict(targetPath); norm != "" && norm != targetPath {
-					targetPath = norm
-				}
-			}
-			targetIdentityKey := buildRelationTargetIdentityKey(rel, targetPath, targetType)
+		}
+		targetIdentityKey := buildRelationTargetIdentityKey(rel, targetPath, targetType)
 
 		// 2. Find or Create Target Fragment
 		//
@@ -4572,7 +4574,7 @@ func (e *ScoutEngine) processSupplyChains(
 
 		// Check if fragment already exists
 		existing, err := e.fragmentsRepo.GetByCanonicalPath(ctx, frag.CanonicalPath)
-		if err != nil {
+		if errors.Is(err, horizonrepo.ErrFragmentNotFound) {
 			// Create new fragment
 			frag.Metadata.CreatedAt = time.Now().UTC()
 			frag.Metadata.LastUpdatedAt = time.Now().UTC()
@@ -4594,7 +4596,7 @@ func (e *ScoutEngine) processSupplyChains(
 				msg := fmt.Sprintf("[SupplyChainFragmentCreate] OK canonicalPath=%s id=%s type=%s", frag.CanonicalPath, id, frag.Type)
 				e.logLine(ctx, job, "info", msg)
 			}
-		} else {
+		} else if err == nil && existing != nil {
 			// Fragment exists, store ID for edge creation
 			pathToID[frag.CanonicalPath] = existing.ID
 			e.ensureOrgGeoFallbackLink(ctx, existing, "scout_supply_chain", job.ID)
@@ -4633,6 +4635,11 @@ func (e *ScoutEngine) processSupplyChains(
 					}
 				}
 			}
+		} else if err != nil {
+			createErrors++
+			msg := fmt.Sprintf("[SupplyChainFragmentLookup] FAILED canonicalPath=%s err=%v", frag.CanonicalPath, err)
+			fmt.Printf("%s\n", msg)
+			e.logLine(ctx, job, "warn", msg)
 		}
 	}
 

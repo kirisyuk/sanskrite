@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	firebase "firebase.google.com/go/v4"
@@ -43,12 +44,15 @@ import (
 	// Horizon system
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
+	horizonfeedback "github.com/igorkirisyuk/sanskrite/internal/horizon/feedback"
+	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/profile"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	horizontasks "github.com/igorkirisyuk/sanskrite/internal/horizon/tasks"
@@ -255,6 +259,8 @@ func main() {
 	var profileScheduler *horizonprofile.Scheduler
 	var enforcementHandlers *horizonhttp.EnforcementHandlers
 	var scoutEngine *horizonscout.ScoutEngine
+	var riskPipeline *horizonrisk.Pipeline
+	var riskJobsRepo *horizonrepo.RiskJobsRepository
 	var horizonTelemetryRepo *horizonrepo.HorizonTelemetryRepository
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
@@ -1036,9 +1042,10 @@ func main() {
 		horizonCascadeEntityRegistryRepo := horizonrepo.NewCascadeEntityRegistryRepository(fsClient.Client())
 		horizonCanonicalPathRedirectsRepo := horizonrepo.NewCanonicalPathRedirectsRepository(fsClient.Client())
 		horizonTelemetryRepo = horizonrepo.NewHorizonTelemetryRepository(fsClient.Client())
-		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
-		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
-		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
+			horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
+			horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
+			riskJobsRepo = horizonrepo.NewRiskJobsRepository(fsClient.Client())
+			horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
 		horizonProfilesRepo := horizonrepo.NewFragmentProfilesRepository(fsClient.Client())
 		horizonProfilePoliciesRepo := horizonrepo.NewFragmentProfileRefreshPoliciesRepository(fsClient.Client())
 		horizonLensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(fsClient.Client())
@@ -1116,10 +1123,60 @@ func main() {
 					logger.Printf("WARNING: Cloud Tasks (Scout) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
 				}
 			}
-		}
+			}
 
-		// Cloud Tasks dispatcher for Profile refresh (managed queue + autoscaling + retries).
-		var profileTasksDispatcher *horizontasks.ProfileCloudTasksDispatcher
+			// Cloud Tasks dispatcher for Risk jobs (separate queue/lifecycle from Scout).
+			var riskTasksDispatcher *horizontasks.RiskCloudTasksDispatcher
+			{
+				enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_RISK", "1"))
+				if enabled == "1" || strings.EqualFold(enabled, "true") {
+					location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
+					queue := strings.TrimSpace(getEnv("CLOUD_TASKS_RISK_QUEUE", "sanskrite-risk-v1"))
+					baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
+					saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+					aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+					if baseURL != "" && saEmail != "" {
+						targetURL := strings.TrimRight(baseURL, "/") + "/api/v1/internal/tasks/risk/run"
+						if aud == "" {
+							aud = strings.TrimRight(baseURL, "/")
+						}
+						if d, err := horizontasks.NewRiskCloudTasksDispatcher(ctx, projectID, location, queue, targetURL, saEmail, aud); err == nil {
+							riskTasksDispatcher = d
+							logger.Printf("Cloud Tasks (Risk) enabled: queue=%s location=%s target=%s", queue, location, targetURL)
+							if riskJobsRepo != nil {
+								riskJobsRepo.WithOnCreate(func(c context.Context, job *horizonmodels.RiskJob) error {
+									if pub != nil && job != nil {
+										payload := map[string]interface{}{
+											"schemaVersion":      "risk.ws.v1",
+											"tenantId":           strings.TrimSpace(job.TenantID),
+											"projectId":          strings.TrimSpace(job.ProjectID),
+											"lensId":             strings.TrimSpace(job.LensID),
+											"jobId":              strings.TrimSpace(job.ID),
+											"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+											"polarity":           strings.TrimSpace(job.Polarity),
+											"state":              string(job.CurrentState),
+											"stage":              string(job.CurrentStage),
+										}
+										_ = pub.PublishJSON(c, realtime.EventType("horizon.risk.job.created"), strings.TrimSpace(job.TenantID), payload)
+									}
+									if err := riskTasksDispatcher.EnqueueRiskJob(c, job.ID); err != nil {
+										return err
+									}
+									logger.Printf("Cloud Tasks (Risk) enqueued: jobId=%s target=%s polarity=%s", job.ID, job.TargetCanonicalPath, job.Polarity)
+									return nil
+								})
+							}
+						} else {
+							logger.Printf("WARNING: Cloud Tasks (Risk) disabled due to init error: %v", err)
+						}
+					} else {
+						logger.Printf("WARNING: Cloud Tasks (Risk) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
+					}
+				}
+			}
+
+			// Cloud Tasks dispatcher for Profile refresh (managed queue + autoscaling + retries).
+			var profileTasksDispatcher *horizontasks.ProfileCloudTasksDispatcher
 		{
 			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_PROFILE", "1"))
 			if enabled == "1" || strings.EqualFold(enabled, "true") {
@@ -1240,6 +1297,8 @@ func main() {
 		if err != nil {
 			logger.Printf("WARNING: Horizon service initialization failed: %v", err)
 		} else {
+			horizonService.SetOntologyFactsRepository(ontologyFactsRepo)
+
 			// Initialize Lens subsystem
 			lensLifecycle := horizonlens.NewLifecycleManager(horizonFragmentsRepo)
 			lensCalculator := horizonlens.NewMetricsCalculator(horizonFragmentsRepo)
@@ -1269,6 +1328,212 @@ func main() {
 				horizonLensesRepo,
 				pub,
 			)
+			propagationProfilesRepo := horizonrepo.NewPropagationProfilesRepository(fsClient.Client())
+			propagationProfileLookup := horizonpropagation.NewProfileLookup(propagationProfilesRepo)
+			if err := propagationProfileLookup.Initialize(context.Background()); err != nil {
+				logger.Printf("WARNING: propagation profile lookup initialization fallback: %v", err)
+			}
+			interpretationQueue := horizoninterp.NewInterpretationQueue(fsClient.Client())
+			interpretationCache := horizoninterp.NewInterpretationCache(fsClient.Client())
+			scoreComputer := horizoninterp.NewScoreComputer()
+			triggerEvaluator := horizoninterp.NewTriggerEvaluator(scoreComputer, horizonFragmentsRepo, horizonFragmentVersionsRepo)
+			interpDispatcher := horizoninterp.NewDispatcher(
+				horizonFragmentsRepo,
+				triggerEvaluator,
+				interpretationQueue,
+				horizoninterp.DefaultTriggerConfig(),
+			)
+			var feedbackMu sync.Mutex
+			feedbackThrottleWindow := 2 * time.Minute
+			feedbackLastSeen := make(map[string]time.Time)
+			isFeedbackThrottled := func(key string) bool {
+				key = strings.TrimSpace(key)
+				if key == "" {
+					return false
+				}
+				now := time.Now().UTC()
+				feedbackMu.Lock()
+				defer feedbackMu.Unlock()
+				for k, ts := range feedbackLastSeen {
+					if now.Sub(ts) > feedbackThrottleWindow {
+						delete(feedbackLastSeen, k)
+					}
+				}
+				if ts, ok := feedbackLastSeen[key]; ok && now.Sub(ts) <= feedbackThrottleWindow {
+					return true
+				}
+				feedbackLastSeen[key] = now
+				return false
+			}
+			resolveFeedbackFragment := func(ctx context.Context, event horizonfeedback.Event) *horizonmodels.HorizonFragment {
+				if ctx == nil {
+					ctx = context.Background()
+				}
+				if fid := strings.TrimSpace(event.FragmentID); fid != "" {
+					if f, err := horizonFragmentsRepo.Get(ctx, fid); err == nil && f != nil {
+						return f
+					}
+				}
+				candidates := make([]string, 0, 3)
+				if cp := strings.TrimSpace(event.CanonicalPath); cp != "" {
+					candidates = append(candidates, cp)
+				}
+				if raw, ok := event.Payload["representative"]; ok {
+					if cp, ok := raw.(string); ok && strings.TrimSpace(cp) != "" {
+						candidates = append(candidates, strings.TrimSpace(cp))
+					}
+				}
+				for _, cp := range candidates {
+					if f, err := horizonFragmentsRepo.GetByCanonicalPath(ctx, cp); err == nil && f != nil {
+						return f
+					}
+				}
+				return nil
+			}
+			normalizeFeedbackPolarity := func(p string) string {
+				p = strings.ToLower(strings.TrimSpace(p))
+				if p != "risk" && p != "opportunity" {
+					return "risk"
+				}
+				return p
+			}
+			enqueueForcedInterpretation := func(ctx context.Context, frag *horizonmodels.HorizonFragment, polarity string, priority horizoninterp.TriggerPriority, triggerType horizoninterp.TriggerType, triggerValue float64) {
+				if frag == nil || strings.TrimSpace(frag.ID) == "" {
+					return
+				}
+				polarity = normalizeFeedbackPolarity(polarity)
+				hasPending, err := interpretationQueue.HasPending(ctx, frag.ID, polarity)
+				if err == nil && hasPending {
+					return
+				}
+				_, err = interpretationQueue.Enqueue(ctx, &horizoninterp.InterpretationRequest{
+					FragmentID:    strings.TrimSpace(frag.ID),
+					CanonicalPath: strings.TrimSpace(frag.CanonicalPath),
+					NodeLabel:     strings.TrimSpace(frag.Labels["en"]),
+					Polarity:      polarity,
+					Priority:      priority,
+					TriggerType:   triggerType,
+					TriggerValue:  triggerValue,
+					CreatedAt:     time.Now().UTC(),
+					Status:        "pending",
+				})
+				if err != nil {
+					logger.Printf("[horizon.feedback] enqueue_failed fragmentId=%s polarity=%s err=%v", strings.TrimSpace(frag.ID), polarity, err)
+				}
+			}
+				triggerPropagationRefresh := func(fragmentID string) {
+					fragmentID = strings.TrimSpace(fragmentID)
+					if fragmentID == "" || propagationEngine == nil {
+						return
+					}
+				go func(fid string) {
+					runCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+					defer cancel()
+					if _, err := propagationEngine.TriggerPropagation(runCtx, fid); err != nil {
+						logger.Printf("[horizon.feedback] propagation_refresh_failed fragmentId=%s err=%v", fid, err)
+						}
+					}(fragmentID)
+				}
+				enqueueRiskJobForFragment := func(ctx context.Context, frag *horizonmodels.HorizonFragment, eventType, polarity, reason string) {
+					if riskJobsRepo == nil || frag == nil {
+						return
+					}
+					projectID := ""
+					if frag.Governance.CreatedByProjectID != nil {
+						projectID = strings.TrimSpace(*frag.Governance.CreatedByProjectID)
+					}
+					if projectID == "" {
+						return
+					}
+					polarity = normalizeFeedbackPolarity(polarity)
+					triggerRef := strings.Join([]string{
+						"feedback",
+						strings.TrimSpace(eventType),
+						strings.TrimSpace(reason),
+						strings.TrimSpace(frag.ID),
+					}, ":")
+					dedupKey := strings.Join([]string{
+						"risk_job_dedup",
+						strings.TrimSpace(frag.TenantID),
+						projectID,
+						"",
+						strings.TrimSpace(frag.CanonicalPath),
+						triggerRef,
+						polarity,
+					}, "|")
+					_, _, err := riskJobsRepo.Create(ctx, &horizonmodels.RiskJob{
+						TenantID:            strings.TrimSpace(frag.TenantID),
+						ProjectID:           projectID,
+						TriggerType:         "feedback",
+						TriggerRef:          triggerRef,
+						DedupKey:            dedupKey,
+						TargetCanonicalPath: strings.TrimSpace(frag.CanonicalPath),
+						Polarity:            polarity,
+						CurrentStage:        horizonmodels.RiskStageIdentify,
+						CurrentState:        horizonmodels.RiskJobStatePending,
+						State: map[string]any{
+							"feedbackType": strings.TrimSpace(eventType),
+							"feedbackReason": strings.TrimSpace(reason),
+						},
+					})
+					if err != nil {
+						logger.Printf("[horizon.feedback] risk_job_enqueue_failed fragmentId=%s polarity=%s err=%v", strings.TrimSpace(frag.ID), polarity, err)
+					}
+				}
+				feedbackEmitter := horizonfeedback.FuncEmitter(func(ctx context.Context, event horizonfeedback.Event) error {
+				eventType := strings.TrimSpace(event.Type)
+				if eventType == "" {
+					return nil
+				}
+				frag := resolveFeedbackFragment(ctx, event)
+				fragKey := strings.TrimSpace(event.FragmentID)
+				if frag != nil && strings.TrimSpace(frag.ID) != "" {
+					fragKey = strings.TrimSpace(frag.ID)
+				}
+				throttleKey := strings.Join([]string{
+					eventType,
+					fragKey,
+					normalizeFeedbackPolarity(event.Polarity),
+					strings.TrimSpace(event.Reason),
+				}, "|")
+				if isFeedbackThrottled(throttleKey) {
+					return nil
+				}
+
+				logger.Printf("[horizon.feedback] type=%s fragmentId=%s polarity=%s reason=%s",
+					eventType,
+					fragKey,
+					normalizeFeedbackPolarity(event.Polarity),
+					strings.TrimSpace(event.Reason),
+				)
+
+					switch eventType {
+					case "re_evaluate":
+						if frag != nil {
+							enqueueForcedInterpretation(ctx, frag, event.Polarity, horizoninterp.TriggerPriorityHigh, horizoninterp.TriggerTypeRapidChange, 1.0)
+							triggerPropagationRefresh(frag.ID)
+							enqueueRiskJobForFragment(ctx, frag, eventType, event.Polarity, event.Reason)
+						}
+					case "attention_escalation":
+						if frag != nil {
+							enqueueForcedInterpretation(ctx, frag, event.Polarity, horizoninterp.TriggerPriorityAlways, horizoninterp.TriggerTypeVIP, 1.0)
+							triggerPropagationRefresh(frag.ID)
+							enqueueRiskJobForFragment(ctx, frag, eventType, event.Polarity, event.Reason)
+						}
+					}
+				return nil
+			})
+				interpretSignalsRepo := horizoninterp.NewOntologySignalFactsRepo(ontologyFactsRepo)
+				interpreter := horizoninterp.NewInterpreter(exec, horizonFragmentsRepo, interpretSignalsRepo).WithFeedbackEmitter(feedbackEmitter)
+			interpProcessor := horizoninterp.NewProcessor(
+				interpretationQueue,
+				interpretationCache,
+				interpreter,
+			)
+			interpProcessor.Start(context.Background(), 30*time.Second, 20)
+			propagationEngine.WithFragmentChangedHook(func(ctx context.Context, fragmentID string) {
+				_ = interpDispatcher.EvaluateAndEnqueue(ctx, fragmentID)
+			})
 
 			// Wire Policy Architecture for semantic propagation
 			propagationPoliciesRepo := horizonrepo.NewPropagationPoliciesRepository(fsClient.Client())
@@ -1293,7 +1558,60 @@ func main() {
 			criticalPathDetector := horizoncriticalpath.NewDetector(horizonFragmentsRepo, horizonEdgesRepo)
 			propagationEngine.WithCriticalPathDetector(criticalPathDetector)
 
-			horizonService.SetPropagationEngine(propagationEngine)
+				horizonService.SetPropagationEngine(propagationEngine)
+				riskAppetiteRepo := horizonrepo.NewRiskAppetiteProfilesRepository(fsClient.Client())
+				appetiteResolver := horizonrisk.NewAppetiteResolver(riskAppetiteRepo, horizonFragmentsRepo, horizonEdgesRepo)
+				concentrationAnalyzer := horizonrisk.NewConcentrationAnalyzer(horizonFragmentsRepo).
+					WithFeedbackEmitter(feedbackEmitter)
+				horizonService.SetRiskServices(appetiteResolver, concentrationAnalyzer)
+				if riskJobsRepo != nil {
+					riskCfg := horizonrisk.DefaultPipelineConfig()
+					enabledRiskPipeline := strings.TrimSpace(getEnv("ENABLE_RISK_PIPELINE", "1"))
+					riskCfg.EnablePipeline = enabledRiskPipeline == "1" || strings.EqualFold(enabledRiskPipeline, "true")
+					if v := strings.TrimSpace(getEnv("RISK_PIPELINE_MAX_STAGE_RETRIES", "")); v != "" {
+						if n, err := strconv.Atoi(v); err == nil && n > 0 {
+							riskCfg.MaxAttempts = n
+						}
+					}
+					if v := strings.TrimSpace(getEnv("RISK_PIPELINE_STAGE_TIMEOUT_SEC", "")); v != "" {
+						if n, err := strconv.Atoi(v); err == nil && n > 0 {
+							riskCfg.StageTimeout = time.Duration(n) * time.Second
+						}
+					}
+					stageFlag := func(env string, def bool) bool {
+						raw := strings.TrimSpace(getEnv(env, ""))
+						if raw == "" {
+							return def
+						}
+						return raw == "1" || strings.EqualFold(raw, "true")
+					}
+					riskCfg.EnableStage[horizonmodels.RiskStageIdentify] = stageFlag("ENABLE_RISK_STAGE_IDENTIFY", riskCfg.EnableStage[horizonmodels.RiskStageIdentify])
+					riskCfg.EnableStage[horizonmodels.RiskStageEscalate] = stageFlag("ENABLE_RISK_STAGE_ESCALATE", riskCfg.EnableStage[horizonmodels.RiskStageEscalate])
+					riskCfg.EnableStage[horizonmodels.RiskStageApply] = stageFlag("ENABLE_RISK_STAGE_APPLICABILITY", riskCfg.EnableStage[horizonmodels.RiskStageApply])
+					riskCfg.EnableStage[horizonmodels.RiskStageSeed] = stageFlag("ENABLE_RISK_STAGE_SEED", riskCfg.EnableStage[horizonmodels.RiskStageSeed])
+					riskCfg.EnableStage[horizonmodels.RiskStagePropagate] = stageFlag("ENABLE_RISK_STAGE_PROPAGATE", riskCfg.EnableStage[horizonmodels.RiskStagePropagate])
+					riskCfg.EnableStage[horizonmodels.RiskStageRollup] = stageFlag("ENABLE_RISK_STAGE_ROLLUP", riskCfg.EnableStage[horizonmodels.RiskStageRollup])
+					riskCfg.EnableStage[horizonmodels.RiskStageInterpret] = stageFlag("ENABLE_RISK_STAGE_INTERPRET", riskCfg.EnableStage[horizonmodels.RiskStageInterpret])
+					riskCfg.EnableStage[horizonmodels.RiskStageAlert] = stageFlag("ENABLE_RISK_STAGE_ALERT", riskCfg.EnableStage[horizonmodels.RiskStageAlert])
+
+					riskPipeline = horizonrisk.NewPipeline(
+						riskJobsRepo,
+						ontologyFactsRepo,
+						horizonFragmentsRepo,
+						horizonEdgesRepo,
+						horizonExposurePathsRepo,
+						propagationEngine,
+						propagationProfileLookup,
+						appetiteResolver,
+						interpreter,
+						pub,
+						riskCfg,
+					).WithFeedbackEmitter(feedbackEmitter)
+				}
+				horizonFragmentsRepo.WithOnUpsert(func(ctx context.Context, fragment *horizonmodels.HorizonFragment) {
+					// Auto-seed appetite profiles when external scopes emerge (market/geo/org with segments).
+					appetiteResolver.EnsureForFragment(ctx, fragment)
+				})
 
 			// Запускаем фоновый процессор Cold Path задач (каждые 30 секунд)
 			ctxBackground := context.Background()
@@ -1374,6 +1692,8 @@ func main() {
 			scoutEngine.WithCanonicalPathResolver(canonicalPathResolver)
 			// Wire LensesRepository for updating lens ViewConfig on assembly completion
 			scoutEngine.WithLensesRepository(horizonLensesRepo)
+			// Wire ExposurePathsRepository for strict external applicability gating.
+			scoutEngine.WithExposurePathsRepository(horizonExposurePathsRepo)
 			// Wire LensArtifactsRepository for Phase 2 Strategic Overlay
 			scoutEngine.WithLensArtifactsRepo(horizonLensArtifactsRepo)
 
@@ -1382,6 +1702,8 @@ func main() {
 				_, err := propagationEngine.TriggerPropagation(ctx, fragmentID)
 				return err
 			})
+			// Wire shared axis-based signal propagation components (single source of truth).
+			scoutEngine.WithSignalPropagation(propagationEngine, propagationProfileLookup)
 
 			horizonService.SetScoutEngine(scoutEngine)
 
@@ -1428,7 +1750,8 @@ func main() {
 			// Watchdog (background monitoring) can generate large volumes of Scout jobs.
 			// Keep it disabled by default; enable explicitly via env.
 			if strings.TrimSpace(getEnv("ENABLE_HORIZON_WATCHDOG", "0")) == "1" {
-				watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, ontologyFactsRepo, horizonScoutingJobsRepo, scoutEngine, sourceExecutor, exec)
+					watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, ontologyFactsRepo, horizonScoutingJobsRepo, scoutEngine, sourceExecutor, exec).
+						WithRiskJobsRepository(riskJobsRepo)
 				watchdogScheduler := horizonwatchdog.NewScheduler()
 				watchdogService := horizonwatchdog.NewWatchdogService(
 					horizonWatchdogRepo,
@@ -1550,13 +1873,15 @@ func main() {
 			}
 
 			// Create HTTP handlers
-			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
-				WithDocumentsRepo(docsRepo).
-				WithUsersRepo(s.users).
-				WithGenAIHandler(genaiHandler).
-				WithInteractionsRepo(interactionsRepo).
-				WithOntologyFactsRepo(ontologyFactsRepo).
-				WithProfilesHandler(profilesHandler)
+				horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
+					WithDocumentsRepo(docsRepo).
+					WithUsersRepo(s.users).
+					WithGenAIHandler(genaiHandler).
+					WithInteractionsRepo(interactionsRepo).
+					WithOntologyFactsRepo(ontologyFactsRepo).
+					WithExposurePathsRepo(horizonExposurePathsRepo).
+					WithRiskJobsRepo(riskJobsRepo).
+					WithProfilesHandler(profilesHandler)
 			logger.Printf("Horizon system initialized")
 
 			// Wire Horizon Lens service to projects handler for cascade delete
@@ -1586,7 +1911,7 @@ func main() {
 
 	// Cloud Tasks -> Scout job execution (managed queue + retries + autoscaling).
 	// Secured via OIDC token issued for the configured service account.
-	mux.HandleFunc("/api/v1/internal/tasks/scout/run", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/api/v1/internal/tasks/scout/run", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -1686,12 +2011,111 @@ func main() {
 			return
 		}
 
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		})
 
-	// Cloud Tasks -> Profile refresh execution (managed queue + retries + autoscaling).
-	// Secured via OIDC token issued for the configured service account.
+		// Cloud Tasks -> Risk job execution (separate queue and lifecycle from Scout).
+		mux.HandleFunc("/api/v1/internal/tasks/risk/run", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if riskPipeline == nil {
+				http.Error(w, "risk pipeline not initialized", http.StatusServiceUnavailable)
+				return
+			}
+
+			authz := strings.TrimSpace(r.Header.Get("Authorization"))
+			const bearer = "Bearer "
+			if !strings.HasPrefix(authz, bearer) || len(authz) <= len(bearer) {
+				http.Error(w, "missing Authorization bearer token", http.StatusUnauthorized)
+				return
+			}
+			rawTok := strings.TrimSpace(authz[len(bearer):])
+			aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+			if aud == "" {
+				aud = "https://" + r.Host
+			}
+			payload, err := idtoken.Validate(r.Context(), rawTok, aud)
+			if err != nil {
+				http.Error(w, "invalid cloud tasks token", http.StatusUnauthorized)
+				return
+			}
+			expectedSA := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+			if expectedSA != "" {
+				if email, ok := payload.Claims["email"].(string); !ok || !strings.EqualFold(strings.TrimSpace(email), expectedSA) {
+					http.Error(w, "unexpected token identity", http.StatusForbidden)
+					return
+				}
+			}
+
+			var body struct {
+				JobID string `json:"jobId"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid json body", http.StatusBadRequest)
+				return
+			}
+			jobID := strings.TrimSpace(body.JobID)
+			if jobID == "" {
+				http.Error(w, "jobId is required", http.StatusBadRequest)
+				return
+			}
+
+			execCtx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+			defer cancel()
+
+			job, runErr := riskPipeline.RunJob(execCtx, jobID)
+			if runErr != nil {
+				retryCount := 0
+				if v := strings.TrimSpace(r.Header.Get("X-CloudTasks-TaskRetryCount")); v != "" {
+					if n, perr := strconv.Atoi(v); perr == nil && n >= 0 {
+						retryCount = n
+					}
+				}
+				if job != nil {
+					terminal := job.CurrentState == horizonmodels.RiskJobStateCompleted ||
+						job.CurrentState == horizonmodels.RiskJobStateFailed ||
+						job.CurrentState == horizonmodels.RiskJobStatePoisoned ||
+						job.CurrentState == horizonmodels.RiskJobStateCancelled
+					if terminal || retryCount >= 4 {
+						if !terminal && retryCount >= 4 && riskJobsRepo != nil {
+							job.CurrentState = horizonmodels.RiskJobStatePoisoned
+							if strings.TrimSpace(job.TerminalReason) == "" {
+								job.TerminalReason = "E_STAGE_TIMEOUT"
+							}
+							_ = riskJobsRepo.Update(context.Background(), job)
+						}
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusOK)
+						_ = json.NewEncoder(w).Encode(map[string]string{
+							"status": "ok",
+							"jobId":  jobID,
+							"state":  string(job.CurrentState),
+						})
+						return
+					}
+				}
+				http.Error(w, fmt.Sprintf("risk execution failed (will retry): %v", runErr), http.StatusInternalServerError)
+				return
+			}
+
+			state := string(horizonmodels.RiskJobStateCompleted)
+			if job != nil {
+				state = string(job.CurrentState)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"status": "ok",
+				"jobId":  jobID,
+				"state":  state,
+			})
+		})
+
+		// Cloud Tasks -> Profile refresh execution (managed queue + retries + autoscaling).
+		// Secured via OIDC token issued for the configured service account.
 	mux.HandleFunc("/api/v1/internal/tasks/profile/refresh", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

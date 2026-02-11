@@ -199,12 +199,48 @@ func (r *OntologyFactsRepository) ListByCanonicalPathAndKind(ctx context.Context
 	return out, nil
 }
 
+// ListByEventIDAndKind returns facts associated with a specific source event and kind.
+// This is used for idempotency/dedup in signal pipelines (same event should not emit same wave repeatedly).
+func (r *OntologyFactsRepository) ListByEventIDAndKind(ctx context.Context, tenantID, eventID, kind string, limit int) ([]*models.OntologyFact, error) {
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	eventID = strings.TrimSpace(eventID)
+	kind = strings.TrimSpace(kind)
+	if eventID == "" || kind == "" {
+		return nil, fmt.Errorf("eventID and kind are required")
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+
+	q := r.col.
+		Where("tenantId", "==", tenantID).
+		Where("eventId", "==", eventID).
+		Where("kind", "==", kind).
+		Limit(limit)
+
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.OntologyFact, 0, len(docs))
+	for _, d := range docs {
+		var f models.OntologyFact
+		if err := d.DataTo(&f); err != nil {
+			continue
+		}
+		out = append(out, &f)
+	}
+	return out, nil
+}
+
 // ListCanonicalPathsBySpherePath returns a deduplicated list of canonicalPaths for facts
 // that contain the given exact spherePath in their spherePaths.
 //
 // Notes:
-// - This intentionally avoids adding extra Firestore filters (tenant/status) to not require composite indexes.
-//   Filtering is done in-memory.
+//   - This intentionally avoids adding extra Firestore filters (tenant/status) to not require composite indexes.
+//     Filtering is done in-memory.
 func (r *OntologyFactsRepository) ListCanonicalPathsBySpherePath(ctx context.Context, tenantID string, spherePath string, limit int) ([]string, error) {
 	if strings.TrimSpace(spherePath) == "" {
 		return nil, fmt.Errorf("spherePath is required")
@@ -269,7 +305,7 @@ func (r *OntologyFactsRepository) exportToGCSAndSync(ctx context.Context, f *mod
 	}
 
 	doc := vertexDocumentJSON{
-		ID:      f.ID,
+		ID: f.ID,
 		Content: map[string]interface{}{
 			"mimeType": "text/plain",
 			"rawBytes": base64.StdEncoding.EncodeToString([]byte(f.VectorText)),

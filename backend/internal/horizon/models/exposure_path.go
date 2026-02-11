@@ -14,12 +14,30 @@ import (
 type ExposureType string
 
 const (
-	ExposureTypeSupplyChainRisk ExposureType = "SUPPLY_CHAIN_RISK"
+	ExposureTypeSupplyChainRisk       ExposureType = "SUPPLY_CHAIN_RISK"
+	ExposureTypeLogisticsRouteRisk    ExposureType = "LOGISTICS_ROUTE_RISK"
+	ExposureTypeLegalRegulatoryRisk   ExposureType = "LEGAL_REGULATORY_RISK"
+	ExposureTypeFinancialSettlementRisk ExposureType = "FINANCIAL_SETTLEMENT_RISK"
+	ExposureTypeGeopoliticalRisk      ExposureType = "GEOPOLITICAL_RISK"
+	ExposureTypeClimateHazardRisk     ExposureType = "CLIMATE_HAZARD_RISK"
+	ExposureTypeInformationSpaceRisk  ExposureType = "INFORMATION_SPACE_RISK"
 )
 
 func (t ExposureType) Valid() bool {
 	switch t {
 	case ExposureTypeSupplyChainRisk:
+		return true
+	case ExposureTypeLogisticsRouteRisk:
+		return true
+	case ExposureTypeLegalRegulatoryRisk:
+		return true
+	case ExposureTypeFinancialSettlementRisk:
+		return true
+	case ExposureTypeGeopoliticalRisk:
+		return true
+	case ExposureTypeClimateHazardRisk:
+		return true
+	case ExposureTypeInformationSpaceRisk:
 		return true
 	default:
 		return false
@@ -269,5 +287,4 @@ func ExposureDocID(tenantID, lensID, canonicalKey string) string {
 	short := hex.EncodeToString(sum[:10])
 	return fmt.Sprintf("%s__%s__%s", strings.TrimSpace(tenantID), strings.TrimSpace(lensID), short)
 }
-
 
