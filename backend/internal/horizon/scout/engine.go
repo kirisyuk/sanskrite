@@ -711,13 +711,13 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 	if e.propagationTrigger != nil {
 		for fid := range dimensionFragmentIDsToPropagate {
 			fid := fid
-			go func() {
+			runAsyncSafe("dimension_fragment_propagation", func() {
 				propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 				defer cancel()
 				if err := e.propagationTrigger(propCtx, fid); err != nil {
 					fmt.Printf("[ScoutEngine] propagationTrigger failed for dimension fragment: fragmentId=%s err=%v\n", fid, err)
 				}
-			}()
+			})
 		}
 	}
 
@@ -1103,6 +1103,17 @@ func (e *ScoutEngine) WithValidationPolicy(executor *policy.PolicyExecutor) *Sco
 	e.validationPolicy = executor
 	if e.preCreateValidator != nil {
 		e.preCreateValidator.WithValidationPolicy(executor)
+	}
+	return e
+}
+
+// WithTelemetryRepo wires unified telemetry sink for policy KPI counters.
+func (e *ScoutEngine) WithTelemetryRepo(telemetryRepo *repo.HorizonTelemetryRepository) *ScoutEngine {
+	if e.preCreateValidator != nil {
+		e.preCreateValidator.WithTelemetryRepo(telemetryRepo)
+	}
+	if e.edgesRepo != nil {
+		e.edgesRepo.WithTelemetryRepo(telemetryRepo)
 	}
 	return e
 }
@@ -1974,14 +1985,15 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 												}
 												// Trigger propagation for signal-derived metrics
 												if e.propagationTrigger != nil {
-													go func(fid string) {
+													fid := frag.ID
+													runAsyncSafe("signal_derived_metric_propagation", func() {
 														propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 														defer cancel()
 														if err := e.propagationTrigger(propCtx, fid); err != nil {
 															fmt.Printf("[ScoutEngine] propagationTrigger failed for signal-derived metric updates: fragmentId=%s signalId=%s err=%v\n",
 																strings.TrimSpace(fid), strings.TrimSpace(signalID), err)
 														}
-													}(frag.ID)
+													})
 												}
 											}
 										}
@@ -2029,13 +2041,14 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					}
 					// Trigger propagation for deterministic updates as well (non-blocking).
 					if e.propagationTrigger != nil {
-						go func(fid string) {
+						fid := existingFragment.ID
+						runAsyncSafe("deterministic_metric_propagation", func() {
 							propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 							defer cancel()
 							if err := e.propagationTrigger(propCtx, fid); err != nil {
 								fmt.Printf("Propagation trigger failed for fragment %s: %v\n", fid, err)
 							}
-						}(existingFragment.ID)
+						})
 					}
 					if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "fast_path_applied_facts"); err != nil {
 						fmt.Printf("[ScoutEngine] Failed to transition job to VERIFIED on fast-path (best-effort): jobId=%s target=%s err=%v\n",
@@ -3612,7 +3625,8 @@ SKIP_RESEARCH:
 	if e.propagationTrigger != nil {
 		rc, _ := rtctx.Get(ctx)
 		// Запускаем в отдельной горутине, чтобы не блокировать завершение задачи
-		go func(fid string) {
+		fid := fragmentID
+		runAsyncSafe("scout_job_fragment_propagation", func() {
 			// Используем фоновый контекст с таймаутом
 			propBase := context.Background()
 			if strings.TrimSpace(rc.TenantID) != "" || strings.TrimSpace(rc.ProjectID) != "" || strings.TrimSpace(rc.LensID) != "" || strings.TrimSpace(rc.CorrelationID) != "" || strings.TrimSpace(rc.SessionID) != "" {
@@ -3624,7 +3638,7 @@ SKIP_RESEARCH:
 				// Логируем ошибку (в реальном коде нужен logger)
 				fmt.Printf("Propagation trigger failed for fragment %s: %v\n", fid, err)
 			}
-		}(fragmentID)
+		})
 	}
 
 	return nil
@@ -4391,7 +4405,7 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 	}
 
 	// Run in background to not block job completion.
-	go func() {
+	runAsyncSafe("policy_check", func() {
 		// Policy checks may involve multiple LLM calls (duplicate checks + fallbacks) and must not
 		// be prematurely cancelled, otherwise we get "context deadline exceeded" across all providers
 		// and fail to persist policy check results.
@@ -4631,7 +4645,7 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 		if e.policyWSPublisher != nil {
 			_ = e.policyWSPublisher.PublishPolicyCheckComplete(policyCtx, result, durationMs)
 		}
-	}()
+	})
 }
 
 // shouldAutoExecuteEnforcement returns true if enforcement jobs should be executed immediately.

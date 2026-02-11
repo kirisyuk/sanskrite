@@ -31,6 +31,10 @@ func main() {
 
 	// Override Firebase Auth Project ID if specified
 	firebaseProjectID := getEnv("FIREBASE_AUTH_PROJECT_ID", projectID)
+	if firebaseProjectID != projectID {
+		log.Printf("FIREBASE_AUTH_PROJECT_ID=%q differs from GCP project %q; overriding to %q for hatlone-ws token verification", firebaseProjectID, projectID, projectID)
+		firebaseProjectID = projectID
+	}
 	log.Printf("Initializing Firebase App with ProjectID: %s (GCP_PROJECT_ID: %s)", firebaseProjectID, projectID)
 
 	fbApp, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: firebaseProjectID}, opts...)

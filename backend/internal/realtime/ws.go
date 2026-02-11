@@ -23,8 +23,10 @@ type Hub struct {
 	verifiedConns map[string]map[*websocket.Conn]struct{}
 	// connection ids for diagnostics
 	connIDs map[*websocket.Conn]string
-	mu      sync.RWMutex
-	logger  *log.Logger
+	// per-connection write locks (gorilla/websocket requires single concurrent writer per conn)
+	connWriteMu map[*websocket.Conn]*sync.Mutex
+	mu          sync.RWMutex
+	logger      *log.Logger
 }
 
 func NewHub(logger *log.Logger) *Hub {
@@ -38,6 +40,7 @@ func NewHub(logger *log.Logger) *Hub {
 		projConns:     make(map[string]map[string]map[*websocket.Conn]struct{}),
 		verifiedConns: make(map[string]map[*websocket.Conn]struct{}),
 		connIDs:       make(map[*websocket.Conn]string),
+		connWriteMu:   make(map[*websocket.Conn]*sync.Mutex),
 		logger:        logger,
 	}
 }
@@ -57,6 +60,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, tenantID string) {
 	h.conns[tenantID][c] = struct{}{}
 	// assign connection id for diagnostics
 	h.connIDs[c] = uuid.NewString()
+	h.connWriteMu[c] = &sync.Mutex{}
 	h.mu.Unlock()
 
 	// simple ping loop
@@ -65,7 +69,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, tenantID string) {
 		defer ticker.Stop()
 		for {
 			<-ticker.C
-			if err := c.WriteControl(websocket.PingMessage, []byte("ping"), time.Now().Add(5*time.Second)); err != nil {
+			if err := h.writeControlWithLock(c, websocket.PingMessage, []byte("ping"), time.Now().Add(5*time.Second)); err != nil {
 				h.removeConn(tenantID, c)
 				_ = c.Close()
 				return
@@ -221,6 +225,7 @@ func (h *Hub) removeConn(tenantID string, c *websocket.Conn) {
 		}
 	}
 	delete(h.connIDs, c)
+	delete(h.connWriteMu, c)
 
 	// Log removal for debugging
 	if h.logger != nil && len(subscribedProjects) > 0 {
@@ -232,8 +237,12 @@ func (h *Hub) removeConn(tenantID string, c *websocket.Conn) {
 func (h *Hub) BroadcastJSON(tenantID string, v interface{}) {
 	h.mu.RLock()
 	set := h.conns[tenantID]
+	connections := make([]*websocket.Conn, 0, len(set))
+	for c := range set {
+		connections = append(connections, c)
+	}
 	h.mu.RUnlock()
-	if len(set) == 0 {
+	if len(connections) == 0 {
 		// DEBUG: log when no clients are connected for analysis.status
 		if env, ok := v.(map[string]interface{}); ok {
 			if t, hasType := env["type"].(string); hasType && t == "analysis.status" {
@@ -250,7 +259,7 @@ func (h *Hub) BroadcastJSON(tenantID string, v interface{}) {
 		}
 	}
 
-	for c := range set {
+	for _, c := range connections {
 		if err := h.writeJSONWithRetry(c, v); err != nil {
 			h.logger.Printf("ws: write error after retries tenant=%s conn=%s: %v", tenantID, h.getConnID(c), err)
 			h.removeConn(tenantID, c)
@@ -261,36 +270,38 @@ func (h *Hub) BroadcastJSON(tenantID string, v interface{}) {
 
 // writeJSONWithRetry writes JSON to WebSocket connection with retry mechanism
 func (h *Hub) writeJSONWithRetry(c *websocket.Conn, v interface{}) error {
-	writeDeadline := time.Now().Add(5 * time.Second)
-	if err := c.SetWriteDeadline(writeDeadline); err != nil {
-		return fmt.Errorf("failed to set write deadline: %w", err)
-	}
-	defer func() {
-		// Clear the write deadline so subsequent writes aren't impacted
-		_ = c.SetWriteDeadline(time.Time{})
-	}()
+	return h.withConnWriteLock(c, func() error {
+		writeDeadline := time.Now().Add(5 * time.Second)
+		if err := c.SetWriteDeadline(writeDeadline); err != nil {
+			return fmt.Errorf("failed to set write deadline: %w", err)
+		}
+		defer func() {
+			// Clear the write deadline so subsequent writes aren't impacted
+			_ = c.SetWriteDeadline(time.Time{})
+		}()
 
-	// Try write with retry (up to 2 retries for transient errors)
-	var writeErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		writeErr = c.WriteJSON(v)
-		if writeErr == nil {
-			return nil
-		}
-		// Check if error is transient (timeout, temporary network issue)
-		if attempt < 2 && (websocket.IsUnexpectedCloseError(writeErr, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) ||
-			strings.Contains(writeErr.Error(), "timeout") || strings.Contains(writeErr.Error(), "broken pipe")) {
-			// Brief delay before retry
-			time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
-			// Reset deadline for retry
-			if err := c.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-				return fmt.Errorf("failed to reset write deadline: %w", err)
+		// Try write with retry (up to 2 retries for transient errors)
+		var writeErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			writeErr = c.WriteJSON(v)
+			if writeErr == nil {
+				return nil
 			}
-			continue
+			// Check if error is transient (timeout, temporary network issue)
+			if attempt < 2 && (websocket.IsUnexpectedCloseError(writeErr, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) ||
+				strings.Contains(writeErr.Error(), "timeout") || strings.Contains(writeErr.Error(), "broken pipe")) {
+				// Brief delay before retry
+				time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+				// Reset deadline for retry
+				if err := c.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+					return fmt.Errorf("failed to reset write deadline: %w", err)
+				}
+				continue
+			}
+			break
 		}
-		break
-	}
-	return writeErr
+		return writeErr
+	})
 }
 
 // BroadcastJSONProject sends payload only to clients of tenant subscribed to projectId
@@ -600,12 +611,16 @@ func truncateForLog(b []byte, limit int) string {
 func (h *Hub) BroadcastVerified(verifiedCode string, v interface{}) {
 	h.mu.RLock()
 	set := h.verifiedConns[verifiedCode]
+	connections := make([]*websocket.Conn, 0, len(set))
+	for c := range set {
+		connections = append(connections, c)
+	}
 	h.mu.RUnlock()
-	if len(set) == 0 {
+	if len(connections) == 0 {
 		return
 	}
-	for c := range set {
-		if err := c.WriteJSON(v); err != nil {
+	for _, c := range connections {
+		if err := h.writeJSONWithRetry(c, v); err != nil {
 			h.logger.Printf("ws write error (verified broadcast): %v", err)
 			// Find tenant for this connection to remove it properly
 			h.mu.Lock()
@@ -623,6 +638,27 @@ func (h *Hub) BroadcastVerified(verifiedCode string, v interface{}) {
 			}
 		}
 	}
+}
+
+func (h *Hub) withConnWriteLock(c *websocket.Conn, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	h.mu.RLock()
+	wmu := h.connWriteMu[c]
+	h.mu.RUnlock()
+	if wmu == nil {
+		return fmt.Errorf("connection write lock not found")
+	}
+	wmu.Lock()
+	defer wmu.Unlock()
+	return fn()
+}
+
+func (h *Hub) writeControlWithLock(c *websocket.Conn, messageType int, data []byte, deadline time.Time) error {
+	return h.withConnWriteLock(c, func() error {
+		return c.WriteControl(messageType, data, deadline)
+	})
 }
 
 // GetConnectedClients returns the count of connected WS clients per tenantID (for debugging)

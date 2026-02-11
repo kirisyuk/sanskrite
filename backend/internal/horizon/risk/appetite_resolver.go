@@ -83,7 +83,9 @@ func (r *AppetiteResolver) primaryScope(fragment *horizonmodels.HorizonFragment)
 		}
 	case strings.HasPrefix(cp, "/loc/"):
 		return cp
-	case fragment.HomeLocation.ISO3166_1 != nil && strings.TrimSpace(*fragment.HomeLocation.ISO3166_1) != "":
+	case fragment.HomeLocation != nil &&
+		fragment.HomeLocation.ISO3166_1 != nil &&
+		strings.TrimSpace(*fragment.HomeLocation.ISO3166_1) != "":
 		return "/loc/" + strings.ToLower(strings.TrimSpace(*fragment.HomeLocation.ISO3166_1)) + "/na/na"
 	}
 	return ""

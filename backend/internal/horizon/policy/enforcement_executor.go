@@ -854,7 +854,11 @@ func (e *EnforcementExecutor) executeFixLegalForm(ctx context.Context, task Enfo
 		if parts == nil || strings.TrimSpace(parts.Namespace) != "org" {
 			return &EnforcementResult{Success: false, Action: "fix_legal_form", Error: "unsupported namespace for legal form fix"}, nil
 		}
-		if parts.Org != nil && strings.TrimSpace(parts.Org.LegalForm) != "" {
+		orgParts := parts.Org
+		if orgParts == nil {
+			return &EnforcementResult{Success: false, Action: "fix_legal_form", Error: "org canonical parts are missing"}, nil
+		}
+		if strings.TrimSpace(orgParts.LegalForm) != "" {
 			return &EnforcementResult{
 				Success: true,
 				Action:  "no_change_needed",
@@ -902,9 +906,7 @@ func (e *EnforcementExecutor) executeFixLegalForm(ctx context.Context, task Enfo
 		})
 
 		orgGeo := ""
-		if parts != nil && parts.Org != nil {
-			orgGeo = strings.ToLower(strings.TrimSpace(parts.Org.Geo))
-		}
+		orgGeo = strings.ToLower(strings.TrimSpace(orgParts.Geo))
 
 		prompt := strings.TrimSpace(fmt.Sprintf(`
 You are fixing a missing legal form suffix for an organization canonical path.
@@ -1125,9 +1127,10 @@ func (e *EnforcementExecutor) executeFixISO2(ctx context.Context, task Enforceme
 	currentGeo := ""
 	switch namespace {
 	case "org":
-		if parts.Org != nil {
-			currentGeo = strings.ToLower(strings.TrimSpace(parts.Org.Geo))
+		if parts.Org == nil {
+			return &EnforcementResult{Success: false, Action: "fix_iso2", Error: "org canonical parts are missing"}, nil
 		}
+		currentGeo = strings.ToLower(strings.TrimSpace(parts.Org.Geo))
 	case "gov":
 		if parts.Gov != nil {
 			currentGeo = strings.ToLower(strings.TrimSpace(parts.Gov.Geo))

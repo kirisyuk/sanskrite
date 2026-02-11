@@ -458,6 +458,40 @@ go run ./cmd/tools/horizon_propagate_metric \
 
 ---
 
+### `horizon_edge_policy_report`
+
+**Назначение:** Строит comparison-report для KPI Big Bang Edge Policy (`baseline` vs `after`) и печатает `top invalid triples`.
+
+**Как работает:**
+1. Читает агрегированные счетчики из `horizon_telemetry`:
+   - `component=edge_policy`, `metric=kpi_rates`
+   - `component=edge_policy`, `metric=top_invalid_triples`
+2. Формирует два окна:
+   - `after`: последние `--window-hours`
+   - `baseline`: окно такой же длины, заканчивающееся на `now - --baseline-shift-hours`
+3. Считает KPI-rate как `counter / policy_decision_total`
+4. Печатает Top-N invalid triples по after-window.
+
+**Использование:**
+```bash
+go run ./cmd/tools/horizon_edge_policy_report \
+  --project=sanskrite \
+  --tenant=global \
+  --window-hours=24 \
+  --baseline-shift-hours=24 \
+  --top-invalid-limit=20
+```
+
+**Флаги:**
+- `--project` (required) - GCP project ID
+- `--tenant` (default: "global") - Tenant ID
+- `--window-hours` (default: 24) - длина сравниваемого окна
+- `--baseline-shift-hours` (default: 24) - смещение baseline-окна назад
+- `--limit` (default: 720) - лимит telemetry windows per metric
+- `--top-invalid-limit` (default: 20) - сколько invalid triples вывести
+
+---
+
 ### `horizon_find_missing_wikidata`
 
 **Назначение:** Находит фрагменты без Wikidata ID и опционально предлагает кандидатов через Wikidata API.
@@ -786,4 +820,3 @@ go run ./cmd/tools/horizon_deduplicate_fragments --project=sanskrite --dry-run=f
 ## Лицензия
 
 Внутренние инструменты проекта Sanskrite.
-

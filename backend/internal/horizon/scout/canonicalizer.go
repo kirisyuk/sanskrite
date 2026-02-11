@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
@@ -179,38 +180,7 @@ func (e *ScoutEngine) normalizeFragmentType(ctx context.Context, s string) model
 
 // normalizeFragmentTypeHardcoded is the hardcoded fallback for fragment type normalization.
 func normalizeFragmentTypeHardcoded(s string) models.FragmentType {
-	switch strings.TrimSpace(strings.ToUpper(s)) {
-	case string(models.FragmentTypeOrganization), "ORG":
-		return models.FragmentTypeOrganization
-	case string(models.FragmentTypeFacility), "FAC":
-		return models.FragmentTypeFacility
-	case string(models.FragmentTypeGeoRegion), "REGION", "GEO", "GEOREGION":
-		return models.FragmentTypeGeoRegion
-	case string(models.FragmentTypeProduct):
-		return models.FragmentTypeProduct
-	case string(models.FragmentTypeProgram):
-		return models.FragmentTypeProgram
-	case string(models.FragmentTypeMarket):
-		return models.FragmentTypeMarket
-	case string(models.FragmentTypeEvent):
-		return models.FragmentTypeEvent
-	case string(models.FragmentTypePerson), "HUMAN", "INDIVIDUAL":
-		return models.FragmentTypePerson
-	case string(models.FragmentTypeMediaChannel), "MEDIA", "CHANNEL":
-		return models.FragmentTypeMediaChannel
-	case string(models.FragmentTypeDecisionPoint), "DECISIONPOINT", "DECISION":
-		return models.FragmentTypeDecisionPoint
-	case string(models.FragmentTypeMechanism):
-		return models.FragmentTypeMechanism
-	case string(models.FragmentTypeSupplyLink), "SUPPLYLINK":
-		return models.FragmentTypeSupplyLink
-	case string(models.FragmentTypeDeposit), "MINE", "FIELD", "BASIN", "RESERVOIR":
-		return models.FragmentTypeDeposit
-	case string(models.FragmentTypeCommunity), "NETWORK", "GROUP", "COLLECTIVE":
-		return models.FragmentTypeCommunity
-	default:
-		return ""
-	}
+	return edgesemantics.NormalizeFragmentTypeToken(s)
 }
 
 // Legacy function for backward compatibility (used in preferredCanonicalPaths)

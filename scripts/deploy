@@ -1685,7 +1685,11 @@ deploy_hatlone_ws() {
     --project "$PROJECT_ID" \
     --quiet
 
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID"
+  if [[ "$FIREBASE_PROJECT_ID" != "$PROJECT_ID" ]]; then
+    echo -e "${YELLOW}[hatlone-ws] FIREBASE_PROJECT_ID ($FIREBASE_PROJECT_ID) differs from project ($PROJECT_ID). Forcing FIREBASE_AUTH_PROJECT_ID=$PROJECT_ID.${NC}"
+  fi
+  # hatlone-ws must verify tokens issued by the active project for this deployment.
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$PROJECT_ID"
 
   echo -e "${BLUE}[hatlone-ws] Deploying to Cloud Run...${NC}"
   gcloud run deploy "$service" \

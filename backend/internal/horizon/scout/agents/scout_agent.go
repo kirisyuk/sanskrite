@@ -536,14 +536,15 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
    - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
      For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO (NOT PRODUCES).
-   - AUDITED_BY: source (ORGANIZATION/FACILITY) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
+   - AUDITED_BY: source (ORGANIZATION/FACILITY/PROGRAM) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
    - COMPETES_WITH: competitor relationship (direction is not important, but still output as source->target).
   - INFLUENCES: source influences target.
     Clarification: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
+    Source MAY be PERSON. Target MAY be MARKET or SPHERE (SPHERE links are treated as weaker evidence).
    - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
    - RELATIVE_OF: person-person symmetric relationship (public relatives). Use ONLY when both are PERSON.
    - RELATED_TO: person-person symmetric relationship (publicly known associates: friends/partners/classmates). Use ONLY when both are PERSON.
-   - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY -> MARKET).
+   - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
     - If THIS FRAGMENT is MARKET, still emit relations with relationType=PARTICIPATES_IN to the player entities; backend will reverse the edge direction.
     - PRODUCT may also PARTICIPATE_IN a market (product category presence).
      - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
@@ -553,12 +554,12 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    
    EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
    - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
-   - OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT
-   - CONTROLS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY
+   - OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT/DEPOSIT/MEDIA_CHANNEL/COMMUNITY
+   - CONTROLS: source MUST be ORGANIZATION or PERSON or COMMUNITY, target MUST be ORGANIZATION/FACILITY
   - CONTROLS_ACCESS: source SHOULD be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
-  - IMPOSES_CONDITION: source SHOULD be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
-  - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY, target MUST be DECISION_POINT
-  - USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be MECHANISM
+  - IMPOSES_CONDITION: source SHOULD be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT
+  - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY/PERSON, target MUST be DECISION_POINT
+  - USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY/PROGRAM, target MUST be MECHANISM
   - APPLIES_TO: source MUST be MECHANISM, target can be ORGANIZATION/FACILITY/PRODUCT/MARKET
    - MANAGES: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PROGRAM
    - EMPLOYED_BY: source MUST be PERSON, target MUST be ORGANIZATION
@@ -571,17 +572,17 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - INVESTS_IN: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/PROGRAM/PRODUCT
   - PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
   - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
-  - PARTICIPATES_IN: source MAY also be PRODUCT, target MUST be MARKET
+  - PARTICIPATES_IN: source MAY also be PRODUCT/PERSON, target MUST be MARKET
   - DOMINATES: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
    - PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
-   - AUDITED_BY: source MUST be ORGANIZATION or FACILITY, target MUST be ORGANIZATION
+   - AUDITED_BY: source MUST be ORGANIZATION or FACILITY or PROGRAM, target MUST be ORGANIZATION
    - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
    - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
    - LOCATED_IN: target MUST be GEO_REGION
    - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION, FACILITY, or DEPOSIT
   - OPERATES_IN: source MAY also be PERSON when referring to location of work/operation
    - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
-  - DEPENDS_ON: source can be ORGANIZATION/FACILITY/PRODUCT/COMMUNITY/MARKET, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION/MEDIA_CHANNEL/COMMUNITY
+  - DEPENDS_ON: source can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/COMMUNITY/MEDIA_CHANNEL/DEPOSIT, target can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/GEO_REGION/MEDIA_CHANNEL/COMMUNITY/DEPOSIT
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT (e.g., mine extracts from ore deposit, platform extracts from oil field)
    - OWNS: can also target DEPOSIT (org/person owns deposit rights)
    - PRODUCES: source can also be DEPOSIT (deposits produce resources)
@@ -592,7 +593,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - targetLegalName: Same as targetName (explicit field)
    - targetShortName: Base name without ownership suffix (e.g., "Tesla")
   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY"
-  - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, COMPETES_WITH, INFLUENCES, EXTRACTS_FROM, OPERATES_VIA, MEMBER_OF, AFFILIATED_WITH, HAS_SUBGROUP, CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO, SURFACES
+  - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, COMPETES_WITH, INFLUENCES, EXTRACTS_FROM, PARTICIPATES_IN, DOMINATES, HAS_SUBMARKET, ADMINISTERS, OPERATES_VIA, MEMBER_OF, AFFILIATED_WITH, HAS_SUBGROUP, CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO, SURFACES
    - reason: Brief evidence/reason for this relation
    - confidence: 0.0 to 1.0
    - targetCanonicalPath: REQUIRED. Suggest a STABLE canonical path.

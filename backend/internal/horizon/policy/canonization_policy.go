@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -70,11 +71,17 @@ func (p *CanonizationPolicy) Decide(ctx context.Context, input PolicyInput) (Pol
 	if err == nil && len(rules) > 0 {
 		for _, rule := range rules {
 			if rule.InputType == inputType && p.matchesPattern(inputValue, rule.InputPattern) {
+				out := strings.TrimSpace(rule.Output)
+				if out == "" {
+					log.Printf("%s WARNING: skipping DB rule with empty output: id=%s, inputType=%s, pattern=%s",
+						logPrefix, rule.ID, rule.InputType, rule.InputPattern)
+					continue
+				}
 				log.Printf("%s DB rule matched: id=%s, inputType=%s, pattern=%s, output=%s",
-					logPrefix, rule.ID, rule.InputType, rule.InputPattern, rule.Output)
+					logPrefix, rule.ID, rule.InputType, rule.InputPattern, out)
 				return PolicyDecision{
 					Action:       "normalize_to",
-					Params:       map[string]interface{}{"output": rule.Output},
+					Params:       map[string]interface{}{"output": out},
 					DecisionPath: "rule:db:exact_match",
 					RuleID:       &rule.ID,
 					Confidence:   1.0,
@@ -85,7 +92,12 @@ func (p *CanonizationPolicy) Decide(ctx context.Context, input PolicyInput) (Pol
 	}
 
 	// Fallback to hardcoded normalization
-	normalized := p.normalizeFallback(inputType, inputValue)
+	normalized := strings.TrimSpace(p.normalizeFallback(inputType, inputValue))
+	if normalized == "" {
+		normalized = p.safeNormalizationFallback(inputType, inputValue)
+		log.Printf("%s WARNING: empty normalization output prevented (inputType=%s, inputValue=%s, fallback=%s)",
+			logPrefix, inputType, inputValue, normalized)
+	}
 	log.Printf("%s Normalized via hardcoded rules: %s -> %s (inputType=%s)",
 		logPrefix, inputValue, normalized, inputType)
 	return PolicyDecision{
@@ -142,30 +154,22 @@ func (p *CanonizationPolicy) normalizeFallback(inputType, inputValue string) str
 
 // normalizeFragmentType maps common human labels to FragmentType enum (hardcoded from canonicalizer.go).
 func (p *CanonizationPolicy) normalizeFragmentType(s string) horizonmodels.FragmentType {
-	normalized := strings.TrimSpace(strings.ToUpper(s))
-	switch normalized {
-	case string(horizonmodels.FragmentTypeOrganization), "ORG":
-		return horizonmodels.FragmentTypeOrganization
-	case string(horizonmodels.FragmentTypeFacility), "FAC":
-		return horizonmodels.FragmentTypeFacility
-	case string(horizonmodels.FragmentTypeGeoRegion), "REGION", "GEO", "GEOREGION":
-		return horizonmodels.FragmentTypeGeoRegion
-	case string(horizonmodels.FragmentTypeProduct):
-		return horizonmodels.FragmentTypeProduct
-	case string(horizonmodels.FragmentTypeProgram):
-		return horizonmodels.FragmentTypeProgram
-	case string(horizonmodels.FragmentTypeMarket):
-		return horizonmodels.FragmentTypeMarket
-	case string(horizonmodels.FragmentTypeEvent):
-		return horizonmodels.FragmentTypeEvent
-	case string(horizonmodels.FragmentTypePerson), "HUMAN", "INDIVIDUAL":
-		return horizonmodels.FragmentTypePerson
-	case string(horizonmodels.FragmentTypeMediaChannel), "MEDIA", "CHANNEL":
-		return horizonmodels.FragmentTypeMediaChannel
-	case string(horizonmodels.FragmentTypeDeposit), "MINE", "FIELD", "BASIN":
-		return horizonmodels.FragmentTypeDeposit
+	// Keep fragment/entity type normalization aligned with unified edge semantics contract.
+	return edgesemantics.NormalizeFragmentTypeToken(s)
+}
+
+func (p *CanonizationPolicy) safeNormalizationFallback(inputType, inputValue string) string {
+	switch inputType {
+	case "fragment_type", "entity_type":
+		return string(p.normalizeFragmentType(inputValue))
+	case "canonical_path":
+		return strings.ToLower(strings.TrimSpace(inputValue))
+	case "relation_type", "event_type":
+		return strings.ToUpper(strings.TrimSpace(inputValue))
+	case "slug":
+		return p.slugify(inputValue)
 	default:
-		return ""
+		return strings.TrimSpace(inputValue)
 	}
 }
 

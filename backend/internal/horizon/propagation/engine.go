@@ -3,7 +3,9 @@ package propagation
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -180,6 +182,12 @@ func (e *PropagationEngine) fireFragmentChangedHook(ctx context.Context, fragmen
 		return
 	}
 	go func(fid string) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[PropagationEngine] fragmentChangedHook panic recovered: fragmentId=%s panic=%v stack=%s",
+					strings.TrimSpace(fid), rec, string(debug.Stack()))
+			}
+		}()
 		hctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		e.fragmentChangedHook(hctx, fid)
@@ -427,6 +435,11 @@ func (e *PropagationEngine) processColdPathIfReady(ctx context.Context) {
 func (e *PropagationEngine) StartColdPathProcessor(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[PropagationEngine] cold_path_processor panic recovered: panic=%v stack=%s", rec, string(debug.Stack()))
+			}
+		}()
 		for {
 			select {
 			case <-ctx.Done():
@@ -511,6 +524,9 @@ func (e *PropagationEngine) propagateHotPath(
 			// Historical edges (ValidTo < now) and future edges (ValidFrom > now) are excluded.
 			// This ensures propagation only flows through currently active relationships.
 			if !edge.IsActiveNow() {
+				continue
+			}
+			if edge.IsQuarantined() {
 				continue
 			}
 
@@ -901,6 +917,9 @@ func (e *PropagationEngine) simulateHotPath(
 
 		// Filter out inactive edges (historical or future) from real-time propagation
 		if !edge.IsActiveNow() {
+			continue
+		}
+		if edge.IsQuarantined() {
 			continue
 		}
 

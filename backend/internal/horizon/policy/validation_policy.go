@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
@@ -109,6 +110,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	if strings.HasPrefix(fragment.CanonicalPath, "/discovered/") {
 		reason := "canonical path uses /discovered/ prefix - must be canonicalized first"
 		log.Printf("%s REJECT: %s (canonicalPath=%s)", logPrefix, reason, fragment.CanonicalPath)
+		fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 		return PolicyDecision{
 			Action:       "reject",
 			Params:       map[string]interface{}{"reason": reason},
@@ -121,6 +123,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	if strings.TrimSpace(fragment.CanonicalPath) == "" {
 		reason := "canonical path is required"
 		log.Printf("%s REJECT: %s", logPrefix, reason)
+		fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 		return PolicyDecision{
 			Action:       "reject",
 			Params:       map[string]interface{}{"reason": reason},
@@ -132,6 +135,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	if fragment.Type == "" {
 		reason := "fragment type is required"
 		log.Printf("%s REJECT: %s", logPrefix, reason)
+		fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 		return PolicyDecision{
 			Action:       "reject",
 			Params:       map[string]interface{}{"reason": reason},
@@ -140,19 +144,46 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		}, nil
 	}
 
+	// Policy 2.5: Deterministic type/path reconciliation.
+	if reconciledType, changed := edgesemantics.ReconcileTypeWithCanonicalPath(fragment.Type, fragment.CanonicalPath); changed {
+		originalType := fragment.Type
+		fragment.Type = reconciledType
+		reason := fmt.Sprintf("type_path_mismatch: canonicalPath=%q with type=%s reconciled to %s", fragment.CanonicalPath, originalType, reconciledType)
+		log.Printf("%s INFO: %s", logPrefix, reason)
+		fragment.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, reason, 0.05)
+		return PolicyDecision{
+			Action: "allow_with_penalty",
+			Params: map[string]interface{}{
+				"penalty": 0.05,
+				"reason":  reason,
+			},
+			DecisionPath: "rule:hardcoded:type_path_reconciled",
+			Confidence:   0.95,
+		}, nil
+	}
+
 	// Policy 3: Enforce canonical path prefixes by type
 	expectedPrefix := p.expectedPathPrefix(fragment.Type)
 	if expectedPrefix != "" && !strings.HasPrefix(fragment.CanonicalPath, expectedPrefix) {
-		warning := fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s",
-			fragment.CanonicalPath, expectedPrefix, fragment.Type)
-		log.Printf("%s WARNING: %s", logPrefix, warning)
-		// Continue with penalty instead of reject
-		return PolicyDecision{
-			Action:       "penalty",
-			Params:       map[string]interface{}{"penalty": 0.1, "reason": warning},
-			DecisionPath: "rule:hardcoded:prefix_mismatch",
-			Confidence:   0.9,
-		}, nil
+		// Government bodies are modeled as ORGANIZATION but live under /gov/* namespace.
+		if fragment.Type == horizonmodels.FragmentTypeOrganization && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/") {
+			log.Printf("%s INFO: allow GOV path for organization: %s", logPrefix, fragment.CanonicalPath)
+		} else {
+			warning := fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s",
+				fragment.CanonicalPath, expectedPrefix, fragment.Type)
+			log.Printf("%s WARNING: %s", logPrefix, warning)
+			fragment.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, warning, 0.1)
+			// Continue with penalty instead of reject
+			return PolicyDecision{
+				Action: "allow_with_penalty",
+				Params: map[string]interface{}{
+					"penalty": 0.1,
+					"reason":  warning,
+				},
+				DecisionPath: "rule:hardcoded:prefix_mismatch",
+				Confidence:   0.9,
+			}, nil
+		}
 	}
 
 	// Policy 4: GEO_REGION strict validation
@@ -166,6 +197,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		if !strings.HasPrefix(fragment.CanonicalPath, "/loc/") {
 			reason := fmt.Sprintf("GEO_REGION canonicalPath %q must use /loc/ prefix", fragment.CanonicalPath)
 			log.Printf("%s REJECT: %s", logPrefix, reason)
+			fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 			return PolicyDecision{
 				Action:       "reject",
 				Params:       map[string]interface{}{"reason": reason},
@@ -179,6 +211,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		if len(parts) != 4 || parts[0] != "loc" {
 			reason := fmt.Sprintf("GEO_REGION canonicalPath %q must be /loc/{country}/{admin1}/{city}", fragment.CanonicalPath)
 			log.Printf("%s REJECT: %s (parts=%v)", logPrefix, reason, parts)
+			fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 			return PolicyDecision{
 				Action:       "reject",
 				Params:       map[string]interface{}{"reason": reason},
@@ -191,6 +224,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			reason := fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country code %q (expected ISO3166-1 alpha2 lowercase)",
 				fragment.CanonicalPath, parts[1])
 			log.Printf("%s REJECT: %s", logPrefix, reason)
+			fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 			return PolicyDecision{
 				Action:       "reject",
 				Params:       map[string]interface{}{"reason": reason},
@@ -209,9 +243,13 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			warning := fmt.Sprintf("flat facility path %q - consider nesting under parent org: /fac/{org}/%s",
 				fragment.CanonicalPath, pathParts[1])
 			log.Printf("%s WARNING: %s", logPrefix, warning)
+			fragment.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, warning, 0.05)
 			return PolicyDecision{
-				Action:       "penalty",
-				Params:       map[string]interface{}{"penalty": 0.05, "reason": warning},
+				Action: "allow_with_penalty",
+				Params: map[string]interface{}{
+					"penalty": 0.05,
+					"reason":  warning,
+				},
 				DecisionPath: "rule:hardcoded:flat_facility",
 				Confidence:   0.95,
 			}, nil
@@ -219,6 +257,16 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	}
 
 	// Check DB rules for additional validation
+	if p.rulesRepo == nil {
+		log.Printf("%s ALLOW: fragment validation passed (canonicalPath=%s, type=%s)",
+			logPrefix, fragment.CanonicalPath, fragment.Type)
+		return PolicyDecision{
+			Action:       "allow",
+			DecisionPath: "rule:hardcoded:passed",
+			Confidence:   1.0,
+		}, nil
+	}
+
 	rules, err := p.rulesRepo.GetRules(ctx)
 	if err != nil {
 		log.Printf("%s ERROR: failed to get rules from repo: %v", logPrefix, err)
@@ -276,11 +324,20 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 
 	var sourceType, targetType, relationType string
 	var sourceID, targetID string
+	var sourcePath, targetPath string
 
 	if input.Edge != nil {
 		sourceID = input.Edge.SourceFragmentID
 		targetID = input.Edge.TargetFragmentID
 		relationType = string(input.Edge.Type)
+		if input.Edge.Qualifiers != nil {
+			if v, ok := input.Edge.Qualifiers["sourceCanonicalPath"].(string); ok {
+				sourcePath = strings.TrimSpace(v)
+			}
+			if v, ok := input.Edge.Qualifiers["targetCanonicalPath"].(string); ok {
+				targetPath = strings.TrimSpace(v)
+			}
+		}
 		log.Printf("%s Validating edge: sourceID=%s, targetID=%s, type=%s",
 			logPrefix, sourceID, targetID, relationType)
 	} else {
@@ -289,6 +346,8 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		sourceType, _ = input.Context["sourceType"].(string)
 		targetType, _ = input.Context["targetType"].(string)
 		relationType, _ = input.Context["relationType"].(string)
+		sourcePath, _ = input.Context["sourceCanonicalPath"].(string)
+		targetPath, _ = input.Context["targetCanonicalPath"].(string)
 		log.Printf("%s Validating edge from context: sourceType=%s, targetType=%s, type=%s",
 			logPrefix, sourceType, targetType, relationType)
 	}
@@ -313,6 +372,28 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	if targetType == "" {
 		targetType, _ = input.Context["targetType"].(string)
 	}
+	if sourcePath == "" {
+		sourcePath, _ = input.Context["sourceCanonicalPath"].(string)
+	}
+	if targetPath == "" {
+		targetPath, _ = input.Context["targetCanonicalPath"].(string)
+	}
+
+	// Policy 1.5: deterministic edge endpoint type/path reconciliation.
+	if sourceType != "" && sourcePath != "" {
+		if reconciled, changed := edgesemantics.ReconcileTypeWithCanonicalPath(horizonmodels.FragmentType(sourceType), sourcePath); changed {
+			log.Printf("%s INFO: type_path_mismatch source reconciled: path=%s type=%s -> %s",
+				logPrefix, sourcePath, sourceType, reconciled)
+			sourceType = string(reconciled)
+		}
+	}
+	if targetType != "" && targetPath != "" {
+		if reconciled, changed := edgesemantics.ReconcileTypeWithCanonicalPath(horizonmodels.FragmentType(targetType), targetPath); changed {
+			log.Printf("%s INFO: type_path_mismatch target reconciled: path=%s type=%s -> %s",
+				logPrefix, targetPath, targetType, reconciled)
+			targetType = string(reconciled)
+		}
+	}
 
 	// Policy 2: Edge direction validation (hardcoded from EdgeDirectionPolicies)
 	if sourceType != "" && targetType != "" && relationType != "" {
@@ -332,20 +413,50 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 					Confidence:   1.0,
 				}, nil
 			} else {
-				reason := fmt.Sprintf("edge direction invalid and not reversible: %s -> %s (%s). Rule: %s",
+				baseReason := fmt.Sprintf("edge direction invalid and not reversible: %s -> %s (%s). Rule: %s",
 					sourceType, targetType, relationType, rule.Description)
-				log.Printf("%s REJECT: %s", logPrefix, reason)
+				penalty, reason := quarantinePenaltyForTriple(
+					edgeType,
+					horizonmodels.FragmentType(sourceType),
+					horizonmodels.FragmentType(targetType),
+				)
+				if reason == "" {
+					reason = baseReason
+				} else {
+					reason = reason + "; " + baseReason
+				}
+				log.Printf("%s QUARANTINE: %s (penalty=%.2f)", logPrefix, reason, penalty)
 				return PolicyDecision{
-					Action:       "reject",
-					Params:       map[string]interface{}{"reason": reason},
-					DecisionPath: "rule:hardcoded:direction_invalid",
-					Confidence:   1.0,
+					Action: "quarantine",
+					Params: map[string]interface{}{
+						"reason":  reason,
+						"penalty": penalty,
+					},
+					DecisionPath: "rule:hardcoded:direction_invalid_quarantine",
+					Confidence:   1.0 - penalty,
 				}, nil
 			}
 		} else if rule != nil {
 			log.Printf("%s Direction validation passed: %s -> %s (%s). Rule: %s",
 				logPrefix, sourceType, targetType, relationType, rule.Description)
 		}
+	}
+
+	// Policy 2.5: Soft-penalty for weak but semantically plausible links.
+	if relationType == string(horizonmodels.DependencyTypeInfluences) &&
+		sourceType == string(horizonmodels.FragmentTypeOrganization) &&
+		targetType == string(horizonmodels.FragmentTypeSphere) {
+		reason := "INFLUENCES to SPHERE treated as weak-link; preserved with penalty"
+		return PolicyDecision{
+			Action: "allow_with_penalty",
+			Params: map[string]interface{}{
+				"penalty":      0.15,
+				"reason":       reason,
+				"edgeModality": "potential",
+			},
+			DecisionPath: "rule:hardcoded:influences_sphere_penalty",
+			Confidence:   0.85,
+		}, nil
 	}
 
 	// Policy 3: Validate influence qualifiers for INFLUENCES edges
@@ -367,6 +478,16 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	}
 
 	// Check DB rules
+	if p.rulesRepo == nil {
+		log.Printf("%s ALLOW: edge validation passed (sourceType=%s, targetType=%s, relationType=%s)",
+			logPrefix, sourceType, targetType, relationType)
+		return PolicyDecision{
+			Action:       "allow",
+			DecisionPath: "rule:hardcoded:passed",
+			Confidence:   0.7,
+		}, nil
+	}
+
 	rules, err := p.rulesRepo.GetRules(ctx)
 	if err != nil {
 		log.Printf("%s ERROR: failed to get rules from repo: %v", logPrefix, err)
@@ -450,481 +571,57 @@ func (p *ValidationPolicy) matchRule(rules []*ValidationRule, sourceType, target
 
 // validateEdgeDirection checks edge direction validity (hardcoded from edge_normalizer.go).
 func (p *ValidationPolicy) validateEdgeDirection(edgeType horizonmodels.DependencyType, sourceType, targetType horizonmodels.FragmentType) (bool, bool, *EdgeDirectionRule) {
-	rule, exists := edgeDirectionPolicies[edgeType]
-	if !exists {
-		return false, false, &EdgeDirectionRule{
-			Description: fmt.Sprintf("unknown edge type %s: missing direction policy", edgeType),
-		}
-	}
-
-	sourceValid := containsFragmentType(rule.ValidSourceTypes, sourceType)
-	targetValid := containsFragmentType(rule.ValidTargetTypes, targetType)
-
-	if sourceValid && targetValid {
-		return true, false, &rule
-	}
-
-	// Check if reversed direction would be valid
-	reversedSourceValid := containsFragmentType(rule.ValidSourceTypes, targetType)
-	reversedTargetValid := containsFragmentType(rule.ValidTargetTypes, sourceType)
-
-	if reversedSourceValid && reversedTargetValid {
-		return false, true, &rule
-	}
-
-	return false, false, &rule
+	return edgesemantics.ValidateEdgeDirection(edgeType, sourceType, targetType)
 }
 
-// EdgeDirectionRule defines valid source and target fragment types for an edge type.
-type EdgeDirectionRule struct {
-	ValidSourceTypes []horizonmodels.FragmentType
-	ValidTargetTypes []horizonmodels.FragmentType
-	Description      string
-}
+// EdgeDirectionRule delegates to the unified edgesemantics contract.
+type EdgeDirectionRule = edgesemantics.EdgeDirectionRule
 
-// edgeDirectionPolicies defines edge direction validation rules (hardcoded from edge_normalizer.go).
-var edgeDirectionPolicies = map[horizonmodels.DependencyType]EdgeDirectionRule{
-	horizonmodels.DependencyTypeRegulates: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeGeoRegion,
-			horizonmodels.FragmentTypeMarket,
-		},
-		Description: "Regulator (org) regulates regulated entity",
-	},
-	horizonmodels.DependencyTypeOwns: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeDeposit,
-		},
-		Description: "Owner owns asset/subsidiary",
-	},
-	horizonmodels.DependencyTypeControls: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-			horizonmodels.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-		},
-		Description: "Controller controls entity (non-equity or indirect control)",
-	},
-	horizonmodels.DependencyTypeManages: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProgram,
-		},
-		Description: "Manager manages entity (formal authority, not ownership)",
-	},
-	horizonmodels.DependencyTypeEmployedBy: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypePerson},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
-		Description:      "Person is employed by organization",
-	},
-	horizonmodels.DependencyTypeBoardMemberOf: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypePerson},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
-		Description:      "Person is board member of organization",
-	},
-	horizonmodels.DependencyTypeKeyPerson: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypePerson},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
-		Description:      "Person is key person of organization",
-	},
-	horizonmodels.DependencyTypeFounded: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypePerson,
-			horizonmodels.FragmentTypeOrganization,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeProgram,
-		},
-		Description: "Founder founded organization/program",
-	},
-	horizonmodels.DependencyTypeInvestsIn: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeProgram,
-			horizonmodels.FragmentTypeProduct,
-		},
-		Description: "Investor invests in investee",
-	},
-	horizonmodels.DependencyTypePartnersWith: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-		},
-		Description: "Partners collaborate (symmetric)",
-	},
-	horizonmodels.DependencyTypeCompetesWith: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-		},
-		Description: "Competitors compete in the same arena (symmetric)",
-	},
-	horizonmodels.DependencyTypeProduces: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeDeposit,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
-		Description:      "Producer produces product",
-	},
-	horizonmodels.DependencyTypeConsumes: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProduct,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
-		Description:      "Consumer consumes product",
-	},
-	horizonmodels.DependencyTypeLocatedIn: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeProgram,
-			horizonmodels.FragmentTypeGeoRegion,
-			horizonmodels.FragmentTypeDeposit,
-			horizonmodels.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeGeoRegion},
-		Description:      "Entity is located within region",
-	},
-	horizonmodels.DependencyTypeOperatesIn: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeGeoRegion,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeDeposit,
-		},
-		Description: "Organization operates in location",
-	},
-	horizonmodels.DependencyTypeSuppliesTo: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-		},
-		Description: "Supplier supplies to customer",
-	},
-	horizonmodels.DependencyTypeDependsOn: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeDomain,
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-			horizonmodels.FragmentTypeProgram,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeCommunity,
-			horizonmodels.FragmentTypeMediaChannel,
-			horizonmodels.FragmentTypeDeposit,
-			horizonmodels.FragmentTypeMarket,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeDomain,
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-			horizonmodels.FragmentTypeMarket,
-			horizonmodels.FragmentTypeProgram,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeGeoRegion,
-			horizonmodels.FragmentTypeMediaChannel,
-			horizonmodels.FragmentTypeCommunity,
-			horizonmodels.FragmentTypeDeposit,
-		},
-		Description: "Dependent entity depends on dependency",
-	},
-	horizonmodels.DependencyTypeTransformsInto: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeProduct},
-		Description:      "Product transforms into downstream product",
-	},
-	horizonmodels.DependencyTypeExtractsFrom: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeFacility},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDeposit},
-		Description:      "Facility extracts from deposit",
-	},
-	horizonmodels.DependencyTypeAuditedBy: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
-		Description:      "Entity is audited by an external audit firm",
-	},
-	horizonmodels.DependencyTypeInfluences: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeGeoRegion,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeProgram,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeGeoRegion,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeProgram,
-		},
-		Description: "Source entity influences target entity (political/economic influence)",
-	},
-
-	// PARTICIPATES_IN: org/fac participates in a market.
-	horizonmodels.DependencyTypeParticipatesIn: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeCommunity,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeProgram,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
-		Description:      "Entity participates in market",
-	},
-	// DOMINATES: org/fac dominates a market (leader).
-	horizonmodels.DependencyTypeDominates: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
-		Description:      "Entity dominates market (leader)",
-	},
-	// HAS_SUBMARKET: market hierarchy (parent market -> child sub-market).
-	horizonmodels.DependencyTypeHasSubmarket: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMarket},
-		Description:      "Market has sub-market (hierarchy)",
-	},
-	// HAS_SUBGROUP: community hierarchy (parent group -> child sub-group).
-	horizonmodels.DependencyTypeHasSubgroup: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeCommunity},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeCommunity},
-		Description:      "Community has sub-group (hierarchy)",
-	},
-	// ADMINISTERS: government hierarchy (superior body -> subordinate body).
-	// NOTE: GOV bodies are stored as FragmentTypeOrganization under /gov/... canonical paths.
-	horizonmodels.DependencyTypeAdministers: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeGeoRegion,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeProgram,
-			horizonmodels.FragmentTypeGeoRegion,
-		},
-		Description:      "Government body administers subordinate body (hierarchy)",
-	},
-	// OPERATES_VIA: community/org uses a channel/platform for communication/operations.
-	horizonmodels.DependencyTypeOperatesVia: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeCommunity,
-			horizonmodels.FragmentTypeOrganization,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMediaChannel},
-		Description:      "Entity operates via media channel",
-	},
-	// MEMBER_OF: person is a member of a community.
-	horizonmodels.DependencyTypeMemberOf: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypePerson},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeCommunity},
-		Description:      "Person is member of community",
-	},
-	// AFFILIATED_WITH: community or person affiliated with organization.
-	horizonmodels.DependencyTypeAffiliatedWith: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeCommunity,
-			horizonmodels.FragmentTypePerson,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeOrganization},
-		Description:      "Entity is affiliated with organization",
-	},
-	// DOMAIN edges
-	horizonmodels.DependencyTypeFocusesOn: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeDomain,
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-			horizonmodels.FragmentTypeMarket,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeProgram,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeGeoRegion,
-			horizonmodels.FragmentTypeCommunity,
-			horizonmodels.FragmentTypeMediaChannel,
-			horizonmodels.FragmentTypeDeposit,
-		},
-		Description: "Domain focuses on an entity/domain",
-	},
-	horizonmodels.DependencyTypeInvolvesActor: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-			horizonmodels.FragmentTypeCommunity,
-		},
-		Description: "Domain involves principal actor",
-	},
-	horizonmodels.DependencyTypeInGeoScope: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeGeoRegion},
-		Description:      "Domain is in geo scope",
-	},
-	horizonmodels.DependencyTypeAbout: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeDomain,
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypePerson,
-			horizonmodels.FragmentTypeMarket,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeProgram,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeGeoRegion,
-			horizonmodels.FragmentTypeCommunity,
-			horizonmodels.FragmentTypeMediaChannel,
-			horizonmodels.FragmentTypeDeposit,
-		},
-		Description: "Domain describes subject entities",
-	},
-	horizonmodels.DependencyTypeRelatedDomain: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		Description:      "Related domains (symmetric)",
-	},
-	horizonmodels.DependencyTypeBroadensTo: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		Description:      "Domain broadens to another domain",
-	},
-	horizonmodels.DependencyTypeNarrowsTo: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		Description:      "Domain narrows to another domain",
-	},
-	horizonmodels.DependencyTypeAffects: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		Description:      "Domain affects another domain",
-	},
-	horizonmodels.DependencyTypeSurfaces: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDomain},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeDecisionPoint,
-			horizonmodels.FragmentTypeMechanism,
-		},
-		Description: "Domain surfaces strategic entities",
-	},
-	// Strategic decision layer
-	horizonmodels.DependencyTypeControlsAccess: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeDecisionPoint,
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeMarket,
-			horizonmodels.FragmentTypeProgram,
-		},
-		Description: "Strategic gatekeeping relation",
-	},
-	horizonmodels.DependencyTypeImposesCondition: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeDecisionPoint,
-			horizonmodels.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProduct,
-		},
-		Description: "Imposes compliance/cost constraints",
-	},
-	horizonmodels.DependencyTypeGatekeepsDecision: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeDecisionPoint},
-		Description:      "Actor gatekeeps a strategic decision",
-	},
-	horizonmodels.DependencyTypeUsesMechanism: {
-		ValidSourceTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeDecisionPoint,
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMechanism},
-		Description:      "Agent uses control mechanism",
-	},
-	horizonmodels.DependencyTypeAppliesTo: {
-		ValidSourceTypes: []horizonmodels.FragmentType{horizonmodels.FragmentTypeMechanism},
-		ValidTargetTypes: []horizonmodels.FragmentType{
-			horizonmodels.FragmentTypeOrganization,
-			horizonmodels.FragmentTypeFacility,
-			horizonmodels.FragmentTypeProduct,
-			horizonmodels.FragmentTypeMarket,
-		},
-		Description: "Mechanism applies to entity",
-	},
-}
-
-func containsFragmentType(types []horizonmodels.FragmentType, t horizonmodels.FragmentType) bool {
-	for _, vt := range types {
-		if vt == t {
-			return true
-		}
+func quarantinePenaltyForTriple(edgeType horizonmodels.DependencyType, sourceType, targetType horizonmodels.FragmentType) (float64, string) {
+	switch {
+	case edgeType == horizonmodels.DependencyTypeConsumes &&
+		sourceType == horizonmodels.FragmentTypeOrganization &&
+		targetType == horizonmodels.FragmentTypeOrganization:
+		return 0.30, "quarantine: ORGANIZATION -> ORGANIZATION CONSUMES is semantically invalid"
+	case edgeType == horizonmodels.DependencyTypeConsumes &&
+		sourceType == horizonmodels.FragmentTypeOrganization &&
+		targetType == horizonmodels.FragmentTypeFacility:
+		return 0.30, "quarantine: ORGANIZATION -> FACILITY CONSUMES is semantically invalid"
+	case edgeType == horizonmodels.DependencyTypeParticipatesIn &&
+		sourceType == horizonmodels.FragmentTypeMarket &&
+		targetType == horizonmodels.FragmentTypeMarket:
+		return 0.25, "quarantine: MARKET -> MARKET PARTICIPATES_IN is semantically invalid"
+	case edgeType == horizonmodels.DependencyTypeCompetesWith &&
+		sourceType == horizonmodels.FragmentTypeMarket &&
+		targetType == horizonmodels.FragmentTypeMarket:
+		return 0.25, "quarantine: MARKET -> MARKET COMPETES_WITH is semantically invalid"
+	case edgeType == horizonmodels.DependencyTypeAuditedBy &&
+		sourceType == horizonmodels.FragmentTypeGeoRegion &&
+		targetType == horizonmodels.FragmentTypeOrganization:
+		return 0.40, "quarantine: GEO_REGION cannot be AUDITED_BY organization"
+	case edgeType == horizonmodels.DependencyTypeOperatesVia &&
+		sourceType == horizonmodels.FragmentTypeFacility &&
+		targetType == horizonmodels.FragmentTypeOrganization:
+		return 0.30, "quarantine: FACILITY -> ORGANIZATION OPERATES_VIA requires MEDIA_CHANNEL target"
+	case edgeType == horizonmodels.DependencyTypeHasSubmarket &&
+		sourceType == horizonmodels.FragmentTypeMarket &&
+		targetType == horizonmodels.FragmentTypeProduct:
+		return 0.25, "quarantine: MARKET -> PRODUCT HAS_SUBMARKET requires MARKET target"
+	case edgeType == horizonmodels.DependencyTypeCompetesWith &&
+		sourceType == horizonmodels.FragmentTypeProgram &&
+		targetType == horizonmodels.FragmentTypeProgram:
+		return 0.20, "quarantine: PROGRAM -> PROGRAM COMPETES_WITH is low-confidence in current ontology"
+	case edgeType == horizonmodels.DependencyTypeInvolvesActor &&
+		sourceType == horizonmodels.FragmentTypePerson &&
+		targetType == horizonmodels.FragmentTypeOrganization:
+		return 0.30, "quarantine: INVOLVES_ACTOR requires DOMAIN source"
+	case edgeType == horizonmodels.DependencyTypeFocusesOn &&
+		sourceType == horizonmodels.FragmentTypeMarket &&
+		targetType == horizonmodels.FragmentTypeOrganization:
+		return 0.30, "quarantine: FOCUSES_ON requires DOMAIN source"
+	default:
+		return 0.20, ""
 	}
-	return false
 }
 
 // expectedPathPrefix returns expected canonical path prefix for fragment type (hardcoded from precreate_validator.go).

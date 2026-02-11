@@ -613,6 +613,7 @@ Choose relationType to match the CORRECT semantic direction:
 -  Clarification: external audit relationship (audit firm reviews source entity).
 - COMPETES_WITH: market rivalry/competition (symmetric); not collaboration or supply.
 - INFLUENCES: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
+  Source MAY be PERSON. Target MAY be MARKET or SPHERE (SPHERE links are treated as weaker evidence).
 - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY -> MARKET).
   Clarification: entity is an active market participant (player).
   - If THIS FRAGMENT is MARKET, you may still emit PARTICIPATES_IN relations to player entities; backend will reverse the edge direction.
@@ -666,8 +667,8 @@ These edge types have strict direction rules. Use sourceCanonicalPath when THIS 
 
 EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
 - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
-- OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT/DEPOSIT
-- CONTROLS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY
+- OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT/DEPOSIT/MEDIA_CHANNEL/COMMUNITY
+- CONTROLS: source MUST be ORGANIZATION or PERSON or COMMUNITY, target MUST be ORGANIZATION/FACILITY
 - MANAGES: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PROGRAM
 - EMPLOYED_BY: source MUST be PERSON, target MUST be ORGANIZATION
 - BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION
@@ -678,12 +679,13 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - LOCATED_IN: target MUST be GEO_REGION
 - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY or DEPOSIT
 - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
-- DEPENDS_ON: source can be ORGANIZATION/FACILITY/PRODUCT, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
-- AUDITED_BY: source MUST be ORGANIZATION or FACILITY, target MUST be ORGANIZATION
+- DEPENDS_ON: source can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/COMMUNITY/MEDIA_CHANNEL/DEPOSIT, target can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/GEO_REGION/MEDIA_CHANNEL/COMMUNITY/DEPOSIT
+- AUDITED_BY: source MUST be ORGANIZATION or FACILITY or PROGRAM, target MUST be ORGANIZATION
 - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
 - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
 - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT
-- PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
+- PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
+- PARTICIPATES_IN: source MAY also be PRODUCT or PERSON, target MUST be MARKET
 - DOMINATES: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
 - HAS_SUBMARKET: source MUST be MARKET, target MUST be MARKET (parent → narrower sub-market)
 - ADMINISTERS: source MUST be ORGANIZATION (/gov/...), target MUST be ORGANIZATION (/gov/...) (superior → subordinate)
@@ -691,8 +693,8 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - MEMBER_OF: source MUST be PERSON, target MUST be COMMUNITY
 - AFFILIATED_WITH: source MUST be COMMUNITY or PERSON, target MUST be ORGANIZATION
 - HAS_SUBGROUP: source MUST be COMMUNITY, target MUST be COMMUNITY (parent group → narrower sub-group/branch/clan)
-- GATEKEEPS_DECISION: source MUST be ORGANIZATION or GOV or COMMUNITY, target MUST be DECISION_POINT
-- USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be MECHANISM (path starts with /mechanism/)
+- GATEKEEPS_DECISION: source MUST be ORGANIZATION or GOV or COMMUNITY or PERSON, target MUST be DECISION_POINT
+- USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY or PROGRAM, target MUST be MECHANISM (path starts with /mechanism/)
 - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
 - IMPOSES_CONDITION: source MUST be ORGANIZATION or GOV or COMMUNITY or DECISION_POINT, target MUST be ORGANIZATION/FACILITY/PRODUCT
 - APPLIES_TO: source MUST be MECHANISM, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET

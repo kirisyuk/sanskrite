@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
@@ -49,9 +51,10 @@ func getEdgeAffectCollector(ctx context.Context) func(string, string) {
 
 // DependencyEdgesRepository репозиторий для работы с DependencyEdge
 type DependencyEdgesRepository struct {
-	col            *firestore.CollectionRef
-	validationPolicy *policy.PolicyExecutor // Optional: for edge validation
-	fragmentsRepo   *HorizonFragmentsRepository // Optional: for fragment type lookup
+	col              *firestore.CollectionRef
+	validationPolicy *policy.PolicyExecutor      // Optional: for edge validation
+	fragmentsRepo    *HorizonFragmentsRepository // Optional: for fragment type lookup
+	telemetryRepo    *HorizonTelemetryRepository // Optional: aggregated edge policy KPIs
 }
 
 // NewDependencyEdgesRepository создает новый репозиторий
@@ -73,15 +76,21 @@ func (r *DependencyEdgesRepository) WithFragmentsRepo(repo *HorizonFragmentsRepo
 	return r
 }
 
+// WithTelemetryRepo sets the unified telemetry sink used for edge policy KPI counters.
+func (r *DependencyEdgesRepository) WithTelemetryRepo(repo *HorizonTelemetryRepository) *DependencyEdgesRepository {
+	r.telemetryRepo = repo
+	return r
+}
+
 // Create создает новый DependencyEdge
 func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.DependencyEdge) (string, error) {
 	logPrefix := "[DependencyEdgesRepository:Create]"
-	
+
 	if edge == nil {
 		return "", ErrInvalidDocument
 	}
-	
-	log.Printf("%s Creating edge: sourceID=%s, targetID=%s, type=%s", 
+
+	log.Printf("%s Creating edge: sourceID=%s, targetID=%s, type=%s",
 		logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
 
 	// Basic validation
@@ -92,6 +101,14 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 
 	// Policy-based validation if available
 	if r.validationPolicy != nil {
+		policyStatus := models.PolicyStatusClean
+		policyReason := ""
+		policyPenalty := 0.0
+		policyEdgeModality := ""
+		canonFromEdgeType := models.DependencyType("")
+		decision := policy.PolicyDecision{Action: "allow"}
+		var err error
+
 		// Get source and target fragment types and paths for validation
 		var sourceType, targetType string
 		var sourcePath, targetPath string
@@ -107,18 +124,40 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 				log.Printf("%s Target fragment type: %s, path: %s", logPrefix, targetType, targetPath)
 			}
 		}
+		srcTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(sourceType), sourcePath)
+		dstTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(targetType), targetPath)
+		sourceType = string(srcTypeActual)
+		targetType = string(dstTypeActual)
 
 		// Canonicalize certain mis-modeled edges before running validation policy.
 		// Example: PRODUCT OWNS ORGANIZATION -> ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
 		// Use path-aware canonicalization to handle community subtypes (dynasty/tribe).
 		if sourceType != "" && targetType != "" {
-			if newType, shouldSwap, changed, reason := models.CanonicalizeEdgeWithPaths(edge.Type, models.FragmentType(sourceType), models.FragmentType(targetType), sourcePath, targetPath); changed {
+			if edge.Type == models.DependencyTypeInvestsIn &&
+				srcTypeActual == models.FragmentTypeOrganization &&
+				dstTypeActual == models.FragmentTypeFacility &&
+				models.HasOwnershipEvidence("", edge.Qualifiers, edge.Metrics) {
+				oldType := edge.Type
+				edge.Type = models.DependencyTypeOwns
+				canonFromEdgeType = oldType
+				if edge.Qualifiers == nil {
+					edge.Qualifiers = map[string]interface{}{}
+				}
+				edge.Qualifiers["canonicalized"] = true
+				edge.Qualifiers["canonicalizedFromEdgeType"] = string(oldType)
+				edge.Qualifiers["canonicalizationReason"] = "canonicalize: ORGANIZATION INVESTS_IN FACILITY with ownership evidence -> ORGANIZATION OWNS FACILITY"
+				edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
+				log.Printf("%s Canonicalized edge: %s -> %s (%s) [from %s] reason=%s",
+					logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, oldType, edge.Qualifiers["canonicalizationReason"])
+			} else if newType, shouldSwap, changed, reason := models.CanonicalizeEdgeWithPaths(edge.Type, srcTypeActual, dstTypeActual, sourcePath, targetPath); changed {
 				oldType := edge.Type
 				edge.Type = newType
+				canonFromEdgeType = oldType
 				if shouldSwap {
 					edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
 					sourceType, targetType = targetType, sourceType
 					sourcePath, targetPath = targetPath, sourcePath
+					srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
 				}
 				if edge.Qualifiers == nil {
 					edge.Qualifiers = map[string]interface{}{}
@@ -134,16 +173,30 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 					logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, oldType, reason)
 			}
 		}
+		if canonFromEdgeType != "" {
+			if penalty := models.CanonicalizationPenalty(canonFromEdgeType, edge.Type, srcTypeActual, dstTypeActual); penalty > 0 {
+				policyStatus = models.PolicyStatusPenalized
+				policyPenalty = penalty
+				if reasonRaw, ok := edge.Qualifiers["canonicalizationReason"].(string); ok {
+					policyReason = strings.TrimSpace(reasonRaw)
+				}
+				if edge.Properties.Criticality > 0 {
+					edge.Properties.Criticality *= (1.0 - penalty)
+				}
+			}
+		}
 
-		decision, err := r.validationPolicy.Execute(ctx, policy.PolicyInput{
+		decision, err = r.validationPolicy.Execute(ctx, policy.PolicyInput{
 			Kind: "edge",
 			Context: map[string]interface{}{
-				"validationKind":   "edge",
-				"sourceFragmentID": edge.SourceFragmentID,
-				"targetFragmentID": edge.TargetFragmentID,
-				"sourceType":       sourceType,
-				"targetType":       targetType,
-				"relationType":     string(edge.Type),
+				"validationKind":      "edge",
+				"sourceFragmentID":    edge.SourceFragmentID,
+				"targetFragmentID":    edge.TargetFragmentID,
+				"sourceType":          sourceType,
+				"targetType":          targetType,
+				"sourceCanonicalPath": sourcePath,
+				"targetCanonicalPath": targetPath,
+				"relationType":        string(edge.Type),
 			},
 			Edge: edge,
 		})
@@ -155,10 +208,21 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 
 		log.Printf("%s Policy decision: action=%s, path=%s, confidence=%.2f",
 			logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
+		if modality, _ := decision.Params["edgeModality"].(string); strings.TrimSpace(modality) != "" {
+			policyEdgeModality = strings.TrimSpace(modality)
+		}
 
 		policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
 			Reverse: func() {
 				edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
+			},
+			RewriteType: func(newType string, _ string) {
+				newEdgeType := models.DependencyType(strings.TrimSpace(newType))
+				if newEdgeType == "" || newEdgeType == edge.Type {
+					return
+				}
+				canonFromEdgeType = edge.Type
+				edge.Type = newEdgeType
 			},
 			ApplyPenalty: func(penalty float64, _ string) {
 				if edge.Properties.Criticality > 0 {
@@ -166,7 +230,38 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 					log.Printf("%s Adjusted criticality: %.4f", logPrefix, edge.Properties.Criticality)
 				}
 			},
+			SetPolicyStatus: func(status, reason string, penalty float64) {
+				if status == models.PolicyStatusClean && policyStatus != models.PolicyStatusClean {
+					return
+				}
+				policyStatus = status
+				policyReason = strings.TrimSpace(reason)
+				policyPenalty = penalty
+			},
 		})
+		if edge.Qualifiers == nil {
+			edge.Qualifiers = map[string]interface{}{}
+		}
+		if policyEdgeModality != "" {
+			if _, ok := edge.Qualifiers["edgeModality"]; !ok {
+				edge.Qualifiers["edgeModality"] = policyEdgeModality
+			}
+		}
+		edge.SetPolicyStatus(policyStatus, policyReason, policyPenalty)
+		if canonFromEdgeType != "" {
+			edge.SetPolicyOriginalType(canonFromEdgeType)
+		}
+		r.recordPolicyDecisionTelemetry(
+			ctx,
+			edge.TenantID,
+			decision,
+			sourceType,
+			targetType,
+			string(edge.Type),
+			policyStatus,
+			policyReason,
+			canonFromEdgeType != "",
+		)
 	}
 
 	now := time.Now().UTC()
@@ -187,9 +282,62 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 	if fn := getEdgeAffectCollector(ctx); fn != nil {
 		fn(edge.SourceFragmentID, edge.TargetFragmentID)
 	}
-	
+
 	log.Printf("%s Edge created successfully: id=%s", logPrefix, edge.ID)
 	return edge.ID, nil
+}
+
+func (r *DependencyEdgesRepository) recordPolicyDecisionTelemetry(
+	ctx context.Context,
+	tenantID string,
+	decision policy.PolicyDecision,
+	sourceType string,
+	targetType string,
+	relationType string,
+	finalStatus string,
+	finalReason string,
+	canonicalized bool,
+) {
+	if r == nil || r.telemetryRepo == nil {
+		return
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+
+	snapshot := policy.BuildDecisionTelemetrySnapshot(policy.DecisionTelemetryInput{
+		Kind:          "edge",
+		Decision:      decision,
+		SourceType:    sourceType,
+		TargetType:    targetType,
+		RelationType:  relationType,
+		FinalStatus:   finalStatus,
+		FinalReason:   finalReason,
+		Canonicalized: canonicalized,
+	})
+	if len(snapshot.Counters) > 0 {
+		_ = r.telemetryRepo.Increment(
+			ctx,
+			tenantID,
+			"edge_policy",
+			"kpi_rates",
+			time.Hour,
+			map[string]string{"kind": "edge"},
+			snapshot.Counters,
+		)
+	}
+	if len(snapshot.InvalidTripleDims) > 0 && len(snapshot.InvalidTripleCount) > 0 {
+		_ = r.telemetryRepo.Increment(
+			ctx,
+			tenantID,
+			"edge_policy",
+			"top_invalid_triples",
+			24*time.Hour,
+			snapshot.InvalidTripleDims,
+			snapshot.InvalidTripleCount,
+		)
+	}
 }
 
 // Get получает DependencyEdge по ID

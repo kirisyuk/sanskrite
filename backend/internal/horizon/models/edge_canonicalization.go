@@ -13,10 +13,10 @@ import (
 // SymmetricEdgeTypes defines edge types where the relationship is reciprocal.
 // For these types, we normalize source/target to ensure consistent representation.
 var SymmetricEdgeTypes = map[DependencyType]bool{
-	DependencyTypeCompetesWith: true, // "A competes with B" = "B competes with A"
-	DependencyTypePartnersWith: true, // "A partners with B" = "B partners with A"
-	DependencyTypeRelativeOf:   true, // "A is relative of B" = "B is relative of A"
-	DependencyTypeRelatedTo:    true, // "A is related to B" = "B is related to A"
+	DependencyTypeCompetesWith:  true, // "A competes with B" = "B competes with A"
+	DependencyTypePartnersWith:  true, // "A partners with B" = "B partners with A"
+	DependencyTypeRelativeOf:    true, // "A is relative of B" = "B is relative of A"
+	DependencyTypeRelatedTo:     true, // "A is related to B" = "B is related to A"
 	DependencyTypeRelatedDomain: true, // "D1 related domain D2" = "D2 related domain D1"
 }
 
@@ -112,6 +112,13 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeLocatedIn, true, true, "canonicalize: GEO_REGION OWNS ORGANIZATION -> ORGANIZATION LOCATED_IN GEO_REGION"
 	}
 
+	// OWNS(COMMUNITY → ORGANIZATION) usually indicates informal control, not legal ownership.
+	if edgeType == DependencyTypeOwns &&
+		sourceType == FragmentTypeCommunity &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypeControls, false, true, "canonicalize: COMMUNITY OWNS ORGANIZATION -> COMMUNITY CONTROLS ORGANIZATION"
+	}
+
 	// EXTRACTS_FROM is strict by ontology: FACILITY -> DEPOSIT.
 	// However, in practice LLMs often emit ORG -> DEPOSIT when the specific facility is unknown.
 	// Best-effort canonicalization: treat it as ORG OPERATES_IN DEPOSIT (no loss of meaning, keeps graph usable).
@@ -187,6 +194,20 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		sourceType == FragmentTypeOrganization &&
 		targetType == FragmentTypeProgram {
 		return DependencyTypeAdministers, false, true, "canonicalize: ORGANIZATION OWNS PROGRAM -> ORGANIZATION ADMINISTERS PROGRAM"
+	}
+
+	// AFFILIATED_WITH(PERSON → COMMUNITY) expresses membership in this ontology.
+	if edgeType == DependencyTypeAffiliatedWith &&
+		sourceType == FragmentTypePerson &&
+		targetType == FragmentTypeCommunity {
+		return DependencyTypeMemberOf, false, true, "canonicalize: PERSON AFFILIATED_WITH COMMUNITY -> PERSON MEMBER_OF COMMUNITY"
+	}
+
+	// AFFILIATED_WITH(ORG → ORG) is treated as partnership relation.
+	if edgeType == DependencyTypeAffiliatedWith &&
+		sourceType == FragmentTypeOrganization &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypePartnersWith, false, true, "canonicalize: ORGANIZATION AFFILIATED_WITH ORGANIZATION -> ORGANIZATION PARTNERS_WITH ORGANIZATION"
 	}
 
 	// DOMINATES(MARKET → ORG/FAC/COMMUNITY) → DOMINATES (swap)
@@ -268,6 +289,27 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeConsumes, true, true, "canonicalize: PRODUCT SUPPLIES_TO ORGANIZATION -> ORGANIZATION CONSUMES PRODUCT"
 	}
 
+	// PRODUCES(ORGANIZATION → ORGANIZATION) is frequently a mistyped supply relation.
+	if edgeType == DependencyTypeProduces &&
+		sourceType == FragmentTypeOrganization &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypeSuppliesTo, false, true, "canonicalize: ORGANIZATION PRODUCES ORGANIZATION -> ORGANIZATION SUPPLIES_TO ORGANIZATION"
+	}
+
+	// MANAGES(PERSON → PERSON) is not formal management in current ontology.
+	if edgeType == DependencyTypeManages &&
+		sourceType == FragmentTypePerson &&
+		targetType == FragmentTypePerson {
+		return DependencyTypeRelatedTo, false, true, "canonicalize: PERSON MANAGES PERSON -> PERSON RELATED_TO PERSON"
+	}
+
+	// INVESTS_IN(ORGANIZATION → FACILITY) usually means operating/asset position.
+	if edgeType == DependencyTypeInvestsIn &&
+		sourceType == FragmentTypeOrganization &&
+		targetType == FragmentTypeFacility {
+		return DependencyTypeOperatesIn, false, true, "canonicalize: ORGANIZATION INVESTS_IN FACILITY -> ORGANIZATION OPERATES_IN FACILITY"
+	}
+
 	// APPLIES_TO(ENTITY → MECHANISM) is inverted; canonical direction is MECHANISM → ENTITY.
 	if edgeType == DependencyTypeAppliesTo &&
 		sourceType != FragmentTypeMechanism &&
@@ -301,9 +343,28 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 }
 
 // CanonicalizeEdgeWithPaths rewrites an edge type (and optionally direction) based on endpoint fragment types and canonical paths.
-// This extends CanonicalizeEdge with path-based checks (e.g., for community subtypes).
+// This extends CanonicalizeEdge with path-based checks (e.g., for community subtypes, product-path retargeting).
 // Returns: (newType, shouldSwapEndpoints, changed, reason).
 func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType FragmentType, sourcePath, targetPath string) (DependencyType, bool, bool, string) {
+	// =============================================================================
+	// Path-based canonicalization BEFORE standard type-based rules.
+	// These intercept cases where the canonical path reveals the correct target type
+	// that the fragment type metadata got wrong.
+	// =============================================================================
+
+	// PRODUCES(ORG → ORG) where target path starts with /product/:
+	// The target is actually a PRODUCT mistyped as ORGANIZATION.
+	// Fix: keep PRODUCES, signal that targetType should be corrected to PRODUCT.
+	// This is more accurate than the generic ORG→ORG fallback (→ SUPPLIES_TO).
+	if edgeType == DependencyTypeProduces &&
+		sourceType == FragmentTypeOrganization &&
+		targetType == FragmentTypeOrganization &&
+		strings.HasPrefix(strings.TrimSpace(targetPath), "/product/") {
+		// Edge type stays PRODUCES (ORG → PRODUCT is valid).
+		// The caller should reconcile targetType to PRODUCT based on path.
+		return DependencyTypeProduces, false, true, "canonicalize: ORGANIZATION PRODUCES ORGANIZATION(path=/product/...) -> keep PRODUCES, target is mistyped PRODUCT"
+	}
+
 	// First apply standard canonicalization
 	newType, shouldSwap, changed, reason := CanonicalizeEdge(edgeType, sourceType, targetType)
 	if changed {

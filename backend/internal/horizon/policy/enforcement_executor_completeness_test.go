@@ -1,6 +1,9 @@
 package policy
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestCreateEnforcementJobs_CreatesEnrichEdgeTaskForCompletenessViolation(t *testing.T) {
 	exec := &EnforcementExecutor{}
@@ -16,7 +19,7 @@ func TestCreateEnforcementJobs_CreatesEnrichEdgeTaskForCompletenessViolation(t *
 		},
 	}
 
-	jobs, err := exec.CreateEnforcementJobs(nil, "tenant-1", "job-1", violations)
+	jobs, err := exec.CreateEnforcementJobs(context.Background(), "tenant-1", "job-1", violations)
 	if err != nil {
 		t.Fatalf("CreateEnforcementJobs failed: %v", err)
 	}
@@ -30,4 +33,3 @@ func TestCreateEnforcementJobs_CreatesEnrichEdgeTaskForCompletenessViolation(t *
 		t.Fatalf("expected target edge-1, got %s", jobs[0].Task.TargetID)
 	}
 }
-

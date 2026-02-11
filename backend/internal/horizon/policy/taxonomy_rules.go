@@ -2,8 +2,10 @@ package policy
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -103,7 +105,7 @@ type Examples struct {
 // DefaultTaxonomyRules returns the default taxonomy rules for policy enforcement.
 func DefaultTaxonomyRules() *TaxonomyRules {
 	rules := taxonomy.DefaultCanonicalRules()
-	return &TaxonomyRules{
+	tr := &TaxonomyRules{
 		Geo: GeoTaxonomyRules{
 			Format:       rules.Geo.Format,
 			Admin1Source: "geonames",
@@ -291,6 +293,59 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 			"RELATED_TO",
 		},
 	}
+	// Keep prompt contract aligned with runtime edge semantics source-of-truth.
+	tr.EdgeDirection.Rules = buildEdgeDirectionRulesFromSemantics()
+	tr.SymmetricEdges = buildSymmetricEdgesFromSemantics()
+	return tr
+}
+
+func buildEdgeDirectionRulesFromSemantics() []EdgeDirectionRuleLLM {
+	types := make([]string, 0, len(edgesemantics.EdgeDirectionPolicies))
+	for t := range edgesemantics.EdgeDirectionPolicies {
+		types = append(types, string(t))
+	}
+	sort.Strings(types)
+
+	out := make([]EdgeDirectionRuleLLM, 0, len(types))
+	for _, t := range types {
+		rule := edgesemantics.EdgeDirectionPolicies[models.DependencyType(t)]
+		out = append(out, EdgeDirectionRuleLLM{
+			EdgeType:    t,
+			Direction:   fmt.Sprintf("%s → %s", joinFragmentTypes(rule.ValidSourceTypes), joinFragmentTypes(rule.ValidTargetTypes)),
+			Description: rule.Description,
+			ValidSource: fragmentTypesToStrings(rule.ValidSourceTypes),
+			ValidTarget: fragmentTypesToStrings(rule.ValidTargetTypes),
+		})
+	}
+	return out
+}
+
+func buildSymmetricEdgesFromSemantics() []string {
+	out := make([]string, 0, len(models.SymmetricEdgeTypes))
+	for edgeType := range models.SymmetricEdgeTypes {
+		out = append(out, string(edgeType))
+	}
+	sort.Strings(out)
+	return out
+}
+
+func fragmentTypesToStrings(types []models.FragmentType) []string {
+	if len(types) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(types))
+	for _, t := range types {
+		out = append(out, string(t))
+	}
+	return out
+}
+
+func joinFragmentTypes(types []models.FragmentType) string {
+	if len(types) == 0 {
+		return "*"
+	}
+	parts := fragmentTypesToStrings(types)
+	return strings.Join(parts, "|")
 }
 
 // ToLLMContext converts taxonomy rules to a string suitable for LLM prompts.

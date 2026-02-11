@@ -122,6 +122,8 @@ type HorizonFragment struct {
 
 	// Гибкие метрики
 	State map[string]MetricValue `json:"state" firestore:"state"`
+	// Qualifiers stores policy/runtime annotations (e.g., policyStatus/policyReason).
+	Qualifiers map[string]interface{} `json:"qualifiers,omitempty" firestore:"qualifiers,omitempty"`
 
 	// HighProfile stores global, precomputed "high-profile" business signals derived from the graph.
 	// It is optional and may be absent for older fragments or when backfill hasn't run yet.

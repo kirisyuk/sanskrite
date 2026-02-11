@@ -235,6 +235,16 @@
       "collectionGroup": "ontology_facts",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "canonicalPaths", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ontology_facts",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "spherePaths", "arrayConfig": "CONTAINS" },
         { "fieldPath": "updatedAt", "order": "ASCENDING" }
@@ -942,5 +952,4 @@
     }
   ]
 }
-
 

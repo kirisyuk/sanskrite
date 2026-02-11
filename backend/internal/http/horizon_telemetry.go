@@ -99,6 +99,23 @@ func (h *HorizonTelemetryHandler) List(w http.ResponseWriter, r *http.Request) {
 	if total := summary["resolve_calls"]; total > 0 {
 		hitRate = float64(summary["redirect_hits"]) / float64(total)
 	}
+	rates := map[string]float64{}
+	if total := summary["policy_decision_total"]; total > 0 {
+		metricKeys := []string{
+			"policy_reject_non_blocking_rate",
+			"auto_fix_rate",
+			"auto_fix_hit_rate",
+			"penalty_rate",
+			"quarantine_rate",
+			"false_positive_reject_rate",
+			"type_path_mismatch_rate",
+		}
+		for _, k := range metricKeys {
+			if v := summary[k]; v > 0 {
+				rates[k] = float64(v) / float64(total)
+			}
+		}
+	}
 
 	// IMPORTANT: Return JSON keys in lowerCamelCase as expected by the frontend.
 	// Do NOT expose internal Go struct field names (WindowStart, Counters, etc).
@@ -133,6 +150,7 @@ func (h *HorizonTelemetryHandler) List(w http.ResponseWriter, r *http.Request) {
 		"items":    out,
 		"summary":  summary,
 		"hitRate":  hitRate,
+		"rates":    rates,
 		"tenantId": tenantID,
 	})
 }

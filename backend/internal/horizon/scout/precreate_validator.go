@@ -7,10 +7,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -30,6 +32,7 @@ type PreCreateValidator struct {
 	productDedup     *ProductDeduplicator
 	personDedup      *PersonDeduplicator
 	validationPolicy *policy.PolicyExecutor // Optional: unified validation policy
+	telemetryRepo    *repo.HorizonTelemetryRepository
 	wikidataClient   coreontology.WikidataClientInterface
 	geonamesClient   coreontology.GeoNamesClientInterface
 }
@@ -52,6 +55,12 @@ func (v *PreCreateValidator) WithPersonDedup(dedup *PersonDeduplicator) *PreCrea
 // WithValidationPolicy sets the validation policy executor.
 func (v *PreCreateValidator) WithValidationPolicy(executor *policy.PolicyExecutor) *PreCreateValidator {
 	v.validationPolicy = executor
+	return v
+}
+
+// WithTelemetryRepo wires aggregated policy KPI telemetry sink (best-effort).
+func (v *PreCreateValidator) WithTelemetryRepo(telemetryRepo *repo.HorizonTelemetryRepository) *PreCreateValidator {
+	v.telemetryRepo = telemetryRepo
 	return v
 }
 
@@ -123,7 +132,11 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 						result.Warnings = append(result.Warnings, reason)
 					}
 				},
+				SetPolicyStatus: func(status, reason string, penalty float64) {
+					fragment.SetPolicyStatus(status, reason, penalty)
+				},
 			})
+			v.recordPolicyDecisionTelemetry(ctx, fragment, decision)
 		}
 	}
 
@@ -502,6 +515,39 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	}
 
 	return result, nil
+}
+
+func (v *PreCreateValidator) recordPolicyDecisionTelemetry(
+	ctx context.Context,
+	fragment *models.HorizonFragment,
+	decision policy.PolicyDecision,
+) {
+	if v == nil || v.telemetryRepo == nil || fragment == nil {
+		return
+	}
+	tenantID := strings.TrimSpace(fragment.TenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	snapshot := policy.BuildDecisionTelemetrySnapshot(policy.DecisionTelemetryInput{
+		Kind:        "fragment",
+		Decision:    decision,
+		SourceType:  string(fragment.Type),
+		FinalStatus: fragment.GetPolicyStatus(),
+		FinalReason: fragment.GetPolicyReason(),
+	})
+	if len(snapshot.Counters) == 0 {
+		return
+	}
+	_ = v.telemetryRepo.Increment(
+		ctx,
+		tenantID,
+		"edge_policy",
+		"kpi_rates",
+		time.Hour,
+		map[string]string{"kind": "fragment"},
+		snapshot.Counters,
+	)
 }
 
 // expectedPathPrefix returns the expected canonical path prefix for a fragment type.

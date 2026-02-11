@@ -3351,6 +3351,17 @@ export async function layoutLevelsTwoPane<T = any>(
       }
     }
 
+    // Market hierarchy: collapse sibling submarkets into one stack by default.
+    // We intentionally label this as "Related markets" to keep UX generic for
+    // HAS_SUBMARKET / HAS_SUBGROUP-like structures.
+    if (relatedId && pairTypes && pairTypes.size > 0 && isMarketType(tk)) {
+      const hasSubmarket = Array.from(pairTypes).some((x) => normalizeEdgeType(x) === 'HAS_SUBMARKET');
+      const hasSubgroup = Array.from(pairTypes).some((x) => normalizeEdgeType(x) === 'HAS_SUBGROUP');
+      if (hasSubmarket || hasSubgroup) {
+        return { kind: 'submarket', title: 'Related markets', visualType: 'MARKET' };
+      }
+    }
+
     // Persons:
     // - If the person is connected via EMPLOYED_BY to the expanded org, bucket into a dedicated Staff stack.
     // - Otherwise keep the generic People stack.
@@ -4392,6 +4403,50 @@ export async function layoutLevelsTwoPane<T = any>(
     anchoredRightIds.add(g.parentId);
   }
 
+  // Build soft anchors from RIGHT nodes to centers of LEFT groups they connect to.
+  // This reduces avoidable crossings where a right node has strong relations to nodes
+  // inside another node's left group, but barycentric right-only sweeps ignore that.
+  const leftGroupCenterByChildId = new Map<string, number>(); // childId -> group center Y
+  for (const g of groupInfos) {
+    const gyCenter = g.gy + g.h / 2;
+    for (const c of g.children) {
+      const cid = String((c as any)?.id || '').trim();
+      if (!cid) continue;
+      leftGroupCenterByChildId.set(cid, gyCenter);
+    }
+  }
+  const leftGroupPullTargetsByRightId = new Map<string, number[]>(); // rightId -> [groupCenterY...]
+  {
+    const rightIdSet = new Set(rightSorted.map((n) => String(n.id || '').trim()).filter(Boolean));
+    const addPull = (rid: string, gy: number) => {
+      const arr = leftGroupPullTargetsByRightId.get(rid) || [];
+      arr.push(gy);
+      leftGroupPullTargetsByRightId.set(rid, arr);
+    };
+    for (const e of (edges || []) as any[]) {
+      const eid = String(e?.id || '').trim();
+      if (eid.startsWith('levels:agg:')) continue;
+      if (eid.startsWith('levels:stackproxy:')) continue;
+      if (eid.startsWith('levels:gproxy:')) continue;
+      if (Boolean(e?.data?.levelsAgg)) continue;
+      if (Boolean(e?.data?.levelsStackProxy)) continue;
+      if (Boolean(e?.data?.levelsGroupProxy)) continue;
+      const s = normId(e?.source);
+      const t = normId(e?.target);
+      if (!s || !t || s === t) continue;
+      // right -> left-group-child
+      if (rightIdSet.has(s)) {
+        const gy = leftGroupCenterByChildId.get(t);
+        if (typeof gy === 'number') addPull(s, gy);
+      }
+      // left-group-child -> right
+      if (rightIdSet.has(t)) {
+        const gy = leftGroupCenterByChildId.get(s);
+        if (typeof gy === 'number') addPull(t, gy);
+      }
+    }
+  }
+
   // After groups are packed (and their parent right-nodes were shifted),
   // re-balance the RIGHT hierarchy vertically so that:
   // - nodes expanded from groups don't "fly away"
@@ -4453,6 +4508,7 @@ export async function layoutLevelsTwoPane<T = any>(
 
     const blend = (cur: number, next: number, a: number) => cur * (1 - a) + next * a;
     const alpha = 0.65; // fairly strong pull towards target
+    const leftGroupPullAlpha = 0.32; // soft pull to connected left groups (cross-band consistency)
 
     for (let sweep = 0; sweep < 2; sweep++) {
       // Right-to-left: follow parents (keeps newly promoted nodes close to their right-side ancestors).
@@ -4461,6 +4517,11 @@ export async function layoutLevelsTwoPane<T = any>(
         if (ids.length === 0) continue;
         for (const id of ids) {
           if (anchoredRightIds.has(id)) continue;
+          const leftTargets = leftGroupPullTargetsByRightId.get(id);
+          if (leftTargets && leftTargets.length > 0) {
+            const leftTarget = leftTargets.reduce((s, y) => s + y, 0) / leftTargets.length;
+            yC.set(id, blend(yC.get(id) || 0, leftTarget, leftGroupPullAlpha));
+          }
           const pars = Array.from(parentsOf.get(id) || []).filter(
             (p) => typeof yC.get(p) === 'number' && !stackHiddenIds.has(p) && !preHiddenIds.has(p),
           );
@@ -4477,6 +4538,11 @@ export async function layoutLevelsTwoPane<T = any>(
         if (ids.length === 0) continue;
         for (const id of ids) {
           if (anchoredRightIds.has(id)) continue;
+          const leftTargets = leftGroupPullTargetsByRightId.get(id);
+          if (leftTargets && leftTargets.length > 0) {
+            const leftTarget = leftTargets.reduce((s, y) => s + y, 0) / leftTargets.length;
+            yC.set(id, blend(yC.get(id) || 0, leftTarget, leftGroupPullAlpha * 0.8));
+          }
           const kids = Array.from(childrenOf.get(id) || []).filter(
             (c) => typeof yC.get(c) === 'number' && !stackHiddenIds.has(c) && !preHiddenIds.has(c),
           );
@@ -4835,11 +4901,11 @@ export async function layoutLevelsTwoPane<T = any>(
     stackGroupIndex.set(gid, i);
   }
 
-  type LevelItem = { kind: 'group' | 'node'; id: string; y: number; h: number };
+  type LevelItem = { kind: 'group' | 'node'; id: string; x: number; y: number; w: number; h: number };
   const levelToItems = new Map<number, LevelItem[]>();
   for (const [gid, gpos] of stackGroupPositions.entries()) {
     const arr = levelToItems.get(gpos.level) || [];
-    arr.push({ kind: 'group', id: gid, y: gpos.y, h: gpos.h });
+    arr.push({ kind: 'group', id: gid, x: gpos.x, y: gpos.y, w: gpos.w, h: gpos.h });
     levelToItems.set(gpos.level, arr);
   }
 
@@ -4850,13 +4916,12 @@ export async function layoutLevelsTwoPane<T = any>(
       if (
         groupedChildIds.has(nodeId) ||
         stackHiddenIds.has(nodeId) ||
-        preHiddenIds.has(nodeId) ||
-        stackMetaById.has(nodeId) // Not a controller (controllers become groups)
+        preHiddenIds.has(nodeId)
       ) continue;
       const nodePos = rightPos.get(nodeId);
       if (!nodePos) continue;
       const nodeH = unitHeights.get(nodeId) || nodeHeight;
-      items.push({ kind: 'node', id: nodeId, y: nodePos.y, h: nodeH });
+      items.push({ kind: 'node', id: nodeId, x: nodePos.x, y: nodePos.y, w: nodeWidth, h: nodeH });
     }
     if (items.length <= 1) continue;
 
@@ -4880,6 +4945,78 @@ export async function layoutLevelsTwoPane<T = any>(
         if (p) rightPos.set(item.id, { x: p.x, y: Math.round(top) });
       }
       cursor = top + item.h + gapY;
+    }
+  }
+
+  // === 6.65) Cross-column collision pass (expanded stack groups vs nodes in neighboring columns) ===
+  // Expanded stack groups can be wider than one level step. Treat them as full layout nodes:
+  // if a group's bbox intersects nodes in adjacent columns, push those nodes below the group.
+  {
+    const overlapMarginX = 12;
+    const overlapMarginY = 10;
+
+    const groupRects = Array.from(stackGroupPositions.entries())
+      .map(([id, g]) => ({ id, x: g.x, y: g.y, w: g.w, h: g.h }))
+      .sort((a, b) => a.y - b.y);
+
+    if (groupRects.length > 0) {
+      type StandaloneNodeRect = { id: string; level: number; x: number; y: number; w: number; h: number };
+      const standalone = new Map<string, StandaloneNodeRect>();
+
+      for (const [lv, ids] of idsByLevel.entries()) {
+        for (const nodeId of ids) {
+          if (
+            groupedChildIds.has(nodeId) ||
+            stackHiddenIds.has(nodeId) ||
+            preHiddenIds.has(nodeId)
+          ) {
+            continue;
+          }
+          const p = rightPos.get(nodeId);
+          if (!p) continue;
+          const h = unitHeights.get(nodeId) || nodeHeight;
+          standalone.set(nodeId, { id: nodeId, level: lv, x: p.x, y: p.y, w: nodeWidth, h });
+        }
+      }
+
+      const xOverlap = (a: { x: number; w: number }, b: { x: number; w: number }) =>
+        (a.x + a.w) > (b.x - overlapMarginX) && (b.x + b.w) > (a.x - overlapMarginX);
+
+      const yOverlap = (a: { y: number; h: number }, b: { y: number; h: number }) =>
+        (a.y + a.h) > (b.y - overlapMarginY) && (b.y + b.h) > (a.y - overlapMarginY);
+
+      for (const g of groupRects) {
+        const gBottom = g.y + g.h;
+        for (const node of standalone.values()) {
+          // Only resolve when there is real rectangle overlap (including neighboring columns).
+          if (!xOverlap(g, node) || !yOverlap(g, node)) continue;
+          // Keep original ordering: only push nodes that are at/under the group top.
+          if (node.y + node.h <= g.y + overlapMarginY) continue;
+          const gapY = rightGapY(node.level);
+          node.y = Math.max(node.y, Math.round(gBottom + gapY));
+        }
+      }
+
+      // Re-apply per-level vertical packing after cross-column pushes.
+      const byLevel = new Map<number, StandaloneNodeRect[]>();
+      for (const n of standalone.values()) {
+        const arr = byLevel.get(n.level) || [];
+        arr.push(n);
+        byLevel.set(n.level, arr);
+      }
+
+      for (const [lv, nodesAtLevel] of byLevel.entries()) {
+        if (nodesAtLevel.length === 0) continue;
+        const gapY = rightGapY(lv);
+        nodesAtLevel.sort((a, b) => a.y - b.y);
+        let cursor = nodesAtLevel[0] ? nodesAtLevel[0].y : 0;
+        for (const n of nodesAtLevel) {
+          n.y = Math.max(n.y, cursor);
+          cursor = n.y + n.h + gapY;
+          const p = rightPos.get(n.id);
+          if (p) rightPos.set(n.id, { x: p.x, y: Math.round(n.y) });
+        }
+      }
     }
   }
 

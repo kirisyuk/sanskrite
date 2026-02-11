@@ -3,6 +3,7 @@ package interpretation
 import (
 	"context"
 	"log"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -66,6 +67,11 @@ func (p *Processor) Start(ctx context.Context, interval time.Duration, batchSize
 	ticker := time.NewTicker(interval)
 	go func() {
 		defer ticker.Stop()
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("%s start_loop_panic_recovered panic=%v stack=%s", signalsys.LogInterpret, rec, string(debug.Stack()))
+			}
+		}()
 		for {
 			select {
 			case <-ctx.Done():
@@ -78,4 +84,3 @@ func (p *Processor) Start(ctx context.Context, interval time.Duration, batchSize
 		}
 	}()
 }
-

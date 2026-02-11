@@ -444,6 +444,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const dbg = React.useCallback((...args: any[]) => {
     if (DEV) console.log(...args);
   }, [DEV]);
+  const edgePolicyWarnedPairsRef = React.useRef<Set<string>>(new Set());
 
   const getEdgeStroke = React.useCallback((style: any): string => {
     const s = style?.stroke;
@@ -7677,6 +7678,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return tt === 'PERSON';
     };
     const INFLUENCEISH = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES']);
+    const LOCATEDISH = new Set(['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'IN_GEO_SCOPE']);
+    const PARTNERSHIPISH = new Set(['PARTNERS_WITH']);
     const edgeTypeOf = (e: any): string => {
       const raw = (e as any)?.data?.edgeType || (e as any)?.data?.subkind || (e as any)?.label || (e as any)?.type || '';
       return String(raw || '').toUpperCase().trim();
@@ -7723,6 +7726,52 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
 
     let base = hiddenNodeIds.size === 0 ? edges : edges.filter((e) => !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target));
+
+    // Suppress clearly inconsistent geo-partnership visuals:
+    // if a pair involving GEO has both location semantics and PARTNERS_WITH,
+    // keep location edge(s) and suppress PARTNERS_WITH on the frontend.
+    // NOTE: this is visual suppression only; data remains intact.
+    const pairKeyGeo = (a: string, b: string) => (a < b ? `${a}||${b}` : `${b}||${a}`);
+    const geoPairsWithLocated = new Set<string>();
+    const geoPairsWithPartnership = new Set<string>();
+    if (base.length > 0) {
+      for (const e of base) {
+        const s = String((e as any)?.source || '').trim();
+        const t = String((e as any)?.target || '').trim();
+        if (!s || !t || s === t) continue;
+        const st = typeByKey.get(s) || '';
+        const tt = typeByKey.get(t) || '';
+        if (!isGeoType(st) && !isGeoType(tt)) continue;
+        const et = edgeTypeOf(e);
+        const k = pairKeyGeo(s, t);
+        if (LOCATEDISH.has(et)) geoPairsWithLocated.add(k);
+        if (PARTNERSHIPISH.has(et)) geoPairsWithPartnership.add(k);
+      }
+      if (geoPairsWithLocated.size > 0 && geoPairsWithPartnership.size > 0) {
+        const suppressedPairs = new Set<string>();
+        base = base.filter((e) => {
+          const s = String((e as any)?.source || '').trim();
+          const t = String((e as any)?.target || '').trim();
+          if (!s || !t || s === t) return true;
+          const st = typeByKey.get(s) || '';
+          const tt = typeByKey.get(t) || '';
+          if (!isGeoType(st) && !isGeoType(tt)) return true;
+          const et = edgeTypeOf(e);
+          if (!PARTNERSHIPISH.has(et)) return true;
+          const k = pairKeyGeo(s, t);
+          if (!geoPairsWithLocated.has(k)) return true;
+          suppressedPairs.add(k);
+          return false;
+        });
+        if (suppressedPairs.size > 0 && DEV) {
+          for (const k of suppressedPairs) {
+            if (edgePolicyWarnedPairsRef.current.has(k)) continue;
+            edgePolicyWarnedPairsRef.current.add(k);
+            console.warn('[HZN:EDGE_POLICY] Suppressed PARTNERS_WITH for GEO pair due to LOCATED/OPERATES relation', { pairKey: k });
+          }
+        }
+      }
+    }
 
     // Apply influence suppression (ORG↔GEO / ORG↔PERSON) when a stronger non-influence relation exists.
     if (pairHasNonInfluence.size > 0 && pairHasAnyInfluence.size > 0) {
@@ -7820,7 +7869,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
 
     return filtered;
-  }, [edges, hiddenNodeIds, nodes, isLevelsLayout, viewDirective]);
+  }, [edges, hiddenNodeIds, nodes, isLevelsLayout, viewDirective, DEV]);
 
   // Stable node structure info (only changes when nodes are added/removed/hidden, NOT on style changes).
   // This prevents hubNodeIds from re-computing on every hover/style update.

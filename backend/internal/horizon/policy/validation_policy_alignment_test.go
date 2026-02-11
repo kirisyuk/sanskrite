@@ -1,10 +1,17 @@
 package policy
 
 import (
+	"context"
 	"testing"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
+
+type testValidationRulesRepo struct{}
+
+func (testValidationRulesRepo) GetRules(context.Context) ([]*ValidationRule, error) {
+	return nil, nil
+}
 
 func TestShouldValidateCanonicalPath_IncludesCommunityAndDomain(t *testing.T) {
 	if !shouldValidateCanonicalPath("/community/sa/dynasty/house-of-saud") {
@@ -142,5 +149,104 @@ func TestValidationPolicy_CompetesWithAndAuditedByRulesPresent(t *testing.T) {
 	)
 	if !okAuditedBy {
 		t.Fatalf("expected AUDITED_BY ORGANIZATION -> ORGANIZATION to be valid")
+	}
+}
+
+func TestValidationPolicy_RelatedAndRelativeRulesPresent(t *testing.T) {
+	p := &ValidationPolicy{}
+
+	okRelated, _, _ := p.validateEdgeDirection(
+		horizonmodels.DependencyTypeRelatedTo,
+		horizonmodels.FragmentTypePerson,
+		horizonmodels.FragmentTypePerson,
+	)
+	if !okRelated {
+		t.Fatalf("expected RELATED_TO PERSON -> PERSON to be valid")
+	}
+
+	okRelative, _, _ := p.validateEdgeDirection(
+		horizonmodels.DependencyTypeRelativeOf,
+		horizonmodels.FragmentTypePerson,
+		horizonmodels.FragmentTypePerson,
+	)
+	if !okRelative {
+		t.Fatalf("expected RELATIVE_OF PERSON -> PERSON to be valid")
+	}
+}
+
+func TestValidationPolicy_InfluencesPersonToSphereAllowed(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypePerson),
+			"targetType":     string(horizonmodels.FragmentTypeSphere),
+			"relationType":   string(horizonmodels.DependencyTypeInfluences),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != "allow" {
+		t.Fatalf("expected allow decision, got %s", decision.Action)
+	}
+}
+
+func TestValidationPolicy_InfluencesOrgToSphereGetsPenaltyPotential(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
+			"targetType":     string(horizonmodels.FragmentTypeSphere),
+			"relationType":   string(horizonmodels.DependencyTypeInfluences),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != "allow_with_penalty" {
+		t.Fatalf("expected allow_with_penalty decision, got %s", decision.Action)
+	}
+	if got, _ := decision.Params["edgeModality"].(string); got != "potential" {
+		t.Fatalf("expected edgeModality=potential, got %q", got)
+	}
+}
+
+func TestValidationPolicy_OrgConsumesOrgQuarantine(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
+			"targetType":     string(horizonmodels.FragmentTypeOrganization),
+			"relationType":   string(horizonmodels.DependencyTypeConsumes),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != "quarantine" {
+		t.Fatalf("expected quarantine decision, got %s", decision.Action)
+	}
+}
+
+func TestValidationPolicy_GovPathOrgWhitelist(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "fragment",
+		Fragment: &horizonmodels.HorizonFragment{
+			Type:          horizonmodels.FragmentTypeOrganization,
+			CanonicalPath: "/gov/sa/ministry-of-finance",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action == "penalty" || decision.Action == "reject" {
+		t.Fatalf("gov path should not be penalized/rejected, got %s", decision.Action)
 	}
 }

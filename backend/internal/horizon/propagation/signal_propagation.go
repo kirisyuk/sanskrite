@@ -294,6 +294,9 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 
 	// Process outgoing edges
 	for _, edge := range outgoingEdges {
+		if edge == nil || edge.IsQuarantined() {
+			continue
+		}
 		spec := strongSpecs[edge.Type]
 		if spec == nil {
 			continue
@@ -310,6 +313,9 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 
 	// Process incoming edges
 	for _, edge := range incomingEdges {
+		if edge == nil || edge.IsQuarantined() {
+			continue
+		}
 		spec := strongSpecs[edge.Type]
 		if spec == nil {
 			continue

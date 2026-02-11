@@ -1042,6 +1042,7 @@ func main() {
 		horizonCascadeEntityRegistryRepo := horizonrepo.NewCascadeEntityRegistryRepository(fsClient.Client())
 		horizonCanonicalPathRedirectsRepo := horizonrepo.NewCanonicalPathRedirectsRepository(fsClient.Client())
 		horizonTelemetryRepo = horizonrepo.NewHorizonTelemetryRepository(fsClient.Client())
+		horizonEdgesRepo.WithTelemetryRepo(horizonTelemetryRepo)
 			horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
 			horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
 			riskJobsRepo = horizonrepo.NewRiskJobsRepository(fsClient.Client())
@@ -1670,6 +1671,7 @@ func main() {
 			// Wire CanonizationPolicy and ValidationPolicy for normalization and validation
 			scoutEngine.WithCanonizationPolicy(canonizationPolicyExecutor)
 			scoutEngine.WithValidationPolicy(validationPolicyExecutor)
+			scoutEngine.WithTelemetryRepo(horizonTelemetryRepo)
 
 			// Create and wire CanonicalPathResolver for early canonicalization and deduplication
 			// This ensures all paths are canonicalized and deduplicated before processing

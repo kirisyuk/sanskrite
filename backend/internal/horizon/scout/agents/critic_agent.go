@@ -245,8 +245,8 @@ For MECHANISM:
 STRATEGIC EDGE TYPE VALIDATION:
 - CONTROLS_ACCESS: source = DECISION_POINT/ORG/GOV/COMMUNITY, target = ORG/FACILITY/PRODUCT/MARKET/PROGRAM
 - IMPOSES_CONDITION: source = ORG/GOV/COMMUNITY/DECISION_POINT, target = ORG/FACILITY/PRODUCT
-- GATEKEEPS_DECISION: source = ORG/GOV/COMMUNITY, target = DECISION_POINT
-- USES_MECHANISM: source = DECISION_POINT/ORG/GOV/COMMUNITY, target = MECHANISM (MUST be /mechanism/...)
+- GATEKEEPS_DECISION: source = ORG/GOV/COMMUNITY/PERSON, target = DECISION_POINT
+- USES_MECHANISM: source = DECISION_POINT/ORG/GOV/COMMUNITY/PROGRAM, target = MECHANISM (MUST be /mechanism/...)
 - APPLIES_TO: source = MECHANISM, target = ORG/FACILITY/PRODUCT/MARKET
 
 CRITICAL: USES_MECHANISM target MUST be /mechanism/... (never /decision/...)
@@ -596,9 +596,9 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION/GOV; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM.
 	      - Qualifiers MUST include 'type' (block|enable|delay|monitor). Missing qualifiers = MEDIUM severity conflict.
 	    - IMPOSES_CONDITION: qualifiers MUST include 'type' (cost|compliance|technical) and 'impact'.
-	    - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY; target MUST be DECISION_POINT.
+	    - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY/PERSON; target MUST be DECISION_POINT.
 	      - When asking for gatekeeper, ALWAYS request EXPLICIT SOURCE (sourceCanonicalPath) in missingInfo.
-	    - USES_MECHANISM: source MUST be DECISION_POINT/ORGANIZATION/GOV/COMMUNITY; target MUST be MECHANISM.
+	    - USES_MECHANISM: source MUST be DECISION_POINT/ORGANIZATION/GOV/COMMUNITY/PROGRAM; target MUST be MECHANISM.
 	      - When asking for mechanism user (from MECHANISM fragment), ALWAYS request EXPLICIT SOURCE in missingInfo.
 	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET.
 

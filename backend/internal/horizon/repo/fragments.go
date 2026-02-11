@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -182,6 +183,24 @@ func (r *HorizonFragmentsRepository) WithOnUpsert(fn func(ctx context.Context, f
 	return r
 }
 
+func (r *HorizonFragmentsRepository) runOnUpsertAsync(fragment *models.HorizonFragment) {
+	if r == nil || r.onUpsert == nil || fragment == nil {
+		return
+	}
+	f := fragment
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[HorizonFragments] ERROR: onUpsert hook panic recovered: fragmentId=%s canonicalPath=%s panic=%v stack=%s",
+					strings.TrimSpace(f.ID), strings.TrimSpace(f.CanonicalPath), rec, string(debug.Stack()))
+			}
+		}()
+		hctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		r.onUpsert(hctx, f)
+	}()
+}
+
 // ExportToGCS экспортирует фрагмент в GCS для индексации без обновления в Firestore
 // Используется для массового re-export существующих фрагментов
 // skipSync: если true, не триггерит синхронизацию Vertex AI Search (для массового экспорта)
@@ -255,6 +274,11 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 		} else if r.vertexSearchSync != nil {
 			// Legacy: single-URI sync (deprecated, high quota usage)
 			go func() {
+				defer func() {
+					if rec := recover(); rec != nil {
+						log.Printf("[HorizonFragments] ERROR: vertexSearchSync panic recovered for uri=%s panic=%v stack=%s", gcsURI, rec, string(debug.Stack()))
+					}
+				}()
 				syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				if op, err := r.vertexSearchSync(syncCtx, gcsURI); err == nil {
@@ -362,15 +386,8 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 		log.Printf("WARNING: failed to export fragment to GCS: %v", err)
 	}
 
-	// Best-effort onUpsert hook (async)
-	if r.onUpsert != nil {
-		f := fragment
-		go func() {
-			hctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			r.onUpsert(hctx, f)
-		}()
-	}
+	// Best-effort onUpsert hook (async, panic-safe)
+	r.runOnUpsertAsync(fragment)
 
 	return fragment.ID, nil
 }
@@ -789,15 +806,8 @@ func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *model
 		log.Printf("WARNING: failed to export updated fragment to GCS: %v", err)
 	}
 
-	// Best-effort onUpsert hook (async)
-	if r.onUpsert != nil {
-		f := fragment
-		go func() {
-			hctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			r.onUpsert(hctx, f)
-		}()
-	}
+	// Best-effort onUpsert hook (async, panic-safe)
+	r.runOnUpsertAsync(fragment)
 
 	return nil
 }
@@ -1174,6 +1184,11 @@ func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) erro
 				r.vertexSyncBatcher.Add(gcsURI)
 			} else if r.vertexSearchSync != nil {
 				go func(uri string) {
+					defer func() {
+						if rec := recover(); rec != nil {
+							log.Printf("[HorizonFragments] ERROR: vertexSearchSync(delete) panic recovered for uri=%s panic=%v stack=%s", uri, rec, string(debug.Stack()))
+						}
+					}()
 					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
 					if op, err := r.vertexSearchSync(syncCtx, uri); err == nil {

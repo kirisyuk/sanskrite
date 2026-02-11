@@ -2112,7 +2112,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	// Best-effort propagation trigger for the domain node.
 	if e.propagationTrigger != nil {
 		rc, _ := rtctx.Get(ctx)
-		go func(fid string) {
+		fid := fragmentID
+		runAsyncSafe("domain_node_propagation", func() {
 			propBase := context.Background()
 			if strings.TrimSpace(rc.TenantID) != "" || strings.TrimSpace(rc.ProjectID) != "" || strings.TrimSpace(rc.LensID) != "" || strings.TrimSpace(rc.CorrelationID) != "" || strings.TrimSpace(rc.SessionID) != "" {
 				propBase = rtctx.With(propBase, rc)
@@ -2120,7 +2121,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			propCtx, cancel := context.WithTimeout(propBase, 2*time.Minute)
 			defer cancel()
 			_ = e.propagationTrigger(propCtx, fid)
-		}(fragmentID)
+		})
 	}
 
 	e.publish(ctx, realtime.EventType("horizon.domain.expansion.completed"), map[string]interface{}{
@@ -3817,20 +3818,30 @@ func (e *ScoutEngine) processRelationsInternal(
 			if id == "" {
 				return ""
 			}
+			resolveFromPath := func(path string, current models.FragmentType) models.FragmentType {
+				inferred := InferFragmentTypeFromCanonicalPath(strings.TrimSpace(path))
+				if inferred == "" {
+					return current
+				}
+				if current == "" || current != inferred {
+					return inferred
+				}
+				return current
+			}
 			// Check explicit source fragment first (Phase 2 strategic relations)
 			if explicitSourceFragment != nil && strings.TrimSpace(explicitSourceFragment.ID) == id {
-				return explicitSourceFragment.Type
+				return resolveFromPath(explicitSourceFragment.CanonicalPath, explicitSourceFragment.Type)
 			}
 			if sourceFragment != nil && strings.TrimSpace(sourceFragment.ID) == id {
-				return sourceFragment.Type
+				return resolveFromPath(sourceFragment.CanonicalPath, sourceFragment.Type)
 			}
 			if targetFragment != nil && strings.TrimSpace(targetFragment.ID) == id {
-				return targetFragment.Type
+				return resolveFromPath(targetFragment.CanonicalPath, targetFragment.Type)
 			}
 			// Fallback: best-effort fetch (rare; only when endpoints differ from source/target fragments).
 			if e.fragmentsRepo != nil {
 				if f, ferr := e.fragmentsRepo.Get(ctx, id); ferr == nil && f != nil {
-					return f.Type
+					return resolveFromPath(f.CanonicalPath, f.Type)
 				}
 			}
 			return ""
@@ -3889,7 +3900,16 @@ func (e *ScoutEngine) processRelationsInternal(
 		dstPathActual := resolvePathByID(edgeTargetID)
 		canonFromEdgeType := ""
 		canonReason := ""
-		if newType, shouldSwap, changed, reason := CanonicalizeEdgeWithPaths(edgeType, srcTypeActual, dstTypeActual, srcPathActual, dstPathActual); changed {
+		if edgeType == models.DependencyTypeInvestsIn &&
+			srcTypeActual == models.FragmentTypeOrganization &&
+			dstTypeActual == models.FragmentTypeFacility &&
+			models.HasOwnershipEvidence(rel.Reason, rel.Qualifiers, rel.Metrics) {
+			canonFromEdgeType = string(edgeType)
+			canonReason = "canonicalize: ORGANIZATION INVESTS_IN FACILITY with ownership evidence -> ORGANIZATION OWNS FACILITY"
+			edgeType = models.DependencyTypeOwns
+			directionChanged = true
+			edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
+		} else if newType, shouldSwap, changed, reason := CanonicalizeEdgeWithPaths(edgeType, srcTypeActual, dstTypeActual, srcPathActual, dstPathActual); changed {
 			canonFromEdgeType = string(edgeType)
 			canonReason = reason
 			edgeType = newType
@@ -3904,6 +3924,20 @@ func (e *ScoutEngine) processRelationsInternal(
 		}
 
 		relConfidence := rel.Confidence
+		policyStatus := models.PolicyStatusClean
+		policyReason := ""
+		policyPenalty := 0.0
+		policyEdgeModality := ""
+		if canonFromEdgeType != "" {
+			if penalty := models.CanonicalizationPenalty(models.DependencyType(canonFromEdgeType), edgeType, srcTypeActual, dstTypeActual); penalty > 0 {
+				relConfidence = relConfidence * (1.0 - penalty)
+				policyPenalty = penalty
+				policyStatus = models.PolicyStatusPenalized
+				if policyReason == "" {
+					policyReason = strings.TrimSpace(canonReason)
+				}
+			}
+		}
 		// Policy: direction validation and reversal (enforced for known edge types).
 		// Use unified ValidationPolicy if available, otherwise fallback to hardcoded rules
 		if e.validationPolicy != nil && sourceFragment != nil {
@@ -3918,6 +3952,8 @@ func (e *ScoutEngine) processRelationsInternal(
 					"targetFragmentID": edgeTargetID,
 					"sourceType":       string(srcTypeActual),
 					"targetType":       string(dstTypeActual),
+					"sourceCanonicalPath": srcPathActual,
+					"targetCanonicalPath": dstPathActual,
 					"relationType":     string(edgeType),
 				},
 				// IMPORTANT: do not pass Fragment here, or ValidationPolicy will overwrite sourceType from it,
@@ -3930,10 +3966,23 @@ func (e *ScoutEngine) processRelationsInternal(
 			} else {
 				fmt.Printf("%s ValidationPolicy decision: action=%s, path=%s, confidence=%.2f\n",
 					logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
+				if modality, _ := decision.Params["edgeModality"].(string); strings.TrimSpace(modality) != "" {
+					policyEdgeModality = strings.TrimSpace(modality)
+				}
 
 				policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
 					Reverse: func() {
 						edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+						directionChanged = true
+						edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
+					},
+					RewriteType: func(newType string, _ string) {
+						newEdgeType := models.DependencyType(strings.TrimSpace(newType))
+						if newEdgeType == "" || newEdgeType == edgeType {
+							return
+						}
+						canonFromEdgeType = string(edgeType)
+						edgeType = newEdgeType
 						directionChanged = true
 						edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
 					},
@@ -3942,6 +3991,14 @@ func (e *ScoutEngine) processRelationsInternal(
 						if relConfidence < 0 {
 							relConfidence = 0
 						}
+					},
+					SetPolicyStatus: func(status, reason string, penalty float64) {
+						if status == models.PolicyStatusClean && policyStatus != models.PolicyStatusClean {
+							return
+						}
+						policyStatus = status
+						policyReason = strings.TrimSpace(reason)
+						policyPenalty = penalty
 					},
 				})
 			}
@@ -3963,9 +4020,10 @@ func (e *ScoutEngine) processRelationsInternal(
 					// If we reversed, re-apply symmetric normalization (noop for non-symmetric types).
 					edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
 				} else if rule != nil {
-					// Neither direction is valid: reject the edge to keep the graph consistent.
-					fmt.Printf("Skipping invalid-direction edge: %s -> %s (%s) rule=%s\n", sourceFragment.CanonicalPath, targetPath, edgeType, rule.Description)
-					continue
+					policyStatus = models.PolicyStatusQuarantined
+					policyReason = fmt.Sprintf("quarantine: %s", rule.Description)
+					policyPenalty = 0.2
+					relConfidence = relConfidence * (1.0 - policyPenalty)
 				}
 			}
 		}
@@ -4046,6 +4104,12 @@ func (e *ScoutEngine) processRelationsInternal(
 			edge.Qualifiers["canonicalizedFromEdgeType"] = canonFromEdgeType
 			edge.Qualifiers["canonicalizationReason"] = canonReason
 			edge.Qualifiers["normalizedEdgeType"] = string(edgeType)
+			if policyStatus == models.PolicyStatusClean {
+				policyStatus = models.PolicyStatusAutoFixed
+			}
+			if policyReason == "" {
+				policyReason = strings.TrimSpace(canonReason)
+			}
 		}
 		// Temporal validity (real-world effective time) — fail-open:
 		// If parsing fails, keep edge without dates rather than dropping it.
@@ -4068,6 +4132,11 @@ func (e *ScoutEngine) processRelationsInternal(
 		if len(rel.Qualifiers) > 0 {
 			edge.Qualifiers = mergeQualifiers(edge.Qualifiers, rel.Qualifiers)
 		}
+		if strings.TrimSpace(policyEdgeModality) != "" {
+			if _, exists := edge.Qualifiers["edgeModality"]; !exists {
+				edge.Qualifiers["edgeModality"] = policyEdgeModality
+			}
+		}
 		if directionChanged {
 			edge.Qualifiers["normalizedDirection"] = true
 			edge.Qualifiers["normalizedEdgeType"] = string(edgeType)
@@ -4077,6 +4146,10 @@ func (e *ScoutEngine) processRelationsInternal(
 		if govRegulatesSwapApplied {
 			edge.Qualifiers["canonicalizedGovRegulatesSwap"] = true
 			edge.Qualifiers["govRegulatesSwapReason"] = govRegulatesSwapReason
+		}
+		edge.SetPolicyStatus(policyStatus, policyReason, policyPenalty)
+		if canonFromEdgeType != "" {
+			edge.SetPolicyOriginalType(models.DependencyType(canonFromEdgeType))
 		}
 		applyBestEffortEdgeEnrichment(edge)
 
@@ -4729,15 +4802,25 @@ func (e *ScoutEngine) processSupplyChains(
 			if cp == "" {
 				return ""
 			}
+			resolveFromPath := func(path string, current models.FragmentType) models.FragmentType {
+				inferred := InferFragmentTypeFromCanonicalPath(path)
+				if inferred == "" {
+					return current
+				}
+				if current == "" || current != inferred {
+					return inferred
+				}
+				return current
+			}
 			if sourceFragment != nil && strings.TrimSpace(sourceFragment.CanonicalPath) == cp {
-				return sourceFragment.Type
+				return resolveFromPath(cp, sourceFragment.Type)
 			}
 			if e.fragmentsRepo != nil {
 				if f, ferr := e.fragmentsRepo.GetByCanonicalPath(ctx, cp); ferr == nil && f != nil {
-					return f.Type
+					return resolveFromPath(cp, f.Type)
 				}
 			}
-			return ""
+			return resolveFromPath(cp, "")
 		}
 		srcTypeActual := resolveTypeByCanonical(srcPath)
 		dstTypeActual := resolveTypeByCanonical(dstPath)
@@ -4745,16 +4828,21 @@ func (e *ScoutEngine) processSupplyChains(
 		// Policy: direction validation & reversal (best-effort, same behavior as processDiscoveredRelations).
 		edgeCriticality := normalizeEdgeConfidence(chainEdge.Confidence)
 		directionChanged := false
+		policyStatus := models.PolicyStatusClean
+		policyReason := ""
+		policyPenalty := 0.0
 		if e.validationPolicy != nil {
 			decision, derr := e.validationPolicy.Execute(ctx, policy.PolicyInput{
 				Kind: "edge",
 				Context: map[string]interface{}{
-					"validationKind":   "edge",
-					"sourceFragmentID": sourceID,
-					"targetFragmentID": targetID,
-					"sourceType":       string(srcTypeActual),
-					"targetType":       string(dstTypeActual),
-					"relationType":     string(edgeType),
+					"validationKind":      "edge",
+					"sourceFragmentID":    sourceID,
+					"targetFragmentID":    targetID,
+					"sourceType":          string(srcTypeActual),
+					"targetType":          string(dstTypeActual),
+					"sourceCanonicalPath": srcPath,
+					"targetCanonicalPath": dstPath,
+					"relationType":        string(edgeType),
 				},
 				Fragment: nil,
 			})
@@ -4769,6 +4857,14 @@ func (e *ScoutEngine) processSupplyChains(
 							logPrefix, chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, decision.DecisionPath)
 						e.logLine(ctx, job, "info", msg)
 					},
+					RewriteType: func(newType string, _ string) {
+						newEdgeType := models.DependencyType(strings.TrimSpace(newType))
+						if newEdgeType == "" || newEdgeType == edgeType {
+							return
+						}
+						edgeType = newEdgeType
+						directionChanged = true
+					},
 					ApplyPenalty: func(penalty float64, _ string) {
 						before := edgeCriticality
 						edgeCriticality = edgeCriticality * (1.0 - penalty)
@@ -4779,6 +4875,14 @@ func (e *ScoutEngine) processSupplyChains(
 					},
 					Warn: func(msg string) {
 						e.logLine(ctx, job, "warn", fmt.Sprintf("%s %s", logPrefix, msg))
+					},
+					SetPolicyStatus: func(status, reason string, penalty float64) {
+						if status == models.PolicyStatusClean && policyStatus != models.PolicyStatusClean {
+							return
+						}
+						policyStatus = status
+						policyReason = strings.TrimSpace(reason)
+						policyPenalty = penalty
 					},
 				})
 			} else {
@@ -4824,6 +4928,7 @@ func (e *ScoutEngine) processSupplyChains(
 			edge.Qualifiers["normalizedDirection"] = true
 			edge.Qualifiers["normalizedEdgeType"] = string(edgeType)
 		}
+		edge.SetPolicyStatus(policyStatus, policyReason, policyPenalty)
 		applyBestEffortEdgeEnrichment(edge)
 
 		if id, createErr := e.edgesRepo.Create(ctx, edge); createErr != nil {

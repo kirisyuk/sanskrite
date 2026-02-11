@@ -518,19 +518,13 @@ const ensureHorizonNode2026Styles = () => {
     /* Stack controllers (containers): visually distinct from entity nodes.
        Goal: fast role recognition without adding noisy chrome. */
     .hzn-node-2026.is-stack {
-      /* Stack controllers (group-like nodes): calm, single-surface card.
-         No backplates, no inner chrome. Border width matches selected edge weight. */
-      --hzn-stack-accent: #38BDF8;
+      /* Quiet aggregate card: no accent spine, no heavy border treatment. */
       border-radius: 14px;
-      border: 2px solid var(--hzn-stack-border, rgba(148,163,184,0.26));
-      border-left: 6px solid var(--hzn-stack-accent);
+      border: 1px solid var(--hzn-stack-border, rgba(148,163,184,0.18));
       box-shadow: var(--hzn-shadow);
     }
     .hzn-node-2026.is-stack::after { display: none; }
-    [data-theme="light"] .hzn-node-2026.is-stack {
-      --hzn-stack-accent: #1D4ED8;
-      border-color: rgba(100,116,139,0.26);
-    }
+    [data-theme="light"] .hzn-node-2026.is-stack { border-color: rgba(100,116,139,0.20); }
     [data-theme="light"] .hzn-node-2026.is-stack::after { display: none; }
     /* Perf mode: disable all transitions and heavy effects for smoother pan/zoom on large graphs */
     :root[data-hzn-perf-mode="true"] .hzn-node-2026 {
@@ -2146,14 +2140,18 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
   const stackGroupVisualType = isStackGroup ? String((data as any)?.stackVisualType || '').trim() : '';
   const stackGroupAccent = stackGroupVisualType
     ? getNodeColors(stackGroupVisualType, theme).accent
-    : (theme === 'dark' ? '#38BDF8' : '#0284C7');
+    : (theme === 'dark' ? '#94A3B8' : '#64748B');
   if (isStackGroup) {
-    bg = theme === 'dark' ? 'rgba(148, 163, 184, 0.12)' : 'rgba(15, 23, 42, 0.06)';
-    border = theme === 'dark' ? 'rgba(148, 163, 184, 0.42)' : 'rgba(100, 116, 139, 0.34)';
+    bg = theme === 'dark' ? 'rgba(148, 163, 184, 0.07)' : 'rgba(15, 23, 42, 0.035)';
+    border = theme === 'dark' ? 'rgba(148, 163, 184, 0.28)' : 'rgba(100, 116, 139, 0.22)';
   }
 
-  const titleColor = theme === 'dark' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.9)';
-  const subtitleColor = theme === 'dark' ? 'rgba(255,255,255,0.62)' : 'rgba(15,23,42,0.62)';
+  const titleColor = isStackGroup
+    ? (theme === 'dark' ? 'rgba(255,255,255,0.72)' : 'rgba(15,23,42,0.72)')
+    : (theme === 'dark' ? 'rgba(255,255,255,0.9)' : 'rgba(15,23,42,0.9)');
+  const subtitleColor = isStackGroup
+    ? (theme === 'dark' ? 'rgba(255,255,255,0.48)' : 'rgba(15,23,42,0.5)')
+    : (theme === 'dark' ? 'rgba(255,255,255,0.62)' : 'rgba(15,23,42,0.62)');
   const count = typeof data.groupCount === 'number' ? data.groupCount : undefined;
   const ring = selected ? (theme === 'dark' ? 'rgba(255,255,255,0.35)' : 'rgba(15,23,42,0.20)') : undefined;
   const borderWidth = isStackGroup ? 0 : (noFill ? 2 : 1.5);
@@ -2340,16 +2338,16 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         width: '100%',
         height: '100%',
         background: bg,
-        border: borderMode === 'outline'
-          ? (isStackGroup ? `1px solid ${border}` : fullBorderCss)
-          : 'none',
+        border: isStackGroup
+          ? 'none'
+          : (borderMode === 'outline' ? fullBorderCss : 'none'),
         borderLeft: isStackGroup
-          ? `6px solid ${stackGroupAccent}`
+          ? 'none'
           : (borderMode === 'divider-left' ? dividerBorderCss : undefined),
         borderRight: borderMode === 'divider-right' ? dividerBorderCss : undefined,
         borderRadius: (borderMode === 'outline' || isStackGroup || bgTint === 'subtle') ? 12 : 0,
         boxShadow: isStackGroup
-          ? 'none'
+          ? (theme === 'dark' ? '0 2px 8px rgba(0,0,0,0.12)' : '0 2px 8px rgba(0,0,0,0.05)')
           : ((noFill && !ring)
             ? 'none'
             : ((theme === 'dark' ? '0 2px 10px rgba(0,0,0,0.25)' : '0 2px 10px rgba(0,0,0,0.08)') +
@@ -2747,9 +2745,9 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
             {!isStackGroup && icon && <span style={{ fontSize: 12 }}>{icon}</span>}
             <div style={{
               fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: '0.5px',
-              textTransform: 'uppercase',
+              fontWeight: isStackGroup ? 600 : 700,
+              letterSpacing: isStackGroup ? '0.15px' : '0.5px',
+              textTransform: isStackGroup ? 'none' : 'uppercase',
               color: titleColor,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -2796,14 +2794,14 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                   width: 24,
                   height: 24,
                   borderRadius: 9,
-                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
-                  background: theme === 'dark' ? 'rgba(245, 158, 11, 0.28)' : 'rgba(245, 158, 11, 0.18)',
-                  color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.16)' : 'rgba(15,23,42,0.12)'}`,
+                  background: theme === 'dark' ? 'rgba(2, 6, 23, 0.28)' : 'rgba(255, 255, 255, 0.74)',
+                  color: theme === 'dark' ? 'rgba(255,255,255,0.68)' : 'rgba(15,23,42,0.58)',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
+                  boxShadow: 'none',
                   pointerEvents: 'auto',
                 }}
               >
@@ -3359,6 +3357,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const stackCount = typeof (data as any)?.stackCount === 'number' ? (data as any).stackCount : undefined;
   const stackExpanded = Boolean((data as any)?.stackExpanded);
   const canToggleStack = Boolean(stackKey && stackCount && stackCount > 1 && typeof (data as any)?.onToggleStack === 'function');
+  const showStackExpandButton = Boolean(canToggleStack && !stackExpanded);
   const stackTitle = String((data as any)?.stackTitle || '').trim();
   const stackSubtitle = String((data as any)?.stackSubtitle || '').trim();
   const stackVisualType = String((data as any)?.stackVisualType || '').trim();
@@ -4559,36 +4558,32 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       {/* Header */}
       {isCollapsedStackController ? (
         <>
-          {/* Stack controller: centered premium layout (icon above text) */}
+          {/* Stack controller: compact aggregate layout (quiet, structural). */}
           <div
             style={{
               position: 'absolute',
-              // Align the main icon top with the stack badge top-right.
-              inset: '10px 16px 30px 16px',
+              inset: '12px 14px 34px 14px',
               display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
+              flexDirection: 'row',
+              alignItems: 'flex-start',
               justifyContent: 'flex-start',
-              textAlign: 'center',
-              gap: 8,
+              textAlign: 'left',
+              gap: 10,
               pointerEvents: 'none',
             }}
           >
             <div
               style={{
-                width: 44,
-                height: 44,
-                borderRadius: 14,
-                background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.10)'}`,
+                width: 30,
+                height: 30,
+                borderRadius: 9,
+                background: theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.045)',
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                // Keep the badge away from the card's rounded border (stack controllers have stacked backplates).
-                marginTop: 0,
-                boxShadow: theme === 'dark'
-                  ? `0 14px 30px rgba(0,0,0,0.22), inset 0 0 0 1px ${hexToRgba(accentColor, 0.18)}`
-                  : `0 14px 30px rgba(0,0,0,0.10), inset 0 0 0 1px ${hexToRgba(accentColor, 0.12)}`,
+                boxShadow: 'none',
+                flexShrink: 0,
               }}
             >
               {isSubcategoryStackController ? (
@@ -4596,42 +4591,44 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                   <EdgeTypeIcon
                     edgeType={subcategoryEdgeType || 'RELATED_TO'}
                     color={getEdgeColor(subcategoryEdgeType || 'RELATED_TO')}
-                    size={16}
+                    size={13}
                   />
                 </div>
               ) : (
-                <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={18} />
+                <HorizonNodeIcon
+                  type={visualType || data.type}
+                  color={theme === 'dark' ? 'rgba(255,255,255,0.76)' : 'rgba(15,23,42,0.72)'}
+                  size={14}
+                />
               )}
             </div>
-            {/* Country flag as separate icon below type icon */}
             {!isSubcategoryStackController && extractCountryCode(data.canonicalPath) && (
               <div
                 style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 14,
-                  background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.10)'}`,
+                  width: 30,
+                  height: 30,
+                  borderRadius: 9,
+                  background: theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.045)',
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  boxShadow: theme === 'dark'
-                    ? `0 14px 30px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.08)`
-                    : `0 14px 30px rgba(0,0,0,0.10), inset 0 0 0 1px rgba(15,23,42,0.06)`,
+                  boxShadow: 'none',
+                  flexShrink: 0,
                 }}
               >
-                <CountryFlag countryCode={extractCountryCode(data.canonicalPath)} size={24} />
+                <CountryFlag countryCode={extractCountryCode(data.canonicalPath)} size={18} />
               </div>
             )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, width: '100%' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, width: '100%', paddingTop: 2 }}>
               <div
                 style={{
-                  fontSize: 15,
-                  fontWeight: 850,
+                  fontSize: 13,
+                  fontWeight: 700,
                   color: textColor,
-                  letterSpacing: '-0.01em',
-                  lineHeight: 1.15,
+                  letterSpacing: '0.01em',
+                  lineHeight: 1.18,
                   width: '100%',
                   maxWidth: '100%',
                   overflow: 'hidden',
@@ -4645,8 +4642,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               {stackSubtitle && (
                 <div
                   style={{
-                    fontSize: 12,
-                    fontWeight: 520,
+                    fontSize: 11,
+                    fontWeight: 500,
                     color: mutedTextColor,
                     lineHeight: 1.2,
                     width: '100%',
@@ -4675,39 +4672,29 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               zIndex: 3,
             }}
           >
-            {/* Stack indicator: strict top-right position (same slot as Pin on regular nodes). */}
-            {isCollapsedStackController && (
+            {/* Count badge in the top-right slot (quiet replacement for decorative stack icon). */}
+            {isCollapsedStackController && !canToggleStack && typeof stackCount === 'number' && (
               <div
                 style={{
-                  width: 22,
+                  minWidth: 24,
                   height: 22,
-                  borderRadius: 8,
-                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
-                  background: theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.65)',
-                  color: theme === 'dark' ? 'rgba(255,255,255,0.75)' : 'rgba(15,23,42,0.70)',
+                  padding: '0 8px',
+                  borderRadius: 11,
+                  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.16)' : 'rgba(15,23,42,0.12)'}`,
+                  background: theme === 'dark' ? 'rgba(2, 6, 23, 0.34)' : 'rgba(255,255,255,0.76)',
+                  color: theme === 'dark' ? 'rgba(255,255,255,0.78)' : 'rgba(15,23,42,0.66)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  boxShadow: theme === 'dark' ? '0 1px 6px rgba(0,0,0,0.35)' : '0 1px 6px rgba(0,0,0,0.10)',
+                  boxShadow: 'none',
                   pointerEvents: 'none',
+                  fontSize: 11,
+                  fontWeight: 700,
                 }}
-                title="Stack"
+                title={`${stackCount} nodes in stack`}
                 aria-hidden="true"
               >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M12 2 2 7l10 5 10-5-10-5z" />
-                  <path d="M2 17l10 5 10-5" />
-                  <path d="M2 12l10 5 10-5" />
-                </svg>
+                {stackCount}
               </div>
             )}
 
@@ -5008,7 +4995,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       )}
 
       {/* Expand / collapse moved to bottom-right (less intrusive; more discoverable near content). */}
-      {(showExpand || canCollapse || (isSubcategoryStackController && canToggleStack)) && (
+      {(showExpand || canCollapse || showStackExpandButton) && (
         <div
           style={{
             position: 'absolute',
@@ -5020,7 +5007,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             zIndex: 2,
           }}
         >
-          {isSubcategoryStackController && canToggleStack && typeof stackCount === 'number' && (
+          {showStackExpandButton && (
             <button
               type="button"
               onPointerDown={stopNodeSelectEvent as any}
@@ -5030,30 +5017,27 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                 const cb = (data as any)?.onToggleStack as ((k: string, next: boolean) => void) | undefined;
                 cb?.(stackKey, true);
               }}
-              aria-label={`Expand ${stackTitle || displayLabel} (${stackCount})`}
-              title={`Expand ${stackTitle || displayLabel} (${stackCount})`}
+              aria-label={`Expand stack: ${stackTitle || displayLabel}`}
+              title={`Expand stack (${stackCount || 0})`}
               style={{
-                minWidth: 28,
-                height: 22,
-                padding: '0 8px',
-                borderRadius: 11,
-                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.22)' : 'rgba(15,23,42,0.16)'}`,
-                background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.82)',
-                color: theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.82)',
+                width: 24,
+                height: 24,
+                borderRadius: 9,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)',
+                color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
                 cursor: 'pointer',
-                fontSize: 12,
-                fontWeight: 850,
-                lineHeight: 1,
-                boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.25)' : '0 8px 18px rgba(0,0,0,0.12)',
-                display: 'inline-flex',
+                display: 'flex',
                 alignItems: 'center',
-                gap: 6,
+                justifyContent: 'center',
+                boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
               }}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M6 9l6 6 6-6" />
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="6" cy="12" r="1.6" />
+                <circle cx="12" cy="12" r="1.6" />
+                <circle cx="18" cy="12" r="1.6" />
               </svg>
-              <span>{stackCount}</span>
             </button>
           )}
           {showExpand && (
@@ -5220,16 +5204,13 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         (() => {
           // Reserve space so we don't overlap the bottom-left and bottom-right controls.
           const leftReserve = showRiskShieldButton ? 12 + 24 + 8 : 12;
-          const rightButtons = (showExpand ? 1 : 0) + (canCollapse ? 1 : 0);
+          const rightButtons = (showExpand ? 1 : 0) + (canCollapse ? 1 : 0) + (showStackExpandButton ? 1 : 0);
           const rightReserve = (() => {
             // If the bottom-right controls are not rendered, keep a minimal padding.
-            if (!(showExpand || canCollapse || (isSubcategoryStackController && canToggleStack))) return 12;
-            // Subcategory stack controller has an additional "count" pill (wider than 24px).
-            const hasCountPill = Boolean(isSubcategoryStackController && canToggleStack && typeof stackCount === 'number');
-            const countPillW = hasCountPill ? 28 + 8 + 10 : 0; // minWidth + padding + a bit of safety
+            if (!(showExpand || canCollapse || showStackExpandButton)) return 12;
             const buttonsW = rightButtons > 0 ? (rightButtons * 24 + Math.max(0, rightButtons - 1) * 6) : 0;
             // +12 right margin + small safety gap.
-            return 12 + countPillW + buttonsW + 8;
+            return 12 + buttonsW + 8;
           })();
 
           return (
@@ -5313,7 +5294,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         </div>
       )}
 
-      {/* Stack toggle: when expanded, show collapse button to the right of the node; when collapsed, show expand button below */}
+      {/* Stack toggle: keep only expanded-state collapse control here.
+          Collapsed-state expand now uses the standard bottom-right action button ("..."). */}
       {canToggleStack && !isSubcategoryStackController && (
         <button
           type="button"
@@ -5325,6 +5307,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           aria-label={stackExpanded ? 'Collapse stack' : 'Expand stack'}
           title={stackExpanded ? 'Collapse stacked nodes' : `Show ${(stackCount || 0)} items`}
           style={{
+            display: stackExpanded ? 'inline-flex' : 'none',
             position: 'absolute',
             ...(stackExpanded ? {
               left: '100%',
@@ -5332,36 +5315,38 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               transform: 'translateY(-50%)',
               marginLeft: 8,
             } : {
-              left: '50%',
-              bottom: -14,
-              transform: 'translateX(-50%)',
+              right: 10,
+              top: 10,
+              transform: 'none',
             }),
-            height: 26,
-            padding: '0 10px',
+            height: stackExpanded ? 26 : 22,
+            minWidth: stackExpanded ? undefined : 24,
+            padding: stackExpanded ? '0 10px' : '0 8px',
             borderRadius: 999,
-            border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.14)'}`,
-            background: theme === 'dark' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.82)',
-            color: theme === 'dark' ? 'rgba(255,255,255,0.92)' : 'rgba(15,23,42,0.86)',
+            border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.16)' : 'rgba(15,23,42,0.12)'}`,
+            background: theme === 'dark' ? 'rgba(2, 6, 23, 0.34)' : 'rgba(255,255,255,0.76)',
+            color: theme === 'dark' ? 'rgba(255,255,255,0.82)' : 'rgba(15,23,42,0.70)',
             cursor: 'pointer',
-            display: 'inline-flex',
             alignItems: 'center',
-            gap: 8,
-            boxShadow: theme === 'dark' ? '0 10px 24px rgba(0,0,0,0.28)' : '0 10px 24px rgba(0,0,0,0.12)',
-            fontSize: 12,
-            fontWeight: 800,
+            gap: stackExpanded ? 8 : 0,
+            boxShadow: 'none',
+            fontSize: stackExpanded ? 12 : 11,
+            fontWeight: stackExpanded ? 800 : 700,
             lineHeight: 1,
             pointerEvents: 'auto',
             zIndex: 3,
           }}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 2 3 7l9 5 9-5-9-5Z" />
-            <path d="M3 12l9 5 9-5" />
-            <path d="M3 17l9 5 9-5" />
-          </svg>
-          <span>
-            {stackExpanded ? 'Collapse' : `${(stackCount || 0)}`}
-          </span>
+          {stackExpanded ? (
+            <>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 15l-6-6-6 6" />
+              </svg>
+              <span>Collapse</span>
+            </>
+          ) : (
+            <span>{stackCount || 0}</span>
+          )}
         </button>
       )}
 
