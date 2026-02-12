@@ -19,6 +19,7 @@
 | MaterializedArtifact, SupplyLink | ✅ | см. секцию D) |
 | Lens-specific highProfile | ❌ | отложено до полноценного дизайна |
 | Метрики в оверлей | ❌ | метрики пока в `State` фрагментов |
+| Org identity anchor & transitions | ❌ | identity anchor, nameHistory, transition edges (RENAMED_TO, LEGAL_SUCCESSOR_OF…); см. roadmap секция "Organization Identity Anchor & Corporate Transitions" |
 
 ## External Risk Maturity Plan (без миграций данных)
 
@@ -164,6 +165,72 @@
 ### Большой раздел работ (единый блок): расширение онтологии/таксономии Horizon
 Отсюда и до секции **“Обработка метрик при propagation (семантика поверх "доставки дельт")”** включительно — один целостный блок работ: новые canonical paths, новые fragment/edge types, нормализация, требования Critic/Scout, lifecycle/time, edge metrics/temporal validity, и интеграция с propagation.
 ---
+- **Organization Identity Anchor & Corporate Transitions (rename/rebrand/successor)** — ❌ **TODO**
+  - **Проблема**: Система не поддерживает корпоративные переходы (Tinkoff Bank → T-Bank, смена собственности + ребрендинг). Path/slug и текущее имя перегружены ролью идентичности, что ломается при rename/rebrand.
+  - **Текущее состояние**:
+    - `Identifiers` — `map[string]string`, нет темпоральной истории имён.
+    - Dedup по `wikidataId` → `legalName` → `labelEN` → `shortName`; `formerly|aka|fka` в именах **зачищаются** (`stripParentheticalAnnotations`), не используются для связывания.
+    - `canonical_path_redirects` есть, но без формальной онтологии переходов.
+    - `ValidFrom`/`ValidTo` есть на `HorizonFragment` и `DependencyEdge`.
+  - **Фундаментальная причина**: нет immutable identity anchor для юрлица (регномер/LEI/единый entity key как first-class); нет отдельной онтологии корпоративных переходов как формального контракта.
+  - **План работ**:
+    - **1. Identity anchor (приоритет в dedup)**:
+      - **Международные** (универсальные, приоритет выше):
+        - `wikidataId` — Wikidata Q-id (сохраняется при ребрендинге того же юрлица)
+        - `lei` — Legal Entity Identifier (GLEIF, 20 символов, финансы)
+        - `duns` — D-U-N-S Number (Dun & Bradstreet, 9 цифр, 300M+ организаций)
+      - **Национальные** (по юрисдикции, иерархия в dedup после международных):
+        - **РФ**: `ogrn` (Основной гос. рег. номер), `inn` (ИНН)
+        - **UK**: `crn` (Company Registration Number), `vat`
+        - **EU**: `vat` (VAT ID, EU-wide), `siren` (FR), `siret` (FR), `uid` (AT/CH), `ust_idnr` (DE), `cvr` (DK), `ico` (CZ/SK), `partita_iva` (IT), `nif` (ES/PT), `cif` (ES), `nip` (PL), `krs` (PL), `cui` (RO), `matricule` (LU)
+        - **СНГ/ЕАЭС**: `bin` (KZ), `edrpou` (UA), `uic` (BG), `idno` (MD), `voen` (AZ)
+        - **США**: `ein` (Employer Identification Number)
+        - **Канада**: `bin` (Business Identification Number)
+        - **Австралия**: `abn` (Australian Business Number), `acn` (Australian Company Number)
+        - **Китай**: `usc` (Unified Social Credit Code)
+        - **Япония**: `hn` (Hojin Number / Corporate Number)
+        - **Индия**: `gstin`, `cin` (Corporate Identification Number), `pan`
+        - **Сингапур**: `uen` (Unique Entity Number)
+        - **Южная Корея**: `brn` (Business Registration Number)
+        - **Бразилия**: `cnpj`
+        - **Аргентина**: `cuit`
+        - **Мексика**: `rfc`
+        - **ОАЭ/СА**: `crn` (Commercial Registration), `trn`, `vat`
+        - **ЮАР**: `vat`, `tin`
+      - В `OrgDeduplicator`: сначала поиск по identity anchor (по приоритету), затем по name.
+      - Добавить `FindByIdentifierAndType` для ключевых идентификаторов; поддерживать `identifiers` с ключами выше.
+      - **Дополнительные юрисдикции** (полный список ~100+ стран в Keyrails):
+        - **Турция**: `vkn` | **Индонезия**: `npwp` | **Малайзия**: `ssm` | **Таиланд**: `tin` | **Вьетнам**: `mst`
+        - **Израиль**: `crn` | **Египет**: `tin`, `vat` | **Нигерия**: `tin`, `vat` | **Кения**: `pin`, `vat`
+        - **Перу/Эквадор/Никарагуа**: `ruc` | **Чили**: `rut` | **Колумбия**: `nit`, `rut` | **Коста-Рика**: `cedula_juridica`
+        - **Норвегия/Швеция**: `orgnr` | **Финляндия**: `y_tunnus` | **Исландия**: `id` (Kennitala) | **Эстония**: `rc` | **Латвия**: `rn` | **Литва**: `cc`
+        - **Гонконг**: `brn` | **Казахстан**: `bin` | **Узбекистан**: `inn`
+      - **Справочник**: [Keyrails Business Identification Numbers](https://docs.keyrails.com/docs/business-identification-numbers-by-country), GLEIF RA List (230+ юрисдикций).
+    - **2. NameHistory (темпоральная история имён)**:
+      - Новое поле `NameHistory []struct{ Name, Kind string; ValidFrom, ValidTo *time.Time }` (или `identifiers.nameHistory`).
+      - Kind: `short`, `legal`, `brand`, `aka`.
+      - Пример: `[{Name: "Tinkoff Bank", Kind: "short", ValidTo: "2024-06-01"}, {Name: "T-Bank", Kind: "short", ValidFrom: "2024-06-01"}]`.
+      - Использовать при поиске/dedup и explainability.
+    - **3. Redirect-aware path resolution**:
+      - При резолве path всегда проверять `canonical_path_redirects`; для Tinkoff: `/org/ru/tinkoff-bank` → `/org/ru/t-bank`.
+    - **4. Transition edge types** (для случаев смены юрлица):
+      - `RENAMED_TO` — legal name rename, та же сущность.
+      - `REBRANDED_TO` — brand rename, та же сущность.
+      - `LEGAL_SUCCESSOR_OF` — новое юрлицо-наследник старого.
+      - `MERGED_INTO` — слияние.
+      - `SPUN_OFF_FROM` — выделение.
+      - `ACQUIRED_BY` — M&A событие (владение отдельно через OWNS по времени).
+      - Добавить в `DependencyType`, direction policy, canonicalization matrix.
+    - **5. Правило "матрица не в пустоту"**:
+      - Для любого transition-инпута матрица канонизации — total function: либо retag в один из transition-типов, либо `RELATED_TO` + `policyStatus=penalized` + `policyReason=transition_unclassified`.
+      - Никогда не удалять связь/не обнулять тип из-за неуверенности.
+  - **Применение к Tinkoff → T-Bank** (если то же юрлицо — ребрендинг):
+    - Один `ORGANIZATION`, обновить `shortName`/`legalName`, добавить `nameHistory`, redirect `/org/ru/tinkoff-bank` → `/org/ru/t-bank`.
+    - Dedup: по identity anchor (wikidataId/ogrn/inn), затем по nameHistory + current names.
+  - **Если юрлицо изменилось**: два `ORGANIZATION` + `LEGAL_SUCCESSOR_OF`, ownership/restructure рёбра с `ValidFrom`/`ValidTo`.
+  - **Артефакты**: `org_deduplicator.go` (identity anchor priority), `models/fragment.go` (NameHistory), `models/dependency_edge.go` (transition types), `canonical_path_redirects` (расширение), edge direction policy.
+  - **См. также**: BIG_BANG_EDGE_POLICY_REMEDIATION_PLAN.md (policyStatus/penalty/quarantine контракт).
+
 - **Natural Resource Deposit (`/deposit/`) и EXTRACTS_FROM** — ✅ **Реализовано**
   - `FragmentTypeDeposit`, canonical path `/deposit/{resource-slug}/{deposit-slug}`, validation_policy, edge_normalizer, supply_chain_parser, research_profile. EXTRACTS_FROM (FACILITY → DEPOSIT), OPERATES_IN (ORG → DEPOSIT), PRODUCES (DEPOSIT → PRODUCT), LOCATED_IN (DEPOSIT → GEO_REGION). Канонизация ORG EXTRACTS_FROM DEPOSIT → OPERATES_IN (best-effort).
 - **Требования к скаутингу металлургических и горнодобывающих компаний (metal & mining)**
