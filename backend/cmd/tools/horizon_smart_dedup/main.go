@@ -21,6 +21,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/geonames"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -377,42 +378,15 @@ func canonicalNamespaceFamilyFromPath(path string) string {
 }
 
 func expectedNamespaceFamilyForType(t models.FragmentType) string {
-	switch t {
-	case models.FragmentTypeOrganization:
-		return "org"
-	case models.FragmentTypeFacility:
-		return "fac"
-	case models.FragmentTypeGeoRegion:
-		return "loc"
-	case models.FragmentTypeProduct:
-		return "product"
-	case models.FragmentTypePerson:
-		return "person"
-	case models.FragmentTypeMediaChannel:
-		return "media"
-	case models.FragmentTypeMarket:
-		return "market"
-	case models.FragmentTypeDecisionPoint:
-		return "decision"
-	case models.FragmentTypeMechanism:
-		return "mechanism"
-	case models.FragmentTypeProgram:
-		return "program"
-	case models.FragmentTypeDomain:
-		return "domain"
-	case models.FragmentTypeDeposit:
-		return "deposit"
-	case models.FragmentTypeCommunity:
-		return "community"
-	case models.FragmentTypeEvent:
-		return "event"
-	case models.FragmentTypeSphere:
-		return "sphere"
-	case models.FragmentTypeSupplyLink:
-		return "supply-link"
-	default:
+	prefix := strings.TrimSpace(policy.ExpectedCanonicalPathPrefix(t))
+	if prefix == "" {
 		return ""
 	}
+	parts := strings.Split(strings.Trim(prefix, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parts[0]))
 }
 
 func fragmentNamespaceFamilyForDedup(f *models.HorizonFragment) string {
