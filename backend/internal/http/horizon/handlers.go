@@ -12,16 +12,16 @@ import (
 
 // HorizonHandlers содержит все HTTP handlers для Horizon API
 type HorizonHandlers struct {
-	service          *horizon.HorizonService
-	lensItemsHandler *LensItemsHandler
-	genAIHandler     *httputil.GenAIHandler
-	profilesHandler  *ProfilesHandler
-	docsRepo         *corerepo.DocumentsRepository
-	usersRepo        *corerepo.UsersRepository
-	interactions     *corerepo.InteractionsRepository
-	factsRepo           *corerepo.OntologyFactsRepository
-	exposurePathsRepo   *horizonrepo.ExposurePathsRepository
-	riskJobsRepo        *horizonrepo.RiskJobsRepository
+	service           *horizon.HorizonService
+	lensItemsHandler  *LensItemsHandler
+	genAIHandler      *httputil.GenAIHandler
+	profilesHandler   *ProfilesHandler
+	docsRepo          *corerepo.DocumentsRepository
+	usersRepo         *corerepo.UsersRepository
+	interactions      *corerepo.InteractionsRepository
+	factsRepo         *corerepo.OntologyFactsRepository
+	exposurePathsRepo *horizonrepo.ExposurePathsRepository
+	riskJobsRepo      *horizonrepo.RiskJobsRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -272,6 +272,24 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			return
 		case "domain-overlay-execute":
 			h.ExecuteDomainOverlay(w, r)
+			return
+		case "domain-answers":
+			if len(pathParts) > 2 {
+				// /api/horizon/lenses/{lensId}/domain-answers/{domainId}/run
+				if len(pathParts) > 3 && pathParts[3] == "run" {
+					h.RunDomainAnswer(w, r)
+					return
+				}
+				// GET: single snapshot; other methods not allowed here
+				h.GetDomainAnswer(w, r)
+				return
+			}
+			// POST: create domain on demand; GET: list snapshots
+			if r.Method == http.MethodPost {
+				h.CreateDomainAnswer(w, r)
+				return
+			}
+			h.ListDomainAnswers(w, r)
 			return
 		case "artifacts":
 			// Check for /artifacts/stats or /artifacts/context

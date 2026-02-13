@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -132,6 +133,8 @@ type HorizonFragment struct {
 	// Обогащение данными
 	KBRefs      []KBReference     `json:"kbRefs,omitempty" firestore:"kbRefs,omitempty"`
 	Identifiers map[string]string `json:"identifiers,omitempty" firestore:"identifiers,omitempty"`
+	// NameHistory stores temporal aliases/rebrands/legacy names for explainable org identity transitions.
+	NameHistory []NameHistoryEntry `json:"nameHistory,omitempty" firestore:"nameHistory,omitempty"`
 
 	// Временная валидность
 	ValidFrom *time.Time `json:"validFrom,omitempty" firestore:"validFrom,omitempty"`
@@ -182,6 +185,15 @@ type FragmentMetadata struct {
 	EpistemicStatus    EpistemicStatus `json:"epistemicStatus" firestore:"epistemicStatus"`
 }
 
+// NameHistoryEntry stores a historical name variant with optional validity window.
+// Kind values are normalized to: short | legal | brand | aka.
+type NameHistoryEntry struct {
+	Name      string     `json:"name" firestore:"name"`
+	Kind      string     `json:"kind" firestore:"kind"`
+	ValidFrom *time.Time `json:"validFrom,omitempty" firestore:"validFrom,omitempty"`
+	ValidTo   *time.Time `json:"validTo,omitempty" firestore:"validTo,omitempty"`
+}
+
 // Validate проверяет валидность HorizonFragment
 func (f *HorizonFragment) Validate() error {
 	if f.Type == "" {
@@ -222,6 +234,10 @@ func (f *HorizonFragment) Validate() error {
 	if f.State == nil {
 		f.State = make(map[string]MetricValue)
 	}
+	// Shared naming policy: keep legal/short/display names consistent and enforce Latin-only labels.en.
+	f.Labels, f.Identifiers = naming.NormalizeFragmentNames(f.CanonicalPath, f.Labels, f.Identifiers)
+	// Best-effort: trim and normalize temporal alias history.
+	f.normalizeNameHistory()
 	// Best-effort: keep Wikidata linkage consistent across both KBRefs and Identifiers.
 	// This enables reliable dedup/search (e.g., FindByIdentifier("wikidataId", "...")) even for legacy fragments
 	// that may have stored Wikidata only in kbRefs.
@@ -380,6 +396,43 @@ func (f *HorizonFragment) Validate() error {
 	// This keeps expand/graph filtering deterministic without requiring backfills.
 	f.IndexPaths = BuildIndexPaths(f, nil)
 	return nil
+}
+
+func (f *HorizonFragment) normalizeNameHistory() {
+	if f == nil || len(f.NameHistory) == 0 {
+		return
+	}
+	out := make([]NameHistoryEntry, 0, len(f.NameHistory))
+	seen := make(map[string]struct{}, len(f.NameHistory))
+	for _, e := range f.NameHistory {
+		name := strings.TrimSpace(e.Name)
+		if name == "" {
+			continue
+		}
+		kind := strings.ToLower(strings.TrimSpace(e.Kind))
+		switch kind {
+		case "short", "legal", "brand", "aka":
+			// allowed
+		default:
+			kind = "aka"
+		}
+		key := kind + "|" + strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, NameHistoryEntry{
+			Name:      name,
+			Kind:      kind,
+			ValidFrom: e.ValidFrom,
+			ValidTo:   e.ValidTo,
+		})
+	}
+	if len(out) == 0 {
+		f.NameHistory = nil
+		return
+	}
+	f.NameHistory = out
 }
 
 // ensureWikidataMirroring best-effort keeps Wikidata external ID mirrored in both:
@@ -652,6 +705,21 @@ func (f *HorizonFragment) GenerateVectorText() string {
 				line += " " + strings.TrimSpace(*metricValue.Unit)
 			}
 			add(line)
+		}
+	}
+
+	// Историческая история имён (для поиска по бывшим названиям)
+	if len(f.NameHistory) > 0 {
+		names := make([]string, 0, len(f.NameHistory))
+		for _, nh := range f.NameHistory {
+			name := strings.TrimSpace(nh.Name)
+			if name == "" {
+				continue
+			}
+			names = append(names, name)
+		}
+		if len(names) > 0 {
+			add("Former names: " + strings.Join(names, ", "))
 		}
 	}
 

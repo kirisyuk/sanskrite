@@ -58,6 +58,7 @@ func (a *Adapter) GetEntityData(ctx context.Context, qID string) (*ontology.Wiki
 		URL:           data.URL,
 		Properties:    data.Properties,
 		PropertiesRaw: data.PropertiesRaw,
+		Aliases:       data.Aliases,
 	}, nil
 }
 

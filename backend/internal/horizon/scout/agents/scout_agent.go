@@ -9,6 +9,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -117,8 +118,15 @@ type scoutResultInternal struct {
 	SupplyChains []SupplyChain        `json:"supplyChains,omitempty"`
 }
 
-// ExtractFragmentData извлекает данные HorizonFragment и связи из контента источника
+// ExtractFragmentData извлекает данные HorizonFragment и связи из контента источника.
+// Backward-compatible wrapper around ExtractFragmentDataWithGrounding.
 func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string) (*ScoutResult, error) {
+	result, _, err := a.ExtractFragmentDataWithGrounding(ctx, content, targetCanonicalPath, entityPath, sectorPath, specialties, chainContext)
+	return result, err
+}
+
+// ExtractFragmentDataWithGrounding returns extracted result plus grounding evidence from full AI task result.
+func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string) (*ScoutResult, *ai.GroundingEvidence, error) {
 	prompt := a.buildExtractionPrompt(content, targetCanonicalPath, entityPath, sectorPath, specialties, chainContext)
 
 	verifier := ai.NewSimpleJSONVerifier()
@@ -127,9 +135,11 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 		TaskType:     ai.TaskTypeContentGeneration,
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
-			TextGenerationCapability: true,
-			MinCapabilityScore:       7,
-			MinContextWindow:         16000, // Увеличиваем окно для связей
+			TextGenerationCapability:        true,
+			SearchGroundingCapability:       true,
+			InternalDataGroundingCapability: true,
+			MinCapabilityScore:              7,
+			MinContextWindow:                16000, // Увеличиваем окно для связей
 			// IMPORTANT: For large inputs + reasoning models, output budgets can be consumed by hidden "thinking",
 			// leading to truncated JSON. We intentionally allow larger outputs here.
 			MaxOutputSize: 16384,
@@ -137,15 +147,19 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 		Verifier: verifier,
 	}
 
-	result, err := a.executor.ExecuteStructuredTask(ctx, task)
+	result, fullResult, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract fragment data: %w", err)
+		return nil, nil, fmt.Errorf("failed to extract fragment data: %w", err)
+	}
+	var groundingEvidence *ai.GroundingEvidence
+	if fullResult != nil {
+		groundingEvidence = fullResult.GroundingEvidence
 	}
 
 	// Преобразуем результат
 	jsonData, err := json.Marshal(result)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal result: %w", err)
+		return nil, groundingEvidence, fmt.Errorf("failed to marshal result: %w", err)
 	}
 
 	// Unmarshal to internal structure to catch extra fields like Name
@@ -186,7 +200,7 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 		if err2 := json.Unmarshal(jsonData, &fragment); err2 == nil {
 			scoutResult = &ScoutResult{Fragment: fragment}
 		} else {
-			return nil, fmt.Errorf("failed to unmarshal scout result: %w", err)
+			return nil, groundingEvidence, fmt.Errorf("failed to unmarshal scout result: %w", err)
 		}
 	}
 
@@ -235,6 +249,12 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 	if scoutResult.Fragment.Identifiers["shortName"] == "" && scoutResult.Fragment.Labels["en"] != "" {
 		scoutResult.Fragment.Identifiers["shortName"] = scoutResult.Fragment.Labels["en"]
 	}
+	scoutResult.Fragment.Labels, scoutResult.Fragment.Identifiers = naming.NormalizeFragmentNames(
+		scoutResult.Fragment.CanonicalPath,
+		scoutResult.Fragment.Labels,
+		scoutResult.Fragment.Identifiers,
+	)
+	normalizeDiscoveredRelationsNames(scoutResult.Relations)
 
 	// Ensure Type is set
 	if scoutResult.Fragment.Type == "" {
@@ -287,7 +307,21 @@ func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, ta
 	}
 	scoutResult.Fragment.Metadata.LastUpdatedAt = time.Now().UTC()
 
-	return scoutResult, nil
+	return scoutResult, groundingEvidence, nil
+}
+
+func normalizeDiscoveredRelationsNames(relations []DiscoveredRelation) {
+	for i := range relations {
+		name, legal, short := naming.NormalizeRelationNames(
+			relations[i].TargetType,
+			relations[i].TargetName,
+			relations[i].TargetLegalName,
+			relations[i].TargetShortName,
+		)
+		relations[i].TargetName = name
+		relations[i].TargetLegalName = legal
+		relations[i].TargetShortName = short
+	}
 }
 
 // buildExtractionPrompt строит промпт для извлечения данных
@@ -363,6 +397,7 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
 	profile := ResolveResearchProfile("", targetCanonicalPath, "")
 	profileBlock := BuildResearchProfilePromptBlock(profile)
+	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
 
 	return fmt.Sprintf(`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.
 
@@ -386,25 +421,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - entityPath: Must match the provided entity path
    - sectorPath: Must match the provided sector path
    - %s
-   - legalName: The legal/official name of the entity, INCLUDING the form of ownership when relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC, etc.)
-   - shortName: The base name WITHOUT the form of ownership (used for canonicalPath slugging)
-   - IMPORTANT (legal form placement):
-     - Do NOT move the legal form token to the beginning of the name.
-       BAD: "JSC Tochka Bank"
-       GOOD: "Tochka Bank JSC" (only if sources use that ordering) or use the original official name in local language.
-     - legal_form is a SUFFIX in org canonicalPath (/org/{iso2}/{slug}-{legal_form}) and a separate field in canonicalParts.Org.LegalForm.
-   - IMPORTANT (official vs transliteration):
-     - Prefer the OFFICIAL legal name as stated by the company/registry/source.
-     - If the official legal name is not Latin and no established official English name exists:
-       - Keep identifiers.legalName in the original language/script when known.
-      - Use labels.en for transliteration/English display only (do NOT invent an English legalName).
-    - labels.en MUST be Latin-script only (broad Latin is OK: diacritics, Scandinavian, Turkish, etc.). No non-Latin scripts in labels.en.
-   - GOV-specific naming (CRITICAL when canonicalPath starts with /gov/):
-     - Always provide BOTH:
-       - labels.en: readable English name (translation if official English exists; otherwise careful transliteration)
-       - identifiers.legalName: official name as in the primary source/registry (often in native script)
-     - If you can identify the native language/script, also set labels.<iso639> (e.g., labels.th, labels.ms, labels.ar, labels.ru).
-     - Do NOT replace native official name with a translated version in identifiers.legalName. Keep translation/transliteration in labels.en.
+   %s
    - marketSegments: *** HIGHLY IMPORTANT for ORGANIZATION/FACILITY/GOV ***
      You MUST attempt to determine market segments for any org/gov/facility. This is critical for graph analytics.
      Format: Array of canonical paths /segment/{domain}/{vertical}/{geo}
@@ -541,12 +558,18 @@ TASK: Extract all relevant information about this entity and return it as a JSON
   - INFLUENCES: source influences target.
     Clarification: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
     Source MAY be PERSON. Target MAY be MARKET or SPHERE (SPHERE links are treated as weaker evidence).
-   - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
-   - RELATIVE_OF: person-person symmetric relationship (public relatives). Use ONLY when both are PERSON.
-   - RELATED_TO: person-person symmetric relationship (publicly known associates: friends/partners/classmates). Use ONLY when both are PERSON.
-   - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
-    - If THIS FRAGMENT is MARKET, still emit relations with relationType=PARTICIPATES_IN to the player entities; backend will reverse the edge direction.
-    - PRODUCT may also PARTICIPATE_IN a market (product category presence).
+	   - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
+	   - RELATIVE_OF: person-person symmetric relationship (public relatives). Use ONLY when both are PERSON.
+	   - RELATED_TO: person-person symmetric relationship (publicly known associates: friends/partners/classmates). Use ONLY when both are PERSON.
+	   - RENAMED_TO: organization legal rename (ORG -> ORG).
+	   - REBRANDED_TO: organization brand rename/repositioning (ORG -> ORG).
+	   - LEGAL_SUCCESSOR_OF: organization legal succession (ORG -> ORG).
+	   - MERGED_INTO: organization merged into another organization (ORG -> ORG).
+	   - SPUN_OFF_FROM: organization spun off from parent/source organization (ORG -> ORG).
+	   - ACQUIRED_BY: organization acquired by another organization (ORG -> ORG).
+	   - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
+	    - If THIS FRAGMENT is MARKET, still emit relations with relationType=PARTICIPATES_IN to the player entities; backend will reverse the edge direction.
+	    - PRODUCT may also PARTICIPATE_IN a market (product category presence).
      - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
    - DOMINATES: entity dominates a market (leader) (canonical direction: ORG/FACILITY -> MARKET).
      - If THIS FRAGMENT is MARKET, still emit relations with relationType=DOMINATES to the leader entity; backend will reverse the edge direction.
@@ -576,11 +599,17 @@ TASK: Extract all relevant information about this entity and return it as a JSON
   - DOMINATES: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
    - PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
    - AUDITED_BY: source MUST be ORGANIZATION or FACILITY or PROGRAM, target MUST be ORGANIZATION
-   - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
-   - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
-   - LOCATED_IN: target MUST be GEO_REGION
-   - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION, FACILITY, or DEPOSIT
-  - OPERATES_IN: source MAY also be PERSON when referring to location of work/operation
+	   - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
+	   - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
+	   - RENAMED_TO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+	   - REBRANDED_TO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+	   - LEGAL_SUCCESSOR_OF: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+	   - MERGED_INTO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+	   - SPUN_OFF_FROM: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+	   - ACQUIRED_BY: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+	   - LOCATED_IN: target MUST be GEO_REGION
+	   - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION, FACILITY, or DEPOSIT
+	  - OPERATES_IN: source MAY also be PERSON when referring to location of work/operation
    - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
   - DEPENDS_ON: source can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/COMMUNITY/MEDIA_CHANNEL/DEPOSIT, target can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/GEO_REGION/MEDIA_CHANNEL/COMMUNITY/DEPOSIT
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT (e.g., mine extracts from ore deposit, platform extracts from oil field)
@@ -593,7 +622,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - targetLegalName: Same as targetName (explicit field)
    - targetShortName: Base name without ownership suffix (e.g., "Tesla")
   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY"
-  - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, COMPETES_WITH, INFLUENCES, EXTRACTS_FROM, PARTICIPATES_IN, DOMINATES, HAS_SUBMARKET, ADMINISTERS, OPERATES_VIA, MEMBER_OF, AFFILIATED_WITH, HAS_SUBGROUP, CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO, SURFACES
+	  - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, RENAMED_TO, REBRANDED_TO, LEGAL_SUCCESSOR_OF, MERGED_INTO, SPUN_OFF_FROM, ACQUIRED_BY, COMPETES_WITH, INFLUENCES, EXTRACTS_FROM, PARTICIPATES_IN, DOMINATES, HAS_SUBMARKET, ADMINISTERS, OPERATES_VIA, MEMBER_OF, AFFILIATED_WITH, HAS_SUBGROUP, CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO, SURFACES
    - reason: Brief evidence/reason for this relation
    - confidence: 0.0 to 1.0
    - targetCanonicalPath: REQUIRED. Suggest a STABLE canonical path.
@@ -750,5 +779,5 @@ CANONICAL PATH RULES:
 - If a legal form is known (Inc., LLC, JSC, GmbH, etc.), append it as -{legal_form} to satisfy org canonical format.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
-Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, businessRulesBlock, profileBlock, canonicalRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, businessRulesBlock, profileBlock, canonicalRulesBlock, nameRulesBlock)
 }

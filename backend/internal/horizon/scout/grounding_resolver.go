@@ -8,6 +8,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 )
 
@@ -53,6 +54,8 @@ type ResolvedGroundingContext struct {
 
 	// byNameLower — lookup by lowercased label[en] or any label value.
 	byNameLower map[string]*models.HorizonFragment
+	// byNameNormalized — lookup by normalized display/legal name (suffix/punctuation tolerant).
+	byNameNormalized map[string]*models.HorizonFragment
 
 	// byIdentifier — lookup by identifier value (wikidataId, legalName, shortName, etc.).
 	byIdentifier map[string]*models.HorizonFragment
@@ -64,13 +67,23 @@ type ResolvedGroundingContext struct {
 	HasWebResults bool
 }
 
+type GroundingMatchReason string
+
+const (
+	GroundingMatchExactCanonical GroundingMatchReason = "grounding_match_exact_canonical"
+	GroundingMatchIdentifier     GroundingMatchReason = "grounding_match_identifier"
+	GroundingMatchLabel          GroundingMatchReason = "grounding_match_label"
+	GroundingNoMatchCreatedNew   GroundingMatchReason = "grounding_no_match_created_new"
+)
+
 // Resolve loads fragments referenced by grounding evidence and builds a lookup context.
 // This is the core operation: datastore citation URIs → fragment IDs → Firestore load → indexed context.
 func (r *GroundingEvidenceResolver) Resolve(ctx context.Context, evidence *ai.GroundingEvidence) *ResolvedGroundingContext {
 	result := &ResolvedGroundingContext{
-		byCanonicalPath: map[string]*models.HorizonFragment{},
-		byNameLower:     map[string]*models.HorizonFragment{},
-		byIdentifier:    map[string]*models.HorizonFragment{},
+		byCanonicalPath:  map[string]*models.HorizonFragment{},
+		byNameLower:      map[string]*models.HorizonFragment{},
+		byNameNormalized: map[string]*models.HorizonFragment{},
+		byIdentifier:     map[string]*models.HorizonFragment{},
 	}
 
 	if evidence == nil {
@@ -116,6 +129,11 @@ func (r *GroundingEvidenceResolver) Resolve(ctx context.Context, evidence *ai.Gr
 				if _, exists := result.byNameLower[key]; !exists {
 					result.byNameLower[key] = frag
 				}
+				if norm := naming.NormalizeLookupText(naming.NormalizeLegalName(label)); norm != "" {
+					if _, exists := result.byNameNormalized[norm]; !exists {
+						result.byNameNormalized[norm] = frag
+					}
+				}
 			}
 		}
 
@@ -137,6 +155,11 @@ func (r *GroundingEvidenceResolver) Resolve(ctx context.Context, evidence *ai.Gr
 				if _, exists := result.byIdentifier[valKey]; !exists {
 					result.byIdentifier[valKey] = frag
 				}
+				if norm := naming.NormalizeLookupText(naming.NormalizeLegalName(idVal)); norm != "" {
+					if _, exists := result.byIdentifier[norm]; !exists {
+						result.byIdentifier[norm] = frag
+					}
+				}
 			}
 		}
 	}
@@ -157,7 +180,10 @@ func (c *ResolvedGroundingContext) FindByName(name string) *models.HorizonFragme
 	if c == nil || name == "" {
 		return nil
 	}
-	return c.byNameLower[strings.ToLower(strings.TrimSpace(name))]
+	if frag := c.byNameLower[strings.ToLower(strings.TrimSpace(name))]; frag != nil {
+		return frag
+	}
+	return c.byNameNormalized[naming.NormalizeLookupText(naming.NormalizeLegalName(name))]
 }
 
 // FindByIdentifier returns a grounded fragment by identifier value (e.g., wikidataId, legalName), or nil.
@@ -172,7 +198,10 @@ func (c *ResolvedGroundingContext) FindByIdentifier(key, value string) *models.H
 			return frag
 		}
 	}
-	return c.byIdentifier[strings.ToLower(value)]
+	if frag := c.byIdentifier[strings.ToLower(value)]; frag != nil {
+		return frag
+	}
+	return c.byIdentifier[naming.NormalizeLookupText(naming.NormalizeLegalName(value))]
 }
 
 // FindBestMatch attempts to find a grounded fragment matching the given entity by trying
@@ -182,29 +211,29 @@ func (c *ResolvedGroundingContext) FindByIdentifier(key, value string) *models.H
 //  3. Name/label match (case-insensitive)
 //
 // Returns nil if no match found.
-func (c *ResolvedGroundingContext) FindBestMatch(canonicalPath, name string, identifiers map[string]string) *models.HorizonFragment {
+func (c *ResolvedGroundingContext) FindBestMatch(canonicalPath, name string, identifiers map[string]string) (*models.HorizonFragment, GroundingMatchReason) {
 	if c == nil || len(c.Fragments) == 0 {
-		return nil
+		return nil, GroundingNoMatchCreatedNew
 	}
 
 	// 1. Exact canonical path
 	if frag := c.FindByCanonicalPath(canonicalPath); frag != nil {
-		return frag
+		return frag, GroundingMatchExactCanonical
 	}
 
 	// 2. Identifier match
 	for key, val := range identifiers {
 		if frag := c.FindByIdentifier(key, val); frag != nil {
-			return frag
+			return frag, GroundingMatchIdentifier
 		}
 	}
 
 	// 3. Name match
 	if frag := c.FindByName(name); frag != nil {
-		return frag
+		return frag, GroundingMatchLabel
 	}
 
-	return nil
+	return nil, GroundingNoMatchCreatedNew
 }
 
 // IsEmpty returns true if no fragments were resolved from grounding evidence.

@@ -8,7 +8,9 @@ import (
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 func (h *HorizonHandlers) HandleRiskJobsRoot(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +34,7 @@ func (h *HorizonHandlers) HandleRiskJobRoutes(w http.ResponseWriter, r *http.Req
 type createRiskJobRequest struct {
 	ProjectID           string `json:"projectId"`
 	LensID              string `json:"lensId,omitempty"`
+	TargetFragmentID    string `json:"targetFragmentId,omitempty"`
 	TargetCanonicalPath string `json:"targetCanonicalPath"`
 	Polarity            string `json:"polarity,omitempty"`
 	TriggerRef          string `json:"triggerRef,omitempty"`
@@ -59,6 +62,7 @@ func (h *HorizonHandlers) CreateRiskJob(w http.ResponseWriter, r *http.Request) 
 	tenantID := strings.TrimSpace(authInfo.TenantID)
 	projectID := strings.TrimSpace(req.ProjectID)
 	targetPath := strings.TrimSpace(req.TargetCanonicalPath)
+	targetFragmentID := strings.TrimSpace(req.TargetFragmentID)
 	if tenantID == "" {
 		http.Error(w, "tenantId is required", http.StatusBadRequest)
 		return
@@ -67,8 +71,42 @@ func (h *HorizonHandlers) CreateRiskJob(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "projectId is required", http.StatusBadRequest)
 		return
 	}
-	if targetPath == "" {
-		http.Error(w, "targetCanonicalPath is required", http.StatusBadRequest)
+	if targetPath == "" && targetFragmentID == "" {
+		http.Error(w, "targetCanonicalPath or targetFragmentId is required", http.StatusBadRequest)
+		return
+	}
+
+	if h.service != nil && h.service.Fragments() != nil {
+		fragmentsRepo := h.service.Fragments()
+		if targetFragmentID != "" {
+			fragment, err := fragmentsRepo.Get(r.Context(), targetFragmentID)
+			if err != nil || fragment == nil {
+				http.Error(w, "targetFragmentId not found", http.StatusBadRequest)
+				return
+			}
+			if strings.TrimSpace(fragment.TenantID) != "" && strings.TrimSpace(fragment.TenantID) != strings.TrimSpace(tenantID) && strings.TrimSpace(fragment.TenantID) != "global" {
+				http.Error(w, "targetFragmentId belongs to another tenant", http.StatusForbidden)
+				return
+			}
+			if cp := strings.TrimSpace(fragment.CanonicalPath); cp != "" {
+				targetPath = cp
+			}
+		} else {
+			normalizedPath := normalizeRiskTargetPathForAPI(targetPath)
+			if normalizedPath != "" {
+				if fragment, err := fragmentsRepo.GetByCanonicalPath(r.Context(), normalizedPath); err == nil && fragment != nil {
+					if strings.TrimSpace(fragment.ID) != "" {
+						targetFragmentID = strings.TrimSpace(fragment.ID)
+					}
+					if cp := strings.TrimSpace(fragment.CanonicalPath); cp != "" {
+						targetPath = cp
+					}
+				}
+			}
+		}
+	}
+	if strings.TrimSpace(targetPath) == "" {
+		http.Error(w, "targetCanonicalPath resolution failed", http.StatusBadRequest)
 		return
 	}
 
@@ -114,7 +152,8 @@ func (h *HorizonHandlers) CreateRiskJob(w http.ResponseWriter, r *http.Request) 
 		CurrentStage:        horizonmodels.RiskStageIdentify,
 		CurrentState:        horizonmodels.RiskJobStatePending,
 		State: map[string]any{
-			"triggerOrigin": "api_manual",
+			"triggerOrigin":    "api_manual",
+			"targetFragmentId": strings.TrimSpace(targetFragmentID),
 		},
 	}
 
@@ -136,6 +175,37 @@ func (h *HorizonHandlers) CreateRiskJob(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, fmt.Sprintf("failed to encode response: %v", err), http.StatusInternalServerError)
 		return
 	}
+}
+
+func normalizeRiskTargetPathForAPI(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if strings.HasPrefix(path, "/domain/") {
+		if norm, err := taxonomy.NormalizeDomainCanonicalPath(path); err == nil && strings.TrimSpace(norm) != "" {
+			path = strings.TrimSpace(norm)
+		}
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 2 {
+		lastIdx := len(parts) - 1
+		leaf := strings.TrimSpace(parts[lastIdx])
+		if leaf != "" {
+			normalizedLeaf := taxonomy.Slugify(naming.NormalizeLegalName(strings.ReplaceAll(leaf, "-", " ")))
+			if normalizedLeaf != "" {
+				parts[lastIdx] = normalizedLeaf
+				path = "/" + strings.Join(parts, "/")
+			}
+		}
+	}
+	if err := taxonomy.ValidateCanonicalPath(path); err == nil {
+		return path
+	}
+	return strings.TrimSpace(path)
 }
 
 func (h *HorizonHandlers) GetRiskJob(w http.ResponseWriter, r *http.Request) {

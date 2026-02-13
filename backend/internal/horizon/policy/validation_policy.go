@@ -71,18 +71,20 @@ func (p *ValidationPolicy) Decide(ctx context.Context, input PolicyInput) (Polic
 
 	// Fragment validation
 	if kind == "fragment" && input.Fragment != nil {
-		return p.validateFragment(ctx, input)
+		decision, err := p.validateFragment(ctx, input)
+		return NormalizeValidationDecision(decision), err
 	}
 
 	// Edge validation
 	if kind == "edge" {
-		return p.validateEdge(ctx, input)
+		decision, err := p.validateEdge(ctx, input)
+		return NormalizeValidationDecision(decision), err
 	}
 
 	// Fallback
 	log.Printf("%s Unknown validation kind: %s, defaulting to allow", logPrefix, kind)
 	return PolicyDecision{
-		Action:       "allow",
+		Action:       ActionAllow,
 		DecisionPath: "rule:unknown_kind",
 		Confidence:   0.5,
 	}, nil
@@ -96,7 +98,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	if fragment == nil {
 		log.Printf("%s ERROR: fragment is nil", logPrefix)
 		return PolicyDecision{
-			Action:       "reject",
+			Action:       ActionQuarantineSoft,
 			Params:       map[string]interface{}{"reason": "fragment is nil"},
 			DecisionPath: "rule:hardcoded",
 			Confidence:   1.0,
@@ -112,8 +114,8 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		log.Printf("%s REJECT: %s (canonicalPath=%s)", logPrefix, reason, fragment.CanonicalPath)
 		fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 		return PolicyDecision{
-			Action:       "reject",
-			Params:       map[string]interface{}{"reason": reason},
+			Action:       ActionQuarantineSoft,
+			Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
 			DecisionPath: "rule:hardcoded:discovered_prefix",
 			Confidence:   1.0,
 		}, nil
@@ -125,8 +127,8 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		log.Printf("%s REJECT: %s", logPrefix, reason)
 		fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 		return PolicyDecision{
-			Action:       "reject",
-			Params:       map[string]interface{}{"reason": reason},
+			Action:       ActionQuarantineSoft,
+			Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
 			DecisionPath: "rule:hardcoded:empty_path",
 			Confidence:   1.0,
 		}, nil
@@ -137,8 +139,8 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		log.Printf("%s REJECT: %s", logPrefix, reason)
 		fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 		return PolicyDecision{
-			Action:       "reject",
-			Params:       map[string]interface{}{"reason": reason},
+			Action:       ActionQuarantineSoft,
+			Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
 			DecisionPath: "rule:hardcoded:empty_type",
 			Confidence:   1.0,
 		}, nil
@@ -152,7 +154,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		log.Printf("%s INFO: %s", logPrefix, reason)
 		fragment.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, reason, 0.05)
 		return PolicyDecision{
-			Action: "allow_with_penalty",
+			Action: ActionAllowWithPenalty,
 			Params: map[string]interface{}{
 				"penalty": 0.05,
 				"reason":  reason,
@@ -163,27 +165,22 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	}
 
 	// Policy 3: Enforce canonical path prefixes by type
-	expectedPrefix := p.expectedPathPrefix(fragment.Type)
-	if expectedPrefix != "" && !strings.HasPrefix(fragment.CanonicalPath, expectedPrefix) {
-		// Government bodies are modeled as ORGANIZATION but live under /gov/* namespace.
-		if fragment.Type == horizonmodels.FragmentTypeOrganization && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/") {
-			log.Printf("%s INFO: allow GOV path for organization: %s", logPrefix, fragment.CanonicalPath)
-		} else {
-			warning := fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s",
-				fragment.CanonicalPath, expectedPrefix, fragment.Type)
-			log.Printf("%s WARNING: %s", logPrefix, warning)
-			fragment.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, warning, 0.1)
-			// Continue with penalty instead of reject
-			return PolicyDecision{
-				Action: "allow_with_penalty",
-				Params: map[string]interface{}{
-					"penalty": 0.1,
-					"reason":  warning,
-				},
-				DecisionPath: "rule:hardcoded:prefix_mismatch",
-				Confidence:   0.9,
-			}, nil
-		}
+	expectedPrefix := ExpectedCanonicalPathPrefix(fragment.Type)
+	if !IsCanonicalPathAllowedForType(fragment.Type, fragment.CanonicalPath) {
+		warning := fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s",
+			fragment.CanonicalPath, expectedPrefix, fragment.Type)
+		log.Printf("%s WARNING: %s", logPrefix, warning)
+		fragment.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, warning, 0.1)
+		// Continue with penalty instead of reject
+		return PolicyDecision{
+			Action: ActionAllowWithPenalty,
+			Params: map[string]interface{}{
+				"penalty": 0.1,
+				"reason":  warning,
+			},
+			DecisionPath: "rule:hardcoded:prefix_mismatch",
+			Confidence:   0.9,
+		}, nil
 	}
 
 	// Policy 4: GEO_REGION strict validation
@@ -199,8 +196,8 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			log.Printf("%s REJECT: %s", logPrefix, reason)
 			fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 			return PolicyDecision{
-				Action:       "reject",
-				Params:       map[string]interface{}{"reason": reason},
+				Action:       ActionQuarantineSoft,
+				Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
 				DecisionPath: "rule:hardcoded:geo_prefix",
 				Confidence:   1.0,
 			}, nil
@@ -213,8 +210,8 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			log.Printf("%s REJECT: %s (parts=%v)", logPrefix, reason, parts)
 			fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 			return PolicyDecision{
-				Action:       "reject",
-				Params:       map[string]interface{}{"reason": reason},
+				Action:       ActionQuarantineSoft,
+				Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
 				DecisionPath: "rule:hardcoded:geo_format",
 				Confidence:   1.0,
 			}, nil
@@ -226,8 +223,8 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			log.Printf("%s REJECT: %s", logPrefix, reason)
 			fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 			return PolicyDecision{
-				Action:       "reject",
-				Params:       map[string]interface{}{"reason": reason},
+				Action:       ActionQuarantineSoft,
+				Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
 				DecisionPath: "rule:hardcoded:geo_country_code",
 				Confidence:   1.0,
 			}, nil
@@ -245,7 +242,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			log.Printf("%s WARNING: %s", logPrefix, warning)
 			fragment.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, warning, 0.05)
 			return PolicyDecision{
-				Action: "allow_with_penalty",
+				Action: ActionAllowWithPenalty,
 				Params: map[string]interface{}{
 					"penalty": 0.05,
 					"reason":  warning,
@@ -261,7 +258,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		log.Printf("%s ALLOW: fragment validation passed (canonicalPath=%s, type=%s)",
 			logPrefix, fragment.CanonicalPath, fragment.Type)
 		return PolicyDecision{
-			Action:       "allow",
+			Action:       ActionAllow,
 			DecisionPath: "rule:hardcoded:passed",
 			Confidence:   1.0,
 		}, nil
@@ -282,8 +279,8 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			case "reject":
 				log.Printf("%s REJECT by DB rule: %s", logPrefix, rule.Reason)
 				return PolicyDecision{
-					Action:       "reject",
-					Params:       map[string]interface{}{"reason": rule.Reason},
+					Action:       ActionQuarantineSoft,
+					Params:       map[string]interface{}{"reason": rule.Reason, "penalty": 0.2},
 					DecisionPath: "rule:db:exact_match",
 					RuleID:       &rule.ID,
 					Confidence:   1.0,
@@ -291,7 +288,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			case "penalty":
 				log.Printf("%s PENALTY by DB rule: %s (penalty=%.2f)", logPrefix, rule.Reason, rule.ConfidencePenalty)
 				return PolicyDecision{
-					Action:       "penalty",
+					Action:       ActionAllowWithPenalty,
 					Params:       map[string]interface{}{"penalty": rule.ConfidencePenalty, "reason": rule.Reason},
 					DecisionPath: "rule:db:exact_match",
 					RuleID:       &rule.ID,
@@ -300,7 +297,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			case "allow":
 				log.Printf("%s ALLOW by DB rule: %s", logPrefix, rule.Reason)
 				return PolicyDecision{
-					Action:       "allow",
+					Action:       ActionAllow,
 					DecisionPath: "rule:db:exact_match",
 					RuleID:       &rule.ID,
 					Confidence:   1.0,
@@ -312,7 +309,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	log.Printf("%s ALLOW: fragment validation passed (canonicalPath=%s, type=%s)",
 		logPrefix, fragment.CanonicalPath, fragment.Type)
 	return PolicyDecision{
-		Action:       "allow",
+		Action:       ActionAllow,
 		DecisionPath: "rule:hardcoded:passed",
 		Confidence:   1.0,
 	}, nil
@@ -357,8 +354,8 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		reason := fmt.Sprintf("self-loop detected: sourceID=%s == targetID=%s", sourceID, targetID)
 		log.Printf("%s REJECT: %s", logPrefix, reason)
 		return PolicyDecision{
-			Action:       "reject",
-			Params:       map[string]interface{}{"reason": reason},
+			Action:       ActionQuarantineSoft,
+			Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
 			DecisionPath: "rule:hardcoded:self_loop",
 			Confidence:   1.0,
 		}, nil
@@ -407,7 +404,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 					sourceType, targetType, relationType, rule.Description)
 				log.Printf("%s REVERSE: %s", logPrefix, reason)
 				return PolicyDecision{
-					Action:       "reverse",
+					Action:       ActionReverse,
 					Params:       map[string]interface{}{"reason": reason, "shouldReverse": true},
 					DecisionPath: "rule:hardcoded:direction_reverse",
 					Confidence:   1.0,
@@ -427,7 +424,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 				}
 				log.Printf("%s QUARANTINE: %s (penalty=%.2f)", logPrefix, reason, penalty)
 				return PolicyDecision{
-					Action: "quarantine",
+					Action: ActionQuarantineSoft,
 					Params: map[string]interface{}{
 						"reason":  reason,
 						"penalty": penalty,
@@ -448,7 +445,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		targetType == string(horizonmodels.FragmentTypeSphere) {
 		reason := "INFLUENCES to SPHERE treated as weak-link; preserved with penalty"
 		return PolicyDecision{
-			Action: "allow_with_penalty",
+			Action: ActionAllowWithPenalty,
 			Params: map[string]interface{}{
 				"penalty":      0.15,
 				"reason":       reason,
@@ -467,8 +464,8 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 				reason := fmt.Sprintf("invalid influence qualifiers: %v", err)
 				log.Printf("%s REJECT: %s", logPrefix, reason)
 				return PolicyDecision{
-					Action:       "reject",
-					Params:       map[string]interface{}{"reason": reason},
+					Action:       ActionQuarantineSoft,
+					Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
 					DecisionPath: "rule:hardcoded:invalid_influence_qualifiers",
 					Confidence:   1.0,
 				}, nil
@@ -482,7 +479,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		log.Printf("%s ALLOW: edge validation passed (sourceType=%s, targetType=%s, relationType=%s)",
 			logPrefix, sourceType, targetType, relationType)
 		return PolicyDecision{
-			Action:       "allow",
+			Action:       ActionAllow,
 			DecisionPath: "rule:hardcoded:passed",
 			Confidence:   0.7,
 		}, nil
@@ -503,8 +500,8 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 			case "reject":
 				log.Printf("%s REJECT by DB rule: %s", logPrefix, rule.Reason)
 				return PolicyDecision{
-					Action:       "reject",
-					Params:       map[string]interface{}{"reason": rule.Reason},
+					Action:       ActionQuarantineSoft,
+					Params:       map[string]interface{}{"reason": rule.Reason, "penalty": 0.2},
 					DecisionPath: "rule:db:exact_match",
 					RuleID:       &rule.ID,
 					Confidence:   1.0,
@@ -512,7 +509,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 			case "penalty":
 				log.Printf("%s PENALTY by DB rule: %s (penalty=%.2f)", logPrefix, rule.Reason, rule.ConfidencePenalty)
 				return PolicyDecision{
-					Action:       "penalty",
+					Action:       ActionAllowWithPenalty,
 					Params:       map[string]interface{}{"penalty": rule.ConfidencePenalty, "reason": rule.Reason},
 					DecisionPath: "rule:db:exact_match",
 					RuleID:       &rule.ID,
@@ -521,7 +518,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 			case "allow":
 				log.Printf("%s ALLOW by DB rule: %s", logPrefix, rule.Reason)
 				return PolicyDecision{
-					Action:       "allow",
+					Action:       ActionAllow,
 					DecisionPath: "rule:db:exact_match",
 					RuleID:       &rule.ID,
 					Confidence:   1.0,
@@ -533,7 +530,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	log.Printf("%s ALLOW: edge validation passed (sourceType=%s, targetType=%s, relationType=%s)",
 		logPrefix, sourceType, targetType, relationType)
 	return PolicyDecision{
-		Action:       "allow",
+		Action:       ActionAllow,
 		DecisionPath: "rule:hardcoded:passed",
 		Confidence:   0.7,
 	}, nil
@@ -621,45 +618,5 @@ func quarantinePenaltyForTriple(edgeType horizonmodels.DependencyType, sourceTyp
 		return 0.30, "quarantine: FOCUSES_ON requires DOMAIN source"
 	default:
 		return 0.20, ""
-	}
-}
-
-// expectedPathPrefix returns expected canonical path prefix for fragment type (hardcoded from precreate_validator.go).
-func (p *ValidationPolicy) expectedPathPrefix(fragType horizonmodels.FragmentType) string {
-	switch fragType {
-	case horizonmodels.FragmentTypeOrganization:
-		return "/org/"
-	case horizonmodels.FragmentTypeFacility:
-		return "/fac/"
-	case horizonmodels.FragmentTypeGeoRegion:
-		return "/loc/"
-	case horizonmodels.FragmentTypeProduct:
-		return "/product/"
-	case horizonmodels.FragmentTypePerson:
-		return "/person/"
-	case horizonmodels.FragmentTypeMediaChannel:
-		return "/media/"
-	case horizonmodels.FragmentTypeCommunity:
-		return "/community/"
-	case horizonmodels.FragmentTypeDomain:
-		return "/domain/"
-	case horizonmodels.FragmentTypeSphere:
-		return "/sphere/"
-	case horizonmodels.FragmentTypeSupplyLink:
-		return "/supply-link/" // Tenant-specific, format: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}
-	case horizonmodels.FragmentTypeProgram:
-		return "/program/"
-	case horizonmodels.FragmentTypeMarket:
-		return "/market/"
-	case horizonmodels.FragmentTypeEvent:
-		return "/event/"
-	case horizonmodels.FragmentTypeDeposit:
-		return "/deposit/"
-	case horizonmodels.FragmentTypeDecisionPoint:
-		return "/decision/"
-	case horizonmodels.FragmentTypeMechanism:
-		return "/mechanism/"
-	default:
-		return ""
 	}
 }

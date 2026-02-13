@@ -44,6 +44,7 @@ type HorizonService struct {
 	scoutingJobsRepo     *repo.ScoutingJobsRepository
 	fragmentVersionsRepo *repo.HorizonFragmentVersionsRepository
 	lensArtifactsRepo    *repo.LensArtifactsRepository // Phase 2 Strategic Overlay artifacts
+	domainAnswersRepo    *repo.DomainAnswerSnapshotsRepository
 	ontologyFactsRepo    *corerepo.OntologyFactsRepository
 }
 
@@ -200,6 +201,16 @@ func (s *HorizonService) LensArtifacts() *repo.LensArtifactsRepository {
 // SetLensArtifactsRepo устанавливает LensArtifactsRepository (optional, for Phase 2 Strategic Overlay)
 func (s *HorizonService) SetLensArtifactsRepo(repo *repo.LensArtifactsRepository) {
 	s.lensArtifactsRepo = repo
+}
+
+// DomainAnswerSnapshots returns DomainAnswerSnapshotsRepository.
+func (s *HorizonService) DomainAnswerSnapshots() *repo.DomainAnswerSnapshotsRepository {
+	return s.domainAnswersRepo
+}
+
+// SetDomainAnswerSnapshotsRepo wires DomainAnswerSnapshotsRepository.
+func (s *HorizonService) SetDomainAnswerSnapshotsRepo(repo *repo.DomainAnswerSnapshotsRepository) {
+	s.domainAnswersRepo = repo
 }
 
 // SetOntologyFactsRepository wires ontology_facts access for semantics-aware rollups.

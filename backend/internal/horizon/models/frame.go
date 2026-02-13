@@ -12,9 +12,9 @@ type Frame struct {
 	ProjectID           string                 `json:"projectId" firestore:"projectId"`
 	ScoutRequestID      string                 `json:"scoutRequestId" firestore:"scoutRequestId"`
 	TargetCanonicalPath string                 `json:"targetCanonicalPath" firestore:"targetCanonicalPath"`
-	SourceIDs           []string               `json:"sourceIds" firestore:"sourceIds"`           // DataSource IDs
+	SourceIDs           []string               `json:"sourceIds" firestore:"sourceIds"`                                   // DataSource IDs
 	SourceDocumentID    *string                `json:"sourceDocumentId,omitempty" firestore:"sourceDocumentId,omitempty"` // Для обратной совместимости
-	DocumentIDs         []string               `json:"documentIds,omitempty" firestore:"documentIds,omitempty"` // Document IDs
+	DocumentIDs         []string               `json:"documentIds,omitempty" firestore:"documentIds,omitempty"`           // Document IDs
 	ExtractedState      map[string]MetricValue `json:"extractedState" firestore:"extractedState"`
 	Evidence            []Evidence             `json:"evidence" firestore:"evidence"`
 	Provenance          ClaimProvenance        `json:"provenance" firestore:"provenance"`
@@ -27,30 +27,40 @@ type Frame struct {
 
 // ClaimProvenance детальная прослеживаемость для Frame
 type ClaimProvenance struct {
-	SourceIDs       []string         `json:"sourceIds" firestore:"sourceIds"`   // Для обратной совместимости
+	SourceIDs       []string         `json:"sourceIds" firestore:"sourceIds"` // Для обратной совместимости
 	SourceRefs      []SourceRef      `json:"sourceRefs,omitempty" firestore:"sourceRefs,omitempty"`
 	DataSourceIDs   []string         `json:"dataSourceIds,omitempty" firestore:"dataSourceIds,omitempty"` // DataSource IDs
 	DocumentIDs     []string         `json:"documentIds,omitempty" firestore:"documentIds,omitempty"`     // Document IDs
 	Method          ExtractionMethod `json:"method" firestore:"method"`
 	ExtractedAt     time.Time        `json:"extractedAt" firestore:"extractedAt"`
 	EvidenceAnchors []string         `json:"evidenceAnchors,omitempty" firestore:"evidenceAnchors,omitempty"`
-	License         *string           `json:"license,omitempty" firestore:"license,omitempty"`
+	License         *string          `json:"license,omitempty" firestore:"license,omitempty"`
+	// GroundingContractVersion is the version of internal-first grounding provenance contract.
+	GroundingContractVersion string `json:"groundingContractVersion,omitempty" firestore:"groundingContractVersion,omitempty"`
+	// OriginMode classifies where evidence came from: internal_only | external_only | mixed.
+	OriginMode string `json:"originMode,omitempty" firestore:"originMode,omitempty"`
+	// InternalEvidence stores deterministic IDs/URIs proving internal datastore grounding.
+	InternalEvidence *GroundingInternalEvidence `json:"internalEvidence,omitempty" firestore:"internalEvidence,omitempty"`
+	// ExternalEvidence stores web citations/URLs used by grounded generation.
+	ExternalEvidence *GroundingExternalEvidence `json:"externalEvidence,omitempty" firestore:"externalEvidence,omitempty"`
+	// ResolutionStats captures grounding-aware materialization counters.
+	ResolutionStats *GroundingResolutionStats `json:"resolutionStats,omitempty" firestore:"resolutionStats,omitempty"`
 }
 
 // Evidence представляет доказательство из источника
 type Evidence struct {
-	SourceURL       string  `json:"sourceUrl" firestore:"sourceUrl"`
-	SourceHash      string  `json:"sourceHash" firestore:"sourceHash"`
+	SourceURL        string  `json:"sourceUrl" firestore:"sourceUrl"`
+	SourceHash       string  `json:"sourceHash" firestore:"sourceHash"`
 	ReliabilityScore float64 `json:"reliabilityScore" firestore:"reliabilityScore"`
-	Quote           string  `json:"quote" firestore:"quote"`
+	Quote            string  `json:"quote" firestore:"quote"`
 }
 
 // ValidationMeta метаданные процесса валидации
 type ValidationMeta struct {
-	ScoutLLMVersion   string `json:"scoutLlmVersion" firestore:"scoutLlmVersion"`
-	CriticLLMVersion  string `json:"criticLlmVersion" firestore:"criticLlmVersion"`
-	ChainOfThought    string `json:"chainOfThought" firestore:"chainOfThought"`
-	ValidationResult  string `json:"validationResult" firestore:"validationResult"`
+	ScoutLLMVersion  string `json:"scoutLlmVersion" firestore:"scoutLlmVersion"`
+	CriticLLMVersion string `json:"criticLlmVersion" firestore:"criticLlmVersion"`
+	ChainOfThought   string `json:"chainOfThought" firestore:"chainOfThought"`
+	ValidationResult string `json:"validationResult" firestore:"validationResult"`
 }
 
 // Validate проверяет валидность Frame
@@ -75,4 +85,3 @@ func (f *Frame) Validate() error {
 	}
 	return nil
 }
-

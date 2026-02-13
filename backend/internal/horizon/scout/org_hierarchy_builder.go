@@ -203,7 +203,7 @@ func (b *OrgHierarchyBuilder) ensureParentOrg(ctx context.Context, path, name, _
 	// Deduplicate before creating (prevents parent-org duplicates like "Apple" being created many times).
 	if b.orgDedup != nil {
 		deduplicated, derr := b.orgDedup.DeduplicateOrg(ctx, f)
-		if derr == nil && deduplicated != nil && deduplicated.ID != "" {
+		if derr == nil && deduplicated != nil && deduplicated.ID != "" && isDedupReplacementCompatible(f.Type, f.CanonicalPath, deduplicated) {
 			return deduplicated.ID, nil
 		}
 	}

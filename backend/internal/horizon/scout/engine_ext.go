@@ -238,21 +238,6 @@ func bestEffortTitleCase(s string) string {
 	return strings.Join(words, " ")
 }
 
-func lastCanonicalSegment(cp string) string {
-	cp = strings.TrimSpace(cp)
-	if cp == "" {
-		return ""
-	}
-	parts := strings.Split(cp, "/")
-	for i := len(parts) - 1; i >= 0; i-- {
-		seg := strings.TrimSpace(parts[i])
-		if seg != "" {
-			return seg
-		}
-	}
-	return ""
-}
-
 func isPlaceholderToken(label string) bool {
 	l := strings.ToLower(strings.TrimSpace(label))
 	switch l {
@@ -301,7 +286,7 @@ func shouldSkipRecursivePlaceholderTarget(path string) bool {
 	return hasUnknownGeoSegments(path) || hasUnknownJurisdiction(path)
 }
 
-func isSoftDeniedRelationForRecurse(sourceType, targetType models.FragmentType, sourcePath, targetPath, relationType string) bool {
+func isSoftDeniedRelationForRecurse(sourceType, targetType models.FragmentType, _ string, targetPath, relationType string) bool {
 	rt := strings.TrimSpace(relationType)
 	if rt == "" {
 		return false
@@ -1193,6 +1178,9 @@ func (e *ScoutEngine) processDiscoveredRelations(
 	return e.processRelationsInternal(ctx, job, sourceFragment, relations, "scout_discovery", map[string]interface{}{"source": "scout"}, nil)
 }
 
+// Keep for optional grounded-relation flows even when current call graph doesn't invoke it directly.
+var _ = (*ScoutEngine).processDiscoveredRelationsWithGrounding
+
 // processDiscoveredRelationsWithGrounding is like processDiscoveredRelations but also accepts
 // a ResolvedGroundingContext from Vertex AI Search. When a relation target matches a grounded
 // fragment, the system uses the DB entity directly (canonical path, identifiers) instead of
@@ -1494,8 +1482,78 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	if domainCP == "" || !strings.HasPrefix(domainCP, "/domain/") {
 		return nil
 	}
+	internalFirstContext := ""
+	domainFastPathApplied := false
+	if internalFirstGroundingEnabled() {
+		if e.planner != nil && e.executor != nil {
+			sourcePlan, err := e.planner.PlanSources(ctx, strings.TrimSpace(job.TenantID), strings.TrimSpace(job.ProjectID), domainCP, models.ScoutingStrategySnapshot, nil, "")
+			if err != nil {
+				logGroundingWarnf("domain expansion PlanSources failed: jobId=%s target=%s err=%v", strings.TrimSpace(job.ID), strings.TrimSpace(domainCP), err)
+			} else if sourcePlan != nil {
+				for _, src := range sourcePlan.Sources {
+					if src == nil {
+						continue
+					}
+					res, execErr := e.executor.ExecuteDataSource(ctx, src)
+					if execErr != nil {
+						logGroundingWarnf("domain expansion source execution failed: jobId=%s sourceId=%s kind=%s err=%v",
+							strings.TrimSpace(job.ID), strings.TrimSpace(src.ID), strings.TrimSpace(src.Kind), execErr)
+						continue
+					}
+					if s := strings.TrimSpace(res.Content); s != "" {
+						internalFirstContext += s + "\n\n"
+					}
+				}
+			}
+		}
+		if gctx := e.buildGraphBackedInternalContext(ctx, strings.TrimSpace(job.TenantID), domainCP); strings.TrimSpace(gctx) != "" {
+			if internalFirstContext != "" {
+				internalFirstContext += "\n\n"
+			}
+			internalFirstContext += gctx
+		}
+		// Reuse deterministic facts fast-path before any grounded AI calls.
+		if e.planner != nil && e.planner.factsRepo != nil && e.fragmentsRepo != nil {
+			domainFragment := existingFragment
+			if domainFragment == nil || strings.TrimSpace(domainFragment.ID) == "" {
+				if existingByPath, err := e.fragmentsRepo.GetByCanonicalPath(ctx, strings.TrimSpace(domainCP)); err == nil && existingByPath != nil {
+					domainFragment = existingByPath
+					existingFragment = existingByPath
+				}
+			}
+			if domainFragment != nil && strings.TrimSpace(domainFragment.ID) != "" {
+				facts, err := e.planner.factsRepo.ListUpdatedSinceByCanonicalPath(ctx, strings.TrimSpace(job.TenantID), strings.TrimSpace(domainCP), time.Time{}, 200)
+				if err != nil {
+					logGroundingWarnf("domain expansion facts fast-path failed: jobId=%s target=%s err=%v",
+						strings.TrimSpace(job.ID), strings.TrimSpace(domainCP), err)
+				} else if len(facts) > 0 {
+					applier := &FactApplier{vertex: e.planner.vertexSearchClient}
+					applyRes, applyErr := applier.TryApplyFactsFastPath(ctx, e.fragmentsRepo, domainFragment, facts, 0.70, 0.80)
+					if applyErr != nil {
+						logGroundingErrorWithContext(job, "scout", "domain_expansion.fast_path", "domain_fast_path_apply_failed", "fact_fast_path_error", true, applyErr)
+						e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.fast_path", "domain_fast_path_apply_failed", "fact_fast_path_error", true)
+					} else if applyRes != nil && applyRes.Applied {
+						domainFastPathApplied = true
+						logGroundingInfof("domain expansion fast-path applied: jobId=%s target=%s appliedFacts=%d maxRelevance=%.3f",
+							strings.TrimSpace(job.ID), strings.TrimSpace(domainCP), applyRes.AppliedFacts, applyRes.MaxRelevance)
+					}
+				}
+			}
+		}
+	}
 
-	_ = e.transition(ctx, job, models.ScoutingJobStateExecution, 0.4, "domain_expansion")
+	inlineDomainContractRun := false
+	if job.State != nil {
+		if v, ok := job.State["inlineDomainContractRun"]; ok {
+			inlineDomainContractRun = parseStateBool(v, false)
+		}
+	}
+	if !inlineDomainContractRun {
+		if err := e.transition(ctx, job, models.ScoutingJobStateExecution, 0.4, "domain_expansion"); err != nil {
+			logGroundingErrorWithContext(job, "scout", "domain_expansion.transition_execution", "job_transition_failed", "state_transition_error", true, err)
+			e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.transition_execution", "job_transition_failed", "state_transition_error", true)
+		}
+	}
 
 	contract := e.bestEffortFindDomainContract(job, domainCP)
 	title := ""
@@ -1612,7 +1670,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	// IntentResolver is NOT required to fully expand domains; this step is responsible for that.
 	var domainResearchRelations []agents.DiscoveredRelation
 	var domainResearchChains []agents.SupplyChain
-	if e.researchAgent != nil {
+	var domainGroundingEvidence *ai.GroundingEvidence
+	if e.researchAgent != nil && !domainFastPathApplied {
 		originalQuery := ""
 		if job.State != nil {
 			if v, ok := job.State["originalQuery"].(string); ok {
@@ -1715,11 +1774,23 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				}
 			}
 		}
-		enrichedFragment, newRelations, newChains, err := e.researchAgent.EnrichFragment(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, "", originalQuery, nil, existingEntities)
+		enrichedFragment, newRelations, newChains, evidence, err := e.researchAgent.EnrichFragmentWithGrounding(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, internalFirstContext, originalQuery, nil, existingEntities)
 		_ = enrichedFragment
 		if err != nil {
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> domain research failed: %v", err))
 		} else {
+			domainGroundingEvidence = mergeGroundingEvidence(domainGroundingEvidence, evidence)
+			if internalFirstGroundingEnabled() && evidence != nil {
+				applyGroundingEvidenceToJobState(job, domainGroundingEvidence, nil, nil)
+				logGroundingInfof("domain base research grounding: jobId=%s target=%s datastore=%v(%d) web=%v(%d)",
+					strings.TrimSpace(job.ID),
+					strings.TrimSpace(domainCP),
+					evidence.HasDatastoreResults,
+					len(evidence.DatastoreFragmentIDs),
+					evidence.HasWebResults,
+					len(evidence.WebSources),
+				)
+			}
 			domainResearchRelations = append(domainResearchRelations, newRelations...)
 			domainResearchChains = append(domainResearchChains, newChains...)
 			for _, rel := range newRelations {
@@ -1757,7 +1828,10 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				"relationsN":    len(newRelations),
 				"supplyChainsN": len(newChains),
 			}
-			_ = e.scoutingJobsRepo.Update(ctx, job)
+			if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+				logGroundingErrorWithContext(job, "scout", "domain_expansion.persist_research_state", "job_state_update_failed", "repo_update_error", true, err)
+				e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.persist_research_state", "job_state_update_failed", "repo_update_error", true)
+			}
 		}
 
 		e.publish(ctx, realtime.EventType("horizon.domain.research.completed"), map[string]interface{}{
@@ -1884,7 +1958,12 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	if existingFragment == nil || strings.TrimSpace(existingFragment.ID) == "" {
 		id, err := e.fragmentsRepo.Create(ctx, frag)
 		if err != nil {
-			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_fragment_create_failed")
+			if !inlineDomainContractRun {
+				if trErr := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_fragment_create_failed"); trErr != nil {
+					logGroundingErrorWithContext(job, "scout", "domain_expansion.transition_failed", "job_transition_failed", "state_transition_error", true, trErr)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.transition_failed", "job_transition_failed", "state_transition_error", true)
+				}
+			}
 			return fmt.Errorf("domain fragment create failed: %w", err)
 		}
 		fragmentID = id
@@ -1901,7 +1980,12 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		}
 	} else {
 		if err := e.fragmentsRepo.Update(ctx, frag); err != nil {
-			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_fragment_update_failed")
+			if !inlineDomainContractRun {
+				if trErr := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_fragment_update_failed"); trErr != nil {
+					logGroundingErrorWithContext(job, "scout", "domain_expansion.transition_failed", "job_transition_failed", "state_transition_error", true, trErr)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.transition_failed", "job_transition_failed", "state_transition_error", true)
+				}
+			}
 			return fmt.Errorf("domain fragment update failed: %w", err)
 		}
 		fragmentID = existingFragment.ID
@@ -2081,33 +2165,63 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		"affectedDomainsN":    len(affected),
 		"relationsEmittedN":   len(rels),
 	}
-	_ = e.scoutingJobsRepo.Update(ctx, job)
+	if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+		logGroundingErrorWithContext(job, "scout", "domain_expansion.persist_state", "job_state_update_failed", "repo_update_error", true, err)
+		e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.persist_state", "job_state_update_failed", "repo_update_error", true)
+	}
 
-	_ = e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "domain_expansion_done")
+	if !inlineDomainContractRun {
+		if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "domain_expansion_done"); err != nil {
+			logGroundingErrorWithContext(job, "scout", "domain_expansion.transition_verified", "job_transition_failed", "state_transition_error", true, err)
+			e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.transition_verified", "job_transition_failed", "state_transition_error", true)
+		}
 
-	// Realtime: job completed.
-	e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-		"tenantId":      job.TenantID,
-		"projectId":     job.ProjectID,
-		"lensId":        strings.TrimSpace(job.LensID),
-		"jobId":         job.ID,
-		"fragmentId":    fragmentID,
-		"canonicalPath": domainCP,
-		"confidence":    1.0,
-		"hint":          "base_enrichment",
-		"legacyHint":    "domain_expansion",
-	})
+		// Realtime: job completed.
+		e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+			"tenantId":      job.TenantID,
+			"projectId":     job.ProjectID,
+			"lensId":        strings.TrimSpace(job.LensID),
+			"jobId":         job.ID,
+			"fragmentId":    fragmentID,
+			"canonicalPath": domainCP,
+			"confidence":    1.0,
+			"hint":          "base_enrichment",
+			"legacyHint":    "domain_expansion",
+		})
+	}
 
 	// Decomposition: schedule first-order entity scouts.
 	if len(rels) > 0 {
-		_ = e.processDiscoveredRelations(ctx, job, frag, rels)
+		var resolvedGrounding *ResolvedGroundingContext
+		if internalFirstGroundingEnabled() && e.groundingResolver != nil {
+			ev := mergeGroundingEvidence(domainGroundingEvidence, groundingEvidenceFromJobState(job))
+			if ev != nil {
+				resolvedGrounding = e.groundingResolver.Resolve(ctx, ev)
+			}
+		}
+		if resolvedGrounding != nil && !resolvedGrounding.IsEmpty() {
+			if err := e.processDiscoveredRelationsWithGrounding(ctx, job, frag, rels, resolvedGrounding); err != nil {
+				logGroundingErrorWithContext(job, "scout", "domain_expansion.relations_grounded", "relations_materialization_failed", "materialization_error", true, err)
+				e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.relations_grounded", "relations_materialization_failed", "materialization_error", true)
+			}
+		} else {
+			if err := e.processDiscoveredRelations(ctx, job, frag, rels); err != nil {
+				logGroundingErrorWithContext(job, "scout", "domain_expansion.relations_fallback", "relations_materialization_failed", "materialization_error", true, err)
+				e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.relations_fallback", "relations_materialization_failed", "materialization_error", true)
+			}
+		}
 	}
 	if len(domainResearchChains) > 0 {
-		_ = e.processSupplyChains(ctx, job, frag, domainResearchChains)
+		if err := e.processSupplyChains(ctx, job, frag, domainResearchChains); err != nil {
+			logGroundingErrorWithContext(job, "scout", "domain_expansion.supply_chains", "supply_chain_processing_failed", "materialization_error", true, err)
+			e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.supply_chains", "supply_chain_processing_failed", "materialization_error", true)
+		}
 	}
 
 	// Policy audit + optional enforcement (best-effort).
-	e.runPolicyAudit(ctx, job)
+	if !inlineDomainContractRun {
+		e.runPolicyAudit(ctx, job)
+	}
 
 	// Best-effort propagation trigger for the domain node.
 	if e.propagationTrigger != nil {
@@ -2120,7 +2234,10 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			}
 			propCtx, cancel := context.WithTimeout(propBase, 2*time.Minute)
 			defer cancel()
-			_ = e.propagationTrigger(propCtx, fid)
+			if err := e.propagationTrigger(propCtx, fid); err != nil {
+				logGroundingErrorWithContext(job, "scout", "domain_expansion.propagation", "propagation_trigger_failed", "propagation_error", true, err)
+				e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.propagation", "propagation_trigger_failed", "propagation_error", true)
+			}
 		})
 	}
 
@@ -2164,12 +2281,20 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 
 	// Phase 2: Strategic Layer Overlay — automatically triggered after Phase 1 completes.
 	// Only run if there are entities/relations to analyze and the domain benefits from strategic analysis.
-	if e.shouldRunStrategicOverlay(contractType, len(firstOrder), len(rels)) {
+	skipAutoStrategicOverlay := false
+	if job.State != nil {
+		if v, ok := job.State["skipAutoStrategicOverlay"]; ok {
+			skipAutoStrategicOverlay = parseStateBool(v, false)
+		}
+	}
+	if !skipAutoStrategicOverlay && e.shouldRunStrategicOverlay(contractType, len(firstOrder), len(rels)) {
 		e.triggerPhase2StrategicOverlay(ctx, job, domainCP)
 	}
 
 	// Check if all scout jobs for this lens are completed.
-	e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
+	if !inlineDomainContractRun {
+		e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
+	}
 	return nil
 }
 
@@ -2190,7 +2315,18 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		return nil
 	}
 
-	_ = e.transition(ctx, job, models.ScoutingJobStateExecution, 0.4, "domain_overlay")
+	inlineDomainContractRun := false
+	if job.State != nil {
+		if v, ok := job.State["inlineDomainContractRun"]; ok {
+			inlineDomainContractRun = parseStateBool(v, false)
+		}
+	}
+	if !inlineDomainContractRun {
+		if err := e.transition(ctx, job, models.ScoutingJobStateExecution, 0.4, "domain_overlay"); err != nil {
+			logGroundingErrorWithContext(job, "scout", "domain_overlay.transition_execution", "job_transition_failed", "state_transition_error", true, err)
+			e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.transition_execution", "job_transition_failed", "state_transition_error", true)
+		}
+	}
 
 	contract := e.bestEffortFindDomainContract(job, domainCP)
 	title := ""
@@ -2268,7 +2404,12 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	if existingFragment == nil || strings.TrimSpace(existingFragment.ID) == "" {
 		id, err := e.fragmentsRepo.Create(ctx, frag)
 		if err != nil {
-			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_overlay_fragment_create_failed")
+			if !inlineDomainContractRun {
+				if trErr := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_overlay_fragment_create_failed"); trErr != nil {
+					logGroundingErrorWithContext(job, "scout", "domain_overlay.transition_failed", "job_transition_failed", "state_transition_error", true, trErr)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.transition_failed", "job_transition_failed", "state_transition_error", true)
+				}
+			}
 			return fmt.Errorf("domain fragment create failed: %w", err)
 		}
 		fragmentID = id
@@ -2283,7 +2424,12 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		}
 	} else {
 		if err := e.fragmentsRepo.Update(ctx, frag); err != nil {
-			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_overlay_fragment_update_failed")
+			if !inlineDomainContractRun {
+				if trErr := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_overlay_fragment_update_failed"); trErr != nil {
+					logGroundingErrorWithContext(job, "scout", "domain_overlay.transition_failed", "job_transition_failed", "state_transition_error", true, trErr)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.transition_failed", "job_transition_failed", "state_transition_error", true)
+				}
+			}
 			return fmt.Errorf("domain fragment update failed: %w", err)
 		}
 		fragmentID = existingFragment.ID
@@ -2337,6 +2483,37 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		},
 	})
 
+	internalFirstOverlayContext := ""
+	if internalFirstGroundingEnabled() {
+		if e.planner != nil && e.executor != nil {
+			sourcePlan, err := e.planner.PlanSources(ctx, strings.TrimSpace(job.TenantID), strings.TrimSpace(job.ProjectID), domainCP, models.ScoutingStrategySnapshot, nil, "")
+			if err != nil {
+				logGroundingWarnf("domain overlay PlanSources failed: jobId=%s target=%s err=%v", strings.TrimSpace(job.ID), strings.TrimSpace(domainCP), err)
+			} else if sourcePlan != nil {
+				for _, src := range sourcePlan.Sources {
+					if src == nil {
+						continue
+					}
+					res, execErr := e.executor.ExecuteDataSource(ctx, src)
+					if execErr != nil {
+						logGroundingWarnf("domain overlay source execution failed: jobId=%s sourceId=%s kind=%s err=%v",
+							strings.TrimSpace(job.ID), strings.TrimSpace(src.ID), strings.TrimSpace(src.Kind), execErr)
+						continue
+					}
+					if s := strings.TrimSpace(res.Content); s != "" {
+						internalFirstOverlayContext += s + "\n\n"
+					}
+				}
+			}
+		}
+		if gctx := e.buildGraphBackedInternalContext(ctx, strings.TrimSpace(job.TenantID), domainCP); strings.TrimSpace(gctx) != "" {
+			if internalFirstOverlayContext != "" {
+				internalFirstOverlayContext += "\n\n"
+			}
+			internalFirstOverlayContext += gctx
+		}
+	}
+
 	// Build graph context for strategic overlay.
 	// Prefer LensArtifacts (finalized entities from jobs) over lens.Scope (just paths).
 	var graphContext string
@@ -2354,6 +2531,13 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		}
 		graphContext = e.buildLensGraphContext(ctx, lens, 40, 120)
 	}
+	if strings.TrimSpace(internalFirstOverlayContext) != "" {
+		if strings.TrimSpace(graphContext) == "" {
+			graphContext = strings.TrimSpace(internalFirstOverlayContext)
+		} else {
+			graphContext = strings.TrimSpace(graphContext) + "\n\nINTERNAL-FIRST CONTEXT:\n" + strings.TrimSpace(internalFirstOverlayContext)
+		}
+	}
 
 	focus := ""
 	keywords := []string(nil)
@@ -2367,10 +2551,26 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	}
 
 	overlayAgent := agents.NewStrategicOverlayAgent(e.aiExecutor)
-	overlayResult, err := overlayAgent.Extract(ctx, frag, graphContext, focus, keywords)
+	overlayResult, overlayEvidence, err := overlayAgent.ExtractWithGrounding(ctx, frag, graphContext, focus, keywords)
 	if err != nil {
-		_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_overlay_failed")
+		if !inlineDomainContractRun {
+			if trErr := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_overlay_failed"); trErr != nil {
+				logGroundingErrorWithContext(job, "scout", "domain_overlay.transition_failed", "job_transition_failed", "state_transition_error", true, trErr)
+				e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.transition_failed", "job_transition_failed", "state_transition_error", true)
+			}
+		}
 		return err
+	}
+	if internalFirstGroundingEnabled() && overlayEvidence != nil {
+		applyGroundingEvidenceToJobState(job, overlayEvidence, nil, nil)
+		logGroundingInfof("domain overlay extraction grounding: jobId=%s target=%s datastore=%v(%d) web=%v(%d)",
+			strings.TrimSpace(job.ID),
+			strings.TrimSpace(domainCP),
+			overlayEvidence.HasDatastoreResults,
+			len(overlayEvidence.DatastoreFragmentIDs),
+			overlayEvidence.HasWebResults,
+			len(overlayEvidence.WebSources),
+		)
 	}
 
 	decisionCount := 0
@@ -2388,7 +2588,10 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		if err == nil && f != nil {
 			if f.Type != models.FragmentTypeDecisionPoint {
 				f.Type = models.FragmentTypeDecisionPoint
-				_ = e.fragmentsRepo.Update(ctx, f)
+				if err := e.fragmentsRepo.Update(ctx, f); err != nil {
+					logGroundingErrorWithContext(job, "scout", "domain_overlay.update_fragment_type", "fragment_update_failed", "repo_update_error", true, err)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.update_fragment_type", "fragment_update_failed", "repo_update_error", true)
+				}
 			}
 			decisionCount++
 			overlayScopePaths = append(overlayScopePaths, cp)
@@ -2430,7 +2633,10 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		if err == nil && f != nil {
 			if f.Type != models.FragmentTypeMechanism {
 				f.Type = models.FragmentTypeMechanism
-				_ = e.fragmentsRepo.Update(ctx, f)
+				if err := e.fragmentsRepo.Update(ctx, f); err != nil {
+					logGroundingErrorWithContext(job, "scout", "domain_overlay.update_fragment_type", "fragment_update_failed", "repo_update_error", true, err)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.update_fragment_type", "fragment_update_failed", "repo_update_error", true)
+				}
 			}
 			mechanismCount++
 			overlayScopePaths = append(overlayScopePaths, cp)
@@ -2632,7 +2838,10 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		"surfacesEdges":    surfacesCount,
 		"relationsEmitted": edgesEmitted,
 	}
-	_ = e.scoutingJobsRepo.Update(ctx, job)
+	if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+		logGroundingErrorWithContext(job, "scout", "domain_overlay.persist_state", "job_state_update_failed", "repo_update_error", true, err)
+		e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.persist_state", "job_state_update_failed", "repo_update_error", true)
+	}
 
 	// Mark all lens artifacts as processed for strategic overlay
 	if e.lensArtifactsRepo != nil && lensID != "" {
@@ -2644,24 +2853,36 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 				}
 			}
 			if len(artIDs) > 0 {
-				_ = e.lensArtifactsRepo.MarkProcessedForStrategic(ctx, artIDs)
+				if err := e.lensArtifactsRepo.MarkProcessedForStrategic(ctx, artIDs); err != nil {
+					logGroundingErrorWithContext(job, "scout", "domain_overlay.mark_artifacts_processed", "artifact_mark_processed_failed", "repo_update_error", true, err)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.mark_artifacts_processed", "artifact_mark_processed_failed", "repo_update_error", true)
+				}
 			}
 		}
 	}
 
-	_ = e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "domain_overlay_done")
-	e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-		"tenantId":      job.TenantID,
-		"projectId":     job.ProjectID,
-		"lensId":        strings.TrimSpace(job.LensID),
-		"jobId":         job.ID,
-		"fragmentId":    fragmentID,
-		"canonicalPath": domainCP,
-		"confidence":    1.0,
-		"hint":          "strategic_projection",
-		"legacyHint":    "domain_overlay",
-	})
-	e.runPolicyAudit(ctx, job)
+	if !inlineDomainContractRun {
+		if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "domain_overlay_done"); err != nil {
+			logGroundingErrorWithContext(job, "scout", "domain_overlay.transition_verified", "job_transition_failed", "state_transition_error", true, err)
+			e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.transition_verified", "job_transition_failed", "state_transition_error", true)
+		}
+	}
+	if !inlineDomainContractRun {
+		e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+			"tenantId":      job.TenantID,
+			"projectId":     job.ProjectID,
+			"lensId":        strings.TrimSpace(job.LensID),
+			"jobId":         job.ID,
+			"fragmentId":    fragmentID,
+			"canonicalPath": domainCP,
+			"confidence":    1.0,
+			"hint":          "strategic_projection",
+			"legacyHint":    "domain_overlay",
+		})
+	}
+	if !inlineDomainContractRun {
+		e.runPolicyAudit(ctx, job)
+	}
 	e.publish(ctx, realtime.EventType("horizon.domain.overlay.completed"), map[string]interface{}{
 		"tenantId":      job.TenantID,
 		"projectId":     job.ProjectID,
@@ -2697,7 +2918,9 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 			"entityName":  title,
 		},
 	})
-	e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
+	if !inlineDomainContractRun {
+		e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
+	}
 	return nil
 }
 
@@ -2790,6 +3013,11 @@ func (e *ScoutEngine) processRelationsInternal(
 	}
 	isSupplyChainMode := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
 	isEquityMode := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity)
+	relationsResolvedByGrounding := 0
+	relationsCreatedNew := 0
+	dedupRedirectsByGrounding := 0
+	dedupFalsePositiveSuspected := 0
+	groundingReasonCounts := map[string]int64{}
 	cascadeID := ""
 	if job != nil && job.State != nil {
 		if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
@@ -2871,6 +3099,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		}
 	}
 	enableManagement := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement)
+	runtimeGroundingEvidence := groundingEvidenceFromJobState(job)
 
 	for _, rel := range relations {
 		if rel.TargetName == "" {
@@ -2883,7 +3112,12 @@ func (e *ScoutEngine) processRelationsInternal(
 		rel.RelationType = strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
 		normalizedRelationType := strings.TrimSpace(rel.RelationType)
 		if rawRelationType != "" && normalizedRelationType != "" && rawRelationType != normalizedRelationType {
-			fmt.Printf("[ScoutEngine] Normalized relationType: %q -> %q\n", rawRelationType, normalizedRelationType)
+			logGroundingInfof("component=scout phase=relations.normalize_type jobId=%s targetCanonicalPath=%s reasonCode=relation_type_normalized raw=%q normalized=%q",
+				strings.TrimSpace(job.ID),
+				strings.TrimSpace(job.TargetCanonicalPath),
+				rawRelationType,
+				normalizedRelationType,
+			)
 		}
 		targetTypeHint := e.normalizeFragmentType(ctx, rel.TargetType)
 		targetType := targetTypeHint
@@ -2891,7 +3125,8 @@ func (e *ScoutEngine) processRelationsInternal(
 		// 1. Determine target canonical path
 		targetPath, err := e.resolveCanonicalPath(ctx, rel)
 		if err != nil {
-			fmt.Printf("Canonicalization failed for relation target=%q: %v\n", rel.TargetName, err)
+			logGroundingErrorWithContext(job, "scout", "relations.resolve_canonical_path", "canonicalization_failed", "canonicalization_error", true, err)
+			e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.resolve_canonical_path", "canonicalization_failed", "canonicalization_error", true)
 			continue
 		}
 		// Align targetType with canonical path prefix (auto-fix mismatches).
@@ -2918,6 +3153,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		var targetFragment *models.HorizonFragment
 		var targetID string
 
+		groundingMatchReason := ""
 		if groundingCtx != nil && !groundingCtx.IsEmpty() {
 			identifiers := map[string]string{}
 			if rel.TargetLegalName != "" {
@@ -2926,20 +3162,39 @@ func (e *ScoutEngine) processRelationsInternal(
 			if rel.TargetShortName != "" {
 				identifiers["shortName"] = rel.TargetShortName
 			}
-			if grounded := groundingCtx.FindBestMatch(targetPath, rel.TargetName, identifiers); grounded != nil {
+			grounded, matchReason := groundingCtx.FindBestMatch(targetPath, rel.TargetName, identifiers)
+			groundingMatchReason = string(matchReason)
+			if strings.TrimSpace(groundingMatchReason) != "" {
+				groundingReasonCounts[strings.TrimSpace(groundingMatchReason)]++
+			}
+			if grounded != nil {
 				// Entity EXISTS in our database — use it directly.
 				targetFragment = grounded
 				targetID = grounded.ID
+				relationsResolvedByGrounding++
 				groundedCP := strings.TrimSpace(grounded.CanonicalPath)
 				if groundedCP != "" && groundedCP != targetPath {
 					// The DB canonical path differs from LLM-generated one → record redirect.
-					fmt.Printf("[ScoutEngine] Grounding match: LLM path %q → DB path %q (fragmentId=%s)\n",
-						targetPath, groundedCP, grounded.ID)
-					e.recordDeterministicRedirect(ctx, targetPath, groundedCP, "grounding_evidence")
+					logGroundingInfof("component=scout phase=relations.grounding_match jobId=%s reasonCode=%s llmPath=%q dbPath=%q fragmentId=%s",
+						strings.TrimSpace(job.ID),
+						strings.TrimSpace(groundingMatchReason),
+						targetPath,
+						groundedCP,
+						strings.TrimSpace(grounded.ID),
+					)
+					e.recordDeterministicRedirect(ctx, targetPath, groundedCP, groundingMatchReason)
+					dedupRedirectsByGrounding++
+					if groundingMatchReason == string(GroundingMatchLabel) {
+						dedupFalsePositiveSuspected++
+					}
 					targetPath = groundedCP
 				} else {
-					fmt.Printf("[ScoutEngine] Grounding match: path %q → existing fragmentId=%s\n",
-						targetPath, grounded.ID)
+					logGroundingInfof("component=scout phase=relations.grounding_match jobId=%s reasonCode=%s path=%q fragmentId=%s",
+						strings.TrimSpace(job.ID),
+						strings.TrimSpace(groundingMatchReason),
+						targetPath,
+						strings.TrimSpace(grounded.ID),
+					)
 				}
 			}
 		}
@@ -2982,7 +3237,12 @@ func (e *ScoutEngine) processRelationsInternal(
 		}
 
 		if targetFragment == nil {
-			targetFragment, _ = e.fragmentsRepo.GetByCanonicalPath(ctx, targetPath)
+			existingByPath, getErr := e.fragmentsRepo.GetByCanonicalPath(ctx, targetPath)
+			if getErr != nil {
+				logGroundingErrorWithContext(job, "scout", "relations.lookup_target_fragment", "target_lookup_failed", "repo_read_error", true, getErr)
+				e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.lookup_target_fragment", "target_lookup_failed", "repo_read_error", true)
+			}
+			targetFragment = existingByPath
 		}
 
 		if targetFragment == nil {
@@ -3022,6 +3282,7 @@ func (e *ScoutEngine) processRelationsInternal(
 					EpistemicStatus: models.EpistemicStatusLowConfidence,
 				},
 			}
+			applyGroundingProvenance(&newFragment.Provenance, runtimeGroundingEvidence, nil, nil, nil)
 			if rel.TargetShortName != "" {
 				newFragment.Identifiers["shortName"] = rel.TargetShortName
 			}
@@ -3031,20 +3292,33 @@ func (e *ScoutEngine) processRelationsInternal(
 			if e.preCreateValidator != nil {
 				preValidation, valErr := e.preCreateValidator.ValidateAndProcess(ctx, newFragment)
 				if valErr != nil {
-					fmt.Printf("[ScoutEngine] Warning: pre-create validation error for %s: %v\n", targetPath, valErr)
+					logGroundingErrorWithContext(job, "scout", "relations.precreate_validate", "precreate_validation_failed", "validation_error", true, valErr)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.precreate_validate", "precreate_validation_failed", "validation_error", true)
 				} else if preValidation != nil {
 					// Log warnings
 					for _, w := range preValidation.Warnings {
-						fmt.Printf("[ScoutEngine] Pre-create warning for %s: %s\n", targetPath, w)
+						logGroundingWarnf("component=scout phase=relations.precreate_validate jobId=%s targetCanonicalPath=%s reasonCode=precreate_warning warning=%q",
+							strings.TrimSpace(job.ID),
+							strings.TrimSpace(targetPath),
+							strings.TrimSpace(w),
+						)
 					}
 					// Check if creation should be blocked
 					if !preValidation.IsValid {
-						fmt.Printf("[ScoutEngine] Fragment creation blocked for %s: %s\n", targetPath, preValidation.BlockReason)
+						logGroundingWarnf("component=scout phase=relations.precreate_validate jobId=%s targetCanonicalPath=%s reasonCode=precreate_blocked blockReason=%q",
+							strings.TrimSpace(job.ID),
+							strings.TrimSpace(targetPath),
+							strings.TrimSpace(preValidation.BlockReason),
+						)
 						continue
 					}
 					// Check if we should use an existing fragment instead (deduplication)
 					if preValidation.ReplacementFrag != nil && preValidation.ReplacementFrag.ID != "" {
-						fmt.Printf("[ScoutEngine] Using existing fragment %s instead of creating %s\n", preValidation.ReplacementFrag.ID, targetPath)
+						logGroundingInfof("component=scout phase=relations.precreate_validate jobId=%s targetCanonicalPath=%s reasonCode=precreate_replaced replacementFragmentId=%s",
+							strings.TrimSpace(job.ID),
+							strings.TrimSpace(targetPath),
+							strings.TrimSpace(preValidation.ReplacementFrag.ID),
+						)
 						targetFragment = preValidation.ReplacementFrag
 						targetID = targetFragment.ID
 						usedExistingDuplicate = true
@@ -3064,12 +3338,14 @@ func (e *ScoutEngine) processRelationsInternal(
 			if !usedExistingDuplicate {
 				id, err := e.fragmentsRepo.Create(ctx, newFragment)
 				if err != nil {
-					fmt.Printf("Failed to create discovered fragment %s: %v\n", targetPath, err)
+					logGroundingErrorWithContext(job, "scout", "relations.create_target_fragment", "fragment_create_failed", "repo_write_error", true, err)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.create_target_fragment", "fragment_create_failed", "repo_write_error", true)
 					continue
 				}
 				targetID = id
 				targetFragment = newFragment
 				targetFragment.ID = id
+				relationsCreatedNew++
 			}
 
 			// Create Recursive Scouting Job (Decomposition)
@@ -3223,10 +3499,8 @@ func (e *ScoutEngine) processRelationsInternal(
 							currentDepth+1,
 						)
 						if vErr != nil {
-							msg := fmt.Sprintf("[SupplyChainVisited] ERROR mark tenant=%s cascade=%s target=%s err=%v",
-								strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), vErr)
-							fmt.Printf("%s\n", msg)
-							e.logLine(ctx, job, "warn", msg)
+							logGroundingErrorWithContext(job, "scout", "relations.supply_chain_visited", "visited_mark_failed", "repo_update_error", true, vErr)
+							e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.supply_chain_visited", "visited_mark_failed", "repo_update_error", true)
 						} else if already {
 							msg := fmt.Sprintf("[SupplyChainVisited] SKIP alreadyVisited tenant=%s cascade=%s target=%s depth=%d",
 								strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), currentDepth+1)
@@ -3367,10 +3641,8 @@ func (e *ScoutEngine) processRelationsInternal(
 							currentDepth+1,
 						)
 						if vErr != nil {
-							msg := fmt.Sprintf("[SupplyChainVisited] ERROR mark tenant=%s cascade=%s target=%s err=%v",
-								strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), vErr)
-							fmt.Printf("%s\n", msg)
-							e.logLine(ctx, job, "warn", msg)
+							logGroundingErrorWithContext(job, "scout", "relations.supply_chain_visited", "visited_mark_failed", "repo_update_error", true, vErr)
+							e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.supply_chain_visited", "visited_mark_failed", "repo_update_error", true)
 						} else if already {
 							msg := fmt.Sprintf("[SupplyChainVisited] SKIP alreadyVisited tenant=%s cascade=%s target=%s depth=%d",
 								strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), currentDepth+1)
@@ -3390,10 +3662,14 @@ func (e *ScoutEngine) processRelationsInternal(
 					}
 
 					if _, err := e.scoutingJobsRepo.Create(ctx, scoutingJob); err != nil {
-						fmt.Printf("Failed to create recursive job for %s: %v\n", targetPath, err)
+						logGroundingErrorWithContext(job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true, err)
+						e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true)
 						// Best-effort: undo visited marker so quality isn't blocked by transient enqueue failures.
 						if isSupplyChainMode && e != nil && e.cascadeVisitedRepo != nil {
-							_ = e.cascadeVisitedRepo.DeleteVisited(ctx, job.TenantID, cascadeID, targetPath)
+							if delErr := e.cascadeVisitedRepo.DeleteVisited(ctx, job.TenantID, cascadeID, targetPath); delErr != nil {
+								logGroundingErrorWithContext(job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true, delErr)
+								e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true)
+							}
 							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.unmark_on_create_fail", map[string]any{
 								"tenantId":  strings.TrimSpace(job.TenantID),
 								"projectId": strings.TrimSpace(job.ProjectID),
@@ -3648,9 +3924,14 @@ func (e *ScoutEngine) processRelationsInternal(
 					if _, err := e.scoutingJobsRepo.Create(ctx, scoutingJob); err == nil {
 						fmt.Printf("Triggered recursive scouting (existing fragment) for: %s\n", targetPath)
 					} else {
+						logGroundingErrorWithContext(job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true, err)
+						e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true)
 						// Best-effort: undo visited marker so quality isn't blocked by transient enqueue failures.
 						if isSupplyChainMode && e != nil && e.cascadeVisitedRepo != nil {
-							_ = e.cascadeVisitedRepo.DeleteVisited(ctx, job.TenantID, cascadeID, targetPath)
+							if delErr := e.cascadeVisitedRepo.DeleteVisited(ctx, job.TenantID, cascadeID, targetPath); delErr != nil {
+								logGroundingErrorWithContext(job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true, delErr)
+								e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true)
+							}
 							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.unmark_on_create_fail", map[string]any{
 								"tenantId":  strings.TrimSpace(job.TenantID),
 								"projectId": strings.TrimSpace(job.ProjectID),
@@ -3691,7 +3972,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		// NOTE: This is the unified edge materializer used for both base enrichment and strategic projection.
 		// The legacy inline materialization block below is kept temporarily for safe diffing/migration,
 		// but is bypassed via continue.
-		_ = e.materializeRelationEdge(
+		if matErr := e.materializeRelationEdge(
 			ctx,
 			job,
 			sourceFragment,
@@ -3706,7 +3987,10 @@ func (e *ScoutEngine) processRelationsInternal(
 			baseQualifiers,
 			enableManagement,
 			seenEdgeKeys,
-		)
+		); matErr != nil {
+			logGroundingErrorWithContext(job, "scout", "relations.materialize_edge", "edge_materialization_failed", "materialization_error", true, matErr)
+			e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.materialize_edge", "edge_materialization_failed", "materialization_error", true)
+		}
 		continue
 
 		/* LEGACY INLINE EDGE MATERIALIZER (disabled; kept for reference during migration)
@@ -3769,15 +4053,16 @@ func (e *ScoutEngine) processRelationsInternal(
 						Method:    provenanceMethod,
 					},
 				}
-				if createdID, createErr := e.fragmentsRepo.Create(ctx, newSrcFrag); createErr == nil {
-					edgeSourceID = createdID
-					explicitSourceFragment = newSrcFrag
-					fmt.Printf("[ScoutEngine] Created explicit source fragment: %s (%s)\n", explicitSourcePath, srcType)
-				} else {
-					fmt.Printf("[ScoutEngine] Failed to create explicit source fragment %s: %v\n", explicitSourcePath, createErr)
-					// Fall back to default source
-					explicitSourceFragment = sourceFragment
-					edgeSourceID = sourceFragment.ID
+					if createdID, createErr := e.fragmentsRepo.Create(ctx, newSrcFrag); createErr == nil {
+						edgeSourceID = createdID
+						explicitSourceFragment = newSrcFrag
+						fmt.Printf("[ScoutEngine] Created explicit source fragment: %s (%s)\n", explicitSourcePath, srcType)
+					} else {
+						logGroundingErrorWithContext(job, "scout", "relations.explicit_source_create", "explicit_source_create_failed", "repo_write_error", true, createErr)
+						e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.explicit_source_create", "explicit_source_create_failed", "repo_write_error", true)
+						// Fall back to default source
+						explicitSourceFragment = sourceFragment
+						edgeSourceID = sourceFragment.ID
 				}
 			}
 			}
@@ -3874,75 +4159,89 @@ func (e *ScoutEngine) processRelationsInternal(
 		srcTypeActual := resolveTypeByID(edgeSourceID)
 		dstTypeActual := resolveTypeByID(edgeTargetID)
 
-		// Special-case canonicalization: REGULATES involving /gov paths.
-		// In reality, government bodies (namespace /gov/...) are regulators; companies are regulated.
-		// LLMs frequently output inverted direction as ORG -> GOV for REGULATES; fix it best-effort.
-		govRegulatesSwapApplied := false
-		govRegulatesSwapReason := ""
-		if edgeType == models.DependencyTypeRegulates {
-			srcPathActual := resolvePathByID(edgeSourceID)
-			dstPathActual := resolvePathByID(edgeTargetID)
-			if strings.HasPrefix(srcPathActual, "/org/") && strings.HasPrefix(dstPathActual, "/gov/") {
-				edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
-				srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
-				directionChanged = true
-				govRegulatesSwapApplied = true
-				govRegulatesSwapReason = "canonicalize: REGULATES /org -> /gov swapped to /gov -> /org (gov bodies are regulators)"
-				// Re-apply symmetric normalization after any swap (noop for non-symmetric).
-				edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
-			}
-		}
-
-		// Canonicalize certain mis-modeled edges where reversing is not sufficient.
-		// Example: PRODUCT OWNS ORGANIZATION should become ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
-		// Use path-aware canonicalization to handle community subtypes (dynasty/tribe).
+		// Unified canonicalization via policy (includes REGULATES /gov swap, transition fallback, unknown type fallback).
 		srcPathActual := resolvePathByID(edgeSourceID)
 		dstPathActual := resolvePathByID(edgeTargetID)
 		canonFromEdgeType := ""
 		canonReason := ""
-		if edgeType == models.DependencyTypeInvestsIn &&
-			srcTypeActual == models.FragmentTypeOrganization &&
-			dstTypeActual == models.FragmentTypeFacility &&
-			models.HasOwnershipEvidence(rel.Reason, rel.Qualifiers, rel.Metrics) {
-			canonFromEdgeType = string(edgeType)
-			canonReason = "canonicalize: ORGANIZATION INVESTS_IN FACILITY with ownership evidence -> ORGANIZATION OWNS FACILITY"
-			edgeType = models.DependencyTypeOwns
-			directionChanged = true
-			edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
-		} else if newType, shouldSwap, changed, reason := CanonicalizeEdgeWithPaths(edgeType, srcTypeActual, dstTypeActual, srcPathActual, dstPathActual); changed {
-			canonFromEdgeType = string(edgeType)
-			canonReason = reason
-			edgeType = newType
-			directionChanged = true
-			if shouldSwap {
-				edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
-				srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
-				srcPathActual, dstPathActual = dstPathActual, srcPathActual
-			}
-			// Re-apply symmetric normalization after any swap/type-change (noop for non-symmetric).
-			edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
-		}
-
 		relConfidence := rel.Confidence
 		policyStatus := models.PolicyStatusClean
 		policyReason := ""
 		policyPenalty := 0.0
 		policyEdgeModality := ""
-		if canonFromEdgeType != "" {
-			if penalty := models.CanonicalizationPenalty(models.DependencyType(canonFromEdgeType), edgeType, srcTypeActual, dstTypeActual); penalty > 0 {
-				relConfidence = relConfidence * (1.0 - penalty)
-				policyPenalty = penalty
-				policyStatus = models.PolicyStatusPenalized
-				if policyReason == "" {
-					policyReason = strings.TrimSpace(canonReason)
-				}
+		canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
+			EdgeType:          edgeType,
+			SourceType:        srcTypeActual,
+			TargetType:        dstTypeActual,
+			SourcePath:        srcPathActual,
+			TargetPath:        dstPathActual,
+			RawRelationType:   rawRelationType,
+			OwnershipEvidence: models.HasOwnershipEvidence(rel.Reason, rel.Qualifiers, rel.Metrics),
+		})
+		if canon.Changed {
+			if canon.OriginalType != "" {
+				canonFromEdgeType = string(canon.OriginalType)
+			} else {
+				canonFromEdgeType = string(edgeType)
+			}
+			canonReason = canon.Reason
+			edgeType = canon.EdgeType
+			directionChanged = true
+			if canon.ShouldSwap {
+				edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+				srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
+				srcPathActual, dstPathActual = dstPathActual, srcPathActual
+			}
+			edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
+		}
+		if canon.PolicyPenalty > 0 {
+			relConfidence = relConfidence * canon.ConfidenceMult
+			if relConfidence < 0 {
+				relConfidence = 0
+			}
+			if canon.PolicyPenalty > policyPenalty {
+				policyPenalty = canon.PolicyPenalty
+			}
+			policyStatus = policy.MergePolicyStatus(policyStatus, canon.PolicyStatus)
+			if strings.TrimSpace(canon.PolicyReason) != "" {
+				policyReason = strings.TrimSpace(canon.PolicyReason)
+			}
+			if canon.PolicyReason == "transition_unclassified" {
+				policy.LogPolicyEvent("edge_canonicalization_policy", policy.PolicyLogStageFallback, map[string]interface{}{
+					"trace_id":      "na",
+					"tenant_id":     job.TenantID,
+					"job_id":        job.ID,
+					"edge_id":       "",
+					"source_type":   srcTypeActual,
+					"target_type":   dstTypeActual,
+					"relation_type": edgeType,
+					"action":        policy.ActionAllowWithPenalty,
+					"policy_status": policyStatus,
+					"policy_reason": policyReason,
+					"policy_penalty": policyPenalty,
+					"decision_path": "runtime_scout_relations",
+					"confidence":    canon.ConfidenceMult,
+				})
 			}
 		}
 		// Policy: direction validation and reversal (enforced for known edge types).
 		// Use unified ValidationPolicy if available, otherwise fallback to hardcoded rules
 		if e.validationPolicy != nil && sourceFragment != nil {
 			logPrefix := "[ScoutEngine:processRelations]"
-			fmt.Printf("%s Using ValidationPolicy for edge validation\n", logPrefix)
+			policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageInput, map[string]interface{}{
+				"trace_id":      "na",
+				"tenant_id":     job.TenantID,
+				"job_id":        job.ID,
+				"source_type":   srcTypeActual,
+				"target_type":   dstTypeActual,
+				"relation_type": edgeType,
+				"action":        "validate_edge",
+				"policy_status": "na",
+				"policy_reason": "",
+				"policy_penalty": 0,
+				"decision_path": "runtime",
+				"confidence":    0,
+			})
 
 			decision, err := e.validationPolicy.Execute(ctx, policy.PolicyInput{
 				Kind: "edge",
@@ -3961,11 +4260,29 @@ func (e *ScoutEngine) processRelationsInternal(
 				Fragment: nil,
 			})
 
-			if err != nil {
-				fmt.Printf("%s ERROR: ValidationPolicy failed: %v, falling back to hardcoded rules\n", logPrefix, err)
-			} else {
-				fmt.Printf("%s ValidationPolicy decision: action=%s, path=%s, confidence=%.2f\n",
-					logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
+				if err != nil {
+					logGroundingErrorWithContext(job, "scout", "relations.validation_policy", "validation_policy_failed", "policy_execution_error", true, err)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.validation_policy", "validation_policy_failed", "policy_execution_error", true)
+				} else {
+				decisionReason := ""
+				if reason, _ := decision.Params["reason"].(string); strings.TrimSpace(reason) != "" {
+					decisionReason = strings.TrimSpace(reason)
+				}
+				policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageDecision, map[string]interface{}{
+					"trace_id":      "na",
+					"tenant_id":     job.TenantID,
+					"job_id":        job.ID,
+					"edge_id":       "",
+					"source_type":   srcTypeActual,
+					"target_type":   dstTypeActual,
+					"relation_type": edgeType,
+					"action":        decision.Action,
+					"policy_status": policyStatus,
+					"policy_reason": decisionReason,
+					"policy_penalty": policyPenalty,
+					"decision_path": decision.DecisionPath,
+					"confidence":    decision.Confidence,
+				})
 				if modality, _ := decision.Params["edgeModality"].(string); strings.TrimSpace(modality) != "" {
 					policyEdgeModality = strings.TrimSpace(modality)
 				}
@@ -3993,18 +4310,18 @@ func (e *ScoutEngine) processRelationsInternal(
 						}
 					},
 					SetPolicyStatus: func(status, reason string, penalty float64) {
-						if status == models.PolicyStatusClean && policyStatus != models.PolicyStatusClean {
-							return
+						policyStatus = policy.MergePolicyStatus(policyStatus, status)
+						if strings.TrimSpace(reason) != "" {
+							policyReason = strings.TrimSpace(reason)
 						}
-						policyStatus = status
-						policyReason = strings.TrimSpace(reason)
-						policyPenalty = penalty
+						if penalty > policyPenalty {
+							policyPenalty = penalty
+						}
 					},
 				})
 			}
 		} else if sourceFragment != nil {
-			// Fallback to hardcoded validation
-			// Use actual endpoint types (post-normalization).
+			// Policy-level direction validation (replaces direct edgesemantics call).
 			st := srcTypeActual
 			tt := dstTypeActual
 			if st == "" {
@@ -4013,17 +4330,19 @@ func (e *ScoutEngine) processRelationsInternal(
 			if tt == "" {
 				tt = targetType
 			}
-			if valid, shouldReverse, rule := ValidateEdgeDirection(edgeType, st, tt); !valid {
+			valid, shouldReverse, dirStatus, dirReason, dirPenalty := policy.ApplyEdgeDirectionValidation(edgeType, st, tt)
+			if !valid {
 				if shouldReverse {
 					edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
 					directionChanged = true
-					// If we reversed, re-apply symmetric normalization (noop for non-symmetric types).
 					edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
-				} else if rule != nil {
-					policyStatus = models.PolicyStatusQuarantined
-					policyReason = fmt.Sprintf("quarantine: %s", rule.Description)
-					policyPenalty = 0.2
-					relConfidence = relConfidence * (1.0 - policyPenalty)
+				} else {
+					policyStatus = policy.MergePolicyStatus(policyStatus, dirStatus)
+					policyReason = dirReason
+					if dirPenalty > policyPenalty {
+						policyPenalty = dirPenalty
+					}
+					relConfidence = relConfidence * (1.0 - dirPenalty)
 				}
 			}
 		}
@@ -4089,6 +4408,7 @@ func (e *ScoutEngine) processRelationsInternal(
 				"targetName":             strings.TrimSpace(rel.TargetName),
 				"targetCanonicalPath":    strings.TrimSpace(resolvedTargetPath),
 				"sourceCanonicalPath":    strings.TrimSpace(resolvedSourcePath),
+				"groundingMatchReason":   strings.TrimSpace(groundingMatchReason),
 			},
 			Provenance: models.Provenance{
 				Method:    provenanceMethod,
@@ -4099,6 +4419,7 @@ func (e *ScoutEngine) processRelationsInternal(
 				LastUpdatedAt: time.Now(),
 			},
 		}
+		applyGroundingProvenance(&edge.Provenance, runtimeGroundingEvidence, nil, nil, nil)
 		if canonFromEdgeType != "" {
 			edge.Qualifiers["canonicalized"] = true
 			edge.Qualifiers["canonicalizedFromEdgeType"] = canonFromEdgeType
@@ -4143,9 +4464,9 @@ func (e *ScoutEngine) processRelationsInternal(
 			edge.Qualifiers["normalizedSourceFragmentId"] = edge.SourceFragmentID
 			edge.Qualifiers["normalizedTargetFragmentId"] = edge.TargetFragmentID
 		}
-		if govRegulatesSwapApplied {
+		if canon.GovRegulatesSwap {
 			edge.Qualifiers["canonicalizedGovRegulatesSwap"] = true
-			edge.Qualifiers["govRegulatesSwapReason"] = govRegulatesSwapReason
+			edge.Qualifiers["govRegulatesSwapReason"] = canon.GovRegulatesSwapReason
 		}
 		edge.SetPolicyStatus(policyStatus, policyReason, policyPenalty)
 		if canonFromEdgeType != "" {
@@ -4200,6 +4521,57 @@ func (e *ScoutEngine) processRelationsInternal(
 			})
 		}
 		*/
+	}
+	if job != nil {
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		prevResolved := 0
+		prevCreated := 0
+		prevRedirects := 0
+		if raw, ok := job.State[stateKeyResolutionStats]; ok {
+			if m, ok := raw.(map[string]interface{}); ok && m != nil {
+				prevResolved = parseStateInt(m["relationsResolvedByGrounding"], 0)
+				prevCreated = parseStateInt(m["relationsCreatedNew"], 0)
+				prevRedirects = parseStateInt(m["dedupRedirectsByGrounding"], 0)
+			}
+		}
+		job.State[stateKeyGroundingContractVer] = groundingContractVersionV1
+		job.State[stateKeyResolutionStats] = map[string]interface{}{
+			"relationsResolvedByGrounding": prevResolved + relationsResolvedByGrounding,
+			"relationsCreatedNew":          prevCreated + relationsCreatedNew,
+			"dedupRedirectsByGrounding":    prevRedirects + dedupRedirectsByGrounding,
+		}
+		if groundingCtx != nil {
+			originMode := groundingOriginModeFromEvidence(groundingCtx.HasDatastoreResults, groundingCtx.HasWebResults)
+			if originMode != "" {
+				job.State[stateKeyOriginMode] = originMode
+			}
+		}
+		if strings.TrimSpace(job.TenantID) != "" || e != nil {
+			for reason, n := range groundingReasonCounts {
+				if strings.TrimSpace(reason) == "" || n <= 0 {
+					continue
+				}
+				e.emitGroundingCounter(ctx, strings.TrimSpace(job.TenantID), "horizon_grounding_relations_resolved_total", map[string]string{
+					"reason": strings.TrimSpace(reason),
+				}, map[string]int64{"count": n})
+			}
+			if relationsCreatedNew > 0 {
+				origin := parseStateString(job.State[stateKeyOriginMode])
+				if strings.TrimSpace(origin) == "" {
+					origin = "unknown"
+				}
+				e.emitGroundingCounter(ctx, strings.TrimSpace(job.TenantID), "horizon_grounding_new_fragments_total", map[string]string{
+					"origin": strings.TrimSpace(origin),
+				}, map[string]int64{"count": int64(relationsCreatedNew)})
+			}
+			if dedupFalsePositiveSuspected > 0 {
+				e.emitGroundingCounter(ctx, strings.TrimSpace(job.TenantID), "horizon_dedup_false_positive_suspected_total", nil, map[string]int64{
+					"count": int64(dedupFalsePositiveSuspected),
+				})
+			}
+		}
 	}
 	return nil
 }
@@ -4284,7 +4656,7 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 				}
 			}
 		}
-		enrichedFrag, newRelations, _, err := e.researchAgent.EnrichFragment(
+		enrichedFrag, newRelations, _, evidence, err := e.researchAgent.EnrichFragmentWithGrounding(
 			researchCtx,
 			frag,
 			missing,
@@ -4299,6 +4671,18 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 		)
 		if err != nil {
 			continue
+		}
+		if internalFirstGroundingEnabled() && evidence != nil {
+			applyGroundingEvidenceToJobState(job, evidence, nil, nil)
+			logGroundingInfof("strategic research grounding: jobId=%s fragmentId=%s target=%s datastore=%v(%d) web=%v(%d)",
+				strings.TrimSpace(job.ID),
+				strings.TrimSpace(frag.ID),
+				strings.TrimSpace(frag.CanonicalPath),
+				evidence.HasDatastoreResults,
+				len(evidence.DatastoreFragmentIDs),
+				evidence.HasWebResults,
+				len(evidence.WebSources),
+			)
 		}
 
 		// Sanitize edges from Research Agent (same rules as Overlay Agent).
@@ -4832,6 +5216,20 @@ func (e *ScoutEngine) processSupplyChains(
 		policyReason := ""
 		policyPenalty := 0.0
 		if e.validationPolicy != nil {
+			policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageInput, map[string]interface{}{
+				"trace_id":       "na",
+				"tenant_id":      job.TenantID,
+				"job_id":         job.ID,
+				"source_type":    srcTypeActual,
+				"target_type":    dstTypeActual,
+				"relation_type":  edgeType,
+				"action":         "validate_edge_supply_chain",
+				"policy_status":  "na",
+				"policy_reason":  "",
+				"policy_penalty": 0,
+				"decision_path":  "runtime_supply_chain",
+				"confidence":     0,
+			})
 			decision, derr := e.validationPolicy.Execute(ctx, policy.PolicyInput{
 				Kind: "edge",
 				Context: map[string]interface{}{
@@ -4848,6 +5246,24 @@ func (e *ScoutEngine) processSupplyChains(
 			})
 			if derr == nil {
 				logPrefix := "[SupplyChainPolicy]"
+				reason := ""
+				if rv, _ := decision.Params["reason"].(string); strings.TrimSpace(rv) != "" {
+					reason = strings.TrimSpace(rv)
+				}
+				policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageDecision, map[string]interface{}{
+					"trace_id":       "na",
+					"tenant_id":      job.TenantID,
+					"job_id":         job.ID,
+					"source_type":    srcTypeActual,
+					"target_type":    dstTypeActual,
+					"relation_type":  edgeType,
+					"action":         decision.Action,
+					"policy_status":  policyStatus,
+					"policy_reason":  reason,
+					"policy_penalty": policyPenalty,
+					"decision_path":  decision.DecisionPath,
+					"confidence":     decision.Confidence,
+				})
 				policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
 					Reverse: func() {
 						sourceID, targetID = targetID, sourceID
@@ -4877,16 +5293,32 @@ func (e *ScoutEngine) processSupplyChains(
 						e.logLine(ctx, job, "warn", fmt.Sprintf("%s %s", logPrefix, msg))
 					},
 					SetPolicyStatus: func(status, reason string, penalty float64) {
-						if status == models.PolicyStatusClean && policyStatus != models.PolicyStatusClean {
-							return
+						policyStatus = policy.MergePolicyStatus(policyStatus, status)
+						if strings.TrimSpace(reason) != "" {
+							policyReason = strings.TrimSpace(reason)
 						}
-						policyStatus = status
-						policyReason = strings.TrimSpace(reason)
-						policyPenalty = penalty
+						if penalty > policyPenalty {
+							policyPenalty = penalty
+						}
 					},
 				})
 			} else {
 				msg := fmt.Sprintf("[SupplyChainPolicy] ERROR validationPolicy err=%v", derr)
+				policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageError, map[string]interface{}{
+					"trace_id":       "na",
+					"tenant_id":      job.TenantID,
+					"job_id":         job.ID,
+					"source_type":    srcTypeActual,
+					"target_type":    dstTypeActual,
+					"relation_type":  edgeType,
+					"action":         "validate_edge_supply_chain",
+					"policy_status":  "na",
+					"policy_reason":  derr.Error(),
+					"policy_penalty": 0,
+					"decision_path":  "runtime_supply_chain",
+					"error_class":    "policy_execution_error",
+					"confidence":     0,
+				})
 				e.logLine(ctx, job, "warn", msg)
 			}
 		}
@@ -4979,7 +5411,8 @@ func (e *ScoutEngine) processSupplyChains(
 		// Update job state in repository
 		if e.scoutingJobsRepo != nil {
 			if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
-				fmt.Printf("[ScoutEngine] Failed to update job chain context: %v\n", err)
+				logGroundingErrorWithContext(job, "scout", "supply_chain.persist_chain_context", "job_state_update_failed", "repo_update_error", true, err)
+				e.emitGroundingErrorTelemetry(ctx, job, "scout", "supply_chain.persist_chain_context", "job_state_update_failed", "repo_update_error", true)
 			}
 		}
 	}
@@ -5583,7 +6016,8 @@ func (e *ScoutEngine) triggerPhase2StrategicOverlay(
 	// Create job (Cloud Tasks dispatcher will pick it up)
 	jobID, err := e.scoutingJobsRepo.Create(ctx, phase2Job)
 	if err != nil {
-		fmt.Printf("[ScoutEngine] Strategic projection job creation failed for %s: %v\n", domainCP, err)
+		logGroundingErrorWithContext(phase1Job, "scout", "strategic_projection.enqueue", "strategic_projection_job_create_failed", "repo_write_error", true, err)
+		e.emitGroundingErrorTelemetry(ctx, phase1Job, "scout", "strategic_projection.enqueue", "strategic_projection_job_create_failed", "repo_write_error", true)
 		return
 	}
 

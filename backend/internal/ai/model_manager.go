@@ -474,6 +474,76 @@ func (mm *AIModelManager) initializeModels() {
 		ToolUseProtocol:               ToolUseProtocolGemini,
 	}
 
+	// ------------------- Vertex AI mirrors for internal datastore grounding -------------------
+	// These entries deliberately mirror grounding-capable Gemini models, but with Provider=VertexAI
+	// and InternalDataGroundingCapability=true. Routing remains capability-first then price-based.
+	mm.models["vertex-gemini-2.5-pro"] = AIModelCapabilities{
+		Name:                            "vertex-gemini-2.5-pro",
+		ContextWindow:                   2000000,
+		OutputTokens:                    2000000,
+		PricePerInputToken:              0.00000250,
+		PricePerOutputToken:             0.00001500,
+		Provider:                        AIProviderVertexAI,
+		MaxTokensPerMinute:              4000000,
+		MaxTokensPerDay:                 10000000,
+		NearlyRealTime:                  false,
+		CapabilityScore:                 8,
+		ImageGenerationCapability:       false,
+		EmbeddingGenerationCapability:   false,
+		TextGenerationCapability:        true,
+		ImageAnalysisCapability:         true,
+		BuiltInSearchCapability:         false,
+		SearchGroundingCapability:       true,
+		InternalDataGroundingCapability: true,
+		SupportsToolCalling:             true,
+		SupportsMcp:                     true,
+		ToolUseProtocol:                 ToolUseProtocolGemini,
+	}
+	mm.models["vertex-gemini-3-pro-preview"] = AIModelCapabilities{
+		Name:                            "vertex-gemini-3-pro-preview",
+		ContextWindow:                   1048576,
+		OutputTokens:                    65536,
+		PricePerInputToken:              0.00000200,
+		PricePerOutputToken:             0.00001200,
+		Provider:                        AIProviderVertexAI,
+		MaxTokensPerMinute:              4000000,
+		MaxTokensPerDay:                 10000000,
+		NearlyRealTime:                  false,
+		CapabilityScore:                 9,
+		ImageGenerationCapability:       false,
+		EmbeddingGenerationCapability:   false,
+		TextGenerationCapability:        true,
+		ImageAnalysisCapability:         true,
+		BuiltInSearchCapability:         false,
+		SearchGroundingCapability:       true,
+		InternalDataGroundingCapability: true,
+		SupportsToolCalling:             true,
+		SupportsMcp:                     true,
+		ToolUseProtocol:                 ToolUseProtocolGemini,
+	}
+	mm.models["vertex-gemini-3-flash-preview"] = AIModelCapabilities{
+		Name:                            "vertex-gemini-3-flash-preview",
+		ContextWindow:                   1048576,
+		OutputTokens:                    65536,
+		PricePerInputToken:              0.00000050,
+		PricePerOutputToken:             0.00000300,
+		Provider:                        AIProviderVertexAI,
+		MaxTokensPerMinute:              6000000,
+		MaxTokensPerDay:                 12000000,
+		NearlyRealTime:                  true,
+		CapabilityScore:                 8,
+		ImageGenerationCapability:       false,
+		EmbeddingGenerationCapability:   false,
+		TextGenerationCapability:        true,
+		ImageAnalysisCapability:         true,
+		BuiltInSearchCapability:         false,
+		SearchGroundingCapability:       true,
+		InternalDataGroundingCapability: true,
+		SupportsToolCalling:             true,
+		SupportsMcp:                     true,
+		ToolUseProtocol:                 ToolUseProtocolGemini,
+	}
+
 	// ------------------------- DeepSeek (без нативного Search) -------------------------
 	mm.models["deepseek-chat"] = AIModelCapabilities{
 		Name:                          "deepseek-chat",
@@ -609,8 +679,8 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 	// Нормализация взаимоисключающих флагов
 	mm.normalizeCapabilities(&requirements)
 
-	log.Printf("AIModelManager SelectModel called with requirements: MinContextWindow=%d, InputTokens=%d, PreferNearlyRealTime=%v, MinCapabilityScore=%d, PreferredModel=%s",
-		requirements.MinContextWindow, inputTokens, preferNearlyRealTime, requirements.MinCapabilityScore, requirements.PreferredModel)
+	log.Printf("AIModelManager SelectModel called with requirements: MinContextWindow=%d, InputTokens=%d, PreferNearlyRealTime=%v, MinCapabilityScore=%d, PreferredModel=%s, SearchGrounding=%v, InternalDataGrounding=%v",
+		requirements.MinContextWindow, inputTokens, preferNearlyRealTime, requirements.MinCapabilityScore, requirements.PreferredModel, requirements.SearchGroundingCapability, requirements.InternalDataGroundingCapability)
 
 	if excludeModels == nil {
 		excludeModels = []string{}
@@ -619,11 +689,15 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 	// Fast path: if PreferredModel is set, not excluded, and meets basic requirements — use it directly.
 	if pm := strings.TrimSpace(requirements.PreferredModel); pm != "" && !contains(excludeModels, pm) {
 		if m, ok := mm.models[pm]; ok {
-			if m.ContextWindow >= inputTokens && m.TextGenerationCapability {
+			if m.ContextWindow >= inputTokens &&
+				m.TextGenerationCapability &&
+				(!requirements.BuiltInSearchCapability || m.BuiltInSearchCapability) &&
+				(!requirements.SearchGroundingCapability || m.SearchGroundingCapability) &&
+				(!requirements.InternalDataGroundingCapability || m.InternalDataGroundingCapability) {
 				log.Printf("AIModelManager: using PreferredModel %s", pm)
 				return pm
 			}
-			log.Printf("AIModelManager: PreferredModel %s does not meet requirements (contextWindow=%d < inputTokens=%d), falling back", pm, m.ContextWindow, inputTokens)
+			log.Printf("AIModelManager: PreferredModel %s does not meet capability requirements, falling back", pm)
 		} else {
 			log.Printf("AIModelManager: PreferredModel %s not found in model registry, falling back", pm)
 		}
@@ -636,6 +710,8 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 	searchRequired := requirements.BuiltInSearchCapability
 	// Требование на Search Grounding (Vertex/Gemini)
 	groundingRequired := requirements.SearchGroundingCapability
+	// Требование на grounding по internal datastore (Vertex AI Search).
+	internalGroundingRequired := requirements.InternalDataGroundingCapability
 
 	// Фильтруем модели по всем критериям
 	type modelCandidate struct {
@@ -677,6 +753,10 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 		}
 		// Если требуется Grounding, отбираем только модели с поддержкой Grounding
 		if groundingRequired && !m.SearchGroundingCapability {
+			continue
+		}
+		// Если требуется grounding по internal datastore, оставляем только внутренне-grounded модели.
+		if internalGroundingRequired && !m.InternalDataGroundingCapability {
 			continue
 		}
 
@@ -726,6 +806,9 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 		if groundingRequired && !m.SearchGroundingCapability {
 			continue
 		}
+		if internalGroundingRequired && !m.InternalDataGroundingCapability {
+			continue
+		}
 
 		if m.ContextWindow > maxContextWindow {
 			maxContextWindow = m.ContextWindow
@@ -763,6 +846,8 @@ func (mm *AIModelManager) SelectToolCallingModel(requirements AIRequirements, in
 	}
 	requiredContextWindow := max(requirements.MinContextWindow, inputTokens)
 	searchRequired := requirements.BuiltInSearchCapability
+	groundingRequired := requirements.SearchGroundingCapability
+	internalGroundingRequired := requirements.InternalDataGroundingCapability
 
 	type modelCandidate struct {
 		name  string
@@ -797,6 +882,12 @@ func (mm *AIModelManager) SelectToolCallingModel(requirements AIRequirements, in
 			continue
 		}
 		if searchRequired && !m.BuiltInSearchCapability {
+			continue
+		}
+		if groundingRequired && !m.SearchGroundingCapability {
+			continue
+		}
+		if internalGroundingRequired && !m.InternalDataGroundingCapability {
 			continue
 		}
 		if !m.SupportsToolCalling {
@@ -843,6 +934,12 @@ func (mm *AIModelManager) SelectToolCallingModel(requirements AIRequirements, in
 			continue
 		}
 		if searchRequired && !m.BuiltInSearchCapability {
+			continue
+		}
+		if groundingRequired && !m.SearchGroundingCapability {
+			continue
+		}
+		if internalGroundingRequired && !m.InternalDataGroundingCapability {
 			continue
 		}
 		if !m.SupportsToolCalling {
@@ -978,7 +1075,7 @@ func (mm *AIModelManager) GetModelCapabilities(modelName string) (AIModelCapabil
 // normalizeCapabilities приводит флаги требуемых возможностей в консистентное состояние
 func (mm *AIModelManager) normalizeCapabilities(requirements *AIRequirements) {
 	// Поиск может сочетаться с генерацией текста
-	if requirements.BuiltInSearchCapability {
+	if requirements.BuiltInSearchCapability || requirements.SearchGroundingCapability || requirements.InternalDataGroundingCapability {
 		if !requirements.ImageAnalysisCapability &&
 			!requirements.TextGenerationCapability &&
 			!requirements.ImageGenerationCapability &&

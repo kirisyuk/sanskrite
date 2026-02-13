@@ -11,6 +11,7 @@ import (
 
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
@@ -101,6 +102,11 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		log.Printf("%s ERROR: fragment is nil", logPrefix)
 		return &ValidationResult{IsValid: false, BlockReason: "nil fragment"}, nil
 	}
+	fragment.Labels, fragment.Identifiers = naming.NormalizeFragmentNames(
+		fragment.CanonicalPath,
+		fragment.Labels,
+		fragment.Identifiers,
+	)
 
 	log.Printf("%s Validating fragment: id=%s, type=%s, canonicalPath=%s",
 		logPrefix, fragment.ID, fragment.Type, fragment.CanonicalPath)
@@ -172,27 +178,22 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Policy 2: Enforce canonical path prefixes by type
 	// ==========================================================================
 	// Each fragment type should use its designated path prefix.
-	prefix := v.expectedPathPrefix(fragment.Type)
-	if prefix != "" && !strings.HasPrefix(fragment.CanonicalPath, prefix) {
-		// Special-case: government bodies are modeled as ORGANIZATION fragments but use /gov/... namespace.
-		if fragment.Type == models.FragmentTypeOrganization && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/") {
-			// ok
-		} else {
-			// Best-effort auto-correction for obvious namespace/type mismatch.
-			if fixed, changed := coerceCanonicalPathForType(fragment.CanonicalPath, fragment.Type, firstNonEmpty(
-				strings.TrimSpace(fragment.Identifiers["legalName"]),
-				strings.TrimSpace(fragment.Labels["en"]),
-				strings.TrimSpace(fragment.Identifiers["shortName"]),
-			)); changed && strings.TrimSpace(fixed) != "" {
-				result.Warnings = append(result.Warnings,
-					fmt.Sprintf("canonical path %q auto-corrected to %q for type %s",
-						fragment.CanonicalPath, fixed, fragment.Type))
-				fragment.CanonicalPath = fixed
-			}
+	prefix := policy.ExpectedCanonicalPathPrefix(fragment.Type)
+	if !policy.IsCanonicalPathAllowedForType(fragment.Type, fragment.CanonicalPath) {
+		// Best-effort auto-correction for obvious namespace/type mismatch.
+		if fixed, changed := coerceCanonicalPathForType(fragment.CanonicalPath, fragment.Type, firstNonEmpty(
+			strings.TrimSpace(fragment.Identifiers["legalName"]),
+			strings.TrimSpace(fragment.Labels["en"]),
+			strings.TrimSpace(fragment.Identifiers["shortName"]),
+		)); changed && strings.TrimSpace(fixed) != "" {
 			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s",
-					fragment.CanonicalPath, prefix, fragment.Type))
+				fmt.Sprintf("canonical path %q auto-corrected to %q for type %s",
+					fragment.CanonicalPath, fixed, fragment.Type))
+			fragment.CanonicalPath = fixed
 		}
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s",
+				fragment.CanonicalPath, prefix, fragment.Type))
 	}
 
 	// Organization canonical paths: prefer /org/{iso2|na}/{slug}. Keep legacy /org/{slug} but warn.
@@ -438,8 +439,8 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	if fragment.Type == models.FragmentTypeMarket && v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil {
 		fragment.Tags = taxonomy.NormalizeMarketTags(fragment.Tags)
 		if len(fragment.Tags) >= 5 {
-			geo, sector := parseMarketGeoSectorForDedup(fragment.CanonicalPath)
-			if geo != "" && sector != "" {
+			geo, sector, vertical := parseMarketGeoSectorForDedup(fragment.CanonicalPath)
+			if geo != "" && sector != "" && vertical != "" {
 				searchTokens := taxonomy.MarketTagSearchTokens(fragment.Tags, 10)
 				if len(searchTokens) > 0 {
 					candidates, err := v.geoBuilder.fragmentsRepo.FindByTags(ctx, searchTokens, 50)
@@ -457,11 +458,13 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 							if cand.Type != models.FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(cand.CanonicalPath), "/market/") {
 								continue
 							}
-							cGeo, cSector := parseMarketGeoSectorForDedup(cand.CanonicalPath)
-							if cGeo == "" || cSector == "" {
+							cGeo, cSector, cVertical := parseMarketGeoSectorForDedup(cand.CanonicalPath)
+							if cGeo == "" || cSector == "" || cVertical == "" {
 								continue
 							}
-							if cGeo != geo || cSector != sector {
+							// Strict scope match: same geo + domain + vertical.
+							// This prevents false merges between neighboring sub-markets in one domain.
+							if cGeo != geo || cSector != sector || cVertical != vertical {
 								continue
 							}
 							candTags := taxonomy.NormalizeMarketTags(cand.Tags)
@@ -550,51 +553,8 @@ func (v *PreCreateValidator) recordPolicyDecisionTelemetry(
 	)
 }
 
-// expectedPathPrefix returns the expected canonical path prefix for a fragment type.
-func (v *PreCreateValidator) expectedPathPrefix(fragType models.FragmentType) string {
-	switch fragType {
-	case models.FragmentTypeOrganization:
-		return "/org/"
-	case models.FragmentTypeFacility:
-		return "/fac/"
-	case models.FragmentTypeGeoRegion:
-		return "/loc/"
-	case models.FragmentTypeProduct:
-		return "/product/"
-	case models.FragmentTypePerson:
-		return "/person/"
-	case models.FragmentTypeMediaChannel:
-		return "/media/"
-	case models.FragmentTypeMarket:
-		return "/market/"
-	case models.FragmentTypeDecisionPoint:
-		return "/decision/"
-	case models.FragmentTypeMechanism:
-		return "/mechanism/"
-	default:
-		return ""
-	}
-}
-
-func parseMarketGeoSectorForDedup(canonicalPath string) (string, string) {
-	cp := strings.TrimSpace(canonicalPath)
-	if !strings.HasPrefix(cp, "/market/") {
-		return "", ""
-	}
-	if parts, err := taxonomy.ParseCanonicalPathParts(cp); err == nil && parts != nil && parts.Market != nil {
-		geo := strings.ToLower(strings.TrimSpace(parts.Market.Geo))
-		sector := taxonomy.NormalizeMarketDomain(parts.Market.Domain)
-		if geo != "" && sector != "" {
-			return geo, sector
-		}
-	}
-	trimmed := strings.Trim(cp, "/")
-	parts := strings.Split(trimmed, "/")
-	// /market/{geo}/{domain}/{vertical}
-	if len(parts) >= 4 && parts[0] == "market" {
-		return strings.ToLower(strings.TrimSpace(parts[1])), taxonomy.NormalizeMarketDomain(parts[2])
-	}
-	return "", ""
+func parseMarketGeoSectorForDedup(canonicalPath string) (string, string, string) {
+	return parseMarketDedupScope(canonicalPath)
 }
 
 // repairInvalidCanonicalPath tries to deterministically map an invalid canonical path

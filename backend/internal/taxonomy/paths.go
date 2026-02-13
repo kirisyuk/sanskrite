@@ -33,28 +33,28 @@ var regionalGeoTokens = map[string]struct{}{
 	"nafta":   {},
 
 	// Common regional blocs / treaties.
-	"brics":          {},
-	"g7":             {},
-	"g20":            {},
-	"opec":           {},
-	"oecd":           {},
-	"apec":           {},
-	"mercosur":       {},
-	"caricom":        {},
-	"au":             {}, // African Union (kept as token; avoid ISO2 conflict via context)
-	"african-union":  {},
-	"arab-league":    {},
-	"eaeu":           {},
-	"csto":           {},
-	"sco":            {},
-	"rcep":           {},
-	"cptpp":          {},
-	"bimstec":        {},
-	"eac":            {},
-	"comesa":         {},
-	"igad":           {},
-	"sadc":           {},
-	"ecowas":         {},
+	"brics":           {},
+	"g7":              {},
+	"g20":             {},
+	"opec":            {},
+	"oecd":            {},
+	"apec":            {},
+	"mercosur":        {},
+	"caricom":         {},
+	"au":              {}, // African Union (kept as token; avoid ISO2 conflict via context)
+	"african-union":   {},
+	"arab-league":     {},
+	"eaeu":            {},
+	"csto":            {},
+	"sco":             {},
+	"rcep":            {},
+	"cptpp":           {},
+	"bimstec":         {},
+	"eac":             {},
+	"comesa":          {},
+	"igad":            {},
+	"sadc":            {},
+	"ecowas":          {},
 	"pacific-islands": {},
 }
 
@@ -310,12 +310,13 @@ var domainContractTypes = map[string]struct{}{
 	"conflict-dynamics":   {},
 
 	// Markets / opportunity / competitive
-	"market-opportunity":    {},
-	"competitive-landscape": {},
-	"market-entry":          {},
-	"market-sizing":         {},
-	"demand-forecast":       {},
-	"pricing-dynamics":      {},
+	"market-opportunity":       {},
+	"competitive-landscape":    {},
+	"geographic-concentration": {},
+	"market-entry":             {},
+	"market-sizing":            {},
+	"demand-forecast":          {},
+	"pricing-dynamics":         {},
 
 	// Investment / finance
 	"investment-thesis":  {},
@@ -365,19 +366,29 @@ var domainContractTypes = map[string]struct{}{
 }
 
 var domainFacetKeys = map[string]struct{}{
-	"geo":        {},
-	"topic":      {},
-	"subject":    {},
-	"project":    {},
-	"asset":      {},
-	"material":   {},
+	"geo":         {},
+	"topic":       {},
+	"subject":     {},
+	"project":     {},
+	"asset":       {},
+	"material":    {},
 	"application": {},
-	"sector":     {},
-	"industry":   {},
-	"market":     {},
-	"regulation": {},
-	"framework":  {},
-	"time":       {},
+	"sector":      {},
+	"industry":    {},
+	"market":      {},
+	"regulation":  {},
+	"framework":   {},
+	"time":        {},
+}
+
+// DomainContractTypes returns all supported /domain/v1 contract types in stable order.
+func DomainContractTypes() []string {
+	out := make([]string, 0, len(domainContractTypes))
+	for ct := range domainContractTypes {
+		out = append(out, ct)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func validateDomainCanonicalPathParts(parts []string, originalPath string) error {
@@ -1168,11 +1179,11 @@ func normalizeHonorific(honorific string) (canonical string, original string) {
 		"he": "he", "his excellency": "he", "her excellency": "he",
 
 		// Religious titles
-		"pope": "pope",
+		"pope":      "pope",
 		"ayatollah": "ayatollah", "grand ayatollah": "grand-ayatollah",
-		"imam": "imam",
-		"rabbi": "rabbi",
-		"cardinal": "cardinal",
+		"imam":       "imam",
+		"rabbi":      "rabbi",
+		"cardinal":   "cardinal",
 		"archbishop": "archbishop",
 
 		// Gulf/Arab honorifics

@@ -16,10 +16,30 @@
 | edgeModality, ValidFrom/ValidTo | ✅ | qualifiers, `normalizeTemporalModality`, policy_checker |
 | QueryAddress | ✅ | `query_address.go`, `query_resolver.go`, `query_refresh_job.go` |
 | Policy infrastructure | ✅ | Policy interface, PolicyExecutor, Firestore collections |
-| MaterializedArtifact, SupplyLink | ✅ | см. секцию D) |
+| MaterializedArtifact, SupplyLink | ✅ | core-model/runtime готовы; API endpoints для SupplyLink/paths — в TODO (см. секцию F) |
+| Ручной scouting клиентов организации | ✅ | через `POST /api/horizon/fragments/{id}/refresh` + `specialties=["supply_chain"]` |
+| Appetite governance (override + audit trail) | ◑ | runtime appetite есть; analyst override endpoint и audit trail — в TODO |
+| Interpretation queue hardening (DLQ/retry/SLO) | ❌ | базовая очередь есть, hardening ещё не завершён |
 | Lens-specific highProfile | ❌ | отложено до полноценного дизайна |
 | Метрики в оверлей | ❌ | метрики пока в `State` фрагментов |
-| Org identity anchor & transitions | ❌ | identity anchor, nameHistory, transition edges (RENAMED_TO, LEGAL_SUCCESSOR_OF…); см. roadmap секция "Organization Identity Anchor & Corporate Transitions" |
+| Org identity anchor & transitions | ❌ | identity anchor, nameHistory, transition edges (RENAMED_TO, LEGAL_SUCCESSOR_OF…); см. `ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md` |
+
+## Delta (2026-02-13): Internal-First Grounding (v5)
+
+Источник: `docs/horizon/implementation/INTERNAL_FIRST_GROUNDING_IMPLEMENTATION_PLAN.md` (rev v5).
+
+Фиксируем согласованные уточнения без урезания целевого функционального объёма:
+
+1. `P2.1` (grounding-aware wiring) не выносится в отдельный декомпозированный scope reduction. Реализуем в основном контуре plan без снижения целевой функциональности.
+2. Model routing: capability-first.
+   - Сначала фильтрация по capabilities (`SearchGroundingCapability` + `InternalDataGroundingCapability`).
+   - Затем выбор по цене внутри отфильтрованных кандидатов.
+   - Отдельный hardcoded provider-priority не вводится.
+3. Datastore scoping: единый источник истины для Horizon retrieval path — `VERTEX_SEARCH_HORIZON_DATA_STORE_ID`. Не допускаем параллельной эксплуатации двух разных datastore источников в critical path.
+4. Risk `IDENTIFY`: fragmentId-first с унификацией state-ключей и canonical normalization по naming/taxonomy policy перед path fallback.
+5. Provenance rollout: staged delivery без сокращения full scope.
+   - Milestone A (v1): базовый контракт provenance для job/frame + resolution stats/telemetry.
+   - Milestone B: полный охват edge/fact/domain snapshot provenance, как зафиксировано в implementation plan.
 
 ## External Risk Maturity Plan (без миграций данных)
 
@@ -54,15 +74,147 @@
 1. Усилить applicability policy:
    - добавить конфигурируемые правила по vertical/geo/axis;
    - включить policy-backed explain reasons.
-2. Appetite governance:
+2. Appetite governance (частично):
    - UI/endpoint для analyst override профилей аппетита;
    - audit trail для изменений порогов.
 3. Quality loop:
    - регулярные backtest job’ы (precision/recall/false alerts);
    - drift monitoring по axis amplitude/confidence.
-4. Alerting hardening:
+4. Alerting hardening (частично):
    - dead-letter и retry policy для interpretation queue;
    - SLO-мониторинг latency event->alert.
+
+## Canonical Playbook: Systemic Dependency Investigation (semiconductor-class queries)
+
+Цель: зафиксировать единый контракт для запросов класса:
+
+`Investigate systemic risks and opportunities in the global semiconductor supply chain (2026–2030)... prioritize top 10 dependencies with confidence and sources.`
+
+Этот playbook задаёт **как исследуем**, **как материализуем в граф**, и **как отдаём результат** в UI/API без ad-hoc логики.
+
+### 1) Нормализация запроса в Domain + QueryAddress
+
+1. Сначала резолвим intent в домен-контракт (`/domain/v1/supply-chain/...`) и целевые разрезы:
+   - value-chain сегменты: lithography equipment, advanced packaging, critical inputs;
+   - временной горизонт: `2026-01-01 .. 2030-12-31`;
+   - полярность: `risk` + `opportunity`.
+2. Затем формируем `QueryAddress` для scope (sector/sphere/location/entityType) и snapshot resolved paths.
+3. Все дальнейшие шаги работают с каноническими path, а не со свободным текстом.
+
+### 2) Двухконтурный runtime (обязательно)
+
+1. **Structural contour**: `Scout -> Critic -> Research -> Policy`.
+   - формирует/обновляет `HorizonFragment` и `DependencyEdge`;
+   - применяет canonicalization + policy statuses (`clean|auto_fixed|penalized|quarantined`).
+2. **Signal contour**: `IDENTIFY -> ESCALATE -> APPLICABILITY -> SEED -> PROPAGATE -> ROLLUP -> INTERPRET -> ALERT`.
+   - работает только с `SignalDescriptor` (`OntologyFact(kind=signal)`), canonical metric paths и traceable reason codes.
+3. Результат ответа всегда объединяет оба контура: структура + динамика сигнала.
+
+### 3) Онтологическая проекция (обязательные сущности/связи)
+
+Минимальный набор узлов:
+- `ORGANIZATION`, `FACILITY`, `PRODUCT`, `MARKET`, `DEPOSIT`, `GEO_REGION`, `PROGRAM`.
+- Для санкций/экспорт-контроля: `DECISION_POINT`, `MECHANISM`, GOV-узлы (`/gov/...` как `ORGANIZATION`).
+
+Минимальный набор рёбер:
+- supply/value chain: `SUPPLIES_TO`, `PRODUCES`, `CONSUMES`, `TRANSFORMS_INTO`, `EXTRACTS_FROM`, `DEPENDS_ON`.
+- geo/regulatory: `LOCATED_IN`, `OPERATES_IN`, `REGULATES`, `CONTROLS_ACCESS`, `USES_MECHANISM`, `APPLIES_TO`.
+- market/concentration: `PARTICIPATES_IN`, `DOMINATES`, `HAS_SUBMARKET`.
+
+Обязательные qualifiers/поля для transmission-grade ребер:
+- `throughput_share`, `capacity_constraint`, `reroute_penalty`, `reroute_latency_delta_hours`, `reroute_cost_delta_pct`;
+- `edgeModality`, `ValidFrom`, `ValidTo`;
+- policy qualifiers (`policyStatus`, `policyReason`, `policyPenalty`, `policyTimestamp`).
+
+### 4) Контракт числовых метрик (TAM/CAGR/CR4/HHI и др.)
+
+Для каждого ключевого market/submarket узла:
+1. Пытаться материализовать `TAM`, `CAGR`, `CR4`, `HHI` (+ период, единицы, источник).
+2. Если метрика отсутствует:
+   - сохранять `unknown` с explicit gap reason;
+   - не подменять пустоту псевдо-точностью.
+3. `CR4/HHI` использовать как вход в concentration/risk ranking.
+
+Для каждого dependency edge:
+1. Хранить долевые/пропускные величины как edge metrics/qualifiers.
+2. Разделять observed vs projected через `edgeModality` + temporal validity.
+
+### 5) Топ-10 зависимостей: deterministic ranking
+
+`TopDependencyScore` (нормализованный 0..1, explainable):
+
+`impact * exposure * concentration * (1 - substitutability) * sanction_export_control_exposure * confidence`
+
+Где:
+1. `impact/exposure` — из propagation + path criticality.
+2. `concentration` — из `CR4/HHI` и/или proxy.
+3. `substitutability` — из reroute/capacity qualifiers и observed alternatives.
+4. `sanction_export_control_exposure` — из decision/mechanism layer (`REGULATES/CONTROLS_ACCESS/USES_MECHANISM`).
+5. `confidence` — агрегат source quality + corroboration + recency + policy penalties.
+
+Выход top-10 обязан включать:
+1. зависимость (source -> target, product/mechanism context),
+2. score + confidence,
+3. why-path (минимум 1 transmission path),
+4. substitution options,
+5. sources (прямые URL/refs).
+
+### 6) Графовый output контракт (UI/API)
+
+В graph-view показываем 3 слоя одновременно (с возможностью фильтра):
+1. **Structural layer**: реальные поставки/трансформации/гео-размещение.
+2. **Control layer**: регуляторы, decision points, mechanisms, access control.
+3. **Signal layer**: risk/opportunity волны, contributors, rollup.
+
+Обязательные визуальные правила:
+1. Quarantined edges всегда видимы, но исключены из risk-critical path (dashed/muted).
+2. Каждый top dependency кликабелен до evidence chain (sources + reason codes + policy qualifiers).
+3. Временной фильтр `2026–2030` влияет на edge/node validity и сценарные метрики.
+4. Переключение `risk|opportunity` меняет ranking/paths, а не только цвет.
+
+### 7) Definition of Done для этого класса запросов
+
+1. Ответ воспроизводим повторным прогоном (одинаковый top-10 при том же входе/данных).
+2. У каждого top-10 есть machine-readable explain + источники.
+3. В выдаче нет рёбер без direction policy и без policyStatus.
+4. Метрики концентрации либо заполнены, либо явно помечены как data gap.
+5. Sanctions/export-control exposure объяснён через decision/mechanism слой, а не свободным текстом.
+
+### 8) Domain Answer Layer + DomainContractEngine
+
+**Дизайн-документ**: `docs/horizon/implementation/DOMAIN_ANSWER_LAYER_DESIGN.md`
+
+**Суть**: Ввести над графом `Domain Answer Layer` — домены как структурированные контракты, ответ собирается из артефактов, граф объясняет ответ (path-centric), а не заменяет его. Исполнение контрактов — в выделенном движке `DomainContractEngine`.
+
+**Ключевые решения** (зафиксированы):
+
+1. **Несколько доменов в одном job, без иерархии**. IntentResolver возвращает до 3 доменов; каждый обрабатывается DomainContractEngine независимо на одном графе. Под-темы внутри одного домена — facets. Контракт типизирован (kebab-case: `supply-chain`, `regulatory-impact`, `competitive-landscape` и др. — см. `paths.go:domainContractTypes`).
+2. **`DomainContractEngine`** — выделенный расширяемый движок (`backend/internal/horizon/domain/`):
+   - Фазы: Resolve → Steer → Gate → Enrich → Assemble → Publish.
+   - Scout/Critic/Research/Policy **не меняются** — DomainContractEngine стирит их через scouting directives.
+   - Будущее расширение: Scenario (what-if), Compare, Watch.
+3. **Cross-facet connectivity** — домен стирит scouting для поиска связей между facets. Без горизонтальных связей между facets нет explainability. Inter-facet connectivity — обязательная проверка в Completeness Gate.
+4. **Сборка артефактов — post-processing с одним structured LLM вызовом**:
+   - Основные артефакты (`critical_dependencies`, `concentration_evidence`, `control_exposure`, `impact_paths`, `data_gaps`) — детерминированная проекция из графа (scoring, BFS/Dijkstra, агрегация метрик).
+   - LLM (один structured вызов) — `thesis`, `alternatives.feasibility`, `objective_check`.
+5. **Completeness Gate — гибрид**:
+   - Level 1 (детерминированный): structural checks (минимум узлов/facet, inter-facet connectivity, market metrics, regulatory edges). Если не пройден — enrichment без LLM.
+   - Level 2 (Domain Critic, старшая модель): семантическая полнота. Если не пройден — enrichment signals → новые задачи в том же job. ≤ 2 цикла, budget cap, fallback `ready_with_gaps`.
+6. **Graph-query эволюционирует в drill-down** поверх готового `DomainAnswerSnapshot`.
+7. **UI**: Domain Overlay — сворачиваемый контрол поверх графа (mini → domain list → expanded с thesis/deps/hotspots/gaps/facets). Граф первичен, overlay управляет подсветкой.
+8. **Интеграция через adapter pattern (R8)**: `ContractHandler.Execute()` возвращает только `ViewDirective` — pipeline не меняется. Новый `DomainAnswerHandler` регистрируется в `ContractRegistry`, внутри делегирует в `DomainContractEngine.Run()`. Snapshot публикуется в отдельную Firestore collection `domain_answer_snapshots/`. `ViewDirective` генерируется как backward-compat адаптер из snapshot. `domain_overlay.go` endpoints мигрируются в thin wrappers над DomainContractEngine.
+9. **WS-события DomainContractEngine (R9)**: Namespace `horizon.domain.contract.*` — события на каждой фазе (resolve/steer/gate/enrich/assemble/publish). Инфраструктура готова (Pub/Sub → WS Hub → фронт). DomainContractEngine получает `EventPublisher` interface, не зависит от ScoutEngine напрямую. Фронт: timeline лог фаз в Domain Overlay (expanded), badge текущей фазы в mini-state.
+
+**Engineering notes (Phase 1 review, не блокируют, учесть при масштабировании)**:
+
+1. **Gate "partial" и enrichment loop**: `summarizeChecks` при P1 fail возвращает `OverallStatus = "partial"`. Enrichment loop продолжает цикл при `OverallStatus != "pass"`, т.е. partial тоже триггерит enrichment. Это корректно, но L2 semantic critic может вернуть "partial" (= "mostly ok") — и это потратит лишний enrichment cycle. При тюнинге: рассмотреть отдельный порог для L2 partial vs L1 partial.
+2. **Enrichment jobs — async gap**: `enqueueEnrichmentTasks` создаёт scouting jobs, затем `ExecuteBaseCollect` вызывается сразу после. Если enrichment jobs обрабатываются async (а не в том же executor context) — повторный `collectGraph` может пересобрать тот же граф без новых данных. Убедиться, что enrichment jobs завершаются до re-collect, или добавить await/poll.
+3. **`collectGraph` hardcoded limit 4000 artifacts**: для крупных линз с множеством доменов может не хватить. Вынести в `GateConfig` или сделать пропорциональным количеству доменов.
+4. **BFS complexity в `hasConnectivityBetweenFacets`**: для каждой пары facet nodes запускается BFS. При N facets × M nodes per facet = до N²×M² BFS runs. Early return спасает. Для текущих масштабов (< 4K nodes) — ок. При росте: рассмотреть single-source multi-target BFS или union-find.
+
+**Инкрементальность (deferred)**:
+- Пересборка `DomainAnswerSnapshot` при изменениях графа — **отложено**.
+- Когда будет нужно: `assembledAt` + `staleAfter`; stale-маркировка при изменениях в critical paths; пересборка lazy/eager. Естественная ответственность фазы `Watch` в DomainContractEngine.
 
 ## Пайплайн Scout → Critic → Research → Policy
 
@@ -70,14 +222,14 @@
 
 **Текущий порядок** (соблюдён): Intent Resolution → Scout → Critic → Research → Critic Re-validation → Conflict Resolution → Metrics → Persistence → Policy Check.
 
-**Готово**: Conflict Resolution перенесён после Research; добавлена re-validation после Research.
+**Готово**: Conflict Resolution перенесён после Research; добавлена re-validation после Research; `recordDeterministicRedirect` вызывается в ключевых path-change кейсах (`market_dedup`, `precreate_normalization`).
 
 **TODO для проверки и реализации**:
 
 | Приоритет | Задача | Описание |
 |-----------|--------|----------|
 | P1 | Унифицировать Policy | Policy применяется в 3+ местах (`edge_materializer`, `precreate_validator`, `dependency_edges`, `runPolicyCheck`) с разной логикой. Одинаковые action handlers (reject/reverse/penalty) во всех точках, best-effort. |
-| P1 | `recordDeterministicRedirect` везде | Вызывать при любом изменении path. Сейчас не вызывается при: Market deduplication, Pre-create validation. |
+| P3 | `recordDeterministicRedirect` coverage | Основные кейсы закрыты (в т.ч. Market deduplication, Pre-create validation). Оставить регрессионный контроль на новых местах path rewrite. |
 | P2 | Централизовать canonicalization | `canonicalPath` меняется в 6 местах → множество вызовов `bestEffortRewriteLensScope`. Рассмотреть накопление изменений и один финальный rewrite. |
 | P2 | История aliases | `aliasCanonicalPath` хранит только первый alias. При цепочке `/org/tesla` → `/org/us/tesla` → `/org/us/tesla-inc` сохранять массив aliases. |
 | P2 | Budget checks раньше | Проверка бюджета только перед Research. Scout и Critic могут потратить до проверки. При масштабировании добавить проверки на ранних этапах. |
@@ -108,7 +260,8 @@
   - Вынести метрики из фрагментов в оверлей
   - [x] Реализовать подгрузку материалов вручную из фрагмента-продукта через wikidata - срочно
     - POST `/api/horizon/fragments/{id}/expand-materials` — синхронный вызов, возвращает статистику
-  - Добавить клиентов организации в скаутинг, вызываемый вручную - тоже срочно
+  - [x] Добавить клиентов организации в скаутинг, вызываемый вручную - тоже срочно
+    - Используется ручной `POST /api/horizon/fragments/{id}/refresh` с `specialties=["supply_chain"]` (поиск downstream customers в Scout/Critic/Research).
 - **Wikidata QID resolver (suggest-only → gated auto-apply)**
   - Вынести поиск/скоринг Wikidata QID из `cmd/tools/horizon_find_missing_wikidata` в ядро как **suggest-only resolver** (без авто-записи).
   - Добавить кэширование/TTL, type-gating (например, `P31=Q5` для PERSON), и телеметрию качества (score распределения, false positives).
@@ -166,70 +319,8 @@
 Отсюда и до секции **“Обработка метрик при propagation (семантика поверх "доставки дельт")”** включительно — один целостный блок работ: новые canonical paths, новые fragment/edge types, нормализация, требования Critic/Scout, lifecycle/time, edge metrics/temporal validity, и интеграция с propagation.
 ---
 - **Organization Identity Anchor & Corporate Transitions (rename/rebrand/successor)** — ❌ **TODO**
-  - **Проблема**: Система не поддерживает корпоративные переходы (Tinkoff Bank → T-Bank, смена собственности + ребрендинг). Path/slug и текущее имя перегружены ролью идентичности, что ломается при rename/rebrand.
-  - **Текущее состояние**:
-    - `Identifiers` — `map[string]string`, нет темпоральной истории имён.
-    - Dedup по `wikidataId` → `legalName` → `labelEN` → `shortName`; `formerly|aka|fka` в именах **зачищаются** (`stripParentheticalAnnotations`), не используются для связывания.
-    - `canonical_path_redirects` есть, но без формальной онтологии переходов.
-    - `ValidFrom`/`ValidTo` есть на `HorizonFragment` и `DependencyEdge`.
-  - **Фундаментальная причина**: нет immutable identity anchor для юрлица (регномер/LEI/единый entity key как first-class); нет отдельной онтологии корпоративных переходов как формального контракта.
-  - **План работ**:
-    - **1. Identity anchor (приоритет в dedup)**:
-      - **Международные** (универсальные, приоритет выше):
-        - `wikidataId` — Wikidata Q-id (сохраняется при ребрендинге того же юрлица)
-        - `lei` — Legal Entity Identifier (GLEIF, 20 символов, финансы)
-        - `duns` — D-U-N-S Number (Dun & Bradstreet, 9 цифр, 300M+ организаций)
-      - **Национальные** (по юрисдикции, иерархия в dedup после международных):
-        - **РФ**: `ogrn` (Основной гос. рег. номер), `inn` (ИНН)
-        - **UK**: `crn` (Company Registration Number), `vat`
-        - **EU**: `vat` (VAT ID, EU-wide), `siren` (FR), `siret` (FR), `uid` (AT/CH), `ust_idnr` (DE), `cvr` (DK), `ico` (CZ/SK), `partita_iva` (IT), `nif` (ES/PT), `cif` (ES), `nip` (PL), `krs` (PL), `cui` (RO), `matricule` (LU)
-        - **СНГ/ЕАЭС**: `bin` (KZ), `edrpou` (UA), `uic` (BG), `idno` (MD), `voen` (AZ)
-        - **США**: `ein` (Employer Identification Number)
-        - **Канада**: `bin` (Business Identification Number)
-        - **Австралия**: `abn` (Australian Business Number), `acn` (Australian Company Number)
-        - **Китай**: `usc` (Unified Social Credit Code)
-        - **Япония**: `hn` (Hojin Number / Corporate Number)
-        - **Индия**: `gstin`, `cin` (Corporate Identification Number), `pan`
-        - **Сингапур**: `uen` (Unique Entity Number)
-        - **Южная Корея**: `brn` (Business Registration Number)
-        - **Бразилия**: `cnpj`
-        - **Аргентина**: `cuit`
-        - **Мексика**: `rfc`
-        - **ОАЭ/СА**: `crn` (Commercial Registration), `trn`, `vat`
-        - **ЮАР**: `vat`, `tin`
-      - В `OrgDeduplicator`: сначала поиск по identity anchor (по приоритету), затем по name.
-      - Добавить `FindByIdentifierAndType` для ключевых идентификаторов; поддерживать `identifiers` с ключами выше.
-      - **Дополнительные юрисдикции** (полный список ~100+ стран в Keyrails):
-        - **Турция**: `vkn` | **Индонезия**: `npwp` | **Малайзия**: `ssm` | **Таиланд**: `tin` | **Вьетнам**: `mst`
-        - **Израиль**: `crn` | **Египет**: `tin`, `vat` | **Нигерия**: `tin`, `vat` | **Кения**: `pin`, `vat`
-        - **Перу/Эквадор/Никарагуа**: `ruc` | **Чили**: `rut` | **Колумбия**: `nit`, `rut` | **Коста-Рика**: `cedula_juridica`
-        - **Норвегия/Швеция**: `orgnr` | **Финляндия**: `y_tunnus` | **Исландия**: `id` (Kennitala) | **Эстония**: `rc` | **Латвия**: `rn` | **Литва**: `cc`
-        - **Гонконг**: `brn` | **Казахстан**: `bin` | **Узбекистан**: `inn`
-      - **Справочник**: [Keyrails Business Identification Numbers](https://docs.keyrails.com/docs/business-identification-numbers-by-country), GLEIF RA List (230+ юрисдикций).
-    - **2. NameHistory (темпоральная история имён)**:
-      - Новое поле `NameHistory []struct{ Name, Kind string; ValidFrom, ValidTo *time.Time }` (или `identifiers.nameHistory`).
-      - Kind: `short`, `legal`, `brand`, `aka`.
-      - Пример: `[{Name: "Tinkoff Bank", Kind: "short", ValidTo: "2024-06-01"}, {Name: "T-Bank", Kind: "short", ValidFrom: "2024-06-01"}]`.
-      - Использовать при поиске/dedup и explainability.
-    - **3. Redirect-aware path resolution**:
-      - При резолве path всегда проверять `canonical_path_redirects`; для Tinkoff: `/org/ru/tinkoff-bank` → `/org/ru/t-bank`.
-    - **4. Transition edge types** (для случаев смены юрлица):
-      - `RENAMED_TO` — legal name rename, та же сущность.
-      - `REBRANDED_TO` — brand rename, та же сущность.
-      - `LEGAL_SUCCESSOR_OF` — новое юрлицо-наследник старого.
-      - `MERGED_INTO` — слияние.
-      - `SPUN_OFF_FROM` — выделение.
-      - `ACQUIRED_BY` — M&A событие (владение отдельно через OWNS по времени).
-      - Добавить в `DependencyType`, direction policy, canonicalization matrix.
-    - **5. Правило "матрица не в пустоту"**:
-      - Для любого transition-инпута матрица канонизации — total function: либо retag в один из transition-типов, либо `RELATED_TO` + `policyStatus=penalized` + `policyReason=transition_unclassified`.
-      - Никогда не удалять связь/не обнулять тип из-за неуверенности.
-  - **Применение к Tinkoff → T-Bank** (если то же юрлицо — ребрендинг):
-    - Один `ORGANIZATION`, обновить `shortName`/`legalName`, добавить `nameHistory`, redirect `/org/ru/tinkoff-bank` → `/org/ru/t-bank`.
-    - Dedup: по identity anchor (wikidataId/ogrn/inn), затем по nameHistory + current names.
-  - **Если юрлицо изменилось**: два `ORGANIZATION` + `LEGAL_SUCCESSOR_OF`, ownership/restructure рёбра с `ValidFrom`/`ValidTo`.
-  - **Артефакты**: `org_deduplicator.go` (identity anchor priority), `models/fragment.go` (NameHistory), `models/dependency_edge.go` (transition types), `canonical_path_redirects` (расширение), edge direction policy.
-  - **См. также**: BIG_BANG_EDGE_POLICY_REMEDIATION_PLAN.md (policyStatus/penalty/quarantine контракт).
+  - Вынесено в отдельный документ для реализации отдельным агентом: `docs/horizon/implementation/ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md`.
+  - В `roadmap.md` оставляем только статус/ссылку, чтобы не перегружать основной roadmap деталями национальных реестров, identity anchor и transition-логики.
 
 - **Natural Resource Deposit (`/deposit/`) и EXTRACTS_FROM** — ✅ **Реализовано**
   - `FragmentTypeDeposit`, canonical path `/deposit/{resource-slug}/{deposit-slug}`, validation_policy, edge_normalizer, supply_chain_parser, research_profile. EXTRACTS_FROM (FACILITY → DEPOSIT), OPERATES_IN (ORG → DEPOSIT), PRODUCES (DEPOSIT → PRODUCT), LOCATED_IN (DEPOSIT → GEO_REGION). Канонизация ORG EXTRACTS_FROM DEPOSIT → OPERATES_IN (best-effort).
@@ -1659,7 +1750,7 @@ type PolicyDecision struct {
   - [x] Добавить поля `SupplierRef`, `CustomerRef`, `ProductRef` в HorizonFragment
   - [x] Валидация: SupplyLink требует `tenantId` (может быть tenant или "global" как assumption-layer)
   - [ ] API endpoint для создания SupplyLink
-  - [ ] Интеграция с Scout для автоматического обнаружения
+  - [x] Интеграция с Scout для автоматического обнаружения
 
 - **Milestone 2: Path Building**
   - [x] Функция `BuildUpstreamPath(customer, opts)` с confidence propagation

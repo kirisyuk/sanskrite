@@ -58,7 +58,7 @@ func BuildDecisionTelemetrySnapshot(in DecisionTelemetryInput) DecisionTelemetry
 	case "allow_with_penalty", "penalty":
 		counters["penalty_rate"] = 1
 		penaltyCounted = true
-	case "quarantine":
+	case "quarantine", "quarantine_soft":
 		counters["quarantine_rate"] = 1
 		quarantineCounted = true
 	}
@@ -102,7 +102,7 @@ func BuildDecisionTelemetrySnapshot(in DecisionTelemetryInput) DecisionTelemetry
 		}
 	}
 
-	invalidAction := action == "quarantine" || action == "reject"
+	invalidAction := action == "quarantine" || action == "quarantine_soft" || action == "reject"
 	unknownDirection := counters["unknown_direction_policy_count"] > 0
 	if (invalidAction || unknownDirection) &&
 		strings.TrimSpace(in.RelationType) != "" &&

@@ -8,6 +8,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -46,8 +47,38 @@ func (a *ResearchAgent) EnrichFragment(
 	decompositionHints []DecompositionHint,
 	existingEntities []string,
 ) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, error) {
+	enriched, relations, chains, _, err := a.EnrichFragmentWithGrounding(
+		ctx,
+		fragment,
+		missingInfo,
+		focus,
+		spherePaths,
+		keywords,
+		specialties,
+		chainContext,
+		originalQuery,
+		decompositionHints,
+		existingEntities,
+	)
+	return enriched, relations, chains, err
+}
+
+// EnrichFragmentWithGrounding returns enriched data plus grounding evidence from full AI task result.
+func (a *ResearchAgent) EnrichFragmentWithGrounding(
+	ctx context.Context,
+	fragment *models.HorizonFragment,
+	missingInfo []string,
+	focus string,
+	spherePaths []string,
+	keywords []string,
+	specialties []string,
+	chainContext string,
+	originalQuery string,
+	decompositionHints []DecompositionHint,
+	existingEntities []string,
+) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
 	if len(missingInfo) == 0 {
-		return fragment, nil, nil, nil
+		return fragment, nil, nil, nil, nil
 	}
 
 	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
@@ -58,8 +89,9 @@ func (a *ResearchAgent) EnrichFragment(
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
-			TextGenerationCapability:  true,
-			SearchGroundingCapability: true, // Включаем Search Grounding
+			TextGenerationCapability:        true,
+			SearchGroundingCapability:       true, // Включаем Search Grounding
+			InternalDataGroundingCapability: true,
 			// Важно: позволяем fallback на gemini-2.5-pro (capabilityScore=8),
 			// иначе при сбое gemini-3-pro-preview у нас не остаётся подходящих моделей.
 			MinCapabilityScore: 7,
@@ -71,15 +103,19 @@ func (a *ResearchAgent) EnrichFragment(
 		Verifier: verifier,
 	}
 
-	result, err := a.executor.ExecuteStructuredTask(ctx, task)
+	result, fullResult, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to enrich fragment with research: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to enrich fragment with research: %w", err)
+	}
+	var groundingEvidence *ai.GroundingEvidence
+	if fullResult != nil {
+		groundingEvidence = fullResult.GroundingEvidence
 	}
 
 	// Преобразуем результат
 	jsonData, err := json.Marshal(result)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to marshal research result: %w", err)
+		return nil, nil, nil, groundingEvidence, fmt.Errorf("failed to marshal research result: %w", err)
 	}
 	fmt.Printf("[ResearchAgent] Raw Result: %s\n", jsonData)
 
@@ -90,9 +126,9 @@ func (a *ResearchAgent) EnrichFragment(
 		if err2 := json.Unmarshal(jsonData, &partialFrag); err2 == nil {
 			// Merge only fragment, no relations
 			a.mergeFragment(fragment, &partialFrag)
-			return fragment, nil, nil, nil
+			return fragment, nil, nil, groundingEvidence, nil
 		}
-		return nil, nil, nil, fmt.Errorf("failed to unmarshal enriched result: %w", err)
+		return nil, nil, nil, groundingEvidence, fmt.Errorf("failed to unmarshal enriched result: %w", err)
 	}
 
 	// Merge Fragment
@@ -103,8 +139,14 @@ func (a *ResearchAgent) EnrichFragment(
 			a.mergeFragment(fragment, &partialFragment)
 		}
 	}
+	fragment.Labels, fragment.Identifiers = naming.NormalizeFragmentNames(
+		fragment.CanonicalPath,
+		fragment.Labels,
+		fragment.Identifiers,
+	)
+	normalizeDiscoveredRelationsNames(res.Relations)
 
-	return fragment, res.Relations, res.SupplyChains, nil
+	return fragment, res.Relations, res.SupplyChains, groundingEvidence, nil
 }
 
 // mergeFragment merges partial data into the main fragment
@@ -236,6 +278,35 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 	}
 	if len(partial.KBRefs) > 0 {
 		main.KBRefs = append(main.KBRefs, partial.KBRefs...)
+	}
+	// Merge NameHistory: add entries from partial that don't duplicate existing entries.
+	if len(partial.NameHistory) > 0 {
+		seen := make(map[string]struct{}, len(main.NameHistory))
+		for _, e := range main.NameHistory {
+			key := strings.ToLower(strings.TrimSpace(e.Kind)) + "|" + strings.ToLower(strings.TrimSpace(e.Name))
+			seen[key] = struct{}{}
+		}
+		for _, e := range partial.NameHistory {
+			name := strings.TrimSpace(e.Name)
+			if name == "" {
+				continue
+			}
+			kind := strings.ToLower(strings.TrimSpace(e.Kind))
+			if kind == "" {
+				kind = "aka"
+			}
+			key := kind + "|" + strings.ToLower(name)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			main.NameHistory = append(main.NameHistory, models.NameHistoryEntry{
+				Name:      name,
+				Kind:      kind,
+				ValidFrom: e.ValidFrom,
+				ValidTo:   e.ValidTo,
+			})
+		}
 	}
 }
 
@@ -423,6 +494,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
 	profile := ResolveResearchProfile(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
 	profileBlock := BuildResearchProfilePromptBlock(profile)
+	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
 
 	return fmt.Sprintf(`You are a research agent. Your task is to find missing information about the provided fragment using your search capabilities.
 
@@ -449,27 +521,7 @@ Return a JSON object with fields:
    - "confidence": 0.0-1.0
    - "reason": evidence for this chain
 
-Name Normalization Rules:
-- For organizations and similar entities, ALWAYS provide:
-  - fragment.identifiers.legalName (and/or fragment.labels.en): legal/official name including ownership suffix if relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC...)
-  - fragment.identifiers.shortName: base name without ownership suffix
-- For relations, ALWAYS provide targetLegalName and targetShortName in addition to targetName.
-  - IMPORTANT (legal form placement):
-    - Do NOT move the legal form token to the beginning of the name. Example: "JSC Tochka Bank" is WRONG.
-    - Keep the official ordering from sources/registries (often "... Bank JSC" or localized equivalents).
-    - legal_form is a SUFFIX in org canonicalPath (/org/{iso2}/{slug}-{legal_form}) and a separate field in canonicalParts.Org.LegalForm.
-  - IMPORTANT (official vs transliteration):
-    - Prefer the OFFICIAL legal name as stated by the company/registry/source.
-    - If the official legal name is not in Latin script and no established official English name exists:
-      - Keep fragment.identifiers.legalName in the original language/script if you can find it.
-      - Put a reasonable transliteration/English display name into fragment.labels.en (do NOT invent a new legalName).
-    - fragment.labels.en MUST be Latin-script only (broad Latin is OK: diacritics, Scandinavian, Turkish, etc.). No non-Latin scripts in labels.en.
-  - GOV-specific naming (CRITICAL when canonicalPath starts with /gov/):
-    - Always provide BOTH:
-      - fragment.labels.en: readable English name (translation if official English exists; otherwise careful transliteration)
-      - fragment.identifiers.legalName: official name as in primary source/registry (often native script)
-    - If you can identify the native language/script, also set fragment.labels.<iso639> (e.g., labels.th, labels.ms, labels.ar, labels.ru).
-    - Do NOT replace native official name with a translated version in identifiers.legalName. Keep translation/transliteration in labels.en.
+%s
 
 Product Canonicalization:
 - If you can resolve a more specific product name/path, update fragment.canonicalPath.
@@ -481,6 +533,15 @@ Product Canonicalization:
   - Use plural ONLY when plural is the natural/standard product term in industry terminology (avoid invented plurals).
   - Do NOT include a company/brand name in product names/paths unless it is clearly the official and commonly used product name.
     - Example: "IBM watsonx" should only be used if sources consistently use that full official name; otherwise use "watsonx".
+
+Name History (ORG/PERSON - for rebrands, renames, formerly-known-as):
+If you discover that the entity has former names, previous brand names, or was renamed/rebranded:
+- Output fragment.nameHistory as an array of objects: { "name": "Former Name", "kind": "short|legal|brand|aka", "validFrom": "YYYY-MM-DD", "validTo": "YYYY-MM-DD" }
+- Kind values: "short" (former short/trade name), "legal" (former legal/official name), "brand" (former brand), "aka" (alias/nickname)
+- validFrom/validTo are OPTIONAL (use when you know dates; omit if unknown)
+- Example: Tinkoff Bank rebranded to T-Bank → { "name": "Tinkoff Bank", "kind": "short", "validTo": "2024-06-01" }
+- Search for: "X formerly known as", "X renamed", "X rebrand", "X previous name"
+- Do NOT include the current name in nameHistory.
 
 Organization Classification (ORG/FACILITY/GOV) - *** HIGH PRIORITY ***:
 You SHOULD actively research and determine these fields for any organization or government body:
@@ -614,6 +675,12 @@ Choose relationType to match the CORRECT semantic direction:
 - COMPETES_WITH: market rivalry/competition (symmetric); not collaboration or supply.
 - INFLUENCES: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
   Source MAY be PERSON. Target MAY be MARKET or SPHERE (SPHERE links are treated as weaker evidence).
+- RENAMED_TO: organization legal rename (source MUST be ORGANIZATION, target MUST be ORGANIZATION).
+- REBRANDED_TO: organization brand rename/repositioning (source MUST be ORGANIZATION, target MUST be ORGANIZATION).
+- LEGAL_SUCCESSOR_OF: legal succession between organizations (source MUST be ORGANIZATION, target MUST be ORGANIZATION).
+- MERGED_INTO: source organization merged into target organization.
+- SPUN_OFF_FROM: source organization spun off from target organization.
+- ACQUIRED_BY: source organization acquired by target organization.
 - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY -> MARKET).
   Clarification: entity is an active market participant (player).
   - If THIS FRAGMENT is MARKET, you may still emit PARTICIPATES_IN relations to player entities; backend will reverse the edge direction.
@@ -683,6 +750,12 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - AUDITED_BY: source MUST be ORGANIZATION or FACILITY or PROGRAM, target MUST be ORGANIZATION
 - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
 - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
+- RENAMED_TO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+- REBRANDED_TO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+- LEGAL_SUCCESSOR_OF: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+- MERGED_INTO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+- SPUN_OFF_FROM: source MUST be ORGANIZATION, target MUST be ORGANIZATION
+- ACQUIRED_BY: source MUST be ORGANIZATION, target MUST be ORGANIZATION
 - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT
 - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
 - PARTICIPATES_IN: source MAY also be PRODUCT or PERSON, target MUST be MARKET
@@ -754,7 +827,7 @@ DiscoveredRelation Schema:
   "targetLegalName": "string",
   "targetShortName": "string",
   "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY" | "DECISION_POINT" | "MECHANISM",
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED",
@@ -915,7 +988,7 @@ METRIC VALUE FORMAT (IMPORTANT):
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock)
 }
 
 func dedupNonEmptyStrings(in []string) []string {

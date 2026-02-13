@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"unicode"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
@@ -21,10 +21,12 @@ type OrgDeduplicatorStats struct {
 	HitPathVariant        int64
 	HitCountryAsOrg       int64
 	HitWikidataID         int64
+	HitIdentityAnchor     int64
 	HitGovOrgBridge       int64
 	HitLegalName          int64
 	HitLabelEN            int64
 	HitShortName          int64
+	HitNameHistory        int64
 	HitNormalizedLegal    int64
 	HitWikidataSearch     int64
 }
@@ -37,6 +39,66 @@ func isOrgWikidataSearchDedupEnabled() bool {
 	return v == "1" || v == "true" || v == "yes" || v == "y" || v == "on"
 }
 
+// orgIdentityAnchorPriority defines organization identity anchors in descending dedup confidence.
+// International IDs first, then common national registry identifiers.
+var orgIdentityAnchorPriority = []string{
+	"wikidataId",
+	"lei",
+	"duns",
+	"ogrn",
+	"inn",
+	"crn",
+	"vat",
+	"siren",
+	"siret",
+	"uid",
+	"ust_idnr",
+	"cvr",
+	"ico",
+	"partita_iva",
+	"nif",
+	"cif",
+	"nip",
+	"krs",
+	"cui",
+	"matricule",
+	"bin",
+	"edrpou",
+	"uic",
+	"idno",
+	"voen",
+	"ein",
+	"abn",
+	"acn",
+	"usc",
+	"hn",
+	"gstin",
+	"cin",
+	"pan",
+	"uen",
+	"brn",
+	"cnpj",
+	"cuit",
+	"rfc",
+	"trn",
+	"tin",
+	"vkn",
+	"npwp",
+	"ssm",
+	"mst",
+	"pin",
+	"ruc",
+	"rut",
+	"nit",
+	"cedula_juridica",
+	"orgnr",
+	"y_tunnus",
+	"rc",
+	"rn",
+	"cc",
+	"id",
+}
+
 // =============================================================================
 // ORGANIZATION DEDUPLICATION POLICY
 // =============================================================================
@@ -44,7 +106,7 @@ func isOrgWikidataSearchDedupEnabled() bool {
 // abbreviations). This policy defines how to identify and merge duplicates.
 //
 // Deduplication Priority:
-// 1. Wikidata ID match - highest confidence, same real-world entity
+// 1. Identity anchor match (wikidata/lei/duns/national registries) - highest confidence
 // 2. Exact shortName match (case-insensitive) - high confidence
 // 3. Normalized legalName match - medium confidence (removes JSC, LLC, Inc, etc.)
 
@@ -59,10 +121,12 @@ type OrgDeduplicator struct {
 	hitPathVariant        int64
 	hitCountryAsOrg       int64
 	hitWikidataID         int64
+	hitIdentityAnchor     int64
 	hitGovOrgBridge       int64
 	hitLegalName          int64
 	hitLabelEN            int64
 	hitShortName          int64
+	hitNameHistory        int64
 	hitNormalizedLegal    int64
 	hitWikidataSearch     int64
 }
@@ -82,7 +146,7 @@ func NewOrgDeduplicator(fragmentsRepo *repo.HorizonFragmentsRepository, client c
 //
 // Matching priority (Tier 1 = 100% confidence, Tier 2 = high confidence):
 // Tier 1:
-//  1. Wikidata ID match (from KBRefs or Identifiers)
+//  1. Identity anchor match (from KBRefs or Identifiers)
 //  2. Exact legalName match (case-insensitive) — юридическое название уникально
 //
 // Tier 2:
@@ -171,14 +235,15 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	// Tier 1: Highest confidence — auto-merge
 	// =========================================================================
 
-	// Strategy 1: Match by Wikidata ID
+	// Strategy 1: Match by identity anchor priority (wikidata/lei/duns/national IDs).
 	wikidataID := extractWikidataIDFromFragment(fragment)
-	if wikidataID != "" {
-		existing, err := d.findByWikidataID(ctx, wikidataID)
-		if err == nil && existing != nil && existing.ID != fragment.ID {
+	if existing, matchedKey, err := d.findByIdentityAnchor(ctx, fragment); err == nil && existing != nil && existing.ID != fragment.ID {
+		if matchedKey == "wikidataId" {
 			atomic.AddInt64(&d.hitWikidataID, 1)
-			return existing, nil
+		} else {
+			atomic.AddInt64(&d.hitIdentityAnchor, 1)
 		}
+		return existing, nil
 	}
 
 	// For government bodies, stop here by default to avoid false merges across countries based on names.
@@ -240,6 +305,12 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 			atomic.AddInt64(&d.hitShortName, 1)
 			return existing, nil
 		}
+	}
+
+	// Strategy 4.5: Match current names against history and history against current names.
+	if existing, err := d.findByNameHistory(ctx, fragment); err == nil && existing != nil && existing.ID != fragment.ID {
+		atomic.AddInt64(&d.hitNameHistory, 1)
+		return existing, nil
 	}
 
 	// Strategy 5: Normalized legalName match (fallback for minor suffix differences)
@@ -372,6 +443,80 @@ func (d *OrgDeduplicator) findByWikidataID(ctx context.Context, wikidataID strin
 	return nil, nil
 }
 
+func (d *OrgDeduplicator) findByIdentityAnchor(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, string, error) {
+	if d == nil || d.fragmentsRepo == nil || fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+		return nil, "", nil
+	}
+	for _, key := range orgIdentityAnchorPriority {
+		raw := strings.TrimSpace(identityAnchorValue(fragment, key))
+		if raw == "" {
+			continue
+		}
+		for _, probe := range normalizeIdentifierLookupValues(raw) {
+			cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, key, probe, models.FragmentTypeOrganization)
+			if err != nil || len(cands) == 0 {
+				continue
+			}
+			cands = filterOrgDedupCandidates(fragment, cands, "anchor")
+			cands = filterSelfConsistentOrgCandidates(cands)
+			best := chooseBestOrgCandidate(cands)
+			if best != nil && best.ID != "" && best.ID != fragment.ID {
+				return best, key, nil
+			}
+		}
+	}
+	return nil, "", nil
+}
+
+func identityAnchorValue(fragment *models.HorizonFragment, key string) string {
+	if fragment == nil || strings.TrimSpace(key) == "" {
+		return ""
+	}
+	if strings.EqualFold(key, "wikidataId") {
+		return extractWikidataIDFromFragment(fragment)
+	}
+	if fragment.Identifiers == nil {
+		return ""
+	}
+	if v := strings.TrimSpace(fragment.Identifiers[key]); v != "" {
+		return v
+	}
+	// Backward compatibility for occasional kebab-case ingestion keys.
+	if v := strings.TrimSpace(fragment.Identifiers[strings.ReplaceAll(key, "_", "-")]); v != "" {
+		return v
+	}
+	return ""
+}
+
+func normalizeIdentifierLookupValues(value string) []string {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 4)
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	add(raw)
+	add(strings.ToUpper(raw))
+	add(strings.ToLower(raw))
+	clean := strings.NewReplacer(" ", "", "-", "", ".", "", "/", "").Replace(raw)
+	add(clean)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // findByShortName searches for an existing organization with the same shortName.
 func (d *OrgDeduplicator) findByShortName(ctx context.Context, fragment *models.HorizonFragment, shortName string) (*models.HorizonFragment, error) {
 	if shortName == "" {
@@ -450,6 +595,131 @@ func (d *OrgDeduplicator) findByNormalizedLegalName(ctx context.Context, fragmen
 	}
 
 	return nil, nil
+}
+
+func (d *OrgDeduplicator) findByNameHistory(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, error) {
+	if d == nil || d.fragmentsRepo == nil || fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+		return nil, nil
+	}
+	fragCurrent := collectNormalizedCurrentOrgNames(fragment)
+	fragHistory := collectNormalizedHistoricalOrgNames(fragment)
+	if len(fragCurrent) == 0 || len(fragHistory) == 0 {
+		return nil, nil
+	}
+
+	cands, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, "global", models.FragmentTypeOrganization, 800)
+	if err != nil || len(cands) == 0 {
+		return nil, err
+	}
+
+	fragQID := strings.TrimSpace(extractWikidataIDFromFragment(fragment))
+	matches := make([]*models.HorizonFragment, 0, 8)
+	for _, c := range cands {
+		if c == nil || c.ID == "" || c.ID == fragment.ID || c.Type != models.FragmentTypeOrganization {
+			continue
+		}
+		// Apply the same jurisdiction safety rails as other non-anchor strategies.
+		filtered := filterOrgDedupCandidates(fragment, []*models.HorizonFragment{c}, "history")
+		if len(filtered) == 0 {
+			continue
+		}
+		cQID := strings.TrimSpace(extractWikidataIDFromFragment(c))
+		if fragQID != "" && cQID != "" && !strings.EqualFold(fragQID, cQID) {
+			continue
+		}
+		candCurrent := collectNormalizedCurrentOrgNames(c)
+		candHistory := collectNormalizedHistoricalOrgNames(c)
+		if hasNameOverlap(fragHistory, candCurrent) || hasNameOverlap(fragCurrent, candHistory) {
+			matches = append(matches, c)
+		}
+	}
+	if len(matches) == 0 {
+		return nil, nil
+	}
+	matches = filterSelfConsistentOrgCandidates(matches)
+	return chooseBestOrgCandidate(matches), nil
+}
+
+func collectNormalizedCurrentOrgNames(f *models.HorizonFragment) map[string]struct{} {
+	out := map[string]struct{}{}
+	if f == nil {
+		return out
+	}
+	addNormalizedNameVariants(out, strings.TrimSpace(f.Identifiers["legalName"]))
+	addNormalizedNameVariants(out, strings.TrimSpace(f.Identifiers["shortName"]))
+	addNormalizedNameVariants(out, strings.TrimSpace(f.Labels["en"]))
+	return out
+}
+
+func collectNormalizedHistoricalOrgNames(f *models.HorizonFragment) map[string]struct{} {
+	out := map[string]struct{}{}
+	if f == nil {
+		return out
+	}
+	for _, h := range f.NameHistory {
+		addNormalizedNameVariants(out, strings.TrimSpace(h.Name))
+	}
+	if f.Identifiers != nil {
+		for _, key := range []string{"formerName", "former_name", "previousName", "oldName", "aka", "fka"} {
+			raw := strings.TrimSpace(f.Identifiers[key])
+			for _, name := range splitNameListField(raw) {
+				addNormalizedNameVariants(out, name)
+			}
+		}
+	}
+	return out
+}
+
+func addNormalizedNameVariants(dst map[string]struct{}, raw string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return
+	}
+	if n := naming.NormalizeLookupText(raw); n != "" {
+		dst[n] = struct{}{}
+	}
+	if n := naming.NormalizeLegalName(raw); n != "" {
+		if m := naming.NormalizeLookupText(n); m != "" {
+			dst[m] = struct{}{}
+		}
+	}
+}
+
+func splitNameListField(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ';' || r == '|'
+	})
+	if len(parts) == 0 {
+		return []string{raw}
+	}
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func hasNameOverlap(a, b map[string]struct{}) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	for v := range a {
+		if _, ok := b[v]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 type orgPathScope struct {
@@ -573,9 +843,7 @@ func stripSlugLegalForm(slug string) string {
 	// Normalize common corp filler tokens that often appear before legal form
 	// and should not split identity cores (e.g., wingtech-technology-co-ltd vs wingtech-technology-ltd).
 	for _, filler := range []string{"-co", "-company", "-group", "-holding", "-holdings"} {
-		if strings.HasSuffix(slug, filler) {
-			slug = strings.TrimSuffix(slug, filler)
-		}
+		slug = strings.TrimSuffix(slug, filler)
 	}
 	return slug
 }
@@ -906,78 +1174,12 @@ func extractWikidataIDFromFragment(f *models.HorizonFragment) string {
 // the same organization. This policy normalizes them for matching.
 
 // LegalSuffixesToRemove defines common legal suffixes to strip during normalization.
-var LegalSuffixesToRemove = []string{
-	" jsc", " pjsc", " cjsc", " ojsc",
-	" llc", " pllc", " inc", " ltd", " co", " corp", " corporation",
-	" group", " holdings", " limited", " company", " pty ltd",
-	" sa", " ag", " se", " gmbh", " ab", " oy", " as", " spa",
-	" nv", " bv", " sarl", " srl", " plc", " lp", " llp",
-	" s.a.", " a.g.", " s.p.a.", " n.v.", " b.v.", " s.à r.l.", " p.l.c.",
-	" p.j.s.c.", " c.j.s.c.",
-}
-
-// reParenthetical matches parenthetical annotations that LLMs often inject into org names.
-// Examples: "(formerly stc pay)", "(ex-Aramex)", "(now STC Bank)", "(fka STC Pay)", "(dba ...)"
-var reParenthetical = regexp.MustCompile(`\s*\((?:formerly|previously|ex-?|now|fka|dba|aka|trading as|prev\.?|f/k/a|d/b/a|a/k/a)\s[^)]*\)`)
-
-// stripParentheticalAnnotations removes LLM-injected parenthetical annotations from org names.
-// e.g., "STC Bank (formerly stc pay)" → "STC Bank"
-func stripParentheticalAnnotations(name string) string {
-	cleaned := reParenthetical.ReplaceAllString(name, "")
-	return strings.TrimSpace(cleaned)
-}
+var LegalSuffixesToRemove = naming.LegalSuffixesToRemove
 
 // NormalizeLegalName removes common legal suffixes, parenthetical annotations,
 // and normalizes spacing/punctuation for deduplication matching.
 func NormalizeLegalName(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		return ""
-	}
-
-	// Remove parenthetical annotations like "(formerly stc pay)" before suffix stripping.
-	// This prevents "(formerly ...)" from masking the legal suffix at the end.
-	name = stripParentheticalAnnotations(name)
-
-	// Normalize punctuation and spacing
-	name = strings.ReplaceAll(name, ".", "")
-	name = strings.ReplaceAll(name, ",", "")
-	name = strings.ReplaceAll(name, "&", "and")
-	name = strings.ReplaceAll(name, "-", " ")
-	name = strings.Join(strings.Fields(name), " ")
-
-	// Remove legal suffixes iteratively after punctuation normalization.
-	// This handles variants like:
-	// - "co ltd"
-	// - "co., ltd."
-	// - "inc ltd" (stacked noise)
-	changed := true
-	for changed {
-		changed = false
-		for _, suffix := range LegalSuffixesToRemove {
-			sfx := strings.ToLower(strings.TrimSpace(suffix))
-			sfx = strings.ReplaceAll(sfx, ".", "")
-			sfx = strings.ReplaceAll(sfx, ",", "")
-			sfx = strings.Join(strings.Fields(sfx), " ")
-			if sfx == "" {
-				continue
-			}
-			if strings.HasSuffix(name, " "+sfx) {
-				name = strings.TrimSpace(strings.TrimSuffix(name, " "+sfx))
-				changed = true
-				break
-			}
-			if name == sfx {
-				name = ""
-				changed = true
-				break
-			}
-		}
-	}
-
-	name = strings.Join(strings.Fields(name), " ")
-
-	return name
+	return naming.NormalizeLegalName(name)
 }
 
 func (d *OrgDeduplicator) String() string {
@@ -999,10 +1201,12 @@ func (d *OrgDeduplicator) Stats() OrgDeduplicatorStats {
 		HitPathVariant:        atomic.LoadInt64(&d.hitPathVariant),
 		HitCountryAsOrg:       atomic.LoadInt64(&d.hitCountryAsOrg),
 		HitWikidataID:         atomic.LoadInt64(&d.hitWikidataID),
+		HitIdentityAnchor:     atomic.LoadInt64(&d.hitIdentityAnchor),
 		HitGovOrgBridge:       atomic.LoadInt64(&d.hitGovOrgBridge),
 		HitLegalName:          atomic.LoadInt64(&d.hitLegalName),
 		HitLabelEN:            atomic.LoadInt64(&d.hitLabelEN),
 		HitShortName:          atomic.LoadInt64(&d.hitShortName),
+		HitNameHistory:        atomic.LoadInt64(&d.hitNameHistory),
 		HitNormalizedLegal:    atomic.LoadInt64(&d.hitNormalizedLegal),
 		HitWikidataSearch:     atomic.LoadInt64(&d.hitWikidataSearch),
 	}

@@ -55,9 +55,23 @@ func (a *IntentDecomposerAgent) DecomposeWithOptions(
 	keywords []string,
 	opts DecomposeOptions,
 ) ([]DiscoveredRelation, error) {
+	rels, _, err := a.DecomposeWithGrounding(ctx, targetCanonicalPath, focus, spherePaths, keywords, opts)
+	return rels, err
+}
+
+// DecomposeWithGrounding is like DecomposeWithOptions but also returns grounding evidence
+// from the full AI task result.
+func (a *IntentDecomposerAgent) DecomposeWithGrounding(
+	ctx context.Context,
+	targetCanonicalPath string,
+	focus string,
+	spherePaths []string,
+	keywords []string,
+	opts DecomposeOptions,
+) ([]DiscoveredRelation, *ai.GroundingEvidence, error) {
 	targetCanonicalPath = strings.TrimSpace(targetCanonicalPath)
 	if targetCanonicalPath == "" {
-		return nil, fmt.Errorf("targetCanonicalPath is required")
+		return nil, nil, fmt.Errorf("targetCanonicalPath is required")
 	}
 
 	// Auto-detect abstract anchor from path prefix
@@ -72,26 +86,32 @@ func (a *IntentDecomposerAgent) DecomposeWithOptions(
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
-			TextGenerationCapability:  true,
-			SearchGroundingCapability: true, // ok to use grounded search when available
-			MinCapabilityScore:        7,
-			MinContextWindow:          16000,
-			MaxOutputSize:             8192,
+			TextGenerationCapability:        true,
+			SearchGroundingCapability:       true, // ok to use grounded search when available
+			InternalDataGroundingCapability: true,
+			MinCapabilityScore:              7,
+			MinContextWindow:                16000,
+			MaxOutputSize:                   8192,
 		},
 		Verifier: verifier,
 	}
 
-	result, err := a.executor.ExecuteStructuredTask(ctx, task)
+	result, fullResult, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
 	if err != nil {
-		return nil, fmt.Errorf("intent decomposition failed: %w", err)
+		return nil, nil, fmt.Errorf("intent decomposition failed: %w", err)
 	}
+	var groundingEvidence *ai.GroundingEvidence
+	if fullResult != nil {
+		groundingEvidence = fullResult.GroundingEvidence
+	}
+
 	b, err := json.Marshal(result)
 	if err != nil {
-		return nil, err
+		return nil, groundingEvidence, err
 	}
 	var out intentDecompositionResult
 	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, fmt.Errorf("failed to parse intent decomposition result: %w", err)
+		return nil, groundingEvidence, fmt.Errorf("failed to parse intent decomposition result: %w", err)
 	}
 	// Best-effort cleanup: drop empty rows, clamp confidence to appropriate envelope.
 	clean := make([]DiscoveredRelation, 0, len(out.Relations))
@@ -124,7 +144,7 @@ func (a *IntentDecomposerAgent) DecomposeWithOptions(
 			break
 		}
 	}
-	return clean, nil
+	return clean, groundingEvidence, nil
 }
 
 func (a *IntentDecomposerAgent) buildPromptWithOptions(targetCanonicalPath string, focus string, spherePaths []string, keywords []string, opts DecomposeOptions) string {
@@ -226,6 +246,12 @@ Choose relationType to match this direction:
   For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO (NOT PRODUCES).
 - REGULATES: source regulates target (source is typically a government/agency org).
 - COMPETES_WITH / INFLUENCES: as labeled.
+- RENAMED_TO: organization legal rename (ORG -> ORG).
+- REBRANDED_TO: organization brand rename/repositioning (ORG -> ORG).
+- LEGAL_SUCCESSOR_OF: legal succession between organizations (ORG -> ORG).
+- MERGED_INTO: source organization merged into target organization.
+- SPUN_OFF_FROM: source organization spun off from target organization.
+- ACQUIRED_BY: source organization acquired by target organization.
 - GATEKEEPS_DECISION: source (ORG/GOV/COMMUNITY) gatekeeps target (DECISION_POINT).
 - OPERATES_VIA: source uses target channel/platform for communication/operations.
   Direction: COMMUNITY/ORGANIZATION → MEDIA_CHANNEL
@@ -267,7 +293,7 @@ Return ONLY JSON with this schema:
       "targetLegalName": "string",
       "targetShortName": "string",
       "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "COMMUNITY",
-      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "COMPETES_WITH" | "INFLUENCES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "SURFACES",
+      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "SURFACES",
       "reason": "string",
       "confidence": 0.0,
       "targetCanonicalPath": "string (REQUIRED, stable, NOT /discovered/*)"

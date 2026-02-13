@@ -333,6 +333,36 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
 		Description:      "Entity is affiliated with organization",
 	},
+	models.DependencyTypeRenamedTo: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Organization renamed to organization (corporate transition)",
+	},
+	models.DependencyTypeRebrandedTo: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Organization rebranded to organization (corporate transition)",
+	},
+	models.DependencyTypeLegalSuccessorOf: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Organization is legal successor of organization",
+	},
+	models.DependencyTypeMergedInto: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Organization merged into organization",
+	},
+	models.DependencyTypeSpunOffFrom: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Organization spun off from organization",
+	},
+	models.DependencyTypeAcquiredBy: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Organization acquired by organization",
+	},
 	models.DependencyTypeFocusesOn: {
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
 		ValidTargetTypes: []models.FragmentType{

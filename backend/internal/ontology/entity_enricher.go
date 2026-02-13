@@ -40,6 +40,7 @@ type WikidataEntityData struct {
 	URL           string                 `json:"url"`
 	Properties    map[string]string      `json:"properties"`
 	PropertiesRaw map[string]interface{} `json:"propertiesRaw,omitempty"`
+	Aliases       []string               `json:"aliases,omitempty"` // English aliases (alternative names/labels)
 }
 
 // EntityEnricher обогащает Entity данными из внешних источников (Wikidata)

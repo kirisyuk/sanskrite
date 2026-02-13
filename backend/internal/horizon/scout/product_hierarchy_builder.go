@@ -506,7 +506,8 @@ func (b *ProductHierarchyBuilder) ensureProductFromWikidata(
 
 	// Deduplicate before creating
 	deduplicated, err := b.deduplicator.DeduplicateProduct(ctx, f)
-	if err == nil && deduplicated != nil && deduplicated.ID != "" && deduplicated.ID != f.ID {
+	if err == nil && deduplicated != nil && deduplicated.ID != "" && deduplicated.ID != f.ID &&
+		isDedupReplacementCompatible(f.Type, f.CanonicalPath, deduplicated) {
 		fmt.Printf("[ProductHierarchyBuilder] Deduplicated product from Wikidata: qID=%s candidateCP=%s -> existing id=%s canonicalPath=%s\n",
 			qID, f.CanonicalPath, deduplicated.ID, deduplicated.CanonicalPath)
 		return deduplicated, nil
@@ -840,7 +841,8 @@ func (b *ProductHierarchyBuilder) ensureProducerFromWikidata(
 	// Deduplicate before creating
 	if b.orgDeduplicator != nil {
 		deduplicated, err := b.orgDeduplicator.DeduplicateOrg(ctx, f)
-		if err == nil && deduplicated != nil && deduplicated.ID != "" && deduplicated.ID != f.ID {
+		if err == nil && deduplicated != nil && deduplicated.ID != "" && deduplicated.ID != f.ID &&
+			isDedupReplacementCompatible(f.Type, f.CanonicalPath, deduplicated) {
 			fmt.Printf("[ProductHierarchyBuilder] Producer dedup hit: qID=%s -> existing id=%s path=%s\n",
 				qID, deduplicated.ID, deduplicated.CanonicalPath)
 			// Cache for this session

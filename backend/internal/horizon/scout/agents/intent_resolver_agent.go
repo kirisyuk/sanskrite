@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -107,12 +108,12 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 		TaskType:     ai.TaskTypeContentAnalysis,
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
-			PreferredModel:               "gemini-3-flash-preview",
-			TextGenerationCapability:     true,
-			SearchGroundingCapability:    false,
-			MinCapabilityScore:           7,
-			MinContextWindow:             8000,
-			MaxOutputSize:                4096, // domains + anchors + hints in one response
+			PreferredModel:            "gemini-3-flash-preview",
+			TextGenerationCapability:  true,
+			SearchGroundingCapability: false,
+			MinCapabilityScore:        7,
+			MinContextWindow:          8000,
+			MaxOutputSize:             4096, // domains + anchors + hints in one response
 		},
 		Verifier: verifier,
 	}
@@ -191,7 +192,15 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 		}
 		an.Reason = strings.TrimSpace(an.Reason)
 		an.Type = strings.TrimSpace(an.Type)
-		an.Name = strings.TrimSpace(an.Name)
+		an.Name = naming.StripParentheticalAliasAnnotations(strings.TrimSpace(an.Name))
+		if an.Name == "" {
+			an.Name = naming.BestEffortLabelFromCanonicalPath(cp)
+		}
+		if an.Name != "" && !naming.IsLatinScript(an.Name) {
+			if fallback := naming.BestEffortLabelFromCanonicalPath(cp); fallback != "" {
+				an.Name = fallback
+			}
+		}
 		nAnchors = append(nAnchors, an)
 		if len(nAnchors) >= 5 {
 			break
@@ -460,6 +469,7 @@ func buildUnifiedIntentPrompt(query string, existingDomains []string) string {
 
 `
 	}
+	anchorNamingBlock := naming.PromptAnchorNameRules()
 	return fmt.Sprintf(`You are an INTENT RESOLVER for a risk/intelligence analysis system. Output ONLY JSON.
 
 USER QUERY:
@@ -517,7 +527,7 @@ DOMAIN RULES
 - contractType MUST be one of:
   SUPPLY CHAIN: supply-chain, value-chain, logistics-flow, trade-flow, sourcing-map, procurement-map
   RISK/GEOPOLITICS: risk-assessment, geopolitical-risk, bilateral-relations, sanctions-exposure, conflict-dynamics
-  MARKETS: market-opportunity, competitive-landscape, market-entry, market-sizing, demand-forecast, pricing-dynamics
+  MARKETS: market-opportunity, competitive-landscape, geographic-concentration, market-entry, market-sizing, demand-forecast, pricing-dynamics
   INVESTMENT: investment-thesis, funding-landscape, exit-strategy, valuation-drivers, portfolio-exposure
   OWNERSHIP/STRUCTURE: ownership-structure, control-map
   TECHNOLOGY: technology-landscape, innovation-map, patent-landscape, rd-landscape, adoption-curve, disruption-analysis
@@ -540,6 +550,7 @@ ANCHOR TAXONOMY
 - Anchors are concrete real-world entities. Do NOT create domains as anchors.
 - canonicalPath namespaces: /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media
 - ALL path segments MUST be lowercase slugs (hyphens, no spaces).
+%s
 
 ORGANIZATION: /org/{iso2|na}/{slug} (e.g., /org/sa/saudi-aramco). GOV bodies: /gov/{iso2|na}/{slug}.
 FACILITY: /fac/{orgSlug}/{facilitySlug} or /fac/{facilitySlug}
@@ -560,7 +571,7 @@ DECOMPOSITION HINTS (REQUIRED for MARKET/PROGRAM anchors):
 GENERAL:
 - Provide 1-3 anchors (what the Lens should attach to).
 - Prefer stable, specific anchors.
-- Return ONLY JSON. No markdown. No commentary.`, query, existingDomainsBlock, quotedBlock, multiHint)
+- Return ONLY JSON. No markdown. No commentary.`, query, existingDomainsBlock, quotedBlock, multiHint, anchorNamingBlock)
 }
 
 func parseDomainPathForIntent(canonicalPath string) (contractType string, facets map[string][]string) {
@@ -643,6 +654,8 @@ func baseDomainTitle(contractType string) string {
 		return "Market opportunity"
 	case "competitive-landscape":
 		return "Competitive landscape"
+	case "geographic-concentration":
+		return "Geographic concentration"
 	case "market-entry":
 		return "Market entry"
 	case "market-sizing":
@@ -868,6 +881,8 @@ func buildDomainDescriptionForIntent(contractType string, title string) string {
 		return fmt.Sprintf("Expand %s into first-order entities and relationships: market segments, key players, demand drivers, supply constraints, and regulatory factors.", ttl)
 	case "competitive-landscape":
 		return fmt.Sprintf("Expand %s into first-order entities: competitors, market shares, product offerings, strategic positioning, and differentiation factors.", ttl)
+	case "geographic-concentration":
+		return fmt.Sprintf("Expand %s into first-order entities: geographies, facilities, suppliers, capacity distribution, and concentration signals.", ttl)
 	case "market-sizing", "demand-forecast":
 		return fmt.Sprintf("Expand %s into first-order entities: market segments, size drivers, growth factors, demand indicators, and key forecasts.", ttl)
 	case "pricing-dynamics":
@@ -1252,7 +1267,7 @@ RULES:
     RISK / GEOPOLITICS:
       risk-assessment, geopolitical-risk, bilateral-relations, sanctions-exposure, conflict-dynamics
     MARKETS / OPPORTUNITY:
-      market-opportunity, competitive-landscape, market-entry, market-sizing, demand-forecast, pricing-dynamics
+      market-opportunity, competitive-landscape, geographic-concentration, market-entry, market-sizing, demand-forecast, pricing-dynamics
     INVESTMENT / FINANCE:
       investment-thesis, funding-landscape, exit-strategy, valuation-drivers, portfolio-exposure
     OWNERSHIP / STRUCTURE:

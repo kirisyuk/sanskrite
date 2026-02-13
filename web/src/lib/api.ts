@@ -1979,6 +1979,42 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     input: {
       projectId?: string;
       question: string;
+      domainAnswerContext?: {
+        snapshotId?: string;
+        id?: string;
+        domainId?: string;
+        domainCanonicalPath?: string;
+        readinessStatus?: string;
+        domainContract?: {
+          contractType?: string;
+          title?: string;
+          description?: string;
+          facets?: Record<string, string[]>;
+        };
+        thesis?: { text?: string; confidence?: number };
+        gate?: { overallStatus?: string; failedCheckIds?: string[] };
+        criticalDependencies?: Array<{
+          sourceCanonicalPath?: string;
+          targetCanonicalPath?: string;
+          relationType?: string;
+          topDependencyScore?: number;
+          confidence?: number;
+        }>;
+        impactPaths?: Array<{
+          nodePaths?: string[];
+          edgeIds?: string[];
+          criticality?: number;
+          facetKey?: string;
+        }>;
+        dataGaps?: Array<{
+          gapType?: string;
+          affectedFacet?: string;
+          affectedNodePath?: string;
+          affectedEdgeId?: string;
+          hint?: string;
+          priority?: string;
+        }>;
+      };
       graph: {
         nodes: Array<{ id: string; label?: string; type?: string; canonicalPath?: string }>;
         edges?: Array<{ from: string; to: string; type?: string; label?: string }>;
@@ -2047,6 +2083,93 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return response.data;
     } catch (error: any) {
       console.error(`[API] executeDomainOverlay error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Horizon - List domain answers for a lens.
+   * GET /api/horizon/lenses/{lensId}/domain-answers
+   */
+  async listHorizonDomainAnswers(
+    lensId: string,
+    options?: { limit?: number }
+  ): Promise<{ domainAnswers: any[]; totalCount: number }> {
+    try {
+      const params: Record<string, number> = {};
+      if (typeof options?.limit === 'number' && options.limit > 0) {
+        params.limit = options.limit;
+      }
+      const response = await this.client.get(`/api/horizon/lenses/${lensId}/domain-answers`, { params });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] listHorizonDomainAnswers error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Horizon - Get one domain answer by domainId or snapshot id.
+   * GET /api/horizon/lenses/{lensId}/domain-answers/{domainId}
+   */
+  async getHorizonDomainAnswer(lensId: string, domainId: string): Promise<any> {
+    try {
+      const response = await this.client.get(
+        `/api/horizon/lenses/${lensId}/domain-answers/${encodeURIComponent(domainId)}`
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getHorizonDomainAnswer error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Horizon - Create a new domain on demand from a user query.
+   * POST /api/horizon/lenses/{lensId}/domain-answers
+   */
+  async createHorizonDomainAnswer(
+    lensId: string,
+    body: { query: string },
+    headers?: { correlationId?: string; sessionId?: string },
+  ): Promise<{ jobId: string; domainCanonicalPath: string }> {
+    try {
+      const hdrs: Record<string, string> = {};
+      if (headers?.correlationId) hdrs['X-Correlation-Id'] = headers.correlationId;
+      if (headers?.sessionId) hdrs['X-Session-Id'] = headers.sessionId;
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/domain-answers`,
+        body,
+        { headers: hdrs },
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] createHorizonDomainAnswer error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Horizon - Run DomainContractEngine for an existing domain (builds snapshot).
+   * POST /api/horizon/lenses/{lensId}/domain-answers/{domainId}/run
+   */
+  async runHorizonDomainAnswer(
+    lensId: string,
+    domainId: string,
+    headers?: { correlationId?: string; sessionId?: string },
+  ): Promise<{ jobId: string; domainCanonicalPath: string }> {
+    try {
+      const hdrs: Record<string, string> = {};
+      if (headers?.correlationId) hdrs['X-Correlation-Id'] = headers.correlationId;
+      if (headers?.sessionId) hdrs['X-Session-Id'] = headers.sessionId;
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/domain-answers/${encodeURIComponent(domainId)}/run`,
+        {},
+        { headers: hdrs },
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] runHorizonDomainAnswer error:`, error);
       throw error;
     }
   }
@@ -2566,6 +2689,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       nodes: any[];
       edges: any[];
     };
+    domainAnswers?: any[];
     summary: {
       totalFragments: number;
       totalEdges: number;
@@ -2712,4 +2836,3 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
 }
 
 export const api = new ApiClient();
-

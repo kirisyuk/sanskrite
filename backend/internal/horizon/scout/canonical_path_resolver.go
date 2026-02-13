@@ -268,7 +268,10 @@ func (r *CanonicalPathResolver) Resolve(
 
 		deduplicated, err := r.orgDeduplicator.DeduplicateOrg(ctx, testFragment)
 		if err == nil && deduplicated != nil && deduplicated.ID != "" {
-			if deduplicated.CanonicalPath != result.CanonicalPath {
+			if !isDedupReplacementCompatible(fragmentType, result.CanonicalPath, deduplicated) {
+				log.Printf("%s Org deduplication candidate rejected (incompatible): requestedType=%s requestedPath=%s candidateType=%s candidatePath=%s candidateID=%s",
+					logPrefix, fragmentType, result.CanonicalPath, deduplicated.Type, deduplicated.CanonicalPath, deduplicated.ID)
+			} else if deduplicated.CanonicalPath != result.CanonicalPath {
 				atomic.AddInt64(&r.orgDedupHits, 1)
 				result.NormalizationSteps = append(result.NormalizationSteps,
 					fmt.Sprintf("org_deduplication: %s -> %s (id=%s)", result.CanonicalPath, deduplicated.CanonicalPath, deduplicated.ID))
@@ -848,8 +851,8 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 		rawTags := parseTagMetadata(metadata["tags"])
 		normalizedTags := taxonomy.NormalizeMarketTags(rawTags)
 		if len(normalizedTags) >= 5 {
-			geo, sector := parseMarketGeoSector(result.CanonicalPath)
-			if geo != "" && sector != "" {
+			geo, sector, vertical := parseMarketGeoSector(result.CanonicalPath)
+			if geo != "" && sector != "" && vertical != "" {
 				searchTokens := taxonomy.MarketTagSearchTokens(normalizedTags, 10)
 				if len(searchTokens) > 0 {
 					candidates, err := r.fragmentsRepo.FindByTags(ctx, searchTokens, 50)
@@ -867,8 +870,12 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 							if cand.Type != models.FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(cand.CanonicalPath), "/market/") {
 								continue
 							}
-							cGeo, cSector := parseMarketGeoSector(cand.CanonicalPath)
-							if cGeo == "" || cSector == "" || cGeo != geo || cSector != sector {
+							cGeo, cSector, cVertical := parseMarketGeoSector(cand.CanonicalPath)
+							if cGeo == "" || cSector == "" || cVertical == "" {
+								continue
+							}
+							// Strict scope match: same geo + domain + vertical.
+							if cGeo != geo || cSector != sector || cVertical != vertical {
 								continue
 							}
 							candTags := taxonomy.NormalizeMarketTags(cand.Tags)
@@ -918,6 +925,16 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 		if wikidataId, ok := metadata["wikidataId"]; ok {
 			testFragment.Identifiers["wikidataId"] = strings.TrimSpace(wikidataId)
 		}
+		for _, key := range orgIdentityAnchorPriority {
+			if key == "wikidataId" {
+				continue
+			}
+			if v, ok := metadata[key]; ok {
+				if vv := strings.TrimSpace(v); vv != "" {
+					testFragment.Identifiers[key] = vv
+				}
+			}
+		}
 		if labelEN, ok := metadata["labelEN"]; ok {
 			if testFragment.Labels == nil {
 				testFragment.Labels = make(map[string]string)
@@ -927,7 +944,10 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 
 		deduplicated, err := r.orgDeduplicator.DeduplicateOrg(ctx, testFragment)
 		if err == nil && deduplicated != nil && deduplicated.ID != "" {
-			if deduplicated.CanonicalPath != result.CanonicalPath {
+			if !isDedupReplacementCompatible(fragmentType, result.CanonicalPath, deduplicated) {
+				log.Printf("%s Org deduplication (with metadata) candidate rejected (incompatible): requestedType=%s requestedPath=%s candidateType=%s candidatePath=%s candidateID=%s",
+					logPrefix, fragmentType, result.CanonicalPath, deduplicated.Type, deduplicated.CanonicalPath, deduplicated.ID)
+			} else if deduplicated.CanonicalPath != result.CanonicalPath {
 				atomic.AddInt64(&r.orgDedupHits, 1)
 				result.NormalizationSteps = append(result.NormalizationSteps,
 					fmt.Sprintf("org_deduplication_with_metadata: %s -> %s (id=%s)", result.CanonicalPath, deduplicated.CanonicalPath, deduplicated.ID))
@@ -989,24 +1009,8 @@ func parseTagMetadata(raw string) []string {
 	return out
 }
 
-func parseMarketGeoSector(canonicalPath string) (string, string) {
-	cp := strings.TrimSpace(canonicalPath)
-	if !strings.HasPrefix(cp, "/market/") {
-		return "", ""
-	}
-	if parts, err := taxonomy.ParseCanonicalPathParts(cp); err == nil && parts != nil && parts.Market != nil {
-		geo := strings.ToLower(strings.TrimSpace(parts.Market.Geo))
-		sector := taxonomy.NormalizeMarketDomain(parts.Market.Domain)
-		if geo != "" && sector != "" {
-			return geo, sector
-		}
-	}
-	trimmed := strings.Trim(cp, "/")
-	parts := strings.Split(trimmed, "/")
-	if len(parts) >= 4 && parts[0] == "market" {
-		return strings.ToLower(strings.TrimSpace(parts[1])), taxonomy.NormalizeMarketDomain(parts[2])
-	}
-	return "", ""
+func parseMarketGeoSector(canonicalPath string) (string, string, string) {
+	return parseMarketDedupScope(canonicalPath)
 }
 
 // RecordRedirect stores a canonical path rewrite for future fast-path resolution.

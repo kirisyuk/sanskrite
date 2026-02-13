@@ -22,6 +22,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -691,7 +692,7 @@ func (r *HorizonFragmentsRepository) FindByNormalizedLegalName(ctx context.Conte
 		if legalName == "" {
 			continue
 		}
-		fragNormalized := normalizeLegalNameForSearch(legalName)
+		fragNormalized := naming.NormalizeLegalName(legalName)
 		if fragNormalized == normalizedName {
 			matches = append(matches, &fragment)
 			if len(matches) >= 5 {
@@ -701,55 +702,6 @@ func (r *HorizonFragmentsRepository) FindByNormalizedLegalName(ctx context.Conte
 	}
 
 	return matches, nil
-}
-
-// normalizeLegalNameForSearch is a local helper matching scout.NormalizeLegalName logic.
-func normalizeLegalNameForSearch(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		return ""
-	}
-	// Normalize punctuation and spacing first to stabilize suffix matching.
-	name = strings.ReplaceAll(name, ".", "")
-	name = strings.ReplaceAll(name, ",", "")
-	name = strings.ReplaceAll(name, "&", "and")
-	name = strings.ReplaceAll(name, "-", " ")
-	name = strings.Join(strings.Fields(name), " ")
-
-	// Remove legal suffixes iteratively (same semantics as scout.NormalizeLegalName).
-	suffixes := []string{
-		" jsc", " llc", " inc", " ltd", " co", " corp", " corporation",
-		" group", " holdings", " limited", " company", " pty ltd",
-		" sa", " ag", " se", " gmbh", " ab", " oy", " as", " spa",
-		" nv", " bv", " sarl", " plc", " lp", " llp",
-		" s.a.", " a.g.", " s.p.a.", " n.v.", " b.v.", " s.à r.l.", " p.l.c.",
-		" co., ltd.", " co.,ltd.", " co., ltd", " co.,ltd",
-	}
-	changed := true
-	for changed {
-		changed = false
-		for _, suffix := range suffixes {
-			sfx := strings.ToLower(strings.TrimSpace(suffix))
-			sfx = strings.ReplaceAll(sfx, ".", "")
-			sfx = strings.ReplaceAll(sfx, ",", "")
-			sfx = strings.Join(strings.Fields(sfx), " ")
-			if sfx == "" {
-				continue
-			}
-			if strings.HasSuffix(name, " "+sfx) {
-				name = strings.TrimSpace(strings.TrimSuffix(name, " "+sfx))
-				changed = true
-				break
-			}
-			if name == sfx {
-				name = ""
-				changed = true
-				break
-			}
-		}
-	}
-	name = strings.Join(strings.Fields(name), " ")
-	return name
 }
 
 // Update обновляет HorizonFragment и сохраняет версию

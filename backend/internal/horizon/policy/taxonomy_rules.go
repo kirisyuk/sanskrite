@@ -546,33 +546,26 @@ func (r *TaxonomyRules) ValidatePersonPath(path string) (bool, string) {
 
 // ValidateEdgeDirection checks if an edge has correct direction.
 func (r *TaxonomyRules) ValidateEdgeDirection(edgeType models.DependencyType, sourceType, targetType models.FragmentType) (bool, bool, string) {
-	edgeTypeStr := string(edgeType)
-
-	for _, rule := range r.EdgeDirection.Rules {
-		if rule.EdgeType == edgeTypeStr {
-			sourceValid := containsString(rule.ValidSource, string(sourceType))
-			targetValid := containsString(rule.ValidTarget, string(targetType))
-
-			if sourceValid && targetValid {
-				return true, false, ""
-			}
-
-			// Check if reversed would be valid
-			reversedSourceValid := containsString(rule.ValidSource, string(targetType))
-			reversedTargetValid := containsString(rule.ValidTarget, string(sourceType))
-
-			if reversedSourceValid && reversedTargetValid {
-				return false, true, fmt.Sprintf("Edge %s should be reversed: %s → %s, not %s → %s",
-					edgeTypeStr, targetType, sourceType, sourceType, targetType)
-			}
-
-			return false, false, fmt.Sprintf("Edge %s has invalid endpoint types: source=%s, target=%s",
-				edgeTypeStr, sourceType, targetType)
-		}
+	valid, shouldReverse, rule := edgesemantics.ValidateEdgeDirection(edgeType, sourceType, targetType)
+	if valid {
+		return true, false, ""
 	}
 
-	// No rule found = valid
-	return true, false, ""
+	description := ""
+	if rule != nil {
+		description = strings.TrimSpace(rule.Description)
+	}
+	if shouldReverse {
+		if description == "" {
+			description = fmt.Sprintf("edge %s should be reversed: %s → %s, not %s → %s", edgeType, targetType, sourceType, sourceType, targetType)
+		}
+		return false, true, description
+	}
+
+	if description == "" {
+		description = fmt.Sprintf("edge %s has invalid endpoint types: source=%s, target=%s", edgeType, sourceType, targetType)
+	}
+	return false, false, description
 }
 
 // IsSymmetricEdge checks if an edge type is symmetric.

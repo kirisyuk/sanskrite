@@ -44,8 +44,19 @@ type Provenance struct {
 	// Contributions is the bounded, structured provenance for this metric path on this node.
 	// It is the primary contract for tracing how a value arrived (risk-architecture.md "Top-K provenance").
 	Contributions []Contribution `json:"contributions,omitempty" firestore:"contributions,omitempty"`
-	ObservedAt    *time.Time  `json:"observedAt,omitempty" firestore:"observedAt,omitempty"`
-	Method        string      `json:"method,omitempty" firestore:"method,omitempty"` // extracted, curated, imported
+	ObservedAt    *time.Time     `json:"observedAt,omitempty" firestore:"observedAt,omitempty"`
+	Method        string         `json:"method,omitempty" firestore:"method,omitempty"` // extracted, curated, imported
+	// GroundingContractVersion is the version of internal-first grounding provenance contract.
+	// Example: "v1"
+	GroundingContractVersion string `json:"groundingContractVersion,omitempty" firestore:"groundingContractVersion,omitempty"`
+	// OriginMode classifies where evidence came from: internal_only | external_only | mixed.
+	OriginMode string `json:"originMode,omitempty" firestore:"originMode,omitempty"`
+	// InternalEvidence stores deterministic IDs/URIs proving internal datastore grounding.
+	InternalEvidence *GroundingInternalEvidence `json:"internalEvidence,omitempty" firestore:"internalEvidence,omitempty"`
+	// ExternalEvidence stores web citations/URLs used by grounded generation.
+	ExternalEvidence *GroundingExternalEvidence `json:"externalEvidence,omitempty" firestore:"externalEvidence,omitempty"`
+	// ResolutionStats captures grounding-aware materialization counters.
+	ResolutionStats *GroundingResolutionStats `json:"resolutionStats,omitempty" firestore:"resolutionStats,omitempty"`
 }
 
 // SourceRef представляет ссылку на источник данных
@@ -53,6 +64,27 @@ type SourceRef struct {
 	SourceID   string  `json:"sourceId" firestore:"sourceId"`                         // DataSource ID или Document ID
 	SourceType string  `json:"sourceType" firestore:"sourceType"`                     // "dataSource", "document", "web", "rss", "telegram_channel"
 	DocumentID *string `json:"documentId,omitempty" firestore:"documentId,omitempty"` // Если SourceType = "dataSource", может быть Document
+}
+
+// GroundingInternalEvidence captures internal datastore evidence used by grounded calls.
+type GroundingInternalEvidence struct {
+	FragmentIDs   []string `json:"fragmentIds,omitempty" firestore:"fragmentIds,omitempty"`
+	DatastoreURIs []string `json:"datastoreUris,omitempty" firestore:"datastoreUris,omitempty"`
+	SourceIDs     []string `json:"sourceIds,omitempty" firestore:"sourceIds,omitempty"`
+	DocumentIDs   []string `json:"documentIds,omitempty" firestore:"documentIds,omitempty"`
+}
+
+// GroundingExternalEvidence captures external web evidence used by grounded calls.
+type GroundingExternalEvidence struct {
+	WebURLs   []string `json:"webUrls,omitempty" firestore:"webUrls,omitempty"`
+	Citations []string `json:"citations,omitempty" firestore:"citations,omitempty"`
+}
+
+// GroundingResolutionStats captures grounding-aware materialization outcomes.
+type GroundingResolutionStats struct {
+	RelationsResolvedByGrounding int `json:"relationsResolvedByGrounding,omitempty" firestore:"relationsResolvedByGrounding,omitempty"`
+	RelationsCreatedNew          int `json:"relationsCreatedNew,omitempty" firestore:"relationsCreatedNew,omitempty"`
+	DedupRedirectsByGrounding    int `json:"dedupRedirectsByGrounding,omitempty" firestore:"dedupRedirectsByGrounding,omitempty"`
 }
 
 // Contribution represents a single source contribution to a metric at a node.
@@ -87,13 +119,13 @@ const (
 	// Examples:
 	// - /domain/v1/supply-chain/geo/us/application/ev/material/lithium
 	// - /domain/v1/bilateral-relations/subject/uae-saudi-arabia
-	FragmentTypeDomain FragmentType = "DOMAIN"
-	FragmentTypeSphere       FragmentType = "SPHERE"
-	FragmentTypeEvent        FragmentType = "EVENT"
-	FragmentTypeProduct      FragmentType = "PRODUCT"
-	FragmentTypeProgram      FragmentType = "PROGRAM"
-	FragmentTypeMarket       FragmentType = "MARKET"
-	FragmentTypePerson       FragmentType = "PERSON"
+	FragmentTypeDomain  FragmentType = "DOMAIN"
+	FragmentTypeSphere  FragmentType = "SPHERE"
+	FragmentTypeEvent   FragmentType = "EVENT"
+	FragmentTypeProduct FragmentType = "PRODUCT"
+	FragmentTypeProgram FragmentType = "PROGRAM"
+	FragmentTypeMarket  FragmentType = "MARKET"
+	FragmentTypePerson  FragmentType = "PERSON"
 	// FragmentTypeMediaChannel represents a "last-mile" media endpoint (e.g., a specific public Telegram channel),
 	// not a media holding/company. This helps model narratives and distribution channels separately from owners.
 	FragmentTypeMediaChannel FragmentType = "MEDIA_CHANNEL"
@@ -102,8 +134,8 @@ const (
 	FragmentTypeDecisionPoint FragmentType = "DECISION_POINT"
 	// FragmentTypeMechanism represents a control mechanism (global, reusable).
 	// Canonical path format: /mechanism/{category}/{slug}
-	FragmentTypeMechanism FragmentType = "MECHANISM"
-	FragmentTypeSupplyLink   FragmentType = "SUPPLY_LINK" // Tenant-specific supply chain link
+	FragmentTypeMechanism  FragmentType = "MECHANISM"
+	FragmentTypeSupplyLink FragmentType = "SUPPLY_LINK" // Tenant-specific supply chain link
 	// FragmentTypeDeposit represents a natural resource deposit (oil field, mine, basin, etc.).
 	// Canonical path format: /deposit/{resource-slug}/{deposit-slug}
 	// Example: /deposit/crude-oil/permian-basin, /deposit/lithium/atacama-salar

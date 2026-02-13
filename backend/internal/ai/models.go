@@ -66,7 +66,7 @@ const (
 	AIProviderOpenAI   AIProvider = "OpenAI"
 	AIProviderClaude   AIProvider = "Claude"
 	AIProviderGemini   AIProvider = "Gemini"   // Google AI (generativelanguage.googleapis.com) — API key auth
-	AIProviderVertexAI AIProvider = "VertexAI"  // Vertex AI Platform (aiplatform.googleapis.com) — OAuth2, supports Vertex AI Search grounding
+	AIProviderVertexAI AIProvider = "VertexAI" // Vertex AI Platform (aiplatform.googleapis.com) — OAuth2, supports Vertex AI Search grounding
 	AIProviderDeepSeek AIProvider = "DeepSeek"
 	AIProviderGrok     AIProvider = "Grok"
 )
@@ -123,6 +123,9 @@ type AIRequirements struct {
 
 	// SearchGroundingCapability требуется модель с поддержкой Google Search Grounding (Vertex/Gemini)
 	SearchGroundingCapability bool `json:"searchGroundingCapability"`
+
+	// InternalDataGroundingCapability требуется модель с поддержкой grounding по internal datastore (Vertex AI Search).
+	InternalDataGroundingCapability bool `json:"internalDataGroundingCapability"`
 }
 
 // AIModelCapabilities описывает технические и коммерческие характеристики конкретной AI-модели
@@ -174,6 +177,9 @@ type AIModelCapabilities struct {
 
 	// SearchGroundingCapability поддерживает ли модель Search Grounding (Gemini/Vertex)
 	SearchGroundingCapability bool
+
+	// InternalDataGroundingCapability поддерживает ли модель grounding по внутреннему datastore.
+	InternalDataGroundingCapability bool
 
 	// SupportsToolCalling поддерживает ли модель function/tool-calling
 	SupportsToolCalling bool

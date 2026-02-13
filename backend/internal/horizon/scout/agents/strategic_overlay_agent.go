@@ -49,11 +49,17 @@ func NewStrategicOverlayAgent(executor *ai.AITaskExecutor) *StrategicOverlayAgen
 }
 
 func (a *StrategicOverlayAgent) Extract(ctx context.Context, domain *models.HorizonFragment, graphContext string, focus string, keywords []string) (*StrategicOverlayResult, error) {
+	result, _, err := a.ExtractWithGrounding(ctx, domain, graphContext, focus, keywords)
+	return result, err
+}
+
+// ExtractWithGrounding returns extracted overlay plus grounding evidence.
+func (a *StrategicOverlayAgent) ExtractWithGrounding(ctx context.Context, domain *models.HorizonFragment, graphContext string, focus string, keywords []string) (*StrategicOverlayResult, *ai.GroundingEvidence, error) {
 	if a == nil || a.executor == nil {
-		return nil, fmt.Errorf("strategic overlay agent not configured")
+		return nil, nil, fmt.Errorf("strategic overlay agent not configured")
 	}
 	if domain == nil || strings.TrimSpace(domain.CanonicalPath) == "" {
-		return nil, fmt.Errorf("domain is required")
+		return nil, nil, fmt.Errorf("domain is required")
 	}
 	focus = strings.TrimSpace(focus)
 	keywords = dedupStrings(keywords, 12)
@@ -74,27 +80,32 @@ func (a *StrategicOverlayAgent) Extract(ctx context.Context, domain *models.Hori
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
-			TextGenerationCapability:  true,
-			SearchGroundingCapability: true,
-			MinCapabilityScore:        7,
-			MinContextWindow:          16000,
-			MaxOutputSize:             12000,
+			TextGenerationCapability:        true,
+			SearchGroundingCapability:       true,
+			InternalDataGroundingCapability: true,
+			MinCapabilityScore:              7,
+			MinContextWindow:                16000,
+			MaxOutputSize:                   12000,
 		},
 		Verifier: verifier,
 	}
-	raw, err := a.executor.ExecuteStructuredTask(ctx, task)
+	raw, fullResult, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
 	if err != nil {
-		return nil, fmt.Errorf("strategic overlay extraction failed: %w", err)
+		return nil, nil, fmt.Errorf("strategic overlay extraction failed: %w", err)
+	}
+	var groundingEvidence *ai.GroundingEvidence
+	if fullResult != nil {
+		groundingEvidence = fullResult.GroundingEvidence
 	}
 	b, err := json.Marshal(raw)
 	if err != nil {
-		return nil, fmt.Errorf("marshal overlay result: %w", err)
+		return nil, groundingEvidence, fmt.Errorf("marshal overlay result: %w", err)
 	}
 	var out StrategicOverlayResult
 	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, fmt.Errorf("unmarshal overlay result: %w", err)
+		return nil, groundingEvidence, fmt.Errorf("unmarshal overlay result: %w", err)
 	}
-	return &out, nil
+	return &out, groundingEvidence, nil
 }
 
 func buildStrategicOverlayPrompt(domainPath, domainTitle, domainDesc, graphContext, focus, keywords string) string {

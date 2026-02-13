@@ -120,6 +120,12 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 		seen2[p] = struct{}{}
 		outScope = append(outScope, p)
 	}
+	scopeDomainPaths := map[string]struct{}{}
+	for _, p := range outScope {
+		if strings.HasPrefix(strings.TrimSpace(p), "/domain/") {
+			scopeDomainPaths[strings.TrimSpace(p)] = struct{}{}
+		}
+	}
 
 	// Получаем все HorizonFragment из scope (resolved)
 	fragments, err := h.service.Fragments().ListByCanonicalPaths(r.Context(), outScope)
@@ -248,6 +254,39 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 			"totalEdges":     len(allEdges),
 			"metrics":        metrics,
 		},
+		"domainAnswers": []interface{}{},
+	}
+	if len(scopeDomainPaths) > 0 {
+		if domainAnswersRepo := h.service.DomainAnswerSnapshots(); domainAnswersRepo != nil {
+			if snapshots, err := domainAnswersRepo.ListByLens(r.Context(), lensID, 50); err == nil && len(snapshots) > 0 {
+				out := make([]interface{}, 0, len(snapshots))
+				for _, s := range snapshots {
+					if s == nil {
+						continue
+					}
+					pathCandidates := []string{
+						strings.TrimSpace(s.DomainCanonicalPath),
+						strings.TrimSpace(s.DomainID),
+						strings.TrimSpace(s.DomainContract.CanonicalPath),
+					}
+					matched := false
+					for _, cp := range pathCandidates {
+						if cp == "" {
+							continue
+						}
+						if _, ok := scopeDomainPaths[cp]; ok {
+							matched = true
+							break
+						}
+					}
+					if !matched {
+						continue
+					}
+					out = append(out, s)
+				}
+				response["domainAnswers"] = out
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -31,7 +31,7 @@ func NewScoutPlanner(dataSourcesRepo *repo.DataSourcesRepository, factsRepo *rep
 	return &ScoutPlanner{
 		dataSourcesRepo:    dataSourcesRepo,
 		factsRepo:          factsRepo,
-		vertexSearchClient: vertexSearchClient,
+		vertexSearchClient: horizonVertexClient(vertexSearchClient),
 	}
 }
 
@@ -70,10 +70,10 @@ func (p *ScoutPlanner) PlanSources(ctx context.Context, tenantID, projectID stri
 // filterRelevantSourcesByFacts selects sources referenced by ontology facts for the target canonicalPath.
 //
 // IMPORTANT:
-// - If we cannot confidently select sources from facts (no facts, no sourceIds, query failure),
-//   we return nil so caller may fall back to doc-based planning or heuristic source selection.
-// - We intentionally avoid returning an empty slice to force Research, because internal documents
-//   may exist even when facts are not yet present/indexed.
+//   - If we cannot confidently select sources from facts (no facts, no sourceIds, query failure),
+//     we return nil so caller may fall back to doc-based planning or heuristic source selection.
+//   - We intentionally avoid returning an empty slice to force Research, because internal documents
+//     may exist even when facts are not yet present/indexed.
 func (p *ScoutPlanner) filterRelevantSourcesByFacts(
 	ctx context.Context,
 	tenantID string,
@@ -130,7 +130,8 @@ func (p *ScoutPlanner) filterRelevantSourcesByFacts(
 
 	// PRIORITY 2: Vertex AI Search fallback (for semantic search when Firestore doesn't have facts)
 	// Use Vertex AI Search only if Firestore didn't return facts, as it may have indexing delay.
-	if p.vertexSearchClient != nil && p.vertexSearchClient.IsConfigured() {
+	vertex := horizonVertexClient(p.vertexSearchClient)
+	if vertex != nil && vertex.IsConfigured() {
 		filterParts := []string{`structData.type: "ontology_fact"`}
 		if strings.TrimSpace(tenantID) != "" {
 			filterParts = append(filterParts, fmt.Sprintf(`structData.tenantId: "%s"`, strings.TrimSpace(tenantID)))
@@ -144,7 +145,7 @@ func (p *ScoutPlanner) filterRelevantSourcesByFacts(
 			PageSize: 30,
 			Filter:   strings.Join(filterParts, " AND "),
 		}
-		resp, err := p.vertexSearchClient.Search(ctx, req)
+		resp, err := vertex.Search(ctx, req)
 		if err == nil && resp != nil {
 			sourceIDs := make(map[string]struct{})
 			for _, r := range resp.Results {
@@ -217,7 +218,8 @@ func (p *ScoutPlanner) materializeSources(ctx context.Context, allSources []*mod
 // filterRelevantSources фильтрует релевантные источники с помощью Vertex AI Search
 func (p *ScoutPlanner) filterRelevantSources(ctx context.Context, sources []*models.DataSource, targetCanonicalPath string, strategy horizonmodels.ScoutingStrategy, searchQuery string) []*models.DataSource {
 	// Fallback: если клиент не настроен или нет источников, используем эвристику
-	if p.vertexSearchClient == nil || !p.vertexSearchClient.IsConfigured() || len(sources) == 0 {
+	vertex := horizonVertexClient(p.vertexSearchClient)
+	if vertex == nil || !vertex.IsConfigured() || len(sources) == 0 {
 		return p.fallbackFiltering(sources, strategy)
 	}
 
@@ -234,7 +236,7 @@ func (p *ScoutPlanner) filterRelevantSources(ctx context.Context, sources []*mod
 		// Можно добавить фильтр по типу документов, если нужно
 	}
 
-	resp, err := p.vertexSearchClient.Search(ctx, req)
+	resp, err := vertex.Search(ctx, req)
 	if err != nil {
 		// При ошибке используем fallback
 		return p.fallbackFiltering(sources, strategy)

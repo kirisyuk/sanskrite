@@ -133,27 +133,24 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 		// Example: PRODUCT OWNS ORGANIZATION -> ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
 		// Use path-aware canonicalization to handle community subtypes (dynasty/tribe).
 		if sourceType != "" && targetType != "" {
-			if edge.Type == models.DependencyTypeInvestsIn &&
-				srcTypeActual == models.FragmentTypeOrganization &&
-				dstTypeActual == models.FragmentTypeFacility &&
-				models.HasOwnershipEvidence("", edge.Qualifiers, edge.Metrics) {
+			canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
+				EdgeType:          edge.Type,
+				SourceType:        srcTypeActual,
+				TargetType:        dstTypeActual,
+				SourcePath:        sourcePath,
+				TargetPath:        targetPath,
+				RawRelationType:   string(edge.Type),
+				OwnershipEvidence: models.HasOwnershipEvidence("", edge.Qualifiers, edge.Metrics),
+			})
+			if canon.Changed {
 				oldType := edge.Type
-				edge.Type = models.DependencyTypeOwns
-				canonFromEdgeType = oldType
-				if edge.Qualifiers == nil {
-					edge.Qualifiers = map[string]interface{}{}
+				edge.Type = canon.EdgeType
+				if canon.OriginalType != "" {
+					canonFromEdgeType = canon.OriginalType
+				} else {
+					canonFromEdgeType = oldType
 				}
-				edge.Qualifiers["canonicalized"] = true
-				edge.Qualifiers["canonicalizedFromEdgeType"] = string(oldType)
-				edge.Qualifiers["canonicalizationReason"] = "canonicalize: ORGANIZATION INVESTS_IN FACILITY with ownership evidence -> ORGANIZATION OWNS FACILITY"
-				edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
-				log.Printf("%s Canonicalized edge: %s -> %s (%s) [from %s] reason=%s",
-					logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, oldType, edge.Qualifiers["canonicalizationReason"])
-			} else if newType, shouldSwap, changed, reason := models.CanonicalizeEdgeWithPaths(edge.Type, srcTypeActual, dstTypeActual, sourcePath, targetPath); changed {
-				oldType := edge.Type
-				edge.Type = newType
-				canonFromEdgeType = oldType
-				if shouldSwap {
+				if canon.ShouldSwap {
 					edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
 					sourceType, targetType = targetType, sourceType
 					sourcePath, targetPath = targetPath, sourcePath
@@ -163,26 +160,44 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 					edge.Qualifiers = map[string]interface{}{}
 				}
 				edge.Qualifiers["canonicalized"] = true
-				edge.Qualifiers["canonicalizedFromEdgeType"] = string(oldType)
-				edge.Qualifiers["canonicalizationReason"] = reason
+				edge.Qualifiers["canonicalizedFromEdgeType"] = string(canonFromEdgeType)
+				edge.Qualifiers["canonicalizationReason"] = canon.Reason
 				edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
-				if shouldSwap {
+				if canon.ShouldSwap {
 					edge.Qualifiers["normalizedDirection"] = true
 				}
 				log.Printf("%s Canonicalized edge: %s -> %s (%s) [from %s] reason=%s",
-					logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, oldType, reason)
+					logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, canonFromEdgeType, canon.Reason)
 			}
-		}
-		if canonFromEdgeType != "" {
-			if penalty := models.CanonicalizationPenalty(canonFromEdgeType, edge.Type, srcTypeActual, dstTypeActual); penalty > 0 {
-				policyStatus = models.PolicyStatusPenalized
-				policyPenalty = penalty
-				if reasonRaw, ok := edge.Qualifiers["canonicalizationReason"].(string); ok {
-					policyReason = strings.TrimSpace(reasonRaw)
+			if canon.PolicyPenalty > 0 {
+				policyStatus = policy.MergePolicyStatus(policyStatus, canon.PolicyStatus)
+				if canon.PolicyPenalty > policyPenalty {
+					policyPenalty = canon.PolicyPenalty
 				}
-				if edge.Properties.Criticality > 0 {
-					edge.Properties.Criticality *= (1.0 - penalty)
+				if strings.TrimSpace(canon.PolicyReason) != "" {
+					policyReason = strings.TrimSpace(canon.PolicyReason)
 				}
+				if edge.Properties.Criticality > 0 && canon.ConfidenceMult > 0 && canon.ConfidenceMult < 1 {
+					edge.Properties.Criticality *= canon.ConfidenceMult
+				}
+			}
+			if canon.PolicyReason == "transition_unclassified" {
+				log.Printf("%s transition_unclassified fallback applied: %s -> %s", logPrefix, canonFromEdgeType, edge.Type)
+				policy.LogPolicyEvent("edge_canonicalization_policy", policy.PolicyLogStageFallback, map[string]interface{}{
+					"trace_id":       "na",
+					"tenant_id":      edge.TenantID,
+					"job_id":         "na",
+					"edge_id":        edge.ID,
+					"source_type":    sourceType,
+					"target_type":    targetType,
+					"relation_type":  edge.Type,
+					"action":         policy.ActionAllowWithPenalty,
+					"policy_status":  policyStatus,
+					"policy_reason":  canon.PolicyReason,
+					"policy_penalty": policyPenalty,
+					"decision_path":  "runtime_repo_edge_create",
+					"confidence":     canon.ConfidenceMult,
+				})
 			}
 		}
 
@@ -203,11 +218,46 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 
 		if err != nil {
 			log.Printf("%s ERROR: policy validation failed: %v", logPrefix, err)
+			policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageError, map[string]interface{}{
+				"trace_id":       "na",
+				"tenant_id":      edge.TenantID,
+				"job_id":         "na",
+				"edge_id":        edge.ID,
+				"source_type":    sourceType,
+				"target_type":    targetType,
+				"relation_type":  edge.Type,
+				"action":         "validate_edge",
+				"policy_status":  "na",
+				"policy_reason":  err.Error(),
+				"policy_penalty": 0,
+				"decision_path":  "runtime_repo_edge_create",
+				"error_class":    "policy_execution_error",
+				"confidence":     0,
+			})
 			return "", fmt.Errorf("policy validation error: %w", err)
 		}
 
 		log.Printf("%s Policy decision: action=%s, path=%s, confidence=%.2f",
 			logPrefix, decision.Action, decision.DecisionPath, decision.Confidence)
+		reason := ""
+		if rv, _ := decision.Params["reason"].(string); strings.TrimSpace(rv) != "" {
+			reason = strings.TrimSpace(rv)
+		}
+		policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageDecision, map[string]interface{}{
+			"trace_id":       "na",
+			"tenant_id":      edge.TenantID,
+			"job_id":         "na",
+			"edge_id":        edge.ID,
+			"source_type":    sourceType,
+			"target_type":    targetType,
+			"relation_type":  edge.Type,
+			"action":         decision.Action,
+			"policy_status":  policyStatus,
+			"policy_reason":  reason,
+			"policy_penalty": policyPenalty,
+			"decision_path":  decision.DecisionPath,
+			"confidence":     decision.Confidence,
+		})
 		if modality, _ := decision.Params["edgeModality"].(string); strings.TrimSpace(modality) != "" {
 			policyEdgeModality = strings.TrimSpace(modality)
 		}
@@ -231,12 +281,13 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 				}
 			},
 			SetPolicyStatus: func(status, reason string, penalty float64) {
-				if status == models.PolicyStatusClean && policyStatus != models.PolicyStatusClean {
-					return
+				policyStatus = policy.MergePolicyStatus(policyStatus, status)
+				if strings.TrimSpace(reason) != "" {
+					policyReason = strings.TrimSpace(reason)
 				}
-				policyStatus = status
-				policyReason = strings.TrimSpace(reason)
-				policyPenalty = penalty
+				if penalty > policyPenalty {
+					policyPenalty = penalty
+				}
 			},
 		})
 		if edge.Qualifiers == nil {

@@ -173,6 +173,13 @@ func EnrichFragmentFromEntityData(
 		}
 	}
 
+	// NameHistory: populate from Wikidata aliases and former names (P5768).
+	if fragment.Type == hmodels.FragmentTypeOrganization || fragment.Type == hmodels.FragmentTypePerson {
+		if populateNameHistoryFromWikidata(fragment, ed) {
+			changed = true
+		}
+	}
+
 	// Mark Wikidata sync time on the fragment's Wikidata KBRef.
 	if setWikidataLastSync(fragment, now) {
 		changed = true
@@ -181,6 +188,112 @@ func EnrichFragmentFromEntityData(
 	// Best-effort: keep identifiers/KBRefs mirrored and indexPaths updated.
 	_ = fragment.Validate()
 	return changed, nil
+}
+
+// populateNameHistoryFromWikidata extracts aliases and former names from Wikidata entity data
+// and merges them into fragment.NameHistory. Returns true if any entries were added.
+func populateNameHistoryFromWikidata(fragment *hmodels.HorizonFragment, ed *coreontology.WikidataEntityData) bool {
+	if fragment == nil || ed == nil {
+		return false
+	}
+
+	// Collect existing name history entries to avoid duplicates.
+	existing := make(map[string]struct{}, len(fragment.NameHistory))
+	for _, e := range fragment.NameHistory {
+		key := strings.ToLower(strings.TrimSpace(e.Kind)) + "|" + strings.ToLower(strings.TrimSpace(e.Name))
+		existing[key] = struct{}{}
+	}
+
+	// Also skip names that match current labels/identifiers (not historical).
+	currentNames := make(map[string]struct{})
+	if fragment.Labels != nil {
+		for _, v := range fragment.Labels {
+			if v := strings.TrimSpace(v); v != "" {
+				currentNames[strings.ToLower(v)] = struct{}{}
+			}
+		}
+	}
+	if fragment.Identifiers != nil {
+		for _, k := range []string{"legalName", "shortName"} {
+			if v := strings.TrimSpace(fragment.Identifiers[k]); v != "" {
+				currentNames[strings.ToLower(v)] = struct{}{}
+			}
+		}
+	}
+
+	addEntry := func(name, kind string) bool {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return false
+		}
+		lc := strings.ToLower(name)
+		// Skip if it's the same as a current name.
+		if _, ok := currentNames[lc]; ok {
+			return false
+		}
+		key := kind + "|" + lc
+		if _, ok := existing[key]; ok {
+			return false
+		}
+		existing[key] = struct{}{}
+		fragment.NameHistory = append(fragment.NameHistory, hmodels.NameHistoryEntry{
+			Name: name,
+			Kind: kind,
+		})
+		return true
+	}
+
+	added := false
+
+	// 1. Former official names from P5768 (monolingual text values).
+	formerNames := allMonolingualValues(ed.PropertiesRaw, "P5768")
+	for _, fn := range formerNames {
+		if addEntry(fn, "legal") {
+			added = true
+		}
+	}
+
+	// 2. Nicknames from P1449.
+	nicknames := allMonolingualValues(ed.PropertiesRaw, "P1449")
+	for _, nn := range nicknames {
+		if addEntry(nn, "aka") {
+			added = true
+		}
+	}
+
+	// 3. Wikidata aliases (English) — treat as "aka".
+	for _, alias := range ed.Aliases {
+		if addEntry(alias, "aka") {
+			added = true
+		}
+	}
+
+	return added
+}
+
+// allMonolingualValues extracts all monolingual text values for a property from PropertiesRaw.
+func allMonolingualValues(props map[string]interface{}, propID string) []string {
+	if props == nil {
+		return nil
+	}
+	raw, ok := props[propID]
+	if !ok || raw == nil {
+		return nil
+	}
+	var out []string
+	switch t := raw.(type) {
+	case []interface{}:
+		for _, it := range t {
+			if s := monolingualToString(it); strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+	case string:
+		if s := strings.TrimSpace(t); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func wikidataLastSync(f *hmodels.HorizonFragment) *time.Time {

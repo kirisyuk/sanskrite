@@ -67,6 +67,15 @@ func isDynastyOrTribeCommunity(canonicalPath string) bool {
 //
 // Keep this conservative and explicit. This is used at creation time and during cleanup.
 func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentType) (DependencyType, bool, bool, string) {
+	// Corporate transition edges are only valid for organization-to-organization links.
+	// If endpoint typing is wrong, preserve weak linkage semantics instead of dropping the edge.
+	if IsTransitionEdgeType(edgeType) {
+		if sourceType == FragmentTypeOrganization && targetType == FragmentTypeOrganization {
+			return edgeType, false, false, ""
+		}
+		return DependencyTypeInfluences, false, true, "canonicalize: non-org transition edge -> INFLUENCES"
+	}
+
 	// =============================================================================
 	// DOMAIN-related canonicalization (pre-policy)
 	// =============================================================================

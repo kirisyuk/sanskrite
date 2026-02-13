@@ -292,6 +292,21 @@ func main() {
 	// For brevity, only Vertex provider is wired here; additional providers can be added
 	{
 		aiServices := []ai.AIService{}
+		vertexProjectID := strings.TrimSpace(getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", "")))
+		vertexLocation := strings.TrimSpace(getEnv("VERTEX_LOCATION", "us-central1"))
+		if vertexProjectID != "" {
+			vertexService, err := ai.NewVertexAIService(vertexProjectID, vertexLocation, modelManager)
+			if err != nil {
+				log.Printf("HZN_GROUNDING WARN: component=bootstrap phase=vertex_service_init reasonCode=vertex_service_init_failed errorClass=provider_init_error err=%v", err)
+			} else {
+				if ds := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID")); ds != "" {
+					vertexService = vertexService.WithDataStore(ds)
+				}
+				aiServices = append(aiServices, vertexService)
+			}
+		} else {
+			log.Printf("HZN_GROUNDING WARN: component=bootstrap phase=vertex_service_init reasonCode=missing_project_id errorClass=config_error message=%q", "VertexAIService disabled: missing GCP project id (GCP_PROJECT_ID/GOOGLE_CLOUD_PROJECT)")
+		}
 
 		if v := os.Getenv("GEMINI_API_KEY"); v != "" {
 			aiServices = append(aiServices, ai.NewGeminiService(v, modelManager))
@@ -336,10 +351,6 @@ func main() {
 		// Create genaiClient for artifact executor (using combined client)
 		// Import gen_combined and gen_gemini packages at top of file
 		geminiAPIKey := os.Getenv("GEMINI_API_KEY")
-		vertexLocation := os.Getenv("VERTEX_LOCATION")
-		if vertexLocation == "" {
-			vertexLocation = "us-central1"
-		}
 		fastModel := os.Getenv("GENAI_FAST_MODEL")
 		qualityModel := os.Getenv("GENAI_QUALITY_MODEL")
 		geminiClient := gen_gemini.NewClient(geminiAPIKey, projectID, vertexLocation, fastModel, qualityModel)
@@ -1043,13 +1054,14 @@ func main() {
 		horizonCanonicalPathRedirectsRepo := horizonrepo.NewCanonicalPathRedirectsRepository(fsClient.Client())
 		horizonTelemetryRepo = horizonrepo.NewHorizonTelemetryRepository(fsClient.Client())
 		horizonEdgesRepo.WithTelemetryRepo(horizonTelemetryRepo)
-			horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
-			horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
-			riskJobsRepo = horizonrepo.NewRiskJobsRepository(fsClient.Client())
-			horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
+		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
+		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
+		riskJobsRepo = horizonrepo.NewRiskJobsRepository(fsClient.Client())
+		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
 		horizonProfilesRepo := horizonrepo.NewFragmentProfilesRepository(fsClient.Client())
 		horizonProfilePoliciesRepo := horizonrepo.NewFragmentProfileRefreshPoliciesRepository(fsClient.Client())
 		horizonLensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(fsClient.Client())
+		horizonDomainAnswerSnapshotsRepo := horizonrepo.NewDomainAnswerSnapshotsRepository(fsClient.Client())
 
 		// Horizon spend ledger (actual GenAI $ attribution) for budget enforcement.
 		horizonSpendLedger := horizonrepo.NewHorizonSpendLedger(fsClient.Client())
@@ -1124,60 +1136,60 @@ func main() {
 					logger.Printf("WARNING: Cloud Tasks (Scout) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
 				}
 			}
-			}
+		}
 
-			// Cloud Tasks dispatcher for Risk jobs (separate queue/lifecycle from Scout).
-			var riskTasksDispatcher *horizontasks.RiskCloudTasksDispatcher
-			{
-				enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_RISK", "1"))
-				if enabled == "1" || strings.EqualFold(enabled, "true") {
-					location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
-					queue := strings.TrimSpace(getEnv("CLOUD_TASKS_RISK_QUEUE", "sanskrite-risk-v1"))
-					baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
-					saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
-					aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
-					if baseURL != "" && saEmail != "" {
-						targetURL := strings.TrimRight(baseURL, "/") + "/api/v1/internal/tasks/risk/run"
-						if aud == "" {
-							aud = strings.TrimRight(baseURL, "/")
-						}
-						if d, err := horizontasks.NewRiskCloudTasksDispatcher(ctx, projectID, location, queue, targetURL, saEmail, aud); err == nil {
-							riskTasksDispatcher = d
-							logger.Printf("Cloud Tasks (Risk) enabled: queue=%s location=%s target=%s", queue, location, targetURL)
-							if riskJobsRepo != nil {
-								riskJobsRepo.WithOnCreate(func(c context.Context, job *horizonmodels.RiskJob) error {
-									if pub != nil && job != nil {
-										payload := map[string]interface{}{
-											"schemaVersion":      "risk.ws.v1",
-											"tenantId":           strings.TrimSpace(job.TenantID),
-											"projectId":          strings.TrimSpace(job.ProjectID),
-											"lensId":             strings.TrimSpace(job.LensID),
-											"jobId":              strings.TrimSpace(job.ID),
-											"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-											"polarity":           strings.TrimSpace(job.Polarity),
-											"state":              string(job.CurrentState),
-											"stage":              string(job.CurrentStage),
-										}
-										_ = pub.PublishJSON(c, realtime.EventType("horizon.risk.job.created"), strings.TrimSpace(job.TenantID), payload)
+		// Cloud Tasks dispatcher for Risk jobs (separate queue/lifecycle from Scout).
+		var riskTasksDispatcher *horizontasks.RiskCloudTasksDispatcher
+		{
+			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_RISK", "1"))
+			if enabled == "1" || strings.EqualFold(enabled, "true") {
+				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_RISK_QUEUE", "sanskrite-risk-v1"))
+				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
+				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+				if baseURL != "" && saEmail != "" {
+					targetURL := strings.TrimRight(baseURL, "/") + "/api/v1/internal/tasks/risk/run"
+					if aud == "" {
+						aud = strings.TrimRight(baseURL, "/")
+					}
+					if d, err := horizontasks.NewRiskCloudTasksDispatcher(ctx, projectID, location, queue, targetURL, saEmail, aud); err == nil {
+						riskTasksDispatcher = d
+						logger.Printf("Cloud Tasks (Risk) enabled: queue=%s location=%s target=%s", queue, location, targetURL)
+						if riskJobsRepo != nil {
+							riskJobsRepo.WithOnCreate(func(c context.Context, job *horizonmodels.RiskJob) error {
+								if pub != nil && job != nil {
+									payload := map[string]interface{}{
+										"schemaVersion":       "risk.ws.v1",
+										"tenantId":            strings.TrimSpace(job.TenantID),
+										"projectId":           strings.TrimSpace(job.ProjectID),
+										"lensId":              strings.TrimSpace(job.LensID),
+										"jobId":               strings.TrimSpace(job.ID),
+										"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+										"polarity":            strings.TrimSpace(job.Polarity),
+										"state":               string(job.CurrentState),
+										"stage":               string(job.CurrentStage),
 									}
-									if err := riskTasksDispatcher.EnqueueRiskJob(c, job.ID); err != nil {
-										return err
-									}
-									logger.Printf("Cloud Tasks (Risk) enqueued: jobId=%s target=%s polarity=%s", job.ID, job.TargetCanonicalPath, job.Polarity)
-									return nil
-								})
-							}
-						} else {
-							logger.Printf("WARNING: Cloud Tasks (Risk) disabled due to init error: %v", err)
+									_ = pub.PublishJSON(c, realtime.EventType("horizon.risk.job.created"), strings.TrimSpace(job.TenantID), payload)
+								}
+								if err := riskTasksDispatcher.EnqueueRiskJob(c, job.ID); err != nil {
+									return err
+								}
+								logger.Printf("Cloud Tasks (Risk) enqueued: jobId=%s target=%s polarity=%s", job.ID, job.TargetCanonicalPath, job.Polarity)
+								return nil
+							})
 						}
 					} else {
-						logger.Printf("WARNING: Cloud Tasks (Risk) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
+						logger.Printf("WARNING: Cloud Tasks (Risk) disabled due to init error: %v", err)
 					}
+				} else {
+					logger.Printf("WARNING: Cloud Tasks (Risk) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
 				}
 			}
+		}
 
-			// Cloud Tasks dispatcher for Profile refresh (managed queue + autoscaling + retries).
-			var profileTasksDispatcher *horizontasks.ProfileCloudTasksDispatcher
+		// Cloud Tasks dispatcher for Profile refresh (managed queue + autoscaling + retries).
+		var profileTasksDispatcher *horizontasks.ProfileCloudTasksDispatcher
 		{
 			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_PROFILE", "1"))
 			if enabled == "1" || strings.EqualFold(enabled, "true") {
@@ -1320,6 +1332,7 @@ func main() {
 
 			horizonService.SetLensService(lensService)
 			horizonService.SetLensArtifactsRepo(horizonLensArtifactsRepo)
+			horizonService.SetDomainAnswerSnapshotsRepo(horizonDomainAnswerSnapshotsRepo)
 
 			// Initialize Propagation subsystem
 			propagationEngine := horizonpropagation.NewPropagationEngine(
@@ -1422,66 +1435,66 @@ func main() {
 					logger.Printf("[horizon.feedback] enqueue_failed fragmentId=%s polarity=%s err=%v", strings.TrimSpace(frag.ID), polarity, err)
 				}
 			}
-				triggerPropagationRefresh := func(fragmentID string) {
-					fragmentID = strings.TrimSpace(fragmentID)
-					if fragmentID == "" || propagationEngine == nil {
-						return
-					}
+			triggerPropagationRefresh := func(fragmentID string) {
+				fragmentID = strings.TrimSpace(fragmentID)
+				if fragmentID == "" || propagationEngine == nil {
+					return
+				}
 				go func(fid string) {
 					runCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 					defer cancel()
 					if _, err := propagationEngine.TriggerPropagation(runCtx, fid); err != nil {
 						logger.Printf("[horizon.feedback] propagation_refresh_failed fragmentId=%s err=%v", fid, err)
-						}
-					}(fragmentID)
+					}
+				}(fragmentID)
+			}
+			enqueueRiskJobForFragment := func(ctx context.Context, frag *horizonmodels.HorizonFragment, eventType, polarity, reason string) {
+				if riskJobsRepo == nil || frag == nil {
+					return
 				}
-				enqueueRiskJobForFragment := func(ctx context.Context, frag *horizonmodels.HorizonFragment, eventType, polarity, reason string) {
-					if riskJobsRepo == nil || frag == nil {
-						return
-					}
-					projectID := ""
-					if frag.Governance.CreatedByProjectID != nil {
-						projectID = strings.TrimSpace(*frag.Governance.CreatedByProjectID)
-					}
-					if projectID == "" {
-						return
-					}
-					polarity = normalizeFeedbackPolarity(polarity)
-					triggerRef := strings.Join([]string{
-						"feedback",
-						strings.TrimSpace(eventType),
-						strings.TrimSpace(reason),
-						strings.TrimSpace(frag.ID),
-					}, ":")
-					dedupKey := strings.Join([]string{
-						"risk_job_dedup",
-						strings.TrimSpace(frag.TenantID),
-						projectID,
-						"",
-						strings.TrimSpace(frag.CanonicalPath),
-						triggerRef,
-						polarity,
-					}, "|")
-					_, _, err := riskJobsRepo.Create(ctx, &horizonmodels.RiskJob{
-						TenantID:            strings.TrimSpace(frag.TenantID),
-						ProjectID:           projectID,
-						TriggerType:         "feedback",
-						TriggerRef:          triggerRef,
-						DedupKey:            dedupKey,
-						TargetCanonicalPath: strings.TrimSpace(frag.CanonicalPath),
-						Polarity:            polarity,
-						CurrentStage:        horizonmodels.RiskStageIdentify,
-						CurrentState:        horizonmodels.RiskJobStatePending,
-						State: map[string]any{
-							"feedbackType": strings.TrimSpace(eventType),
-							"feedbackReason": strings.TrimSpace(reason),
-						},
-					})
-					if err != nil {
-						logger.Printf("[horizon.feedback] risk_job_enqueue_failed fragmentId=%s polarity=%s err=%v", strings.TrimSpace(frag.ID), polarity, err)
-					}
+				projectID := ""
+				if frag.Governance.CreatedByProjectID != nil {
+					projectID = strings.TrimSpace(*frag.Governance.CreatedByProjectID)
 				}
-				feedbackEmitter := horizonfeedback.FuncEmitter(func(ctx context.Context, event horizonfeedback.Event) error {
+				if projectID == "" {
+					return
+				}
+				polarity = normalizeFeedbackPolarity(polarity)
+				triggerRef := strings.Join([]string{
+					"feedback",
+					strings.TrimSpace(eventType),
+					strings.TrimSpace(reason),
+					strings.TrimSpace(frag.ID),
+				}, ":")
+				dedupKey := strings.Join([]string{
+					"risk_job_dedup",
+					strings.TrimSpace(frag.TenantID),
+					projectID,
+					"",
+					strings.TrimSpace(frag.CanonicalPath),
+					triggerRef,
+					polarity,
+				}, "|")
+				_, _, err := riskJobsRepo.Create(ctx, &horizonmodels.RiskJob{
+					TenantID:            strings.TrimSpace(frag.TenantID),
+					ProjectID:           projectID,
+					TriggerType:         "feedback",
+					TriggerRef:          triggerRef,
+					DedupKey:            dedupKey,
+					TargetCanonicalPath: strings.TrimSpace(frag.CanonicalPath),
+					Polarity:            polarity,
+					CurrentStage:        horizonmodels.RiskStageIdentify,
+					CurrentState:        horizonmodels.RiskJobStatePending,
+					State: map[string]any{
+						"feedbackType":   strings.TrimSpace(eventType),
+						"feedbackReason": strings.TrimSpace(reason),
+					},
+				})
+				if err != nil {
+					logger.Printf("[horizon.feedback] risk_job_enqueue_failed fragmentId=%s polarity=%s err=%v", strings.TrimSpace(frag.ID), polarity, err)
+				}
+			}
+			feedbackEmitter := horizonfeedback.FuncEmitter(func(ctx context.Context, event horizonfeedback.Event) error {
 				eventType := strings.TrimSpace(event.Type)
 				if eventType == "" {
 					return nil
@@ -1508,24 +1521,24 @@ func main() {
 					strings.TrimSpace(event.Reason),
 				)
 
-					switch eventType {
-					case "re_evaluate":
-						if frag != nil {
-							enqueueForcedInterpretation(ctx, frag, event.Polarity, horizoninterp.TriggerPriorityHigh, horizoninterp.TriggerTypeRapidChange, 1.0)
-							triggerPropagationRefresh(frag.ID)
-							enqueueRiskJobForFragment(ctx, frag, eventType, event.Polarity, event.Reason)
-						}
-					case "attention_escalation":
-						if frag != nil {
-							enqueueForcedInterpretation(ctx, frag, event.Polarity, horizoninterp.TriggerPriorityAlways, horizoninterp.TriggerTypeVIP, 1.0)
-							triggerPropagationRefresh(frag.ID)
-							enqueueRiskJobForFragment(ctx, frag, eventType, event.Polarity, event.Reason)
-						}
+				switch eventType {
+				case "re_evaluate":
+					if frag != nil {
+						enqueueForcedInterpretation(ctx, frag, event.Polarity, horizoninterp.TriggerPriorityHigh, horizoninterp.TriggerTypeRapidChange, 1.0)
+						triggerPropagationRefresh(frag.ID)
+						enqueueRiskJobForFragment(ctx, frag, eventType, event.Polarity, event.Reason)
 					}
+				case "attention_escalation":
+					if frag != nil {
+						enqueueForcedInterpretation(ctx, frag, event.Polarity, horizoninterp.TriggerPriorityAlways, horizoninterp.TriggerTypeVIP, 1.0)
+						triggerPropagationRefresh(frag.ID)
+						enqueueRiskJobForFragment(ctx, frag, eventType, event.Polarity, event.Reason)
+					}
+				}
 				return nil
 			})
-				interpretSignalsRepo := horizoninterp.NewOntologySignalFactsRepo(ontologyFactsRepo)
-				interpreter := horizoninterp.NewInterpreter(exec, horizonFragmentsRepo, interpretSignalsRepo).WithFeedbackEmitter(feedbackEmitter)
+			interpretSignalsRepo := horizoninterp.NewOntologySignalFactsRepo(ontologyFactsRepo)
+			interpreter := horizoninterp.NewInterpreter(exec, horizonFragmentsRepo, interpretSignalsRepo).WithFeedbackEmitter(feedbackEmitter)
 			interpProcessor := horizoninterp.NewProcessor(
 				interpretationQueue,
 				interpretationCache,
@@ -1554,65 +1567,78 @@ func main() {
 			canonizationRulesRepo := horizonrepo.NewCanonizationRulesRepository(fsClient.Client())
 			canonizationPolicy := horizonpolicy.NewCanonizationPolicy(canonizationRulesRepo)
 			canonizationPolicyExecutor := horizonpolicy.NewPolicyExecutor(canonizationPolicy, policyTelemetry, nil)
+			policyRegistry := horizonpolicy.NewPolicyRegistry(
+				propagationPolicy,
+				validationPolicy,
+				canonizationPolicy,
+			)
+			logger.Printf(
+				"Policy registry initialized: policies=%v unified_contract=%v shadow_mode=%v",
+				policyRegistry.List(),
+				horizonpolicy.UnifiedPolicyContractEnabled(),
+				horizonpolicy.UnifiedPolicyShadowModeEnabled(),
+			)
 
 			// Wire Critical Path Detector
 			criticalPathDetector := horizoncriticalpath.NewDetector(horizonFragmentsRepo, horizonEdgesRepo)
 			propagationEngine.WithCriticalPathDetector(criticalPathDetector)
 
-				horizonService.SetPropagationEngine(propagationEngine)
-				riskAppetiteRepo := horizonrepo.NewRiskAppetiteProfilesRepository(fsClient.Client())
-				appetiteResolver := horizonrisk.NewAppetiteResolver(riskAppetiteRepo, horizonFragmentsRepo, horizonEdgesRepo)
-				concentrationAnalyzer := horizonrisk.NewConcentrationAnalyzer(horizonFragmentsRepo).
-					WithFeedbackEmitter(feedbackEmitter)
-				horizonService.SetRiskServices(appetiteResolver, concentrationAnalyzer)
-				if riskJobsRepo != nil {
-					riskCfg := horizonrisk.DefaultPipelineConfig()
-					enabledRiskPipeline := strings.TrimSpace(getEnv("ENABLE_RISK_PIPELINE", "1"))
-					riskCfg.EnablePipeline = enabledRiskPipeline == "1" || strings.EqualFold(enabledRiskPipeline, "true")
-					if v := strings.TrimSpace(getEnv("RISK_PIPELINE_MAX_STAGE_RETRIES", "")); v != "" {
-						if n, err := strconv.Atoi(v); err == nil && n > 0 {
-							riskCfg.MaxAttempts = n
-						}
+			horizonService.SetPropagationEngine(propagationEngine)
+			riskAppetiteRepo := horizonrepo.NewRiskAppetiteProfilesRepository(fsClient.Client())
+			appetiteResolver := horizonrisk.NewAppetiteResolver(riskAppetiteRepo, horizonFragmentsRepo, horizonEdgesRepo)
+			concentrationAnalyzer := horizonrisk.NewConcentrationAnalyzer(horizonFragmentsRepo).
+				WithFeedbackEmitter(feedbackEmitter)
+			horizonService.SetRiskServices(appetiteResolver, concentrationAnalyzer)
+			if riskJobsRepo != nil {
+				riskCfg := horizonrisk.DefaultPipelineConfig()
+				enabledRiskPipeline := strings.TrimSpace(getEnv("ENABLE_RISK_PIPELINE", "1"))
+				riskCfg.EnablePipeline = enabledRiskPipeline == "1" || strings.EqualFold(enabledRiskPipeline, "true")
+				if v := strings.TrimSpace(getEnv("RISK_PIPELINE_MAX_STAGE_RETRIES", "")); v != "" {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						riskCfg.MaxAttempts = n
 					}
-					if v := strings.TrimSpace(getEnv("RISK_PIPELINE_STAGE_TIMEOUT_SEC", "")); v != "" {
-						if n, err := strconv.Atoi(v); err == nil && n > 0 {
-							riskCfg.StageTimeout = time.Duration(n) * time.Second
-						}
-					}
-					stageFlag := func(env string, def bool) bool {
-						raw := strings.TrimSpace(getEnv(env, ""))
-						if raw == "" {
-							return def
-						}
-						return raw == "1" || strings.EqualFold(raw, "true")
-					}
-					riskCfg.EnableStage[horizonmodels.RiskStageIdentify] = stageFlag("ENABLE_RISK_STAGE_IDENTIFY", riskCfg.EnableStage[horizonmodels.RiskStageIdentify])
-					riskCfg.EnableStage[horizonmodels.RiskStageEscalate] = stageFlag("ENABLE_RISK_STAGE_ESCALATE", riskCfg.EnableStage[horizonmodels.RiskStageEscalate])
-					riskCfg.EnableStage[horizonmodels.RiskStageApply] = stageFlag("ENABLE_RISK_STAGE_APPLICABILITY", riskCfg.EnableStage[horizonmodels.RiskStageApply])
-					riskCfg.EnableStage[horizonmodels.RiskStageSeed] = stageFlag("ENABLE_RISK_STAGE_SEED", riskCfg.EnableStage[horizonmodels.RiskStageSeed])
-					riskCfg.EnableStage[horizonmodels.RiskStagePropagate] = stageFlag("ENABLE_RISK_STAGE_PROPAGATE", riskCfg.EnableStage[horizonmodels.RiskStagePropagate])
-					riskCfg.EnableStage[horizonmodels.RiskStageRollup] = stageFlag("ENABLE_RISK_STAGE_ROLLUP", riskCfg.EnableStage[horizonmodels.RiskStageRollup])
-					riskCfg.EnableStage[horizonmodels.RiskStageInterpret] = stageFlag("ENABLE_RISK_STAGE_INTERPRET", riskCfg.EnableStage[horizonmodels.RiskStageInterpret])
-					riskCfg.EnableStage[horizonmodels.RiskStageAlert] = stageFlag("ENABLE_RISK_STAGE_ALERT", riskCfg.EnableStage[horizonmodels.RiskStageAlert])
-
-					riskPipeline = horizonrisk.NewPipeline(
-						riskJobsRepo,
-						ontologyFactsRepo,
-						horizonFragmentsRepo,
-						horizonEdgesRepo,
-						horizonExposurePathsRepo,
-						propagationEngine,
-						propagationProfileLookup,
-						appetiteResolver,
-						interpreter,
-						pub,
-						riskCfg,
-					).WithFeedbackEmitter(feedbackEmitter)
 				}
-				horizonFragmentsRepo.WithOnUpsert(func(ctx context.Context, fragment *horizonmodels.HorizonFragment) {
-					// Auto-seed appetite profiles when external scopes emerge (market/geo/org with segments).
-					appetiteResolver.EnsureForFragment(ctx, fragment)
-				})
+				if v := strings.TrimSpace(getEnv("RISK_PIPELINE_STAGE_TIMEOUT_SEC", "")); v != "" {
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						riskCfg.StageTimeout = time.Duration(n) * time.Second
+					}
+				}
+				stageFlag := func(env string, def bool) bool {
+					raw := strings.TrimSpace(getEnv(env, ""))
+					if raw == "" {
+						return def
+					}
+					return raw == "1" || strings.EqualFold(raw, "true")
+				}
+				riskCfg.EnableStage[horizonmodels.RiskStageIdentify] = stageFlag("ENABLE_RISK_STAGE_IDENTIFY", riskCfg.EnableStage[horizonmodels.RiskStageIdentify])
+				riskCfg.EnableStage[horizonmodels.RiskStageEscalate] = stageFlag("ENABLE_RISK_STAGE_ESCALATE", riskCfg.EnableStage[horizonmodels.RiskStageEscalate])
+				riskCfg.EnableStage[horizonmodels.RiskStageApply] = stageFlag("ENABLE_RISK_STAGE_APPLICABILITY", riskCfg.EnableStage[horizonmodels.RiskStageApply])
+				riskCfg.EnableStage[horizonmodels.RiskStageSeed] = stageFlag("ENABLE_RISK_STAGE_SEED", riskCfg.EnableStage[horizonmodels.RiskStageSeed])
+				riskCfg.EnableStage[horizonmodels.RiskStagePropagate] = stageFlag("ENABLE_RISK_STAGE_PROPAGATE", riskCfg.EnableStage[horizonmodels.RiskStagePropagate])
+				riskCfg.EnableStage[horizonmodels.RiskStageRollup] = stageFlag("ENABLE_RISK_STAGE_ROLLUP", riskCfg.EnableStage[horizonmodels.RiskStageRollup])
+				riskCfg.EnableStage[horizonmodels.RiskStageInterpret] = stageFlag("ENABLE_RISK_STAGE_INTERPRET", riskCfg.EnableStage[horizonmodels.RiskStageInterpret])
+				riskCfg.EnableStage[horizonmodels.RiskStageAlert] = stageFlag("ENABLE_RISK_STAGE_ALERT", riskCfg.EnableStage[horizonmodels.RiskStageAlert])
+
+				riskPipeline = horizonrisk.NewPipeline(
+					riskJobsRepo,
+					ontologyFactsRepo,
+					horizonFragmentsRepo,
+					horizonEdgesRepo,
+					horizonExposurePathsRepo,
+					propagationEngine,
+					propagationProfileLookup,
+					appetiteResolver,
+					interpreter,
+					pub,
+					riskCfg,
+				).WithFeedbackEmitter(feedbackEmitter).
+					WithScoutingJobsRepo(horizonScoutingJobsRepo).
+					WithTelemetryRepo(horizonTelemetryRepo)
+			}
+			horizonFragmentsRepo.WithOnUpsert(func(ctx context.Context, fragment *horizonmodels.HorizonFragment) {
+				// Auto-seed appetite profiles when external scopes emerge (market/geo/org with segments).
+				appetiteResolver.EnsureForFragment(ctx, fragment)
+			})
 
 			// Запускаем фоновый процессор Cold Path задач (каждые 30 секунд)
 			ctxBackground := context.Background()
@@ -1698,6 +1724,8 @@ func main() {
 			scoutEngine.WithExposurePathsRepository(horizonExposurePathsRepo)
 			// Wire LensArtifactsRepository for Phase 2 Strategic Overlay
 			scoutEngine.WithLensArtifactsRepo(horizonLensArtifactsRepo)
+			// Wire DomainAnswerSnapshotsRepository for DomainContractEngine publish phase.
+			scoutEngine.WithDomainAnswerSnapshotsRepo(horizonDomainAnswerSnapshotsRepo)
 
 			// Подключаем триггер распространения изменений
 			scoutEngine.WithPropagationTrigger(func(ctx context.Context, fragmentID string) error {
@@ -1714,6 +1742,7 @@ func main() {
 				horizonFragmentsRepo,
 				horizonEdgesRepo,
 				horizonpolicy.WithAIExecutor(exec),
+				horizonpolicy.WithValidationExecutor(validationPolicyExecutor),
 				horizonpolicy.WithGeoNamesClient(geonamesClientForHorizon),
 			)
 			scoutEngine.WithPolicyChecker(policyChecker)
@@ -1752,8 +1781,8 @@ func main() {
 			// Watchdog (background monitoring) can generate large volumes of Scout jobs.
 			// Keep it disabled by default; enable explicitly via env.
 			if strings.TrimSpace(getEnv("ENABLE_HORIZON_WATCHDOG", "0")) == "1" {
-					watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, ontologyFactsRepo, horizonScoutingJobsRepo, scoutEngine, sourceExecutor, exec).
-						WithRiskJobsRepository(riskJobsRepo)
+				watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, ontologyFactsRepo, horizonScoutingJobsRepo, scoutEngine, sourceExecutor, exec).
+					WithRiskJobsRepository(riskJobsRepo)
 				watchdogScheduler := horizonwatchdog.NewScheduler()
 				watchdogService := horizonwatchdog.NewWatchdogService(
 					horizonWatchdogRepo,
@@ -1875,15 +1904,15 @@ func main() {
 			}
 
 			// Create HTTP handlers
-				horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
-					WithDocumentsRepo(docsRepo).
-					WithUsersRepo(s.users).
-					WithGenAIHandler(genaiHandler).
-					WithInteractionsRepo(interactionsRepo).
-					WithOntologyFactsRepo(ontologyFactsRepo).
-					WithExposurePathsRepo(horizonExposurePathsRepo).
-					WithRiskJobsRepo(riskJobsRepo).
-					WithProfilesHandler(profilesHandler)
+			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
+				WithDocumentsRepo(docsRepo).
+				WithUsersRepo(s.users).
+				WithGenAIHandler(genaiHandler).
+				WithInteractionsRepo(interactionsRepo).
+				WithOntologyFactsRepo(ontologyFactsRepo).
+				WithExposurePathsRepo(horizonExposurePathsRepo).
+				WithRiskJobsRepo(riskJobsRepo).
+				WithProfilesHandler(profilesHandler)
 			logger.Printf("Horizon system initialized")
 
 			// Wire Horizon Lens service to projects handler for cascade delete
@@ -1913,7 +1942,7 @@ func main() {
 
 	// Cloud Tasks -> Scout job execution (managed queue + retries + autoscaling).
 	// Secured via OIDC token issued for the configured service account.
-		mux.HandleFunc("/api/v1/internal/tasks/scout/run", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/internal/tasks/scout/run", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -2013,111 +2042,111 @@ func main() {
 			return
 		}
 
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
-		})
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 
-		// Cloud Tasks -> Risk job execution (separate queue and lifecycle from Scout).
-		mux.HandleFunc("/api/v1/internal/tasks/risk/run", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			if riskPipeline == nil {
-				http.Error(w, "risk pipeline not initialized", http.StatusServiceUnavailable)
-				return
-			}
+	// Cloud Tasks -> Risk job execution (separate queue and lifecycle from Scout).
+	mux.HandleFunc("/api/v1/internal/tasks/risk/run", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if riskPipeline == nil {
+			http.Error(w, "risk pipeline not initialized", http.StatusServiceUnavailable)
+			return
+		}
 
-			authz := strings.TrimSpace(r.Header.Get("Authorization"))
-			const bearer = "Bearer "
-			if !strings.HasPrefix(authz, bearer) || len(authz) <= len(bearer) {
-				http.Error(w, "missing Authorization bearer token", http.StatusUnauthorized)
+		authz := strings.TrimSpace(r.Header.Get("Authorization"))
+		const bearer = "Bearer "
+		if !strings.HasPrefix(authz, bearer) || len(authz) <= len(bearer) {
+			http.Error(w, "missing Authorization bearer token", http.StatusUnauthorized)
+			return
+		}
+		rawTok := strings.TrimSpace(authz[len(bearer):])
+		aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+		if aud == "" {
+			aud = "https://" + r.Host
+		}
+		payload, err := idtoken.Validate(r.Context(), rawTok, aud)
+		if err != nil {
+			http.Error(w, "invalid cloud tasks token", http.StatusUnauthorized)
+			return
+		}
+		expectedSA := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+		if expectedSA != "" {
+			if email, ok := payload.Claims["email"].(string); !ok || !strings.EqualFold(strings.TrimSpace(email), expectedSA) {
+				http.Error(w, "unexpected token identity", http.StatusForbidden)
 				return
 			}
-			rawTok := strings.TrimSpace(authz[len(bearer):])
-			aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
-			if aud == "" {
-				aud = "https://" + r.Host
+		}
+
+		var body struct {
+			JobID string `json:"jobId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		jobID := strings.TrimSpace(body.JobID)
+		if jobID == "" {
+			http.Error(w, "jobId is required", http.StatusBadRequest)
+			return
+		}
+
+		execCtx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+		defer cancel()
+
+		job, runErr := riskPipeline.RunJob(execCtx, jobID)
+		if runErr != nil {
+			retryCount := 0
+			if v := strings.TrimSpace(r.Header.Get("X-CloudTasks-TaskRetryCount")); v != "" {
+				if n, perr := strconv.Atoi(v); perr == nil && n >= 0 {
+					retryCount = n
+				}
 			}
-			payload, err := idtoken.Validate(r.Context(), rawTok, aud)
-			if err != nil {
-				http.Error(w, "invalid cloud tasks token", http.StatusUnauthorized)
-				return
-			}
-			expectedSA := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
-			if expectedSA != "" {
-				if email, ok := payload.Claims["email"].(string); !ok || !strings.EqualFold(strings.TrimSpace(email), expectedSA) {
-					http.Error(w, "unexpected token identity", http.StatusForbidden)
+			if job != nil {
+				terminal := job.CurrentState == horizonmodels.RiskJobStateCompleted ||
+					job.CurrentState == horizonmodels.RiskJobStateFailed ||
+					job.CurrentState == horizonmodels.RiskJobStatePoisoned ||
+					job.CurrentState == horizonmodels.RiskJobStateCancelled
+				if terminal || retryCount >= 4 {
+					if !terminal && retryCount >= 4 && riskJobsRepo != nil {
+						job.CurrentState = horizonmodels.RiskJobStatePoisoned
+						if strings.TrimSpace(job.TerminalReason) == "" {
+							job.TerminalReason = "E_STAGE_TIMEOUT"
+						}
+						_ = riskJobsRepo.Update(context.Background(), job)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					_ = json.NewEncoder(w).Encode(map[string]string{
+						"status": "ok",
+						"jobId":  jobID,
+						"state":  string(job.CurrentState),
+					})
 					return
 				}
 			}
+			http.Error(w, fmt.Sprintf("risk execution failed (will retry): %v", runErr), http.StatusInternalServerError)
+			return
+		}
 
-			var body struct {
-				JobID string `json:"jobId"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				http.Error(w, "invalid json body", http.StatusBadRequest)
-				return
-			}
-			jobID := strings.TrimSpace(body.JobID)
-			if jobID == "" {
-				http.Error(w, "jobId is required", http.StatusBadRequest)
-				return
-			}
-
-			execCtx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-			defer cancel()
-
-			job, runErr := riskPipeline.RunJob(execCtx, jobID)
-			if runErr != nil {
-				retryCount := 0
-				if v := strings.TrimSpace(r.Header.Get("X-CloudTasks-TaskRetryCount")); v != "" {
-					if n, perr := strconv.Atoi(v); perr == nil && n >= 0 {
-						retryCount = n
-					}
-				}
-				if job != nil {
-					terminal := job.CurrentState == horizonmodels.RiskJobStateCompleted ||
-						job.CurrentState == horizonmodels.RiskJobStateFailed ||
-						job.CurrentState == horizonmodels.RiskJobStatePoisoned ||
-						job.CurrentState == horizonmodels.RiskJobStateCancelled
-					if terminal || retryCount >= 4 {
-						if !terminal && retryCount >= 4 && riskJobsRepo != nil {
-							job.CurrentState = horizonmodels.RiskJobStatePoisoned
-							if strings.TrimSpace(job.TerminalReason) == "" {
-								job.TerminalReason = "E_STAGE_TIMEOUT"
-							}
-							_ = riskJobsRepo.Update(context.Background(), job)
-						}
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusOK)
-						_ = json.NewEncoder(w).Encode(map[string]string{
-							"status": "ok",
-							"jobId":  jobID,
-							"state":  string(job.CurrentState),
-						})
-						return
-					}
-				}
-				http.Error(w, fmt.Sprintf("risk execution failed (will retry): %v", runErr), http.StatusInternalServerError)
-				return
-			}
-
-			state := string(horizonmodels.RiskJobStateCompleted)
-			if job != nil {
-				state = string(job.CurrentState)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"status": "ok",
-				"jobId":  jobID,
-				"state":  state,
-			})
+		state := string(horizonmodels.RiskJobStateCompleted)
+		if job != nil {
+			state = string(job.CurrentState)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status": "ok",
+			"jobId":  jobID,
+			"state":  state,
 		})
+	})
 
-		// Cloud Tasks -> Profile refresh execution (managed queue + retries + autoscaling).
-		// Secured via OIDC token issued for the configured service account.
+	// Cloud Tasks -> Profile refresh execution (managed queue + retries + autoscaling).
+	// Secured via OIDC token issued for the configured service account.
 	mux.HandleFunc("/api/v1/internal/tasks/profile/refresh", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -3248,7 +3277,14 @@ func main() {
 			return
 		}
 		if horizonService == nil || horizonService.Watchdog() == nil {
-			http.Error(w, "horizon watchdog not initialized", http.StatusServiceUnavailable)
+			// Watchdog is intentionally feature-flagged and may be disabled in this revision.
+			// Return 200 to avoid noisy Cloud Scheduler ERROR logs when the cron remains enabled.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":      true,
+				"skipped": true,
+				"reason":  "watchdog_disabled_or_not_initialized",
+			})
 			return
 		}
 

@@ -135,7 +135,7 @@ DOMAIN RULES:
   RISK / GEOPOLITICS:
     risk-assessment, geopolitical-risk, bilateral-relations, sanctions-exposure, conflict-dynamics
   MARKETS / OPPORTUNITY:
-    market-opportunity, competitive-landscape, market-entry, market-sizing, demand-forecast, pricing-dynamics
+    market-opportunity, competitive-landscape, geographic-concentration, market-entry, market-sizing, demand-forecast, pricing-dynamics
   INVESTMENT / FINANCE:
     investment-thesis, funding-landscape, exit-strategy, valuation-drivers, portfolio-exposure
   TECHNOLOGY / INNOVATION:

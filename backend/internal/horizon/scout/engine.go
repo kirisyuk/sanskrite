@@ -770,6 +770,7 @@ type ScoutEngine struct {
 	canonicalPathResolver   *CanonicalPathResolver            // Unified canonicalization and deduplication service
 	missingInfoStatusRepo   *repo.MissingInfoStatusRepository // Tracks missingInfo attempts to prevent infinite loops
 	groundingResolver       *GroundingEvidenceResolver        // Resolves Vertex AI grounding evidence → real fragments from DB
+	telemetryRepo           *repo.HorizonTelemetryRepository  // Optional: grounding/risk counters
 
 	// Policy enforcement (final validation step)
 	policyChecker          *policy.PolicyChecker              // Optional: validates job output before completion
@@ -779,7 +780,8 @@ type ScoutEngine struct {
 	policyWSPublisher      *policy.PolicyWSPublisher          // Optional: publishes policy check results via WebSocket
 
 	// Lens artifacts for Phase 2 Strategic Overlay
-	lensArtifactsRepo *repo.LensArtifactsRepository // Optional: accumulates finalized fragments/edges per lens
+	lensArtifactsRepo *repo.LensArtifactsRepository         // Optional: accumulates finalized fragments/edges per lens
+	domainAnswersRepo *repo.DomainAnswerSnapshotsRepository // Optional: persisted DomainAnswerSnapshot artifacts
 }
 
 // bestEffortRewriteLensScope replaces alias canonical paths in lens.Scope with their canonical equivalents.
@@ -1109,6 +1111,7 @@ func (e *ScoutEngine) WithValidationPolicy(executor *policy.PolicyExecutor) *Sco
 
 // WithTelemetryRepo wires unified telemetry sink for policy KPI counters.
 func (e *ScoutEngine) WithTelemetryRepo(telemetryRepo *repo.HorizonTelemetryRepository) *ScoutEngine {
+	e.telemetryRepo = telemetryRepo
 	if e.preCreateValidator != nil {
 		e.preCreateValidator.WithTelemetryRepo(telemetryRepo)
 	}
@@ -1116,6 +1119,39 @@ func (e *ScoutEngine) WithTelemetryRepo(telemetryRepo *repo.HorizonTelemetryRepo
 		e.edgesRepo.WithTelemetryRepo(telemetryRepo)
 	}
 	return e
+}
+
+func (e *ScoutEngine) emitGroundingCounter(ctx context.Context, tenantID, metric string, dimensions map[string]string, counters map[string]int64) {
+	if e == nil || e.telemetryRepo == nil {
+		return
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	if err := e.telemetryRepo.Increment(ctx, tenantID, "grounding", strings.TrimSpace(metric), time.Hour, dimensions, counters); err != nil {
+		logGroundingWarnf("telemetry increment failed: tenantId=%s metric=%s err=%v", tenantID, strings.TrimSpace(metric), err)
+	}
+}
+
+func (e *ScoutEngine) emitGroundingErrorTelemetry(ctx context.Context, job *models.ScoutingJob, component, phase, reasonCode, errorClass string, bestEffort bool) {
+	tenantID := ""
+	if job != nil {
+		tenantID = strings.TrimSpace(job.TenantID)
+	}
+	e.emitGroundingCounter(ctx, tenantID, "horizon_grounding_errors_total", map[string]string{
+		"component":   strings.TrimSpace(component),
+		"phase":       strings.TrimSpace(phase),
+		"error_class": strings.TrimSpace(errorClass),
+		"reason_code": strings.TrimSpace(reasonCode),
+	}, map[string]int64{"count": 1})
+	if bestEffort {
+		e.emitGroundingCounter(ctx, tenantID, "horizon_grounding_best_effort_total", map[string]string{
+			"component":   strings.TrimSpace(component),
+			"phase":       strings.TrimSpace(phase),
+			"reason_code": strings.TrimSpace(reasonCode),
+		}, map[string]int64{"count": 1})
+	}
 }
 
 // WithCanonizationPolicy sets the canonization policy executor for path/type normalization.
@@ -1308,6 +1344,12 @@ func (e *ScoutEngine) WithPolicyWSPublisher(publisher *policy.PolicyWSPublisher)
 // Used by Phase 2 Strategic Overlay to build decision layer from lens job outputs.
 func (e *ScoutEngine) WithLensArtifactsRepo(repo *repo.LensArtifactsRepository) *ScoutEngine {
 	e.lensArtifactsRepo = repo
+	return e
+}
+
+// WithDomainAnswerSnapshotsRepo sets repository for Domain Answer snapshots.
+func (e *ScoutEngine) WithDomainAnswerSnapshotsRepo(repo *repo.DomainAnswerSnapshotsRepository) *ScoutEngine {
+	e.domainAnswersRepo = repo
 	return e
 }
 
@@ -2304,6 +2346,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	var scoutResult *agents.ScoutResult
 	var extractedFragment *models.HorizonFragment
 	var validationResult *agents.ValidationResult
+	var groundingEvidence *ai.GroundingEvidence
 
 	if aggregatedContent == "" {
 		fmt.Printf("[ScoutEngine] No internal content for %s. Initiating full research.\n", job.TargetCanonicalPath)
@@ -2460,10 +2503,35 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		e.logLine(ctx, job, "info", fmt.Sprintf("> taxonomy classified: entityPath=%s sectorPath=%s", entityPath, sectorPath))
 
-		scoutResult, err = e.scoutAgent.ExtractFragmentData(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, sectorPath, specialties, chainContextForPrompt)
+		scoutResult, groundingEvidence, err = e.scoutAgent.ExtractFragmentDataWithGrounding(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, sectorPath, specialties, chainContextForPrompt)
 		if err != nil {
 			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "extraction_failed")
 			return fmt.Errorf("failed to extract fragment data: %w", err)
+		}
+		if internalFirstGroundingEnabled() {
+			if groundingEvidence != nil {
+				logGroundingInfof("scout extraction grounding: tenantId=%s projectId=%s lensId=%s jobId=%s target=%s datastore=%v(%d) web=%v(%d)",
+					strings.TrimSpace(job.TenantID),
+					strings.TrimSpace(job.ProjectID),
+					strings.TrimSpace(job.LensID),
+					strings.TrimSpace(job.ID),
+					strings.TrimSpace(job.TargetCanonicalPath),
+					groundingEvidence.HasDatastoreResults,
+					len(groundingEvidence.DatastoreFragmentIDs),
+					groundingEvidence.HasWebResults,
+					len(groundingEvidence.WebSources),
+				)
+				applyGroundingEvidenceToJobState(job, groundingEvidence, allSourceIDs, allDocumentIDs)
+				if job.State != nil {
+					if originMode := parseStateString(job.State[stateKeyOriginMode]); strings.TrimSpace(originMode) != "" {
+						e.emitGroundingCounter(ctx, strings.TrimSpace(job.TenantID), "horizon_grounding_origin_mode_total", map[string]string{
+							"mode": strings.TrimSpace(originMode),
+						}, map[string]int64{"count": 1})
+					}
+				}
+			} else if requireGroundingProvenanceEnabled() {
+				logGroundingWarnf("missing grounding evidence on extraction: jobId=%s target=%s", strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath))
+			}
 		}
 		extractedFragment = &scoutResult.Fragment
 
@@ -2681,9 +2749,35 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				}
 			}
 		}
-		enrichedFragment, newRelations, newSupplyChains, err := e.researchAgent.EnrichFragment(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities)
+		enrichedFragment, newRelations, newSupplyChains, researchGroundingEvidence, err := e.researchAgent.EnrichFragmentWithGrounding(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities)
 		if err == nil {
 			researchSucceeded = true
+			groundingEvidence = mergeGroundingEvidence(groundingEvidence, researchGroundingEvidence)
+			if internalFirstGroundingEnabled() {
+				if researchGroundingEvidence != nil {
+					logGroundingInfof("research grounding: tenantId=%s projectId=%s lensId=%s jobId=%s target=%s datastore=%v(%d) web=%v(%d)",
+						strings.TrimSpace(job.TenantID),
+						strings.TrimSpace(job.ProjectID),
+						strings.TrimSpace(job.LensID),
+						strings.TrimSpace(job.ID),
+						strings.TrimSpace(job.TargetCanonicalPath),
+						researchGroundingEvidence.HasDatastoreResults,
+						len(researchGroundingEvidence.DatastoreFragmentIDs),
+						researchGroundingEvidence.HasWebResults,
+						len(researchGroundingEvidence.WebSources),
+					)
+					applyGroundingEvidenceToJobState(job, groundingEvidence, allSourceIDs, allDocumentIDs)
+					if job.State != nil {
+						if originMode := parseStateString(job.State[stateKeyOriginMode]); strings.TrimSpace(originMode) != "" {
+							e.emitGroundingCounter(ctx, strings.TrimSpace(job.TenantID), "horizon_grounding_origin_mode_total", map[string]string{
+								"mode": strings.TrimSpace(originMode),
+							}, map[string]int64{"count": 1})
+						}
+					}
+				} else if requireGroundingProvenanceEnabled() {
+					logGroundingWarnf("missing grounding evidence on research: jobId=%s target=%s", strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath))
+				}
+			}
 			// Capture canonicalPath drift introduced by research (aliasing).
 			oldCP := ""
 			if extractedFragment != nil {
@@ -3489,6 +3583,25 @@ SKIP_RESEARCH:
 				Overwrite: true,
 			})
 		}
+		if internalFirstGroundingEnabled() {
+			var resolutionStats *models.GroundingResolutionStats
+			if job.State != nil {
+				if raw, ok := job.State[stateKeyResolutionStats]; ok {
+					if m, ok := raw.(map[string]interface{}); ok && m != nil {
+						resolutionStats = &models.GroundingResolutionStats{
+							RelationsResolvedByGrounding: parseStateInt(m["relationsResolvedByGrounding"], 0),
+							RelationsCreatedNew:          parseStateInt(m["relationsCreatedNew"], 0),
+							DedupRedirectsByGrounding:    parseStateInt(m["dedupRedirectsByGrounding"], 0),
+						}
+					}
+				}
+			}
+			applyGroundingProvenance(&existingFragment.Provenance, groundingEvidence, allSourceIDs, allDocumentIDs, resolutionStats)
+			if requireGroundingProvenanceEnabled() && strings.TrimSpace(existingFragment.Provenance.OriginMode) == "" {
+				logGroundingWarnf("missing fragment provenance originMode after grounding: jobId=%s fragmentId=%s target=%s",
+					strings.TrimSpace(job.ID), strings.TrimSpace(existingFragment.ID), strings.TrimSpace(job.TargetCanonicalPath))
+			}
+		}
 
 		if err := e.fragmentsRepo.Update(ctx, existingFragment); err != nil {
 			return fmt.Errorf("failed to update fragment: %w", err)
@@ -3564,9 +3677,46 @@ SKIP_RESEARCH:
 
 	// DECOMPOSITION: Обработка найденных связей (рекурсивный скаутинг)
 	if len(scoutResult.Relations) > 0 {
+		var resolvedGrounding *ResolvedGroundingContext
+		if internalFirstGroundingEnabled() && e.groundingResolver != nil && groundingEvidence != nil {
+			resolvedGrounding = e.groundingResolver.Resolve(ctx, groundingEvidence)
+			if resolvedGrounding != nil && !resolvedGrounding.IsEmpty() {
+				logGroundingInfof("grounding resolver context: jobId=%s target=%s fragments=%d",
+					strings.TrimSpace(job.ID),
+					strings.TrimSpace(job.TargetCanonicalPath),
+					resolvedGrounding.Size(),
+				)
+			} else if requireGroundingProvenanceEnabled() {
+				logGroundingWarnf("grounding resolver returned empty context: jobId=%s target=%s", strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath))
+			}
+		}
 		// Используем existingFragment, так как он содержит актуальный ID после сохранения.
-		if err := e.processDiscoveredRelations(ctx, job, existingFragment, scoutResult.Relations); err != nil {
-			fmt.Printf("Decomposition failed: %v\n", err)
+		var err error
+		if resolvedGrounding != nil && !resolvedGrounding.IsEmpty() {
+			err = e.processDiscoveredRelationsWithGrounding(ctx, job, existingFragment, scoutResult.Relations, resolvedGrounding)
+		} else {
+			err = e.processDiscoveredRelations(ctx, job, existingFragment, scoutResult.Relations)
+		}
+		if err != nil {
+			logGroundingErrorWithContext(job, "scout", "materialization.decomposition", "decomposition_failed", "materialization_error", true, err)
+			e.emitGroundingErrorTelemetry(ctx, job, "scout", "materialization.decomposition", "decomposition_failed", "materialization_error", true)
+		}
+	}
+	if internalFirstGroundingEnabled() && job.State != nil {
+		if raw, ok := job.State[stateKeyResolutionStats]; ok {
+			if m, ok := raw.(map[string]interface{}); ok && m != nil {
+				trace.Log(ctx, "scout_grounding", "scout.grounding.stats", map[string]any{
+					"tenantId":                     strings.TrimSpace(job.TenantID),
+					"projectId":                    strings.TrimSpace(job.ProjectID),
+					"lensId":                       strings.TrimSpace(job.LensID),
+					"jobId":                        strings.TrimSpace(job.ID),
+					"targetCanonicalPath":          strings.TrimSpace(job.TargetCanonicalPath),
+					"originMode":                   parseStateString(job.State[stateKeyOriginMode]),
+					"relationsResolvedByGrounding": parseStateInt(m["relationsResolvedByGrounding"], 0),
+					"relationsCreatedNew":          parseStateInt(m["relationsCreatedNew"], 0),
+					"dedupRedirectsByGrounding":    parseStateInt(m["dedupRedirectsByGrounding"], 0),
+				})
+			}
 		}
 	}
 
@@ -3941,9 +4091,16 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 		DecompositionHints: decompositionHints,
 		OriginalQuery:      originalQuery,
 	}
-	rels, err := agent.DecomposeWithOptions(ctx, strings.TrimSpace(job.TargetCanonicalPath), focus, spherePaths, keywords, opts)
+	rels, decompGroundingEvidence, err := agent.DecomposeWithGrounding(ctx, strings.TrimSpace(job.TargetCanonicalPath), focus, spherePaths, keywords, opts)
 	if err != nil {
 		return err
+	}
+	if internalFirstGroundingEnabled() && decompGroundingEvidence != nil {
+		logGroundingInfof("intent_decomposer grounding evidence: jobId=%s target=%s hasDatastore=%t hasWeb=%t fragmentIDs=%d",
+			strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath),
+			decompGroundingEvidence.HasDatastoreResults, decompGroundingEvidence.HasWebResults,
+			len(decompGroundingEvidence.DatastoreFragmentIDs))
+		applyGroundingEvidenceToJobState(job, decompGroundingEvidence, nil, nil)
 	}
 	if len(rels) == 0 {
 		job.State["intentDecompositionDone"] = true
@@ -4411,6 +4568,19 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 		// and fail to persist policy check results.
 		policyCtx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 		defer cancel()
+		policy.LogPolicyEvent("policy_checker_policy", policy.PolicyLogStageInput, map[string]interface{}{
+			"trace_id":         "na",
+			"tenant_id":        job.TenantID,
+			"job_id":           job.ID,
+			"action":           "policy_audit_start",
+			"policy_status":    "na",
+			"policy_reason":    "",
+			"policy_penalty":   0,
+			"decision_path":    "policy_audit",
+			"confidence":       0,
+			"contract_enabled": policy.UnifiedPolicyContractEnabled(),
+			"shadow_mode":      policy.UnifiedPolicyShadowModeEnabled(),
+		})
 
 		durationMs := int64(0)
 		var result *policy.PolicyCheckResult
@@ -4427,7 +4597,18 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 			)
 			durationMs = time.Since(startTime).Milliseconds()
 			if err != nil {
-				fmt.Printf("[ScoutEngine] Policy check failed for job %s: %v\n", job.ID, err)
+				policy.LogPolicyEvent("policy_checker_policy", policy.PolicyLogStageError, map[string]interface{}{
+					"trace_id":       "na",
+					"tenant_id":      job.TenantID,
+					"job_id":         job.ID,
+					"action":         "check_job_output",
+					"policy_status":  "na",
+					"policy_reason":  err.Error(),
+					"policy_penalty": 0,
+					"decision_path":  "policy_audit",
+					"error_class":    "policy_checker_error",
+					"confidence":     0,
+				})
 			} else {
 				result = r
 			}
@@ -4436,10 +4617,31 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 		// If policy result exists, report it + optionally run enforcement.
 		if result != nil {
 			if result.TotalViolations == 0 {
-				fmt.Printf("[ScoutEngine] Policy check passed for job %s (no violations)\n", job.ID)
+				policy.LogPolicyEvent("policy_checker_policy", policy.PolicyLogStageResult, map[string]interface{}{
+					"trace_id":       "na",
+					"tenant_id":      job.TenantID,
+					"job_id":         job.ID,
+					"action":         "allow",
+					"policy_status":  "clean",
+					"policy_reason":  "no_violations",
+					"policy_penalty": 0,
+					"decision_path":  "policy_audit",
+					"confidence":     1,
+				})
 			} else {
-				fmt.Printf("[ScoutEngine] Policy check found %d violations for job %s (%d auto-fixable)\n",
-					result.TotalViolations, job.ID, result.AutoFixableCount)
+				policy.LogPolicyEvent("policy_checker_policy", policy.PolicyLogStageDecision, map[string]interface{}{
+					"trace_id":       "na",
+					"tenant_id":      job.TenantID,
+					"job_id":         job.ID,
+					"action":         "quarantine_soft",
+					"policy_status":  "penalized",
+					"policy_reason":  "violations_found",
+					"policy_penalty": 0,
+					"decision_path":  "policy_audit",
+					"confidence":     1,
+					"violations":     result.TotalViolations,
+					"auto_fixable":   result.AutoFixableCount,
+				})
 			}
 
 			// Create enforcement jobs for auto-fixable violations
@@ -4448,13 +4650,35 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 				enforcementJobs, err := e.enforcementExecutor.CreateEnforcementJobs(enforcementCtx, job.TenantID, job.ID, result.Violations)
 				enforcementCancel()
 				if err != nil {
-					fmt.Printf("[ScoutEngine] Failed to create enforcement jobs for %s: %v\n", job.ID, err)
+					policy.LogPolicyEvent("enforcement_policy", policy.PolicyLogStageError, map[string]interface{}{
+						"trace_id":       "na",
+						"tenant_id":      job.TenantID,
+						"job_id":         job.ID,
+						"action":         "create_enforcement_jobs",
+						"policy_status":  "na",
+						"policy_reason":  err.Error(),
+						"policy_penalty": 0,
+						"decision_path":  "policy_audit",
+						"error_class":    "enforcement_create_error",
+						"confidence":     0,
+					})
 				} else if len(enforcementJobs) > 0 {
 					// Store enforcement job IDs in result
 					for _, ej := range enforcementJobs {
 						result.EnforcementJobIDs = append(result.EnforcementJobIDs, ej.ID)
 					}
-					fmt.Printf("[ScoutEngine] Created %d enforcement jobs for %s\n", len(enforcementJobs), job.ID)
+					policy.LogPolicyEvent("enforcement_policy", policy.PolicyLogStageApply, map[string]interface{}{
+						"trace_id":       "na",
+						"tenant_id":      job.TenantID,
+						"job_id":         job.ID,
+						"action":         "create_enforcement_jobs",
+						"policy_status":  "na",
+						"policy_reason":  "enforcement_jobs_created",
+						"policy_penalty": 0,
+						"decision_path":  "policy_audit",
+						"confidence":     1,
+						"jobs_count":     len(enforcementJobs),
+					})
 
 					// Optionally execute auto-fixes immediately.
 					if e.shouldAutoExecuteEnforcement() {
@@ -4499,7 +4723,18 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 		if result != nil {
 			if e.policyCheckResultsRepo != nil {
 				if err := e.policyCheckResultsRepo.Save(policyCtx, result); err != nil {
-					fmt.Printf("[ScoutEngine] Failed to persist policy check result for %s: %v\n", job.ID, err)
+					policy.LogPolicyEvent("policy_checker_policy", policy.PolicyLogStageError, map[string]interface{}{
+						"trace_id":       "na",
+						"tenant_id":      job.TenantID,
+						"job_id":         job.ID,
+						"action":         "persist_policy_check_result",
+						"policy_status":  "na",
+						"policy_reason":  err.Error(),
+						"policy_penalty": 0,
+						"decision_path":  "policy_audit",
+						"error_class":    "policy_check_persist_error",
+						"confidence":     0,
+					})
 				}
 			}
 		}

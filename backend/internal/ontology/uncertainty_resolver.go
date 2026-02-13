@@ -100,7 +100,7 @@ type UncertaintyContext struct {
 // collectContext собирает контекст из затронутых объектов
 func (r *UncertaintyResolver) collectContext(
 	ctx context.Context,
-	tenantID string,
+	_ string,
 	affectedRefs []models.AffectedRef,
 ) (*UncertaintyContext, error) {
 	context := &UncertaintyContext{
@@ -236,7 +236,7 @@ All fields except resolvedValue and selectedClaimId are required.`,
 // applyResolution применяет результат разрешения
 func (r *UncertaintyResolver) applyResolution(
 	ctx context.Context,
-	tenantID string,
+	_ string,
 	uncertainty *models.UncertaintyModel,
 	resolution *ResolutionResult,
 ) error {

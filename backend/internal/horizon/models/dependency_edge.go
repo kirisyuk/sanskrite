@@ -157,7 +157,69 @@ const (
 	//   /community/af/tribe/pashtun HAS_SUBGROUP /community/af/tribe/durrani
 	//   /community/kz/tribe/senior-zhuz HAS_SUBGROUP /community/kz/tribe/uysun
 	DependencyTypeHasSubgroup DependencyType = "HAS_SUBGROUP"
+
+	// --- Corporate transition edges ---
+	// RENAMED_TO: legal name rename (typically same legal entity identity).
+	DependencyTypeRenamedTo DependencyType = "RENAMED_TO"
+	// REBRANDED_TO: brand rename/repositioning.
+	DependencyTypeRebrandedTo DependencyType = "REBRANDED_TO"
+	// LEGAL_SUCCESSOR_OF: new legal entity is successor of a previous one.
+	DependencyTypeLegalSuccessorOf DependencyType = "LEGAL_SUCCESSOR_OF"
+	// MERGED_INTO: source legal entity merged into target.
+	DependencyTypeMergedInto DependencyType = "MERGED_INTO"
+	// SPUN_OFF_FROM: source legal entity was spun off from target.
+	DependencyTypeSpunOffFrom DependencyType = "SPUN_OFF_FROM"
+	// ACQUIRED_BY: source legal entity is acquired by target.
+	DependencyTypeAcquiredBy DependencyType = "ACQUIRED_BY"
 )
+
+// IsTransitionEdgeType reports whether an edge type represents a corporate transition.
+func IsTransitionEdgeType(edgeType DependencyType) bool {
+	switch edgeType {
+	case DependencyTypeRenamedTo,
+		DependencyTypeRebrandedTo,
+		DependencyTypeLegalSuccessorOf,
+		DependencyTypeMergedInto,
+		DependencyTypeSpunOffFrom,
+		DependencyTypeAcquiredBy:
+		return true
+	default:
+		return false
+	}
+}
+
+var transitionIntentTokens = []string{
+	"RENAME",
+	"REBRAND",
+	"SUCCESSOR",
+	"MERGED",
+	"MERGER",
+	"SPIN",
+	"SPUN",
+	"ACQUISITION",
+	"ACQUIRED",
+	"TAKEOVER",
+	"FKA",
+	"FORMERLY",
+}
+
+// IsTransitionLikeRelationType reports whether a raw relation string looks like a corporate transition intent.
+// It accepts both canonical transition edge types and fuzzy transition-like tokens.
+func IsTransitionLikeRelationType(rawRelationType string) bool {
+	s := strings.ToUpper(strings.TrimSpace(rawRelationType))
+	if s == "" {
+		return false
+	}
+	if IsTransitionEdgeType(DependencyType(s)) {
+		return true
+	}
+	for _, token := range transitionIntentTokens {
+		if strings.Contains(s, token) {
+			return true
+		}
+	}
+	return false
+}
 
 // =============================================================================
 // DEPENDENCY FACETS (qualifiers for DEPENDS_ON edges)

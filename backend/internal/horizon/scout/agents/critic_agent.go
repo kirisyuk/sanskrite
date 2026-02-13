@@ -8,6 +8,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -316,21 +317,19 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt() + "\n\n"
 	profile := ResolveResearchProfile(extractedData.Type, extractedData.CanonicalPath, extractedData.CommunityType)
 	profileBlock := BuildResearchProfilePromptBlock(profile) + "\n\n"
+	nameRulesBlock := strings.ReplaceAll(naming.PromptEntityNameNormalizationRules(), "\n", "\n        ")
 
 	canonicalRules := taxonomy.DefaultCanonicalRules()
 	canonicalValidationBlock := fmt.Sprintf(`  MANDATORY - Canonical path validation (for fragment AND relations):
     - For the main fragment and EACH relation targetCanonicalPath:
       - If path is /org/... ensure it is %s; otherwise add a question:
         - "Confirm official legal name, jurisdiction (ISO2 or regional token), and canonical org path for <entity>. REQUIRED FORMAT: %s where iso2 is ISO3166-1 alpha2 lowercase; regional tokens (e.g., gcc, eu) go in the geo slot (2nd segment); slug is hyphenated base name; legal_form is a SUFFIX token in {%s} (e.g., /org/us/tesla-inc). Do NOT rewrite names as 'JSC X' — keep official ordering from sources; legal_form belongs at the end of canonicalPath and in canonicalParts.Org.LegalForm."
-      - If path is /gov/... ensure it is %s; otherwise add a question:
-        - "Which country/jurisdiction does this government body belong to? REQUIRED FORMAT: %s with iso2 ISO3166-1 alpha2 lowercase OR regional token (gcc, eu, asean); regional tokens go in the geo slot (2nd segment). Example: %s."
-      - GOV NAMING (CRITICAL for /gov/...):
-        - Ensure the government body has BOTH:
-          - labels.en: readable English name (translation if official English exists; otherwise careful transliteration). MUST be Latin-script only (broad Latin is OK).
-          - identifiers.legalName: official name as in primary source/registry (often native script)
-        - If native language/script is known, also ensure labels.<iso639> is present (e.g., labels.th, labels.ms, labels.ar).
-      - If path is /product/... ensure it is either %s or %s; otherwise add a question:
-        - "Resolve canonical product taxonomy for <product>. REQUIRED FORMAT: %s (or %s if unknown). category∈{%s}; type∈{%s}; stage∈{%s}. Example: %s."
+	      - If path is /gov/... ensure it is %s; otherwise add a question:
+	        - "Which country/jurisdiction does this government body belong to? REQUIRED FORMAT: %s with iso2 ISO3166-1 alpha2 lowercase OR regional token (gcc, eu, asean); regional tokens go in the geo slot (2nd segment). Example: %s."
+	      - Shared naming constraints (for fragment + relations):
+	        %s
+	      - If path is /product/... ensure it is either %s or %s; otherwise add a question:
+	        - "Resolve canonical product taxonomy for <product>. REQUIRED FORMAT: %s (or %s if unknown). category∈{%s}; type∈{%s}; stage∈{%s}. Example: %s."
       - If path is /loc/... ensure it is %s; otherwise add a question:
         - "Resolve canonical GEO path for <location>. REQUIRED FORMAT: %s where cc is ISO3166-1 alpha2 lowercase (or allowed regional token: asean, brics, gcc, eu, eaeu), admin1 is GeoNames admin code or 'na', city is hyphenated English name. Example: %s."
       - If path is /program/... ensure it is /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known:
@@ -343,6 +342,7 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 		canonicalRules.Gov.Format,
 		canonicalRules.Gov.Format,
 		canonicalRules.Gov.Example,
+		nameRulesBlock,
 		canonicalRules.Product.Fallback,
 		canonicalRules.Product.Format,
 		canonicalRules.Product.Format,

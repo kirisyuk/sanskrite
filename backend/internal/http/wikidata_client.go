@@ -47,6 +47,7 @@ type WikidataEntityData struct {
 	TypeLabel     string                 `json:"typeLabel,omitempty"`     // Human-readable type (e.g., "human")
 	Properties    map[string]string      `json:"properties"`              // Property ID -> Formatted Value
 	PropertiesRaw map[string]interface{} `json:"propertiesRaw,omitempty"` // Property ID -> Raw Value (for complex structures)
+	Aliases       []string               `json:"aliases,omitempty"`       // English aliases (alternative names/labels)
 }
 
 // NewWikidataClient creates a new Wikidata API client
@@ -229,6 +230,9 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 			Descriptions map[string]struct {
 				Value string `json:"value"`
 			} `json:"descriptions"`
+			Aliases map[string][]struct {
+				Value string `json:"value"`
+			} `json:"aliases"`
 			Claims map[string][]struct {
 				Mainsnak struct {
 					Datavalue struct {
@@ -283,6 +287,8 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 			"P186":  true, // Material used
 			"P1448": true, // Official name
 			"P1813": true, // Short name
+			"P5768": true, // Former official name (dissolved or name-changed entity)
+			"P1449": true, // Nickname
 		}
 
 		properties := make(map[string]string)
@@ -300,7 +306,7 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 			
 			// For multi-value properties, collect all values.
 			// IMPORTANT: P452 (industry) is multi-valued for many organizations and is required for industry taxonomy mapping.
-			if propID == "P31" || propID == "P279" || propID == "P366" || propID == "P10565" || propID == "P186" || propID == "P452" || propID == "P176" || propID == "P1448" || propID == "P1813" {
+			if propID == "P31" || propID == "P279" || propID == "P366" || propID == "P10565" || propID == "P186" || propID == "P452" || propID == "P176" || propID == "P1448" || propID == "P1813" || propID == "P5768" || propID == "P1449" {
 				var values []string
 				var rawValues []interface{}
 				for _, claim := range claims {
@@ -382,6 +388,24 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 			}
 		}
 
+		// Extract English aliases (alternative names).
+		var aliases []string
+		if enAliases, ok := entity.Aliases["en"]; ok {
+			seen := map[string]struct{}{}
+			for _, a := range enAliases {
+				v := strings.TrimSpace(a.Value)
+				if v == "" {
+					continue
+				}
+				lc := strings.ToLower(v)
+				if _, dup := seen[lc]; dup {
+					continue
+				}
+				seen[lc] = struct{}{}
+				aliases = append(aliases, v)
+			}
+		}
+
 		// Get Wikipedia URL if available
 		docURL := fmt.Sprintf("https://www.wikidata.org/wiki/%s", entityID)
 		if enwiki, ok := entity.Sitelinks["enwiki"]; ok {
@@ -397,6 +421,7 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 			TypeLabel:     typeLabel,
 			Properties:    properties,
 			PropertiesRaw: propertiesRaw,
+			Aliases:       aliases,
 		}, nil
 	}
 

@@ -28,7 +28,11 @@ import {
 import { api } from '../lib/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
+import {
+  useHorizonRealtimeStore,
+  type HorizonRealtimeEvent,
+} from '../stores/horizonRealtimeStore';
+import { DomainOverlayPanel, type DomainOverlayAnswerItem, type DomainOverlayPanelMode } from './DomainOverlayPanel';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
 import { isSphereCanonicalPath, isSphereEntity, isSphereType } from '../lib/horizonSphere';
 import {
@@ -1875,14 +1879,336 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [graphQueryActiveChipId, setGraphQueryActiveChipId] = React.useState<string | null>(null);
   const [graphQueryHighlightIds, setGraphQueryHighlightIds] = React.useState<Set<string> | null>(null);
   const [viewDirective, setViewDirective] = React.useState<ViewDirective | null>(null);
+  const [domainAnswers, setDomainAnswers] = React.useState<any[]>([]);
+  const [domainOverlayPanelMode, setDomainOverlayPanelMode] = React.useState<DomainOverlayPanelMode>('mini');
+  const [activeDomainAnswerKey, setActiveDomainAnswerKey] = React.useState<string>('');
+  const [domainOverlayHighlightEnabled, setDomainOverlayHighlightEnabled] = React.useState(true);
+  // domainOverlayPreview removed — no longer used
+  const realtimeEvents = useHorizonRealtimeStore((s) => s.events);
 
-  const [domainOverlayOpen, setDomainOverlayOpen] = React.useState(false);
-  const [domainOverlayQuery, setDomainOverlayQuery] = React.useState('');
-  const [domainOverlayPreview, setDomainOverlayPreview] = React.useState<any | null>(null);
-  const [domainOverlayLoading, setDomainOverlayLoading] = React.useState(false);
-  const [domainOverlayExecuting, setDomainOverlayExecuting] = React.useState(false);
-  const [domainOverlayError, setDomainOverlayError] = React.useState<string | null>(null);
-  const domainOverlayInputRef = React.useRef<HTMLInputElement | null>(null);
+  type DomainContractTone = 'info' | 'success' | 'warning' | 'error';
+  type DomainContractMiniBadge = { label: string; tone: DomainContractTone } | null;
+
+  const domainContractEventTone = React.useCallback((ev: HorizonRealtimeEvent): DomainContractTone => {
+    const t = String(ev?.type || '').trim();
+    if (t.includes('.failed') || t.includes('.fallback')) return 'error';
+    if (t.includes('.budget.warning')) return 'warning';
+    if (t.includes('.completed') || t.includes('.passed')) return 'success';
+    return 'info';
+  }, []);
+
+  const domainContractEventLabel = React.useCallback((ev: HorizonRealtimeEvent): string => {
+    const t = String(ev?.type || '').trim();
+    const cycleRaw = Number((ev as any)?.data?.cycle);
+    const cycle = Number.isFinite(cycleRaw) && cycleRaw > 0 ? cycleRaw : null;
+    if (t.endsWith('.resolve.started')) return 'Resolving';
+    if (t.endsWith('.resolve.completed')) return 'Resolved';
+    if (t.endsWith('.steer.started')) return 'Steering';
+    if (t.endsWith('.steer.completed')) return 'Steered';
+    if (t.endsWith('.gate.started')) return 'Checking gate';
+    if (t.endsWith('.gate.passed')) return 'Gate passed';
+    if (t.endsWith('.gate.failed')) return 'Gaps found';
+    if (t.endsWith('.enrich.started')) return cycle ? `Enriching ${cycle}` : 'Enriching';
+    if (t.endsWith('.enrich.completed')) return cycle ? `Enriched ${cycle}` : 'Enriched';
+    if (t.endsWith('.assemble.started')) return 'Assembling';
+    if (t.endsWith('.assemble.completed')) return 'Assembled';
+    if (t.endsWith('.publish.completed')) return 'Ready';
+    if (t.endsWith('.budget.warning')) return 'Budget warning';
+    if (t.endsWith('.fallback')) return 'Ready with gaps';
+    return ev?.humanReadable?.title || 'Domain contract';
+  }, []);
+
+  const domainAnswerItems = React.useMemo<DomainOverlayAnswerItem[]>(() => {
+    const toStr = (v: any): string => String(v || '').trim();
+    const toArr = (v: any): any[] => (Array.isArray(v) ? v : []);
+
+    // ── 1. Build items from full DomainAnswerSnapshots (when available) ──
+    const snapshotList = Array.isArray(domainAnswers) ? domainAnswers : [];
+    const snapshotMap = new Map<string, DomainOverlayAnswerItem>();
+    snapshotList.forEach((raw: any, idx: number) => {
+      const canonicalPath = toStr(raw?.domainCanonicalPath || raw?.domainContract?.canonicalPath);
+      const domainId = toStr(raw?.domainId);
+      const snapshotId = toStr(raw?.id);
+      const key = toStr(canonicalPath || domainId || snapshotId || `domain-${idx}`);
+      const contractType = toStr(raw?.domainContract?.contractType || raw?.contractType);
+      const title = toStr(
+        raw?.domainContract?.title ||
+          raw?.title ||
+          (canonicalPath ? humanizeCanonicalPath(canonicalPath) : '') ||
+          domainId ||
+          snapshotId ||
+          `Domain ${idx + 1}`,
+      );
+      const readinessStatus = toStr(raw?.readinessStatus || raw?.status).toLowerCase();
+      const dataGaps = toArr(raw?.dataGaps);
+      const criticalDependencies = toArr(raw?.criticalDependencies);
+      const impactPaths = toArr(raw?.impactPaths);
+      const highlightedNodeIds = toArr(raw?.highlightedNodeIds).map((x) => toStr(x)).filter(Boolean);
+      const highlightedEdgeIds = toArr(raw?.highlightedEdgeIds).map((x) => toStr(x)).filter(Boolean);
+      const gateFailedCount = Number(raw?.gate?.failed || 0) || 0;
+      if (!key) return;
+      snapshotMap.set(key, {
+        key, raw, snapshotId, domainId, canonicalPath, contractType, title, readinessStatus,
+        thesisText: toStr(raw?.thesis?.text), dataGaps, criticalDependencies, impactPaths,
+        criticalNodes: toArr(raw?.criticalNodes), concentrationEvidence: toArr(raw?.concentrationEvidence),
+        controlExposure: toArr(raw?.controlExposure), highlightedNodeIds, highlightedEdgeIds, gateFailedCount,
+        facets: (raw?.domainContract?.facets && typeof raw.domainContract.facets === 'object') ? raw.domainContract.facets : {},
+        assembledAt: toStr(raw?.assembledAt || raw?.updatedAt || raw?.createdAt),
+      } as DomainOverlayAnswerItem);
+    });
+
+    // ── 2. Build stub items from DOMAIN graph nodes (always available) ──
+    const safeNodes = Array.isArray(nodes) ? nodes : [];
+    const graphDomainStubs = new Map<string, DomainOverlayAnswerItem>();
+    safeNodes.forEach((n: any) => {
+      const d = n?.data || n;
+      const t = toStr(d?.type).toUpperCase();
+      const cp = toStr(d?.canonicalPath);
+      const isDomain = t === 'DOMAIN' || cp.startsWith('/domain/');
+      if (!isDomain || !cp) return;
+      if (snapshotMap.has(cp)) return; // snapshot takes priority
+
+      // Parse contractType + facets from canonicalPath
+      let contractType = '';
+      const facets: Record<string, string[]> = {};
+      if (cp.startsWith('/domain/v1/')) {
+        const parts = cp.split('/').filter(Boolean);
+        contractType = toStr(parts[2]);
+        const rest = parts.slice(3);
+        for (let i = 0; i + 1 < rest.length; i += 2) {
+          const fk = toStr(rest[i]);
+          const fv = toStr(rest[i + 1]);
+          if (!fk || !fv) continue;
+          if (!facets[fk]) facets[fk] = [];
+          facets[fk].push(fv);
+        }
+      }
+      // Also try identifiers
+      const ids = d?.identifiers && typeof d.identifiers === 'object' ? d.identifiers : {};
+      if (!contractType) contractType = toStr(ids?.domainContractType);
+      if (Object.keys(facets).length === 0 && ids?.domainFacetsJson) {
+        try {
+          const parsed = JSON.parse(ids.domainFacetsJson);
+          if (parsed && typeof parsed === 'object') {
+            for (const [fk, fv] of Object.entries(parsed as any)) {
+              const k = toStr(fk);
+              if (!k) continue;
+              facets[k] = Array.isArray(fv) ? fv.map((x: any) => toStr(x)).filter(Boolean) : [];
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      const nodeId = toStr(d?.id || d?.fragmentId || n?.id);
+      const label = toStr(d?.label || d?.labels?.en);
+      const title = label || humanizeCanonicalPath(cp) || `Domain`;
+
+      graphDomainStubs.set(cp, {
+        key: cp,
+        raw: d,
+        snapshotId: '',
+        domainId: nodeId,
+        canonicalPath: cp,
+        contractType,
+        title,
+        readinessStatus: 'pending',
+        thesisText: '',
+        dataGaps: [],
+        criticalDependencies: [],
+        impactPaths: [],
+        criticalNodes: [],
+        concentrationEvidence: [],
+        controlExposure: [],
+        highlightedNodeIds: nodeId ? [nodeId] : [],
+        highlightedEdgeIds: [],
+        gateFailedCount: 0,
+        facets,
+        assembledAt: '',
+      } as DomainOverlayAnswerItem);
+    });
+
+    // ── 3. Merge: snapshots first, then graph stubs for domains without snapshots ──
+    const out: DomainOverlayAnswerItem[] = [
+      ...Array.from(snapshotMap.values()),
+      ...Array.from(graphDomainStubs.values()),
+    ];
+
+    out.sort((a, b) => {
+      // Snapshot items (with readiness) before stubs
+      const aHasSnapshot = a.snapshotId ? 1 : 0;
+      const bHasSnapshot = b.snapshotId ? 1 : 0;
+      if (aHasSnapshot !== bHasSnapshot) return bHasSnapshot - aHasSnapshot;
+      const ar = a.readinessStatus === 'ready' ? 1 : 0;
+      const br = b.readinessStatus === 'ready' ? 1 : 0;
+      if (ar !== br) return br - ar;
+      const at = Date.parse(String(a.assembledAt || '')) || 0;
+      const bt = Date.parse(String(b.assembledAt || '')) || 0;
+      if (at !== bt) return bt - at;
+      return a.title.localeCompare(b.title);
+    });
+    return out;
+  }, [domainAnswers, nodes]);
+
+  React.useEffect(() => {
+    if (domainAnswerItems.length === 0) {
+      if (activeDomainAnswerKey) setActiveDomainAnswerKey('');
+      return;
+    }
+    const exists = domainAnswerItems.some((x) => x.key === activeDomainAnswerKey);
+    if (exists) return;
+    const preferred = domainAnswerItems.find((x) => x.readinessStatus === 'ready') || domainAnswerItems[0];
+    setActiveDomainAnswerKey(String(preferred?.key || ''));
+  }, [domainAnswerItems, activeDomainAnswerKey]);
+
+  const activeDomainAnswer = React.useMemo<DomainOverlayAnswerItem | null>(() => {
+    if (domainAnswerItems.length === 0) return null;
+    const selected = domainAnswerItems.find((x) => x.key === activeDomainAnswerKey);
+    return selected || domainAnswerItems[0] || null;
+  }, [domainAnswerItems, activeDomainAnswerKey]);
+
+  const domainOverlayHighlightNodeIds = React.useMemo<Set<string> | null>(() => {
+    if (!domainOverlayHighlightEnabled || !activeDomainAnswer) return null;
+    const out = new Set<string>();
+    for (const id of activeDomainAnswer.highlightedNodeIds || []) {
+      const s = String(id || '').trim();
+      if (s) out.add(s);
+    }
+    if (out.size === 0) {
+      for (const n of Array.isArray(activeDomainAnswer.raw?.criticalNodes) ? activeDomainAnswer.raw.criticalNodes : []) {
+        const id = String(n?.fragmentId || '').trim();
+        if (id) out.add(id);
+      }
+      for (const dep of activeDomainAnswer.criticalDependencies || []) {
+        const s = String(dep?.sourceFragmentId || '').trim();
+        const t = String(dep?.targetFragmentId || '').trim();
+        if (s) out.add(s);
+        if (t) out.add(t);
+      }
+    }
+    return out.size > 0 ? out : null;
+  }, [activeDomainAnswer, domainOverlayHighlightEnabled]);
+
+  const domainOverlayHighlightEdgeIds = React.useMemo<Set<string> | null>(() => {
+    if (!domainOverlayHighlightEnabled || !activeDomainAnswer) return null;
+    const out = new Set<string>();
+    for (const id of activeDomainAnswer.highlightedEdgeIds || []) {
+      const s = String(id || '').trim();
+      if (s) out.add(s);
+    }
+    if (out.size === 0) {
+      for (const dep of activeDomainAnswer.criticalDependencies || []) {
+        const id = String(dep?.edgeId || '').trim();
+        if (id) out.add(id);
+      }
+      for (const path of activeDomainAnswer.impactPaths || []) {
+        const edgeIDs = Array.isArray(path?.edgeIds) ? path.edgeIds : [];
+        for (const edgeID of edgeIDs) {
+          const id = String(edgeID || '').trim();
+          if (id) out.add(id);
+        }
+      }
+    }
+    return out.size > 0 ? out : null;
+  }, [activeDomainAnswer, domainOverlayHighlightEnabled]);
+
+  const activeDomainOverlayPath = React.useMemo(() => {
+    const activePath = String(
+      activeDomainAnswer?.canonicalPath ||
+      activeDomainAnswer?.domainId ||
+      activeDomainAnswer?.raw?.domainContract?.canonicalPath ||
+      '',
+    ).trim();
+    if (activePath) return activePath;
+    const list = Array.isArray(domainAnswers) ? domainAnswers : [];
+    const preferred =
+      list.find((a: any) => String(a?.readinessStatus || '').trim() === 'ready') || list[0];
+    if (!preferred) return '';
+    return String(
+      preferred?.domainCanonicalPath ||
+      preferred?.domainId ||
+      preferred?.domainContract?.canonicalPath ||
+      '',
+    ).trim();
+  }, [domainAnswers, activeDomainAnswer]);
+
+  const domainContractTimeline = React.useMemo(() => {
+    const targetPath = String(activeDomainOverlayPath || '').trim();
+    const events = Array.isArray(realtimeEvents) ? realtimeEvents : [];
+    const filtered = events.filter((ev) => {
+      const type = String(ev?.type || '').trim();
+      if (!type.startsWith('horizon.domain.contract.')) return false;
+      if (lensId && ev?.lensId && String(ev.lensId).trim() !== String(lensId).trim()) return false;
+      if (!targetPath) return true;
+      const eventPath = String(
+        (ev as any)?.data?.canonicalPath ||
+        (ev as any)?.data?.domainCanonicalPath ||
+        (ev as any)?.data?.domainId ||
+        '',
+      ).trim();
+      if (!eventPath) return false;
+      return eventPath === targetPath;
+    });
+    return filtered
+      .slice()
+      .sort((a, b) => Number(b?.ts || 0) - Number(a?.ts || 0))
+      .slice(0, 8);
+  }, [activeDomainOverlayPath, realtimeEvents, lensId]);
+
+  const domainContractMiniBadge = React.useMemo<DomainContractMiniBadge>(() => {
+    const ev = domainContractTimeline[0];
+    if (ev) {
+      return {
+        label: domainContractEventLabel(ev),
+        tone: domainContractEventTone(ev),
+      };
+    }
+    if (!activeDomainAnswer) return null;
+    const gaps = activeDomainAnswer.dataGaps.length;
+    const ready = activeDomainAnswer.readinessStatus === 'ready';
+    return {
+      label: ready ? 'Ready' : gaps > 0 ? `Gaps ${gaps}` : 'Ready with gaps',
+      tone: ready ? 'success' : gaps > 0 ? 'warning' : 'info',
+    };
+  }, [domainContractEventLabel, domainContractEventTone, domainContractTimeline, activeDomainAnswer]);
+
+  const domainReadinessMeta = React.useCallback((item?: DomainOverlayAnswerItem | null): { label: string; tone: DomainContractTone } => {
+    if (!item) return { label: 'Unknown', tone: 'info' };
+    const readiness = String(item.readinessStatus || '').trim().toLowerCase();
+    const gapCount = Math.max(item.dataGaps.length, item.gateFailedCount);
+    if (readiness === 'pending' || (!item.snapshotId && readiness !== 'ready')) return { label: 'Collecting', tone: 'info' };
+    if (readiness === 'ready') return { label: 'Ready', tone: 'success' };
+    if (gapCount > 0) return { label: `Gaps ${gapCount}`, tone: 'warning' };
+    return { label: 'Ready with gaps', tone: 'warning' };
+  }, []);
+
+  const lastDomainPublishEventIdRef = React.useRef<string>('');
+
+  React.useEffect(() => {
+    if (!lensId) return;
+    const events = Array.isArray(realtimeEvents) ? realtimeEvents : [];
+    const latest = events
+      .filter((ev) => {
+        const t = String(ev?.type || '').trim();
+        if (t !== 'horizon.domain.contract.publish.completed') return false;
+        if (ev?.lensId && String(ev.lensId).trim() !== String(lensId).trim()) return false;
+        return true;
+      })
+      .slice()
+      .sort((a, b) => Number(b?.ts || 0) - Number(a?.ts || 0))[0];
+    const eventId = String(latest?.id || '').trim();
+    if (!eventId) return;
+    if (eventId === lastDomainPublishEventIdRef.current) return;
+    lastDomainPublishEventIdRef.current = eventId;
+    void (async () => {
+      try {
+        const res = await api.listHorizonDomainAnswers(lensId, { limit: 50 });
+        const list = Array.isArray((res as any)?.domainAnswers) ? (res as any).domainAnswers : [];
+        setDomainAnswers(list);
+      } catch {
+        // best-effort sync only
+      }
+    })();
+  }, [realtimeEvents, lensId]);
 
   // Lens scope preview (empty state)
   const [lensName, setLensName] = React.useState<string | null>(null);
@@ -1999,11 +2325,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     return () => window.clearTimeout(t);
   }, [askGraphOpen]);
 
-  React.useEffect(() => {
-    if (!domainOverlayOpen) return;
-    const t = window.setTimeout(() => domainOverlayInputRef.current?.focus(), 0);
-    return () => window.clearTimeout(t);
-  }, [domainOverlayOpen]);
+  // (Old domain overlay focus effect removed — replaced by DomainOverlayPanel)
 
   // Lens scope preview: load lens metadata (name + scope canonical paths)
   React.useEffect(() => {
@@ -4834,6 +5156,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const cockpitData = await api.getHorizonLensCockpit(lensId);
       const viewDirectiveRaw = (cockpitData?.lens?.viewConfig?.viewDirective || null) as ViewDirective | null;
       setViewDirective(viewDirectiveRaw);
+      setDomainAnswers(Array.isArray((cockpitData as any)?.domainAnswers) ? (cockpitData as any).domainAnswers : []);
       
       const rawFragments = cockpitData.graph.nodes || [];
       const rawEdges = cockpitData.graph.edges || [];
@@ -8530,9 +8853,35 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
     }
 
+    const domainEdgeSet = domainOverlayHighlightEdgeIds;
+    const domainNodeSet = domainOverlayHighlightNodeIds;
+    const domainEdgeActive = !!domainEdgeSet && domainEdgeSet.size > 0;
+    const domainNodeActive = !!domainNodeSet && domainNodeSet.size > 0;
+    if (domainEdgeActive || domainNodeActive) {
+      const out = edgesForDisplay.map((e) => {
+        const { baseStyle } = baseStyled(e);
+        const eid = String((e as any)?.id || '').trim();
+        const src = String((e as any)?.source || '').trim();
+        const dst = String((e as any)?.target || '').trim();
+        const byEdgeId = !!domainEdgeSet && !!eid && domainEdgeSet.has(eid);
+        const byNodePair = !!domainNodeSet && !!src && !!dst && domainNodeSet.has(src) && domainNodeSet.has(dst);
+        const isHi = byEdgeId || byNodePair;
+        if (isHi) {
+          const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+          return withLabel(e, true, {
+            ...baseStyle,
+            opacity: 1,
+            strokeWidth: strokeWidth + 1.0,
+          }, true);
+        }
+        return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
+      });
+      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
+    }
+
     // Default: dim all edges, hide labels
     return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay));
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId]);
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -8989,7 +9338,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Perf mode: keep visuals light, but still allow graph-query highlight (low-cost style).
     const qset = graphQueryHighlightIds;
     const qActive = !!qset && qset.size > 0;
-    if (perfMode && !qActive && !String(riskShieldActiveNodeId || '').trim()) return nodes;
+    const dset = qActive ? null : domainOverlayHighlightNodeIds;
+    const dActive = !!dset && dset.size > 0;
+    if (perfMode && !qActive && !dActive && !String(riskShieldActiveNodeId || '').trim()) return nodes;
 
     const owned = hoverHighlight?.nodeIds;
     const ultimatePersons: Set<string> | undefined = (hoverHighlight as any)?.ultimatePersonIds;
@@ -9003,6 +9354,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const queryBoxShadow = theme === 'dark'
       ? '0 0 0 4px rgba(248,113,113,0.18), 0 10px 26px rgba(0,0,0,0.35)'
       : '0 0 0 4px rgba(220,38,38,0.14), 0 10px 26px rgba(0,0,0,0.18)';
+    const domainOutline = theme === 'dark' ? '2px solid rgba(56,189,248,0.78)' : '2px solid rgba(2,132,199,0.62)';
+    const domainBoxShadow = theme === 'dark'
+      ? '0 0 0 4px rgba(56,189,248,0.18), 0 10px 24px rgba(0,0,0,0.35)'
+      : '0 0 0 4px rgba(2,132,199,0.14), 0 10px 24px rgba(0,0,0,0.16)';
 
     return nodes.map((n) => {
       const id = String(n.id || '').trim();
@@ -9011,6 +9366,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const isOwnedNode = !!owned && id && owned.has(id);
       const isHovered = id === hovered;
       const isQuery = qActive && !!qset && id && qset.has(id);
+      const isDomain = dActive && !!dset && id && dset.has(id);
       const isRiskNode = riskActive && !isGroup && id && id === riskId;
 
       // Base hover highlight behavior (existing UX).
@@ -9030,12 +9386,21 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       let style: any = prevStyle;
       let styleChanged = false;
 
-      const wantQuery = Boolean(qActive && isQuery && !isGroup);
-      if (qActive && !wantQuery) {
-        // De-emphasize others (original logic: min(currentOpacity, 0.55), groups even more muted)
-        opacity = isGroup ? 0.12 : Math.min(opacity, 0.55);
+      const highlightMode: '' | 'query' | 'domain' = qActive ? 'query' : dActive ? 'domain' : '';
+      const wantPrimaryHighlight =
+        highlightMode === 'query'
+          ? Boolean(isQuery && !isGroup)
+          : highlightMode === 'domain'
+            ? Boolean(isDomain && !isGroup)
+            : false;
+      if (highlightMode && !wantPrimaryHighlight) {
+        // Query keeps slightly stronger dimming than domain overlay.
+        opacity =
+          highlightMode === 'query'
+            ? (isGroup ? 0.12 : Math.min(opacity, 0.55))
+            : (isGroup ? 0.12 : Math.min(opacity, 0.52));
       }
-      if (wantQuery) {
+      if (wantPrimaryHighlight) {
         opacity = 1;
         zIndex = Math.max(zIndex, 40);
       }
@@ -9063,22 +9428,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         styleChanged = true;
       }
 
-      // Query highlight style props: add/remove deterministically
-      if (wantQuery) {
-        const needOutline = prevStyle.outline !== queryOutline;
+      // Primary highlight style props: add/remove deterministically
+      const targetOutline = highlightMode === 'query' ? queryOutline : highlightMode === 'domain' ? domainOutline : '';
+      const targetShadow = highlightMode === 'query' ? queryBoxShadow : highlightMode === 'domain' ? domainBoxShadow : '';
+      if (wantPrimaryHighlight && targetOutline) {
+        const needOutline = prevStyle.outline !== targetOutline;
         const needOffset = prevStyle.outlineOffset !== 2;
-        const needShadow = prevStyle.boxShadow !== queryBoxShadow;
+        const needShadow = prevStyle.boxShadow !== targetShadow;
         if (needOutline || needOffset || needShadow) {
           if (!styleChanged) {
             style = { ...prevStyle };
             styleChanged = true;
           }
-          style.outline = queryOutline;
+          style.outline = targetOutline;
           style.outlineOffset = 2;
-          style.boxShadow = queryBoxShadow;
+          style.boxShadow = targetShadow;
         }
       } else {
-        // If this node had query styles from a previous run, clear them.
+        // If this node had highlight styles from a previous run, clear them.
         if (prevStyle.outline || typeof prevStyle.outlineOffset !== 'undefined' || prevStyle.boxShadow) {
           if (!styleChanged) {
             style = { ...prevStyle };
@@ -9253,7 +9620,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Return original node if nothing changed (preserves reference for React.memo)
       return n;
     });
-  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter, openTraceModalForNode, undoLastTrace, canUndoTrace, openLocalFilters, toggleLocalFilter, levelsExpandEdgeTypes, riskShieldActiveNodeId, toggleRiskShield]);
+  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, domainOverlayHighlightNodeIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter, openTraceModalForNode, undoLastTrace, canUndoTrace, openLocalFilters, toggleLocalFilter, levelsExpandEdgeTypes, riskShieldActiveNodeId, toggleRiskShield]);
 
   // Lightweight info for perf mode (no re-styling of edges)
   const perfHoveredEdgeInfo = React.useMemo(() => {
@@ -10960,7 +11327,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (askGraphOpen || addNodeOpen || domainOverlayOpen) return;
+      if (askGraphOpen || addNodeOpen) return;
       if (graphQueryHighlightIds && graphQueryHighlightIds.size > 0) {
         e.preventDefault();
         clearGraphQueryHighlight();
@@ -10968,7 +11335,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [askGraphOpen, addNodeOpen, domainOverlayOpen, graphQueryHighlightIds, clearGraphQueryHighlight]);
+  }, [askGraphOpen, addNodeOpen, graphQueryHighlightIds, clearGraphQueryHighlight]);
 
   const submitAskGraph = React.useCallback(async () => {
     const q = String(askGraphQuery || '').trim();
@@ -10998,8 +11365,28 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         label: String(e?.data?.edgeCaption || e?.label || '').trim() || undefined,
       }));
 
-    if (nodesSnap.length === 0) {
-      setAskGraphError('Graph is empty. Load the graph first.');
+    const domainAnswerContext = (() => {
+      const preferred = activeDomainAnswer?.raw;
+      if (!preferred) return undefined;
+      return {
+        snapshotId: String(preferred?.id || '').trim() || undefined,
+        id: String(preferred?.id || '').trim() || undefined,
+        domainId: String(preferred?.domainId || '').trim() || undefined,
+        domainCanonicalPath: String(preferred?.domainCanonicalPath || '').trim() || undefined,
+        readinessStatus: String(preferred?.readinessStatus || '').trim() || undefined,
+        domainContract: preferred?.domainContract || undefined,
+        thesis: preferred?.thesis || undefined,
+        gate: preferred?.gate || undefined,
+        criticalDependencies: Array.isArray(preferred?.criticalDependencies)
+          ? preferred.criticalDependencies
+          : undefined,
+        impactPaths: Array.isArray(preferred?.impactPaths) ? preferred.impactPaths : undefined,
+        dataGaps: Array.isArray(preferred?.dataGaps) ? preferred.dataGaps : undefined,
+      };
+    })();
+
+    if (nodesSnap.length === 0 && !domainAnswerContext) {
+      setAskGraphError('Graph is empty. Load the graph first or run domain analysis.');
       return;
     }
 
@@ -11008,6 +11395,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     try {
       const res = await api.queryHorizonGraph(lensId, {
         question: q,
+        domainAnswerContext,
         graph: { nodes: nodesSnap, edges: edgesSnap },
       });
 
@@ -11053,59 +11441,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     } finally {
       setAskGraphLoading(false);
     }
-  }, [askGraphQuery, askGraphLoading, lensId, clearGraphQueryHighlight]);
+  }, [askGraphQuery, askGraphLoading, lensId, clearGraphQueryHighlight, activeDomainAnswer]);
 
-  const closeDomainOverlay = React.useCallback(() => {
-    setDomainOverlayOpen(false);
-    setDomainOverlayQuery('');
-    setDomainOverlayPreview(null);
-    setDomainOverlayLoading(false);
-    setDomainOverlayExecuting(false);
-    setDomainOverlayError(null);
-  }, []);
-
-  const submitDomainOverlayPreview = React.useCallback(async () => {
-    const q = String(domainOverlayQuery || '').trim();
-    if (!lensId || !q || domainOverlayLoading || domainOverlayExecuting) return;
-    setDomainOverlayLoading(true);
-    setDomainOverlayError(null);
-    try {
-      const res = await api.previewDomainOverlay(lensId, { query: q });
-      const intent = (res as any)?.intent || null;
-      setDomainOverlayPreview({ intent, existingDomains: (res as any)?.existingDomains || [] });
-      if (!intent?.domains || intent.domains.length === 0) {
-        setDomainOverlayError('No domain detected for this query.');
-      }
-    } catch (err: any) {
-      console.error('[LensCanvas] previewDomainOverlay error:', err);
-      setDomainOverlayError('Failed to interpret the query.');
-    } finally {
-      setDomainOverlayLoading(false);
-    }
-  }, [domainOverlayQuery, lensId, domainOverlayLoading, domainOverlayExecuting]);
-
-  const executeDomainOverlay = React.useCallback(async () => {
-    const q = String(domainOverlayQuery || '').trim();
-    if (!lensId || !q || domainOverlayExecuting) return;
-    const domainPath = String(domainOverlayPreview?.intent?.domains?.[0]?.canonicalPath || '').trim();
-    if (!domainPath) {
-      setDomainOverlayError('Check the domain first.');
-      return;
-    }
+  // Domain Overlay: create new domain on demand
+  const handleCreateDomain = React.useCallback(async (query: string) => {
+    if (!lensId || !query.trim()) return;
     const correlationId = genCorrelationId();
-    setDomainOverlayExecuting(true);
-    setDomainOverlayError(null);
     try {
-      // Strategic projection triggers via dedicated endpoint (jobs are created per domain).
-      await api.triggerHorizonPhase2StrategicOverlay(lensId, { domainPaths: [domainPath] }, { correlationId });
-      closeDomainOverlay();
+      await api.createHorizonDomainAnswer(lensId, { query: query.trim() }, { correlationId });
     } catch (err: any) {
-      console.error('[LensCanvas] executeDomainOverlay error:', err);
-      setDomainOverlayError('Failed to start overlay job.');
-    } finally {
-      setDomainOverlayExecuting(false);
+      console.error('[LensCanvas] createDomainAnswer error:', err);
     }
-  }, [domainOverlayQuery, lensId, domainOverlayExecuting, domainOverlayPreview, genCorrelationId, closeDomainOverlay]);
+  }, [lensId, genCorrelationId]);
+
+  // Domain Overlay: run DomainContractEngine for existing domain stub
+  const handleRunDomain = React.useCallback(async (item: DomainOverlayAnswerItem) => {
+    if (!lensId || !item.canonicalPath) return;
+    const correlationId = genCorrelationId();
+    try {
+      await api.runHorizonDomainAnswer(lensId, item.canonicalPath, { correlationId });
+    } catch (err: any) {
+      console.error('[LensCanvas] runDomainAnswer error:', err);
+    }
+  }, [lensId, genCorrelationId]);
 
   const truncateChip = React.useCallback((s: string, max: number) => {
     const t = String(s || '').trim();
@@ -12965,40 +13323,26 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             </div>
           )}
 
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              if (!lensId) return;
-              setDomainOverlayError(null);
-              setDomainOverlayOpen(true);
-            }}
-            disabled={!lensId || domainOverlayLoading || domainOverlayExecuting}
-            title="Strategic overlay"
-            style={{
-              pointerEvents: 'auto',
-              width: 44,
-              height: 44,
-              borderRadius: 999,
-              border: '1px solid var(--border-subtle)',
-              background: theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.80)',
-              color: 'var(--text-heading)',
-              cursor: (!lensId || domainOverlayLoading || domainOverlayExecuting) ? 'not-allowed' : 'pointer',
-              opacity: (!lensId || domainOverlayLoading || domainOverlayExecuting) ? 0.55 : 1,
-              boxShadow: 'none',
-              filter: theme === 'dark' ? 'drop-shadow(0 16px 40px rgba(0,0,0,0.55))' : 'drop-shadow(0 16px 40px rgba(0,0,0,0.18))',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 16,
-              fontWeight: 900,
-              lineHeight: 1,
-              backdropFilter: 'blur(8px)',
-            }}
-          >
-            S
-          </button>
+          {/* Domain Overlay Panel (replaces old S-button) */}
+          <DomainOverlayPanel
+            theme={theme as 'light' | 'dark'}
+            mode={domainOverlayPanelMode}
+            setMode={setDomainOverlayPanelMode}
+            items={domainAnswerItems}
+            activeKey={activeDomainAnswerKey}
+            setActiveKey={setActiveDomainAnswerKey}
+            highlightEnabled={domainOverlayHighlightEnabled}
+            setHighlightEnabled={setDomainOverlayHighlightEnabled}
+            timeline={domainContractTimeline}
+            miniBadge={domainContractMiniBadge}
+            domainContractEventTone={domainContractEventTone}
+            domainContractEventLabel={domainContractEventLabel}
+            readinessMeta={domainReadinessMeta}
+            activeDomainOverlayPath={activeDomainOverlayPath}
+            alwaysShowMini={!!lensId}
+            onCreateDomain={handleCreateDomain}
+            onRunDomain={handleRunDomain}
+          />
 
           <button
             type="button"
@@ -13649,179 +13993,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         </div>
       )}
 
-      {/* Domain Overlay Command Palette Overlay */}
-      {domainOverlayOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 9998,
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'center',
-            paddingTop: '15vh',
-            background: theme === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)',
-            backdropFilter: 'blur(4px)',
-          }}
-          onClick={() => closeDomainOverlay()}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: 640,
-              maxWidth: '92vw',
-              display: 'flex',
-              flexDirection: 'column',
-              background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 16,
-              boxShadow: theme === 'dark' ? '0 20px 60px rgba(0,0,0,0.6)' : '0 20px 60px rgba(0,0,0,0.2)',
-              overflow: 'hidden',
-              animation: 'horizon-command-pop 0.15s ease-out',
-            }}
-          >
-            <style>{`
-              @keyframes horizon-command-pop {
-                from { opacity: 0; transform: scale(0.96) translateY(10px); }
-                to { opacity: 1; transform: scale(1) translateY(0); }
-              }
-            `}</style>
-            <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
-              <div style={{ marginRight: 12, color: 'var(--text-secondary-strong)', display: 'flex', fontWeight: 900 }}>
-                S
-              </div>
-              <input
-                ref={domainOverlayInputRef}
-                value={domainOverlayQuery}
-                onChange={(e) => {
-                  setDomainOverlayQuery(e.target.value);
-                  setDomainOverlayPreview(null);
-                  setDomainOverlayError(null);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    e.preventDefault();
-                    closeDomainOverlay();
-                    return;
-                  }
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    if (domainOverlayPreview?.intent?.domains?.length) {
-                      void executeDomainOverlay();
-                    } else {
-                      void submitDomainOverlayPreview();
-                    }
-                    return;
-                  }
-                }}
-                placeholder="Describe how control or influence works here… (Enter to check)"
-                autoComplete="off"
-                spellCheck={false}
-                disabled={domainOverlayLoading || domainOverlayExecuting}
-                style={{
-                  flex: 1,
-                  border: 'none',
-                  outline: 'none',
-                  background: 'transparent',
-                  color: 'var(--text-heading)',
-                  fontSize: 16,
-                  fontWeight: 550,
-                }}
-              />
-              {(domainOverlayLoading || domainOverlayExecuting) && (
-                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
-                  {domainOverlayExecuting ? 'Starting…' : 'Analyzing…'}
-                </div>
-              )}
-            </div>
-
-            <div style={{ padding: 14 }}>
-              {domainOverlayError && (
-                <div style={{ padding: '10px 12px', borderRadius: 12, background: theme === 'dark' ? 'rgba(239,68,68,0.10)' : 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.22)', color: '#EF4444', fontSize: 13 }}>
-                  {domainOverlayError}
-                </div>
-              )}
-
-              {!domainOverlayError && domainOverlayPreview?.intent?.domains?.length > 0 && (
-                <div style={{ padding: 12, borderRadius: 12, border: '1px solid var(--border-subtle)', background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }}>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginBottom: 6 }}>We’ll analyze as</div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-heading)' }}>
-                    {String(domainOverlayPreview.intent.domains[0]?.title || domainOverlayPreview.intent.domains[0]?.canonicalPath || 'Domain')}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginTop: 6, lineHeight: 1.4 }}>
-                    <div>{String(domainOverlayPreview.intent.domains[0]?.canonicalPath || '').trim()}</div>
-                    {domainOverlayPreview.intent.domains[0]?.contractType && (
-                      <div>Type: {String(domainOverlayPreview.intent.domains[0]?.contractType || '').trim()}</div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {!domainOverlayError && (!domainOverlayPreview?.intent?.domains?.length) && (
-                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', lineHeight: 1.5 }}>
-                  This graph shows the baseline relationships. Your question defines a domain; we’ll identify it and suggest the actions to build that domain automatically.
-                </div>
-              )}
-
-              <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-                <button
-                  type="button"
-                  onClick={() => closeDomainOverlay()}
-                  disabled={domainOverlayLoading || domainOverlayExecuting}
-                  style={{
-                    height: 36,
-                    padding: '0 14px',
-                    borderRadius: 12,
-                    border: '1px solid var(--border-subtle)',
-                    background: 'transparent',
-                    color: 'var(--text-secondary-strong)',
-                    cursor: (domainOverlayLoading || domainOverlayExecuting) ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  Close
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void submitDomainOverlayPreview()}
-                  disabled={domainOverlayLoading || domainOverlayExecuting || !domainOverlayQuery.trim() || !lensId}
-                  style={{
-                    height: 36,
-                    padding: '0 16px',
-                    borderRadius: 12,
-                    border: '1px solid var(--border-subtle)',
-                    background: 'transparent',
-                    color: 'var(--text-heading)',
-                    fontWeight: 700,
-                    cursor: (domainOverlayLoading || domainOverlayExecuting || !domainOverlayQuery.trim() || !lensId) ? 'not-allowed' : 'pointer',
-                    opacity: (domainOverlayLoading || domainOverlayExecuting || !domainOverlayQuery.trim() || !lensId) ? 0.6 : 1,
-                  }}
-                >
-                  Check
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void executeDomainOverlay()}
-                  disabled={domainOverlayExecuting || domainOverlayLoading || !domainOverlayPreview?.intent?.domains?.length}
-                  style={{
-                    height: 36,
-                    padding: '0 16px',
-                    borderRadius: 12,
-                    border: 'none',
-                    background: 'var(--accent-primary, #3B82F6)',
-                    color: '#fff',
-                    fontWeight: 800,
-                    cursor: (domainOverlayExecuting || domainOverlayLoading || !domainOverlayPreview?.intent?.domains?.length) ? 'not-allowed' : 'pointer',
-                    opacity: (domainOverlayExecuting || domainOverlayLoading || !domainOverlayPreview?.intent?.domains?.length) ? 0.6 : 1,
-                    boxShadow: '0 8px 20px rgba(59,130,246,0.25)',
-                  }}
-                >
-                  Analyze
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Ask Graph Command Palette Overlay */}
       {askGraphOpen && (

@@ -140,6 +140,13 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"MEMBER_OF":       {},
 	"AFFILIATED_WITH": {},
 	"HAS_SUBGROUP":    {},
+	// Corporate transitions
+	"RENAMED_TO":         {},
+	"REBRANDED_TO":       {},
+	"LEGAL_SUCCESSOR_OF": {},
+	"MERGED_INTO":        {},
+	"SPUN_OFF_FROM":      {},
+	"ACQUIRED_BY":        {},
 	// Domain contracts
 	"FOCUSES_ON":     {},
 	"INVOLVES_ACTOR": {},
@@ -294,6 +301,18 @@ func NormalizeRelationType(in string) string {
 		return "INVESTS_IN"
 	case "DEPENDS":
 		return "DEPENDS_ON"
+	case "RENAMED", "RENAMED_AS", "NAME_CHANGED_TO", "NAME_CHANGE", "RENAME_TO":
+		return "RENAMED_TO"
+	case "REBRANDED", "REBRAND", "REBRANDED_AS", "BRAND_CHANGED_TO":
+		return "REBRANDED_TO"
+	case "SUCCESSOR_OF", "LEGAL_SUCCESSOR", "SUCCEEDED_BY", "SUCCEEDS", "SUCCESSOR":
+		return "LEGAL_SUCCESSOR_OF"
+	case "MERGED", "MERGED_TO", "MERGED_WITH", "MERGER_INTO":
+		return "MERGED_INTO"
+	case "SPINOFF_FROM", "SPIN_OFF_FROM", "SPUN_OUT_OF", "CARVED_OUT_FROM", "DEMERGED_FROM":
+		return "SPUN_OFF_FROM"
+	case "ACQUIRED", "BOUGHT_BY", "TAKEN_OVER_BY", "ACQUISITION_BY":
+		return "ACQUIRED_BY"
 	}
 	if t := getRuntimeTaxonomy(); t != nil && len(t.AllowedRelationTypes) > 0 {
 		if _, ok := t.AllowedRelationTypes[s]; ok {

@@ -147,6 +147,19 @@ func (e *EnforcementExecutor) ExecuteJob(ctx context.Context, job *PolicyEnforce
 
 	log.Printf("[EnforcementExecutor] Executing job %s: type=%s target=%s",
 		job.ID, job.Task.Type, job.Task.TargetID)
+	LogPolicyEvent("enforcement_policy", PolicyLogStageInput, map[string]interface{}{
+		"trace_id":       "na",
+		"tenant_id":      job.TenantID,
+		"job_id":         job.ParentJobID,
+		"edge_id":        job.Task.TargetID,
+		"action":         string(job.Task.Type),
+		"policy_status":  "na",
+		"policy_reason":  "",
+		"policy_penalty": 0,
+		"decision_path":  "enforcement_execute",
+		"rule_id":        job.ViolationID,
+		"confidence":     0,
+	})
 
 	// Update status to in_progress
 	job.Status = EnforcementStatusInProgress
@@ -243,6 +256,19 @@ func (e *EnforcementExecutor) ExecuteJob(ctx context.Context, job *PolicyEnforce
 
 	log.Printf("[EnforcementExecutor] Job %s completed: success=%v action=%s",
 		job.ID, result.Success, result.Action)
+	LogPolicyEvent("enforcement_policy", PolicyLogStageResult, map[string]interface{}{
+		"trace_id":       "na",
+		"tenant_id":      job.TenantID,
+		"job_id":         job.ParentJobID,
+		"edge_id":        job.Task.TargetID,
+		"action":         result.Action,
+		"policy_status":  string(status),
+		"policy_reason":  result.Error,
+		"policy_penalty": 0,
+		"decision_path":  "enforcement_execute",
+		"rule_id":        job.ViolationID,
+		"confidence":     1,
+	})
 
 	return result, nil
 }
@@ -280,6 +306,18 @@ func (e *EnforcementExecutor) executeMergeFragments(ctx context.Context, task En
 	reassigned, deleted, err := e.reassignEdges(ctx, duplicate.TenantID, duplicateID, canonicalID)
 	if err != nil {
 		log.Printf("[EnforcementExecutor] WARNING: edge reassignment partial failure: %v", err)
+		LogPolicyEvent("enforcement_policy", PolicyLogStageError, map[string]interface{}{
+			"trace_id":       "na",
+			"tenant_id":      duplicate.TenantID,
+			"job_id":         "",
+			"action":         "reassign_edges",
+			"policy_status":  "partial",
+			"policy_reason":  err.Error(),
+			"policy_penalty": 0,
+			"decision_path":  "enforcement_merge",
+			"error_class":    "edge_reassignment_partial_failure",
+			"confidence":     0,
+		})
 	}
 
 	// Delete duplicate

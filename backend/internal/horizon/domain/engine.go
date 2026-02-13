@@ -1,0 +1,2831 @@
+package domain
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
+)
+
+type LensArtifactsReader interface {
+	ListByLens(ctx context.Context, lensID string, limit int) ([]*models.LensArtifact, error)
+}
+
+type FragmentsReader interface {
+	Get(ctx context.Context, id string) (*models.HorizonFragment, error)
+	GetByCanonicalPath(ctx context.Context, canonicalPath string) (*models.HorizonFragment, error)
+	GetMany(ctx context.Context, ids []string) (map[string]*models.HorizonFragment, error)
+}
+
+type EdgesReader interface {
+	Get(ctx context.Context, id string) (*models.DependencyEdge, error)
+}
+
+type ScoutingJobsWriter interface {
+	Create(ctx context.Context, job *models.ScoutingJob) (string, error)
+}
+
+type SnapshotsWriter interface {
+	Upsert(ctx context.Context, snapshot *models.DomainAnswerSnapshot) (string, error)
+}
+
+type Engine struct {
+	gateConfig    GateConfig
+	lensArtifacts LensArtifactsReader
+	fragments     FragmentsReader
+	edges         EdgesReader
+	scoutingJobs  ScoutingJobsWriter
+	snapshots     SnapshotsWriter
+	aiExecutor    *ai.AITaskExecutor
+	publisher     EventPublisher
+}
+
+func NewEngine(
+	lensArtifacts LensArtifactsReader,
+	fragments FragmentsReader,
+	edges EdgesReader,
+	scoutingJobs ScoutingJobsWriter,
+	snapshots SnapshotsWriter,
+	aiExecutor *ai.AITaskExecutor,
+	publisher EventPublisher,
+) *Engine {
+	return &Engine{
+		gateConfig:    DefaultGateConfig(),
+		lensArtifacts: lensArtifacts,
+		fragments:     fragments,
+		edges:         edges,
+		scoutingJobs:  scoutingJobs,
+		snapshots:     snapshots,
+		aiExecutor:    aiExecutor,
+		publisher:     publisher,
+	}
+}
+
+func (e *Engine) WithGateConfig(cfg GateConfig) *Engine {
+	e.gateConfig = cfg
+	return e
+}
+
+func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
+	if e == nil {
+		return nil, fmt.Errorf("domain engine is nil")
+	}
+	if in.Job == nil {
+		return nil, fmt.Errorf("run input job is nil")
+	}
+	contract := normalizeContract(in.Contract, in.Job)
+	if strings.TrimSpace(contract.ContractType) == "" {
+		return nil, fmt.Errorf("contractType is required")
+	}
+	steeringProfile := steeringProfileForContractType(contract.ContractType)
+	domainID := domainIDFromContract(contract, in.Job)
+	expectations := generateCrossFacetExpectations(contract)
+	originalQuery := extractOriginalQuery(in.Job)
+	logDomainContract(ctx, "run.start", in.Job, &contract, map[string]any{
+		"domainId":         domainID,
+		"steeringProfile":  string(steeringProfile),
+		"facetCount":       len(contract.Facets),
+		"expectationCount": len(expectations),
+		"maxCycles":        e.gateConfig.MaxEnrichmentCycles,
+	})
+
+	e.emit(ctx, in.Job, contract, "horizon.domain.contract.resolve.started",
+		"Resolving domain contract",
+		"Normalizing domain contract and facets",
+		map[string]interface{}{
+			"domainId":        domainID,
+			"contractType":    contract.ContractType,
+			"steeringProfile": string(steeringProfile),
+			"facets":          contract.Facets,
+			"query":           originalQuery,
+		},
+	)
+	e.emit(ctx, in.Job, contract, "horizon.domain.contract.resolve.completed",
+		fmt.Sprintf("Domain contract resolved: %s", contract.ContractType),
+		fmt.Sprintf("Facets: %d", len(contract.Facets)),
+		map[string]interface{}{
+			"domainId":               domainID,
+			"contractType":           contract.ContractType,
+			"steeringProfile":        string(steeringProfile),
+			"facetCount":             len(contract.Facets),
+			"crossFacetExpectations": expectations,
+		},
+	)
+
+	anchorDirectives := buildAnchorDirectives(contract)
+	e.emit(ctx, in.Job, contract, "horizon.domain.contract.steer.started",
+		fmt.Sprintf("Steering scouting for %s", contract.ContractType),
+		fmt.Sprintf("Anchor wave directives: %d", len(anchorDirectives)),
+		map[string]interface{}{
+			"domainId":       domainID,
+			"wave":           "anchor",
+			"directiveCount": len(anchorDirectives),
+		},
+	)
+	if in.ExecuteBaseCollect != nil {
+		if err := in.ExecuteBaseCollect(ctx, in.GroundingEvidence); err != nil {
+			logDomainContract(ctx, "steer.base_collect.error", in.Job, &contract, map[string]any{
+				"domainId": domainID,
+				"wave":     "anchor",
+				"error":    err.Error(),
+			})
+			return nil, err
+		}
+	}
+	if in.ExecuteStrategicCollect != nil {
+		if err := in.ExecuteStrategicCollect(ctx, in.GroundingEvidence); err != nil {
+			// Strategic layer is best-effort for many contracts; continue with base graph.
+			logDomainContract(ctx, "steer.strategic_collect.error", in.Job, &contract, map[string]any{
+				"domainId": domainID,
+				"wave":     "anchor",
+				"error":    err.Error(),
+			})
+		}
+	}
+	e.emit(ctx, in.Job, contract, "horizon.domain.contract.steer.completed",
+		fmt.Sprintf("Steering complete: %d directives", len(anchorDirectives)),
+		"Base and strategic graph collection completed",
+		map[string]interface{}{
+			"domainId":       domainID,
+			"wave":           "anchor",
+			"directiveCount": len(anchorDirectives),
+		},
+	)
+
+	maxCycles := e.gateConfig.MaxEnrichmentCycles
+	if maxCycles < 0 {
+		maxCycles = 0
+	}
+	cycle := 0
+	var finalSnapshot *models.DomainAnswerSnapshot
+	var finalGate gateResult
+	var lastGraph graphSnapshot
+
+	for {
+		logDomainContract(ctx, "cycle.start", in.Job, &contract, map[string]any{
+			"domainId": domainID,
+			"cycle":    cycle,
+		})
+		lastGraph = e.collectGraph(ctx, in.Job, contract)
+		logDomainContract(ctx, "cycle.graph.collected", in.Job, &contract, map[string]any{
+			"domainId":  domainID,
+			"cycle":     cycle,
+			"nodeCount": len(lastGraph.NodesByID),
+			"edgeCount": len(lastGraph.Edges),
+		})
+		snapshot := e.assembleDeterministic(in.Job, contract, domainID, expectations, lastGraph)
+
+		e.emit(ctx, in.Job, contract, "horizon.domain.contract.gate.started",
+			"Checking completeness",
+			fmt.Sprintf("Running Gate L1 cycle %d", cycle),
+			map[string]interface{}{
+				"domainId": domainID,
+				"level":    1,
+				"cycle":    cycle,
+			},
+		)
+		l1 := e.evaluateGateL1(contract, expectations, snapshot, lastGraph)
+		if l1.OverallStatus == "pass" {
+			e.emit(ctx, in.Job, contract, "horizon.domain.contract.gate.passed",
+				"Completeness check passed (L1)",
+				fmt.Sprintf("Checks passed: %d/%d", l1.Passed, l1.TotalChecks),
+				map[string]interface{}{
+					"domainId": domainID,
+					"level":    1,
+					"score":    l1.Score,
+					"checks":   l1.Checks,
+				},
+			)
+			e.emit(ctx, in.Job, contract, "horizon.domain.contract.gate.started",
+				"Checking completeness",
+				"Running semantic Gate L2",
+				map[string]interface{}{
+					"domainId": domainID,
+					"level":    2,
+					"cycle":    cycle,
+				},
+			)
+			l2 := e.evaluateGateL2(ctx, contract, snapshot, l1, originalQuery)
+			if l2.OverallStatus == "pass" {
+				e.emit(ctx, in.Job, contract, "horizon.domain.contract.gate.passed",
+					"Completeness check passed (L2)",
+					"Semantic completeness reached",
+					map[string]interface{}{
+						"domainId": domainID,
+						"level":    2,
+						"score":    l2.Score,
+						"checks":   l2.Checks,
+					},
+				)
+				snapshot.Gate = l2.toSummary()
+				finalSnapshot = snapshot
+				finalGate = l2
+				break
+			}
+			l1 = l2
+		}
+
+		finalGate = l1
+		if cycle >= maxCycles {
+			logDomainContract(ctx, "enrich.limit_reached", in.Job, &contract, map[string]any{
+				"domainId":     domainID,
+				"cycle":        cycle,
+				"maxCycles":    maxCycles,
+				"failedChecks": l1.failedCheckIDs(),
+				"gateLevel":    l1.Level,
+				"gateStatus":   l1.OverallStatus,
+			})
+			break
+		}
+		tasks := buildEnrichmentTasks(contract, l1)
+		if warning := buildDomainBudgetWarning(in.Job, cycle+1, maxCycles); warning != nil {
+			e.emit(ctx, in.Job, contract, "horizon.domain.contract.budget.warning",
+				warning.Title,
+				warning.Description,
+				map[string]interface{}{
+					"domainId":   domainID,
+					"cycle":      cycle + 1,
+					"usedUSD":    warning.UsedUSD,
+					"capUSD":     warning.CapUSD,
+					"usedTokens": warning.UsedTokens,
+					"usagePct":   warning.UsagePct,
+				},
+			)
+		}
+		e.emit(ctx, in.Job, contract, "horizon.domain.contract.gate.failed",
+			fmt.Sprintf("Completeness gaps found (L%d)", l1.Level),
+			"Scheduling enrichment tasks",
+			map[string]interface{}{
+				"domainId":        domainID,
+				"level":           l1.Level,
+				"failedChecks":    l1.failedCheckIDs(),
+				"enrichmentTasks": tasks,
+			},
+		)
+		e.emit(ctx, in.Job, contract, "horizon.domain.contract.enrich.started",
+			fmt.Sprintf("Enriching: %d tasks", len(tasks)),
+			fmt.Sprintf("Cycle %d", cycle+1),
+			map[string]interface{}{
+				"domainId":   domainID,
+				"cycle":      cycle + 1,
+				"taskCount":  len(tasks),
+				"focusAreas": l1.failedCheckIDs(),
+			},
+		)
+		beforeNodes := len(lastGraph.NodesByID)
+		beforeEdges := len(lastGraph.Edges)
+		e.enqueueEnrichmentTasks(ctx, in.Job, contract, tasks, cycle+1)
+		if in.ExecuteBaseCollect != nil {
+			if err := in.ExecuteBaseCollect(ctx, in.GroundingEvidence); err != nil {
+				logDomainContract(ctx, "enrich.base_collect.error", in.Job, &contract, map[string]any{
+					"domainId": domainID,
+					"cycle":    cycle + 1,
+					"error":    err.Error(),
+				})
+			}
+		}
+		if in.ExecuteStrategicCollect != nil {
+			if err := in.ExecuteStrategicCollect(ctx, in.GroundingEvidence); err != nil {
+				logDomainContract(ctx, "enrich.strategic_collect.error", in.Job, &contract, map[string]any{
+					"domainId": domainID,
+					"cycle":    cycle + 1,
+					"error":    err.Error(),
+				})
+			}
+		}
+		afterGraph := e.collectGraph(ctx, in.Job, contract)
+		e.emit(ctx, in.Job, contract, "horizon.domain.contract.enrich.completed",
+			fmt.Sprintf("Enrichment cycle %d complete", cycle+1),
+			"Graph enriched with additional tasks",
+			map[string]interface{}{
+				"domainId": domainID,
+				"cycle":    cycle + 1,
+				"newNodes": maxInt(0, len(afterGraph.NodesByID)-beforeNodes),
+				"newEdges": maxInt(0, len(afterGraph.Edges)-beforeEdges),
+			},
+		)
+		logDomainContract(ctx, "enrich.completed", in.Job, &contract, map[string]any{
+			"domainId": domainID,
+			"cycle":    cycle + 1,
+			"newNodes": maxInt(0, len(afterGraph.NodesByID)-beforeNodes),
+			"newEdges": maxInt(0, len(afterGraph.Edges)-beforeEdges),
+		})
+		cycle++
+	}
+
+	if finalSnapshot == nil {
+		finalSnapshot = e.assembleDeterministic(in.Job, contract, domainID, expectations, lastGraph)
+		finalSnapshot.ReadinessStatus = models.DomainReadinessReadyWithGaps
+		finalSnapshot.Gate = finalGate.toSummary()
+	}
+	finalSnapshot.EnrichmentCycles = cycle
+	finalSnapshot.GroundingContractVersion = "v1"
+	applyGroundingEvidenceToSnapshot(finalSnapshot, in.GroundingEvidence)
+	if in.Job != nil && in.Job.State != nil {
+		if v, ok := in.Job.State["originMode"].(string); ok && strings.TrimSpace(finalSnapshot.OriginMode) == "" {
+			finalSnapshot.OriginMode = strings.TrimSpace(v)
+		}
+		if raw, ok := in.Job.State["resolutionStats"]; ok {
+			if m, ok := raw.(map[string]interface{}); ok && m != nil {
+				finalSnapshot.ResolutionStats = &models.GroundingResolutionStats{
+					RelationsResolvedByGrounding: toInt(m["relationsResolvedByGrounding"]),
+					RelationsCreatedNew:          toInt(m["relationsCreatedNew"]),
+					DedupRedirectsByGrounding:    toInt(m["dedupRedirectsByGrounding"]),
+				}
+			}
+		}
+	}
+
+	e.emit(ctx, in.Job, contract, "horizon.domain.contract.assemble.started",
+		"Assembling domain answer",
+		"Building deterministic artifacts and structured narrative",
+		map[string]interface{}{
+			"domainId":     domainID,
+			"contractType": contract.ContractType,
+		},
+	)
+	e.applyStructuredNarrative(ctx, contract, finalSnapshot)
+	e.emit(ctx, in.Job, contract, "horizon.domain.contract.assemble.completed",
+		"Domain answer assembled",
+		shortThesis(finalSnapshot.Thesis.Text),
+		map[string]interface{}{
+			"domainId":        domainID,
+			"snapshotId":      finalSnapshot.ID,
+			"readinessStatus": finalSnapshot.ReadinessStatus,
+			"artifactCount":   len(finalSnapshot.CriticalDependencies) + len(finalSnapshot.ImpactPaths) + len(finalSnapshot.DataGaps),
+		},
+	)
+
+	if strings.TrimSpace(finalSnapshot.ReadinessStatus) == "" {
+		finalSnapshot.ReadinessStatus = models.DomainReadinessReady
+	}
+	if finalGate.OverallStatus != "pass" {
+		finalSnapshot.ReadinessStatus = models.DomainReadinessReadyWithGaps
+		e.emit(ctx, in.Job, contract, "horizon.domain.contract.fallback",
+			"Answer ready with gaps",
+			"Reached enrichment cycle limit with unresolved critical checks",
+			map[string]interface{}{
+				"domainId":        domainID,
+				"gapCount":        len(finalSnapshot.DataGaps),
+				"readinessStatus": finalSnapshot.ReadinessStatus,
+			},
+		)
+	}
+
+	if e.snapshots != nil {
+		if id, err := e.snapshots.Upsert(ctx, finalSnapshot); err == nil {
+			finalSnapshot.ID = id
+			logDomainContract(ctx, "snapshot.upsert.ok", in.Job, &contract, map[string]any{
+				"domainId":   domainID,
+				"snapshotId": strings.TrimSpace(id),
+			})
+		} else {
+			logDomainContract(ctx, "snapshot.upsert.error", in.Job, &contract, map[string]any{
+				"domainId":   domainID,
+				"snapshotId": strings.TrimSpace(finalSnapshot.ID),
+				"error":      err.Error(),
+			})
+		}
+	}
+
+	e.emit(ctx, in.Job, contract, "horizon.domain.contract.publish.completed",
+		"Domain answer published",
+		fmt.Sprintf("Snapshot %s", strings.TrimSpace(finalSnapshot.ID)),
+		map[string]interface{}{
+			"domainId":        domainID,
+			"snapshotId":      finalSnapshot.ID,
+			"contractType":    contract.ContractType,
+			"readinessStatus": finalSnapshot.ReadinessStatus,
+		},
+	)
+
+	out := &RunResult{
+		Snapshot:      finalSnapshot,
+		ViewDirective: adaptSnapshotToViewDirective(finalSnapshot),
+	}
+	logDomainContract(ctx, "run.completed", in.Job, &contract, map[string]any{
+		"domainId":          domainID,
+		"snapshotId":        strings.TrimSpace(finalSnapshot.ID),
+		"readinessStatus":   strings.TrimSpace(finalSnapshot.ReadinessStatus),
+		"enrichmentCycles":  cycle,
+		"criticalDeps":      len(finalSnapshot.CriticalDependencies),
+		"impactPaths":       len(finalSnapshot.ImpactPaths),
+		"dataGaps":          len(finalSnapshot.DataGaps),
+		"gateOverallStatus": finalGate.OverallStatus,
+	})
+	return out, nil
+}
+
+type graphSnapshot struct {
+	NodesByID   map[string]*models.HorizonFragment
+	NodesByPath map[string]*models.HorizonFragment
+	Edges       []*models.DependencyEdge
+}
+
+func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, contract Contract) graphSnapshot {
+	out := graphSnapshot{
+		NodesByID:   map[string]*models.HorizonFragment{},
+		NodesByPath: map[string]*models.HorizonFragment{},
+		Edges:       []*models.DependencyEdge{},
+	}
+	if e.lensArtifacts == nil || e.fragments == nil || e.edges == nil || job == nil {
+		logDomainContract(ctx, "collect.skipped", job, &contract, map[string]any{
+			"reason": "missing_dependencies_or_job",
+		})
+		return out
+	}
+	lensID := strings.TrimSpace(job.LensID)
+	if lensID == "" {
+		logDomainContract(ctx, "collect.skipped", job, &contract, map[string]any{
+			"reason": "missing_lens_id",
+		})
+		return out
+	}
+	artifacts, err := e.lensArtifacts.ListByLens(ctx, lensID, 4000)
+	if err != nil {
+		logDomainContract(ctx, "collect.artifacts.error", job, &contract, map[string]any{
+			"lensId": lensID,
+			"error":  err.Error(),
+		})
+		return out
+	}
+	if len(artifacts) == 0 {
+		logDomainContract(ctx, "collect.artifacts.empty", job, &contract, map[string]any{
+			"lensId": lensID,
+		})
+		return out
+	}
+	fragmentIDs := make([]string, 0, len(artifacts))
+	fragSeen := map[string]struct{}{}
+	edgeIDs := make([]string, 0, len(artifacts))
+	edgeSeen := map[string]struct{}{}
+	for _, a := range artifacts {
+		if a == nil {
+			continue
+		}
+		if a.IsFragment() {
+			id := strings.TrimSpace(a.FragmentID)
+			if id != "" {
+				if _, ok := fragSeen[id]; !ok {
+					fragSeen[id] = struct{}{}
+					fragmentIDs = append(fragmentIDs, id)
+				}
+			}
+		}
+		if a.IsEdge() {
+			id := strings.TrimSpace(a.EdgeID)
+			if id != "" {
+				if _, ok := edgeSeen[id]; !ok {
+					edgeSeen[id] = struct{}{}
+					edgeIDs = append(edgeIDs, id)
+				}
+			}
+		}
+	}
+	if len(fragmentIDs) > 0 {
+		byID, err := e.fragments.GetMany(ctx, fragmentIDs)
+		if err != nil {
+			logDomainContract(ctx, "collect.fragments.error", job, &contract, map[string]any{
+				"fragmentIdCount": len(fragmentIDs),
+				"error":           err.Error(),
+			})
+		}
+		if byID == nil {
+			byID = map[string]*models.HorizonFragment{}
+		}
+		for _, id := range fragmentIDs {
+			f := byID[strings.TrimSpace(id)]
+			if f == nil {
+				continue
+			}
+			out.NodesByID[f.ID] = f
+			cp := strings.TrimSpace(f.CanonicalPath)
+			if cp != "" {
+				out.NodesByPath[cp] = f
+			}
+		}
+	}
+	edgeReadErrors := 0
+	for _, edgeID := range edgeIDs {
+		edge, err := e.edges.Get(ctx, edgeID)
+		if err != nil {
+			edgeReadErrors++
+			continue
+		}
+		if edge == nil {
+			continue
+		}
+		if edge.SourceFragmentID == "" || edge.TargetFragmentID == "" {
+			continue
+		}
+		if out.NodesByID[edge.SourceFragmentID] == nil || out.NodesByID[edge.TargetFragmentID] == nil {
+			continue
+		}
+		out.Edges = append(out.Edges, edge)
+	}
+	if edgeReadErrors > 0 {
+		logDomainContract(ctx, "collect.edges.error", job, &contract, map[string]any{
+			"edgeReadErrors": edgeReadErrors,
+			"edgeIdCount":    len(edgeIDs),
+		})
+	}
+	fallbackFragmentErrors := 0
+	if len(out.NodesByID) == 0 && len(contract.FirstOrderEntities) > 0 && e.fragments != nil {
+		for _, cp := range contract.FirstOrderEntities {
+			cp = strings.TrimSpace(cp)
+			if cp == "" {
+				continue
+			}
+			if f, err := e.fragments.GetByCanonicalPath(ctx, cp); err == nil && f != nil {
+				out.NodesByID[f.ID] = f
+				out.NodesByPath[cp] = f
+			} else if err != nil {
+				fallbackFragmentErrors++
+			}
+		}
+		if fallbackFragmentErrors > 0 {
+			logDomainContract(ctx, "collect.fragments_fallback.error", job, &contract, map[string]any{
+				"errorCount": fallbackFragmentErrors,
+			})
+		}
+	}
+	return out
+}
+
+func normalizeContract(c Contract, job *models.ScoutingJob) Contract {
+	out := c
+	out.CanonicalPath = strings.TrimSpace(out.CanonicalPath)
+	out.ContractType = strings.TrimSpace(strings.ToLower(out.ContractType))
+	out.Title = strings.TrimSpace(out.Title)
+	out.Description = strings.TrimSpace(out.Description)
+	if out.CanonicalPath != "" && len(out.Facets) == 0 {
+		out.Facets = parseFacetsFromDomainPath(out.CanonicalPath)
+	}
+	if len(out.Facets) == 0 {
+		out.Facets = map[string][]string{"default": {strings.TrimSpace(job.TargetCanonicalPath)}}
+	}
+	for k, vals := range out.Facets {
+		nk := strings.TrimSpace(strings.ToLower(k))
+		if nk == "" {
+			delete(out.Facets, k)
+			continue
+		}
+		seen := map[string]struct{}{}
+		clean := make([]string, 0, len(vals))
+		for _, v := range vals {
+			v = strings.TrimSpace(strings.ToLower(v))
+			if v == "" {
+				continue
+			}
+			if _, ok := seen[v]; ok {
+				continue
+			}
+			seen[v] = struct{}{}
+			clean = append(clean, v)
+		}
+		delete(out.Facets, k)
+		out.Facets[nk] = clean
+	}
+	if out.ContractType == "" {
+		parts := strings.Split(strings.Trim(out.CanonicalPath, "/"), "/")
+		if len(parts) >= 3 && parts[0] == "domain" && parts[1] == "v1" {
+			out.ContractType = strings.TrimSpace(parts[2])
+		}
+	}
+	if out.Title == "" {
+		out.Title = strings.TrimSpace(job.TargetCanonicalPath)
+	}
+	if out.Polarity == nil {
+		out.Polarity = []string{"risk", "opportunity"}
+	}
+	return out
+}
+
+func parseFacetsFromDomainPath(canonicalPath string) map[string][]string {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(canonicalPath), "/"), "/")
+	// /domain/v1/{contractType}/(facet/value)*
+	if len(parts) < 4 {
+		return map[string][]string{}
+	}
+	rest := parts[3:]
+	if len(rest)%2 != 0 {
+		return map[string][]string{}
+	}
+	out := map[string][]string{}
+	for i := 0; i < len(rest); i += 2 {
+		k := strings.TrimSpace(strings.ToLower(rest[i]))
+		v := strings.TrimSpace(strings.ToLower(rest[i+1]))
+		if k == "" || v == "" {
+			continue
+		}
+		out[k] = append(out[k], v)
+	}
+	return out
+}
+
+func domainIDFromContract(c Contract, job *models.ScoutingJob) string {
+	if strings.TrimSpace(c.CanonicalPath) != "" {
+		return strings.TrimSpace(c.CanonicalPath)
+	}
+	if job != nil && strings.TrimSpace(job.TargetCanonicalPath) != "" {
+		return strings.TrimSpace(job.TargetCanonicalPath)
+	}
+	return strings.TrimSpace(c.ContractType)
+}
+
+func generateCrossFacetExpectations(contract Contract) []CrossFacetExpectation {
+	keys := make([]string, 0, len(contract.Facets))
+	for k := range contract.Facets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	rels := expectedRelationsForContractType(contract.ContractType)
+	out := make([]CrossFacetExpectation, 0, len(keys))
+	for i := 0; i < len(keys); i++ {
+		for j := i + 1; j < len(keys); j++ {
+			out = append(out, CrossFacetExpectation{
+				FacetA:              keys[i],
+				FacetB:              keys[j],
+				ExpectedRelationSet: append([]string(nil), rels...),
+			})
+		}
+	}
+	return out
+}
+
+func expectedRelationsForContractType(contractType string) []string {
+	switch steeringProfileForContractType(contractType) {
+	case SteeringProfileSupplyChain:
+		return []string{"SUPPLIES_TO", "CONSUMES", "DEPENDS_ON", "PRODUCES", "TRANSFORMS_INTO"}
+	case SteeringProfileRegulatoryExposure:
+		return []string{"REGULATES", "CONTROLS_ACCESS", "USES_MECHANISM", "APPLIES_TO"}
+	case SteeringProfileCompetitiveLandscape:
+		return []string{"PARTICIPATES_IN", "DOMINATES", "COMPETES_WITH", "PRODUCES"}
+	case SteeringProfileGeographicConcentration:
+		return []string{"LOCATED_IN", "OPERATES_IN", "EXTRACTS_FROM"}
+	default:
+		return []string{"DEPENDS_ON", "AFFECTS", "RELATED_DOMAIN"}
+	}
+}
+
+func buildAnchorDirectives(contract Contract) []EnrichmentTask {
+	out := make([]EnrichmentTask, 0, len(contract.Facets))
+	for facet, vals := range contract.Facets {
+		hint := fmt.Sprintf("Expand facet '%s' with additional entities", facet)
+		if len(vals) > 0 {
+			hint += fmt.Sprintf(" (%s)", strings.Join(vals, ", "))
+		}
+		out = append(out, EnrichmentTask{
+			Priority: "P1",
+			GapType:  "anchor_expansion",
+			FacetKey: facet,
+			Hint:     hint,
+		})
+	}
+	return out
+}
+
+func buildFacetNodes(contract Contract, g graphSnapshot) map[string][]*models.HorizonFragment {
+	out := map[string][]*models.HorizonFragment{}
+	for k := range contract.Facets {
+		out[k] = []*models.HorizonFragment{}
+	}
+	if len(out) == 0 {
+		out["default"] = []*models.HorizonFragment{}
+	}
+	for _, f := range g.NodesByID {
+		if f == nil {
+			continue
+		}
+		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
+		if cp == "" {
+			continue
+		}
+		matched := false
+		for facet, vals := range contract.Facets {
+			if len(vals) == 0 {
+				continue
+			}
+			for _, raw := range vals {
+				v := strings.TrimSpace(strings.ToLower(raw))
+				if v == "" {
+					continue
+				}
+				if strings.Contains(cp, "/"+v+"/") || strings.HasSuffix(cp, "/"+v) {
+					out[facet] = append(out[facet], f)
+					matched = true
+					break
+				}
+				if facet == "geo" && len(v) == 2 && strings.Contains(cp, "/"+v+"/") {
+					out[facet] = append(out[facet], f)
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			out["default"] = append(out["default"], f)
+		}
+	}
+	return out
+}
+
+func (e *Engine) assembleDeterministic(job *models.ScoutingJob, contract Contract, domainID string, expectations []CrossFacetExpectation, g graphSnapshot) *models.DomainAnswerSnapshot {
+	snapshot := &models.DomainAnswerSnapshot{
+		TenantID:            strings.TrimSpace(job.TenantID),
+		ProjectID:           strings.TrimSpace(job.ProjectID),
+		LensID:              strings.TrimSpace(job.LensID),
+		DomainID:            domainID,
+		DomainCanonicalPath: strings.TrimSpace(contract.CanonicalPath),
+		DomainContract: models.DomainContractSnapshot{
+			CanonicalPath: strings.TrimSpace(contract.CanonicalPath),
+			ContractType:  strings.TrimSpace(contract.ContractType),
+			Title:         strings.TrimSpace(contract.Title),
+			Description:   strings.TrimSpace(contract.Description),
+			Facets:        contract.Facets,
+			Polarity:      contract.Polarity,
+		},
+		AssembledAt:           time.Now().UTC(),
+		ReadinessStatus:       models.DomainReadinessReady,
+		FacetSummary:          map[string]models.FacetSummary{},
+		CriticalDependencies:  []models.CriticalDependency{},
+		CriticalNodes:         []models.CriticalNode{},
+		ConcentrationEvidence: []models.ConcentrationEvidence{},
+		ControlExposure:       []models.ControlExposure{},
+		ImpactPaths:           []models.ImpactPath{},
+		DataGaps:              []models.DataGap{},
+	}
+	for _, ex := range expectations {
+		snapshot.DomainContract.CrossFacetExpectations = append(snapshot.DomainContract.CrossFacetExpectations, ex.FacetA+"<->"+ex.FacetB)
+	}
+
+	facetNodes := buildFacetNodes(contract, g)
+	for facet, nodes := range facetNodes {
+		score := qualityScore(nodes)
+		summary := snapshot.FacetSummary[facet]
+		summary.NodeCount = len(nodes)
+		summary.QualityScore = score
+		snapshot.FacetSummary[facet] = summary
+	}
+
+	edges := make([]*models.DependencyEdge, 0, len(g.Edges))
+	for _, edge := range g.Edges {
+		if edge == nil {
+			continue
+		}
+		edges = append(edges, edge)
+	}
+
+	sort.SliceStable(edges, func(i, j int) bool {
+		return topDependencyScore(edges[i], g) > topDependencyScore(edges[j], g)
+	})
+	topK := e.gateConfig.TopKDependencies
+	if topK <= 0 {
+		topK = 10
+	}
+	for idx, edge := range edges {
+		if idx >= topK {
+			break
+		}
+		src := g.NodesByID[edge.SourceFragmentID]
+		dst := g.NodesByID[edge.TargetFragmentID]
+		dep := models.CriticalDependency{
+			EdgeID:             strings.TrimSpace(edge.ID),
+			SourceFragmentID:   strings.TrimSpace(edge.SourceFragmentID),
+			TargetFragmentID:   strings.TrimSpace(edge.TargetFragmentID),
+			RelationType:       string(edge.Type),
+			TopDependencyScore: topDependencyScore(edge, g),
+			Confidence:         dependencyConfidence(edge),
+			SourceRefs:         dependencySourceRefs(edge),
+		}
+		if src != nil {
+			dep.SourceCanonicalPath = strings.TrimSpace(src.CanonicalPath)
+		}
+		if dst != nil {
+			dep.TargetCanonicalPath = strings.TrimSpace(dst.CanonicalPath)
+		}
+		dep.FacetKey = inferFacetForDependency(dep, facetNodes)
+		snapshot.CriticalDependencies = append(snapshot.CriticalDependencies, dep)
+	}
+
+	criticalNodes := make([]models.CriticalNode, 0, len(g.NodesByID))
+	for _, f := range g.NodesByID {
+		if f == nil {
+			continue
+		}
+		crit := fragmentCriticality(f, edges)
+		criticalNodes = append(criticalNodes, models.CriticalNode{
+			FragmentID:        strings.TrimSpace(f.ID),
+			CanonicalPath:     strings.TrimSpace(f.CanonicalPath),
+			Criticality:       crit,
+			CriticalityReason: "high_profile_and_degree_centrality",
+			Confidence:        clamp01(0.5 + crit*0.5),
+		})
+	}
+	sort.SliceStable(criticalNodes, func(i, j int) bool { return criticalNodes[i].Criticality > criticalNodes[j].Criticality })
+	if len(criticalNodes) > topK {
+		criticalNodes = criticalNodes[:topK]
+	}
+	snapshot.CriticalNodes = criticalNodes
+
+	snapshot.ConcentrationEvidence = buildConcentrationEvidence(g)
+	snapshot.ControlExposure = buildControlExposure(g)
+	snapshot.ImpactPaths = buildImpactPaths(g, snapshot.CriticalDependencies)
+	snapshot.DataGaps = detectDataGaps(contract, facetNodes, snapshot)
+	snapshot.HighlightedNodeIDs, snapshot.HighlightedEdgeIDs = highlightedIDs(snapshot)
+
+	return snapshot
+}
+
+func qualityScore(nodes []*models.HorizonFragment) float64 {
+	if len(nodes) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, f := range nodes {
+		if f == nil {
+			continue
+		}
+		switch strings.ToUpper(strings.TrimSpace(string(f.Metadata.EpistemicStatus))) {
+		case string(models.EpistemicStatusVerified):
+			sum += 1.0
+		case string(models.EpistemicStatusLowConfidence):
+			sum += 0.5
+		case string(models.EpistemicStatusRejected):
+			sum += 0.0
+		default:
+			sum += 0.5
+		}
+	}
+	return sum / float64(len(nodes))
+}
+
+func topDependencyScore(edge *models.DependencyEdge, g graphSnapshot) float64 {
+	if edge == nil {
+		return 0
+	}
+	impact := clamp01(edge.Properties.Criticality)
+	if impact == 0 {
+		impact = 0.5
+	}
+	exposure := clamp01(maxFloat(edge.GetThroughputShare(), edge.GetCapacityConstraint()))
+	if exposure == 0 {
+		exposure = 0.5
+	}
+	concentration := deriveConcentration(edge)
+	substitutability := clamp01(edge.GetSubstitutability())
+	if substitutability == 0 {
+		substitutability = 0.5
+	}
+	sanctions := sanctionExposure(edge, g)
+	confidence := dependencyConfidence(edge)
+	score := impact * exposure * concentration * (1.0 - substitutability) * sanctions * confidence
+	if score == 0 {
+		// Fallback when sparse qualifiers are present.
+		score = clamp01((impact + exposure + concentration + sanctions + confidence) / 5.0)
+	}
+	return clamp01(score)
+}
+
+func dependencyConfidence(edge *models.DependencyEdge) float64 {
+	if edge == nil {
+		return 0.5
+	}
+	base := 0.5
+	if edge.Provenance.ObservedAt != nil {
+		base += 0.1
+	}
+	if len(dependencySourceRefs(edge)) >= 2 {
+		base += 0.15
+	}
+	if edge.GetPolicyStatus() == models.PolicyStatusPenalized {
+		base -= 0.2
+	}
+	if edge.GetPolicyStatus() == models.PolicyStatusQuarantined {
+		base -= 0.4
+	}
+	return clamp01(base)
+}
+
+func dependencySourceRefs(edge *models.DependencyEdge) []string {
+	if edge == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 8)
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	for _, id := range edge.Provenance.SourceIDs {
+		add(id)
+	}
+	for _, id := range edge.Provenance.DataSourceIDs {
+		add(id)
+	}
+	for _, ref := range edge.Provenance.SourceRefs {
+		add(ref.SourceID)
+	}
+	return out
+}
+
+func deriveConcentration(edge *models.DependencyEdge) float64 {
+	if edge == nil {
+		return 0.5
+	}
+	for _, key := range []string{"cr4", "CR4", "hhi", "HHI"} {
+		if edge.Qualifiers != nil {
+			if v, ok := parseFloat(edge.Qualifiers[key]); ok {
+				if strings.EqualFold(key, "hhi") {
+					return clamp01(v / 5000.0)
+				}
+				return clamp01(v)
+			}
+		}
+		if edge.Metrics != nil {
+			if mv, ok := edge.Metrics[key]; ok {
+				if strings.EqualFold(key, "hhi") {
+					return clamp01(mv.Value / 5000.0)
+				}
+				return clamp01(mv.Value)
+			}
+		}
+	}
+	return 0.5
+}
+
+func sanctionExposure(edge *models.DependencyEdge, g graphSnapshot) float64 {
+	if edge == nil {
+		return 0.5
+	}
+	if edge.Type == models.DependencyTypeRegulates || edge.Type == models.DependencyTypeControlsAccess || edge.Type == models.DependencyTypeUsesMechanism {
+		return 1.0
+	}
+	src := g.NodesByID[edge.SourceFragmentID]
+	tgt := g.NodesByID[edge.TargetFragmentID]
+	srcID := ""
+	tgtID := ""
+	if src != nil {
+		srcID = strings.TrimSpace(src.ID)
+	}
+	if tgt != nil {
+		tgtID = strings.TrimSpace(tgt.ID)
+	}
+	for _, ed := range g.Edges {
+		if ed == nil {
+			continue
+		}
+		if ed.Type != models.DependencyTypeRegulates && ed.Type != models.DependencyTypeControlsAccess && ed.Type != models.DependencyTypeUsesMechanism {
+			continue
+		}
+		if ed.SourceFragmentID == srcID || ed.TargetFragmentID == srcID || ed.SourceFragmentID == tgtID || ed.TargetFragmentID == tgtID {
+			return 0.9
+		}
+	}
+	return 0.5
+}
+
+func inferFacetForDependency(dep models.CriticalDependency, facetNodes map[string][]*models.HorizonFragment) string {
+	source := strings.TrimSpace(dep.SourceCanonicalPath)
+	target := strings.TrimSpace(dep.TargetCanonicalPath)
+	for facet, nodes := range facetNodes {
+		for _, n := range nodes {
+			if n == nil {
+				continue
+			}
+			cp := strings.TrimSpace(n.CanonicalPath)
+			if cp != "" && (cp == source || cp == target) {
+				return facet
+			}
+		}
+	}
+	return "default"
+}
+
+func fragmentCriticality(f *models.HorizonFragment, edges []*models.DependencyEdge) float64 {
+	if f == nil {
+		return 0
+	}
+	degree := 0
+	for _, e := range edges {
+		if e == nil {
+			continue
+		}
+		if e.SourceFragmentID == f.ID || e.TargetFragmentID == f.ID {
+			degree++
+		}
+	}
+	centrality := clamp01(float64(degree) / 12.0)
+	highProfile := 0.0
+	if f.HighProfile != nil {
+		for _, sig := range f.HighProfile.Signals {
+			if clamp01(sig.Score) > highProfile {
+				highProfile = clamp01(sig.Score)
+			}
+		}
+	}
+	if highProfile == 0 {
+		highProfile = 0.4
+	}
+	return clamp01(0.6*highProfile + 0.4*centrality)
+}
+
+func buildConcentrationEvidence(g graphSnapshot) []models.ConcentrationEvidence {
+	out := make([]models.ConcentrationEvidence, 0, 8)
+	for _, f := range g.NodesByID {
+		if f == nil || f.Type != models.FragmentTypeMarket {
+			continue
+		}
+		evidence := models.ConcentrationEvidence{
+			MarketCanonicalPath: strings.TrimSpace(f.CanonicalPath),
+		}
+		setMetric := func(metricName string, dst **float64) {
+			if mv, ok := f.State[metricName]; ok {
+				v := mv.Value
+				*dst = &v
+			}
+		}
+		setMetric("TAM", &evidence.TAM)
+		setMetric("CAGR", &evidence.CAGR)
+		setMetric("CR4", &evidence.CR4)
+		setMetric("HHI", &evidence.HHI)
+		if evidence.TAM == nil && evidence.CAGR == nil && evidence.CR4 == nil && evidence.HHI == nil {
+			evidence.DataGap = "missing_market_metrics"
+		}
+		out = append(out, evidence)
+	}
+	return out
+}
+
+func buildControlExposure(g graphSnapshot) []models.ControlExposure {
+	out := make([]models.ControlExposure, 0, 16)
+	for _, edge := range g.Edges {
+		if edge == nil {
+			continue
+		}
+		if edge.Type != models.DependencyTypeRegulates && edge.Type != models.DependencyTypeControlsAccess && edge.Type != models.DependencyTypeUsesMechanism {
+			continue
+		}
+		path := []string{}
+		if src := g.NodesByID[edge.SourceFragmentID]; src != nil {
+			path = append(path, strings.TrimSpace(src.CanonicalPath))
+		}
+		if tgt := g.NodesByID[edge.TargetFragmentID]; tgt != nil {
+			path = append(path, strings.TrimSpace(tgt.CanonicalPath))
+		}
+		out = append(out, models.ControlExposure{
+			MechanismType: strings.ToLower(string(edge.Type)),
+			Severity:      severityFromEdge(edge),
+			Confidence:    dependencyConfidence(edge),
+			EdgeIDs:       []string{strings.TrimSpace(edge.ID)},
+			Path:          path,
+		})
+	}
+	return out
+}
+
+func severityFromEdge(edge *models.DependencyEdge) string {
+	if edge == nil {
+		return "medium"
+	}
+	if edge.GetPolicyStatus() == models.PolicyStatusQuarantined {
+		return "high"
+	}
+	if edge.GetPolicyStatus() == models.PolicyStatusPenalized {
+		return "medium"
+	}
+	if edge.Properties.Criticality >= 0.75 {
+		return "high"
+	}
+	if edge.Properties.Criticality <= 0.3 {
+		return "low"
+	}
+	return "medium"
+}
+
+func buildImpactPaths(g graphSnapshot, deps []models.CriticalDependency) []models.ImpactPath {
+	out := make([]models.ImpactPath, 0, len(deps))
+	for _, dep := range deps {
+		pathNodes, pathEdges := shortestPath(g, dep.SourceFragmentID, dep.TargetFragmentID, 6)
+		if len(pathNodes) == 0 {
+			continue
+		}
+		nodePaths := make([]string, 0, len(pathNodes))
+		for _, id := range pathNodes {
+			if f := g.NodesByID[id]; f != nil {
+				nodePaths = append(nodePaths, strings.TrimSpace(f.CanonicalPath))
+			}
+		}
+		out = append(out, models.ImpactPath{
+			DependencyEdgeID: strings.TrimSpace(dep.EdgeID),
+			NodePaths:        nodePaths,
+			EdgeIDs:          append([]string(nil), pathEdges...),
+			FacetKey:         dep.FacetKey,
+			Criticality:      dep.TopDependencyScore,
+		})
+	}
+	return out
+}
+
+func detectDataGaps(contract Contract, facetNodes map[string][]*models.HorizonFragment, snapshot *models.DomainAnswerSnapshot) []models.DataGap {
+	gaps := make([]models.DataGap, 0, 16)
+	for facet, nodes := range facetNodes {
+		if len(nodes) == 0 {
+			gaps = append(gaps, models.DataGap{
+				GapType:       "empty_facet",
+				AffectedFacet: facet,
+				Hint:          fmt.Sprintf("Expand facet '%s' with more entities", facet),
+				Priority:      "P0",
+			})
+		}
+	}
+	if len(snapshot.ConcentrationEvidence) == 0 {
+		gaps = append(gaps, models.DataGap{
+			GapType:  "missing_metric",
+			Hint:     "No market concentration metrics (TAM/CAGR/CR4/HHI) found in scope",
+			Priority: "P1",
+		})
+	}
+	if len(snapshot.ControlExposure) == 0 && isRegulatorySensitive(contract.ContractType) {
+		gaps = append(gaps, models.DataGap{
+			GapType:  "no_regulatory",
+			Hint:     "No regulatory/control exposure edges found",
+			Priority: "P1",
+		})
+	}
+	if len(snapshot.ImpactPaths) == 0 && len(snapshot.CriticalDependencies) > 0 {
+		gaps = append(gaps, models.DataGap{
+			GapType:  "no_paths",
+			Hint:     "Critical dependencies exist without explainable impact paths",
+			Priority: "P0",
+		})
+	}
+	return gaps
+}
+
+func isRegulatorySensitive(contractType string) bool {
+	switch steeringProfileForContractType(contractType) {
+	case SteeringProfileSupplyChain, SteeringProfileRegulatoryExposure:
+		return true
+	default:
+		return false
+	}
+}
+
+func highlightedIDs(snapshot *models.DomainAnswerSnapshot) ([]string, []string) {
+	nodeSet := map[string]struct{}{}
+	edgeSet := map[string]struct{}{}
+	for _, dep := range snapshot.CriticalDependencies {
+		if dep.SourceFragmentID != "" {
+			nodeSet[dep.SourceFragmentID] = struct{}{}
+		}
+		if dep.TargetFragmentID != "" {
+			nodeSet[dep.TargetFragmentID] = struct{}{}
+		}
+		if dep.EdgeID != "" {
+			edgeSet[dep.EdgeID] = struct{}{}
+		}
+	}
+	for _, p := range snapshot.ImpactPaths {
+		for _, edgeID := range p.EdgeIDs {
+			if edgeID != "" {
+				edgeSet[edgeID] = struct{}{}
+			}
+		}
+	}
+	nodes := make([]string, 0, len(nodeSet))
+	for id := range nodeSet {
+		nodes = append(nodes, id)
+	}
+	sort.Strings(nodes)
+	edges := make([]string, 0, len(edgeSet))
+	for id := range edgeSet {
+		edges = append(edges, id)
+	}
+	sort.Strings(edges)
+	return nodes, edges
+}
+
+type gateResult struct {
+	Level         int
+	OverallStatus string
+	TotalChecks   int
+	Passed        int
+	Failed        int
+	Partial       int
+	Score         float64
+	Checks        []models.DomainGateCheck
+}
+
+func (r gateResult) failedCheckIDs() []string {
+	out := make([]string, 0, len(r.Checks))
+	for _, c := range r.Checks {
+		if c.Status == "fail" {
+			out = append(out, c.CheckID)
+		}
+	}
+	return out
+}
+
+func (r gateResult) toSummary() models.DomainGateSummary {
+	return models.DomainGateSummary{
+		OverallStatus:  r.OverallStatus,
+		TotalChecks:    r.TotalChecks,
+		Passed:         r.Passed,
+		Failed:         r.Failed,
+		Partial:        r.Partial,
+		Checks:         r.Checks,
+		FailedCheckIDs: r.failedCheckIDs(),
+	}
+}
+
+func (e *Engine) evaluateGateL1(contract Contract, expectations []CrossFacetExpectation, snapshot *models.DomainAnswerSnapshot, g graphSnapshot) gateResult {
+	checks := make([]models.DomainGateCheck, 0, 64)
+	facetNodes := buildFacetNodes(contract, g)
+	// U1 Facet population
+	for facet, nodes := range facetNodes {
+		n := len(nodes)
+		status := "pass"
+		priority := "P2"
+		if n == 0 {
+			status = "fail"
+			priority = "P0"
+		} else if n < e.gateConfig.MinNodesPerFacet {
+			status = "fail"
+			priority = "P1"
+		}
+		checks = append(checks, models.DomainGateCheck{
+			CheckID:        "U1_facet_population_" + facet,
+			Status:         status,
+			Priority:       priority,
+			GapDescription: fmt.Sprintf("facet=%s nodes=%d", facet, n),
+			Affected:       []string{facet},
+			EnrichmentHint: fmt.Sprintf("Expand facet '%s': find more entities", facet),
+		})
+	}
+
+	// U2 quality score by facet
+	for facet, nodes := range facetNodes {
+		score := qualityScore(nodes)
+		status := "pass"
+		if score < e.gateConfig.MinQualityRatio {
+			status = "fail"
+		}
+		checks = append(checks, models.DomainGateCheck{
+			CheckID:        "U2_facet_node_quality_" + facet,
+			Status:         status,
+			Priority:       "P1",
+			GapDescription: fmt.Sprintf("facet=%s quality_score=%.3f threshold=%.3f", facet, score, e.gateConfig.MinQualityRatio),
+			Affected:       []string{facet},
+			EnrichmentHint: fmt.Sprintf("Re-scout low-quality nodes for facet '%s'", facet),
+		})
+	}
+
+	// U3 inter-facet connectivity.
+	for _, ex := range expectations {
+		aNodes := facetNodes[ex.FacetA]
+		bNodes := facetNodes[ex.FacetB]
+		ok := hasConnectivityBetweenFacets(g, aNodes, bNodes, e.gateConfig.MaxInterFacetHops)
+		checks = append(checks, models.DomainGateCheck{
+			CheckID:        "U3_inter_facet_connectivity_" + ex.FacetA + "_" + ex.FacetB,
+			Status:         ternary(ok, "pass", "fail"),
+			Priority:       "P0",
+			GapDescription: fmt.Sprintf("connectivity=%v max_hops=%d", ok, e.gateConfig.MaxInterFacetHops),
+			Affected:       []string{ex.FacetA, ex.FacetB},
+			EnrichmentHint: fmt.Sprintf("Cross-facet disconnect: %s ↔ %s", ex.FacetA, ex.FacetB),
+		})
+	}
+
+	// U4 critical dependency paths.
+	for i, dep := range snapshot.CriticalDependencies {
+		found := false
+		for _, p := range snapshot.ImpactPaths {
+			if p.DependencyEdgeID == dep.EdgeID {
+				found = true
+				break
+			}
+		}
+		priority := "P1"
+		if i < 3 {
+			priority = "P0"
+		}
+		checks = append(checks, models.DomainGateCheck{
+			CheckID:        "U4_critical_dependency_path_" + dep.EdgeID,
+			Status:         ternary(found, "pass", "fail"),
+			Priority:       priority,
+			GapDescription: fmt.Sprintf("dependency=%s path_found=%v", dep.EdgeID, found),
+			Affected:       []string{dep.EdgeID},
+			EnrichmentHint: "Scout intermediate nodes for missing path",
+		})
+	}
+
+	// U5 policy & direction.
+	policyMissing := []string{}
+	directionMissing := []string{}
+	for _, p := range snapshot.ImpactPaths {
+		for _, edgeID := range p.EdgeIDs {
+			edge := edgeByID(g.Edges, edgeID)
+			if edge == nil {
+				continue
+			}
+			if strings.TrimSpace(edge.GetPolicyStatus()) == "" {
+				policyMissing = append(policyMissing, edgeID)
+			}
+			if strings.TrimSpace(edge.SourceFragmentID) == "" || strings.TrimSpace(edge.TargetFragmentID) == "" {
+				directionMissing = append(directionMissing, edgeID)
+			}
+		}
+	}
+	u5ok := len(policyMissing) == 0 && len(directionMissing) == 0
+	checks = append(checks, models.DomainGateCheck{
+		CheckID:        "U5_edge_direction_policy",
+		Status:         ternary(u5ok, "pass", "fail"),
+		Priority:       "P1",
+		GapDescription: fmt.Sprintf("missing_policy=%d missing_direction=%d", len(policyMissing), len(directionMissing)),
+		Affected:       append(policyMissing, directionMissing...),
+		EnrichmentHint: "Re-run policy checks for critical paths",
+	})
+
+	// U6 data gap ratio.
+	totalArtifacts := len(snapshot.CriticalDependencies) + len(snapshot.ImpactPaths) + len(snapshot.CriticalNodes) + len(snapshot.ConcentrationEvidence) + len(snapshot.ControlExposure)
+	if totalArtifacts <= 0 {
+		totalArtifacts = 1
+	}
+	gapRatio := float64(len(snapshot.DataGaps)) / float64(totalArtifacts)
+	u6Status := "pass"
+	u6Priority := "P2"
+	if gapRatio >= e.gateConfig.MaxGapRatioP0 {
+		u6Status = "fail"
+		u6Priority = "P0"
+	} else if gapRatio >= e.gateConfig.MaxGapRatioP1 {
+		u6Status = "fail"
+		u6Priority = "P1"
+	}
+	checks = append(checks, models.DomainGateCheck{
+		CheckID:        "U6_data_gap_ratio",
+		Status:         u6Status,
+		Priority:       u6Priority,
+		GapDescription: fmt.Sprintf("gap_ratio=%.3f", gapRatio),
+		EnrichmentHint: "Prioritize top data gaps",
+	})
+
+	// U7 temporal validity.
+	temporalCoverage := temporalCoverageRatio(g, snapshot.ImpactPaths, contract)
+	checks = append(checks, models.DomainGateCheck{
+		CheckID:        "U7_temporal_validity",
+		Status:         ternary(temporalCoverage >= e.gateConfig.MinTemporalCoverage, "pass", "fail"),
+		Priority:       "P2",
+		GapDescription: fmt.Sprintf("temporal_coverage=%.3f threshold=%.3f", temporalCoverage, e.gateConfig.MinTemporalCoverage),
+		EnrichmentHint: "Refresh stale edges in critical paths",
+	})
+
+	// U8 source diversity.
+	sourceDiversityOK := true
+	for i, dep := range snapshot.CriticalDependencies {
+		if i >= e.gateConfig.TopKDependencies {
+			break
+		}
+		if len(dep.SourceRefs) < e.gateConfig.MinSourcesPerDep {
+			sourceDiversityOK = false
+			break
+		}
+	}
+	checks = append(checks, models.DomainGateCheck{
+		CheckID:        "U8_source_diversity",
+		Status:         ternary(sourceDiversityOK, "pass", "fail"),
+		Priority:       "P3",
+		GapDescription: fmt.Sprintf("min_sources_per_dep=%d", e.gateConfig.MinSourcesPerDep),
+		EnrichmentHint: "Corroborate single-source dependencies with additional sources",
+	})
+
+	// Contract-specific checks
+	checks = append(checks, e.contractSpecificChecks(contract, g, facetNodes, snapshot)...)
+
+	return summarizeChecks(1, checks)
+}
+
+func (e *Engine) contractSpecificChecks(contract Contract, g graphSnapshot, facetNodes map[string][]*models.HorizonFragment, snapshot *models.DomainAnswerSnapshot) []models.DomainGateCheck {
+	profile := steeringProfileForContractType(contract.ContractType)
+	out := make([]models.DomainGateCheck, 0, 12)
+	switch profile {
+	case SteeringProfileSupplyChain:
+		out = append(out,
+			checkSupplyChainEdges(g, facetNodes),
+			checkUpstreamDownstream(g, facetNodes),
+			checkMarketMetrics(snapshot),
+			checkConcentrationEvidence(snapshot),
+			checkSubstitutionData(snapshot),
+			checkGeoCoverage(snapshot, e.gateConfig.MinGeoCoverage),
+		)
+	case SteeringProfileRegulatoryExposure:
+		out = append(out,
+			checkRegulatoryEdges(g),
+			checkDecisionPoints(g),
+			checkJurisdictionCoverage(facetNodes),
+			checkMechanismSpecificity(g),
+		)
+	case SteeringProfileCompetitiveLandscape:
+		out = append(out,
+			checkMarketParticipation(g),
+			checkMarketShareData(g),
+			checkConcentrationEvidence(snapshot),
+		)
+	case SteeringProfileGeographicConcentration:
+		out = append(out,
+			checkGeoEdges(g, e.gateConfig.MinGeoCoverage),
+			checkGeoDiversity(g),
+		)
+	}
+	return out
+}
+
+func summarizeChecks(level int, checks []models.DomainGateCheck) gateResult {
+	res := gateResult{
+		Level:       level,
+		Checks:      checks,
+		TotalChecks: len(checks),
+	}
+	hasP0Fail := false
+	hasP1Fail := false
+	for _, c := range checks {
+		switch c.Status {
+		case "pass":
+			res.Passed++
+		case "partial":
+			res.Partial++
+		default:
+			res.Failed++
+			if strings.EqualFold(c.Priority, "P0") {
+				hasP0Fail = true
+			}
+			if strings.EqualFold(c.Priority, "P1") {
+				hasP1Fail = true
+			}
+		}
+	}
+	switch {
+	case hasP0Fail:
+		res.OverallStatus = "fail"
+	case hasP1Fail:
+		res.OverallStatus = "partial"
+	default:
+		res.OverallStatus = "pass"
+	}
+	if res.TotalChecks > 0 {
+		res.Score = float64(res.Passed) / float64(res.TotalChecks)
+	}
+	return res
+}
+
+type semanticGateResponse struct {
+	Status            string   `json:"status"`
+	CriticalGaps      []string `json:"criticalGaps"`
+	EnrichmentSignals []string `json:"enrichmentSignals"`
+	Confidence        float64  `json:"confidence"`
+}
+
+func (e *Engine) evaluateGateL2(ctx context.Context, contract Contract, snapshot *models.DomainAnswerSnapshot, l1 gateResult, originalQuery string) gateResult {
+	if e.aiExecutor == nil {
+		logDomainContract(ctx, "gate.l2.skipped", nil, &contract, map[string]any{
+			"reason":   "ai_executor_nil",
+			"l1Status": l1.OverallStatus,
+		})
+		return gateResult{
+			Level:         2,
+			OverallStatus: "pass",
+			TotalChecks:   1,
+			Passed:        1,
+			Score:         1.0,
+			Checks: []models.DomainGateCheck{{
+				CheckID:  "L2_semantic_completeness",
+				Status:   "pass",
+				Priority: "P2",
+			}},
+		}
+	}
+	prompt := buildL2Prompt(contract, snapshot, l1, originalQuery)
+	verifier := ai.NewGenericVerifier(func(r semanticGateResponse) error {
+		st := strings.TrimSpace(strings.ToLower(r.Status))
+		if st != "pass" && st != "partial" && st != "fail" {
+			return fmt.Errorf("invalid status")
+		}
+		return nil
+	})
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeKnowledgeSynthesis,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability:        true,
+			InternalDataGroundingCapability: true,
+			MinCapabilityScore:              7,
+			MinContextWindow:                12000,
+			MaxOutputSize:                   2000,
+		},
+		Verifier: verifier,
+	}
+	raw, fullResult, err := e.aiExecutor.ExecuteStructuredTaskFull(ctx, task)
+	if err != nil {
+		logDomainContract(ctx, "gate.l2.ai.error", nil, &contract, map[string]any{
+			"error": err.Error(),
+		})
+		return gateResult{
+			Level:         2,
+			OverallStatus: "partial",
+			TotalChecks:   1,
+			Failed:        1,
+			Checks: []models.DomainGateCheck{{
+				CheckID:        "L2_semantic_completeness",
+				Status:         "fail",
+				Priority:       "P1",
+				GapDescription: "semantic critic unavailable",
+				EnrichmentHint: "Retry semantic critic with refreshed context",
+			}},
+		}
+	}
+	if snapshot != nil && fullResult != nil {
+		applyGroundingEvidenceToSnapshot(snapshot, fullResult.GroundingEvidence)
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		logDomainContract(ctx, "gate.l2.parse.error", nil, &contract, map[string]any{
+			"stage": "marshal",
+			"error": err.Error(),
+		})
+		b = []byte("{}")
+	}
+	var parsed semanticGateResponse
+	if err := json.Unmarshal(b, &parsed); err != nil {
+		logDomainContract(ctx, "gate.l2.parse.error", nil, &contract, map[string]any{
+			"stage":       "unmarshal",
+			"payloadSize": len(b),
+			"error":       err.Error(),
+		})
+	}
+	status := strings.TrimSpace(strings.ToLower(parsed.Status))
+	if status == "" {
+		logDomainContract(ctx, "gate.l2.status.empty", nil, &contract, map[string]any{
+			"fallbackStatus": "partial",
+		})
+		status = "partial"
+	}
+	priority := "P1"
+	if status == "pass" {
+		priority = "P3"
+	}
+	check := models.DomainGateCheck{
+		CheckID:        "L2_semantic_completeness",
+		Status:         status,
+		Priority:       priority,
+		GapDescription: strings.Join(parsed.CriticalGaps, "; "),
+		EnrichmentHint: strings.Join(parsed.EnrichmentSignals, "; "),
+		Affected:       parsed.CriticalGaps,
+	}
+	res := summarizeChecks(2, []models.DomainGateCheck{check})
+	if status == "partial" && res.OverallStatus == "pass" {
+		res.OverallStatus = "partial"
+	}
+	return res
+}
+
+func buildL2Prompt(contract Contract, snapshot *models.DomainAnswerSnapshot, l1 gateResult, originalQuery string) string {
+	originalQuery = strings.Join(strings.Fields(strings.TrimSpace(originalQuery)), " ")
+	if originalQuery == "" {
+		originalQuery = "(not provided)"
+	}
+	return strings.TrimSpace(fmt.Sprintf(`
+Return JSON only:
+{
+  "status": "pass|partial|fail",
+  "criticalGaps": ["..."],
+  "enrichmentSignals": ["..."],
+  "confidence": 0.0
+}
+
+Domain contract:
+- type: %s
+- title: %s
+- facets: %s
+
+Original user query:
+- %s
+
+Artifacts:
+- criticalDependencies: %d
+- criticalNodes: %d
+- concentrationEvidence: %d
+- controlExposure: %d
+- impactPaths: %d
+- dataGaps: %d
+
+Gate L1:
+- status: %s
+- failedChecks: %s
+
+Evaluate semantic completeness against the original contract. If answer can be delivered with current evidence, status=pass.
+`, contract.ContractType, contract.Title, asJSON(contract.Facets), originalQuery, len(snapshot.CriticalDependencies), len(snapshot.CriticalNodes), len(snapshot.ConcentrationEvidence), len(snapshot.ControlExposure), len(snapshot.ImpactPaths), len(snapshot.DataGaps), l1.OverallStatus, strings.Join(l1.failedCheckIDs(), ", ")))
+}
+
+func buildEnrichmentTasks(_ Contract, gate gateResult) []EnrichmentTask {
+	out := make([]EnrichmentTask, 0, len(gate.Checks))
+	for _, c := range gate.Checks {
+		if c.Status != "fail" {
+			continue
+		}
+		task := EnrichmentTask{
+			Priority:    c.Priority,
+			GapType:     c.CheckID,
+			Hint:        c.EnrichmentHint,
+			MissingInfo: []string{},
+		}
+		if strings.Contains(c.CheckID, "inter_facet_connectivity") {
+			task.GapType = "cross_facet_connectivity"
+		}
+		if strings.Contains(c.CheckID, "market") {
+			task.GapType = "metric_gap"
+		}
+		if strings.Contains(c.CheckID, "critical_dependency_path") {
+			task.GapType = "path_gap"
+		}
+		for _, a := range c.Affected {
+			if strings.HasPrefix(a, "/") {
+				task.TargetPath = a
+				break
+			}
+		}
+		if strings.TrimSpace(task.Hint) != "" {
+			task.MissingInfo = append(task.MissingInfo, task.Hint)
+		}
+		out = append(out, task)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return priorityRank(out[i].Priority) < priorityRank(out[j].Priority) })
+	return out
+}
+
+func priorityRank(p string) int {
+	switch strings.TrimSpace(strings.ToUpper(p)) {
+	case "P0":
+		return 0
+	case "P1":
+		return 1
+	case "P2":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func (e *Engine) enqueueEnrichmentTasks(ctx context.Context, parent *models.ScoutingJob, contract Contract, tasks []EnrichmentTask, cycle int) {
+	if e.scoutingJobs == nil || parent == nil {
+		logDomainContract(ctx, "enrich.enqueue.skipped", parent, &contract, map[string]any{
+			"reason": "missing_scouting_jobs_or_parent",
+			"cycle":  cycle,
+		})
+		return
+	}
+	maxJobs := 8
+	for i, task := range tasks {
+		if i >= maxJobs {
+			break
+		}
+		targetPath := strings.TrimSpace(task.TargetPath)
+		if targetPath == "" {
+			if len(contract.FirstOrderEntities) > 0 {
+				targetPath = strings.TrimSpace(contract.FirstOrderEntities[i%len(contract.FirstOrderEntities)])
+			} else {
+				targetPath = strings.TrimSpace(parent.TargetCanonicalPath)
+			}
+		}
+		if targetPath == "" {
+			logDomainContract(ctx, "enrich.enqueue.skip_target", parent, &contract, map[string]any{
+				"cycle":    cycle,
+				"priority": task.Priority,
+				"gapType":  task.GapType,
+			})
+			continue
+		}
+		now := time.Now().UTC()
+		state := map[string]interface{}{
+			"targetCanonicalPath": targetPath,
+			"lensId":              strings.TrimSpace(parent.LensID),
+			"currentState":        string(models.ScoutingJobStatePending),
+			"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
+			"recursionDepth":      0.0,
+			"maxRecursionDepth":   1.0,
+			"domains": []map[string]interface{}{
+				{
+					"canonicalPath": strings.TrimSpace(contract.CanonicalPath),
+					"contractType":  strings.TrimSpace(contract.ContractType),
+					"title":         strings.TrimSpace(contract.Title),
+					"description":   strings.TrimSpace(contract.Description),
+					"facets":        contract.Facets,
+				},
+			},
+			"missingInfo": []string{strings.TrimSpace(task.Hint)},
+			"trigger":     "domain_contract_engine_enrich",
+			"enrichment": map[string]interface{}{
+				"cycle":    cycle,
+				"gapType":  task.GapType,
+				"priority": task.Priority,
+			},
+		}
+		if parent.State != nil {
+			if v, ok := parent.State["correlationId"]; ok {
+				state["correlationId"] = v
+			}
+			if v, ok := parent.State["sessionId"]; ok {
+				state["sessionId"] = v
+			}
+		}
+		job := &models.ScoutingJob{
+			AgentJob: agentmodels.AgentJob{
+				TenantID:  strings.TrimSpace(parent.TenantID),
+				ProjectID: strings.TrimSpace(parent.ProjectID),
+				AgentID:   "scout",
+				Status:    agentmodels.AgentJobStatusPending,
+				CreatedAt: now,
+				UpdatedAt: now,
+				State:     state,
+			},
+			LensID:              strings.TrimSpace(parent.LensID),
+			TargetCanonicalPath: targetPath,
+			ScoutingStrategy:    string(models.ScoutingStrategySnapshot),
+			BillingContext: models.BillingContext{
+				ChargeModel: string(models.ChargeModelBounty),
+				ProjectID:   strings.TrimSpace(parent.ProjectID),
+			},
+			CurrentState: models.ScoutingJobStatePending,
+		}
+		jobID, err := e.scoutingJobs.Create(ctx, job)
+		if err != nil {
+			logDomainContract(ctx, "enrich.enqueue.error", parent, &contract, map[string]any{
+				"cycle":      cycle,
+				"targetPath": targetPath,
+				"gapType":    task.GapType,
+				"priority":   task.Priority,
+				"error":      err.Error(),
+			})
+			continue
+		}
+		logDomainContract(ctx, "enrich.enqueue.ok", parent, &contract, map[string]any{
+			"cycle":      cycle,
+			"targetPath": targetPath,
+			"gapType":    task.GapType,
+			"priority":   task.Priority,
+			"childJobId": strings.TrimSpace(jobID),
+		})
+	}
+}
+
+type narrativeResponse struct {
+	Thesis struct {
+		Text       string  `json:"text"`
+		Confidence float64 `json:"confidence"`
+	} `json:"thesis"`
+	Alternatives   []models.Alternative  `json:"alternatives"`
+	ObjectiveCheck models.ObjectiveCheck `json:"objectiveCheck"`
+}
+
+func (e *Engine) applyStructuredNarrative(ctx context.Context, contract Contract, snapshot *models.DomainAnswerSnapshot) {
+	if snapshot == nil {
+		return
+	}
+	if e.aiExecutor == nil {
+		logDomainContract(ctx, "narrative.skipped", nil, &contract, map[string]any{
+			"reason": "ai_executor_nil",
+		})
+		snapshot.Thesis = models.DomainThesis{
+			Text:       fallbackThesis(contract, snapshot),
+			Confidence: 0.6,
+		}
+		snapshot.ObjectiveCheck = models.ObjectiveCheck{
+			OntologyConformance: "pass",
+			PolicyConformance:   "pass",
+			Completeness:        snapshot.ReadinessStatus,
+			Confidence:          0.6,
+		}
+		return
+	}
+	prompt := buildNarrativePrompt(contract, snapshot)
+	verifier := ai.NewGenericVerifier(func(r narrativeResponse) error {
+		if strings.TrimSpace(r.Thesis.Text) == "" {
+			return fmt.Errorf("thesis.text is required")
+		}
+		return nil
+	})
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeKnowledgeSynthesis,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability:        true,
+			MinCapabilityScore:              7,
+			MinContextWindow:                12000,
+			MaxOutputSize:                   3000,
+			SearchGroundingCapability:       true,
+			InternalDataGroundingCapability: true,
+		},
+		Verifier: verifier,
+	}
+	raw, fullResult, err := e.aiExecutor.ExecuteStructuredTaskFull(ctx, task)
+	if err != nil {
+		logDomainContract(ctx, "narrative.ai.error", nil, &contract, map[string]any{
+			"error": err.Error(),
+		})
+		snapshot.Thesis = models.DomainThesis{
+			Text:       fallbackThesis(contract, snapshot),
+			Confidence: 0.6,
+		}
+		snapshot.ObjectiveCheck = models.ObjectiveCheck{
+			OntologyConformance: "partial",
+			PolicyConformance:   "pass",
+			Completeness:        snapshot.ReadinessStatus,
+			Confidence:          0.55,
+		}
+		return
+	}
+	if fullResult != nil {
+		applyGroundingEvidenceToSnapshot(snapshot, fullResult.GroundingEvidence)
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		logDomainContract(ctx, "narrative.parse.error", nil, &contract, map[string]any{
+			"stage": "marshal",
+			"error": err.Error(),
+		})
+		snapshot.Thesis = models.DomainThesis{
+			Text:       fallbackThesis(contract, snapshot),
+			Confidence: 0.6,
+		}
+		snapshot.ObjectiveCheck = models.ObjectiveCheck{
+			OntologyConformance: "partial",
+			PolicyConformance:   "pass",
+			Completeness:        snapshot.ReadinessStatus,
+			Confidence:          0.55,
+		}
+		return
+	}
+	var parsed narrativeResponse
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		logDomainContract(ctx, "narrative.parse.error", nil, &contract, map[string]any{
+			"stage":       "unmarshal",
+			"payloadSize": len(data),
+			"error":       err.Error(),
+		})
+		snapshot.Thesis = models.DomainThesis{
+			Text:       fallbackThesis(contract, snapshot),
+			Confidence: 0.6,
+		}
+		snapshot.ObjectiveCheck = models.ObjectiveCheck{
+			OntologyConformance: "partial",
+			PolicyConformance:   "pass",
+			Completeness:        snapshot.ReadinessStatus,
+			Confidence:          0.55,
+		}
+		return
+	}
+	if strings.TrimSpace(parsed.Thesis.Text) == "" {
+		logDomainContract(ctx, "narrative.parse.empty_thesis", nil, &contract, map[string]any{
+			"fallback": true,
+		})
+		parsed.Thesis.Text = fallbackThesis(contract, snapshot)
+		if parsed.Thesis.Confidence == 0 {
+			parsed.Thesis.Confidence = 0.6
+		}
+	}
+	snapshot.Thesis = models.DomainThesis{
+		Text:       strings.TrimSpace(parsed.Thesis.Text),
+		Confidence: clamp01(parsed.Thesis.Confidence),
+	}
+	snapshot.Alternatives = parsed.Alternatives
+	snapshot.ObjectiveCheck = parsed.ObjectiveCheck
+	if strings.TrimSpace(snapshot.ObjectiveCheck.Completeness) == "" {
+		snapshot.ObjectiveCheck.Completeness = snapshot.ReadinessStatus
+	}
+}
+
+func applyGroundingEvidenceToSnapshot(snapshot *models.DomainAnswerSnapshot, evidence *ai.GroundingEvidence) {
+	if snapshot == nil || evidence == nil {
+		return
+	}
+	if snapshot.InternalEvidence == nil {
+		snapshot.InternalEvidence = &models.GroundingInternalEvidence{}
+	}
+	if snapshot.ExternalEvidence == nil {
+		snapshot.ExternalEvidence = &models.GroundingExternalEvidence{}
+	}
+	snapshot.InternalEvidence.FragmentIDs = appendUniqueTrimmed(snapshot.InternalEvidence.FragmentIDs, evidence.DatastoreFragmentIDs...)
+	snapshot.InternalEvidence.DatastoreURIs = appendUniqueTrimmed(snapshot.InternalEvidence.DatastoreURIs, evidence.DatastoreURIs...)
+	for _, web := range evidence.WebSources {
+		snapshot.ExternalEvidence.WebURLs = appendUniqueTrimmed(snapshot.ExternalEvidence.WebURLs, strings.TrimSpace(web.URL))
+		citation := strings.TrimSpace(web.Title)
+		if citation == "" {
+			citation = strings.TrimSpace(web.URL)
+		}
+		snapshot.ExternalEvidence.Citations = appendUniqueTrimmed(snapshot.ExternalEvidence.Citations, citation)
+	}
+	hasInternal := len(snapshot.InternalEvidence.FragmentIDs) > 0 || len(snapshot.InternalEvidence.DatastoreURIs) > 0
+	hasExternal := len(snapshot.ExternalEvidence.WebURLs) > 0 || len(snapshot.ExternalEvidence.Citations) > 0
+	switch {
+	case hasInternal && hasExternal:
+		snapshot.OriginMode = "mixed"
+	case hasInternal:
+		snapshot.OriginMode = "internal_only"
+	case hasExternal:
+		snapshot.OriginMode = "external_only"
+	}
+}
+
+func appendUniqueTrimmed(base []string, values ...string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(base)+len(values))
+	for _, v := range base {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
+func buildNarrativePrompt(contract Contract, snapshot *models.DomainAnswerSnapshot) string {
+	return strings.TrimSpace(fmt.Sprintf(`
+Return JSON only:
+{
+  "thesis": {"text":"...", "confidence":0.0},
+  "alternatives": [{"title":"...", "description":"...", "feasibility":"...", "capacityDelta":"...", "latencyDelta":"...", "costDelta":"...", "timeToSwitch":"...", "confidence":0.0}],
+  "objectiveCheck": {
+    "ontologyConformance":"pass|partial|fail",
+    "policyConformance":"pass|partial|fail",
+    "provenanceQuality":"high|medium|low",
+    "biasAssessment":"...",
+    "completeness":"ready|ready_with_gaps",
+    "confidence":0.0
+  }
+}
+
+Contract:
+- type: %s
+- title: %s
+- description: %s
+- facets: %s
+
+Artifacts:
+- criticalDependencies: %s
+- concentrationEvidence: %s
+- controlExposure: %s
+- dataGaps: %s
+`, contract.ContractType, contract.Title, contract.Description, asJSON(contract.Facets), asJSON(snapshot.CriticalDependencies), asJSON(snapshot.ConcentrationEvidence), asJSON(snapshot.ControlExposure), asJSON(snapshot.DataGaps)))
+}
+
+func fallbackThesis(contract Contract, snapshot *models.DomainAnswerSnapshot) string {
+	return fmt.Sprintf("%s analysis identified %d critical dependencies, %d impact paths, and %d explicit data gaps.",
+		strings.TrimSpace(contract.Title), len(snapshot.CriticalDependencies), len(snapshot.ImpactPaths), len(snapshot.DataGaps))
+}
+
+func adaptSnapshotToViewDirective(snapshot *models.DomainAnswerSnapshot) *models.ViewDirective {
+	if snapshot == nil {
+		return nil
+	}
+	d := &models.ViewDirective{
+		ContractType: strings.TrimSpace(snapshot.DomainContract.ContractType),
+		Summary:      strings.TrimSpace(snapshot.Thesis.Text),
+	}
+	for _, p := range snapshot.ImpactPaths {
+		if len(p.NodePaths) == 0 {
+			continue
+		}
+		d.HighlightPaths = append(d.HighlightPaths, models.HighlightPath{
+			NodePaths: append([]string(nil), p.NodePaths...),
+			Label:     "impact path",
+			Style:     "primary",
+		})
+	}
+	for _, dep := range snapshot.CriticalDependencies {
+		if dep.SourceCanonicalPath != "" {
+			d.FocusNodePaths = append(d.FocusNodePaths, dep.SourceCanonicalPath)
+		}
+		if dep.TargetCanonicalPath != "" {
+			d.FocusNodePaths = append(d.FocusNodePaths, dep.TargetCanonicalPath)
+		}
+	}
+	seenFocus := map[string]struct{}{}
+	focus := make([]string, 0, len(d.FocusNodePaths))
+	for _, cp := range d.FocusNodePaths {
+		cp = strings.TrimSpace(cp)
+		if cp == "" {
+			continue
+		}
+		if _, ok := seenFocus[cp]; ok {
+			continue
+		}
+		seenFocus[cp] = struct{}{}
+		focus = append(focus, cp)
+	}
+	d.FocusNodePaths = focus
+	for _, ev := range snapshot.ConcentrationEvidence {
+		if ev.MarketCanonicalPath == "" {
+			continue
+		}
+		if ev.CR4 != nil {
+			d.Annotations = append(d.Annotations, models.Annotation{
+				CanonicalPath: ev.MarketCanonicalPath,
+				Key:           "cr4",
+				Value:         fmt.Sprintf("%.3f", *ev.CR4),
+			})
+		}
+		if ev.HHI != nil {
+			d.Annotations = append(d.Annotations, models.Annotation{
+				CanonicalPath: ev.MarketCanonicalPath,
+				Key:           "hhi",
+				Value:         fmt.Sprintf("%.1f", *ev.HHI),
+			})
+		}
+	}
+	if len(snapshot.DataGaps) > 0 {
+		rp := &models.ResearchPlan{
+			MissingEdges: []models.MissingEdge{},
+			MissingNodes: []string{},
+			Reason:       "domain_answer_data_gaps",
+		}
+		for _, gap := range snapshot.DataGaps {
+			if gap.AffectedNodePath != "" {
+				rp.MissingNodes = append(rp.MissingNodes, gap.AffectedNodePath)
+			}
+		}
+		d.ResearchPlan = rp
+	}
+	d.FilterRelTypes = defaultFilterRelTypes(snapshot.DomainContract.ContractType)
+	return d
+}
+
+func defaultFilterRelTypes(contractType string) []string {
+	switch steeringProfileForContractType(contractType) {
+	case SteeringProfileSupplyChain:
+		return []string{"SUPPLIES_TO", "CONSUMES", "DEPENDS_ON", "PRODUCES", "TRANSFORMS_INTO"}
+	case SteeringProfileRegulatoryExposure:
+		return []string{"REGULATES", "CONTROLS_ACCESS", "USES_MECHANISM", "APPLIES_TO"}
+	case SteeringProfileCompetitiveLandscape:
+		return []string{"PARTICIPATES_IN", "DOMINATES", "COMPETES_WITH", "PRODUCES"}
+	case SteeringProfileGeographicConcentration:
+		return []string{"LOCATED_IN", "OPERATES_IN", "EXTRACTS_FROM"}
+	default:
+		return []string{}
+	}
+}
+
+func (e *Engine) emit(ctx context.Context, job *models.ScoutingJob, contract Contract, eventType, title, description string, extra map[string]interface{}) {
+	if e.publisher == nil || job == nil {
+		return
+	}
+	payload := map[string]interface{}{
+		"tenantId":      strings.TrimSpace(job.TenantID),
+		"projectId":     strings.TrimSpace(job.ProjectID),
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         strings.TrimSpace(job.ID),
+		"canonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"contractType":  strings.TrimSpace(contract.ContractType),
+		"humanReadable": map[string]interface{}{
+			"title":       title,
+			"description": description,
+			"entityName":  strings.TrimSpace(contract.Title),
+		},
+	}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	e.publisher.Publish(ctx, eventType, payload)
+}
+
+func hasConnectivityBetweenFacets(g graphSnapshot, aNodes, bNodes []*models.HorizonFragment, maxHops int) bool {
+	if len(aNodes) == 0 || len(bNodes) == 0 {
+		return false
+	}
+	targetSet := map[string]struct{}{}
+	for _, n := range bNodes {
+		if n != nil && strings.TrimSpace(n.ID) != "" {
+			targetSet[n.ID] = struct{}{}
+		}
+	}
+	for _, src := range aNodes {
+		if src == nil || strings.TrimSpace(src.ID) == "" {
+			continue
+		}
+		for targetID := range targetSet {
+			nodes, _ := shortestPath(g, src.ID, targetID, maxHops)
+			if len(nodes) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func shortestPath(g graphSnapshot, fromID, toID string, maxHops int) ([]string, []string) {
+	fromID = strings.TrimSpace(fromID)
+	toID = strings.TrimSpace(toID)
+	if fromID == "" || toID == "" {
+		return nil, nil
+	}
+	if fromID == toID {
+		return []string{fromID}, nil
+	}
+	if maxHops <= 0 {
+		maxHops = 6
+	}
+	type state struct {
+		NodeID  string
+		Depth   int
+		Path    []string
+		EdgeIDs []string
+	}
+	adj := map[string][]*models.DependencyEdge{}
+	for _, e := range g.Edges {
+		if e == nil {
+			continue
+		}
+		adj[e.SourceFragmentID] = append(adj[e.SourceFragmentID], e)
+		adj[e.TargetFragmentID] = append(adj[e.TargetFragmentID], e) // undirected for explainability path search
+	}
+	q := []state{{NodeID: fromID, Depth: 0, Path: []string{fromID}, EdgeIDs: []string{}}}
+	visitedDepth := map[string]int{fromID: 0}
+	for len(q) > 0 {
+		cur := q[0]
+		q = q[1:]
+		if cur.Depth >= maxHops {
+			continue
+		}
+		for _, e := range adj[cur.NodeID] {
+			next := e.TargetFragmentID
+			if next == cur.NodeID {
+				next = e.SourceFragmentID
+			}
+			if next == "" {
+				continue
+			}
+			nextDepth := cur.Depth + 1
+			if prev, ok := visitedDepth[next]; ok && prev <= nextDepth {
+				continue
+			}
+			visitedDepth[next] = nextDepth
+			nextPath := append(append([]string{}, cur.Path...), next)
+			nextEdges := append(append([]string{}, cur.EdgeIDs...), strings.TrimSpace(e.ID))
+			if next == toID {
+				return nextPath, nextEdges
+			}
+			q = append(q, state{NodeID: next, Depth: nextDepth, Path: nextPath, EdgeIDs: nextEdges})
+		}
+	}
+	return nil, nil
+}
+
+func temporalCoverageRatio(g graphSnapshot, paths []models.ImpactPath, contract Contract) float64 {
+	if len(paths) == 0 {
+		return 1
+	}
+	total := 0
+	valid := 0
+	for _, p := range paths {
+		for _, edgeID := range p.EdgeIDs {
+			edge := edgeByID(g.Edges, edgeID)
+			if edge == nil {
+				continue
+			}
+			total++
+			if edgeOverlapsHorizon(edge, contract) {
+				valid++
+			}
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(valid) / float64(total)
+}
+
+func edgeOverlapsHorizon(edge *models.DependencyEdge, contract Contract) bool {
+	if edge == nil {
+		return false
+	}
+	start := contract.TemporalStart
+	end := contract.TemporalEnd
+	if start == nil && end == nil {
+		// No explicit horizon: treat timestamped edges as valid, otherwise unknown.
+		return edge.ValidFrom != nil || edge.ValidTo != nil
+	}
+	ef := edge.ValidFrom
+	et := edge.ValidTo
+	if ef == nil && et == nil {
+		return false
+	}
+	if ef == nil {
+		// Edge exists until et.
+		if start != nil && et.Before(*start) {
+			return false
+		}
+		return true
+	}
+	if et == nil {
+		// Edge starts at ef and is open-ended.
+		if end != nil && ef.After(*end) {
+			return false
+		}
+		return true
+	}
+	if start != nil && et.Before(*start) {
+		return false
+	}
+	if end != nil && ef.After(*end) {
+		return false
+	}
+	return true
+}
+
+func edgeByID(edges []*models.DependencyEdge, edgeID string) *models.DependencyEdge {
+	edgeID = strings.TrimSpace(edgeID)
+	if edgeID == "" {
+		return nil
+	}
+	for _, e := range edges {
+		if e != nil && strings.TrimSpace(e.ID) == edgeID {
+			return e
+		}
+	}
+	return nil
+}
+
+func checkSupplyChainEdges(g graphSnapshot, facetNodes map[string][]*models.HorizonFragment) models.DomainGateCheck {
+	needed := map[models.DependencyType]struct{}{
+		models.DependencyTypeSuppliesTo: {},
+		models.DependencyTypeConsumes:   {},
+		models.DependencyTypeDependsOn:  {},
+		models.DependencyTypeProduces:   {},
+	}
+	perFacet := map[string]bool{}
+	for facet := range facetNodes {
+		perFacet[facet] = false
+	}
+	pathToFacet := map[string]string{}
+	for facet, nodes := range facetNodes {
+		for _, n := range nodes {
+			if n != nil {
+				pathToFacet[n.ID] = facet
+			}
+		}
+	}
+	for _, edge := range g.Edges {
+		if edge == nil {
+			continue
+		}
+		if _, ok := needed[edge.Type]; !ok {
+			continue
+		}
+		if facet, ok := pathToFacet[edge.SourceFragmentID]; ok {
+			perFacet[facet] = true
+		}
+		if facet, ok := pathToFacet[edge.TargetFragmentID]; ok {
+			perFacet[facet] = true
+		}
+	}
+	missing := []string{}
+	for facet, ok := range perFacet {
+		if !ok {
+			missing = append(missing, facet)
+		}
+	}
+	sort.Strings(missing)
+	return models.DomainGateCheck{
+		CheckID:        "SC1_supply_chain_edges_exist",
+		Status:         ternary(len(missing) == 0, "pass", "fail"),
+		Priority:       "P0",
+		GapDescription: fmt.Sprintf("missing_facets=%s", strings.Join(missing, ",")),
+		Affected:       missing,
+		EnrichmentHint: "Add SUPPLIES_TO/CONSUMES/DEPENDS_ON/PRODUCES edges for missing facets",
+	}
+}
+
+func checkUpstreamDownstream(g graphSnapshot, facetNodes map[string][]*models.HorizonFragment) models.DomainGateCheck {
+	failures := []string{}
+	outgoingTypes := map[models.DependencyType]struct{}{
+		models.DependencyTypeSuppliesTo: {},
+		models.DependencyTypeProduces:   {},
+	}
+	incomingTypes := map[models.DependencyType]struct{}{
+		models.DependencyTypeConsumes:  {},
+		models.DependencyTypeDependsOn: {},
+	}
+	for _, nodes := range facetNodes {
+		for _, n := range nodes {
+			if n == nil || n.ID == "" {
+				continue
+			}
+			hasUpstream := false
+			hasDownstream := false
+			for _, edge := range g.Edges {
+				if edge == nil {
+					continue
+				}
+				if edge.SourceFragmentID == n.ID {
+					if _, ok := outgoingTypes[edge.Type]; ok {
+						hasDownstream = true
+					}
+				}
+				if edge.TargetFragmentID == n.ID {
+					if _, ok := incomingTypes[edge.Type]; ok {
+						hasUpstream = true
+					}
+				}
+			}
+			if !hasUpstream || !hasDownstream {
+				failures = append(failures, strings.TrimSpace(n.CanonicalPath))
+			}
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "SC2_upstream_downstream_coverage",
+		Status:         ternary(len(failures) == 0, "pass", "fail"),
+		Priority:       "P1",
+		GapDescription: fmt.Sprintf("anchors_missing_bidirectional=%d", len(failures)),
+		Affected:       failures,
+		EnrichmentHint: "Find upstream and downstream links for anchor nodes",
+	}
+}
+
+func checkMarketMetrics(snapshot *models.DomainAnswerSnapshot) models.DomainGateCheck {
+	if snapshot == nil {
+		return models.DomainGateCheck{CheckID: "SC3_market_metrics", Status: "fail", Priority: "P2"}
+	}
+	for _, ev := range snapshot.ConcentrationEvidence {
+		if ev.TAM != nil || ev.CAGR != nil || ev.CR4 != nil || ev.HHI != nil || strings.TrimSpace(ev.DataGap) != "" {
+			return models.DomainGateCheck{CheckID: "SC3_market_metrics", Status: "pass", Priority: "P2"}
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "SC3_market_metrics",
+		Status:         "fail",
+		Priority:       "P2",
+		GapDescription: "no market metrics",
+		EnrichmentHint: "Collect TAM/CAGR/CR4/HHI or explicit data_gap",
+	}
+}
+
+func checkConcentrationEvidence(snapshot *models.DomainAnswerSnapshot) models.DomainGateCheck {
+	if snapshot == nil {
+		return models.DomainGateCheck{CheckID: "SC4_concentration_evidence", Status: "fail", Priority: "P1"}
+	}
+	for _, ev := range snapshot.ConcentrationEvidence {
+		if ev.CR4 != nil || ev.HHI != nil {
+			return models.DomainGateCheck{CheckID: "SC4_concentration_evidence", Status: "pass", Priority: "P1"}
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "SC4_concentration_evidence",
+		Status:         "fail",
+		Priority:       "P1",
+		GapDescription: "CR4/HHI missing",
+		EnrichmentHint: "Collect concentration metrics or proxy via market participation counts",
+	}
+}
+
+func checkSubstitutionData(snapshot *models.DomainAnswerSnapshot) models.DomainGateCheck {
+	if snapshot == nil {
+		return models.DomainGateCheck{CheckID: "SC5_substitution_data", Status: "fail", Priority: "P2"}
+	}
+	if len(snapshot.Alternatives) > 0 {
+		return models.DomainGateCheck{CheckID: "SC5_substitution_data", Status: "pass", Priority: "P2"}
+	}
+	for _, gap := range snapshot.DataGaps {
+		if gap.GapType == "no_alternatives" {
+			return models.DomainGateCheck{CheckID: "SC5_substitution_data", Status: "pass", Priority: "P2"}
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "SC5_substitution_data",
+		Status:         "fail",
+		Priority:       "P2",
+		GapDescription: "alternatives missing",
+		EnrichmentHint: "Find alternatives or mark explicit no_alternatives gap",
+	}
+}
+
+func checkGeoCoverage(snapshot *models.DomainAnswerSnapshot, minCoverage float64) models.DomainGateCheck {
+	if snapshot == nil || len(snapshot.CriticalNodes) == 0 {
+		return models.DomainGateCheck{CheckID: "SC6_geographic_distribution", Status: "fail", Priority: "P2"}
+	}
+	geoCovered := 0
+	for _, n := range snapshot.CriticalNodes {
+		cp := strings.ToLower(strings.TrimSpace(n.CanonicalPath))
+		if strings.Contains(cp, "/loc/") || strings.Contains(cp, "/geo/") || strings.Contains(cp, "/country/") {
+			geoCovered++
+		}
+	}
+	ratio := float64(geoCovered) / float64(len(snapshot.CriticalNodes))
+	return models.DomainGateCheck{
+		CheckID:        "SC6_geographic_distribution",
+		Status:         ternary(ratio >= minCoverage, "pass", "fail"),
+		Priority:       "P2",
+		GapDescription: fmt.Sprintf("geo_coverage=%.3f threshold=%.3f", ratio, minCoverage),
+		EnrichmentHint: "Link critical nodes with LOCATED_IN/OPERATES_IN",
+	}
+}
+
+func checkRegulatoryEdges(g graphSnapshot) models.DomainGateCheck {
+	n := 0
+	for _, edge := range g.Edges {
+		if edge == nil {
+			continue
+		}
+		if edge.Type == models.DependencyTypeRegulates || edge.Type == models.DependencyTypeControlsAccess || edge.Type == models.DependencyTypeUsesMechanism {
+			n++
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "RE1_regulatory_edges_exist",
+		Status:         ternary(n > 0, "pass", "fail"),
+		Priority:       "P0",
+		GapDescription: fmt.Sprintf("regulatory_edges=%d", n),
+		EnrichmentHint: "Find REGULATES/CONTROLS_ACCESS/USES_MECHANISM edges",
+	}
+}
+
+func checkDecisionPoints(g graphSnapshot) models.DomainGateCheck {
+	n := 0
+	for _, f := range g.NodesByID {
+		if f == nil {
+			continue
+		}
+		if f.Type == models.FragmentTypeDecisionPoint || f.Type == models.FragmentTypeMechanism {
+			n++
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "RE2_decision_points",
+		Status:         ternary(n > 0, "pass", "fail"),
+		Priority:       "P0",
+		GapDescription: fmt.Sprintf("decision_or_mechanism_nodes=%d", n),
+		EnrichmentHint: "Add decision points and mechanisms for regulatory exposure",
+	}
+}
+
+func checkJurisdictionCoverage(facetNodes map[string][]*models.HorizonFragment) models.DomainGateCheck {
+	failed := []string{}
+	for facet, nodes := range facetNodes {
+		ok := false
+		for _, n := range nodes {
+			if n == nil {
+				continue
+			}
+			cp := strings.ToLower(strings.TrimSpace(n.CanonicalPath))
+			if strings.HasPrefix(cp, "/gov/") || strings.Contains(cp, "/regulation/") {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			failed = append(failed, facet)
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "RE3_jurisdiction_coverage",
+		Status:         ternary(len(failed) == 0, "pass", "fail"),
+		Priority:       "P1",
+		GapDescription: fmt.Sprintf("facets_without_jurisdiction=%s", strings.Join(failed, ",")),
+		Affected:       failed,
+		EnrichmentHint: "Add GOV/regulatory nodes by facet",
+	}
+}
+
+func checkMechanismSpecificity(g graphSnapshot) models.DomainGateCheck {
+	missing := []string{}
+	for _, edge := range g.Edges {
+		if edge == nil || edge.Type != models.DependencyTypeRegulates {
+			continue
+		}
+		mechanism := ""
+		if edge.Qualifiers != nil {
+			mechanism = strings.TrimSpace(fmt.Sprintf("%v", edge.Qualifiers["mechanism_type"]))
+		}
+		if mechanism == "" {
+			missing = append(missing, strings.TrimSpace(edge.ID))
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "RE5_mechanism_specificity",
+		Status:         ternary(len(missing) == 0, "pass", "fail"),
+		Priority:       "P2",
+		GapDescription: fmt.Sprintf("edges_without_mechanism_type=%d", len(missing)),
+		Affected:       missing,
+		EnrichmentHint: "Specify mechanism_type on REGULATES edges or add explicit data gap",
+	}
+}
+
+func checkMarketParticipation(g graphSnapshot) models.DomainGateCheck {
+	marketOK := false
+	countByMarket := map[string]int{}
+	for _, edge := range g.Edges {
+		if edge == nil || edge.Type != models.DependencyTypeParticipatesIn {
+			continue
+		}
+		countByMarket[edge.TargetFragmentID]++
+	}
+	for _, c := range countByMarket {
+		if c >= 3 {
+			marketOK = true
+			break
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "CL1_market_participation",
+		Status:         ternary(marketOK, "pass", "fail"),
+		Priority:       "P0",
+		GapDescription: fmt.Sprintf("markets_with_3_participants=%v", marketOK),
+		EnrichmentHint: "Add PARTICIPATES_IN edges from at least 3 organizations per primary market",
+	}
+}
+
+func checkMarketShareData(g graphSnapshot) models.DomainGateCheck {
+	withShare := 0
+	for _, edge := range g.Edges {
+		if edge == nil || edge.Type != models.DependencyTypeParticipatesIn {
+			continue
+		}
+		if edge.Qualifiers != nil {
+			if _, ok := parseFloat(edge.Qualifiers["market_share"]); ok {
+				withShare++
+			}
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "CL2_market_share_data",
+		Status:         ternary(withShare >= 4, "pass", "fail"),
+		Priority:       "P1",
+		GapDescription: fmt.Sprintf("participant_edges_with_market_share=%d", withShare),
+		EnrichmentHint: "Collect market_share qualifiers for top competitors",
+	}
+}
+
+func checkGeoEdges(g graphSnapshot, minCoverage float64) models.DomainGateCheck {
+	if len(g.NodesByID) == 0 {
+		return models.DomainGateCheck{CheckID: "GC1_geographic_edges", Status: "fail", Priority: "P0"}
+	}
+	withGeo := map[string]struct{}{}
+	for _, edge := range g.Edges {
+		if edge == nil {
+			continue
+		}
+		if edge.Type == models.DependencyTypeLocatedIn || edge.Type == models.DependencyTypeOperatesIn {
+			withGeo[edge.SourceFragmentID] = struct{}{}
+			withGeo[edge.TargetFragmentID] = struct{}{}
+		}
+	}
+	coverage := float64(len(withGeo)) / float64(len(g.NodesByID))
+	return models.DomainGateCheck{
+		CheckID:        "GC1_geographic_edges",
+		Status:         ternary(coverage >= minCoverage, "pass", "fail"),
+		Priority:       "P0",
+		GapDescription: fmt.Sprintf("geo_coverage=%.3f threshold=%.3f", coverage, minCoverage),
+		EnrichmentHint: "Add LOCATED_IN/OPERATES_IN edges for scoped entities",
+	}
+}
+
+func checkGeoDiversity(g graphSnapshot) models.DomainGateCheck {
+	regions := map[string]struct{}{}
+	for _, f := range g.NodesByID {
+		if f == nil {
+			continue
+		}
+		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
+		if strings.HasPrefix(cp, "/loc/") {
+			parts := strings.Split(strings.Trim(cp, "/"), "/")
+			if len(parts) >= 2 {
+				regions[parts[1]] = struct{}{}
+			}
+		}
+	}
+	return models.DomainGateCheck{
+		CheckID:        "GC2_geo_diversity",
+		Status:         ternary(len(regions) >= 2, "pass", "fail"),
+		Priority:       "P0",
+		GapDescription: fmt.Sprintf("unique_geo_regions=%d", len(regions)),
+		EnrichmentHint: "Add entities from at least two geographies",
+	}
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func clamp01(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+func parseFloat(v interface{}) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case float32:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case int32:
+		return float64(t), true
+	case string:
+		s := strings.TrimSpace(strings.TrimSuffix(t, "%"))
+		if s == "" {
+			return 0, false
+		}
+		n, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
+func ternary(cond bool, a, b string) string {
+	if cond {
+		return a
+	}
+	return b
+}
+
+func asJSON(v interface{}) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+func shortThesis(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= 180 {
+		return s
+	}
+	return s[:177] + "..."
+}
+
+func extractOriginalQuery(job *models.ScoutingJob) string {
+	if job == nil || job.State == nil {
+		return ""
+	}
+	if v, ok := job.State["originalQuery"].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return strings.TrimSpace(job.UserQuery)
+}
+
+type domainBudgetWarning struct {
+	Title       string
+	Description string
+	UsedUSD     float64
+	CapUSD      float64
+	UsedTokens  int
+	UsagePct    int
+}
+
+func buildDomainBudgetWarning(job *models.ScoutingJob, usedCycles, maxCycles int) *domainBudgetWarning {
+	if job == nil || maxCycles <= 0 || usedCycles < maxCycles {
+		return nil
+	}
+	usagePct := int(math.Round((float64(usedCycles) / float64(maxCycles)) * 100.0))
+	if usagePct < 1 {
+		usagePct = 1
+	}
+	usedUSD, _ := extractStateFloat(job.State,
+		"usedUSD", "spendUSD", "spentUSD", "domainUsedUSD",
+	)
+	capUSD, _ := extractStateFloat(job.State,
+		"capUSD", "budgetCapUSD", "domainBudgetCapUSD", "budgetUSD",
+	)
+	usedTokens, _ := extractStateInt(job.State,
+		"usedTokens", "usageTokens", "outputTokens", "totalTokens", "domainUsedTokens",
+	)
+
+	description := fmt.Sprintf("Enrichment cycle budget is near cap (%d/%d cycles).", usedCycles, maxCycles)
+	if capUSD > 0 && usedUSD > 0 {
+		description = fmt.Sprintf("Enrichment budget is near cap (%.2f / %.2f USD).", usedUSD, capUSD)
+	}
+	return &domainBudgetWarning{
+		Title:       fmt.Sprintf("Budget warning: %d%% used", usagePct),
+		Description: description,
+		UsedUSD:     usedUSD,
+		CapUSD:      capUSD,
+		UsedTokens:  usedTokens,
+		UsagePct:    usagePct,
+	}
+}
+
+func extractStateFloat(state map[string]interface{}, keys ...string) (float64, bool) {
+	if len(state) == 0 || len(keys) == 0 {
+		return 0, false
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if raw, ok := state[key]; ok {
+			if v, ok2 := parseFloat(raw); ok2 {
+				return v, true
+			}
+		}
+	}
+	if rawBudget, ok := state["budget"].(map[string]interface{}); ok && len(rawBudget) > 0 {
+		for _, key := range keys {
+			if key == "" {
+				continue
+			}
+			if raw, ok := rawBudget[key]; ok {
+				if v, ok2 := parseFloat(raw); ok2 {
+					return v, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+func extractStateInt(state map[string]interface{}, keys ...string) (int, bool) {
+	if v, ok := extractStateFloat(state, keys...); ok {
+		return int(math.Round(v)), true
+	}
+	return 0, false
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func toInt(v interface{}) int {
+	switch t := v.(type) {
+	case int:
+		return t
+	case int32:
+		return int(t)
+	case int64:
+		return int(t)
+	case float32:
+		return int(t)
+	case float64:
+		return int(t)
+	case string:
+		t = strings.TrimSpace(t)
+		if t == "" {
+			return 0
+		}
+		if i, err := strconv.Atoi(t); err == nil {
+			return i
+		}
+		if f, err := strconv.ParseFloat(t, 64); err == nil {
+			return int(f)
+		}
+		return 0
+	default:
+		return 0
+	}
+}

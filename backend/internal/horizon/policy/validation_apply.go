@@ -2,6 +2,7 @@ package policy
 
 import (
 	"log"
+	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
@@ -16,19 +17,21 @@ type ValidationDecisionHandlers struct {
 }
 
 // ApplyValidationDecisionBestEffort applies validation policy decisions consistently.
-// It never blocks execution; reject is treated as a warning.
+// It never blocks execution; quarantine_soft remains non-blocking in best-effort runtime.
 func ApplyValidationDecisionBestEffort(logPrefix string, decision PolicyDecision, handlers ValidationDecisionHandlers) {
+	decision = NormalizeValidationDecision(decision)
+
 	switch decision.Action {
-	case "reject":
+	case ActionQuarantineSoft:
 		reason, _ := decision.Params["reason"].(string)
 		if reason == "" {
-			reason = "policy reject"
+			reason = "policy quarantine_soft"
 		}
 		penalty := 0.2
 		if p, ok := decision.Params["penalty"].(float64); ok && p > 0 {
 			penalty = p
 		}
-		log.Printf("%s WARNING: ValidationPolicy would reject (non-blocking): %s", logPrefix, reason)
+		log.Printf("%s QUARANTINE_SOFT by ValidationPolicy (non-blocking): %.2f, reason: %s", logPrefix, penalty, reason)
 		if handlers.Warn != nil {
 			handlers.Warn(reason)
 		}
@@ -38,7 +41,7 @@ func ApplyValidationDecisionBestEffort(logPrefix string, decision PolicyDecision
 		if handlers.SetPolicyStatus != nil {
 			handlers.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, penalty)
 		}
-	case "reverse":
+	case ActionReverse:
 		shouldReverse, _ := decision.Params["shouldReverse"].(bool)
 		if shouldReverse {
 			log.Printf("%s REVERSING by ValidationPolicy", logPrefix)
@@ -50,7 +53,7 @@ func ApplyValidationDecisionBestEffort(logPrefix string, decision PolicyDecision
 				handlers.SetPolicyStatus(horizonmodels.PolicyStatusAutoFixed, reason, 0)
 			}
 		}
-	case "auto_fix":
+	case ActionAutoFix:
 		reason, _ := decision.Params["reason"].(string)
 		if newType, ok := decision.Params["newType"].(string); ok && newType != "" && handlers.RewriteType != nil {
 			handlers.RewriteType(newType, reason)
@@ -66,20 +69,19 @@ func ApplyValidationDecisionBestEffort(logPrefix string, decision PolicyDecision
 		if handlers.SetPolicyStatus != nil {
 			handlers.SetPolicyStatus(horizonmodels.PolicyStatusAutoFixed, reason, penalty)
 		}
-	case "penalty":
-		penalty, _ := decision.Params["penalty"].(float64)
+	case ActionRewriteType:
 		reason, _ := decision.Params["reason"].(string)
-		if penalty < 0 {
-			penalty = 0
+		if newType, ok := decision.Params["newType"].(string); ok && strings.TrimSpace(newType) != "" && handlers.RewriteType != nil {
+			handlers.RewriteType(newType, reason)
 		}
-		log.Printf("%s PENALTY by ValidationPolicy: %.2f, reason: %s", logPrefix, penalty, reason)
-		if handlers.ApplyPenalty != nil && penalty > 0 {
+		penalty, _ := decision.Params["penalty"].(float64)
+		if penalty > 0 && handlers.ApplyPenalty != nil {
 			handlers.ApplyPenalty(penalty, reason)
 		}
 		if handlers.SetPolicyStatus != nil {
-			handlers.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, reason, penalty)
+			handlers.SetPolicyStatus(horizonmodels.PolicyStatusAutoFixed, reason, penalty)
 		}
-	case "allow_with_penalty":
+	case ActionAllowWithPenalty:
 		penalty, _ := decision.Params["penalty"].(float64)
 		reason, _ := decision.Params["reason"].(string)
 		if penalty < 0 {
@@ -92,23 +94,7 @@ func ApplyValidationDecisionBestEffort(logPrefix string, decision PolicyDecision
 		if handlers.SetPolicyStatus != nil {
 			handlers.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, reason, penalty)
 		}
-	case "quarantine":
-		penalty, _ := decision.Params["penalty"].(float64)
-		reason, _ := decision.Params["reason"].(string)
-		if penalty <= 0 {
-			penalty = 0.2
-		}
-		log.Printf("%s QUARANTINED by ValidationPolicy: %.2f, reason: %s", logPrefix, penalty, reason)
-		if handlers.ApplyPenalty != nil {
-			handlers.ApplyPenalty(penalty, reason)
-		}
-		if handlers.Warn != nil && reason != "" {
-			handlers.Warn(reason)
-		}
-		if handlers.SetPolicyStatus != nil {
-			handlers.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, penalty)
-		}
-	case "allow":
+	case ActionAllow:
 		log.Printf("%s ALLOWED by ValidationPolicy", logPrefix)
 		if handlers.SetPolicyStatus != nil {
 			handlers.SetPolicyStatus(horizonmodels.PolicyStatusClean, "", 0)

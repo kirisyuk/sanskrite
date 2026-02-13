@@ -447,6 +447,36 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             text = 'Domain overlay';
             humanReadable = { title: 'Domain overlay' };
           }
+        } else if (type.startsWith('horizon.domain.contract.')) {
+          if (type.includes('.failed') || type.includes('.fallback')) {
+            icon = 'error';
+          } else if (type.includes('.completed') || type.includes('.passed')) {
+            icon = 'success';
+          } else {
+            icon = 'info';
+          }
+          const hr = data?.humanReadable;
+          if (hr && typeof hr?.title === 'string' && hr.title.trim()) {
+            const title = hr.title.trim();
+            const description =
+              typeof hr?.description === 'string' ? hr.description.trim() : '';
+            text = description ? `${title} — ${short(description)}` : title;
+            humanReadable = {
+              title,
+              description: description ? short(description) : undefined,
+              entityName:
+                typeof hr?.entityName === 'string' ? hr.entityName : undefined,
+            };
+          } else {
+            const raw = String(type || '').replace('horizon.domain.contract.', '');
+            const title = raw
+              ? raw
+                  .replace(/\./g, ' ')
+                  .replace(/\b\w/g, (c) => c.toUpperCase())
+              : 'Domain contract';
+            text = title;
+            humanReadable = { title };
+          }
         } else if (type === 'horizon.scout.job.log') {
           const rawLine = typeof data?.line === 'string' ? data.line : '';
           const level =

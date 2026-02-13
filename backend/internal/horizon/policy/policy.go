@@ -2,8 +2,6 @@ package policy
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -73,28 +71,72 @@ func NewPolicyExecutor(policy Policy, telemetry TelemetryWriter, llmExecutor LLM
 
 // Execute executes the policy with telemetry recording.
 func (e *PolicyExecutor) Execute(ctx context.Context, input PolicyInput) (PolicyDecision, error) {
-	logPrefix := fmt.Sprintf("[PolicyExecutor:%s]", e.policy.Name())
 	start := time.Now()
-
-	log.Printf("%s Execute called: kind=%s", logPrefix, input.Kind)
-	if input.Fragment != nil {
-		log.Printf("%s Input fragment: id=%s, type=%s, canonicalPath=%s",
-			logPrefix, input.Fragment.ID, input.Fragment.Type, input.Fragment.CanonicalPath)
+	fields := map[string]interface{}{
+		"trace_id":       "na",
+		"tenant_id":      "na",
+		"job_id":         "na",
+		"action":         "",
+		"policy_status":  "na",
+		"policy_reason":  "",
+		"policy_penalty": 0,
+		"decision_path":  "executor",
+		"confidence":     0,
 	}
 	if input.Edge != nil {
-		log.Printf("%s Input edge: id=%s, sourceID=%s, targetID=%s, type=%s",
-			logPrefix, input.Edge.ID, input.Edge.SourceFragmentID, input.Edge.TargetFragmentID, input.Edge.Type)
+		fields["edge_id"] = input.Edge.ID
+		fields["source_id"] = input.Edge.SourceFragmentID
+		fields["target_id"] = input.Edge.TargetFragmentID
+		fields["relation_type"] = input.Edge.Type
 	}
-	if len(input.Context) > 0 {
-		log.Printf("%s Input context: %+v", logPrefix, input.Context)
+	if input.Fragment != nil {
+		fields["fragment_id"] = input.Fragment.ID
+		fields["source_type"] = input.Fragment.Type
+		fields["origin_mode"] = input.Fragment.Provenance.OriginMode
+		fields["tenant_id"] = input.Fragment.TenantID
 	}
+	if v, ok := input.Context["tenantID"].(string); ok && v != "" {
+		fields["tenant_id"] = v
+	}
+	if v, ok := input.Context["tenantId"].(string); ok && v != "" {
+		fields["tenant_id"] = v
+	}
+	if v, ok := input.Context["jobID"].(string); ok && v != "" {
+		fields["job_id"] = v
+	}
+	if v, ok := input.Context["jobId"].(string); ok && v != "" {
+		fields["job_id"] = v
+	}
+	if v, ok := input.Context["sourceType"].(string); ok && v != "" {
+		fields["source_type"] = v
+	}
+	if v, ok := input.Context["targetType"].(string); ok && v != "" {
+		fields["target_type"] = v
+	}
+	if v, ok := input.Context["relationType"].(string); ok && v != "" {
+		fields["relation_type"] = v
+	}
+	LogPolicyEvent(e.policy.Name(), PolicyLogStageInput, fields)
 
 	// Try deterministic rules first
 	decision, err := e.policy.Decide(ctx, input)
 	if err != nil {
-		log.Printf("%s ERROR: policy.Decide failed: %v", logPrefix, err)
 		decision.LatencyMs = int(time.Since(start).Milliseconds())
 		decision.DecisionPath = "rule:error"
+		LogPolicyEvent(e.policy.Name(), PolicyLogStageError, map[string]interface{}{
+			"trace_id":       fields["trace_id"],
+			"tenant_id":      fields["tenant_id"],
+			"job_id":         fields["job_id"],
+			"fragment_id":    fields["fragment_id"],
+			"edge_id":        fields["edge_id"],
+			"action":         decision.Action,
+			"policy_status":  "na",
+			"policy_reason":  err.Error(),
+			"policy_penalty": 0,
+			"decision_path":  decision.DecisionPath,
+			"error_class":    "policy_decide_error",
+			"confidence":     decision.Confidence,
+		})
 		if e.telemetry != nil {
 			_ = e.telemetry.Record(decision, e.policy.Name())
 		}
@@ -104,17 +146,40 @@ func (e *PolicyExecutor) Execute(ctx context.Context, input PolicyInput) (Policy
 	if decision.DecisionPath != "llm:fallback" {
 		// Rule-based decision
 		decision.LatencyMs = int(time.Since(start).Milliseconds())
-		log.Printf("%s Decision: action=%s, path=%s, confidence=%.2f, latency=%dms",
-			logPrefix, decision.Action, decision.DecisionPath, decision.Confidence, decision.LatencyMs)
-		if decision.RuleID != nil {
-			log.Printf("%s Rule ID: %s", logPrefix, *decision.RuleID)
-		}
-		if len(decision.Params) > 0 {
-			log.Printf("%s Decision params: %+v", logPrefix, decision.Params)
-		}
+		reason := decisionReason(decision, "")
+		penalty, _ := decision.Params["penalty"].(float64)
+		LogPolicyEvent(e.policy.Name(), PolicyLogStageDecision, map[string]interface{}{
+			"trace_id":       fields["trace_id"],
+			"tenant_id":      fields["tenant_id"],
+			"job_id":         fields["job_id"],
+			"fragment_id":    fields["fragment_id"],
+			"edge_id":        fields["edge_id"],
+			"source_type":    fields["source_type"],
+			"target_type":    fields["target_type"],
+			"relation_type":  fields["relation_type"],
+			"action":         decision.Action,
+			"policy_status":  "na",
+			"policy_reason":  reason,
+			"policy_penalty": penalty,
+			"decision_path":  decision.DecisionPath,
+			"rule_id":        decision.RuleID,
+			"confidence":     decision.Confidence,
+			"origin_mode":    fields["origin_mode"],
+		})
 		if e.telemetry != nil {
 			if err := e.telemetry.Record(decision, e.policy.Name()); err != nil {
-				log.Printf("%s ERROR: failed to record telemetry: %v", logPrefix, err)
+				LogPolicyEvent(e.policy.Name(), PolicyLogStageError, map[string]interface{}{
+					"trace_id":       fields["trace_id"],
+					"tenant_id":      fields["tenant_id"],
+					"job_id":         fields["job_id"],
+					"action":         "telemetry_record",
+					"policy_status":  "na",
+					"policy_reason":  err.Error(),
+					"policy_penalty": 0,
+					"decision_path":  decision.DecisionPath,
+					"error_class":    "telemetry_record_error",
+					"confidence":     decision.Confidence,
+				})
 			}
 		}
 		return decision, nil
@@ -122,33 +187,110 @@ func (e *PolicyExecutor) Execute(ctx context.Context, input PolicyInput) (Policy
 
 	// LLM fallback (if executor is available)
 	if e.llmExecutor != nil {
-		log.Printf("%s Attempting LLM fallback", logPrefix)
+		LogPolicyEvent(e.policy.Name(), PolicyLogStageFallback, map[string]interface{}{
+			"trace_id":       fields["trace_id"],
+			"tenant_id":      fields["tenant_id"],
+			"job_id":         fields["job_id"],
+			"action":         "llm_fallback",
+			"policy_status":  "na",
+			"policy_reason":  "",
+			"policy_penalty": 0,
+			"decision_path":  "llm:fallback",
+			"confidence":     decision.Confidence,
+		})
 		prompt := e.buildLLMPrompt(input)
 		llmDecision, tokens, err := e.llmExecutor.Execute(ctx, prompt, input)
 		if err == nil {
 			llmDecision.DecisionPath = "llm:fallback"
 			llmDecision.LatencyMs = int(time.Since(start).Milliseconds())
 			llmDecision.LLMTokens = &tokens
-			log.Printf("%s LLM decision: action=%s, confidence=%.2f, tokens=%d, latency=%dms",
-				logPrefix, llmDecision.Action, llmDecision.Confidence, tokens, llmDecision.LatencyMs)
+			reason := decisionReason(llmDecision, "")
+			penalty, _ := llmDecision.Params["penalty"].(float64)
+			LogPolicyEvent(e.policy.Name(), PolicyLogStageDecision, map[string]interface{}{
+				"trace_id":       fields["trace_id"],
+				"tenant_id":      fields["tenant_id"],
+				"job_id":         fields["job_id"],
+				"fragment_id":    fields["fragment_id"],
+				"edge_id":        fields["edge_id"],
+				"source_type":    fields["source_type"],
+				"target_type":    fields["target_type"],
+				"relation_type":  fields["relation_type"],
+				"action":         llmDecision.Action,
+				"policy_status":  "na",
+				"policy_reason":  reason,
+				"policy_penalty": penalty,
+				"decision_path":  llmDecision.DecisionPath,
+				"confidence":     llmDecision.Confidence,
+				"origin_mode":    fields["origin_mode"],
+			})
 			if e.telemetry != nil {
 				if err := e.telemetry.Record(llmDecision, e.policy.Name()); err != nil {
-					log.Printf("%s ERROR: failed to record LLM telemetry: %v", logPrefix, err)
+					LogPolicyEvent(e.policy.Name(), PolicyLogStageError, map[string]interface{}{
+						"trace_id":       fields["trace_id"],
+						"tenant_id":      fields["tenant_id"],
+						"job_id":         fields["job_id"],
+						"action":         "llm_telemetry_record",
+						"policy_status":  "na",
+						"policy_reason":  err.Error(),
+						"policy_penalty": 0,
+						"decision_path":  llmDecision.DecisionPath,
+						"error_class":    "telemetry_record_error",
+						"confidence":     llmDecision.Confidence,
+					})
 				}
 			}
 			return llmDecision, nil
 		}
-		log.Printf("%s ERROR: LLM fallback failed: %v", logPrefix, err)
+		LogPolicyEvent(e.policy.Name(), PolicyLogStageError, map[string]interface{}{
+			"trace_id":       fields["trace_id"],
+			"tenant_id":      fields["tenant_id"],
+			"job_id":         fields["job_id"],
+			"action":         "llm_fallback",
+			"policy_status":  "na",
+			"policy_reason":  err.Error(),
+			"policy_penalty": 0,
+			"decision_path":  "llm:fallback",
+			"error_class":    "llm_fallback_error",
+			"confidence":     decision.Confidence,
+		})
 	}
 
 	// Fallback to default decision if both rule and LLM fail
 	decision.LatencyMs = int(time.Since(start).Milliseconds())
 	decision.DecisionPath = "rule:default"
-	log.Printf("%s Using default decision: action=%s, confidence=%.2f",
-		logPrefix, decision.Action, decision.Confidence)
+	reason := decisionReason(decision, "default_decision")
+	penalty, _ := decision.Params["penalty"].(float64)
+	LogPolicyEvent(e.policy.Name(), PolicyLogStageResult, map[string]interface{}{
+		"trace_id":       fields["trace_id"],
+		"tenant_id":      fields["tenant_id"],
+		"job_id":         fields["job_id"],
+		"fragment_id":    fields["fragment_id"],
+		"edge_id":        fields["edge_id"],
+		"source_type":    fields["source_type"],
+		"target_type":    fields["target_type"],
+		"relation_type":  fields["relation_type"],
+		"action":         decision.Action,
+		"policy_status":  "na",
+		"policy_reason":  reason,
+		"policy_penalty": penalty,
+		"decision_path":  decision.DecisionPath,
+		"confidence":     decision.Confidence,
+		"origin_mode":    fields["origin_mode"],
+	})
 	if e.telemetry != nil {
 		if err := e.telemetry.Record(decision, e.policy.Name()); err != nil {
-			log.Printf("%s ERROR: failed to record default telemetry: %v", logPrefix, err)
+			LogPolicyEvent(e.policy.Name(), PolicyLogStageError, map[string]interface{}{
+				"trace_id":       fields["trace_id"],
+				"tenant_id":      fields["tenant_id"],
+				"job_id":         fields["job_id"],
+				"action":         "default_telemetry_record",
+				"policy_status":  "na",
+				"policy_reason":  err.Error(),
+				"policy_penalty": 0,
+				"decision_path":  decision.DecisionPath,
+				"error_class":    "telemetry_record_error",
+				"confidence":     decision.Confidence,
+			})
 		}
 	}
 	return decision, err

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -41,27 +42,27 @@ import (
 // 8. Deduplicates resulting edges
 
 var (
-	projectID          = flag.String("project", "", "GCP project ID (required)")
-	apply              = flag.Bool("apply", false, "Apply changes (default: dry-run)")
-	dryRun             = flag.Bool("dry-run", false, "Force dry-run even if --apply is set")
-	tenantID           = flag.String("tenant", "global", "Tenant ID (default: global)")
-	verbose            = flag.Bool("verbose", false, "Verbose logging")
-	typeFilter         = flag.String("type", "", "Filter by fragment type (GEO_REGION, ORGANIZATION, FACILITY, etc.)")
-	maxFragments       = flag.Int("max-fragments", 0, "Stop after loading this many fragments (0 = no limit)")
-	unionClusters      = flag.Bool("union-clusters", true, "Build transitive clusters via union-find across signals (recommended; helps catch chain duplicates). Set false to skip aliasPath-based transitive clustering.")
-	skipVertexSync     = flag.Bool("skip-vertex-sync", false, "Skip Vertex AI Search sync (faster, run bulk sync separately)")
-	skipEdgePass       = flag.Bool("skip-edge-pass", false, "Skip global edge direction fix + symmetric normalization + edge dedup pass (safer for targeted fragment-only dedup runs)")
-	pageSize           = flag.Int("page-size", 500, "Firestore page size for loading fragments (pagination). Lower = safer, higher = fewer round-trips")
-	startAfterDocID    = flag.String("start-after", "", "Resume cursor: start loading fragments after this Firestore document ID (__name__)")
-	pageTimeoutSec     = flag.Int("page-timeout-s", 90, "Timeout in seconds for each Firestore page fetch while loading fragments (0 disables)")
-	enableProductAlias = flag.Bool("enable-product-alias", true, "Enable PRODUCT alias clustering (model/SKU heuristic). Default ON (requested for product-heavy dedup runs).")
-	enableOrgNameOnly  = flag.Bool("enable-org-name-only", false, "Enable ORGANIZATION name-only clustering (shortName/label[en]). Default OFF (too many false merges).")
-	enableOrgFuzzyName = flag.Bool("enable-org-fuzzy-name", false, "Enable ORGANIZATION fuzzy-ish name clustering (normalized legalName + stub-rescue normalized label/legal). Default OFF.")
+	projectID                 = flag.String("project", "", "GCP project ID (required)")
+	apply                     = flag.Bool("apply", false, "Apply changes (default: dry-run)")
+	dryRun                    = flag.Bool("dry-run", false, "Force dry-run even if --apply is set")
+	tenantID                  = flag.String("tenant", "global", "Tenant ID (default: global)")
+	verbose                   = flag.Bool("verbose", false, "Verbose logging")
+	typeFilter                = flag.String("type", "", "Filter by fragment type (GEO_REGION, ORGANIZATION, FACILITY, etc.)")
+	maxFragments              = flag.Int("max-fragments", 0, "Stop after loading this many fragments (0 = no limit)")
+	unionClusters             = flag.Bool("union-clusters", true, "Build transitive clusters via union-find across signals (recommended; helps catch chain duplicates). Set false to skip aliasPath-based transitive clustering.")
+	skipVertexSync            = flag.Bool("skip-vertex-sync", false, "Skip Vertex AI Search sync (faster, run bulk sync separately)")
+	skipEdgePass              = flag.Bool("skip-edge-pass", false, "Skip global edge direction fix + symmetric normalization + edge dedup pass (safer for targeted fragment-only dedup runs)")
+	pageSize                  = flag.Int("page-size", 500, "Firestore page size for loading fragments (pagination). Lower = safer, higher = fewer round-trips")
+	startAfterDocID           = flag.String("start-after", "", "Resume cursor: start loading fragments after this Firestore document ID (__name__)")
+	pageTimeoutSec            = flag.Int("page-timeout-s", 90, "Timeout in seconds for each Firestore page fetch while loading fragments (0 disables)")
+	enableProductAlias        = flag.Bool("enable-product-alias", true, "Enable PRODUCT alias clustering (model/SKU heuristic). Default ON (requested for product-heavy dedup runs).")
+	enableOrgNameOnly         = flag.Bool("enable-org-name-only", false, "Enable ORGANIZATION name-only clustering (shortName/label[en]). Default OFF (too many false merges).")
+	enableOrgFuzzyName        = flag.Bool("enable-org-fuzzy-name", false, "Enable ORGANIZATION fuzzy-ish name clustering (normalized legalName + stub-rescue normalized label/legal). Default OFF.")
 	skipOrgLegacyCountryCheck = flag.Bool("skip-org-legacy-country-check", false, "Skip LOCATED_IN country check for legacy /org/{company} → /org/{geo}/{company}-{legalForm} (faster, higher risk).")
-	fixEdgesOnly       = flag.Bool("fix-edges-only", false, "Only fix/normalize edges (direction + symmetric normalization + dedup). Skips fragment dedup/merge even if duplicates are found.")
-	canonicalizeEdges  = flag.Bool("edge-canonicalize", true, "Rewrite mis-modeled edges into canonical types (e.g., MARKET OWNS MARKET -> HAS_SUBMARKET, ORG DEPENDS_ON MARKET -> PARTICIPATES_IN).")
-	skipGeoNames       = flag.Bool("skip-geonames", false, "Skip GeoNames-based /loc normalization (enabled by default).")
-	marketCleanupOnly  = flag.Bool("market-cleanup-only", false, "Only run Step 7 (market geo-mismatch cleanup + domain normalization). Skips all fragment dedup and edge fixing.")
+	fixEdgesOnly              = flag.Bool("fix-edges-only", false, "Only fix/normalize edges (direction + symmetric normalization + dedup). Skips fragment dedup/merge even if duplicates are found.")
+	canonicalizeEdges         = flag.Bool("edge-canonicalize", true, "Rewrite mis-modeled edges into canonical types (e.g., MARKET OWNS MARKET -> HAS_SUBMARKET, ORG DEPENDS_ON MARKET -> PARTICIPATES_IN).")
+	skipGeoNames              = flag.Bool("skip-geonames", false, "Skip GeoNames-based /loc normalization (enabled by default).")
+	marketCleanupOnly         = flag.Bool("market-cleanup-only", false, "Only run Step 7 (market geo-mismatch cleanup + domain normalization). Skips all fragment dedup and edge fixing.")
 )
 
 // Used to print a reliable resume cursor on Ctrl+C / SIGTERM and on load failures.
@@ -77,18 +78,18 @@ type DuplicateCluster struct {
 }
 
 type Stats struct {
-	TotalFragments             int
-	ClustersFound              int
-	FragmentsMerged            int
-	FragmentsDeleted           int
-	PathsFixed                 int
-	EdgesReassigned            int
-	EdgesDeleted               int
-	EdgesDeduplicated          int
-	EdgesDirectionFixed        int
-	EdgesCanonicalized         int
-	MarketGeoMismatchCleaned   int
-	MarketDomainNormalized     int
+	TotalFragments           int
+	ClustersFound            int
+	FragmentsMerged          int
+	FragmentsDeleted         int
+	PathsFixed               int
+	EdgesReassigned          int
+	EdgesDeleted             int
+	EdgesDeduplicated        int
+	EdgesDirectionFixed      int
+	EdgesCanonicalized       int
+	MarketGeoMismatchCleaned int
+	MarketDomainNormalized   int
 }
 
 // =============================================================================
@@ -339,6 +340,165 @@ func canonicalNamespace(f *models.HorizonFragment) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(parts[0]))
+}
+
+func canonicalNamespaceFamilyFromPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if parts := canonicalPartsFromPath(path); parts != nil {
+		ns := strings.ToLower(strings.TrimSpace(parts.Namespace))
+		switch ns {
+		case "gov":
+			return "org"
+		case "region":
+			return "loc"
+		default:
+			return ns
+		}
+	}
+	if !strings.HasPrefix(path, "/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	ns := strings.ToLower(strings.TrimSpace(parts[0]))
+	switch ns {
+	case "gov":
+		return "org"
+	case "region":
+		return "loc"
+	default:
+		return ns
+	}
+}
+
+func expectedNamespaceFamilyForType(t models.FragmentType) string {
+	switch t {
+	case models.FragmentTypeOrganization:
+		return "org"
+	case models.FragmentTypeFacility:
+		return "fac"
+	case models.FragmentTypeGeoRegion:
+		return "loc"
+	case models.FragmentTypeProduct:
+		return "product"
+	case models.FragmentTypePerson:
+		return "person"
+	case models.FragmentTypeMediaChannel:
+		return "media"
+	case models.FragmentTypeMarket:
+		return "market"
+	case models.FragmentTypeDecisionPoint:
+		return "decision"
+	case models.FragmentTypeMechanism:
+		return "mechanism"
+	case models.FragmentTypeProgram:
+		return "program"
+	case models.FragmentTypeDomain:
+		return "domain"
+	case models.FragmentTypeDeposit:
+		return "deposit"
+	case models.FragmentTypeCommunity:
+		return "community"
+	case models.FragmentTypeEvent:
+		return "event"
+	case models.FragmentTypeSphere:
+		return "sphere"
+	case models.FragmentTypeSupplyLink:
+		return "supply-link"
+	default:
+		return ""
+	}
+}
+
+func fragmentNamespaceFamilyForDedup(f *models.HorizonFragment) string {
+	if f == nil {
+		return ""
+	}
+	if fam := canonicalNamespaceFamilyFromPath(f.CanonicalPath); fam != "" {
+		return fam
+	}
+	return expectedNamespaceFamilyForType(f.Type)
+}
+
+func isTypePathCompatibleForDedup(f *models.HorizonFragment) bool {
+	if f == nil {
+		return false
+	}
+	expected := expectedNamespaceFamilyForType(f.Type)
+	if expected == "" {
+		return true
+	}
+	actual := canonicalNamespaceFamilyFromPath(f.CanonicalPath)
+	if actual == "" {
+		return true
+	}
+	return actual == expected
+}
+
+func formatFamilyCounts(families map[string][]*models.HorizonFragment) string {
+	if len(families) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(families))
+	for fam, frs := range families {
+		name := fam
+		if strings.TrimSpace(name) == "" {
+			name = "unknown"
+		}
+		parts = append(parts, fmt.Sprintf("%s=%d", name, len(frs)))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+// filterClusterByNamespaceFamily enforces same canonical namespace family inside a dedup cluster.
+// This avoids unsafe merges like /product/* with /deposit/* or /person/* with /org/*.
+func filterClusterByNamespaceFamily(fragments []*models.HorizonFragment) ([]*models.HorizonFragment, bool, string) {
+	if len(fragments) <= 1 {
+		return fragments, false, ""
+	}
+
+	byFamily := make(map[string][]*models.HorizonFragment)
+	for _, f := range fragments {
+		if f == nil || strings.TrimSpace(f.ID) == "" {
+			continue
+		}
+		fam := fragmentNamespaceFamilyForDedup(f)
+		if fam == "" {
+			fam = "unknown"
+		}
+		byFamily[fam] = append(byFamily[fam], f)
+	}
+	if len(byFamily) <= 1 {
+		return fragments, false, ""
+	}
+
+	// Keep only the dominant family when unambiguous; otherwise skip the cluster.
+	bestFamily := ""
+	bestCount := 0
+	tied := false
+	for fam, frs := range byFamily {
+		if len(frs) > bestCount {
+			bestFamily = fam
+			bestCount = len(frs)
+			tied = false
+			continue
+		}
+		if len(frs) == bestCount {
+			tied = true
+		}
+	}
+
+	counts := formatFamilyCounts(byFamily)
+	if bestCount <= 1 || tied {
+		return nil, true, fmt.Sprintf("mixed_namespace_family_ambiguous(%s)", counts)
+	}
+	return byFamily[bestFamily], true, fmt.Sprintf("mixed_namespace_family_filtered(keep=%s;%s)", bestFamily, counts)
 }
 
 func extractOrgLegalForm(f *models.HorizonFragment) string {
@@ -698,7 +858,7 @@ func main() {
 	legalNameIndex := make(map[string][]*models.HorizonFragment)              // type:legalName -> fragments
 	labelENIndex := make(map[string][]*models.HorizonFragment)                // type:label_en -> fragments (Tier 2)
 	normalizedLegalIndex := make(map[string][]*models.HorizonFragment)        // type:normalized_legal -> fragments
-	normalizedLegalNAIndex := make(map[string][]*models.HorizonFragment)     // type:ns:na:normalized -> ORG fragments with unknown jurisdiction (for cross-match into iso2-scoped clusters)
+	normalizedLegalNAIndex := make(map[string][]*models.HorizonFragment)      // type:ns:na:normalized -> ORG fragments with unknown jurisdiction (for cross-match into iso2-scoped clusters)
 	orgNormalizedNameIndex := make(map[string][]*models.HorizonFragment)      // type:normalized(label/legal) -> org fragments (LOW-signal stub rescue)
 	facilityNormalizedNameIndex := make(map[string][]*models.HorizonFragment) // facility_key -> facility fragments (normalized name; scoped by /fac/{org}/)
 	geoCityIndex := make(map[string][]*models.HorizonFragment)                // city_name -> geo fragments
@@ -707,6 +867,16 @@ func main() {
 	personPhoneticIndex := make(map[string][]*models.HorizonFragment)         // phonetic_key -> person fragments (catches Tahnoon/Tahnoun, Khalid/Halid)
 
 	for _, f := range fragments {
+		if f == nil {
+			continue
+		}
+		if !isTypePathCompatibleForDedup(f) {
+			if *verbose {
+				log.Printf("  SKIP indexing (type/path mismatch): id=%s type=%s path=%s", f.ID, f.Type, f.CanonicalPath)
+			}
+			continue
+		}
+
 		// Index by Wikidata ID
 		if wikidataID := extractWikidataID(f); wikidataID != "" {
 			wikidataIndex[wikidataID] = append(wikidataIndex[wikidataID], f)
@@ -1486,8 +1656,8 @@ func main() {
 		start := time.Now()
 		checkedLegacy := 0
 		// Index by base company name (without legal form)
-		legacyBaseNameIndex := make(map[string][]*models.HorizonFragment)       // baseName -> legacy /org/{company} fragments
-		canonicalBaseNameIndex := make(map[string][]*models.HorizonFragment)    // baseName:iso2 -> canonical /org/{geo}/{company}-{legalForm} fragments
+		legacyBaseNameIndex := make(map[string][]*models.HorizonFragment)    // baseName -> legacy /org/{company} fragments
+		canonicalBaseNameIndex := make(map[string][]*models.HorizonFragment) // baseName:iso2 -> canonical /org/{geo}/{company}-{legalForm} fragments
 
 		for _, f := range fragments {
 			if f == nil {
@@ -1615,6 +1785,7 @@ func main() {
 	log.Printf("  Found %d orgLegacyBaseName-based clusters", orgLegacyBaseNameClusters)
 
 	// Priority 1: Wikidata ID matches (highest confidence)
+	wikidataClusters := 0
 	for wikidataID, frags := range wikidataIndex {
 		if len(frags) > 1 {
 			var unprocessed []*models.HorizonFragment
@@ -1634,10 +1805,11 @@ func main() {
 				for _, f := range unprocessed {
 					processedFragmentIDs[f.ID] = true
 				}
+				wikidataClusters++
 			}
 		}
 	}
-	log.Printf("  Found %d Wikidata-based clusters", len(clusters))
+	log.Printf("  Found %d Wikidata-based clusters", wikidataClusters)
 
 	// Priority 2: ShortName matches (same type)
 	// CAUTION: For GEO_REGION, only group if same country or at least one has non-canonical path
@@ -1655,6 +1827,17 @@ func main() {
 				fragType := unprocessed[0].Type
 				if fragType == models.FragmentTypeGeoRegion {
 					unprocessed = filterGeoByCountry(unprocessed)
+				} else if fragType == models.FragmentTypeMarket {
+					// MARKET name-only matches are very noisy across geos/domains.
+					// Keep only scope-consistent groups; otherwise skip.
+					filtered, skip, reason := filterMarketByScope(unprocessed)
+					if skip {
+						if *verbose {
+							log.Printf("  SKIP MARKET cluster (shortName): key=%s reason=%s", key, reason)
+						}
+						continue
+					}
+					unprocessed = filtered
 				}
 			}
 			if len(unprocessed) > 1 {
@@ -1698,6 +1881,15 @@ func main() {
 				fragType := unprocessed[0].Type
 				if fragType == models.FragmentTypeGeoRegion {
 					unprocessed = filterGeoByCountry(unprocessed)
+				} else if fragType == models.FragmentTypeMarket {
+					filtered, skip, reason := filterMarketByScope(unprocessed)
+					if skip {
+						if *verbose {
+							log.Printf("  SKIP MARKET cluster (legalName): key=%s reason=%s", key, reason)
+						}
+						continue
+					}
+					unprocessed = filtered
 				}
 			}
 			if len(unprocessed) > 1 {
@@ -1741,6 +1933,15 @@ func main() {
 				fragType := unprocessed[0].Type
 				if fragType == models.FragmentTypeGeoRegion {
 					unprocessed = filterGeoByCountry(unprocessed)
+				} else if fragType == models.FragmentTypeMarket {
+					filtered, skip, reason := filterMarketByScope(unprocessed)
+					if skip {
+						if *verbose {
+							log.Printf("  SKIP MARKET cluster (labelEN): key=%s reason=%s", key, reason)
+						}
+						continue
+					}
+					unprocessed = filtered
 				}
 			}
 			if len(unprocessed) > 1 {
@@ -2008,6 +2209,15 @@ func main() {
 				}
 			}
 			if len(unprocessed) > 1 {
+				// Safety: productName slug-only matches are risky when all candidates are
+				// already hierarchical/service products (different stage/type can share slug).
+				// Allow only clusters anchored by at least one flat/legacy product path.
+				if !hasFlatProductAnchor(unprocessed) {
+					if *verbose {
+						log.Printf("  SKIP PRODUCT cluster (productName): key=%s reason=no_flat_anchor", productName)
+					}
+					continue
+				}
 				cluster := &DuplicateCluster{
 					MatchType:  "productName",
 					MatchValue: productName,
@@ -2116,14 +2326,110 @@ func main() {
 			log.Printf("\n---- Cluster %d/%d [%s: %s] ----", i+1, len(clusters), cluster.MatchType, cluster.MatchValue)
 		}
 
+		clusterFragments := cluster.Fragments
+		if filtered, changed, reason := filterClusterByNamespaceFamily(clusterFragments); changed {
+			if len(filtered) <= 1 {
+				if *verbose {
+					log.Printf("  SKIP cluster: reason=%s", reason)
+				}
+				continue
+			}
+			clusterFragments = filtered
+			if *verbose {
+				log.Printf("  FILTER cluster: reason=%s", reason)
+			}
+		}
+
+		// Special case: MARKET hierarchy is not dedup.
+		// If cluster paths form parent/child prefixes, keep nodes separate and enforce HAS_SUBMARKET edges.
+		if hierarchyPairs, hasHierarchy := collectMarketHierarchyPairs(clusterFragments); hasHierarchy {
+			byPath := make(map[string][]*models.HorizonFragment)
+			for _, f := range clusterFragments {
+				if f == nil || strings.TrimSpace(f.ID) == "" {
+					continue
+				}
+				cp := strings.TrimSpace(f.CanonicalPath)
+				if cp == "" {
+					continue
+				}
+				byPath[cp] = append(byPath[cp], f)
+			}
+
+			canonicalByPath := make(map[string]*models.HorizonFragment, len(byPath))
+			for cp, group := range byPath {
+				if len(group) == 0 {
+					continue
+				}
+				cid := selectCanonical(group, profileCache)
+				for _, f := range group {
+					if f != nil && f.ID == cid {
+						canonicalByPath[cp] = f
+						break
+					}
+				}
+			}
+
+			createdOrPlanned := 0
+			for _, pair := range hierarchyPairs {
+				parent := canonicalByPath[pair[0]]
+				child := canonicalByPath[pair[1]]
+				if parent == nil || child == nil {
+					continue
+				}
+				created, err := ensureHasSubmarketEdge(ctx, edgesRepo, *tenantID, parent.ID, child.ID, *apply)
+				if err != nil {
+					log.Printf("  ERROR: failed to ensure HAS_SUBMARKET %s -> %s: %v", parent.ID, child.ID, err)
+					continue
+				}
+				if created {
+					createdOrPlanned++
+					if *verbose {
+						if *apply {
+							log.Printf("  ✓ Ensured HAS_SUBMARKET: %s -> %s", parent.CanonicalPath, child.CanonicalPath)
+						} else {
+							log.Printf("  [DRY-RUN] Would ensure HAS_SUBMARKET: %s -> %s", parent.CanonicalPath, child.CanonicalPath)
+						}
+					}
+				}
+			}
+			if *verbose {
+				log.Printf("  SKIP market hierarchy merge: pairs=%d edges=%d", len(hierarchyPairs), createdOrPlanned)
+			}
+			continue
+		}
+
+		// Generic hierarchy guard: if canonical paths in the same namespace form strict parent/child hierarchy,
+		// do not merge this cluster. These are usually taxonomy nodes, not duplicates.
+		if namespace, hierarchyPairs, hasHierarchy := collectNamespaceHierarchyPairs(clusterFragments, 2); hasHierarchy {
+			if *verbose {
+				log.Printf("  SKIP %s hierarchy merge: pairs=%d", namespace, len(hierarchyPairs))
+			}
+			continue
+		}
+
 		// Find canonical fragment
 		var canonical *models.HorizonFragment
 		var duplicates []*models.HorizonFragment
-		for _, f := range cluster.Fragments {
-			if f.ID == cluster.CanonicalID {
+		canonicalID := strings.TrimSpace(cluster.CanonicalID)
+		if canonicalID == "" {
+			canonicalID = selectCanonical(clusterFragments, profileCache)
+		}
+		for _, f := range clusterFragments {
+			if f.ID == canonicalID {
 				canonical = f
 			} else {
 				duplicates = append(duplicates, f)
+			}
+		}
+		if canonical == nil {
+			duplicates = nil
+			canonicalID = selectCanonical(clusterFragments, profileCache)
+			for _, f := range clusterFragments {
+				if f.ID == canonicalID {
+					canonical = f
+				} else {
+					duplicates = append(duplicates, f)
+				}
 			}
 		}
 
@@ -2870,6 +3176,9 @@ func normalizeOrgGovGeoForDedupKey(s string) string {
 	if s == "" || s == "na" {
 		return "na"
 	}
+	if s == "int" {
+		return "int"
+	}
 	if len(s) == 2 && s >= "aa" && s <= "zz" {
 		return s
 	}
@@ -3014,8 +3323,16 @@ func selectCanonical(fragments []*models.HorizonFragment, profileCache map[strin
 		}
 	}
 
-	// For GEO_REGION: first check if any have /loc/ prefix
 	fragType := fragments[0].Type
+	// For PRODUCT: if a cluster mixes flat and full canonical paths, prefer full canonical paths.
+	// Example: /product/robotaxi-service vs /product/service/logistics/ride-hailing/robotaxi-service
+	if fragType == models.FragmentTypeProduct {
+		if preferred := preferFullProductPaths(fragments); len(preferred) > 0 {
+			fragments = preferred
+		}
+	}
+
+	// For GEO_REGION: first check if any have /loc/ prefix
 	if fragType == models.FragmentTypeGeoRegion {
 		// Prefer canonical /loc/{cc}/{admin1}/{city} when available.
 		var canonicalLocs []*models.HorizonFragment
@@ -3038,6 +3355,313 @@ func selectCanonical(fragments []*models.HorizonFragment, profileCache map[strin
 
 	// Default: score-based selection
 	return selectCanonicalByScore(fragments, profileCache)
+}
+
+func preferFullProductPaths(fragments []*models.HorizonFragment) []*models.HorizonFragment {
+	if len(fragments) <= 1 {
+		return nil
+	}
+	flat := make([]*models.HorizonFragment, 0, len(fragments))
+	full := make([]*models.HorizonFragment, 0, len(fragments))
+	for _, f := range fragments {
+		if f == nil || f.Type != models.FragmentTypeProduct {
+			continue
+		}
+		if isFlatProductPathForCanonicalSelection(f) {
+			flat = append(flat, f)
+		} else {
+			full = append(full, f)
+		}
+	}
+	if len(flat) > 0 && len(full) > 0 {
+		return full
+	}
+	return nil
+}
+
+func isFlatProductPathForCanonicalSelection(f *models.HorizonFragment) bool {
+	if f == nil {
+		return false
+	}
+	cp := canonicalPartsForFragment(f)
+	if cp != nil && cp.Namespace == "product" && cp.Product != nil {
+		shape := strings.ToLower(strings.TrimSpace(cp.Product.Shape))
+		if shape == "flat" {
+			return true
+		}
+		if shape == "org_scoped_flat" {
+			// /product/{category}/{slug} may be parsed as org_scoped_flat but is still taxonomy-like,
+			// so it should outrank legacy /product/{slug} in canonical selection.
+			return !isProductTaxonomyHead(cp.Product.OrgSlug)
+		}
+		return false
+	}
+	parts := strings.Split(strings.Trim(strings.TrimSpace(f.CanonicalPath), "/"), "/")
+	if len(parts) < 2 || parts[0] != "product" {
+		return false
+	}
+	// Legacy fallback when parser can't parse canonical parts.
+	// /product/{slug} is flat.
+	if len(parts) == 2 {
+		return true
+	}
+	// /product/{orgOrCategory}/{slug} is usually flat (org-scoped), except taxonomy-like heads.
+	if len(parts) == 3 {
+		return !isProductTaxonomyHead(parts[1])
+	}
+	return false
+}
+
+func isProductTaxonomyHead(seg string) bool {
+	switch strings.ToLower(strings.TrimSpace(seg)) {
+	case "raw", "component", "finished", "service":
+		return true
+	default:
+		return false
+	}
+}
+
+func splitCanonicalPath(path string) []string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return nil
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
+}
+
+func canonicalNamespaceFromPath(path string) string {
+	parts := splitCanonicalPath(path)
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parts[0]))
+}
+
+func collectHierarchyPairsForNamespace(fragments []*models.HorizonFragment, namespace string, minDepth int) ([][2]string, bool) {
+	if len(fragments) <= 1 {
+		return nil, false
+	}
+	namespace = strings.ToLower(strings.TrimSpace(namespace))
+	unique := map[string]struct{}{}
+	for _, f := range fragments {
+		if f == nil {
+			continue
+		}
+		cp := strings.TrimSpace(f.CanonicalPath)
+		if cp == "" || !strings.HasPrefix(cp, "/") {
+			continue
+		}
+		parts := splitCanonicalPath(cp)
+		if len(parts) < minDepth {
+			continue
+		}
+		if namespace != "" && strings.ToLower(strings.TrimSpace(parts[0])) != namespace {
+			continue
+		}
+		unique[cp] = struct{}{}
+	}
+	if len(unique) <= 1 {
+		return nil, false
+	}
+
+	paths := make([]string, 0, len(unique))
+	for p := range unique {
+		paths = append(paths, p)
+	}
+
+	hierarchyDetected := false
+	pairSet := map[string][2]string{}
+	for _, child := range paths {
+		bestParent := ""
+		bestDepth := -1
+		for _, parent := range paths {
+			if parent == child {
+				continue
+			}
+			if !strings.HasPrefix(child, parent+"/") {
+				continue
+			}
+			hierarchyDetected = true
+			depth := len(splitCanonicalPath(parent))
+			if depth > bestDepth {
+				bestDepth = depth
+				bestParent = parent
+			}
+		}
+		if bestParent == "" {
+			continue
+		}
+		key := bestParent + "->" + child
+		pairSet[key] = [2]string{bestParent, child}
+	}
+	if !hierarchyDetected || len(pairSet) == 0 {
+		return nil, hierarchyDetected
+	}
+
+	keys := make([]string, 0, len(pairSet))
+	for k := range pairSet {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([][2]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, pairSet[k])
+	}
+	return pairs, true
+}
+
+func collectNamespaceHierarchyPairs(fragments []*models.HorizonFragment, minDepth int) (string, [][2]string, bool) {
+	if len(fragments) <= 1 {
+		return "", nil, false
+	}
+	uniqueNS := map[string]struct{}{}
+	for _, f := range fragments {
+		if f == nil {
+			continue
+		}
+		ns := canonicalNamespaceFromPath(f.CanonicalPath)
+		if ns == "" {
+			continue
+		}
+		uniqueNS[ns] = struct{}{}
+	}
+	if len(uniqueNS) != 1 {
+		return "", nil, false
+	}
+	namespace := ""
+	for ns := range uniqueNS {
+		namespace = ns
+	}
+	// MARKET hierarchy is handled in a dedicated block where HAS_SUBMARKET edges are enforced.
+	if namespace == "market" {
+		return "", nil, false
+	}
+	pairs, ok := collectHierarchyPairsForNamespace(fragments, namespace, minDepth)
+	return namespace, pairs, ok
+}
+
+// detectDirectMarketHierarchy returns true when all market paths in a cluster fit:
+// parent path + exactly one extra segment for each child.
+func detectDirectMarketHierarchy(fragments []*models.HorizonFragment) (parentPath string, childPaths map[string]struct{}, ok bool) {
+	if len(fragments) <= 1 {
+		return "", nil, false
+	}
+	unique := map[string]struct{}{}
+	for _, f := range fragments {
+		if f == nil {
+			continue
+		}
+		if !strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/market/") {
+			return "", nil, false
+		}
+		parts := splitCanonicalPath(f.CanonicalPath)
+		if len(parts) < 4 || parts[0] != "market" {
+			return "", nil, false
+		}
+		unique[strings.TrimSpace(f.CanonicalPath)] = struct{}{}
+	}
+	if len(unique) <= 1 {
+		return "", nil, false
+	}
+
+	shortest := ""
+	shortLen := 0
+	tie := false
+	for p := range unique {
+		n := len(splitCanonicalPath(p))
+		if shortest == "" || n < shortLen {
+			shortest = p
+			shortLen = n
+			tie = false
+			continue
+		}
+		if n == shortLen && p != shortest {
+			tie = true
+		}
+	}
+	if shortest == "" || tie {
+		return "", nil, false
+	}
+
+	children := map[string]struct{}{}
+	parentParts := splitCanonicalPath(shortest)
+	for p := range unique {
+		if p == shortest {
+			continue
+		}
+		pp := splitCanonicalPath(p)
+		if len(pp) != len(parentParts)+1 {
+			return "", nil, false
+		}
+		for i := range parentParts {
+			if pp[i] != parentParts[i] {
+				return "", nil, false
+			}
+		}
+		children[p] = struct{}{}
+	}
+	if len(children) == 0 {
+		return "", nil, false
+	}
+	return shortest, children, true
+}
+
+// collectMarketHierarchyPairs returns nearest parent->child canonicalPath pairs for market paths in the cluster.
+// A hierarchy is detected when at least one path is a strict prefix of another.
+func collectMarketHierarchyPairs(fragments []*models.HorizonFragment) ([][2]string, bool) {
+	return collectHierarchyPairsForNamespace(fragments, "market", 4)
+}
+
+func ensureHasSubmarketEdge(ctx context.Context, edgesRepo *repo.DependencyEdgesRepository, tenantID, parentID, childID string, apply bool) (bool, error) {
+	parentID = strings.TrimSpace(parentID)
+	childID = strings.TrimSpace(childID)
+	if parentID == "" || childID == "" || parentID == childID {
+		return false, nil
+	}
+
+	existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, parentID, childID, models.DependencyTypeHasSubmarket)
+	if err == nil && existing != nil {
+		return false, nil
+	}
+	if err != nil && !errors.Is(err, repo.ErrEdgeNotFound) {
+		return false, err
+	}
+
+	if !apply {
+		return true, nil
+	}
+
+	now := time.Now().UTC()
+	_, err = edgesRepo.Create(ctx, &models.DependencyEdge{
+		TenantID:         tenantID,
+		SourceFragmentID: parentID,
+		TargetFragmentID: childID,
+		Type:             models.DependencyTypeHasSubmarket,
+		Properties: models.EdgeProperties{
+			Criticality:   0.6,
+			Amplification: 1.0,
+			LatencyHours:  24,
+		},
+		Qualifiers: map[string]interface{}{
+			"inferred": true,
+			"reason":   "market.parent_child.hierarchy.inferred_by_dedup",
+		},
+		Provenance: models.Provenance{
+			Method: "horizon_smart_dedup_market_hierarchy",
+		},
+		Metadata: models.EdgeMetadata{
+			CreatedAt:     now,
+			LastUpdatedAt: now,
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // selectCanonicalByScore chooses canonical based on data quality score
@@ -3212,6 +3836,71 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment, profileCache ma
 	}
 
 	return scoredFragments[0].fragment.ID
+}
+
+// filterMarketByScope applies conservative scope checks for MARKET name-based clusters.
+// Name-only equality is too broad for markets; we only allow merges when:
+// - all candidates have a resolvable market geo token,
+// - all candidates share the same geo token,
+// - all canonical (non-legacy) candidates share the same normalized market domain.
+func filterMarketByScope(fragments []*models.HorizonFragment) ([]*models.HorizonFragment, bool, string) {
+	if len(fragments) <= 1 {
+		return fragments, false, ""
+	}
+
+	geos := map[string]struct{}{}
+	domains := map[string]struct{}{}
+	for _, f := range fragments {
+		if f == nil || f.Type != models.FragmentTypeMarket {
+			continue
+		}
+		cp := canonicalPartsForFragment(f)
+		if cp == nil || cp.Namespace != "market" || cp.Market == nil {
+			continue
+		}
+		mp := cp.Market
+		geo := strings.ToLower(strings.TrimSpace(mp.Geo))
+		if geo != "" && geo != "na" {
+			geos[geo] = struct{}{}
+		}
+		if !mp.Legacy {
+			domain := taxonomy.NormalizeMarketDomain(strings.ToLower(strings.TrimSpace(mp.Domain)))
+			if domain != "" {
+				domains[domain] = struct{}{}
+			}
+		}
+	}
+
+	// If we cannot establish geo scope, skip to avoid broad false merges.
+	if len(geos) == 0 {
+		return nil, true, "market_geo_unknown"
+	}
+	if len(geos) > 1 {
+		return nil, true, fmt.Sprintf("market_geo_conflict=%v", keysSorted(geos))
+	}
+	if len(domains) > 1 {
+		return nil, true, fmt.Sprintf("market_domain_conflict=%v", keysSorted(domains))
+	}
+	return fragments, false, ""
+}
+
+// hasFlatProductAnchor returns true when at least one PRODUCT path in a cluster
+// is flat/legacy. This is used to keep slug-only productName dedup conservative.
+func hasFlatProductAnchor(fragments []*models.HorizonFragment) bool {
+	for _, f := range fragments {
+		if f == nil || f.Type != models.FragmentTypeProduct {
+			continue
+		}
+		cp := canonicalPartsForFragment(f)
+		if cp == nil || cp.Namespace != "product" || cp.Product == nil {
+			continue
+		}
+		shape := strings.ToLower(strings.TrimSpace(cp.Product.Shape))
+		if shape == "flat" || shape == "org_scoped_flat" {
+			return true
+		}
+	}
+	return false
 }
 
 // filterGeoByCountry filters GEO_REGION fragments to only include those with same country.
@@ -4950,10 +5639,9 @@ func cleanMarketEdgesAndDomains(ctx context.Context, db *firestore.Client, edges
 		if orgGeo == "global" || orgGeo == "int" {
 			continue
 		}
-		// Regional tokens (gcc, eu, asean, etc.) — these orgs operate across multiple countries,
-		// so we also skip them (they can legitimately participate in any member-country market).
-		switch orgGeo {
-		case "gcc", "eu", "eaeu", "asean", "brics", "opec", "nafta", "mercosur", "cis", "apac", "latam", "mena", "emea":
+		// Regional/composite geo tokens operate across multiple countries,
+		// so strict geo-mismatch check is not meaningful.
+		if taxonomy.IsRegionalGeoToken(orgGeo) || taxonomy.IsCompositeGeoToken(orgGeo) {
 			continue
 		}
 
@@ -4986,6 +5674,11 @@ func cleanMarketEdgesAndDomains(ctx context.Context, db *firestore.Client, edges
 			}
 			if marketGeo == orgGeo {
 				continue // Same geo — OK
+			}
+			// Composite market geo: allow if org country is one of composite members.
+			// Example: ORG geo=ma is valid for market geo=ma-sa.
+			if compositeGeoContainsCountry(marketGeo, orgGeo) {
+				continue
 			}
 			// Regional market: allow if org's country is a member of that region.
 			// E.g. BH org → /market/gcc/… is OK because Bahrain is a GCC member.
@@ -5116,11 +5809,17 @@ func cleanMarketEdgesAndDomains(ctx context.Context, db *firestore.Client, edges
 			// Delete the non-canonical market fragment
 			_ = fragmentsRepo.Delete(ctx, marketID)
 		} else {
-			// No existing fragment at canonical path — just rename
-			_, err := db.Collection("horizon_fragments").Doc(marketID).Set(ctx, map[string]interface{}{
-				"canonicalPath": newCP,
-			}, firestore.MergeAll)
+			// No existing fragment at canonical path — update through repository to keep
+			// canonicalParts/indexPaths/validation lifecycle consistent.
+			current, err := fragmentsRepo.Get(ctx, marketID)
 			if err != nil {
+				if verbose {
+					log.Printf("  7b: ERROR loading market %s for rename: %v", marketID, err)
+				}
+				continue
+			}
+			current.CanonicalPath = newCP
+			if err := fragmentsRepo.Update(ctx, current); err != nil {
 				if verbose {
 					log.Printf("  7b: ERROR renaming %s: %v", marketID, err)
 				}
@@ -5155,10 +5854,25 @@ func extractGeoFromCanonicalPath(cp string) string {
 	if len(geo) == 2 && geo[0] >= 'a' && geo[0] <= 'z' && geo[1] >= 'a' && geo[1] <= 'z' {
 		return geo // Valid ISO2
 	}
-	// Known regional tokens
-	switch geo {
-	case "gcc", "eu", "eaeu", "asean", "brics", "opec", "nafta", "mercosur", "cis", "apac", "latam", "mena", "emea":
+	// Composite and regional tokens are taxonomy-driven.
+	if taxonomy.IsCompositeGeoToken(geo) || taxonomy.IsRegionalGeoToken(geo) {
 		return geo
 	}
 	return "" // Not a valid geo (e.g., /org/repsol → "repsol" is not a geo)
+}
+
+// compositeGeoContainsCountry checks whether a composite geo token (e.g., "ma-sa")
+// includes a country ISO2 code (e.g., "ma").
+func compositeGeoContainsCountry(compositeGeo, countryISO2 string) bool {
+	compositeGeo = strings.ToLower(strings.TrimSpace(compositeGeo))
+	countryISO2 = strings.ToLower(strings.TrimSpace(countryISO2))
+	if !taxonomy.IsCompositeGeoToken(compositeGeo) || !isISO2CountryToken(countryISO2) {
+		return false
+	}
+	for _, token := range strings.Split(compositeGeo, "-") {
+		if strings.TrimSpace(token) == countryISO2 {
+			return true
+		}
+	}
+	return false
 }

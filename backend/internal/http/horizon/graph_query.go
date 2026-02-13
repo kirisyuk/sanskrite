@@ -11,6 +11,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
+	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
@@ -80,9 +81,9 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "projectId does not match lens.projectId", http.StatusBadRequest)
 		return
 	}
-	// Ensure graph snapshot has at least some nodes.
-	if len(req.Graph.Nodes) == 0 {
-		http.Error(w, "graph.nodes is required", http.StatusBadRequest)
+	hasDomainAnswerContext := req.DomainAnswerContext != nil && req.DomainAnswerContext.hasContent()
+	if len(req.Graph.Nodes) == 0 && !hasDomainAnswerContext {
+		http.Error(w, "either graph.nodes or domainAnswerContext is required", http.StatusBadRequest)
 		return
 	}
 
@@ -113,13 +114,13 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 			label = sid
 		}
 		mappedNodes = append(mappedNodes, mappedNode{
-			ID:           sid,
-			Label:        label,
-			Type:         strings.TrimSpace(n.Type),
+			ID:            sid,
+			Label:         label,
+			Type:          strings.TrimSpace(n.Type),
 			CanonicalPath: strings.TrimSpace(n.CanonicalPath),
 		})
 	}
-	if len(mappedNodes) == 0 {
+	if len(mappedNodes) == 0 && !hasDomainAnswerContext {
 		http.Error(w, "graph.nodes must contain at least one node with non-empty id", http.StatusBadRequest)
 		return
 	}
@@ -146,7 +147,7 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	prompt := buildGraphQueryPrompt(req.Question, now, mappedNodes, mappedEdges)
+	prompt := buildGraphQueryPrompt(req.Question, now, mappedNodes, mappedEdges, req.DomainAnswerContext)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
@@ -179,6 +180,15 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 		allowed := make(map[string]struct{}, len(revIDMap))
 		for sid := range revIDMap {
 			allowed[sid] = struct{}{}
+		}
+		if len(allowed) == 0 {
+			if len(out.RelevantNodeIDs) > 0 {
+				return fmt.Errorf("relevantNodeIds must be empty when graph snapshot has no nodes")
+			}
+			if len(out.Findings) > 0 {
+				return fmt.Errorf("findings must be empty when graph snapshot has no nodes")
+			}
+			return nil
 		}
 		for _, nid := range out.RelevantNodeIDs {
 			nid = strings.TrimSpace(nid)
@@ -292,14 +302,15 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 		atts = append(atts, graphQueryAttribution{Title: strings.TrimSpace(a.Title), URL: strings.TrimSpace(a.URL)})
 	}
 	payload := graphQueryInteractionPayload{
-		SchemaVersion: "v1",
-		LensID:        lensID,
-		ProjectID:     projectID,
-		AskedAt:       now.Format(time.RFC3339),
-		Question:      req.Question,
-		Answer:        strings.TrimSpace(parsed.Answer),
-		RelevantNodeIDs: resolvedNodeIDs,
-		Findings:      resolvedFindings,
+		SchemaVersion:       "v1",
+		LensID:              lensID,
+		ProjectID:           projectID,
+		AskedAt:             now.Format(time.RFC3339),
+		Question:            req.Question,
+		Answer:              strings.TrimSpace(parsed.Answer),
+		RelevantNodeIDs:     resolvedNodeIDs,
+		DomainAnswerContext: req.DomainAnswerContext,
+		Findings:            resolvedFindings,
 		LLM: graphQueryLLMMeta{
 			Model:          strings.TrimSpace(genResp.Model),
 			Grounding:      true,
@@ -355,29 +366,76 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := graphQueryResponse{
-		InteractionID: interactionID,
-		ProjectID:     projectID,
-		LensID:        lensID,
-		Question:      req.Question,
-		Answer:        strings.TrimSpace(parsed.Answer),
+		InteractionID:   interactionID,
+		ProjectID:       projectID,
+		LensID:          lensID,
+		Question:        req.Question,
+		Answer:          strings.TrimSpace(parsed.Answer),
 		RelevantNodeIDs: resolvedNodeIDs,
-		Findings:      resolvedFindings,
-		Model:         strings.TrimSpace(genResp.Model),
-		SearchQueries: dedupeStrings(genResp.SearchQueries),
-		Sources:       dedupeStrings(genResp.Sources),
-		Timestamp:     now.Format(time.RFC3339),
+		Findings:        resolvedFindings,
+		Model:           strings.TrimSpace(genResp.Model),
+		SearchQueries:   dedupeStrings(genResp.SearchQueries),
+		Sources:         dedupeStrings(genResp.Sources),
+		Timestamp:       now.Format(time.RFC3339),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
 type graphQueryRequest struct {
-	ProjectID string `json:"projectId,omitempty"`
-	Question  string `json:"question"`
-	Graph     struct {
+	ProjectID           string                         `json:"projectId,omitempty"`
+	Question            string                         `json:"question"`
+	DomainAnswerContext *graphQueryDomainAnswerContext `json:"domainAnswerContext,omitempty"`
+	Graph               struct {
 		Nodes []graphSnapshotNode `json:"nodes"`
 		Edges []graphSnapshotEdge `json:"edges,omitempty"`
 	} `json:"graph"`
+}
+
+type graphQueryDomainAnswerContext struct {
+	SnapshotID           string                               `json:"snapshotId,omitempty"`
+	ID                   string                               `json:"id,omitempty"`
+	DomainID             string                               `json:"domainId,omitempty"`
+	DomainCanonicalPath  string                               `json:"domainCanonicalPath,omitempty"`
+	ReadinessStatus      string                               `json:"readinessStatus,omitempty"`
+	DomainContract       horizonmodels.DomainContractSnapshot `json:"domainContract,omitempty"`
+	Thesis               horizonmodels.DomainThesis           `json:"thesis,omitempty"`
+	Gate                 horizonmodels.DomainGateSummary      `json:"gate,omitempty"`
+	CriticalDependencies []horizonmodels.CriticalDependency   `json:"criticalDependencies,omitempty"`
+	ImpactPaths          []horizonmodels.ImpactPath           `json:"impactPaths,omitempty"`
+	DataGaps             []horizonmodels.DataGap              `json:"dataGaps,omitempty"`
+}
+
+func (c *graphQueryDomainAnswerContext) normalizedSnapshotID() string {
+	if c == nil {
+		return ""
+	}
+	if strings.TrimSpace(c.SnapshotID) != "" {
+		return strings.TrimSpace(c.SnapshotID)
+	}
+	return strings.TrimSpace(c.ID)
+}
+
+func (c *graphQueryDomainAnswerContext) hasContent() bool {
+	if c == nil {
+		return false
+	}
+	if c.normalizedSnapshotID() != "" {
+		return true
+	}
+	if strings.TrimSpace(c.DomainID) != "" {
+		return true
+	}
+	if strings.TrimSpace(c.DomainCanonicalPath) != "" {
+		return true
+	}
+	if strings.TrimSpace(c.Thesis.Text) != "" {
+		return true
+	}
+	if len(c.CriticalDependencies) > 0 || len(c.ImpactPaths) > 0 || len(c.DataGaps) > 0 {
+		return true
+	}
+	return false
 }
 
 type graphSnapshotNode struct {
@@ -409,23 +467,23 @@ type mappedEdge struct {
 }
 
 type graphQueryLLMResponse struct {
-	Answer          string             `json:"answer"`
-	RelevantNodeIDs []string           `json:"relevantNodeIds"`
+	Answer          string              `json:"answer"`
+	RelevantNodeIDs []string            `json:"relevantNodeIds"`
 	Findings        []graphQueryFinding `json:"findings"`
 }
 
 type graphQueryResponse struct {
-	InteractionID   string   `json:"interactionId"`
-	ProjectID       string   `json:"projectId"`
-	LensID          string   `json:"lensId"`
-	Question        string   `json:"question"`
-	Answer          string   `json:"answer"`
-	RelevantNodeIDs []string `json:"relevantNodeIds"`
+	InteractionID   string              `json:"interactionId"`
+	ProjectID       string              `json:"projectId"`
+	LensID          string              `json:"lensId"`
+	Question        string              `json:"question"`
+	Answer          string              `json:"answer"`
+	RelevantNodeIDs []string            `json:"relevantNodeIds"`
 	Findings        []graphQueryFinding `json:"findings,omitempty"`
-	Model           string   `json:"model,omitempty"`
-	SearchQueries   []string `json:"searchQueries,omitempty"`
-	Sources         []string `json:"sources,omitempty"`
-	Timestamp       string   `json:"timestamp"`
+	Model           string              `json:"model,omitempty"`
+	SearchQueries   []string            `json:"searchQueries,omitempty"`
+	Sources         []string            `json:"sources,omitempty"`
+	Timestamp       string              `json:"timestamp"`
 }
 
 // graphQueryFinding represents a single fresh grounded finding linked to a graph node.
@@ -439,15 +497,15 @@ type graphQueryFinding struct {
 }
 
 type graphQueryLLMMeta struct {
-	Model          string                 `json:"model"`
-	Grounding      bool                   `json:"grounding"`
-	SearchQueries  []string               `json:"searchQueries,omitempty"`
-	Sources        []string               `json:"sources,omitempty"`
+	Model          string                  `json:"model"`
+	Grounding      bool                    `json:"grounding"`
+	SearchQueries  []string                `json:"searchQueries,omitempty"`
+	Sources        []string                `json:"sources,omitempty"`
 	Attributions   []graphQueryAttribution `json:"attributions,omitempty"`
-	PromptTokens   int                    `json:"promptTokens,omitempty"`
-	OutputTokens   int                    `json:"outputTokens,omitempty"`
-	TotalTokens    int                    `json:"totalTokens,omitempty"`
-	RawJSONPreview string                 `json:"rawJsonPreview,omitempty"`
+	PromptTokens   int                     `json:"promptTokens,omitempty"`
+	OutputTokens   int                     `json:"outputTokens,omitempty"`
+	TotalTokens    int                     `json:"totalTokens,omitempty"`
+	RawJSONPreview string                  `json:"rawJsonPreview,omitempty"`
 }
 
 type graphQueryAttribution struct {
@@ -456,20 +514,21 @@ type graphQueryAttribution struct {
 }
 
 type graphQueryInteractionPayload struct {
-	SchemaVersion    string `json:"schemaVersion"`
-	ProjectID        string `json:"projectId"`
-	LensID           string `json:"lensId"`
-	AskedAt          string `json:"askedAt"`
-	Question         string `json:"question"`
-	Answer           string `json:"answer"`
-	RelevantNodeIDs  []string `json:"relevantNodeIds"`
-	Findings         []graphQueryFinding `json:"findings,omitempty"`
-	Graph            struct {
+	SchemaVersion       string                         `json:"schemaVersion"`
+	ProjectID           string                         `json:"projectId"`
+	LensID              string                         `json:"lensId"`
+	AskedAt             string                         `json:"askedAt"`
+	Question            string                         `json:"question"`
+	Answer              string                         `json:"answer"`
+	RelevantNodeIDs     []string                       `json:"relevantNodeIds"`
+	DomainAnswerContext *graphQueryDomainAnswerContext `json:"domainAnswerContext,omitempty"`
+	Findings            []graphQueryFinding            `json:"findings,omitempty"`
+	Graph               struct {
 		Nodes []graphSnapshotNode `json:"nodes"`
 		Edges []graphSnapshotEdge `json:"edges,omitempty"`
 	} `json:"graph"`
 	LLM            graphQueryLLMMeta `json:"llm"`
-	LLMResponseRaw string           `json:"llmResponseRaw,omitempty"`
+	LLMResponseRaw string            `json:"llmResponseRaw,omitempty"`
 	// Mapping from LLM-visible simple ids (n1..) back to original ids.
 	LLMNodeIDMap map[string]string `json:"llmNodeIdMap"`
 }
@@ -494,26 +553,45 @@ Rules:
 ` + langHint)
 }
 
-func buildGraphQueryPrompt(question string, now time.Time, nodes []mappedNode, edges []mappedEdge) string {
+func buildGraphQueryPrompt(question string, now time.Time, nodes []mappedNode, edges []mappedEdge, domainAnswerContext *graphQueryDomainAnswerContext) string {
 	// Keep prompt compact but explicit.
 	// Nodes/edges are provided as JSON so the model can reason over them.
 	nodesJSON, _ := json.Marshal(nodes)
 	edgesJSON, _ := json.Marshal(edges)
 	schemaJSON, _ := json.Marshal(graphQueryJSONSchema())
+	domainAnswerJSON := "null"
+	if domainAnswerContext != nil && domainAnswerContext.hasContent() {
+		safe := *domainAnswerContext
+		safe.ID = safe.normalizedSnapshotID()
+		safe.SnapshotID = safe.normalizedSnapshotID()
+		if b, err := json.Marshal(safe); err == nil {
+			domainAnswerJSON = string(b)
+		}
+	}
+	graphIDsNote := "Node IDs are available. Use only those IDs in relevantNodeIds and findings[].nodeId."
+	if len(nodes) == 0 {
+		graphIDsNote = "Graph IDs are unavailable (graph snapshot nodes are empty). relevantNodeIds MUST be [] and findings MUST be []."
+	}
 	return strings.TrimSpace(fmt.Sprintf(`
 Now (UTC): %s
 Interpret "now" as the reference date/time. Your answer MUST be based on the most relevant information available as of this moment (prefer recent data).
 
+Domain answer context (priority over graph snapshot when present):
+- context: %s
+
 Graph snapshot:
 - nodes: %s
 - edges: %s
+
+Constraints:
+- %s
 
 User question:
 %s
 
 Required JSON schema:
 %s
-`, now.Format(time.RFC3339), string(nodesJSON), string(edgesJSON), question, string(schemaJSON)))
+`, now.Format(time.RFC3339), domainAnswerJSON, string(nodesJSON), string(edgesJSON), graphIDsNote, question, string(schemaJSON)))
 }
 
 func graphQueryJSONSchema() map[string]interface{} {
@@ -534,11 +612,11 @@ func graphQueryJSONSchema() map[string]interface{} {
 				"items": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
-						"nodeId": map[string]interface{}{"type": "string"},
-						"title": map[string]interface{}{"type": "string"},
+						"nodeId":    map[string]interface{}{"type": "string"},
+						"title":     map[string]interface{}{"type": "string"},
 						"eventDate": map[string]interface{}{"type": "string"},
-						"source": map[string]interface{}{"type": "string"},
-						"url": map[string]interface{}{"type": "string"},
+						"source":    map[string]interface{}{"type": "string"},
+						"url":       map[string]interface{}{"type": "string"},
 					},
 					"required": []string{"nodeId", "title", "eventDate", "source", "url"},
 				},
@@ -590,8 +668,6 @@ func strPtr(s string) *string {
 	}
 	return &ss
 }
-func intPtr(v int) *int { return &v }
-func boolPtr(v bool) *bool { return &v }
+func intPtr(v int) *int           { return &v }
+func boolPtr(v bool) *bool        { return &v }
 func floatPtr(v float64) *float64 { return &v }
-
-

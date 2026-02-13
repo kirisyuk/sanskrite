@@ -2,33 +2,14 @@ package scout
 
 import (
 	"strings"
-	"unicode"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 )
 
 func normalizeIdentityText(in string) string {
-	s := strings.ToLower(strings.TrimSpace(in))
-	if s == "" {
-		return ""
-	}
-	var b strings.Builder
-	b.Grow(len(s))
-	prevSpace := false
-	for _, r := range s {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-			prevSpace = false
-			continue
-		}
-		if !prevSpace {
-			b.WriteByte(' ')
-			prevSpace = true
-		}
-	}
-	out := strings.Join(strings.Fields(b.String()), " ")
-	return strings.TrimSpace(out)
+	return naming.NormalizeLookupText(in)
 }
 
 func leafSlug(path string) string {

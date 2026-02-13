@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,16 +14,18 @@ import (
 	horizonfeedback "github.com/igorkirisyuk/sanskrite/internal/horizon/feedback"
 	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 const (
-	logRiskPipeline = "[horizon.risk.pipeline]"
+	logRiskPipeline = "HZN_GROUNDING [horizon.risk.pipeline]"
 )
 
 type PipelineConfig struct {
@@ -53,7 +56,9 @@ func DefaultPipelineConfig() PipelineConfig {
 }
 
 type Pipeline struct {
-	jobsRepo *horizonrepo.RiskJobsRepository
+	jobsRepo  *horizonrepo.RiskJobsRepository
+	scoutRepo *horizonrepo.ScoutingJobsRepository
+	telemetry *horizonrepo.HorizonTelemetryRepository
 
 	factsRepo         *corerepo.OntologyFactsRepository
 	fragmentsRepo     *horizonrepo.HorizonFragmentsRepository
@@ -113,6 +118,16 @@ func NewPipeline(
 
 func (p *Pipeline) WithFeedbackEmitter(emitter horizonfeedback.Emitter) *Pipeline {
 	p.feedback = emitter
+	return p
+}
+
+func (p *Pipeline) WithScoutingJobsRepo(scoutRepo *horizonrepo.ScoutingJobsRepository) *Pipeline {
+	p.scoutRepo = scoutRepo
+	return p
+}
+
+func (p *Pipeline) WithTelemetryRepo(telemetry *horizonrepo.HorizonTelemetryRepository) *Pipeline {
+	p.telemetry = telemetry
 	return p
 }
 
@@ -225,6 +240,7 @@ func (p *Pipeline) RunJob(ctx context.Context, jobID string) (*horizonmodels.Ris
 				return job, err
 			}
 			p.logf(job, stage, "error", "phase=stage_failed decision=%s reason=%s err=%v", out.Decision, job.TerminalReason, stageErr)
+			p.emitGroundingErrorTelemetry(ctx, job, "run.stage_failed", strings.TrimSpace(job.TerminalReason), "stage_execution_error", false)
 			if err := p.publishStageEvent(ctx, "horizon.risk.stage.failed", job, stage, out.StatePatch); err != nil {
 				return job, err
 			}
@@ -295,13 +311,42 @@ func (p *Pipeline) stageIdentify(ctx context.Context, job *horizonmodels.RiskJob
 	if p.fragmentsRepo == nil || p.factsRepo == nil {
 		return failStage(horizonmodels.RiskReasonDependencyUnavailable), fmt.Errorf("identify deps unavailable")
 	}
-	targetPath := strings.TrimSpace(job.TargetCanonicalPath)
-	if targetPath == "" {
-		return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("missing targetCanonicalPath")
+	var fragment *horizonmodels.HorizonFragment
+	var err error
+	identifyMode := "path"
+
+	targetFragmentID := ""
+	if riskIdentifyFragmentIDEnabled() {
+		targetFragmentID = stateString(job.State, riskStateKeyTargetFragmentID)
+		if targetFragmentID == "" {
+			targetFragmentID = stateString(job.State, riskStateKeyFragmentID)
+		}
 	}
-	fragment, err := p.fragmentsRepo.GetByCanonicalPath(ctx, targetPath)
-	if err != nil || fragment == nil {
-		return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("target fragment not found: %w", err)
+	if targetFragmentID != "" {
+		fragment, err = p.fragmentsRepo.Get(ctx, targetFragmentID)
+		if err != nil {
+			p.logf(job, horizonmodels.RiskStageIdentify, "warn", "phase=identify_fragment_lookup_failed fragmentId=%s err=%v",
+				strings.TrimSpace(targetFragmentID), err)
+			p.emitGroundingErrorTelemetry(ctx, job, "identify.fragment_lookup", "identify_fragment_lookup_failed", "repo_read_error", true)
+		} else if fragment != nil {
+			identifyMode = "fragmentId"
+		}
+	}
+	if fragment == nil {
+		targetPath := normalizeRiskTargetPath(strings.TrimSpace(job.TargetCanonicalPath))
+		if targetPath == "" {
+			return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("missing targetCanonicalPath")
+		}
+		fragment, err = p.fragmentsRepo.GetByCanonicalPath(ctx, targetPath)
+		if (err != nil || fragment == nil) && targetPath != strings.TrimSpace(job.TargetCanonicalPath) {
+			fragment, err = p.fragmentsRepo.GetByCanonicalPath(ctx, strings.TrimSpace(job.TargetCanonicalPath))
+			if err == nil && fragment != nil {
+				identifyMode = "fallback"
+			}
+		}
+		if err != nil || fragment == nil {
+			return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("target fragment not found: %w", err)
+		}
 	}
 
 	facts, err := p.factsRepo.ListByCanonicalPathAndKind(ctx, strings.TrimSpace(job.TenantID), strings.TrimSpace(fragment.CanonicalPath), "signal", 300)
@@ -326,13 +371,37 @@ func (p *Pipeline) stageIdentify(ctx context.Context, job *horizonmodels.RiskJob
 		signalIDs = append(signalIDs, strings.TrimSpace(f.ID))
 	}
 	patch := map[string]any{
-		"fragmentId":      strings.TrimSpace(fragment.ID),
-		"targetPath":      strings.TrimSpace(fragment.CanonicalPath),
-		"signalIds":       signalIDs,
-		"signalCount":     len(signalIDs),
-		"identifiedAtUtc": time.Now().UTC().Format(time.RFC3339Nano),
+		riskStateKeyFragmentID:          strings.TrimSpace(fragment.ID),
+		riskStateKeyTargetFragmentID:    strings.TrimSpace(fragment.ID),
+		riskStateKeyTargetCanonicalPath: strings.TrimSpace(fragment.CanonicalPath),
+		"targetPath":                    strings.TrimSpace(fragment.CanonicalPath),
+		riskStateKeySignalIDs:           signalIDs,
+		riskStateKeySignalCount:         len(signalIDs),
+		riskStateKeyIdentifiedAtUTC:     time.Now().UTC().Format(time.RFC3339Nano),
+		riskStateKeyIdentifyMode:        strings.TrimSpace(identifyMode),
 	}
+	p.emitRiskCounter(ctx, strings.TrimSpace(job.TenantID), "horizon_risk_identify_resolution_total", map[string]string{
+		"mode": strings.TrimSpace(identifyMode),
+	}, map[string]int64{"count": 1})
 	if len(signalIDs) == 0 {
+		refreshOutcome := "still_empty"
+		if p.shouldTriggerScoutRefresh(job) {
+			if refreshID, refreshErr := p.enqueueScoutRefresh(ctx, job, fragment); refreshErr != nil {
+				p.logf(job, horizonmodels.RiskStageIdentify, "warn", "phase=identify_scout_refresh_enqueue_failed fragmentId=%s err=%v",
+					strings.TrimSpace(fragment.ID), refreshErr)
+				p.emitGroundingErrorTelemetry(ctx, job, "identify.enqueue_scout_refresh", "identify_scout_refresh_enqueue_failed", "enqueue_error", true)
+			} else {
+				refreshOutcome = "resolved"
+				patch[riskStateKeyScoutRefreshMarker] = true
+				patch[riskStateKeyScoutRefreshAtUTC] = time.Now().UTC().Format(time.RFC3339Nano)
+				patch[riskStateKeyScoutRefreshDepth] = stateInt(job.State, riskStateKeyScoutRefreshDepth) + 1
+				patch[riskStateKeyScoutRefreshReason] = "identify_no_signals"
+				patch["scoutRefreshJobId"] = strings.TrimSpace(refreshID)
+			}
+		}
+		p.emitRiskCounter(ctx, strings.TrimSpace(job.TenantID), "horizon_risk_scout_refresh_total", map[string]string{
+			"outcome": strings.TrimSpace(refreshOutcome),
+		}, map[string]int64{"count": 1})
 		return &stageOutput{
 			Decision:    horizonmodels.RiskStageDecisionSkip,
 			ReasonCodes: []string{string(horizonmodels.RiskReasonStageSkippedNoSignals)},
@@ -386,9 +455,9 @@ func (p *Pipeline) stageApplicability(ctx context.Context, job *horizonmodels.Ri
 	if p.fragmentsRepo == nil || p.edgesRepo == nil {
 		return failStage(horizonmodels.RiskReasonDependencyUnavailable), fmt.Errorf("applicability deps unavailable")
 	}
-	fragmentID := stateString(job.State, "fragmentId")
+	fragmentID := stateString(job.State, riskStateKeyFragmentID)
 	if fragmentID == "" {
-		return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("missing fragmentId in state")
+		return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("missing %s in state", riskStateKeyFragmentID)
 	}
 	target, err := p.fragmentsRepo.Get(ctx, fragmentID)
 	if err != nil || target == nil {
@@ -833,9 +902,9 @@ func (p *Pipeline) stageRollup(ctx context.Context, job *horizonmodels.RiskJob) 
 	if p.fragmentsRepo == nil {
 		return failStage(horizonmodels.RiskReasonDependencyUnavailable), fmt.Errorf("rollup deps unavailable")
 	}
-	fragmentID := stateString(job.State, "fragmentId")
+	fragmentID := stateString(job.State, riskStateKeyFragmentID)
 	if fragmentID == "" {
-		return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("missing fragmentId")
+		return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("missing %s", riskStateKeyFragmentID)
 	}
 	fragment, err := p.fragmentsRepo.Get(ctx, fragmentID)
 	if err != nil || fragment == nil {
@@ -924,9 +993,9 @@ func (p *Pipeline) stageInterpret(ctx context.Context, job *horizonmodels.RiskJo
 	if p.interpreter == nil || p.fragmentsRepo == nil {
 		return &stageOutput{Decision: horizonmodels.RiskStageDecisionSkip, ReasonCodes: []string{string(horizonmodels.RiskReasonDependencyUnavailable)}}, nil
 	}
-	fragmentID := stateString(job.State, "fragmentId")
+	fragmentID := stateString(job.State, riskStateKeyFragmentID)
 	if fragmentID == "" {
-		return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("missing fragmentId")
+		return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("missing %s", riskStateKeyFragmentID)
 	}
 	fragment, err := p.fragmentsRepo.Get(ctx, fragmentID)
 	if err != nil || fragment == nil {
@@ -965,9 +1034,9 @@ func (p *Pipeline) stageAlert(ctx context.Context, job *horizonmodels.RiskJob) (
 	if p.fragmentsRepo == nil {
 		return failStage(horizonmodels.RiskReasonDependencyUnavailable), fmt.Errorf("alert deps unavailable")
 	}
-	fragmentID := stateString(job.State, "fragmentId")
+	fragmentID := stateString(job.State, riskStateKeyFragmentID)
 	if fragmentID == "" {
-		return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("missing fragmentId")
+		return failStage(horizonmodels.RiskReasonStageInputInvalid), fmt.Errorf("missing %s", riskStateKeyFragmentID)
 	}
 	fragment, err := p.fragmentsRepo.Get(ctx, fragmentID)
 	if err != nil || fragment == nil {
@@ -1051,7 +1120,7 @@ func (p *Pipeline) loadSignalFactsFromState(ctx context.Context, job *horizonmod
 	}
 	ids := stateStringSlice(job.State, "applicableSignalIds")
 	if len(ids) == 0 {
-		ids = stateStringSlice(job.State, "signalIds")
+		ids = stateStringSlice(job.State, riskStateKeySignalIDs)
 	}
 	if len(ids) == 0 {
 		return nil, nil
@@ -1096,6 +1165,7 @@ func (p *Pipeline) publishJobState(ctx context.Context, eventType string, job *h
 	}
 	if err := p.realtimePub.PublishJSON(ctx, realtime.EventType(eventType), strings.TrimSpace(job.TenantID), payload); err != nil {
 		p.logf(job, "", "error", "phase=ws_publish_failed event=%s err=%v", eventType, err)
+		p.emitGroundingErrorTelemetry(ctx, job, "publish.job_state", "ws_publish_failed", "realtime_publish_error", false)
 		return err
 	}
 	return nil
@@ -1121,6 +1191,7 @@ func (p *Pipeline) publishStageEvent(ctx context.Context, eventType string, job 
 	}
 	if err := p.realtimePub.PublishJSON(ctx, realtime.EventType(eventType), strings.TrimSpace(job.TenantID), out); err != nil {
 		p.logf(job, stage, "error", "phase=ws_publish_failed event=%s err=%v", eventType, err)
+		p.emitGroundingErrorTelemetry(ctx, job, "publish.stage_event", "ws_publish_failed", "realtime_publish_error", false)
 		return err
 	}
 	return nil
@@ -1181,6 +1252,205 @@ func mergeRiskState(dst, patch map[string]any) {
 	}
 	for k, v := range patch {
 		dst[k] = v
+	}
+}
+
+func (p *Pipeline) emitRiskCounter(ctx context.Context, tenantID, metric string, dimensions map[string]string, counters map[string]int64) {
+	if p == nil || p.telemetry == nil {
+		return
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	if err := p.telemetry.Increment(ctx, tenantID, "risk_pipeline", strings.TrimSpace(metric), time.Hour, dimensions, counters); err != nil {
+		log.Printf("%s telemetry_increment_failed tenant=%s metric=%s err=%v", logRiskPipeline, tenantID, strings.TrimSpace(metric), err)
+	}
+}
+
+func (p *Pipeline) emitGroundingErrorTelemetry(ctx context.Context, job *horizonmodels.RiskJob, phase, reasonCode, errorClass string, bestEffort bool) {
+	if p == nil {
+		return
+	}
+	tenantID := ""
+	if job != nil {
+		tenantID = strings.TrimSpace(job.TenantID)
+		if job.State == nil {
+			job.State = map[string]any{}
+		}
+		if s := strings.TrimSpace(phase); s != "" {
+			job.State[riskStateKeyLastErrorPhase] = s
+		}
+		if s := strings.TrimSpace(reasonCode); s != "" {
+			job.State[riskStateKeyLastErrorReasonCode] = s
+		}
+		if s := strings.TrimSpace(errorClass); s != "" {
+			job.State[riskStateKeyLastErrorClass] = s
+		}
+		job.State[riskStateKeyLastErrorAtUTC] = time.Now().UTC().Format(time.RFC3339Nano)
+		if bestEffort {
+			job.State[riskStateKeyBestEffortCount] = stateInt(job.State, riskStateKeyBestEffortCount) + 1
+		}
+	}
+	p.emitRiskCounter(ctx, tenantID, "horizon_grounding_errors_total", map[string]string{
+		"component":   "risk_pipeline",
+		"phase":       strings.TrimSpace(phase),
+		"error_class": strings.TrimSpace(errorClass),
+		"reason_code": strings.TrimSpace(reasonCode),
+	}, map[string]int64{"count": 1})
+	if bestEffort {
+		p.emitRiskCounter(ctx, tenantID, "horizon_grounding_best_effort_total", map[string]string{
+			"component":   "risk_pipeline",
+			"phase":       strings.TrimSpace(phase),
+			"reason_code": strings.TrimSpace(reasonCode),
+		}, map[string]int64{"count": 1})
+	}
+}
+
+func (p *Pipeline) shouldTriggerScoutRefresh(job *horizonmodels.RiskJob) bool {
+	if p == nil || job == nil || p.scoutRepo == nil {
+		return false
+	}
+	if !riskNoSignalsScoutRefreshEnabled() {
+		return false
+	}
+	if stateBool(job.State, riskStateKeyScoutRefreshMarker) {
+		return false
+	}
+	if stateInt(job.State, riskStateKeyScoutRefreshDepth) >= 1 {
+		return false
+	}
+	lastAt := parseRFC3339Any(stateString(job.State, riskStateKeyScoutRefreshAtUTC))
+	if lastAt.IsZero() {
+		return true
+	}
+	cooldownMinutes := 180
+	if raw := strings.TrimSpace(os.Getenv(envRiskScoutRefreshCooldownM)); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			cooldownMinutes = n
+		}
+	}
+	return time.Since(lastAt) >= time.Duration(cooldownMinutes)*time.Minute
+}
+
+func (p *Pipeline) enqueueScoutRefresh(ctx context.Context, job *horizonmodels.RiskJob, fragment *horizonmodels.HorizonFragment) (string, error) {
+	if p == nil || p.scoutRepo == nil {
+		return "", fmt.Errorf("scout refresh repo unavailable")
+	}
+	if job == nil || fragment == nil || strings.TrimSpace(fragment.CanonicalPath) == "" {
+		return "", fmt.Errorf("invalid refresh target")
+	}
+	scoutJob := &horizonmodels.ScoutingJob{
+		AgentJob: coremodels.AgentJob{
+			TenantID:  strings.TrimSpace(job.TenantID),
+			ProjectID: strings.TrimSpace(job.ProjectID),
+			Status:    "pending",
+			AgentID:   "scout",
+			Task: map[string]interface{}{
+				"targetCanonicalPath": strings.TrimSpace(fragment.CanonicalPath),
+				"scoutingStrategy":    string(horizonmodels.ScoutingStrategySnapshot),
+			},
+			State: map[string]interface{}{
+				"targetCanonicalPath":           strings.TrimSpace(fragment.CanonicalPath),
+				"targetFragmentId":              strings.TrimSpace(fragment.ID),
+				"lensId":                        strings.TrimSpace(job.LensID),
+				"currentState":                  string(horizonmodels.ScoutingJobStatePending),
+				"triggerOrigin":                 "risk_identify_no_signals",
+				"riskTriggeredScoutRefresh":     true,
+				"riskScoutRefreshDepth":         stateInt(job.State, riskStateKeyScoutRefreshDepth) + 1,
+				"skipRiskBackPropagation":       true,
+				"riskParentJobId":               strings.TrimSpace(job.ID),
+				"riskParentTargetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+			},
+		},
+		LensID:              strings.TrimSpace(job.LensID),
+		TargetCanonicalPath: strings.TrimSpace(fragment.CanonicalPath),
+		ScoutingStrategy:    string(horizonmodels.ScoutingStrategySnapshot),
+		BillingContext: horizonmodels.BillingContext{
+			ChargeModel: string(horizonmodels.ChargeModelAccess),
+			ProjectID:   strings.TrimSpace(job.ProjectID),
+		},
+		CurrentState: horizonmodels.ScoutingJobStatePending,
+	}
+	id, err := p.scoutRepo.Create(ctx, scoutJob)
+	if err != nil {
+		return "", err
+	}
+	p.logf(job, horizonmodels.RiskStageIdentify, "info", "phase=identify_scout_refresh_enqueued target=%s scoutJobId=%s fragmentId=%s",
+		strings.TrimSpace(fragment.CanonicalPath), strings.TrimSpace(id), strings.TrimSpace(fragment.ID))
+	return id, nil
+}
+
+func normalizeRiskTargetPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	// Keep domain path facet ordering deterministic.
+	if strings.HasPrefix(path, "/domain/") {
+		if norm, err := taxonomy.NormalizeDomainCanonicalPath(path); err == nil && strings.TrimSpace(norm) != "" {
+			path = strings.TrimSpace(norm)
+		}
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 2 {
+		lastIdx := len(parts) - 1
+		leaf := strings.TrimSpace(parts[lastIdx])
+		if leaf != "" {
+			normalizedLeaf := taxonomy.Slugify(naming.NormalizeLegalName(strings.ReplaceAll(leaf, "-", " ")))
+			if normalizedLeaf != "" {
+				parts[lastIdx] = normalizedLeaf
+				path = "/" + strings.Join(parts, "/")
+			}
+		}
+	}
+	if err := taxonomy.ValidateCanonicalPath(path); err == nil {
+		return path
+	}
+	return strings.TrimSpace(path)
+}
+
+func parseRFC3339Any(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t.UTC()
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.UTC()
+	}
+	return time.Time{}
+}
+
+func stateInt(state map[string]any, key string) int {
+	if state == nil {
+		return 0
+	}
+	raw, ok := state[key]
+	if !ok || raw == nil {
+		return 0
+	}
+	switch t := raw.(type) {
+	case int:
+		return t
+	case int32:
+		return int(t)
+	case int64:
+		return int(t)
+	case float64:
+		return int(t)
+	case float32:
+		return int(t)
+	case string:
+		v, _ := strconv.Atoi(strings.TrimSpace(t))
+		return v
+	default:
+		return 0
 	}
 }
 

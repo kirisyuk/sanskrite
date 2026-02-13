@@ -80,15 +80,13 @@ func TestValidationPolicy_HasDomainStrategicDirectionRules(t *testing.T) {
 }
 
 func TestValidationPolicy_ExpectedPathPrefix_ExtendedTypes(t *testing.T) {
-	p := &ValidationPolicy{}
-
-	if got := p.expectedPathPrefix(horizonmodels.FragmentTypeDomain); got != "/domain/" {
+	if got := ExpectedCanonicalPathPrefix(horizonmodels.FragmentTypeDomain); got != "/domain/" {
 		t.Fatalf("expected DOMAIN prefix /domain/, got %q", got)
 	}
-	if got := p.expectedPathPrefix(horizonmodels.FragmentTypeDecisionPoint); got != "/decision/" {
+	if got := ExpectedCanonicalPathPrefix(horizonmodels.FragmentTypeDecisionPoint); got != "/decision/" {
 		t.Fatalf("expected DECISION_POINT prefix /decision/, got %q", got)
 	}
-	if got := p.expectedPathPrefix(horizonmodels.FragmentTypeMechanism); got != "/mechanism/" {
+	if got := ExpectedCanonicalPathPrefix(horizonmodels.FragmentTypeMechanism); got != "/mechanism/" {
 		t.Fatalf("expected MECHANISM prefix /mechanism/, got %q", got)
 	}
 }
@@ -229,8 +227,8 @@ func TestValidationPolicy_OrgConsumesOrgQuarantine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide() error = %v", err)
 	}
-	if decision.Action != "quarantine" {
-		t.Fatalf("expected quarantine decision, got %s", decision.Action)
+	if decision.Action != "quarantine_soft" {
+		t.Fatalf("expected quarantine_soft decision, got %s", decision.Action)
 	}
 }
 
@@ -246,7 +244,7 @@ func TestValidationPolicy_GovPathOrgWhitelist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide() error = %v", err)
 	}
-	if decision.Action == "penalty" || decision.Action == "reject" {
+	if decision.Action == "penalty" || decision.Action == "reject" || decision.Action == "quarantine_soft" {
 		t.Fatalf("gov path should not be penalized/rejected, got %s", decision.Action)
 	}
 }
