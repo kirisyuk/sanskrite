@@ -148,6 +148,27 @@ type SourceDetails struct {
 
 	// legacy compatibility
 	SourceURI *string `json:"sourceUri,omitempty" firestore:"sourceUri"`
+
+	// horizon_monitor_feed / generic API-like feeds
+	HorizonMonitorCategory *string `json:"horizonMonitorCategory,omitempty" firestore:"horizonMonitorCategory,omitempty"`
+	HorizonMonitorFeedType *string `json:"horizonMonitorFeedType,omitempty" firestore:"horizonMonitorFeedType,omitempty"`
+	// HorizonMonitorIngestMode marks intended usage for Horizon Monitor sources:
+	// - "ontology_fact": source is intended to produce ontology facts/signals
+	// - "query_only": source is used for on-demand lookups/snapshots
+	HorizonMonitorIngestMode *string `json:"horizonMonitorIngestMode,omitempty" firestore:"horizonMonitorIngestMode,omitempty"`
+	// HorizonMonitorSignalType stores canonical signal type for source-driven signals (e.g. risk:protest).
+	HorizonMonitorSignalType *string `json:"horizonMonitorSignalType,omitempty" firestore:"horizonMonitorSignalType,omitempty"`
+	// HorizonMonitorRequiresAuth indicates that upstream provider needs credentials or relay secrets.
+	HorizonMonitorRequiresAuth *bool `json:"horizonMonitorRequiresAuth,omitempty" firestore:"horizonMonitorRequiresAuth,omitempty"`
+	// Legacy worldmonitor aliases (read/write compatibility).
+	WorldMonitorCategoryLegacy     *string           `json:"worldmonitorCategory,omitempty" firestore:"worldmonitorCategory,omitempty"`
+	WorldMonitorFeedTypeLegacy     *string           `json:"worldmonitorFeedType,omitempty" firestore:"worldmonitorFeedType,omitempty"`
+	WorldMonitorIngestModeLegacy   *string           `json:"worldmonitorIngestMode,omitempty" firestore:"worldmonitorIngestMode,omitempty"`
+	WorldMonitorSignalTypeLegacy   *string           `json:"worldmonitorSignalType,omitempty" firestore:"worldmonitorSignalType,omitempty"`
+	WorldMonitorRequiresAuthLegacy *bool             `json:"worldmonitorRequiresAuth,omitempty" firestore:"worldmonitorRequiresAuth,omitempty"`
+	RequestHeaders                 map[string]string `json:"requestHeaders,omitempty" firestore:"requestHeaders,omitempty"`
+	// PollIntervalMinutes allows source-level polling override (e.g., 30 min for Horizon Monitor feeds).
+	PollIntervalMinutes *int `json:"pollIntervalMinutes,omitempty" firestore:"pollIntervalMinutes,omitempty"`
 }
 
 // DataSource соответствует Core.DataSources
@@ -724,7 +745,7 @@ type ArtifactConfig struct {
 	StructureGeneration *StructureGenerationConfig `json:"structureGeneration,omitempty" firestore:"structureGeneration,omitempty"` // how structure was created
 	GenerationSettings  GenerationSettings         `json:"generationSettings" firestore:"generationSettings"`                       // generation settings
 	UserRequest         *string                    `json:"userRequest,omitempty" firestore:"userRequest,omitempty"`                 // original user request/requirements for the document
-	SourceInteractionID *string                   `json:"sourceInteractionId,omitempty" firestore:"sourceInteractionId,omitempty"` // ID of last user or assistant interaction that triggered document creation
+	SourceInteractionID *string                    `json:"sourceInteractionId,omitempty" firestore:"sourceInteractionId,omitempty"` // ID of last user or assistant interaction that triggered document creation
 }
 
 // ArtifactSection defines a section of the artifact with its generation config

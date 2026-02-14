@@ -3239,8 +3239,10 @@ func (e *ScoutEngine) processRelationsInternal(
 		if targetFragment == nil {
 			existingByPath, getErr := e.fragmentsRepo.GetByCanonicalPath(ctx, targetPath)
 			if getErr != nil {
-				logGroundingErrorWithContext(job, "scout", "relations.lookup_target_fragment", "target_lookup_failed", "repo_read_error", true, getErr)
-				e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.lookup_target_fragment", "target_lookup_failed", "repo_read_error", true)
+				if !errors.Is(getErr, horizonrepo.ErrFragmentNotFound) {
+					logGroundingErrorWithContext(job, "scout", "relations.lookup_target_fragment", "target_lookup_failed", "repo_read_error", true, getErr)
+					e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.lookup_target_fragment", "target_lookup_failed", "repo_read_error", true)
+				}
 			}
 			targetFragment = existingByPath
 		}

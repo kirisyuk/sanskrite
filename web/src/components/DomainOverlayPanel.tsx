@@ -20,6 +20,7 @@ export interface DomainOverlayAnswerItem {
   thesisText: string;
   dataGaps: any[];
   criticalDependencies: any[];
+  explanatoryUnits: any[];
   impactPaths: any[];
   criticalNodes: any[];
   concentrationEvidence: any[];
@@ -54,6 +55,8 @@ export interface DomainOverlayPanelProps {
   onRunDomain?: (item: DomainOverlayAnswerItem) => void;
   /** Per-dependency highlight callback */
   onHighlightDependency?: (dep: any) => void;
+  onHoverDependency?: (dep: any | null) => void;
+  onHoverExplanatoryUnit?: (unit: any | null) => void;
   onHighlightFacet?: (facetKey: string) => void;
   onClearHighlight?: () => void;
 }
@@ -61,6 +64,8 @@ export interface DomainOverlayPanelProps {
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
+
+const SECTION_MAX_HEIGHT = 190;
 
 const toneColor = (tone: Tone, theme: string): string => {
   if (tone === 'error') return '#EF4444';
@@ -106,6 +111,22 @@ const cardShadow = (theme: string): string =>
     : '0 12px 40px rgba(0,0,0,0.16)';
 
 const OVERLAY_Z = 70;
+const DOMAIN_LIST_WIDTH = 330; // 220 * 1.5
+const DOMAIN_EXPANDED_WIDTH = 465; // 310 * 1.5
+const nodeActionButtonStyle = (theme: string): React.CSSProperties => ({
+  width: 24,
+  height: 24,
+  borderRadius: 9,
+  border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+  background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)',
+  color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
+  flexShrink: 0,
+});
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                         */
@@ -120,7 +141,7 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
     readinessMeta, activeDomainOverlayPath,
     alwaysShowMini = false,
     onCreateDomain, onRunDomain,
-    onHighlightDependency, onHighlightFacet, onClearHighlight,
+    onHighlightDependency, onHoverDependency, onHoverExplanatoryUnit, onHighlightFacet, onClearHighlight,
   } = props;
 
   const activeItem = React.useMemo(
@@ -154,8 +175,24 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
     }
   }, [createQuery, createLoading, onCreateDomain]);
 
+  const closeDomainList = React.useCallback(() => {
+    // Reset active domain selection so graph highlights are cleared.
+    setActiveKey('');
+    onClearHighlight?.();
+    setMode('mini');
+  }, [setActiveKey, onClearHighlight, setMode]);
+
   // Expanded accordion sections
   const [expandedSections, setExpandedSections] = React.useState<Set<string>>(new Set(['thesis']));
+  const [hoveredDomainKey, setHoveredDomainKey] = React.useState<string>('');
+  const [hoveredDependencyKey, setHoveredDependencyKey] = React.useState<string>('');
+  const [hoveredExplanatoryKey, setHoveredExplanatoryKey] = React.useState<string>('');
+  React.useEffect(() => {
+    setHoveredDependencyKey('');
+    setHoveredExplanatoryKey('');
+    onHoverDependency?.(null);
+    onHoverExplanatoryUnit?.(null);
+  }, [activeItem?.key, mode, onHoverDependency, onHoverExplanatoryUnit]);
   const toggleSection = React.useCallback((s: string) => {
     setExpandedSections((prev) => {
       const next = new Set(prev);
@@ -170,11 +207,11 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (mode === 'expanded') { e.preventDefault(); setMode('list'); return; }
-      if (mode === 'list') { e.preventDefault(); setMode('mini'); return; }
+      if (mode === 'list') { e.preventDefault(); closeDomainList(); return; }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [mode, setMode]);
+  }, [mode, setMode, closeDomainList]);
 
   if (items.length === 0 && !miniBadge && !alwaysShowMini) return null;
 
@@ -260,7 +297,7 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
           position: 'absolute',
           right: 0,
           bottom: 0,
-          width: 220,
+          width: `min(92vw, ${DOMAIN_LIST_WIDTH}px)`,
           maxHeight: 'min(400px, 60vh)',
           borderRadius: 14,
           border: '1px solid var(--border-subtle)',
@@ -312,19 +349,24 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
             )}
             <button
               type="button"
-              onClick={() => setMode('mini')}
-              style={{
-                border: 'none',
-                background: 'transparent',
-                cursor: 'pointer',
-                fontSize: 14,
-                color: 'var(--text-secondary-strong)',
-                padding: '2px 4px',
-                borderRadius: 6,
-              }}
-              title="Collapse"
+              onClick={closeDomainList}
+              style={nodeActionButtonStyle(theme)}
+              title="Close domain list"
+              aria-label="Close domain list"
             >
-              ‹
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M6 6l12 12M18 6l-12 12" />
+              </svg>
             </button>
           </div>
         </div>
@@ -380,10 +422,22 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
         )}
 
         {/* List */}
-        <div style={{ overflowY: 'auto', padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            padding: '6px 8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            overscrollBehavior: 'contain',
+          }}
+        >
           {items.map((item) => {
             const meta = readinessMeta(item);
             const isActive = item.key === activeKey;
+            const isHovered = item.key === hoveredDomainKey;
             const isPending = !item.snapshotId && item.readinessStatus === 'pending';
             return (
               <button
@@ -396,6 +450,10 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
                   setActiveKey(item.key);
                   setMode('expanded');
                 }}
+                onMouseEnter={() => setHoveredDomainKey(item.key)}
+                onMouseLeave={() => setHoveredDomainKey((prev) => (prev === item.key ? '' : prev))}
+                onFocus={() => setHoveredDomainKey(item.key)}
+                onBlur={() => setHoveredDomainKey((prev) => (prev === item.key ? '' : prev))}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -404,12 +462,22 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
                   width: '100%',
                   padding: '8px 10px',
                   borderRadius: 10,
-                  border: isActive ? '1px solid var(--accent-primary, #3B82F6)' : '1px solid transparent',
+                  border: isActive
+                    ? '1px solid var(--accent-primary, #3B82F6)'
+                    : isHovered
+                      ? (theme === 'dark' ? '1px solid rgba(59,130,246,0.44)' : '1px solid rgba(59,130,246,0.30)')
+                      : '1px solid transparent',
                   background: isActive
                     ? (theme === 'dark' ? 'rgba(59,130,246,0.10)' : 'rgba(59,130,246,0.06)')
-                    : 'transparent',
+                    : isHovered
+                      ? (theme === 'dark' ? 'rgba(59,130,246,0.08)' : 'rgba(59,130,246,0.05)')
+                      : 'transparent',
+                  boxShadow: isHovered && !isActive
+                    ? (theme === 'dark' ? '0 6px 14px rgba(0,0,0,0.24)' : '0 6px 14px rgba(0,0,0,0.10)')
+                    : 'none',
                   cursor: 'pointer',
                   textAlign: 'left',
+                  transition: 'background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease',
                 }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -454,8 +522,9 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
         position: 'absolute',
         right: 0,
         bottom: 0,
-        width: 310,
+        width: `min(92vw, ${DOMAIN_EXPANDED_WIDTH}px)`,
         maxHeight: 'min(70vh, 600px)',
+        minHeight: 'min(38vh, 320px)',
         borderRadius: 14,
         border: '1px solid var(--border-subtle)',
         background: cardBg(theme),
@@ -476,12 +545,29 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
           gap: 8,
           padding: '10px 12px',
           borderBottom: '1px solid var(--border-subtle)',
-          cursor: 'pointer',
         }}
-        onClick={() => setMode('list')}
-        title="Back to domain list"
       >
-        <span style={{ fontSize: 14, color: 'var(--text-secondary-strong)', fontWeight: 700 }}>‹</span>
+        <button
+          type="button"
+          onClick={() => setMode('list')}
+          title="Back to domain list"
+          aria-label="Back to domain list"
+          style={nodeActionButtonStyle(theme)}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M15 6l-6 6 6 6" />
+          </svg>
+        </button>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
@@ -532,7 +618,19 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
       </div>
 
       {/* Scrollable body */}
-      <div style={{ overflowY: 'auto', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          padding: '8px 10px 16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          overscrollBehavior: 'contain',
+          scrollPaddingBottom: 16,
+        }}
+      >
 
         {/* ▸ Thesis */}
         <AccordionSection
@@ -541,7 +639,7 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
           expanded={expandedSections.has('thesis')}
           onToggle={toggleSection}
           theme={theme}
-          defaultOpen
+          maxBodyHeight={220}
         >
           {activeItem.thesisText ? (
             <div style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--text-heading)' }}>
@@ -568,6 +666,7 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
           expanded={expandedSections.has('deps')}
           onToggle={toggleSection}
           theme={theme}
+          maxBodyHeight={220}
         >
           {activeItem.criticalDependencies.length === 0 ? (
             <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', fontStyle: 'italic' }}>None found.</div>
@@ -578,17 +677,40 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
                 const tgt = String(dep?.targetCanonicalPath || '').split('/').pop() || '?';
                 const score = Number(dep?.topDependencyScore || 0);
                 const facet = String(dep?.facetKey || '').trim();
+                const rowKey = String(dep?.edgeId || idx);
+                const isHovered = hoveredDependencyKey === rowKey;
                 return (
                   <div
-                    key={String(dep?.edgeId || idx)}
+                    key={rowKey}
                     style={{
                       padding: '6px 8px',
                       borderRadius: 8,
-                      border: '1px solid var(--border-subtle)',
-                      background: theme === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)',
-                      cursor: onHighlightDependency ? 'pointer' : 'default',
+                      border: isHovered
+                        ? (theme === 'dark' ? '1px solid rgba(59,130,246,0.44)' : '1px solid rgba(59,130,246,0.30)')
+                        : '1px solid var(--border-subtle)',
+                      background: isHovered
+                        ? (theme === 'dark' ? 'rgba(59,130,246,0.08)' : 'rgba(59,130,246,0.05)')
+                        : (theme === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)'),
+                      cursor: onHoverDependency || onHighlightDependency ? 'pointer' : 'default',
+                      transition: 'background 0.12s ease, border-color 0.12s ease',
                     }}
                     onClick={() => onHighlightDependency?.(dep)}
+                    onMouseEnter={() => {
+                      setHoveredDependencyKey(rowKey);
+                      onHoverDependency?.(dep);
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredDependencyKey((prev) => (prev === rowKey ? '' : prev));
+                      onHoverDependency?.(null);
+                    }}
+                    onFocus={() => {
+                      setHoveredDependencyKey(rowKey);
+                      onHoverDependency?.(dep);
+                    }}
+                    onBlur={() => {
+                      setHoveredDependencyKey((prev) => (prev === rowKey ? '' : prev));
+                      onHoverDependency?.(null);
+                    }}
                     title={`${dep?.sourceCanonicalPath} → ${dep?.targetCanonicalPath}`}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -624,6 +746,103 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
           )}
         </AccordionSection>
 
+        {/* ▸ Mechanisms */}
+        {activeItem.explanatoryUnits.length > 0 && (
+          <AccordionSection
+            id="mechanisms"
+            label={`Mechanisms (${activeItem.explanatoryUnits.length})`}
+            expanded={expandedSections.has('mechanisms')}
+            onToggle={toggleSection}
+            theme={theme}
+            maxBodyHeight={260}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {activeItem.explanatoryUnits.slice(0, 80).map((unit: any, idx: number) => {
+                const src = String(unit?.sourceCanonicalPath || '').split('/').pop() || '?';
+                const tgt = String(unit?.targetCanonicalPath || '').split('/').pop() || '?';
+                const rank = Number(unit?.dependencyRank || 0) || idx + 1;
+                const mechanism = String(unit?.mechanism || '').trim();
+                const role = String(unit?.roleInThesis || '').trim();
+                const explanation = String(unit?.explanationText || '').trim();
+                const confidence = Number(unit?.confidence || 0);
+                const rowKey = String(unit?.unitId || unit?.dependencyEdgeId || idx);
+                const isHovered = hoveredExplanatoryKey === rowKey;
+                return (
+                  <div
+                    key={rowKey}
+                    style={{
+                      padding: '6px 8px',
+                      borderRadius: 8,
+                      border: isHovered
+                        ? (theme === 'dark' ? '1px solid rgba(56,189,248,0.48)' : '1px solid rgba(2,132,199,0.34)')
+                        : '1px solid var(--border-subtle)',
+                      background: isHovered
+                        ? (theme === 'dark' ? 'rgba(56,189,248,0.10)' : 'rgba(2,132,199,0.06)')
+                        : (theme === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)'),
+                      cursor: onHoverExplanatoryUnit ? 'pointer' : 'default',
+                      transition: 'background 0.12s ease, border-color 0.12s ease',
+                    }}
+                    onMouseEnter={() => {
+                      setHoveredExplanatoryKey(rowKey);
+                      onHoverExplanatoryUnit?.(unit);
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredExplanatoryKey((prev) => (prev === rowKey ? '' : prev));
+                      onHoverExplanatoryUnit?.(null);
+                    }}
+                    onFocus={() => {
+                      setHoveredExplanatoryKey(rowKey);
+                      onHoverExplanatoryUnit?.(unit);
+                    }}
+                    onBlur={() => {
+                      setHoveredExplanatoryKey((prev) => (prev === rowKey ? '' : prev));
+                      onHoverExplanatoryUnit?.(null);
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-secondary-strong)', minWidth: 14 }}>
+                        {rank}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: 'var(--text-heading)',
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {src} → {tgt}
+                      </span>
+                      {confidence > 0 && <ScoreBar score={confidence} theme={theme} />}
+                    </div>
+                    {explanation && (
+                      <div style={{ marginTop: 4, fontSize: 10, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                        {explanation}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                      {mechanism && (
+                        <span style={{ ...pillStyle('info', theme), fontSize: 9, padding: '1px 6px' }}>
+                          {mechanism}
+                        </span>
+                      )}
+                      {role && (
+                        <span style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>
+                          {role}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </AccordionSection>
+        )}
+
         {/* ▸ Concentration Hotspots */}
         {activeItem.concentrationEvidence.length > 0 && (
           <AccordionSection
@@ -632,6 +851,7 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
             expanded={expandedSections.has('concentration')}
             onToggle={toggleSection}
             theme={theme}
+            maxBodyHeight={220}
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               {activeItem.concentrationEvidence.slice(0, 8).map((ev: any, idx: number) => {
@@ -665,6 +885,7 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
             expanded={expandedSections.has('control')}
             onToggle={toggleSection}
             theme={theme}
+            maxBodyHeight={220}
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               {activeItem.controlExposure.slice(0, 8).map((ce: any, idx: number) => {
@@ -696,6 +917,7 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
             expanded={expandedSections.has('gaps')}
             onToggle={toggleSection}
             theme={theme}
+            maxBodyHeight={220}
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               {activeItem.dataGaps.slice(0, 10).map((gap: any, idx: number) => (
@@ -727,6 +949,8 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
             expanded={expandedSections.has('facets')}
             onToggle={toggleSection}
             theme={theme}
+            maxBodyHeight={180}
+            bodyPadding="4px 10px 12px"
           >
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
               {Object.entries(activeItem.facets).map(([key, vals]) => (
@@ -757,6 +981,7 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
             expanded={expandedSections.has('timeline')}
             onToggle={toggleSection}
             theme={theme}
+            maxBodyHeight={240}
           >
             {activeDomainOverlayPath && (
               <div
@@ -774,7 +999,7 @@ export const DomainOverlayPanel: React.FC<DomainOverlayPanelProps> = (props) => 
                 {activeDomainOverlayPath}
               </div>
             )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 160, overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {timeline.map((ev) => {
                 const tone = domainContractEventTone(ev);
                 const stageLabel = domainContractEventLabel(ev);
@@ -824,11 +1049,24 @@ const AccordionSection: React.FC<{
   expanded: boolean;
   onToggle: (id: string) => void;
   theme: string;
-  defaultOpen?: boolean;
+  maxBodyHeight?: number;
+  bodyPadding?: string;
   children: React.ReactNode;
-}> = ({ id, label, expanded, onToggle, theme, children }) => (
+}> = ({
+  id,
+  label,
+  expanded,
+  onToggle,
+  theme,
+  children,
+  maxBodyHeight = SECTION_MAX_HEIGHT,
+  bodyPadding = '4px 10px 8px',
+}) => (
   <div
     style={{
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 0,
       borderRadius: 10,
       border: '1px solid var(--border-subtle)',
       background: theme === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)',
@@ -855,7 +1093,14 @@ const AccordionSection: React.FC<{
       <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-heading)' }}>{label}</span>
     </button>
     {expanded && (
-      <div style={{ padding: '4px 10px 8px' }}>
+      <div
+        style={{
+          padding: bodyPadding,
+          maxHeight: maxBodyHeight,
+          overflowY: 'auto',
+          overscrollBehavior: 'contain',
+        }}
+      >
         {children}
       </div>
     )}

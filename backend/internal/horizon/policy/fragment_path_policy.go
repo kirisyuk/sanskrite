@@ -17,6 +17,7 @@ var fragmentPathPrefixes = map[horizonmodels.FragmentType]string{
 	horizonmodels.FragmentTypeDomain:        "/domain/",
 	horizonmodels.FragmentTypeSphere:        "/sphere/",
 	horizonmodels.FragmentTypeSupplyLink:    "/supply-link/",
+	horizonmodels.FragmentTypeTrack:         "/track/",
 	horizonmodels.FragmentTypeProgram:       "/program/",
 	horizonmodels.FragmentTypeMarket:        "/market/",
 	horizonmodels.FragmentTypeEvent:         "/event/",

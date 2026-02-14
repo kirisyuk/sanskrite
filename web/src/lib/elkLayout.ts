@@ -2237,8 +2237,9 @@ export async function layoutLevelsTwoPane<T = any>(
     'NEEDS': { outgoing: 'Needs', incoming: 'Needed by' },
     'USES': { outgoing: 'Uses', incoming: 'Used by' },
     'CONSUMES': { outgoing: 'Consumes', incoming: 'Consumed by' },
-    'PARTNERS_WITH': { outgoing: 'Partners:', incoming: 'Partners:' },
-    'COOPERATES_WITH': { outgoing: 'Partners:', incoming: 'Partners:' },
+    // More explicit than "Partners" because these are entity nodes, not contracts/agreements.
+    'PARTNERS_WITH': { outgoing: 'Partner entities:', incoming: 'Partner entities:' },
+    'COOPERATES_WITH': { outgoing: 'Partner entities:', incoming: 'Partner entities:' },
     'AFFILIATED_WITH': { outgoing: 'Affiliated with', incoming: 'Affiliated with' },
     'MEMBER_OF': { outgoing: 'Member of', incoming: 'Has member' },
     'OPERATES_VIA': { outgoing: 'Via', incoming: 'Via' },
@@ -2528,7 +2529,7 @@ export async function layoutLevelsTwoPane<T = any>(
         if (nodes.length === 0) continue;
         
         // Pre-process nodes: extract labels and metadata
-        const nodeData: Array<{ node: Node<T>; label: string; type: string; id: string }> = [];
+        const nodeData: Array<{ label: string; type: string; id: string }> = [];
         for (const n of nodes) {
           const d: any = (n as any)?.data || {};
           const nodeLabel = String(d?.label || '').trim() || 
@@ -2542,76 +2543,23 @@ export async function layoutLevelsTwoPane<T = any>(
             })();
           const nodeType = String(d?.type || '').trim() || '';
           nodeData.push({
-            node: n,
             label: nodeLabel,
             type: nodeType,
             id: String(n.id || '').trim(),
           });
         }
-        
-        // Smart grouping: find groups sharing common prefix (min 2 words, length > 10 chars)
-        const processedItems: Array<{ id: string; label: string; type: string }> = [];
-        const used = new Set<number>();
-        
-        for (let i = 0; i < nodeData.length; i++) {
-          if (used.has(i)) continue;
-          
-          const current = nodeData[i]!;
-          const currentWords = current.label.split(/\s+/).filter(Boolean);
-          
-          // Need at least 2 words and length > 10 chars for grouping
-          if (currentWords.length < 2 || current.label.length <= 10) {
-            processedItems.push({
-              id: current.id,
-              label: current.label,
-              type: current.type,
-            });
-            used.add(i);
-            continue;
-          }
-          
-          // Find nodes with matching prefix (first 2 words)
-          const prefix = currentWords.slice(0, 2).join(' ');
-          const group: typeof nodeData = [current];
-          const groupIndices = [i];
-          
-          for (let j = i + 1; j < nodeData.length; j++) {
-            if (used.has(j)) continue;
-            const other = nodeData[j]!;
-            const otherWords = other.label.split(/\s+/).filter(Boolean);
-            if (otherWords.length >= 2 && otherWords.slice(0, 2).join(' ') === prefix) {
-              group.push(other);
-              groupIndices.push(j);
-            }
-          }
-          
-          // If group has > 1 item, collapse them
-          if (group.length > 1) {
-            processedItems.push({
-              id: group[0]!.id,
-              label: `${prefix} +${group.length - 1}`,
-              type: group[0]!.type,
-            });
-            groupIndices.forEach(idx => used.add(idx));
-          } else {
-            processedItems.push({
-              id: current.id,
-              label: current.label,
-              type: current.type,
-            });
-            used.add(i);
-          }
-        }
-        
-        // Build items array with processed items (respect maxItems limit)
+
+        // Deterministic UX: no heuristic prefix-grouping; just sort and show top-N (+overflow).
+        nodeData.sort((a, b) => a.label.localeCompare(b.label));
+
         const items: Array<{ id: string; label: string; type: string }> = [];
         const maxItems = 5; // Slightly relaxed limit for badges
-        for (let i = 0; i < Math.min(processedItems.length, maxItems); i++) {
-          items.push(processedItems[i]!);
+        for (let i = 0; i < Math.min(nodeData.length, maxItems); i++) {
+          items.push(nodeData[i]!);
         }
         
         // Add overflow indicator if needed
-        const overflow = Math.max(0, nodes.length - maxItems);
+        const overflow = Math.max(0, nodeData.length - maxItems);
         if (overflow > 0) {
           items.push({
             id: `__overflow__${labelKey}`,
@@ -2676,6 +2624,11 @@ export async function layoutLevelsTwoPane<T = any>(
           const bl = String((b.data as any)?.label || b.id);
           return al.localeCompare(bl);
         });
+        // Determine if all nodes in this business block belong to a single relation label
+        // (e.g. only "Partner entities:"). If so, show that label above the expanded node list.
+        const blockFactsForHeader = buildBusinessFacts(nodesFlat);
+        const expandedNodesHeader =
+          blockFactsForHeader.length === 1 ? String(blockFactsForHeader[0]?.label || '').trim() : '';
         const contextCard = buildBusinessBlockCard(typeKey, nodesFlat, isBlockCollapsed);
         const cardW = CONTEXT_CARD_WIDTH + LEFT_REL_CONTAINER_PAD_X * 2;
 
@@ -2770,7 +2723,7 @@ export async function layoutLevelsTwoPane<T = any>(
           const blockW = cols * nodeW + Math.max(0, cols - 1) * groupChildGapX + LEFT_REL_CONTAINER_PAD_X * 2;
           relBlocks.push({
             edgeTypeKey: '',
-            label: '',
+            label: expandedNodesHeader,
             nodes: nodesFlat,
             cols,
             startX: relCursor,
@@ -2781,6 +2734,7 @@ export async function layoutLevelsTwoPane<T = any>(
             masonry: true,
             businessBlock: true,
             blockKey: typeKey,
+            showHeader: Boolean(expandedNodesHeader),
           } as any);
           relColsTotal += cols;
           typeBlockW = relCursor + blockW;
@@ -3942,8 +3896,6 @@ export async function layoutLevelsTwoPane<T = any>(
       } as any);
 
       const relBlocks = (b.relBlocks || []) as any[];
-      const businessBlockRelGroupId = `levels:leftrel:${typeGroupId}:__block__:${typeKey}`;
-      let businessBlockRelGroupCreated = false;
       for (let rbIdx = 0; rbIdx < relBlocks.length; rbIdx++) {
         const rb: any = relBlocks[rbIdx]!;
         const isBusinessBlockRb = Boolean((rb as any)?.businessBlock);
@@ -3961,47 +3913,43 @@ export async function layoutLevelsTwoPane<T = any>(
         // Create a real container for this relation subcategory within the type section.
         const rbStart = Math.round(Math.max(0, Math.floor((rb as any)?.startX || 0)));
         const rbW = Math.max(1, Math.round(Math.floor((rb as any)?.blockW || 0) || 1));
-        const relGroupId = isBusinessBlockRb ? businessBlockRelGroupId : `levels:leftrel:${typeGroupId}:${relKeyNorm || 'OTHER'}:${rbIdx}`;
-        const relGroupCreatedNow = (() => {
-          if (!isBusinessBlockRb) return true;
-          if (businessBlockRelGroupCreated) return false;
-          businessBlockRelGroupCreated = true;
-          return true;
-        })();
-        if (relGroupCreatedNow) {
-          groupNodes.push({
-            id: relGroupId,
-            type: 'horizonGroup' as any,
-            position: { x: isBusinessBlockRb ? 0 : rbStart, y: 0 },
-            parentId: typeGroupId,
-            extent: 'parent' as any,
-            selectable: false,
-            draggable: false,
-            connectable: false,
-            focusable: false,
-            deletable: false,
-            style: { width: isBusinessBlockRb ? typeGroupW : rbW, height: Math.max(1, Math.round(groupH)), zIndex: 0 } as any,
-            data: {
-              isGroup: true,
-              groupIsBackdrop: true,
-              groupInteractive: false,
-              groupHideHeader: true,
-              groupNoFill: true,
-              // Only draw vertical dividers between relation subcategories.
-              // Business-block cards use internal columns (card + items) and should read as ONE subgroup.
-              groupBorderMode: isBusinessBlockRb ? 'none' : (rbIdx < relBlocks.length - 1 ? 'divider-right' : 'none'),
-              // Footer label + collapse control (rendered by HorizonGroupNode).
-              // No footer for business block context cards.
-              groupFooterTitle: isBusinessBlockRb ? '' : relTitle,
-              groupFooterEdgeTypeKey: isBusinessBlockRb ? '' : relKeyNorm,
-              groupFooterNodeCount: isBusinessBlockRb ? 0 : nodeCount,
-              groupFooterCollapsed: isBusinessBlockRb ? false : collapsed,
-              groupFooterFirstNodeId: isBusinessBlockRb ? '' : firstNodeId,
-              onToggleSubcategoryCollapse,
-              groupId: groupId, // root Levels-left group
-            } as any,
-          } as any);
-        }
+        const relGroupId = `levels:leftrel:${typeGroupId}:${relKeyNorm || 'OTHER'}:${rbIdx}`;
+        const showBusinessBlockHeader = Boolean(isBusinessBlockRb && (rb as any)?.showHeader && relTitle);
+        groupNodes.push({
+          id: relGroupId,
+          type: 'horizonGroup' as any,
+          position: { x: rbStart, y: 0 },
+          parentId: typeGroupId,
+          extent: 'parent' as any,
+          selectable: false,
+          draggable: false,
+          connectable: false,
+          focusable: false,
+          deletable: false,
+          style: { width: rbW, height: Math.max(1, Math.round(groupH)), zIndex: 0 } as any,
+          data: {
+            isGroup: true,
+            groupIsBackdrop: true,
+            groupInteractive: false,
+            // Business blocks: show a small header above the expanded node list (if a single relation label applies).
+            groupHideHeader: isBusinessBlockRb ? !showBusinessBlockHeader : true,
+            groupTitle: (isBusinessBlockRb && showBusinessBlockHeader) ? relTitle : '',
+            groupCount: (isBusinessBlockRb && showBusinessBlockHeader) ? nodeCount : undefined,
+            groupNoFill: true,
+            // Only draw vertical dividers between relation subcategories.
+            // Business-block columns (card + expanded nodes) should read as one section.
+            groupBorderMode: isBusinessBlockRb ? 'none' : (rbIdx < relBlocks.length - 1 ? 'divider-right' : 'none'),
+            // Footer label + collapse control (rendered by HorizonGroupNode).
+            // No footer for business block context cards.
+            groupFooterTitle: isBusinessBlockRb ? '' : relTitle,
+            groupFooterEdgeTypeKey: isBusinessBlockRb ? '' : relKeyNorm,
+            groupFooterNodeCount: isBusinessBlockRb ? 0 : nodeCount,
+            groupFooterCollapsed: isBusinessBlockRb ? false : collapsed,
+            groupFooterFirstNodeId: isBusinessBlockRb ? '' : firstNodeId,
+            onToggleSubcategoryCollapse,
+            groupId: groupId, // root Levels-left group
+          } as any,
+        } as any);
 
         for (let idx = 0; idx < rb.nodes.length; idx++) {
           const child = rb.nodes[idx]!;
@@ -4012,7 +3960,9 @@ export async function layoutLevelsTwoPane<T = any>(
           const isSyntheticContextCard =
             String((child as any)?.id || '').startsWith('levels:leftblock:card:');
 
-          const rbStartX = isBusinessBlockRb ? rbStart : 0;
+          // Children are nested inside `relGroupId`, which is already positioned at `rbStart`.
+          // So we should NOT add `rbStart` again for business blocks.
+          const rbStartX = 0;
           if (isSyntheticContextCard) {
             // Render the synthetic context card directly — preserve its data as-is.
             const cx = LEFT_REL_CONTAINER_PAD_X + rbStartX;

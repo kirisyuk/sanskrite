@@ -1347,6 +1347,17 @@ func main() {
 			if err := propagationProfileLookup.Initialize(context.Background()); err != nil {
 				logger.Printf("WARNING: propagation profile lookup initialization fallback: %v", err)
 			}
+			orchestrator = orchestrator.WithHorizonMonitorPipeline(
+				discovery.NewHorizonMonitorPipeline(
+					ontologyFactsRepo,
+					exec,
+					horizonFragmentsRepo,
+					horizonEdgesRepo,
+					propagationEngine,
+					propagationProfileLookup,
+					logger,
+				),
+			)
 			interpretationQueue := horizoninterp.NewInterpretationQueue(fsClient.Client())
 			interpretationCache := horizoninterp.NewInterpretationCache(fsClient.Client())
 			scoreComputer := horizoninterp.NewScoreComputer()

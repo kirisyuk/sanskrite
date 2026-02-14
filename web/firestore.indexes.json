@@ -42,6 +42,15 @@
       ]
     },
     {
+      "collectionGroup": "core_projects",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "lastInteractionAt", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "core_datasources",
       "queryScope": "COLLECTION",
       "fields": [
@@ -245,6 +254,16 @@
       "collectionGroup": "ontology_facts",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "canonicalPaths", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ontology_facts",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "spherePaths", "arrayConfig": "CONTAINS" },
         { "fieldPath": "updatedAt", "order": "ASCENDING" }
@@ -256,6 +275,35 @@
       "fields": [
         { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "spherePaths", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ontology_facts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "canonicalPaths", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ontology_facts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ontology_facts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "type", "order": "ASCENDING" },
         { "fieldPath": "updatedAt", "order": "DESCENDING" }
       ]
     },
@@ -524,6 +572,16 @@
       ]
     },
     {
+      "collectionGroup": "agent_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "projectId", "order": "ASCENDING" },
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "listening_signals",
       "queryScope": "COLLECTION",
       "fields": [
@@ -610,6 +668,15 @@
       "collectionGroup": "horizon_fragments",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "governance.status", "order": "ASCENDING" },
         { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "labels.en", "order": "ASCENDING" },
@@ -642,6 +709,65 @@
         { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "governance.status", "order": "ASCENDING" },
         { "fieldPath": "canonicalPath", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "type", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "indexPaths", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "governance.status", "order": "ASCENDING" },
+        { "fieldPath": "indexPaths", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "marketSegmentNormDomains", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "governance.status", "order": "ASCENDING" },
+        { "fieldPath": "marketSegmentNormDomains", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "marketSegmentNormPairs", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "governance.status", "order": "ASCENDING" },
+        { "fieldPath": "marketSegmentNormPairs", "arrayConfig": "CONTAINS" }
       ]
     },
     {
@@ -825,6 +951,126 @@
       ]
     },
     {
+      "collectionGroup": "horizon_telemetry",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "component", "order": "ASCENDING" },
+        { "fieldPath": "metric", "order": "ASCENDING" },
+        { "fieldPath": "windowStart", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_items",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "projectId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_items",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_items",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_items",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "projectId", "order": "ASCENDING" },
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_materialized_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "canonicalKey", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_materialized_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "canonicalKey", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_materialized_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_materialized_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_missing_info_status",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fragmentId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_missing_info_status",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fragmentId", "order": "ASCENDING" },
+        { "fieldPath": "questionHash", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_missing_info_status",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "nextAttemptAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragment_profiles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fragmentId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "capturedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragment_profiles",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "canonicalPath", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "capturedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "horizon_enforcement_jobs",
       "queryScope": "COLLECTION",
       "fields": [
@@ -836,9 +1082,27 @@
       "collectionGroup": "horizon_enforcement_jobs",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "parentJobId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_enforcement_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_enforcement_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
       ]
     },
     {
@@ -873,6 +1137,71 @@
         { "fieldPath": "service", "order": "ASCENDING" },
         { "fieldPath": "types", "arrayConfig": "CONTAINS" },
         { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "addedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "type", "order": "ASCENDING" },
+        { "fieldPath": "addedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "processedForStrategicAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "canonicalPath", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "edgeId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fragmentId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_lens_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "addedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "domain_answer_snapshots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "assembledAt", "order": "DESCENDING" }
       ]
     },
     {
@@ -952,4 +1281,3 @@
     }
   ]
 }
-

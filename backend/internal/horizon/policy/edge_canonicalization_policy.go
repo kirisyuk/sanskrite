@@ -60,6 +60,12 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 		res.EdgeType = horizonmodels.DependencyTypeOwns
 		res.Changed = true
 		res.Reason = "canonicalize: ORGANIZATION INVESTS_IN FACILITY with ownership evidence -> ORGANIZATION OWNS FACILITY"
+	} else if fix, ok := ResolveEdgeDirectionAutoFix(in.EdgeType, in.SourceType, in.TargetType); ok {
+		res.OriginalType = in.EdgeType
+		res.EdgeType = fix.NewType
+		res.ShouldSwap = fix.ShouldSwap
+		res.Changed = true
+		res.Reason = fix.Reason
 	} else if newType, shouldSwap, changed, reason := horizonmodels.CanonicalizeEdgeWithPaths(
 		in.EdgeType, in.SourceType, in.TargetType, in.SourcePath, in.TargetPath,
 	); changed {

@@ -2,7 +2,10 @@ package enrich
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,11 +51,6 @@ func EnrichFragmentFromWikidataIfPresent(
 	}
 	opts = opts.withDefaults()
 
-	// Only meaningful for ORG/PERSON in v1.
-	if fragment.Type != hmodels.FragmentTypeOrganization && fragment.Type != hmodels.FragmentTypePerson {
-		return false, nil
-	}
-
 	qid := strings.TrimSpace(extractWikidataIDFromFragment(fragment))
 	if qid == "" || !strings.HasPrefix(qid, "Q") {
 		return false, nil
@@ -96,85 +94,90 @@ func EnrichFragmentFromEntityData(
 		return false, nil
 	}
 
-	// Type-gating (avoid applying human data to orgs and vice versa).
-	p31 := extractEntityIDs(ed.PropertiesRaw, "P31")
-	isHuman := false
-	for _, x := range p31 {
-		if x == "Q5" {
-			isHuman = true
-			break
-		}
-	}
-	if fragment.Type == hmodels.FragmentTypePerson && !isHuman {
-		return false, fmt.Errorf("qid %s is not a human (P31=%v)", qid, p31)
-	}
-	if fragment.Type == hmodels.FragmentTypeOrganization && isHuman {
-		return false, fmt.Errorf("qid %s is a human (unexpected for org)", qid)
+	// Coordinates from Wikidata P625 for all fragment kinds (best-effort).
+	if applyCoordinatesFromWikidata(fragment, ed.PropertiesRaw, opts.Overwrite) {
+		changed = true
 	}
 
-	// Ensure maps exist
-	if fragment.Labels == nil {
-		fragment.Labels = map[string]string{}
-	}
-	if fragment.Identifiers == nil {
-		fragment.Identifiers = map[string]string{}
-	}
+	if fragment.Type == hmodels.FragmentTypePerson || fragment.Type == hmodels.FragmentTypeOrganization {
+		// Type-gating (avoid applying human data to orgs and vice versa).
+		p31 := extractEntityIDs(ed.PropertiesRaw, "P31")
+		isHuman := false
+		for _, x := range p31 {
+			if x == "Q5" {
+				isHuman = true
+				break
+			}
+		}
+		if fragment.Type == hmodels.FragmentTypePerson && !isHuman {
+			return false, fmt.Errorf("qid %s is not a human (P31=%v)", qid, p31)
+		}
+		if fragment.Type == hmodels.FragmentTypeOrganization && isHuman {
+			return false, fmt.Errorf("qid %s is a human (unexpected for org)", qid)
+		}
 
-	// labels.en + description
-	if s := strings.TrimSpace(ed.Label); s != "" {
-		if opts.Overwrite || strings.TrimSpace(fragment.Labels["en"]) == "" {
-			if fragment.Labels["en"] != s {
-				fragment.Labels["en"] = s
-				changed = true
-			}
+		// Ensure maps exist
+		if fragment.Labels == nil {
+			fragment.Labels = map[string]string{}
 		}
-	}
-	if s := strings.TrimSpace(ed.Description); s != "" {
-		if opts.Overwrite || strings.TrimSpace(fragment.Description) == "" {
-			if fragment.Description != s {
-				fragment.Description = s
-				changed = true
-			}
+		if fragment.Identifiers == nil {
+			fragment.Identifiers = map[string]string{}
 		}
-	}
 
-	// Official name (P1448) and short name (P1813)
-	official := strings.TrimSpace(firstNonEmptyMonolingual(ed.PropertiesRaw, "P1448"))
-	short := strings.TrimSpace(firstNonEmptyMonolingual(ed.PropertiesRaw, "P1813"))
-	if official != "" {
-		if opts.Overwrite || strings.TrimSpace(fragment.Identifiers["legalName"]) == "" {
-			if fragment.Identifiers["legalName"] != official {
-				fragment.Identifiers["legalName"] = official
-				changed = true
-			}
-		}
-	}
-	if short != "" {
-		if opts.Overwrite || strings.TrimSpace(fragment.Identifiers["shortName"]) == "" {
-			if fragment.Identifiers["shortName"] != short {
-				fragment.Identifiers["shortName"] = short
-				changed = true
-			}
-		}
-	}
-
-	// IndustryPaths from P452 (ORG only).
-	if fragment.Type == hmodels.FragmentTypeOrganization {
-		inds := extractEntityIDs(ed.PropertiesRaw, "P452")
-		if len(inds) > 0 {
-			paths := taxonomy.MapIndustryQIDsToPaths(inds)
-			if len(paths) > 0 {
-				// Overwrite is fine; these are derived.
-				if !stringSlicesEqual(fragment.IndustryPaths, paths) {
-					fragment.IndustryPaths = paths
+		// labels.en + description
+		if s := strings.TrimSpace(ed.Label); s != "" {
+			if opts.Overwrite || strings.TrimSpace(fragment.Labels["en"]) == "" {
+				if fragment.Labels["en"] != s {
+					fragment.Labels["en"] = s
 					changed = true
 				}
 			}
 		}
-	}
+		if s := strings.TrimSpace(ed.Description); s != "" {
+			if opts.Overwrite || strings.TrimSpace(fragment.Description) == "" {
+				if fragment.Description != s {
+					fragment.Description = s
+					changed = true
+				}
+			}
+		}
 
-	// NameHistory: populate from Wikidata aliases and former names (P5768).
-	if fragment.Type == hmodels.FragmentTypeOrganization || fragment.Type == hmodels.FragmentTypePerson {
+		// Official name (P1448) and short name (P1813)
+		official := strings.TrimSpace(firstNonEmptyMonolingual(ed.PropertiesRaw, "P1448"))
+		short := strings.TrimSpace(firstNonEmptyMonolingual(ed.PropertiesRaw, "P1813"))
+		if official != "" {
+			if opts.Overwrite || strings.TrimSpace(fragment.Identifiers["legalName"]) == "" {
+				if fragment.Identifiers["legalName"] != official {
+					fragment.Identifiers["legalName"] = official
+					changed = true
+				}
+			}
+		}
+		if short != "" {
+			if opts.Overwrite || strings.TrimSpace(fragment.Identifiers["shortName"]) == "" {
+				if fragment.Identifiers["shortName"] != short {
+					fragment.Identifiers["shortName"] = short
+					changed = true
+				}
+			}
+		}
+
+		// IndustryPaths from P452 (ORG only).
+		if fragment.Type == hmodels.FragmentTypeOrganization {
+			inds := extractEntityIDs(ed.PropertiesRaw, "P452")
+			if len(inds) > 0 {
+				paths := taxonomy.MapIndustryQIDsToPaths(inds)
+				if len(paths) > 0 {
+					// Overwrite is fine; these are derived.
+					if !stringSlicesEqual(fragment.IndustryPaths, paths) {
+						fragment.IndustryPaths = paths
+						changed = true
+					}
+				}
+			}
+		}
+
+		// NameHistory: populate from Wikidata aliases and former names (P5768).
 		if populateNameHistoryFromWikidata(fragment, ed) {
 			changed = true
 		}
@@ -188,6 +191,158 @@ func EnrichFragmentFromEntityData(
 	// Best-effort: keep identifiers/KBRefs mirrored and indexPaths updated.
 	_ = fragment.Validate()
 	return changed, nil
+}
+
+func applyCoordinatesFromWikidata(fragment *hmodels.HorizonFragment, props map[string]interface{}, overwrite bool) bool {
+	if fragment == nil || props == nil {
+		return false
+	}
+	lat, lon, ok := extractWikidataCoordinates(props)
+	if !ok {
+		return false
+	}
+
+	changed := false
+	existingValid := fragment.Coordinates != nil && hmodels.IsValidCoordinates(fragment.Coordinates.Lat, fragment.Coordinates.Lon)
+	if overwrite || !existingValid {
+		if !existingValid || fragment.Coordinates.Lat != lat || fragment.Coordinates.Lon != lon {
+			fragment.Coordinates = &hmodels.Coordinates{Lat: lat, Lon: lon}
+			changed = true
+		}
+	}
+
+	iso := fmt.Sprintf("%+.6f%+.6f/", lat, lon)
+	if fragment.HomeLocation == nil {
+		fragment.HomeLocation = &hmodels.Location{}
+		changed = true
+	}
+	currentISO := ""
+	if fragment.HomeLocation.ISO6709 != nil {
+		currentISO = strings.TrimSpace(*fragment.HomeLocation.ISO6709)
+	}
+	if overwrite || currentISO == "" {
+		if currentISO != iso {
+			fragment.HomeLocation.ISO6709 = &iso
+			changed = true
+		}
+	}
+	return changed
+}
+
+func extractWikidataCoordinates(props map[string]interface{}) (float64, float64, bool) {
+	if props == nil {
+		return 0, 0, false
+	}
+	raw, ok := props["P625"]
+	if !ok || raw == nil {
+		return 0, 0, false
+	}
+	return extractWikidataCoordinatesValue(raw)
+}
+
+func extractWikidataCoordinatesValue(raw interface{}) (float64, float64, bool) {
+	if raw == nil {
+		return 0, 0, false
+	}
+	switch t := raw.(type) {
+	case []interface{}:
+		for _, it := range t {
+			if lat, lon, ok := extractWikidataCoordinatesValue(it); ok {
+				return lat, lon, true
+			}
+		}
+		return 0, 0, false
+	case map[string]interface{}:
+		if lat, ok := anyToFloat64(t["latitude"]); ok {
+			if lon, ok := anyToFloat64(t["longitude"]); ok && hmodels.IsValidCoordinates(lat, lon) {
+				return lat, lon, true
+			}
+		}
+		if lat, ok := anyToFloat64(t["lat"]); ok {
+			if lon, ok := anyToFloat64(t["lon"]); ok && hmodels.IsValidCoordinates(lat, lon) {
+				return lat, lon, true
+			}
+			if lng, ok := anyToFloat64(t["lng"]); ok && hmodels.IsValidCoordinates(lat, lng) {
+				return lat, lng, true
+			}
+		}
+		if v, ok := t["value"]; ok {
+			return extractWikidataCoordinatesValue(v)
+		}
+		if v, ok := t["datavalue"]; ok {
+			return extractWikidataCoordinatesValue(v)
+		}
+		if v, ok := t["mainsnak"]; ok {
+			return extractWikidataCoordinatesValue(v)
+		}
+		return 0, 0, false
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return 0, 0, false
+		}
+		if lat, lon, ok := hmodels.ParseISO6709Coordinates(s); ok {
+			return lat, lon, true
+		}
+		if strings.HasPrefix(strings.ToLower(s), "point(") && strings.HasSuffix(s, ")") {
+			inner := strings.TrimSpace(s[len("Point(") : len(s)-1])
+			parts := strings.Fields(inner)
+			if len(parts) == 2 {
+				lon, lonOK := strconv.ParseFloat(parts[0], 64)
+				lat, latOK := strconv.ParseFloat(parts[1], 64)
+				if latOK == nil && lonOK == nil && hmodels.IsValidCoordinates(lat, lon) {
+					return lat, lon, true
+				}
+			}
+		}
+		if strings.Contains(s, ",") {
+			parts := strings.Split(s, ",")
+			if len(parts) == 2 {
+				lat, latErr := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+				lon, lonErr := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+				if latErr == nil && lonErr == nil && hmodels.IsValidCoordinates(lat, lon) {
+					return lat, lon, true
+				}
+			}
+		}
+		return 0, 0, false
+	default:
+		return 0, 0, false
+	}
+}
+
+func anyToFloat64(v interface{}) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, false
+		}
+		return n, true
+	case float32:
+		f := float64(n)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, false
+		}
+		return f, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, false
+		}
+		return f, true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
 }
 
 // populateNameHistoryFromWikidata extracts aliases and former names from Wikidata entity data
@@ -448,7 +603,3 @@ func stringSlicesEqual(a, b []string) bool {
 	}
 	return true
 }
-
-
-
-

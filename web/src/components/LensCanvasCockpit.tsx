@@ -1451,6 +1451,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   // Stack preview overlay (Levels): show up to 5 hidden stack members as chips on controller click.
   const stackPreviewControllerIdRef = React.useRef<string | null>(null);
   const pendingFocusNodeIdRef = React.useRef<string | null>(null);
+  const pendingFocusNodeIdsRef = React.useRef<Set<string> | null>(null);
 
   // Levels (Hierarchical) expansion filter (controls which edge types are fetched on expand).
   type LevelsExpandMode = 'all' | 'ownership' | 'expansion' | 'dependencies' | 'context' | 'market' | 'influence' | 'balanced';
@@ -1883,6 +1884,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [domainOverlayPanelMode, setDomainOverlayPanelMode] = React.useState<DomainOverlayPanelMode>('mini');
   const [activeDomainAnswerKey, setActiveDomainAnswerKey] = React.useState<string>('');
   const [domainOverlayHighlightEnabled, setDomainOverlayHighlightEnabled] = React.useState(true);
+  const [domainOverlayHoverNodeIds, setDomainOverlayHoverNodeIds] = React.useState<string[]>([]);
+  const [domainOverlayHoverEdgeIds, setDomainOverlayHoverEdgeIds] = React.useState<string[]>([]);
   // domainOverlayPreview removed — no longer used
   const realtimeEvents = useHorizonRealtimeStore((s) => s.events);
 
@@ -1942,6 +1945,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const readinessStatus = toStr(raw?.readinessStatus || raw?.status).toLowerCase();
       const dataGaps = toArr(raw?.dataGaps);
       const criticalDependencies = toArr(raw?.criticalDependencies);
+      const explanatoryUnits = toArr(raw?.explanatoryLayer?.units);
       const impactPaths = toArr(raw?.impactPaths);
       const highlightedNodeIds = toArr(raw?.highlightedNodeIds).map((x) => toStr(x)).filter(Boolean);
       const highlightedEdgeIds = toArr(raw?.highlightedEdgeIds).map((x) => toStr(x)).filter(Boolean);
@@ -1949,7 +1953,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (!key) return;
       snapshotMap.set(key, {
         key, raw, snapshotId, domainId, canonicalPath, contractType, title, readinessStatus,
-        thesisText: toStr(raw?.thesis?.text), dataGaps, criticalDependencies, impactPaths,
+        thesisText: toStr(raw?.thesis?.text), dataGaps, criticalDependencies, explanatoryUnits, impactPaths,
         criticalNodes: toArr(raw?.criticalNodes), concentrationEvidence: toArr(raw?.concentrationEvidence),
         controlExposure: toArr(raw?.controlExposure), highlightedNodeIds, highlightedEdgeIds, gateFailedCount,
         facets: (raw?.domainContract?.facets && typeof raw.domainContract.facets === 'object') ? raw.domainContract.facets : {},
@@ -2015,6 +2019,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         thesisText: '',
         dataGaps: [],
         criticalDependencies: [],
+        explanatoryUnits: [],
         impactPaths: [],
         criticalNodes: [],
         concentrationEvidence: [],
@@ -2054,17 +2059,204 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (activeDomainAnswerKey) setActiveDomainAnswerKey('');
       return;
     }
+    if (!activeDomainAnswerKey) return;
     const exists = domainAnswerItems.some((x) => x.key === activeDomainAnswerKey);
-    if (exists) return;
-    const preferred = domainAnswerItems.find((x) => x.readinessStatus === 'ready') || domainAnswerItems[0];
-    setActiveDomainAnswerKey(String(preferred?.key || ''));
+    if (!exists) setActiveDomainAnswerKey('');
   }, [domainAnswerItems, activeDomainAnswerKey]);
 
   const activeDomainAnswer = React.useMemo<DomainOverlayAnswerItem | null>(() => {
-    if (domainAnswerItems.length === 0) return null;
-    const selected = domainAnswerItems.find((x) => x.key === activeDomainAnswerKey);
-    return selected || domainAnswerItems[0] || null;
+    if (!activeDomainAnswerKey || domainAnswerItems.length === 0) return null;
+    return domainAnswerItems.find((x) => x.key === activeDomainAnswerKey) || null;
   }, [domainAnswerItems, activeDomainAnswerKey]);
+
+  const clearDomainOverlayHover = React.useCallback(() => {
+    setDomainOverlayHoverNodeIds([]);
+    setDomainOverlayHoverEdgeIds([]);
+  }, []);
+
+  React.useEffect(() => {
+    if (!activeDomainAnswer || domainOverlayPanelMode !== 'expanded' || !domainOverlayHighlightEnabled) {
+      clearDomainOverlayHover();
+    }
+  }, [activeDomainAnswer, domainOverlayPanelMode, domainOverlayHighlightEnabled, clearDomainOverlayHover]);
+
+  React.useEffect(() => {
+    clearDomainOverlayHover();
+  }, [activeDomainAnswerKey, clearDomainOverlayHover]);
+
+  const domainOverlayGraphIndex = React.useMemo(() => {
+    const nodeIdByFragmentId = new Map<string, string>();
+    const nodeIdByCanonicalPath = new Map<string, string>();
+    const nodeIds = new Set<string>();
+    for (const n of nodes) {
+      const d: any = (n as any)?.data;
+      if (d?.isGroup) continue;
+      const nodeId = String((n as any)?.id || '').trim();
+      if (!nodeId) continue;
+      nodeIds.add(nodeId);
+      const fragmentId = String(d?.fragmentId || '').trim();
+      if (fragmentId && !nodeIdByFragmentId.has(fragmentId)) nodeIdByFragmentId.set(fragmentId, nodeId);
+      const canonicalPath = String(d?.canonicalPath || '').trim();
+      if (canonicalPath && !nodeIdByCanonicalPath.has(canonicalPath)) nodeIdByCanonicalPath.set(canonicalPath, nodeId);
+    }
+
+    const edgeIds = new Set<string>();
+    const edgeIdsByPair = new Map<string, string[]>();
+    const edgeIdsByPairAndRelation = new Map<string, string[]>();
+    for (const e of edges) {
+      const edgeId = String((e as any)?.id || '').trim();
+      const sourceId = String((e as any)?.source || '').trim();
+      const targetId = String((e as any)?.target || '').trim();
+      if (edgeId) edgeIds.add(edgeId);
+      if (!edgeId || !sourceId || !targetId) continue;
+      const pairKey = `${sourceId}=>${targetId}`;
+      const baseBucket = edgeIdsByPair.get(pairKey) || [];
+      baseBucket.push(edgeId);
+      edgeIdsByPair.set(pairKey, baseBucket);
+      const relationType = String((e as any)?.data?.edgeType || (e as any)?.data?.subkind || (e as any)?.label || '')
+        .trim()
+        .replace(/\s+/g, '_')
+        .toUpperCase();
+      if (!relationType) continue;
+      const relKey = `${pairKey}|${relationType}`;
+      const relBucket = edgeIdsByPairAndRelation.get(relKey) || [];
+      relBucket.push(edgeId);
+      edgeIdsByPairAndRelation.set(relKey, relBucket);
+    }
+
+    return {
+      nodeIds,
+      nodeIdByFragmentId,
+      nodeIdByCanonicalPath,
+      edgeIds,
+      edgeIdsByPair,
+      edgeIdsByPairAndRelation,
+    };
+  }, [nodes, edges]);
+
+  const resolveDomainOverlayNodeId = React.useCallback((fragmentId: string, canonicalPath: string): string => {
+    const fid = String(fragmentId || '').trim();
+    const cp = String(canonicalPath || '').trim();
+    if (fid) {
+      const byFragment = domainOverlayGraphIndex.nodeIdByFragmentId.get(fid);
+      if (byFragment) return byFragment;
+      if (domainOverlayGraphIndex.nodeIds.has(fid)) return fid;
+    }
+    if (cp) {
+      const byPath = domainOverlayGraphIndex.nodeIdByCanonicalPath.get(cp);
+      if (byPath) return byPath;
+      if (domainOverlayGraphIndex.nodeIds.has(cp)) return cp;
+    }
+    return '';
+  }, [domainOverlayGraphIndex]);
+
+  const resolveDomainOverlayHoverTarget = React.useCallback((target: any): { nodeIds: string[]; edgeIds: string[] } => {
+    if (!target || typeof target !== 'object') return { nodeIds: [], edgeIds: [] };
+
+    const normalizeRelation = (v: any): string => String(v || '').trim().replace(/\s+/g, '_').toUpperCase();
+
+    const nodeSet = new Set<string>();
+    const edgeSet = new Set<string>();
+
+    const sourceNodeId = resolveDomainOverlayNodeId(
+      String(target?.sourceFragmentId || '').trim(),
+      String(target?.sourceCanonicalPath || '').trim(),
+    );
+    const targetNodeId = resolveDomainOverlayNodeId(
+      String(target?.targetFragmentId || '').trim(),
+      String(target?.targetCanonicalPath || '').trim(),
+    );
+    if (sourceNodeId) nodeSet.add(sourceNodeId);
+    if (targetNodeId) nodeSet.add(targetNodeId);
+
+    const anchorNodeIDs = Array.isArray(target?.anchorNodeIds) ? target.anchorNodeIds : [];
+    for (const rawNodeId of anchorNodeIDs) {
+      const candidate = String(rawNodeId || '').trim();
+      if (!candidate) continue;
+      const resolved = resolveDomainOverlayNodeId(candidate, '');
+      if (resolved) nodeSet.add(resolved);
+      else if (domainOverlayGraphIndex.nodeIds.has(candidate)) nodeSet.add(candidate);
+    }
+
+    const candidateEdgeIDs: string[] = [];
+    if (target?.edgeId) candidateEdgeIDs.push(String(target.edgeId));
+    if (target?.dependencyEdgeId) candidateEdgeIDs.push(String(target.dependencyEdgeId));
+    if (Array.isArray(target?.anchorEdgeIds)) {
+      for (const id of target.anchorEdgeIds) candidateEdgeIDs.push(String(id || ''));
+    }
+    for (const rawEdgeId of candidateEdgeIDs) {
+      const edgeId = String(rawEdgeId || '').trim();
+      if (!edgeId) continue;
+      if (domainOverlayGraphIndex.edgeIds.has(edgeId)) edgeSet.add(edgeId);
+    }
+
+    const relation = normalizeRelation(target?.relationType);
+    const addByPair = (source: string, destination: string) => {
+      if (!source || !destination) return;
+      const pairKey = `${source}=>${destination}`;
+      const byPair = domainOverlayGraphIndex.edgeIdsByPair.get(pairKey) || [];
+      for (const edgeId of byPair) edgeSet.add(edgeId);
+      if (!relation) return;
+      const byRelation = domainOverlayGraphIndex.edgeIdsByPairAndRelation.get(`${pairKey}|${relation}`) || [];
+      for (const edgeId of byRelation) edgeSet.add(edgeId);
+    };
+
+    if (sourceNodeId && targetNodeId) {
+      addByPair(sourceNodeId, targetNodeId);
+    }
+
+    const resolvedAnchors = Array.from(nodeSet);
+    if (resolvedAnchors.length >= 2) {
+      for (let i = 0; i < resolvedAnchors.length; i += 1) {
+        for (let j = 0; j < resolvedAnchors.length; j += 1) {
+          if (i === j) continue;
+          addByPair(resolvedAnchors[i] || '', resolvedAnchors[j] || '');
+        }
+      }
+    }
+
+    return {
+      nodeIds: Array.from(nodeSet.values()),
+      edgeIds: Array.from(edgeSet.values()),
+    };
+  }, [domainOverlayGraphIndex, resolveDomainOverlayNodeId]);
+
+  const setDomainOverlayHoverFromTarget = React.useCallback((target: any | null) => {
+    if (
+      !domainOverlayHighlightEnabled ||
+      !activeDomainAnswer ||
+      domainOverlayPanelMode !== 'expanded' ||
+      !target
+    ) {
+      clearDomainOverlayHover();
+      return;
+    }
+    const resolved = resolveDomainOverlayHoverTarget(target);
+    if (resolved.nodeIds.length === 0 && resolved.edgeIds.length === 0) {
+      clearDomainOverlayHover();
+      return;
+    }
+    setDomainOverlayHoverNodeIds(resolved.nodeIds);
+    setDomainOverlayHoverEdgeIds(resolved.edgeIds);
+  }, [
+    activeDomainAnswer,
+    clearDomainOverlayHover,
+    domainOverlayHighlightEnabled,
+    domainOverlayPanelMode,
+    resolveDomainOverlayHoverTarget,
+  ]);
+
+  const onDomainDependencyHover = React.useCallback((dep: any | null) => {
+    setDomainOverlayHoverFromTarget(dep);
+  }, [setDomainOverlayHoverFromTarget]);
+
+  const onDomainExplanatoryUnitHover = React.useCallback((unit: any | null) => {
+    setDomainOverlayHoverFromTarget(unit);
+  }, [setDomainOverlayHoverFromTarget]);
+
+  const onDomainDependencyClick = React.useCallback((dep: any) => {
+    setDomainOverlayHoverFromTarget(dep);
+  }, [setDomainOverlayHoverFromTarget]);
 
   const domainOverlayHighlightNodeIds = React.useMemo<Set<string> | null>(() => {
     if (!domainOverlayHighlightEnabled || !activeDomainAnswer) return null;
@@ -2110,6 +2302,239 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
     return out.size > 0 ? out : null;
   }, [activeDomainAnswer, domainOverlayHighlightEnabled]);
+
+  const domainOverlayHoverNodeIdSet = React.useMemo<Set<string> | null>(() => {
+    if (!domainOverlayHighlightEnabled || !activeDomainAnswer || domainOverlayHoverNodeIds.length === 0) return null;
+    const out = new Set<string>();
+    for (const id of domainOverlayHoverNodeIds) {
+      const nodeId = String(id || '').trim();
+      if (nodeId) out.add(nodeId);
+    }
+    return out.size > 0 ? out : null;
+  }, [activeDomainAnswer, domainOverlayHighlightEnabled, domainOverlayHoverNodeIds]);
+
+  const domainOverlayHoverEdgeIdSet = React.useMemo<Set<string> | null>(() => {
+    if (!domainOverlayHighlightEnabled || !activeDomainAnswer || domainOverlayHoverEdgeIds.length === 0) return null;
+    const out = new Set<string>();
+    for (const id of domainOverlayHoverEdgeIds) {
+      const edgeId = String(id || '').trim();
+      if (edgeId) out.add(edgeId);
+    }
+    return out.size > 0 ? out : null;
+  }, [activeDomainAnswer, domainOverlayHighlightEnabled, domainOverlayHoverEdgeIds]);
+
+  const domainTopDependencies = React.useMemo<any[]>(() => {
+    if (!activeDomainAnswer) return [];
+    const list = Array.isArray(activeDomainAnswer.criticalDependencies) ? activeDomainAnswer.criticalDependencies : [];
+    return list.slice(0, 10);
+  }, [activeDomainAnswer]);
+
+  const domainTopDependencySpecs = React.useMemo<
+    Array<{
+      edgeId: string;
+      relationType: string;
+      sourceFragmentId: string;
+      targetFragmentId: string;
+      sourceCanonicalPath: string;
+      targetCanonicalPath: string;
+      topDependencyScore: number;
+    }>
+  >(() => {
+    if (domainTopDependencies.length === 0) return [];
+    return domainTopDependencies
+      .map((dep: any) => ({
+        edgeId: String(dep?.edgeId || '').trim(),
+        relationType: String(dep?.relationType || '').trim(),
+        sourceFragmentId: String(dep?.sourceFragmentId || '').trim(),
+        targetFragmentId: String(dep?.targetFragmentId || '').trim(),
+        sourceCanonicalPath: String(dep?.sourceCanonicalPath || '').trim(),
+        targetCanonicalPath: String(dep?.targetCanonicalPath || '').trim(),
+        topDependencyScore: Number(dep?.topDependencyScore || 0) || 0,
+      }))
+      .filter((dep) =>
+        Boolean(
+          dep.sourceFragmentId ||
+            dep.targetFragmentId ||
+            dep.sourceCanonicalPath ||
+            dep.targetCanonicalPath ||
+            dep.edgeId,
+        ),
+      );
+  }, [domainTopDependencies]);
+
+  const domainTopDependencyNodeIds = React.useMemo<Set<string> | null>(() => {
+    if (domainTopDependencySpecs.length === 0) return null;
+    const nodeIdByFragmentId = new Map<string, string>();
+    const nodeIdByCanonicalPath = new Map<string, string>();
+    const nodeIds = new Set<string>();
+    for (const n of nodes) {
+      const d: any = (n as any)?.data;
+      if (d?.isGroup) continue;
+      const nodeId = String((n as any)?.id || '').trim();
+      if (!nodeId) continue;
+      nodeIds.add(nodeId);
+      const fid = String(d?.fragmentId || '').trim();
+      if (fid && !nodeIdByFragmentId.has(fid)) nodeIdByFragmentId.set(fid, nodeId);
+      const cp = String(d?.canonicalPath || '').trim();
+      if (cp && !nodeIdByCanonicalPath.has(cp)) nodeIdByCanonicalPath.set(cp, nodeId);
+    }
+    const resolveNodeId = (fragmentId: string, canonicalPath: string): string => {
+      const fid = String(fragmentId || '').trim();
+      const cp = String(canonicalPath || '').trim();
+      if (fid) {
+        const byFid = nodeIdByFragmentId.get(fid);
+        if (byFid) return byFid;
+        if (nodeIds.has(fid)) return fid;
+      }
+      if (cp) {
+        const byPath = nodeIdByCanonicalPath.get(cp);
+        if (byPath) return byPath;
+      }
+      return '';
+    };
+
+    const out = new Set<string>();
+    for (const dep of domainTopDependencySpecs) {
+      const s = resolveNodeId(dep.sourceFragmentId, dep.sourceCanonicalPath);
+      const t = resolveNodeId(dep.targetFragmentId, dep.targetCanonicalPath);
+      if (s) out.add(s);
+      if (t) out.add(t);
+    }
+    return out.size > 0 ? out : null;
+  }, [domainTopDependencySpecs, nodes]);
+
+  const domainTopDependencyMissingNodeRefs = React.useMemo<
+    Array<{
+      fragmentId: string;
+      canonicalPath: string;
+      label: string;
+      type: string;
+    }>
+  >(() => {
+    if (domainTopDependencySpecs.length === 0) return [];
+    const nodeIdByFragmentId = new Map<string, string>();
+    const nodeIdByCanonicalPath = new Map<string, string>();
+    const nodeIds = new Set<string>();
+    for (const n of nodes) {
+      const d: any = (n as any)?.data;
+      if (d?.isGroup) continue;
+      const nodeId = String((n as any)?.id || '').trim();
+      if (!nodeId) continue;
+      nodeIds.add(nodeId);
+      const fid = String(d?.fragmentId || '').trim();
+      if (fid && !nodeIdByFragmentId.has(fid)) nodeIdByFragmentId.set(fid, nodeId);
+      const cp = String(d?.canonicalPath || '').trim();
+      if (cp && !nodeIdByCanonicalPath.has(cp)) nodeIdByCanonicalPath.set(cp, nodeId);
+    }
+    const resolveNodeId = (fragmentId: string, canonicalPath: string): string => {
+      const fid = String(fragmentId || '').trim();
+      const cp = String(canonicalPath || '').trim();
+      if (fid) {
+        const byFid = nodeIdByFragmentId.get(fid);
+        if (byFid) return byFid;
+        if (nodeIds.has(fid)) return fid;
+      }
+      if (cp) {
+        const byPath = nodeIdByCanonicalPath.get(cp);
+        if (byPath) return byPath;
+      }
+      return '';
+    };
+
+    const missing = new Map<
+      string,
+      {
+        fragmentId: string;
+        canonicalPath: string;
+        label: string;
+        type: string;
+      }
+    >();
+    const addMissing = (fragmentId: string, canonicalPath: string) => {
+      const fid = String(fragmentId || '').trim();
+      const cp = String(canonicalPath || '').trim();
+      if (!fid && !cp) return;
+      if (resolveNodeId(fid, cp)) return;
+      const key = fid || cp;
+      if (!key || missing.has(key)) return;
+      missing.set(key, {
+        fragmentId: fid,
+        canonicalPath: cp,
+        label: cp ? humanizeCanonicalPath(cp) : (fid ? `Fragment ${fid.slice(0, 8)}` : 'Fragment'),
+        type: '',
+      });
+    };
+
+    for (const dep of domainTopDependencySpecs) {
+      addMissing(dep.sourceFragmentId, dep.sourceCanonicalPath);
+      addMissing(dep.targetFragmentId, dep.targetCanonicalPath);
+    }
+    return Array.from(missing.values());
+  }, [domainTopDependencySpecs, nodes]);
+
+  const domainTopDependencyEdgeIds = React.useMemo<Set<string> | null>(() => {
+    if (domainTopDependencySpecs.length === 0) return null;
+    const nodeIdByFragmentId = new Map<string, string>();
+    const nodeIdByCanonicalPath = new Map<string, string>();
+    const nodeIds = new Set<string>();
+    for (const n of nodes) {
+      const d: any = (n as any)?.data;
+      if (d?.isGroup) continue;
+      const nodeId = String((n as any)?.id || '').trim();
+      if (!nodeId) continue;
+      nodeIds.add(nodeId);
+      const fid = String(d?.fragmentId || '').trim();
+      if (fid && !nodeIdByFragmentId.has(fid)) nodeIdByFragmentId.set(fid, nodeId);
+      const cp = String(d?.canonicalPath || '').trim();
+      if (cp && !nodeIdByCanonicalPath.has(cp)) nodeIdByCanonicalPath.set(cp, nodeId);
+    }
+    const resolveNodeId = (fragmentId: string, canonicalPath: string): string => {
+      const fid = String(fragmentId || '').trim();
+      const cp = String(canonicalPath || '').trim();
+      if (fid) {
+        const byFid = nodeIdByFragmentId.get(fid);
+        if (byFid) return byFid;
+        if (nodeIds.has(fid)) return fid;
+      }
+      if (cp) {
+        const byPath = nodeIdByCanonicalPath.get(cp);
+        if (byPath) return byPath;
+      }
+      return '';
+    };
+
+    const out = new Set<string>();
+    for (const dep of domainTopDependencySpecs) {
+      const id = String(dep.edgeId || '').trim();
+      if (id) out.add(id);
+    }
+    for (const dep of domainTopDependencySpecs) {
+      const sourceId = resolveNodeId(dep.sourceFragmentId, dep.sourceCanonicalPath);
+      const targetId = resolveNodeId(dep.targetFragmentId, dep.targetCanonicalPath);
+      if (!sourceId || !targetId) continue;
+      const rel = String(dep.relationType || '').trim().replace(/\s+/g, '_').toUpperCase();
+      for (const e of edges) {
+        const eid = String((e as any)?.id || '').trim();
+        const es = String((e as any)?.source || '').trim();
+        const et = String((e as any)?.target || '').trim();
+        if (!eid || es !== sourceId || et !== targetId) continue;
+        if (rel) {
+          const edgeRel = String((e as any)?.data?.edgeType || (e as any)?.data?.subkind || (e as any)?.label || '')
+            .trim()
+            .replace(/\s+/g, '_')
+            .toUpperCase();
+          if (edgeRel && edgeRel !== rel) continue;
+        }
+        out.add(eid);
+      }
+    }
+    return out.size > 0 ? out : null;
+  }, [domainTopDependencySpecs, nodes, edges]);
+
+  const domainTopDependencyFocusActive =
+    domainOverlayPanelMode === 'expanded' &&
+    !!activeDomainAnswer &&
+    domainTopDependencies.length > 0;
 
   const activeDomainOverlayPath = React.useMemo(() => {
     const activePath = String(
@@ -2214,6 +2639,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [lensName, setLensName] = React.useState<string | null>(null);
   const [lensScopePaths, setLensScopePaths] = React.useState<string[]>([]);
   const [scopePreview, setScopePreview] = React.useState<Array<{ canonicalPath: string; name?: string; type?: string }>>([]);
+  const SCOPE_PREVIEW_SECTION_LIMIT = 5;
   const [scopePreviewLoading, setScopePreviewLoading] = React.useState(false);
   const [lensMetaLoading, setLensMetaLoading] = React.useState(false);
   const lensMetaRef = React.useRef<any | null>(null);
@@ -2507,6 +2933,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
   }, [lensId, lensScopePaths]);
 
+  const isDomainScopePreviewEntry = React.useCallback((entry: { canonicalPath: string; type?: string }) => {
+    const cp = String(entry?.canonicalPath || '').trim().toLowerCase();
+    const t = String(entry?.type || '').trim().toUpperCase();
+    return t === 'DOMAIN' || cp.startsWith('/domain/');
+  }, []);
+
+  const scopePreviewDomains = React.useMemo(() => {
+    return scopePreview.filter((entry) => isDomainScopePreviewEntry(entry));
+  }, [scopePreview, isDomainScopePreviewEntry]);
+
+  const scopePreviewNonDomains = React.useMemo(() => {
+    return scopePreview.filter((entry) => !isDomainScopePreviewEntry(entry));
+  }, [scopePreview, isDomainScopePreviewEntry]);
+
   // Add-node: search/prefetch entities by partial name (existing but previously unused API).
   React.useEffect(() => {
     if (!addNodeOpen) return;
@@ -2659,6 +3099,317 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (typeof fn === 'function') fn();
     }
   }, [rightDockStateByNodeId, layoutMode]);
+
+  const lastDomainTopDepsRevealKeyRef = React.useRef<string>('');
+  const lastDomainTopDepsMaterializeKeyRef = React.useRef<string>('');
+  React.useEffect(() => {
+    if (domainTopDependencyFocusActive) return;
+    lastDomainTopDepsRevealKeyRef.current = '';
+    lastDomainTopDepsMaterializeKeyRef.current = '';
+  }, [domainTopDependencyFocusActive]);
+
+  React.useEffect(() => {
+    if (!domainTopDependencyFocusActive) return;
+    if (domainTopDependencyMissingNodeRefs.length === 0) return;
+    const missingKeys = domainTopDependencyMissingNodeRefs
+      .map((x) => String(x.fragmentId || x.canonicalPath || '').trim())
+      .filter(Boolean)
+      .sort();
+    if (missingKeys.length === 0) return;
+    const key = `${String(activeDomainAnswerKey || '').trim()}|${missingKeys.join(',')}`;
+    if (key && key === lastDomainTopDepsMaterializeKeyRef.current) return;
+    lastDomainTopDepsMaterializeKeyRef.current = key;
+
+    let cancelled = false;
+
+    void (async () => {
+      const fetched: Array<{ ref: { fragmentId: string; canonicalPath: string; label: string; type: string }; raw: any }> = [];
+      await Promise.all(
+        domainTopDependencyMissingNodeRefs.map(async (ref) => {
+          const fragmentId = String(ref.fragmentId || '').trim();
+          const canonicalPath = String(ref.canonicalPath || '').trim();
+          if (!fragmentId && !canonicalPath) return;
+          try {
+            let raw: any = null;
+            if (fragmentId) {
+              raw = await api.getHorizonFragment(fragmentId);
+            }
+            if (!raw && canonicalPath) {
+              raw = await api.getHorizonFragmentByPath(canonicalPath);
+            }
+            if (raw) fetched.push({ ref, raw });
+          } catch (err) {
+            console.warn('[Cockpit] Failed to materialize top dependency node', {
+              fragmentId,
+              canonicalPath,
+              err,
+            });
+          }
+        }),
+      );
+      if (cancelled || fetched.length === 0) return;
+
+      setNodes((prev) => {
+        const byId = new Set<string>();
+        const byFragmentId = new Set<string>();
+        const byCanonicalPath = new Set<string>();
+        let centerX = 0;
+        let centerY = 0;
+        let centerN = 0;
+        for (const n of prev as any[]) {
+          const nodeId = String((n as any)?.id || '').trim();
+          if (nodeId) byId.add(nodeId);
+          const d: any = (n as any)?.data || {};
+          const fid = String(d?.fragmentId || '').trim();
+          if (fid) byFragmentId.add(fid);
+          const cp = String(d?.canonicalPath || '').trim();
+          if (cp) byCanonicalPath.add(cp);
+          const p: any = (n as any)?.position;
+          if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+            centerX += Number(p.x);
+            centerY += Number(p.y);
+            centerN += 1;
+          }
+        }
+        const baseX = centerN > 0 ? centerX / centerN : 0;
+        const baseY = centerN > 0 ? centerY / centerN : 0;
+
+        let changed = false;
+        let addedCount = 0;
+        const next = [...(prev as any[])];
+
+        for (const row of fetched) {
+          const raw = row.raw || {};
+          const labels = raw?.labels && typeof raw.labels === 'object' ? raw.labels : {};
+          const fragmentId = String(raw?.id || row.ref.fragmentId || '').trim();
+          const canonicalPath = String(raw?.canonicalPath || row.ref.canonicalPath || '').trim();
+          const nodeId = fragmentId || canonicalPath;
+          if (!nodeId) continue;
+          if (byId.has(nodeId)) continue;
+          if (fragmentId && byFragmentId.has(fragmentId)) continue;
+          if (canonicalPath && byCanonicalPath.has(canonicalPath)) continue;
+
+          const stateMetrics: Record<string, number> = {};
+          const rawState = raw?.state && typeof raw.state === 'object' ? raw.state : {};
+          Object.entries(rawState).forEach(([k, v]: [string, any]) => {
+            if (typeof v === 'number' && Number.isFinite(v)) {
+              stateMetrics[k] = v;
+              return;
+            }
+            if (v && typeof v === 'object' && typeof (v as any).value === 'number' && Number.isFinite((v as any).value)) {
+              stateMetrics[k] = Number((v as any).value);
+            }
+          });
+
+          const offsetCol = addedCount % 4;
+          const offsetRow = Math.floor(addedCount / 4);
+          addedCount += 1;
+
+          next.push({
+            id: nodeId,
+            type: 'horizonFragment',
+            position: { x: baseX + (offsetCol - 1.5) * 170, y: baseY + (offsetRow + 1) * 150 },
+            hidden: false,
+            data: {
+              id: nodeId,
+              lensItemId: '',
+              fragmentId: fragmentId || undefined,
+              canonicalPath: canonicalPath || undefined,
+              label:
+                String(labels?.en || raw?.label || '').trim() ||
+                (canonicalPath ? humanizeCanonicalPath(canonicalPath) : '') ||
+                row.ref.label,
+              type: String(raw?.type || row.ref.type || '').trim() || undefined,
+              state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
+              showMetrics: showNodeMetrics,
+              status: raw?.status,
+              expanded: false,
+              collapsed: false,
+              critical: false,
+              onLoadRelated: invokeLoadRelated,
+              onCollapse: invokeCollapse,
+              onScopeScout: invokeScopeScout,
+            },
+          } as any);
+          changed = true;
+          byId.add(nodeId);
+          if (fragmentId) byFragmentId.add(fragmentId);
+          if (canonicalPath) byCanonicalPath.add(canonicalPath);
+        }
+
+        return changed ? (next as any) : prev;
+      });
+      invokeArrange();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeDomainAnswerKey,
+    domainTopDependencyFocusActive,
+    domainTopDependencyMissingNodeRefs,
+    invokeArrange,
+    invokeCollapse,
+    invokeLoadRelated,
+    invokeScopeScout,
+    setNodes,
+    showNodeMetrics,
+  ]);
+
+  React.useEffect(() => {
+    if (!domainTopDependencyFocusActive) return;
+    if (domainTopDependencySpecs.length === 0) return;
+    setEdges((prev) => {
+      const currentNodes = (nodesStateRef.current || nodes) as any[];
+      const nodeIdByFragmentId = new Map<string, string>();
+      const nodeIdByCanonicalPath = new Map<string, string>();
+      const nodeIds = new Set<string>();
+      for (const n of currentNodes) {
+        const d: any = (n as any)?.data;
+        if (d?.isGroup) continue;
+        const nodeId = String((n as any)?.id || '').trim();
+        if (!nodeId) continue;
+        nodeIds.add(nodeId);
+        const fid = String(d?.fragmentId || '').trim();
+        if (fid && !nodeIdByFragmentId.has(fid)) nodeIdByFragmentId.set(fid, nodeId);
+        const cp = String(d?.canonicalPath || '').trim();
+        if (cp && !nodeIdByCanonicalPath.has(cp)) nodeIdByCanonicalPath.set(cp, nodeId);
+      }
+      const resolveNodeId = (fragmentId: string, canonicalPath: string): string => {
+        const fid = String(fragmentId || '').trim();
+        const cp = String(canonicalPath || '').trim();
+        if (fid) {
+          const byFid = nodeIdByFragmentId.get(fid);
+          if (byFid) return byFid;
+          if (nodeIds.has(fid)) return fid;
+        }
+        if (cp) {
+          const byPath = nodeIdByCanonicalPath.get(cp);
+          if (byPath) return byPath;
+        }
+        return '';
+      };
+
+      const next = [...(prev as any[])];
+      const existingIds = new Set<string>();
+      for (const e of next) {
+        const id = String((e as any)?.id || '').trim();
+        if (id) existingIds.add(id);
+      }
+
+      const relationNorm = (v: string) => String(v || '').trim().replace(/\s+/g, '_').toUpperCase();
+      const hasMatchingEdge = (sourceId: string, targetId: string, relationType: string): boolean => {
+        const relNorm = relationNorm(relationType);
+        for (const e of next) {
+          const es = String((e as any)?.source || '').trim();
+          const et = String((e as any)?.target || '').trim();
+          if (es !== sourceId || et !== targetId) continue;
+          if (!relNorm) return true;
+          const edgeRelNorm = relationNorm(
+            String((e as any)?.data?.edgeType || (e as any)?.data?.subkind || (e as any)?.label || ''),
+          );
+          if (!edgeRelNorm || edgeRelNorm === relNorm) return true;
+        }
+        return false;
+      };
+
+      let changed = false;
+      for (const dep of domainTopDependencySpecs) {
+        const sourceId = resolveNodeId(dep.sourceFragmentId, dep.sourceCanonicalPath);
+        const targetId = resolveNodeId(dep.targetFragmentId, dep.targetCanonicalPath);
+        if (!sourceId || !targetId || sourceId === targetId) continue;
+        if (hasMatchingEdge(sourceId, targetId, dep.relationType)) continue;
+
+        const relationRaw = String(dep.relationType || '').trim() || 'DEPENDS_ON';
+        const relNorm = relationNorm(relationRaw) || 'DEPENDS_ON';
+        let edgeId = String(dep.edgeId || '').trim();
+        if (!edgeId) edgeId = `domain-topdep:${sourceId}:${targetId}:${relNorm}`;
+        if (existingIds.has(edgeId)) {
+          let k = 2;
+          let candidate = `${edgeId}:${k}`;
+          while (existingIds.has(candidate)) {
+            k += 1;
+            candidate = `${edgeId}:${k}`;
+          }
+          edgeId = candidate;
+        }
+        existingIds.add(edgeId);
+
+        const stroke =
+          theme === 'dark'
+            ? 'rgba(56,189,248,0.74)'
+            : 'rgba(2,132,199,0.62)';
+        next.push({
+          id: edgeId,
+          source: sourceId,
+          target: targetId,
+          type: 'default',
+          interactionWidth: 18,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: stroke,
+          },
+          style: {
+            stroke,
+            strokeWidth: 1.8,
+            opacity: 0.95,
+          },
+          data: {
+            edgeType: relationRaw,
+            edgeCaption: getEdgeCaptionShort(relationRaw || relNorm),
+            topDependencyScore: dep.topDependencyScore,
+            isTopDependencySynthetic: true,
+          },
+        } as any);
+        changed = true;
+      }
+      return changed ? (next as any) : prev;
+    });
+  }, [
+    domainTopDependencyFocusActive,
+    domainTopDependencySpecs,
+    getEdgeCaptionShort,
+    nodes,
+    setEdges,
+    theme,
+  ]);
+
+  React.useEffect(() => {
+    if (!domainTopDependencyFocusActive || !domainTopDependencyNodeIds) return;
+    const ids = Array.from(domainTopDependencyNodeIds).filter(Boolean).sort();
+    if (ids.length === 0) return;
+    const edgeIds = Array.from(domainTopDependencyEdgeIds || []).filter(Boolean).sort();
+    const key = `${String(activeDomainAnswerKey || '').trim()}|${ids.join(',')}|${edgeIds.join(',')}`;
+    if (key && key === lastDomainTopDepsRevealKeyRef.current) return;
+    lastDomainTopDepsRevealKeyRef.current = key;
+
+    const idSet = new Set<string>(ids);
+    setNodes((prev) => {
+      let changed = false;
+      const next = (prev as any[]).map((n) => {
+        const nid = String((n as any)?.id || '').trim();
+        const d: any = (n as any)?.data || {};
+        const fid = String(d?.fragmentId || '').trim();
+        const cp = String(d?.canonicalPath || '').trim();
+        const shouldReveal = Boolean(nid && idSet.has(nid)) || Boolean(fid && idSet.has(fid)) || Boolean(cp && idSet.has(cp));
+        if (!shouldReveal || !Boolean((n as any)?.hidden)) return n;
+        changed = true;
+        return { ...(n as any), hidden: false } as any;
+      });
+      return changed ? (next as any) : prev;
+    });
+
+    pendingFocusNodeIdsRef.current = idSet;
+    invokeArrange();
+  }, [
+    activeDomainAnswerKey,
+    domainTopDependencyFocusActive,
+    domainTopDependencyNodeIds,
+    domainTopDependencyEdgeIds,
+    setNodes,
+    invokeArrange,
+  ]);
 
   const stopTrace = React.useCallback(() => {
     traceAbortRef.current?.abort();
@@ -8048,7 +8799,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       else pairHasNonInfluence.add(k);
     }
 
-    let base = hiddenNodeIds.size === 0 ? edges : edges.filter((e) => !hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target));
+    const topDepNodeSet = domainTopDependencyFocusActive ? domainTopDependencyNodeIds : null;
+    const topDepEdgeSet = domainTopDependencyFocusActive ? domainTopDependencyEdgeIds : null;
+    const keepByDomainTopDep = (e: any): boolean => {
+      const s = String((e as any)?.source || '').trim();
+      const t = String((e as any)?.target || '').trim();
+      if (!s || !t) return false;
+      const eid = String((e as any)?.id || '').trim();
+      if (topDepEdgeSet && eid && topDepEdgeSet.has(eid)) return true;
+      return !!topDepNodeSet && topDepNodeSet.has(s) && topDepNodeSet.has(t);
+    };
+
+    let base = hiddenNodeIds.size === 0
+      ? edges
+      : edges.filter((e) => (!hiddenNodeIds.has(e.source) && !hiddenNodeIds.has(e.target)) || keepByDomainTopDep(e));
 
     // Suppress clearly inconsistent geo-partnership visuals:
     // if a pair involving GEO has both location semantics and PARTNERS_WITH,
@@ -8191,8 +8955,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       filtered = filtered.filter((e) => !excludeRelTypes.has(edgeTypeOf(e)));
     }
 
+    // Domain focus: force-include Top Dependencies edges even when generic view filters suppress them.
+    if (topDepEdgeSet && topDepEdgeSet.size > 0) {
+      const present = new Set<string>(filtered.map((e) => String((e as any)?.id || '').trim()).filter(Boolean));
+      const forced: Edge[] = [];
+      for (const e of base) {
+        const id = String((e as any)?.id || '').trim();
+        if (!id || !topDepEdgeSet.has(id) || present.has(id)) continue;
+        forced.push(e);
+      }
+      if (forced.length > 0) filtered = [...filtered, ...forced];
+    }
+
     return filtered;
-  }, [edges, hiddenNodeIds, nodes, isLevelsLayout, viewDirective, DEV]);
+  }, [
+    edges,
+    hiddenNodeIds,
+    nodes,
+    isLevelsLayout,
+    viewDirective,
+    DEV,
+    domainTopDependencyFocusActive,
+    domainTopDependencyNodeIds,
+    domainTopDependencyEdgeIds,
+  ]);
 
   // Stable node structure info (only changes when nodes are added/removed/hidden, NOT on style changes).
   // This prevents hubNodeIds from re-computing on every hover/style update.
@@ -8853,6 +9639,32 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
     }
 
+    const domainHoverEdgeSet = domainOverlayHoverEdgeIdSet;
+    const domainHoverNodeSet = domainOverlayHoverNodeIdSet;
+    const domainHoverEdgeActive = !!domainHoverEdgeSet && domainHoverEdgeSet.size > 0;
+    const domainHoverNodeActive = !!domainHoverNodeSet && domainHoverNodeSet.size > 0;
+    if (domainHoverEdgeActive || domainHoverNodeActive) {
+      const out = edgesForDisplay.map((e) => {
+        const { baseStyle } = baseStyled(e);
+        const eid = String((e as any)?.id || '').trim();
+        const src = String((e as any)?.source || '').trim();
+        const dst = String((e as any)?.target || '').trim();
+        const byEdgeId = !!domainHoverEdgeSet && !!eid && domainHoverEdgeSet.has(eid);
+        const byNodePair = !!domainHoverNodeSet && !!src && !!dst && domainHoverNodeSet.has(src) && domainHoverNodeSet.has(dst);
+        const isHi = byEdgeId || byNodePair;
+        if (isHi) {
+          const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+          return withLabel(e, true, {
+            ...baseStyle,
+            opacity: 1,
+            strokeWidth: strokeWidth + 1.4,
+          }, true);
+        }
+        return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
+      });
+      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
+    }
+
     const domainEdgeSet = domainOverlayHighlightEdgeIds;
     const domainNodeSet = domainOverlayHighlightNodeIds;
     const domainEdgeActive = !!domainEdgeSet && domainEdgeSet.size > 0;
@@ -8881,7 +9693,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Default: dim all edges, hide labels
     return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay));
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds]);
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -9338,9 +10150,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Perf mode: keep visuals light, but still allow graph-query highlight (low-cost style).
     const qset = graphQueryHighlightIds;
     const qActive = !!qset && qset.size > 0;
-    const dset = qActive ? null : domainOverlayHighlightNodeIds;
+    const hoverSet = qActive ? null : domainOverlayHoverNodeIdSet;
+    const domainHoverActive = !!hoverSet && hoverSet.size > 0;
+    const dset = qActive || domainHoverActive ? null : domainOverlayHighlightNodeIds;
     const dActive = !!dset && dset.size > 0;
-    if (perfMode && !qActive && !dActive && !String(riskShieldActiveNodeId || '').trim()) return nodes;
+    const topDepSet = domainTopDependencyFocusActive && !domainHoverActive ? domainTopDependencyNodeIds : null;
+    const topDepActive = !!topDepSet && topDepSet.size > 0;
+    if (perfMode && !qActive && !domainHoverActive && !dActive && !topDepActive && !String(riskShieldActiveNodeId || '').trim()) return nodes;
 
     const owned = hoverHighlight?.nodeIds;
     const ultimatePersons: Set<string> | undefined = (hoverHighlight as any)?.ultimatePersonIds;
@@ -9349,16 +10165,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const riskId = String(riskShieldActiveNodeId || '').trim();
     const riskActive = !!riskId;
 
-    // Pre-compute query highlight styles (avoid creating objects in loop)
-    const queryOutline = theme === 'dark' ? '2px solid rgba(248,113,113,0.75)' : '2px solid rgba(220,38,38,0.60)';
-    const queryBoxShadow = theme === 'dark'
-      ? '0 0 0 4px rgba(248,113,113,0.18), 0 10px 26px rgba(0,0,0,0.35)'
-      : '0 0 0 4px rgba(220,38,38,0.14), 0 10px 26px rgba(0,0,0,0.18)';
-    const domainOutline = theme === 'dark' ? '2px solid rgba(56,189,248,0.78)' : '2px solid rgba(2,132,199,0.62)';
-    const domainBoxShadow = theme === 'dark'
-      ? '0 0 0 4px rgba(56,189,248,0.18), 0 10px 24px rgba(0,0,0,0.35)'
-      : '0 0 0 4px rgba(2,132,199,0.14), 0 10px 24px rgba(0,0,0,0.16)';
-
     return nodes.map((n) => {
       const id = String(n.id || '').trim();
       const isGroup = Boolean((n.data as any)?.isGroup);
@@ -9366,7 +10172,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const isOwnedNode = !!owned && id && owned.has(id);
       const isHovered = id === hovered;
       const isQuery = qActive && !!qset && id && qset.has(id);
+      const isDomainHover = domainHoverActive && !!hoverSet && id && hoverSet.has(id);
       const isDomain = dActive && !!dset && id && dset.has(id);
+      const isTopDep = topDepActive && !!topDepSet && id && topDepSet.has(id);
       const isRiskNode = riskActive && !isGroup && id && id === riskId;
 
       // Base hover highlight behavior (existing UX).
@@ -9386,10 +10194,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       let style: any = prevStyle;
       let styleChanged = false;
 
-      const highlightMode: '' | 'query' | 'domain' = qActive ? 'query' : dActive ? 'domain' : '';
+      const highlightMode: '' | 'query' | 'domain-hover' | 'domain' = qActive ? 'query' : domainHoverActive ? 'domain-hover' : dActive ? 'domain' : '';
       const wantPrimaryHighlight =
         highlightMode === 'query'
           ? Boolean(isQuery && !isGroup)
+          : highlightMode === 'domain-hover'
+            ? Boolean(isDomainHover && !isGroup)
           : highlightMode === 'domain'
             ? Boolean(isDomain && !isGroup)
             : false;
@@ -9398,11 +10208,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         opacity =
           highlightMode === 'query'
             ? (isGroup ? 0.12 : Math.min(opacity, 0.55))
+            : highlightMode === 'domain-hover'
+              ? (isGroup ? 0.10 : Math.min(opacity, 0.38))
             : (isGroup ? 0.12 : Math.min(opacity, 0.52));
       }
       if (wantPrimaryHighlight) {
         opacity = 1;
         zIndex = Math.max(zIndex, 40);
+      }
+      if (isTopDep && !isGroup) {
+        opacity = 1;
+        zIndex = Math.max(zIndex, 46);
       }
 
       // Risk Shield mode: dim everything except the active node.
@@ -9428,33 +10244,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         styleChanged = true;
       }
 
-      // Primary highlight style props: add/remove deterministically
-      const targetOutline = highlightMode === 'query' ? queryOutline : highlightMode === 'domain' ? domainOutline : '';
-      const targetShadow = highlightMode === 'query' ? queryBoxShadow : highlightMode === 'domain' ? domainBoxShadow : '';
-      if (wantPrimaryHighlight && targetOutline) {
-        const needOutline = prevStyle.outline !== targetOutline;
-        const needOffset = prevStyle.outlineOffset !== 2;
-        const needShadow = prevStyle.boxShadow !== targetShadow;
-        if (needOutline || needOffset || needShadow) {
-          if (!styleChanged) {
-            style = { ...prevStyle };
-            styleChanged = true;
-          }
-          style.outline = targetOutline;
-          style.outlineOffset = 2;
-          style.boxShadow = targetShadow;
+      // Legacy cleanup: remove old wrapper-level outline highlights if present.
+      // New highlight is rendered inside the node card (rounded halo) via data flags.
+      if (prevStyle.outline || typeof prevStyle.outlineOffset !== 'undefined' || prevStyle.boxShadow) {
+        if (!styleChanged) {
+          style = { ...prevStyle };
+          styleChanged = true;
         }
-      } else {
-        // If this node had highlight styles from a previous run, clear them.
-        if (prevStyle.outline || typeof prevStyle.outlineOffset !== 'undefined' || prevStyle.boxShadow) {
-          if (!styleChanged) {
-            style = { ...prevStyle };
-            styleChanged = true;
-          }
-          delete style.outline;
-          delete style.outlineOffset;
-          delete style.boxShadow;
-        }
+        delete style.outline;
+        delete style.outlineOffset;
+        delete style.boxShadow;
       }
 
       // Decoration flags (read by HorizonFragmentNode via data):
@@ -9477,6 +10276,43 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Only clone data when needed (perf).
       let nextData: any = d0;
       let changed = false;
+      const wantQueryHighlight = Boolean(highlightMode === 'query' && isQuery && !isGroup);
+      const wantDomainHighlight = Boolean(
+        (highlightMode === 'domain' && isDomain && !isGroup) ||
+        (highlightMode === 'domain-hover' && isDomainHover && !isGroup),
+      );
+      const wantTopDependencyHighlight = Boolean(isTopDep && !isGroup);
+
+      if (!isGroup) {
+        const prevQuery = Boolean((nextData as any)?.queryHighlight);
+        const prevDomain = Boolean((nextData as any)?.domainHighlight);
+        const prevTopDep = Boolean((nextData as any)?.topDependencyHighlight);
+        if (prevQuery !== wantQueryHighlight || prevDomain !== wantDomainHighlight || prevTopDep !== wantTopDependencyHighlight) {
+          if (nextData === d0) {
+            nextData = { ...d0 };
+            changed = true;
+          }
+          if (wantQueryHighlight) (nextData as any).queryHighlight = true;
+          else delete (nextData as any).queryHighlight;
+          if (wantDomainHighlight) (nextData as any).domainHighlight = true;
+          else delete (nextData as any).domainHighlight;
+          if (wantTopDependencyHighlight) (nextData as any).topDependencyHighlight = true;
+          else delete (nextData as any).topDependencyHighlight;
+          changed = true;
+        }
+      } else if (
+        typeof (nextData as any)?.queryHighlight !== 'undefined' ||
+        typeof (nextData as any)?.domainHighlight !== 'undefined' ||
+        typeof (nextData as any)?.topDependencyHighlight !== 'undefined'
+      ) {
+        if (nextData === d0) {
+          nextData = { ...d0 };
+          changed = true;
+        }
+        delete (nextData as any).queryHighlight;
+        delete (nextData as any).domainHighlight;
+        delete (nextData as any).topDependencyHighlight;
+      }
       // For regular (right-pane) stacks, set onToggleStack to toggleStackGroup.
       // BUT: subcategory stacks (left-pane, collapsed by default) already have their own
       // onToggleStack set by elkLayout that calls onToggleSubcategoryCollapse. Don't overwrite it!
@@ -9613,14 +10449,44 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Only create new node object if something actually changed
       const prevZIndex = (n as any).zIndex;
       const zIndexChanged = prevZIndex !== zIndex;
-      
-      if (changed || styleChanged || zIndexChanged) {
-        return { ...n, data: changed ? nextData : d0, zIndex, style } as any;
+
+      const prevHidden = Boolean((n as any).hidden);
+      const nextHidden = isTopDep && !isGroup ? false : prevHidden;
+      const hiddenChanged = prevHidden !== nextHidden;
+
+      if (changed || styleChanged || zIndexChanged || hiddenChanged) {
+        const out: any = { ...n, data: changed ? nextData : d0, zIndex, style };
+        if (hiddenChanged) out.hidden = nextHidden;
+        return out as any;
       }
       // Return original node if nothing changed (preserves reference for React.memo)
       return n;
     });
-  }, [perfMode, nodes, hoverHighlight, hoveredNodeId, graphQueryHighlightIds, domainOverlayHighlightNodeIds, theme, hubNodeIds, toggleStackGroup, layoutMode, openRightFilters, toggleRightFilter, openTraceModalForNode, undoLastTrace, canUndoTrace, openLocalFilters, toggleLocalFilter, levelsExpandEdgeTypes, riskShieldActiveNodeId, toggleRiskShield]);
+  }, [
+    perfMode,
+    nodes,
+    hoverHighlight,
+    hoveredNodeId,
+    graphQueryHighlightIds,
+    domainOverlayHoverNodeIdSet,
+    domainOverlayHighlightNodeIds,
+    theme,
+    hubNodeIds,
+    toggleStackGroup,
+    layoutMode,
+    openRightFilters,
+    toggleRightFilter,
+    openTraceModalForNode,
+    undoLastTrace,
+    canUndoTrace,
+    openLocalFilters,
+    toggleLocalFilter,
+    levelsExpandEdgeTypes,
+    riskShieldActiveNodeId,
+    toggleRiskShield,
+    domainTopDependencyFocusActive,
+    domainTopDependencyNodeIds,
+  ]);
 
   // Lightweight info for perf mode (no re-styling of edges)
   const perfHoveredEdgeInfo = React.useMemo(() => {
@@ -9847,11 +10713,32 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setNodes(withCallbacks);
 
       // Focus behavior after arrange:
-      // - If a stack-preview chip (or expand/collapse flow) requested focus, center on that node.
+      // - If domain top-deps focus is requested, fit viewport to that subset.
+      // - Else if a stack-preview chip (or expand/collapse flow) requested focus, center on that node.
       // - Otherwise DO NOT auto-fit the entire graph. Expanding a node should keep the user's zoom/context.
+      const focusNodeIds = pendingFocusNodeIdsRef.current;
+      pendingFocusNodeIdsRef.current = null;
       const focusId = String(pendingFocusNodeIdRef.current || '').trim();
       pendingFocusNodeIdRef.current = null;
-      if (focusId) {
+      if (focusNodeIds && focusNodeIds.size > 0) {
+        setTimeout(() => {
+          try {
+            const inst: any = reactFlowInstanceRef.current;
+            if (!inst || typeof inst.fitView !== 'function') return;
+            const toFit = (withCallbacks as any[]).filter((n) => {
+              if (!n || (n.data as any)?.isGroup || Boolean((n as any).hidden)) return false;
+              const id = String((n as any)?.id || '').trim();
+              return !!id && focusNodeIds.has(id);
+            });
+            if (toFit.length > 0) {
+              inst.fitView({ nodes: toFit, padding: 0.24, duration: 420 });
+              return;
+            }
+            const first = Array.from(focusNodeIds)[0];
+            if (first) focusOnFragment(first);
+          } catch {}
+        }, 80);
+      } else if (focusId) {
         setTimeout(() => {
           try {
             // Keep zoom stable; just center on the node.
@@ -13342,6 +14229,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             alwaysShowMini={!!lensId}
             onCreateDomain={handleCreateDomain}
             onRunDomain={handleRunDomain}
+            onHighlightDependency={onDomainDependencyClick}
+            onHoverDependency={onDomainDependencyHover}
+            onHoverExplanatoryUnit={onDomainExplanatoryUnitHover}
+            onClearHighlight={clearDomainOverlayHover}
           />
 
           <button
@@ -13454,60 +14345,156 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                       </div>
                     ) : (
                       <>
-                        {scopePreview.slice(0, 5).map((it) => (
+                        {scopePreviewDomains.length > 0 && (
                           <div
-                            key={it.canonicalPath}
                             style={{
-                              padding: '8px 16px',
-                              display: 'flex',
-                              alignItems: 'baseline',
-                              gap: 10,
-                              borderBottom: '1px solid transparent',
+                              paddingTop: 2,
+                              paddingBottom: scopePreviewNonDomains.length > 0 ? 6 : 2,
+                              borderBottom:
+                                scopePreviewNonDomains.length > 0
+                                  ? (theme === 'dark' ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(0,0,0,0.08)')
+                                  : 'none',
                             }}
                           >
                             <div
                               style={{
-                                width: 6,
-                                height: 6,
-                                borderRadius: '50%',
-                                background: 'var(--accent-primary, #3B82F6)',
-                                flexShrink: 0,
-                                marginTop: 6,
+                                padding: '4px 16px 6px',
+                                fontSize: 10,
+                                fontWeight: 800,
+                                letterSpacing: '0.04em',
+                                textTransform: 'uppercase',
+                                color: theme === 'dark' ? 'rgba(251,191,36,0.92)' : 'rgba(180,83,9,0.92)',
                               }}
-                            />
-                            <div
-                              style={{
-                                flex: 1,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                                fontSize: 13,
-                                fontWeight: 600,
-                                color: 'var(--text-heading)',
-                              }}
-                              title={it.name || it.canonicalPath}
                             >
-                              {it.name || it.canonicalPath}
+                              Domains ({scopePreviewDomains.length})
                             </div>
-                            {it.type && (
+                            {scopePreviewDomains.slice(0, SCOPE_PREVIEW_SECTION_LIMIT).map((it) => (
                               <div
+                                key={it.canonicalPath}
                                 style={{
-                                  fontSize: 10,
-                                  color: 'var(--text-secondary-strong)',
-                                  textTransform: 'uppercase',
-                                  fontWeight: 600,
-                                  flexShrink: 0,
-                                  opacity: 0.7,
+                                  padding: '8px 16px',
+                                  display: 'flex',
+                                  alignItems: 'baseline',
+                                  gap: 10,
+                                  borderBottom: '1px solid transparent',
                                 }}
                               >
-                                {it.type}
-          </div>
-        )}
-      </div>
-                        ))}
-                        {scopePreview.length > 5 && (
-                          <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                            ...and {scopePreview.length - 5} more
+                                <div
+                                  style={{
+                                    width: 6,
+                                    height: 6,
+                                    borderRadius: '50%',
+                                    background: theme === 'dark' ? 'rgba(251,191,36,0.95)' : '#D97706',
+                                    flexShrink: 0,
+                                    marginTop: 6,
+                                  }}
+                                />
+                                <div
+                                  style={{
+                                    flex: 1,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                    fontSize: 13,
+                                    fontWeight: 700,
+                                    color: 'var(--text-heading)',
+                                  }}
+                                  title={it.name || it.canonicalPath}
+                                >
+                                  {it.name || it.canonicalPath}
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: 10,
+                                    color: theme === 'dark' ? 'rgba(251,191,36,0.9)' : 'rgba(180,83,9,0.9)',
+                                    textTransform: 'uppercase',
+                                    fontWeight: 700,
+                                    flexShrink: 0,
+                                    opacity: 0.9,
+                                  }}
+                                >
+                                  {it.type || 'DOMAIN'}
+                                </div>
+                              </div>
+                            ))}
+                            {scopePreviewDomains.length > SCOPE_PREVIEW_SECTION_LIMIT && (
+                              <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                                ...and {scopePreviewDomains.length - SCOPE_PREVIEW_SECTION_LIMIT} more domains
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {scopePreviewNonDomains.length > 0 && (
+                          <div style={{ paddingTop: scopePreviewDomains.length > 0 ? 6 : 2, paddingBottom: 2 }}>
+                            <div
+                              style={{
+                                padding: '4px 16px 6px',
+                                fontSize: 10,
+                                fontWeight: 800,
+                                letterSpacing: '0.04em',
+                                textTransform: 'uppercase',
+                                color: 'var(--text-secondary-strong)',
+                              }}
+                            >
+                              Scope ({scopePreviewNonDomains.length})
+                            </div>
+                            {scopePreviewNonDomains.slice(0, SCOPE_PREVIEW_SECTION_LIMIT).map((it) => (
+                              <div
+                                key={it.canonicalPath}
+                                style={{
+                                  padding: '8px 16px',
+                                  display: 'flex',
+                                  alignItems: 'baseline',
+                                  gap: 10,
+                                  borderBottom: '1px solid transparent',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    width: 6,
+                                    height: 6,
+                                    borderRadius: '50%',
+                                    background: 'var(--accent-primary, #3B82F6)',
+                                    flexShrink: 0,
+                                    marginTop: 6,
+                                  }}
+                                />
+                                <div
+                                  style={{
+                                    flex: 1,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                    fontSize: 13,
+                                    fontWeight: 600,
+                                    color: 'var(--text-heading)',
+                                  }}
+                                  title={it.name || it.canonicalPath}
+                                >
+                                  {it.name || it.canonicalPath}
+                                </div>
+                                {it.type && (
+                                  <div
+                                    style={{
+                                      fontSize: 10,
+                                      color: 'var(--text-secondary-strong)',
+                                      textTransform: 'uppercase',
+                                      fontWeight: 600,
+                                      flexShrink: 0,
+                                      opacity: 0.7,
+                                    }}
+                                  >
+                                    {it.type}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                            {scopePreviewNonDomains.length > SCOPE_PREVIEW_SECTION_LIMIT && (
+                              <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                                ...and {scopePreviewNonDomains.length - SCOPE_PREVIEW_SECTION_LIMIT} more
+                              </div>
+                            )}
                           </div>
                         )}
                       </>

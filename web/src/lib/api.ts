@@ -2303,6 +2303,38 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  async listHorizonGeoObjects(options?: {
+    limit?: number;
+    pathPrefix?: string;
+    onlyLoc?: boolean;
+  }): Promise<{
+    items: Array<{
+      id: string;
+      canonicalPath: string;
+      type: string;
+      label?: string;
+      description?: string;
+      status?: string;
+      coordinates?: { lat: number; lon: number };
+      updatedAt?: string;
+    }>;
+    total: number;
+    limit: number;
+    pathPrefix?: string;
+  }> {
+    try {
+      const params: Record<string, string> = {};
+      if (options?.limit !== undefined) params.limit = String(options.limit);
+      if (options?.pathPrefix) params.pathPrefix = options.pathPrefix;
+      if (options?.onlyLoc !== undefined) params.onlyLoc = options.onlyLoc ? '1' : '0';
+      const response = await this.client.get('/api/horizon/geo-objects', { params });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] listHorizonGeoObjects error:`, error);
+      throw error;
+    }
+  }
+
   async deleteHorizonFragment(fragmentId: string): Promise<{ ok: boolean; fragmentId: string }> {
     try {
       const response = await this.client.delete(`/api/horizon/fragments/${fragmentId}`);

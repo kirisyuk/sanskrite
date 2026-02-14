@@ -274,7 +274,7 @@ func (h *SourcesHandler) CreateSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Kind        string               `json:"kind"` // rss, telegram_channel, web
+		Kind        string               `json:"kind"` // rss, telegram_channel, web, horizon_monitor_feed
 		DisplayName string               `json:"displayName"`
 		Details     models.SourceDetails `json:"details"`
 		Status      string               `json:"status"` // active, paused, completed
@@ -283,24 +283,29 @@ func (h *SourcesHandler) CreateSource(w http.ResponseWriter, r *http.Request) {
 		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
 		return
 	}
+	req.Kind = models.NormalizeSourceKind(req.Kind)
 
 	// Validate kind
-	if req.Kind != "rss" && req.Kind != "telegram_channel" && req.Kind != "web" {
-		WriteBadRequest(w, "INVALID_KIND", "kind must be rss, telegram_channel, or web")
+	if req.Kind != models.SourceKindRSS && req.Kind != models.SourceKindTelegramChannel && req.Kind != models.SourceKindWeb && req.Kind != models.SourceKindHorizonFeed {
+		WriteBadRequest(w, "INVALID_KIND", "kind must be rss, telegram_channel, web, or horizon_monitor_feed")
 		return
 	}
 
 	// Validate required fields based on kind
-	if req.Kind == "rss" && (req.Details.RSSURL == nil || *req.Details.RSSURL == "") {
+	if req.Kind == models.SourceKindRSS && (req.Details.RSSURL == nil || *req.Details.RSSURL == "") {
 		WriteBadRequest(w, "VALIDATION_ERROR", "rssUrl is required for RSS sources")
 		return
 	}
-	if req.Kind == "telegram_channel" && (req.Details.ChannelUsername == nil || *req.Details.ChannelUsername == "") {
+	if req.Kind == models.SourceKindTelegramChannel && (req.Details.ChannelUsername == nil || *req.Details.ChannelUsername == "") {
 		WriteBadRequest(w, "VALIDATION_ERROR", "channelUsername is required for Telegram sources")
 		return
 	}
-	if req.Kind == "web" && (req.Details.URI == nil || *req.Details.URI == "") {
+	if req.Kind == models.SourceKindWeb && (req.Details.URI == nil || *req.Details.URI == "") {
 		WriteBadRequest(w, "VALIDATION_ERROR", "uri is required for web sources")
+		return
+	}
+	if models.IsHorizonMonitorFeedKind(req.Kind) && (req.Details.URI == nil || *req.Details.URI == "") {
+		WriteBadRequest(w, "VALIDATION_ERROR", "uri is required for horizon_monitor_feed sources")
 		return
 	}
 
@@ -314,7 +319,7 @@ func (h *SourcesHandler) CreateSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Normalize channel username (remove @ if present)
-	if req.Kind == "telegram_channel" && req.Details.ChannelUsername != nil {
+	if req.Kind == models.SourceKindTelegramChannel && req.Details.ChannelUsername != nil {
 		username := strings.TrimPrefix(strings.TrimSpace(*req.Details.ChannelUsername), "@")
 		req.Details.ChannelUsername = &username
 	}
@@ -322,11 +327,13 @@ func (h *SourcesHandler) CreateSource(w http.ResponseWriter, r *http.Request) {
 	// Generate display name if not provided
 	displayName := req.DisplayName
 	if displayName == "" {
-		if req.Kind == "rss" && req.Details.RSSURL != nil {
+		if req.Kind == models.SourceKindRSS && req.Details.RSSURL != nil {
 			displayName = *req.Details.RSSURL
-		} else if req.Kind == "telegram_channel" && req.Details.ChannelUsername != nil {
+		} else if req.Kind == models.SourceKindTelegramChannel && req.Details.ChannelUsername != nil {
 			displayName = "@" + *req.Details.ChannelUsername
-		} else if req.Kind == "web" && req.Details.URI != nil {
+		} else if req.Kind == models.SourceKindWeb && req.Details.URI != nil {
+			displayName = *req.Details.URI
+		} else if models.IsHorizonMonitorFeedKind(req.Kind) && req.Details.URI != nil {
 			displayName = *req.Details.URI
 		} else {
 			displayName = req.Kind + " source"
@@ -501,7 +508,7 @@ func (h *SourcesHandler) UpdateSourceStatus(w http.ResponseWriter, r *http.Reque
 // ListSources handles GET /api/v1/sources
 // Query parameters:
 //   - projectId: filter by project (returns sources linked to this project)
-//   - kind: filter by kind (rss, telegram_channel, web)
+//   - kind: filter by kind (rss, telegram_channel, web, horizon_monitor_feed)
 //   - status: filter by status (active, paused, completed)
 //   - tenantId: filter by tenant (defaults to authenticated user's tenant)
 func (h *SourcesHandler) ListSources(w http.ResponseWriter, r *http.Request) {
@@ -672,7 +679,7 @@ func (h *SourcesHandler) IngestSource(w http.ResponseWriter, r *http.Request) {
 		h.logger.Printf("IngestSource: starting ingest for source %s (kind: %s)", sourceID, ds.Kind)
 		var ingestErr error
 		switch ds.Kind {
-		case "telegram_channel":
+		case models.SourceKindTelegramChannel:
 			if ds.Details.ChannelUsername == nil {
 				h.logger.Printf("IngestSource: telegram_channel source %s missing ChannelUsername", sourceID)
 				return
@@ -686,7 +693,7 @@ func (h *SourcesHandler) IngestSource(w http.ResponseWriter, r *http.Request) {
 			docTenantID := ds.TenantID // Empty for public sources, tenant-specific for private sources
 			h.logger.Printf("IngestSource: calling IngestTelegram for source %s, channel @%s, lastMessageID=%d, docTenantID=%s", sourceID, *ds.Details.ChannelUsername, last, docTenantID)
 			ingestErr = h.orchestrator.IngestTelegram(ctx, docTenantID, sourceID, *ds.Details.ChannelUsername, last)
-		case "web":
+		case models.SourceKindWeb:
 			if ds.Details.URI == nil {
 				h.logger.Printf("IngestSource: web source %s missing URI", sourceID)
 				return
@@ -694,7 +701,7 @@ func (h *SourcesHandler) IngestSource(w http.ResponseWriter, r *http.Request) {
 			// For public sources (TenantID == ""), use empty tenantID for documents
 			docTenantID := ds.TenantID // Empty for public sources, tenant-specific for private sources
 			ingestErr = h.orchestrator.IngestWeb(ctx, docTenantID, sourceID, *ds.Details.URI)
-		case "rss":
+		case models.SourceKindRSS:
 			if ds.Details.RSSURL == nil {
 				h.logger.Printf("IngestSource: rss source %s missing RSSURL", sourceID)
 				return
@@ -705,6 +712,18 @@ func (h *SourcesHandler) IngestSource(w http.ResponseWriter, r *http.Request) {
 				ingestErr = h.orchestrator.IngestRSS(ctx, docTenantID, sourceID, h.orchestrator.EmbeddingProvider())
 			} else {
 				h.logger.Printf("IngestSource: rss source %s requires embedding provider", sourceID)
+				return
+			}
+		case models.SourceKindHorizonFeed, models.SourceKindWorldMonitorLegacy:
+			if ds.Details.URI == nil {
+				h.logger.Printf("IngestSource: horizon_monitor_feed source %s missing URI", sourceID)
+				return
+			}
+			docTenantID := ds.TenantID
+			if h.orchestrator.EmbeddingProvider() != nil {
+				ingestErr = h.orchestrator.IngestHorizonMonitorFeed(ctx, docTenantID, sourceID, h.orchestrator.EmbeddingProvider())
+			} else {
+				h.logger.Printf("IngestSource: horizon_monitor_feed source %s requires embedding provider", sourceID)
 				return
 			}
 		default:

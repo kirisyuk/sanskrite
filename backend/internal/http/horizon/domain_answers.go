@@ -25,6 +25,35 @@ type domainAnswersListResponse struct {
 	TotalCount    int                            `json:"totalCount"`
 }
 
+func parseLensAndDomainTokenFromPath(r *http.Request) (string, string, error) {
+	const prefix = "/api/horizon/lenses/"
+	escapedPath := strings.TrimSpace(r.URL.EscapedPath())
+	if !strings.HasPrefix(escapedPath, prefix) {
+		return "", "", errors.New("invalid path")
+	}
+	rest := strings.TrimPrefix(escapedPath, prefix)
+	lensID, tail, ok := strings.Cut(rest, "/domain-answers/")
+	lensID = strings.TrimSpace(strings.Trim(lensID, "/"))
+	if !ok || lensID == "" {
+		return "", "", errors.New("lensId required in path")
+	}
+	tail = strings.TrimSpace(strings.Trim(tail, "/"))
+	tail = strings.TrimSuffix(tail, "/run")
+	tail = strings.TrimSuffix(tail, "/")
+	if tail == "" {
+		return "", "", errors.New("domainId required in path")
+	}
+	domainToken, err := url.PathUnescape(tail)
+	if err != nil {
+		return "", "", errors.New("domainId required in path")
+	}
+	domainToken = strings.TrimSpace(domainToken)
+	if domainToken == "" {
+		return "", "", errors.New("domainId required in path")
+	}
+	return lensID, domainToken, nil
+}
+
 // ListDomainAnswers returns domain answer snapshots for a lens.
 // GET /api/horizon/lenses/{lensId}/domain-answers
 func (h *HorizonHandlers) ListDomainAnswers(w http.ResponseWriter, r *http.Request) {
@@ -101,17 +130,12 @@ func (h *HorizonHandlers) GetDomainAnswer(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Authentication required", http.StatusUnauthorized)
 		return
 	}
-
-	path := strings.TrimPrefix(r.URL.Path, "/api/horizon/lenses/")
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 3 || strings.TrimSpace(parts[0]) == "" {
-		http.Error(w, "lensId required in path", http.StatusBadRequest)
-		return
-	}
-	lensID := strings.TrimSpace(parts[0])
-	domainToken, _ := url.PathUnescape(strings.TrimSpace(parts[2]))
-	domainToken = strings.TrimSpace(domainToken)
-	if domainToken == "" {
+	lensID, domainToken, parseErr := parseLensAndDomainTokenFromPath(r)
+	if parseErr != nil {
+		if parseErr.Error() == "lensId required in path" {
+			http.Error(w, "lensId required in path", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "domainId required in path", http.StatusBadRequest)
 		return
 	}
@@ -269,17 +293,12 @@ func (h *HorizonHandlers) RunDomainAnswer(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Authentication required", http.StatusUnauthorized)
 		return
 	}
-
-	path := strings.TrimPrefix(r.URL.Path, "/api/horizon/lenses/")
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 4 || strings.TrimSpace(parts[0]) == "" {
-		http.Error(w, "lensId required in path", http.StatusBadRequest)
-		return
-	}
-	lensID := strings.TrimSpace(parts[0])
-	domainToken, _ := url.PathUnescape(strings.TrimSpace(parts[2]))
-	domainToken = strings.TrimSpace(domainToken)
-	if domainToken == "" {
+	lensID, domainToken, parseErr := parseLensAndDomainTokenFromPath(r)
+	if parseErr != nil {
+		if parseErr.Error() == "lensId required in path" {
+			http.Error(w, "lensId required in path", http.StatusBadRequest)
+			return
+		}
 		http.Error(w, "domainId required in path", http.StatusBadRequest)
 		return
 	}

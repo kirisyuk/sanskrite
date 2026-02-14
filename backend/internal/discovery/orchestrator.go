@@ -2,9 +2,14 @@ package discovery
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +41,7 @@ type Orchestrator struct {
 	cache         *repo.ProcessedContentRepository
 	interactions  *repo.InteractionsRepository
 	ingestHistory *repo.SourceIngestHistoryRepository
+	wmPipeline    *HorizonMonitorPipeline
 }
 
 type TelegramFetcher interface {
@@ -70,6 +76,13 @@ func (o *Orchestrator) EmbeddingProvider() ai.EmbeddingProvider { return o.emb }
 // WithIngestHistory wires SourceIngestHistory repository for tracking ingest runs
 func (o *Orchestrator) WithIngestHistory(h *repo.SourceIngestHistoryRepository) *Orchestrator {
 	o.ingestHistory = h
+	return o
+}
+
+// WithHorizonMonitorPipeline wires Horizon Monitor deterministic processing
+// (ontology facts, signal propagation, grid/country rollups, briefs/classification).
+func (o *Orchestrator) WithHorizonMonitorPipeline(p *HorizonMonitorPipeline) *Orchestrator {
+	o.wmPipeline = p
 	return o
 }
 
@@ -509,6 +522,13 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 // foundNew indicates if new content was found in the current poll.
 // Same logic as in poller_worker.go
 func (o *Orchestrator) cadenceToDuration(ds *models.DataSource, foundNew bool) time.Duration {
+	if ds != nil && ds.Details.PollIntervalMinutes != nil && *ds.Details.PollIntervalMinutes > 0 {
+		return time.Duration(*ds.Details.PollIntervalMinutes) * time.Minute
+	}
+	// horizon monitor feeds are intentionally conservative by default (product requirement).
+	if ds != nil && models.IsHorizonMonitorFeedKind(ds.Kind) {
+		return 30 * time.Minute
+	}
 	// Default 30 minutes
 	def := 30 * time.Minute
 
@@ -600,6 +620,21 @@ func (o *Orchestrator) IngestProjectSources(ctx context.Context, tenantID, proje
 			// reuse existing rss ingest using emb
 			if o.emb != nil {
 				_ = o.IngestRSS(ctx, tenantID, ds.ID, o.emb)
+			}
+		} else if models.IsHorizonMonitorFeedKind(ds.Kind) && ds.Details.URI != nil {
+			can := crawler.CanonicalizeURL(*ds.Details.URI)
+			if can == "" {
+				can = strings.TrimSpace(*ds.Details.URI)
+			}
+			if can == "" {
+				continue
+			}
+			if _, ok := rssSeen[can]; ok {
+				continue
+			}
+			rssSeen[can] = struct{}{}
+			if o.emb != nil {
+				_ = o.IngestHorizonMonitorFeed(ctx, tenantID, ds.ID, o.emb)
 			}
 		}
 	}
@@ -784,9 +819,414 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	return nil
 }
 
+// IngestHorizonMonitorFeed ingests a Horizon Monitor feed snapshot (JSON or text) and maps it to normalized documents.
+// The feed endpoint is expected in DataSource.Details.URI.
+func (o *Orchestrator) IngestHorizonMonitorFeed(ctx context.Context, tenantID, sourceID string, embed ai.EmbeddingProvider) error {
+	if o.docs == nil || o.chunks == nil || embed == nil {
+		return fmt.Errorf("ingest dependencies not wired")
+	}
+
+	feedURL := ""
+	var sourceDS *models.DataSource
+	if o.sources != nil {
+		if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
+			sourceDS = ds
+			if ds.Details.URI != nil {
+				feedURL = strings.TrimSpace(*ds.Details.URI)
+			} else if ds.Details.SourceURI != nil {
+				feedURL = strings.TrimSpace(*ds.Details.SourceURI)
+			}
+		}
+	}
+	if feedURL == "" {
+		return fmt.Errorf("horizon_monitor_feed source %s has empty URI", sourceID)
+	}
+
+	startTime := time.Now().UTC()
+	docs, fetchErr := o.fetchHorizonMonitorDocuments(ctx, feedURL)
+	if fetchErr != nil {
+		// Even on error, keep polling state moving to avoid source starvation.
+		if o.sources != nil {
+			if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
+				now := time.Now().UTC()
+				ds.LastPolledAt = &now
+				b := 60
+				if ds.PollBackoffSec != nil && *ds.PollBackoffSec > 0 {
+					b = *ds.PollBackoffSec * 2
+					if b > 3600 {
+						b = 3600
+					}
+				}
+				ds.PollBackoffSec = &b
+				next := now.Add(time.Duration(b) * time.Second)
+				ds.NextPollAt = &next
+				if err := o.sources.Upsert(ctx, ds); err != nil {
+					o.logger.Printf("orchestrator: failed to update NextPollAt/LastPolledAt on horizon monitor fetch error for source %s: %v", sourceID, err)
+				}
+			}
+		}
+
+		if o.ingestHistory != nil {
+			errStr := fetchErr.Error()
+			completedAt := time.Now().UTC()
+			durationMs := int(completedAt.Sub(startTime).Milliseconds())
+			_, _ = o.ingestHistory.Create(ctx, &models.SourceIngestHistory{
+				TenantID:           tenantID,
+				SourceID:           sourceID,
+				Kind:               "horizon_monitor_feed",
+				Status:             "error",
+				Error:              &errStr,
+				Params:             map[string]interface{}{"url": feedURL},
+				DocumentsProcessed: 0,
+				DocumentsCreated:   0,
+				DurationMs:         &durationMs,
+				StartedAt:          startTime,
+				CompletedAt:        &completedAt,
+				CreatedAt:          startTime,
+			})
+		}
+		return fetchErr
+	}
+
+	mode := normalizeHorizonMonitorIngestMode(sourceDS)
+	documentsCreated, err := o.processProviderDocumentsWithOptions(
+		ctx,
+		tenantID,
+		sourceID,
+		docs,
+		embed,
+		providerIngestOptions{
+			// HorizonMonitor feeds are processed by dedicated deterministic pipeline;
+			// we intentionally skip generic document.process LLM extraction here.
+			PublishDocumentProcess: horizonMonitorShouldPublishDocumentProcess(mode),
+		},
+	)
+	if err != nil {
+		if o.ingestHistory != nil {
+			errStr := err.Error()
+			completedAt := time.Now().UTC()
+			durationMs := int(completedAt.Sub(startTime).Milliseconds())
+			_, _ = o.ingestHistory.Create(ctx, &models.SourceIngestHistory{
+				TenantID:           tenantID,
+				SourceID:           sourceID,
+				Kind:               "horizon_monitor_feed",
+				Status:             "error",
+				Error:              &errStr,
+				Params:             map[string]interface{}{"url": feedURL},
+				DocumentsProcessed: len(docs),
+				DocumentsCreated:   documentsCreated,
+				DurationMs:         &durationMs,
+				StartedAt:          startTime,
+				CompletedAt:        &completedAt,
+				CreatedAt:          startTime,
+			})
+		}
+		return err
+	}
+	if o.wmPipeline != nil {
+		if err := o.wmPipeline.ProcessDocuments(ctx, tenantID, sourceDS, feedURL, docs); err != nil {
+			o.logger.Printf("orchestrator: horizon monitor pipeline failed for source %s (mode=%s): %v", sourceID, mode, err)
+		}
+	}
+
+	if o.ingestHistory != nil {
+		completedAt := time.Now().UTC()
+		durationMs := int(completedAt.Sub(startTime).Milliseconds())
+		status := "success"
+		if len(docs) == 0 {
+			status = "empty"
+		}
+		_, _ = o.ingestHistory.Create(ctx, &models.SourceIngestHistory{
+			TenantID:           tenantID,
+			SourceID:           sourceID,
+			Kind:               "horizon_monitor_feed",
+			Status:             status,
+			Params:             map[string]interface{}{"url": feedURL},
+			DocumentsProcessed: len(docs),
+			DocumentsCreated:   documentsCreated,
+			DurationMs:         &durationMs,
+			StartedAt:          startTime,
+			CompletedAt:        &completedAt,
+			CreatedAt:          startTime,
+		})
+	}
+
+	if o.sources != nil {
+		ds, err := o.sources.Get(ctx, sourceID)
+		if err == nil && ds != nil {
+			now := time.Now().UTC()
+			ds.LastPolledAt = &now
+			if documentsCreated > 0 {
+				ds.LastFoundAt = &now
+			}
+			interval := o.cadenceToDuration(ds, documentsCreated > 0)
+			next := now.Add(interval)
+			ds.NextPollAt = &next
+			zero := 0
+			ds.PollBackoffSec = &zero
+			if err := o.sources.Upsert(ctx, ds); err != nil {
+				o.logger.Printf("orchestrator: failed to update NextPollAt for horizon monitor source %s: %v", sourceID, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (o *Orchestrator) fetchHorizonMonitorDocuments(ctx context.Context, feedURL string) ([]prov.NormalizedDocument, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("horizon monitor feed returned HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	return parseHorizonMonitorDocuments(feedURL, body, strings.ToLower(resp.Header.Get("Content-Type")))
+}
+
+func parseHorizonMonitorDocuments(feedURL string, body []byte, contentType string) ([]prov.NormalizedDocument, error) {
+	raw := strings.TrimSpace(string(body))
+	if raw == "" {
+		return nil, nil
+	}
+	if strings.Contains(contentType, "json") || strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[") {
+		var payload any
+		if err := json.Unmarshal(body, &payload); err == nil {
+			if docs := parseHorizonMonitorJSONPayload(feedURL, payload); len(docs) > 0 {
+				return docs, nil
+			}
+		}
+	}
+
+	now := time.Now().UTC()
+	ext := "hm-" + hashShort(feedURL+"|"+raw)
+	return []prov.NormalizedDocument{
+		{
+			ExternalID:        ext,
+			Title:             "Horizon Monitor feed snapshot",
+			URL:               feedURL,
+			DocumentPath:      "horizon-monitor/" + ext,
+			FullText:          raw,
+			ContentType:       "plainText",
+			DocumentType:      "feed_snapshot",
+			Language:          "en",
+			SourceMeta:        map[string]any{"feedUrl": feedURL},
+			OriginPublishedAt: &now,
+		},
+	}, nil
+}
+
+func parseHorizonMonitorJSONPayload(feedURL string, payload any) []prov.NormalizedDocument {
+	now := time.Now().UTC()
+	switch v := payload.(type) {
+	case []any:
+		return horizonMonitorDocsFromItems(feedURL, v, "items")
+	case map[string]any:
+		keys := []string{"items", "events", "signals", "news", "data", "results"}
+		for _, key := range keys {
+			if arrAny, ok := v[key].([]any); ok && len(arrAny) > 0 {
+				return horizonMonitorDocsFromItems(feedURL, arrAny, key)
+			}
+		}
+		pretty, _ := json.MarshalIndent(v, "", "  ")
+		ext := "hm-" + hashShort(feedURL+"|"+string(pretty))
+		return []prov.NormalizedDocument{
+			{
+				ExternalID:        ext,
+				Title:             "Horizon Monitor feed snapshot",
+				URL:               feedURL,
+				DocumentPath:      "horizon-monitor/" + ext,
+				FullText:          string(pretty),
+				ContentType:       "application/json",
+				DocumentType:      "feed_snapshot",
+				Language:          "en",
+				SourceMeta:        map[string]any{"feedUrl": feedURL, "payloadKind": "object"},
+				OriginPublishedAt: &now,
+			},
+		}
+	default:
+		return nil
+	}
+}
+
+func horizonMonitorDocsFromItems(feedURL string, items []any, payloadKey string) []prov.NormalizedDocument {
+	docs := make([]prov.NormalizedDocument, 0, len(items))
+	for i, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		title := firstNonEmptyString(
+			asString(m["title"]),
+			asString(m["name"]),
+			asString(m["headline"]),
+			asString(m["summary"]),
+		)
+		if title == "" {
+			title = fmt.Sprintf("Horizon Monitor %s #%d", payloadKey, i+1)
+		}
+
+		link := firstNonEmptyString(
+			asString(m["link"]),
+			asString(m["url"]),
+			asString(m["sourceUrl"]),
+		)
+
+		text := firstNonEmptyString(
+			asString(m["content"]),
+			asString(m["description"]),
+			asString(m["summary"]),
+			asString(m["text"]),
+		)
+		if text == "" {
+			if raw, err := json.Marshal(m); err == nil {
+				text = string(raw)
+			}
+		}
+		if text == "" {
+			continue
+		}
+
+		extID := firstNonEmptyString(
+			asString(m["id"]),
+			asString(m["eventId"]),
+			asString(m["guid"]),
+		)
+		if extID == "" {
+			extID = "hm-" + hashShort(feedURL+"|"+title+"|"+link+"|"+strconv.Itoa(i))
+		}
+
+		doc := prov.NormalizedDocument{
+			ExternalID:   extID,
+			Title:        title,
+			URL:          link,
+			DocumentPath: "horizon-monitor/" + payloadKey + "/" + extID,
+			FullText:     text,
+			ContentType:  "plainText",
+			DocumentType: "feed_item",
+			Language:     "en",
+			SourceMeta: map[string]any{
+				"feedUrl":    feedURL,
+				"payloadKey": payloadKey,
+			},
+		}
+		if t := parseAnyTime(
+			m["pubDate"],
+			m["publishedAt"],
+			m["published"],
+			m["timestamp"],
+			m["time"],
+			m["date"],
+		); t != nil {
+			doc.OriginPublishedAt = t
+		}
+		docs = append(docs, doc)
+	}
+	return docs
+}
+
+func parseAnyTime(vals ...any) *time.Time {
+	for _, v := range vals {
+		switch t := v.(type) {
+		case string:
+			s := strings.TrimSpace(t)
+			if s == "" {
+				continue
+			}
+			if tm, err := time.Parse(time.RFC3339, s); err == nil {
+				return &tm
+			}
+			if tm, err := time.Parse(time.RFC3339Nano, s); err == nil {
+				return &tm
+			}
+			if tm, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+				return &tm
+			}
+			if unix, err := strconv.ParseInt(s, 10, 64); err == nil {
+				if unix > 1e12 {
+					tm := time.UnixMilli(unix).UTC()
+					return &tm
+				}
+				tm := time.Unix(unix, 0).UTC()
+				return &tm
+			}
+		case float64:
+			u := int64(t)
+			if u <= 0 {
+				continue
+			}
+			if u > 1e12 {
+				tm := time.UnixMilli(u).UTC()
+				return &tm
+			}
+			tm := time.Unix(u, 0).UTC()
+			return &tm
+		}
+	}
+	return nil
+}
+
+func asString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case json.Number:
+		return strings.TrimSpace(t.String())
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(t)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	default:
+		return ""
+	}
+}
+
+func hashShort(s string) string {
+	sum := sha1.Sum([]byte(strings.TrimSpace(s)))
+	return hex.EncodeToString(sum[:8])
+}
+
+func firstNonEmptyString(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
 // processProviderDocuments is a helper to process documents from any provider
 // Returns the number of newly created documents (not updated existing ones)
 func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, sourceID string, docs []prov.NormalizedDocument, embed ai.EmbeddingProvider) (int, error) {
+	return o.processProviderDocumentsWithOptions(ctx, tenantID, sourceID, docs, embed, providerIngestOptions{
+		PublishDocumentProcess: true,
+	})
+}
+
+type providerIngestOptions struct {
+	PublishDocumentProcess bool
+}
+
+func (o *Orchestrator) processProviderDocumentsWithOptions(
+	ctx context.Context,
+	tenantID, sourceID string,
+	docs []prov.NormalizedDocument,
+	embed ai.EmbeddingProvider,
+	opts providerIngestOptions,
+) (int, error) {
 	// Deduplicate documents by ExternalID within this ingest run
 	seenExt := map[string]struct{}{}
 	documentsCreated := 0
@@ -878,7 +1318,7 @@ func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, s
 			existing.Status = "embedded"
 			_ = o.docs.Upsert(ctx, existing)
 			// publish to document.process
-			if o.publish != nil {
+			if opts.PublishDocumentProcess && o.publish != nil {
 				payload := map[string]any{
 					"tenantId":   tenantID,
 					"sourceId":   sourceID,
@@ -893,7 +1333,7 @@ func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, s
 				d.Status = "embedded"
 				_ = o.docs.Upsert(ctx, d)
 				// publish to document.process
-				if o.publish != nil {
+				if opts.PublishDocumentProcess && o.publish != nil {
 					payload := map[string]any{
 						"tenantId":   tenantID,
 						"sourceId":   sourceID,

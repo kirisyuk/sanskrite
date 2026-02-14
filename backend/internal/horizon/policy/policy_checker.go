@@ -1412,208 +1412,44 @@ func (pc *PolicyChecker) checkEdgeDirectionLegacy(
 		return violations
 	}
 
-	// Auto-fix: GEO_REGION → MARKET with DOMINATES is a modeling error.
-	if !shouldReverse &&
-		edge.Type == horizonmodels.DependencyType("DOMINATES") &&
-		sourceType == horizonmodels.FragmentTypeGeoRegion &&
-		targetType == horizonmodels.FragmentTypeMarket {
-		v := PolicyViolation{
-			ID:          uuid.New().String(),
-			Type:        ViolationEdgeDirection,
-			Severity:    SeverityWarning,
-			EdgeID:      edge.ID,
-			ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
-			Rule:        "edge_direction",
-			Description: "Edge DOMINATES is invalid for GEO_REGION -> MARKET. Auto-fix: rewrite edge type to INFLUENCES.",
-			Confidence:  0.9,
-			AutoFixable: true,
-			DetectedAt:  time.Now(),
-			DetectedBy:  "deterministic",
-		}
-		v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, "INFLUENCES")
-		v.SuggestedFix = &EnforcementTask{
-			Type:     TaskCanonicalizeEdge,
-			TargetID: edge.ID,
-			Params: map[string]interface{}{
-				"newType":    "INFLUENCES",
-				"shouldSwap": false,
-			},
-		}
-		return append(violations, v)
-	}
+	if !shouldReverse {
+		if fix, ok := ResolveEdgeDirectionAutoFix(edge.Type, sourceType, targetType); ok {
+			expectedSourceID := edge.SourceFragmentID
+			expectedTargetID := edge.TargetFragmentID
+			expectedSourceType := sourceType
+			expectedTargetType := targetType
+			if fix.ShouldSwap {
+				expectedSourceID, expectedTargetID = edge.TargetFragmentID, edge.SourceFragmentID
+				expectedSourceType, expectedTargetType = targetType, sourceType
+			}
 
-	if !shouldReverse &&
-		edge.Type == horizonmodels.DependencyType("OWNS") &&
-		sourceType == horizonmodels.FragmentTypeOrganization &&
-		targetType == horizonmodels.FragmentTypeProgram {
-		v := PolicyViolation{
-			ID:          uuid.New().String(),
-			Type:        ViolationEdgeDirection,
-			Severity:    SeverityWarning,
-			EdgeID:      edge.ID,
-			ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
-			Rule:        "edge_direction",
-			Description: "Edge OWNS is invalid for ORGANIZATION -> PROGRAM. Auto-fix: rewrite edge type to ADMINISTERS.",
-			Confidence:  0.95,
-			AutoFixable: true,
-			DetectedAt:  time.Now(),
-			DetectedBy:  "deterministic",
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationEdgeDirection,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				Rule:        "edge_direction",
+				Description: fix.Reason,
+				Confidence:  fix.Confidence,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
+			v.ExpectedValue = fmt.Sprintf(
+				"%s (%s) -> %s (%s) [%s]",
+				expectedSourceID, expectedSourceType, expectedTargetID, expectedTargetType, fix.NewType,
+			)
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskCanonicalizeEdge,
+				TargetID: edge.ID,
+				Params: map[string]interface{}{
+					"newType":    string(fix.NewType),
+					"shouldSwap": fix.ShouldSwap,
+				},
+			}
+			return append(violations, v)
 		}
-		v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, "ADMINISTERS")
-		v.SuggestedFix = &EnforcementTask{
-			Type:     TaskCanonicalizeEdge,
-			TargetID: edge.ID,
-			Params: map[string]interface{}{
-				"newType":    "ADMINISTERS",
-				"shouldSwap": false,
-			},
-		}
-		return append(violations, v)
-	}
-
-	if !shouldReverse &&
-		edge.Type == horizonmodels.DependencyType("INVESTS_IN") &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeOrganization {
-		v := PolicyViolation{
-			ID:          uuid.New().String(),
-			Type:        ViolationEdgeDirection,
-			Severity:    SeverityWarning,
-			EdgeID:      edge.ID,
-			ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
-			Rule:        "edge_direction",
-			Description: "Edge INVESTS_IN is invalid for MARKET -> ORGANIZATION. Auto-fix: rewrite to ORGANIZATION -> MARKET with edge type PARTICIPATES_IN.",
-			Confidence:  0.95,
-			AutoFixable: true,
-			DetectedAt:  time.Now(),
-			DetectedBy:  "deterministic",
-		}
-		v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, "PARTICIPATES_IN")
-		v.SuggestedFix = &EnforcementTask{
-			Type:     TaskCanonicalizeEdge,
-			TargetID: edge.ID,
-			Params: map[string]interface{}{
-				"newType":    "PARTICIPATES_IN",
-				"shouldSwap": true,
-			},
-		}
-		return append(violations, v)
-	}
-
-	if !shouldReverse &&
-		edge.Type == horizonmodels.DependencyType("PRODUCES") &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeFacility {
-		v := PolicyViolation{
-			ID:          uuid.New().String(),
-			Type:        ViolationEdgeDirection,
-			Severity:    SeverityWarning,
-			EdgeID:      edge.ID,
-			ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
-			Rule:        "edge_direction",
-			Description: "Edge PRODUCES is invalid for MARKET -> FACILITY. Auto-fix: rewrite to FACILITY -> MARKET with edge type PARTICIPATES_IN.",
-			Confidence:  0.95,
-			AutoFixable: true,
-			DetectedAt:  time.Now(),
-			DetectedBy:  "deterministic",
-		}
-		v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, "PARTICIPATES_IN")
-		v.SuggestedFix = &EnforcementTask{
-			Type:     TaskCanonicalizeEdge,
-			TargetID: edge.ID,
-			Params: map[string]interface{}{
-				"newType":    "PARTICIPATES_IN",
-				"shouldSwap": true,
-			},
-		}
-		return append(violations, v)
-	}
-
-	if !shouldReverse &&
-		edge.Type == horizonmodels.DependencyType("LOCATED_IN") &&
-		sourceType == horizonmodels.FragmentTypeOrganization &&
-		targetType == horizonmodels.FragmentTypeFacility {
-		v := PolicyViolation{
-			ID:          uuid.New().String(),
-			Type:        ViolationEdgeDirection,
-			Severity:    SeverityWarning,
-			EdgeID:      edge.ID,
-			ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
-			Rule:        "edge_direction",
-			Description: "Edge LOCATED_IN is invalid for ORGANIZATION -> FACILITY. Auto-fix: rewrite edge type to OPERATES_IN.",
-			Confidence:  0.95,
-			AutoFixable: true,
-			DetectedAt:  time.Now(),
-			DetectedBy:  "deterministic",
-		}
-		v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, "OPERATES_IN")
-		v.SuggestedFix = &EnforcementTask{
-			Type:     TaskCanonicalizeEdge,
-			TargetID: edge.ID,
-			Params: map[string]interface{}{
-				"newType":    "OPERATES_IN",
-				"shouldSwap": false,
-			},
-		}
-		return append(violations, v)
-	}
-
-	if !shouldReverse &&
-		edge.Type == horizonmodels.DependencyType("OWNS") &&
-		sourceType == horizonmodels.FragmentTypeGeoRegion &&
-		targetType == horizonmodels.FragmentTypeOrganization {
-		v := PolicyViolation{
-			ID:          uuid.New().String(),
-			Type:        ViolationEdgeDirection,
-			Severity:    SeverityWarning,
-			EdgeID:      edge.ID,
-			ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
-			Rule:        "edge_direction",
-			Description: "Edge OWNS is invalid for GEO_REGION -> ORGANIZATION. Auto-fix: rewrite to ORGANIZATION -> GEO_REGION with edge type LOCATED_IN.",
-			Confidence:  0.95,
-			AutoFixable: true,
-			DetectedAt:  time.Now(),
-			DetectedBy:  "deterministic",
-		}
-		v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, "LOCATED_IN")
-		v.SuggestedFix = &EnforcementTask{
-			Type:     TaskCanonicalizeEdge,
-			TargetID: edge.ID,
-			Params: map[string]interface{}{
-				"newType":    "LOCATED_IN",
-				"shouldSwap": true,
-			},
-		}
-		return append(violations, v)
-	}
-
-	if !shouldReverse &&
-		edge.Type == horizonmodels.DependencyType("OWNS") &&
-		sourceType == horizonmodels.FragmentTypeCommunity &&
-		targetType == horizonmodels.FragmentTypeOrganization {
-		v := PolicyViolation{
-			ID:          uuid.New().String(),
-			Type:        ViolationEdgeDirection,
-			Severity:    SeverityWarning,
-			EdgeID:      edge.ID,
-			ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
-			Rule:        "edge_direction",
-			Description: "Edge OWNS is invalid for COMMUNITY -> ORGANIZATION. Auto-fix: rewrite to CONTROLS (dynasty/community controlling an organization).",
-			Confidence:  0.95,
-			AutoFixable: true,
-			DetectedAt:  time.Now(),
-			DetectedBy:  "deterministic",
-		}
-		v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, "CONTROLS")
-		v.SuggestedFix = &EnforcementTask{
-			Type:     TaskCanonicalizeEdge,
-			TargetID: edge.ID,
-			Params: map[string]interface{}{
-				"newType":    "CONTROLS",
-				"shouldSwap": false,
-			},
-		}
-		return append(violations, v)
 	}
 
 	severity := SeverityWarning

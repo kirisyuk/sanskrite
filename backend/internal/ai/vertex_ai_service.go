@@ -102,10 +102,41 @@ func (s *VertexAIService) Provider() AIProvider {
 
 // endpoint возвращает URL для Vertex AI Gemini API.
 func (s *VertexAIService) endpoint(model string) string {
+	vertexModel := normalizeVertexModelID(model)
+	location := selectVertexLocationForModel(strings.TrimSpace(s.location), vertexModel)
+	if location == "global" {
+		return fmt.Sprintf(
+			"https://aiplatform.googleapis.com/v1beta1/projects/%s/locations/%s/publishers/google/models/%s:generateContent",
+			s.projectID, location, vertexModel,
+		)
+	}
 	return fmt.Sprintf(
 		"https://%s-aiplatform.googleapis.com/v1beta1/projects/%s/locations/%s/publishers/google/models/%s:generateContent",
-		s.location, s.projectID, s.location, model,
+		location, s.projectID, location, vertexModel,
 	)
+}
+
+func selectVertexLocationForModel(configuredLocation, vertexModel string) string {
+	loc := strings.TrimSpace(configuredLocation)
+	if loc == "" {
+		loc = "us-central1"
+	}
+	// Gemini 3 preview models are currently served from global endpoint in Vertex.
+	normalized := strings.ToLower(strings.TrimSpace(vertexModel))
+	if strings.HasPrefix(normalized, "gemini-3-") {
+		return "global"
+	}
+	return loc
+}
+
+// normalizeVertexModelID maps internal model aliases to real Vertex publisher model IDs.
+// Internal catalog uses "vertex-gemini-*" names to distinguish provider routing.
+func normalizeVertexModelID(model string) string {
+	m := strings.TrimSpace(model)
+	if strings.HasPrefix(m, "vertex-") {
+		return strings.TrimPrefix(m, "vertex-")
+	}
+	return m
 }
 
 // authHeaders добавляет OAuth2 Bearer token к запросу.

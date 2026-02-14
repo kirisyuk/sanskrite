@@ -9,6 +9,7 @@ import { SettingsModal } from '../components/SettingsModal';
 import { AccountModal } from '../components/AccountModal';
 import { AdminModal } from '../components/AdminModal';
 import { LensCanvas } from '../components/LensCanvas';
+import { WorldMapPanel } from '../components/WorldMapPanel';
 import AssembleLensRequestComponent, { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
 import { api } from '../lib/api';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
@@ -33,6 +34,7 @@ const HorizonPage: React.FC = () => {
   const [showSettings, setShowSettings] = React.useState(false);
   const [showAccount, setShowAccount] = React.useState(false);
   const [showAdmin, setShowAdmin] = React.useState(false);
+  const [showWorldMap, setShowWorldMap] = React.useState(false);
   
   // Load saved Horizon state from localStorage
   const getSavedHorizonState = React.useCallback(() => {
@@ -277,6 +279,7 @@ const HorizonPage: React.FC = () => {
   const handleResetChat = React.useCallback(() => {
     setCurrentProject(null);
     setSelectedLensId(null);
+    setShowWorldMap(false);
     saveHorizonState(null, null);
   }, [setCurrentProject, setSelectedLensId, saveHorizonState]);
 
@@ -578,9 +581,11 @@ const HorizonPage: React.FC = () => {
         onDeleteChat={handleDeleteChat}
         onRenameChat={handleRenameChat}
         onStartEditingProject={startEditingProject}
+        onProjectSelected={() => setShowWorldMap(false)}
         currentMode="horizon"
         projectId={currentProject?.id || null}
         onSelectLens={(lensId) => {
+          setShowWorldMap(false);
           setSelectedLensId(lensId);
           // User explicitly chose to open a lens: stop treating this as an in-progress creation feed.
           setLensStarted(false);
@@ -588,7 +593,15 @@ const HorizonPage: React.FC = () => {
           setActiveCreateSessionId(null);
         }}
         selectedLensId={selectedLensId}
+        onOpenWorldMap={() => {
+          setShowWorldMap(true);
+          setLensStarted(false);
+          setActiveCreateCorrelationId(null);
+          setActiveCreateSessionId(null);
+        }}
+        isWorldMapActive={showWorldMap}
         onNewLens={() => {
+          setShowWorldMap(false);
           // Ensure project is selected (should already be selected when hovering, but double-check)
           // Clear states and show input field for new lens
           setSelectedLensId(null);
@@ -623,8 +636,10 @@ const HorizonPage: React.FC = () => {
             position: 'relative',
           }}
         >
-          {/* Lens Canvas overlay - show Progress view for both project and lens selection */}
-          {currentProject ? (
+          {showWorldMap ? (
+            <WorldMapPanel />
+          ) : currentProject ? (
+            /* Lens Canvas overlay - show Progress view for both project and lens selection */
             <LensCanvas
               isOpen={true}
               lensId={selectedLensId}
@@ -688,4 +703,3 @@ const HorizonPage: React.FC = () => {
 };
 
 export default HorizonPage;
-

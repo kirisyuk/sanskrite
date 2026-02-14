@@ -12,12 +12,37 @@ import (
 )
 
 func isPublicSource(kind string) bool {
-	switch kind {
-	case "web", "rss", "telegram_channel":
+	switch models.NormalizeSourceKind(kind) {
+	case models.SourceKindWeb, models.SourceKindRSS, models.SourceKindTelegramChannel, models.SourceKindHorizonFeed:
 		return true
 	default:
 		return false
 	}
+}
+
+func expandSourceKindAliases(kinds []string) []string {
+	if len(kinds) == 0 {
+		return kinds
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(kinds)+1)
+	for _, k := range kinds {
+		normalized := models.NormalizeSourceKind(k)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; !ok {
+			out = append(out, normalized)
+			seen[normalized] = struct{}{}
+		}
+		if normalized == models.SourceKindHorizonFeed {
+			if _, ok := seen[models.SourceKindWorldMonitorLegacy]; !ok {
+				out = append(out, models.SourceKindWorldMonitorLegacy)
+				seen[models.SourceKindWorldMonitorLegacy] = struct{}{}
+			}
+		}
+	}
+	return out
 }
 
 var ErrInvalidDocument = errors.New("invalid document")
@@ -545,10 +570,11 @@ func (r *DataSourcesRepository) Create(ctx context.Context, ds *models.DataSourc
 	if ds == nil {
 		return "", ErrInvalidDocument
 	}
+	ds.SyncCompatForWrite()
 	now := time.Now().UTC()
 	ds.CreatedAt = now
 	ds.UpdatedAt = now
-	// Public sources (web/rss/telegram_channel) are stored globally
+	// Public sources (web/rss/telegram_channel/horizon_monitor_feed) are stored globally
 	if isPublicSource(ds.Kind) {
 		ds.TenantID = ""
 		ds.Pk = "global"
@@ -711,6 +737,7 @@ func (r *DataSourcesRepository) Upsert(ctx context.Context, ds *models.DataSourc
 	if ds == nil || ds.ID == "" {
 		return ErrInvalidDocument
 	}
+	ds.SyncCompatForWrite()
 	now := time.Now().UTC()
 	if ds.CreatedAt.IsZero() {
 		ds.CreatedAt = now
@@ -736,6 +763,7 @@ func (r *DataSourcesRepository) Get(ctx context.Context, id string) (*models.Dat
 	if err := snap.DataTo(&ds); err != nil {
 		return nil, err
 	}
+	ds.SyncCompatForWrite()
 	return &ds, nil
 }
 
@@ -762,9 +790,18 @@ func (r *DataSourcesRepository) FindByCanonicalSource(ctx context.Context, tenan
 		if err := doc.DataTo(&ds); err != nil {
 			continue
 		}
-		// Check if canonical matches URI or ChannelUsername
+		ds.NormalizeCompat()
+		// Check if canonical matches URI, RSSURL, or ChannelUsername
 		if ds.Details.URI != nil && *ds.Details.URI == canonical {
 			fmt.Printf("[FindByCanonicalSource] Found match by URI: canonical=%s, id=%s\n", canonical, ds.ID)
+			return &ds, nil
+		}
+		if ds.Details.RSSURL != nil && *ds.Details.RSSURL == canonical {
+			fmt.Printf("[FindByCanonicalSource] Found match by RSSURL: canonical=%s, id=%s\n", canonical, ds.ID)
+			return &ds, nil
+		}
+		if ds.Details.SourceURI != nil && *ds.Details.SourceURI == canonical {
+			fmt.Printf("[FindByCanonicalSource] Found match by SourceURI: canonical=%s, id=%s\n", canonical, ds.ID)
 			return &ds, nil
 		}
 		if ds.Details.ChannelUsername != nil && *ds.Details.ChannelUsername == canonical {
@@ -777,6 +814,9 @@ func (r *DataSourcesRepository) FindByCanonicalSource(ctx context.Context, tenan
 		}
 		if ds.Details.URI != nil {
 			candidates = append(candidates, fmt.Sprintf("id=%s,uri=%s", ds.ID, *ds.Details.URI))
+		}
+		if ds.Details.RSSURL != nil {
+			candidates = append(candidates, fmt.Sprintf("id=%s,rss=%s", ds.ID, *ds.Details.RSSURL))
 		}
 	}
 
@@ -812,6 +852,7 @@ func (r *DataSourcesRepository) ListByProject(ctx context.Context, tenantID, pro
 		if err := d.DataTo(&ds); err != nil {
 			continue
 		}
+		ds.SyncCompatForWrite()
 		if _, ok := ids[ds.ID]; ok {
 			sources = append(sources, &ds)
 		}
@@ -852,6 +893,7 @@ func (r *DataSourcesRepository) ListActiveByKinds(ctx context.Context, kinds []s
 	if len(kinds) == 0 {
 		return []*models.DataSource{}, nil
 	}
+	kinds = expandSourceKindAliases(kinds)
 	// Firestore IN supports up to 10 values
 	q := r.col.Where("status", "==", "active").Where("kind", "in", kinds)
 	docs, err := q.Documents(ctx).GetAll()
@@ -864,6 +906,7 @@ func (r *DataSourcesRepository) ListActiveByKinds(ctx context.Context, kinds []s
 		if err := d.DataTo(&ds); err != nil {
 			continue
 		}
+		ds.SyncCompatForWrite()
 		res = append(res, &ds)
 	}
 	return res, nil
@@ -875,6 +918,7 @@ func (r *DataSourcesRepository) ListByKinds(ctx context.Context, kinds []string)
 	if len(kinds) == 0 {
 		return []*models.DataSource{}, nil
 	}
+	kinds = expandSourceKindAliases(kinds)
 	// Firestore IN supports up to 10 values
 	q := r.col.Where("kind", "in", kinds)
 	docs, err := q.Documents(ctx).GetAll()
@@ -887,6 +931,7 @@ func (r *DataSourcesRepository) ListByKinds(ctx context.Context, kinds []string)
 		if err := d.DataTo(&ds); err != nil {
 			continue
 		}
+		ds.SyncCompatForWrite()
 		res = append(res, &ds)
 	}
 	return res, nil
@@ -895,6 +940,7 @@ func (r *DataSourcesRepository) ListByKinds(ctx context.Context, kinds []string)
 // ListByTenant returns all datasources accessible by a tenant (tenant-scoped + global public sources)
 func (r *DataSourcesRepository) ListByTenant(ctx context.Context, tenantID string, kinds []string, status *string) ([]*models.DataSource, error) {
 	var allDocs []*firestore.DocumentSnapshot
+	kinds = expandSourceKindAliases(kinds)
 
 	// Get tenant-scoped sources
 	if len(kinds) > 0 {
@@ -921,8 +967,14 @@ func (r *DataSourcesRepository) ListByTenant(ctx context.Context, tenantID strin
 		allDocs = append(allDocs, docs...)
 	}
 
-	// Get global public sources (rss, telegram_channel, web)
-	globalKinds := []string{"rss", "telegram_channel", "web"}
+	// Get global public sources (rss, telegram_channel, web, horizon_monitor_feed)
+	globalKinds := []string{
+		models.SourceKindRSS,
+		models.SourceKindTelegramChannel,
+		models.SourceKindWeb,
+		models.SourceKindHorizonFeed,
+		models.SourceKindWorldMonitorLegacy, // legacy records
+	}
 	if len(kinds) > 0 {
 		// Filter global kinds by requested kinds
 		filteredKinds := []string{}
@@ -965,6 +1017,7 @@ func (r *DataSourcesRepository) ListByTenant(ctx context.Context, tenantID strin
 		if err := d.DataTo(&ds); err != nil {
 			continue
 		}
+		ds.SyncCompatForWrite()
 		// Deduplicate by ID (in case same source appears in both tenant and global queries)
 		if _, ok := seen[ds.ID]; !ok {
 			res = append(res, &ds)

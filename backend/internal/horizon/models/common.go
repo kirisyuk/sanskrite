@@ -1,6 +1,14 @@
 package models
 
-import "time"
+import (
+	"math"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var reISO6709Pair = regexp.MustCompile(`^([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)/?$`)
 
 // MetricValue представляет гибкую метрику с описанием, типом и метаданными
 type MetricValue struct {
@@ -25,6 +33,44 @@ type Location struct {
 	ISO6709   *string `json:"iso6709,omitempty" firestore:"iso6709,omitempty"`     // координаты ISO 6709
 	ISO3166_1 *string `json:"iso3166_1,omitempty" firestore:"iso3166_1,omitempty"` // ISO 3166-1 alpha-2 (страна)
 	ISO3166_2 *string `json:"iso3166_2,omitempty" firestore:"iso3166_2,omitempty"` // ISO 3166-2 (субъект)
+}
+
+// Coordinates is a typed geographic coordinate.
+type Coordinates struct {
+	Lat float64 `json:"lat" firestore:"lat"`
+	Lon float64 `json:"lon" firestore:"lon"`
+}
+
+// IsValidCoordinates validates lat/lon ranges and guards against NaN/Inf.
+func IsValidCoordinates(lat, lon float64) bool {
+	if math.IsNaN(lat) || math.IsNaN(lon) || math.IsInf(lat, 0) || math.IsInf(lon, 0) {
+		return false
+	}
+	return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+}
+
+// ParseISO6709Coordinates parses "+lat-lon/" style ISO6709 coordinates.
+func ParseISO6709Coordinates(raw string) (float64, float64, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, 0, false
+	}
+	m := reISO6709Pair.FindStringSubmatch(s)
+	if len(m) != 3 {
+		return 0, 0, false
+	}
+	lat, err := strconv.ParseFloat(strings.TrimSpace(m[1]), 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	lon, err := strconv.ParseFloat(strings.TrimSpace(m[2]), 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	if !IsValidCoordinates(lat, lon) {
+		return 0, 0, false
+	}
+	return lat, lon, true
 }
 
 // KBReference представляет ссылку на внешнюю базу знаний
@@ -136,6 +182,11 @@ const (
 	// Canonical path format: /mechanism/{category}/{slug}
 	FragmentTypeMechanism  FragmentType = "MECHANISM"
 	FragmentTypeSupplyLink FragmentType = "SUPPLY_LINK" // Tenant-specific supply chain link
+	// FragmentTypeTrack represents movable objects with frequently updated position/state.
+	// Canonical path format: /track/{kind}/{geo}/{slug}-{id8}
+	// - kind: air | sea | ground
+	// - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
+	FragmentTypeTrack FragmentType = "TRACK"
 	// FragmentTypeDeposit represents a natural resource deposit (oil field, mine, basin, etc.).
 	// Canonical path format: /deposit/{resource-slug}/{deposit-slug}
 	// Example: /deposit/crude-oil/permian-basin, /deposit/lithium/atacama-salar

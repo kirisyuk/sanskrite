@@ -127,3 +127,58 @@ func truncate(s string, maxLen int) string {
 	}
 	return s[:maxLen] + "..."
 }
+
+func TestNormalizeVertexModelID(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{in: "vertex-gemini-3-flash-preview", want: "gemini-3-flash-preview"},
+		{in: "vertex-gemini-2.5-pro", want: "gemini-2.5-pro"},
+		{in: "gemini-2.5-flash", want: "gemini-2.5-flash"},
+		{in: "  vertex-gemini-3-pro-preview  ", want: "gemini-3-pro-preview"},
+	}
+
+	for _, tc := range tests {
+		got := normalizeVertexModelID(tc.in)
+		if got != tc.want {
+			t.Fatalf("normalizeVertexModelID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestSelectVertexLocationForModel(t *testing.T) {
+	tests := []struct {
+		name     string
+		location string
+		model    string
+		want     string
+	}{
+		{
+			name:     "gemini3 preview forced to global",
+			location: "us-central1",
+			model:    "gemini-3-flash-preview",
+			want:     "global",
+		},
+		{
+			name:     "gemini2 keeps configured location",
+			location: "us-central1",
+			model:    "gemini-2.5-pro",
+			want:     "us-central1",
+		},
+		{
+			name:     "empty configured location falls back",
+			location: "",
+			model:    "gemini-2.5-pro",
+			want:     "us-central1",
+		},
+	}
+
+	for _, tc := range tests {
+		got := selectVertexLocationForModel(tc.location, tc.model)
+		if got != tc.want {
+			t.Fatalf("%s: selectVertexLocationForModel(%q, %q) = %q, want %q",
+				tc.name, tc.location, tc.model, got, tc.want)
+		}
+	}
+}

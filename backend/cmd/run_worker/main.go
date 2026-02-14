@@ -78,6 +78,7 @@ func main() {
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	chunksRepo := repo.NewChunksRepository(fsClient.Client())
 	ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
+	ontologyFactsRepo := repo.NewOntologyFactsRepository(fsClient.Client())
 
 	// Create publisher
 	publisher, err := realtime.NewPublisher(ctx, *projectID)
@@ -107,6 +108,17 @@ func main() {
 	emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
 	orchestrator = orchestrator.WithEmbedding(emb)
 	orchestrator = orchestrator.WithIngestHistory(ingestHistoryRepo)
+	orchestrator = orchestrator.WithHorizonMonitorPipeline(
+		discovery.NewHorizonMonitorPipeline(
+			ontologyFactsRepo,
+			exec,
+			nil,
+			nil,
+			nil,
+			nil,
+			logger,
+		),
+	)
 
 	// Create poller
 	psClient := publisher.Client()

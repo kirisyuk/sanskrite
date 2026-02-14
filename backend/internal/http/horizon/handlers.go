@@ -101,6 +101,7 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/fragments", authMiddleware(http.HandlerFunc(h.HandleFragmentsRoot)))
 	mux.Handle("/api/horizon/fragments/by-path", authMiddleware(http.HandlerFunc(h.GetFragmentByPath)))
 	mux.Handle("/api/horizon/fragments/", authMiddleware(http.HandlerFunc(h.HandleFragmentRoutes)))
+	mux.Handle("/api/horizon/geo-objects", authMiddleware(http.HandlerFunc(h.ListGeoObjects)))
 
 	// Fragment profiles (direct access by profile ID)
 	if h.profilesHandler != nil {
@@ -276,7 +277,7 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 		case "domain-answers":
 			if len(pathParts) > 2 {
 				// /api/horizon/lenses/{lensId}/domain-answers/{domainId}/run
-				if len(pathParts) > 3 && pathParts[3] == "run" {
+				if len(pathParts) > 3 && pathParts[len(pathParts)-1] == "run" {
 					h.RunDomainAnswer(w, r)
 					return
 				}

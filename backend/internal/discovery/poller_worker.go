@@ -33,7 +33,12 @@ func (w *SourcePoller) PublishDue(ctx context.Context) error {
 	if w.orchestrator == nil || w.orchestrator.publish == nil || w.orchestrator.sources == nil {
 		return nil
 	}
-	kinds := []string{"rss", "telegram_channel"}
+	kinds := []string{
+		models.SourceKindRSS,
+		models.SourceKindTelegramChannel,
+		models.SourceKindHorizonFeed,
+		models.SourceKindWorldMonitorLegacy, // legacy alias
+	}
 	// List all sources of supported kinds (regardless of global status)
 	// We'll filter by active project links instead
 	list, err := w.orchestrator.sources.ListByKinds(ctx, kinds)
@@ -262,6 +267,15 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 			} else {
 				pollErr = fmt.Errorf("sources repository not available")
 			}
+		case models.SourceKindHorizonFeed, models.SourceKindWorldMonitorLegacy:
+			if w.orchestrator.emb != nil && w.orchestrator.docs != nil && w.orchestrator.chunks != nil {
+				ingestAttempted = true
+				pollErr = w.orchestrator.IngestHorizonMonitorFeed(ctxP, processingTenantID, payload.SourceID, w.orchestrator.emb)
+			} else {
+				w.logger.Printf("source poller: skipping horizon_monitor_feed ingest for source %s - missing dependencies (emb=%v, docs=%v, chunks=%v)",
+					payload.SourceID, w.orchestrator.emb != nil, w.orchestrator.docs != nil, w.orchestrator.chunks != nil)
+				pollErr = fmt.Errorf("ingest dependencies not wired")
+			}
 		default:
 			// Unsupported kinds are ignored
 			w.logger.Printf("source poller: unsupported source kind: %s", payload.Kind)
@@ -385,6 +399,12 @@ func (w *SourcePoller) hasActiveProjects(ctx context.Context, tenantID, sourceID
 // cadenceToDuration maps publishingCadence string (if available via profile) to a polling interval.
 // In poller_worker, we don't know if new content was found, so we rely on LastFoundAt heuristics.
 func cadenceToDuration(ds *models.DataSource) time.Duration {
+	if ds != nil && ds.Details.PollIntervalMinutes != nil && *ds.Details.PollIntervalMinutes > 0 {
+		return time.Duration(*ds.Details.PollIntervalMinutes) * time.Minute
+	}
+	if ds != nil && models.IsHorizonMonitorFeedKind(ds.Kind) {
+		return 30 * time.Minute
+	}
 	// Default 30 minutes
 	def := 30 * time.Minute
 	// Try to infer from profile attached to this datasource via orchestrator.profiles

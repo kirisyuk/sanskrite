@@ -142,6 +142,15 @@ type HorizonFragment struct {
 
 	// Location с ISO стандартами
 	HomeLocation *Location `json:"homeLocation,omitempty" firestore:"homeLocation,omitempty"`
+	// Coordinates stores generic lat/lon for map rendering across all fragment kinds.
+	Coordinates *Coordinates `json:"coordinates,omitempty" firestore:"coordinates,omitempty"`
+	// HorizonMonitor stores typed fields imported from Horizon Monitor ontology.
+	// It complements (but does not replace) generic qualifiers.
+	HorizonMonitor *HorizonMonitorFragmentData `json:"horizonMonitor,omitempty" firestore:"horizonMonitor,omitempty"`
+	// WorldMonitorLegacy keeps backward compatibility with legacy worldMonitor field.
+	WorldMonitorLegacy *HorizonMonitorFragmentData `json:"worldMonitor,omitempty" firestore:"worldMonitor,omitempty"`
+	// Track stores latest movement state for movable entities (TRACK type).
+	Track *TrackFragmentData `json:"track,omitempty" firestore:"track,omitempty"`
 
 	// Provenance
 	Provenance Provenance `json:"provenance" firestore:"provenance"`
@@ -196,6 +205,8 @@ type NameHistoryEntry struct {
 
 // Validate проверяет валидность HorizonFragment
 func (f *HorizonFragment) Validate() error {
+	f.NormalizeHorizonMonitorAliases()
+
 	if f.Type == "" {
 		return fmt.Errorf("type is required")
 	}
@@ -245,6 +256,10 @@ func (f *HorizonFragment) Validate() error {
 	// Best-effort: keep GeoNames linkage consistent across both KBRefs and Identifiers.
 	// GeoNames ExternalID is a numeric string (geonameId).
 	f.ensureGeoNamesMirroring()
+	// Best-effort: keep generic coordinates filled from canonical geo-bearing fields.
+	f.ensureCoordinatesMirroring()
+	// Keep dual field compatibility: canonical horizonMonitor + legacy worldMonitor.
+	f.SyncHorizonMonitorAliases()
 
 	// Best-effort: normalize org-level classifiers (safe, deterministic).
 	// These fields can be produced by Scout/Research and should be canonicalized before persistence.
@@ -570,6 +585,42 @@ func (f *HorizonFragment) ensureGeoNamesMirroring() {
 	})
 }
 
+// ensureCoordinatesMirroring best-effort keeps generic fragment coordinates populated from:
+// 1) explicit fragment coordinates,
+// 2) track coordinates,
+// 3) horizonMonitor coordinates,
+// 4) homeLocation ISO6709.
+func (f *HorizonFragment) ensureCoordinatesMirroring() {
+	if f == nil {
+		return
+	}
+
+	if f.Coordinates != nil && IsValidCoordinates(f.Coordinates.Lat, f.Coordinates.Lon) {
+		return
+	}
+	f.Coordinates = nil
+
+	if f.Track != nil && IsValidCoordinates(f.Track.Lat, f.Track.Lon) {
+		f.Coordinates = &Coordinates{Lat: f.Track.Lat, Lon: f.Track.Lon}
+		return
+	}
+
+	if wm := f.EffectiveHorizonMonitor(); wm != nil && wm.Coordinates != nil &&
+		IsValidCoordinates(wm.Coordinates.Lat, wm.Coordinates.Lon) {
+		f.Coordinates = &Coordinates{
+			Lat: wm.Coordinates.Lat,
+			Lon: wm.Coordinates.Lon,
+		}
+		return
+	}
+
+	if f.HomeLocation != nil && f.HomeLocation.ISO6709 != nil {
+		if lat, lon, ok := ParseISO6709Coordinates(*f.HomeLocation.ISO6709); ok {
+			f.Coordinates = &Coordinates{Lat: lat, Lon: lon}
+		}
+	}
+}
+
 // GenerateVectorText генерирует vectorText для семантического поиска
 // См. docs/horizon/architecture/semantic-search.md
 func (f *HorizonFragment) GenerateVectorText() string {
@@ -671,6 +722,9 @@ func (f *HorizonFragment) GenerateVectorText() string {
 	}
 
 	// Локация
+	if f.Coordinates != nil {
+		add(fmt.Sprintf("Coordinates: %.6f, %.6f", f.Coordinates.Lat, f.Coordinates.Lon))
+	}
 	if f.HomeLocation != nil {
 		locParts := []string{}
 		if f.HomeLocation.Name != "" {
@@ -687,6 +741,79 @@ func (f *HorizonFragment) GenerateVectorText() string {
 		}
 		if len(locParts) > 0 {
 			add("Location: " + strings.Join(locParts, ", "))
+		}
+	}
+
+	if wm := f.EffectiveHorizonMonitor(); wm != nil {
+		if wm.ObjectKind != "" {
+			add("HorizonMonitor kind: " + string(wm.ObjectKind))
+		}
+		if wm.SourceObjectID != "" {
+			add("HorizonMonitor source object: " + wm.SourceObjectID)
+		}
+		if wm.Coordinates != nil {
+			add(fmt.Sprintf("HorizonMonitor coordinates: %.6f, %.6f", wm.Coordinates.Lat, wm.Coordinates.Lon))
+		}
+		if len(wm.Countries) > 0 {
+			add("HorizonMonitor countries: " + strings.Join(wm.Countries, ", "))
+		}
+		if wm.FacilityType != "" {
+			add("HorizonMonitor facility type: " + wm.FacilityType)
+		}
+		if wm.MarketType != "" {
+			add("HorizonMonitor market type: " + wm.MarketType)
+		}
+		if wm.PipelineType != "" {
+			add("HorizonMonitor pipeline type: " + wm.PipelineType)
+		}
+		if wm.PortType != "" {
+			add("HorizonMonitor port type: " + wm.PortType)
+		}
+		if wm.Mineral != "" {
+			add("HorizonMonitor mineral: " + wm.Mineral)
+		}
+		if wm.Operator != "" {
+			add("HorizonMonitor operator: " + wm.Operator)
+		}
+		if wm.Status != "" {
+			add("HorizonMonitor status: " + wm.Status)
+		}
+		if wm.Capacity != "" {
+			add("HorizonMonitor capacity: " + wm.Capacity)
+		}
+		if wm.CapacityTbps != nil {
+			add(fmt.Sprintf("HorizonMonitor capacity tbps: %.2f", *wm.CapacityTbps))
+		}
+	}
+	if f.Track != nil {
+		tr := f.Track
+		if tr.Kind != "" {
+			add("Track kind: " + string(tr.Kind))
+		}
+		if tr.ObjectType != "" {
+			add("Track object type: " + tr.ObjectType)
+		}
+		if tr.ExternalTrackID != "" {
+			add("Track external id: " + tr.ExternalTrackID)
+		}
+		add(fmt.Sprintf("Track coordinates: %.6f, %.6f", tr.Lat, tr.Lon))
+		if tr.HeadingDeg != nil {
+			add(fmt.Sprintf("Track heading: %.1f deg", *tr.HeadingDeg))
+		}
+		if tr.SpeedKts != nil {
+			add(fmt.Sprintf("Track speed: %.1f kts", *tr.SpeedKts))
+		}
+		if tr.AltitudeM != nil {
+			add(fmt.Sprintf("Track altitude: %.1f m", *tr.AltitudeM))
+		}
+		if tr.DepthM != nil {
+			add(fmt.Sprintf("Track depth: %.1f m", *tr.DepthM))
+		}
+		if !tr.LastSeenAt.IsZero() {
+			add("Track last seen: " + tr.LastSeenAt.UTC().Format(time.RFC3339))
+		}
+		if tr.GeoHash != "" {
+			add("Track geohash: " + tr.GeoHash)
 		}
 	}
 

@@ -39,6 +39,9 @@ interface SidebarPanelProps {
   onSelectLens?: (lensId: string | null) => void;
   selectedLensId?: string | null;
   onNewLens?: () => void; // Optional: callback for creating new lens
+  onProjectSelected?: () => void;
+  onOpenWorldMap?: () => void;
+  isWorldMapActive?: boolean;
 }
 
 type SidebarDensity = 'comfortable' | 'compact';
@@ -407,6 +410,9 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   onSelectLens,
   selectedLensId,
   onNewLens,
+  onProjectSelected,
+  onOpenWorldMap,
+  isWorldMapActive,
 }) => {
   const { t } = useTranslation();
   const location = useLocation();
@@ -726,6 +732,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
             projectName: project.displayName,
             currentProjectId: currentProject?.id,
           });
+          onProjectSelected?.();
           onCloseAllModals?.();
           setCurrentProject(project);
           if (isMobile) {
@@ -748,7 +755,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
         onCreateLens={currentMode === 'horizon' && project.projectType === 'horizon' ? onNewLens : undefined}
       />
     );
-  }, [deletingProjectIds, currentProject, editingProjectId, editingProjectName, editingInputRef, onCloseAllModals, setCurrentProject, isMobile, onClose, onStartEditingProject, onDeleteChat, onRenameChat, onEditingProjectIdChange, onEditingProjectNameChange, currentMode, onNewLens]);
+  }, [deletingProjectIds, currentProject, editingProjectId, editingProjectName, editingInputRef, onProjectSelected, onCloseAllModals, setCurrentProject, isMobile, onClose, onStartEditingProject, onDeleteChat, onRenameChat, onEditingProjectIdChange, onEditingProjectNameChange, currentMode, onNewLens]);
 
   // Modern row renderer (projects) - larger, calmer visual style
   const renderModernProjectRow = React.useCallback((project: Project) => {
@@ -772,9 +779,11 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
           // If clicking the already selected project, just switch to details (lenses/jobs).
           // This fixes the "Back -> click same project does nothing" UX, since currentProject.id doesn't change.
           if (isSelected) {
+            onProjectSelected?.();
             if (isHorizonMode) setSidebarMainTab('details');
             return;
           }
+          onProjectSelected?.();
           onCloseAllModals?.();
           setCurrentProject(project);
           // Immediately switch to details view; don't wait for currentProject.id effect.
@@ -920,6 +929,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     editingInputRef,
     sidebarDensity,
     onCloseAllModals,
+    onProjectSelected,
     setCurrentProject,
     isMobile,
     onClose,
@@ -2902,6 +2912,42 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                     >
                       {isProjectsView ? (
                         <>
+                          {isHorizonMode && onOpenWorldMap && (
+                            <>
+                              <button
+                                type="button"
+                                className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-lg transition-colors mb-2"
+                                aria-pressed={Boolean(isWorldMapActive)}
+                                style={{
+                                  backgroundColor: 'transparent',
+                                  border: 'none',
+                                  color: 'var(--text-secondary-strong)',
+                                }}
+                                onMouseEnter={(e) => {
+                                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                                }}
+                                onClick={() => {
+                                  onCloseAllModals?.();
+                                  onOpenWorldMap();
+                                  if (isMobile) onClose();
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--text-tertiary-weak)' }}>
+                                    <circle cx="12" cy="12" r="9" />
+                                    <path d="M3 12h18" />
+                                    <path d="M12 3a12 12 0 0 1 0 18" />
+                                    <path d="M12 3a12 12 0 0 0 0 18" />
+                                  </svg>
+                                  <span style={{ fontSize: 12, fontWeight: 650, color: 'var(--text-secondary-strong)' }}>World map</span>
+                                </div>
+                              </button>
+                              <div style={{ height: 1, background: 'var(--border-subtle)', marginBottom: 10 }} />
+                            </>
+                          )}
                           <div className="sidebar-section-title" style={{ marginBottom: 10 }}>
                             {isHorizonMode ? 'Projects' : t('unfold.sections.chats')}
                           </div>
@@ -3129,6 +3175,55 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   </div>
                 ) : (
                   <>
+                    {isHorizonMode && onOpenWorldMap && (
+                      <>
+                        <button
+                          type="button"
+                          className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg transition-colors mb-2"
+                          aria-pressed={Boolean(isWorldMapActive)}
+                          style={{
+                            backgroundColor: 'transparent',
+                            color: 'var(--text-secondary-strong)',
+                            border: 'none',
+                          }}
+                          onMouseEnter={(e) => {
+                            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                          }}
+                          onMouseLeave={(e) => {
+                            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                          }}
+                          onClick={() => {
+                            onCloseAllModals?.();
+                            onOpenWorldMap();
+                            if (isMobile) onClose();
+                          }}
+                        >
+                          <span className="flex items-center gap-2 text-13 font-medium" style={{ color: 'var(--text-secondary-strong)' }}>
+                            <svg
+                              className="w-4 h-4"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth={2}
+                              style={{ color: 'var(--text-tertiary-weak)' }}
+                            >
+                              <circle cx="12" cy="12" r="9" />
+                              <path d="M3 12h18" />
+                              <path d="M12 3a12 12 0 0 1 0 18" />
+                              <path d="M12 3a12 12 0 0 0 0 18" />
+                            </svg>
+                            World map
+                          </span>
+                        </button>
+                        <div
+                          className="mb-3"
+                          style={{
+                            height: '1px',
+                            backgroundColor: 'var(--white-10)',
+                          }}
+                        />
+                      </>
+                    )}
                     <div
                       className="text-[11px] uppercase tracking-wide mb-2"
                       style={{ color: 'var(--text-heading)' }}
@@ -3773,4 +3868,3 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     </>
   );
 };
-

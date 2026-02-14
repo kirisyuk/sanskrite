@@ -159,16 +159,23 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 		return nil, nil, "", fmt.Errorf("ExecuteStructuredTask requires a Verifier in the AITask object, but it was nil")
 	}
 
+	activeTask := *task
 	triedModels := []string{}
+	geminiSearchGroundingFallbackApplied := false
 
 	for {
 		attempt := len(triedModels) + 1
 
-		currentModel := e.modelManager.SelectFallbackModel(task.AIRequirements, inputTokens, triedModels)
+		currentModel := e.modelManager.SelectFallbackModel(activeTask.AIRequirements, inputTokens, triedModels)
 		if currentModel == "" {
+			if !geminiSearchGroundingFallbackApplied && e.enableGeminiSearchGroundingFallback(&activeTask, inputChars) {
+				geminiSearchGroundingFallbackApplied = true
+				triedModels = nil // New fallback phase: restart attempts with downgraded requirements.
+				continue
+			}
 			log.Printf("ERROR: All models tried or unavailable for structured task '%s'. Total models tried: %d, Input size: %d chars (%d tokens est)",
-				task.TaskType, len(triedModels), inputChars, inputTokens)
-			return nil, nil, "", fmt.Errorf("unable to complete structured task '%s': No suitable AI models available after all fallbacks (windowChars=%d)", task.TaskType, inputChars)
+				activeTask.TaskType, len(triedModels), inputChars, inputTokens)
+			return nil, nil, "", fmt.Errorf("unable to complete structured task '%s': No suitable AI models available after all fallbacks (windowChars=%d)", activeTask.TaskType, inputChars)
 		}
 
 		modelCapabilities, err := e.modelManager.GetModelCapabilities(currentModel)
@@ -196,12 +203,12 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 			modelCapabilities.Provider, currentModel, attempt, inputChars, inputTokens, deadlineStr, remainingStr)
 
 		attemptStartedAt := time.Now()
-		result, err := aiService.ExecuteTask(ctx, task, currentModel)
+		result, err := aiService.ExecuteTask(ctx, &activeTask, currentModel)
 		if err != nil {
 			// Log detailed information about the request when it fails
 			elapsed := time.Since(attemptStartedAt)
 			log.Printf("WARNING: Task failed with model %s after %s (task=%s provider=%s attempt=%d input=%d chars %d tokens est). Error: %v",
-				currentModel, elapsed, task.TaskType, modelCapabilities.Provider, attempt, inputChars, inputTokens, err)
+				currentModel, elapsed, activeTask.TaskType, modelCapabilities.Provider, attempt, inputChars, inputTokens, err)
 
 			// If context was canceled, log a specific message
 			if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
@@ -267,12 +274,41 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 			outputToks := len(result.Content) / 4
 			cost, _ := e.modelManager.CalculateProcessingCost(currentModel, inputToks, outputToks)
 			durationMs := int(time.Since(startedAt).Milliseconds())
-			e.saveUsageMetric(ctx, task, currentModel, inputToks, outputToks, len(result.Content), cost, &durationMs)
+			e.saveUsageMetric(ctx, &activeTask, currentModel, inputToks, outputToks, len(result.Content), cost, &durationMs)
 		}
 
 		_ = startedAt // для телеметрии
 		return parsedResult, result, currentModel, nil
 	}
+}
+
+// enableGeminiSearchGroundingFallback downgrades strict internal-grounding tasks to
+// external search grounding on Gemini when all internal-grounding models are exhausted.
+func (e *AITaskExecutor) enableGeminiSearchGroundingFallback(task *AITask, inputChars int) bool {
+	if task == nil {
+		return false
+	}
+	req := task.AIRequirements
+	if !req.InternalDataGroundingCapability {
+		return false
+	}
+	if _, ok := e.aiServices[AIProviderGemini]; !ok {
+		log.Printf("WARNING: Gemini search-grounding fallback skipped for task '%s': Gemini provider is not registered",
+			task.TaskType)
+		return false
+	}
+
+	req.InternalDataGroundingCapability = false
+	req.SearchGroundingCapability = true
+	req.BuiltInSearchCapability = false
+	if pm := strings.TrimSpace(req.PreferredModel); pm == "" || strings.HasPrefix(pm, "vertex-") {
+		req.PreferredModel = "gemini-3-flash-preview"
+	}
+	task.AIRequirements = req
+
+	log.Printf("WARNING: Applying Gemini fallback for structured task '%s': downgraded capabilities to search grounding (windowChars=%d, preferredModel=%s)",
+		task.TaskType, inputChars, task.AIRequirements.PreferredModel)
+	return true
 }
 
 // ExecuteEmbeddingCalculationTask выполняет задачу по вычислению эмбеддингов

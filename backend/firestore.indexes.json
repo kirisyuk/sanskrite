@@ -1197,6 +1197,14 @@
       ]
     },
     {
+      "collectionGroup": "domain_answer_snapshots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "assembledAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "horizon_dependency_edges",
       "queryScope": "COLLECTION",
       "fields": [
@@ -1273,4 +1281,3 @@
     }
   ]
 }
-

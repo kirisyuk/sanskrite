@@ -53,6 +53,7 @@ func main() {
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	chunksRepo := repo.NewChunksRepository(fsClient.Client())
 	ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
+	ontologyFactsRepo := repo.NewOntologyFactsRepository(fsClient.Client())
 
 	// Get source to determine tenantID and kind
 	ds, err := sourcesRepo.Get(ctx, *sourceID)
@@ -103,6 +104,17 @@ func main() {
 	emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
 	orchestrator = orchestrator.WithEmbedding(emb)
 	orchestrator = orchestrator.WithIngestHistory(ingestHistoryRepo)
+	orchestrator = orchestrator.WithHorizonMonitorPipeline(
+		discovery.NewHorizonMonitorPipeline(
+			ontologyFactsRepo,
+			exec,
+			nil,
+			nil,
+			nil,
+			nil,
+			logger,
+		),
+	)
 
 	fmt.Printf("Testing ingest for source: %s (kind: %s, tenantID: %s)\n", *sourceID, ds.Kind, tenantID)
 	fmt.Printf("Before processing:\n")

@@ -5296,9 +5296,9 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 	const pageSize = 100
 	reversed := 0
 	canonicalized := 0
-	deleted := 0
 	totalChecked := 0
 	var lastDoc *firestore.DocumentSnapshot
+	logPrefix := "[horizon_smart_dedup:fixEdgeDirections]"
 
 	// Best-effort type resolver: when horizon_smart_dedup is run with --type filter,
 	// fragmentTypes cache can be incomplete, but edge direction fixing must remain global.
@@ -5306,26 +5306,52 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 	if typeCache == nil {
 		typeCache = make(map[string]models.FragmentType)
 	}
-	resolveType := func(id string) models.FragmentType {
+	pathCache := make(map[string]string, len(typeCache))
+	needPath := canonicalizeTypes || validationExecutor != nil
+	resolveEndpoint := func(id string) (models.FragmentType, string) {
 		id = strings.TrimSpace(id)
 		if id == "" {
-			return ""
+			return "", ""
 		}
-		if t, ok := typeCache[id]; ok && t != "" {
-			return t
+		cachedType := typeCache[id]
+		cachedPath := strings.TrimSpace(pathCache[id])
+		if cachedType != "" && (!needPath || cachedPath != "") {
+			if cachedPath != "" {
+				if reconciled, changed := edgesemantics.ReconcileTypeWithCanonicalPath(cachedType, cachedPath); changed {
+					cachedType = reconciled
+					typeCache[id] = reconciled
+				}
+			}
+			return cachedType, cachedPath
 		}
+
 		snap, err := db.Collection("horizon_fragments").Doc(id).Get(ctx)
 		if err != nil || snap == nil || !snap.Exists() {
-			return ""
+			return cachedType, cachedPath
 		}
-		if v, ok := snap.Data()["type"].(string); ok {
-			t := models.FragmentType(strings.TrimSpace(v))
-			if t != "" {
-				typeCache[id] = t
-				return t
+		data := snap.Data()
+		if cachedType == "" {
+			if v, ok := data["type"].(string); ok {
+				cachedType = models.FragmentType(strings.TrimSpace(v))
 			}
 		}
-		return ""
+		if cachedPath == "" {
+			if v, ok := data["canonicalPath"].(string); ok {
+				cachedPath = strings.TrimSpace(v)
+			}
+		}
+		if cachedPath != "" && cachedType != "" {
+			if reconciled, changed := edgesemantics.ReconcileTypeWithCanonicalPath(cachedType, cachedPath); changed {
+				cachedType = reconciled
+			}
+		}
+		if cachedType != "" {
+			typeCache[id] = cachedType
+		}
+		if cachedPath != "" {
+			pathCache[id] = cachedPath
+		}
+		return cachedType, cachedPath
 	}
 
 	for {
@@ -5354,186 +5380,255 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 				edge.ID = doc.Ref.ID
 			}
 
-			sourceType := resolveType(edge.SourceFragmentID)
-			targetType := resolveType(edge.TargetFragmentID)
+			sourceType, sourcePath := resolveEndpoint(edge.SourceFragmentID)
+			targetType, targetPath := resolveEndpoint(edge.TargetFragmentID)
 
 			if sourceType == "" || targetType == "" {
 				continue // Skip if we can't determine types (orphaned edge or deleted fragment)
 			}
 
-			updated := false
-			typeNormalized := false
+			edgeChanged := false
+			edgeCanonicalized := false
+			policyStatus := models.PolicyStatusClean
+			policyReason := ""
+			policyPenalty := 0.0
+			policyEdgeModality := ""
+			canonFromEdgeType := models.DependencyType("")
+			normSource, normTarget, normType, symSwapped := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+			if symSwapped {
+				edge.SourceFragmentID = normSource
+				edge.TargetFragmentID = normTarget
+				edge.Type = normType
+				sourceType, targetType = targetType, sourceType
+				sourcePath, targetPath = targetPath, sourcePath
+				edgeChanged = true
+			}
 
 			// Core canonization: normalize relation type
 			if canonExecutor != nil {
 				if normalized := normalizeRelationTypeWithPolicy(ctx, canonExecutor, edge.Type); normalized != "" && normalized != string(edge.Type) {
+					canonFromEdgeType = edge.Type
 					edge.Type = models.DependencyType(normalized)
-					typeNormalized = true
+					edgeChanged = true
+					edgeCanonicalized = true
 				}
 			}
 
-			// Core validation: check edge direction using policy rules
-			if validationExecutor != nil {
-				decision, err := validationExecutor.Execute(ctx, policy.PolicyInput{
-					Kind: "validation",
-					Edge: &edge,
-					Context: map[string]interface{}{
-						"sourceType":   string(sourceType),
-						"targetType":   string(targetType),
-						"relationType": string(edge.Type),
-					},
-				})
-				if err == nil {
-					switch decision.Action {
-					case "reverse":
-						oldSource := edge.SourceFragmentID
-						edge.SourceFragmentID = edge.TargetFragmentID
-						edge.TargetFragmentID = oldSource
-						sourceType, targetType = targetType, sourceType
-						if err := edgesRepo.Update(ctx, &edge); err != nil {
-							log.Printf("  ERROR: failed to reverse edge %s (policy): %v", edge.ID, err)
-							continue
-						}
-						if *verbose {
-							log.Printf("  ✓ Reversed edge %s by policy: %s -> %s (%s)",
-								edge.ID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
-						}
-						reversed++
-						updated = true
-						continue
-					case "reject":
-						if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
-							deleted++
-							if *verbose {
-								log.Printf("  ✓ Deleted edge %s by policy (reject)", edge.ID)
-							}
-						} else {
-							log.Printf("  ERROR: failed to delete edge %s (policy reject): %v", edge.ID, err)
-						}
-						updated = true
-						continue
-					}
-				}
-			}
-
-			// Canonical representation: SUBSIDIARY_OF is normalized into OWNS (parent -> subsidiary).
-			if edge.Type == models.DependencyTypeSubsidiaryOf {
-				oldSource := edge.SourceFragmentID            // subsidiary
-				edge.SourceFragmentID = edge.TargetFragmentID // parent
-				edge.TargetFragmentID = oldSource
-				edge.Type = models.DependencyTypeOwns
-				if err := edgesRepo.Update(ctx, &edge); err != nil {
-					log.Printf("  ERROR: failed to normalize SUBSIDIARY_OF edge %s: %v", edge.ID, err)
-					continue
-				}
-				canonicalized++
-				updated = true
-				continue
-			}
-
-			// Canonical representation: HAS_KEY_PERSON is normalized into KEY_PERSON (person -> org).
-			if edge.Type == models.DependencyTypeHasKeyPerson {
-				// Historical variants:
-				// - ORG -> PERSON (inverse)
-				// - PERSON -> ORG (already correct but legacy type)
-				//
-				// Canonical: KEY_PERSON with PERSON -> ORG.
-				if sourceType == models.FragmentTypeOrganization && targetType == models.FragmentTypePerson {
-					oldSource := edge.SourceFragmentID            // org
-					edge.SourceFragmentID = edge.TargetFragmentID // person
-					edge.TargetFragmentID = oldSource
-					// Swap cached endpoint types as well
-					sourceType, targetType = targetType, sourceType
-				}
-				edge.Type = models.DependencyTypeKeyPerson
-				if err := edgesRepo.Update(ctx, &edge); err != nil {
-					log.Printf("  ERROR: failed to normalize HAS_KEY_PERSON edge %s: %v", edge.ID, err)
-					continue
-				}
-				if *verbose {
-					log.Printf("  ✓ Normalized HAS_KEY_PERSON → KEY_PERSON: %s → %s", edge.SourceFragmentID, edge.TargetFragmentID)
-				}
-				canonicalized++
-				updated = true
-				continue
-			}
-
-			// Canonical representation: WORKS_FOR is legacy; normalize to EMPLOYED_BY.
-			if edge.Type == models.DependencyTypeWorksFor {
-				edge.Type = models.DependencyTypeEmployedBy
-				canonicalized++
-				// Keep processing below: direction might still need to be reversed.
-			}
-
-			// Canonicalize certain mis-modeled edges where reversing is not sufficient.
-			// Example: PRODUCT OWNS ORGANIZATION -> ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
+			// Core edge canonicalization: path-aware matrix shared with runtime ingestion/repo.
 			if canonicalizeTypes {
-				if newType, shouldSwap, changed, reason := scout.CanonicalizeEdge(edge.Type, sourceType, targetType); changed {
-					oldType := edge.Type
-					edge.Type = newType
-					if shouldSwap {
-						oldSource := edge.SourceFragmentID
-						edge.SourceFragmentID = edge.TargetFragmentID
-						edge.TargetFragmentID = oldSource
-						sourceType, targetType = targetType, sourceType
+				rawRelationType := strings.TrimSpace(string(edge.Type))
+				if edge.Qualifiers != nil {
+					if v, ok := edge.Qualifiers["rawRelationType"].(string); ok && strings.TrimSpace(v) != "" {
+						rawRelationType = strings.TrimSpace(v)
 					}
-					// Re-apply symmetric normalization after swap/type-change (noop for non-symmetric).
+				}
+				canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
+					EdgeType:          edge.Type,
+					SourceType:        sourceType,
+					TargetType:        targetType,
+					SourcePath:        sourcePath,
+					TargetPath:        targetPath,
+					RawRelationType:   rawRelationType,
+					OwnershipEvidence: models.HasOwnershipEvidence("", edge.Qualifiers, edge.Metrics),
+				})
+				if canon.Changed {
+					origType := edge.Type
+					if canon.OriginalType != "" {
+						canonFromEdgeType = canon.OriginalType
+					} else if canonFromEdgeType == "" {
+						canonFromEdgeType = origType
+					}
+					edge.Type = canon.EdgeType
+					if canon.ShouldSwap {
+						edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
+						sourceType, targetType = targetType, sourceType
+						sourcePath, targetPath = targetPath, sourcePath
+						reversed++
+					}
 					edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
-
 					if edge.Qualifiers == nil {
 						edge.Qualifiers = map[string]interface{}{}
 					}
 					edge.Qualifiers["canonicalized"] = true
-					edge.Qualifiers["canonicalizedFromEdgeType"] = string(oldType)
-					edge.Qualifiers["canonicalizationReason"] = reason
+					edge.Qualifiers["canonicalizedFromEdgeType"] = string(canonFromEdgeType)
+					edge.Qualifiers["canonicalizationReason"] = canon.Reason
 					edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
-					if shouldSwap {
+					if canon.ShouldSwap {
 						edge.Qualifiers["normalizedDirection"] = true
 					}
+					edgeChanged = true
+					edgeCanonicalized = true
+				}
+				if canon.PolicyPenalty > 0 {
+					policyStatus = policy.MergePolicyStatus(policyStatus, canon.PolicyStatus)
+					if canon.PolicyPenalty > policyPenalty {
+						policyPenalty = canon.PolicyPenalty
+					}
+					if strings.TrimSpace(canon.PolicyReason) != "" {
+						policyReason = strings.TrimSpace(canon.PolicyReason)
+					}
+					if edge.Properties.Criticality > 0 && canon.ConfidenceMult > 0 && canon.ConfidenceMult < 1 {
+						edge.Properties.Criticality *= canon.ConfidenceMult
+					}
+				}
+				if canon.PolicyReason == "transition_unclassified" {
+					policy.LogPolicyEvent("edge_canonicalization_policy", policy.PolicyLogStageFallback, map[string]interface{}{
+						"trace_id":       "na",
+						"tenant_id":      edge.TenantID,
+						"job_id":         "na",
+						"edge_id":        edge.ID,
+						"source_type":    sourceType,
+						"target_type":    targetType,
+						"relation_type":  edge.Type,
+						"action":         policy.ActionAllowWithPenalty,
+						"policy_status":  policyStatus,
+						"policy_reason":  canon.PolicyReason,
+						"policy_penalty": policyPenalty,
+						"decision_path":  "horizon_smart_dedup_fix_edge_directions",
+						"confidence":     canon.ConfidenceMult,
+					})
+				}
+			}
 
-					if err := edgesRepo.Update(ctx, &edge); err != nil {
-						log.Printf("  ERROR: failed to canonicalize edge %s: %v", edge.ID, err)
-						continue
+			// Core validation: use unified action-contract and best-effort apply handlers.
+			if validationExecutor != nil {
+				decision, err := validationExecutor.Execute(ctx, policy.PolicyInput{
+					Kind: "edge",
+					Edge: &edge,
+					Context: map[string]interface{}{
+						"validationKind":      "edge",
+						"sourceFragmentID":    edge.SourceFragmentID,
+						"targetFragmentID":    edge.TargetFragmentID,
+						"sourceType":          string(sourceType),
+						"targetType":          string(targetType),
+						"sourceCanonicalPath": sourcePath,
+						"targetCanonicalPath": targetPath,
+						"relationType":        string(edge.Type),
+					},
+				})
+				if err != nil {
+					policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageError, map[string]interface{}{
+						"trace_id":       "na",
+						"tenant_id":      edge.TenantID,
+						"job_id":         "na",
+						"edge_id":        edge.ID,
+						"source_type":    sourceType,
+						"target_type":    targetType,
+						"relation_type":  edge.Type,
+						"action":         "validate_edge",
+						"policy_status":  "na",
+						"policy_reason":  err.Error(),
+						"policy_penalty": 0,
+						"decision_path":  "horizon_smart_dedup_fix_edge_directions",
+						"error_class":    "policy_execution_error",
+						"confidence":     0,
+					})
+				} else {
+					decision = policy.NormalizeValidationDecision(decision)
+					reason := ""
+					if rv, _ := decision.Params["reason"].(string); strings.TrimSpace(rv) != "" {
+						reason = strings.TrimSpace(rv)
 					}
-					if *verbose {
-						log.Printf("  ✓ Canonicalized edge %s: %s -> %s [%s -> %s]",
-							edge.ID, oldType, edge.Type, edge.TargetFragmentID, edge.SourceFragmentID)
+					policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageDecision, map[string]interface{}{
+						"trace_id":       "na",
+						"tenant_id":      edge.TenantID,
+						"job_id":         "na",
+						"edge_id":        edge.ID,
+						"source_type":    sourceType,
+						"target_type":    targetType,
+						"relation_type":  edge.Type,
+						"action":         decision.Action,
+						"policy_status":  policyStatus,
+						"policy_reason":  reason,
+						"policy_penalty": policyPenalty,
+						"decision_path":  decision.DecisionPath,
+						"confidence":     decision.Confidence,
+					})
+
+					prevSource := edge.SourceFragmentID
+					prevTarget := edge.TargetFragmentID
+					prevType := edge.Type
+					prevCriticality := edge.Properties.Criticality
+
+					policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
+						Reverse: func() {
+							edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
+							sourceType, targetType = targetType, sourceType
+							sourcePath, targetPath = targetPath, sourcePath
+							reversed++
+						},
+						RewriteType: func(newType string, _ string) {
+							newEdgeType := models.DependencyType(strings.TrimSpace(newType))
+							if newEdgeType == "" || newEdgeType == edge.Type {
+								return
+							}
+							if canonFromEdgeType == "" {
+								canonFromEdgeType = edge.Type
+							}
+							edge.Type = newEdgeType
+						},
+						ApplyPenalty: func(penalty float64, _ string) {
+							if edge.Properties.Criticality > 0 {
+								edge.Properties.Criticality *= (1.0 - penalty)
+							}
+						},
+						SetPolicyStatus: func(status, reason string, penalty float64) {
+							policyStatus = policy.MergePolicyStatus(policyStatus, status)
+							if strings.TrimSpace(reason) != "" {
+								policyReason = strings.TrimSpace(reason)
+							}
+							if penalty > policyPenalty {
+								policyPenalty = penalty
+							}
+						},
+					})
+
+					if modality, _ := decision.Params["edgeModality"].(string); strings.TrimSpace(modality) != "" {
+						policyEdgeModality = strings.TrimSpace(modality)
 					}
+
+					if edge.SourceFragmentID != prevSource || edge.TargetFragmentID != prevTarget || edge.Type != prevType {
+						edgeChanged = true
+					}
+					if edge.Type != prevType {
+						edgeCanonicalized = true
+					}
+					if edge.Properties.Criticality != prevCriticality {
+						edgeChanged = true
+					}
+				}
+			}
+
+			if policyEdgeModality != "" {
+				if edge.Qualifiers == nil {
+					edge.Qualifiers = map[string]interface{}{}
+				}
+				if _, ok := edge.Qualifiers["edgeModality"]; !ok {
+					edge.Qualifiers["edgeModality"] = policyEdgeModality
+					edgeChanged = true
+				}
+			}
+			if policyStatus != models.PolicyStatusClean || policyPenalty > 0 || strings.TrimSpace(policyReason) != "" {
+				edge.SetPolicyStatus(policyStatus, policyReason, policyPenalty)
+				edgeChanged = true
+			}
+			if canonFromEdgeType != "" {
+				edge.SetPolicyOriginalType(canonFromEdgeType)
+				edgeChanged = true
+			}
+
+			if edgeChanged {
+				edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+				if err := edgesRepo.Update(ctx, &edge); err != nil {
+					log.Printf("  ERROR: failed to update edge %s: %v", edge.ID, err)
+					continue
+				}
+				if edgeCanonicalized {
 					canonicalized++
-					updated = true
-					continue
 				}
-			}
-
-			if scout.ShouldReverseEdge(edge.Type, sourceType, targetType) {
-				// Reverse the edge
-				oldSource := edge.SourceFragmentID
-				edge.SourceFragmentID = edge.TargetFragmentID
-				edge.TargetFragmentID = oldSource
-				// Swap cached types
-				sourceType, targetType = targetType, sourceType
-
-				if err := edgesRepo.Update(ctx, &edge); err != nil {
-					log.Printf("  ERROR: failed to reverse edge %s: %v", edge.ID, err)
-					continue
-				}
-
 				if *verbose {
-					log.Printf("  ✓ Reversed edge %s: %s (%s) -> %s (%s) [%s]",
-						edge.ID, edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Type)
+					log.Printf("  ✓ Updated edge %s: %s -> %s (%s)", edge.ID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
 				}
-				reversed++
-				updated = true
-			}
-
-			// Persist edge type normalization if it was the only change
-			if typeNormalized && !updated {
-				if err := edgesRepo.Update(ctx, &edge); err != nil {
-					log.Printf("  ERROR: failed to persist edge type normalization %s: %v", edge.ID, err)
-					continue
-				}
-				canonicalized++
-				updated = true
 			}
 		}
 
@@ -5547,9 +5642,6 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 		if len(docs) < pageSize {
 			break // Last page
 		}
-	}
-	if deleted > 0 {
-		log.Printf("✓ Policy rejected %d edges", deleted)
 	}
 
 	log.Printf("  Completed: checked %d edges total", totalChecked)

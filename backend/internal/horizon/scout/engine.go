@@ -71,6 +71,37 @@ func isUpperAcronym(s string) bool {
 	return hasLetter
 }
 
+func isDomainCriticalEnrichmentJob(job *models.ScoutingJob) bool {
+	if job == nil || job.State == nil {
+		return false
+	}
+
+	if v, ok := job.State["trigger"]; ok {
+		if strings.EqualFold(strings.TrimSpace(parseStateString(v)), "domain_contract_engine_enrich") {
+			return true
+		}
+	}
+
+	if v, ok := job.State["domains"]; ok {
+		switch t := v.(type) {
+		case []interface{}:
+			if len(t) > 0 {
+				return true
+			}
+		case []map[string]interface{}:
+			if len(t) > 0 {
+				return true
+			}
+		case []string:
+			if len(t) > 0 {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func shouldRequestProductCanonicalization(frag *models.HorizonFragment) bool {
 	if frag == nil {
 		return false
@@ -2624,7 +2655,9 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			goto SKIP_RESEARCH
 		}
 		// Daily guardrails (USD + token caps) to keep costs bounded during MVP.
-		if e.budgetPolicy.Enabled && e.spendLedger != nil && lensID != "" && cascadeID != "" {
+		// Domain-critical enrichment tasks must not be blocked by budget caps.
+		skipBudgetGuards := isDomainCriticalEnrichmentJob(job)
+		if e.budgetPolicy.Enabled && !skipBudgetGuards && e.spendLedger != nil && lensID != "" && cascadeID != "" {
 			day := time.Now().UTC().Format("2006-01-02")
 			if cSpend, _, cOut, err := e.spendLedger.GetCascadeSpendUSD(ctx, tenantID, cascadeID, day); err == nil {
 				if e.budgetPolicy.CascadeDailyMaxUSD > 0 && cSpend >= e.budgetPolicy.CascadeDailyMaxUSD {
@@ -2646,6 +2679,9 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					goto SKIP_RESEARCH
 				}
 			}
+		}
+		if skipBudgetGuards {
+			fmt.Printf("[ScoutEngine] Budget guardrails bypassed for domain-critical enrichment job %s\n", strings.TrimSpace(job.ID))
 		}
 		fmt.Printf("[ScoutEngine] Starting research for job %s, missing info: %v\n", job.ID, validationResult.MissingInfo)
 		e.logLine(ctx, job, "info", fmt.Sprintf("> research started (missing=%d)", len(validationResult.MissingInfo)))

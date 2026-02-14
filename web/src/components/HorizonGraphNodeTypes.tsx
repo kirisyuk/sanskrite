@@ -101,6 +101,12 @@ export interface HorizonNodeData {
   } | null;
   /** UI: toggle risk shield for a fragment (wired by LensCanvasCockpit). */
   onToggleRiskShield?: (fragmentId: string) => void;
+  /** UI: rounded highlight ring for graph query match (wired by LensCanvasCockpit). */
+  queryHighlight?: boolean;
+  /** UI: rounded highlight ring for selected domain overlay (wired by LensCanvasCockpit). */
+  domainHighlight?: boolean;
+  /** UI: stronger rounded ring for top-dependency focus nodes (wired by LensCanvasCockpit). */
+  topDependencyHighlight?: boolean;
   onLoadRelated?: (fragmentId: string) => void; // Функция для загрузки связанных элементов
   onCollapse?: (fragmentId: string) => void; // Функция для сворачивания (undo expand)
   isLoadingRelated?: boolean; // Флаг загрузки связанных элементов
@@ -3338,6 +3344,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isLoadingRelated = Boolean(data.isLoadingRelated);
   const isHub = Boolean((data as any)?.hubHighlight);
   const isUltimateBeneficiary = Boolean((data as any)?.ultimateBeneficiaryHighlight);
+  const isQueryHighlight = Boolean((data as any)?.queryHighlight);
+  const isDomainHighlight = Boolean((data as any)?.domainHighlight);
+  const isTopDependencyHighlight = Boolean((data as any)?.topDependencyHighlight);
   // Allow Research even if the first "load related" attempt returned empty: in that case the node isn't expanded,
   // but the user should still be able to run scouting from it.
   const isSelected = Boolean(selected);
@@ -3574,13 +3583,38 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     }
   }, []);
 
-  // Additional semantic highlights:
-  // - Ultimate beneficiaries (PERSON) on upward control traversal: greenish ring
-  // - Hubs (in>=5 or out>=5): amber ring
-  // Priority: critical > beneficiary > hub
-  const hubRing = theme === 'dark' ? 'rgba(251, 191, 36, 0.60)' : 'rgba(245, 158, 11, 0.55)';
-  const beneficiaryRing = theme === 'dark' ? 'rgba(52, 211, 153, 0.56)' : 'rgba(16, 185, 129, 0.46)';
-  const highlightRing = !isCritical ? (isUltimateBeneficiary ? beneficiaryRing : (isHub ? hubRing : null)) : null;
+  // Additional semantic highlights (rounded ring + halo):
+  // Priority: critical > query > top-dependency > domain > beneficiary > hub
+  const queryTone = theme === 'dark'
+    ? { ring: 'rgba(56, 189, 248, 0.82)', glow: 'rgba(56, 189, 248, 0.22)' }
+    : { ring: 'rgba(14, 165, 233, 0.70)', glow: 'rgba(14, 165, 233, 0.18)' };
+  const topDependencyTone = theme === 'dark'
+    ? { ring: 'rgba(125, 211, 252, 0.90)', glow: 'rgba(125, 211, 252, 0.28)' }
+    : { ring: 'rgba(2, 132, 199, 0.76)', glow: 'rgba(2, 132, 199, 0.24)' };
+  const domainTone = theme === 'dark'
+    ? { ring: 'rgba(56, 189, 248, 0.68)', glow: 'rgba(56, 189, 248, 0.18)' }
+    : { ring: 'rgba(2, 132, 199, 0.58)', glow: 'rgba(2, 132, 199, 0.14)' };
+  const beneficiaryTone = theme === 'dark'
+    ? { ring: 'rgba(52, 211, 153, 0.64)', glow: 'rgba(52, 211, 153, 0.18)' }
+    : { ring: 'rgba(16, 185, 129, 0.54)', glow: 'rgba(16, 185, 129, 0.14)' };
+  const hubTone = theme === 'dark'
+    ? { ring: 'rgba(251, 191, 36, 0.66)', glow: 'rgba(251, 191, 36, 0.18)' }
+    : { ring: 'rgba(245, 158, 11, 0.56)', glow: 'rgba(245, 158, 11, 0.14)' };
+  const highlightTone = !isCritical
+    ? (
+        isQueryHighlight
+          ? queryTone
+          : isTopDependencyHighlight
+            ? topDependencyTone
+            : isDomainHighlight
+              ? domainTone
+              : isUltimateBeneficiary
+                ? beneficiaryTone
+                : isHub
+                  ? hubTone
+                  : null
+      )
+    : null;
 
   const displayLabel =
     (isCollapsedStackController && stackTitle)
@@ -3693,12 +3727,14 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     const compactBaseShadow = isCritical
       ? `0 0 0 2px ${criticalRing}, ${compactShadowBase}`
       : (q === 'max' ? `${compactShadowBase}, 0 18px 60px rgba(0,0,0,0.18)` : compactShadowBase);
-    const compactShadow = highlightRing ? `0 0 0 2px ${highlightRing}, ${compactBaseShadow}` : compactBaseShadow;
+    const compactShadow = highlightTone
+      ? `0 0 0 2px ${highlightTone.ring}, 0 0 0 5px ${highlightTone.glow}, 0 0 20px ${highlightTone.glow}, ${compactBaseShadow}`
+      : compactBaseShadow;
 
     return (
       <>
         <div
-          className={`hzn-node-2026 hzn-node-compact ${isDomainVisual ? 'is-domain' : ''} ${isDecisionVisual ? 'is-decision' : ''} ${isMechanismVisual ? 'is-mechanism' : ''} ${isSelected ? 'is-selected' : ''}`}
+          className={`hzn-node-2026 hzn-node-compact ${isDomainVisual ? 'is-domain' : ''} ${isDecisionVisual ? 'is-decision' : ''} ${isMechanismVisual ? 'is-mechanism' : ''} ${isSelected ? 'is-selected' : ''} ${isQueryHighlight ? 'is-query-highlight' : ''} ${isDomainHighlight ? 'is-domain-highlight' : ''} ${isTopDependencyHighlight ? 'is-topdep-highlight' : ''}`}
           onMouseEnter={() => setIsHovering(true)}
           onMouseLeave={() => setIsHovering(false)}
           style={{
@@ -4154,7 +4190,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       )}
 
       <div
-        className={`hzn-node-2026 ${isDomainVisual ? 'is-domain' : ''} ${isDecisionVisual ? 'is-decision' : ''} ${isMechanismVisual ? 'is-mechanism' : ''} ${isSelected ? 'is-selected' : ''} ${isCollapsedStackController ? 'is-stack' : ''}`}
+        className={`hzn-node-2026 ${isDomainVisual ? 'is-domain' : ''} ${isDecisionVisual ? 'is-decision' : ''} ${isMechanismVisual ? 'is-mechanism' : ''} ${isSelected ? 'is-selected' : ''} ${isCollapsedStackController ? 'is-stack' : ''} ${isQueryHighlight ? 'is-query-highlight' : ''} ${isDomainHighlight ? 'is-domain-highlight' : ''} ${isTopDependencyHighlight ? 'is-topdep-highlight' : ''}`}
         onMouseEnter={() => setIsHovering(true)}
         onMouseLeave={() => setIsHovering(false)}
         style={{
@@ -4173,7 +4209,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             const baseShadow = isCritical
               ? `0 0 0 2px ${criticalRing}, ${shadowBase}`
               : (q === 'max' ? `${shadowBase}, 0 18px 60px rgba(0,0,0,0.18)` : shadowBase);
-            return highlightRing ? `0 0 0 2px ${highlightRing}, ${baseShadow}` : baseShadow;
+            return highlightTone
+              ? `0 0 0 2px ${highlightTone.ring}, 0 0 0 5px ${highlightTone.glow}, 0 0 20px ${highlightTone.glow}, ${baseShadow}`
+              : baseShadow;
           })(),
           padding: isCollapsed ? '8px 12px 12px' : '10px 14px 14px',
           width: `${NODE_WIDTH_PX}px`,

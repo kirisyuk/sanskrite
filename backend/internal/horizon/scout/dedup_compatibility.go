@@ -60,6 +60,8 @@ func dedupExpectedFamilyForType(fragType models.FragmentType) string {
 		return "sphere"
 	case models.FragmentTypeSupplyLink:
 		return "supply-link"
+	case models.FragmentTypeTrack:
+		return "track"
 	default:
 		return ""
 	}

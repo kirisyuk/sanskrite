@@ -355,6 +355,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 								Confidence: 1.0,
 							})
 						}
+						attachGeoCoordinatesFromGeoNames(fragment, best)
 					}
 				}
 			}
@@ -555,6 +556,38 @@ func (v *PreCreateValidator) recordPolicyDecisionTelemetry(
 
 func parseMarketGeoSectorForDedup(canonicalPath string) (string, string, string) {
 	return parseMarketDedupScope(canonicalPath)
+}
+
+func attachGeoCoordinatesFromGeoNames(fragment *models.HorizonFragment, place *coreontology.GeoNamesPlace) {
+	if fragment == nil || place == nil {
+		return
+	}
+	lat, err := strconv.ParseFloat(strings.TrimSpace(place.Lat), 64)
+	if err != nil {
+		return
+	}
+	lon, err := strconv.ParseFloat(strings.TrimSpace(place.Lng), 64)
+	if err != nil {
+		return
+	}
+	if !models.IsValidCoordinates(lat, lon) {
+		return
+	}
+
+	if fragment.Coordinates == nil || !models.IsValidCoordinates(fragment.Coordinates.Lat, fragment.Coordinates.Lon) {
+		fragment.Coordinates = &models.Coordinates{
+			Lat: lat,
+			Lon: lon,
+		}
+	}
+
+	if fragment.HomeLocation == nil {
+		fragment.HomeLocation = &models.Location{}
+	}
+	iso := fmt.Sprintf("%+.6f%+.6f/", lat, lon)
+	if fragment.HomeLocation.ISO6709 == nil || strings.TrimSpace(*fragment.HomeLocation.ISO6709) == "" {
+		fragment.HomeLocation.ISO6709 = &iso
+	}
 }
 
 // repairInvalidCanonicalPath tries to deterministically map an invalid canonical path

@@ -2,6 +2,8 @@ package domain
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -168,6 +170,9 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 	var finalSnapshot *models.DomainAnswerSnapshot
 	var finalGate gateResult
 	var lastGraph graphSnapshot
+	var initialExplanatory *models.DomainExplanatoryLayer
+	initialExplanatoryHash := ""
+	initialSnapshotPublished := false
 
 	for {
 		logDomainContract(ctx, "cycle.start", in.Job, &contract, map[string]any{
@@ -182,6 +187,50 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 			"edgeCount": len(lastGraph.Edges),
 		})
 		snapshot := e.assembleDeterministic(in.Job, contract, domainID, expectations, lastGraph)
+		if cycle == 0 {
+			e.emit(ctx, in.Job, contract, "horizon.domain.contract.explain.started",
+				"Building explanatory layer",
+				"Generating domain-specific mechanism explanations from graph artifacts",
+				map[string]interface{}{
+					"domainId": domainID,
+					"phase":    "initial",
+				},
+			)
+			e.applyExplanatoryLayer(ctx, contract, snapshot, lastGraph, originalQuery, "initial")
+			initialExplanatory = cloneDomainExplanatoryLayer(snapshot.ExplanatoryLayer)
+			initialExplanatoryHash = dependencyHashFromCriticalDependencies(snapshot.CriticalDependencies)
+			unitCount := 0
+			candidateCount := 0
+			tokenBudget := 0
+			consumedInput := 0
+			consumedOutput := 0
+			explainStatus := ""
+			dependencyHash := ""
+			if snapshot.ExplanatoryLayer != nil {
+				unitCount = len(snapshot.ExplanatoryLayer.Units)
+				candidateCount = snapshot.ExplanatoryLayer.CandidateCount
+				tokenBudget = snapshot.ExplanatoryLayer.TokenBudget
+				consumedInput = snapshot.ExplanatoryLayer.ConsumedInputTokens
+				consumedOutput = snapshot.ExplanatoryLayer.ConsumedOutputTokens
+				explainStatus = snapshot.ExplanatoryLayer.Status
+				dependencyHash = snapshot.ExplanatoryLayer.SourceDependencyHash
+			}
+			e.emit(ctx, in.Job, contract, "horizon.domain.contract.explain.completed",
+				"Explanatory layer generated",
+				fmt.Sprintf("Units: %d", unitCount),
+				map[string]interface{}{
+					"domainId":       domainID,
+					"phase":          "initial",
+					"unitCount":      unitCount,
+					"candidateCount": candidateCount,
+					"tokenBudget":    tokenBudget,
+					"consumedInput":  consumedInput,
+					"consumedOutput": consumedOutput,
+					"explainStatus":  explainStatus,
+					"dependencyHash": dependencyHash,
+				},
+			)
+		}
 
 		e.emit(ctx, in.Job, contract, "horizon.domain.contract.gate.started",
 			"Checking completeness",
@@ -234,6 +283,27 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		}
 
 		finalGate = l1
+		if cycle == 0 && !initialSnapshotPublished && e.snapshots != nil {
+			snapshot.ReadinessStatus = models.DomainReadinessReadyWithGaps
+			snapshot.Gate = l1.toSummary()
+			snapshot.EnrichmentCycles = cycle
+			if id, err := e.snapshots.Upsert(ctx, snapshot); err == nil {
+				snapshot.ID = id
+				initialSnapshotPublished = true
+				logDomainContract(ctx, "snapshot.upsert.initial.ok", in.Job, &contract, map[string]any{
+					"domainId":   domainID,
+					"snapshotId": strings.TrimSpace(id),
+					"cycle":      cycle,
+				})
+			} else {
+				logDomainContract(ctx, "snapshot.upsert.initial.error", in.Job, &contract, map[string]any{
+					"domainId":   domainID,
+					"snapshotId": strings.TrimSpace(snapshot.ID),
+					"cycle":      cycle,
+					"error":      err.Error(),
+				})
+			}
+		}
 		if cycle >= maxCycles {
 			logDomainContract(ctx, "enrich.limit_reached", in.Job, &contract, map[string]any{
 				"domainId":     domainID,
@@ -326,6 +396,16 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		finalSnapshot.ReadinessStatus = models.DomainReadinessReadyWithGaps
 		finalSnapshot.Gate = finalGate.toSummary()
 	}
+	if finalSnapshot.ExplanatoryLayer == nil && initialExplanatory != nil {
+		finalSnapshot.ExplanatoryLayer = cloneDomainExplanatoryLayer(initialExplanatory)
+	}
+	if finalSnapshot.ExplanatoryLayer != nil {
+		finalHash := dependencyHashFromCriticalDependencies(finalSnapshot.CriticalDependencies)
+		if initialExplanatoryHash != "" && finalHash != "" && initialExplanatoryHash != finalHash {
+			finalSnapshot.ExplanatoryLayer.Stale = true
+			finalSnapshot.ExplanatoryLayer.Status = "stale"
+		}
+	}
 	finalSnapshot.EnrichmentCycles = cycle
 	finalSnapshot.GroundingContractVersion = "v1"
 	applyGroundingEvidenceToSnapshot(finalSnapshot, in.GroundingEvidence)
@@ -346,13 +426,22 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 
 	e.emit(ctx, in.Job, contract, "horizon.domain.contract.assemble.started",
 		"Assembling domain answer",
-		"Building deterministic artifacts and structured narrative",
+		"Building deterministic artifacts, structured narrative, and explanatory layer",
 		map[string]interface{}{
 			"domainId":     domainID,
 			"contractType": contract.ContractType,
 		},
 	)
 	e.applyStructuredNarrative(ctx, contract, finalSnapshot)
+	if finalSnapshot.ExplanatoryLayer == nil || len(finalSnapshot.ExplanatoryLayer.Units) == 0 {
+		e.applyExplanatoryLayer(ctx, contract, finalSnapshot, lastGraph, originalQuery, "final")
+	}
+	if finalSnapshot.ExplanatoryLayer != nil {
+		finalSnapshot.ExplanatoryLayer.ThesisContext = strings.TrimSpace(finalSnapshot.Thesis.Text)
+		if strings.TrimSpace(finalSnapshot.ExplanatoryLayer.SourceDependencyHash) == "" {
+			finalSnapshot.ExplanatoryLayer.SourceDependencyHash = dependencyHashFromCriticalDependencies(finalSnapshot.CriticalDependencies)
+		}
+	}
 	e.emit(ctx, in.Job, contract, "horizon.domain.contract.assemble.completed",
 		"Domain answer assembled",
 		shortThesis(finalSnapshot.Thesis.Text),
@@ -361,6 +450,12 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 			"snapshotId":      finalSnapshot.ID,
 			"readinessStatus": finalSnapshot.ReadinessStatus,
 			"artifactCount":   len(finalSnapshot.CriticalDependencies) + len(finalSnapshot.ImpactPaths) + len(finalSnapshot.DataGaps),
+			"explanatoryUnits": func() int {
+				if finalSnapshot.ExplanatoryLayer == nil {
+					return 0
+				}
+				return len(finalSnapshot.ExplanatoryLayer.Units)
+			}(),
 		},
 	)
 
@@ -420,6 +515,12 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		"impactPaths":       len(finalSnapshot.ImpactPaths),
 		"dataGaps":          len(finalSnapshot.DataGaps),
 		"gateOverallStatus": finalGate.OverallStatus,
+		"explanatoryUnits": func() int {
+			if finalSnapshot.ExplanatoryLayer == nil {
+				return 0
+			}
+			return len(finalSnapshot.ExplanatoryLayer.Units)
+		}(),
 	})
 	return out, nil
 }
@@ -839,7 +940,7 @@ func (e *Engine) assembleDeterministic(job *models.ScoutingJob, contract Contrac
 	snapshot.ConcentrationEvidence = buildConcentrationEvidence(g)
 	snapshot.ControlExposure = buildControlExposure(g)
 	snapshot.ImpactPaths = buildImpactPaths(g, snapshot.CriticalDependencies)
-	snapshot.DataGaps = detectDataGaps(contract, facetNodes, snapshot)
+	snapshot.DataGaps = capDataGaps(detectDataGaps(contract, facetNodes, snapshot), e.gateConfig.MaxDataGaps)
 	snapshot.HighlightedNodeIDs, snapshot.HighlightedEdgeIDs = highlightedIDs(snapshot)
 
 	return snapshot
@@ -1242,6 +1343,16 @@ func (r gateResult) failedCheckIDs() []string {
 	return out
 }
 
+func (r gateResult) failedCheckIDsLimited(limit int) []string {
+	all := r.failedCheckIDs()
+	if limit <= 0 || len(all) <= limit {
+		return all
+	}
+	out := append([]string(nil), all[:limit]...)
+	out = append(out, fmt.Sprintf("..._%d_more", len(all)-limit))
+	return out
+}
+
 func (r gateResult) toSummary() models.DomainGateSummary {
 	return models.DomainGateSummary{
 		OverallStatus:  r.OverallStatus,
@@ -1250,8 +1361,59 @@ func (r gateResult) toSummary() models.DomainGateSummary {
 		Failed:         r.Failed,
 		Partial:        r.Partial,
 		Checks:         r.Checks,
-		FailedCheckIDs: r.failedCheckIDs(),
+		FailedCheckIDs: r.failedCheckIDsLimited(40),
 	}
+}
+
+func capDataGaps(gaps []models.DataGap, max int) []models.DataGap {
+	if max <= 0 || len(gaps) <= max {
+		return gaps
+	}
+	out := append([]models.DataGap(nil), gaps[:max-1]...)
+	out = append(out, models.DataGap{
+		GapType:  "truncated",
+		Hint:     fmt.Sprintf("additional gaps omitted: %d", len(gaps)-(max-1)),
+		Priority: "P2",
+	})
+	return out
+}
+
+func capGateChecks(checks []models.DomainGateCheck, maxChecks int) []models.DomainGateCheck {
+	if maxChecks <= 0 || len(checks) <= maxChecks {
+		return checks
+	}
+	if maxChecks < 2 {
+		maxChecks = 2
+	}
+	head := append([]models.DomainGateCheck(nil), checks[:maxChecks-1]...)
+	tail := checks[maxChecks-1:]
+	failCount := 0
+	partialCount := 0
+	for _, c := range tail {
+		switch strings.TrimSpace(strings.ToLower(c.Status)) {
+		case "fail":
+			failCount++
+		case "partial":
+			partialCount++
+		}
+	}
+	status := "pass"
+	priority := "P3"
+	if failCount > 0 {
+		status = "fail"
+		priority = "P0"
+	} else if partialCount > 0 {
+		status = "partial"
+		priority = "P1"
+	}
+	head = append(head, models.DomainGateCheck{
+		CheckID:        "U0_gate_overflow_summary",
+		Status:         status,
+		Priority:       priority,
+		GapDescription: fmt.Sprintf("omitted_checks=%d omitted_fail=%d omitted_partial=%d", len(tail), failCount, partialCount),
+		EnrichmentHint: "Detailed gate diagnostics truncated to keep domain summary actionable",
+	})
+	return head
 }
 
 func (e *Engine) evaluateGateL1(contract Contract, expectations []CrossFacetExpectation, snapshot *models.DomainAnswerSnapshot, g graphSnapshot) gateResult {
@@ -1297,17 +1459,50 @@ func (e *Engine) evaluateGateL1(contract Contract, expectations []CrossFacetExpe
 	}
 
 	// U3 inter-facet connectivity.
-	for _, ex := range expectations {
+	maxCrossFacetChecks := e.gateConfig.MaxCrossFacetChecks
+	if maxCrossFacetChecks <= 0 {
+		maxCrossFacetChecks = 24
+	}
+	failedPairs := make([]string, 0, len(expectations))
+	passedPairs := 0
+	for idx, ex := range expectations {
 		aNodes := facetNodes[ex.FacetA]
 		bNodes := facetNodes[ex.FacetB]
 		ok := hasConnectivityBetweenFacets(g, aNodes, bNodes, e.gateConfig.MaxInterFacetHops)
+		if ok {
+			passedPairs++
+		} else {
+			failedPairs = append(failedPairs, ex.FacetA+"<->"+ex.FacetB)
+		}
+		if idx < maxCrossFacetChecks {
+			checks = append(checks, models.DomainGateCheck{
+				CheckID:        "U3_inter_facet_connectivity_" + ex.FacetA + "_" + ex.FacetB,
+				Status:         ternary(ok, "pass", "fail"),
+				Priority:       "P0",
+				GapDescription: fmt.Sprintf("connectivity=%v max_hops=%d", ok, e.gateConfig.MaxInterFacetHops),
+				Affected:       []string{ex.FacetA, ex.FacetB},
+				EnrichmentHint: fmt.Sprintf("Cross-facet disconnect: %s ↔ %s", ex.FacetA, ex.FacetB),
+			})
+		}
+	}
+	if len(expectations) > maxCrossFacetChecks {
+		affected := make([]string, 0, 12)
+		for _, p := range failedPairs {
+			affected = append(affected, p)
+			if len(affected) >= 12 {
+				break
+			}
+		}
 		checks = append(checks, models.DomainGateCheck{
-			CheckID:        "U3_inter_facet_connectivity_" + ex.FacetA + "_" + ex.FacetB,
-			Status:         ternary(ok, "pass", "fail"),
-			Priority:       "P0",
-			GapDescription: fmt.Sprintf("connectivity=%v max_hops=%d", ok, e.gateConfig.MaxInterFacetHops),
-			Affected:       []string{ex.FacetA, ex.FacetB},
-			EnrichmentHint: fmt.Sprintf("Cross-facet disconnect: %s ↔ %s", ex.FacetA, ex.FacetB),
+			CheckID:  "U3_inter_facet_connectivity_aggregate",
+			Status:   ternary(len(failedPairs) == 0, "pass", "fail"),
+			Priority: "P0",
+			GapDescription: fmt.Sprintf(
+				"pair_checks_total=%d detailed=%d failed_pairs=%d passed_pairs=%d",
+				len(expectations), maxCrossFacetChecks, len(failedPairs), passedPairs,
+			),
+			Affected:       affected,
+			EnrichmentHint: "Resolve inter-facet disconnects across omitted facet pairs",
 		})
 	}
 
@@ -1415,6 +1610,7 @@ func (e *Engine) evaluateGateL1(contract Contract, expectations []CrossFacetExpe
 
 	// Contract-specific checks
 	checks = append(checks, e.contractSpecificChecks(contract, g, facetNodes, snapshot)...)
+	checks = capGateChecks(checks, e.gateConfig.MaxGateChecks)
 
 	return summarizeChecks(1, checks)
 }
@@ -1789,6 +1985,485 @@ func (e *Engine) enqueueEnrichmentTasks(ctx context.Context, parent *models.Scou
 			"childJobId": strings.TrimSpace(jobID),
 		})
 	}
+}
+
+type explanatoryUnitResponse struct {
+	EdgeID        string   `json:"edgeId"`
+	Mechanism     string   `json:"mechanism"`
+	RoleInThesis  string   `json:"roleInThesis"`
+	Explanation   string   `json:"explanation"`
+	Confidence    float64  `json:"confidence"`
+	AnchorNodeIDs []string `json:"anchorNodeIds"`
+	AnchorEdgeIDs []string `json:"anchorEdgeIds"`
+	EvidenceRefs  []string `json:"evidenceRefs"`
+}
+
+type explanatoryResponse struct {
+	Units []explanatoryUnitResponse `json:"units"`
+}
+
+func (e *Engine) applyExplanatoryLayer(ctx context.Context, contract Contract, snapshot *models.DomainAnswerSnapshot, g graphSnapshot, originalQuery, phase string) {
+	if snapshot == nil {
+		return
+	}
+
+	candidates := e.buildExplanatoryCandidates(contract, g)
+	tokenBudget := e.gateConfig.ExplanatoryTokenBudget
+	if tokenBudget <= 0 {
+		tokenBudget = 100000
+	}
+	maxUnits := e.gateConfig.ExplanatoryMaxUnits
+	if maxUnits <= 0 {
+		maxUnits = 120
+	}
+	thesisContext := strings.TrimSpace(snapshot.Thesis.Text)
+	if thesisContext == "" {
+		thesisContext = fallbackThesis(contract, snapshot)
+	}
+
+	layer := &models.DomainExplanatoryLayer{
+		Status:               "ready",
+		Phase:                strings.TrimSpace(phase),
+		GeneratedAt:          time.Now().UTC(),
+		ThesisContext:        thesisContext,
+		CandidateCount:       len(candidates),
+		TokenBudget:          tokenBudget,
+		SourceDependencyHash: dependencyHashFromCriticalDependencies(candidates),
+		Units:                []models.DomainExplanatoryUnit{},
+		Errors:               []string{},
+	}
+
+	if len(candidates) == 0 {
+		snapshot.ExplanatoryLayer = layer
+		return
+	}
+
+	// Fallback path when AI is unavailable: still persist domain-bound explanation atoms.
+	if e.aiExecutor == nil {
+		layer.Units = deterministicExplanatoryUnits(candidates, maxUnits)
+		layer.UnitCount = len(layer.Units)
+		layer.CoveredDependencyCount = len(layer.Units)
+		snapshot.ExplanatoryLayer = layer
+		return
+	}
+
+	chunkTokens := e.gateConfig.ExplanatoryChunkTokens
+	if chunkTokens <= 0 {
+		chunkTokens = 12000
+	}
+	chunks := chunkCriticalDependenciesByToken(candidates, chunkTokens)
+	candidateByEdgeID := map[string]models.CriticalDependency{}
+	rankByEdgeID := map[string]int{}
+	for i, dep := range candidates {
+		candidateByEdgeID[strings.TrimSpace(dep.EdgeID)] = dep
+		rankByEdgeID[strings.TrimSpace(dep.EdgeID)] = i + 1
+	}
+	unitsByEdge := map[string]models.DomainExplanatoryUnit{}
+	tokenSpent := 0
+
+	verifier := ai.NewGenericVerifier(func(r explanatoryResponse) error {
+		// Empty payload is allowed (we fallback below).
+		for _, u := range r.Units {
+			if strings.TrimSpace(u.EdgeID) == "" {
+				return fmt.Errorf("edgeId is required for each explanatory unit")
+			}
+		}
+		return nil
+	})
+
+	for idx, chunk := range chunks {
+		if len(chunk) == 0 || len(unitsByEdge) >= maxUnits {
+			break
+		}
+		prompt := buildExplanatoryPrompt(contract, originalQuery, thesisContext, idx+1, len(chunks), chunk)
+		estInputTokens := len(prompt) / 4
+		if tokenSpent+estInputTokens > tokenBudget && len(unitsByEdge) > 0 {
+			break
+		}
+		task := &ai.AITask{
+			TaskType:     ai.TaskTypeKnowledgeSynthesis,
+			InputContent: prompt,
+			AIRequirements: ai.AIRequirements{
+				TextGenerationCapability:        true,
+				SearchGroundingCapability:       true,
+				InternalDataGroundingCapability: true,
+				MinCapabilityScore:              7,
+				MinContextWindow:                maxInt(12000, estInputTokens+2500),
+				MaxOutputSize:                   3200,
+			},
+			Verifier: verifier,
+		}
+		raw, fullResult, err := e.aiExecutor.ExecuteStructuredTaskFull(ctx, task)
+		if err != nil {
+			layer.Errors = append(layer.Errors, fmt.Sprintf("chunk_%d: %s", idx+1, strings.TrimSpace(err.Error())))
+			continue
+		}
+		if fullResult != nil {
+			layer.ConsumedInputTokens += maxInt(0, fullResult.InputTokens)
+			layer.ConsumedOutputTokens += maxInt(0, fullResult.OutputTokens)
+			tokenSpent += maxInt(0, fullResult.InputTokens) + maxInt(0, fullResult.OutputTokens)
+		} else {
+			layer.ConsumedInputTokens += estInputTokens
+			tokenSpent += estInputTokens
+		}
+		data, err := json.Marshal(raw)
+		if err != nil {
+			layer.Errors = append(layer.Errors, fmt.Sprintf("chunk_%d_marshal: %s", idx+1, strings.TrimSpace(err.Error())))
+			continue
+		}
+		var parsed explanatoryResponse
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			layer.Errors = append(layer.Errors, fmt.Sprintf("chunk_%d_unmarshal: %s", idx+1, strings.TrimSpace(err.Error())))
+			continue
+		}
+		for _, u := range parsed.Units {
+			edgeID := strings.TrimSpace(u.EdgeID)
+			if edgeID == "" {
+				continue
+			}
+			dep, ok := candidateByEdgeID[edgeID]
+			if !ok {
+				continue
+			}
+			unit := mapExplanatoryUnitResponse(dep, rankByEdgeID[edgeID], u)
+			if prev, exists := unitsByEdge[edgeID]; exists && prev.Confidence >= unit.Confidence {
+				continue
+			}
+			unitsByEdge[edgeID] = unit
+			if len(unitsByEdge) >= maxUnits {
+				break
+			}
+		}
+		if tokenSpent >= tokenBudget {
+			break
+		}
+	}
+
+	if len(unitsByEdge) == 0 {
+		layer.Units = deterministicExplanatoryUnits(candidates, maxUnits)
+		// Keep layer usable even if AI parse/execution failed for all chunks.
+		layer.Status = "ready"
+	} else {
+		units := make([]models.DomainExplanatoryUnit, 0, len(unitsByEdge))
+		for _, u := range unitsByEdge {
+			units = append(units, u)
+		}
+		sort.SliceStable(units, func(i, j int) bool {
+			if units[i].DependencyRank == units[j].DependencyRank {
+				return units[i].Confidence > units[j].Confidence
+			}
+			return units[i].DependencyRank < units[j].DependencyRank
+		})
+		if len(units) > maxUnits {
+			units = units[:maxUnits]
+		}
+		layer.Units = units
+	}
+	if len(layer.Errors) > 8 {
+		layer.Errors = append(layer.Errors[:8], fmt.Sprintf("..._%d_more_errors", len(layer.Errors)-8))
+	}
+	layer.UnitCount = len(layer.Units)
+	layer.CoveredDependencyCount = len(layer.Units)
+	if strings.TrimSpace(layer.Status) == "" {
+		layer.Status = "ready"
+	}
+	snapshot.ExplanatoryLayer = layer
+}
+
+func (e *Engine) buildExplanatoryCandidates(contract Contract, g graphSnapshot) []models.CriticalDependency {
+	edges := make([]*models.DependencyEdge, 0, len(g.Edges))
+	for _, edge := range g.Edges {
+		if edge == nil {
+			continue
+		}
+		edges = append(edges, edge)
+	}
+	sort.SliceStable(edges, func(i, j int) bool {
+		return topDependencyScore(edges[i], g) > topDependencyScore(edges[j], g)
+	})
+	maxCandidates := e.gateConfig.ExplanatoryMaxCandidates
+	if maxCandidates <= 0 {
+		maxCandidates = 120
+	}
+	facetNodes := buildFacetNodes(contract, g)
+	out := make([]models.CriticalDependency, 0, minInt(maxCandidates, len(edges)))
+	for i, edge := range edges {
+		if i >= maxCandidates {
+			break
+		}
+		src := g.NodesByID[edge.SourceFragmentID]
+		dst := g.NodesByID[edge.TargetFragmentID]
+		dep := models.CriticalDependency{
+			EdgeID:             strings.TrimSpace(edge.ID),
+			SourceFragmentID:   strings.TrimSpace(edge.SourceFragmentID),
+			TargetFragmentID:   strings.TrimSpace(edge.TargetFragmentID),
+			RelationType:       string(edge.Type),
+			TopDependencyScore: topDependencyScore(edge, g),
+			Confidence:         dependencyConfidence(edge),
+			SourceRefs:         dependencySourceRefs(edge),
+		}
+		if src != nil {
+			dep.SourceCanonicalPath = strings.TrimSpace(src.CanonicalPath)
+		}
+		if dst != nil {
+			dep.TargetCanonicalPath = strings.TrimSpace(dst.CanonicalPath)
+		}
+		dep.FacetKey = inferFacetForDependency(dep, facetNodes)
+		out = append(out, dep)
+	}
+	return out
+}
+
+func chunkCriticalDependenciesByToken(deps []models.CriticalDependency, chunkTokens int) [][]models.CriticalDependency {
+	if len(deps) == 0 {
+		return nil
+	}
+	if chunkTokens <= 0 {
+		chunkTokens = 12000
+	}
+	overhead := 900 // prompt/schema overhead
+	out := make([][]models.CriticalDependency, 0, 8)
+	cur := make([]models.CriticalDependency, 0, 24)
+	curTokens := overhead
+	push := func() {
+		if len(cur) == 0 {
+			return
+		}
+		out = append(out, cur)
+		cur = make([]models.CriticalDependency, 0, 24)
+		curTokens = overhead
+	}
+	for _, dep := range deps {
+		itemTokens := len(asJSON(dep))/4 + 40
+		if curTokens+itemTokens > chunkTokens && len(cur) > 0 {
+			push()
+		}
+		cur = append(cur, dep)
+		curTokens += itemTokens
+	}
+	push()
+	return out
+}
+
+func buildExplanatoryPrompt(contract Contract, originalQuery, thesisContext string, chunkIndex, totalChunks int, deps []models.CriticalDependency) string {
+	if strings.TrimSpace(originalQuery) == "" {
+		originalQuery = "(not provided)"
+	}
+	return strings.TrimSpace(fmt.Sprintf(`
+Return JSON only:
+{
+  "units": [
+    {
+      "edgeId": "...",
+      "mechanism": "...",
+      "roleInThesis": "...",
+      "explanation": "...",
+      "confidence": 0.0,
+      "anchorNodeIds": ["sourceFragmentId","targetFragmentId"],
+      "anchorEdgeIds": ["edgeId"],
+      "evidenceRefs": ["sourceRef1","sourceRef2"]
+    }
+  ]
+}
+
+Rules:
+- Use ONLY edgeId values from the provided dependency list.
+- Explain mechanism in domain context (not generic node description).
+- Keep explanation concise (1-2 sentences per unit).
+- Prefer explicit policy/mechanism words from relationType.
+- If evidenceRefs are unavailable, return empty array.
+
+Domain context:
+- contractType: %s
+- title: %s
+- description: %s
+- facets: %s
+- originalQuery: %s
+- thesisContext: %s
+- chunk: %d/%d
+
+Dependency candidates:
+%s
+`, contract.ContractType, contract.Title, contract.Description, asJSON(contract.Facets), originalQuery, thesisContext, chunkIndex, totalChunks, asJSON(deps)))
+}
+
+func mapExplanatoryUnitResponse(dep models.CriticalDependency, rank int, in explanatoryUnitResponse) models.DomainExplanatoryUnit {
+	edgeID := strings.TrimSpace(dep.EdgeID)
+	anchorEdgeIDs := cleanStringList(in.AnchorEdgeIDs, 4)
+	if len(anchorEdgeIDs) == 0 {
+		anchorEdgeIDs = []string{edgeID}
+	}
+	anchorNodeIDs := cleanStringList(in.AnchorNodeIDs, 4)
+	if len(anchorNodeIDs) == 0 {
+		if strings.TrimSpace(dep.SourceFragmentID) != "" {
+			anchorNodeIDs = append(anchorNodeIDs, strings.TrimSpace(dep.SourceFragmentID))
+		}
+		if strings.TrimSpace(dep.TargetFragmentID) != "" {
+			anchorNodeIDs = append(anchorNodeIDs, strings.TrimSpace(dep.TargetFragmentID))
+		}
+	}
+	mechanism := strings.TrimSpace(in.Mechanism)
+	if mechanism == "" {
+		mechanism = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(dep.RelationType), "_", " "))
+	}
+	role := strings.TrimSpace(in.RoleInThesis)
+	if role == "" {
+		role = fmt.Sprintf("dependency in %s domain mechanism", strings.TrimSpace(dep.FacetKey))
+	}
+	explanation := strings.TrimSpace(in.Explanation)
+	if explanation == "" {
+		explanation = fmt.Sprintf(
+			"%s -> %s via %s contributes to the domain mechanism and influences thesis outcomes.",
+			shortCanonicalForExplanation(dep.SourceCanonicalPath),
+			shortCanonicalForExplanation(dep.TargetCanonicalPath),
+			strings.ToLower(strings.ReplaceAll(strings.TrimSpace(dep.RelationType), "_", " ")),
+		)
+	}
+	conf := clamp01(in.Confidence)
+	if conf == 0 {
+		conf = clamp01(0.35 + 0.35*dep.TopDependencyScore + 0.30*dep.Confidence)
+	}
+	return models.DomainExplanatoryUnit{
+		UnitID:              explanatoryUnitID(edgeID, rank),
+		DependencyEdgeID:    edgeID,
+		DependencyRank:      rank,
+		TopDependencyScore:  dep.TopDependencyScore,
+		RelationType:        strings.TrimSpace(dep.RelationType),
+		FacetKey:            strings.TrimSpace(dep.FacetKey),
+		SourceCanonicalPath: strings.TrimSpace(dep.SourceCanonicalPath),
+		TargetCanonicalPath: strings.TrimSpace(dep.TargetCanonicalPath),
+		AnchorNodeIDs:       anchorNodeIDs,
+		AnchorEdgeIDs:       anchorEdgeIDs,
+		Mechanism:           mechanism,
+		RoleInThesis:        role,
+		ExplanationText:     explanation,
+		EvidenceRefs:        cleanStringList(append(cleanStringList(in.EvidenceRefs, 6), dep.SourceRefs...), 6),
+		Confidence:          conf,
+	}
+}
+
+func deterministicExplanatoryUnits(deps []models.CriticalDependency, maxUnits int) []models.DomainExplanatoryUnit {
+	if maxUnits <= 0 {
+		maxUnits = 120
+	}
+	out := make([]models.DomainExplanatoryUnit, 0, minInt(maxUnits, len(deps)))
+	for i, dep := range deps {
+		if i >= maxUnits {
+			break
+		}
+		relation := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(dep.RelationType), "_", " "))
+		if relation == "" {
+			relation = "dependency"
+		}
+		role := "material mechanism in domain thesis"
+		if strings.TrimSpace(dep.FacetKey) != "" {
+			role = fmt.Sprintf("material mechanism in facet '%s'", strings.TrimSpace(dep.FacetKey))
+		}
+		out = append(out, models.DomainExplanatoryUnit{
+			UnitID:              explanatoryUnitID(dep.EdgeID, i+1),
+			DependencyEdgeID:    strings.TrimSpace(dep.EdgeID),
+			DependencyRank:      i + 1,
+			TopDependencyScore:  dep.TopDependencyScore,
+			RelationType:        strings.TrimSpace(dep.RelationType),
+			FacetKey:            strings.TrimSpace(dep.FacetKey),
+			SourceCanonicalPath: strings.TrimSpace(dep.SourceCanonicalPath),
+			TargetCanonicalPath: strings.TrimSpace(dep.TargetCanonicalPath),
+			AnchorNodeIDs: cleanStringList([]string{
+				strings.TrimSpace(dep.SourceFragmentID),
+				strings.TrimSpace(dep.TargetFragmentID),
+			}, 4),
+			AnchorEdgeIDs: []string{strings.TrimSpace(dep.EdgeID)},
+			Mechanism:     relation,
+			RoleInThesis:  role,
+			ExplanationText: fmt.Sprintf(
+				"%s affects %s through %s; this dependency is part of the domain explanatory layer.",
+				shortCanonicalForExplanation(dep.SourceCanonicalPath),
+				shortCanonicalForExplanation(dep.TargetCanonicalPath),
+				relation,
+			),
+			EvidenceRefs: cleanStringList(dep.SourceRefs, 6),
+			Confidence:   clamp01(0.35 + 0.35*dep.TopDependencyScore + 0.30*dep.Confidence),
+		})
+	}
+	return out
+}
+
+func explanatoryUnitID(edgeID string, rank int) string {
+	base := strings.TrimSpace(edgeID)
+	if base == "" {
+		base = fmt.Sprintf("rank_%d", rank)
+	}
+	sum := sha1.Sum([]byte(fmt.Sprintf("%s|%d", base, rank)))
+	return "exu_" + hex.EncodeToString(sum[:])[:16]
+}
+
+func shortCanonicalForExplanation(cp string) string {
+	cp = strings.TrimSpace(cp)
+	if cp == "" {
+		return "unknown"
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) == 0 {
+		return cp
+	}
+	last := strings.TrimSpace(parts[len(parts)-1])
+	if last == "" {
+		return cp
+	}
+	return strings.ReplaceAll(last, "-", " ")
+}
+
+func cleanStringList(in []string, maxItems int) []string {
+	if maxItems <= 0 {
+		maxItems = len(in)
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, minInt(maxItems, len(in)))
+	for _, v := range in {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+		if len(out) >= maxItems {
+			break
+		}
+	}
+	return out
+}
+
+func cloneDomainExplanatoryLayer(in *models.DomainExplanatoryLayer) *models.DomainExplanatoryLayer {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Errors = append([]string(nil), in.Errors...)
+	out.Units = append([]models.DomainExplanatoryUnit(nil), in.Units...)
+	return &out
+}
+
+func dependencyHashFromCriticalDependencies(deps []models.CriticalDependency) string {
+	if len(deps) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(deps))
+	for _, d := range deps {
+		edgeID := strings.TrimSpace(d.EdgeID)
+		if edgeID == "" {
+			continue
+		}
+		keys = append(keys, edgeID)
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	sum := sha1.Sum([]byte(strings.Join(keys, "|")))
+	return hex.EncodeToString(sum[:])
 }
 
 type narrativeResponse struct {

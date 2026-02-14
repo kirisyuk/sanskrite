@@ -18,6 +18,17 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
+type geoObjectResponseItem struct {
+	ID            string              `json:"id"`
+	CanonicalPath string              `json:"canonicalPath"`
+	Type          models.FragmentType `json:"type"`
+	Label         string              `json:"label,omitempty"`
+	Description   string              `json:"description,omitempty"`
+	Status        string              `json:"status,omitempty"`
+	Coordinates   *models.Coordinates `json:"coordinates,omitempty"`
+	UpdatedAt     time.Time           `json:"updatedAt"`
+}
+
 // ListFragments получает список HorizonFragment через Lens scope
 func (h *HorizonHandlers) ListFragments(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -65,6 +76,76 @@ func (h *HorizonHandlers) ListFragments(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// ListGeoObjects returns geo-bound fragments for map rendering.
+// GET /api/horizon/geo-objects?limit=2000&pathPrefix=/loc/
+func (h *HorizonHandlers) ListGeoObjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if httputil.GetAuthInfo(r.Context()) == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	limit := 2000
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	pathPrefix := strings.TrimSpace(r.URL.Query().Get("pathPrefix"))
+	onlyLoc := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("onlyLoc")), "1") ||
+		strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("onlyLoc")), "true")
+	if pathPrefix == "" && onlyLoc {
+		pathPrefix = "/loc/"
+	}
+
+	fragments, err := h.service.Fragments().ListGeoBound(r.Context(), limit, pathPrefix)
+	if err != nil {
+		// IMPORTANT: Cloud Run request logs only show HTTP 500; without explicit logging
+		// we lose the underlying Firestore error (e.g. missing composite index).
+		log.Printf("ListGeoObjects error: limit=%d pathPrefix=%q: %v", limit, pathPrefix, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	items := make([]geoObjectResponseItem, 0, len(fragments))
+	for _, f := range fragments {
+		if f == nil || f.Coordinates == nil {
+			continue
+		}
+		label := strings.TrimSpace(f.Labels["en"])
+		if label == "" {
+			label = strings.TrimSpace(f.Identifiers["legalName"])
+		}
+		if label == "" {
+			label = strings.TrimSpace(f.Identifiers["shortName"])
+		}
+		items = append(items, geoObjectResponseItem{
+			ID:            f.ID,
+			CanonicalPath: f.CanonicalPath,
+			Type:          f.Type,
+			Label:         label,
+			Description:   strings.TrimSpace(f.Description),
+			Status:        strings.TrimSpace(f.Governance.Status),
+			Coordinates:   f.Coordinates,
+			UpdatedAt:     f.UpdatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"items":      items,
+		"total":      len(items),
+		"limit":      limit,
+		"pathPrefix": pathPrefix,
+	})
 }
 
 // GetFragment получает HorizonFragment по ID

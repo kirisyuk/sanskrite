@@ -100,6 +100,41 @@ type DomainThesis struct {
 	Confidence float64 `json:"confidence,omitempty" firestore:"confidence,omitempty"`
 }
 
+type DomainExplanatoryUnit struct {
+	UnitID              string   `json:"unitId,omitempty" firestore:"unitId,omitempty"`
+	DependencyEdgeID    string   `json:"dependencyEdgeId,omitempty" firestore:"dependencyEdgeId,omitempty"`
+	DependencyRank      int      `json:"dependencyRank,omitempty" firestore:"dependencyRank,omitempty"`
+	TopDependencyScore  float64  `json:"topDependencyScore,omitempty" firestore:"topDependencyScore,omitempty"`
+	RelationType        string   `json:"relationType,omitempty" firestore:"relationType,omitempty"`
+	FacetKey            string   `json:"facetKey,omitempty" firestore:"facetKey,omitempty"`
+	SourceCanonicalPath string   `json:"sourceCanonicalPath,omitempty" firestore:"sourceCanonicalPath,omitempty"`
+	TargetCanonicalPath string   `json:"targetCanonicalPath,omitempty" firestore:"targetCanonicalPath,omitempty"`
+	AnchorNodeIDs       []string `json:"anchorNodeIds,omitempty" firestore:"anchorNodeIds,omitempty"`
+	AnchorEdgeIDs       []string `json:"anchorEdgeIds,omitempty" firestore:"anchorEdgeIds,omitempty"`
+	Mechanism           string   `json:"mechanism,omitempty" firestore:"mechanism,omitempty"`
+	RoleInThesis        string   `json:"roleInThesis,omitempty" firestore:"roleInThesis,omitempty"`
+	ExplanationText     string   `json:"explanationText,omitempty" firestore:"explanationText,omitempty"`
+	EvidenceRefs        []string `json:"evidenceRefs,omitempty" firestore:"evidenceRefs,omitempty"`
+	Confidence          float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
+}
+
+type DomainExplanatoryLayer struct {
+	Status                 string                  `json:"status,omitempty" firestore:"status,omitempty"` // ready|stale|failed|pending
+	Phase                  string                  `json:"phase,omitempty" firestore:"phase,omitempty"`   // initial|final
+	GeneratedAt            time.Time               `json:"generatedAt,omitempty" firestore:"generatedAt,omitempty"`
+	ThesisContext          string                  `json:"thesisContext,omitempty" firestore:"thesisContext,omitempty"`
+	CandidateCount         int                     `json:"candidateCount,omitempty" firestore:"candidateCount,omitempty"`
+	UnitCount              int                     `json:"unitCount,omitempty" firestore:"unitCount,omitempty"`
+	CoveredDependencyCount int                     `json:"coveredDependencyCount,omitempty" firestore:"coveredDependencyCount,omitempty"`
+	TokenBudget            int                     `json:"tokenBudget,omitempty" firestore:"tokenBudget,omitempty"`
+	ConsumedInputTokens    int                     `json:"consumedInputTokens,omitempty" firestore:"consumedInputTokens,omitempty"`
+	ConsumedOutputTokens   int                     `json:"consumedOutputTokens,omitempty" firestore:"consumedOutputTokens,omitempty"`
+	SourceDependencyHash   string                  `json:"sourceDependencyHash,omitempty" firestore:"sourceDependencyHash,omitempty"`
+	Stale                  bool                    `json:"stale,omitempty" firestore:"stale,omitempty"`
+	Errors                 []string                `json:"errors,omitempty" firestore:"errors,omitempty"`
+	Units                  []DomainExplanatoryUnit `json:"units,omitempty" firestore:"units,omitempty"`
+}
+
 type Alternative struct {
 	Title         string  `json:"title,omitempty" firestore:"title,omitempty"`
 	Description   string  `json:"description,omitempty" firestore:"description,omitempty"`
@@ -147,6 +182,7 @@ type DomainAnswerSnapshot struct {
 	ImpactPaths              []ImpactPath               `json:"impactPaths,omitempty" firestore:"impactPaths,omitempty"`
 	DataGaps                 []DataGap                  `json:"dataGaps,omitempty" firestore:"dataGaps,omitempty"`
 	Thesis                   DomainThesis               `json:"thesis" firestore:"thesis"`
+	ExplanatoryLayer         *DomainExplanatoryLayer    `json:"explanatoryLayer,omitempty" firestore:"explanatoryLayer,omitempty"`
 	Alternatives             []Alternative              `json:"alternatives,omitempty" firestore:"alternatives,omitempty"`
 	ObjectiveCheck           ObjectiveCheck             `json:"objectiveCheck" firestore:"objectiveCheck"`
 	FacetSummary             map[string]FacetSummary    `json:"facetSummary,omitempty" firestore:"facetSummary,omitempty"`

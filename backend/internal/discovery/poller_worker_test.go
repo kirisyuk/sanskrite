@@ -33,6 +33,18 @@ func TestCadenceToDuration(t *testing.T) {
 	if d := cadenceToDuration(ds); d != 6*time.Hour {
 		t.Fatalf(">=24h should be 6h, got %v", d)
 	}
+
+	ds.Kind = models.SourceKindHorizonFeed
+	ds.LastFoundAt = ago(72 * time.Hour)
+	if d := cadenceToDuration(ds); d != 30*time.Minute {
+		t.Fatalf("horizon_monitor_feed should default to 30m, got %v", d)
+	}
+
+	override := 15
+	ds.Details.PollIntervalMinutes = &override
+	if d := cadenceToDuration(ds); d != 15*time.Minute {
+		t.Fatalf("pollIntervalMinutes override should be 15m, got %v", d)
+	}
 }
 
 // (no-op)

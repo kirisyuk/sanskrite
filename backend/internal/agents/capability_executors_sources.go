@@ -310,26 +310,32 @@ func (e *SourceCreateExecutor) ValidateInput(input map[string]interface{}) error
 	if !ok || kind == "" {
 		return fmt.Errorf("kind is required and must be a non-empty string")
 	}
-	if kind != "telegram_channel" && kind != "rss" && kind != "web" {
-		return fmt.Errorf("kind must be telegram_channel, rss, or web")
+	kind = models.NormalizeSourceKind(kind)
+	if kind != models.SourceKindTelegramChannel && kind != models.SourceKindRSS && kind != models.SourceKindWeb && kind != models.SourceKindHorizonFeed {
+		return fmt.Errorf("kind must be telegram_channel, rss, web, or horizon_monitor_feed")
 	}
 
 	// Проверка обязательных полей в зависимости от kind
 	switch kind {
-	case "telegram_channel":
+	case models.SourceKindTelegramChannel:
 		channelUsername, ok := input["channelUsername"].(string)
 		if !ok || channelUsername == "" {
 			return fmt.Errorf("channelUsername is required for telegram_channel kind")
 		}
-	case "rss":
+	case models.SourceKindRSS:
 		rssURL, ok := input["rssUrl"].(string)
 		if !ok || rssURL == "" {
 			return fmt.Errorf("rssUrl is required for rss kind")
 		}
-	case "web":
+	case models.SourceKindWeb:
 		uri, ok := input["uri"].(string)
 		if !ok || uri == "" {
 			return fmt.Errorf("uri is required for web kind")
+		}
+	case models.SourceKindHorizonFeed:
+		uri, ok := input["uri"].(string)
+		if !ok || uri == "" {
+			return fmt.Errorf("uri is required for horizon_monitor_feed kind")
 		}
 	}
 
@@ -338,6 +344,7 @@ func (e *SourceCreateExecutor) ValidateInput(input map[string]interface{}) error
 
 func (e *SourceCreateExecutor) Execute(ctx context.Context, stepCtx *AgentStepContext) (*CapabilityResult, error) {
 	kind, _ := stepCtx.Input["kind"].(string)
+	kind = models.NormalizeSourceKind(kind)
 	displayName, _ := stepCtx.Input["displayName"].(string)
 	status, _ := stepCtx.Input["status"].(string)
 	if status == "" {
@@ -347,25 +354,36 @@ func (e *SourceCreateExecutor) Execute(ctx context.Context, stepCtx *AgentStepCo
 	// Построить SourceDetails
 	details := models.SourceDetails{}
 	switch kind {
-	case "telegram_channel":
+	case models.SourceKindTelegramChannel:
 		channelUsername, _ := stepCtx.Input["channelUsername"].(string)
 		channelUsername = strings.TrimPrefix(strings.TrimSpace(channelUsername), "@")
 		details.ChannelUsername = &channelUsername
-	case "rss":
+	case models.SourceKindRSS:
 		rssURL, _ := stepCtx.Input["rssUrl"].(string)
 		details.RSSURL = &rssURL
-	case "web":
+	case models.SourceKindWeb:
 		uri, _ := stepCtx.Input["uri"].(string)
 		details.URI = &uri
+	case models.SourceKindHorizonFeed:
+		uri, _ := stepCtx.Input["uri"].(string)
+		details.URI = &uri
+		if v, ok := stepCtx.Input["pollIntervalMinutes"].(float64); ok {
+			n := int(v)
+			if n > 0 {
+				details.PollIntervalMinutes = &n
+			}
+		}
 	}
 
 	// Генерировать displayName если не указан
 	if displayName == "" {
-		if kind == "telegram_channel" && details.ChannelUsername != nil {
+		if kind == models.SourceKindTelegramChannel && details.ChannelUsername != nil {
 			displayName = "@" + *details.ChannelUsername
-		} else if kind == "rss" && details.RSSURL != nil {
+		} else if kind == models.SourceKindRSS && details.RSSURL != nil {
 			displayName = *details.RSSURL
-		} else if kind == "web" && details.URI != nil {
+		} else if kind == models.SourceKindWeb && details.URI != nil {
+			displayName = *details.URI
+		} else if kind == models.SourceKindHorizonFeed && details.URI != nil {
 			displayName = *details.URI
 		} else {
 			displayName = kind + " source"

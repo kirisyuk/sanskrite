@@ -27,6 +27,7 @@ var canonicalPrefixToType = []struct {
 	{prefix: "/event/", typ: models.FragmentTypeEvent},
 	{prefix: "/sphere/", typ: models.FragmentTypeSphere},
 	{prefix: "/supply-link/", typ: models.FragmentTypeSupplyLink},
+	{prefix: "/track/", typ: models.FragmentTypeTrack},
 }
 
 // ExpectedTypeFromCanonicalPath returns expected FragmentType by canonicalPath prefix.

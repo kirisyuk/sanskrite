@@ -3,8 +3,12 @@ package scout
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
@@ -49,15 +53,17 @@ type ExecuteDataSourceResult struct {
 
 // ExecuteDataSource выполняет запрос к DataSource и возвращает контент
 func (e *SourceExecutor) ExecuteDataSource(ctx context.Context, source *models.DataSource) (*ExecuteDataSourceResult, error) {
-	switch source.Kind {
-	case "web":
+	switch models.NormalizeSourceKind(source.Kind) {
+	case models.SourceKindWeb:
 		return e.executeWebSource(ctx, source)
-	case "rss":
+	case models.SourceKindRSS:
 		return e.executeRSSSource(ctx, source)
-	case "telegram_channel":
+	case models.SourceKindTelegramChannel:
 		return e.executeTelegramSource(ctx, source)
 	case "document":
 		return e.executeDocumentSource(ctx, source)
+	case models.SourceKindHorizonFeed:
+		return e.executeHorizonMonitorFeedSource(ctx, source)
 	default:
 		return nil, fmt.Errorf("unsupported source kind: %s", source.Kind)
 	}
@@ -75,12 +81,12 @@ func (e *SourceExecutor) executeWebSource(ctx context.Context, source *models.Da
 
 	// Сохраняем как Document для прослеживаемости
 	document := &models.Document{
-		TenantID:    source.TenantID,
-		SourceID:    source.ID,
-		URL:         *source.Details.URI,
-		FullText:    result.Text,
-		ContentType: result.ContentType,
-		Status:      "new",
+		TenantID:     source.TenantID,
+		SourceID:     source.ID,
+		URL:          *source.Details.URI,
+		FullText:     result.Text,
+		ContentType:  result.ContentType,
+		Status:       "new",
 		DocumentPath: fmt.Sprintf("web/%s", source.ID),
 	}
 	documentID, err := e.documentsRepo.Create(ctx, document)
@@ -147,7 +153,7 @@ func (e *SourceExecutor) executeRSSSource(ctx context.Context, source *models.Da
 	}
 
 	return &ExecuteDataSourceResult{
-		Content:     content,
+		Content: content,
 		// Use first document if present; RSS normalization may not always create documents.
 		DocumentID: func() string {
 			if len(documentIDs) > 0 {
@@ -268,3 +274,81 @@ func (e *SourceExecutor) executeDocumentSource(ctx context.Context, source *mode
 	}, nil
 }
 
+func (e *SourceExecutor) executeHorizonMonitorFeedSource(ctx context.Context, source *models.DataSource) (*ExecuteDataSourceResult, error) {
+	if source.Details.URI == nil || strings.TrimSpace(*source.Details.URI) == "" {
+		return nil, fmt.Errorf("horizon_monitor_feed source missing URI")
+	}
+	if e.documentsRepo == nil {
+		return nil, fmt.Errorf("Documents repository not configured")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSpace(*source.Details.URI), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build request: %w", err)
+	}
+	for k, v := range source.Details.RequestHeaders {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		req.Header.Set(k, v)
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch horizon monitor feed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("horizon monitor feed returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, fmt.Errorf("failed reading horizon monitor feed body: %w", err)
+	}
+
+	content := strings.TrimSpace(string(body))
+	if content == "" {
+		return nil, fmt.Errorf("horizon monitor feed returned empty content")
+	}
+
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "application/json") {
+		var parsed any
+		if err := json.Unmarshal(body, &parsed); err == nil {
+			if pretty, merr := json.MarshalIndent(parsed, "", "  "); merr == nil {
+				content = string(pretty)
+			}
+		}
+	}
+
+	now := time.Now().UTC()
+	document := &models.Document{
+		TenantID:     source.TenantID,
+		SourceID:     source.ID,
+		URL:          strings.TrimSpace(*source.Details.URI),
+		Title:        source.DisplayName,
+		FullText:     content,
+		ContentType:  "application/json",
+		DocumentType: "feed_snapshot",
+		Status:       "new",
+		DocumentPath: fmt.Sprintf("horizon-monitor/%s/%s", source.ID, now.Format("20060102T150405")),
+	}
+	documentID, err := e.documentsRepo.Create(ctx, document)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create document: %w", err)
+	}
+
+	hash := sha256.Sum256([]byte(content))
+	hashStr := fmt.Sprintf("sha256:%x", hash)
+
+	return &ExecuteDataSourceResult{
+		Content:     content,
+		DocumentID:  documentID,
+		SourceIDs:   []string{source.ID},
+		DocumentIDs: []string{documentID},
+		SourceURL:   strings.TrimSpace(*source.Details.URI),
+		SourceHash:  hashStr,
+		SourceType:  "horizon_monitor_feed",
+	}, nil
+}

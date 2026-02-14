@@ -239,16 +239,20 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 			"rawBytes": base64.StdEncoding.EncodeToString([]byte(content)),
 		},
 		"structData": map[string]interface{}{
-			"tenantId":      fragment.TenantID,
-			"type":          "horizon_fragment",
-			"canonicalPath": fragment.CanonicalPath,
-			"entityPath":    fragment.EntityPath,
-			"sectorPath":    fragment.SectorPath,
-			"indexPaths":    fragment.IndexPaths,
-			"status":        fragment.Governance.Status,
-			"updatedAt":     fragment.UpdatedAt.Format(time.RFC3339),
-			"createdAt":     fragment.CreatedAt.Format(time.RFC3339),
-			"uri":           gcsURI,
+			"tenantId":       fragment.TenantID,
+			"type":           "horizon_fragment",
+			"canonicalPath":  fragment.CanonicalPath,
+			"entityPath":     fragment.EntityPath,
+			"sectorPath":     fragment.SectorPath,
+			"indexPaths":     fragment.IndexPaths,
+			"coordinates":    coordinatesToStructData(fragment.Coordinates),
+			"homeLocation":   locationToStructData(fragment.HomeLocation),
+			"horizonMonitor": horizonMonitorToStructData(fragment.EffectiveHorizonMonitor()),
+			"track":          trackToStructData(fragment.Track),
+			"status":         fragment.Governance.Status,
+			"updatedAt":      fragment.UpdatedAt.Format(time.RFC3339),
+			"createdAt":      fragment.CreatedAt.Format(time.RFC3339),
+			"uri":            gcsURI,
 		},
 	}
 
@@ -292,6 +296,141 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 	}
 
 	return nil
+}
+
+func coordinatesToStructData(c *models.Coordinates) map[string]interface{} {
+	if c == nil || !models.IsValidCoordinates(c.Lat, c.Lon) {
+		return nil
+	}
+	return map[string]interface{}{
+		"lat": c.Lat,
+		"lon": c.Lon,
+	}
+}
+
+func locationToStructData(loc *models.Location) map[string]interface{} {
+	if loc == nil {
+		return nil
+	}
+	out := map[string]interface{}{}
+	if v := strings.TrimSpace(loc.Name); v != "" {
+		out["name"] = v
+	}
+	if loc.ISO3166_1 != nil && strings.TrimSpace(*loc.ISO3166_1) != "" {
+		out["iso3166_1"] = strings.TrimSpace(*loc.ISO3166_1)
+	}
+	if loc.ISO3166_2 != nil && strings.TrimSpace(*loc.ISO3166_2) != "" {
+		out["iso3166_2"] = strings.TrimSpace(*loc.ISO3166_2)
+	}
+	if loc.ISO6709 != nil && strings.TrimSpace(*loc.ISO6709) != "" {
+		out["iso6709"] = strings.TrimSpace(*loc.ISO6709)
+		if lat, lon, ok := models.ParseISO6709Coordinates(*loc.ISO6709); ok {
+			out["lat"] = lat
+			out["lon"] = lon
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func horizonMonitorToStructData(wm *models.HorizonMonitorFragmentData) map[string]interface{} {
+	if wm == nil {
+		return nil
+	}
+	out := map[string]interface{}{}
+	if wm.ObjectKind != "" {
+		out["objectKind"] = string(wm.ObjectKind)
+	}
+	if v := strings.TrimSpace(wm.SourceObjectID); v != "" {
+		out["sourceObjectId"] = v
+	}
+	if wm.Coordinates != nil {
+		out["coordinates"] = map[string]interface{}{
+			"lat": wm.Coordinates.Lat,
+			"lon": wm.Coordinates.Lon,
+		}
+	}
+	if len(wm.Countries) > 0 {
+		out["countries"] = wm.Countries
+	}
+	if len(wm.Parties) > 0 {
+		out["parties"] = wm.Parties
+	}
+	if v := strings.TrimSpace(wm.Status); v != "" {
+		out["status"] = v
+	}
+	if v := strings.TrimSpace(wm.Operator); v != "" {
+		out["operator"] = v
+	}
+	if v := strings.TrimSpace(wm.FacilityType); v != "" {
+		out["facilityType"] = v
+	}
+	if v := strings.TrimSpace(wm.MarketType); v != "" {
+		out["marketType"] = v
+	}
+	if v := strings.TrimSpace(wm.PipelineType); v != "" {
+		out["pipelineType"] = v
+	}
+	if v := strings.TrimSpace(wm.PortType); v != "" {
+		out["portType"] = v
+	}
+	if v := strings.TrimSpace(wm.Mineral); v != "" {
+		out["mineral"] = v
+	}
+	if v := strings.TrimSpace(wm.Capacity); v != "" {
+		out["capacity"] = v
+	}
+	if wm.CapacityTbps != nil {
+		out["capacityTbps"] = *wm.CapacityTbps
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func trackToStructData(tr *models.TrackFragmentData) map[string]interface{} {
+	if tr == nil {
+		return nil
+	}
+	out := map[string]interface{}{
+		"lat":        tr.Lat,
+		"lon":        tr.Lon,
+		"lastSeenAt": tr.LastSeenAt.Format(time.RFC3339),
+	}
+	if tr.Kind != "" {
+		out["kind"] = string(tr.Kind)
+	}
+	if v := strings.TrimSpace(tr.ObjectType); v != "" {
+		out["objectType"] = v
+	}
+	if v := strings.TrimSpace(tr.ExternalTrackID); v != "" {
+		out["externalTrackId"] = v
+	}
+	if v := strings.TrimSpace(tr.SourceID); v != "" {
+		out["sourceId"] = v
+	}
+	if tr.HeadingDeg != nil {
+		out["headingDeg"] = *tr.HeadingDeg
+	}
+	if tr.SpeedKts != nil {
+		out["speedKts"] = *tr.SpeedKts
+	}
+	if tr.AltitudeM != nil {
+		out["altitudeM"] = *tr.AltitudeM
+	}
+	if tr.DepthM != nil {
+		out["depthM"] = *tr.DepthM
+	}
+	if tr.Confidence != 0 {
+		out["confidence"] = tr.Confidence
+	}
+	if v := strings.TrimSpace(tr.GeoHash); v != "" {
+		out["geoHash"] = v
+	}
+	return out
 }
 
 // Create создает новый HorizonFragment
@@ -887,6 +1026,110 @@ func (r *HorizonFragmentsRepository) ListByStatus(ctx context.Context, status st
 		fragments = append(fragments, &fragment)
 	}
 	return fragments, nil
+}
+
+// ListGeoBound returns global fragments with resolved valid coordinates for map rendering.
+// Coordinates are resolved in best-effort order:
+//  1. fragment.coordinates
+//  2. fragment.track
+//  3. fragment.horizonMonitor/worldMonitor coordinates
+//  4. homeLocation.iso6709
+//
+// If pathPrefix is not empty, only canonical paths with that prefix are scanned.
+func (r *HorizonFragmentsRepository) ListGeoBound(
+	ctx context.Context,
+	limit int,
+	pathPrefix string,
+) ([]*models.HorizonFragment, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	scanLimit := limit * 4
+	if scanLimit < limit+200 {
+		scanLimit = limit + 200
+	}
+	if scanLimit > 20000 {
+		scanLimit = 20000
+	}
+
+	prefix := strings.TrimSpace(pathPrefix)
+	var fsQ firestore.Query
+	if prefix != "" {
+		if !strings.HasPrefix(prefix, "/") {
+			prefix = "/" + prefix
+		}
+		fsQ = r.col.
+			Where("tenantId", "==", "global").
+			Where("canonicalPath", ">=", prefix).
+			Where("canonicalPath", "<", prefix+"\ufffd").
+			OrderBy("canonicalPath", firestore.Asc).
+			Limit(scanLimit)
+	} else {
+		fsQ = r.col.
+			Where("tenantId", "==", "global").
+			Where("governance.status", "==", "ACTIVE").
+			OrderBy("updatedAt", firestore.Desc).
+			Limit(scanLimit)
+	}
+
+	docs, err := fsQ.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	capHint := len(docs)
+	if capHint > limit {
+		capHint = limit
+	}
+	out := make([]*models.HorizonFragment, 0, capHint)
+	seen := make(map[string]struct{}, len(docs))
+	for _, d := range docs {
+		var fragment models.HorizonFragment
+		if err := d.DataTo(&fragment); err != nil {
+			continue
+		}
+		if fragment.ID == "" {
+			continue
+		}
+		if _, exists := seen[fragment.ID]; exists {
+			continue
+		}
+		if lat, lon, ok := resolveFragmentCoordinates(&fragment); ok {
+			fragment.Coordinates = &models.Coordinates{Lat: lat, Lon: lon}
+		} else {
+			continue
+		}
+		seen[fragment.ID] = struct{}{}
+		out = append(out, &fragment)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func resolveFragmentCoordinates(fragment *models.HorizonFragment) (float64, float64, bool) {
+	if fragment == nil {
+		return 0, 0, false
+	}
+	if fragment.Coordinates != nil && models.IsValidCoordinates(fragment.Coordinates.Lat, fragment.Coordinates.Lon) {
+		return fragment.Coordinates.Lat, fragment.Coordinates.Lon, true
+	}
+	if fragment.Track != nil && models.IsValidCoordinates(fragment.Track.Lat, fragment.Track.Lon) {
+		return fragment.Track.Lat, fragment.Track.Lon, true
+	}
+	if wm := fragment.EffectiveHorizonMonitor(); wm != nil && wm.Coordinates != nil &&
+		models.IsValidCoordinates(wm.Coordinates.Lat, wm.Coordinates.Lon) {
+		return wm.Coordinates.Lat, wm.Coordinates.Lon, true
+	}
+	if fragment.HomeLocation != nil && fragment.HomeLocation.ISO6709 != nil {
+		if lat, lon, ok := models.ParseISO6709Coordinates(*fragment.HomeLocation.ISO6709); ok {
+			return lat, lon, true
+		}
+	}
+	return 0, 0, false
 }
 
 // Query возвращает базовый Firestore query для HorizonFragment коллекции
