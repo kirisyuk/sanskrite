@@ -27,6 +27,10 @@ desktop.ini
 backend/bin/
 backend/build/
 backend/server
+# Local tool binaries (go build -o ... in backend/)
+backend/horizon_smart_dedup
+backend/horizon_*
+backend/check_*
 *.exe
 *.exe~
 *.dll
