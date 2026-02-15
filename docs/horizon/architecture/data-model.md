@@ -16,7 +16,7 @@
   "id": "uuid",
   "tenantId": "global",
   "canonicalPath": "/fac/tsmc/fab-21",
-  "type": "ORGANIZATION | FACILITY | GEO_REGION | SPHERE | EVENT | PRODUCT | PROGRAM | MARKET | PERSON | DEPOSIT",
+  "type": "ORGANIZATION | FACILITY | GEO_REGION | SPHERE | EVENT | PRODUCT | PROGRAM | MARKET | PERSON | DEPOSIT | TRACK",
   "entityPath": "/Infrastructure/Manufacturing/Factory",
   "sectorPath": "/Technology/Semiconductors/Manufacturing",
   "entityId": "uuid",
@@ -1112,4 +1112,3 @@ Horizon интегрируется с существующей системой 
 - [Базовая таксономия](taxonomy.md)
 - [Семантический поиск](semantic-search.md)
 - [Жизненный цикл](../workflows/lifecycle.md)
-

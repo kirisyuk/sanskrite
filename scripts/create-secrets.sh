@@ -105,6 +105,16 @@ create_secret "GEONAMES_USERNAME" "kirisyuk" "Geonames Username"
 create_secret "admin_job_token" "0221989ca2185bde0290361f" "Admin Job Token for Cloud Scheduler"
 create_secret "functions-key" "PLACEHOLDER_UPDATE_ME" "Functions Key"
 
+# External Data Providers
+create_secret "ACLED_ACCESS_TOKEN" "PLACEHOLDER_UPDATE_ME" "ACLED API Access Token"
+create_secret "NASA_FIRMS_API_KEY" "PLACEHOLDER_UPDATE_ME" "NASA FIRMS API Key"
+create_secret "FRED_API_KEY" "PLACEHOLDER_UPDATE_ME" "FRED API Key"
+create_secret "EIA_API_KEY" "PLACEHOLDER_UPDATE_ME" "EIA API Key"
+create_secret "FINNHUB_API_KEY" "PLACEHOLDER_UPDATE_ME" "Finnhub API Key"
+create_secret "CLOUDFLARE_API_TOKEN" "PLACEHOLDER_UPDATE_ME" "Cloudflare API Token"
+create_secret "OPENSKY_USERNAME" "PLACEHOLDER_UPDATE_ME" "OpenSky Network Username"
+create_secret "OPENSKY_PASSWORD" "PLACEHOLDER_UPDATE_ME" "OpenSky Network Password"
+
 echo ""
 echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
 echo -e "${GREEN}✓ Secrets creation completed${NC}"

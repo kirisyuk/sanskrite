@@ -1217,6 +1217,26 @@
     - [ ] `backend/internal/horizon/scout/agents/scout_agent.go` → извлекать edge metrics
     - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → требовать metrics для OWNS, INVESTS_IN, SUPPLIES_TO
     - [ ] `docs/horizon/architecture/data-model.md` → документировать edge metrics
+- **Track Entities (Moving Objects) — `/track/...`**
+  - **Контекст**: Для отслеживания перемещаемых объектов (суда, самолеты, грузы) используется отдельный тип фрагментов с высокой частотой обновлений.
+  - **Canonical Path Format** (без брендинга, нейтральный):
+    - `/track/air/{iso_or_global}/{slug}-{hash}` (e.g. `/track/air/us/af1-12345`)
+    - `/track/sea/{iso_or_global}/{slug}-{hash}` (e.g. `/track/sea/imo/9876543`)
+    - `/track/ground/{iso_or_global}/{slug}-{hash}`
+  - **Модель данных**:
+    - `FragmentType`: `TRACK`
+    - **State/Metrics**: `lat`, `lon`, `heading`, `speed`, `altitude` (air), `depth` (sea), `lastSeenAt`, `geoHash`.
+    - **Provenance**: `sourceId`, `confidence`.
+  - **Логика обновления**:
+    - **Критерий**: объект считается "треком" только при наличии валидной геопривязки (не 0,0) + разрешенного типа (vessel, aircraft) + признака трека.
+    - **History vs State**: История позиций пишется в `ontology_facts` (signals) или TimeSeries хранилище. Во фрагменте (`HorizonFragment`) хранится только **latest state** для быстрого доступа и отображения на карте.
+    - `fragment.HorizonMonitor` используется только как переходный контейнер при импорте, но не как основной критерий в runtime.
+  - **Чеклист**:
+    - [ ] Добавить `FragmentTypeTrack` в модели.
+    - [ ] Реализовать `TrackIngest` пайплайн (отдельно от Scout), который обновляет только State фрагмента.
+    - [ ] Настроить TTL или архивную политику для старых треков (чтобы не засорять граф "мертвыми" точками).
+    - [ ] Убедиться, что бренд `worldmonitor` не используется в путях или тегах.
+
 - **Edge Temporal Validity (срок действия связей)**
   - **Проблема**: Связи могут иметь ограниченный срок действия:
     - Инвестировал в прошлом, но **уже вышел**

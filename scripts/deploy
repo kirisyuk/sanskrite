@@ -1366,6 +1366,12 @@ deploy_api() {
 
   # PayPal secrets (optional - PayPal integration will be disabled if not set)
   local paypal_secrets="GEMINI_API_KEY=gemini_api_key:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest,TAVILY_API_KEY=tavily_api_key:latest,ADMIN_JOB_TOKEN=${SECRET_ADMIN_JOB_TOKEN}:latest"
+  
+  # ACLED secrets (optional)
+  if gcloud secrets describe ACLED_ACCESS_TOKEN >/dev/null 2>&1; then
+    paypal_secrets="$paypal_secrets,ACLED_ACCESS_TOKEN=ACLED_ACCESS_TOKEN:latest"
+  fi
+
   if gcloud secrets describe paypal_client_id >/dev/null 2>&1 && gcloud secrets describe paypal_secret >/dev/null 2>&1; then
     paypal_secrets="$paypal_secrets,PAYPAL_CLIENT_ID=paypal_client_id:latest,PAYPAL_SECRET=paypal_secret:latest"
     if gcloud secrets describe paypal_webhook_id >/dev/null 2>&1; then
