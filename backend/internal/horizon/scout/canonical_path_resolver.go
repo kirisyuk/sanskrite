@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/merge"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -220,6 +221,21 @@ func (r *CanonicalPathResolver) Resolve(
 			result.NormalizationSteps = append(result.NormalizationSteps,
 				fmt.Sprintf("found_existing_fragment: %s (id=%s)", result.CanonicalPath, existing.ID))
 			log.Printf("%s Found existing fragment: %s (id=%s)", logPrefix, result.CanonicalPath, existing.ID)
+			return result, nil
+		}
+	}
+
+	// Step 2.5: Abbreviation resolution — redirect abbrev paths to full-name fragments in same geo.
+	// Prevents creating duplicate fragments like /gov/ae/adafsa when /gov/ae/abu-dhabi-agriculture-and-food-safety-authority exists.
+	if r.fragmentsRepo != nil && (strings.HasPrefix(result.CanonicalPath, "/gov/") || strings.HasPrefix(result.CanonicalPath, "/org/")) {
+		abbrevPath := result.CanonicalPath
+		if resolvedPath, existingFrag, ok := merge.ResolveAbbreviationToFull(ctx, abbrevPath, r.fragmentsRepo); ok && existingFrag != nil && existingFrag.ID != "" {
+			atomic.AddInt64(&r.foundExistingByPath, 1)
+			result.CanonicalPath = resolvedPath
+			result.ExistingFragment = existingFrag
+			result.NormalizationSteps = append(result.NormalizationSteps,
+				fmt.Sprintf("abbreviation_resolution: %s -> %s (id=%s)", abbrevPath, resolvedPath, existingFrag.ID))
+			log.Printf("%s Abbreviation resolution: %s -> %s (id=%s)", logPrefix, abbrevPath, resolvedPath, existingFrag.ID)
 			return result, nil
 		}
 	}

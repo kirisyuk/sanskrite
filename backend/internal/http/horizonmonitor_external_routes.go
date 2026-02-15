@@ -1,14 +1,10 @@
 package http
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha1"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/xml"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,14 +12,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 )
 
 // RegisterHorizonMonitorExternalRoutes exposes public /api/* endpoints used by HorizonMonitor sources.
@@ -69,33 +61,33 @@ func (a *horizonMonitorExternalAPI) register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/gdelt-doc", a.handleGDELTDoc)
 	mux.HandleFunc("/api/opensky", a.handleOpenSky)
 	mux.HandleFunc("/api/earthquakes", a.handleUSGSEarthquakes)
-	mux.HandleFunc("/api/ucdp-events", a.handleUCDPGedEvents)
-	mux.HandleFunc("/api/ucdp", a.handleUCDPCountryConflicts)
-	mux.HandleFunc("/api/hapi", a.handleHAPIConflictContext)
-	mux.HandleFunc("/api/climate-anomalies", a.handleClimateAnomalies)
-	mux.HandleFunc("/api/service-status", a.handleServiceStatus)
-	mux.HandleFunc("/api/nga-warnings", a.handleNGAWarnings)
-	mux.HandleFunc("/api/faa-status", a.handleFAAStatus)
+	mux.HandleFunc("/api/ucdp-events", a.handleNotImplemented("ucdp-events"))
+	mux.HandleFunc("/api/ucdp", a.handleNotImplemented("ucdp"))
+	mux.HandleFunc("/api/hapi", a.handleNotImplemented("hapi"))
+	mux.HandleFunc("/api/climate-anomalies", a.handleNotImplemented("climate-anomalies"))
+	mux.HandleFunc("/api/service-status", a.handleNotImplemented("service-status"))
+	mux.HandleFunc("/api/nga-warnings", a.handleNotImplemented("nga-warnings"))
+	mux.HandleFunc("/api/faa-status", a.handleNotImplemented("faa-status"))
 
 	// Query-only proxies/analytics (safe to expose; sources can remain paused until needed).
-	mux.HandleFunc("/api/yahoo-finance", a.handleYahooFinanceProxy)
-	mux.HandleFunc("/api/coingecko", a.handleCoinGecko)
-	mux.HandleFunc("/api/polymarket", a.handlePolymarket)
-	mux.HandleFunc("/api/fred-data", a.handleFRED)
-	mux.HandleFunc("/api/worldbank", a.handleWorldBank)
-	mux.HandleFunc("/api/unhcr-population", a.handleUNHCRPopulation)
-	mux.HandleFunc("/api/worldpop-exposure", a.handleWorldPopExposure)
-	mux.HandleFunc("/api/github-trending", a.handleGitHubTrending)
-	mux.HandleFunc("/api/arxiv", a.handleArxiv)
-	mux.HandleFunc("/api/hackernews", a.handleHackerNews)
-	mux.HandleFunc("/api/macro-signals", a.handleMacroSignals)
-	mux.HandleFunc("/api/etf-flows", a.handleETFFlows)
-	mux.HandleFunc("/api/stablecoin-markets", a.handleStablecoinMarkets)
-	mux.HandleFunc("/api/stock-index", a.handleStockIndex)
-	mux.HandleFunc("/api/risk-scores", a.handleRiskScores)
-	mux.HandleFunc("/api/temporal-baseline", a.handleTemporalBaseline)
-	mux.HandleFunc("/api/eia/petroleum", a.handleEIAPetroleum)
-	mux.HandleFunc("/api/tech-events", a.handleTechEvents)
+	mux.HandleFunc("/api/yahoo-finance", a.handleNotImplemented("yahoo-finance"))
+	mux.HandleFunc("/api/coingecko", a.handleNotImplemented("coingecko"))
+	mux.HandleFunc("/api/polymarket", a.handleNotImplemented("polymarket"))
+	mux.HandleFunc("/api/fred-data", a.handleNotImplemented("fred-data"))
+	mux.HandleFunc("/api/worldbank", a.handleNotImplemented("worldbank"))
+	mux.HandleFunc("/api/unhcr-population", a.handleNotImplemented("unhcr-population"))
+	mux.HandleFunc("/api/worldpop-exposure", a.handleNotImplemented("worldpop-exposure"))
+	mux.HandleFunc("/api/github-trending", a.handleNotImplemented("github-trending"))
+	mux.HandleFunc("/api/arxiv", a.handleNotImplemented("arxiv"))
+	mux.HandleFunc("/api/hackernews", a.handleNotImplemented("hackernews"))
+	mux.HandleFunc("/api/macro-signals", a.handleNotImplemented("macro-signals"))
+	mux.HandleFunc("/api/etf-flows", a.handleNotImplemented("etf-flows"))
+	mux.HandleFunc("/api/stablecoin-markets", a.handleNotImplemented("stablecoin-markets"))
+	mux.HandleFunc("/api/stock-index", a.handleNotImplemented("stock-index"))
+	mux.HandleFunc("/api/risk-scores", a.handleNotImplemented("risk-scores"))
+	mux.HandleFunc("/api/temporal-baseline", a.handleNotImplemented("temporal-baseline"))
+	mux.HandleFunc("/api/eia/petroleum", a.handleNotImplemented("eia-petroleum"))
+	mux.HandleFunc("/api/tech-events", a.handleNotImplemented("tech-events"))
 
 	// Not implemented yet (auth-heavy / websocket relay). Keep endpoint stable.
 	mux.HandleFunc("/api/ais-snapshot", a.handleNotImplemented("ais-snapshot"))

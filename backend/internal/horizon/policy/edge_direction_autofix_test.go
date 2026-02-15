@@ -23,6 +23,23 @@ func TestResolveEdgeDirectionAutoFixMarketInvestsInOrg(t *testing.T) {
 	}
 }
 
+func TestResolveEdgeDirectionAutoFixCommunityFoundedPerson(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeFounded,
+		horizonmodels.FragmentTypeCommunity,
+		horizonmodels.FragmentTypePerson,
+	)
+	if !ok {
+		t.Fatalf("expected auto-fix for COMMUNITY FOUNDED PERSON")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeFounded {
+		t.Fatalf("expected newType FOUNDED (unchanged), got %s", fix.NewType)
+	}
+	if !fix.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true (PERSON founds COMMUNITY)")
+	}
+}
+
 func TestApplyEdgeCanonicalizationPolicyUsesDirectionAutoFix(t *testing.T) {
 	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
 		EdgeType:   horizonmodels.DependencyTypeInvestsIn,
@@ -39,5 +56,25 @@ func TestApplyEdgeCanonicalizationPolicyUsesDirectionAutoFix(t *testing.T) {
 	}
 	if !got.ShouldSwap {
 		t.Fatalf("expected shouldSwap=true")
+	}
+}
+
+func TestApplyEdgeCanonicalizationPolicyHasSubmarketChildToParent(t *testing.T) {
+	// Child (more segments) as source, parent as target -> should swap to parent→child
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:   horizonmodels.DependencyTypeHasSubmarket,
+		SourceType: horizonmodels.FragmentTypeMarket,
+		TargetType: horizonmodels.FragmentTypeMarket,
+		SourcePath: "/market/global/finance/banking/cross-border-payments/b2b",
+		TargetPath: "/market/global/finance/banking/cross-border-payments",
+	})
+	if !got.Changed {
+		t.Fatalf("expected canonicalization change for HAS_SUBMARKET child→parent")
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeHasSubmarket {
+		t.Fatalf("expected HAS_SUBMARKET unchanged, got %s", got.EdgeType)
+	}
+	if !got.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true (parent→child)")
 	}
 }

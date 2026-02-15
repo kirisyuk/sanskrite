@@ -773,6 +773,65 @@ func main() {
 		return
 	}
 
+	// Fast path: --fix-edges-only skips fragment loading, dedup, and merge; only fixes edges
+	if *fixEdgesOnly {
+		log.Printf("\n=== Fix edges only mode (--fix-edges-only) ===")
+		log.Printf("Skipping fragment loading and deduplication; only fixing edge directions + canonicalization + dedup")
+		fragmentTypes := make(map[string]models.FragmentType) // empty; fixEdgeDirections fetches types on demand
+		if *skipEdgePass {
+			log.Printf("SKIPPED (--skip-edge-pass): not modifying edges")
+		} else {
+			log.Printf("\n=== Step 5: Fixing edge directions ===")
+			if *apply {
+				fixed, canonicalized, err := fixEdgeDirections(ctx, db, edgesRepo, fragmentTypes, *tenantID, *canonicalizeEdges, validationExecutor, canonExecutor)
+				if err != nil {
+					log.Printf("ERROR: edge direction fix failed: %v", err)
+				} else {
+					stats.EdgesDirectionFixed = fixed
+					stats.EdgesCanonicalized = canonicalized
+					log.Printf("✓ Fixed direction of %d edges", fixed)
+					if *canonicalizeEdges {
+						log.Printf("✓ Canonicalized %d edges", canonicalized)
+					}
+				}
+			} else {
+				log.Printf("[DRY-RUN] Would fix edge directions")
+			}
+			log.Printf("\n=== Step 6: Normalizing & deduplicating edges ===")
+			if *apply {
+				normed, err := normalizeSymmetricEdges(ctx, db, edgesRepo, *tenantID)
+				if err != nil {
+					log.Printf("ERROR: symmetric edge normalization failed: %v", err)
+				} else if *verbose && normed > 0 {
+					log.Printf("✓ Normalized %d symmetric edges", normed)
+				}
+				deduped, err := deduplicateEdges(ctx, db, edgesRepo, *tenantID)
+				if err != nil {
+					log.Printf("ERROR: edge deduplication failed: %v", err)
+				} else {
+					stats.EdgesDeduplicated = deduped
+					log.Printf("✓ Deduplicated %d edges", deduped)
+				}
+			} else {
+				log.Printf("[DRY-RUN] Would normalize symmetric edges and deduplicate edges")
+			}
+			log.Printf("\n=== Step 7: Market geo-mismatch & domain normalization ===")
+			geoMismatch, domainNorm := cleanMarketEdgesAndDomains(ctx, db, edgesRepo, *tenantID, *apply, *verbose)
+			stats.MarketGeoMismatchCleaned = geoMismatch
+			stats.MarketDomainNormalized = domainNorm
+		}
+		log.Printf("\n=== Summary (fix edges only) ===")
+		log.Printf("Edges direction fixed: %d", stats.EdgesDirectionFixed)
+		log.Printf("Edges canonicalized: %d", stats.EdgesCanonicalized)
+		log.Printf("Edges deduplicated: %d", stats.EdgesDeduplicated)
+		log.Printf("Market geo-mismatch edges cleaned: %d", stats.MarketGeoMismatchCleaned)
+		log.Printf("Market domains normalized: %d", stats.MarketDomainNormalized)
+		if !*apply {
+			log.Printf("\n[DRY-RUN] No changes made. Use --apply to execute.")
+		}
+		return
+	}
+
 	// Step 1: Load all fragments
 	log.Printf("\n=== Step 1: Loading fragments ===")
 	fragments, err := loadAllFragments(ctx, db, *tenantID, *typeFilter)

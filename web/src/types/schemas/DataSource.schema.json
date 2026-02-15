@@ -60,6 +60,45 @@
         },
         "sourceUri": {
           "type": "string"
+        },
+        "horizonMonitorCategory": {
+          "type": "string"
+        },
+        "horizonMonitorFeedType": {
+          "type": "string"
+        },
+        "horizonMonitorIngestMode": {
+          "type": "string"
+        },
+        "horizonMonitorSignalType": {
+          "type": "string"
+        },
+        "horizonMonitorRequiresAuth": {
+          "type": "boolean"
+        },
+        "worldmonitorCategory": {
+          "type": "string"
+        },
+        "worldmonitorFeedType": {
+          "type": "string"
+        },
+        "worldmonitorIngestMode": {
+          "type": "string"
+        },
+        "worldmonitorSignalType": {
+          "type": "string"
+        },
+        "worldmonitorRequiresAuth": {
+          "type": "boolean"
+        },
+        "requestHeaders": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "pollIntervalMinutes": {
+          "type": "integer"
         }
       },
       "additionalProperties": false,

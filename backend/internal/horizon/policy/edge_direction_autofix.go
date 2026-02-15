@@ -80,6 +80,15 @@ func ResolveEdgeDirectionAutoFix(
 			Reason:     "canonicalize: COMMUNITY OWNS ORGANIZATION -> COMMUNITY CONTROLS ORGANIZATION",
 			Confidence: 0.95,
 		}, true
+	case edgeType == horizonmodels.DependencyTypeFounded &&
+		(sourceType == horizonmodels.FragmentTypeCommunity || sourceType == horizonmodels.FragmentTypeOrganization) &&
+		targetType == horizonmodels.FragmentTypePerson:
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeFounded,
+			ShouldSwap: true,
+			Reason:     "canonicalize: COMMUNITY/ORGANIZATION FOUNDED PERSON -> PERSON FOUNDED COMMUNITY/ORGANIZATION",
+			Confidence: 0.95,
+		}, true
 	default:
 		return EdgeDirectionAutoFix{}, false
 	}

@@ -2169,6 +2169,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
   const borderMode = String((data as any)?.groupBorderMode || 'outline').trim().toLowerCase();
   const fullBorderCss = `${borderWidth}px ${borderStyle} ${border}`;
   const dividerBorderCss = `1px dashed ${border}`;
+  const showExpandBracket = Boolean((data as any)?.groupShowExpandBracket);
 
   // Optional subtle background tint (used for Levels root group instead of an outline).
   const bgTint = String((data as any)?.groupBgTint || '').trim().toLowerCase();
@@ -2409,6 +2410,23 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
             {ownerLabel}
           </span>
         </button>
+      )}
+      {/* Bracket "[" embracing expanded nodes on the left (context card expansion). */}
+      {showExpandBracket && (
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 12,
+            bottom: 12,
+            width: 8,
+            pointerEvents: 'none',
+            borderLeft: `2px solid ${border}`,
+            borderTopLeftRadius: 6,
+            borderBottomLeftRadius: 6,
+            opacity: theme === 'dark' ? 0.5 : 0.45,
+          }}
+        />
       )}
       {/* Optional: Type subsections (visual separators + labels). Keep pointerEvents off. */}
       {showTypeBlocks && (
@@ -3087,11 +3105,11 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
   const contextExpanded = Boolean((data as any)?.contextExpanded);
 
   const isDark = theme === 'dark';
-  const bg = isDark ? 'rgba(30,41,59,0.95)' : 'rgba(248,250,252,0.97)';
-  const border = isDark ? 'rgba(148,163,184,0.25)' : 'rgba(148,163,184,0.3)';
+  // Graphite background: one tone above main canvas (#121212 → #1A1A1A), subtle, not loud
+  const bg = isDark ? 'rgba(26,26,26,0.98)' : 'rgba(248,250,252,0.97)';
+  const border = isDark ? 'rgba(148,163,184,0.12)' : 'rgba(148,163,184,0.18)';
   const titleColor = isDark ? 'rgba(248,250,252,0.88)' : 'rgba(15,23,42,0.82)';
   const labelColor = isDark ? 'rgba(148,163,184,0.65)' : 'rgba(71,85,105,0.65)';
-  const headerBorderColor = isDark ? 'rgba(148,163,184,0.2)' : 'rgba(148,163,184,0.25)';
   const lineColor = isDark ? 'rgba(148,163,184,0.82)' : 'rgba(71,85,105,0.78)';
   // CTA styling: match node expand/collapse affordance (same border, shadow, amber active state).
   const ctaBorder = isDark ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)';
@@ -3099,6 +3117,9 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
   const ctaBgActive = isDark ? 'rgba(245, 158, 11, 0.28)' : 'rgba(245, 158, 11, 0.18)';
   const ctaText = isDark ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)';
   const ctaShadow = isDark ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)';
+
+  const fadeHeight = 40;
+  const gradientOverlay = `linear-gradient(to top, ${bg} 0%, transparent 100%)`;
 
   return (
     <div
@@ -3114,10 +3135,11 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
         boxShadow: isDark ? '0 2px 8px rgba(0,0,0,0.25)' : '0 1px 4px rgba(0,0,0,0.06)',
         overflow: 'hidden',
         pointerEvents: 'auto',
+        position: 'relative',
       }}
     >
       {/* Title row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8, marginBottom: 8, borderBottom: `1px solid ${headerBorderColor}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8, marginBottom: 8, flexShrink: 0 }}>
         <div
           style={{
             fontSize: 11,
@@ -3148,11 +3170,20 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
           </div>
         )}
       </div>
-      {/* Fact lines / Structured facts */}
+      {/* Fact lines / Structured facts — extends into button area with bottom fade */}
       <div
         className="nowheel nodrag nopan"
         onWheelCapture={(e) => e.stopPropagation()}
-        style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 2 }}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          paddingRight: 2,
+          paddingBottom: fadeHeight,
+        }}
       >
         {isOldFormat ? (
           // Legacy format: plain text lines
@@ -3189,7 +3220,6 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
                   flexDirection: 'column',
                   gap: 4,
                   paddingBottom: factIdx < arr.length - 1 ? 6 : 0,
-                  borderBottom: factIdx < arr.length - 1 ? `1px solid ${headerBorderColor}` : 'none',
                 }}
               >
                 {/* Label row */}
@@ -3272,17 +3302,34 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
           </>
         )}
       </div>
+      {/* Gradient fade so content smoothly disappears into the button area */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: fadeHeight,
+          background: gradientOverlay,
+          pointerEvents: 'none',
+          zIndex: 1,
+        }}
+      />
       {/* Fixed bottom action row so the contextual toggle is always visible. */}
       <div
         style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-end',
           minHeight: 28,
-          marginTop: 6,
           paddingTop: 6,
-          borderTop: `1px solid ${headerBorderColor}`,
-          flexShrink: 0,
+          paddingRight: 12,
+          paddingBottom: 8,
+          zIndex: 2,
         }}
       >
         {typeof onShowDetails === 'function' && (

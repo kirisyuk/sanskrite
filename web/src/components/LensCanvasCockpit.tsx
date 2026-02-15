@@ -4247,7 +4247,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   // Likewise, LOCATED_IN should dominate DEPENDS-like relations for ORG/GOV -> GEO placements when directed correctly.
   const suppressDominatedEdges = useCallback(
     (edgesIn: Edge[] | null | undefined, nodesIn?: Node<HorizonNodeData>[] | null): Edge[] => {
-      const edges = Array.isArray(edgesIn) ? edgesIn : [];
+      let edges = Array.isArray(edgesIn) ? edgesIn : [];
+      if (edges.length === 0) return [];
+
+      // Strong edge types that dominate DEPENDS_ON when in the opposite direction
+      // (e.g. ORG→PROGRAM PRODUCES + PROGRAM→ORG Depends → suppress Depends)
+      const STRONG_VS_DEPENDS = new Set([
+        'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO', 'PARTICIPATES_IN',
+        'PARTNERS_WITH', 'COOPERATES_WITH', 'SUPPORTS', 'INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES',
+        'OWNS', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'FOUNDED', 'EMPLOYED_BY', 'BOARD_MEMBER_OF',
+      ]);
+      const dirKey = (a: string, b: string) => `${norm(a)}→${norm(b)}`;
+      const strongReverse = new Set<string>();
+      for (const e of edges as any[]) {
+        const et = String((e?.data?.edgeType || e?.label || '').trim()).toUpperCase();
+        if (STRONG_VS_DEPENDS.has(et)) {
+          strongReverse.add(dirKey(e.target, e.source));
+        }
+      }
+      edges = edges.filter((e) => {
+        const et = String((e as any)?.data?.edgeType || (e as any)?.label || '').trim().toUpperCase();
+        if (et !== 'DEPENDS_ON') return true;
+        // Suppress DEPENDS_ON only when there is a stronger edge in the opposite direction
+        return !strongReverse.has(dirKey((e as any).source, (e as any).target));
+      });
       if (edges.length === 0) return [];
 
       const nodeById = new Map<string, any>();

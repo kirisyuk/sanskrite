@@ -136,6 +136,9 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 
 	// Co-Pilot chat
 	mux.Handle("/api/horizon/co-pilot/chat", authMiddleware(http.HandlerFunc(h.CoPilotChat)))
+
+	// Register external feed proxies (unauthenticated)
+	h.RegisterFeedRoutes(mux)
 }
 
 // HandleFragmentsRoot handles /api/horizon/fragments (list fragments via lens scope).

@@ -98,8 +98,9 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeProgram,
+			models.FragmentTypeCommunity,
 		},
-		Description: "Founder founded organization/program",
+		Description: "Founder (person/org) founded organization/program/community",
 	},
 	models.DependencyTypeInvestsIn: {
 		ValidSourceTypes: []models.FragmentType{

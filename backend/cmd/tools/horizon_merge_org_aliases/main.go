@@ -18,6 +18,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/merge"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -43,7 +44,7 @@ func slugify(s string) string {
 
 func main() {
 	var (
-		projectID     = flag.String("project", getenvDefault("GCP_PROJECT", "sanskrite"), "GCP project id")
+		projectID     = flag.String("project", getenvDefault("GCP_PROJECT", "hatlone-test"), "GCP project id")
 		apply         = flag.Bool("apply", false, "Apply changes (default: dry-run only)")
 		dryRun        = flag.Bool("dry-run", false, "Force dry-run even if --apply is provided")
 		limit         = flag.Int("limit", 0, "Max number of org fragments to process (0 = no limit)")
@@ -52,8 +53,9 @@ func main() {
 		vertexLoc     = flag.String("vertex-location", "", "Vertex AI Search location (default from env or prod)")
 		bucket        = flag.String("bucket", "", "GCS bucket used for Vertex indexing (defaults to RAG_DOCUMENTS_BUCKET, CORE_DOCS_BUCKET, or {project}-core-docs)")
 		fullReconcile = flag.Bool("vertex-full-reconcile", true, "Run FULL Vertex AI Search import for horizon_fragments at the end (apply mode only)")
-		minConfidence = flag.Float64("min-confidence", 0.85, "Minimum confidence to merge when preferred fragment exists")
-		only          = flag.String("only", "", "Comma-separated substrings to filter source canonicalPaths to process (e.g., 'ford-motor-company,byd-company,rivian-automotive'). Empty = process all candidates")
+		minConfidence         = flag.Float64("min-confidence", 0.85, "Minimum confidence to merge when preferred fragment exists")
+		only                  = flag.String("only", "", "Comma-separated substrings to filter source canonicalPaths to process (e.g., 'ford-motor-company,byd-company,rivian-automotive'). Empty = process all candidates")
+		alsoAbbreviationMerge = flag.Bool("also-abbreviation-merge", false, "Also run abbreviation->full merge (heuristic: first-letter acronym match in same geo)")
 	)
 	flag.Parse()
 	if *dryRun {
@@ -320,6 +322,24 @@ func main() {
 		}
 	}
 
+	if *alsoAbbreviationMerge {
+		log.Printf("=== Running abbreviation->full merge ===")
+		abbrevCfg := merge.RunConfig{
+			ProjectID: *projectID,
+			TenantID:  *tenantID,
+			Apply:     *apply,
+			Limit:     *limit,
+			Prefixes:  []string{"/gov/", "/org/"},
+		}
+		abbrevResult, err := merge.RunAbbreviationMerge(ctx, db, fragmentsRepo, edgesRepo, framesRepo, abbrevCfg)
+		if err != nil {
+			log.Printf("WARNING: abbreviation merge failed: %v", err)
+		} else {
+			log.Printf("Abbreviation merge: processed=%d merged=%d updatedFull=%d deletedAbbrev=%d updatedEdges=%d",
+				abbrevResult.Processed, abbrevResult.Merged, abbrevResult.UpdatedFull, abbrevResult.DeletedAbbrev, abbrevResult.UpdatedEdges)
+		}
+	}
+
 	log.Printf("=== Migration Summary ===")
 	log.Printf("processed=%d merged=%d createdPreferred=%d updatedPreferred=%d deletedOld=%d updatedEdges=%d deletedDupEdges=%d updatedFrames=%d skippedNoShort=%d apply=%v",
 		processed, merged, createdPreferred, updatedPreferred, deletedOld, updatedEdges, deletedDupEdges, updatedFrames, skippedNoShort, *apply)
@@ -334,7 +354,7 @@ func getenvDefault(k, def string) string {
 }
 
 func getSecret(name string) string {
-	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret", name, "--project", getenvDefault("GCP_PROJECT", "sanskrite"))
+	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret", name, "--project", getenvDefault("GCP_PROJECT", "hatlone-test"))
 	out, err := cmd.Output()
 	if err != nil {
 		return ""

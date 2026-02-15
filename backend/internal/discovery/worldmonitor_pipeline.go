@@ -211,6 +211,10 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 	}
 
 	mode := normalizeHorizonMonitorIngestMode(ds)
+	if mode == wmIngestModeQueryOnly {
+		return nil
+	}
+
 	feedType := ""
 	if ds.Details.HorizonMonitorFeedType != nil {
 		feedType = strings.TrimSpace(*ds.Details.HorizonMonitorFeedType)
@@ -242,22 +246,15 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 				p.logf("horizon monitor pipeline: failed to upsert event fact source=%s feedType=%s ext=%s: %v", ds.ID, event.FeedType, event.ExternalID, err)
 			} else {
 				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil {
-					seedPaths := p.resolveEventSeedPaths(ctx, event)
-					if len(seedPaths) > 0 {
-						signal.SeedPaths = uniqueStrings(seedPaths)
-					}
 					if err := p.upsertAndPropagateSignal(ctx, tenantID, ds.ID, signal, eventFact); err != nil {
 						p.logf("horizon monitor pipeline: signal propagation failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
 					}
 				}
 			}
-		} else {
-			// query_only/document_feed: do not emit ontology facts or rollups.
-			continue
 		}
 
 		classification := classifyHorizonMonitorNewsKeyword(event.Title)
-		if p.exec != nil && classification.Confidence < 0.65 && aiClassificationsUsed < 4 {
+		if p.exec != nil && mode == wmIngestModeOntologyFact && classification.Confidence < 0.65 && aiClassificationsUsed < 4 {
 			if refined, ok := p.classifyHorizonMonitorNewsWithAI(ctx, event.Title); ok {
 				classification = refined
 				aiClassificationsUsed++
@@ -294,8 +291,10 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 	if err := p.upsertGridCellFacts(ctx, tenantID, cells); err != nil {
 		p.logf("horizon monitor pipeline: failed to upsert grid rollups: %v", err)
 	}
-	if err := p.upsertCountryBriefFacts(ctx, tenantID, countries); err != nil {
-		p.logf("horizon monitor pipeline: failed to upsert country briefs: %v", err)
+	if mode == wmIngestModeOntologyFact {
+		if err := p.upsertCountryBriefFacts(ctx, tenantID, countries); err != nil {
+			p.logf("horizon monitor pipeline: failed to upsert country briefs: %v", err)
+		}
 	}
 
 	return nil
@@ -765,390 +764,6 @@ func (p *HorizonMonitorPipeline) upsertTrackFragment(ctx context.Context, tenant
 		return nil
 	}
 	return p.fragmentsRepo.Update(ctx, existing)
-}
-
-type horizonSeedPathCandidate struct {
-	Path  string
-	Score float64
-}
-
-type horizonIdentifierCandidate struct {
-	Key   string
-	Value string
-	Score float64
-}
-
-func (p *HorizonMonitorPipeline) resolveEventSeedPaths(ctx context.Context, e *horizonMonitorFeedEvent) []string {
-	if p == nil || p.fragmentsRepo == nil || e == nil {
-		return nil
-	}
-
-	scored := make(map[string]float64)
-	addFragment := func(fragment *horizonmodels.HorizonFragment, baseScore float64) {
-		if fragment == nil {
-			return
-		}
-		path := strings.TrimSpace(fragment.CanonicalPath)
-		if path == "" {
-			return
-		}
-		score, ok := scoreEventFragmentCandidate(e, fragment, baseScore)
-		if !ok {
-			return
-		}
-		if prev, exists := scored[path]; !exists || score > prev {
-			scored[path] = score
-		}
-	}
-
-	for _, c := range extractEventCanonicalPathCandidates(e) {
-		fragment, err := p.fragmentsRepo.GetByCanonicalPath(ctx, c.Path)
-		if err != nil || fragment == nil {
-			continue
-		}
-		addFragment(fragment, c.Score)
-	}
-
-	for _, idc := range extractEventIdentifierCandidates(e) {
-		var fragments []*horizonmodels.HorizonFragment
-		var err error
-		if idc.Key == "externalTrackId" {
-			fragments, err = p.fragmentsRepo.FindByIdentifierAndType(ctx, idc.Key, idc.Value, horizonmodels.FragmentTypeTrack)
-		} else {
-			fragments, err = p.fragmentsRepo.FindByIdentifier(ctx, idc.Key, idc.Value)
-		}
-		if err != nil {
-			continue
-		}
-		for _, fragment := range fragments {
-			addFragment(fragment, idc.Score)
-		}
-	}
-
-	if len(scored) == 0 {
-		return nil
-	}
-	ranked := make([]horizonSeedPathCandidate, 0, len(scored))
-	for path, score := range scored {
-		ranked = append(ranked, horizonSeedPathCandidate{
-			Path:  path,
-			Score: score,
-		})
-	}
-	sort.Slice(ranked, func(i, j int) bool {
-		if ranked[i].Score == ranked[j].Score {
-			return ranked[i].Path < ranked[j].Path
-		}
-		return ranked[i].Score > ranked[j].Score
-	})
-	limit := len(ranked)
-	if limit > 8 {
-		limit = 8
-	}
-	out := make([]string, 0, limit)
-	for _, c := range ranked[:limit] {
-		out = append(out, c.Path)
-	}
-	return uniqueStrings(out)
-}
-
-func extractEventCanonicalPathCandidates(e *horizonMonitorFeedEvent) []horizonSeedPathCandidate {
-	if e == nil {
-		return nil
-	}
-	candidates := make(map[string]float64)
-	add := func(path string, score float64) {
-		path = normalizeEventCandidatePath(path)
-		if path == "" {
-			return
-		}
-		if prev, ok := candidates[path]; !ok || score > prev {
-			candidates[path] = score
-		}
-	}
-
-	if tr, ok := extractTrackObservation(e); ok && isAllowedTrackObjectType(strings.TrimSpace(tr.ObjectType)) {
-		if path := trackCanonicalPath(e, tr); path != "" {
-			add(path, 1.30)
-		}
-	}
-
-	raw := e.Raw
-	add(asString(raw["canonicalPath"]), 1.20)
-	add(asString(raw["canonical_path"]), 1.20)
-	add(asString(raw["fragmentPath"]), 1.15)
-	add(asString(raw["fragment_path"]), 1.15)
-	add(asString(raw["targetCanonicalPath"]), 1.15)
-	add(asString(raw["target_canonical_path"]), 1.15)
-	add(asString(raw["objectPath"]), 1.10)
-	add(asString(raw["object_path"]), 1.10)
-	add(asString(raw["entityPath"]), 1.00)
-	add(asString(raw["entity_path"]), 1.00)
-
-	addPathSliceCandidate(raw["canonicalPaths"], 1.05, add)
-	addPathSliceCandidate(raw["canonical_paths"], 1.05, add)
-	addPathSliceCandidate(raw["fragmentPaths"], 1.00, add)
-	addPathSliceCandidate(raw["fragment_paths"], 1.00, add)
-
-	if target, ok := raw["target"].(map[string]interface{}); ok {
-		add(asString(target["canonicalPath"]), 1.15)
-		add(asString(target["canonical_path"]), 1.15)
-		add(asString(target["path"]), 1.00)
-	}
-
-	out := make([]horizonSeedPathCandidate, 0, len(candidates))
-	for path, score := range candidates {
-		out = append(out, horizonSeedPathCandidate{Path: path, Score: score})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Score == out[j].Score {
-			return out[i].Path < out[j].Path
-		}
-		return out[i].Score > out[j].Score
-	})
-	return out
-}
-
-func addPathSliceCandidate(raw interface{}, score float64, add func(path string, score float64)) {
-	values, ok := raw.([]interface{})
-	if !ok {
-		return
-	}
-	for _, item := range values {
-		add(asString(item), score)
-	}
-}
-
-func normalizeEventCandidatePath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	if !strings.HasPrefix(path, "/") {
-		return ""
-	}
-	return strings.ReplaceAll(path, "//", "/")
-}
-
-func extractEventIdentifierCandidates(e *horizonMonitorFeedEvent) []horizonIdentifierCandidate {
-	if e == nil {
-		return nil
-	}
-	trackLike := isTrackLikeEvent(e)
-	raw := e.Raw
-
-	candidates := make(map[string]horizonIdentifierCandidate)
-	add := func(key, value string, score float64) {
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		if key == "" || value == "" {
-			return
-		}
-		id := key + "|" + value
-		if prev, ok := candidates[id]; !ok || score > prev.Score {
-			candidates[id] = horizonIdentifierCandidate{
-				Key:   key,
-				Value: value,
-				Score: score,
-			}
-		}
-	}
-
-	if strings.TrimSpace(e.ExternalID) != "" {
-		add("sourceObjectId", e.ExternalID, 0.25)
-		if trackLike {
-			add("externalTrackId", e.ExternalID, 0.20)
-		}
-	}
-
-	add("sourceObjectId", asString(raw["sourceObjectId"]), 1.15)
-	add("sourceObjectId", asString(raw["source_object_id"]), 1.15)
-	add("sourceObjectId", asString(raw["objectId"]), 1.00)
-	add("sourceObjectId", asString(raw["object_id"]), 1.00)
-	add("sourceObjectId", asString(raw["assetId"]), 0.95)
-	add("sourceObjectId", asString(raw["asset_id"]), 0.95)
-	add("sourceObjectId", asString(raw["entityId"]), 0.90)
-	add("sourceObjectId", asString(raw["entity_id"]), 0.90)
-	add("sourceObjectId", asString(raw["trackId"]), 1.05)
-	add("sourceObjectId", asString(raw["track_id"]), 1.05)
-
-	if tr, ok := extractTrackObservation(e); ok {
-		add("sourceObjectId", tr.ExternalTrackID, 1.35)
-		add("externalTrackId", tr.ExternalTrackID, 1.35)
-	}
-
-	if trackLike {
-		add("externalTrackId", asString(raw["externalTrackId"]), 1.30)
-		add("externalTrackId", asString(raw["external_track_id"]), 1.30)
-		add("externalTrackId", asString(raw["icao24"]), 1.30)
-		add("externalTrackId", asString(raw["icao"]), 1.25)
-		add("externalTrackId", asString(raw["hex"]), 1.20)
-		add("externalTrackId", asString(raw["mmsi"]), 1.30)
-		add("externalTrackId", asString(raw["imo"]), 1.20)
-		add("externalTrackId", asString(raw["vessel_id"]), 1.15)
-		add("externalTrackId", asString(raw["ship_id"]), 1.15)
-		add("externalTrackId", asString(raw["flight"]), 1.00)
-		add("externalTrackId", asString(raw["callsign"]), 0.90)
-		add("externalTrackId", asString(raw["id"]), 0.35)
-	}
-
-	out := make([]horizonIdentifierCandidate, 0, len(candidates))
-	for _, c := range candidates {
-		out = append(out, c)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Score == out[j].Score {
-			if out[i].Key == out[j].Key {
-				return out[i].Value < out[j].Value
-			}
-			return out[i].Key < out[j].Key
-		}
-		return out[i].Score > out[j].Score
-	})
-	return out
-}
-
-func isTrackLikeEvent(e *horizonMonitorFeedEvent) bool {
-	if e == nil {
-		return false
-	}
-	switch strings.TrimSpace(e.FeedType) {
-	case "opensky_flights", "ais_snapshot":
-		return true
-	}
-	return strings.TrimSpace(e.SignalType) == "risk:military_flight" || strings.TrimSpace(e.SignalType) == "risk:military_vessel"
-}
-
-func trackCanonicalPath(e *horizonMonitorFeedEvent, tr horizonTrackObservation) string {
-	if e == nil || !isRealCoordinate(e.Lat, e.Lon, e.HasCoordinates) || !isAllowedTrackObjectType(strings.TrimSpace(tr.ObjectType)) {
-		return ""
-	}
-	geoToken := strings.ToLower(strings.TrimSpace(e.CountryCode))
-	if len(geoToken) != 2 {
-		geoToken = "global"
-	}
-	trackIdentity := strings.TrimSpace(tr.ExternalTrackID)
-	if trackIdentity == "" {
-		trackIdentity = "event-" + shortHash(strings.Join([]string{
-			strings.TrimSpace(e.SourceID),
-			strings.TrimSpace(e.ExternalID),
-			strconv.FormatFloat(e.Lat, 'f', 6, 64),
-			strconv.FormatFloat(e.Lon, 'f', 6, 64),
-		}, "|"))
-	}
-	baseName := firstNonEmptyString(strings.TrimSpace(tr.DisplayName), trackIdentity, strings.TrimSpace(e.Title), "track")
-	cp := strings.Join([]string{
-		"/track",
-		string(tr.Kind),
-		geoToken,
-		slug(baseName) + "-" + shortHash(strings.Join([]string{string(tr.Kind), trackIdentity}, "|")),
-	}, "/")
-	cp = strings.ReplaceAll(cp, "//", "/")
-	return normalizeEventCandidatePath(cp)
-}
-
-func scoreEventFragmentCandidate(e *horizonMonitorFeedEvent, fragment *horizonmodels.HorizonFragment, baseScore float64) (float64, bool) {
-	if e == nil || fragment == nil {
-		return 0, false
-	}
-	if !horizonmodels.IsHorizonMonitorGeoUpdatableType(fragment.Type) {
-		return 0, false
-	}
-	if isTrackLikeEvent(e) && fragment.Type != horizonmodels.FragmentTypeTrack {
-		return 0, false
-	}
-
-	score := baseScore
-	if strings.TrimSpace(fragment.Governance.Status) == string(horizonmodels.FragmentStatusActive) {
-		score += 0.05
-	}
-	if strings.TrimSpace(fragment.Status) == string(horizonmodels.FragmentStatusActive) {
-		score += 0.03
-	}
-
-	if !isRealCoordinate(e.Lat, e.Lon, e.HasCoordinates) {
-		return score, true
-	}
-	lat, lon, ok := fragmentCoordinatesForMatching(fragment)
-	if !ok {
-		return 0, false
-	}
-	distKM := haversineDistanceKM(e.Lat, e.Lon, lat, lon)
-	maxKM := maxSeedDistanceKM(fragment)
-	if distKM > maxKM {
-		return 0, false
-	}
-	proximityScore := 1 - (distKM / maxKM)
-	if proximityScore < 0 {
-		proximityScore = 0
-	}
-	score += proximityScore * 0.40
-	return score, true
-}
-
-func fragmentCoordinatesForMatching(fragment *horizonmodels.HorizonFragment) (float64, float64, bool) {
-	if fragment == nil {
-		return 0, 0, false
-	}
-	if fragment.Track != nil && horizonmodels.IsRealGeoCoordinate(fragment.Track.Lat, fragment.Track.Lon) {
-		return fragment.Track.Lat, fragment.Track.Lon, true
-	}
-	if fragment.Coordinates != nil && horizonmodels.IsRealGeoCoordinate(fragment.Coordinates.Lat, fragment.Coordinates.Lon) {
-		return fragment.Coordinates.Lat, fragment.Coordinates.Lon, true
-	}
-	if wm := fragment.EffectiveHorizonMonitor(); wm != nil && wm.Coordinates != nil &&
-		horizonmodels.IsRealGeoCoordinate(wm.Coordinates.Lat, wm.Coordinates.Lon) {
-		return wm.Coordinates.Lat, wm.Coordinates.Lon, true
-	}
-	if fragment.HomeLocation != nil && fragment.HomeLocation.ISO6709 != nil {
-		if lat, lon, ok := horizonmodels.ParseISO6709Coordinates(*fragment.HomeLocation.ISO6709); ok &&
-			horizonmodels.IsRealGeoCoordinate(lat, lon) {
-			return lat, lon, true
-		}
-	}
-	return 0, 0, false
-}
-
-func maxSeedDistanceKM(fragment *horizonmodels.HorizonFragment) float64 {
-	if fragment == nil {
-		return 120
-	}
-	if fragment.Type == horizonmodels.FragmentTypeTrack {
-		if fragment.Track != nil {
-			switch strings.TrimSpace(strings.ToLower(fragment.Track.ObjectType)) {
-			case "military_aircraft":
-				return 600
-			case "vessel":
-				return 250
-			case "ground_vehicle":
-				return 80
-			}
-		}
-		return 200
-	}
-	switch fragment.Type {
-	case horizonmodels.FragmentTypeGeoRegion:
-		return 800
-	case horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeDeposit, horizonmodels.FragmentTypeEvent:
-		return 200
-	case horizonmodels.FragmentTypeMarket:
-		return 300
-	default:
-		return 150
-	}
-}
-
-func haversineDistanceKM(lat1, lon1, lat2, lon2 float64) float64 {
-	const earthRadiusKM = 6371.0
-	toRad := func(deg float64) float64 {
-		return deg * math.Pi / 180
-	}
-	dLat := toRad(lat2 - lat1)
-	dLon := toRad(lon2 - lon1)
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(toRad(lat1))*math.Cos(toRad(lat2))*math.Sin(dLon/2)*math.Sin(dLon/2)
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-	return earthRadiusKM * c
 }
 
 func mergeTrackFragment(dst, src *horizonmodels.HorizonFragment) bool {
@@ -2446,4 +2061,28 @@ func maxTime(a, b time.Time) time.Time {
 		return b
 	}
 	return a
+}
+
+func trackCanonicalPath(e *horizonMonitorFeedEvent, tr horizonTrackObservation) string {
+	geoToken := strings.ToLower(strings.TrimSpace(e.CountryCode))
+	if len(geoToken) != 2 {
+		geoToken = "global"
+	}
+	trackIdentity := strings.TrimSpace(tr.ExternalTrackID)
+	if trackIdentity == "" {
+		trackIdentity = "event-" + shortHash(strings.Join([]string{
+			strings.TrimSpace(e.SourceID),
+			strings.TrimSpace(e.ExternalID),
+			strconv.FormatFloat(e.Lat, 'f', 6, 64),
+			strconv.FormatFloat(e.Lon, 'f', 6, 64),
+		}, "|"))
+	}
+	baseName := firstNonEmptyString(strings.TrimSpace(tr.DisplayName), trackIdentity, strings.TrimSpace(e.Title), "track")
+	canonicalPath := strings.Join([]string{
+		"/track",
+		string(tr.Kind),
+		geoToken,
+		slug(baseName) + "-" + shortHash(strings.Join([]string{string(tr.Kind), trackIdentity}, "|")),
+	}, "/")
+	return strings.ReplaceAll(canonicalPath, "//", "/")
 }

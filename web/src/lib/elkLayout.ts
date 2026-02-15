@@ -2421,6 +2421,10 @@ export async function layoutLevelsTwoPane<T = any>(
     };
 
     const blockRoleForChild = (child: Node<T>): string => {
+      const tk = normalizeFragmentType((child.data as any)?.type);
+      // Markets always go to market_regulation (Submarkets), regardless of edge type.
+      if (LEFT_MARKET_TYPES.has(tk)) return 'market_regulation';
+
       const rel = bestRelTypeToParent(child);
       if (MARKET_EDGE_SET.has(rel) || REGULATORY_EDGE_SET.has(rel) || GEO_EDGE_SET.has(rel)) {
         return 'market_regulation';
@@ -3948,6 +3952,12 @@ export async function layoutLevelsTwoPane<T = any>(
             groupFooterFirstNodeId: isBusinessBlockRb ? '' : firstNodeId,
             onToggleSubcategoryCollapse,
             groupId: groupId, // root Levels-left group
+            // Bracket "[" only between context card and expanded nodes, not before the card.
+            groupShowExpandBracket: (() => {
+              if (!isBusinessBlockRb || collapsed) return false;
+              const firstId = String((rb.nodes?.[0] as any)?.id || '').trim();
+              return !firstId.startsWith('levels:leftblock:card:');
+            })(),
           } as any,
         } as any);
 

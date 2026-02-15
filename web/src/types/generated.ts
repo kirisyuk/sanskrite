@@ -228,6 +228,20 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
     originalFileName?: string;
     contentType?: string;
     sourceUri?: string;
+    horizonMonitorCategory?: string;
+    horizonMonitorFeedType?: string;
+    horizonMonitorIngestMode?: string;
+    horizonMonitorSignalType?: string;
+    horizonMonitorRequiresAuth?: boolean;
+    worldmonitorCategory?: string;
+    worldmonitorFeedType?: string;
+    worldmonitorIngestMode?: string;
+    worldmonitorSignalType?: string;
+    worldmonitorRequiresAuth?: boolean;
+    requestHeaders?: {
+      [k: string]: string;
+    };
+    pollIntervalMinutes?: number;
   };
   lastPolledAt?: string;
   lastFoundAt?: string;

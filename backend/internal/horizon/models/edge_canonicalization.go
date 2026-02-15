@@ -197,6 +197,13 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET PARTICIPATES_IN ENTITY -> ENTITY PARTICIPATES_IN MARKET"
 	}
 
+	// INVESTS_IN(MARKET → ORGANIZATION): Market does not "invest" in org; org participates in market.
+	if edgeType == DependencyTypeInvestsIn &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET INVESTS_IN ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET"
+	}
+
 	// OWNS(ORG → PROGRAM) → ADMINISTERS
 	// Organizations typically administer/operate programs rather than "own" them.
 	if edgeType == DependencyTypeOwns &&
@@ -348,6 +355,21 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeControls, true, true, "canonicalize: GEO CONTROLS ORGANIZATION -> ORGANIZATION CONTROLS GEO"
 	}
 
+	// FOUNDED(COMMUNITY → PERSON): Person founds community, not the reverse.
+	// Swap to PERSON → COMMUNITY.
+	if edgeType == DependencyTypeFounded &&
+		sourceType == FragmentTypeCommunity &&
+		targetType == FragmentTypePerson {
+		return DependencyTypeFounded, true, true, "canonicalize: COMMUNITY FOUNDED PERSON -> PERSON FOUNDED COMMUNITY"
+	}
+
+	// FOUNDED(ORGANIZATION → PERSON): Person founds org/program, not the reverse.
+	if edgeType == DependencyTypeFounded &&
+		sourceType == FragmentTypeOrganization &&
+		targetType == FragmentTypePerson {
+		return DependencyTypeFounded, true, true, "canonicalize: ORGANIZATION FOUNDED PERSON -> PERSON FOUNDED ORGANIZATION"
+	}
+
 	return edgeType, false, false, ""
 }
 
@@ -396,5 +418,33 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 		return edgeType, true, true, "canonicalize: ORGANIZATION OWNS COMMUNITY(dynasty/tribe) -> COMMUNITY(dynasty/tribe) OWNS ORGANIZATION"
 	}
 
+	// HAS_SUBMARKET: parent (broader market) → child (submarket). Parent = fewer path segments or prefix of child path.
+	// Swap when child is source so we never create bidirectional parent↔child edges.
+	if edgeType == DependencyTypeHasSubmarket &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeMarket &&
+		sourcePath != "" && targetPath != "" {
+		segSrc := pathSegmentCount(sourcePath)
+		segTgt := pathSegmentCount(targetPath)
+		// Source is child (more segments) and target is parent: swap to parent→child
+		if segSrc > segTgt {
+			return edgeType, true, true, "canonicalize: HAS_SUBMARKET child→parent -> parent→child (by segment count)"
+		}
+		// Target path is prefix of source: source is child, target is parent; swap
+		tgtPrefix := strings.TrimSuffix(strings.TrimSpace(targetPath), "/") + "/"
+		if tgtPrefix != "/" && strings.HasPrefix(strings.TrimSpace(sourcePath), tgtPrefix) {
+			return edgeType, true, true, "canonicalize: HAS_SUBMARKET child→parent -> parent→child (by path prefix)"
+		}
+		// Source path is prefix of target: correct direction, no swap
+	}
+
 	return edgeType, shouldSwap, changed, reason
+}
+
+func pathSegmentCount(path string) int {
+	p := strings.Trim(path, "/")
+	if p == "" {
+		return 0
+	}
+	return len(strings.Split(p, "/"))
 }

@@ -4805,10 +4805,14 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 			changed = true
 		}
 	case models.DependencyTypeManages, models.DependencyTypeEmployedBy, models.DependencyTypeBoardMemberOf, models.DependencyTypeFounded:
-		// Leadership/people relationships are directional and typically originate from PERSON -> ORG.
-		// When scouting an ORGANIZATION, LLM output may attach PERSON targets with these types;
-		// when the "management" specialty is enabled, we normalize the direction by swapping endpoints.
-		if enableManagement && isOrg(srcType) && isPerson(targetType) {
+		// Leadership/people relationships are directional and typically originate from PERSON -> ORG/COMMUNITY.
+		// FOUNDED: Person founds org/community, never the reverse. Always swap COMMUNITY/ORG -> PERSON.
+		if edgeType == models.DependencyTypeFounded &&
+			(srcType == models.FragmentTypeCommunity || isOrg(srcType)) && isPerson(targetType) {
+			sourceID, targetID = targetID, sourceID
+			changed = true
+		} else if enableManagement && isOrg(srcType) && isPerson(targetType) {
+			// When scouting an ORGANIZATION, LLM output may attach PERSON targets with these types.
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}

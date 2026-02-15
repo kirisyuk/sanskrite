@@ -605,6 +605,49 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	return best, nil
 }
 
+// ListByCanonicalPathPrefix returns fragments whose canonicalPath starts with prefix.
+// Used for abbreviation resolution: list fragments in same geo to find abbrev/full pairs.
+func (r *HorizonFragmentsRepository) ListByCanonicalPathPrefix(ctx context.Context, prefix string, limit int) ([]*models.HorizonFragment, error) {
+	if r == nil || r.col == nil || prefix == "" {
+		return nil, nil
+	}
+	p := strings.TrimSpace(prefix)
+	if !strings.HasSuffix(p, "/") {
+		p = p + "/"
+	}
+	if limit <= 0 {
+		limit = 300
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	q := r.col.
+		Where("tenantId", "==", "global").
+		Where("canonicalPath", ">=", p).
+		Where("canonicalPath", "<", p+"\ufffd").
+		OrderBy("canonicalPath", firestore.Asc).
+		Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		if doc == nil || !doc.Exists() {
+			continue
+		}
+		var f models.HorizonFragment
+		if err := doc.DataTo(&f); err != nil {
+			continue
+		}
+		if strings.TrimSpace(f.ID) == "" {
+			f.ID = strings.TrimSpace(doc.Ref.ID)
+		}
+		out = append(out, &f)
+	}
+	return out, nil
+}
+
 // FindByTags returns fragments that match any of the provided tags (best-effort).
 // Note: uses array-contains-any and is capped by limit.
 func (r *HorizonFragmentsRepository) FindByTags(ctx context.Context, tags []string, limit int) ([]*models.HorizonFragment, error) {

@@ -37,7 +37,7 @@
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_deduplicate_fragments \
-  --project=sanskrite \
+  --project=hatlone-test \
   --dry-run=false \
   --limit=100 \
   --verbose
@@ -101,13 +101,13 @@ go run ./cmd/tools/horizon_deduplicate_fragments \
 ```bash
 # Дедупликация всех типов
 go run ./cmd/tools/horizon_smart_dedup \
-  --project=sanskrite \
+  --project=hatlone-test \
   --apply \
   --verbose
 
 # Только организации
 go run ./cmd/tools/horizon_smart_dedup \
-  --project=sanskrite \
+  --project=hatlone-test \
   --type=ORGANIZATION \
   --apply \
   --enable-org-name-only \
@@ -115,7 +115,7 @@ go run ./cmd/tools/horizon_smart_dedup \
 
 # Только исправление рёбер (без дедупликации фрагментов)
 go run ./cmd/tools/horizon_smart_dedup \
-  --project=sanskrite \
+  --project=hatlone-test \
   --fix-edges-only \
   --apply
 ```
@@ -151,7 +151,7 @@ go run ./cmd/tools/horizon_smart_dedup \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_cleanup_orphaned_versions \
-  --project=sanskrite \
+  --project=hatlone-test \
   --dry-run=false
 ```
 
@@ -181,7 +181,7 @@ go run ./cmd/tools/horizon_cleanup_orphaned_versions \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_merge_discovered \
-  --project=sanskrite \
+  --project=hatlone-test \
   --apply \
   --limit=100
 ```
@@ -221,7 +221,7 @@ go run ./cmd/tools/horizon_merge_discovered \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_merge_org_aliases \
-  --project=sanskrite \
+  --project=hatlone-test \
   --apply \
   --min-confidence=0.85 \
   --only=ford-motor-company,byd-company
@@ -270,13 +270,13 @@ go run ./cmd/tools/horizon_merge_org_aliases \
 ```bash
 # Dry-run с прикреплением GeoNames ID
 go run ./cmd/tools/horizon_normalize_loc_geonames \
-  --project=sanskrite \
+  --project=hatlone-test \
   --limit=1000 \
   --skip-confidence-below=0.8
 
 # Применить изменения
 go run ./cmd/tools/horizon_normalize_loc_geonames \
-  --project=sanskrite \
+  --project=hatlone-test \
   --apply \
   --apply-geonames-id \
   --cursor-file=/tmp/normalize_cursor.json
@@ -322,12 +322,12 @@ go run ./cmd/tools/horizon_normalize_loc_geonames \
 ```bash
 # Dry-run
 go run ./cmd/tools/horizon_backfill_index_paths \
-  --project=sanskrite \
+  --project=hatlone-test \
   --page-size=200
 
 # Применить изменения
 go run ./cmd/tools/horizon_backfill_index_paths \
-  --project=sanskrite \
+  --project=hatlone-test \
   --dry-run=false \
   --touch-timestamps \
   --start-after=lastDocID
@@ -364,16 +364,34 @@ go run ./cmd/tools/horizon_backfill_index_paths \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_check_signals \
-  --project=sanskrite \
+  --project=hatlone-test \
   --path=/org/byd \
   --limit=200
 ```
 
 **Флаги:**
-- `--project` (default: "sanskrite") - GCP project ID
+- `--project` (default: "hatlone-test") - GCP project ID
 - `--tenant` (default: "global") - Tenant ID
 - `--path` (required) - canonical path для инспекции (например, `/org/byd`)
 - `--limit` (default: 200) - максимальное количество фактов для сканирования
+
+---
+
+### `check_market_submarket_bidirectional`
+
+**Назначение:** Находит пары MARKET↔MARKET с bidirectional HAS_SUBMARKET (оба A→B и B→A). Проверяет гипотезу: путь с большим числом сегментов = submarket (child), с меньшим = parent.
+
+**Использование:**
+```bash
+go run ./cmd/tools/check_market_submarket_bidirectional --project=hatlone-test
+go run ./cmd/tools/check_market_submarket_bidirectional --project=hatlone-test --limit=20
+```
+
+**Флаги:**
+- `--project` (required) - GCP project ID
+- `--tenant` (default: "global") - Tenant ID
+- `--limit` (default: 0) - макс. пар для вывода (0 = все)
+- `--apply` - применить исправления: удалить некорректные child→parent рёбра (и оба sibling-рёбра)
 
 ---
 
@@ -391,7 +409,7 @@ go run ./cmd/tools/horizon_check_signals \
 go run ./cmd/tools/check_founded_edges
 ```
 
-**Примечание:** Использует хардкод project ID "sanskrite". Для других проектов нужно изменить код.
+**Примечание:** Использует хардкод project ID "hatlone-test". Для других проектов нужно изменить код.
 
 ---
 
@@ -410,7 +428,7 @@ go run ./cmd/tools/check_founded_edges
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_reexport_fragments \
-  --project=sanskrite \
+  --project=hatlone-test \
   --bucket=my-bucket \
   --resume \
   --checkpoint-file=/tmp/reexport_checkpoint.txt
@@ -444,14 +462,14 @@ go run ./cmd/tools/horizon_reexport_fragments \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_propagate_metric \
-  --project=sanskrite \
+  --project=hatlone-test \
   --path=/org/byd \
   --metric=/metric/risk/supply_chain_criticality \
   --delta=0.1
 ```
 
 **Флаги:**
-- `--project` (default: "sanskrite") - GCP project ID
+- `--project` (default: "hatlone-test") - GCP project ID
 - `--path` (required) - canonical path фрагмента
 - `--metric` (required) - имя метрики для изменения
 - `--delta` (default: 0.1) - изменение значения метрики
@@ -475,7 +493,7 @@ go run ./cmd/tools/horizon_propagate_metric \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_edge_policy_report \
-  --project=sanskrite \
+  --project=hatlone-test \
   --tenant=global \
   --window-hours=24 \
   --baseline-shift-hours=24 \
@@ -507,19 +525,19 @@ go run ./cmd/tools/horizon_edge_policy_report \
 ```bash
 # Найти фрагменты без Wikidata
 go run ./cmd/tools/horizon_find_missing_wikidata \
-  --project=sanskrite \
+  --project=hatlone-test \
   --limit=1000 \
   --format=jsonl
 
 # С предложениями Wikidata
 go run ./cmd/tools/horizon_find_missing_wikidata \
-  --project=sanskrite \
+  --project=hatlone-test \
   --suggest-wikidata \
   --limit=100
 
 # Применить найденные Wikidata ID
 go run ./cmd/tools/horizon_find_missing_wikidata \
-  --project=sanskrite \
+  --project=hatlone-test \
   --suggest-wikidata \
   --apply-wikidata-ref \
   --apply-industry \
@@ -579,7 +597,7 @@ go run ./cmd/tools/horizon_find_missing_wikidata \
 ```bash
 # Dry-run: backfill MARKET profile + market metrics
 go run ./cmd/tools/horizon_llm_backfill \
-  --project=sanskrite \
+  --project=hatlone-test \
   --features=market_profile,market_metrics \
   --types=MARKET \
   --limit=200 \
@@ -588,7 +606,7 @@ go run ./cmd/tools/horizon_llm_backfill \
 
 # Apply: backfill org classifiers
 go run ./cmd/tools/horizon_llm_backfill \
-  --project=sanskrite \
+  --project=hatlone-test \
   --apply \
   --features=org_classifiers \
   --types=ORGANIZATION \
@@ -745,10 +763,10 @@ go run ./cmd/tools/horizon_llm_backfill \
 
 ```bash
 # Только отчет
-go run ./cmd/tools/horizon_deduplicate_fragments --project=sanskrite
+go run ./cmd/tools/horizon_deduplicate_fragments --project=hatlone-test
 
 # Применить изменения
-go run ./cmd/tools/horizon_deduplicate_fragments --project=sanskrite --dry-run=false
+go run ./cmd/tools/horizon_deduplicate_fragments --project=hatlone-test --dry-run=false
 ```
 
 ### Миграция ссылок
