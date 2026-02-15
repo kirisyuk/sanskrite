@@ -1086,6 +1086,8 @@ func orgNameAlnumFingerprint(f *models.HorizonFragment) string {
 	if norm == "" {
 		norm = strings.ToLower(strings.TrimSpace(raw))
 	}
+	// Phonetic: telecom/telekom transliteration (Kazakhtelecom vs Kazakhtelekom)
+	norm = strings.ReplaceAll(norm, "telekom", "telecom")
 	var b strings.Builder
 	for _, r := range norm {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {

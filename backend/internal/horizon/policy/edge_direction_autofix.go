@@ -44,6 +44,24 @@ func ResolveEdgeDirectionAutoFix(
 			Reason:     "canonicalize: MARKET INVESTS_IN ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET",
 			Confidence: 0.95,
 		}, true
+	case edgeType == horizonmodels.DependencyTypeRelatedTo &&
+		(sourceType == horizonmodels.FragmentTypeOrganization || sourceType == horizonmodels.FragmentTypeFacility || sourceType == horizonmodels.FragmentTypeCommunity || sourceType == horizonmodels.FragmentTypeProgram) &&
+		targetType == horizonmodels.FragmentTypeMarket:
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			ShouldSwap: false,
+			Reason:     "canonicalize: ENTITY RELATED_TO MARKET -> ENTITY PARTICIPATES_IN MARKET",
+			Confidence: 0.90,
+		}, true
+	case edgeType == horizonmodels.DependencyTypeRelatedTo &&
+		sourceType == horizonmodels.FragmentTypeMarket &&
+		(targetType == horizonmodels.FragmentTypeOrganization || targetType == horizonmodels.FragmentTypeFacility || targetType == horizonmodels.FragmentTypeCommunity || targetType == horizonmodels.FragmentTypeProgram):
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			ShouldSwap: true,
+			Reason:     "canonicalize: MARKET RELATED_TO ENTITY -> ENTITY PARTICIPATES_IN MARKET",
+			Confidence: 0.90,
+		}, true
 	case edgeType == horizonmodels.DependencyTypeProduces &&
 		sourceType == horizonmodels.FragmentTypeMarket &&
 		targetType == horizonmodels.FragmentTypeFacility:

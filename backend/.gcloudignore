@@ -21,6 +21,7 @@ cmd/*/hatlone-ws
 
 # Local tool binaries produced by `go build` / `go install` for cmd/tools (often 40-80MB each)
 horizon_*
+check_*
 
 # Log files
 *.log

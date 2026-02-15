@@ -279,6 +279,24 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 			wantSwap:   true,
 			wantChange: true,
 		},
+		{
+			name:       "ORGANIZATION RELATED_TO MARKET -> ORGANIZATION PARTICIPATES_IN MARKET",
+			edgeType:   models.DependencyTypeRelatedTo,
+			sourceType: models.FragmentTypeOrganization,
+			targetType: models.FragmentTypeMarket,
+			wantType:   models.DependencyTypeParticipatesIn,
+			wantSwap:   false,
+			wantChange: true,
+		},
+		{
+			name:       "MARKET RELATED_TO ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET (swap)",
+			edgeType:   models.DependencyTypeRelatedTo,
+			sourceType: models.FragmentTypeMarket,
+			targetType: models.FragmentTypeOrganization,
+			wantType:   models.DependencyTypeParticipatesIn,
+			wantSwap:   true,
+			wantChange: true,
+		},
 	}
 
 	for _, tt := range tests {

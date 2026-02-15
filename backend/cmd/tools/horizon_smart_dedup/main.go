@@ -210,16 +210,18 @@ func shouldSkipOrgNameCluster(matchType string, frags []*models.HorizonFragment)
 	}
 
 	// Skip name-based ORG merges when legal forms conflict (semantic distinction).
-	legalForms := map[string]struct{}{}
+	// Equivalent forms (ao/jsc, ltd/limited, etc.) are grouped — same group = no conflict.
+	legalFormGroups := map[string]struct{}{}
 	for _, f := range frags {
 		lf := extractOrgLegalForm(f)
 		if lf == "" {
 			continue
 		}
-		legalForms[lf] = struct{}{}
+		group := legalFormCanonicalGroup(lf)
+		legalFormGroups[group] = struct{}{}
 	}
-	if len(legalForms) > 1 {
-		return true, fmt.Sprintf("conflicting_legal_forms=%v", keysSorted(legalForms))
+	if len(legalFormGroups) > 1 {
+		return true, fmt.Sprintf("conflicting_legal_forms=%v", keysSorted(legalFormGroups))
 	}
 
 	return false, ""
@@ -481,6 +483,35 @@ func extractOrgLegalForm(f *models.HorizonFragment) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(parts.Org.LegalForm))
+}
+
+// legalFormCanonicalGroup maps equivalent legal forms to a canonical group.
+// Forms in the same group (e.g. ao/jsc) are not treated as conflicting.
+var legalFormCanonicalGroupMap = map[string]string{
+	// CIS JSC variants (АО = JSC, ОАО/PJSC = public JSC, ЗАО/CJSC = closed JSC)
+	"ao": "jsc", "oao": "jsc", "jsc": "jsc", "pjsc": "jsc", "cjsc": "jsc", "ojsc": "jsc",
+	"zao": "zao",
+	// CIS LLC variants (ООО = LLC)
+	"ooo": "llc", "llc": "llc",
+	// UK variants
+	"ltd": "ltd", "limited": "ltd", "plc": "plc", "p.l.c.": "plc",
+	// US variants
+	"inc": "inc", "corp": "inc", "corporation": "inc",
+	// French/Spanish
+	"sa": "sa", "s.a.": "sa", "sas": "sas", "sarl": "sarl",
+	// Nordic
+	"ab": "ab", "oy": "oy", "as": "as",
+	// German
+	"gmbh": "gmbh", "ag": "ag",
+	// Italian
+	"srl": "srl", "spa": "spa",
+}
+
+func legalFormCanonicalGroup(form string) string {
+	if g, ok := legalFormCanonicalGroupMap[form]; ok {
+		return g
+	}
+	return form
 }
 
 func keysSorted(m map[string]struct{}) []string {
@@ -898,6 +929,7 @@ func main() {
 	productNameIndex := make(map[string][]*models.HorizonFragment)            // product_name -> product fragments
 	productAliasIndex := make(map[string][]*models.HorizonFragment)           // product_alias_key -> product fragments (label/short/legal + legacy slug aliases)
 	personPhoneticIndex := make(map[string][]*models.HorizonFragment)         // phonetic_key -> person fragments (catches Tahnoon/Tahnoun, Khalid/Halid)
+	orgPhoneticIndex := make(map[string][]*models.HorizonFragment)             // type:org:iso2:phonetic_key -> org fragments (telecom/telekom, c/k transliteration)
 
 	for _, f := range fragments {
 		if f == nil {
@@ -1073,6 +1105,11 @@ func main() {
 				if n != "" {
 					key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, n)
 					orgNormalizedNameIndex[key] = append(orgNormalizedNameIndex[key], f)
+					// Phonetic key for transliteration variants (telecom/telekom, c/k)
+					if pk := normalizeOrgPhoneticKey(n); pk != "" {
+						pkKey := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, pk)
+						orgPhoneticIndex[pkKey] = append(orgPhoneticIndex[pkKey], f)
+					}
 				}
 			}
 		}
@@ -1205,6 +1242,7 @@ func main() {
 	log.Printf("✓ Normalized legal index: %d unique keys", len(normalizedLegalIndex))
 	log.Printf("✓ Normalized legal NA index: %d unique keys (org fragments with unknown jurisdiction)", len(normalizedLegalNAIndex))
 	log.Printf("✓ ORG normalized name index: %d unique keys", len(orgNormalizedNameIndex))
+	log.Printf("✓ ORG phonetic index: %d unique keys", len(orgPhoneticIndex))
 	log.Printf("✓ FACILITY normalized name index: %d unique keys", len(facilityNormalizedNameIndex))
 	log.Printf("✓ GEO city index: %d unique cities", len(geoCityIndex))
 	log.Printf("✓ GEO by path index: %d unique paths", len(geoByPath))
@@ -2142,6 +2180,40 @@ func main() {
 		normalizedLegalClusters++
 	}
 	log.Printf("  Found %d normalizedLegal-based clusters", normalizedLegalClusters)
+
+	// Priority 5.2: ORG phonetic matches (telecom/telekom, c/k transliteration) — same geo + phonetic base = likely same
+	orgPhoneticClusters := 0
+	for key, frags := range orgPhoneticIndex {
+		if len(frags) <= 1 {
+			continue
+		}
+		var unprocessed []*models.HorizonFragment
+		for _, f := range frags {
+			if !processedFragmentIDs[f.ID] {
+				unprocessed = append(unprocessed, f)
+			}
+		}
+		if len(unprocessed) > 1 {
+			if skip, reason := shouldSkipOrgNameCluster("orgPhonetic", unprocessed); skip {
+				if *verbose {
+					log.Printf("  SKIP ORG cluster (orgPhonetic): key=%s reason=%s", key, reason)
+				}
+				continue
+			}
+			cluster := &DuplicateCluster{
+				MatchType:  "orgPhonetic",
+				MatchValue: key,
+				Fragments:  unprocessed,
+			}
+			cluster.CanonicalID = selectCanonical(unprocessed, profileCache)
+			clusters = append(clusters, cluster)
+			for _, f := range unprocessed {
+				processedFragmentIDs[f.ID] = true
+			}
+			orgPhoneticClusters++
+		}
+	}
+	log.Printf("  Found %d orgPhonetic-based clusters", orgPhoneticClusters)
 
 	// Priority 5.5: ORG normalized name (label/legal) — LOW-signal stub rescue (guarded)
 	// Example: /org/softbank-group (label="softbank group", no identifiers) should merge into /org/softbank (legalName="SoftBank Group Corp.")
@@ -5239,6 +5311,37 @@ func isSpecificProductAliasKey(aliasKey string) bool {
 		return false
 	}
 	return true
+}
+
+// normalizeOrgPhoneticKey normalizes org names for phonetic matching (transliteration variants).
+// Handles: telecom/telekom (Kazakhtelecom vs Kazakhtelekom), com/kom suffix. Same geo + phonetic match = likely same org.
+// Returns empty if result too short (<6 chars) to avoid false positives.
+func normalizeOrgPhoneticKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	// Transliteration variants (order matters: longer first)
+	replacements := []struct{ from, to string }{
+		{"telekom", "telecom"}, // Kazakhtelecom/Kazakhtelekom, Deutsche Telekom
+	}
+	for _, r := range replacements {
+		name = strings.ReplaceAll(name, r.from, r.to)
+	}
+	// Alphanumeric only
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else if r == ' ' {
+			b.WriteRune(r)
+		}
+	}
+	result := strings.Join(strings.Fields(b.String()), " ")
+	if len(result) < 6 {
+		return ""
+	}
+	return result
 }
 
 // normalizePhoneticKey normalizes Arabic/transliterated names for phonetic matching.

@@ -204,6 +204,20 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET INVESTS_IN ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET"
 	}
 
+	// RELATED_TO(ORG/FACILITY/COMMUNITY/PROGRAM → MARKET) → PARTICIPATES_IN
+	// "Related" between entity and market usually means participation (entity operates in market).
+	if edgeType == DependencyTypeRelatedTo &&
+		(sourceType == FragmentTypeOrganization || sourceType == FragmentTypeFacility || sourceType == FragmentTypeCommunity || sourceType == FragmentTypeProgram) &&
+		targetType == FragmentTypeMarket {
+		return DependencyTypeParticipatesIn, false, true, "canonicalize: ENTITY RELATED_TO MARKET -> ENTITY PARTICIPATES_IN MARKET"
+	}
+	// RELATED_TO(MARKET → ORG/FACILITY/COMMUNITY/PROGRAM) → PARTICIPATES_IN (swap)
+	if edgeType == DependencyTypeRelatedTo &&
+		sourceType == FragmentTypeMarket &&
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility || targetType == FragmentTypeCommunity || targetType == FragmentTypeProgram) {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET RELATED_TO ENTITY -> ENTITY PARTICIPATES_IN MARKET"
+	}
+
 	// OWNS(ORG → PROGRAM) → ADMINISTERS
 	// Organizations typically administer/operate programs rather than "own" them.
 	if edgeType == DependencyTypeOwns &&

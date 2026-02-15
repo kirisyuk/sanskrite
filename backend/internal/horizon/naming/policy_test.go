@@ -10,6 +10,14 @@ func TestNormalizeLegalName(t *testing.T) {
 		{"Taiwan Semiconductor Manufacturing Company Limited (TSMC)", "taiwan semiconductor manufacturing"},
 		{"T-Bank (formerly Tinkoff) PJSC", "t bank"},
 		{"Saudi Arabia Central Bank (SAMA)", "saudi arabia central bank"},
+		// Legal form prefix: "JSC Company" vs "Company" = same base in same geo
+		{"JSC Kazakhtelecom", "kazakhtelecom"},
+		{"Kazakhtelecom", "kazakhtelecom"},
+		// Legal form suffix
+		{"Kazakhtelekom Jsc", "kazakhtelekom"},
+		// "Joint Stock Company" prefix (Samruk-Kazyna)
+		{"Joint Stock Company Sovereign Wealth Fund Samruk-Kazyna", "sovereign wealth fund samruk kazyna"},
+		{"Sovereign Wealth Fund Samruk Kazyna Jsc", "sovereign wealth fund samruk kazyna"},
 	}
 	for _, tt := range tests {
 		got := NormalizeLegalName(tt.in)

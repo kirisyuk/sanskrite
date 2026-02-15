@@ -17,6 +17,18 @@ var LegalSuffixesToRemove = []string{
 	" p.j.s.c.", " c.j.s.c.",
 }
 
+// LegalPrefixesToRemove defines legal form prefixes (e.g. "JSC Company Name").
+// Same geo + base name + legal form (prefix or suffix) = same entity with very high probability.
+// Exclude short prefixes (sa, ag, co, nv, bv) that could match common words (Saudi, agency, etc.).
+// Longer phrases first so "joint stock company" strips before "jsc" is checked.
+var LegalPrefixesToRemove = []string{
+	"joint stock company ", "public joint stock company ", "closed joint stock company ",
+	"jsc ", "pjsc ", "cjsc ", "ojsc ",
+	"ao ", "oao ", "zao ", // Russian АО, ОАО, ЗАО
+	"llc ", "inc ", "ltd ", "corp ", "plc ",
+	"gmbh ", "sarl ", "srl ",
+}
+
 // parentheticalAliasRE matches parenthetical alias/rebranding annotations that LLMs often inject.
 var parentheticalAliasRE = regexp.MustCompile(`\s*\((?:formerly|previously|ex-?|now|fka|dba|aka|trading as|prev\.?|f/k/a|d/b/a|a/k/a)\s[^)]*\)`)
 var trailingAcronymParenRE = regexp.MustCompile(`\s*\(([A-Za-z0-9&.\-]{2,20})\)\s*$`)
@@ -79,6 +91,19 @@ func NormalizeLegalName(name string) string {
 				changed = true
 				break
 			}
+		}
+	}
+
+	// Strip legal form prefixes (e.g. "JSC Kazakhtelecom" -> "kazakhtelecom").
+	// Same geo + base name regardless of prefix/suffix form = same entity.
+	for _, prefix := range LegalPrefixesToRemove {
+		pfx := strings.ToLower(strings.TrimSpace(prefix))
+		if pfx == "" {
+			continue
+		}
+		if strings.HasPrefix(name, pfx) {
+			name = strings.TrimSpace(strings.TrimPrefix(name, pfx))
+			break
 		}
 	}
 
