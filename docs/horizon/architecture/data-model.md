@@ -904,6 +904,12 @@ type EdgeMetadata struct {
 // - eventId: Reference to /event/ fragment (e.g., for INVESTS_IN funding rounds)
 // - round: Investment round name (e.g., "Series A")
 // - contractType: Type of contract (e.g., "long-term", "spot")
+// - integration_type: "vertical" | "partnership" | "arm's-length" (SUPPLIES_TO, OWNS)
+// - at_facility: (TRANSFORMS_INTO only) Canonical path of facility where product transformation occurs.
+//   Semantics: products transform; the facility is the qualifier (where it happens).
+//   Example: Product X --TRANSFORMS_INTO--> Product Y with qualifiers.at_facility="/fac/albemarle/silver-peak"
+// - transport_via: (SUPPLIES_TO, SupplyLink) Array of facility canonical paths the product passes through.
+//   Ports, terminals, pipelines, warehouses — qualify the transport method. Same canonicalization/dedup as other fragments.
 
 // MissingInfoStatus — tracks missing information research status (NEW)
 type MissingInfoStatus struct {
@@ -1086,6 +1092,18 @@ gcloud firestore indexes composite create \
 - Использует Provenance для прослеживаемости источников
 
 Подробнее см. [Базовая таксономия](taxonomy.md).
+
+## Domain modes, allowlists и semantic groups
+
+Для доменно-специфичного выполнения Scout (фазы, Research/Critic по домену) используются:
+
+- **Domain mode** — режим выполнения, производный от intent-resolved доменов (contract types) и steering profile: `supply_chain`, `governance`, `market`, `strategic`, `general`. Записывается в `ScoutingJob.State["domainMode"]` или `State["domainModes"]` (при composite).
+- **Allowlist по domain mode** — для каждого режима задан список разрешённых типов рёбер (DependencyType) при записи и фильтрации; при `general` ограничений нет.
+- **Semantic groups** — справочник DependencyType → семантическая группа (`supply_chain`, `governance`, `market`, `strategic`, `domain`, `person`, `transition`, `other`) для фильтрации в API/UI и выбора allowlist.
+
+Подробнее см. [ТЗ: Domain-specific фазы Scout и composable agents](../implementation/SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md).
+
+**Канонические типы рёбер (TZ §6.1):** в промптах и при записи используются только канонические типы. Устаревшие типы (RELATED_TO, AFFILIATED_WITH, DOMINATES, WORKS_FOR, RENAMED_TO, ABOUT, BROADENS_TO и др.) маппятся в нормализаторе: RELATED_TO/AFFILIATED_WITH/PARTNERS_WITH → ASSOCIATED_WITH; переходы (RENAMED_TO, MERGED_INTO, …) → CORPORATE_TRANSITION; домен↔домен → DOMAIN_RELATION или FOCUSES_ON; домен→объект → FOCUSES_ON; DOMINATES → PARTICIPATES_IN; WORKS_FOR/KEY_PERSON → EMPLOYED_BY.
 
 ## Интеграция с Project и DataSource
 

@@ -6,8 +6,9 @@ import (
 )
 
 const (
-	envUnifiedPolicyContract = "HORIZON_UNIFIED_POLICY_CONTRACT"
-	envUnifiedPolicyShadow   = "HORIZON_UNIFIED_POLICY_SHADOW_MODE"
+	envUnifiedPolicyContract   = "HORIZON_UNIFIED_POLICY_CONTRACT"
+	envUnifiedPolicyShadow     = "HORIZON_UNIFIED_POLICY_SHADOW_MODE"
+	envScoutComposablePipeline = "HORIZON_SCOUT_COMPOSABLE_PIPELINE"
 )
 
 func policyUnifiedContractEnabled() bool {
@@ -26,6 +27,16 @@ func UnifiedPolicyContractEnabled() bool {
 // UnifiedPolicyShadowModeEnabled reports whether shadow compare mode is enabled.
 func UnifiedPolicyShadowModeEnabled() bool {
 	return policyUnifiedShadowModeEnabled()
+}
+
+func scoutComposablePipelineEnabled() bool {
+	return policyEnvEnabled(envScoutComposablePipeline, true)
+}
+
+// ScoutComposablePipelineEnabled reports whether Scout uses composable Critic/Research pipelines by domain mode.
+// When false, Scout uses the monolithic validation and enrichment path (fallback/rollback).
+func ScoutComposablePipelineEnabled() bool {
+	return scoutComposablePipelineEnabled()
 }
 
 func policyEnvEnabled(name string, def bool) bool {

@@ -31,6 +31,16 @@ func TestValidateCanonicalPath(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "valid org path with regional token (EU-level org)",
+			path:    "/org/eu/european-commission",
+			wantErr: false,
+		},
+		{
+			name:    "valid org path with int (international org)",
+			path:    "/org/int/united-nations",
+			wantErr: false,
+		},
+		{
 			name:    "valid gov path",
 			path:    "/gov/ae/ministry-of-defence",
 			wantErr: false,
@@ -49,6 +59,11 @@ func TestValidateCanonicalPath(t *testing.T) {
 			name:    "invalid gov path bad country segment",
 			path:    "/gov/uae/ministry-of-defence",
 			wantErr: true,
+		},
+		{
+			name:    "valid gov path with regional token (EU-level body)",
+			path:    "/gov/eu/european-commission",
+			wantErr: false,
 		},
 		{
 			name:    "valid person path",

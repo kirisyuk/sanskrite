@@ -10,14 +10,12 @@ import (
 // These functions are shared across packages (scout, policy, repo) to avoid
 // circular imports.
 
-// SymmetricEdgeTypes defines edge types where the relationship is reciprocal.
-// For these types, we normalize source/target to ensure consistent representation.
+// SymmetricEdgeTypes defines edge types where the relationship is reciprocal (canonical types per TZ §6.1).
 var SymmetricEdgeTypes = map[DependencyType]bool{
-	DependencyTypeCompetesWith:  true, // "A competes with B" = "B competes with A"
-	DependencyTypePartnersWith:  true, // "A partners with B" = "B partners with A"
-	DependencyTypeRelativeOf:    true, // "A is relative of B" = "B is relative of A"
-	DependencyTypeRelatedTo:     true, // "A is related to B" = "B is related to A"
-	DependencyTypeRelatedDomain: true, // "D1 related domain D2" = "D2 related domain D1"
+	DependencyTypeCompetesWith:    true,
+	DependencyTypeRelativeOf:     true,
+	DependencyTypeAssociatedWith: true, // canonical for RELATED_TO, AFFILIATED_WITH, PARTNERS_WITH
+	DependencyTypeDomainRelation: true, // canonical for domain↔domain
 }
 
 // IsSelfLoop returns true if the edge points to itself.
@@ -67,8 +65,11 @@ func isDynastyOrTribeCommunity(canonicalPath string) bool {
 //
 // Keep this conservative and explicit. This is used at creation time and during cleanup.
 func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentType) (DependencyType, bool, bool, string) {
+	// Transition types → canonical CORPORATE_TRANSITION first (TZ §6.1).
+	if IsTransitionEdgeType(edgeType) && edgeType != DependencyTypeCorporateTransition {
+		edgeType = DependencyTypeCorporateTransition
+	}
 	// Corporate transition edges are only valid for organization-to-organization links.
-	// If endpoint typing is wrong, preserve weak linkage semantics instead of dropping the edge.
 	if IsTransitionEdgeType(edgeType) {
 		if sourceType == FragmentTypeOrganization && targetType == FragmentTypeOrganization {
 			return edgeType, false, false, ""
@@ -77,23 +78,65 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 	}
 
 	// =============================================================================
-	// DOMAIN-related canonicalization (pre-policy)
+	// DOMAIN-related canonicalization (TZ §6.1: domain↔domain only FOCUSES_ON and DOMAIN_RELATION)
 	// =============================================================================
-	// If a DOMAIN ↔ DOMAIN edge uses an unknown/non-allowlisted type, rewrite it into FOCUSES_ON.
-	// This keeps the graph usable and prevents policy failures from arbitrary LLM relation types.
 	if sourceType == FragmentTypeDomain && targetType == FragmentTypeDomain {
 		switch edgeType {
-		case DependencyTypeFocusesOn,
-			DependencyTypeRelatedDomain,
-			DependencyTypeBroadensTo,
-			DependencyTypeNarrowsTo,
-			DependencyTypeAffects,
-			DependencyTypeDependsOn:
-			// Allowlisted domain-domain relations.
+		case DependencyTypeFocusesOn, DependencyTypeDomainRelation:
 			return edgeType, false, false, ""
+		case DependencyTypeRelatedDomain, DependencyTypeBroadensTo, DependencyTypeNarrowsTo, DependencyTypeAffects:
+			return DependencyTypeDomainRelation, false, true, "canonicalize: DOMAIN↔DOMAIN -> DOMAIN_RELATION"
+		case DependencyTypeDependsOn:
+			return DependencyTypeDomainRelation, false, true, "canonicalize: DOMAIN DEPENDS_ON DOMAIN -> DOMAIN_RELATION"
 		default:
-			return DependencyTypeFocusesOn, false, true, "canonicalize: DOMAIN→DOMAIN unknown edge type -> DOMAIN FOCUSES_ON DOMAIN"
+			return DependencyTypeFocusesOn, false, true, "canonicalize: DOMAIN→DOMAIN unknown -> FOCUSES_ON"
 		}
+	}
+
+	// Domain → non-domain (entity): only FOCUSES_ON (TZ §6.1).
+	if sourceType == FragmentTypeDomain && targetType != FragmentTypeDomain {
+		switch edgeType {
+		case DependencyTypeFocusesOn:
+			return edgeType, false, false, ""
+		case DependencyTypeAbout, DependencyTypeAffects, DependencyTypeSurfaces, DependencyTypeInvolvesActor, DependencyTypeInGeoScope:
+			return DependencyTypeFocusesOn, false, true, "canonicalize: domain→entity -> FOCUSES_ON"
+		default:
+			return DependencyTypeFocusesOn, false, true, "canonicalize: domain→entity unknown -> FOCUSES_ON"
+		}
+	}
+
+	// AFFILIATED_WITH(PERSON → COMMUNITY) → MEMBER_OF (canonical membership).
+	if edgeType == DependencyTypeAffiliatedWith &&
+		sourceType == FragmentTypePerson &&
+		targetType == FragmentTypeCommunity {
+		return DependencyTypeMemberOf, false, true, "canonicalize: PERSON AFFILIATED_WITH COMMUNITY -> MEMBER_OF"
+	}
+	// RELATED_TO(ENTITY ↔ MARKET) → PARTICIPATES_IN (must run before generic RELATED_TO→ASSOCIATED_WITH).
+	if edgeType == DependencyTypeRelatedTo &&
+		(sourceType == FragmentTypeOrganization || sourceType == FragmentTypeFacility || sourceType == FragmentTypeCommunity || sourceType == FragmentTypeProgram) &&
+		targetType == FragmentTypeMarket {
+		return DependencyTypeParticipatesIn, false, true, "canonicalize: ENTITY RELATED_TO MARKET -> ENTITY PARTICIPATES_IN MARKET"
+	}
+	if edgeType == DependencyTypeRelatedTo &&
+		sourceType == FragmentTypeMarket &&
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility || targetType == FragmentTypeCommunity || targetType == FragmentTypeProgram) {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET RELATED_TO ENTITY -> ENTITY PARTICIPATES_IN MARKET"
+	}
+	// RELATED_TO / AFFILIATED_WITH / PARTNERS_WITH → ASSOCIATED_WITH (canonical).
+	switch edgeType {
+	case DependencyTypeRelatedTo, DependencyTypeAffiliatedWith, DependencyTypePartnersWith:
+		return DependencyTypeAssociatedWith, false, true, "canonicalize: relation -> ASSOCIATED_WITH"
+	}
+
+	// DOMINATES → PARTICIPATES_IN (with marketRole/market_share in qualifiers/metrics).
+	if edgeType == DependencyTypeDominates {
+		return DependencyTypeParticipatesIn, false, true, "canonicalize: DOMINATES -> PARTICIPATES_IN"
+	}
+
+	// WORKS_FOR / KEY_PERSON / HAS_KEY_PERSON → EMPLOYED_BY (canonical employment).
+	switch edgeType {
+	case DependencyTypeWorksFor, DependencyTypeKeyPerson, DependencyTypeHasKeyPerson:
+		return DependencyTypeEmployedBy, false, true, "canonicalize: employment/key person -> EMPLOYED_BY"
 	}
 
 	// ORG OWNS PERSON is invalid: ownership should flow from PERSON to ORG.
@@ -204,40 +247,12 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET INVESTS_IN ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET"
 	}
 
-	// RELATED_TO(ORG/FACILITY/COMMUNITY/PROGRAM → MARKET) → PARTICIPATES_IN
-	// "Related" between entity and market usually means participation (entity operates in market).
-	if edgeType == DependencyTypeRelatedTo &&
-		(sourceType == FragmentTypeOrganization || sourceType == FragmentTypeFacility || sourceType == FragmentTypeCommunity || sourceType == FragmentTypeProgram) &&
-		targetType == FragmentTypeMarket {
-		return DependencyTypeParticipatesIn, false, true, "canonicalize: ENTITY RELATED_TO MARKET -> ENTITY PARTICIPATES_IN MARKET"
-	}
-	// RELATED_TO(MARKET → ORG/FACILITY/COMMUNITY/PROGRAM) → PARTICIPATES_IN (swap)
-	if edgeType == DependencyTypeRelatedTo &&
-		sourceType == FragmentTypeMarket &&
-		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility || targetType == FragmentTypeCommunity || targetType == FragmentTypeProgram) {
-		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET RELATED_TO ENTITY -> ENTITY PARTICIPATES_IN MARKET"
-	}
-
 	// OWNS(ORG → PROGRAM) → ADMINISTERS
 	// Organizations typically administer/operate programs rather than "own" them.
 	if edgeType == DependencyTypeOwns &&
 		sourceType == FragmentTypeOrganization &&
 		targetType == FragmentTypeProgram {
 		return DependencyTypeAdministers, false, true, "canonicalize: ORGANIZATION OWNS PROGRAM -> ORGANIZATION ADMINISTERS PROGRAM"
-	}
-
-	// AFFILIATED_WITH(PERSON → COMMUNITY) expresses membership in this ontology.
-	if edgeType == DependencyTypeAffiliatedWith &&
-		sourceType == FragmentTypePerson &&
-		targetType == FragmentTypeCommunity {
-		return DependencyTypeMemberOf, false, true, "canonicalize: PERSON AFFILIATED_WITH COMMUNITY -> PERSON MEMBER_OF COMMUNITY"
-	}
-
-	// AFFILIATED_WITH(ORG → ORG) is treated as partnership relation.
-	if edgeType == DependencyTypeAffiliatedWith &&
-		sourceType == FragmentTypeOrganization &&
-		targetType == FragmentTypeOrganization {
-		return DependencyTypePartnersWith, false, true, "canonicalize: ORGANIZATION AFFILIATED_WITH ORGANIZATION -> ORGANIZATION PARTNERS_WITH ORGANIZATION"
 	}
 
 	// DOMINATES(MARKET → ORG/FAC/COMMUNITY) → DOMINATES (swap)

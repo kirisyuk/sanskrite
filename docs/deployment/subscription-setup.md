@@ -16,7 +16,7 @@
 
 ### 2. Firestore Indexes
 
-Добавьте следующие индексы в `backend/firestore.indexes.json`:
+Добавьте следующие индексы в `web/firestore.indexes.json`:
 
 ```json
 {
@@ -52,7 +52,7 @@
 После добавления индексов, разверните их:
 
 ```bash
-gcloud firestore indexes deploy backend/firestore.indexes.json
+cd web && firebase deploy --only firestore:indexes
 ```
 
 Или дождитесь автоматического создания при первом запросе (Firestore создаст их автоматически, но может занять время).

@@ -3,18 +3,73 @@ package pathbuilder
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 )
 
+// pathBuilderCacheEntry holds a cached value with expiry.
+type pathBuilderCacheEntry struct {
+	value    interface{}
+	expireAt time.Time
+}
+
+// pathBuilderCache is a simple in-memory cache with TTL for reduce DB queries during path building.
+type pathBuilderCache struct {
+	mu    sync.RWMutex
+	ttl   time.Duration
+	items map[string]pathBuilderCacheEntry
+}
+
+func newPathBuilderCache(ttl time.Duration) *pathBuilderCache {
+	c := &pathBuilderCache{ttl: ttl, items: make(map[string]pathBuilderCacheEntry)}
+	if ttl > 0 {
+		go c.cleanupLoop()
+	}
+	return c
+}
+
+func (c *pathBuilderCache) cleanupLoop() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		c.mu.Lock()
+		now := time.Now()
+		for k, e := range c.items {
+			if e.expireAt.Before(now) {
+				delete(c.items, k)
+			}
+		}
+		c.mu.Unlock()
+	}
+}
+
+func (c *pathBuilderCache) get(key string) (interface{}, bool) {
+	c.mu.RLock()
+	e, ok := c.items[key]
+	c.mu.RUnlock()
+	if !ok || (c.ttl > 0 && time.Now().After(e.expireAt)) {
+		return nil, false
+	}
+	return e.value, true
+}
+
+func (c *pathBuilderCache) set(key string, value interface{}) {
+	c.mu.Lock()
+	c.items[key] = pathBuilderCacheEntry{value: value, expireAt: time.Now().Add(c.ttl)}
+	c.mu.Unlock()
+}
+
 // SupplyChainPathBuilder builds supply chain paths from SupplyLink segments.
 type SupplyChainPathBuilder struct {
 	fragmentsRepo *repo.HorizonFragmentsRepository
 	edgesRepo     *repo.DependencyEdgesRepository
 	artifactsRepo *repo.MaterializedArtifactsRepository
+	cache         *pathBuilderCache
 }
 
 // NewSupplyChainPathBuilder creates a new SupplyChainPathBuilder.
@@ -27,7 +82,14 @@ func NewSupplyChainPathBuilder(
 		fragmentsRepo: fragmentsRepo,
 		edgesRepo:     edgesRepo,
 		artifactsRepo: artifactsRepo,
+		cache:         newPathBuilderCache(5 * time.Minute),
 	}
+}
+
+// WithCacheTTL overrides the default cache TTL (0 = disabled).
+func (b *SupplyChainPathBuilder) WithCacheTTL(ttl time.Duration) *SupplyChainPathBuilder {
+	b.cache = newPathBuilderCache(ttl)
+	return b
 }
 
 // BuildPathOptions configures path building behavior.
@@ -36,6 +98,10 @@ type BuildPathOptions struct {
 	TenantID string
 	// MaxDepth limits the maximum depth of the path
 	MaxDepth int
+	// MaxBranching limits segments explored per step (top N by confidence). 0 = no limit.
+	MaxBranching int
+	// MaxPaths limits how many distinct paths to return (top by confidence). 0 = 10.
+	MaxPaths int
 	// RequireProductTransformation if true, requires TRANSFORMS_INTO between products
 	RequireProductTransformation bool
 	// EffectiveAt filters links by time validity (nil = no time filter)
@@ -48,7 +114,9 @@ type BuildPathOptions struct {
 func DefaultBuildPathOptions() BuildPathOptions {
 	return BuildPathOptions{
 		MaxDepth:                     6,
-		RequireProductTransformation: false,
+		MaxBranching:                 5,
+		MaxPaths:                     10,
+		RequireProductTransformation: true,
 		MinConfidence:                0.0,
 	}
 }
@@ -66,6 +134,8 @@ type PathSegment struct {
 	// Optional facility refs
 	SupplierFacilityRef *string
 	CustomerFacilityRef *string
+	// TransportViaRefs: ordered facility paths product passes through (ports, terminals, pipelines, warehouses)
+	TransportViaRefs []string
 	// Confidence for this segment (0..1)
 	Confidence float64
 	// TenantID of the link ("global" or tenant)
@@ -85,13 +155,14 @@ type SupplyChainPath struct {
 	MaxDepth  int
 }
 
-// BuildUpstreamPath builds a supply chain path upstream from a given customer.
-// Returns paths from suppliers to the customer, following SupplyLink segments.
-func (b *SupplyChainPathBuilder) BuildUpstreamPath(
+// BuildUpstreamPaths builds supply chain paths upstream from a given customer.
+// Returns multiple paths (top by confidence) from suppliers to the customer, following SupplyLink segments.
+// A real supply chain is a graph; returning multiple paths gives a fuller picture than a single path.
+func (b *SupplyChainPathBuilder) BuildUpstreamPaths(
 	ctx context.Context,
 	customerRef string, // Canonical path of customer org/fac
 	opts BuildPathOptions,
-) (*SupplyChainPath, error) {
+) ([]*SupplyChainPath, error) {
 	if customerRef == "" {
 		return nil, fmt.Errorf("customerRef is required")
 	}
@@ -108,13 +179,7 @@ func (b *SupplyChainPathBuilder) BuildUpstreamPath(
 	}
 
 	if len(segments) == 0 {
-		// Return empty path
-		return &SupplyChainPath{
-			Segments:   []PathSegment{},
-			Confidence: 0.0,
-			BuildMode:  "tenant_first_global_fallback",
-			MaxDepth:   opts.MaxDepth,
-		}, nil
+		return []*SupplyChainPath{}, nil
 	}
 
 	// Build paths recursively upstream
@@ -129,8 +194,35 @@ func (b *SupplyChainPathBuilder) BuildUpstreamPath(
 		}
 	}
 
-	// For now, return the first path (later we can merge/rank multiple paths)
 	if len(allPaths) == 0 {
+		return []*SupplyChainPath{}, nil
+	}
+
+	// Sort by confidence descending and take top MaxPaths
+	sort.Slice(allPaths, func(i, j int) bool { return allPaths[i].Confidence > allPaths[j].Confidence })
+	maxPaths := opts.MaxPaths
+	if maxPaths <= 0 {
+		maxPaths = 10
+	}
+	if len(allPaths) > maxPaths {
+		allPaths = allPaths[:maxPaths]
+	}
+
+	return allPaths, nil
+}
+
+// BuildUpstreamPath builds a single supply chain path upstream (highest confidence).
+// Prefer BuildUpstreamPaths for a fuller supply chain view.
+func (b *SupplyChainPathBuilder) BuildUpstreamPath(
+	ctx context.Context,
+	customerRef string,
+	opts BuildPathOptions,
+) (*SupplyChainPath, error) {
+	paths, err := b.BuildUpstreamPaths(ctx, customerRef, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
 		return &SupplyChainPath{
 			Segments:   []PathSegment{},
 			Confidence: 0.0,
@@ -138,16 +230,7 @@ func (b *SupplyChainPathBuilder) BuildUpstreamPath(
 			MaxDepth:   opts.MaxDepth,
 		}, nil
 	}
-
-	// Select best path (highest confidence)
-	bestPath := allPaths[0]
-	for _, path := range allPaths[1:] {
-		if path.Confidence > bestPath.Confidence {
-			bestPath = path
-		}
-	}
-
-	return bestPath, nil
+	return paths[0], nil
 }
 
 // buildPathRecursive recursively builds a path upstream from a segment.
@@ -212,6 +295,12 @@ func (b *SupplyChainPathBuilder) buildPathRecursive(
 	// Optionally validate product transformation
 	if opts.RequireProductTransformation {
 		nextSegments = b.filterByProductTransformation(ctx, currentSegment.ProductRef, nextSegments)
+	}
+
+	// Branching limit: take top N by confidence to avoid exponential blowup
+	if opts.MaxBranching > 0 && len(nextSegments) > opts.MaxBranching {
+		sort.Slice(nextSegments, func(i, j int) bool { return nextSegments[i].Confidence > nextSegments[j].Confidence })
+		nextSegments = nextSegments[:opts.MaxBranching]
 	}
 
 	// Build paths for each next segment
@@ -294,6 +383,15 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 	tenantID string,
 	opts BuildPathOptions,
 ) ([]PathSegment, error) {
+	cacheKey := "supplyLinks:" + customerRef + "|" + tenantID
+	if b.cache != nil {
+		if v, ok := b.cache.get(cacheKey); ok {
+			if segs, ok := v.([]PathSegment); ok {
+				return segs, nil
+			}
+		}
+	}
+
 	// Find SupplyLinks where customer matches
 	links, err := b.fragmentsRepo.FindSupplyLinksByCustomer(ctx, customerRef, tenantID, 100)
 	if err != nil {
@@ -347,12 +445,17 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 			CustomerRef:         customerRefVal,
 			SupplierFacilityRef: link.SupplierFacilityRef,
 			CustomerFacilityRef: link.CustomerFacilityRef,
+			TransportViaRefs:    link.TransportViaRefs,
 			Confidence:          confidence,
 			TenantID:            link.TenantID,
 			IsTenantSpecific:    link.TenantID != "global",
 		}
 
 		segments = append(segments, segment)
+	}
+
+	if b.cache != nil {
+		b.cache.set(cacheKey, segments)
 	}
 
 	return segments, nil
@@ -383,6 +486,15 @@ func (b *SupplyChainPathBuilder) checkProductTransformation(
 	upstreamProduct string,
 	downstreamProduct string,
 ) (bool, error) {
+	cacheKey := "transforms:" + upstreamProduct + "|" + downstreamProduct
+	if b.cache != nil {
+		if v, ok := b.cache.get(cacheKey); ok {
+			if vb, ok := v.(bool); ok {
+				return vb, nil
+			}
+		}
+	}
+
 	// Get upstream product fragment
 	upstreamFrag, err := b.fragmentsRepo.GetByCanonicalPath(ctx, upstreamProduct)
 	if err != nil {
@@ -401,13 +513,18 @@ func (b *SupplyChainPathBuilder) checkProductTransformation(
 		return false, err
 	}
 
+	found := false
 	for _, edge := range edges {
 		if edge.Type == models.DependencyTypeTransformsInto && edge.TargetFragmentID == downstreamFrag.ID {
-			return true, nil
+			found = true
+			break
 		}
 	}
 
-	return false, nil
+	if b.cache != nil {
+		b.cache.set(cacheKey, found)
+	}
+	return found, nil
 }
 
 // areProductsCompatible checks if products are compatible (soft check).

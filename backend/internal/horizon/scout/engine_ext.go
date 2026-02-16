@@ -16,6 +16,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
@@ -129,6 +130,25 @@ func parseStateBool(v interface{}, def bool) bool {
 	default:
 		return def
 	}
+}
+
+func hasDomainsInState(state map[string]interface{}) bool {
+	if state == nil {
+		return false
+	}
+	v, ok := state["domains"]
+	if !ok || v == nil {
+		return false
+	}
+	switch t := v.(type) {
+	case []interface{}:
+		return len(t) > 0
+	case []map[string]interface{}:
+		return len(t) > 0
+	case []string:
+		return len(t) > 0
+	}
+	return false
 }
 
 func normalizeStrategicMechanismPath(path, title, description string) (string, bool) {
@@ -535,6 +555,36 @@ func extractOtherSlugFromDomainPath(canonicalPath string) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[3])
+}
+
+// copyDomainModeStateToChild copies domainMode, domainModes, and domains from parent state into child state
+// so child jobs run the same domain phases (Phase 1 Research / Phase 2 Critic by mode).
+func copyDomainModeStateToChild(parentState map[string]interface{}, childState map[string]interface{}) {
+	if parentState == nil || childState == nil {
+		return
+	}
+	for _, key := range []string{"domainMode", "domainModes", "domains"} {
+		if v, ok := parentState[key]; ok && v != nil {
+			childState[key] = v
+		}
+	}
+}
+
+// getJobDomainModes returns domain mode(s) from job state for composable Critic/Research.
+func getJobDomainModes(job *models.ScoutingJob) []string {
+	if job == nil || job.State == nil {
+		return nil
+	}
+	if v, ok := job.State["domainModes"]; ok && v != nil {
+		return parseStateStringSlice(v)
+	}
+	if v, ok := job.State["domainMode"]; ok && v != nil {
+		s := parseStateString(v)
+		if s != "" {
+			return []string{s}
+		}
+	}
+	return nil
 }
 
 func parseStateString(v interface{}) string {
@@ -1464,6 +1514,112 @@ func parseDomainPathFacets(domainCP string) (contractType string, facets map[str
 		facets[k] = append(facets[k], v)
 	}
 	return contractType, facets
+}
+
+// ensureJobDomainMode computes domain mode(s) from job state (domains, path, specialties) and writes job.State["domainMode"] or job.State["domainModes"].
+// Call once at the start of job execution, after effectiveCanonicalPath is known.
+func (e *ScoutEngine) ensureJobDomainMode(job *models.ScoutingJob, effectiveCanonicalPath string) {
+	if job == nil {
+		return
+	}
+	if job.State == nil {
+		job.State = make(map[string]interface{})
+	}
+	path := strings.TrimSpace(effectiveCanonicalPath)
+	if path == "" {
+		path = strings.TrimSpace(job.TargetCanonicalPath)
+	}
+
+	var contractTypes []string
+	// 1) From path if /domain/v1/
+	if strings.HasPrefix(path, "/domain/v1/") {
+		ct, _ := parseDomainPathFacets(path)
+		if ct != "" {
+			contractTypes = append(contractTypes, ct)
+		}
+	}
+	// 2) From job.State["domains"]
+	if len(contractTypes) == 0 && job.State != nil {
+		if raw, ok := job.State["domains"]; ok && raw != nil {
+			switch t := raw.(type) {
+			case []agents.DomainResolution:
+				for _, d := range t {
+					ct := strings.TrimSpace(d.ContractType)
+					if ct != "" {
+						contractTypes = append(contractTypes, ct)
+					}
+				}
+			case []map[string]interface{}:
+				for _, m := range t {
+					ct := getStringField(m, "contractType", "ContractType")
+					if ct != "" {
+						contractTypes = append(contractTypes, ct)
+					}
+				}
+			case []interface{}:
+				for _, it := range t {
+					m, ok := it.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					ct := getStringField(m, "contractType", "ContractType")
+					if ct != "" {
+						contractTypes = append(contractTypes, ct)
+					}
+				}
+			}
+		}
+	}
+	// 3) From specialties fallback
+	if len(contractTypes) == 0 && job.State != nil {
+		if v, ok := job.State["specialties"]; ok {
+			specs := parseStateStringSlice(v)
+			specs = taxonomy.NormalizeSpecialties(specs)
+			for _, s := range specs {
+				s = strings.TrimSpace(strings.ToLower(s))
+				switch s {
+				case taxonomy.SpecialtySupplyChain:
+					contractTypes = append(contractTypes, "supply-chain")
+				case taxonomy.SpecialtyEquity:
+					contractTypes = append(contractTypes, "equity")
+				case taxonomy.SpecialtyManagement:
+					contractTypes = append(contractTypes, "ownership-structure")
+				case taxonomy.SpecialtyProductsAndServices:
+					contractTypes = append(contractTypes, "supply-chain")
+				}
+			}
+		}
+	}
+
+	var modes []string
+	if len(contractTypes) > 0 {
+		modes = domain.DomainModesForContractTypes(contractTypes)
+	}
+	modes = taxonomy.NormalizeDomainModes(modes)
+	if len(modes) == 0 {
+		modes = []string{taxonomy.DomainModeGeneral}
+	}
+	if len(modes) == 1 {
+		job.State["domainMode"] = modes[0]
+		delete(job.State, "domainModes")
+	} else {
+		job.State["domainModes"] = modes
+		delete(job.State, "domainMode")
+	}
+}
+
+func getStringField(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			if s, ok := v.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func (e *ScoutEngine) executeDomainExpansionJob(
@@ -2940,11 +3096,16 @@ func (e *ScoutEngine) processRelationsInternal(
 	// Guardrails for recursive scouting:
 	// - Depth is controlled by recursionDepth/maxRecursionDepth.
 	// - Breadth is capped per parent job to avoid runaway fanout (LLM can emit many relations).
+	// - Domain-derived jobs use lower cap to control cost explosion.
 	// - We deduplicate targets within this job execution to avoid enqueueing the same target multiple times.
 	maxChildren := 25
 	if job != nil && job.State != nil {
 		if v, ok := job.State["maxChildrenPerJob"]; ok {
 			maxChildren = parseStateInt(v, maxChildren)
+		}
+		// Domain lens jobs: reduce fanout to control Vertex cost.
+		if hasDomainsInState(job.State) && maxChildren > 6 {
+			maxChildren = 6
 		}
 	}
 	if maxChildren < 0 {
@@ -3055,7 +3216,8 @@ func (e *ScoutEngine) processRelationsInternal(
 				string(models.DependencyTypeDependsOn),
 				string(models.DependencyTypeProduces),
 				string(models.DependencyTypeConsumes),
-				string(models.DependencyTypeTransformsInto):
+				string(models.DependencyTypeTransformsInto),
+				string(models.DependencyTypeExtractsFrom):
 				return true
 			default:
 				// In supply chain mode, skip non-supply-chain edges to stay focused
@@ -3612,6 +3774,7 @@ func (e *ScoutEngine) processRelationsInternal(
 						if v, ok := job.State["decompositionHints"]; ok {
 							childState["decompositionHints"] = v
 						}
+						copyDomainModeStateToChild(job.State, childState)
 					}
 					scoutingJob := &models.ScoutingJob{
 						AgentJob: agentmodels.AgentJob{
@@ -3904,6 +4067,7 @@ func (e *ScoutEngine) processRelationsInternal(
 						if v, ok := job.State["specialties"]; ok {
 							childState["specialties"] = v
 						}
+						copyDomainModeStateToChild(job.State, childState)
 					}
 					scoutingJob := &models.ScoutingJob{
 						AgentJob: agentmodels.AgentJob{
@@ -4887,6 +5051,61 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// canonicalizeQualifierFacilityPaths resolves at_facility and transport_via paths through the resolver.
+// Qualifier objects are fragments; same canonicalization and deduplication rules apply.
+func (e *ScoutEngine) canonicalizeQualifierFacilityPaths(ctx context.Context, qualifiers map[string]interface{}, pathRewrites map[string]string) map[string]interface{} {
+	if qualifiers == nil {
+		return qualifiers
+	}
+	out := make(map[string]interface{}, len(qualifiers))
+	for k, v := range qualifiers {
+		out[k] = v
+	}
+	resolvePath := func(p string) string {
+		p = strings.TrimSpace(p)
+		if p == "" || !strings.HasPrefix(p, "/fac/") {
+			return p
+		}
+		if rp, ok := pathRewrites[p]; ok && strings.TrimSpace(rp) != "" {
+			return strings.TrimSpace(rp)
+		}
+		if e.canonicalPathResolver != nil {
+			if resolved, err := e.canonicalPathResolver.Resolve(ctx, p, models.FragmentTypeFacility); err == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+				return strings.TrimSpace(resolved.CanonicalPath)
+			}
+		}
+		return p
+	}
+	if v := out[models.QualifierAtFacility]; v != nil {
+		if s, ok := v.(string); ok {
+			out[models.QualifierAtFacility] = resolvePath(s)
+		}
+	}
+	if v := out[models.QualifierTransportVia]; v != nil {
+		switch arr := v.(type) {
+		case []interface{}:
+			canon := make([]string, 0, len(arr))
+			for _, item := range arr {
+				if s, ok := item.(string); ok {
+					if r := resolvePath(s); r != "" {
+						canon = append(canon, r)
+					}
+				}
+			}
+			out[models.QualifierTransportVia] = canon
+		case []string:
+			canon := make([]string, 0, len(arr))
+			for _, s := range arr {
+				if r := resolvePath(s); r != "" {
+					canon = append(canon, r)
+				}
+			}
+			out[models.QualifierTransportVia] = canon
+		}
+	}
+	return out
+}
+
 // processSupplyChains parses supply chain output from agents and persists fragments/edges.
 func (e *ScoutEngine) processSupplyChains(
 	ctx context.Context,
@@ -5336,6 +5555,22 @@ func (e *ScoutEngine) processSupplyChains(
 			continue
 		}
 
+		qualifiers := map[string]interface{}{
+			"reason":              chainEdge.Reason,
+			"sourceCanonicalPath": chainEdge.SourceCanonicalPath,
+			"targetCanonicalPath": chainEdge.TargetCanonicalPath,
+			"rawConfidence":       chainEdge.Confidence,
+			"fromSupplyChain":     true,
+		}
+		if chainEdge.Qualifiers != nil {
+			for k, v := range chainEdge.Qualifiers {
+				if k != "" && v != nil {
+					qualifiers[k] = v
+				}
+			}
+		}
+		// Canonicalize qualifier facility paths (at_facility, transport_via) — same rules as other fragments
+		qualifiers = e.canonicalizeQualifierFacilityPaths(ctx, qualifiers, pathRewrites)
 		edge := &models.DependencyEdge{
 			TenantID:         "global",
 			SourceFragmentID: sourceID,
@@ -5346,13 +5581,7 @@ func (e *ScoutEngine) processSupplyChains(
 				Amplification: 1.0,
 				LatencyHours:  24,
 			},
-			Qualifiers: map[string]interface{}{
-				"reason":              chainEdge.Reason,
-				"sourceCanonicalPath": chainEdge.SourceCanonicalPath,
-				"targetCanonicalPath": chainEdge.TargetCanonicalPath,
-				"rawConfidence":       chainEdge.Confidence,
-				"fromSupplyChain":     true,
-			},
+			Qualifiers: qualifiers,
 			Provenance: models.Provenance{
 				Method:    provenanceMethod,
 				SourceIDs: []string{job.ID},
@@ -5398,6 +5627,63 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 	}
 
+	// Materialize SupplyLink fragments from parsed segments so PathBuilder can traverse
+	// SupplyLink provenance: Scout/Research supply chains → parser → SupplyLink fragments
+	supplyLinksCreated := 0
+	supplyLinksSkipped := 0
+	for _, seg := range result.SupplyLinkSegments {
+		supplier := strings.TrimSpace(seg.SupplierRef)
+		product := strings.TrimSpace(seg.ProductRef)
+		customer := strings.TrimSpace(seg.CustomerRef)
+		if supplier == "" || product == "" || customer == "" {
+			continue
+		}
+		if rp, ok := pathRewrites[supplier]; ok && rp != "" {
+			supplier = strings.TrimSpace(rp)
+		}
+		if rp, ok := pathRewrites[product]; ok && rp != "" {
+			product = strings.TrimSpace(rp)
+		}
+		if rp, ok := pathRewrites[customer]; ok && rp != "" {
+			customer = strings.TrimSpace(rp)
+		}
+		supplierRef := supplier
+		customerRef := customer
+		productRef := product
+		slFrag := &models.HorizonFragment{
+			Type:              models.FragmentTypeSupplyLink,
+			TenantID:          "global",
+			SupplierRef:       &supplierRef,
+			ProductRef:        &productRef,
+			CustomerRef:       &customerRef,
+			TransportViaRefs:  seg.TransportViaRefs,
+			Status:            "active",
+			Governance:        models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
+			Provenance:        models.Provenance{Method: "scout_supply_chain", SourceIDs: []string{job.ID}},
+			Metadata:          models.FragmentMetadata{CreatedAt: time.Now().UTC(), LastUpdatedAt: time.Now().UTC(), EpistemicStatus: models.EpistemicStatusLowConfidence},
+		}
+		slFrag.State = map[string]models.MetricValue{"confidence": {Value: seg.Confidence, Confidence: 0.8}}
+		if err := slFrag.Validate(); err != nil {
+			supplyLinksSkipped++
+			continue
+		}
+		// Dedup: SupplyLink canonicalPath is deterministic (tenant:supplier:product:customer).
+		// GetByCanonicalPath gives reliable lookup by unique key, unlike FindSupplyLinksByCustomer(limit 100).
+		if existing, _ := e.fragmentsRepo.GetByCanonicalPath(ctx, slFrag.CanonicalPath); existing != nil && strings.TrimSpace(existing.ID) != "" {
+			supplyLinksSkipped++
+			continue
+		}
+		if _, createErr := e.fragmentsRepo.Create(ctx, slFrag); createErr != nil {
+			supplyLinksSkipped++
+		} else {
+			supplyLinksCreated++
+		}
+	}
+
+	if supplyLinksCreated > 0 || supplyLinksSkipped > 0 {
+		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyLinkMaterialize] created=%d skipped=%d", supplyLinksCreated, supplyLinksSkipped))
+	}
+
 	// Update chain context in job state for propagation to child jobs
 	if job.State == nil {
 		job.State = make(map[string]interface{})
@@ -5438,19 +5724,21 @@ func (e *ScoutEngine) processSupplyChains(
 		"edgesCount":     len(result.Edges),
 		"gapHintsCount":  len(gapHints),
 		"supplyChainLogSummary": map[string]any{
-			"createdFragments": createdFrags,
-			"updatedFragments": updatedFrags,
-			"fragmentErrors":   createErrors,
-			"createdEdges":     createdEdges,
-			"edgeDupes":        edgeDupes,
-			"edgeErrors":       edgeCreateErrors,
-			"edgeReversed":     edgeReversed,
-			"edgePenalized":    edgePenalized,
+			"createdFragments":   createdFrags,
+			"updatedFragments":   updatedFrags,
+			"fragmentErrors":     createErrors,
+			"createdEdges":       createdEdges,
+			"edgeDupes":          edgeDupes,
+			"edgeErrors":         edgeCreateErrors,
+			"edgeReversed":       edgeReversed,
+			"edgePenalized":      edgePenalized,
+			"supplyLinksCreated": supplyLinksCreated,
+			"supplyLinksSkipped": supplyLinksSkipped,
 		},
 	})
 	{
-		msg := fmt.Sprintf("[SupplyChainSummary] fragments(created=%d updated=%d err=%d) edges(created=%d dupes=%d err=%d reversed=%d penalized=%d) gaps=%d",
-			createdFrags, updatedFrags, createErrors, createdEdges, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, len(gapHints))
+		msg := fmt.Sprintf("[SupplyChainSummary] fragments(created=%d updated=%d err=%d) edges(created=%d dupes=%d err=%d reversed=%d penalized=%d) supplyLinks(created=%d skipped=%d) gaps=%d",
+			createdFrags, updatedFrags, createErrors, createdEdges, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, supplyLinksCreated, supplyLinksSkipped, len(gapHints))
 		fmt.Printf("%s\n", msg)
 		e.logLine(ctx, job, "info", msg)
 	}
@@ -5755,6 +6043,7 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 		if v, ok := job.State["decompositionHints"]; ok {
 			childState["decompositionHints"] = v
 		}
+		copyDomainModeStateToChild(job.State, childState)
 
 		scoutingJob := &models.ScoutingJob{
 			AgentJob: agentmodels.AgentJob{
@@ -5997,6 +6286,7 @@ func (e *ScoutEngine) triggerPhase2StrategicOverlay(
 			state["originalQuery"] = strings.TrimSpace(v)
 			state["query"] = strings.TrimSpace(v)
 		}
+		copyDomainModeStateToChild(phase1Job.State, state)
 	}
 
 	phase2Job := &models.ScoutingJob{

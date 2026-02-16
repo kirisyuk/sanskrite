@@ -156,7 +156,7 @@ git commit -m "Update types from backend models"
 5. **Cloud Storage**:
    - `gs://PROJECT_ID-web-static` (frontend статика)
 
-6. **Firestore Indexes** (из `backend/firestore.indexes.json`)
+6. **Firestore Indexes** (из `web/firestore.indexes.json`)
 
 ---
 

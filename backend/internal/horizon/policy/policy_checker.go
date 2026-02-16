@@ -352,6 +352,11 @@ func (pc *PolicyChecker) checkFragmentPath(ctx context.Context, frag *horizonmod
 
 	case horizonmodels.FragmentTypeMechanism:
 		violations = append(violations, pc.checkMechanismPath(ctx, frag)...)
+
+	case horizonmodels.FragmentTypeCommunity:
+		// taxonomy.ValidateCanonicalPath already ran; community paths /community/{geo}/{type}/{slug}
+		// use regional tokens for geo (eu, asean, etc.) and type (dynasty|tribe|trade|activist|...).
+		// No additional deterministic checks needed.
 	}
 
 	return violations
@@ -628,8 +633,8 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 			}
 			violations = append(violations, v)
 		}
-		// "int" is a special geo token for international organizations (UN, UNESCO, etc.).
-		if iso2 != "na" && iso2 != "int" && len(iso2) != 2 && !strings.Contains(iso2, "-") {
+		// "int" is special for international orgs. Regional tokens (eu, asean, brics, gcc) are allowed.
+		if iso2 != "na" && iso2 != "int" && len(iso2) != 2 && !strings.Contains(iso2, "-") && !taxonomy.IsRegionalGeoToken(iso2) {
 			v := PolicyViolation{
 				ID:          uuid.New().String(),
 				Type:        ViolationInvalidISO2,

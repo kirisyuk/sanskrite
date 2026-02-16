@@ -157,7 +157,7 @@ fi
 ## Связанные файлы
 
 - `backend/internal/ai/vector_index_firestore.go` - реализация векторного поиска
-- `backend/firestore.indexes.json` - конфигурация индексов (не содержит векторных полей)
+- `web/firestore.indexes.json` - конфигурация индексов (не содержит векторных полей)
 - `scripts/deploy` - скрипт деплоя с автоматическим созданием векторного индекса
 - `backend/internal/http/discovery.go` - использование векторного поиска в API
 

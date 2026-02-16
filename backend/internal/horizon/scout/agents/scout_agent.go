@@ -88,6 +88,9 @@ type SupplyChain struct {
 	Confidence float64 `json:"confidence"`
 	// Reason/evidence for this chain
 	Reason string `json:"reason,omitempty"`
+	// TransportVia lists facility canonical paths the product passes through (ports, terminals, pipelines, warehouses).
+	// Same canonicalization and deduplication rules apply as for other fragments.
+	TransportVia []string `json:"transportVia,omitempty"`
 }
 
 // SupplyChainNode represents a single node in a supply chain.
@@ -361,18 +364,25 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 			specBlock += "MODULE: supply_chain (build complete supply chains)\n"
 			specBlock += "- Your PRIMARY goal is to identify and return COMPLETE SUPPLY CHAINS as ordered node sequences.\n"
 			specBlock += "- A supply chain is an ordered path: supplier → product → processor → product → customer → ...\n"
-			specBlock += "- Nodes alternate between ACTORS (ORGANIZATION/FACILITY) and PRODUCTS.\n"
+			specBlock += "- Nodes MUST alternate between ACTORS (ORGANIZATION/FACILITY) and PRODUCTS.\n"
+			specBlock += "- CRITICAL: Include FACILITY nodes where transformation happens. Pattern: product → facility → product.\n"
+			specBlock += "  The facility consumes the upstream product and produces the downstream product (transformation at facility).\n"
+			specBlock += "- For extractive chains: subsidiary → facility → deposit → product. Use /deposit/{resource}/{slug} for deposits.\n"
 			specBlock += "- For each chain, include:\n"
-			specBlock += "  - All intermediate products (materials, components, finished goods)\n"
-			specBlock += "  - All actors: suppliers, manufacturers, processors, assemblers, distributors, customers\n"
+			specBlock += "  - All intermediate products (raw materials, components, finished goods)\n"
+			specBlock += "  - All actors: suppliers (org), processors (facility), manufacturers (facility), assemblers, distributors, customers\n"
+			specBlock += "  - Facilities where product transformation occurs (refinery, smelter, factory)\n"
+			specBlock += "  - Deposits when tracing to extraction (mine, oil field)\n"
 			specBlock += "- Return chains in the 'supplyChains' field (see output schema below).\n"
-			specBlock += "- Each node needs: canonicalPath, name, type (ORGANIZATION/FACILITY/PRODUCT), and optional role.\n"
-			specBlock += "- Roles: supplier, processor, manufacturer, assembler, distributor, customer, or describe the function.\n"
+			specBlock += "- Each node needs: canonicalPath, name, type (ORGANIZATION/FACILITY/PRODUCT/DEPOSIT), and optional role.\n"
+			specBlock += "- Roles: supplier, processor, manufacturer, assembler, distributor, customer, extractor.\n"
 			specBlock += "- Multiple chains are expected — different product lines, different suppliers, branching paths.\n"
-			specBlock += "- Canonical paths: /org/{iso2|na}/{slug} for organizations, /fac/{org}/{slug} for facilities, /product/{category}/{type}/{stage}/{slug} for products.\n"
+			specBlock += "- Canonical paths: /org/{iso2|na}/{slug}, /fac/{org}/{slug}, /product/{category}/{type}/{stage}/{slug}, /deposit/{resource}/{slug}.\n"
 			specBlock += "- Product/material naming rules apply to supply chains too:\n"
 			specBlock += "  - Use SINGULAR product/material terms by default.\n"
 			specBlock += "  - Avoid including company/brand names in product nodes unless it is an official, widely used product name.\n"
+			specBlock += "- ADAPT to geo/sector: Use entity path, sector path, and target canonical path to infer supply chain patterns. Examples: Chinese EV (BYD) → vertical integration; European OEMs → partnership networks. For SUPPLIES_TO relations, add qualifiers.integration_type when clear: \"vertical\" | \"partnership\" | \"arm's-length\".\n"
+			specBlock += "- For SUPPLIES_TO relations: when transport route is known, add qualifiers.transport_via as array of facility paths (ports, terminals, pipelines, warehouses). Same canonicalization rules.\n"
 			specBlock += "- IMPORTANT: Also output individual 'relations' for non-chain relationships (location, ownership, etc.).\n\n"
 		}
 		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) {
@@ -389,11 +399,12 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 			specBlock += "  - INVESTS_IN: investor -> investee (minority investment; not necessarily control)\n"
 			specBlock += "- IMPORTANT: Do NOT use OWNS for employment/management roles (CEO/board). That belongs to management module.\n"
 			specBlock += "- IMPORTANT: Facilities/products/deposits do NOT own organizations. If a facility/product/deposit is owned by an org/person, use SUBSIDIARY_OF (source=facility/product/deposit, target=owner).\n"
+			specBlock += "- ADAPT to geo/sector: Use entity path and target canonical path to infer ownership patterns. For OWNS, add qualifiers.integration_type when clear: \"vertical\" (subsidiary in integrated chain) | \"partnership\" (JV, strategic stake) | \"arm's-length\" (pure financial).\n"
 			specBlock += "- Put stake/percent/voting rights (if known) and evidence in 'reason'.\n\n"
 		}
 	}
 
-	canonicalRulesBlock := taxonomy.CanonicalPathRulesPrompt()
+	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt()
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
 	profile := ResolveResearchProfile("", targetCanonicalPath, "")
 	profileBlock := BuildResearchProfilePromptBlock(profile)
@@ -635,6 +646,7 @@ TASK: Extract all relevant information about this entity and return it as a JSON
      - eventId: "/event/{slug}" (e.g., funding round for INVESTS_IN)
      - round: "Series A" (INVESTS_IN)
      - contractType: "long-term" | "spot" (SUPPLIES_TO)
+     - integration_type: "vertical" | "partnership" | "arm's-length" (SUPPLIES_TO, OWNS: relationship nature)
     - facet: for DEPENDS_ON, classify dependency nature (communication | infrastructure | payment | distribution | logistics | supply | labor | legitimization | enforcement | regulatory)
     - transmission qualifiers for DEPENDS_ON (especially logistics/supply/infrastructure/distribution):
       - throughput_share: 0..1 (share of flow transmitted through this dependency)
@@ -668,10 +680,14 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    
    CHAIN STRUCTURE:
    - Nodes MUST alternate: actor → product → actor → product → ...
-   - Actors are ORGANIZATION or FACILITY
+   - Actors are ORGANIZATION or FACILITY (use FACILITY for transformation sites: refinery, smelter, factory)
    - Products link actors in the chain
-   - Example chain nodes (canonical paths, alternating actor/product):
-     [/org/{supplier}, /product/raw/mineral/extraction/{slug}, /fac/{orgSlug}/{facilitySlug}, /product/component/electronic/manufacturing/{slug}, /org/{customer}]
+   - Include FACILITY where transformation happens: product → facility → product (e.g. lithium-ore → refinery → lithium-carbonate)
+   - For extractive: org → facility → deposit → product (e.g. KMG → mine → /deposit/lithium/salares → lithium-ore)
+   - transportVia (optional): array of facility canonical paths the product passes through (ports, terminals, pipelines, warehouses).
+     Same canonicalization rules apply. Example: ["/fac/port/antofagasta", "/fac/port/shanghai"] for maritime route.
+   - Example chain nodes (alternating actor/product):
+     [/org/albemarle, /product/raw/mineral/extraction/lithium-ore, /fac/albemarle/silver-peak, /product/raw/chemical/refining/lithium-carbonate, /org/catl]
    - Multiple chains expected for different product lines or branches
 
 CANONICAL PATH RULES:

@@ -5,7 +5,7 @@
 
 ### Key Code
 - Firestore client: `backend/internal/gcp/firestore.go`
-- Indexes: `backend/firestore.indexes.json`
+- Indexes: `web/firestore.indexes.json`
 - Rules: `backend/firestore.rules`
 
 

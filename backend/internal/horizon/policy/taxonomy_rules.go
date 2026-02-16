@@ -137,6 +137,7 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 					"/org/de/siemens-ag",
 					"/org/int/united-nations",
 					"/org/int/unesco",
+					"/org/eu/european-commission", // regional token for EU-level orgs
 				},
 				Incorrect: []string{
 					"/org/saudi-aramco",       // missing iso2 and legal form
@@ -154,6 +155,8 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 					"/gov/ae/adnoc",
 					"/gov/us/sec",
 					"/gov/ae-sa-om/gcc-council", // composite geo for intergovernmental
+					"/gov/eu/european-commission", // regional token for EU-level bodies
+					"/gov/asean/asean-secretariat",
 				},
 				Incorrect: []string{
 					"/gov/ministry-of-finance", // missing iso2
@@ -218,6 +221,8 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 					"/market/sa/finance/banking",
 					"/market/ae/energy/oil-gas",
 					"/market/global/technology/semiconductors",
+					"/market/eu/finance/banking",   // regional token for EU market
+					"/market/brics/energy/oil-gas", // regional token for BRICS
 				},
 				Incorrect: []string{
 					"/market/banking",    // missing geo and domain
@@ -490,12 +495,13 @@ func (r *TaxonomyRules) ValidateGovPath(path string) (bool, string) {
 		return false, "GOVERNMENT path must have exactly 3 segments (/gov/{iso2|na}/{slug})"
 	}
 
-	geo := strings.TrimSpace(parts[1])
+	geo := strings.ToLower(strings.TrimSpace(parts[1]))
 	if geo == "" {
 		return false, "GOVERNMENT path missing jurisdiction segment"
 	}
-	if geo != "na" && len(geo) != 2 && !strings.Contains(geo, "-") {
-		return false, fmt.Sprintf("Invalid ISO2 jurisdiction code: %s", geo)
+	// Allow: na, ISO2 (2 chars), composite (contains "-"), or regional token (eu, asean, brics, gcc, etc.)
+	if geo != "na" && len(geo) != 2 && !strings.Contains(geo, "-") && !taxonomy.IsRegionalGeoToken(geo) {
+		return false, fmt.Sprintf("Invalid jurisdiction (expected ISO2, composite, na, or regional token like eu/asean/brics): %s", parts[1])
 	}
 
 	return true, ""

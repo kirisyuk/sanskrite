@@ -493,6 +493,11 @@ func (e *ScoutEngine) materializeRelationEdge(
 	if len(rel.Qualifiers) > 0 {
 		edge.Qualifiers = mergeQualifiers(edge.Qualifiers, rel.Qualifiers)
 	}
+	// Canonicalize qualifier facility paths (at_facility, transport_via) — same rules as other fragments
+	edge.Qualifiers = e.canonicalizeQualifierFacilityPaths(ctx, edge.Qualifiers, nil)
+	if edge.Qualifiers == nil {
+		edge.Qualifiers = make(map[string]interface{})
+	}
 	if strings.TrimSpace(policyEdgeModality) != "" {
 		if _, exists := edge.Qualifiers["edgeModality"]; !exists {
 			edge.Qualifiers["edgeModality"] = policyEdgeModality

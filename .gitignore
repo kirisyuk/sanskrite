@@ -92,3 +92,6 @@ docs/**/.DS_Store
 # Local secrets docs
 TEST_KEYS.md
 paypal-credentials.md
+
+# Secrets file for deploy (apply-secrets.sh) — never commit!
+scripts/secrets.env

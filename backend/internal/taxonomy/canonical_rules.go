@@ -44,7 +44,7 @@ type GeoCanonicalRules struct {
 func DefaultCanonicalRules() CanonicalRules {
 	return CanonicalRules{
 		Org: OrgCanonicalRules{
-			Format: "/org/{iso2|na}/{slug}-{legal_form}",
+			Format: "/org/{iso2|na|int|regional}/{slug}-{legal_form}",
 			// NOTE: legal_form tokens are a compact allowlist used by:
 			// - LLM prompts (canonicalization + enforcement)
 			// - deterministic suffix parsing in canonical_parts.go
@@ -72,7 +72,7 @@ func DefaultCanonicalRules() CanonicalRules {
 			Example: "/org/us/tesla-inc",
 		},
 		Gov: GovCanonicalRules{
-			Format:  "/gov/{iso2|na}/{slug}",
+			Format:  "/gov/{iso2|na|regional}/{slug}",
 			Example: "/gov/us/department-of-state",
 		},
 		Product: ProductCanonicalRules{
@@ -114,12 +114,12 @@ func DefaultCanonicalRules() CanonicalRules {
 			Format:  "/loc/{cc}/{admin1}/{city}",
 			Example: "/loc/us/ca/san-francisco",
 			Notes: []string{
-				"cc must be ISO3166-1 alpha2 lowercase (exactly 2 chars)",
-				"regional geo tokens are allowed when ISO2 is insufficient (e.g., asean, brics, gcc, eu, eaeu, opec, oecd, g7, g20)",
-				"regional geo tokens can be extended via HORIZON_REGIONAL_GEO_TOKENS",
-				"admin1 must be a GeoNames admin code or \"na\"",
-				"city must be a lowercase slug or \"na\"",
-				"country-only locations use /loc/{cc}/na/na",
+				"cc: ISO3166-1 alpha2 (2 chars), composite (e.g. tr-sy, ae-sa-om), or regional token",
+				"regional tokens: " + strings.Join(RegionalGeoTokenList(), ", "),
+				"extend via HORIZON_REGIONAL_GEO_TOKENS env",
+				"admin1: GeoNames admin code or \"na\"",
+				"city: lowercase slug or \"na\"",
+				"country-only: /loc/{cc}/na/na",
 			},
 		},
 	}
@@ -131,8 +131,10 @@ func CanonicalPathRulesPrompt() string {
 	var sb strings.Builder
 	sb.WriteString("CANONICAL PATH RULES (REQUIRED):\n")
 	sb.WriteString(fmt.Sprintf("- ORGANIZATION: %s (example: %s)\n", rules.Org.Format, rules.Org.Example))
+	sb.WriteString(fmt.Sprintf("  - geo: ISO2 (us, sa), composite (tr-sy, ae-sa-om), na, int, or regional (%s). EU/ASEAN/BRICS-level orgs use eu/asean/brics\n", strings.Join(RegionalGeoTokenList(), ", ")))
 	sb.WriteString(fmt.Sprintf("  - legal_form in {%s}\n", strings.Join(rules.Org.LegalForms, ", ")))
 	sb.WriteString(fmt.Sprintf("- GOVERNMENT: %s (example: %s)\n", rules.Gov.Format, rules.Gov.Example))
+	sb.WriteString(fmt.Sprintf("  - geo: ISO2, composite, na, or regional (%s). EU/ASEAN-level bodies use eu/asean\n", strings.Join(RegionalGeoTokenList(), ", ")))
 	sb.WriteString(fmt.Sprintf("- PRODUCT: %s (fallback: %s)\n", rules.Product.Format, rules.Product.Fallback))
 	sb.WriteString(fmt.Sprintf("  - category: %s\n", strings.Join(rules.Product.Categories, " | ")))
 	sb.WriteString(fmt.Sprintf("  - type: %s\n", strings.Join(rules.Product.Types, " | ")))
@@ -142,5 +144,23 @@ func CanonicalPathRulesPrompt() string {
 	for _, note := range rules.Geo.Notes {
 		sb.WriteString(fmt.Sprintf("  - %s\n", note))
 	}
+	return sb.String()
+}
+
+// ExtendedCanonicalPathRulesPrompt returns canonical path rules for all entity types used in Research/Critic.
+// Includes FACILITY, PERSON, MARKET, COMMUNITY, DEPOSIT, EVENT, PROGRAM, DECISION_POINT, MECHANISM.
+func ExtendedCanonicalPathRulesPrompt() string {
+	regionalList := strings.Join(RegionalGeoTokenList(), ", ")
+	var sb strings.Builder
+	sb.WriteString(CanonicalPathRulesPrompt())
+	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug} (preferred) or /fac/{facilitySlug}. Example: /fac/tsmc/fab-21\n")
+	sb.WriteString("- PERSON: /person/{slug}. Example: /person/elon-musk\n")
+	sb.WriteString(fmt.Sprintf("- MARKET: /market/{geo}/{domain}/{vertical} (preferred) or /market/{geo}/{slug}. geo: ISO2, composite (tr-sy), int, or regional (%s). Example: /market/sa/finance/banking\n", regionalList))
+	sb.WriteString(fmt.Sprintf("- COMMUNITY: /community/{geo}/{type}/{slug}. geo: ISO2, composite, or regional (%s). type: trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe. Example: /community/ae/trade/hawala-dubai-network, /community/sa/dynasty/house-of-saud, /community/af/tribe/pashtun\n", regionalList))
+	sb.WriteString("- DEPOSIT: /deposit/{resource}/{slug}. resource: oil, natural-gas, iron-ore, lithium-ore, etc. Example: /deposit/oil/permian-basin. Fallback: /deposit/other/{slug}\n")
+	sb.WriteString("- EVENT: /event/{slug}. Example: /event/funding-round-series-a\n")
+	sb.WriteString(fmt.Sprintf("- PROGRAM: /program/{jurisdiction}/{slug} (preferred) or /program/{slug}. jurisdiction: ISO2, int, or regional (%s). Example: /program/kazakhstan/alem-ai\n", regionalList))
+	sb.WriteString("- DECISION_POINT: /decision/{domain}/{slug}. Example: /decision/export/grant-license\n")
+	sb.WriteString("- MECHANISM: /mechanism/{category}/{slug}. category: regulatory, economic, technological, contractual, political. Example: /mechanism/regulatory/entity-list\n")
 	return sb.String()
 }

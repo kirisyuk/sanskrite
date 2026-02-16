@@ -236,6 +236,8 @@ SupplyLink может иметь (опционально) **агрегирова
 │  /org/albemarle ──PRODUCES──> /product/.../lithium-carbonate│
 │  /product/.../lithium-carbonate ──TRANSFORMS_INTO──>        │
 │                        /product/.../battery-cell            │
+│  (qualifiers.at_facility: /fac/catl/ningde — where transformation occurs) │
+│  (qualifiers.transport_via: [/fac/port/antofagasta, /fac/port/shanghai] — transport route) │
 └─────────────────────────────────────────────────────────────┘
                               │
                               │ references
@@ -261,10 +263,9 @@ SupplyLink может иметь (опционально) **агрегирова
 
 ### Workflow создания SupplyLink
 
-1. **LLM + HIL**: Scout находит гипотезу "BMW likely sources batteries from CATL"
-2. Создаётся draft SupplyLink с `confidence: 0.6`, `provenance.method: "llm_inference"`
-3. Human-in-the-Loop подтверждает/корректирует
-4. SupplyLink становится confirmed с `confidence: 0.95`, `provenance.method: "hil_verified"`
+**Источники SupplyLink:**
+1. **Scout/Research supply chains** (автоматически): при парсинге цепочек из LLM (supplyChains) парсер извлекает сегменты actor→product→actor и материализует SupplyLink фрагменты. `provenance.method: "scout_supply_chain"`. PathBuilder использует их для обхода upstream.
+2. **LLM + HIL** (будущее): Scout находит гипотезу "BMW likely sources batteries from CATL" → draft SupplyLink → HIL подтверждает → confirmed.
 
 ---
 
@@ -460,6 +461,8 @@ const (
 
 ### Milestone 2: Path Building
 - [x] Функция `BuildUpstreamPath(customer, opts)` с confidence propagation
+- [x] `BuildUpstreamPaths` — возврат топ-K путей (MaxPaths, по умолчанию 10) вместо одного
+- [x] `RequireProductTransformation: true` по умолчанию — проверка TRANSFORMS_INTO между продуктами
 - [x] Tenant-first, global-fallback precedence на уровне сегмента
 - [x] Интеграция с MaterializedArtifact для сохранения путей
 - [ ] Кэширование построенных путей
@@ -482,6 +485,7 @@ const (
 ## См. также
 
 - [Data Model](data-model.md)
+- [Structural Org & Supply Chain Model](structural-org-supply-chain-model.md) — структурированные организации, org units, голографические множества
 - [Taxonomy](taxonomy.md)
 - [Product Hierarchy](product-hierarchy.md)
 - [Roadmap](../implementation/roadmap.md)

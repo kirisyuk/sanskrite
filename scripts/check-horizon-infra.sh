@@ -178,8 +178,8 @@ fi
 
 echo ""
 echo "9. Проверка Firestore индексов..."
-if [ -f "backend/firestore.indexes.json" ]; then
-  if grep -q "horizon_fragments\|horizon_lenses\|horizon_dependency_edges\|horizon_frames\|horizon_watchdog_configs" backend/firestore.indexes.json; then
+if [ -f "web/firestore.indexes.json" ]; then
+  if grep -q "horizon_fragments\|horizon_lenses\|horizon_dependency_edges\|horizon_frames\|horizon_watchdog_configs" web/firestore.indexes.json; then
     check "Индексы для Horizon найдены в firestore.indexes.json"
     echo "   Разверните индексы: firebase deploy --only firestore:indexes"
   else

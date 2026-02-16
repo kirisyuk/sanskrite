@@ -10,7 +10,7 @@
 - Managed via service accounts and CI/CD secret store; avoid committing secrets.
 
 ### References
-- Indexes: `backend/firestore.indexes.json`
+- Indexes: `web/firestore.indexes.json`
 - Rules: `backend/firestore.rules`
 - Dockerfile: `backend/Dockerfile`
 - Cloud Build deploy: `web/cloudbuild.deploy.yaml`

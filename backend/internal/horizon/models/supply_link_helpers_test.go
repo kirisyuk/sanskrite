@@ -190,6 +190,30 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid: with transportViaRefs",
+			fragment: &HorizonFragment{
+				Type:     FragmentTypeSupplyLink,
+				TenantID: "tenant-123",
+				ProductRef: strPtr("/product/lithium-carbonate"),
+				SupplierRef: strPtr("/org/albemarle"),
+				CustomerRef: strPtr("/org/catl"),
+				TransportViaRefs: []string{"/fac/port/antofagasta", "/fac/port/shanghai"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "error: invalid transportViaRefs path",
+			fragment: &HorizonFragment{
+				Type:     FragmentTypeSupplyLink,
+				TenantID: "tenant-123",
+				ProductRef: strPtr("/product/lithium-carbonate"),
+				SupplierRef: strPtr("/org/albemarle"),
+				CustomerRef: strPtr("/org/catl"),
+				TransportViaRefs: []string{"/org/invalid-port"},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

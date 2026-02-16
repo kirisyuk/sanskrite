@@ -23,6 +23,7 @@
 | Lens-specific highProfile | ❌ | отложено до полноценного дизайна |
 | Метрики в оверлей | ❌ | метрики пока в `State` фрагментов |
 | Org identity anchor & transitions | ❌ | identity anchor, nameHistory, transition edges (RENAMED_TO, LEGAL_SUCCESSOR_OF…); см. `ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md` |
+| Scout domain phases & composable agents | ✅ | Domain modes (intent→job.State), allowlists, semantic groups; CriticPipeline/ResearchPipeline by mode; Phase 0–3 in engine; domain mode in child jobs; canonical edge types (ASSOCIATED_WITH, CORPORATE_TRANSITION, DOMAIN_RELATION). Toggle: `HORIZON_SCOUT_COMPOSABLE_PIPELINE=false` для отката на монолитный путь. ТЗ: `SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md`. |
 
 ## Delta (2026-02-13): Internal-First Grounding (v5)
 
@@ -1479,7 +1480,7 @@
       - `Where("fragmentId","==",...)` + `OrderBy("capturedAt", Desc)` (latest first)
       - `Where("canonicalPath","==",...)` + `Where("status","==","ACTIVE")` + `OrderBy("capturedAt", Desc)` (latest active)
     - Действия:
-      - Явно описать и держать в репо нужные **composite indexes** (`backend/firestore.indexes.json`) для этих паттернов.
+      - Явно описать и держать в репо нужные **composite indexes** (`web/firestore.indexes.json`) для этих паттернов.
       - После того как индексы в `READY`, вернуть DB‑ordering в:
         - `FragmentProfilesRepository.ListByFragmentID()`
         - `FragmentProfilesRepository.DeleteByFragmentID()` (если нужно детерминированно удалять “latest first”, иначе можно оставить без orderBy)
@@ -1815,7 +1816,7 @@ type PolicyDecision struct {
    - `WatchdogConfigRepository` (`backend/internal/repo/watchdog_configs.go`)
 
 3. Создание Firestore индексов:
-   - Обновление `backend/firestore.indexes.json`
+   - Обновление `web/firestore.indexes.json`
    - Создание составных индексов для частых запросов
 
 4. Миграции данных (если требуется):
@@ -2090,3 +2091,4 @@ type PolicyDecision struct {
 - [Технические решения](technical-decisions.md)
 - [Архитектурный обзор](../architecture/overview.md)
 - [Supply Chain & Influence Model](../architecture/supply-chain-influence-model.md)
+- [ТЗ: Domain-specific фазы Scout, composable Research/Critic, упрощение рёбер](SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md)

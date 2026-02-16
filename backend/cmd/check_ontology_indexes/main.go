@@ -63,7 +63,7 @@ func main() {
 	// For now, we'll just verify that collections exist and log instructions
 	fmt.Println("Checking ontology collections and indexes...")
 	fmt.Println("Note: Use 'gcloud firestore indexes composite list' to see existing indexes")
-	fmt.Println("Deploy indexes with: gcloud firestore indexes deploy backend/firestore.indexes.json")
+	fmt.Println("Deploy indexes with: cd web && firebase deploy --only firestore:indexes")
 	fmt.Println()
 
 	missing := 0
@@ -77,7 +77,7 @@ func main() {
 	if missing > 0 {
 		fmt.Printf("\nTotal required indexes: %d\n", missing)
 		fmt.Println("To deploy indexes, run:")
-		fmt.Println("  gcloud firestore indexes deploy backend/firestore.indexes.json")
+		fmt.Println("  cd web && firebase deploy --only firestore:indexes --project", projectID)
 		fmt.Println("Or use Firebase CLI:")
 		fmt.Println("  cd web && firebase deploy --only firestore:indexes --project", projectID)
 	} else {

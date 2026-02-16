@@ -1,6 +1,10 @@
 package domain
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+)
 
 type SteeringProfileName string
 
@@ -48,12 +52,14 @@ var profileByContractType = map[string]SteeringProfileName{
 	"pricing-dynamics":         SteeringProfileCompetitiveLandscape,
 	"geographic-concentration": SteeringProfileGeographicConcentration,
 
-	// Investment / finance
-	"investment-thesis":  SteeringProfileInvestmentFinance,
-	"funding-landscape":  SteeringProfileInvestmentFinance,
-	"exit-strategy":      SteeringProfileInvestmentFinance,
-	"valuation-drivers":  SteeringProfileInvestmentFinance,
-	"portfolio-exposure": SteeringProfileInvestmentFinance,
+	// Investment / finance / ownership / governance
+	"investment-thesis":   SteeringProfileInvestmentFinance,
+	"funding-landscape":   SteeringProfileInvestmentFinance,
+	"exit-strategy":       SteeringProfileInvestmentFinance,
+	"valuation-drivers":   SteeringProfileInvestmentFinance,
+	"portfolio-exposure":  SteeringProfileInvestmentFinance,
+	"ownership-structure": SteeringProfileInvestmentFinance,
+	"equity":              SteeringProfileInvestmentFinance,
 
 	// Technology / innovation
 	"technology-landscape": SteeringProfileTechnologyInnovation,
@@ -91,4 +97,72 @@ func steeringProfileForContractType(contractType string) SteeringProfileName {
 		return p
 	}
 	return SteeringProfileGeneral
+}
+
+// SteeringProfileForContractType returns the steering profile for a contract type (exported for callers outside this package).
+func SteeringProfileForContractType(contractType string) SteeringProfileName {
+	return steeringProfileForContractType(contractType)
+}
+
+// profileToDomainMode maps steering profile to domain mode (supply_chain→supply_chain, regulatory_exposure→strategic, etc.).
+var profileToDomainMode = map[SteeringProfileName]string{
+	SteeringProfileGeneral:                 taxonomy.DomainModeGeneral,
+	SteeringProfileSupplyChain:             taxonomy.DomainModeSupplyChain,
+	SteeringProfileRegulatoryExposure:      taxonomy.DomainModeStrategic,
+	SteeringProfileCompetitiveLandscape:    taxonomy.DomainModeMarket,
+	SteeringProfileGeographicConcentration: taxonomy.DomainModeMarket,
+	SteeringProfileInvestmentFinance:       taxonomy.DomainModeGovernance,
+	SteeringProfileTechnologyInnovation:    taxonomy.DomainModeGeneral,
+	SteeringProfileEcosystemStakeholder:    taxonomy.DomainModeGeneral,
+	SteeringProfileScenarioTrends:          taxonomy.DomainModeStrategic,
+	SteeringProfileSectorIndustry:          taxonomy.DomainModeSupplyChain,
+}
+
+// DomainModeForSteeringProfile returns the domain mode for a steering profile name.
+func DomainModeForSteeringProfile(profile SteeringProfileName) string {
+	if mode, ok := profileToDomainMode[profile]; ok {
+		return mode
+	}
+	return taxonomy.DomainModeGeneral
+}
+
+// contractTypesWithMultipleModes maps contract types that imply multiple domain modes.
+// partnership-landscape needs both supply chain (SUPPLIES_TO, PARTNERS_WITH) and governance (OWNS, PARTNERS_WITH).
+func contractTypesWithMultipleModes(ct string) []string {
+	switch ct {
+	case "partnership-landscape":
+		return []string{taxonomy.DomainModeSupplyChain, taxonomy.DomainModeGovernance}
+	default:
+		return nil
+	}
+}
+
+// DomainModesForContractTypes returns deduplicated domain modes for the given contract types.
+// Uses steeringProfileForContractType and DomainModeForSteeringProfile; order preserved.
+// Special case: partnership-landscape yields both supply_chain and governance modes.
+func DomainModesForContractTypes(contractTypes []string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(contractTypes)*2)
+	for _, ct := range contractTypes {
+		ct = strings.TrimSpace(strings.ToLower(ct))
+		if ct == "" {
+			continue
+		}
+		if modes := contractTypesWithMultipleModes(ct); len(modes) > 0 {
+			for _, m := range modes {
+				if _, ok := seen[m]; !ok {
+					seen[m] = struct{}{}
+					out = append(out, m)
+				}
+			}
+			continue
+		}
+		profile := steeringProfileForContractType(ct)
+		mode := DomainModeForSteeringProfile(profile)
+		if _, ok := seen[mode]; !ok {
+			seen[mode] = struct{}{}
+			out = append(out, mode)
+		}
+	}
+	return taxonomy.NormalizeDomainModes(out)
 }

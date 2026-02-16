@@ -103,7 +103,15 @@ const (
 	// APPLIES_TO: mechanism applies to entity or relation scope.
 	DependencyTypeAppliesTo DependencyType = "APPLIES_TO"
 
-	// --- Legacy types for migration ---
+	// --- Canonical consolidated types (TZ §6.1) ---
+	// ASSOCIATED_WITH: canonical for symmetric/associative links (replaces RELATED_TO, AFFILIATED_WITH, PARTNERS_WITH as output).
+	DependencyTypeAssociatedWith DependencyType = "ASSOCIATED_WITH"
+	// CORPORATE_TRANSITION: canonical for renames, successions, M&A (replaces RENAMED_TO, REBRANDED_TO, LEGAL_SUCCESSOR_OF, etc.).
+	DependencyTypeCorporateTransition DependencyType = "CORPORATE_TRANSITION"
+	// DOMAIN_RELATION: canonical for domain↔domain links (replaces RELATED_DOMAIN, BROADENS_TO, NARROWS_TO as output).
+	DependencyTypeDomainRelation DependencyType = "DOMAIN_RELATION"
+
+	// --- Legacy types for migration (deprecated as LLM/output types; canonicalizer maps to types above) ---
 	// WORKS_FOR: legacy employment (prefer EMPLOYED_BY). Person works for org.
 	DependencyTypeWorksFor DependencyType = "WORKS_FOR"
 	// KEY_PERSON: legacy key person relationship. Should be PERSON → ORG.
@@ -176,7 +184,8 @@ const (
 // IsTransitionEdgeType reports whether an edge type represents a corporate transition.
 func IsTransitionEdgeType(edgeType DependencyType) bool {
 	switch edgeType {
-	case DependencyTypeRenamedTo,
+	case DependencyTypeCorporateTransition,
+		DependencyTypeRenamedTo,
 		DependencyTypeRebrandedTo,
 		DependencyTypeLegalSuccessorOf,
 		DependencyTypeMergedInto,
@@ -296,6 +305,26 @@ const (
 	TransmissionContractModeExplicit = "explicit"
 	TransmissionContractModeInferred = "inferred"
 )
+
+// Supply chain / governance relationship nature (SUPPLIES_TO, OWNS).
+const (
+	QualifierIntegrationType = "integration_type" // "vertical" | "partnership" | "arm's-length"
+
+	IntegrationTypeVertical   = "vertical"   // owned/controlled within same group (e.g., BYD subsidiaries)
+	IntegrationTypePartnership = "partnership" // JV, strategic alliance, long-term partnership
+	IntegrationTypeArmsLength = "arm's-length" // spot/short-term commercial, pure financial
+)
+
+// QualifierAtFacility is used on TRANSFORMS_INTO edges to indicate where the product transformation occurs.
+// Value: canonical path of the facility (e.g. /fac/albemarle/silver-peak).
+// Semantics: products transform; the facility is the qualifier (where it happens).
+const QualifierAtFacility = "at_facility"
+
+// QualifierTransportVia is used on SUPPLIES_TO (and SupplyLink) to indicate transport route facilities.
+// Value: array of canonical paths (ports, terminals, pipelines, warehouses, etc.).
+// Semantics: facilities that qualify the transport method; product passes through these.
+// Same canonicalization and deduplication rules apply as for other fragments.
+const QualifierTransportVia = "transport_via"
 
 // EdgeProperties свойства ребра зависимости
 type EdgeProperties struct {

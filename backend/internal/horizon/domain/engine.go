@@ -1728,7 +1728,7 @@ func (e *Engine) evaluateGateL2(ctx context.Context, contract Contract, snapshot
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability:        true,
 			InternalDataGroundingCapability: true,
-			MinCapabilityScore:              7,
+			MinCapabilityScore:              6, // Flash-tier for cost control (was 7/pro)
 			MinContextWindow:                12000,
 			MaxOutputSize:                   2000,
 		},
@@ -2087,7 +2087,7 @@ func (e *Engine) applyExplanatoryLayer(ctx context.Context, contract Contract, s
 				TextGenerationCapability:        true,
 				SearchGroundingCapability:       true,
 				InternalDataGroundingCapability: true,
-				MinCapabilityScore:              7,
+				MinCapabilityScore:              6, // Flash-tier for cost control (was 7/pro)
 				MinContextWindow:                maxInt(12000, estInputTokens+2500),
 				MaxOutputSize:                   3200,
 			},
@@ -2507,7 +2507,7 @@ func (e *Engine) applyStructuredNarrative(ctx context.Context, contract Contract
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability:        true,
-			MinCapabilityScore:              7,
+			MinCapabilityScore:              6, // Flash-tier for cost control (was 7/pro)
 			MinContextWindow:                12000,
 			MaxOutputSize:                   3000,
 			SearchGroundingCapability:       true,

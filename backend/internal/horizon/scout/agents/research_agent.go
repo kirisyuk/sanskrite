@@ -63,6 +63,59 @@ func (a *ResearchAgent) EnrichFragment(
 	return enriched, relations, chains, err
 }
 
+// EnrichFragmentWithGroundingWithDomainModes runs composable research when domainModes is non-empty and not only "general";
+// otherwise behaves as EnrichFragmentWithGrounding (monolithic). Grounding evidence is nil when using pipeline.
+func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
+	ctx context.Context,
+	fragment *models.HorizonFragment,
+	missingInfo []string,
+	focus string,
+	spherePaths []string,
+	keywords []string,
+	specialties []string,
+	chainContext string,
+	originalQuery string,
+	decompositionHints []DecompositionHint,
+	existingEntities []string,
+	domainModes []string,
+) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
+	usePipeline := false
+	for _, m := range domainModes {
+		m = strings.TrimSpace(strings.ToLower(m))
+		if m != "" && m != taxonomy.DomainModeGeneral {
+			usePipeline = true
+			break
+		}
+	}
+	if usePipeline && a.executor != nil {
+		input := ResearchStrategyInput{
+			Fragment:           fragment,
+			MissingInfo:        missingInfo,
+			Focus:              focus,
+			SpherePaths:        spherePaths,
+			Keywords:           keywords,
+			Specialties:        specialties,
+			ChainContext:       chainContext,
+			OriginalQuery:      originalQuery,
+			DecompositionHints: decompositionHints,
+			ExistingEntities:   existingEntities,
+		}
+		enriched, relations, chains, err := a.ResearchPipeline().Enrich(ctx, input, domainModes)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if enriched != nil {
+			fragment.Labels, fragment.Identifiers = naming.NormalizeFragmentNames(
+				fragment.CanonicalPath,
+				fragment.Labels,
+				fragment.Identifiers,
+			)
+			return enriched, relations, chains, nil, nil
+		}
+	}
+	return a.EnrichFragmentWithGrounding(ctx, fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
+}
+
 // EnrichFragmentWithGrounding returns enriched data plus grounding evidence from full AI task result.
 func (a *ResearchAgent) EnrichFragmentWithGrounding(
 	ctx context.Context,
@@ -495,6 +548,11 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 	profile := ResolveResearchProfile(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
 	profileBlock := BuildResearchProfilePromptBlock(profile)
 	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
+	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt() + `
+- /segment/{domain}/{vertical}/{geo} for org marketSegments; /media/{platform}/{slug} for media channels
+- NEVER use "/discovered/*" (not allowed)
+- canonicalPath MUST match expected prefix for targetType; if unsure, still output your best stable canonicalPath
+`
 
 	return fmt.Sprintf(`You are a research agent. Your task is to find missing information about the provided fragment using your search capabilities.
 
@@ -881,114 +939,16 @@ WHEN NOT TO USE sourceCanonicalPath:
 
 CRITICAL: Always verify that the resulting edge direction matches EDGE DIRECTION VALIDATION RULES below.
 
-CANONICAL PATH RULES:
-- NEVER use "/discovered/*" (not allowed).
-- Prefer stable namespaces:
-  - Organizations: /org/{iso2|na}/{slug}
-    - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase).
-    - CRITICAL: If the country is mentioned or clearly implied in the name/context, infer ISO2 and use it.
-    - Use "na" ONLY when you truly cannot infer ISO2 from name/context/sources.
-    - Legacy /org/{slug} may exist; prefer /org/{iso2}/{slug} for NEW entities to reduce collisions.
-  - Government bodies: /gov/{iso2|na}/{slug}
-    - Use for ministries, regulators, agencies, state bodies.
-    - CRITICAL: If country is mentioned or clearly implied in the name/context, infer ISO2 and use it.
-    - Use /gov/na/{slug} ONLY when you truly cannot infer ISO2, and then explicitly ask to resolve country via missingInfo.
-  - Market segments (ORG-level classification): /segment/{domain}/{vertical}/{geo}
-    - geo: ISO3166-1 alpha2 lowercase (2 letters) OR "global"
-  - Media channels (last-mile endpoints): /media/{platform}/{slug}
-    - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
-  - Communities (informal social groups): /community/{geo}/{type}/{slug}
-    - geo: ISO3166-1 alpha2 lowercase, regional token, or "global"/"int"
-    - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
-    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
-    - Examples:
-      - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
-      - "Kazan drug dealers" -> /community/ru/criminal/kazan-synthetic-dealers
-      - "OSINT community" -> /community/global/professional/osint-researchers
-      - "House of Saud" -> /community/sa/dynasty/house-of-saud
-      - "Pashtun tribes" -> /community/af/tribe/pashtun
-      - "Senior Zhuz (Kazakhstan)" -> /community/kz/tribe/senior-zhuz
-    - CRITICAL: COMMUNITY is for INFORMAL groups WITHOUT legal structure.
-      - If the entity has legal registration → use ORGANIZATION (/org/)
-      - If the entity is a media endpoint (channel/group) → use MEDIA_CHANNEL (/media/)
-      - COMMUNITY is the social entity that *uses* channels, not the channel itself
-    - COMMUNITY HIERARCHY: Use HAS_SUBGROUP to link parent community → narrower sub-community
-      - dynasties: house-of-saud → sudairi-seven
-      - tribes: pashtun → durrani → popalzai
-      - Direction: broader → narrower
-  - People: /person/{lowercase-slug}
-  - Products (Goods): MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}[/{model-sku-slug}]
-    - category: "raw" | "component" | "finished" | "service"
-    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy" | "hydrocarbon" | "fuel" | "petrochemical"
-    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly" | "liquefaction" | "cracking"
-    - slug: lowercase-slug derived from product name
-    - model-sku-slug: (OPTIONAL) specific model/SKU slug
-    - Examples:
-      - "Lithium Ore" -> /product/raw/mineral/extraction/lithium-ore
-      - "Lithium Carbonate" -> /product/raw/chemical/refining/lithium-carbonate
-      - "Battery Cell" -> /product/component/electronic/manufacturing/battery-cell
-      - "Electric Vehicle" -> /product/finished/mechanical/assembly/electric-vehicle
-      - "Crude Oil" -> /product/raw/hydrocarbon/extraction/crude-oil
-      - "LNG" -> /product/raw/hydrocarbon/liquefaction/lng
-    - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
-  - Services: Use structure /product/service/{domain}/{subdomain}/{slug}[/{offering-slug}]
-    - domain: it | financial | legal | consulting | logistics | engineering | media | telecom | education | healthcare | construction | security | hr | real-estate | other
-    - subdomain: domain-specific (e.g., software, cloud, hosting, banking, payments, compliance, etc.)
-  - Deposits (Natural Resource): /deposit/{resource-slug}/{deposit-slug}
-    - IMPORTANT: resource-slug examples are not exhaustive; prefer best-effort slug over dropping the deposit.
-    - Examples:
-      - "Permian Basin" -> /deposit/crude-oil/permian-basin
-      - "Atacama Salar" -> /deposit/lithium/atacama-salar
-      - "Escondida Mine" -> /deposit/copper/escondida
-      - "Ghawar Field" -> /deposit/crude-oil/ghawar
+%s
 
 METRIC VALUE FORMAT (IMPORTANT):
 - value MUST be a JSON number (expand \"10M\" to 10000000; do NOT include commas)
 - unit MUST be lowercase string (or omit)
 - confidence MUST be 0..1 (if you only know \"80\", output 0.8)
 - observedAt MUST be ISO8601 (\"YYYY-MM-DD\" or RFC3339)
-  - Programs:
-    - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
-      - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
-      - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
-    - Otherwise /program/{programSlug}
-  - Markets:
-    - Prefer (segment-first): /market/{geo}/{domain}/{vertical}
-      - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
-      - This enables consistent market hierarchy + aggregation
-    - Legacy /market/{geo}/{marketSlug} may exist in older data; do NOT emit legacy for new markets.
-      - Always provide domain/vertical for NEW outputs.
-      - geo: ISO2, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
-      - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
-      - GEOGRAPHY INHERITANCE: If THIS FRAGMENT is a regional market (e.g., /market/sa/...), 
-        new MARKET relations MUST inherit that geo, not default to "global"
-      - Extract geo from market name context when present:
-        - "Saudi event marketing" → /market/sa/event-marketing (NOT /market/global/...)
-        - "German automotive" → /market/de/automotive
-      - Examples (segment-first): /market/sa/professional-services/marketing, /market/sa/professional-services/event-marketing
-    - If you encounter a legacy market path in sources, map it to segment-first /market/{geo}/{domain}/{vertical}.
-  - Facilities:
-    - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred
-    - Otherwise /fac/{facilitySlug}
-  - GEO regions / locations: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase OR regional token (e.g., gcc, eu, asean, opec)
-    - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
-      - GCC → /loc/gcc/na/na (NOT /loc/na/na/gcc)
-    - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
-    - city: lowercase slug; use "na" if not applicable/unknown
-    - country-only locations: /loc/{country}/na/na
-    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 (exactly 2 lowercase letters). Invalid codes will be REJECTED.
-- VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
-  - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
-  - canonicalPath MUST match expected prefix for targetType (see namespaces above)
-  - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code
-  - Facilities: prefer /fac/{orgSlug}/{facilitySlug} over flat /fac/{facilitySlug} (flat paths get penalty)
-- canonicalPath slug SHOULD be derived from targetShortName (without ownership suffix) to avoid duplicates when legal form changes.
-- ONLY include ownership suffix in canonicalPath if needed to disambiguate between different entities with same shortName.
-- If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock, canonicalRulesBlock)
 }
 
 func dedupNonEmptyStrings(in []string) []string {

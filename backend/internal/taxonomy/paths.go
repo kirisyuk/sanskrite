@@ -79,6 +79,18 @@ func IsRegionalGeoToken(token string) bool {
 	return false
 }
 
+// RegionalGeoTokenList returns a sorted list of allowed regional geo tokens for prompts.
+// Used in canonical path rules so LLM knows valid values for {geo} in /org, /gov, /loc, /market, /community, /program.
+// Includes: global, int (for org only), na, plus regional blocs (gcc, eu, asean, brics, opec, etc.).
+func RegionalGeoTokenList() []string {
+	tokens := make([]string, 0, len(regionalGeoTokens)+2)
+	for t := range regionalGeoTokens {
+		tokens = append(tokens, t)
+	}
+	sort.Strings(tokens)
+	return tokens
+}
+
 // Basic Cyrillic -> Latin transliteration (best-effort).
 // Rationale: canonical paths are restricted to ASCII slugs (a-z0-9-), but user inputs and KB labels
 // frequently include Cyrillic. Without transliteration, Slugify() would drop those characters and
@@ -193,21 +205,21 @@ func ValidateCanonicalPath(path string) error {
 	switch namespace {
 	case "gov":
 		// /gov/{geo}/{slug}
-		// geo: ISO3166-1 alpha2 (exactly 2 lowercase letters) OR composite (2-3 ISO2 joined by "-")
-		// Examples: "us", "sa", "tr-sy", "ae-sa-om", "na"
+		// geo: ISO3166-1 alpha2, composite (tr-sy, ae-sa-om), na, or regional (eu, asean, brics, gcc, etc.)
+		// Regional tokens allow EU/ASEAN/BRICS-level bodies (European Commission, ASEAN Secretariat, etc.)
 		if len(parts) != 3 {
 			return fmt.Errorf("gov canonical path must have exactly 3 segments: /gov/{geo}/{slug}: %s", path)
 		}
 		geo := strings.ToLower(strings.TrimSpace(parts[1]))
-		if geo != "na" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) {
-			return fmt.Errorf("gov canonical path has invalid geo %q (expected ISO3166-1 alpha2 like 'us'/'sa', composite like 'tr-sy'/'ae-sa-om', or 'na'): %s", parts[1], path)
+		if geo != "na" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) && !IsRegionalGeoToken(geo) {
+			return fmt.Errorf("gov canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, na, or regional token like eu/asean/brics): %s", parts[1], path)
 		}
 	case "org":
 		// Allowed:
 		// - legacy: /org/{slug}
 		// - preferred: /org/{geo}/{slug}
-		// geo: ISO3166-1 alpha2 (exactly 2 lowercase letters) OR composite (2-3 ISO2 joined by "-")
-		// Examples: "us", "sa", "tr-sy", "ae-sa-om", "na", "int"
+		// geo: ISO3166-1 alpha2, composite (tr-sy, ae-sa-om), na, int, or regional (eu, asean, brics, gcc, etc.)
+		// Regional tokens allow EU/ASEAN/BRICS-level orgs (European Commission, ASEAN Secretariat, etc.)
 		if len(parts) == 2 {
 			return nil
 		}
@@ -215,9 +227,8 @@ func ValidateCanonicalPath(path string) error {
 			return fmt.Errorf("org canonical path must be /org/{slug} (legacy) or /org/{geo}/{slug}: %s", path)
 		}
 		geo := strings.ToLower(strings.TrimSpace(parts[1]))
-		// "int" is a special token for international organizations (UN, UNESCO, etc.).
-		if geo != "na" && geo != "int" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) {
-			return fmt.Errorf("org canonical path has invalid geo %q (expected ISO3166-1 alpha2 like 'us'/'sa', composite like 'tr-sy'/'ae-sa-om', or 'na'/'int'): %s", parts[1], path)
+		if geo != "na" && geo != "int" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) && !IsRegionalGeoToken(geo) {
+			return fmt.Errorf("org canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, na, int, or regional token like eu/asean/brics): %s", parts[1], path)
 		}
 	case "loc":
 		// /loc/{cc}/{admin1}/{city}

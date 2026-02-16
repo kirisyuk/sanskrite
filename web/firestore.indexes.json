@@ -60,6 +60,22 @@
       ]
     },
     {
+      "collectionGroup": "core_datasources",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "sourceDetails.channelUsername", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "core_datasources",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "sourceDetails.uri", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "meta_analyses",
       "queryScope": "COLLECTION",
       "fields": [
@@ -178,6 +194,30 @@
         { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "rag_documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sourceId", "order": "ASCENDING" },
+        { "fieldPath": "externalId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "rag_source_projects",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "projectId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "rag_source_projects",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sourceId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
       ]
     },
     {
@@ -474,6 +514,14 @@
         { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "projectId", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "core_docs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "external.provider", "order": "ASCENDING" },
+        { "fieldPath": "external.resourceId", "order": "ASCENDING" }
       ]
     },
     {

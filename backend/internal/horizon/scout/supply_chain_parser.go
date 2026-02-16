@@ -18,6 +18,18 @@ func NewSupplyChainParser() *SupplyChainParser {
 	return &SupplyChainParser{}
 }
 
+// SupplyLinkSegment represents one actor→product→actor segment for SupplyLink materialization.
+// PathBuilder uses SupplyLink fragments; these are created from parsed chains so PathBuilder has data.
+type SupplyLinkSegment struct {
+	SupplierRef         string
+	ProductRef          string
+	CustomerRef         string
+	SupplierFacilityRef string
+	CustomerFacilityRef string
+	TransportViaRefs    []string
+	Confidence          float64
+}
+
 // ParsedChainResult contains fragments and edges extracted from supply chains.
 type ParsedChainResult struct {
 	// Fragments are new or updated fragments discovered in the chains.
@@ -25,6 +37,9 @@ type ParsedChainResult struct {
 	Fragments map[string]*models.HorizonFragment
 	// Edges are supply chain edges extracted from the chains.
 	Edges []*ChainEdge
+	// SupplyLinkSegments are actor→product→actor segments for SupplyLink materialization.
+	// Enables PathBuilder to traverse; created from Scout/Research output.
+	SupplyLinkSegments []*SupplyLinkSegment
 	// Stats contains diagnostic counters for parsing (for [SupplyChain*] telemetry).
 	Stats ParsedChainStats
 }
@@ -46,9 +61,12 @@ type ParsedChainStats struct {
 type ChainEdge struct {
 	SourceCanonicalPath string
 	TargetCanonicalPath string
-	RelationType        string // PRODUCES, CONSUMES, SUPPLIES_TO, DEPENDS_ON, TRANSFORMS_INTO
+	RelationType        string                 // PRODUCES, CONSUMES, SUPPLIES_TO, DEPENDS_ON, TRANSFORMS_INTO
 	Confidence          float64
 	Reason              string
+	// Qualifiers carry edge-specific metadata (e.g. at_facility for TRANSFORMS_INTO).
+	// Passed through to DependencyEdge.Qualifiers on materialization.
+	Qualifiers map[string]interface{} `json:"qualifiers,omitempty"`
 }
 
 // ParseSupplyChains converts agent supply chain output into fragments and edges.
@@ -71,6 +89,17 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 		if len(chain.Nodes) < 2 {
 			// Need at least 2 nodes to form an edge
 			continue
+		}
+
+		// Ensure transport facilities become fragments (same canonicalization/dedup as other nodes)
+		for _, pth := range chain.TransportVia {
+			pth = strings.TrimSpace(pth)
+			if pth != "" && strings.HasPrefix(pth, "/fac/") && result.Fragments[pth] == nil {
+				frag := p.createTransportFacilityFragment(pth)
+				if frag != nil {
+					result.Fragments[pth] = frag
+				}
+			}
 		}
 
 		// Process each node in the chain
@@ -115,10 +144,124 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 					}
 				}
 			}
+
+			// Infer TRANSFORMS_INTO with at_facility when pattern: product -> facility -> product
+			// The facility consumes upstream product and produces downstream product; transformation happens there.
+			if i >= 1 && i < len(chain.Nodes)-1 {
+				prevNode := chain.Nodes[i-1]
+				nextNode := chain.Nodes[i+1]
+				if p.isProductType(prevNode.Type, prevNode.CanonicalPath) &&
+					p.isActorType(node.Type, node.CanonicalPath) &&
+					strings.HasPrefix(strings.TrimSpace(node.CanonicalPath), "/fac/") &&
+					p.isProductType(nextNode.Type, nextNode.CanonicalPath) {
+					prevPath := strings.TrimSpace(prevNode.CanonicalPath)
+					nextPath := strings.TrimSpace(nextNode.CanonicalPath)
+					facPath := strings.TrimSpace(node.CanonicalPath)
+					if prevPath != "" && nextPath != "" && facPath != "" {
+						transformEdge := &ChainEdge{
+							SourceCanonicalPath: prevPath,
+							TargetCanonicalPath: nextPath,
+							RelationType:        string(models.DependencyTypeTransformsInto),
+							Confidence:          chain.Confidence,
+							Reason:              fmt.Sprintf("Supply chain: %s transforms into %s at %s. %s", prevNode.Name, nextNode.Name, node.Name, chain.Reason),
+							Qualifiers: map[string]interface{}{
+								models.QualifierAtFacility: facPath,
+							},
+						}
+						result.Edges = append(result.Edges, transformEdge)
+						result.Stats.EdgesCreated++
+					}
+				}
+			}
+		}
+		// Extract SupplyLink segments (actor→product→actor) for PathBuilder materialization
+		for i := 0; i < len(chain.Nodes)-2; i++ {
+			a, prod, b := chain.Nodes[i], chain.Nodes[i+1], chain.Nodes[i+2]
+			if p.isActorType(a.Type, a.CanonicalPath) &&
+				p.isProductType(prod.Type, prod.CanonicalPath) &&
+				p.isActorType(b.Type, b.CanonicalPath) {
+				srcPath := strings.TrimSpace(a.CanonicalPath)
+				prodPath := strings.TrimSpace(prod.CanonicalPath)
+				dstPath := strings.TrimSpace(b.CanonicalPath)
+				if srcPath != "" && prodPath != "" && dstPath != "" {
+					seg := &SupplyLinkSegment{
+						SupplierRef: srcPath,
+						ProductRef:  prodPath,
+						CustomerRef: dstPath,
+						Confidence:  chain.Confidence,
+					}
+					for _, pth := range chain.TransportVia {
+						pth = strings.TrimSpace(pth)
+						if pth != "" && strings.HasPrefix(pth, "/fac/") {
+							seg.TransportViaRefs = append(seg.TransportViaRefs, pth)
+						}
+					}
+					result.SupplyLinkSegments = append(result.SupplyLinkSegments, seg)
+				}
+			}
+		}
+
+		// Infer SUPPLIES_TO with transport_via when pattern: actor -> product -> actor and chain has transportVia
+		if len(chain.Nodes) >= 3 && len(chain.TransportVia) > 0 {
+			for i := 0; i < len(chain.Nodes)-2; i++ {
+				a, prod, b := chain.Nodes[i], chain.Nodes[i+1], chain.Nodes[i+2]
+				if p.isActorType(a.Type, a.CanonicalPath) &&
+					p.isProductType(prod.Type, prod.CanonicalPath) &&
+					p.isActorType(b.Type, b.CanonicalPath) {
+					srcPath := strings.TrimSpace(a.CanonicalPath)
+					dstPath := strings.TrimSpace(b.CanonicalPath)
+					if srcPath != "" && dstPath != "" {
+						via := make([]string, 0, len(chain.TransportVia))
+						for _, pth := range chain.TransportVia {
+							pth = strings.TrimSpace(pth)
+							if pth != "" && strings.HasPrefix(pth, "/fac/") {
+								via = append(via, pth)
+							}
+						}
+						if len(via) > 0 {
+							supEdge := &ChainEdge{
+								SourceCanonicalPath: srcPath,
+								TargetCanonicalPath: dstPath,
+								RelationType:        string(models.DependencyTypeSuppliesTo),
+								Confidence:          chain.Confidence,
+								Reason:              fmt.Sprintf("Supply chain: %s supplies %s to %s via %v. %s", a.Name, prod.Name, b.Name, via, chain.Reason),
+								Qualifiers: map[string]interface{}{
+									models.QualifierTransportVia: via,
+								},
+							}
+							result.Edges = append(result.Edges, supEdge)
+							result.Stats.EdgesCreated++
+						}
+					}
+					break // one SUPPLIES_TO per chain with transport
+				}
+			}
 		}
 	}
 
 	return result, nil
+}
+
+// createTransportFacilityFragment creates a minimal HorizonFragment for a transport facility path.
+// Used when transportVia paths are not already in chain nodes; same canonicalization rules apply.
+func (p *SupplyChainParser) createTransportFacilityFragment(canonicalPath string) *models.HorizonFragment {
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	if canonicalPath == "" || !strings.HasPrefix(canonicalPath, "/fac/") {
+		return nil
+	}
+	parts := strings.Split(strings.Trim(canonicalPath, "/"), "/")
+	name := parts[len(parts)-1]
+	if name == "" && len(parts) > 1 {
+		name = parts[len(parts)-2]
+	}
+	name = strings.ReplaceAll(name, "-", " ")
+	return &models.HorizonFragment{
+		CanonicalPath: canonicalPath,
+		Type:          models.FragmentTypeFacility,
+		Labels:        map[string]string{"en": name},
+		Identifiers:   map[string]string{},
+		State:         make(map[string]models.MetricValue),
+	}
 }
 
 // createFragmentFromNode creates a HorizonFragment from a supply chain node.

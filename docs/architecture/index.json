@@ -54,7 +54,7 @@
     "path": "docs/architecture/data-model.md",
     "code": [
       "backend/internal/models/models.go",
-      "backend/firestore.indexes.json",
+      "web/firestore.indexes.json",
       "backend/firestore.rules"
     ]
   },

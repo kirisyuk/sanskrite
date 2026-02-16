@@ -273,7 +273,19 @@ setup_infrastructure() {
   
   # 3. Ensure secrets exist (create if missing with placeholder)
   echo -e "${BLUE}[infra] Ensuring secrets exist...${NC}"
-  for secret in gemini_api_key openai_api_key anthropic_api_key deepseek_api_key grok_api_key tavily_api_key; do
+  local known_secrets=(
+    gemini_api_key openai_api_key anthropic_api_key deepseek_api_key grok_api_key tavily_api_key
+    vertex_api_key
+    ANTHROPIC_API_KEY ANTHROPIC_API_KEY_TEST DEEPSEEK_API_KEY DEEPSEEK_API_KEY_TEST
+    GROK_API_KEY GROK_API_KEY_TEST OPENAI_API_KEY_TEST VERTEX_API_KEY VERTEX_API_KEY_TEST
+    TELEGRAM_API_ID TELEGRAM_API_HASH TELEGRAM_BOT_TOKEN TELEGRAM_SESSION_STRING
+    paypal_client_id paypal_secret paypal_webhook_id
+    google-custom-search-api-key
+    GEONAMES_USERNAME functions-key
+    ACLED_ACCESS_TOKEN NASA_FIRMS_API_KEY FRED_API_KEY EIA_API_KEY FINNHUB_API_KEY
+    CLOUDFLARE_API_TOKEN OPENSKY_USERNAME OPENSKY_PASSWORD
+  )
+  for secret in "${known_secrets[@]}"; do
     if ! gcloud secrets describe "$secret" >/dev/null 2>&1; then
       echo "PLACEHOLDER_UPDATE_ME" | gcloud secrets create "$secret" --data-file=-
       echo -e "${YELLOW}  ⚠${NC} Created placeholder for: $secret (update with real value!)"
@@ -954,7 +966,7 @@ except:
   echo -e "${BLUE}[infra] Ensuring Pub/Sub topics...${NC}"
   for topic in \
     discovery.status discovery.profile discovery.answer discovery.project \
-    document.process ground.refresh source.poll source.poll.due \
+    document.process ground.refresh source.poll source.poll.due chat.ontology.process \
     genai.stream genai.stream.error genai.stream.tool_call genai.stream.tool_result \
     artifact.generation.started artifact.section.generating artifact.section.chunk artifact.section.completed \
     artifact.assembly.started artifact.assembly.chunk artifact.assembly.completed \
@@ -1049,6 +1061,57 @@ except:
         --enable-message-ordering \
         --quiet >/dev/null 2>&1 || true
       echo -e "${GREEN}  ✓${NC} Created subscription: $sub_id"
+    fi
+  done
+
+  # 4.4 Ensure ws-broker subscriptions for base topics (aggregator / legacy sanskrite-ws)
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for base topics (ws-broker)...${NC}"
+  local base_ws_topics=(
+    discovery.status discovery.profile discovery.answer discovery.project
+    document.process analysis.status agent.update verified.stream
+    artifact.generation.started artifact.section.generating artifact.generation.error
+    artifact.assembly.started artifact.assembly.chunk artifact.assembly.completed
+    artifact.section.completed artifact.section.chunk artifact.generation.completed
+  )
+  for topic in "${base_ws_topics[@]}"; do
+    local sub_id="${topic}-ws-broker"
+    if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      echo -e "${GREEN}  ✓${NC} $sub_id exists"
+    else
+      if gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
+        gcloud pubsub subscriptions create "$sub_id" \
+          --project="$PROJECT_ID" \
+          --topic="$topic" \
+          --enable-message-ordering \
+          --quiet >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓${NC} Created subscription: $sub_id"
+      fi
+    fi
+  done
+
+  # 4.5 Ensure worker subscriptions (source poller, grounding, document processor, chat ontology)
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub worker subscriptions...${NC}"
+  local worker_subs=(
+    "source.poll:source.poll.worker"
+    "source.poll.due:source.poll.due.worker"
+    "ground.refresh:ground.refresh.worker"
+    "hatlone.operations.events:hatlone.operations.events.worker"
+    "hatlone.artifact.events:hatlone.artifact.events.document-processor.worker"
+    "chat.ontology.process:chat.ontology.process.worker"
+  )
+  for pair in "${worker_subs[@]}"; do
+    local topic="${pair%%:*}"
+    local sub_id="${pair#*:}"
+    if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      echo -e "${GREEN}  ✓${NC} $sub_id exists"
+    else
+      if gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
+        gcloud pubsub subscriptions create "$sub_id" \
+          --project="$PROJECT_ID" \
+          --topic="$topic" \
+          --quiet >/dev/null 2>&1 || true
+        echo -e "${GREEN}  ✓${NC} Created subscription: $sub_id"
+      fi
     fi
   done
 
@@ -1893,37 +1956,29 @@ create_indexes() {
     fi
   fi
   
-  # Also deploy firestore.indexes.json for other composite indexes
+  # Deploy firestore rules and indexes via Firebase CLI
   # Note: Vector indexes are created separately via gcloud (see above)
-  echo -e "${BLUE}[firestore] Deploying firestore.indexes.json (composite indexes)...${NC}"
-  # Ensure firestore.indexes.json exists in web directory (Firebase CLI requires it there)
-  if [[ -f "$API_DIR/firestore.indexes.json" && ! -f "$WEB_DIR/firestore.indexes.json" ]]; then
-    cp "$API_DIR/firestore.indexes.json" "$WEB_DIR/firestore.indexes.json"
-    echo -e "${BLUE}  Copied${NC} firestore.indexes.json to web directory"
-  fi
-  
-  if [[ -f "$WEB_DIR/firestore.indexes.json" ]]; then
-    # Try Firebase CLI first (if available) - deploy from web directory where firebase.json is
+  echo -e "${BLUE}[firestore] Deploying rules and indexes (firestore)...${NC}"
+  if [[ -f "$WEB_DIR/firestore.indexes.json" ]] && [[ -f "$API_DIR/firestore.rules" ]]; then
     if command -v firebase >/dev/null 2>&1 && [[ -f "$WEB_DIR/firebase.json" ]]; then
       cd "$WEB_DIR"
-      if firebase deploy --only firestore:indexes --project "$PROJECT_ID" --non-interactive --force 2>/dev/null; then
-        echo -e "${GREEN}  ✓${NC} Indexes deployed via Firebase CLI"
+      if firebase deploy --only firestore --project "$PROJECT_ID" --non-interactive --force 2>/dev/null; then
+        echo -e "${GREEN}  ✓${NC} Firestore rules and indexes deployed via Firebase CLI"
         cd "$ROOT_DIR"
       else
         cd "$ROOT_DIR"
         echo -e "${YELLOW}  ⚠${NC} Firebase CLI deploy failed (this is normal if indexes already exist)"
-        echo -e "${BLUE}  Note:${NC} Vector field config is in $WEB_DIR/firestore.indexes.json"
-        echo -e "${BLUE}  To deploy manually:${NC} cd web && firebase deploy --only firestore:indexes --project $PROJECT_ID"
+        echo -e "${BLUE}  To deploy manually:${NC} cd web && firebase deploy --only firestore --project $PROJECT_ID"
       fi
     else
       echo -e "${YELLOW}  ⚠${NC} Firebase CLI not found or firebase.json missing"
-      echo -e "${YELLOW}  ⚠${NC} Deploy indexes manually:"
-      echo -e "${YELLOW}     cd web && firebase deploy --only firestore:indexes --project $PROJECT_ID${NC}"
-      echo -e "${YELLOW}  ⚠${NC} Or use Firebase Console: Firestore > Indexes > Deploy from file"
+      echo -e "${YELLOW}  ⚠${NC} Deploy manually: cd web && firebase deploy --only firestore --project $PROJECT_ID"
     fi
-    echo -e "${BLUE}  Index file:${NC} $WEB_DIR/firestore.indexes.json"
+    echo -e "${BLUE}  Rules:${NC} $API_DIR/firestore.rules"
+    echo -e "${BLUE}  Indexes:${NC} $WEB_DIR/firestore.indexes.json"
   else
-    echo -e "${YELLOW}  ⚠${NC} firestore.indexes.json not found at $WEB_DIR/firestore.indexes.json"
+    [[ ! -f "$API_DIR/firestore.rules" ]] && echo -e "${YELLOW}  ⚠${NC} firestore.rules not found at $API_DIR/firestore.rules"
+    [[ ! -f "$WEB_DIR/firestore.indexes.json" ]] && echo -e "${YELLOW}  ⚠${NC} firestore.indexes.json not found at $WEB_DIR/firestore.indexes.json"
   fi
 
   # Verify meta_analyses indexes presence (best-effort)

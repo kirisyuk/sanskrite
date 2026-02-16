@@ -9,7 +9,7 @@
 
 1. **Firestore**
    - ✓ Коллекции будут созданы автоматически при первом использовании
-   - ✓ Индексы определены в `backend/firestore.indexes.json`
+   - ✓ Индексы определены в `web/firestore.indexes.json`
    - ✓ Security Rules добавлены в `backend/firestore.rules`
 
 2. **GCS Buckets**

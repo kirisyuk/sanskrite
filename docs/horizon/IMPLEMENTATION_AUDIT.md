@@ -260,7 +260,7 @@
 
 #### ✅ Определены в firestore.indexes.json
 
-Все обязательные индексы определены в `backend/firestore.indexes.json`:
+Все обязательные индексы определены в `web/firestore.indexes.json`:
 
 - ✅ `horizon_fragments`: tenantId + canonicalPath
 - ✅ `horizon_fragments`: tenantId + governance.status + updatedAt
@@ -638,7 +638,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 ### Индексы Firestore
 
-**Статус**: Определены в `backend/firestore.indexes.json`
+**Статус**: Определены в `web/firestore.indexes.json`
 
 Все обязательные индексы определены в конфигурации. Для применения:
 

@@ -71,37 +71,6 @@ func isUpperAcronym(s string) bool {
 	return hasLetter
 }
 
-func isDomainCriticalEnrichmentJob(job *models.ScoutingJob) bool {
-	if job == nil || job.State == nil {
-		return false
-	}
-
-	if v, ok := job.State["trigger"]; ok {
-		if strings.EqualFold(strings.TrimSpace(parseStateString(v)), "domain_contract_engine_enrich") {
-			return true
-		}
-	}
-
-	if v, ok := job.State["domains"]; ok {
-		switch t := v.(type) {
-		case []interface{}:
-			if len(t) > 0 {
-				return true
-			}
-		case []map[string]interface{}:
-			if len(t) > 0 {
-				return true
-			}
-		case []string:
-			if len(t) > 0 {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
 func shouldRequestProductCanonicalization(frag *models.HorizonFragment) bool {
 	if frag == nil {
 		return false
@@ -1899,6 +1868,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		effectiveCanonicalPath = strings.TrimSpace(job.TargetCanonicalPath)
 	}
 
+	// Domain mode: derive from intent-resolved domains (contract types), path, or specialties.
+	// Used by Phase 1/2 (Research/Critic pipelines) and allowlist filtering.
+	e.ensureJobDomainMode(job, effectiveCanonicalPath)
+
 	// FRESHNESS CHECK: Проверяем, есть ли свежие данные
 	// Используем уже канонизированный и дедуплицированный путь
 	// Это предотвращает повторные дорогие поиски, если данные недавно обновлялись (волны/затухание)
@@ -2526,6 +2499,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		e.logLine(ctx, job, "info", "> extracting structured data")
 
+		// Phase 0 (structural extraction): extract fragment identity and basic relations (LOCATED_IN, OPERATES_IN; optional PRODUCES/CONSUMES).
 		// Определяем entityPath и sectorPath из targetCanonicalPath через LLM
 		entityPath, sectorPath, err := e.taxonomyClassifier.ClassifyTaxonomy(ctx, job.TargetCanonicalPath)
 		if err != nil {
@@ -2566,6 +2540,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		extractedFragment = &scoutResult.Fragment
 
+		// Phase 2 (domain validation / critic): first validation — CriticPipeline when domain mode set, else monolithic prompt.
 		// VALIDATION: Валидация через Critic Agent
 		if err := e.transition(ctx, job, models.ScoutingJobStateValidation, 0.7, "validation"); err != nil {
 			return fmt.Errorf("failed to transition to VALIDATION: %w", err)
@@ -2578,7 +2553,11 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") {
 			graphContext = e.buildGraphSkeletonContext(ctx, job.TargetCanonicalPath)
 		}
-		validationResult, err = e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, aggregatedContent, specialties, graphContext)
+		domainModes := getJobDomainModes(job)
+		if !policy.ScoutComposablePipelineEnabled() {
+			domainModes = nil
+		}
+		validationResult, err = e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, aggregatedContent, specialties, graphContext, domainModes)
 		if err != nil {
 			// Логируем ошибку, но не останавливаем процесс (fail-open с низким confidence)
 			fmt.Printf("[ScoutEngine] critic validation error (fail-open): jobId=%s target=%s err=%v\n",
@@ -2654,10 +2633,9 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		if len(validationResult.MissingInfo) == 0 {
 			goto SKIP_RESEARCH
 		}
-		// Daily guardrails (USD + token caps) to keep costs bounded during MVP.
-		// Domain-critical enrichment tasks must not be blocked by budget caps.
-		skipBudgetGuards := isDomainCriticalEnrichmentJob(job)
-		if e.budgetPolicy.Enabled && !skipBudgetGuards && e.spendLedger != nil && lensID != "" && cascadeID != "" {
+		// Daily guardrails (USD + token caps) to keep costs bounded.
+		// Domain contract jobs are now subject to budget (previously bypassed).
+		if e.budgetPolicy.Enabled && e.spendLedger != nil && lensID != "" && cascadeID != "" {
 			day := time.Now().UTC().Format("2006-01-02")
 			if cSpend, _, cOut, err := e.spendLedger.GetCascadeSpendUSD(ctx, tenantID, cascadeID, day); err == nil {
 				if e.budgetPolicy.CascadeDailyMaxUSD > 0 && cSpend >= e.budgetPolicy.CascadeDailyMaxUSD {
@@ -2679,9 +2657,6 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					goto SKIP_RESEARCH
 				}
 			}
-		}
-		if skipBudgetGuards {
-			fmt.Printf("[ScoutEngine] Budget guardrails bypassed for domain-critical enrichment job %s\n", strings.TrimSpace(job.ID))
 		}
 		fmt.Printf("[ScoutEngine] Starting research for job %s, missing info: %v\n", job.ID, validationResult.MissingInfo)
 		e.logLine(ctx, job, "info", fmt.Sprintf("> research started (missing=%d)", len(validationResult.MissingInfo)))
@@ -2785,10 +2760,29 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				}
 			}
 		}
-		enrichedFragment, newRelations, newSupplyChains, researchGroundingEvidence, err := e.researchAgent.EnrichFragmentWithGrounding(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities)
+		// Phase 1 (domain expansion / research): ResearchPipeline when domain mode set, else EnrichFragmentWithGrounding; allowlist applied when appending relations.
+		domainModes := getJobDomainModes(job)
+		if !policy.ScoutComposablePipelineEnabled() {
+			domainModes = nil
+		}
+		enrichedFragment, newRelations, newSupplyChains, researchGroundingEvidence, err := e.researchAgent.EnrichFragmentWithGroundingWithDomainModes(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities, domainModes)
 		if err == nil {
 			researchSucceeded = true
 			groundingEvidence = mergeGroundingEvidence(groundingEvidence, researchGroundingEvidence)
+			// Apply allowlist by domain mode: only persist relations (and supply chains) allowed for this job's mode(s).
+			if len(newRelations) > 0 || len(newSupplyChains) > 0 {
+				allowlist := EdgeAllowlistByDomainModes(domainModes)
+				if allowlist != nil {
+					filtered := make([]agents.DiscoveredRelation, 0, len(newRelations))
+					for _, r := range newRelations {
+						if AllowlistContains(allowlist, models.DependencyType(r.RelationType)) {
+							filtered = append(filtered, r)
+						}
+					}
+					newRelations = filtered
+					// Supply chains are allowed when mode is supply_chain (allowlist includes supply chain types); keep all chains when filtered relations are applied.
+				}
+			}
 			if internalFirstGroundingEnabled() {
 				if researchGroundingEvidence != nil {
 					logGroundingInfof("research grounding: tenantId=%s projectId=%s lensId=%s jobId=%s target=%s datastore=%v(%d) web=%v(%d)",
@@ -2926,7 +2920,12 @@ SKIP_RESEARCH:
 			rels = scoutResult.Relations
 			chains = scoutResult.SupplyChains
 		}
-		revalidationResult, err := e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, rels, chains, aggregatedContent, specialties, graphContext)
+		// Phase 2 (domain validation / critic): re-validation after research — CriticPipeline when domain mode set.
+		domainModesReval := getJobDomainModes(job)
+		if !policy.ScoutComposablePipelineEnabled() {
+			domainModesReval = nil
+		}
+		revalidationResult, err := e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, rels, chains, aggregatedContent, specialties, graphContext, domainModesReval)
 		if err != nil {
 			fmt.Printf("[ScoutEngine] critic re-validation error (fail-open): jobId=%s target=%s err=%v\n",
 				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
@@ -3726,6 +3725,7 @@ SKIP_RESEARCH:
 				logGroundingWarnf("grounding resolver returned empty context: jobId=%s target=%s", strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath))
 			}
 		}
+		// Phase 3 (decomposition): materialize edges and schedule child jobs (child jobs inherit domainMode/domainModes/domains from job state).
 		// Используем existingFragment, так как он содержит актуальный ID после сохранения.
 		var err error
 		if resolvedGrounding != nil && !resolvedGrounding.IsEmpty() {

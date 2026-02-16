@@ -133,6 +133,13 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 			return fmt.Errorf("customerFacilityRef must be a facility canonical path (starts with /fac/)")
 		}
 	}
+	// Validate transportViaRefs if present (ports, terminals, pipelines, warehouses)
+	for _, p := range f.TransportViaRefs {
+		p = strings.TrimSpace(p)
+		if p != "" && !strings.HasPrefix(p, "/fac/") {
+			return fmt.Errorf("transportViaRefs entries must be facility canonical paths (start with /fac/)")
+		}
+	}
 	// At least one of SupplierRef or CustomerRef must be set
 	if (f.SupplierRef == nil || strings.TrimSpace(*f.SupplierRef) == "") &&
 		(f.CustomerRef == nil || strings.TrimSpace(*f.CustomerRef) == "") {

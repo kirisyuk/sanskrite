@@ -164,8 +164,9 @@ type HorizonFragment struct {
 	SupplierRef         *string `json:"supplierRef,omitempty" firestore:"supplierRef,omitempty"`                 // /org/... or /fac/... (nil = natural resource)
 	CustomerRef         *string `json:"customerRef,omitempty" firestore:"customerRef,omitempty"`                 // /org/... or /fac/... (nil = end consumer)
 	ProductRef          *string `json:"productRef,omitempty" firestore:"productRef,omitempty"`                   // /product/... (required for SUPPLY_LINK)
-	SupplierFacilityRef *string `json:"supplierFacilityRef,omitempty" firestore:"supplierFacilityRef,omitempty"` // /fac/... (optional)
-	CustomerFacilityRef *string `json:"customerFacilityRef,omitempty" firestore:"customerFacilityRef,omitempty"` // /fac/... (optional)
+	SupplierFacilityRef *string  `json:"supplierFacilityRef,omitempty" firestore:"supplierFacilityRef,omitempty"` // /fac/... (optional)
+	CustomerFacilityRef *string  `json:"customerFacilityRef,omitempty" firestore:"customerFacilityRef,omitempty"` // /fac/... (optional)
+	TransportViaRefs   []string `json:"transportViaRefs,omitempty" firestore:"transportViaRefs,omitempty"`     // ordered /fac/... paths (ports, terminals, pipelines, warehouses)
 
 	// Lifecycle — real-world lifecycle stage and dates (for FACILITY, DEPOSIT, ORGANIZATION).
 	// LifecycleStage is a canonical value from AllowedLifecycleStages (e.g., "construction", "operational", "closed").

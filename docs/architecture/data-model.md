@@ -5,7 +5,7 @@ Primary store: Firestore
 ### Entities
 - See `backend/internal/models/models.go` for canonical Go types.
 - Firestore rules: `backend/firestore.rules`
-- Firestore indexes: `backend/firestore.indexes.json`
+- Firestore indexes: `web/firestore.indexes.json`
 
 ### Collection Design
 - Collections and subcollections are defined implicitly by repositories under `backend/internal/repo/*` and data access in `backend/internal/gcp/firestore.go`.
