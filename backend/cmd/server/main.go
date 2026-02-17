@@ -1062,6 +1062,8 @@ func main() {
 		horizonProfilePoliciesRepo := horizonrepo.NewFragmentProfileRefreshPoliciesRepository(fsClient.Client())
 		horizonLensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(fsClient.Client())
 		horizonDomainAnswerSnapshotsRepo := horizonrepo.NewDomainAnswerSnapshotsRepository(fsClient.Client())
+		horizonUnitGraphSnapshotsRepo := horizonrepo.NewUnitGraphSnapshotsRepository(fsClient.Client())
+		horizonUnitDiveResultsRepo := horizonrepo.NewUnitDiveResultsRepository(fsClient.Client())
 
 		// Horizon spend ledger (actual GenAI $ attribution) for budget enforcement.
 		horizonSpendLedger := horizonrepo.NewHorizonSpendLedger(fsClient.Client())
@@ -1333,6 +1335,8 @@ func main() {
 			horizonService.SetLensService(lensService)
 			horizonService.SetLensArtifactsRepo(horizonLensArtifactsRepo)
 			horizonService.SetDomainAnswerSnapshotsRepo(horizonDomainAnswerSnapshotsRepo)
+			horizonService.SetUnitGraphSnapshotsRepo(horizonUnitGraphSnapshotsRepo)
+			horizonService.SetUnitDiveResultsRepo(horizonUnitDiveResultsRepo)
 
 			// Initialize Propagation subsystem
 			propagationEngine := horizonpropagation.NewPropagationEngine(
@@ -1737,6 +1741,9 @@ func main() {
 			scoutEngine.WithLensArtifactsRepo(horizonLensArtifactsRepo)
 			// Wire DomainAnswerSnapshotsRepository for DomainContractEngine publish phase.
 			scoutEngine.WithDomainAnswerSnapshotsRepo(horizonDomainAnswerSnapshotsRepo)
+			// Wire unit-first persistent stores (L1 unit graph + dive artifacts).
+			scoutEngine.WithUnitGraphSnapshotsRepo(horizonUnitGraphSnapshotsRepo)
+			scoutEngine.WithUnitDiveResultsRepo(horizonUnitDiveResultsRepo)
 
 			// Подключаем триггер распространения изменений
 			scoutEngine.WithPropagationTrigger(func(ctx context.Context, fragmentID string) error {
@@ -1923,6 +1930,8 @@ func main() {
 				WithOntologyFactsRepo(ontologyFactsRepo).
 				WithExposurePathsRepo(horizonExposurePathsRepo).
 				WithRiskJobsRepo(riskJobsRepo).
+				WithUnitGraphRepo(horizonUnitGraphSnapshotsRepo).
+				WithUnitDiveRepo(horizonUnitDiveResultsRepo).
 				WithProfilesHandler(profilesHandler)
 			logger.Printf("Horizon system initialized")
 

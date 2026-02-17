@@ -15,9 +15,10 @@ type CriticValidator interface {
 
 // CriticValidatorInput is the input for a single validator run.
 type CriticValidatorInput struct {
-	Fragment      *models.HorizonFragment
-	Relations     []DiscoveredRelation
-	SupplyChains  []SupplyChain
-	SourceContent string
-	GraphContext  string
+	Fragment          *models.HorizonFragment
+	Relations         []DiscoveredRelation
+	SupplyChains      []SupplyChain
+	SourceContent     string
+	GraphContext      string
+	UnitPipelinePhase models.UnitPipelinePhase
 }

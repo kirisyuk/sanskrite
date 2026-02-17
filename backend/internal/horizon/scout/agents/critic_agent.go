@@ -44,7 +44,7 @@ type ValidationConflict struct {
 
 // Validate проверяет извлеченные данные на соответствие источникам
 func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string) (*ValidationResult, error) {
-	return a.ValidateWithGraphContext(ctx, extractedData, relations, supplyChains, sourceContent, specialties, "")
+	return a.ValidateWithGraphContext(ctx, extractedData, relations, supplyChains, sourceContent, specialties, "", nil, models.UnitPipelinePhaseP3)
 }
 
 // ValidateWithGraphContext validates extracted data and can optionally be given a compact "graph context"
@@ -57,40 +57,33 @@ func (a *CriticAgent) ValidateWithGraphContext(
 	sourceContent string,
 	specialties []string,
 	graphContext string,
+	domainModes []string,
+	unitPhase models.UnitPipelinePhase,
 ) (*ValidationResult, error) {
-	prompt := a.buildValidationPrompt(extractedData, relations, supplyChains, sourceContent, specialties, graphContext)
-
-	verifier := ai.NewSimpleJSONVerifier()
-
-	task := &ai.AITask{
-		TaskType:     ai.TaskTypeContentGeneration,
-		InputContent: prompt,
-		AIRequirements: ai.AIRequirements{
-			TextGenerationCapability: true,
-			MinCapabilityScore:       7,
-			MinContextWindow:         16000, // Увеличиваем окно, так как добавляем relations
-			MaxOutputSize:            4096,
-		},
-		Verifier: verifier,
+	if a == nil {
+		return nil, fmt.Errorf("critic agent is nil")
+	}
+	domainModes = taxonomy.NormalizeDomainModes(domainModes)
+	if len(domainModes) > 0 {
+		input := CriticValidatorInput{
+			Fragment:          extractedData,
+			Relations:         relations,
+			SupplyChains:      supplyChains,
+			SourceContent:     sourceContent,
+			GraphContext:      graphContext,
+			UnitPipelinePhase: unitPhase,
+		}
+		out, err := a.CriticPipeline().Validate(ctx, input, domainModes)
+		if err != nil {
+			return nil, err
+		}
+		if out != nil {
+			return out, nil
+		}
 	}
 
-	result, err := a.executor.ExecuteStructuredTask(ctx, task)
-	if err != nil {
-		return nil, fmt.Errorf("failed to validate data: %w", err)
-	}
-
-	// Преобразуем результат в ValidationResult
-	jsonData, err := json.Marshal(result)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal result: %w", err)
-	}
-
-	var validationResult ValidationResult
-	if err := json.Unmarshal(jsonData, &validationResult); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal validation result: %w", err)
-	}
-
-	return &validationResult, nil
+	prompt := a.buildValidationPrompt(extractedData, relations, supplyChains, sourceContent, specialties, graphContext, unitPhase)
+	return a.runValidationPrompt(ctx, prompt)
 }
 
 // ValidateStrategicOverlay validates DECISION_POINT and MECHANISM entities in Phase 2.
@@ -278,7 +271,7 @@ Return ONLY valid JSON. No markdown fences.
 }
 
 // buildValidationPrompt строит промпт для валидации данных
-func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string, graphContext string) string {
+func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string, graphContext string, unitPhase models.UnitPipelinePhase) string {
 	if extractedData == nil {
 		extractedData = &models.HorizonFragment{}
 	}
@@ -317,6 +310,7 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt() + "\n\n"
 	profile := ResolveResearchProfile(extractedData.Type, extractedData.CanonicalPath, extractedData.CommunityType)
 	profileBlock := BuildResearchProfilePromptBlock(profile) + "\n\n"
+	unitPhaseBlock := buildUnitPhaseCriticBlock(unitPhase) + "\n\n"
 	nameRulesBlock := strings.ReplaceAll(naming.PromptEntityNameNormalizationRules(), "\n", "\n        ")
 
 	canonicalRules := taxonomy.DefaultCanonicalRules()
@@ -368,6 +362,7 @@ EXTRACTED RELATIONS (JSON):
 SOURCE CONTENT:
 %s
 
+%s
 %s
 %s
 %s
@@ -602,5 +597,5 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      - When asking for mechanism user (from MECHANISM fragment), ALWAYS request EXPLICIT SOURCE in missingInfo.
 	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET.
 
-	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, canonicalValidationBlock)
+	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, unitPhaseBlock, canonicalValidationBlock)
 }

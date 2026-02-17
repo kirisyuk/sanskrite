@@ -94,6 +94,27 @@ func geoAndSectorContext(frag *models.HorizonFragment) string {
 	return sb.String()
 }
 
+func unitPhaseResearchGuardrailBlock(phase models.UnitPipelinePhase) string {
+	switch phase {
+	case models.UnitPipelinePhaseP5:
+		return `UNIT PIPELINE PHASE: P5 (Unit Dive Execution)
+- This run is an explicit unit dive. You may expand legal entities, facilities, and multi-hop chains within budget.
+- Keep alignment to selected supplier_unit_ref and customer_unit_ref when present in context.`
+	default:
+		return `UNIT PIPELINE PHASE: P0-P3 (Broad/Semi-depth)
+- Do NOT perform full legal-entity decomposition or SKU/contract-level reconstruction.
+- Keep output at macro + unit contours with broad product/service buckets and clear qualifiers.
+- If deep detail is needed, add targeted missingInfo questions instead of deep expansion.`
+	}
+}
+
+func unitPhaseSupplyDepthGuidance(phase models.UnitPipelinePhase) string {
+	if phase == models.UnitPipelinePhaseP5 {
+		return "Depth target: 2+ tiers upstream/downstream when evidence is available and within dive budget."
+	}
+	return "Depth target: broad/semi-depth. Prioritize direct links and, at most, one additional tier per side when confidence is strong."
+}
+
 // SupplyChainResearchStrategy enriches for supply chain only (PRODUCES, CONSUMES, SUPPLIES_TO, etc.).
 type SupplyChainResearchStrategy struct {
 	agent *ResearchAgent
@@ -183,8 +204,8 @@ func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*
 			TextGenerationCapability:        true,
 			SearchGroundingCapability:       true,
 			InternalDataGroundingCapability: true,
-			MinCapabilityScore:               7,
-			MinContextWindow:                 16000,
+			MinCapabilityScore:              7,
+			MinContextWindow:                16000,
 			MaxOutputSize:                   16000,
 		},
 		Verifier: verifier,
@@ -228,9 +249,10 @@ func (a *ResearchAgent) buildSupplyChainEnrichmentPrompt(input ResearchStrategyI
 		questions = "Identify upstream suppliers and downstream customers; products produced or consumed; facility locations; extractive links to deposits."
 	}
 	geoContext := geoAndSectorContext(frag)
-	return fmt.Sprintf(`You are a research agent. Enrich the entity for SUPPLY CHAIN context. Aim for COMPLETE chains: trace upstream to raw materials/suppliers and downstream to end customers. Include at least 2 tiers when data exists.
+	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
+	return fmt.Sprintf(`You are a research agent. Enrich the entity for SUPPLY CHAIN context. Build coherent chains with phase-aware depth.
 
-Use ONLY these relation types (canonical): PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN.
+Use ONLY these relation types (canonical): DEPENDS_ON, PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN.
 Do NOT use RELATED_TO, AFFILIATED_WITH, PARTNERS_WITH, OWNS, COMPETES_WITH, or other non-supply-chain types.
 
 ENTITY TYPES in supply chain: %s. Use correct targetType for each relation.
@@ -238,13 +260,16 @@ ENTITY TYPES in supply chain: %s. Use correct targetType for each relation.
 CANONICAL PATH RULES (targetCanonicalPath MUST follow; supplyChains nodes too):
 %s
 
-%sWHAT TO FIND (prioritize completeness):
-1. Upstream (2+ tiers when possible): Direct suppliers → their suppliers. Use SUPPLIES_TO (actor→actor: org, facility, community). PRODUCES/CONSUMES (org, facility, program→product). For raw materials: trace to extraction/mining when relevant.
-2. Downstream (2+ tiers when possible): Direct customers → their customers. Include distribution channels and end users when known.
+%s
+%s
+
+WHAT TO FIND (prioritize completeness):
+1. Upstream: direct suppliers, then one next tier when confidence allows. Use DEPENDS_ON (consumer side) or SUPPLIES_TO (supplier side) consistently. Use PRODUCES/CONSUMES (org, facility, program→product). For raw materials: trace to extraction/mining when relevant.
+2. Downstream: direct customers, then one next tier when confidence allows. Include distribution channels and end users when known.
 3. Products: PRODUCES (org/facility/program→product), CONSUMES (org/facility/program→product). Value chain: PRODUCT TRANSFORMS_INTO PRODUCT (upstream→downstream). Include capacity/volume in metrics when you find figures (production_capacity, annual_volume).
 4. Facilities & geography: LOCATED_IN (org/facility/person→GEO_REGION), OPERATES_IN (org/facility→region/deposit). For each facility: what it produces, capacity if known.
 5. Extractive (mining, O&G): EXTRACTS_FROM (FACILITY→DEPOSIT). Add reserves/production to fragment.state (/metric/reserves_volume, /metric/production_annual).
-6. Supply chains: Build end-to-end chains with FULL detail. Output supplyChains with nodes [{canonicalPath, name, type, role?}].
+6. Supply chains: Build end-to-end chains with detail appropriate to phase. Output supplyChains with nodes [{canonicalPath, name, type, role?}].
    - CRITICAL: Include FACILITY nodes where transformation happens. Pattern: product → facility → product (e.g. lithium-ore → refinery → lithium-carbonate).
    - For extractive: subsidiary → facility → deposit → product (e.g. KMG → mine → /deposit/lithium/salares → lithium-ore).
    - Nodes MUST alternate: actor → product → actor → product. Use /fac/{org}/{slug} for transformation sites.
@@ -272,7 +297,9 @@ Return a JSON object:
 Nodes MUST alternate actor→product. Include FACILITY where transformation happens (product→facility→product).
 For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transportVia in chains = facilities product passes through.
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, string(fragmentJSON), questions)
+%s
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, string(fragmentJSON), questions, unitPhaseSupplyDepthGuidance(input.UnitPipelinePhase))
 }
 
 // buildGovernanceEnrichmentPrompt builds a prompt for ownership, board, key persons, gov hierarchy (canonical types).
@@ -287,6 +314,7 @@ func (a *ResearchAgent) buildGovernanceEnrichmentPrompt(input ResearchStrategyIn
 		questions = "Identify owners, subsidiaries, board members, key executives; ownership percentages; government hierarchy (ADMINISTERS)."
 	}
 	geoContext := geoAndSectorContext(frag)
+	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for GOVERNANCE context. Aim for COMPLETE ownership and control structure:
 
 ENTITY TYPES in governance: %s. Use correct targetType for each relation.
@@ -294,7 +322,10 @@ ENTITY TYPES in governance: %s. Use correct targetType for each relation.
 CANONICAL PATH RULES (targetCanonicalPath MUST follow):
 %s
 
-%sUse ONLY these relation types (canonical): OWNS, SUBSIDIARY_OF, CONTROLS, INVESTS_IN, BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED, ADMINISTERS.
+%s
+%s
+
+Use ONLY these relation types (canonical): OWNS, SUBSIDIARY_OF, CONTROLS, INVESTS_IN, BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED, ADMINISTERS.
 Do NOT use RELATED_TO, AFFILIATED_WITH, KEY_PERSON, HAS_KEY_PERSON, or other non-governance types.
 
 WHAT TO FIND (prioritize completeness):
@@ -324,7 +355,7 @@ Return a JSON object:
   "supplyChains": []
 }
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, string(fragmentJSON), questions)
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, string(fragmentJSON), questions)
 }
 
 // buildMarketEnrichmentPrompt builds a prompt for market participation, sizing, concentration, submarkets.
@@ -338,11 +369,14 @@ func (a *ResearchAgent) buildMarketEnrichmentPrompt(input ResearchStrategyInput)
 	if questions == "" {
 		questions = "Identify market participation, sub-markets, key players, market sizing (TAM, CAGR, HHI, CR4), geographic concentration."
 	}
+	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for MARKET context. Aim for COMPLETE market picture:
 
 ENTITY TYPES in market: %s. PARTICIPATES_IN source can be any of these. Use correct targetType for each relation.
 
 CANONICAL PATH RULES (targetCanonicalPath MUST follow):
+%s
+
 %s
 
 Use ONLY these relation types: PARTICIPATES_IN (with marketRole and metrics.market_share), HAS_SUBMARKET.
@@ -369,7 +403,7 @@ Return a JSON object:
   "supplyChains": []
 }
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket), taxonomy.ExtendedCanonicalPathRulesPrompt(), string(fragmentJSON), questions)
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, string(fragmentJSON), questions)
 }
 
 // buildStrategicEnrichmentPrompt builds a prompt for strategic layer (decision points, mechanisms, gatekeepers).
@@ -383,11 +417,14 @@ func (a *ResearchAgent) buildStrategicEnrichmentPrompt(input ResearchStrategyInp
 	if questions == "" {
 		questions = "Identify decision points, mechanisms, gatekeepers, control/access relations, export controls, sanctions, licensing."
 	}
+	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for STRATEGIC context only.
 
 ENTITY TYPES in strategic: %s. Gatekeepers can be org, gov, community, or person. Use correct targetType for each relation.
 
 CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
+%s
+
 %s
 
 Use ONLY these relation types: CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO.
@@ -413,5 +450,5 @@ Return a JSON object:
 }
 
 For GATEKEEPS_DECISION and USES_MECHANISM: set sourceCanonicalPath, sourceType, sourceName when the SOURCE is not the current fragment (e.g. gatekeeper org, mechanism user).
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), string(fragmentJSON), questions)
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, string(fragmentJSON), questions)
 }

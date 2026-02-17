@@ -2,8 +2,6 @@ import React from 'react';
 import { useLocation } from 'react-router-dom';
 import { ThemeContext } from './ThemeProvider';
 import { useAuth } from '../contexts/AuthContext';
-import logoDarkTheme from '../assets/hatl-dark-theme.png';
-import logoLightTheme from '../assets/hatl-light-theme.png';
 import { UserProfile } from './UserProfile';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../stores/uiStore';
@@ -29,17 +27,12 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   const [shareUrlProjectId, setShareUrlProjectId] = React.useState<string | null>(null); // Track which project the share URL is for
   const [copied, setCopied] = React.useState(false);
   const [downloadBusy, setDownloadBusy] = React.useState(false);
+  const [modeOpen, setModeOpen] = React.useState(false);
   const shareRef = React.useRef<HTMLDivElement | null>(null);
-  const isChat = React.useMemo(() => {
-    try {
-      const params = new URLSearchParams(location.search);
-      const isUnfold = params.get('app') === 'unfold';
-      return location.pathname === '/' && (isUnfold || !!currentUser);
-    } catch {
-      return !!currentUser;
-    }
-  }, [location.pathname, location.search, currentUser]);
-
+  const modeRef = React.useRef<HTMLDivElement | null>(null);
+  const currentMode = React.useMemo<'Structure' | 'Discuss'>(() => {
+    return location.pathname.startsWith('/horizon') ? 'Structure' : 'Discuss';
+  }, [location.pathname]);
   const toggleTheme = React.useCallback(() => {
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
@@ -159,13 +152,23 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
 
   React.useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
-      if (!shareOpen) return;
-      const el = shareRef.current;
-      if (el && !el.contains(e.target as Node)) setShareOpen(false);
+      const target = e.target as Node;
+      if (shareOpen) {
+        const shareEl = shareRef.current;
+        if (shareEl && !shareEl.contains(target)) setShareOpen(false);
+      }
+      if (modeOpen) {
+        const modeEl = modeRef.current;
+        if (modeEl && !modeEl.contains(target)) setModeOpen(false);
+      }
     };
     document.addEventListener('mousedown', onDocClick, { capture: true });
     return () => document.removeEventListener('mousedown', onDocClick, { capture: true } as any);
-  }, [shareOpen]);
+  }, [shareOpen, modeOpen]);
+
+  React.useEffect(() => {
+    setModeOpen(false);
+  }, [location.pathname, location.search]);
 
   // Export chat to markdown
   const exportToMarkdown = React.useCallback(() => {
@@ -499,29 +502,28 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
     <div className="topbar">
       {/* Left side - Logo (aligned to sidebar toggle spacing) */}
       <div className="flex items-center gap-3 px-3">
-        <a href="/" aria-label="Home" className="flex items-center" style={{ textDecoration: 'none' }}>
-          <img
-            src={theme === 'dark' ? logoDarkTheme : logoLightTheme}
-            alt="hatl.one"
-            className="h-[12px] w-auto object-contain"
-            style={{
-              filter: theme === 'dark' ? 'drop-shadow(0 0 2px rgba(0,0,0,0.6))' : 'none',
-              opacity: 0.7,
-            }}
-          />
-        </a>
-        {/* Link to /discuss (chat) when not in chat, or /horizon when in chat */}
-        {currentUser && (
-          <a
-            href={isChat ? "/horizon" : "/"}
-            className="text-12 px-2 py-1 rounded"
-            style={{ color: 'var(--text-heading)', textDecoration: 'none' }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLAnchorElement).style.backgroundColor = 'var(--white-10)'; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLAnchorElement).style.backgroundColor = 'transparent'; }}
-          >
-            {isChat ? "/horizon" : "/discuss"}
-          </a>
-        )}
+        <div className="hzn-brand-mark" aria-label="Horizon navigation">
+          <span className="hzn-brand-primary">Horizon</span>
+          <span className="hzn-brand-divider" aria-hidden="true">|</span>
+          <div className="hzn-brand-dropdown" ref={modeRef}>
+            <button
+              type="button"
+              className="hzn-brand-option hzn-brand-option-trigger"
+              aria-label="Select mode"
+              aria-haspopup="menu"
+              aria-expanded={modeOpen}
+              onClick={() => setModeOpen((v) => !v)}
+            >
+              {currentMode}
+            </button>
+            {modeOpen && (
+              <div className="hzn-brand-menu" role="menu" aria-label="Mode selection">
+                <a href="/horizon" role="menuitem" className="hzn-brand-menu-item">Structure</a>
+                <a href="/" role="menuitem" className="hzn-brand-menu-item">Discuss</a>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Center - View mode toggle temporarily disabled */}
@@ -638,4 +640,3 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
     </div>
   );
 };
-

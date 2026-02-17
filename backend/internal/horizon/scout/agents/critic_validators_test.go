@@ -29,8 +29,8 @@ func TestComposableValidationPrompts_DoNotContainDeprecatedTypes(t *testing.T) {
 	agent := NewCriticAgent(nil)
 
 	prompts := []struct {
-		name   string
-		build  func(CriticValidatorInput) string
+		name  string
+		build func(CriticValidatorInput) string
 	}{
 		{"Core", agent.buildCoreValidationPrompt},
 		{"SupplyChain", agent.buildSupplyChainValidationPrompt},
@@ -133,5 +133,23 @@ func TestStrategicValidator_nilFragmentReturnsNil(t *testing.T) {
 	}
 	if result != nil {
 		t.Errorf("expected nil result for nil fragment, got %+v", result)
+	}
+}
+
+func TestComposableValidationPrompts_ContainPhaseGuardrails(t *testing.T) {
+	agent := NewCriticAgent(nil)
+	input := CriticValidatorInput{
+		Fragment:          &models.HorizonFragment{Type: "ORGANIZATION", CanonicalPath: "/org/us/example-inc"},
+		UnitPipelinePhase: models.UnitPipelinePhaseP3,
+	}
+	prompt := agent.buildCoreValidationPrompt(input)
+	if !strings.Contains(prompt, "UNIT PIPELINE PHASE: P0-P3") {
+		t.Fatalf("expected P0-P3 guardrails in core prompt")
+	}
+
+	input.UnitPipelinePhase = models.UnitPipelinePhaseP5
+	prompt = agent.buildCoreValidationPrompt(input)
+	if !strings.Contains(prompt, "UNIT PIPELINE PHASE: P5") {
+		t.Fatalf("expected P5 guardrails in core prompt")
 	}
 }

@@ -70,8 +70,9 @@ type DiscoveredRelation struct {
 
 // ScoutResult результат работы Scout Agent
 type ScoutResult struct {
-	Fragment  models.HorizonFragment `json:"fragment"`
-	Relations []DiscoveredRelation   `json:"relations"`
+	Fragment     models.HorizonFragment  `json:"fragment"`
+	Relations    []DiscoveredRelation    `json:"relations"`
+	UnitProfiles []models.OrgUnitProfile `json:"unitProfiles,omitempty"`
 	// SupplyChains is populated only when supply_chain specialty is enabled.
 	// Each chain is an ordered sequence of nodes representing a supply chain path.
 	SupplyChains []SupplyChain `json:"supplyChains,omitempty"`
@@ -116,21 +117,22 @@ type extractedFragment struct {
 }
 
 type scoutResultInternal struct {
-	Fragment     extractedFragment    `json:"fragment"`
-	Relations    []DiscoveredRelation `json:"relations"`
-	SupplyChains []SupplyChain        `json:"supplyChains,omitempty"`
+	Fragment     extractedFragment       `json:"fragment"`
+	Relations    []DiscoveredRelation    `json:"relations"`
+	UnitProfiles []models.OrgUnitProfile `json:"unitProfiles,omitempty"`
+	SupplyChains []SupplyChain           `json:"supplyChains,omitempty"`
 }
 
 // ExtractFragmentData извлекает данные HorizonFragment и связи из контента источника.
 // Backward-compatible wrapper around ExtractFragmentDataWithGrounding.
-func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string) (*ScoutResult, error) {
-	result, _, err := a.ExtractFragmentDataWithGrounding(ctx, content, targetCanonicalPath, entityPath, sectorPath, specialties, chainContext)
+func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string, domainModes []string) (*ScoutResult, error) {
+	result, _, err := a.ExtractFragmentDataWithGrounding(ctx, content, targetCanonicalPath, entityPath, sectorPath, specialties, chainContext, domainModes)
 	return result, err
 }
 
 // ExtractFragmentDataWithGrounding returns extracted result plus grounding evidence from full AI task result.
-func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string) (*ScoutResult, *ai.GroundingEvidence, error) {
-	prompt := a.buildExtractionPrompt(content, targetCanonicalPath, entityPath, sectorPath, specialties, chainContext)
+func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string, domainModes []string) (*ScoutResult, *ai.GroundingEvidence, error) {
+	prompt := a.buildExtractionPrompt(content, targetCanonicalPath, entityPath, sectorPath, specialties, chainContext, domainModes)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -173,6 +175,7 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 		scoutResult = &ScoutResult{
 			Fragment:     internalResult.Fragment.HorizonFragment,
 			Relations:    internalResult.Relations,
+			UnitProfiles: normalizeUnitProfiles(targetCanonicalPath, internalResult.UnitProfiles),
 			SupplyChains: internalResult.SupplyChains,
 		}
 		// Handle name fields from internal struct (prefer LegalName)
@@ -327,17 +330,347 @@ func normalizeDiscoveredRelationsNames(relations []DiscoveredRelation) {
 	}
 }
 
+func normalizeUnitProfiles(parentOrgRef string, in []models.OrgUnitProfile) []models.OrgUnitProfile {
+	if len(in) == 0 {
+		return nil
+	}
+	parentOrgRef = strings.TrimSpace(parentOrgRef)
+	seen := make(map[string]struct{}, len(in))
+	out := make([]models.OrgUnitProfile, 0, len(in))
+	for idx, unit := range in {
+		unit.ParentOrgRef = strings.TrimSpace(unit.ParentOrgRef)
+		if unit.ParentOrgRef == "" {
+			unit.ParentOrgRef = parentOrgRef
+		}
+		unit.UnitCode = models.NormalizeUnitCode(string(unit.UnitCode))
+		unit.Label = strings.TrimSpace(unit.Label)
+		if unit.Label == "" {
+			unit.Label = string(unit.UnitCode)
+		}
+		unit.UnitID = strings.TrimSpace(unit.UnitID)
+		if unit.UnitID == "" {
+			unit.UnitID = normalizeUnitID(unit.Label, unit.UnitCode, idx)
+		}
+		if _, ok := seen[unit.UnitID]; ok {
+			continue
+		}
+		seen[unit.UnitID] = struct{}{}
+		out = append(out, unit)
+	}
+	return out
+}
+
+func normalizeUnitID(label string, code models.UnitCode, idx int) string {
+	base := slugifyUnitToken(label)
+	if base == "" {
+		base = slugifyUnitToken(string(code))
+	}
+	if base == "" {
+		base = "unit"
+	}
+	return fmt.Sprintf("%s-%d", base, idx+1)
+}
+
+func slugifyUnitToken(in string) string {
+	s := strings.TrimSpace(strings.ToLower(in))
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		isAlpha := r >= 'a' && r <= 'z'
+		isNum := r >= '0' && r <= '9'
+		if isAlpha || isNum {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	return out
+}
+
+func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string {
+	domainModes = taxonomy.NormalizeDomainModes(domainModes)
+	if len(domainModes) == 0 {
+		return nil
+	}
+	hasSpecific := false
+	for _, m := range domainModes {
+		m = strings.TrimSpace(strings.ToLower(m))
+		if m != "" && m != taxonomy.DomainModeGeneral {
+			hasSpecific = true
+			break
+		}
+	}
+	if !hasSpecific {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 16)
+	for _, m := range domainModes {
+		switch strings.TrimSpace(strings.ToLower(m)) {
+		case taxonomy.DomainModeSupplyChain:
+			for _, t := range []string{
+				string(models.DependencyTypeDependsOn),
+				string(models.DependencyTypeSuppliesTo),
+				string(models.DependencyTypeProduces),
+				string(models.DependencyTypeConsumes),
+				string(models.DependencyTypeTransformsInto),
+				string(models.DependencyTypeExtractsFrom),
+				string(models.DependencyTypeLocatedIn),
+				string(models.DependencyTypeOperatesIn),
+			} {
+				if _, ok := seen[t]; ok {
+					continue
+				}
+				seen[t] = struct{}{}
+				out = append(out, t)
+			}
+		case taxonomy.DomainModeGovernance:
+			for _, t := range []string{
+				string(models.DependencyTypeOwns),
+				string(models.DependencyTypeSubsidiaryOf),
+				string(models.DependencyTypeControls),
+				string(models.DependencyTypeInvestsIn),
+				string(models.DependencyTypeBoardMemberOf),
+				string(models.DependencyTypeEmployedBy),
+				string(models.DependencyTypeFounded),
+				string(models.DependencyTypeAdministers),
+			} {
+				if _, ok := seen[t]; ok {
+					continue
+				}
+				seen[t] = struct{}{}
+				out = append(out, t)
+			}
+		case taxonomy.DomainModeMarket:
+			for _, t := range []string{
+				string(models.DependencyTypeParticipatesIn),
+				string(models.DependencyTypeHasSubmarket),
+			} {
+				if _, ok := seen[t]; ok {
+					continue
+				}
+				seen[t] = struct{}{}
+				out = append(out, t)
+			}
+		case taxonomy.DomainModeStrategic:
+			for _, t := range []string{
+				string(models.DependencyTypeControlsAccess),
+				string(models.DependencyTypeImposesCondition),
+				string(models.DependencyTypeGatekeepsDecision),
+				string(models.DependencyTypeUsesMechanism),
+				string(models.DependencyTypeAppliesTo),
+			} {
+				if _, ok := seen[t]; ok {
+					continue
+				}
+				seen[t] = struct{}{}
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
+func extractionDomainGuardrailBlock(domainModes []string) string {
+	domainModes = taxonomy.NormalizeDomainModes(domainModes)
+	if len(domainModes) == 0 || taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGeneral) {
+		return ""
+	}
+	allowed := extractionAllowedRelationTypesByDomainModes(domainModes)
+	if len(allowed) == 0 {
+		return ""
+	}
+	modeLabel := strings.Join(domainModes, ", ")
+	return fmt.Sprintf(`DOMAIN MODE GUARDRAILS (strict):
+- Active domain modes: %s
+- Emit ONLY these relationType values: %s
+- If evidence suggests another relation family, add it as uncertainty in reason/missing coverage instead of emitting out-of-domain edges.`, modeLabel, strings.Join(allowed, ", "))
+}
+
+func extractionDomainRelationCatalogOverrideBlock(domainModes []string) string {
+	domainModes = taxonomy.NormalizeDomainModes(domainModes)
+	if len(domainModes) == 0 || taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGeneral) {
+		return ""
+	}
+	allowed := extractionAllowedRelationTypesByDomainModes(domainModes)
+	if len(allowed) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(`DOMAIN-SCOPED RELATION CATALOG (strict override):
+- Ignore generic relation catalog below and emit relationType ONLY from: %s
+- If evidence maps to another relation family, record uncertainty in reason and do NOT emit that edge.`, strings.Join(allowed, ", "))
+}
+
+const extractionGeneralRelationRulesBlock = `   - DEPENDS_ON: source depends on target (use this for suppliers, contractors, infrastructure).
+     Example: If Panasonic supplies Tesla battery cells, for Tesla (source) -> Panasonic (target) use DEPENDS_ON (NOT SUPPLIES_TO).
+   - SUPPLIES_TO: source supplies goods/services to target (use this for customers/recipients).
+   - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
+   - OPERATES_IN: source operates in target (source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY).
+   - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
+   - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
+   - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
+   - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control).
+   - MANAGES: source manages target (formal authority: CEO/executive/director/operator).
+   - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION).
+   - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
+   - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM).
+   - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT).
+   - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
+   - CONSUMES: source consumes target (source MUST be ORGANIZATION or FACILITY or PROGRAM, target MUST be PRODUCT).
+   - TRANSFORMS_INTO: PRODUCT -> PRODUCT value-chain transformation.
+   - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
+   - AUDITED_BY: source (ORGANIZATION/FACILITY/PROGRAM) is audited by target (ORGANIZATION).
+   - PARTNERS_WITH: partnership/collaboration (symmetric; still output as source->target).
+   - COMPETES_WITH: competitor relationship (direction is not important, still output as source->target).
+   - INFLUENCES: source influences target (soft power; avoid for formal authority/ownership).
+   - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
+   - DOMINATES: entity dominates a market (canonical direction: ORG/FACILITY -> MARKET).
+   - HAS_SUBMARKET: parent market -> submarket.
+   - ADMINISTERS: government/body administers subordinate GOV or PROGRAM.
+   - OPERATES_VIA: COMMUNITY/ORGANIZATION -> MEDIA_CHANNEL.
+   - MEMBER_OF: PERSON -> COMMUNITY.
+   - AFFILIATED_WITH: COMMUNITY/PERSON -> ORGANIZATION.
+   - RELATIVE_OF, RELATED_TO: person-person relationships only.
+   - RENAMED_TO, REBRANDED_TO, LEGAL_SUCCESSOR_OF, MERGED_INTO, SPUN_OFF_FROM, ACQUIRED_BY: ORG lifecycle events.
+   - CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO: strategic overlay.
+   - HAS_SUBGROUP: COMMUNITY parent -> narrower community subgroup.
+
+   EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
+   - OWNS: source MUST be ORGANIZATION or PERSON; target MUST be ORGANIZATION/FACILITY/PRODUCT/DEPOSIT/MEDIA_CHANNEL/COMMUNITY.
+   - EMPLOYED_BY and BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION.
+   - PRODUCES/CONSUMES: source MUST be ORGANIZATION/FACILITY/PROGRAM (or DEPOSIT for PRODUCES), target MUST be PRODUCT.
+   - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
+   - PARTICIPATES_IN/HAS_SUBMARKET/DOMINATES: target MUST be MARKET.
+   - LOCATED_IN target MUST be GEO_REGION.
+   - SUPPLIES_TO source/target SHOULD be ORGANIZATION or FACILITY.
+   - Strategic edges MUST use DECISION_POINT/MECHANISM compatible source/target types.
+
+   Each object must include:
+   - targetName, targetLegalName, targetShortName
+   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY" | "DECISION_POINT" | "MECHANISM"
+   - relationType: canonical dependency type
+   - reason, confidence, targetCanonicalPath
+
+   Optional edge enrichment fields (REQUIRED WHEN AVAILABLE):
+   - validFrom, validTo
+   - qualifiers: edgeModality, eventId, round, contractType, integration_type, facet, transmission qualifiers
+   - qualifiers (unit-first): source_unit_ref, source_unit_code, source_unit_label, target_unit_ref, target_unit_code, target_unit_label
+   - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`
+
+func buildExtractionRelationsRulesBlock(domainModes []string) string {
+	domainModes = taxonomy.NormalizeDomainModes(domainModes)
+	allowed := extractionAllowedRelationTypesByDomainModes(domainModes)
+	if len(allowed) == 0 {
+		return extractionGeneralRelationRulesBlock
+	}
+
+	var b strings.Builder
+	b.WriteString("   DOMAIN-SCOPED RELATION RULES (active contract):\n")
+	b.WriteString(fmt.Sprintf("   - Allowed relationType values ONLY: %s\n", strings.Join(allowed, ", ")))
+	b.WriteString("   - Never emit a relation outside this set.\n")
+
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
+		b.WriteString(`   SUPPLY CHAIN MODE:
+   - DEPENDS_ON: consumer -> supplier/infrastructure dependency.
+   - SUPPLIES_TO: supplier -> customer flow.
+   - PRODUCES/CONSUMES: actor -> product.
+   - TRANSFORMS_INTO: product -> downstream product.
+   - EXTRACTS_FROM: facility -> deposit.
+   - LOCATED_IN/OPERATES_IN only for geo/facility anchoring.
+   - Prefer qualifiers.facet for DEPENDS_ON (communication|infrastructure|payment|distribution|logistics|supply|labor|legitimization|enforcement|regulatory).
+   - For transmission dependencies add throughput_share, capacity_constraint, reroute_penalty, reroute_latency_delta_hours, reroute_cost_delta_pct when known.
+`)
+	}
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGovernance) {
+		b.WriteString(`   GOVERNANCE MODE:
+   - OWNS and SUBSIDIARY_OF for equity hierarchy.
+   - CONTROLS for explicit non-equity control.
+   - INVESTS_IN for minority/stake investments.
+   - BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED for people governance links.
+   - ADMINISTERS for GOV/ORG hierarchy into GOV/PROGRAM.
+   - Add metrics.ownership_percent and/or voting_percent when evidence exists.
+`)
+	}
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeMarket) {
+		b.WriteString(`   MARKET MODE:
+   - PARTICIPATES_IN: entity -> market.
+   - HAS_SUBMARKET: parent market -> child market.
+   - Keep focus on market structure and placement, not supply/governance edges.
+`)
+	}
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeStrategic) {
+		b.WriteString(`   STRATEGIC MODE:
+   - CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO only.
+   - Respect DECISION_POINT/MECHANISM typing and direction.
+`)
+	}
+
+	b.WriteString(`
+   Each object must include:
+   - targetName, targetLegalName, targetShortName
+   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY" | "DECISION_POINT" | "MECHANISM"
+   - relationType: one of the allowed values listed above
+   - reason, confidence, targetCanonicalPath
+
+   Optional edge enrichment fields (REQUIRED WHEN AVAILABLE):
+   - validFrom, validTo
+   - qualifiers: edgeModality, eventId, round, contractType, integration_type, facet, transmission qualifiers
+   - qualifiers (unit-first): source_unit_ref, source_unit_code, source_unit_label, target_unit_ref, target_unit_code, target_unit_label
+   - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`)
+	return b.String()
+}
+
+func buildUnitIdentificationBlock(targetCanonicalPath string, domainModes []string) string {
+	cp := strings.TrimSpace(strings.ToLower(targetCanonicalPath))
+	needsUnits := strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/")
+	if !needsUnits && !taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) && !taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGovernance) {
+		return ""
+	}
+	return `UNIT-FIRST PHASE ORDER (MANDATORY):
+1) First identify macro units for THIS FRAGMENT and return them in "unitProfiles".
+2) Then extract relations and attach unit qualifiers.
+3) If uncertain, keep relation and set unit refs/codes to "unclassified" (do not drop relation).
+
+"unitProfiles" Field (Array):
+- Return 2-8 unit contours for ORG/GOV targets when evidence exists.
+- Each profile shape:
+  { "unitId", "parentOrgRef", "unitCode", "label", "status"?, "geo"?, "legalEntityRefs"?, "aliases"?, "confidence"?, "sources"? }
+- unitCode MUST be one of: consumer | enterprise | core_ops | it | logistics | corporate | rnd | unclassified.
+- parentOrgRef should point to THIS FRAGMENT canonical path.
+- unitId must be stable and unique within parentOrgRef.
+
+Relation unit qualifiers (on each relation.qualifiers):
+- source_unit_ref / target_unit_ref: unit identifiers or "unclassified"
+- source_unit_code / target_unit_code: same enum as unitCode
+- source_unit_label / target_unit_label: short human-readable labels`
+}
+
 // buildExtractionPrompt строит промпт для извлечения данных
-func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string) string {
+func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string, domainModes []string) string {
 	specialties = taxonomy.NormalizeSpecialties(specialties)
+	domainModes = taxonomy.NormalizeDomainModes(domainModes)
+	supplyChainModuleEnabled := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) || taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain)
 	chainBlock := ""
 	if strings.TrimSpace(chainContext) != "" {
 		chainBlock = strings.TrimSpace(chainContext) + "\n"
 	}
 	specBlock := ""
-	if len(specialties) > 0 {
+	if len(specialties) > 0 || len(domainModes) > 0 {
 		specBlock = "SPECIALIZATION MODULES (optional; apply only those listed):\n"
-		specBlock += fmt.Sprintf("- requestedSpecialties: %s\n", strings.Join(specialties, ", "))
+		if len(specialties) > 0 {
+			specBlock += fmt.Sprintf("- requestedSpecialties: %s\n", strings.Join(specialties, ", "))
+		}
+		if len(domainModes) > 0 {
+			specBlock += fmt.Sprintf("- requestedDomainModes: %s\n", strings.Join(domainModes, ", "))
+		}
 		specBlock += "\n"
 		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement) {
 			specBlock += "MODULE: management (executive leadership / board / founders)\n"
@@ -360,7 +693,7 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 			specBlock += "  - Do NOT include a company/brand name in the product name/path unless it is clearly the official and commonly used product name.\n"
 			specBlock += "    Examples: 'IBM watsonx' MAY be ok only if sources consistently use it; otherwise use 'watsonx'.\n\n"
 		}
-		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
+		if supplyChainModuleEnabled {
 			specBlock += "MODULE: supply_chain (build complete supply chains)\n"
 			specBlock += "- Your PRIMARY goal is to identify and return COMPLETE SUPPLY CHAINS as ordered node sequences.\n"
 			specBlock += "- A supply chain is an ordered path: supplier → product → processor → product → customer → ...\n"
@@ -403,6 +736,19 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 			specBlock += "- Put stake/percent/voting rights (if known) and evidence in 'reason'.\n\n"
 		}
 	}
+	domainBlock := extractionDomainGuardrailBlock(domainModes)
+	if strings.TrimSpace(domainBlock) != "" {
+		domainBlock += "\n\n"
+	}
+	relationCatalogOverride := extractionDomainRelationCatalogOverrideBlock(domainModes)
+	if strings.TrimSpace(relationCatalogOverride) != "" {
+		relationCatalogOverride += "\n"
+	}
+	relationRulesBlock := buildExtractionRelationsRulesBlock(domainModes)
+	unitIdentificationBlock := buildUnitIdentificationBlock(targetCanonicalPath, domainModes)
+	if strings.TrimSpace(unitIdentificationBlock) != "" {
+		unitIdentificationBlock += "\n\n"
+	}
 
 	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt()
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
@@ -424,7 +770,10 @@ CONTENT TO ANALYZE:
 %s
 %s
 %s
-TASK: Extract all relevant information about this entity and return it as a JSON object with fields: "fragment", "relations", and optionally "supplyChains" (if supply_chain module is enabled).
+%s
+TASK: Extract all relevant information about this entity and return it as a JSON object with fields: "fragment", "unitProfiles", "relations", and optionally "supplyChains" (if supply_chain module is enabled).
+
+%s
 
 1. "fragment" Field (Object):
    Must match the fragment schema:
@@ -520,155 +869,27 @@ TASK: Extract all relevant information about this entity and return it as a JSON
      - observedAt MUST be ISO8601 ("YYYY-MM-DD" or RFC3339)
      - provenance MUST include method + at least 1 sourceId
 
-2. "relations" Field (Array of Objects):
+2. "unitProfiles" Field (Array of Objects):
+   Optional for non-org/non-gov targets. For /org/ and /gov/ targets, return when evidence exists.
+   Use this exact shape:
+   - unitId: stable id within this parent org/gov
+   - parentOrgRef: canonical path of THIS FRAGMENT
+   - unitCode: consumer|enterprise|core_ops|it|logistics|corporate|rnd|unclassified
+   - label: short unit label
+   - status: ACTIVE|DORMANT|MERGED|UNKNOWN (optional)
+   - geo: array of geo hints (optional)
+   - legalEntityRefs: array of /org/... legal entities tied to this unit (optional)
+   - aliases, confidence, sources: optional
+
+3. "relations" Field (Array of Objects):
    Identify key dependencies, suppliers, customers, subsidiaries, competitors, or locations mentioned in the text.
    IMPORTANT: Relation direction is STRICT.
    Each relation object describes a directed edge FROM THIS FRAGMENT (source) TO the relation's targetCanonicalPath (target).
    Choose relationType to match this direction:
-   - DEPENDS_ON: source depends on target (use this for suppliers, contractors, infrastructure).
-     Example: If Panasonic supplies Tesla battery cells, for Tesla (source) -> Panasonic (target) use DEPENDS_ON (NOT SUPPLIES_TO).
-   - SUPPLIES_TO: source supplies goods/services to target (use this for customers/recipients).
-   - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
-   - OPERATES_IN: source operates in target (source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY).
-   - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
-   - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
-     CRITICAL: NEVER output OWNS where targetType=PERSON.
-     CRITICAL: NEVER output OWNS from ORGANIZATION to COMMUNITY if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}.
-       Dynasties and tribes own organizations, not the reverse. If THIS FRAGMENT (org) is owned by a dynasty/tribe, use SUBSIDIARY_OF from org to community (will be normalized to OWNS with reversed direction).
-     If THIS FRAGMENT is owned/controlled by a person or parent org, use SUBSIDIARY_OF with the owner as target (it will be normalized to OWNS).
-     Use OWNS ONLY for equity ownership/control relationships (shareholder, stake, holding company, ultimate beneficial owner).
-     Do NOT use OWNS for roles/employment/management like CEO, director, founder, chairman; use INFLUENCES if relevant, or omit the relation.
-     Examples:
-       - If "Company X is owned by John Doe": emit SUBSIDIARY_OF from Company X -> John Doe (NOT OWNS from Company X -> John Doe).
-       - If THIS FRAGMENT is a PERSON and they own Company X: emit OWNS from Person -> Company X.
-  - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
-    Clarification: authority without clear equity ownership (state control, voting).
-  - CONTROLS_ACCESS: strategic gatekeeping (block/enable/delay/monitor). Use ONLY when modeling decision points or explicit gatekeepers.
-  - IMPOSES_CONDITION: source forces target to comply with rules/costs/technical constraints (strategic overlay).
-  - USES_MECHANISM: source possesses/uses a mechanism of control (strategic overlay).
-  - APPLIES_TO: mechanism applies to target entity or relation scope (strategic overlay).
-   - MANAGES: source manages target (formal authority: CEO/executive/director/operator). Do NOT use for informal influence.
-  - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
-  - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
-  - OPERATES_VIA: source uses target channel/platform for communication/operations.
-    Direction: COMMUNITY/ORGANIZATION → MEDIA_CHANNEL
-  - MEMBER_OF: person is a member of a community (not employment).
-    Direction: PERSON → COMMUNITY
-  - AFFILIATED_WITH: community or person has affiliation with a formal organization.
-    Direction: COMMUNITY/PERSON → ORGANIZATION
-  - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
-    Clarification: historical origin event; does NOT imply ongoing ownership or control.
-   - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
-     Include in 'reason': round name/number, investment amount if known.
-     If a specific funding event exists (with date, participants), consider linking to /event/funding-round/{slug} via Qualifiers["eventId"].
-   - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
-   - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
-     For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO (NOT PRODUCES).
-   - AUDITED_BY: source (ORGANIZATION/FACILITY/PROGRAM) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
-   - COMPETES_WITH: competitor relationship (direction is not important, but still output as source->target).
-  - INFLUENCES: source influences target.
-    Clarification: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
-    Source MAY be PERSON. Target MAY be MARKET or SPHERE (SPHERE links are treated as weaker evidence).
-	   - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
-	   - RELATIVE_OF: person-person symmetric relationship (public relatives). Use ONLY when both are PERSON.
-	   - RELATED_TO: person-person symmetric relationship (publicly known associates: friends/partners/classmates). Use ONLY when both are PERSON.
-	   - RENAMED_TO: organization legal rename (ORG -> ORG).
-	   - REBRANDED_TO: organization brand rename/repositioning (ORG -> ORG).
-	   - LEGAL_SUCCESSOR_OF: organization legal succession (ORG -> ORG).
-	   - MERGED_INTO: organization merged into another organization (ORG -> ORG).
-	   - SPUN_OFF_FROM: organization spun off from parent/source organization (ORG -> ORG).
-	   - ACQUIRED_BY: organization acquired by another organization (ORG -> ORG).
-	   - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
-	    - If THIS FRAGMENT is MARKET, still emit relations with relationType=PARTICIPATES_IN to the player entities; backend will reverse the edge direction.
-	    - PRODUCT may also PARTICIPATE_IN a market (product category presence).
-     - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
-   - DOMINATES: entity dominates a market (leader) (canonical direction: ORG/FACILITY -> MARKET).
-     - If THIS FRAGMENT is MARKET, still emit relations with relationType=DOMINATES to the leader entity; backend will reverse the edge direction.
-     - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
-   
-   EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
-   - REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
-   - OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT/DEPOSIT/MEDIA_CHANNEL/COMMUNITY
-   - CONTROLS: source MUST be ORGANIZATION or PERSON or COMMUNITY, target MUST be ORGANIZATION/FACILITY
-  - CONTROLS_ACCESS: source SHOULD be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
-  - IMPOSES_CONDITION: source SHOULD be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT
-  - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY/PERSON, target MUST be DECISION_POINT
-  - USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY/PROGRAM, target MUST be MECHANISM
-  - APPLIES_TO: source MUST be MECHANISM, target can be ORGANIZATION/FACILITY/PRODUCT/MARKET
-   - MANAGES: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PROGRAM
-   - EMPLOYED_BY: source MUST be PERSON, target MUST be ORGANIZATION
-   - BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION
-  - OPERATES_VIA: source MUST be COMMUNITY or ORGANIZATION, target MUST be MEDIA_CHANNEL
-  - MEMBER_OF: source MUST be PERSON, target MUST be COMMUNITY
-  - AFFILIATED_WITH: source MUST be COMMUNITY or PERSON, target MUST be ORGANIZATION
-  - HAS_SUBGROUP: source MUST be COMMUNITY, target MUST be COMMUNITY (parent group → narrower sub-group/branch/clan)
-   - FOUNDED: source MUST be PERSON or ORGANIZATION, target MUST be ORGANIZATION/PROGRAM
-   - INVESTS_IN: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/PROGRAM/PRODUCT
-  - PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
-  - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
-  - PARTICIPATES_IN: source MAY also be PRODUCT/PERSON, target MUST be MARKET
-  - DOMINATES: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
-   - PRODUCES: source MUST be ORGANIZATION or FACILITY, target MUST be PRODUCT
-   - AUDITED_BY: source MUST be ORGANIZATION or FACILITY or PROGRAM, target MUST be ORGANIZATION
-	   - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
-	   - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
-	   - RENAMED_TO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-	   - REBRANDED_TO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-	   - LEGAL_SUCCESSOR_OF: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-	   - MERGED_INTO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-	   - SPUN_OFF_FROM: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-	   - ACQUIRED_BY: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-	   - LOCATED_IN: target MUST be GEO_REGION
-	   - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION, FACILITY, or DEPOSIT
-	  - OPERATES_IN: source MAY also be PERSON when referring to location of work/operation
-   - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
-  - DEPENDS_ON: source can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/COMMUNITY/MEDIA_CHANNEL/DEPOSIT, target can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/GEO_REGION/MEDIA_CHANNEL/COMMUNITY/DEPOSIT
-   - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT (e.g., mine extracts from ore deposit, platform extracts from oil field)
-   - OWNS: can also target DEPOSIT (org/person owns deposit rights)
-   - PRODUCES: source can also be DEPOSIT (deposits produce resources)
-   - LOCATED_IN: source can also be DEPOSIT (deposits are located in regions)
-   
-   Each object must include:
-   - targetName: Full legal/official name where relevant (e.g., "Tesla, Inc.")
-   - targetLegalName: Same as targetName (explicit field)
-   - targetShortName: Base name without ownership suffix (e.g., "Tesla")
-  - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY"
-	  - relationType: One of: SUPPLIES_TO, DEPENDS_ON, LOCATED_IN, OPERATES_IN, REGULATES, PRODUCES, CONSUMES, TRANSFORMS_INTO, OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED, INVESTS_IN, PARTNERS_WITH, AUDITED_BY, RELATIVE_OF, RELATED_TO, RENAMED_TO, REBRANDED_TO, LEGAL_SUCCESSOR_OF, MERGED_INTO, SPUN_OFF_FROM, ACQUIRED_BY, COMPETES_WITH, INFLUENCES, EXTRACTS_FROM, PARTICIPATES_IN, DOMINATES, HAS_SUBMARKET, ADMINISTERS, OPERATES_VIA, MEMBER_OF, AFFILIATED_WITH, HAS_SUBGROUP, CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO, SURFACES
-   - reason: Brief evidence/reason for this relation
-   - confidence: 0.0 to 1.0
-   - targetCanonicalPath: REQUIRED. Suggest a STABLE canonical path.
+   %s
+   %s
 
-   Optional edge enrichment fields (REQUIRED WHEN AVAILABLE; if unknown, keep edge and set unknown/null instead of dropping relation):
-   - validFrom: (Optional) Relationship start date in real world. Prefer "YYYY-MM-DD" (or RFC3339 if needed).
-   - validTo: (Optional) Relationship end date in real world (for historical relations). Prefer "YYYY-MM-DD".
-   - qualifiers: (Optional) Map of categorical qualifiers, e.g.:
-     - edgeModality: "actual" | "projected" | "historical" | "potential"
-     - eventId: "/event/{slug}" (e.g., funding round for INVESTS_IN)
-     - round: "Series A" (INVESTS_IN)
-     - contractType: "long-term" | "spot" (SUPPLIES_TO)
-     - integration_type: "vertical" | "partnership" | "arm's-length" (SUPPLIES_TO, OWNS: relationship nature)
-    - facet: for DEPENDS_ON, classify dependency nature (communication | infrastructure | payment | distribution | logistics | supply | labor | legitimization | enforcement | regulatory)
-    - transmission qualifiers for DEPENDS_ON (especially logistics/supply/infrastructure/distribution):
-      - throughput_share: 0..1 (share of flow transmitted through this dependency)
-      - capacity_constraint: 0..1 (how severe bottleneck is; 1 = severe)
-      - reroute_penalty: 0..1 (difficulty/cost of substitution)
-      - reroute_latency_delta_hours: number (extra hours if rerouted)
-      - reroute_cost_delta_pct: number (extra percent cost if rerouted)
-      - if transmission qualifiers are unknown, preserve relation and include facet + reason with explicit uncertainty.
-   - metrics: (Optional) Map of numerical edge metrics with MetricValue objects.
-     Examples:
-       - OWNS: ownership_percent (unit="percent", value=45.0), voting_percent
-       - INVESTS_IN: investment_amount (unit like "usd" / any ticker code), round_size_total
-       - SUPPLIES_TO: annual_volume, contract_value
-       - DEPENDS_ON (logistics/supply): throughput_share, route_capacity, reroute_latency_delta_hours, reroute_cost_delta_pct
-     MetricValue format:
-       - value MUST be a JSON number (no commas; expand "10M" to 10000000)
-       - unit MUST be lowercase (e.g., "percent", "usd", "bbl", "metric_tons_per_year")
-       - confidence MUST be 0..1
-       - observedAt MUST be ISO8601 ("YYYY-MM-DD" or RFC3339)
-     We will tolerate some variations (e.g., "45%%" or "10M") but prefer strict numeric JSON.
-
-3. "supplyChains" Field (Array of Objects) - ONLY if supply_chain module is enabled:
+4. "supplyChains" Field (Array of Objects) - ONLY if supply_chain module is enabled:
    Each object represents one supply chain path with:
    - nodes: Ordered array of entities in the chain. Each node has:
      - canonicalPath: stable path (/org/..., /fac/..., /product/...)
@@ -795,5 +1016,5 @@ CANONICAL PATH RULES:
 - If a legal form is known (Inc., LLC, JSC, GmbH, etc.), append it as -{legal_form} to satisfy org canonical format.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
-Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, businessRulesBlock, profileBlock, canonicalRulesBlock, nameRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, businessRulesBlock, profileBlock, domainBlock, canonicalRulesBlock, nameRulesBlock, relationCatalogOverride, unitIdentificationBlock, relationRulesBlock)
 }

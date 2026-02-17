@@ -59,15 +59,20 @@ func (p *ResearchPipelineRunner) strategiesForModes(modes []string) []ResearchSt
 	}
 	seen := make(map[string]bool)
 	var list []ResearchStrategy
+	hasNonGeneral := false
 	for _, m := range modes {
 		m = strings.TrimSpace(strings.ToLower(m))
-		if m == "" || m == taxonomy.DomainModeGeneral {
-			return nil
+		if m == "" {
+			continue
+		}
+		if m == taxonomy.DomainModeGeneral {
+			continue
 		}
 		if seen[m] {
 			continue
 		}
 		seen[m] = true
+		hasNonGeneral = true
 		switch m {
 		case taxonomy.DomainModeSupplyChain:
 			list = append(list, &SupplyChainResearchStrategy{agent: p.agent})
@@ -78,6 +83,9 @@ func (p *ResearchPipelineRunner) strategiesForModes(modes []string) []ResearchSt
 		case taxonomy.DomainModeStrategic:
 			list = append(list, &StrategicResearchStrategy{agent: p.agent})
 		}
+	}
+	if !hasNonGeneral {
+		return nil
 	}
 	return list
 }

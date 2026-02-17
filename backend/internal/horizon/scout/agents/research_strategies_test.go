@@ -76,4 +76,28 @@ func TestResearchPipeline_StrategiesForModes(t *testing.T) {
 	if general != nil {
 		t.Errorf("general mode should return nil strategies, got %d", len(general))
 	}
+
+	mixed := runner.strategiesForModes([]string{taxonomy.DomainModeGeneral, taxonomy.DomainModeSupplyChain})
+	if len(mixed) != 1 {
+		t.Errorf("general+supply_chain should keep supply_chain strategy, got %d", len(mixed))
+	}
+}
+
+func TestSupplyChainEnrichmentPrompt_PhaseGuardrails(t *testing.T) {
+	a := NewResearchAgent(nil)
+	input := ResearchStrategyInput{
+		Fragment:          &models.HorizonFragment{CanonicalPath: "/org/us/example"},
+		MissingInfo:       []string{"Find suppliers"},
+		UnitPipelinePhase: models.UnitPipelinePhaseP3,
+	}
+	prompt := a.buildSupplyChainEnrichmentPrompt(input)
+	if !strings.Contains(prompt, "UNIT PIPELINE PHASE: P0-P3") {
+		t.Fatalf("expected P0-P3 guardrails in prompt")
+	}
+
+	input.UnitPipelinePhase = models.UnitPipelinePhaseP5
+	prompt = a.buildSupplyChainEnrichmentPrompt(input)
+	if !strings.Contains(prompt, "UNIT PIPELINE PHASE: P5") {
+		t.Fatalf("expected P5 guardrails in prompt")
+	}
 }

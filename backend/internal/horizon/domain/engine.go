@@ -152,13 +152,18 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 			})
 		}
 	}
+	steerDescription := "Base graph collection completed"
+	if in.ExecuteStrategicCollect != nil {
+		steerDescription = "Base and strategic graph collection completed"
+	}
 	e.emit(ctx, in.Job, contract, "horizon.domain.contract.steer.completed",
 		fmt.Sprintf("Steering complete: %d directives", len(anchorDirectives)),
-		"Base and strategic graph collection completed",
+		steerDescription,
 		map[string]interface{}{
-			"domainId":       domainID,
-			"wave":           "anchor",
-			"directiveCount": len(anchorDirectives),
+			"domainId":               domainID,
+			"wave":                   "anchor",
+			"directiveCount":         len(anchorDirectives),
+			"strategicCollectInline": in.ExecuteStrategicCollect != nil,
 		},
 	)
 

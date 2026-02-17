@@ -45,6 +45,8 @@ type HorizonService struct {
 	fragmentVersionsRepo *repo.HorizonFragmentVersionsRepository
 	lensArtifactsRepo    *repo.LensArtifactsRepository // Phase 2 Strategic Overlay artifacts
 	domainAnswersRepo    *repo.DomainAnswerSnapshotsRepository
+	unitGraphRepo        *repo.UnitGraphSnapshotsRepository
+	unitDiveResultsRepo  *repo.UnitDiveResultsRepository
 	ontologyFactsRepo    *corerepo.OntologyFactsRepository
 }
 
@@ -211,6 +213,26 @@ func (s *HorizonService) DomainAnswerSnapshots() *repo.DomainAnswerSnapshotsRepo
 // SetDomainAnswerSnapshotsRepo wires DomainAnswerSnapshotsRepository.
 func (s *HorizonService) SetDomainAnswerSnapshotsRepo(repo *repo.DomainAnswerSnapshotsRepository) {
 	s.domainAnswersRepo = repo
+}
+
+// UnitGraphSnapshots returns UnitGraphSnapshotsRepository.
+func (s *HorizonService) UnitGraphSnapshots() *repo.UnitGraphSnapshotsRepository {
+	return s.unitGraphRepo
+}
+
+// SetUnitGraphSnapshotsRepo wires UnitGraphSnapshotsRepository.
+func (s *HorizonService) SetUnitGraphSnapshotsRepo(repo *repo.UnitGraphSnapshotsRepository) {
+	s.unitGraphRepo = repo
+}
+
+// UnitDiveResults returns UnitDiveResultsRepository.
+func (s *HorizonService) UnitDiveResults() *repo.UnitDiveResultsRepository {
+	return s.unitDiveResultsRepo
+}
+
+// SetUnitDiveResultsRepo wires UnitDiveResultsRepository.
+func (s *HorizonService) SetUnitDiveResultsRepo(repo *repo.UnitDiveResultsRepository) {
+	s.unitDiveResultsRepo = repo
 }
 
 // SetOntologyFactsRepository wires ontology_facts access for semantics-aware rollups.

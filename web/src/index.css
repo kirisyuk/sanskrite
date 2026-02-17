@@ -22,6 +22,7 @@
   display: none;
 }
 @import "tailwindcss";
+@import "@fontsource/inter/300.css";
 @import "@fontsource/inter/400.css";
 @import "@fontsource/inter/500.css";
 @import "@fontsource/inter/600.css";
@@ -599,6 +600,115 @@ p {
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
+}
+
+.hzn-brand-mark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 0.92rem;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  user-select: none;
+}
+
+.hzn-brand-primary {
+  color: #f4f8ff;
+  font-weight: 400;
+}
+
+.hzn-brand-divider {
+  color: #6f7f9f;
+  font-weight: 300;
+}
+
+.hzn-brand-secondary {
+  color: #667798;
+  font-size: 0.9em;
+  font-weight: 300;
+}
+
+.hzn-brand-option {
+  color: #667798;
+  font-size: 0.9em;
+  font-weight: 300;
+  text-decoration: none;
+}
+
+.hzn-brand-dropdown {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.hzn-brand-option-trigger {
+  background: transparent;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.hzn-brand-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding-top: 4px;
+  z-index: 70;
+}
+
+.hzn-brand-menu-item {
+  color: #667798;
+  font-size: 0.9em;
+  font-weight: 300;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.hzn-brand-menu-item:hover,
+.hzn-brand-menu-item:focus-visible,
+.hzn-brand-menu-item:active,
+.hzn-brand-menu-item:visited {
+  color: #667798;
+  text-decoration: none;
+}
+
+.hzn-brand-option:hover,
+.hzn-brand-option:focus-visible,
+.hzn-brand-option:active,
+.hzn-brand-option:visited {
+  color: #667798;
+  text-decoration: none;
+}
+
+[data-theme="light"] .hzn-brand-primary {
+  color: #223a66;
+}
+
+[data-theme="light"] .hzn-brand-divider {
+  color: #7f90b2;
+}
+
+[data-theme="light"] .hzn-brand-secondary {
+  color: #7082a8;
+}
+
+[data-theme="light"] .hzn-brand-menu-item,
+[data-theme="light"] .hzn-brand-menu-item:hover,
+[data-theme="light"] .hzn-brand-menu-item:focus-visible,
+[data-theme="light"] .hzn-brand-menu-item:active,
+[data-theme="light"] .hzn-brand-menu-item:visited,
+[data-theme="light"] .hzn-brand-option,
+[data-theme="light"] .hzn-brand-option:hover,
+[data-theme="light"] .hzn-brand-option:focus-visible,
+[data-theme="light"] .hzn-brand-option:active,
+[data-theme="light"] .hzn-brand-option:visited {
+  color: #7082a8;
 }
 
 .bottombar {

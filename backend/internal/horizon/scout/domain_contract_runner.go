@@ -153,6 +153,22 @@ func (e *ScoutEngine) RunDomainContract(ctx context.Context, in pipeline.Contrac
 		domainContractEventPublisher{engine: e},
 	)
 
+	runInlineStrategicCollect := shouldRunInlineStrategicCollect(job)
+	var executeStrategicCollect func(ctx context.Context, groundingEvidence *ai.GroundingEvidence) error
+	if runInlineStrategicCollect {
+		executeStrategicCollect = func(ctx context.Context, _ *ai.GroundingEvidence) error {
+			return e.executeDomainStrategicOverlayJob(ctx, job, effectiveCanonicalPath, in.ExistingFragment)
+		}
+	}
+	trace.Log(ctx, "domain_contract", "domain_contract.runner.strategic_collect.policy", map[string]any{
+		"tenantId":               strings.TrimSpace(job.TenantID),
+		"projectId":              strings.TrimSpace(job.ProjectID),
+		"lensId":                 strings.TrimSpace(job.LensID),
+		"jobId":                  strings.TrimSpace(job.ID),
+		"contractType":           strings.TrimSpace(contract.ContractType),
+		"inlineStrategicCollect": runInlineStrategicCollect,
+	})
+
 	runRes, err := domainEngine.Run(ctx, horizondomain.RunInput{
 		Job:               job,
 		Contract:          contract,
@@ -160,9 +176,7 @@ func (e *ScoutEngine) RunDomainContract(ctx context.Context, in pipeline.Contrac
 		ExecuteBaseCollect: func(ctx context.Context, _ *ai.GroundingEvidence) error {
 			return e.executeDomainExpansionJob(ctx, job, effectiveCanonicalPath, in.ExistingFragment)
 		},
-		ExecuteStrategicCollect: func(ctx context.Context, _ *ai.GroundingEvidence) error {
-			return e.executeDomainStrategicOverlayJob(ctx, job, effectiveCanonicalPath, in.ExistingFragment)
-		},
+		ExecuteStrategicCollect: executeStrategicCollect,
 	})
 	if err != nil {
 		trace.Log(ctx, "domain_contract", "domain_contract.runner.error", map[string]any{
@@ -207,4 +221,21 @@ func (e *ScoutEngine) RunDomainContract(ctx context.Context, in pipeline.Contrac
 		"readinessStatus":     readiness,
 	})
 	return runRes.ViewDirective, nil
+}
+
+func shouldRunInlineStrategicCollect(job *models.ScoutingJob) bool {
+	if job == nil || job.State == nil {
+		return false
+	}
+	for _, key := range []string{
+		"enableInlineStrategicCollect",
+		"runInlineStrategicCollect",
+		"enableStrategicOverlay",
+		"enableStrategicCollect",
+	} {
+		if v, ok := job.State[key]; ok && parseStateBool(v, false) {
+			return true
+		}
+	}
+	return false
 }

@@ -22,6 +22,8 @@ type HorizonHandlers struct {
 	factsRepo         *corerepo.OntologyFactsRepository
 	exposurePathsRepo *horizonrepo.ExposurePathsRepository
 	riskJobsRepo      *horizonrepo.RiskJobsRepository
+	unitGraphRepo     *horizonrepo.UnitGraphSnapshotsRepository
+	unitDiveRepo      *horizonrepo.UnitDiveResultsRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -81,6 +83,16 @@ func (h *HorizonHandlers) WithExposurePathsRepo(r *horizonrepo.ExposurePathsRepo
 
 func (h *HorizonHandlers) WithRiskJobsRepo(r *horizonrepo.RiskJobsRepository) *HorizonHandlers {
 	h.riskJobsRepo = r
+	return h
+}
+
+func (h *HorizonHandlers) WithUnitGraphRepo(r *horizonrepo.UnitGraphSnapshotsRepository) *HorizonHandlers {
+	h.unitGraphRepo = r
+	return h
+}
+
+func (h *HorizonHandlers) WithUnitDiveRepo(r *horizonrepo.UnitDiveResultsRepository) *HorizonHandlers {
+	h.unitDiveRepo = r
 	return h
 }
 
@@ -319,6 +331,34 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			return
 		case "trigger-phase2":
 			h.TriggerPhase2StrategicOverlay(w, r)
+			return
+		case "unit-graph":
+			switch r.Method {
+			case http.MethodGet:
+				h.GetLensUnitGraph(w, r)
+			case http.MethodPut, http.MethodPost:
+				h.UpsertLensUnitGraph(w, r)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		case "unit-dive-results":
+			if len(pathParts) > 2 {
+				if r.Method != http.MethodGet {
+					http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				h.GetLensUnitDiveResult(w, r)
+				return
+			}
+			switch r.Method {
+			case http.MethodGet:
+				h.ListLensUnitDiveResults(w, r)
+			case http.MethodPost:
+				h.UpsertLensUnitDiveResult(w, r)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
 			return
 		default:
 			http.Error(w, "Unknown subpath", http.StatusNotFound)

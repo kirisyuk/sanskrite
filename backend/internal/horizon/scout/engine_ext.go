@@ -12,11 +12,11 @@ import (
 	"unicode"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
@@ -70,6 +70,64 @@ func mergeQualifiers(dst map[string]interface{}, extra map[string]interface{}) m
 		dst[kk] = v
 	}
 	return dst
+}
+
+func isDomainScaffoldRelationType(rt string) bool {
+	rt = strings.TrimSpace(taxonomy.NormalizeRelationType(rt))
+	switch rt {
+	case string(models.DependencyTypeFocusesOn),
+		string(models.DependencyTypeInvolvesActor),
+		string(models.DependencyTypeInGeoScope),
+		string(models.DependencyTypeAbout),
+		string(models.DependencyTypeDependsOn),
+		string(models.DependencyTypeAffects),
+		string(models.DependencyTypeRelatedDomain):
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizeDomainResearchRelations(domainCanonicalPath, contractType string, rels []agents.DiscoveredRelation) []agents.DiscoveredRelation {
+	if len(rels) == 0 {
+		return nil
+	}
+	domainCanonicalPath = strings.TrimSpace(domainCanonicalPath)
+	modes := taxonomy.NormalizeDomainModes(domain.DomainModesForContractTypes([]string{strings.TrimSpace(contractType)}))
+	allowlist := EdgeAllowlistByDomainModes(modes)
+
+	out := make([]agents.DiscoveredRelation, 0, len(rels))
+	for _, rel := range rels {
+		targetPath := strings.TrimSpace(rel.TargetCanonicalPath)
+		if targetPath == "" {
+			continue
+		}
+		rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+		if rt == "" {
+			rt = string(models.DependencyTypeFocusesOn)
+		}
+
+		sourcePath := strings.TrimSpace(rel.SourceCanonicalPath)
+		if sourcePath == "" {
+			sourcePath = domainCanonicalPath
+		}
+
+		if strings.HasPrefix(sourcePath, "/domain/") {
+			// Domain anchor edges must remain in domain-scaffold relation space.
+			if !isDomainScaffoldRelationType(rt) {
+				rt = string(models.DependencyTypeFocusesOn)
+			}
+		} else {
+			// For non-domain source relations (explicit source from research), enforce domain-mode allowlist.
+			if allowlist != nil && !AllowlistContains(allowlist, models.DependencyType(rt)) && !isDomainScaffoldRelationType(rt) {
+				continue
+			}
+		}
+
+		rel.RelationType = rt
+		out = append(out, rel)
+	}
+	return out
 }
 
 func parseStateInt(v interface{}, def int) int {
@@ -563,7 +621,7 @@ func copyDomainModeStateToChild(parentState map[string]interface{}, childState m
 	if parentState == nil || childState == nil {
 		return
 	}
-	for _, key := range []string{"domainMode", "domainModes", "domains"} {
+	for _, key := range []string{"domainMode", "domainModes", "domains", models.StateKeyUnitPipelinePhase, models.StateKeyUnitProfiles} {
 		if v, ok := parentState[key]; ok && v != nil {
 			childState[key] = v
 		}
@@ -1516,9 +1574,54 @@ func parseDomainPathFacets(domainCP string) (contractType string, facets map[str
 	return contractType, facets
 }
 
-// ensureJobDomainMode computes domain mode(s) from job state (domains, path, specialties) and writes job.State["domainMode"] or job.State["domainModes"].
+func contractTypesFromDomainsRaw(raw interface{}) []string {
+	if raw == nil {
+		return nil
+	}
+	out := make([]string, 0, 8)
+	add := func(v string) {
+		v = strings.TrimSpace(strings.ToLower(v))
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	switch t := raw.(type) {
+	case []agents.DomainResolution:
+		for _, d := range t {
+			add(d.ContractType)
+		}
+	case []map[string]interface{}:
+		for _, m := range t {
+			add(getStringField(m, "contractType", "ContractType"))
+		}
+	case []interface{}:
+		for _, it := range t {
+			m, ok := it.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			add(getStringField(m, "contractType", "ContractType"))
+		}
+	}
+	return out
+}
+
+func contractTypesFromLensScope(scope []string) []string {
+	out := make([]string, 0, 4)
+	for _, p := range scope {
+		ct, _ := parseDomainPathFacets(strings.TrimSpace(p))
+		ct = strings.TrimSpace(strings.ToLower(ct))
+		if ct != "" {
+			out = append(out, ct)
+		}
+	}
+	return out
+}
+
+// ensureJobDomainMode computes domain mode(s) from path, domains in job/lens state, and specialties fallback,
+// then writes job.State["domainMode"] or job.State["domainModes"].
 // Call once at the start of job execution, after effectiveCanonicalPath is known.
-func (e *ScoutEngine) ensureJobDomainMode(job *models.ScoutingJob, effectiveCanonicalPath string) {
+func (e *ScoutEngine) ensureJobDomainMode(ctx context.Context, job *models.ScoutingJob, effectiveCanonicalPath string) {
 	if job == nil {
 		return
 	}
@@ -1540,37 +1643,34 @@ func (e *ScoutEngine) ensureJobDomainMode(job *models.ScoutingJob, effectiveCano
 	}
 	// 2) From job.State["domains"]
 	if len(contractTypes) == 0 && job.State != nil {
-		if raw, ok := job.State["domains"]; ok && raw != nil {
-			switch t := raw.(type) {
-			case []agents.DomainResolution:
-				for _, d := range t {
-					ct := strings.TrimSpace(d.ContractType)
-					if ct != "" {
-						contractTypes = append(contractTypes, ct)
+		if raw, ok := job.State["domains"]; ok {
+			contractTypes = append(contractTypes, contractTypesFromDomainsRaw(raw)...)
+		}
+	}
+
+	// 3) From lens scope/viewConfig when job state lacks domains (e.g., reused jobs, old payloads).
+	if len(contractTypes) == 0 && e != nil && e.lensesRepo != nil {
+		lensID := strings.TrimSpace(job.LensID)
+		if lensID == "" && job.State != nil {
+			lensID = parseStateString(job.State["lensId"])
+		}
+		if lensID != "" && strings.TrimSpace(job.TenantID) != "" {
+			if lens, err := e.lensesRepo.Get(ctx, lensID); err == nil && lens != nil {
+				if strings.TrimSpace(lens.TenantID) == strings.TrimSpace(job.TenantID) {
+					if lens.ViewConfig != nil {
+						if raw, ok := lens.ViewConfig["domains"]; ok {
+							contractTypes = append(contractTypes, contractTypesFromDomainsRaw(raw)...)
+						}
 					}
-				}
-			case []map[string]interface{}:
-				for _, m := range t {
-					ct := getStringField(m, "contractType", "ContractType")
-					if ct != "" {
-						contractTypes = append(contractTypes, ct)
-					}
-				}
-			case []interface{}:
-				for _, it := range t {
-					m, ok := it.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					ct := getStringField(m, "contractType", "ContractType")
-					if ct != "" {
-						contractTypes = append(contractTypes, ct)
+					if len(contractTypes) == 0 {
+						contractTypes = append(contractTypes, contractTypesFromLensScope(lens.Scope)...)
 					}
 				}
 			}
 		}
 	}
-	// 3) From specialties fallback
+
+	// 4) From specialties fallback
 	if len(contractTypes) == 0 && job.State != nil {
 		if v, ok := job.State["specialties"]; ok {
 			specs := parseStateStringSlice(v)
@@ -1935,6 +2035,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		if err != nil {
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> domain research failed: %v", err))
 		} else {
+			newRelations = sanitizeDomainResearchRelations(domainCP, contractType, newRelations)
 			domainGroundingEvidence = mergeGroundingEvidence(domainGroundingEvidence, evidence)
 			if internalFirstGroundingEnabled() && evidence != nil {
 				applyGroundingEvidenceToJobState(job, domainGroundingEvidence, nil, nil)
@@ -3164,16 +3265,22 @@ func (e *ScoutEngine) processRelationsInternal(
 	// - Normalize symmetric edges so A<->B is represented consistently.
 	seenEdgeKeys := map[string]struct{}{}
 
-	// Specialties (optional): used to enable/disable extra normalization rules safely.
-	// NOTE: We read specialties early so shouldRecurse can use them for supply_chain mode filtering.
+	// Domain modes + specialties (optional): recurse strategy should be domain-driven first.
 	specialties := []string(nil)
 	if job != nil && job.State != nil {
 		if v, ok := job.State["specialties"]; ok {
 			specialties = taxonomy.NormalizeSpecialties(parseStateStringSlice(v))
 		}
 	}
-	isSupplyChainMode := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
-	isEquityMode := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity)
+	domainModes := taxonomy.NormalizeDomainModes(getJobDomainModes(job))
+	isSupplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain)
+	if !isSupplyChainMode {
+		isSupplyChainMode = taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
+	}
+	isGovernanceMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGovernance)
+	if !isGovernanceMode {
+		isGovernanceMode = taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) || taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement)
+	}
 	relationsResolvedByGrounding := 0
 	relationsCreatedNew := 0
 	dedupRedirectsByGrounding := 0
@@ -3225,13 +3332,17 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 		}
 
-		// Equity mode: follow only ownership/control edges
-		if isEquityMode {
+		// Governance mode: follow ownership/control/governance edges.
+		if isGovernanceMode {
 			switch rt {
 			case string(models.DependencyTypeOwns),
 				string(models.DependencyTypeSubsidiaryOf),
 				string(models.DependencyTypeControls),
-				string(models.DependencyTypeInvestsIn):
+				string(models.DependencyTypeInvestsIn),
+				string(models.DependencyTypeBoardMemberOf),
+				string(models.DependencyTypeEmployedBy),
+				string(models.DependencyTypeFounded),
+				string(models.DependencyTypeAdministers):
 				return true
 			default:
 				return false
@@ -5651,16 +5762,16 @@ func (e *ScoutEngine) processSupplyChains(
 		customerRef := customer
 		productRef := product
 		slFrag := &models.HorizonFragment{
-			Type:              models.FragmentTypeSupplyLink,
-			TenantID:          "global",
-			SupplierRef:       &supplierRef,
-			ProductRef:        &productRef,
-			CustomerRef:       &customerRef,
-			TransportViaRefs:  seg.TransportViaRefs,
-			Status:            "active",
-			Governance:        models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
-			Provenance:        models.Provenance{Method: "scout_supply_chain", SourceIDs: []string{job.ID}},
-			Metadata:          models.FragmentMetadata{CreatedAt: time.Now().UTC(), LastUpdatedAt: time.Now().UTC(), EpistemicStatus: models.EpistemicStatusLowConfidence},
+			Type:             models.FragmentTypeSupplyLink,
+			TenantID:         "global",
+			SupplierRef:      &supplierRef,
+			ProductRef:       &productRef,
+			CustomerRef:      &customerRef,
+			TransportViaRefs: seg.TransportViaRefs,
+			Status:           "active",
+			Governance:       models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
+			Provenance:       models.Provenance{Method: "scout_supply_chain", SourceIDs: []string{job.ID}},
+			Metadata:         models.FragmentMetadata{CreatedAt: time.Now().UTC(), LastUpdatedAt: time.Now().UTC(), EpistemicStatus: models.EpistemicStatusLowConfidence},
 		}
 		slFrag.State = map[string]models.MetricValue{"confidence": {Value: seg.Confidence, Confidence: 0.8}}
 		if err := slFrag.Validate(); err != nil {
@@ -6164,8 +6275,8 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 		return false
 	}
 
-	// Contract types that benefit from strategic overlay analysis
-	// (power dynamics, risk assessment, competitive analysis, etc.)
+	// Strategic overlay is opt-in by contract family.
+	// Supply-chain/market broad runs should not auto-mix strategic layer.
 	strategicContractTypes := map[string]bool{
 		// Risk / geopolitics
 		"risk-assessment":     true,
@@ -6173,23 +6284,6 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 		"bilateral-relations": true,
 		"sanctions-exposure":  true,
 		"conflict-dynamics":   true,
-		// Supply chain / value chain (control points matter)
-		"supply-chain":    true,
-		"value-chain":     true,
-		"logistics-flow":  true,
-		"trade-flow":      true,
-		"sourcing-map":    true,
-		"procurement-map": true,
-		// Markets / competitive
-		"competitive-landscape": true,
-		"market-entry":          true,
-		// Investment / finance
-		"investment-thesis":  true,
-		"portfolio-exposure": true,
-		// Technology / innovation
-		"technology-landscape": true,
-		"innovation-map":       true,
-		"ip-landscape":         true,
 		// Regulatory
 		"regulatory-landscape":    true,
 		"compliance-map":          true,
@@ -6209,12 +6303,7 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 	}
 
 	ct := strings.ToLower(strings.TrimSpace(contractType))
-	if strategicContractTypes[ct] {
-		return true
-	}
-	// Default fallback: best-effort strategic overlay for unknown/other contracts.
-	// This avoids surprises when new contract types are introduced.
-	return true
+	return strategicContractTypes[ct]
 }
 
 // triggerPhase2StrategicOverlay creates a new ScoutingJob for the strategic projection pass

@@ -78,6 +78,7 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 	decompositionHints []DecompositionHint,
 	existingEntities []string,
 	domainModes []string,
+	unitPhase models.UnitPipelinePhase,
 ) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
 	usePipeline := false
 	for _, m := range domainModes {
@@ -99,6 +100,7 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 			OriginalQuery:      originalQuery,
 			DecompositionHints: decompositionHints,
 			ExistingEntities:   existingEntities,
+			UnitPipelinePhase:  unitPhase,
 		}
 		enriched, relations, chains, err := a.ResearchPipeline().Enrich(ctx, input, domainModes)
 		if err != nil {

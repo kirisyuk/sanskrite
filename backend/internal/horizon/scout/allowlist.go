@@ -15,6 +15,7 @@ func EdgeAllowlistByDomainMode(mode string) []models.DependencyType {
 	switch mode {
 	case taxonomy.DomainModeSupplyChain:
 		return []models.DependencyType{
+			models.DependencyTypeDependsOn,
 			models.DependencyTypeProduces,
 			models.DependencyTypeConsumes,
 			models.DependencyTypeSuppliesTo,
