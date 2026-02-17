@@ -474,6 +474,26 @@ func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string 
 				seen[t] = struct{}{}
 				out = append(out, t)
 			}
+		case taxonomy.DomainModePolicyImpact:
+			for _, t := range []string{
+				string(models.DependencyTypeRegulates),
+				string(models.DependencyTypeControlsAccess),
+				string(models.DependencyTypeImposesCondition),
+				string(models.DependencyTypeUsesMechanism),
+				string(models.DependencyTypeAppliesTo),
+				string(models.DependencyTypeInfluences),
+				string(models.DependencyTypeDependsOn),
+				string(models.DependencyTypeParticipatesIn),
+				string(models.DependencyTypeLocatedIn),
+				string(models.DependencyTypeOperatesIn),
+				string(models.DependencyTypeAdministers),
+			} {
+				if _, ok := seen[t]; ok {
+					continue
+				}
+				seen[t] = struct{}{}
+				out = append(out, t)
+			}
 		}
 	}
 	return out
@@ -552,6 +572,8 @@ const extractionGeneralRelationRulesBlock = `   - DEPENDS_ON: source depends on 
    - LOCATED_IN target MUST be GEO_REGION.
    - SUPPLIES_TO source/target SHOULD be ORGANIZATION or FACILITY.
    - Strategic edges MUST use DECISION_POINT/MECHANISM compatible source/target types.
+   - NON-DOMAIN RELATION GUARDRAIL: for relation types listed above, targetCanonicalPath MUST NOT start with /domain/.
+     DOMAIN targets are allowed only for DOMAIN scaffold relations (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, RELATED_DOMAIN, BROADENS_TO, NARROWS_TO, AFFECTS, DEPENDS_ON with DOMAIN source).
 
    Each object must include:
    - targetName, targetLegalName, targetShortName
@@ -576,6 +598,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	b.WriteString("   DOMAIN-SCOPED RELATION RULES (active contract):\n")
 	b.WriteString(fmt.Sprintf("   - Allowed relationType values ONLY: %s\n", strings.Join(allowed, ", ")))
 	b.WriteString("   - Never emit a relation outside this set.\n")
+	b.WriteString("   - Unless relationType is a DOMAIN scaffold relation, targetCanonicalPath MUST NOT start with /domain/.\n")
 
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
 		b.WriteString(`   SUPPLY CHAIN MODE:
@@ -610,6 +633,15 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 		b.WriteString(`   STRATEGIC MODE:
    - CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO only.
    - Respect DECISION_POINT/MECHANISM typing and direction.
+`)
+	}
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModePolicyImpact) {
+		b.WriteString(`   POLICY IMPACT MODE:
+   - Focus on policy transmission channels from regulator/program to market/org/community.
+   - REGULATES/ADMINISTERS for formal public-policy authority.
+   - CONTROLS_ACCESS/IMPOSES_CONDITION/USES_MECHANISM/APPLIES_TO for explicit instruments and constraints.
+   - INFLUENCES for soft or second-order impact channels when formal authority is absent.
+   - DEPENDS_ON/PARTICIPATES_IN/LOCATED_IN/OPERATES_IN for exposure context needed in impact modeling.
 `)
 	}
 

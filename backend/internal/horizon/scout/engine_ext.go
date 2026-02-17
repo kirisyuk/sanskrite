@@ -112,6 +112,15 @@ func sanitizeDomainResearchRelations(domainCanonicalPath, contractType string, r
 			sourcePath = domainCanonicalPath
 		}
 
+		// Domain contracts are projection anchors and should not have incoming edges from non-domain sources.
+		// Canonicalize legacy/non-strict outputs into domain->entity scaffold relation.
+		if strings.HasPrefix(targetPath, "/domain/") && !strings.HasPrefix(sourcePath, "/domain/") {
+			rel.SourceCanonicalPath = targetPath
+			rel.TargetCanonicalPath = sourcePath
+			sourcePath = rel.SourceCanonicalPath
+			targetPath = rel.TargetCanonicalPath
+		}
+
 		if strings.HasPrefix(sourcePath, "/domain/") {
 			// Domain anchor edges must remain in domain-scaffold relation space.
 			if !isDomainScaffoldRelationType(rt) {

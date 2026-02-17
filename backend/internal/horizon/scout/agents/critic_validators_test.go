@@ -123,6 +123,24 @@ func TestCriticPipeline_Validate_compositeModes(t *testing.T) {
 	}
 }
 
+func TestCriticPipeline_Validate_policyImpactMode(t *testing.T) {
+	runner := (&CriticAgent{}).CriticPipeline()
+	modes := []string{taxonomy.DomainModePolicyImpact}
+	validators := runner.validatorsForModes(modes)
+	if len(validators) != 2 {
+		t.Errorf("expected 2 validators (Core, PolicyImpact), got %d", len(validators))
+	}
+	modesSeen := make(map[string]bool)
+	for _, v := range validators {
+		modesSeen[v.DomainMode()] = true
+	}
+	for _, want := range []string{"core", taxonomy.DomainModePolicyImpact} {
+		if !modesSeen[want] {
+			t.Errorf("missing validator for mode %q", want)
+		}
+	}
+}
+
 func TestStrategicValidator_nilFragmentReturnsNil(t *testing.T) {
 	v := &StrategicValidator{agent: &CriticAgent{}}
 	ctx := context.Background()

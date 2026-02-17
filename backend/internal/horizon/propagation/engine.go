@@ -32,6 +32,7 @@ type PropagationEngine struct {
 	lazyEval             *LazyEvaluator
 	policyExecutor       *policy.PolicyExecutor // Optional: for semantic propagation policies
 	criticalPathDetector *criticalpath.Detector // Optional: for critical path detection
+	adapterRegistry      *AdapterRegistry       // Optional: domain-model adapter registry (contract type/domain mode)
 	fragmentChangedHook  func(ctx context.Context, fragmentID string)
 
 	// Трекинг активных распространений
@@ -85,6 +86,13 @@ func (e *PropagationEngine) WithPolicyExecutor(executor *policy.PolicyExecutor) 
 // WithCriticalPathDetector sets the critical path detector.
 func (e *PropagationEngine) WithCriticalPathDetector(detector *criticalpath.Detector) *PropagationEngine {
 	e.criticalPathDetector = detector
+	return e
+}
+
+// WithDomainAdapterRegistry sets the domain-model adapter registry.
+// This is a non-breaking extension point; when nil, propagation behavior remains unchanged.
+func (e *PropagationEngine) WithDomainAdapterRegistry(registry *AdapterRegistry) *PropagationEngine {
+	e.adapterRegistry = registry
 	return e
 }
 
@@ -468,18 +476,21 @@ func (e *PropagationEngine) propagateHotPath(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	adapter := e.resolveDomainAdapter(ctx, sourceFragment)
 
 	type waveItem struct {
-		frag *models.HorizonFragment
-		d    float64
-		hops int
-		path []string // Track path from source
+		frag       *models.HorizonFragment
+		metricName string
+		d          float64
+		hops       int
+		path       []string // Track path from source
 	}
 
 	// visitedMagnitude tracks the strongest (absolute) delta we've already processed for a fragment
 	// during this wave, to prevent infinite loops on cyclic graphs.
-	visitedMagnitude := map[string]float64{sourceFragment.ID: math.Abs(delta)}
-	stack := []waveItem{{frag: sourceFragment, d: delta, hops: 0, path: []string{sourceFragment.ID}}}
+	sourceMetric := strings.TrimSpace(metricName)
+	visitedMagnitude := map[string]float64{sourceFragment.ID + "|" + sourceMetric: math.Abs(delta)}
+	stack := []waveItem{{frag: sourceFragment, metricName: sourceMetric, d: delta, hops: 0, path: []string{sourceFragment.ID}}}
 	hitHopLimit := false
 	cycleSkips := 0
 
@@ -492,6 +503,9 @@ func (e *PropagationEngine) propagateHotPath(
 		it := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if it.frag == nil || strings.TrimSpace(it.frag.ID) == "" {
+			continue
+		}
+		if strings.TrimSpace(it.metricName) == "" {
 			continue
 		}
 		if it.hops >= hotPathMaxHops {
@@ -507,7 +521,7 @@ func (e *PropagationEngine) propagateHotPath(
 
 		// Best-effort unit: use the current unit on the fragment metric, if present.
 		var unit *string
-		if mv, ok := it.frag.State[metricName]; ok {
+		if mv, ok := it.frag.State[it.metricName]; ok {
 			unit = mv.Unit
 		}
 
@@ -549,7 +563,7 @@ func (e *PropagationEngine) propagateHotPath(
 				decision, err := e.policyExecutor.Execute(ctx, policy.PolicyInput{
 					Kind: "propagation",
 					Context: map[string]interface{}{
-						"metricName":     metricName,
+						"metricName":     it.metricName,
 						"relationType":   string(edge.Type),
 						"currentDepth":   it.hops,
 						"isCriticalPath": isCriticalPath,
@@ -592,7 +606,18 @@ func (e *PropagationEngine) propagateHotPath(
 				continue
 			}
 
-			if !e.threshold.ExceedsThreshold(metricName, dampedDelta, unit) {
+			propagatedMetric := it.metricName
+			if adapter != nil {
+				nextMetric, nextDelta, skip := e.applyAdapterTransfer(ctx, adapter, it.metricName, dampedDelta, edge, it.frag)
+				if skip {
+					continue
+				}
+				if strings.TrimSpace(nextMetric) != "" {
+					propagatedMetric = strings.TrimSpace(nextMetric)
+				}
+				dampedDelta = nextDelta
+			}
+			if !e.threshold.ExceedsThreshold(propagatedMetric, dampedDelta, unit) {
 				continue
 			}
 
@@ -603,7 +628,8 @@ func (e *PropagationEngine) propagateHotPath(
 
 			// Cycle guard: if we've already propagated an equal-or-stronger delta to this node in this wave, skip.
 			absD := math.Abs(dampedDelta)
-			if prev, ok := visitedMagnitude[edge.TargetFragmentID]; ok && prev >= absD {
+			visitKey := edge.TargetFragmentID + "|" + propagatedMetric
+			if prev, ok := visitedMagnitude[visitKey]; ok && prev >= absD {
 				cycleSkips++
 				continue
 			}
@@ -613,12 +639,12 @@ func (e *PropagationEngine) propagateHotPath(
 				continue
 			}
 
-			if err := e.updateFragmentMetric(ctx, targetFragment, metricName, dampedDelta); err != nil {
+			if err := e.updateFragmentMetric(ctx, targetFragment, propagatedMetric, dampedDelta); err != nil {
 				continue
 			}
 
 			affectedFragments[targetFragment.ID] = true
-			visitedMagnitude[targetFragment.ID] = absD
+			visitedMagnitude[visitKey] = absD
 
 			// Track propagation path
 			newPath := make([]string, len(it.path)+1)
@@ -641,7 +667,13 @@ func (e *PropagationEngine) propagateHotPath(
 				}
 			}
 
-			stack = append(stack, waveItem{frag: targetFragment, d: dampedDelta, hops: it.hops + 1, path: newPath})
+			stack = append(stack, waveItem{
+				frag:       targetFragment,
+				metricName: propagatedMetric,
+				d:          dampedDelta,
+				hops:       it.hops + 1,
+				path:       newPath,
+			})
 		}
 	}
 
@@ -849,10 +881,11 @@ func (e *PropagationEngine) SimulatePropagation(ctx context.Context, fragmentID 
 	// Запускаем симуляцию распространения (без сохранения изменений)
 	affectedFragments := make(map[string]bool)
 	affectedLenses := make(map[string]bool)
+	adapter := e.resolveDomainAdapter(ctx, sourceFragment)
 
 	// Симулируем распространение по критическим путям (с защитой от циклов)
-	visitedMagnitude := map[string]float64{sourceFragment.ID: math.Abs(delta)}
-	if err := e.simulateHotPath(ctx, sourceFragment, metricName, delta, affectedFragments, affectedLenses, visitedMagnitude, 0); err != nil {
+	visitedMagnitude := map[string]float64{sourceFragment.ID + "|" + strings.TrimSpace(metricName): math.Abs(delta)}
+	if err := e.simulateHotPath(ctx, sourceFragment, metricName, delta, affectedFragments, affectedLenses, visitedMagnitude, 0, adapter); err != nil {
 		return nil, fmt.Errorf("hot path simulation failed: %w", err)
 	}
 
@@ -889,6 +922,7 @@ func (e *PropagationEngine) simulateHotPath(
 	affectedLenses map[string]bool,
 	visitedMagnitude map[string]float64,
 	hops int,
+	adapter DomainModelAdapter,
 ) error {
 	if e == nil || sourceFragment == nil {
 		return nil
@@ -925,9 +959,20 @@ func (e *PropagationEngine) simulateHotPath(
 
 		// Применяем затухание волны
 		dampedDelta := e.damping.ApplyDamping(delta, edge.Properties.Amplification, edge.Properties.Criticality)
+		propagatedMetric := strings.TrimSpace(metricName)
+		if adapter != nil {
+			nextMetric, nextDelta, skip := e.applyAdapterTransfer(ctx, adapter, metricName, dampedDelta, edge, sourceFragment)
+			if skip {
+				continue
+			}
+			if strings.TrimSpace(nextMetric) != "" {
+				propagatedMetric = strings.TrimSpace(nextMetric)
+			}
+			dampedDelta = nextDelta
+		}
 
 		// Проверяем порог после затухания
-		if !e.threshold.ExceedsThreshold(metricName, dampedDelta, nil) {
+		if !e.threshold.ExceedsThreshold(propagatedMetric, dampedDelta, nil) {
 			continue
 		}
 
@@ -936,7 +981,8 @@ func (e *PropagationEngine) simulateHotPath(
 			absD = -absD
 		}
 		// Защита от циклов: если мы уже приходили в target с более сильной волной — дальше не идём.
-		if prev, ok := visitedMagnitude[edge.TargetFragmentID]; ok && prev >= absD {
+		visitKey := edge.TargetFragmentID + "|" + propagatedMetric
+		if prev, ok := visitedMagnitude[visitKey]; ok && prev >= absD {
 			continue
 		}
 
@@ -946,7 +992,7 @@ func (e *PropagationEngine) simulateHotPath(
 			continue // Пропускаем недоступные фрагменты
 		}
 
-		visitedMagnitude[targetFragment.ID] = absD
+		visitedMagnitude[visitKey] = absD
 
 		// Симулируем обновление метрики (без сохранения)
 		affectedFragments[targetFragment.ID] = true
@@ -960,11 +1006,140 @@ func (e *PropagationEngine) simulateHotPath(
 		}
 
 		// Рекурсивно симулируем дальше
-		if err := e.simulateHotPath(ctx, targetFragment, metricName, dampedDelta, affectedFragments, affectedLenses, visitedMagnitude, hops+1); err != nil {
+		if err := e.simulateHotPath(ctx, targetFragment, propagatedMetric, dampedDelta, affectedFragments, affectedLenses, visitedMagnitude, hops+1, adapter); err != nil {
 			// Логируем ошибку, но продолжаем симуляцию
 			_ = err
 		}
 	}
 
 	return nil
+}
+
+func (e *PropagationEngine) resolveDomainAdapter(ctx context.Context, sourceFragment *models.HorizonFragment) DomainModelAdapter {
+	if e == nil || e.adapterRegistry == nil {
+		return nil
+	}
+
+	var contractType string
+	var domainModes []string
+	if binding, ok := DomainAdapterBindingFromContext(ctx); ok {
+		contractType = strings.TrimSpace(binding.ContractType)
+		domainModes = append([]string(nil), binding.DomainModes...)
+	}
+
+	if contractType == "" && sourceFragment != nil {
+		if sourceFragment.Identifiers != nil {
+			contractType = strings.TrimSpace(sourceFragment.Identifiers["domainContractType"])
+		}
+		if contractType == "" {
+			contractType = contractTypeFromDomainCanonicalPath(sourceFragment.CanonicalPath)
+		}
+	}
+
+	adapter, ok := e.adapterRegistry.ForContractTypeOrMode(contractType, domainModes)
+	if !ok {
+		return nil
+	}
+	return adapter
+}
+
+func (e *PropagationEngine) applyAdapterTransfer(
+	ctx context.Context,
+	adapter DomainModelAdapter,
+	metricName string,
+	delta float64,
+	edge *models.DependencyEdge,
+	node *models.HorizonFragment,
+) (string, float64, bool) {
+	if adapter == nil {
+		return metricName, delta, false
+	}
+	signal, ok := signalDescriptorFromMetricPath(metricName, delta)
+	if !ok {
+		return metricName, delta, false
+	}
+	hook, err := adapter.TransferHook(ctx, signal, edge, node)
+	if err != nil || hook == nil {
+		return metricName, delta, false
+	}
+	if hook.Skip {
+		return metricName, delta, true
+	}
+
+	outMetric := metricName
+	if axis := strings.TrimSpace(hook.AdjustedAxis); axis != "" {
+		outMetric = metricPathWithAxis(metricName, axis)
+	}
+
+	outDelta := delta
+	if hook.AdjustedAmplitude > 0 {
+		amp := clamp01(hook.AdjustedAmplitude)
+		sign := 1.0
+		if delta < 0 {
+			sign = -1.0
+		}
+		outDelta = amp * sign
+	}
+	return outMetric, outDelta, false
+}
+
+func signalDescriptorFromMetricPath(metricName string, delta float64) (*models.SignalDescriptor, bool) {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(metricName), "/"), "/")
+	// /metric/{risk|opportunity}/{axis(2 segments)}[/mechanism...]
+	if len(parts) < 4 || parts[0] != "metric" {
+		return nil, false
+	}
+	polarity := strings.TrimSpace(parts[1])
+	if polarity != "risk" && polarity != "opportunity" {
+		return nil, false
+	}
+	axis := strings.TrimSpace(parts[2] + "/" + parts[3])
+	if !models.IsValidAxis(axis) {
+		return nil, false
+	}
+	mechanism := ""
+	if len(parts) > 4 {
+		mechanism = strings.TrimSpace(strings.Join(parts[4:], "/"))
+	}
+	amp := math.Abs(delta)
+	if amp > 1.0 {
+		amp = 1.0
+	}
+	return &models.SignalDescriptor{
+		Axis:      axis,
+		Mechanism: mechanism,
+		Amplitude: amp,
+		Polarity:  polarity,
+	}, true
+}
+
+func metricPathWithAxis(metricName, axis string) string {
+	axis = strings.TrimSpace(axis)
+	if axis == "" || !models.IsValidAxis(axis) {
+		return metricName
+	}
+	parts := strings.Split(strings.Trim(strings.TrimSpace(metricName), "/"), "/")
+	if len(parts) < 4 || parts[0] != "metric" {
+		return metricName
+	}
+	polarity := strings.TrimSpace(parts[1])
+	if polarity != "risk" && polarity != "opportunity" {
+		return metricName
+	}
+	path := "/metric/" + polarity + "/" + axis
+	if len(parts) > 4 {
+		path += "/" + strings.Join(parts[4:], "/")
+	}
+	return path
+}
+
+func contractTypeFromDomainCanonicalPath(canonicalPath string) string {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(canonicalPath), "/"), "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	if parts[0] != "domain" || parts[1] != "v1" {
+		return ""
+	}
+	return strings.TrimSpace(strings.ToLower(parts[2]))
 }

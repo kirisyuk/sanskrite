@@ -36,6 +36,9 @@ func TestBuildExtractionPrompt_EnablesSupplyChainModuleFromDomainMode(t *testing
 	if !strings.Contains(prompt, "DOMAIN-SCOPED RELATION RULES (active contract)") {
 		t.Fatalf("expected domain-scoped relation rules block")
 	}
+	if !strings.Contains(prompt, "targetCanonicalPath MUST NOT start with /domain/") {
+		t.Fatalf("expected scoped guardrail that non-domain relations must not target /domain/")
+	}
 	if !strings.Contains(prompt, "UNIT-FIRST PHASE ORDER (MANDATORY)") {
 		t.Fatalf("expected unit-first phase order block in scoped prompt")
 	}
@@ -69,6 +72,9 @@ func TestBuildExtractionPrompt_GeneralModeKeepsFullRelationCatalog(t *testing.T)
 	}
 	if !strings.Contains(prompt, "\"unitProfiles\"") {
 		t.Fatalf("general prompt must still include unitProfiles contract")
+	}
+	if !strings.Contains(prompt, "targetCanonicalPath MUST NOT start with /domain/") {
+		t.Fatalf("general prompt must include non-domain target guardrail for /domain/")
 	}
 }
 

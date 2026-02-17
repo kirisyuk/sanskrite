@@ -1346,6 +1346,14 @@ func main() {
 				horizonLensesRepo,
 				pub,
 			)
+			adapterRegistry := horizonpropagation.NewAdapterRegistry()
+			if err := adapterRegistry.Register(horizonpropagation.NewPolicyImpactAdapter()); err != nil {
+				logger.Printf("WARNING: policy-impact adapter registration failed: %v", err)
+			}
+			if err := adapterRegistry.RegisterModeFallback(taxonomy.DomainModePolicyImpact, horizonpropagation.PolicyImpactContractTypeFamily); err != nil {
+				logger.Printf("WARNING: policy-impact adapter mode fallback registration failed: %v", err)
+			}
+			propagationEngine.WithDomainAdapterRegistry(adapterRegistry)
 			propagationProfilesRepo := horizonrepo.NewPropagationProfilesRepository(fsClient.Client())
 			propagationProfileLookup := horizonpropagation.NewProfileLookup(propagationProfilesRepo)
 			if err := propagationProfileLookup.Initialize(context.Background()); err != nil {

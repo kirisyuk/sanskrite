@@ -352,6 +352,7 @@ var domainContractTypes = map[string]struct{}{
 	"power-dynamics":        {},
 
 	// Policy / regulation / compliance
+	"policy-impact":           {},
 	"regulatory-impact":       {},
 	"policy-and-regulation":   {},
 	"compliance-landscape":    {},

@@ -79,3 +79,18 @@ func (v *StrategicValidator) Validate(ctx context.Context, input CriticValidator
 	}
 	return v.agent.ValidateStrategicOverlay(ctx, input.Fragment, input.Relations, input.GraphContext)
 }
+
+// PolicyImpactValidator validates policy-impact specific relation quality and coverage.
+type PolicyImpactValidator struct {
+	agent *CriticAgent
+}
+
+func (v *PolicyImpactValidator) DomainMode() string { return taxonomy.DomainModePolicyImpact }
+
+func (v *PolicyImpactValidator) Validate(ctx context.Context, input CriticValidatorInput) (*ValidationResult, error) {
+	if v.agent == nil {
+		return nil, nil
+	}
+	prompt := v.agent.buildPolicyImpactValidationPrompt(input)
+	return v.agent.runValidationPrompt(ctx, prompt)
+}

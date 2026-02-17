@@ -35,3 +35,11 @@ func TestDomainModesForContractTypes_PartnershipLandscapeWithOther(t *testing.T)
 		t.Errorf("expected supply_chain and governance, got %v", modes)
 	}
 }
+
+func TestDomainModesForContractTypes_PolicyImpact(t *testing.T) {
+	modes := DomainModesForContractTypes([]string{"policy-impact"})
+	want := []string{taxonomy.DomainModePolicyImpact}
+	if !reflect.DeepEqual(modes, want) {
+		t.Errorf("policy-impact: got %v, want %v", modes, want)
+	}
+}

@@ -773,6 +773,8 @@ func expectedRelationsForContractType(contractType string) []string {
 		return []string{"SUPPLIES_TO", "CONSUMES", "DEPENDS_ON", "PRODUCES", "TRANSFORMS_INTO"}
 	case SteeringProfileRegulatoryExposure:
 		return []string{"REGULATES", "CONTROLS_ACCESS", "USES_MECHANISM", "APPLIES_TO"}
+	case SteeringProfilePolicyImpact:
+		return []string{"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "ADMINISTERS"}
 	case SteeringProfileCompetitiveLandscape:
 		return []string{"PARTICIPATES_IN", "DOMINATES", "COMPETES_WITH", "PRODUCES"}
 	case SteeringProfileGeographicConcentration:
@@ -1286,7 +1288,7 @@ func detectDataGaps(contract Contract, facetNodes map[string][]*models.HorizonFr
 
 func isRegulatorySensitive(contractType string) bool {
 	switch steeringProfileForContractType(contractType) {
-	case SteeringProfileSupplyChain, SteeringProfileRegulatoryExposure:
+	case SteeringProfileSupplyChain, SteeringProfileRegulatoryExposure, SteeringProfilePolicyImpact:
 		return true
 	default:
 		return false
@@ -2774,6 +2776,8 @@ func defaultFilterRelTypes(contractType string) []string {
 		return []string{"SUPPLIES_TO", "CONSUMES", "DEPENDS_ON", "PRODUCES", "TRANSFORMS_INTO"}
 	case SteeringProfileRegulatoryExposure:
 		return []string{"REGULATES", "CONTROLS_ACCESS", "USES_MECHANISM", "APPLIES_TO"}
+	case SteeringProfilePolicyImpact:
+		return []string{"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "ADMINISTERS"}
 	case SteeringProfileCompetitiveLandscape:
 		return []string{"PARTICIPATES_IN", "DOMINATES", "COMPETES_WITH", "PRODUCES"}
 	case SteeringProfileGeographicConcentration:

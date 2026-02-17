@@ -10,6 +10,7 @@ import ReactFlow, {
   useEdgesState,
   ReactFlowInstance,
   MarkerType,
+  Position,
   EdgeProps,
   EdgeTypes,
   BaseEdge,
@@ -62,6 +63,62 @@ import { DynastyProfileModal } from './DynastyProfileModal';
 import { TribeProfileModal } from './TribeProfileModal';
 import { ProgramProfileModal } from './ProgramProfileModal';
 
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+
+// Deterministic hash for stable edge routing/label offsets across renders.
+const stableHash32 = (input: string): number => {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+};
+
+const edgeLabelOffset = (
+  seed: string,
+  sourceX: number,
+  sourceY: number,
+  targetX: number,
+  targetY: number,
+): { dx: number; dy: number } => {
+  const h = stableHash32(seed);
+  // Spread labels across a few deterministic lanes so captions don't stack on one point.
+  const lane = (h % 5) - 2; // -2..2
+  if (lane === 0) return { dx: 0, dy: -4 };
+  const mag = 10 + ((h >> 3) % 3) * 4; // 10/14/18
+  const vx = targetX - sourceX;
+  const vy = targetY - sourceY;
+  const len = Math.hypot(vx, vy) || 1;
+  const nx = -vy / len;
+  const ny = vx / len;
+  return {
+    dx: nx * lane * mag,
+    dy: ny * lane * mag - 4,
+  };
+};
+
+const CORRIDOR_SYN_NODE_PREFIX = 'corridor:syn:';
+const CORRIDOR_SYN_EDGE_PREFIX = 'corridor:synedge:';
+const CORRIDOR_LEGACY_NODE_PREFIXES = ['corridor:group:', 'corridor:lane:', 'corridor:node:', 'corridor:more:'] as const;
+const CORRIDOR_LEGACY_EDGE_PREFIXES = ['corridor:edge:'] as const;
+
+const hasAnyPrefix = (value: string, prefixes: readonly string[]): boolean => {
+  const v = String(value || '').trim();
+  if (!v) return false;
+  for (const p of prefixes) {
+    if (v.startsWith(p)) return true;
+  }
+  return false;
+};
+
+const isLegacyCorridorNodeId = (id: string): boolean => hasAnyPrefix(id, CORRIDOR_LEGACY_NODE_PREFIXES);
+const isLegacyCorridorEdgeId = (id: string): boolean => hasAnyPrefix(id, CORRIDOR_LEGACY_EDGE_PREFIXES);
+const isCorridorSyntheticNodeId = (id: string): boolean => String(id || '').trim().startsWith(CORRIDOR_SYN_NODE_PREFIX);
+const isCorridorSyntheticEdgeId = (id: string): boolean => String(id || '').trim().startsWith(CORRIDOR_SYN_EDGE_PREFIX);
+const isCorridorArtifactNodeId = (id: string): boolean => isCorridorSyntheticNodeId(id) || isLegacyCorridorNodeId(id);
+const isCorridorArtifactEdgeId = (id: string): boolean => isCorridorSyntheticEdgeId(id) || isLegacyCorridorEdgeId(id);
+
 /**
  * Custom edge that draws an arc (inverted parabola) going UP and over.
  * Used for central-to-central connections in Linear mode.
@@ -92,8 +149,9 @@ const ArcTopEdge: React.FC<EdgeProps> = ({
   const path = `M ${sourceX} ${sourceY} Q ${midX} ${midY} ${targetX} ${targetY}`;
 
   // Label position: at the apex of the arc
-  const labelX = midX;
-  const labelY = midY - 8; // Slightly above the arc apex
+  const arcOffset = edgeLabelOffset(String(id || ''), sourceX, sourceY, targetX, targetY);
+  const labelX = midX + arcOffset.dx;
+  const labelY = midY - 8 + arcOffset.dy; // Slightly above the arc apex
 
   return (
     <>
@@ -266,7 +324,18 @@ const HznEdge: React.FC<EdgeProps> = ({
   const { theme } = React.useContext(ThemeContext);
   // IMPORTANT: pass source/target positions, otherwise getBezierPath defaults to Bottom/Top and curves can look
   // like they connect from the wrong side (even if the anchor point is correct).
-  const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+  const routeSeed = `${String(id || '')}|${String(source || '')}|${String(target || '')}|${String((data as any)?.edgeType || '')}`;
+  const routeHash = stableHash32(routeSeed);
+  const curvature = clamp(0.25 + (((routeHash % 5) - 2) * 0.06), 0.12, 0.48);
+  const [edgePath, baseLabelX, baseLabelY] = getBezierPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    curvature,
+  });
   const d: any = data || {};
   const showLabel = !!d.showLabel;
   const caption = String(d.edgeCaption || d.edgeLabel || '').trim();
@@ -274,6 +343,9 @@ const HznEdge: React.FC<EdgeProps> = ({
   const onLabelHoverEnter = d.onLabelHoverEnter as undefined | ((edgeId: string) => void);
   const onLabelHoverLeave = d.onLabelHoverLeave as undefined | ((edgeId: string) => void);
   const raiseToFront = !!d.raiseToFront;
+  const lblOffset = edgeLabelOffset(routeSeed, sourceX, sourceY, targetX, targetY);
+  const labelX = baseLabelX + lblOffset.dx;
+  const labelY = baseLabelY + lblOffset.dy;
 
   return (
     <>
@@ -343,8 +415,6 @@ const HznArcTopEdge: React.FC<EdgeProps> = ({
   const arcHeight = Math.min(80, Math.max(40, dx * 0.25));
   const midY = Math.min(sourceY, targetY) - arcHeight;
   const path = `M ${sourceX} ${sourceY} Q ${midX} ${midY} ${targetX} ${targetY}`;
-  const labelX = midX;
-  const labelY = midY - 8;
   const d: any = data || {};
   const showLabel = !!d.showLabel;
   const caption = String(d.edgeCaption || d.edgeLabel || '').trim();
@@ -352,6 +422,10 @@ const HznArcTopEdge: React.FC<EdgeProps> = ({
   const onLabelHoverEnter = d.onLabelHoverEnter as undefined | ((edgeId: string) => void);
   const onLabelHoverLeave = d.onLabelHoverLeave as undefined | ((edgeId: string) => void);
   const raiseToFront = !!d.raiseToFront;
+  const routeSeed = `${String(id || '')}|${String(source || '')}|${String(target || '')}|${String(d.edgeType || '')}|arc`;
+  const lblOffset = edgeLabelOffset(routeSeed, sourceX, sourceY, targetX, targetY);
+  const labelX = midX + lblOffset.dx;
+  const labelY = midY - 8 + lblOffset.dy;
 
   return (
     <>
@@ -468,6 +542,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       GATEKEEPS_DECISION: 'Gatekeeps',
       USES_MECHANISM: 'Mechanism',
       APPLIES_TO: 'Applies',
+      CORRIDOR_AUTHORITY: 'Authority',
+      CORRIDOR_DECISION: 'Decision',
+      CORRIDOR_MECHANISM: 'Mechanism',
+      CORRIDOR_IMPACT: 'Impact',
+      CORRIDOR_MEDIATOR: 'Mediator',
       // Dependency / usage
       DEPENDS_ON: 'Depends',
       REQUIRES: 'Requires',
@@ -1441,6 +1520,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [showMiniMap, setShowMiniMap] = React.useState(false);
   const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
   const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear' | 'levels'>('levels');
+  // Layout mode helpers - shared across callbacks/effects below.
+  const isFreeformLayout = layoutMode === 'freeform';
+  const isLinearLayout = layoutMode === 'linear';
+  const isLevelsLayout = layoutMode === 'levels';
   const [showToolbarMenu, setShowToolbarMenu] = React.useState(false);
   const toolbarMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [showLayoutMenu, setShowLayoutMenu] = React.useState(false);
@@ -1454,7 +1537,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const pendingFocusNodeIdsRef = React.useRef<Set<string> | null>(null);
 
   // Levels (Hierarchical) expansion filter (controls which edge types are fetched on expand).
-  type LevelsExpandMode = 'all' | 'ownership' | 'expansion' | 'dependencies' | 'context' | 'market' | 'influence' | 'balanced';
+  type LevelsExpandMode = 'all' | 'ownership' | 'expansion' | 'dependencies' | 'context' | 'market' | 'influence' | 'balanced' | 'decision-chain';
   const [levelsExpandMode, setLevelsExpandMode] = React.useState<LevelsExpandMode>('all');
   const [showLevelsExpandMenu, setShowLevelsExpandMenu] = React.useState(false);
   const levelsExpandMenuRef = React.useRef<HTMLDivElement | null>(null);
@@ -1475,6 +1558,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return 'Key stakeholders';
       case 'balanced':
         return 'Strategic overview';
+      case 'decision-chain':
+        return 'Decision Chain';
       case 'all':
       default:
         return 'Full network';
@@ -1528,6 +1613,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return INFLUENCE;
       case 'balanced':
         return [...OWNERSHIP, ...CONTEXT, ...MARKET];
+      case 'decision-chain':
+        return [];
       case 'all':
       default:
         return [];
@@ -1871,6 +1958,76 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     summary?: string;
   };
 
+  type ControlCorridorNode = {
+    id: string;
+    label: string;
+    type?: string;
+    canonicalPath?: string;
+    lane: string;
+    depth: number;
+    seed?: boolean;
+  };
+  type ControlCorridorEdge = {
+    id: string;
+    from: string;
+    to: string;
+    type: string;
+    stage: string;
+    role?: string;
+    criticality?: number;
+  };
+  type ControlCorridorScoredNode = {
+    id: string;
+    label: string;
+    type?: string;
+    canonicalPath?: string;
+    score?: number;
+    coverage?: number;
+  };
+  type ControlCorridorPathBundle = {
+    id: string;
+    controllerId: string;
+    targetId: string;
+    mediatorId?: string;
+    nodeIds: string[];
+    edgeIds: string[];
+    edgeKeys?: string[];
+    coverageScore?: number;
+    description?: string;
+  };
+  type ControlCorridorGraph = {
+    lensId: string;
+    seedFragmentIds: string[];
+    nodes: ControlCorridorNode[];
+    edges: ControlCorridorEdge[];
+    bundles?: {
+      controllers?: ControlCorridorScoredNode[];
+      decisionPoints?: ControlCorridorScoredNode[];
+      mechanisms?: ControlCorridorScoredNode[];
+      mediators?: ControlCorridorScoredNode[];
+      impactedTargets?: ControlCorridorScoredNode[];
+      paths?: ControlCorridorPathBundle[];
+      bottlenecks?: {
+        nodes?: Array<{ id: string; usageCount?: number; score?: number }>;
+        edges?: Array<{ id: string; from: string; to: string; usageCount?: number }>;
+      };
+    };
+    summary?: {
+      seedCount?: number;
+      authorityCount?: number;
+      decisionCount?: number;
+      mechanismCount?: number;
+      impactCount?: number;
+      controllerCount?: number;
+      mediatorsCount?: number;
+      pathBundleCount?: number;
+      totalNodes?: number;
+      totalEdges?: number;
+      truncated?: boolean;
+    };
+    warnings?: string[];
+  };
+
   const [askGraphOpen, setAskGraphOpen] = React.useState(false);
   const [askGraphQuery, setAskGraphQuery] = React.useState('');
   const [askGraphLoading, setAskGraphLoading] = React.useState(false);
@@ -1880,6 +2037,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [graphQueryActiveChipId, setGraphQueryActiveChipId] = React.useState<string | null>(null);
   const [graphQueryHighlightIds, setGraphQueryHighlightIds] = React.useState<Set<string> | null>(null);
   const [viewDirective, setViewDirective] = React.useState<ViewDirective | null>(null);
+  const [controlCorridorMode, setControlCorridorMode] = React.useState(false);
+  const [controlCorridorLoading, setControlCorridorLoading] = React.useState(false);
+  const [, setControlCorridorError] = React.useState<string | null>(null);
+  const [controlCorridorGraph, setControlCorridorGraph] = React.useState<ControlCorridorGraph | null>(null);
+  const [controlCorridorSeedId, setControlCorridorSeedId] = React.useState<string>('');
+  const runControlCorridorRef = React.useRef<((seedIdOverride?: string) => Promise<{ graph: ControlCorridorGraph; seedId: string } | null>) | null>(null);
+  const controlCorridorRenderLogKeyRef = React.useRef<string>('');
+  const controlCorridorRevealKeyRef = React.useRef<string>('');
   const [domainAnswers, setDomainAnswers] = React.useState<any[]>([]);
   const [domainOverlayPanelMode, setDomainOverlayPanelMode] = React.useState<DomainOverlayPanelMode>('mini');
   const [activeDomainAnswerKey, setActiveDomainAnswerKey] = React.useState<string>('');
@@ -1888,6 +2053,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [domainOverlayHoverEdgeIds, setDomainOverlayHoverEdgeIds] = React.useState<string[]>([]);
   // domainOverlayPreview removed — no longer used
   const realtimeEvents = useHorizonRealtimeStore((s) => s.events);
+
+  React.useEffect(() => {
+    setControlCorridorMode(false);
+    setControlCorridorLoading(false);
+    setControlCorridorError(null);
+    setControlCorridorGraph(null);
+    setControlCorridorSeedId('');
+  }, [lensId]);
 
   type DomainContractTone = 'info' | 'success' | 'warning' | 'error';
   type DomainContractMiniBadge = { label: string; tone: DomainContractTone } | null;
@@ -2644,10 +2817,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [lensMetaLoading, setLensMetaLoading] = React.useState(false);
   const lensMetaRef = React.useRef<any | null>(null);
 
-  // Layout mode helpers - определяют, какую логику раскладки использовать
-  const isFreeformLayout = layoutMode === 'freeform';
-  const isLinearLayout = layoutMode === 'linear';
-  const isLevelsLayout = layoutMode === 'levels';
+  React.useEffect(() => {
+    const enabled = isLevelsLayout && levelsExpandMode === 'decision-chain';
+    setControlCorridorMode(enabled);
+    if (!enabled) {
+      setControlCorridorLoading(false);
+      setControlCorridorError(null);
+      setControlCorridorGraph(null);
+      setControlCorridorSeedId('');
+    }
+  }, [isLevelsLayout, levelsExpandMode]);
 
   // Prevent mode-switch relayout loops
   const lastAppliedLayoutModeRef = React.useRef<'freeform' | 'linear' | 'levels' | null>(null);
@@ -3099,6 +3278,21 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (typeof fn === 'function') fn();
     }
   }, [rightDockStateByNodeId, layoutMode]);
+
+  // Corridor synthetic nodes/edges are only valid in Levels + Decision Chain mode.
+  // Leaving the mode should purge them from the canonical graph state.
+  React.useEffect(() => {
+    const corridorAllowed = layoutMode === 'levels' && levelsExpandMode === 'decision-chain';
+    if (corridorAllowed) return;
+    const nodesNow = nodesStateRef.current || [];
+    const edgesNow = edgesStateRef.current || [];
+    const hasCorridorNodes = nodesNow.some((n: any) => isCorridorArtifactNodeId(String((n as any)?.id || '').trim()));
+    const hasCorridorEdges = edgesNow.some((e: any) => isCorridorArtifactEdgeId(String((e as any)?.id || '').trim()));
+    if (!hasCorridorNodes && !hasCorridorEdges) return;
+    setNodes((prev) => (prev || []).filter((n: any) => !isCorridorArtifactNodeId(String((n as any)?.id || '').trim())));
+    setEdges((prev) => (prev || []).filter((e: any) => !isCorridorArtifactEdgeId(String((e as any)?.id || '').trim())));
+    if (layoutMode === 'levels') invokeArrange();
+  }, [layoutMode, levelsExpandMode, setNodes, setEdges, invokeArrange]);
 
   const lastDomainTopDepsRevealKeyRef = React.useRef<string>('');
   const lastDomainTopDepsMaterializeKeyRef = React.useRef<string>('');
@@ -4187,6 +4381,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     return selected?.id || null;
   }, [nodes]);
 
+  const controlCorridorSeedNodeId = React.useMemo(() => {
+    const selected = String(selectedNodeId || '').trim();
+    if (selected && !isCorridorArtifactNodeId(selected)) return selected;
+    const expanded = nodes.find((n) => {
+      if (!n || (n.data as any)?.isGroup) return false;
+      const id = String((n as any)?.id || '').trim();
+      if (!id || isCorridorArtifactNodeId(id)) return false;
+      return Boolean((n.data as any)?.expanded);
+    });
+    return String((expanded as any)?.id || '').trim() || '';
+  }, [nodes, selectedNodeId]);
+
   // Normalize IDs coming from backend / firestore / UI (avoid whitespace or non-string surprises)
   const norm = (v: unknown) => String(v ?? '').trim();
 
@@ -4682,6 +4888,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
 
     const eps = 8; // px threshold to treat as "same column"
+    // Wider ambiguity band for side handles to avoid unnatural "hook" turns near vertical alignment.
+    const nearColumnBand = 56;
+    const horizontalHandlesByX = (
+      sx: number,
+      tx: number,
+      prefer: 'toRight' | 'toLeft',
+    ): { sourceHandle: string; targetHandle: string } => {
+      if (tx > sx + nearColumnBand) return { sourceHandle: 'source-right', targetHandle: 'target-left' };
+      if (tx < sx - nearColumnBand) return { sourceHandle: 'source-left', targetHandle: 'target-right' };
+      return prefer === 'toRight'
+        ? { sourceHandle: 'source-right', targetHandle: 'target-left' }
+        : { sourceHandle: 'source-left', targetHandle: 'target-right' };
+    };
 
     const isInGroup = (n: Node<HorizonNodeData>) => {
       const pid = (n as any).parentId || (n as any).parentNode;
@@ -4694,6 +4913,52 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
 
     const normalizeTypeKey = (t: any) => String(t || '').toUpperCase().trim().replace(/\s+/g, '_') || 'UNKNOWN';
+    const corridorLaneRankForNode = (n: Node<HorizonNodeData> | undefined): number => {
+      if (!n) return -1;
+      const d: any = n.data || {};
+      if (d?.isGroup) return -1;
+      const lane = String(d?.corridorLane || '').trim().toLowerCase();
+      if (lane === 'authority') return 0;
+      if (lane === 'execution' || lane === 'decision' || lane === 'mechanism' || lane === 'mediator') return 1;
+      if (lane === 'propagation' || lane === 'impact') return 2;
+
+      const parentEdgeType = normalizeTypeKey(d?.edgeTypeFromParent || '');
+      if (parentEdgeType === 'CORRIDOR_AUTHORITY') return 0;
+      if (
+        parentEdgeType === 'CORRIDOR_DECISION' ||
+        parentEdgeType === 'CORRIDOR_MECHANISM' ||
+        parentEdgeType === 'CORRIDOR_MEDIATOR'
+      ) return 1;
+      if (parentEdgeType === 'CORRIDOR_IMPACT') return 2;
+
+      const tk = normalizeTypeKey(d?.type || '');
+      if (tk === 'DECISION_POINT' || tk === 'MECHANISM') return 1;
+      if (tk === 'ORGANIZATION' || tk === 'PERSON' || tk === 'COMMUNITY') return 0;
+      return -1;
+    };
+    const isDecisionCorridorNode = (n: Node<HorizonNodeData> | undefined): boolean =>
+      corridorLaneRankForNode(n) >= 0;
+    const corridorHandlesForPair = (
+      sourceNode: Node<HorizonNodeData>,
+      targetNode: Node<HorizonNodeData>,
+      sx: number,
+      sy: number,
+      tx: number,
+      ty: number,
+    ): { sourceHandle: string; targetHandle: string } => {
+      const sLane = corridorLaneRankForNode(sourceNode);
+      const tLane = corridorLaneRankForNode(targetNode);
+      if (sLane >= 0 && tLane >= 0 && sLane !== tLane) {
+        return sLane < tLane
+          ? { sourceHandle: 'source-right', targetHandle: 'target-left' }
+          : { sourceHandle: 'source-left', targetHandle: 'target-right' };
+      }
+      if (tx > sx + nearColumnBand) return { sourceHandle: 'source-right', targetHandle: 'target-left' };
+      if (tx < sx - nearColumnBand) return { sourceHandle: 'source-left', targetHandle: 'target-right' };
+      return ty >= sy
+        ? { sourceHandle: 'source-bottom', targetHandle: 'target-top' }
+        : { sourceHandle: 'source-top', targetHandle: 'target-bottom' };
+    };
     const PEER_EDGE_TYPES = new Set<string>([
       'COMPETES_WITH',
       'CONFLICTS_WITH',
@@ -5116,6 +5381,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         continue;
       }
 
+      // Same left group child-to-child edge: keep it as a real intra-group edge.
+      // Do not proxy to group handlers, otherwise decision groups produce wrapped/chaotic internals.
+      if (sgIsLeftGroup && tgIsLeftGroup && sg === tg) {
+        continue;
+      }
+
       // Exactly one endpoint is a grouped child in a left group -> proxy group-to-node.
       const groupId = sgIsLeftGroup ? sg! : (tgIsLeftGroup ? tg! : '');
       if (!groupId) continue;
@@ -5248,12 +5519,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     }
 
-    // Emit stack group proxy edges (right-side expanded stacks)
+    // Emit stack group proxy edges (expanded stacks)
     for (const b of stackGroupProxyBuckets.values()) {
       const { groupId, outsideId, edgeType, groupAsSource, outsideAsSource } = b;
-      const port = stackGroupPortsByGroupId.get(groupId)?.get(edgeType) ||
-                   stackGroupPortsByGroupId.get(groupId)?.get('OTHER') ||
-                   { sourceHandleId: 'source-left', targetHandleId: 'target-left' };
       const baseStyle = getEdgeStyle(edgeType, undefined);
       const stroke = getEdgeStroke(baseStyle);
       const id = `levels:stackgproxy:${groupId}:node:${outsideId}:edge:${edgeType}`;
@@ -5263,18 +5531,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const oNode = nodeMap.get(outsideId);
       const gx = typeof (gNode as any)?.position?.x === 'number' ? (gNode as any).position.x : 0;
       const ox = typeof (oNode as any)?.position?.x === 'number' ? (oNode as any).position.x : 0;
-      // Stack groups are on the right; edges come from the left (typically)
+      // Choose side by real geometry to avoid wraparounds when a stack group appears left of an outside node.
       const outsideIsLeftOfGroup = ox < gx - eps;
       const outsideIsRightOfGroup = ox > gx + eps;
       const outsideTargetHandle = outsideIsLeftOfGroup ? 'target-right' : (outsideIsRightOfGroup ? 'target-left' : 'target-right');
       const outsideSourceHandle = outsideIsLeftOfGroup ? 'source-right' : (outsideIsRightOfGroup ? 'source-left' : 'source-right');
+      const groupTargetHandle = outsideIsLeftOfGroup ? 'target-left' : (outsideIsRightOfGroup ? 'target-right' : 'target-left');
+      const groupSourceHandle = outsideIsLeftOfGroup ? 'source-left' : (outsideIsRightOfGroup ? 'source-right' : 'source-right');
       aggEdges.push({
         id,
         source: groupToOutside ? groupId : outsideId,
         target: groupToOutside ? outsideId : groupId,
         ...(groupToOutside
-          ? { sourceHandle: port.sourceHandleId, targetHandle: outsideTargetHandle }
-          : { sourceHandle: outsideSourceHandle, targetHandle: port.targetHandleId }),
+          ? { sourceHandle: groupSourceHandle, targetHandle: outsideTargetHandle }
+          : { sourceHandle: outsideSourceHandle, targetHandle: groupTargetHandle }),
         type: 'hzn',
         interactionWidth: 18,
         markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
@@ -5316,11 +5586,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const sg = sId ? groupIdByChildId.get(sId) : undefined;
         const tg = tId ? groupIdByChildId.get(tId) : undefined;
         const sameLeftGroup = Boolean(sg && tg && sg === tg && sg.startsWith('levels:left:'));
+        const sameLeftDecisionGroup =
+          sameLeftGroup &&
+          isDecisionCorridorNode(sourceNode) &&
+          isDecisionCorridorNode(targetNode);
 
         const eid = String((e as any)?.id || '').trim();
         const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
         const d0: any = (e as any)?.data || {};
         const noHover = eid && noHoverRevealEdgeIds.has(eid);
+
+        if (sameLeftDecisionGroup) {
+          const sLane = corridorLaneRankForNode(sourceNode);
+          const tLane = corridorLaneRankForNode(targetNode);
+          if (sLane >= 0 && tLane >= 0 && sLane === tLane) {
+            // Same-lane corridor edges are secondary; keep them hover-reveal to reduce clutter.
+            const d = { ...stripAggFlags(d0), levelsHiddenByAggregation: true, levelsDecisionIntraLane: true };
+            return { ...e, data: d };
+          }
+          return {
+            ...e,
+            data: stripAggFlags(d0),
+            ...corridorHandlesForPair(sourceNode, targetNode, sx, sy, tx, ty),
+          };
+        }
 
         // If this is an intra-group edge (same group), hide by aggregation even if there's no aggKey.
         // (No agg edge exists; we just keep the canvas clean and reveal only on hover.)
@@ -5358,9 +5647,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return {
           ...e,
           data: d,
-          ...(tInStackGroup
-            ? { sourceHandle: 'source-right', targetHandle: 'target-left' }
-            : { sourceHandle: 'source-left', targetHandle: 'target-right' }),
+          ...horizontalHandlesByX(sx, tx, tInStackGroup ? 'toRight' : 'toLeft'),
         };
       }
       if (sGrouped && !tGrouped) {
@@ -5374,15 +5661,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return {
           ...e,
           data: d,
-          ...(sInStackGroup
-            ? { sourceHandle: 'source-left', targetHandle: 'target-right' }
-            : { sourceHandle: 'source-right', targetHandle: 'target-left' }),
+          ...horizontalHandlesByX(sx, tx, sInStackGroup ? 'toLeft' : 'toRight'),
         };
       }
 
-      // Group nodes: always right side
+      // Grouped children: choose side by real geometry (avoids right-edge wraparounds).
       if (sGrouped) {
-        sourceHandle = 'source-right';
+        if (tx > sx + nearColumnBand) sourceHandle = 'source-right';
+        else if (tx < sx - nearColumnBand) sourceHandle = 'source-left';
+        else sourceHandle = sInStackGroup ? 'source-left' : 'source-right';
       } else {
         if (tx > sx + eps) sourceHandle = 'source-right';
         else if (tx < sx - eps) sourceHandle = 'source-left';
@@ -5390,7 +5677,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
 
       if (tGrouped) {
-        targetHandle = 'target-right';
+        if (sx < tx - nearColumnBand) targetHandle = 'target-left';
+        else if (sx > tx + nearColumnBand) targetHandle = 'target-right';
+        else targetHandle = tInStackGroup ? 'target-left' : 'target-right';
       } else {
         if (sx < tx - eps) targetHandle = 'target-left';
         else if (sx > tx + eps) targetHandle = 'target-right';
@@ -5435,6 +5724,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const sg = sId ? groupIdByChildId.get(sId) : undefined;
         const tg = tId ? groupIdByChildId.get(tId) : undefined;
         const sameLeftGroup = Boolean(sg && tg && sg === tg && sg.startsWith('levels:left:'));
+        const sameLeftDecisionGroup =
+          sameLeftGroup &&
+          isDecisionCorridorNode(sourceNode) &&
+          isDecisionCorridorNode(targetNode);
+        if (sameLeftDecisionGroup) {
+          const d0: any = (e as any)?.data || {};
+          const sLane = corridorLaneRankForNode(sourceNode);
+          const tLane = corridorLaneRankForNode(targetNode);
+          if (sLane >= 0 && tLane >= 0 && sLane === tLane) {
+            const d = { ...stripAggFlags(d0), levelsHiddenByAggregation: true, levelsDecisionIntraLane: true };
+            return { ...e, data: d };
+          }
+          return {
+            ...e,
+            data: stripAggFlags(d0),
+            ...corridorHandlesForPair(sourceNode, targetNode, sx, sy, tx, ty),
+          };
+        }
         if (sameLeftGroup) {
           const eid = String((e as any)?.id || '').trim();
           const aggKey = eid ? perChildEdgeIdsToAggKey.get(eid) : undefined;
@@ -5468,9 +5775,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return {
           ...e,
           data: d,
-          ...(tInStackGroup
-            ? { sourceHandle: 'source-right', targetHandle: 'target-left' }
-            : { sourceHandle: 'source-left', targetHandle: 'target-right' }),
+          ...horizontalHandlesByX(sx, tx, tInStackGroup ? 'toRight' : 'toLeft'),
         };
       }
       if (sGrouped && !tGrouped) {
@@ -5484,9 +5789,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return {
           ...e,
           data: d,
-          ...(sInStackGroup
-            ? { sourceHandle: 'source-left', targetHandle: 'target-right' }
-            : { sourceHandle: 'source-right', targetHandle: 'target-left' }),
+          ...horizontalHandlesByX(sx, tx, sInStackGroup ? 'toLeft' : 'toRight'),
         };
       }
 
@@ -5496,15 +5799,21 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const hadAggHide = Boolean(d0.levelsHiddenByAggregation) || Boolean(d0.levelsAggKey);
       const eOut: any = hadAggHide ? { ...e, data: stripAggFlags(d0) } : e;
 
-      if (sGrouped) sourceHandle = 'source-right';
-      else {
+      if (sGrouped) {
+        if (tx > sx + nearColumnBand) sourceHandle = 'source-right';
+        else if (tx < sx - nearColumnBand) sourceHandle = 'source-left';
+        else sourceHandle = sInStackGroup ? 'source-left' : 'source-right';
+      } else {
         if (tx > sx + eps) sourceHandle = 'source-right';
         else if (tx < sx - eps) sourceHandle = 'source-left';
         else sourceHandle = (isStackProxy || isPeerEdge) ? 'source-right' : ((ty > sy) ? 'source-bottom' : 'source-top');
       }
 
-      if (tGrouped) targetHandle = 'target-right';
-      else {
+      if (tGrouped) {
+        if (sx < tx - nearColumnBand) targetHandle = 'target-left';
+        else if (sx > tx + nearColumnBand) targetHandle = 'target-right';
+        else targetHandle = tInStackGroup ? 'target-left' : 'target-right';
+      } else {
         if (sx < tx - eps) targetHandle = 'target-left';
         else if (sx > tx + eps) targetHandle = 'target-right';
         else targetHandle = (isStackProxy || isPeerEdge) ? 'target-left' : ((sy > ty) ? 'target-bottom' : 'target-top');
@@ -6418,6 +6727,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const handleCollapseCentral = useCallback(async (rawFragmentId: string) => {
     const fragmentId = (rawFragmentId || '').trim();
     if (!fragmentId) return;
+    if (controlCorridorMode && String(controlCorridorSeedId || '').trim() === fragmentId) {
+      setControlCorridorGraph(null);
+      setControlCorridorSeedId('');
+      setControlCorridorError(null);
+    }
 
     const record = expansionsRef.current.get(fragmentId);
     
@@ -6426,8 +6740,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // This can happen if the record was lost due to race conditions or errors.
     if (!record) {
       console.warn('[Cockpit] No expansion record found for', fragmentId, '- clearing expanded flag only');
+      const synNodePrefix = `${CORRIDOR_SYN_NODE_PREFIX}${fragmentId}:`;
+      const synEdgePrefix = `${CORRIDOR_SYN_EDGE_PREFIX}${fragmentId}:`;
+      setEdges((prev) =>
+        (prev || []).filter((e: any) => {
+          const eid = String((e as any)?.id || '').trim();
+          if (eid.startsWith(synEdgePrefix)) return false;
+          if (isLegacyCorridorEdgeId(eid)) return false;
+          return true;
+        }),
+      );
       setNodes((prev) =>
-        (prev || []).map((n) => {
+        (prev || [])
+          .filter((n: any) => {
+            const nid = String((n as any)?.id || '').trim();
+            if (nid.startsWith(synNodePrefix)) return false;
+            if (isLegacyCorridorNodeId(nid)) return false;
+            return true;
+          })
+          .map((n) => {
           if (n.id === fragmentId || (n.data as any)?.fragmentId === fragmentId) {
             return { ...n, data: { ...n.data, expanded: false, isLoadingRelated: false } as any };
           }
@@ -6435,6 +6766,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }),
       );
       expandedNodesRef.current.delete(fragmentId);
+      const fn = onArrangeRef.current;
+      if (typeof fn === 'function') fn();
       return;
     }
 
@@ -6656,6 +6989,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           expandedRoleGroups,
           onToggleRoleOverflow: toggleRoleOverflow,
           compactLeftPane: true,
+          leftPaneMode: levelsExpandMode === 'decision-chain' ? 'decision-chain' : 'default',
           rightDockMode: true,
           rightDockStateByNodeId,
           onToggleRightDock: toggleRightDock,
@@ -6725,6 +7059,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     invokeLoadRelated,
     invokeCollapse,
     invokeScopeScout,
+    controlCorridorMode,
+    controlCorridorSeedId,
+    levelsExpandMode,
   ]);
 
   // Keep ref updated for proxies (avoid circular deps)
@@ -6791,21 +7128,183 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     );
 
     try {
-      const dependencies = await api.getFragmentDependencies(
-        fragmentId,
-        isLevelsLayout
-          ? {
-              direction: 'both',
-              // In Levels mode we can request the backend to pre-filter by edge types (focus filter)
-              ...(levelsExpandEdgeTypes.length > 0 ? { edgeTypes: levelsExpandEdgeTypes } : {}),
-              includeFragments: true,
-              // Default limits for Hierarchical expansion (4 quadrants × 18)
-              maxNeighbors: 72,
-              maxPerType: 18,
-              limit: 500,
-            }
-          : { direction: 'both' }
-      );
+      const laneToEdgeMeta = (laneRaw: string): { edgeType: string; direction: 'incoming' | 'outgoing' } => {
+        const lane = String(laneRaw || '').trim().toLowerCase();
+        if (lane === 'authority') return { edgeType: 'CORRIDOR_AUTHORITY', direction: 'outgoing' };
+        if (lane === 'decision') return { edgeType: 'CORRIDOR_DECISION', direction: 'outgoing' };
+        if (lane === 'mechanism') return { edgeType: 'CORRIDOR_MECHANISM', direction: 'outgoing' };
+        if (lane === 'impact') return { edgeType: 'CORRIDOR_IMPACT', direction: 'outgoing' };
+        return { edgeType: 'CORRIDOR_MEDIATOR', direction: 'outgoing' };
+      };
+      const corridorLaneById = new Map<string, string>();
+
+      let dependencies: any;
+      if (isLevelsLayout && levelsExpandMode === 'decision-chain') {
+        const result = await runControlCorridorRef.current?.(fragmentId);
+        const corridorGraphLocal = result?.graph || null;
+        if (!corridorGraphLocal) {
+          setNodes((prev) =>
+            prev.map((n) =>
+              n.id === fragmentId || n.data.fragmentId === fragmentId
+                ? { ...n, data: { ...n.data, isLoadingRelated: false, loadRelatedAttempted: true } }
+                : n,
+            ),
+          );
+          setLoadingFragmentId(null);
+          return;
+        }
+
+        const corridorSeedId =
+          String((Array.isArray(corridorGraphLocal.seedFragmentIds) ? corridorGraphLocal.seedFragmentIds[0] : '') || '').trim() ||
+          fragmentId;
+        const corridorNodesRaw = Array.isArray(corridorGraphLocal.nodes) ? corridorGraphLocal.nodes : [];
+        const corridorEdgesRaw = Array.isArray(corridorGraphLocal.edges) ? corridorGraphLocal.edges : [];
+        const corridorPathsRaw = Array.isArray((corridorGraphLocal as any)?.bundles?.paths)
+          ? ((corridorGraphLocal as any).bundles.paths as ControlCorridorPathBundle[])
+          : [];
+
+        const edgeKeyOf = (fromRaw: any, toRaw: any, typeRaw: any): string => {
+          const from = String(fromRaw || '').trim();
+          const to = String(toRaw || '').trim();
+          const type = String(typeRaw || '').trim().toUpperCase();
+          if (!from || !to || !type) return '';
+          return `${from}|${to}|${type}`;
+        };
+
+        const seededPaths = corridorPathsRaw.filter((p) => {
+          const controller = String(p?.controllerId || '').trim();
+          const target = String(p?.targetId || '').trim();
+          const mediator = String(p?.mediatorId || '').trim();
+          const nodeIds = Array.isArray(p?.nodeIds) ? p.nodeIds : [];
+          return (
+            controller === corridorSeedId ||
+            target === corridorSeedId ||
+            mediator === corridorSeedId ||
+            nodeIds.some((x) => String(x || '').trim() === corridorSeedId)
+          );
+        });
+        const corridorPaths = seededPaths.length > 0 ? seededPaths : corridorPathsRaw;
+
+        const pathNodeIds = new Set<string>();
+        const pathEdgeIds = new Set<string>();
+        const pathEdgeKeys = new Set<string>();
+        for (const p of corridorPaths) {
+          const controller = String(p?.controllerId || '').trim();
+          const target = String(p?.targetId || '').trim();
+          const mediator = String(p?.mediatorId || '').trim();
+          if (controller) pathNodeIds.add(controller);
+          if (target) pathNodeIds.add(target);
+          if (mediator) pathNodeIds.add(mediator);
+          const nodeIds = Array.isArray(p?.nodeIds) ? p.nodeIds : [];
+          for (const nidRaw of nodeIds) {
+            const nid = String(nidRaw || '').trim();
+            if (nid) pathNodeIds.add(nid);
+          }
+          const edgeIds = Array.isArray(p?.edgeIds) ? p.edgeIds : [];
+          for (const eidRaw of edgeIds) {
+            const eid = String(eidRaw || '').trim();
+            if (eid) pathEdgeIds.add(eid);
+          }
+          const edgeKeys = Array.isArray((p as any)?.edgeKeys) ? (p as any).edgeKeys : [];
+          for (const ekRaw of edgeKeys) {
+            const ek = String(ekRaw || '').trim();
+            if (ek) pathEdgeKeys.add(ek);
+          }
+        }
+
+        const corridorEdgesScoped = corridorEdgesRaw.filter((e: any) => {
+          if (pathEdgeIds.size === 0 && pathEdgeKeys.size === 0) return true;
+          const eid = String(e?.id || '').trim();
+          const key = edgeKeyOf(e?.from, e?.to, e?.type);
+          return (eid && pathEdgeIds.has(eid)) || (key && pathEdgeKeys.has(key));
+        });
+        const corridorEdgesByPathNodes = corridorEdgesRaw.filter((e: any) => {
+          const from = String(e?.from || '').trim();
+          const to = String(e?.to || '').trim();
+          return from && to && pathNodeIds.has(from) && pathNodeIds.has(to);
+        });
+        const corridorEdges =
+          corridorEdgesScoped.length > 0
+            ? corridorEdgesScoped
+            : (corridorEdgesByPathNodes.length > 0 ? corridorEdgesByPathNodes : corridorEdgesRaw);
+
+        const corridorEdgeNodeIds = new Set<string>();
+        for (const e of corridorEdges) {
+          const from = String((e as any)?.from || '').trim();
+          const to = String((e as any)?.to || '').trim();
+          if (from) corridorEdgeNodeIds.add(from);
+          if (to) corridorEdgeNodeIds.add(to);
+        }
+        const corridorNodesByPaths = corridorNodesRaw.filter((n: any) => {
+          const id = String(n?.id || '').trim();
+          return id && pathNodeIds.has(id);
+        });
+        const corridorNodesByEdges = corridorNodesRaw.filter((n: any) => {
+          const id = String(n?.id || '').trim();
+          return id && corridorEdgeNodeIds.has(id);
+        });
+        const corridorNodes =
+          corridorNodesByPaths.length > 0
+            ? corridorNodesByPaths
+            : (corridorNodesByEdges.length > 0 ? corridorNodesByEdges : corridorNodesRaw);
+
+        const depEdgesFromCorridor = corridorEdges
+          .map((e: any) => ({
+            id: String(e?.id || '').trim() || edgeKeyOf(e?.from, e?.to, e?.type),
+            sourceFragmentId: String(e?.from || '').trim(),
+            targetFragmentId: String(e?.to || '').trim(),
+            type: String(e?.type || '').trim(),
+            edgeType: String(e?.type || '').trim(),
+            properties: {
+              criticality: Number.isFinite(Number(e?.criticality)) ? Number(e.criticality) : 0,
+            },
+          }))
+          .filter((e: any) => e.sourceFragmentId && e.targetFragmentId && e.type);
+
+        const fragmentsFromCorridor = corridorNodes
+          .filter((n: any) => {
+            const id = String(n?.id || '').trim();
+            return id && id !== corridorSeedId;
+          })
+          .map((n: any) => {
+            const id = String(n?.id || '').trim();
+            const label = String(n?.label || '').trim();
+            const lane = String(n?.lane || '').trim().toLowerCase() || 'intermediary';
+            corridorLaneById.set(id, lane);
+            const labels = label ? { en: label } : undefined;
+            return {
+              id,
+              canonicalPath: String(n?.canonicalPath || '').trim() || undefined,
+              type: String(n?.type || '').trim() || 'UNKNOWN',
+              labels,
+              state: {},
+              status: 'active',
+            };
+          });
+
+        dependencies = {
+          edges: depEdgesFromCorridor,
+          fragments: fragmentsFromCorridor,
+          _corridor: true,
+          _corridorSeedId: corridorSeedId,
+        };
+      } else {
+        dependencies = await api.getFragmentDependencies(
+          fragmentId,
+          isLevelsLayout
+            ? {
+                direction: 'both',
+                // In Levels mode we can request the backend to pre-filter by edge types (focus filter)
+                ...(levelsExpandEdgeTypes.length > 0 ? { edgeTypes: levelsExpandEdgeTypes } : {}),
+                includeFragments: true,
+                // Default limits for Hierarchical expansion (4 quadrants × 18)
+                maxNeighbors: 72,
+                maxPerType: 18,
+                limit: 500,
+              }
+            : { direction: 'both' }
+        );
+      }
       dbg('[Cockpit] Loaded dependencies for fragment:', fragmentId, dependencies);
 
       const depEdges: any[] = Array.isArray(dependencies?.edges) ? dependencies.edges : [];
@@ -7257,6 +7756,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       }
 
+      if (isLevelsLayout && levelsExpandMode === 'decision-chain' && corridorLaneById.size > 0) {
+        for (const rid of relatedFragmentIds) {
+          const fid = norm(rid);
+          if (!fid) continue;
+          const lane = String(corridorLaneById.get(fid) || '').trim().toLowerCase();
+          const fallback = laneToEdgeMeta(lane);
+          // Corridor nodes must stay in the corridor group (left pane), not promoted by inherited incoming edges.
+          fragmentEdgeType.set(fid, fallback.edgeType);
+          fragmentDirection.set(fid, fallback.direction);
+        }
+      }
+
       // Log final edge info for all neighbors
       if (layoutMode === 'linear' || layoutMode === 'levels') {
         // debug logs removed
@@ -7297,6 +7808,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const fid = String(fragment.id).trim();
         const edgeTypeFromParent = fragmentEdgeType.get(fid) || '';
         const directionFromParent = fragmentDirection.get(fid) || 'outgoing';
+        const corridorLaneForNode =
+          (isLevelsLayout && levelsExpandMode === 'decision-chain')
+            ? String(corridorLaneById.get(fid) || '').trim().toLowerCase()
+            : '';
         // В freeform режиме используется группировка (parentFragmentId, edgeTypeFromParent, directionFromParent)
         // В linear режиме это не используется (TODO)
         return {
@@ -7311,6 +7826,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             rootFragmentId: sourceRootId,
             edgeTypeFromParent, // Тип связи с родителем для сортировки (freeform)
             directionFromParent, // 'incoming' (сверху) или 'outgoing' (снизу) (freeform)
+            ...(corridorLaneForNode ? { corridorLane: corridorLaneForNode } : {}),
             depth: childDepth,
             canonicalPath: fragment.canonicalPath,
             indexPaths: Array.isArray(fragment.indexPaths) ? fragment.indexPaths : undefined,
@@ -7606,6 +8122,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             latencyHours: e?.properties?.latencyHours,
             direction: 'forward',
             baseStyle,
+            corridorEdge: isLevelsLayout && levelsExpandMode === 'decision-chain',
           },
         });
       }
@@ -7755,6 +8272,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
         const edgeTypeFromParent = fragmentEdgeType.get(nodeFragmentId) || '';
         const directionFromParent = fragmentDirection.get(nodeFragmentId) || 'outgoing';
+        const corridorLaneForNode =
+          (isLevelsLayout && levelsExpandMode === 'decision-chain')
+            ? String(corridorLaneById.get(nodeFragmentId) || '').trim().toLowerCase()
+            : '';
 
         dbg('[Cockpit] Updating existing node for grouping (freeform):', nodeFragmentId, { edgeTypeFromParent, directionFromParent });
 
@@ -7767,6 +8288,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             ...(isFreeformLayout || isLevelsLayout ? { parentFragmentId: fragmentId } : {}),
             edgeTypeFromParent,
             directionFromParent,
+            ...(corridorLaneForNode ? { corridorLane: corridorLaneForNode } : {}),
             // Make absorbed nodes non-central so they move into section groups in Linear.
             depth: childDepth,
             // Keep consistent root marker (Linear treats expanded node as the local root).
@@ -7886,6 +8408,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           expandedRoleGroups,
           onToggleRoleOverflow: toggleRoleOverflow,
           compactLeftPane: true,
+          leftPaneMode: levelsExpandMode === 'decision-chain' ? 'decision-chain' : 'default',
           rightDockMode: true,
           rightDockStateByNodeId,
           onToggleRightDock: toggleRightDock,
@@ -8157,8 +8680,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     normalizeEdgeType,
     getEdgeHandles,
     handleGroupPageChange,
+    invokeArrange,
     recalculateLinearHandles,
     recalculateFreeformHandles,
+    levelsExpandMode,
     expandedRoleGroups,
     toggleRoleOverflow,
   ]);
@@ -9716,7 +10241,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Default: dim all edges, hide labels
     return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay));
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds]);
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -10509,6 +11034,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     toggleRiskShield,
     domainTopDependencyFocusActive,
     domainTopDependencyNodeIds,
+    controlCorridorMode,
   ]);
 
   // Lightweight info for perf mode (no re-styling of edges)
@@ -10656,6 +11182,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           expandedRoleGroups,
           onToggleRoleOverflow: toggleRoleOverflow,
           compactLeftPane: true,
+          leftPaneMode: levelsExpandMode === 'decision-chain' ? 'decision-chain' : 'default',
           rightDockMode: true,
           rightDockStateByNodeId,
           onToggleRightDock: toggleRightDock,
@@ -10777,7 +11304,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     } finally {
       setArranging(false);
     }
-  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout, collapsedSubcategories, toggleSubcategoryCollapse, rightDockStateByNodeId, toggleRightDock, expandedRoleGroups, toggleRoleOverflow]);
+  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout, levelsExpandMode, collapsedSubcategories, toggleSubcategoryCollapse, rightDockStateByNodeId, toggleRightDock, expandedRoleGroups, toggleRoleOverflow]);
 
   // Keep ref updated for stack toggle re-layout (avoid TDZ / circular deps).
   onArrangeRef.current = () => { void handleArrange(); };
@@ -10835,6 +11362,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             expandedRoleGroups,
             onToggleRoleOverflow: toggleRoleOverflow,
             compactLeftPane: true,
+            leftPaneMode: levelsExpandMode === 'decision-chain' ? 'decision-chain' : 'default',
             rightDockMode: true,
             rightDockStateByNodeId,
             onToggleRightDock: toggleRightDock,
@@ -11702,6 +12230,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (targetEl?.closest?.('.react-flow__edge') || targetEl?.classList?.contains?.('react-flow__edge-path')) {
       return;
     }
+    if (isLegacyCorridorNodeId(String((node as any)?.id || '').trim())) {
+      return;
+    }
     if (import.meta.env.DEV) console.log('[Cockpit] Node clicked:', node.id, node.data);
     ignorePaneClicksUntilRef.current = Date.now() + 250;
     event.stopPropagation();
@@ -11918,6 +12449,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   // Handle edge click
   const handleEdgeClick = useCallback((event: React.MouseEvent, edge: Edge) => {
     if (import.meta.env.DEV) console.log('[Cockpit] Edge clicked:', edge.id, edge.data);
+    if (isLegacyCorridorEdgeId(String((edge as any)?.id || '').trim())) {
+      return;
+    }
     ignorePaneClicksUntilRef.current = Date.now() + 250;
     event.stopPropagation();
     event.preventDefault();
@@ -12375,6 +12909,172 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
   }, [lensId, genCorrelationId]);
 
+  const runControlCorridor = React.useCallback(async (seedIdOverride?: string): Promise<{ graph: ControlCorridorGraph; seedId: string } | null> => {
+    if (!lensId || controlCorridorLoading) return null;
+    const seedId =
+      String(seedIdOverride || '').trim() ||
+      String(controlCorridorSeedId || '').trim() ||
+      String(controlCorridorSeedNodeId || '').trim();
+    if (!seedId) {
+      setControlCorridorError('Expand a node to build a focused corridor.');
+      setControlCorridorGraph(null);
+      setControlCorridorSeedId('');
+      return null;
+    }
+    setControlCorridorLoading(true);
+    setControlCorridorError(null);
+    try {
+      const response = await api.queryHorizonControlCorridor(lensId, {
+        seedFragmentIds: [seedId],
+        maxNodes: 96,
+        maxEdges: 140,
+      });
+      const nodesSafe = Array.isArray(response?.nodes) ? response.nodes : [];
+      const edgesSafe = Array.isArray(response?.edges) ? response.edges : [];
+      const normalizedNodes = nodesSafe.map((n: any) => ({
+        id: String(n?.id || '').trim(),
+        label: String(n?.label || '').trim(),
+        type: typeof n?.type === 'string' ? n.type : undefined,
+        canonicalPath: typeof n?.canonicalPath === 'string' ? n.canonicalPath : undefined,
+        lane: String(n?.lane || '').trim() || 'intermediary',
+        depth: Number.isFinite(Number(n?.depth)) ? Number(n.depth) : 0,
+        seed: Boolean(n?.seed),
+      })).filter((n) => n.id);
+      const normalizedEdges = edgesSafe.map((e: any) => ({
+        id: String(e?.id || '').trim(),
+        from: String(e?.from || '').trim(),
+        to: String(e?.to || '').trim(),
+        type: String(e?.type || '').trim(),
+        stage: String(e?.stage || '').trim() || 'mechanism',
+        role: String(e?.role || '').trim() || undefined,
+        criticality: Number.isFinite(Number(e?.criticality)) ? Number(e.criticality) : undefined,
+      })).filter((e) => e.from && e.to);
+      const bundlesRaw = response?.bundles && typeof response.bundles === 'object' ? response.bundles : undefined;
+      const normalizeScoredNodes = (arr: any): ControlCorridorScoredNode[] => (
+        Array.isArray(arr)
+          ? arr
+              .map((n: any) => ({
+                id: String(n?.id || '').trim(),
+                label: String(n?.label || '').trim(),
+                type: typeof n?.type === 'string' ? n.type : undefined,
+                canonicalPath: typeof n?.canonicalPath === 'string' ? n.canonicalPath : undefined,
+                score: Number.isFinite(Number(n?.score)) ? Number(n.score) : undefined,
+                coverage: Number.isFinite(Number(n?.coverage)) ? Number(n.coverage) : undefined,
+              }))
+              .filter((n) => n.id)
+          : []
+      );
+      const normalizedBundles = bundlesRaw
+        ? {
+            controllers: normalizeScoredNodes((bundlesRaw as any).controllers),
+            decisionPoints: normalizeScoredNodes((bundlesRaw as any).decisionPoints),
+            mechanisms: normalizeScoredNodes((bundlesRaw as any).mechanisms),
+            mediators: normalizeScoredNodes((bundlesRaw as any).mediators),
+            impactedTargets: normalizeScoredNodes((bundlesRaw as any).impactedTargets),
+            paths: Array.isArray((bundlesRaw as any).paths)
+              ? (bundlesRaw as any).paths
+                  .map((p: any) => ({
+                    id: String(p?.id || '').trim(),
+                    controllerId: String(p?.controllerId || '').trim(),
+                    targetId: String(p?.targetId || '').trim(),
+                    mediatorId: String(p?.mediatorId || '').trim() || undefined,
+                    nodeIds: Array.isArray(p?.nodeIds) ? p.nodeIds.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+                    edgeIds: Array.isArray(p?.edgeIds) ? p.edgeIds.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+                    edgeKeys: Array.isArray(p?.edgeKeys) ? p.edgeKeys.map((x: any) => String(x || '').trim()).filter(Boolean) : [],
+                    coverageScore: Number.isFinite(Number(p?.coverageScore)) ? Number(p.coverageScore) : undefined,
+                    description: typeof p?.description === 'string' ? p.description : undefined,
+                  }))
+                  .filter((p: ControlCorridorPathBundle) => p.id && p.controllerId && p.targetId)
+              : [],
+            bottlenecks: (bundlesRaw as any).bottlenecks && typeof (bundlesRaw as any).bottlenecks === 'object'
+              ? {
+                  nodes: Array.isArray((bundlesRaw as any).bottlenecks?.nodes)
+                    ? (bundlesRaw as any).bottlenecks.nodes
+                        .map((n: any) => ({
+                          id: String(n?.id || '').trim(),
+                          usageCount: Number.isFinite(Number(n?.usageCount)) ? Number(n.usageCount) : undefined,
+                          score: Number.isFinite(Number(n?.score)) ? Number(n.score) : undefined,
+                        }))
+                        .filter((n: any) => n.id)
+                    : [],
+                  edges: Array.isArray((bundlesRaw as any).bottlenecks?.edges)
+                    ? (bundlesRaw as any).bottlenecks.edges
+                        .map((e: any) => ({
+                          id: String(e?.id || '').trim(),
+                          from: String(e?.from || '').trim(),
+                          to: String(e?.to || '').trim(),
+                          usageCount: Number.isFinite(Number(e?.usageCount)) ? Number(e.usageCount) : undefined,
+                        }))
+                        .filter((e: any) => e.id && e.from && e.to)
+                    : [],
+                }
+              : undefined,
+          }
+        : undefined;
+      const responseSeedId = String((Array.isArray(response?.seedFragmentIds) ? response.seedFragmentIds[0] : '') || '').trim() || seedId;
+      if (import.meta.env.DEV) {
+        const laneCounts: Record<string, number> = {};
+        for (const n of normalizedNodes) {
+          const lane = String(n.lane || '').trim().toLowerCase() || 'intermediary';
+          laneCounts[lane] = (laneCounts[lane] || 0) + 1;
+        }
+        const stageCounts: Record<string, number> = {};
+        for (const e of normalizedEdges) {
+          const stage = String(e.stage || '').trim().toLowerCase() || 'mechanism';
+          stageCounts[stage] = (stageCounts[stage] || 0) + 1;
+        }
+        const uniqueNodeIds = new Set(normalizedNodes.map((n) => n.id));
+        let edgesWithMissingNode = 0;
+        for (const e of normalizedEdges) {
+          if (!uniqueNodeIds.has(e.from) || !uniqueNodeIds.has(e.to)) edgesWithMissingNode++;
+        }
+        console.groupCollapsed('[Corridor][API] aggregated');
+        console.log({
+          lensId,
+          requestSeedId: seedId,
+          responseSeedId,
+          summary: response?.summary || null,
+          warnings: Array.isArray(response?.warnings) ? response.warnings : [],
+          nodeCount: normalizedNodes.length,
+          edgeCount: normalizedEdges.length,
+          laneCounts,
+          stageCounts,
+          edgesWithMissingNode,
+          bundleCounts: {
+            controllers: normalizedBundles?.controllers?.length || 0,
+            decisionPoints: normalizedBundles?.decisionPoints?.length || 0,
+            mechanisms: normalizedBundles?.mechanisms?.length || 0,
+            mediators: normalizedBundles?.mediators?.length || 0,
+            impactedTargets: normalizedBundles?.impactedTargets?.length || 0,
+            paths: normalizedBundles?.paths?.length || 0,
+          },
+        });
+        console.groupEnd();
+      }
+      const graphPayload: ControlCorridorGraph = {
+        lensId: String(response?.lensId || lensId).trim(),
+        seedFragmentIds: Array.isArray(response?.seedFragmentIds) ? response.seedFragmentIds : [],
+        nodes: normalizedNodes,
+        edges: normalizedEdges,
+        bundles: normalizedBundles,
+        summary: response?.summary ? { ...response.summary } : undefined,
+        warnings: Array.isArray(response?.warnings) ? response.warnings.map((w: any) => String(w || '').trim()).filter(Boolean) : [],
+      };
+      setControlCorridorGraph(graphPayload);
+      setControlCorridorSeedId(responseSeedId);
+      return { graph: graphPayload, seedId: responseSeedId };
+    } catch (e: any) {
+      const msg = String(e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Failed to build control corridor').trim();
+      setControlCorridorError(msg || 'Failed to build control corridor');
+      setControlCorridorGraph(null);
+      setControlCorridorSeedId('');
+      return null;
+    } finally {
+      setControlCorridorLoading(false);
+    }
+  }, [lensId, controlCorridorLoading, controlCorridorSeedId, controlCorridorSeedNodeId]);
+  runControlCorridorRef.current = runControlCorridor;
+
   const truncateChip = React.useCallback((s: string, max: number) => {
     const t = String(s || '').trim();
     if (!t) return '';
@@ -12784,6 +13484,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   { key: 'market', label: 'Competitive landscape', hint: 'Competitors, partners, and market positioning' },
                   { key: 'influence', label: 'Key stakeholders', hint: 'Decision-makers and influencing entities' },
                   { key: 'balanced', label: 'Strategic overview', hint: 'Structure, footprint, and competitive position' },
+                  { key: 'decision-chain', label: 'Decision Chain', hint: 'On expand: build focused authority → decision → mechanism → impact group' },
                 ] as Array<{ key: LevelsExpandMode; label: string; hint: string }>
               ).map((opt) => {
                 const active = levelsExpandMode === opt.key;
@@ -13005,6 +13706,102 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       d.onLoadRelated(fid);
     }
   }, []);
+
+  const renderNodes = displayNodes;
+  const renderEdges = displayEdges;
+
+  React.useEffect(() => {
+    const corridorActive =
+      isLevelsLayout &&
+      levelsExpandMode === 'decision-chain' &&
+      controlCorridorMode;
+    if (!corridorActive) {
+      controlCorridorRevealKeyRef.current = '';
+      return;
+    }
+    const seedId =
+      String(controlCorridorSeedId || '').trim() ||
+      String((Array.isArray(controlCorridorGraph?.seedFragmentIds) ? controlCorridorGraph?.seedFragmentIds[0] : '') || '').trim();
+    if (!seedId) return;
+    const synNodePrefix = `${CORRIDOR_SYN_NODE_PREFIX}${seedId}:`;
+    const synNodeCount = (renderNodes as any[]).filter((n) => String((n as any)?.id || '').trim().startsWith(synNodePrefix)).length;
+    if (synNodeCount === 0) return;
+    const key = `${seedId}|${synNodeCount}`;
+    if (controlCorridorRevealKeyRef.current === key) return;
+    controlCorridorRevealKeyRef.current = key;
+    window.setTimeout(() => {
+      try {
+        const inst: any = reactFlowInstanceRef.current;
+        if (!inst || typeof inst.fitView !== 'function') return;
+        const toFit = (renderNodes as any[]).filter((n) => {
+          const id = String((n as any)?.id || '').trim();
+          if (!id) return false;
+          if (id.startsWith(synNodePrefix)) return true;
+          if (id === seedId) return true;
+          const fid = String(((n as any)?.data as any)?.fragmentId || '').trim();
+          return fid === seedId || fid.startsWith(synNodePrefix);
+        });
+        if (toFit.length > 0) {
+          inst.fitView({ nodes: toFit as any, padding: 0.18, duration: 380 });
+        }
+      } catch {
+        // best effort only
+      }
+    }, 90);
+  }, [
+    isLevelsLayout,
+    levelsExpandMode,
+    controlCorridorMode,
+    controlCorridorSeedId,
+    controlCorridorGraph?.seedFragmentIds,
+    renderNodes,
+  ]);
+
+  React.useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const corridorActive =
+      isLevelsLayout &&
+      levelsExpandMode === 'decision-chain' &&
+      controlCorridorMode;
+    if (!corridorActive) return;
+    const seedId =
+      String(controlCorridorSeedId || '').trim() ||
+      String((Array.isArray(controlCorridorGraph?.seedFragmentIds) ? controlCorridorGraph?.seedFragmentIds[0] : '') || '').trim();
+    const synNodePrefix = seedId ? `${CORRIDOR_SYN_NODE_PREFIX}${seedId}:` : CORRIDOR_SYN_NODE_PREFIX;
+    const synEdgePrefix = seedId ? `${CORRIDOR_SYN_EDGE_PREFIX}${seedId}:` : CORRIDOR_SYN_EDGE_PREFIX;
+    const syntheticNodeCount = (renderNodes as any[]).filter((n) => String((n as any)?.id || '').trim().startsWith(synNodePrefix)).length;
+    const syntheticEdgeCount = (renderEdges as any[]).filter((e) => String((e as any)?.id || '').trim().startsWith(synEdgePrefix)).length;
+    const key = [
+      String(lensId || '').trim(),
+      seedId,
+      syntheticNodeCount,
+      syntheticEdgeCount,
+      renderNodes.length,
+      renderEdges.length,
+    ].join('|');
+    if (controlCorridorRenderLogKeyRef.current === key) return;
+    controlCorridorRenderLogKeyRef.current = key;
+    console.groupCollapsed('[Corridor][Render] aggregated');
+    console.log({
+      lensId,
+      corridorActive,
+      seedId,
+      syntheticNodeCount,
+      syntheticEdgeCount,
+      finalRenderNodeCount: renderNodes.length,
+      finalRenderEdgeCount: renderEdges.length,
+    });
+    console.groupEnd();
+  }, [
+    lensId,
+    isLevelsLayout,
+    levelsExpandMode,
+    controlCorridorMode,
+    controlCorridorSeedId,
+    controlCorridorGraph?.seedFragmentIds,
+    renderNodes.length,
+    renderEdges.length,
+  ]);
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -14002,8 +14799,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         )}
 
         <ReactFlow
-            nodes={displayNodes}
-            edges={displayEdges}
+            nodes={renderNodes}
+            edges={renderEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onNodeClick={handleNodeClick}

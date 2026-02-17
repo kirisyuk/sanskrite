@@ -2043,6 +2043,144 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   /**
+   * Horizon - Build transitive control corridor (authority -> decision -> mechanism -> impact)
+   * on the fly from graph data around seeds/lens scope.
+   * POST /api/horizon/lenses/{lensId}/control-corridor
+   */
+  async queryHorizonControlCorridor(
+    lensId: string,
+    input?: {
+      seedCanonicalPaths?: string[];
+      seedFragmentIds?: string[];
+      maxAuthorityHops?: number;
+      maxImpactHops?: number;
+      perNodeEdgeLimit?: number;
+      maxNodes?: number;
+      maxEdges?: number;
+      maxSeeds?: number;
+    }
+  ): Promise<{
+    lensId: string;
+    seedFragmentIds: string[];
+    seedCanonicalPaths?: string[];
+    nodes: Array<{
+      id: string;
+      label: string;
+      type?: string;
+      canonicalPath?: string;
+      lane: 'authority' | 'decision' | 'mechanism' | 'impact' | 'intermediary' | string;
+      depth: number;
+      seed?: boolean;
+    }>;
+    edges: Array<{
+      id: string;
+      from: string;
+      to: string;
+      type: string;
+      stage: 'authority' | 'decision' | 'mechanism' | 'impact' | string;
+      role?: 'authority' | 'execution' | 'propagation' | string;
+      criticality?: number;
+    }>;
+    bundles?: {
+      controllers?: Array<{
+        id: string;
+        label: string;
+        type?: string;
+        canonicalPath?: string;
+        score?: number;
+        coverage?: number;
+      }>;
+      decisionPoints?: Array<{
+        id: string;
+        label: string;
+        type?: string;
+        canonicalPath?: string;
+        score?: number;
+        coverage?: number;
+      }>;
+      mechanisms?: Array<{
+        id: string;
+        label: string;
+        type?: string;
+        canonicalPath?: string;
+        score?: number;
+        coverage?: number;
+      }>;
+      mediators?: Array<{
+        id: string;
+        label: string;
+        type?: string;
+        canonicalPath?: string;
+        score?: number;
+        coverage?: number;
+      }>;
+      impactedTargets?: Array<{
+        id: string;
+        label: string;
+        type?: string;
+        canonicalPath?: string;
+        score?: number;
+        coverage?: number;
+      }>;
+      paths?: Array<{
+        id: string;
+        controllerId: string;
+        targetId: string;
+        mediatorId?: string;
+        nodeIds: string[];
+        edgeIds: string[];
+        edgeKeys?: string[];
+        coverageScore?: number;
+        description?: string;
+      }>;
+      bottlenecks?: {
+        nodes?: Array<{
+          id: string;
+          label?: string;
+          type?: string;
+          canonicalPath?: string;
+          usageCount?: number;
+          score?: number;
+        }>;
+        edges?: Array<{
+          id: string;
+          from: string;
+          to: string;
+          type?: string;
+          role?: string;
+          usageCount?: number;
+        }>;
+      };
+    };
+    summary: {
+      seedCount: number;
+      seedTruncated?: boolean;
+      authorityCount: number;
+      decisionCount: number;
+      mechanismCount: number;
+      impactCount: number;
+      impactRootCount: number;
+      controllerCount?: number;
+      mediatorsCount?: number;
+      pathBundleCount?: number;
+      totalNodes: number;
+      totalEdges: number;
+      maxAuthorityHops: number;
+      maxImpactHops: number;
+      truncated: boolean;
+    };
+    warnings?: string[];
+  }> {
+    try {
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/control-corridor`, input || {});
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] queryHorizonControlCorridor error:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Horizon - Preview strategic domain overlay (no job creation).
    * POST /api/horizon/lenses/{lensId}/domain-overlay-preview
    */

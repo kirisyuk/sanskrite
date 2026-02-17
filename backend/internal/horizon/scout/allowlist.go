@@ -48,6 +48,20 @@ func EdgeAllowlistByDomainMode(mode string) []models.DependencyType {
 			models.DependencyTypeUsesMechanism,
 			models.DependencyTypeAppliesTo,
 		}
+	case taxonomy.DomainModePolicyImpact:
+		return []models.DependencyType{
+			models.DependencyTypeRegulates,
+			models.DependencyTypeControlsAccess,
+			models.DependencyTypeImposesCondition,
+			models.DependencyTypeUsesMechanism,
+			models.DependencyTypeAppliesTo,
+			models.DependencyTypeInfluences,
+			models.DependencyTypeDependsOn,
+			models.DependencyTypeParticipatesIn,
+			models.DependencyTypeLocatedIn,
+			models.DependencyTypeOperatesIn,
+			models.DependencyTypeAdministers,
+		}
 	case taxonomy.DomainModeGeneral:
 		return nil // full set: no filter
 	default:

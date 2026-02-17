@@ -5,11 +5,12 @@ import "strings"
 // DomainMode determines which Scout phases, Research strategies, and Critic validators run.
 // Source of truth: intent-resolved domains (contract types) and steering profile mapping.
 const (
-	DomainModeSupplyChain = "supply_chain"
-	DomainModeGovernance  = "governance"
-	DomainModeMarket      = "market"
-	DomainModeStrategic   = "strategic"
-	DomainModeGeneral     = "general"
+	DomainModeSupplyChain  = "supply_chain"
+	DomainModeGovernance   = "governance"
+	DomainModeMarket       = "market"
+	DomainModeStrategic    = "strategic"
+	DomainModePolicyImpact = "policy_impact"
+	DomainModeGeneral      = "general"
 )
 
 // DomainMode is a string type for domain execution mode.
@@ -29,7 +30,7 @@ func NormalizeDomainModes(in []string) []string {
 			continue
 		}
 		switch s {
-		case DomainModeSupplyChain, DomainModeGovernance, DomainModeMarket, DomainModeStrategic, DomainModeGeneral:
+		case DomainModeSupplyChain, DomainModeGovernance, DomainModeMarket, DomainModeStrategic, DomainModePolicyImpact, DomainModeGeneral:
 			if _, ok := seen[s]; !ok {
 				seen[s] = struct{}{}
 				out = append(out, s)
@@ -48,13 +49,15 @@ func NormalizeDomainModes(in []string) []string {
 }
 
 var domainModeSynonyms = map[string]string{
-	"supply_chain": DomainModeSupplyChain,
-	"supply-chain": DomainModeSupplyChain,
-	"governance":   DomainModeGovernance,
-	"market":       DomainModeMarket,
-	"strategic":    DomainModeStrategic,
-	"general":      DomainModeGeneral,
-	"equity":       DomainModeGovernance, // specialty equity -> governance mode
+	"supply_chain":  DomainModeSupplyChain,
+	"supply-chain":  DomainModeSupplyChain,
+	"governance":    DomainModeGovernance,
+	"market":        DomainModeMarket,
+	"strategic":     DomainModeStrategic,
+	"policy_impact": DomainModePolicyImpact,
+	"policy-impact": DomainModePolicyImpact,
+	"general":       DomainModeGeneral,
+	"equity":        DomainModeGovernance, // specialty equity -> governance mode
 }
 
 // EntityTypesForDomainMode returns the entity types string for Research/Critic prompts.
@@ -69,6 +72,8 @@ func EntityTypesForDomainMode(mode string) string {
 		return "ORGANIZATION, FACILITY, COMMUNITY, PROGRAM, MARKET"
 	case DomainModeStrategic:
 		return "ORGANIZATION (including /gov/), PERSON, COMMUNITY, DECISION_POINT, MECHANISM"
+	case DomainModePolicyImpact:
+		return "ORGANIZATION (including /gov/), PROGRAM, MARKET, COMMUNITY, GEO_REGION, DECISION_POINT, MECHANISM"
 	default:
 		return ""
 	}
@@ -84,6 +89,8 @@ func EntityActorTypesForDomainMode(mode string) string {
 		return "ORGANIZATION, PERSON, COMMUNITY (dynasty/tribe)"
 	case DomainModeMarket:
 		return "ORGANIZATION, FACILITY, COMMUNITY, PROGRAM"
+	case DomainModePolicyImpact:
+		return "ORGANIZATION (including /gov/), PROGRAM, COMMUNITY"
 	default:
 		return ""
 	}

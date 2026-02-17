@@ -74,6 +74,8 @@ func (p *CriticPipelineRunner) validatorsForModes(modes []string) []CriticValida
 			out = append(out, &MarketValidator{agent: p.agent})
 		case taxonomy.DomainModeStrategic:
 			out = append(out, &StrategicValidator{agent: p.agent})
+		case taxonomy.DomainModePolicyImpact:
+			out = append(out, &PolicyImpactValidator{agent: p.agent})
 		}
 	}
 	return out

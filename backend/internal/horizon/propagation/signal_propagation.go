@@ -110,6 +110,15 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 			axis:       signal.Axis,
 		})
 	}
+	var adapter DomainModelAdapter
+	if len(seedFragmentIDs) > 0 {
+		if seedFrag, err := e.fragmentsRepo.Get(ctx, seedFragmentIDs[0]); err == nil && seedFrag != nil {
+			adapter = e.resolveDomainAdapter(ctx, seedFrag)
+		}
+	}
+	if adapter == nil {
+		adapter = e.resolveDomainAdapter(ctx, nil)
+	}
 
 	// BFS propagation
 	for len(queue) > 0 {
@@ -172,6 +181,28 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 			}
 			if nextAmplitude > 1.0 {
 				nextAmplitude = 1.0
+			}
+			if adapter != nil {
+				hookSignal := &horizonmodels.SignalDescriptor{
+					Axis:      nextAxis,
+					Mechanism: signal.Mechanism,
+					Amplitude: nextAmplitude,
+					Polarity:  signal.Polarity,
+				}
+				if hook, err := adapter.TransferHook(ctx, hookSignal, neighbor.edge, frag); err == nil && hook != nil {
+					if hook.Skip {
+						continue
+					}
+					if hook.AdjustedAmplitude > 0 {
+						nextAmplitude = clamp01(hook.AdjustedAmplitude)
+					}
+					if axis := strings.TrimSpace(hook.AdjustedAxis); axis != "" && horizonmodels.IsValidAxis(axis) {
+						nextAxis = axis
+					}
+				}
+			}
+			if nextAmplitude < MinAmplitudeThreshold {
+				continue
 			}
 
 			// Add to queue

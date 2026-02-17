@@ -19,6 +19,7 @@ const (
 	SteeringProfileEcosystemStakeholder    SteeringProfileName = "ecosystem_stakeholder"
 	SteeringProfileScenarioTrends          SteeringProfileName = "scenario_trends"
 	SteeringProfileSectorIndustry          SteeringProfileName = "sector_industry"
+	SteeringProfilePolicyImpact            SteeringProfileName = "policy_impact"
 )
 
 var profileByContractType = map[string]SteeringProfileName{
@@ -36,6 +37,7 @@ var profileByContractType = map[string]SteeringProfileName{
 	"bilateral-relations":     SteeringProfileRegulatoryExposure,
 	"sanctions-exposure":      SteeringProfileRegulatoryExposure,
 	"conflict-dynamics":       SteeringProfileRegulatoryExposure,
+	"policy-impact":           SteeringProfilePolicyImpact,
 	"regulatory-impact":       SteeringProfileRegulatoryExposure,
 	"policy-and-regulation":   SteeringProfileRegulatoryExposure,
 	"compliance-landscape":    SteeringProfileRegulatoryExposure,
@@ -116,6 +118,7 @@ var profileToDomainMode = map[SteeringProfileName]string{
 	SteeringProfileEcosystemStakeholder:    taxonomy.DomainModeGeneral,
 	SteeringProfileScenarioTrends:          taxonomy.DomainModeStrategic,
 	SteeringProfileSectorIndustry:          taxonomy.DomainModeSupplyChain,
+	SteeringProfilePolicyImpact:            taxonomy.DomainModePolicyImpact,
 }
 
 // DomainModeForSteeringProfile returns the domain mode for a steering profile name.

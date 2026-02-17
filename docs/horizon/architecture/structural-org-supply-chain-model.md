@@ -514,7 +514,263 @@ Deep dive — точечный, edge-centric.
 
 ---
 
-## 18. Связанные документы
+## 18. Horizon Modeler и Policy Impact (единый контракт)
+
+### 18.1 Принцип
+
+Модель не делится на два документа и не делится на две базы:
+
+1. Базовый граф Horizon остаётся единым (`HorizonFragment` + `DependencyEdge`).
+2. Modeler живёт в `/horizon` как режим работы с тем же графом и storage.
+3. `policy-impact` — отдельный `contractType` и отдельный `domainMode` (`policy_impact`).
+
+### 18.2 Domain contract -> Domain mode
+
+Нормативно:
+
+1. Поведение pipeline определяется типом доменного контракта.
+2. Исполнение маршрутизируется через `domainMode`.
+3. Один `contractType` обычно даёт один `domainMode`, но несколько контрактов могут сводиться к одному mode.
+4. Для policy impact: `policy-impact -> policy_impact`.
+
+### 18.3 Policy-impact pipeline (сверху-вглубь)
+
+Используется тот же фазовый каркас `P0..P5`, но с другой семантикой фаз:
+
+| Phase | Название | Вход | Выход | Запуск |
+|------|----------|------|-------|--------|
+| `P0` | Policy Anchor | target policy/program | anchor fragment | auto |
+| `P1` | Source/Instrument Discovery | anchor | instruments, authority chain, `OrgUnitProfile[]` для exposed orgs | auto |
+| `P2` | Channel/Segment Mapping | instruments + exposed segments | exposure edges с quantitative qualifiers | auto |
+| `P3` | Critic Lite (Model Readiness) | edges + qualifiers | coverage gaps, qualifier gaps, observability gaps | auto |
+| `P4` | Scenario Planning | critic flags + adapter encode preview | `ScenarioInput`, signal descriptors preview | conditional |
+| `P5` | Targeted Deep Dive | selected exposure edge | detailed pass-through model for specific sector/org | manual by default |
+
+По умолчанию: `P0..P3`; `P5` только по явному триггеру.
+
+#### 18.3.1 Связь policy-impact pipeline с unit-моделью
+
+Policy exposure раскладывается на unit-уровень, когда exposed entity — крупная организация:
+- Повышение НДС влияет на `Kazakhtelecom.consumer` и `Kazakhtelecom.enterprise` по-разному (consumer = B2C, pass-through к абонентам; enterprise = B2B, договорные цены).
+- Research в P2 должен проставлять `target_unit_ref` и `target_unit_code` на exposure edges к org с unit-каркасом.
+- Если unit-каркас для org ещё не построен, P2 ставит `unclassified` и формирует missingInfo.
+- Critic в P3 проверяет: для крупных exposed org (orgSize >= "enterprise") unit qualifiers обязательны.
+
+### 18.4 Propagation и математическая модель
+
+Ключевое правило:
+
+1. `propagation` остаётся signal-first и не становится «моделью всего мира».
+2. Доменная математика вводится отдельной абстракцией `DomainModelAdapter`.
+3. Adapter привязан к типу контракта (contract type family), fallback — на `domainMode`.
+
+Обязательные функции adapter:
+
+- `encode`: реальный фактор/сценарий -> proxy-сигналы на существующий 12-axis basis.
+- `transfer`: доменная трансформация сигнала по узлам/рёбрам (hook в BFS-цикл).
+- `decode`: proxy-сигналы -> итоговые бизнес-метрики на endpoint-узлах.
+
+#### 18.4.1 Контракт `DomainModelAdapter` (формальный интерфейс)
+
+```go
+type DomainModelAdapter interface {
+    // ContractTypeFamily returns which contract family this adapter handles.
+    ContractTypeFamily() string
+
+    // Encode converts a domain scenario into proxy signals for injection
+    // onto the existing 12-axis basis. Adapter does NOT create new axes.
+    Encode(ctx context.Context, scenario ScenarioInput) ([]SignalDescriptor, error)
+
+    // TransferHook is called per-edge during BFS propagation.
+    // Returns adjusted amplitude/axis or Skip=true to block propagation.
+    // If nil-result, engine uses default profile damping.
+    TransferHook(ctx context.Context, signal SignalDescriptor, edge DependencyEdge, node HorizonFragment) (*TransferResult, error)
+
+    // Decode converts accumulated proxy signals on endpoint nodes
+    // into domain-level business metrics. Called on-demand (not during wave).
+    Decode(ctx context.Context, node HorizonFragment, accumulated []AccumulatedSignal, scenario ScenarioInput) ([]BusinessMetric, error)
+}
+```
+
+Ключевые типы:
+
+```go
+type ScenarioInput struct {
+    ScenarioID   string                 // unique scenario identifier
+    ContractType string                 // "policy-impact", "supply-chain-disruption", etc.
+    Parameters   map[string]interface{} // domain-specific: {"vat_rate_from":12, "vat_rate_to":16}
+    BaselineRef  string                 // optional: snapshot of baseline state
+    TargetPaths  []string               // optional: limit analysis scope
+}
+
+type TransferResult struct {
+    AdjustedAmplitude float64
+    AdjustedAxis      string // empty = keep current
+    Skip              bool   // true = do not propagate through this edge
+}
+
+type AccumulatedSignal struct {
+    Axis      string
+    Amplitude float64
+    Polarity  string
+    HopCount  int
+}
+
+type BusinessMetric struct {
+    MetricPath string  // e.g., "/metric/policy/budget_revenue_delta"
+    Value      float64
+    Unit       string
+    Confidence float64
+}
+```
+
+#### 18.4.2 Правило проекции на 12-axis basis
+
+Adapter **не создаёт новые axes**. Propagation engine работает с фиксированным 12-axis basis.
+Доменный сценарий проецируется на существующие axes через `Encode`:
+
+| Доменный фактор | Проекция на axes | Обоснование |
+|---|---|---|
+| Повышение НДС | `financial/settlement` + `physical_flow/demand` | Рост фискальной нагрузки → рост транзакционных издержек + снижение спроса |
+| Ужесточение compliance | `legal/compliance` + `info/uncertainty` | Регуляторная нагрузка + неопределённость правил |
+| Санкции на сектор | `legal/access` + `physical_flow/supply` | Запрет доступа + разрыв поставок |
+| Субсидирование | `financial/credit` (opportunity polarity) | Улучшение финансовых условий |
+
+Каждый adapter определяет свою таблицу проекций в `Encode`.
+
+#### 18.4.3 Правило вычисления
+
+1. По волне ходят лёгкие proxy-сигналы (amplitude ∈ [0,1] на стандартных axes).
+2. `TransferHook` применяет доменные коэффициенты per-edge (pass-through rate, sector sensitivity).
+3. Тяжёлая математика выполняется в `decode` on-demand.
+4. `decode` кэшируется по ключу `scenario_id + node_id + model_version`.
+5. Инвалидация кэша: при изменении графа (новые edges/fragments) или параметров сценария.
+
+#### 18.4.4 Adapter Registry
+
+```go
+type AdapterRegistry struct {
+    adapters map[string]DomainModelAdapter // contract type family -> adapter
+}
+
+func (r *AdapterRegistry) ForContractType(ct string) (DomainModelAdapter, bool)
+```
+
+`PropagationEngine` подключает registry через `.WithAdapterRegistry(reg)`.
+При наличии адаптера для текущего contract type, engine вызывает `TransferHook` в BFS-цикле.
+При отсутствии — используется стандартный `PropagationProfile` (текущее поведение, backward compatible).
+
+### 18.5 Где отражаем эффекты НДС (пример policy-impact)
+
+#### 18.5.1 Сквозной пример: НДС с 12% до 16% в Казахстане
+
+**P0 — Policy Anchor:**
+- anchor = `/gov/kz/ministry-of-finance`, contract type = `policy-impact`
+- параметры: `{"vat_rate_from": 12, "vat_rate_to": 16, "effective_date": "2026-07-01", "jurisdiction": "kz"}`
+
+**P1 — Source/Instrument Discovery (Scout):**
+- instruments: `НДС (ставка базовая)`, `НДС (ставка на продовольствие, если льготная)`, `НДС (освобождения)`
+- programs: `/program/kz/vat-reform-2026`
+- authority chain: `/gov/kz/ministry-of-finance` ADMINISTERS `/program/kz/vat-reform-2026`
+
+**P2 — Channel/Segment Mapping (Research):**
+- IMPOSES_CONDITION: `/program/kz/vat-reform-2026` → `/market/kz/consumer/food` (qualifiers: `pass_through_estimate=0.6, tax_base_coverage=partial`)
+- IMPOSES_CONDITION: `/program/kz/vat-reform-2026` → `/market/kz/consumer/retail` (qualifiers: `pass_through_estimate=0.85, tax_base_coverage=full`)
+- INFLUENCES: `/program/kz/vat-reform-2026` → `/community/kz/trade/bazaar-traders` (qualifiers: `channel_type=evasion, lag_quarters=2`)
+- DEPENDS_ON: `/org/kz/magnum-retail` → `/market/kz/consumer/food` (exposure)
+
+**P3 — Critic Lite:**
+- проверяет: есть ли pass_through_estimate на ключевых exposure edges? Есть ли observability hints?
+- missingInfo: "What is the estimated pass-through rate for electronics retail in KZ?"
+- dive candidates: `magnum-retail ↔ food-market` edge (high exposure, partial data)
+
+**Encode (adapter):**
+```
+scenario: {vat_rate_from: 12, vat_rate_to: 16}
+→ SignalDescriptor[]:
+  - axis: "financial/settlement", amplitude: 0.33, polarity: "risk",
+    seedPaths: ["/market/kz/consumer/food", "/market/kz/consumer/retail"],
+    mechanism: "vat_increase"
+  - axis: "physical_flow/demand", amplitude: 0.25, polarity: "risk",
+    seedPaths: ["/market/kz/consumer/retail"],
+    mechanism: "price_elasticity"
+```
+
+**TransferHook (adapter, per-edge):**
+- edge `/market/kz/consumer/food` → `/org/kz/magnum-retail`: amplitude *= pass_through_estimate (0.6)
+- edge `/market/kz/consumer/retail` → `/community/kz/trade/bazaar-traders`: amplitude *= 0.3 (low formal exposure, evasion channel)
+
+**Decode (adapter, on-demand):**
+- node `/gov/kz/ministry-of-finance`: `budget_revenue_delta_mln_kzt = +320`, `shadow_share_delta_pct = +1.2`
+- node `/market/kz/consumer/food`: `consumer_price_index_delta_pct = +2.4`
+- node `/org/kz/magnum-retail`: `margin_pressure_pct = -1.8`
+
+#### 18.5.2 Нормативные слои интерпретации
+
+Цепочка эффектов отражается в двух плоскостях:
+
+1. В графе: кто выпускает policy, через какие каналы идёт влияние, кто экспонирован.
+2. В endpoint-метриках через `decode`: бюджетные доходы, proxy ВВП, proxy теневой доли, proxy соц.настроений/трендов.
+
+Пять слоёв интерпретации:
+
+1. **Policy Source** (authority chain): кто принимает решение, по какой иерархии.
+   - Граф: ADMINISTERS, REGULATES, GATEKEEPS_DECISION edges.
+2. **Transmission Channel** (механизм передачи): как policy доходит до экономических агентов.
+   - Граф: IMPOSES_CONDITION, USES_MECHANISM, CONTROLS_ACCESS edges.
+   - Qualifiers: `channel_type`, `rate_from/rate_to`, `effective_date`.
+3. **Exposure** (сектора/группы/гео): кто под воздействием и насколько.
+   - Граф: DEPENDS_ON, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN edges к exposed nodes.
+   - Qualifiers: `pass_through_estimate`, `elasticity_hint`, `tax_base_coverage`, `sector_sensitivity`.
+4. **Response** (реакция и обратные волны): как агенты адаптируются.
+   - Граф: INFLUENCES edges с `channel_type` = `substitution`, `evasion`, `behavioral`.
+   - Qualifiers: `lag_quarters` (задержка реакции).
+5. **Observability** (кто, как и с какой уверенностью измеряет):
+   - Qualifiers на edges: `observability` = `direct|proxy|modeled`.
+   - `measurement_lag_months`: через сколько месяцев эффект станет видимым в данных.
+   - `measurement_confidence`: уверенность в возможности измерения (0.0-1.0).
+   - Примеры источников: stat.gov.kz (retail sales, CPI), налоговая отчётность (VAT collection), customs data.
+   - Critic проверяет: для каждого major exposure edge должен быть хотя бы один observability hint.
+
+### 18.6 Текущее состояние (as-is)
+
+Уже есть:
+
+1. `policy-impact` как contract type и `policy_impact` как mode.
+2. mode-specific ветки Research/Critic и allowlist.
+3. Общий propagation engine (BFS, 12-axis basis, damping, transformations, explain trace).
+4. Research prompt для policy-impact с quantitative qualifiers (pass_through, elasticity, observability).
+5. Critic prompt с проверкой modeling readiness и observability completeness.
+6. `DomainModelAdapter` + `AdapterRegistry` в runtime (`encode/transfer/decode` контракт, fallback `contractType -> domainMode`).
+7. Интеграция `TransferHook` в hot-path и signal BFS (`PropagateSignalFromSeeds`) как opt-in слой.
+8. `PolicyImpactAdapter` переведён в режим engine-router (`engineId`) с поддержкой нескольких реализаций.
+9. Реализован первый `MacroEconomicalEngine` (`macro_economical_v1`) с явным macro metric set:
+   `budget_revenue_delta_pct`, `budget_revenue_delta_bln_kzt`, `fiscal_balance_delta_pct_gdp`,
+   `gdp_real_delta_pct`, `cpi_delta_pct`, `household_real_income_delta_pct`, `consumption_real_delta_pct`,
+   `business_margin_delta_pct`, `investment_delta_pct`, `compliance_rate_delta_pct`, `shadow_economy_share_delta_pct`,
+   `transmission_intensity_index`.
+10. Read-only what-if path использует `SimulatePropagation` и умеет прокидывать `contractType/domainModes/engineId` для adapter routing.
+
+Пока отсутствует:
+
+1. Production-grade калибровка `MacroEconomicalEngine` на реальных data series (KZ, sector-level).
+2. Добавление следующих engine-реализаций (`policy_impact.sociology.*`, др.) поверх общего propagation слоя.
+3. Scenario management (baseline snapshot, diff, sensitivity analysis, versioning).
+4. Кэш/инвалидация для `decode`-метрик (`scenario_id + node_id + model_version`).
+5. Полный modeler UI для baseline/scenario/sensitivity.
+
+### 18.7 Ближайший backlog
+
+1. Добавить отдельный scenario-run endpoint (`scenario -> encode -> propagate -> decode`) без мутации graph state.
+2. Добавить baseline snapshot / diff и sensitivity sweep (elasticity/pass-through ranges).
+3. Формализовать policy-impact qualifiers/metrics/provenance в type contracts.
+4. Расширить `PolicyImpactAdapter` калиброванными коэффициентами (по geo/sector/channel).
+5. Добавить decode-cache + invalidation.
+6. Покрыть интеграционными тестами end-to-end сценарий НДС (KZ 12% -> 16%) на sample graph.
+
+---
+
+## 19. Связанные документы
 
 | Документ | Связь |
 |----------|-------|
@@ -525,4 +781,4 @@ Deep dive — точечный, edge-centric.
 
 ---
 
-*Документ обновлён по итогам обсуждения. Версия: 2026-02-16.*
+*Документ обновлён по итогам обсуждения. Версия: 2026-02-17.*

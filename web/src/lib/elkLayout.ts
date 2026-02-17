@@ -87,6 +87,12 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'AUDITED_BY': 2,
   // Administrative hierarchy (gov skeleton)
   'ADMINISTERS': 2,
+  // Decision-corridor synthetic parent edges (for left-pane corridor grouping only).
+  'CORRIDOR_AUTHORITY': 2,
+  'CORRIDOR_DECISION': 2,
+  'CORRIDOR_MECHANISM': 2,
+  'CORRIDOR_IMPACT': 2,
+  'CORRIDOR_MEDIATOR': 2,
 
   // 2) Products & dependency (inputs/outputs)
   'PRODUCES': 2,
@@ -487,7 +493,15 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'AFFECTS':
     case 'IMPACTS':
       return 'context';
-    // Strategic overlay relations (decision/mechanism layer)
+    // Decision-corridor synthetic parent-edge types.
+    case 'CORRIDOR_AUTHORITY':
+    case 'CORRIDOR_DECISION':
+    case 'CORRIDOR_MECHANISM':
+    case 'CORRIDOR_IMPACT':
+    case 'CORRIDOR_MEDIATOR':
+      return 'market';
+    
+    // Strategic overlay relations in generic mode stay as context.
     case 'CONTROLS_ACCESS':
     case 'IMPOSES_CONDITION':
     case 'GATEKEEPS_DECISION':
@@ -573,6 +587,12 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'RELATED_DOMAIN',
     'BROADENS_TO',
     'NARROWS_TO',
+    // Decision corridor synthetic parent-edge types.
+    'CORRIDOR_AUTHORITY',
+    'CORRIDOR_DECISION',
+    'CORRIDOR_MECHANISM',
+    'CORRIDOR_IMPACT',
+    'CORRIDOR_MEDIATOR',
   ]);
 
   // RIGHT side: environment (context/regulation/competition/influence).
@@ -1104,6 +1124,7 @@ export async function layoutLevelsTwoPane<T = any>(
     expandedRoleGroups = new Set<string>(),
     onToggleRoleOverflow,
     compactLeftPane = false,
+    leftPaneMode = 'default',
     rightDockMode = false,
     rightDockStateByNodeId,
     onToggleRightDock,
@@ -1112,6 +1133,7 @@ export async function layoutLevelsTwoPane<T = any>(
   if (!nodes || nodes.length === 0) return nodes;
 
   const isGroup = (n: Node<T>) => Boolean((n.data as any)?.isGroup);
+  const isDecisionChainLeftPane = compactLeftPane && leftPaneMode === 'decision-chain';
 
   // Helper to check if a subcategory (edge type) is collapsed for a given group.
   // Supports both per-group state (`groupId:edgeType`) and global defaults (`edgeType`).
@@ -1181,6 +1203,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'PARENT_OF',
     'SUBSIDIARY_OF',
     'ADMINISTERS',
+    'REGULATES',
     // Strategic overlay relations
     'CONTROLS_ACCESS',
     'IMPOSES_CONDITION',
@@ -1190,7 +1213,7 @@ export async function layoutLevelsTwoPane<T = any>(
   ]);
   const DOCK_SUPPLY = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
   const DOCK_DEPENDENCIES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
-  const DOCK_STRUCTURE = new Set(['DOMINATES', 'HAS_SUBMARKET', 'HAS_SUBGROUP']);
+  const DOCK_STRUCTURE = new Set(['DOMINATES', 'HAS_SUBMARKET', 'HAS_SUBGROUP', 'PARTICIPATES_IN']);
 
   const rightDockCategoryForEdgeType = (edgeType: string | undefined): RightDockKey | null => {
     const et = normalizeEdgeType(edgeType);
@@ -1280,6 +1303,9 @@ export async function layoutLevelsTwoPane<T = any>(
     'USES',
     'CONSUMES',
     'EXTRACTS_FROM',
+    // Market participation is directional: participant -> market.
+    // Participant should appear to the LEFT of the market node.
+    'PARTICIPATES_IN',
     // Governance/employment: PERSON -(EMPLOYED_BY)-> ORG means ORG is the "more ultimate" node (parent).
     'EMPLOYED_BY',
     'LOCATED_IN',
@@ -1297,7 +1323,6 @@ export async function layoutLevelsTwoPane<T = any>(
     'OPPOSES',
     'PARTNERS_WITH',
     'COOPERATES_WITH',
-    'PARTICIPATES_IN',
     'RELATED_TO',
     'RELATIVE_OF',
     'SIMILAR_TO',
@@ -1316,7 +1341,6 @@ export async function layoutLevelsTwoPane<T = any>(
     'OPERATES_IN',
     'BASED_IN',
     'HEADQUARTERED_IN',
-    'REGULATES',
     // Influence relations should stay grouped (context), not be promoted into the right backbone.
     // Otherwise an incoming INFLUENCES edge can incorrectly "hijack" the hierarchy layout.
     'INFLUENCES',
@@ -1677,6 +1701,9 @@ export async function layoutLevelsTwoPane<T = any>(
   // We interpret this as 1 node-width GAP between columns => step ~= 2 * nodeWidth.
   const RIGHT_LEVEL_STEP_X = Math.max(nodeWidth * 2, nodeWidth + nodeSpacing);
   const RIGHT_BASE_X = 520; // leftmost right-hierarchy column anchor
+  // Small per-type lane shift inside each right hierarchy level.
+  // This separates MARKET/DOMAIN/etc. visually without breaking level ordering.
+  const RIGHT_TYPE_LANE_STEP_X = Math.max(24, Math.floor(nodeWidth * 0.24));
 
   // Extra air between left (groups) and right (hierarchy) — about half a node width.
   const GROUP_GAP_X = 22 + Math.floor(nodeWidth / 2);
@@ -1902,9 +1929,20 @@ export async function layoutLevelsTwoPane<T = any>(
   const MARKET_EDGE_SET = new Set([
     'COMPETES_WITH', 'PARTICIPATES_IN', 'DOMINATES', 'HAS_SUBMARKET',
   ]);
+  const STRATEGIC_EDGE_SET = new Set([
+    'CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'GATEKEEPS_DECISION', 'USES_MECHANISM', 'APPLIES_TO',
+  ]);
+  const CORRIDOR_AUTHORITY_EDGE_SET = new Set([
+    'CORRIDOR_AUTHORITY',
+  ]);
+  const CORRIDOR_EXECUTION_EDGE_SET = new Set([
+    'CORRIDOR_DECISION', 'CORRIDOR_MECHANISM', 'CORRIDOR_MEDIATOR',
+  ]);
+  const CORRIDOR_PROPAGATION_EDGE_SET = new Set([
+    'CORRIDOR_IMPACT',
+  ]);
   const REGULATORY_EDGE_SET = new Set([
     'REGULATES', 'INFLUENCES', 'AFFECTS', 'IMPACTS',
-    'CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'GATEKEEPS_DECISION', 'USES_MECHANISM', 'APPLIES_TO',
   ]);
   const PARTNERSHIP_EDGE_SET = new Set([
     'PARTNERS_WITH', 'COOPERATES_WITH', 'AFFILIATED_WITH', 'MEMBER_OF', 'OPERATES_VIA',
@@ -1918,14 +1956,35 @@ export async function layoutLevelsTwoPane<T = any>(
   const LEFT_REGULATORY_TYPES = new Set(['MECHANISM', 'DECISION_POINT']);
   const LEFT_MARKET_TYPES = new Set(['MARKET']);
   const LEFT_PRODUCT_TYPES = new Set(['PRODUCT', 'SERVICE', 'TECHNOLOGY']);
+  void LEFT_PRODUCT_TYPES;
+
+  const corridorRoleFromEdge = (edgeTypeRaw: string, fragmentTypeRaw: string): string => {
+    const et = normalizeEdgeType(edgeTypeRaw);
+    const tk = normalizeFragmentType(fragmentTypeRaw);
+    if (CORRIDOR_AUTHORITY_EDGE_SET.has(et)) return 'corridor_authority';
+    if (CORRIDOR_EXECUTION_EDGE_SET.has(et)) return 'corridor_execution';
+    if (CORRIDOR_PROPAGATION_EDGE_SET.has(et)) return 'corridor_propagation';
+
+    // Fallback to canonical edge families when synthetic parent-edge types are absent.
+    if (GOVERNANCE_EDGE_SET.has(et)) return 'corridor_authority';
+    if (STRATEGIC_EDGE_SET.has(et)) return 'corridor_execution';
+    if (et) return 'corridor_propagation';
+
+    // Last fallback by fragment type.
+    if (tk === 'DECISION_POINT' || tk === 'MECHANISM') return 'corridor_execution';
+    if (tk === 'ORGANIZATION' || tk === 'PERSON' || tk === 'COMMUNITY') return 'corridor_authority';
+    return 'corridor_propagation';
+  };
 
   const SEMANTIC_ROLE_LABEL: Record<string, string> = {
     'governance': 'Governance',
     'supply_chain': 'Supply Chain',
     'market': 'Market',
+    'strategic_layer': 'Decision & Mechanisms',
     'regulatory': 'Regulatory',
     'partnerships': 'Partnerships',
     // Business block labels (compact left pane)
+    'decision_mechanisms': 'Decision & Mechanisms',
     'market_regulation': 'Market & Regulation',
     'products_supply': 'Products & Supply',
     'ownership_governance': 'Ownership & Governance',
@@ -1933,12 +1992,17 @@ export async function layoutLevelsTwoPane<T = any>(
     'people': 'People',
     'geography': 'Geography',
     'other': 'Context',
+    // Decision-chain corridor roles
+    'corridor_authority': 'Authority',
+    'corridor_execution': 'Execution',
+    'corridor_propagation': 'Propagation',
     // Compact role labels (used in compact left pane)
     'supply': 'Supply',
     'context': 'Context',
   };
   const SEMANTIC_ROLE_ORDER: Record<string, number> = {
     'governance': 100,
+    'strategic_layer': 150,
     'supply_chain': 200,
     'products': 250,
     'market': 300,
@@ -1948,9 +2012,14 @@ export async function layoutLevelsTwoPane<T = any>(
     'geography': 700,
     'other': 900,
     // Compact role ordering (business blocks)
+    'decision_mechanisms': 150,
     'market_regulation': 100,
     'products_supply': 200,
     'ownership_governance': 300,
+    // Decision-chain corridor ordering
+    'corridor_authority': 110,
+    'corridor_execution': 150,
+    'corridor_propagation': 190,
   };
 
   // Maximum visible nodes per semantic category in left group.
@@ -1961,12 +2030,16 @@ export async function layoutLevelsTwoPane<T = any>(
   const semanticRoleOf = (child: Node<T>, pid: string): string => {
     const d: any = child.data;
     const tk = normalizeFragmentType(d?.type);
+    if (isDecisionChainLeftPane) {
+      const parentEdgeType = normalizeEdgeType(String(d?.edgeTypeFromParent || '').trim());
+      if (parentEdgeType) return corridorRoleFromEdge(parentEdgeType, tk);
+    }
 
     // Type-first overrides: certain node types always map to a specific role.
     // NOTE: Products should follow edge-type semantics (e.g. DOMINATES -> market/regulation),
     // so we do NOT force product types into the products bucket here.
     if (LEFT_GEO_TYPES.has(tk)) return 'geography';
-    if (LEFT_REGULATORY_TYPES.has(tk)) return 'regulatory';
+    if (LEFT_REGULATORY_TYPES.has(tk)) return 'strategic_layer';
     if (LEFT_MARKET_TYPES.has(tk)) return 'market';
 
     // Edge-type-based: find the best relation to the parent.
@@ -1989,18 +2062,24 @@ export async function layoutLevelsTwoPane<T = any>(
       }
     }
 
+    if (isDecisionChainLeftPane) {
+      return corridorRoleFromEdge(bestEdge, tk);
+    }
+
     let role: string;
     if (GOVERNANCE_EDGE_SET.has(bestEdge)) role = 'governance';
     else if (SUPPLY_EDGE_SET.has(bestEdge)) role = 'supply_chain';
     else if (MARKET_EDGE_SET.has(bestEdge)) role = 'market';
+    else if (STRATEGIC_EDGE_SET.has(bestEdge)) role = 'strategic_layer';
     else if (REGULATORY_EDGE_SET.has(bestEdge)) role = 'regulatory';
     else if (PARTNERSHIP_EDGE_SET.has(bestEdge)) role = 'partnerships';
     else if (GEO_EDGE_SET.has(bestEdge)) role = 'geography';
     else if (tk === 'PERSON') role = 'people';
     else role = 'other';
 
-    // Compact left-pane mode: merge roles into 3 executive business blocks
+    // Compact left-pane mode: merge roles into executive business blocks.
     if (compactLeftPane) {
+      if (role === 'strategic_layer') return 'decision_mechanisms';
       if (role === 'market' || role === 'regulatory' || role === 'geography') return 'market_regulation';
       if (role === 'supply_chain' || role === 'products' || role === 'partnerships') return 'products_supply';
       if (role === 'governance' || role === 'people') return 'ownership_governance';
@@ -2109,6 +2188,11 @@ export async function layoutLevelsTwoPane<T = any>(
       HAS_SUBMARKET: 'Submarket',
       HAS_SUBGROUP: 'Subgroup',
       ADMINISTERS: 'Administers',
+      CORRIDOR_AUTHORITY: 'Authority',
+      CORRIDOR_DECISION: 'Decision',
+      CORRIDOR_MECHANISM: 'Mechanism',
+      CORRIDOR_IMPACT: 'Impact',
+      CORRIDOR_MEDIATOR: 'Mediator',
       // Community relationships
       OPERATES_VIA: 'Via',
       MEMBER_OF: 'Member',
@@ -2188,6 +2272,7 @@ export async function layoutLevelsTwoPane<T = any>(
 
   // Business block titles for context cards
   const BUSINESS_BLOCK_TITLES: Record<string, string> = {
+    'decision_mechanisms': 'Decision & Mechanisms',
     'market_regulation': 'Market & Regulation',
     'products_supply': 'Products & Supply',
     'ownership_governance': 'Ownership & Governance',
@@ -2214,6 +2299,9 @@ export async function layoutLevelsTwoPane<T = any>(
     'REGULATES': { outgoing: 'Regulates', incoming: 'Regulated by' },
     'INFLUENCES': { outgoing: 'Influences', incoming: 'Influenced by' },
     'AFFECTS': { outgoing: 'Affects', incoming: 'Affected by' },
+    'CONTROLS_ACCESS': { outgoing: 'Controls access to', incoming: 'Access controlled by' },
+    'IMPOSES_CONDITION': { outgoing: 'Imposes conditions on', incoming: 'Conditions imposed by' },
+    'GATEKEEPS_DECISION': { outgoing: 'Gatekeeps decisions for', incoming: 'Gatekept by' },
     'USES_MECHANISM': { outgoing: 'Uses', incoming: 'Used by' },
     'APPLIES_TO': { outgoing: 'Applies to', incoming: 'Applied by' },
     'OWNS': { outgoing: 'Owns', incoming: 'Owned by' },
@@ -2227,6 +2315,11 @@ export async function layoutLevelsTwoPane<T = any>(
     'EXECUTIVE_OF': { outgoing: 'Executives:', incoming: 'Executive of' },
     'EMPLOYED_BY': { outgoing: 'Employees:', incoming: 'Employed by' },
     'ADMINISTERS': { outgoing: 'Administers', incoming: 'Administered by' },
+    'CORRIDOR_AUTHORITY': { outgoing: 'Authority', incoming: 'Authority' },
+    'CORRIDOR_DECISION': { outgoing: 'Decision', incoming: 'Decision' },
+    'CORRIDOR_MECHANISM': { outgoing: 'Mechanism', incoming: 'Mechanism' },
+    'CORRIDOR_IMPACT': { outgoing: 'Impact', incoming: 'Impact' },
+    'CORRIDOR_MEDIATOR': { outgoing: 'Mediator', incoming: 'Mediator' },
     'AUDITED_BY': { outgoing: 'Audited by', incoming: 'Audits' },
     'PRODUCES': { outgoing: 'Products:', incoming: 'Produced by' },
     'TRANSFORMS_INTO': { outgoing: 'Transforms into', incoming: 'Transformed from' },
@@ -2422,10 +2515,18 @@ export async function layoutLevelsTwoPane<T = any>(
 
     const blockRoleForChild = (child: Node<T>): string => {
       const tk = normalizeFragmentType((child.data as any)?.type);
+      if (isDecisionChainLeftPane) {
+        const rel = bestRelTypeToParent(child);
+        return corridorRoleFromEdge(rel, tk);
+      }
       // Markets always go to market_regulation (Submarkets), regardless of edge type.
       if (LEFT_MARKET_TYPES.has(tk)) return 'market_regulation';
+      if (LEFT_REGULATORY_TYPES.has(tk)) return 'decision_mechanisms';
 
       const rel = bestRelTypeToParent(child);
+      if (STRATEGIC_EDGE_SET.has(rel)) {
+        return 'decision_mechanisms';
+      }
       if (MARKET_EDGE_SET.has(rel) || REGULATORY_EDGE_SET.has(rel) || GEO_EDGE_SET.has(rel)) {
         return 'market_regulation';
       }
@@ -2448,8 +2549,8 @@ export async function layoutLevelsTwoPane<T = any>(
       byType.set(role, arr);
     }
 
-    // Safety: in compact mode, ensure any legacy roles are merged into the 3 business blocks.
-    if (compactLeftPane) {
+    // Safety: in compact mode, ensure any legacy roles are merged into compact business blocks.
+    if (compactLeftPane && !isDecisionChainLeftPane) {
       const mergeRole = (from: string, to: string) => {
         const list = byType.get(from) || [];
         if (list.length === 0) return;
@@ -2459,6 +2560,7 @@ export async function layoutLevelsTwoPane<T = any>(
         byType.delete(from);
       };
       mergeRole('market', 'market_regulation');
+      mergeRole('strategic_layer', 'decision_mechanisms');
       mergeRole('regulatory', 'market_regulation');
       mergeRole('geography', 'market_regulation');
       mergeRole('products', 'products_supply');
@@ -2821,10 +2923,11 @@ export async function layoutLevelsTwoPane<T = any>(
       // Optionally group within the type block by the PRIORITY relation type to the parent.
       const relBlocks: RelBlock<T>[] = [];
       // Semantic roles that should NOT be subdivided by relation edge types — render as simple column-major grids.
-      // Products, Geography, Regulatory: keep compact, no subcategory split.
+      // Products, Geography, Regulatory/Strategic: keep compact, no subcategory split.
       const NO_REL_GROUPING_ROLES = new Set([
-        'products', 'geography', 'regulatory', 'market', 'context', 'supply',
-        'market_regulation', 'products_supply', 'ownership_governance',
+        'products', 'geography', 'regulatory', 'strategic_layer', 'market', 'context', 'supply',
+        'decision_mechanisms', 'market_regulation', 'products_supply', 'ownership_governance',
+        'corridor_authority', 'corridor_execution', 'corridor_propagation',
       ]);
       const isCompactGridRole = NO_REL_GROUPING_ROLES.has(typeKey);
       // In compact left pane, avoid relation subcategories to keep cards short.
@@ -3076,10 +3179,31 @@ export async function layoutLevelsTwoPane<T = any>(
   // Precompute labels and type scores for fast sort
   const labelById = new Map<string, string>();
   const typeScoreById = new Map<string, number>();
+  const typeById = new Map<string, string>();
+  const canonicalPathById = new Map<string, string>();
   for (const n of rightNodes) {
+    const nd: any = n.data;
+    const tt = normalizeFragmentType(nd?.type);
     labelById.set(n.id, String((n.data as any)?.label || n.id));
-    typeScoreById.set(n.id, typeOrderScore(normalizeFragmentType((n.data as any)?.type)));
+    typeScoreById.set(n.id, typeOrderScore(tt));
+    typeById.set(n.id, tt);
+    canonicalPathById.set(n.id, String(nd?.canonicalPath || '').trim());
   }
+
+  const rightTypeLane = (id: string): number => {
+    const tt = typeById.get(id) || 'UNKNOWN';
+    const cp = canonicalPathById.get(id) || '';
+    if (tt === 'MARKET' || cp.startsWith('/market/')) return 0;
+    if (tt === 'DOMAIN' || cp.startsWith('/domain/')) return 1;
+    if (tt === 'DECISION_POINT' || tt === 'MECHANISM') return 1;
+    if (tt === 'ORGANIZATION' || tt === 'PERSON' || tt === 'COMMUNITY' || tt === 'MEDIA_CHANNEL') return -1;
+    if (tt === 'FACILITY' || tt === 'DEPOSIT') return -1;
+    if (tt === 'GEO_REGION' || tt === 'LOCATION' || tt === 'COUNTRY' || tt === 'STATE' || tt === 'PROVINCE' || tt === 'CITY') return -1;
+    return 0;
+  };
+
+  const rightXFor = (id: string, level: number): number =>
+    RIGHT_BASE_X + (level * RIGHT_LEVEL_STEP_X) + (rightTypeLane(id) * RIGHT_TYPE_LANE_STEP_X);
 
   // Helper to sort nodes by clustering related ones together (connected components).
   // This ensures that partners/related entities stay vertically adjacent.
@@ -3202,7 +3326,7 @@ export async function layoutLevelsTwoPane<T = any>(
   // Assign final positions.
   for (const rn of rightSorted) {
     const lv = hLevel.get(rn.id) || 0;
-    const x = RIGHT_BASE_X + lv * RIGHT_LEVEL_STEP_X;
+    const x = rightXFor(rn.id, lv);
     const yc = yCenter.get(rn.id) ?? 0;
     rightPos.set(rn.id, { x, y: yc - nodeHeight / 2 });
   }
@@ -3735,7 +3859,7 @@ export async function layoutLevelsTwoPane<T = any>(
     for (const rn of rightSorted) {
       if (!isVisibleRight(rn.id)) continue;
       const lv = hLevel.get(rn.id) || 0;
-      const x = RIGHT_BASE_X + lv * RIGHT_LEVEL_STEP_X;
+      const x = rightXFor(rn.id, lv);
       const yc = yCenter.get(rn.id) ?? 0;
       rightPos.set(rn.id, { x, y: yc - nodeHeight / 2 });
     }
@@ -5111,7 +5235,6 @@ export function deriveLevelsTreeMetadata<T = any>(
     'RELATED_TO',
     'SIMILAR_TO',
     'LINKED_TO',
-    'PARTICIPATES_IN',
   ]);
 
   // Types that imply hierarchy (Parent -> Child)
@@ -5162,6 +5285,9 @@ export function deriveLevelsTreeMetadata<T = any>(
     // but keep this here for robustness when legacy edges leak through.
     'SUBSIDIARY_OF',
     'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM',
+    // Market participation is directional: participant -> market.
+    // Participant should appear to the LEFT of the market node.
+    'PARTICIPATES_IN',
     // Context acts like upstream/parent
     'LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN'
   ]);
@@ -5804,6 +5930,12 @@ export interface LayoutOptions_Custom {
    * When true, left pane nodes will have nodeSize: 'compact' and use COMPACT_NODE_LAYOUT_HEIGHT.
    */
   compactLeftPane?: boolean;
+  /**
+   * Optional left-pane semantic mode.
+   * - default: standard business-role grouping
+   * - decision-chain: authority/execution/propagation grouping for corridor expansions
+   */
+  leftPaneMode?: 'default' | 'decision-chain';
 
   /**
    * Right Dock mode (Levels layout).

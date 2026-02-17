@@ -81,6 +81,11 @@ func TestResearchPipeline_StrategiesForModes(t *testing.T) {
 	if len(mixed) != 1 {
 		t.Errorf("general+supply_chain should keep supply_chain strategy, got %d", len(mixed))
 	}
+
+	policy := runner.strategiesForModes([]string{taxonomy.DomainModePolicyImpact})
+	if len(policy) != 1 {
+		t.Errorf("policy_impact should enable exactly one strategy, got %d", len(policy))
+	}
 }
 
 func TestSupplyChainEnrichmentPrompt_PhaseGuardrails(t *testing.T) {
@@ -99,5 +104,41 @@ func TestSupplyChainEnrichmentPrompt_PhaseGuardrails(t *testing.T) {
 	prompt = a.buildSupplyChainEnrichmentPrompt(input)
 	if !strings.Contains(prompt, "UNIT PIPELINE PHASE: P5") {
 		t.Fatalf("expected P5 guardrails in prompt")
+	}
+}
+
+func TestMarketEnrichmentPrompt_DirectionGuardrails(t *testing.T) {
+	a := NewResearchAgent(nil)
+	input := ResearchStrategyInput{
+		Fragment:    &models.HorizonFragment{CanonicalPath: "/market/kz/agriculture/credit"},
+		MissingInfo: []string{"Find top players"},
+	}
+	prompt := a.buildMarketEnrichmentPrompt(input)
+	if !strings.Contains(prompt, "PARTICIPATES_IN direction is participant -> market.") {
+		t.Fatalf("expected strict PARTICIPATES_IN direction guardrail in market prompt")
+	}
+	if !strings.Contains(prompt, "targetCanonicalPath MUST NOT start with /domain/.") {
+		t.Fatalf("expected non-domain target guardrail in market prompt")
+	}
+	if !strings.Contains(prompt, "sourceCanonicalPath/sourceType/sourceName = player") {
+		t.Fatalf("expected explicit-source instruction for market player relations")
+	}
+}
+
+func TestPolicyImpactEnrichmentPrompt_DomainTargetGuardrails(t *testing.T) {
+	a := NewResearchAgent(nil)
+	input := ResearchStrategyInput{
+		Fragment:    &models.HorizonFragment{CanonicalPath: "/gov/kz/ministry-of-agriculture"},
+		MissingInfo: []string{"Map policy channels"},
+	}
+	prompt := a.buildPolicyImpactEnrichmentPrompt(input)
+	if !strings.Contains(prompt, "DOMAIN is not a valid target for these relation types.") {
+		t.Fatalf("expected explicit domain-target disallowance in policy impact prompt")
+	}
+	if !strings.Contains(prompt, "targetCanonicalPath MUST NOT start with /domain/.") {
+		t.Fatalf("expected non-domain target guardrail in policy impact prompt")
+	}
+	if !strings.Contains(prompt, "PARTICIPATES_IN direction is participant -> market.") {
+		t.Fatalf("expected strict PARTICIPATES_IN direction guardrail in policy impact prompt")
 	}
 }

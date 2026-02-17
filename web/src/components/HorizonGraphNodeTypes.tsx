@@ -2668,7 +2668,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         </>
       )}
 
-      {/* Stack group ports: on the LEFT edge (stacks are on right pane, edges come from left). */}
+      {/* Stack group visible ports are rendered on the LEFT edge. */}
       {showEdgePorts && isStackGroup && (
         <>
           {edgePorts!.map((p, idx) => {
@@ -2715,13 +2715,15 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
           })}
         </>
       )}
-      {/* Fallback source-left / target-left handles for stack groups.
-          Proxy edges fall back to these IDs when the specific edge type isn't in the port map.
+      {/* Fallback lateral handles for stack groups.
+          Proxy edges may resolve to left or right side depending on geometry.
           Always render them so React Flow can resolve the handle reference. */}
       {isStackGroup && (() => {
         const hasSourceLeft = edgePorts.some((p) => p?.sourceHandleId === 'source-left');
         const hasTargetLeft = edgePorts.some((p) => p?.targetHandleId === 'target-left');
-        if (hasSourceLeft && hasTargetLeft) return null;
+        const hasSourceRight = edgePorts.some((p) => p?.sourceHandleId === 'source-right');
+        const hasTargetRight = edgePorts.some((p) => p?.targetHandleId === 'target-right');
+        if (hasSourceLeft && hasTargetLeft && hasSourceRight && hasTargetRight) return null;
         return (
           <>
             {!hasTargetLeft && (
@@ -2744,6 +2746,28 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                 style={{ background: border, width: '10px', height: '10px',
                   border: `2px solid ${theme === 'dark' ? 'rgba(15,23,42,0.75)' : 'rgba(255,255,255,0.95)'}`,
                   left: '-5px', top: '50%', opacity: 0, pointerEvents: 'none' }}
+              />
+            )}
+            {!hasTargetRight && (
+              <Handle
+                id="target-right"
+                type="target"
+                position={Position.Right}
+                className="hzn-handle"
+                style={{ background: border, width: '10px', height: '10px',
+                  border: `2px solid ${theme === 'dark' ? 'rgba(15,23,42,0.75)' : 'rgba(255,255,255,0.95)'}`,
+                  right: '-5px', top: '50%', opacity: 0, pointerEvents: 'none' }}
+              />
+            )}
+            {!hasSourceRight && (
+              <Handle
+                id="source-right"
+                type="source"
+                position={Position.Right}
+                className="hzn-handle"
+                style={{ background: border, width: '10px', height: '10px',
+                  border: `2px solid ${theme === 'dark' ? 'rgba(15,23,42,0.75)' : 'rgba(255,255,255,0.95)'}`,
+                  right: '-5px', top: '50%', opacity: 0, pointerEvents: 'none' }}
               />
             )}
           </>

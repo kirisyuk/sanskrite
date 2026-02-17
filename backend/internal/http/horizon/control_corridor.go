@@ -1,0 +1,1631 @@
+package horizon
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"sort"
+	"strings"
+
+	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+)
+
+// QueryControlCorridor builds an on-the-fly transitive control corridor:
+// authority -> decision -> mechanism -> impact.
+//
+// POST /api/horizon/lenses/{lensId}/control-corridor
+func (h *HorizonHandlers) QueryControlCorridor(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authInfo, err := requireAuth(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	lensID := strings.TrimSpace(extractIDFromPath(r, "/api/horizon/lenses/"))
+	if lensID == "" {
+		http.Error(w, "lensId is required in path", http.StatusBadRequest)
+		return
+	}
+	if h.service == nil || h.service.Lens() == nil || h.service.Fragments() == nil || h.service.Edges() == nil {
+		http.Error(w, "Horizon service not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	lens, err := h.service.Lens().GetLens(r.Context(), lensID)
+	if err != nil || lens == nil {
+		http.Error(w, "Lens not found", http.StatusNotFound)
+		return
+	}
+	if strings.TrimSpace(lens.TenantID) == "" || lens.TenantID != authInfo.TenantID {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	var req controlCorridorRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	opts := controlCorridorOptions{
+		MaxAuthorityHops: clampInt(req.MaxAuthorityHops, 0, 4, 2),
+		MaxImpactHops:    clampInt(req.MaxImpactHops, 1, 6, 3),
+		PerNodeEdgeLimit: clampInt(req.PerNodeEdgeLimit, 40, 800, 180),
+		MaxNodes:         clampInt(req.MaxNodes, 40, 1200, 260),
+		MaxEdges:         clampInt(req.MaxEdges, 80, 2400, 520),
+		MaxSeeds:         clampInt(req.MaxSeeds, 1, 64, 16),
+	}
+
+	seedIDs, seedPaths, seedTruncated, warnings, err := h.resolveControlCorridorSeeds(r.Context(), lens, req, opts.MaxSeeds)
+	if err != nil {
+		http.Error(w, "Failed to resolve seeds", http.StatusInternalServerError)
+		return
+	}
+	if len(seedIDs) == 0 {
+		http.Error(w, "No valid seeds found (provide seedCanonicalPaths/seedFragmentIds or ensure lens.scope is resolvable)", http.StatusBadRequest)
+		return
+	}
+
+	res, err := h.buildControlCorridor(r.Context(), lensID, seedIDs, seedPaths, opts)
+	if err != nil {
+		http.Error(w, "Failed to build control corridor", http.StatusInternalServerError)
+		return
+	}
+	res.Summary.SeedTruncated = seedTruncated
+	res.Summary.Truncated = res.Summary.Truncated || seedTruncated
+	if len(warnings) > 0 {
+		res.Warnings = append(res.Warnings, warnings...)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+type controlCorridorRequest struct {
+	SeedCanonicalPaths []string `json:"seedCanonicalPaths,omitempty"`
+	SeedFragmentIDs    []string `json:"seedFragmentIds,omitempty"`
+	MaxAuthorityHops   int      `json:"maxAuthorityHops,omitempty"`
+	MaxImpactHops      int      `json:"maxImpactHops,omitempty"`
+	PerNodeEdgeLimit   int      `json:"perNodeEdgeLimit,omitempty"`
+	MaxNodes           int      `json:"maxNodes,omitempty"`
+	MaxEdges           int      `json:"maxEdges,omitempty"`
+	MaxSeeds           int      `json:"maxSeeds,omitempty"`
+}
+
+type controlCorridorOptions struct {
+	MaxAuthorityHops int
+	MaxImpactHops    int
+	PerNodeEdgeLimit int
+	MaxNodes         int
+	MaxEdges         int
+	MaxSeeds         int
+}
+
+type controlCorridorNode struct {
+	ID            string `json:"id"`
+	Label         string `json:"label"`
+	Type          string `json:"type,omitempty"`
+	CanonicalPath string `json:"canonicalPath,omitempty"`
+	Lane          string `json:"lane"`
+	Depth         int    `json:"depth"`
+	Seed          bool   `json:"seed,omitempty"`
+}
+
+type controlCorridorEdge struct {
+	ID          string  `json:"id"`
+	From        string  `json:"from"`
+	To          string  `json:"to"`
+	Type        string  `json:"type"`
+	Stage       string  `json:"stage"`
+	Role        string  `json:"role,omitempty"`
+	Criticality float64 `json:"criticality,omitempty"`
+}
+
+type controlCorridorSummary struct {
+	SeedCount        int  `json:"seedCount"`
+	SeedTruncated    bool `json:"seedTruncated,omitempty"`
+	AuthorityCount   int  `json:"authorityCount"`
+	DecisionCount    int  `json:"decisionCount"`
+	MechanismCount   int  `json:"mechanismCount"`
+	ImpactCount      int  `json:"impactCount"`
+	ImpactRootCount  int  `json:"impactRootCount"`
+	ControllerCount  int  `json:"controllerCount,omitempty"`
+	MediatorCount    int  `json:"mediatorsCount,omitempty"`
+	BundleCount      int  `json:"pathBundleCount,omitempty"`
+	TotalNodes       int  `json:"totalNodes"`
+	TotalEdges       int  `json:"totalEdges"`
+	MaxAuthorityHops int  `json:"maxAuthorityHops"`
+	MaxImpactHops    int  `json:"maxImpactHops"`
+	Truncated        bool `json:"truncated"`
+}
+
+type controlCorridorResponse struct {
+	LensID             string                 `json:"lensId"`
+	SeedFragmentIDs    []string               `json:"seedFragmentIds"`
+	SeedCanonicalPaths []string               `json:"seedCanonicalPaths,omitempty"`
+	Nodes              []controlCorridorNode  `json:"nodes"`
+	Edges              []controlCorridorEdge  `json:"edges"`
+	Bundles            map[string]interface{} `json:"bundles,omitempty"`
+	Summary            controlCorridorSummary `json:"summary"`
+	Warnings           []string               `json:"warnings,omitempty"`
+}
+
+func (h *HorizonHandlers) resolveControlCorridorSeeds(
+	ctx context.Context,
+	lens *horizonmodels.Lens,
+	req controlCorridorRequest,
+	maxSeeds int,
+) ([]string, []string, bool, []string, error) {
+	fragmentsRepo := h.service.Fragments()
+	if fragmentsRepo == nil {
+		return nil, nil, false, nil, nil
+	}
+
+	seedIDs := make([]string, 0, maxSeeds)
+	seedPaths := make([]string, 0, maxSeeds)
+	seen := map[string]struct{}{}
+	warnings := make([]string, 0, 8)
+	truncated := false
+
+	addSeed := func(f *horizonmodels.HorizonFragment) {
+		if f == nil {
+			return
+		}
+		id := strings.TrimSpace(f.ID)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		if len(seedIDs) >= maxSeeds {
+			truncated = true
+			return
+		}
+		seen[id] = struct{}{}
+		seedIDs = append(seedIDs, id)
+		if cp := strings.TrimSpace(f.CanonicalPath); cp != "" {
+			seedPaths = append(seedPaths, cp)
+		}
+	}
+
+	for _, idRaw := range req.SeedFragmentIDs {
+		id := strings.TrimSpace(idRaw)
+		if id == "" {
+			continue
+		}
+		f, err := fragmentsRepo.Get(ctx, id)
+		if err != nil || f == nil {
+			warnings = append(warnings, "seedFragmentId not found: "+id)
+			continue
+		}
+		addSeed(f)
+	}
+	for _, cpRaw := range req.SeedCanonicalPaths {
+		cp := strings.TrimSpace(cpRaw)
+		if cp == "" {
+			continue
+		}
+		f, err := fragmentsRepo.GetByCanonicalPath(ctx, cp)
+		if err != nil || f == nil {
+			warnings = append(warnings, "seedCanonicalPath not found: "+cp)
+			continue
+		}
+		addSeed(f)
+	}
+
+	if len(seedIDs) == 0 {
+		scopeFrags, err := fragmentsRepo.ListByCanonicalPaths(ctx, lens.Scope)
+		if err != nil {
+			return nil, nil, false, warnings, err
+		}
+		sort.SliceStable(scopeFrags, func(i, j int) bool {
+			ai := strings.TrimSpace(scopeFrags[i].CanonicalPath)
+			aj := strings.TrimSpace(scopeFrags[j].CanonicalPath)
+			if ai != aj {
+				return ai < aj
+			}
+			return strings.TrimSpace(scopeFrags[i].ID) < strings.TrimSpace(scopeFrags[j].ID)
+		})
+		for _, f := range scopeFrags {
+			addSeed(f)
+		}
+	}
+
+	return seedIDs, seedPaths, truncated, warnings, nil
+}
+
+func (h *HorizonHandlers) buildControlCorridor(
+	ctx context.Context,
+	lensID string,
+	seedIDs []string,
+	seedPaths []string,
+	opts controlCorridorOptions,
+) (*controlCorridorResponse, error) {
+	edgesRepo := h.service.Edges()
+	fragmentsRepo := h.service.Fragments()
+
+	const (
+		laneAuthority    = "authority"
+		laneDecision     = "decision"
+		laneMechanism    = "mechanism"
+		laneImpact       = "impact"
+		laneIntermediary = "intermediary"
+		roleAuthority    = "authority"
+		roleExecution    = "execution"
+		rolePropagation  = "propagation"
+	)
+
+	type bfsItem struct {
+		id  string
+		hop int
+	}
+	type corridorEdge struct {
+		Key         string
+		ID          string
+		From        string
+		To          string
+		Type        string
+		Role        string
+		Criticality float64
+	}
+	type bundlePath struct {
+		ID          string
+		Controller  string
+		Target      string
+		Mediator    string
+		NodeIDs     []string
+		EdgeKeys    []string
+		Coverage    float64
+		Description string
+	}
+
+	authorityEdgeSet := map[string]struct{}{
+		string(horizonmodels.DependencyTypeOwns):         {},
+		string(horizonmodels.DependencyTypeSubsidiaryOf): {},
+		"PARENT_OF": {},
+		string(horizonmodels.DependencyTypeControls):      {},
+		string(horizonmodels.DependencyTypeManages):       {},
+		string(horizonmodels.DependencyTypeInvestsIn):     {},
+		string(horizonmodels.DependencyTypeBoardMemberOf): {},
+		"EXECUTIVE_OF": {},
+		string(horizonmodels.DependencyTypeEmployedBy):  {},
+		string(horizonmodels.DependencyTypeFounded):     {},
+		string(horizonmodels.DependencyTypeAdministers): {},
+		string(horizonmodels.DependencyTypeAuditedBy):   {},
+	}
+	executionEdgeSet := map[string]struct{}{
+		string(horizonmodels.DependencyTypeGatekeepsDecision): {},
+		string(horizonmodels.DependencyTypeUsesMechanism):     {},
+		string(horizonmodels.DependencyTypeAppliesTo):         {},
+		string(horizonmodels.DependencyTypeControlsAccess):    {},
+		string(horizonmodels.DependencyTypeImposesCondition):  {},
+	}
+	propagationEdgeSet := map[string]struct{}{
+		string(horizonmodels.DependencyTypeInfluences): {},
+		string(horizonmodels.DependencyTypeAffects):    {},
+		"IMPACTS": {},
+		string(horizonmodels.DependencyTypeRegulates): {},
+		string(horizonmodels.DependencyTypeDependsOn): {},
+		"REQUIRES": {},
+		"NEEDS":    {},
+		"USES":     {},
+		string(horizonmodels.DependencyTypeConsumes):       {},
+		string(horizonmodels.DependencyTypeSuppliesTo):     {},
+		string(horizonmodels.DependencyTypeProduces):       {},
+		string(horizonmodels.DependencyTypeTransformsInto): {},
+		string(horizonmodels.DependencyTypeExtractsFrom):   {},
+		string(horizonmodels.DependencyTypeParticipatesIn): {},
+		string(horizonmodels.DependencyTypeDominates):      {},
+		string(horizonmodels.DependencyTypeHasSubmarket):   {},
+		string(horizonmodels.DependencyTypeHasSubgroup):    {},
+		string(horizonmodels.DependencyTypeOperatesVia):    {},
+		string(horizonmodels.DependencyTypeAffiliatedWith): {},
+		string(horizonmodels.DependencyTypeMemberOf):       {},
+		string(horizonmodels.DependencyTypePartnersWith):   {},
+		"COOPERATES_WITH": {},
+		string(horizonmodels.DependencyTypeRelatedTo):  {},
+		string(horizonmodels.DependencyTypeRelativeOf): {},
+		string(horizonmodels.DependencyTypeLocatedIn):  {},
+		string(horizonmodels.DependencyTypeOperatesIn): {},
+		"BASED_IN":         {},
+		"HEADQUARTERED_IN": {},
+	}
+	programGovBridgeEdgeSet := map[string]struct{}{
+		string(horizonmodels.DependencyTypeAdministers): {},
+		string(horizonmodels.DependencyTypeRegulates):   {},
+		string(horizonmodels.DependencyTypeInfluences):  {},
+		string(horizonmodels.DependencyTypeAffects):     {},
+		"IMPACTS": {},
+		string(horizonmodels.DependencyTypeControls):         {},
+		string(horizonmodels.DependencyTypeManages):          {},
+		string(horizonmodels.DependencyTypeControlsAccess):   {},
+		string(horizonmodels.DependencyTypeImposesCondition): {},
+	}
+
+	normalizeType := func(raw string) string {
+		return strings.ToUpper(strings.TrimSpace(raw))
+	}
+	roleForType := func(edgeType string) string {
+		et := normalizeType(edgeType)
+		if et == "" {
+			return ""
+		}
+		if _, ok := authorityEdgeSet[et]; ok {
+			return roleAuthority
+		}
+		if _, ok := executionEdgeSet[et]; ok {
+			return roleExecution
+		}
+		if _, ok := propagationEdgeSet[et]; ok {
+			return rolePropagation
+		}
+		return ""
+	}
+	stageFor := func(role, edgeType string) string {
+		et := normalizeType(edgeType)
+		switch role {
+		case roleAuthority:
+			return "authority"
+		case roleExecution:
+			if et == string(horizonmodels.DependencyTypeGatekeepsDecision) || et == string(horizonmodels.DependencyTypeUsesMechanism) {
+				return "decision"
+			}
+			return "mechanism"
+		case rolePropagation:
+			return "impact"
+		default:
+			return "impact"
+		}
+	}
+
+	fragCache := make(map[string]*horizonmodels.HorizonFragment, len(seedIDs)*8)
+	missingFrag := make(map[string]struct{})
+	getFragment := func(id string) *horizonmodels.HorizonFragment {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return nil
+		}
+		if f, ok := fragCache[id]; ok {
+			return f
+		}
+		if _, miss := missingFrag[id]; miss {
+			return nil
+		}
+		f, err := fragmentsRepo.Get(ctx, id)
+		if err != nil || f == nil {
+			missingFrag[id] = struct{}{}
+			return nil
+		}
+		fragCache[id] = f
+		return f
+	}
+	labelFor := func(f *horizonmodels.HorizonFragment, id string) string {
+		if f != nil {
+			if s := strings.TrimSpace(f.Labels["en"]); s != "" {
+				return s
+			}
+			for _, lang := range []string{"ru", "de", "es", "kk"} {
+				if s := strings.TrimSpace(f.Labels[lang]); s != "" {
+					return s
+				}
+			}
+			if cp := strings.TrimSpace(f.CanonicalPath); cp != "" {
+				last := cp
+				if parts := strings.Split(cp, "/"); len(parts) > 0 {
+					last = parts[len(parts)-1]
+				}
+				last = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(last, "-", " "), "_", " "))
+				if last != "" {
+					return last
+				}
+				return cp
+			}
+		}
+		return strings.TrimSpace(id)
+	}
+	isProgramNode := func(id string) bool {
+		f := getFragment(id)
+		if f == nil {
+			return false
+		}
+		if strings.ToUpper(strings.TrimSpace(string(f.Type))) == string(horizonmodels.FragmentTypeProgram) {
+			return true
+		}
+		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
+		return strings.HasPrefix(cp, "/program/")
+	}
+	isGovOrOrgNode := func(id string) bool {
+		f := getFragment(id)
+		if f == nil {
+			return false
+		}
+		ft := strings.ToUpper(strings.TrimSpace(string(f.Type)))
+		if ft != string(horizonmodels.FragmentTypeOrganization) {
+			return false
+		}
+		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
+		return cp == "" || strings.HasPrefix(cp, "/gov/") || strings.HasPrefix(cp, "/org/")
+	}
+
+	adjCache := make(map[string][]*horizonmodels.DependencyEdge, len(seedIDs)*8)
+	getAdjacent := func(nodeID string) []*horizonmodels.DependencyEdge {
+		nodeID = strings.TrimSpace(nodeID)
+		if nodeID == "" {
+			return nil
+		}
+		if cached, ok := adjCache[nodeID]; ok {
+			return cached
+		}
+		outgoing, outErr := edgesRepo.ListBySource(ctx, "global", nodeID, nil, opts.PerNodeEdgeLimit)
+		incoming, inErr := edgesRepo.ListByTarget(ctx, "global", nodeID, nil, opts.PerNodeEdgeLimit)
+		if outErr != nil && inErr != nil {
+			adjCache[nodeID] = []*horizonmodels.DependencyEdge{}
+			return adjCache[nodeID]
+		}
+		seen := map[string]struct{}{}
+		merged := make([]*horizonmodels.DependencyEdge, 0, len(outgoing)+len(incoming))
+		appendUnique := func(list []*horizonmodels.DependencyEdge) {
+			for _, e := range list {
+				if e == nil {
+					continue
+				}
+				s := strings.TrimSpace(e.SourceFragmentID)
+				t := strings.TrimSpace(e.TargetFragmentID)
+				et := normalizeType(string(e.Type))
+				if s == "" || t == "" || et == "" {
+					continue
+				}
+				key := strings.TrimSpace(e.ID)
+				if key == "" {
+					key = s + "|" + t + "|" + et
+				}
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				merged = append(merged, e)
+			}
+		}
+		appendUnique(outgoing)
+		appendUnique(incoming)
+		adjCache[nodeID] = merged
+		return merged
+	}
+
+	maxExploreNodes := opts.MaxNodes*4 + 32
+	maxExploreEdges := opts.MaxEdges*6 + 64
+	maxExploreHops := opts.MaxAuthorityHops + opts.MaxImpactHops + 4
+	if maxExploreHops < 3 {
+		maxExploreHops = 3
+	}
+	truncated := false
+
+	exploredNodes := make(map[string]struct{}, len(seedIDs)*16)
+	addExploredNode := func(id string) bool {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return false
+		}
+		if _, ok := exploredNodes[id]; ok {
+			return true
+		}
+		if len(exploredNodes) >= maxExploreNodes {
+			truncated = true
+			return false
+		}
+		exploredNodes[id] = struct{}{}
+		return true
+	}
+	edgePool := make(map[string]corridorEdge, maxExploreEdges)
+	addEdgeToPool := func(e *horizonmodels.DependencyEdge, role string) bool {
+		if e == nil {
+			return false
+		}
+		s := strings.TrimSpace(e.SourceFragmentID)
+		t := strings.TrimSpace(e.TargetFragmentID)
+		et := normalizeType(string(e.Type))
+		if s == "" || t == "" || et == "" || role == "" {
+			return false
+		}
+		key := s + "|" + t + "|" + et
+		if _, ok := edgePool[key]; ok {
+			return true
+		}
+		if len(edgePool) >= maxExploreEdges {
+			truncated = true
+			return false
+		}
+		eid := strings.TrimSpace(e.ID)
+		if eid == "" {
+			eid = key
+		}
+		edgePool[key] = corridorEdge{
+			Key:         key,
+			ID:          eid,
+			From:        s,
+			To:          t,
+			Type:        et,
+			Role:        role,
+			Criticality: e.Properties.Criticality,
+		}
+		return true
+	}
+
+	exploreVisited := make(map[string]int, len(seedIDs)*8)
+	exploreQueue := make([]bfsItem, 0, len(seedIDs))
+	enqueueExplore := func(id string, hop int) {
+		id = strings.TrimSpace(id)
+		if id == "" || hop > maxExploreHops {
+			return
+		}
+		if prev, ok := exploreVisited[id]; ok && hop >= prev {
+			return
+		}
+		exploreVisited[id] = hop
+		exploreQueue = append(exploreQueue, bfsItem{id: id, hop: hop})
+	}
+	for _, sid := range seedIDs {
+		if addExploredNode(sid) {
+			enqueueExplore(sid, 0)
+		}
+	}
+	for qi := 0; qi < len(exploreQueue); qi++ {
+		cur := exploreQueue[qi]
+		if cur.hop > maxExploreHops {
+			continue
+		}
+		for _, e := range getAdjacent(cur.id) {
+			if e == nil {
+				continue
+			}
+			role := roleForType(string(e.Type))
+			if role == "" {
+				continue
+			}
+			if !addEdgeToPool(e, role) {
+				continue
+			}
+			s := strings.TrimSpace(e.SourceFragmentID)
+			t := strings.TrimSpace(e.TargetFragmentID)
+			if s == "" || t == "" {
+				continue
+			}
+			_ = addExploredNode(s)
+			_ = addExploredNode(t)
+			if s == cur.id {
+				enqueueExplore(t, cur.hop+1)
+			} else if t == cur.id {
+				enqueueExplore(s, cur.hop+1)
+			}
+		}
+	}
+
+	edgeList := make([]corridorEdge, 0, len(edgePool))
+	for _, e := range edgePool {
+		edgeList = append(edgeList, e)
+	}
+	sort.SliceStable(edgeList, func(i, j int) bool {
+		if edgeList[i].From != edgeList[j].From {
+			return edgeList[i].From < edgeList[j].From
+		}
+		if edgeList[i].To != edgeList[j].To {
+			return edgeList[i].To < edgeList[j].To
+		}
+		if edgeList[i].Type != edgeList[j].Type {
+			return edgeList[i].Type < edgeList[j].Type
+		}
+		return edgeList[i].ID < edgeList[j].ID
+	})
+
+	outByRole := map[string]map[string][]corridorEdge{
+		roleAuthority:   {},
+		roleExecution:   {},
+		rolePropagation: {},
+	}
+	inByRole := map[string]map[string][]corridorEdge{
+		roleAuthority:   {},
+		roleExecution:   {},
+		rolePropagation: {},
+	}
+	for _, e := range edgeList {
+		if _, ok := outByRole[e.Role][e.From]; !ok {
+			outByRole[e.Role][e.From] = make([]corridorEdge, 0, 4)
+		}
+		outByRole[e.Role][e.From] = append(outByRole[e.Role][e.From], e)
+		if _, ok := inByRole[e.Role][e.To]; !ok {
+			inByRole[e.Role][e.To] = make([]corridorEdge, 0, 4)
+		}
+		inByRole[e.Role][e.To] = append(inByRole[e.Role][e.To], e)
+	}
+
+	upstreamLimit := opts.MaxAuthorityHops + 3
+	upstreamVisited := make(map[string]int, len(seedIDs)*8)
+	upstreamQueue := make([]bfsItem, 0, len(seedIDs))
+	enqueueUpstream := func(id string, hop int) {
+		id = strings.TrimSpace(id)
+		if id == "" || hop > upstreamLimit {
+			return
+		}
+		if prev, ok := upstreamVisited[id]; ok && hop >= prev {
+			return
+		}
+		upstreamVisited[id] = hop
+		upstreamQueue = append(upstreamQueue, bfsItem{id: id, hop: hop})
+	}
+	for _, sid := range seedIDs {
+		enqueueUpstream(sid, 0)
+	}
+	for qi := 0; qi < len(upstreamQueue); qi++ {
+		cur := upstreamQueue[qi]
+		if cur.hop >= upstreamLimit {
+			continue
+		}
+		for _, role := range []string{roleAuthority, roleExecution} {
+			for _, e := range inByRole[role][cur.id] {
+				enqueueUpstream(e.From, cur.hop+1)
+			}
+		}
+		if isProgramNode(cur.id) {
+			for _, e := range inByRole[rolePropagation][cur.id] {
+				if _, ok := programGovBridgeEdgeSet[e.Type]; !ok {
+					continue
+				}
+				if isGovOrOrgNode(e.From) {
+					enqueueUpstream(e.From, cur.hop+1)
+				}
+			}
+		}
+	}
+
+	isControllerLike := func(id string) bool {
+		if len(outByRole[roleAuthority][id])+len(outByRole[roleExecution][id]) > 0 {
+			return true
+		}
+		f := getFragment(id)
+		if f == nil {
+			return false
+		}
+		ft := strings.ToUpper(strings.TrimSpace(string(f.Type)))
+		switch ft {
+		case string(horizonmodels.FragmentTypeOrganization), string(horizonmodels.FragmentTypeProgram),
+			string(horizonmodels.FragmentTypePerson), string(horizonmodels.FragmentTypeDecisionPoint),
+			string(horizonmodels.FragmentTypeMechanism):
+			return true
+		}
+		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
+		return strings.HasPrefix(cp, "/gov/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/program/") || strings.HasPrefix(cp, "/decision/") || strings.HasPrefix(cp, "/mechanism/")
+	}
+
+	controllers := make(map[string]struct{}, len(seedIDs))
+	for id := range upstreamVisited {
+		if isControllerLike(id) {
+			controllers[id] = struct{}{}
+		}
+	}
+	if len(controllers) == 0 {
+		for _, sid := range seedIDs {
+			controllers[sid] = struct{}{}
+		}
+	}
+
+	forwardLimit := opts.MaxAuthorityHops + 4
+	forwardDist := make(map[string]int, len(seedIDs)*16)
+	forwardPrev := make(map[string]corridorEdge, len(seedIDs)*16)
+	forwardQueue := make([]bfsItem, 0, len(controllers)+len(seedIDs))
+	enqueueForward := func(id string, hop int, prev *corridorEdge) {
+		id = strings.TrimSpace(id)
+		if id == "" || hop > forwardLimit {
+			return
+		}
+		if old, ok := forwardDist[id]; ok && hop >= old {
+			return
+		}
+		forwardDist[id] = hop
+		if prev != nil {
+			forwardPrev[id] = *prev
+		}
+		forwardQueue = append(forwardQueue, bfsItem{id: id, hop: hop})
+	}
+	for cid := range controllers {
+		enqueueForward(cid, 0, nil)
+	}
+	for _, sid := range seedIDs {
+		enqueueForward(sid, 0, nil)
+	}
+	impactRoots := make(map[string]struct{}, 16)
+	for qi := 0; qi < len(forwardQueue); qi++ {
+		cur := forwardQueue[qi]
+		if cur.hop >= forwardLimit {
+			continue
+		}
+		for _, role := range []string{roleAuthority, roleExecution} {
+			for _, e := range outByRole[role][cur.id] {
+				edgeCopy := e
+				enqueueForward(e.To, cur.hop+1, &edgeCopy)
+				if e.Type == string(horizonmodels.DependencyTypeAppliesTo) ||
+					e.Type == string(horizonmodels.DependencyTypeControlsAccess) ||
+					e.Type == string(horizonmodels.DependencyTypeImposesCondition) {
+					impactRoots[e.To] = struct{}{}
+				}
+			}
+		}
+	}
+
+	propStart := make(map[string]struct{}, len(seedIDs)+len(forwardDist))
+	for _, sid := range seedIDs {
+		propStart[sid] = struct{}{}
+	}
+	for id := range forwardDist {
+		f := getFragment(id)
+		ft := ""
+		if f != nil {
+			ft = strings.ToUpper(strings.TrimSpace(string(f.Type)))
+		}
+		if ft == string(horizonmodels.FragmentTypeDecisionPoint) || ft == string(horizonmodels.FragmentTypeMechanism) || len(outByRole[roleExecution][id]) > 0 {
+			propStart[id] = struct{}{}
+		}
+	}
+
+	impactLimit := opts.MaxImpactHops
+	impactDist := make(map[string]int, len(seedIDs)*24)
+	impactPrev := make(map[string]corridorEdge, len(seedIDs)*24)
+	impactQueue := make([]bfsItem, 0, len(propStart))
+	enqueueImpact := func(id string, hop int, prev *corridorEdge) {
+		id = strings.TrimSpace(id)
+		if id == "" || hop > impactLimit {
+			return
+		}
+		if old, ok := impactDist[id]; ok && hop >= old {
+			return
+		}
+		impactDist[id] = hop
+		if prev != nil {
+			impactPrev[id] = *prev
+		}
+		impactQueue = append(impactQueue, bfsItem{id: id, hop: hop})
+	}
+	for id := range propStart {
+		enqueueImpact(id, 0, nil)
+	}
+	for qi := 0; qi < len(impactQueue); qi++ {
+		cur := impactQueue[qi]
+		if cur.hop >= impactLimit {
+			continue
+		}
+		for _, e := range outByRole[rolePropagation][cur.id] {
+			edgeCopy := e
+			enqueueImpact(e.To, cur.hop+1, &edgeCopy)
+		}
+	}
+
+	isImpactTargetType := func(id string) bool {
+		f := getFragment(id)
+		if f == nil {
+			return false
+		}
+		ft := strings.ToUpper(strings.TrimSpace(string(f.Type)))
+		switch ft {
+		case string(horizonmodels.FragmentTypeMarket), string(horizonmodels.FragmentTypeOrganization),
+			string(horizonmodels.FragmentTypeProgram), string(horizonmodels.FragmentTypeProduct),
+			string(horizonmodels.FragmentTypeDomain), string(horizonmodels.FragmentTypeFacility),
+			string(horizonmodels.FragmentTypeGeoRegion),
+			string(horizonmodels.FragmentTypeCommunity):
+			return true
+		}
+		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
+		return strings.HasPrefix(cp, "/market/") || strings.HasPrefix(cp, "/domain/") || strings.HasPrefix(cp, "/loc/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/program/")
+	}
+
+	impactedTargets := make(map[string]struct{}, 24)
+	for id, d := range impactDist {
+		if d <= 0 {
+			continue
+		}
+		if _, ok := controllers[id]; ok {
+			continue
+		}
+		if len(outByRole[rolePropagation][id]) == 0 || isImpactTargetType(id) {
+			impactedTargets[id] = struct{}{}
+		}
+	}
+	if len(impactedTargets) == 0 {
+		type impactCandidate struct {
+			id   string
+			dist int
+		}
+		cands := make([]impactCandidate, 0, len(impactDist))
+		for id, d := range impactDist {
+			if d <= 0 {
+				continue
+			}
+			cands = append(cands, impactCandidate{id: id, dist: d})
+		}
+		sort.SliceStable(cands, func(i, j int) bool {
+			if cands[i].dist != cands[j].dist {
+				return cands[i].dist > cands[j].dist
+			}
+			return cands[i].id < cands[j].id
+		})
+		for _, c := range cands {
+			impactedTargets[c.id] = struct{}{}
+			if len(impactedTargets) >= 8 {
+				break
+			}
+		}
+	}
+
+	backwardLimit := opts.MaxImpactHops + 4
+	backwardDist := make(map[string]int, len(seedIDs)*24)
+	backwardNext := make(map[string]corridorEdge, len(seedIDs)*24)
+	backwardQueue := make([]bfsItem, 0, len(impactedTargets))
+	enqueueBackward := func(id string, hop int, next *corridorEdge) {
+		id = strings.TrimSpace(id)
+		if id == "" || hop > backwardLimit {
+			return
+		}
+		if old, ok := backwardDist[id]; ok && hop >= old {
+			return
+		}
+		backwardDist[id] = hop
+		if next != nil {
+			backwardNext[id] = *next
+		}
+		backwardQueue = append(backwardQueue, bfsItem{id: id, hop: hop})
+	}
+	for id := range impactedTargets {
+		enqueueBackward(id, 0, nil)
+	}
+	for qi := 0; qi < len(backwardQueue); qi++ {
+		cur := backwardQueue[qi]
+		if cur.hop >= backwardLimit {
+			continue
+		}
+		for _, e := range inByRole[rolePropagation][cur.id] {
+			edgeCopy := e
+			enqueueBackward(e.From, cur.hop+1, &edgeCopy)
+		}
+	}
+
+	intersection := make(map[string]struct{}, len(forwardDist))
+	for id := range forwardDist {
+		if _, ok := backwardDist[id]; ok {
+			intersection[id] = struct{}{}
+		}
+	}
+	for _, sid := range seedIDs {
+		intersection[sid] = struct{}{}
+	}
+
+	decisions := make(map[string]struct{}, 16)
+	mechanisms := make(map[string]struct{}, 16)
+	for id := range intersection {
+		f := getFragment(id)
+		if f == nil {
+			continue
+		}
+		ft := strings.ToUpper(strings.TrimSpace(string(f.Type)))
+		if ft == string(horizonmodels.FragmentTypeDecisionPoint) {
+			decisions[id] = struct{}{}
+		} else if ft == string(horizonmodels.FragmentTypeMechanism) {
+			mechanisms[id] = struct{}{}
+		}
+	}
+	for id := range forwardDist {
+		f := getFragment(id)
+		if f == nil {
+			continue
+		}
+		ft := strings.ToUpper(strings.TrimSpace(string(f.Type)))
+		if ft == string(horizonmodels.FragmentTypeDecisionPoint) {
+			decisions[id] = struct{}{}
+		} else if ft == string(horizonmodels.FragmentTypeMechanism) {
+			mechanisms[id] = struct{}{}
+		}
+	}
+
+	mediators := make(map[string]struct{}, len(intersection))
+	for id := range intersection {
+		if _, ok := controllers[id]; ok {
+			continue
+		}
+		if _, ok := impactedTargets[id]; ok {
+			continue
+		}
+		if _, ok := decisions[id]; ok {
+			continue
+		}
+		if _, ok := mechanisms[id]; ok {
+			continue
+		}
+		mediators[id] = struct{}{}
+	}
+
+	finalNodeSet := make(map[string]struct{}, len(intersection)+len(controllers)+len(impactedTargets)+32)
+	finalEdgeSet := make(map[string]corridorEdge, len(edgePool))
+	addFinalNode := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		finalNodeSet[id] = struct{}{}
+	}
+	addFinalEdge := func(e corridorEdge) {
+		if e.Key == "" {
+			return
+		}
+		finalEdgeSet[e.Key] = e
+		addFinalNode(e.From)
+		addFinalNode(e.To)
+	}
+
+	for _, sid := range seedIDs {
+		addFinalNode(sid)
+	}
+	for id := range controllers {
+		addFinalNode(id)
+	}
+	for id := range decisions {
+		addFinalNode(id)
+	}
+	for id := range mechanisms {
+		addFinalNode(id)
+	}
+	for id := range mediators {
+		addFinalNode(id)
+	}
+	for id := range impactedTargets {
+		addFinalNode(id)
+	}
+
+	collectForwardPath := func(fromNode string) (string, []corridorEdge) {
+		cur := strings.TrimSpace(fromNode)
+		if cur == "" {
+			return "", nil
+		}
+		path := make([]corridorEdge, 0, 8)
+		guard := 0
+		for guard < 128 {
+			guard++
+			e, ok := forwardPrev[cur]
+			if !ok {
+				break
+			}
+			path = append(path, e)
+			cur = e.From
+		}
+		for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+			path[i], path[j] = path[j], path[i]
+		}
+		return cur, path
+	}
+
+	findMeetAndTail := func(targetID string) (string, []corridorEdge) {
+		targetID = strings.TrimSpace(targetID)
+		if targetID == "" {
+			return "", nil
+		}
+		if _, ok := forwardDist[targetID]; ok {
+			return targetID, nil
+		}
+		type state struct {
+			id string
+		}
+		queue := []state{{id: targetID}}
+		seen := map[string]struct{}{targetID: {}}
+		prev := map[string]corridorEdge{}
+		meet := ""
+
+		for qi := 0; qi < len(queue); qi++ {
+			cur := queue[qi]
+			if _, ok := forwardDist[cur.id]; ok {
+				meet = cur.id
+				break
+			}
+			for _, e := range inByRole[rolePropagation][cur.id] {
+				pred := e.From
+				if pred == "" {
+					continue
+				}
+				if _, ok := seen[pred]; ok {
+					continue
+				}
+				seen[pred] = struct{}{}
+				prev[pred] = e
+				queue = append(queue, state{id: pred})
+			}
+		}
+		if meet == "" {
+			return "", nil
+		}
+		tail := make([]corridorEdge, 0, 8)
+		cur := meet
+		guard := 0
+		for cur != targetID && guard < 128 {
+			guard++
+			e, ok := prev[cur]
+			if !ok {
+				break
+			}
+			tail = append(tail, e)
+			cur = e.To
+		}
+		return meet, tail
+	}
+
+	nodeUsage := make(map[string]int, 64)
+	edgeUsage := make(map[string]int, 64)
+	usedPathPairs := map[string]struct{}{}
+	bundles := make([]bundlePath, 0, 32)
+
+	targetIDs := make([]string, 0, len(impactedTargets))
+	for id := range impactedTargets {
+		targetIDs = append(targetIDs, id)
+	}
+	sort.Strings(targetIDs)
+
+	for _, targetID := range targetIDs {
+		meet, tail := findMeetAndTail(targetID)
+		if meet == "" {
+			continue
+		}
+		controllerID, head := collectForwardPath(meet)
+		if controllerID == "" {
+			controllerID = meet
+		}
+		key := controllerID + "|" + targetID
+		if _, ok := usedPathPairs[key]; ok {
+			continue
+		}
+		usedPathPairs[key] = struct{}{}
+
+		nodeSeq := make([]string, 0, len(head)+len(tail)+2)
+		edgeSeq := make([]string, 0, len(head)+len(tail))
+		nodeSeq = append(nodeSeq, controllerID)
+		for _, e := range head {
+			addFinalEdge(e)
+			edgeSeq = append(edgeSeq, e.Key)
+			if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != e.To {
+				nodeSeq = append(nodeSeq, e.To)
+			}
+		}
+		if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != meet {
+			nodeSeq = append(nodeSeq, meet)
+		}
+		for _, e := range tail {
+			addFinalEdge(e)
+			edgeSeq = append(edgeSeq, e.Key)
+			if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != e.To {
+				nodeSeq = append(nodeSeq, e.To)
+			}
+		}
+		if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != targetID {
+			nodeSeq = append(nodeSeq, targetID)
+		}
+		for _, nid := range nodeSeq {
+			addFinalNode(nid)
+			nodeUsage[nid]++
+		}
+		for _, ek := range edgeSeq {
+			edgeUsage[ek]++
+		}
+
+		bundles = append(bundles, bundlePath{
+			ID:          "bundle:" + key,
+			Controller:  controllerID,
+			Target:      targetID,
+			Mediator:    meet,
+			NodeIDs:     nodeSeq,
+			EdgeKeys:    edgeSeq,
+			Coverage:    1.0 / float64(len(edgeSeq)+1),
+			Description: "controller-to-impact corridor",
+		})
+		if len(bundles) >= 48 {
+			break
+		}
+	}
+
+	if len(finalEdgeSet) == 0 {
+		for _, e := range edgeList {
+			if e.Role == roleAuthority || e.Role == roleExecution {
+				if _, ok := forwardDist[e.From]; ok {
+					if _, ok2 := forwardDist[e.To]; ok2 {
+						addFinalEdge(e)
+					}
+				}
+			}
+			if e.Role == rolePropagation {
+				if _, ok := backwardDist[e.From]; ok {
+					if _, ok2 := backwardDist[e.To]; ok2 {
+						addFinalEdge(e)
+					}
+				}
+			}
+		}
+	}
+
+	type nodeRank struct {
+		ID       string
+		Priority int
+		Depth    int
+		Label    string
+	}
+	nodeRanks := make([]nodeRank, 0, len(finalNodeSet))
+	for id := range finalNodeSet {
+		depth := 999
+		if d, ok := forwardDist[id]; ok && d < depth {
+			depth = d
+		}
+		if d, ok := backwardDist[id]; ok && d < depth {
+			depth = d
+		}
+		if depth == 999 {
+			depth = 0
+		}
+		priority := 70
+		if containsID(seedIDs, id) {
+			priority = 0
+		} else if _, ok := controllers[id]; ok {
+			priority = 10
+		} else if _, ok := decisions[id]; ok {
+			priority = 20
+		} else if _, ok := mechanisms[id]; ok {
+			priority = 30
+		} else if _, ok := mediators[id]; ok {
+			priority = 40
+		} else if _, ok := impactedTargets[id]; ok {
+			priority = 50
+		}
+		nodeRanks = append(nodeRanks, nodeRank{
+			ID:       id,
+			Priority: priority,
+			Depth:    depth,
+			Label:    labelFor(getFragment(id), id),
+		})
+	}
+	sort.SliceStable(nodeRanks, func(i, j int) bool {
+		if nodeRanks[i].Priority != nodeRanks[j].Priority {
+			return nodeRanks[i].Priority < nodeRanks[j].Priority
+		}
+		if nodeRanks[i].Depth != nodeRanks[j].Depth {
+			return nodeRanks[i].Depth < nodeRanks[j].Depth
+		}
+		if nodeRanks[i].Label != nodeRanks[j].Label {
+			return nodeRanks[i].Label < nodeRanks[j].Label
+		}
+		return nodeRanks[i].ID < nodeRanks[j].ID
+	})
+
+	keptNodes := make(map[string]struct{}, len(nodeRanks))
+	nodeLimit := opts.MaxNodes
+	if len(nodeRanks) > nodeLimit {
+		truncated = true
+		nodeRanks = nodeRanks[:nodeLimit]
+	}
+	for _, nr := range nodeRanks {
+		keptNodes[nr.ID] = struct{}{}
+	}
+
+	keptEdges := make([]corridorEdge, 0, len(finalEdgeSet))
+	for _, e := range finalEdgeSet {
+		if _, ok := keptNodes[e.From]; !ok {
+			continue
+		}
+		if _, ok := keptNodes[e.To]; !ok {
+			continue
+		}
+		keptEdges = append(keptEdges, e)
+	}
+	roleRank := map[string]int{
+		roleAuthority:   1,
+		roleExecution:   2,
+		rolePropagation: 3,
+	}
+	sort.SliceStable(keptEdges, func(i, j int) bool {
+		if roleRank[keptEdges[i].Role] != roleRank[keptEdges[j].Role] {
+			return roleRank[keptEdges[i].Role] < roleRank[keptEdges[j].Role]
+		}
+		if keptEdges[i].Type != keptEdges[j].Type {
+			return keptEdges[i].Type < keptEdges[j].Type
+		}
+		if keptEdges[i].From != keptEdges[j].From {
+			return keptEdges[i].From < keptEdges[j].From
+		}
+		if keptEdges[i].To != keptEdges[j].To {
+			return keptEdges[i].To < keptEdges[j].To
+		}
+		return keptEdges[i].ID < keptEdges[j].ID
+	})
+	if len(keptEdges) > opts.MaxEdges {
+		truncated = true
+		keptEdges = keptEdges[:opts.MaxEdges]
+	}
+
+	nodeRoles := make(map[string]map[string]struct{}, len(keptNodes))
+	for _, e := range keptEdges {
+		if _, ok := nodeRoles[e.From]; !ok {
+			nodeRoles[e.From] = map[string]struct{}{}
+		}
+		if _, ok := nodeRoles[e.To]; !ok {
+			nodeRoles[e.To] = map[string]struct{}{}
+		}
+		nodeRoles[e.From][e.Role] = struct{}{}
+		nodeRoles[e.To][e.Role] = struct{}{}
+	}
+
+	nodeLane := func(id string) string {
+		if _, ok := decisions[id]; ok {
+			return laneDecision
+		}
+		if _, ok := mechanisms[id]; ok {
+			return laneMechanism
+		}
+		if _, ok := controllers[id]; ok {
+			return laneAuthority
+		}
+		if _, ok := impactedTargets[id]; ok {
+			return laneImpact
+		}
+		if _, ok := mediators[id]; ok {
+			return laneIntermediary
+		}
+		if rs, ok := nodeRoles[id]; ok {
+			if _, ok2 := rs[roleExecution]; ok2 {
+				return laneMechanism
+			}
+			if _, ok2 := rs[roleAuthority]; ok2 {
+				return laneAuthority
+			}
+			if _, ok2 := rs[rolePropagation]; ok2 {
+				return laneImpact
+			}
+		}
+		return laneIntermediary
+	}
+
+	nodesOut := make([]controlCorridorNode, 0, len(nodeRanks))
+	for _, nr := range nodeRanks {
+		id := nr.ID
+		f := getFragment(id)
+		n := controlCorridorNode{
+			ID:    id,
+			Label: labelFor(f, id),
+			Lane:  nodeLane(id),
+			Depth: nr.Depth,
+			Seed:  containsID(seedIDs, id),
+		}
+		if f != nil {
+			n.Type = strings.TrimSpace(string(f.Type))
+			n.CanonicalPath = strings.TrimSpace(f.CanonicalPath)
+		}
+		nodesOut = append(nodesOut, n)
+	}
+
+	edgesOut := make([]controlCorridorEdge, 0, len(keptEdges))
+	for _, e := range keptEdges {
+		edgesOut = append(edgesOut, controlCorridorEdge{
+			ID:          e.ID,
+			From:        e.From,
+			To:          e.To,
+			Type:        e.Type,
+			Stage:       stageFor(e.Role, e.Type),
+			Role:        e.Role,
+			Criticality: e.Criticality,
+		})
+	}
+
+	keptEdgeKeys := make(map[string]struct{}, len(keptEdges))
+	for _, e := range keptEdges {
+		keptEdgeKeys[e.Key] = struct{}{}
+	}
+
+	type scoredNode struct {
+		ID       string  `json:"id"`
+		Label    string  `json:"label"`
+		Type     string  `json:"type,omitempty"`
+		Path     string  `json:"canonicalPath,omitempty"`
+		Score    float64 `json:"score,omitempty"`
+		Coverage int     `json:"coverage,omitempty"`
+	}
+	toScoredNode := func(id string, score float64, coverage int) scoredNode {
+		f := getFragment(id)
+		out := scoredNode{
+			ID:       id,
+			Label:    labelFor(f, id),
+			Score:    score,
+			Coverage: coverage,
+		}
+		if f != nil {
+			out.Type = strings.TrimSpace(string(f.Type))
+			out.Path = strings.TrimSpace(f.CanonicalPath)
+		}
+		return out
+	}
+
+	controllersOut := make([]scoredNode, 0, len(controllers))
+	for id := range controllers {
+		if _, ok := keptNodes[id]; !ok {
+			continue
+		}
+		controllersOut = append(controllersOut, toScoredNode(id, 1.0/float64((forwardDist[id]+1)), nodeUsage[id]))
+	}
+	sort.SliceStable(controllersOut, func(i, j int) bool {
+		if controllersOut[i].Coverage != controllersOut[j].Coverage {
+			return controllersOut[i].Coverage > controllersOut[j].Coverage
+		}
+		if controllersOut[i].Score != controllersOut[j].Score {
+			return controllersOut[i].Score > controllersOut[j].Score
+		}
+		return controllersOut[i].ID < controllersOut[j].ID
+	})
+
+	decisionsOut := make([]scoredNode, 0, len(decisions))
+	for id := range decisions {
+		if _, ok := keptNodes[id]; !ok {
+			continue
+		}
+		decisionsOut = append(decisionsOut, toScoredNode(id, 1.0/float64((forwardDist[id]+1)), nodeUsage[id]))
+	}
+	sort.SliceStable(decisionsOut, func(i, j int) bool {
+		if decisionsOut[i].Coverage != decisionsOut[j].Coverage {
+			return decisionsOut[i].Coverage > decisionsOut[j].Coverage
+		}
+		return decisionsOut[i].ID < decisionsOut[j].ID
+	})
+
+	mechanismsOut := make([]scoredNode, 0, len(mechanisms))
+	for id := range mechanisms {
+		if _, ok := keptNodes[id]; !ok {
+			continue
+		}
+		mechanismsOut = append(mechanismsOut, toScoredNode(id, 1.0/float64((forwardDist[id]+1)), nodeUsage[id]))
+	}
+	sort.SliceStable(mechanismsOut, func(i, j int) bool {
+		if mechanismsOut[i].Coverage != mechanismsOut[j].Coverage {
+			return mechanismsOut[i].Coverage > mechanismsOut[j].Coverage
+		}
+		return mechanismsOut[i].ID < mechanismsOut[j].ID
+	})
+
+	mediatorsOut := make([]scoredNode, 0, len(mediators))
+	for id := range mediators {
+		if _, ok := keptNodes[id]; !ok {
+			continue
+		}
+		mediatorsOut = append(mediatorsOut, toScoredNode(id, 1.0/float64((forwardDist[id]+1)+(backwardDist[id]+1)), nodeUsage[id]))
+	}
+	sort.SliceStable(mediatorsOut, func(i, j int) bool {
+		if mediatorsOut[i].Coverage != mediatorsOut[j].Coverage {
+			return mediatorsOut[i].Coverage > mediatorsOut[j].Coverage
+		}
+		return mediatorsOut[i].ID < mediatorsOut[j].ID
+	})
+
+	targetsOut := make([]scoredNode, 0, len(impactedTargets))
+	for id := range impactedTargets {
+		if _, ok := keptNodes[id]; !ok {
+			continue
+		}
+		targetsOut = append(targetsOut, toScoredNode(id, 1.0/float64((impactDist[id]+1)), nodeUsage[id]))
+	}
+	sort.SliceStable(targetsOut, func(i, j int) bool {
+		if targetsOut[i].Coverage != targetsOut[j].Coverage {
+			return targetsOut[i].Coverage > targetsOut[j].Coverage
+		}
+		return targetsOut[i].ID < targetsOut[j].ID
+	})
+
+	bundlesOut := make([]map[string]interface{}, 0, len(bundles))
+	for _, b := range bundles {
+		if _, ok := keptNodes[b.Controller]; !ok {
+			continue
+		}
+		if _, ok := keptNodes[b.Target]; !ok {
+			continue
+		}
+		nodeIDs := make([]string, 0, len(b.NodeIDs))
+		for _, nid := range b.NodeIDs {
+			if _, ok := keptNodes[nid]; ok {
+				nodeIDs = append(nodeIDs, nid)
+			}
+		}
+		edgeIDs := make([]string, 0, len(b.EdgeKeys))
+		edgeKeys := make([]string, 0, len(b.EdgeKeys))
+		for _, ek := range b.EdgeKeys {
+			if _, ok := keptEdgeKeys[ek]; ok {
+				edgeKeys = append(edgeKeys, ek)
+				if edge, okEdge := edgePool[ek]; okEdge && strings.TrimSpace(edge.ID) != "" {
+					edgeIDs = append(edgeIDs, strings.TrimSpace(edge.ID))
+				} else {
+					edgeIDs = append(edgeIDs, ek)
+				}
+			}
+		}
+		if len(nodeIDs) == 0 {
+			continue
+		}
+		bundlesOut = append(bundlesOut, map[string]interface{}{
+			"id":            b.ID,
+			"controllerId":  b.Controller,
+			"targetId":      b.Target,
+			"mediatorId":    b.Mediator,
+			"nodeIds":       nodeIDs,
+			"edgeIds":       edgeIDs,
+			"edgeKeys":      edgeKeys,
+			"coverageScore": b.Coverage,
+			"description":   b.Description,
+		})
+	}
+
+	type usageNode struct {
+		ID      string
+		Count   int
+		DistKey int
+	}
+	usageNodes := make([]usageNode, 0, len(nodeUsage))
+	for id, c := range nodeUsage {
+		if c <= 0 {
+			continue
+		}
+		if _, ok := keptNodes[id]; !ok {
+			continue
+		}
+		dist := 0
+		if d, ok := forwardDist[id]; ok {
+			dist += d
+		}
+		if d, ok := backwardDist[id]; ok {
+			dist += d
+		}
+		usageNodes = append(usageNodes, usageNode{ID: id, Count: c, DistKey: dist})
+	}
+	sort.SliceStable(usageNodes, func(i, j int) bool {
+		if usageNodes[i].Count != usageNodes[j].Count {
+			return usageNodes[i].Count > usageNodes[j].Count
+		}
+		if usageNodes[i].DistKey != usageNodes[j].DistKey {
+			return usageNodes[i].DistKey < usageNodes[j].DistKey
+		}
+		return usageNodes[i].ID < usageNodes[j].ID
+	})
+	if len(usageNodes) > 12 {
+		usageNodes = usageNodes[:12]
+	}
+	bottleneckNodes := make([]map[string]interface{}, 0, len(usageNodes))
+	for _, u := range usageNodes {
+		n := toScoredNode(u.ID, float64(u.Count), u.Count)
+		bottleneckNodes = append(bottleneckNodes, map[string]interface{}{
+			"id":            n.ID,
+			"label":         n.Label,
+			"type":          n.Type,
+			"canonicalPath": n.Path,
+			"usageCount":    u.Count,
+			"score":         n.Score,
+		})
+	}
+
+	type usageEdge struct {
+		Key   string
+		Count int
+	}
+	usageEdges := make([]usageEdge, 0, len(edgeUsage))
+	for key, c := range edgeUsage {
+		if c <= 0 {
+			continue
+		}
+		if _, ok := keptEdgeKeys[key]; !ok {
+			continue
+		}
+		usageEdges = append(usageEdges, usageEdge{Key: key, Count: c})
+	}
+	sort.SliceStable(usageEdges, func(i, j int) bool {
+		if usageEdges[i].Count != usageEdges[j].Count {
+			return usageEdges[i].Count > usageEdges[j].Count
+		}
+		return usageEdges[i].Key < usageEdges[j].Key
+	})
+	if len(usageEdges) > 12 {
+		usageEdges = usageEdges[:12]
+	}
+	bottleneckEdges := make([]map[string]interface{}, 0, len(usageEdges))
+	for _, u := range usageEdges {
+		e, ok := edgePool[u.Key]
+		if !ok {
+			continue
+		}
+		bottleneckEdges = append(bottleneckEdges, map[string]interface{}{
+			"id":         e.ID,
+			"from":       e.From,
+			"to":         e.To,
+			"type":       e.Type,
+			"role":       e.Role,
+			"usageCount": u.Count,
+		})
+	}
+
+	bundlesPayload := map[string]interface{}{
+		"controllers":     controllersOut,
+		"decisionPoints":  decisionsOut,
+		"mechanisms":      mechanismsOut,
+		"mediators":       mediatorsOut,
+		"impactedTargets": targetsOut,
+		"paths":           bundlesOut,
+		"bottlenecks": map[string]interface{}{
+			"nodes": bottleneckNodes,
+			"edges": bottleneckEdges,
+		},
+	}
+
+	var authorityCount, decisionCount, mechanismCount, impactCount int
+	for _, n := range nodesOut {
+		switch strings.TrimSpace(n.Lane) {
+		case laneAuthority:
+			authorityCount++
+		case laneDecision:
+			decisionCount++
+		case laneMechanism:
+			mechanismCount++
+		case laneImpact:
+			impactCount++
+		}
+	}
+	impactRootCount := 0
+	for id := range impactRoots {
+		if _, ok := keptNodes[id]; ok {
+			impactRootCount++
+		}
+	}
+
+	return &controlCorridorResponse{
+		LensID:             lensID,
+		SeedFragmentIDs:    append([]string(nil), seedIDs...),
+		SeedCanonicalPaths: append([]string(nil), seedPaths...),
+		Nodes:              nodesOut,
+		Edges:              edgesOut,
+		Bundles:            bundlesPayload,
+		Summary: controlCorridorSummary{
+			SeedCount:        len(seedIDs),
+			AuthorityCount:   authorityCount,
+			DecisionCount:    decisionCount,
+			MechanismCount:   mechanismCount,
+			ImpactCount:      impactCount,
+			ImpactRootCount:  impactRootCount,
+			TotalNodes:       len(nodesOut),
+			TotalEdges:       len(edgesOut),
+			MaxAuthorityHops: opts.MaxAuthorityHops,
+			MaxImpactHops:    opts.MaxImpactHops,
+			ControllerCount:  len(controllersOut),
+			MediatorCount:    len(mediatorsOut),
+			BundleCount:      len(bundlesOut),
+			Truncated:        truncated,
+		},
+	}, nil
+}
+
+func containsID(items []string, id string) bool {
+	id = strings.TrimSpace(id)
+	for _, it := range items {
+		if strings.TrimSpace(it) == id {
+			return true
+		}
+	}
+	return false
+}
+
+func clampInt(v, min, max, fallback int) int {
+	if v == 0 {
+		v = fallback
+	}
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}

@@ -283,6 +283,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 		case "graph-query":
 			h.QueryGraph(w, r)
 			return
+		case "control-corridor":
+			h.QueryControlCorridor(w, r)
+			return
 		case "domain-overlay-preview":
 			h.PreviewDomainOverlay(w, r)
 			return

@@ -191,6 +191,25 @@ func (s *StrategicResearchStrategy) Enrich(ctx context.Context, input ResearchSt
 	return out, nil
 }
 
+// PolicyImpactResearchStrategy enriches policy impact channels (regulatory instrument -> segment -> impact).
+type PolicyImpactResearchStrategy struct {
+	agent *ResearchAgent
+}
+
+func (s *PolicyImpactResearchStrategy) DomainMode() string { return taxonomy.DomainModePolicyImpact }
+
+func (s *PolicyImpactResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
+	if s.agent == nil || s.agent.executor == nil {
+		return nil, nil
+	}
+	prompt := s.agent.buildPolicyImpactEnrichmentPrompt(input)
+	out, err := s.agent.runResearchPrompt(ctx, prompt)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // runResearchPrompt runs a research prompt and parses result into ResearchStrategyOutput.
 func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil {
@@ -374,18 +393,31 @@ func (a *ResearchAgent) buildMarketEnrichmentPrompt(input ResearchStrategyInput)
 
 ENTITY TYPES in market: %s. PARTICIPATES_IN source can be any of these. Use correct targetType for each relation.
 
-CANONICAL PATH RULES (targetCanonicalPath MUST follow):
+CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
 %s
 
 Use ONLY these relation types: PARTICIPATES_IN (with marketRole and metrics.market_share), HAS_SUBMARKET.
 Do NOT use DOMINATES, COMPETES_WITH, or other non-market types.
+STRICT DIRECTION/TYPING RULES (MANDATORY):
+- PARTICIPATES_IN direction is participant -> market.
+  - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON.
+  - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
+  - targetCanonicalPath MUST NOT start with /domain/.
+- HAS_SUBMARKET direction is parent-market -> child-market.
+  - source and target MUST both be MARKET paths (/market/...).
+  - targetCanonicalPath MUST NOT start with /domain/.
+- If CURRENT FRAGMENT is MARKET and you need player -> THIS MARKET, you MUST set explicit source:
+  - sourceCanonicalPath/sourceType/sourceName = player
+  - targetCanonicalPath = THIS FRAGMENT market path
+  - relationType = PARTICIPATES_IN
+- Never emit non-domain relations with targetCanonicalPath /domain/... in this strategy.
 
 WHAT TO FIND (prioritize completeness):
 1. Market participation: PARTICIPATES_IN (entity→market). Source: ORGANIZATION, FACILITY, COMMUNITY, or PROGRAM. metrics.market_share (0..1 or percent). marketRole: participant, leader, dominant.
 2. Full market hierarchy: HAS_SUBMARKET (MARKET→MARKET, parent→narrower). Build 3 levels when possible (e.g. market→sub-market→segment).
-3. Top 10 players: For MARKET entities, find PARTICIPATES_IN edges FROM top 10 players (orgs, facilities, communities, programs) by market share. Include shares when known.
+3. Top 10 players: For MARKET entities, find top 10 player entities (orgs, facilities, communities, programs) by market share and emit PARTICIPATES_IN as player -> market using explicit sourceCanonicalPath.
 4. Full sizing: fragment.state: /metric/market/tam_usd, /metric/market/cagr_percent, /metric/market/hhi, /metric/market/cr4_percent. Only if you find reliable data; do NOT fabricate.
 5. Geographic split: fragment.state with geo distribution (e.g. /metric/market/geo_share_us, /metric/market/geo_share_eu) when relevant.
 6. Return key players (orgs, facilities, communities, programs) that should be explored further (child jobs will recurse).
@@ -399,7 +431,7 @@ QUESTIONS TO ANSWER (from Critic; prioritize these):
 Return a JSON object:
 {
   "fragment": { updated fields: state with /metric/market/tam_usd, cagr_percent, hhi, cr4_percent when found },
-  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "metrics": { "market_share": ... } } ],
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "metrics": { "market_share": ... }, "sourceCanonicalPath?", "sourceType?", "sourceName?" } ],
   "supplyChains": []
 }
 
@@ -451,4 +483,72 @@ Return a JSON object:
 
 For GATEKEEPS_DECISION and USES_MECHANISM: set sourceCanonicalPath, sourceType, sourceName when the SOURCE is not the current fragment (e.g. gatekeeper org, mechanism user).
 Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, string(fragmentJSON), questions)
+}
+
+// buildPolicyImpactEnrichmentPrompt builds a prompt for policy impact channels and exposure graph.
+func (a *ResearchAgent) buildPolicyImpactEnrichmentPrompt(input ResearchStrategyInput) string {
+	frag := input.Fragment
+	if frag == nil {
+		frag = &models.HorizonFragment{}
+	}
+	fragmentJSON, _ := json.MarshalIndent(frag, "", "  ")
+	questions := strings.Join(input.MissingInfo, "\n- ")
+	if questions == "" {
+		questions = "Identify policy parameters, affected segments, impact channels, and regulator/program links."
+	}
+	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
+	return fmt.Sprintf(`You are a research agent. Enrich the entity for POLICY IMPACT context.
+
+ENTITY TYPES in policy impact: %s. Use correct targetType for each relation.
+
+CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
+%s
+
+%s
+
+Use ONLY these relation types: REGULATES, CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO, INFLUENCES, DEPENDS_ON, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN, ADMINISTERS.
+Do NOT use generic relation types outside this list.
+STRICT DIRECTION/TYPING RULES (MANDATORY):
+- In this strategy, DOMAIN is not a valid target for these relation types.
+  - targetCanonicalPath MUST NOT start with /domain/.
+- PARTICIPATES_IN direction is participant -> market.
+  - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON.
+  - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
+  - When CURRENT FRAGMENT is MARKET, use explicit sourceCanonicalPath/sourceType/sourceName for participant -> THIS MARKET.
+- REGULATES/ADMINISTERS must originate from regulator/admin source, not from affected market/entity.
+- For any relation where semantic source is not CURRENT FRAGMENT, explicit sourceCanonicalPath/sourceType/sourceName is REQUIRED.
+
+WHAT TO FIND:
+1. Policy instruments and mechanisms (tax rate changes, exemptions, compliance controls, enforcement mechanisms).
+2. Regulator/program authority chains (who sets/administers policy; what is in scope).
+3. Exposure links to affected segments (markets, organizations, communities, geographies).
+4. Influence channels suitable for propagation modeling (formal and indirect channels).
+5. QUANTITATIVE QUALIFIERS (CRITICAL for scenario modeling — provide best estimates even when uncertain):
+   - For REGULATES/IMPOSES_CONDITION edges: qualifiers.rate_from, qualifiers.rate_to, qualifiers.effective_date when the instrument has numeric parameters.
+   - For exposure edges (to markets/orgs/communities): qualifiers.pass_through_estimate (0.0-1.0: share of cost passed downstream),
+     qualifiers.elasticity_hint ("inelastic"|"unit_elastic"|"elastic"|"unknown"),
+     qualifiers.tax_base_coverage ("full"|"partial"|"exempt"),
+     qualifiers.sector_sensitivity ("low"|"medium"|"high").
+   - For INFLUENCES edges: qualifiers.channel_type ("formal_regulation"|"price_signal"|"behavioral"|"substitution"|"evasion"),
+     qualifiers.lag_quarters (estimated delay in quarters before effect materializes),
+     qualifiers.observability ("direct"|"proxy"|"modeled").
+6. Observability metadata: for each major impact channel, note HOW the effect would be measured
+   (e.g., national statistics agency data, customs declarations, tax collection reports).
+   Add qualifiers.measurement_lag_months and qualifiers.measurement_confidence (0.0-1.0) when estimable.
+
+CURRENT FRAGMENT:
+%s
+
+QUESTIONS TO ANSWER (from Critic; prioritize these):
+- %s
+
+Return a JSON object:
+{
+  "fragment": { updated fields if any },
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?" } ],
+  "supplyChains": []
+}
+
+For relations where SOURCE is not the current fragment, set sourceCanonicalPath, sourceType, sourceName.
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, string(fragmentJSON), questions)
 }

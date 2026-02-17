@@ -60,3 +60,29 @@ func TestSanitizeDomainResearchRelations_StripsCrossModeNoise(t *testing.T) {
 		t.Fatalf("explicit org-sourced SUPPLIES_TO must be preserved, got %s", out[1].RelationType)
 	}
 }
+
+func TestSanitizeDomainResearchRelations_RewritesIncomingToDomain(t *testing.T) {
+	in := []agents.DiscoveredRelation{
+		{
+			SourceCanonicalPath: "/market/kz/logistics/cold-chain",
+			TargetCanonicalPath: "/domain/v1/market-opportunity/geo/kz/sector/agro-food",
+			RelationType:        "PARTICIPATES_IN",
+		},
+	}
+
+	out := sanitizeDomainResearchRelations("/domain/v1/market-opportunity/geo/kz/sector/agro-food", "market-opportunity", in)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 sanitized relation, got %d", len(out))
+	}
+
+	got := out[0]
+	if got.SourceCanonicalPath != "/domain/v1/market-opportunity/geo/kz/sector/agro-food" {
+		t.Fatalf("expected sourceCanonicalPath to be rewritten to domain, got %q", got.SourceCanonicalPath)
+	}
+	if got.TargetCanonicalPath != "/market/kz/logistics/cold-chain" {
+		t.Fatalf("expected targetCanonicalPath to be rewritten to previous source, got %q", got.TargetCanonicalPath)
+	}
+	if got.RelationType != string(models.DependencyTypeFocusesOn) {
+		t.Fatalf("incoming-to-domain relation must normalize to FOCUSES_ON, got %s", got.RelationType)
+	}
+}

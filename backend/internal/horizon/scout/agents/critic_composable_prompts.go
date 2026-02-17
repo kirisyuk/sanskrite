@@ -186,3 +186,42 @@ Validate:
 Return JSON with hasConflicts/conflicts/confidence/isValid/missingInfo.
 Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeMarket), graphBlock, string(fragmentJSON), string(relationsJSON))
 }
+
+func (a *CriticAgent) buildPolicyImpactValidationPrompt(input CriticValidatorInput) string {
+	fragmentJSON, _ := json.MarshalIndent(input.Fragment, "", "  ")
+	relationsJSON, _ := json.MarshalIndent(input.Relations, "", "  ")
+	graphBlock := ""
+	if strings.TrimSpace(input.GraphContext) != "" {
+		graphBlock = "GRAPH CONTEXT:\n" + strings.TrimSpace(input.GraphContext) + "\n\n"
+	}
+	return fmt.Sprintf(`You are a Critic validator for POLICY IMPACT mode.
+
+%s
+Allowed relation types: REGULATES, CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO, INFLUENCES, DEPENDS_ON, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN, ADMINISTERS.
+Allowed actor types: %s.
+Canonical path rules:
+%s
+
+%sFRAGMENT:
+%s
+
+RELATIONS:
+%s
+
+Validate:
+1. policy channel consistency: regulator/program/mechanism links are directionally coherent;
+2. impact graph quality: affected segments are explicit and connected through interpretable channels;
+3. relation taxonomy compliance (type-direction-entity compatibility);
+4. SCENARIO MODELING READINESS (critical for policy-impact):
+   a. do REGULATES/IMPOSES_CONDITION edges carry quantitative qualifiers (rate_from, rate_to, effective_date)?
+   b. do exposure edges carry pass_through_estimate, elasticity_hint, or sector_sensitivity?
+   c. do INFLUENCES edges specify channel_type, lag_quarters, observability?
+   d. flag edges lacking quantitative qualifiers as missingInfo with specific questions (e.g., "What is the estimated pass-through rate for VAT increase on food retail?");
+5. OBSERVABILITY COMPLETENESS: are there edges or segments with no plausible measurement source?
+   Flag segments where effect measurement is unclear as missingInfo;
+6. five-layer coverage check: Policy Source, Transmission Channel, Exposure, Response, Observability.
+   Report which layers are missing or thin for the current fragment.
+
+Return JSON with hasConflicts/conflicts/confidence/isValid/missingInfo.
+Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON))
+}

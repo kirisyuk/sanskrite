@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"strings"
 
+	horizondomain "github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
@@ -136,6 +138,7 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 	// Root nodes = scope fragments (filtered). No hop+1 expansion: only scope entities.
 	rootFragments := make([]*models.HorizonFragment, 0, len(fragments))
 	rootIDs := make(map[string]struct{}, len(fragments))
+	rootByID := make(map[string]*models.HorizonFragment, len(fragments))
 	for _, fragment := range fragments {
 		if fragment == nil || isSphereFragment(fragment) {
 			continue
@@ -143,6 +146,7 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 		rootFragments = append(rootFragments, fragment)
 		if fragment.ID != "" {
 			rootIDs[fragment.ID] = struct{}{}
+			rootByID[fragment.ID] = fragment
 		}
 	}
 
@@ -150,6 +154,7 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 	edgesRepo := h.service.Edges()
 	var allEdges []interface{}
 	seenEdges := make(map[string]struct{}, 2048)
+	skippedIncomingDomainEdges := 0
 
 	addEdge := func(edge *models.DependencyEdge) {
 		if edge == nil {
@@ -159,6 +164,10 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if _, ok := rootIDs[edge.TargetFragmentID]; !ok {
+			return
+		}
+		if shouldSkipDomainIncomingEdgeForCockpit(rootByID[edge.SourceFragmentID], rootByID[edge.TargetFragmentID]) {
+			skippedIncomingDomainEdges++
 			return
 		}
 		k := edge.SourceFragmentID + "|" + edge.TargetFragmentID + "|" + string(edge.Type)
@@ -186,6 +195,13 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 				addEdge(edge)
 			}
 		}
+	}
+	if skippedIncomingDomainEdges > 0 {
+		trace.Log(r.Context(), "cockpit", "cockpit.edges.skip_incoming_domain", map[string]any{
+			"tenantId": strings.TrimSpace(lens.TenantID),
+			"lensId":   strings.TrimSpace(lens.ID),
+			"count":    skippedIncomingDomainEdges,
+		})
 	}
 
 	// Вычисляем метрики Lens через MetricsCalculator
@@ -304,6 +320,21 @@ func isSphereFragment(fragment *models.HorizonFragment) bool {
 	return strings.HasPrefix(cp, "/sphere/")
 }
 
+func isDomainFragment(fragment *models.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	if fragment.Type == models.FragmentTypeDomain {
+		return true
+	}
+	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
+	return strings.HasPrefix(cp, "/domain/")
+}
+
+func shouldSkipDomainIncomingEdgeForCockpit(source, target *models.HorizonFragment) bool {
+	return isDomainFragment(target) && !isDomainFragment(source)
+}
+
 // SimulateWhatIf выполняет What-If симуляцию изменения метрик
 func (h *HorizonHandlers) SimulateWhatIf(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -327,9 +358,12 @@ func (h *HorizonHandlers) SimulateWhatIf(w http.ResponseWriter, r *http.Request)
 	lensID := pathParts[0]
 
 	var req struct {
-		FragmentID string                 `json:"fragmentId"`
-		MetricName string                 `json:"metricName"`
-		NewValue   map[string]interface{} `json:"newValue"` // MetricValue структура
+		FragmentID   string                 `json:"fragmentId"`
+		MetricName   string                 `json:"metricName"`
+		NewValue     map[string]interface{} `json:"newValue"` // MetricValue структура
+		ContractType string                 `json:"contractType,omitempty"`
+		DomainModes  []string               `json:"domainModes,omitempty"`
+		EngineID     string                 `json:"engineId,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -379,8 +413,26 @@ func (h *HorizonHandlers) SimulateWhatIf(w http.ResponseWriter, r *http.Request)
 		newMetricValue.Value = value
 	}
 
-	// Выполняем симуляцию распространения
-	propagationResult, err := propagationEngine.PropagateChange(r.Context(), req.FragmentID, req.MetricName, oldMetricValue, newMetricValue)
+	// Выполняем симуляцию распространения в read-only режиме
+	binding := horizonpropagation.DomainAdapterBinding{
+		ContractType: strings.TrimSpace(req.ContractType),
+		DomainModes:  append([]string(nil), req.DomainModes...),
+		EngineID:     strings.TrimSpace(req.EngineID),
+	}
+	if binding.ContractType == "" {
+		contractTypes := contractTypesFromScope(lens.Scope)
+		if len(contractTypes) > 0 {
+			binding.ContractType = strings.TrimSpace(contractTypes[0])
+			if len(binding.DomainModes) == 0 {
+				binding.DomainModes = horizondomain.DomainModesForContractTypes(contractTypes)
+			}
+		}
+	}
+	if binding.ContractType != "" && len(binding.DomainModes) == 0 {
+		binding.DomainModes = horizondomain.DomainModesForContractTypes([]string{binding.ContractType})
+	}
+	ctxWithBinding := horizonpropagation.WithDomainAdapterBinding(r.Context(), binding)
+	propagationResult, err := propagationEngine.SimulatePropagation(ctxWithBinding, req.FragmentID, req.MetricName, oldMetricValue, newMetricValue)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -393,8 +445,39 @@ func (h *HorizonHandlers) SimulateWhatIf(w http.ResponseWriter, r *http.Request)
 		"affectedLenses":    propagationResult.AffectedLenses,
 		"propagationTime":   propagationResult.PropagationTime.String(),
 		"metrics":           propagationResult.Metrics,
+		"contractType":      binding.ContractType,
+		"domainModes":       binding.DomainModes,
+		"engineId":          binding.EngineID,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func contractTypesFromScope(scope []string) []string {
+	seen := make(map[string]struct{}, len(scope))
+	out := make([]string, 0, len(scope))
+	for _, entry := range scope {
+		ct := contractTypeFromDomainPath(entry)
+		if ct == "" {
+			continue
+		}
+		if _, ok := seen[ct]; ok {
+			continue
+		}
+		seen[ct] = struct{}{}
+		out = append(out, ct)
+	}
+	return out
+}
+
+func contractTypeFromDomainPath(path string) string {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(path), "/"), "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	if parts[0] != "domain" || parts[1] != "v1" {
+		return ""
+	}
+	return strings.TrimSpace(strings.ToLower(parts[2]))
 }

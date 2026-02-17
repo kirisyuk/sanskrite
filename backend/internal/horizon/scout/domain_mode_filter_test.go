@@ -14,6 +14,13 @@ func TestEdgeAllowlistByDomainMode_SupplyChainIncludesDependsOn(t *testing.T) {
 	}
 }
 
+func TestEdgeAllowlistByDomainMode_PolicyImpactIncludesInfluences(t *testing.T) {
+	allow := EdgeAllowlistByDomainMode(taxonomy.DomainModePolicyImpact)
+	if !AllowlistContains(allow, "INFLUENCES") {
+		t.Fatalf("policy_impact allowlist must include INFLUENCES")
+	}
+}
+
 func TestFilterDiscoveredRelationsByDomainModes_SupplyChain(t *testing.T) {
 	in := []agents.DiscoveredRelation{
 		{RelationType: "SUPPLIES_TO"},
