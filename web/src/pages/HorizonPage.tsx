@@ -312,6 +312,31 @@ const HorizonPage: React.FC = () => {
 
     let openedPreflight = false;
     try {
+      if (request.createEmptyLens) {
+        const lens = await api.createHorizonLens(
+          {
+            projectId: request.projectId,
+            name: String(request.name || '').trim() || 'untitled lens',
+            scope: [],
+            status: 'ACTIVE',
+          },
+          { skipScouting: true },
+        );
+        if (lens?.id) {
+          setSelectedLensId(lens.id);
+          window.dispatchEvent(new CustomEvent('horizon:lens-created', {
+            detail: { lensId: lens.id, projectId: request.projectId },
+          }));
+        } else {
+          setSelectedLensId(null);
+        }
+        setLensStarted(false);
+        setActiveCreateCorrelationId(null);
+        setActiveCreateSessionId(null);
+        resetEvents();
+        return;
+      }
+
       // Two creation modes:
       // 1) Prefetch-only (chips only): create lens with explicit scope (no scouting).
       // 2) Query (+ optional prefetch scope): create lens from NL query (scouting), merging prefetchScope into final scope.

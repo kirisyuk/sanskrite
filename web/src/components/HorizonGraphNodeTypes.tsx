@@ -3418,6 +3418,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isQueryHighlight = Boolean((data as any)?.queryHighlight);
   const isDomainHighlight = Boolean((data as any)?.domainHighlight);
   const isTopDependencyHighlight = Boolean((data as any)?.topDependencyHighlight);
+  const isBottleneckHighlight = Boolean((data as any)?.bottleneckHighlight);
   // Allow Research even if the first "load related" attempt returned empty: in that case the node isn't expanded,
   // but the user should still be able to run scouting from it.
   const isSelected = Boolean(selected);
@@ -3671,6 +3672,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const hubTone = theme === 'dark'
     ? { ring: 'rgba(251, 191, 36, 0.66)', glow: 'rgba(251, 191, 36, 0.18)' }
     : { ring: 'rgba(245, 158, 11, 0.56)', glow: 'rgba(245, 158, 11, 0.14)' };
+  const bottleneckTone = theme === 'dark'
+    ? { ring: 'rgba(245, 158, 11, 0.74)', glow: 'rgba(245, 158, 11, 0.26)' }
+    : { ring: 'rgba(217, 119, 6, 0.66)', glow: 'rgba(217, 119, 6, 0.20)' };
   const highlightTone = !isCritical
     ? (
         isQueryHighlight
@@ -3681,9 +3685,11 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               ? domainTone
               : isUltimateBeneficiary
                 ? beneficiaryTone
-                : isHub
-                  ? hubTone
-                  : null
+                : isBottleneckHighlight
+                  ? bottleneckTone
+                  : isHub
+                    ? hubTone
+                    : null
       )
     : null;
 

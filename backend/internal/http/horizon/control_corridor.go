@@ -282,6 +282,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		NodeIDs     []string
 		EdgeKeys    []string
 		Coverage    float64
+		PathType    string
 		Description string
 	}
 
@@ -331,10 +332,6 @@ func (h *HorizonHandlers) buildControlCorridor(
 		"COOPERATES_WITH": {},
 		string(horizonmodels.DependencyTypeRelatedTo):  {},
 		string(horizonmodels.DependencyTypeRelativeOf): {},
-		string(horizonmodels.DependencyTypeLocatedIn):  {},
-		string(horizonmodels.DependencyTypeOperatesIn): {},
-		"BASED_IN":         {},
-		"HEADQUARTERED_IN": {},
 	}
 	programGovBridgeEdgeSet := map[string]struct{}{
 		string(horizonmodels.DependencyTypeAdministers): {},
@@ -716,9 +713,8 @@ func (h *HorizonHandlers) buildControlCorridor(
 
 	forwardLimit := opts.MaxAuthorityHops + 4
 	forwardDist := make(map[string]int, len(seedIDs)*16)
-	forwardPrev := make(map[string]corridorEdge, len(seedIDs)*16)
 	forwardQueue := make([]bfsItem, 0, len(controllers)+len(seedIDs))
-	enqueueForward := func(id string, hop int, prev *corridorEdge) {
+	enqueueForward := func(id string, hop int) {
 		id = strings.TrimSpace(id)
 		if id == "" || hop > forwardLimit {
 			return
@@ -727,16 +723,13 @@ func (h *HorizonHandlers) buildControlCorridor(
 			return
 		}
 		forwardDist[id] = hop
-		if prev != nil {
-			forwardPrev[id] = *prev
-		}
 		forwardQueue = append(forwardQueue, bfsItem{id: id, hop: hop})
 	}
 	for cid := range controllers {
-		enqueueForward(cid, 0, nil)
+		enqueueForward(cid, 0)
 	}
 	for _, sid := range seedIDs {
-		enqueueForward(sid, 0, nil)
+		enqueueForward(sid, 0)
 	}
 	impactRoots := make(map[string]struct{}, 16)
 	for qi := 0; qi < len(forwardQueue); qi++ {
@@ -746,8 +739,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		}
 		for _, role := range []string{roleAuthority, roleExecution} {
 			for _, e := range outByRole[role][cur.id] {
-				edgeCopy := e
-				enqueueForward(e.To, cur.hop+1, &edgeCopy)
+				enqueueForward(e.To, cur.hop+1)
 				if e.Type == string(horizonmodels.DependencyTypeAppliesTo) ||
 					e.Type == string(horizonmodels.DependencyTypeControlsAccess) ||
 					e.Type == string(horizonmodels.DependencyTypeImposesCondition) {
@@ -774,9 +766,8 @@ func (h *HorizonHandlers) buildControlCorridor(
 
 	impactLimit := opts.MaxImpactHops
 	impactDist := make(map[string]int, len(seedIDs)*24)
-	impactPrev := make(map[string]corridorEdge, len(seedIDs)*24)
 	impactQueue := make([]bfsItem, 0, len(propStart))
-	enqueueImpact := func(id string, hop int, prev *corridorEdge) {
+	enqueueImpact := func(id string, hop int) {
 		id = strings.TrimSpace(id)
 		if id == "" || hop > impactLimit {
 			return
@@ -785,13 +776,10 @@ func (h *HorizonHandlers) buildControlCorridor(
 			return
 		}
 		impactDist[id] = hop
-		if prev != nil {
-			impactPrev[id] = *prev
-		}
 		impactQueue = append(impactQueue, bfsItem{id: id, hop: hop})
 	}
 	for id := range propStart {
-		enqueueImpact(id, 0, nil)
+		enqueueImpact(id, 0)
 	}
 	for qi := 0; qi < len(impactQueue); qi++ {
 		cur := impactQueue[qi]
@@ -799,8 +787,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 			continue
 		}
 		for _, e := range outByRole[rolePropagation][cur.id] {
-			edgeCopy := e
-			enqueueImpact(e.To, cur.hop+1, &edgeCopy)
+			enqueueImpact(e.To, cur.hop+1)
 		}
 	}
 
@@ -814,12 +801,11 @@ func (h *HorizonHandlers) buildControlCorridor(
 		case string(horizonmodels.FragmentTypeMarket), string(horizonmodels.FragmentTypeOrganization),
 			string(horizonmodels.FragmentTypeProgram), string(horizonmodels.FragmentTypeProduct),
 			string(horizonmodels.FragmentTypeDomain), string(horizonmodels.FragmentTypeFacility),
-			string(horizonmodels.FragmentTypeGeoRegion),
 			string(horizonmodels.FragmentTypeCommunity):
 			return true
 		}
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
-		return strings.HasPrefix(cp, "/market/") || strings.HasPrefix(cp, "/domain/") || strings.HasPrefix(cp, "/loc/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/program/")
+		return strings.HasPrefix(cp, "/market/") || strings.HasPrefix(cp, "/domain/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/program/")
 	}
 
 	impactedTargets := make(map[string]struct{}, 24)
@@ -862,9 +848,8 @@ func (h *HorizonHandlers) buildControlCorridor(
 
 	backwardLimit := opts.MaxImpactHops + 4
 	backwardDist := make(map[string]int, len(seedIDs)*24)
-	backwardNext := make(map[string]corridorEdge, len(seedIDs)*24)
 	backwardQueue := make([]bfsItem, 0, len(impactedTargets))
-	enqueueBackward := func(id string, hop int, next *corridorEdge) {
+	enqueueBackward := func(id string, hop int) {
 		id = strings.TrimSpace(id)
 		if id == "" || hop > backwardLimit {
 			return
@@ -873,13 +858,10 @@ func (h *HorizonHandlers) buildControlCorridor(
 			return
 		}
 		backwardDist[id] = hop
-		if next != nil {
-			backwardNext[id] = *next
-		}
 		backwardQueue = append(backwardQueue, bfsItem{id: id, hop: hop})
 	}
 	for id := range impactedTargets {
-		enqueueBackward(id, 0, nil)
+		enqueueBackward(id, 0)
 	}
 	for qi := 0; qi < len(backwardQueue); qi++ {
 		cur := backwardQueue[qi]
@@ -887,8 +869,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 			continue
 		}
 		for _, e := range inByRole[rolePropagation][cur.id] {
-			edgeCopy := e
-			enqueueBackward(e.From, cur.hop+1, &edgeCopy)
+			enqueueBackward(e.From, cur.hop+1)
 		}
 	}
 
@@ -983,84 +964,224 @@ func (h *HorizonHandlers) buildControlCorridor(
 		addFinalNode(id)
 	}
 
-	collectForwardPath := func(fromNode string) (string, []corridorEdge) {
-		cur := strings.TrimSpace(fromNode)
-		if cur == "" {
-			return "", nil
-		}
-		path := make([]corridorEdge, 0, 8)
-		guard := 0
-		for guard < 128 {
-			guard++
-			e, ok := forwardPrev[cur]
-			if !ok {
-				break
-			}
-			path = append(path, e)
-			cur = e.From
-		}
-		for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
-			path[i], path[j] = path[j], path[i]
-		}
-		return cur, path
+	type headPath struct {
+		Controller string
+		Edges      []corridorEdge
+	}
+	type meetPath struct {
+		Meet string
+		Tail []corridorEdge
+		Dist int
 	}
 
-	findMeetAndTail := func(targetID string) (string, []corridorEdge) {
-		targetID = strings.TrimSpace(targetID)
-		if targetID == "" {
-			return "", nil
-		}
-		if _, ok := forwardDist[targetID]; ok {
-			return targetID, nil
-		}
-		type state struct {
-			id string
-		}
-		queue := []state{{id: targetID}}
-		seen := map[string]struct{}{targetID: {}}
-		prev := map[string]corridorEdge{}
-		meet := ""
+	rootsForHead := make(map[string]struct{}, len(controllers)+len(seedIDs))
+	for id := range controllers {
+		rootsForHead[id] = struct{}{}
+	}
+	for _, sid := range seedIDs {
+		rootsForHead[sid] = struct{}{}
+	}
 
+	forwardPreds := make(map[string][]corridorEdge, len(forwardDist))
+	for _, role := range []string{roleAuthority, roleExecution} {
+		for fromID, edges := range outByRole[role] {
+			fromDist, ok := forwardDist[fromID]
+			if !ok {
+				continue
+			}
+			for _, e := range edges {
+				toDist, ok := forwardDist[e.To]
+				if !ok || toDist != fromDist+1 {
+					continue
+				}
+				forwardPreds[e.To] = append(forwardPreds[e.To], e)
+			}
+		}
+	}
+	for nodeID := range forwardPreds {
+		sort.SliceStable(forwardPreds[nodeID], func(i, j int) bool {
+			a := forwardPreds[nodeID][i]
+			b := forwardPreds[nodeID][j]
+			if a.From != b.From {
+				return a.From < b.From
+			}
+			if a.Type != b.Type {
+				return a.Type < b.Type
+			}
+			if a.To != b.To {
+				return a.To < b.To
+			}
+			return a.Key < b.Key
+		})
+	}
+
+	headPathsCache := make(map[string][]headPath, 64)
+	collectHeadPaths := func(meetID string, maxPaths int) []headPath {
+		meetID = strings.TrimSpace(meetID)
+		if meetID == "" || maxPaths <= 0 {
+			return nil
+		}
+		if cached, ok := headPathsCache[meetID]; ok {
+			if len(cached) > maxPaths {
+				return append([]headPath(nil), cached[:maxPaths]...)
+			}
+			return append([]headPath(nil), cached...)
+		}
+
+		paths := make([]headPath, 0, maxPaths)
+		inStack := make(map[string]struct{}, 32)
+		var walk func(nodeID string, reversePath []corridorEdge)
+		walk = func(nodeID string, reversePath []corridorEdge) {
+			if len(paths) >= maxPaths {
+				return
+			}
+			nodeID = strings.TrimSpace(nodeID)
+			if nodeID == "" {
+				return
+			}
+			if _, cycle := inStack[nodeID]; cycle {
+				return
+			}
+			if _, ok := rootsForHead[nodeID]; ok {
+				forwardPath := make([]corridorEdge, len(reversePath))
+				for i := 0; i < len(reversePath); i++ {
+					forwardPath[i] = reversePath[len(reversePath)-1-i]
+				}
+				paths = append(paths, headPath{
+					Controller: nodeID,
+					Edges:      forwardPath,
+				})
+				return
+			}
+
+			preds := forwardPreds[nodeID]
+			if len(preds) == 0 {
+				return
+			}
+
+			inStack[nodeID] = struct{}{}
+			for _, p := range preds {
+				if len(paths) >= maxPaths {
+					break
+				}
+				nextPath := append(append([]corridorEdge(nil), reversePath...), p)
+				walk(p.From, nextPath)
+			}
+			delete(inStack, nodeID)
+		}
+		walk(meetID, nil)
+
+		if len(paths) == 0 {
+			if _, ok := forwardDist[meetID]; ok {
+				paths = append(paths, headPath{Controller: meetID, Edges: nil})
+			}
+		}
+		sort.SliceStable(paths, func(i, j int) bool {
+			if paths[i].Controller != paths[j].Controller {
+				return paths[i].Controller < paths[j].Controller
+			}
+			if len(paths[i].Edges) != len(paths[j].Edges) {
+				return len(paths[i].Edges) < len(paths[j].Edges)
+			}
+			keyI := ""
+			for _, e := range paths[i].Edges {
+				keyI += "|" + e.Key
+			}
+			keyJ := ""
+			for _, e := range paths[j].Edges {
+				keyJ += "|" + e.Key
+			}
+			return keyI < keyJ
+		})
+		headPathsCache[meetID] = append([]headPath(nil), paths...)
+		if len(paths) > maxPaths {
+			return append([]headPath(nil), paths[:maxPaths]...)
+		}
+		return append([]headPath(nil), paths...)
+	}
+
+	findMeetPaths := func(targetID string, maxMeets int) []meetPath {
+		targetID = strings.TrimSpace(targetID)
+		if targetID == "" || maxMeets <= 0 {
+			return nil
+		}
+		dist := map[string]int{targetID: 0}
+		nextToTarget := make(map[string]corridorEdge, 64)
+		queue := []string{targetID}
 		for qi := 0; qi < len(queue); qi++ {
 			cur := queue[qi]
-			if _, ok := forwardDist[cur.id]; ok {
-				meet = cur.id
-				break
+			curDist := dist[cur]
+			if curDist >= backwardLimit {
+				continue
 			}
-			for _, e := range inByRole[rolePropagation][cur.id] {
-				pred := e.From
+			for _, e := range inByRole[rolePropagation][cur] {
+				pred := strings.TrimSpace(e.From)
 				if pred == "" {
 					continue
 				}
-				if _, ok := seen[pred]; ok {
+				nextDist := curDist + 1
+				oldDist, seen := dist[pred]
+				if seen && nextDist >= oldDist {
 					continue
 				}
-				seen[pred] = struct{}{}
-				prev[pred] = e
-				queue = append(queue, state{id: pred})
+				dist[pred] = nextDist
+				nextToTarget[pred] = e
+				queue = append(queue, pred)
 			}
 		}
-		if meet == "" {
-			return "", nil
-		}
-		tail := make([]corridorEdge, 0, 8)
-		cur := meet
-		guard := 0
-		for cur != targetID && guard < 128 {
-			guard++
-			e, ok := prev[cur]
-			if !ok {
-				break
+
+		meets := make([]meetPath, 0, 8)
+		for meetID, d := range dist {
+			if _, ok := forwardDist[meetID]; !ok {
+				continue
 			}
-			tail = append(tail, e)
-			cur = e.To
+			tail := make([]corridorEdge, 0, d)
+			cur := meetID
+			guard := 0
+			for cur != targetID && guard < 128 {
+				guard++
+				e, ok := nextToTarget[cur]
+				if !ok {
+					tail = nil
+					break
+				}
+				tail = append(tail, e)
+				cur = e.To
+			}
+			if cur != targetID {
+				continue
+			}
+			meets = append(meets, meetPath{
+				Meet: meetID,
+				Tail: tail,
+				Dist: d,
+			})
 		}
-		return meet, tail
+		sort.SliceStable(meets, func(i, j int) bool {
+			iForward := forwardDist[meets[i].Meet]
+			jForward := forwardDist[meets[j].Meet]
+			iScore := iForward + meets[i].Dist
+			jScore := jForward + meets[j].Dist
+			if iScore != jScore {
+				return iScore < jScore
+			}
+			if meets[i].Dist != meets[j].Dist {
+				return meets[i].Dist < meets[j].Dist
+			}
+			if iForward != jForward {
+				return iForward < jForward
+			}
+			return meets[i].Meet < meets[j].Meet
+		})
+		if len(meets) > maxMeets {
+			meets = meets[:maxMeets]
+		}
+		return meets
 	}
 
 	nodeUsage := make(map[string]int, 64)
 	edgeUsage := make(map[string]int, 64)
-	usedPathPairs := map[string]struct{}{}
+	usedPathKeys := map[string]struct{}{}
 	bundles := make([]bundlePath, 0, 32)
 
 	targetIDs := make([]string, 0, len(impactedTargets))
@@ -1069,64 +1190,110 @@ func (h *HorizonHandlers) buildControlCorridor(
 	}
 	sort.Strings(targetIDs)
 
+	stopBundles := false
 	for _, targetID := range targetIDs {
-		meet, tail := findMeetAndTail(targetID)
-		if meet == "" {
-			continue
-		}
-		controllerID, head := collectForwardPath(meet)
-		if controllerID == "" {
-			controllerID = meet
-		}
-		key := controllerID + "|" + targetID
-		if _, ok := usedPathPairs[key]; ok {
-			continue
-		}
-		usedPathPairs[key] = struct{}{}
-
-		nodeSeq := make([]string, 0, len(head)+len(tail)+2)
-		edgeSeq := make([]string, 0, len(head)+len(tail))
-		nodeSeq = append(nodeSeq, controllerID)
-		for _, e := range head {
-			addFinalEdge(e)
-			edgeSeq = append(edgeSeq, e.Key)
-			if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != e.To {
-				nodeSeq = append(nodeSeq, e.To)
-			}
-		}
-		if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != meet {
-			nodeSeq = append(nodeSeq, meet)
-		}
-		for _, e := range tail {
-			addFinalEdge(e)
-			edgeSeq = append(edgeSeq, e.Key)
-			if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != e.To {
-				nodeSeq = append(nodeSeq, e.To)
-			}
-		}
-		if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != targetID {
-			nodeSeq = append(nodeSeq, targetID)
-		}
-		for _, nid := range nodeSeq {
-			addFinalNode(nid)
-			nodeUsage[nid]++
-		}
-		for _, ek := range edgeSeq {
-			edgeUsage[ek]++
-		}
-
-		bundles = append(bundles, bundlePath{
-			ID:          "bundle:" + key,
-			Controller:  controllerID,
-			Target:      targetID,
-			Mediator:    meet,
-			NodeIDs:     nodeSeq,
-			EdgeKeys:    edgeSeq,
-			Coverage:    1.0 / float64(len(edgeSeq)+1),
-			Description: "controller-to-impact corridor",
-		})
-		if len(bundles) >= 48 {
+		if stopBundles {
 			break
+		}
+		meetPaths := findMeetPaths(targetID, 6)
+		for _, mt := range meetPaths {
+			if stopBundles {
+				break
+			}
+			headPaths := collectHeadPaths(mt.Meet, 8)
+			if len(headPaths) == 0 {
+				headPaths = []headPath{{Controller: mt.Meet, Edges: nil}}
+			}
+			for _, hp := range headPaths {
+				controllerID := strings.TrimSpace(hp.Controller)
+				if controllerID == "" {
+					controllerID = mt.Meet
+				}
+
+				nodeSeq := make([]string, 0, len(hp.Edges)+len(mt.Tail)+2)
+				edgeSeq := make([]string, 0, len(hp.Edges)+len(mt.Tail))
+				nodeSeq = append(nodeSeq, controllerID)
+
+				for _, e := range hp.Edges {
+					addFinalEdge(e)
+					edgeSeq = append(edgeSeq, e.Key)
+					if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != e.To {
+						nodeSeq = append(nodeSeq, e.To)
+					}
+				}
+				if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != mt.Meet {
+					nodeSeq = append(nodeSeq, mt.Meet)
+				}
+				for _, e := range mt.Tail {
+					addFinalEdge(e)
+					edgeSeq = append(edgeSeq, e.Key)
+					if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != e.To {
+						nodeSeq = append(nodeSeq, e.To)
+					}
+				}
+				if len(nodeSeq) == 0 || nodeSeq[len(nodeSeq)-1] != targetID {
+					nodeSeq = append(nodeSeq, targetID)
+				}
+				if len(nodeSeq) < 2 {
+					continue
+				}
+
+				pathSig := controllerID + "|" + targetID + "|" + strings.Join(edgeSeq, ",")
+				if _, ok := usedPathKeys[pathSig]; ok {
+					continue
+				}
+				usedPathKeys[pathSig] = struct{}{}
+
+				pathType := "transitive"
+				hasExecution := false
+				hasPropagation := false
+				for _, ek := range edgeSeq {
+					e, ok := edgePool[ek]
+					if !ok {
+						continue
+					}
+					if e.Role == roleExecution {
+						hasExecution = true
+					}
+					if e.Role == rolePropagation {
+						hasPropagation = true
+					}
+				}
+				switch {
+				case len(edgeSeq) == 1 && hasPropagation:
+					pathType = "direct-impact"
+				case hasExecution && hasPropagation:
+					pathType = "decision-mechanism-impact"
+				case hasExecution:
+					pathType = "authority-execution"
+				case hasPropagation:
+					pathType = "propagation"
+				}
+
+				for _, nid := range nodeSeq {
+					addFinalNode(nid)
+					nodeUsage[nid]++
+				}
+				for _, ek := range edgeSeq {
+					edgeUsage[ek]++
+				}
+
+				bundles = append(bundles, bundlePath{
+					ID:          "bundle:" + pathSig,
+					Controller:  controllerID,
+					Target:      targetID,
+					Mediator:    mt.Meet,
+					NodeIDs:     nodeSeq,
+					EdgeKeys:    edgeSeq,
+					Coverage:    1.0 / float64(len(edgeSeq)+1),
+					PathType:    pathType,
+					Description: "controller-to-impact corridor",
+				})
+				if len(bundles) >= 96 {
+					stopBundles = true
+					break
+				}
+			}
 		}
 	}
 
@@ -1458,6 +1625,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 			"edgeIds":       edgeIDs,
 			"edgeKeys":      edgeKeys,
 			"coverageScore": b.Coverage,
+			"pathType":      b.PathType,
 			"description":   b.Description,
 		})
 	}

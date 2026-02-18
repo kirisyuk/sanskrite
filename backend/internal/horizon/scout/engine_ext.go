@@ -540,6 +540,8 @@ func buildDomainTitle(contractType string, canonicalPath string, facets map[stri
 			base = "Power dynamics"
 
 		// Policy / regulation
+		case "policy-impact":
+			base = "Policy impact"
 		case "regulatory-impact":
 			base = "Regulatory impact"
 		case "policy-and-regulation":
@@ -6297,6 +6299,7 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 		"regulatory-landscape":    true,
 		"compliance-map":          true,
 		"policy-and-regulation":   true,
+		"policy-impact":           true,
 		"regulatory-impact":       true,
 		"compliance-landscape":    true,
 		"security-and-compliance": true,

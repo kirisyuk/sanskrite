@@ -36,6 +36,7 @@ func TestComposableValidationPrompts_DoNotContainDeprecatedTypes(t *testing.T) {
 		{"SupplyChain", agent.buildSupplyChainValidationPrompt},
 		{"Governance", agent.buildGovernanceValidationPrompt},
 		{"Market", agent.buildMarketValidationPrompt},
+		{"PolicyImpact", agent.buildPolicyImpactValidationPrompt},
 	}
 	for _, p := range prompts {
 		t.Run(p.name, func(t *testing.T) {
@@ -45,6 +46,38 @@ func TestComposableValidationPrompts_DoNotContainDeprecatedTypes(t *testing.T) {
 				if strings.Contains(upper, dep) {
 					t.Errorf("composable %s prompt must not mention deprecated type %q", p.name, dep)
 				}
+			}
+		})
+	}
+}
+
+func TestComposableValidationPrompts_ContainStrictOutputSchema(t *testing.T) {
+	frag := &models.HorizonFragment{
+		Type:          "ORGANIZATION",
+		CanonicalPath: "/org/us/example-inc",
+	}
+	input := CriticValidatorInput{
+		Fragment:  frag,
+		Relations: nil,
+	}
+	agent := NewCriticAgent(nil)
+
+	prompts := []struct {
+		name  string
+		build func(CriticValidatorInput) string
+	}{
+		{"Core", agent.buildCoreValidationPrompt},
+		{"SupplyChain", agent.buildSupplyChainValidationPrompt},
+		{"Governance", agent.buildGovernanceValidationPrompt},
+		{"Market", agent.buildMarketValidationPrompt},
+		{"PolicyImpact", agent.buildPolicyImpactValidationPrompt},
+	}
+
+	for _, p := range prompts {
+		t.Run(p.name, func(t *testing.T) {
+			prompt := p.build(input)
+			if !strings.Contains(prompt, "STRICT OUTPUT SCHEMA") {
+				t.Fatalf("%s prompt must include strict output schema block", p.name)
 			}
 		})
 	}
@@ -169,5 +202,29 @@ func TestComposableValidationPrompts_ContainPhaseGuardrails(t *testing.T) {
 	prompt = agent.buildCoreValidationPrompt(input)
 	if !strings.Contains(prompt, "UNIT PIPELINE PHASE: P5") {
 		t.Fatalf("expected P5 guardrails in core prompt")
+	}
+}
+
+func TestParseValidationResultMap_NormalizesObservedModelDrift(t *testing.T) {
+	payload := map[string]interface{}{
+		"hasConflicts": false,
+		"isValid":      true,
+		"confidence":   "0.72",
+		"missingInfo": []interface{}{
+			"What controls access?",
+			map[string]interface{}{"question": "Who gatekeeps this decision?"},
+			map[string]interface{}{"text": "What mechanism applies?"},
+		},
+	}
+
+	res, err := parseValidationResultMap(payload)
+	if err != nil {
+		t.Fatalf("parseValidationResultMap: %v", err)
+	}
+	if res.Confidence != 0.72 {
+		t.Fatalf("expected confidence 0.72, got %f", res.Confidence)
+	}
+	if len(res.MissingInfo) != 3 {
+		t.Fatalf("expected 3 missingInfo items, got %d", len(res.MissingInfo))
 	}
 }

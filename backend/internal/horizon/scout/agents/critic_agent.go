@@ -126,13 +126,12 @@ func (a *CriticAgent) ValidateStrategicOverlay(
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal result: %w", err)
 	}
-
-	var validationResult ValidationResult
-	if err := json.Unmarshal(jsonData, &validationResult); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal validation result: %w", err)
+	validationResult, err := parseValidationResultJSON(jsonData)
+	if err != nil {
+		return nil, err
 	}
 
-	return &validationResult, nil
+	return validationResult, nil
 }
 
 // buildStrategicValidationPrompt builds a focused prompt for Phase 2 strategic entity validation.

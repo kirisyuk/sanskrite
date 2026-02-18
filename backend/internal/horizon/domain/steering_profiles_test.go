@@ -43,3 +43,11 @@ func TestDomainModesForContractTypes_PolicyImpact(t *testing.T) {
 		t.Errorf("policy-impact: got %v, want %v", modes, want)
 	}
 }
+
+func TestDomainModesForContractTypes_RegulatoryImpactUsesPolicyImpactMode(t *testing.T) {
+	modes := DomainModesForContractTypes([]string{"regulatory-impact"})
+	want := []string{taxonomy.DomainModePolicyImpact}
+	if !reflect.DeepEqual(modes, want) {
+		t.Errorf("regulatory-impact: got %v, want %v", modes, want)
+	}
+}

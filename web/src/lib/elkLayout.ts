@@ -1976,6 +1976,56 @@ export async function layoutLevelsTwoPane<T = any>(
     return 'corridor_propagation';
   };
 
+  const CORRIDOR_TYPE_GROUP_PREFIX = 'corridor_type:';
+  const corridorTypeGroupForNode = (n: Node<T>): string => {
+    const d: any = (n as any)?.data || {};
+    const tk = normalizeFragmentType(String(d?.type || '').trim());
+    if (tk === 'MARKET' || tk === 'DOMAIN') return `${CORRIDOR_TYPE_GROUP_PREFIX}markets`;
+    if (tk === 'PRODUCT' || tk === 'SERVICE' || tk === 'TECHNOLOGY') return `${CORRIDOR_TYPE_GROUP_PREFIX}products`;
+    if (tk === 'DECISION_POINT') return `${CORRIDOR_TYPE_GROUP_PREFIX}decision_points`;
+    if (tk === 'MECHANISM' || tk === 'PROGRAM') return `${CORRIDOR_TYPE_GROUP_PREFIX}mechanisms`;
+    if (tk === 'ORGANIZATION' || tk === 'PERSON' || tk === 'COMPANY' || tk === 'ORG') return `${CORRIDOR_TYPE_GROUP_PREFIX}actors`;
+    return `${CORRIDOR_TYPE_GROUP_PREFIX}actors`;
+  };
+  const corridorTypeGroupLabel = (key: string): string => {
+    const suffix = String(key || '').startsWith(CORRIDOR_TYPE_GROUP_PREFIX)
+      ? String(key || '').slice(CORRIDOR_TYPE_GROUP_PREFIX.length)
+      : String(key || '');
+    switch (suffix) {
+      case 'actors':
+        return 'Actors';
+      case 'decision_points':
+        return 'Decision Points';
+      case 'mechanisms':
+        return 'Mechanisms';
+      case 'markets':
+        return 'Markets';
+      case 'products':
+        return 'Products';
+      default:
+        return 'Actors';
+    }
+  };
+  const corridorTypeGroupOrder = (key: string): number => {
+    const suffix = String(key || '').startsWith(CORRIDOR_TYPE_GROUP_PREFIX)
+      ? String(key || '').slice(CORRIDOR_TYPE_GROUP_PREFIX.length)
+      : String(key || '');
+    switch (suffix) {
+      case 'markets':
+        return 10;
+      case 'products':
+        return 20;
+      case 'decision_points':
+        return 30;
+      case 'mechanisms':
+        return 40;
+      case 'actors':
+        return 90;
+      default:
+        return 90;
+    }
+  };
+
   const SEMANTIC_ROLE_LABEL: Record<string, string> = {
     'governance': 'Governance',
     'supply_chain': 'Supply Chain',
@@ -1992,10 +2042,10 @@ export async function layoutLevelsTwoPane<T = any>(
     'people': 'People',
     'geography': 'Geography',
     'other': 'Context',
-    // Decision-chain corridor roles
-    'corridor_authority': 'Authority',
+    // Decision-chain corridor roles (business-meaningful labels for the flow columns)
+    'corridor_propagation': 'Impact',
     'corridor_execution': 'Execution',
-    'corridor_propagation': 'Propagation',
+    'corridor_authority': 'Authority',
     // Compact role labels (used in compact left pane)
     'supply': 'Supply',
     'context': 'Context',
@@ -2016,10 +2066,11 @@ export async function layoutLevelsTwoPane<T = any>(
     'market_regulation': 100,
     'products_supply': 200,
     'ownership_governance': 300,
-    // Decision-chain corridor ordering
-    'corridor_authority': 110,
+    // Decision-chain corridor ordering: propagation (leftmost, furthest from seed) → authority (rightmost, closest to seed).
+    // This ensures left-group columns flow: Impact ← Mechanism ← Execution ← Authority ← [seed on right backbone]
+    'corridor_propagation': 110,
     'corridor_execution': 150,
-    'corridor_propagation': 190,
+    'corridor_authority': 190,
   };
 
   // Maximum visible nodes per semantic category in left group.
@@ -2121,6 +2172,8 @@ export async function layoutLevelsTwoPane<T = any>(
     stackKey?: string;
     /** Optional override for row count within this subcategory block. */
     rows?: number;
+    /** When true, use compact per-subcategory row offsets (don't inherit tall rows from sibling subcategories). */
+    compactOffsets?: boolean;
     // Per-block node width for compact packing
     nodeW?: number;
     // Business block card metadata (compact left pane summary)
@@ -2513,6 +2566,132 @@ export async function layoutLevelsTwoPane<T = any>(
       return { edgeType: et, isOutgoing: dir };
     };
 
+    const corridorControlEdgeTypes = new Set([
+      'OWNS', 'PARENT_OF', 'SUBSIDIARY_OF', 'CONTROLS', 'MANAGES', 'INVESTS_IN', 'ADMINISTERS',
+      'BOARD_MEMBER_OF', 'EXECUTIVE_OF',
+    ]);
+    const corridorNodeSorter = (nodesIn: Node<T>[]): Node<T>[] => {
+      const nodesLocal = (nodesIn || []).slice();
+      if (!isDecisionChainLeftPane || nodesLocal.length <= 1) {
+        return nodesLocal.sort((a, b) => {
+          const al = String((a.data as any)?.label || a.id);
+          const bl = String((b.data as any)?.label || b.id);
+          return al.localeCompare(bl);
+        });
+      }
+      const ids = new Set<string>(nodesLocal.map((n) => String(n?.id || '').trim()).filter(Boolean));
+      const depthById = new Map<string, number>();
+      const out = new Map<string, Set<string>>();
+      const inDeg = new Map<string, number>();
+      const outDeg = new Map<string, number>();
+      const bumpOut = (id: string) => outDeg.set(id, (outDeg.get(id) || 0) + 1);
+      const bumpIn = (id: string) => inDeg.set(id, (inDeg.get(id) || 0) + 1);
+      for (const id of ids) {
+        out.set(id, new Set<string>());
+        inDeg.set(id, 0);
+        outDeg.set(id, 0);
+      }
+      for (const n of nodesLocal) {
+        const id = String(n?.id || '').trim();
+        if (!id) continue;
+        const d = Number((n as any)?.data?.corridorDepth);
+        if (Number.isFinite(d)) depthById.set(id, d);
+      }
+
+      for (const e of (edges || []) as any[]) {
+        const eid = String(e?.id || '').trim();
+        if (eid.startsWith('levels:agg:')) continue;
+        if (Boolean(e?.data?.levelsAgg)) continue;
+        if (Boolean(e?.data?.levelsStackProxy)) continue;
+        const s = normId(e?.source);
+        const t = normId(e?.target);
+        if (!s || !t || s === t) continue;
+        if (!ids.has(s) || !ids.has(t)) continue;
+        const et = normalizeEdgeType(edgeTypeOf(e));
+        if (!et) continue;
+        if (!corridorControlEdgeTypes.has(et) && !et.startsWith('CORRIDOR_')) continue;
+        let from = s;
+        let to = t;
+        if (et === 'SUBSIDIARY_OF') {
+          from = t;
+          to = s;
+        }
+        if (!ids.has(from) || !ids.has(to) || from === to) continue;
+        const set = out.get(from) || new Set<string>();
+        if (set.has(to)) continue;
+        set.add(to);
+        out.set(from, set);
+        bumpOut(from);
+        bumpIn(to);
+      }
+
+      const labelOf = (id: string) => {
+        const n = nodesLocal.find((x) => String(x.id || '').trim() === id);
+        return String((n?.data as any)?.label || n?.id || id);
+      };
+
+      const queue = Array.from(ids)
+        .filter((id) => (inDeg.get(id) || 0) === 0)
+        .sort((a, b) => {
+          const ao = outDeg.get(a) || 0;
+          const bo = outDeg.get(b) || 0;
+          if (ao !== bo) return bo - ao;
+          return labelOf(a).localeCompare(labelOf(b));
+        });
+      const ordered: string[] = [];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        ordered.push(cur);
+        for (const nb of (out.get(cur) || new Set<string>())) {
+          inDeg.set(nb, (inDeg.get(nb) || 0) - 1);
+          if ((inDeg.get(nb) || 0) === 0) {
+            queue.push(nb);
+          }
+        }
+        queue.sort((a, b) => {
+          const ao = outDeg.get(a) || 0;
+          const bo = outDeg.get(b) || 0;
+          if (ao !== bo) return bo - ao;
+          return labelOf(a).localeCompare(labelOf(b));
+        });
+      }
+
+      if (ordered.length < ids.size) {
+        const rest = Array.from(ids).filter((id) => !ordered.includes(id));
+        rest.sort((a, b) => {
+          const ad = (outDeg.get(a) || 0) - (inDeg.get(a) || 0);
+          const bd = (outDeg.get(b) || 0) - (inDeg.get(b) || 0);
+          if (ad !== bd) return bd - ad;
+          return labelOf(a).localeCompare(labelOf(b));
+        });
+        ordered.push(...rest);
+      }
+
+      // Decision-chain readability rule:
+      // right side (near seed) must contain first-level controlled nodes, deeper dependents go left.
+      // Since layout fills columns left -> right, we keep "deeper first" in list.
+      ordered.sort((a, b) => {
+        const ad = depthById.has(a) ? depthById.get(a)! : Number.POSITIVE_INFINITY;
+        const bd = depthById.has(b) ? depthById.get(b)! : Number.POSITIVE_INFINITY;
+        if (ad !== bd) return bd - ad; // deeper left, closer-to-seed right
+        const ao = outDeg.get(a) || 0;
+        const bo = outDeg.get(b) || 0;
+        if (ao !== bo) return ao - bo; // dependents before controllers
+        return labelOf(a).localeCompare(labelOf(b));
+      });
+
+      const rank = new Map<string, number>();
+      ordered.forEach((id, idx) => rank.set(id, idx));
+      return nodesLocal.sort((a, b) => {
+        const ar = rank.get(String(a.id || '').trim()) ?? 999999;
+        const br = rank.get(String(b.id || '').trim()) ?? 999999;
+        if (ar !== br) return ar - br;
+        const al = String((a.data as any)?.label || a.id);
+        const bl = String((b.data as any)?.label || b.id);
+        return al.localeCompare(bl);
+      });
+    };
+
     const blockRoleForChild = (child: Node<T>): string => {
       const tk = normalizeFragmentType((child.data as any)?.type);
       if (isDecisionChainLeftPane) {
@@ -2543,6 +2722,13 @@ export async function layoutLevelsTwoPane<T = any>(
     // This gives the left group business meaning instead of raw entity-type grouping.
     const byType = new Map<string, Node<T>[]>();
     for (const n of safeChildren) {
+      if (isDecisionChainLeftPane) {
+        const tk = normalizeFragmentType((n.data as any)?.type);
+        const rel = bestRelTypeToParent(n);
+        if (LEFT_GEO_TYPES.has(tk) || tk.includes('GEO') || GEO_EDGE_SET.has(rel)) {
+          continue;
+        }
+      }
       const role = compactLeftPane ? blockRoleForChild(n) : semanticRoleOf(n, parentId);
       const arr = byType.get(role) || [];
       arr.push(n);
@@ -2579,14 +2765,18 @@ export async function layoutLevelsTwoPane<T = any>(
     });
 
     // Per-category cap: limit visible nodes to prevent horizontal sprawl.
+    // Decision Chain is analysis-focused: show all nodes (no "+N more" cap there).
     // Store overflow counts for "+N more" pill rendering.
     const overflowByRole = new Map<string, number>();
-    for (const [role, nodes] of byType.entries()) {
-      const overflowKey = `levels:lefttype:${effectiveGroupId}:${role}`;
-      const isExpanded = expandedRoleGroups instanceof Set && expandedRoleGroups.has(overflowKey);
-      if (!isExpanded && nodes.length > MAX_VISIBLE_PER_CATEGORY) {
-        overflowByRole.set(role, nodes.length - MAX_VISIBLE_PER_CATEGORY);
-        byType.set(role, nodes.slice(0, MAX_VISIBLE_PER_CATEGORY));
+    const applyRoleCap = !isDecisionChainLeftPane;
+    if (applyRoleCap) {
+      for (const [role, nodes] of byType.entries()) {
+        const overflowKey = `levels:lefttype:${effectiveGroupId}:${role}`;
+        const isExpanded = expandedRoleGroups instanceof Set && expandedRoleGroups.has(overflowKey);
+        if (!isExpanded && nodes.length > MAX_VISIBLE_PER_CATEGORY) {
+          overflowByRole.set(role, nodes.length - MAX_VISIBLE_PER_CATEGORY);
+          byType.set(role, nodes.slice(0, MAX_VISIBLE_PER_CATEGORY));
+        }
       }
     }
 
@@ -2873,9 +3063,10 @@ export async function layoutLevelsTwoPane<T = any>(
           const bl = String((b.data as any)?.label || b.id);
           return al.localeCompare(bl);
         });
+        const orderedFlat = corridorNodeSorter(nodesFlat);
         const nodeW = Math.max(
           COMPACT_NODE_WIDTH,
-          ...nodesFlat.map((n) => leftPaneLayoutWidthFor((n as any)?.data || {})),
+          ...orderedFlat.map((n) => leftPaneLayoutWidthFor((n as any)?.data || {})),
         );
 
         const hasFull = nodesFlat.some(
@@ -2903,11 +3094,11 @@ export async function layoutLevelsTwoPane<T = any>(
           {
             edgeTypeKey: '',
             label: '',
-            nodes: nodesFlat,
+            nodes: orderedFlat,
             cols,
             startX: 0,
             blockW,
-            nodeCount: nodesFlat.length,
+            nodeCount: orderedFlat.length,
             collapsed: false,
             nodeW,
           } as any,
@@ -2927,17 +3118,19 @@ export async function layoutLevelsTwoPane<T = any>(
       const NO_REL_GROUPING_ROLES = new Set([
         'products', 'geography', 'regulatory', 'strategic_layer', 'market', 'context', 'supply',
         'decision_mechanisms', 'market_regulation', 'products_supply', 'ownership_governance',
-        'corridor_authority', 'corridor_execution', 'corridor_propagation',
       ]);
       const isCompactGridRole = NO_REL_GROUPING_ROLES.has(typeKey);
-      // In compact left pane, avoid relation subcategories to keep cards short.
+      const useCorridorTypeGrouping =
+        isDecisionChainLeftPane &&
+        (typeKey === 'corridor_authority' || typeKey === 'corridor_execution' || typeKey === 'corridor_propagation');
       const useRelGroupingForType =
-        useRelGrouping && !compactLeftPane && !isCompactGridRole;
+        useCorridorTypeGrouping ||
+        (useRelGrouping && !compactLeftPane && !isCompactGridRole);
 
       if (useRelGroupingForType) {
         const byRel = new Map<string, Node<T>[]>();
         for (const n of list) {
-          const rel = bestRelTypeToParent(n);
+          const rel = useCorridorTypeGrouping ? corridorTypeGroupForNode(n) : bestRelTypeToParent(n);
           const arr = byRel.get(rel) || [];
           arr.push(n);
           byRel.set(rel, arr);
@@ -2977,11 +3170,7 @@ export async function layoutLevelsTwoPane<T = any>(
         const rowHeights = new Array(rowsForType).fill(minBase);
         for (const [rk, v] of byRel.entries()) {
           const relKey = String(rk || '').trim();
-          const nodesRel = (v || []).slice().sort((a, b) => {
-            const al = String((a.data as any)?.label || a.id);
-            const bl = String((b.data as any)?.label || b.id);
-            return al.localeCompare(bl);
-          });
+          const nodesRel = corridorNodeSorter((v || []).slice());
           const collapsed = isSubcategoryCollapsed(effectiveGroupId, relKey) && nodesRel.length > 1;
           const controller = nodesRel[0];
           const nodesForLayout = collapsed ? (controller ? [controller] : []) : nodesRel;
@@ -2998,6 +3187,12 @@ export async function layoutLevelsTwoPane<T = any>(
         maxRows = Math.max(maxRows, rowsForType);
 
         const relKeys = Array.from(byRel.keys()).sort((a, b) => {
+          if (useCorridorTypeGrouping) {
+            const ap = corridorTypeGroupOrder(a);
+            const bp = corridorTypeGroupOrder(b);
+            if (ap !== bp) return ap - bp;
+            return corridorTypeGroupLabel(a).localeCompare(corridorTypeGroupLabel(b));
+          }
           const ap = getEdgePriority(a);
           const bp = getEdgePriority(b);
           if (ap !== bp) return ap - bp;
@@ -3007,11 +3202,7 @@ export async function layoutLevelsTwoPane<T = any>(
         let relColsTotal = 0;
         for (let ri = 0; ri < relKeys.length; ri++) {
           const relKey = relKeys[ri]!;
-          const nodesRel = (byRel.get(relKey) || []).slice().sort((a, b) => {
-            const al = String((a.data as any)?.label || a.id);
-            const bl = String((b.data as any)?.label || b.id);
-            return al.localeCompare(bl);
-          });
+          const nodesRel = corridorNodeSorter((byRel.get(relKey) || []).slice());
 
           // Subcategory collapse is STRUCTURAL:
           // - If collapsed: only ONE controller node participates in the grid.
@@ -3024,13 +3215,21 @@ export async function layoutLevelsTwoPane<T = any>(
           const nodesForLayout = collapsed ? (controller ? [controller] : []) : nodesRel;
 
           const relKeyNorm = normalizeEdgeType(relKey);
-          // UX: "Competes" should stack in a compact column even if other subcategories exist.
-          const rowsForRel =
-            compactLeftPane && relKeyNorm === 'COMPETES_WITH'
-              // NOTE: competitors in Levels-left are always rendered as compact mini-nodes (nodeSize is applied later),
-              // so treat them as compact for row calculation to avoid "full-size" spacing.
-              ? Math.max(1, Math.min(6, nodesForLayout.length))
-              : Math.max(1, rowsForType);
+          // In compact left pane, a fully-compact subcategory should not inherit "full-node" row spacing
+          // from neighboring subcategories in the same type block.
+          const relAllCompact =
+            compactLeftPane &&
+            nodesForLayout.length > 0 &&
+            nodesForLayout.every((n) => {
+              const nd: any = (n as any)?.data || {};
+              return leftPaneLayoutHeightFor(nd) <= COMPACT_NODE_LAYOUT_HEIGHT + 1;
+            });
+          // UX: stack compact subcategories in tall columns (up to 6 mini nodes per column).
+          const useCompactOffsets =
+            compactLeftPane && (relKeyNorm === 'COMPETES_WITH' || relAllCompact);
+          const rowsForRel = useCompactOffsets
+            ? Math.max(1, Math.min(6, nodesForLayout.length))
+            : Math.max(1, rowsForType);
           const cols = collapsed ? 1 : Math.ceil(nodesForLayout.length / rowsForRel);
           const relNodeW = Math.max(
             COMPACT_NODE_WIDTH,
@@ -3044,7 +3243,7 @@ export async function layoutLevelsTwoPane<T = any>(
 
           relBlocks.push({
             edgeTypeKey: relKey,
-            label: edgeTypeCaptionShortLocal(relKey),
+            label: useCorridorTypeGrouping ? corridorTypeGroupLabel(relKey) : edgeTypeCaptionShortLocal(relKey),
             nodes: nodesForLayout,
             cols,
             startX: relCursor,
@@ -3056,6 +3255,7 @@ export async function layoutLevelsTwoPane<T = any>(
             controllerId,
             stackKey,
             rows: rowsForRel,
+            compactOffsets: useCompactOffsets,
             nodeW: relNodeW,
           });
           relColsTotal += cols;
@@ -3073,11 +3273,7 @@ export async function layoutLevelsTwoPane<T = any>(
           compactLeftPane && isCompactGridRole
             ? Math.max(1, Math.min(maxVerticalForNodes(list), list.length))
             : Math.max(minRowsForBlock, rowsForCount(list.length));
-        const nodesFlat = list.slice().sort((a, b) => {
-          const al = String((a.data as any)?.label || a.id);
-          const bl = String((b.data as any)?.label || b.id);
-          return al.localeCompare(bl);
-        });
+        const nodesFlat = corridorNodeSorter(list.slice());
         // Compute per-row max height (supports mixed compact/full nodes).
         const minBase = compactLeftPane ? COMPACT_NODE_LAYOUT_HEIGHT : nodeHeight;
         const rowHeights = new Array(rowsForType).fill(minBase);
@@ -4030,9 +4226,8 @@ export async function layoutLevelsTwoPane<T = any>(
         const edgeTypeKey = String((rb as any)?.edgeTypeKey || '').trim();
         const relKeyNorm = normalizeEdgeType(edgeTypeKey);
         const isCompetesSubcategory = compactLeftPane && relKeyNorm === 'COMPETES_WITH';
-        // IMPORTANT: competitors are rendered as compact in Levels-left, but nodeSize is applied below,
-        // so we must use compact offsets unconditionally here to avoid full-size row spacing.
-        const competesUseCompactOffsets = isCompetesSubcategory;
+        // NOTE: `compactOffsets` is precomputed in groupDimsWrap for all-compact relation blocks.
+        const useCompactSubcategoryOffsets = Boolean((rb as any)?.compactOffsets) || isCompetesSubcategory;
         const relTitle = String((rb as any)?.label || edgeTypeKey || '').trim();
         const nodeCount = typeof (rb as any)?.nodeCount === 'number' ? (rb as any).nodeCount : (rb?.nodes?.length || 0);
         const firstNodeId = String((rb as any)?.firstNodeId || '').trim();
@@ -4148,7 +4343,7 @@ export async function layoutLevelsTwoPane<T = any>(
           // Column-major within each relation sub-block: first fill vertical, then move right.
           // For COMPETES: compute its own compact row offsets so it doesn't inherit tall row heights
           // from other subcategories (e.g. AUDIT) within the same type block.
-          const rbRows = isCompetesSubcategory
+          const rbRows = useCompactSubcategoryOffsets
             ? Math.max(1, Math.floor((rb as any)?.rows || Math.min(6, rb.nodes.length) || 1))
             : safeRows;
           const rowIdx = idx % rbRows;
@@ -4158,7 +4353,7 @@ export async function layoutLevelsTwoPane<T = any>(
           const cxBase = LEFT_REL_CONTAINER_PAD_X + rbStartX;
           const cx = Math.round(cxBase + colIdx * (rbNodeW + groupChildGapX));
           const cy = (() => {
-            if (!competesUseCompactOffsets) return PAD_TOP + (rowOffsets[rowIdx] || 0);
+            if (!useCompactSubcategoryOffsets) return PAD_TOP + (rowOffsets[rowIdx] || 0);
             // Compact rows: each row is COMPACT_NODE_LAYOUT_HEIGHT + groupChildGapY.
             const rbRowOffsets = new Array(rbRows).fill(0);
             for (let r = 1; r < rbRows; r++) {
@@ -4217,7 +4412,7 @@ export async function layoutLevelsTwoPane<T = any>(
           }
           
           // Apply compact node size for left pane when enabled.
-          if (isCompetesSubcategory || isLeftPaneCompactNode(d)) {
+          if (useCompactSubcategoryOffsets || isLeftPaneCompactNode(d)) {
             d.nodeSize = 'compact';
           }
 
@@ -4248,7 +4443,7 @@ export async function layoutLevelsTwoPane<T = any>(
               if (y < bestY) { bestY = y; bestCol = c; }
             }
             // Apply compact node size for left pane when enabled BEFORE measuring height.
-            if (isCompetesSubcategory || isLeftPaneCompactNode(d)) {
+            if (useCompactSubcategoryOffsets || isLeftPaneCompactNode(d)) {
               d.nodeSize = 'compact';
             }
             const h = leftPaneLayoutHeightFor(d);
@@ -4300,7 +4495,7 @@ export async function layoutLevelsTwoPane<T = any>(
               md.hiddenByStack = true;
               (md as any).stackControllerId = controllerId;
               // Apply compact node size for left pane when enabled.
-              if (isCompetesSubcategory || isLeftPaneCompactNode(md)) {
+              if (useCompactSubcategoryOffsets || isLeftPaneCompactNode(md)) {
                 md.nodeSize = 'compact';
               }
               childNodes.push({

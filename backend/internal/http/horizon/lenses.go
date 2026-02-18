@@ -15,6 +15,17 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
 
+func lensValidationStatus(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(msg, "validation error") {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
 // CreateLens создает новый Lens
 func (h *HorizonHandlers) CreateLens(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -96,7 +107,7 @@ func (h *HorizonHandlers) CreateLens(w http.ResponseWriter, r *http.Request) {
 				"sessionId":     sessionID,
 			})
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), lensValidationStatus(err))
 		return
 	}
 
@@ -198,7 +209,7 @@ func (h *HorizonHandlers) UpdateLens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.Lens().UpdateLens(ctx, &lens); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), lensValidationStatus(err))
 		return
 	}
 

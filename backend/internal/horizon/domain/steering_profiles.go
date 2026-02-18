@@ -38,7 +38,7 @@ var profileByContractType = map[string]SteeringProfileName{
 	"sanctions-exposure":      SteeringProfileRegulatoryExposure,
 	"conflict-dynamics":       SteeringProfileRegulatoryExposure,
 	"policy-impact":           SteeringProfilePolicyImpact,
-	"regulatory-impact":       SteeringProfileRegulatoryExposure,
+	"regulatory-impact":       SteeringProfilePolicyImpact,
 	"policy-and-regulation":   SteeringProfileRegulatoryExposure,
 	"compliance-landscape":    SteeringProfileRegulatoryExposure,
 	"security-and-compliance": SteeringProfileRegulatoryExposure,

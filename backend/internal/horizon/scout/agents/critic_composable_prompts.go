@@ -11,6 +11,26 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
+const criticValidationOutputSchema = `STRICT OUTPUT SCHEMA (types are mandatory):
+{
+  "hasConflicts": boolean,
+  "conflicts": [
+    {
+      "field": "string",
+      "extractedValue": any,
+      "sourceValue": any,
+      "reason": "string",
+      "severity": "low" | "medium" | "high"
+    }
+  ],
+  "confidence": number,           // float 0..1, MUST be numeric (not string)
+  "isValid": boolean,
+  "missingInfo": ["string"]       // array of strings only
+}
+Rules:
+- missingInfo items MUST be plain strings, not objects.
+- Return exactly one JSON object and no extra prose.`
+
 func buildUnitPhaseCriticBlock(phase models.UnitPipelinePhase) string {
 	switch phase {
 	case models.UnitPipelinePhaseP5:
@@ -49,11 +69,11 @@ func (a *CriticAgent) runValidationPrompt(ctx context.Context, prompt string) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal result: %w", err)
 	}
-	var validationResult ValidationResult
-	if err := json.Unmarshal(jsonData, &validationResult); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal validation result: %w", err)
+	validationResult, err := parseValidationResultJSON(jsonData)
+	if err != nil {
+		return nil, err
 	}
-	return &validationResult, nil
+	return validationResult, nil
 }
 
 func (a *CriticAgent) buildCoreValidationPrompt(input CriticValidatorInput) string {
@@ -88,7 +108,9 @@ Return JSON:
   "missingInfo": ["string"]
 }
 
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), graphBlock, string(fragmentJSON), string(relationsJSON))
+%s
+
+Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildSupplyChainValidationPrompt(input CriticValidatorInput) string {
@@ -130,8 +152,9 @@ Validate:
 7. qualifier quality (confidence, source hints, transport qualifiers when applicable);
 8. missing unit qualifiers should be explicit and resolved as unclassified when uncertain.
 
-Return JSON with hasConflicts/conflicts/confidence/isValid/missingInfo.
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(chainsJSON))
+%s
+
+Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(chainsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildGovernanceValidationPrompt(input CriticValidatorInput) string {
@@ -155,8 +178,9 @@ Validate ownership and control coherence:
 3. government hierarchy consistency when /gov/ entities appear;
 4. missing information that should be researched before deep dive.
 
-Return JSON with hasConflicts/conflicts/confidence/isValid/missingInfo.
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeGovernance), string(fragmentJSON), string(relationsJSON))
+%s
+
+Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeGovernance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildMarketValidationPrompt(input CriticValidatorInput) string {
@@ -183,8 +207,9 @@ Validate:
 2. major participant coverage and market share plausibility when available;
 3. required market metrics presence at broad level (tam, cagr, concentration).
 
-Return JSON with hasConflicts/conflicts/confidence/isValid/missingInfo.
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeMarket), graphBlock, string(fragmentJSON), string(relationsJSON))
+%s
+
+Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeMarket), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildPolicyImpactValidationPrompt(input CriticValidatorInput) string {
@@ -222,6 +247,7 @@ Validate:
 6. five-layer coverage check: Policy Source, Transmission Channel, Exposure, Response, Observability.
    Report which layers are missing or thin for the current fragment.
 
-Return JSON with hasConflicts/conflicts/confidence/isValid/missingInfo.
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON))
+%s
+
+Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }

@@ -18,6 +18,8 @@ export interface AssembleLensRequest {
   projectId: string;
   query: string;
   name?: string;
+  /** Explicit empty-lens creation path: create lens without preflight/research. */
+  createEmptyLens?: boolean;
   /** Optional: UI-selected canonical paths to be merged into lens scope. */
   prefetchScope?: string[];
   filters: {
@@ -85,8 +87,8 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   const [placeholder] = useState(() => 
     PLACEHOLDER_VARIANTS[Math.floor(Math.random() * PLACEHOLDER_VARIANTS.length)]
   );
-  const [suggestions] = useState(() => 
-    [...SUGGESTIONS].sort(() => 0.5 - Math.random()).slice(0, 3)
+  const [suggestions] = useState(() =>
+    [...SUGGESTIONS].sort(() => 0.5 - Math.random()).slice(0, 2)
   );
 
   // Focus input on mount
@@ -271,6 +273,19 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
       filters,
     };
 
+    onAssemble(request);
+  };
+
+  const handleCreateEmptyLens = () => {
+    if (disabled) return;
+    const request: AssembleLensRequest = {
+      projectId,
+      query: '',
+      name: 'untitled lens',
+      createEmptyLens: true,
+      prefetchScope: [],
+      filters,
+    };
     onAssemble(request);
   };
 
@@ -583,9 +598,14 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
           marginTop: 16, 
           fontSize: 13, 
           color: 'var(--text-tertiary)', 
-          textAlign: 'center',
-          maxWidth: '800px',
-          lineHeight: 1.6 
+          lineHeight: 1.6,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexWrap: 'nowrap',
+          whiteSpace: 'nowrap',
+          overflowX: 'auto',
+          maxWidth: '100%',
         }}>
           <span style={{ marginRight: 6 }}>Try:</span>
           {suggestions.map((s, i) => (
@@ -609,6 +629,37 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
               {i < suggestions.length - 1 && <span style={{ margin: '0 8px', color: 'var(--text-disabled, rgba(255,255,255,0.1))' }}>|</span>}
             </React.Fragment>
           ))}
+          {suggestions.length > 0 && <span style={{ margin: '0 8px', color: 'var(--text-disabled, rgba(255,255,255,0.1))' }}>|</span>}
+          <button
+            type="button"
+            onClick={handleCreateEmptyLens}
+            disabled={disabled}
+            style={{
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              color: 'var(--text-secondary)',
+              border: 'none',
+              borderBottom: '1px dashed var(--border-subtle, rgba(255,255,255,0.2))',
+              background: 'var(--white-06)',
+              borderRadius: 6,
+              padding: '0 6px',
+              fontSize: 13,
+              lineHeight: 1.6,
+              opacity: disabled ? 0.55 : 1,
+              transition: 'color 0.2s, background-color 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              if (!disabled) {
+                e.currentTarget.style.color = 'var(--text-heading)';
+                e.currentTarget.style.background = 'var(--white-10)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'var(--white-06)';
+              e.currentTarget.style.color = 'var(--text-secondary)';
+            }}
+          >
+            Create empty lens
+          </button>
         </div>
       )}
 
@@ -832,4 +883,3 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
 };
 
 export default AssembleLensRequestComponent;
-

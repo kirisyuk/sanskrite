@@ -143,7 +143,7 @@ DOMAIN RULES:
   ECOSYSTEM / STAKEHOLDER:
     ecosystem-mapping, stakeholder-mapping, partnership-landscape, influence-network, power-dynamics
   POLICY / REGULATION:
-    regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
+    policy-impact, regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
   SCENARIOS / TRENDS:
     scenario-analysis, macro-trends, megatrends, future-outlook
   SECTOR / INDUSTRY SPECIFIC:

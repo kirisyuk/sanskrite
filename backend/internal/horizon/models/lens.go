@@ -7,16 +7,16 @@ import (
 
 // Lens представляет пользовательскую конфигурацию мониторинга и анализа
 type Lens struct {
-	ID          string                 `json:"id" firestore:"id"`
-	TenantID    string                 `json:"tenantId" firestore:"tenantId"`
-	ProjectID   string                 `json:"projectId" firestore:"projectId"`
-	Name        string                 `json:"name" firestore:"name"`
+	ID        string `json:"id" firestore:"id"`
+	TenantID  string `json:"tenantId" firestore:"tenantId"`
+	ProjectID string `json:"projectId" firestore:"projectId"`
+	Name      string `json:"name" firestore:"name"`
 
 	// Scope: Mixed array of canonical paths AND query addresses
 	// Examples:
 	//   - Static: "/org/tsmc", "/fac/tsmc/fab-21"
 	//   - Dynamic (QueryAddress): "/query/sector:/Technology/Semiconductors/**"
-	Scope       []string               `json:"scope" firestore:"scope"`
+	Scope []string `json:"scope" firestore:"scope"`
 
 	ViewConfig  map[string]interface{} `json:"viewConfig" firestore:"viewConfig"`
 	AlertConfig map[string]interface{} `json:"alertConfig" firestore:"alertConfig"`
@@ -67,12 +67,8 @@ func (l *Lens) Validate() error {
 	if l.Name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if len(l.Scope) == 0 {
-		return fmt.Errorf("scope must contain at least one canonicalPath")
-	}
 	if l.Status != string(LensStatusActive) && l.Status != string(LensStatusArchived) {
 		return fmt.Errorf("status must be ACTIVE or ARCHIVED")
 	}
 	return nil
 }
-

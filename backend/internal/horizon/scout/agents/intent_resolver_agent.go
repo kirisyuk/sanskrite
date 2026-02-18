@@ -533,7 +533,7 @@ DOMAIN RULES
   TECHNOLOGY: technology-landscape, innovation-map, patent-landscape, rd-landscape, adoption-curve, disruption-analysis
   ECOSYSTEM: ecosystem-mapping, stakeholder-mapping, partnership-landscape, influence-network, power-dynamics
   RELATIONSHIP/COMMONALITY: commonality-analysis
-  POLICY: regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
+  POLICY: policy-impact, regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
   SCENARIOS: scenario-analysis, macro-trends, megatrends, future-outlook
   SECTOR: sector-overview, industry-structure, vertical-deep-dive
   FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
@@ -704,6 +704,8 @@ func baseDomainTitle(contractType string) string {
 		return "Power dynamics"
 
 	// Policy / regulation
+	case "policy-impact":
+		return "Policy impact"
 	case "regulatory-impact":
 		return "Regulatory impact"
 	case "policy-and-regulation":
@@ -917,7 +919,7 @@ func buildDomainDescriptionForIntent(contractType string, title string) string {
 		return fmt.Sprintf("Expand %s into first-order entities: influential actors, power centers, decision networks, gatekeepers, and leverage points.", ttl)
 
 	// Policy / regulation
-	case "regulatory-impact", "policy-and-regulation":
+	case "policy-impact", "regulatory-impact", "policy-and-regulation":
 		return fmt.Sprintf("Expand %s into first-order entities: regulatory bodies, policy frameworks, compliance requirements, enforcement trends, and impact areas.", ttl)
 	case "compliance-landscape", "security-and-compliance":
 		return fmt.Sprintf("Expand %s into first-order entities: compliance standards, certifications, audit requirements, risk areas, and best practices.", ttl)
@@ -1279,7 +1281,7 @@ RULES:
     RELATIONSHIP / COMMONALITY:
       commonality-analysis
     POLICY / REGULATION:
-      regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
+      policy-impact, regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
     SCENARIOS / TRENDS:
       scenario-analysis, macro-trends, megatrends, future-outlook
     SECTOR / INDUSTRY SPECIFIC:
