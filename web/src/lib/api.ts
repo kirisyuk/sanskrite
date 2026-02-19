@@ -2043,6 +2043,71 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   /**
+   * Horizon - Build a structured graph-intent plan from NL query + visible graph snapshot.
+   * POST /api/horizon/lenses/{lensId}/graph-intent/plan
+   */
+  async planHorizonGraphIntent(
+    lensId: string,
+    input: import('../types/graphIntent').GraphIntentPlanRequest,
+  ): Promise<import('../types/graphIntent').GraphIntentPlanResponse> {
+    try {
+      const response = await this.client.post<import('../types/graphIntent').GraphIntentPlanResponse>(
+        `/api/horizon/lenses/${lensId}/graph-intent/plan`,
+        input,
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] planHorizonGraphIntent error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Horizon - Apply a graph-intent plan (mutating mode).
+   * POST /api/horizon/lenses/{lensId}/graph-intent/apply
+   */
+  async applyHorizonGraphIntent(
+    lensId: string,
+    input: import('../types/graphIntent').GraphIntentApplyRequest,
+    options?: { confirm?: boolean },
+  ): Promise<import('../types/graphIntent').GraphIntentApplyResponse> {
+    try {
+      const response = await this.client.post<import('../types/graphIntent').GraphIntentApplyResponse>(
+        `/api/horizon/lenses/${lensId}/graph-intent/apply`,
+        input,
+        {
+          params: options?.confirm ? { confirm: 'true' } : undefined,
+          headers: options?.confirm ? { 'X-Graph-Intent-Confirm': 'true' } : undefined,
+        },
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] applyHorizonGraphIntent error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Horizon - Execute graph-intent in dry-run mode (no writes).
+   * POST /api/horizon/lenses/{lensId}/graph-intent/dry-run
+   */
+  async dryRunHorizonGraphIntent(
+    lensId: string,
+    input: import('../types/graphIntent').GraphIntentApplyRequest,
+  ): Promise<import('../types/graphIntent').GraphIntentApplyResponse> {
+    try {
+      const response = await this.client.post<import('../types/graphIntent').GraphIntentApplyResponse>(
+        `/api/horizon/lenses/${lensId}/graph-intent/dry-run`,
+        input,
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] dryRunHorizonGraphIntent error:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Horizon - Build transitive control corridor (authority -> decision -> mechanism -> impact)
    * on the fly from graph data around seeds/lens scope.
    * POST /api/horizon/lenses/{lensId}/control-corridor

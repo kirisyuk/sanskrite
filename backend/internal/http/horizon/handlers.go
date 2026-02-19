@@ -283,6 +283,23 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 		case "graph-query":
 			h.QueryGraph(w, r)
 			return
+		case "graph-intent":
+			if len(pathParts) < 3 {
+				http.Error(w, "Graph intent action is required", http.StatusBadRequest)
+				return
+			}
+			action := strings.TrimSpace(pathParts[2])
+			switch action {
+			case "plan":
+				h.PlanGraphIntent(w, r)
+			case "apply":
+				h.ApplyGraphIntent(w, r)
+			case "dry-run":
+				h.DryRunGraphIntent(w, r)
+			default:
+				http.Error(w, "Unknown graph-intent action", http.StatusNotFound)
+			}
+			return
 		case "control-corridor":
 			h.QueryControlCorridor(w, r)
 			return

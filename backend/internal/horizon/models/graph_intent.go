@@ -1,0 +1,817 @@
+package models
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+const (
+	GraphIntentVersionV1 = "graph-intent.v1"
+
+	GraphIntentExecutionLanguageEN = "en"
+
+	GraphIntentClassCreate    = "create"
+	GraphIntentClassUpdate    = "update"
+	GraphIntentClassTransform = "transform"
+	GraphIntentClassMixed     = "mixed"
+	GraphIntentClassUnknown   = "unknown"
+
+	GraphIntentApplyModePatch = "patch"
+	GraphIntentApplyModeDry   = "dry-run"
+)
+
+const (
+	GraphIntentGroupingGovernanceStructure = "governance_structure"
+	GraphIntentGroupingMarketMap           = "market_map"
+	GraphIntentGroupingSupplyChainSkeleton = "supply_chain_skeleton"
+	GraphIntentGroupingOwnershipControl    = "ownership_control"
+	GraphIntentGroupingInvestmentFlow      = "investment_flow"
+	GraphIntentGroupingRegulatoryLandscape = "regulatory_landscape"
+	GraphIntentGroupingSocietalStructure   = "societal_structure"
+)
+
+const (
+	GraphIntentRelationTypeAlignsWith    = "ALIGNS_WITH"
+	GraphIntentRelationTypeOpposes       = "OPPOSES"
+	GraphIntentRelationTypeCooperates    = "COOPERATES_WITH"
+	GraphIntentRelationTypeConflictsWith = "CONFLICTS_WITH"
+)
+
+// GraphIntentPlanRequest is the request body for:
+// POST /api/horizon/lenses/{lensId}/graph-intent/plan
+type GraphIntentPlanRequest struct {
+	Version           string                 `json:"version"`
+	RawQuery          string                 `json:"rawQuery"`
+	QueryLanguage     string                 `json:"queryLanguage,omitempty"`
+	ExecutionLanguage string                 `json:"executionLanguage,omitempty"`
+	Snapshot          GraphIntentSnapshot    `json:"snapshot"`
+	Options           GraphIntentPlanOptions `json:"options,omitempty"`
+}
+
+type GraphIntentSnapshot struct {
+	Nodes           []GraphIntentSnapshotNode `json:"nodes,omitempty"`
+	Edges           []GraphIntentSnapshotEdge `json:"edges,omitempty"`
+	SelectedNodeIDs []string                  `json:"selectedNodeIds,omitempty"`
+	VisibleNodeIDs  []string                  `json:"visibleNodeIds,omitempty"`
+	ViewState       GraphIntentViewState      `json:"viewState,omitempty"`
+}
+
+type GraphIntentViewState struct {
+	Zoom    float64                `json:"zoom,omitempty"`
+	Filters map[string]interface{} `json:"filters,omitempty"`
+}
+
+type GraphIntentSnapshotNode struct {
+	NodeID        string   `json:"nodeId,omitempty"`
+	FragmentID    string   `json:"fragmentId,omitempty"`
+	CanonicalPath string   `json:"canonicalPath,omitempty"`
+	Label         string   `json:"label,omitempty"`
+	Type          string   `json:"type,omitempty"`
+	Position      *XYPoint `json:"position,omitempty"`
+}
+
+type GraphIntentSnapshotEdge struct {
+	EdgeID           string `json:"edgeId,omitempty"`
+	SourceNodeID     string `json:"sourceNodeId,omitempty"`
+	TargetNodeID     string `json:"targetNodeId,omitempty"`
+	SourceFragmentID string `json:"sourceFragmentId,omitempty"`
+	TargetFragmentID string `json:"targetFragmentId,omitempty"`
+	RelationType     string `json:"relationType,omitempty"`
+	Direction        string `json:"direction,omitempty"`
+}
+
+type XYPoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type GraphIntentPlanOptions struct {
+	AllowSearchGrounding   bool `json:"allowSearchGrounding,omitempty"`
+	AllowInternalGrounding bool `json:"allowInternalGrounding,omitempty"`
+	MaxNewNodes            int  `json:"maxNewNodes,omitempty"`
+	MaxNewEdges            int  `json:"maxNewEdges,omitempty"`
+}
+
+// GraphIntentPlanResponse is returned by:
+// POST /api/horizon/lenses/{lensId}/graph-intent/plan
+type GraphIntentPlanResponse struct {
+	Version                string                    `json:"version"`
+	NormalizedEnglishQuery string                    `json:"normalizedEnglishQuery"`
+	IntentClass            string                    `json:"intentClass"`
+	Confidence             float64                   `json:"confidence"`
+	Create                 GraphIntentCreateBlock    `json:"create"`
+	Update                 GraphIntentUpdateBlock    `json:"update"`
+	Transform              GraphIntentTransformBlock `json:"transform"`
+	Explanations           []string                  `json:"explanations,omitempty"`
+	Warnings               []string                  `json:"warnings,omitempty"`
+	RequiresConfirmation   bool                      `json:"requiresConfirmation"`
+}
+
+type GraphIntentCreateBlock struct {
+	Groupings []GraphIntentGrouping `json:"groupings,omitempty"`
+	Nodes     []GraphIntentNodeSpec `json:"nodes,omitempty"`
+	Edges     []GraphIntentEdgeSpec `json:"edges,omitempty"`
+}
+
+type GraphIntentGrouping struct {
+	GroupingID   string                  `json:"groupingId"`
+	GroupingKind string                  `json:"groupingKind"`
+	Title        string                  `json:"title"`
+	Anchor       *GraphIntentAnchor      `json:"anchor,omitempty"`
+	Entities     []GraphIntentNodeSpec   `json:"entities,omitempty"`
+	Relations    []GraphIntentEdgeSpec   `json:"relations,omitempty"`
+	Evidence     *GraphIntentEvidenceRef `json:"evidence,omitempty"`
+}
+
+type GraphIntentAnchor struct {
+	CanonicalPathHint string `json:"canonicalPathHint,omitempty"`
+}
+
+type GraphIntentEvidenceRef struct {
+	InternalRefs []string `json:"internalRefs,omitempty"`
+	SearchRefs   []string `json:"searchRefs,omitempty"`
+}
+
+type GraphIntentNodeSpec struct {
+	TempID            string                 `json:"tempId,omitempty"`
+	Label             string                 `json:"label"`
+	Type              string                 `json:"type"`
+	CanonicalPathHint string                 `json:"canonicalPathHint,omitempty"`
+	State             map[string]interface{} `json:"state,omitempty"`
+	Metadata          map[string]interface{} `json:"metadata,omitempty"`
+}
+
+type GraphIntentEdgeSpec struct {
+	TempID       string                 `json:"tempId,omitempty"`
+	FromTempID   string                 `json:"fromTempId,omitempty"`
+	ToTempID     string                 `json:"toTempId,omitempty"`
+	FromNodeID   string                 `json:"fromNodeId,omitempty"`
+	ToNodeID     string                 `json:"toNodeId,omitempty"`
+	RelationType string                 `json:"relationType"`
+	Direction    string                 `json:"direction,omitempty"`
+	Confidence   float64                `json:"confidence,omitempty"`
+	Qualifiers   map[string]interface{} `json:"qualifiers,omitempty"`
+	Metrics      map[string]interface{} `json:"metrics,omitempty"`
+}
+
+type GraphIntentUpdateBlock struct {
+	NodePatches     []GraphIntentNodePatch       `json:"nodePatches,omitempty"`
+	EdgePatches     []GraphIntentEdgePatch       `json:"edgePatches,omitempty"`
+	RelationRewrite []GraphIntentRelationRewrite `json:"relationRewrite,omitempty"`
+}
+
+type GraphIntentNodePatch struct {
+	PatchID       string                 `json:"patchId,omitempty"`
+	NodeID        string                 `json:"nodeId,omitempty"`
+	TempID        string                 `json:"tempId,omitempty"`
+	FragmentID    string                 `json:"fragmentId,omitempty"`
+	CanonicalPath string                 `json:"canonicalPath,omitempty"`
+	Label         *string                `json:"label,omitempty"`
+	Type          *string                `json:"type,omitempty"`
+	StatePatch    map[string]interface{} `json:"statePatch,omitempty"`
+	MetadataPatch map[string]interface{} `json:"metadataPatch,omitempty"`
+}
+
+type GraphIntentEdgePatch struct {
+	PatchID          string                 `json:"patchId,omitempty"`
+	EdgeID           string                 `json:"edgeId,omitempty"`
+	SourceNodeID     string                 `json:"sourceNodeId,omitempty"`
+	TargetNodeID     string                 `json:"targetNodeId,omitempty"`
+	SourceFragmentID string                 `json:"sourceFragmentId,omitempty"`
+	TargetFragmentID string                 `json:"targetFragmentId,omitempty"`
+	RelationType     *string                `json:"relationType,omitempty"`
+	Direction        *string                `json:"direction,omitempty"`
+	Attributes       map[string]interface{} `json:"attributes,omitempty"`
+}
+
+type GraphIntentRelationRewrite struct {
+	RewriteID   string                         `json:"rewriteId,omitempty"`
+	Match       GraphIntentRelationMatch       `json:"match"`
+	ReplaceWith GraphIntentRelationReplacement `json:"replaceWith"`
+	Reason      string                         `json:"reason,omitempty"`
+}
+
+type GraphIntentRelationMatch struct {
+	RelationType  string   `json:"relationType,omitempty"`
+	SourceNodeIDs []string `json:"sourceNodeIds,omitempty"`
+	TargetNodeIDs []string `json:"targetNodeIds,omitempty"`
+}
+
+type GraphIntentRelationReplacement struct {
+	RelationType string `json:"relationType"`
+	Direction    string `json:"direction,omitempty"`
+}
+
+type GraphIntentTransformBlock struct {
+	DeriveChains []GraphIntentDeriveChain `json:"deriveChains,omitempty"`
+	Restructure  []GraphIntentRestructure `json:"restructure,omitempty"`
+}
+
+type GraphIntentDeriveChain struct {
+	ChainID       string                      `json:"chainId,omitempty"`
+	FromNodeID    string                      `json:"fromNodeId,omitempty"`
+	ToNodeID      string                      `json:"toNodeId,omitempty"`
+	Constraints   GraphIntentChainConstraints `json:"constraints,omitempty"`
+	ProposedPath  []string                    `json:"proposedPath,omitempty"`
+	ProposedEdges []string                    `json:"proposedEdges,omitempty"`
+	Confidence    float64                     `json:"confidence,omitempty"`
+}
+
+type GraphIntentChainConstraints struct {
+	AllowedRelationTypes []string `json:"allowedRelationTypes,omitempty"`
+	MaxHops              int      `json:"maxHops,omitempty"`
+}
+
+type GraphIntentRestructure struct {
+	RestructureID string                 `json:"restructureId,omitempty"`
+	ScopeNodeIDs  []string               `json:"scopeNodeIds,omitempty"`
+	Mode          string                 `json:"mode,omitempty"`
+	Params        map[string]interface{} `json:"params,omitempty"`
+}
+
+type GraphIntentApplyRequest struct {
+	Version        string                  `json:"version"`
+	Plan           GraphIntentPlanResponse `json:"plan"`
+	ApplyMode      string                  `json:"applyMode,omitempty"`
+	IdempotencyKey string                  `json:"idempotencyKey"`
+}
+
+type GraphIntentUnresolvedItem struct {
+	TempID          string `json:"tempId,omitempty"`
+	Reason          string `json:"reason"`
+	SuggestedAction string `json:"suggestedAction,omitempty"`
+}
+
+type GraphIntentApplyResponse struct {
+	Applied          bool                        `json:"applied"`
+	CreatedNodeCount int                         `json:"createdNodeCount"`
+	CreatedEdgeCount int                         `json:"createdEdgeCount"`
+	UpdatedNodeCount int                         `json:"updatedNodeCount"`
+	UpdatedEdgeCount int                         `json:"updatedEdgeCount"`
+	UnresolvedItems  []GraphIntentUnresolvedItem `json:"unresolvedItems,omitempty"`
+	Warnings         []string                    `json:"warnings,omitempty"`
+	ActionPreview    *GraphIntentActionPlan      `json:"actionPreview,omitempty"`
+}
+
+type GraphIntentActionPlan struct {
+	Actions []GraphIntentAction `json:"actions"`
+}
+
+type GraphIntentAction struct {
+	ActionID string                 `json:"actionId"`
+	Kind     string                 `json:"kind"`
+	Scope    string                 `json:"scope"`
+	RefID    string                 `json:"refId,omitempty"`
+	Payload  map[string]interface{} `json:"payload,omitempty"`
+}
+
+func DefaultGraphIntentPlanOptions() GraphIntentPlanOptions {
+	return GraphIntentPlanOptions{
+		AllowSearchGrounding:   true,
+		AllowInternalGrounding: true,
+		MaxNewNodes:            60,
+		MaxNewEdges:            120,
+	}
+}
+
+func (r *GraphIntentPlanRequest) NormalizeAndValidate() error {
+	if r == nil {
+		return fmt.Errorf("request is nil")
+	}
+	r.Version = strings.TrimSpace(r.Version)
+	if r.Version == "" {
+		r.Version = GraphIntentVersionV1
+	}
+	if r.Version != GraphIntentVersionV1 {
+		return fmt.Errorf("unsupported version: %s", r.Version)
+	}
+	r.RawQuery = strings.TrimSpace(r.RawQuery)
+	if r.RawQuery == "" {
+		return fmt.Errorf("rawQuery is required")
+	}
+	r.QueryLanguage = strings.TrimSpace(strings.ToLower(r.QueryLanguage))
+	if r.QueryLanguage == "" {
+		r.QueryLanguage = "auto"
+	}
+	r.ExecutionLanguage = strings.TrimSpace(strings.ToLower(r.ExecutionLanguage))
+	if r.ExecutionLanguage == "" {
+		r.ExecutionLanguage = GraphIntentExecutionLanguageEN
+	}
+	def := DefaultGraphIntentPlanOptions()
+	if r.Options.MaxNewNodes <= 0 {
+		r.Options.MaxNewNodes = def.MaxNewNodes
+	}
+	if r.Options.MaxNewEdges <= 0 {
+		r.Options.MaxNewEdges = def.MaxNewEdges
+	}
+	if r.Options.MaxNewNodes > 500 {
+		return fmt.Errorf("maxNewNodes exceeds hard limit: %d", r.Options.MaxNewNodes)
+	}
+	if r.Options.MaxNewEdges > 1000 {
+		return fmt.Errorf("maxNewEdges exceeds hard limit: %d", r.Options.MaxNewEdges)
+	}
+	if r.Snapshot.ViewState.Zoom == 0 {
+		r.Snapshot.ViewState.Zoom = 1.0
+	}
+	return nil
+}
+
+func (r *GraphIntentApplyRequest) NormalizeAndValidate() error {
+	if r == nil {
+		return fmt.Errorf("request is nil")
+	}
+	r.Version = strings.TrimSpace(r.Version)
+	if r.Version == "" {
+		r.Version = GraphIntentVersionV1
+	}
+	if r.Version != GraphIntentVersionV1 {
+		return fmt.Errorf("unsupported version: %s", r.Version)
+	}
+	r.ApplyMode = strings.TrimSpace(strings.ToLower(r.ApplyMode))
+	if r.ApplyMode == "" {
+		r.ApplyMode = GraphIntentApplyModePatch
+	}
+	if r.ApplyMode != GraphIntentApplyModePatch && r.ApplyMode != GraphIntentApplyModeDry {
+		return fmt.Errorf("invalid applyMode: %s", r.ApplyMode)
+	}
+	r.IdempotencyKey = strings.TrimSpace(r.IdempotencyKey)
+	if r.IdempotencyKey == "" {
+		return fmt.Errorf("idempotencyKey is required")
+	}
+	if err := r.Plan.NormalizeAndValidate(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
+	if p == nil {
+		return fmt.Errorf("plan is nil")
+	}
+	p.Version = strings.TrimSpace(p.Version)
+	if p.Version == "" {
+		p.Version = GraphIntentVersionV1
+	}
+	if p.Version != GraphIntentVersionV1 {
+		return fmt.Errorf("unsupported plan version: %s", p.Version)
+	}
+	p.IntentClass = strings.TrimSpace(strings.ToLower(p.IntentClass))
+	if p.IntentClass == "" {
+		p.IntentClass = GraphIntentClassUnknown
+	}
+	switch p.IntentClass {
+	case GraphIntentClassCreate, GraphIntentClassUpdate, GraphIntentClassTransform, GraphIntentClassMixed, GraphIntentClassUnknown:
+	default:
+		return fmt.Errorf("invalid intentClass: %s", p.IntentClass)
+	}
+	if p.Confidence < 0 || p.Confidence > 1 {
+		return fmt.Errorf("confidence must be between 0 and 1")
+	}
+	if strings.TrimSpace(p.NormalizedEnglishQuery) == "" {
+		return fmt.Errorf("normalizedEnglishQuery is required")
+	}
+	for i := range p.Create.Groupings {
+		g := &p.Create.Groupings[i]
+		g.GroupingKind = strings.TrimSpace(strings.ToLower(g.GroupingKind))
+		if !IsGraphIntentGroupingKindAllowed(g.GroupingKind) {
+			return fmt.Errorf("invalid groupingKind: %s", g.GroupingKind)
+		}
+		for _, n := range g.Entities {
+			if strings.TrimSpace(n.Label) == "" {
+				return fmt.Errorf("create.groupings.entities.label is required")
+			}
+			if !IsGraphIntentNodeTypeAllowed(n.Type) {
+				return fmt.Errorf("invalid grouping entity type: %s", n.Type)
+			}
+		}
+		for _, rel := range g.Relations {
+			if !IsGraphIntentRelationTypeAllowed(rel.RelationType) {
+				return fmt.Errorf("invalid grouping relationType: %s", rel.RelationType)
+			}
+		}
+	}
+	for _, n := range p.Create.Nodes {
+		if strings.TrimSpace(n.Label) == "" {
+			return fmt.Errorf("create.nodes.label is required")
+		}
+		if !IsGraphIntentNodeTypeAllowed(n.Type) {
+			return fmt.Errorf("invalid create.nodes.type: %s", n.Type)
+		}
+	}
+	for _, e := range p.Create.Edges {
+		if !IsGraphIntentRelationTypeAllowed(e.RelationType) {
+			return fmt.Errorf("invalid create edge relationType: %s", e.RelationType)
+		}
+	}
+	for _, ep := range p.Update.EdgePatches {
+		if ep.RelationType != nil && strings.TrimSpace(*ep.RelationType) != "" && !IsGraphIntentRelationTypeAllowed(*ep.RelationType) {
+			return fmt.Errorf("invalid edge patch relationType: %s", strings.TrimSpace(*ep.RelationType))
+		}
+	}
+	for _, np := range p.Update.NodePatches {
+		if np.Type != nil && strings.TrimSpace(*np.Type) != "" && !IsGraphIntentNodeTypeAllowed(*np.Type) {
+			return fmt.Errorf("invalid node patch type: %s", strings.TrimSpace(*np.Type))
+		}
+	}
+	for _, rw := range p.Update.RelationRewrite {
+		if strings.TrimSpace(rw.Match.RelationType) != "" && !IsGraphIntentRelationTypeAllowed(rw.Match.RelationType) {
+			return fmt.Errorf("invalid relationRewrite.match.relationType: %s", rw.Match.RelationType)
+		}
+		if !IsGraphIntentRelationTypeAllowed(rw.ReplaceWith.RelationType) {
+			return fmt.Errorf("invalid relationRewrite.replaceWith.relationType: %s", rw.ReplaceWith.RelationType)
+		}
+	}
+	for _, ch := range p.Transform.DeriveChains {
+		for _, rt := range ch.Constraints.AllowedRelationTypes {
+			if !IsGraphIntentRelationTypeAllowed(rt) {
+				return fmt.Errorf("invalid deriveChains.constraints.allowedRelationTypes item: %s", rt)
+			}
+		}
+	}
+	return nil
+}
+
+func (p *GraphIntentPlanResponse) EstimatedCreateCounts() (nodes int, edges int) {
+	for _, g := range p.Create.Groupings {
+		nodes += len(g.Entities)
+		edges += len(g.Relations)
+	}
+	nodes += len(p.Create.Nodes)
+	edges += len(p.Create.Edges)
+	return nodes, edges
+}
+
+func (p *GraphIntentPlanResponse) IsPotentiallyDestructive() bool {
+	if len(p.Update.RelationRewrite) == 0 {
+		return false
+	}
+	for _, rw := range p.Update.RelationRewrite {
+		if len(rw.Match.SourceNodeIDs) == 0 && len(rw.Match.TargetNodeIDs) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *GraphIntentPlanResponse) MapToActions() *GraphIntentActionPlan {
+	if p == nil {
+		return &GraphIntentActionPlan{Actions: []GraphIntentAction{}}
+	}
+	actions := make([]GraphIntentAction, 0, 64)
+	nextID := 1
+	push := func(kind, scope, ref string, payload map[string]interface{}) {
+		actions = append(actions, GraphIntentAction{
+			ActionID: fmt.Sprintf("a%d", nextID),
+			Kind:     kind,
+			Scope:    scope,
+			RefID:    strings.TrimSpace(ref),
+			Payload:  payload,
+		})
+		nextID++
+	}
+
+	for _, g := range p.Create.Groupings {
+		push("create_grouping", "create", g.GroupingID, map[string]interface{}{
+			"groupingKind": g.GroupingKind,
+			"title":        g.Title,
+		})
+		for _, n := range g.Entities {
+			ref := n.TempID
+			if strings.TrimSpace(ref) == "" {
+				ref = n.CanonicalPathHint
+			}
+			push("create_node", "create", ref, map[string]interface{}{
+				"label":             n.Label,
+				"type":              n.Type,
+				"canonicalPathHint": n.CanonicalPathHint,
+			})
+		}
+		for _, e := range g.Relations {
+			ref := e.TempID
+			if strings.TrimSpace(ref) == "" {
+				ref = e.FromTempID + "->" + e.ToTempID + ":" + e.RelationType
+			}
+			push("create_edge", "create", ref, map[string]interface{}{
+				"fromTempId":   e.FromTempID,
+				"toTempId":     e.ToTempID,
+				"relationType": strings.ToUpper(strings.TrimSpace(e.RelationType)),
+				"direction":    strings.ToLower(strings.TrimSpace(e.Direction)),
+			})
+		}
+	}
+	for _, n := range p.Create.Nodes {
+		ref := n.TempID
+		if strings.TrimSpace(ref) == "" {
+			ref = n.CanonicalPathHint
+		}
+		push("create_node", "create", ref, map[string]interface{}{
+			"label":             n.Label,
+			"type":              n.Type,
+			"canonicalPathHint": n.CanonicalPathHint,
+		})
+	}
+	for _, e := range p.Create.Edges {
+		ref := e.TempID
+		if strings.TrimSpace(ref) == "" {
+			ref = e.FromTempID + "->" + e.ToTempID + ":" + e.RelationType
+		}
+		push("create_edge", "create", ref, map[string]interface{}{
+			"fromTempId":   e.FromTempID,
+			"toTempId":     e.ToTempID,
+			"relationType": strings.ToUpper(strings.TrimSpace(e.RelationType)),
+			"direction":    strings.ToLower(strings.TrimSpace(e.Direction)),
+		})
+	}
+
+	for _, np := range p.Update.NodePatches {
+		ref := firstNonEmpty(np.PatchID, np.NodeID, np.TempID, np.FragmentID, np.CanonicalPath)
+		payload := map[string]interface{}{}
+		if np.Label != nil {
+			payload["label"] = *np.Label
+		}
+		if np.Type != nil {
+			payload["type"] = *np.Type
+		}
+		if len(np.StatePatch) > 0 {
+			payload["statePatch"] = np.StatePatch
+		}
+		if len(np.MetadataPatch) > 0 {
+			payload["metadataPatch"] = np.MetadataPatch
+		}
+		push("update_node", "update", ref, payload)
+	}
+	for _, ep := range p.Update.EdgePatches {
+		ref := firstNonEmpty(ep.PatchID, ep.EdgeID)
+		payload := map[string]interface{}{
+			"sourceNodeId":     ep.SourceNodeID,
+			"targetNodeId":     ep.TargetNodeID,
+			"sourceFragmentId": ep.SourceFragmentID,
+			"targetFragmentId": ep.TargetFragmentID,
+		}
+		if ep.RelationType != nil {
+			payload["relationType"] = *ep.RelationType
+		}
+		if ep.Direction != nil {
+			payload["direction"] = *ep.Direction
+		}
+		if len(ep.Attributes) > 0 {
+			payload["attributes"] = ep.Attributes
+		}
+		push("update_edge", "update", ref, payload)
+	}
+	for _, rw := range p.Update.RelationRewrite {
+		ref := firstNonEmpty(rw.RewriteID, rw.Match.RelationType+"->"+rw.ReplaceWith.RelationType)
+		push("rewrite_relation", "update", ref, map[string]interface{}{
+			"match":       rw.Match,
+			"replaceWith": rw.ReplaceWith,
+			"reason":      rw.Reason,
+		})
+	}
+
+	for _, dc := range p.Transform.DeriveChains {
+		ref := firstNonEmpty(dc.ChainID, dc.FromNodeID+"->"+dc.ToNodeID)
+		push("derive_chain", "transform", ref, map[string]interface{}{
+			"fromNodeId":    dc.FromNodeID,
+			"toNodeId":      dc.ToNodeID,
+			"constraints":   dc.Constraints,
+			"proposedPath":  dc.ProposedPath,
+			"proposedEdges": dc.ProposedEdges,
+		})
+	}
+	for _, rs := range p.Transform.Restructure {
+		ref := firstNonEmpty(rs.RestructureID, rs.Mode)
+		push("restructure_graph", "transform", ref, map[string]interface{}{
+			"scopeNodeIds": rs.ScopeNodeIDs,
+			"mode":         rs.Mode,
+			"params":       rs.Params,
+		})
+	}
+
+	return &GraphIntentActionPlan{Actions: actions}
+}
+
+func IsGraphIntentGroupingKindAllowed(kind string) bool {
+	_, ok := graphIntentAllowedGroupingKinds[strings.TrimSpace(strings.ToLower(kind))]
+	return ok
+}
+
+func IsGraphIntentRelationTypeAllowed(relationType string) bool {
+	_, ok := graphIntentAllowedRelationTypes[strings.ToUpper(strings.TrimSpace(relationType))]
+	return ok
+}
+
+func IsGraphIntentNodeTypeAllowed(nodeType string) bool {
+	_, ok := graphIntentAllowedNodeTypes[strings.ToUpper(strings.TrimSpace(nodeType))]
+	return ok
+}
+
+// NormalizeGraphIntentRelationType maps graph-intent-level relation aliases to runtime canonical types.
+func NormalizeGraphIntentRelationType(relationType string) (DependencyType, map[string]interface{}, string, bool) {
+	rt := strings.ToUpper(strings.TrimSpace(relationType))
+	if rt == "" {
+		return "", nil, "", false
+	}
+	switch rt {
+	case GraphIntentRelationTypeAlignsWith:
+		return DependencyTypeAssociatedWith, map[string]interface{}{"associationSubtype": "aligns_with"}, "mapped ALIGNS_WITH -> ASSOCIATED_WITH", true
+	case GraphIntentRelationTypeCooperates:
+		return DependencyTypeAssociatedWith, map[string]interface{}{"associationSubtype": "cooperates_with"}, "mapped COOPERATES_WITH -> ASSOCIATED_WITH", true
+	case GraphIntentRelationTypeOpposes:
+		return DependencyTypeInfluences, map[string]interface{}{"influencePolarity": "negative", "influenceMode": "opposition"}, "mapped OPPOSES -> INFLUENCES (negative)", true
+	case GraphIntentRelationTypeConflictsWith:
+		return DependencyTypeInfluences, map[string]interface{}{"influencePolarity": "negative", "influenceMode": "conflict"}, "mapped CONFLICTS_WITH -> INFLUENCES (negative)", true
+	}
+	if _, ok := graphIntentAllowedRuntimeRelationTypes[rt]; ok {
+		return DependencyType(rt), nil, "", true
+	}
+	return "", nil, "", false
+}
+
+func MapGraphIntentNodeTypeToFragmentType(nodeType, canonicalPathHint string) FragmentType {
+	nt := strings.ToUpper(strings.TrimSpace(nodeType))
+	switch nt {
+	case "GOVERNMENT_AGENCY":
+		return FragmentTypeOrganization
+	case "COMMUNITY_DYNASTY", "COMMUNITY_TRIBE":
+		return FragmentTypeCommunity
+	case "ORGANIZATION", "FACILITY", "GEO_REGION", "DOMAIN", "SPHERE", "EVENT", "PRODUCT", "PROGRAM", "MARKET", "PERSON", "MEDIA_CHANNEL", "DECISION_POINT", "MECHANISM", "SUPPLY_LINK", "TRACK", "DEPOSIT", "COMMUNITY":
+		return FragmentType(nt)
+	}
+	cp := strings.TrimSpace(strings.ToLower(canonicalPathHint))
+	switch {
+	case strings.HasPrefix(cp, "/org/"), strings.HasPrefix(cp, "/gov/"):
+		return FragmentTypeOrganization
+	case strings.HasPrefix(cp, "/fac/"):
+		return FragmentTypeFacility
+	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/geo/"), strings.HasPrefix(cp, "/region/"):
+		return FragmentTypeGeoRegion
+	case strings.HasPrefix(cp, "/product/"):
+		return FragmentTypeProduct
+	case strings.HasPrefix(cp, "/program/"):
+		return FragmentTypeProgram
+	case strings.HasPrefix(cp, "/market/"):
+		return FragmentTypeMarket
+	case strings.HasPrefix(cp, "/person/"):
+		return FragmentTypePerson
+	case strings.HasPrefix(cp, "/media/"):
+		return FragmentTypeMediaChannel
+	case strings.HasPrefix(cp, "/domain/"):
+		return FragmentTypeDomain
+	case strings.HasPrefix(cp, "/deposit/"):
+		return FragmentTypeDeposit
+	case strings.HasPrefix(cp, "/community/"):
+		return FragmentTypeCommunity
+	case strings.HasPrefix(cp, "/decision/"):
+		return FragmentTypeDecisionPoint
+	case strings.HasPrefix(cp, "/mechanism/"):
+		return FragmentTypeMechanism
+	case strings.HasPrefix(cp, "/sphere/"):
+		return FragmentTypeSphere
+	case strings.HasPrefix(cp, "/event/"):
+		return FragmentTypeEvent
+	}
+	return FragmentTypeOrganization
+}
+
+func GraphIntentAllowedRelationTypesSorted() []string {
+	out := make([]string, 0, len(graphIntentAllowedRelationTypes))
+	for t := range graphIntentAllowedRelationTypes {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func GraphIntentAllowedGroupingKindsSorted() []string {
+	out := make([]string, 0, len(graphIntentAllowedGroupingKinds))
+	for k := range graphIntentAllowedGroupingKinds {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func GraphIntentAllowedNodeTypesSorted() []string {
+	out := make([]string, 0, len(graphIntentAllowedNodeTypes))
+	for t := range graphIntentAllowedNodeTypes {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+var graphIntentAllowedGroupingKinds = map[string]struct{}{
+	GraphIntentGroupingGovernanceStructure: {},
+	GraphIntentGroupingMarketMap:           {},
+	GraphIntentGroupingSupplyChainSkeleton: {},
+	GraphIntentGroupingOwnershipControl:    {},
+	GraphIntentGroupingInvestmentFlow:      {},
+	GraphIntentGroupingRegulatoryLandscape: {},
+	GraphIntentGroupingSocietalStructure:   {},
+}
+
+var graphIntentAllowedRuntimeRelationTypes = map[string]struct{}{
+	string(DependencyTypeSuppliesTo):          {},
+	string(DependencyTypeLocatedIn):           {},
+	string(DependencyTypeOwns):                {},
+	string(DependencyTypeSubsidiaryOf):        {},
+	string(DependencyTypeProduces):            {},
+	string(DependencyTypeConsumes):            {},
+	string(DependencyTypeOperatesIn):          {},
+	string(DependencyTypeRegulates):           {},
+	string(DependencyTypeCompetesWith):        {},
+	string(DependencyTypeDependsOn):           {},
+	string(DependencyTypeInfluences):          {},
+	string(DependencyTypeTransformsInto):      {},
+	string(DependencyTypeExtractsFrom):        {},
+	string(DependencyTypeParticipatesIn):      {},
+	string(DependencyTypeDominates):           {},
+	string(DependencyTypeHasSubmarket):        {},
+	string(DependencyTypeAdministers):         {},
+	string(DependencyTypeManages):             {},
+	string(DependencyTypeControls):            {},
+	string(DependencyTypeControlsAccess):      {},
+	string(DependencyTypeEmployedBy):          {},
+	string(DependencyTypeBoardMemberOf):       {},
+	string(DependencyTypeFounded):             {},
+	string(DependencyTypeInvestsIn):           {},
+	string(DependencyTypePartnersWith):        {},
+	string(DependencyTypeImposesCondition):    {},
+	string(DependencyTypeGatekeepsDecision):   {},
+	string(DependencyTypeUsesMechanism):       {},
+	string(DependencyTypeAppliesTo):           {},
+	string(DependencyTypeAssociatedWith):      {},
+	string(DependencyTypeCorporateTransition): {},
+	string(DependencyTypeDomainRelation):      {},
+	string(DependencyTypeWorksFor):            {},
+	string(DependencyTypeKeyPerson):           {},
+	string(DependencyTypeHasKeyPerson):        {},
+	string(DependencyTypeAuditedBy):           {},
+	string(DependencyTypeRelativeOf):          {},
+	string(DependencyTypeRelatedTo):           {},
+	string(DependencyTypeOperatesVia):         {},
+	string(DependencyTypeMemberOf):            {},
+	string(DependencyTypeAffiliatedWith):      {},
+	string(DependencyTypeFocusesOn):           {},
+	string(DependencyTypeInvolvesActor):       {},
+	string(DependencyTypeInGeoScope):          {},
+	string(DependencyTypeAbout):               {},
+	string(DependencyTypeSurfaces):            {},
+	string(DependencyTypeRelatedDomain):       {},
+	string(DependencyTypeBroadensTo):          {},
+	string(DependencyTypeNarrowsTo):           {},
+	string(DependencyTypeAffects):             {},
+	string(DependencyTypeHasSubgroup):         {},
+	string(DependencyTypeRenamedTo):           {},
+	string(DependencyTypeRebrandedTo):         {},
+	string(DependencyTypeLegalSuccessorOf):    {},
+	string(DependencyTypeMergedInto):          {},
+	string(DependencyTypeSpunOffFrom):         {},
+	string(DependencyTypeAcquiredBy):          {},
+}
+
+var graphIntentAllowedRelationTypes = func() map[string]struct{} {
+	out := make(map[string]struct{}, len(graphIntentAllowedRuntimeRelationTypes)+4)
+	for k := range graphIntentAllowedRuntimeRelationTypes {
+		out[k] = struct{}{}
+	}
+	out[GraphIntentRelationTypeAlignsWith] = struct{}{}
+	out[GraphIntentRelationTypeOpposes] = struct{}{}
+	out[GraphIntentRelationTypeCooperates] = struct{}{}
+	out[GraphIntentRelationTypeConflictsWith] = struct{}{}
+	return out
+}()
+
+var graphIntentAllowedNodeTypes = map[string]struct{}{
+	string(FragmentTypeOrganization):  {},
+	string(FragmentTypeFacility):      {},
+	string(FragmentTypeGeoRegion):     {},
+	string(FragmentTypeDomain):        {},
+	string(FragmentTypeSphere):        {},
+	string(FragmentTypeEvent):         {},
+	string(FragmentTypeProduct):       {},
+	string(FragmentTypeProgram):       {},
+	string(FragmentTypeMarket):        {},
+	string(FragmentTypePerson):        {},
+	string(FragmentTypeMediaChannel):  {},
+	string(FragmentTypeDecisionPoint): {},
+	string(FragmentTypeMechanism):     {},
+	string(FragmentTypeSupplyLink):    {},
+	string(FragmentTypeTrack):         {},
+	string(FragmentTypeDeposit):       {},
+	string(FragmentTypeCommunity):     {},
+	"GOVERNMENT_AGENCY":               {},
+	"COMMUNITY_DYNASTY":               {},
+	"COMMUNITY_TRIBE":                 {},
+}

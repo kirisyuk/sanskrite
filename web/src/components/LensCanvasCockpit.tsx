@@ -13471,6 +13471,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     Refresh: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 21h5v-5" /></svg>,
     Load: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" /><path d="M12 11v6" /><path d="M9 14l3 3 3-3" /></svg>,
     Search: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>,
+    Message: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a8.5 8.5 0 0 1-8.5 8.5h-5L3 22l1.5-4.5v-5A8.5 8.5 0 1 1 21 12Z" /></svg>,
     Sliders: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>,
     Dots: <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>,
     Plus: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>,
@@ -15437,6 +15438,53 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           </button>
         </div>
 
+        {/* Bottom-center quick trigger for Search/Add command palette */}
+        <div
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: 14,
+            transform: 'translateX(-50%)',
+            zIndex: 220,
+            pointerEvents: 'none',
+          }}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              toggleCommandPalette();
+            }}
+            disabled={!lensId}
+            title={addNodeOpen ? 'Close search / add (Ctrl+K)' : 'Find or add node (Ctrl+K)'}
+            aria-label={addNodeOpen ? 'Close search and add palette' : 'Open search and add palette'}
+            style={{
+              pointerEvents: 'auto',
+              width: 44,
+              height: 44,
+              borderRadius: 999,
+              border: addNodeOpen
+                ? (theme === 'dark' ? '1px solid rgba(96,165,250,0.55)' : '1px solid rgba(37,99,235,0.50)')
+                : '1px solid var(--border-subtle)',
+              background: addNodeOpen
+                ? (theme === 'dark' ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.14)')
+                : (theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.80)'),
+              color: 'var(--text-heading)',
+              cursor: !lensId ? 'not-allowed' : 'pointer',
+              opacity: !lensId ? 0.5 : 1,
+              filter: theme === 'dark' ? 'drop-shadow(0 16px 40px rgba(0,0,0,0.55))' : 'drop-shadow(0 16px 40px rgba(0,0,0,0.18))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backdropFilter: 'blur(8px)',
+              transition: 'background-color 0.18s ease, border-color 0.18s ease',
+            }}
+          >
+            {Icons.Plus}
+          </button>
+        </div>
+
         {/* Perf-mode edge info (avoids heavy edge relabel/restyling) */}
         {perfMode && perfHoveredEdgeInfo && (
           <div
@@ -15458,8 +15506,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           </div>
         )}
 
-        {/* Overlay empty-state (граф всё равно виден как canvas) */}
-        {nodes.length === 0 && !loading && (
+        {/* Overlay empty-state:
+            show only when lens has a non-empty scope; for empty-lens flow keep canvas immediately interactive. */}
+        {nodes.length === 0 && !loading && !lensMetaLoading && lensScopePaths.length > 0 && (
           <div
             style={{
               position: 'absolute',
@@ -15846,15 +15895,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       {addNodeOpen && (
         <div
           style={{
-            position: 'fixed',
+            position: 'absolute',
             inset: 0,
-            zIndex: 9999,
+            zIndex: 260,
             display: 'flex',
-            alignItems: 'flex-start',
+            alignItems: 'flex-end',
             justifyContent: 'center',
-            paddingTop: '15vh',
+            paddingBottom: 72,
             background: theme === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)',
             backdropFilter: 'blur(4px)',
+            animation: 'horizon-command-backdrop-in 0.12s ease-out',
           }}
           onClick={() => closeAddNode()}
         >
@@ -15870,12 +15920,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               borderRadius: 16,
               boxShadow: theme === 'dark' ? '0 20px 60px rgba(0,0,0,0.6)' : '0 20px 60px rgba(0,0,0,0.2)',
               overflow: 'hidden',
-              animation: 'horizon-command-pop 0.15s ease-out',
+              animation: 'horizon-command-rise 0.2s cubic-bezier(0.2, 0.9, 0.2, 1)',
+              transformOrigin: '50% 100%',
             }}
           >
             <style>{`
-              @keyframes horizon-command-pop {
-                from { opacity: 0; transform: scale(0.96) translateY(10px); }
+              @keyframes horizon-command-backdrop-in {
+                from { opacity: 0; }
+                to { opacity: 1; }
+              }
+              @keyframes horizon-command-rise {
+                from { opacity: 0; transform: translateY(14px) scale(0.98); }
                 to { opacity: 1; transform: scale(1) translateY(0); }
               }
             `}</style>
@@ -15926,7 +15981,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                     return;
                   }
                 }}
-                placeholder="Search nodes (on graph) or add fragments…"
+                placeholder="What should I do?"
                 autoComplete="off"
                 spellCheck={false}
                 style={{
