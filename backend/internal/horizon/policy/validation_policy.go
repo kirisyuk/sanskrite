@@ -439,6 +439,27 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		}
 	}
 
+	// Policy 2.55: HAS_MARKET_SEGMENT path rule (best-effort). Ideal: child path = parent path + one segment.
+	if relationType == string(horizonmodels.DependencyTypeHasMarketSegment) &&
+		sourceType == string(horizonmodels.FragmentTypeMarket) &&
+		targetType == string(horizonmodels.FragmentTypeMarket) &&
+		sourcePath != "" && targetPath != "" &&
+		strings.HasPrefix(sourcePath, "/market/") && strings.HasPrefix(targetPath, "/market/") {
+		if !horizonmodels.MarketSegmentPathsFollowRule(sourcePath, targetPath) {
+			reason := "HAS_MARKET_SEGMENT: ideal rule is child path = parent path + one segment; paths deviate (best-effort)"
+			log.Printf("%s PENALTY: %s", logPrefix, reason)
+			return PolicyDecision{
+				Action: ActionAllowWithPenalty,
+				Params: map[string]interface{}{
+					"penalty": 0.05,
+					"reason":  reason,
+				},
+				DecisionPath: "rule:hardcoded:has_market_segment_path_rule",
+				Confidence:   0.95,
+			}, nil
+		}
+	}
+
 	// Policy 2.5: Soft-penalty for weak but semantically plausible links.
 	if relationType == string(horizonmodels.DependencyTypeInfluences) &&
 		sourceType == string(horizonmodels.FragmentTypeOrganization) &&
@@ -600,10 +621,10 @@ func quarantinePenaltyForTriple(edgeType horizonmodels.DependencyType, sourceTyp
 		sourceType == horizonmodels.FragmentTypeFacility &&
 		targetType == horizonmodels.FragmentTypeOrganization:
 		return 0.30, "quarantine: FACILITY -> ORGANIZATION OPERATES_VIA requires MEDIA_CHANNEL target"
-	case edgeType == horizonmodels.DependencyTypeHasSubmarket &&
+	case edgeType == horizonmodels.DependencyTypeHasMarketSegment &&
 		sourceType == horizonmodels.FragmentTypeMarket &&
 		targetType == horizonmodels.FragmentTypeProduct:
-		return 0.25, "quarantine: MARKET -> PRODUCT HAS_SUBMARKET requires MARKET target"
+		return 0.25, "quarantine: MARKET -> PRODUCT HAS_MARKET_SEGMENT requires MARKET target"
 	case edgeType == horizonmodels.DependencyTypeCompetesWith &&
 		sourceType == horizonmodels.FragmentTypeProgram &&
 		targetType == horizonmodels.FragmentTypeProgram:

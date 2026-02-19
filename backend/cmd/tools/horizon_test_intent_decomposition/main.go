@@ -25,7 +25,7 @@ import (
 )
 
 func getSecret(secretName string) string {
-	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret="+secretName, "--project=hatlone-test")
+	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret="+secretName, "--project=h1horizon")
 	out, err := cmd.Output()
 	if err != nil {
 		log.Printf("Warning: Failed to fetch secret %s: %v", secretName, err)
@@ -55,7 +55,7 @@ func normalizeCanonicalPath(raw string) string {
 func main() {
 	log.Println("=== Testing Intent Decomposition (Tesla Battery Logistics) ===")
 	ctx := context.Background()
-	projectID := "hatlone-test"
+	projectID := "h1horizon"
 
 	targetFlag := flag.String("target", "/org/tesla", "Target canonical path")
 	focusFlag := flag.String("focus", "Battery logistics supply chain: identify suppliers (cells, cathode/anode, lithium), manufacturing sites, logistics nodes, flows.", "Lens focus")

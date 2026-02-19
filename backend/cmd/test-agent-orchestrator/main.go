@@ -226,7 +226,7 @@ func main() {
 	// BigQuery для bigquery_query (если доступен)
 	bigqueryDatasetID := os.Getenv("BIGQUERY_DATASET_ID")
 	if bigqueryDatasetID == "" {
-		bigqueryDatasetID = "sanskrite_documents"
+		bigqueryDatasetID = "h1horizon_documents"
 	}
 	bigqueryClient, err := gcp.NewBigQueryClient(ctx, projectID, bigqueryDatasetID)
 	if err == nil {
@@ -838,7 +838,7 @@ func testScenario4(ctx context.Context, orchestrator *agents.AgentOrchestrator, 
 			Capability: "bigquery_query",
 			Status:     models.AgentStepStatusPending,
 			Input: map[string]interface{}{
-				"sql": "SELECT COUNT(*) as total_docs FROM `sanskrite_documents.core_docs_metadata` LIMIT 1",
+				"sql": "SELECT COUNT(*) as total_docs FROM `h1horizon_documents.core_docs_metadata` LIMIT 1",
 			},
 			DependsOn:  []string{},
 			IsCritical: false,

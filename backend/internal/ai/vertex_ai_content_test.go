@@ -17,7 +17,7 @@ func TestVertexAISearchContentQuality(t *testing.T) {
 		t.Skip("set VERTEX_AI_LIVE_TEST=1 to run live Vertex AI tests")
 	}
 
-	projectID := "hatlone-test"
+	projectID := "h1horizon"
 	location := "us-central1"
 	dataStoreID := "horizon-fragments-store"
 

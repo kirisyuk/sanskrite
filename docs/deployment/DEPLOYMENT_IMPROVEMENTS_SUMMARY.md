@@ -142,8 +142,8 @@ done
 ═══════════════════════════════════════════════════════
 ✓ Deployment Complete
 ═══════════════════════════════════════════════════════
-Backend API: https://sanskrite-api-xxx.run.app
-Telegram Service: https://sanskrite-telegram-xxx.run.app
+Backend API: https://h1horizon-api-xxx.run.app
+Telegram Service: https://h1horizon-telegram-xxx.run.app
 
 Post-deployment checklist:
   ☐ Verify secrets have real API keys

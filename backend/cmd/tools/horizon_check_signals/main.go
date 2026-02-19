@@ -16,7 +16,7 @@ import (
 
 func main() {
 	var (
-		projectID     = flag.String("project", "sanskrite", "GCP project id")
+		projectID     = flag.String("project", "h1horizon", "GCP project id")
 		tenantID      = flag.String("tenant", "global", "tenant id (default: global)")
 		canonicalPath = flag.String("path", "/org/byd", "canonical path to inspect (e.g., /org/byd)")
 		limit         = flag.Int("limit", 200, "max facts to scan")

@@ -145,7 +145,7 @@ fi
 
 echo ""
 echo "7. Проверка переменных окружения Cloud Run..."
-SERVICE="sanskrite-api"
+SERVICE="h1horizon-api"
 REGION="us-central1"
 if gcloud run services describe "$SERVICE" --region="$REGION" --format="value(metadata.name)" 2>/dev/null | grep -q "$SERVICE"; then
   check "Cloud Run сервис существует: $SERVICE"

@@ -15,7 +15,7 @@ import (
 // MARKET HIERARCHY POLICY
 // =============================================================================
 // Markets form hierarchies from broader to narrower segments.
-// This policy automatically creates parent markets and HAS_SUBMARKET edges
+// This policy automatically creates parent markets and HAS_MARKET_SEGMENT edges
 // when sub-markets are detected.
 //
 // Examples:
@@ -53,7 +53,7 @@ var MarketSlugSuffixes = []string{
 	"-segment", "-sector", "-industry", "-market",
 }
 
-// EnsureMarketHierarchy infers parent market from canonical path and creates HAS_SUBMARKET edge.
+// EnsureMarketHierarchy infers parent market from canonical path and creates HAS_MARKET_SEGMENT edge.
 // Best-effort: does not block on errors.
 func (b *MarketHierarchyBuilder) EnsureMarketHierarchy(
 	ctx context.Context,
@@ -130,8 +130,8 @@ func (b *MarketHierarchyBuilder) EnsureMarketHierarchy(
 		fragment.ParentMarketPath = parentPath
 	}
 
-	// Create HAS_SUBMARKET edge: parent -> child
-	if err := b.ensureHasSubmarketEdge(ctx, parentID, fragmentID, provenanceMethod, sourceID); err != nil {
+	// Create HAS_MARKET_SEGMENT edge: parent -> child
+	if err := b.ensureHasMarketSegmentEdge(ctx, parentID, fragmentID, provenanceMethod, sourceID); err != nil {
 		return nil // Best effort
 	}
 
@@ -237,23 +237,30 @@ func (b *MarketHierarchyBuilder) ensureParentMarket(ctx context.Context, path, s
 	return id, nil
 }
 
-// ensureHasSubmarketEdge creates a HAS_SUBMARKET edge from parent to child if it doesn't exist.
-func (b *MarketHierarchyBuilder) ensureHasSubmarketEdge(ctx context.Context, parentID, childID, provenanceMethod, sourceID string) error {
-	// Check if edge already exists
-	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, models.DependencyTypeHasSubmarket)
+// ensureHasMarketSegmentEdge creates a HAS_MARKET_SEGMENT edge from parent to child if it doesn't exist.
+func (b *MarketHierarchyBuilder) ensureHasMarketSegmentEdge(ctx context.Context, parentID, childID, provenanceMethod, sourceID string) error {
+	// Check if edge already exists (HAS_MARKET_SEGMENT or legacy HAS_SUBMARKET)
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, models.DependencyTypeHasMarketSegment)
 	if err == nil {
-		return nil // Already exists
+		return nil
+	}
+	if !errors.Is(err, repo.ErrEdgeNotFound) {
+		return err
+	}
+	_, err = b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, models.DependencyTypeHasSubmarket)
+	if err == nil {
+		return nil
 	}
 	if !errors.Is(err, repo.ErrEdgeNotFound) {
 		return err
 	}
 
-	// Create HAS_SUBMARKET edge
+	// Create HAS_MARKET_SEGMENT edge
 	edge := &models.DependencyEdge{
 		TenantID:         "global",
 		SourceFragmentID: parentID,
 		TargetFragmentID: childID,
-		Type:             models.DependencyTypeHasSubmarket,
+		Type:             models.DependencyTypeHasMarketSegment,
 		Properties: models.EdgeProperties{
 			Criticality:   0.5,
 			Amplification: 1.0,

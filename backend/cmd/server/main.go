@@ -358,7 +358,7 @@ func main() {
 		genaiClient := gen_combined.NewClient(geminiClient, openaiAPIKey)
 
 		// Initialize BigQuery client and AI service
-		bigqueryDatasetID := getEnv("BIGQUERY_DATASET_ID", "sanskrite_documents")
+		bigqueryDatasetID := getEnv("BIGQUERY_DATASET_ID", "h1horizon_documents")
 		if bq, err := gcp.NewBigQueryClient(ctx, projectID, bigqueryDatasetID, opts...); err == nil {
 			bqClient = bq
 			bigqueryAIService = services.NewBigQueryAIService(bqClient, genaiClient, logger)
@@ -1078,9 +1078,9 @@ func main() {
 			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_SCOUT", "1"))
 			if enabled == "1" || strings.EqualFold(enabled, "true") {
 				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
-				// NOTE: The original queue name "sanskrite-scout" may be temporarily unavailable after deletion.
+				// NOTE: The original queue name "h1horizon-scout" may be temporarily unavailable after deletion.
 				// Use env override in prod; default to a safe v2 name.
-				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_SCOUT_QUEUE", "sanskrite-scout-v2"))
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_SCOUT_QUEUE", "h1horizon-scout-v2"))
 				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
 				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
 				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
@@ -1146,7 +1146,7 @@ func main() {
 			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_RISK", "1"))
 			if enabled == "1" || strings.EqualFold(enabled, "true") {
 				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
-				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_RISK_QUEUE", "sanskrite-risk-v1"))
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_RISK_QUEUE", "h1horizon-risk-v1"))
 				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
 				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
 				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
@@ -1196,7 +1196,7 @@ func main() {
 			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_PROFILE", "1"))
 			if enabled == "1" || strings.EqualFold(enabled, "true") {
 				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
-				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_PROFILE_QUEUE", "sanskrite-profile-refresh"))
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_PROFILE_QUEUE", "h1horizon-profile-refresh"))
 				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
 				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
 				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))

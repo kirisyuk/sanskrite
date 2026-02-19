@@ -92,6 +92,8 @@ func GraphIntentPlanResponseSchemaDraft07() map[string]interface{} {
 				"enum": []string{
 					GraphIntentClassCreate,
 					GraphIntentClassUpdate,
+					GraphIntentClassDelete,
+					GraphIntentClassMerge,
 					GraphIntentClassTransform,
 					GraphIntentClassMixed,
 					GraphIntentClassUnknown,
@@ -107,6 +109,12 @@ func GraphIntentPlanResponseSchemaDraft07() map[string]interface{} {
 			},
 			"update": map[string]interface{}{
 				"$ref": "#/definitions/updateBlock",
+			},
+			"delete": map[string]interface{}{
+				"$ref": "#/definitions/deleteBlock",
+			},
+			"merge": map[string]interface{}{
+				"$ref": "#/definitions/mergeBlock",
 			},
 			"transform": map[string]interface{}{
 				"$ref": "#/definitions/transformBlock",
@@ -212,7 +220,7 @@ func GraphIntentApplyResponseSchemaDraft07() map[string]interface{} {
 
 func graphIntentDefinitionsWithPlanDraft07() map[string]interface{} {
 	defs := graphIntentDefinitionsDraft07()
-	defs["planResponse"] = map[string]interface{}{
+		defs["planResponse"] = map[string]interface{}{
 		"type":                 "object",
 		"additionalProperties": false,
 		"required": []string{
@@ -239,6 +247,8 @@ func graphIntentDefinitionsWithPlanDraft07() map[string]interface{} {
 				"enum": []string{
 					GraphIntentClassCreate,
 					GraphIntentClassUpdate,
+					GraphIntentClassDelete,
+					GraphIntentClassMerge,
 					GraphIntentClassTransform,
 					GraphIntentClassMixed,
 					GraphIntentClassUnknown,
@@ -254,6 +264,12 @@ func graphIntentDefinitionsWithPlanDraft07() map[string]interface{} {
 			},
 			"update": map[string]interface{}{
 				"$ref": "#/definitions/updateBlock",
+			},
+			"delete": map[string]interface{}{
+				"$ref": "#/definitions/deleteBlock",
+			},
+			"merge": map[string]interface{}{
+				"$ref": "#/definitions/mergeBlock",
 			},
 			"transform": map[string]interface{}{
 				"$ref": "#/definitions/transformBlock",
@@ -461,7 +477,7 @@ func graphIntentDefinitionsDraft07() map[string]interface{} {
 		"nodeSpec": map[string]interface{}{
 			"type":                 "object",
 			"additionalProperties": false,
-			"required":             []string{"label", "type"},
+			"required":             []string{"label", "type", "canonicalPathHint"},
 			"properties": map[string]interface{}{
 				"tempId": map[string]interface{}{
 					"type": "string",
@@ -553,6 +569,36 @@ func graphIntentDefinitionsDraft07() map[string]interface{} {
 					"items": map[string]interface{}{
 						"$ref": "#/definitions/relationRewrite",
 					},
+				},
+			},
+		},
+		"deleteBlock": map[string]interface{}{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]interface{}{
+				"nodeIds": map[string]interface{}{
+					"type":  "array",
+					"items": map[string]interface{}{"type": "string"},
+				},
+				"edgeIds": map[string]interface{}{
+					"type":  "array",
+					"items": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		"mergeBlock": map[string]interface{}{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]interface{}{
+				"primaryNodeId": map[string]interface{}{
+					"type": "string",
+				},
+				"duplicateNodeIds": map[string]interface{}{
+					"type":  "array",
+					"items": map[string]interface{}{"type": "string"},
+				},
+				"mergeFragmentData": map[string]interface{}{
+					"type": "boolean",
 				},
 			},
 		},

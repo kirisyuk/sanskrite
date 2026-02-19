@@ -7,10 +7,10 @@
 ## Создаваемые ресурсы
 
 ### 1. Cloud Run Services (5 сервисов)
-- `sanskrite-api` - основной backend API
-- `sanskrite-ws` - WebSocket broker (legacy)
+- `h1horizon-api` - основной backend API
+- `h1horizon-ws` - WebSocket broker (legacy)
 - `hatlone-ws` - новый WebSocket broker для realtime событий
-- `sanskrite-telegram` - Telegram сервис
+- `h1horizon-telegram` - Telegram сервис
 - `verified-proxy` - прокси для verified URL анализа
 
 ### 2. Pub/Sub Topics (33 топика)
@@ -43,24 +43,24 @@
 
 ### 4. Cloud Storage Buckets (3 основных)
 - `sanskrite-core-docs` - для хранения core документов
-- `sanskrite-rag-documents` - для хранения RAG документов
-- `sanskrite-horizon-fragments` - для хранения Horizon fragments (ДОБАВЛЕНО)
+- `h1horizon-rag-documents` - для хранения RAG документов
+- `h1horizon-horizon-fragments` - для хранения Horizon fragments (ДОБАВЛЕНО)
 - `sanskrite-web-static` - опционально (создается только если `CREATE_WEB_STATIC_BUCKET=1`)
 
 **Примечание:** Другие buckets (для Vertex AI Search импорта, системные) создаются автоматически и не требуют явного создания.
 
 ### 5. Cloud Tasks Queues (2 очереди)
-- `sanskrite-scout-v2` - для Scout jobs (maxConcurrentDispatches=50)
-- `sanskrite-profile-refresh` - для обновления профилей Horizon fragments (maxConcurrentDispatches=1000) (ДОБАВЛЕНО)
+- `h1horizon-scout-v2` - для Scout jobs (maxConcurrentDispatches=50)
+- `h1horizon-profile-refresh` - для обновления профилей Horizon fragments (maxConcurrentDispatches=1000) (ДОБАВЛЕНО)
 
 ### 6. Cloud Scheduler Jobs (4 jobs)
-- `sanskrite-source-poller` - опрос источников каждые 5 минут
-- `sanskrite-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
+- `h1horizon-source-poller` - опрос источников каждые 5 минут
+- `h1horizon-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
 - `subscription-billing-daily` - ежедневный биллинг подписок в 02:00 UTC (ДОБАВЛЕНО)
-- `sanskrite-horizon-watchdog` - опциональный watchdog для Horizon (только с флагом `--horizon-watchdog`)
+- `h1horizon-horizon-watchdog` - опциональный watchdog для Horizon (только с флагом `--horizon-watchdog`)
 
 ### 7. Redis Instance (1 instance)
-- `sanskrite-redis` - Memorystore Redis для кеширования
+- `h1horizon-redis` - Memorystore Redis для кеширования
 
 ### 8. Service Accounts (1 основной)
 - `backend@<PROJECT_ID>.iam.gserviceaccount.com` - основной service account для backend сервисов
@@ -86,16 +86,16 @@
 
 ## Что было добавлено в последнем обновлении
 
-1. ✅ **Cloud Tasks Queue `sanskrite-profile-refresh`** - для обновления профилей Horizon fragments
+1. ✅ **Cloud Tasks Queue `h1horizon-profile-refresh`** - для обновления профилей Horizon fragments
 2. ✅ **Cloud Scheduler Job `subscription-billing-daily`** - для ежедневного биллинга
-3. ✅ **GCS Bucket `sanskrite-horizon-fragments`** - для хранения Horizon fragments
+3. ✅ **GCS Bucket `h1horizon-horizon-fragments`** - для хранения Horizon fragments
 4. ✅ **Pub/Sub топики** - `genai.stream.error`, `genai.stream.tool_call`, `genai.stream.tool_result`, `interaction.created`, `interaction.updated`
 5. ✅ **Pub/Sub подписки** - для interaction топиков
 
 ## Элементы, которые создаются автоматически (не требуют добавления)
 
 - Buckets для Vertex AI Search импорта (`1031480025965_*`)
-- Системные buckets (`cloud-ai-platform-*`, `run-sources-*`, `sanskrite_cloudbuild`)
+- Системные buckets (`cloud-ai-platform-*`, `run-sources-*`, `h1horizon_cloudbuild`)
 - Системные Service Accounts (Compute Engine default, Firebase admin SDK)
 - VPC Network `default` (создается автоматически при первом использовании)
 - Worker подписки Pub/Sub (создаются автоматически в коде)

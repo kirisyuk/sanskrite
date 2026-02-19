@@ -70,7 +70,7 @@ func main() {
 		string(horizonmodels.DependencyTypeParticipatesIn),
 		string(horizonmodels.DependencyTypeDominates),
 		// Market hierarchy
-		string(horizonmodels.DependencyTypeHasSubmarket),
+		string(horizonmodels.DependencyTypeHasMarketSegment),
 		// Government hierarchy
 		string(horizonmodels.DependencyTypeAdministers),
 		// Governance / org-person

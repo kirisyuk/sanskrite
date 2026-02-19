@@ -662,8 +662,8 @@ Market Enrichment (MARKET):
     - Singular, lowercase, hyphenated slugs.
     - Include sector/industry terms + key technologies/materials + common synonyms.
   - fragment.parentMarketPath: canonical path of broader/parent market (e.g., /market/sa/event-marketing → parent: /market/sa/marketing)
-- MARKET HIERARCHY: Use HAS_SUBMARKET to link parent market → narrower sub-market
-  - Example: if THIS FRAGMENT is /market/sa/marketing and you discover /market/sa/event-marketing, emit HAS_SUBMARKET relation
+- MARKET HIERARCHY: Use HAS_MARKET_SEGMENT to link parent market → narrower segment. Child path = parent path + one segment.
+  - Example: if THIS FRAGMENT is /market/sa/marketing and you discover /market/sa/marketing/event-marketing, emit HAS_MARKET_SEGMENT relation
   - Direction: broader → narrower (THIS FRAGMENT → sub-market)
 - MARKET → COMMUNITY resolution: If you discover informal operator networks in a market:
   - Create COMMUNITY targets with /community/{geo}/{type}/{slug} paths
@@ -820,7 +820,7 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
 - PARTICIPATES_IN: source MAY also be PRODUCT or PERSON, target MUST be MARKET
 - DOMINATES: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
-- HAS_SUBMARKET: source MUST be MARKET, target MUST be MARKET (parent → narrower sub-market)
+- HAS_MARKET_SEGMENT: source MUST be MARKET, target MUST be MARKET (parent → segment; child path = parent path + one segment)
 - ADMINISTERS: source MUST be ORGANIZATION (/gov/...), target MUST be ORGANIZATION (/gov/...) (superior → subordinate)
 - OPERATES_VIA: source MUST be COMMUNITY or ORGANIZATION, target MUST be MEDIA_CHANNEL
 - MEMBER_OF: source MUST be PERSON, target MUST be COMMUNITY
@@ -844,7 +844,7 @@ Community Enrichment (COMMUNITY - when Type == COMMUNITY or canonicalPath starts
   - Use HAS_SUBGROUP to link parent community → narrower sub-community/branch/clan
     - dynasties: broader family → branch (house-of-saud → sudairi-seven)
     - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
-    - Direction: broader → narrower (like HAS_SUBMARKET for markets)
+    - Direction: broader → narrower (like HAS_MARKET_SEGMENT for markets)
   - Use OPERATES_VIA to link community → media channels it uses for communication
   - Use PARTICIPATES_IN to link community → markets it operates in
   - Use AFFILIATED_WITH to link community → formal organizations it's connected to
@@ -889,7 +889,7 @@ DiscoveredRelation Schema:
   "targetLegalName": "string",
   "targetShortName": "string",
   "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY" | "DECISION_POINT" | "MECHANISM",
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_SUBMARKET" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_MARKET_SEGMENT" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED",

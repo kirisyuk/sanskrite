@@ -36,7 +36,7 @@ func TestSanitizeDomainResearchRelations_StripsCrossModeNoise(t *testing.T) {
 	in := []agents.DiscoveredRelation{
 		{
 			TargetCanonicalPath: "/market/global/technology/telecom",
-			RelationType:        "HAS_SUBMARKET",
+			RelationType:        "HAS_MARKET_SEGMENT",
 		},
 		{
 			SourceCanonicalPath: "/org/cn/huawei",

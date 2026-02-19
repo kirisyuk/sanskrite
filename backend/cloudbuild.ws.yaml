@@ -5,8 +5,7 @@ steps:
       - '-f'
       - 'cmd/ws-broker/Dockerfile'
       - '-t'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/sanskrite/sanskrite-ws:latest'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/h1horizon/h1horizon-ws:latest'
       - '.'
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/sanskrite/sanskrite-ws:latest'
-
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/h1horizon/h1horizon-ws:latest'

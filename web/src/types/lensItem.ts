@@ -45,7 +45,7 @@ export type DependencyType =
   | 'EXTRACTS_FROM'
   | 'PARTICIPATES_IN'
   | 'DOMINATES'
-  | 'HAS_SUBMARKET'
+  | 'HAS_MARKET_SEGMENT'
   | 'HAS_SUBGROUP'
   | 'ADMINISTERS'
   | 'OPERATES_VIA'

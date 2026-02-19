@@ -50,7 +50,7 @@ func main() {
 	// Initialize BigQuery
 	bigqueryDatasetID := os.Getenv("BIGQUERY_DATASET_ID")
 	if bigqueryDatasetID == "" {
-		bigqueryDatasetID = "sanskrite_documents"
+		bigqueryDatasetID = "h1horizon_documents"
 	}
 
 	bqClient, err := gcp.NewBigQueryClient(ctx, *projectID, bigqueryDatasetID, opts...)

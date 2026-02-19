@@ -153,7 +153,7 @@ func (s *GovernanceResearchStrategy) Enrich(ctx context.Context, input ResearchS
 	return out, nil
 }
 
-// MarketResearchStrategy enriches for market participation only (PARTICIPATES_IN, HAS_SUBMARKET).
+// MarketResearchStrategy enriches for market participation only (PARTICIPATES_IN, HAS_MARKET_SEGMENT).
 type MarketResearchStrategy struct {
 	agent *ResearchAgent
 }
@@ -398,15 +398,16 @@ CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 
 %s
 
-Use ONLY these relation types: PARTICIPATES_IN (with marketRole and metrics.market_share), HAS_SUBMARKET.
+Use ONLY these relation types: PARTICIPATES_IN (with marketRole and metrics.market_share), HAS_MARKET_SEGMENT.
 Do NOT use DOMINATES, COMPETES_WITH, or other non-market types.
 STRICT DIRECTION/TYPING RULES (MANDATORY):
 - PARTICIPATES_IN direction is participant -> market.
   - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
   - targetCanonicalPath MUST NOT start with /domain/.
-- HAS_SUBMARKET direction is parent-market -> child-market.
+- HAS_MARKET_SEGMENT direction is parent-market -> child-market (segment).
   - source and target MUST both be MARKET paths (/market/...).
+  - Ideal rule: child path = parent path + exactly one segment (e.g. /market/sa/finance -> /market/sa/finance/banking).
   - targetCanonicalPath MUST NOT start with /domain/.
 - If CURRENT FRAGMENT is MARKET and you need player -> THIS MARKET, you MUST set explicit source:
   - sourceCanonicalPath/sourceType/sourceName = player
@@ -416,7 +417,7 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
 
 WHAT TO FIND (prioritize completeness):
 1. Market participation: PARTICIPATES_IN (entity→market). Source: ORGANIZATION, FACILITY, COMMUNITY, or PROGRAM. metrics.market_share (0..1 or percent). marketRole: participant, leader, dominant.
-2. Full market hierarchy: HAS_SUBMARKET (MARKET→MARKET, parent→narrower). Build 3 levels when possible (e.g. market→sub-market→segment).
+2. Full market hierarchy: HAS_MARKET_SEGMENT (MARKET→MARKET, parent→segment). Child path = parent path + one segment. Build 3 levels when possible (e.g. market→sub-market→segment).
 3. Top 10 players: For MARKET entities, find top 10 player entities (orgs, facilities, communities, programs) by market share and emit PARTICIPATES_IN as player -> market using explicit sourceCanonicalPath.
 4. Full sizing: fragment.state: /metric/market/tam_usd, /metric/market/cagr_percent, /metric/market/hhi, /metric/market/cr4_percent. Only if you find reliable data; do NOT fabricate.
 5. Geographic split: fragment.state with geo distribution (e.g. /metric/market/geo_share_us, /metric/market/geo_share_eu) when relevant.

@@ -438,7 +438,7 @@ LLM нужен когда:
 3. **Causal inference**: нужно понять "почему" для explain trace
 4. **Novel patterns**: новый тип события, не покрытый правилами
 
-### 6.2 Cloud Tasks Queue: `sanskrite-propagation-llm`
+### 6.2 Cloud Tasks Queue: `h1horizon-propagation-llm`
 
 Отдельная очередь с:
 - `maxConcurrentDispatches`: 10 (throttling)
@@ -675,7 +675,7 @@ type ExplainContributor struct {
 ### Зависимости
 - Runtime Taxonomy loader должен поддерживать новые поля
 - Firestore indexes для `ontology_facts` по `kind=signal`
-- Cloud Tasks queue creation (отдельная от `sanskrite-scout-v2`)
+- Cloud Tasks queue creation (отдельная от `h1horizon-scout-v2`)
 
 ### Риски
 - **LLM latency**: async queue митигирует, но explain trace может быть "stale"

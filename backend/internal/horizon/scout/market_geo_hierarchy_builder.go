@@ -18,7 +18,7 @@ import (
 //   /market/cn/lithium   ⊂  /market/global/lithium
 //
 // This builder ensures a 1-hop geo parent exists and links:
-//   /market/global/... HAS_SUBMARKET /market/{geo}/...
+//   /market/global/... HAS_MARKET_SEGMENT /market/{geo}/...
 //
 // Notes:
 // - This is deterministic and best-effort (fail-open).
@@ -37,7 +37,7 @@ func NewMarketGeoHierarchyBuilder(fragmentsRepo *repo.HorizonFragmentsRepository
 	}
 }
 
-// EnsureMarketGeoHierarchy ensures a global parent market exists for a regional market and links it via HAS_SUBMARKET.
+// EnsureMarketGeoHierarchy ensures a global parent market exists for a regional market and links it via HAS_MARKET_SEGMENT.
 // Best-effort: does not block on errors.
 func (b *MarketGeoHierarchyBuilder) EnsureMarketGeoHierarchy(
 	ctx context.Context,
@@ -87,7 +87,7 @@ func (b *MarketGeoHierarchyBuilder) EnsureMarketGeoHierarchy(
 		return nil
 	}
 
-	// Create HAS_SUBMARKET edge: global -> regional
+	// Create HAS_MARKET_SEGMENT edge: global -> regional
 	_ = b.ensureGeoHasSubmarketEdge(ctx, globalID, fragmentID, provenanceMethod, sourceID, geo)
 	return nil
 }
@@ -182,8 +182,15 @@ func (b *MarketGeoHierarchyBuilder) ensureGeoHasSubmarketEdge(ctx context.Contex
 		return nil
 	}
 
-	// Check if edge already exists
-	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", globalID, regionalID, models.DependencyTypeHasSubmarket)
+	// Check if edge already exists (HAS_MARKET_SEGMENT or legacy HAS_SUBMARKET)
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", globalID, regionalID, models.DependencyTypeHasMarketSegment)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, repo.ErrEdgeNotFound) {
+		return err
+	}
+	_, err = b.edgesRepo.GetBySourceTargetAndType(ctx, "global", globalID, regionalID, models.DependencyTypeHasSubmarket)
 	if err == nil {
 		return nil
 	}
@@ -196,7 +203,7 @@ func (b *MarketGeoHierarchyBuilder) ensureGeoHasSubmarketEdge(ctx context.Contex
 		TenantID:         "global",
 		SourceFragmentID: globalID,
 		TargetFragmentID: regionalID,
-		Type:             models.DependencyTypeHasSubmarket,
+		Type:             models.DependencyTypeHasMarketSegment,
 		Properties: models.EdgeProperties{
 			Criticality:   0.35,
 			Amplification: 1.0,

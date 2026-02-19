@@ -291,7 +291,7 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
 		Description:      "Entity dominates market (leader)",
 	},
-	models.DependencyTypeHasSubmarket: {
+	models.DependencyTypeHasMarketSegment: {
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeMarket},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
 		Description:      "Market has sub-market (hierarchy)",

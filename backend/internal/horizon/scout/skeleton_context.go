@@ -60,8 +60,8 @@ type marketSkeletonContext struct {
 	ExpectedParentPath   string `json:"expectedParentPath,omitempty"`
 	ExpectedParentExists bool   `json:"expectedParentExists,omitempty"`
 
-	ParentEdges  []skeletonEdgeView `json:"parentEdges,omitempty"`  // incoming HAS_SUBMARKET (parent -> this)
-	ChildEdges   []skeletonEdgeView `json:"childEdges,omitempty"`   // outgoing HAS_SUBMARKET (this -> child)
+	ParentEdges  []skeletonEdgeView `json:"parentEdges,omitempty"`  // incoming HAS_MARKET_SEGMENT (parent -> this)
+	ChildEdges   []skeletonEdgeView `json:"childEdges,omitempty"`   // outgoing HAS_MARKET_SEGMENT (this -> child)
 	SiblingPaths []string           `json:"siblingPaths,omitempty"` // other children of the same parent (if any)
 
 	NearbyPaths []string `json:"nearbyPaths,omitempty"` // existing market nodes in same geo/(domain) prefix (cap)
@@ -152,9 +152,17 @@ func (e *ScoutEngine) buildMarketSkeletonContext(ctx context.Context, canonicalP
 
 	// Edges (only if fragment exists in DB; otherwise we can't query edges by ID).
 	if out.FragmentID != "" {
-		edgeType := models.DependencyTypeHasSubmarket
+		edgeType := models.DependencyTypeHasMarketSegment
 		parents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &edgeType, 5)
 		children, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &edgeType, 15)
+		// Also include legacy HAS_SUBMARKET for backward compatibility
+		legacyType := models.DependencyTypeHasSubmarket
+		if legParents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &legacyType, 5); len(legParents) > 0 {
+			parents = append(parents, legParents...)
+		}
+		if legChildren, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &legacyType, 15); len(legChildren) > 0 {
+			children = append(children, legChildren...)
+		}
 
 		// Parent edges (incoming)
 		for _, ed := range parents {
@@ -200,6 +208,9 @@ func (e *ScoutEngine) buildMarketSkeletonContext(ctx context.Context, canonicalP
 		if len(out.ParentEdges) > 0 && out.ParentEdges[0].SourceID != "" {
 			parentID := out.ParentEdges[0].SourceID
 			sibEdges, _ := e.edgesRepo.ListBySource(ctx, "global", parentID, &edgeType, 20)
+			if legSib, _ := e.edgesRepo.ListBySource(ctx, "global", parentID, &legacyType, 20); len(legSib) > 0 {
+				sibEdges = append(sibEdges, legSib...)
+			}
 			for _, ed := range sibEdges {
 				if ed == nil || strings.TrimSpace(ed.TargetFragmentID) == "" || strings.TrimSpace(ed.TargetFragmentID) == out.FragmentID {
 					continue

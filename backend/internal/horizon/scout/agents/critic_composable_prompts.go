@@ -193,7 +193,7 @@ func (a *CriticAgent) buildMarketValidationPrompt(input CriticValidatorInput) st
 	return fmt.Sprintf(`You are a Critic validator for MARKET mode.
 
 %s
-Allowed relation types: PARTICIPATES_IN, HAS_SUBMARKET.
+Allowed relation types: PARTICIPATES_IN, HAS_MARKET_SEGMENT.
 Allowed actor types: %s.
 
 %sFRAGMENT:

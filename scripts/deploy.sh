@@ -114,12 +114,9 @@ deploy_web() {
   # Try to resolve ws-broker URL for Vite env
   local WS_URL="${WS_URL:-}"
   if [[ -z "$WS_URL" ]]; then
-    if gcloud run services describe hatlone-ws --region "$REGION" >/dev/null 2>&1; then
-      WS_URL=$(gcloud run services describe hatlone-ws --region "$REGION" --format='value(status.url)')
-      echo -e "${GREEN}[web] Found hatlone ws URL:${NC} $WS_URL"
-    elif gcloud run services describe sanskrite-ws --region "$REGION" >/dev/null 2>&1; then
-      WS_URL=$(gcloud run services describe sanskrite-ws --region "$REGION" --format='value(status.url)')
-      echo -e "${YELLOW}[web] hatlone-ws not found, falling back to sanskrite-ws URL:${NC} $WS_URL"
+    if gcloud run services describe h1horizon-ws --region "$REGION" >/dev/null 2>&1; then
+      WS_URL=$(gcloud run services describe h1horizon-ws --region "$REGION" --format='value(status.url)')
+      echo -e "${GREEN}[web] Found h1horizon-ws URL:${NC} $WS_URL"
     else
       echo -e "${YELLOW}[web] ws-broker service not found (will use default from env if set)${NC}"
     fi
@@ -254,6 +251,7 @@ setup_infrastructure() {
   echo -e "${BLUE}[infra] Ensuring IAM permissions...${NC}"
   for role in \
     roles/datastore.user \
+    roles/aiplatform.user \
     roles/secretmanager.secretAccessor \
     roles/pubsub.admin \
     roles/pubsub.publisher \
@@ -315,8 +313,8 @@ setup_infrastructure() {
   fi
 
   # 3.2 Ensure Cloud Tasks queue for Scout exists and is configured (managed retries).
-  # NOTE: The original queue name "sanskrite-scout" may be temporarily unavailable after deletion.
-  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-sanskrite-scout-v2}"
+  # NOTE: The original queue name "h1horizon-scout" may be temporarily unavailable after deletion.
+  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-h1horizon-scout-v2}"
   if gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $scout_queue"
   else
@@ -337,7 +335,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $scout_queue (maxAttempts=5)"
 
   # 3.4.1 Ensure Cloud Tasks queue for Profile refresh exists
-  local profile_queue="${CLOUD_TASKS_PROFILE_QUEUE:-sanskrite-profile-refresh}"
+  local profile_queue="${CLOUD_TASKS_PROFILE_QUEUE:-h1horizon-profile-refresh}"
   if gcloud tasks queues describe "$profile_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $profile_queue"
   else
@@ -358,7 +356,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $profile_queue (maxConcurrentDispatches=1000)"
 
   # 3.4.2 Ensure Cloud Tasks queue for Risk pipeline exists
-  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-sanskrite-risk-v1}"
+  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-h1horizon-risk-v1}"
   if gcloud tasks queues describe "$risk_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $risk_queue"
   else
@@ -492,11 +490,12 @@ setup_infrastructure() {
     echo -e "${YELLOW}[infra] Warning: Could not determine project number, skipping Vertex AI SA setup${NC}"
   fi
   
-  # Grant backend service account access to Vertex AI Search
-  echo -e "${BLUE}[infra] Granting backend SA access to Vertex AI Search...${NC}"
+  # Grant backend service account access to Vertex AI / Vertex AI Search
+  echo -e "${BLUE}[infra] Granting backend SA access to Vertex AI / Vertex AI Search...${NC}"
+  # roles/aiplatform.user allows publisher model predict calls via Vertex AI
   # roles/discoveryengine.editor allows import/export operations
   # roles/discoveryengine.user allows API access (search)
-  for role in roles/discoveryengine.editor roles/discoveryengine.user; do
+  for role in roles/aiplatform.user roles/discoveryengine.editor roles/discoveryengine.user; do
     gcloud projects add-iam-policy-binding "$PROJECT_ID" \
       --member="serviceAccount:${SA_BACKEND}" \
       --role="$role" \
@@ -663,8 +662,8 @@ except:
   # Update Cloud Run service with Data Store ID if we have one
   if [[ -n "$datastore_id" ]]; then
     echo -e "${BLUE}[infra] Updating Cloud Run service with Data Store ID...${NC}"
-    if gcloud run services describe sanskrite-api --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      gcloud run services update sanskrite-api --region="$REGION" --project="$PROJECT_ID" \
+    if gcloud run services describe h1horizon-api --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      gcloud run services update h1horizon-api --region="$REGION" --project="$PROJECT_ID" \
         --update-env-vars "VERTEX_SEARCH_DATA_STORE_ID=$datastore_id" \
         --quiet >/dev/null 2>&1 && \
         echo -e "${GREEN}[infra] Updated Cloud Run service with VERTEX_SEARCH_DATA_STORE_ID=$datastore_id${NC}" || \
@@ -833,7 +832,7 @@ except:
   
   # 3.9 Setup Redis (Memorystore)
   echo -e "${BLUE}[infra] Setting up Redis (Memorystore)...${NC}"
-  local redis_instance="sanskrite-redis"
+  local redis_instance="h1horizon-redis"
   local redis_tier="BASIC"
   local redis_size="1"
   # Use lowercase value expected by gcloud: redis_7_0
@@ -847,14 +846,14 @@ except:
     echo -e "${BLUE}[infra] Redis host:${NC} $redis_host:$redis_port"
     
     # Update Cloud Run services with Redis connection info if they exist
-    if gcloud run services describe sanskrite-api --region="$REGION" >/dev/null 2>&1; then
-      gcloud run services update sanskrite-api --region="$REGION" \
+    if gcloud run services describe h1horizon-api --region="$REGION" >/dev/null 2>&1; then
+      gcloud run services update h1horizon-api --region="$REGION" \
         --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port" \
         --quiet >/dev/null 2>&1 && \
-        echo -e "${GREEN}[infra] Updated sanskrite-api with Redis connection info${NC}" || \
-        echo -e "${YELLOW}[infra] Warning: Failed to update sanskrite-api with Redis info${NC}"
+        echo -e "${GREEN}[infra] Updated h1horizon-api with Redis connection info${NC}" || \
+        echo -e "${YELLOW}[infra] Warning: Failed to update h1horizon-api with Redis info${NC}"
     fi
-    # Note: sanskrite-ws does NOT use Redis, so skip Redis env vars update
+    # Note: h1horizon-ws does NOT use Redis, so skip Redis env vars update
     # WS broker only uses Pub/Sub, Firestore, and Firebase Auth (all accessible without VPC)
   else
     echo -e "${BLUE}[infra] Creating Redis instance (this may take 10-20 minutes)...${NC}"
@@ -944,14 +943,14 @@ except:
         echo -e "${BLUE}[infra] Redis host:${NC} $redis_host:$redis_port"
         
         # Update Cloud Run API service с новыми env (VPC не используем)
-        if gcloud run services describe sanskrite-api --region="$REGION" >/dev/null 2>&1; then
-          gcloud run services update sanskrite-api --region="$REGION" \
+        if gcloud run services describe h1horizon-api --region="$REGION" >/dev/null 2>&1; then
+          gcloud run services update h1horizon-api --region="$REGION" \
             --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port" \
             --quiet >/dev/null 2>&1 && \
-            echo -e "${GREEN}[infra] Updated sanskrite-api with Redis connection info${NC}" || \
-            echo -e "${YELLOW}[infra] Warning: Failed to update sanskrite-api (may need manual update)${NC}"
+            echo -e "${GREEN}[infra] Updated h1horizon-api with Redis connection info${NC}" || \
+            echo -e "${YELLOW}[infra] Warning: Failed to update h1horizon-api (may need manual update)${NC}"
         fi
-        # Note: sanskrite-ws does NOT use Redis, so no VPC connector needed
+        # Note: h1horizon-ws does NOT use Redis, so no VPC connector needed
         # WS broker only uses Pub/Sub, Firestore, and Firebase Auth (all accessible without VPC)
         
         echo -e "${GREEN}[infra] Redis setup completed successfully${NC}"
@@ -1074,7 +1073,7 @@ except:
     fi
   done
 
-  # 4.4 Ensure ws-broker subscriptions for base topics (aggregator / legacy sanskrite-ws)
+  # 4.4 Ensure ws-broker subscriptions for base topics (aggregator / legacy h1horizon-ws)
   echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for base topics (ws-broker)...${NC}"
   local base_ws_topics=(
     discovery.status discovery.profile discovery.answer discovery.project
@@ -1129,7 +1128,7 @@ except:
   if [[ "$TARGET_API" -eq 1 || "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
     echo -e "${BLUE}[infra] Ensuring Cloud Scheduler jobs (optional)...${NC}"
     if gcloud services list --enabled --filter="config.name: cloudscheduler.googleapis.com" --format="value(config.name)" | grep -q cloudscheduler.googleapis.com; then
-      SVC_URL=$(gcloud run services describe sanskrite-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+      SVC_URL=$(gcloud run services describe h1horizon-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
       
       if [[ -n "$SVC_URL" ]]; then
         # Resolve the stable admin job token from Secret Manager (single source of truth).
@@ -1141,7 +1140,7 @@ except:
         fi
 
         # 5a. Source poller job
-        JOB_NAME="sanskrite-source-poller"
+        JOB_NAME="h1horizon-source-poller"
         # Create or update a job that calls admin publish-due with header X-Job-Token
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http "$JOB_NAME" \
@@ -1169,7 +1168,7 @@ except:
         echo -e "${GREEN}[infra] ✓${NC} Source poller scheduler job ensured"
         
         # 5b. Artifact scheduler job (checks for scheduled artifact updates)
-        JOB_NAME="sanskrite-artifact-scheduler"
+        JOB_NAME="h1horizon-artifact-scheduler"
         # Schedule: every hour at minute 0 (e.g., 00:00, 01:00, 02:00, ...)
         # This checks all artifacts and triggers updates for those with daily/weekly schedules
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
@@ -1224,11 +1223,11 @@ except:
 
           # Ensure API env vars aligned with Cloud Scheduler mode
           # (disable any internal ticker if introduced later; keep knobs explicit)
-          gcloud run services update sanskrite-api --region "$REGION" \
+          gcloud run services update h1horizon-api --region "$REGION" \
             --update-env-vars "ENABLE_HORIZON_WATCHDOG=1,DISABLE_HORIZON_WATCHDOG_TICKER=true,HORIZON_WATCHDOG_CRON_LIMIT=200,HORIZON_WATCHDOG_CRON_LOCK_TTL=9m" \
             --quiet || true
 
-          JOB_NAME="sanskrite-horizon-watchdog"
+          JOB_NAME="h1horizon-horizon-watchdog"
           WATCHDOG_LIMIT="${HORIZON_WATCHDOG_CRON_LIMIT:-200}"
           WATCHDOG_SCHEDULE="${HORIZON_WATCHDOG_CRON_SCHEDULE:-*/5 * * * *}"
           WATCHDOG_URI="$SVC_URL/api/v1/admin/horizon/watchdog/run?limit=$WATCHDOG_LIMIT"
@@ -1381,7 +1380,7 @@ deploy_api() {
 
   # Ensure Cloud Tasks queue exists even for --api-only deploys (managed Scout execution).
   # NOTE: default queue is v2 to avoid the "recently deleted queue" lockout.
-  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-sanskrite-scout-v2}"
+  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-h1horizon-scout-v2}"
   if ! gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $scout_queue"
     gcloud tasks queues create "$scout_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1398,7 +1397,7 @@ deploy_api() {
     --quiet >/dev/null 2>&1 || true
 
   # Ensure Cloud Tasks queue exists for risk pipeline as well.
-  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-sanskrite-risk-v1}"
+  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-h1horizon-risk-v1}"
   if ! gcloud tasks queues describe "$risk_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $risk_queue"
     gcloud tasks queues create "$risk_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1434,7 +1433,7 @@ deploy_api() {
   (cd "$API_DIR" && rm -f horizon_* check_* 2>/dev/null || true)
 
   echo -e "${BLUE}[api] Building container image (Artifact Registry)...${NC}"
-  local service="sanskrite-api"
+  local service="h1horizon-api"
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"
 
   # PayPal secrets (optional - PayPal integration will be disabled if not set)
@@ -1483,7 +1482,7 @@ deploy_api() {
   # Check if Redis exists and get connection info
   local redis_host=""
   local redis_port="6379"
-  local redis_instance="sanskrite-redis"
+  local redis_instance="h1horizon-redis"
   if gcloud redis instances describe "$redis_instance" --region="$REGION" >/dev/null 2>&1; then
     redis_host=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(host)' 2>/dev/null || echo "")
     redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
@@ -1491,7 +1490,7 @@ deploy_api() {
   
   # Get Telegram service URL if it exists
   local telegram_url=""
-  local telegram_service="sanskrite-telegram"
+  local telegram_service="h1horizon-telegram"
   if gcloud run services describe "$telegram_service" --region="$REGION" >/dev/null 2>&1; then
     telegram_url=$(gcloud run services describe "$telegram_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
     if [[ -n "$telegram_url" ]]; then
@@ -1513,7 +1512,7 @@ deploy_api() {
   if [[ "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
     enable_horizon_watchdog="1"
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|https://hatlone-test.web.app|https://hatlone-test.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_HORIZON_WATCHDOG=${enable_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|https://h1horizon.web.app|https://h1horizon.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_HORIZON_WATCHDOG=${enable_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
   # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Store
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
   local horizon_fragments_bucket="${HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-horizon-fragments}"
@@ -1578,19 +1577,19 @@ deploy_api() {
   if [[ -z "$admin_token" ]]; then
     admin_token=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
   fi
-  if gcloud scheduler jobs describe "sanskrite-horizon-watchdog" --location="$REGION" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "sanskrite-horizon-watchdog" \
+  if gcloud scheduler jobs describe "h1horizon-horizon-watchdog" --location="$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "h1horizon-horizon-watchdog" \
       --location="$REGION" \
       --update-headers="X-Job-Token=$admin_token" \
       --quiet >/dev/null 2>&1 || true
-    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for sanskrite-horizon-watchdog"
+    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for h1horizon-horizon-watchdog"
   fi
-  if gcloud scheduler jobs describe "sanskrite-source-poller" --location="$REGION" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "sanskrite-source-poller" \
+  if gcloud scheduler jobs describe "h1horizon-source-poller" --location="$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "h1horizon-source-poller" \
       --location="$REGION" \
       --update-headers="X-Job-Token=$admin_token" \
       --quiet >/dev/null 2>&1 || true
-    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for sanskrite-source-poller"
+    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for h1horizon-source-poller"
   fi
 }
 
@@ -1608,7 +1607,7 @@ deploy_verified_proxy() {
   # Get backend URL and functions key
   local backend_url="${API_URL:-}"
   if [[ -z "$backend_url" ]]; then
-    backend_url=$(gcloud run services describe sanskrite-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+    backend_url=$(gcloud run services describe h1horizon-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
   fi
   
   if [[ -z "$backend_url" ]]; then
@@ -1710,9 +1709,24 @@ deploy_ws() {
   echo -e "${GREEN}[ws] Go build successful locally${NC}"
 
   echo -e "${BLUE}[ws] Building ws-broker image...${NC}"
-  local service="sanskrite-ws"
+  local service="h1horizon-ws"
   # Must match cloudbuild.ws.yaml output image
-  local image="us-central1-docker.pkg.dev/$PROJECT_ID/sanskrite/sanskrite-ws:latest"
+  local image="us-central1-docker.pkg.dev/$PROJECT_ID/h1horizon/h1horizon-ws:latest"
+  local ws_repo="h1horizon"
+
+  if ! gcloud artifacts repositories describe "$ws_repo" --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${YELLOW}[ws] Artifact Registry repo '${ws_repo}' not found, creating...${NC}"
+    gcloud artifacts repositories create "$ws_repo" \
+      --repository-format=docker \
+      --location "$REGION" \
+      --description="WS broker images" \
+      --project "$PROJECT_ID" \
+      --quiet >/dev/null 2>&1 || true
+  fi
+  if ! gcloud artifacts repositories describe "$ws_repo" --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${RED}[ws] Error: Artifact Registry repo '${ws_repo}' is required but could not be created${NC}" >&2
+    exit 1
+  fi
 
   # Build using cloudbuild with explicit Dockerfile
   gcloud builds submit "$API_DIR" \
@@ -1723,7 +1737,7 @@ deploy_ws() {
   # Check if Redis exists and get connection info
   local redis_host=""
   local redis_port="6379"
-  local redis_instance="sanskrite-redis"
+  local redis_instance="h1horizon-redis"
   if gcloud redis instances describe "$redis_instance" --region="$REGION" >/dev/null 2>&1; then
     redis_host=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(host)' 2>/dev/null || echo "")
     redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
@@ -1803,11 +1817,12 @@ deploy_hatlone_ws() {
 
 deploy_py() {
   echo -e "${BLUE}[py] Deploying Telegram service to Cloud Run...${NC}"
-  local service="sanskrite-telegram"
+  local service="h1horizon-telegram"
   local SRC_DIR="$ROOT_DIR/python/telegram_service"
   gcloud run deploy "$service" \
     --source "$SRC_DIR" \
     --region "$REGION" \
+    --service-account "$SA_BACKEND" \
     --allow-unauthenticated \
     --min-instances=1 \
     --max-instances=3 \
@@ -1826,9 +1841,9 @@ deploy_py() {
   
   # Update backend with TELEGRAM_SERVICE_URL if we have it (only if API was not just deployed)
   # If API was deployed, TELEGRAM_SERVICE_URL is already set in env_vars during deploy
-  if [[ -n "$TG_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe sanskrite-api --region "$REGION" >/dev/null 2>&1; then
+  if [[ -n "$TG_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe h1horizon-api --region "$REGION" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Updating existing backend with TELEGRAM_SERVICE_URL=$TG_URL...${NC}"
-    gcloud run services update sanskrite-api \
+    gcloud run services update h1horizon-api \
       --region "$REGION" \
       --update-env-vars "TELEGRAM_SERVICE_URL=$TG_URL" \
       --quiet || {
@@ -1840,32 +1855,32 @@ deploy_py() {
 create_indexes() {
   echo -e "${BLUE}[firestore] Creating composite indexes (idempotent)...${NC}"
   # Projects: tenantId + view + lastInteractionAt desc
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=core_projects \
     --field-config field-path=tenantId,order=ASCENDING \
     --field-config field-path=view,order=ASCENDING \
     --field-config field-path=lastInteractionAt,order=DESCENDING \
     --quiet || true
   # DataSources suggestions (uri canonical, channel username)
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=core_datasources \
     --field-config field-path=tenantId,order=ASCENDING \
     --field-config field-path=sourceDetails.uri,order=ASCENDING \
     --quiet || true
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=core_datasources \
     --field-config field-path=tenantId,order=ASCENDING \
     --field-config field-path=sourceDetails.channelUsername,order=ASCENDING \
     --quiet || true
   # Interactions: projectId + createdAt asc (for listing by project with ordering)
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=core_interactions \
     --field-config field-path=projectId,order=ASCENDING \
     --field-config field-path=createdAt,order=ASCENDING \
     --quiet || true
 
   # Core docs: tenant+project for quick listing within project, newest first
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=core_docs \
     --field-config field-path=tenantId,order=ASCENDING \
     --field-config field-path=projectId,order=ASCENDING \
@@ -1873,44 +1888,44 @@ create_indexes() {
     --quiet || true
 
   # Core docs: lookup by external provider+resource id (optional future use)
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=core_docs \
     --field-config field-path=external.provider,order=ASCENDING \
     --field-config field-path=external.resourceId,order=ASCENDING \
     --quiet || true
 
   # RAG: sourceProjects composites
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=rag_source_projects \
     --field-config field-path=projectId,order=ASCENDING \
     --field-config field-path=status,order=ASCENDING \
     --quiet || true
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=rag_source_projects \
     --field-config field-path=sourceId,order=ASCENDING \
     --field-config field-path=status,order=ASCENDING \
     --quiet || true
 
   # RAG: documents lookups
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=rag_documents \
     --field-config field-path=sourceId,order=ASCENDING \
     --field-config field-path=originPublishedAt,order=DESCENDING \
     --quiet || true
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=rag_documents \
     --field-config field-path=sourceId,order=ASCENDING \
     --field-config field-path=externalId,order=ASCENDING \
     --quiet || true
 
   # Meta analyses: events by project (latest first)
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=meta_analyses \
     --field-config field-path=projectId,order=ASCENDING \
     --field-config field-path=createdAt,order=DESCENDING \
     --quiet || true
   # Meta analyses: events by user within tenant (latest first)
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=meta_analyses \
     --field-config field-path=tenantId,order=ASCENDING \
     --field-config field-path=userId,order=ASCENDING \
@@ -1918,14 +1933,14 @@ create_indexes() {
     --quiet || true
 
   # Subscriptions: status + currentPeriodEnd for billing queries
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=subscriptions \
     --field-config field-path=status,order=ASCENDING \
     --field-config field-path=currentPeriodEnd,order=ASCENDING \
     --quiet || true
 
   # Vouchers: tier + isActive + createdAt for admin filtering
-  gcloud firestore indexes composite create \
+  gcloud firestore indexes composite create --async \
     --collection-group=vouchers \
     --field-config field-path=tier,order=ASCENDING \
     --field-config field-path=isActive,order=ASCENDING \
@@ -1955,7 +1970,7 @@ create_indexes() {
     echo -e "${GREEN}  ✓${NC} Vector index already exists for rag_chunks.embedding"
   else
     echo -e "${BLUE}  Creating vector index...${NC}"
-    if gcloud firestore indexes composite create \
+    if gcloud firestore indexes composite create --async \
       --collection-group=rag_chunks \
       --query-scope=COLLECTION \
       --field-config='field-path=embedding,vector-config={"dimension":"1536", "flat": "{}"}' \
@@ -2123,7 +2138,7 @@ if [[ "$TARGET_CLEANUP_REVISIONS" -eq 1 ]]; then
   echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
   
   # Clean up revisions for all services (keep last 10 per service)
-  services=("sanskrite-api" "sanskrite-telegram" "sanskrite-ws" "hatlone-ws" "verified-proxy")
+  services=("h1horizon-api" "h1horizon-telegram" "h1horizon-ws" "hatlone-ws" "verified-proxy")
   for service in "${services[@]}"; do
     if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
       cleanup_old_revisions "$service" "$REGION" 10

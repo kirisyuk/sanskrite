@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Скрипт для проверки и тестирования Vertex AI Search
-# Использование: ./scripts/test-vertex-search.sh [-p|--project sanskrite]
+# Использование: ./scripts/test-vertex-search.sh [-p|--project h1horizon]
 
-PROJECT="sanskrite"
+PROJECT="h1horizon"
 DATA_STORE_ID="rag-documents-store"
 LOCATION="global"
-BUCKET="sanskrite-rag-documents"
+BUCKET="h1horizon-rag-documents"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

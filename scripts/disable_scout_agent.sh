@@ -13,9 +13,9 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Параметры по умолчанию
-PROJECT_ID="${GCP_PROJECT_ID:-sanskrite}"
+PROJECT_ID="${GCP_PROJECT_ID:-h1horizon}"
 REGION="${GCP_REGION:-us-central1}"
-SERVICE="${CLOUD_RUN_SERVICE:-sanskrite-api}"
+SERVICE="${CLOUD_RUN_SERVICE:-h1horizon-api}"
 
 echo -e "${BLUE}=== Отключение агента запуска скаутов ===${NC}"
 echo -e "Проект: ${GREEN}$PROJECT_ID${NC}"

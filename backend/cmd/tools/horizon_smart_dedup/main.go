@@ -61,7 +61,7 @@ var (
 	enableOrgFuzzyName        = flag.Bool("enable-org-fuzzy-name", false, "Enable ORGANIZATION fuzzy-ish name clustering (normalized legalName + stub-rescue normalized label/legal). Default OFF.")
 	skipOrgLegacyCountryCheck = flag.Bool("skip-org-legacy-country-check", false, "Skip LOCATED_IN country check for legacy /org/{company} → /org/{geo}/{company}-{legalForm} (faster, higher risk).")
 	fixEdgesOnly              = flag.Bool("fix-edges-only", false, "Only fix/normalize edges (direction + symmetric normalization + dedup). Skips fragment dedup/merge even if duplicates are found.")
-	canonicalizeEdges         = flag.Bool("edge-canonicalize", true, "Rewrite mis-modeled edges into canonical types (e.g., MARKET OWNS MARKET -> HAS_SUBMARKET, ORG DEPENDS_ON MARKET -> PARTICIPATES_IN).")
+	canonicalizeEdges         = flag.Bool("edge-canonicalize", true, "Rewrite mis-modeled edges into canonical types (e.g., MARKET OWNS MARKET -> HAS_MARKET_SEGMENT, ORG DEPENDS_ON MARKET -> PARTICIPATES_IN).")
 	skipGeoNames              = flag.Bool("skip-geonames", false, "Skip GeoNames-based /loc normalization (enabled by default).")
 	marketCleanupOnly         = flag.Bool("market-cleanup-only", false, "Only run Step 7 (market geo-mismatch cleanup + domain normalization). Skips all fragment dedup and edge fixing.")
 )
@@ -2446,7 +2446,7 @@ func main() {
 		}
 
 		// Special case: MARKET hierarchy is not dedup.
-		// If cluster paths form parent/child prefixes, keep nodes separate and enforce HAS_SUBMARKET edges.
+		// If cluster paths form parent/child prefixes, keep nodes separate and enforce HAS_MARKET_SEGMENT edges.
 		if hierarchyPairs, hasHierarchy := collectMarketHierarchyPairs(clusterFragments); hasHierarchy {
 			byPath := make(map[string][]*models.HorizonFragment)
 			for _, f := range clusterFragments {
@@ -2481,18 +2481,18 @@ func main() {
 				if parent == nil || child == nil {
 					continue
 				}
-				created, err := ensureHasSubmarketEdge(ctx, edgesRepo, *tenantID, parent.ID, child.ID, *apply)
+				created, err := ensureHasMarketSegmentEdge(ctx, edgesRepo, *tenantID, parent.ID, child.ID, *apply)
 				if err != nil {
-					log.Printf("  ERROR: failed to ensure HAS_SUBMARKET %s -> %s: %v", parent.ID, child.ID, err)
+					log.Printf("  ERROR: failed to ensure HAS_MARKET_SEGMENT %s -> %s: %v", parent.ID, child.ID, err)
 					continue
 				}
 				if created {
 					createdOrPlanned++
 					if *verbose {
 						if *apply {
-							log.Printf("  ✓ Ensured HAS_SUBMARKET: %s -> %s", parent.CanonicalPath, child.CanonicalPath)
+							log.Printf("  ✓ Ensured HAS_MARKET_SEGMENT: %s -> %s", parent.CanonicalPath, child.CanonicalPath)
 						} else {
-							log.Printf("  [DRY-RUN] Would ensure HAS_SUBMARKET: %s -> %s", parent.CanonicalPath, child.CanonicalPath)
+							log.Printf("  [DRY-RUN] Would ensure HAS_MARKET_SEGMENT: %s -> %s", parent.CanonicalPath, child.CanonicalPath)
 						}
 					}
 				}
@@ -3641,7 +3641,7 @@ func collectNamespaceHierarchyPairs(fragments []*models.HorizonFragment, minDept
 	for ns := range uniqueNS {
 		namespace = ns
 	}
-	// MARKET hierarchy is handled in a dedicated block where HAS_SUBMARKET edges are enforced.
+	// MARKET hierarchy is handled in a dedicated block where HAS_MARKET_SEGMENT edges are enforced.
 	if namespace == "market" {
 		return "", nil, false
 	}
@@ -3721,18 +3721,25 @@ func collectMarketHierarchyPairs(fragments []*models.HorizonFragment) ([][2]stri
 	return collectHierarchyPairsForNamespace(fragments, "market", 4)
 }
 
-func ensureHasSubmarketEdge(ctx context.Context, edgesRepo *repo.DependencyEdgesRepository, tenantID, parentID, childID string, apply bool) (bool, error) {
+func ensureHasMarketSegmentEdge(ctx context.Context, edgesRepo *repo.DependencyEdgesRepository, tenantID, parentID, childID string, apply bool) (bool, error) {
 	parentID = strings.TrimSpace(parentID)
 	childID = strings.TrimSpace(childID)
 	if parentID == "" || childID == "" || parentID == childID {
 		return false, nil
 	}
 
-	existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, parentID, childID, models.DependencyTypeHasSubmarket)
-	if err == nil && existing != nil {
+	_, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, parentID, childID, models.DependencyTypeHasMarketSegment)
+	if err == nil {
 		return false, nil
 	}
-	if err != nil && !errors.Is(err, repo.ErrEdgeNotFound) {
+	if !errors.Is(err, repo.ErrEdgeNotFound) {
+		return false, err
+	}
+	_, err = edgesRepo.GetBySourceTargetAndType(ctx, tenantID, parentID, childID, models.DependencyTypeHasSubmarket)
+	if err == nil {
+		return false, nil
+	}
+	if !errors.Is(err, repo.ErrEdgeNotFound) {
 		return false, err
 	}
 
@@ -3745,7 +3752,7 @@ func ensureHasSubmarketEdge(ctx context.Context, edgesRepo *repo.DependencyEdges
 		TenantID:         tenantID,
 		SourceFragmentID: parentID,
 		TargetFragmentID: childID,
-		Type:             models.DependencyTypeHasSubmarket,
+		Type:             models.DependencyTypeHasMarketSegment,
 		Properties: models.EdgeProperties{
 			Criticality:   0.6,
 			Amplification: 1.0,

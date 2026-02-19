@@ -375,7 +375,7 @@ func commonalityEdgeTypeAllowed(edgeType string) bool {
 	case string(models.DependencyTypeLocatedIn),
 		string(models.DependencyTypeOperatesIn),
 		string(models.DependencyTypeParticipatesIn),
-		string(models.DependencyTypeHasSubmarket),
+		string(models.DependencyTypeHasMarketSegment),
 		string(models.DependencyTypeInfluences):
 		return false
 	default:

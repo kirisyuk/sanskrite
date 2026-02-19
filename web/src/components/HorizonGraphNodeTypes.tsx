@@ -1503,7 +1503,7 @@ export const getEdgeColor = (edgeType: string | undefined): string => {
   return '#64748B';
 };
 
-const EdgeTypeIcon = ({ edgeType, color, size = 16 }: { edgeType: string; color: string; size?: number }) => {
+export const EdgeTypeIcon = ({ edgeType, color, size = 16 }: { edgeType: string; color: string; size?: number }) => {
   const et = (edgeType || '').toUpperCase().trim();
   const common = {
     width: size,
@@ -1893,7 +1893,8 @@ const edgeCaptionShort = (raw: any): string => {
     // Market / hierarchy
     PARTICIPATES_IN: 'Participates',
     DOMINATES: 'Dominates',
-    HAS_SUBMARKET: 'Submarket',
+    HAS_MARKET_SEGMENT: 'Segment',
+    HAS_SUBMARKET: 'Segment', // deprecated
     HAS_SUBGROUP: 'Subgroup',
     ADMINISTERS: 'Administers',
     // Community relationships

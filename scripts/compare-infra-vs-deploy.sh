@@ -94,7 +94,7 @@ done
 
 # --- Cloud Tasks Queues: deploy creates ---
 DEPLOY_QUEUES=(
-  sanskrite-scout-v2 sanskrite-profile-refresh sanskrite-risk-v1
+  h1horizon-scout-v2 h1horizon-profile-refresh h1horizon-risk-v1
 )
 
 echo ""
@@ -134,8 +134,8 @@ done
 
 # --- Cloud Scheduler Jobs: deploy creates ---
 DEPLOY_JOBS=(
-  sanskrite-source-poller sanskrite-artifact-scheduler subscription-billing-daily
-  sanskrite-horizon-watchdog  # only with --horizon-watchdog
+  h1horizon-source-poller h1horizon-artifact-scheduler subscription-billing-daily
+  h1horizon-horizon-watchdog  # only with --horizon-watchdog
 )
 
 echo ""
@@ -150,9 +150,9 @@ for j in $INFRA_JOBS; do
 done
 
 # --- Cloud Run Services: deploy creates ---
-# hatlone-ws = текущий WS-брокер; sanskrite-ws = legacy
+# hatlone-ws = текущий WS-брокер; h1horizon-ws = legacy
 DEPLOY_SERVICES=(
-  sanskrite-api hatlone-ws sanskrite-ws verified-proxy sanskrite-telegram
+  h1horizon-api hatlone-ws h1horizon-ws verified-proxy h1horizon-telegram
 )
 
 echo ""

@@ -2016,7 +2016,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		domainMissing := []string{
 			fmt.Sprintf("Expand this DOMAIN contract into 5-10 first-order entities and relations. Use DOMAIN relation types (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON) and valid canonical paths only. ContractType=%s; Facets=%v; Title=%s.", strings.TrimSpace(contractType), parsedFacets, title),
 		}
-		// Collect existing entities from session graph for duplicate prevention
+		// Collect existing entities from session graph for duplicate prevention.
+		// Domain jobs never populate session graph before this step, so fall back to lens scope.
 		var existingEntities []string
 		if sg := SessionGraphFromContext(ctx); sg != nil {
 			for _, frag := range sg.AllFragments() {
@@ -2038,6 +2039,17 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 					existingEntities = append(existingEntities, path)
 				} else {
 					existingEntities = append(existingEntities, fmt.Sprintf("%s | %s", path, label))
+				}
+			}
+		}
+		if len(existingEntities) == 0 && job != nil && strings.TrimSpace(job.LensID) != "" && e.lensesRepo != nil {
+			if lens, lerr := e.lensesRepo.Get(ctx, strings.TrimSpace(job.LensID)); lerr == nil && lens != nil {
+				for _, p := range lens.Scope {
+					p = strings.TrimSpace(p)
+					if p == "" {
+						continue
+					}
+					existingEntities = append(existingEntities, p)
 				}
 			}
 		}
@@ -3531,6 +3543,24 @@ func (e *ScoutEngine) processRelationsInternal(
 			targetFragment = existingByPath
 		}
 
+		if targetFragment == nil {
+			// Resolve path through canonicalPathResolver to reuse existing fragment or canonical form (reduces duplicates).
+			if e.canonicalPathResolver != nil {
+				resolved, rerr := e.canonicalPathResolver.Resolve(ctx, targetPath, targetType)
+				if rerr == nil && resolved != nil {
+					if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
+						targetFragment = resolved.ExistingFragment
+						targetID = targetFragment.ID
+					} else if strings.TrimSpace(resolved.CanonicalPath) != "" && strings.TrimSpace(resolved.CanonicalPath) != targetPath {
+						targetPath = strings.TrimSpace(resolved.CanonicalPath)
+						if existingByPath2, gerr := e.fragmentsRepo.GetByCanonicalPath(ctx, targetPath); gerr == nil && existingByPath2 != nil && strings.TrimSpace(existingByPath2.ID) != "" {
+							targetFragment = existingByPath2
+							targetID = existingByPath2.ID
+						}
+					}
+				}
+			}
+		}
 		if targetFragment == nil {
 			// Fragment doesn't exist -> Create minimal fragment (low confidence) and schedule scouting to fill it.
 			// We do NOT use /discovered paths; canonicalPath must already be stable here.

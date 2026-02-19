@@ -787,7 +787,7 @@ RULES:
         - "German automotive" → /market/de/automotive
         - Use "global" ONLY when no geographic context is present
     - MARKET HIERARCHY: Markets form broader → narrower hierarchies
-      - Parent relationships are modeled as HAS_SUBMARKET edges (broader → narrower)
+      - Parent relationships are modeled as HAS_MARKET_SEGMENT edges (broader → narrower)
       - Example: marketing → digital-marketing → event-marketing
     - Examples:
       - "SME banking in Iraq" -> /market/iq/finance/banking

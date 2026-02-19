@@ -3,11 +3,11 @@ set -euo pipefail
 
 # Fetch _TEST secrets from GCP Secret Manager and write a local .env.test
 # Usage:
-#   ./scripts/pull-test-secrets.sh [-p|--project sanskrite]
+#   ./scripts/pull-test-secrets.sh [-p|--project h1horizon]
 # Load after creation:
 #   set -a; source .env.test; set +a
 
-PROJECT="sanskrite"
+PROJECT="h1horizon"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -p|--project) PROJECT="$2"; shift 2;;

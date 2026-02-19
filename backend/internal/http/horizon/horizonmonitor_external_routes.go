@@ -63,7 +63,7 @@ func (h *HorizonHandlers) proxyUCDPEvents(w http.ResponseWriter, r *http.Request
 
 func (h *HorizonHandlers) proxyHAPIConflict(w http.ResponseWriter, r *http.Request) {
 	// HDX HAPI (Humanitarian API) - Conflict events
-	targetURL := "https://hapi.humdata.org/api/v1/conflict-event?limit=1000&app_name=hatlone-test"
+	targetURL := "https://hapi.humdata.org/api/v1/conflict-event?limit=1000&app_name=h1horizon"
 	h.proxyExternalFeed(w, r, targetURL, nil)
 }
 

@@ -1172,6 +1172,12 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   const [paletteActiveIndex, setPaletteActiveIndex] = React.useState(0);
   const [paletteMode, setPaletteMode] = React.useState<'search' | 'create_project'>('search');
   const paletteInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [paletteAnchorRect, setPaletteAnchorRect] = React.useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
 
   const openPalette = React.useCallback(() => {
     setPaletteOpen(true);
@@ -1201,6 +1207,73 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       closePalette();
     }
   }, [isOpen, closePalette]);
+
+  React.useEffect(() => {
+    if (!paletteOpen || !isModernSidebarMode || !isHorizonMode) {
+      setPaletteAnchorRect(null);
+      return;
+    }
+
+    let rafId: number | null = null;
+    const getAnchor = () =>
+      document.querySelector<HTMLElement>('[data-horizon-graph-area="true"]');
+
+    const updateAnchorRect = () => {
+      const el = getAnchor();
+      if (!el) {
+        setPaletteAnchorRect(null);
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        setPaletteAnchorRect(null);
+        return;
+      }
+      const next = {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      };
+      setPaletteAnchorRect((prev) => {
+        if (
+          prev &&
+          Math.abs(prev.left - next.left) < 0.5 &&
+          Math.abs(prev.top - next.top) < 0.5 &&
+          Math.abs(prev.width - next.width) < 0.5 &&
+          Math.abs(prev.height - next.height) < 0.5
+        ) {
+          return prev;
+        }
+        return next;
+      });
+    };
+
+    const scheduleAnchorRectUpdate = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        updateAnchorRect();
+      });
+    };
+
+    updateAnchorRect();
+    window.addEventListener('resize', scheduleAnchorRectUpdate);
+    window.addEventListener('scroll', scheduleAnchorRectUpdate, true);
+
+    const anchor = getAnchor();
+    const resizeObserver = anchor ? new ResizeObserver(scheduleAnchorRectUpdate) : null;
+    if (anchor && resizeObserver) {
+      resizeObserver.observe(anchor);
+    }
+
+    return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', scheduleAnchorRectUpdate);
+      window.removeEventListener('scroll', scheduleAnchorRectUpdate, true);
+      resizeObserver?.disconnect();
+    };
+  }, [isHorizonMode, isModernSidebarMode, paletteOpen]);
 
   // Global hotkey: Ctrl/Cmd + K
   React.useEffect(() => {
@@ -3386,10 +3459,6 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
             position: 'fixed',
             inset: 0,
             zIndex: 9999,
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'center',
-            paddingTop: '14vh',
             background: 'rgba(0,0,0,0.35)',
             backdropFilter: 'blur(6px)',
           }}
@@ -3397,8 +3466,18 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
+              position: 'absolute',
+              left: paletteAnchorRect
+                ? `${Math.round(paletteAnchorRect.left + paletteAnchorRect.width / 2)}px`
+                : '50%',
+              top: paletteAnchorRect
+                ? `${Math.max(16, Math.round(paletteAnchorRect.top + paletteAnchorRect.height * 0.14))}px`
+                : '14vh',
+              transform: 'translateX(-50%)',
               width: 680,
-              maxWidth: 'min(680px, calc(100vw - 28px))',
+              maxWidth: paletteAnchorRect
+                ? `${Math.max(320, Math.floor(paletteAnchorRect.width - 28))}px`
+                : 'min(680px, calc(100vw - 28px))',
               borderRadius: 18,
               background: 'var(--bg-elevated)',
               border: '1px solid var(--border-subtle)',

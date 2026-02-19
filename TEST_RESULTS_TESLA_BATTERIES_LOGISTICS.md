@@ -103,7 +103,7 @@
 #### Проблема: Auth для локального тестирования
 **Решение**: Добавлен dev-fallback для Google OAuth access token (строго под флагом `AUTH_ALLOW_GOOGLE_ACCESS_TOKEN=1`).
 
-⚠️ Важно: в Cloud Run `sanskrite-api` по умолчанию всё ещё ожидается **Firebase ID token** (по логам есть “incorrect number of segments ... retrieve a valid ID token”). Dev-fallback включать только временно для тестов, чтобы не ослаблять продовую модель доступа.
+⚠️ Важно: в Cloud Run `h1horizon-api` по умолчанию всё ещё ожидается **Firebase ID token** (по логам есть “incorrect number of segments ... retrieve a valid ID token”). Dev-fallback включать только временно для тестов, чтобы не ослаблять продовую модель доступа.
 
 **Файлы изменены:**
 - `backend/internal/http/auth.go`: добавлена поддержка Google access token как fallback

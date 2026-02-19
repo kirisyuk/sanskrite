@@ -104,7 +104,8 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'NEEDS': 2,
   'EXTRACTS_FROM': 2,
   // Market hierarchy (market skeleton)
-  'HAS_SUBMARKET': 2,
+  'HAS_MARKET_SEGMENT': 2,
+  'HAS_SUBMARKET': 2, // deprecated, backward compat
   // Community hierarchy (dynasty/tribe skeleton)
   'HAS_SUBGROUP': 2,
 
@@ -423,6 +424,7 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
 
     // Hierarchies (skeleton):
     // - Market hierarchy: parent should appear to the RIGHT, child to the LEFT.
+    case 'HAS_MARKET_SEGMENT':
     case 'HAS_SUBMARKET':
       return isOutgoing ? 'market' : 'context';
     // - Government admin hierarchy: treat as governance/context for left-group placement.
@@ -437,7 +439,7 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'AFFILIATED_WITH':
       return 'context';  // affiliation with formal org
     case 'HAS_SUBGROUP':
-      return isOutgoing ? 'market' : 'context';  // community hierarchy (like HAS_SUBMARKET)
+      return isOutgoing ? 'market' : 'context';  // community hierarchy (like HAS_MARKET_SEGMENT)
 
     // Supply Chain vs Customers depends on direction
     case 'SUPPLIES_TO':
@@ -539,10 +541,10 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     return isLeft ? 'top-left' : 'top-right';
   }
 
-  // Special case: HAS_SUBMARKET / HAS_SUBGROUP should be purely horizontal.
+  // Special case: HAS_MARKET_SEGMENT / HAS_SUBGROUP should be purely horizontal.
   // - outgoing (parent -> child) => child LEFT
   // - incoming (parent -> child) => parent RIGHT
-  if (t === 'HAS_SUBMARKET' || t === 'HAS_SUBGROUP') {
+  if (t === 'HAS_MARKET_SEGMENT' || t === 'HAS_SUBGROUP' || t === 'HAS_SUBMARKET') {
     return isOutgoing ? 'top-left' : 'top-right';
   }
 
@@ -1213,7 +1215,7 @@ export async function layoutLevelsTwoPane<T = any>(
   ]);
   const DOCK_SUPPLY = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
   const DOCK_DEPENDENCIES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
-  const DOCK_STRUCTURE = new Set(['DOMINATES', 'HAS_SUBMARKET', 'HAS_SUBGROUP', 'PARTICIPATES_IN']);
+  const DOCK_STRUCTURE = new Set(['DOMINATES', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP', 'PARTICIPATES_IN']);
 
   const rightDockCategoryForEdgeType = (edgeType: string | undefined): RightDockKey | null => {
     const et = normalizeEdgeType(edgeType);
@@ -1249,8 +1251,8 @@ export async function layoutLevelsTwoPane<T = any>(
     if (STRONG_CONTROL_TYPES.has(t)) return 400;
     // Market-defining relation: strong, but below hard control/ownership.
     if (t === 'DOMINATES') return 260;
-    // Market hierarchy (parent -> submarket): strong structural signal.
-    if (t === 'HAS_SUBMARKET') return 240;
+    // Market hierarchy (parent -> segment): strong structural signal.
+    if (t === 'HAS_MARKET_SEGMENT' || t === 'HAS_SUBMARKET') return 240;
     // Community hierarchy (dynasty/tribe): strong structural signal.
     if (t === 'HAS_SUBGROUP') return 240;
     if (GOVERNANCE_CONTROL_TYPES.has(t)) return 220;
@@ -1292,8 +1294,9 @@ export async function layoutLevelsTwoPane<T = any>(
     'APPLIES_TO',
     // Market-defining relations (org -> market): treat as hierarchy signal so the org is placed to the RIGHT.
     'DOMINATES',
-    // Market hierarchy (parent -> submarket).
-    'HAS_SUBMARKET',
+    // Market hierarchy (parent -> segment).
+    'HAS_MARKET_SEGMENT',
+    'HAS_SUBMARKET', // deprecated
   ]);
   const INVERTED_HIERARCHY_TYPES = new Set([
     'SUBSIDIARY_OF',
@@ -1927,7 +1930,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM',
   ]);
   const MARKET_EDGE_SET = new Set([
-    'COMPETES_WITH', 'PARTICIPATES_IN', 'DOMINATES', 'HAS_SUBMARKET',
+    'COMPETES_WITH', 'PARTICIPATES_IN', 'DOMINATES', 'HAS_MARKET_SEGMENT',
   ]);
   const STRATEGIC_EDGE_SET = new Set([
     'CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'GATEKEEPS_DECISION', 'USES_MECHANISM', 'APPLIES_TO',
@@ -2238,7 +2241,8 @@ export async function layoutLevelsTwoPane<T = any>(
       // Market / hierarchy
       PARTICIPATES_IN: 'Participates',
       DOMINATES: 'Dominates',
-      HAS_SUBMARKET: 'Submarket',
+      HAS_MARKET_SEGMENT: 'Segment',
+      HAS_SUBMARKET: 'Segment', // deprecated
       HAS_SUBGROUP: 'Subgroup',
       ADMINISTERS: 'Administers',
       CORRIDOR_AUTHORITY: 'Authority',
@@ -2348,7 +2352,8 @@ export async function layoutLevelsTwoPane<T = any>(
     'COMPETES_WITH': { outgoing: 'Competes with', incoming: 'Competes with' },
     'PARTICIPATES_IN': { outgoing: 'Participates in', incoming: 'Participates in' },
     'DOMINATES': { outgoing: 'Dominates in markets', incoming: 'Dominated in markets by' },
-    'HAS_SUBMARKET': { outgoing: 'Submarkets:', incoming: 'Submarket of' },
+    'HAS_MARKET_SEGMENT': { outgoing: 'Segments:', incoming: 'Segment of' },
+    'HAS_SUBMARKET': { outgoing: 'Segments:', incoming: 'Segment of' }, // deprecated
     'REGULATES': { outgoing: 'Regulates', incoming: 'Regulated by' },
     'INFLUENCES': { outgoing: 'Influences', incoming: 'Influenced by' },
     'AFFECTS': { outgoing: 'Affects', incoming: 'Affected by' },
@@ -3631,11 +3636,11 @@ export async function layoutLevelsTwoPane<T = any>(
 
     // Market hierarchy: collapse sibling submarkets into one stack by default.
     // We intentionally label this as "Related markets" to keep UX generic for
-    // HAS_SUBMARKET / HAS_SUBGROUP-like structures.
+    // HAS_MARKET_SEGMENT / HAS_SUBGROUP-like structures.
     if (relatedId && pairTypes && pairTypes.size > 0 && isMarketType(tk)) {
-      const hasSubmarket = Array.from(pairTypes).some((x) => normalizeEdgeType(x) === 'HAS_SUBMARKET');
+      const hasMarketSegment = Array.from(pairTypes).some((x) => normalizeEdgeType(x) === 'HAS_MARKET_SEGMENT' || normalizeEdgeType(x) === 'HAS_SUBMARKET');
       const hasSubgroup = Array.from(pairTypes).some((x) => normalizeEdgeType(x) === 'HAS_SUBGROUP');
-      if (hasSubmarket || hasSubgroup) {
+      if (hasMarketSegment || hasSubgroup) {
         return { kind: 'submarket', title: 'Related markets', visualType: 'MARKET' };
       }
     }
@@ -5441,8 +5446,9 @@ export function deriveLevelsTreeMetadata<T = any>(
     'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO',
     // Market-defining (org -> market): treat as hierarchy signal
     'DOMINATES',
-    // Market hierarchy (parent -> submarket)
-    'HAS_SUBMARKET',
+    // Market hierarchy (parent -> segment)
+    'HAS_MARKET_SEGMENT',
+    'HAS_SUBMARKET', // deprecated
     // Influence is usually Top-Down: Regulator (Parent) -> Company (Child)
     'INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS',
     // Strategic overlay relations (control/conditions/mechanisms)
@@ -5467,7 +5473,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     if (!t) return 0;
     if (STRONG_CONTROL_TYPES.has(t)) return 400;
     if (t === 'DOMINATES') return 260;
-    if (t === 'HAS_SUBMARKET') return 240;
+    if (t === 'HAS_MARKET_SEGMENT' || t === 'HAS_SUBMARKET') return 240;
     if (t === 'BOARD_MEMBER_OF' || t === 'EXECUTIVE_OF') return 220;
     if (t === 'PRODUCES' || t === 'SUPPLIES_TO' || t === 'TRANSFORMS_INTO') return 120;
     if (INFLUENCE_TYPES.has(t)) return 40;

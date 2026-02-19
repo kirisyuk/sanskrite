@@ -5,9 +5,9 @@ set -euo pipefail
 #   export ANTHROPIC_API_KEY=...
 #   export DEEPSEEK_API_KEY=...
 #   export TAVILY_API_KEY=...
-#   ./scripts/setup-prod-secrets.sh [-p|--project sanskrite]
+#   ./scripts/setup-prod-secrets.sh [-p|--project h1horizon]
 
-PROJECT="sanskrite"
+PROJECT="h1horizon"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -p|--project)
@@ -31,7 +31,7 @@ create_if_missing() {
     return 0
   fi
   gcloud secrets create "$name" --replication-policy=automatic \
-    --labels=environment=prod,owner=sanskrite >/dev/null
+    --labels=environment=prod,owner=h1horizon >/dev/null
 }
 
 add_version() {

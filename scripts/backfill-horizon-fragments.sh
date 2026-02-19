@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-PROJECT="${PROJECT:-sanskrite}"
-BUCKET="${BUCKET:-sanskrite-horizon-fragments}"
+PROJECT="${PROJECT:-h1horizon}"
+BUCKET="${BUCKET:-h1horizon-horizon-fragments}"
 DATA_STORE_ID="${DATA_STORE_ID:-horizon-fragments-store}"
 TENANT="${TENANT:-global}"
 BATCH_SIZE="${BATCH_SIZE:-100}"

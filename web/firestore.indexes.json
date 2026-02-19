@@ -1262,6 +1262,23 @@
       ]
     },
     {
+      "collectionGroup": "unit_graph_snapshots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "unit_graph_snapshots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "lensId", "order": "ASCENDING" },
+        { "fieldPath": "domainCanonicalPath", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "horizon_dependency_edges",
       "queryScope": "COLLECTION",
       "fields": [

@@ -59,20 +59,20 @@ func TestApplyEdgeCanonicalizationPolicyUsesDirectionAutoFix(t *testing.T) {
 	}
 }
 
-func TestApplyEdgeCanonicalizationPolicyHasSubmarketChildToParent(t *testing.T) {
+func TestApplyEdgeCanonicalizationPolicyHasMarketSegmentChildToParent(t *testing.T) {
 	// Child (more segments) as source, parent as target -> should swap to parent→child
 	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
-		EdgeType:   horizonmodels.DependencyTypeHasSubmarket,
+		EdgeType:   horizonmodels.DependencyTypeHasMarketSegment,
 		SourceType: horizonmodels.FragmentTypeMarket,
 		TargetType: horizonmodels.FragmentTypeMarket,
 		SourcePath: "/market/global/finance/banking/cross-border-payments/b2b",
 		TargetPath: "/market/global/finance/banking/cross-border-payments",
 	})
 	if !got.Changed {
-		t.Fatalf("expected canonicalization change for HAS_SUBMARKET child→parent")
+		t.Fatalf("expected canonicalization change for HAS_MARKET_SEGMENT child→parent")
 	}
-	if got.EdgeType != horizonmodels.DependencyTypeHasSubmarket {
-		t.Fatalf("expected HAS_SUBMARKET unchanged, got %s", got.EdgeType)
+	if got.EdgeType != horizonmodels.DependencyTypeHasMarketSegment {
+		t.Fatalf("expected HAS_MARKET_SEGMENT unchanged, got %s", got.EdgeType)
 	}
 	if !got.ShouldSwap {
 		t.Fatalf("expected shouldSwap=true (parent→child)")

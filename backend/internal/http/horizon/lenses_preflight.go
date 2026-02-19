@@ -100,8 +100,9 @@ func (h *HorizonHandlers) LensPreflight(w http.ResponseWriter, r *http.Request) 
 		"querySha1": trace.HashText(req.Query),
 	})
 
+	existingDomains := h.collectExistingDomainPathsForProject(ctx, authInfo.TenantID, req.ProjectID)
 	intentAgent := agents.NewIntentResolverAgent(h.service.AIExecutor())
-	intent, err := intentAgent.Resolve(ctx, req.Query)
+	intent, err := intentAgent.ResolveWithContext(ctx, req.Query, existingDomains)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

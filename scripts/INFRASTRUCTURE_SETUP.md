@@ -25,10 +25,10 @@
   - Подписки для interaction топиков: `interaction.created-ws-broker`, `interaction.updated-ws-broker` (2 подписки)
 
 - **Cloud Scheduler Jobs** (4 jobs):
-  - `sanskrite-source-poller` - опрос источников каждые 5 минут
-  - `sanskrite-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
+  - `h1horizon-source-poller` - опрос источников каждые 5 минут
+  - `h1horizon-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
   - `subscription-billing-daily` - ежедневный биллинг подписок в 02:00 UTC
-  - `sanskrite-horizon-watchdog` - опциональный watchdog для Horizon (только с флагом `--horizon-watchdog`)
+  - `h1horizon-horizon-watchdog` - опциональный watchdog для Horizon (только с флагом `--horizon-watchdog`)
 
 ### 2. `scripts/create-secrets.sh` - Создание секретов
 

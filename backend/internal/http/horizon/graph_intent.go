@@ -11,10 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/merge"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -60,18 +64,56 @@ func (h *HorizonHandlers) PlanGraphIntent(w http.ResponseWriter, r *http.Request
 	// Contract: execution stays in English.
 	req.ExecutionLanguage = horizonmodels.GraphIntentExecutionLanguageEN
 
-	plan, err := h.generateGraphIntentPlan(r.Context(), lens, &req)
+	corrID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+	if corrID == "" {
+		corrID = uuid.NewString()
+	}
+	sessID := strings.TrimSpace(r.Header.Get("X-Session-Id"))
+	if sessID == "" {
+		sessID = uuid.NewString()
+	}
+	ctx := rtctx.With(r.Context(), rtctx.Context{
+		TenantID:      authInfo.TenantID,
+		ProjectID:     lens.ProjectID,
+		LensID:        lens.ID,
+		CorrelationID: corrID,
+		SessionID:     sessID,
+	})
+	trace.Log(ctx, "graph_intent", "plan.request", map[string]any{
+		"lensId":       lens.ID,
+		"projectId":    lens.ProjectID,
+		"rawQuery":     trace.Trunc(req.RawQuery, 200),
+		"snapshotNodes": len(req.Snapshot.Nodes),
+		"snapshotEdges": len(req.Snapshot.Edges),
+		"maxNewNodes":  req.Options.MaxNewNodes,
+		"maxNewEdges":  req.Options.MaxNewEdges,
+	})
+
+	plan, err := h.generateGraphIntentPlan(ctx, lens, &req)
 	if err != nil {
-		http.Error(w, "Failed to generate graph intent plan", http.StatusInternalServerError)
+		trace.Log(ctx, "graph_intent", "plan.error", map[string]any{
+			"lensId": lens.ID, "error": err.Error(),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":  "Failed to generate graph intent plan",
+			"detail": err.Error(),
+		})
 		return
 	}
 	if plan == nil {
-		http.Error(w, "Empty graph intent plan", http.StatusInternalServerError)
+		trace.Log(ctx, "graph_intent", "plan.empty", map[string]any{"lensId": lens.ID})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Empty graph intent plan", "detail": "planner returned no plan"})
 		return
 	}
 	normalizeGraphIntentPlanLoose(plan)
 	if err := plan.NormalizeAndValidate(); err != nil {
-		http.Error(w, "Generated plan is invalid", http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Generated plan is invalid", "detail": err.Error()})
 		return
 	}
 	if plan.IsPotentiallyDestructive() {
@@ -86,6 +128,20 @@ func (h *HorizonHandlers) PlanGraphIntent(w http.ResponseWriter, r *http.Request
 		plan.Warnings = appendUniqueStrings(plan.Warnings, fmt.Sprintf("plan exceeds maxNewEdges: %d > %d", createdEdges, req.Options.MaxNewEdges))
 		plan.RequiresConfirmation = true
 	}
+
+	trace.Log(ctx, "graph_intent", "plan.ok", map[string]any{
+		"lensId":              lens.ID,
+		"normalizedQuery":     trace.Trunc(plan.NormalizedEnglishQuery, 120),
+		"intentClass":         plan.IntentClass,
+		"confidence":          plan.Confidence,
+		"requiresConfirmation": plan.RequiresConfirmation,
+		"groupingsN":          len(plan.Create.Groupings),
+		"createNodesN":        len(plan.Create.Nodes),
+		"createEdgesN":        len(plan.Create.Edges),
+		"estimatedCreateNodes": createdNodes,
+		"estimatedCreateEdges": createdEdges,
+		"warningsN":            len(plan.Warnings),
+	})
 
 	writeGraphIntentJSON(w, http.StatusOK, plan)
 }
@@ -118,6 +174,22 @@ func (h *HorizonHandlers) applyGraphIntent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	corrID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+	if corrID == "" {
+		corrID = uuid.NewString()
+	}
+	sessID := strings.TrimSpace(r.Header.Get("X-Session-Id"))
+	if sessID == "" {
+		sessID = uuid.NewString()
+	}
+	applyCtx := rtctx.With(r.Context(), rtctx.Context{
+		TenantID:      authInfo.TenantID,
+		ProjectID:     lens.ProjectID,
+		LensID:        lens.ID,
+		CorrelationID: corrID,
+		SessionID:     sessID,
+	})
+
 	var req horizonmodels.GraphIntentApplyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -148,6 +220,9 @@ func (h *HorizonHandlers) applyGraphIntent(w http.ResponseWriter, r *http.Reques
 
 	isDryRun := req.ApplyMode == horizonmodels.GraphIntentApplyModeDry
 	if !isDryRun && (req.Plan.RequiresConfirmation || req.Plan.IsPotentiallyDestructive()) && !graphIntentApplyConfirmed(r) {
+		trace.Log(applyCtx, "graph_intent", "apply.confirmation_required", map[string]any{
+			"lensId": lens.ID, "idempotencyKey": trace.Trunc(req.IdempotencyKey, 36),
+		})
 		resp := horizonmodels.GraphIntentApplyResponse{
 			Applied:       false,
 			Warnings:      []string{"confirmation required for potentially destructive plan; resend with confirm=true"},
@@ -157,6 +232,13 @@ func (h *HorizonHandlers) applyGraphIntent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	trace.Log(applyCtx, "graph_intent", "apply.start", map[string]any{
+		"lensId":        lens.ID,
+		"idempotencyKey": trace.Trunc(req.IdempotencyKey, 36),
+		"dryRun":        isDryRun,
+		"intentClass":   req.Plan.IntentClass,
+	})
+
 	exec := &graphIntentApplyExecutor{
 		handler:              h,
 		ctx:                  r.Context(),
@@ -165,6 +247,9 @@ func (h *HorizonHandlers) applyGraphIntent(w http.ResponseWriter, r *http.Reques
 		maxRewriteTouchCount: graphIntentApplyHardMaxRewriteOps,
 	}
 	if err := exec.init(); err != nil {
+		trace.Log(applyCtx, "graph_intent", "apply.init_error", map[string]any{
+			"lensId": lens.ID, "error": err.Error(),
+		})
 		http.Error(w, "Graph intent apply is not available", http.StatusServiceUnavailable)
 		return
 	}
@@ -175,6 +260,21 @@ func (h *HorizonHandlers) applyGraphIntent(w http.ResponseWriter, r *http.Reques
 	if isDryRun {
 		resp.Applied = false
 	}
+
+	trace.Log(applyCtx, "graph_intent", "apply.ok", map[string]any{
+		"lensId":             lens.ID,
+		"applied":            resp.Applied,
+		"dryRun":             isDryRun,
+		"createdNodeCount":   resp.CreatedNodeCount,
+		"createdEdgeCount":   resp.CreatedEdgeCount,
+		"updatedNodeCount":   resp.UpdatedNodeCount,
+		"updatedEdgeCount":   resp.UpdatedEdgeCount,
+		"deletedNodeCount":   resp.DeletedNodeCount,
+		"deletedEdgeCount":   resp.DeletedEdgeCount,
+		"unresolvedItemsN":   len(resp.UnresolvedItems),
+		"warningsN":          len(resp.Warnings),
+	})
+
 	writeGraphIntentJSON(w, http.StatusOK, resp)
 }
 
@@ -201,16 +301,19 @@ func (h *HorizonHandlers) generateGraphIntentPlan(ctx context.Context, lens *hor
 		return nil, fmt.Errorf("planner is unavailable")
 	}
 	snapshot := compactGraphIntentSnapshot(req.Snapshot)
-	allowedRelations := horizonmodels.GraphIntentAllowedRelationTypesSorted()
 	allowedNodeTypes := horizonmodels.GraphIntentAllowedNodeTypesSorted()
+	allowedRelations := horizonmodels.GraphIntentAllowedRelationTypesSorted()
 	allowedGroupingKinds := horizonmodels.GraphIntentAllowedGroupingKindsSorted()
+	nodeTypeDescriptions := taxonomy.GraphIntentNodeTypeDescriptions(allowedNodeTypes)
+	relationTypeDescriptions := taxonomy.GraphIntentRelationTypeDescriptions(allowedRelations)
+	groupingKindDescriptions := taxonomy.GraphIntentGroupingKindDescriptions(allowedGroupingKinds)
 	schema := horizonmodels.GraphIntentPlanResponseSchemaDraft07()
 	schemaJSON, _ := json.Marshal(schema)
 	snapshotJSON, _ := json.Marshal(snapshot)
 
 	systemInstruction := strings.TrimSpace(`
 You are a Graph Intent planner for a knowledge graph editor.
-Return ONLY valid JSON.
+Return ONLY valid JSON. No markdown, no code fences, no extra text.
 
 Rules:
 - The user query may be in any language.
@@ -220,52 +323,92 @@ Rules:
 - Output a structured plan only.
 - Use ONLY allowed groupingKind, node types, and relation types from the prompt.
 - Keep plan conservative: if uncertain, lower confidence and add warnings.
-- If operation can be destructive (broad relation rewrites), set requiresConfirmation=true.
+- If operation can be destructive (broad relation rewrites, deletions), set requiresConfirmation=true.
 - Keep output compact and executable.
-`)
+- CRITICAL: Every node (create.nodes, groupings.entities) MUST have tempId and canonicalPathHint. Edges use fromTempId/toTempId for new nodes, fromNodeId/toNodeId for existing snapshot nodes.
+- DELETE: Use delete.nodeIds to remove obsolete nodes. Use delete.edgeIds to remove specific edges. Node deletion cascades to its edges.
+- MERGE: For "merge duplicates" or "remove duplicates, keep one" use merge block. Set merge.primaryNodeId to the canonical node (from snapshot), merge.duplicateNodeIds to the duplicates. The system will: reassign edges from duplicates to primary (with dedup), optionally merge fragment data (Labels, State, merged_paths), then delete duplicates. Prefer merge over update+delete for duplicate consolidation.
+`) + "\n\n" + taxonomy.GraphIntentCanonicalPathRulesPrompt()
+
+	exampleOutput := `{
+  "version": "graph-intent.v1",
+  "normalizedEnglishQuery": "Add governance structure for X",
+  "intentClass": "create",
+  "confidence": 0.9,
+  "create": {
+    "groupings": [],
+    "nodes": [
+      {"tempId": "n1", "label": "Entity A", "type": "ORGANIZATION", "canonicalPathHint": "/org/example/entity-a"},
+      {"tempId": "n2", "label": "Entity B", "type": "PERSON", "canonicalPathHint": "/person/entity-b"}
+    ],
+    "edges": [
+      {"fromTempId": "n1", "toTempId": "n2", "relationType": "EMPLOYED_BY", "direction": "forward"}
+    ]
+  },
+  "update": {},
+  "delete": {},
+  "transform": {},
+  "requiresConfirmation": false
+}`
+
+	exampleMergeOutput := `{
+  "version": "graph-intent.v1",
+  "normalizedEnglishQuery": "Merge duplicate Astana Akimat nodes into a single primary entity",
+  "intentClass": "merge",
+  "confidence": 0.95,
+  "create": {},
+  "update": {"nodePatches": [{"nodeId": "cp_1da8c93544d4b313205a", "label": "Astana Akimat", "type": "GOVERNMENT_AGENCY"}]},
+  "delete": {},
+  "merge": {
+    "primaryNodeId": "cp_1da8c93544d4b313205a",
+    "duplicateNodeIds": ["cp_33cdb0ab875032572677", "cp_6dea39e6339e15a2e4f9"],
+    "mergeFragmentData": true
+  },
+  "transform": {},
+  "explanations": ["Consolidated duplicates into primary. Edges reassigned and deduplicated, fragment data merged, duplicates removed."],
+  "requiresConfirmation": true
+}`
 
 	prompt := strings.TrimSpace(fmt.Sprintf(`
 Now (UTC): %s
 Contract version: %s
-Execution language (must be used for planning): %s
+Execution language: %s
 
-Lens context:
-- lensId: %s
-- projectId: %s
+Lens: %s / %s
 
 Request:
 - rawQuery: %s
 - queryLanguage: %s
-- options:
-  - allowSearchGrounding: %t
-  - allowInternalGrounding: %t
-  - maxNewNodes: %d
-  - maxNewEdges: %d
+- allowSearchGrounding: %t, allowInternalGrounding: %t
+- maxNewNodes: %d, maxNewEdges: %d
 
-Allowed grouping kinds:
 %s
 
-Allowed node types:
 %s
 
-Allowed relation types:
 %s
 
 Graph snapshot JSON:
 %s
 
-Output JSON schema (draft-07):
+Example output structure (follow this format exactly):
 %s
 
-Return one JSON object matching the schema.
-`, time.Now().UTC().Format(time.RFC3339), horizonmodels.GraphIntentVersionV1, horizonmodels.GraphIntentExecutionLanguageEN, lens.ID, lens.ProjectID, req.RawQuery, req.QueryLanguage, req.Options.AllowSearchGrounding, req.Options.AllowInternalGrounding, req.Options.MaxNewNodes, req.Options.MaxNewEdges, strings.Join(allowedGroupingKinds, ", "), strings.Join(allowedNodeTypes, ", "), strings.Join(allowedRelations, ", "), string(snapshotJSON), string(schemaJSON)))
+For merge/remove-duplicates queries, use delete.nodeIds:
+%s
+
+Full JSON schema (draft-07):
+%s
+
+Return exactly one JSON object. No markdown, no code fences. Just the raw JSON.
+`, time.Now().UTC().Format(time.RFC3339), horizonmodels.GraphIntentVersionV1, horizonmodels.GraphIntentExecutionLanguageEN, lens.ID, lens.ProjectID, req.RawQuery, req.QueryLanguage, req.Options.AllowSearchGrounding, req.Options.AllowInternalGrounding, req.Options.MaxNewNodes, req.Options.MaxNewEdges, groupingKindDescriptions, nodeTypeDescriptions, relationTypeDescriptions, string(snapshotJSON), exampleOutput, exampleMergeOutput, string(schemaJSON)))
 
 	llmReq := gen_combined.GenAIRequest{
 		Model:             graphIntentPlannerModel,
 		Prompt:            prompt,
 		SystemInstruction: systemInstruction,
 		WebSearchEnabled:  req.Options.AllowSearchGrounding,
-		MaxOutputTokens:   4096,
+		MaxOutputTokens:   16384,
 		Temperature:       0.1,
 		ProjectID:         strings.TrimSpace(lens.ProjectID),
 	}
@@ -321,15 +464,21 @@ func inferGraphIntentClass(plan *horizonmodels.GraphIntentPlanResponse) string {
 	}
 	hasCreate := len(plan.Create.Groupings)+len(plan.Create.Nodes)+len(plan.Create.Edges) > 0
 	hasUpdate := len(plan.Update.NodePatches)+len(plan.Update.EdgePatches)+len(plan.Update.RelationRewrite) > 0
+	hasDelete := len(plan.Delete.NodeIDs)+len(plan.Delete.EdgeIDs) > 0
+	hasMerge := strings.TrimSpace(plan.Merge.PrimaryNodeID) != "" && len(plan.Merge.DuplicateNodeIDs) > 0
 	hasTransform := len(plan.Transform.DeriveChains)+len(plan.Transform.Restructure) > 0
 	switch {
-	case hasCreate && !hasUpdate && !hasTransform:
+	case hasCreate && !hasUpdate && !hasDelete && !hasMerge && !hasTransform:
 		return horizonmodels.GraphIntentClassCreate
-	case !hasCreate && hasUpdate && !hasTransform:
+	case !hasCreate && hasUpdate && !hasDelete && !hasMerge && !hasTransform:
 		return horizonmodels.GraphIntentClassUpdate
-	case !hasCreate && !hasUpdate && hasTransform:
+	case !hasCreate && !hasUpdate && hasDelete && !hasMerge && !hasTransform:
+		return horizonmodels.GraphIntentClassDelete
+	case !hasCreate && !hasUpdate && !hasDelete && hasMerge && !hasTransform:
+		return horizonmodels.GraphIntentClassMerge
+	case !hasCreate && !hasUpdate && !hasDelete && !hasMerge && hasTransform:
 		return horizonmodels.GraphIntentClassTransform
-	case hasCreate || hasUpdate || hasTransform:
+	case hasCreate || hasUpdate || hasDelete || hasMerge || hasTransform:
 		return horizonmodels.GraphIntentClassMixed
 	default:
 		return horizonmodels.GraphIntentClassUnknown
@@ -500,6 +649,10 @@ func normalizeGraphIntentPlanLoose(plan *horizonmodels.GraphIntentPlanResponse) 
 			ch.Constraints.AllowedRelationTypes[j] = strings.ToUpper(strings.TrimSpace(ch.Constraints.AllowedRelationTypes[j]))
 		}
 	}
+	for i := range plan.Merge.DuplicateNodeIDs {
+		plan.Merge.DuplicateNodeIDs[i] = strings.TrimSpace(plan.Merge.DuplicateNodeIDs[i])
+	}
+	plan.Merge.PrimaryNodeID = strings.TrimSpace(plan.Merge.PrimaryNodeID)
 	plan.Warnings = appendUniqueStrings(nil, plan.Warnings...)
 	plan.Explanations = appendUniqueStrings(nil, plan.Explanations...)
 }
@@ -529,6 +682,8 @@ type graphIntentApplyExecutor struct {
 	createdEdgeCount int
 	updatedNodeCount int
 	updatedEdgeCount int
+	deletedNodeCount int
+	deletedEdgeCount int
 
 	maxRewriteTouchCount int
 }
@@ -588,6 +743,17 @@ func (e *graphIntentApplyExecutor) execute(plan *horizonmodels.GraphIntentPlanRe
 		e.applyRelationRewrite(rw)
 	}
 
+	if strings.TrimSpace(plan.Merge.PrimaryNodeID) != "" && len(plan.Merge.DuplicateNodeIDs) > 0 {
+		e.applyMerge(plan.Merge)
+	}
+
+	for _, edgeID := range plan.Delete.EdgeIDs {
+		e.applyDeleteEdge(edgeID)
+	}
+	for _, nodeID := range plan.Delete.NodeIDs {
+		e.applyDeleteNode(nodeID)
+	}
+
 	for _, dc := range plan.Transform.DeriveChains {
 		if strings.TrimSpace(dc.FromNodeID) != "" && strings.TrimSpace(dc.ToNodeID) != "" {
 			e.warnings = appendUniqueStrings(e.warnings, "transform.deriveChains is non-mutating in apply mode")
@@ -610,6 +776,8 @@ func (e *graphIntentApplyExecutor) execute(plan *horizonmodels.GraphIntentPlanRe
 		CreatedEdgeCount: e.createdEdgeCount,
 		UpdatedNodeCount: e.updatedNodeCount,
 		UpdatedEdgeCount: e.updatedEdgeCount,
+		DeletedNodeCount: e.deletedNodeCount,
+		DeletedEdgeCount: e.deletedEdgeCount,
 		UnresolvedItems:  e.unresolved,
 		Warnings:         e.warnings,
 	}
@@ -1038,6 +1206,294 @@ func (e *graphIntentApplyExecutor) applyEdgePatch(patch horizonmodels.GraphInten
 	}
 	e.updatedEdgeCount++
 	e.syncEdgeLensItem(edge)
+}
+
+func (e *graphIntentApplyExecutor) applyDeleteEdge(edgeID string) {
+	edgeID = strings.TrimSpace(edgeID)
+	if edgeID == "" {
+		return
+	}
+	if e.dryRun {
+		e.deletedEdgeCount++
+		return
+	}
+	if err := e.edgesRepo.Delete(e.ctx, edgeID); err != nil {
+		e.unresolved = append(e.unresolved, horizonmodels.GraphIntentUnresolvedItem{
+			TempID:          edgeID,
+			Reason:          fmt.Sprintf("failed to delete edge: %v", err),
+			SuggestedAction: "retry",
+		})
+		return
+	}
+	e.deletedEdgeCount++
+}
+
+func (e *graphIntentApplyExecutor) applyDeleteNode(nodeID string) {
+	ref := strings.TrimSpace(nodeID)
+	if ref == "" {
+		return
+	}
+	fragmentID, ok := e.resolveNodeRef(ref)
+	if !ok || fragmentID == "" {
+		e.unresolved = append(e.unresolved, horizonmodels.GraphIntentUnresolvedItem{
+			TempID:          ref,
+			Reason:          "delete node target unresolved",
+			SuggestedAction: "fix_plan",
+		})
+		return
+	}
+	if e.dryRun {
+		e.deletedNodeCount++
+		return
+	}
+	if err := e.fragmentsRepo.Delete(e.ctx, fragmentID); err != nil {
+		e.unresolved = append(e.unresolved, horizonmodels.GraphIntentUnresolvedItem{
+			TempID:          ref,
+			Reason:          fmt.Sprintf("failed to delete fragment: %v", err),
+			SuggestedAction: "retry",
+		})
+		return
+	}
+	e.deletedNodeCount++
+}
+
+func (e *graphIntentApplyExecutor) applyMerge(m horizonmodels.GraphIntentMergeBlock) {
+	primaryID, ok := e.resolveNodeRef(strings.TrimSpace(m.PrimaryNodeID))
+	if !ok || primaryID == "" {
+		e.unresolved = append(e.unresolved, horizonmodels.GraphIntentUnresolvedItem{
+			TempID:          strings.TrimSpace(m.PrimaryNodeID),
+			Reason:          "merge primary node unresolved",
+			SuggestedAction: "fix_plan",
+		})
+		return
+	}
+	tenantID := strings.TrimSpace(e.lens.TenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	mergeFragmentData := m.MergeFragmentData == nil || *m.MergeFragmentData
+
+	primary, err := e.fragmentsRepo.Get(e.ctx, primaryID)
+	if err != nil || primary == nil {
+		e.unresolved = append(e.unresolved, horizonmodels.GraphIntentUnresolvedItem{
+			TempID:          m.PrimaryNodeID,
+			Reason:          "merge primary fragment not found",
+			SuggestedAction: "retry",
+		})
+		return
+	}
+
+	duplicateIDs := make([]string, 0, len(m.DuplicateNodeIDs))
+	for _, ref := range m.DuplicateNodeIDs {
+		dupID, ok := e.resolveNodeRef(strings.TrimSpace(ref))
+		if !ok || dupID == "" || dupID == primaryID {
+			continue
+		}
+		duplicateIDs = append(duplicateIDs, dupID)
+	}
+
+	if e.dryRun {
+		e.updatedNodeCount++
+		e.deletedNodeCount += len(duplicateIDs)
+		return
+	}
+
+	for _, dupID := range duplicateIDs {
+		dup, err := e.fragmentsRepo.Get(e.ctx, dupID)
+		if err != nil || dup == nil {
+			continue
+		}
+		if mergeFragmentData {
+			if merge.MergeFragmentDataFillFirst(primary, dup) {
+				primary.UpdatedAt = time.Now().UTC()
+				_ = e.fragmentsRepo.Update(e.ctx, primary)
+			}
+		}
+		reassigned, dedupDeleted := e.reassignEdgesWithDedup(tenantID, dupID, primaryID)
+		e.updatedEdgeCount += reassigned
+		e.deletedEdgeCount += dedupDeleted
+		if err := e.fragmentsRepo.Delete(e.ctx, dupID); err != nil {
+			e.unresolved = append(e.unresolved, horizonmodels.GraphIntentUnresolvedItem{
+				TempID:          dupID,
+				Reason:          fmt.Sprintf("failed to delete duplicate after merge: %v", err),
+				SuggestedAction: "retry",
+			})
+			continue
+		}
+		e.deletedNodeCount++
+	}
+	dedupDeleted := e.bestEffortDedupeEdgesForNode(tenantID, primaryID, 2000)
+	e.deletedEdgeCount += dedupDeleted
+}
+
+func (e *graphIntentApplyExecutor) reassignEdgesWithDedup(tenantID, fromID, toID string) (reassigned, deleted int) {
+	const limit = 5000
+	srcEdges, err := e.edgesRepo.ListBySource(e.ctx, tenantID, fromID, nil, limit)
+	if err != nil {
+		return 0, 0
+	}
+	tgtEdges, err := e.edgesRepo.ListByTarget(e.ctx, tenantID, fromID, nil, limit)
+	if err != nil {
+		return 0, 0
+	}
+	for _, edge := range srcEdges {
+		if edge == nil || strings.TrimSpace(edge.ID) == "" || edge.Type == "" {
+			continue
+		}
+		existing, err := e.edgesRepo.GetBySourceTargetAndType(e.ctx, tenantID, toID, edge.TargetFragmentID, edge.Type)
+		if err == nil && existing != nil {
+			if graphIntentMergeEdgeMetrics(existing, edge) {
+				_ = e.edgesRepo.Update(e.ctx, existing)
+			}
+			if err := e.edgesRepo.Delete(e.ctx, edge.ID); err == nil {
+				deleted++
+			}
+			continue
+		}
+		edge.SourceFragmentID = toID
+		if edge.SourceFragmentID == edge.TargetFragmentID {
+			if err := e.edgesRepo.Delete(e.ctx, edge.ID); err == nil {
+				deleted++
+			}
+			continue
+		}
+		edge.Metadata.LastUpdatedAt = time.Now().UTC()
+		if err := e.edgesRepo.Update(e.ctx, edge); err == nil {
+			reassigned++
+			e.syncEdgeLensItem(edge)
+		}
+	}
+	for _, edge := range tgtEdges {
+		if edge == nil || strings.TrimSpace(edge.ID) == "" || edge.Type == "" {
+			continue
+		}
+		existing, err := e.edgesRepo.GetBySourceTargetAndType(e.ctx, tenantID, edge.SourceFragmentID, toID, edge.Type)
+		if err == nil && existing != nil {
+			if graphIntentMergeEdgeMetrics(existing, edge) {
+				_ = e.edgesRepo.Update(e.ctx, existing)
+			}
+			if err := e.edgesRepo.Delete(e.ctx, edge.ID); err == nil {
+				deleted++
+			}
+			continue
+		}
+		edge.TargetFragmentID = toID
+		if edge.SourceFragmentID == edge.TargetFragmentID {
+			if err := e.edgesRepo.Delete(e.ctx, edge.ID); err == nil {
+				deleted++
+			}
+			continue
+		}
+		edge.Metadata.LastUpdatedAt = time.Now().UTC()
+		if err := e.edgesRepo.Update(e.ctx, edge); err == nil {
+			reassigned++
+			e.syncEdgeLensItem(edge)
+		}
+	}
+	return reassigned, deleted
+}
+
+func graphIntentMergeEdgeMetrics(dst, src *horizonmodels.DependencyEdge) bool {
+	if dst == nil || src == nil {
+		return false
+	}
+	changed := false
+	if len(src.Metrics) > 0 {
+		if dst.Metrics == nil {
+			dst.Metrics = map[string]horizonmodels.MetricValue{}
+		}
+		for k, mv := range src.Metrics {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				continue
+			}
+			if cur, ok := dst.Metrics[key]; ok {
+				if merge.BetterMetricValue(mv, cur) {
+					dst.Metrics[key] = mv
+					changed = true
+				}
+			} else {
+				dst.Metrics[key] = mv
+				changed = true
+			}
+		}
+	}
+	if len(src.Qualifiers) > 0 {
+		if dst.Qualifiers == nil {
+			dst.Qualifiers = map[string]interface{}{}
+		}
+		for k, v := range src.Qualifiers {
+			key := strings.TrimSpace(k)
+			if key == "" {
+				continue
+			}
+			if _, ok := dst.Qualifiers[key]; ok {
+				continue
+			}
+			dst.Qualifiers[key] = v
+			changed = true
+		}
+	}
+	return changed
+}
+
+func (e *graphIntentApplyExecutor) bestEffortDedupeEdgesForNode(tenantID, fragmentID string, limit int) (deleted int) {
+	if e == nil || e.edgesRepo == nil {
+		return 0
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	fragmentID = strings.TrimSpace(fragmentID)
+	if tenantID == "" || fragmentID == "" || limit <= 0 {
+		return 0
+	}
+	srcEdges, err := e.edgesRepo.ListBySource(e.ctx, tenantID, fragmentID, nil, limit)
+	if err != nil {
+		return 0
+	}
+	tgtEdges, err := e.edgesRepo.ListByTarget(e.ctx, tenantID, fragmentID, nil, limit)
+	if err != nil {
+		return 0
+	}
+	type key struct {
+		s  string
+		t  string
+		ty string
+	}
+	kept := map[key]*horizonmodels.DependencyEdge{}
+	consider := func(ed *horizonmodels.DependencyEdge) {
+		if ed == nil {
+			return
+		}
+		s := strings.TrimSpace(ed.SourceFragmentID)
+		t := strings.TrimSpace(ed.TargetFragmentID)
+		ty := ed.Type
+		ns, nt, nty, _ := horizonmodels.NormalizeSymmetricEdge(s, t, ty)
+		k := key{s: ns, t: nt, ty: string(nty)}
+		if existing, ok := kept[k]; ok && existing != nil {
+			keep := existing
+			drop := ed
+			if ed.Metadata.CreatedAt.Before(existing.Metadata.CreatedAt) ||
+				(ed.Metadata.CreatedAt.Equal(existing.Metadata.CreatedAt) && strings.TrimSpace(ed.ID) < strings.TrimSpace(existing.ID)) {
+				keep = ed
+				drop = existing
+				kept[k] = keep
+			}
+			if drop != nil && strings.TrimSpace(drop.ID) != "" {
+				if err := e.edgesRepo.Delete(e.ctx, drop.ID); err == nil {
+					deleted++
+				}
+			}
+			return
+		}
+		kept[k] = ed
+	}
+	for _, ed := range srcEdges {
+		consider(ed)
+	}
+	for _, ed := range tgtEdges {
+		consider(ed)
+	}
+	return deleted
 }
 
 func (e *graphIntentApplyExecutor) applyRelationRewrite(rw horizonmodels.GraphIntentRelationRewrite) {

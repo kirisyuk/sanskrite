@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-PROJECT_ID="${GCP_PROJECT_ID:-sanskrite}"
+PROJECT_ID="${GCP_PROJECT_ID:-h1horizon}"
 REGION="US"
 
 echo "=== Проверка инфраструктуры BigQuery/Vertex AI ==="
@@ -52,11 +52,11 @@ echo ""
 
 # 3. Проверка BigQuery dataset
 echo "3. Проверка BigQuery dataset..."
-if bq show "$PROJECT_ID:sanskrite_documents" >/dev/null 2>&1; then
-  echo "  ✅ Dataset sanskrite_documents существует"
+if bq show "$PROJECT_ID:h1horizon_documents" >/dev/null 2>&1; then
+  echo "  ✅ Dataset h1horizon_documents существует"
   
   # Проверка таблиц
-  TABLES=$(bq ls "$PROJECT_ID:sanskrite_documents" 2>&1 | grep -E "TABLE|VIEW|EXTERNAL" | awk '{print $1}' || echo "")
+  TABLES=$(bq ls "$PROJECT_ID:h1horizon_documents" 2>&1 | grep -E "TABLE|VIEW|EXTERNAL" | awk '{print $1}' || echo "")
   if echo "$TABLES" | grep -q "documents_metadata"; then
     echo "    ✅ Таблица documents_metadata существует"
   else
@@ -81,7 +81,7 @@ if bq show "$PROJECT_ID:sanskrite_documents" >/dev/null 2>&1; then
     echo "    ⚠️  Object Table core_docs_object_table не найдена"
   fi
 else
-  echo "  ❌ Dataset sanskrite_documents не найден"
+  echo "  ❌ Dataset h1horizon_documents не найден"
 fi
 
 echo ""
@@ -156,7 +156,7 @@ echo ""
 echo "7. Рекомендуемые переменные окружения:"
 echo "  - GCP_PROJECT_ID=$PROJECT_ID"
 echo "  - GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
-echo "  - BIGQUERY_DATASET_ID=sanskrite_documents (опционально, по умолчанию)"
+echo "  - BIGQUERY_DATASET_ID=h1horizon_documents (опционально, по умолчанию)"
 echo "  - GEMINI_API_KEY (из Secret Manager)"
 echo "  - VERTEX_LOCATION=us-central1 (опционально)"
 echo "  - RAG_DOCUMENTS_BUCKET=$PROJECT_ID-rag-documents"

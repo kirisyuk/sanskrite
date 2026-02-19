@@ -19,7 +19,7 @@ When you run `scripts/deploy --api` or `scripts/deploy` (which includes API), th
 
 ### Deployment Flow
 
-1. Main API (`sanskrite-api`) is deployed
+1. Main API (`h1horizon-api`) is deployed
 2. Verified proxy (`verified-proxy`) is automatically deployed using the API URL
 3. Proxy URL is displayed in the deployment summary
 
@@ -87,7 +87,7 @@ curl -X POST $PROXY_URL/verified \
 ## Environment Variables
 
 Set automatically during deployment:
-- `BACKEND_URL`: Full URL of the backend API (from `sanskrite-api` service)
+- `BACKEND_URL`: Full URL of the backend API (from `h1horizon-api` service)
 - `ALLOWED_ORIGIN`: CORS allowed origin (default: `https://hatl.one`)
 
 From Secret Manager:

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 const (
@@ -13,6 +15,8 @@ const (
 
 	GraphIntentClassCreate    = "create"
 	GraphIntentClassUpdate    = "update"
+	GraphIntentClassDelete    = "delete"
+	GraphIntentClassMerge    = "merge"
 	GraphIntentClassTransform = "transform"
 	GraphIntentClassMixed     = "mixed"
 	GraphIntentClassUnknown   = "unknown"
@@ -102,6 +106,8 @@ type GraphIntentPlanResponse struct {
 	Confidence             float64                   `json:"confidence"`
 	Create                 GraphIntentCreateBlock    `json:"create"`
 	Update                 GraphIntentUpdateBlock    `json:"update"`
+	Delete                 GraphIntentDeleteBlock   `json:"delete"`
+	Merge                  GraphIntentMergeBlock    `json:"merge"`
 	Transform              GraphIntentTransformBlock `json:"transform"`
 	Explanations           []string                  `json:"explanations,omitempty"`
 	Warnings               []string                  `json:"warnings,omitempty"`
@@ -159,6 +165,22 @@ type GraphIntentUpdateBlock struct {
 	NodePatches     []GraphIntentNodePatch       `json:"nodePatches,omitempty"`
 	EdgePatches     []GraphIntentEdgePatch       `json:"edgePatches,omitempty"`
 	RelationRewrite []GraphIntentRelationRewrite `json:"relationRewrite,omitempty"`
+}
+
+// GraphIntentDeleteBlock specifies nodes and edges to remove from the graph.
+// Node deletion cascades to edges (edges referencing the node are removed).
+type GraphIntentDeleteBlock struct {
+	NodeIDs []string `json:"nodeIds,omitempty"`
+	EdgeIDs []string `json:"edgeIds,omitempty"`
+}
+
+// GraphIntentMergeBlock merges duplicate nodes into a primary node.
+// LLM selects primary; duplicates are reassigned (edges redirected) and then removed.
+// Edge reassignment deduplicates: if primary already has same (source,target,type), duplicate edge is deleted.
+type GraphIntentMergeBlock struct {
+	PrimaryNodeID     string   `json:"primaryNodeId"`
+	DuplicateNodeIDs []string `json:"duplicateNodeIds,omitempty"`
+	MergeFragmentData *bool   `json:"mergeFragmentData,omitempty"` // fill-first merge of Labels, Identifiers, State. Nil = true.
 }
 
 type GraphIntentNodePatch struct {
@@ -249,6 +271,8 @@ type GraphIntentApplyResponse struct {
 	CreatedEdgeCount int                         `json:"createdEdgeCount"`
 	UpdatedNodeCount int                         `json:"updatedNodeCount"`
 	UpdatedEdgeCount int                         `json:"updatedEdgeCount"`
+	DeletedNodeCount int                         `json:"deletedNodeCount"`
+	DeletedEdgeCount int                         `json:"deletedEdgeCount"`
 	UnresolvedItems  []GraphIntentUnresolvedItem `json:"unresolvedItems,omitempty"`
 	Warnings         []string                    `json:"warnings,omitempty"`
 	ActionPreview    *GraphIntentActionPlan      `json:"actionPreview,omitempty"`
@@ -361,7 +385,7 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 		p.IntentClass = GraphIntentClassUnknown
 	}
 	switch p.IntentClass {
-	case GraphIntentClassCreate, GraphIntentClassUpdate, GraphIntentClassTransform, GraphIntentClassMixed, GraphIntentClassUnknown:
+	case GraphIntentClassCreate, GraphIntentClassUpdate, GraphIntentClassDelete, GraphIntentClassMerge, GraphIntentClassTransform, GraphIntentClassMixed, GraphIntentClassUnknown:
 	default:
 		return fmt.Errorf("invalid intentClass: %s", p.IntentClass)
 	}
@@ -384,6 +408,16 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 			if !IsGraphIntentNodeTypeAllowed(n.Type) {
 				return fmt.Errorf("invalid grouping entity type: %s", n.Type)
 			}
+			cp := strings.TrimSpace(n.CanonicalPathHint)
+			if cp == "" {
+				return fmt.Errorf("create.groupings.entities.canonicalPathHint is required for %q", n.Label)
+			}
+			if !strings.HasPrefix(cp, "/") {
+				cp = "/" + cp
+			}
+			if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+				return fmt.Errorf("create.groupings.entities.canonicalPathHint invalid for %q: %w", n.Label, err)
+			}
 		}
 		for _, rel := range g.Relations {
 			if !IsGraphIntentRelationTypeAllowed(rel.RelationType) {
@@ -397,6 +431,16 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 		}
 		if !IsGraphIntentNodeTypeAllowed(n.Type) {
 			return fmt.Errorf("invalid create.nodes.type: %s", n.Type)
+		}
+		cp := strings.TrimSpace(n.CanonicalPathHint)
+		if cp == "" {
+			return fmt.Errorf("create.nodes.canonicalPathHint is required for %q", n.Label)
+		}
+		if !strings.HasPrefix(cp, "/") {
+			cp = "/" + cp
+		}
+		if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+			return fmt.Errorf("create.nodes.canonicalPathHint invalid for %q: %w", n.Label, err)
 		}
 	}
 	for _, e := range p.Create.Edges {
@@ -443,6 +487,12 @@ func (p *GraphIntentPlanResponse) EstimatedCreateCounts() (nodes int, edges int)
 }
 
 func (p *GraphIntentPlanResponse) IsPotentiallyDestructive() bool {
+	if len(p.Merge.PrimaryNodeID) > 0 && len(p.Merge.DuplicateNodeIDs) > 0 {
+		return true
+	}
+	if len(p.Delete.NodeIDs) > 0 || len(p.Delete.EdgeIDs) > 0 {
+		return true
+	}
 	if len(p.Update.RelationRewrite) == 0 {
 		return false
 	}
@@ -566,6 +616,19 @@ func (p *GraphIntentPlanResponse) MapToActions() *GraphIntentActionPlan {
 			"match":       rw.Match,
 			"replaceWith": rw.ReplaceWith,
 			"reason":      rw.Reason,
+		})
+	}
+	for _, nodeID := range p.Delete.NodeIDs {
+		push("delete_node", "delete", strings.TrimSpace(nodeID), map[string]interface{}{"nodeId": nodeID})
+	}
+	for _, edgeID := range p.Delete.EdgeIDs {
+		push("delete_edge", "delete", strings.TrimSpace(edgeID), map[string]interface{}{"edgeId": edgeID})
+	}
+	if strings.TrimSpace(p.Merge.PrimaryNodeID) != "" && len(p.Merge.DuplicateNodeIDs) > 0 {
+		push("merge_nodes", "merge", p.Merge.PrimaryNodeID, map[string]interface{}{
+			"primaryNodeId":    p.Merge.PrimaryNodeID,
+			"duplicateNodeIds": p.Merge.DuplicateNodeIDs,
+			"mergeFragmentData": p.Merge.MergeFragmentData,
 		})
 	}
 
@@ -737,7 +800,7 @@ var graphIntentAllowedRuntimeRelationTypes = map[string]struct{}{
 	string(DependencyTypeExtractsFrom):        {},
 	string(DependencyTypeParticipatesIn):      {},
 	string(DependencyTypeDominates):           {},
-	string(DependencyTypeHasSubmarket):        {},
+	string(DependencyTypeHasMarketSegment):    {},
 	string(DependencyTypeAdministers):         {},
 	string(DependencyTypeManages):             {},
 	string(DependencyTypeControls):            {},

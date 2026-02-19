@@ -55,6 +55,12 @@ import {
 } from '../lib/elkLayout';
 import type { LensItem } from '../types/lensItem';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
+import {
+  GRAPH_INTENT_VERSION_V1,
+  type GraphIntentPlanRequest,
+  type GraphIntentPlanResponse,
+  type GraphIntentApplyRequest,
+} from '../types/graphIntent';
 import { ExpandEmptyToast } from './ExpandEmptyToast';
 import { MarketProfileModal } from './MarketProfileModal';
 import { OrgProfileModal } from './OrgProfileModal';
@@ -62,6 +68,7 @@ import { GovProfileModal } from './GovProfileModal';
 import { DynastyProfileModal } from './DynastyProfileModal';
 import { TribeProfileModal } from './TribeProfileModal';
 import { ProgramProfileModal } from './ProgramProfileModal';
+import { GraphIntentResultCard } from './GraphIntentResultCard';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
@@ -586,7 +593,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Market / hierarchy
       PARTICIPATES_IN: 'Participates',
       DOMINATES: 'Dominates',
-      HAS_SUBMARKET: 'Submarket',
+      HAS_MARKET_SEGMENT: 'Segment',
+      HAS_SUBMARKET: 'Segment', // deprecated, backward compat for existing edges
       HAS_SUBGROUP: 'Subgroup',
       ADMINISTERS: 'Administers',
       // Community relationships
@@ -1592,7 +1600,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'SIMILAR_TO',
       'LINKED_TO',
       // Market skeleton
-      'HAS_SUBMARKET',
+      'HAS_MARKET_SEGMENT',
       // Community hierarchy
       'HAS_SUBGROUP',
     ];
@@ -1849,6 +1857,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const addNodeCacheRef = React.useRef<Map<string, HorizonSearchEntity[]>>(new Map());
   const addNodeAbortRef = React.useRef<AbortController | null>(null);
 
+  const [graphIntentPlan, setGraphIntentPlan] = React.useState<GraphIntentPlanResponse | null>(null);
+  const [graphIntentLoading, setGraphIntentLoading] = React.useState(false);
+  const [graphIntentError, setGraphIntentError] = React.useState<string | null>(null);
+  const [graphIntentApplyLoading, setGraphIntentApplyLoading] = React.useState(false);
+
   const graphSearchResults = React.useMemo(() => {
     if (!addNodeOpen) return [] as Array<{ node: Node<HorizonNodeData>; label: string; type?: string; canonicalPath?: string; score: number }>;
     const raw = String(addNodeQuery || '').trim().toLowerCase();
@@ -1908,15 +1921,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const paletteSelectableItems = React.useMemo(() => {
     const q = String(addNodeQuery || '').trim();
+    const intentItem = q.length >= 3 ? [{ kind: 'intent' as const, query: q }] : [];
+    if (graphIntentLoading && q.length >= 3) {
+      return intentItem;
+    }
     const scoutItem = q.length >= 2 ? [{ kind: 'scout' as const, query: q }] : [];
     return [
+      ...intentItem,
       ...scoutItem,
       ...graphSearchResults.map((m) => ({ kind: 'graph' as const, node: m.node, label: m.label, canonicalPath: m.canonicalPath, type: m.type })),
       ...filteredAddNodeResults.map((r) => ({ kind: 'index' as const, entity: r })),
     ];
-  }, [addNodeQuery, graphSearchResults, filteredAddNodeResults]);
+  }, [addNodeQuery, graphSearchResults, filteredAddNodeResults, graphIntentLoading]);
 
   const addNodeQueryTrim = String(addNodeQuery || '').trim();
+
+  React.useEffect(() => {
+    setAddNodeActiveIndex((i) => Math.min(i, Math.max(0, paletteSelectableItems.length - 1)));
+  }, [paletteSelectableItems]);
 
   // If the add-node UI is closed/unmounted, abort in-flight requests and release retained results.
   React.useEffect(() => {
@@ -2061,6 +2083,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setControlCorridorError(null);
     setControlCorridorGraph(null);
     setControlCorridorSeedId('');
+    setGraphIntentPlan(null);
+    setGraphIntentError(null);
   }, [lensId]);
 
   type DomainContractTone = 'info' | 'success' | 'warning' | 'error';
@@ -3720,7 +3744,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
 
     // 🟦 Market hierarchy (skeleton) — Teal dashed
-    if (type === 'HAS_SUBMARKET') {
+    if (type === 'HAS_MARKET_SEGMENT' || type === 'HAS_SUBMARKET') {
       return {
         stroke: '#14B8A6', // teal-500
         strokeWidth: Math.max(1.2, baseWidth * 0.95),
@@ -3879,7 +3903,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
       const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM'];
       const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
-      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'HAS_SUBMARKET', 'HAS_SUBGROUP'];
+      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP'];
       const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
       const out = new Set<string>();
       if (draft.scopes.ownership) for (const t of OWNERSHIP) out.add(t);
@@ -4421,7 +4445,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     'PARENT_OF': 3,
     'SUBSIDIARY_OF': 3,
     // 3.5. Hierarchies / skeleton links (market + gov + community)
-    'HAS_SUBMARKET': 3,
+    'HAS_MARKET_SEGMENT': 3,
     'HAS_SUBGROUP': 3,
     'ADMINISTERS': 3,
     // 4. Партнёрство/Поставки — средний приоритет
@@ -11963,6 +11987,137 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }, []);
 
+  // --- Graph Intent ---
+  const executeGraphIntentForQuery = React.useCallback(
+    async (query: string) => {
+      const q = String(query || '').trim();
+      if (!lensId || !q || graphIntentLoading) return;
+
+      const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
+      const currentEdges: Edge[] = edgesStateRef.current || [];
+
+      const nodesSnap = currentNodes
+        .filter((n) => !((n.data as any)?.isGroup))
+        .map((n: any) => ({
+          nodeId: String(n.id || '').trim(),
+          fragmentId: String((n.data as any)?.fragmentId || '').trim() || undefined,
+          canonicalPath: String((n.data as any)?.canonicalPath || '').trim() || undefined,
+          label: String((n.data as any)?.label || '').trim() || undefined,
+          type: String((n.data as any)?.type || '').trim() || undefined,
+          position: n.position ? { x: Number(n.position.x) || 0, y: Number(n.position.y) || 0 } : undefined,
+        }))
+        .filter((n) => n.nodeId);
+
+      const nodeIdSet = new Set(nodesSnap.map((n) => n.nodeId));
+      const edgesSnap = currentEdges
+        .filter((e: any) => nodeIdSet.has(String(e.source || '').trim()) && nodeIdSet.has(String(e.target || '').trim()))
+        .map((e: any) => ({
+          edgeId: String(e.id || '').trim() || undefined,
+          sourceNodeId: String(e.source || '').trim(),
+          targetNodeId: String(e.target || '').trim(),
+          sourceFragmentId: String((e.data as any)?.sourceFragmentId || (e.data as any)?.source || '').trim() || undefined,
+          targetFragmentId: String((e.data as any)?.targetFragmentId || (e.data as any)?.target || '').trim() || undefined,
+          relationType: String((e.data as any)?.edgeType || e.type || '').trim() || undefined,
+          direction: 'forward' as const,
+        }));
+
+      const planReq: GraphIntentPlanRequest = {
+        version: GRAPH_INTENT_VERSION_V1,
+        rawQuery: q,
+        queryLanguage: 'auto',
+        executionLanguage: 'en',
+        snapshot: {
+          nodes: nodesSnap,
+          edges: edgesSnap,
+          visibleNodeIds: nodesSnap.map((n) => n.nodeId),
+          viewState: { zoom: 1, filters: {} },
+        },
+        options: {
+          allowSearchGrounding: true,
+          allowInternalGrounding: true,
+          maxNewNodes: 60,
+          maxNewEdges: 120,
+        },
+      };
+
+      if (import.meta.env.DEV) {
+        console.log('[GraphIntent] plan request:', {
+          rawQuery: planReq.rawQuery,
+          snapshotNodesN: planReq.snapshot.nodes?.length ?? 0,
+          snapshotEdgesN: planReq.snapshot.edges?.length ?? 0,
+          snapshot: planReq.snapshot,
+        });
+      }
+
+      setGraphIntentLoading(true);
+      setGraphIntentError(null);
+      setGraphIntentPlan(null);
+
+      try {
+        const plan = await api.planHorizonGraphIntent(lensId, planReq);
+        if (import.meta.env.DEV) {
+          console.log('[GraphIntent] plan response:', JSON.stringify(plan, null, 2));
+        }
+        setGraphIntentPlan(plan);
+      } catch (e: any) {
+        const d = e?.response?.data;
+        const msg = (typeof d === 'object' && d?.detail)
+          ? String(d.detail).trim()
+          : (typeof d === 'object' && d?.error)
+            ? String(d.error).trim()
+            : (typeof d === 'string' ? d : e?.message || 'Failed to plan').trim();
+        if (import.meta.env.DEV) {
+          console.warn('[GraphIntent] plan error:', e);
+        }
+        setGraphIntentError(msg || 'Failed to generate graph intent plan');
+        setGraphIntentPlan(null);
+      } finally {
+        setGraphIntentLoading(false);
+      }
+    },
+    [lensId, graphIntentLoading],
+  );
+
+  const applyGraphIntentPlan = React.useCallback(async () => {
+    const plan = graphIntentPlan;
+    if (!lensId || !plan || graphIntentApplyLoading) return;
+
+    const applyReq: GraphIntentApplyRequest = {
+      version: GRAPH_INTENT_VERSION_V1,
+      plan,
+      applyMode: 'patch',
+      idempotencyKey: genCorrelationId(),
+    };
+
+    if (import.meta.env.DEV) {
+      console.log('[GraphIntent] apply request:', JSON.stringify({ applyReq: { ...applyReq, plan: { intentClass: plan.intentClass, create: { groupingsN: plan.create?.groupings?.length, nodesN: plan.create?.nodes?.length, edgesN: plan.create?.edges?.length } } } }, null, 2));
+    }
+
+    setGraphIntentApplyLoading(true);
+    try {
+      const res = await api.applyHorizonGraphIntent(lensId, applyReq, { confirm: plan.requiresConfirmation });
+      if (import.meta.env.DEV) {
+        console.log('[GraphIntent] apply response:', JSON.stringify(res, null, 2));
+      }
+      setGraphIntentPlan(null);
+      setGraphIntentError(null);
+      await handleLoadGraph();
+    } catch (e: any) {
+      const msg = String(e?.response?.data || e?.message || 'Failed to apply').trim();
+      if (import.meta.env.DEV) {
+        console.warn('[GraphIntent] apply error:', e);
+      }
+      setGraphIntentError(msg);
+    } finally {
+      setGraphIntentApplyLoading(false);
+    }
+  }, [lensId, graphIntentPlan, graphIntentApplyLoading, genCorrelationId, handleLoadGraph]);
+
+  const dismissGraphIntentPlan = React.useCallback(() => {
+    setGraphIntentPlan(null);
+    setGraphIntentError(null);
+  }, []);
+
   const findFragmentIdByCanonicalPath = React.useCallback(
     (canonicalPath: string): string => {
       const cp = String(canonicalPath || '').trim();
@@ -15376,6 +15531,35 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             </div>
           )}
 
+          {/* Graph Intent error toast (only when palette closed) */}
+          {graphIntentError && !graphIntentPlan && !addNodeOpen && (
+            <div
+              style={{
+                position: 'absolute',
+                left: '50%',
+                bottom: 72,
+                transform: 'translateX(-50%)',
+                zIndex: 210,
+                padding: '10px 20px',
+                borderRadius: 12,
+                border: '1px solid rgba(239,68,68,0.5)',
+                background: theme === 'dark' ? 'rgba(239,68,68,0.15)' : 'rgba(239,68,68,0.08)',
+                color: 'var(--text-heading)',
+                fontSize: 13,
+                maxWidth: 400,
+              }}
+            >
+              {graphIntentError}
+              <button
+                type="button"
+                onClick={() => setGraphIntentError(null)}
+                style={{ marginLeft: 12, textDecoration: 'underline', cursor: 'pointer', background: 'none', border: 'none', color: 'inherit' }}
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
           {/* Domain Overlay Panel (replaces old S-button) */}
           <DomainOverlayPanel
             theme={theme as 'light' | 'dark'}
@@ -15899,8 +16083,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             inset: 0,
             zIndex: 260,
             display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'center',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
             paddingBottom: 72,
             background: theme === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)',
             backdropFilter: 'blur(4px)',
@@ -15908,6 +16093,61 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           }}
           onClick={() => closeAddNode()}
         >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 8,
+            }}
+          >
+            {graphIntentPlan && (
+              <GraphIntentResultCard
+                plan={graphIntentPlan}
+                applyLoading={graphIntentApplyLoading}
+                onApply={() => void applyGraphIntentPlan()}
+                onDismiss={dismissGraphIntentPlan}
+                theme={theme as 'light' | 'dark'}
+              />
+            )}
+            {graphIntentError && !graphIntentPlan && (
+              <div
+                style={{
+                  width: 520,
+                  maxWidth: '90vw',
+                  borderRadius: 16,
+                  border: '1px solid rgba(239,68,68,0.5)',
+                  background: theme === 'dark' ? 'rgba(239,68,68,0.15)' : 'rgba(239,68,68,0.08)',
+                  color: 'var(--text-heading)',
+                  padding: '16px 20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                }}
+              >
+                <span style={{ fontSize: 13, flex: 1 }}>{graphIntentError}</span>
+                <button
+                  type="button"
+                  onClick={() => setGraphIntentError(null)}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 8,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'transparent',
+                    color: 'var(--text-secondary)',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </div>
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
@@ -15966,6 +16206,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                     e.preventDefault();
                     const picked = paletteSelectableItems[addNodeActiveIndex];
                     if (!picked) return;
+                    if (picked.kind === 'intent') {
+                      void executeGraphIntentForQuery(picked.query);
+                      return;
+                    }
                     if (picked.kind === 'scout') {
                       void scoutForQuery(picked.query);
                       return;
@@ -16006,14 +16250,63 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 </div>
               )}
 
-              {/* Scout from query */}
-              {addNodeQueryTrim.length >= 2 && (
+              {/* Execute intent (Graph Intent) */}
+              {addNodeQueryTrim.length >= 3 && (
+                <div>
+                  <div style={{ padding: '10px 16px 6px', fontSize: 11, fontWeight: 800, color: 'var(--text-secondary-strong)', letterSpacing: 0.4, textTransform: 'uppercase' }}>
+                    Graph Intent
+                  </div>
+                  {(() => {
+                    const absIdx = 0;
+                    const isActive = absIdx === addNodeActiveIndex;
+                    return (
+                      <button
+                        key={`intent-${addNodeQueryTrim}`}
+                        type="button"
+                        onClick={() => void executeGraphIntentForQuery(addNodeQueryTrim)}
+                        onMouseEnter={() => setAddNodeActiveIndex(absIdx)}
+                        disabled={graphIntentLoading}
+                        style={{
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '10px 16px',
+                          border: 'none',
+                          borderLeft: `3px solid ${isActive ? 'var(--accent-primary, #3B82F6)' : 'transparent'}`,
+                          background: isActive ? (theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)') : 'transparent',
+                          cursor: graphIntentLoading ? 'not-allowed' : 'pointer',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 2,
+                          transition: 'background 0.1s',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+                          <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            Execute intent: &quot;{addNodeQueryTrim}&quot;
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary-strong)', border: '1px solid var(--border-subtle)', borderRadius: 999, padding: '2px 8px', background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}>
+                              {graphIntentLoading ? '…' : 'Plan'}
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', opacity: 0.9 }}>
+                          {graphIntentLoading ? 'Request is being processed...' : 'Build structure from NL query; preview then apply to graph.'}
+                        </div>
+                      </button>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* Scout from query - hidden when loading */}
+              {addNodeQueryTrim.length >= 2 && !graphIntentLoading && (
                 <div>
                   <div style={{ padding: '10px 16px 6px', fontSize: 11, fontWeight: 800, color: 'var(--text-secondary-strong)', letterSpacing: 0.4, textTransform: 'uppercase' }}>
                     Scout
                   </div>
                   {(() => {
-                    const absIdx = 0;
+                    const absIdx = addNodeQueryTrim.length >= 3 ? 1 : 0;
                     const isActive = absIdx === addNodeActiveIndex;
                     return (
                       <button
@@ -16060,14 +16353,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 </div>
               )}
 
-              {/* On-graph matches */}
-              {graphSearchResults.length > 0 && (
+              {/* On-graph matches - hidden when loading */}
+              {graphSearchResults.length > 0 && !graphIntentLoading && (
                 <div style={{ padding: '10px 16px 6px', fontSize: 11, fontWeight: 800, color: 'var(--text-secondary-strong)', letterSpacing: 0.4, textTransform: 'uppercase' }}>
                   On graph
                 </div>
               )}
               {graphSearchResults.map((m, idx) => {
-                const absIdx = (addNodeQueryTrim.length >= 2 ? 1 : 0) + idx;
+                const intentOffset = addNodeQueryTrim.length >= 3 ? 1 : 0;
+                const scoutOffset = addNodeQueryTrim.length >= 2 ? 1 : 0;
+                const absIdx = intentOffset + scoutOffset + idx;
                 const isActive = absIdx === addNodeActiveIndex;
                 return (
                   <button
@@ -16113,21 +16408,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 );
               })}
 
-              {/* Index matches (global) */}
-              {addNodeQueryTrim.length >= 2 && (
+              {/* Index matches (global) - hidden when loading */}
+              {addNodeQueryTrim.length >= 2 && !graphIntentLoading && (
                 <div style={{ padding: `${graphSearchResults.length > 0 ? '12px' : '10px'} 16px 6px`, fontSize: 11, fontWeight: 800, color: 'var(--text-secondary-strong)', letterSpacing: 0.4, textTransform: 'uppercase' }}>
                   Add to graph
                 </div>
               )}
 
-              {addNodeQueryTrim.length >= 2 && !addNodeLoading && !addNodeError && filteredAddNodeResults.length === 0 && (
+              {addNodeQueryTrim.length >= 2 && !graphIntentLoading && !addNodeLoading && !addNodeError && filteredAddNodeResults.length === 0 && (
                 <div style={{ padding: '16px 24px', textAlign: 'center', color: 'var(--text-secondary-strong)', fontSize: 13 }}>
                   No results for "{addNodeQueryTrim}"
                 </div>
               )}
 
-              {filteredAddNodeResults.map((r, idx) => {
-                const absIdx = (addNodeQueryTrim.length >= 2 ? 1 : 0) + graphSearchResults.length + idx;
+              {!graphIntentLoading && filteredAddNodeResults.map((r, idx) => {
+                const intentOffset = addNodeQueryTrim.length >= 3 ? 1 : 0;
+                const scoutOffset = addNodeQueryTrim.length >= 2 ? 1 : 0;
+                const absIdx = intentOffset + scoutOffset + graphSearchResults.length + idx;
                 const isActive = absIdx === addNodeActiveIndex;
                 return (
                   <button

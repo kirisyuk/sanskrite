@@ -410,18 +410,30 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		"prefetchScopeN":    len(req.PrefetchScope),
 	})
 
-	// 1) Resolve intent (precheck).
+	// 1) Resolve intent (precheck). Pass existing domains so LLM can avoid duplicates.
 	intent := (*agents.IntentResolution)(nil)
 	var err error
 	if req.IntentOverride != nil {
 		intent = sanitizeIntentForLensCreation(req.IntentOverride)
 	} else {
+		existingDomains := h.collectExistingDomainPathsForProject(ctx, authInfo.TenantID, req.ProjectID)
+		for _, p := range req.PrefetchScope {
+			p = strings.TrimSpace(p)
+			if p != "" && strings.HasPrefix(p, "/domain/") {
+				existingDomains = append(existingDomains, p)
+			}
+		}
+		existingDomains = dedupStrings(existingDomains)
+		if len(existingDomains) > 20 {
+			existingDomains = existingDomains[:20]
+		}
 		intentAgent := agents.NewIntentResolverAgent(h.service.AIExecutor())
 		trace.Log(ctx, "intent", "intent.resolve.start", map[string]any{
-			"projectId": req.ProjectID,
-			"queryLen":  len(req.Query),
+			"projectId":       req.ProjectID,
+			"queryLen":        len(req.Query),
+			"existingDomains": len(existingDomains),
 		})
-		intent, err = intentAgent.Resolve(ctx, req.Query)
+		intent, err = intentAgent.ResolveWithContext(ctx, req.Query, existingDomains)
 	}
 	if err != nil {
 		trace.Log(ctx, "intent", "intent.resolve.error", map[string]any{

@@ -512,12 +512,12 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - If GRAPH SKELETON CONTEXT.kind == "market_skeleton":
 	    - Your goal is to ensure the market is CONNECTED into a regional/global hierarchy (skeleton), not just populated with players.
 	    - If parentEdges is empty AND expectedParentPath is present:
-	      - Add a missingInfo item to find/confirm the correct parent market and create HAS_SUBMARKET edge parent -> this.
+	      - Add a missingInfo item to find/confirm the correct parent market and create HAS_MARKET_SEGMENT edge parent -> this.
 	      - Always use segment-first paths: /market/{geo}/{domain}/{vertical}. Do NOT emit legacy for NEW markets.
 	    - If childEdges is empty:
-	      - Add a missingInfo item: "What are the key immediate sub-markets of <market> in this geography? Return 5-10 /market/... canonical paths and HAS_SUBMARKET edges (broader -> narrower)."
+	      - Add a missingInfo item: "What are the key immediate sub-markets of <market> in this geography? Return 5-10 /market/... canonical paths and HAS_MARKET_SEGMENT edges (broader -> narrower; child path = parent path + one segment)."
 	    - If nearbyPaths suggests many related markets exist but this node has no parent/children, add a missingInfo item:
-	      - "How should <market> be placed within the existing market skeleton for <geo>? Use nearbyPaths as candidates; add HAS_SUBMARKET edges."
+	      - "How should <market> be placed within the existing market skeleton for <geo>? Use nearbyPaths as candidates; add HAS_MARKET_SEGMENT edges."
 	    - If the market path appears legacy (/market/{geo}/{slug}), add a missingInfo item:
 	      - "Map legacy market <market> to segment-first /market/{geo}/{domain}/{vertical} (or propose segment dictionary synonyms/parents) and create bridging edges."
 	  - If GRAPH SKELETON CONTEXT.kind == "gov_skeleton":

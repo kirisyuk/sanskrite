@@ -64,9 +64,11 @@ const (
 	DependencyTypeParticipatesIn DependencyType = "PARTICIPATES_IN"
 	// DOMINATES: org/facility dominates a market (leader relationship).
 	DependencyTypeDominates DependencyType = "DOMINATES"
-	// HAS_SUBMARKET: market hierarchy (parent market → child/narrower market).
-	// Example: /market/sa/marketing HAS_SUBMARKET /market/sa/event-marketing
-	// Direction: broader market → narrower market.
+	// HAS_MARKET_SEGMENT: market hierarchy (parent market has segment = child/narrower market).
+	// Child path = parent path + exactly one segment. Direction: broader → narrower.
+	// Example: /market/sa/marketing HAS_MARKET_SEGMENT /market/sa/marketing/event-marketing
+	DependencyTypeHasMarketSegment DependencyType = "HAS_MARKET_SEGMENT"
+	// DependencyTypeHasSubmarket is deprecated. Use HAS_MARKET_SEGMENT. Kept in enum for backward compatibility.
 	DependencyTypeHasSubmarket DependencyType = "HAS_SUBMARKET"
 
 	// --- Government hierarchy ---

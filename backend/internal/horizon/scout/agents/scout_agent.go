@@ -452,7 +452,7 @@ func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string 
 		case taxonomy.DomainModeMarket:
 			for _, t := range []string{
 				string(models.DependencyTypeParticipatesIn),
-				string(models.DependencyTypeHasSubmarket),
+				string(models.DependencyTypeHasMarketSegment),
 			} {
 				if _, ok := seen[t]; ok {
 					continue
@@ -553,7 +553,7 @@ const extractionGeneralRelationRulesBlock = `   - DEPENDS_ON: source depends on 
    - INFLUENCES: source influences target (soft power; avoid for formal authority/ownership).
    - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
    - DOMINATES: entity dominates a market (canonical direction: ORG/FACILITY -> MARKET).
-   - HAS_SUBMARKET: parent market -> submarket.
+   - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
    - ADMINISTERS: government/body administers subordinate GOV or PROGRAM.
    - OPERATES_VIA: COMMUNITY/ORGANIZATION -> MEDIA_CHANNEL.
    - MEMBER_OF: PERSON -> COMMUNITY.
@@ -568,7 +568,7 @@ const extractionGeneralRelationRulesBlock = `   - DEPENDS_ON: source depends on 
    - EMPLOYED_BY and BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION.
    - PRODUCES/CONSUMES: source MUST be ORGANIZATION/FACILITY/PROGRAM (or DEPOSIT for PRODUCES), target MUST be PRODUCT.
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
-   - PARTICIPATES_IN/HAS_SUBMARKET/DOMINATES: target MUST be MARKET.
+   - PARTICIPATES_IN/HAS_MARKET_SEGMENT/DOMINATES: target MUST be MARKET.
    - LOCATED_IN target MUST be GEO_REGION.
    - SUPPLIES_TO source/target SHOULD be ORGANIZATION or FACILITY.
    - Strategic edges MUST use DECISION_POINT/MECHANISM compatible source/target types.
@@ -625,7 +625,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeMarket) {
 		b.WriteString(`   MARKET MODE:
    - PARTICIPATES_IN: entity -> market.
-   - HAS_SUBMARKET: parent market -> child market.
+   - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
    - Keep focus on market structure and placement, not supply/governance edges.
 `)
 	}
@@ -978,7 +978,7 @@ CANONICAL PATH RULES:
     - COMMUNITY HIERARCHY: Use HAS_SUBGROUP to link parent community → narrower sub-community
       - dynasties: broader family → branch (house-of-saud → sudairi-seven)
       - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
-      - Direction: broader → narrower (like HAS_SUBMARKET for markets)
+      - Direction: broader → narrower (like HAS_MARKET_SEGMENT for markets)
   - People: /person/{lowercase-slug}
   - Products (Goods): MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}[/{model-slug}]
     - category: "raw" | "component" | "finished"

@@ -654,6 +654,7 @@ const HorizonPage: React.FC = () => {
         {/* Content area - flexible width */}
         <div
           className="flex-1 min-h-0"
+          data-horizon-graph-area="true"
           style={{
             display: 'flex',
             flexDirection: 'column',

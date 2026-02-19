@@ -1,6 +1,6 @@
 // check_market_submarket_bidirectional finds MARKET↔MARKET pairs where both A→B and B→A
-// have HAS_SUBMARKET edges (bidirectional submarket links). Reports path segment counts
-// to validate hypothesis: path with more segments = submarket (child), fewer = parent.
+// have HAS_MARKET_SEGMENT edges (bidirectional market segment links). Reports path segment counts
+// to validate hypothesis: path with more segments = segment (child), fewer = parent.
 // With --apply, deletes the incorrect child→parent edge(s).
 package main
 
@@ -43,7 +43,7 @@ func main() {
 	edges := make(map[edgeKey]string) // edgeKey -> docID
 	iter := db.Collection("horizon_dependency_edges").
 		Where("tenantId", "==", *tenantID).
-		Where("type", "==", string(models.DependencyTypeHasSubmarket)).
+		Where("type", "==", string(models.DependencyTypeHasMarketSegment)).
 		Documents(ctx)
 	count := 0
 	for {
@@ -63,7 +63,7 @@ func main() {
 		edges[edgeKey{src, tgt}] = doc.Ref.ID
 		count++
 	}
-	log.Printf("Loaded %d HAS_SUBMARKET edges", count)
+	log.Printf("Loaded %d HAS_MARKET_SEGMENT edges", count)
 
 	// Find bidirectional pairs: both A→B and B→A exist
 	bidir := make(map[edgeKey]struct{})
@@ -76,7 +76,7 @@ func main() {
 			}
 		}
 	}
-	log.Printf("Found %d bidirectional HAS_SUBMARKET pairs", len(bidir))
+	log.Printf("Found %d bidirectional HAS_MARKET_SEGMENT pairs", len(bidir))
 	if len(bidir) == 0 {
 		return
 	}
@@ -124,14 +124,14 @@ func main() {
 	}
 
 	// Report each pair with segment analysis; optionally fix
-	fmt.Println("\n=== Bidirectional HAS_SUBMARKET pairs ===")
-	fmt.Println("Hypothesis: path with MORE segments = submarket (child); FEWER = parent market")
+	fmt.Println("\n=== Bidirectional HAS_MARKET_SEGMENT pairs ===")
+	fmt.Println("Hypothesis: path with MORE segments = segment (child); FEWER = parent market")
 	fmt.Printf("Total: %d pairs\n", len(bidir))
 	if *limit > 0 {
 		fmt.Printf("Showing first %d\n", *limit)
 	}
 	if *apply {
-		fmt.Println("APPLY MODE: will delete incorrect child→parent edge(s)")
+		fmt.Println("APPLY MODE: will delete incorrect child→parent HAS_MARKET_SEGMENT edge(s)")
 	}
 	fmt.Println()
 
@@ -143,21 +143,21 @@ func main() {
 		segA := segmentCount(pathA)
 		segB := segmentCount(pathB)
 
-		// Determine parent and child (who should be source of correct HAS_SUBMARKET: parent→child)
+		// Determine parent and child (who should be source of correct HAS_MARKET_SEGMENT: parent→child)
 		var parentID, childID string
 		var verdict string
 		if strings.HasPrefix(pathB+"/", pathA+"/") || pathB == pathA {
 			parentID, childID = k.src, k.tgt
-			verdict = fmt.Sprintf("→ %s is PARENT (prefix), %s is SUBMARKET", pathA, pathB)
+			verdict = fmt.Sprintf("→ %s is PARENT (prefix), %s is SEGMENT", pathA, pathB)
 		} else if strings.HasPrefix(pathA+"/", pathB+"/") {
 			parentID, childID = k.tgt, k.src
-			verdict = fmt.Sprintf("→ %s is PARENT (prefix), %s is SUBMARKET", pathB, pathA)
+			verdict = fmt.Sprintf("→ %s is PARENT (prefix), %s is SEGMENT", pathB, pathA)
 		} else if segA < segB {
 			parentID, childID = k.src, k.tgt
-			verdict = fmt.Sprintf("→ %s is PARENT (%d seg), %s is SUBMARKET (%d seg)", pathA, segA, pathB, segB)
+			verdict = fmt.Sprintf("→ %s is PARENT (%d seg), %s is SEGMENT (%d seg)", pathA, segA, pathB, segB)
 		} else if segB < segA {
 			parentID, childID = k.tgt, k.src
-			verdict = fmt.Sprintf("→ %s is PARENT (%d seg), %s is SUBMARKET (%d seg)", pathB, segB, pathA, segA)
+			verdict = fmt.Sprintf("→ %s is PARENT (%d seg), %s is SEGMENT (%d seg)", pathB, segB, pathA, segA)
 		} else {
 			verdict = fmt.Sprintf("→ EQUAL segments (%d each); SIBLINGS? removing both edges", segA)
 		}
@@ -215,7 +215,7 @@ func main() {
 	}
 
 	if *apply && deleted > 0 {
-		log.Printf("\n✓ Deleted %d incorrect HAS_SUBMARKET edge(s)", deleted)
+		log.Printf("\n✓ Deleted %d incorrect HAS_MARKET_SEGMENT edge(s)", deleted)
 	}
 }
 

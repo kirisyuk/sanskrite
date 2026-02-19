@@ -84,34 +84,15 @@ func main() {
 		hub.ServeWS(w, r, tenant)
 	})
 
-	// Pub/Sub subscriber: subscribe to realtime topics and route to hub
+	// Pub/Sub subscriber: subscribe to same aggregated topics the API publishes to
+	// (hatlone.discovery.events, hatlone.horizon.events, etc.). Base topic names
+	// (discovery.status, discovery.profile) are not used by the Publisher.
 	psClient, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
 		log.Fatalf("pubsub init: %v", err)
 	}
 	sub := realtime.NewSubscriber(psClient, hub, logger)
-	_ = sub.Start(ctx,
-		string(realtime.EventDiscoveryStatus),
-		string(realtime.EventDiscoveryProfile),
-		string(realtime.EventDiscoveryAnswer),
-		string(realtime.EventDiscoveryProject),
-		string(realtime.EventDocProcess),
-		string(realtime.EventAnalysisStatus),
-		string(realtime.EventArtifactGenerationStarted),
-		string(realtime.EventArtifactSectionGenerating),
-		string(realtime.EventArtifactSectionChunk),
-		string(realtime.EventArtifactSectionCompleted),
-		string(realtime.EventArtifactAssemblyStarted),
-		string(realtime.EventArtifactAssemblyChunk),
-		string(realtime.EventArtifactAssemblyCompleted),
-		string(realtime.EventArtifactGenerationCompleted),
-		string(realtime.EventArtifactGenerationError),
-		string(realtime.EventAgentUpdate),
-		string(realtime.EventVerifiedStream),
-		// Interaction events (e.g., when LLM creates/updates graphs via tools)
-		string(realtime.EventInteractionCreated),
-		string(realtime.EventInteractionUpdated),
-	)
+	_ = sub.Start(ctx, realtime.AggregatedTopics...)
 
 	srv := &http.Server{Addr: ":" + addr, Handler: http.DefaultServeMux, ReadHeaderTimeout: 5 * time.Second}
 	log.Printf("ws-broker listening on :%s", addr)

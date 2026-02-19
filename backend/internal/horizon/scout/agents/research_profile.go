@@ -95,12 +95,12 @@ func BuildResearchProfilePromptBlock(profile ResearchProfile) string {
 	case ResearchProfileMarket:
 		return `SPECIALIZED RESEARCH PROFILE: MARKET
 - Required execution order:
-  1) Place this market in hierarchy (parent/children) via HAS_SUBMARKET.
+  1) Place this market in hierarchy (parent/children) via HAS_MARKET_SEGMENT.
   2) Resolve market structure: marketDomain, marketVertical, marketChannels, tags.
   3) Resolve players and leaders via PARTICIPATES_IN / DOMINATES.
   4) Resolve market metrics (TAM/CAGR/CR4/HHI) and concentration evidence.
 - Taxonomically correct edge types:
-  - Required/primary: HAS_SUBMARKET, PARTICIPATES_IN, DOMINATES
+  - Required/primary: HAS_MARKET_SEGMENT, PARTICIPATES_IN, DOMINATES
   - Allowed when evidence exists: REGULATES, DEPENDS_ON, INFLUENCES
   - Avoid for market decomposition: generic RELATED_TO without concrete semantics.
 - Missing info priorities:

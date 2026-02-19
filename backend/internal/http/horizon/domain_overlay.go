@@ -320,6 +320,44 @@ func (h *HorizonHandlers) ExecuteDomainOverlay(w http.ResponseWriter, r *http.Re
 	}
 }
 
+// collectExistingDomainPathsForProject returns /domain/ paths from all lenses in the project.
+// Used by intent resolve (lens creation, preflight) to avoid duplicate domains.
+func (h *HorizonHandlers) collectExistingDomainPathsForProject(ctx context.Context, tenantID, projectID string) []string {
+	if tenantID == "" || projectID == "" || h.service == nil {
+		return nil
+	}
+	ls := h.service.Lens()
+	if ls == nil {
+		return nil
+	}
+	lenses, err := ls.ListLensesByProject(ctx, tenantID, projectID, nil, 50)
+	if err != nil || len(lenses) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 20)
+	for _, lens := range lenses {
+		if lens == nil {
+			continue
+		}
+		for _, p := range lens.Scope {
+			p = strings.TrimSpace(p)
+			if p == "" || !strings.HasPrefix(p, "/domain/") {
+				continue
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			out = append(out, p)
+			if len(out) >= 20 {
+				return out
+			}
+		}
+	}
+	return out
+}
+
 func (h *HorizonHandlers) collectNearbyDomainPaths(ctx context.Context, lens *models.Lens) []string {
 	if lens == nil {
 		return nil

@@ -26,6 +26,6 @@
   },
   "firestore": {
     "indexes": "firestore.indexes.json",
-    "rules": "../backend/firestore.rules"
+    "rules": "firestore.rules"
   }
 }

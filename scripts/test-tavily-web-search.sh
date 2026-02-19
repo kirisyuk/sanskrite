@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Configuration
-API_URL="${API_URL:-https://sanskrite-api-sqt63d2k2q-uc.a.run.app}"
+API_URL="${API_URL:-https://h1horizon-api-sqt63d2k2q-uc.a.run.app}"
 TEST_QUERY="${TEST_QUERY:-latest news about AI}"
 
 # Get Tavily API key
@@ -194,7 +194,7 @@ echo ""
 # Test 4: Verify Tavily key is accessible in Cloud Run
 echo -e "${BLUE}[Test 4] Verifying Tavily secret in Cloud Run...${NC}"
 if command -v gcloud >/dev/null 2>&1; then
-    SECRET_CHECK=$(gcloud run services describe sanskrite-api --region=us-central1 \
+    SECRET_CHECK=$(gcloud run services describe h1horizon-api --region=us-central1 \
         --format="value(spec.template.spec.containers[0].env)" 2>/dev/null | grep -o "TAVILY_API_KEY" || echo "")
     
     if [[ -n "$SECRET_CHECK" ]]; then

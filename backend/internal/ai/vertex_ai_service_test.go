@@ -21,7 +21,7 @@ func TestVertexAIServiceLiveSmoke(t *testing.T) {
 		projectID = strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT"))
 	}
 	if projectID == "" {
-		projectID = "hatlone-test"
+		projectID = "h1horizon"
 	}
 	location := "us-central1"
 	dataStoreID := "horizon-fragments-store"

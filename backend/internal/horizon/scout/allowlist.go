@@ -38,7 +38,7 @@ func EdgeAllowlistByDomainMode(mode string) []models.DependencyType {
 	case taxonomy.DomainModeMarket:
 		return []models.DependencyType{
 			models.DependencyTypeParticipatesIn,
-			models.DependencyTypeHasSubmarket,
+			models.DependencyTypeHasMarketSegment,
 		}
 	case taxonomy.DomainModeStrategic:
 		return []models.DependencyType{

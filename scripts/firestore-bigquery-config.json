@@ -1,6 +1,6 @@
 {
   "collectionGroupId": "rag_documents",
-  "datasetId": "sanskrite_documents",
+  "datasetId": "h1horizon_documents",
   "tableId": "documents_metadata",
   "location": "US",
   "useNewSchema": true,

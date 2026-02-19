@@ -47,7 +47,7 @@
 SELECT 
   id,
   ML.GENERATE_TEXT(
-    MODEL `sanskrite.sanskrite_documents.gemini_model`,
+    MODEL `h1horizon.h1horizon_documents.gemini_model`,
     extractedText,
     STRUCT('Summarize this document' AS prompt)
   ) AS summary

@@ -8,9 +8,9 @@ set -euo pipefail
 #   export GROK_API_KEY_TEST=...
 #   export GEMINI_API_KEY_TEST=...
 #   export TAVILY_API_KEY_TEST=...
-#   ./scripts/setup-test-secrets.sh [-p|--project sanskrite]
+#   ./scripts/setup-test-secrets.sh [-p|--project h1horizon]
 
-PROJECT="sanskrite"
+PROJECT="h1horizon"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -p|--project)

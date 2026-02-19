@@ -14,6 +14,7 @@ let listenersAttached = false; // Track if event listeners are already attached
 let projectsStoreUnsubscribe: (() => void) | null = null; // Store unsubscribe function to prevent memory leaks
 let windowEventListeners: { visibilitychange: () => void; online: () => void } | null = null; // Store listeners for cleanup
 let lastSubscribedProjectId: string | undefined = undefined; // Track last subscribed projectId to restore on reconnect
+const WS_BROKER_URL = 'https://h1horizon-ws-yulmgw47va-uc.a.run.app';
 
 type SubscriptionWaiter = {
   timeoutId: number;
@@ -885,7 +886,6 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
     set({ sources: [], correlationId: null, answer: null, pendingSources: [], interactions: [] });
   },
   connectWs: async (tenantId) => {
-    const url = (window as any).buildWsUrl ? (window as any).buildWsUrl(tenantId) : undefined;
     async function openSocket() {
       // Prevent multiple simultaneous connection attempts
       if (isConnecting) {
@@ -911,14 +911,8 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
         }
         const token = await user.getIdToken(true);
 
-        const base = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:8080';
-        const broker = (import.meta as any).env?.VITE_WS_BROKER_URL as string | undefined;
         const toWs = (u: string) => u.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
-        const wsUrl = (() => {
-          if (broker && broker.trim()) return `${toWs(broker.replace(/\/$/, ''))}/ws?token=${encodeURIComponent(token)}`;
-          if (url && typeof url === 'string') return url;
-          return `${toWs(base)}/ws?token=${encodeURIComponent(token)}`;
-        })();
+        const wsUrl = `${toWs(WS_BROKER_URL.replace(/\/$/, ''))}/ws?token=${encodeURIComponent(token)}`;
 
         // Close previous if any
         if (wsRef) {

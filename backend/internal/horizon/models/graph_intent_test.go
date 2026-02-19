@@ -13,9 +13,10 @@ func TestGraphIntentPlanResponseNormalizeAndValidate_NodeTypeValidation(t *testi
 		Create: GraphIntentCreateBlock{
 			Nodes: []GraphIntentNodeSpec{
 				{
-					TempID: "n1",
-					Label:  "Unknown",
-					Type:   "NOT_A_REAL_NODE_TYPE",
+					TempID:            "n1",
+					Label:             "Unknown",
+					Type:              "NOT_A_REAL_NODE_TYPE",
+					CanonicalPathHint: "/org/na/unknown-na",
 				},
 			},
 		},
@@ -43,8 +44,8 @@ func TestGraphIntentPlanResponseMapToActions(t *testing.T) {
 					GroupingKind: GraphIntentGroupingSocietalStructure,
 					Title:        "Societal map",
 					Entities: []GraphIntentNodeSpec{
-						{TempID: "n1", Label: "Group A", Type: string(FragmentTypeCommunity)},
-						{TempID: "n2", Label: "Person B", Type: string(FragmentTypePerson)},
+						{TempID: "n1", Label: "Group A", Type: string(FragmentTypeCommunity), CanonicalPathHint: "/community/global/interest/group-a"},
+						{TempID: "n2", Label: "Person B", Type: string(FragmentTypePerson), CanonicalPathHint: "/person/person-b"},
 					},
 					Relations: []GraphIntentEdgeSpec{
 						{TempID: "e1", FromTempID: "n2", ToTempID: "n1", RelationType: string(DependencyTypeMemberOf), Direction: forward},

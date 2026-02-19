@@ -8,7 +8,7 @@
    - `VERTEX_SEARCH_DATA_STORE_ID` - должен быть `rag-documents-store`
    - `VERTEX_SEARCH_LOCATION` - должен быть `global`
    - `GEMINI_API_KEY` - обязателен
-   - `RAG_DOCUMENTS_BUCKET` - должен быть `sanskrite-rag-documents`
+   - `RAG_DOCUMENTS_BUCKET` - должен быть `h1horizon-rag-documents`
    - `GCP_PROJECT_ID` - обязателен
 
 2. **Секреты в Secret Manager**:
@@ -19,7 +19,7 @@
    - Количество проиндексированных документов
 
 4. **GCS Bucket**:
-   - Существование bucket `sanskrite-rag-documents`
+   - Существование bucket `h1horizon-rag-documents`
    - Количество .txt файлов
 
 5. **API**:
@@ -33,7 +33,7 @@
    - `roles/discoveryengine.editor` для backend SA (рекомендуется)
 
 7. **Cloud Run Configuration**:
-   - Существование сервиса `sanskrite-api`
+   - Существование сервиса `h1horizon-api`
    - Наличие `VERTEX_SEARCH_DATA_STORE_ID` в env vars
    - Наличие `RAG_DOCUMENTS_BUCKET` в env vars
    - Binding секрета `GEMINI_API_KEY`
@@ -82,10 +82,10 @@ local paypal_secrets="GEMINI_API_KEY=gemini_api_key:latest,..."
 ### 1. Установить VERTEX_SEARCH_DATA_STORE_ID:
 
 ```bash
-gcloud run services update sanskrite-api \
+gcloud run services update h1horizon-api \
   --region=us-central1 \
   --update-env-vars="VERTEX_SEARCH_DATA_STORE_ID=rag-documents-store" \
-  --project=sanskrite
+  --project=h1horizon
 ```
 
 ### 2. Выдать роль discoveryengine.editor:

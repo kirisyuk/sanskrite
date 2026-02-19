@@ -1,6 +1,6 @@
 export const GRAPH_INTENT_VERSION_V1 = 'graph-intent.v1' as const;
 
-export type GraphIntentClass = 'create' | 'update' | 'transform' | 'mixed' | 'unknown';
+export type GraphIntentClass = 'create' | 'update' | 'delete' | 'merge' | 'transform' | 'mixed' | 'unknown';
 export type GraphIntentApplyMode = 'patch' | 'dry-run';
 export type GraphIntentDirection = 'forward' | 'reverse' | 'bidirectional';
 
@@ -121,6 +121,15 @@ export interface GraphIntentPlanResponse {
       };
       reason?: string;
     }>;
+  };
+  delete?: {
+    nodeIds?: string[];
+    edgeIds?: string[];
+  };
+  merge?: {
+    primaryNodeId?: string;
+    duplicateNodeIds?: string[];
+    mergeFragmentData?: boolean;
   };
   transform: {
     deriveChains?: Array<{

@@ -323,7 +323,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		string(horizonmodels.DependencyTypeExtractsFrom):   {},
 		string(horizonmodels.DependencyTypeParticipatesIn): {},
 		string(horizonmodels.DependencyTypeDominates):      {},
-		string(horizonmodels.DependencyTypeHasSubmarket):   {},
+		string(horizonmodels.DependencyTypeHasMarketSegment): {},
 		string(horizonmodels.DependencyTypeHasSubgroup):    {},
 		string(horizonmodels.DependencyTypeOperatesVia):    {},
 		string(horizonmodels.DependencyTypeAffiliatedWith): {},

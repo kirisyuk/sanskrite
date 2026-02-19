@@ -123,7 +123,7 @@ ImportDocuments("gs://bucket/tenant2@example.com/**", INCREMENTAL)
 ```bash
 gcloud discovery-engine operations list \
   --location=global \
-  --project=sanskrite \
+  --project=h1horizon \
   --filter="metadata.operationType=IMPORT"
 ```
 

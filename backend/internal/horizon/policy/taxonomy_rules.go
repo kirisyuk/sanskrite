@@ -250,7 +250,7 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				// PROGRAM can participate in markets (e.g., government programs active in a sector/segment).
 				{EdgeType: "PARTICIPATES_IN", Direction: "ORG|FACILITY|COMMUNITY|PRODUCT|PROGRAM → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PRODUCT", "PROGRAM"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "DOMINATES", Direction: "ORG|FACILITY|COMMUNITY → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY"}, ValidTarget: []string{"MARKET"}},
-				{EdgeType: "HAS_SUBMARKET", Direction: "MARKET → MARKET", ValidSource: []string{"MARKET"}, ValidTarget: []string{"MARKET"}},
+				{EdgeType: "HAS_MARKET_SEGMENT", Direction: "MARKET → MARKET", ValidSource: []string{"MARKET"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "ADMINISTERS", Direction: "ORGANIZATION|GEO_REGION → ORGANIZATION|PROGRAM|GEO_REGION", ValidSource: []string{"ORGANIZATION", "GEO_REGION"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "GEO_REGION"}, Description: "Government hierarchy"},
 				{EdgeType: "EXTRACTS_FROM", Direction: "FACILITY → DEPOSIT", ValidSource: []string{"FACILITY"}, ValidTarget: []string{"DEPOSIT"}},
 				{EdgeType: "MEMBER_OF", Direction: "PERSON → COMMUNITY", ValidSource: []string{"PERSON"}, ValidTarget: []string{"COMMUNITY"}},

@@ -65,6 +65,10 @@ func isDynastyOrTribeCommunity(canonicalPath string) bool {
 //
 // Keep this conservative and explicit. This is used at creation time and during cleanup.
 func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentType) (DependencyType, bool, bool, string) {
+	// HAS_SUBMARKET (deprecated) → HAS_MARKET_SEGMENT
+	if edgeType == DependencyTypeHasSubmarket {
+		edgeType = DependencyTypeHasMarketSegment
+	}
 	// Transition types → canonical CORPORATE_TRANSITION first (TZ §6.1).
 	if IsTransitionEdgeType(edgeType) && edgeType != DependencyTypeCorporateTransition {
 		edgeType = DependencyTypeCorporateTransition
@@ -189,12 +193,12 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 	// MARKET-related canonicalization
 	// =============================================================================
 
-	// OWNS(MARKET → MARKET) → HAS_SUBMARKET
+	// OWNS(MARKET → MARKET) → HAS_MARKET_SEGMENT
 	// LLM often says "beverages owns beer market" meaning hierarchy, not ownership.
 	if edgeType == DependencyTypeOwns &&
 		sourceType == FragmentTypeMarket &&
 		targetType == FragmentTypeMarket {
-		return DependencyTypeHasSubmarket, false, true, "canonicalize: MARKET OWNS MARKET -> MARKET HAS_SUBMARKET MARKET"
+		return DependencyTypeHasMarketSegment, false, true, "canonicalize: MARKET OWNS MARKET -> MARKET HAS_MARKET_SEGMENT MARKET"
 	}
 
 	// DEPENDS(ORG → MARKET) → PARTICIPATES_IN
@@ -447,9 +451,9 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 		return edgeType, true, true, "canonicalize: ORGANIZATION OWNS COMMUNITY(dynasty/tribe) -> COMMUNITY(dynasty/tribe) OWNS ORGANIZATION"
 	}
 
-	// HAS_SUBMARKET: parent (broader market) → child (submarket). Parent = fewer path segments or prefix of child path.
+	// HAS_MARKET_SEGMENT: parent (broader market) → child (segment). Child path = parent path + one segment.
 	// Swap when child is source so we never create bidirectional parent↔child edges.
-	if edgeType == DependencyTypeHasSubmarket &&
+	if edgeType == DependencyTypeHasMarketSegment &&
 		sourceType == FragmentTypeMarket &&
 		targetType == FragmentTypeMarket &&
 		sourcePath != "" && targetPath != "" {
@@ -457,12 +461,12 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 		segTgt := pathSegmentCount(targetPath)
 		// Source is child (more segments) and target is parent: swap to parent→child
 		if segSrc > segTgt {
-			return edgeType, true, true, "canonicalize: HAS_SUBMARKET child→parent -> parent→child (by segment count)"
+			return edgeType, true, true, "canonicalize: HAS_MARKET_SEGMENT child→parent -> parent→child (by segment count)"
 		}
 		// Target path is prefix of source: source is child, target is parent; swap
 		tgtPrefix := strings.TrimSuffix(strings.TrimSpace(targetPath), "/") + "/"
 		if tgtPrefix != "/" && strings.HasPrefix(strings.TrimSpace(sourcePath), tgtPrefix) {
-			return edgeType, true, true, "canonicalize: HAS_SUBMARKET child→parent -> parent→child (by path prefix)"
+			return edgeType, true, true, "canonicalize: HAS_MARKET_SEGMENT child→parent -> parent→child (by path prefix)"
 		}
 		// Source path is prefix of target: correct direction, no swap
 	}
@@ -476,4 +480,31 @@ func pathSegmentCount(path string) int {
 		return 0
 	}
 	return len(strings.Split(p, "/"))
+}
+
+// MarketSegmentPathsFollowRule returns true if parentPath and childPath follow the rule:
+// child path = parent path + exactly one segment. Best-effort: also accepts prefix match
+// when segment count differs by 1 (legacy paths may not be strictly +1).
+func MarketSegmentPathsFollowRule(parentPath, childPath string) bool {
+	parentPath = strings.TrimSpace(strings.Trim(parentPath, "/"))
+	childPath = strings.TrimSpace(strings.Trim(childPath, "/"))
+	if parentPath == "" || childPath == "" {
+		return true // no path info, cannot validate
+	}
+	// Child must start with parent prefix
+	prefix := parentPath + "/"
+	if !strings.HasPrefix(childPath, prefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(childPath, prefix)
+	if suffix == "" {
+		return false // child equals parent
+	}
+	// Ideal: exactly one extra segment (no nested slashes in suffix)
+	if !strings.Contains(suffix, "/") {
+		return true
+	}
+	// Best-effort: allow multiple segments (e.g. /market/sa/finance -> /market/sa/finance/banking/retail)
+	// as long as child is strictly longer
+	return pathSegmentCount(childPath) > pathSegmentCount(parentPath)
 }

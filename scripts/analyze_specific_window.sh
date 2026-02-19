@@ -2,7 +2,7 @@
 set -e
 
 SOURCE_ID="0juOUd5xxhFMZ4GydpHz"
-PROJECT_ID="sanskrite"
+PROJECT_ID="h1horizon"
 
 echo "Fetching logs for source $SOURCE_ID covering the 09:13 poll window..."
 

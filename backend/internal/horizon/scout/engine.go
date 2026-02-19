@@ -1268,7 +1268,7 @@ func (e *ScoutEngine) persistUnitGraphSnapshotFromRelations(ctx context.Context,
 	var existing *models.UnitGraphSnapshot
 	if snap, err := e.unitGraphRepo.GetByLensAndDomain(ctx, lensID, domainCanonicalPath); err == nil {
 		existing = snap
-	} else if err != nil && !errors.Is(err, repo.ErrUnitGraphSnapshotNotFound) {
+	} else if !errors.Is(err, repo.ErrUnitGraphSnapshotNotFound) {
 		e.logLine(ctx, job, "warn", fmt.Sprintf("> unit graph snapshot read failed: %v", err))
 	}
 

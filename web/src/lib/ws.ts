@@ -4,18 +4,12 @@ export function apiBaseToWs(baseUrl: string) {
   return baseUrl.replace(/^https?:/, (m) => (m === 'https:' ? 'wss:' : 'ws:'));
 }
 
-export function buildWsUrl(tenantId: string) {
-  const broker = (import.meta as any).env?.VITE_WS_BROKER_URL as string | undefined;
-  if (broker && broker.trim()) {
-    const b = broker.replace(/\/$/, '');
-    return `${b}/ws`;
-  }
-  const base = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080').replace(/\/$/, '');
-  const wsBase = apiBaseToWs(base);
+const WS_BROKER_URL = 'https://h1horizon-ws-yulmgw47va-uc.a.run.app';
+
+export function buildWsUrl(_tenantId: string) {
+  const wsBase = apiBaseToWs(WS_BROKER_URL.replace(/\/$/, ''));
   return `${wsBase}/ws`;
 }
-
-
 
 
 

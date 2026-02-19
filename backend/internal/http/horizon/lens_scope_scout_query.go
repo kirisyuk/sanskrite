@@ -96,8 +96,9 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 	})
 
 	// Resolve intent -> pick the first anchor canonical path as the target.
+	existingDomains := h.collectNearbyDomainPaths(ctx, lens)
 	intentAgent := agents.NewIntentResolverAgent(h.service.AIExecutor())
-	intent, ierr := intentAgent.Resolve(ctx, q)
+	intent, ierr := intentAgent.ResolveWithContext(ctx, q, existingDomains)
 	if ierr != nil || intent == nil || len(intent.Anchors) == 0 {
 		http.Error(w, "failed to resolve query", http.StatusBadRequest)
 		return

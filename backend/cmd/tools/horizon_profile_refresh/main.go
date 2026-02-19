@@ -204,7 +204,7 @@ func buildProfileTasksDispatcher(ctx context.Context, projectID string) *tasks.P
 	}
 	queue := strings.TrimSpace(os.Getenv("CLOUD_TASKS_PROFILE_QUEUE"))
 	if queue == "" {
-		queue = "sanskrite-profile-refresh"
+		queue = "h1horizon-profile-refresh"
 	}
 	baseURL := strings.TrimSpace(os.Getenv("CLOUD_TASKS_TARGET_BASE_URL"))
 	saEmail := strings.TrimSpace(os.Getenv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT"))

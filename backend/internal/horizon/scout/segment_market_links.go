@@ -16,7 +16,7 @@ import (
 // Segment-first principle:
 // - ORG/FAC/GOV fragments carry primary market classification as MarketSegments (/segment/...).
 // - We materialize /market/... nodes derived from segments for:
-//   - hierarchy (HAS_SUBMARKET)
+//   - hierarchy (HAS_MARKET_SEGMENT)
 //   - market-level metrics (TAM/CAGR/etc.)
 //   - stable traversal and aggregation
 //
