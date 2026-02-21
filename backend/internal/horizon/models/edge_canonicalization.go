@@ -115,6 +115,13 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		targetType == FragmentTypeCommunity {
 		return DependencyTypeMemberOf, false, true, "canonicalize: PERSON AFFILIATED_WITH COMMUNITY -> MEMBER_OF"
 	}
+	// AFFILIATED_WITH(ORGANIZATION → COMMUNITY/PERSON) → swap to COMMUNITY/PERSON AFFILIATED_WITH ORGANIZATION.
+	// Canonical: community/person is affiliated with org, not the reverse. Must run before generic AFFILIATED_WITH→ASSOCIATED_WITH.
+	if edgeType == DependencyTypeAffiliatedWith &&
+		sourceType == FragmentTypeOrganization &&
+		(targetType == FragmentTypeCommunity || targetType == FragmentTypePerson) {
+		return DependencyTypeAffiliatedWith, true, true, "canonicalize: ORGANIZATION AFFILIATED_WITH COMMUNITY/PERSON -> COMMUNITY/PERSON AFFILIATED_WITH ORGANIZATION"
+	}
 	// RELATED_TO(ENTITY ↔ MARKET) → PARTICIPATES_IN (must run before generic RELATED_TO→ASSOCIATED_WITH).
 	if edgeType == DependencyTypeRelatedTo &&
 		(sourceType == FragmentTypeOrganization || sourceType == FragmentTypeFacility || sourceType == FragmentTypeCommunity || sourceType == FragmentTypeProgram) &&
@@ -288,6 +295,15 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		sourceType == FragmentTypeOrganization &&
 		targetType == FragmentTypeFacility {
 		return DependencyTypeOperatesIn, false, true, "canonicalize: ORGANIZATION LOCATED_IN FACILITY -> ORGANIZATION OPERATES_IN FACILITY"
+	}
+
+	// LOCATED_IN(GEO_REGION → ENTITY) → swap to ENTITY LOCATED_IN GEO_REGION
+	// Common LLM error: region "located in" community/org; canonical is entity located in region.
+	if edgeType == DependencyTypeLocatedIn &&
+		sourceType == FragmentTypeGeoRegion &&
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility ||
+			targetType == FragmentTypeCommunity || targetType == FragmentTypePerson || targetType == FragmentTypeDeposit) {
+		return DependencyTypeLocatedIn, true, true, "canonicalize: GEO_REGION LOCATED_IN ENTITY -> ENTITY LOCATED_IN GEO_REGION"
 	}
 
 	// SUPPLIES_TO(PRODUCT → PRODUCT) → TRANSFORMS_INTO

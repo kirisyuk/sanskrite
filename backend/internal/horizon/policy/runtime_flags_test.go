@@ -18,3 +18,4 @@ func TestPolicyEnvEnabled(t *testing.T) {
 		t.Fatalf("expected shadow mode enabled when env=true")
 	}
 }
+

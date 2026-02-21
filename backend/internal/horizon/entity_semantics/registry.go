@@ -1,0 +1,144 @@
+package entity_semantics
+
+import (
+	"strings"
+
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+)
+
+var registry = make(map[EntityTypeKey]*EntityTypeDefinition)
+
+// ResolveByPath returns the entity type key for a canonical path.
+// Path takes precedence over fragment type (e.g. /gov/ -> GOV even with ORGANIZATION type).
+func ResolveByPath(canonicalPath string, fragmentType models.FragmentType, communityType string) EntityTypeKey {
+	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
+	ct := strings.TrimSpace(strings.ToLower(communityType))
+	ft := fragmentType
+	if ft == "" {
+		ft = inferFragmentTypeFromPath(cp)
+	}
+
+	if strings.HasPrefix(cp, "/gov/") {
+		return EntityTypeGov
+	}
+	if strings.HasPrefix(cp, "/decision/") || ft == models.FragmentTypeDecisionPoint {
+		return EntityTypeDecisionPoint
+	}
+	if strings.HasPrefix(cp, "/mechanism/") || ft == models.FragmentTypeMechanism {
+		return EntityTypeMechanism
+	}
+	if strings.HasPrefix(cp, "/domain/") || ft == models.FragmentTypeDomain {
+		return EntityTypeDomain
+	}
+
+	switch ft {
+	case models.FragmentTypeMarket:
+		return EntityTypeMarket
+	case models.FragmentTypeProduct:
+		return EntityTypeProduct
+	case models.FragmentTypeFacility:
+		return EntityTypeFacility
+	case models.FragmentTypeDeposit:
+		return EntityTypeDeposit
+	case models.FragmentTypeProgram:
+		return EntityTypeProgram
+	case models.FragmentTypeCommunity:
+		if ct == "dynasty" || strings.Contains(cp, "/dynasty/") {
+			return EntityTypeCommunityDynasty
+		}
+		if ct == "tribe" || strings.Contains(cp, "/tribe/") {
+			return EntityTypeCommunityTribe
+		}
+		return EntityTypeCommunity
+	case models.FragmentTypePerson:
+		return EntityTypePerson
+	case models.FragmentTypeGeoRegion:
+		return EntityTypeGeoRegion
+	case models.FragmentTypeOrganization:
+		return EntityTypeOrganization
+	}
+	return EntityTypeGeneral
+}
+
+func inferFragmentTypeFromPath(cp string) models.FragmentType {
+	switch {
+	case strings.HasPrefix(cp, "/market/"):
+		return models.FragmentTypeMarket
+	case strings.HasPrefix(cp, "/product/"):
+		return models.FragmentTypeProduct
+	case strings.HasPrefix(cp, "/fac/"):
+		return models.FragmentTypeFacility
+	case strings.HasPrefix(cp, "/deposit/"):
+		return models.FragmentTypeDeposit
+	case strings.HasPrefix(cp, "/gov/"), strings.HasPrefix(cp, "/org/"):
+		return models.FragmentTypeOrganization
+	case strings.HasPrefix(cp, "/community/"):
+		return models.FragmentTypeCommunity
+	case strings.HasPrefix(cp, "/program/"):
+		return models.FragmentTypeProgram
+	case strings.HasPrefix(cp, "/domain/"):
+		return models.FragmentTypeDomain
+	case strings.HasPrefix(cp, "/decision/"):
+		return models.FragmentTypeDecisionPoint
+	case strings.HasPrefix(cp, "/mechanism/"):
+		return models.FragmentTypeMechanism
+	case strings.HasPrefix(cp, "/person/"):
+		return models.FragmentTypePerson
+	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"), strings.HasPrefix(cp, "/geo/"):
+		return models.FragmentTypeGeoRegion
+	default:
+		return ""
+	}
+}
+
+// GetDefinition returns the entity type definition for the given key.
+// Returns nil for EntityTypeGeneral or unknown keys.
+func GetDefinition(key EntityTypeKey) *EntityTypeDefinition {
+	return registry[key]
+}
+
+// GetDefinitionByPath returns the definition for the entity at the given path.
+func GetDefinitionByPath(canonicalPath string, fragmentType models.FragmentType, communityType string) *EntityTypeDefinition {
+	key := ResolveByPath(canonicalPath, fragmentType, communityType)
+	return GetDefinition(key)
+}
+
+// ProfileSectionsForType returns profile section specs for a fragment type and path.
+// Uses GOV-specific sections when path starts with /gov/.
+func ProfileSectionsForType(fragmentType models.FragmentType, canonicalPath string, communityType string) []models.ProfileSectionSpec {
+	def := GetDefinitionByPath(canonicalPath, fragmentType, communityType)
+	if def == nil || len(def.ProfileSections) == 0 {
+		return defaultProfileSections()
+	}
+	return def.ProfileSections
+}
+
+func defaultProfileSections() []models.ProfileSectionSpec {
+	return []models.ProfileSectionSpec{
+		{Key: "overview", Title: "Overview", Description: "General description and purpose", Required: true, Order: 1},
+		{Key: "structure", Title: "Structure", Description: "Organizational structure, key divisions", Required: false, Order: 2},
+		{Key: "mandate", Title: "Mandate & Functions", Description: "Legal mandate, responsibilities, functions", Required: false, Order: 3},
+		{Key: "regulations", Title: "Regulations", Description: "Key regulations issued or enforced", Required: false, Order: 4},
+		{Key: "recent_actions", Title: "Recent Actions", Description: "Recent decisions, announcements, enforcement actions", Required: false, Order: 5},
+	}
+}
+
+// ExtractionBlockForPath returns the type-specific extraction block (object detail).
+// Empty string if no block for this type.
+func ExtractionBlockForPath(canonicalPath string, fragmentType models.FragmentType, communityType string) string {
+	def := GetDefinitionByPath(canonicalPath, fragmentType, communityType)
+	if def == nil {
+		return ""
+	}
+	return def.ExtractionBlock
+}
+
+// ResearchBlockForPath returns the type-specific research block (object detail).
+// Empty string if no block for this type.
+func ResearchBlockForPath(canonicalPath string, fragmentType models.FragmentType, communityType string) string {
+	def := GetDefinitionByPath(canonicalPath, fragmentType, communityType)
+	if def == nil {
+		return ""
+	}
+	return def.ResearchBlock
+}

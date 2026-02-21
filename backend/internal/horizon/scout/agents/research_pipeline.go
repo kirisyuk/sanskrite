@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -18,12 +19,12 @@ type ResearchPipelineRunner struct {
 	agent *ResearchAgent
 }
 
-// Enrich runs the appropriate strategies for the given domain modes and merges fragment updates, relations, and supply chains.
-func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrategyInput, domainModes []string) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, error) {
+// Enrich runs the appropriate strategies for the given domain modes and merges fragment updates, relations, supply chains, and grounding evidence.
+func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrategyInput, domainModes []string) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
 	strategies := p.strategiesForModes(domainModes)
 	if len(strategies) == 0 {
 		// Fallback: no strategies (e.g. general with no composable path) — caller should use EnrichFragmentWithGrounding
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	workingFragment := input.Fragment
@@ -32,11 +33,12 @@ func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrat
 	}
 	var allRelations []DiscoveredRelation
 	var allChains []SupplyChain
+	var mergedGrounding *ai.GroundingEvidence
 
 	for _, s := range strategies {
 		out, err := s.Enrich(ctx, input)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		if out == nil {
 			continue
@@ -46,9 +48,12 @@ func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrat
 		}
 		allRelations = append(allRelations, out.Relations...)
 		allChains = append(allChains, out.SupplyChains...)
+		if out.GroundingEvidence != nil {
+			mergedGrounding = ai.MergeGroundingEvidence(mergedGrounding, out.GroundingEvidence)
+		}
 	}
 
-	return workingFragment, allRelations, allChains, nil
+	return workingFragment, allRelations, allChains, mergedGrounding, nil
 }
 
 // strategiesForModes returns the list of strategies to run for the given domain modes.
@@ -78,6 +83,8 @@ func (p *ResearchPipelineRunner) strategiesForModes(modes []string) []ResearchSt
 			list = append(list, &SupplyChainResearchStrategy{agent: p.agent})
 		case taxonomy.DomainModeGovernance:
 			list = append(list, &GovernanceResearchStrategy{agent: p.agent})
+		case taxonomy.DomainModeAssurance:
+			list = append(list, &AssuranceResearchStrategy{agent: p.agent})
 		case taxonomy.DomainModeMarket:
 			list = append(list, &MarketResearchStrategy{agent: p.agent})
 		case taxonomy.DomainModeStrategic:

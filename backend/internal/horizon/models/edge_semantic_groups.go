@@ -4,6 +4,7 @@ package models
 const (
 	SemanticGroupSupplyChain = "supply_chain"
 	SemanticGroupGovernance  = "governance"
+	SemanticGroupAssurance   = "assurance"
 	SemanticGroupMarket      = "market"
 	SemanticGroupStrategic   = "strategic"
 	SemanticGroupDomain      = "domain"
@@ -39,6 +40,10 @@ var edgeTypeToSemanticGroup = map[DependencyType]string{
 	DependencyTypeEmployedBy:    SemanticGroupGovernance,
 	DependencyTypeFounded:      SemanticGroupGovernance,
 	DependencyTypeAdministers:  SemanticGroupGovernance,
+	// assurance (Third Line: audit, certification, regulatory oversight)
+	DependencyTypeAssures:   SemanticGroupAssurance,
+	DependencyTypeAuditedBy: SemanticGroupAssurance,
+	DependencyTypeRegulates: SemanticGroupAssurance,
 	// market
 	DependencyTypeParticipatesIn:  SemanticGroupMarket,
 	DependencyTypeHasMarketSegment: SemanticGroupMarket,
@@ -79,8 +84,6 @@ var edgeTypeToSemanticGroup = map[DependencyType]string{
 	DependencyTypeSpunOffFrom:        SemanticGroupTransition,
 	DependencyTypeAcquiredBy:         SemanticGroupTransition,
 	// other
-	DependencyTypeRegulates:    SemanticGroupOther,
-	DependencyTypeAuditedBy:    SemanticGroupOther,
 	DependencyTypeCompetesWith: SemanticGroupOther,
 	DependencyTypeInfluences:   SemanticGroupOther,
 	DependencyTypeDependsOn:    SemanticGroupOther,

@@ -102,7 +102,7 @@ type ProductPathParts struct {
 // but it is a first-class Horizon concept (see horizon models and scout prompts).
 type CommunityPathParts struct {
 	Geo    string // ISO2 or regional token like "global"
-	Type   string // trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe
+	Type   string // trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe|representatives|industry-association|key-community
 	Slug   string
 	Legacy bool // true if type segment is absent
 }

@@ -88,6 +88,8 @@ func main() {
 		string(horizonmodels.DependencyTypeAppliesTo),
 		// People/org meta-relations
 		string(horizonmodels.DependencyTypeKeyPerson),
+		// Assurance / oversight
+		string(horizonmodels.DependencyTypeAssures),
 		// OSINT-lite / governance extensions
 		string(horizonmodels.DependencyTypeAuditedBy),
 		string(horizonmodels.DependencyTypeRelativeOf),

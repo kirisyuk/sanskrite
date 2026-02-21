@@ -13,18 +13,29 @@ import (
 // ScenarioInput describes a domain-modeling scenario applied to the graph.
 // The fields are intentionally generic so each contract family can define its own parameters.
 type ScenarioInput struct {
-	ScenarioID   string                 `json:"scenarioId"`
-	ContractType string                 `json:"contractType"`
-	Parameters   map[string]interface{} `json:"parameters,omitempty"`
-	BaselineRef  string                 `json:"baselineRef,omitempty"`
-	TargetPaths  []string               `json:"targetPaths,omitempty"`
+	ScenarioID      string                 `json:"scenarioId"`
+	ContractType    string                 `json:"contractType"`
+	DomainModes     []string               `json:"domainModes,omitempty"`
+	EngineID        string                 `json:"engineId,omitempty"`
+	Mode            string                 `json:"mode,omitempty"` // "preview" | "apply" (default)
+	Parameters      map[string]interface{} `json:"parameters,omitempty"`
+	BaselineRef     string                 `json:"baselineRef,omitempty"`
+	SeedFragmentIDs []string               `json:"seedFragmentIds,omitempty"` // Optional explicit seed fragments (e.g. selected visible node)
+	TargetPaths     []string               `json:"targetPaths,omitempty"`
+	MaxTraceSteps   int                    `json:"maxTraceSteps,omitempty"` // Optional trace cap; defaults are applied by runner.
 }
+
+const (
+	ScenarioModePreview = "preview"
+	ScenarioModeApply   = "apply"
+)
 
 // TransferResult is a domain-specific propagation adjustment returned by adapter hooks.
 type TransferResult struct {
-	AdjustedAmplitude float64 `json:"adjustedAmplitude"`
-	AdjustedAxis      string  `json:"adjustedAxis,omitempty"` // empty => keep current axis
-	Skip              bool    `json:"skip,omitempty"`         // true => block propagation over this edge
+	AdjustedAmplitude float64            `json:"adjustedAmplitude"`
+	AdjustedAxis      string             `json:"adjustedAxis,omitempty"` // empty => keep current axis
+	Skip              bool               `json:"skip,omitempty"`         // true => block propagation over this edge
+	DebugFactors      map[string]float64 `json:"debugFactors,omitempty"` // Optional factor breakdown for explain trace
 }
 
 // AccumulatedSignal represents a compact signal view for endpoint decoding.
@@ -43,6 +54,15 @@ type BusinessMetric struct {
 	Confidence float64 `json:"confidence,omitempty"`
 }
 
+// DomainInputParamSpec defines how a scenario parameter can be resolved from fragment.State.
+// FragmentKey is the canonical key in fragment.State; ParamKeys are the scenario parameter names it fills.
+// ResolveFrom indicates which fragments to check: "location" (locationPath), "target" (targetPaths).
+type DomainInputParamSpec struct {
+	FragmentKey string   `json:"fragmentKey"` // Canonical key in fragment.State, e.g. "/metric/policy/vat_rate_pct"
+	ParamKeys   []string `json:"paramKeys"`   // Scenario parameter keys this fills, e.g. ["vat_rate_from"]
+	ResolveFrom string   `json:"resolveFrom"` // "location" | "target" — which fragment(s) to read from
+}
+
 // DomainModelAdapter encapsulates domain-specific math/algorithmics around signal propagation.
 // Binding is done by contract type family, with optional fallback by domain mode.
 type DomainModelAdapter interface {
@@ -54,6 +74,14 @@ type DomainModelAdapter interface {
 	TransferHook(ctx context.Context, signal *horizonmodels.SignalDescriptor, edge *horizonmodels.DependencyEdge, node *horizonmodels.HorizonFragment) (*TransferResult, error)
 	// Decode projects accumulated proxy signals into business metrics on endpoint nodes.
 	Decode(ctx context.Context, node *horizonmodels.HorizonFragment, accumulated []AccumulatedSignal, scenario ScenarioInput) ([]BusinessMetric, error)
+}
+
+// DomainAdapterWithInputParams extends DomainModelAdapter with canonical input param specs.
+// Fragment.State keys and scenario parameter mappings are fully defined here.
+type DomainAdapterWithInputParams interface {
+	DomainModelAdapter
+	// InputParamSpecs returns the canonical fragment.State keys and their mapping to scenario parameters.
+	InputParamSpecs() []DomainInputParamSpec
 }
 
 // AdapterRegistry stores adapters by contract type family and optional fallback mapping by domain mode.

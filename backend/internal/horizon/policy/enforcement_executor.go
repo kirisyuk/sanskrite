@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	grpcCodes "google.golang.org/grpc/codes"
+	grpcStatus "google.golang.org/grpc/status"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -275,20 +277,39 @@ func (e *EnforcementExecutor) ExecuteJob(ctx context.Context, job *PolicyEnforce
 
 // executeMergeFragments merges a duplicate fragment into the canonical one.
 func (e *EnforcementExecutor) executeMergeFragments(ctx context.Context, task EnforcementTask) (*EnforcementResult, error) {
-	duplicateID := task.TargetID
+	duplicateID := strings.TrimSpace(task.TargetID)
 	canonicalID, ok := task.Params["canonicalId"].(string)
+	canonicalID = strings.TrimSpace(canonicalID)
 	if !ok || canonicalID == "" {
 		return nil, fmt.Errorf("canonicalId not specified")
+	}
+	if duplicateID == "" {
+		return nil, fmt.Errorf("target duplicate id not specified")
+	}
+	if duplicateID == canonicalID {
+		return mergeFragmentsSkippedResult(duplicateID, canonicalID, "duplicate and canonical ids are identical"), nil
 	}
 
 	// Load both fragments
 	duplicate, err := e.fragmentsRepo.Get(ctx, duplicateID)
 	if err != nil {
+		if isNotFoundError(err) {
+			return mergeFragmentsSkippedResult(duplicateID, canonicalID, "duplicate fragment already absent"), nil
+		}
 		return nil, fmt.Errorf("failed to load duplicate fragment: %w", err)
+	}
+	if duplicate == nil {
+		return mergeFragmentsSkippedResult(duplicateID, canonicalID, "duplicate fragment already absent"), nil
 	}
 	canonical, err := e.fragmentsRepo.Get(ctx, canonicalID)
 	if err != nil {
+		if isNotFoundError(err) {
+			return mergeFragmentsSkippedResult(duplicateID, canonicalID, "canonical fragment already absent"), nil
+		}
 		return nil, fmt.Errorf("failed to load canonical fragment: %w", err)
+	}
+	if canonical == nil {
+		return mergeFragmentsSkippedResult(duplicateID, canonicalID, "canonical fragment already absent"), nil
 	}
 
 	// Merge data from duplicate into canonical
@@ -298,6 +319,9 @@ func (e *EnforcementExecutor) executeMergeFragments(ctx context.Context, task En
 	if merged {
 		canonical.UpdatedAt = time.Now().UTC()
 		if err := e.fragmentsRepo.Update(ctx, canonical); err != nil {
+			if isNotFoundError(err) {
+				return mergeFragmentsSkippedResult(duplicateID, canonicalID, "canonical fragment disappeared during update"), nil
+			}
 			return nil, fmt.Errorf("failed to update canonical: %w", err)
 		}
 	}
@@ -322,7 +346,10 @@ func (e *EnforcementExecutor) executeMergeFragments(ctx context.Context, task En
 
 	// Delete duplicate
 	if err := e.fragmentsRepo.Delete(ctx, duplicateID); err != nil {
-		return nil, fmt.Errorf("failed to delete duplicate: %w", err)
+		if !isNotFoundError(err) {
+			return nil, fmt.Errorf("failed to delete duplicate: %w", err)
+		}
+		log.Printf("[EnforcementExecutor] merge_fragments: duplicate already deleted (id=%s), finishing as idempotent success", duplicateID)
 	}
 
 	// Best-effort: rewrite lens scopes from duplicate canonicalPath to canonical canonicalPath,
@@ -337,6 +364,22 @@ func (e *EnforcementExecutor) executeMergeFragments(ctx context.Context, task En
 		AffectedIDs: []string{canonicalID, duplicateID},
 		Details:     fmt.Sprintf("Merged %s into %s. Edges: %d reassigned, %d deleted.", duplicateID, canonicalID, reassigned, deleted),
 	}, nil
+}
+
+func mergeFragmentsSkippedResult(duplicateID, canonicalID, reason string) *EnforcementResult {
+	ids := make([]string, 0, 2)
+	if canonicalID != "" {
+		ids = append(ids, canonicalID)
+	}
+	if duplicateID != "" {
+		ids = append(ids, duplicateID)
+	}
+	return &EnforcementResult{
+		Success:     true,
+		Action:      "merge_fragments_skipped",
+		AffectedIDs: ids,
+		Details:     fmt.Sprintf("Skipped merge %s -> %s: %s.", duplicateID, canonicalID, strings.TrimSpace(reason)),
+	}
 }
 
 // reassignEdges reassigns edges from one fragment to another.
@@ -866,6 +909,40 @@ func (e *EnforcementExecutor) executeNormalizeSymmetric(ctx context.Context, _ s
 func (e *EnforcementExecutor) executeFixLegalForm(ctx context.Context, task EnforcementTask) (*EnforcementResult, error) {
 	fragID := task.TargetID
 	correctPath, ok := task.Params["correctPath"].(string)
+	frag, err := e.fragmentsRepo.Get(ctx, fragID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load fragment: %w", err)
+	}
+	if frag == nil {
+		return nil, fmt.Errorf("fragment not found: %s", fragID)
+	}
+
+	oldPath := strings.TrimSpace(frag.CanonicalPath)
+	parts, perr := taxonomy.ParseCanonicalPathParts(oldPath)
+	if perr != nil || parts == nil {
+		parts = frag.CanonicalParts
+	}
+	if parts == nil || strings.TrimSpace(parts.Namespace) != "org" {
+		return &EnforcementResult{
+			Success:     true,
+			Action:      "fix_legal_form_skipped",
+			AffectedIDs: []string{fragID},
+			Details:     fmt.Sprintf("Skipped legal form fix for non-org canonical path: %s", oldPath),
+		}, nil
+	}
+
+	if ok && strings.TrimSpace(correctPath) != "" {
+		correctParts, cErr := taxonomy.ParseCanonicalPathParts(strings.TrimSpace(correctPath))
+		if cErr != nil || correctParts == nil || strings.TrimSpace(correctParts.Namespace) != "org" {
+			return &EnforcementResult{
+				Success:     true,
+				Action:      "fix_legal_form_skipped",
+				AffectedIDs: []string{fragID},
+				Details:     fmt.Sprintf("Skipped legal form fix with non-org target path: %s", strings.TrimSpace(correctPath)),
+			}, nil
+		}
+	}
+
 	// If correctPath is not provided, attempt to infer legal form via LLM and apply selectively.
 	if !ok || strings.TrimSpace(correctPath) == "" {
 		if e.aiExecutor == nil {
@@ -874,23 +951,6 @@ func (e *EnforcementExecutor) executeFixLegalForm(ctx context.Context, task Enfo
 				Action:  "fix_legal_form",
 				Error:   "AI executor not configured - cannot infer legal form automatically",
 			}, nil
-		}
-
-		frag, err := e.fragmentsRepo.Get(ctx, fragID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load fragment: %w", err)
-		}
-		if frag == nil {
-			return nil, fmt.Errorf("fragment not found: %s", fragID)
-		}
-
-		oldPath := strings.TrimSpace(frag.CanonicalPath)
-		parts, perr := taxonomy.ParseCanonicalPathParts(oldPath)
-		if perr != nil || parts == nil {
-			parts = frag.CanonicalParts
-		}
-		if parts == nil || strings.TrimSpace(parts.Namespace) != "org" {
-			return &EnforcementResult{Success: false, Action: "fix_legal_form", Error: "unsupported namespace for legal form fix"}, nil
 		}
 		orgParts := parts.Org
 		if orgParts == nil {
@@ -1583,6 +1643,11 @@ func (e *EnforcementExecutor) CreateEnforcementJobs(
 		success bool
 	}
 	existing := map[string]existingStatus{}
+	type existingMergePairState struct {
+		hasCompletedSuccess bool
+		hasPendingWork      bool
+	}
+	existingMergePairs := map[string]existingMergePairState{}
 	if e.enforcementRepo != nil && parentJobID != "" {
 		if prev, err := e.enforcementRepo.ListByParentJob(ctx, parentJobID, 2000); err == nil {
 			for _, pj := range prev {
@@ -1598,20 +1663,45 @@ func (e *EnforcementExecutor) CreateEnforcementJobs(
 					st.success = pj.Result.Success
 				}
 				existing[k] = st
+				if mpk := mergeTaskPairKey(pj.Task); mpk != "" {
+					pst := existingMergePairs[mpk]
+					if pj.Status == EnforcementStatusPending || pj.Status == EnforcementStatusInProgress {
+						pst.hasPendingWork = true
+					}
+					if pj.Status == EnforcementStatusCompleted && pj.Result != nil && pj.Result.Success {
+						pst.hasCompletedSuccess = true
+					}
+					existingMergePairs[mpk] = pst
+				}
 			}
 		}
 	}
 	seenInBatch := map[string]struct{}{}
+	seenMergePairs := map[string]struct{}{}
 
 	for _, v := range violations {
 		task, ok := e.resolveEnforcementTaskForViolation(v)
 		if !ok {
 			continue
 		}
+		mergePairKey := mergeTaskPairKey(task)
+		if mergePairKey != "" {
+			if _, ok := seenMergePairs[mergePairKey]; ok {
+				continue
+			}
+			if pst, ok := existingMergePairs[mergePairKey]; ok {
+				if pst.hasCompletedSuccess || pst.hasPendingWork {
+					continue
+				}
+			}
+		}
 
 		// Idempotency guard: if org legal form is already populated in canonicalParts, don't enqueue fix_legal_form.
 		if task.Type == TaskFixLegalForm && strings.TrimSpace(task.TargetID) != "" && e.fragmentsRepo != nil {
 			if frag, err := e.fragmentsRepo.Get(ctx, strings.TrimSpace(task.TargetID)); err == nil && frag != nil {
+				if !strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/org/") {
+					continue
+				}
 				if frag.CanonicalParts != nil && frag.CanonicalParts.Org != nil && strings.TrimSpace(frag.CanonicalParts.Org.LegalForm) != "" {
 					continue
 				}
@@ -1634,6 +1724,9 @@ func (e *EnforcementExecutor) CreateEnforcementJobs(
 				}
 			}
 			seenInBatch[key] = struct{}{}
+		}
+		if mergePairKey != "" {
+			seenMergePairs[mergePairKey] = struct{}{}
 		}
 
 		job := &PolicyEnforcementJob{
@@ -1666,6 +1759,9 @@ func enforcementTaskKey(t EnforcementTask) string {
 	}
 	// Include key params to avoid collapsing distinct fixes of different kinds.
 	switch t.Type {
+	case TaskMergeFragments:
+		canonicalID, _ := t.Params["canonicalId"].(string)
+		return base + ":" + strings.TrimSpace(canonicalID)
 	case TaskFixPath:
 		cp, _ := t.Params["correctPath"].(string)
 		reason, _ := t.Params["reason"].(string)
@@ -1686,6 +1782,33 @@ func enforcementTaskKey(t EnforcementTask) string {
 	default:
 		return base
 	}
+}
+
+func mergeTaskPairKey(t EnforcementTask) string {
+	if t.Type != TaskMergeFragments {
+		return ""
+	}
+	duplicateID := strings.TrimSpace(t.TargetID)
+	canonicalID, _ := t.Params["canonicalId"].(string)
+	canonicalID = strings.TrimSpace(canonicalID)
+	if duplicateID == "" || canonicalID == "" {
+		return ""
+	}
+	if duplicateID <= canonicalID {
+		return duplicateID + "|" + canonicalID
+	}
+	return canonicalID + "|" + duplicateID
+}
+
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if grpcStatus.Code(err) == grpcCodes.NotFound {
+		return true
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "not found") || strings.Contains(low, "notfound")
 }
 
 func (e *EnforcementExecutor) resolveEnforcementTaskForViolation(v PolicyViolation) (EnforcementTask, bool) {

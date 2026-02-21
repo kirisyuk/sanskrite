@@ -144,6 +144,8 @@ func (li *LensItem) Validate() error {
 			string(DependencyTypeFounded):       true,
 			string(DependencyTypeInvestsIn):     true,
 			string(DependencyTypePartnersWith):  true,
+			// Assurance / oversight
+			string(DependencyTypeAssures): true,
 			// OSINT-lite / governance extensions
 			string(DependencyTypeAuditedBy):  true,
 			string(DependencyTypeRelativeOf): true,

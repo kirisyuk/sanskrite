@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -437,11 +438,24 @@ func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string 
 				string(models.DependencyTypeOwns),
 				string(models.DependencyTypeSubsidiaryOf),
 				string(models.DependencyTypeControls),
+				string(models.DependencyTypeManages),
 				string(models.DependencyTypeInvestsIn),
 				string(models.DependencyTypeBoardMemberOf),
 				string(models.DependencyTypeEmployedBy),
 				string(models.DependencyTypeFounded),
 				string(models.DependencyTypeAdministers),
+			} {
+				if _, ok := seen[t]; ok {
+					continue
+				}
+				seen[t] = struct{}{}
+				out = append(out, t)
+			}
+		case taxonomy.DomainModeAssurance:
+			for _, t := range []string{
+				string(models.DependencyTypeAssures),
+				string(models.DependencyTypeAuditedBy),
+				string(models.DependencyTypeRegulates),
 			} {
 				if _, ok := seen[t]; ok {
 					continue
@@ -572,8 +586,7 @@ const extractionGeneralRelationRulesBlock = `   - DEPENDS_ON: source depends on 
    - LOCATED_IN target MUST be GEO_REGION.
    - SUPPLIES_TO source/target SHOULD be ORGANIZATION or FACILITY.
    - Strategic edges MUST use DECISION_POINT/MECHANISM compatible source/target types.
-   - NON-DOMAIN RELATION GUARDRAIL: for relation types listed above, targetCanonicalPath MUST NOT start with /domain/.
-     DOMAIN targets are allowed only for DOMAIN scaffold relations (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, RELATED_DOMAIN, BROADENS_TO, NARROWS_TO, AFFECTS, DEPENDS_ON with DOMAIN source).
+   - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/ for any relation.
 
    Each object must include:
    - targetName, targetLegalName, targetShortName
@@ -598,7 +611,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	b.WriteString("   DOMAIN-SCOPED RELATION RULES (active contract):\n")
 	b.WriteString(fmt.Sprintf("   - Allowed relationType values ONLY: %s\n", strings.Join(allowed, ", ")))
 	b.WriteString("   - Never emit a relation outside this set.\n")
-	b.WriteString("   - Unless relationType is a DOMAIN scaffold relation, targetCanonicalPath MUST NOT start with /domain/.\n")
+	b.WriteString("   - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.\n")
 
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
 		b.WriteString(`   SUPPLY CHAIN MODE:
@@ -616,10 +629,18 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 		b.WriteString(`   GOVERNANCE MODE:
    - OWNS and SUBSIDIARY_OF for equity hierarchy.
    - CONTROLS for explicit non-equity control.
+   - MANAGES for formal management (CEO, director, operator).
    - INVESTS_IN for minority/stake investments.
    - BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED for people governance links.
    - ADMINISTERS for GOV/ORG hierarchy into GOV/PROGRAM.
    - Add metrics.ownership_percent and/or voting_percent when evidence exists.
+`)
+	}
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeAssurance) {
+		b.WriteString(`   ASSURANCE MODE:
+   - ASSURES: assurer -> assuree. Add qualifiers.assurance_type: audit|certification|regulatory|inspection.
+   - AUDITED_BY: assuree -> auditor (legacy).
+   - REGULATES: regulator -> regulated entity.
 `)
 	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeMarket) {
@@ -784,8 +805,11 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 
 	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt()
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
-	profile := ResolveResearchProfile("", targetCanonicalPath, "")
-	profileBlock := BuildResearchProfilePromptBlock(profile)
+	// Object detail: from entity_semantics (unified per type). Scope from domain modes above.
+	typeBlock := entity_semantics.ExtractionBlockForPath(targetCanonicalPath, "", "")
+	if typeBlock != "" {
+		typeBlock = typeBlock + "\n\n"
+	}
 	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
 
 	return fmt.Sprintf(`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.
@@ -963,7 +987,7 @@ CANONICAL PATH RULES:
   - Communities (informal social groups): /community/{geo}/{type}/{slug}
     - geo: ISO3166-1 alpha2 lowercase, regional token, or "global"/"int"
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
-    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
+    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe | representatives | industry-association | key-community
     - Examples:
       - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
       - "Kazan drug dealers" -> /community/ru/criminal/kazan-synthetic-dealers
@@ -1048,5 +1072,5 @@ CANONICAL PATH RULES:
 - If a legal form is known (Inc., LLC, JSC, GmbH, etc.), append it as -{legal_form} to satisfy org canonical format.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
-Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, businessRulesBlock, profileBlock, domainBlock, canonicalRulesBlock, nameRulesBlock, relationCatalogOverride, unitIdentificationBlock, relationRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, businessRulesBlock, typeBlock, domainBlock, canonicalRulesBlock, nameRulesBlock, relationCatalogOverride, unitIdentificationBlock, relationRulesBlock)
 }

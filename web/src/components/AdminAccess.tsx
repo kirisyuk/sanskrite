@@ -28,8 +28,18 @@ type TelemetryItem = {
   updatedAt: string;
 };
 
+type AdminTab = 'waitlist' | 'vouchers' | 'telemetry' | 'external_services' | 'ws';
+
+type ExternalServiceStats = {
+  hit: number;
+  miss: number;
+  error: number;
+  calls: number;
+  hitRate: number;
+};
+
 const AdminAccess: React.FC = () => {
-  const [tab, setTab] = React.useState<'waitlist' | 'vouchers' | 'telemetry' | 'ws'>('waitlist');
+  const [tab, setTab] = React.useState<AdminTab>('waitlist');
   const [statusFilter, setStatusFilter] = React.useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
   const [items, setItems] = React.useState<Array<{ id: string; email: string; status: string; note?: string; invitedBy?: string; createdAt: string; updatedAt: string }>>([]);
   const [loading, setLoading] = React.useState(false);
@@ -54,6 +64,12 @@ const AdminAccess: React.FC = () => {
   const [telemetryLimit, setTelemetryLimit] = React.useState(48);
   const telemetryComponent = 'canonical_path_resolver';
   const telemetryMetric = 'redirect_cache';
+
+  // External services telemetry
+  const [extServices, setExtServices] = React.useState<Record<string, ExternalServiceStats>>({});
+  const [extServicesLoading, setExtServicesLoading] = React.useState(false);
+  const [extServicesError, setExtServicesError] = React.useState<string | null>(null);
+  const [extServicesLimit, setExtServicesLimit] = React.useState(168);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -108,11 +124,25 @@ const AdminAccess: React.FC = () => {
     }
   }, [telemetryLimit, telemetryComponent, telemetryMetric]);
 
+  const loadExternalServices = React.useCallback(async () => {
+    setExtServicesLoading(true);
+    setExtServicesError(null);
+    try {
+      const data = await api.getHorizonExternalServicesTelemetry({ limit: extServicesLimit });
+      setExtServices(data?.services || {});
+    } catch (e) {
+      setExtServicesError('Failed to load external services telemetry');
+    } finally {
+      setExtServicesLoading(false);
+    }
+  }, [extServicesLimit]);
+
   React.useEffect(() => {
     if (tab === 'waitlist') load();
     if (tab === 'vouchers') loadVouchers();
     if (tab === 'telemetry') loadTelemetry();
-  }, [tab, statusFilter, voucherFilter, voucherActiveFilter, load, loadVouchers, loadTelemetry]);
+    if (tab === 'external_services') loadExternalServices();
+  }, [tab, statusFilter, voucherFilter, voucherActiveFilter, load, loadVouchers, loadTelemetry, loadExternalServices]);
 
   const approve = async (email: string) => {
     try {
@@ -156,6 +186,13 @@ const AdminAccess: React.FC = () => {
           onClick={() => setTab('telemetry')}
         >
           Telemetry
+        </button>
+        <button
+          className="px-3 py-1 rounded text-12"
+          style={{ backgroundColor: tab === 'external_services' ? 'var(--white-10)' : 'transparent', color: 'var(--text-heading)' }}
+          onClick={() => setTab('external_services')}
+        >
+          External Services
         </button>
       </div>
 
@@ -243,6 +280,17 @@ const AdminAccess: React.FC = () => {
           limit={telemetryLimit}
           onLimitChange={setTelemetryLimit}
           onRefresh={loadTelemetry}
+        />
+      )}
+
+      {tab === 'external_services' && (
+        <ExternalServicesTab
+          services={extServices}
+          loading={extServicesLoading}
+          error={extServicesError}
+          limit={extServicesLimit}
+          onLimitChange={setExtServicesLimit}
+          onRefresh={loadExternalServices}
         />
       )}
 
@@ -726,6 +774,72 @@ const WsDiagnosticsTab: React.FC = () => {
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+const ExternalServicesTab: React.FC<{
+  services: Record<string, ExternalServiceStats>;
+  loading: boolean;
+  error: string | null;
+  limit: number;
+  onLimitChange: (value: number) => void;
+  onRefresh: () => void;
+}> = ({ services, loading, error, limit, onLimitChange, onRefresh }) => {
+  const serviceOrder = ['geonames', 'wikidata', 'opencorporates'];
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-13" style={{ color: 'var(--text-heading)' }}>External services hit rate</div>
+        <div className="flex items-center gap-2">
+          <select
+            className="text-12 px-2 py-1 rounded"
+            style={{ backgroundColor: 'var(--white-10)', color: 'var(--text-heading)', border: 'none' }}
+            value={limit}
+            onChange={(e) => onLimitChange(parseInt(e.target.value, 10))}
+          >
+            <option value={24}>Last 24h</option>
+            <option value={48}>Last 48h</option>
+            <option value={168}>Last 7d</option>
+          </select>
+          <button className="btn btn-primary text-12" onClick={onRefresh}>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)' }}>
+        {loading ? (
+          <div className="p-3 text-12" style={{ color: 'var(--text-secondary)' }}>Loading…</div>
+        ) : error ? (
+          <div className="p-3 text-12" style={{ color: 'var(--text-secondary)' }}>{error}</div>
+        ) : (
+          <div className="divide-y" style={{ borderColor: 'var(--overlay-line-90)' }}>
+            {serviceOrder.map((name) => {
+              const s = services[name] || { hit: 0, miss: 0, error: 0, calls: 0, hitRate: 0 };
+              return (
+                <div key={name} className="p-3" style={{ backgroundColor: 'var(--bg-elevated)' }}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>
+                      {name.charAt(0).toUpperCase() + name.slice(1)}
+                    </div>
+                    <div className="text-12" style={{ color: 'var(--text-secondary)' }}>
+                      Hit rate: <strong style={{ color: 'var(--text-heading)' }}>{(s.hitRate * 100).toFixed(2)}%</strong>
+                    </div>
+                  </div>
+                  <div className="flex gap-4 text-12" style={{ color: 'var(--text-secondary)' }}>
+                    <span>Hit: {s.hit}</span>
+                    <span>Miss: {s.miss}</span>
+                    <span>Error: {s.error}</span>
+                    <span>Total: {s.calls}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

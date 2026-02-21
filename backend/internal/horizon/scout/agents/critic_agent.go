@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -228,8 +229,8 @@ For MECHANISM:
 3. EDGE COMPLETENESS:
    - MUST have at least one USES_MECHANISM edge pointing TO this mechanism (who uses it?)
    - If missing → missingInfo: "What agents/organizations use <mechanism>? Return USES_MECHANISM edges with EXPLICIT SOURCE: sourceCanonicalPath=/org/... or /gov/... or /decision/... (the user), sourceType=ORGANIZATION or GOV or DECISION_POINT, sourceName=user name. Target is THIS MECHANISM. CRITICAL: The user/agent MUST be the source, NOT the mechanism."
-   - SHOULD have APPLIES_TO edges (what does it affect?)
-   - If missing → missingInfo: "What does <mechanism> apply to? Return APPLIES_TO edges with targetCanonicalPath = affected entity (org/facility/product/market). Source is THIS MECHANISM."
+   - MUST have at least one APPLIES_TO edge (what/who does it affect? — downstream impact is required)
+   - If missing → missingInfo: "What does <mechanism> affect? Return APPLIES_TO edges with targetCanonicalPath = affected entity (org/facility/product/market) from the graph. Source is THIS MECHANISM. CRITICAL: Every mechanism must have concrete downstream targets."
 
 4. ORPHAN MECHANISMS:
    - Mechanism with NO incoming and NO outgoing edges → HIGH severity conflict
@@ -307,8 +308,8 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 `, strings.TrimSpace(graphContext))
 	}
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt() + "\n\n"
-	profile := ResolveResearchProfile(extractedData.Type, extractedData.CanonicalPath, extractedData.CommunityType)
-	profileBlock := BuildResearchProfilePromptBlock(profile) + "\n\n"
+	// Object detail: from entity_semantics (unified per type).
+	profileBlock := entity_semantics.ResearchBlockForPath(extractedData.CanonicalPath, extractedData.Type, extractedData.CommunityType) + "\n\n"
 	unitPhaseBlock := buildUnitPhaseCriticBlock(unitPhase) + "\n\n"
 	nameRulesBlock := strings.ReplaceAll(naming.PromptEntityNameNormalizationRules(), "\n", "\n        ")
 
@@ -392,8 +393,8 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - FOUNDED: historical origin event; does NOT imply ongoing ownership or control.
 	  - INFLUENCES: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
 	- If the entity is an Organization, Facility, or Government body (/org/, /fac/, /gov/):
-	  - If no external auditor is present (AUDITED_BY), add a question:
-	    - "Who is the external auditor of <org> (as of YYYY)? Provide audit firm and source."
+	- If no assurance/audit is present (ASSURES or AUDITED_BY), add a question:
+	    - "Who provides external assurance to <org>? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit) or AUDITED_BY. Provide audit firm and source."
 	  
 	  - *** CRITICAL *** If marketSegments is empty or missing, you MUST add this question:
 	    - "What industry/sector does <entity> operate in? Return as marketSegments array with canonical paths:
@@ -426,7 +427,7 @@ TASK: Compare the extracted data with the source content and identify any confli
     - If the entity is a COMMUNITY (fragment.type == COMMUNITY OR canonicalPath starts with /community/):
       - Community geo MUST be in the 2nd segment: /community/{geo}/{type}/{slug} where geo is ISO2 or regional token (gcc, eu, asean). Never put geo at the end.
       - If communityType is empty/missing, add:
-        - "What type of community is <entity>? Return one of trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe."
+        - "What type of community is <entity>? Return one of trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe|representatives|industry-association|key-community."
       - If communityPlatforms is empty AND there are no OPERATES_VIA edges, add:
         - "Which specific communication channels does <community> use? Return /media/{platform}/{slug} and OPERATES_VIA edges."
       - If affiliatedOrgPath is empty AND there are no AFFILIATED_WITH edges, add:

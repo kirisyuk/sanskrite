@@ -934,7 +934,7 @@ func (e *Engine) assembleDeterministic(job *models.ScoutingJob, contract Contrac
 			FragmentID:        strings.TrimSpace(f.ID),
 			CanonicalPath:     strings.TrimSpace(f.CanonicalPath),
 			Criticality:       crit,
-			CriticalityReason: "high_profile_and_degree_centrality",
+			CriticalityReason: "degree_centrality",
 			Confidence:        clamp01(0.5 + crit*0.5),
 		})
 	}
@@ -1139,18 +1139,7 @@ func fragmentCriticality(f *models.HorizonFragment, edges []*models.DependencyEd
 		}
 	}
 	centrality := clamp01(float64(degree) / 12.0)
-	highProfile := 0.0
-	if f.HighProfile != nil {
-		for _, sig := range f.HighProfile.Signals {
-			if clamp01(sig.Score) > highProfile {
-				highProfile = clamp01(sig.Score)
-			}
-		}
-	}
-	if highProfile == 0 {
-		highProfile = 0.4
-	}
-	return clamp01(0.6*highProfile + 0.4*centrality)
+	return centrality
 }
 
 func buildConcentrationEvidence(g graphSnapshot) []models.ConcentrationEvidence {

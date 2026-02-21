@@ -21,6 +21,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
@@ -77,6 +78,25 @@ func bestEffortBackfillCanonicalPartsFromPath(fragment *models.HorizonFragment) 
 	fragment.CanonicalParts = parts
 }
 
+// bestEffortReconcileFragmentTypeFromPath keeps fragment.Type aligned with canonical path namespace.
+// This guarantees deterministic type<->path mapping at the repository boundary.
+func bestEffortReconcileFragmentTypeFromPath(fragment *models.HorizonFragment) {
+	if fragment == nil {
+		return
+	}
+	reconciled, changed := edgesemantics.ReconcileTypeWithCanonicalPath(
+		fragment.Type,
+		strings.TrimSpace(fragment.CanonicalPath),
+	)
+	if !changed || reconciled == "" {
+		return
+	}
+	prev := fragment.Type
+	fragment.Type = reconciled
+	log.Printf("[HorizonFragments] INFO: reconciled fragment type from canonicalPath: fragmentId=%q canonicalPath=%q from=%q to=%q",
+		strings.TrimSpace(fragment.ID), strings.TrimSpace(fragment.CanonicalPath), prev, reconciled)
+}
+
 func canonicalPathDocID(tenantID, canonicalPath string) string {
 	raw := strings.TrimSpace(tenantID) + "|" + strings.TrimSpace(canonicalPath)
 	sum := sha1.Sum([]byte(raw))
@@ -109,40 +129,6 @@ func NewHorizonFragmentsRepository(db *firestore.Client) *HorizonFragmentsReposi
 		db:           db,
 		versionsRepo: NewHorizonFragmentVersionsRepository(db),
 	}
-}
-
-// UpdateHighProfile updates only the `highProfile` field of a fragment (best-effort, field-level update).
-// This avoids clobbering concurrent writes to other parts of the fragment during background computations.
-//
-// If hp is nil, the field is deleted.
-func (r *HorizonFragmentsRepository) UpdateHighProfile(ctx context.Context, fragmentID string, hp *models.HighProfile) error {
-	if r == nil || r.col == nil {
-		return ErrInvalidDocument
-	}
-	id := strings.TrimSpace(fragmentID)
-	if id == "" {
-		return ErrInvalidDocument
-	}
-
-	now := time.Now().UTC()
-	updates := []firestore.Update{
-		{Path: "updatedAt", Value: now},
-	}
-
-	if hp == nil {
-		updates = append(updates, firestore.Update{Path: "highProfile", Value: firestore.Delete})
-	} else {
-		if hp.Version == 0 {
-			hp.Version = 1
-		}
-		if hp.UpdatedAt.IsZero() {
-			hp.UpdatedAt = now
-		}
-		updates = append(updates, firestore.Update{Path: "highProfile", Value: hp})
-	}
-
-	_, err := r.col.Doc(id).Update(ctx, updates)
-	return err
 }
 
 // WithStorage настраивает GCS хранилище для экспорта фрагментов
@@ -444,6 +430,8 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	bestEffortAssembleCanonicalPathFromParts(fragment)
 	// Best-effort: shared canonical-path normalization at repository boundary.
 	canonical.NormalizeFragmentForPersist(fragment)
+	// Keep fragment type deterministic with canonicalPath namespace.
+	bestEffortReconcileFragmentTypeFromPath(fragment)
 	if err := fragment.Validate(); err != nil {
 		return "", fmt.Errorf("validation error: %w", err)
 	}
@@ -897,6 +885,8 @@ func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *model
 	bestEffortAssembleCanonicalPathFromParts(fragment)
 	// Best-effort: shared canonical-path normalization at repository boundary.
 	canonical.NormalizeFragmentForPersist(fragment)
+	// Keep fragment type deterministic with canonicalPath namespace.
+	bestEffortReconcileFragmentTypeFromPath(fragment)
 	if err := fragment.Validate(); err != nil {
 		return fmt.Errorf("validation error: %w", err)
 	}

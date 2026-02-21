@@ -51,6 +51,21 @@ func (v *GovernanceValidator) Validate(ctx context.Context, input CriticValidato
 	return v.agent.runValidationPrompt(ctx, prompt)
 }
 
+// AssuranceValidator validates audit, certification, regulatory oversight.
+type AssuranceValidator struct {
+	agent *CriticAgent
+}
+
+func (v *AssuranceValidator) DomainMode() string { return taxonomy.DomainModeAssurance }
+
+func (v *AssuranceValidator) Validate(ctx context.Context, input CriticValidatorInput) (*ValidationResult, error) {
+	if v.agent == nil {
+		return nil, nil
+	}
+	prompt := v.agent.buildAssuranceValidationPrompt(input)
+	return v.agent.runValidationPrompt(ctx, prompt)
+}
+
 // MarketValidator validates market participation and sizing.
 type MarketValidator struct {
 	agent *CriticAgent

@@ -6,6 +6,7 @@ import (
 )
 
 const graphIntentDraft07SchemaURI = "http://json-schema.org/draft-07/schema#"
+const graphIntentCanonicalPathPattern = "^/[a-z0-9-]+(?:/[a-z0-9-]+)+$"
 
 func GraphIntentDraft07Schemas() map[string]map[string]interface{} {
 	return map[string]map[string]interface{}{
@@ -220,7 +221,7 @@ func GraphIntentApplyResponseSchemaDraft07() map[string]interface{} {
 
 func graphIntentDefinitionsWithPlanDraft07() map[string]interface{} {
 	defs := graphIntentDefinitionsDraft07()
-		defs["planResponse"] = map[string]interface{}{
+	defs["planResponse"] = map[string]interface{}{
 		"type":                 "object",
 		"additionalProperties": false,
 		"required": []string{
@@ -456,7 +457,9 @@ func graphIntentDefinitionsDraft07() map[string]interface{} {
 			"additionalProperties": false,
 			"properties": map[string]interface{}{
 				"canonicalPathHint": map[string]interface{}{
-					"type": "string",
+					"type":      "string",
+					"minLength": 3,
+					"pattern":   graphIntentCanonicalPathPattern,
 				},
 			},
 		},
@@ -491,7 +494,9 @@ func graphIntentDefinitionsDraft07() map[string]interface{} {
 					"enum": nodeTypes,
 				},
 				"canonicalPathHint": map[string]interface{}{
-					"type": "string",
+					"type":      "string",
+					"minLength": 3,
+					"pattern":   graphIntentCanonicalPathPattern,
 				},
 				"state": map[string]interface{}{
 					"type":                 "object",

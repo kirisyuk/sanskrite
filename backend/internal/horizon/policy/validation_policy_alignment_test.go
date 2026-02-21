@@ -128,7 +128,7 @@ func TestValidationPolicy_ExtractsFromAndKeyPersonRulesPresent(t *testing.T) {
 	}
 }
 
-func TestValidationPolicy_CompetesWithAndAuditedByRulesPresent(t *testing.T) {
+func TestValidationPolicy_CompetesWithAuditedByAndAssuresRulesPresent(t *testing.T) {
 	p := &ValidationPolicy{}
 
 	okCompetes, _, _ := p.validateEdgeDirection(
@@ -147,6 +147,15 @@ func TestValidationPolicy_CompetesWithAndAuditedByRulesPresent(t *testing.T) {
 	)
 	if !okAuditedBy {
 		t.Fatalf("expected AUDITED_BY ORGANIZATION -> ORGANIZATION to be valid")
+	}
+
+	okAssures, _, _ := p.validateEdgeDirection(
+		horizonmodels.DependencyTypeAssures,
+		horizonmodels.FragmentTypeOrganization,
+		horizonmodels.FragmentTypeOrganization,
+	)
+	if !okAssures {
+		t.Fatalf("expected ASSURES ORGANIZATION -> ORGANIZATION to be valid")
 	}
 }
 

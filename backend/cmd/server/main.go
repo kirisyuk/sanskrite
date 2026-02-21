@@ -44,6 +44,7 @@ import (
 	// Horizon system
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
+	horizonenrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	horizonfeedback "github.com/igorkirisyuk/sanskrite/internal/horizon/feedback"
 	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
@@ -55,6 +56,7 @@ import (
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	horizontelemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetry"
 	horizontasks "github.com/igorkirisyuk/sanskrite/internal/horizon/tasks"
 	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
 	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
@@ -513,6 +515,7 @@ func main() {
 		}
 
 		// Initialize GeoNames client (for deterministic geo hierarchy normalization)
+		// Full chain (adapter + telemetry + cache) is built in Horizon block when horizonTelemetryRepo is available.
 		geonamesClient := httphandlers.GetGeoNamesClientFromEnv()
 		var geonamesClientForHorizon ontology.GeoNamesClientInterface
 		if geonamesClient != nil {
@@ -521,14 +524,10 @@ func main() {
 				gnUser = strings.TrimSpace(os.Getenv("HORIZON_GEONAMES_USERNAME"))
 			}
 			if gnUser == "" {
-				gnUser = "<unknown>"
+				gnUser = httphandlers.DefaultGeoNamesUsername
 			}
 			logger.Printf("GeoNames client initialized (geo hierarchy resolver enabled): username=%s", gnUser)
-			geonamesClientForHorizon = geonames.NewCachedClient(
-				geonames.NewAdapter(geonamesClient),
-				externalCacheRepo,
-				geonames.CacheOptionsFromEnv(),
-			)
+			// geonamesClientForHorizon built in Horizon block with telemetry wrapper
 		} else {
 			logger.Printf("GeoNames client disabled: GEONAMES_USERNAME not set")
 		}
@@ -1359,6 +1358,7 @@ func main() {
 			if err := propagationProfileLookup.Initialize(context.Background()); err != nil {
 				logger.Printf("WARNING: propagation profile lookup initialization fallback: %v", err)
 			}
+			propagationEngine.WithProfileLookup(propagationProfileLookup)
 			orchestrator = orchestrator.WithHorizonMonitorPipeline(
 				discovery.NewHorizonMonitorPipeline(
 					ontologyFactsRepo,
@@ -1699,14 +1699,37 @@ func main() {
 				pub,
 				exec,
 			)
+			// Build GeoNames client with telemetry (adapter -> telemetry -> cache). Only when horizon block runs.
+			if geonamesClient != nil && horizonTelemetryRepo != nil {
+				gnBase := geonames.NewAdapter(geonamesClient)
+				gnWithTelemetry := horizontelemetry.NewGeoNamesTelemetryWrapper(gnBase, horizonTelemetryRepo)
+				geonamesClientForHorizon = geonames.NewCachedClient(gnWithTelemetry, externalCacheRepo, geonames.CacheOptionsFromEnv())
+			} else if geonamesClient != nil {
+				geonamesClientForHorizon = geonames.NewCachedClient(geonames.NewAdapter(geonamesClient), externalCacheRepo, geonames.CacheOptionsFromEnv())
+			}
 			// Wire Wikidata into Scout (dedup + conservative enrichment-by-QID inside PreCreateValidator).
 			// IMPORTANT: We do NOT enable fuzzy Wikidata search here; PreCreateValidator only uses GetEntityData when QID is already present.
 			if wikidataClient != nil {
-				scoutEngine.WithWikidataClient(wikidata.NewAdapter(wikidataClient))
+				wdAdapter := wikidata.NewAdapter(wikidataClient)
+				var wdForScout ontology.WikidataClientInterface = wdAdapter
+				if horizonTelemetryRepo != nil {
+					wdForScout = horizontelemetry.NewWikidataTelemetryWrapper(wdAdapter, horizonTelemetryRepo)
+				}
+				scoutEngine.WithWikidataClient(wdForScout)
 			}
 			// Wire GeoNames into Scout for deterministic /loc normalization (country/admin1/city).
 			if geonamesClientForHorizon != nil {
 				scoutEngine.WithGeoNamesClient(geonamesClientForHorizon)
+			}
+			// Wire OpenCorporates into Scout for organization enrichment (registry IDs).
+			// Enable via HORIZON_ENABLE_OPEN_CORPORATES=true; API token optional (OPEN_CORPORATES_API_TOKEN).
+			if ocClient := httphandlers.GetOpenCorporatesClientFromEnv(); ocClient != nil {
+				var ocForScout horizonenrich.OpenCorporatesClientInterface = ocClient
+				if horizonTelemetryRepo != nil {
+					ocForScout = horizontelemetry.NewOpenCorporatesTelemetryWrapper(ocClient, horizonTelemetryRepo)
+				}
+				scoutEngine.WithOpenCorporatesClient(ocForScout)
+				logger.Printf("OpenCorporates client wired (org enrichment; enable with HORIZON_ENABLE_OPEN_CORPORATES=true)")
 			}
 			// Unified ontology facts emitter: allows Scout to persist minimal OntologyFacts even when sources pipeline is paused.
 			scoutEngine.WithFactEmitter(ontology.NewFactEmitter(ontologyFactsRepo, pub))
@@ -1940,7 +1963,8 @@ func main() {
 				WithRiskJobsRepo(riskJobsRepo).
 				WithUnitGraphRepo(horizonUnitGraphSnapshotsRepo).
 				WithUnitDiveRepo(horizonUnitDiveResultsRepo).
-				WithProfilesHandler(profilesHandler)
+				WithProfilesHandler(profilesHandler).
+				WithPropagationProfileLookup(propagationProfileLookup)
 			logger.Printf("Horizon system initialized")
 
 			// Wire Horizon Lens service to projects handler for cascade delete
@@ -2398,6 +2422,7 @@ func main() {
 
 	// Horizon telemetry (admin only)
 	telemetryHandler := httphandlers.NewHorizonTelemetryHandler(horizonTelemetryRepo, s.users, logger)
+	mux.Handle("/api/v1/admin/horizon/telemetry/external-services", authMiddleware(http.HandlerFunc(telemetryHandler.ExternalServices)))
 	mux.Handle("/api/v1/admin/horizon/telemetry", authMiddleware(http.HandlerFunc(telemetryHandler.List)))
 
 	// Share routes handler (initialized before project sub-routes)

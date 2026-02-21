@@ -104,7 +104,7 @@ func (p *ProfileLookup) GetForSignal(signal *horizonmodels.SignalDescriptor) (*h
 	if err != nil {
 		return nil, err
 	}
-	if strategicChokepointID(signal.LocationPath) == "" {
+	if !isStrategicChokepointPath(signal.LocationPath) {
 		return base, nil
 	}
 

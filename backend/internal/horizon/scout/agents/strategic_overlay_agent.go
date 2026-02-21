@@ -125,7 +125,10 @@ func buildStrategicOverlayPrompt(domainPath, domainTitle, domainDesc, graphConte
 		graphBlock = "GRAPH CONTEXT (existing Lens graph):\n" + strings.TrimSpace(graphContext) + "\n\n"
 	}
 	return fmt.Sprintf(`You are extracting STRATEGIC DECISION OVERLAYS for an existing graph.
-Your task: identify WHO DECIDES WHAT in this graph, HOW they decide, and WHAT they can block/enable.
+Your task: identify WHO DECIDES WHAT in this graph, HOW they decide, and — CRITICAL — WHAT/WHO is AFFECTED (downstream impact).
+
+PURPOSE: Understand decision mechanics in the lens context: who decides, who influences, and ONE STEP FURTHER — what entities (org/facility/product/market) are affected by each decision and mechanism.
+Do NOT create abstract decision points or mechanisms. Only create when you can name CONCRETE affected targets from the GRAPH CONTEXT.
 
 DOMAIN:
 - canonicalPath: %s
@@ -307,10 +310,17 @@ CONFIDENCE GUIDELINES:
 - 0.5-0.7: Inferred control based on market position
 - <0.5: Speculative, should have strong reason
 
+DOWNSTREAM IMPACT (MANDATORY):
+- Each DECISION_POINT MUST have at least one CONTROLS_ACCESS or IMPOSES_CONDITION edge with target = concrete entity (org/facility/product/market) FROM THE GRAPH.
+- Each MECHANISM MUST have at least one APPLIES_TO edge with target = concrete entity FROM THE GRAPH.
+- Do NOT create a decision point or mechanism if you cannot name a specific affected entity. Fewer is better than vague.
+- Targets MUST be paths that appear in GRAPH CONTEXT — do not invent entities.
+
 OUTPUT RULES:
 - Output ONLY valid JSON. No markdown, no comments.
-- Each decision point MUST have at least one edge connecting it to the graph.
-- Prefer fewer, high-quality decision points over many vague ones.
-- Focus on ACTIONABLE control: what can actually be blocked/enabled/delayed?
+- Each decision point MUST have at least one CONTROLS_ACCESS/IMPOSES_CONDITION edge to a graph entity (what it affects).
+- Each mechanism MUST have at least one APPLIES_TO edge to a graph entity (what it affects).
+- STRICT: Prefer 2–5 high-quality, well-connected decision points over 10+ abstract ones. When in doubt, omit.
+- Focus on ACTIONABLE control: what can actually be blocked/enabled/delayed, and WHO/WHAT is affected.
 `, domainPath, domainTitle, domainDesc, focusBlock, graphBlock)
 }

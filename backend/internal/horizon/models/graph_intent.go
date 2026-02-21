@@ -401,7 +401,8 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 		if !IsGraphIntentGroupingKindAllowed(g.GroupingKind) {
 			return fmt.Errorf("invalid groupingKind: %s", g.GroupingKind)
 		}
-		for _, n := range g.Entities {
+		for j := range g.Entities {
+			n := &g.Entities[j]
 			if strings.TrimSpace(n.Label) == "" {
 				return fmt.Errorf("create.groupings.entities.label is required")
 			}
@@ -415,6 +416,10 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 			if !strings.HasPrefix(cp, "/") {
 				cp = "/" + cp
 			}
+			if norm, changed := normalizeMechanismCanonicalPathForGraphIntent(cp); changed {
+				cp = norm
+				n.CanonicalPathHint = cp
+			}
 			if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
 				return fmt.Errorf("create.groupings.entities.canonicalPathHint invalid for %q: %w", n.Label, err)
 			}
@@ -425,7 +430,8 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 			}
 		}
 	}
-	for _, n := range p.Create.Nodes {
+	for i := range p.Create.Nodes {
+		n := &p.Create.Nodes[i]
 		if strings.TrimSpace(n.Label) == "" {
 			return fmt.Errorf("create.nodes.label is required")
 		}
@@ -438,6 +444,10 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 		}
 		if !strings.HasPrefix(cp, "/") {
 			cp = "/" + cp
+		}
+		if norm, changed := normalizeMechanismCanonicalPathForGraphIntent(cp); changed {
+			cp = norm
+			n.CanonicalPathHint = cp
 		}
 		if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
 			return fmt.Errorf("create.nodes.canonicalPathHint invalid for %q: %w", n.Label, err)
@@ -484,6 +494,42 @@ func (p *GraphIntentPlanResponse) EstimatedCreateCounts() (nodes int, edges int)
 	nodes += len(p.Create.Nodes)
 	edges += len(p.Create.Edges)
 	return nodes, edges
+}
+
+func normalizeMechanismCanonicalPathForGraphIntent(path string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return "", false
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "mechanism" {
+		return "", false
+	}
+	category := strings.ToLower(strings.TrimSpace(parts[1]))
+	switch category {
+	case "regulatory", "economic", "technological", "contractual", "political":
+		return "", false
+	}
+	mapped := map[string]string{
+		"tax":        "regulatory",
+		"fiscal":     "economic",
+		"monetary":   "economic",
+		"sanctions":  "regulatory",
+		"tariff":     "regulatory",
+		"subsidy":    "economic",
+		"incentive":  "economic",
+		"license":    "regulatory",
+		"permit":     "regulatory",
+		"quota":      "regulatory",
+		"embargo":    "regulatory",
+		"ban":        "regulatory",
+		"restriction": "regulatory",
+	}
+	next, ok := mapped[category]
+	if !ok {
+		next = "regulatory"
+	}
+	return "/mechanism/" + next + "/" + parts[2], true
 }
 
 func (p *GraphIntentPlanResponse) IsPotentiallyDestructive() bool {
@@ -820,6 +866,7 @@ var graphIntentAllowedRuntimeRelationTypes = map[string]struct{}{
 	string(DependencyTypeWorksFor):            {},
 	string(DependencyTypeKeyPerson):           {},
 	string(DependencyTypeHasKeyPerson):        {},
+	string(DependencyTypeAssures):             {},
 	string(DependencyTypeAuditedBy):           {},
 	string(DependencyTypeRelativeOf):          {},
 	string(DependencyTypeRelatedTo):           {},

@@ -476,6 +476,51 @@ go run ./cmd/tools/horizon_propagate_metric \
 
 ---
 
+### `horizon_propagation_calibration`
+
+**Назначение:** Инструмент калибровки логики propagation. Берёт ноду из графа, через LLM (Gemini 3 Pro Preview + search grounding) получает новости, преобразует их в 12-axis сигналы, прогоняет propagation (simulation) и выводит отчёт для ручной оценки.
+
+**Как работает:**
+1. Загружает фрагмент по `-path`
+2. Один запрос к Gemini с search grounding: «что происходит с [org]?» → новости
+3. LLM извлекает 1–4 сигнала в формате 12-axis
+4. Запускает `SimulateSignalFromSeeds` (без записи в Firestore)
+5. Печатает: accumulated metrics по нодам, trace propagation, summary
+
+**Использование:**
+```bash
+# Калибровка для конкретной org
+go run ./cmd/tools/horizon_propagation_calibration \
+  --project=PROJECT \
+  --path=/org/ae/flydubai-llc
+
+# Список org с большим числом связей (кандидаты для калибровки)
+go run ./cmd/tools/horizon_propagation_calibration \
+  --project=PROJECT \
+  --list-candidates \
+  --limit=20
+```
+
+**Флаги:**
+- `--project` (required) - GCP project ID
+- `--path` - canonical path org-ноды (single-node mode)
+- `--paths` - comma-separated paths для multi-node с интерференцией (напр. /org/ae/g42-llc,/org/sa/public-investment-fund-sa)
+- `--list-candidates` - вывести топ org по числу рёбер
+- `--limit` (default: 200, max 200) - макс. org в list-candidates
+- `--max-edges` (default: 10000) - макс. рёбер при сканировании (один проход, без per-org запросов)
+- `--agg` (default: hop_weighted) - агрегация для интерференции: max | sum | hop_weighted
+- `--simulate` (default: true) - simulation mode (без записи)
+- `--verbose` - подробный лог
+
+**Multi-node report включает:**
+- Interference degree — распределение нод по числу seeds
+- Conflicts — ноды, где одна ось имеет risk от одного seed и opportunity от другого
+- Aggregated by node — агрегированные метрики (hop-weighted: прямые сигналы весят больше)
+
+**Требования:** `GEMINI_API_KEY` (env или Secret Manager)
+
+---
+
 ### `horizon_edge_policy_report`
 
 **Назначение:** Строит comparison-report для KPI Big Bang Edge Policy (`baseline` vs `after`) и печатает `top invalid triples`.

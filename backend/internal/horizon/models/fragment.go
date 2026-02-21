@@ -126,10 +126,6 @@ type HorizonFragment struct {
 	// Qualifiers stores policy/runtime annotations (e.g., policyStatus/policyReason).
 	Qualifiers map[string]interface{} `json:"qualifiers,omitempty" firestore:"qualifiers,omitempty"`
 
-	// HighProfile stores global, precomputed "high-profile" business signals derived from the graph.
-	// It is optional and may be absent for older fragments or when backfill hasn't run yet.
-	HighProfile *HighProfile `json:"highProfile,omitempty" firestore:"highProfile,omitempty"`
-
 	// Обогащение данными
 	KBRefs      []KBReference     `json:"kbRefs,omitempty" firestore:"kbRefs,omitempty"`
 	Identifiers map[string]string `json:"identifiers,omitempty" firestore:"identifiers,omitempty"`
@@ -257,6 +253,9 @@ func (f *HorizonFragment) Validate() error {
 	// Best-effort: keep GeoNames linkage consistent across both KBRefs and Identifiers.
 	// GeoNames ExternalID is a numeric string (geonameId).
 	f.ensureGeoNamesMirroring()
+	// Best-effort: keep OpenCorporates linkage consistent across both KBRefs and Identifiers.
+	// OpenCorporates ExternalID format: jurisdiction_code/company_number (e.g. "gb/00102498").
+	f.ensureOpenCorporatesMirroring()
 	// Best-effort: keep generic coordinates filled from canonical geo-bearing fields.
 	f.ensureCoordinatesMirroring()
 	// Keep dual field compatibility: canonical horizonMonitor + legacy worldMonitor.
@@ -342,6 +341,7 @@ func (f *HorizonFragment) Validate() error {
 		allowedCommunityTypes := map[string]struct{}{
 			"trade": {}, "activist": {}, "professional": {}, "criminal": {},
 			"religious": {}, "ethnic": {}, "interest": {}, "dynasty": {}, "tribe": {},
+			"representatives": {}, "industry-association": {}, "key-community": {},
 		}
 		if _, ok := allowedCommunityTypes[f.CommunityType]; !ok && f.CommunityType != "" {
 			// Unknown communityType - keep it but don't block (best-effort).
@@ -583,6 +583,51 @@ func (f *HorizonFragment) ensureGeoNamesMirroring() {
 		KB:         "GeoNames",
 		ExternalID: gid,
 		Confidence: 1.0,
+	})
+}
+
+// ensureOpenCorporatesMirroring best-effort keeps OpenCorporates ID mirrored in both:
+// - KBRefs (KB="OpenCorporates", ExternalID="gb/00102498")
+// - Identifiers["openCorporatesId"] ("gb/00102498")
+func (f *HorizonFragment) ensureOpenCorporatesMirroring() {
+	if f == nil {
+		return
+	}
+	kbID := ""
+	kbIdx := -1
+	for i, ref := range f.KBRefs {
+		if strings.EqualFold(strings.TrimSpace(ref.KB), "OpenCorporates") {
+			kbID = strings.TrimSpace(ref.ExternalID)
+			kbIdx = i
+			break
+		}
+	}
+	idID := ""
+	if f.Identifiers != nil {
+		idID = strings.TrimSpace(f.Identifiers["openCorporatesId"])
+	}
+	ocID := kbID
+	if ocID == "" {
+		ocID = idID
+	}
+	if ocID == "" {
+		return
+	}
+	if f.Identifiers == nil {
+		f.Identifiers = make(map[string]string)
+	}
+	f.Identifiers["openCorporatesId"] = ocID
+	if kbIdx >= 0 {
+		f.KBRefs[kbIdx].KB = "OpenCorporates"
+		if strings.TrimSpace(f.KBRefs[kbIdx].ExternalID) == "" {
+			f.KBRefs[kbIdx].ExternalID = ocID
+		}
+		return
+	}
+	f.KBRefs = append(f.KBRefs, KBReference{
+		KB:         "OpenCorporates",
+		ExternalID: ocID,
+		Confidence: 0.85,
 	})
 }
 

@@ -241,7 +241,32 @@ type ProfileSectionSpec struct {
 }
 
 // DefaultSectionsForType returns the default section specs for a fragment type.
+// Delegates to entity_semantics for unified type logic. Pass empty path/communityType for type-only resolution.
+// Callers with full fragment context should use entity_semantics.ProfileSectionsForType directly.
 func DefaultSectionsForType(fragmentType FragmentType) []ProfileSectionSpec {
+	return DefaultSectionsForTypeWithPath(fragmentType, "", "")
+}
+
+// DefaultSectionsForTypeWithPath returns section specs with path-aware resolution (e.g. GOV vs ORGANIZATION).
+// Used by profile generator when fragment is available.
+func DefaultSectionsForTypeWithPath(fragmentType FragmentType, canonicalPath string, communityType string) []ProfileSectionSpec {
+	// Delegate to entity_semantics; avoid import cycle by using a function variable set by entity_semantics init.
+	if profileSectionsResolver != nil {
+		return profileSectionsResolver(fragmentType, canonicalPath, communityType)
+	}
+	// Fallback when entity_semantics not yet loaded (tests, etc.)
+	return defaultSectionsFallback(fragmentType)
+}
+
+// profileSectionsResolver is set by entity_semantics to avoid import cycle.
+var profileSectionsResolver func(FragmentType, string, string) []ProfileSectionSpec
+
+// RegisterProfileSectionsResolver is called by entity_semantics init.
+func RegisterProfileSectionsResolver(fn func(FragmentType, string, string) []ProfileSectionSpec) {
+	profileSectionsResolver = fn
+}
+
+func defaultSectionsFallback(fragmentType FragmentType) []ProfileSectionSpec {
 	switch fragmentType {
 	case FragmentTypeOrganization:
 		return []ProfileSectionSpec{
@@ -273,8 +298,6 @@ func DefaultSectionsForType(fragmentType FragmentType) []ProfileSectionSpec {
 			{Key: "pricing", Title: "Pricing", Description: "Price points, pricing trends", Required: false, Order: 6},
 		}
 	default:
-		// For GOV (which uses FragmentTypeOrganization with /gov/ path) and others
-		// Check if it's a gov body by convention
 		return []ProfileSectionSpec{
 			{Key: "overview", Title: "Overview", Description: "General description and purpose", Required: true, Order: 1},
 			{Key: "structure", Title: "Structure", Description: "Organizational structure, key divisions", Required: false, Order: 2},

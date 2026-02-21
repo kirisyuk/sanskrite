@@ -160,7 +160,7 @@ const (
 	FragmentTypeOrganization FragmentType = "ORGANIZATION"
 	FragmentTypeFacility     FragmentType = "FACILITY"
 	FragmentTypeGeoRegion    FragmentType = "GEO_REGION"
-	// FragmentTypeDomain is an executable “knowledge contract” node (not a real-world entity).
+	// FragmentTypeDomain is a contract type identifier (domain is config, not a graph node).
 	// Canonical path format: /domain/v1/{contractType}/{facetKey}/{facetValue}...
 	// Examples:
 	// - /domain/v1/supply-chain/geo/us/application/ev/material/lithium

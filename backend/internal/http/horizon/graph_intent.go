@@ -3,7 +3,9 @@ package horizon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"sort"
@@ -23,48 +25,57 @@ import (
 )
 
 const (
-	graphIntentPlannerModel = "gemini-3-flash-preview"
-
 	graphIntentApplyHardMaxCreateNodes = 200
 	graphIntentApplyHardMaxCreateEdges = 400
 	graphIntentApplyHardMaxRewriteOps  = 250
 )
 
+var errGraphIntentPlanValidation = errors.New("graph intent plan validation failed")
+
 // PlanGraphIntent handles:
 // POST /api/horizon/lenses/{lensId}/graph-intent/plan
 func (h *HorizonHandlers) PlanGraphIntent(w http.ResponseWriter, r *http.Request) {
+	lensId := graphIntentLensIdFromRequest(r)
+	corrID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+
 	if r.Method != http.MethodPost {
+		logGraphIntentErr("plan", "method", http.StatusMethodNotAllowed, lensId, corrID, nil)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	authInfo, err := requireAuth(r)
 	if err != nil || authInfo == nil {
+		logGraphIntentErr("plan", "auth", http.StatusUnauthorized, lensId, corrID, err)
 		http.Error(w, "Authentication required", http.StatusUnauthorized)
 		return
 	}
 	lens, err := h.resolveGraphIntentLens(r.Context(), r, authInfo.TenantID)
 	if err != nil {
+		logGraphIntentErr("plan", "resolve_lens", http.StatusBadRequest, lensId, corrID, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	lensId = lens.ID
 	if h.genAIHandler == nil {
+		logGraphIntentErr("plan", "genai_unconfigured", http.StatusServiceUnavailable, lensId, corrID, nil)
 		http.Error(w, "GenAI handler not configured", http.StatusServiceUnavailable)
 		return
 	}
 
 	var req horizonmodels.GraphIntentPlanRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logGraphIntentErr("plan", "decode", http.StatusBadRequest, lensId, corrID, err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	if err := req.NormalizeAndValidate(); err != nil {
+		logGraphIntentErr("plan", "req_validate", http.StatusBadRequest, lensId, corrID, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// Contract: execution stays in English.
 	req.ExecutionLanguage = horizonmodels.GraphIntentExecutionLanguageEN
 
-	corrID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
 	if corrID == "" {
 		corrID = uuid.NewString()
 	}
@@ -80,29 +91,37 @@ func (h *HorizonHandlers) PlanGraphIntent(w http.ResponseWriter, r *http.Request
 		SessionID:     sessID,
 	})
 	trace.Log(ctx, "graph_intent", "plan.request", map[string]any{
-		"lensId":       lens.ID,
-		"projectId":    lens.ProjectID,
-		"rawQuery":     trace.Trunc(req.RawQuery, 200),
+		"lensId":        lens.ID,
+		"projectId":     lens.ProjectID,
+		"rawQuery":      trace.Trunc(req.RawQuery, 200),
 		"snapshotNodes": len(req.Snapshot.Nodes),
 		"snapshotEdges": len(req.Snapshot.Edges),
-		"maxNewNodes":  req.Options.MaxNewNodes,
-		"maxNewEdges":  req.Options.MaxNewEdges,
+		"maxNewNodes":   req.Options.MaxNewNodes,
+		"maxNewEdges":   req.Options.MaxNewEdges,
 	})
 
 	plan, err := h.generateGraphIntentPlan(ctx, lens, &req)
 	if err != nil {
+		status := http.StatusInternalServerError
+		errMsg := "Failed to generate graph intent plan"
+		if errors.Is(err, errGraphIntentPlanValidation) {
+			status = http.StatusBadRequest
+			errMsg = "plan validation failed"
+		}
+		logGraphIntentErr("plan", "generate", status, lens.ID, corrID, err)
 		trace.Log(ctx, "graph_intent", "plan.error", map[string]any{
 			"lensId": lens.ID, "error": err.Error(),
 		})
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error":  "Failed to generate graph intent plan",
+			"error":  errMsg,
 			"detail": err.Error(),
 		})
 		return
 	}
 	if plan == nil {
+		logGraphIntentErr("plan", "empty", http.StatusInternalServerError, lens.ID, corrID, fmt.Errorf("planner returned no plan"))
 		trace.Log(ctx, "graph_intent", "plan.empty", map[string]any{"lensId": lens.ID})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -110,12 +129,7 @@ func (h *HorizonHandlers) PlanGraphIntent(w http.ResponseWriter, r *http.Request
 		return
 	}
 	normalizeGraphIntentPlanLoose(plan)
-	if err := plan.NormalizeAndValidate(); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Generated plan is invalid", "detail": err.Error()})
-		return
-	}
+	// Validation is strict in generateGraphIntentPlan; only valid plans reach this point.
 	if plan.IsPotentiallyDestructive() {
 		plan.RequiresConfirmation = true
 	}
@@ -130,14 +144,14 @@ func (h *HorizonHandlers) PlanGraphIntent(w http.ResponseWriter, r *http.Request
 	}
 
 	trace.Log(ctx, "graph_intent", "plan.ok", map[string]any{
-		"lensId":              lens.ID,
-		"normalizedQuery":     trace.Trunc(plan.NormalizedEnglishQuery, 120),
-		"intentClass":         plan.IntentClass,
-		"confidence":          plan.Confidence,
+		"lensId":               lens.ID,
+		"normalizedQuery":      trace.Trunc(plan.NormalizedEnglishQuery, 120),
+		"intentClass":          plan.IntentClass,
+		"confidence":           plan.Confidence,
 		"requiresConfirmation": plan.RequiresConfirmation,
-		"groupingsN":          len(plan.Create.Groupings),
-		"createNodesN":        len(plan.Create.Nodes),
-		"createEdgesN":        len(plan.Create.Edges),
+		"groupingsN":           len(plan.Create.Groupings),
+		"createNodesN":         len(plan.Create.Nodes),
+		"createEdgesN":         len(plan.Create.Edges),
 		"estimatedCreateNodes": createdNodes,
 		"estimatedCreateEdges": createdEdges,
 		"warningsN":            len(plan.Warnings),
@@ -159,22 +173,27 @@ func (h *HorizonHandlers) DryRunGraphIntent(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *HorizonHandlers) applyGraphIntent(w http.ResponseWriter, r *http.Request, forceDryRun bool) {
+	lensId := graphIntentLensIdFromRequest(r)
+	corrID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+
 	if r.Method != http.MethodPost {
+		logGraphIntentErr("apply", "method", http.StatusMethodNotAllowed, lensId, corrID, nil)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	authInfo, err := requireAuth(r)
 	if err != nil || authInfo == nil {
+		logGraphIntentErr("apply", "auth", http.StatusUnauthorized, lensId, corrID, err)
 		http.Error(w, "Authentication required", http.StatusUnauthorized)
 		return
 	}
 	lens, err := h.resolveGraphIntentLens(r.Context(), r, authInfo.TenantID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		logGraphIntentErr("apply", "resolve_lens", http.StatusBadRequest, lensId, corrID, err)
+		writeGraphIntentJSON(w, http.StatusBadRequest, map[string]string{"error": "lens resolution failed", "detail": err.Error()})
 		return
 	}
-
-	corrID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
+	lensId = lens.ID
 	if corrID == "" {
 		corrID = uuid.NewString()
 	}
@@ -192,34 +211,42 @@ func (h *HorizonHandlers) applyGraphIntent(w http.ResponseWriter, r *http.Reques
 
 	var req horizonmodels.GraphIntentApplyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		logGraphIntentErr("apply", "decode", http.StatusBadRequest, lensId, corrID, err)
+		writeGraphIntentJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid request body", "detail": err.Error()})
 		return
 	}
 	if forceDryRun {
 		req.ApplyMode = horizonmodels.GraphIntentApplyModeDry
 	}
 	if err := req.NormalizeAndValidate(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		logGraphIntentErr("apply", "req_validate", http.StatusBadRequest, lensId, corrID, err)
+		writeGraphIntentJSON(w, http.StatusBadRequest, map[string]string{"error": "request validation failed", "detail": err.Error()})
 		return
 	}
 	normalizeGraphIntentPlanLoose(&req.Plan)
 	if err := req.Plan.NormalizeAndValidate(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		logGraphIntentErr("apply", "plan_validate", http.StatusBadRequest, lensId, corrID, err)
+		writeGraphIntentJSON(w, http.StatusBadRequest, map[string]string{"error": "plan validation failed", "detail": err.Error()})
 		return
 	}
 
 	createdNodes, createdEdges := req.Plan.EstimatedCreateCounts()
 	if createdNodes > graphIntentApplyHardMaxCreateNodes {
-		http.Error(w, fmt.Sprintf("create nodes exceed apply limit: %d > %d", createdNodes, graphIntentApplyHardMaxCreateNodes), http.StatusBadRequest)
+		err := fmt.Errorf("create nodes exceed limit: %d > %d", createdNodes, graphIntentApplyHardMaxCreateNodes)
+		logGraphIntentErr("apply", "limit_nodes", http.StatusBadRequest, lensId, corrID, err)
+		writeGraphIntentJSON(w, http.StatusBadRequest, map[string]string{"error": "apply limit exceeded", "detail": err.Error()})
 		return
 	}
 	if createdEdges > graphIntentApplyHardMaxCreateEdges {
-		http.Error(w, fmt.Sprintf("create edges exceed apply limit: %d > %d", createdEdges, graphIntentApplyHardMaxCreateEdges), http.StatusBadRequest)
+		err := fmt.Errorf("create edges exceed limit: %d > %d", createdEdges, graphIntentApplyHardMaxCreateEdges)
+		logGraphIntentErr("apply", "limit_edges", http.StatusBadRequest, lensId, corrID, err)
+		writeGraphIntentJSON(w, http.StatusBadRequest, map[string]string{"error": "apply limit exceeded", "detail": err.Error()})
 		return
 	}
 
 	isDryRun := req.ApplyMode == horizonmodels.GraphIntentApplyModeDry
 	if !isDryRun && (req.Plan.RequiresConfirmation || req.Plan.IsPotentiallyDestructive()) && !graphIntentApplyConfirmed(r) {
+		logGraphIntentErr("apply", "confirmation_required", http.StatusConflict, lensId, corrID, fmt.Errorf("resend with confirm=true"))
 		trace.Log(applyCtx, "graph_intent", "apply.confirmation_required", map[string]any{
 			"lensId": lens.ID, "idempotencyKey": trace.Trunc(req.IdempotencyKey, 36),
 		})
@@ -233,10 +260,10 @@ func (h *HorizonHandlers) applyGraphIntent(w http.ResponseWriter, r *http.Reques
 	}
 
 	trace.Log(applyCtx, "graph_intent", "apply.start", map[string]any{
-		"lensId":        lens.ID,
+		"lensId":         lens.ID,
 		"idempotencyKey": trace.Trunc(req.IdempotencyKey, 36),
-		"dryRun":        isDryRun,
-		"intentClass":   req.Plan.IntentClass,
+		"dryRun":         isDryRun,
+		"intentClass":    req.Plan.IntentClass,
 	})
 
 	exec := &graphIntentApplyExecutor{
@@ -247,10 +274,11 @@ func (h *HorizonHandlers) applyGraphIntent(w http.ResponseWriter, r *http.Reques
 		maxRewriteTouchCount: graphIntentApplyHardMaxRewriteOps,
 	}
 	if err := exec.init(); err != nil {
+		logGraphIntentErr("apply", "init", http.StatusServiceUnavailable, lensId, corrID, err)
 		trace.Log(applyCtx, "graph_intent", "apply.init_error", map[string]any{
 			"lensId": lens.ID, "error": err.Error(),
 		})
-		http.Error(w, "Graph intent apply is not available", http.StatusServiceUnavailable)
+		writeGraphIntentJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Graph intent apply is not available", "detail": err.Error()})
 		return
 	}
 
@@ -262,17 +290,17 @@ func (h *HorizonHandlers) applyGraphIntent(w http.ResponseWriter, r *http.Reques
 	}
 
 	trace.Log(applyCtx, "graph_intent", "apply.ok", map[string]any{
-		"lensId":             lens.ID,
-		"applied":            resp.Applied,
-		"dryRun":             isDryRun,
-		"createdNodeCount":   resp.CreatedNodeCount,
-		"createdEdgeCount":   resp.CreatedEdgeCount,
-		"updatedNodeCount":   resp.UpdatedNodeCount,
-		"updatedEdgeCount":   resp.UpdatedEdgeCount,
-		"deletedNodeCount":   resp.DeletedNodeCount,
-		"deletedEdgeCount":   resp.DeletedEdgeCount,
-		"unresolvedItemsN":   len(resp.UnresolvedItems),
-		"warningsN":          len(resp.Warnings),
+		"lensId":           lens.ID,
+		"applied":          resp.Applied,
+		"dryRun":           isDryRun,
+		"createdNodeCount": resp.CreatedNodeCount,
+		"createdEdgeCount": resp.CreatedEdgeCount,
+		"updatedNodeCount": resp.UpdatedNodeCount,
+		"updatedEdgeCount": resp.UpdatedEdgeCount,
+		"deletedNodeCount": resp.DeletedNodeCount,
+		"deletedEdgeCount": resp.DeletedEdgeCount,
+		"unresolvedItemsN": len(resp.UnresolvedItems),
+		"warningsN":        len(resp.Warnings),
 	})
 
 	writeGraphIntentJSON(w, http.StatusOK, resp)
@@ -313,7 +341,23 @@ func (h *HorizonHandlers) generateGraphIntentPlan(ctx context.Context, lens *hor
 
 	systemInstruction := strings.TrimSpace(`
 You are a Graph Intent planner for a knowledge graph editor.
-Return ONLY valid JSON. No markdown, no code fences, no extra text.
+Return ONLY a single JSON object. No markdown, no code fences, no extra text.
+
+Required output structure (exact keys):
+{
+  "version": "graph-intent.v1",
+  "normalizedEnglishQuery": "<English translation of user query>",
+  "intentClass": "create|update|delete|merge|transform|mixed|unknown",
+  "confidence": <0.0-1.0>,
+  "create": { "groupings": [], "nodes": [...], "edges": [...] },
+  "update": { "nodePatches": [], "edgePatches": [], "relationRewrite": [] },
+  "delete": { "nodeIds": [], "edgeIds": [] },
+  "merge": { "primaryNodeId": "", "duplicateNodeIds": [], "mergeFragmentData": true },
+  "transform": { "deriveChains": [], "restructure": [] },
+  "requiresConfirmation": false
+}
+
+Every create.nodes and groupings.entities item MUST have: label, type, canonicalPathHint (path starting with /). Edges use fromTempId/toTempId or fromNodeId/toNodeId.
 
 Rules:
 - The user query may be in any language.
@@ -325,6 +369,7 @@ Rules:
 - Keep plan conservative: if uncertain, lower confidence and add warnings.
 - If operation can be destructive (broad relation rewrites, deletions), set requiresConfirmation=true.
 - Keep output compact and executable.
+- Forbidden path forms (never use): /policy/*, /geo/*, /economy/*, /society/*, /org/gov/*.
 - CRITICAL: Every node (create.nodes, groupings.entities) MUST have tempId and canonicalPathHint. Edges use fromTempId/toTempId for new nodes, fromNodeId/toNodeId for existing snapshot nodes.
 - DELETE: Use delete.nodeIds to remove obsolete nodes. Use delete.edgeIds to remove specific edges. Node deletion cascades to its edges.
 - MERGE: For "merge duplicates" or "remove duplicates, keep one" use merge block. Set merge.primaryNodeId to the canonical node (from snapshot), merge.duplicateNodeIds to the duplicates. The system will: reassign edges from duplicates to primary (with dedup), optionally merge fragment data (Labels, State, merged_paths), then delete duplicates. Prefer merge over update+delete for duplicate consolidation.
@@ -338,7 +383,7 @@ Rules:
   "create": {
     "groupings": [],
     "nodes": [
-      {"tempId": "n1", "label": "Entity A", "type": "ORGANIZATION", "canonicalPathHint": "/org/example/entity-a"},
+      {"tempId": "n1", "label": "Entity A", "type": "ORGANIZATION", "canonicalPathHint": "/org/us/entity-a-inc"},
       {"tempId": "n2", "label": "Entity B", "type": "PERSON", "canonicalPathHint": "/person/entity-b"}
     ],
     "edges": [
@@ -394,7 +439,7 @@ Graph snapshot JSON:
 Example output structure (follow this format exactly):
 %s
 
-For merge/remove-duplicates queries, use delete.nodeIds:
+Example merge output structure:
 %s
 
 Full JSON schema (draft-07):
@@ -404,41 +449,104 @@ Return exactly one JSON object. No markdown, no code fences. Just the raw JSON.
 `, time.Now().UTC().Format(time.RFC3339), horizonmodels.GraphIntentVersionV1, horizonmodels.GraphIntentExecutionLanguageEN, lens.ID, lens.ProjectID, req.RawQuery, req.QueryLanguage, req.Options.AllowSearchGrounding, req.Options.AllowInternalGrounding, req.Options.MaxNewNodes, req.Options.MaxNewEdges, groupingKindDescriptions, nodeTypeDescriptions, relationTypeDescriptions, string(snapshotJSON), exampleOutput, exampleMergeOutput, string(schemaJSON)))
 
 	llmReq := gen_combined.GenAIRequest{
-		Model:             graphIntentPlannerModel,
+		Model:             "", // Model Manager picks via MinCapabilityScore=7
 		Prompt:            prompt,
 		SystemInstruction: systemInstruction,
-		WebSearchEnabled:  req.Options.AllowSearchGrounding,
-		MaxOutputTokens:   16384,
+		WebSearchEnabled:  false,
+		MaxOutputTokens:   65536,
 		Temperature:       0.1,
 		ProjectID:         strings.TrimSpace(lens.ProjectID),
+		StrictJSONEnabled: true,
+		JSONSchema:        schema,
 	}
+	trace.Log(ctx, "graph_intent", "plan.llm_request", map[string]any{
+		"lensId":                 lens.ID,
+		"model":                  llmReq.Model,
+		"strictJSONEnabled":      llmReq.StrictJSONEnabled,
+		"webSearchEnabled":       llmReq.WebSearchEnabled,
+		"requestedWebSearch":     req.Options.AllowSearchGrounding,
+		"maxOutputTokensBudget":  llmReq.MaxOutputTokens,
+		"promptChars":            len(prompt),
+		"systemInstructionChars": len(systemInstruction),
+		"schemaChars":            len(schemaJSON),
+		"snapshotChars":          len(snapshotJSON),
+	})
+	llmStarted := time.Now()
 
-	genResp, err := h.genAIHandler.GenerateDirect(ctx, llmReq)
+	genResp, err := h.genAIHandler.GenerateStructuredViaTaskExecutor(ctx, llmReq, 7)
 	if err != nil || genResp == nil {
+		trace.Log(ctx, "graph_intent", "plan.llm_error", map[string]any{
+			"lensId": lens.ID, "error": err.Error(),
+		})
 		return nil, fmt.Errorf("planner call failed")
 	}
+	llmElapsedMs := time.Since(llmStarted).Milliseconds()
 
-	ver := ai.NewGenericVerifier(func(out horizonmodels.GraphIntentPlanResponse) error {
-		normalizeGraphIntentPlanLoose(&out)
-		if err := out.NormalizeAndValidate(); err != nil {
-			return err
-		}
-		return nil
+	// Log LLM response for AI diagnosis (sufficient for debugging)
+	contentLen := len(genResp.Content)
+	contentPreview := trace.Trunc(genResp.Content, 6000)
+	log.Printf("[GraphIntent] plan.llm_response lensId=%s model=%s llmElapsedMs=%d contentLen=%d usage(prompt=%d output=%d reasoning=%d total=%d) contentPreview=%s",
+		lens.ID, strings.TrimSpace(genResp.Model), llmElapsedMs, contentLen,
+		genResp.Usage.PromptTokens, genResp.Usage.OutputTokens, genResp.Usage.ReasoningTokens, genResp.Usage.TotalTokens,
+		contentPreview,
+	)
+	trace.Log(ctx, "graph_intent", "plan.llm_response", map[string]any{
+		"lensId":         lens.ID,
+		"model":          strings.TrimSpace(genResp.Model),
+		"llmElapsedMs":   llmElapsedMs,
+		"contentLen":     contentLen,
+		"contentPreview": trace.Trunc(genResp.Content, 2000),
+		"usagePrompt":    genResp.Usage.PromptTokens,
+		"usageOutput":    genResp.Usage.OutputTokens,
+		"usageTotal":     genResp.Usage.TotalTokens,
+		"usageReasoning": genResp.Usage.ReasoningTokens,
+		"finishReason":   extractGeminiFinishReason(genResp.RawJSON),
 	})
-	parsedAny, err := ver.VerifyAndParse(genResp.Content)
-	if err != nil {
-		llmReq.SystemInstruction = strings.TrimSpace(systemInstruction + "\n\nCRITICAL: Return ONLY a single JSON object. No markdown. No extra text.")
-		genResp2, err2 := h.genAIHandler.GenerateDirect(ctx, llmReq)
-		if err2 != nil || genResp2 == nil {
-			return nil, fmt.Errorf("planner output validation failed")
-		}
-		parsedAny, err = ver.VerifyAndParse(genResp2.Content)
-		if err != nil {
-			return nil, fmt.Errorf("planner output validation failed")
-		}
+
+	// Parse JSON
+	var plan horizonmodels.GraphIntentPlanResponse
+	baseVerifier := &ai.BaseVerifier{}
+	cleaned, cleanErr := baseVerifier.CleanAndFixJSON(genResp.Content)
+	if cleanErr != nil {
+		log.Printf("[GraphIntent] plan.parse_failed lensId=%s stage=clean err=%v rawTail=%s", lens.ID, cleanErr, tailForLog(genResp.Content, 1600))
+		trace.Log(ctx, "graph_intent", "plan.parse_failed", map[string]any{
+			"lensId":         lens.ID,
+			"stage":          "clean",
+			"error":          cleanErr.Error(),
+			"contentLen":     contentLen,
+			"contentPreview": contentPreview,
+			"rawTail":        tailForLog(genResp.Content, 800),
+			"finishReason":   extractGeminiFinishReason(genResp.RawJSON),
+			"usagePrompt":    genResp.Usage.PromptTokens,
+			"usageOutput":    genResp.Usage.OutputTokens,
+			"usageTotal":     genResp.Usage.TotalTokens,
+		})
+		return nil, fmt.Errorf("planner JSON parse failed: %w", cleanErr)
 	}
-	plan := parsedAny.(horizonmodels.GraphIntentPlanResponse)
+	if err := json.Unmarshal([]byte(cleaned), &plan); err != nil {
+		log.Printf("[GraphIntent] plan.parse_failed lensId=%s stage=unmarshal err=%v cleanedLen=%d cleanedTail=%s", lens.ID, err, len(cleaned), tailForLog(cleaned, 1200))
+		trace.Log(ctx, "graph_intent", "plan.parse_failed", map[string]any{
+			"lensId":       lens.ID,
+			"stage":        "unmarshal",
+			"error":        err.Error(),
+			"cleanedLen":   len(cleaned),
+			"cleanedTail":  tailForLog(cleaned, 600),
+			"contentLen":   contentLen,
+			"finishReason": extractGeminiFinishReason(genResp.RawJSON),
+			"usagePrompt":  genResp.Usage.PromptTokens,
+			"usageOutput":  genResp.Usage.OutputTokens,
+			"usageTotal":   genResp.Usage.TotalTokens,
+		})
+		return nil, fmt.Errorf("planner JSON parse failed: %w", err)
+	}
 	normalizeGraphIntentPlanLoose(&plan)
+	if err := plan.NormalizeAndValidate(); err != nil {
+		log.Printf("[GraphIntent] plan.validation_failed lensId=%s err=%v contentPreview=%s", lens.ID, err, contentPreview)
+		trace.Log(ctx, "graph_intent", "plan.validation_failed", map[string]any{
+			"lensId": lens.ID, "validationError": err.Error(), "contentLen": contentLen, "contentPreview": contentPreview,
+		})
+		return nil, fmt.Errorf("%w: %v", errGraphIntentPlanValidation, err)
+	}
 
 	if strings.TrimSpace(plan.NormalizedEnglishQuery) == "" {
 		plan.NormalizedEnglishQuery = strings.TrimSpace(req.RawQuery)
@@ -1982,6 +2090,40 @@ func appendUniqueStrings(dst []string, values ...string) []string {
 	return out
 }
 
+func tailForLog(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[len(s)-max:]
+}
+
+func extractGeminiFinishReason(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var root map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &root); err != nil {
+		return ""
+	}
+	cands, ok := root["candidates"].([]interface{})
+	if !ok || len(cands) == 0 {
+		return ""
+	}
+	c0, ok := cands[0].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if fr, ok := c0["finishReason"].(string); ok {
+		return strings.TrimSpace(fr)
+	}
+	return ""
+}
+
 func graphIntentApplyConfirmed(r *http.Request) bool {
 	if r == nil {
 		return false
@@ -1998,6 +2140,31 @@ func writeGraphIntentJSON(w http.ResponseWriter, status int, payload interface{}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// logGraphIntentErr logs every error response so GCP logs suffice for diagnosis.
+// Call before every 4xx/5xx return. lensId/corrID may be empty when not yet available.
+func logGraphIntentErr(phase, stage string, status int, lensId, corrID string, err error) {
+	msg := fmt.Sprintf("[GraphIntent] %s.%s status=%d", phase, stage, status)
+	if lensId != "" {
+		msg += fmt.Sprintf(" lensId=%s", lensId)
+	}
+	if corrID != "" {
+		msg += fmt.Sprintf(" correlationId=%s", corrID)
+	}
+	if err != nil {
+		msg += fmt.Sprintf(" err=%v", err)
+	}
+	log.Print(msg)
+}
+
+func graphIntentLensIdFromRequest(r *http.Request) string {
+	path := strings.TrimPrefix(r.URL.Path, "/api/horizon/lenses/")
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
+		return strings.TrimSpace(parts[0])
+	}
+	return ""
 }
 
 func cloneAnyMap(in map[string]interface{}) map[string]interface{} {

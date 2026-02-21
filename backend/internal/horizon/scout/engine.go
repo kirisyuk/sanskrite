@@ -10,19 +10,16 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
-	horizonhighprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/highprofile"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
@@ -1611,6 +1608,7 @@ type ScoutEngine struct {
 	aiExecutor              *ai.AITaskExecutor
 	wikidataClient          coreontology.WikidataClientInterface // Optional: shared for enrichment/dedup (no search by default)
 	geonamesClient          coreontology.GeoNamesClientInterface // Optional: deterministic geo normalization/enrichment
+	openCorporatesClient    henrich.OpenCorporatesClientInterface // Optional: org enrichment with registry IDs
 	spendLedger             *repo.HorizonSpendLedger
 	budgetPolicy            BudgetPolicy
 	propagationTrigger      func(ctx context.Context, fragmentID string) error
@@ -1648,6 +1646,112 @@ type ScoutEngine struct {
 	domainAnswersRepo *repo.DomainAnswerSnapshotsRepository // Optional: persisted DomainAnswerSnapshot artifacts
 	unitGraphRepo     *repo.UnitGraphSnapshotsRepository    // Optional: persisted L1 unit graph snapshots
 	unitDiveRepo      *repo.UnitDiveResultsRepository       // Optional: persisted unit-dive artifacts
+}
+
+const maxDeferredScopeAddPerLens = 5
+
+// bestEffortDeferredScopeAdd adds canonicalPath to lens.Scope if under limit (max 5 per lens).
+// Used when Scout creates fragment for a deferred-scope job.
+func (e *ScoutEngine) bestEffortDeferredScopeAdd(ctx context.Context, lensID, canonicalPath string) {
+	if e == nil || e.lensesRepo == nil || lensID == "" || strings.TrimSpace(canonicalPath) == "" {
+		return
+	}
+	lens, err := e.lensesRepo.Get(ctx, lensID)
+	if err != nil || lens == nil {
+		return
+	}
+	currentCount := 0
+	if lens.ViewConfig != nil {
+		if v, ok := lens.ViewConfig["deferredScopeAddCount"]; ok {
+			switch n := v.(type) {
+			case float64:
+				currentCount = int(n)
+			case int:
+				currentCount = n
+			}
+		}
+	}
+	if currentCount >= maxDeferredScopeAddPerLens {
+		trace.Log(ctx, "scope", "scope.deferred_add.skipped_limit", map[string]any{
+			"lensId": lensID,
+			"path":   canonicalPath,
+			"count":  currentCount,
+		})
+		return
+	}
+	// Check if path already in scope
+	for _, s := range lens.Scope {
+		if strings.TrimSpace(s) == canonicalPath {
+			return
+		}
+	}
+	if err := e.lensesRepo.AddScopeCanonicalPaths(ctx, lensID, []string{canonicalPath}); err != nil {
+		trace.Log(ctx, "scope", "scope.deferred_add.failed", map[string]any{
+			"lensId": lensID,
+			"path":   canonicalPath,
+			"error":  err.Error(),
+		})
+		return
+	}
+	if lens.ViewConfig == nil {
+		lens.ViewConfig = map[string]interface{}{}
+	}
+	lens.ViewConfig["deferredScopeAddCount"] = currentCount + 1
+	_ = e.lensesRepo.Update(ctx, lens)
+	trace.Log(ctx, "scope", "scope.deferred_add.ok", map[string]any{
+		"lensId": lensID,
+		"path":   canonicalPath,
+		"count":  currentCount + 1,
+	})
+}
+
+// bestEffortRemoveOrphanScopePaths removes scope paths that have no corresponding fragment.
+func (e *ScoutEngine) bestEffortRemoveOrphanScopePaths(ctx context.Context, lensID string) {
+	if e == nil || e.lensesRepo == nil || e.fragmentsRepo == nil || lensID == "" {
+		return
+	}
+	lens, err := e.lensesRepo.Get(ctx, lensID)
+	if err != nil || lens == nil || len(lens.Scope) == 0 {
+		return
+	}
+	var toRemove []string
+	for _, p := range lens.Scope {
+		p = strings.TrimSpace(p)
+		if p == "" || strings.HasPrefix(p, "/query/") || strings.HasPrefix(p, "/domain/") {
+			continue
+		}
+		resolvedCP := p
+		if e.canonicalPathResolver != nil {
+			ft := InferFragmentTypeFromCanonicalPath(p)
+			if rr, rerr := e.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && rr != nil && strings.TrimSpace(rr.CanonicalPath) != "" {
+				resolvedCP = strings.TrimSpace(rr.CanonicalPath)
+				if rr.ExistingFragment != nil {
+					continue // has fragment
+				}
+			}
+		}
+		f, ferr := e.fragmentsRepo.GetByCanonicalPath(ctx, resolvedCP)
+		if ferr != nil || f == nil || strings.TrimSpace(f.ID) == "" {
+			toRemove = append(toRemove, p)
+		}
+	}
+	if len(toRemove) == 0 {
+		return
+	}
+	if err := e.lensesRepo.RemoveScopeCanonicalPaths(ctx, lensID, toRemove); err != nil {
+		trace.Log(ctx, "scope", "scope.orphan_cleanup.failed", map[string]any{
+			"lensId":    lensID,
+			"removedN":  len(toRemove),
+			"paths":     toRemove,
+			"error":     err.Error(),
+		})
+		return
+	}
+	trace.Log(ctx, "scope", "scope.orphan_cleanup.ok", map[string]any{
+		"lensId":   lensID,
+		"removedN": len(toRemove),
+		"paths":    toRemove,
+	})
 }
 
 // bestEffortRewriteLensScope replaces alias canonical paths in lens.Scope with their canonical equivalents.
@@ -2176,6 +2280,12 @@ func (e *ScoutEngine) WithGeoNamesClient(client coreontology.GeoNamesClientInter
 	return e
 }
 
+// WithOpenCorporatesClient sets the OpenCorporates client for organization enrichment (registry IDs).
+func (e *ScoutEngine) WithOpenCorporatesClient(client henrich.OpenCorporatesClientInterface) *ScoutEngine {
+	e.openCorporatesClient = client
+	return e
+}
+
 // WithPolicyChecker sets the policy checker for final validation of job outputs.
 func (e *ScoutEngine) WithPolicyChecker(checker *policy.PolicyChecker) *ScoutEngine {
 	e.policyChecker = checker
@@ -2435,6 +2545,10 @@ func (e *ScoutEngine) transition(ctx context.Context, job *models.ScoutingJob, n
 		job.Status = coreModels.AgentJobStatusCompleted
 	case models.ScoutingJobStateRejected, models.ScoutingJobStateFailed:
 		job.Status = coreModels.AgentJobStatusFailed
+		// Orphan cleanup: remove scope paths with no fragment when job fails.
+		if lensID := strings.TrimSpace(job.LensID); lensID != "" && e.lensesRepo != nil && e.fragmentsRepo != nil {
+			e.bestEffortRemoveOrphanScopePaths(ctx, lensID)
+		}
 	default:
 		// Any non-terminal scout state counts as running from AgentJob perspective.
 		// (pending is only used at creation time).
@@ -2491,27 +2605,6 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	}
 	policyTracker := tracking.NewTracker()
 	ctx = tracking.WithTracker(ctx, policyTracker)
-
-	// Collect affected fragment IDs from edge writes during this job execution.
-	// This lets us recompute global highProfile signals in one batch AFTER policy/enforcement,
-	// without per-edge recomputation or additional Firestore lookups for endpoints.
-	var hpMu sync.Mutex
-	hpAffected := map[string]struct{}{}
-	ctx = repo.WithEdgeAffectCollector(ctx, func(sourceFragmentID, targetFragmentID string) {
-		sourceFragmentID = strings.TrimSpace(sourceFragmentID)
-		targetFragmentID = strings.TrimSpace(targetFragmentID)
-		if sourceFragmentID == "" && targetFragmentID == "" {
-			return
-		}
-		hpMu.Lock()
-		if sourceFragmentID != "" {
-			hpAffected[sourceFragmentID] = struct{}{}
-		}
-		if targetFragmentID != "" {
-			hpAffected[targetFragmentID] = struct{}{}
-		}
-		hpMu.Unlock()
-	})
 
 	// SESSION GRAPH: In-memory cache for fragments discovered/created during this job.
 	// Solves: Vertex indexing delay, duplicate creation, path update tracking.
@@ -2791,43 +2884,11 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	}
 
-	// DOMAIN jobs are handled by a deterministic domain-expansion runner (no heavy LLM scouting).
-	// This runs before freshness checks because domains are contracts, not real-world entities.
+	// Domain is config (contract), not a graph node. Jobs targeting /domain/ are skipped;
+	// domainModes come from lens; scope excludes /domain/ paths.
 	if strings.HasPrefix(strings.TrimSpace(effectiveCanonicalPath), "/domain/") {
-		// Select which pipeline pass to execute for this domain job.
-		pass := pipeline.PassBaseEnrichment
-		if job.State != nil {
-			if v, ok := job.State[pipeline.StateKeyPipelinePass]; ok {
-				if s := strings.TrimSpace(parseStateString(v)); s != "" {
-					pass = pipeline.PassName(s)
-				}
-			}
-		}
-		// Backward compatibility: old flags used to route to overlay executor.
-		// If present, treat it as strategic projection pass.
-		if pass == pipeline.PassBaseEnrichment {
-			overlayMode := false
-			if job.State != nil {
-				if v, ok := job.State["domainOverlayMode"]; ok {
-					overlayMode = parseStateBool(v, false)
-				}
-				if !overlayMode {
-					if v, ok := job.State["phase2Overlay"]; ok {
-						overlayMode = parseStateBool(v, false)
-					}
-				}
-			}
-			if overlayMode {
-				pass = pipeline.PassStrategicProjection
-			}
-		}
-
-		r := pipeline.DefaultRunner()
-		return r.Run(ctx, e, pass, pipeline.PassInput{
-			Job:                    job,
-			EffectiveCanonicalPath: effectiveCanonicalPath,
-			ExistingFragment:       existingFragment,
-		})
+		_ = e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "domain_as_config_skip")
+		return nil
 	}
 
 	if existingFragment != nil {
@@ -3354,7 +3415,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") ||
 			strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/fac/") {
 			validationResult.MissingInfo = append(validationResult.MissingInfo,
-				fmt.Sprintf("Who is the external auditor of %s (as of the latest fiscal year)? Provide audit firm legal name and source. Output as relation AUDITED_BY.", job.TargetCanonicalPath),
+				fmt.Sprintf("Who provides external assurance to %s? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit) or AUDITED_BY. Provide audit firm and source.", job.TargetCanonicalPath),
 				fmt.Sprintf("[HIGH PRIORITY] What industry/sector does %s operate in? Return marketSegments as array of paths /segment/{domain}/{vertical}/{geo}. Domains: finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate|public-sector|professional-services. For government use public-sector domain. Geo: ISO2 lowercase or regional bucket (global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta). Example: /segment/technology/semiconductors/tw", job.TargetCanonicalPath),
 				fmt.Sprintf("[HIGH PRIORITY] What is the size of %s? Find employee count or revenue to determine orgSize: sme (<500 emp or <$100M rev), le (500-5000 emp or $100M-$1B), enterprise (5000-50000 emp or $1B-$10B), mega (>50000 emp or >$10B). For government: federal G20 ministries=enterprise/mega, regional=le/enterprise. Use 'na' only if truly unknown.", job.TargetCanonicalPath),
 			)
@@ -4590,15 +4651,17 @@ SKIP_RESEARCH:
 	// This runs on both create and update to ensure best-effort enrichment even for existing fragments.
 	if existingFragment != nil {
 		e.enrichFragmentHierarchy(ctx, existingFragment, job.ID)
+		// OpenCorporates: attach registry ID for ORGANIZATION fragments when enabled.
+		if henrich.OpenCorporatesEnabled() && e.openCorporatesClient != nil && existingFragment.Type == models.FragmentTypeOrganization {
+			if attached, ocID := henrich.AttachOpenCorporatesIDIfMissing(ctx, e.openCorporatesClient, existingFragment); attached && ocID != "" {
+				_ = e.fragmentsRepo.Update(ctx, existingFragment)
+			}
+		}
 	}
 
 	if orgLegacyPath != "" && orgCanonicalizedPath != "" && existingFragment != nil {
 		e.runLegacyOrgEdgeCleanup(ctx, job, existingFragment, orgLegacyPath, orgCanonicalizedPath)
 	}
-
-	// Emit minimal ontology facts from Scout's LLM output/state (best-effort).
-	// This is intentionally small-volume: 1 fact per root job, focusing on risk metrics.
-	_ = e.emitMinimalFactsFromScoutRun(ctx, job, existingFragment, frameID)
 
 	// Intent-based sphere linking: ensure sphere fragments and INFLUENCES edges exist for this target
 	// when the Lens requested spherePaths. This is intentionally independent of ontology facts/metrics
@@ -4612,6 +4675,17 @@ SKIP_RESEARCH:
 	// This seeds exploration for the requested spheres and makes future similar queries faster.
 	if err := e.seedOntologyFromIntent(ctx, job, existingFragment); err != nil {
 		fmt.Printf("[ScoutEngine] Intent decomposition failed for %s: %v\n", job.TargetCanonicalPath, err)
+	}
+
+	// Deferred scope: add to scope only when fragment created (max 5 per lens).
+	if lensID != "" && e.lensesRepo != nil && e.fragmentsRepo != nil {
+		if job.State != nil && parseStateBool(job.State[models.StateKeyDeferredScopeAdd], false) {
+			effectiveCP := strings.TrimSpace(existingFragment.CanonicalPath)
+			if effectiveCP != "" {
+				e.bestEffortDeferredScopeAdd(ctx, lensID, effectiveCP)
+			}
+		}
+		e.bestEffortRemoveOrphanScopePaths(ctx, lensID)
 	}
 
 	// Realtime: job completed + node materialized/updated.
@@ -4701,7 +4775,6 @@ SKIP_RESEARCH:
 	}
 
 	// POLICY ENFORCEMENT: Run final validation on all created/modified entities
-	// Also persist highProfile affected fragment IDs collected from edge writes during this job.
 	if job.State == nil {
 		job.State = map[string]interface{}{}
 	}
@@ -4709,39 +4782,6 @@ SKIP_RESEARCH:
 	e.persistUnitDiveResultFromJobState(ctx, job, effectiveCanonicalPath, validationResult.Confidence, scoutResult.Relations, scoutResult.SupplyChains)
 	// Persist finalized job outputs into LensArtifacts (Phase 2 input).
 	e.persistLensArtifactsFromJobState(ctx, job)
-	{
-		ids := map[string]struct{}{}
-
-		// Primary source: endpoints observed at edge write time (canonicalized/swapped in repo.Create).
-		hpMu.Lock()
-		for id := range hpAffected {
-			ids[id] = struct{}{}
-		}
-		hpMu.Unlock()
-
-		// Baseline: any fragments tracked by policyTracker (covers "node-only" changes).
-		for _, id := range e.extractStringSlice(job.State, "createdFragmentIds") {
-			id = strings.TrimSpace(id)
-			if id != "" {
-				ids[id] = struct{}{}
-			}
-		}
-		for _, id := range e.extractStringSlice(job.State, "modifiedFragmentIds") {
-			id = strings.TrimSpace(id)
-			if id != "" {
-				ids[id] = struct{}{}
-			}
-		}
-
-		out := make([]string, 0, len(ids))
-		for id := range ids {
-			out = append(out, id)
-		}
-		sort.Strings(out)
-		if len(out) > 0 {
-			job.State["highProfileAffectedFragmentIds"] = out
-		}
-	}
 	e.runPolicyAudit(ctx, job)
 
 	// Запускаем распространение изменений в графе
@@ -4764,210 +4804,6 @@ SKIP_RESEARCH:
 		})
 	}
 
-	return nil
-}
-
-func (e *ScoutEngine) emitMinimalFactsFromScoutRun(ctx context.Context, job *models.ScoutingJob, fragment *models.HorizonFragment, frameID string) error {
-	if e == nil || job == nil || fragment == nil {
-		return nil
-	}
-	// Avoid exponential growth: only root jobs.
-	if job.State != nil {
-		if v, ok := job.State["recursionDepth"].(float64); ok && int(v) > 0 {
-			return nil
-		}
-		if v, ok := job.State["scoutFactsEmitted"].(bool); ok && v {
-			return nil
-		}
-	}
-	if e.factEmitter == nil && (e.planner == nil || e.planner.factsRepo == nil) {
-		return nil
-	}
-
-	// Collect only risk metrics to keep it minimal.
-	type pair struct {
-		name string
-		mv   models.MetricValue
-	}
-	riskMetrics := make([]pair, 0)
-	for k, mv := range fragment.State {
-		k2 := strings.TrimSpace(k)
-		if strings.HasPrefix(k2, "/metric/risk/") {
-			riskMetrics = append(riskMetrics, pair{name: k2, mv: mv})
-		}
-	}
-	if len(riskMetrics) == 0 {
-		return nil
-	}
-	if len(riskMetrics) > 12 {
-		riskMetrics = riskMetrics[:12]
-	}
-
-	now := time.Now().UTC()
-	title := fmt.Sprintf("Scout inferred risk metrics for %s", strings.TrimSpace(fragment.CanonicalPath))
-	f := &coreModels.OntologyFact{
-		BaseOntologyFields: coreModels.BaseOntologyFields{
-			TenantID:       strings.TrimSpace(job.TenantID),
-			Version:        1,
-			CreatedAt:      now,
-			UpdatedAt:      now,
-			CreatedBy:      "system",
-			UpdatedBy:      "system",
-			Labels:         map[string]string{"en": title},
-			Status:         "active",
-			Tags:           []string{"scout", "llm", "metric", "risk"},
-			CanonicalPaths: []string{strings.TrimSpace(fragment.CanonicalPath)},
-			ActorPaths:     []string{strings.TrimSpace(fragment.CanonicalPath)},
-			SpherePaths: func() []string {
-				if job.State == nil {
-					return nil
-				}
-				raw, ok := job.State["spherePaths"]
-				if !ok {
-					return nil
-				}
-				paths := []string{}
-				switch t := raw.(type) {
-				case []string:
-					paths = append(paths, t...)
-				case []interface{}:
-					for _, it := range t {
-						if s, ok := it.(string); ok {
-							paths = append(paths, s)
-						}
-					}
-				case string:
-					for _, p := range strings.Split(t, ",") {
-						paths = append(paths, p)
-					}
-				}
-				return taxonomy.NormalizeSpherePaths(paths)
-			}(),
-		},
-		Kind:       "metric",
-		Type:       "scout_inferred_risk_metrics",
-		Title:      title,
-		Summary:    "Minimal metric patch emitted by Scout after LLM research; used to seed ontology_facts when sources pipeline is paused.",
-		ObservedAt: &now,
-		SourceRefs: []coreModels.SourceRef{
-			{SourceID: strings.TrimSpace(job.ID), SourceType: coreModels.SourceTypeAgentJob},
-			{SourceID: strings.TrimSpace(frameID), SourceType: coreModels.SourceTypeHorizonFrame},
-		},
-		Confidence: 0.6,
-	}
-
-	for _, p := range riskMetrics {
-		mv := p.mv
-		observed := mv.ObservedAt
-		f.MetricUpdates = append(f.MetricUpdates, coreModels.FactMetricUpdate{
-			MetricName: p.name,
-			Value:      mv.Value,
-			Unit:       mv.Unit,
-			Confidence: mv.Confidence,
-			ObservedAt: &observed,
-		})
-		if mv.Confidence > f.Confidence {
-			f.Confidence = mv.Confidence
-		}
-	}
-	f.VectorText = f.GenerateVectorText()
-
-	rc, _ := rtctx.Get(ctx)
-	// Add correlation/trace link when available (so facts can be traced back to LLM/tool telemetry).
-	if v := strings.TrimSpace(rc.CorrelationID); v != "" {
-		f.SourceRefs = append(f.SourceRefs, coreModels.SourceRef{SourceID: v, SourceType: coreModels.SourceTypeAITrace})
-	}
-	emitOpts := coreontology.EmitFactOptions{
-		TenantID:         strings.TrimSpace(job.TenantID),
-		ProjectID:        strings.TrimSpace(job.ProjectID),
-		LensID:           strings.TrimSpace(job.LensID),
-		SessionID:        strings.TrimSpace(rc.SessionID),
-		CorrelationID:    strings.TrimSpace(rc.CorrelationID),
-		PublishFeedEvent: true,
-		Actor:            "system",
-	}
-
-	metricFactID := ""
-	if e.factEmitter != nil {
-		if id, err := e.factEmitter.Emit(ctx, f, emitOpts); err == nil {
-			metricFactID = id
-		}
-	} else if e.planner != nil && e.planner.factsRepo != nil {
-		if id, err := e.planner.factsRepo.Create(ctx, f); err == nil {
-			metricFactID = id
-		}
-	}
-
-	// Also emit a minimal signal snapshot so the system can answer "risks" queries even when source ingestion is paused.
-	// This is intentionally one signal per root job to avoid feed spam.
-	if job.State != nil {
-		if v, ok := job.State["scoutSignalsEmitted"].(bool); ok && v {
-			// nothing
-		} else {
-			sTitle := fmt.Sprintf("Risk snapshot for %s", strings.TrimSpace(fragment.CanonicalPath))
-			parts := make([]string, 0, len(riskMetrics))
-			for _, p := range riskMetrics {
-				parts = append(parts, fmt.Sprintf("%s=%.2f", p.name, p.mv.Value))
-			}
-			sort.Strings(parts)
-			sSummary := "Risk metrics snapshot synthesized by Scout from LLM state. " + strings.Join(parts, "; ")
-
-			s := &coreModels.OntologyFact{
-				BaseOntologyFields: coreModels.BaseOntologyFields{
-					TenantID:       strings.TrimSpace(job.TenantID),
-					Version:        1,
-					CreatedAt:      now,
-					UpdatedAt:      now,
-					CreatedBy:      "system",
-					UpdatedBy:      "system",
-					Labels:         map[string]string{"en": sTitle},
-					Status:         "active",
-					Tags:           []string{"scout", "llm", "signal", "risk"},
-					CanonicalPaths: []string{strings.TrimSpace(fragment.CanonicalPath)},
-					ActorPaths:     []string{strings.TrimSpace(fragment.CanonicalPath)},
-					SpherePaths:    f.SpherePaths,
-				},
-				Kind:       "signal",
-				Type:       "risk_snapshot",
-				Title:      sTitle,
-				Summary:    sSummary,
-				ObservedAt: &now,
-				SourceRefs: []coreModels.SourceRef{
-					{SourceID: strings.TrimSpace(job.ID), SourceType: coreModels.SourceTypeAgentJob},
-					{SourceID: strings.TrimSpace(frameID), SourceType: coreModels.SourceTypeHorizonFrame},
-				},
-				Confidence: f.Confidence,
-			}
-			if strings.TrimSpace(metricFactID) != "" {
-				s.SourceRefs = append(s.SourceRefs, coreModels.SourceRef{SourceID: strings.TrimSpace(metricFactID), SourceType: coreModels.SourceTypeOntologyFact})
-			}
-			if v := strings.TrimSpace(rc.CorrelationID); v != "" {
-				s.SourceRefs = append(s.SourceRefs, coreModels.SourceRef{SourceID: v, SourceType: coreModels.SourceTypeAITrace})
-			}
-			s.VectorText = s.GenerateVectorText()
-
-			if e.factEmitter != nil {
-				if _, err := e.factEmitter.Emit(ctx, s, emitOpts); err != nil {
-					fmt.Printf("[ScoutEngine] Failed to emit signal snapshot fact (best-effort): jobId=%s target=%s err=%v\n",
-						strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
-				}
-			} else if e.planner != nil && e.planner.factsRepo != nil {
-				if _, err := e.planner.factsRepo.Create(ctx, s); err != nil {
-					fmt.Printf("[ScoutEngine] Failed to persist signal snapshot fact (best-effort): jobId=%s target=%s err=%v\n",
-						strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
-				}
-			}
-			job.State["scoutSignalsEmitted"] = true
-		}
-	}
-
-	if job.State != nil {
-		job.State["scoutFactsEmitted"] = true
-		if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
-			fmt.Printf("[ScoutEngine] Failed to persist job state scoutFactsEmitted (best-effort): jobId=%s target=%s err=%v\n",
-				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
-		}
-	}
 	return nil
 }
 
@@ -5378,7 +5214,7 @@ func (e *ScoutEngine) checkAndPublishAssemblyCompletion(ctx context.Context, ten
 		}
 	}
 
-	// If all jobs are completed or failed, publish assembly.ready
+	// If all jobs are completed or failed, run intra-graph inference then publish assembly.ready
 	if totalJobs > 0 && pendingJobs == 0 && runningJobs == 0 {
 		progress := 1.0
 		if totalJobs > 0 {
@@ -5399,6 +5235,9 @@ func (e *ScoutEngine) checkAndPublishAssemblyCompletion(ctx context.Context, ten
 				"jobsRunning": 0,
 			},
 		})
+
+		// Intra-graph link inference: infer direct relations between entities in scope
+		e.runIntraGraphInference(ctx, tenantID, projectID, lensID)
 
 		// Publish final assembly.ready event
 		e.publish(ctx, realtime.EventType("horizon.assembly.ready"), map[string]interface{}{
@@ -5517,9 +5356,6 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 		return
 	}
 
-	// High-profile recompute targets (deduped list collected during edge materialization for this job).
-	highProfileIDs := e.extractStringSlice(job.State, "highProfileAffectedFragmentIds")
-
 	// Collect created/modified fragment and edge IDs from job state (for PolicyChecker).
 	createdFragmentIDs := e.extractStringSlice(job.State, "createdFragmentIds")
 	modifiedFragmentIDs := e.extractStringSlice(job.State, "modifiedFragmentIds")
@@ -5529,8 +5365,7 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 	shouldRunPolicy := e.policyChecker != nil &&
 		(len(createdFragmentIDs) > 0 || len(modifiedFragmentIDs) > 0 || len(createdEdgeIDs) > 0 || len(modifiedEdgeIDs) > 0)
 
-	// If nothing to do (no policy checker work and no high-profile recompute targets), skip.
-	if !shouldRunPolicy && len(highProfileIDs) == 0 {
+	if !shouldRunPolicy {
 		return
 	}
 
@@ -5660,35 +5495,6 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 						execCancel()
 					}
 				}
-			}
-		}
-
-		// High-profile recompute step: must run after policy/enforcement to reflect corrected edges.
-		if len(highProfileIDs) > 0 && e.fragmentsRepo != nil && e.edgesRepo != nil {
-			// Dedup + cap to keep runtime bounded.
-			seen := map[string]struct{}{}
-			dedup := make([]string, 0, len(highProfileIDs))
-			for _, id := range highProfileIDs {
-				id = strings.TrimSpace(id)
-				if id == "" {
-					continue
-				}
-				if _, ok := seen[id]; ok {
-					continue
-				}
-				seen[id] = struct{}{}
-				dedup = append(dedup, id)
-				if len(dedup) >= 200 {
-					break
-				}
-			}
-			if len(dedup) > 0 {
-				hpCalc := horizonhighprofile.NewCalculator(e.fragmentsRepo, e.edgesRepo)
-				hpCtx, hpCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-				for _, id := range dedup {
-					_, _ = hpCalc.Apply(hpCtx, id) // best-effort
-				}
-				hpCancel()
 			}
 		}
 
@@ -5913,53 +5719,6 @@ func (e *ScoutEngine) executeEnforcementJobs(ctx context.Context, job *models.Sc
 	durationMs := time.Since(startTime).Milliseconds()
 	fmt.Printf("[ScoutEngine] Enforcement batch completed for %s: %d completed, %d failed, %d skipped in %dms\n",
 		job.ID, completed, failed, skipped, durationMs)
-
-	// After enforcement applied, recompute global highProfile for affected fragments (best-effort).
-	// This ensures highProfile reflects corrected edges even when enforcement is executed asynchronously later.
-	if e.fragmentsRepo != nil && e.edgesRepo != nil {
-		affected := map[string]struct{}{}
-		// Primary: explicit affected IDs from enforcement results.
-		for _, ej := range jobs {
-			if ej == nil || ej.Result == nil {
-				continue
-			}
-			for _, id := range ej.Result.AffectedIDs {
-				id = strings.TrimSpace(id)
-				if id != "" {
-					affected[id] = struct{}{}
-				}
-			}
-			// Fallback: violation fragmentId (when present).
-			if ej.Violation != nil {
-				if id := strings.TrimSpace(ej.Violation.FragmentID); id != "" {
-					affected[id] = struct{}{}
-				}
-			}
-		}
-		// Secondary: include pre-collected set from the original scout job (if available).
-		if job.State != nil {
-			for _, id := range e.extractStringSlice(job.State, "highProfileAffectedFragmentIds") {
-				id = strings.TrimSpace(id)
-				if id != "" {
-					affected[id] = struct{}{}
-				}
-			}
-		}
-		// Bound runtime.
-		ids := make([]string, 0, len(affected))
-		for id := range affected {
-			ids = append(ids, id)
-			if len(ids) >= 200 {
-				break
-			}
-		}
-		if len(ids) > 0 {
-			hpCalc := horizonhighprofile.NewCalculator(e.fragmentsRepo, e.edgesRepo)
-			for _, id := range ids {
-				_, _ = hpCalc.Apply(ctx, id)
-			}
-		}
-	}
 
 	if noPendingEnforcementJobs(jobs) {
 		e.publishEnforcementBatchComplete(ctx, job, jobs, durationMs)

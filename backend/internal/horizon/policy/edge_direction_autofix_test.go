@@ -59,6 +59,46 @@ func TestApplyEdgeCanonicalizationPolicyUsesDirectionAutoFix(t *testing.T) {
 	}
 }
 
+func TestApplyEdgeCanonicalizationPolicyLocatedInGeoToEntity(t *testing.T) {
+	// GEO_REGION LOCATED_IN COMMUNITY -> swap to COMMUNITY LOCATED_IN GEO_REGION
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:   horizonmodels.DependencyTypeLocatedIn,
+		SourceType: horizonmodels.FragmentTypeGeoRegion,
+		TargetType: horizonmodels.FragmentTypeCommunity,
+		SourcePath: "/loc/sa/na/na",
+		TargetPath: "/community/sa/industry-association/steel-producers",
+	})
+	if !got.Changed {
+		t.Fatalf("expected canonicalization change for GEO_REGION LOCATED_IN COMMUNITY")
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeLocatedIn {
+		t.Fatalf("expected LOCATED_IN unchanged, got %s", got.EdgeType)
+	}
+	if !got.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true (COMMUNITY LOCATED_IN GEO_REGION)")
+	}
+}
+
+func TestApplyEdgeCanonicalizationPolicyAffiliatedWithOrgToCommunity(t *testing.T) {
+	// ORGANIZATION AFFILIATED_WITH COMMUNITY -> swap to COMMUNITY AFFILIATED_WITH ORGANIZATION
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:   horizonmodels.DependencyTypeAffiliatedWith,
+		SourceType: horizonmodels.FragmentTypeOrganization,
+		TargetType: horizonmodels.FragmentTypeCommunity,
+		SourcePath: "/org/eu/steel-association-inc",
+		TargetPath: "/community/eu/industry-association/steel-producers",
+	})
+	if !got.Changed {
+		t.Fatalf("expected canonicalization change for ORGANIZATION AFFILIATED_WITH COMMUNITY")
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeAffiliatedWith {
+		t.Fatalf("expected AFFILIATED_WITH unchanged, got %s", got.EdgeType)
+	}
+	if !got.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true (COMMUNITY AFFILIATED_WITH ORGANIZATION)")
+	}
+}
+
 func TestApplyEdgeCanonicalizationPolicyHasMarketSegmentChildToParent(t *testing.T) {
 	// Child (more segments) as source, parent as target -> should swap to parent→child
 	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{

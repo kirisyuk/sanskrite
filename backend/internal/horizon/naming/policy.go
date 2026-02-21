@@ -296,8 +296,10 @@ func NormalizeRelationNames(targetType, targetName, targetLegalName, targetShort
 func PromptEntityNameNormalizationRules() string {
 	return `Name Normalization Rules (CRITICAL):
 - For organizations and government bodies, ALWAYS provide:
-  - fragment.identifiers.legalName: legal/official name including ownership/legal form when relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC...)
-  - fragment.identifiers.shortName: base name without ownership/legal form
+  - fragment.identifiers.legalName: official name WITHOUT country suffix and WITHOUT legal form (LLC, Inc, Ltd, GmbH, AG, etc.)
+  - fragment.identifiers.shortName: base/trade name without country and without legal form
+- Do NOT include country in organization names (e.g., "Core42 UAE" → "Core42"); country is already in canonical path /org/{geo}/...
+- Legal form (LLC, Inc, Ltd, GmbH, etc.) belongs ONLY in canonicalPath as -{legal_form} suffix, NOT in legalName/shortName/labelEn.
 - For relations, ALWAYS provide targetLegalName and targetShortName in addition to targetName.
 - IMPORTANT (legal form placement):
   - Do NOT move legal form tokens to the beginning (BAD: "JSC Tochka Bank").

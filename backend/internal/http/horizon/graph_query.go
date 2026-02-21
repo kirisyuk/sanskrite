@@ -11,7 +11,6 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
@@ -81,9 +80,8 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "projectId does not match lens.projectId", http.StatusBadRequest)
 		return
 	}
-	hasDomainAnswerContext := req.DomainAnswerContext != nil && req.DomainAnswerContext.hasContent()
-	if len(req.Graph.Nodes) == 0 && !hasDomainAnswerContext {
-		http.Error(w, "either graph.nodes or domainAnswerContext is required", http.StatusBadRequest)
+	if len(req.Graph.Nodes) == 0 {
+		http.Error(w, "graph.nodes is required", http.StatusBadRequest)
 		return
 	}
 
@@ -120,7 +118,7 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 			CanonicalPath: strings.TrimSpace(n.CanonicalPath),
 		})
 	}
-	if len(mappedNodes) == 0 && !hasDomainAnswerContext {
+	if len(mappedNodes) == 0 {
 		http.Error(w, "graph.nodes must contain at least one node with non-empty id", http.StatusBadRequest)
 		return
 	}
@@ -147,7 +145,7 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	prompt := buildGraphQueryPrompt(req.Question, now, mappedNodes, mappedEdges, req.DomainAnswerContext)
+	prompt := buildGraphQueryPrompt(req.Question, now, mappedNodes, mappedEdges)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
@@ -309,7 +307,6 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 		Question:            req.Question,
 		Answer:              strings.TrimSpace(parsed.Answer),
 		RelevantNodeIDs:     resolvedNodeIDs,
-		DomainAnswerContext: req.DomainAnswerContext,
 		Findings:            resolvedFindings,
 		LLM: graphQueryLLMMeta{
 			Model:          strings.TrimSpace(genResp.Model),
@@ -383,59 +380,12 @@ func (h *HorizonHandlers) QueryGraph(w http.ResponseWriter, r *http.Request) {
 }
 
 type graphQueryRequest struct {
-	ProjectID           string                         `json:"projectId,omitempty"`
-	Question            string                         `json:"question"`
-	DomainAnswerContext *graphQueryDomainAnswerContext `json:"domainAnswerContext,omitempty"`
-	Graph               struct {
+	ProjectID string `json:"projectId,omitempty"`
+	Question  string `json:"question"`
+	Graph     struct {
 		Nodes []graphSnapshotNode `json:"nodes"`
 		Edges []graphSnapshotEdge `json:"edges,omitempty"`
 	} `json:"graph"`
-}
-
-type graphQueryDomainAnswerContext struct {
-	SnapshotID           string                               `json:"snapshotId,omitempty"`
-	ID                   string                               `json:"id,omitempty"`
-	DomainID             string                               `json:"domainId,omitempty"`
-	DomainCanonicalPath  string                               `json:"domainCanonicalPath,omitempty"`
-	ReadinessStatus      string                               `json:"readinessStatus,omitempty"`
-	DomainContract       horizonmodels.DomainContractSnapshot `json:"domainContract,omitempty"`
-	Thesis               horizonmodels.DomainThesis           `json:"thesis,omitempty"`
-	Gate                 horizonmodels.DomainGateSummary      `json:"gate,omitempty"`
-	CriticalDependencies []horizonmodels.CriticalDependency   `json:"criticalDependencies,omitempty"`
-	ImpactPaths          []horizonmodels.ImpactPath           `json:"impactPaths,omitempty"`
-	DataGaps             []horizonmodels.DataGap              `json:"dataGaps,omitempty"`
-}
-
-func (c *graphQueryDomainAnswerContext) normalizedSnapshotID() string {
-	if c == nil {
-		return ""
-	}
-	if strings.TrimSpace(c.SnapshotID) != "" {
-		return strings.TrimSpace(c.SnapshotID)
-	}
-	return strings.TrimSpace(c.ID)
-}
-
-func (c *graphQueryDomainAnswerContext) hasContent() bool {
-	if c == nil {
-		return false
-	}
-	if c.normalizedSnapshotID() != "" {
-		return true
-	}
-	if strings.TrimSpace(c.DomainID) != "" {
-		return true
-	}
-	if strings.TrimSpace(c.DomainCanonicalPath) != "" {
-		return true
-	}
-	if strings.TrimSpace(c.Thesis.Text) != "" {
-		return true
-	}
-	if len(c.CriticalDependencies) > 0 || len(c.ImpactPaths) > 0 || len(c.DataGaps) > 0 {
-		return true
-	}
-	return false
 }
 
 type graphSnapshotNode struct {
@@ -521,8 +471,7 @@ type graphQueryInteractionPayload struct {
 	Question            string                         `json:"question"`
 	Answer              string                         `json:"answer"`
 	RelevantNodeIDs     []string                       `json:"relevantNodeIds"`
-	DomainAnswerContext *graphQueryDomainAnswerContext `json:"domainAnswerContext,omitempty"`
-	Findings            []graphQueryFinding            `json:"findings,omitempty"`
+	Findings []graphQueryFinding `json:"findings,omitempty"`
 	Graph               struct {
 		Nodes []graphSnapshotNode `json:"nodes"`
 		Edges []graphSnapshotEdge `json:"edges,omitempty"`
@@ -553,31 +502,14 @@ Rules:
 ` + langHint)
 }
 
-func buildGraphQueryPrompt(question string, now time.Time, nodes []mappedNode, edges []mappedEdge, domainAnswerContext *graphQueryDomainAnswerContext) string {
-	// Keep prompt compact but explicit.
-	// Nodes/edges are provided as JSON so the model can reason over them.
+func buildGraphQueryPrompt(question string, now time.Time, nodes []mappedNode, edges []mappedEdge) string {
 	nodesJSON, _ := json.Marshal(nodes)
 	edgesJSON, _ := json.Marshal(edges)
 	schemaJSON, _ := json.Marshal(graphQueryJSONSchema())
-	domainAnswerJSON := "null"
-	if domainAnswerContext != nil && domainAnswerContext.hasContent() {
-		safe := *domainAnswerContext
-		safe.ID = safe.normalizedSnapshotID()
-		safe.SnapshotID = safe.normalizedSnapshotID()
-		if b, err := json.Marshal(safe); err == nil {
-			domainAnswerJSON = string(b)
-		}
-	}
 	graphIDsNote := "Node IDs are available. Use only those IDs in relevantNodeIds and findings[].nodeId."
-	if len(nodes) == 0 {
-		graphIDsNote = "Graph IDs are unavailable (graph snapshot nodes are empty). relevantNodeIds MUST be [] and findings MUST be []."
-	}
 	return strings.TrimSpace(fmt.Sprintf(`
 Now (UTC): %s
 Interpret "now" as the reference date/time. Your answer MUST be based on the most relevant information available as of this moment (prefer recent data).
-
-Domain answer context (priority over graph snapshot when present):
-- context: %s
 
 Graph snapshot:
 - nodes: %s
@@ -591,7 +523,7 @@ User question:
 
 Required JSON schema:
 %s
-`, now.Format(time.RFC3339), domainAnswerJSON, string(nodesJSON), string(edgesJSON), graphIDsNote, question, string(schemaJSON)))
+`, now.Format(time.RFC3339), string(nodesJSON), string(edgesJSON), graphIDsNote, question, string(schemaJSON)))
 }
 
 func graphQueryJSONSchema() map[string]interface{} {

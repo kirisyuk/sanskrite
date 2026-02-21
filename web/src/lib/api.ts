@@ -109,6 +109,14 @@ class ApiClient {
     return response.data;
   }
 
+  async getHorizonExternalServicesTelemetry(params?: { limit?: number }): Promise<{
+    services: Record<string, { hit: number; miss: number; error: number; calls: number; hitRate: number }>;
+    tenantId: string;
+  }> {
+    const response = await this.client.get(`/api/v1/admin/horizon/telemetry/external-services`, { params: params || {} });
+    return response.data;
+  }
+
   // Users
   async createUser(data: {
     firebaseUid: string;
@@ -1979,42 +1987,6 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     input: {
       projectId?: string;
       question: string;
-      domainAnswerContext?: {
-        snapshotId?: string;
-        id?: string;
-        domainId?: string;
-        domainCanonicalPath?: string;
-        readinessStatus?: string;
-        domainContract?: {
-          contractType?: string;
-          title?: string;
-          description?: string;
-          facets?: Record<string, string[]>;
-        };
-        thesis?: { text?: string; confidence?: number };
-        gate?: { overallStatus?: string; failedCheckIds?: string[] };
-        criticalDependencies?: Array<{
-          sourceCanonicalPath?: string;
-          targetCanonicalPath?: string;
-          relationType?: string;
-          topDependencyScore?: number;
-          confidence?: number;
-        }>;
-        impactPaths?: Array<{
-          nodePaths?: string[];
-          edgeIds?: string[];
-          criticality?: number;
-          facetKey?: string;
-        }>;
-        dataGaps?: Array<{
-          gapType?: string;
-          affectedFacet?: string;
-          affectedNodePath?: string;
-          affectedEdgeId?: string;
-          hint?: string;
-          priority?: string;
-        }>;
-      };
       graph: {
         nodes: Array<{ id: string; label?: string; type?: string; canonicalPath?: string }>;
         edges?: Array<{ from: string; to: string; type?: string; label?: string }>;
@@ -2241,138 +2213,6 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return response.data;
     } catch (error: any) {
       console.error(`[API] queryHorizonControlCorridor error:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Horizon - Preview strategic domain overlay (no job creation).
-   * POST /api/horizon/lenses/{lensId}/domain-overlay-preview
-   */
-  async previewDomainOverlay(
-    lensId: string,
-    input: { query: string }
-  ): Promise<{
-    intent: any;
-    existingDomains?: string[];
-  }> {
-    try {
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/domain-overlay-preview`, input);
-      return response.data;
-    } catch (error: any) {
-      console.error(`[API] previewDomainOverlay error:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Horizon - Execute strategic domain overlay job.
-   * POST /api/horizon/lenses/{lensId}/domain-overlay-execute
-   */
-  async executeDomainOverlay(
-    lensId: string,
-    input: { query: string; domainCanonicalPath?: string; specialties?: string[] },
-    options?: { correlationId?: string; sessionId?: string }
-  ): Promise<{
-    jobId: string;
-    domainCanonicalPath: string;
-    existingDomains?: string[];
-  }> {
-    try {
-      const headers: Record<string, string> = {};
-      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
-      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/domain-overlay-execute`, input, { headers });
-      return response.data;
-    } catch (error: any) {
-      console.error(`[API] executeDomainOverlay error:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Horizon - List domain answers for a lens.
-   * GET /api/horizon/lenses/{lensId}/domain-answers
-   */
-  async listHorizonDomainAnswers(
-    lensId: string,
-    options?: { limit?: number }
-  ): Promise<{ domainAnswers: any[]; totalCount: number }> {
-    try {
-      const params: Record<string, number> = {};
-      if (typeof options?.limit === 'number' && options.limit > 0) {
-        params.limit = options.limit;
-      }
-      const response = await this.client.get(`/api/horizon/lenses/${lensId}/domain-answers`, { params });
-      return response.data;
-    } catch (error: any) {
-      console.error(`[API] listHorizonDomainAnswers error:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Horizon - Get one domain answer by domainId or snapshot id.
-   * GET /api/horizon/lenses/{lensId}/domain-answers/{domainId}
-   */
-  async getHorizonDomainAnswer(lensId: string, domainId: string): Promise<any> {
-    try {
-      const response = await this.client.get(
-        `/api/horizon/lenses/${lensId}/domain-answers/${encodeURIComponent(domainId)}`
-      );
-      return response.data;
-    } catch (error: any) {
-      console.error(`[API] getHorizonDomainAnswer error:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Horizon - Create a new domain on demand from a user query.
-   * POST /api/horizon/lenses/{lensId}/domain-answers
-   */
-  async createHorizonDomainAnswer(
-    lensId: string,
-    body: { query: string },
-    headers?: { correlationId?: string; sessionId?: string },
-  ): Promise<{ jobId: string; domainCanonicalPath: string }> {
-    try {
-      const hdrs: Record<string, string> = {};
-      if (headers?.correlationId) hdrs['X-Correlation-Id'] = headers.correlationId;
-      if (headers?.sessionId) hdrs['X-Session-Id'] = headers.sessionId;
-      const response = await this.client.post(
-        `/api/horizon/lenses/${lensId}/domain-answers`,
-        body,
-        { headers: hdrs },
-      );
-      return response.data;
-    } catch (error: any) {
-      console.error(`[API] createHorizonDomainAnswer error:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Horizon - Run DomainContractEngine for an existing domain (builds snapshot).
-   * POST /api/horizon/lenses/{lensId}/domain-answers/{domainId}/run
-   */
-  async runHorizonDomainAnswer(
-    lensId: string,
-    domainId: string,
-    headers?: { correlationId?: string; sessionId?: string },
-  ): Promise<{ jobId: string; domainCanonicalPath: string }> {
-    try {
-      const hdrs: Record<string, string> = {};
-      if (headers?.correlationId) hdrs['X-Correlation-Id'] = headers.correlationId;
-      if (headers?.sessionId) hdrs['X-Session-Id'] = headers.sessionId;
-      const response = await this.client.post(
-        `/api/horizon/lenses/${lensId}/domain-answers/${encodeURIComponent(domainId)}/run`,
-        {},
-        { headers: hdrs },
-      );
-      return response.data;
-    } catch (error: any) {
-      console.error(`[API] runHorizonDomainAnswer error:`, error);
       throw error;
     }
   }
@@ -2955,6 +2795,91 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  async runHorizonScenario(input: {
+    scenarioId?: string;
+    contractType?: string;
+    domainModes?: string[];
+    engineId?: string;
+    mode?: 'preview' | 'apply' | string;
+    parameters?: Record<string, any>;
+    baselineRef?: string;
+    seedFragmentIds?: string[];
+    targetPaths?: string[];
+    maxTraceSteps?: number;
+  }): Promise<{
+    scenarioId?: string;
+    contractType?: string;
+    domainModes?: string[];
+    engineId?: string;
+    mode?: string;
+    seedFragmentIds?: string[];
+    inputResolution?: {
+      resolved?: Record<string, number>;
+      resolvedFrom?: Record<string, string>;
+      missing?: string[];
+    };
+    encodedSignals?: Array<{
+      id?: string;
+      axis?: string;
+      mechanism?: string;
+      amplitude: number;
+      polarity?: string;
+      seedPaths?: string[];
+      locationPath?: string;
+    }>;
+    signalRuns?: Array<{
+      signalId?: string;
+      axis?: string;
+      polarity?: string;
+      mechanism?: string;
+      seedFragmentIds?: string[];
+      affectedFragments?: string[];
+      pathsTraced?: number;
+      trace?: Array<{
+        step?: number;
+        signalId?: string;
+        fromFragmentId?: string;
+        toFragmentId?: string;
+        fromPath?: string;
+        toPath?: string;
+        fromGeo?: string;
+        toGeo?: string;
+        edgeId?: string;
+        edgeType?: string;
+        direction?: string;
+        channel?: string;
+        scope?: string;
+        spillover?: string;
+        axisIn?: string;
+        axisOut?: string;
+        amplitudeIn?: number;
+        amplitudeOut?: number;
+        hops?: number;
+        outcome?: string;
+        reason?: string;
+        factors?: Record<string, number>;
+      }>;
+      traceDropped?: number;
+    }>;
+    affectedFragments: string[];
+    domainMetrics?: Array<{
+      fragmentId: string;
+      canonicalPath?: string;
+      accumulated?: Array<{ axis: string; amplitude: number; polarity?: string; hopCount?: number }>;
+      metrics: Array<{ metricPath: string; value: number; unit?: string; confidence?: number }>;
+      persisted: boolean;
+    }>;
+    propagationStats?: Record<string, number>;
+  }> {
+    try {
+      const response = await this.client.post('/api/horizon/scenarios/run', input || {});
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] runHorizonScenario error:`, error);
+      throw error;
+    }
+  }
+
   // --- Horizon Lens Artifacts ---
   /**
    * List artifacts for a lens
@@ -3026,31 +2951,6 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return response.data;
     } catch (error: any) {
       console.error(`[API] getHorizonLensArtifactContext error:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Trigger strategic projection (decision/mechanism layer) for a lens
-   * POST /api/horizon/lenses/{lensId}/trigger-phase2
-   */
-  async triggerHorizonPhase2StrategicOverlay(
-    lensId: string,
-    input?: { domainPaths?: string[]; force?: boolean },
-    options?: { correlationId?: string; sessionId?: string }
-  ): Promise<{
-    jobIds: string[];
-    message: string;
-    queued: number;
-  }> {
-    try {
-      const headers: Record<string, string> = {};
-      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
-      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/trigger-phase2`, input || {}, { headers });
-      return response.data;
-    } catch (error: any) {
-      console.error(`[API] triggerHorizonPhase2StrategicOverlay error:`, error);
       throw error;
     }
   }

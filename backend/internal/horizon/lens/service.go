@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
+	horizondomain "github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
@@ -20,6 +21,75 @@ import (
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
+
+// effectiveDomainModesForLens returns domain modes for job state.
+// Prefers lens.DomainModes; falls back to computing from ViewConfig["domains"] for legacy lenses.
+func effectiveDomainModesForLens(lens *models.Lens) []string {
+	if lens == nil {
+		return nil
+	}
+	if len(lens.DomainModes) > 0 {
+		return lens.DomainModes
+	}
+	if lens.ViewConfig == nil {
+		return nil
+	}
+	raw, ok := lens.ViewConfig["domains"]
+	if !ok || raw == nil {
+		return nil
+	}
+	contractTypes := contractTypesFromDomainsRaw(raw)
+	if len(contractTypes) == 0 {
+		return nil
+	}
+	return horizondomain.DomainModesForContractTypes(contractTypes)
+}
+
+func contractTypesFromDomainsRaw(raw interface{}) []string {
+	if raw == nil {
+		return nil
+	}
+	out := make([]string, 0, 8)
+	add := func(v string) {
+		v = strings.TrimSpace(strings.ToLower(v))
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	switch t := raw.(type) {
+	case []agents.DomainResolution:
+		for _, d := range t {
+			add(d.ContractType)
+		}
+	case []map[string]interface{}:
+		for _, m := range t {
+			add(getStringFieldFromMap(m, "contractType", "ContractType"))
+		}
+	case []interface{}:
+		for _, it := range t {
+			m, ok := it.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			add(getStringFieldFromMap(m, "contractType", "ContractType"))
+		}
+	}
+	return out
+}
+
+func getStringFieldFromMap(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			if s, ok := v.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
+}
 
 func parseStringSlice(v interface{}) []string {
 	switch t := v.(type) {
@@ -52,6 +122,40 @@ func parseStringSlice(v interface{}) []string {
 	default:
 		return nil
 	}
+}
+
+// addDeferredScopePathIfUnderLimit adds canonicalPath to lens scope if under maxCount (for deferred/cache-hit paths).
+func addDeferredScopePathIfUnderLimit(ctx context.Context, lensesRepo *repo.LensesRepository, lens *models.Lens, lensID, canonicalPath string, maxCount int) {
+	if lensesRepo == nil || lens == nil || lensID == "" || strings.TrimSpace(canonicalPath) == "" || maxCount <= 0 {
+		return
+	}
+	currentCount := 0
+	if lens.ViewConfig != nil {
+		if v, ok := lens.ViewConfig["deferredScopeAddCount"]; ok {
+			switch n := v.(type) {
+			case float64:
+				currentCount = int(n)
+			case int:
+				currentCount = n
+			}
+		}
+	}
+	if currentCount >= maxCount {
+		return
+	}
+	for _, s := range lens.Scope {
+		if strings.TrimSpace(s) == canonicalPath {
+			return
+		}
+	}
+	if err := lensesRepo.AddScopeCanonicalPaths(ctx, lensID, []string{canonicalPath}); err != nil {
+		return
+	}
+	if lens.ViewConfig == nil {
+		lens.ViewConfig = map[string]interface{}{}
+	}
+	lens.ViewConfig["deferredScopeAddCount"] = currentCount + 1
+	lens.Scope = append(lens.Scope, canonicalPath)
 }
 
 func inferFragmentTypeFromPath(path string) models.FragmentType {
@@ -642,12 +746,22 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	}
 	// Avoid duplicate work (e.g. repeated anchors / resolved queries).
 	staticPaths = dedupeCanonicalPaths(staticPaths)
+
+	// Deferred scope paths: anchors from intent, added to scope only when Scout creates fragment (max 5 per lens).
+	deferredScopePaths := []string(nil)
+	if lens.ViewConfig != nil {
+		if v, ok := lens.ViewConfig["deferredScopePaths"]; ok {
+			deferredScopePaths = parseStringSlice(v)
+			deferredScopePaths = dedupeCanonicalPaths(deferredScopePaths)
+		}
+	}
 	trace.Log(ctx, "scope", "scope.deduped", map[string]any{
-		"tenantId":       strings.TrimSpace(lens.TenantID),
-		"projectId":      strings.TrimSpace(lens.ProjectID),
-		"lensId":         lensID,
-		"staticPathsN":   len(staticPaths),
-		"staticPathsTop": trace.StrSlice(staticPaths, 20),
+		"tenantId":           strings.TrimSpace(lens.TenantID),
+		"projectId":          strings.TrimSpace(lens.ProjectID),
+		"lensId":             lensID,
+		"staticPathsN":       len(staticPaths),
+		"staticPathsTop":     trace.StrSlice(staticPaths, 20),
+		"deferredScopePathsN": len(deferredScopePaths),
 	})
 
 	// Логируем ошибки резолва (если есть)
@@ -716,6 +830,10 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	scopeRewrites := map[string]string{} // inputPath -> canonicalPath
 
 	for _, inputPath := range staticPaths {
+		// Domain is config, not a graph node — skip /domain/ paths.
+		if strings.HasPrefix(strings.TrimSpace(inputPath), "/domain/") {
+			continue
+		}
 		// EARLY CANONICALIZATION AND DEDUPLICATION: Resolve canonical path before any processing
 		// This ensures we operate on canonicalized and deduplicated paths throughout the pipeline
 		var canonicalPath string
@@ -759,12 +877,6 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			if !fragment.Metadata.LastVerifiedAt.IsZero() && fragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
 				isFragmentFreshEnough = true
 			}
-		}
-		// Domains are *contracts* whose expansion is lens-context-sensitive (it can add first-order
-		// entities into this lens scope). Therefore, even if the DOMAIN fragment itself looks "fresh",
-		// we still want to schedule a domain job when a domain is explicitly in scope.
-		if strings.HasPrefix(strings.TrimSpace(canonicalPath), "/domain/") {
-			isFragmentFreshEnough = false
 		}
 		if isCacheHit && fragment != nil {
 			cacheHits++
@@ -904,6 +1016,11 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			if ds, ok := lens.ViewConfig["domains"]; ok && ds != nil {
 				state["domains"] = normalizeDomainContractsForState(ds)
 			}
+			// DomainModes from lens (execution contracts) — preferred when set.
+			// Fallback: compute from ViewConfig["domains"] for legacy lenses.
+			if domainModes := effectiveDomainModesForLens(lens); len(domainModes) > 0 {
+				state["domainModes"] = domainModes
+			}
 			scoutingJob := &models.ScoutingJob{
 				AgentJob: agentmodels.AgentJob{
 					TenantID:  lens.TenantID,
@@ -988,6 +1105,173 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				"confidence":      1.0,
 				"hint":            "cached_verified_skip_scout",
 			})
+		}
+	}
+
+	// Process deferred scope paths (anchors): create jobs with deferredScopeAdd. Scope added only when Scout creates fragment (max 5).
+	for _, inputPath := range deferredScopePaths {
+		if strings.HasPrefix(strings.TrimSpace(inputPath), "/domain/") {
+			continue
+		}
+		var canonicalPath string
+		var fragment *models.HorizonFragment
+		var isCacheHit bool
+		if s.canonicalPathResolver != nil {
+			resolved, err := s.canonicalPathResolver.Resolve(ctx, inputPath, scout.InferFragmentTypeFromCanonicalPath(inputPath))
+			if err == nil && resolved != nil {
+				canonicalPath = resolved.CanonicalPath
+				if resolved.ExistingFragment != nil {
+					fragment = resolved.ExistingFragment
+					isCacheHit = true
+				}
+			} else {
+				canonicalPath = strings.TrimSpace(inputPath)
+			}
+		} else {
+			canonicalPath = strings.TrimSpace(inputPath)
+		}
+		if fragment == nil {
+			var err error
+			fragment, err = s.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
+			isCacheHit = err == nil && fragment != nil
+		}
+		isFragmentFreshEnough := false
+		if isCacheHit && fragment != nil && !fragment.Metadata.LastVerifiedAt.IsZero() && fragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
+			isFragmentFreshEnough = true
+		}
+		// Cache hit for deferred path: add to scope so node shows (max 5 per lens).
+		if isCacheHit && fragment != nil {
+			addDeferredScopePathIfUnderLimit(ctx, s.lensesRepo, lens, lensID, strings.TrimSpace(canonicalPath), 5)
+			cacheHits++
+			lens.ScopeFragments[canonicalPath] = fragment.ID
+			if ap := strings.TrimSpace(inputPath); ap != "" && ap != strings.TrimSpace(canonicalPath) {
+				lens.ScopeFragments[ap] = fragment.ID
+			}
+			_ = s.fragmentsRepo.IncrementActiveSubscribers(ctx, fragment.ID)
+			_ = s.lifecycle.EnsureActive(ctx, fragment.ID)
+			if s.watchdogHook != nil {
+				s.watchdogHook(ctx, fragment.ID)
+			}
+			s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+				"tenantId":        lens.TenantID,
+				"projectId":      lens.ProjectID,
+				"lensId":          lensID,
+				"canonicalPath":   canonicalPath,
+				"fragmentId":      fragment.ID,
+				"status":          "cached",
+				"epistemicStatus": string(fragment.Metadata.EpistemicStatus),
+				"version":         fragment.Version,
+			})
+			continue
+		}
+		if SkipScouting(ctx) {
+			if !isCacheHit {
+				s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+					"tenantId":      lens.TenantID,
+					"projectId":     lens.ProjectID,
+					"lensId":        lensID,
+					"canonicalPath": strings.TrimSpace(canonicalPath),
+					"status":        "pending",
+					"hint":          "just_open_skip_scouting",
+				})
+			}
+			continue
+		}
+		if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
+			if existingJobID, ok := activeScoutJobs[strings.TrimSpace(canonicalPath)]; ok && existingJobID != "" {
+				s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+					"tenantId":      lens.TenantID,
+					"projectId":     lens.ProjectID,
+					"lensId":        lensID,
+					"canonicalPath": strings.TrimSpace(canonicalPath),
+					"status":        "scouting",
+					"jobId":         existingJobID,
+					"hint":          "dedup_existing_scout_job",
+				})
+				continue
+			}
+			scoutingPlanned++
+			now := time.Now().UTC()
+			state := map[string]interface{}{
+				"targetCanonicalPath": canonicalPath,
+				"lensId":              lensID,
+				"currentState":        string(models.ScoutingJobStatePending),
+				"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
+				"recursionDepth":      0.0,
+				"maxRecursionDepth":   float64(maxRecursionDepth),
+				models.StateKeyDeferredScopeAdd: true,
+			}
+			if ap := strings.TrimSpace(inputPath); ap != "" && ap != strings.TrimSpace(canonicalPath) {
+				state["aliasCanonicalPath"] = ap
+			}
+			if rc, ok := rtctx.Get(ctx); ok {
+				if strings.TrimSpace(rc.CorrelationID) != "" {
+					state["correlationId"] = rc.CorrelationID
+				}
+				if strings.TrimSpace(rc.SessionID) != "" {
+					state["sessionId"] = rc.SessionID
+				}
+			}
+			if len(requestedMetrics) > 0 {
+				state["requestedMetrics"] = requestedMetrics
+			}
+			if focus != "" {
+				state["focus"] = focus
+			}
+			if len(spherePaths) > 0 {
+				state["spherePaths"] = spherePaths
+			}
+			if len(keywords) > 0 {
+				state["keywords"] = keywords
+			}
+			if len(specialties) > 0 {
+				state["specialties"] = specialties
+			}
+			if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
+				state["maxChildrenPerJob"] = 80.0
+			}
+			if oq, ok := lens.ViewConfig["originalQuery"].(string); ok && strings.TrimSpace(oq) != "" {
+				state["originalQuery"] = strings.TrimSpace(oq)
+			}
+			if dh, ok := lens.ViewConfig["decompositionHints"]; ok && dh != nil {
+				state["decompositionHints"] = dh
+			}
+			if ds, ok := lens.ViewConfig["domains"]; ok && ds != nil {
+				state["domains"] = normalizeDomainContractsForState(ds)
+			}
+			if domainModes := effectiveDomainModesForLens(lens); len(domainModes) > 0 {
+				state["domainModes"] = domainModes
+			}
+			scoutingJob := &models.ScoutingJob{
+				AgentJob: agentmodels.AgentJob{
+					TenantID:  lens.TenantID,
+					ProjectID: lens.ProjectID,
+					Status:    agentmodels.AgentJobStatusPending,
+					AgentID:   "scout",
+					CreatedAt: now,
+					UpdatedAt: now,
+					State:     state,
+				},
+				LensID:              lensID,
+				TargetCanonicalPath: canonicalPath,
+				ScoutingStrategy:    string(models.ScoutingStrategySnapshot),
+				BillingContext: models.BillingContext{
+					ChargeModel: string(models.ChargeModelBounty),
+					ProjectID:   lens.ProjectID,
+				},
+				CurrentState: models.ScoutingJobStatePending,
+			}
+			if jobID, createErr := s.scoutingJobsRepo.Create(ctx, scoutingJob); createErr == nil && strings.TrimSpace(jobID) != "" {
+				activeScoutJobs[strings.TrimSpace(canonicalPath)] = strings.TrimSpace(jobID)
+				s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
+					"tenantId":      lens.TenantID,
+					"projectId":     lens.ProjectID,
+					"lensId":        lensID,
+					"canonicalPath": canonicalPath,
+					"status":        "scouting",
+					"jobId":         strings.TrimSpace(jobID),
+				})
+			}
 		}
 	}
 
@@ -1404,12 +1688,6 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 					isFragmentFreshEnough = true
 				}
 			}
-			// Domains are contracts; even if the DOMAIN fragment itself looks "fresh", expansion is
-			// lens-context-sensitive (it can add first-order entities into this lens scope), so
-			// we still schedule a job when a domain is explicitly in scope.
-			if strings.HasPrefix(strings.TrimSpace(canonicalPath), "/domain/") {
-				isFragmentFreshEnough = false
-			}
 			if isCacheHit && fragment != nil {
 				// Обновляем кэш для нового узла
 				lens.ScopeFragments[canonicalPath] = fragment.ID
@@ -1485,6 +1763,9 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 					}
 					if ds, ok := lens.ViewConfig["domains"]; ok && ds != nil {
 						state["domains"] = normalizeDomainContractsForState(ds)
+					}
+					if domainModes := effectiveDomainModesForLens(lens); len(domainModes) > 0 {
+						state["domainModes"] = domainModes
 					}
 				}
 				scoutingJob := &models.ScoutingJob{

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -64,7 +65,7 @@ func (a *ResearchAgent) EnrichFragment(
 }
 
 // EnrichFragmentWithGroundingWithDomainModes runs composable research when domainModes is non-empty and not only "general";
-// otherwise behaves as EnrichFragmentWithGrounding (monolithic). Grounding evidence is nil when using pipeline.
+// otherwise behaves as EnrichFragmentWithGrounding (monolithic). Grounding evidence is merged from all strategies when using pipeline.
 func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 	ctx context.Context,
 	fragment *models.HorizonFragment,
@@ -102,7 +103,7 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 			ExistingEntities:   existingEntities,
 			UnitPipelinePhase:  unitPhase,
 		}
-		enriched, relations, chains, err := a.ResearchPipeline().Enrich(ctx, input, domainModes)
+		enriched, relations, chains, groundingEvidence, err := a.ResearchPipeline().Enrich(ctx, input, domainModes)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -112,7 +113,7 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 				fragment.Labels,
 				fragment.Identifiers,
 			)
-			return enriched, relations, chains, nil, nil
+			return enriched, relations, chains, groundingEvidence, nil
 		}
 	}
 	return a.EnrichFragmentWithGrounding(ctx, fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
@@ -547,8 +548,8 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 		}
 	}
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
-	profile := ResolveResearchProfile(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
-	profileBlock := BuildResearchProfilePromptBlock(profile)
+	// Object detail: from entity_semantics (unified per type).
+	profileBlock := entity_semantics.ResearchBlockForPath(fragment.CanonicalPath, fragment.Type, fragment.CommunityType)
 	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
 	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt() + `
 - /segment/{domain}/{vertical}/{geo} for org marketSegments; /media/{platform}/{slug} for media channels
@@ -561,6 +562,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 CURRENT FRAGMENT DATA:
 %s
 
+%s
 %s
 %s
 %s
@@ -730,8 +732,8 @@ Choose relationType to match the CORRECT semantic direction:
 -  Clarification: manufacturer/producer -> product output.
 - EXTRACTS_FROM: source (FACILITY) extracts from target (DEPOSIT). Use for mines/oil fields/ore bodies.
 -  Clarification: extraction relationship (facility/mine -> resource deposit).
-- AUDITED_BY: source (ORGANIZATION/FACILITY) is audited by target (ORGANIZATION). Use for external auditors/audit firms.
--  Clarification: external audit relationship (audit firm reviews source entity).
+- ASSURES: source (ORGANIZATION) provides independent assurance to target (ORG/FACILITY/PROGRAM). Add qualifiers.assurance_type: audit|certification|regulatory|inspection.
+- AUDITED_BY: source (ORGANIZATION/FACILITY/PROGRAM) is audited by target (ORGANIZATION). Legacy; prefer ASSURES for new data.
 - COMPETES_WITH: market rivalry/competition (symmetric); not collaboration or supply.
 - INFLUENCES: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
   Source MAY be PERSON. Target MAY be MARKET or SPHERE (SPHERE links are treated as weaker evidence).
@@ -807,6 +809,7 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY or DEPOSIT
 - SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
 - DEPENDS_ON: source can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/COMMUNITY/MEDIA_CHANNEL/DEPOSIT, target can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/GEO_REGION/MEDIA_CHANNEL/COMMUNITY/DEPOSIT
+- ASSURES: source MUST be ORGANIZATION, target MUST be ORGANIZATION or FACILITY or PROGRAM
 - AUDITED_BY: source MUST be ORGANIZATION or FACILITY or PROGRAM, target MUST be ORGANIZATION
 - RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
 - RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
@@ -831,12 +834,12 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
 - IMPOSES_CONDITION: source MUST be ORGANIZATION or GOV or COMMUNITY or DECISION_POINT, target MUST be ORGANIZATION/FACILITY/PRODUCT
 - APPLIES_TO: source MUST be MECHANISM, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET
-- NON-DOMAIN RELATION GUARDRAIL: for relation types above, targetCanonicalPath MUST NOT start with /domain/.
+- Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
   DOMAIN targets are allowed only for DOMAIN scaffold relations (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, RELATED_DOMAIN, BROADENS_TO, NARROWS_TO, AFFECTS, DEPENDS_ON with DOMAIN source).
 
 Community Enrichment (COMMUNITY - when Type == COMMUNITY or canonicalPath starts with /community/):
 - If the fragment is a COMMUNITY, output (best-effort):
-  - fragment.communityType: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
+  - fragment.communityType: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe | representatives | industry-association | key-community
   - fragment.communityPlatforms: array of MEDIA_CHANNEL paths (e.g., ["/media/telegram/channel-slug"])
   - fragment.communityEstimatedSize: small | medium | large | massive | unknown
   - fragment.affiliatedOrgPath: canonical path of affiliated formal organization (if any)
@@ -846,7 +849,7 @@ Community Enrichment (COMMUNITY - when Type == COMMUNITY or canonicalPath starts
     - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
     - Direction: broader → narrower (like HAS_MARKET_SEGMENT for markets)
   - Use OPERATES_VIA to link community → media channels it uses for communication
-  - Use PARTICIPATES_IN to link community → markets it operates in
+  - Use PARTICIPATES_IN to link community → markets it operates in (direction: community → market; if reversed, policy auto-corrects)
   - Use AFFILIATED_WITH to link community → formal organizations it's connected to
 - Search for: "X network", "X group members", "X telegram channels", "X operations", "X family branches", "X clan structure"
 
@@ -889,7 +892,7 @@ DiscoveredRelation Schema:
   "targetLegalName": "string",
   "targetShortName": "string",
   "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY" | "DECISION_POINT" | "MECHANISM",
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_MARKET_SEGMENT" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "ASSURES" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_MARKET_SEGMENT" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED",
@@ -952,7 +955,7 @@ METRIC VALUE FORMAT (IMPORTANT):
 - observedAt MUST be ISO8601 (\"YYYY-MM-DD\" or RFC3339)
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock, canonicalRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock, canonicalRulesBlock)
 }
 
 func dedupNonEmptyStrings(in []string) []string {

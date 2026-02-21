@@ -330,33 +330,46 @@ func (pc *PolicyChecker) checkFragmentPath(ctx context.Context, frag *horizonmod
 		}
 	}
 
-	switch frag.Type {
-	case horizonmodels.FragmentTypeGeoRegion:
+	// Type/path mismatches happen in the wild (e.g., stale type with corrected canonicalPath).
+	// Keep validating by path namespace to avoid emitting namespace-specific fixes for the wrong entity family.
+	if !IsCanonicalPathAllowedForType(frag.Type, path) {
+		expectedPrefix := ExpectedCanonicalPathPrefix(frag.Type)
+		violations = append(violations, PolicyViolation{
+			ID:          uuid.New().String(),
+			Type:        ViolationTypeMismatch,
+			Severity:    SeverityWarning,
+			FragmentID:  frag.ID,
+			ActualValue: path,
+			Rule:        "fragment_type_path_namespace",
+			Description: fmt.Sprintf("Fragment type %s is incompatible with canonical path %q (expected prefix %q)", frag.Type, path, expectedPrefix),
+			Confidence:  1.0,
+			AutoFixable: false,
+			DetectedAt:  time.Now(),
+			DetectedBy:  "deterministic",
+		})
+	}
+
+	switch {
+	case strings.HasPrefix(path, "/loc/"):
 		violations = append(violations, pc.checkGeoPath(ctx, frag)...)
 
-	case horizonmodels.FragmentTypeOrganization:
-		if strings.HasPrefix(path, "/gov/") {
-			violations = append(violations, pc.checkGovPath(ctx, frag)...)
-		} else {
-			violations = append(violations, pc.checkOrgPath(ctx, frag)...)
-		}
+	case strings.HasPrefix(path, "/gov/"):
+		violations = append(violations, pc.checkGovPath(ctx, frag)...)
 
-	case horizonmodels.FragmentTypeProduct:
+	case strings.HasPrefix(path, "/org/"):
+		violations = append(violations, pc.checkOrgPath(ctx, frag)...)
+
+	case strings.HasPrefix(path, "/product/"):
 		violations = append(violations, pc.checkProductPath(ctx, frag)...)
 
-	case horizonmodels.FragmentTypePerson:
+	case strings.HasPrefix(path, "/person/"):
 		violations = append(violations, pc.checkPersonPath(ctx, frag)...)
 
-	case horizonmodels.FragmentTypeDecisionPoint:
+	case strings.HasPrefix(path, "/decision/"):
 		violations = append(violations, pc.checkDecisionPointPath(ctx, frag)...)
 
-	case horizonmodels.FragmentTypeMechanism:
+	case strings.HasPrefix(path, "/mechanism/"):
 		violations = append(violations, pc.checkMechanismPath(ctx, frag)...)
-
-	case horizonmodels.FragmentTypeCommunity:
-		// taxonomy.ValidateCanonicalPath already ran; community paths /community/{geo}/{type}/{slug}
-		// use regional tokens for geo (eu, asean, etc.) and type (dynasty|tribe|trade|activist|...).
-		// No additional deterministic checks needed.
 	}
 
 	return violations
@@ -503,7 +516,10 @@ func (pc *PolicyChecker) resolveGeoNamesPath(ctx context.Context, cc, admin1, ci
 // checkOrgPath validates an ORGANIZATION canonical path.
 func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.HorizonFragment) []PolicyViolation {
 	var violations []PolicyViolation
-	path := frag.CanonicalPath
+	path := strings.TrimSpace(frag.CanonicalPath)
+	if !strings.HasPrefix(path, "/org/") {
+		return violations
+	}
 
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	geo := ""
@@ -676,7 +692,10 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 // checkGovPath validates a GOVERNMENT canonical path.
 func (pc *PolicyChecker) checkGovPath(_ context.Context, frag *horizonmodels.HorizonFragment) []PolicyViolation {
 	var violations []PolicyViolation
-	path := frag.CanonicalPath
+	path := strings.TrimSpace(frag.CanonicalPath)
+	if !strings.HasPrefix(path, "/gov/") {
+		return violations
+	}
 
 	valid, reason := pc.taxonomyRules.ValidateGovPath(path)
 	if !valid {

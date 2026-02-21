@@ -191,6 +191,8 @@ const (
 	StateKeyUnitProfiles = "unitProfiles"
 	// StateKeyUnitDiveRequest stores UnitDiveRequest payload in ScoutingJob.State.
 	StateKeyUnitDiveRequest = "unitDiveRequest"
+	// StateKeyDeferredScopeAdd when true, scope is added only after fragment is created (max 5 per lens).
+	StateKeyDeferredScopeAdd = "deferredScopeAdd"
 )
 
 // NormalizeUnitPipelinePhase canonicalizes raw phase values.

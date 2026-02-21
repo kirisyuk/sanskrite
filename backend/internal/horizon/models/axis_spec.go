@@ -102,8 +102,8 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			Label:           "Physical Flow Supply",
 			DefaultDamping:   0.75,
 			DefaultMaxHops:   4,
-			PropagationMode:  "downstream",
-			StrongEdgeTypes:  []string{"SUPPLIES_TO", "DEPENDS_ON", "TRANSFORMS_INTO"},
+			PropagationMode:  "both",
+			StrongEdgeTypes:  []string{"SUPPLIES_TO", "DEPENDS_ON", "TRANSFORMS_INTO", "OWNS", "PARTNERS_WITH"},
 			TransformsTo:     []string{},
 		},
 		AxisPhysicalFlowDemand: {

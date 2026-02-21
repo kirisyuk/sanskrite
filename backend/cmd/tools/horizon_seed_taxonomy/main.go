@@ -360,6 +360,8 @@ func main() {
 			"INVESTS_IN",
 			"PARTNERS_WITH",
 			"KEY_PERSON",
+			// Assurance / oversight
+			"ASSURES",
 			// OSINT-lite / governance extensions
 			"AUDITED_BY",
 			"RELATIVE_OF",

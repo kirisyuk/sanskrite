@@ -43,6 +43,7 @@ func isOrgWikidataSearchDedupEnabled() bool {
 // International IDs first, then common national registry identifiers.
 var orgIdentityAnchorPriority = []string{
 	"wikidataId",
+	"openCorporatesId",
 	"lei",
 	"duns",
 	"ogrn",

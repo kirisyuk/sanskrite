@@ -131,6 +131,8 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"SURFACES": {},
 	// People/org meta-relations
 	"KEY_PERSON": {},
+	// Assurance / oversight (Third Line)
+	"ASSURES":     {},
 	// OSINT-lite / governance extensions
 	"AUDITED_BY":  {},
 	"RELATIVE_OF": {},
@@ -278,6 +280,8 @@ func NormalizeRelationType(in string) string {
 	switch s {
 	case "AUDITOR", "AUDITORS", "AUDITOR_OF", "AUDITED", "AUDIT_FIRM":
 		return "AUDITED_BY"
+	case "ASSURED_BY", "CERTIFIED_BY", "CERTIFIES", "INSPECTED_BY", "INSPECTS":
+		return "ASSURES"
 	case "RELATIVE", "RELATIVES", "FAMILY_OF", "FAMILY_MEMBER_OF", "KIN_OF":
 		return "RELATIVE_OF"
 	case "RELATED", "ASSOCIATED_WITH", "ASSOCIATE_OF", "FRIEND_OF", "BUSINESS_PARTNER_OF", "CLASSMATE_OF", "ALUMNI_OF":

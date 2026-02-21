@@ -52,7 +52,7 @@ func TestResearchPipeline_SupplyChainMode(t *testing.T) {
 	}
 	modes := []string{taxonomy.DomainModeSupplyChain}
 
-	frag, relations, chains, err := runner.Enrich(ctx, input, modes)
+	frag, relations, chains, _, err := runner.Enrich(ctx, input, modes)
 	if err != nil {
 		t.Fatalf("Enrich: %v", err)
 	}
@@ -132,8 +132,8 @@ func TestPolicyImpactEnrichmentPrompt_DomainTargetGuardrails(t *testing.T) {
 		MissingInfo: []string{"Map policy channels"},
 	}
 	prompt := a.buildPolicyImpactEnrichmentPrompt(input)
-	if !strings.Contains(prompt, "DOMAIN is not a valid target for these relation types.") {
-		t.Fatalf("expected explicit domain-target disallowance in policy impact prompt")
+	if !strings.Contains(prompt, "targetCanonicalPath MUST NOT start with /domain/") {
+		t.Fatalf("expected domain-as-config guardrail in policy impact prompt")
 	}
 	if !strings.Contains(prompt, "targetCanonicalPath MUST NOT start with /domain/.") {
 		t.Fatalf("expected non-domain target guardrail in policy impact prompt")

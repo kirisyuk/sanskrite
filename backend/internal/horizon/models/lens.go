@@ -12,11 +12,21 @@ type Lens struct {
 	ProjectID string `json:"projectId" firestore:"projectId"`
 	Name      string `json:"name" firestore:"name"`
 
-	// Scope: Mixed array of canonical paths AND query addresses
+	// Scope: Mixed array of canonical paths AND query addresses.
+	// Does NOT include /domain/ paths (domain is config, not a graph node).
 	// Examples:
 	//   - Static: "/org/tsmc", "/fac/tsmc/fab-21"
 	//   - Dynamic (QueryAddress): "/query/sector:/Technology/Semiconductors/**"
 	Scope []string `json:"scope" firestore:"scope"`
+
+	// DomainModes: execution contracts (supply_chain, governance, market, etc.).
+	// Determines how pipeline applies rules (allowlist, Research/Critic strategies).
+	// Source: intent resolution contract types → DomainModesForContractTypes.
+	DomainModes []string `json:"domainModes,omitempty" firestore:"domainModes,omitempty"`
+
+	// Intents: living questions the user wants to answer. Can be many per lens.
+	// Situational; does not define execution (that's DomainModes).
+	Intents []LensIntent `json:"intents,omitempty" firestore:"intents,omitempty"`
 
 	ViewConfig  map[string]interface{} `json:"viewConfig" firestore:"viewConfig"`
 	AlertConfig map[string]interface{} `json:"alertConfig" firestore:"alertConfig"`
@@ -46,6 +56,15 @@ type Lens struct {
 	// Example:
 	//   /exposure/SUPPLY_CHAIN_RISK/objective/fragment/<fragmentId>/path/<pathId>
 	ExposurePaths []string `json:"exposurePaths,omitempty" firestore:"exposurePaths,omitempty"`
+}
+
+// LensIntent is a living question the user wants to answer within the lens.
+// Does not define execution (that's DomainModes); situational.
+type LensIntent struct {
+	ID        string    `json:"id,omitempty" firestore:"id,omitempty"`
+	Question  string    `json:"question" firestore:"question"`
+	CreatedAt time.Time `json:"createdAt,omitempty" firestore:"createdAt,omitempty"`
+	Status    string    `json:"status,omitempty" firestore:"status,omitempty"` // pending, answered, archived
 }
 
 // LensStatus статус Lens

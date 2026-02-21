@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 )
@@ -412,7 +413,7 @@ func (g *Generator) generateMarketProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := models.DefaultSectionsForType(fragment.Type)
+	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -532,18 +533,6 @@ func (g *Generator) generateMarketProfileMultiStep(
 	return profile, usedModel, strings.TrimSpace(strings.Join(allNotes, "\n")), nil
 }
 
-func orgSectionSpecs() []models.ProfileSectionSpec {
-	return []models.ProfileSectionSpec{
-		{Key: "identity_operations", Title: "Identity & Operations", Description: "Who they are, where they operate, scale, footprint, how work is organized", Required: true, Order: 1},
-		{Key: "business_moat", Title: "Business Model & Moat", Description: "How value is created, revenue streams, pricing power, defensibility", Required: true, Order: 2},
-		{Key: "leadership_governance", Title: "Leadership & Governance", Description: "Key leaders, board, governance signals, leadership changes", Required: false, Order: 3},
-		{Key: "financial_profile", Title: "Financial Profile", Description: "Revenue, margins, cash flow, capital structure, unit economics", Required: true, Order: 4},
-		{Key: "market_position", Title: "Market Position & Competition", Description: "Competitive position, peers, share, differentiation", Required: true, Order: 5},
-		{Key: "risks_constraints", Title: "Risks & Constraints", Description: "Regulatory, legal, operational, supply, cyber, concentration risks", Required: false, Order: 6},
-		{Key: "trajectory_catalysts", Title: "Trajectory & Catalysts", Description: "Momentum, recent events, upcoming milestones, what changes the outlook", Required: false, Order: 7},
-	}
-}
-
 // generateOrgProfileMultiStep generates each section as a separate LLM request (org-specific),
 // then synthesizes a dashboard object at the end.
 func (g *Generator) generateOrgProfileMultiStep(
@@ -564,7 +553,7 @@ func (g *Generator) generateOrgProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := orgSectionSpecs()
+	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -679,58 +668,6 @@ func (g *Generator) generateOrgProfileMultiStep(
 	return profile, usedModel, strings.TrimSpace(strings.Join(allNotes, "\n")), nil
 }
 
-func govSectionSpecs() []models.ProfileSectionSpec {
-	return []models.ProfileSectionSpec{
-		{Key: "identity_jurisdiction", Title: "Identity & Jurisdiction", Description: "What the institution is, legal status, hierarchy/chain-of-command, geographic/functional jurisdiction, population/territory coverage", Required: true, Order: 1},
-		{Key: "mandate_policy_domain", Title: "Mandate & Policy Domain", Description: "Formal mandate, powers, policy remit, key legal instruments, regulatory authority, international obligations if relevant", Required: true, Order: 2},
-		{Key: "leadership_political_landscape", Title: "Leadership & Political Landscape", Description: "Leadership, appointments, political context, electoral cycle, coalition stability, key stakeholders, legitimacy signals", Required: false, Order: 3},
-		{Key: "budget_resources", Title: "Budget & Resources", Description: "Budget size and trends, staffing/resources, funding sources, spending priorities, procurement and capability constraints", Required: false, Order: 4},
-		{Key: "policy_agenda", Title: "Policy Agenda", Description: "Current initiatives, reforms, legislative pipeline, stated priorities, implementation status and timelines", Required: true, Order: 5},
-		{Key: "regulatory_impact", Title: "Regulatory Impact", Description: "Regulations/enforcement actions, compliance posture, fines/sanctions/investigations, who is impacted and how", Required: false, Order: 6},
-		{Key: "geopolitical_position", Title: "Geopolitical Position", Description: "International posture, alliances/organizations, sanctions regime, trade agreements, major external constraints", Required: false, Order: 7},
-	}
-}
-
-// ---------- DYNASTY section specs ----------
-
-func dynastySectionSpecs() []models.ProfileSectionSpec {
-	return []models.ProfileSectionSpec{
-		{Key: "identity_lineage", Title: "Identity & Lineage", Description: "Founding history, lineage, generational depth, succession principles, key branches, historical significance", Required: true, Order: 1},
-		{Key: "economic_footprint", Title: "Economic Footprint", Description: "Holdings (companies, investments, real estate), key industries, estimated wealth magnitude (where publicly documented), asset classes", Required: true, Order: 2},
-		{Key: "leadership_succession", Title: "Leadership & Succession", Description: "Current patriarch/matriarch or decision-makers, succession pipeline, family governance structures, generational roles", Required: true, Order: 3},
-		{Key: "influence_network", Title: "Influence Network", Description: "Political connections, economic influence, board positions, philanthropic networks, advisory roles, international ties", Required: false, Order: 4},
-		{Key: "legacy_reputation", Title: "Legacy & Reputation", Description: "Public perception, philanthropic initiatives, cultural contributions, brand and reputation management", Required: false, Order: 5},
-		{Key: "trajectory_catalysts", Title: "Trajectory & Catalysts", Description: "Generational transitions, strategic moves, upcoming milestones, potential succession events, emerging opportunities or challenges", Required: false, Order: 6},
-	}
-}
-
-// ---------- TRIBE section specs ----------
-
-func tribeSectionSpecs() []models.ProfileSectionSpec {
-	return []models.ProfileSectionSpec{
-		{Key: "identity_heritage", Title: "Identity & Heritage", Description: "Origins, cultural identity, language/traditions, geographic homeland, population estimates, sub-tribes/clans, historical context", Required: true, Order: 1},
-		{Key: "traditional_governance", Title: "Traditional Governance", Description: "Leadership structures (councils, chiefs, elders), decision-making processes, succession mechanisms, traditional laws/customs", Required: true, Order: 2},
-		{Key: "economic_activities", Title: "Economic Activities", Description: "Traditional livelihoods, modern economic participation, key industries, business interests, economic challenges and opportunities", Required: true, Order: 3},
-		{Key: "political_engagement", Title: "Political Engagement", Description: "Political representation, relationship with central government, autonomy status, historical agreements, current political role", Required: false, Order: 4},
-		{Key: "alliance_network", Title: "Alliance Network", Description: "Relations with other tribes, confederations, historical alliances, regional partnerships, diaspora communities", Required: false, Order: 5},
-		{Key: "contemporary_dynamics", Title: "Contemporary Dynamics", Description: "Current challenges and opportunities, urbanization/migration patterns, cultural preservation efforts, modernization initiatives", Required: false, Order: 6},
-	}
-}
-
-// ---------- PROGRAM section specs ----------
-
-func programSectionSpecs() []models.ProfileSectionSpec {
-	return []models.ProfileSectionSpec{
-		{Key: "identity_scope", Title: "Identity & Scope", Description: "What the program is, sponsoring entity, objectives, geographic/sectoral scope, timeline, budget authorization, legal basis", Required: true, Order: 1},
-		{Key: "funding_resources", Title: "Funding & Resources", Description: "Budget size, funding sources, disbursement schedule, resource allocation, procurement mechanisms, cost structure", Required: true, Order: 2},
-		{Key: "implementation_status", Title: "Implementation Status", Description: "Current phase, milestones achieved, timeline adherence, key deliverables, contractors/implementers, operational structure", Required: true, Order: 3},
-		{Key: "stakeholder_ecosystem", Title: "Stakeholder Ecosystem", Description: "Sponsors, implementing agencies, beneficiaries, partners, critics, oversight bodies, political support", Required: false, Order: 4},
-		{Key: "impact_outcomes", Title: "Impact & Outcomes", Description: "KPIs, measured results, economic/social impact, success metrics, evaluation findings, beneficiary feedback", Required: false, Order: 5},
-		{Key: "risks_constraints", Title: "Risks & Constraints", Description: "Political risks, funding risks, implementation challenges, dependencies, regulatory hurdles, external factors", Required: false, Order: 6},
-		{Key: "trajectory_outlook", Title: "Trajectory & Outlook", Description: "Future phases, expansion plans, sunset provisions, successor programs, strategic direction, sustainability", Required: false, Order: 7},
-	}
-}
-
 // generateGovProfileMultiStep generates each section as a separate LLM request (gov-specific),
 // then synthesizes a dashboard object at the end.
 func (g *Generator) generateGovProfileMultiStep(
@@ -751,7 +688,7 @@ func (g *Generator) generateGovProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := govSectionSpecs()
+	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -888,7 +825,7 @@ func (g *Generator) generateDynastyProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := dynastySectionSpecs()
+	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -1025,7 +962,7 @@ func (g *Generator) generateTribeProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := tribeSectionSpecs()
+	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -1162,7 +1099,7 @@ func (g *Generator) generateProgramProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := programSectionSpecs()
+	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -2986,7 +2923,7 @@ func (g *Generator) gatherGraphContext(ctx context.Context, fragment *models.Hor
 // buildPrompt builds the LLM prompt for profile generation.
 func (g *Generator) buildPrompt(fragment *models.HorizonFragment, graphContext *models.GraphContextSummary) string {
 	asOf := time.Now().UTC().Format("2006-01-02")
-	sections := models.DefaultSectionsForType(fragment.Type)
+	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
 	sectionSpecs := make([]map[string]any, 0, len(sections))
 	for _, s := range sections {
 		sectionSpecs = append(sectionSpecs, map[string]any{
@@ -3107,7 +3044,7 @@ func (g *Generator) parseResult(
 	}
 
 	// Convert sections
-	defaultSections := models.DefaultSectionsForType(fragment.Type)
+	defaultSections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range defaultSections {
 		sectionOrder[s.Key] = s.Order

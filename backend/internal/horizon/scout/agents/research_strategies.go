@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
@@ -22,11 +23,12 @@ type ResearchStrategyInput struct {
 	UnitPipelinePhase  models.UnitPipelinePhase
 }
 
-// ResearchStrategyOutput holds the result of a single strategy: relations, supply chains, optional fragment merge.
+// ResearchStrategyOutput holds the result of a single strategy: relations, supply chains, optional fragment merge, grounding evidence.
 type ResearchStrategyOutput struct {
-	Relations       []DiscoveredRelation
-	SupplyChains    []SupplyChain
-	FragmentPartial *models.HorizonFragment // optional; merged into working fragment by pipeline
+	Relations        []DiscoveredRelation
+	SupplyChains     []SupplyChain
+	FragmentPartial  *models.HorizonFragment // optional; merged into working fragment by pipeline
+	GroundingEvidence *ai.GroundingEvidence  // Vertex AI Search provenance from this strategy
 }
 
 // ResearchStrategy is a domain-specific enrichment strategy (supply_chain, governance, market, strategic, general).

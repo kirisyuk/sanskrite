@@ -118,15 +118,22 @@ func NewGeoNamesClient(username string) *GeoNamesClient {
 	}
 }
 
+// DefaultGeoNamesUsername is used when no env var is set (shared demo/dev username).
+const DefaultGeoNamesUsername = "kirisyuk"
+
 // GetGeoNamesClientFromEnv creates a GeoNames client from environment variables.
 //
 // Env:
 // - GEONAMES_USERNAME (preferred)
 // - HORIZON_GEONAMES_USERNAME (fallback)
+// - DefaultGeoNamesUsername if both unset
 func GetGeoNamesClientFromEnv() *GeoNamesClient {
 	username := strings.Trim(strings.TrimSpace(os.Getenv("GEONAMES_USERNAME")), "\"'")
 	if username == "" {
 		username = strings.Trim(strings.TrimSpace(os.Getenv("HORIZON_GEONAMES_USERNAME")), "\"'")
+	}
+	if username == "" {
+		username = DefaultGeoNamesUsername
 	}
 	return NewGeoNamesClient(username)
 }

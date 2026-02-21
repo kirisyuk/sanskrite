@@ -638,6 +638,53 @@ Adapter **не создаёт новые axes**. Propagation engine работа
 
 Каждый adapter определяет свою таблицу проекций в `Encode`.
 
+#### 18.4.2.1 Policy-impact semantics matrix (runtime contract)
+
+Для `policy-impact` вводится жёсткая матрица в runtime:
+
+1. **Unknown edge type = block** (`TransferHook.Skip=true`).
+2. **Edge type + axis compatibility** управляет тем, может ли конкретная ось идти по конкретному типу связи.
+3. **Source fragment type factor** дополнительно ослабляет/усиливает сигнал в зависимости от типа узла.
+4. **Decode jurisdiction gate**: endpoint метрики декодируются только для узлов, совпадающих с geo-scope сценария.
+5. **Decode type allowlist**: endpoint-метрики считаются только на узлах допустимых типов.
+
+Базовая матрица `edgeType -> axis` (policy-impact):
+
+| Edge type | Ключевые поддерживаемые оси | Поведение |
+|---|---|---|
+| `REGULATES`, `APPLIES_TO`, `IMPOSES_CONDITION`, `CONTROLS_ACCESS` | `legal/access`, `legal/compliance`, `financial/settlement`, `info/uncertainty` | Сильный нормативный канал, усиливает compliance/access |
+| `DEPENDS_ON` | `financial/*`, `physical_flow/*`, `logistics/*`, `operational/continuity` | Экономический transmission канал, умеренное затухание |
+| `SUPPLIES_TO`, `CONSUMES`, `PARTICIPATES_IN` | `physical_flow/*`, `financial/settlement`, частично `legal/compliance` | Рыночный/цепочечный канал |
+| `OPERATES_IN`, `LOCATED_IN`, `IN_GEO_SCOPE` | `geo/conflict`, `legal/*`, частично `info/uncertainty` | Гео/юрисдикционный канал |
+| `INFLUENCES`, `PARTNERS_WITH`, `ASSOCIATED_WITH` | `info/uncertainty`, `info/reputation` (+слабее `demand/settlement`) | Инфо/поведенческий канал |
+| `OWNS`, `CONTROLS`, `MANAGES`, `INVESTS_IN`, `ADMINISTERS` | `financial/*`, `legal/compliance`, `operational/continuity` | Контроль/управление/финансы |
+| `USES_MECHANISM`, `AFFECTS`, `ABOUT` | `legal/compliance`, `info/*`, частично `financial/settlement` | Вспомогательные policy-связи |
+
+Матрица `fragment type -> node factor`:
+
+| Fragment type | Роль в policy-impact transfer |
+|---|---|
+| `GEO_REGION` | усиливает `geo/conflict`, `legal/*`; ослабляет финансовые оси |
+| `MARKET` | усиливает `physical_flow/demand`, `financial/settlement` |
+| `PROGRAM`, `MECHANISM`, `DECISION_POINT`, `DOMAIN` | усиливает `legal/*` и `info/uncertainty`; ослабляет операционные оси |
+| `ORGANIZATION`, `FACILITY` | нейтрально для `financial/physical`; ослабляет info-оси |
+| `COMMUNITY`, `PERSON`, `MEDIA_CHANNEL` | усиливает `info/*`; ослабляет финансово-операционные оси |
+
+Decode scope-гейтинг (критично для кейса НДС KZ):
+
+1. Geo-scope берётся из `scenario.parameters.location_path` (или `jurisdiction/country` -> `/loc/{cc}/na/na`).
+2. Endpoint узел допускается к decode только если его canonical geo пересекается с geo-scope сценария.
+3. Узлы без geo (например legacy `/org/{slug}`) для country-scoped сценариев блокируются на decode.
+4. В итоге `vat_kz` не декодируется в метрики для `"/org/ae/..."` и аналогичных out-of-scope узлов.
+
+Trace explainability для каждой передачи сигнала (`outcome=propagated|dropped`) включает:
+
+1. `channel`: `regulatory|economic|informational|geopolitical|operational|mixed`.
+2. `scope`: `domestic|cross_border|unknown`.
+3. `spillover`: `direct_domestic`, `cross_border_economic`, `cross_border_informational`, и др.
+4. `factors`: карта множителей шага (`effective_damping`, `strong_edge_weight`, `throughput_factor`,
+   `axis_transform_factor`, `adapter.*`, `after_adapter`), чтобы было видно, как именно рассчитан `amplitude_out`.
+
 #### 18.4.3 Правило вычисления
 
 1. По волне ходят лёгкие proxy-сигналы (amplitude ∈ [0,1] на стандартных axes).
@@ -781,4 +828,4 @@ scenario: {vat_rate_from: 12, vat_rate_to: 16}
 
 ---
 
-*Документ обновлён по итогам обсуждения. Версия: 2026-02-17.*
+*Документ обновлён по итогам обсуждения. Версия: 2026-02-20.*

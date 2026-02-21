@@ -183,6 +183,32 @@ Validate ownership and control coherence:
 Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeGovernance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
+func (a *CriticAgent) buildAssuranceValidationPrompt(input CriticValidatorInput) string {
+	fragmentJSON, _ := json.MarshalIndent(input.Fragment, "", "  ")
+	relationsJSON, _ := json.MarshalIndent(input.Relations, "", "  ")
+	return fmt.Sprintf(`You are a Critic validator for ASSURANCE mode (Third Line: audit, certification, regulatory oversight).
+
+%s
+Allowed relation types: ASSURES (with qualifiers.assurance_type: audit|certification|regulatory|inspection), AUDITED_BY, REGULATES.
+Allowed actor types: %s.
+
+FRAGMENT:
+%s
+
+RELATIONS:
+%s
+
+Validate:
+1. ASSURES direction: assurer (source) → assuree (target). AUDITED_BY: assuree → assurer.
+2. external audit coverage for significant orgs/facilities;
+3. certification and regulatory oversight when relevant to sector;
+4. missing assurance information that should be researched.
+
+%s
+
+Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeAssurance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+}
+
 func (a *CriticAgent) buildMarketValidationPrompt(input CriticValidatorInput) string {
 	fragmentJSON, _ := json.MarshalIndent(input.Fragment, "", "  ")
 	relationsJSON, _ := json.MarshalIndent(input.Relations, "", "  ")

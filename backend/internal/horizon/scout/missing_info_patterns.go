@@ -408,6 +408,12 @@ func ExtractPlatformFromPath(canonicalPath string) string {
 	return ""
 }
 
+// AllowedCommunityTypes is the canonical list of community type slugs for /community/{geo}/{type}/{slug}.
+var AllowedCommunityTypes = []string{
+	"trade", "activist", "professional", "criminal", "religious", "ethnic", "interest",
+	"dynasty", "tribe", "representatives", "industry-association", "key-community",
+}
+
 // SuggestCommunityType suggests a community type based on context.
 func SuggestCommunityType(marketPath, description string) string {
 	desc := strings.ToLower(description)
@@ -438,6 +444,18 @@ func SuggestCommunityType(marketPath, description string) string {
 	if strings.Contains(desc, "professional") || strings.Contains(desc, "researcher") ||
 		strings.Contains(desc, "developer") || strings.Contains(desc, "osint") {
 		return "professional"
+	}
+
+	// Industry association indicators
+	if strings.Contains(desc, "association") || strings.Contains(desc, "trade body") ||
+		strings.Contains(desc, "industry group") || strings.Contains(desc, "lobby") {
+		return "industry-association"
+	}
+
+	// Representatives indicators
+	if strings.Contains(desc, "representative") || strings.Contains(desc, "delegation") ||
+		strings.Contains(desc, "delegate") {
+		return "representatives"
 	}
 
 	// Default

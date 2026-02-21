@@ -33,6 +33,7 @@ type PropagationEngine struct {
 	policyExecutor       *policy.PolicyExecutor // Optional: for semantic propagation policies
 	criticalPathDetector *criticalpath.Detector // Optional: for critical path detection
 	adapterRegistry      *AdapterRegistry       // Optional: domain-model adapter registry (contract type/domain mode)
+	profileLookup        *ProfileLookup         // Optional: axis-based propagation profiles (used by PropagateChange when set)
 	fragmentChangedHook  func(ctx context.Context, fragmentID string)
 
 	// Трекинг активных распространений
@@ -93,6 +94,13 @@ func (e *PropagationEngine) WithCriticalPathDetector(detector *criticalpath.Dete
 // This is a non-breaking extension point; when nil, propagation behavior remains unchanged.
 func (e *PropagationEngine) WithDomainAdapterRegistry(registry *AdapterRegistry) *PropagationEngine {
 	e.adapterRegistry = registry
+	return e
+}
+
+// WithProfileLookup sets the profile lookup for axis-based propagation.
+// When set, PropagateChange uses axis profiles (strong edges, damping, transformations) instead of legacy WaveDamping.
+func (e *PropagationEngine) WithProfileLookup(lookup *ProfileLookup) *PropagationEngine {
+	e.profileLookup = lookup
 	return e
 }
 
@@ -185,7 +193,7 @@ func (e *PropagationEngine) PropagateChange(ctx context.Context, fragmentID stri
 	}, nil
 }
 
-func (e *PropagationEngine) fireFragmentChangedHook(ctx context.Context, fragmentID string) {
+func (e *PropagationEngine) fireFragmentChangedHook(_ context.Context, fragmentID string) {
 	if e == nil || e.fragmentChangedHook == nil || strings.TrimSpace(fragmentID) == "" {
 		return
 	}
@@ -460,7 +468,8 @@ func (e *PropagationEngine) StartColdPathProcessor(ctx context.Context, interval
 	}()
 }
 
-// propagateHotPath распространяет влияние по критическим путям (немедленно)
+// propagateHotPath распространяет влияние по критическим путям (немедленно).
+// When profileLookup is set and metricName is a canonical signal path, uses axis-based profiles (strong edges, damping, transformations).
 func (e *PropagationEngine) propagateHotPath(
 	ctx context.Context,
 	sourceFragment *models.HorizonFragment,
@@ -476,6 +485,17 @@ func (e *PropagationEngine) propagateHotPath(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Axis-based path: use same profiles as PropagateSignalFromSeeds when available.
+	if e.profileLookup != nil && isCanonicalSignalMetricPath(metricName) {
+		sig, ok := signalDescriptorFromMetricPath(metricName, delta)
+		if ok && sig != nil {
+			profile, err := e.profileLookup.GetForSignal(sig)
+			if err == nil && profile != nil {
+				return e.propagateHotPathAxisBased(ctx, sourceFragment, metricName, delta, sig, profile, affectedFragments, affectedLenses, propagationPaths)
+			}
+		}
+	}
+	// Legacy path: WaveDamping, all outgoing edges.
 	adapter := e.resolveDomainAdapter(ctx, sourceFragment)
 
 	type waveItem struct {
@@ -700,6 +720,156 @@ func (e *PropagationEngine) propagateHotPath(
 		}
 	}
 
+	return nil
+}
+
+// propagateHotPathAxisBased uses axis profiles (strong edges, damping, transformations) for delta propagation.
+// Same traversal semantics as PropagateSignalFromSeeds, but applies additive delta to downstream metrics.
+func (e *PropagationEngine) propagateHotPathAxisBased(
+	ctx context.Context,
+	sourceFragment *models.HorizonFragment,
+	metricName string,
+	delta float64,
+	sig *models.SignalDescriptor,
+	profile *models.PropagationProfile,
+	affectedFragments map[string]bool,
+	affectedLenses map[string]bool,
+	propagationPaths *[][]string,
+) error {
+	if e == nil || sourceFragment == nil || sig == nil || profile == nil {
+		return nil
+	}
+	adapter := e.resolveDomainAdapter(ctx, sourceFragment)
+	maxHops := profile.DefaultMaxHops
+	if maxHops <= 0 {
+		maxHops = 8
+	}
+
+	type queueItem struct {
+		frag       *models.HorizonFragment
+		metricName string
+		axis       string
+		d          float64
+		hops       int
+		path       []string
+	}
+
+	visited := make(map[string]float64) // nodeID|metric -> abs(delta)
+	queue := []queueItem{{
+		frag:       sourceFragment,
+		metricName: metricName,
+		axis:       sig.Axis,
+		d:          delta,
+		hops:       0,
+		path:       []string{sourceFragment.ID},
+	}}
+	visited[sourceFragment.ID+"|"+metricName] = math.Abs(delta)
+
+	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		it := queue[0]
+		queue = queue[1:]
+		if it.frag == nil || it.hops >= maxHops {
+			continue
+		}
+		if math.Abs(it.d) < MinAmplitudeThreshold {
+			continue
+		}
+
+		neighbors, err := e.getNeighborsViaStrongEdges(ctx, it.frag, profile)
+		if err != nil {
+			continue
+		}
+		if it.frag.State == nil {
+			it.frag.State = make(map[string]models.MetricValue)
+		}
+		var unit *string
+		if mv, ok := it.frag.State[it.metricName]; ok {
+			unit = mv.Unit
+		}
+
+		for _, neighbor := range neighbors {
+			// Damping from profile + edge physics (same as signal_propagation)
+			breakdown := e.calculateDampedAmplitudeWithBreakdown(math.Abs(it.d), neighbor.edge, profile)
+			nextAmp := breakdown.Amplitude
+			if it.d < 0 {
+				nextAmp = -nextAmp
+			}
+			nextAxis, transformFactor := e.applyTransformation(it.axis, neighbor.edge, profile)
+			if transformFactor != 0 && transformFactor != 1 {
+				nextAmp *= transformFactor
+			}
+			if nextAmp > 1.0 {
+				nextAmp = 1.0
+			}
+			if nextAmp < -1.0 {
+				nextAmp = -1.0
+			}
+			nextMetric := metricPathWithAxis(it.metricName, nextAxis)
+
+			if adapter != nil {
+				nextSig, ok := signalDescriptorFromMetricPath(nextMetric, nextAmp)
+				if ok && nextSig != nil {
+					hook, err := adapter.TransferHook(ctx, nextSig, neighbor.edge, it.frag)
+					if err == nil && hook != nil {
+						if hook.Skip {
+							continue
+						}
+						if hook.AdjustedAmplitude > 0 {
+							sign := 1.0
+							if nextAmp < 0 {
+								sign = -1.0
+							}
+							nextAmp = clamp01(hook.AdjustedAmplitude) * sign
+						}
+						if axis := strings.TrimSpace(hook.AdjustedAxis); axis != "" && models.IsValidAxis(axis) {
+							nextAxis = axis
+							nextMetric = metricPathWithAxis(it.metricName, nextAxis)
+						}
+					}
+				}
+			}
+			if !e.threshold.ExceedsThreshold(nextMetric, nextAmp, unit) {
+				continue
+			}
+
+			visitKey := neighbor.fragmentID + "|" + nextMetric
+			absD := math.Abs(nextAmp)
+			if prev, ok := visited[visitKey]; ok && prev >= absD {
+				continue
+			}
+			visited[visitKey] = absD
+
+			targetFrag, err := e.fragmentsRepo.Get(ctx, neighbor.fragmentID)
+			if err != nil || targetFrag == nil {
+				continue
+			}
+			if err := e.updateFragmentMetric(ctx, targetFrag, nextMetric, nextAmp); err != nil {
+				continue
+			}
+			affectedFragments[neighbor.fragmentID] = true
+			newPath := append(append([]string{}, it.path...), neighbor.fragmentID)
+			if propagationPaths != nil {
+				*propagationPaths = append(*propagationPaths, newPath)
+			}
+			if e.lensesRepo != nil {
+				lenses, _ := e.lensesRepo.FindByScope(ctx, "global", targetFrag.CanonicalPath, 100)
+				for _, l := range lenses {
+					affectedLenses[l.ID] = true
+				}
+			}
+			queue = append(queue, queueItem{
+				frag:       targetFrag,
+				metricName: nextMetric,
+				axis:       nextAxis,
+				d:          nextAmp,
+				hops:       it.hops + 1,
+				path:       newPath,
+			})
+		}
+	}
 	return nil
 }
 

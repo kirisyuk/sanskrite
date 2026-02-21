@@ -160,6 +160,39 @@ func (r *LensesRepository) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+// RemoveScopeCanonicalPaths removes canonical paths from lens.scope using array remove.
+// Used for orphan cleanup when scope paths have no corresponding fragment.
+func (r *LensesRepository) RemoveScopeCanonicalPaths(ctx context.Context, lensID string, canonicalPaths []string) error {
+	if lensID == "" {
+		return ErrInvalidDocument
+	}
+	if len(canonicalPaths) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	removeArgs := make([]interface{}, 0, len(canonicalPaths))
+	for _, p := range canonicalPaths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		removeArgs = append(removeArgs, p)
+	}
+	if len(removeArgs) == 0 {
+		return nil
+	}
+	updates := map[string]interface{}{
+		"scope":     firestore.ArrayRemove(removeArgs...),
+		"updatedAt": time.Now().UTC(),
+	}
+	_, err := r.col.Doc(lensID).Set(ctx, updates, firestore.MergeAll)
+	return err
+}
+
 // AddScopeCanonicalPaths appends canonical paths to lens.scope using array union.
 // This is intentionally partial (does not validate full Lens), to support incremental workflows (e.g., domain expansion).
 func (r *LensesRepository) AddScopeCanonicalPaths(ctx context.Context, lensID string, canonicalPaths []string) error {

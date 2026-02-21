@@ -154,3 +154,77 @@ func (h *HorizonTelemetryHandler) List(w http.ResponseWriter, r *http.Request) {
 		"tenantId": tenantID,
 	})
 }
+
+// ExternalServices GET /api/v1/admin/horizon/telemetry/external-services
+// Returns hit/miss/error counts and hit rate per external service (geonames, wikidata, opencorporates).
+func (h *HorizonTelemetryHandler) ExternalServices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
+		return
+	}
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	if h.repo == nil {
+		WriteInternalError(w, "telemetry repo not configured")
+		return
+	}
+
+	tenantID := strings.TrimSpace(r.URL.Query().Get("tenantId"))
+	if tenantID == "" {
+		tenantID = "global"
+	}
+
+	limit := 168 // ~7 days of hourly windows
+	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	services := []string{"geonames", "wikidata", "opencorporates"}
+	type serviceStats struct {
+		Hit     int64   `json:"hit"`
+		Miss    int64   `json:"miss"`
+		Error   int64   `json:"error"`
+		Calls   int64   `json:"calls"`
+		HitRate float64 `json:"hitRate"`
+	}
+	result := make(map[string]serviceStats)
+
+	for _, service := range services {
+		items, err := h.repo.List(r.Context(), tenantID, "external_services", service, limit)
+		if err != nil {
+			if h.logger != nil {
+				h.logger.Printf("external services telemetry list error: %v", err)
+			}
+			continue
+		}
+		var hit, miss, errCount int64
+		for _, item := range items {
+			if item == nil || item.Counters == nil {
+				continue
+			}
+			hit += item.Counters["hit"]
+			miss += item.Counters["miss"]
+			errCount += item.Counters["error"]
+		}
+		calls := hit + miss + errCount
+		var hitRate float64
+		if calls > 0 {
+			hitRate = float64(hit) / float64(calls)
+		}
+		result[service] = serviceStats{
+			Hit:     hit,
+			Miss:    miss,
+			Error:   errCount,
+			Calls:   calls,
+			HitRate: hitRate,
+		}
+	}
+
+	WriteJSON(w, http.StatusOK, map[string]any{
+		"services":  result,
+		"tenantId":  tenantID,
+	})
+}

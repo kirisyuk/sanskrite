@@ -737,7 +737,7 @@ func (e *ScoutEngine) buildLensGraphContext(ctx context.Context, lens *models.Le
 		maxEdges = 120
 	}
 
-	// 1) Direct scope nodes (exclude domains; Phase2 job already has the domain fragment).
+	// 1) Direct scope nodes (exclude /domain/ — domain is config, not a graph node).
 	directPaths := make([]string, 0, len(lens.Scope))
 	seenPath := map[string]struct{}{}
 	for _, p := range lens.Scope {
@@ -1632,12 +1632,26 @@ func contractTypesFromLensScope(scope []string) []string {
 // ensureJobDomainMode computes domain mode(s) from path, domains in job/lens state, and specialties fallback,
 // then writes job.State["domainMode"] or job.State["domainModes"].
 // Call once at the start of job execution, after effectiveCanonicalPath is known.
+// If domainModes/domainMode already set (e.g. from lens at job creation), do not overwrite.
 func (e *ScoutEngine) ensureJobDomainMode(ctx context.Context, job *models.ScoutingJob, effectiveCanonicalPath string) {
 	if job == nil {
 		return
 	}
 	if job.State == nil {
 		job.State = make(map[string]interface{})
+	}
+	// Prefer domainModes from lens (set at job creation).
+	if v, ok := job.State["domainModes"]; ok && v != nil {
+		modes := parseStateStringSlice(v)
+		modes = taxonomy.NormalizeDomainModes(modes)
+		if len(modes) > 0 {
+			return
+		}
+	}
+	if v, ok := job.State["domainMode"]; ok && v != nil {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			return
+		}
 	}
 	path := strings.TrimSpace(effectiveCanonicalPath)
 	if path == "" {
@@ -1659,7 +1673,9 @@ func (e *ScoutEngine) ensureJobDomainMode(ctx context.Context, job *models.Scout
 		}
 	}
 
-	// 3) From lens scope/viewConfig when job state lacks domains (e.g., reused jobs, old payloads).
+	// 3) From lens when job state lacks domains (e.g., reused jobs, old payloads).
+	// Prefer lens.DomainModes (new); else lens.ViewConfig["domains"] → contractTypes; else lens.Scope (legacy /domain/ paths).
+	var lensModes []string
 	if len(contractTypes) == 0 && e != nil && e.lensesRepo != nil {
 		lensID := strings.TrimSpace(job.LensID)
 		if lensID == "" && job.State != nil {
@@ -1668,12 +1684,14 @@ func (e *ScoutEngine) ensureJobDomainMode(ctx context.Context, job *models.Scout
 		if lensID != "" && strings.TrimSpace(job.TenantID) != "" {
 			if lens, err := e.lensesRepo.Get(ctx, lensID); err == nil && lens != nil {
 				if strings.TrimSpace(lens.TenantID) == strings.TrimSpace(job.TenantID) {
-					if lens.ViewConfig != nil {
+					if len(lens.DomainModes) > 0 {
+						lensModes = taxonomy.NormalizeDomainModes(lens.DomainModes)
+					} else if lens.ViewConfig != nil {
 						if raw, ok := lens.ViewConfig["domains"]; ok {
 							contractTypes = append(contractTypes, contractTypesFromDomainsRaw(raw)...)
 						}
 					}
-					if len(contractTypes) == 0 {
+					if len(contractTypes) == 0 && len(lensModes) == 0 {
 						contractTypes = append(contractTypes, contractTypesFromLensScope(lens.Scope)...)
 					}
 				}
@@ -1703,7 +1721,9 @@ func (e *ScoutEngine) ensureJobDomainMode(ctx context.Context, job *models.Scout
 	}
 
 	var modes []string
-	if len(contractTypes) > 0 {
+	if len(lensModes) > 0 {
+		modes = lensModes
+	} else if len(contractTypes) > 0 {
 		modes = domain.DomainModesForContractTypes(contractTypes)
 	}
 	modes = taxonomy.NormalizeDomainModes(modes)
@@ -3379,7 +3399,8 @@ func (e *ScoutEngine) processRelationsInternal(
 			// OSINT-lite / social edges can explode recursion breadth; keep nodes/edges but don't auto-expand.
 			string(models.DependencyTypeRelatedTo),
 			string(models.DependencyTypeRelativeOf),
-			// Auditors are a governance fact; not useful to recursively expand by default.
+			// Auditors/assurers are governance facts; not useful to recursively expand by default.
+			string(models.DependencyTypeAssures),
 			string(models.DependencyTypeAuditedBy):
 			return false
 		default:

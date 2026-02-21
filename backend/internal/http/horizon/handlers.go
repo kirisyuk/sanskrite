@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
+	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -12,18 +13,19 @@ import (
 
 // HorizonHandlers содержит все HTTP handlers для Horizon API
 type HorizonHandlers struct {
-	service           *horizon.HorizonService
-	lensItemsHandler  *LensItemsHandler
-	genAIHandler      *httputil.GenAIHandler
-	profilesHandler   *ProfilesHandler
-	docsRepo          *corerepo.DocumentsRepository
-	usersRepo         *corerepo.UsersRepository
-	interactions      *corerepo.InteractionsRepository
-	factsRepo         *corerepo.OntologyFactsRepository
-	exposurePathsRepo *horizonrepo.ExposurePathsRepository
-	riskJobsRepo      *horizonrepo.RiskJobsRepository
-	unitGraphRepo     *horizonrepo.UnitGraphSnapshotsRepository
-	unitDiveRepo      *horizonrepo.UnitDiveResultsRepository
+	service                   *horizon.HorizonService
+	lensItemsHandler          *LensItemsHandler
+	genAIHandler              *httputil.GenAIHandler
+	profilesHandler           *ProfilesHandler
+	docsRepo                  *corerepo.DocumentsRepository
+	usersRepo                 *corerepo.UsersRepository
+	interactions              *corerepo.InteractionsRepository
+	factsRepo                  *corerepo.OntologyFactsRepository
+	exposurePathsRepo         *horizonrepo.ExposurePathsRepository
+	riskJobsRepo              *horizonrepo.RiskJobsRepository
+	unitGraphRepo             *horizonrepo.UnitGraphSnapshotsRepository
+	unitDiveRepo              *horizonrepo.UnitDiveResultsRepository
+	propagationProfileLookup  *horizonprop.ProfileLookup
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -96,6 +98,12 @@ func (h *HorizonHandlers) WithUnitDiveRepo(r *horizonrepo.UnitDiveResultsReposit
 	return h
 }
 
+// WithPropagationProfileLookup wires ProfileLookup for scenario/axis-based signal propagation.
+func (h *HorizonHandlers) WithPropagationProfileLookup(lookup *horizonprop.ProfileLookup) *HorizonHandlers {
+	h.propagationProfileLookup = lookup
+	return h
+}
+
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Intent precheck (NL -> taxonomy-aligned intent)
@@ -136,12 +144,16 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	// Scout endpoints
 	mux.Handle("/api/horizon/scout/jobs/", authMiddleware(http.HandlerFunc(h.HandleScoutRoutes)))
 
-	// Propagation endpoints
-	mux.Handle("/api/horizon/propagation/status", authMiddleware(http.HandlerFunc(h.GetPropagationStatus)))
-	mux.Handle("/api/horizon/propagation/trigger", authMiddleware(http.HandlerFunc(h.TriggerPropagation)))
+		// Propagation endpoints
+		mux.Handle("/api/horizon/propagation/status", authMiddleware(http.HandlerFunc(h.GetPropagationStatus)))
+		mux.Handle("/api/horizon/propagation/trigger", authMiddleware(http.HandlerFunc(h.TriggerPropagation)))
+		mux.Handle("/api/horizon/propagation/trace", authMiddleware(http.HandlerFunc(h.TracePropagationPaths)))
 
-	// Debug: inject an event and run SignalDescriptor pipeline (extract → seed → propagate)
-	mux.Handle("/api/horizon/events:inject", authMiddleware(http.HandlerFunc(h.InjectEvent)))
+		// Debug: inject an event and run SignalDescriptor pipeline (extract → seed → propagate)
+		mux.Handle("/api/horizon/events:inject", authMiddleware(http.HandlerFunc(h.InjectEvent)))
+
+		// Domain scenario: Encode → Propagate → Decode (policy-impact, etc.)
+		mux.Handle("/api/horizon/scenarios/run", authMiddleware(http.HandlerFunc(h.RunScenario)))
 
 	// Entity search (Live Entity Recognition)
 	mux.Handle("/api/horizon/entities/search", authMiddleware(http.HandlerFunc(h.SearchEntities)))
@@ -303,30 +315,6 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 		case "control-corridor":
 			h.QueryControlCorridor(w, r)
 			return
-		case "domain-overlay-preview":
-			h.PreviewDomainOverlay(w, r)
-			return
-		case "domain-overlay-execute":
-			h.ExecuteDomainOverlay(w, r)
-			return
-		case "domain-answers":
-			if len(pathParts) > 2 {
-				// /api/horizon/lenses/{lensId}/domain-answers/{domainId}/run
-				if len(pathParts) > 3 && pathParts[len(pathParts)-1] == "run" {
-					h.RunDomainAnswer(w, r)
-					return
-				}
-				// GET: single snapshot; other methods not allowed here
-				h.GetDomainAnswer(w, r)
-				return
-			}
-			// POST: create domain on demand; GET: list snapshots
-			if r.Method == http.MethodPost {
-				h.CreateDomainAnswer(w, r)
-				return
-			}
-			h.ListDomainAnswers(w, r)
-			return
 		case "artifacts":
 			// Check for /artifacts/stats or /artifacts/context
 			if len(pathParts) > 2 {
@@ -348,9 +336,6 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			default:
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
-			return
-		case "trigger-phase2":
-			h.TriggerPhase2StrategicOverlay(w, r)
 			return
 		case "unit-graph":
 			switch r.Method {

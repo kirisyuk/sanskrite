@@ -61,6 +61,8 @@ export type DependencyType =
   | 'INVESTS_IN'
   | 'PARTNERS_WITH'
   | 'COOPERATES_WITH'
+  // Assurance / oversight (Third Line)
+  | 'ASSURES'
   // OSINT-lite / governance extensions
   | 'AUDITED_BY'
   | 'RELATIVE_OF'

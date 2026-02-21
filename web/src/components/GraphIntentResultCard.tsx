@@ -14,6 +14,8 @@ export interface GraphIntentResultCardProps {
   onApply: () => void;
   onDismiss: () => void;
   theme?: 'light' | 'dark';
+  /** Map from node id / fragmentId / canonicalPath to display label. Used for merge and delete sections. */
+  nodeIdToLabel?: Record<string, string>;
 }
 
 function collectNodes(plan: GraphIntentPlanResponse): GraphIntentNodeSpec[] {
@@ -61,12 +63,19 @@ function buildTempIdToLabel(nodes: GraphIntentNodeSpec[]): Map<string, string> {
   return m;
 }
 
+function resolveLabel(id: string, nodeIdToLabel?: Record<string, string>): string {
+  if (!id) return '?';
+  const label = nodeIdToLabel?.[id];
+  return (label && label.trim()) || id;
+}
+
 export function GraphIntentResultCard({
   plan,
   applyLoading,
   onApply,
   onDismiss,
   theme = 'dark',
+  nodeIdToLabel,
 }: GraphIntentResultCardProps) {
   const nodes = collectNodes(plan);
   const edges = collectEdges(plan);
@@ -234,9 +243,14 @@ export function GraphIntentResultCard({
                   color: 'var(--text-heading)',
                   fontSize: 12,
                   fontWeight: 600,
+                  maxWidth: 180,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
+                title={plan.merge!.primaryNodeId}
               >
-                {plan.merge!.primaryNodeId}
+                {resolveLabel(plan.merge!.primaryNodeId, nodeIdToLabel)}
               </div>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>←</span>
               {(plan.merge?.duplicateNodeIds ?? []).map((id) => (
@@ -251,10 +265,14 @@ export function GraphIntentResultCard({
                     color: 'var(--text-heading)',
                     fontSize: 12,
                     fontWeight: 500,
+                    maxWidth: 180,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
                   }}
-                  title={`Duplicate → merge into primary`}
+                  title={id}
                 >
-                  {id}
+                  {resolveLabel(id, nodeIdToLabel)}
                 </div>
               ))}
             </div>
@@ -283,10 +301,10 @@ export function GraphIntentResultCard({
                     fontSize: 12,
                     fontWeight: 500,
                   }}
-                  title={`Delete node ${id}`}
+                  title={id}
                 >
                   <span style={{ opacity: 0.8 }}>−</span>
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>{id}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>{resolveLabel(id, nodeIdToLabel)}</span>
                 </div>
               ))}
               {(plan.delete?.edgeIds ?? []).map((id) => (

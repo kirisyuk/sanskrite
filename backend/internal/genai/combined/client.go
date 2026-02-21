@@ -36,6 +36,7 @@ type GenAIRequest struct {
 	Tools              []Tool                 `json:"tools,omitempty"`
 	ToolChoice         string                 `json:"toolChoice,omitempty"` // auto|required
 	ParallelToolCalls  bool                   `json:"parallelToolCalls,omitempty"`
+	ThinkingBudget *int `json:"thinkingBudget,omitempty"` // nil = model default; 0 = disable thinking (Gemini 2.5+/3)
 	// Optional: for WebSocket event routing (used in Research mode)
 	ProjectID string `json:"projectId,omitempty"`
 	StreamID  string `json:"streamId,omitempty"`
@@ -1083,9 +1084,10 @@ func (c *Client) GenAIGenerate(ctx context.Context, req GenAIRequest) (*GenAIRes
 	// This ensures that resp.Model always has the real model name, not alias
 	actualModelName := ConvertAliasToModel(req.Model)
 	opts := g.Options{
-		ModelOverride:     actualModelName, // Use actual model name directly (normalizeOptionsFor* will handle if it's still an alias)
+		ModelOverride:     actualModelName,
 		Temperature:       req.Temperature,
 		MaxOutputTokens:   req.MaxOutputTokens,
+		ThinkingBudget:    req.ThinkingBudget,
 		GroundingEnabled:  req.WebSearchEnabled,
 		SystemInstruction: systemInstruction,
 	}

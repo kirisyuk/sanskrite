@@ -298,6 +298,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		string(horizonmodels.DependencyTypeEmployedBy):  {},
 		string(horizonmodels.DependencyTypeFounded):     {},
 		string(horizonmodels.DependencyTypeAdministers): {},
+		string(horizonmodels.DependencyTypeAssures):     {},
 		string(horizonmodels.DependencyTypeAuditedBy):   {},
 	}
 	executionEdgeSet := map[string]struct{}{

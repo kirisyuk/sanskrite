@@ -6,6 +6,7 @@ export type HorizonAssemblyStage =
   | 'decomposition'
   | 'cache_hit'
   | 'scouting'
+  | 'intra_graph'
   | 'propagation'
   | 'ready'
   | 'failed'
@@ -210,6 +211,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             decomposition: 'Decomposing',
             cache_hit: 'Loading from cache',
             scouting: 'Scouting',
+            intra_graph: 'Linking entities',
             propagation: 'Propagating',
             ready: 'Ready',
             failed: 'Failed',
@@ -446,6 +448,22 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
           } else {
             text = 'Domain overlay';
             humanReadable = { title: 'Domain overlay' };
+          }
+        } else if (type.startsWith('horizon.intra_graph.')) {
+          icon = type.includes('completed') ? 'success' : 'info';
+          const hr = data?.humanReadable;
+          if (hr && typeof hr?.title === 'string' && hr.title.trim()) {
+            const title = hr.title.trim();
+            const description =
+              typeof hr?.description === 'string' ? hr.description.trim() : '';
+            text = description ? `${title} — ${short(description)}` : title;
+            humanReadable = {
+              title,
+              description: description ? short(description) : undefined,
+            };
+          } else {
+            text = 'Intra-graph link inference';
+            humanReadable = { title: 'Intra-graph link inference' };
           }
         } else if (type.startsWith('horizon.domain.contract.')) {
           if (type.includes('.failed') || type.includes('.fallback')) {
@@ -1048,6 +1066,21 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
         }));
       } catch {
         // ignore
+      }
+
+      // Intra-graph: update assembly stage while linking entities
+      if (type === 'horizon.intra_graph.started' || type === 'horizon.intra_graph.completed') {
+        const stage = type === 'horizon.intra_graph.started' ? 'intra_graph' : 'ready';
+        set((s) => ({
+          assembly: {
+            ...s.assembly,
+            stage,
+            phase: stage,
+            lensId: data?.lensId ?? s.assembly.lensId,
+            projectId: data?.projectId ?? s.assembly.projectId,
+            lastEventAt: now,
+          },
+        }));
       }
 
       // Assembly orchestration

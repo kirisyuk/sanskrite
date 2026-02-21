@@ -107,6 +107,8 @@ export interface HorizonNodeData {
   domainHighlight?: boolean;
   /** UI: stronger rounded ring for top-dependency focus nodes (wired by LensCanvasCockpit). */
   topDependencyHighlight?: boolean;
+  /** UI: rounded red ring for propagation trace preview (wired by LensCanvasCockpit). */
+  signalPropagationHighlight?: boolean;
   onLoadRelated?: (fragmentId: string) => void; // Функция для загрузки связанных элементов
   onCollapse?: (fragmentId: string) => void; // Функция для сворачивания (undo expand)
   isLoadingRelated?: boolean; // Флаг загрузки связанных элементов
@@ -1496,7 +1498,7 @@ export const getEdgeColor = (edgeType: string | undefined): string => {
   // Dependency — Gray
   if (['DEPENDS_ON', 'REQUIRES', 'USES', 'NEEDS'].includes(type)) return '#9CA3AF';
   // Location — Purple
-  if (['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'AUDITED_BY'].includes(type)) return '#A855F7';
+  if (['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'ASSURES', 'AUDITED_BY'].includes(type)) return '#A855F7';
   // Social graph (people-people) — Teal
   if (['RELATED_TO', 'RELATIVE_OF'].includes(type)) return '#06B6D4';
   // Default — Slate
@@ -1871,6 +1873,7 @@ const edgeCaptionShort = (raw: any): string => {
     SUPPORTS: 'Supports',
     SUPPLIES_TO: 'Supplies',
     PRODUCES: 'Produces',
+    ASSURES: 'Assures',
     AUDITED_BY: 'Audited',
     RELATED_TO: 'Related',
     RELATIVE_OF: 'Relatives',
@@ -3419,6 +3422,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isQueryHighlight = Boolean((data as any)?.queryHighlight);
   const isDomainHighlight = Boolean((data as any)?.domainHighlight);
   const isTopDependencyHighlight = Boolean((data as any)?.topDependencyHighlight);
+  const isSignalPropagationHighlight = Boolean((data as any)?.signalPropagationHighlight);
   const isBottleneckHighlight = Boolean((data as any)?.bottleneckHighlight);
   // Allow Research even if the first "load related" attempt returned empty: in that case the node isn't expanded,
   // but the user should still be able to run scouting from it.
@@ -3657,7 +3661,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   }, []);
 
   // Additional semantic highlights (rounded ring + halo):
-  // Priority: critical > query > top-dependency > domain > beneficiary > hub
+  // Priority: critical > signal > query > top-dependency > domain > beneficiary > hub
+  const signalPropagationTone = theme === 'dark'
+    ? { ring: 'rgba(248, 113, 113, 0.90)', glow: 'rgba(248, 113, 113, 0.34)' }
+    : { ring: 'rgba(220, 38, 38, 0.82)', glow: 'rgba(248, 113, 113, 0.24)' };
   const queryTone = theme === 'dark'
     ? { ring: 'rgba(56, 189, 248, 0.82)', glow: 'rgba(56, 189, 248, 0.22)' }
     : { ring: 'rgba(14, 165, 233, 0.70)', glow: 'rgba(14, 165, 233, 0.18)' };
@@ -3678,7 +3685,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     : { ring: 'rgba(217, 119, 6, 0.66)', glow: 'rgba(217, 119, 6, 0.20)' };
   const highlightTone = !isCritical
     ? (
-        isQueryHighlight
+        isSignalPropagationHighlight
+          ? signalPropagationTone
+          : isQueryHighlight
           ? queryTone
           : isTopDependencyHighlight
             ? topDependencyTone

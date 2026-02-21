@@ -37,7 +37,7 @@ type IntentResolution struct {
 }
 
 // DomainResolution describes an executable domain contract extracted from a user query.
-// It is a first-class ontology node (DOMAIN fragment) and is expanded into first-order entities by the pipeline.
+// Domain is config (contract), not a graph node; used for domainModes and contract rules.
 type DomainResolution struct {
 	CanonicalPath      string              `json:"canonicalPath"`
 	ContractType       string              `json:"contractType"` // allowlisted, must match /domain/v1/{contractType}/...

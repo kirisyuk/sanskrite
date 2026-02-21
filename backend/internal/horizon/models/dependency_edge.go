@@ -121,8 +121,14 @@ const (
 	// HAS_KEY_PERSON: legacy inverse (ORG has key person). Should be normalized to KEY_PERSON (PERSON → ORG).
 	DependencyTypeHasKeyPerson DependencyType = "HAS_KEY_PERSON"
 
+	// --- Assurance / oversight (Third Line: independent verification) ---
+	// ASSURES: assurer provides independent assurance to assuree. Qualifier assurance_type: audit | certification | regulatory | inspection.
+	// Direction: assurer (ORGANIZATION) → assuree (ORGANIZATION/FACILITY/PROGRAM).
+	// Subsumes: audit (AUDITED_BY inverse), certification, regulatory approval, inspection.
+	DependencyTypeAssures DependencyType = "ASSURES"
+
 	// --- OSINT-lite / governance extensions ---
-	// AUDITED_BY: external auditor relationship (company -> audit firm).
+	// AUDITED_BY: external auditor relationship (company -> audit firm). Legacy; prefer ASSURES(assurance_type:audit) for new data.
 	DependencyTypeAuditedBy DependencyType = "AUDITED_BY"
 	// RELATIVE_OF: symmetric person-person relationship (public relatives).
 	DependencyTypeRelativeOf DependencyType = "RELATIVE_OF"

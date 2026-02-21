@@ -109,24 +109,11 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Ensure scope contains this canonical path
+	// Deferred scope: do NOT add to scope here. Scope is added only when Scout creates the fragment (max 5 per lens).
 	scopeAdded := false
-	{
-		seen := map[string]struct{}{}
-		for _, p := range lens.Scope {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			seen[p] = struct{}{}
-		}
-		if _, ok := seen[targetCanonicalPath]; !ok {
-			lens.Scope = append(lens.Scope, targetCanonicalPath)
-			scopeAdded = true
-		}
-	}
 
 	// Create scouting job (maxRecursionDepth=0: add as a single node, no automatic relationship expansion).
+	// Job has deferredScopeAdd=true so scope is added on success.
 	jobID := ""
 	if h.service.ScoutingJobs() != nil {
 		now := time.Now().UTC()
@@ -141,6 +128,7 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 			"maxRecursionDepth":  0.0,
 			"trigger":            "ui.graph.scope_scout_query",
 			"correlationId":      correlationID,
+			models.StateKeyDeferredScopeAdd: true,
 		}
 		if len(specialties) > 0 {
 			state["specialties"] = specialties
@@ -172,11 +160,7 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// Persist updated scope (and manage subscriptions) best-effort.
-	// If scope didn't change, we still return success (idempotent).
-	if scopeAdded {
-		_ = h.service.Lens().UpdateLens(ctx, lens)
-	}
+	// No scope update: deferred until fragment is created by Scout.
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Correlation-Id", correlationID)

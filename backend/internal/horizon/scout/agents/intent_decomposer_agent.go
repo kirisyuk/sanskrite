@@ -253,6 +253,9 @@ Choose relationType to match this direction:
 - SPUN_OFF_FROM: source organization spun off from target organization.
 - ACQUIRED_BY: source organization acquired by target organization.
 - GATEKEEPS_DECISION: source (ORG/GOV/COMMUNITY) gatekeeps target (DECISION_POINT).
+- ASSURES: source (ORGANIZATION) provides independent assurance to target (ORG/FACILITY/PROGRAM). Add qualifiers.assurance_type: audit | certification | regulatory | inspection.
+  Direction: assurer → assuree. E.g. audit firm ASSURES org, certifier ASSURES org.
+- AUDITED_BY: legacy; source (ORG/FACILITY/PROGRAM) is audited by target (ORGANIZATION). Prefer ASSURES for new data.
 - OPERATES_VIA: source uses target channel/platform for communication/operations.
   Direction: COMMUNITY/ORGANIZATION → MEDIA_CHANNEL
   Example: /community/ru/criminal/kazan-dealers OPERATES_VIA /media/telegram/kazan-zakaz
@@ -293,7 +296,7 @@ Return ONLY JSON with this schema:
       "targetLegalName": "string",
       "targetShortName": "string",
       "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "COMMUNITY",
-      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "HAS_MARKET_SEGMENT" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "SURFACES",
+      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "ASSURES" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "HAS_MARKET_SEGMENT" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "SURFACES",
       "reason": "string",
       "confidence": 0.0,
       "targetCanonicalPath": "string (REQUIRED, stable, NOT /discovered/*)"
@@ -317,7 +320,7 @@ RULES:
     - geo: ISO2, regional token, or "global"/"int"
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
     - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
-    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe
+    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe | representatives | industry-association | key-community
     - Examples:
       - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
       - "Kazan drug dealers" -> /community/ru/criminal/kazan-synthetic-dealers
@@ -382,6 +385,7 @@ RULES:
   - LOCATED_IN: target MUST be GEO_REGION
   - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
   - GATEKEEPS_DECISION: source MUST be ORGANIZATION or GOV or COMMUNITY, target MUST be DECISION_POINT
+  - ASSURES: source MUST be ORGANIZATION, target MUST be ORGANIZATION or FACILITY or PROGRAM
   - USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be MECHANISM
   - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
   - IMPOSES_CONDITION: source MUST be ORGANIZATION or GOV or COMMUNITY or DECISION_POINT, target MUST be ORGANIZATION/FACILITY/PRODUCT

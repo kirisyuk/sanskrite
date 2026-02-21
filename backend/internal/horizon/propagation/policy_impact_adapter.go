@@ -44,6 +44,7 @@ type PolicyMetricSpec struct {
 type PolicyImpactEngine interface {
 	EngineID() string
 	MetricSpecs() []PolicyMetricSpec
+	InputParamSpecs() []DomainInputParamSpec
 	Encode(ctx context.Context, scenario ScenarioInput) ([]*horizonmodels.SignalDescriptor, error)
 	TransferHook(ctx context.Context, signal *horizonmodels.SignalDescriptor, edge *horizonmodels.DependencyEdge, node *horizonmodels.HorizonFragment) (*TransferResult, error)
 	Decode(ctx context.Context, node *horizonmodels.HorizonFragment, accumulated []AccumulatedSignal, scenario ScenarioInput) ([]BusinessMetric, error)
@@ -115,6 +116,14 @@ func (a *PolicyImpactAdapter) Decode(ctx context.Context, node *horizonmodels.Ho
 		return nil, err
 	}
 	return engine.Decode(ctx, node, accumulated, scenario)
+}
+
+func (a *PolicyImpactAdapter) InputParamSpecs() []DomainInputParamSpec {
+	engine, err := a.resolveEngine(context.Background(), ScenarioInput{}, false)
+	if err != nil {
+		return nil
+	}
+	return engine.InputParamSpecs()
 }
 
 func (a *PolicyImpactAdapter) resolveEngine(ctx context.Context, scenario ScenarioInput, strict bool) (PolicyImpactEngine, error) {

@@ -738,8 +738,11 @@ Return a SINGLE JSON object that matches EXACTLY this schema:
 
 RULES:
 - canonicalPath MUST be stable and must NOT start with "/discovered/".
-- legalName MUST include the form of ownership when relevant (Inc., Ltd., LLC, GmbH, AG, S.A., PLC...).
-- shortName MUST be the base name without ownership suffix.
+- ORGANIZATION NAMING (CRITICAL):
+  - Do NOT include country in the name — use only the official name (e.g., "Core42 UAE" → "Core42"; country is already in /org/{geo}/...).
+  - Do NOT include legal form (LLC, Inc, Ltd, GmbH, AG, etc.) in legalName or shortName — legal form belongs ONLY in canonicalPath as -{legal_form} suffix.
+  - legalName: official name without country suffix and without legal form.
+  - shortName: base/trade name without country and without legal form.
 - %s
 - canonicalPath slug MUST be derived from shortName (without ownership suffix) to avoid duplicates when legal form changes.
 - If a legal form is known, append it as -{legal_form} to satisfy org canonical format.
@@ -815,7 +818,7 @@ RULES:
   - COMMUNITY: /community/{geo}/{type}/{slug}
     - geo: ISO2, regional token, or "global"/"int"
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
-    - type: trade | activist | professional | criminal | religious | ethnic | interest
+    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe | representatives | industry-association | key-community
       - trade: commercial networks without formal structure (hawala, informal trade networks)
       - activist: political/social activist groups
       - professional: professional communities without legal entity (OSINT researchers, developers)
@@ -823,6 +826,11 @@ RULES:
       - religious: religious communities and congregations
       - ethnic: diaspora and ethnic communities
       - interest: hobby/interest-based communities
+      - dynasty: family dynasties (house-of-saud)
+      - tribe: tribal/clan communities (pashtun, durrani)
+      - representatives: representative bodies (lobby groups, delegations)
+      - industry-association: industry associations, trade bodies
+      - key-community: key stakeholder communities in a domain
     - slug: lowercase-slug derived from community name
     - Examples:
       - "Hawala network in Dubai" → /community/ae/trade/hawala-dubai-network

@@ -100,10 +100,14 @@ func main() {
 		log.Fatalf("failed to update source fragment: %v", err)
 	}
 
-	// Run propagation
+	// Run propagation (axis-based when ProfileLookup is set and metric is canonical)
+	profilesRepo := horizonrepo.NewPropagationProfilesRepository(fs)
+	profileLookup := horizonprop.NewProfileLookup(profilesRepo)
+	_ = profileLookup.Initialize(ctx)
 	engine := horizonprop.NewPropagationEngine(frRepo, versionsRepo, edgesRepo, lensesRepo, pub).
 		WithPolicyExecutor(policyExecutor).
-		WithCriticalPathDetector(criticalPathDetector)
+		WithCriticalPathDetector(criticalPathDetector).
+		WithProfileLookup(profileLookup)
 	res, err := engine.PropagateChange(ctx, frag.ID, mn, old, newVal)
 	if err != nil {
 		log.Fatalf("PropagateChange failed: %v", err)

@@ -27,6 +27,7 @@ type Options struct {
 	ModelOverride     string  `json:"modelOverride"`
 	Temperature       float64 `json:"temperature"`
 	MaxOutputTokens   int     `json:"maxOutputTokens"`
+	ThinkingBudget    *int    `json:"thinkingBudget,omitempty"` // nil = model default; 0 = disable thinking
 	GroundingEnabled  bool    `json:"groundingEnabled"`
 	SystemInstruction string  `json:"systemInstruction"`
 	ResponseFormat    string  `json:"responseFormat"` // "text" | "json"
@@ -160,13 +161,18 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 			"parts": []map[string]interface{}{{"text": opts.SystemInstruction}},
 		}
 	}
-	if opts.Temperature > 0 || opts.MaxOutputTokens > 0 || opts.ResponseFormat != "" {
+	if opts.Temperature > 0 || opts.MaxOutputTokens > 0 || opts.ResponseFormat != "" || opts.ThinkingBudget != nil {
 		gc := map[string]interface{}{}
 		if opts.Temperature > 0 {
 			gc["temperature"] = opts.Temperature
 		}
 		if opts.MaxOutputTokens > 0 {
 			gc["max_output_tokens"] = opts.MaxOutputTokens
+		}
+		if opts.ThinkingBudget != nil {
+			gc["thinkingConfig"] = map[string]interface{}{
+				"thinkingBudget": *opts.ThinkingBudget,
+			}
 		}
 		// Do not set response_mime_type when tools are present (function calling is incompatible)
 		if opts.ResponseFormat != "" && len(tools) == 0 {
@@ -358,7 +364,7 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 			"parts": []map[string]interface{}{{"text": prompt}},
 		}},
 	}
-	// Добавить response_mime_type для JSON output
+	// response_mime_type for JSON output. Gemini API rejects full JSON Schema ($ref, definitions, const, etc.)
 	gc := map[string]interface{}{}
 	if len(tools) == 0 {
 		gc["response_mime_type"] = "application/json"
@@ -369,10 +375,14 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 	if opts.Temperature > 0 {
 		gc["temperature"] = opts.Temperature
 	}
+	if opts.ThinkingBudget != nil {
+		gc["thinkingConfig"] = map[string]interface{}{
+			"thinkingBudget": *opts.ThinkingBudget,
+		}
+	}
 	if len(gc) > 0 {
 		reqBody["generationConfig"] = gc
 	}
-	// response_schema is not supported on this endpoint; enforce JSON via response_mime_type only
 	toolsPayload := make([]map[string]interface{}, 0)
 	if len(tools) > 0 {
 		fdecls := make([]map[string]interface{}, 0, len(tools))
@@ -468,7 +478,14 @@ func (c *Client) parseGenerateRoot(root map[string]interface{}, model string) (*
 		if v, ok := u["candidatesTokenCount"].(float64); ok {
 			out.Usage.OutputTokens = int(v)
 		}
-		out.Usage.TotalTokens = out.Usage.PromptTokens + out.Usage.OutputTokens
+		if v, ok := u["thoughtsTokenCount"].(float64); ok {
+			out.Usage.ReasoningTokens = int(v)
+		}
+		if v, ok := u["totalTokenCount"].(float64); ok {
+			out.Usage.TotalTokens = int(v)
+		} else {
+			out.Usage.TotalTokens = out.Usage.PromptTokens + out.Usage.OutputTokens
+		}
 	}
 	if cmeta, ok := root["candidates"].([]interface{}); ok && len(cmeta) > 0 {
 		if cand0, ok := cmeta[0].(map[string]interface{}); ok {

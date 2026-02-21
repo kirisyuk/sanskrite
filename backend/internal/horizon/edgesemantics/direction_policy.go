@@ -231,6 +231,15 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDeposit},
 		Description:      "Facility extracts from deposit",
 	},
+	models.DependencyTypeAssures: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypeProgram,
+		},
+		Description: "Assurer provides independent assurance to entity. Qualifier assurance_type: audit | certification | regulatory | inspection",
+	},
 	models.DependencyTypeAuditedBy: {
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
@@ -238,7 +247,7 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeProgram,
 		},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Entity is audited by an external audit firm",
+		Description:      "Entity is audited by an external audit firm (legacy; prefer ASSURES for new data)",
 	},
 	models.DependencyTypeInfluences: {
 		ValidSourceTypes: []models.FragmentType{

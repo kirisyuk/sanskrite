@@ -613,6 +613,9 @@ func quarantinePenaltyForTriple(edgeType horizonmodels.DependencyType, sourceTyp
 		sourceType == horizonmodels.FragmentTypeMarket &&
 		targetType == horizonmodels.FragmentTypeMarket:
 		return 0.25, "quarantine: MARKET -> MARKET COMPETES_WITH is semantically invalid"
+	case edgeType == horizonmodels.DependencyTypeAssures &&
+		sourceType == horizonmodels.FragmentTypeGeoRegion:
+		return 0.40, "quarantine: GEO_REGION cannot be ASSURES source (assurer)"
 	case edgeType == horizonmodels.DependencyTypeAuditedBy &&
 		sourceType == horizonmodels.FragmentTypeGeoRegion &&
 		targetType == horizonmodels.FragmentTypeOrganization:

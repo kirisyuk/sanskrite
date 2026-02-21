@@ -3,11 +3,14 @@ package horizon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
+	horizondomain "github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
 	hlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
@@ -515,22 +518,11 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		"spherePathsTop": trace.StrSlice(intent.SpherePaths, 10),
 	})
 
-	// 2) Build Lens.
-	scope := make([]string, 0, len(intent.Domains)+len(intent.Anchors)+len(req.PrefetchScope))
-	seenScope := make(map[string]struct{}, len(intent.Domains)+len(intent.Anchors)+len(req.PrefetchScope))
-	// Domains go first so their scouting jobs are created first.
-	for _, d := range intent.Domains {
-		cp := strings.TrimSpace(d.CanonicalPath)
-		if cp == "" {
-			continue
-		}
-		if _, ok := seenScope[cp]; ok {
-			continue
-		}
-		seenScope[cp] = struct{}{}
-		scope = append(scope, cp)
-	}
-	// Then anchors (unchanged behavior).
+	// 2) Build Lens. Scope = prefetch only (user-selected). Anchors are deferred: added to scope only when Scout creates fragment (max 5).
+	scopeCap := len(req.PrefetchScope)
+	scope := make([]string, 0, scopeCap)
+	seenScope := make(map[string]struct{}, scopeCap)
+	deferredScopePaths := make([]string, 0, len(intent.Anchors))
 	for _, a := range intent.Anchors {
 		cp := strings.TrimSpace(a.CanonicalPath)
 		if cp == "" {
@@ -540,7 +532,7 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 			continue
 		}
 		seenScope[cp] = struct{}{}
-		scope = append(scope, cp)
+		deferredScopePaths = append(deferredScopePaths, cp)
 	}
 	// Merge prefetch scope (UI-selected entities) into the final scope.
 	for _, raw := range req.PrefetchScope {
@@ -559,7 +551,6 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		var rewrites map[string]string
 		scope, rewrites = canonicalizeScopeWithFirestore(ctx, scope, h)
 		if len(rewrites) > 0 {
-			// Keep intent domains/anchors in sync with canonicalized scope.
 			for i := range intent.Domains {
 				cp := strings.TrimSpace(intent.Domains[i].CanonicalPath)
 				if next, ok := rewrites[cp]; ok && strings.TrimSpace(next) != "" {
@@ -574,7 +565,20 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 			}
 		}
 	}
-	if len(scope) == 0 {
+	// Canonicalize deferred scope paths (anchors) for job creation.
+	if len(deferredScopePaths) > 0 {
+		canon, rewrites := canonicalizeScopeWithFirestore(ctx, deferredScopePaths, h)
+		deferredScopePaths = canon
+		if len(rewrites) > 0 {
+			for i := range intent.Anchors {
+				cp := strings.TrimSpace(intent.Anchors[i].CanonicalPath)
+				if next, ok := rewrites[cp]; ok && strings.TrimSpace(next) != "" {
+					intent.Anchors[i].CanonicalPath = next
+				}
+			}
+		}
+	}
+	if len(scope) == 0 && len(deferredScopePaths) == 0 && len(intent.Domains) == 0 {
 		trace.Log(ctx, "scope", "scope.empty", map[string]any{
 			"projectId": req.ProjectID,
 			"domainsN":  len(intent.Domains),
@@ -622,7 +626,12 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	if len(intent.DecompositionHints) > 0 {
 		viewConfig["decompositionHints"] = intent.DecompositionHints
 	}
+	// Deferred scope paths: anchors added to scope only when Scout creates fragment (max 5 per lens).
+	if len(deferredScopePaths) > 0 {
+		viewConfig["deferredScopePaths"] = deferredScopePaths
+	}
 	// Persist domains (contracts) for downstream scout/research.
+	// When domain-as-config: store domainModes and intents; keep domains in ViewConfig for backward compat.
 	if len(intent.Domains) > 0 {
 		viewConfig["domains"] = intent.Domains
 	}
@@ -643,6 +652,56 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		Scope:      scope,
 		ViewConfig: viewConfig,
 		Status:     status,
+	}
+	// DomainModes: execution contracts from intent domains (contract types).
+	if len(intent.Domains) > 0 {
+		contractTypes := make([]string, 0, len(intent.Domains))
+		for _, d := range intent.Domains {
+			ct := strings.TrimSpace(d.ContractType)
+			if ct != "" {
+				contractTypes = append(contractTypes, ct)
+			}
+		}
+		if len(contractTypes) > 0 {
+			lens.DomainModes = horizondomain.DomainModesForContractTypes(contractTypes)
+		}
+	}
+	// Intents: living questions from domains (title/description) and focus.
+	if len(intent.Domains) > 0 || strings.TrimSpace(intent.Focus) != "" {
+		now := time.Now().UTC()
+		intents := make([]models.LensIntent, 0, len(intent.Domains)+1)
+		for i, d := range intent.Domains {
+			q := strings.TrimSpace(d.Description)
+			if q == "" {
+				q = strings.TrimSpace(d.Title)
+			}
+			if q != "" {
+				intents = append(intents, models.LensIntent{
+					ID:        fmt.Sprintf("intent-%d", i),
+					Question:  q,
+					CreatedAt: now,
+					Status:    "pending",
+				})
+			}
+		}
+		if strings.TrimSpace(intent.Focus) != "" {
+			hasFocus := false
+			for _, i := range intents {
+				if i.Question == strings.TrimSpace(intent.Focus) {
+					hasFocus = true
+					break
+				}
+			}
+			if !hasFocus {
+				intents = append(intents, models.LensIntent{
+					ID:        "intent-focus",
+					Question:  strings.TrimSpace(intent.Focus),
+					CreatedAt: now,
+					Status:    "pending",
+				})
+			}
+		}
+		lens.Intents = intents
 	}
 
 	trace.Log(ctx, "lens_create", "lens.built", map[string]any{

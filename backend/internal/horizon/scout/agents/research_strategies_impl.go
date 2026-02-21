@@ -115,6 +115,16 @@ func unitPhaseSupplyDepthGuidance(phase models.UnitPipelinePhase) string {
 	return "Depth target: broad/semi-depth. Prioritize direct links and, at most, one additional tier per side when confidence is strong."
 }
 
+// researchPreferExistingEntitiesBlock returns guidance to use existing entities from grounding instead of creating duplicates.
+// Applied to all research prompts to reduce duplicates from minor naming differences.
+func researchPreferExistingEntitiesBlock() string {
+	return `PREFER EXISTING ENTITIES (avoid duplicates):
+Your search has access to existing entities in the knowledge base (grounding/datastore results).
+When you find an entity that matches an existing one — even with minor naming differences (e.g., "Tesla Inc" vs "Tesla Inc.", "JPMorgan" vs "JPMorgan Chase", "Ministry of Finance" vs "MOF", abbreviations vs full names) — use the EXISTING canonical path from the grounding context.
+Do NOT create duplicate entities. Only create new entities when no suitable existing match is found in your search results.
+`
+}
+
 // SupplyChainResearchStrategy enriches for supply chain only (PRODUCES, CONSUMES, SUPPLIES_TO, etc.).
 type SupplyChainResearchStrategy struct {
 	agent *ResearchAgent
@@ -146,6 +156,25 @@ func (s *GovernanceResearchStrategy) Enrich(ctx context.Context, input ResearchS
 		return nil, nil
 	}
 	prompt := s.agent.buildGovernanceEnrichmentPrompt(input)
+	out, err := s.agent.runResearchPrompt(ctx, prompt)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AssuranceResearchStrategy enriches for Third Line: audit, certification, regulatory oversight.
+type AssuranceResearchStrategy struct {
+	agent *ResearchAgent
+}
+
+func (s *AssuranceResearchStrategy) DomainMode() string { return taxonomy.DomainModeAssurance }
+
+func (s *AssuranceResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
+	if s.agent == nil || s.agent.executor == nil {
+		return nil, nil
+	}
+	prompt := s.agent.buildAssuranceEnrichmentPrompt(input)
 	out, err := s.agent.runResearchPrompt(ctx, prompt)
 	if err != nil || out == nil {
 		return nil, err
@@ -211,6 +240,7 @@ func (s *PolicyImpactResearchStrategy) Enrich(ctx context.Context, input Researc
 }
 
 // runResearchPrompt runs a research prompt and parses result into ResearchStrategyOutput.
+// Returns grounding evidence from Vertex AI Search when available.
 func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil {
 		return nil, nil
@@ -229,7 +259,7 @@ func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*
 		},
 		Verifier: verifier,
 	}
-	result, _, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
+	result, fullResult, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("research prompt: %w", err)
 	}
@@ -242,8 +272,12 @@ func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*
 		return nil, fmt.Errorf("unmarshal research result: %w", err)
 	}
 	out := &ResearchStrategyOutput{
-		Relations:    res.Relations,
-		SupplyChains: res.SupplyChains,
+		Relations:        res.Relations,
+		SupplyChains:     res.SupplyChains,
+		GroundingEvidence: nil,
+	}
+	if fullResult != nil {
+		out.GroundingEvidence = fullResult.GroundingEvidence
 	}
 	if res.Fragment != nil {
 		fragBytes, _ := json.Marshal(res.Fragment)
@@ -279,6 +313,7 @@ ENTITY TYPES in supply chain: %s. Use correct targetType for each relation.
 CANONICAL PATH RULES (targetCanonicalPath MUST follow; supplyChains nodes too):
 %s
 
+%s
 %s
 %s
 
@@ -318,7 +353,7 @@ For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transp
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, string(fragmentJSON), questions, unitPhaseSupplyDepthGuidance(input.UnitPipelinePhase))
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), string(fragmentJSON), questions, unitPhaseSupplyDepthGuidance(input.UnitPipelinePhase))
 }
 
 // buildGovernanceEnrichmentPrompt builds a prompt for ownership, board, key persons, gov hierarchy (canonical types).
@@ -343,15 +378,16 @@ CANONICAL PATH RULES (targetCanonicalPath MUST follow):
 
 %s
 %s
+%s
 
-Use ONLY these relation types (canonical): OWNS, SUBSIDIARY_OF, CONTROLS, INVESTS_IN, BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED, ADMINISTERS.
+Use ONLY these relation types (canonical): %s.
 Do NOT use RELATED_TO, AFFILIATED_WITH, KEY_PERSON, HAS_KEY_PERSON, or other non-governance types.
 
 WHAT TO FIND (prioritize completeness):
 1. Ownership chain: Trace to ultimate parent or beneficial owner. OWNS (parent→subsidiary): ORG/PERSON/COMMUNITY→ORG. SUBSIDIARY_OF (subsidiary→parent). Include intermediate holding companies. metrics.ownership_percent when known. COMMUNITY (dynasty, tribe) can OWNS ORGANIZATION.
 2. Control: CONTROLS for state control, voting rights, contractual control. Who controls at each level?
 3. Full board: BOARD_MEMBER_OF (PERSON→ORG). All board members for significant organizations.
-4. Full C-suite: EMPLOYED_BY (PERSON→ORG) for CEO, CFO, COO. FOUNDED (PERSON→ORG) for founders.
+4. Management: MANAGES (manager→managed). CEO, director, operator — formal authority over org/subsidiary. Full C-suite: EMPLOYED_BY (PERSON→ORG) for employment. FOUNDED (PERSON→ORG) for founders.
 5. Investment: INVESTS_IN (investor→target). Include metrics (investment_amount, round, valuation) when known.
 6. Government hierarchy: ADMINISTERS (GOV/ORG with /gov/ path → subordinate GOV or PROGRAM). Full hierarchy to leaf agencies.
 7. Return entities (parents, subsidiaries, board members, investors, gov bodies, programs) that should be explored further (child jobs will recurse).
@@ -374,7 +410,60 @@ Return a JSON object:
   "supplyChains": []
 }
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, string(fragmentJSON), questions)
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), taxonomy.GovernanceEdgeTypesString(), string(fragmentJSON), questions)
+}
+
+// buildAssuranceEnrichmentPrompt builds a prompt for Third Line: audit, certification, regulatory oversight.
+func (a *ResearchAgent) buildAssuranceEnrichmentPrompt(input ResearchStrategyInput) string {
+	frag := input.Fragment
+	if frag == nil {
+		frag = &models.HorizonFragment{}
+	}
+	fragmentJSON, _ := json.MarshalIndent(frag, "", "  ")
+	questions := strings.Join(input.MissingInfo, "\n- ")
+	if questions == "" {
+		questions = "Identify external auditors, certifiers, regulators; audit firm, certifications, regulatory oversight."
+	}
+	geoContext := geoAndSectorContext(frag)
+	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
+	return fmt.Sprintf(`You are a research agent. Enrich the entity for ASSURANCE context (Third Line: independent audit, certification, regulatory oversight). Aim for COMPLETE assurance picture:
+
+ENTITY TYPES in assurance: %s. Assurers are audit firms, certifiers, regulators. Assurees are orgs, facilities, programs.
+
+CANONICAL PATH RULES (targetCanonicalPath MUST follow):
+%s
+
+%s
+%s
+%s
+
+Use ONLY these relation types (canonical): %s.
+For ASSURES: add qualifiers.assurance_type = "audit" | "certification" | "regulatory" | "inspection".
+Direction: assurer (source) → assuree (target). E.g. audit firm ASSURES org, certifier ASSURES org.
+AUDITED_BY: legacy direction (assuree → assurer). Prefer ASSURES for new data.
+REGULATES: regulator (source) → regulated entity (target).
+
+WHAT TO FIND (prioritize completeness):
+1. External audit: Who audits this org/facility? ASSURES(assurance_type:audit) from auditor to org, or AUDITED_BY (org→auditor). Include audit firm legal name.
+2. Certifications: ISO, sector-specific (e.g. FDA approval, banking license). ASSURES(assurance_type:certification). Certifier → org.
+3. Regulatory oversight: Which regulators oversee this entity? REGULATES (regulator→entity). Or ASSURES(assurance_type:regulatory) when regulator grants license/approval.
+4. Inspections: ASSURES(assurance_type:inspection) for inspection bodies.
+5. Return assurers (audit firms, certifiers, regulators) that should be explored further (child jobs will recurse).
+
+CURRENT FRAGMENT:
+%s
+
+QUESTIONS TO ANSWER (from Critic; prioritize these):
+- %s
+
+Return a JSON object:
+{
+  "fragment": { updated fields if any },
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "qualifiers": { "assurance_type"?: "audit|certification|regulatory|inspection" } } ],
+  "supplyChains": []
+}
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeAssurance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), taxonomy.AssuranceEdgeTypesString(), string(fragmentJSON), questions)
 }
 
 // buildMarketEnrichmentPrompt builds a prompt for market participation, sizing, concentration, submarkets.
@@ -396,6 +485,7 @@ ENTITY TYPES in market: %s. PARTICIPATES_IN source can be any of these. Use corr
 CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
+%s
 %s
 
 Use ONLY these relation types: PARTICIPATES_IN (with marketRole and metrics.market_share), HAS_MARKET_SEGMENT.
@@ -436,7 +526,7 @@ Return a JSON object:
   "supplyChains": []
 }
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, string(fragmentJSON), questions)
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, researchPreferExistingEntitiesBlock(), string(fragmentJSON), questions)
 }
 
 // buildStrategicEnrichmentPrompt builds a prompt for strategic layer (decision points, mechanisms, gatekeepers).
@@ -459,15 +549,16 @@ CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
 %s
+%s
 
 Use ONLY these relation types: CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO.
 Do NOT use generic relation types.
 
-WHAT TO FIND:
-1. Decision points: DECISION_POINT /decision/{domain}/{slug} — concrete decisions (Grant License, Block Export, Approve). CONTROLS_ACCESS (decision→entity it controls), IMPOSES_CONDITION (decision→entity). GATEKEEPS_DECISION (org/gov/community/person→decision: who decides).
-2. Mechanisms: MECHANISM /mechanism/{category}/{slug} — instruments (Entity List, Banking License, Export Control). USES_MECHANISM (org/gov/decision→mechanism: who uses it). APPLIES_TO (mechanism→entity: what it affects). Categories: regulatory, economic, technological, contractual, political.
-3. Control/access: CONTROLS_ACCESS — who blocks/enables access to what. IMPOSES_CONDITION — who imposes rules/costs on whom.
-4. Gatekeepers: GATEKEEPS_DECISION — ORGANIZATION (incl. /gov/), PERSON, or COMMUNITY as source, DECISION_POINT as target. Who has authority over this decision?
+WHAT TO FIND (downstream impact is required):
+1. Decision points: DECISION_POINT /decision/{domain}/{slug} — concrete decisions (Grant License, Block Export, Approve). MUST have CONTROLS_ACCESS or IMPOSES_CONDITION to concrete entities (what it affects). GATEKEEPS_DECISION (who decides). Do NOT create decision points without a clear affected target.
+2. Mechanisms: MECHANISM /mechanism/{category}/{slug} — instruments (Entity List, Banking License, Export Control). MUST have APPLIES_TO to concrete entities (what/who it affects). USES_MECHANISM (who uses it). Do NOT create mechanisms without a clear affected target.
+3. Control/access: CONTROLS_ACCESS — decision/org blocks/enables access to WHAT (target = org/facility/product/market). IMPOSES_CONDITION — who imposes rules/costs on WHOM.
+4. Gatekeepers: GATEKEEPS_DECISION — who has authority over the decision.
 
 CURRENT FRAGMENT:
 %s
@@ -483,7 +574,7 @@ Return a JSON object:
 }
 
 For GATEKEEPS_DECISION and USES_MECHANISM: set sourceCanonicalPath, sourceType, sourceName when the SOURCE is not the current fragment (e.g. gatekeeper org, mechanism user).
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, string(fragmentJSON), questions)
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, researchPreferExistingEntitiesBlock(), string(fragmentJSON), questions)
 }
 
 // buildPolicyImpactEnrichmentPrompt builds a prompt for policy impact channels and exposure graph.
@@ -506,12 +597,12 @@ CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
 %s
+%s
 
 Use ONLY these relation types: REGULATES, CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO, INFLUENCES, DEPENDS_ON, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN, ADMINISTERS.
 Do NOT use generic relation types outside this list.
 STRICT DIRECTION/TYPING RULES (MANDATORY):
-- In this strategy, DOMAIN is not a valid target for these relation types.
-  - targetCanonicalPath MUST NOT start with /domain/.
+- Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
 - PARTICIPATES_IN direction is participant -> market.
   - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
@@ -551,5 +642,5 @@ Return a JSON object:
 }
 
 For relations where SOURCE is not the current fragment, set sourceCanonicalPath, sourceType, sourceName.
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, string(fragmentJSON), questions)
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, researchPreferExistingEntitiesBlock(), string(fragmentJSON), questions)
 }

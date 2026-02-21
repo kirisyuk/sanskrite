@@ -83,6 +83,12 @@ func TestPolicyImpactAdapter_TransferHook_EvasionRedirect(t *testing.T) {
 	if got.AdjustedAmplitude >= signal.Amplitude {
 		t.Fatalf("expected reduced amplitude, got %.3f", got.AdjustedAmplitude)
 	}
+	if len(got.DebugFactors) == 0 {
+		t.Fatalf("expected debug factors for trace explainability")
+	}
+	if _, ok := got.DebugFactors["final_factor"]; !ok {
+		t.Fatalf("expected final_factor in debug factors")
+	}
 }
 
 func TestPolicyImpactAdapter_Decode_ReturnsMacroMetricSet(t *testing.T) {
@@ -123,5 +129,34 @@ func TestPolicyImpactAdapter_Decode_ReturnsMacroMetricSet(t *testing.T) {
 		if !seen[want] {
 			t.Fatalf("missing expected macro metric: %s", want)
 		}
+	}
+}
+
+func TestPolicyImpactAdapter_Decode_BlocksOutOfScopeNode(t *testing.T) {
+	a := NewPolicyImpactAdapter()
+	out, err := a.Decode(context.Background(), &horizonmodels.HorizonFragment{
+		Type:          horizonmodels.FragmentTypeOrganization,
+		CanonicalPath: "/org/ae/mubadala",
+	}, []AccumulatedSignal{
+		{Axis: horizonmodels.AxisFinancialSettlement, Amplitude: 0.30},
+		{Axis: horizonmodels.AxisPhysicalFlowDemand, Amplitude: 0.25},
+		{Axis: horizonmodels.AxisInfoUncertainty, Amplitude: 0.10},
+		{Axis: horizonmodels.AxisLegalCompliance, Amplitude: 0.08},
+	}, ScenarioInput{
+		ContractType: "policy-impact",
+		Parameters: map[string]interface{}{
+			"engine_id":                    PolicyImpactEngineMacroEconomicalV1,
+			"vat_rate_from":                12.0,
+			"vat_rate_to":                  16.0,
+			"location_path":                "/loc/kz/na/na",
+			"baseline_gdp_bln_kzt":         120000.0,
+			"baseline_vat_revenue_bln_kzt": 4000.0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("expected no decoded metrics for out-of-scope node, got %d", len(out))
 	}
 }

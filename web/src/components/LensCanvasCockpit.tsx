@@ -33,7 +33,6 @@ import {
   useHorizonRealtimeStore,
   type HorizonRealtimeEvent,
 } from '../stores/horizonRealtimeStore';
-import { DomainOverlayPanel, type DomainOverlayAnswerItem, type DomainOverlayPanelMode } from './DomainOverlayPanel';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
 import { isSphereCanonicalPath, isSphereEntity, isSphereType } from '../lib/horizonSphere';
 import {
@@ -488,6 +487,81 @@ const CUSTOM_EDGE_TYPES: EdgeTypes = {
   hznArcTop: HznArcTopEdge,
 };
 
+const PHYSICAL_AXES_12: string[] = [
+  'legal/access',
+  'legal/compliance',
+  'financial/settlement',
+  'financial/credit',
+  'physical_flow/supply',
+  'physical_flow/demand',
+  'logistics/capacity',
+  'logistics/latency',
+  'operational/continuity',
+  'info/uncertainty',
+  'info/reputation',
+  'geo/conflict',
+];
+
+type ModelerScenarioPreset = {
+  id: string;
+  label: string;
+  description: string;
+  scenarioId: string;
+  contractType: string;
+  domainModes: string[];
+  engineId: string;
+  parameters: Record<string, any>;
+};
+
+const MODELER_SCENARIO_PRESETS: ModelerScenarioPreset[] = [
+  {
+    id: 'vat_kz_baseline_12_to_16',
+    label: 'Scenario 1: VAT 12 -> 16',
+    description: 'Baseline macro response with moderate elasticity/compliance assumptions.',
+    scenarioId: 'vat_kz_baseline_12_to_16',
+    contractType: 'policy-impact',
+    domainModes: ['policy_impact'],
+    engineId: 'macro_economical_v1',
+    parameters: {
+      location_path: '/loc/kz/na/na',
+      vat_rate_from: 12.0,
+      vat_rate_to: 16.0,
+      baseline_gdp_bln_kzt: 135000.0,
+      baseline_vat_revenue_bln_kzt: 4200.0,
+      pass_through_rate: 0.75,
+      demand_elasticity: -0.35,
+      compliance_elasticity: 0.14,
+      shadow_sensitivity: 0.18,
+      price_basket_share: 0.45,
+      wage_indexation_rate: 0.30,
+      investment_sensitivity: 0.45,
+    },
+  },
+  {
+    id: 'vat_kz_stress_12_to_16',
+    label: 'Scenario 2: VAT stress',
+    description: 'Stronger pass-through and shadow-economy reaction under weaker compliance.',
+    scenarioId: 'vat_kz_stress_12_to_16',
+    contractType: 'policy-impact',
+    domainModes: ['policy_impact'],
+    engineId: 'macro_economical_v1',
+    parameters: {
+      location_path: '/loc/kz/na/na',
+      vat_rate_from: 12.0,
+      vat_rate_to: 16.0,
+      baseline_gdp_bln_kzt: 135000.0,
+      baseline_vat_revenue_bln_kzt: 4200.0,
+      pass_through_rate: 0.88,
+      demand_elasticity: -0.55,
+      compliance_elasticity: 0.24,
+      shadow_sensitivity: 0.34,
+      price_basket_share: 0.50,
+      wage_indexation_rate: 0.15,
+      investment_sensitivity: 0.65,
+    },
+  },
+];
+
 function pruneMapToMax<K, V>(m: Map<K, V>, maxSize: number) {
   if (maxSize <= 0) {
     m.clear();
@@ -602,6 +676,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       MEMBER_OF: 'Member',
       AFFILIATED_WITH: 'Affiliated',
       // Person relationships
+      ASSURES: 'Assures',
       AUDITED_BY: 'Audited',
       RELATED_TO: 'Related',
       RELATIVE_OF: 'Relatives',
@@ -1491,7 +1566,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
   }, []);
 
-  type HoverHighlightMode = 'off' | 'control' | 'expansion' | 'production' | 'supplies' | 'competition' | 'decision-chain';
+  type HoverHighlightMode = 'off' | 'control' | 'expansion' | 'production' | 'supplies' | 'competition' | 'decision-chain' | 'signal-propagation';
+  type SignalPropagationOverlay = {
+    sourceNodeId: string;
+    sourceFragmentId: string;
+    nodeIds: string[];
+    edgeIds: string[];
+    signalRuns: number;
+    traceSteps: number;
+  };
   const [hoverHighlightMode, setHoverHighlightMode] = React.useState<HoverHighlightMode>('control');
 
   // Safety: if hover highlight is disabled, ensure no stale opacity stays on nodes (can happen if a rendered snapshot
@@ -1588,7 +1671,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'CONSUMES',
       'EXTRACTS_FROM',
     ];
-    const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
+    const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'ASSURES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
     const MARKET = [
       'COMPETES_WITH',
       'CONFLICTS_WITH',
@@ -1853,6 +1936,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [addNodeLoading, setAddNodeLoading] = React.useState(false);
   const [addNodeError, setAddNodeError] = React.useState<string | null>(null);
   const [addNodeActiveIndex, setAddNodeActiveIndex] = React.useState(0);
+  const [addNodeSearchEnabled, setAddNodeSearchEnabled] = React.useState(true); // Search mode: prefetch + add-node options from graph
   const addNodeInputRef = React.useRef<HTMLInputElement | null>(null);
   const addNodeCacheRef = React.useRef<Map<string, HorizonSearchEntity[]>>(new Map());
   const addNodeAbortRef = React.useRef<AbortController | null>(null);
@@ -1862,8 +1946,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [graphIntentError, setGraphIntentError] = React.useState<string | null>(null);
   const [graphIntentApplyLoading, setGraphIntentApplyLoading] = React.useState(false);
 
+  const graphIntentNodeIdToLabel = React.useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const n of nodes) {
+      const d = (n?.data as any) || {};
+      if ((d as any)?.isGroup) continue;
+      const label = String(d?.label || '').trim() || '?';
+      const nid = String(n?.id || '').trim();
+      const fid = String(d?.fragmentId || '').trim();
+      const cp = String(d?.canonicalPath || '').trim();
+      if (nid) m[nid] = label;
+      if (fid) m[fid] = label;
+      if (cp) m[cp] = label;
+    }
+    return m;
+  }, [nodes]);
+
   const graphSearchResults = React.useMemo(() => {
-    if (!addNodeOpen) return [] as Array<{ node: Node<HorizonNodeData>; label: string; type?: string; canonicalPath?: string; score: number }>;
+    if (!addNodeOpen || !addNodeSearchEnabled) return [] as Array<{ node: Node<HorizonNodeData>; label: string; type?: string; canonicalPath?: string; score: number }>;
     const raw = String(addNodeQuery || '').trim().toLowerCase();
     if (!raw) return [];
     const tokens = raw
@@ -1902,10 +2002,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
     out.sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
     return out.slice(0, 10);
-  }, [addNodeOpen, addNodeQuery, nodes]);
+  }, [addNodeOpen, addNodeSearchEnabled, addNodeQuery, nodes]);
 
   const filteredAddNodeResults = React.useMemo(() => {
-    if (!addNodeOpen) return [] as HorizonSearchEntity[];
+    if (!addNodeOpen || !addNodeSearchEnabled) return [] as HorizonSearchEntity[];
     const snapNodes: Node<HorizonNodeData>[] = (nodesStateRef.current || nodes) as any;
     const existingPaths = new Set(
       snapNodes
@@ -1917,7 +2017,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const cp = String(r?.canonicalPath || '').trim();
       return !cp || !existingPaths.has(cp);
     });
-  }, [addNodeOpen, addNodeResults, nodes]);
+  }, [addNodeOpen, addNodeSearchEnabled, addNodeResults, nodes]);
 
   const paletteSelectableItems = React.useMemo(() => {
     const q = String(addNodeQuery || '').trim();
@@ -1926,19 +2026,31 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return intentItem;
     }
     const scoutItem = q.length >= 2 ? [{ kind: 'scout' as const, query: q }] : [];
+    const graphItems = addNodeSearchEnabled ? graphSearchResults.map((m) => ({ kind: 'graph' as const, node: m.node, label: m.label, canonicalPath: m.canonicalPath, type: m.type })) : [];
+    const indexItems = addNodeSearchEnabled ? filteredAddNodeResults.map((r) => ({ kind: 'index' as const, entity: r })) : [];
     return [
       ...intentItem,
       ...scoutItem,
-      ...graphSearchResults.map((m) => ({ kind: 'graph' as const, node: m.node, label: m.label, canonicalPath: m.canonicalPath, type: m.type })),
-      ...filteredAddNodeResults.map((r) => ({ kind: 'index' as const, entity: r })),
+      ...graphItems,
+      ...indexItems,
     ];
-  }, [addNodeQuery, graphSearchResults, filteredAddNodeResults, graphIntentLoading]);
+  }, [addNodeQuery, addNodeSearchEnabled, graphSearchResults, filteredAddNodeResults, graphIntentLoading]);
 
   const addNodeQueryTrim = String(addNodeQuery || '').trim();
 
   React.useEffect(() => {
     setAddNodeActiveIndex((i) => Math.min(i, Math.max(0, paletteSelectableItems.length - 1)));
   }, [paletteSelectableItems]);
+
+  // When Search is disabled, abort prefetch and clear add-node results.
+  React.useEffect(() => {
+    if (addNodeSearchEnabled) return;
+    addNodeAbortRef.current?.abort();
+    addNodeAbortRef.current = null;
+    setAddNodeResults([]);
+    setAddNodeLoading(false);
+    setAddNodeError(null);
+  }, [addNodeSearchEnabled]);
 
   // If the add-node UI is closed/unmounted, abort in-flight requests and release retained results.
   React.useEffect(() => {
@@ -2056,9 +2168,28 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [askGraphLoading, setAskGraphLoading] = React.useState(false);
   const [askGraphError, setAskGraphError] = React.useState<string | null>(null);
   const askGraphInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [modelerOpen, setModelerOpen] = React.useState(false);
+  const [modelerLoading, setModelerLoading] = React.useState(false);
+  const [modelerError, setModelerError] = React.useState<string | null>(null);
+  const [modelerPresetId, setModelerPresetId] = React.useState<string>(MODELER_SCENARIO_PRESETS[0]?.id || '');
+  const [modelerScenarioId, setModelerScenarioId] = React.useState<string>(MODELER_SCENARIO_PRESETS[0]?.scenarioId || 'policy-impact-scenario');
+  const [modelerContractType, setModelerContractType] = React.useState<string>(MODELER_SCENARIO_PRESETS[0]?.contractType || 'policy-impact');
+  const [modelerDomainModesInput, setModelerDomainModesInput] = React.useState<string>((MODELER_SCENARIO_PRESETS[0]?.domainModes || ['policy_impact']).join(', '));
+  const [modelerEngineId, setModelerEngineId] = React.useState<string>(MODELER_SCENARIO_PRESETS[0]?.engineId || 'macro_economical_v1');
+  const [modelerMode, setModelerMode] = React.useState<'preview' | 'apply'>('preview');
+  const [modelerTargetPathsInput, setModelerTargetPathsInput] = React.useState<string>('');
+  const [modelerAdvancedOpen, setModelerAdvancedOpen] = React.useState(false);
+  const [modelerParametersInput, setModelerParametersInput] = React.useState<string>(
+    JSON.stringify(MODELER_SCENARIO_PRESETS[0]?.parameters || {}, null, 2),
+  );
+  const [modelerResult, setModelerResult] = React.useState<Awaited<ReturnType<typeof api.runHorizonScenario>> | null>(null);
   const [graphQueryChips, setGraphQueryChips] = React.useState<GraphQueryChip[]>([]);
   const [graphQueryActiveChipId, setGraphQueryActiveChipId] = React.useState<string | null>(null);
   const [graphQueryHighlightIds, setGraphQueryHighlightIds] = React.useState<Set<string> | null>(null);
+  const [signalPropagationOverlay, setSignalPropagationOverlay] = React.useState<SignalPropagationOverlay | null>(null);
+  const [signalPropagationLoading, setSignalPropagationLoading] = React.useState(false);
+  const [signalPropagationError, setSignalPropagationError] = React.useState<string | null>(null);
+  const signalPropagationRequestSeqRef = React.useRef(0);
   const [viewDirective, setViewDirective] = React.useState<ViewDirective | null>(null);
   const [controlCorridorMode, setControlCorridorMode] = React.useState(false);
   const [controlCorridorLoading, setControlCorridorLoading] = React.useState(false);
@@ -2068,12 +2199,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const runControlCorridorRef = React.useRef<((seedIdOverride?: string) => Promise<{ graph: ControlCorridorGraph; seedId: string } | null>) | null>(null);
   const controlCorridorRenderLogKeyRef = React.useRef<string>('');
   const controlCorridorRevealKeyRef = React.useRef<string>('');
-  const [domainAnswers, setDomainAnswers] = React.useState<any[]>([]);
-  const [domainOverlayPanelMode, setDomainOverlayPanelMode] = React.useState<DomainOverlayPanelMode>('mini');
-  const [activeDomainAnswerKey, setActiveDomainAnswerKey] = React.useState<string>('');
-  const [domainOverlayHighlightEnabled, setDomainOverlayHighlightEnabled] = React.useState(true);
-  const [domainOverlayHoverNodeIds, setDomainOverlayHoverNodeIds] = React.useState<string[]>([]);
-  const [domainOverlayHoverEdgeIds, setDomainOverlayHoverEdgeIds] = React.useState<string[]>([]);
   // domainOverlayPreview removed — no longer used
   const realtimeEvents = useHorizonRealtimeStore((s) => s.events);
 
@@ -2085,203 +2210,41 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setControlCorridorSeedId('');
     setGraphIntentPlan(null);
     setGraphIntentError(null);
+    setModelerOpen(false);
+    setModelerLoading(false);
+    setModelerError(null);
+    setModelerResult(null);
+    setSignalPropagationOverlay(null);
+    setSignalPropagationLoading(false);
+    setSignalPropagationError(null);
+    signalPropagationRequestSeqRef.current += 1;
   }, [lensId]);
 
-  type DomainContractTone = 'info' | 'success' | 'warning' | 'error';
-  type DomainContractMiniBadge = { label: string; tone: DomainContractTone } | null;
-
-  const domainContractEventTone = React.useCallback((ev: HorizonRealtimeEvent): DomainContractTone => {
-    const t = String(ev?.type || '').trim();
-    if (t.includes('.failed') || t.includes('.fallback')) return 'error';
-    if (t.includes('.budget.warning')) return 'warning';
-    if (t.includes('.completed') || t.includes('.passed')) return 'success';
-    return 'info';
-  }, []);
-
-  const domainContractEventLabel = React.useCallback((ev: HorizonRealtimeEvent): string => {
-    const t = String(ev?.type || '').trim();
-    const cycleRaw = Number((ev as any)?.data?.cycle);
-    const cycle = Number.isFinite(cycleRaw) && cycleRaw > 0 ? cycleRaw : null;
-    if (t.endsWith('.resolve.started')) return 'Resolving';
-    if (t.endsWith('.resolve.completed')) return 'Resolved';
-    if (t.endsWith('.steer.started')) return 'Steering';
-    if (t.endsWith('.steer.completed')) return 'Steered';
-    if (t.endsWith('.gate.started')) return 'Checking gate';
-    if (t.endsWith('.gate.passed')) return 'Gate passed';
-    if (t.endsWith('.gate.failed')) return 'Gaps found';
-    if (t.endsWith('.enrich.started')) return cycle ? `Enriching ${cycle}` : 'Enriching';
-    if (t.endsWith('.enrich.completed')) return cycle ? `Enriched ${cycle}` : 'Enriched';
-    if (t.endsWith('.assemble.started')) return 'Assembling';
-    if (t.endsWith('.assemble.completed')) return 'Assembled';
-    if (t.endsWith('.publish.completed')) return 'Ready';
-    if (t.endsWith('.budget.warning')) return 'Budget warning';
-    if (t.endsWith('.fallback')) return 'Ready with gaps';
-    return ev?.humanReadable?.title || 'Domain contract';
-  }, []);
-
-  const domainAnswerItems = React.useMemo<DomainOverlayAnswerItem[]>(() => {
-    const toStr = (v: any): string => String(v || '').trim();
-    const toArr = (v: any): any[] => (Array.isArray(v) ? v : []);
-
-    // ── 1. Build items from full DomainAnswerSnapshots (when available) ──
-    const snapshotList = Array.isArray(domainAnswers) ? domainAnswers : [];
-    const snapshotMap = new Map<string, DomainOverlayAnswerItem>();
-    snapshotList.forEach((raw: any, idx: number) => {
-      const canonicalPath = toStr(raw?.domainCanonicalPath || raw?.domainContract?.canonicalPath);
-      const domainId = toStr(raw?.domainId);
-      const snapshotId = toStr(raw?.id);
-      const key = toStr(canonicalPath || domainId || snapshotId || `domain-${idx}`);
-      const contractType = toStr(raw?.domainContract?.contractType || raw?.contractType);
-      const title = toStr(
-        raw?.domainContract?.title ||
-          raw?.title ||
-          (canonicalPath ? humanizeCanonicalPath(canonicalPath) : '') ||
-          domainId ||
-          snapshotId ||
-          `Domain ${idx + 1}`,
-      );
-      const readinessStatus = toStr(raw?.readinessStatus || raw?.status).toLowerCase();
-      const dataGaps = toArr(raw?.dataGaps);
-      const criticalDependencies = toArr(raw?.criticalDependencies);
-      const explanatoryUnits = toArr(raw?.explanatoryLayer?.units);
-      const impactPaths = toArr(raw?.impactPaths);
-      const highlightedNodeIds = toArr(raw?.highlightedNodeIds).map((x) => toStr(x)).filter(Boolean);
-      const highlightedEdgeIds = toArr(raw?.highlightedEdgeIds).map((x) => toStr(x)).filter(Boolean);
-      const gateFailedCount = Number(raw?.gate?.failed || 0) || 0;
-      if (!key) return;
-      snapshotMap.set(key, {
-        key, raw, snapshotId, domainId, canonicalPath, contractType, title, readinessStatus,
-        thesisText: toStr(raw?.thesis?.text), dataGaps, criticalDependencies, explanatoryUnits, impactPaths,
-        criticalNodes: toArr(raw?.criticalNodes), concentrationEvidence: toArr(raw?.concentrationEvidence),
-        controlExposure: toArr(raw?.controlExposure), highlightedNodeIds, highlightedEdgeIds, gateFailedCount,
-        facets: (raw?.domainContract?.facets && typeof raw.domainContract.facets === 'object') ? raw.domainContract.facets : {},
-        assembledAt: toStr(raw?.assembledAt || raw?.updatedAt || raw?.createdAt),
-      } as DomainOverlayAnswerItem);
-    });
-
-    // ── 2. Build stub items from DOMAIN graph nodes (always available) ──
-    const safeNodes = Array.isArray(nodes) ? nodes : [];
-    const graphDomainStubs = new Map<string, DomainOverlayAnswerItem>();
-    safeNodes.forEach((n: any) => {
-      const d = n?.data || n;
-      const t = toStr(d?.type).toUpperCase();
-      const cp = toStr(d?.canonicalPath);
-      const isDomain = t === 'DOMAIN' || cp.startsWith('/domain/');
-      if (!isDomain || !cp) return;
-      if (snapshotMap.has(cp)) return; // snapshot takes priority
-
-      // Parse contractType + facets from canonicalPath
-      let contractType = '';
-      const facets: Record<string, string[]> = {};
-      if (cp.startsWith('/domain/v1/')) {
-        const parts = cp.split('/').filter(Boolean);
-        contractType = toStr(parts[2]);
-        const rest = parts.slice(3);
-        for (let i = 0; i + 1 < rest.length; i += 2) {
-          const fk = toStr(rest[i]);
-          const fv = toStr(rest[i + 1]);
-          if (!fk || !fv) continue;
-          if (!facets[fk]) facets[fk] = [];
-          facets[fk].push(fv);
-        }
-      }
-      // Also try identifiers
-      const ids = d?.identifiers && typeof d.identifiers === 'object' ? d.identifiers : {};
-      if (!contractType) contractType = toStr(ids?.domainContractType);
-      if (Object.keys(facets).length === 0 && ids?.domainFacetsJson) {
-        try {
-          const parsed = JSON.parse(ids.domainFacetsJson);
-          if (parsed && typeof parsed === 'object') {
-            for (const [fk, fv] of Object.entries(parsed as any)) {
-              const k = toStr(fk);
-              if (!k) continue;
-              facets[k] = Array.isArray(fv) ? fv.map((x: any) => toStr(x)).filter(Boolean) : [];
-            }
-          }
-        } catch { /* ignore */ }
-      }
-
-      const nodeId = toStr(d?.id || d?.fragmentId || n?.id);
-      const label = toStr(d?.label || d?.labels?.en);
-      const title = label || humanizeCanonicalPath(cp) || `Domain`;
-
-      graphDomainStubs.set(cp, {
-        key: cp,
-        raw: d,
-        snapshotId: '',
-        domainId: nodeId,
-        canonicalPath: cp,
-        contractType,
-        title,
-        readinessStatus: 'pending',
-        thesisText: '',
-        dataGaps: [],
-        criticalDependencies: [],
-        explanatoryUnits: [],
-        impactPaths: [],
-        criticalNodes: [],
-        concentrationEvidence: [],
-        controlExposure: [],
-        highlightedNodeIds: nodeId ? [nodeId] : [],
-        highlightedEdgeIds: [],
-        gateFailedCount: 0,
-        facets,
-        assembledAt: '',
-      } as DomainOverlayAnswerItem);
-    });
-
-    // ── 3. Merge: snapshots first, then graph stubs for domains without snapshots ──
-    const out: DomainOverlayAnswerItem[] = [
-      ...Array.from(snapshotMap.values()),
-      ...Array.from(graphDomainStubs.values()),
-    ];
-
-    out.sort((a, b) => {
-      // Snapshot items (with readiness) before stubs
-      const aHasSnapshot = a.snapshotId ? 1 : 0;
-      const bHasSnapshot = b.snapshotId ? 1 : 0;
-      if (aHasSnapshot !== bHasSnapshot) return bHasSnapshot - aHasSnapshot;
-      const ar = a.readinessStatus === 'ready' ? 1 : 0;
-      const br = b.readinessStatus === 'ready' ? 1 : 0;
-      if (ar !== br) return br - ar;
-      const at = Date.parse(String(a.assembledAt || '')) || 0;
-      const bt = Date.parse(String(b.assembledAt || '')) || 0;
-      if (at !== bt) return bt - at;
-      return a.title.localeCompare(b.title);
-    });
-    return out;
-  }, [domainAnswers, nodes]);
-
-  React.useEffect(() => {
-    if (domainAnswerItems.length === 0) {
-      if (activeDomainAnswerKey) setActiveDomainAnswerKey('');
-      return;
-    }
-    if (!activeDomainAnswerKey) return;
-    const exists = domainAnswerItems.some((x) => x.key === activeDomainAnswerKey);
-    if (!exists) setActiveDomainAnswerKey('');
-  }, [domainAnswerItems, activeDomainAnswerKey]);
-
-  const activeDomainAnswer = React.useMemo<DomainOverlayAnswerItem | null>(() => {
-    if (!activeDomainAnswerKey || domainAnswerItems.length === 0) return null;
-    return domainAnswerItems.find((x) => x.key === activeDomainAnswerKey) || null;
-  }, [domainAnswerItems, activeDomainAnswerKey]);
-
-  const clearDomainOverlayHover = React.useCallback(() => {
-    setDomainOverlayHoverNodeIds([]);
-    setDomainOverlayHoverEdgeIds([]);
-  }, []);
-
-  React.useEffect(() => {
-    if (!activeDomainAnswer || domainOverlayPanelMode !== 'expanded' || !domainOverlayHighlightEnabled) {
-      clearDomainOverlayHover();
-    }
-  }, [activeDomainAnswer, domainOverlayPanelMode, domainOverlayHighlightEnabled, clearDomainOverlayHover]);
-
-  React.useEffect(() => {
-    clearDomainOverlayHover();
-  }, [activeDomainAnswerKey, clearDomainOverlayHover]);
-
+  const domainAnswerItems = React.useMemo<any[]>(() => [], []);
+  const activeDomainAnswerKey = '';
+  const activeDomainAnswer = null as any;
+  const domainOverlayPanelMode = 'mini' as 'mini' | 'list' | 'expanded';
+  const domainOverlayHighlightEnabled = false;
+  const domainOverlayHoverNodeIds: string[] = [];
+  const domainOverlayHoverEdgeIds: string[] = [];
+  const setDomainOverlayPanelMode = () => {};
+  const setActiveDomainAnswerKey = () => {};
+  const setDomainOverlayHighlightEnabled = () => {};
+  const setDomainOverlayHoverNodeIds = () => {};
+  const setDomainOverlayHoverEdgeIds = () => {};
+  const clearDomainOverlayHover = React.useCallback(() => {}, []);
+  const domainContractEventTone = (ev: any) => 'info' as const;
+  const domainContractEventLabel = (ev: any) => 'Domain contract';
+  const domainReadinessMeta = () => ({ label: '', tone: 'info' as const });
+  const activeDomainOverlayPath = '';
+  const domainContractTimeline: any[] = [];
+  const domainContractMiniBadge = null;
+  const setDomainOverlayHoverFromTarget = () => {};
+  const onDomainDependencyClick = () => {};
+  const onDomainDependencyHover = () => {};
+  const onDomainExplanatoryUnitHover = () => {};
+  const handleCreateDomain = async () => {};
+  const handleRunDomain = async () => {};
   const domainOverlayGraphIndex = React.useMemo(() => {
     const nodeIdByFragmentId = new Map<string, string>();
     const nodeIdByCanonicalPath = new Map<string, string>();
@@ -2418,43 +2381,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       edgeIds: Array.from(edgeSet.values()),
     };
   }, [domainOverlayGraphIndex, resolveDomainOverlayNodeId]);
-
-  const setDomainOverlayHoverFromTarget = React.useCallback((target: any | null) => {
-    if (
-      !domainOverlayHighlightEnabled ||
-      !activeDomainAnswer ||
-      domainOverlayPanelMode !== 'expanded' ||
-      !target
-    ) {
-      clearDomainOverlayHover();
-      return;
-    }
-    const resolved = resolveDomainOverlayHoverTarget(target);
-    if (resolved.nodeIds.length === 0 && resolved.edgeIds.length === 0) {
-      clearDomainOverlayHover();
-      return;
-    }
-    setDomainOverlayHoverNodeIds(resolved.nodeIds);
-    setDomainOverlayHoverEdgeIds(resolved.edgeIds);
-  }, [
-    activeDomainAnswer,
-    clearDomainOverlayHover,
-    domainOverlayHighlightEnabled,
-    domainOverlayPanelMode,
-    resolveDomainOverlayHoverTarget,
-  ]);
-
-  const onDomainDependencyHover = React.useCallback((dep: any | null) => {
-    setDomainOverlayHoverFromTarget(dep);
-  }, [setDomainOverlayHoverFromTarget]);
-
-  const onDomainExplanatoryUnitHover = React.useCallback((unit: any | null) => {
-    setDomainOverlayHoverFromTarget(unit);
-  }, [setDomainOverlayHoverFromTarget]);
-
-  const onDomainDependencyClick = React.useCallback((dep: any) => {
-    setDomainOverlayHoverFromTarget(dep);
-  }, [setDomainOverlayHoverFromTarget]);
 
   const domainOverlayHighlightNodeIds = React.useMemo<Set<string> | null>(() => {
     if (!domainOverlayHighlightEnabled || !activeDomainAnswer) return null;
@@ -2734,105 +2660,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     !!activeDomainAnswer &&
     domainTopDependencies.length > 0;
 
-  const activeDomainOverlayPath = React.useMemo(() => {
-    const activePath = String(
-      activeDomainAnswer?.canonicalPath ||
-      activeDomainAnswer?.domainId ||
-      activeDomainAnswer?.raw?.domainContract?.canonicalPath ||
-      '',
-    ).trim();
-    if (activePath) return activePath;
-    const list = Array.isArray(domainAnswers) ? domainAnswers : [];
-    const preferred =
-      list.find((a: any) => String(a?.readinessStatus || '').trim() === 'ready') || list[0];
-    if (!preferred) return '';
-    return String(
-      preferred?.domainCanonicalPath ||
-      preferred?.domainId ||
-      preferred?.domainContract?.canonicalPath ||
-      '',
-    ).trim();
-  }, [domainAnswers, activeDomainAnswer]);
-
-  const domainContractTimeline = React.useMemo(() => {
-    const targetPath = String(activeDomainOverlayPath || '').trim();
-    const events = Array.isArray(realtimeEvents) ? realtimeEvents : [];
-    const filtered = events.filter((ev) => {
-      const type = String(ev?.type || '').trim();
-      if (!type.startsWith('horizon.domain.contract.')) return false;
-      if (lensId && ev?.lensId && String(ev.lensId).trim() !== String(lensId).trim()) return false;
-      if (!targetPath) return true;
-      const eventPath = String(
-        (ev as any)?.data?.canonicalPath ||
-        (ev as any)?.data?.domainCanonicalPath ||
-        (ev as any)?.data?.domainId ||
-        '',
-      ).trim();
-      if (!eventPath) return false;
-      return eventPath === targetPath;
-    });
-    return filtered
-      .slice()
-      .sort((a, b) => Number(b?.ts || 0) - Number(a?.ts || 0))
-      .slice(0, 8);
-  }, [activeDomainOverlayPath, realtimeEvents, lensId]);
-
-  const domainContractMiniBadge = React.useMemo<DomainContractMiniBadge>(() => {
-    const ev = domainContractTimeline[0];
-    if (ev) {
-      return {
-        label: domainContractEventLabel(ev),
-        tone: domainContractEventTone(ev),
-      };
-    }
-    if (!activeDomainAnswer) return null;
-    const gaps = activeDomainAnswer.dataGaps.length;
-    const ready = activeDomainAnswer.readinessStatus === 'ready';
-    return {
-      label: ready ? 'Ready' : gaps > 0 ? `Gaps ${gaps}` : 'Ready with gaps',
-      tone: ready ? 'success' : gaps > 0 ? 'warning' : 'info',
-    };
-  }, [domainContractEventLabel, domainContractEventTone, domainContractTimeline, activeDomainAnswer]);
-
-  const domainReadinessMeta = React.useCallback((item?: DomainOverlayAnswerItem | null): { label: string; tone: DomainContractTone } => {
-    if (!item) return { label: 'Unknown', tone: 'info' };
-    const readiness = String(item.readinessStatus || '').trim().toLowerCase();
-    const gapCount = Math.max(item.dataGaps.length, item.gateFailedCount);
-    if (readiness === 'pending' || (!item.snapshotId && readiness !== 'ready')) return { label: 'Collecting', tone: 'info' };
-    if (readiness === 'ready') return { label: 'Ready', tone: 'success' };
-    if (gapCount > 0) return { label: `Gaps ${gapCount}`, tone: 'warning' };
-    return { label: 'Ready with gaps', tone: 'warning' };
-  }, []);
-
-  const lastDomainPublishEventIdRef = React.useRef<string>('');
-
-  React.useEffect(() => {
-    if (!lensId) return;
-    const events = Array.isArray(realtimeEvents) ? realtimeEvents : [];
-    const latest = events
-      .filter((ev) => {
-        const t = String(ev?.type || '').trim();
-        if (t !== 'horizon.domain.contract.publish.completed') return false;
-        if (ev?.lensId && String(ev.lensId).trim() !== String(lensId).trim()) return false;
-        return true;
-      })
-      .slice()
-      .sort((a, b) => Number(b?.ts || 0) - Number(a?.ts || 0))[0];
-    const eventId = String(latest?.id || '').trim();
-    if (!eventId) return;
-    if (eventId === lastDomainPublishEventIdRef.current) return;
-    lastDomainPublishEventIdRef.current = eventId;
-    void (async () => {
-      try {
-        const res = await api.listHorizonDomainAnswers(lensId, { limit: 50 });
-        const list = Array.isArray((res as any)?.domainAnswers) ? (res as any).domainAnswers : [];
-        setDomainAnswers(list);
-      } catch {
-        // best-effort sync only
-      }
-    })();
-  }, [realtimeEvents, lensId]);
-
   // Lens scope preview (empty state)
   const [lensName, setLensName] = React.useState<string | null>(null);
   const [lensScopePaths, setLensScopePaths] = React.useState<string[]>([]);
@@ -2954,6 +2781,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const t = window.setTimeout(() => askGraphInputRef.current?.focus(), 0);
     return () => window.clearTimeout(t);
   }, [askGraphOpen]);
+
+  React.useEffect(() => {
+    if (!modelerOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      setModelerOpen(false);
+      setModelerLoading(false);
+      setModelerError(null);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [modelerOpen]);
 
   // (Old domain overlay focus effect removed — replaced by DomainOverlayPanel)
 
@@ -3153,7 +2993,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   // Add-node: search/prefetch entities by partial name (existing but previously unused API).
   React.useEffect(() => {
-    if (!addNodeOpen) return;
+    if (!addNodeOpen || !addNodeSearchEnabled) return;
     const q = addNodeQuery.trim();
     if (q.length < 2) {
       addNodeAbortRef.current?.abort();
@@ -3211,7 +3051,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }, 180);
 
     return () => window.clearTimeout(handle);
-  }, [addNodeOpen, addNodeQuery]);
+  }, [addNodeOpen, addNodeSearchEnabled, addNodeQuery]);
 
   // Refs for synchronous tracking of expanded nodes (avoids stale state issues)
   const expandedNodesRef = React.useRef<Set<string>>(new Set());
@@ -3902,7 +3742,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (wantsAll) return [] as string[];
       const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
       const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM'];
-      const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
+      const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'ASSURES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
       const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP'];
       const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
       const out = new Set<string>();
@@ -6352,8 +6192,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const cockpitData = await api.getHorizonLensCockpit(lensId);
       const viewDirectiveRaw = (cockpitData?.lens?.viewConfig?.viewDirective || null) as ViewDirective | null;
       setViewDirective(viewDirectiveRaw);
-      setDomainAnswers(Array.isArray((cockpitData as any)?.domainAnswers) ? (cockpitData as any).domainAnswers : []);
-      
       const rawFragments = cockpitData.graph.nodes || [];
       const rawEdges = cockpitData.graph.edges || [];
       const scopePaths = new Set(
@@ -8957,6 +8795,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const hoverHighlight = React.useMemo(() => {
     if (perfMode) return null as null | { nodeIds: Set<string>; edgeIds: Set<string> };
     if (hoverHighlightMode === 'off') return null;
+    if (hoverHighlightMode === 'signal-propagation') return null;
     const hovered = String(hoveredNodeId || '').trim();
     if (!hovered) return null;
     const isControlLike = hoverHighlightMode === 'control' || hoverHighlightMode === 'expansion';
@@ -10022,6 +9861,26 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     return map;
   }, [isLevelsLayout, baseVisibleEdges]);
 
+  const signalPropagationNodeIdSet = React.useMemo<Set<string> | null>(() => {
+    if (hoverHighlightMode !== 'signal-propagation' || !signalPropagationOverlay) return null;
+    const out = new Set<string>();
+    for (const id of signalPropagationOverlay.nodeIds || []) {
+      const nodeId = String(id || '').trim();
+      if (nodeId) out.add(nodeId);
+    }
+    return out.size > 0 ? out : null;
+  }, [hoverHighlightMode, signalPropagationOverlay]);
+
+  const signalPropagationEdgeIdSet = React.useMemo<Set<string> | null>(() => {
+    if (hoverHighlightMode !== 'signal-propagation' || !signalPropagationOverlay) return null;
+    const out = new Set<string>();
+    for (const id of signalPropagationOverlay.edgeIds || []) {
+      const edgeId = String(id || '').trim();
+      if (edgeId) out.add(edgeId);
+    }
+    return out.size > 0 ? out : null;
+  }, [hoverHighlightMode, signalPropagationOverlay]);
+
   // Derive edges styles for hover highlighting (do not mutate base edges)
   // Labels are hidden by default to reduce visual noise, shown only on hover
   const displayEdges = React.useMemo(() => {
@@ -10029,6 +9888,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const FADE_OPACITY = 0.12;
     const riskId = String(riskShieldActiveNodeId || '').trim();
     const riskActive = !!riskId;
+    const signalModeActive = hoverHighlightMode === 'signal-propagation';
 
     const applyRiskShieldDimming = (arr: Edge[]) => {
       if (!riskActive) return arr;
@@ -10050,7 +9910,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Perf mode: do not derive per-edge styles/labels (avoids O(E) object cloning on hover),
     // just return filtered edges.
-    if (perfMode && !riskActive) return baseVisibleEdges;
+    if (perfMode && !riskActive && !signalModeActive) return baseVisibleEdges;
     // Risk Shield prevails over all hover/selection edge logic.
     if (riskActive) return applyRiskShieldDimming(baseVisibleEdges);
 
@@ -10246,6 +10106,49 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Only create new array if there are raised edges
       return raised.length > 0 ? [...rest, ...raised] : edges;
     };
+
+    if (signalModeActive && signalPropagationOverlay) {
+      const signalEdgeSet = signalPropagationEdgeIdSet;
+      const signalEdgeActive = !!signalEdgeSet && signalEdgeSet.size > 0;
+      const signalStroke = theme === 'dark' ? 'rgba(248,113,113,0.96)' : 'rgba(220,38,38,0.94)';
+      const signalGlow = theme === 'dark' ? 'drop-shadow(0 0 8px rgba(248,113,113,0.72))' : 'drop-shadow(0 0 6px rgba(239,68,68,0.56))';
+
+      const out = edgesForDisplay.map((e) => {
+        if ((e as any)?.hidden) return e;
+        const { baseStyle } = baseStyled(e);
+        const edgeId = String((e as any)?.id || '').trim();
+        const isSignalEdge = signalEdgeActive && !!edgeId && !!signalEdgeSet && signalEdgeSet.has(edgeId);
+        if (isSignalEdge) {
+          const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+          const highlighted: any = withLabel(
+            e,
+            true,
+            {
+              ...baseStyle,
+              opacity: 1,
+              stroke: signalStroke,
+              strokeOpacity: 1,
+              strokeWidth: Math.max(2.8, strokeWidth + 1.2),
+              filter: signalGlow,
+            },
+            true,
+          );
+          highlighted.markerEnd = { type: MarkerType.ArrowClosed, color: signalStroke };
+          return highlighted;
+        }
+        return withLabel(
+          e,
+          false,
+          {
+            ...baseStyle,
+            opacity: signalEdgeActive ? 0.06 : 0.12,
+            strokeOpacity: signalEdgeActive ? 0.06 : (baseStyle as any)?.strokeOpacity,
+          },
+          false,
+        );
+      });
+      return applyRiskShieldDimming(orderByRaised(out));
+    }
 
     // Persisted selection highlight (keeps an edge emphasized until the user clicks elsewhere).
     // Hover still works normally; we only skip this overlay in "edge hover" mode (hoveredEdgeId),
@@ -10605,7 +10508,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Default: dim all edges, hide labels
     return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay));
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode]);
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, hoverHighlightMode, signalPropagationOverlay, signalPropagationEdgeIdSet, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -11060,15 +10963,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const displayNodes = React.useMemo(() => {
     // Perf mode: keep visuals light, but still allow graph-query highlight (low-cost style).
-    const qset = graphQueryHighlightIds;
+    const signalModeActive = hoverHighlightMode === 'signal-propagation';
+    const signalSet = signalModeActive ? signalPropagationNodeIdSet : null;
+    const signalActive = !!signalSet && signalSet.size > 0;
+    const qset = signalModeActive ? null : graphQueryHighlightIds;
     const qActive = !!qset && qset.size > 0;
     const hoverSet = qActive ? null : domainOverlayHoverNodeIdSet;
     const domainHoverActive = !!hoverSet && hoverSet.size > 0;
     const dset = qActive || domainHoverActive ? null : domainOverlayHighlightNodeIds;
     const dActive = !!dset && dset.size > 0;
-    const topDepSet = domainTopDependencyFocusActive && !domainHoverActive ? domainTopDependencyNodeIds : null;
+    const topDepSet = signalModeActive ? null : (domainTopDependencyFocusActive && !domainHoverActive ? domainTopDependencyNodeIds : null);
     const topDepActive = !!topDepSet && topDepSet.size > 0;
-    if (perfMode && !qActive && !domainHoverActive && !dActive && !topDepActive && !String(riskShieldActiveNodeId || '').trim()) return nodes;
+    if (perfMode && !signalActive && !qActive && !domainHoverActive && !dActive && !topDepActive && !String(riskShieldActiveNodeId || '').trim()) return nodes;
 
     const owned = hoverHighlight?.nodeIds;
     const ultimatePersons: Set<string> | undefined = (hoverHighlight as any)?.ultimatePersonIds;
@@ -11087,6 +10993,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const isDomainHover = domainHoverActive && !!hoverSet && id && hoverSet.has(id);
       const isDomain = dActive && !!dset && id && dset.has(id);
       const isTopDep = topDepActive && !!topDepSet && id && topDepSet.has(id);
+      const isSignal = signalActive && !!signalSet && id && signalSet.has(id);
       const isRiskNode = riskActive && !isGroup && id && id === riskId;
 
       // Base hover highlight behavior (existing UX).
@@ -11106,9 +11013,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       let style: any = prevStyle;
       let styleChanged = false;
 
-      const highlightMode: '' | 'query' | 'domain-hover' | 'domain' = qActive ? 'query' : domainHoverActive ? 'domain-hover' : dActive ? 'domain' : '';
+      const highlightMode: '' | 'signal' | 'query' | 'domain-hover' | 'domain' =
+        signalActive ? 'signal' : qActive ? 'query' : domainHoverActive ? 'domain-hover' : dActive ? 'domain' : '';
       const wantPrimaryHighlight =
-        highlightMode === 'query'
+        highlightMode === 'signal'
+          ? Boolean(isSignal && !isGroup)
+          : highlightMode === 'query'
           ? Boolean(isQuery && !isGroup)
           : highlightMode === 'domain-hover'
             ? Boolean(isDomainHover && !isGroup)
@@ -11118,7 +11028,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (highlightMode && !wantPrimaryHighlight) {
         // Query keeps slightly stronger dimming than domain overlay.
         opacity =
-          highlightMode === 'query'
+          highlightMode === 'signal'
+            ? (isGroup ? 0.06 : Math.min(opacity, 0.18))
+            : highlightMode === 'query'
             ? (isGroup ? 0.12 : Math.min(opacity, 0.55))
             : highlightMode === 'domain-hover'
               ? (isGroup ? 0.10 : Math.min(opacity, 0.38))
@@ -11194,12 +11106,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         (highlightMode === 'domain-hover' && isDomainHover && !isGroup),
       );
       const wantTopDependencyHighlight = Boolean(isTopDep && !isGroup);
+      const wantSignalPropagationHighlight = Boolean(highlightMode === 'signal' && isSignal && !isGroup);
 
       if (!isGroup) {
         const prevQuery = Boolean((nextData as any)?.queryHighlight);
         const prevDomain = Boolean((nextData as any)?.domainHighlight);
         const prevTopDep = Boolean((nextData as any)?.topDependencyHighlight);
-        if (prevQuery !== wantQueryHighlight || prevDomain !== wantDomainHighlight || prevTopDep !== wantTopDependencyHighlight) {
+        const prevSignal = Boolean((nextData as any)?.signalPropagationHighlight);
+        if (prevQuery !== wantQueryHighlight || prevDomain !== wantDomainHighlight || prevTopDep !== wantTopDependencyHighlight || prevSignal !== wantSignalPropagationHighlight) {
           if (nextData === d0) {
             nextData = { ...d0 };
             changed = true;
@@ -11210,12 +11124,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           else delete (nextData as any).domainHighlight;
           if (wantTopDependencyHighlight) (nextData as any).topDependencyHighlight = true;
           else delete (nextData as any).topDependencyHighlight;
+          if (wantSignalPropagationHighlight) (nextData as any).signalPropagationHighlight = true;
+          else delete (nextData as any).signalPropagationHighlight;
           changed = true;
         }
       } else if (
         typeof (nextData as any)?.queryHighlight !== 'undefined' ||
         typeof (nextData as any)?.domainHighlight !== 'undefined' ||
-        typeof (nextData as any)?.topDependencyHighlight !== 'undefined'
+        typeof (nextData as any)?.topDependencyHighlight !== 'undefined' ||
+        typeof (nextData as any)?.signalPropagationHighlight !== 'undefined'
       ) {
         if (nextData === d0) {
           nextData = { ...d0 };
@@ -11224,6 +11141,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         delete (nextData as any).queryHighlight;
         delete (nextData as any).domainHighlight;
         delete (nextData as any).topDependencyHighlight;
+        delete (nextData as any).signalPropagationHighlight;
       }
       // For regular (right-pane) stacks, set onToggleStack to toggleStackGroup.
       // BUT: subcategory stacks (left-pane, collapsed by default) already have their own
@@ -11378,8 +11296,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     perfMode,
     nodes,
     hoverHighlight,
+    hoverHighlightMode,
     hoveredNodeId,
     graphQueryHighlightIds,
+    signalPropagationNodeIdSet,
     domainOverlayHoverNodeIdSet,
     domainOverlayHighlightNodeIds,
     theme,
@@ -11894,6 +11814,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
   }, [nodes, edges, lensId, projectId]);
 
+  const handleFitView = useCallback(() => {
+    const inst: any = reactFlowInstanceRef.current;
+    if (!inst || typeof inst.fitView !== 'function') return;
+    try {
+      inst.fitView({ padding: 0.12, duration: 320 });
+    } catch {
+      // best effort only
+    }
+  }, []);
+
   const closeAddNode = React.useCallback(() => {
     addNodeAbortRef.current?.abort();
     addNodeAbortRef.current = null;
@@ -11909,6 +11839,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (!lensId) return;
     // Single palette at a time.
     setAskGraphOpen(false);
+    setModelerOpen(false);
     setAddNodeOpen(true);
     setAddNodeQuery('');
     setAddNodeResults([]);
@@ -11931,6 +11862,444 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setAskGraphLoading(false);
     setAskGraphError(null);
   }, []);
+
+  const normalizeListInput = React.useCallback((raw: string): string[] => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    String(raw || '')
+      .split(/[\n,]+/g)
+      .map((v) => String(v || '').trim())
+      .filter(Boolean)
+      .forEach((v) => {
+        if (seen.has(v)) return;
+        seen.add(v);
+        out.push(v);
+      });
+    return out;
+  }, []);
+
+  const parseModelerParameters = React.useCallback((raw: string): { value: Record<string, any>; error: string | null } => {
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return { value: {}, error: null };
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { value: {}, error: 'Parameters must be a JSON object.' };
+      }
+      return { value: parsed as Record<string, any>, error: null };
+    } catch (e: any) {
+      return { value: {}, error: String(e?.message || 'JSON parse error') };
+    }
+  }, []);
+
+  const modelerParsedParams = React.useMemo(() => parseModelerParameters(modelerParametersInput), [modelerParametersInput, parseModelerParameters]);
+  const modelerParamObj = modelerParsedParams.value;
+  const modelerParamError = modelerParsedParams.error;
+
+  const modelerParamNum = React.useCallback((key: string, fallback: number): number => {
+    const raw = modelerParamObj?.[key];
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    if (typeof raw === 'string') {
+      const n = Number(raw);
+      if (Number.isFinite(n)) return n;
+    }
+    return fallback;
+  }, [modelerParamObj]);
+
+  const modelerParamStr = React.useCallback((key: string, fallback: string): string => {
+    const raw = modelerParamObj?.[key];
+    if (typeof raw === 'string' && raw.trim()) return raw.trim();
+    return fallback;
+  }, [modelerParamObj]);
+
+  const updateModelerParameter = React.useCallback((key: string, value: any) => {
+    setModelerParametersInput((prev) => {
+      const parsed = parseModelerParameters(prev);
+      const next = { ...(parsed.value || {}) };
+      next[key] = value;
+      return JSON.stringify(next, null, 2);
+    });
+  }, [parseModelerParameters]);
+
+  const selectedNodeCanonicalPath = React.useMemo(() => {
+    const sid = String(selectedNodeId || '').trim();
+    if (!sid) return '';
+    const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || nodes;
+    const node = currentNodes.find((n) => String((n as any)?.id || '').trim() === sid);
+    const cp = String((node?.data as any)?.canonicalPath || '').trim();
+    return cp;
+  }, [nodes, selectedNodeId]);
+
+  const selectedNodeFragmentId = React.useMemo(() => {
+    const sid = String(selectedNodeId || '').trim();
+    if (!sid) return '';
+    const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || nodes;
+    const node = currentNodes.find((n) => String((n as any)?.id || '').trim() === sid);
+    const fid = String((node?.data as any)?.fragmentId || '').trim();
+    return fid;
+  }, [nodes, selectedNodeId]);
+
+  const suggestedModelerTargetPaths = React.useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const push = (v: string) => {
+      const p = String(v || '').trim();
+      if (!p || seen.has(p)) return;
+      seen.add(p);
+      out.push(p);
+    };
+    push(selectedNodeCanonicalPath);
+    for (const p of lensScopePaths) push(String(p || '').trim());
+    const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || nodes;
+    for (const n of currentNodes) {
+      if ((n.data as any)?.isGroup) continue;
+      push(String((n.data as any)?.canonicalPath || '').trim());
+      if (out.length >= 24) break;
+    }
+    return out;
+  }, [lensScopePaths, nodes, selectedNodeCanonicalPath]);
+
+  const modelerTargetPaths = React.useMemo(() => normalizeListInput(modelerTargetPathsInput), [modelerTargetPathsInput, normalizeListInput]);
+
+  const setModelerTargetPaths = React.useCallback((paths: string[]) => {
+    const unique = normalizeListInput(paths.join('\n'));
+    setModelerTargetPathsInput(unique.join('\n'));
+  }, [normalizeListInput]);
+
+  const toggleModelerTargetPath = React.useCallback((path: string) => {
+    const p = String(path || '').trim();
+    if (!p) return;
+    const cur = normalizeListInput(modelerTargetPathsInput);
+    const has = cur.includes(p);
+    const next = has ? cur.filter((x) => x !== p) : [...cur, p];
+    setModelerTargetPaths(next);
+  }, [modelerTargetPathsInput, normalizeListInput, setModelerTargetPaths]);
+
+  const modelerLocationPath = modelerParamStr('location_path', '/loc/kz/na/na');
+  const modelerVatFrom = modelerParamNum('vat_rate_from', 12);
+  const modelerVatTo = modelerParamNum('vat_rate_to', 16);
+  const modelerBaselineGDP = modelerParamNum('baseline_gdp_bln_kzt', 135000);
+  const modelerBaselineVatRevenue = modelerParamNum('baseline_vat_revenue_bln_kzt', 4200);
+  const modelerPassThrough = modelerParamNum('pass_through_rate', 0.75);
+  const modelerDemandElasticity = modelerParamNum('demand_elasticity', -0.35);
+  const modelerComplianceElasticity = modelerParamNum('compliance_elasticity', 0.14);
+  const modelerShadowSensitivity = modelerParamNum('shadow_sensitivity', 0.18);
+
+  const setModelerPreset = React.useCallback((presetId: string) => {
+    const preset = MODELER_SCENARIO_PRESETS.find((p) => p.id === presetId) || MODELER_SCENARIO_PRESETS[0];
+    if (!preset) return;
+    setModelerPresetId(preset.id);
+    setModelerScenarioId(preset.scenarioId);
+    setModelerContractType(preset.contractType);
+    setModelerDomainModesInput((preset.domainModes || []).join(', '));
+    setModelerEngineId(preset.engineId);
+    setModelerParametersInput(JSON.stringify(preset.parameters || {}, null, 2));
+    setModelerMode('preview');
+    setModelerAdvancedOpen(false);
+    setModelerError(null);
+  }, []);
+
+  const closeModeler = React.useCallback(() => {
+    setModelerOpen(false);
+    setModelerLoading(false);
+    setModelerError(null);
+    setModelerAdvancedOpen(false);
+  }, []);
+
+  const openModeler = React.useCallback(() => {
+    if (!lensId) return;
+    closeAddNode();
+    closeAskGraph();
+    setModelerOpen(true);
+    setModelerError(null);
+    setModelerAdvancedOpen(false);
+    if (!String(modelerTargetPathsInput || '').trim()) {
+      setModelerTargetPaths(suggestedModelerTargetPaths.slice(0, 12));
+    }
+  }, [lensId, closeAddNode, closeAskGraph, modelerTargetPathsInput, suggestedModelerTargetPaths, setModelerTargetPaths]);
+
+  const runModelerScenario = React.useCallback(
+    async (modeOverride?: 'preview' | 'apply') => {
+      if (!lensId || modelerLoading) return;
+      setModelerError(null);
+
+      if (modelerParamError) {
+        setModelerError(`Parameters JSON is invalid: ${modelerParamError}`);
+        return;
+      }
+      const parsedParameters: Record<string, any> = modelerParamObj || {};
+
+      const reqMode = modeOverride || modelerMode;
+      const contractType = String(modelerContractType || '').trim() || 'policy-impact';
+      const domainModes = normalizeListInput(modelerDomainModesInput);
+      const targetPaths = modelerTargetPaths;
+      const seedFragmentIds = selectedNodeFragmentId ? [selectedNodeFragmentId] : [];
+
+      setModelerLoading(true);
+      try {
+        const result = await api.runHorizonScenario({
+          scenarioId: String(modelerScenarioId || '').trim() || undefined,
+          contractType,
+          domainModes: domainModes.length > 0 ? domainModes : undefined,
+          engineId: String(modelerEngineId || '').trim() || undefined,
+          mode: reqMode,
+          parameters: parsedParameters,
+          seedFragmentIds: seedFragmentIds.length > 0 ? seedFragmentIds : undefined,
+          targetPaths: targetPaths.length > 0 ? targetPaths : undefined,
+          maxTraceSteps: 3000,
+        });
+        setModelerResult(result);
+
+        if (reqMode === 'apply') {
+          // Apply mode persists decoded business metrics to node state; reload to reflect updated node metrics.
+          await handleLoadGraph();
+        }
+      } catch (e: any) {
+        const msg = String(e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Scenario run failed').trim();
+        setModelerError(msg || 'Scenario run failed');
+      } finally {
+        setModelerLoading(false);
+      }
+    },
+    [
+      lensId,
+      modelerLoading,
+      modelerParametersInput,
+      modelerMode,
+      modelerContractType,
+      modelerDomainModesInput,
+      modelerTargetPaths,
+      selectedNodeFragmentId,
+      modelerScenarioId,
+      modelerEngineId,
+      modelerParamError,
+      modelerParamObj,
+      normalizeListInput,
+      handleLoadGraph,
+    ],
+  );
+
+  React.useEffect(() => {
+    const requestSeq = signalPropagationRequestSeqRef.current + 1;
+    signalPropagationRequestSeqRef.current = requestSeq;
+
+    if (hoverHighlightMode !== 'signal-propagation') {
+      setSignalPropagationLoading(false);
+      setSignalPropagationError(null);
+      setSignalPropagationOverlay(null);
+      return;
+    }
+
+    const sourceNodeId = String(selectedNodeId || '').trim();
+    const sourceFragmentId = String(selectedNodeFragmentId || '').trim();
+    if (!lensId || !sourceNodeId || !sourceFragmentId) {
+      setSignalPropagationLoading(false);
+      setSignalPropagationOverlay(null);
+      setSignalPropagationError('Select a visible node to preview signal propagation.');
+      return;
+    }
+    if (modelerParamError) {
+      setSignalPropagationLoading(false);
+      setSignalPropagationOverlay(null);
+      setSignalPropagationError(`Invalid modeler parameters: ${modelerParamError}`);
+      return;
+    }
+
+    const visibleNodeIds = new Set<string>();
+    const nodeIdsByFragmentId = new Map<string, string[]>();
+    const pushFragmentNodeId = (fragmentId: string, nodeId: string) => {
+      const fid = String(fragmentId || '').trim();
+      const nid = String(nodeId || '').trim();
+      if (!fid || !nid) return;
+      const bucket = nodeIdsByFragmentId.get(fid) || [];
+      if (!bucket.includes(nid)) bucket.push(nid);
+      nodeIdsByFragmentId.set(fid, bucket);
+    };
+    for (const n of nodes) {
+      const nodeId = String((n as any)?.id || '').trim();
+      if (!nodeId || (n as any)?.hidden) continue;
+      const d: any = (n as any)?.data || {};
+      if (d?.isGroup) continue;
+      visibleNodeIds.add(nodeId);
+      const fragmentId = String(d?.fragmentId || nodeId).trim();
+      if (fragmentId) pushFragmentNodeId(fragmentId, nodeId);
+      pushFragmentNodeId(nodeId, nodeId);
+    }
+    if (!visibleNodeIds.has(sourceNodeId)) {
+      setSignalPropagationLoading(false);
+      setSignalPropagationOverlay(null);
+      setSignalPropagationError('Selected node is not visible in current graph view.');
+      return;
+    }
+
+    const visibleEdgeIds = new Set<string>();
+    const edgeIdsByPair = new Map<string, string[]>();
+    const edgeIdsByPairAndType = new Map<string, string[]>();
+    const addEdgeLookup = (m: Map<string, string[]>, key: string, edgeId: string) => {
+      if (!key || !edgeId) return;
+      const bucket = m.get(key) || [];
+      if (!bucket.includes(edgeId)) bucket.push(edgeId);
+      m.set(key, bucket);
+    };
+    for (const e of visibleEdges) {
+      if ((e as any)?.hidden) continue;
+      const edgeId = String((e as any)?.id || '').trim();
+      const sourceId = String((e as any)?.source || '').trim();
+      const targetId = String((e as any)?.target || '').trim();
+      if (!edgeId || !sourceId || !targetId) continue;
+      visibleEdgeIds.add(edgeId);
+      const pairKey = `${sourceId}=>${targetId}`;
+      addEdgeLookup(edgeIdsByPair, pairKey, edgeId);
+      const edgeTypeNorm = normalizeEdgeType(
+        String((e as any)?.data?.edgeType || (e as any)?.data?.subkind || (e as any)?.label || ''),
+      );
+      if (edgeTypeNorm) {
+        addEdgeLookup(edgeIdsByPairAndType, `${pairKey}|${edgeTypeNorm}`, edgeId);
+      }
+    }
+
+    const resolveVisibleNodeIdsForFragment = (fragmentIdRaw: string): string[] => {
+      const fragmentId = String(fragmentIdRaw || '').trim();
+      if (!fragmentId) return [];
+      const out = new Set<string>();
+      const direct = nodeIdsByFragmentId.get(fragmentId) || [];
+      for (const nid of direct) {
+        if (visibleNodeIds.has(nid)) out.add(nid);
+      }
+      if (visibleNodeIds.has(fragmentId)) out.add(fragmentId);
+      return Array.from(out);
+    };
+
+    setSignalPropagationLoading(true);
+    setSignalPropagationError(null);
+
+    (async () => {
+      try {
+        const domainModes = normalizeListInput(modelerDomainModesInput);
+        const result = await api.runHorizonScenario({
+          scenarioId: String(modelerScenarioId || '').trim() || undefined,
+          contractType: String(modelerContractType || '').trim() || undefined,
+          domainModes: domainModes.length > 0 ? domainModes : undefined,
+          engineId: String(modelerEngineId || '').trim() || undefined,
+          mode: 'preview',
+          parameters: modelerParamObj || {},
+          seedFragmentIds: [sourceFragmentId],
+          targetPaths: modelerTargetPaths.length > 0 ? modelerTargetPaths : undefined,
+          maxTraceSteps: 3000,
+        });
+        if (signalPropagationRequestSeqRef.current !== requestSeq) return;
+
+        const nextNodeIds = new Set<string>([sourceNodeId]);
+        const nextEdgeIds = new Set<string>();
+        const addNodesByFragment = (fragmentIdRaw: string) => {
+          for (const nid of resolveVisibleNodeIdsForFragment(fragmentIdRaw)) {
+            nextNodeIds.add(nid);
+          }
+        };
+        const linkByTrace = (fromFragmentRaw: string, toFragmentRaw: string, edgeTypeRaw: string) => {
+          const fromNodeIds = resolveVisibleNodeIdsForFragment(fromFragmentRaw);
+          const toNodeIds = resolveVisibleNodeIdsForFragment(toFragmentRaw);
+          if (fromNodeIds.length === 0 || toNodeIds.length === 0) return;
+          const edgeTypeNorm = normalizeEdgeType(edgeTypeRaw);
+          const tryLookup = (m: Map<string, string[]>, key: string): boolean => {
+            const ids = m.get(key) || [];
+            if (ids.length === 0) return false;
+            for (const id of ids) nextEdgeIds.add(id);
+            return true;
+          };
+
+          let matched = false;
+          for (const fromNodeId of fromNodeIds) {
+            for (const toNodeId of toNodeIds) {
+              if (!fromNodeId || !toNodeId || fromNodeId === toNodeId) continue;
+              if (edgeTypeNorm) {
+                matched =
+                  tryLookup(edgeIdsByPairAndType, `${fromNodeId}=>${toNodeId}|${edgeTypeNorm}`) ||
+                  tryLookup(edgeIdsByPairAndType, `${toNodeId}=>${fromNodeId}|${edgeTypeNorm}`) ||
+                  matched;
+              }
+            }
+          }
+          if (matched) return;
+          for (const fromNodeId of fromNodeIds) {
+            for (const toNodeId of toNodeIds) {
+              if (!fromNodeId || !toNodeId || fromNodeId === toNodeId) continue;
+              matched =
+                tryLookup(edgeIdsByPair, `${fromNodeId}=>${toNodeId}`) ||
+                tryLookup(edgeIdsByPair, `${toNodeId}=>${fromNodeId}`) ||
+                matched;
+            }
+          }
+        };
+
+        const signalRuns = Array.isArray(result?.signalRuns) ? result.signalRuns : [];
+        let traceSteps = 0;
+        for (const run of signalRuns) {
+          const affected = Array.isArray((run as any)?.affectedFragments) ? (run as any).affectedFragments : [];
+          for (const fragmentId of affected) addNodesByFragment(String(fragmentId || ''));
+
+          const trace = Array.isArray((run as any)?.trace) ? (run as any).trace : [];
+          traceSteps += trace.length;
+          for (const ev of trace) {
+            const fromFragmentId = String((ev as any)?.fromFragmentId || (ev as any)?.fromFragment || '').trim();
+            const toFragmentId = String((ev as any)?.toFragmentId || (ev as any)?.toFragment || '').trim();
+            addNodesByFragment(fromFragmentId);
+            addNodesByFragment(toFragmentId);
+
+            const outcome = String((ev as any)?.outcome || '').trim().toLowerCase();
+            if (outcome !== 'propagated') continue;
+
+            const edgeId = String((ev as any)?.edgeId || '').trim();
+            if (edgeId && visibleEdgeIds.has(edgeId)) {
+              nextEdgeIds.add(edgeId);
+              continue;
+            }
+            linkByTrace(fromFragmentId, toFragmentId, String((ev as any)?.edgeType || ''));
+          }
+        }
+
+        const affectedOverall = Array.isArray((result as any)?.affectedFragments) ? (result as any).affectedFragments : [];
+        for (const fragmentId of affectedOverall) addNodesByFragment(String(fragmentId || ''));
+
+        setSignalPropagationOverlay({
+          sourceNodeId,
+          sourceFragmentId,
+          nodeIds: Array.from(nextNodeIds).filter((id) => visibleNodeIds.has(id)).sort(),
+          edgeIds: Array.from(nextEdgeIds).filter((id) => visibleEdgeIds.has(id)).sort(),
+          signalRuns: signalRuns.length,
+          traceSteps,
+        });
+        setSignalPropagationError(null);
+      } catch (e: any) {
+        if (signalPropagationRequestSeqRef.current !== requestSeq) return;
+        const msg = String(
+          e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Signal propagation preview failed',
+        ).trim();
+        setSignalPropagationOverlay(null);
+        setSignalPropagationError(msg || 'Signal propagation preview failed');
+      } finally {
+        if (signalPropagationRequestSeqRef.current === requestSeq) {
+          setSignalPropagationLoading(false);
+        }
+      }
+    })();
+  }, [
+    hoverHighlightMode,
+    selectedNodeId,
+    selectedNodeFragmentId,
+    lensId,
+    nodes,
+    visibleEdges,
+    normalizeEdgeType,
+    modelerScenarioId,
+    modelerContractType,
+    modelerDomainModesInput,
+    modelerEngineId,
+    modelerParamObj,
+    modelerParamError,
+    modelerTargetPaths,
+    normalizeListInput,
+  ]);
 
   const extractStateMetrics = React.useCallback((raw: any): Record<string, number> | undefined => {
     if (!raw || typeof raw !== 'object') return undefined;
@@ -12103,11 +12472,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setGraphIntentError(null);
       await handleLoadGraph();
     } catch (e: any) {
-      const msg = String(e?.response?.data || e?.message || 'Failed to apply').trim();
+      const d = e?.response?.data;
+      const msg =
+        (typeof d === 'object' && d?.detail) ? String(d.detail).trim()
+        : (typeof d === 'object' && d?.error) ? String(d.error).trim()
+        : (typeof d === 'string' ? d : e?.message || 'Failed to apply').trim();
       if (import.meta.env.DEV) {
         console.warn('[GraphIntent] apply error:', e);
       }
-      setGraphIntentError(msg);
+      setGraphIntentError(msg || 'Failed to apply');
     } finally {
       setGraphIntentApplyLoading(false);
     }
@@ -12300,37 +12673,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       closeAddNode();
 
       try {
-        // Special-case DOMAIN queries: "Scout it" should run strategic projection (decision layer), not generic scope scout.
-        // We detect a domain intent best-effort via the overlay preview endpoint (no writes).
-        try {
-          const preview = await api.previewDomainOverlay(lensId, { query: q });
-          const domainCp = String((preview as any)?.intent?.domains?.[0]?.canonicalPath || '').trim();
-          if (domainCp && domainCp.startsWith('/domain/')) {
-            // Optimistic scope preview update (pin state and UI consistency).
-            setLensScopePaths((prev) => (prev.includes(domainCp) ? prev : [...prev, domainCp]));
-
-            // Update placeholder node with canonicalPath to enable WS reconciliation.
-            setNodes((prev) =>
-              (prev || []).map((n) => {
-                if (String((n as any)?.id || '').trim() !== placeholderId) return n;
-                const d0: any = (n as any)?.data || {};
-                const d = { ...d0, canonicalPath: domainCp, label: d0?.label || `Strategic projection: ${q}` };
-                return { ...(n as any), data: d } as any;
-              }),
-            );
-            const st = pendingScoutRef.current.get(correlationId);
-            if (st) pendingScoutRef.current.set(correlationId, { ...st, canonicalPath: domainCp });
-
-            // Trigger strategic projection job(s) for this domain.
-            const sessionId = (window as any).__horizonSessionId || correlationId;
-            (window as any).__horizonSessionId = sessionId;
-            await api.triggerHorizonPhase2StrategicOverlay(lensId, { domainPaths: [domainCp] }, { correlationId, sessionId });
-            return;
-          }
-        } catch {
-          // ignore: fall back to normal scope-scout-query
-        }
-
         const res = await api.scopeScoutHorizonLensQuery(lensId, { query: q }, { correlationId });
         const cp = String(res?.targetCanonicalPath || '').trim();
         if (cp) {
@@ -13187,11 +13529,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const isDomain = cp.startsWith('/domain/');
 
       if (isDomain) {
-        const correlationId = genCorrelationId();
-        const sessionId = (window as any).__horizonSessionId || correlationId;
-        (window as any).__horizonSessionId = sessionId;
-        await api.triggerHorizonPhase2StrategicOverlay(lensId, { domainPaths: [cp] }, { correlationId, sessionId });
-        ok = true;
+        ok = false;
       } else {
         if (!onScopeScout) return;
         await onScopeScout({ fragmentId, canonicalPath: scopeScoutModal.canonicalPath, maxRecursionDepth: scopeScoutDepth });
@@ -13266,7 +13604,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (askGraphOpen || addNodeOpen) return;
+      if (askGraphOpen || addNodeOpen || modelerOpen) return;
       if (graphQueryHighlightIds && graphQueryHighlightIds.size > 0) {
         e.preventDefault();
         clearGraphQueryHighlight();
@@ -13274,7 +13612,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [askGraphOpen, addNodeOpen, graphQueryHighlightIds, clearGraphQueryHighlight]);
+  }, [askGraphOpen, addNodeOpen, modelerOpen, graphQueryHighlightIds, clearGraphQueryHighlight]);
 
   const submitAskGraph = React.useCallback(async () => {
     const q = String(askGraphQuery || '').trim();
@@ -13304,28 +13642,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         label: String(e?.data?.edgeCaption || e?.label || '').trim() || undefined,
       }));
 
-    const domainAnswerContext = (() => {
-      const preferred = activeDomainAnswer?.raw;
-      if (!preferred) return undefined;
-      return {
-        snapshotId: String(preferred?.id || '').trim() || undefined,
-        id: String(preferred?.id || '').trim() || undefined,
-        domainId: String(preferred?.domainId || '').trim() || undefined,
-        domainCanonicalPath: String(preferred?.domainCanonicalPath || '').trim() || undefined,
-        readinessStatus: String(preferred?.readinessStatus || '').trim() || undefined,
-        domainContract: preferred?.domainContract || undefined,
-        thesis: preferred?.thesis || undefined,
-        gate: preferred?.gate || undefined,
-        criticalDependencies: Array.isArray(preferred?.criticalDependencies)
-          ? preferred.criticalDependencies
-          : undefined,
-        impactPaths: Array.isArray(preferred?.impactPaths) ? preferred.impactPaths : undefined,
-        dataGaps: Array.isArray(preferred?.dataGaps) ? preferred.dataGaps : undefined,
-      };
-    })();
-
-    if (nodesSnap.length === 0 && !domainAnswerContext) {
-      setAskGraphError('Graph is empty. Load the graph first or run domain analysis.');
+    if (nodesSnap.length === 0) {
+      setAskGraphError('Graph is empty. Load the graph first.');
       return;
     }
 
@@ -13334,7 +13652,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     try {
       const res = await api.queryHorizonGraph(lensId, {
         question: q,
-        domainAnswerContext,
         graph: { nodes: nodesSnap, edges: edgesSnap },
       });
 
@@ -13380,29 +13697,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     } finally {
       setAskGraphLoading(false);
     }
-  }, [askGraphQuery, askGraphLoading, lensId, clearGraphQueryHighlight, activeDomainAnswer]);
-
-  // Domain Overlay: create new domain on demand
-  const handleCreateDomain = React.useCallback(async (query: string) => {
-    if (!lensId || !query.trim()) return;
-    const correlationId = genCorrelationId();
-    try {
-      await api.createHorizonDomainAnswer(lensId, { query: query.trim() }, { correlationId });
-    } catch (err: any) {
-      console.error('[LensCanvas] createDomainAnswer error:', err);
-    }
-  }, [lensId, genCorrelationId]);
-
-  // Domain Overlay: run DomainContractEngine for existing domain stub
-  const handleRunDomain = React.useCallback(async (item: DomainOverlayAnswerItem) => {
-    if (!lensId || !item.canonicalPath) return;
-    const correlationId = genCorrelationId();
-    try {
-      await api.runHorizonDomainAnswer(lensId, item.canonicalPath, { correlationId });
-    } catch (err: any) {
-      console.error('[LensCanvas] runDomainAnswer error:', err);
-    }
-  }, [lensId, genCorrelationId]);
+  }, [askGraphQuery, askGraphLoading, lensId, clearGraphQueryHighlight]);
 
   const runControlCorridor = React.useCallback(async (seedIdOverride?: string): Promise<{ graph: ControlCorridorGraph; seedId: string } | null> => {
     if (!lensId || controlCorridorLoading) return null;
@@ -13598,40 +13893,49 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   );
 
   // Toolbar components
-  const IconButton = ({ onClick, active, disabled, title, icon }: any) => (
+  const ToolbarDivider = () => (
+    <div style={{ width: 1, height: 20, background: 'var(--border-subtle)', margin: '0 4px' }} aria-hidden="true" />
+  );
+
+  const IconButton = ({ onClick, active, disabled, title, icon, label }: { onClick: () => void; active?: boolean; disabled?: boolean; title: string; icon: React.ReactNode; label?: string }) => (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       title={title}
-        style={{
+      aria-label={title}
+      style={{
         background: active ? (theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)') : 'transparent',
         border: 'none',
-        borderRadius: '6px',
-        padding: '6px',
+        borderRadius: 8,
+        padding: label ? '6px 10px' : '6px',
         cursor: disabled ? 'not-allowed' : 'pointer',
         color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
         opacity: disabled ? 0.4 : 1,
-          display: 'flex',
-          alignItems: 'center',
+        display: 'flex',
+        alignItems: 'center',
         justifyContent: 'center',
+        gap: 6,
         transition: 'all 0.2s ease',
+        fontSize: 12,
+        fontWeight: 600,
       }}
     >
       {icon}
+      {label && <span>{label}</span>}
     </button>
   );
 
   const Icons = {
     Refresh: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 21h5v-5" /></svg>,
-    Load: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" /><path d="M12 11v6" /><path d="M9 14l3 3 3-3" /></svg>,
     Search: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>,
+    Arrange: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
+    Focus: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>,
     Message: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a8.5 8.5 0 0 1-8.5 8.5h-5L3 22l1.5-4.5v-5A8.5 8.5 0 1 1 21 12Z" /></svg>,
     Sliders: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>,
     Dots: <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>,
     Plus: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>,
     X: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18" /><path d="M6 6l12 12" /></svg>,
-    Magic: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M9 3v4"/><path d="M3 7h4"/><path d="M3 3h4"/></svg>,
     Download: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
     Zap: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
     Map: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>,
@@ -13686,6 +13990,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return 'Competes';
       case 'decision-chain':
         return 'Decision Chain';
+      case 'signal-propagation':
+        return 'Signal propagation';
       default:
         return 'Highlight';
     }
@@ -13697,56 +14003,60 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, []);
 
   const toolbarContent = (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-      <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load Graph" icon={Icons.Load} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+      {/* Actions */}
+      <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load graph" icon={Icons.Refresh} />
       <IconButton
-        onClick={() => {
-          toggleCommandPalette();
-        }}
+        onClick={toggleCommandPalette}
         disabled={!lensId}
         active={addNodeOpen}
         title={addNodeOpen ? 'Close search (Ctrl+K)' : 'Search / add (Ctrl+K)'}
         icon={Icons.Search}
       />
-      <IconButton onClick={handleArrange} disabled={arranging || nodes.length === 0} title="Arrange Graph" icon={Icons.Magic} />
+      <IconButton onClick={handleArrange} disabled={arranging || nodes.length === 0} title="Arrange graph" icon={Icons.Arrange} />
+      <IconButton onClick={handleFitView} disabled={nodes.length === 0} title="Fit view" icon={Icons.Focus} />
       <IconButton
-        onClick={() => onToggleInspector?.()}
-        disabled={!onToggleInspector}
-        active={Boolean(inspectorActive)}
-        title={inspectorActive ? 'Close inspector' : 'Open inspector'}
-        icon={Icons.Info}
+        onClick={() => {
+          setShowToolbarMenu(false);
+          handleDownload();
+        }}
+        disabled={nodes.length === 0 && edges.length === 0}
+        title="Download graph"
+        icon={Icons.Download}
       />
-      <IconButton onClick={() => setVisualSettingsOpen(true)} title="Visual settings" icon={Icons.Sliders} />
 
-      {/* Layout mode (quick control) */}
+      <ToolbarDivider />
+
+      {/* Modes */}
       <div ref={layoutMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
         <button
           type="button"
           onClick={() => {
             setShowLayoutMenu((v) => !v);
             setShowHoverModeMenu(false);
+            setShowLevelsExpandMenu(false);
             setShowToolbarMenu(false);
           }}
           title={`Layout: ${layoutModeLabel(layoutMode)}`}
           aria-label="Layout mode"
+          aria-expanded={showLayoutMenu}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
-            padding: '6px 8px',
-            borderRadius: 10,
+            padding: '6px 10px',
+            borderRadius: 8,
             border: '1px solid var(--border-subtle)',
             background: theme === 'dark' ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.40)',
             color: 'var(--text-heading)',
             cursor: 'pointer',
             fontSize: 12,
-            fontWeight: 750,
+            fontWeight: 600,
             lineHeight: 1,
           }}
         >
-          <span style={{ color: 'var(--text-secondary-strong)', display: 'inline-flex' }}>
-            {layoutModeIcon(layoutMode)}
-          </span>
+          <span style={{ display: 'inline-flex' }}>{layoutModeIcon(layoutMode)}</span>
+          <span>{layoutModeLabel(layoutMode)}</span>
           <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.ChevronDown}</span>
         </button>
 
@@ -13812,7 +14122,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         )}
       </div>
 
-      {/* Highlight mode (quick control) */}
       <div ref={hoverModeMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
         <button
           type="button"
@@ -13820,24 +14129,26 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             setShowHoverModeMenu((v) => !v);
             setShowLayoutMenu(false);
             setShowToolbarMenu(false);
+            setShowLevelsExpandMenu(false);
           }}
           title="Highlight mode"
+          aria-expanded={showHoverModeMenu}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
-              padding: '6px 8px',
-            borderRadius: 10,
+            padding: '6px 10px',
+            borderRadius: 8,
             border: '1px solid var(--border-subtle)',
             background: theme === 'dark' ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.40)',
             color: 'var(--text-heading)',
-              cursor: 'pointer',
+            cursor: 'pointer',
             fontSize: 12,
-            fontWeight: 750,
+            fontWeight: 600,
             lineHeight: 1,
           }}
         >
-          <span style={{ color: 'var(--text-secondary-strong)', fontWeight: 800 }}>Highlight:</span>
+          <span style={{ color: 'var(--text-secondary-strong)' }}>Highlight</span>
           <span>{hoverModeLabel(hoverHighlightMode)}</span>
           <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.ChevronDown}</span>
         </button>
@@ -13869,6 +14180,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 { key: 'supplies', label: 'Supplies', hint: 'Direct suppliers/inputs' },
                 { key: 'competition', label: 'Competes', hint: 'Direct competition/conflict' },
                 { key: 'decision-chain', label: 'Decision Chain', hint: 'Directed corridor around hovered node (authority → execution → impact)' },
+                { key: 'signal-propagation', label: 'Signal propagation', hint: 'Backend propagation trace from selected node (12-axis rules).' },
               ] as Array<{ key: HoverHighlightMode; label: string; hint: string }>
             ).map((opt) => {
               const active = hoverHighlightMode === opt.key;
@@ -13912,7 +14224,42 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         )}
       </div>
 
-      {/* Levels: expansion filter (what edge types are fetched on expand) */}
+      {hoverHighlightMode === 'signal-propagation' && (
+        <div
+          style={{
+            padding: '6px 10px',
+            borderRadius: 8,
+            border: '1px solid rgba(239,68,68,0.30)',
+            background: theme === 'dark' ? 'rgba(127,29,29,0.28)' : 'rgba(254,226,226,0.85)',
+            color: theme === 'dark' ? 'rgba(254,202,202,0.94)' : 'rgba(127,29,29,0.92)',
+            fontSize: 11,
+            fontWeight: 700,
+            lineHeight: 1.1,
+            maxWidth: 280,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+          title={
+            signalPropagationLoading
+              ? 'Running backend propagation preview from selected node'
+              : signalPropagationError
+                ? signalPropagationError
+                : signalPropagationOverlay
+                  ? `${signalPropagationOverlay.nodeIds.length} nodes, ${signalPropagationOverlay.edgeIds.length} edges, ${signalPropagationOverlay.traceSteps} trace steps`
+                  : 'No visible propagation path'
+          }
+        >
+          {signalPropagationLoading
+            ? 'Signal propagation: running…'
+            : signalPropagationError
+              ? `Signal propagation: ${signalPropagationError}`
+              : signalPropagationOverlay
+                ? `Signal propagation: ${signalPropagationOverlay.nodeIds.length} nodes · ${signalPropagationOverlay.edgeIds.length} edges`
+                : 'Signal propagation: no visible path'}
+        </div>
+      )}
+
       {isLevelsLayout && (
         <div ref={levelsExpandMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
           <button
@@ -13924,18 +14271,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               setShowToolbarMenu(false);
             }}
             title="Expansion filter (edge types fetched on expand)"
+            aria-expanded={showLevelsExpandMenu}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-              padding: '6px 8px',
-              borderRadius: 10,
+              padding: '6px 10px',
+              borderRadius: 8,
               border: expandModeGlow ? '1px solid rgba(245, 158, 11, 0.6)' : '1px solid var(--border-subtle)',
               background: theme === 'dark' ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.40)',
               color: 'var(--text-heading)',
               cursor: 'pointer',
               fontSize: 12,
-              fontWeight: 750,
+              fontWeight: 600,
               lineHeight: 1,
               boxShadow: expandModeGlow
                 ? '0 0 12px rgba(245, 158, 11, 0.4), 0 0 24px rgba(245, 158, 11, 0.2)'
@@ -13943,7 +14291,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               transition: 'box-shadow 0.4s ease, border-color 0.4s ease',
             }}
           >
-            <span style={{ color: 'var(--text-secondary-strong)', fontWeight: 800 }}>Expand:</span>
+            <span style={{ color: 'var(--text-secondary-strong)' }}>Expand</span>
             <span>{levelsExpandLabel(levelsExpandMode)}</span>
             <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.ChevronDown}</span>
           </button>
@@ -14023,59 +14371,44 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         </div>
       )}
 
+      <ToolbarDivider />
+
+      {/* Settings & overflow */}
+      <IconButton
+        onClick={() => onToggleInspector?.()}
+        disabled={!onToggleInspector}
+        active={Boolean(inspectorActive)}
+        title={inspectorActive ? 'Close inspector' : 'Open inspector'}
+        icon={Icons.Info}
+      />
+      <IconButton onClick={() => setVisualSettingsOpen(true)} title="Visual settings" icon={Icons.Sliders} />
+
       <div ref={toolbarMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
         <IconButton
           onClick={() => setShowToolbarMenu((v: boolean) => !v)}
           active={showToolbarMenu}
-          title="More"
+          title="More options"
           icon={Icons.Dots}
         />
         {showToolbarMenu && (
-            <div
-              style={{
-                position: 'absolute',
+          <div
+            style={{
+              position: 'absolute',
               top: 'calc(100% + 6px)',
               right: 0,
-              minWidth: 220,
+              minWidth: 200,
               borderRadius: 12,
               border: '1px solid var(--border-subtle)',
               background: 'var(--bg-elevated)',
               boxShadow: theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.55)' : '0 14px 40px rgba(0,0,0,0.18)',
-                overflow: 'hidden',
+              overflow: 'hidden',
               zIndex: 1000,
             }}
           >
             <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', borderBottom: '1px solid var(--border-subtle)' }}>
-              Canvas menu
+              Canvas
             </div>
-
-            <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowToolbarMenu(false);
-                  handleDownload();
-                }}
-                disabled={nodes.length === 0 && edges.length === 0}
-          style={{
-                    width: '100%',
-                  padding: '10px 12px',
-                    border: 'none',
-                  background: 'transparent',
-                  cursor: nodes.length === 0 && edges.length === 0 ? 'not-allowed' : 'pointer',
-                  color: 'var(--text-heading)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  opacity: nodes.length === 0 && edges.length === 0 ? 0.45 : 1,
-                }}
-              >
-                <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.Download}</span>
-                <span style={{ fontSize: 12, fontWeight: 700 }}>Download graph</span>
-              </button>
-            </div>
-
-            <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', borderTop: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between' }}>
+            <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', display: 'flex', justifyContent: 'space-between' }}>
               <span>{nodes.length} nodes</span>
               <span>{edges.length} edges</span>
             </div>
@@ -14087,7 +14420,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           </div>
         )}
       </div>
-      </div>
+    </div>
   );
 
   const applyVisualPreset = React.useCallback((preset: VisualPreset) => {
@@ -14808,6 +15141,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   <option value="supplies">Supplies</option>
                   <option value="competition">Competition</option>
                   <option value="decision-chain">Decision Chain</option>
+                  <option value="signal-propagation">Signal propagation</option>
                 </select>
               </div>
             </div>
@@ -15560,30 +15894,43 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             </div>
           )}
 
-          {/* Domain Overlay Panel (replaces old S-button) */}
-          <DomainOverlayPanel
-            theme={theme as 'light' | 'dark'}
-            mode={domainOverlayPanelMode}
-            setMode={setDomainOverlayPanelMode}
-            items={domainAnswerItems}
-            activeKey={activeDomainAnswerKey}
-            setActiveKey={setActiveDomainAnswerKey}
-            highlightEnabled={domainOverlayHighlightEnabled}
-            setHighlightEnabled={setDomainOverlayHighlightEnabled}
-            timeline={domainContractTimeline}
-            miniBadge={domainContractMiniBadge}
-            domainContractEventTone={domainContractEventTone}
-            domainContractEventLabel={domainContractEventLabel}
-            readinessMeta={domainReadinessMeta}
-            activeDomainOverlayPath={activeDomainOverlayPath}
-            alwaysShowMini={!!lensId}
-            onCreateDomain={handleCreateDomain}
-            onRunDomain={handleRunDomain}
-            onHighlightDependency={onDomainDependencyClick}
-            onHoverDependency={onDomainDependencyHover}
-            onHoverExplanatoryUnit={onDomainExplanatoryUnitHover}
-            onClearHighlight={clearDomainOverlayHover}
-          />
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              if (!lensId) return;
+              openModeler();
+            }}
+            disabled={!lensId || modelerLoading}
+            title="Policy impact modeler"
+            style={{
+              pointerEvents: 'auto',
+              width: 44,
+              height: 44,
+              borderRadius: 999,
+              border: modelerOpen
+                ? (theme === 'dark' ? '1px solid rgba(96,165,250,0.55)' : '1px solid rgba(37,99,235,0.50)')
+                : '1px solid var(--border-subtle)',
+              background: modelerOpen
+                ? (theme === 'dark' ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.14)')
+                : (theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.80)'),
+              color: 'var(--text-heading)',
+              cursor: (!lensId || modelerLoading) ? 'not-allowed' : 'pointer',
+              opacity: (!lensId || modelerLoading) ? 0.55 : 1,
+              filter: theme === 'dark' ? 'drop-shadow(0 16px 40px rgba(0,0,0,0.55))' : 'drop-shadow(0 16px 40px rgba(0,0,0,0.18))',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 14,
+              fontWeight: 900,
+              lineHeight: 1,
+              backdropFilter: 'blur(8px)',
+              transition: 'background-color 0.18s ease, border-color 0.18s ease',
+            }}
+          >
+            FX
+          </button>
 
           <button
             type="button"
@@ -15591,6 +15938,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               e.stopPropagation();
               e.preventDefault();
               if (!lensId) return;
+              setModelerOpen(false);
               setAskGraphError(null);
               setAskGraphOpen(true);
             }}
@@ -16013,7 +16361,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   gap: 8,
                 }}
               >
-                  <span aria-hidden="true" style={{ display: 'inline-flex' }}>{Icons.Load}</span>
+                  <span aria-hidden="true" style={{ display: 'inline-flex' }}>{Icons.Refresh}</span>
                   Load Graph
               </button>
             </div>
@@ -16103,6 +16451,31 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               marginBottom: 8,
             }}
           >
+            {graphIntentLoading && !graphIntentPlan && (
+              <>
+                <style>{`
+                  @keyframes horizon-command-dot-bounce {
+                    0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+                    40% { transform: translateY(-6px); opacity: 1; }
+                  }
+                `}</style>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {[0, 1, 2].map((i) => (
+                    <div
+                      key={i}
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        background: 'var(--accent-primary, #3B82F6)',
+                        animation: 'horizon-command-dot-bounce 1.1s infinite ease-in-out',
+                        animationDelay: `${i * 0.14}s`,
+                      }}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
             {graphIntentPlan && (
               <GraphIntentResultCard
                 plan={graphIntentPlan}
@@ -16110,6 +16483,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 onApply={() => void applyGraphIntentPlan()}
                 onDismiss={dismissGraphIntentPlan}
                 theme={theme as 'light' | 'dark'}
+                nodeIdToLabel={graphIntentNodeIdToLabel}
               />
             )}
             {graphIntentError && !graphIntentPlan && (
@@ -16246,7 +16620,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             <div style={{ maxHeight: 400, overflowY: 'auto', padding: '6px 0' }}>
               {!addNodeLoading && !addNodeError && !addNodeQueryTrim && (
                 <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary-strong)', fontSize: 13 }}>
-                  Type to search nodes on this graph, or add from the global index
+                  {addNodeSearchEnabled
+                    ? 'Type to search nodes on this graph, or add from the global index'
+                    : 'Type for Graph Intent or Scout (Search off — no graph/index results)'}
                 </div>
               )}
 
@@ -16353,13 +16729,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 </div>
               )}
 
-              {/* On-graph matches - hidden when loading */}
-              {graphSearchResults.length > 0 && !graphIntentLoading && (
+              {/* On-graph matches - hidden when loading or when Search is off */}
+              {addNodeSearchEnabled && graphSearchResults.length > 0 && !graphIntentLoading && (
                 <div style={{ padding: '10px 16px 6px', fontSize: 11, fontWeight: 800, color: 'var(--text-secondary-strong)', letterSpacing: 0.4, textTransform: 'uppercase' }}>
                   On graph
                 </div>
               )}
-              {graphSearchResults.map((m, idx) => {
+              {addNodeSearchEnabled && graphSearchResults.map((m, idx) => {
                 const intentOffset = addNodeQueryTrim.length >= 3 ? 1 : 0;
                 const scoutOffset = addNodeQueryTrim.length >= 2 ? 1 : 0;
                 const absIdx = intentOffset + scoutOffset + idx;
@@ -16408,14 +16784,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 );
               })}
 
-              {/* Index matches (global) - hidden when loading */}
-              {addNodeQueryTrim.length >= 2 && !graphIntentLoading && (
+              {/* Index matches (global) - hidden when loading or when Search is off */}
+              {addNodeSearchEnabled && addNodeQueryTrim.length >= 2 && !graphIntentLoading && (
                 <div style={{ padding: `${graphSearchResults.length > 0 ? '12px' : '10px'} 16px 6px`, fontSize: 11, fontWeight: 800, color: 'var(--text-secondary-strong)', letterSpacing: 0.4, textTransform: 'uppercase' }}>
                   Add to graph
                 </div>
               )}
 
-              {addNodeQueryTrim.length >= 2 && !graphIntentLoading && !addNodeLoading && !addNodeError && filteredAddNodeResults.length === 0 && (
+              {addNodeSearchEnabled && addNodeQueryTrim.length >= 2 && !graphIntentLoading && !addNodeLoading && !addNodeError && filteredAddNodeResults.length === 0 && (
                 <div style={{ padding: '16px 24px', textAlign: 'center', color: 'var(--text-secondary-strong)', fontSize: 13 }}>
                   No results for "{addNodeQueryTrim}"
                 </div>
@@ -16478,25 +16854,721 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 borderTop: '1px solid var(--border-subtle)',
                 background: theme === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.01)',
                 display: 'flex',
-                justifyContent: 'flex-end',
+                alignItems: 'center',
+                justifyContent: 'space-between',
                 gap: 12,
                 fontSize: 11,
                 color: 'var(--text-secondary-strong)',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <kbd style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '1px 4px', fontSize: 10 }}>↵</kbd>
-                <span>to focus / add</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <kbd style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '1px 4px', fontSize: 10 }}>esc</kbd>
-                <span>to close</span>
+              <button
+                type="button"
+                onClick={() => setAddNodeSearchEnabled((v) => !v)}
+                title={addNodeSearchEnabled ? 'Search on: show nodes from graph and global index (click to disable)' : 'Search off: only Graph Intent and Scout (click to enable)'}
+                aria-pressed={addNodeSearchEnabled}
+                aria-label={addNodeSearchEnabled ? 'Search enabled' : 'Search disabled'}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 4,
+                  padding: '1px 4px',
+                  borderRadius: 4,
+                  border: 'none',
+                  background: addNodeSearchEnabled ? (theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)') : 'transparent',
+                  color: 'var(--text-secondary-strong)',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  lineHeight: 1,
+                  transition: 'background 0.12s',
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', opacity: addNodeSearchEnabled ? 1 : 0.5, flexShrink: 0, lineHeight: 0 }}>{Icons.Search}</span>
+                <span>Search</span>
+              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <kbd style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '1px 4px', fontSize: 10 }}>↵</kbd>
+                  <span>to focus / add</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <kbd style={{ background: 'var(--bg-base)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '1px 4px', fontSize: 10 }}>esc</kbd>
+                  <span>to close</span>
+                </div>
               </div>
             </div>
           </div>
         </div>
       )}
 
+
+      {/* Policy Impact Modeler Overlay */}
+      {modelerOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9997,
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'center',
+            paddingTop: '8vh',
+            background: theme === 'dark' ? 'rgba(0,0,0,0.52)' : 'rgba(255,255,255,0.42)',
+            backdropFilter: 'blur(4px)',
+          }}
+          onClick={() => closeModeler()}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 980,
+              maxWidth: '96vw',
+              maxHeight: '88vh',
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+              background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 16,
+              boxShadow: theme === 'dark' ? '0 22px 64px rgba(0,0,0,0.62)' : '0 22px 64px rgba(0,0,0,0.22)',
+              padding: 14,
+              animation: 'horizon-command-pop 0.15s ease-out',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 900, color: 'var(--text-heading)' }}>
+                  Policy Impact Modeler
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginTop: 2 }}>
+                  Encode -&gt; Transfer (12-axis propagation) -&gt; Decode
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => closeModeler()}
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: 10,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  color: 'var(--text-secondary-strong)',
+                  cursor: 'pointer',
+                  fontSize: 16,
+                  fontWeight: 900,
+                }}
+              >
+                {Icons.X}
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(240px, 1fr))', gap: 10 }}>
+              {MODELER_SCENARIO_PRESETS.map((p) => {
+                const active = modelerPresetId === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setModelerPreset(p.id)}
+                    style={{
+                      textAlign: 'left',
+                      borderRadius: 12,
+                      border: active
+                        ? (theme === 'dark' ? '1px solid rgba(96,165,250,0.55)' : '1px solid rgba(37,99,235,0.50)')
+                        : '1px solid var(--border-subtle)',
+                      background: active
+                        ? (theme === 'dark' ? 'rgba(59,130,246,0.16)' : 'rgba(59,130,246,0.10)')
+                        : (theme === 'dark' ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.015)'),
+                      padding: '10px 12px',
+                      cursor: 'pointer',
+                      color: 'var(--text-heading)',
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 900 }}>{p.label}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 3 }}>{p.description}</div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(160px, 1fr))', gap: 10 }}>
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: '8px 10px', background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.015)' }}>
+                <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)', textTransform: 'uppercase', letterSpacing: 0.35 }}>VAT change</div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--text-heading)', marginTop: 3 }}>
+                  {(modelerVatTo - modelerVatFrom).toFixed(2)} pp
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>{modelerVatFrom.toFixed(2)}% → {modelerVatTo.toFixed(2)}%</div>
+              </div>
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: '8px 10px', background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.015)' }}>
+                <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)', textTransform: 'uppercase', letterSpacing: 0.35 }}>Baseline VAT</div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--text-heading)', marginTop: 3 }}>
+                  {modelerBaselineVatRevenue.toFixed(0)}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>bln KZT</div>
+              </div>
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: '8px 10px', background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.015)' }}>
+                <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)', textTransform: 'uppercase', letterSpacing: 0.35 }}>Target nodes</div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--text-heading)', marginTop: 3 }}>
+                  {modelerTargetPaths.length}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>seed scope</div>
+              </div>
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: '8px 10px', background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.015)' }}>
+                <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)', textTransform: 'uppercase', letterSpacing: 0.35 }}>Mode</div>
+                <div style={{ fontSize: 18, fontWeight: 900, color: 'var(--text-heading)', marginTop: 3 }}>
+                  {modelerMode === 'apply' ? 'Apply' : 'Preview'}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>{modelerMode === 'apply' ? 'Persists decode' : 'No persistence'}</div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(260px, 1fr))', gap: 12 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)', fontWeight: 700 }}>Jurisdiction path</span>
+                <input
+                  value={modelerLocationPath}
+                  onChange={(e) => updateModelerParameter('location_path', String(e.target.value || '').trim())}
+                  spellCheck={false}
+                  style={{
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-base)',
+                    color: 'var(--text-heading)',
+                    borderRadius: 10,
+                    padding: '8px 10px',
+                    fontSize: 12,
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+                  }}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)', fontWeight: 700 }}>Scenario ID</span>
+                <input
+                  value={modelerScenarioId}
+                  onChange={(e) => setModelerScenarioId(e.target.value)}
+                  placeholder="scenario id"
+                  spellCheck={false}
+                  style={{
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-base)',
+                    color: 'var(--text-heading)',
+                    borderRadius: 10,
+                    padding: '8px 10px',
+                    fontSize: 12,
+                  }}
+                />
+              </label>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(260px, 1fr))', gap: 12 }}>
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', marginBottom: 8 }}>VAT rates</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>from (%)</span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min={0}
+                      max={100}
+                      value={Number.isFinite(modelerVatFrom) ? modelerVatFrom : 0}
+                      onChange={(e) => updateModelerParameter('vat_rate_from', Number(e.target.value))}
+                      style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-heading)', borderRadius: 9, padding: '7px 9px', fontSize: 12 }}
+                    />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>to (%)</span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min={0}
+                      max={100}
+                      value={Number.isFinite(modelerVatTo) ? modelerVatTo : 0}
+                      onChange={(e) => updateModelerParameter('vat_rate_to', Number(e.target.value))}
+                      style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-heading)', borderRadius: 9, padding: '7px 9px', fontSize: 12 }}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', marginBottom: 8 }}>Baselines</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>GDP (bln KZT)</span>
+                    <input
+                      type="number"
+                      step="100"
+                      value={Number.isFinite(modelerBaselineGDP) ? modelerBaselineGDP : 0}
+                      onChange={(e) => updateModelerParameter('baseline_gdp_bln_kzt', Number(e.target.value))}
+                      style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-heading)', borderRadius: 9, padding: '7px 9px', fontSize: 12 }}
+                    />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>VAT revenue (bln KZT)</span>
+                    <input
+                      type="number"
+                      step="10"
+                      value={Number.isFinite(modelerBaselineVatRevenue) ? modelerBaselineVatRevenue : 0}
+                      onChange={(e) => updateModelerParameter('baseline_vat_revenue_bln_kzt', Number(e.target.value))}
+                      style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-heading)', borderRadius: 9, padding: '7px 9px', fontSize: 12 }}
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10, display: 'grid', gap: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>Behavior assumptions</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: 10 }}>
+                {[
+                  { key: 'pass_through_rate', label: 'Pass-through', value: modelerPassThrough, min: 0.30, max: 1.00, step: 0.01 },
+                  { key: 'demand_elasticity', label: 'Demand elasticity', value: modelerDemandElasticity, min: -1.20, max: 0.00, step: 0.01 },
+                  { key: 'compliance_elasticity', label: 'Compliance elasticity', value: modelerComplianceElasticity, min: 0.02, max: 0.45, step: 0.01 },
+                  { key: 'shadow_sensitivity', label: 'Shadow sensitivity', value: modelerShadowSensitivity, min: 0.02, max: 0.65, step: 0.01 },
+                ].map((row) => (
+                  <label key={row.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)', fontWeight: 700 }}>{row.label}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-heading)', fontWeight: 800 }}>{Number(row.value).toFixed(2)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={row.min}
+                      max={row.max}
+                      step={row.step}
+                      value={Number.isFinite(row.value) ? row.value : row.min}
+                      onChange={(e) => updateModelerParameter(row.key, Number(e.target.value))}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10, display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>Target paths (seed scope)</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => setModelerTargetPaths(selectedNodeCanonicalPath ? [selectedNodeCanonicalPath] : [])}
+                    disabled={!selectedNodeCanonicalPath}
+                    style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary-strong)', fontSize: 11, cursor: selectedNodeCanonicalPath ? 'pointer' : 'not-allowed', opacity: selectedNodeCanonicalPath ? 1 : 0.45 }}
+                  >
+                    Use selected
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModelerTargetPaths(suggestedModelerTargetPaths.slice(0, 12))}
+                    disabled={suggestedModelerTargetPaths.length === 0}
+                    style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary-strong)', fontSize: 11, cursor: suggestedModelerTargetPaths.length > 0 ? 'pointer' : 'not-allowed', opacity: suggestedModelerTargetPaths.length > 0 ? 1 : 0.45 }}
+                  >
+                    Use scope
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModelerTargetPaths([])}
+                    style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary-strong)', fontSize: 11, cursor: 'pointer' }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxHeight: 108, overflowY: 'auto', paddingRight: 2 }}>
+                {suggestedModelerTargetPaths.slice(0, 20).map((p) => {
+                  const active = modelerTargetPaths.includes(p);
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => toggleModelerTargetPath(p)}
+                      style={{
+                        maxWidth: '100%',
+                        borderRadius: 999,
+                        border: active
+                          ? (theme === 'dark' ? '1px solid rgba(34,197,94,0.45)' : '1px solid rgba(16,185,129,0.50)')
+                          : '1px solid var(--border-subtle)',
+                        background: active
+                          ? (theme === 'dark' ? 'rgba(16,185,129,0.16)' : 'rgba(16,185,129,0.10)')
+                          : 'transparent',
+                        color: active ? 'var(--text-heading)' : 'var(--text-secondary-strong)',
+                        padding: '4px 9px',
+                        fontSize: 11,
+                        cursor: 'pointer',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+                      }}
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                If no targets are selected, seeds are inferred from <code>location_path</code> via <code>OPERATES_IN/LOCATED_IN</code>.
+              </div>
+              <div style={{ fontSize: 11, color: selectedNodeFragmentId ? 'var(--text-heading)' : 'var(--text-secondary-strong)' }}>
+                Seed source: {selectedNodeFragmentId ? <code>{selectedNodeFragmentId}</code> : 'no selected visible node (fallback to inferred seeds)'}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setModelerAdvancedOpen((v) => !v)}
+                style={{
+                  height: 34,
+                  padding: '0 12px',
+                  borderRadius: 10,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  color: 'var(--text-secondary-strong)',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                {modelerAdvancedOpen ? 'Hide advanced' : 'Advanced settings'}
+              </button>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModelerMode('preview');
+                    void runModelerScenario('preview');
+                  }}
+                  disabled={modelerLoading}
+                  style={{
+                    height: 36,
+                    padding: '0 14px',
+                    borderRadius: 10,
+                    border: '1px solid var(--border-subtle)',
+                    background: modelerMode === 'preview' ? (theme === 'dark' ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.14)') : 'transparent',
+                    color: 'var(--text-heading)',
+                    fontWeight: 900,
+                    fontSize: 12,
+                    cursor: modelerLoading ? 'not-allowed' : 'pointer',
+                    opacity: modelerLoading ? 0.6 : 1,
+                  }}
+                >
+                  Preview impact
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModelerMode('apply');
+                    void runModelerScenario('apply');
+                  }}
+                  disabled={modelerLoading}
+                  style={{
+                    height: 36,
+                    padding: '0 14px',
+                    borderRadius: 10,
+                    border: 'none',
+                    background: 'var(--accent-primary, #3B82F6)',
+                    color: '#fff',
+                    fontWeight: 900,
+                    fontSize: 12,
+                    cursor: modelerLoading ? 'not-allowed' : 'pointer',
+                    opacity: modelerLoading ? 0.6 : 1,
+                    boxShadow: '0 8px 20px rgba(59,130,246,0.25)',
+                  }}
+                >
+                  Apply to graph
+                </button>
+              </div>
+            </div>
+
+            {modelerAdvancedOpen && (
+              <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10, display: 'grid', gap: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(160px, 1fr))', gap: 8 }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)', fontWeight: 700 }}>Contract type</span>
+                    <input value={modelerContractType} onChange={(e) => setModelerContractType(e.target.value)} spellCheck={false} style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-heading)', borderRadius: 9, padding: '7px 9px', fontSize: 12 }} />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)', fontWeight: 700 }}>Domain modes</span>
+                    <input value={modelerDomainModesInput} onChange={(e) => setModelerDomainModesInput(e.target.value)} spellCheck={false} style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-heading)', borderRadius: 9, padding: '7px 9px', fontSize: 12 }} />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)', fontWeight: 700 }}>Engine</span>
+                    <select value={modelerEngineId} onChange={(e) => setModelerEngineId(String(e.target.value || '').trim())} style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-base)', color: 'var(--text-heading)', borderRadius: 9, padding: '7px 9px', fontSize: 12 }}>
+                      <option value="macro_economical_v1">macro_economical_v1</option>
+                    </select>
+                  </label>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>Raw target paths</div>
+                    <textarea
+                      value={modelerTargetPathsInput}
+                      onChange={(e) => setModelerTargetPathsInput(e.target.value)}
+                      spellCheck={false}
+                      style={{
+                        width: '100%',
+                        minHeight: 120,
+                        resize: 'vertical',
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-base)',
+                        color: 'var(--text-heading)',
+                        borderRadius: 10,
+                        padding: '8px 10px',
+                        fontSize: 12,
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>Raw parameters JSON</div>
+                    <textarea
+                      value={modelerParametersInput}
+                      onChange={(e) => setModelerParametersInput(e.target.value)}
+                      spellCheck={false}
+                      style={{
+                        width: '100%',
+                        minHeight: 120,
+                        resize: 'vertical',
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-base)',
+                        color: 'var(--text-heading)',
+                        borderRadius: 10,
+                        padding: '8px 10px',
+                        fontSize: 12,
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {modelerLoading && (
+              <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>Running scenario...</div>
+            )}
+
+            {modelerParamError && !modelerError && (
+              <div
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 10,
+                  border: '1px solid rgba(245,158,11,0.35)',
+                  background: theme === 'dark' ? 'rgba(245,158,11,0.12)' : 'rgba(245,158,11,0.10)',
+                  color: '#B45309',
+                  fontSize: 12,
+                }}
+              >
+                Parameters JSON has a parse error. Quick controls still work, but run is blocked until JSON is valid.
+              </div>
+            )}
+
+            {modelerError && (
+              <div
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 12,
+                  border: '1px solid rgba(239,68,68,0.35)',
+                  background: theme === 'dark' ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.08)',
+                  color: '#EF4444',
+                  fontSize: 12,
+                }}
+              >
+                {modelerError}
+              </div>
+            )}
+
+            {modelerResult && (
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 10,
+                  borderTop: '1px solid var(--border-subtle)',
+                  paddingTop: 10,
+                }}
+              >
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', fontSize: 11 }}>
+                    Signals: <b>{Array.isArray(modelerResult.encodedSignals) ? modelerResult.encodedSignals.length : 0}</b>
+                  </span>
+                  <span style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', fontSize: 11 }}>
+                    Seeds: <b>{Array.isArray(modelerResult.seedFragmentIds) ? modelerResult.seedFragmentIds.length : 0}</b>
+                  </span>
+                  <span style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', fontSize: 11 }}>
+                    Affected nodes: <b>{Array.isArray(modelerResult.affectedFragments) ? modelerResult.affectedFragments.length : 0}</b>
+                  </span>
+                  <span style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', fontSize: 11 }}>
+                    Decoded nodes: <b>{Array.isArray(modelerResult.domainMetrics) ? modelerResult.domainMetrics.length : 0}</b>
+                  </span>
+                  <span style={{ padding: '4px 8px', borderRadius: 999, border: '1px solid var(--border-subtle)', fontSize: 11 }}>
+                    Trace steps: <b>{Number((modelerResult.propagationStats || {})['trace_steps'] || 0).toFixed(0)}</b>
+                  </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', marginBottom: 6 }}>Input resolution</div>
+                    {Array.isArray(modelerResult?.inputResolution?.missing) && modelerResult.inputResolution!.missing!.length > 0 && (
+                      <div style={{ fontSize: 11, color: '#EF4444', marginBottom: 6 }}>
+                        Missing: {modelerResult.inputResolution!.missing!.join(', ')}
+                      </div>
+                    )}
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      {Object.entries(modelerResult?.inputResolution?.resolved || {}).slice(0, 12).map(([k, v]) => {
+                        const from = (modelerResult?.inputResolution?.resolvedFrom || ({} as Record<string, string>))[k] || '';
+                        return (
+                          <div key={k} style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, fontSize: 11 }}>
+                            <span style={{ color: 'var(--text-secondary-strong)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k}</span>
+                            <span style={{ color: 'var(--text-heading)', fontWeight: 700 }}>{Number(v).toFixed(4)}</span>
+                            <span style={{ color: 'var(--text-secondary-strong)', maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{from}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', marginBottom: 6 }}>Encoded + 12-axis basis</div>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                      {PHYSICAL_AXES_12.map((axis) => {
+                        const hit = Array.isArray(modelerResult.encodedSignals) && modelerResult.encodedSignals.some((s) => String(s?.axis || '').trim() === axis);
+                        return (
+                          <span
+                            key={axis}
+                            style={{
+                              padding: '3px 7px',
+                              borderRadius: 999,
+                              border: '1px solid var(--border-subtle)',
+                              background: hit ? (theme === 'dark' ? 'rgba(34,197,94,0.20)' : 'rgba(16,185,129,0.14)') : 'transparent',
+                              color: hit ? 'var(--text-heading)' : 'var(--text-secondary-strong)',
+                              fontSize: 10,
+                              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", monospace',
+                            }}
+                          >
+                            {axis}
+                          </span>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      {(modelerResult.encodedSignals || []).slice(0, 8).map((s, idx) => (
+                        <div key={`${s.id || 'sig'}-${idx}`} style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                          <b style={{ color: 'var(--text-heading)' }}>{s.axis || 'axis'}</b> / amp {(Number(s.amplitude || 0)).toFixed(3)} / {s.polarity || 'n/a'}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', marginBottom: 6 }}>
+                    Signal transfer trace
+                  </div>
+                  <div style={{ display: 'grid', gap: 8, maxHeight: 220, overflowY: 'auto' }}>
+                    {(Array.isArray(modelerResult.signalRuns) ? modelerResult.signalRuns : []).slice(0, 8).map((run, idx) => (
+                      <div
+                        key={`${String(run.signalId || run.axis || 'run')}-${idx}`}
+                        style={{
+                          border: '1px solid var(--border-subtle)',
+                          borderRadius: 10,
+                          padding: 8,
+                          background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 5 }}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-heading)' }}>
+                            {run.signalId || run.axis || 'signal'}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>
+                            seeds {Array.isArray(run.seedFragmentIds) ? run.seedFragmentIds.length : 0} • affected {Array.isArray(run.affectedFragments) ? run.affectedFragments.length : 0} • trace {Array.isArray(run.trace) ? run.trace.length : 0}
+                          </div>
+                        </div>
+                        <div style={{ display: 'grid', gap: 3 }}>
+                          {(Array.isArray(run.trace) ? run.trace : []).slice(0, 6).map((ev, evIdx) => (
+                            <div key={`${String(run.signalId || 'signal')}-${idx}-${evIdx}`} style={{ display: 'grid', gap: 2, fontSize: 10 }}>
+                              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+                                <span style={{ color: 'var(--text-secondary-strong)', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {ev.outcome || 'event'} {ev.fromFragmentId ? `${ev.fromFragmentId} -> ` : ''}{ev.toFragmentId || ''}
+                                </span>
+                                <span style={{ color: 'var(--text-heading)', whiteSpace: 'nowrap' }}>
+                                  {Number(ev.amplitudeOut || 0).toFixed(3)} {ev.axisOut || ''}
+                                </span>
+                              </div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: 9, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                {ev.channel ? <span>channel: {ev.channel}</span> : null}
+                                {ev.scope ? <span>scope: {ev.scope}</span> : null}
+                                {ev.spillover ? <span>spillover: {ev.spillover}</span> : null}
+                                {ev.factors && typeof ev.factors === 'object' && typeof (ev.factors as any)['after_adapter'] === 'number'
+                                  ? <span>f(after): {Number((ev.factors as any)['after_adapter']).toFixed(3)}</span>
+                                  : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    {(!Array.isArray(modelerResult.signalRuns) || modelerResult.signalRuns.length === 0) && (
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>No per-signal trace available for this run.</div>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', marginBottom: 6 }}>
+                    Decode output by node
+                  </div>
+                  <div style={{ display: 'grid', gap: 8, maxHeight: 260, overflowY: 'auto' }}>
+                    {(Array.isArray(modelerResult.domainMetrics) ? [...modelerResult.domainMetrics] : [])
+                      .sort((a, b) => {
+                        const ax = Array.isArray(a.metrics) ? Math.max(0, ...a.metrics.map((m) => Math.abs(Number(m?.value || 0)))) : 0;
+                        const bx = Array.isArray(b.metrics) ? Math.max(0, ...b.metrics.map((m) => Math.abs(Number(m?.value || 0)))) : 0;
+                        return bx - ax;
+                      })
+                      .slice(0, 20)
+                      .map((node, idx) => (
+                        <div
+                          key={`${String(node.fragmentId || node.canonicalPath || 'node')}-${idx}`}
+                          style={{
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 10,
+                            padding: 8,
+                            background: theme === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                            <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, color: 'var(--text-heading)', fontWeight: 800 }}>
+                              {String(node.canonicalPath || node.fragmentId || 'node')}
+                            </div>
+                            <span style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>
+                              {node.persisted ? 'persisted' : 'preview'}
+                            </span>
+                          </div>
+                          <div style={{ display: 'grid', gap: 3 }}>
+                            {(node.metrics || []).slice(0, 10).map((m) => (
+                              <div
+                                key={`${String(node.fragmentId || '')}-${String(m.metricPath || '')}`}
+                                style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, fontSize: 11 }}
+                              >
+                                <span style={{ color: 'var(--text-secondary-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {m.metricPath}
+                                </span>
+                                <span style={{ color: 'var(--text-heading)', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                  {Number(m.value || 0).toFixed(4)} {m.unit || ''}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Ask Graph Command Palette Overlay */}
       {askGraphOpen && (

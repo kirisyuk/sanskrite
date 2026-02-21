@@ -83,7 +83,8 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'CONTROLS': 1,
   'BOARD_MEMBER_OF': 1,
   'EXECUTIVE_OF': 1,
-  // Governance (strong, but not control)
+  // Assurance (Third Line)
+  'ASSURES': 2,
   'AUDITED_BY': 2,
   // Administrative hierarchy (gov skeleton)
   'ADMINISTERS': 2,
@@ -412,14 +413,16 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     // This places orgs that define a market to the RIGHT of the market node.
     case 'DOMINATES':
       return isOutgoing ? 'market' : 'context';
-    // People / governance relationships should be treated as "context" for placement:
-    // founders/board/executives/staff are not supply-chain nor customers.
+    // People / governance relationships (орган управления) — all as "context" for placement:
+    // founders/board/executives/staff/managers/controllers are not supply-chain nor customers.
     case 'FOUNDED':
     case 'BOARD_MEMBER_OF':
     case 'EXECUTIVE_OF':
     case 'EMPLOYED_BY':
     case 'KEY_PERSON':
     case 'WORKS_FOR':
+    case 'MANAGES':
+    case 'CONTROLS':
       return 'context';
 
     // Hierarchies (skeleton):
@@ -455,14 +458,13 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     // OWNS от центральной ноды (outgoing) идет в нижнюю группу (customers)
     case 'OWNS':
       return isOutgoing ? 'customers' : 'supply-chain';  // incoming (на центральную ноду) -> сверху, outgoing (от центральной ноды) -> снизу
-    case 'MANAGES':
-    case 'CONTROLS':
     case 'PARENT_OF':
-      return isOutgoing ? 'customers' : 'supply-chain';
+      return isOutgoing ? 'customers' : 'supply-chain';  // structural ownership hierarchy
     case 'SUBSIDIARY_OF':
       return isOutgoing ? 'supply-chain' : 'customers';  // inverse of OWNS
+    case 'ASSURES':
     case 'AUDITED_BY':
-      return 'context'; // governance/compliance context
+      return 'context'; // assurance/oversight context
     
     // Production always downstream
     case 'PRODUCES':
@@ -1206,6 +1208,8 @@ export async function layoutLevelsTwoPane<T = any>(
     'SUBSIDIARY_OF',
     'ADMINISTERS',
     'REGULATES',
+    'ASSURES',
+    'AUDITED_BY',
     // Strategic overlay relations
     'CONTROLS_ACCESS',
     'IMPOSES_CONDITION',
@@ -1920,10 +1924,14 @@ export async function layoutLevelsTwoPane<T = any>(
   // Groups children by business role (derived from edge type + node type) instead of entity type.
   // This gives the left group business meaning: "Governance", "Supply Chain", "Market", etc.
 
+  // Must match backend taxonomy.GovernanceEdgeTypes (орган управления)
   const GOVERNANCE_EDGE_SET = new Set([
     'OWNS', 'CONTROLS', 'MANAGES', 'INVESTS_IN', 'PARENT_OF', 'SUBSIDIARY_OF',
     'BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY', 'FOUNDED', 'ADMINISTERS',
-    'AUDITED_BY',
+  ]);
+  // Must match backend taxonomy.AssuranceEdgeTypes (Third Line: audit, certification, regulatory)
+  const ASSURANCE_EDGE_SET = new Set([
+    'ASSURES', 'AUDITED_BY', 'REGULATES',
   ]);
   const SUPPLY_EDGE_SET = new Set([
     'SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES',
@@ -1970,6 +1978,7 @@ export async function layoutLevelsTwoPane<T = any>(
 
     // Fallback to canonical edge families when synthetic parent-edge types are absent.
     if (GOVERNANCE_EDGE_SET.has(et)) return 'corridor_authority';
+    if (ASSURANCE_EDGE_SET.has(et)) return 'corridor_authority';  // assurance = oversight authority
     if (STRATEGIC_EDGE_SET.has(et)) return 'corridor_execution';
     if (et) return 'corridor_propagation';
 
@@ -2031,6 +2040,7 @@ export async function layoutLevelsTwoPane<T = any>(
 
   const SEMANTIC_ROLE_LABEL: Record<string, string> = {
     'governance': 'Governance',
+    'assurance': 'Assurance & Oversight',
     'supply_chain': 'Supply Chain',
     'market': 'Market',
     'strategic_layer': 'Decision & Mechanisms',
@@ -2069,6 +2079,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'market_regulation': 100,
     'products_supply': 200,
     'ownership_governance': 300,
+    'assurance': 310,  // Assurance & Oversight (Third Line)
     // Decision-chain corridor ordering: propagation (leftmost, furthest from seed) → authority (rightmost, closest to seed).
     // This ensures left-group columns flow: Impact ← Mechanism ← Execution ← Authority ← [seed on right backbone]
     'corridor_propagation': 110,
@@ -2122,6 +2133,7 @@ export async function layoutLevelsTwoPane<T = any>(
 
     let role: string;
     if (GOVERNANCE_EDGE_SET.has(bestEdge)) role = 'governance';
+    else if (ASSURANCE_EDGE_SET.has(bestEdge)) role = 'assurance';
     else if (SUPPLY_EDGE_SET.has(bestEdge)) role = 'supply_chain';
     else if (MARKET_EDGE_SET.has(bestEdge)) role = 'market';
     else if (STRATEGIC_EDGE_SET.has(bestEdge)) role = 'strategic_layer';
@@ -2137,6 +2149,7 @@ export async function layoutLevelsTwoPane<T = any>(
       if (role === 'market' || role === 'regulatory' || role === 'geography') return 'market_regulation';
       if (role === 'supply_chain' || role === 'products' || role === 'partnerships') return 'products_supply';
       if (role === 'governance' || role === 'people') return 'ownership_governance';
+      if (role === 'assurance') return 'assurance';
       return 'other';
     }
 
@@ -2333,6 +2346,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'market_regulation': 'Market & Regulation',
     'products_supply': 'Products & Supply',
     'ownership_governance': 'Ownership & Governance',
+    'assurance': 'Assurance & Oversight',
     'other': 'Context',
   };
   const BUSINESS_BLOCK_KEYS = new Set(Object.keys(BUSINESS_BLOCK_TITLES));
@@ -2378,6 +2392,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'CORRIDOR_MECHANISM': { outgoing: 'Mechanism', incoming: 'Mechanism' },
     'CORRIDOR_IMPACT': { outgoing: 'Impact', incoming: 'Impact' },
     'CORRIDOR_MEDIATOR': { outgoing: 'Mediator', incoming: 'Mediator' },
+    'ASSURES': { outgoing: 'Assures', incoming: 'Assured by' },
     'AUDITED_BY': { outgoing: 'Audited by', incoming: 'Audits' },
     'PRODUCES': { outgoing: 'Products:', incoming: 'Produced by' },
     'TRANSFORMS_INTO': { outgoing: 'Transforms into', incoming: 'Transformed from' },
@@ -3122,7 +3137,7 @@ export async function layoutLevelsTwoPane<T = any>(
       // Products, Geography, Regulatory/Strategic: keep compact, no subcategory split.
       const NO_REL_GROUPING_ROLES = new Set([
         'products', 'geography', 'regulatory', 'strategic_layer', 'market', 'context', 'supply',
-        'decision_mechanisms', 'market_regulation', 'products_supply', 'ownership_governance',
+        'decision_mechanisms', 'market_regulation', 'products_supply', 'ownership_governance', 'assurance',
       ]);
       const isCompactGridRole = NO_REL_GROUPING_ROLES.has(typeKey);
       const useCorridorTypeGrouping =

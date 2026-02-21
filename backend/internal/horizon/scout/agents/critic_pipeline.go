@@ -70,6 +70,8 @@ func (p *CriticPipelineRunner) validatorsForModes(modes []string) []CriticValida
 			out = append(out, &SupplyChainValidator{agent: p.agent})
 		case taxonomy.DomainModeGovernance:
 			out = append(out, &GovernanceValidator{agent: p.agent})
+		case taxonomy.DomainModeAssurance:
+			out = append(out, &AssuranceValidator{agent: p.agent})
 		case taxonomy.DomainModeMarket:
 			out = append(out, &MarketValidator{agent: p.agent})
 		case taxonomy.DomainModeStrategic:

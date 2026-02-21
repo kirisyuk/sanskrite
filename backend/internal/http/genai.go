@@ -174,6 +174,74 @@ func (h *GenAIHandler) GenerateDirect(ctx context.Context, req gen_combined.GenA
 	return h.client.GenAIGenerate(ctx, req)
 }
 
+// GenerateStructuredViaTaskExecutor uses task executor (Model Manager + fallbacks) when available.
+// Falls back to GenerateDirect if taskExecutor is nil.
+// minCapScore: minimum capability score for model selection (e.g. 7 for Graph Intent).
+func (h *GenAIHandler) GenerateStructuredViaTaskExecutor(ctx context.Context, req gen_combined.GenAIRequest, minCapScore int) (*gen_combined.GenAIResponse, error) {
+	if h.taskExecutor == nil {
+		return h.GenerateDirect(ctx, req)
+	}
+	fullInput := strings.TrimSpace(req.Prompt)
+	if req.SystemInstruction != "" {
+		fullInput = strings.TrimSpace(req.SystemInstruction) + "\n\nUser request: " + fullInput
+	}
+	inputTokens := len(fullInput) / 4
+	if inputTokens < 1000 {
+		inputTokens = 1000
+	}
+	maxOut := req.MaxOutputTokens
+	if maxOut <= 0 {
+		maxOut = 65536
+	}
+	verifier := ai.NewSimpleJSONVerifier()
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContentGeneration,
+		InputContent: fullInput,
+		AIRequirements: ai.AIRequirements{
+			PreferredModel:           req.Model,
+			MinContextWindow:         inputTokens,
+			MaxOutputSize:            maxOut,
+			MinCapabilityScore:       minCapScore,
+			TextGenerationCapability: true,
+		},
+		Verifier:        verifier,
+		EnableTelemetry: true,
+	}
+	// Plumb tenant/user for usage metrics (same as GenAIGenerate task-executor flow)
+	if auth := GetAuthInfo(ctx); auth != nil {
+		task.TenantID = auth.TenantID
+		task.UserID = auth.UID
+		if req.ProjectID != "" {
+			task.Project = req.ProjectID
+		}
+	}
+	parsed, fullResult, err := h.taskExecutor.ExecuteStructuredTaskFull(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+	jsonBytes, err := json.Marshal(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("marshal task result: %w", err)
+	}
+	inT := fullResult.InputTokens
+	if inT <= 0 {
+		inT = inputTokens
+	}
+	outT := fullResult.OutputTokens
+	if outT <= 0 {
+		outT = len(jsonBytes) / 4
+	}
+	return &gen_combined.GenAIResponse{
+		Content: string(jsonBytes),
+		Model:   fullResult.Model,
+		Usage: g.Usage{
+			PromptTokens: inT,
+			OutputTokens: outT,
+			TotalTokens:  inT + outT,
+		},
+	}, nil
+}
+
 // GenAIGenerate: unified generation endpoint
 func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

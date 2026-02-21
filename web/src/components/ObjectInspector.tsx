@@ -758,6 +758,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       'CONFLICTS_WITH',
       'OPPOSES',
       // OSINT-lite / governance extensions
+      'ASSURES',
       'AUDITED_BY',
       'RELATIVE_OF',
       'RELATED_TO',
@@ -802,6 +803,10 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     }
     if (t === 'REGULATES') {
       if (fromType !== 'ORGANIZATION') return { ok: false, message: 'REGULATES: From должен быть ORGANIZATION' };
+    }
+    if (t === 'ASSURES') {
+      if (fromType !== 'ORGANIZATION') return { ok: false, message: 'ASSURES: From должен быть ORGANIZATION (assurer)' };
+      if (toType !== 'ORGANIZATION' && toType !== 'FACILITY' && toType !== 'PROGRAM') return { ok: false, message: 'ASSURES: To должен быть ORGANIZATION, FACILITY или PROGRAM' };
     }
     if (t === 'AUDITED_BY') {
       if (fromType !== 'ORGANIZATION' && fromType !== 'FACILITY') return { ok: false, message: 'AUDITED_BY: From должен быть ORGANIZATION или FACILITY' };
@@ -1208,6 +1213,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     managesIn: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
     boardOut: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
     boardIn: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
+    assuredBy: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
+    assures: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
     locatedOut: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
     locatedIn: Array<{ id: string; label: string; canonicalPath: string; type: string }>;
     source: {
@@ -1229,7 +1236,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       return;
     }
 
-    const edgeTypes = ['MANAGES', 'BOARD_MEMBER_OF', 'LOCATED_IN'];
+    const edgeTypes = ['MANAGES', 'BOARD_MEMBER_OF', 'ASSURES', 'AUDITED_BY', 'REGULATES', 'LOCATED_IN'];
     const reqKey = `${centerFragmentId}|${edgeTypes.join(',')}`;
     if (directRelationsReqKeyRef.current === reqKey) return;
     directRelationsReqKeyRef.current = reqKey;
@@ -1291,6 +1298,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
         const managesIn: any[] = [];
         const boardOut: any[] = [];
         const boardIn: any[] = [];
+        const assuredBy: any[] = [];
+        const assures: any[] = [];
         const locatedOut: any[] = [];
         const locatedIn: any[] = [];
 
@@ -1313,6 +1322,16 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             if (outgoing) dedupePush(boardOut, other);
             else dedupePush(boardIn, other);
           }
+          if (t === 'ASSURES' || t === 'AUDITED_BY' || t === 'REGULATES') {
+            // assuredBy: who provides assurance to us (ASSURES incoming, AUDITED_BY outgoing, REGULATES incoming)
+            if ((t === 'ASSURES' && !outgoing) || (t === 'AUDITED_BY' && outgoing) || (t === 'REGULATES' && !outgoing)) {
+              dedupePush(assuredBy, other);
+            }
+            // assures: who we provide assurance to (ASSURES outgoing, AUDITED_BY incoming, REGULATES outgoing)
+            if ((t === 'ASSURES' && outgoing) || (t === 'AUDITED_BY' && !outgoing) || (t === 'REGULATES' && outgoing)) {
+              dedupePush(assures, other);
+            }
+          }
           if (t === 'LOCATED_IN') {
             if (outgoing) dedupePush(locatedOut, other);
             else dedupePush(locatedIn, other);
@@ -1324,6 +1343,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
           managesIn,
           boardOut,
           boardIn,
+          assuredBy,
+          assures,
           locatedOut,
           locatedIn,
           source: {
@@ -2089,6 +2110,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               (d?.managesOut?.length || 0) > 0 ||
               (d?.boardIn?.length || 0) > 0 ||
               (d?.boardOut?.length || 0) > 0 ||
+              (d?.assuredBy?.length || 0) > 0 ||
+              (d?.assures?.length || 0) > 0 ||
               (d?.locatedOut?.length || 0) > 0 ||
               (d?.locatedIn?.length || 0) > 0;
 
@@ -2099,7 +2122,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
 
             return (
               <SectionCard
-                title="Governance and location"
+                title="Governance, assurance & location"
                 right={directRelationsLoading ? <Chip>Loading…</Chip> : undefined}
               >
                 {showErr ? (
@@ -2131,6 +2154,14 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                     {/* Governance: show only the direction that makes sense for the node type */}
                     {isOrg && <Section title="Board members" items={d?.boardIn || []} />}
                     {isPerson && <Section title="Board of" items={d?.boardOut || []} />}
+
+                    {/* Assurance & Oversight (Third Line) */}
+                    {((d?.assuredBy?.length || 0) > 0 || (d?.assures?.length || 0) > 0) && (
+                      <>
+                        <Section title="Assured by" items={d?.assuredBy || []} />
+                        <Section title="Assures" items={d?.assures || []} />
+                      </>
+                    )}
 
                     {/* Location */}
                     {!isGeo && <Section title="Located in" items={d?.locatedOut || []} />}

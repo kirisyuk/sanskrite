@@ -2,6 +2,7 @@
 package ai
 
 import (
+	"strings"
 	"time"
 )
 
@@ -326,6 +327,79 @@ type GroundingEvidence struct {
 
 	// HasWebResults — были ли результаты из Google Search.
 	HasWebResults bool `json:"hasWebResults"`
+}
+
+// MergeGroundingEvidence merges add into base, deduplicating fragment IDs, URIs, and web sources.
+// Returns a new merged evidence; base and add are not modified.
+// Used when combining grounding from multiple research strategies.
+func MergeGroundingEvidence(base, add *GroundingEvidence) *GroundingEvidence {
+	if base == nil && add == nil {
+		return nil
+	}
+	if base == nil {
+		cp := *add
+		cp.DatastoreFragmentIDs = append([]string(nil), add.DatastoreFragmentIDs...)
+		cp.DatastoreURIs = append([]string(nil), add.DatastoreURIs...)
+		cp.WebSources = append([]WebCitation(nil), add.WebSources...)
+		return &cp
+	}
+	if add == nil {
+		return base
+	}
+	out := &GroundingEvidence{
+		HasDatastoreResults: base.HasDatastoreResults || add.HasDatastoreResults,
+		HasWebResults:       base.HasWebResults || add.HasWebResults,
+		DatastoreFragmentIDs: appendUniqueStrings(base.DatastoreFragmentIDs, add.DatastoreFragmentIDs...),
+		DatastoreURIs:       appendUniqueStrings(base.DatastoreURIs, add.DatastoreURIs...),
+	}
+	webSeen := make(map[string]struct{})
+	for _, c := range base.WebSources {
+		key := c.URL + "|" + c.Title
+		if key != "|" {
+			webSeen[key] = struct{}{}
+			out.WebSources = append(out.WebSources, c)
+		}
+	}
+	for _, c := range add.WebSources {
+		key := c.URL + "|" + c.Title
+		if key == "|" {
+			continue
+		}
+		if _, ok := webSeen[key]; ok {
+			continue
+		}
+		webSeen[key] = struct{}{}
+		out.WebSources = append(out.WebSources, c)
+	}
+	return out
+}
+
+func appendUniqueStrings(base []string, values ...string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(base)+len(values))
+	for _, v := range base {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
 }
 
 // ImageAnalysisInput структура входных данных для анализа изображения

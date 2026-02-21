@@ -12,6 +12,14 @@ import (
 
 const (
 	policyMetricPrefix = "/metric/policy/macro/"
+	policyInputPrefix  = "/metric/policy/"
+
+	// Canonical fragment.State keys for policy-impact INPUT parameters (resolved from graph).
+	// Same keys are used in InputParamSpecs and when writing/reading fragment.State.
+	MetricPolicyVatRatePct               = policyInputPrefix + "vat_rate_pct"
+	MetricPolicyBaselineGDPBlnKZT        = policyInputPrefix + "baseline_gdp_bln_kzt"
+	MetricPolicyBaselineVatRevenueBlnKZT = policyInputPrefix + "baseline_vat_revenue_bln_kzt"
+	MetricPolicyLocationPath             = policyInputPrefix + "location_path" // Optional: overrides params
 
 	MetricBudgetRevenueDeltaPct        = policyMetricPrefix + "budget_revenue_delta_pct"
 	MetricBudgetRevenueDeltaBlnKZT     = policyMetricPrefix + "budget_revenue_delta_bln_kzt"
@@ -60,6 +68,20 @@ func (e *MacroEconomicalEngine) EngineID() string { return PolicyImpactEngineMac
 func (e *MacroEconomicalEngine) MetricSpecs() []PolicyMetricSpec {
 	out := make([]PolicyMetricSpec, len(macroEconomicalMetricSpecs))
 	copy(out, macroEconomicalMetricSpecs)
+	return out
+}
+
+// InputParamSpecs returns canonical fragment.State keys and their mapping to scenario parameters.
+// Values are resolved from location or target fragments when missing in scenario.Parameters.
+var macroEconomicalInputSpecs = []DomainInputParamSpec{
+	{FragmentKey: MetricPolicyVatRatePct, ParamKeys: []string{"vat_rate_from", "vatRateFrom", "vat_from"}, ResolveFrom: "location"},
+	{FragmentKey: MetricPolicyBaselineGDPBlnKZT, ParamKeys: []string{"baseline_gdp_bln_kzt", "baselineGDPBlnKZT"}, ResolveFrom: "location"},
+	{FragmentKey: MetricPolicyBaselineVatRevenueBlnKZT, ParamKeys: []string{"baseline_vat_revenue_bln_kzt", "baselineVatRevenueBlnKZT", "baseline_tax_revenue_bln_kzt"}, ResolveFrom: "location"},
+}
+
+func (e *MacroEconomicalEngine) InputParamSpecs() []DomainInputParamSpec {
+	out := make([]DomainInputParamSpec, len(macroEconomicalInputSpecs))
+	copy(out, macroEconomicalInputSpecs)
 	return out
 }
 
@@ -130,24 +152,48 @@ func (e *MacroEconomicalEngine) Encode(ctx context.Context, scenario ScenarioInp
 
 func (e *MacroEconomicalEngine) TransferHook(ctx context.Context, signal *horizonmodels.SignalDescriptor, edge *horizonmodels.DependencyEdge, node *horizonmodels.HorizonFragment) (*TransferResult, error) {
 	_ = ctx
-	_ = node
 	if signal == nil || edge == nil {
 		return nil, nil
 	}
 
 	factor := 1.0
 	adjustedAxis := ""
+	debugFactors := map[string]float64{
+		"base_factor": 1.0,
+	}
+	if edgeFactor, ok := policyImpactTransferFactor(edge.Type, signal.Axis); ok {
+		factor *= edgeFactor
+		debugFactors["semantics_edge_axis_factor"] = edgeFactor
+	} else {
+		debugFactors["semantics_edge_axis_factor"] = 0.0
+		return &TransferResult{Skip: true, DebugFactors: debugFactors}, nil
+	}
+	if nodeFactor := policyImpactTransferNodeFactor(node, signal.Axis); nodeFactor > 0 {
+		factor *= nodeFactor
+		debugFactors["semantics_node_factor"] = nodeFactor
+	} else {
+		debugFactors["semantics_node_factor"] = 0.0
+		return &TransferResult{Skip: true, DebugFactors: debugFactors}, nil
+	}
 	if v, ok := qualifierFloat(edge.Qualifiers, "pass_through_estimate", "passThroughEstimate"); ok {
-		factor *= clamp(v, 0.25, 1.35)
+		qf := clamp(v, 0.25, 1.35)
+		factor *= qf
+		debugFactors["qualifier_pass_through"] = qf
 	}
 	if v, ok := qualifierFloat(edge.Qualifiers, "tax_base_coverage", "taxBaseCoverage"); ok {
-		factor *= clamp(v, 0.30, 1.25)
+		qf := clamp(v, 0.30, 1.25)
+		factor *= qf
+		debugFactors["qualifier_tax_base_coverage"] = qf
 	}
 	if v, ok := qualifierFloat(edge.Qualifiers, "elasticity_hint", "demandElasticity"); ok && strings.TrimSpace(signal.Axis) == horizonmodels.AxisPhysicalFlowDemand {
-		factor *= clamp(1.0+math.Abs(v)*0.20, 0.75, 1.55)
+		qf := clamp(1.0+math.Abs(v)*0.20, 0.75, 1.55)
+		factor *= qf
+		debugFactors["qualifier_elasticity_hint"] = qf
 	}
 	if v, ok := qualifierFloat(edge.Qualifiers, "sector_sensitivity", "sectorSensitivity"); ok {
-		factor *= clamp(v, 0.50, 1.60)
+		qf := clamp(v, 0.50, 1.60)
+		factor *= qf
+		debugFactors["qualifier_sector_sensitivity"] = qf
 	}
 
 	channel := strings.ToLower(strings.TrimSpace(qualifierString(edge.Qualifiers, "channel_type", "channelType")))
@@ -157,42 +203,58 @@ func (e *MacroEconomicalEngine) TransferHook(ctx context.Context, signal *horizo
 			adjustedAxis = horizonmodels.AxisInfoUncertainty
 		}
 		factor *= 0.75
+		debugFactors["channel_factor"] = 0.75
 	case "substitution":
 		if strings.TrimSpace(signal.Axis) == horizonmodels.AxisPhysicalFlowDemand {
 			factor *= 1.10
+			debugFactors["channel_factor"] = 1.10
 		}
 	case "behavioral":
 		if strings.TrimSpace(signal.Axis) == horizonmodels.AxisPhysicalFlowDemand {
 			adjustedAxis = horizonmodels.AxisInfoReputation
 		}
 		factor *= 0.95
+		debugFactors["channel_factor"] = 0.95
 	}
 
 	switch edge.Type {
 	case horizonmodels.DependencyTypeAppliesTo, horizonmodels.DependencyTypeImposesCondition, horizonmodels.DependencyTypeControlsAccess:
 		factor *= 1.05
+		debugFactors["edge_type_factor"] = 1.05
 	case horizonmodels.DependencyTypeDependsOn:
 		factor *= 0.95
+		debugFactors["edge_type_factor"] = 0.95
 	case horizonmodels.DependencyTypeRegulates:
 		factor *= 1.03
+		debugFactors["edge_type_factor"] = 1.03
 	}
 
 	adjustedAmplitude := clamp01(signal.Amplitude * factor)
+	debugFactors["final_factor"] = factor
+	debugFactors["adjusted_amplitude"] = adjustedAmplitude
 	if adjustedAmplitude < 0.01 {
-		return &TransferResult{Skip: true}, nil
+		return &TransferResult{Skip: true, DebugFactors: debugFactors}, nil
 	}
 	return &TransferResult{
 		AdjustedAmplitude: adjustedAmplitude,
 		AdjustedAxis:      strings.TrimSpace(adjustedAxis),
+		DebugFactors:      debugFactors,
 	}, nil
 }
 
 func (e *MacroEconomicalEngine) Decode(ctx context.Context, node *horizonmodels.HorizonFragment, accumulated []AccumulatedSignal, scenario ScenarioInput) ([]BusinessMetric, error) {
 	_ = ctx
-	_ = node
 
 	if len(accumulated) == 0 {
 		return []BusinessMetric{}, nil
+	}
+	scopeFactor := 1.0
+	if node != nil {
+		var allowed bool
+		scopeFactor, allowed = policyImpactDecodeScopeFactor(node, scenario)
+		if !allowed || scopeFactor <= 0 {
+			return []BusinessMetric{}, nil
+		}
 	}
 	axes := aggregateMacroAxes(accumulated)
 	transmissionIntensity := clamp(
@@ -200,6 +262,8 @@ func (e *MacroEconomicalEngine) Decode(ctx context.Context, node *horizonmodels.
 		0.35,
 		2.50,
 	)
+	transmissionIntensity *= scopeFactor
+	transmissionIntensity = clamp(transmissionIntensity, 0.20, 2.50)
 
 	vatDelta, hasVatDelta := policyImpactVatDelta(scenario.Parameters)
 	if !hasVatDelta {

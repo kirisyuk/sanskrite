@@ -1,8 +1,35 @@
 package models
 
 import (
+	"strings"
 	"testing"
 )
+
+func TestGraphIntentPlanResponseNormalizeAndValidate_MechanismTaxMapping(t *testing.T) {
+	// Best-effort: LLM may output /mechanism/tax/... for VAT queries; we normalize to regulatory.
+	plan := GraphIntentPlanResponse{
+		Version:                GraphIntentVersionV1,
+		NormalizedEnglishQuery: "Add VAT rate increase mechanism",
+		IntentClass:            GraphIntentClassCreate,
+		Confidence:             0.9,
+		Create: GraphIntentCreateBlock{
+			Nodes: []GraphIntentNodeSpec{
+				{
+					TempID:            "n1",
+					Label:             "VAT Rate Increase",
+					Type:              string(FragmentTypeMechanism),
+					CanonicalPathHint: "/mechanism/tax/vat-increase",
+				},
+			},
+		},
+	}
+	if err := plan.NormalizeAndValidate(); err != nil {
+		t.Fatalf("expected tax->regulatory normalization to succeed: %v", err)
+	}
+	if plan.Create.Nodes[0].CanonicalPathHint != "/mechanism/regulatory/vat-increase" {
+		t.Errorf("expected canonicalPathHint to be normalized to /mechanism/regulatory/vat-increase, got %q", plan.Create.Nodes[0].CanonicalPathHint)
+	}
+}
 
 func TestGraphIntentPlanResponseNormalizeAndValidate_NodeTypeValidation(t *testing.T) {
 	plan := GraphIntentPlanResponse{
@@ -24,6 +51,58 @@ func TestGraphIntentPlanResponseNormalizeAndValidate_NodeTypeValidation(t *testi
 
 	if err := plan.NormalizeAndValidate(); err == nil {
 		t.Fatalf("expected validation error for invalid node type")
+	}
+}
+
+func TestGraphIntentPlanResponseNormalizeAndValidate_RejectsPolicyNamespace(t *testing.T) {
+	plan := GraphIntentPlanResponse{
+		Version:                GraphIntentVersionV1,
+		NormalizedEnglishQuery: "Build VAT reform map",
+		IntentClass:            GraphIntentClassCreate,
+		Confidence:             0.8,
+		Create: GraphIntentCreateBlock{
+			Nodes: []GraphIntentNodeSpec{
+				{
+					TempID:            "n1",
+					Label:             "Tax reform program",
+					Type:              string(FragmentTypeProgram),
+					CanonicalPathHint: "/policy/kz/tax-reform-2025",
+				},
+			},
+		},
+	}
+	err := plan.NormalizeAndValidate()
+	if err == nil {
+		t.Fatalf("expected validation error for /policy namespace")
+	}
+	if !strings.Contains(err.Error(), "invalid namespace") {
+		t.Fatalf("expected invalid namespace error, got: %v", err)
+	}
+}
+
+func TestGraphIntentPlanResponseNormalizeAndValidate_RejectsOrgGovPath(t *testing.T) {
+	plan := GraphIntentPlanResponse{
+		Version:                GraphIntentVersionV1,
+		NormalizedEnglishQuery: "Build governance map",
+		IntentClass:            GraphIntentClassCreate,
+		Confidence:             0.8,
+		Create: GraphIntentCreateBlock{
+			Nodes: []GraphIntentNodeSpec{
+				{
+					TempID:            "n1",
+					Label:             "Ministry of Finance",
+					Type:              "GOVERNMENT_AGENCY",
+					CanonicalPathHint: "/org/gov/minfin-ru",
+				},
+			},
+		},
+	}
+	err := plan.NormalizeAndValidate()
+	if err == nil {
+		t.Fatalf("expected validation error for /org/gov path")
+	}
+	if !strings.Contains(err.Error(), "invalid geo") {
+		t.Fatalf("expected invalid geo error, got: %v", err)
 	}
 }
 
@@ -178,6 +257,23 @@ func TestGraphIntentSchemasDraft07_ContainSocietalAndRelationEnums(t *testing.T)
 	}
 	if !stringInAnySlice(GraphIntentRelationTypeAlignsWith, relationType["enum"]) {
 		t.Fatalf("ALIGNS_WITH is missing from relationType enum")
+	}
+
+	nodeSpec, ok := defs["nodeSpec"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("nodeSpec definition is missing")
+	}
+	nodeSpecProps, ok := nodeSpec["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("nodeSpec properties are missing")
+	}
+	pathHint, ok := nodeSpecProps["canonicalPathHint"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("nodeSpec canonicalPathHint schema is missing")
+	}
+	pattern, ok := pathHint["pattern"].(string)
+	if !ok || strings.TrimSpace(pattern) == "" {
+		t.Fatalf("canonicalPathHint pattern is missing")
 	}
 }
 

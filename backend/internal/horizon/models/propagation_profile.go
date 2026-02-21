@@ -58,13 +58,13 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 		},
 		AxisFinancialSettlement: {
 			AxisKey:        AxisFinancialSettlement,
-			DefaultDamping:  0.80,
+			DefaultDamping:  0.85,
 			DefaultMaxHops:  4,
 			PropagationMode: "both",
 			StrongEdges: []StrongEdgeSpec{
 				{Type: "DEPENDS_ON", Direction: "both", Weight: 1.0},
-				{Type: "OWNS", Direction: "both", Weight: 0.9},
-				{Type: "INVESTS_IN", Direction: "both", Weight: 0.8},
+				{Type: "OWNS", Direction: "both", Weight: 0.85},
+				{Type: "INVESTS_IN", Direction: "both", Weight: 0.75},
 			},
 			Transformations: []TransformationRule{},
 		},
@@ -84,11 +84,13 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			AxisKey:        AxisPhysicalFlowSupply,
 			DefaultDamping:  0.75,
 			DefaultMaxHops:  4,
-			PropagationMode: "downstream",
+			PropagationMode: "both",
 			StrongEdges: []StrongEdgeSpec{
 				{Type: "SUPPLIES_TO", Direction: "source_to_target", Weight: 1.0},
-				{Type: "DEPENDS_ON", Direction: "target_to_source", Weight: 0.9},
+				{Type: "DEPENDS_ON", Direction: "both", Weight: 0.9},
 				{Type: "TRANSFORMS_INTO", Direction: "source_to_target", Weight: 0.8},
+				{Type: "OWNS", Direction: "source_to_target", Weight: 0.7},
+				{Type: "PARTNERS_WITH", Direction: "both", Weight: 0.6},
 			},
 			Transformations: []TransformationRule{},
 		},
@@ -147,6 +149,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			StrongEdges: []StrongEdgeSpec{
 				{Type: "DEPENDS_ON", Direction: "both", Weight: 0.8},
 				{Type: "PARTNERS_WITH", Direction: "both", Weight: 0.7},
+				{Type: "PARTICIPATES_IN", Direction: "target_to_source", Weight: 0.7}, // market → community/org propagation
 			},
 			Transformations: []TransformationRule{},
 		},
@@ -158,6 +161,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			StrongEdges: []StrongEdgeSpec{
 				{Type: "DEPENDS_ON", Direction: "both", Weight: 0.8},
 				{Type: "PARTNERS_WITH", Direction: "both", Weight: 0.7},
+				{Type: "PARTICIPATES_IN", Direction: "target_to_source", Weight: 0.7}, // market → community/org propagation
 			},
 			Transformations: []TransformationRule{},
 		},

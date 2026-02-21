@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
 // LensArtifactsListResponse is the response for listing lens artifacts.
@@ -28,19 +27,6 @@ type LensArtifactStatsResponse struct {
 	ProcessedForPhase2   int        `json:"processedForPhase2"`
 	UnprocessedForPhase2 int        `json:"unprocessedForPhase2"`
 	LastUpdated          *time.Time `json:"lastUpdated,omitempty"`
-}
-
-// Phase2TriggerRequest is the request to trigger Phase 2 Strategic Overlay.
-type Phase2TriggerRequest struct {
-	DomainPaths []string `json:"domainPaths,omitempty"` // Optional: specific domains to process
-	Force       bool     `json:"force,omitempty"`       // Force reprocessing even if already processed
-}
-
-// Phase2TriggerResponse is the response after triggering Phase 2.
-type Phase2TriggerResponse struct {
-	JobIDs  []string `json:"jobIds"`
-	Message string   `json:"message"`
-	Queued  int      `json:"queued"`
 }
 
 // ListLensArtifacts returns the artifacts accumulated for a lens.
@@ -202,161 +188,6 @@ func (h *HorizonHandlers) GetLensArtifactStats(w http.ResponseWriter, r *http.Re
 		ProcessedForPhase2:   processedCount,
 		UnprocessedForPhase2: unprocessedCount,
 		LastUpdated:          lastUpdated,
-	})
-}
-
-// TriggerPhase2StrategicOverlay manually triggers Phase 2 Strategic Overlay for a lens.
-// POST /api/horizon/lenses/{lensId}/trigger-phase2
-func (h *HorizonHandlers) TriggerPhase2StrategicOverlay(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	authInfo, err := requireAuth(r)
-	if err != nil || authInfo == nil {
-		http.Error(w, "Authentication required", http.StatusUnauthorized)
-		return
-	}
-	lensID := extractIDFromPath(r, "/api/horizon/lenses/")
-	lensID = strings.TrimSuffix(lensID, "/trigger-phase2")
-	if strings.TrimSpace(lensID) == "" {
-		http.Error(w, "lensId required in path", http.StatusBadRequest)
-		return
-	}
-
-	var body Phase2TriggerRequest
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body) // Optional body
-	}
-
-	lens, lerr := h.service.Lens().GetLens(r.Context(), lensID)
-	if lerr != nil || lens == nil {
-		http.Error(w, "Lens not found", http.StatusNotFound)
-		return
-	}
-	if lens.TenantID != authInfo.TenantID {
-		http.Error(w, "Access denied", http.StatusForbidden)
-		return
-	}
-
-	// Correlation/session IDs (optional, but improves realtime UX and filtering).
-	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
-	if correlationID == "" {
-		correlationID = strings.TrimSpace(r.Header.Get("X-Correlation-ID"))
-	}
-	sessionID := strings.TrimSpace(r.Header.Get("X-Session-Id"))
-	if sessionID == "" {
-		sessionID = strings.TrimSpace(r.Header.Get("X-Session-ID"))
-	}
-
-	// Find domains in lens scope to trigger Phase 2
-	domainPaths := body.DomainPaths
-	if len(domainPaths) == 0 {
-		// Auto-detect domains from lens scope
-		for _, p := range lens.Scope {
-			p = strings.TrimSpace(p)
-			if strings.HasPrefix(p, "/domain/") {
-				domainPaths = append(domainPaths, p)
-			}
-		}
-	}
-
-	if len(domainPaths) == 0 {
-		http.Error(w, "No domains found in lens scope", http.StatusBadRequest)
-		return
-	}
-
-	// Ensure domains are present in lens scope (idempotent; improves UI visibility).
-	{
-		seen := map[string]struct{}{}
-		for _, p := range lens.Scope {
-			p = strings.TrimSpace(p)
-			if p != "" {
-				seen[p] = struct{}{}
-			}
-		}
-		changed := false
-		for _, p := range domainPaths {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			if _, ok := seen[p]; ok {
-				continue
-			}
-			seen[p] = struct{}{}
-			lens.Scope = append(lens.Scope, p)
-			changed = true
-		}
-		if changed {
-			_ = h.service.Lens().UpdateLens(r.Context(), lens) // best-effort
-		}
-	}
-
-	// Create Phase 2 jobs for each domain
-	jobIDs := make([]string, 0, len(domainPaths))
-	scoutJobsRepo := h.service.ScoutingJobs()
-	if scoutJobsRepo == nil {
-		http.Error(w, "Scouting jobs not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	for _, domainPath := range domainPaths {
-		domainPath = strings.TrimSpace(domainPath)
-		if domainPath == "" || !strings.HasPrefix(domainPath, "/domain/") {
-			continue
-		}
-
-		now := time.Now().UTC()
-		state := map[string]interface{}{
-			"targetCanonicalPath": domainPath,
-			"lensId":              lens.ID,
-			"currentState":        string(models.ScoutingJobStatePending),
-			"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
-			"recursionDepth":      0.0,
-			"maxRecursionDepth":   0.0,
-			"domainOverlayMode":   true,
-			"phase2Overlay":       true,
-			"trigger":             "api.trigger_phase2",
-			"force":               body.Force,
-		}
-		if correlationID != "" {
-			state["correlationId"] = correlationID
-		}
-		if sessionID != "" {
-			state["sessionId"] = sessionID
-		}
-
-		scoutingJob := &models.ScoutingJob{
-			AgentJob: agentmodels.AgentJob{
-				TenantID:  lens.TenantID,
-				ProjectID: lens.ProjectID,
-				Status:    agentmodels.AgentJobStatusPending,
-				AgentID:   "scout",
-				CreatedAt: now,
-				UpdatedAt: now,
-				State:     state,
-			},
-			LensID:              lens.ID,
-			TargetCanonicalPath: domainPath,
-			ScoutingStrategy:    string(models.ScoutingStrategySnapshot),
-			BillingContext: models.BillingContext{
-				ChargeModel: string(models.ChargeModelBounty),
-				ProjectID:   lens.ProjectID,
-			},
-			CurrentState: models.ScoutingJobStatePending,
-		}
-
-		if id, cerr := scoutJobsRepo.Create(r.Context(), scoutingJob); cerr == nil && strings.TrimSpace(id) != "" {
-			jobIDs = append(jobIDs, strings.TrimSpace(id))
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(Phase2TriggerResponse{
-		JobIDs:  jobIDs,
-		Message: "Phase 2 Strategic Overlay jobs queued",
-		Queued:  len(jobIDs),
 	})
 }
 

@@ -2447,7 +2447,18 @@ func main() {
 
 		// Special case: MARKET hierarchy is not dedup.
 		// If cluster paths form parent/child prefixes, keep nodes separate and enforce HAS_MARKET_SEGMENT edges.
-		if hierarchyPairs, hasHierarchy := collectMarketHierarchyPairs(clusterFragments); hasHierarchy {
+		var hierarchyPairs [][2]string
+		var hasHierarchy bool
+		if parentPath, childPaths, directOk := detectDirectMarketHierarchy(clusterFragments); directOk {
+			hierarchyPairs = make([][2]string, 0, len(childPaths))
+			for c := range childPaths {
+				hierarchyPairs = append(hierarchyPairs, [2]string{parentPath, c})
+			}
+			hasHierarchy = true
+		} else {
+			hierarchyPairs, hasHierarchy = collectMarketHierarchyPairs(clusterFragments)
+		}
+		if hasHierarchy {
 			byPath := make(map[string][]*models.HorizonFragment)
 			for _, f := range clusterFragments {
 				if f == nil || strings.TrimSpace(f.ID) == "" {

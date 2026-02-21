@@ -29,11 +29,18 @@ func EdgeAllowlistByDomainMode(mode string) []models.DependencyType {
 			models.DependencyTypeOwns,
 			models.DependencyTypeSubsidiaryOf,
 			models.DependencyTypeControls,
+			models.DependencyTypeManages,
 			models.DependencyTypeInvestsIn,
 			models.DependencyTypeBoardMemberOf,
 			models.DependencyTypeEmployedBy,
 			models.DependencyTypeFounded,
 			models.DependencyTypeAdministers,
+		}
+	case taxonomy.DomainModeAssurance:
+		return []models.DependencyType{
+			models.DependencyTypeAssures,
+			models.DependencyTypeAuditedBy,
+			models.DependencyTypeRegulates,
 		}
 	case taxonomy.DomainModeMarket:
 		return []models.DependencyType{
