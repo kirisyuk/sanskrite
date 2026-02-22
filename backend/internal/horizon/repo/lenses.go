@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,14 +17,24 @@ var ErrLensNotFound = errors.New("lens not found")
 
 // LensesRepository репозиторий для работы с Lens
 type LensesRepository struct {
+	db  *firestore.Client
 	col *firestore.CollectionRef
 }
 
 // NewLensesRepository создает новый репозиторий
 func NewLensesRepository(db *firestore.Client) *LensesRepository {
 	return &LensesRepository{
+		db:  db,
 		col: db.Collection("horizon_lenses"),
 	}
+}
+
+// AutoScopeAddResult describes the outcome of automatic scope expansion.
+type AutoScopeAddResult struct {
+	Added                 bool
+	AlreadyInScope        bool
+	LimitReached          bool
+	DeferredScopeAddCount int
 }
 
 // Create создает новый Lens
@@ -226,6 +237,68 @@ func (r *LensesRepository) AddScopeCanonicalPaths(ctx context.Context, lensID st
 	return err
 }
 
+// AddScopeCanonicalPathAutoLimited appends one canonical path to lens.scope when below maxCount.
+// The check + add + deferredScopeAddCount increment are performed in one transaction.
+func (r *LensesRepository) AddScopeCanonicalPathAutoLimited(
+	ctx context.Context,
+	lensID, canonicalPath string,
+	maxCount int,
+) (AutoScopeAddResult, error) {
+	out := AutoScopeAddResult{}
+	if lensID == "" || strings.TrimSpace(canonicalPath) == "" || maxCount <= 0 {
+		return out, ErrInvalidDocument
+	}
+	if r == nil || r.db == nil {
+		return out, ErrInvalidDocument
+	}
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	docRef := r.col.Doc(lensID)
+
+	err := r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		snap, err := tx.Get(docRef)
+		if err != nil {
+			return err
+		}
+		if !snap.Exists() {
+			return ErrLensNotFound
+		}
+
+		var lens models.Lens
+		if err := snap.DataTo(&lens); err != nil {
+			return err
+		}
+
+		currentCount := deferredScopeAddCount(lens.ViewConfig)
+		out.DeferredScopeAddCount = currentCount
+		for _, s := range lens.Scope {
+			if strings.TrimSpace(s) == canonicalPath {
+				out.AlreadyInScope = true
+				return nil
+			}
+		}
+		if currentCount >= maxCount {
+			out.LimitReached = true
+			return nil
+		}
+
+		if lens.ViewConfig == nil {
+			lens.ViewConfig = map[string]interface{}{}
+		}
+		lens.ViewConfig["deferredScopeAddCount"] = currentCount + 1
+		if err := tx.Set(docRef, map[string]interface{}{
+			"scope":      firestore.ArrayUnion(canonicalPath),
+			"viewConfig": lens.ViewConfig,
+			"updatedAt":  time.Now().UTC(),
+		}, firestore.MergeAll); err != nil {
+			return err
+		}
+		out.Added = true
+		out.DeferredScopeAddCount = currentCount + 1
+		return nil
+	})
+	return out, err
+}
+
 // IncrementDeferredScopeAddCount increments viewConfig.deferredScopeAddCount atomically.
 // This avoids full document rewrites when Scout appends scope entries concurrently.
 func (r *LensesRepository) IncrementDeferredScopeAddCount(ctx context.Context, lensID string, delta int64) error {
@@ -240,6 +313,29 @@ func (r *LensesRepository) IncrementDeferredScopeAddCount(ctx context.Context, l
 		{Path: "updatedAt", Value: time.Now().UTC()},
 	})
 	return err
+}
+
+func deferredScopeAddCount(viewConfig map[string]interface{}) int {
+	if viewConfig == nil {
+		return 0
+	}
+	raw, ok := viewConfig["deferredScopeAddCount"]
+	if !ok {
+		return 0
+	}
+	switch n := raw.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 // AddExposurePathKey appends a canonical exposure key string to the lens document using array union.

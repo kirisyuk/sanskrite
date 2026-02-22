@@ -62,6 +62,11 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
   const scope: string[] = Array.isArray(lens?.scope) ? lens.scope : [];
   const scopeFragments: Record<string, string> = (lens?.scopeFragments && typeof lens.scopeFragments === 'object') ? lens.scopeFragments : {};
   const resolvedQueries: Record<string, string[]> = (lens?.resolvedQueries && typeof lens.resolvedQueries === 'object') ? lens.resolvedQueries : {};
+  const intents = Array.isArray(lens?.intents) ? lens.intents : [];
+  const domains = Array.isArray(lens?.viewConfig?.domains) ? lens.viewConfig.domains : [];
+  const domainModes = Array.isArray(lens?.domainModes) ? lens.domainModes : [];
+  const domainModesOnly = domainModes.length > 0 && domains.length === 0;
+  const totalObjects = scope.length + intents.length + domains.length + (domainModesOnly ? domainModes.length : 0);
 
   type ScopeResolved = { name?: string; type?: string; fragmentId?: string; status: 'resolved' | 'error' };
   const [scopeResolved, setScopeResolved] = React.useState<Record<string, ScopeResolved>>({});
@@ -424,8 +429,8 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
 
         <div style={{ gridArea: 'scope', minHeight: 0 }}>
           <Card
-            title={`Scope (${scope.length || 0})`}
-            subtitle='Add scope by canonical path ("/…"), query address ("/query/…"), or start typing a name to search.'
+            title={`Objects (${totalObjects})`}
+            subtitle='Scope anchors, intents, domain contracts. Add scope by path ("/…") or query ("/query/…").'
           >
             {/* Edit controls (not scrollable) */}
             <div
@@ -589,68 +594,102 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
             </div>
           )}
 
-          {scope.length > 0 ? (
+          {totalObjects > 0 ? (
             <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, overflow: 'hidden', maxHeight: 320 }}>
               <div style={{ maxHeight: 320, overflowY: 'auto' }}>
-              {scope.map((entry: string, index: number) => {
-                const path = (entry || '').trim();
-                const isQuery = path.startsWith('/query/');
-                const resolved = scopeResolved[path];
-                const resolvedList = isQuery ? (resolvedQueries?.[path] || []) : [];
-                const showDivider = index !== scope.length - 1;
-                return (
-                  <div key={`${path}-${index}`} style={{ padding: '10px 12px', background: 'transparent', borderBottom: showDivider ? '1px solid var(--border-subtle)' : 'none' }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-                      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                          {isQuery ? (
-                            <Pill text="Query" />
-                          ) : resolved?.type ? (
-                            <Pill text={String(resolved.type)} />
-                          ) : null}
-                          <div style={{ minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {!isQuery
-                              ? (resolved?.name ? resolved.name : humanizeCanonicalPath(path) || '—')
-                              : '—'}
-                          </div>
-                          {isQuery && resolvedList.length > 0 && (
-                            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', flexShrink: 0 }}>
-                              {resolvedList.length} resolved
-                            </div>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', ...mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={path}>
-                          {path}
+                {intents.map((entry: { id?: string; question?: string; status?: string }, idx: number) => {
+                  const q = (entry?.question || '').trim();
+                  const status = (entry?.status || '').trim();
+                  return (
+                    <div key={`intent-${entry?.id || idx}`} style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                        <Pill text="INTENT" tone={status === 'answered' ? 'success' : 'neutral'} />
+                        <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {q || '—'}
                         </div>
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={() => void handleRemoveScope(path)}
-                        disabled={!onUpdateScope || savingScope}
-                        style={{
-                          padding: '6px 10px',
-                          borderRadius: 10,
-                          border: '1px solid var(--border-subtle)',
-                          background: 'transparent',
-                          color: 'var(--text-secondary-strong)',
-                          fontSize: 12,
-                          fontWeight: 700,
-                          cursor: !onUpdateScope || savingScope ? 'not-allowed' : 'pointer',
-                          opacity: !onUpdateScope || savingScope ? 0.5 : 1,
-                        }}
-                        title="Remove"
-                      >
-                        Remove
-                      </button>
+                    </div>
+                  );
+                })}
+                {domains.map((d: { canonicalPath?: string; contractType?: string; title?: string; description?: string }, idx: number) => {
+                  const path = (d?.canonicalPath || '').trim();
+                  const ct = (d?.contractType || '').trim();
+                  const title = (d?.title || d?.description || '').trim();
+                  return (
+                    <div key={`domain-${path || idx}`} style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                        <Pill text={ct || 'DOMAIN'} />
+                        <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {title || humanizeCanonicalPath(path) || '—'}
+                        </div>
+                      </div>
+                      {path ? (
+                        <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary-strong)', ...mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={path}>
+                          {path}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+                {domainModesOnly && domainModes.map((mode: string, idx: number) => (
+                  <div key={`domainMode-${idx}`} style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      <Pill text="DOMAIN_MODE" />
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)' }}>
+                        {mode}
+                      </div>
                     </div>
                   </div>
-                );
-              })}
+                ))}
+                {scope.map((entry: string, index: number) => {
+                  const path = (entry || '').trim();
+                  const isQuery = path.startsWith('/query/');
+                  const resolved = scopeResolved[path];
+                  const resolvedList = isQuery ? (resolvedQueries?.[path] || []) : [];
+                  return (
+                    <div key={`scope-${path}-${index}`} style={{ padding: '10px 12px', background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                            {isQuery ? <Pill text="Query" /> : resolved?.type ? <Pill text={String(resolved.type)} /> : null}
+                            <div style={{ minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {!isQuery ? (resolved?.name ? resolved.name : humanizeCanonicalPath(path) || '—') : '—'}
+                            </div>
+                            {isQuery && resolvedList.length > 0 && (
+                              <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', flexShrink: 0 }}>{resolvedList.length} resolved</div>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', ...mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={path}>
+                            {path}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleRemoveScope(path)}
+                          disabled={!onUpdateScope || savingScope}
+                          style={{
+                            padding: '6px 10px',
+                            borderRadius: 10,
+                            border: '1px solid var(--border-subtle)',
+                            background: 'transparent',
+                            color: 'var(--text-secondary-strong)',
+                            fontSize: 12,
+                            fontWeight: 700,
+                            cursor: !onUpdateScope || savingScope ? 'not-allowed' : 'pointer',
+                            opacity: !onUpdateScope || savingScope ? 0.5 : 1,
+                          }}
+                          title="Remove"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ) : (
-            <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>No scope defined</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>No objects defined</div>
           )}
         </Card>
         </div>

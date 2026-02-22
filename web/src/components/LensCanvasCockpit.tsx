@@ -4847,17 +4847,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const cached = absolutePosCache.get(id);
         if (cached) return cached;
       }
-      const ax = Number((node as any)?.positionAbsolute?.x);
-      const ay = Number((node as any)?.positionAbsolute?.y);
-      if (Number.isFinite(ax) && Number.isFinite(ay)) {
-        const out = { x: ax, y: ay };
-        if (id) absolutePosCache.set(id, out);
-        return out;
-      }
+      // IMPORTANT:
+      // In relayout flows, `positionAbsolute` can be stale (ReactFlow-internal snapshot from a previous pass).
+      // For handle routing we must prioritize the fresh layout coordinates (`position` + parent chain).
+      // Otherwise X-order can flip logically and produce backward hooks.
       let x = Number((node as any)?.position?.x);
       let y = Number((node as any)?.position?.y);
+      const hasLocalPos = Number.isFinite(x) && Number.isFinite(y);
       if (!Number.isFinite(x)) x = 0;
       if (!Number.isFinite(y)) y = 0;
+      if (!hasLocalPos) {
+        const ax = Number((node as any)?.positionAbsolute?.x);
+        const ay = Number((node as any)?.positionAbsolute?.y);
+        if (Number.isFinite(ax) && Number.isFinite(ay)) {
+          const out = { x: ax, y: ay };
+          if (id) absolutePosCache.set(id, out);
+          return out;
+        }
+      }
       if (depth < 12) {
         const pid = String((node as any)?.parentId || (node as any)?.parentNode || '').trim();
         if (pid) {
@@ -6096,6 +6103,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Создаём маппинг fragmentId -> nodeId для рёбер
     const fragmentToNodeId = new Map<string, string>();
+    const canonicalToNodeId = new Map<string, string>();
     const skippedEdges: Array<{ s: string; t: string }> = [];
 
     // Обрабатываем ноды
@@ -6131,13 +6139,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     nodeItems.forEach(item => {
         const fragmentId = item.fragmentId ? norm(item.fragmentId) : '';
         const nodeId = fragmentId || norm(item.id);
+        const canonicalPath = norm(item.canonicalPath || '');
         if (!nodeId) {
           console.warn('[Cockpit] Node item missing both fragmentId and id:', item);
           return;
         }
-        
-        if (fragmentId) {
-          fragmentToNodeId.set(fragmentId, nodeId);
+
+        // Dedup by fragmentId first.
+        const existingByFragment = fragmentId ? fragmentToNodeId.get(fragmentId) : undefined;
+        if (existingByFragment) {
+          if (canonicalPath && !canonicalToNodeId.has(canonicalPath)) canonicalToNodeId.set(canonicalPath, existingByFragment);
+          return;
+        }
+
+        // Defensive dedup by canonicalPath: if backend emitted another fragment id for the same entity,
+        // alias that fragment id to the already materialized node id.
+        const existingByCanonical = canonicalPath ? canonicalToNodeId.get(canonicalPath) : undefined;
+        if (existingByCanonical) {
+          if (fragmentId) fragmentToNodeId.set(fragmentId, existingByCanonical);
+          return;
         }
 
         // Ensure position is valid
@@ -6166,6 +6186,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             critical: item.critical,
           },
         });
+
+        if (fragmentId) fragmentToNodeId.set(fragmentId, nodeId);
+        if (canonicalPath) canonicalToNodeId.set(canonicalPath, nodeId);
       });
 
     // Обрабатываем рёбра
@@ -6187,8 +6210,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const dstPath = (item as any)?.targetCanonicalPath;
         if (isSphereType(srcType) || isSphereType(dstType)) return;
         if (isSphereCanonicalPath(srcPath) || isSphereCanonicalPath(dstPath)) return;
-        const sourceId = sFrag ? fragmentToNodeId.get(sFrag) : null;
-        const targetId = tFrag ? fragmentToNodeId.get(tFrag) : null;
+        const sourceId =
+          (sFrag ? fragmentToNodeId.get(sFrag) : null) ||
+          (srcPath ? (canonicalToNodeId.get(norm(srcPath)) || null) : null);
+        const targetId =
+          (tFrag ? fragmentToNodeId.get(tFrag) : null) ||
+          (dstPath ? (canonicalToNodeId.get(norm(dstPath)) || null) : null);
 
         if (sourceId && targetId) {
           const baseStyle = getEdgeStyle(item.edgeType, item.criticality);
@@ -7660,14 +7687,62 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const fragmentToNodeIdMap = new Map<string, string>();
       const nodeById = new Map<string, Node<HorizonNodeData>>();
       const nodeByFragmentId = new Map<string, Node<HorizonNodeData>>();
+      const nodeByCanonicalPath = new Map<string, Node<HorizonNodeData>>();
 
       for (const n of currentNodes) {
+        if ((n.data as any)?.isGroup) continue;
         const fid = n.data?.fragmentId ? norm(n.data.fragmentId) : '';
         const nid = norm(n.id);
+        const cp = norm((n.data as any)?.canonicalPath || '');
         if (nid) nodeById.set(nid, n);
         if (fid) nodeByFragmentId.set(fid, n);
         if (fid) fragmentToNodeIdMap.set(fid, nid);
+        if (cp && !nodeByCanonicalPath.has(cp)) nodeByCanonicalPath.set(cp, n);
       }
+
+      // Canonical-path aliases:
+      // if API returns another fragment id for an already-rendered entity (same canonicalPath),
+      // keep a single node and route all edges to it.
+      const canonicalOwnerByPath = new Map<string, string>(); // canonicalPath -> owner fragmentId
+      for (const [cp, n] of nodeByCanonicalPath.entries()) {
+        const owner = norm((n.data as any)?.fragmentId || n.id);
+        if (cp && owner) canonicalOwnerByPath.set(cp, owner);
+      }
+      const canonicalAliasByFragmentId = new Map<string, string>(); // alias fragmentId -> owner fragmentId
+      const dedupedRelatedFragments: any[] = [];
+      for (const f of relatedFragments) {
+        const fid = norm(f?.id || '');
+        const cp = norm(f?.canonicalPath || '');
+        if (!fid) continue;
+
+        const ownerByCp = cp ? canonicalOwnerByPath.get(cp) : undefined;
+        if (ownerByCp && ownerByCp !== fid) {
+          canonicalAliasByFragmentId.set(fid, ownerByCp);
+          const ownerNode = nodeByFragmentId.get(ownerByCp) || nodeById.get(ownerByCp);
+          const ownerNodeId = norm(ownerNode?.id || ownerByCp);
+          if (ownerNodeId) {
+            fragmentToNodeIdMap.set(fid, ownerNodeId);
+            if (ownerNode) nodeByFragmentId.set(fid, ownerNode);
+          }
+          continue;
+        }
+
+        dedupedRelatedFragments.push(f);
+        if (cp && !canonicalOwnerByPath.has(cp)) canonicalOwnerByPath.set(cp, fid);
+      }
+      relatedFragments = dedupedRelatedFragments;
+
+      const resolveNeighborFragmentId = (idRaw: string): string => {
+        const id = norm(idRaw);
+        if (!id) return '';
+        let cur = id;
+        const seen = new Set<string>();
+        while (canonicalAliasByFragmentId.has(cur) && !seen.has(cur)) {
+          seen.add(cur);
+          cur = norm(canonicalAliasByFragmentId.get(cur));
+        }
+        return cur || id;
+      };
 
       // Separate new fragments from existing ones
       const newFragmentsUnsorted = relatedFragments.filter((f) => {
@@ -7699,6 +7774,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           
           existingRelatedIds.add(fid);
         }
+      }
+      for (const [aliasFid, ownerFidRaw] of canonicalAliasByFragmentId.entries()) {
+        void aliasFid;
+        const ownerFid = resolveNeighborFragmentId(ownerFidRaw);
+        if (!ownerFid || ownerFid === fragmentId) continue;
+        if (!existingNodeIds.has(ownerFid)) continue;
+        if (ownerFid === rootNodeIdRef.current) continue;
+        if (expandedNodesRef.current.has(ownerFid)) continue;
+        existingRelatedIds.add(ownerFid);
       }
 
       // === MARKET EXPANSION DEBUG (phase 2) ===
@@ -7892,7 +7976,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         directionRaw: 'incoming' | 'outgoing',
         sourcePriority: number,
       ) => {
-        const neighborId = norm(neighborIdRaw);
+        const neighborId = resolveNeighborFragmentId(neighborIdRaw);
         if (!neighborId || neighborId === fragmentId) return;
         const edgeType = normalizeEdgeTypeKeyLocal(edgeTypeRaw || '');
         if (!edgeType) return;
@@ -7967,9 +8051,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
 
       const candidateNeighborIds = new Set<string>([
-        ...Array.from(relatedFragmentIds).map((id) => norm(id)).filter(Boolean),
-        ...Array.from(existingRelatedIds).map((id) => norm(id)).filter(Boolean),
-        ...Array.from(candidatesByNeighbor.keys()).map((id) => norm(id)).filter(Boolean),
+        ...Array.from(relatedFragmentIds).map((id) => resolveNeighborFragmentId(id)).filter(Boolean),
+        ...Array.from(existingRelatedIds).map((id) => resolveNeighborFragmentId(id)).filter(Boolean),
+        ...Array.from(candidatesByNeighbor.keys()).map((id) => resolveNeighborFragmentId(id)).filter(Boolean),
       ]);
       for (const neighborId of candidateNeighborIds) {
         const best = bestCandidateForNeighbor(neighborId);
@@ -7980,7 +8064,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       if (isLevelsLayout && levelsExpandMode === 'decision-chain' && corridorLaneById.size > 0) {
         for (const rid of relatedFragmentIds) {
-          const fid = norm(rid);
+          const fid = resolveNeighborFragmentId(rid);
           if (!fid) continue;
           const lane = String(corridorLaneById.get(fid) || '').trim().toLowerCase();
           const fallback = laneToEdgeMeta(lane);
@@ -8094,6 +8178,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         if (nid) nodeById.set(nid, n);
         if (fid) nodeByFragmentId.set(fid, n);
         if (fid) fragmentToNodeIdMap.set(fid, nid || fid);
+      }
+      for (const [aliasFid, ownerFidRaw] of canonicalAliasByFragmentId.entries()) {
+        const ownerFid = resolveNeighborFragmentId(ownerFidRaw);
+        const ownerNodeId = ownerFid ? fragmentToNodeIdMap.get(ownerFid) : '';
+        if (ownerNodeId) fragmentToNodeIdMap.set(aliasFid, ownerNodeId);
       }
 
       // Создаём новые рёбра

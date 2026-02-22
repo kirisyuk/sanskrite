@@ -129,33 +129,68 @@ func addDeferredScopePathIfUnderLimit(ctx context.Context, lensesRepo *repo.Lens
 	if lensesRepo == nil || lens == nil || lensID == "" || strings.TrimSpace(canonicalPath) == "" || maxCount <= 0 {
 		return
 	}
-	currentCount := 0
-	if lens.ViewConfig != nil {
-		if v, ok := lens.ViewConfig["deferredScopeAddCount"]; ok {
-			switch n := v.(type) {
-			case float64:
-				currentCount = int(n)
-			case int:
-				currentCount = n
-			}
-		}
-	}
-	if currentCount >= maxCount {
-		return
-	}
-	for _, s := range lens.Scope {
-		if strings.TrimSpace(s) == canonicalPath {
-			return
-		}
-	}
-	if err := lensesRepo.AddScopeCanonicalPaths(ctx, lensID, []string{canonicalPath}); err != nil {
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	res, err := lensesRepo.AddScopeCanonicalPathAutoLimited(ctx, lensID, canonicalPath, maxCount)
+	if err != nil {
 		return
 	}
 	if lens.ViewConfig == nil {
 		lens.ViewConfig = map[string]interface{}{}
 	}
-	lens.ViewConfig["deferredScopeAddCount"] = currentCount + 1
-	lens.Scope = append(lens.Scope, canonicalPath)
+	lens.ViewConfig["deferredScopeAddCount"] = res.DeferredScopeAddCount
+	if (res.Added || res.AlreadyInScope) && !scopeContainsPath(lens.Scope, canonicalPath) {
+		lens.Scope = append(lens.Scope, canonicalPath)
+	}
+}
+
+func scopeContainsPath(scope []string, canonicalPath string) bool {
+	for _, s := range scope {
+		if strings.TrimSpace(s) == canonicalPath {
+			return true
+		}
+	}
+	return false
+}
+
+func preserveDeferredScopeAddCount(lens, oldLens *models.Lens) {
+	if lens == nil || oldLens == nil {
+		return
+	}
+	oldCount, oldOK := deferredScopeAddCountFromViewConfig(oldLens.ViewConfig)
+	if !oldOK {
+		return
+	}
+	newCount, newOK := deferredScopeAddCountFromViewConfig(lens.ViewConfig)
+	if newOK && newCount >= oldCount {
+		return
+	}
+	if lens.ViewConfig == nil {
+		lens.ViewConfig = map[string]interface{}{}
+	}
+	lens.ViewConfig["deferredScopeAddCount"] = oldCount
+}
+
+func deferredScopeAddCountFromViewConfig(viewConfig map[string]interface{}) (int, bool) {
+	if viewConfig == nil {
+		return 0, false
+	}
+	raw, ok := viewConfig["deferredScopeAddCount"]
+	if !ok {
+		return 0, false
+	}
+	switch n := raw.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 func inferFragmentTypeFromPath(path string) models.FragmentType {
@@ -1141,7 +1176,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		}
 		// Cache hit for deferred path: add to scope so node shows (max 5 per lens).
 		if isCacheHit && fragment != nil {
-			addDeferredScopePathIfUnderLimit(ctx, s.lensesRepo, lens, lensID, strings.TrimSpace(canonicalPath), 5)
+			addDeferredScopePathIfUnderLimit(ctx, s.lensesRepo, lens, lensID, strings.TrimSpace(canonicalPath), models.MaxAutoScopeAddsPerLens)
 			cacheHits++
 			lens.ScopeFragments[canonicalPath] = fragment.ID
 			if ap := strings.TrimSpace(inputPath); ap != "" && ap != strings.TrimSpace(canonicalPath) {
@@ -1387,6 +1422,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	if err != nil {
 		return fmt.Errorf("failed to get old lens: %w", err)
 	}
+	preserveDeferredScopeAddCount(lens, oldLens)
 
 	// Инициализируем кэш если отсутствует (нужно для канонизации).
 	if lens.ScopeFragments == nil {

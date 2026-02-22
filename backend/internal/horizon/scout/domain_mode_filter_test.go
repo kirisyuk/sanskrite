@@ -41,12 +41,12 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChain(t *testing.T) {
 
 func TestSupplyChainsEnabled(t *testing.T) {
 	if !supplyChainsEnabled([]string{taxonomy.DomainModeSupplyChain}, nil) {
-		t.Fatalf("supply chains must be enabled for supply_chain domain mode")
+		t.Fatalf("supply chains must be enabled in core mode")
 	}
 	if !supplyChainsEnabled([]string{taxonomy.DomainModeGovernance}, []string{taxonomy.SpecialtySupplyChain}) {
-		t.Fatalf("supply chains must be enabled when supply_chain specialty is requested")
+		t.Fatalf("supply chains must remain enabled with specialty/domain overrides")
 	}
-	if supplyChainsEnabled([]string{taxonomy.DomainModeGovernance}, nil) {
-		t.Fatalf("supply chains must be disabled outside supply_chain mode/specialty")
+	if !supplyChainsEnabled([]string{taxonomy.DomainModeGovernance}, nil) {
+		t.Fatalf("supply chains must be enabled even outside explicit supply_chain mode/specialty")
 	}
 }

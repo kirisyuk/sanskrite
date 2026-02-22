@@ -508,48 +508,14 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 		domainBlock += "If the user asks about a market, use /market/... as a TARGET (anchor), NOT as a DOMAIN.\n"
 		domainBlock += "Do NOT output placeholder names like NA/N-A/Unknown. Use fewer entities instead.\n\n"
 	}
-	specBlock := ""
-	if len(specialties) > 0 {
-		specBlock = "REQUESTED SPECIALTIES (apply only those listed):\n"
-		specBlock += fmt.Sprintf("- requestedSpecialties: %s\n\n", strings.Join(specialties, ", "))
-		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement) {
-			specBlock += "MODULE: management\n"
-			specBlock += "- Prioritize grounded evidence for executive leadership: CEO, CFO, COO, CTO/CIO, CMO, CHRO, President/Managing Director, Chair/Chairman, founders.\n"
-			specBlock += "- Output PERSON targets with /person/{slug} paths.\n"
-			specBlock += "- Use relation types MANAGES / EMPLOYED_BY / BOARD_MEMBER_OF / FOUNDED as appropriate.\n"
-			specBlock += "- NOTE: Since relation objects are anchored on the current fragment, PERSON relations may be normalized by the backend; still output the correct semantic relationType and strong evidence in 'reason'.\n\n"
-		}
-		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyProductsAndServices) {
-			specBlock += "MODULE: products_and_services\n"
-			specBlock += "- For organizations/facilities: prioritize outputs (PRODUCES) and inputs (CONSUMES) as PRODUCT targets.\n"
-			specBlock += "- For product fragments: prioritize upstream/downstream product transformations (TRANSFORMS_INTO between products).\n"
-			specBlock += "- Be strict about canonical product naming and /product/... paths; if classification is uncertain, use fallback /product/{slug} rather than inventing taxonomy.\n\n"
-		}
-		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
-			specBlock += "MODULE: supply_chain (build and extend supply chains)\n"
-			specBlock += "- Your PRIMARY goal is to discover and return COMPLETE SUPPLY CHAINS.\n"
-			specBlock += "- A supply chain is an ordered sequence: supplier → product → processor → product → customer → ...\n"
-			specBlock += "- Search for:\n"
-			specBlock += "  - UPSTREAM: who supplies raw materials/components to this entity?\n"
-			specBlock += "  - DOWNSTREAM: who receives products/services from this entity?\n"
-			specBlock += "  - PRODUCTS: what materials/products flow through the chain?\n"
-			specBlock += "- Return chains in the 'supplyChains' field (see output schema).\n"
-			specBlock += "- Each node: canonicalPath, name, type (ORGANIZATION/FACILITY/PRODUCT), optional role.\n"
-			specBlock += "- Nodes alternate: actor → product → actor → product → ...\n"
-			specBlock += "- Multiple chains expected for different product lines.\n"
-			specBlock += "- Also include individual 'relations' for non-chain findings.\n\n"
-		}
-		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) {
-			specBlock += "MODULE: equity (ownership & control)\n"
-			specBlock += "- Your PRIMARY goal is to discover ownership/control structure with grounded evidence.\n"
-			specBlock += "- Search for: shareholders, parent company, subsidiaries, ultimate beneficial owner, state ownership, voting control.\n"
-			specBlock += "- Use relation types OWNS / SUBSIDIARY_OF / CONTROLS / INVESTS_IN.\n"
-			specBlock += "- Put stake/percent/voting rights and source evidence in 'reason'.\n\n"
-		}
-	}
+	specBlock := buildResearchSpecializationModulesBlock(specialties)
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
 	// Object detail: from entity_semantics (unified per type).
 	profileBlock := entity_semantics.ResearchBlockForPath(fragment.CanonicalPath, fragment.Type, fragment.CommunityType)
+	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(fragment.CanonicalPath, fragment.Type, fragment.CommunityType, fragment.Qualifiers, fragment.Identifiers)
+	coreBusinessTaxonomyBlock := buildCoreBusinessTaxonomyBlock()
+	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlockWithHints(fragment.CanonicalPath, fragment.Type, fragment.Qualifiers, fragment.Identifiers, fragment.Labels)
+	targetTypeEnum := entity_semantics.PromptRelationTargetTypesPipeList()
 	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
 	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt() + `
 - /segment/{domain}/{vertical}/{geo} for org marketSegments; /media/{platform}/{slug} for media channels
@@ -578,8 +544,8 @@ TASK: Use your search tools to find answers to the missing information questions
 Return a JSON object with fields:
 1. "fragment": A JSON object containing ONLY the new or updated fields for the fragment that you found (e.g., "state", "homeLocation").
 2. "relations": An array of DiscoveredRelation objects if you found new dependencies (suppliers, competitors, etc.).
-3. "supplyChains": (ONLY if supply_chain module enabled) Array of supply chain objects, each with:
-   - "nodes": ordered array of {canonicalPath, name, type, role?}
+3. "supplyChains": Array of supply chain objects, each with:
+   - "nodes": ordered array of {canonicalPath, name, type, role?, unitRef?, unitCode?, unitLabel?}
    - "confidence": 0.0-1.0
    - "reason": evidence for this chain
 
@@ -605,79 +571,11 @@ If you discover that the entity has former names, previous brand names, or was r
 - Search for: "X formerly known as", "X renamed", "X rebrand", "X previous name"
 - Do NOT include the current name in nameHistory.
 
-Organization Classification (ORG/FACILITY/GOV) - *** HIGH PRIORITY ***:
-You SHOULD actively research and determine these fields for any organization or government body:
+%s
 
-- fragment.marketSegments: Array of canonical paths /segment/{domain}/{vertical}/{geo}
-  DOMAIN options: finance | technology | industrial | consumer | healthcare | energy | materials | telecom | real-estate | public-sector | professional-services
-  VERTICAL: specific industry (banking, semiconductors, automotive, oil-gas, government, etc.)
-  GEO: ISO2 lowercase (us, de, cn) or "global"
-  
-  Examples by entity type:
-    - Bank → ["/segment/finance/banking/us"]
-    - Tech company → ["/segment/technology/software/global"]
-    - Government ministry → ["/segment/public-sector/government/kz"]
-    - Oil company → ["/segment/energy/oil-gas/sa"]
-  
-  Search for: "company industry", "business segments", "sector classification", "what does X do"
+%s
 
-- fragment.orgSize: one of "sme" | "le" | "enterprise" | "mega" | "na"
-  Classification:
-    - sme: <500 employees or <$100M revenue
-    - le: 500-5000 employees or $100M-$1B revenue
-    - enterprise: 5000-50000 employees or $1B-$10B revenue
-    - mega: >50000 employees or >$10B revenue
-  
-  For government: federal agencies of major countries = enterprise/mega, regional = le/enterprise, local = sme/le
-  
-  Search for: "X employees", "X revenue", "X company size", "X annual report"
-  
-  Use "na" ONLY if no size information can be found after searching.
-
-Business Relevance Enrichment (ORG/FAC/GOV/PRODUCT/MARKET):
-- Populate fragment.tags with 3-6 canonical /biz/... tags when evidence exists:
-  - /biz/function/{slug}
-  - /biz/economic-role/{slug}
-  - /biz/risk-exposure/{slug}
-  - /biz/value-pool/{slug}
-  - /biz/replaceability/{low|medium|high|variable}
-- Prefer stable business semantics (operator, regulator, market-space, commodity-risk, etc.), not marketing slogans.
-
-Government Body Enrichment (GOV - when canonicalPath starts with /gov/):
-- If the fragment is a government body (/gov/...), output (best-effort):
-  - fragment.govType: type of government body. Values: government, ministry, department, agency, authority, regulator, committee, service, bureau, office, council, commission
-  - fragment.parentGovPath: canonical path of superior/parent body in administrative hierarchy
-    - Example: /gov/sa/sfda → parent: /gov/sa/ministry-of-health
-- GOV HIERARCHY: Use ADMINISTERS to link superior body → subordinate body
-  - Example: if THIS FRAGMENT is /gov/sa/ministry-of-health and you discover /gov/sa/sfda reports to it, emit ADMINISTERS relation
-  - Direction: superior → subordinate (THIS FRAGMENT → subordinate)
-- Search for: "X parent ministry", "X reports to", "X organizational structure", "X is part of which ministry"
-
-Market Enrichment (MARKET):
-- If the fragment is a MARKET, output (best-effort):
-  - fragment.marketDomain: finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate
-  - fragment.marketVertical: specific vertical (banking, semiconductors, ev-batteries, ...)
-  - fragment.marketChannels: array (can include b2b, b2c, public-sector, ...)
-  - fragment.tags: REQUIRED 5-8 tags (dedup/search)
-    - Use GICS terminology (no numeric codes) where possible.
-    - Expanded terms ONLY (no abbreviations): "real-world-asset", NOT "rwa".
-    - Singular, lowercase, hyphenated slugs.
-    - Include sector/industry terms + key technologies/materials + common synonyms.
-  - fragment.parentMarketPath: canonical path of broader/parent market (e.g., /market/sa/event-marketing → parent: /market/sa/marketing)
-- MARKET HIERARCHY: Use HAS_MARKET_SEGMENT to link parent market → narrower segment. Child path = parent path + one segment.
-  - Example: if THIS FRAGMENT is /market/sa/marketing and you discover /market/sa/marketing/event-marketing, emit HAS_MARKET_SEGMENT relation
-  - Direction: broader → narrower (THIS FRAGMENT → sub-market)
-- MARKET → COMMUNITY resolution: If you discover informal operator networks in a market:
-  - Create COMMUNITY targets with /community/{geo}/{type}/{slug} paths
-  - Link via PARTICIPATES_IN (community → market) or DEPENDS_ON with facet qualifiers
-- Market sizing/concentration metrics (HIGH PRIORITY):
-  - Store these metrics in fragment.state using CANONICAL keys under /metric/market/... (preferred):
-    - "/metric/market/tam_usd": USD TAM (absolute number), unit="usd"
-    - "/metric/market/cagr_percent": CAGR in percent, unit="percent"
-    - "/metric/market/hhi": HHI index (0..10000), unit="index"
-    - "/metric/market/cr4_percent": CR4 concentration in percent, unit="percent"
-    - "/metric/market/supply_chain_risk": 0..1 (unit optional)
-  - Do NOT fabricate numbers. If you cannot find a reliable estimate, omit the metric (the system will keep the question open).
+%s
 
 OUTPUT BUDGET RULES (CRITICAL):
 - Keep fragment.description SHORT (max 500 chars). Prefer omitting description entirely if it risks truncating JSON.
@@ -743,14 +641,13 @@ Choose relationType to match the CORRECT semantic direction:
 - MERGED_INTO: source organization merged into target organization.
 - SPUN_OFF_FROM: source organization spun off from target organization.
 - ACQUIRED_BY: source organization acquired by target organization.
-- PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY -> MARKET).
+- PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
   Clarification: entity is an active market participant (player).
   - If THIS FRAGMENT is MARKET, you may still emit PARTICIPATES_IN relations to player entities; backend will reverse the edge direction.
   - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
-- DOMINATES: entity dominates a market (leader) (canonical direction: ORG/FACILITY -> MARKET).
-  Clarification: entity is a market leader with outsized share/influence (not just participant).
-  - If THIS FRAGMENT is MARKET, you may still emit DOMINATES relations to leader entities; backend will reverse the edge direction.
-  - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
+- For ORGANIZATION ↔ MARKET pairs, use ONLY PARTICIPATES_IN.
+  Never use OPERATES_IN, DEPENDS_ON, CONSUMES, REGULATES, CONTROLS_ACCESS, INFLUENCES, or other relation types between ORGANIZATION and MARKET.
+  If leadership is known, keep relationType=PARTICIPATES_IN and set qualifiers.marketRole = "leader" | "dominant" (plus market_share metric when available).
 
 === PHASE 2 STRATEGIC RELATIONS (may require EXPLICIT SOURCE) ===
 These edge types have strict direction rules. Use sourceCanonicalPath when THIS FRAGMENT is NOT the correct semantic source.
@@ -822,7 +719,7 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT
 - PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
 - PARTICIPATES_IN: source MAY also be PRODUCT or PERSON, target MUST be MARKET
-- DOMINATES: source MUST be ORGANIZATION or FACILITY, target MUST be MARKET
+- ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (ORG -> MARKET)
 - HAS_MARKET_SEGMENT: source MUST be MARKET, target MUST be MARKET (parent → segment; child path = parent path + one segment)
 - ADMINISTERS: source MUST be ORGANIZATION (/gov/...), target MUST be ORGANIZATION (/gov/...) (superior → subordinate)
 - OPERATES_VIA: source MUST be COMMUNITY or ORGANIZATION, target MUST be MEDIA_CHANNEL
@@ -836,22 +733,6 @@ EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECT
 - APPLIES_TO: source MUST be MECHANISM, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET
 - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
   DOMAIN targets are allowed only for DOMAIN scaffold relations (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, RELATED_DOMAIN, BROADENS_TO, NARROWS_TO, AFFECTS, DEPENDS_ON with DOMAIN source).
-
-Community Enrichment (COMMUNITY - when Type == COMMUNITY or canonicalPath starts with /community/):
-- If the fragment is a COMMUNITY, output (best-effort):
-  - fragment.communityType: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe | representatives | industry-association | key-community
-  - fragment.communityPlatforms: array of MEDIA_CHANNEL paths (e.g., ["/media/telegram/channel-slug"])
-  - fragment.communityEstimatedSize: small | medium | large | massive | unknown
-  - fragment.affiliatedOrgPath: canonical path of affiliated formal organization (if any)
-- COMMUNITY HIERARCHY:
-  - Use HAS_SUBGROUP to link parent community → narrower sub-community/branch/clan
-    - dynasties: broader family → branch (house-of-saud → sudairi-seven)
-    - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
-    - Direction: broader → narrower (like HAS_MARKET_SEGMENT for markets)
-  - Use OPERATES_VIA to link community → media channels it uses for communication
-  - Use PARTICIPATES_IN to link community → markets it operates in (direction: community → market; if reversed, policy auto-corrects)
-  - Use AFFILIATED_WITH to link community → formal organizations it's connected to
-- Search for: "X network", "X group members", "X telegram channels", "X operations", "X family branches", "X clan structure"
 
 DEPENDS_ON FACETS (qualifiers for granular dependency analysis):
 When outputting DEPENDS_ON relations, you SHOULD add a "facet" qualifier to specify the nature of dependency:
@@ -891,8 +772,8 @@ DiscoveredRelation Schema:
   "targetName": "string",
   "targetLegalName": "string",
   "targetShortName": "string",
-  "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY" | "DECISION_POINT" | "MECHANISM",
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "ASSURES" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "DOMINATES" | "HAS_MARKET_SEGMENT" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
+  "targetType": %s,
+  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "ASSURES" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "HAS_MARKET_SEGMENT" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED",
@@ -955,7 +836,7 @@ METRIC VALUE FORMAT (IMPORTANT):
 - observedAt MUST be ISO8601 (\"YYYY-MM-DD\" or RFC3339)
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock, canonicalRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierUnitTemplateContractBlock, targetTypeEnum, canonicalRulesBlock)
 }
 
 func dedupNonEmptyStrings(in []string) []string {

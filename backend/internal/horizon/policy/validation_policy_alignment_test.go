@@ -257,3 +257,45 @@ func TestValidationPolicy_GovPathOrgWhitelist(t *testing.T) {
 		t.Fatalf("gov path should not be penalized/rejected, got %s", decision.Action)
 	}
 }
+
+func TestValidationPolicy_OrgMarketNonParticipatesQuarantine(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind":      "edge",
+			"sourceType":          string(horizonmodels.FragmentTypeOrganization),
+			"targetType":          string(horizonmodels.FragmentTypeMarket),
+			"sourceCanonicalPath": "/org/cn/china-baowu-steel-group-corp-ltd",
+			"targetCanonicalPath": "/market/global/materials/raw-materials",
+			"relationType":        string(horizonmodels.DependencyTypeConsumes),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionQuarantineSoft {
+		t.Fatalf("expected quarantine_soft decision, got %s", decision.Action)
+	}
+}
+
+func TestValidationPolicy_GovMarketNonParticipatesAlsoQuarantine(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind":      "edge",
+			"sourceType":          string(horizonmodels.FragmentTypeOrganization),
+			"targetType":          string(horizonmodels.FragmentTypeMarket),
+			"sourceCanonicalPath": "/gov/us/federal-reserve",
+			"targetCanonicalPath": "/market/us/finance/banking",
+			"relationType":        string(horizonmodels.DependencyTypeRegulates),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionQuarantineSoft {
+		t.Fatalf("expected quarantine_soft decision, got %s", decision.Action)
+	}
+}

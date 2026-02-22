@@ -440,6 +440,25 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	}
 
 	// Policy 2.55: HAS_MARKET_SEGMENT path rule (best-effort). Ideal: child path = parent path + one segment.
+	// Policy 2.57: ORG↔MARKET must be PARTICIPATES_IN.
+	isOrgMarketPair := (sourceType == string(horizonmodels.FragmentTypeOrganization) && targetType == string(horizonmodels.FragmentTypeMarket)) ||
+		(sourceType == string(horizonmodels.FragmentTypeMarket) && targetType == string(horizonmodels.FragmentTypeOrganization))
+	if isOrgMarketPair &&
+		relationType != string(horizonmodels.DependencyTypeParticipatesIn) {
+		reason := "ORG↔MARKET edges must use PARTICIPATES_IN (direction ORGANIZATION -> MARKET)"
+		log.Printf("%s QUARANTINE: %s", logPrefix, reason)
+		return PolicyDecision{
+			Action: ActionQuarantineSoft,
+			Params: map[string]interface{}{
+				"penalty": 0.30,
+				"reason":  reason,
+			},
+			DecisionPath: "rule:hardcoded:org_market_participates_only",
+			Confidence:   0.70,
+		}, nil
+	}
+
+	// Policy 2.55: HAS_MARKET_SEGMENT path rule (best-effort). Ideal: child path = parent path + one segment.
 	if relationType == string(horizonmodels.DependencyTypeHasMarketSegment) &&
 		sourceType == string(horizonmodels.FragmentTypeMarket) &&
 		targetType == string(horizonmodels.FragmentTypeMarket) &&

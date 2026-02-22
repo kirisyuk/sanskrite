@@ -40,6 +40,40 @@ func TestResolveEdgeDirectionAutoFixMarketOperatesInOrg(t *testing.T) {
 	}
 }
 
+func TestResolveEdgeDirectionAutoFixOrganizationMarketGeneric(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeConsumes,
+		horizonmodels.FragmentTypeOrganization,
+		horizonmodels.FragmentTypeMarket,
+	)
+	if !ok {
+		t.Fatalf("expected auto-fix for ORGANIZATION * MARKET")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeParticipatesIn {
+		t.Fatalf("expected newType PARTICIPATES_IN, got %s", fix.NewType)
+	}
+	if fix.ShouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+}
+
+func TestResolveEdgeDirectionAutoFixMarketOrganizationGeneric(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeConsumes,
+		horizonmodels.FragmentTypeMarket,
+		horizonmodels.FragmentTypeOrganization,
+	)
+	if !ok {
+		t.Fatalf("expected auto-fix for MARKET * ORGANIZATION")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeParticipatesIn {
+		t.Fatalf("expected newType PARTICIPATES_IN, got %s", fix.NewType)
+	}
+	if !fix.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true")
+	}
+}
+
 func TestResolveEdgeDirectionAutoFixCommunityFoundedPerson(t *testing.T) {
 	fix, ok := ResolveEdgeDirectionAutoFix(
 		horizonmodels.DependencyTypeFounded,

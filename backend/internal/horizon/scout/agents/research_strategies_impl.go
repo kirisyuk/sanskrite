@@ -125,6 +125,20 @@ Do NOT create duplicate entities. Only create new entities when no suitable exis
 `
 }
 
+func strategyMetricValueFormatBlock() string {
+	return `METRIC VALUE FORMAT (STRICT):
+- For fragment.state and relations[].metrics, each metric entry MUST be either:
+  1) scalar number / numeric string (e.g., 0.065, "6.5%", "10M"), OR
+  2) MetricValue object: { "value": <number>, "unit"?: "...", "confidence"?: 0..1, "observedAt"?: "YYYY-MM-DD|RFC3339" }.
+- value MUST be numeric (JSON number after expansion). Never place narrative text in metric values.
+- Put explanations in "reason" or "fragment.description", not in metrics.
+- INVALID metric example:
+  "market_share_percent": "Estimated ~6.5% share of total food retail ... 30%+ of modern retail segment."
+- VALID metric example:
+  "market_share_percent": { "value": 6.5, "unit": "percent", "confidence": 0.7 }
+`
+}
+
 // SupplyChainResearchStrategy enriches for supply chain only (PRODUCES, CONSUMES, SUPPLIES_TO, etc.).
 type SupplyChainResearchStrategy struct {
 	agent *ResearchAgent
@@ -269,11 +283,17 @@ func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*
 	}
 	var res researchResult
 	if err := json.Unmarshal(jsonData, &res); err != nil {
-		return nil, fmt.Errorf("unmarshal research result: %w", err)
+		sanitized, sanitizeErr := sanitizeResearchResultMetrics(jsonData)
+		if sanitizeErr != nil {
+			return nil, fmt.Errorf("unmarshal research result: %w", err)
+		}
+		if err2 := json.Unmarshal(sanitized, &res); err2 != nil {
+			return nil, fmt.Errorf("unmarshal research result: %w", err)
+		}
 	}
 	out := &ResearchStrategyOutput{
-		Relations:        res.Relations,
-		SupplyChains:     res.SupplyChains,
+		Relations:         res.Relations,
+		SupplyChains:      res.SupplyChains,
 		GroundingEvidence: nil,
 	}
 	if fullResult != nil {
@@ -290,6 +310,64 @@ func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*
 	return out, nil
 }
 
+// sanitizeResearchResultMetrics removes metric entries that fail MetricValue parsing.
+// This allows strategy output to remain usable when a single metric value is emitted as narrative text.
+func sanitizeResearchResultMetrics(data []byte) ([]byte, error) {
+	var root map[string]interface{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+
+	if fragmentRaw, ok := root["fragment"].(map[string]interface{}); ok {
+		sanitizeMetricMapField(fragmentRaw, "state")
+	}
+
+	if relsRaw, ok := root["relations"].([]interface{}); ok {
+		for _, relRaw := range relsRaw {
+			relMap, ok := relRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			sanitizeMetricMapField(relMap, "metrics")
+		}
+	}
+
+	return json.Marshal(root)
+}
+
+func sanitizeMetricMapField(holder map[string]interface{}, field string) {
+	raw, ok := holder[field]
+	if !ok {
+		return
+	}
+	metricMap, ok := raw.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	clean := make(map[string]interface{}, len(metricMap))
+	for key, value := range metricMap {
+		if isValidMetricValueJSON(value) {
+			clean[key] = value
+		}
+	}
+
+	if len(clean) == 0 {
+		delete(holder, field)
+		return
+	}
+	holder[field] = clean
+}
+
+func isValidMetricValueJSON(raw interface{}) bool {
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return false
+	}
+	var mv models.MetricValue
+	return json.Unmarshal(b, &mv) == nil
+}
+
 // buildSupplyChainEnrichmentPrompt builds a prompt for supply-chain enrichment (value chains, logistics, extractive).
 func (a *ResearchAgent) buildSupplyChainEnrichmentPrompt(input ResearchStrategyInput) string {
 	frag := input.Fragment
@@ -303,6 +381,7 @@ func (a *ResearchAgent) buildSupplyChainEnrichmentPrompt(input ResearchStrategyI
 	}
 	geoContext := geoAndSectorContext(frag)
 	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
+	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for SUPPLY CHAIN context. Build coherent chains with phase-aware depth.
 
 Use ONLY these relation types (canonical): DEPENDS_ON, PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN.
@@ -316,6 +395,7 @@ CANONICAL PATH RULES (targetCanonicalPath MUST follow; supplyChains nodes too):
 %s
 %s
 %s
+%s
 
 WHAT TO FIND (prioritize completeness):
 1. Upstream: direct suppliers, then one next tier when confidence allows. Use DEPENDS_ON (consumer side) or SUPPLIES_TO (supplier side) consistently. Use PRODUCES/CONSUMES (org, facility, program→product). For raw materials: trace to extraction/mining when relevant.
@@ -323,7 +403,7 @@ WHAT TO FIND (prioritize completeness):
 3. Products: PRODUCES (org/facility/program→product), CONSUMES (org/facility/program→product). Value chain: PRODUCT TRANSFORMS_INTO PRODUCT (upstream→downstream). Include capacity/volume in metrics when you find figures (production_capacity, annual_volume).
 4. Facilities & geography: LOCATED_IN (org/facility/person→GEO_REGION), OPERATES_IN (org/facility→region/deposit). For each facility: what it produces, capacity if known.
 5. Extractive (mining, O&G): EXTRACTS_FROM (FACILITY→DEPOSIT). Add reserves/production to fragment.state (/metric/reserves_volume, /metric/production_annual).
-6. Supply chains: Build end-to-end chains with detail appropriate to phase. Output supplyChains with nodes [{canonicalPath, name, type, role?}].
+6. Supply chains: Build end-to-end chains with detail appropriate to phase. Output supplyChains with nodes [{canonicalPath, name, type, role?, unitRef?, unitCode?, unitLabel?}].
    - CRITICAL: Include FACILITY nodes where transformation happens. Pattern: product → facility → product (e.g. lithium-ore → refinery → lithium-carbonate).
    - For extractive: subsidiary → facility → deposit → product (e.g. KMG → mine → /deposit/lithium/salares → lithium-ore).
    - Nodes MUST alternate: actor → product → actor → product. Use /fac/{org}/{slug} for transformation sites.
@@ -353,7 +433,9 @@ For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transp
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), string(fragmentJSON), questions, unitPhaseSupplyDepthGuidance(input.UnitPipelinePhase))
+%s
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), objectQualifierUnitTemplateContractBlock, string(fragmentJSON), questions, unitPhaseSupplyDepthGuidance(input.UnitPipelinePhase), strategyMetricValueFormatBlock())
 }
 
 // buildGovernanceEnrichmentPrompt builds a prompt for ownership, board, key persons, gov hierarchy (canonical types).
@@ -369,6 +451,7 @@ func (a *ResearchAgent) buildGovernanceEnrichmentPrompt(input ResearchStrategyIn
 	}
 	geoContext := geoAndSectorContext(frag)
 	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
+	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for GOVERNANCE context. Aim for COMPLETE ownership and control structure:
 
 ENTITY TYPES in governance: %s. Use correct targetType for each relation.
@@ -376,6 +459,7 @@ ENTITY TYPES in governance: %s. Use correct targetType for each relation.
 CANONICAL PATH RULES (targetCanonicalPath MUST follow):
 %s
 
+%s
 %s
 %s
 %s
@@ -410,7 +494,9 @@ Return a JSON object:
   "supplyChains": []
 }
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), taxonomy.GovernanceEdgeTypesString(), string(fragmentJSON), questions)
+%s
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), objectQualifierUnitTemplateContractBlock, taxonomy.GovernanceEdgeTypesString(), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildAssuranceEnrichmentPrompt builds a prompt for Third Line: audit, certification, regulatory oversight.
@@ -426,6 +512,7 @@ func (a *ResearchAgent) buildAssuranceEnrichmentPrompt(input ResearchStrategyInp
 	}
 	geoContext := geoAndSectorContext(frag)
 	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
+	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for ASSURANCE context (Third Line: independent audit, certification, regulatory oversight). Aim for COMPLETE assurance picture:
 
 ENTITY TYPES in assurance: %s. Assurers are audit firms, certifiers, regulators. Assurees are orgs, facilities, programs.
@@ -433,6 +520,7 @@ ENTITY TYPES in assurance: %s. Assurers are audit firms, certifiers, regulators.
 CANONICAL PATH RULES (targetCanonicalPath MUST follow):
 %s
 
+%s
 %s
 %s
 %s
@@ -463,7 +551,9 @@ Return a JSON object:
   "supplyChains": []
 }
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeAssurance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), taxonomy.AssuranceEdgeTypesString(), string(fragmentJSON), questions)
+%s
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeAssurance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), objectQualifierUnitTemplateContractBlock, taxonomy.AssuranceEdgeTypesString(), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildMarketEnrichmentPrompt builds a prompt for market participation, sizing, concentration, submarkets.
@@ -478,6 +568,7 @@ func (a *ResearchAgent) buildMarketEnrichmentPrompt(input ResearchStrategyInput)
 		questions = "Identify market participation, sub-markets, key players, market sizing (TAM, CAGR, HHI, CR4), geographic concentration."
 	}
 	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
+	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for MARKET context. Aim for COMPLETE market picture:
 
 ENTITY TYPES in market: %s. PARTICIPATES_IN source can be any of these. Use correct targetType for each relation.
@@ -485,6 +576,7 @@ ENTITY TYPES in market: %s. PARTICIPATES_IN source can be any of these. Use corr
 CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
+%s
 %s
 %s
 
@@ -495,6 +587,7 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
   - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
   - targetCanonicalPath MUST NOT start with /domain/.
+  - For ORGANIZATION ↔ MARKET pairs, relationType MUST be PARTICIPATES_IN only (ORG -> MARKET).
 - HAS_MARKET_SEGMENT direction is parent-market -> child-market (segment).
   - source and target MUST both be MARKET paths (/market/...).
   - Ideal rule: child path = parent path + exactly one segment (e.g. /market/sa/finance -> /market/sa/finance/banking).
@@ -526,7 +619,9 @@ Return a JSON object:
   "supplyChains": []
 }
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, researchPreferExistingEntitiesBlock(), string(fragmentJSON), questions)
+%s
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, researchPreferExistingEntitiesBlock(), objectQualifierUnitTemplateContractBlock, string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildStrategicEnrichmentPrompt builds a prompt for strategic layer (decision points, mechanisms, gatekeepers).
@@ -541,6 +636,7 @@ func (a *ResearchAgent) buildStrategicEnrichmentPrompt(input ResearchStrategyInp
 		questions = "Identify decision points, mechanisms, gatekeepers, control/access relations, export controls, sanctions, licensing."
 	}
 	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
+	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for STRATEGIC context only.
 
 ENTITY TYPES in strategic: %s. Gatekeepers can be org, gov, community, or person. Use correct targetType for each relation.
@@ -548,6 +644,7 @@ ENTITY TYPES in strategic: %s. Gatekeepers can be org, gov, community, or person
 CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
+%s
 %s
 %s
 
@@ -574,7 +671,9 @@ Return a JSON object:
 }
 
 For GATEKEEPS_DECISION and USES_MECHANISM: set sourceCanonicalPath, sourceType, sourceName when the SOURCE is not the current fragment (e.g. gatekeeper org, mechanism user).
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, researchPreferExistingEntitiesBlock(), string(fragmentJSON), questions)
+%s
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, researchPreferExistingEntitiesBlock(), objectQualifierUnitTemplateContractBlock, string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildPolicyImpactEnrichmentPrompt builds a prompt for policy impact channels and exposure graph.
@@ -589,6 +688,7 @@ func (a *ResearchAgent) buildPolicyImpactEnrichmentPrompt(input ResearchStrategy
 		questions = "Identify policy parameters, affected segments, impact channels, and regulator/program links."
 	}
 	phaseGuardrails := unitPhaseResearchGuardrailBlock(input.UnitPipelinePhase)
+	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for POLICY IMPACT context.
 
 ENTITY TYPES in policy impact: %s. Use correct targetType for each relation.
@@ -596,6 +696,7 @@ ENTITY TYPES in policy impact: %s. Use correct targetType for each relation.
 CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
+%s
 %s
 %s
 
@@ -606,6 +707,7 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
 - PARTICIPATES_IN direction is participant -> market.
   - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
+  - For ORGANIZATION ↔ MARKET pairs, relationType MUST be PARTICIPATES_IN only (ORG -> MARKET).
   - When CURRENT FRAGMENT is MARKET, use explicit sourceCanonicalPath/sourceType/sourceName for participant -> THIS MARKET.
 - REGULATES/ADMINISTERS must originate from regulator/admin source, not from affected market/entity.
 - For any relation where semantic source is not CURRENT FRAGMENT, explicit sourceCanonicalPath/sourceType/sourceName is REQUIRED.
@@ -642,5 +744,7 @@ Return a JSON object:
 }
 
 For relations where SOURCE is not the current fragment, set sourceCanonicalPath, sourceType, sourceName.
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, researchPreferExistingEntitiesBlock(), string(fragmentJSON), questions)
+%s
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), phaseGuardrails, researchPreferExistingEntitiesBlock(), objectQualifierUnitTemplateContractBlock, string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }

@@ -74,7 +74,7 @@ type ScoutResult struct {
 	Fragment     models.HorizonFragment  `json:"fragment"`
 	Relations    []DiscoveredRelation    `json:"relations"`
 	UnitProfiles []models.OrgUnitProfile `json:"unitProfiles,omitempty"`
-	// SupplyChains is populated only when supply_chain specialty is enabled.
+	// SupplyChains is best-effort core output for business graph construction.
 	// Each chain is an ordered sequence of nodes representing a supply chain path.
 	SupplyChains []SupplyChain `json:"supplyChains,omitempty"`
 }
@@ -105,6 +105,13 @@ type SupplyChainNode struct {
 	Type string `json:"type"`
 	// Role describes the node's function in the chain (optional): supplier, processor, assembler, distributor, customer
 	Role string `json:"role,omitempty"`
+	// UnitRef is a unit identifier for actor nodes when known (consumer, enterprise, core_ops, etc).
+	UnitRef string `json:"unitRef,omitempty"`
+	// UnitCode is a controlled unit code for actor nodes.
+	// Allowed values: consumer|enterprise|core_ops|it|logistics|corporate|rnd|unclassified.
+	UnitCode string `json:"unitCode,omitempty"`
+	// UnitLabel is a short human-readable label for the unit.
+	UnitLabel string `json:"unitLabel,omitempty"`
 }
 
 // Вспомогательная структура для парсинга, чтобы поймать name
@@ -543,7 +550,7 @@ func extractionDomainRelationCatalogOverrideBlock(domainModes []string) string {
 - If evidence maps to another relation family, record uncertainty in reason and do NOT emit that edge.`, strings.Join(allowed, ", "))
 }
 
-const extractionGeneralRelationRulesBlock = `   - DEPENDS_ON: source depends on target (use this for suppliers, contractors, infrastructure).
+const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends on target (use this for suppliers, contractors, infrastructure).
      Example: If Panasonic supplies Tesla battery cells, for Tesla (source) -> Panasonic (target) use DEPENDS_ON (NOT SUPPLIES_TO).
    - SUPPLIES_TO: source supplies goods/services to target (use this for customers/recipients).
    - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
@@ -566,7 +573,8 @@ const extractionGeneralRelationRulesBlock = `   - DEPENDS_ON: source depends on 
    - COMPETES_WITH: competitor relationship (direction is not important, still output as source->target).
    - INFLUENCES: source influences target (soft power; avoid for formal authority/ownership).
    - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
-   - DOMINATES: entity dominates a market (canonical direction: ORG/FACILITY -> MARKET).
+   - For ORGANIZATION ↔ MARKET pairs, relationType MUST be PARTICIPATES_IN only (direction: ORGANIZATION -> MARKET).
+     Use qualifiers.marketRole ("leader"/"dominant") + market_share metrics for leadership semantics.
    - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
    - ADMINISTERS: government/body administers subordinate GOV or PROGRAM.
    - OPERATES_VIA: COMMUNITY/ORGANIZATION -> MEDIA_CHANNEL.
@@ -582,7 +590,8 @@ const extractionGeneralRelationRulesBlock = `   - DEPENDS_ON: source depends on 
    - EMPLOYED_BY and BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION.
    - PRODUCES/CONSUMES: source MUST be ORGANIZATION/FACILITY/PROGRAM (or DEPOSIT for PRODUCES), target MUST be PRODUCT.
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
-   - PARTICIPATES_IN/HAS_MARKET_SEGMENT/DOMINATES: target MUST be MARKET.
+   - PARTICIPATES_IN/HAS_MARKET_SEGMENT: target MUST be MARKET.
+   - ORGANIZATION ↔ MARKET relationType MUST be PARTICIPATES_IN only (ORG -> MARKET).
    - LOCATED_IN target MUST be GEO_REGION.
    - SUPPLIES_TO source/target SHOULD be ORGANIZATION or FACILITY.
    - Strategic edges MUST use DECISION_POINT/MECHANISM compatible source/target types.
@@ -590,7 +599,7 @@ const extractionGeneralRelationRulesBlock = `   - DEPENDS_ON: source depends on 
 
    Each object must include:
    - targetName, targetLegalName, targetShortName
-   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY" | "DECISION_POINT" | "MECHANISM"
+   - targetType: MUST be one of: %s
    - relationType: canonical dependency type
    - reason, confidence, targetCanonicalPath
 
@@ -600,11 +609,15 @@ const extractionGeneralRelationRulesBlock = `   - DEPENDS_ON: source depends on 
    - qualifiers (unit-first): source_unit_ref, source_unit_code, source_unit_label, target_unit_ref, target_unit_code, target_unit_label
    - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`
 
+func extractionGeneralRelationRulesBlock() string {
+	return fmt.Sprintf(extractionGeneralRelationRulesTemplate, entity_semantics.PromptRelationTargetTypesPipeList())
+}
+
 func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	domainModes = taxonomy.NormalizeDomainModes(domainModes)
 	allowed := extractionAllowedRelationTypesByDomainModes(domainModes)
 	if len(allowed) == 0 {
-		return extractionGeneralRelationRulesBlock
+		return extractionGeneralRelationRulesBlock()
 	}
 
 	var b strings.Builder
@@ -646,6 +659,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeMarket) {
 		b.WriteString(`   MARKET MODE:
    - PARTICIPATES_IN: entity -> market.
+   - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (ORG -> MARKET).
    - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
    - Keep focus on market structure and placement, not supply/governance edges.
 `)
@@ -666,10 +680,10 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 `)
 	}
 
-	b.WriteString(`
+	b.WriteString(fmt.Sprintf(`
    Each object must include:
    - targetName, targetLegalName, targetShortName
-   - targetType: MUST be one of: "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "DEPOSIT" | "COMMUNITY" | "DECISION_POINT" | "MECHANISM"
+   - targetType: MUST be one of: %s
    - relationType: one of the allowed values listed above
    - reason, confidence, targetCanonicalPath
 
@@ -677,7 +691,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
    - validFrom, validTo
    - qualifiers: edgeModality, eventId, round, contractType, integration_type, facet, transmission qualifiers
    - qualifiers (unit-first): source_unit_ref, source_unit_code, source_unit_label, target_unit_ref, target_unit_code, target_unit_label
-   - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`)
+   - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`, entity_semantics.PromptRelationTargetTypesPipeList()))
 	return b.String()
 }
 
@@ -710,85 +724,11 @@ Relation unit qualifiers (on each relation.qualifiers):
 func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string, domainModes []string) string {
 	specialties = taxonomy.NormalizeSpecialties(specialties)
 	domainModes = taxonomy.NormalizeDomainModes(domainModes)
-	supplyChainModuleEnabled := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) || taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain)
 	chainBlock := ""
 	if strings.TrimSpace(chainContext) != "" {
 		chainBlock = strings.TrimSpace(chainContext) + "\n"
 	}
-	specBlock := ""
-	if len(specialties) > 0 || len(domainModes) > 0 {
-		specBlock = "SPECIALIZATION MODULES (optional; apply only those listed):\n"
-		if len(specialties) > 0 {
-			specBlock += fmt.Sprintf("- requestedSpecialties: %s\n", strings.Join(specialties, ", "))
-		}
-		if len(domainModes) > 0 {
-			specBlock += fmt.Sprintf("- requestedDomainModes: %s\n", strings.Join(domainModes, ", "))
-		}
-		specBlock += "\n"
-		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement) {
-			specBlock += "MODULE: management (executive leadership / board / founders)\n"
-			specBlock += "- Extract top leadership: CEO, CFO, COO, CTO/CIO, CMO, CHRO, President/Managing Director, Chair/Chairman, Founders.\n"
-			specBlock += "- Represent people as targetType=PERSON with canonicalPath /person/{lowercase-slug}.\n"
-			specBlock += "- Use relationType: MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED as appropriate.\n"
-			specBlock += "- NOTE: This extraction is anchored on the current fragment. For PERSON relations, output the best semantic relationType even if the direction looks inverted; the backend will normalize direction when this module is enabled.\n"
-			specBlock += "- Put role/title and evidence in 'reason'.\n\n"
-		}
-		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyProductsAndServices) {
-			specBlock += "MODULE: products_and_services (outputs + inputs + product transformations)\n"
-			specBlock += "- For ORGANIZATION/FACILITY: extract outputs (PRODUCES: products/services offered) and inputs (CONSUMES: materials/components/energy/services consumed).\n"
-			specBlock += "- Represent products and services as targetType=PRODUCT with stable /product/... canonical paths when possible.\n"
-			specBlock += "  - If category/type/stage cannot be determined, use fallback /product/{slug}.\n"
-			specBlock += "- For PRODUCT fragments: extract product-to-product transformations using TRANSFORMS_INTO (source product -> target product).\n"
-			specBlock += "- Prefer canonical names (standard material/product names), not marketing names.\n"
-			specBlock += "- Product/material naming rules (CRITICAL):\n"
-			specBlock += "  - Use SINGULAR nouns by default (e.g., 'silicon wafer', 'battery cell', 'lithium carbonate'), not plurals.\n"
-			specBlock += "  - Use plural ONLY when plural is the natural/standard product term (e.g., 'solar wafer', not 'solar wafers'; avoid invented plurals).\n"
-			specBlock += "  - Do NOT include a company/brand name in the product name/path unless it is clearly the official and commonly used product name.\n"
-			specBlock += "    Examples: 'IBM watsonx' MAY be ok only if sources consistently use it; otherwise use 'watsonx'.\n\n"
-		}
-		if supplyChainModuleEnabled {
-			specBlock += "MODULE: supply_chain (build complete supply chains)\n"
-			specBlock += "- Your PRIMARY goal is to identify and return COMPLETE SUPPLY CHAINS as ordered node sequences.\n"
-			specBlock += "- A supply chain is an ordered path: supplier → product → processor → product → customer → ...\n"
-			specBlock += "- Nodes MUST alternate between ACTORS (ORGANIZATION/FACILITY) and PRODUCTS.\n"
-			specBlock += "- CRITICAL: Include FACILITY nodes where transformation happens. Pattern: product → facility → product.\n"
-			specBlock += "  The facility consumes the upstream product and produces the downstream product (transformation at facility).\n"
-			specBlock += "- For extractive chains: subsidiary → facility → deposit → product. Use /deposit/{resource}/{slug} for deposits.\n"
-			specBlock += "- For each chain, include:\n"
-			specBlock += "  - All intermediate products (raw materials, components, finished goods)\n"
-			specBlock += "  - All actors: suppliers (org), processors (facility), manufacturers (facility), assemblers, distributors, customers\n"
-			specBlock += "  - Facilities where product transformation occurs (refinery, smelter, factory)\n"
-			specBlock += "  - Deposits when tracing to extraction (mine, oil field)\n"
-			specBlock += "- Return chains in the 'supplyChains' field (see output schema below).\n"
-			specBlock += "- Each node needs: canonicalPath, name, type (ORGANIZATION/FACILITY/PRODUCT/DEPOSIT), and optional role.\n"
-			specBlock += "- Roles: supplier, processor, manufacturer, assembler, distributor, customer, extractor.\n"
-			specBlock += "- Multiple chains are expected — different product lines, different suppliers, branching paths.\n"
-			specBlock += "- Canonical paths: /org/{iso2|na}/{slug}, /fac/{org}/{slug}, /product/{category}/{type}/{stage}/{slug}, /deposit/{resource}/{slug}.\n"
-			specBlock += "- Product/material naming rules apply to supply chains too:\n"
-			specBlock += "  - Use SINGULAR product/material terms by default.\n"
-			specBlock += "  - Avoid including company/brand names in product nodes unless it is an official, widely used product name.\n"
-			specBlock += "- ADAPT to geo/sector: Use entity path, sector path, and target canonical path to infer supply chain patterns. Examples: Chinese EV (BYD) → vertical integration; European OEMs → partnership networks. For SUPPLIES_TO relations, add qualifiers.integration_type when clear: \"vertical\" | \"partnership\" | \"arm's-length\".\n"
-			specBlock += "- For SUPPLIES_TO relations: when transport route is known, add qualifiers.transport_via as array of facility paths (ports, terminals, pipelines, warehouses). Same canonicalization rules.\n"
-			specBlock += "- IMPORTANT: Also output individual 'relations' for non-chain relationships (location, ownership, etc.).\n\n"
-		}
-		if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) {
-			specBlock += "MODULE: equity (ownership & control)\n"
-			specBlock += "- Your PRIMARY goal is to extract OWNERSHIP/CONTROL structure: who owns/controls whom.\n"
-			specBlock += "- Focus on equity relationships (shareholders, subsidiaries, parent companies, ultimate beneficial owners, state ownership).\n"
-			specBlock += "- Use relation types:\n"
-			specBlock += "  - OWNS: owner -> owned entity (equity ownership/control)\n"
-			specBlock += "    - Clarification: ownership flows from the higher/parent entity to the lower/subordinate entity in the corporate hierarchy.\n"
-			specBlock += "      Use OWNS only when the source is the true owner/controller of the target (parent → subsidiary, owner → asset).\n"
-			specBlock += "  - SUBSIDIARY_OF: owned entity -> owner (inverse; backend will normalize to OWNS)\n"
-			specBlock += "  - CONTROLS: controller -> controlled entity (non-equity/indirect control when ownership is unclear)\n"
-			specBlock += "    - Clarification: authority without clear equity ownership (state control, voting rights, contractual control).\n"
-			specBlock += "  - INVESTS_IN: investor -> investee (minority investment; not necessarily control)\n"
-			specBlock += "- IMPORTANT: Do NOT use OWNS for employment/management roles (CEO/board). That belongs to management module.\n"
-			specBlock += "- IMPORTANT: Facilities/products/deposits do NOT own organizations. If a facility/product/deposit is owned by an org/person, use SUBSIDIARY_OF (source=facility/product/deposit, target=owner).\n"
-			specBlock += "- ADAPT to geo/sector: Use entity path and target canonical path to infer ownership patterns. For OWNS, add qualifiers.integration_type when clear: \"vertical\" (subsidiary in integrated chain) | \"partnership\" (JV, strategic stake) | \"arm's-length\" (pure financial).\n"
-			specBlock += "- Put stake/percent/voting rights (if known) and evidence in 'reason'.\n\n"
-		}
-	}
+	specBlock := buildExtractionSpecializationModulesBlock(specialties, domainModes)
 	domainBlock := extractionDomainGuardrailBlock(domainModes)
 	if strings.TrimSpace(domainBlock) != "" {
 		domainBlock += "\n\n"
@@ -811,6 +751,9 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 		typeBlock = typeBlock + "\n\n"
 	}
 	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
+	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlock(targetCanonicalPath, "", "")
+	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlock(targetCanonicalPath, "", "")
+	coreBusinessTaxonomyBlock := buildCoreBusinessTaxonomyBlock()
 
 	return fmt.Sprintf(`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.
 
@@ -827,7 +770,7 @@ CONTENT TO ANALYZE:
 %s
 %s
 %s
-TASK: Extract all relevant information about this entity and return it as a JSON object with fields: "fragment", "unitProfiles", "relations", and optionally "supplyChains" (if supply_chain module is enabled).
+TASK: Extract all relevant information about this entity and return it as a JSON object with fields: "fragment", "unitProfiles", "relations", and "supplyChains" (use [] when unknown).
 
 %s
 
@@ -838,68 +781,8 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    - sectorPath: Must match the provided sector path
    - %s
    %s
-   - marketSegments: *** HIGHLY IMPORTANT for ORGANIZATION/FACILITY/GOV ***
-     You MUST attempt to determine market segments for any org/gov/facility. This is critical for graph analytics.
-     Format: Array of canonical paths /segment/{domain}/{vertical}/{geo}
-     
-     DOMAIN taxonomy (pick the most relevant):
-       - finance (banking, insurance, asset-management, payments, capital-markets)
-       - technology (software, hardware, semiconductors, cloud, ai-ml, cybersecurity, telecom-equipment)
-       - industrial (manufacturing, machinery, aerospace, defense, automotive, construction, chemicals)
-       - consumer (retail, e-commerce, food-beverage, apparel, luxury, hospitality, media-entertainment)
-       - healthcare (pharma, biotech, medical-devices, hospitals, health-insurance)
-       - energy (oil-gas, renewables, utilities, nuclear, mining)
-       - materials (metals, chemicals, construction-materials, paper-packaging)
-       - telecom (carriers, infrastructure, media)
-       - real-estate (commercial, residential, reits)
-       - public-sector (government, defense, education, ngo) - USE FOR /gov/ entities
-       - professional-services (consulting, legal, accounting, engineering)
-     
-     GEO: ISO3166-1 alpha2 lowercase (us, cn, de, jp, ru, kz) OR "global" if multinational
-     
-     Examples:
-       - Tesla → ["/segment/industrial/automotive/us", "/segment/energy/renewables/global"]
-       - JPMorgan → ["/segment/finance/banking/us", "/segment/finance/capital-markets/global"]
-       - Ministry of Finance → ["/segment/public-sector/government/kz"]
-       - TSMC → ["/segment/technology/semiconductors/tw"]
-     
-     If the entity clearly operates in multiple domains, include ALL relevant segments.
-     Only omit if you genuinely cannot determine ANY market positioning from available information.
-
-   - orgSize: *** HIGHLY IMPORTANT for ORGANIZATION/GOV ***
-     You MUST classify organization size. This enables filtering and risk assessment.
-     
-     Classification criteria (use ANY available signal):
-       - "sme": Small/Medium (<500 employees OR <$100M revenue OR local/regional scope)
-       - "le": Large Enterprise (500-5000 employees OR $100M-$1B revenue OR national scope)
-       - "enterprise": Major Enterprise (5000-50000 employees OR $1B-$10B revenue OR multinational)
-       - "mega": Mega Corporation (>50000 employees OR >$10B revenue OR global household name)
-       - "na": Use ONLY if you cannot find ANY size indicators (revenue, employees, market cap, scope)
-     
-     For GOVERNMENT bodies (/gov/):
-       - Federal ministries/agencies of major economies → typically "enterprise" or "mega"
-       - Regional/state agencies → typically "le" or "enterprise"
-       - Municipal/local bodies → typically "sme" or "le"
-       - International organizations (UN, WTO, IMF) → "mega"
-     
-     PREFER to classify rather than use "na". Even rough estimates are valuable.
-  - tags: (ALL business entities: ORG/FAC/GOV/PRODUCT/MARKET) include business relevance taxonomy in /biz/... paths.
-    - Use 3-6 paths where evidence exists:
-      - /biz/function/{slug}
-      - /biz/economic-role/{slug}
-      - /biz/risk-exposure/{slug}
-      - /biz/value-pool/{slug}
-      - /biz/replaceability/{low|medium|high|variable}
-    - Keep tags stable and business-meaningful (avoid marketing wording).
-  - marketDomain: (MARKET only) canonical domain family for the market (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate).
-  - marketVertical: (MARKET only) specific vertical (e.g., banking, semiconductors, ev-batteries).
-  - marketChannels: (MARKET only) array of channels (best-effort): ["b2b","b2c","public-sector",...]. Can be empty/omitted.
-  - tags: (MARKET only) REQUIRED 5-8 tags for deduplication and search.
-    - Use GICS terminology (no numeric codes) as the base vocabulary.
-    - Expanded terms ONLY (no abbreviations): "real-world-asset", NOT "rwa".
-    - Singular form: "semiconductor", "battery", "token", NOT plurals.
-    - Lowercase, hyphenated slugs.
-    - Include sector/industry terms + key technologies/materials + common synonyms users search for.
+%s
+%s
    - state: Map of metrics with MetricValue objects.
      IMPORTANT: there are two common classes of metrics:
        A) Normalized risk metrics under /metric/risk/... where value is a score:
@@ -944,20 +827,25 @@ TASK: Extract all relevant information about this entity and return it as a JSON
    Choose relationType to match this direction:
    %s
    %s
+   %s
 
-4. "supplyChains" Field (Array of Objects) - ONLY if supply_chain module is enabled:
+4. "supplyChains" Field (Array of Objects):
    Each object represents one supply chain path with:
    - nodes: Ordered array of entities in the chain. Each node has:
      - canonicalPath: stable path (/org/..., /fac/..., /product/...)
      - name: human-readable name
      - type: ORGANIZATION | FACILITY | PRODUCT
      - role: (optional) supplier, processor, manufacturer, assembler, distributor, customer
+     - unitRef: (optional for actor nodes) unit identifier; prefer known unitId from unitProfiles
+     - unitCode: (optional for actor nodes) consumer|enterprise|core_ops|it|logistics|corporate|rnd|unclassified
+     - unitLabel: (optional for actor nodes) short unit label
    - confidence: 0.0 to 1.0 for the entire chain
    - reason: evidence/source for this chain
    
    CHAIN STRUCTURE:
    - Nodes MUST alternate: actor → product → actor → product → ...
    - Actors are ORGANIZATION or FACILITY (use FACILITY for transformation sites: refinery, smelter, factory)
+   - For actor nodes, keep unitRef/unitCode aligned with relation qualifiers and unitProfiles when available.
    - Products link actors in the chain
    - Include FACILITY where transformation happens: product → facility → product (e.g. lithium-ore → refinery → lithium-carbonate)
    - For extractive: org → facility → deposit → product (e.g. KMG → mine → /deposit/lithium/salares → lithium-ore)
@@ -1072,5 +960,5 @@ CANONICAL PATH RULES:
 - If a legal form is known (Inc., LLC, JSC, GmbH, etc.), append it as -{legal_form} to satisfy org canonical format.
 - If you are unsure, still output your best stable canonicalPath (do not leave it empty).
 
-Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, businessRulesBlock, typeBlock, domainBlock, canonicalRulesBlock, nameRulesBlock, relationCatalogOverride, unitIdentificationBlock, relationRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, businessRulesBlock, typeBlock, domainBlock, canonicalRulesBlock, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierUnitTemplateContractBlock, relationCatalogOverride, unitIdentificationBlock, relationRulesBlock)
 }

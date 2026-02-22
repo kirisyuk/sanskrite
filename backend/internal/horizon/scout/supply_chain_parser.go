@@ -24,6 +24,10 @@ type SupplyLinkSegment struct {
 	SupplierRef         string
 	ProductRef          string
 	CustomerRef         string
+	SupplierUnitRef     string
+	CustomerUnitRef     string
+	SupplierUnitCode    string
+	CustomerUnitCode    string
 	SupplierFacilityRef string
 	CustomerFacilityRef string
 	TransportViaRefs    []string
@@ -61,7 +65,7 @@ type ParsedChainStats struct {
 type ChainEdge struct {
 	SourceCanonicalPath string
 	TargetCanonicalPath string
-	RelationType        string                 // PRODUCES, CONSUMES, SUPPLIES_TO, DEPENDS_ON, TRANSFORMS_INTO
+	RelationType        string // PRODUCES, CONSUMES, SUPPLIES_TO, DEPENDS_ON, TRANSFORMS_INTO
 	Confidence          float64
 	Reason              string
 	// Qualifiers carry edge-specific metadata (e.g. at_facility for TRANSFORMS_INTO).
@@ -184,11 +188,17 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 				prodPath := strings.TrimSpace(prod.CanonicalPath)
 				dstPath := strings.TrimSpace(b.CanonicalPath)
 				if srcPath != "" && prodPath != "" && dstPath != "" {
+					supplierUnitRef, supplierUnitCode, _ := normalizeChainNodeUnit(a)
+					customerUnitRef, customerUnitCode, _ := normalizeChainNodeUnit(b)
 					seg := &SupplyLinkSegment{
-						SupplierRef: srcPath,
-						ProductRef:  prodPath,
-						CustomerRef: dstPath,
-						Confidence:  chain.Confidence,
+						SupplierRef:      srcPath,
+						ProductRef:       prodPath,
+						CustomerRef:      dstPath,
+						SupplierUnitRef:  supplierUnitRef,
+						CustomerUnitRef:  customerUnitRef,
+						SupplierUnitCode: string(supplierUnitCode),
+						CustomerUnitCode: string(customerUnitCode),
+						Confidence:       chain.Confidence,
 					}
 					for _, pth := range chain.TransportVia {
 						pth = strings.TrimSpace(pth)
@@ -219,6 +229,8 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 							}
 						}
 						if len(via) > 0 {
+							srcUnitRef, srcUnitCode, srcUnitLabel := normalizeChainNodeUnit(a)
+							dstUnitRef, dstUnitCode, dstUnitLabel := normalizeChainNodeUnit(b)
 							supEdge := &ChainEdge{
 								SourceCanonicalPath: srcPath,
 								TargetCanonicalPath: dstPath,
@@ -226,7 +238,13 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 								Confidence:          chain.Confidence,
 								Reason:              fmt.Sprintf("Supply chain: %s supplies %s to %s via %v. %s", a.Name, prod.Name, b.Name, via, chain.Reason),
 								Qualifiers: map[string]interface{}{
-									models.QualifierTransportVia: via,
+									models.QualifierTransportVia:        via,
+									models.UnitQualifierSourceUnitRef:   srcUnitRef,
+									models.UnitQualifierSourceUnitCode:  string(srcUnitCode),
+									models.UnitQualifierSourceUnitLabel: srcUnitLabel,
+									models.UnitQualifierTargetUnitRef:   dstUnitRef,
+									models.UnitQualifierTargetUnitCode:  string(dstUnitCode),
+									models.UnitQualifierTargetUnitLabel: dstUnitLabel,
 								},
 							}
 							result.Edges = append(result.Edges, supEdge)
@@ -299,8 +317,41 @@ func (p *SupplyChainParser) createFragmentFromNode(node agents.SupplyChainNode) 
 	if role != "" {
 		frag.Identifiers["supplyChainRole"] = role
 	}
+	unitRef := normalizeUnitRef(node.UnitRef)
+	unitCode := models.NormalizeUnitCode(node.UnitCode)
+	if unitRef != "" && unitCode == models.UnitCodeUnclassified {
+		unitCode = models.NormalizeUnitCode(unitRef)
+	}
+	if unitRef != "" {
+		frag.Identifiers["unitRef"] = unitRef
+	}
+	if unitCode != models.UnitCodeUnclassified {
+		frag.Identifiers["unitCode"] = string(unitCode)
+	}
+	if s := strings.TrimSpace(node.UnitLabel); s != "" {
+		frag.Identifiers["unitLabel"] = s
+	}
 
 	return frag
+}
+
+func normalizeChainNodeUnit(node agents.SupplyChainNode) (string, models.UnitCode, string) {
+	unitRef := normalizeUnitRef(node.UnitRef)
+	unitCode := models.NormalizeUnitCode(node.UnitCode)
+	if unitCode == models.UnitCodeUnclassified && unitRef != "" {
+		unitCode = models.NormalizeUnitCode(unitRef)
+	}
+	if unitRef == "" {
+		unitRef = string(unitCode)
+	}
+	if unitRef == "" {
+		unitRef = string(models.UnitCodeUnclassified)
+	}
+	unitLabel := strings.TrimSpace(node.UnitLabel)
+	if unitLabel == "" {
+		unitLabel = string(unitCode)
+	}
+	return unitRef, unitCode, unitLabel
 }
 
 // inferFragmentType determines the fragment type from node type or canonical path.
@@ -355,6 +406,8 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 	toIsActor := p.isActorType(to.Type, toPath)
 	fromIsProduct := p.isProductType(from.Type, fromPath)
 	toIsProduct := p.isProductType(to.Type, toPath)
+	fromUnitRef, fromUnitCode, fromUnitLabel := normalizeChainNodeUnit(from)
+	toUnitRef, toUnitCode, toUnitLabel := normalizeChainNodeUnit(to)
 
 	var relationType string
 
@@ -375,6 +428,14 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 			RelationType:        string(models.DependencyTypeDependsOn),
 			Confidence:          confidence,
 			Reason:              fmt.Sprintf("Supply chain: %s consumes %s. %s", to.Name, from.Name, reason),
+			Qualifiers: map[string]interface{}{
+				models.UnitQualifierSourceUnitRef:   toUnitRef,
+				models.UnitQualifierSourceUnitCode:  string(toUnitCode),
+				models.UnitQualifierSourceUnitLabel: toUnitLabel,
+				models.UnitQualifierTargetUnitRef:   string(models.UnitCodeUnclassified),
+				models.UnitQualifierTargetUnitCode:  string(models.UnitCodeUnclassified),
+				models.UnitQualifierTargetUnitLabel: string(models.UnitCodeUnclassified),
+			},
 		}
 	case fromIsActor && toIsActor:
 		// Direct actor to actor relationship
@@ -387,12 +448,34 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 		relationType = string(models.DependencyTypeDependsOn)
 	}
 
+	qualifiers := map[string]interface{}{}
+	if fromIsActor {
+		qualifiers[models.UnitQualifierSourceUnitRef] = fromUnitRef
+		qualifiers[models.UnitQualifierSourceUnitCode] = string(fromUnitCode)
+		qualifiers[models.UnitQualifierSourceUnitLabel] = fromUnitLabel
+	}
+	if toIsActor {
+		qualifiers[models.UnitQualifierTargetUnitRef] = toUnitRef
+		qualifiers[models.UnitQualifierTargetUnitCode] = string(toUnitCode)
+		qualifiers[models.UnitQualifierTargetUnitLabel] = toUnitLabel
+	}
+	if fromIsActor && !toIsActor {
+		qualifiers[models.UnitQualifierTargetUnitRef] = string(models.UnitCodeUnclassified)
+		qualifiers[models.UnitQualifierTargetUnitCode] = string(models.UnitCodeUnclassified)
+		qualifiers[models.UnitQualifierTargetUnitLabel] = string(models.UnitCodeUnclassified)
+	}
+	if !fromIsActor && toIsActor {
+		qualifiers[models.UnitQualifierSourceUnitRef] = string(models.UnitCodeUnclassified)
+		qualifiers[models.UnitQualifierSourceUnitCode] = string(models.UnitCodeUnclassified)
+		qualifiers[models.UnitQualifierSourceUnitLabel] = string(models.UnitCodeUnclassified)
+	}
 	return &ChainEdge{
 		SourceCanonicalPath: fromPath,
 		TargetCanonicalPath: toPath,
 		RelationType:        relationType,
 		Confidence:          confidence,
 		Reason:              fmt.Sprintf("Supply chain: %s → %s. %s", from.Name, to.Name, reason),
+		Qualifiers:          qualifiers,
 	}
 }
 
@@ -413,7 +496,6 @@ func (p *SupplyChainParser) isProductType(nodeType string, canonicalPath string)
 	}
 	return strings.HasPrefix(canonicalPath, "/product/")
 }
-
 
 // ChainContext represents the cumulative supply chain state passed between jobs.
 // It contains discovered nodes and edges so far, allowing agents to extend chains.

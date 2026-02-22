@@ -14,7 +14,7 @@ import (
 
 // SymmetricEdgeTypes defines edge types where the relationship is reciprocal (canonical types per TZ §6.1).
 var SymmetricEdgeTypes = map[DependencyType]bool{
-	DependencyTypeCompetesWith:    true,
+	DependencyTypeCompetesWith:   true,
 	DependencyTypeRelativeOf:     true,
 	DependencyTypeAssociatedWith: true, // canonical for RELATED_TO, AFFILIATED_WITH, PARTNERS_WITH
 	DependencyTypeDomainRelation: true, // canonical for domain↔domain
@@ -60,6 +60,22 @@ func isDynastyOrTribeCommunity(canonicalPath string) bool {
 	// parts[0] = "community", parts[1] = geo, parts[2] = type
 	communityType := strings.ToLower(strings.TrimSpace(parts[2]))
 	return communityType == "dynasty" || communityType == "tribe"
+}
+
+func canonicalizeOrgMarketToParticipates(
+	edgeType DependencyType,
+	sourceType, targetType FragmentType,
+) (DependencyType, bool, bool, string) {
+	if edgeType == DependencyTypeParticipatesIn {
+		return edgeType, false, false, ""
+	}
+	if sourceType == FragmentTypeOrganization && targetType == FragmentTypeMarket {
+		return DependencyTypeParticipatesIn, false, true, "canonicalize: ORGANIZATION * MARKET -> ORGANIZATION PARTICIPATES_IN MARKET"
+	}
+	if sourceType == FragmentTypeMarket && targetType == FragmentTypeOrganization {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET * ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET"
+	}
+	return edgeType, false, false, ""
 }
 
 // CanonicalizeEdge rewrites an edge type (and optionally direction) based on endpoint fragment types.
@@ -201,6 +217,13 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 	// =============================================================================
 	// MARKET-related canonicalization
 	// =============================================================================
+
+	// ORG↔MARKET canonical contract: use only PARTICIPATES_IN in ORG -> MARKET direction.
+	// This guardrail is intentionally broad: regardless of raw relation type, normalize
+	// organization-market edges to participation semantics.
+	if newType, shouldSwap, changed, reason := canonicalizeOrgMarketToParticipates(edgeType, sourceType, targetType); changed {
+		return newType, shouldSwap, changed, reason
+	}
 
 	// OWNS(MARKET → MARKET) → HAS_MARKET_SEGMENT
 	// LLM often says "beverages owns beer market" meaning hierarchy, not ownership.

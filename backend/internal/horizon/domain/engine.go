@@ -776,7 +776,7 @@ func expectedRelationsForContractType(contractType string) []string {
 	case SteeringProfilePolicyImpact:
 		return []string{"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "ADMINISTERS"}
 	case SteeringProfileCompetitiveLandscape:
-		return []string{"PARTICIPATES_IN", "DOMINATES", "COMPETES_WITH", "PRODUCES"}
+		return []string{"PARTICIPATES_IN", "COMPETES_WITH", "PRODUCES"}
 	case SteeringProfileGeographicConcentration:
 		return []string{"LOCATED_IN", "OPERATES_IN", "EXTRACTS_FROM"}
 	default:
@@ -2768,7 +2768,7 @@ func defaultFilterRelTypes(contractType string) []string {
 	case SteeringProfilePolicyImpact:
 		return []string{"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "ADMINISTERS"}
 	case SteeringProfileCompetitiveLandscape:
-		return []string{"PARTICIPATES_IN", "DOMINATES", "COMPETES_WITH", "PRODUCES"}
+		return []string{"PARTICIPATES_IN", "COMPETES_WITH", "PRODUCES"}
 	case SteeringProfileGeographicConcentration:
 		return []string{"LOCATED_IN", "OPERATES_IN", "EXTRACTS_FROM"}
 	default:

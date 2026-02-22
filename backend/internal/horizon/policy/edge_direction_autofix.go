@@ -35,6 +35,24 @@ func ResolveEdgeDirectionAutoFix(
 			Reason:     "canonicalize: ORGANIZATION OWNS PROGRAM -> ORGANIZATION ADMINISTERS PROGRAM",
 			Confidence: 0.95,
 		}, true
+	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
+		sourceType == horizonmodels.FragmentTypeOrganization &&
+		targetType == horizonmodels.FragmentTypeMarket:
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			ShouldSwap: false,
+			Reason:     "canonicalize: ORGANIZATION * MARKET -> ORGANIZATION PARTICIPATES_IN MARKET",
+			Confidence: 0.95,
+		}, true
+	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
+		sourceType == horizonmodels.FragmentTypeMarket &&
+		targetType == horizonmodels.FragmentTypeOrganization:
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			ShouldSwap: true,
+			Reason:     "canonicalize: MARKET * ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET",
+			Confidence: 0.95,
+		}, true
 	case edgeType == horizonmodels.DependencyTypeInvestsIn &&
 		sourceType == horizonmodels.FragmentTypeMarket &&
 		targetType == horizonmodels.FragmentTypeOrganization:

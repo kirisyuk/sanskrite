@@ -291,13 +291,11 @@ func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragmen
 	}
 
 	supplyChainBlock := ""
-	if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
-		supplyChainBlock = fmt.Sprintf(`
+	supplyChainBlock = fmt.Sprintf(`
 EXTRACTED SUPPLY CHAINS (JSON):
 %s
 
 `, supplyChainsJSON)
-	}
 
 	graphContextBlock := ""
 	if strings.TrimSpace(graphContext) != "" {
@@ -310,6 +308,7 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt() + "\n\n"
 	// Object detail: from entity_semantics (unified per type).
 	profileBlock := entity_semantics.ResearchBlockForPath(extractedData.CanonicalPath, extractedData.Type, extractedData.CommunityType) + "\n\n"
+	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(extractedData.CanonicalPath, extractedData.Type, extractedData.CommunityType, extractedData.Qualifiers, extractedData.Identifiers) + "\n"
 	unitPhaseBlock := buildUnitPhaseCriticBlock(unitPhase) + "\n\n"
 	nameRulesBlock := strings.ReplaceAll(naming.PromptEntityNameNormalizationRules(), "\n", "\n        ")
 
@@ -362,6 +361,7 @@ EXTRACTED RELATIONS (JSON):
 SOURCE CONTENT:
 %s
 
+%s
 %s
 %s
 %s
@@ -597,5 +597,5 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      - When asking for mechanism user (from MECHANISM fragment), ALWAYS request EXPLICIT SOURCE in missingInfo.
 	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET.
 
-	Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, unitPhaseBlock, canonicalValidationBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, objectTypeTaskBlock, unitPhaseBlock, canonicalValidationBlock)
 }

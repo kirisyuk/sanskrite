@@ -20,6 +20,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
@@ -449,9 +450,679 @@ func filterDiscoveredRelationsByDomainModes(in []agents.DiscoveredRelation, doma
 	return out
 }
 
-func supplyChainsEnabled(domainModes []string, specialties []string) bool {
-	return taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
-		taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
+func supplyChainsEnabled(_ []string, _ []string) bool {
+	// Supply-chain discovery is part of the core scouting pipeline.
+	// Keep this enabled regardless of specialty/domain flags.
+	return true
+}
+
+type facilityQualifierSemantic string
+
+const (
+	facilityQualifierSemanticNone        facilityQualifierSemantic = ""
+	facilityQualifierSemanticRoute       facilityQualifierSemantic = "route"
+	facilityQualifierSemanticSupply      facilityQualifierSemantic = "supply"
+	facilityQualifierSemanticProcurement facilityQualifierSemantic = "procurement"
+)
+
+func mapModelFacilitySemantic(sem models.FacilitySemantic) facilityQualifierSemantic {
+	switch sem {
+	case models.FacilitySemanticRoute:
+		return facilityQualifierSemanticRoute
+	case models.FacilitySemanticSupply:
+		return facilityQualifierSemanticSupply
+	case models.FacilitySemanticProcurement:
+		return facilityQualifierSemanticProcurement
+	default:
+		return facilityQualifierSemanticNone
+	}
+}
+
+func hasTruthyQualifierValue(raw interface{}) bool {
+	switch v := raw.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.TrimSpace(v) != ""
+	case []string:
+		return len(v) > 0
+	case []interface{}:
+		return len(v) > 0
+	case map[string]interface{}:
+		return len(v) > 0
+	default:
+		return false
+	}
+}
+
+func hasTruthyRouteQualifier(raw interface{}) bool {
+	return hasTruthyQualifierValue(raw)
+}
+
+func containsRouteHint(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	for _, token := range []string{
+		"route",
+		"corridor",
+		"pipeline",
+		"shipping-lane",
+		"logistics-lane",
+		"transport-lane",
+		"trade-lane",
+		"canal",
+	} {
+		if strings.Contains(text, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSupplyHint(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	for _, token := range []string{
+		"supply",
+		"supplier",
+		"downstream",
+		"upstream",
+		"distribution",
+		"fulfillment",
+	} {
+		if strings.Contains(text, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsProcurementHint(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	for _, token := range []string{
+		"procurement",
+		"sourcing",
+		"purchasing",
+		"tender",
+		"vendor",
+	} {
+		if strings.Contains(text, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func valueContainsSemanticHint(raw interface{}, detector func(string) bool) bool {
+	switch v := raw.(type) {
+	case string:
+		return detector(v)
+	case []string:
+		for _, item := range v {
+			if detector(item) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if valueContainsSemanticHint(item, detector) {
+				return true
+			}
+		}
+	case map[string]interface{}:
+		for k, item := range v {
+			if detector(k) && hasTruthyQualifierValue(item) {
+				return true
+			}
+			if valueContainsSemanticHint(item, detector) {
+				return true
+			}
+		}
+	case map[string]string:
+		for k, item := range v {
+			if detector(k) && strings.TrimSpace(item) != "" {
+				return true
+			}
+			if detector(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func facilityFragmentHasSemanticHint(frag *models.HorizonFragment, detector func(string) bool) bool {
+	if frag == nil {
+		return false
+	}
+	cp := strings.TrimSpace(strings.ToLower(frag.CanonicalPath))
+	if !strings.HasPrefix(cp, "/fac/") && frag.Type != models.FragmentTypeFacility {
+		return false
+	}
+	if detector(cp) {
+		return true
+	}
+	for _, label := range frag.Labels {
+		if detector(label) {
+			return true
+		}
+	}
+	if frag.Qualifiers != nil {
+		for key, value := range frag.Qualifiers {
+			if detector(key) && hasTruthyQualifierValue(value) {
+				return true
+			}
+			if valueContainsSemanticHint(value, detector) {
+				return true
+			}
+		}
+	}
+	if frag.Identifiers != nil {
+		for key, value := range frag.Identifiers {
+			if detector(key) && strings.TrimSpace(value) != "" {
+				return true
+			}
+			if detector(value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func detectFacilityQualifierSemanticFromFragment(frag *models.HorizonFragment) facilityQualifierSemantic {
+	return mapModelFacilitySemantic(models.DetectFacilitySemanticFromFragment(frag))
+}
+
+func isFacilityTarget(targetCanonicalPath string, targetType models.FragmentType, candidates ...*models.HorizonFragment) bool {
+	cp := strings.TrimSpace(strings.ToLower(targetCanonicalPath))
+	if strings.HasPrefix(cp, "/fac/") || targetType == models.FragmentTypeFacility {
+		return true
+	}
+	for _, c := range candidates {
+		if c == nil {
+			continue
+		}
+		fcp := strings.TrimSpace(strings.ToLower(c.CanonicalPath))
+		if c.Type == models.FragmentTypeFacility || strings.HasPrefix(fcp, "/fac/") {
+			return true
+		}
+	}
+	return false
+}
+
+func detectFacilityQualifierSemanticForTarget(targetCanonicalPath string, targetType models.FragmentType, candidates ...*models.HorizonFragment) facilityQualifierSemantic {
+	if !isFacilityTarget(targetCanonicalPath, targetType, candidates...) {
+		return facilityQualifierSemanticNone
+	}
+	if sem := mapModelFacilitySemantic(models.DetectFacilitySemantic(targetCanonicalPath, nil, nil, nil)); sem != facilityQualifierSemanticNone {
+		return sem
+	}
+	for _, c := range candidates {
+		if sem := detectFacilityQualifierSemanticFromFragment(c); sem != facilityQualifierSemanticNone {
+			return sem
+		}
+	}
+	return facilityQualifierSemanticNone
+}
+
+func shouldSkipSameFacilityQualifierRecursion(sourceFragment *models.HorizonFragment, targetCanonicalPath string, targetType models.FragmentType, candidates ...*models.HorizonFragment) bool {
+	sourceKind := detectFacilityQualifierSemanticFromFragment(sourceFragment)
+	if sourceKind == facilityQualifierSemanticNone {
+		return false
+	}
+	targetKind := detectFacilityQualifierSemanticForTarget(targetCanonicalPath, targetType, candidates...)
+	return targetKind != facilityQualifierSemanticNone && targetKind == sourceKind
+}
+
+func detectFacilityQualifierSemanticFromPath(path string) facilityQualifierSemantic {
+	return mapModelFacilitySemantic(models.DetectFacilitySemantic(path, nil, nil, nil))
+}
+
+func resolveFacilityQualifierSemantic(sourceFragment *models.HorizonFragment, fallbackTargetPath string) facilityQualifierSemantic {
+	if k := detectFacilityQualifierSemanticFromFragment(sourceFragment); k != facilityQualifierSemanticNone {
+		return k
+	}
+	return detectFacilityQualifierSemanticFromPath(fallbackTargetPath)
+}
+
+func firstObjectQualifierRaw(frag *models.HorizonFragment) string {
+	if frag == nil {
+		return ""
+	}
+	if frag.Identifiers != nil {
+		for _, key := range []string{"objectQualifier", "object_qualifier", "qualifier", "businessQualifier", "business_qualifier"} {
+			if v, ok := frag.Identifiers[key]; ok {
+				s := strings.TrimSpace(v)
+				if s != "" {
+					return s
+				}
+			}
+		}
+	}
+	if frag.Qualifiers != nil {
+		for _, key := range []string{"objectQualifier", "object_qualifier", "qualifier", "businessQualifier", "business_qualifier"} {
+			if v, ok := frag.Qualifiers[key]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					return strings.TrimSpace(s)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func inferObjectQualifierForFragment(frag *models.HorizonFragment, fallbackTargetPath string) models.ObjectQualifier {
+	if frag == nil {
+		return models.ObjectQualifierNone
+	}
+	cp := strings.TrimSpace(strings.ToLower(frag.CanonicalPath))
+	if cp == "" {
+		cp = strings.TrimSpace(strings.ToLower(fallbackTargetPath))
+	}
+	switch {
+	case strings.HasPrefix(cp, "/fac/"):
+		switch detectFacilityQualifierSemanticForTarget(cp, models.FragmentTypeFacility, frag) {
+		case facilityQualifierSemanticRoute:
+			return models.ObjectQualifierRoute
+		case facilityQualifierSemanticSupply:
+			return models.ObjectQualifierSupply
+		case facilityQualifierSemanticProcurement:
+			return models.ObjectQualifierProcurement
+		}
+	case strings.HasPrefix(cp, "/gov/"):
+		if containsProcurementHint(cp) {
+			return models.ObjectQualifierProcurer
+		}
+		if strings.Contains(cp, "regulator") || strings.Contains(cp, "authority") || strings.Contains(cp, "commission") {
+			return models.ObjectQualifierRegulator
+		}
+	case strings.HasPrefix(cp, "/org/"):
+		if strings.Contains(cp, "holding") {
+			return models.ObjectQualifierHolding
+		}
+		if strings.Contains(cp, "distribution") || strings.Contains(cp, "distributor") {
+			return models.ObjectQualifierDistributor
+		}
+	case strings.HasPrefix(cp, "/market/"):
+		if strings.Contains(cp, "regulated") {
+			return models.ObjectQualifierRegulated
+		}
+	case strings.HasPrefix(cp, "/deposit/"):
+		if strings.Contains(cp, "greenfield") {
+			return models.ObjectQualifierGreenfield
+		}
+		if strings.Contains(cp, "brownfield") {
+			return models.ObjectQualifierBrownfield
+		}
+	}
+	return models.ObjectQualifierNone
+}
+
+func normalizeAndSetFragmentObjectQualifier(frag *models.HorizonFragment, fallbackTargetPath string) models.ObjectQualifier {
+	if frag == nil {
+		return models.ObjectQualifierNone
+	}
+	raw := firstObjectQualifierRaw(frag)
+	q := models.NormalizeObjectQualifier(raw)
+	if q == models.ObjectQualifierNone {
+		q = inferObjectQualifierForFragment(frag, fallbackTargetPath)
+	}
+	if !models.IsAllowedObjectQualifierForType(frag.Type, frag.CanonicalPath, q) {
+		q = inferObjectQualifierForFragment(frag, fallbackTargetPath)
+		if !models.IsAllowedObjectQualifierForType(frag.Type, frag.CanonicalPath, q) {
+			q = models.ObjectQualifierNone
+		}
+	}
+	if frag.Identifiers == nil {
+		frag.Identifiers = map[string]string{}
+	}
+	if q == models.ObjectQualifierNone {
+		delete(frag.Identifiers, "objectQualifier")
+		return q
+	}
+	frag.Identifiers["objectQualifier"] = string(q)
+	return q
+}
+
+func resolveObjectQualifierForFragment(frag *models.HorizonFragment, fallbackTargetPath string) models.ObjectQualifier {
+	if frag == nil {
+		return models.ObjectQualifierNone
+	}
+	if raw := firstObjectQualifierRaw(frag); raw != "" {
+		q := models.NormalizeObjectQualifier(raw)
+		if models.IsAllowedObjectQualifierForType(frag.Type, frag.CanonicalPath, q) {
+			return q
+		}
+	}
+	return inferObjectQualifierForFragment(frag, fallbackTargetPath)
+}
+
+func parseRelationTargetType(raw string) models.FragmentType {
+	raw = strings.TrimSpace(strings.ToUpper(raw))
+	if raw == "" {
+		return ""
+	}
+	return models.FragmentType(raw)
+}
+
+func targetPathHasAnyPrefix(path string, prefixes ...string) bool {
+	path = strings.TrimSpace(strings.ToLower(path))
+	if path == "" {
+		return false
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func isFacilityQualifierBusinessTargetType(kind facilityQualifierSemantic, targetPath string, targetType models.FragmentType) bool {
+	if kind == facilityQualifierSemanticNone {
+		return true
+	}
+	if targetType == models.FragmentTypePerson || targetType == models.FragmentTypeCommunity || targetType == models.FragmentTypeMediaChannel || targetType == models.FragmentTypeEvent {
+		return false
+	}
+	if targetPathHasAnyPrefix(targetPath, "/person/", "/community/", "/media/", "/event/", "/sphere/", "/domain/", "/decision/", "/mechanism/") {
+		return false
+	}
+
+	// Keep qualifier lanes business-first: geo + flow + actors/products/markets.
+	if targetType == models.FragmentTypeOrganization ||
+		targetType == models.FragmentTypeFacility ||
+		targetType == models.FragmentTypeProduct ||
+		targetType == models.FragmentTypeGeoRegion ||
+		targetType == models.FragmentTypeMarket ||
+		targetType == models.FragmentTypeDeposit ||
+		targetType == models.FragmentTypeProgram ||
+		targetType == models.FragmentTypeDomain ||
+		targetType == "" {
+		return true
+	}
+	if targetPathHasAnyPrefix(targetPath, "/org/", "/fac/", "/product/", "/loc/", "/market/", "/deposit/", "/gov/", "/program/") {
+		return true
+	}
+	return false
+}
+
+func isFacilityQualifierAllowedRelationType(kind facilityQualifierSemantic, relType string) bool {
+	if kind == facilityQualifierSemanticNone {
+		return true
+	}
+	rt := strings.TrimSpace(relType)
+	if rt == "" {
+		return true
+	}
+	switch kind {
+	case facilityQualifierSemanticRoute:
+		switch rt {
+		case string(models.DependencyTypeDependsOn),
+			string(models.DependencyTypeSuppliesTo),
+			string(models.DependencyTypeLocatedIn),
+			string(models.DependencyTypeOperatesIn),
+			string(models.DependencyTypeProduces),
+			string(models.DependencyTypeConsumes),
+			string(models.DependencyTypeTransformsInto),
+			string(models.DependencyTypeExtractsFrom),
+			string(models.DependencyTypeParticipatesIn),
+			string(models.DependencyTypeRegulates),
+			string(models.DependencyTypeControlsAccess),
+			string(models.DependencyTypeImposesCondition):
+			return true
+		default:
+			return false
+		}
+	case facilityQualifierSemanticSupply, facilityQualifierSemanticProcurement:
+		switch rt {
+		case string(models.DependencyTypeDependsOn),
+			string(models.DependencyTypeSuppliesTo),
+			string(models.DependencyTypeProduces),
+			string(models.DependencyTypeConsumes),
+			string(models.DependencyTypeTransformsInto),
+			string(models.DependencyTypeExtractsFrom),
+			string(models.DependencyTypeLocatedIn),
+			string(models.DependencyTypeOperatesIn),
+			string(models.DependencyTypeParticipatesIn),
+			string(models.DependencyTypePartnersWith),
+			string(models.DependencyTypeRegulates),
+			string(models.DependencyTypeControlsAccess),
+			string(models.DependencyTypeImposesCondition):
+			return true
+		default:
+			return false
+		}
+	default:
+		return true
+	}
+}
+
+func isFacilityQualifierBusinessRelation(kind facilityQualifierSemantic, relType string, targetPath string, targetType models.FragmentType) bool {
+	if !isFacilityQualifierBusinessTargetType(kind, targetPath, targetType) {
+		return false
+	}
+	return isFacilityQualifierAllowedRelationType(kind, relType)
+}
+
+func filterDiscoveredRelationsByFacilityQualifier(in []agents.DiscoveredRelation, sourceFragment *models.HorizonFragment, fallbackTargetPath string) []agents.DiscoveredRelation {
+	if len(in) == 0 {
+		return nil
+	}
+	kind := resolveFacilityQualifierSemantic(sourceFragment, fallbackTargetPath)
+	if kind == facilityQualifierSemanticNone {
+		return in
+	}
+	out := make([]agents.DiscoveredRelation, 0, len(in))
+	for _, rel := range in {
+		targetType := parseRelationTargetType(rel.TargetType)
+		if !isFacilityQualifierBusinessRelation(kind, rel.RelationType, rel.TargetCanonicalPath, targetType) {
+			continue
+		}
+		out = append(out, rel)
+	}
+	return out
+}
+
+func applyUnitTemplateContractToRelations(in []agents.DiscoveredRelation, sourceFragment *models.HorizonFragment, fallbackTargetPath string) []agents.DiscoveredRelation {
+	if len(in) == 0 {
+		return nil
+	}
+	objectQualifier := resolveObjectQualifierForFragment(sourceFragment, fallbackTargetPath)
+	if objectQualifier == models.ObjectQualifierNone {
+		return in
+	}
+	out := make([]agents.DiscoveredRelation, 0, len(in))
+	for _, rel := range in {
+		if rel.Qualifiers == nil {
+			rel.Qualifiers = map[string]interface{}{}
+		}
+		rt := models.DependencyType(strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType)))
+		srcCode := models.NormalizeUnitCode(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitCode, "sourceUnitCode"))
+		dstCode := models.NormalizeUnitCode(firstStringQualifier(rel.Qualifiers, models.UnitQualifierTargetUnitCode, "targetUnitCode"))
+		srcCode, dstCode, templateKey, adjusted := models.ApplyUnitTemplatePairByQualifier(objectQualifier, rt, srcCode, dstCode)
+
+		srcRef := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitRef, "sourceUnitRef"))
+		dstRef := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, models.UnitQualifierTargetUnitRef, "targetUnitRef"))
+		srcLabel := strings.TrimSpace(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitLabel, "sourceUnitLabel"))
+		dstLabel := strings.TrimSpace(firstStringQualifier(rel.Qualifiers, models.UnitQualifierTargetUnitLabel, "targetUnitLabel"))
+
+		if srcCode != models.UnitCodeUnclassified {
+			if srcRef == "" || srcRef == string(models.UnitCodeUnclassified) {
+				srcRef = string(srcCode)
+			}
+			if srcLabel == "" || srcLabel == string(models.UnitCodeUnclassified) {
+				srcLabel = string(srcCode)
+			}
+		}
+		if dstCode != models.UnitCodeUnclassified {
+			if dstRef == "" || dstRef == string(models.UnitCodeUnclassified) {
+				dstRef = string(dstCode)
+			}
+			if dstLabel == "" || dstLabel == string(models.UnitCodeUnclassified) {
+				dstLabel = string(dstCode)
+			}
+		}
+		if srcRef == "" {
+			srcRef = string(models.UnitCodeUnclassified)
+		}
+		if dstRef == "" {
+			dstRef = string(models.UnitCodeUnclassified)
+		}
+		if srcLabel == "" {
+			srcLabel = string(srcCode)
+		}
+		if dstLabel == "" {
+			dstLabel = string(dstCode)
+		}
+		rel.Qualifiers[models.UnitQualifierSourceUnitCode] = string(srcCode)
+		rel.Qualifiers[models.UnitQualifierTargetUnitCode] = string(dstCode)
+		rel.Qualifiers[models.UnitQualifierSourceUnitRef] = srcRef
+		rel.Qualifiers[models.UnitQualifierTargetUnitRef] = dstRef
+		rel.Qualifiers[models.UnitQualifierSourceUnitLabel] = srcLabel
+		rel.Qualifiers[models.UnitQualifierTargetUnitLabel] = dstLabel
+		if templateKey != models.UnitTemplateGeneral {
+			rel.Qualifiers["unit_template_key"] = string(templateKey)
+		}
+		if adjusted {
+			rel.Qualifiers["unit_template_adjusted"] = true
+		}
+		out = append(out, rel)
+	}
+	return out
+}
+
+func containsAnyToken(text string, tokens []string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	for _, token := range tokens {
+		if strings.Contains(text, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func filterMissingInfoByFacilityQualifier(in []string, kind facilityQualifierSemantic) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	if kind == facilityQualifierSemanticNone {
+		return in
+	}
+	// Human-biography prompts are out-of-scope for fac(route/supply/procurement) business scouting.
+	bannedTokens := []string{
+		"spouse", "children", "parents", "siblings",
+		"relative", "family", "classmates", "friends",
+		"biography", "personal life", "birth date",
+	}
+	out := make([]string, 0, len(in))
+	for _, q := range in {
+		if containsAnyToken(q, bannedTokens) {
+			continue
+		}
+		out = appendMissingInfoUnique(out, q)
+	}
+	return out
+}
+
+func isRouteFacilityFragment(frag *models.HorizonFragment) bool {
+	if frag == nil {
+		return false
+	}
+	cp := strings.TrimSpace(strings.ToLower(frag.CanonicalPath))
+	if frag.Type != models.FragmentTypeFacility && !strings.HasPrefix(cp, "/fac/") {
+		return false
+	}
+	if frag.Qualifiers != nil {
+		for _, key := range []string{"route", "route_path", "routePath", "route_waypoints", "routeWaypoints"} {
+			if hasTruthyRouteQualifier(frag.Qualifiers[key]) {
+				return true
+			}
+		}
+	}
+	if frag.Identifiers != nil {
+		for _, key := range []string{"facilityType", "routeType"} {
+			if containsRouteHint(frag.Identifiers[key]) {
+				return true
+			}
+		}
+	}
+	return containsRouteHint(cp)
+}
+
+func isRouteFacilityTarget(targetCanonicalPath string, candidates ...*models.HorizonFragment) bool {
+	cp := strings.TrimSpace(strings.ToLower(targetCanonicalPath))
+	if strings.HasPrefix(cp, "/fac/") && containsRouteHint(cp) {
+		return true
+	}
+	for _, c := range candidates {
+		if isRouteFacilityFragment(c) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildRouteFacilityMissingInfo(targetCanonicalPath string) []string {
+	t := strings.TrimSpace(targetCanonicalPath)
+	if t == "" {
+		t = "this route facility"
+	}
+	return []string{
+		fmt.Sprintf("What regions/countries/cities does %s traverse or connect? Return canonical /loc/... paths and LOCATED_IN/OPERATES_IN links for each major segment.", t),
+		fmt.Sprintf("What is the ordered geo route for %s? Provide waypoint sequence with latitude/longitude and route facilities (ports/terminals/pipelines/warehouses). Prefer Google Maps geocoding when coordinates are missing.", t),
+		fmt.Sprintf("Which logistics operators, carriers, suppliers, and major customers are business-critical for %s? Return DEPENDS_ON/SUPPLIES_TO edges with facet=logistics|supply and transmission qualifiers.", t),
+	}
+}
+
+func buildSupplyFacilityMissingInfo(targetCanonicalPath string) []string {
+	t := strings.TrimSpace(targetCanonicalPath)
+	if t == "" {
+		t = "this supply facility"
+	}
+	return []string{
+		fmt.Sprintf("Who are the direct upstream suppliers for %s (companies + input products/materials)? Return DEPENDS_ON/SUPPLIES_TO + PRODUCES/CONSUMES continuity.", t),
+		fmt.Sprintf("Who are the direct downstream customers/recipients for %s and what outputs flow to them? Include product/facility paths and confidence.", t),
+		fmt.Sprintf("Which logistics operators and transport facilities are critical for %s (ports, terminals, rail hubs, warehouses)? Add transport_via and facet=logistics qualifiers where known.", t),
+		fmt.Sprintf("What are the key sourcing/serving regions for %s? Return /loc/... paths and LOCATED_IN/OPERATES_IN links for major flow segments.", t),
+	}
+}
+
+func buildProcurementFacilityMissingInfo(targetCanonicalPath string) []string {
+	t := strings.TrimSpace(targetCanonicalPath)
+	if t == "" {
+		t = "this procurement facility"
+	}
+	return []string{
+		fmt.Sprintf("Who are the key vendors/suppliers contracted by %s and what categories/products do they cover? Return supplier organization/product links.", t),
+		fmt.Sprintf("What are the primary procurement channels and logistics partners for %s (distributors, freight forwarders, carriers, procurement service providers)?", t),
+		fmt.Sprintf("Which sourcing regions and alternative suppliers exist for %s to reduce concentration risk? Return /loc/... + supplier paths.", t),
+		fmt.Sprintf("What are the critical contract/tender dependencies for %s (single-source risks, framework agreements, procurement bottlenecks) with evidence?", t),
+	}
+}
+
+func buildFacilityQualifierMissingInfo(targetCanonicalPath string, kind facilityQualifierSemantic) []string {
+	switch kind {
+	case facilityQualifierSemanticRoute:
+		return buildRouteFacilityMissingInfo(targetCanonicalPath)
+	case facilityQualifierSemanticSupply:
+		return buildSupplyFacilityMissingInfo(targetCanonicalPath)
+	case facilityQualifierSemanticProcurement:
+		return buildProcurementFacilityMissingInfo(targetCanonicalPath)
+	default:
+		return nil
+	}
 }
 
 func normalizeUnitRef(in string) string {
@@ -759,6 +1430,18 @@ func shouldPersistUnitProfilesToGlobal(job *models.ScoutingJob) bool {
 	return true
 }
 
+func sanitizeUnitProfilesDomainKey(raw string) string {
+	key := strings.TrimSpace(raw)
+	if key == "" {
+		return taxonomy.DomainModeGeneral
+	}
+	// Firestore rejects reserved field names matching "__.*__".
+	if key == "__default__" || (strings.HasPrefix(key, "__") && strings.HasSuffix(key, "__")) {
+		return taxonomy.DomainModeGeneral
+	}
+	return key
+}
+
 func setFragmentUnitProfilesQualifier(fragment *models.HorizonFragment, units []models.OrgUnitProfile, domainCanonicalPath string, persist bool) {
 	if fragment == nil {
 		return
@@ -771,16 +1454,13 @@ func setFragmentUnitProfilesQualifier(fragment *models.HorizonFragment, units []
 		delete(fragment.Qualifiers, "unitProfilesByDomain")
 		return
 	}
-	domainKey := strings.TrimSpace(domainCanonicalPath)
-	if domainKey == "" {
-		domainKey = "__default__"
-	}
+	domainKey := sanitizeUnitProfilesDomainKey(domainCanonicalPath)
 	byDomain := map[string]interface{}{}
 	if raw, ok := fragment.Qualifiers["unitProfilesByDomain"]; ok && raw != nil {
 		switch t := raw.(type) {
 		case map[string]interface{}:
 			for k, v := range t {
-				byDomain[k] = v
+				byDomain[sanitizeUnitProfilesDomainKey(k)] = v
 			}
 		default:
 			// Best-effort migration from unknown shape.
@@ -788,7 +1468,7 @@ func setFragmentUnitProfilesQualifier(fragment *models.HorizonFragment, units []
 				var decoded map[string]interface{}
 				if err := json.Unmarshal(b, &decoded); err == nil {
 					for k, v := range decoded {
-						byDomain[k] = v
+						byDomain[sanitizeUnitProfilesDomainKey(k)] = v
 					}
 				}
 			}
@@ -1649,8 +2329,6 @@ type ScoutEngine struct {
 	unitDiveRepo      *repo.UnitDiveResultsRepository       // Optional: persisted unit-dive artifacts
 }
 
-const maxDeferredScopeAddPerLens = 5
-
 // bestEffortDeferredScopeAdd adds canonicalPath to lens.Scope if under limit (max 5 per lens).
 // Used when Scout creates/updates a fragment for any lens job (not just deferred-scope).
 // Path changes during pipeline (org upgrade, dedup, etc.) are handled by bestEffortRewriteLensScope.
@@ -1658,36 +2336,9 @@ func (e *ScoutEngine) bestEffortDeferredScopeAdd(ctx context.Context, lensID, ca
 	if e == nil || e.lensesRepo == nil || lensID == "" || strings.TrimSpace(canonicalPath) == "" {
 		return
 	}
-	lens, err := e.lensesRepo.Get(ctx, lensID)
-	if err != nil || lens == nil {
-		return
-	}
-	currentCount := 0
-	if lens.ViewConfig != nil {
-		if v, ok := lens.ViewConfig["deferredScopeAddCount"]; ok {
-			switch n := v.(type) {
-			case float64:
-				currentCount = int(n)
-			case int:
-				currentCount = n
-			}
-		}
-	}
-	if currentCount >= maxDeferredScopeAddPerLens {
-		trace.Log(ctx, "scope", "scope.deferred_add.skipped_limit", map[string]any{
-			"lensId": lensID,
-			"path":   canonicalPath,
-			"count":  currentCount,
-		})
-		return
-	}
-	// Check if path already in scope
-	for _, s := range lens.Scope {
-		if strings.TrimSpace(s) == canonicalPath {
-			return
-		}
-	}
-	if err := e.lensesRepo.AddScopeCanonicalPaths(ctx, lensID, []string{canonicalPath}); err != nil {
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	res, err := e.lensesRepo.AddScopeCanonicalPathAutoLimited(ctx, lensID, canonicalPath, models.MaxAutoScopeAddsPerLens)
+	if err != nil {
 		trace.Log(ctx, "scope", "scope.deferred_add.failed", map[string]any{
 			"lensId": lensID,
 			"path":   canonicalPath,
@@ -1695,17 +2346,25 @@ func (e *ScoutEngine) bestEffortDeferredScopeAdd(ctx context.Context, lensID, ca
 		})
 		return
 	}
-	if err := e.lensesRepo.IncrementDeferredScopeAddCount(ctx, lensID, 1); err != nil {
-		trace.Log(ctx, "scope", "scope.deferred_add.count_update_failed", map[string]any{
+	if res.LimitReached {
+		trace.Log(ctx, "scope", "scope.deferred_add.skipped_limit", map[string]any{
 			"lensId": lensID,
 			"path":   canonicalPath,
-			"error":  err.Error(),
+			"count":  res.DeferredScopeAddCount,
 		})
+		return
+	}
+	if res.AlreadyInScope {
+		trace.Log(ctx, "scope", "scope.deferred_add.skipped_exists", map[string]any{
+			"lensId": lensID,
+			"path":   canonicalPath,
+		})
+		return
 	}
 	trace.Log(ctx, "scope", "scope.deferred_add.ok", map[string]any{
 		"lensId": lensID,
 		"path":   canonicalPath,
-		"count":  currentCount + 1,
+		"count":  res.DeferredScopeAddCount,
 	})
 }
 
@@ -2540,6 +3199,135 @@ func (e *ScoutEngine) attachRealtimeContext(ctx context.Context, job *models.Sco
 	})
 }
 
+func normalizePipelinePassName(raw string) (pipeline.PassName, bool) {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case string(pipeline.PassBaseEnrichment), "base-enrichment", "base", "phase1", "domain_expansion", "domain-expansion":
+		return pipeline.PassBaseEnrichment, true
+	case string(pipeline.PassStrategicProjection), "strategic-projection", "strategic", "phase2", "domain_overlay", "domain-overlay", "phase2_overlay", "phase2-overlay":
+		return pipeline.PassStrategicProjection, true
+	default:
+		return "", false
+	}
+}
+
+func (e *ScoutEngine) resolvePipelinePassForJob(ctx context.Context, job *models.ScoutingJob, effectiveCanonicalPath string) (pipeline.PassName, bool) {
+	if job == nil {
+		return "", false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(effectiveCanonicalPath), "/domain/") {
+		return "", false
+	}
+	if job.State != nil {
+		if raw := parseStateString(job.State[pipeline.StateKeyPipelinePass]); raw != "" {
+			if pass, ok := normalizePipelinePassName(raw); ok {
+				return pass, true
+			}
+			trace.Log(ctx, "scout_exec", "scout.pipeline_pass.unknown", map[string]any{
+				"tenantId":      strings.TrimSpace(job.TenantID),
+				"projectId":     strings.TrimSpace(job.ProjectID),
+				"lensId":        strings.TrimSpace(job.LensID),
+				"jobId":         strings.TrimSpace(job.ID),
+				"canonicalPath": strings.TrimSpace(effectiveCanonicalPath),
+				"pipelinePass":  strings.TrimSpace(raw),
+			})
+		}
+		if parseStateBool(job.State["domainOverlayMode"], false) || parseStateBool(job.State["phase2Overlay"], false) {
+			return pipeline.PassStrategicProjection, true
+		}
+	}
+	// Domain jobs default to base enrichment pass.
+	return pipeline.PassBaseEnrichment, true
+}
+
+func isTerminalScoutJob(job *models.ScoutingJob) bool {
+	if job == nil {
+		return true
+	}
+	switch job.CurrentState {
+	case models.ScoutingJobStateVerified, models.ScoutingJobStateFailed, models.ScoutingJobStateRejected:
+		return true
+	}
+	switch job.Status {
+	case coreModels.AgentJobStatusCompleted, coreModels.AgentJobStatusFailed:
+		return true
+	}
+	return false
+}
+
+func (e *ScoutEngine) finalizePipelinePassIfNeeded(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	effectiveCanonicalPath string,
+	passName pipeline.PassName,
+) error {
+	if e == nil || job == nil || isTerminalScoutJob(job) {
+		return nil
+	}
+	hint := "pipeline_pass_" + strings.TrimSpace(string(passName))
+	if strings.TrimSpace(string(passName)) == "" {
+		hint = "pipeline_pass"
+	}
+	if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, hint); err != nil {
+		return err
+	}
+	e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+		"tenantId":      job.TenantID,
+		"projectId":     job.ProjectID,
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         job.ID,
+		"canonicalPath": strings.TrimSpace(effectiveCanonicalPath),
+		"confidence":    1.0,
+		"hint":          hint,
+	})
+	e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
+	return nil
+}
+
+func (e *ScoutEngine) runPipelinePass(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	passName pipeline.PassName,
+	effectiveCanonicalPath string,
+	existingFragment *models.HorizonFragment,
+) error {
+	if e == nil || job == nil {
+		return nil
+	}
+	if strings.TrimSpace(string(passName)) == "" {
+		passName = pipeline.PassBaseEnrichment
+	}
+	trace.Log(ctx, "scout_exec", "scout.pipeline_pass.start", map[string]any{
+		"tenantId":      strings.TrimSpace(job.TenantID),
+		"projectId":     strings.TrimSpace(job.ProjectID),
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         strings.TrimSpace(job.ID),
+		"canonicalPath": strings.TrimSpace(effectiveCanonicalPath),
+		"pass":          strings.TrimSpace(string(passName)),
+	})
+	runner := pipeline.DefaultRunner()
+	if err := runner.Run(ctx, e, passName, pipeline.PassInput{
+		Job:                    job,
+		EffectiveCanonicalPath: effectiveCanonicalPath,
+		ExistingFragment:       existingFragment,
+	}); err != nil {
+		_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "pipeline_pass_failed")
+		return fmt.Errorf("pipeline pass %q failed: %w", strings.TrimSpace(string(passName)), err)
+	}
+	if err := e.finalizePipelinePassIfNeeded(ctx, job, effectiveCanonicalPath, passName); err != nil {
+		_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "pipeline_pass_finalize_failed")
+		return fmt.Errorf("pipeline pass %q finalize failed: %w", strings.TrimSpace(string(passName)), err)
+	}
+	trace.Log(ctx, "scout_exec", "scout.pipeline_pass.completed", map[string]any{
+		"tenantId":      strings.TrimSpace(job.TenantID),
+		"projectId":     strings.TrimSpace(job.ProjectID),
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         strings.TrimSpace(job.ID),
+		"canonicalPath": strings.TrimSpace(effectiveCanonicalPath),
+		"pass":          strings.TrimSpace(string(passName)),
+	})
+	return nil
+}
+
 func (e *ScoutEngine) transition(ctx context.Context, job *models.ScoutingJob, newState models.ScoutingJobState, progress float64, hint string) error {
 	if e == nil || e.workflow == nil || job == nil {
 		return nil
@@ -2771,10 +3559,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	}
 
-	// Supply chain context (optional): when supply_chain specialty is enabled, we pass
-	// already-discovered chain nodes/edges + gaps to the LLM to keep it focused and incremental.
+	// Supply chain context (optional): pass already-discovered chain nodes/edges + gaps
+	// to keep LLM scouting incremental and business-meaningful.
 	chainContextForPrompt := ""
-	if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) && job.State != nil {
+	if job.State != nil {
 		if v, ok := job.State["chainContext"]; ok {
 			if cc, _ := ParseChainContext(v); cc != nil {
 				chainContextForPrompt = cc.ToPromptContext()
@@ -2897,10 +3685,11 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	}
 
-	// Domain is config (contract), not a graph node. Jobs targeting /domain/ are skipped;
-	// domainModes come from lens; scope excludes /domain/ paths.
-	if strings.HasPrefix(strings.TrimSpace(effectiveCanonicalPath), "/domain/") {
-		_ = e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "domain_as_config_skip")
+	// Domain jobs are executed by explicit pipeline passes (base_enrichment/strategic_projection).
+	if passName, ok := e.resolvePipelinePassForJob(ctx, job, effectiveCanonicalPath); ok {
+		if err := e.runPipelinePass(ctx, job, passName, effectiveCanonicalPath, existingFragment); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -3405,6 +4194,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		if scoutResult != nil {
 			scoutResult.Relations = filterDiscoveredRelationsByDomainModes(scoutResult.Relations, domainModesForScout)
 			scoutResult.Relations = ensureUnitQualifiersForRelations(scoutResult.Relations, domainModesForScout)
+			scoutResult.Relations = applyUnitTemplateContractToRelations(scoutResult.Relations, &scoutResult.Fragment, job.TargetCanonicalPath)
+			scoutResult.Relations = filterDiscoveredRelationsByFacilityQualifier(scoutResult.Relations, &scoutResult.Fragment, job.TargetCanonicalPath)
 			e.persistUnitGraphSnapshotFromRelations(ctx, job, strings.TrimSpace(job.TargetCanonicalPath), scoutResult.Relations)
 			derivedUnits := deriveSourceUnitProfilesFromRelations(strings.TrimSpace(job.TargetCanonicalPath), scoutResult.Relations)
 			scoutResult.UnitProfiles = mergeUnitProfiles(scoutResult.UnitProfiles, derivedUnits, strings.TrimSpace(job.TargetCanonicalPath))
@@ -3449,6 +4240,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}
 		}
 		extractedFragment = &scoutResult.Fragment
+		normalizeAndSetFragmentObjectQualifier(extractedFragment, job.TargetCanonicalPath)
 
 		// Phase 2 (domain validation / critic): first validation — CriticPipeline when domain mode set, else monolithic prompt.
 		// VALIDATION: Валидация через Critic Agent
@@ -3474,6 +4266,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				Confidence: 0.5,
 			}
 		}
+	}
+
+	if extractedFragment != nil {
+		normalizeAndSetFragmentObjectQualifier(extractedFragment, job.TargetCanonicalPath)
 	}
 
 	// PRODUCT CANONICALIZATION MISSING INFO (best-effort):
@@ -3504,6 +4300,16 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		for _, q := range buildRelationMissingInfo(scoutResult.Relations, 6) {
 			validationResult.MissingInfo = appendMissingInfoUnique(validationResult.MissingInfo, q)
 		}
+	}
+	if validationResult != nil {
+		facilityQualifier := resolveFacilityQualifierSemantic(extractedFragment, job.TargetCanonicalPath)
+		if facilityQualifier == facilityQualifierSemanticNone {
+			facilityQualifier = resolveFacilityQualifierSemantic(existingFragment, job.TargetCanonicalPath)
+		}
+		for _, q := range buildFacilityQualifierMissingInfo(job.TargetCanonicalPath, facilityQualifier) {
+			validationResult.MissingInfo = appendMissingInfoUnique(validationResult.MissingInfo, q)
+		}
+		validationResult.MissingInfo = filterMissingInfoByFacilityQualifier(validationResult.MissingInfo, facilityQualifier)
 	}
 
 	// MARKET METRICS NORMALIZATION (best-effort):
@@ -3672,6 +4478,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			researchSucceeded = true
 			groundingEvidence = mergeGroundingEvidence(groundingEvidence, researchGroundingEvidence)
 			newRelations = ensureUnitQualifiersForRelations(newRelations, domainModesForScout)
+			newRelations = applyUnitTemplateContractToRelations(newRelations, extractedFragment, job.TargetCanonicalPath)
+			newRelations = filterDiscoveredRelationsByFacilityQualifier(newRelations, extractedFragment, job.TargetCanonicalPath)
 			// Apply allowlist by domain mode: only persist relations (and supply chains) allowed for this job's mode(s).
 			if len(newRelations) > 0 || len(newSupplyChains) > 0 {
 				allowlist := EdgeAllowlistByDomainModes(domainModesForScout)
@@ -3744,6 +4552,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				newCP = strings.TrimSpace(enrichedFragment.CanonicalPath)
 			}
 			extractedFragment = enrichedFragment
+			normalizeAndSetFragmentObjectQualifier(extractedFragment, job.TargetCanonicalPath)
 			// Best-effort: if research upgraded canonicalPath (e.g., /product/{slug} -> /product/{cat}/{type}/{stage}/{slug}),
 			// propagate the rewrite into job state + lens scope so UI and in-flight execution follow the canonical path.
 			if oldCP != "" && newCP != "" && oldCP != newCP {
@@ -4589,6 +5398,9 @@ SKIP_RESEARCH:
 			if attached, ocID := henrich.AttachOpenCorporatesIDIfMissing(ctx, e.openCorporatesClient, existingFragment); attached && ocID != "" {
 				_ = e.fragmentsRepo.Update(ctx, existingFragment)
 			}
+		}
+		if e.enrichRouteFacilityGeoContext(ctx, existingFragment, scoutResult) {
+			_ = e.fragmentsRepo.Update(ctx, existingFragment)
 		}
 	}
 

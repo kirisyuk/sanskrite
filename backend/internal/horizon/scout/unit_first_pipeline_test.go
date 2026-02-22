@@ -114,3 +114,64 @@ func TestSetFragmentUnitProfilesQualifier_ByDomain(t *testing.T) {
 		t.Fatalf("expected domain key in unitProfilesByDomain")
 	}
 }
+
+func TestSetFragmentUnitProfilesQualifier_EmptyDomainUsesGeneralKey(t *testing.T) {
+	fragment := &models.HorizonFragment{}
+	units := []models.OrgUnitProfile{
+		{
+			UnitID:       "enterprise",
+			ParentOrgRef: "/org/kz/kazakhtelecom-jsc",
+			UnitCode:     models.UnitCodeEnterprise,
+			Label:        "Enterprise",
+		},
+	}
+	setFragmentUnitProfilesQualifier(fragment, units, "", true)
+	raw, ok := fragment.Qualifiers["unitProfilesByDomain"]
+	if !ok {
+		t.Fatalf("expected unitProfilesByDomain qualifier")
+	}
+	byDomain, ok := raw.(map[string]interface{})
+	if !ok {
+		t.Fatalf("unitProfilesByDomain type = %T, want map[string]interface{}", raw)
+	}
+	if _, ok := byDomain[taxonomy.DomainModeGeneral]; !ok {
+		t.Fatalf("expected %q key in unitProfilesByDomain", taxonomy.DomainModeGeneral)
+	}
+}
+
+func TestSetFragmentUnitProfilesQualifier_MigratesReservedDefaultKey(t *testing.T) {
+	fragment := &models.HorizonFragment{
+		Qualifiers: map[string]interface{}{
+			"unitProfilesByDomain": map[string]interface{}{
+				"__default__": []interface{}{
+					map[string]interface{}{"unitId": "legacy"},
+				},
+			},
+		},
+	}
+	units := []models.OrgUnitProfile{
+		{
+			UnitID:       "enterprise",
+			ParentOrgRef: "/org/kz/kazakhtelecom-jsc",
+			UnitCode:     models.UnitCodeEnterprise,
+			Label:        "Enterprise",
+		},
+	}
+	setFragmentUnitProfilesQualifier(fragment, units, "", true)
+	raw, ok := fragment.Qualifiers["unitProfilesByDomain"]
+	if !ok {
+		t.Fatalf("expected unitProfilesByDomain qualifier")
+	}
+	byDomain, ok := raw.(map[string]interface{})
+	if !ok {
+		t.Fatalf("unitProfilesByDomain type = %T, want map[string]interface{}", raw)
+	}
+	for k := range byDomain {
+		if len(k) >= 4 && k[:2] == "__" && k[len(k)-2:] == "__" {
+			t.Fatalf("reserved key must be sanitized, got %q", k)
+		}
+	}
+	if _, ok := byDomain[taxonomy.DomainModeGeneral]; !ok {
+		t.Fatalf("expected %q key after migration", taxonomy.DomainModeGeneral)
+	}
+}

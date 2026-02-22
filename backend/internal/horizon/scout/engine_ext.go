@@ -13,6 +13,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -3338,6 +3339,7 @@ func (e *ScoutEngine) processRelationsInternal(
 	if cascadeID == "" && job != nil {
 		cascadeID = strings.TrimSpace(job.ID)
 	}
+	sourceFacilityQualifier := resolveFacilityQualifierSemantic(sourceFragment, "")
 
 	// Relation-level guardrails:
 	// - Do not recurse on COMPETES_WITH (explodes breadth and is rarely needed for local intent).
@@ -3347,6 +3349,9 @@ func (e *ScoutEngine) processRelationsInternal(
 	shouldRecurse := func(relType string, conf float64, targetPath string, targetType models.FragmentType) bool {
 		rt := strings.TrimSpace(relType)
 		if rt == "" {
+			return false
+		}
+		if !isFacilityQualifierBusinessRelation(sourceFacilityQualifier, rt, targetPath, targetType) {
 			return false
 		}
 		if sourceFragment != nil && isSoftDeniedRelationForRecurse(sourceFragment.Type, targetType, sourceFragment.CanonicalPath, targetPath, rt) {
@@ -3773,6 +3778,11 @@ func (e *ScoutEngine) processRelationsInternal(
 							sourceFragment.CanonicalPath, targetPath)
 						shouldSkipJob = true
 					}
+					if !shouldSkipJob && shouldSkipSameFacilityQualifierRecursion(sourceFragment, targetPath, targetType, targetFragment) {
+						fmt.Printf("[ScoutEngine] Skipping same-qualifier FAC recursion: %s -> %s.\n",
+							sourceFragment.CanonicalPath, targetPath)
+						shouldSkipJob = true
+					}
 
 					// CRITICAL: Skip if target fragment is already verified (regardless of edge existence)
 					// This prevents re-scouting entities that were just processed
@@ -4115,6 +4125,19 @@ func (e *ScoutEngine) processRelationsInternal(
 							"targetCanonicalPath": strings.TrimSpace(targetPath),
 						})
 						fmt.Printf("[ScoutEngine] Skipping self-reference job: %s -> %s. Circular dependency avoided.\n",
+							sourceFragment.CanonicalPath, targetPath)
+						shouldSkipJob = true
+					}
+					if !shouldSkipJob && shouldSkipSameFacilityQualifierRecursion(sourceFragment, targetPath, targetType, targetFragment) {
+						trace.Log(ctx, "scout_decompose", "child_job.skip.same_facility_qualifier", map[string]any{
+							"tenantId":            strings.TrimSpace(job.TenantID),
+							"projectId":           strings.TrimSpace(job.ProjectID),
+							"lensId":              strings.TrimSpace(job.LensID),
+							"jobId":               strings.TrimSpace(job.ID),
+							"sourceCanonicalPath": strings.TrimSpace(sourceFragment.CanonicalPath),
+							"targetCanonicalPath": strings.TrimSpace(targetPath),
+						})
+						fmt.Printf("[ScoutEngine] Skipping same-qualifier FAC recursion: %s -> %s.\n",
 							sourceFragment.CanonicalPath, targetPath)
 						shouldSkipJob = true
 					}
@@ -5279,6 +5302,206 @@ func (e *ScoutEngine) canonicalizeQualifierFacilityPaths(ctx context.Context, qu
 	return out
 }
 
+func routeCoordKey(lat, lon float64) string {
+	return fmt.Sprintf("%.5f,%.5f", lat, lon)
+}
+
+func locCountryToken(path string) string {
+	p := strings.TrimSpace(strings.ToLower(path))
+	if !strings.HasPrefix(p, "/loc/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) < 2 || parts[0] != "loc" {
+		return ""
+	}
+	cc := strings.TrimSpace(parts[1])
+	if cc == "" || cc == "na" {
+		return ""
+	}
+	if len(cc) == 2 || taxonomy.IsRegionalGeoToken(cc) || taxonomy.IsCompositeGeoToken(cc) {
+		return cc
+	}
+	return ""
+}
+
+func (e *ScoutEngine) enrichRouteFacilityGeoContext(ctx context.Context, fragment *models.HorizonFragment, scoutResult *agents.ScoutResult) bool {
+	if e == nil || fragment == nil || e.fragmentsRepo == nil {
+		return false
+	}
+	if !isRouteFacilityFragment(fragment) {
+		return false
+	}
+
+	changed := false
+	if e.geocodingClient != nil {
+		if applied, _ := henrich.EnrichCoordinatesFromGeocoding(ctx, e.geocodingClient, fragment); applied {
+			changed = true
+		}
+	}
+
+	transportRefs := make([]string, 0, 16)
+	regionPaths := make([]string, 0, 16)
+	if fragment.Qualifiers != nil {
+		for _, key := range []string{"route", "route_path", "routePath", "route_waypoints", "routeWaypoints"} {
+			transportRefs = append(transportRefs, parseStateStringSlice(fragment.Qualifiers[key])...)
+		}
+		transportRefs = append(transportRefs, parseStateStringSlice(fragment.Qualifiers[models.QualifierTransportVia])...)
+	}
+	if scoutResult != nil {
+		fragCP := strings.TrimSpace(fragment.CanonicalPath)
+		for _, rel := range scoutResult.Relations {
+			rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+			src := strings.TrimSpace(rel.SourceCanonicalPath)
+			fromFragment := src == "" || src == fragCP
+			if !fromFragment {
+				continue
+			}
+			targetPath := strings.TrimSpace(rel.TargetCanonicalPath)
+			if (rt == string(models.DependencyTypeLocatedIn) || rt == string(models.DependencyTypeOperatesIn)) &&
+				strings.HasPrefix(targetPath, "/loc/") {
+				regionPaths = append(regionPaths, targetPath)
+			}
+			if rel.Qualifiers != nil {
+				transportRefs = append(transportRefs, parseStateStringSlice(rel.Qualifiers[models.QualifierTransportVia])...)
+			}
+		}
+		for _, ch := range scoutResult.SupplyChains {
+			anchored := false
+			for _, n := range ch.Nodes {
+				if strings.TrimSpace(n.CanonicalPath) == fragCP {
+					anchored = true
+					break
+				}
+			}
+			if anchored {
+				transportRefs = append(transportRefs, ch.TransportVia...)
+			}
+		}
+	}
+	transportRefs = appendUniqueTrim(nil, transportRefs...)
+	regionPaths = appendUniqueTrim(nil, regionPaths...)
+
+	routeCoords := make([]models.HorizonMonitorCoordinates, 0, len(transportRefs)+1)
+	routeSeen := map[string]struct{}{}
+	appendCoord := func(c *models.Coordinates) {
+		if !models.HasRealGeoCoordinates(c) {
+			return
+		}
+		key := routeCoordKey(c.Lat, c.Lon)
+		if _, ok := routeSeen[key]; ok {
+			return
+		}
+		routeSeen[key] = struct{}{}
+		routeCoords = append(routeCoords, models.HorizonMonitorCoordinates{Lat: c.Lat, Lon: c.Lon})
+	}
+	appendCoord(fragment.Coordinates)
+
+	for _, ref := range transportRefs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		if strings.HasPrefix(ref, "/loc/") {
+			regionPaths = append(regionPaths, ref)
+		}
+		if strings.HasPrefix(ref, "/fac/") || strings.HasPrefix(ref, "/loc/") {
+			if waypoint, err := e.fragmentsRepo.GetByCanonicalPath(ctx, ref); err == nil && waypoint != nil {
+				if e.geocodingClient != nil {
+					if applied, _ := henrich.EnrichCoordinatesFromGeocoding(ctx, e.geocodingClient, waypoint); applied {
+						waypoint.Metadata.LastUpdatedAt = time.Now().UTC()
+						_ = e.fragmentsRepo.Update(ctx, waypoint)
+					}
+				}
+				appendCoord(waypoint.Coordinates)
+				if waypoint.HomeLocation != nil && waypoint.HomeLocation.ISO3166_1 != nil {
+					cc := strings.ToLower(strings.TrimSpace(*waypoint.HomeLocation.ISO3166_1))
+					if cc != "" && cc != "na" {
+						regionPaths = append(regionPaths, "/loc/"+cc+"/na/na")
+					}
+				}
+			}
+			continue
+		}
+		if e.geocodingClient != nil {
+			if geo, err := e.geocodingClient.Geocode(ctx, ref); err == nil && geo != nil &&
+				models.IsRealGeoCoordinate(geo.Lat, geo.Lon) {
+				appendCoord(&models.Coordinates{Lat: geo.Lat, Lon: geo.Lon})
+			}
+		}
+	}
+
+	regionPaths = appendUniqueTrim(nil, regionPaths...)
+	sort.Strings(regionPaths)
+	countries := make([]string, 0, len(regionPaths))
+	for _, rp := range regionPaths {
+		if cc := locCountryToken(rp); cc != "" {
+			countries = append(countries, cc)
+		}
+	}
+	countries = appendUniqueTrim(nil, countries...)
+	sort.Strings(countries)
+
+	wm := fragment.EffectiveHorizonMonitor()
+	if wm == nil {
+		fragment.HorizonMonitor = &models.HorizonMonitorFragmentData{}
+		wm = fragment.HorizonMonitor
+		changed = true
+	}
+	if len(routeCoords) > 0 {
+		nextRouteKeys := make([]string, 0, len(routeCoords))
+		prevRouteKeys := make([]string, 0, len(wm.Route))
+		for _, c := range routeCoords {
+			nextRouteKeys = append(nextRouteKeys, routeCoordKey(c.Lat, c.Lon))
+		}
+		for _, c := range wm.Route {
+			prevRouteKeys = append(prevRouteKeys, routeCoordKey(c.Lat, c.Lon))
+		}
+		if !slicesEqual(nextRouteKeys, prevRouteKeys) {
+			wm.Route = routeCoords
+			changed = true
+		}
+	}
+	prevCountries := appendUniqueTrim(nil, wm.Countries...)
+	sort.Strings(prevCountries)
+	if len(countries) > 0 && !slicesEqual(countries, prevCountries) {
+		wm.Countries = countries
+		changed = true
+	}
+	if len(regionPaths) > 0 {
+		if fragment.Qualifiers == nil {
+			fragment.Qualifiers = map[string]interface{}{}
+		}
+		prev := appendUniqueTrim(nil, parseStateStringSlice(fragment.Qualifiers["route_region_paths"])...)
+		sort.Strings(prev)
+		if !slicesEqual(regionPaths, prev) {
+			fragment.Qualifiers["route_region_paths"] = regionPaths
+			changed = true
+		}
+	}
+	if len(routeCoords) > 0 && !models.HasRealGeoCoordinates(fragment.Coordinates) {
+		fragment.Coordinates = &models.Coordinates{Lat: routeCoords[0].Lat, Lon: routeCoords[0].Lon}
+		changed = true
+	}
+	if changed {
+		fragment.Metadata.LastUpdatedAt = time.Now().UTC()
+		fragment.SyncHorizonMonitorAliases()
+	}
+	return changed
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // processSupplyChains parses supply chain output from agents and persists fragments/edges.
 func (e *ScoutEngine) processSupplyChains(
 	ctx context.Context,
@@ -5835,6 +6058,28 @@ func (e *ScoutEngine) processSupplyChains(
 		supplierRef := supplier
 		customerRef := customer
 		productRef := product
+		supplierUnitRef := normalizeUnitRef(seg.SupplierUnitRef)
+		customerUnitRef := normalizeUnitRef(seg.CustomerUnitRef)
+		supplierUnitCode := models.NormalizeUnitCode(seg.SupplierUnitCode)
+		customerUnitCode := models.NormalizeUnitCode(seg.CustomerUnitCode)
+		if supplierUnitCode == models.UnitCodeUnclassified && supplierUnitRef != "" {
+			supplierUnitCode = models.NormalizeUnitCode(supplierUnitRef)
+		}
+		if customerUnitCode == models.UnitCodeUnclassified && customerUnitRef != "" {
+			customerUnitCode = models.NormalizeUnitCode(customerUnitRef)
+		}
+		if supplierUnitRef == "" {
+			supplierUnitRef = string(supplierUnitCode)
+		}
+		if customerUnitRef == "" {
+			customerUnitRef = string(customerUnitCode)
+		}
+		if supplierUnitRef == "" {
+			supplierUnitRef = string(models.UnitCodeUnclassified)
+		}
+		if customerUnitRef == "" {
+			customerUnitRef = string(models.UnitCodeUnclassified)
+		}
 		slFrag := &models.HorizonFragment{
 			Type:             models.FragmentTypeSupplyLink,
 			TenantID:         "global",
@@ -5846,6 +6091,29 @@ func (e *ScoutEngine) processSupplyChains(
 			Governance:       models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
 			Provenance:       models.Provenance{Method: "scout_supply_chain", SourceIDs: []string{job.ID}},
 			Metadata:         models.FragmentMetadata{CreatedAt: time.Now().UTC(), LastUpdatedAt: time.Now().UTC(), EpistemicStatus: models.EpistemicStatusLowConfidence},
+		}
+		slFrag.Qualifiers = map[string]interface{}{
+			"supplierUnitRef":                  supplierUnitRef,
+			"supplierUnitCode":                 string(supplierUnitCode),
+			"customerUnitRef":                  customerUnitRef,
+			"customerUnitCode":                 string(customerUnitCode),
+			models.UnitQualifierSourceUnitRef:  supplierUnitRef,
+			models.UnitQualifierSourceUnitCode: string(supplierUnitCode),
+			models.UnitQualifierSourceUnitLabel: func() string {
+				if supplierUnitCode == models.UnitCodeUnclassified {
+					return string(models.UnitCodeUnclassified)
+				}
+				return string(supplierUnitCode)
+			}(),
+			models.UnitQualifierTargetUnitRef:  customerUnitRef,
+			models.UnitQualifierTargetUnitCode: string(customerUnitCode),
+			models.UnitQualifierTargetUnitLabel: func() string {
+				if customerUnitCode == models.UnitCodeUnclassified {
+					return string(models.UnitCodeUnclassified)
+				}
+				return string(customerUnitCode)
+			}(),
+			"fromSupplyChain": true,
 		}
 		slFrag.State = map[string]models.MetricValue{"confidence": {Value: seg.Confidence, Confidence: 0.8}}
 		if err := slFrag.Validate(); err != nil {
@@ -5954,7 +6222,7 @@ func (e *ScoutEngine) processSupplyChains(
 }
 
 // scheduleSupplyChainChildJobs enqueues child scouting jobs for discovered supply chain nodes
-// (and especially gap nodes). This is supply_chain-only and does not affect general mode.
+// (and especially gap nodes). This is part of the core scouting pipeline.
 func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 	ctx context.Context,
 	job *models.ScoutingJob,
@@ -5963,14 +6231,6 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 	context *ChainContext,
 ) error {
 	if e == nil || job == nil || job.State == nil || e.scoutingJobsRepo == nil || e.fragmentsRepo == nil {
-		return nil
-	}
-
-	specialties := []string(nil)
-	if v, ok := job.State["specialties"]; ok {
-		specialties = taxonomy.NormalizeSpecialties(parseStateStringSlice(v))
-	}
-	if !taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
 		return nil
 	}
 
@@ -6099,6 +6359,9 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 	skippedDup := 0
 	skippedVisited := 0
 	skippedPlaceholder := 0
+	skippedSameQualifier := 0
+	skippedOutOfScope := 0
+	sourceFacilityQualifier := resolveFacilityQualifierSemantic(sourceFragment, "")
 
 	cascadeID := ""
 	if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
@@ -6128,6 +6391,14 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 		if err != nil || frag == nil {
 			// If the fragment isn't there for some reason, skip; supplyChains materialization should have created it.
 			skippedMissingFrag++
+			continue
+		}
+		if shouldSkipSameFacilityQualifierRecursion(sourceFragment, targetPath, frag.Type, frag) {
+			skippedSameQualifier++
+			continue
+		}
+		if !isFacilityQualifierBusinessTargetType(sourceFacilityQualifier, targetPath, frag.Type) {
+			skippedOutOfScope++
 			continue
 		}
 		targetIdentityKey := buildFragmentIdentityKey(frag)
@@ -6266,8 +6537,8 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 	}
 
 	if scheduled > 0 {
-		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=%d candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d placeholder=%d) depth=%d/%d cap=%d",
-			scheduled, len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, skippedPlaceholder, currentDepth, maxDepth, maxChildren)
+		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=%d candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d placeholder=%d sameQualifier=%d outOfScope=%d) depth=%d/%d cap=%d",
+			scheduled, len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, skippedPlaceholder, skippedSameQualifier, skippedOutOfScope, currentDepth, maxDepth, maxChildren)
 		fmt.Printf("%s\n", msg)
 		e.logLine(ctx, job, "info", msg)
 		trace.Log(ctx, "SupplyChain", "SupplyChain.schedule.children", map[string]any{
@@ -6283,13 +6554,15 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 			"skippedDupN":      skippedDup,
 			"skippedVisitedN":  skippedVisited,
 			"skippedPlaceN":    skippedPlaceholder,
+			"skippedSameQN":    skippedSameQualifier,
+			"skippedScopeN":    skippedOutOfScope,
 			"depth":            currentDepth,
 			"maxDepth":         maxDepth,
 			"cap":              maxChildren,
 		})
 	} else {
-		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=0 candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d placeholder=%d) depth=%d/%d cap=%d",
-			len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, skippedPlaceholder, currentDepth, maxDepth, maxChildren)
+		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=0 candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d placeholder=%d sameQualifier=%d outOfScope=%d) depth=%d/%d cap=%d",
+			len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, skippedPlaceholder, skippedSameQualifier, skippedOutOfScope, currentDepth, maxDepth, maxChildren)
 		fmt.Printf("%s\n", msg)
 		e.logLine(ctx, job, "info", msg)
 	}

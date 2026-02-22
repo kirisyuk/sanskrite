@@ -65,6 +65,7 @@ var (
 	canonicalizeEdges         = flag.Bool("edge-canonicalize", true, "Rewrite mis-modeled edges into canonical types (e.g., MARKET OWNS MARKET -> HAS_MARKET_SEGMENT, ORG DEPENDS_ON MARKET -> PARTICIPATES_IN).")
 	skipGeoNames              = flag.Bool("skip-geonames", false, "Skip GeoNames-based /loc normalization (enabled by default).")
 	marketCleanupOnly         = flag.Bool("market-cleanup-only", false, "Only run Step 7 (market geo-mismatch cleanup + domain normalization). Skips all fragment dedup and edge fixing.")
+	transformsCleanupOnly     = flag.Bool("transforms-cleanup-only", false, "Only clean bidirectional PRODUCT TRANSFORMS_INTO edges (canonical stage order). Skips all other passes.")
 )
 
 // Used to print a reliable resume cursor on Ctrl+C / SIGTERM and on load failures.
@@ -793,6 +794,28 @@ func main() {
 	}
 
 	stats := &Stats{}
+
+	// Fast path: --transforms-cleanup-only removes reciprocal PRODUCT TRANSFORMS_INTO in place.
+	if *transformsCleanupOnly {
+		log.Printf("\n=== TRANSFORMS_INTO cleanup only mode (--transforms-cleanup-only) ===")
+		cleaned, err := cleanupBidirectionalTransformsInto(ctx, db, edgesRepo, *tenantID, *apply, *verbose)
+		if err != nil {
+			log.Printf("ERROR: TRANSFORMS_INTO bidirectional cleanup failed: %v", err)
+		} else {
+			stats.EdgesTransformsCleaned = cleaned
+			if *apply {
+				log.Printf("✓ Cleaned %d bidirectional TRANSFORMS_INTO edges", cleaned)
+			} else {
+				log.Printf("[DRY-RUN] Would clean %d bidirectional TRANSFORMS_INTO edges", cleaned)
+			}
+		}
+		log.Printf("\n=== Summary (transforms cleanup only) ===")
+		log.Printf("Bidirectional TRANSFORMS_INTO cleaned: %d", stats.EdgesTransformsCleaned)
+		if !*apply {
+			log.Printf("\n[DRY-RUN] No changes made. Use --apply to execute.")
+		}
+		return
+	}
 
 	// Fast path: --market-cleanup-only skips all fragment dedup/edge fixing
 	if *marketCleanupOnly {

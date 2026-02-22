@@ -3146,6 +3146,9 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
   const oldLines: string[] = isOldFormat ? (contextLines as string[]) : [];
   const count = typeof (data as any)?.contextCount === 'number' ? (data as any).contextCount : 0;
   const onShowDetails = (data as any)?.onToggleContextDetails as (() => void) | undefined;
+  const onToggleSubcategoryCollapse = (data as any)?.onToggleSubcategoryCollapse as ((groupId: string, edgeType: string, nextCollapsed: boolean) => void) | undefined;
+  const contextGroupId = String((data as any)?.contextGroupId || '').trim();
+  const contextBlockKey = String((data as any)?.contextBlockKey || '').trim();
   const contextExpanded = Boolean((data as any)?.contextExpanded);
   const isRightStackContextCard = Boolean((data as any)?.rightStackContextCard);
 
@@ -3377,13 +3380,17 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
           zIndex: 2,
         }}
       >
-        {typeof onShowDetails === 'function' && (
+        {(typeof onToggleSubcategoryCollapse === 'function' && contextGroupId && contextBlockKey) || typeof onShowDetails === 'function' ? (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
               e.preventDefault();
-              onShowDetails();
+              if (typeof onToggleSubcategoryCollapse === 'function' && contextGroupId && contextBlockKey) {
+                onToggleSubcategoryCollapse(contextGroupId, `__block__:${contextBlockKey}`, contextExpanded);
+              } else if (typeof onShowDetails === 'function') {
+                onShowDetails();
+              }
             }}
             onPointerDown={(e) => e.stopPropagation()}
             aria-label={contextExpanded ? 'Collapse back' : 'Show details'}
@@ -3406,7 +3413,7 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
               {isRightStackContextCard ? <path d="M6 9l6 6 6-6" /> : (contextExpanded ? <path d="M15 18l-6-6 6-6" /> : <path d="M9 18l6-6-6-6" />)}
             </svg>
           </button>
-        )}
+        ) : null}
       </div>
       {/* Hidden handles for edge routing (context card acts as a proxy for the first child node) */}
       <Handle type="source" position={Position.Right} id="source-right" style={{ opacity: 0, width: 1, height: 1 }} />
