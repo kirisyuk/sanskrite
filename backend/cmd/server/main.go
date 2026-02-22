@@ -26,13 +26,16 @@ import (
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
 	"github.com/igorkirisyuk/sanskrite/internal/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/adapters"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
+	"github.com/igorkirisyuk/sanskrite/internal/discovery/extraction"
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	"github.com/igorkirisyuk/sanskrite/internal/domain"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
+	"github.com/igorkirisyuk/sanskrite/internal/geocoding"
 	"github.com/igorkirisyuk/sanskrite/internal/geonames"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -56,6 +59,7 @@ import (
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	horizontelemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetry"
 	horizontasks "github.com/igorkirisyuk/sanskrite/internal/horizon/tasks"
 	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
@@ -112,6 +116,17 @@ func (a *tavilyAdapterForSignalMonitoring) Search(ctx context.Context, query str
 	return &services.TavilySearchResponse{
 		Results: results,
 	}, nil
+}
+
+// enforcementRedirectRecorder adapts CanonicalPathResolver to RedirectRecorder for enforcement path fixes.
+type enforcementRedirectRecorder struct {
+	r *horizonscout.CanonicalPathResolver
+}
+
+func (e *enforcementRedirectRecorder) RecordRedirect(ctx context.Context, fromPath, toPath string, fragmentType horizonmodels.FragmentType, reason string) {
+	if e != nil && e.r != nil {
+		e.r.RecordDeterministicRedirect(ctx, fromPath, toPath, fragmentType, reason)
+	}
 }
 
 type server struct {
@@ -574,6 +589,10 @@ func main() {
 			entityEnricher = ontology.NewEntityEnricher(entitiesRepo, wikidataAdapter, logger)
 		}
 
+		// CanonizationPolicy for path normalization (shared with Horizon; unified rules)
+		canonizationRulesRepo := horizonrepo.NewCanonizationRulesRepository(fsClient.Client())
+		canonizationPolicy := horizonpolicy.NewCanonizationPolicy(canonizationRulesRepo)
+
 		// OntologyExtractor - главный компонент для извлечения онтологических объектов.
 		// ВАЖНО: он должен быть инициализирован ДО старта document/chat воркеров, иначе факты не будут создаваться.
 		ontologyExtractor := ontology.NewOntologyExtractor(
@@ -590,7 +609,7 @@ func main() {
 			causalDetector,
 			domainService,
 			logger,
-		)
+		).WithCanonizationPolicy(adapters.NewCanonizationPolicyAdapter(canonizationPolicy))
 
 		// Инициализация стандартной иерархии доменов для "system" tenant
 		go func() {
@@ -664,6 +683,17 @@ func main() {
 				defer cancelW()
 				if err := worker.Start(ctxW); err != nil {
 					log.Printf("document processor stopped: %v", err)
+				}
+			}()
+
+			// Start facts extractor worker (background) — document.extract → OntologyFacts (RSS facts-only path)
+			ndExtractor := extraction.NewNormalizedDocumentExtractor(exec, ontologyExtractor)
+			factsExtractor := discovery.NewFactsExtractor(psClient, string(realtime.TopicArtifactEvents), ndExtractor, logger)
+			go func() {
+				ctxF, cancelF := context.WithCancel(ctx)
+				defer cancelF()
+				if err := factsExtractor.Start(ctxF); err != nil {
+					log.Printf("facts extractor stopped: %v", err)
 				}
 			}()
 
@@ -1051,6 +1081,12 @@ func main() {
 		horizonCascadeVisitedRepo := horizonrepo.NewCascadeVisitedRepository(fsClient.Client())
 		horizonCascadeEntityRegistryRepo := horizonrepo.NewCascadeEntityRegistryRepository(fsClient.Client())
 		horizonCanonicalPathRedirectsRepo := horizonrepo.NewCanonicalPathRedirectsRepository(fsClient.Client())
+		horizonFragmentMergeAuditRepo := horizonrepo.NewFragmentMergeAuditRepository(fsClient.Client())
+		horizonFragmentsMergeRepo := horizonrepo.NewFragmentsMergeRepository(
+			horizonFragmentsRepo,
+			horizonEdgesRepo,
+			horizonFragmentMergeAuditRepo,
+		).WithRedirectsRepo(horizonCanonicalPathRedirectsRepo)
 		horizonTelemetryRepo = horizonrepo.NewHorizonTelemetryRepository(fsClient.Client())
 		horizonEdgesRepo.WithTelemetryRepo(horizonTelemetryRepo)
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
@@ -1278,6 +1314,24 @@ func main() {
 					return vertexSearchClient.ImportDocuments(ctx, importReq)
 				})
 				logger.Printf("Ontology facts: Vertex AI Search sync enabled")
+			}
+		}
+
+		// Wire coordinate enrichment for ontology facts (GeoNames, Geocoding, fragment lookup — same 3 services as fragments)
+		{
+			var gnForFacts ontology.GeoNamesClientInterface
+			if geonamesClient != nil {
+				gnForFacts = geonames.NewCachedClient(geonames.NewAdapter(geonamesClient), externalCacheRepo, geonames.CacheOptionsFromEnv())
+			}
+			var gcForFacts ontology.GeocodingClientInterface
+			if gcClient := httphandlers.GetGoogleGeocodingClientFromEnv(); gcClient != nil {
+				gcForFacts = geocoding.NewCachedClient(geocoding.NewAdapter(gcClient), externalCacheRepo, geocoding.CacheOptionsFromEnv())
+			}
+			if gnForFacts != nil || gcForFacts != nil {
+				enricher := horizonenrich.NewFactCoordinateEnricher(gnForFacts, gcForFacts).WithFragmentsRepo(horizonFragmentsRepo)
+				ontologyFactsRepo = ontologyFactsRepo.WithCoordinateEnricher(enricher)
+				ontologyExtractor = ontologyExtractor.WithFactsRepo(ontologyFactsRepo)
+				logger.Printf("Ontology facts: coordinate enrichment enabled (GeoNames, Geocoding, fragment lookup)")
 			}
 		}
 
@@ -1561,7 +1615,9 @@ func main() {
 				return nil
 			})
 			interpretSignalsRepo := horizoninterp.NewOntologySignalFactsRepo(ontologyFactsRepo)
-			interpreter := horizoninterp.NewInterpreter(exec, horizonFragmentsRepo, interpretSignalsRepo).WithFeedbackEmitter(feedbackEmitter)
+			interpreter := horizoninterp.NewInterpreter(exec, horizonFragmentsRepo, interpretSignalsRepo).
+				WithEventFactsResolver(horizoninterp.NewOntologyEventFactsResolver(ontologyFactsRepo)).
+				WithFeedbackEmitter(feedbackEmitter)
 			interpProcessor := horizoninterp.NewProcessor(
 				interpretationQueue,
 				interpretationCache,
@@ -1586,9 +1642,7 @@ func main() {
 			horizonEdgesRepo.WithValidationPolicy(validationPolicyExecutor)
 			horizonEdgesRepo.WithFragmentsRepo(horizonFragmentsRepo)
 
-			// Wire CanonizationPolicy for normalization (will be set after scoutEngine is created)
-			canonizationRulesRepo := horizonrepo.NewCanonizationRulesRepository(fsClient.Client())
-			canonizationPolicy := horizonpolicy.NewCanonizationPolicy(canonizationRulesRepo)
+			// Wire CanonizationPolicy executor (policy created earlier, shared with OntologyExtractor)
 			canonizationPolicyExecutor := horizonpolicy.NewPolicyExecutor(canonizationPolicy, policyTelemetry, nil)
 			policyRegistry := horizonpolicy.NewPolicyRegistry(
 				propagationPolicy,
@@ -1731,6 +1785,14 @@ func main() {
 				scoutEngine.WithOpenCorporatesClient(ocForScout)
 				logger.Printf("OpenCorporates client wired (org enrichment; enable with HORIZON_ENABLE_OPEN_CORPORATES=true)")
 			}
+			// Wire Google Geocoding into Scout for address-to-coordinates (org/facility/gov).
+			// Uses GOOGLE_MAPS_API_KEY from env or Secret Manager. Cached via external_data_cache.
+			if gcClient := httphandlers.GetGoogleGeocodingClientFromEnv(); gcClient != nil {
+				gcAdapter := geocoding.NewAdapter(gcClient)
+				gcCached := geocoding.NewCachedClient(gcAdapter, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+				scoutEngine.WithGeocodingClient(gcCached)
+				logger.Printf("Google Geocoding client wired (address-to-coordinates for org/facility/gov)")
+			}
 			// Unified ontology facts emitter: allows Scout to persist minimal OntologyFacts even when sources pipeline is paused.
 			scoutEngine.WithFactEmitter(ontology.NewFactEmitter(ontologyFactsRepo, pub))
 			// Budget enforcement wiring.
@@ -1806,8 +1868,14 @@ func main() {
 			enforcementExecutor.WithAIExecutor(exec)
 			// Allow enforcement to rewrite lens scope after path fixes (best-effort).
 			enforcementExecutor.WithLensesRepo(horizonLensesRepo)
+			if horizonFragmentsMergeRepo != nil {
+				enforcementExecutor.WithMergeFragments(horizonFragmentsMergeRepo)
+			}
 			if geonamesClientForHorizon != nil {
 				enforcementExecutor.WithGeoNamesClient(geonamesClientForHorizon)
+			}
+			if canonicalPathResolver != nil {
+				enforcementExecutor.WithRedirectRecorder(&enforcementRedirectRecorder{r: canonicalPathResolver})
 			}
 			scoutEngine.WithEnforcementExecutor(enforcementExecutor)
 			scoutEngine.WithEnforcementJobsRepo(enforcementJobsRepo)
@@ -1954,6 +2022,7 @@ func main() {
 
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
+				WithMergeFragmentsRepo(horizonFragmentsMergeRepo).
 				WithDocumentsRepo(docsRepo).
 				WithUsersRepo(s.users).
 				WithGenAIHandler(genaiHandler).
@@ -1965,6 +2034,33 @@ func main() {
 				WithUnitDiveRepo(horizonUnitDiveResultsRepo).
 				WithProfilesHandler(profilesHandler).
 				WithPropagationProfileLookup(propagationProfileLookup)
+
+			// SignalPipeline for manual 12-axis extraction (events:extract-signals)
+			if aiExec != nil && ontologyFactsRepo != nil {
+				signalExtractor := horizonsignals.NewSignalExtractor(nil, aiExec)
+				applicability := horizonsignals.NewExternalApplicabilityEvaluator().
+					WithFragmentsRepo(horizonFragmentsRepo).
+					WithEdgesRepo(horizonEdgesRepo)
+				if horizonExposurePathsRepo != nil {
+					applicability = applicability.WithExposurePathsRepo(horizonExposurePathsRepo)
+				}
+				seedInjector := horizonsignals.NewSeedInjector(horizonFragmentsRepo, horizonEdgesRepo).
+					WithApplicabilityEvaluator(applicability)
+				if vertexSearchClient != nil && vertexSearchClient.IsConfigured() {
+					if horizonDS := strings.TrimSpace(getEnv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); horizonDS != "" {
+						seedInjector = seedInjector.WithVertexSearch(vertexSearchClient.WithDataStore(horizonDS))
+					}
+				}
+				signalPipeline := horizonscout.NewSignalPipeline(
+					signalExtractor,
+					seedInjector,
+					propagationEngine,
+					propagationProfileLookup,
+					ontologyFactsRepo,
+				).WithEscalationLLM(aiExec)
+				horizonHandlers = horizonHandlers.WithSignalPipeline(signalPipeline)
+			}
+
 			logger.Printf("Horizon system initialized")
 
 			// Wire Horizon Lens service to projects handler for cascade delete

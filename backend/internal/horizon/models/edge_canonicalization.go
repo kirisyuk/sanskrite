@@ -2,6 +2,8 @@ package models
 
 import (
 	"strings"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // =============================================================================
@@ -258,6 +260,13 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET INVESTS_IN ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET"
 	}
 
+	// OPERATES_IN(MARKET → ORGANIZATION): market is not an operator; org participates in market.
+	if edgeType == DependencyTypeOperatesIn &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET OPERATES_IN ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET"
+	}
+
 	// OWNS(ORG → PROGRAM) → ADMINISTERS
 	// Organizations typically administer/operate programs rather than "own" them.
 	if edgeType == DependencyTypeOwns &&
@@ -487,6 +496,19 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 		// Source path is prefix of target: correct direction, no swap
 	}
 
+	// TRANSFORMS_INTO: upstream product stage must point to downstream stage.
+	// Example: extraction -> processing (never the reverse).
+	if edgeType == DependencyTypeTransformsInto &&
+		sourceType == FragmentTypeProduct &&
+		targetType == FragmentTypeProduct &&
+		sourcePath != "" && targetPath != "" {
+		srcStageRank, srcOk := productStageRankFromCanonicalPath(sourcePath)
+		tgtStageRank, tgtOk := productStageRankFromCanonicalPath(targetPath)
+		if srcOk && tgtOk && srcStageRank > tgtStageRank {
+			return edgeType, !shouldSwap, true, "canonicalize: TRANSFORMS_INTO downstream->upstream -> upstream->downstream (by product stage order)"
+		}
+	}
+
 	return edgeType, shouldSwap, changed, reason
 }
 
@@ -496,6 +518,28 @@ func pathSegmentCount(path string) int {
 		return 0
 	}
 	return len(strings.Split(p, "/"))
+}
+
+func productStageRankFromCanonicalPath(path string) (int, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/product/") {
+		return 0, false
+	}
+	parts, err := taxonomy.ParseCanonicalPathParts(path)
+	if err != nil || parts == nil || parts.Product == nil {
+		return 0, false
+	}
+	stage := strings.ToLower(strings.TrimSpace(parts.Product.Stage))
+	if stage == "" {
+		return 0, false
+	}
+	order := taxonomy.GetProductStageOrder()
+	for i, s := range order {
+		if strings.ToLower(strings.TrimSpace(s)) == stage {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 // MarketSegmentPathsFollowRule returns true if parentPath and childPath follow the rule:

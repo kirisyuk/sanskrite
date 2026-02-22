@@ -53,6 +53,7 @@ var (
 	unionClusters             = flag.Bool("union-clusters", true, "Build transitive clusters via union-find across signals (recommended; helps catch chain duplicates). Set false to skip aliasPath-based transitive clustering.")
 	skipVertexSync            = flag.Bool("skip-vertex-sync", false, "Skip Vertex AI Search sync (faster, run bulk sync separately)")
 	skipEdgePass              = flag.Bool("skip-edge-pass", false, "Skip global edge direction fix + symmetric normalization + edge dedup pass (safer for targeted fragment-only dedup runs)")
+	skipMarketCleanup         = flag.Bool("skip-market-cleanup", false, "Skip Step 7 market geo-mismatch/domain cleanup (useful for edge-only maintenance runs).")
 	pageSize                  = flag.Int("page-size", 500, "Firestore page size for loading fragments (pagination). Lower = safer, higher = fewer round-trips")
 	startAfterDocID           = flag.String("start-after", "", "Resume cursor: start loading fragments after this Firestore document ID (__name__)")
 	pageTimeoutSec            = flag.Int("page-timeout-s", 90, "Timeout in seconds for each Firestore page fetch while loading fragments (0 disables)")
@@ -89,6 +90,7 @@ type Stats struct {
 	EdgesDeduplicated        int
 	EdgesDirectionFixed      int
 	EdgesCanonicalized       int
+	EdgesTransformsCleaned   int
 	MarketGeoMismatchCleaned int
 	MarketDomainNormalized   int
 }
@@ -771,6 +773,9 @@ func main() {
 		WithValidationPolicy(validationExecutor).
 		WithFragmentsRepo(fragmentsRepo)
 
+	mergeAuditRepo := repo.NewFragmentMergeAuditRepository(db)
+	redirectsRepo := repo.NewCanonicalPathRedirectsRepository(db)
+
 	// GeoNames client (cached) for /loc normalization
 	var geoNamesClient coreontology.GeoNamesClientInterface
 	if !*skipGeoNames {
@@ -836,6 +841,15 @@ func main() {
 				} else if *verbose && normed > 0 {
 					log.Printf("✓ Normalized %d symmetric edges", normed)
 				}
+				transformsCleaned, err := cleanupBidirectionalTransformsInto(ctx, db, edgesRepo, *tenantID, true, *verbose)
+				if err != nil {
+					log.Printf("ERROR: TRANSFORMS_INTO bidirectional cleanup failed: %v", err)
+				} else {
+					stats.EdgesTransformsCleaned = transformsCleaned
+					if transformsCleaned > 0 {
+						log.Printf("✓ Cleaned %d bidirectional TRANSFORMS_INTO edges", transformsCleaned)
+					}
+				}
 				deduped, err := deduplicateEdges(ctx, db, edgesRepo, *tenantID)
 				if err != nil {
 					log.Printf("ERROR: edge deduplication failed: %v", err)
@@ -844,16 +858,29 @@ func main() {
 					log.Printf("✓ Deduplicated %d edges", deduped)
 				}
 			} else {
+				transformsCleaned, err := cleanupBidirectionalTransformsInto(ctx, db, edgesRepo, *tenantID, false, *verbose)
+				if err != nil {
+					log.Printf("ERROR: TRANSFORMS_INTO bidirectional cleanup dry-run failed: %v", err)
+				} else {
+					stats.EdgesTransformsCleaned = transformsCleaned
+					log.Printf("[DRY-RUN] Would clean %d bidirectional TRANSFORMS_INTO edges", transformsCleaned)
+				}
 				log.Printf("[DRY-RUN] Would normalize symmetric edges and deduplicate edges")
 			}
-			log.Printf("\n=== Step 7: Market geo-mismatch & domain normalization ===")
-			geoMismatch, domainNorm := cleanMarketEdgesAndDomains(ctx, db, edgesRepo, *tenantID, *apply, *verbose)
-			stats.MarketGeoMismatchCleaned = geoMismatch
-			stats.MarketDomainNormalized = domainNorm
+			if *skipMarketCleanup {
+				log.Printf("\n=== Step 7: Market geo-mismatch & domain normalization ===")
+				log.Printf("SKIPPED (--skip-market-cleanup)")
+			} else {
+				log.Printf("\n=== Step 7: Market geo-mismatch & domain normalization ===")
+				geoMismatch, domainNorm := cleanMarketEdgesAndDomains(ctx, db, edgesRepo, *tenantID, *apply, *verbose)
+				stats.MarketGeoMismatchCleaned = geoMismatch
+				stats.MarketDomainNormalized = domainNorm
+			}
 		}
 		log.Printf("\n=== Summary (fix edges only) ===")
 		log.Printf("Edges direction fixed: %d", stats.EdgesDirectionFixed)
 		log.Printf("Edges canonicalized: %d", stats.EdgesCanonicalized)
+		log.Printf("Bidirectional TRANSFORMS_INTO cleaned: %d", stats.EdgesTransformsCleaned)
 		log.Printf("Edges deduplicated: %d", stats.EdgesDeduplicated)
 		log.Printf("Market geo-mismatch edges cleaned: %d", stats.MarketGeoMismatchCleaned)
 		log.Printf("Market domains normalized: %d", stats.MarketDomainNormalized)
@@ -2627,45 +2654,57 @@ func main() {
 			continue
 		}
 
-		// 4a. Merge data from duplicates into canonical
-		changed := pathFixed
-		for _, dup := range duplicates {
-			if mergeFragmentData(canonical, dup) {
-				changed = true
-			}
-		}
-		if changed {
-			if err := fragmentsRepo.Update(ctx, canonical); err != nil {
-				log.Printf("  ERROR: failed to update canonical: %v", err)
-				continue
-			}
-			if *verbose {
-				log.Printf("  ✓ Merged data into canonical")
-			}
-		}
 		stats.FragmentsMerged += len(duplicates)
 
-		// 4b. Reassign edges from duplicates to canonical
-		for _, dup := range duplicates {
-			reassigned, deleted, err := reassignEdges(ctx, db, edgesRepo, *tenantID, dup.ID, canonical.ID)
-			if err != nil {
-				log.Printf("  ERROR: failed to reassign edges from %s: %v", dup.ID, err)
-				continue
+		// Merge via single entry point (data, edges, delete, audit)
+		if mergeAuditRepo != nil {
+			mergeRepo := repo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).WithRedirectsRepo(redirectsRepo)
+			for _, dup := range duplicates {
+				res, err := mergeRepo.MergeFragment(ctx, canonical.ID, dup.ID, strings.TrimSpace(canonical.TenantID), "tool_dedup", "horizon_smart_dedup", "", "")
+				if err != nil {
+					log.Printf("  ERROR: merge %s -> %s failed: %v", dup.ID, canonical.ID, err)
+					continue
+				}
+				stats.EdgesReassigned += res.EdgesReassigned
+				stats.EdgesDeleted += res.EdgesDeleted
+				stats.FragmentsDeleted++
 			}
-			stats.EdgesReassigned += reassigned
-			stats.EdgesDeleted += deleted
-			if *verbose && (reassigned > 0 || deleted > 0) {
-				log.Printf("  ✓ Edges from %s: %d reassigned, %d deleted", dup.ID, reassigned, deleted)
+		} else {
+			// Legacy: merge data, reassign edges, delete
+			changed := pathFixed
+			for _, dup := range duplicates {
+				if mergeFragmentData(canonical, dup) {
+					changed = true
+				}
 			}
-		}
-
-		// 4c. Delete duplicate fragments
-		for _, dup := range duplicates {
-			if err := fragmentsRepo.Delete(ctx, dup.ID); err != nil {
-				log.Printf("  ERROR: failed to delete duplicate %s: %v", dup.ID, err)
-				continue
+			if changed {
+				if err := fragmentsRepo.Update(ctx, canonical); err != nil {
+					log.Printf("  ERROR: failed to update canonical: %v", err)
+					continue
+				}
+				if *verbose {
+					log.Printf("  ✓ Merged data into canonical")
+				}
 			}
-			stats.FragmentsDeleted++
+			for _, dup := range duplicates {
+				reassigned, deleted, err := reassignEdges(ctx, db, edgesRepo, *tenantID, dup.ID, canonical.ID)
+				if err != nil {
+					log.Printf("  ERROR: failed to reassign edges from %s: %v", dup.ID, err)
+					continue
+				}
+				stats.EdgesReassigned += reassigned
+				stats.EdgesDeleted += deleted
+				if *verbose && (reassigned > 0 || deleted > 0) {
+					log.Printf("  ✓ Edges from %s: %d reassigned, %d deleted", dup.ID, reassigned, deleted)
+				}
+			}
+			for _, dup := range duplicates {
+				if err := fragmentsRepo.Delete(ctx, dup.ID); err != nil {
+					log.Printf("  ERROR: failed to delete duplicate %s: %v", dup.ID, err)
+					continue
+				}
+				stats.FragmentsDeleted++
+			}
 		}
 		if *verbose {
 			log.Printf("  ✓ Deleted %d duplicate fragments", len(duplicates))
@@ -2710,6 +2749,15 @@ FIX_EDGES:
 		} else if *verbose && normed > 0 {
 			log.Printf("✓ Normalized %d symmetric edges", normed)
 		}
+		transformsCleaned, err := cleanupBidirectionalTransformsInto(ctx, db, edgesRepo, *tenantID, true, *verbose)
+		if err != nil {
+			log.Printf("ERROR: TRANSFORMS_INTO bidirectional cleanup failed: %v", err)
+		} else {
+			stats.EdgesTransformsCleaned = transformsCleaned
+			if transformsCleaned > 0 {
+				log.Printf("✓ Cleaned %d bidirectional TRANSFORMS_INTO edges", transformsCleaned)
+			}
+		}
 
 		deduped, err := deduplicateEdges(ctx, db, edgesRepo, *tenantID)
 		if err != nil {
@@ -2719,12 +2767,22 @@ FIX_EDGES:
 			log.Printf("✓ Deduplicated %d edges", deduped)
 		}
 	} else {
+		transformsCleaned, err := cleanupBidirectionalTransformsInto(ctx, db, edgesRepo, *tenantID, false, *verbose)
+		if err != nil {
+			log.Printf("ERROR: TRANSFORMS_INTO bidirectional cleanup dry-run failed: %v", err)
+		} else {
+			stats.EdgesTransformsCleaned = transformsCleaned
+			log.Printf("[DRY-RUN] Would clean %d bidirectional TRANSFORMS_INTO edges", transformsCleaned)
+		}
 		log.Printf("[DRY-RUN] Would normalize symmetric edges and deduplicate edges after merge")
 	}
 
 	// Step 7: Market geo-mismatch cleanup + market domain normalization
-	log.Printf("\n=== Step 7: Market geo-mismatch & domain normalization ===")
-	{
+	if *skipMarketCleanup {
+		log.Printf("\n=== Step 7: Market geo-mismatch & domain normalization ===")
+		log.Printf("SKIPPED (--skip-market-cleanup)")
+	} else {
+		log.Printf("\n=== Step 7: Market geo-mismatch & domain normalization ===")
 		geoMismatch, domainNorm := cleanMarketEdgesAndDomains(ctx, db, edgesRepo, *tenantID, *apply, *verbose)
 		stats.MarketGeoMismatchCleaned = geoMismatch
 		stats.MarketDomainNormalized = domainNorm
@@ -2743,6 +2801,7 @@ SUMMARY:
 	log.Printf("Edges deduplicated: %d", stats.EdgesDeduplicated)
 	log.Printf("Edges direction fixed: %d", stats.EdgesDirectionFixed)
 	log.Printf("Edges canonicalized: %d", stats.EdgesCanonicalized)
+	log.Printf("Bidirectional TRANSFORMS_INTO cleaned: %d", stats.EdgesTransformsCleaned)
 	log.Printf("Market geo-mismatch edges cleaned: %d", stats.MarketGeoMismatchCleaned)
 	log.Printf("Market domains normalized: %d", stats.MarketDomainNormalized)
 	if !*apply {
@@ -4795,6 +4854,176 @@ func mergeEdgeRich(dst, src *models.DependencyEdge) bool {
 	}
 
 	return changed
+}
+
+type transformsPairBucket struct {
+	a    string
+	b    string
+	aToB []*models.DependencyEdge
+	bToA []*models.DependencyEdge
+}
+
+// cleanupBidirectionalTransformsInto removes the opposite direction in PRODUCT<->PRODUCT
+// TRANSFORMS_INTO pairs when stage order makes direction deterministic.
+// Canonical direction: upstream stage -> downstream stage (e.g., extraction -> processing).
+func cleanupBidirectionalTransformsInto(
+	ctx context.Context,
+	db *firestore.Client,
+	edgesRepo *repo.DependencyEdgesRepository,
+	tenantID string,
+	apply bool,
+	verbose bool,
+) (int, error) {
+	iter := db.Collection("horizon_dependency_edges").
+		Where("tenantId", "==", tenantID).
+		Where("type", "==", string(models.DependencyTypeTransformsInto)).
+		Documents(ctx)
+	defer iter.Stop()
+
+	pairs := make(map[string]*transformsPairBucket, 1024)
+	totalScanned := 0
+	for {
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+		var edge models.DependencyEdge
+		if err := doc.DataTo(&edge); err != nil {
+			continue
+		}
+		if strings.TrimSpace(edge.ID) == "" {
+			edge.ID = doc.Ref.ID
+		}
+		src := strings.TrimSpace(edge.SourceFragmentID)
+		tgt := strings.TrimSpace(edge.TargetFragmentID)
+		if src == "" || tgt == "" || src == tgt {
+			continue
+		}
+		totalScanned++
+
+		a, b := src, tgt
+		if strings.Compare(a, b) > 0 {
+			a, b = b, a
+		}
+		key := a + "|" + b
+		bucket := pairs[key]
+		if bucket == nil {
+			bucket = &transformsPairBucket{a: a, b: b}
+			pairs[key] = bucket
+		}
+		e := edge
+		if src == a && tgt == b {
+			bucket.aToB = append(bucket.aToB, &e)
+		} else if src == b && tgt == a {
+			bucket.bToA = append(bucket.bToA, &e)
+		}
+	}
+
+	pathCache := make(map[string]string, 2048)
+	resolvePath := func(id string) string {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return ""
+		}
+		if p, ok := pathCache[id]; ok {
+			return p
+		}
+		snap, err := db.Collection("horizon_fragments").Doc(id).Get(ctx)
+		if err != nil || snap == nil || !snap.Exists() {
+			pathCache[id] = ""
+			return ""
+		}
+		p, _ := snap.Data()["canonicalPath"].(string)
+		p = strings.TrimSpace(p)
+		pathCache[id] = p
+		return p
+	}
+
+	stageOrder := map[string]int{}
+	for i, stage := range taxonomy.GetProductStageOrder() {
+		s := strings.ToLower(strings.TrimSpace(stage))
+		if s == "" {
+			continue
+		}
+		stageOrder[s] = i
+	}
+
+	cleaned := 0
+	for _, bucket := range pairs {
+		if bucket == nil || len(bucket.aToB) == 0 || len(bucket.bToA) == 0 {
+			continue
+		}
+		preferAToB, ok, reason := preferredTransformsDirectionAToB(
+			resolvePath(bucket.a),
+			resolvePath(bucket.b),
+			stageOrder,
+		)
+		if !ok {
+			continue
+		}
+		var losers []*models.DependencyEdge
+		if preferAToB {
+			losers = bucket.bToA
+		} else {
+			losers = bucket.aToB
+		}
+		for _, edge := range losers {
+			if edge == nil || strings.TrimSpace(edge.ID) == "" {
+				continue
+			}
+			if verbose {
+				log.Printf("  TRANSFORMS cleanup: %s (%s -> %s) reason=%s",
+					edge.ID, edge.SourceFragmentID, edge.TargetFragmentID, reason)
+			}
+			if apply {
+				if err := edgesRepo.Delete(ctx, edge.ID); err != nil {
+					log.Printf("  ERROR: failed to delete bidirectional TRANSFORMS_INTO edge %s: %v", edge.ID, err)
+					continue
+				}
+			}
+			cleaned++
+		}
+	}
+
+	if verbose {
+		log.Printf("  TRANSFORMS cleanup scanned=%d reciprocalPairs=%d cleaned=%d", totalScanned, len(pairs), cleaned)
+	}
+	return cleaned, nil
+}
+
+func preferredTransformsDirectionAToB(pathA, pathB string, stageOrder map[string]int) (bool, bool, string) {
+	stageA, rankA, okA := productStageFromPath(pathA, stageOrder)
+	stageB, rankB, okB := productStageFromPath(pathB, stageOrder)
+	if !okA || !okB || rankA == rankB {
+		return false, false, ""
+	}
+	if rankA < rankB {
+		return true, true, fmt.Sprintf("stage order: %s (%d) -> %s (%d)", stageA, rankA, stageB, rankB)
+	}
+	return false, true, fmt.Sprintf("stage order: %s (%d) -> %s (%d)", stageB, rankB, stageA, rankA)
+}
+
+func productStageFromPath(path string, stageOrder map[string]int) (string, int, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/product/") {
+		return "", 0, false
+	}
+	parts, err := taxonomy.ParseCanonicalPathParts(path)
+	if err != nil || parts == nil || parts.Product == nil {
+		return "", 0, false
+	}
+	stage := strings.ToLower(strings.TrimSpace(parts.Product.Stage))
+	if stage == "" {
+		return "", 0, false
+	}
+	rank, ok := stageOrder[stage]
+	if !ok {
+		return "", 0, false
+	}
+	return stage, rank, true
 }
 
 // deduplicateEdges removes duplicate edges.

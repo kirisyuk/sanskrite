@@ -7,6 +7,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
 	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -26,6 +27,8 @@ type HorizonHandlers struct {
 	unitGraphRepo             *horizonrepo.UnitGraphSnapshotsRepository
 	unitDiveRepo              *horizonrepo.UnitDiveResultsRepository
 	propagationProfileLookup  *horizonprop.ProfileLookup
+	signalPipeline            *horizonscout.SignalPipeline
+	mergeFragmentsRepo        *horizonrepo.FragmentsMergeRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -104,6 +107,18 @@ func (h *HorizonHandlers) WithPropagationProfileLookup(lookup *horizonprop.Profi
 	return h
 }
 
+// WithSignalPipeline wires SignalPipeline for manual 12-axis extraction (events:extract-signals).
+func (h *HorizonHandlers) WithSignalPipeline(p *horizonscout.SignalPipeline) *HorizonHandlers {
+	h.signalPipeline = p
+	return h
+}
+
+// WithMergeFragmentsRepo wires FragmentsMergeRepository (single entry point for merge).
+func (h *HorizonHandlers) WithMergeFragmentsRepo(r *horizonrepo.FragmentsMergeRepository) *HorizonHandlers {
+	h.mergeFragmentsRepo = r
+	return h
+}
+
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Intent precheck (NL -> taxonomy-aligned intent)
@@ -151,6 +166,8 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 
 		// Debug: inject an event and run SignalDescriptor pipeline (extract → seed → propagate)
 		mux.Handle("/api/horizon/events:inject", authMiddleware(http.HandlerFunc(h.InjectEvent)))
+		// Manual: extract 12-axis signals for existing event facts (no auto-invocation)
+		mux.Handle("/api/horizon/events:extract-signals", authMiddleware(http.HandlerFunc(h.ExtractEventSignals)))
 
 		// Domain scenario: Encode → Propagate → Decode (policy-impact, etc.)
 		mux.Handle("/api/horizon/scenarios/run", authMiddleware(http.HandlerFunc(h.RunScenario)))

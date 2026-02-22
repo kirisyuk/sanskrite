@@ -756,11 +756,11 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		}
 	}
 	trace.Log(ctx, "scope", "scope.deduped", map[string]any{
-		"tenantId":           strings.TrimSpace(lens.TenantID),
-		"projectId":          strings.TrimSpace(lens.ProjectID),
-		"lensId":             lensID,
-		"staticPathsN":       len(staticPaths),
-		"staticPathsTop":     trace.StrSlice(staticPaths, 20),
+		"tenantId":            strings.TrimSpace(lens.TenantID),
+		"projectId":           strings.TrimSpace(lens.ProjectID),
+		"lensId":              lensID,
+		"staticPathsN":        len(staticPaths),
+		"staticPathsTop":      trace.StrSlice(staticPaths, 20),
 		"deferredScopePathsN": len(deferredScopePaths),
 	})
 
@@ -1108,7 +1108,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		}
 	}
 
-	// Process deferred scope paths (anchors): create jobs with deferredScopeAdd. Scope added only when Scout creates fragment (max 5).
+	// Process deferred scope paths (anchors): create scout jobs. Scope added when Scout creates fragment (max 5 per lens).
 	for _, inputPath := range deferredScopePaths {
 		if strings.HasPrefix(strings.TrimSpace(inputPath), "/domain/") {
 			continue
@@ -1154,7 +1154,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			}
 			s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 				"tenantId":        lens.TenantID,
-				"projectId":      lens.ProjectID,
+				"projectId":       lens.ProjectID,
 				"lensId":          lensID,
 				"canonicalPath":   canonicalPath,
 				"fragmentId":      fragment.ID,
@@ -1193,12 +1193,12 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			scoutingPlanned++
 			now := time.Now().UTC()
 			state := map[string]interface{}{
-				"targetCanonicalPath": canonicalPath,
-				"lensId":              lensID,
-				"currentState":        string(models.ScoutingJobStatePending),
-				"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
-				"recursionDepth":      0.0,
-				"maxRecursionDepth":   float64(maxRecursionDepth),
+				"targetCanonicalPath":           canonicalPath,
+				"lensId":                        lensID,
+				"currentState":                  string(models.ScoutingJobStatePending),
+				"scoutingStrategy":              string(models.ScoutingStrategySnapshot),
+				"recursionDepth":                0.0,
+				"maxRecursionDepth":             float64(maxRecursionDepth),
 				models.StateKeyDeferredScopeAdd: true,
 			}
 			if ap := strings.TrimSpace(inputPath); ap != "" && ap != strings.TrimSpace(canonicalPath) {
@@ -1261,7 +1261,18 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				},
 				CurrentState: models.ScoutingJobStatePending,
 			}
-			if jobID, createErr := s.scoutingJobsRepo.Create(ctx, scoutingJob); createErr == nil && strings.TrimSpace(jobID) != "" {
+			jobID, createErr := s.scoutingJobsRepo.Create(ctx, scoutingJob)
+			if createErr != nil {
+				trace.Log(ctx, "root_jobs", "root_jobs.create.error", map[string]any{
+					"tenantId":      strings.TrimSpace(lens.TenantID),
+					"projectId":     strings.TrimSpace(lens.ProjectID),
+					"lensId":        lensID,
+					"canonicalPath": strings.TrimSpace(canonicalPath),
+					"deferred":      true,
+					"error":         createErr.Error(),
+				})
+			}
+			if strings.TrimSpace(jobID) != "" {
 				activeScoutJobs[strings.TrimSpace(canonicalPath)] = strings.TrimSpace(jobID)
 				s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 					"tenantId":      lens.TenantID,

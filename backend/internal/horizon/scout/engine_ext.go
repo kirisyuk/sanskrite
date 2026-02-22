@@ -5403,6 +5403,7 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 
 		// Pre-create validation/dedup (phonetic persons, org alias, geo enrichment, etc.)
+		preCreatePath := strings.TrimSpace(frag.CanonicalPath)
 		if e.preCreateValidator != nil {
 			if pre, perr := e.preCreateValidator.ValidateAndProcess(ctx, frag); perr == nil && pre != nil {
 				if pre.ReplacementFrag != nil && strings.TrimSpace(pre.ReplacementFrag.ID) != "" {
@@ -5425,6 +5426,17 @@ func (e *ScoutEngine) processSupplyChains(
 					continue
 				}
 			}
+		}
+		postCreatePath := strings.TrimSpace(frag.CanonicalPath)
+		if preCreatePath != "" && postCreatePath != "" && preCreatePath != postCreatePath {
+			pathRewrites[preCreatePath] = postCreatePath
+			if origPath != "" {
+				pathRewrites[origPath] = postCreatePath
+			}
+			if effectivePath != "" {
+				pathRewrites[effectivePath] = postCreatePath
+			}
+			effectivePath = postCreatePath
 		}
 
 		// Check if fragment already exists

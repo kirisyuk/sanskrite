@@ -6,6 +6,12 @@ import "time"
 // Общие базовые поля (используются во всех онтологических типах)
 // ============================================================================
 
+// FactCoordinates holds lat/lon resolved from location services (GeoNames, Geocoding, Wikidata).
+type FactCoordinates struct {
+	Lat float64 `json:"lat" firestore:"lat"`
+	Lon float64 `json:"lon" firestore:"lon"`
+}
+
 // BaseOntologyFields содержит общие поля для всех онтологических объектов
 type BaseOntologyFields struct {
 	ID          string            `json:"id" firestore:"id"`
@@ -26,6 +32,8 @@ type BaseOntologyFields struct {
 	CanonicalPaths []string `json:"canonicalPaths,omitempty" firestore:"canonicalPaths,omitempty"`
 	// LocationPath is a taxonomy path for a normalized location (if applicable).
 	LocationPath *string `json:"locationPath,omitempty" firestore:"locationPath,omitempty"`
+	// Coordinates are resolved from LocationPath/canonicalPaths via GeoNames, Geocoding, Wikidata.
+	Coordinates *FactCoordinates `json:"coordinates,omitempty" firestore:"coordinates,omitempty"`
 	// ActorPaths are taxonomy paths for normalized actors/participants (if applicable).
 	ActorPaths []string `json:"actorPaths,omitempty" firestore:"actorPaths,omitempty"`
 	// SpherePaths are taxonomy paths for spheres of influence/impact domains (e.g. geopolitical, social, cyber).

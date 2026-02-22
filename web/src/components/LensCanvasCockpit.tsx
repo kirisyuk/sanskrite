@@ -44,6 +44,8 @@ import {
   getSemanticGroup,
   getLinearSection,
   SEMANTIC_GROUP_POSITION,
+  SEMANTIC_GROUP_LABELS,
+  getEdgePriority,
   createEmptyGrid,
   setGridCell,
   getGridCell,
@@ -51,6 +53,7 @@ import {
   gridToCanvasPosition,
   type GridState,
   type GridCell,
+  type SemanticGroup,
 } from '../lib/elkLayout';
 import type { LensItem } from '../types/lensItem';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
@@ -704,6 +707,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   // because it reflects rendered nodes/edges (e.g. hover-derived opacity) and can "leak" transient styles into state.
   const nodesStateRef = React.useRef<Node<HorizonNodeData>[]>([]);
   const edgesStateRef = React.useRef<Edge[]>([]);
+  const expandedStackKeysRef = React.useRef<Set<string>>(new Set());
   React.useEffect(() => {
     nodesStateRef.current = nodes as any;
   }, [nodes]);
@@ -1621,6 +1625,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const layoutMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [showHoverModeMenu, setShowHoverModeMenu] = React.useState(false);
   const hoverModeMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const [showEdgeViewMenu, setShowEdgeViewMenu] = React.useState(false);
+  const edgeViewMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Graph clarity: focus mode (dim non-incident edges when node selected)
+  const [focusMode, setFocusMode] = React.useState(false);
+  // Graph clarity: semantic layer filter (show only selected relation groups)
+  const [edgeViewFilter, setEdgeViewFilter] = React.useState<SemanticGroup[] | 'all'>('all');
+  // Graph clarity: hide low-priority (context/geography) edges by default
+  const [showSecondaryEdges, setShowSecondaryEdges] = React.useState(false);
+  // Graph clarity: 4 colors by semantic group instead of per-edge-type palette
+  const [useSemanticGroupColors, setUseSemanticGroupColors] = React.useState(true);
 
   // Stack preview overlay (Levels): show up to 5 hidden stack members as chips on controller click.
   const stackPreviewControllerIdRef = React.useRef<string | null>(null);
@@ -1682,6 +1697,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'RELATIVE_OF',
       'SIMILAR_TO',
       'LINKED_TO',
+      // Org participates in market (key for market expansion)
+      'PARTICIPATES_IN',
+      // Org dominates market
+      'DOMINATES',
       // Market skeleton
       'HAS_MARKET_SEGMENT',
       // Community hierarchy
@@ -1871,6 +1890,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       window.removeEventListener('mousedown', onMouseDown, true);
     };
   }, [showLayoutMenu]);
+
+  // Edge view dropdown interactions
+  React.useEffect(() => {
+    if (!showEdgeViewMenu) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowEdgeViewMenu(false);
+      }
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      const el = edgeViewMenuRef.current;
+      const target = e.target as globalThis.Node | null;
+      if (!el || !target) return;
+      if (el.contains(target)) return;
+      setShowEdgeViewMenu(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mousedown', onMouseDown, true);
+    };
+  }, [showEdgeViewMenu]);
 
   // Hover mode dropdown interactions
   React.useEffect(() => {
@@ -3569,11 +3612,45 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     });
   }, [levelsExpandMode]);
 
+  // Semantic group stroke colors (4-color palette for graph clarity)
+  const SEMANTIC_GROUP_STROKE: Record<SemanticGroup, string> = {
+    'supply-chain': '#3B82F6',  // blue
+    'customers': '#22C55E',     // green
+    'market': '#EF4444',       // red
+    'context': '#A855F7',      // purple
+  };
+
   // Helper function for edge styles based on type
-  // Цветовая схема общепринятая для графов знаний
+  // When useSemanticGroupColors: 4 colors by semantic group. Else: full per-type palette.
   const getEdgeStyle = (edgeType: string | undefined, criticality: number | undefined) => {
     const type = (edgeType || '').toUpperCase();
     const baseWidth = criticality ? Math.max(1, criticality * 2) : 1.5;
+
+    if (useSemanticGroupColors) {
+      // PARTICIPATES_IN: neutral participation, not conflict — override market red
+      if (type === 'PARTICIPATES_IN') {
+        return { stroke: '#0D9488', strokeWidth: baseWidth }; // teal-600
+      }
+      // HAS_MARKET_SEGMENT: hierarchy/skeleton — dashed gray (distinct from red competes)
+      if (type === 'HAS_MARKET_SEGMENT' || type === 'HAS_SUBMARKET') {
+        return {
+          stroke: '#9CA3AF', // gray-400
+          strokeWidth: Math.max(1.2, baseWidth * 0.95),
+          strokeDasharray: '5 4',
+        };
+      }
+      const sg = getSemanticGroup(type, true);
+      const stroke = SEMANTIC_GROUP_STROKE[sg] ?? '#64748B';
+      return { stroke, strokeWidth: baseWidth };
+    }
+
+    // 🟢 Participation (org in market) — Teal (neutral, distinct from red competes)
+    if (type === 'PARTICIPATES_IN') {
+      return {
+        stroke: '#0D9488', // teal-600
+        strokeWidth: baseWidth,
+      };
+    }
 
     // 🟡 Dominance / market-defining — Amber (high salience)
     if (type === 'DOMINATES') {
@@ -3583,10 +3660,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       };
     }
 
-    // 🟦 Market hierarchy (skeleton) — Teal dashed
+    // Market hierarchy (skeleton) — Gray dashed (distinct from red competes)
     if (type === 'HAS_MARKET_SEGMENT' || type === 'HAS_SUBMARKET') {
       return {
-        stroke: '#14B8A6', // teal-500
+        stroke: '#9CA3AF', // gray-400
         strokeWidth: Math.max(1.2, baseWidth * 0.95),
         strokeDasharray: '5 4',
       };
@@ -3685,6 +3762,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
   };
 
+  // When useSemanticGroupColors changes, refresh edge baseStyle (no layout needed)
+  React.useEffect(() => {
+    setEdges((prev) =>
+      (prev || []).map((e: any) => {
+        const ed = e?.data || {};
+        const et = ed.edgeType ?? ed.subkind ?? e?.label ?? e?.type;
+        const baseStyle = getEdgeStyle(et, ed.criticality);
+        return { ...e, data: { ...ed, baseStyle } };
+      }),
+    );
+  }, [useSemanticGroupColors, setEdges]);
+
   const runTrace = React.useCallback(async (draft: TraceDraft) => {
     const rootFragId = String(draft?.rootId || '').trim();
     if (!rootFragId) return;
@@ -3743,7 +3832,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
       const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM'];
       const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'ASSURES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
-      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP'];
+      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'PARTICIPATES_IN', 'DOMINATES', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP'];
       const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
       const out = new Set<string>();
       if (draft.scopes.ownership) for (const t of OWNERSHIP) out.add(t);
@@ -5983,6 +6072,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     };
 
+    expandedStackKeysRef.current.clear();
     loadLensItems();
   }, [lensId, setNodes, setEdges, dbg, invokeArrange]);
 
@@ -7090,6 +7180,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const corridorLaneById = new Map<string, string>();
 
       let dependencies: any;
+      const expandedType = String((sourceSnapshot?.data as any)?.type || '').trim().toUpperCase();
+      const expandedCp = String((sourceSnapshot?.data as any)?.canonicalPath || '').trim();
+      const isMarket = expandedType === 'MARKET' || expandedCp.toLowerCase().startsWith('/market/');
+
       if (isLevelsLayout && levelsExpandMode === 'decision-chain') {
         const result = await runControlCorridorRef.current?.(fragmentId);
         const corridorGraphLocal = result?.graph || null;
@@ -7354,23 +7448,109 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           _corridorTotalPaths: corridorPaths.length,
         };
       } else {
-        dependencies = await api.getFragmentDependencies(
-          fragmentId,
-          isLevelsLayout
-            ? {
-                direction: 'both',
-                // In Levels mode we can request the backend to pre-filter by edge types (focus filter)
-                ...(levelsExpandEdgeTypes.length > 0 ? { edgeTypes: levelsExpandEdgeTypes } : {}),
-                includeFragments: true,
-                // Default limits for Hierarchical expansion (4 quadrants × 18)
-                maxNeighbors: 72,
-                maxPerType: 18,
-                limit: 500,
-              }
-            : { direction: 'both' }
-        );
+        // When expanding a MARKET, always include PARTICIPATES_IN and DOMINATES so participants appear in left group
+        const edgeTypesForRequest =
+          isLevelsLayout && levelsExpandEdgeTypes.length > 0
+            ? isMarket
+              ? Array.from(new Set([...levelsExpandEdgeTypes, 'PARTICIPATES_IN', 'DOMINATES']))
+              : levelsExpandEdgeTypes
+            : undefined;
+
+        const requestOptions = isLevelsLayout
+          ? {
+              direction: 'both' as const,
+              ...(edgeTypesForRequest && edgeTypesForRequest.length > 0 ? { edgeTypes: edgeTypesForRequest } : {}),
+              includeFragments: true,
+              ...(isMarket ? { includeUnindexed: true } : {}),
+              maxNeighbors: 72,
+              maxPerType: 18,
+              limit: 500,
+            }
+          : { direction: 'both' as const };
+
+        const mergeDependencies = (primary: any, secondary: any) => {
+          const primaryEdges = Array.isArray(primary?.edges) ? primary.edges : [];
+          const secondaryEdges = Array.isArray(secondary?.edges) ? secondary.edges : [];
+          const edgeByKey = new Map<string, any>();
+          const edgeKeyOf = (e: any): string => {
+            const eid = String(e?.id || '').trim();
+            if (eid) return `id:${eid}`;
+            const s = String(e?.sourceFragmentId || '').trim();
+            const t = String(e?.targetFragmentId || '').trim();
+            const et = String(e?.type || e?.edgeType || '').trim().toUpperCase();
+            return `stt:${s}|${et}|${t}`;
+          };
+          for (const e of primaryEdges) {
+            if (!e) continue;
+            edgeByKey.set(edgeKeyOf(e), e);
+          }
+          for (const e of secondaryEdges) {
+            if (!e) continue;
+            const k = edgeKeyOf(e);
+            if (!edgeByKey.has(k)) edgeByKey.set(k, e);
+          }
+
+          const primaryFragments = Array.isArray(primary?.fragments) ? primary.fragments : [];
+          const secondaryFragments = Array.isArray(secondary?.fragments) ? secondary.fragments : [];
+          const fragmentById = new Map<string, any>();
+          const putFragment = (f: any) => {
+            const fid = String(f?.id || '').trim();
+            if (!fid) return;
+            if (!fragmentById.has(fid)) fragmentById.set(fid, f);
+          };
+          for (const f of primaryFragments) putFragment(f);
+          for (const f of secondaryFragments) putFragment(f);
+
+          const mergedEdges = Array.from(edgeByKey.values());
+          const mergedFragments = Array.from(fragmentById.values());
+
+          return {
+            ...primary,
+            edges: mergedEdges,
+            total: mergedEdges.length,
+            ...(mergedFragments.length > 0 ? { fragments: mergedFragments } : {}),
+          };
+        };
+
+        const baseDeps = await api.getFragmentDependencies(fragmentId, requestOptions);
+        if (isLevelsLayout && isMarket) {
+          // Direction-safe market expansion:
+          // fetch incoming participants explicitly and merge with the generic "both" payload.
+          const incomingMarketDeps = await api.getFragmentDependencies(fragmentId, {
+            direction: 'incoming',
+            edgeTypes: ['PARTICIPATES_IN', 'DOMINATES'],
+            includeFragments: true,
+            includeUnindexed: true,
+            maxNeighbors: 72,
+            maxPerType: 18,
+            limit: 500,
+          });
+          dependencies = mergeDependencies(baseDeps, incomingMarketDeps);
+        } else {
+          dependencies = baseDeps;
+        }
       }
       dbg('[Cockpit] Loaded dependencies for fragment:', fragmentId, dependencies);
+
+      // === MARKET EXPANSION DEBUG ===
+      if (isMarket) {
+        const dEdges = Array.isArray(dependencies?.edges) ? dependencies.edges : [];
+        const participatesEdges = dEdges.filter((e: any) => {
+          const et = String(e?.type || e?.edgeType || '').toUpperCase().trim();
+          return et === 'PARTICIPATES_IN' || et === 'DOMINATES';
+        });
+        const canvasEdgesToMarket = (edgesStateRef.current || []).filter((e: any) => {
+          return norm(e.target) === fragmentId || norm(e.source) === fragmentId;
+        });
+        console.warn('[MARKET-DEBUG] API returned edges:', dEdges.length, 'PARTICIPATES_IN/DOMINATES:', participatesEdges.length);
+        console.warn('[MARKET-DEBUG] PARTICIPATES_IN edges:', participatesEdges.map((e: any) => ({
+          source: e?.sourceFragmentId, target: e?.targetFragmentId, type: e?.type || e?.edgeType,
+        })));
+        console.warn('[MARKET-DEBUG] Canvas edges touching market:', canvasEdgesToMarket.length, canvasEdgesToMarket.map((e: any) => ({
+          source: e.source, target: e.target, type: e.data?.edgeType || e.type,
+        })));
+        console.warn('[MARKET-DEBUG] Fragments from deps:', Array.isArray((dependencies as any)?.fragments) ? (dependencies as any).fragments.length : 0);
+      }
 
       // Bottleneck node IDs from corridor analysis (for gatekeeper highlighting).
       const corridorBottleneckNodeIds: Set<string> =
@@ -7521,29 +7701,91 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
       }
 
+      // === MARKET EXPANSION DEBUG (phase 2) ===
+      if (isMarket) {
+        console.warn('[MARKET-DEBUG] newFragmentsUnsorted:', newFragmentsUnsorted.length,
+          newFragmentsUnsorted.slice(0, 5).map((f: any) => ({ id: f?.id, type: f?.type, cp: f?.canonicalPath })));
+        console.warn('[MARKET-DEBUG] existingRelatedIds (from API fragments):', Array.from(existingRelatedIds));
+      }
+
       // Also check existing edges on canvas to catch relations not returned by dependencies API.
       // In Levels mode we intentionally keep expansions strict to the backend filter (edgeTypes),
-      // so we skip this "supplemental" path to avoid pulling unrelated nodes into the hierarchy.
-      if (!isLevelsLayout) {
-        // const currentEdges = (reactFlowInstanceRef.current as any)?.getEdges?.() || []; // Variable already declared above
+      // except when expanding a MARKET: we must supplement from canvas so orgs with PARTICIPATES_IN
+      // appear in the left group even if the API filtered them (e.g. indexPaths, mode).
+      const runSupplemental = !isLevelsLayout || (isLevelsLayout && isMarket);
+      if (runSupplemental) {
         for (const e of currentEdges) {
           if (norm(e.source) === fragmentId && !expandedNodesRef.current.has(norm(e.target))) {
-            // Outgoing edge from current node to existing target
             const tId = norm(e.target);
             const targetNode = nodeById.get(tId) || nodeByFragmentId.get(tId);
-            if (targetNode && !targetNode.data?.parentFragmentId) {
-              existingRelatedIds.add(tId);
+            const targetFragId = norm((targetNode?.data as any)?.fragmentId || tId);
+            if (
+              targetFragId &&
+              targetFragId !== fragmentId &&
+              targetFragId !== rootNodeIdRef.current &&
+              !expandedNodesRef.current.has(targetFragId)
+            ) {
+              existingRelatedIds.add(targetFragId);
             }
           }
           if (norm(e.target) === fragmentId && !expandedNodesRef.current.has(norm(e.source))) {
-            // Incoming edge from existing source to current node
             const sId = norm(e.source);
             const sourceNode = nodeById.get(sId) || nodeByFragmentId.get(sId);
-            if (sourceNode && !sourceNode.data?.parentFragmentId) {
-              existingRelatedIds.add(sId);
+            const sourceFragId = norm((sourceNode?.data as any)?.fragmentId || sId);
+            if (
+              sourceFragId &&
+              sourceFragId !== fragmentId &&
+              sourceFragId !== rootNodeIdRef.current &&
+              !expandedNodesRef.current.has(sourceFragId)
+            ) {
+              existingRelatedIds.add(sourceFragId);
             }
           }
         }
+
+        // Supplemental from persisted lens edge items:
+        // currentEdges in Levels can be proxy/gproxy edges, so we also recover direct fragment relations
+        // from lensItems to avoid dropping already-loaded PARTICIPATES_IN neighbors.
+        for (const li of (lensItems || [])) {
+          const kind = String((li as any)?.kind || '').trim().toLowerCase();
+          if (kind !== 'edge') continue;
+          const sFrag = norm((li as any)?.sourceFragmentId || '');
+          const tFrag = norm((li as any)?.targetFragmentId || '');
+          if (!sFrag || !tFrag) continue;
+          const edgeTypeLi = String((li as any)?.edgeType || (li as any)?.subkind || '').trim();
+          if (!edgeTypeLi) continue;
+
+          if (sFrag === fragmentId) {
+            const neighborId = tFrag;
+            if (
+              neighborId &&
+              neighborId !== fragmentId &&
+              neighborId !== rootNodeIdRef.current &&
+              !expandedNodesRef.current.has(neighborId) &&
+              nodeByFragmentId.has(neighborId)
+            ) {
+              existingRelatedIds.add(neighborId);
+            }
+          }
+          if (tFrag === fragmentId) {
+            const neighborId = sFrag;
+            if (
+              neighborId &&
+              neighborId !== fragmentId &&
+              neighborId !== rootNodeIdRef.current &&
+              !expandedNodesRef.current.has(neighborId) &&
+              nodeByFragmentId.has(neighborId)
+            ) {
+              existingRelatedIds.add(neighborId);
+            }
+          }
+        }
+      }
+
+      // === MARKET EXPANSION DEBUG (phase 3) ===
+      if (isMarket) {
+        console.warn('[MARKET-DEBUG] After supplemental: existingRelatedIds:', Array.from(existingRelatedIds));
+        console.warn('[MARKET-DEBUG] newFragmentsUnsorted:', newFragmentsUnsorted.length);
       }
 
       if (newFragmentsUnsorted.length === 0 && existingRelatedIds.size === 0) {
@@ -7571,267 +7813,169 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Создаём маппинг fragmentId → тип связи и направление относительно родителя
       const fragmentEdgeType = new Map<string, string>();
       const fragmentDirection = new Map<string, 'incoming' | 'outgoing'>();
-      
-      // debug logs removed
-      
-      const updateEdgeInfo = (neighborId: string, edgeType: string, direction: 'incoming' | 'outgoing') => {
-        // In Levels mode we interpret some relations with inverted "up/down" meaning for placement:
-        // - DEPENDS_ON: if neighbor → central (incoming), neighbor is a dependent (downstream) => treat as 'outgoing' for grouping/placement
-        // - DEPENDS_ON: if central → neighbor (outgoing), neighbor is a prerequisite (upstream) => treat as 'incoming'
-        let effectiveDirection: 'incoming' | 'outgoing' = direction;
-        const etUpper = String(edgeType || '').toUpperCase().trim();
-        const DEP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
-        if (layoutMode === 'levels' && DEP_TYPES.has(etUpper)) {
-          effectiveDirection = direction === 'incoming' ? 'outgoing' : 'incoming';
-        }
-
-        const existingType = fragmentEdgeType.get(neighborId);
-        const existingDir = fragmentDirection.get(neighborId);
-        
-        // Helper to check if edge type is an "incoming dependency" type
-        // These types, when incoming to central node, mean "they own/control/supply us" → should go to TOP row
-        // (Previously incorrectly stated BOTTOM row in comments - incoming deps are UPSTREAM)
-        const isIncomingDependencyType = (t: string) => {
-          const upper = (t || '').toUpperCase().trim();
-          return (
-            // Ownership / Control (Strongest)
-            upper === 'OWNS' || upper === 'PARENT_OF' || upper === 'SUBSIDIARY_OF' || upper === 'MANAGES' || upper === 'CONTROLS' ||
-            // Supply / Dependency
-            upper === 'DEPENDS_ON' || upper === 'REQUIRES' || upper === 'NEEDS' || upper === 'USES' || upper === 'CONSUMES' || upper === 'EXTRACTS_FROM'
-          );
-        };
-        
-        if (!existingType) {
-          // debug logs removed
-          fragmentEdgeType.set(neighborId, edgeType);
-          fragmentDirection.set(neighborId, effectiveDirection);
-        } else {
-          // === LOCATED_IN vs DEPENDS_ON OVERRIDE ===
-          // If both LOCATED_IN and DEPENDS-like relations exist between an ORG/GOV and a GEO node,
-          // we want the GEO placement to be driven by LOCATED_IN (when directed correctly: org -> geo).
-          // Otherwise GEO nodes can be misplaced into dependency groups.
-          const typeOf = (fid: string): string => {
-            const f = byId.get(String(fid || '').trim());
-            const t0 = String(f?.type || '').trim();
-            if (t0) return t0.toUpperCase().replace(/\s+/g, '_');
-            const n = nodeByFragmentId.get(String(fid || '').trim());
-            const t1 = String((n as any)?.data?.type || '').trim();
-            return t1 ? t1.toUpperCase().replace(/\s+/g, '_') : '';
-          };
-          const isOrgLikeType = (t: string, fid: string): boolean => {
-            const tt = String(t || '').toUpperCase().trim();
-            if (tt === 'ORGANIZATION') return true;
-            const f = byId.get(String(fid || '').trim());
-            const cp = String(f?.canonicalPath || '').trim();
-            return Boolean(cp && (cp.startsWith('/org/') || cp.startsWith('/gov/')));
-          };
-          const isGeoType = (t: string, fid: string): boolean => {
-            const tt = String(t || '').toUpperCase().trim();
-            if (tt === 'GEO_REGION' || tt === 'LOCATION') return true;
-            if (tt.includes('GEO')) return true;
-            const f = byId.get(String(fid || '').trim());
-            const cp = String(f?.canonicalPath || '').trim();
-            return Boolean(cp && cp.startsWith('/loc/'));
-          };
-          const centralType = typeOf(fragmentId);
-          const neighborType = typeOf(neighborId);
-          const isCentralOrgLike = isOrgLikeType(centralType, fragmentId); // includes /gov/*
-          const isNeighborOrgLike = isOrgLikeType(neighborType, neighborId);
-          const isNeighborGeo = isGeoType(neighborType, neighborId);
-
-          // === LEVELS PRODUCT OVERRIDE ===
-          // In Levels mode, if the expanded node has an OUTGOING PRODUCES edge to a neighbor,
-          // it must dominate placement/grouping even if other edge types exist (including dependencies).
-          // Otherwise products can "escape" into the right backbone due to dependency heuristics.
-          const existingUpper = String(existingType || '').toUpperCase().trim();
-          const newUpper = String(edgeType || '').toUpperCase().trim();
-
-          if (layoutMode === 'levels' && isCentralOrgLike && isNeighborGeo) {
-            const isDepLike = (u: string) => DEP_TYPES.has(String(u || '').toUpperCase().trim());
-            const existingIsLocatedOut = existingUpper === 'LOCATED_IN' && existingDir === 'outgoing';
-            const newIsLocatedOut = newUpper === 'LOCATED_IN' && effectiveDirection === 'outgoing';
-
-            // If LOCATED_IN (org -> geo) is already chosen, do NOT let DEPENDS-like edges override it.
-            if (existingIsLocatedOut && isDepLike(newUpper)) {
-              return;
-            }
-            // If we currently have a DEPENDS-like edge, but we see LOCATED_IN (org -> geo), promote LOCATED_IN.
-            if (isDepLike(existingUpper) && newIsLocatedOut) {
-              fragmentEdgeType.set(neighborId, edgeType);
-              fragmentDirection.set(neighborId, effectiveDirection);
-              return;
-            }
-          }
-
-          // === INFLUENCE vs DEPENDS OVERRIDE ===
-          // If an ORG/GOV influences another ORG, this semantic is stronger than dependency for placement/grouping,
-          // even if dependency edges exist (and even if they point in the opposite direction).
-          // Otherwise "Depends" can hide the actual semantic and misplace the influencer/target in the wrong group.
-          if (isCentralOrgLike && isNeighborOrgLike) {
-            const INFL = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES']);
-            const PARTNER = new Set(['PARTNERS_WITH', 'COOPERATES_WITH']);
-            const existingIsInfluence = INFL.has(existingUpper);
-            const newIsInfluence = INFL.has(newUpper);
-            const existingIsDepLike = DEP_TYPES.has(existingUpper);
-            const newIsDepLike = DEP_TYPES.has(newUpper);
-            const existingIsPartner = PARTNER.has(existingUpper);
-            const newIsPartner = PARTNER.has(newUpper);
-
-            // Partnership dominates both influence and dependency regardless of direction/priority.
-            if (existingIsPartner && (newIsInfluence || newIsDepLike)) return;
-            if (!existingIsPartner && newIsPartner && (existingIsInfluence || existingIsDepLike)) {
-              fragmentEdgeType.set(neighborId, edgeType);
-              fragmentDirection.set(neighborId, effectiveDirection);
-              return;
-            }
-
-            // Keep influence if already chosen.
-            if (existingIsInfluence && newIsDepLike) return;
-            // Promote influence over dependency regardless of direction/priority.
-            if (existingIsDepLike && newIsInfluence) {
-              fragmentEdgeType.set(neighborId, edgeType);
-              fragmentDirection.set(neighborId, effectiveDirection);
-              return;
-            }
-          }
-
-          const existingIsProducesOut = layoutMode === 'levels' && existingUpper === 'PRODUCES' && existingDir === 'outgoing';
-          const newIsProducesOut = layoutMode === 'levels' && newUpper === 'PRODUCES' && effectiveDirection === 'outgoing';
-          if (existingIsProducesOut) return;
-          if (newIsProducesOut) {
-            fragmentEdgeType.set(neighborId, edgeType);
-            fragmentDirection.set(neighborId, effectiveDirection);
-            return;
-          }
-
-          // === LEVELS CONTROL > DEPENDENCY OVERRIDE ===
-          // If a node has both a control/management signal and a dependency signal to the expanded node,
-          // the control signal must dominate. Otherwise the node can be misclassified (e.g., not bucketed into Stakeholders).
-          const LEVELS_CONTROL_TYPES = new Set(['OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'SUBSIDIARY_OF']);
-          const LEVELS_DEP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
-          const existingIsControl = layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(existingUpper);
-          const newIsControl = layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(newUpper);
-          const existingIsDep = layoutMode === 'levels' && LEVELS_DEP_TYPES.has(existingUpper);
-          const newIsDep = layoutMode === 'levels' && LEVELS_DEP_TYPES.has(newUpper);
-          if (existingIsControl && newIsDep) return;
-          if (newIsControl && existingIsDep) {
-            fragmentEdgeType.set(neighborId, edgeType);
-            fragmentDirection.set(neighborId, effectiveDirection);
-            return;
-          }
-
-          // === LEVELS CONTROL OVERRIDE ===
-          // If there is a control/ownership edge from the expanded node to the neighbor (OUTGOING),
-          // it must dominate over influence edges. Otherwise a node can be incorrectly promoted to the right backbone
-          // due to an incoming INFLUENCES edge, and "miss" the left group.
-          const LEVELS_INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES']);
-          const existingIsControlOut =
-            layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(existingUpper) && existingDir === 'outgoing';
-          const newIsControlOut =
-            layoutMode === 'levels' && LEVELS_CONTROL_TYPES.has(newUpper) && effectiveDirection === 'outgoing';
-          const existingIsInfluence = layoutMode === 'levels' && LEVELS_INFLUENCE_TYPES.has(existingUpper);
-          const newIsInfluence = layoutMode === 'levels' && LEVELS_INFLUENCE_TYPES.has(newUpper);
-          if (existingIsControlOut && newIsInfluence) return;
-          if (newIsControlOut && existingIsInfluence) {
-            fragmentEdgeType.set(neighborId, edgeType);
-            fragmentDirection.set(neighborId, effectiveDirection);
-            return;
-          }
-
-          // === LINEAR LAYOUT SPECIAL LOGIC ===
-          // In Linear mode, incoming dependency edges (neighbor DEPENDS_ON central) MUST determine placement.
-          // These nodes should ALWAYS go to BOTTOM row, regardless of other edges they might have.
-          if (layoutMode === 'linear') {
-            // 1. If EXISTING is an incoming dependency, NEVER override it
-            if (existingDir === 'incoming' && isIncomingDependencyType(existingType)) {
-              // debug logs removed
-              return;
-            }
-            
-            // 2. If NEW is an incoming dependency, it ALWAYS wins
-            if (effectiveDirection === 'incoming' && isIncomingDependencyType(edgeType)) {
-              // debug logs removed
-              fragmentEdgeType.set(neighborId, edgeType);
-              fragmentDirection.set(neighborId, effectiveDirection);
-              return;
-            }
-          }
-          
-          // === DEFAULT PRIORITY LOGIC ===
-          // Если уже есть связь, проверяем приоритет. 
-          // Меньшее число = более высокий приоритет (важнее).
-          const existingPriority = getEdgePriority(existingType);
-          const newPriority = getEdgePriority(edgeType);
-          if (newPriority < existingPriority) {
-            // debug logs removed
-            fragmentEdgeType.set(neighborId, edgeType);
-            fragmentDirection.set(neighborId, effectiveDirection);
-          } else {
-            // debug logs removed
-          }
-        }
+      type EdgeCandidate = {
+        edgeType: string;
+        direction: 'incoming' | 'outgoing';
+        sourcePriority: number;
+        selectionPriority: number;
       };
-      
+      const DEP_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
+      const normalizeEdgeTypeKeyLocal = (t: any): string =>
+        String(t || '').toUpperCase().trim().replace(/\s+/g, '_');
+      const EDGE_SELECTION_PRIORITY: Record<string, number> = {
+        OWNS: 10,
+        PARENT_OF: 10,
+        SUBSIDIARY_OF: 10,
+        CONTROLS: 12,
+        MANAGES: 12,
+        INVESTS_IN: 14,
+        FOUNDED: 16,
+        BOARD_MEMBER_OF: 20,
+        EXECUTIVE_OF: 20,
+        EMPLOYED_BY: 22,
+        ADMINISTERS: 24,
+        DOMINATES: 30,
+        PARTICIPATES_IN: 32,
+        HAS_MARKET_SEGMENT: 34,
+        HAS_SUBMARKET: 34,
+        HAS_SUBGROUP: 34,
+        PRODUCES: 40,
+        SUPPLIES_TO: 42,
+        TRANSFORMS_INTO: 44,
+        LOCATED_IN: 50,
+        OPERATES_IN: 52,
+        BASED_IN: 52,
+        HEADQUARTERED_IN: 52,
+        PARTNERS_WITH: 60,
+        COOPERATES_WITH: 60,
+        AFFILIATED_WITH: 62,
+        MEMBER_OF: 62,
+        OPERATES_VIA: 62,
+        REGULATES: 70,
+        INFLUENCES: 72,
+        AFFECTS: 72,
+        IMPACTS: 72,
+        DEPENDS_ON: 80,
+        REQUIRES: 80,
+        NEEDS: 80,
+        USES: 80,
+        CONSUMES: 80,
+        EXTRACTS_FROM: 80,
+        ASSURES: 90,
+        AUDITED_BY: 90,
+      };
+      const directionPreferenceForType = (edgeType: string): 'incoming' | 'outgoing' | 'any' => {
+        const et = normalizeEdgeTypeKeyLocal(edgeType);
+        if (et === 'LOCATED_IN' || et === 'PRODUCES' || et === 'PARTICIPATES_IN' || et === 'DOMINATES') return 'outgoing';
+        if (layoutMode === 'linear' && DEP_TYPES.has(et)) return 'incoming';
+        return 'any';
+      };
+      const normalizeDirectionForLayout = (
+        edgeType: string,
+        direction: 'incoming' | 'outgoing',
+      ): 'incoming' | 'outgoing' => {
+        const et = normalizeEdgeTypeKeyLocal(edgeType);
+        if (layoutMode === 'levels' && DEP_TYPES.has(et)) {
+          return direction === 'incoming' ? 'outgoing' : 'incoming';
+        }
+        return direction;
+      };
+      const selectionPriorityFor = (edgeType: string, direction: 'incoming' | 'outgoing'): number => {
+        const et = normalizeEdgeTypeKeyLocal(edgeType);
+        if (layoutMode === 'linear' && DEP_TYPES.has(et) && direction === 'incoming') return 5;
+        return EDGE_SELECTION_PRIORITY[et] ?? (100 + getEdgePriority(et));
+      };
+      const candidatesByNeighbor = new Map<string, EdgeCandidate[]>();
+      const addEdgeCandidate = (
+        neighborIdRaw: string,
+        edgeTypeRaw: string,
+        directionRaw: 'incoming' | 'outgoing',
+        sourcePriority: number,
+      ) => {
+        const neighborId = norm(neighborIdRaw);
+        if (!neighborId || neighborId === fragmentId) return;
+        const edgeType = normalizeEdgeTypeKeyLocal(edgeTypeRaw || '');
+        if (!edgeType) return;
+        const direction = normalizeDirectionForLayout(edgeType, directionRaw);
+        const list = candidatesByNeighbor.get(neighborId) || [];
+        list.push({
+          edgeType,
+          direction,
+          sourcePriority,
+          selectionPriority: selectionPriorityFor(edgeType, direction),
+        });
+        candidatesByNeighbor.set(neighborId, list);
+      };
+      const bestCandidateForNeighbor = (neighborId: string): EdgeCandidate | null => {
+        const list = candidatesByNeighbor.get(neighborId) || [];
+        if (list.length === 0) return null;
+        const sorted = [...list].sort((a, b) => {
+          if (a.selectionPriority !== b.selectionPriority) return a.selectionPriority - b.selectionPriority;
+          const prefA = directionPreferenceForType(a.edgeType);
+          const prefB = directionPreferenceForType(b.edgeType);
+          const penA = prefA === 'any' ? 0 : (a.direction === prefA ? 0 : 1);
+          const penB = prefB === 'any' ? 0 : (b.direction === prefB ? 0 : 1);
+          if (penA !== penB) return penA - penB;
+          if (a.sourcePriority !== b.sourcePriority) return a.sourcePriority - b.sourcePriority;
+          const pA = getEdgePriority(a.edgeType);
+          const pB = getEdgePriority(b.edgeType);
+          if (pA !== pB) return pA - pB;
+          if (a.direction !== b.direction) return a.direction === 'outgoing' ? -1 : 1;
+          return a.edgeType.localeCompare(b.edgeType);
+        });
+        return sorted[0] || null;
+      };
+
       for (const e of filteredDepEdges) {
         const s = String(e?.sourceFragmentId || '').trim();
         const t = String(e?.targetFragmentId || '').trim();
-        const edgeType = e?.type || e?.edgeType || '';
-        
-        // Если центральная нода — source, то ребро: central → neighbor (для neighbor = outgoing)
-        if (s === fragmentId && t) {
-          // debug logs removed
-          updateEdgeInfo(t, edgeType, 'outgoing');
-        }
-        // Если центральная нода — target, то ребро: neighbor → central (для neighbor = incoming) 
-        if (t === fragmentId && s) {
-          // debug logs removed
-          updateEdgeInfo(s, edgeType, 'incoming');
-        }
+        const edgeType = String(e?.type || e?.edgeType || '').trim();
+        if (!s || !t || !edgeType) continue;
+        if (s === fragmentId) addEdgeCandidate(t, edgeType, 'outgoing', 0);
+        if (t === fragmentId) addEdgeCandidate(s, edgeType, 'incoming', 0);
       }
 
-      // Levels: keep expansions strict to backend edgeTypes, BUT allow an important exception:
-      // If an expanded node already has a PRODUCES edge on canvas to a neighbor, it must dominate placement
-      // over DEPENDS-like edges (otherwise products can be misplaced).
-      if (isLevelsLayout) {
+      // Supplemental candidates from the current canvas are allowed in:
+      // - freeform / linear always
+      // - levels only for market expansion (to include visible participants not returned by API filter)
+      if (!isLevelsLayout || (isLevelsLayout && isMarket)) {
         for (const e of currentEdges) {
           const s = norm(e.source);
           const t = norm(e.target);
-          const edgeType0 = (e as any)?.data?.edgeType || (e as any)?.type || '';
-          const u = String(edgeType0 || '').toUpperCase().trim();
-          if (u !== 'PRODUCES') continue;
-
-          // Normalize node ids -> fragment ids (ReactFlow ids can be lensItemId in some flows)
+          const edgeType = String((e.data as any)?.edgeType || e.type || '').trim();
+          if (!s || !t || !edgeType) continue;
           const sNode = nodeById.get(s) || nodeByFragmentId.get(s);
           const tNode = nodeById.get(t) || nodeByFragmentId.get(t);
           const sFrag = norm((sNode?.data as any)?.fragmentId || s);
           const tFrag = norm((tNode?.data as any)?.fragmentId || t);
+          if (sFrag === fragmentId && tFrag) addEdgeCandidate(tFrag, edgeType, 'outgoing', 1);
+          if (tFrag === fragmentId && sFrag) addEdgeCandidate(sFrag, edgeType, 'incoming', 1);
+        }
 
-          // Only OUTGOING from expanded -> neighbor matters for the strong override.
-          if (sFrag === fragmentId && tFrag) {
-            updateEdgeInfo(tFrag, 'PRODUCES', 'outgoing');
-          }
+        // Supplemental candidates from persisted lens edge items.
+        // Priority 2 => weaker than direct dependency response (0) and current-edge supplemental (1).
+        for (const li of (lensItems || [])) {
+          const kind = String((li as any)?.kind || '').trim().toLowerCase();
+          if (kind !== 'edge') continue;
+          const sFrag = norm((li as any)?.sourceFragmentId || '');
+          const tFrag = norm((li as any)?.targetFragmentId || '');
+          const edgeType = String((li as any)?.edgeType || (li as any)?.subkind || '').trim();
+          if (!sFrag || !tFrag || !edgeType) continue;
+          if (sFrag === fragmentId && nodeByFragmentId.has(tFrag)) addEdgeCandidate(tFrag, edgeType, 'outgoing', 2);
+          if (tFrag === fragmentId && nodeByFragmentId.has(sFrag)) addEdgeCandidate(sFrag, edgeType, 'incoming', 2);
         }
       }
 
-      // Also populate edge info from current canvas edges if missing from API deps.
-      // In Levels mode, keep behavior strict to the backend response.
-      if (!isLevelsLayout) for (const e of currentEdges) {
-        const s = norm(e.source);
-        const t = norm(e.target);
-        const edgeType = e.data?.edgeType || e.type || '';
-
-        // Normalize node ids -> fragment ids (ReactFlow ids can be lensItemId in some flows)
-        const sNode = nodeById.get(s) || nodeByFragmentId.get(s);
-        const tNode = nodeById.get(t) || nodeByFragmentId.get(t);
-        const sFrag = norm((sNode?.data as any)?.fragmentId || s);
-        const tFrag = norm((tNode?.data as any)?.fragmentId || t);
-
-        if (sFrag === fragmentId && tFrag) {
-          updateEdgeInfo(tFrag, edgeType, 'outgoing');
-        }
-        if (tFrag === fragmentId && sFrag) {
-          updateEdgeInfo(sFrag, edgeType, 'incoming');
-        }
+      const candidateNeighborIds = new Set<string>([
+        ...Array.from(relatedFragmentIds).map((id) => norm(id)).filter(Boolean),
+        ...Array.from(existingRelatedIds).map((id) => norm(id)).filter(Boolean),
+        ...Array.from(candidatesByNeighbor.keys()).map((id) => norm(id)).filter(Boolean),
+      ]);
+      for (const neighborId of candidateNeighborIds) {
+        const best = bestCandidateForNeighbor(neighborId);
+        if (!best) continue;
+        fragmentEdgeType.set(neighborId, best.edgeType);
+        fragmentDirection.set(neighborId, best.direction);
       }
 
       if (isLevelsLayout && levelsExpandMode === 'decision-chain' && corridorLaneById.size > 0) {
@@ -7844,6 +7988,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           fragmentEdgeType.set(fid, fallback.edgeType);
           fragmentDirection.set(fid, fallback.direction);
         }
+      }
+
+      // === MARKET EXPANSION DEBUG (phase 4) ===
+      if (isMarket) {
+        const allEdgeTypes = new Map<string, number>();
+        for (const [nid, et] of fragmentEdgeType.entries()) {
+          allEdgeTypes.set(et, (allEdgeTypes.get(et) || 0) + 1);
+        }
+        console.warn('[MARKET-DEBUG] fragmentEdgeType summary:', Object.fromEntries(allEdgeTypes));
+        const participatesNodes = Array.from(fragmentEdgeType.entries()).filter(([, et]) => et === 'PARTICIPATES_IN' || et === 'DOMINATES');
+        console.warn('[MARKET-DEBUG] PARTICIPATES_IN/DOMINATES nodes:', participatesNodes.length, participatesNodes);
+        console.warn('[MARKET-DEBUG] fragmentDirection for those:', participatesNodes.map(([nid]) => [nid, fragmentDirection.get(nid)]));
       }
 
       // Log final edge info for all neighbors
@@ -8348,9 +8504,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const updatedCurrentNodes = preprocessedNodes.map((n) => {
         const nodeFragmentId = norm(n.data?.fragmentId || n.id);
 
-        // Skip if not an existing related node, or if it already has a parent, or if it's the expanded node
+        // Skip if not an existing related node, or if it's the expanded node.
+        // Existing parent linkage is intentionally re-evaluated for this expansion:
+        // the current expanded node becomes the deterministic owner for all directly related, non-expanded neighbors.
         if (!existingRelatedIds.has(nodeFragmentId)) return n;
-        if (n.data?.parentFragmentId) return n; // Already has a parent, don't override
         if (nodeFragmentId === fragmentId) return n;
         // Double-check: never group already expanded nodes
         // Note: we allow grouping the current rootNodeId if it gets absorbed by another expanding node
@@ -8362,7 +8519,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const nodeDepth = typeof (n.data as any)?.depth === 'number' ? (n.data as any).depth : undefined;
         const nodeRoot = norm((n.data as any)?.rootFragmentId || '');
         
-        if (nodeDepth !== 0 && nodeRoot && nodeRoot !== sourceRootId) return n;
+        // In Levels, direct neighbors of the expanded node are always re-parented to this node.
+        // This avoids direction-dependent "orphaning" when an incoming relation exists but node
+        // currently belongs to another local subgraph.
+        if (!isLevelsLayout && nodeDepth !== 0 && nodeRoot && nodeRoot !== sourceRootId) return n;
 
         const edgeTypeFromParent = fragmentEdgeType.get(nodeFragmentId) || '';
         const directionFromParent = fragmentDirection.get(nodeFragmentId) || 'outgoing';
@@ -8391,6 +8551,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         };
         return updated;
       });
+
+      // Reset expanded stack state when loading new graph (expand node).
+      if (isLevelsLayout) expandedStackKeysRef.current.clear();
 
       // Применяем layout для позиционирования новых узлов относительно родителя
       // Логика зависит от режима раскладки (freeform или linear)
@@ -8506,6 +8669,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           rightDockMode: true,
           rightDockStateByNodeId,
           onToggleRightDock: toggleRightDock,
+          expandedStackKeysOverride: expandedStackKeysRef.current,
         });
         linearEdgesAfterLayout = recalculateLevelsTwoPaneHandles(filteredMergedEdges as any, layoutedNodes as any);
       } else {
@@ -8546,12 +8710,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         if ((n.data as any)?.isGroup) {
           updates.onGroupPageChange = handleGroupPageChange;
         }
-        // Remove loading flag from expanded node
+        // Remove loading flag from expanded node; add temporary glow
         if (n.id === fragmentId || n.data.fragmentId === fragmentId) {
           updates.isLoadingRelated = false;
           updates.expanded = true;
           updates.collapsed = false;
           updates.loadRelatedAttempted = true;
+          updates.expandGlow = true;
         }
         // Ensure callbacks are present on fragment nodes (not groups)
         if (!(n.data as any)?.isGroup) {
@@ -8729,25 +8894,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         });
       }
 
-      // Подгоняем вид к родителю и новым узлам
-      const newNodeIds = newNodes.map((n) => n.id);
+      // Focus on the expanded node (not the whole graph) and center it
       setTimeout(() => {
         if (reactFlowInstanceRef.current) {
           const inst: any = reactFlowInstanceRef.current;
-          const toFit: any[] = [];
-          const parent = inst.getNode?.(fragmentId);
-          if (parent) toFit.push(parent);
-          for (const id of newNodeIds) {
-            const n = inst.getNode?.(id);
-            if (n) toFit.push(n);
+          const expandedNode = inst.getNode?.(fragmentId);
+          if (expandedNode) {
+            // Fit view on the expanded node only so it stays prominent
+            inst.fitView?.({ nodes: [expandedNode], padding: 0.35, duration: 400 });
+            focusOnFragment(fragmentId);
           }
-          if (toFit.length > 0) {
-            inst.fitView?.({ nodes: toFit, padding: 0.25, duration: 400 });
-          }
-          // Always keep the expanded/collapsed node in focus (centered).
-          focusOnFragment(fragmentId);
         }
       }, 100);
+
+      // Clear expand glow after ~2.5s
+      const glowTimeout = setTimeout(() => {
+        setNodes((prev) =>
+          prev.map((n) =>
+            n.id === fragmentId || n.data.fragmentId === fragmentId
+              ? { ...n, data: { ...n.data, expandGlow: false } }
+              : n,
+          ),
+        );
+      }, 2500);
 
       setLoadingFragmentId(null);
     } catch (err: any) {
@@ -9706,6 +9875,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       filtered = filtered.filter((e) => !excludeRelTypes.has(edgeTypeOf(e)));
     }
 
+    // Graph clarity: semantic layer filter (show only selected relation groups)
+    if (edgeViewFilter !== 'all' && edgeViewFilter.length > 0) {
+      const allowed = new Set(edgeViewFilter);
+      filtered = filtered.filter((e) => {
+        const et = edgeTypeOf(e);
+        const sg = getSemanticGroup(et, true);
+        return allowed.has(sg);
+      });
+    }
+
+    // Graph clarity: hide secondary (context/geography) edges when showSecondaryEdges is false
+    if (!showSecondaryEdges) {
+      filtered = filtered.filter((e) => {
+        const et = edgeTypeOf(e);
+        return getEdgePriority(et) < 4;
+      });
+    }
+
     // Domain focus: force-include Top Dependencies edges even when generic view filters suppress them.
     if (topDepEdgeSet && topDepEdgeSet.size > 0) {
       const present = new Set<string>(filtered.map((e) => String((e as any)?.id || '').trim()).filter(Boolean));
@@ -9729,6 +9916,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     domainTopDependencyFocusActive,
     domainTopDependencyNodeIds,
     domainTopDependencyEdgeIds,
+    edgeViewFilter,
+    showSecondaryEdges,
   ]);
 
   // Stable node structure info (only changes when nodes are added/removed/hidden, NOT on style changes).
@@ -10436,8 +10625,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
 
     // Selected node (when not hovering): highlight incident edges, show labels
+    // Focus mode: when enabled, dim non-incident edges much more (0.06) to reduce spaghetti
     if (selectedNodeId) {
       const nodeId = selectedNodeId;
+      const nonIncidentOpacity = focusMode ? 0.06 : DIM_OPACITY;
       const out = edgesForDisplay.map((e) => {
         const { baseStyle } = baseStyled(e);
         const isIncident = e.source === nodeId || e.target === nodeId;
@@ -10449,7 +10640,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             strokeWidth: strokeWidth + 0.75,
           }, true);
         }
-        return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
+        return withLabel(e, false, { ...baseStyle, opacity: nonIncidentOpacity }, false);
       });
       return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
     }
@@ -10508,7 +10699,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Default: dim all edges, hide labels
     return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay));
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, hoverHighlightMode, signalPropagationOverlay, signalPropagationEdgeIdSet, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode]);
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, hoverHighlightMode, signalPropagationOverlay, signalPropagationEdgeIdSet, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode, focusMode]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -10516,37 +10707,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const toggleStackGroup = React.useCallback((stackKey: string, nextExpanded: boolean) => {
     const key = String(stackKey || '').trim();
     if (!key) return;
-    const parseKey = (k: string) => {
-      const parts = String(k || '').split(':');
-      if (parts.length < 5) return null;
-      if (parts[0] !== 'levels') return null;
-      const mode = parts[1] === 'rightstack' ? 'rightstack' : (parts[1] === 'rightstackp' ? 'rightstackp' : null);
-      if (!mode) return null;
-      const pivotId = String(parts[2] || '').trim();
-      return { mode, pivotId };
-    };
-    const parsed = parseKey(key);
-    setNodes((prev) =>
-      prev.map((n) => {
+    setNodes((prev) => {
+      let updated = 0;
+      const next = prev.map((n) => {
         const d: any = (n as any)?.data;
         if (!d || d.isGroup) return n;
-        const k = String(d.stackGroupKey || '').trim();
+        const k = String(d.stackGroupKey || d.stackKey || '').trim();
         if (!k) return n;
         const cur = Boolean(d.stackExpanded);
         if (k === key) {
           if (cur === nextExpanded) return n;
+          updated++;
           return { ...(n as any), data: { ...d, stackExpanded: nextExpanded } } as any;
         }
-        // Only one expanded stack group per right node (same pivot).
-        if (nextExpanded && parsed) {
-          const other = parseKey(k);
-          if (other && other.pivotId === parsed.pivotId && cur) {
-            return { ...(n as any), data: { ...d, stackExpanded: false } } as any;
-          }
-        }
         return n;
-      }),
-    );
+      });
+      if (nextExpanded) expandedStackKeysRef.current.add(key);
+      else expandedStackKeysRef.current.delete(key);
+      return next;
+    });
     if (layoutMode === 'levels') {
       invokeArrange();
     }
@@ -11171,6 +11350,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         delete nextData.onToggleStack;
         changed = true;
       }
+      // Right-pane collapsed stacks rendered as context cards: inject expand callback.
+      const isRightStackContextCard = Boolean((nextData as any)?.rightStackContextCard);
+      const rightStackKey = isRightStackContextCard ? String((nextData as any)?.stackKey || '').trim() : '';
+      if (isRightStackContextCard && rightStackKey) {
+        if (nextData === d0) {
+          nextData = { ...d0 };
+          changed = true;
+        }
+        (nextData as any).onToggleContextDetails = () => toggleStackGroup(rightStackKey, true);
+        changed = true;
+      }
 
       // Risk Shield: attach toggle callback + open flag only for real fragment nodes (not groups, not stacks).
       const canRisk = !isGroup && !stackKey;
@@ -11435,8 +11625,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         setEdges(updatedEdges);
       } else if (isLevelsLayout) {
         // Levels (Hierarchical): contract-driven Two-Pane layout.
+        // CRITICAL: use nodesStateRef to get the latest nodes (avoids stale closure when toggleStackGroup
+        // calls setNodes + invokeArrange in the same tick; ref is updated in effect after render).
+        const nodesForLayout = (nodesStateRef.current?.length ? nodesStateRef.current : nodes) as any[];
         // IMPORTANT: pass the current nodes (including existing groups) so pagination can be preserved.
-        const nodesNoRightStacks = (nodes as any[]).filter((n) => {
+        const nodesNoRightStacks = nodesForLayout.filter((n) => {
           const id = String((n as any)?.id || '').trim();
           const d: any = (n as any)?.data;
           if (id.startsWith('stack:group:')) return false;
@@ -11470,6 +11663,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           rightDockMode: true,
           rightDockStateByNodeId,
           onToggleRightDock: toggleRightDock,
+          expandedStackKeysOverride: expandedStackKeysRef.current,
         });
 
         const finalFragments = arrangedFragments.map((node) => {
@@ -13946,6 +14140,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     LayoutLevels: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/><circle cx="8" cy="7" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="16" cy="17" r="1.6"/></svg>,
     ChevronDown: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
     Info: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>,
+    Target: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>,
+    Layers: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/></svg>,
+    Palette: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.648 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668c1.105 0 2.059-.215 2.98-.643 2.02-1.008 3.48-3.157 3.48-5.75 0-4.5-4.5-8.5-10-8.5z"/></svg>,
+    Filter: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
   };
 
   const layoutModeLabel = React.useCallback((m: 'freeform' | 'linear' | 'levels'): string => {
@@ -14002,6 +14200,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setVisualPreset('custom');
   }, []);
 
+  const graphEmpty = nodes.length === 0;
+
   const toolbarContent = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
       {/* Actions */}
@@ -14013,21 +14213,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         title={addNodeOpen ? 'Close search (Ctrl+K)' : 'Search / add (Ctrl+K)'}
         icon={Icons.Search}
       />
-      <IconButton onClick={handleArrange} disabled={arranging || nodes.length === 0} title="Arrange graph" icon={Icons.Arrange} />
-      <IconButton onClick={handleFitView} disabled={nodes.length === 0} title="Fit view" icon={Icons.Focus} />
-      <IconButton
-        onClick={() => {
-          setShowToolbarMenu(false);
-          handleDownload();
-        }}
-        disabled={nodes.length === 0 && edges.length === 0}
-        title="Download graph"
-        icon={Icons.Download}
-      />
+      {!graphEmpty && (
+        <>
+          <IconButton onClick={handleArrange} disabled={arranging} title="Arrange graph" icon={Icons.Arrange} />
+          <IconButton onClick={handleFitView} title="Fit view" icon={Icons.Focus} />
+          <IconButton
+            onClick={() => {
+              setShowToolbarMenu(false);
+              handleDownload();
+            }}
+            disabled={edges.length === 0}
+            title="Download graph"
+            icon={Icons.Download}
+          />
 
-      <ToolbarDivider />
+          <ToolbarDivider />
 
-      {/* Modes */}
+          {/* Modes */}
       <div ref={layoutMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
         <button
           type="button"
@@ -14373,6 +14575,127 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       <ToolbarDivider />
 
+      {/* Graph clarity */}
+      <IconButton
+        onClick={() => setFocusMode((v) => !v)}
+        active={focusMode}
+        title={focusMode ? 'Focus mode: dim non-selected edges when a node is selected' : 'Focus mode: click to enable'}
+        icon={Icons.Target}
+      />
+      <div ref={edgeViewMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
+        <button
+          type="button"
+          onClick={() => {
+            setShowEdgeViewMenu((v) => !v);
+            setShowLayoutMenu(false);
+            setShowHoverModeMenu(false);
+            setShowLevelsExpandMenu(false);
+          }}
+          title="Filter edges by relation type"
+          aria-expanded={showEdgeViewMenu}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '6px 10px',
+            borderRadius: 8,
+            border: '1px solid var(--border-subtle)',
+            background: theme === 'dark' ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.40)',
+            color: 'var(--text-heading)',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 600,
+            lineHeight: 1,
+          }}
+        >
+          <span style={{ display: 'inline-flex' }}>{Icons.Layers}</span>
+          <span>
+            {edgeViewFilter === 'all'
+              ? 'All relations'
+              : edgeViewFilter.length === 1
+                ? SEMANTIC_GROUP_LABELS[edgeViewFilter[0]!]
+                : `${edgeViewFilter.length} groups`}
+          </span>
+          <span style={{ color: 'var(--text-secondary-strong)' }}>{Icons.ChevronDown}</span>
+        </button>
+        {showEdgeViewMenu && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 6px)',
+              right: 0,
+              minWidth: 200,
+              borderRadius: 12,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-elevated)',
+              boxShadow: theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.55)' : '0 14px 40px rgba(0,0,0,0.18)',
+              overflow: 'hidden',
+              zIndex: 1000,
+            }}
+          >
+            <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', borderBottom: '1px solid var(--border-subtle)' }}>
+              Show relations
+            </div>
+            {[
+              { key: 'all' as const, label: 'All relations' },
+              ...(['supply-chain', 'customers', 'market', 'context'] as SemanticGroup[]).map((sg) => ({
+                key: [sg] as SemanticGroup[],
+                label: SEMANTIC_GROUP_LABELS[sg],
+              })),
+            ].map((opt) => {
+              const active =
+                opt.key === 'all'
+                  ? edgeViewFilter === 'all'
+                  : Array.isArray(opt.key) && edgeViewFilter !== 'all' && edgeViewFilter.length === 1 && edgeViewFilter[0] === opt.key[0];
+              return (
+                <button
+                  key={Array.isArray(opt.key) ? opt.key[0] : opt.key}
+                  type="button"
+                  onClick={() => {
+                    setEdgeViewFilter(opt.key === 'all' ? 'all' : opt.key);
+                    setShowEdgeViewMenu(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: 'none',
+                    background: active ? 'var(--white-10)' : 'transparent',
+                    color: 'var(--text-heading)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    textAlign: 'left',
+                  }}
+                >
+                  <span style={{ fontSize: 12, fontWeight: 800 }}>{opt.label}</span>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>{active ? '✓' : ''}</div>
+                </button>
+              );
+            })}
+            <div style={{ padding: '8px 12px', fontSize: 10, color: 'var(--text-secondary)', borderTop: '1px solid var(--border-subtle)' }}>
+              Filter edges by semantic group
+            </div>
+          </div>
+        )}
+      </div>
+      <IconButton
+        onClick={() => setShowSecondaryEdges((v) => !v)}
+        active={showSecondaryEdges}
+        title={showSecondaryEdges ? 'Showing all edges (incl. context/geography)' : 'Primary edges only (hide context)'}
+        icon={Icons.Filter}
+        label={showSecondaryEdges ? 'All' : 'Primary'}
+      />
+      <IconButton
+        onClick={() => setUseSemanticGroupColors((v) => !v)}
+        active={useSemanticGroupColors}
+        title={useSemanticGroupColors ? '4 colors by semantic group' : 'Full per-type color palette'}
+        icon={Icons.Palette}
+      />
+
+      <ToolbarDivider />
+
       {/* Settings & overflow */}
       <IconButton
         onClick={() => onToggleInspector?.()}
@@ -14420,6 +14743,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 
@@ -15768,7 +16093,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             pointerEvents: 'none', // only inner elements handle pointer events
           }}
         >
-          {graphQueryChips.length > 0 && (
+          {!graphEmpty && graphQueryChips.length > 0 && (
             <div
               style={{
                 display: 'flex',
@@ -15894,6 +16219,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             </div>
           )}
 
+          {!graphEmpty && (
           <button
             type="button"
             onClick={(e) => {
@@ -15931,7 +16257,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           >
             FX
           </button>
+          )}
 
+          {!graphEmpty && (
           <button
             type="button"
             onClick={(e) => {
@@ -15942,7 +16270,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               setAskGraphError(null);
               setAskGraphOpen(true);
             }}
-            disabled={!lensId || nodes.length === 0 || askGraphLoading}
+            disabled={!lensId || askGraphLoading}
             title="Ask this graph"
             style={{
               pointerEvents: 'auto',
@@ -15952,8 +16280,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               border: '1px solid var(--border-subtle)',
               background: theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.80)',
               color: 'var(--text-heading)',
-              cursor: (!lensId || nodes.length === 0 || askGraphLoading) ? 'not-allowed' : 'pointer',
-              opacity: (!lensId || nodes.length === 0 || askGraphLoading) ? 0.55 : 1,
+              cursor: (!lensId || askGraphLoading) ? 'not-allowed' : 'pointer',
+              opacity: (!lensId || askGraphLoading) ? 0.55 : 1,
               // Use drop-shadow so the shadow follows the circular shape (box-shadow can look "square" visually).
               boxShadow: 'none',
               filter: theme === 'dark' ? 'drop-shadow(0 16px 40px rgba(0,0,0,0.55))' : 'drop-shadow(0 16px 40px rgba(0,0,0,0.18))',
@@ -15968,9 +16296,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           >
             ?
           </button>
+          )}
         </div>
 
-        {/* Bottom-center quick trigger for Search/Add command palette */}
+        {/* Bottom-center quick trigger for Search/Add command palette — hidden when graph empty */}
+        {!graphEmpty && (
         <div
           style={{
             position: 'absolute',
@@ -16016,6 +16346,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             {Icons.Plus}
           </button>
         </div>
+        )}
 
         {/* Perf-mode edge info (avoids heavy edge relabel/restyling) */}
         {perfMode && perfHoveredEdgeInfo && (

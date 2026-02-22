@@ -1,6 +1,8 @@
 # Ignore build artifacts
 server
 ws-broker
+verified-proxy
+hatlone-ws
 *.exe
 *.dll
 *.dylib
@@ -9,6 +11,15 @@ ws-broker
 
 # Local tool binaries (can be very large; not needed for Docker builds)
 horizon_*
+check_*
+seed_rss_sources
+migrate_sources
+inspect_*
+purge_*
+geonames_*
+loc_*
+watchdog_*
+test_*
 
 # Local build artifacts and caches
 bin/

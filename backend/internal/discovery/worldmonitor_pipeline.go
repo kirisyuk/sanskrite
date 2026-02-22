@@ -1239,7 +1239,7 @@ func (p *HorizonMonitorPipeline) generateCountryBrief(ctx context.Context, agg h
 	prompt.WriteString("  \"confidence\": number\n")
 	prompt.WriteString("}\n")
 
-	verifier := ai.NewGenericVerifier[horizonMonitorCountryBriefOutput](func(out horizonMonitorCountryBriefOutput) error {
+	verifier := ai.NewGenericVerifier(func(out horizonMonitorCountryBriefOutput) error {
 		if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.CurrentSituation) == "" {
 			return fmt.Errorf("summary/currentSituation are required")
 		}
@@ -1321,11 +1321,7 @@ func (p *HorizonMonitorPipeline) classifyHorizonMonitorNewsWithAI(ctx context.Co
 	prompt.WriteString(strings.Join(categories, ", "))
 	prompt.WriteString("\nSchema: {\"level\": string, \"category\": string, \"confidence\": number}\n")
 
-	verifier := ai.NewGenericVerifier[struct {
-		Level      string  `json:"level"`
-		Category   string  `json:"category"`
-		Confidence float64 `json:"confidence"`
-	}](func(out struct {
+	verifier := ai.NewGenericVerifier(func(out struct {
 		Level      string  `json:"level"`
 		Category   string  `json:"category"`
 		Confidence float64 `json:"confidence"`

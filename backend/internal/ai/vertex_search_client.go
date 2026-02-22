@@ -116,6 +116,13 @@ type SearchResult struct {
 	ID             string         `json:"id"`
 	Document       SearchDocument `json:"document"`
 	RelevanceScore float64        `json:"relevanceScore,omitempty"`
+	RankSignals    *RankSignals   `json:"rankSignals,omitempty"`
+}
+
+// RankSignals — Vertex AI Search возвращает score в rankSignals, не в relevanceScore
+type RankSignals struct {
+	SemanticSimilarityScore float64 `json:"semanticSimilarityScore,omitempty"`
+	KeywordSimilarityScore  float64 `json:"keywordSimilarityScore,omitempty"`
 }
 
 // SearchDocument документ из результата поиска
@@ -226,6 +233,21 @@ func (c *VertexAISearchClient) Search(ctx context.Context, req *SearchRequest) (
 	var searchResp SearchResponse
 	if err := json.Unmarshal(body, &searchResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	// Vertex API: semanticSimilarityScore — шкала 0–1; keywordSimilarityScore — BM25-подобная, может >1.
+	// Используем только semantic для порога (0.81 эмпирически — ниже может сбоить).
+	for i := range searchResp.Results {
+		r := &searchResp.Results[i]
+		if r.RelevanceScore == 0 && r.RankSignals != nil {
+			r.RelevanceScore = r.RankSignals.SemanticSimilarityScore
+		}
+		// URI может быть в structData, а не в document.uri
+		if r.Document.URI == "" && r.Document.StructData != nil {
+			if u, ok := r.Document.StructData["uri"].(string); ok && u != "" {
+				r.Document.URI = u
+			}
+		}
 	}
 
 	log.Printf("[VertexAISearch] Found %d results", len(searchResp.Results))

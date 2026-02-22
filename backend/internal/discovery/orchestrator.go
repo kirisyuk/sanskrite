@@ -618,8 +618,8 @@ func (o *Orchestrator) IngestProjectSources(ctx context.Context, tenantID, proje
 			}
 			rssSeen[can] = struct{}{}
 			// reuse existing rss ingest using emb
-			if o.emb != nil {
-				_ = o.IngestRSS(ctx, tenantID, ds.ID, o.emb)
+			if o.publish != nil && o.providersReg != nil {
+				_ = o.IngestRSS(ctx, tenantID, ds.ID, nil)
 			}
 		} else if models.IsHorizonMonitorFeedKind(ds.Kind) && ds.Details.URI != nil {
 			can := crawler.CanonicalizeURL(*ds.Details.URI)
@@ -641,10 +641,11 @@ func (o *Orchestrator) IngestProjectSources(ctx context.Context, tenantID, proje
 	return nil
 }
 
-// IngestRSS demonstrates provider-based ingest for RSS sources.
-func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string, embed ai.EmbeddingProvider) error {
-	if o.providersReg == nil || o.docs == nil || o.chunks == nil {
-		return fmt.Errorf("RAG components not wired")
+// IngestRSS ingests RSS sources via facts-only path: NormalizedDocument → document.extract → OntologyFacts.
+// No Document or Chunks created. Requires providersReg and publish.
+func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string, _ ai.EmbeddingProvider) error {
+	if o.providersReg == nil || o.publish == nil {
+		return fmt.Errorf("RSS ingest requires providersReg and publish")
 	}
 	p, ok := o.providersReg.Get("rss")
 	if !ok {
@@ -717,7 +718,7 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	}
 
 	startTime := time.Now().UTC() // Start timing the processing part
-	documentsCreated, err := o.processProviderDocuments(ctx, tenantID, sourceID, docs, embed)
+	documentsCreated, err := o.processProviderDocumentsWithOptions(ctx, tenantID, sourceID, docs, nil, providerIngestOptions{FactsOnly: true})
 	if err != nil {
 		// Save the original error before shadowing
 		processErr := err
@@ -1216,8 +1217,54 @@ func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, s
 	})
 }
 
+// processProviderDocumentsFactsOnly publishes document.extract for each NormalizedDocument.
+// No Document or Chunks created. FactsExtractor consumes and persists OntologyFacts.
+func (o *Orchestrator) processProviderDocumentsFactsOnly(ctx context.Context, tenantID, sourceID string, docs []prov.NormalizedDocument) (int, error) {
+	if o.publish == nil {
+		return 0, fmt.Errorf("publisher not wired for facts-only ingest")
+	}
+	seenExt := map[string]struct{}{}
+	published := 0
+	for _, nd := range docs {
+		if strings.TrimSpace(nd.FullText) == "" {
+			continue
+		}
+		if nd.ExternalID != "" {
+			if _, ok := seenExt[nd.ExternalID]; ok {
+				continue
+			}
+			seenExt[nd.ExternalID] = struct{}{}
+		}
+		originPublishedAt := ""
+		if nd.OriginPublishedAt != nil {
+			originPublishedAt = nd.OriginPublishedAt.Format(time.RFC3339)
+		}
+		payload := map[string]any{
+			"tenantId":          tenantID,
+			"sourceId":          sourceID,
+			"externalId":        nd.ExternalID,
+			"fullText":          nd.FullText,
+			"title":             nd.Title,
+			"url":               nd.URL,
+			"language":          nd.Language,
+			"documentType":      nd.DocumentType,
+			"sourceMeta":        nd.SourceMeta,
+		}
+		if originPublishedAt != "" {
+			payload["originPublishedAt"] = originPublishedAt
+		}
+		if err := o.publish.PublishJSON(ctx, realtime.EventDocExtract, tenantID, payload); err != nil {
+			o.logger.Printf("orchestrator: pubsub document.extract error: %v", err)
+			continue
+		}
+		published++
+	}
+	return published, nil
+}
+
 type providerIngestOptions struct {
 	PublishDocumentProcess bool
+	FactsOnly              bool // Skip Document/Chunks; publish document.extract for facts-only path
 }
 
 func (o *Orchestrator) processProviderDocumentsWithOptions(
@@ -1227,6 +1274,10 @@ func (o *Orchestrator) processProviderDocumentsWithOptions(
 	embed ai.EmbeddingProvider,
 	opts providerIngestOptions,
 ) (int, error) {
+	// Facts-only path: no Document/Chunks, publish document.extract for each doc
+	if opts.FactsOnly {
+		return o.processProviderDocumentsFactsOnly(ctx, tenantID, sourceID, docs)
+	}
 	// Deduplicate documents by ExternalID within this ingest run
 	seenExt := map[string]struct{}{}
 	documentsCreated := 0

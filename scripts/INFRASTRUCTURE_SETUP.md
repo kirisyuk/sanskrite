@@ -68,6 +68,7 @@ vim scripts/create-secrets.sh
 - Google сервисы:
   - `google-custom-search-api-key`
   - `google-custom-search-cx`
+  - `google_maps_api_key` — для Geocoding API (геокодирование адресов org/facility)
 
 - Другие:
   - `GEONAMES_USERNAME`

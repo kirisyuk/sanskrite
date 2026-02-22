@@ -18,7 +18,10 @@ import (
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
-// SignalPipeline integrates signal extraction, injection, and propagation into ScoutEngine.
+// SignalPipeline integrates signal extraction, injection, and propagation.
+//
+// NOTE: Scout no longer creates signals. This pipeline is reserved for the future Signaling Pipeline
+// (news flow → events → 12-axis signals → propagation). Scout only populates the graph (facts, fragments, edges).
 type SignalPipeline struct {
 	signalExtractor      *signals.SignalExtractor
 	escalationClassifier *signals.EscalationClassifier

@@ -16,19 +16,20 @@ import (
 // OntologyExtractor преобразует извлеченные данные в онтологические объекты
 // Это основной компонент для создания Entity, Event, Claim из различных источников
 type OntologyExtractor struct {
-	entitiesRepo     *repo.EntityRepository
-	eventsRepo       *repo.EventRepository
-	claimsRepo       *repo.ClaimRepository
-	relationsRepo    *repo.RelationRepository
-	sourcesRepo      *repo.SourceRepository
-	factsRepo        *repo.OntologyFactsRepository
-	entityResolver   *EntityResolver
-	entityEnricher   *EntityEnricher
-	trustIntegrator  *TrustIntegrator
-	conflictDetector *ConflictDetector
-	causalDetector   *CausalDetector
-	domainService    *domain.DomainService
-	logger           *log.Logger
+	entitiesRepo       *repo.EntityRepository
+	eventsRepo         *repo.EventRepository
+	claimsRepo         *repo.ClaimRepository
+	relationsRepo      *repo.RelationRepository
+	sourcesRepo        *repo.SourceRepository
+	factsRepo          *repo.OntologyFactsRepository
+	entityResolver     *EntityResolver
+	entityEnricher     *EntityEnricher
+	trustIntegrator    *TrustIntegrator
+	conflictDetector   *ConflictDetector
+	causalDetector     *CausalDetector
+	domainService      *domain.DomainService
+	canonizationPolicy CanonicalPathNormalizer
+	logger             *log.Logger
 }
 
 // NewOntologyExtractor создает новый экстрактор онтологии
@@ -62,6 +63,56 @@ func NewOntologyExtractor(
 		domainService:    domainService,
 		logger:           logger,
 	}
+}
+
+// CanonicalPathNormalizer normalizes canonical paths (unified with Horizon CanonizationPolicy).
+type CanonicalPathNormalizer interface {
+	NormalizePath(ctx context.Context, path string) (string, error)
+}
+
+// WithCanonizationPolicy wires a path normalizer (e.g. CanonizationPolicy adapter) for unified normalization.
+func (e *OntologyExtractor) WithCanonizationPolicy(p CanonicalPathNormalizer) *OntologyExtractor {
+	e.canonizationPolicy = p
+	return e
+}
+
+// WithFactsRepo updates the facts repository (e.g. after wiring coordinate enricher).
+func (e *OntologyExtractor) WithFactsRepo(r *repo.OntologyFactsRepository) *OntologyExtractor {
+	e.factsRepo = r
+	return e
+}
+
+// normalizeCanonicalPath applies CanonizationPolicy if wired; otherwise returns path unchanged.
+func (e *OntologyExtractor) normalizeCanonicalPath(ctx context.Context, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || e.canonizationPolicy == nil {
+		return path
+	}
+	normalized, err := e.canonizationPolicy.NormalizePath(ctx, path)
+	if err != nil || strings.TrimSpace(normalized) == "" {
+		return path
+	}
+	return strings.TrimSpace(normalized)
+}
+
+// ExtractFromDocumentContext извлекает онтологические объекты из DocumentContext
+// (NormalizedDocument без персистентного Document). Используется для facts-only пути.
+func (e *OntologyExtractor) ExtractFromDocumentContext(
+	ctx context.Context,
+	tenantID string,
+	dc *DocumentContext,
+	extractedData *DocumentExtraction,
+) error {
+	doc := &models.Document{
+		ID:                dc.ID,
+		SourceID:          dc.SourceID,
+		URL:               dc.URL,
+		Title:             dc.Title,
+		DocumentType:      dc.DocumentType,
+		FullText:          dc.FullText,
+		OriginPublishedAt: dc.OriginPublishedAt,
+	}
+	return e.ExtractFromDocument(ctx, tenantID, doc, extractedData)
 }
 
 // ExtractFromDocument извлекает онтологические объекты из Document
@@ -265,6 +316,11 @@ func (e *OntologyExtractor) extractEntities(
 ) (map[string]entityRef, error) {
 	entityIDs := make(map[string]entityRef) // canonicalName -> entityRef
 
+	// Entity types that don't produce valid canonical paths - skip (taxonomy alignment)
+	skipTypes := map[models.EntityType]bool{
+		models.EntityTypeLocation: true, models.EntityTypeDocument: true, models.EntityTypeOther: true,
+	}
+
 	// First pass: resolve/create organizations early, so facilities can bind to a stable orgSlug.
 	orgNameToSlug := make(map[string]string) // lower-canonicalName -> orgSlug (from /org/{slug})
 	for _, ext := range extractedEntities {
@@ -273,6 +329,9 @@ func (e *OntologyExtractor) extractEntities(
 		}
 		canonicalName := strings.TrimSpace(ext.Value)
 		entityType := e.mapExtractedTypeToEntityType(ext.Type)
+		if skipTypes[entityType] {
+			continue
+		}
 		if entityType != models.EntityTypeOrganization {
 			continue
 		}
@@ -300,6 +359,7 @@ func (e *OntologyExtractor) extractEntities(
 				}
 				continue
 			}
+			cPath = e.normalizeCanonicalPath(ctx, cPath)
 
 			// Validate canonical path format
 			if err := taxonomy.ValidateCanonicalPath(cPath); err != nil {
@@ -392,6 +452,11 @@ func (e *OntologyExtractor) extractEntities(
 		// Определяем тип Entity
 		entityType := e.mapExtractedTypeToEntityType(ext.Type)
 
+		// Skip types that don't fit taxonomy (no valid canonical path)
+		if skipTypes[entityType] {
+			continue
+		}
+
 		// Organizations were handled in the first pass.
 		if entityType == models.EntityTypeOrganization {
 			continue
@@ -453,6 +518,7 @@ func (e *OntologyExtractor) extractEntities(
 		} else {
 			cPath = taxonomy.EntityCanonicalPath(string(entityType), canonicalName)
 		}
+		cPath = e.normalizeCanonicalPath(ctx, cPath)
 
 		if cPath == "" || cPath == "/" {
 			if e.logger != nil {
@@ -715,6 +781,10 @@ func (e *OntologyExtractor) extractEvents(
 
 		// Emit unified fact frame (ontology_facts) for watchdog/search
 		if e.factsRepo != nil {
+			observedAt := &now
+			if document.OriginPublishedAt != nil && !document.OriginPublishedAt.IsZero() {
+				observedAt = document.OriginPublishedAt
+			}
 			f := &models.OntologyFact{
 				BaseOntologyFields: models.BaseOntologyFields{
 					TenantID:  tenantID,
@@ -731,7 +801,7 @@ func (e *OntologyExtractor) extractEvents(
 				Title:      event.Title,
 				Summary:    event.OutcomeSummary,
 				OccurredAt: event.OccurredAt,
-				ObservedAt: &now,
+				ObservedAt: observedAt,
 				EventID:    &eventID,
 				SourceIDs:  []string{dataSourceID},
 				SourceRefs: []models.SourceRef{{SourceID: document.ID, SourceType: "document"}},
@@ -1258,18 +1328,20 @@ func (e *OntologyExtractor) mapExtractedTypeToEntityType(extractedType string) m
 	extractedType = strings.ToLower(strings.TrimSpace(extractedType))
 
 	typeMap := map[string]models.EntityType{
-		"person":       models.EntityTypePerson,
-		"organization": models.EntityTypeOrganization,
-		"location":     models.EntityTypeLocation,
-		"product":      models.EntityTypeProduct,
-		"program":      models.EntityTypeProgram,
-		"market":       models.EntityTypeMarket,
-		"event":        models.EntityTypeEventEntity,
-		"document":     models.EntityTypeDocument,
-		"facility":     models.EntityTypeFacility,
-		"supplychain":  models.EntityTypeSupplyChainNode,
-		"government":   models.EntityTypeGovernmentProject,
-		"index":        models.EntityTypeIndexMetric,
+		"person":             models.EntityTypePerson,
+		"organization":       models.EntityTypeOrganization,
+		"location":           models.EntityTypeLocation,
+		"product":            models.EntityTypeProduct,
+		"program":            models.EntityTypeProgram,
+		"market":             models.EntityTypeMarket,
+		"event":              models.EntityTypeEventEntity,
+		"document":           models.EntityTypeDocument,
+		"facility":           models.EntityTypeFacility,
+		"supplychain":        models.EntityTypeSupplyChainNode,
+		"supplychainnode":    models.EntityTypeSupplyChainNode,
+		"government":         models.EntityTypeGovernmentProject,
+		"governmentproject":  models.EntityTypeGovernmentProject,
+		"index":              models.EntityTypeIndexMetric,
 	}
 
 	if entityType, ok := typeMap[extractedType]; ok {

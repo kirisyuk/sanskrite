@@ -15,6 +15,11 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
+// FactCoordinateEnricher resolves coordinates for facts (GeoNames, Geocoding, fragment lookup).
+type FactCoordinateEnricher interface {
+	Enrich(ctx context.Context, f *models.OntologyFact) (bool, error)
+}
+
 // OntologyFactsRepository stores unified ontology facts and optionally syncs them to GCS + Vertex AI Search.
 type OntologyFactsRepository struct {
 	col              *firestore.CollectionRef
@@ -22,6 +27,7 @@ type OntologyFactsRepository struct {
 	bucket           string
 	useGCS           bool
 	vertexSearchSync func(ctx context.Context, tenantID string) (operationName string, err error)
+	coordEnricher    FactCoordinateEnricher
 }
 
 func NewOntologyFactsRepository(db *firestore.Client) *OntologyFactsRepository {
@@ -43,9 +49,20 @@ func (r *OntologyFactsRepository) WithVertexSearchSync(syncFn func(ctx context.C
 	return r
 }
 
+// WithCoordinateEnricher wires GeoNames/Geocoding/fragment lookup for fact coordinates (same as fragments).
+func (r *OntologyFactsRepository) WithCoordinateEnricher(e FactCoordinateEnricher) *OntologyFactsRepository {
+	r.coordEnricher = e
+	return r
+}
+
 func (r *OntologyFactsRepository) Create(ctx context.Context, f *models.OntologyFact) (string, error) {
 	if f == nil {
 		return "", ErrInvalidOntologyDocument
+	}
+	if r.coordEnricher != nil {
+		if _, err := r.coordEnricher.Enrich(ctx, f); err != nil {
+			log.Printf("[OntologyFactsRepo] coordinate enrichment failed: %v", err)
+		}
 	}
 	now := time.Now().UTC()
 	if f.CreatedAt.IsZero() {
@@ -80,6 +97,11 @@ func (r *OntologyFactsRepository) Create(ctx context.Context, f *models.Ontology
 func (r *OntologyFactsRepository) Upsert(ctx context.Context, f *models.OntologyFact) error {
 	if f == nil || f.ID == "" {
 		return ErrInvalidOntologyDocument
+	}
+	if r.coordEnricher != nil {
+		if _, err := r.coordEnricher.Enrich(ctx, f); err != nil {
+			log.Printf("[OntologyFactsRepo] coordinate enrichment failed: %v", err)
+		}
 	}
 	now := time.Now().UTC()
 	if f.CreatedAt.IsZero() {
@@ -184,6 +206,40 @@ func (r *OntologyFactsRepository) ListByCanonicalPathAndKind(ctx context.Context
 		OrderBy("updatedAt", firestore.Desc).
 		Limit(limit)
 
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.OntologyFact, 0, len(docs))
+	for _, d := range docs {
+		var f models.OntologyFact
+		if err := d.DataTo(&f); err != nil {
+			continue
+		}
+		out = append(out, &f)
+	}
+	return out, nil
+}
+
+// ListByTenantAndKind returns facts of a given kind for a tenant, ordered by createdAt desc.
+// Used by RSS-first tools to list events after extraction.
+func (r *OntologyFactsRepository) ListByTenantAndKind(ctx context.Context, tenantID, kind string, limit int) ([]*models.OntologyFact, error) {
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		return nil, fmt.Errorf("kind is required")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	// Use updatedAt for ordering (matches existing composite index: tenantId, kind, updatedAt)
+	q := r.col.
+		Where("tenantId", "==", tenantID).
+		Where("kind", "==", kind).
+		OrderBy("updatedAt", firestore.Desc).
+		Limit(limit)
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
@@ -355,6 +411,12 @@ func (r *OntologyFactsRepository) exportToGCSAndSync(ctx context.Context, f *mod
 	}
 	if f.LocationPath != nil {
 		doc.StructData["locationPath"] = *f.LocationPath
+	}
+	if f.Coordinates != nil {
+		doc.StructData["coordinates"] = map[string]interface{}{
+			"lat": f.Coordinates.Lat,
+			"lon": f.Coordinates.Lon,
+		}
 	}
 	if f.OccurredAt != nil {
 		doc.StructData["occurredAt"] = f.OccurredAt.UTC().Format(time.RFC3339)

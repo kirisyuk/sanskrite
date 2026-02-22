@@ -19,6 +19,7 @@ const (
 	EventDiscoveryAnswer  EventType = "discovery.answer"
 	EventDiscoveryProject EventType = "discovery.project"
 	EventDocProcess       EventType = "document.process"
+	EventDocExtract       EventType = "document.extract" // Facts-only: NormalizedDocument → OntologyFacts (no Document/Chunks)
 	EventGroundRefresh    EventType = "ground.refresh"
 	EventSourcePoll       EventType = "source.poll"
 	EventSourcePollDue    EventType = "source.poll.due"
@@ -250,7 +251,7 @@ func routeTopicName(et EventType) string {
 		return TopicGenAIStreams
 	case strings.HasPrefix(string(et), "discovery."):
 		return TopicDiscoveryEvents
-	case strings.HasPrefix(string(et), "artifact.") || et == EventDocProcess:
+	case strings.HasPrefix(string(et), "artifact.") || et == EventDocProcess || et == EventDocExtract:
 		return TopicArtifactEvents
 	case strings.HasPrefix(string(et), "interaction.") || et == EventAgentUpdate || et == EventAgentStepUpdate || et == EventChatOntologyProcess:
 		return TopicInteractionEvents

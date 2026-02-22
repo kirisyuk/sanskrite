@@ -5,14 +5,15 @@ import (
 	"net/http"
 	"strings"
 
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
 
 // CombineFragmentsInLens merges a "duplicate" fragment into a "keep" fragment:
-// - rewires global DependencyEdges (tenantId="global") from duplicate -> keep
-// - updates lens scope: if scope contains duplicate canonical path, remove it and ensure keep canonical path exists
-// - updates lens items: delete duplicate node item and rewrite edge items from duplicate -> keep
+// - merges fragment data (Labels, Identifiers, State, merged_paths) from remove -> keep
+// - rewires global DependencyEdges (tenantId="global") from remove -> keep
+// - updates lens scope and lens items
+// - deletes the remove fragment
+// - records merge audit for traceability
 //
 // POST /api/horizon/lenses/{lensId}/fragments:combine
 func (h *HorizonHandlers) CombineFragmentsInLens(w http.ResponseWriter, r *http.Request) {
@@ -66,76 +67,46 @@ func (h *HorizonHandlers) CombineFragmentsInLens(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Resolve canonical paths (best-effort) to update scope
-	var keepPath, removePath string
-	if frag, err := h.service.Fragments().Get(r.Context(), keepID); err == nil && frag != nil {
-		keepPath = strings.TrimSpace(frag.CanonicalPath)
+	// Load both fragments for merge and paths
+	fragmentsRepo := h.service.Fragments()
+	keepFrag, err := fragmentsRepo.Get(r.Context(), keepID)
+	if err != nil || keepFrag == nil {
+		httputil.WriteNotFound(w, "Keep fragment not found")
+		return
 	}
-	if frag, err := h.service.Fragments().Get(r.Context(), removeID); err == nil && frag != nil {
-		removePath = strings.TrimSpace(frag.CanonicalPath)
+	removeFrag, err := fragmentsRepo.Get(r.Context(), removeID)
+	if err != nil || removeFrag == nil {
+		httputil.WriteNotFound(w, "Remove fragment not found")
+		return
 	}
-
-	// 1) Rewire global dependency edges (tenantId="global") from removeID -> keepID.
-	edgesRepo := h.service.Edges()
-	updatedEdges := 0
-	deletedEdges := 0
-	{
-		byID := map[string]*horizonmodels.DependencyEdge{}
-		outgoing, _ := edgesRepo.ListBySource(r.Context(), "global", removeID, nil, 5000)
-		incoming, _ := edgesRepo.ListByTarget(r.Context(), "global", removeID, nil, 5000)
-		for _, e := range outgoing {
-			if e != nil && strings.TrimSpace(e.ID) != "" {
-				byID[e.ID] = e
-			}
-		}
-		for _, e := range incoming {
-			if e != nil && strings.TrimSpace(e.ID) != "" {
-				byID[e.ID] = e
-			}
-		}
-
-		for _, e := range byID {
-			if e == nil || strings.TrimSpace(e.ID) == "" {
-				continue
-			}
-			ns := strings.TrimSpace(e.SourceFragmentID)
-			nt := strings.TrimSpace(e.TargetFragmentID)
-			changed := false
-			if ns == removeID {
-				ns = keepID
-				changed = true
-			}
-			if nt == removeID {
-				nt = keepID
-				changed = true
-			}
-			if !changed {
-				continue
-			}
-
-			// Avoid self-loops after rewrite.
-			if ns != "" && ns == nt {
-				_ = edgesRepo.Delete(r.Context(), e.ID)
-				deletedEdges++
-				continue
-			}
-
-			// Avoid duplicates (source,target,type) after rewrite.
-			if existing, err := edgesRepo.GetBySourceTargetAndType(r.Context(), "global", ns, nt, e.Type); err == nil && existing != nil && existing.ID != "" && existing.ID != e.ID {
-				_ = edgesRepo.Delete(r.Context(), e.ID)
-				deletedEdges++
-				continue
-			}
-
-			e.SourceFragmentID = ns
-			e.TargetFragmentID = nt
-			if err := edgesRepo.Update(r.Context(), e); err == nil {
-				updatedEdges++
-			}
-		}
+	keepPath := strings.TrimSpace(keepFrag.CanonicalPath)
+	removePath := strings.TrimSpace(removeFrag.CanonicalPath)
+	tenantID := strings.TrimSpace(keepFrag.TenantID)
+	if tenantID == "" {
+		tenantID = "global"
 	}
 
-	// 2) Update lens scope: if removePath present -> remove; ensure keepPath exists (insert in place if missing).
+	// Merge via single entry point (data, edges, delete, audit)
+	var mergeRes struct {
+		DataMerged      bool
+		EdgesReassigned int
+		EdgesDeleted    int
+	}
+	if h.mergeFragmentsRepo != nil {
+		res, err := h.mergeFragmentsRepo.MergeFragment(r.Context(), keepID, removeID, tenantID, "lens_combine", "", "", lensID)
+		if err != nil {
+			httputil.WriteInternalError(w, "Merge failed: "+err.Error())
+			return
+		}
+		mergeRes.DataMerged = res.DataMerged
+		mergeRes.EdgesReassigned = res.EdgesReassigned
+		mergeRes.EdgesDeleted = res.EdgesDeleted
+	} else {
+		httputil.WriteInternalError(w, "Merge repository not configured")
+		return
+	}
+
+	// Update lens scope: if removePath present -> remove; ensure keepPath exists (insert in place if missing).
 	scopeChanged := false
 	if removePath != "" && keepPath != "" {
 		idx := -1
@@ -265,16 +236,17 @@ func (h *HorizonHandlers) CombineFragmentsInLens(w http.ResponseWriter, r *http.
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"ok":              true,
-		"lensId":          lensID,
-		"keepFragmentId":  keepID,
-		"removeFragmentId": removeID,
-		"scopeChanged":    scopeChanged,
-		"keepCanonicalPath": keepPath,
+		"ok":                  true,
+		"lensId":              lensID,
+		"keepFragmentId":      keepID,
+		"removeFragmentId":    removeID,
+		"scopeChanged":        scopeChanged,
+		"keepCanonicalPath":   keepPath,
 		"removeCanonicalPath": removePath,
+		"fragmentMerged":      mergeRes.DataMerged,
 		"edges": map[string]any{
-			"updated": updatedEdges,
-			"deleted": deletedEdges,
+			"updated": mergeRes.EdgesReassigned,
+			"deleted": mergeRes.EdgesDeleted,
 		},
 		"lensItems": map[string]any{
 			"updated": updatedItems,

@@ -39,3 +39,21 @@ func (p *OpenAIEmbedding) EmbedTexts(ctx context.Context, texts []string) ([][]f
 	}
 	return out, nil
 }
+
+// NoOpEmbedding returns zero vectors — for signaling/RSS ingest when RAG search is not needed.
+// Chunks are created but won't match semantic search; document.process still works.
+const NoOpEmbeddingDim = 1536
+
+type NoOpEmbedding struct{}
+
+func NewNoOpEmbedding() *NoOpEmbedding { return &NoOpEmbedding{} }
+
+func (p *NoOpEmbedding) ModelID() string { return "noop" }
+
+func (p *NoOpEmbedding) EmbedTexts(_ context.Context, texts []string) ([][]float64, error) {
+	out := make([][]float64, len(texts))
+	for i := range texts {
+		out[i] = make([]float64, NoOpEmbeddingDim)
+	}
+	return out, nil
+}

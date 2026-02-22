@@ -54,6 +54,12 @@ type LensesWriter interface {
 	Update(ctx context.Context, lens *horizonmodels.Lens) error
 }
 
+// RedirectRecorder records canonical path redirects so Resolve() returns the final path.
+// Used when enforcement fixes a path (oldPath -> newPath) to avoid future duplicates.
+type RedirectRecorder interface {
+	RecordRedirect(ctx context.Context, fromPath, toPath string, fragmentType horizonmodels.FragmentType, reason string)
+}
+
 // EnforcementExecutor executes policy enforcement tasks.
 type EnforcementExecutor struct {
 	fragmentsRepo   FragmentsWriter
@@ -65,6 +71,13 @@ type EnforcementExecutor struct {
 
 	// Event publisher for WebSocket updates
 	publisher EnforcementEventPublisher
+
+	// Merge fragments: single entry point for merge (data, edges, delete, audit).
+	// When nil, merge tasks will fail (merge repo must be wired).
+	mergeFragments MergeFragments
+
+	// Optional: records redirects when path is fixed so Resolve() returns the final path.
+	redirectRecorder RedirectRecorder
 }
 
 // EnforcementEventPublisher publishes enforcement events.
@@ -117,6 +130,22 @@ func (e *EnforcementExecutor) WithLensesRepo(repo LensesWriter) *EnforcementExec
 // WithGeoNamesClient sets the GeoNames client.
 func (e *EnforcementExecutor) WithGeoNamesClient(client ontology.GeoNamesClientInterface) *EnforcementExecutor {
 	e.geonamesClient = client
+	return e
+}
+
+// WithMergeFragments wires the merge repository (data, edges, delete, audit).
+func (e *EnforcementExecutor) WithMergeFragments(m MergeFragments) *EnforcementExecutor {
+	e.mergeFragments = m
+	return e
+}
+
+// WithRedirectRecorder wires a redirect recorder. When set, executeFixPath records
+// oldPath -> newPath so canonical path resolution returns the corrected path.
+func (e *EnforcementExecutor) WithRedirectRecorder(r RedirectRecorder) *EnforcementExecutor {
+	if e == nil {
+		return e
+	}
+	e.redirectRecorder = r
 	return e
 }
 
@@ -189,7 +218,7 @@ func (e *EnforcementExecutor) ExecuteJob(ctx context.Context, job *PolicyEnforce
 
 	switch job.Task.Type {
 	case TaskMergeFragments:
-		result, err = e.executeMergeFragments(ctx, job.Task)
+		result, err = e.executeMergeFragments(ctx, job)
 	case TaskFixPath:
 		result, err = e.executeFixPath(ctx, job.Task)
 	case TaskReverseEdge:
@@ -275,8 +304,9 @@ func (e *EnforcementExecutor) ExecuteJob(ctx context.Context, job *PolicyEnforce
 	return result, nil
 }
 
-// executeMergeFragments merges a duplicate fragment into the canonical one.
-func (e *EnforcementExecutor) executeMergeFragments(ctx context.Context, task EnforcementTask) (*EnforcementResult, error) {
+// executeMergeFragments merges a duplicate fragment into the canonical one via MergeFragments.
+func (e *EnforcementExecutor) executeMergeFragments(ctx context.Context, job *PolicyEnforcementJob) (*EnforcementResult, error) {
+	task := job.Task
 	duplicateID := strings.TrimSpace(task.TargetID)
 	canonicalID, ok := task.Params["canonicalId"].(string)
 	canonicalID = strings.TrimSpace(canonicalID)
@@ -290,7 +320,7 @@ func (e *EnforcementExecutor) executeMergeFragments(ctx context.Context, task En
 		return mergeFragmentsSkippedResult(duplicateID, canonicalID, "duplicate and canonical ids are identical"), nil
 	}
 
-	// Load both fragments
+	// Load duplicate for tenant + lens scope rewrite (before merge deletes it)
 	duplicate, err := e.fragmentsRepo.Get(ctx, duplicateID)
 	if err != nil {
 		if isNotFoundError(err) {
@@ -312,57 +342,30 @@ func (e *EnforcementExecutor) executeMergeFragments(ctx context.Context, task En
 		return mergeFragmentsSkippedResult(duplicateID, canonicalID, "canonical fragment already absent"), nil
 	}
 
-	// Merge data from duplicate into canonical
-	merged := mergeFragmentData(canonical, duplicate)
-
-	// Update canonical
-	if merged {
-		canonical.UpdatedAt = time.Now().UTC()
-		if err := e.fragmentsRepo.Update(ctx, canonical); err != nil {
-			if isNotFoundError(err) {
-				return mergeFragmentsSkippedResult(duplicateID, canonicalID, "canonical fragment disappeared during update"), nil
-			}
-			return nil, fmt.Errorf("failed to update canonical: %w", err)
-		}
+	if e.mergeFragments == nil {
+		return nil, fmt.Errorf("merge fragments repo not configured")
 	}
 
-	// Reassign edges from duplicate to canonical
-	reassigned, deleted, err := e.reassignEdges(ctx, duplicate.TenantID, duplicateID, canonicalID)
+	tenantID := strings.TrimSpace(duplicate.TenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+
+	res, err := e.mergeFragments.MergeFragment(ctx, canonicalID, duplicateID, tenantID, "enforcement", "", job.ParentJobID, "")
 	if err != nil {
-		log.Printf("[EnforcementExecutor] WARNING: edge reassignment partial failure: %v", err)
-		LogPolicyEvent("enforcement_policy", PolicyLogStageError, map[string]interface{}{
-			"trace_id":       "na",
-			"tenant_id":      duplicate.TenantID,
-			"job_id":         "",
-			"action":         "reassign_edges",
-			"policy_status":  "partial",
-			"policy_reason":  err.Error(),
-			"policy_penalty": 0,
-			"decision_path":  "enforcement_merge",
-			"error_class":    "edge_reassignment_partial_failure",
-			"confidence":     0,
-		})
+		return nil, fmt.Errorf("merge failed: %w", err)
 	}
 
-	// Delete duplicate
-	if err := e.fragmentsRepo.Delete(ctx, duplicateID); err != nil {
-		if !isNotFoundError(err) {
-			return nil, fmt.Errorf("failed to delete duplicate: %w", err)
-		}
-		log.Printf("[EnforcementExecutor] merge_fragments: duplicate already deleted (id=%s), finishing as idempotent success", duplicateID)
-	}
-
-	// Best-effort: rewrite lens scopes from duplicate canonicalPath to canonical canonicalPath,
-	// otherwise UI may keep referencing deleted aliases.
-	if duplicate != nil && canonical != nil {
-		e.bestEffortRewriteLensScopes(ctx, strings.TrimSpace(duplicate.TenantID), strings.TrimSpace(duplicate.CanonicalPath), strings.TrimSpace(canonical.CanonicalPath))
+	// Best-effort: rewrite lens scopes from duplicate canonicalPath to canonical canonicalPath
+	if e.lensesRepo != nil {
+		e.bestEffortRewriteLensScopes(ctx, tenantID, strings.TrimSpace(duplicate.CanonicalPath), strings.TrimSpace(canonical.CanonicalPath))
 	}
 
 	return &EnforcementResult{
 		Success:     true,
 		Action:      "merged",
 		AffectedIDs: []string{canonicalID, duplicateID},
-		Details:     fmt.Sprintf("Merged %s into %s. Edges: %d reassigned, %d deleted.", duplicateID, canonicalID, reassigned, deleted),
+		Details:     fmt.Sprintf("Merged %s into %s. Edges: %d reassigned, %d deleted.", duplicateID, canonicalID, res.EdgesReassigned, res.EdgesDeleted),
 	}, nil
 }
 
@@ -380,136 +383,6 @@ func mergeFragmentsSkippedResult(duplicateID, canonicalID, reason string) *Enfor
 		AffectedIDs: ids,
 		Details:     fmt.Sprintf("Skipped merge %s -> %s: %s.", duplicateID, canonicalID, strings.TrimSpace(reason)),
 	}
-}
-
-// reassignEdges reassigns edges from one fragment to another.
-func (e *EnforcementExecutor) reassignEdges(ctx context.Context, tenantID, fromID, toID string) (reassigned, deleted int, err error) {
-	// Get edges where fromID is source
-	sourceEdges, err := e.edgesRepo.ListBySource(ctx, tenantID, fromID, nil, 1000)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	// Get edges where fromID is target
-	targetEdges, err := e.edgesRepo.ListByTarget(ctx, tenantID, fromID, nil, 1000)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	// Reassign source edges
-	for _, edge := range sourceEdges {
-		// Check for self-loop after reassignment
-		if edge.TargetFragmentID == toID {
-			// Would become self-loop, delete instead
-			if err := e.edgesRepo.Delete(ctx, edge.ID); err == nil {
-				deleted++
-			}
-			continue
-		}
-
-		edge.SourceFragmentID = toID
-		edge.Metadata.LastUpdatedAt = time.Now().UTC()
-		if err := e.edgesRepo.Update(ctx, edge); err == nil {
-			reassigned++
-		}
-	}
-
-	// Reassign target edges
-	for _, edge := range targetEdges {
-		// Check for self-loop after reassignment
-		if edge.SourceFragmentID == toID {
-			// Would become self-loop, delete instead
-			if err := e.edgesRepo.Delete(ctx, edge.ID); err == nil {
-				deleted++
-			}
-			continue
-		}
-
-		edge.TargetFragmentID = toID
-		edge.Metadata.LastUpdatedAt = time.Now().UTC()
-		if err := e.edgesRepo.Update(ctx, edge); err == nil {
-			reassigned++
-		}
-	}
-
-	// Best-effort: de-duplicate edges that now may overlap with existing canonical edges.
-	// This prevents parallel identical edges after merge (duplicate->canonical reassignment).
-	dedupDeleted, _ := e.bestEffortDedupeEdgesForNode(ctx, tenantID, toID, 2000)
-	deleted += dedupDeleted
-
-	return reassigned, deleted, nil
-}
-
-// bestEffortDedupeEdgesForNode deletes duplicate edges for a fragment based on (source,target,type),
-// keeping one "best" edge per key. This is intentionally conservative and bounded.
-func (e *EnforcementExecutor) bestEffortDedupeEdgesForNode(ctx context.Context, tenantID, fragmentID string, limit int) (deleted int, _ error) {
-	if e == nil || e.edgesRepo == nil {
-		return 0, nil
-	}
-	tenantID = strings.TrimSpace(tenantID)
-	fragmentID = strings.TrimSpace(fragmentID)
-	if tenantID == "" || fragmentID == "" || limit <= 0 {
-		return 0, nil
-	}
-
-	// Pull both directions (bounded).
-	srcEdges, err := e.edgesRepo.ListBySource(ctx, tenantID, fragmentID, nil, limit)
-	if err != nil {
-		return 0, err
-	}
-	tgtEdges, err := e.edgesRepo.ListByTarget(ctx, tenantID, fragmentID, nil, limit)
-	if err != nil {
-		return 0, err
-	}
-
-	// Key on normalized symmetric representation to avoid duplicates across swapped endpoints for symmetric edges.
-	type key struct {
-		s  string
-		t  string
-		ty string
-	}
-	kept := map[key]*horizonmodels.DependencyEdge{}
-
-	consider := func(ed *horizonmodels.DependencyEdge) {
-		if ed == nil {
-			return
-		}
-		s := strings.TrimSpace(ed.SourceFragmentID)
-		t := strings.TrimSpace(ed.TargetFragmentID)
-		ty := ed.Type
-		// Normalize symmetric edges for stable keys.
-		ns, nt, nty, _ := horizonmodels.NormalizeSymmetricEdge(s, t, ty)
-		k := key{s: ns, t: nt, ty: string(nty)}
-
-		if existing, ok := kept[k]; ok && existing != nil {
-			// Choose which to keep: prefer earlier CreatedAt; if equal, prefer lexicographically smaller ID.
-			keep := existing
-			drop := ed
-			if ed.Metadata.CreatedAt.Before(existing.Metadata.CreatedAt) ||
-				(ed.Metadata.CreatedAt.Equal(existing.Metadata.CreatedAt) && strings.TrimSpace(ed.ID) < strings.TrimSpace(existing.ID)) {
-				keep = ed
-				drop = existing
-				kept[k] = keep
-			}
-			// Delete the dropped edge (best-effort).
-			if drop != nil && strings.TrimSpace(drop.ID) != "" {
-				if derr := e.edgesRepo.Delete(ctx, drop.ID); derr == nil {
-					deleted++
-				}
-			}
-			return
-		}
-		kept[k] = ed
-	}
-
-	for _, ed := range srcEdges {
-		consider(ed)
-	}
-	for _, ed := range tgtEdges {
-		consider(ed)
-	}
-
-	return deleted, nil
 }
 
 // executeFixPath fixes a fragment's canonical path.
@@ -574,6 +447,11 @@ func (e *EnforcementExecutor) executeFixPath(ctx context.Context, task Enforceme
 		newPath = strings.TrimSpace(frag.CanonicalPath)
 	}
 	e.bestEffortRewriteLensScopes(ctx, strings.TrimSpace(frag.TenantID), strings.TrimSpace(oldPath), newPath)
+
+	// Record redirect so Resolve() returns the corrected path on future LLM outputs.
+	if e.redirectRecorder != nil && strings.TrimSpace(oldPath) != "" && newPath != "" && strings.TrimSpace(oldPath) != newPath {
+		e.redirectRecorder.RecordRedirect(ctx, strings.TrimSpace(oldPath), newPath, frag.Type, "enforcement_fix_path")
+	}
 
 	// Deterministic: if this fix caused a canonicalPath collision (two fragment IDs now share the same canonicalPath),
 	// immediately merge them so edges (which are keyed by fragment IDs) converge to a single node.
@@ -1558,11 +1436,13 @@ func (e *EnforcementExecutor) bestEffortMergeCanonicalPathCollision(ctx context.
 	}
 
 	// Execute merge immediately (best-effort). This will reassign edges and delete the duplicate fragment.
-	if _, err := e.executeMergeFragments(ctx, EnforcementTask{
-		Type:     TaskMergeFragments,
-		TargetID: duplicateID,
-		Params: map[string]interface{}{
-			"canonicalId": canonicalID,
+	if _, err := e.executeMergeFragments(ctx, &PolicyEnforcementJob{
+		Task: EnforcementTask{
+			Type:     TaskMergeFragments,
+			TargetID: duplicateID,
+			Params: map[string]interface{}{
+				"canonicalId": canonicalID,
+			},
 		},
 	}); err != nil {
 		log.Printf("[EnforcementExecutor] WARNING: canonicalPath collision merge failed: path=%q canonical=%q duplicate=%q err=%v",
@@ -1928,61 +1808,6 @@ func appendUniqueStringQualifier(qualifiers map[string]interface{}, key, val str
 }
 
 // Helper functions
-
-func mergeFragmentData(canonical, duplicate *horizonmodels.HorizonFragment) bool {
-	changed := false
-
-	// Merge labels
-	if canonical.Labels == nil {
-		canonical.Labels = make(map[string]string)
-	}
-	for k, v := range duplicate.Labels {
-		if canonical.Labels[k] == "" && v != "" {
-			canonical.Labels[k] = v
-			changed = true
-		}
-	}
-
-	// Merge identifiers
-	if canonical.Identifiers == nil {
-		canonical.Identifiers = make(map[string]string)
-	}
-	for k, v := range duplicate.Identifiers {
-		if canonical.Identifiers[k] == "" && v != "" {
-			canonical.Identifiers[k] = v
-			changed = true
-		}
-	}
-
-	// Merge description
-	if canonical.Description == "" && duplicate.Description != "" {
-		canonical.Description = duplicate.Description
-		changed = true
-	}
-
-	// Merge KB refs
-	existingRefs := make(map[string]bool)
-	for _, ref := range canonical.KBRefs {
-		existingRefs[ref.KB+":"+ref.ExternalID] = true
-	}
-	for _, ref := range duplicate.KBRefs {
-		key := ref.KB + ":" + ref.ExternalID
-		if !existingRefs[key] {
-			canonical.KBRefs = append(canonical.KBRefs, ref)
-			changed = true
-		}
-	}
-
-	// Store merged paths
-	if canonical.Identifiers["merged_paths"] == "" {
-		canonical.Identifiers["merged_paths"] = duplicate.CanonicalPath
-	} else if !strings.Contains(canonical.Identifiers["merged_paths"], duplicate.CanonicalPath) {
-		canonical.Identifiers["merged_paths"] += "," + duplicate.CanonicalPath
-	}
-	changed = true
-
-	return changed
-}
 
 func slugifyName(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))

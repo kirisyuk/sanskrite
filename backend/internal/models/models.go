@@ -129,7 +129,8 @@ type SourceDetails struct {
 	URI *string `json:"uri,omitempty" firestore:"uri"`
 
 	// rss
-	RSSURL *string `json:"rssUrl,omitempty" firestore:"rssUrl"`
+	RSSURL   *string `json:"rssUrl,omitempty" firestore:"rssUrl"`
+	Category *string `json:"category,omitempty" firestore:"category,omitempty"` // e.g. politics, tech, finance, gov, crisis
 
 	// topic_based_interest
 	SearchQuery         *string `json:"searchQuery,omitempty" firestore:"searchQuery"`

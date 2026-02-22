@@ -79,11 +79,13 @@ func TestExecuteMergeFragments_NotFoundDuplicate_SkipsAsSuccess(t *testing.T) {
 	}
 	exec := NewEnforcementExecutor(repo, nil, nil)
 
-	result, err := exec.executeMergeFragments(context.Background(), EnforcementTask{
-		Type:     TaskMergeFragments,
-		TargetID: "dup",
-		Params: map[string]interface{}{
-			"canonicalId": "can",
+	result, err := exec.executeMergeFragments(context.Background(), &PolicyEnforcementJob{
+		Task: EnforcementTask{
+			Type:     TaskMergeFragments,
+			TargetID: "dup",
+			Params: map[string]interface{}{
+				"canonicalId": "can",
+			},
 		},
 	})
 	if err != nil {

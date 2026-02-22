@@ -141,6 +141,9 @@ TEXT LANGUAGE: {language}
 CONTENT:
 {text}
 
+TAXONOMY RULES (REQUIRED - extract only what fits):
+{taxonomyRules}
+
 TASK:
 - Extract fields precisely as per schema. Use only the provided CONTENT.
 - Language must be ISO 639-1 (2 letters, lowercase).
@@ -148,24 +151,10 @@ TASK:
 - Categories must have labels of 1-2 words only, with confidence in [0,1].
 - Document type must be one of: article, post, report, announcement, interview, transcript, other.
 - Dates must be ISO (YYYY-MM-DD) or RFC3339.
-- eventType (if provided) MUST be one of:
-  attack, cyberattack, sanction, blockade, policy_change, license_change, partnership, acquisition, release, deprecation, pricing_change, availability_change, capability_change, protest, strike, election, warning, announcement, incident, other.
 - If you cannot map confidently, use "other".
 - If unsure, prefer conservative outputs; omit or use nulls instead of inventing facts.
 - Include intangible events when they are clearly stated (partnerships, alliances/coalitions, union actions, new legal entities/incorporations, factory openings/closures, product/model releases & deprecations, pricing/availability changes, policy/regulatory changes, sanctions/licensing, investigations, dissolutions).
 - For event locations, prefer structured geo normalization fields (countryAlpha2/admin1/city) to support Horizon canonical geo taxonomy (/loc/{country}/{admin1}/{city}).
-- For geopolitics, social, cyber, and other intangible factors, provide spherePaths on events/claims when clearly inferable.
-  spherePaths must be 1..N canonical taxonomy paths under /sphere/...
-  Examples:
-  - /sphere/geopolitics
-  - /sphere/social
-  - /sphere/social/information
-  - /sphere/cyber
-  - /sphere/digital
-  - /sphere/logistics
-  - /sphere/logistics/maritime
-  - /sphere/energy
-  - /sphere/finance
 -
 - METRIC UPDATES:
   You may extract structured numeric metric updates when the content provides clear values.
@@ -210,13 +199,13 @@ REQUIRED JSON SCHEMA:
   "sentiment": -1.0,
   "categories": [{"label": "1-2 words", "confidence": 0.0}],
   "topics": [{"name": "string", "share": 0.0}],
-  "entities": [{"type": "Person|Organization|Location|Product|Program|Market|Document|Facility|Other", "value": "string", "confidence": 0.0}],
+  "entities": [{"type": "Organization|Person|Product|Facility|Program|Market|GovernmentProject|SupplyChainNode", "value": "string", "confidence": 0.0}],
   "keyPoints": ["string"],
   "documentType": "article|post|report|announcement|interview|transcript|other",
   "outlinks": [{"url": "string", "kind": "reference|citation|internal|external"}],
   "events": [{
     "title": "string",
-    "eventType": "string (optional; e.g., attack|cyberattack|sanction|blockade|policy_change|protest|strike|election|warning|announcement|incident|other)",
+    "eventType": "string (optional; must be from TAXONOMY RULES event types)",
     "dateISO": "YYYY-MM-DD or RFC3339",
     "context": "string?",
     "summary": "string?",

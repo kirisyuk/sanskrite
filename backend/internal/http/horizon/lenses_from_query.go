@@ -518,21 +518,34 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		"spherePathsTop": trace.StrSlice(intent.SpherePaths, 10),
 	})
 
-	// 2) Build Lens. Scope = prefetch only (user-selected). Anchors are deferred: added to scope only when Scout creates fragment (max 5).
+	// 2) Build Lens.
+	// Scope = prefetch only (user-selected).
+	// Deferred scope candidates come from:
+	// - intent anchors
+	// - domain firstOrderEntities (fallback when anchors are sparse/empty)
+	// and are added to scope only when Scout creates fragment (max 5).
 	scopeCap := len(req.PrefetchScope)
 	scope := make([]string, 0, scopeCap)
 	seenScope := make(map[string]struct{}, scopeCap)
-	deferredScopePaths := make([]string, 0, len(intent.Anchors))
-	for _, a := range intent.Anchors {
-		cp := strings.TrimSpace(a.CanonicalPath)
+	deferredScopePaths := make([]string, 0, len(intent.Anchors)+len(intent.Domains)*4)
+	addDeferredScopeCandidate := func(path string) {
+		cp := strings.TrimSpace(path)
 		if cp == "" {
-			continue
+			return
 		}
 		if _, ok := seenScope[cp]; ok {
-			continue
+			return
 		}
 		seenScope[cp] = struct{}{}
 		deferredScopePaths = append(deferredScopePaths, cp)
+	}
+	for _, a := range intent.Anchors {
+		addDeferredScopeCandidate(a.CanonicalPath)
+	}
+	for _, d := range intent.Domains {
+		for _, cp := range d.FirstOrderEntities {
+			addDeferredScopeCandidate(cp)
+		}
 	}
 	// Merge prefetch scope (UI-selected entities) into the final scope.
 	for _, raw := range req.PrefetchScope {
@@ -722,7 +735,7 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 
 	// Mode semantics:
 	// - just_open: create lens without creating initial scouting jobs (best-effort)
-	// - research_first: normal behavior (jobs created, domains first due to scope ordering)
+	// - research_first: normal behavior (jobs created for scope + deferred anchors/first-order entities)
 	mode := strings.ToLower(strings.TrimSpace(req.Mode))
 	if mode == "" {
 		// Default: if domains exist, research first; else keep legacy behavior (research first).

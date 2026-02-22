@@ -2,9 +2,13 @@ package signals
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
+
+	redis "github.com/redis/go-redis/v9"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -33,6 +37,10 @@ type ExternalApplicabilityEvaluator struct {
 
 	mu         sync.RWMutex
 	lensCached map[string]cachedExposureList
+	pathCached map[string]bool
+	adjCached  map[string][]string
+	redis      *redis.Client
+	redisTTL   time.Duration
 }
 
 type cachedExposureList struct {
@@ -41,11 +49,16 @@ type cachedExposureList struct {
 }
 
 func NewExternalApplicabilityEvaluator() *ExternalApplicabilityEvaluator {
-	return &ExternalApplicabilityEvaluator{
+	e := &ExternalApplicabilityEvaluator{
 		minScore:        0.35,
 		maxExposureHops: 2,
 		lensCached:      make(map[string]cachedExposureList),
+		pathCached:      make(map[string]bool),
+		adjCached:       make(map[string][]string),
+		redisTTL:        15 * time.Minute,
 	}
+	e.redis = newRedisApplicabilityClient()
+	return e
 }
 
 func (e *ExternalApplicabilityEvaluator) WithFragmentsRepo(r *repo.HorizonFragmentsRepository) *ExternalApplicabilityEvaluator {
@@ -321,6 +334,10 @@ func (e *ExternalApplicabilityEvaluator) hasGraphPathBounded(ctx context.Context
 	if tenantID == "" {
 		tenantID = "global"
 	}
+	cacheKey := fmt.Sprintf("%s|%s|%s|%d", tenantID, sourceID, targetID, maxHops)
+	if v, ok := e.getPathCache(cacheKey); ok {
+		return v
+	}
 
 	type state struct {
 		id   string
@@ -335,25 +352,13 @@ func (e *ExternalApplicabilityEvaluator) hasGraphPathBounded(ctx context.Context
 		if cur.hops >= maxHops {
 			continue
 		}
-		outEdges, _ := e.edgesRepo.ListBySource(ctx, tenantID, cur.id, nil, 80)
-		inEdges, _ := e.edgesRepo.ListByTarget(ctx, tenantID, cur.id, nil, 80)
-
-		nextIDs := make([]string, 0, len(outEdges)+len(inEdges))
-		for _, ed := range outEdges {
-			if ed != nil {
-				nextIDs = append(nextIDs, strings.TrimSpace(ed.TargetFragmentID))
-			}
-		}
-		for _, ed := range inEdges {
-			if ed != nil {
-				nextIDs = append(nextIDs, strings.TrimSpace(ed.SourceFragmentID))
-			}
-		}
+		nextIDs := e.getAdjacentNodeIDs(ctx, tenantID, cur.id)
 		for _, nid := range nextIDs {
 			if nid == "" {
 				continue
 			}
 			if nid == targetID {
+				e.setPathCache(cacheKey, true)
 				return true
 			}
 			if _, ok := seen[nid]; ok {
@@ -363,7 +368,110 @@ func (e *ExternalApplicabilityEvaluator) hasGraphPathBounded(ctx context.Context
 			queue = append(queue, state{id: nid, hops: cur.hops + 1})
 		}
 	}
+	e.setPathCache(cacheKey, false)
 	return false
+}
+
+func (e *ExternalApplicabilityEvaluator) getAdjacentNodeIDs(ctx context.Context, tenantID, nodeID string) []string {
+	if e == nil || e.edgesRepo == nil {
+		return nil
+	}
+	key := tenantID + "|" + strings.TrimSpace(nodeID)
+	e.mu.RLock()
+	if cached, ok := e.adjCached[key]; ok {
+		out := make([]string, len(cached))
+		copy(out, cached)
+		e.mu.RUnlock()
+		return out
+	}
+	e.mu.RUnlock()
+
+	outEdges, _ := e.edgesRepo.ListBySource(ctx, tenantID, nodeID, nil, 80)
+	inEdges, _ := e.edgesRepo.ListByTarget(ctx, tenantID, nodeID, nil, 80)
+
+	nextIDs := make([]string, 0, len(outEdges)+len(inEdges))
+	for _, ed := range outEdges {
+		if ed != nil {
+			nextIDs = append(nextIDs, strings.TrimSpace(ed.TargetFragmentID))
+		}
+	}
+	for _, ed := range inEdges {
+		if ed != nil {
+			nextIDs = append(nextIDs, strings.TrimSpace(ed.SourceFragmentID))
+		}
+	}
+	e.mu.Lock()
+	e.adjCached[key] = append([]string(nil), nextIDs...)
+	e.mu.Unlock()
+	return nextIDs
+}
+
+func (e *ExternalApplicabilityEvaluator) getPathCache(key string) (bool, bool) {
+	if e == nil || strings.TrimSpace(key) == "" {
+		return false, false
+	}
+	e.mu.RLock()
+	if v, ok := e.pathCached[key]; ok {
+		e.mu.RUnlock()
+		return v, true
+	}
+	e.mu.RUnlock()
+	if e.redis == nil {
+		return false, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Millisecond)
+	defer cancel()
+	val, err := e.redis.Get(ctx, "h:app:path:"+key).Result()
+	if err != nil {
+		return false, false
+	}
+	if val == "1" {
+		e.mu.Lock()
+		e.pathCached[key] = true
+		e.mu.Unlock()
+		return true, true
+	}
+	if val == "0" {
+		e.mu.Lock()
+		e.pathCached[key] = false
+		e.mu.Unlock()
+		return false, true
+	}
+	return false, false
+}
+
+func (e *ExternalApplicabilityEvaluator) setPathCache(key string, value bool) {
+	if e == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	e.mu.Lock()
+	e.pathCached[key] = value
+	e.mu.Unlock()
+	if e.redis == nil {
+		return
+	}
+	raw := "0"
+	if value {
+		raw = "1"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Millisecond)
+	defer cancel()
+	_ = e.redis.Set(ctx, "h:app:path:"+key, raw, e.redisTTL).Err()
+}
+
+func newRedisApplicabilityClient() *redis.Client {
+	addr := strings.TrimSpace(os.Getenv("REDIS_ADDR"))
+	if addr == "" {
+		if u := strings.TrimSpace(os.Getenv("REDIS_URL")); u != "" {
+			if opts, err := redis.ParseURL(u); err == nil {
+				return redis.NewClient(opts)
+			}
+		}
+		return nil
+	}
+	return redis.NewClient(&redis.Options{
+		Addr: addr,
+	})
 }
 
 func axisTypeFit(axis string, ft horizonmodels.FragmentType) (float64, string) {

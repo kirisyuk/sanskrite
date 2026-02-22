@@ -72,4 +72,46 @@ func TestMetricValue_UnmarshalJSON_UsesProvenanceObservedAtFallback(t *testing.T
 	}
 }
 
+func TestMetricValue_UnmarshalJSON_BareNumber(t *testing.T) {
+	var mv MetricValue
+	if err := json.Unmarshal([]byte(`45`), &mv); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if mv.Value != 45 {
+		t.Fatalf("Value=%v, want 45", mv.Value)
+	}
+	if mv.Confidence != 0.6 {
+		t.Fatalf("Confidence=%v, want 0.6", mv.Confidence)
+	}
+	if mv.ObservedAt.IsZero() {
+		t.Fatal("ObservedAt should not be zero")
+	}
+	if mv.Unit != nil {
+		t.Fatalf("Unit=%v, want nil", *mv.Unit)
+	}
+}
 
+func TestMetricValue_UnmarshalJSON_BareStringPercentAndMapDecode(t *testing.T) {
+	var mv MetricValue
+	if err := json.Unmarshal([]byte(`"12.5%"`), &mv); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if mv.Value != 12.5 {
+		t.Fatalf("Value=%v, want 12.5", mv.Value)
+	}
+	if mv.Unit == nil || *mv.Unit != "percent" {
+		t.Fatalf("Unit=%v, want percent", mv.Unit)
+	}
+
+	raw := []byte(`{"ownership_percent":45,"market_share":"12.5%"}`)
+	var metrics map[string]MetricValue
+	if err := json.Unmarshal(raw, &metrics); err != nil {
+		t.Fatalf("json.Unmarshal(metrics map) error = %v", err)
+	}
+	if metrics["ownership_percent"].Value != 45 {
+		t.Fatalf("ownership_percent=%v, want 45", metrics["ownership_percent"].Value)
+	}
+	if metrics["market_share"].Unit == nil || *metrics["market_share"].Unit != "percent" {
+		t.Fatalf("market_share unit=%v, want percent", metrics["market_share"].Unit)
+	}
+}

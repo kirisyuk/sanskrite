@@ -37,14 +37,14 @@ func main() {
 	sourcesRepo := repo.NewDataSourcesRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
 
-	// Get all RSS and Telegram sources
-	kinds := []string{"rss", "telegram_channel"}
+	// Get all sources (rss, telegram, web, horizon_monitor_feed)
+	kinds := []string{"rss", "telegram_channel", "web", "horizon_monitor_feed", "worldmonitor_feed"}
 	sources, err := sourcesRepo.ListByKinds(ctx, kinds)
 	if err != nil {
 		log.Fatalf("Failed to list sources: %v", err)
 	}
 
-	fmt.Printf("\n=== Found %d sources (rss, telegram_channel) ===\n\n", len(sources))
+	fmt.Printf("\n=== Found %d sources (rss, telegram_channel, web, horizon_monitor_feed) ===\n\n", len(sources))
 
 	activeCount := 0
 	for _, ds := range sources {

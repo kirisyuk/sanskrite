@@ -109,6 +109,8 @@ export interface HorizonNodeData {
   topDependencyHighlight?: boolean;
   /** UI: rounded red ring for propagation trace preview (wired by LensCanvasCockpit). */
   signalPropagationHighlight?: boolean;
+  /** UI: temporary glow after expand (wired by LensCanvasCockpit). */
+  expandGlow?: boolean;
   onLoadRelated?: (fragmentId: string) => void; // Функция для загрузки связанных элементов
   onCollapse?: (fragmentId: string) => void; // Функция для сворачивания (undo expand)
   isLoadingRelated?: boolean; // Флаг загрузки связанных элементов
@@ -1485,8 +1487,12 @@ export const getEdgeColor = (edgeType: string | undefined): string => {
   const type = (edgeType || '').toUpperCase();
   // Competition/Conflict — Red
   if (['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES'].includes(type)) return '#EF4444';
+  // Participation (org in market) — Teal (neutral, distinct from red competes)
+  if (type === 'PARTICIPATES_IN') return '#0D9488';
   // Partnership/Cooperation — Green
   if (['PARTNERS_WITH', 'COOPERATES_WITH', 'SUPPLIES_TO', 'SUPPORTS'].includes(type)) return '#22C55E';
+  // Products/Output — Cyan
+  if (['PRODUCES', 'TRANSFORMS_INTO', 'EXTRACTS_FROM'].includes(type)) return '#06B6D4';
   // Influence — Orange
   if (['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'].includes(type)) return '#F97316';
   // Ownership — Blue
@@ -1497,6 +1503,8 @@ export const getEdgeColor = (edgeType: string | undefined): string => {
   if (['BOARD_MEMBER_OF', 'EMPLOYED_BY', 'FOUNDED'].includes(type)) return '#6366F1';
   // Dependency — Gray
   if (['DEPENDS_ON', 'REQUIRES', 'USES', 'NEEDS'].includes(type)) return '#9CA3AF';
+  // Market hierarchy (segment) — Gray dashed
+  if (['HAS_MARKET_SEGMENT', 'HAS_SUBMARKET'].includes(type)) return '#9CA3AF';
   // Location — Purple
   if (['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'ASSURES', 'AUDITED_BY'].includes(type)) return '#A855F7';
   // Social graph (people-people) — Teal
@@ -2182,6 +2190,13 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
     bg = theme === 'dark' ? 'rgba(255,255,255,0.015)' : 'rgba(15,23,42,0.03)';
   }
 
+  // Category tint: subtle background per edge type (left pane relation blocks)
+  const categoryTint = String((data as any)?.groupCategoryTint || '').trim();
+  if (categoryTint && noFill) {
+    const edgeColor = getEdgeColor(categoryTint);
+    bg = hexToRgba(edgeColor, theme === 'dark' ? 0.06 : 0.05);
+  }
+
   // Optional: intra-group subsections (used by Levels Two-Pane left groups to separate children by fragment type).
   const typeBlocks = (data as any)?.groupTypeBlocks as
     | Array<{
@@ -2435,6 +2450,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
       {/* Optional: Type subsections (visual separators + labels). Keep pointerEvents off. */}
       {showTypeBlocks && (
         <>
+          {/* Type dividers: barely visible (category tint used for identification) */}
           {typeBlocks!.map((b, idx) => {
             if (typeof b?.dividerX !== 'number') return null;
             return (
@@ -2447,7 +2463,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                   bottom: 6,
                   width: 1,
                   borderLeft: `1px dashed ${border}`,
-                  opacity: theme === 'dark' ? 0.46 : 0.40,
+                  opacity: theme === 'dark' ? 0.14 : 0.12,
                   pointerEvents: 'none',
                 }}
               />
@@ -2487,7 +2503,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
           IMPORTANT: render even when there is only ONE type block (typeBlocks.length === 1). */}
       {showRelationBlocks && Array.isArray(typeBlocks) && (
         <>
-          {/* Subcategory dividers (between relation blocks): subtle, like type dividers but quieter (2025 UX). */}
+          {/* Subcategory dividers: barely visible (category tint used for identification) */}
           {typeBlocks.flatMap((b, bIdx) => {
             const rels = Array.isArray(b?.relationBlocks) ? (b.relationBlocks as any[]) : [];
             if (!rels || rels.length <= 1) return [];
@@ -2504,7 +2520,7 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                     bottom: 6,
                     width: 1,
                     borderLeft: `1px dashed ${border}`,
-                    opacity: theme === 'dark' ? 0.32 : 0.26,
+                    opacity: theme === 'dark' ? 0.12 : 0.10,
                     pointerEvents: 'none',
                   }}
                 />
@@ -3131,6 +3147,7 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
   const count = typeof (data as any)?.contextCount === 'number' ? (data as any).contextCount : 0;
   const onShowDetails = (data as any)?.onToggleContextDetails as (() => void) | undefined;
   const contextExpanded = Boolean((data as any)?.contextExpanded);
+  const isRightStackContextCard = Boolean((data as any)?.rightStackContextCard);
 
   const isDark = theme === 'dark';
   // Graphite background: one tone above main canvas (#121212 → #1A1A1A), subtle, not loud
@@ -3386,7 +3403,7 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
             }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              {contextExpanded ? <path d="M15 18l-6-6 6-6" /> : <path d="M9 18l6-6-6-6" />}
+              {isRightStackContextCard ? <path d="M6 9l6 6 6-6" /> : (contextExpanded ? <path d="M15 18l-6-6 6-6" /> : <path d="M9 18l6-6-6-6" />)}
             </svg>
           </button>
         )}
@@ -3423,6 +3440,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isDomainHighlight = Boolean((data as any)?.domainHighlight);
   const isTopDependencyHighlight = Boolean((data as any)?.topDependencyHighlight);
   const isSignalPropagationHighlight = Boolean((data as any)?.signalPropagationHighlight);
+  const isExpandGlow = Boolean((data as any)?.expandGlow);
   const isBottleneckHighlight = Boolean((data as any)?.bottleneckHighlight);
   // Allow Research even if the first "load related" attempt returned empty: in that case the node isn't expanded,
   // but the user should still be able to run scouting from it.
@@ -3683,9 +3701,14 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const bottleneckTone = theme === 'dark'
     ? { ring: 'rgba(245, 158, 11, 0.74)', glow: 'rgba(245, 158, 11, 0.26)' }
     : { ring: 'rgba(217, 119, 6, 0.66)', glow: 'rgba(217, 119, 6, 0.20)' };
+  const expandGlowTone = theme === 'dark'
+    ? { ring: 'rgba(56, 189, 248, 0.78)', glow: 'rgba(56, 189, 248, 0.32)' }
+    : { ring: 'rgba(14, 165, 233, 0.72)', glow: 'rgba(14, 165, 233, 0.28)' };
   const highlightTone = !isCritical
     ? (
-        isSignalPropagationHighlight
+        isExpandGlow
+          ? expandGlowTone
+          : isSignalPropagationHighlight
           ? signalPropagationTone
           : isQueryHighlight
           ? queryTone

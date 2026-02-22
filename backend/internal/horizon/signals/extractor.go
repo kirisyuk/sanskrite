@@ -338,6 +338,7 @@ OUTPUT FORMAT (strict JSON):
       "likelihood": 0.0-1.0,
       "polarity": "risk" | "opportunity",
       "seedPaths": ["canonical paths of directly affected entities"],
+      "seedNames": ["human-readable names for semantic search, e.g. Microsoft, Kaspersky, Gemini 1.5 Pro"],
       "locationPath": "canonical location path if applicable",
       "spherePaths": ["sphere paths if applicable"],
       "timeHorizon": "immediate|short_term|medium_term|long_term",
@@ -351,7 +352,8 @@ RULES:
 - Select the PRIMARY axis (most direct physical effect)
 - Amplitude should reflect the strength of the impulse (0.0 = weak, 1.0 = maximum)
 - Polarity: "risk" for negative impacts, "opportunity" for positive impacts
-- seedPaths should be canonical paths of entities directly affected (e.g., ["/org/ae/flydubai-llc"])
+- seedPaths: canonical paths of entities directly affected (e.g., ["/org/ae/flydubai-llc"])
+- seedNames: human-readable names for each seed (e.g., ["Flydubai"]) — used for semantic search, must match order of seedPaths
 - If unsure, prefer conservative estimates (lower amplitude, higher confidence threshold)
 - Return ONLY valid JSON, no markdown code fences`,
 		fact.Title,
@@ -397,6 +399,15 @@ func (e *SignalExtractor) parseLLMSignal(fact *coremodels.OntologyFact, sMap map
 		for _, sp := range spRaw {
 			if spStr, ok := sp.(string); ok {
 				seedPaths = append(seedPaths, spStr)
+			}
+		}
+	}
+
+	seedNames := make([]string, 0, len(seedPaths))
+	if snRaw, ok := sMap["seedNames"].([]interface{}); ok {
+		for _, sn := range snRaw {
+			if snStr, ok := sn.(string); ok && strings.TrimSpace(snStr) != "" {
+				seedNames = append(seedNames, strings.TrimSpace(snStr))
 			}
 		}
 	}
@@ -489,6 +500,7 @@ func (e *SignalExtractor) parseLLMSignal(fact *coremodels.OntologyFact, sMap map
 		Polarity:     polarity,
 		ActorPaths:   fact.ActorPaths,
 		SeedPaths:    seedPaths,
+		SeedNames:    seedNames,
 		LocationPath: locationPath,
 		SpherePaths:  spherePaths,
 		Constraints: horizonmodels.SignalConstraints{

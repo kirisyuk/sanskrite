@@ -412,7 +412,7 @@ func parseSignalsFromResponse(content, seedPath string) (newsSummary string, sig
 	return newsSummary, out
 }
 
-func printReport(ctx context.Context, frRepo *repo.HorizonFragmentsRepository, orgLabel, path, newsSummary string, signals []*models.SignalDescriptor, runs []*propagationRun, simulated bool) {
+func printReport(ctx context.Context, frRepo *repo.HorizonFragmentsRepository, orgLabel, path, newsSummary string, _ []*models.SignalDescriptor, runs []*propagationRun, simulated bool) {
 	fmt.Println()
 	fmt.Println("═══════════════════════════════════════════════════════════════════════════════")
 	fmt.Printf("  PROPAGATION CALIBRATION REPORT — %s\n", orgLabel)
@@ -928,7 +928,11 @@ func runListCandidates(ctx context.Context, frRepo *repo.HorizonFragmentsReposit
 		if f == nil || f.Type != models.FragmentTypeOrganization {
 			continue
 		}
-		if strings.ToLower(strings.TrimSpace(f.Status)) != "active" {
+		status := strings.TrimSpace(f.Governance.Status)
+		if status == "" {
+			status = strings.TrimSpace(f.Status)
+		}
+		if strings.ToLower(status) != "active" {
 			continue
 		}
 		total := degByID[id]

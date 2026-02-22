@@ -23,6 +23,23 @@ func TestResolveEdgeDirectionAutoFixMarketInvestsInOrg(t *testing.T) {
 	}
 }
 
+func TestResolveEdgeDirectionAutoFixMarketOperatesInOrg(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeOperatesIn,
+		horizonmodels.FragmentTypeMarket,
+		horizonmodels.FragmentTypeOrganization,
+	)
+	if !ok {
+		t.Fatalf("expected auto-fix for MARKET OPERATES_IN ORGANIZATION")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeParticipatesIn {
+		t.Fatalf("expected newType PARTICIPATES_IN, got %s", fix.NewType)
+	}
+	if !fix.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true")
+	}
+}
+
 func TestResolveEdgeDirectionAutoFixCommunityFoundedPerson(t *testing.T) {
 	fix, ok := ResolveEdgeDirectionAutoFix(
 		horizonmodels.DependencyTypeFounded,
@@ -47,6 +64,25 @@ func TestApplyEdgeCanonicalizationPolicyUsesDirectionAutoFix(t *testing.T) {
 		TargetType: horizonmodels.FragmentTypeOrganization,
 		SourcePath: "/market/us/technology/semiconductors",
 		TargetPath: "/org/us/acme-inc",
+	})
+	if !got.Changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeParticipatesIn {
+		t.Fatalf("expected PARTICIPATES_IN, got %s", got.EdgeType)
+	}
+	if !got.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true")
+	}
+}
+
+func TestApplyEdgeCanonicalizationPolicyMarketOperatesInOrg(t *testing.T) {
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:   horizonmodels.DependencyTypeOperatesIn,
+		SourceType: horizonmodels.FragmentTypeMarket,
+		TargetType: horizonmodels.FragmentTypeOrganization,
+		SourcePath: "/market/global/energy/oil-gas",
+		TargetPath: "/org/us/acme-energy",
 	})
 	if !got.Changed {
 		t.Fatalf("expected canonicalization change")

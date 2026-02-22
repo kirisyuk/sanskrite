@@ -226,6 +226,22 @@ func (r *LensesRepository) AddScopeCanonicalPaths(ctx context.Context, lensID st
 	return err
 }
 
+// IncrementDeferredScopeAddCount increments viewConfig.deferredScopeAddCount atomically.
+// This avoids full document rewrites when Scout appends scope entries concurrently.
+func (r *LensesRepository) IncrementDeferredScopeAddCount(ctx context.Context, lensID string, delta int64) error {
+	if lensID == "" {
+		return ErrInvalidDocument
+	}
+	if delta == 0 {
+		return nil
+	}
+	_, err := r.col.Doc(lensID).Update(ctx, []firestore.Update{
+		{Path: "viewConfig.deferredScopeAddCount", Value: firestore.Increment(delta)},
+		{Path: "updatedAt", Value: time.Now().UTC()},
+	})
+	return err
+}
+
 // AddExposurePathKey appends a canonical exposure key string to the lens document using array union.
 // This is intentionally partial (does not validate full Lens), to support incremental workflows.
 func (r *LensesRepository) AddExposurePathKey(ctx context.Context, lensID string, rawKey string) (string, error) {
@@ -243,4 +259,3 @@ func (r *LensesRepository) AddExposurePathKey(ctx context.Context, lensID string
 	_, err = r.col.Doc(lensID).Set(ctx, updates, firestore.MergeAll)
 	return canon, err
 }
-

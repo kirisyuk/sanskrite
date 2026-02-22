@@ -61,10 +61,11 @@ type Mitigation struct {
 
 // Interpreter generates human-readable risk/opportunity interpretations using LLM.
 type Interpreter struct {
-	aiExecutor      *ai.AITaskExecutor
-	fragmentsRepo   *repo.HorizonFragmentsRepository
-	signalsRepo     SignalsRepo // For retrieving signal details
-	feedbackEmitter feedback.Emitter
+	aiExecutor         *ai.AITaskExecutor
+	fragmentsRepo      *repo.HorizonFragmentsRepository
+	signalsRepo        SignalsRepo // For retrieving signal details
+	eventFactsResolver EventFactsResolver // Optional: resolve SourceEventID to fact summary for prompt
+	feedbackEmitter    feedback.Emitter
 }
 
 // SignalsRepo provides access to signal descriptors.
@@ -83,6 +84,12 @@ func NewInterpreter(
 		fragmentsRepo: fragmentsRepo,
 		signalsRepo:   signalsRepo,
 	}
+}
+
+// WithEventFactsResolver sets the optional resolver for SourceEventID → fact summary (traceability).
+func (i *Interpreter) WithEventFactsResolver(r EventFactsResolver) *Interpreter {
+	i.eventFactsResolver = r
+	return i
 }
 
 func (i *Interpreter) WithFeedbackEmitter(emitter feedback.Emitter) *Interpreter {
@@ -252,10 +259,16 @@ func (i *Interpreter) buildTopEvents(ctx context.Context, fragment *horizonmodel
 				continue
 			}
 			seen[key] = true
+			eventSummary := strings.TrimSpace(c.SourceEventID)
+			if eventSummary != "" && i.eventFactsResolver != nil {
+				if resolved, err := i.eventFactsResolver.ResolveEventSummary(ctx, c.SourceEventID); err == nil && resolved != "" {
+					eventSummary = resolved
+				}
+			}
 			acc = append(acc, scored{
 				ev: EventProvenance{
 					SignalID:     c.SignalID,
-					EventSummary: c.SourceEventID, // can be resolved by caller if needed
+					EventSummary: eventSummary,
 					Path:         c.Path,
 					Amplitude:    c.Amplitude,
 					Hops:         c.Hops,
@@ -276,10 +289,16 @@ func (i *Interpreter) buildTopEvents(ctx context.Context, fragment *horizonmodel
 				}
 				signal, err := i.signalsRepo.GetSignal(ctx, sourceID)
 				if err == nil && signal != nil {
+					eventSummary := strings.TrimSpace(signal.FactID)
+					if eventSummary != "" && i.eventFactsResolver != nil {
+						if resolved, err := i.eventFactsResolver.ResolveEventSummary(ctx, signal.FactID); err == nil && resolved != "" {
+							eventSummary = resolved
+						}
+					}
 					acc = append(acc, scored{
 						ev: EventProvenance{
 							SignalID:     signal.ID,
-							EventSummary: signal.FactID,
+							EventSummary: eventSummary,
 							Amplitude:    value.Value,
 						},
 					})
@@ -303,7 +322,7 @@ func (i *Interpreter) buildTopEvents(ctx context.Context, fragment *horizonmodel
 
 // buildInterpretationPrompt builds the LLM prompt for interpretation.
 func (i *Interpreter) buildInterpretationPrompt(
-	fragment *horizonmodels.HorizonFragment,
+	_ *horizonmodels.HorizonFragment,
 	request *InterpretationRequest,
 	metrics map[string]float64,
 	axisBreakdown []AxisContribution,

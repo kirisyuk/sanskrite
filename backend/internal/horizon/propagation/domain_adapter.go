@@ -23,6 +23,9 @@ type ScenarioInput struct {
 	SeedFragmentIDs []string               `json:"seedFragmentIds,omitempty"` // Optional explicit seed fragments (e.g. selected visible node)
 	TargetPaths     []string               `json:"targetPaths,omitempty"`
 	MaxTraceSteps   int                    `json:"maxTraceSteps,omitempty"` // Optional trace cap; defaults are applied by runner.
+	// SourceFactID is the OntologyFact(kind=event) ID that triggered this scenario. When set, domain adapters
+	// propagate it to signals so propagation can store signal-fact links for traceability and interpretation.
+	SourceFactID string `json:"sourceFactId,omitempty"`
 }
 
 const (

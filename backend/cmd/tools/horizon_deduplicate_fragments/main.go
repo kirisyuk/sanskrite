@@ -71,6 +71,9 @@ func main() {
 	watchdogRepo := repo.NewWatchdogConfigsRepository(fsClient)
 	lensesRepo := repo.NewLensesRepository(fsClient)
 	versionsRepo := repo.NewHorizonFragmentVersionsRepository(fsClient)
+	mergeAuditRepo := repo.NewFragmentMergeAuditRepository(fsClient)
+	redirectsRepo := repo.NewCanonicalPathRedirectsRepository(fsClient)
+	mergeRepo := repo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).WithRedirectsRepo(redirectsRepo)
 
 	log.Printf("Starting deduplication scan (dry-run=%v, tenant=%s)...", *dryRun, *tenantID)
 
@@ -118,27 +121,38 @@ func main() {
 			log.Printf("  [DRY-RUN] Would keep: %s, remove: %v", primaryID, duplicateIDs)
 			stats.DryRunDuplicates += len(duplicateIDs)
 		} else {
-			// Merge fragment data (especially metrics) from duplicates into primary BEFORE deleting.
-			// Rationale: canonicalPath-level duplicates can be created by race conditions; the "losing" fragment
-			// may still contain richer State metrics or identifiers. We want the richest data to survive.
-			if err := mergeDuplicateFragmentData(ctx, fragmentsRepo, versionsRepo, primaryID, duplicateIDs); err != nil {
-				log.Printf("WARNING: Failed to merge fragment data into primary %s for %s: %v", primaryID, canonicalPath, err)
-				// Continue: reference migration + deletion is still useful, but may lose some data.
+			// Merge each duplicate via single entry point (data, edges, delete, audit)
+			if mergeRepo != nil {
+				for _, dupID := range duplicateIDs {
+					_, err := mergeRepo.MergeFragment(ctx, primaryID, dupID, *tenantID, "tool_dedup", "horizon_deduplicate_fragments", "", "")
+					if err != nil {
+						log.Printf("WARNING: Merge %s -> %s failed: %v", dupID, primaryID, err)
+						continue
+					}
+					stats.DeletedFragments++
+				}
+			} else {
+				// Legacy: merge data, migrate refs, delete
+				if err := mergeDuplicateFragmentData(ctx, fragmentsRepo, versionsRepo, primaryID, duplicateIDs); err != nil {
+					log.Printf("WARNING: Failed to merge fragment data into primary %s for %s: %v", primaryID, canonicalPath, err)
+				}
+				if err := migrateReferences(ctx, primaryID, duplicateIDs, edgesRepo, watchdogRepo, lensesRepo, versionsRepo, fsClient, canonicalPath, stats); err != nil {
+					log.Printf("ERROR: Failed to migrate references for %s: %v", canonicalPath, err)
+					continue
+				}
+				for _, dupID := range duplicateIDs {
+					if err := fragmentsRepo.Delete(ctx, dupID); err != nil {
+						log.Printf("ERROR: Failed to delete fragment %s: %v", dupID, err)
+						continue
+					}
+					stats.DeletedFragments++
+				}
 			}
 
-			// Migrate all references from duplicates to primary
+			// Migrate watchdog/lenses/etc refs (merge repo doesn't do these)
 			if err := migrateReferences(ctx, primaryID, duplicateIDs, edgesRepo, watchdogRepo, lensesRepo, versionsRepo, fsClient, canonicalPath, stats); err != nil {
 				log.Printf("ERROR: Failed to migrate references for %s: %v", canonicalPath, err)
 				continue
-			}
-
-			// Delete duplicate fragments
-			for _, dupID := range duplicateIDs {
-				if err := fragmentsRepo.Delete(ctx, dupID); err != nil {
-					log.Printf("ERROR: Failed to delete fragment %s: %v", dupID, err)
-					continue
-				}
-				stats.DeletedFragments++
 			}
 
 			// Re-export primary fragment to GCS (to ensure it's up-to-date in Vertex)
@@ -439,7 +453,7 @@ type DeduplicationStats struct {
 }
 
 // findDuplicates finds all canonical paths that have multiple fragments
-func findDuplicates(ctx context.Context, fragmentsRepo *repo.HorizonFragmentsRepository, tenantID string) (map[string][]string, error) {
+func findDuplicates(ctx context.Context, fragmentsRepo *repo.HorizonFragmentsRepository, _ string) (map[string][]string, error) {
 	duplicates := make(map[string][]string)
 
 	// Query all fragments for the tenant
@@ -764,7 +778,7 @@ func mergeEdgeMetrics(dst, src *models.DependencyEdge) bool {
 		return false
 	}
 	changed := false
-	if src.Metrics != nil && len(src.Metrics) > 0 {
+	if len(src.Metrics) > 0 {
 		if dst.Metrics == nil {
 			dst.Metrics = map[string]models.MetricValue{}
 		}
@@ -785,7 +799,7 @@ func mergeEdgeMetrics(dst, src *models.DependencyEdge) bool {
 		}
 	}
 	// Qualifiers: fill missing only (never overwrite).
-	if src.Qualifiers != nil && len(src.Qualifiers) > 0 {
+	if len(src.Qualifiers) > 0 {
 		if dst.Qualifiers == nil {
 			dst.Qualifiers = map[string]interface{}{}
 		}

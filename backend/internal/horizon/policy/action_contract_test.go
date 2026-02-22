@@ -50,3 +50,22 @@ func TestApplyEdgeCanonicalizationPolicyTransitionFallback(t *testing.T) {
 		t.Fatalf("expected policy penalty >= 0.15, got %.2f", got.PolicyPenalty)
 	}
 }
+
+func TestApplyEdgeCanonicalizationPolicyTransformsIntoStageOrderSwap(t *testing.T) {
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:   horizonmodels.DependencyTypeTransformsInto,
+		SourceType: horizonmodels.FragmentTypeProduct,
+		TargetType: horizonmodels.FragmentTypeProduct,
+		SourcePath: "/product/finished/mineral/processing/iron-pellet",
+		TargetPath: "/product/raw/mineral/extraction/iron-ore",
+	})
+	if !got.Changed {
+		t.Fatalf("expected canonicalization change for reversed TRANSFORMS_INTO stage order")
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeTransformsInto {
+		t.Fatalf("expected edge type to stay TRANSFORMS_INTO, got %s", got.EdgeType)
+	}
+	if !got.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true")
+	}
+}

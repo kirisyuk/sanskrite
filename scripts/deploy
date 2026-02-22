@@ -1434,6 +1434,11 @@ deploy_api() {
     paypal_secrets="$paypal_secrets,ACLED_ACCESS_TOKEN=ACLED_ACCESS_TOKEN:latest"
   fi
 
+  # Google Maps API key (optional - for geocoding org/facility addresses)
+  if gcloud secrets describe google_maps_api_key --project="$PROJECT_ID" >/dev/null 2>&1; then
+    paypal_secrets="$paypal_secrets,GOOGLE_MAPS_API_KEY=google_maps_api_key:latest"
+  fi
+
   if gcloud secrets describe paypal_client_id >/dev/null 2>&1 && gcloud secrets describe paypal_secret >/dev/null 2>&1; then
     paypal_secrets="$paypal_secrets,PAYPAL_CLIENT_ID=paypal_client_id:latest,PAYPAL_SECRET=paypal_secret:latest"
     if gcloud secrets describe paypal_webhook_id >/dev/null 2>&1; then

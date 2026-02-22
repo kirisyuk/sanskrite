@@ -235,12 +235,12 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 
 		switch payload.Kind {
 		case "rss":
-			if w.orchestrator.emb != nil && w.orchestrator.providersReg != nil && w.orchestrator.docs != nil && w.orchestrator.chunks != nil {
+			if w.orchestrator.publish != nil && w.orchestrator.providersReg != nil {
 				ingestAttempted = true
-				pollErr = w.orchestrator.IngestRSS(ctxP, processingTenantID, payload.SourceID, w.orchestrator.emb)
+				pollErr = w.orchestrator.IngestRSS(ctxP, processingTenantID, payload.SourceID, nil)
 			} else {
-				w.logger.Printf("source poller: skipping RSS ingest for source %s - missing dependencies (emb=%v, providersReg=%v, docs=%v, chunks=%v)",
-					payload.SourceID, w.orchestrator.emb != nil, w.orchestrator.providersReg != nil, w.orchestrator.docs != nil, w.orchestrator.chunks != nil)
+				w.logger.Printf("source poller: skipping RSS ingest for source %s - missing dependencies (publish=%v, providersReg=%v)",
+					payload.SourceID, w.orchestrator.publish != nil, w.orchestrator.providersReg != nil)
 				pollErr = fmt.Errorf("ingest dependencies not wired")
 			}
 		case "telegram_channel":

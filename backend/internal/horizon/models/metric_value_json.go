@@ -1,6 +1,7 @@
 package models
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -23,13 +24,40 @@ var (
 //
 // Rationale: It is better to keep partially-canonical data than to drop whole frames/edges due to strict parsing.
 func (m *MetricValue) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		*m = MetricValue{}
+		return nil
+	}
+
+	// Accept scalar metric formats used by LLM outputs, e.g.:
+	// { "metrics": { "ownership_percent": 45, "market_share": "12.5%" } }
+	if trimmed[0] != '{' {
+		var scalar any
+		if err := json.Unmarshal(trimmed, &scalar); err != nil {
+			return err
+		}
+		val, ok := parseLooseFloat(scalar)
+		if !ok {
+			return fmt.Errorf("metricValue: invalid scalar number: %v", scalar)
+		}
+		unit := inferMetricUnitFromScalar(scalar)
+		*m = MetricValue{
+			Value:      val,
+			Unit:       unit,
+			Confidence: 0.6,
+			ObservedAt: time.Now().UTC(),
+		}
+		return nil
+	}
+
 	var raw struct {
-		Value       any         `json:"value"`
-		Unit        *string     `json:"unit"`
+		Value       any          `json:"value"`
+		Unit        *string      `json:"unit"`
 		ErrorMargin *ErrorMargin `json:"errorMargin"`
-		Confidence  any         `json:"confidence"`
-		ObservedAt  any         `json:"observedAt"`
-		Provenance  Provenance  `json:"provenance"`
+		Confidence  any          `json:"confidence"`
+		ObservedAt  any          `json:"observedAt"`
+		Provenance  Provenance   `json:"provenance"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -70,6 +98,18 @@ func (m *MetricValue) UnmarshalJSON(data []byte) error {
 	m.Confidence = conf
 	m.ObservedAt = obs
 	m.Provenance = raw.Provenance
+	return nil
+}
+
+func inferMetricUnitFromScalar(v any) *string {
+	s, ok := v.(string)
+	if !ok {
+		return nil
+	}
+	if strings.Contains(strings.TrimSpace(s), "%") {
+		unit := "percent"
+		return &unit
+	}
 	return nil
 }
 
@@ -236,5 +276,3 @@ func parseLooseFloatString(in string) (float64, bool) {
 	_ = isPercent // percent handling is caller/unit-specific; we only strip sign.
 	return f, true
 }
-
-

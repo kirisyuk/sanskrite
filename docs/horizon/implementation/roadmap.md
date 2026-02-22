@@ -24,6 +24,7 @@
 | Метрики в оверлей | ❌ | метрики пока в `State` фрагментов |
 | Org identity anchor & transitions | ❌ | identity anchor, nameHistory, transition edges (RENAMED_TO, LEGAL_SUCCESSOR_OF…); см. `ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md` |
 | Scout domain phases & composable agents | ✅ | Domain modes (intent→job.State), allowlists, semantic groups; CriticPipeline/ResearchPipeline by mode; Phase 0–3 in engine; domain mode in child jobs; canonical edge types (ASSOCIATED_WITH, CORPORATE_TRANSITION, DOMAIN_RELATION). Toggle: `HORIZON_SCOUT_COMPOSABLE_PIPELINE=false` для отката на монолитный путь. ТЗ: `SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md`. |
+| Signaling Pipeline | ❌ | Отдельный пайплайн: news flow → events → 12-axis signals → propagation. Scout не создаёт сигналы. План: `SIGNALING_PIPELINE_IMPLEMENTATION_PLAN.md`. |
 
 ## Delta (2026-02-13): Internal-First Grounding (v5)
 
@@ -84,6 +85,15 @@
 4. Alerting hardening (частично):
    - dead-letter и retry policy для interpretation queue;
    - SLO-мониторинг latency event->alert.
+
+## Signaling Pipeline (Roadmap)
+
+**Контекст:** Scout больше не создаёт сигналы. Сигналы — отдельный пайплайн из потока новостей. Источники (rss, horizon_monitor_feed) уже есть; система сама управляет расписанием поллинга.
+
+**План:** см. `SIGNALING_PIPELINE_IMPLEMENTATION_PLAN.md`.
+
+**В roadmap (позже):**
+- **Fallback для слепых зон:** org в графе, но не попал ни в один event из концентрационных фидов — возможность точечного досмотра по запросу пользователя (например, "проверь новости по G42"). Не делать регулярным сканом по всем org.
 
 ## Canonical Playbook: Systemic Dependency Investigation (semiconductor-class queries)
 

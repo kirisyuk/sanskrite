@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	hlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -179,7 +180,9 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 	// Persist updated scope (and manage subscriptions) best-effort.
 	// If scope didn't change, we still return success (idempotent).
 	if scopeAdded {
-		_ = h.service.Lens().UpdateLens(ctx, lens)
+		// ScopeScout already enqueues the exact target job above; suppress auto-scout side effects
+		// from generic scope update logic to avoid scheduling unrelated scope nodes.
+		_ = h.service.Lens().UpdateLens(hlens.WithSkipScouting(ctx), lens)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

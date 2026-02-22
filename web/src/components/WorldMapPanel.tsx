@@ -28,22 +28,27 @@ export const WorldMapPanel: React.FC = () => {
   const [objects, setObjects] = React.useState<GeoObject[]>([]);
   const [selectedObject, setSelectedObject] = React.useState<GeoObject | null>(null);
 
+  const isDark = theme === 'dark';
+  const cartoVariant = isDark ? 'dark_all' : 'light_all';
+  const bgColor = isDark ? '#0a0f0c' : '#f8fafc';
+
   React.useEffect(() => {
     const node = mapNodeRef.current;
     if (!node || mapRef.current) return;
 
+    setLoadingMap(true);
     const map = new maplibregl.Map({
       container: node,
       style: {
         version: 8,
-        name: 'Worldmonitor Dark',
+        name: isDark ? 'Worldmonitor Dark' : 'Worldmonitor Light',
         sources: {
-          'carto-dark': {
+          'carto-basemap': {
             type: 'raster',
             tiles: [
-              'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-              'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-              'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+              `https://a.basemaps.cartocdn.com/${cartoVariant}/{z}/{x}/{y}@2x.png`,
+              `https://b.basemaps.cartocdn.com/${cartoVariant}/{z}/{x}/{y}@2x.png`,
+              `https://c.basemaps.cartocdn.com/${cartoVariant}/{z}/{x}/{y}@2x.png`,
             ],
             tileSize: 256,
             attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
@@ -54,13 +59,13 @@ export const WorldMapPanel: React.FC = () => {
             id: 'background',
             type: 'background',
             paint: {
-              'background-color': '#0a0f0c',
+              'background-color': bgColor,
             },
           },
           {
-            id: 'carto-dark-layer',
+            id: 'carto-basemap-layer',
             type: 'raster',
-            source: 'carto-dark',
+            source: 'carto-basemap',
             minzoom: 0,
             maxzoom: 22,
           },
@@ -98,7 +103,7 @@ export const WorldMapPanel: React.FC = () => {
       map.remove();
       mapRef.current = null;
     };
-  }, []);
+  }, [theme]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -244,8 +249,8 @@ export const WorldMapPanel: React.FC = () => {
             bottom: 10,
             padding: '6px 10px',
             borderRadius: 8,
-            backgroundColor: 'rgba(5, 11, 17, 0.78)',
-            border: '1px solid rgba(255,255,255,0.12)',
+            backgroundColor: theme === 'dark' ? 'rgba(5, 11, 17, 0.78)' : 'rgba(248, 250, 252, 0.92)',
+            border: theme === 'dark' ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(15,23,42,0.15)',
             color: 'var(--text-secondary-strong)',
             fontSize: 11,
           }}
@@ -262,10 +267,10 @@ export const WorldMapPanel: React.FC = () => {
               maxWidth: 340,
               padding: '10px 12px',
               borderRadius: 10,
-              backgroundColor: 'rgba(6, 14, 22, 0.9)',
-              border: '1px solid rgba(255,255,255,0.14)',
+              backgroundColor: theme === 'dark' ? 'rgba(6, 14, 22, 0.9)' : 'rgba(255, 255, 255, 0.95)',
+              border: theme === 'dark' ? '1px solid rgba(255,255,255,0.14)' : '1px solid rgba(15,23,42,0.2)',
               color: 'var(--text-heading)',
-              boxShadow: '0 8px 30px rgba(0,0,0,0.35)',
+              boxShadow: theme === 'dark' ? '0 8px 30px rgba(0,0,0,0.35)' : '0 8px 30px rgba(15,23,42,0.12)',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

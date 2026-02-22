@@ -1,10 +1,25 @@
 package policy
 
 import (
+	"context"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
+
+// MergeFragments is the single entry point for fragment merge operations.
+// Implementations perform: data merge, edge reassign+dedup, delete, audit.
+type MergeFragments interface {
+	MergeFragment(ctx context.Context, primaryID, duplicateID, tenantID, source, toolName, jobID, lensID string) (*MergeResult, error)
+}
+
+// MergeResult holds the outcome of a merge.
+type MergeResult struct {
+	DataMerged       bool
+	EdgesReassigned  int
+	EdgesDeleted     int
+	DuplicateDeleted bool
+}
 
 // =============================================================================
 // POLICY VIOLATION TYPES

@@ -1606,8 +1606,9 @@ type ScoutEngine struct {
 	realtime                *realtime.Publisher
 	taxonomyClassifier      *TaxonomyClassifier
 	aiExecutor              *ai.AITaskExecutor
-	wikidataClient          coreontology.WikidataClientInterface // Optional: shared for enrichment/dedup (no search by default)
-	geonamesClient          coreontology.GeoNamesClientInterface // Optional: deterministic geo normalization/enrichment
+	wikidataClient          coreontology.WikidataClientInterface  // Optional: shared for enrichment/dedup (no search by default)
+	geonamesClient          coreontology.GeoNamesClientInterface  // Optional: deterministic geo normalization/enrichment
+	geocodingClient         coreontology.GeocodingClientInterface // Optional: address-to-coordinates for org/facility/gov
 	openCorporatesClient    henrich.OpenCorporatesClientInterface // Optional: org enrichment with registry IDs
 	spendLedger             *repo.HorizonSpendLedger
 	budgetPolicy            BudgetPolicy
@@ -1651,7 +1652,8 @@ type ScoutEngine struct {
 const maxDeferredScopeAddPerLens = 5
 
 // bestEffortDeferredScopeAdd adds canonicalPath to lens.Scope if under limit (max 5 per lens).
-// Used when Scout creates fragment for a deferred-scope job.
+// Used when Scout creates/updates a fragment for any lens job (not just deferred-scope).
+// Path changes during pipeline (org upgrade, dedup, etc.) are handled by bestEffortRewriteLensScope.
 func (e *ScoutEngine) bestEffortDeferredScopeAdd(ctx context.Context, lensID, canonicalPath string) {
 	if e == nil || e.lensesRepo == nil || lensID == "" || strings.TrimSpace(canonicalPath) == "" {
 		return
@@ -1693,11 +1695,13 @@ func (e *ScoutEngine) bestEffortDeferredScopeAdd(ctx context.Context, lensID, ca
 		})
 		return
 	}
-	if lens.ViewConfig == nil {
-		lens.ViewConfig = map[string]interface{}{}
+	if err := e.lensesRepo.IncrementDeferredScopeAddCount(ctx, lensID, 1); err != nil {
+		trace.Log(ctx, "scope", "scope.deferred_add.count_update_failed", map[string]any{
+			"lensId": lensID,
+			"path":   canonicalPath,
+			"error":  err.Error(),
+		})
 	}
-	lens.ViewConfig["deferredScopeAddCount"] = currentCount + 1
-	_ = e.lensesRepo.Update(ctx, lens)
 	trace.Log(ctx, "scope", "scope.deferred_add.ok", map[string]any{
 		"lensId": lensID,
 		"path":   canonicalPath,
@@ -1740,10 +1744,10 @@ func (e *ScoutEngine) bestEffortRemoveOrphanScopePaths(ctx context.Context, lens
 	}
 	if err := e.lensesRepo.RemoveScopeCanonicalPaths(ctx, lensID, toRemove); err != nil {
 		trace.Log(ctx, "scope", "scope.orphan_cleanup.failed", map[string]any{
-			"lensId":    lensID,
-			"removedN":  len(toRemove),
-			"paths":     toRemove,
-			"error":     err.Error(),
+			"lensId":   lensID,
+			"removedN": len(toRemove),
+			"paths":    toRemove,
+			"error":    err.Error(),
 		})
 		return
 	}
@@ -2276,6 +2280,15 @@ func (e *ScoutEngine) WithGeoNamesClient(client coreontology.GeoNamesClientInter
 	e.geonamesClient = client
 	if e.preCreateValidator != nil {
 		e.preCreateValidator.WithGeoNamesClient(client)
+	}
+	return e
+}
+
+// WithGeocodingClient sets the geocoding client for address-to-coordinates (org/facility/gov).
+func (e *ScoutEngine) WithGeocodingClient(client coreontology.GeocodingClientInterface) *ScoutEngine {
+	e.geocodingClient = client
+	if e.preCreateValidator != nil {
+		e.preCreateValidator.WithGeocodingClient(client)
 	}
 	return e
 }
@@ -2953,96 +2966,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					fmt.Printf("[ScoutEngine] Fast-path applied facts for %s: appliedFacts=%d maxRelevance=%.3f\n",
 						job.TargetCanonicalPath, applyRes.AppliedFacts, applyRes.MaxRelevance)
 
-					// Signal synthesis: synthesize signals from applied facts
-					if e.signalSynthesizer != nil && e.factsRepo != nil {
-						for _, fact := range facts {
-							if fact == nil {
-								continue
-							}
-							synthesizedSignals, err := e.signalSynthesizer.Synthesize(ctx, fact)
-							if err == nil && len(synthesizedSignals) > 0 {
-								for _, signal := range synthesizedSignals {
-									// Save signal as OntologyFact
-									if signalID, err := e.factsRepo.Create(ctx, signal); err == nil {
-										fmt.Printf("[ScoutEngine] Synthesized signal %s from fact %s\n", signalID, fact.ID)
-										// Apply signal's MetricUpdates to target fragments
-										for _, path := range signal.CanonicalPaths {
-											frag, _ := e.fragmentsRepo.GetByCanonicalPath(ctx, path)
-											if frag != nil && len(signal.MetricUpdates) > 0 {
-												// Apply metric updates
-												for _, mu := range signal.MetricUpdates {
-													if frag.State == nil {
-														frag.State = make(map[string]models.MetricValue)
-													}
-													obs := time.Now()
-													if mu.ObservedAt != nil {
-														obs = *mu.ObservedAt
-													}
-													frag.State[mu.MetricName] = models.MetricValue{
-														Value:      mu.Value,
-														Unit:       mu.Unit,
-														Confidence: mu.Confidence,
-														ObservedAt: obs,
-														Provenance: models.Provenance{
-															Method:    "signal_synthesis",
-															SourceIDs: []string{signalID},
-														},
-													}
-												}
-												if err := e.fragmentsRepo.Update(ctx, frag); err != nil {
-													fmt.Printf("[ScoutEngine] Failed to persist signal-derived metric updates (best-effort): signalId=%s fragmentId=%s path=%s err=%v\n",
-														strings.TrimSpace(signalID), strings.TrimSpace(frag.ID), strings.TrimSpace(path), err)
-												}
-												// Trigger propagation for signal-derived metrics
-												if e.propagationTrigger != nil {
-													fid := frag.ID
-													runAsyncSafe("signal_derived_metric_propagation", func() {
-														propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-														defer cancel()
-														if err := e.propagationTrigger(propCtx, fid); err != nil {
-															fmt.Printf("[ScoutEngine] propagationTrigger failed for signal-derived metric updates: fragmentId=%s signalId=%s err=%v\n",
-																strings.TrimSpace(fid), strings.TrimSpace(signalID), err)
-														}
-													})
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-
-					// New Signal Pipeline (SignalDescriptor-based):
-					// Event → SignalDescriptor(s) → Seed Injection → Axis-based Propagation (best-effort).
-					//
-					// This runs alongside legacy synthesis for gradual rollout.
-					if e.aiExecutor != nil && e.fragmentsRepo != nil && e.edgesRepo != nil &&
-						e.signalPropagationEngine != nil && e.signalProfileLookup != nil {
-						signalExtractor := signals.NewSignalExtractor(nil, e.aiExecutor) // LLM-based extraction (rules optional)
-						applicability := signals.NewExternalApplicabilityEvaluator().
-							WithFragmentsRepo(e.fragmentsRepo).
-							WithEdgesRepo(e.edgesRepo)
-						if e.exposurePathsRepo != nil {
-							applicability = applicability.WithExposurePathsRepo(e.exposurePathsRepo)
-						}
-						seedInjector := signals.NewSeedInjector(e.fragmentsRepo, e.edgesRepo).
-							WithApplicabilityEvaluator(applicability)
-						pipeline := NewSignalPipeline(signalExtractor, seedInjector, e.signalPropagationEngine, e.signalProfileLookup, e.factsRepo).
-							WithEscalationLLM(e.aiExecutor)
-						for _, fact := range facts {
-							if fact == nil {
-								continue
-							}
-							if strings.TrimSpace(fact.Kind) != "event" {
-								continue
-							}
-							if err := pipeline.ProcessEvent(ctx, fact); err != nil {
-								fmt.Printf("[ScoutEngine] SignalPipeline failed (best-effort): jobId=%s target=%s factId=%s err=%v\n",
-									strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), strings.TrimSpace(fact.ID), err)
-							}
-						}
-					}
+					// NOTE: Signal creation (event → 12-axis signals → propagation) is a separate Signaling Pipeline.
+					// Scout only populates the graph (facts, fragments, edges). Signaling will be built separately.
 
 					// Dimension propagation: for applied facts, map sphere/location to dimension fragments and trigger waves.
 					if err := e.applyDimensionWavesFromAppliedFacts(ctx, existingFragment, facts, applyRes.AppliedFactIDs); err != nil {
@@ -4493,6 +4418,10 @@ SKIP_RESEARCH:
 							Overwrite: true,
 						})
 					}
+					// Geocoding fallback when coordinates still missing.
+					if e.geocodingClient != nil {
+						_, _ = henrich.EnrichCoordinatesFromGeocoding(ctx, e.geocodingClient, existingFragment)
+					}
 
 					if uerr := e.fragmentsRepo.Update(ctx, existingFragment); uerr != nil {
 						return fmt.Errorf("failed to update fragment after race-guard hit: %w", uerr)
@@ -4615,6 +4544,10 @@ SKIP_RESEARCH:
 				Overwrite: true,
 			})
 		}
+		// Geocoding fallback when coordinates still missing.
+		if e.geocodingClient != nil {
+			_, _ = henrich.EnrichCoordinatesFromGeocoding(ctx, e.geocodingClient, existingFragment)
+		}
 		if internalFirstGroundingEnabled() {
 			var resolutionStats *models.GroundingResolutionStats
 			if job.State != nil {
@@ -4677,13 +4610,13 @@ SKIP_RESEARCH:
 		fmt.Printf("[ScoutEngine] Intent decomposition failed for %s: %v\n", job.TargetCanonicalPath, err)
 	}
 
-	// Deferred scope: add to scope only when fragment created (max 5 per lens).
+	// Add to scope when Scout creates/updates fragment (max 5 per lens).
+	// Trigger: object creation by pipeline, not just deferredScopeAdd or cache hit.
+	// Path changes during pipeline (org upgrade, dedup, etc.) are handled by bestEffortRewriteLensScope.
 	if lensID != "" && e.lensesRepo != nil && e.fragmentsRepo != nil {
-		if job.State != nil && parseStateBool(job.State[models.StateKeyDeferredScopeAdd], false) {
-			effectiveCP := strings.TrimSpace(existingFragment.CanonicalPath)
-			if effectiveCP != "" {
-				e.bestEffortDeferredScopeAdd(ctx, lensID, effectiveCP)
-			}
+		effectiveCP := strings.TrimSpace(existingFragment.CanonicalPath)
+		if effectiveCP != "" {
+			e.bestEffortDeferredScopeAdd(ctx, lensID, effectiveCP)
 		}
 		e.bestEffortRemoveOrphanScopePaths(ctx, lensID)
 	}

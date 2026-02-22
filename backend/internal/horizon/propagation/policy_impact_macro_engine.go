@@ -116,9 +116,10 @@ func (e *MacroEconomicalEngine) Encode(ctx context.Context, scenario ScenarioInp
 	if scenarioID == "" {
 		scenarioID = e.EngineID()
 	}
+	sourceFactID := strings.TrimSpace(scenario.SourceFactID)
 	now := time.Now().UTC()
 	build := func(suffix, axis string, amp float64) *horizonmodels.SignalDescriptor {
-		return &horizonmodels.SignalDescriptor{
+		sig := &horizonmodels.SignalDescriptor{
 			ID:           scenarioID + ":" + suffix,
 			CreatedAt:    now,
 			Axis:         axis,
@@ -135,6 +136,10 @@ func (e *MacroEconomicalEngine) Encode(ctx context.Context, scenario ScenarioInp
 			Confidence: 0.70,
 			ObservedAt: now,
 		}
+		if sourceFactID != "" {
+			sig.FactID = sourceFactID
+		}
+		return sig
 	}
 
 	settlementAmp := amplitudeBase * clamp(0.75+passThrough*0.25, 0.55, 1.00)

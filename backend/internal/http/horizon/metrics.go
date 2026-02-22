@@ -153,6 +153,9 @@ func (h *HorizonHandlers) GetFragmentInterpretation(w http.ResponseWriter, r *ht
 	}
 
 	interpreter := hzninterp.NewInterpreter(aiExec, h.service.Fragments(), nil)
+	if h.factsRepo != nil {
+		interpreter = interpreter.WithEventFactsResolver(hzninterp.NewOntologyEventFactsResolver(h.factsRepo))
+	}
 	out, err := interpreter.Interpret(r.Context(), req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("interpretation failed: %v", err), http.StatusBadRequest)

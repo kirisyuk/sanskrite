@@ -149,6 +149,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 		adapter = e.resolveDomainAdapter(ctx, nil)
 	}
 	fragmentCache := make(map[string]*horizonmodels.HorizonFragment, len(seedFragmentIDs)*2)
+	neighborsCache := make(map[string][]neighborInfo, len(seedFragmentIDs)*2)
 
 	// BFS propagation
 	for len(queue) > 0 {
@@ -199,21 +200,25 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 			continue
 		}
 
-		// Get fragment
-		frag, err := e.fragmentsRepo.Get(ctx, item.fragmentID)
-		if err != nil {
-			traceCollector.add(SignalPropagationTraceEvent{
-				SignalID:     signal.ID,
-				ToFragment:   item.fragmentID,
-				AxisOut:      item.axis,
-				AmplitudeOut: item.amplitude,
-				Hops:         item.hops,
-				Outcome:      "dropped",
-				Reason:       "fragment_load_failed",
-			})
-			continue
+		// Get fragment (cache-first)
+		frag := fragmentCache[item.fragmentID]
+		if frag == nil {
+			loadedFrag, err := e.fragmentsRepo.Get(ctx, item.fragmentID)
+			if err != nil {
+				traceCollector.add(SignalPropagationTraceEvent{
+					SignalID:     signal.ID,
+					ToFragment:   item.fragmentID,
+					AxisOut:      item.axis,
+					AmplitudeOut: item.amplitude,
+					Hops:         item.hops,
+					Outcome:      "dropped",
+					Reason:       "fragment_load_failed",
+				})
+				continue
+			}
+			frag = loadedFrag
+			fragmentCache[item.fragmentID] = frag
 		}
-		fragmentCache[item.fragmentID] = frag
 
 		// Fill canonical path for the last hop if missing
 		if len(item.pathCanon) == len(item.pathIDs) && len(item.pathCanon) > 0 && strings.TrimSpace(item.pathCanon[len(item.pathCanon)-1]) == "" {
@@ -225,7 +230,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 		e.updateNodeMetric(frag, metricPath, item.amplitude, signal, item.pathCanon, item.hops)
 
 		// Save fragment
-		if err := e.fragmentsRepo.Update(ctx, frag); err == nil {
+		if err := e.fragmentsRepo.UpdateFast(ctx, frag); err == nil {
 			affectedFragments[item.fragmentID] = true
 			propagationPaths = append(propagationPaths, append([]string{}, item.pathCanon...))
 			e.fireFragmentChangedHook(ctx, item.fragmentID)
@@ -254,18 +259,23 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 		}
 
 		// Find neighbors via strong edges
-		neighbors, err := e.getNeighborsViaStrongEdges(ctx, frag, profile)
-		if err != nil {
-			traceCollector.add(SignalPropagationTraceEvent{
-				SignalID:     signal.ID,
-				ToFragment:   item.fragmentID,
-				AxisOut:      item.axis,
-				AmplitudeOut: item.amplitude,
-				Hops:         item.hops,
-				Outcome:      "dropped",
-				Reason:       "neighbor_lookup_failed",
-			})
-			continue
+		neighbors, ok := neighborsCache[item.fragmentID]
+		if !ok {
+			loadedNeighbors, err := e.getNeighborsViaStrongEdges(ctx, frag, profile)
+			if err != nil {
+				traceCollector.add(SignalPropagationTraceEvent{
+					SignalID:     signal.ID,
+					ToFragment:   item.fragmentID,
+					AxisOut:      item.axis,
+					AmplitudeOut: item.amplitude,
+					Hops:         item.hops,
+					Outcome:      "dropped",
+					Reason:       "neighbor_lookup_failed",
+				})
+				continue
+			}
+			neighbors = loadedNeighbors
+			neighborsCache[item.fragmentID] = loadedNeighbors
 		}
 
 		for _, neighbor := range neighbors {

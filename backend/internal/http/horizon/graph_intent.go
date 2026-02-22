@@ -771,10 +771,11 @@ type graphIntentApplyExecutor struct {
 	lens    *horizonmodels.Lens
 	dryRun  bool
 
-	fragmentsRepo *repo.HorizonFragmentsRepository
-	edgesRepo     *repo.DependencyEdgesRepository
-	lensItemsRepo *repo.LensItemsRepository
-	lensesRepo    *repo.LensesRepository
+	fragmentsRepo  *repo.HorizonFragmentsRepository
+	edgesRepo      *repo.DependencyEdgesRepository
+	lensItemsRepo  *repo.LensItemsRepository
+	lensesRepo     *repo.LensesRepository
+	mergeFragmentsRepo *repo.FragmentsMergeRepository
 
 	knownFragmentRefs map[string]string
 	tempFragmentRefs  map[string]string
@@ -813,6 +814,7 @@ func (e *graphIntentApplyExecutor) init() error {
 		e.lensItemsRepo = e.handler.lensItemsHandler.lensItemsRepo
 		e.lensesRepo = e.handler.lensItemsHandler.lensesRepo
 	}
+	e.mergeFragmentsRepo = e.handler.mergeFragmentsRepo
 	e.seedKnownFragmentsFromLensScope()
 	e.seedKnownFragmentsFromLensItems()
 	return nil
@@ -1407,6 +1409,34 @@ func (e *graphIntentApplyExecutor) applyMerge(m horizonmodels.GraphIntentMergeBl
 	}
 
 	for _, dupID := range duplicateIDs {
+		if e.mergeFragmentsRepo != nil {
+			onEdge := func(edge *horizonmodels.DependencyEdge) {
+				if edge != nil {
+					e.syncEdgeLensItem(edge)
+				}
+			}
+			res, err := e.mergeFragmentsRepo.MergeFragmentWithRequest(e.ctx, repo.MergeRequest{
+				PrimaryFragmentID:   primaryID,
+				DuplicateFragmentID: dupID,
+				TenantID:            tenantID,
+				Source:              repo.MergeAuditSourceGraphIntent,
+				LensID:              strings.TrimSpace(e.lens.ID),
+				OnEdgeReassigned:    onEdge,
+			})
+			if err != nil {
+				e.unresolved = append(e.unresolved, horizonmodels.GraphIntentUnresolvedItem{
+					TempID:          dupID,
+					Reason:          fmt.Sprintf("merge failed: %v", err),
+					SuggestedAction: "retry",
+				})
+				continue
+			}
+			e.updatedEdgeCount += res.EdgesReassigned
+			e.deletedEdgeCount += res.EdgesDeleted
+			e.deletedNodeCount++
+			continue
+		}
+		// Fallback when merge repo not wired (legacy path)
 		dup, err := e.fragmentsRepo.Get(e.ctx, dupID)
 		if err != nil || dup == nil {
 			continue
@@ -1430,8 +1460,10 @@ func (e *graphIntentApplyExecutor) applyMerge(m horizonmodels.GraphIntentMergeBl
 		}
 		e.deletedNodeCount++
 	}
-	dedupDeleted := e.bestEffortDedupeEdgesForNode(tenantID, primaryID, 2000)
-	e.deletedEdgeCount += dedupDeleted
+	if e.mergeFragmentsRepo == nil {
+		dedupDeleted := e.bestEffortDedupeEdgesForNode(tenantID, primaryID, 2000)
+		e.deletedEdgeCount += dedupDeleted
+	}
 }
 
 func (e *graphIntentApplyExecutor) reassignEdgesWithDedup(tenantID, fromID, toID string) (reassigned, deleted int) {

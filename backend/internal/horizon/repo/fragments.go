@@ -874,8 +874,31 @@ func (r *HorizonFragmentsRepository) FindByNormalizedLegalName(ctx context.Conte
 	return matches, nil
 }
 
-// Update обновляет HorizonFragment и сохраняет версию
+// UpdateOptions configures optional behavior for fragment updates.
+type UpdateOptions struct {
+	// SkipVersionSnapshot disables pre-update version snapshot creation.
+	// Useful for high-frequency metric-only updates (e.g. propagation).
+	SkipVersionSnapshot bool
+	// SkipIndexExport disables GCS/Vertex export for this update.
+	// Useful for internal state updates that do not affect search indexing.
+	SkipIndexExport bool
+}
+
+// Update обновляет HorizonFragment и сохраняет версию.
 func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *models.HorizonFragment) error {
+	return r.updateWithOptions(ctx, fragment, UpdateOptions{})
+}
+
+// UpdateFast applies a lightweight fragment update optimized for high-frequency state changes.
+// It preserves validation and hooks but skips version snapshot + search export.
+func (r *HorizonFragmentsRepository) UpdateFast(ctx context.Context, fragment *models.HorizonFragment) error {
+	return r.updateWithOptions(ctx, fragment, UpdateOptions{
+		SkipVersionSnapshot: true,
+		SkipIndexExport:     true,
+	})
+}
+
+func (r *HorizonFragmentsRepository) updateWithOptions(ctx context.Context, fragment *models.HorizonFragment, opts UpdateOptions) error {
 	if fragment == nil || fragment.ID == "" {
 		return ErrInvalidDocument
 	}
@@ -891,43 +914,50 @@ func (r *HorizonFragmentsRepository) Update(ctx context.Context, fragment *model
 		return fmt.Errorf("validation error: %w", err)
 	}
 
-	// Получаем текущую версию фрагмента для сохранения
-	currentFragment, err := r.Get(ctx, fragment.ID)
-	if err != nil {
-		return fmt.Errorf("failed to get current fragment: %w", err)
-	}
-
 	now := time.Now().UTC()
 	fragment.UpdatedAt = now
+	if fragment.Version < 0 {
+		fragment.Version = 0
+	}
 	fragment.Version++
 	fragment.Metadata.LastUpdatedAt = now
 
-	// Сохраняем версию перед обновлением
-	version := &HorizonFragmentVersion{
-		FragmentID:    currentFragment.ID,
-		TenantID:      currentFragment.TenantID,
-		State:         currentFragment.State,
-		SourceFrameID: currentFragment.Metadata.SourceFrameID,
-		Timestamp:     now,
-	}
-	if _, err := r.versionsRepo.Create(ctx, version); err != nil {
-		// Логируем ошибку, но продолжаем обновление фрагмента
-		// Версионирование не должно блокировать обновление
-		log.Printf("[HorizonFragments] Failed to create version for fragment %s: %v", currentFragment.ID, err)
+	if !opts.SkipVersionSnapshot {
+		// Получаем текущую версию фрагмента для сохранения
+		currentFragment, err := r.Get(ctx, fragment.ID)
+		if err != nil {
+			return fmt.Errorf("failed to get current fragment: %w", err)
+		}
+
+		// Сохраняем версию перед обновлением
+		version := &HorizonFragmentVersion{
+			FragmentID:    currentFragment.ID,
+			TenantID:      currentFragment.TenantID,
+			State:         currentFragment.State,
+			SourceFrameID: currentFragment.Metadata.SourceFrameID,
+			Timestamp:     now,
+		}
+		if _, err := r.versionsRepo.Create(ctx, version); err != nil {
+			// Логируем ошибку, но продолжаем обновление фрагмента
+			// Версионирование не должно блокировать обновление
+			log.Printf("[HorizonFragments] Failed to create version for fragment %s: %v", currentFragment.ID, err)
+		}
 	}
 
 	// Rebuild index paths to reflect any changes
 	fragment.IndexPaths = models.BuildIndexPaths(fragment, nil)
 
-	_, err = r.col.Doc(fragment.ID).Set(ctx, fragment)
+	_, err := r.col.Doc(fragment.ID).Set(ctx, fragment)
 	if err != nil {
 		return err
 	}
 	tracking.RecordFragmentUpdated(ctx, fragment.ID)
 
 	// Экспорт в GCS для поиска (с синхронизацией)
-	if err := r.uploadToGCS(ctx, fragment, false); err != nil {
-		log.Printf("WARNING: failed to export updated fragment to GCS: %v", err)
+	if !opts.SkipIndexExport {
+		if err := r.uploadToGCS(ctx, fragment, false); err != nil {
+			log.Printf("WARNING: failed to export updated fragment to GCS: %v", err)
+		}
 	}
 
 	// Best-effort onUpsert hook (async, panic-safe)

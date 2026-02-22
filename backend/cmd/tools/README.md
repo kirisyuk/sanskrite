@@ -250,6 +250,42 @@ go run ./cmd/tools/horizon_merge_org_aliases \
 
 ## Нормализация данных
 
+### `horizon_backfill_coordinates`
+
+**Назначение:** Заполняет координаты для geo-relevant фрагментов (org, facility, community, program, geo_region).
+
+**Источники:**
+- **GeoNames** — для `/loc/*` (город по canonical path)
+- **Google Geocoding** — для org/facility/community/program по адресу (identifiers, homeLocation, label+country)
+
+**Использование:**
+```bash
+# Dry-run (по умолчанию)
+go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon --limit=500
+
+# Применить изменения
+go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon --apply --limit=1000
+
+# Только org/facility (без /loc)
+go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon --path-prefix=/org --skip-geonames
+```
+
+**Флаги:**
+- `--project` (required) - GCP project ID
+- `--apply` - применить изменения
+- `--limit` - макс. фрагментов для обработки
+- `--skip-geonames` - не использовать GeoNames
+- `--skip-geocoding` - не использовать Google Geocoding
+- `--path-prefix` - только canonicalPath с этим префиксом
+- `--types` - фильтр по типам (ORG,FACILITY,COMMUNITY,PROGRAM,GEO_REGION)
+
+**Требования:**
+
+- `GEONAMES_USERNAME` для GeoNames
+- `GOOGLE_MAPS_API_KEY` для Google Geocoding
+
+---
+
 ### `horizon_normalize_loc_geonames`
 
 **Назначение:** Нормализует географические пути фрагментов через GeoNames API.

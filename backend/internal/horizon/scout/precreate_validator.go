@@ -36,6 +36,7 @@ type PreCreateValidator struct {
 	telemetryRepo    *repo.HorizonTelemetryRepository
 	wikidataClient   coreontology.WikidataClientInterface
 	geonamesClient   coreontology.GeoNamesClientInterface
+	geocodingClient  coreontology.GeocodingClientInterface
 }
 
 // NewPreCreateValidator creates a new pre-create validator.
@@ -76,6 +77,12 @@ func (v *PreCreateValidator) WithWikidataClient(client coreontology.WikidataClie
 // NOTE: wiring only; actual geo canonicalization rules are implemented elsewhere.
 func (v *PreCreateValidator) WithGeoNamesClient(client coreontology.GeoNamesClientInterface) *PreCreateValidator {
 	v.geonamesClient = client
+	return v
+}
+
+// WithGeocodingClient sets the geocoding client for address-to-coordinates resolution (org/facility/gov).
+func (v *PreCreateValidator) WithGeocodingClient(client coreontology.GeocodingClientInterface) *PreCreateValidator {
+	v.geocodingClient = client
 	return v
 }
 
@@ -388,6 +395,15 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		}); err != nil {
 			// Best-effort: do not block creation.
 			result.Warnings = append(result.Warnings, fmt.Sprintf("wikidata enrichment skipped: %v", err))
+		}
+	}
+
+	// Policy 4.6: Geocoding fallback for org/facility/gov when coordinates still missing
+	if v.geocodingClient != nil {
+		if enriched, err := henrich.EnrichCoordinatesFromGeocoding(ctx, v.geocodingClient, fragment); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("geocoding skipped: %v", err))
+		} else if enriched {
+			result.Warnings = append(result.Warnings, "coordinates resolved via geocoding")
 		}
 	}
 
