@@ -1630,6 +1630,36 @@ func contractTypesFromLensScope(scope []string) []string {
 	return out
 }
 
+func writeJobDomainModesState(job *models.ScoutingJob, modes []string) {
+	if job == nil {
+		return
+	}
+	modes = taxonomy.NormalizeDomainModes(modes)
+	if len(modes) == 1 {
+		job.State["domainMode"] = modes[0]
+		delete(job.State, "domainModes")
+		return
+	}
+	job.State["domainModes"] = modes
+	delete(job.State, "domainMode")
+}
+
+func ensureNativeGovernanceModeForPath(modes []string, canonicalPath string) []string {
+	modes = taxonomy.NormalizeDomainModes(modes)
+	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
+	if !strings.HasPrefix(cp, "/org/") && !strings.HasPrefix(cp, "/gov/") {
+		return modes
+	}
+	if taxonomy.HasDomainMode(modes, taxonomy.DomainModeGovernance) {
+		return modes
+	}
+	if len(modes) == 0 {
+		modes = []string{taxonomy.DomainModeGeneral}
+	}
+	modes = append(modes, taxonomy.DomainModeGovernance)
+	return taxonomy.NormalizeDomainModes(modes)
+}
+
 // ensureJobDomainMode computes domain mode(s) from path, domains in job/lens state, and specialties fallback,
 // then writes job.State["domainMode"] or job.State["domainModes"].
 // Call once at the start of job execution, after effectiveCanonicalPath is known.
@@ -1641,22 +1671,28 @@ func (e *ScoutEngine) ensureJobDomainMode(ctx context.Context, job *models.Scout
 	if job.State == nil {
 		job.State = make(map[string]interface{})
 	}
-	// Prefer domainModes from lens (set at job creation).
+	path := strings.TrimSpace(effectiveCanonicalPath)
+	if path == "" {
+		path = strings.TrimSpace(job.TargetCanonicalPath)
+	}
+
+	// Prefer pre-seeded domain modes from lens/job payload, but still enforce native governance for /org|/gov.
 	if v, ok := job.State["domainModes"]; ok && v != nil {
 		modes := parseStateStringSlice(v)
-		modes = taxonomy.NormalizeDomainModes(modes)
+		modes = ensureNativeGovernanceModeForPath(modes, path)
 		if len(modes) > 0 {
+			writeJobDomainModesState(job, modes)
 			return
 		}
 	}
 	if v, ok := job.State["domainMode"]; ok && v != nil {
-		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-			return
+		if s := parseStateString(v); s != "" {
+			modes := ensureNativeGovernanceModeForPath([]string{s}, path)
+			if len(modes) > 0 {
+				writeJobDomainModesState(job, modes)
+				return
+			}
 		}
-	}
-	path := strings.TrimSpace(effectiveCanonicalPath)
-	if path == "" {
-		path = strings.TrimSpace(job.TargetCanonicalPath)
 	}
 
 	var contractTypes []string
@@ -1731,13 +1767,8 @@ func (e *ScoutEngine) ensureJobDomainMode(ctx context.Context, job *models.Scout
 	if len(modes) == 0 {
 		modes = []string{taxonomy.DomainModeGeneral}
 	}
-	if len(modes) == 1 {
-		job.State["domainMode"] = modes[0]
-		delete(job.State, "domainModes")
-	} else {
-		job.State["domainModes"] = modes
-		delete(job.State, "domainMode")
-	}
+	modes = ensureNativeGovernanceModeForPath(modes, path)
+	writeJobDomainModesState(job, modes)
 }
 
 func getStringField(m map[string]interface{}, keys ...string) string {
@@ -5798,6 +5829,72 @@ func (e *ScoutEngine) processSupplyChains(
 				}
 			}
 			if sourceID == "" || targetID == "" {
+				// Last resort: precreate minimal fragments for /program, /market, /community (and other supported paths)
+				// so supply chain edges are not lost when endpoints were not in result.Fragments
+				ensureFragment := func(path string) string {
+					path = strings.TrimSpace(path)
+					if path == "" {
+						return ""
+					}
+					if id := pathToID[path]; id != "" {
+						return id
+					}
+					ft := InferFragmentTypeFromCanonicalPath(path)
+					if ft == "" {
+						return ""
+					}
+					// Only precreate for supply-chain-relevant types (program, market, community often missing from parser output)
+					switch ft {
+					case models.FragmentTypeProgram, models.FragmentTypeMarket, models.FragmentTypeCommunity,
+						models.FragmentTypeOrganization, models.FragmentTypeFacility, models.FragmentTypeProduct,
+						models.FragmentTypeGeoRegion, models.FragmentTypeDeposit:
+						// ok
+					default:
+						return ""
+					}
+					// derive display name from last path segment
+					pathParts := strings.Split(strings.Trim(path, "/"), "/")
+					label := ""
+					if len(pathParts) > 0 {
+						label = strings.ReplaceAll(strings.TrimSpace(pathParts[len(pathParts)-1]), "-", " ")
+					}
+					if label == "" {
+						label = string(ft)
+					}
+					frag := &models.HorizonFragment{
+						TenantID:      "global",
+						CanonicalPath: path,
+						Type:          ft,
+						Labels:        map[string]string{"en": label},
+						Identifiers:   map[string]string{},
+						State:         make(map[string]models.MetricValue),
+						Governance:    models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
+						Metadata:      models.FragmentMetadata{CreatedAt: time.Now().UTC(), LastUpdatedAt: time.Now().UTC(), EpistemicStatus: models.EpistemicStatusLowConfidence},
+						Provenance:    models.Provenance{Method: "scout_supply_chain"},
+					}
+					if job != nil {
+						frag.Provenance.SourceIDs = []string{job.ID}
+					}
+					frag.Status = "active"
+					id, err := e.fragmentsRepo.Create(ctx, frag)
+					if err != nil {
+						return ""
+					}
+					pathToID[path] = id
+					createdFrags++
+					if createdFrags <= previewLimit {
+						e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainFragmentPrecreate] OK path=%s id=%s type=%s", path, id, ft))
+					}
+					return id
+				}
+				if sourceID == "" {
+					sourceID = ensureFragment(srcPath)
+				}
+				if targetID == "" {
+					targetID = ensureFragment(dstPath)
+				}
+			}
+			if sourceID == "" || targetID == "" {
 				msg := fmt.Sprintf("[SupplyChainEdge] SKIP missingFragmentId source=%s target=%s type=%s",
 					srcPath, dstPath, chainEdge.RelationType)
 				fmt.Printf("%s\n", msg)
@@ -5954,6 +6051,15 @@ func (e *ScoutEngine) processSupplyChains(
 				})
 				e.logLine(ctx, job, "warn", msg)
 			}
+		}
+
+		// Policy: block edge creation when validation policy returned quarantine (business-ilogical edges must not enter graph)
+		if policyStatus == models.PolicyStatusQuarantined {
+			msg := fmt.Sprintf("[SupplyChainEdge] SKIP quarantine source=%s target=%s type=%s reason=%s",
+				srcPath, dstPath, edgeType, policyReason)
+			fmt.Printf("%s\n", msg)
+			e.logLine(ctx, job, "warn", msg)
+			continue
 		}
 
 		// Check for existing edge

@@ -1434,28 +1434,12 @@ func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) erro
 				log.Printf("[HorizonFragments] Deleted fragment %s from GCS: %s", id, objectPath)
 			}
 
-			// Trigger Vertex AI Search sync for deletion
-			// In INCREMENTAL mode, deletion from GCS will eventually remove from index
-			// But we trigger sync explicitly to speed it up
-			gcsURI := fmt.Sprintf("gs://%s/%s", r.bucket, objectPath)
-			if r.vertexSyncBatcher != nil {
-				r.vertexSyncBatcher.Add(gcsURI)
-			} else if r.vertexSearchSync != nil {
-				go func(uri string) {
-					defer func() {
-						if rec := recover(); rec != nil {
-							log.Printf("[HorizonFragments] ERROR: vertexSearchSync(delete) panic recovered for uri=%s panic=%v stack=%s", uri, rec, string(debug.Stack()))
-						}
-					}()
-					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					if op, err := r.vertexSearchSync(syncCtx, uri); err == nil {
-						log.Printf("[HorizonFragments] Vertex AI Search sync triggered for deletion: %s", op)
-					} else {
-						log.Printf("[HorizonFragments] Vertex AI Search sync failed for deletion %s: %v", uri, err)
-					}
-				}(gcsURI)
-			}
+			// NOTE: Do NOT add the deleted file's URI to vertexSyncBatcher.
+			// ImportDocuments expects files to exist in GCS; passing a deleted file URI causes
+			// INVALID_RESOURCE_ID ("Given gcs input path matched no files").
+			// Discovery Engine INCREMENTAL import only adds/updates; it does not remove docs
+			// when files disappear. To purge deleted docs, use PurgeDocuments API or run a
+			// FULL reconciliation periodically (e.g. horizon_merge_discovered).
 		}
 	}
 

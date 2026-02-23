@@ -79,6 +79,21 @@ func TestCanonicalPathParts_MarketPreferred(t *testing.T) {
 	}
 }
 
+func TestCanonicalPathParts_MarketExtended(t *testing.T) {
+	// Tolerant parsing for deeper paths (e.g. /market/kz/investment/all/logistics)
+	p, err := ParseCanonicalPathParts("/market/kz/investment/all/logistics")
+	if err != nil {
+		t.Fatalf("ParseCanonicalPathParts(market extended) error: %v", err)
+	}
+	if p == nil || p.Namespace != "market" || p.Market == nil {
+		t.Fatalf("unexpected parts: %#v", p)
+	}
+	if p.Market.Geo != "kz" || p.Market.Domain != "investment" || p.Market.Vertical != "all/logistics" {
+		t.Fatalf("Market parts: geo=%q domain=%q vertical=%q, want kz investment all/logistics",
+			p.Market.Geo, p.Market.Domain, p.Market.Vertical)
+	}
+}
+
 func TestCanonicalPathParts_ProductTail(t *testing.T) {
 	// Example from prompts: product with model/SKU tail segment(s)
 	p, err := ParseCanonicalPathParts("/product/finished/mechanical/manufacturing/excavator/cat-390f")

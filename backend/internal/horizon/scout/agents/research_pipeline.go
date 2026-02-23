@@ -23,7 +23,7 @@ type ResearchPipelineRunner struct {
 func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrategyInput, domainModes []string) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
 	strategies := p.strategiesForModes(domainModes)
 	if len(strategies) == 0 {
-		// Fallback: no strategies (e.g. general with no composable path) — caller should use EnrichFragmentWithGrounding
+		// Defensive no-op: strategy routing should always return at least GeneralResearchStrategy.
 		return nil, nil, nil, nil, nil
 	}
 
@@ -57,10 +57,10 @@ func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrat
 }
 
 // strategiesForModes returns the list of strategies to run for the given domain modes.
-// For general or empty modes returns nil (caller should use monolithic EnrichFragmentWithGrounding).
+// For general or empty modes returns GeneralResearchStrategy.
 func (p *ResearchPipelineRunner) strategiesForModes(modes []string) []ResearchStrategy {
 	if len(modes) == 0 {
-		return nil
+		return []ResearchStrategy{&GeneralResearchStrategy{agent: p.agent}}
 	}
 	seen := make(map[string]bool)
 	var list []ResearchStrategy
@@ -94,7 +94,7 @@ func (p *ResearchPipelineRunner) strategiesForModes(modes []string) []ResearchSt
 		}
 	}
 	if !hasNonGeneral {
-		return nil
+		return []ResearchStrategy{&GeneralResearchStrategy{agent: p.agent}}
 	}
 	return list
 }

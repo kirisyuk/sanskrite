@@ -279,6 +279,7 @@ func main() {
 	var riskPipeline *horizonrisk.Pipeline
 	var riskJobsRepo *horizonrepo.RiskJobsRepository
 	var horizonTelemetryRepo *horizonrepo.HorizonTelemetryRepository
+	var canvasIngester *discovery.CanvasIngester
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger).WithDocuments(sourcesDocsRepo)
@@ -1270,6 +1271,10 @@ func main() {
 				// - VERTEX_SYNC_FLUSH_INTERVAL_SEC (int)
 				if v := strings.TrimSpace(getEnv("VERTEX_SYNC_MAX_BATCH_SIZE", "")); v != "" {
 					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						// Discovery Engine hard limit: max 100 URIs per ImportDocuments request (dataSchema=document)
+						if n > 100 {
+							n = 100
+						}
 						batchConfig.MaxBatchSize = n
 					}
 				}
@@ -2059,6 +2064,19 @@ func main() {
 					ontologyFactsRepo,
 				).WithEscalationLLM(aiExec)
 				horizonHandlers = horizonHandlers.WithSignalPipeline(signalPipeline)
+
+				// Canvas ingester: system sources → batch LLM extraction → ontology facts → 12-axis signals
+				canvasIngester = discovery.NewCanvasIngester(discovery.CanvasIngesterConfig{
+					Sources:        s.dsrcs,
+					ProvidersReg:   reg,
+					Exec:           exec,
+					OntologyExt:    ontologyExtractor,
+					FactsRepo:      ontologyFactsRepo,
+					SignalPipeline: signalPipeline,
+					FetchHM:        orchestrator.FetchHorizonMonitorDocuments,
+					Logger:         logger,
+				})
+				logger.Printf("Canvas ingester initialized")
 			}
 
 			logger.Printf("Horizon system initialized")
@@ -2372,6 +2390,72 @@ func main() {
 		logger.Printf("Profile refresh completed: fragmentId=%s profileId=%s created=%t", fragmentID, result.Profile.ID, result.Created)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+
+	// Cloud Tasks -> Canvas ingest (system sources → batch LLM → ontology facts → 12-axis signals).
+	// Secured via OIDC token issued for the configured service account.
+	mux.HandleFunc("/api/v1/internal/tasks/canvas/ingest", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if canvasIngester == nil {
+			http.Error(w, "canvas ingester not initialized", http.StatusServiceUnavailable)
+			return
+		}
+
+		authz := strings.TrimSpace(r.Header.Get("Authorization"))
+		const bearer = "Bearer "
+		if !strings.HasPrefix(authz, bearer) || len(authz) <= len(bearer) {
+			http.Error(w, "missing Authorization bearer token", http.StatusUnauthorized)
+			return
+		}
+		rawTok := strings.TrimSpace(authz[len(bearer):])
+		aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+		if aud == "" {
+			aud = "https://" + r.Host
+		}
+		payload, err := idtoken.Validate(r.Context(), rawTok, aud)
+		if err != nil {
+			http.Error(w, "invalid cloud tasks token", http.StatusUnauthorized)
+			return
+		}
+		expectedSA := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+		if expectedSA != "" {
+			if email, ok := payload.Claims["email"].(string); !ok || !strings.EqualFold(strings.TrimSpace(email), expectedSA) {
+				http.Error(w, "unexpected token identity", http.StatusForbidden)
+				return
+			}
+		}
+
+		var body struct {
+			TenantID string `json:"tenantId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		tenantID := strings.TrimSpace(body.TenantID)
+		if tenantID == "" {
+			tenantID = "global"
+		}
+
+		execCtx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+		defer cancel()
+
+		docsFetched, eventsCreated, signalsProcessed, err := canvasIngester.Ingest(execCtx, tenantID)
+		if err != nil {
+			logger.Printf("ERROR: Canvas ingest failed: tenant=%s error=%v", tenantID, err)
+			http.Error(w, fmt.Sprintf("canvas ingest failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":            "ok",
+			"tenantId":          tenantID,
+			"docsFetched":       docsFetched,
+			"eventsCreated":     eventsCreated,
+			"signalsProcessed":  signalsProcessed,
+		})
 	})
 
 	// WS hub and Pub/Sub subscriber (disabled when WS is brokered externally)

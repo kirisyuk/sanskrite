@@ -115,6 +115,54 @@ func (e *OntologyExtractor) ExtractFromDocumentContext(
 	return e.ExtractFromDocument(ctx, tenantID, doc, extractedData)
 }
 
+// ExtractFromBatchExtraction creates ontology facts (events) from a batch extraction result.
+// Used by canvas pipeline: merged extraction from multiple documents with SourceIDs per event.
+// Uses a synthetic document for entity/event creation; ext.SourceIDs is used for fact provenance.
+// Returns created OntologyFact IDs for downstream SignalPipeline.
+func (e *OntologyExtractor) ExtractFromBatchExtraction(
+	ctx context.Context,
+	tenantID string,
+	extractedData *DocumentExtraction,
+	batchID string,
+) ([]string, error) {
+	if extractedData == nil || len(extractedData.Events) == 0 {
+		return nil, nil
+	}
+	now := time.Now().UTC()
+	syntheticDoc := &models.Document{
+		ID:           batchID,
+		SourceID:     "",
+		URL:          "",
+		Title:        "canvas_batch",
+		DocumentType: "article",
+		FullText:     "",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	sourceID := ""
+	if len(extractedData.Events) > 0 && len(extractedData.Events[0].SourceIDs) > 0 {
+		sourceID = extractedData.Events[0].SourceIDs[0]
+	}
+	entityIDs, err := e.extractEntities(ctx, tenantID, syntheticDoc, extractedData.Entities, sourceID, now)
+	if err != nil {
+		if e.logger != nil {
+			e.logger.Printf("[OntologyExtractor] Batch extractEntities failed: %v", err)
+		}
+	}
+	var factIDs []string
+	_, err = e.extractEvents(ctx, tenantID, syntheticDoc, extractedData.Events, sourceID, entityIDs, now, &factIDs)
+	if err != nil {
+		if e.logger != nil {
+			e.logger.Printf("[OntologyExtractor] Batch extractEvents failed: %v", err)
+		}
+		return factIDs, err
+	}
+	if e.logger != nil {
+		e.logger.Printf("[OntologyExtractor] Batch extracted %d entities, %d events, %d facts", len(entityIDs), len(extractedData.Events), len(factIDs))
+	}
+	return factIDs, nil
+}
+
 // ExtractFromDocument извлекает онтологические объекты из Document
 // Заменяет старую логику сохранения в Document.Attrs
 func (e *OntologyExtractor) ExtractFromDocument(
@@ -144,7 +192,7 @@ func (e *OntologyExtractor) ExtractFromDocument(
 	}
 
 	// Извлекаем Events
-	eventIDs, err := e.extractEvents(ctx, tenantID, document, extractedData.Events, sourceID, entityIDs, now)
+	eventIDs, err := e.extractEvents(ctx, tenantID, document, extractedData.Events, sourceID, entityIDs, now, nil)
 	if err != nil {
 		if e.logger != nil {
 			e.logger.Printf("[OntologyExtractor] Failed to extract events: %v", err)
@@ -282,6 +330,9 @@ type ExtractedEvent struct {
 	Participants []ExtractedEventParticipant `json:"participants,omitempty"` // участники с ролями
 	SpherePaths  []string                    `json:"spherePaths,omitempty"`
 	EventType    string                      `json:"eventType,omitempty"`
+	// SourceIDs from batch extraction: DataSource IDs that contributed to this event.
+	// When set, used for OntologyFact.SourceIDs instead of document.SourceID.
+	SourceIDs []string `json:"sourceIds,omitempty"`
 }
 
 // ExtractedClaim извлеченное утверждение
@@ -617,7 +668,8 @@ func (e *OntologyExtractor) extractEntities(
 	return entityIDs, nil
 }
 
-// extractEvents создает Event объекты из извлеченных данных
+// extractEvents создает Event объекты из извлеченных данных.
+// If factIDsOut is non-nil, appends created OntologyFact IDs to it (for batch pipeline).
 func (e *OntologyExtractor) extractEvents(
 	ctx context.Context,
 	tenantID string,
@@ -626,14 +678,20 @@ func (e *OntologyExtractor) extractEvents(
 	sourceID string,
 	entityIDs map[string]entityRef,
 	now time.Time,
+	factIDsOut *[]string,
 ) ([]string, error) {
 	var eventIDs []string
 
 	for _, ext := range extractedEvents {
 		// Prefer core DataSource ID for provenance (this is what Scout/Watchdog can consume).
+		// For batch extraction, ext.SourceIDs takes precedence.
 		dataSourceID := strings.TrimSpace(document.SourceID)
 		if dataSourceID == "" {
 			dataSourceID = strings.TrimSpace(sourceID)
+		}
+		eventSourceIDs := []string{dataSourceID}
+		if len(ext.SourceIDs) > 0 {
+			eventSourceIDs = ext.SourceIDs
 		}
 
 		if ext.Title == "" || ext.DateISO == "" {
@@ -696,7 +754,7 @@ func (e *OntologyExtractor) extractEvents(
 			}(),
 			Confidence: baseConfidence,
 			Provenance: models.Provenance{
-				SourceIDs: []string{dataSourceID},
+				SourceIDs: eventSourceIDs,
 				SourceRefs: []models.SourceRef{
 					{
 						SourceID:   document.ID,
@@ -785,6 +843,10 @@ func (e *OntologyExtractor) extractEvents(
 			if document.OriginPublishedAt != nil && !document.OriginPublishedAt.IsZero() {
 				observedAt = document.OriginPublishedAt
 			}
+			sourceIDs := []string{dataSourceID}
+			if len(ext.SourceIDs) > 0 {
+				sourceIDs = ext.SourceIDs
+			}
 			f := &models.OntologyFact{
 				BaseOntologyFields: models.BaseOntologyFields{
 					TenantID:  tenantID,
@@ -803,7 +865,7 @@ func (e *OntologyExtractor) extractEvents(
 				OccurredAt: event.OccurredAt,
 				ObservedAt: observedAt,
 				EventID:    &eventID,
-				SourceIDs:  []string{dataSourceID},
+				SourceIDs:  sourceIDs,
 				SourceRefs: []models.SourceRef{{SourceID: document.ID, SourceType: "document"}},
 				Confidence: event.Confidence,
 			}
@@ -854,7 +916,10 @@ func (e *OntologyExtractor) extractEvents(
 			}
 			f.VectorText = f.GenerateVectorText()
 
-			_, _ = e.factsRepo.Create(ctx, f) // best effort
+			factID, createErr := e.factsRepo.Create(ctx, f)
+			if createErr == nil && factID != "" && factIDsOut != nil {
+				*factIDsOut = append(*factIDsOut, factID)
+			}
 		}
 
 		// Обнаружение причинно-следственных связей
@@ -1205,7 +1270,7 @@ func (e *OntologyExtractor) extractEventsFromChat(
 		ID:       interaction.ID,
 		TenantID: tenantID,
 		FullText: interaction.Content,
-	}, extractedEvents, sourceID, entityIDs, now)
+	}, extractedEvents, sourceID, entityIDs, now, nil)
 }
 
 // extractClaimsFromChat создает Claim из чата

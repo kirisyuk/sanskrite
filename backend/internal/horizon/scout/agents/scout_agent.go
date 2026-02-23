@@ -587,6 +587,7 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
 
    EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
    - OWNS: source MUST be ORGANIZATION or PERSON; target MUST be ORGANIZATION/FACILITY/PRODUCT/DEPOSIT/MEDIA_CHANNEL/COMMUNITY.
+   - CONTROLS: source MUST be ORGANIZATION or PERSON or COMMUNITY; target MUST be ORGANIZATION or FACILITY (controller → controlled).
    - EMPLOYED_BY and BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION.
    - PRODUCES/CONSUMES: source MUST be ORGANIZATION/FACILITY/PROGRAM (or DEPOSIT for PRODUCES), target MUST be PRODUCT.
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
@@ -720,6 +721,21 @@ Relation unit qualifiers (on each relation.qualifiers):
 - source_unit_label / target_unit_label: short human-readable labels`
 }
 
+func extractionCanonicalNamespaceDetailsBlock() string {
+	return `CANONICAL NAMESPACE DETAILS (strict addendum):
+- /segment/{domain}/{vertical}/{geo} for ORG marketSegments (exactly 3 parts after /segment).
+- /media/{platform}/{slug} for concrete media channels/endpoints.
+- Products:
+  - goods: /product/{category}/{type}/{stage}/{slug}[/{model-slug}]
+  - services: /product/service/{domain}/{subdomain}/{slug}[/{offering-slug}]
+- Markets:
+  - prefer /market/{geo}/{domain}/{vertical}
+  - HAS_MARKET_SEGMENT child path = parent path + one segment
+- Communities: /community/{geo}/{type}/{slug}; subgroup hierarchy via HAS_SUBGROUP (broader -> narrower).
+- Programs: prefer /program/{jurisdiction}/{slug} when jurisdiction is known.
+- Facilities: prefer /fac/{orgSlug}/{facilitySlug} over flat /fac/{facilitySlug}.`
+}
+
 // buildExtractionPrompt строит промпт для извлечения данных
 func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string, domainModes []string) string {
 	specialties = taxonomy.NormalizeSpecialties(specialties)
@@ -754,211 +770,82 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlock(targetCanonicalPath, "", "")
 	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlock(targetCanonicalPath, "", "")
 	coreBusinessTaxonomyBlock := buildCoreBusinessTaxonomyBlock()
+	canonicalContractBlock := fmt.Sprintf(`CANONICAL PATH RULES:
+%s
+%s
+- NEVER use "/discovered/*".
+- canonicalPath MUST match expected namespace for targetType.
+- Domain is config, not graph node: targetCanonicalPath MUST NOT start with /domain/ for non-domain relations.
+- If unsure, still output your best stable canonicalPath (do not leave it empty).`, canonicalRulesBlock, extractionCanonicalNamespaceDetailsBlock())
 
-	return fmt.Sprintf(`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.
+	fragmentContractBlock := fmt.Sprintf(`1. "fragment" Field (Object):
+- canonicalPath MUST match target canonical path
+- entityPath MUST match provided entity path
+- sectorPath MUST match provided sector path
+- %s
+- %s
+%s
+%s
+- state: map of MetricValue entries
+- description: short factual summary
+- homeLocation: location object when available
+- lifecycleStage: concept|planning|permitting|financing|construction|commissioning|operational|expansion|suspended|decommissioning|closed
+- expectedStartDate, actualStartDate, expectedEndDate, actualEndDate: ISO8601 when known
+- identifiers: ISIN/LEI/Ticker/etc when available
+- kbRefs: external KB refs when available
+- metric value format:
+  - value MUST be JSON number (expand "10M" -> 10000000)
+  - unit lowercase (or omitted when unitless)
+  - confidence in 0..1
+  - observedAt ISO8601
+  - provenance method + at least one sourceId`, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierUnitTemplateContractBlock)
 
-TARGET ENTITY:
+	unitProfilesContractBlock := `2. "unitProfiles" Field (Array of Objects):
+- Optional for non-org/non-gov targets. For /org/ and /gov/ return when evidence exists.
+- Shape:
+  - unitId (stable id), parentOrgRef, unitCode, label
+  - unitCode enum: consumer|enterprise|core_ops|it|logistics|corporate|rnd|unclassified
+  - optional: status, geo, legalEntityRefs, aliases, confidence, sources`
+
+	relationsContractBlock := fmt.Sprintf(`3. "relations" Field (Array of Objects):
+- Each relation is a directed edge FROM THIS FRAGMENT (source) TO targetCanonicalPath (target), unless explicit sourceCanonicalPath is provided.
+- relationType must follow semantic direction.
+%s
+%s
+%s`, relationCatalogOverride, unitIdentificationBlock, relationRulesBlock)
+
+	supplyChainsContractBlock := `4. "supplyChains" Field (Array of Objects):
+- Each chain has: nodes[], confidence, reason, optional transportVia[].
+- Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|PROGRAM|MARKET|GEO_REGION|DEPOSIT|COMMUNITY), role?, unitRef?, unitCode?, unitLabel?
+- Nodes MUST alternate actor -> product -> actor -> product.
+- Include FACILITY where transformation occurs (product -> facility -> product).
+- For extractive flows: org -> facility -> deposit -> product.
+- transportVia should contain facility canonical paths for ports/terminals/pipelines/warehouses when known.`
+
+	return joinPromptBlocks(
+		`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.`,
+		fmt.Sprintf(`TARGET ENTITY:
 - Canonical Path: %s
 - Entity Type Path: %s
-- Sector Path: %s
-
-CONTENT TO ANALYZE:
-%s
-
-%s
-%s
-%s
-%s
-%s
-TASK: Extract all relevant information about this entity and return it as a JSON object with fields: "fragment", "unitProfiles", "relations", and "supplyChains" (use [] when unknown).
-
-%s
-
-1. "fragment" Field (Object):
-   Must match the fragment schema:
-   - canonicalPath: Must match the target canonical path
-   - entityPath: Must match the provided entity path
-   - sectorPath: Must match the provided sector path
-   - %s
-   %s
-%s
-%s
-   - state: Map of metrics with MetricValue objects.
-     IMPORTANT: there are two common classes of metrics:
-       A) Normalized risk metrics under /metric/risk/... where value is a score:
-          - Magnitude: value in [0..1]
-          - Directional: value in [-1..1]
-       B) Domain/industrial metrics (absolute quantities), e.g. reserves/production/capacity:
-          - value is an absolute number (NOT normalized to 0..1), unit must be specified (bbl, tcf, metric_tons, etc).
-   - description: Brief description of the entity
-   - homeLocation: Location object with ISO standards if available
-   - lifecycleStage: (IMPORTANT for FACILITY/DEPOSIT/extractive ORG) Current operational stage:
-     - "concept" | "planning" | "permitting" | "financing" | "construction" | "commissioning" | "operational" | "expansion" | "suspended" | "decommissioning" | "closed"
-     - Default to "operational" if entity is clearly operating; otherwise extract from text
-   - expectedStartDate: (if lifecycleStage is construction/planning) When entity is expected to become operational (ISO8601)
-   - actualStartDate: When entity actually started operating (ISO8601), if known
-   - expectedEndDate: When entity is planned to close (ISO8601), if known
-   - actualEndDate: When entity actually closed (ISO8601), if known
-   - identifiers: Map of identifiers (ISIN, LEI, Ticker, etc.) if available
-   - kbRefs: Array of KB references (Wikidata, DBpedia) if available
-   - metrics format rules (for both normalized and absolute metrics):
-     - value MUST be a JSON number (no commas; expand "10M" to 10000000)
-     - unit MUST be lowercase string (or omit unit if truly unitless)
-     - confidence MUST be 0..1
-     - observedAt MUST be ISO8601 ("YYYY-MM-DD" or RFC3339)
-     - provenance MUST include method + at least 1 sourceId
-
-2. "unitProfiles" Field (Array of Objects):
-   Optional for non-org/non-gov targets. For /org/ and /gov/ targets, return when evidence exists.
-   Use this exact shape:
-   - unitId: stable id within this parent org/gov
-   - parentOrgRef: canonical path of THIS FRAGMENT
-   - unitCode: consumer|enterprise|core_ops|it|logistics|corporate|rnd|unclassified
-   - label: short unit label
-   - status: ACTIVE|DORMANT|MERGED|UNKNOWN (optional)
-   - geo: array of geo hints (optional)
-   - legalEntityRefs: array of /org/... legal entities tied to this unit (optional)
-   - aliases, confidence, sources: optional
-
-3. "relations" Field (Array of Objects):
-   Identify key dependencies, suppliers, customers, subsidiaries, competitors, or locations mentioned in the text.
-   IMPORTANT: Relation direction is STRICT.
-   Each relation object describes a directed edge FROM THIS FRAGMENT (source) TO the relation's targetCanonicalPath (target).
-   Choose relationType to match this direction:
-   %s
-   %s
-   %s
-
-4. "supplyChains" Field (Array of Objects):
-   Each object represents one supply chain path with:
-   - nodes: Ordered array of entities in the chain. Each node has:
-     - canonicalPath: stable path (/org/..., /fac/..., /product/...)
-     - name: human-readable name
-     - type: ORGANIZATION | FACILITY | PRODUCT
-     - role: (optional) supplier, processor, manufacturer, assembler, distributor, customer
-     - unitRef: (optional for actor nodes) unit identifier; prefer known unitId from unitProfiles
-     - unitCode: (optional for actor nodes) consumer|enterprise|core_ops|it|logistics|corporate|rnd|unclassified
-     - unitLabel: (optional for actor nodes) short unit label
-   - confidence: 0.0 to 1.0 for the entire chain
-   - reason: evidence/source for this chain
-   
-   CHAIN STRUCTURE:
-   - Nodes MUST alternate: actor → product → actor → product → ...
-   - Actors are ORGANIZATION or FACILITY (use FACILITY for transformation sites: refinery, smelter, factory)
-   - For actor nodes, keep unitRef/unitCode aligned with relation qualifiers and unitProfiles when available.
-   - Products link actors in the chain
-   - Include FACILITY where transformation happens: product → facility → product (e.g. lithium-ore → refinery → lithium-carbonate)
-   - For extractive: org → facility → deposit → product (e.g. KMG → mine → /deposit/lithium/salares → lithium-ore)
-   - transportVia (optional): array of facility canonical paths the product passes through (ports, terminals, pipelines, warehouses).
-     Same canonicalization rules apply. Example: ["/fac/port/antofagasta", "/fac/port/shanghai"] for maritime route.
-   - Example chain nodes (alternating actor/product):
-     [/org/albemarle, /product/raw/mineral/extraction/lithium-ore, /fac/albemarle/silver-peak, /product/raw/chemical/refining/lithium-carbonate, /org/catl]
-   - Multiple chains expected for different product lines or branches
-
-CANONICAL PATH RULES:
-- NEVER use "/discovered/*" (this is not allowed).
-- Prefer existing stable namespaces:
-  - Organizations: /org/{iso2|na}/{slug}
-    - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase). If unknown use "na".
-    - slug: lowercase slug derived from shortName (without ownership suffix).
-    - Legacy /org/{slug} may exist in the graph; prefer /org/{iso2}/{slug} for NEW entities to reduce collisions.
-  - Government bodies: /gov/{iso2|na}/{slug}
-    - Use for ministries, regulators, agencies, state bodies. This prevents collisions like "Ministry of Defence" across countries.
-    - If jurisdiction is unknown, use /gov/na/{slug} and add a missingInfo question (or leave confidence low).
-  - Market segments (ORG-level classification): /segment/{domain}/{vertical}/{geo}
-    - domain: broad sector domain slug (e.g., finance, technology, industrial, consumer, healthcare, energy)
-    - vertical: specific vertical slug (e.g., retail-banking, semiconductors, ev-batteries)
-    - geo: ISO3166-1 alpha2 lowercase (2 letters) OR "global"
-    - IMPORTANT: fixed number of segments after /segment: exactly 3 parts (domain/vertical/geo)
-  - Media channels (last-mile endpoints): /media/{platform}/{slug}
-    - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
-  - Communities (informal social groups): /community/{geo}/{type}/{slug}
-    - geo: ISO3166-1 alpha2 lowercase, regional token, or "global"/"int"
-    - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
-    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe | representatives | industry-association | key-community
-    - Examples:
-      - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
-      - "Kazan drug dealers" -> /community/ru/criminal/kazan-synthetic-dealers
-      - "OSINT community" -> /community/global/professional/osint-researchers
-      - "House of Saud" -> /community/sa/dynasty/house-of-saud
-      - "Pashtun tribes" -> /community/af/tribe/pashtun
-      - "Senior Zhuz (Kazakhstan)" -> /community/kz/tribe/senior-zhuz
-    - CRITICAL: COMMUNITY is for INFORMAL groups WITHOUT legal structure.
-      - If the entity has legal registration → use ORGANIZATION (/org/)
-      - If the entity is a media endpoint (channel/group) → use MEDIA_CHANNEL (/media/)
-      - COMMUNITY is the social entity that *uses* channels, not the channel itself
-    - COMMUNITY HIERARCHY: Use HAS_SUBGROUP to link parent community → narrower sub-community
-      - dynasties: broader family → branch (house-of-saud → sudairi-seven)
-      - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
-      - Direction: broader → narrower (like HAS_MARKET_SEGMENT for markets)
-  - People: /person/{lowercase-slug}
-  - Products (Goods): MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}[/{model-slug}]
-    - category: "raw" | "component" | "finished"
-    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy" | "hydrocarbon" | "fuel" | "petrochemical"
-    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly" | "liquefaction" | "cracking"
-    - slug: lowercase-slug derived from product name
-    - model-slug: (OPTIONAL) specific product model/SKU (e.g., "cat-390f" for Caterpillar 390F excavator)
-    - Examples:
-      - "Lithium Ore" -> /product/raw/mineral/extraction/lithium-ore
-      - "Lithium Carbonate" -> /product/raw/chemical/refining/lithium-carbonate
-      - "Battery Cell" -> /product/component/electronic/manufacturing/battery-cell
-      - "Electric Vehicle" -> /product/finished/mechanical/assembly/electric-vehicle
-      - "Caterpillar 390F" -> /product/finished/mechanical/manufacturing/excavator/cat-390f
-      - "Crude Oil" -> /product/raw/hydrocarbon/extraction/crude-oil
-      - "LNG" -> /product/raw/hydrocarbon/liquefaction/lng
-    - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
-  - Services: Use structure /product/service/{domain}/{subdomain}/{slug}[/{offering-slug}]
-    - domain: "it" | "financial" | "legal" | "consulting" | "logistics" | "engineering" | "media" | "telecom" | "education" | "healthcare" | "construction" | "security" | "hr" | "real-estate" | "other"
-    - subdomain: domain-specific (e.g., "software" | "cloud" | "hosting" for IT; "banking" | "insurance" | "payments" for financial)
-    - slug: lowercase-slug derived from service name
-    - offering-slug: (OPTIONAL) specific offering/product
-    - Examples:
-      - "Software Development" -> /product/service/it/software/custom-development
-      - "Cloud Hosting" -> /product/service/it/cloud/hosting
-      - "Payment Processing" -> /product/service/financial/payments/payment-processing
-      - "Salesforce Sales Cloud" -> /product/service/it/software/crm-saas/salesforce-sales-cloud
-  - Deposits (Natural Resource): /deposit/{resource-slug}/{deposit-slug}
-    - resource-slug: primary resource type (examples: crude-oil, natural-gas, lithium, copper, gold, iron-ore, uranium, rare-earth, coal)
-      - IMPORTANT: this list is NOT exhaustive. If you encounter a different resource (e.g., potash, phosphate, nickel),
-        use a best-effort lowercase slug and still emit a /deposit/... path. Use "other" only if truly unknown.
-    - deposit-slug: lowercase-slug derived from deposit/field/basin name
-    - Examples:
-      - "Permian Basin" -> /deposit/crude-oil/permian-basin
-      - "Atacama Salar" -> /deposit/lithium/atacama-salar
-      - "Escondida Mine" -> /deposit/copper/escondida
-      - "Ghawar Field" -> /deposit/crude-oil/ghawar
-  - Programs:
-    - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known
-      - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
-      - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
-    - Otherwise /program/{programSlug}
-  - Markets:
-    - Prefer (segment-first): /market/{geo}/{domain}/{vertical}
-      - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
-      - geo: ISO3166-1 alpha2 lowercase, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
-      - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
-      - Examples: /market/sa/professional-services/marketing, /market/global/technology/ev-batteries
-    - Legacy /market/{geo}/{marketSlug} may exist in older data; do NOT emit legacy for NEW markets.
-      - Always provide geo + domain + vertical for NEW outputs.
-  - Facilities:
-    - Prefer /fac/{orgSlug}/{facilitySlug} when org can be inferred (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
-    - Otherwise /fac/{facilitySlug}
-  - GEO regions / locations: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase (2 chars) or regional token (asean, brics, gcc, eu, eaeu)
-    - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
-      - GCC → /loc/gcc/na/na (NOT /loc/na/na/gcc)
-    - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
-    - city: lowercase slug; use "na" if not applicable/unknown
-    - country-only locations: /loc/{country}/na/na
-    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 or an allowed regional token. Invalid codes will be REJECTED.
-- VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
-  - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
-  - canonicalPath MUST match expected prefix for targetType (see namespaces above)
-  - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code or allowed regional token
-  - Facilities: prefer /fac/{orgSlug}/{facilitySlug} over flat /fac/{facilitySlug} (flat paths get penalty)
-- canonicalPath slug MUST be derived from shortName (without ownership suffix) to avoid duplicates when legal form changes.
-- If a legal form is known (Inc., LLC, JSC, GmbH, etc.), append it as -{legal_form} to satisfy org canonical format.
-- If you are unsure, still output your best stable canonicalPath (do not leave it empty).
-
-Return ONLY valid JSON. Do not include markdown code fences.`, targetCanonicalPath, entityPath, sectorPath, content, chainBlock, specBlock, businessRulesBlock, typeBlock, domainBlock, canonicalRulesBlock, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierUnitTemplateContractBlock, relationCatalogOverride, unitIdentificationBlock, relationRulesBlock)
+- Sector Path: %s`, targetCanonicalPath, entityPath, sectorPath),
+		"CONTENT TO ANALYZE:\n"+content,
+		chainBlock,
+		specBlock,
+		businessRulesBlock,
+		typeBlock,
+		domainBlock,
+		canonicalContractBlock,
+		`TASK:
+Extract all relevant information and return ONE JSON object with fields:
+- fragment
+- unitProfiles
+- relations
+- supplyChains
+Use [] for unknown arrays.`,
+		fragmentContractBlock,
+		unitProfilesContractBlock,
+		relationsContractBlock,
+		supplyChainsContractBlock,
+		"Return ONLY valid JSON. Do not include markdown code fences.",
+	)
 }

@@ -61,13 +61,19 @@ func DefaultVertexSyncBatcherConfig() VertexSyncBatcherConfig {
 	}
 }
 
+// Discovery Engine hard limit for gcsSource.inputUris (dataSchema=document).
+const discoveryEngineMaxInputUris = 100
+
 // NewVertexSyncBatcher creates a new batcher.
 func NewVertexSyncBatcher(
 	importFn func(ctx context.Context, uris []string) (string, error),
 	config VertexSyncBatcherConfig,
 ) *VertexSyncBatcher {
 	if config.MaxBatchSize <= 0 {
-		config.MaxBatchSize = 100
+		config.MaxBatchSize = 90
+	}
+	if config.MaxBatchSize > discoveryEngineMaxInputUris {
+		config.MaxBatchSize = discoveryEngineMaxInputUris
 	}
 	if config.FlushInterval <= 0 {
 		config.FlushInterval = 5 * time.Second

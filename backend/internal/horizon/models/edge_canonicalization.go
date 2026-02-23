@@ -218,6 +218,23 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 	// MARKET-related canonicalization
 	// =============================================================================
 
+	// APPLIES_TO(ENTITY → MECHANISM) is inverted; canonical direction is MECHANISM → ENTITY.
+	// Keep this before generic ORG↔MARKET normalization so APPLIES_TO does not collapse into PARTICIPATES_IN.
+	if edgeType == DependencyTypeAppliesTo &&
+		sourceType != FragmentTypeMechanism &&
+		targetType == FragmentTypeMechanism {
+		return DependencyTypeAppliesTo, true, true, "canonicalize: ENTITY APPLIES_TO MECHANISM -> MECHANISM APPLIES_TO ENTITY"
+	}
+
+	// APPLIES_TO with non-mechanism source is usually a wrong relation label.
+	// Best-effort fallback: recast as INFLUENCES to preserve weak effect semantics.
+	// This must run before generic ORG↔MARKET normalization.
+	if edgeType == DependencyTypeAppliesTo &&
+		sourceType != FragmentTypeMechanism &&
+		targetType != FragmentTypeMechanism {
+		return DependencyTypeInfluences, false, true, "canonicalize: non-mechanism APPLIES_TO -> INFLUENCES"
+	}
+
 	// ORG↔MARKET canonical contract: use only PARTICIPATES_IN in ORG -> MARKET direction.
 	// This guardrail is intentionally broad: regardless of raw relation type, normalize
 	// organization-market edges to participation semantics.
@@ -405,21 +422,6 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		sourceType == FragmentTypeOrganization &&
 		targetType == FragmentTypeFacility {
 		return DependencyTypeOperatesIn, false, true, "canonicalize: ORGANIZATION INVESTS_IN FACILITY -> ORGANIZATION OPERATES_IN FACILITY"
-	}
-
-	// APPLIES_TO(ENTITY → MECHANISM) is inverted; canonical direction is MECHANISM → ENTITY.
-	if edgeType == DependencyTypeAppliesTo &&
-		sourceType != FragmentTypeMechanism &&
-		targetType == FragmentTypeMechanism {
-		return DependencyTypeAppliesTo, true, true, "canonicalize: ENTITY APPLIES_TO MECHANISM -> MECHANISM APPLIES_TO ENTITY"
-	}
-
-	// APPLIES_TO with non-mechanism source is usually a wrong relation label.
-	// Best-effort fallback: recast as INFLUENCES to preserve weak effect semantics.
-	if edgeType == DependencyTypeAppliesTo &&
-		sourceType != FragmentTypeMechanism &&
-		targetType != FragmentTypeMechanism {
-		return DependencyTypeInfluences, false, true, "canonicalize: non-mechanism APPLIES_TO -> INFLUENCES"
 	}
 
 	// OPERATES_IN(PERSON → GEO) → LOCATED_IN

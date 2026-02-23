@@ -124,3 +124,58 @@ func TestParseSupplyChains_SuppliesToEdgeCarriesUnitQualifiers(t *testing.T) {
 		t.Fatalf("transport_via=%v, want [/fac/us/port-long-beach]", via)
 	}
 }
+
+func TestParseSupplyChains_ProgramAndMarketNodesCreateFragments(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.81,
+			Reason:     "Aktau port route to TITR and EU logistics market",
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/fac/kazakhstan/aktau-sea-port",
+					Name:          "Aktau Sea Port",
+					Type:          "FACILITY",
+				},
+				{
+					CanonicalPath: "/program/int/titr-middle-corridor",
+					Name:          "TITR Middle Corridor",
+					Type:          "PROGRAM",
+				},
+				{
+					CanonicalPath: "/market/eu/all/logistics",
+					Name:          "EU Logistics Market",
+					Type:          "MARKET",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/market/kz/investment/all/logistics")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+
+	programFrag, ok := result.Fragments["/program/int/titr-middle-corridor"]
+	if !ok || programFrag == nil {
+		t.Fatalf("expected PROGRAM fragment to be materialized")
+	}
+	if programFrag.Type != models.FragmentTypeProgram {
+		t.Fatalf("program fragment type=%s, want %s", programFrag.Type, models.FragmentTypeProgram)
+	}
+
+	marketFrag, ok := result.Fragments["/market/eu/all/logistics"]
+	if !ok || marketFrag == nil {
+		t.Fatalf("expected MARKET fragment to be materialized")
+	}
+	if marketFrag.Type != models.FragmentTypeMarket {
+		t.Fatalf("market fragment type=%s, want %s", marketFrag.Type, models.FragmentTypeMarket)
+	}
+
+	if result.Stats.NodesSkippedUnknownType != 0 {
+		t.Fatalf("nodesSkippedUnknownType=%d, want 0", result.Stats.NodesSkippedUnknownType)
+	}
+	if len(result.Edges) == 0 {
+		t.Fatalf("expected edges to be created")
+	}
+}

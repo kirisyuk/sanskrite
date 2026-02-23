@@ -96,3 +96,26 @@ func TestBuildExtractionPrompt_MixedGeneralAndSpecificUsesScopedCatalog(t *testi
 		t.Fatalf("mixed general+specific should not include unrelated general taxonomy")
 	}
 }
+
+func TestBuildExtractionPrompt_ContainsCanonicalNamespaceDetails(t *testing.T) {
+	a := NewScoutAgent(nil)
+	prompt := a.buildExtractionPrompt(
+		"content",
+		"/org/us/example-inc",
+		"/entity/organization",
+		"/sector/industrial",
+		nil,
+		"",
+		nil,
+	)
+	for _, want := range []string{
+		"CANONICAL NAMESPACE DETAILS (strict addendum):",
+		"/segment/{domain}/{vertical}/{geo}",
+		"/media/{platform}/{slug}",
+		"/product/service/{domain}/{subdomain}/{slug}",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected canonical details to include %q", want)
+		}
+	}
+}

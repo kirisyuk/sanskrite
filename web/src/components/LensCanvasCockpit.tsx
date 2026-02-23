@@ -1621,6 +1621,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const isLevelsLayout = layoutMode === 'levels';
   const [showToolbarMenu, setShowToolbarMenu] = React.useState(false);
   const toolbarMenuRef = React.useRef<HTMLDivElement | null>(null);
+  // Right-side pushable overlays: actions, view, info
+  const [actionsOverlayOpen, setActionsOverlayOpen] = React.useState(false);
+  const [viewOverlayOpen, setViewOverlayOpen] = React.useState(false);
+  const [infoOverlayOpen, setInfoOverlayOpen] = React.useState(false);
   const [showLayoutMenu, setShowLayoutMenu] = React.useState(false);
   const layoutMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [showHoverModeMenu, setShowHoverModeMenu] = React.useState(false);
@@ -14176,10 +14180,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   );
 
   // Toolbar components
-  const ToolbarDivider = () => (
-    <div style={{ width: 1, height: 20, background: 'var(--border-subtle)', margin: '0 4px' }} aria-hidden="true" />
-  );
-
   const IconButton = ({ onClick, active, disabled, title, icon, label }: { onClick: () => void; active?: boolean; disabled?: boolean; title: string; icon: React.ReactNode; label?: string }) => (
     <button
       type="button"
@@ -14291,34 +14291,61 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const graphEmpty = nodes.length === 0;
 
-  const toolbarContent = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-      {/* Actions */}
-      <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load graph" icon={Icons.Refresh} />
-      <IconButton
-        onClick={toggleCommandPalette}
-        disabled={!lensId}
-        active={addNodeOpen}
-        title={addNodeOpen ? 'Close search (Ctrl+K)' : 'Search / add (Ctrl+K)'}
-        icon={Icons.Search}
-      />
-      {!graphEmpty && (
-        <>
-          <IconButton onClick={handleArrange} disabled={arranging} title="Arrange graph" icon={Icons.Arrange} />
-          <IconButton onClick={handleFitView} title="Fit view" icon={Icons.Focus} />
-          <IconButton
-            onClick={() => {
-              setShowToolbarMenu(false);
-              handleDownload();
-            }}
-            disabled={edges.length === 0}
-            title="Download graph"
-            icon={Icons.Download}
-          />
+  const overlayPanelStyle: React.CSSProperties = {
+    padding: '8px 10px',
+    borderRadius: 12,
+    border: '1px solid var(--border-subtle)',
+    background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.65)',
+    backdropFilter: 'blur(8px)',
+    boxShadow: theme === 'dark' ? '0 8px 20px rgba(0,0,0,0.35)' : '0 8px 20px rgba(0,0,0,0.12)',
+    overflow: 'visible',
+    minWidth: 120,
+    maxWidth: 'min(90vw, 720px)',
+  };
 
-          <ToolbarDivider />
+  const pushableButtonStyle = (active: boolean): React.CSSProperties => ({
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    border: '1px solid var(--border-subtle)',
+    background: active ? (theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') : (theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.65)'),
+    color: 'var(--text-heading)',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    transition: 'all 0.2s ease',
+  });
 
-          {/* Modes */}
+  const actionsOverlayContent = (
+    <div style={{ ...overlayPanelStyle, display: 'flex', flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
+        <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load graph" icon={Icons.Refresh} />
+        <IconButton
+          onClick={() => { setActionsOverlayOpen(false); toggleCommandPalette(); }}
+          disabled={!lensId}
+          active={addNodeOpen}
+          title={addNodeOpen ? 'Close search (Ctrl+K)' : 'Search / add (Ctrl+K)'}
+          icon={Icons.Search}
+        />
+        {!graphEmpty && (
+          <>
+            <IconButton onClick={handleArrange} disabled={arranging} title="Arrange graph" icon={Icons.Arrange} />
+            <IconButton onClick={handleFitView} title="Fit view" icon={Icons.Focus} />
+            <IconButton
+              onClick={() => { setActionsOverlayOpen(false); handleDownload(); }}
+              disabled={edges.length === 0}
+              title="Download graph"
+              icon={Icons.Download}
+            />
+          </>
+        )}
+    </div>
+  );
+
+  const viewOverlayContent = !graphEmpty ? (
+    <div style={{ ...overlayPanelStyle, display: 'flex', flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
+      {/* Modes */}
       <div ref={layoutMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
         <button
           type="button"
@@ -14662,7 +14689,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         </div>
       )}
 
-      <ToolbarDivider />
+      <div style={{ width: 1, minHeight: 24, background: 'var(--border-subtle)', margin: '0 4px' }} />
 
       {/* Graph clarity */}
       <IconButton
@@ -14782,10 +14809,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         title={useSemanticGroupColors ? '4 colors by semantic group' : 'Full per-type color palette'}
         icon={Icons.Palette}
       />
+    </div>
+  ) : null;
 
-      <ToolbarDivider />
-
-      {/* Settings & overflow */}
+  const infoOverlayContent = (
+    <div style={{ ...overlayPanelStyle, display: 'flex', flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
       <IconButton
         onClick={() => onToggleInspector?.()}
         disabled={!onToggleInspector}
@@ -14793,46 +14821,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         title={inspectorActive ? 'Close inspector' : 'Open inspector'}
         icon={Icons.Info}
       />
-      <IconButton onClick={() => setVisualSettingsOpen(true)} title="Visual settings" icon={Icons.Sliders} />
-
-      <div ref={toolbarMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
-        <IconButton
-          onClick={() => setShowToolbarMenu((v: boolean) => !v)}
-          active={showToolbarMenu}
-          title="More options"
-          icon={Icons.Dots}
-        />
-        {showToolbarMenu && (
-          <div
-            style={{
-              position: 'absolute',
-              top: 'calc(100% + 6px)',
-              right: 0,
-              minWidth: 200,
-              borderRadius: 12,
-              border: '1px solid var(--border-subtle)',
-              background: 'var(--bg-elevated)',
-              boxShadow: theme === 'dark' ? '0 14px 40px rgba(0,0,0,0.55)' : '0 14px 40px rgba(0,0,0,0.18)',
-              overflow: 'hidden',
-              zIndex: 1000,
-            }}
-          >
-            <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', borderBottom: '1px solid var(--border-subtle)' }}>
-              Canvas
-            </div>
-            <div style={{ padding: '10px 12px', fontSize: 11, color: 'var(--text-secondary-strong)', display: 'flex', justifyContent: 'space-between' }}>
-              <span>{nodes.length} nodes</span>
-              <span>{edges.length} edges</span>
-            </div>
-            {error && (
-              <div style={{ padding: '10px 12px', fontSize: 11, color: '#EF4444', borderTop: '1px solid var(--border-subtle)' }}>
-                {error}
-              </div>
-            )}
-          </div>
-        )}
+      <IconButton onClick={() => { setInfoOverlayOpen(false); setVisualSettingsOpen(true); }} title="Visual settings" icon={Icons.Sliders} />
+      <div ref={toolbarMenuRef} style={{ padding: '0 8px', fontSize: 11, color: 'var(--text-secondary-strong)', display: 'flex', gap: 12, alignItems: 'center', borderLeft: '1px solid var(--border-subtle)' }}>
+        <span>{nodes.length} nodes</span>
+        <span>{edges.length} edges</span>
       </div>
-        </>
+      {error && (
+        <div style={{ fontSize: 11, color: '#EF4444' }}>
+          {error}
+        </div>
       )}
     </div>
   );
@@ -15696,27 +15693,83 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           </div>
         )}
 
-        {/* Canvas toolbar overlay (actions + overflow menu) */}
-    <div
-      style={{
-        position: 'absolute',
-        top: 12,
-        right: 12,
+        {/* Right-side vertical buttons; overlays expand left as horizontal toolbar rows */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 12,
+            right: 12,
+            bottom: 12,
             zIndex: 80,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '6px 8px',
-        borderRadius: 12,
-        border: '1px solid var(--border-subtle)',
-        background: theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.65)',
-        backdropFilter: 'blur(8px)',
-        boxShadow: theme === 'dark' ? '0 8px 20px rgba(0,0,0,0.35)' : '0 8px 20px rgba(0,0,0,0.12)',
-        pointerEvents: 'auto',
-      }}
-    >
-          {toolbarContent}
-      </div>
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: 8,
+            pointerEvents: 'auto',
+          }}
+        >
+          {/* 1. Actions */}
+          <div style={{ display: 'flex', flexDirection: 'row-reverse', alignItems: 'center', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => {
+                setViewOverlayOpen(false);
+                setInfoOverlayOpen(false);
+                setActionsOverlayOpen((v) => !v);
+              }}
+              title="Actions"
+              aria-label="Actions"
+              style={pushableButtonStyle(actionsOverlayOpen)}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 21h5v-5" />
+              </svg>
+            </button>
+            {actionsOverlayOpen && actionsOverlayContent}
+          </div>
+
+          {/* 2. View & highlight */}
+          <div style={{ display: 'flex', flexDirection: 'row-reverse', alignItems: 'center', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => {
+                if (graphEmpty) return;
+                setActionsOverlayOpen(false);
+                setInfoOverlayOpen(false);
+                setViewOverlayOpen((v) => !v);
+              }}
+              disabled={graphEmpty}
+              title={graphEmpty ? 'Load graph first' : 'View & highlight'}
+              aria-label="View & highlight"
+              style={{ ...pushableButtonStyle(viewOverlayOpen), opacity: graphEmpty ? 0.5 : 1, cursor: graphEmpty ? 'not-allowed' : 'pointer' }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.648 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668c1.105 0 2.059-.215 2.98-.643 2.02-1.008 3.48-3.157 3.48-5.75 0-4.5-4.5-8.5-10-8.5z"/>
+              </svg>
+            </button>
+            {viewOverlayOpen && viewOverlayContent}
+          </div>
+
+          {/* 3. Info & settings */}
+          <div style={{ display: 'flex', flexDirection: 'row-reverse', alignItems: 'center', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => {
+                setActionsOverlayOpen(false);
+                setViewOverlayOpen(false);
+                setInfoOverlayOpen((v) => !v);
+              }}
+              title="Info & settings"
+              aria-label="Info & settings"
+              style={pushableButtonStyle(infoOverlayOpen)}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />
+              </svg>
+            </button>
+            {infoOverlayOpen && infoOverlayContent}
+          </div>
+        </div>
 
         {/* Edge explanation popover (opened via small button next to edge caption) */}
         {edgeExplainPopover?.open && (

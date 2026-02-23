@@ -974,6 +974,12 @@ func (o *Orchestrator) IngestHorizonMonitorFeed(ctx context.Context, tenantID, s
 	return nil
 }
 
+// FetchHorizonMonitorDocuments fetches and parses a Horizon Monitor feed URL into normalized documents.
+// Used by CanvasIngester for system canvas.
+func (o *Orchestrator) FetchHorizonMonitorDocuments(ctx context.Context, feedURL string) ([]prov.NormalizedDocument, error) {
+	return o.fetchHorizonMonitorDocuments(ctx, feedURL)
+}
+
 func (o *Orchestrator) fetchHorizonMonitorDocuments(ctx context.Context, feedURL string) ([]prov.NormalizedDocument, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
 	if err != nil {

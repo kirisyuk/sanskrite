@@ -301,6 +301,7 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 
 	case "market":
 		// Preferred: /market/{geo}/{domain}/{vertical}
+		// Extended: /market/{geo}/{domain}/{vertical}[/{subvertical}...] (tolerant for deeper paths)
 		// Legacy: /market/{geo}/{slug} OR /market/{slug}
 		if len(parts) == 2 {
 			out.Market = &MarketPathParts{Geo: "", Slug: parts[1], Legacy: true}
@@ -310,8 +311,12 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 			out.Market = &MarketPathParts{Geo: parts[1], Slug: parts[2], Legacy: true}
 			return out, nil
 		}
-		if len(parts) == 4 {
-			out.Market = &MarketPathParts{Geo: parts[1], Domain: parts[2], Vertical: parts[3], Legacy: false}
+		if len(parts) >= 4 {
+			vertical := parts[3]
+			if len(parts) > 4 {
+				vertical = strings.Join(parts[3:], "/")
+			}
+			out.Market = &MarketPathParts{Geo: parts[1], Domain: parts[2], Vertical: vertical, Legacy: false}
 			return out, nil
 		}
 		return nil, fmt.Errorf("market path must be /market/{slug} (legacy), /market/{geo}/{slug} (legacy), or /market/{geo}/{domain}/{vertical}: %q", path)

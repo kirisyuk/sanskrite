@@ -242,6 +242,7 @@
 | P1 | Унифицировать Policy | Policy применяется в 3+ местах (`edge_materializer`, `precreate_validator`, `dependency_edges`, `runPolicyCheck`) с разной логикой. Одинаковые action handlers (reject/reverse/penalty) во всех точках, best-effort. |
 | P3 | `recordDeterministicRedirect` coverage | Основные кейсы закрыты (в т.ч. Market deduplication, Pre-create validation). Оставить регрессионный контроль на новых местах path rewrite. |
 | P2 | Централизовать canonicalization | `canonicalPath` меняется в 6 местах → множество вызовов `bestEffortRewriteLensScope`. Рассмотреть накопление изменений и один финальный rewrite. |
+| P2 | Убрать legacy monolithic fallback в ResearchAgent | После ввода composable `GeneralResearchStrategy` оставить единый путь enrichment (pipeline-only), удалить `enrichFragmentWithGroundingMonolith` и мёртвый fallback-контур, сохранить backward-compatible контракты промптов/схем. |
 | P2 | История aliases | `aliasCanonicalPath` хранит только первый alias. При цепочке `/org/tesla` → `/org/us/tesla` → `/org/us/tesla-inc` сохранять массив aliases. |
 | P2 | Budget checks раньше | Проверка бюджета только перед Research. Scout и Critic могут потратить до проверки. При масштабировании добавить проверки на ранних этапах. |
 

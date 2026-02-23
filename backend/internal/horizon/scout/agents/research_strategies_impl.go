@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -139,6 +142,24 @@ func strategyMetricValueFormatBlock() string {
 `
 }
 
+func strategySupplyChainsJSONContractBlock() string {
+	return `SUPPLY CHAINS JSON CONTRACT (STRICT):
+- "supplyChains" MUST be an array of objects.
+- Each chain object MUST have:
+  - "nodes": REQUIRED array of objects (NOT string and NOT shorthand)
+  - "confidence": REQUIRED number in 0..1
+  - "reason": REQUIRED short evidence string
+  - "transportVia": OPTIONAL array of facility canonical paths (/fac/...)
+- Node object schema (each nodes[i]):
+  - "canonicalPath": REQUIRED string
+  - "name": REQUIRED string
+  - "type": REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|PROGRAM|MARKET|GEO_REGION|DEPOSIT
+  - "role", "unitRef", "unitCode", "unitLabel": OPTIONAL strings
+- INVALID shape example: "nodes": "A -> B -> C"
+- VALID shape example: "nodes": [{"canonicalPath":"/org/...","name":"...","type":"ORGANIZATION"}]
+`
+}
+
 // SupplyChainResearchStrategy enriches for supply chain only (PRODUCES, CONSUMES, SUPPLIES_TO, etc.).
 type SupplyChainResearchStrategy struct {
 	agent *ResearchAgent
@@ -253,6 +274,25 @@ func (s *PolicyImpactResearchStrategy) Enrich(ctx context.Context, input Researc
 	return out, nil
 }
 
+// GeneralResearchStrategy enriches in broad mode with fragment-type specialization.
+type GeneralResearchStrategy struct {
+	agent *ResearchAgent
+}
+
+func (s *GeneralResearchStrategy) DomainMode() string { return taxonomy.DomainModeGeneral }
+
+func (s *GeneralResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
+	if s.agent == nil || s.agent.executor == nil {
+		return nil, nil
+	}
+	prompt := s.agent.buildGeneralEnrichmentPrompt(input)
+	out, err := s.agent.runResearchPrompt(ctx, prompt)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // runResearchPrompt runs a research prompt and parses result into ResearchStrategyOutput.
 // Returns grounding evidence from Vertex AI Search when available.
 func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*ResearchStrategyOutput, error) {
@@ -283,7 +323,7 @@ func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*
 	}
 	var res researchResult
 	if err := json.Unmarshal(jsonData, &res); err != nil {
-		sanitized, sanitizeErr := sanitizeResearchResultMetrics(jsonData)
+		sanitized, sanitizeErr := sanitizeResearchResultForUnmarshal(jsonData)
 		if sanitizeErr != nil {
 			return nil, fmt.Errorf("unmarshal research result: %w", err)
 		}
@@ -310,31 +350,405 @@ func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*
 	return out, nil
 }
 
-// sanitizeResearchResultMetrics removes metric entries that fail MetricValue parsing.
-// This allows strategy output to remain usable when a single metric value is emitted as narrative text.
-func sanitizeResearchResultMetrics(data []byte) ([]byte, error) {
+// sanitizeResearchResultForUnmarshal repairs common shape/type drifts in LLM output so
+// a single malformed field does not drop the whole research response.
+func sanitizeResearchResultForUnmarshal(data []byte) ([]byte, error) {
 	var root map[string]interface{}
 	if err := json.Unmarshal(data, &root); err != nil {
 		return nil, err
 	}
 
-	if fragmentRaw, ok := root["fragment"].(map[string]interface{}); ok {
-		sanitizeMetricMapField(fragmentRaw, "state")
-	}
-
-	if relsRaw, ok := root["relations"].([]interface{}); ok {
-		for _, relRaw := range relsRaw {
-			relMap, ok := relRaw.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			sanitizeMetricMapField(relMap, "metrics")
+	if fragmentRaw, ok := root["fragment"]; ok {
+		if fragmentMap, mapOK := fragmentRaw.(map[string]interface{}); mapOK {
+			sanitizeMetricMapField(fragmentMap, "state")
+		} else {
+			delete(root, "fragment")
 		}
 	}
+
+	sanitizeResearchRelations(root)
+	sanitizeResearchSupplyChains(root)
 
 	return json.Marshal(root)
 }
 
+func sanitizeResearchRelations(root map[string]interface{}) {
+	relsRaw, exists := root["relations"]
+	if !exists {
+		return
+	}
+	rels, ok := relsRaw.([]interface{})
+	if !ok {
+		delete(root, "relations")
+		return
+	}
+	clean := make([]interface{}, 0, len(rels))
+	for _, relRaw := range rels {
+		relMap, ok := relRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		sanitizeMetricMapField(relMap, "metrics")
+		coerceFloatField(relMap, "confidence", 0.5)
+		ensureStringField(relMap, "targetName")
+		ensureStringField(relMap, "targetType")
+		ensureStringField(relMap, "targetCanonicalPath")
+		ensureStringField(relMap, "relationType")
+		ensureStringField(relMap, "reason")
+		ensureStringField(relMap, "sourceCanonicalPath")
+		ensureStringField(relMap, "sourceType")
+		ensureStringField(relMap, "sourceName")
+		sanitizeMapFieldOrDelete(relMap, "qualifiers")
+		clean = append(clean, relMap)
+	}
+	root["relations"] = clean
+}
+
+func sanitizeResearchSupplyChains(root map[string]interface{}) {
+	chainsRaw, exists := root["supplyChains"]
+	if !exists {
+		return
+	}
+	chains := toInterfaceSlice(chainsRaw)
+	if chains == nil {
+		delete(root, "supplyChains")
+		return
+	}
+
+	cleanChains := make([]interface{}, 0, len(chains))
+	for _, chainRaw := range chains {
+		chainMap, ok := chainRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		nodes := sanitizeSupplyChainNodesField(chainMap["nodes"])
+		if len(nodes) == 0 {
+			continue
+		}
+		chainMap["nodes"] = nodes
+		coerceFloatField(chainMap, "confidence", 0.5)
+		ensureStringField(chainMap, "reason")
+		if via := sanitizeStringArrayField(chainMap["transportVia"]); len(via) > 0 {
+			chainMap["transportVia"] = via
+		} else {
+			delete(chainMap, "transportVia")
+		}
+		cleanChains = append(cleanChains, chainMap)
+	}
+	root["supplyChains"] = cleanChains
+}
+
+func sanitizeSupplyChainNodesField(raw interface{}) []interface{} {
+	nodes := toInterfaceSlice(raw)
+	if nodes == nil {
+		return nil
+	}
+	clean := make([]interface{}, 0, len(nodes))
+	for _, nodeRaw := range nodes {
+		nodeMap := sanitizeSupplyChainNode(nodeRaw)
+		if nodeMap == nil {
+			continue
+		}
+		clean = append(clean, nodeMap)
+	}
+	return clean
+}
+
+func sanitizeSupplyChainNode(raw interface{}) map[string]interface{} {
+	switch v := raw.(type) {
+	case map[string]interface{}:
+		cp := firstStringValue(v, "canonicalPath", "canonical_path", "path")
+		name := firstStringValue(v, "name")
+		nodeType := firstStringValue(v, "type")
+		if cp == "" && name == "" {
+			return nil
+		}
+		if cp != "" && name == "" {
+			name = deriveNameFromCanonicalPath(cp)
+		}
+		if cp != "" && nodeType == "" {
+			nodeType = inferSupplyChainNodeTypeFromPath(cp)
+		}
+		if nodeType == "" {
+			nodeType = "ORGANIZATION"
+		}
+		// Normalize to runtime-supported enum (prevents drift when LLM returns "network", "group", etc.)
+		nodeType = normalizeSupplyChainNodeType(nodeType)
+		node := map[string]interface{}{
+			"canonicalPath": cp,
+			"name":          name,
+			"type":          nodeType,
+		}
+		if s := firstStringValue(v, "role"); s != "" {
+			node["role"] = s
+		}
+		if s := firstStringValue(v, "unitRef"); s != "" {
+			node["unitRef"] = s
+		}
+		if s := firstStringValue(v, "unitCode"); s != "" {
+			node["unitCode"] = s
+		}
+		if s := firstStringValue(v, "unitLabel"); s != "" {
+			node["unitLabel"] = s
+		}
+		return node
+	case string:
+		return sanitizeSupplyChainNodeString(v)
+	default:
+		return nil
+	}
+}
+
+func sanitizeSupplyChainNodeString(raw string) map[string]interface{} {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	parsedPath := normalizeNodePathToken(s)
+	if strings.HasPrefix(parsedPath, "/") {
+		return map[string]interface{}{
+			"canonicalPath": parsedPath,
+			"name":          deriveNameFromCanonicalPath(parsedPath),
+			"type":          inferSupplyChainNodeTypeFromPath(parsedPath),
+		}
+	}
+	return map[string]interface{}{
+		"canonicalPath": "",
+		"name":          s,
+		"type":          "ORGANIZATION",
+	}
+}
+
+func sanitizeMapFieldOrDelete(holder map[string]interface{}, field string) {
+	raw, ok := holder[field]
+	if !ok {
+		return
+	}
+	if _, isMap := raw.(map[string]interface{}); !isMap {
+		delete(holder, field)
+	}
+}
+
+func ensureStringField(holder map[string]interface{}, field string) {
+	raw, ok := holder[field]
+	if !ok || raw == nil {
+		return
+	}
+	switch v := raw.(type) {
+	case string:
+		holder[field] = strings.TrimSpace(v)
+	default:
+		holder[field] = strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+}
+
+func firstStringValue(holder map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		raw, ok := holder[key]
+		if !ok || raw == nil {
+			continue
+		}
+		switch v := raw.(type) {
+		case string:
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		default:
+			s := strings.TrimSpace(fmt.Sprintf("%v", v))
+			if s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func coerceFloatField(holder map[string]interface{}, field string, fallback float64) {
+	raw, ok := holder[field]
+	if !ok || raw == nil {
+		holder[field] = fallback
+		return
+	}
+	switch v := raw.(type) {
+	case float64:
+		holder[field] = v
+	case float32:
+		holder[field] = float64(v)
+	case int:
+		holder[field] = float64(v)
+	case int64:
+		holder[field] = float64(v)
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			holder[field] = f
+			return
+		}
+		holder[field] = fallback
+	case string:
+		s := strings.TrimSpace(v)
+		s = strings.TrimSuffix(s, "%")
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			holder[field] = f
+			return
+		}
+		holder[field] = fallback
+	default:
+		holder[field] = fallback
+	}
+}
+
+func sanitizeStringArrayField(raw interface{}) []string {
+	arr := toInterfaceSlice(raw)
+	if arr == nil {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		switch v := item.(type) {
+		case string:
+			s := strings.TrimSpace(v)
+			if s != "" {
+				out = append(out, s)
+			}
+		default:
+			s := strings.TrimSpace(fmt.Sprintf("%v", v))
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+func toInterfaceSlice(raw interface{}) []interface{} {
+	switch v := raw.(type) {
+	case []interface{}:
+		return v
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return nil
+		}
+		var arr []interface{}
+		if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") && json.Unmarshal([]byte(s), &arr) == nil {
+			return arr
+		}
+		for _, token := range splitSupplyChainNodeString(s) {
+			arr = append(arr, token)
+		}
+		return arr
+	default:
+		return nil
+	}
+}
+
+func splitSupplyChainNodeString(raw string) []string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	repl := strings.NewReplacer("→", "->", "=>", "->", "\n", "->", ";", "->")
+	s = repl.Replace(s)
+	parts := strings.Split(s, "->")
+	if len(parts) == 1 {
+		parts = strings.Split(s, ",")
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		t := strings.TrimSpace(part)
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func normalizeNodePathToken(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "/") {
+		return s
+	}
+	lowered := strings.ToLower(s)
+	for _, prefix := range []string{"org/", "fac/", "product/", "market/", "program/", "loc/", "deposit/", "region/"} {
+		if strings.HasPrefix(lowered, prefix) {
+			return "/" + s
+		}
+	}
+	return s
+}
+
+func deriveNameFromCanonicalPath(cp string) string {
+	trimmed := strings.TrimSpace(cp)
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	last := strings.TrimSpace(parts[len(parts)-1])
+	if last == "" && len(parts) > 1 {
+		last = strings.TrimSpace(parts[len(parts)-2])
+	}
+	last = strings.ReplaceAll(last, "-", " ")
+	return last
+}
+
+func inferSupplyChainNodeTypeFromPath(cp string) string {
+	path := strings.TrimSpace(strings.ToLower(cp))
+	switch {
+	case strings.HasPrefix(path, "/org/"):
+		return "ORGANIZATION"
+	case strings.HasPrefix(path, "/fac/"):
+		return "FACILITY"
+	case strings.HasPrefix(path, "/product/"):
+		return "PRODUCT"
+	case strings.HasPrefix(path, "/program/"):
+		return "PROGRAM"
+	case strings.HasPrefix(path, "/market/"):
+		return "MARKET"
+	case strings.HasPrefix(path, "/loc/"), strings.HasPrefix(path, "/region/"):
+		return "GEO_REGION"
+	case strings.HasPrefix(path, "/deposit/"):
+		return "DEPOSIT"
+	case strings.HasPrefix(path, "/community/"):
+		return "COMMUNITY"
+	default:
+		return "ORGANIZATION"
+	}
+}
+
+// normalizeSupplyChainNodeType maps arbitrary LLM output to runtime-supported enum.
+// Prevents contract drift when LLM returns "COMMUNITY", "network", "group" etc.
+func normalizeSupplyChainNodeType(raw string) string {
+	u := strings.ToUpper(strings.TrimSpace(raw))
+	switch u {
+	case "ORGANIZATION", "ORG":
+		return "ORGANIZATION"
+	case "FACILITY", "FAC":
+		return "FACILITY"
+	case "PRODUCT":
+		return "PRODUCT"
+	case "PROGRAM":
+		return "PROGRAM"
+	case "MARKET":
+		return "MARKET"
+	case "GEO_REGION", "GEO", "LOCATION", "LOC", "REGION":
+		return "GEO_REGION"
+	case "DEPOSIT":
+		return "DEPOSIT"
+	case "COMMUNITY", "NETWORK", "GROUP", "COLLECTIVE":
+		return "COMMUNITY"
+	default:
+		return "ORGANIZATION"
+	}
+}
+
+// sanitizeMetricMapField removes malformed metric maps from the holder field.
+// This allows strategy output to remain usable when a single metric value is emitted as narrative text.
 func sanitizeMetricMapField(holder map[string]interface{}, field string) {
 	raw, ok := holder[field]
 	if !ok {
@@ -342,6 +756,7 @@ func sanitizeMetricMapField(holder map[string]interface{}, field string) {
 	}
 	metricMap, ok := raw.(map[string]interface{})
 	if !ok {
+		delete(holder, field)
 		return
 	}
 
@@ -357,6 +772,264 @@ func sanitizeMetricMapField(holder map[string]interface{}, field string) {
 		return
 	}
 	holder[field] = clean
+}
+
+func buildResearchFocusContextBlock(focus string, spherePaths []string, keywords []string, originalQuery string) string {
+	focus = strings.TrimSpace(focus)
+	originalQuery = strings.TrimSpace(originalQuery)
+	spheresLine := strings.Join(dedupNonEmptyStrings(spherePaths), ", ")
+	keywordsLine := strings.Join(dedupNonEmptyStrings(keywords), ", ")
+
+	if focus == "" && spheresLine == "" && keywordsLine == "" && originalQuery == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("FOCUS CONTEXT (use to steer grounded search):\n")
+	if originalQuery != "" {
+		b.WriteString(fmt.Sprintf("- originalQuery: %q\n", originalQuery))
+	}
+	if focus != "" {
+		b.WriteString(fmt.Sprintf("- focus: %s\n", focus))
+	}
+	if spheresLine != "" {
+		b.WriteString(fmt.Sprintf("- spherePaths: %s\n", spheresLine))
+	}
+	if keywordsLine != "" {
+		b.WriteString(fmt.Sprintf("- keywords: %s\n", keywordsLine))
+	}
+	return b.String()
+}
+
+func buildResearchChainContextBlock(chainContext string) string {
+	chainContext = strings.TrimSpace(chainContext)
+	if chainContext == "" {
+		return ""
+	}
+	return "SUPPLY CHAIN CONTEXT:\n" + chainContext
+}
+
+func buildResearchExistingEntitiesBlock(existingEntities []string) string {
+	if len(existingEntities) == 0 {
+		return ""
+	}
+	ents := existingEntities
+	if len(ents) > 50 {
+		ents = ents[:50]
+	}
+	var b strings.Builder
+	b.WriteString("EXISTING ENTITIES (reuse instead of creating duplicates):\n")
+	for _, e := range ents {
+		if strings.TrimSpace(e) == "" {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("- %s\n", e))
+	}
+	b.WriteString("- Prefer existing canonical paths when entity identity matches.\n")
+	return b.String()
+}
+
+func isDomainFragment(fragment *models.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	cp := strings.TrimSpace(strings.ToLower(fragment.CanonicalPath))
+	return fragment.Type == models.FragmentTypeDomain || strings.HasPrefix(cp, "/domain/")
+}
+
+func buildGeneralResearchDomainExpansionBlock(fragment *models.HorizonFragment) string {
+	if !isDomainFragment(fragment) {
+		return ""
+	}
+	return `DOMAIN EXPANSION GUIDANCE (CRITICAL OVERRIDE):
+- This fragment is a DOMAIN contract. Your primary goal is to expand it into first-order entities.
+- Use ONLY domain relation types: FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON.
+- Target canonicalPath MUST match targetType:
+  ORGANIZATION->/org or /gov, PERSON->/person, PRODUCT->/product, PROGRAM->/program, MARKET->/market, FACILITY->/fac, GEO_REGION->/loc, EVENT->/event, MEDIA_CHANNEL->/media, COMMUNITY->/community, DOMAIN->/domain
+- If the user asks about a market, use /market/... as a TARGET (anchor), NOT as a DOMAIN.
+- Do NOT output placeholder names like NA/N-A/Unknown. Use fewer entities instead.`
+}
+
+func generalResearchCanonicalSupplementBlock() string {
+	return `- /segment/{domain}/{vertical}/{geo} for org marketSegments; /media/{platform}/{slug} for media channels
+- Product (goods): prefer /product/{category}/{type}/{stage}/{slug}; services: /product/service/{domain}/{subdomain}/{slug}[/{offering-slug}]
+- Markets: prefer /market/{geo}/{domain}/{vertical}; for HAS_MARKET_SEGMENT child path = parent path + one segment
+- Communities: /community/{geo}/{type}/{slug}; use HAS_SUBGROUP for parent->narrower subgroup
+- Programs: prefer /program/{jurisdiction}/{slug} when jurisdiction is known
+- NEVER use "/discovered/*" (not allowed)
+- canonicalPath MUST match expected prefix for targetType; if unsure, still output your best stable canonicalPath`
+}
+
+func buildGeneralResearchRelationTaxonomyBlock(isDomain bool) string {
+	if isDomain {
+		return `ALLOWED RELATION TAXONOMY (DOMAIN OVERRIDE):
+- Use ONLY: FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON.
+- Do not emit non-domain relations for DOMAIN fragments.
+- Domain is configuration, not a graph node for non-domain relation families.`
+	}
+	return "ALLOWED RELATION TAXONOMY:\n" + extractionGeneralRelationRulesBlock()
+}
+
+func generalResearchProductCanonicalizationBlock() string {
+	return `Product Canonicalization:
+- If you can resolve a more specific product name/path, update fragment.canonicalPath.
+- Prefer /product/{category}/{type}/{stage}/{slug} or /product/service/{domain}/{subdomain}/{slug}.
+- If the current path is flat or acronym-like, expand to full product name and align relation targets.
+- Product naming rules:
+  - Use SINGULAR nouns by default (e.g., "battery cell", "lithium carbonate"), not invented plurals.
+  - Use plural only when plural is standard industry term.
+  - Do NOT include company/brand prefix unless it is clearly official and widely used.`
+}
+
+func generalResearchNameHistoryBlock() string {
+	return `Name History (ORG/PERSON - rebrand/rename/formerly-known-as):
+- If former names are found, output fragment.nameHistory[] with:
+  { "name": "...", "kind": "short|legal|brand|aka", "validFrom"?: "YYYY-MM-DD", "validTo"?: "YYYY-MM-DD" }
+- Do NOT include current name in nameHistory.
+- Search cues: "formerly known as", "renamed", "rebrand", "previous name".`
+}
+
+func generalResearchExplicitSourceRulesBlock() string {
+	return `EXPLICIT SOURCE RULES (CRITICAL for strategic edges):
+- Default source is THIS FRAGMENT.
+- Use sourceCanonicalPath/sourceType/sourceName when semantic source is different.
+- GATEKEEPS_DECISION: source must be gatekeeper (ORG/GOV/COMMUNITY), target is DECISION_POINT.
+- USES_MECHANISM: source is decision/org/gov/community/program, target is MECHANISM.
+- APPLIES_TO: source is MECHANISM, target is affected entity.
+- CONTROLS_ACCESS / IMPOSES_CONDITION: source is controller/imposer, target is affected entity.
+- For phase-1 business edges (DEPENDS_ON, SUPPLIES_TO, LOCATED_IN, OWNS, etc.), keep default source unless evidence explicitly requires otherwise.`
+}
+
+func buildResearchDecompositionGuidanceBlock(fragment *models.HorizonFragment, hints []DecompositionHint, originalQuery string) string {
+	if fragment == nil {
+		return ""
+	}
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	isAnchor := fragment.Type == models.FragmentTypeMarket ||
+		fragment.Type == models.FragmentTypeProgram ||
+		strings.HasPrefix(cp, "/market/") ||
+		strings.HasPrefix(cp, "/program/")
+	if !isAnchor {
+		return ""
+	}
+
+	for i := range hints {
+		if strings.TrimSpace(hints[i].AnchorPath) != cp {
+			continue
+		}
+		hint := hints[i]
+		var b strings.Builder
+		b.WriteString("MARKET/PROGRAM DECOMPOSITION GUIDANCE:\n")
+		b.WriteString("- This fragment is an anchor. Prioritize concrete players and operating assets.\n")
+		if len(hint.EntityTypes) > 0 {
+			b.WriteString(fmt.Sprintf("- target entity types: %s\n", strings.Join(hint.EntityTypes, ", ")))
+		}
+		if len(hint.SubMarkets) > 0 {
+			b.WriteString(fmt.Sprintf("- sub-markets: %s\n", strings.Join(hint.SubMarkets, ", ")))
+		}
+		if len(hint.PlayerCategories) > 0 {
+			b.WriteString(fmt.Sprintf("- player categories: %s\n", strings.Join(hint.PlayerCategories, ", ")))
+		}
+		if len(hint.SearchQueries) > 0 {
+			b.WriteString("- suggested search queries:\n")
+			for _, q := range hint.SearchQueries {
+				if strings.TrimSpace(q) == "" {
+					continue
+				}
+				b.WriteString(fmt.Sprintf("  - %s\n", q))
+			}
+		}
+		b.WriteString("- Prefer real-world entities and relations over abstract commentary.\n")
+		return b.String()
+	}
+
+	originalQuery = strings.TrimSpace(originalQuery)
+	if originalQuery == "" {
+		return ""
+	}
+	return fmt.Sprintf(`MARKET/PROGRAM DECOMPOSITION GUIDANCE:
+- This fragment is an anchor; prioritize concrete entities and business relations.
+- originalQuery: %q
+- Discover major players, products/services, regulators, and facilities.
+- Emit these as relations with grounded evidence and stable canonical paths.`, originalQuery)
+}
+
+func joinPromptBlocks(blocks ...string) string {
+	out := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		out = append(out, block)
+	}
+	return strings.Join(out, "\n\n")
+}
+
+func (a *ResearchAgent) buildGeneralEnrichmentPrompt(input ResearchStrategyInput) string {
+	frag := input.Fragment
+	if frag == nil {
+		frag = &models.HorizonFragment{}
+	}
+	fragmentJSON, _ := json.MarshalIndent(frag, "", "  ")
+	questions := strings.Join(input.MissingInfo, "\n- ")
+	if strings.TrimSpace(questions) == "" {
+		questions = "Resolve critical unknowns for fragment attributes, key dependencies, and supply chain links."
+	}
+
+	chainBlock := buildResearchChainContextBlock(input.ChainContext)
+	focusBlock := buildResearchFocusContextBlock(input.Focus, input.SpherePaths, input.Keywords, input.OriginalQuery)
+	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
+	decompositionBlock := buildResearchDecompositionGuidanceBlock(frag, input.DecompositionHints, input.OriginalQuery)
+	domainBlock := buildGeneralResearchDomainExpansionBlock(frag)
+	specBlock := buildResearchSpecializationModulesBlock(input.Specialties)
+	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
+	profileBlock := entity_semantics.ResearchBlockForPath(frag.CanonicalPath, frag.Type, frag.CommunityType)
+	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(frag.CanonicalPath, frag.Type, frag.CommunityType, frag.Qualifiers, frag.Identifiers)
+	coreBusinessTaxonomyBlock := buildCoreBusinessTaxonomyBlock()
+	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
+	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
+	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt() + "\n" + generalResearchCanonicalSupplementBlock()
+	relationTaxonomyBlock := buildGeneralResearchRelationTaxonomyBlock(isDomainFragment(frag))
+
+	return joinPromptBlocks(
+		`You are a research agent. Enrich the fragment with grounded facts and business-meaningful relations.`,
+		`CURRENT FRAGMENT DATA:
+`+string(fragmentJSON),
+		chainBlock,
+		focusBlock,
+		existingEntitiesBlock,
+		researchPreferExistingEntitiesBlock(),
+		decompositionBlock,
+		domainBlock,
+		specBlock,
+		businessRulesBlock,
+		profileBlock,
+		nameRulesBlock,
+		objectTypeTaskBlock,
+		coreBusinessTaxonomyBlock,
+		objectQualifierUnitTemplateContractBlock,
+		generalResearchProductCanonicalizationBlock(),
+		generalResearchNameHistoryBlock(),
+		generalResearchExplicitSourceRulesBlock(),
+		relationTaxonomyBlock,
+		`CANONICAL PATH RULES:
+`+canonicalRulesBlock,
+		fmt.Sprintf(`QUESTIONS TO ANSWER (from Critic):
+- %s`, questions),
+		`Return JSON object:
+{
+  "fragment": { updated fields only },
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?", "metrics"?, "qualifiers"? } ],
+  "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"?, "unitRef"?, "unitCode"?, "unitLabel"? } ], "confidence", "reason", "transportVia"?: ["/fac/..."] } ]
+}`,
+		strategySupplyChainsJSONContractBlock(),
+		`OUTPUT BUDGET RULES (CRITICAL):
+- Keep fragment.description short (max 500 chars); omit if it risks JSON truncation.
+- If budget is tight, prioritize missingInfo answers and valid JSON with closed braces.`,
+		strategyMetricValueFormatBlock(),
+		`Return ONLY valid JSON. No markdown.`,
+	)
 }
 
 func isValidMetricValueJSON(raw interface{}) bool {
@@ -426,7 +1099,7 @@ Return a JSON object:
 {
   "fragment": { updated fields if found: homeLocation, state (e.g. /metric/reserves_volume, /metric/production_annual for extractive) },
   "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length", "transport_via"?: ["/fac/port/...", "/fac/terminal/..."] } } ],
-  "supplyChains": [ { "nodes": [...], "confidence", "reason", "transportVia"?: ["/fac/port/...", "/fac/terminal/..."] } ]
+  "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"?, "unitRef"?, "unitCode"?, "unitLabel"? } ], "confidence", "reason", "transportVia"?: ["/fac/port/...", "/fac/terminal/..."] } ]
 }
 Nodes MUST alternate actor→product. Include FACILITY where transformation happens (product→facility→product).
 For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transportVia in chains = facilities product passes through.
@@ -435,7 +1108,9 @@ For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transp
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), objectQualifierUnitTemplateContractBlock, string(fragmentJSON), questions, unitPhaseSupplyDepthGuidance(input.UnitPipelinePhase), strategyMetricValueFormatBlock())
+%s
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, phaseGuardrails, researchPreferExistingEntitiesBlock(), objectQualifierUnitTemplateContractBlock, string(fragmentJSON), questions, unitPhaseSupplyDepthGuidance(input.UnitPipelinePhase), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
 }
 
 // buildGovernanceEnrichmentPrompt builds a prompt for ownership, board, key persons, gov hierarchy (canonical types).
@@ -469,7 +1144,7 @@ Do NOT use RELATED_TO, AFFILIATED_WITH, KEY_PERSON, HAS_KEY_PERSON, or other non
 
 WHAT TO FIND (prioritize completeness):
 1. Ownership chain: Trace to ultimate parent or beneficial owner. OWNS (parent→subsidiary): ORG/PERSON/COMMUNITY→ORG. SUBSIDIARY_OF (subsidiary→parent). Include intermediate holding companies. metrics.ownership_percent when known. COMMUNITY (dynasty, tribe) can OWNS ORGANIZATION.
-2. Control: CONTROLS for state control, voting rights, contractual control. Who controls at each level?
+2. Control: CONTROLS (controller→controlled): ORG/PERSON/COMMUNITY→ORG/FACILITY. State control, voting rights, contractual control. Who controls at each level?
 3. Full board: BOARD_MEMBER_OF (PERSON→ORG). All board members for significant organizations.
 4. Management: MANAGES (manager→managed). CEO, director, operator — formal authority over org/subsidiary. Full C-suite: EMPLOYED_BY (PERSON→ORG) for employment. FOUNDED (PERSON→ORG) for founders.
 5. Investment: INVESTS_IN (investor→target). Include metrics (investment_amount, round, valuation) when known.

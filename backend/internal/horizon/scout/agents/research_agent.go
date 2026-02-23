@@ -64,8 +64,8 @@ func (a *ResearchAgent) EnrichFragment(
 	return enriched, relations, chains, err
 }
 
-// EnrichFragmentWithGroundingWithDomainModes runs composable research when domainModes is non-empty and not only "general";
-// otherwise behaves as EnrichFragmentWithGrounding (monolithic). Grounding evidence is merged from all strategies when using pipeline.
+// EnrichFragmentWithGroundingWithDomainModes runs composable research pipeline by domain modes.
+// Empty/GENERAL modes are routed to GeneralResearchStrategy (not monolithic fallback).
 func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 	ctx context.Context,
 	fragment *models.HorizonFragment,
@@ -81,15 +81,16 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 	domainModes []string,
 	unitPhase models.UnitPipelinePhase,
 ) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
-	usePipeline := false
-	for _, m := range domainModes {
-		m = strings.TrimSpace(strings.ToLower(m))
-		if m != "" && m != taxonomy.DomainModeGeneral {
-			usePipeline = true
-			break
-		}
+	if len(missingInfo) == 0 {
+		return fragment, nil, nil, nil, nil
 	}
-	if usePipeline && a.executor != nil {
+
+	normalizedModes := taxonomy.NormalizeDomainModes(domainModes)
+	if len(normalizedModes) == 0 {
+		normalizedModes = []string{taxonomy.DomainModeGeneral}
+	}
+
+	if a.executor != nil {
 		input := ResearchStrategyInput{
 			Fragment:           fragment,
 			MissingInfo:        missingInfo,
@@ -103,23 +104,24 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 			ExistingEntities:   existingEntities,
 			UnitPipelinePhase:  unitPhase,
 		}
-		enriched, relations, chains, groundingEvidence, err := a.ResearchPipeline().Enrich(ctx, input, domainModes)
+		enriched, relations, chains, groundingEvidence, err := a.ResearchPipeline().Enrich(ctx, input, normalizedModes)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
 		if enriched != nil {
-			fragment.Labels, fragment.Identifiers = naming.NormalizeFragmentNames(
-				fragment.CanonicalPath,
-				fragment.Labels,
-				fragment.Identifiers,
+			enriched.Labels, enriched.Identifiers = naming.NormalizeFragmentNames(
+				enriched.CanonicalPath,
+				enriched.Labels,
+				enriched.Identifiers,
 			)
 			return enriched, relations, chains, groundingEvidence, nil
 		}
 	}
-	return a.EnrichFragmentWithGrounding(ctx, fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
+	return a.enrichFragmentWithGroundingMonolith(ctx, fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
 }
 
-// EnrichFragmentWithGrounding returns enriched data plus grounding evidence from full AI task result.
+// EnrichFragmentWithGrounding returns enriched data plus grounding evidence.
+// Primary path uses composable GeneralResearchStrategy; monolithic prompt is retained as fallback.
 func (a *ResearchAgent) EnrichFragmentWithGrounding(
 	ctx context.Context,
 	fragment *models.HorizonFragment,
@@ -134,6 +136,53 @@ func (a *ResearchAgent) EnrichFragmentWithGrounding(
 	existingEntities []string,
 ) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
 	if len(missingInfo) == 0 {
+		return fragment, nil, nil, nil, nil
+	}
+	if a.executor != nil {
+		input := ResearchStrategyInput{
+			Fragment:           fragment,
+			MissingInfo:        missingInfo,
+			Focus:              focus,
+			SpherePaths:        spherePaths,
+			Keywords:           keywords,
+			Specialties:        specialties,
+			ChainContext:       chainContext,
+			OriginalQuery:      originalQuery,
+			DecompositionHints: decompositionHints,
+			ExistingEntities:   existingEntities,
+			UnitPipelinePhase:  models.UnitPipelinePhaseP0,
+		}
+		enriched, relations, chains, groundingEvidence, err := a.ResearchPipeline().Enrich(ctx, input, []string{taxonomy.DomainModeGeneral})
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if enriched != nil {
+			enriched.Labels, enriched.Identifiers = naming.NormalizeFragmentNames(
+				enriched.CanonicalPath,
+				enriched.Labels,
+				enriched.Identifiers,
+			)
+			return enriched, relations, chains, groundingEvidence, nil
+		}
+	}
+	return a.enrichFragmentWithGroundingMonolith(ctx, fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
+}
+
+// enrichFragmentWithGroundingMonolith preserves legacy one-shot enrichment prompt behavior as fallback.
+func (a *ResearchAgent) enrichFragmentWithGroundingMonolith(
+	ctx context.Context,
+	fragment *models.HorizonFragment,
+	missingInfo []string,
+	focus string,
+	spherePaths []string,
+	keywords []string,
+	specialties []string,
+	chainContext string,
+	originalQuery string,
+	decompositionHints []DecompositionHint,
+	existingEntities []string,
+) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
+	if a == nil || a.executor == nil {
 		return fragment, nil, nil, nil, nil
 	}
 
@@ -614,7 +663,7 @@ Choose relationType to match the CORRECT semantic direction:
 - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
 -  Clarification: inverse of OWNS (child -> parent). Use when describing who owns THIS FRAGMENT.
 - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
--  Clarification: authority without clear equity ownership (e.g., state control, voting rights, contractual control).
+-  Clarification: control flows from controller to controlled entity (controller → controlled). Authority without clear equity ownership (e.g., state control, voting rights, contractual control).
 - MANAGES: source manages target (formal authority: CEO/executive/director/operator). Do NOT use for informal influence.
 -  Clarification: formal management authority or operational responsibility, not ownership.
 - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
