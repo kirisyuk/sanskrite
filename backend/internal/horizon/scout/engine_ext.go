@@ -3395,37 +3395,20 @@ func (e *ScoutEngine) processRelationsInternal(
 			return false
 		}
 
-		// Supply chain mode: strict filtering to only follow supply-chain edges
+		// Domain-mode strict filtering: only recurse on edges allowed by the active mode.
 		if isSupplyChainMode {
-			switch rt {
-			case string(models.DependencyTypeSuppliesTo),
-				string(models.DependencyTypeDependsOn),
-				string(models.DependencyTypeProduces),
-				string(models.DependencyTypeConsumes),
-				string(models.DependencyTypeTransformsInto),
-				string(models.DependencyTypeExtractsFrom):
-				return true
-			default:
-				// In supply chain mode, skip non-supply-chain edges to stay focused
+			allow := EdgeAllowlistByDomainMode("supply_chain")
+			if !AllowlistContains(allow, models.DependencyType(rt)) {
 				return false
 			}
+			return true
 		}
-
-		// Governance mode: follow ownership/control/governance edges.
 		if isGovernanceMode {
-			switch rt {
-			case string(models.DependencyTypeOwns),
-				string(models.DependencyTypeSubsidiaryOf),
-				string(models.DependencyTypeControls),
-				string(models.DependencyTypeInvestsIn),
-				string(models.DependencyTypeBoardMemberOf),
-				string(models.DependencyTypeEmployedBy),
-				string(models.DependencyTypeFounded),
-				string(models.DependencyTypeAdministers):
-				return true
-			default:
+			allow := EdgeAllowlistByDomainMode("governance")
+			if !AllowlistContains(allow, models.DependencyType(rt)) {
 				return false
 			}
+			return true
 		}
 
 		// General mode: exclude known noisy edge types
@@ -5261,6 +5244,22 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 		}
 		if isControlled(srcType) && isController(targetType) {
 			// Inverted: FACILITY → ORG [CONTROLS_ACCESS] should be ORG → FACILITY
+			sourceID, targetID = targetID, sourceID
+			changed = true
+		}
+
+	case models.DependencyTypeAdministers:
+		// ADMINISTERS: source MUST be ORGANIZATION/GEO_REGION. FACILITY and DEPOSIT cannot administer.
+		isDeposit := func(t models.FragmentType) bool { return t == models.FragmentTypeDeposit }
+		tgtValid := isOrg(targetType) || targetType == models.FragmentTypeProgram || targetType == models.FragmentTypeGeoRegion
+		if (isFac(srcType) || isDeposit(srcType)) && tgtValid {
+			sourceID, targetID = targetID, sourceID
+			changed = true
+		}
+
+	case models.DependencyTypeControls:
+		// CONTROLS: source MUST be ORG/PERSON/COMMUNITY. PRODUCT cannot control.
+		if isProd(srcType) && (isOrg(targetType) || isFac(targetType)) {
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}

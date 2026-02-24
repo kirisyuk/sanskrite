@@ -453,6 +453,26 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeFounded, true, true, "canonicalize: ORGANIZATION FOUNDED PERSON -> PERSON FOUNDED ORGANIZATION"
 	}
 
+	// ADMINISTERS: source MUST be ORGANIZATION/GEO_REGION. FACILITY cannot administer.
+	// "Facility administered by org" → swap to ORG ADMINISTERS FACILITY.
+	if edgeType == DependencyTypeAdministers &&
+		sourceType == FragmentTypeFacility &&
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeProgram || targetType == FragmentTypeGeoRegion) {
+		return DependencyTypeAdministers, true, true, "canonicalize: FACILITY ADMINISTERS ORG -> ORG ADMINISTERS FACILITY (swap only)"
+	}
+	// ADMINISTERS: DEPOSIT cannot administer. "Deposit administered by gov/org" → swap.
+	if edgeType == DependencyTypeAdministers &&
+		sourceType == FragmentTypeDeposit &&
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeProgram || targetType == FragmentTypeGeoRegion) {
+		return DependencyTypeAdministers, true, true, "canonicalize: DEPOSIT ADMINISTERS ORG -> ORG ADMINISTERS DEPOSIT (swap only)"
+	}
+	// CONTROLS: source MUST be ORG/PERSON/COMMUNITY. PRODUCT cannot control.
+	if edgeType == DependencyTypeControls &&
+		sourceType == FragmentTypeProduct &&
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility) {
+		return DependencyTypeControls, true, true, "canonicalize: PRODUCT CONTROLS ORG -> ORG CONTROLS PRODUCT (swap only)"
+	}
+
 	return edgeType, false, false, ""
 }
 
@@ -465,6 +485,20 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 	// These intercept cases where the canonical path reveals the correct target type
 	// that the fragment type metadata got wrong.
 	// =============================================================================
+
+	// ADMINISTERS: /org/ → /gov/ is backwards (gov bodies administer, not companies).
+	if edgeType == DependencyTypeAdministers &&
+		strings.HasPrefix(strings.TrimSpace(sourcePath), "/org/") &&
+		strings.HasPrefix(strings.TrimSpace(targetPath), "/gov/") {
+		return DependencyTypeAdministers, true, true, "canonicalize: ADMINISTERS /org -> /gov swapped to /gov -> /org"
+	}
+
+	// CONTROLS: /product/ → /gov/ or /org/ is backwards (gov/org controls product).
+	if edgeType == DependencyTypeControls &&
+		strings.HasPrefix(strings.TrimSpace(sourcePath), "/product/") &&
+		(strings.HasPrefix(strings.TrimSpace(targetPath), "/gov/") || strings.HasPrefix(strings.TrimSpace(targetPath), "/org/")) {
+		return DependencyTypeControls, true, true, "canonicalize: CONTROLS /product/ -> /gov/|/org/ swapped to /gov/|/org/ -> /product/"
+	}
 
 	// PRODUCES(ORG → ORG) where target path starts with /product/:
 	// The target is actually a PRODUCT mistyped as ORGANIZATION.

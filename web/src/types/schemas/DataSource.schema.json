@@ -37,6 +37,9 @@
         "rssUrl": {
           "type": "string"
         },
+        "category": {
+          "type": "string"
+        },
         "searchQuery": {
           "type": "string"
         },

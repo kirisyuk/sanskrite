@@ -7,6 +7,7 @@ function isRelevant(ev: HorizonRealtimeEvent): boolean {
   if (t === 'horizon.graph.edge.upserted') return true;
   if (t === 'horizon.scout.job.state') return true;
   if (t === 'horizon.scout.job.completed') return true;
+  if (t === 'horizon.canvas.newsByFragments.completed') return true;
   if (t.startsWith('horizon.domain.contract.')) return true;
   if (t.startsWith('horizon.intra_graph.')) return true;
   return false;

@@ -28,7 +28,6 @@ type HorizonServiceDependencies struct {
 	// Репозитории основной системы (для связи с Entity, Document)
 	EntitiesRepo   *repo.EntityRepository
 	DocumentsRepo  *repo.DocumentsRepository
-	ChunksRepo     *repo.ChunksRepository
 	DataSourcesRepo *repo.DataSourcesRepository
 
 	// Ontology helpers (optional, but recommended for entity linking + enrichment)

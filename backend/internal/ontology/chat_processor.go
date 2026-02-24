@@ -200,7 +200,8 @@ Schema:
       "context": "string (optional)",
       "summary": "string (optional)",
       "location": {
-        "name": "string (optional)",
+        "name": "place name (optional)",
+        "address": "full address for geocoding (optional)",
         "iso6709": "string (optional)",
         "countryAlpha2": "string (ISO3166-1 alpha2 lowercase, optional)",
         "admin1": "string (lowercase code/slug or 'na', optional)",
@@ -310,6 +311,12 @@ Schema:
 							loc.Name = &nm
 						}
 					}
+					if addr, ok := locAny["address"].(string); ok {
+						addr = strings.TrimSpace(addr)
+						if addr != "" {
+							loc.Address = &addr
+						}
+					}
 					if iso, ok := locAny["iso6709"].(string); ok {
 						iso = strings.TrimSpace(iso)
 						if iso != "" {
@@ -334,7 +341,7 @@ Schema:
 							loc.City = &ct
 						}
 					}
-					if loc.Name != nil || loc.ISO6709 != nil || loc.CountryAlpha2 != nil || loc.Admin1 != nil || loc.City != nil {
+					if loc.Name != nil || loc.Address != nil || loc.ISO6709 != nil || loc.CountryAlpha2 != nil || loc.Admin1 != nil || loc.City != nil {
 						result.Events[i].Location = &loc
 					}
 				}

@@ -58,6 +58,8 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
   const [scopeSuggestIndex, setScopeSuggestIndex] = React.useState(0);
   const scopeSuggestAbortRef = React.useRef<AbortController | null>(null);
   const scopeSuggestCacheRef = React.useRef<Map<string, SearchEntity[]>>(new Map());
+  const [newsLoading, setNewsLoading] = React.useState(false);
+  const [newsError, setNewsError] = React.useState<string | null>(null);
 
   const scope: string[] = Array.isArray(lens?.scope) ? lens.scope : [];
   const scopeFragments: Record<string, string> = (lens?.scopeFragments && typeof lens.scopeFragments === 'object') ? lens.scopeFragments : {};
@@ -305,6 +307,32 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
     }
   };
 
+  const handleLoadNews = React.useCallback(async () => {
+    const paths = scope.filter((p) => {
+      const s = (p || '').trim();
+      return s.startsWith('/') && !s.startsWith('/query/');
+    });
+    if (paths.length === 0) {
+      setNewsError('Add at least one canonical path to scope (e.g. /org/ae/deloitte)');
+      return;
+    }
+    setNewsLoading(true);
+    setNewsError(null);
+    try {
+      await api.fetchNewsByFragments({
+        fragments: paths.map((cp) => ({
+          canonicalPath: cp,
+          canonicalName: scopeFragments[cp] || undefined,
+        })),
+        daysBack: 7,
+      });
+    } catch (e: any) {
+      setNewsError(e?.response?.data?.error || e?.message || 'Failed to load news');
+    } finally {
+      setNewsLoading(false);
+    }
+  }, [scope, scopeFragments]);
+
   const Card: React.FC<{ title: string; subtitle?: string; children: React.ReactNode; right?: React.ReactNode }> = ({ title, subtitle, children, right }) => (
     <div
       style={{
@@ -380,13 +408,14 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
           grid-template-columns: repeat(3, minmax(280px, 1fr));
           grid-template-areas:
             "scope scope scope"
+            "news news news"
             "info assembly config"
             "jobs jobs jobs";
           align-items: start;
         }
         @media (max-width: 980px) {
           .horizon-details-grid { grid-template-columns: 1fr; }
-          .horizon-details-grid { grid-template-areas: "scope" "info" "assembly" "config" "jobs"; }
+          .horizon-details-grid { grid-template-areas: "scope" "news" "info" "assembly" "config" "jobs"; }
         }
       `}</style>
 
@@ -423,6 +452,40 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                   </div>
                 </div>
               )}
+            </div>
+          </Card>
+        </div>
+
+        <div style={{ gridArea: 'news' }}>
+          <Card
+            title="News & ontology facts"
+            subtitle="Fetch recent news via search grounding, create events and 12-axis signals for scope entities."
+            right={
+              <button
+                type="button"
+                onClick={() => void handleLoadNews()}
+                disabled={newsLoading}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 12,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  color: 'var(--text-heading)',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: newsLoading ? 'not-allowed' : 'pointer',
+                  opacity: newsLoading ? 0.55 : 1,
+                }}
+              >
+                {newsLoading ? 'Loading…' : 'Load news for scope'}
+              </button>
+            }
+          >
+            {newsError && (
+              <div style={{ fontSize: 12, color: '#f87171', marginBottom: 8 }}>{newsError}</div>
+            )}
+            <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+              Uses Gemini search grounding. Creates ontology facts (events), extracts 12-axis signals, propagates to graph.
             </div>
           </Card>
         </div>

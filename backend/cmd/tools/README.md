@@ -340,6 +340,44 @@ go run ./cmd/tools/horizon_normalize_loc_geonames \
 
 ---
 
+### `horizon_fix_administers_facility_direction`
+
+**Назначение:** Исправляет исторические рёбра ADMINISTERS с неверным направлением:
+- FACILITY → ORG/GOV → ORG ADMINISTERS FACILITY
+- DEPOSIT → ORG/GOV → ORG ADMINISTERS DEPOSIT
+- /org/ → /gov/ → /gov/ ADMINISTERS /org/
+
+**Как работает:**
+1. Сканирует все рёбра типа ADMINISTERS
+2. Для каждого ребра проверяет типы и пути source/target
+3. Если source=FACILITY или DEPOSIT и target=ORG|PROGRAM|GEO_REGION — swap
+4. Если source path /org/ и target path /gov/ — swap (gov administers, not companies)
+5. Добавляет qualifiers с метаданными исправления
+
+**Использование:**
+```bash
+# Dry-run (по умолчанию)
+go run ./cmd/tools/horizon_fix_administers_facility_direction \
+  --project=PROJECT \
+  --out=report.jsonl
+
+# Применить изменения
+go run ./cmd/tools/horizon_fix_administers_facility_direction \
+  --project=PROJECT \
+  --apply
+```
+
+**Флаги:**
+- `--project` (required) - GCP project ID
+- `--tenant` (default: "global") - Tenant ID
+- `--apply` - применить изменения (по умолчанию dry-run)
+- `--out` - путь к JSONL-отчёту (по умолчанию stdout)
+- `--page-size` (default: 500) - размер страницы Firestore
+- `--progress-every` (default: 100) - логировать прогресс каждые N рёбер
+- `--start-after` - курсор для возобновления (Firestore document ID)
+
+---
+
 ## Заполнение индексов
 
 ### `horizon_backfill_index_paths`

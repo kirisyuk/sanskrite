@@ -64,6 +64,9 @@ func (e *SourceExecutor) ExecuteDataSource(ctx context.Context, source *models.D
 		return e.executeDocumentSource(ctx, source)
 	case models.SourceKindHorizonFeed:
 		return e.executeHorizonMonitorFeedSource(ctx, source)
+	case models.SourceKindLLMSearchGrounding:
+		// Quasi-source: not executable; content already in ontology facts from Gemini grounding.
+		return &ExecuteDataSourceResult{SourceIDs: []string{source.ID}, SourceType: models.SourceTypeLLMSearchGrounding}, nil
 	default:
 		return nil, fmt.Errorf("unsupported source kind: %s", source.Kind)
 	}

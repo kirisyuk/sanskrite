@@ -521,26 +521,6 @@ func containsRouteHint(text string) bool {
 	return false
 }
 
-func containsSupplyHint(text string) bool {
-	text = strings.ToLower(strings.TrimSpace(text))
-	if text == "" {
-		return false
-	}
-	for _, token := range []string{
-		"supply",
-		"supplier",
-		"downstream",
-		"upstream",
-		"distribution",
-		"fulfillment",
-	} {
-		if strings.Contains(text, token) {
-			return true
-		}
-	}
-	return false
-}
-
 func containsProcurementHint(text string) bool {
 	text = strings.ToLower(strings.TrimSpace(text))
 	if text == "" {
@@ -555,83 +535,6 @@ func containsProcurementHint(text string) bool {
 	} {
 		if strings.Contains(text, token) {
 			return true
-		}
-	}
-	return false
-}
-
-func valueContainsSemanticHint(raw interface{}, detector func(string) bool) bool {
-	switch v := raw.(type) {
-	case string:
-		return detector(v)
-	case []string:
-		for _, item := range v {
-			if detector(item) {
-				return true
-			}
-		}
-	case []interface{}:
-		for _, item := range v {
-			if valueContainsSemanticHint(item, detector) {
-				return true
-			}
-		}
-	case map[string]interface{}:
-		for k, item := range v {
-			if detector(k) && hasTruthyQualifierValue(item) {
-				return true
-			}
-			if valueContainsSemanticHint(item, detector) {
-				return true
-			}
-		}
-	case map[string]string:
-		for k, item := range v {
-			if detector(k) && strings.TrimSpace(item) != "" {
-				return true
-			}
-			if detector(item) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func facilityFragmentHasSemanticHint(frag *models.HorizonFragment, detector func(string) bool) bool {
-	if frag == nil {
-		return false
-	}
-	cp := strings.TrimSpace(strings.ToLower(frag.CanonicalPath))
-	if !strings.HasPrefix(cp, "/fac/") && frag.Type != models.FragmentTypeFacility {
-		return false
-	}
-	if detector(cp) {
-		return true
-	}
-	for _, label := range frag.Labels {
-		if detector(label) {
-			return true
-		}
-	}
-	if frag.Qualifiers != nil {
-		for key, value := range frag.Qualifiers {
-			if detector(key) && hasTruthyQualifierValue(value) {
-				return true
-			}
-			if valueContainsSemanticHint(value, detector) {
-				return true
-			}
-		}
-	}
-	if frag.Identifiers != nil {
-		for key, value := range frag.Identifiers {
-			if detector(key) && strings.TrimSpace(value) != "" {
-				return true
-			}
-			if detector(value) {
-				return true
-			}
 		}
 	}
 	return false
@@ -1059,19 +962,6 @@ func isRouteFacilityFragment(frag *models.HorizonFragment) bool {
 		}
 	}
 	return containsRouteHint(cp)
-}
-
-func isRouteFacilityTarget(targetCanonicalPath string, candidates ...*models.HorizonFragment) bool {
-	cp := strings.TrimSpace(strings.ToLower(targetCanonicalPath))
-	if strings.HasPrefix(cp, "/fac/") && containsRouteHint(cp) {
-		return true
-	}
-	for _, c := range candidates {
-		if isRouteFacilityFragment(c) {
-			return true
-		}
-	}
-	return false
 }
 
 func buildRouteFacilityMissingInfo(targetCanonicalPath string) []string {

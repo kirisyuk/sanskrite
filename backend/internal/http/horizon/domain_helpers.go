@@ -8,7 +8,7 @@ import (
 )
 
 // collectNearbyDomainPaths returns domain paths from lens scope (domain is config; typically empty).
-func (h *HorizonHandlers) collectNearbyDomainPaths(ctx context.Context, lens *models.Lens) []string {
+func (h *HorizonHandlers) collectNearbyDomainPaths(_ context.Context, lens *models.Lens) []string {
 	if lens == nil || len(lens.Scope) == 0 {
 		return nil
 	}
@@ -23,7 +23,7 @@ func (h *HorizonHandlers) collectNearbyDomainPaths(ctx context.Context, lens *mo
 }
 
 // collectExistingDomainPathsForProject returns domain paths from project lenses (domain is config; typically empty).
-func (h *HorizonHandlers) collectExistingDomainPathsForProject(ctx context.Context, tenantID, projectID string) []string {
+func (h *HorizonHandlers) collectExistingDomainPathsForProject(_ context.Context, _, _ string) []string {
 	// Domain is config; no domain fragments. Return empty.
 	return nil
 }

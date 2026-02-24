@@ -122,3 +122,65 @@ func TestCanonicalizeEdgeWithPaths_TransformsIntoUpstreamToDownstream_Stays(t *t
 		t.Fatalf("expected shouldSwap=false")
 	}
 }
+
+func TestCanonicalizeEdge_DepositAdministersOrg_SwapOnly(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeAdministers,
+		FragmentTypeDeposit,
+		FragmentTypeOrganization,
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeAdministers {
+		t.Fatalf("expected ADMINISTERS (unchanged), got %s", newType)
+	}
+	if !shouldSwap {
+		t.Fatalf("expected shouldSwap=true (ORG ADMINISTERS DEPOSIT)")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty canonicalization reason")
+	}
+}
+
+func TestCanonicalizeEdgeWithPaths_OrgAdministersGov_Swap(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdgeWithPaths(
+		DependencyTypeAdministers,
+		FragmentTypeOrganization,
+		FragmentTypeOrganization,
+		"/org/iq/state-company-for-phosphates-jsc",
+		"/gov/iq/ministry-of-industry",
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeAdministers {
+		t.Fatalf("expected ADMINISTERS (unchanged), got %s", newType)
+	}
+	if !shouldSwap {
+		t.Fatalf("expected shouldSwap=true (/gov/ ADMINISTERS /org/)")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty canonicalization reason")
+	}
+}
+
+func TestCanonicalizeEdge_FacilityAdministersOrg_SwapOnly(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeAdministers,
+		FragmentTypeFacility,
+		FragmentTypeOrganization,
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeAdministers {
+		t.Fatalf("expected ADMINISTERS (unchanged), got %s", newType)
+	}
+	if !shouldSwap {
+		t.Fatalf("expected shouldSwap=true (ORG ADMINISTERS FACILITY)")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty canonicalization reason")
+	}
+}

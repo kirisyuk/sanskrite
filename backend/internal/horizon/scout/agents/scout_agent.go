@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
@@ -405,119 +406,19 @@ func slugifyUnitToken(in string) string {
 
 func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string {
 	domainModes = taxonomy.NormalizeDomainModes(domainModes)
-	if len(domainModes) == 0 {
-		return nil
-	}
-	hasSpecific := false
+	// For prompt guardrails: if specific modes are present alongside general,
+	// prefer specific scope (ignore general). Only return nil when ALL modes are general.
+	specific := make([]string, 0, len(domainModes))
 	for _, m := range domainModes {
 		m = strings.TrimSpace(strings.ToLower(m))
 		if m != "" && m != taxonomy.DomainModeGeneral {
-			hasSpecific = true
-			break
+			specific = append(specific, m)
 		}
 	}
-	if !hasSpecific {
+	if len(specific) == 0 {
 		return nil
 	}
-	seen := map[string]struct{}{}
-	out := make([]string, 0, 16)
-	for _, m := range domainModes {
-		switch strings.TrimSpace(strings.ToLower(m)) {
-		case taxonomy.DomainModeSupplyChain:
-			for _, t := range []string{
-				string(models.DependencyTypeDependsOn),
-				string(models.DependencyTypeSuppliesTo),
-				string(models.DependencyTypeProduces),
-				string(models.DependencyTypeConsumes),
-				string(models.DependencyTypeTransformsInto),
-				string(models.DependencyTypeExtractsFrom),
-				string(models.DependencyTypeLocatedIn),
-				string(models.DependencyTypeOperatesIn),
-			} {
-				if _, ok := seen[t]; ok {
-					continue
-				}
-				seen[t] = struct{}{}
-				out = append(out, t)
-			}
-		case taxonomy.DomainModeGovernance:
-			for _, t := range []string{
-				string(models.DependencyTypeOwns),
-				string(models.DependencyTypeSubsidiaryOf),
-				string(models.DependencyTypeControls),
-				string(models.DependencyTypeManages),
-				string(models.DependencyTypeInvestsIn),
-				string(models.DependencyTypeBoardMemberOf),
-				string(models.DependencyTypeEmployedBy),
-				string(models.DependencyTypeFounded),
-				string(models.DependencyTypeAdministers),
-			} {
-				if _, ok := seen[t]; ok {
-					continue
-				}
-				seen[t] = struct{}{}
-				out = append(out, t)
-			}
-		case taxonomy.DomainModeAssurance:
-			for _, t := range []string{
-				string(models.DependencyTypeAssures),
-				string(models.DependencyTypeAuditedBy),
-				string(models.DependencyTypeRegulates),
-			} {
-				if _, ok := seen[t]; ok {
-					continue
-				}
-				seen[t] = struct{}{}
-				out = append(out, t)
-			}
-		case taxonomy.DomainModeMarket:
-			for _, t := range []string{
-				string(models.DependencyTypeParticipatesIn),
-				string(models.DependencyTypeHasMarketSegment),
-			} {
-				if _, ok := seen[t]; ok {
-					continue
-				}
-				seen[t] = struct{}{}
-				out = append(out, t)
-			}
-		case taxonomy.DomainModeStrategic:
-			for _, t := range []string{
-				string(models.DependencyTypeControlsAccess),
-				string(models.DependencyTypeImposesCondition),
-				string(models.DependencyTypeGatekeepsDecision),
-				string(models.DependencyTypeUsesMechanism),
-				string(models.DependencyTypeAppliesTo),
-			} {
-				if _, ok := seen[t]; ok {
-					continue
-				}
-				seen[t] = struct{}{}
-				out = append(out, t)
-			}
-		case taxonomy.DomainModePolicyImpact:
-			for _, t := range []string{
-				string(models.DependencyTypeRegulates),
-				string(models.DependencyTypeControlsAccess),
-				string(models.DependencyTypeImposesCondition),
-				string(models.DependencyTypeUsesMechanism),
-				string(models.DependencyTypeAppliesTo),
-				string(models.DependencyTypeInfluences),
-				string(models.DependencyTypeDependsOn),
-				string(models.DependencyTypeParticipatesIn),
-				string(models.DependencyTypeLocatedIn),
-				string(models.DependencyTypeOperatesIn),
-				string(models.DependencyTypeAdministers),
-			} {
-				if _, ok := seen[t]; ok {
-					continue
-				}
-				seen[t] = struct{}{}
-				out = append(out, t)
-			}
-		}
-	}
-	return out
+	return edgesemantics.EdgeAllowlistStrings(specific)
 }
 
 func extractionDomainGuardrailBlock(domainModes []string) string {
@@ -554,7 +455,7 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
      Example: If Panasonic supplies Tesla battery cells, for Tesla (source) -> Panasonic (target) use DEPENDS_ON (NOT SUPPLIES_TO).
    - SUPPLIES_TO: source supplies goods/services to target (use this for customers/recipients).
    - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
-   - OPERATES_IN: source operates in target (source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY).
+   - OPERATES_IN: source operates in target (source MUST be ORGANIZATION or PERSON, target MUST be GEO_REGION or FACILITY or DEPOSIT).
    - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
    - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
    - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
@@ -562,13 +463,14 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - MANAGES: source manages target (formal authority: CEO/executive/director/operator).
    - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION).
    - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
-   - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM).
+   - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM or COMMUNITY).
    - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT).
    - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
-   - CONSUMES: source consumes target (source MUST be ORGANIZATION or FACILITY or PROGRAM, target MUST be PRODUCT).
+   - CONSUMES: source consumes target (source MUST be ORGANIZATION or FACILITY or PRODUCT, target MUST be PRODUCT).
    - TRANSFORMS_INTO: PRODUCT -> PRODUCT value-chain transformation.
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
-   - AUDITED_BY: source (ORGANIZATION/FACILITY/PROGRAM) is audited by target (ORGANIZATION).
+   - ASSURES: source (ORGANIZATION) provides independent assurance to target (ORGANIZATION/FACILITY/PROGRAM). Add qualifiers.assurance_type: audit | certification | regulatory | inspection.
+   - AUDITED_BY: source (ORGANIZATION/FACILITY/PROGRAM) is audited by target (ORGANIZATION). Prefer ASSURES for new data.
    - PARTNERS_WITH: partnership/collaboration (symmetric; still output as source->target).
    - COMPETES_WITH: competitor relationship (direction is not important, still output as source->target).
    - INFLUENCES: source influences target (soft power; avoid for formal authority/ownership).
@@ -576,7 +478,7 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - For ORGANIZATION ↔ MARKET pairs, relationType MUST be PARTICIPATES_IN only (direction: ORGANIZATION -> MARKET).
      Use qualifiers.marketRole ("leader"/"dominant") + market_share metrics for leadership semantics.
    - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
-   - ADMINISTERS: government/body administers subordinate GOV or PROGRAM.
+   - ADMINISTERS: government/body administers subordinate GOV, PROGRAM, GEO_REGION, FACILITY, or DEPOSIT.
    - OPERATES_VIA: COMMUNITY/ORGANIZATION -> MEDIA_CHANNEL.
    - MEMBER_OF: PERSON -> COMMUNITY.
    - AFFILIATED_WITH: COMMUNITY/PERSON -> ORGANIZATION.
@@ -585,17 +487,8 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO: strategic overlay.
    - HAS_SUBGROUP: COMMUNITY parent -> narrower community subgroup.
 
-   EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
-   - OWNS: source MUST be ORGANIZATION or PERSON; target MUST be ORGANIZATION/FACILITY/PRODUCT/DEPOSIT/MEDIA_CHANNEL/COMMUNITY.
-   - CONTROLS: source MUST be ORGANIZATION or PERSON or COMMUNITY; target MUST be ORGANIZATION or FACILITY (controller → controlled).
-   - EMPLOYED_BY and BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION.
-   - PRODUCES/CONSUMES: source MUST be ORGANIZATION/FACILITY/PROGRAM (or DEPOSIT for PRODUCES), target MUST be PRODUCT.
-   - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
-   - PARTICIPATES_IN/HAS_MARKET_SEGMENT: target MUST be MARKET.
-   - ORGANIZATION ↔ MARKET relationType MUST be PARTICIPATES_IN only (ORG -> MARKET).
-   - LOCATED_IN target MUST be GEO_REGION.
-   - SUPPLIES_TO source/target SHOULD be ORGANIZATION or FACILITY.
-   - Strategic edges MUST use DECISION_POINT/MECHANISM compatible source/target types.
+   %s
+   - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (ORG -> MARKET).
    - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/ for any relation.
 
    Each object must include:
@@ -611,7 +504,7 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`
 
 func extractionGeneralRelationRulesBlock() string {
-	return fmt.Sprintf(extractionGeneralRelationRulesTemplate, entity_semantics.PromptRelationTargetTypesPipeList())
+	return fmt.Sprintf(extractionGeneralRelationRulesTemplate, edgesemantics.EdgeDirectionValidationRulesForPrompt(), entity_semantics.PromptRelationTargetTypesPipeList())
 }
 
 func buildExtractionRelationsRulesBlock(domainModes []string) string {

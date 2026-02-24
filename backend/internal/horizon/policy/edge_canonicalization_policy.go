@@ -52,6 +52,27 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 		in.SourcePath, in.TargetPath = in.TargetPath, in.SourcePath
 	}
 
+	// --- ADMINISTERS /org → /gov swap (gov bodies administer, not companies) ---
+	if in.EdgeType == horizonmodels.DependencyTypeAdministers &&
+		strings.HasPrefix(in.SourcePath, "/org/") && strings.HasPrefix(in.TargetPath, "/gov/") {
+		res.ShouldSwap = true
+		res.Changed = true
+		res.Reason = "canonicalize: ADMINISTERS /org -> /gov swapped to /gov -> /org (gov bodies administer)"
+		in.SourceType, in.TargetType = in.TargetType, in.SourceType
+		in.SourcePath, in.TargetPath = in.TargetPath, in.SourcePath
+	}
+
+	// --- CONTROLS /product/ → /gov/ or /org/ swap (gov/org controls product, not vice versa) ---
+	if in.EdgeType == horizonmodels.DependencyTypeControls &&
+		strings.HasPrefix(in.SourcePath, "/product/") &&
+		(strings.HasPrefix(in.TargetPath, "/gov/") || strings.HasPrefix(in.TargetPath, "/org/")) {
+		res.ShouldSwap = true
+		res.Changed = true
+		res.Reason = "canonicalize: CONTROLS /product/ -> /gov/|/org/ swapped to /gov/|/org/ -> /product/ (gov/org controls product)"
+		in.SourceType, in.TargetType = in.TargetType, in.SourceType
+		in.SourcePath, in.TargetPath = in.TargetPath, in.SourcePath
+	}
+
 	if in.EdgeType == horizonmodels.DependencyTypeInvestsIn &&
 		in.SourceType == horizonmodels.FragmentTypeOrganization &&
 		in.TargetType == horizonmodels.FragmentTypeFacility &&

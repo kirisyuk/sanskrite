@@ -34,7 +34,6 @@ type Orchestrator struct {
 	sproj         *repo.SourceProjectsRepository
 	profiles      *repo.SourceProfilesRepository
 	docs          *repo.DocumentsRepository
-	chunks        *repo.ChunksRepository
 	emb           ai.EmbeddingProvider
 	publish       *realtime.Publisher
 	logger        *log.Logger
@@ -113,7 +112,7 @@ func (o *Orchestrator) ensureProjectSourceLink(ctx context.Context, tenantID, pr
 
 // RefreshDocumentByID naive revalidation placeholder
 func (o *Orchestrator) RefreshDocumentByID(ctx context.Context, tenantID, sourceID, docID string) error {
-	if o.docs == nil || o.providersReg == nil || o.emb == nil {
+	if o.docs == nil || o.providersReg == nil {
 		return fmt.Errorf("grounding deps not wired")
 	}
 	// Respect source status
@@ -146,28 +145,14 @@ func (o *Orchestrator) RefreshDocumentByID(ctx context.Context, tenantID, source
 	if strings.TrimSpace(updatedText) == "" || updatedText == d.FullText {
 		return nil
 	}
-	// update document and re-embed chunks
+	// update document (Upsert uploads to GCS, triggers Vertex sync)
 	d.FullText = updatedText
 	d.ContentHash = repo.HashContent(updatedText)
 	d.UpdatedAt = time.Now().UTC()
-	d.Status = "new"
+	d.Status = "indexed"
 	if err := o.docs.Upsert(ctx, d); err != nil {
 		return err
 	}
-	// re-chunk and re-embed (simple replace: in prod, delete old chunks first)
-	parts := ChunkText(updatedText, 1200)
-	vecs, err := o.emb.EmbedTexts(ctx, parts)
-	if err != nil {
-		return err
-	}
-	for i := range parts {
-		ch := &models.Chunk{TenantID: tenantID, DocID: d.ID, SourceID: d.SourceID, Position: i, Text: parts[i], Embedding: vecs[i], EmbeddingModel: o.emb.ModelID(), EmbeddingVersion: "v1", Attrs: map[string]any{"documentType": d.DocumentType}, ContentHash: repo.HashContent(parts[i]), CreatedAt: time.Now().UTC()}
-		if _, err := o.chunks.Create(ctx, ch); err != nil {
-			return err
-		}
-	}
-	d.Status = "embedded"
-	_ = o.docs.Upsert(ctx, d)
 	return nil
 }
 
@@ -192,11 +177,10 @@ func (o *Orchestrator) WithInteractions(ir *repo.InteractionsRepository) *Orches
 	return o
 }
 
-// WithRAG wires repositories and provider registry for RAG ingest
-func (o *Orchestrator) WithRAG(reg *prov.Registry, docs *repo.DocumentsRepository, chunks *repo.ChunksRepository) *Orchestrator {
+// WithDocumentIngest wires repositories and provider registry for document ingest (GCS + Vertex AI Search)
+func (o *Orchestrator) WithDocumentIngest(reg *prov.Registry, docs *repo.DocumentsRepository) *Orchestrator {
 	o.providersReg = reg
 	o.docs = docs
-	o.chunks = chunks
 	return o
 }
 
@@ -206,9 +190,9 @@ func (o *Orchestrator) WithEmbedding(emb ai.EmbeddingProvider) *Orchestrator {
 	return o
 }
 
-// IngestWeb ingests a single web page as a document and chunks (sync embeddings)
+// IngestWeb ingests a single web page as a document (Upsert uploads to GCS, triggers Vertex sync)
 func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canonicalURL string) error {
-	if o.crawl == nil || o.docs == nil || o.chunks == nil || o.emb == nil {
+	if o.crawl == nil || o.docs == nil {
 		return fmt.Errorf("ingest dependencies not wired")
 	}
 	fr, err := o.crawl.FetchContent(ctx, canonicalURL)
@@ -241,7 +225,6 @@ func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canoni
 	now := time.Now().UTC()
 	extID := canonicalURL
 	existing, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, extID)
-	var docID string
 	if existing != nil {
 		existing.Title = canonicalURL
 		existing.URL = canonicalURL
@@ -255,30 +238,14 @@ func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canoni
 		if err := o.docs.Upsert(ctx, existing); err != nil {
 			return err
 		}
-		docID = existing.ID
 	} else {
 		d := &models.Document{TenantID: tenantID, SourceID: sourceID, ExternalID: extID, Title: canonicalURL, URL: canonicalURL, DocumentPath: "web/" + canonicalURL, FullText: fr.Text, Status: "new", ContentType: "plainText", DocumentType: "article", ContentHash: repo.HashContent(fr.Text), IngestedAt: now, CreatedAt: now, UpdatedAt: now}
-		id, err := o.docs.Create(ctx, d)
-		if err != nil {
+		if _, err := o.docs.Create(ctx, d); err != nil {
 			return err
-		}
-		docID = id
-	}
-	parts := ChunkText(fr.Text, 1200)
-	if len(parts) > 0 {
-		vectors, err := o.emb.EmbedTexts(ctx, parts)
-		if err != nil {
-			return err
-		}
-		for i := range parts {
-			ch := &models.Chunk{TenantID: tenantID, DocID: docID, SourceID: sourceID, Position: i, Text: parts[i], Embedding: vectors[i], EmbeddingModel: o.emb.ModelID(), EmbeddingVersion: "v1", Attrs: map[string]any{"documentType": "article"}, ContentHash: repo.HashContent(parts[i]), CreatedAt: now}
-			if _, err := o.chunks.Create(ctx, ch); err != nil {
-				return err
-			}
 		}
 	}
 	if d, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, extID); d != nil {
-		d.Status = "embedded"
+		d.Status = "indexed"
 		_ = o.docs.Upsert(ctx, d)
 		if o.publish != nil {
 			_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"tenantId": tenantID, "sourceId": sourceID, "documentId": d.ID, "externalId": d.ExternalID})
@@ -308,9 +275,9 @@ func (o *Orchestrator) IngestWeb(ctx context.Context, tenantID, sourceID, canoni
 	return nil
 }
 
-// IngestTelegram ingests recent Telegram messages as documents and chunks
+// IngestTelegram ingests recent Telegram messages as documents (Upsert uploads to GCS, triggers Vertex sync)
 func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, handle string, lastMessageID int) error {
-	if o.telegram == nil || o.docs == nil || o.chunks == nil || o.emb == nil {
+	if o.telegram == nil || o.docs == nil {
 		return fmt.Errorf("ingest dependencies not wired")
 	}
 	o.logger.Printf("orchestrator: IngestTelegram started for @%s (sourceID=%s, tenantID=%s, lastMessageID=%d)", handle, sourceID, tenantID, lastMessageID)
@@ -396,7 +363,6 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 			maxSeenID = m.ID
 		}
 		existing, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, extID)
-		var docID string
 		var pubAt *time.Time
 		if t, err := time.Parse(time.RFC3339, m.Date); err == nil {
 			pubAt = &t
@@ -420,31 +386,15 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 			if err := o.docs.Upsert(ctx, existing); err != nil {
 				return err
 			}
-			docID = existing.ID
 		} else {
 			d := &models.Document{TenantID: tenantID, SourceID: sourceID, ExternalID: extID, Title: m.Link, URL: m.Link, DocumentPath: "telegram/" + handle + "/" + extID, FullText: text, Status: "new", ContentType: "plainText", DocumentType: "post", OriginPublishedAt: pubAt, ContentHash: repo.HashContent(text), IngestedAt: now, CreatedAt: now, UpdatedAt: now}
-			id, err := o.docs.Create(ctx, d)
-			if err != nil {
+			if _, err := o.docs.Create(ctx, d); err != nil {
 				return err
 			}
-			docID = id
 			documentsCreated++
 		}
-		parts := ChunkText(text, 800)
-		if len(parts) > 0 {
-			vectors, err := o.emb.EmbedTexts(ctx, parts)
-			if err != nil {
-				return err
-			}
-			for i := range parts {
-				ch := &models.Chunk{TenantID: tenantID, DocID: docID, SourceID: sourceID, Position: i, Text: parts[i], Embedding: vectors[i], EmbeddingModel: o.emb.ModelID(), EmbeddingVersion: "v1", Attrs: map[string]any{"documentType": "post"}, ContentHash: repo.HashContent(parts[i]), CreatedAt: now}
-				if _, err := o.chunks.Create(ctx, ch); err != nil {
-					return err
-				}
-			}
-		}
 		if d, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, extID); d != nil {
-			d.Status = "embedded"
+			d.Status = "indexed"
 			_ = o.docs.Upsert(ctx, d)
 			if o.publish != nil {
 				_ = o.publish.PublishJSON(ctx, realtime.EventDocProcess, tenantID, map[string]any{"tenantId": tenantID, "sourceId": sourceID, "documentId": d.ID, "externalId": d.ExternalID})
@@ -718,7 +668,7 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	}
 
 	startTime := time.Now().UTC() // Start timing the processing part
-	documentsCreated, err := o.processProviderDocumentsWithOptions(ctx, tenantID, sourceID, docs, nil, providerIngestOptions{FactsOnly: true})
+	documentsCreated, err := o.processProviderDocumentsWithOptions(ctx, tenantID, sourceID, docs, providerIngestOptions{FactsOnly: true})
 	if err != nil {
 		// Save the original error before shadowing
 		processErr := err
@@ -822,9 +772,9 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 
 // IngestHorizonMonitorFeed ingests a Horizon Monitor feed snapshot (JSON or text) and maps it to normalized documents.
 // The feed endpoint is expected in DataSource.Details.URI.
-func (o *Orchestrator) IngestHorizonMonitorFeed(ctx context.Context, tenantID, sourceID string, embed ai.EmbeddingProvider) error {
-	if o.docs == nil || o.chunks == nil || embed == nil {
-		return fmt.Errorf("ingest dependencies not wired")
+func (o *Orchestrator) IngestHorizonMonitorFeed(ctx context.Context, tenantID, sourceID string, _ ai.EmbeddingProvider) error {
+	if o.docs == nil {
+		return fmt.Errorf("ingest dependencies not wired (docs)")
 	}
 
 	feedURL := ""
@@ -895,7 +845,6 @@ func (o *Orchestrator) IngestHorizonMonitorFeed(ctx context.Context, tenantID, s
 		tenantID,
 		sourceID,
 		docs,
-		embed,
 		providerIngestOptions{
 			// HorizonMonitor feeds are processed by dedicated deterministic pipeline;
 			// we intentionally skip generic document.process LLM extraction here.
@@ -1217,8 +1166,8 @@ func firstNonEmptyString(vals ...string) string {
 
 // processProviderDocuments is a helper to process documents from any provider
 // Returns the number of newly created documents (not updated existing ones)
-func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, sourceID string, docs []prov.NormalizedDocument, embed ai.EmbeddingProvider) (int, error) {
-	return o.processProviderDocumentsWithOptions(ctx, tenantID, sourceID, docs, embed, providerIngestOptions{
+func (o *Orchestrator) processProviderDocuments(ctx context.Context, tenantID, sourceID string, docs []prov.NormalizedDocument) (int, error) {
+	return o.processProviderDocumentsWithOptions(ctx, tenantID, sourceID, docs, providerIngestOptions{
 		PublishDocumentProcess: true,
 	})
 }
@@ -1277,7 +1226,6 @@ func (o *Orchestrator) processProviderDocumentsWithOptions(
 	ctx context.Context,
 	tenantID, sourceID string,
 	docs []prov.NormalizedDocument,
-	embed ai.EmbeddingProvider,
 	opts providerIngestOptions,
 ) (int, error) {
 	// Facts-only path: no Document/Chunks, publish document.extract for each doc
@@ -1296,7 +1244,6 @@ func (o *Orchestrator) processProviderDocumentsWithOptions(
 		}
 		// idempotent upsert by externalId
 		existing, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, nd.ExternalID)
-		var docID string
 		now := time.Now().UTC()
 		if existing != nil {
 			existing.Title = nd.Title
@@ -1314,7 +1261,6 @@ func (o *Orchestrator) processProviderDocumentsWithOptions(
 			if err := o.docs.Upsert(ctx, existing); err != nil {
 				return 0, err
 			}
-			docID = existing.ID
 		} else {
 			d := &models.Document{
 				TenantID:          tenantID,
@@ -1335,44 +1281,15 @@ func (o *Orchestrator) processProviderDocumentsWithOptions(
 				CreatedAt:         now,
 				UpdatedAt:         now,
 			}
-			id, err := o.docs.Create(ctx, d)
-			if err != nil {
+			if _, err := o.docs.Create(ctx, d); err != nil {
 				return 0, err
 			}
-			docID = id
 			documentsCreated++
 		}
 
-		// chunk and embed synchronously
-		parts := ChunkText(nd.FullText, 1200)
-		if len(parts) == 0 {
-			continue
-		}
-		vectors, err := embed.EmbedTexts(ctx, parts)
-		if err != nil {
-			return 0, err
-		}
-		for i := range parts {
-			ch := &models.Chunk{
-				TenantID:         tenantID,
-				DocID:            docID,
-				SourceID:         sourceID,
-				Position:         i,
-				Text:             parts[i],
-				Embedding:        vectors[i],
-				EmbeddingModel:   embed.ModelID(),
-				EmbeddingVersion: "v1",
-				Attrs:            map[string]any{"language": nd.Language, "documentType": nd.DocumentType},
-				ContentHash:      repo.HashContent(parts[i]),
-				CreatedAt:        time.Now().UTC(),
-			}
-			if _, err := o.chunks.Create(ctx, ch); err != nil {
-				return 0, err
-			}
-		}
-		// Update document status to embedded and enqueue async processing
+		// Update document status to indexed (Create/Upsert uploads to GCS, triggers Vertex sync)
 		if existing != nil {
-			existing.Status = "embedded"
+			existing.Status = "indexed"
 			_ = o.docs.Upsert(ctx, existing)
 			// publish to document.process
 			if opts.PublishDocumentProcess && o.publish != nil {
@@ -1387,7 +1304,7 @@ func (o *Orchestrator) processProviderDocumentsWithOptions(
 		} else {
 			// For new documents, get it back by externalID to publish event
 			if d, _ := o.docs.GetByExternalID(ctx, tenantID, sourceID, nd.ExternalID); d != nil {
-				d.Status = "embedded"
+				d.Status = "indexed"
 				_ = o.docs.Upsert(ctx, d)
 				// publish to document.process
 				if opts.PublishDocumentProcess && o.publish != nil {
@@ -2100,7 +2017,7 @@ func (o *Orchestrator) processTelegramSource(ctx context.Context, in ExecuteInpu
 
 	// Save messages as documents if ingest is available
 	// IngestTelegram will fetch messages itself, so we call it first
-	if o.docs != nil && o.chunks != nil && o.emb != nil {
+	if o.docs != nil {
 		// Use tenantID from input (project's tenant) for document storage
 		// For public sources (TenantID=""), documents should be global (TenantID="")
 		// This makes them visible to all tenants who added this source
@@ -2304,11 +2221,11 @@ func (o *Orchestrator) processRSSSource(ctx context.Context, in ExecuteInput, fe
 		return err
 	}
 
-	// Ingest them (save to DB and chunks) if dependencies available
-	if o.docs != nil && o.chunks != nil && o.emb != nil {
+	// Ingest them (save to DB, Vertex indexes via GCS) if dependencies available
+	if o.docs != nil {
 		// Use tenantID from input
 		docTenantID := ds.TenantID
-		count, err := o.processProviderDocuments(ctx, docTenantID, ds.ID, docs, o.emb)
+		count, err := o.processProviderDocuments(ctx, docTenantID, ds.ID, docs)
 		if err != nil {
 			o.logger.Printf("orchestrator: failed to process rss docs for %s: %v", feedURL, err)
 		} else {

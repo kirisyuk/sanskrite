@@ -13,7 +13,7 @@ import (
 
 func isPublicSource(kind string) bool {
 	switch models.NormalizeSourceKind(kind) {
-	case models.SourceKindWeb, models.SourceKindRSS, models.SourceKindTelegramChannel, models.SourceKindHorizonFeed:
+	case models.SourceKindWeb, models.SourceKindRSS, models.SourceKindTelegramChannel, models.SourceKindHorizonFeed, models.SourceKindLLMSearchGrounding:
 		return true
 	default:
 		return false
@@ -822,6 +822,35 @@ func (r *DataSourcesRepository) FindByCanonicalSource(ctx context.Context, tenan
 
 	fmt.Printf("[FindByCanonicalSource] No match for canonical=%s among %d sources: %v\n", canonical, len(candidates), candidates)
 	return nil, fmt.Errorf("datasource not found")
+}
+
+// LLMSearchQuasiSourceCanonicalURI is the canonical URI for the LLM search grounding quasi-source.
+// Used by FindByCanonicalSource and EnsureLLMSearchQuasiSource.
+const LLMSearchQuasiSourceCanonicalURI = "llm-search-grounding://gemini"
+
+// EnsureLLMSearchQuasiSource finds or creates the global quasi-source for facts from Gemini search grounding.
+// Returns the DataSource ID. Used by NewsByFragmentsCanvas for ontology fact provenance.
+func (r *DataSourcesRepository) EnsureLLMSearchQuasiSource(ctx context.Context) (string, error) {
+	ds, err := r.FindByCanonicalSource(ctx, "", LLMSearchQuasiSourceCanonicalURI)
+	if err == nil && ds != nil && ds.ID != "" {
+		return ds.ID, nil
+	}
+	uri := LLMSearchQuasiSourceCanonicalURI
+	now := time.Now().UTC()
+	ds = &models.DataSource{
+		DisplayName: "Gemini LLM Search Grounding",
+		Kind:        models.SourceKindLLMSearchGrounding,
+		Status:      "active",
+		Details:     models.SourceDetails{URI: &uri},
+		OwnerUserID: "system",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		FirstSeen:   now,
+		LastSeen:    now,
+		ErrorCount:  0,
+		TrustLevel:  0.7,
+	}
+	return r.Create(ctx, ds)
 }
 
 // ListByProject returns datasources for a project (primary or related)

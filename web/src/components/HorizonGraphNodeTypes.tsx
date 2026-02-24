@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import { ThemeContext } from './ThemeProvider';
 import type { SemanticGroup, LinearSection } from '../lib/elkLayout';
 import { humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
-import { RiskSegmentIcon, computeRiskSegments, computeRiskSegmentSource, formatRiskLevel, clamp01, type RiskSegmentId } from '../lib/riskShield';
 import * as CountryFlags from 'country-flag-icons/react/1x1';
 
 // Extract ISO 2-letter country code from canonical path
@@ -82,8 +81,16 @@ export interface HorizonNodeData {
   expanded?: boolean;
   collapsed?: boolean;
   critical?: boolean;
-  /** UI: risk shield mode for this node (computed in LensCanvasCockpit displayNodes). */
-  riskShieldOpen?: boolean;
+  /** UI: fragment profile panel open (computed in LensCanvasCockpit displayNodes). */
+  fragmentProfileOpen?: boolean;
+  /** UI: ontology facts (events) for Latest events tab (wired by LensCanvasCockpit). */
+  fragmentProfileEvents?: Array<{ id: string; title: string; summary?: string; occurredAt?: string; type?: string }>;
+  /** UI: ontology facts (signals) for Signals tab (wired by LensCanvasCockpit). */
+  fragmentProfileSignals?: Array<{ id: string; title: string; summary?: string; type?: string; observedAt?: string; tags?: string[] }>;
+  /** UI: loading ontology facts or waiting for news fetch. */
+  fragmentProfileLoading?: boolean;
+  /** UI: news fetch was triggered, waiting for WS. */
+  fragmentProfileFetchTriggered?: boolean;
   /** Global, precomputed "high-profile" business signals for this fragment (backend-provided). */
   highProfile?: {
     version: number;
@@ -99,8 +106,8 @@ export interface HorizonNodeData {
       } | null;
     }>;
   } | null;
-  /** UI: toggle risk shield for a fragment (wired by LensCanvasCockpit). */
-  onToggleRiskShield?: (fragmentId: string) => void;
+  /** UI: toggle fragment profile for a fragment (wired by LensCanvasCockpit). */
+  onToggleFragmentProfile?: (fragmentId: string) => void;
   /** UI: rounded highlight ring for graph query match (wired by LensCanvasCockpit). */
   queryHighlight?: boolean;
   /** UI: rounded highlight ring for selected domain overlay (wired by LensCanvasCockpit). */
@@ -3431,9 +3438,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const baseVisualType = getHorizonNodeVisualType(data.type, data.canonicalPath, data.label);
   const colors = getNodeColors(baseVisualType, theme);
   const [isHovering, setIsHovering] = React.useState(false);
-  // Risk panel (below node): active tab + compact/full toggle.
-  const [riskTab, setRiskTab] = React.useState<RiskSegmentId>('geopolitical');
-  const [riskExpanded, setRiskExpanded] = React.useState(false);
+  const [fragmentProfileTab, setFragmentProfileTab] = React.useState<'events' | 'signals'>('events');
   const rightFiltersRef = React.useRef<HTMLDivElement | null>(null);
   const rightFiltersBtnRef = React.useRef<HTMLButtonElement | null>(null);
   
@@ -3503,10 +3508,9 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const stackPreviewMore = typeof (data as any)?.stackPreviewMore === 'number' ? (data as any).stackPreviewMore : 0;
   const onStackPreviewSelect = (data as any)?.onStackPreviewSelect as ((nodeId: string) => void) | undefined;
   const onStackPreviewMore = (data as any)?.onStackPreviewMore as (() => void) | undefined;
-  // Risk Shield button: only on "real" fragment nodes (not group nodes, not stack controllers, not stack members).
-  // For now it's a pure UI affordance; wiring happens later.
-  const showRiskShieldButton = Boolean(data.fragmentId && !String((data as any)?.stackGroupKey || '').trim());
-  const isRiskShieldOpen = Boolean(data.riskShieldOpen);
+  // Fragment Profile button: only on "real" fragment nodes (not group nodes, not stack controllers, not stack members).
+  const showFragmentProfileButton = Boolean(data.fragmentId && !String((data as any)?.stackGroupKey || '').trim());
+  const isFragmentProfileOpen = Boolean(data.fragmentProfileOpen);
 
   // Right Dock (Levels right pane): 4 filters
   const isLevelsRightPane = String((data as any)?.levelsPane || '').trim() === 'right';
@@ -3570,7 +3574,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     return out;
   }, [segmentNorms]);
   const showSegmentBadges = React.useMemo(() => {
-    if (!showRiskShieldButton) return false;
+    if (!showFragmentProfileButton) return false;
     if (!segmentIconTypes || segmentIconTypes.length === 0) return false;
     const t = String((data as any)?.type || '').toUpperCase().trim().replace(/\s+/g, '_');
     const cp = String((data as any)?.canonicalPath || '').trim();
@@ -3578,15 +3582,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     if (t === 'ORGANIZATION') return true;
     if (cp.startsWith('/org/') || cp.startsWith('/gov/')) return true;
     return false;
-  }, [showRiskShieldButton, segmentIconTypes, (data as any)?.type, (data as any)?.canonicalPath]);
+  }, [showFragmentProfileButton, segmentIconTypes, (data as any)?.type, (data as any)?.canonicalPath]);
 
-  // Risk Shield: compute segments from HorizonFragment.state (prefer risk_segment_*; fallback to propagated base metrics)
-  const riskState = (data as any)?.state;
-  const riskSegments = React.useMemo(() => computeRiskSegments(riskState), [riskState]);
-  React.useEffect(() => {
-    // Closing panel resets expanded view (tab stays).
-    if (!Boolean(data.riskShieldOpen) && riskExpanded) setRiskExpanded(false);
-  }, [data.riskShieldOpen, riskExpanded]);
   // Collapsed stacked view: show 2–3 subtle "cards" peeking from underneath.
   const stackLayers = canToggleStack && !stackExpanded
     ? Math.min(3, Math.max(2, Math.ceil((stackCount || 0) / 8)))
@@ -4340,9 +4337,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           overflow: 'visible',
         }}
       >
-      {/* Risk panel (below node). Shield visuals removed (per latest UX direction). */}
-      {Boolean(data.riskShieldOpen) && (
+      {/* Fragment Profile panel (below node). Tabs: Latest events | Signals. */}
+      {Boolean(data.fragmentProfileOpen) && (
         <div
+          className="nodrag nopan"
           style={{
             position: 'absolute',
             left: '50%',
@@ -4356,26 +4354,48 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           }}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
+          onWheelCapture={(e) => e.stopPropagation()}
         >
-          {/* Accent separator (echo node outline color): dashed and full panel width */}
+          <style>{`
+            @keyframes hzn-fp-shimmer {
+              0% { background-position: 200% 0; }
+              100% { background-position: -200% 0; }
+            }
+            .hzn-fp-skeleton {
+              background: linear-gradient(
+                90deg,
+                ${theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)'} 0%,
+                ${theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)'} 50%,
+                ${theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)'} 100%
+              );
+              background-size: 400% 100%;
+              animation: hzn-fp-shimmer 1.4s ease-in-out infinite;
+            }
+            .hzn-fp-events-scroll::-webkit-scrollbar { width: 6px; }
+            .hzn-fp-events-scroll::-webkit-scrollbar-track { background: transparent; }
+            .hzn-fp-events-scroll::-webkit-scrollbar-thumb {
+              background: ${theme === 'dark' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)'};
+              border-radius: 3px;
+            }
+          `}</style>
+          {/* Accent separator */}
           <div
             style={{
               height: 0,
-              borderTop: `2px dashed ${theme === 'dark' ? hexToRgba(accentColor, 0.55) : hexToRgba(accentColor, 0.38)}`,
-              margin: '0 0 10px',
+              borderTop: `1px solid ${theme === 'dark' ? hexToRgba(accentColor, 0.35) : hexToRgba(accentColor, 0.28)}`,
+              margin: '0 0 8px',
               width: '100%',
-              boxShadow: theme === 'dark' ? `0 0 18px ${hexToRgba(accentColor, 0.20)}` : 'none',
             }}
           />
 
           <div
             style={{
-              borderRadius: 16,
-              border: 'none',
-              background: theme === 'dark' ? 'rgba(10,10,12,0.70)' : 'rgba(255,255,255,0.72)',
-              backdropFilter: 'blur(12px)',
-              boxShadow: theme === 'dark' ? '0 22px 70px rgba(0,0,0,0.55)' : '0 22px 70px rgba(0,0,0,0.16)',
-              padding: 12,
+              borderRadius: 12,
+              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}`,
+              background: theme === 'dark' ? 'rgba(14,14,16,0.92)' : 'rgba(255,255,255,0.96)',
+              backdropFilter: 'blur(16px)',
+              boxShadow: theme === 'dark' ? '0 16px 48px rgba(0,0,0,0.5)' : '0 16px 48px rgba(0,0,0,0.08)',
+              padding: 14,
               position: 'relative',
             }}
           >
@@ -4384,209 +4404,187 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               onClick={(e) => {
                 e.stopPropagation();
                 if (!data.fragmentId) return;
-                (data as any)?.onToggleRiskShield?.(data.fragmentId);
+                (data as any)?.onToggleFragmentProfile?.(data.fragmentId);
               }}
-              aria-label="Close risk panel"
-              title="Close"
+              aria-label={isFragmentProfileOpen ? 'Close fragment profile' : 'Open fragment profile'}
+              title={isFragmentProfileOpen ? 'Close' : 'Latest events'}
               style={{
                 position: 'absolute',
-                top: 8,
-                right: 8,
-                width: 28,
-                height: 28,
-                borderRadius: 10,
-                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
-                background: 'transparent',
-                color: 'var(--text-heading)',
+                top: 10,
+                right: 10,
+                width: 24,
+                height: 24,
+                borderRadius: 6,
+                border: 'none',
+                background: theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+                color: 'var(--text-secondary-strong)',
                 cursor: 'pointer',
-                opacity: 0.75,
-                fontSize: 16,
-                fontWeight: 900,
+                fontSize: 14,
+                fontWeight: 600,
                 lineHeight: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
               ×
             </button>
 
-            {/* Tabs: 8 risk icons (order = polygon, top clockwise) */}
-            <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 8, marginBottom: 10 }}>
-              {riskSegments.map((seg) => {
-                const isActive = seg.id === riskTab;
-                const op = 0.05 + 0.95 * clamp01(seg.score);
-                const title = `${seg.label}: ${formatRiskLevel(seg.level)} (${seg.score.toFixed(2)}) — ${seg.description}`;
-                return (
-                  <button
-                    key={`risk-tab-${seg.id}`}
-                    type="button"
-                    title={title}
-                    onClick={() => setRiskTab(seg.id)}
-                    aria-label={`Risk tab: ${seg.label}`}
-                    aria-pressed={isActive}
-                    style={{
-                      // Match node expand/collapse control size for visual rhyme.
-                      width: 24,
-                      height: 24,
-                      borderRadius: 9,
-                      border: isActive
-                        ? `1px solid ${hexToRgba(seg.color, theme === 'dark' ? 0.55 : 0.40)}`
-                        : `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.10)'}`,
-                      background: isActive
-                        ? (theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.05)')
-                        : 'transparent',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      boxShadow: isActive
-                        ? (theme === 'dark' ? `0 0 0 2px ${hexToRgba(seg.color, 0.16)}` : `0 0 0 2px ${hexToRgba(seg.color, 0.10)}`)
-                        : 'none',
-                    }}
-                  >
-                    <RiskSegmentIcon id={seg.id} size={14} color={seg.color} opacity={isActive ? 1 : op} />
-                  </button>
-                );
-              })}
-            </div>
-
             {(() => {
-              const current = riskSegments.find((s) => s.id === riskTab) || riskSegments[0];
-              const score = clamp01(current?.score ?? 0);
-              const pct = Math.round(score * 100);
-              const source = computeRiskSegmentSource((data as any)?.state, current.id);
+              const events = (data as any)?.fragmentProfileEvents || [];
+              const signals = (data as any)?.fragmentProfileSignals || [];
+              const showSignalsTab = signals.length > 0;
+              const loading = Boolean((data as any)?.fragmentProfileLoading);
 
-              if (!riskExpanded) {
-                // Compact view: bar + number
-                return (
-                  <button
-                    type="button"
-                    onClick={() => setRiskExpanded(true)}
-                    style={{
-                      width: '100%',
-                      border: 'none',
-                      background: 'transparent',
-                      padding: 0,
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                    }}
-                    title="Show details"
-                  >
-                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
-                      <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-heading)' }}>
-                        {current.label}
-                      </div>
-                      <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-secondary-strong)' }}>
-                        {pct}%
-                      </div>
-                    </div>
-                    <div
-                      style={{
-                        marginTop: 8,
-                        height: 8,
-                        borderRadius: 999,
-                        background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.06)',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${pct}%`,
-                          height: '100%',
-                          background: current.color,
-                          opacity: 0.9,
-                        }}
-                      />
-                    </div>
-                    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.4 }}>
-                      {current.description}
-                    </div>
-                  </button>
-                );
-              }
-
-              // Expanded view: deterministic “profile” (no LLM)
               return (
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                      <RiskSegmentIcon id={current.id} size={18} color={current.color} opacity={1} />
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 950, color: 'var(--text-heading)', lineHeight: 1.2 }}>
-                          {current.label}
-                        </div>
-                        <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
-                          {current.description}
-                        </div>
-                      </div>
-                    </div>
+                <>
+                  {/* Tab row */}
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
                     <button
                       type="button"
-                      onClick={() => setRiskExpanded(false)}
-                      title="Collapse"
+                      onClick={(e) => { e.stopPropagation(); setFragmentProfileTab('events'); }}
                       style={{
-                        width: 28,
-                        height: 28,
-                        borderRadius: 10,
-                        border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)'}`,
-                        background: 'transparent',
-                        color: 'var(--text-heading)',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        letterSpacing: '0.04em',
+                        textTransform: 'uppercase',
+                        color: fragmentProfileTab === 'events' ? 'var(--text-heading)' : 'var(--text-tertiary-weak)',
+                        background: 'none',
+                        border: 'none',
                         cursor: 'pointer',
-                        opacity: 0.75,
-                        fontSize: 16,
-                        fontWeight: 900,
-                        lineHeight: 1,
-                        flexShrink: 0,
+                        padding: 0,
                       }}
                     >
-                      ×
+                      Latest events
                     </button>
-                  </div>
-
-                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                    <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-secondary-strong)' }}>
-                      Level: {formatRiskLevel(current.level)}
-                    </div>
-                    <div style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-secondary-strong)' }}>
-                      Score: {score.toFixed(2)} ({pct}%)
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      marginTop: 8,
-                      height: 8,
-                      borderRadius: 999,
-                      background: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.06)',
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: `${pct}%`,
-                        height: '100%',
-                        background: current.color,
-                        opacity: 0.9,
-                      }}
-                    />
-                  </div>
-
-                  <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.5 }}>
-                    {source.kind === 'none' ? (
-                      <div>Source metric: — (no direct metric available)</div>
-                    ) : (
-                      <div>
-                        Source metric: <span style={{ fontWeight: 900, color: 'var(--text-heading)' }}>{source.key}</span>{' '}
-                        <span style={{ opacity: 0.8 }}>
-                          ({source.kind === 'segment_metric' ? 'segment' : 'fallback'}; value={source.value.toFixed(2)})
-                        </span>
-                      </div>
+                    {showSignalsTab && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setFragmentProfileTab('signals'); }}
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          letterSpacing: '0.04em',
+                          textTransform: 'uppercase',
+                          color: fragmentProfileTab === 'signals' ? 'var(--text-heading)' : 'var(--text-tertiary-weak)',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          padding: 0,
+                        }}
+                      >
+                        Signals ({signals.length})
+                      </button>
                     )}
                   </div>
-                </div>
+
+                  {loading ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {[1, 2, 3, 4].map((i) => (
+                        <div
+                          key={i}
+                          className="hzn-fp-skeleton"
+                          style={{
+                            height: i === 1 ? 56 : 44,
+                            borderRadius: 6,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  ) : (fragmentProfileTab === 'signals' && showSignalsTab) ? (
+                    <div
+                      className="hzn-fp-events-scroll nowheel nodrag nopan"
+                      onWheelCapture={(e) => e.stopPropagation()}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 0,
+                        maxHeight: 320,
+                        overflowY: 'auto',
+                        overflowX: 'hidden',
+                        marginRight: -4,
+                        paddingRight: 4,
+                      }}
+                    >
+                      {signals.map((sig: any, idx: number) => (
+                        <div
+                          key={sig.id}
+                          style={{
+                            padding: '12px 0',
+                            borderBottom: idx < signals.length - 1
+                              ? `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`
+                              : 'none',
+                          }}
+                        >
+                          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', lineHeight: 1.35, letterSpacing: '-0.01em' }}>
+                            {sig.title || sig.type || 'Signal'}
+                          </div>
+                          {sig.summary && (
+                            <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.45, opacity: 0.9 }}>
+                              {sig.summary}
+                            </div>
+                          )}
+                          {sig.observedAt && (
+                            <div style={{ marginTop: 6, fontSize: 10, color: 'var(--text-tertiary-weak)', letterSpacing: '0.02em' }}>
+                              {new Date(sig.observedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : events.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-tertiary-weak)', lineHeight: 1.5 }}>
+                      No events yet. Loading or creating…
+                    </div>
+                  ) : (
+                    <div
+                      className="hzn-fp-events-scroll nowheel nodrag nopan"
+                      onWheelCapture={(e) => e.stopPropagation()}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 0,
+                        maxHeight: 320,
+                        overflowY: 'auto',
+                        overflowX: 'hidden',
+                        marginRight: -4,
+                        paddingRight: 4,
+                      }}
+                    >
+                      {events.map((ev: any, idx: number) => (
+                        <div
+                          key={ev.id}
+                          style={{
+                            padding: '12px 0',
+                            borderBottom: idx < events.length - 1
+                              ? `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`
+                              : 'none',
+                          }}
+                        >
+                          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', lineHeight: 1.35, letterSpacing: '-0.01em' }}>
+                            {ev.title || 'Untitled'}
+                          </div>
+                          {ev.summary && (
+                            <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.45, opacity: 0.9 }}>
+                              {ev.summary}
+                            </div>
+                          )}
+                          {ev.occurredAt && (
+                            <div style={{ marginTop: 6, fontSize: 10, color: 'var(--text-tertiary-weak)', letterSpacing: '0.02em' }}>
+                              {new Date(ev.occurredAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               );
             })()}
           </div>
         </div>
       )}
+
 
       {/* Stack controllers are now rendered as a single calm surface (no backplates). */}
 
@@ -5299,7 +5297,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       )}
 
       {/* Risk Shield affordance (bottom-left, symmetric to expand button). */}
-      {showRiskShieldButton && (
+      {showFragmentProfileButton && (
         <div
           style={{
             position: 'absolute',
@@ -5315,25 +5313,24 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              if (data.fragmentId) data.onToggleRiskShield?.(data.fragmentId);
+              if (data.fragmentId) data.onToggleFragmentProfile?.(data.fragmentId);
             }}
-            aria-label="Risk shield"
-            title={isRiskShieldOpen ? 'Risk shield (on)' : 'Risk shield'}
+            aria-label={isFragmentProfileOpen ? 'Close latest events' : 'Show latest events'}
+            title={isFragmentProfileOpen ? 'Close (click again)' : 'Latest events'}
             style={{
               width: 24,
               height: 24,
               borderRadius: 9,
-              border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
-              // Match expand/collapse affordance: when active, use the same amber fill as "collapse" state.
-              background: isRiskShieldOpen
-                ? (theme === 'dark' ? 'rgba(245, 158, 11, 0.28)' : 'rgba(245, 158, 11, 0.18)')
+              border: `1px solid ${isFragmentProfileOpen ? (theme === 'dark' ? 'rgba(245,158,11,0.5)' : 'rgba(245,158,11,0.4)') : (theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)')}`,
+              background: isFragmentProfileOpen
+                ? (theme === 'dark' ? 'rgba(245, 158, 11, 0.32)' : 'rgba(245, 158, 11, 0.22)')
                 : (theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.78)'),
-              color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
+              color: isFragmentProfileOpen ? (theme === 'dark' ? 'rgba(255,255,255,0.95)' : 'rgba(15,23,42,0.9)') : (theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)'),
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
+              boxShadow: isFragmentProfileOpen ? (theme === 'dark' ? '0 0 0 1px rgba(245,158,11,0.3), inset 0 1px 0 rgba(255,255,255,0.08)' : 'inset 0 1px 2px rgba(0,0,0,0.06)') : (theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)'),
             }}
           >
             {/* Exclamation icon (attention / risk mode) */}
@@ -5358,7 +5355,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
       {marketSummary && (
         (() => {
           // Reserve space so we don't overlap the bottom-left and bottom-right controls.
-          const leftReserve = showRiskShieldButton ? 12 + 24 + 8 : 12;
+          const leftReserve = showFragmentProfileButton ? 12 + 24 + 8 : 12;
           const rightButtons = (showExpand ? 1 : 0) + (canCollapse ? 1 : 0) + (showStackExpandButton ? 1 : 0);
           const rightReserve = (() => {
             // If the bottom-right controls are not rendered, keep a minimal padding.
@@ -5403,8 +5400,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         })()
       )}
 
-      {/* Top market segments (max 3): centered between left (!) and right expand/collapse controls. */}
-      {showSegmentBadges && (
+      {/* Top market segments (max 3): centered between left (!) and right expand/collapse controls. Hidden when Fragment Profile (Latest events) is open. */}
+      {showSegmentBadges && !isFragmentProfileOpen && (
         <div
           style={{
             position: 'absolute',

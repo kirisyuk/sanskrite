@@ -60,30 +60,8 @@ func main() {
 	// Repositories
 	coreDocsRepo := repo.NewCoreDocsRepo(fsClient)
 	docsRepo := repo.NewDocumentsRepository(fsClient)
-	chunksRepo := repo.NewChunksRepository(fsClient)
 
-	// Embeddings (prefer OpenAI; fallback to Gemini key, still via executor)
-	modelManager := ai.NewAIModelManager()
-	aiServices := []ai.AIService{}
-	openaiAPIKey := gcp.GetEnvOrSecret(ctx, *projectID, "OPENAI_API_KEY", "openai_api_key")
-	if strings.TrimSpace(openaiAPIKey) != "" {
-		aiServices = append(aiServices, ai.NewOpenAIService(openaiAPIKey, modelManager))
-		log.Printf("Embeddings provider: OpenAI")
-	}
-	if len(aiServices) == 0 {
-		geminiAPIKey := gcp.GetEnvOrSecret(ctx, *projectID, "GEMINI_API_KEY", "gemini_api_key")
-		if strings.TrimSpace(geminiAPIKey) != "" {
-			aiServices = append(aiServices, ai.NewGeminiService(geminiAPIKey, modelManager))
-			log.Printf("Embeddings provider: Vertex AI (Gemini)")
-		}
-	}
-	if len(aiServices) == 0 {
-		log.Fatal("No embedding API keys found. Set OPENAI_API_KEY or GEMINI_API_KEY env var, or ensure secrets exist in GCP Secret Manager.")
-	}
-	exec := ai.NewAITaskExecutor(aiServices, modelManager)
-	emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
-
-	// Optional: enable GCS storage for rag_documents (needed for Vertex AI Search import)
+	// Enable GCS storage for rag_documents (needed for Vertex AI Search import)
 	gcsClient, gcsErr := gcp.NewGCSClient(ctx, *projectID)
 	if gcsErr != nil {
 		log.Printf("Warning: failed to create GCS client (StoragePath/Vertex sync may be disabled): %v", gcsErr)
@@ -102,8 +80,9 @@ func main() {
 		vertexSearchLocation = "global"
 	}
 	vertexSearchDataStoreID := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_DATA_STORE_ID"))
+	var vertexSearchClient *ai.VertexAISearchClient
 	if vertexSearchDataStoreID != "" && ragDocsBucket != "" {
-		vertexSearchClient := ai.NewVertexAISearchClient(*projectID, vertexSearchLocation, vertexSearchDataStoreID, "")
+		vertexSearchClient = ai.NewVertexAISearchClient(*projectID, vertexSearchLocation, vertexSearchDataStoreID, "")
 		docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, tid string) (string, error) {
 			gcsPath := fmt.Sprintf("gs://%s/%s/**", ragDocsBucket, tid)
 			importReq := &ai.ImportDocumentsRequest{
@@ -136,7 +115,7 @@ func main() {
 	// Projects handler (we reuse IndexCoreDoc implementation, including artifact section assembly)
 	logger := log.New(os.Stdout, "[reindex-artifacts] ", log.LstdFlags)
 	projectsRepo := repo.NewProjectsRepository(fsClient)
-	ph := httphandlers.NewProjectsHandler(projectsRepo, logger).WithRAG(docsRepo, chunksRepo, emb)
+	ph := httphandlers.NewProjectsHandler(projectsRepo, logger).WithDocumentIndexing(docsRepo, vertexSearchClient)
 
 	// Collect artifacts to process
 	artifacts := make([]*models.CoreDoc, 0)

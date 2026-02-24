@@ -661,7 +661,6 @@ func (r *DocumentsRepository) DeleteWithStorage(ctx context.Context, d *models.D
 }
 
 // DeleteBySource deletes all documents for a source and their content from GCS
-// Note: chunks should be deleted separately using ChunksRepository.DeleteByDoc
 func (r *DocumentsRepository) DeleteBySource(ctx context.Context, tenantID, sourceID string) error {
 	if tenantID == "" || sourceID == "" {
 		return ErrInvalidDocument

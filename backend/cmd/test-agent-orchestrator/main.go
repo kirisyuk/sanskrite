@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 
 	firebase "firebase.google.com/go/v4"
@@ -388,7 +387,7 @@ func main() {
 
 	// Тестовый сценарий 2: Поиск → Чтение → Анализ → Сохранение
 	// fmt.Println("\n=== Test Scenario 2: Search → Read → Analyze → Write ===")
-	// testScenario2(ctx, orchestrator, jobsRepo, coreDocsRepo, docsRepo, chunksRepo, emb)
+	// testScenario2(ctx, orchestrator, jobsRepo, coreDocsRepo, docsRepo)
 	_ = testScenario2 // Suppress unused function warning
 
 	// Тестовый сценарий 3: Job с некритичным шагом (должен продолжить при ошибке)
@@ -507,7 +506,7 @@ func testScenario1(ctx context.Context, orchestrator *agents.AgentOrchestrator, 
 	}
 }
 
-func testScenario2(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository, coreDocsRepo *repo.CoreDocsRepo, _ *repo.DocumentsRepository, _ *repo.ChunksRepository, _ ai.EmbeddingProvider) {
+func testScenario2(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository, coreDocsRepo *repo.CoreDocsRepo, _ *repo.DocumentsRepository) {
 	// Сценарий: Найти документ → Прочитать → Проанализировать → Сохранить изменения
 	fmt.Println("\n--- Scenario 2: Search → Read → Analyze → Write ---")
 
@@ -620,29 +619,23 @@ func testScenario2(ctx context.Context, orchestrator *agents.AgentOrchestrator, 
 	}
 }
 
-// indexCoreDocForTest индексирует CoreDoc в RAG (создает Document и Chunks)
-func indexCoreDocForTest(ctx context.Context, cd *models.CoreDoc, docsRepo *repo.DocumentsRepository, chunksRepo *repo.ChunksRepository, emb ai.EmbeddingProvider) error {
+// indexCoreDocForTest индексирует CoreDoc (создает Document, Vertex индексирует через GCS)
+func indexCoreDocForTest(ctx context.Context, cd *models.CoreDoc, docsRepo *repo.DocumentsRepository) error {
 	if cd.ExtractedText == nil || *cd.ExtractedText == "" {
 		return fmt.Errorf("no text to index")
 	}
 
-	text := *cd.ExtractedText
-	text = strings.TrimSpace(text)
+	text := strings.TrimSpace(*cd.ExtractedText)
 	if text == "" {
 		return fmt.Errorf("no text to index")
 	}
 
-	// Virtual SourceID для project documents
 	virtualSourceID := fmt.Sprintf("project:%s", cd.ProjectID)
 	externalID := fmt.Sprintf("coredoc:%s", cd.ID)
-
-	// Проверяем, существует ли Document
-	existingDoc, _ := docsRepo.GetByCoreDocID(ctx, cd.TenantID, cd.ID)
-	var docID string
 	now := time.Now().UTC()
 
+	existingDoc, _ := docsRepo.GetByCoreDocID(ctx, cd.TenantID, cd.ID)
 	if existingDoc != nil {
-		// Обновляем существующий документ
 		existingDoc.FullText = text
 		existingDoc.Title = cd.Filename
 		existingDoc.ContentType = cd.ContentType
@@ -650,81 +643,32 @@ func indexCoreDocForTest(ctx context.Context, cd *models.CoreDoc, docsRepo *repo
 		existingDoc.DocumentPath = fmt.Sprintf("coredoc/%s/%s", cd.ProjectID, cd.ID)
 		existingDoc.ContentHash = repo.HashContent(text)
 		existingDoc.UpdatedAt = now
-		existingDoc.Status = "new"
-		if err := docsRepo.Upsert(ctx, existingDoc); err != nil {
-			return fmt.Errorf("failed to update document: %w", err)
-		}
-		docID = existingDoc.ID
-		// Удаляем старые chunks
-		if err := chunksRepo.DeleteByDoc(ctx, cd.TenantID, docID); err != nil {
-			log.Printf("Warning: failed to delete old chunks: %v", err)
-		}
-	} else {
-		// Создаем новый Document
-		doc := &models.Document{
-			TenantID:     cd.TenantID,
-			SourceID:     virtualSourceID,
-			ExternalID:   externalID,
-			Title:        cd.Filename,
-			DocumentPath: fmt.Sprintf("coredoc/%s/%s", cd.ProjectID, cd.ID),
-			FullText:     text,
-			Status:       "new",
-			ContentType:  cd.ContentType,
-			DocumentType: "coredoc",
-			ContentHash:  repo.HashContent(text),
-			IngestedAt:   now,
-			CreatedAt:    now,
-			UpdatedAt:    now,
-			Attrs: map[string]any{
-				"coreDocId":    cd.ID,
-				"projectId":    cd.ProjectID,
-				"documentType": "coredoc",
-			},
-		}
-		id, err := docsRepo.Create(ctx, doc)
-		if err != nil {
-			return fmt.Errorf("failed to create document: %w", err)
-		}
-		docID = id
+		existingDoc.Status = "indexed"
+		return docsRepo.Upsert(ctx, existingDoc)
 	}
 
-	// Chunk и embed
-	parts := discovery.ChunkText(text, 1200)
-	if len(parts) == 0 {
-		return nil
+	doc := &models.Document{
+		TenantID:     cd.TenantID,
+		SourceID:     virtualSourceID,
+		ExternalID:   externalID,
+		Title:        cd.Filename,
+		DocumentPath: fmt.Sprintf("coredoc/%s/%s", cd.ProjectID, cd.ID),
+		FullText:     text,
+		Status:       "indexed",
+		ContentType:  cd.ContentType,
+		DocumentType: "coredoc",
+		ContentHash:  repo.HashContent(text),
+		IngestedAt:   now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Attrs: map[string]any{
+			"coreDocId":    cd.ID,
+			"projectId":    cd.ProjectID,
+			"documentType": "coredoc",
+		},
 	}
-
-	vectors, err := emb.EmbedTexts(ctx, parts)
-	if err != nil {
-		return fmt.Errorf("failed to create embeddings: %w", err)
-	}
-
-	for i := range parts {
-		ch := &models.Chunk{
-			TenantID:         cd.TenantID,
-			DocID:            docID,
-			SourceID:         virtualSourceID,
-			Position:         i,
-			Text:             parts[i],
-			Embedding:        vectors[i],
-			EmbeddingModel:   emb.ModelID(),
-			EmbeddingVersion: "v1",
-			Attrs:            map[string]any{"documentType": "coredoc", "coreDocId": cd.ID},
-			ContentHash:      repo.HashContent(parts[i]),
-			CreatedAt:        now,
-		}
-		if _, err := chunksRepo.Create(ctx, ch); err != nil {
-			return fmt.Errorf("failed to create chunk: %w", err)
-		}
-	}
-
-	// Помечаем документ как embedded
-	if doc, _ := docsRepo.GetByID(ctx, docID); doc != nil {
-		doc.Status = "embedded"
-		_ = docsRepo.Upsert(ctx, doc)
-	}
-
-	return nil
+	_, err := docsRepo.Create(ctx, doc)
+	return err
 }
 
 func testScenario3(ctx context.Context, orchestrator *agents.AgentOrchestrator, jobsRepo *repo.AgentJobsRepository) {

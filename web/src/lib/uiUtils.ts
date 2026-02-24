@@ -254,6 +254,18 @@ export function preferDisplayLabel(label?: string, canonicalPath?: string, type?
 }
 
 /**
+ * Normalize canonical path for consistent matching (trim, remove trailing slash).
+ * Matches backend newsByFragments key format.
+ */
+export function normalizeCanonicalPath(path?: string): string {
+  let p = String(path || '').trim();
+  while (p.length > 1 && p.endsWith('/')) {
+    p = p.slice(0, -1);
+  }
+  return p;
+}
+
+/**
  * Humanize a canonicalPath for UI display by taking the last segment.
  * Example: "/org/turki-al-saud" -> "turki al saud"
  */

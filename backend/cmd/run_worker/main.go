@@ -76,7 +76,6 @@ func main() {
 	sourcesRepo := repo.NewDataSourcesRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
-	chunksRepo := repo.NewChunksRepository(fsClient.Client())
 	ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
 	ontologyFactsRepo := repo.NewOntologyFactsRepository(fsClient.Client())
 
@@ -102,7 +101,7 @@ func main() {
 	// Create orchestrator
 	orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, nil, sourcesRepo, publisher, logger)
 	orchestrator = orchestrator.WithSourceProjects(sourceProjectsRepo)
-	orchestrator = orchestrator.WithRAG(prov.NewRegistry(), docsRepo, chunksRepo)
+	orchestrator = orchestrator.WithDocumentIngest(prov.NewRegistry(), docsRepo)
 
 	// Create embedding provider
 	emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")

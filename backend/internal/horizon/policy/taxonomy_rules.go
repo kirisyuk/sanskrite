@@ -238,7 +238,7 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "FOUNDED", Direction: "PERSON|ORG → ORGANIZATION|PROGRAM", ValidSource: []string{"PERSON", "ORGANIZATION"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM"}},
 				{EdgeType: "OWNS", Direction: "ORG|PERSON → ORG|FACILITY|PRODUCT|DEPOSIT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "DEPOSIT"}},
 				// COMMUNITY can also be an actor (e.g., dynasty) that controls organizations/facilities.
-				{EdgeType: "CONTROLS", Direction: "ORG|PERSON|COMMUNITY → ORG|FACILITY", ValidSource: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY"}},
+				{EdgeType: "CONTROLS", Direction: "ORG|PERSON|COMMUNITY → ORG|FACILITY|PRODUCT", ValidSource: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}},
 				{EdgeType: "REGULATES", Direction: "ORGANIZATION → *", ValidSource: []string{"ORGANIZATION"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "MARKET"}},
 				// PROGRAM can also be located in a GEO region (e.g., incubator/government program operating in a city).
 				{EdgeType: "LOCATED_IN", Direction: "* → GEO_REGION", ValidSource: []string{"FACILITY", "ORGANIZATION", "PERSON", "PRODUCT", "PROGRAM", "GEO_REGION", "DEPOSIT", "COMMUNITY"}, ValidTarget: []string{"GEO_REGION"}},
@@ -251,7 +251,7 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "PARTICIPATES_IN", Direction: "ORG|FACILITY|COMMUNITY|PRODUCT|PROGRAM → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PRODUCT", "PROGRAM"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "DOMINATES", Direction: "ORG|FACILITY|COMMUNITY → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "HAS_MARKET_SEGMENT", Direction: "MARKET → MARKET", ValidSource: []string{"MARKET"}, ValidTarget: []string{"MARKET"}},
-				{EdgeType: "ADMINISTERS", Direction: "ORGANIZATION|GEO_REGION → ORGANIZATION|PROGRAM|GEO_REGION", ValidSource: []string{"ORGANIZATION", "GEO_REGION"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "GEO_REGION"}, Description: "Government hierarchy"},
+				{EdgeType: "ADMINISTERS", Direction: "ORGANIZATION|GEO_REGION → ORGANIZATION|PROGRAM|GEO_REGION|FACILITY|DEPOSIT", ValidSource: []string{"ORGANIZATION", "GEO_REGION"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "GEO_REGION", "FACILITY", "DEPOSIT"}, Description: "Government hierarchy"},
 				{EdgeType: "EXTRACTS_FROM", Direction: "FACILITY → DEPOSIT", ValidSource: []string{"FACILITY"}, ValidTarget: []string{"DEPOSIT"}},
 				{EdgeType: "MEMBER_OF", Direction: "PERSON → COMMUNITY", ValidSource: []string{"PERSON"}, ValidTarget: []string{"COMMUNITY"}},
 				{EdgeType: "HAS_SUBGROUP", Direction: "COMMUNITY → COMMUNITY", ValidSource: []string{"COMMUNITY"}, ValidTarget: []string{"COMMUNITY"}},

@@ -42,6 +42,17 @@ type OntologyFact struct {
 	// MetricUpdates is an optional, structured patch that can be applied to HorizonFragment.State without LLM.
 	// This is only used for safe, typed metric changes (e.g., numeric KPI updates) and is ignored otherwise.
 	MetricUpdates []FactMetricUpdate `json:"metricUpdates,omitempty" firestore:"metricUpdates,omitempty"`
+
+	// EventPlace is the place name from LLM (e.g. "Dubai airport"); used for geocoding fallback.
+	EventPlace *string `json:"eventPlace,omitempty" firestore:"eventPlace,omitempty"`
+	// EventAddress is the full address from LLM for geocoding (e.g. "123 Main St, Houston, TX"); Google Geo resolves to Coordinates.
+	EventAddress *string `json:"eventAddress,omitempty" firestore:"eventAddress,omitempty"`
+	// EventISO6709 is coordinates from LLM in ISO6709 format (e.g. "+25.27+55.30/"); parsed to Coordinates when valid.
+	EventISO6709 *string `json:"eventIso6709,omitempty" firestore:"eventIso6709,omitempty"`
+
+	// CanonicalNames are human-readable names of the canonical paths (e.g. "San Francisco", "Emirates").
+	// Used for search/lookup when resolving facts to visible fragments.
+	CanonicalNames []string `json:"canonicalNames,omitempty" firestore:"canonicalNames,omitempty"`
 }
 
 // FactMetricUpdate represents a safe, typed metric update derived from a fact.
@@ -90,8 +101,17 @@ func (f *OntologyFact) GenerateVectorText() string {
 	if len(f.CanonicalPaths) > 0 {
 		add("Canonical paths: " + strings.Join(f.CanonicalPaths, ", "))
 	}
+	if len(f.CanonicalNames) > 0 {
+		add("Canonical names: " + strings.Join(f.CanonicalNames, ", "))
+	}
 	if f.LocationPath != nil && strings.TrimSpace(*f.LocationPath) != "" {
 		add("Location path: " + strings.TrimSpace(*f.LocationPath))
+	}
+	if f.EventPlace != nil && strings.TrimSpace(*f.EventPlace) != "" {
+		add("Place: " + strings.TrimSpace(*f.EventPlace))
+	}
+	if f.EventAddress != nil && strings.TrimSpace(*f.EventAddress) != "" {
+		add("Address: " + strings.TrimSpace(*f.EventAddress))
 	}
 	if len(f.ActorPaths) > 0 {
 		add("Actor paths: " + strings.Join(f.ActorPaths, ", "))

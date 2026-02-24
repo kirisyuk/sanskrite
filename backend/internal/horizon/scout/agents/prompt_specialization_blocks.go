@@ -125,7 +125,7 @@ func buildObjectQualifierUnitTemplateContractBlock(canonicalPath string, fragmen
 	return buildObjectQualifierUnitTemplateContractBlockWithHints(canonicalPath, fragmentType, nil, nil, nil)
 }
 
-func buildObjectQualifierUnitTemplateContractBlockWithHints(canonicalPath string, fragmentType models.FragmentType, qualifiers map[string]interface{}, identifiers map[string]string, labels map[string]string) string {
+func buildObjectQualifierUnitTemplateContractBlockWithHints(canonicalPath string, fragmentType models.FragmentType, qualifiers map[string]interface{}, identifiers map[string]string, _ map[string]string) string {
 	fragmentType = inferPromptFragmentType(canonicalPath, fragmentType)
 	allQualifiers := models.AllObjectQualifierStrings()
 	allowedQualifiers := models.AllowedObjectQualifierStringsForType(fragmentType, canonicalPath)

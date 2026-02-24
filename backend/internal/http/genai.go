@@ -33,13 +33,12 @@ type GenAIHandler struct {
 	modelManager     *ai.AIModelManager
 	taskExecutor     *ai.AITaskExecutor
 	// CoreDocs tool dependencies (optional, wired via WithCoreDocsTools)
-	coreDocs     *repo.CoreDocsRepo
-	interactions *repo.InteractionsRepository
-	docsRepo     *repo.DocumentsRepository
-	chunksRepo   *repo.ChunksRepository
-	emb          ai.EmbeddingProvider
-	storage      StorageClient
-	bucket       string
+	coreDocs           *repo.CoreDocsRepo
+	interactions       *repo.InteractionsRepository
+	docsRepo           *repo.DocumentsRepository
+	vertexSearchClient *ai.VertexAISearchClient
+	storage            StorageClient
+	bucket             string
 	// Graph tool dependencies (optional, wired via WithGraphTools)
 	graphEnabled bool
 	// Research mode dependencies (optional, wired via WithTavilyClient)
@@ -102,21 +101,19 @@ func (h *GenAIHandler) WithAIExecutor(exec *ai.AITaskExecutor) *GenAIHandler {
 	return h
 }
 
-// WithCoreDocsTools wires repositories needed for CoreDocs tool execution
+// WithCoreDocsTools wires repositories needed for CoreDocs tool execution (Vertex AI Search for search)
 func (h *GenAIHandler) WithCoreDocsTools(
 	coreDocs *repo.CoreDocsRepo,
 	interactions *repo.InteractionsRepository,
 	docsRepo *repo.DocumentsRepository,
-	chunksRepo *repo.ChunksRepository,
-	emb ai.EmbeddingProvider,
+	vertexSearch *ai.VertexAISearchClient,
 	storage StorageClient,
 	bucket string,
 ) *GenAIHandler {
 	h.coreDocs = coreDocs
 	h.interactions = interactions
 	h.docsRepo = docsRepo
-	h.chunksRepo = chunksRepo
-	h.emb = emb
+	h.vertexSearchClient = vertexSearch
 	h.storage = storage
 	h.bucket = bucket
 	return h
@@ -1023,14 +1020,13 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 
 		// Register CoreDocs tools if tool usage is enabled and dependencies are available
 		// We detect tool usage mode by checking if projectID is present
-		if projectID != "" && h.coreDocs != nil && h.interactions != nil && h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+		if projectID != "" && h.coreDocs != nil && h.interactions != nil && h.docsRepo != nil && h.vertexSearchClient != nil {
 			// Create CoreDocs tool executor
 			coreDocsExecutor := NewCoreDocsToolExecutor(
 				h.coreDocs,
 				h.interactions,
 				h.docsRepo,
-				h.chunksRepo,
-				h.emb,
+				h.vertexSearchClient,
 				h.storage,
 				h.bucket,
 				h.publisher,

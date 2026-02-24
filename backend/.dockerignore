@@ -1,8 +1,9 @@
-# Ignore build artifacts
+# Ignore build artifacts and service binaries
 server
 ws-broker
 verified-proxy
 hatlone-ws
+main
 *.exe
 *.dll
 *.dylib
@@ -10,16 +11,28 @@ hatlone-ws
 *.out
 
 # Local tool binaries (can be very large; not needed for Docker builds)
+# Go build outputs from cmd/tools/* and cmd/* - exclude all known patterns
 horizon_*
+add_*
 check_*
-seed_rss_sources
-migrate_sources
+check-*
+seed_*
+migrate_*
 inspect_*
 purge_*
 geonames_*
 loc_*
 watchdog_*
 test_*
+test-*
+sync-*
+reindex-*
+update-*
+clear_*
+run_*
+find_*
+gemini_*
+openai_*
 
 # Local build artifacts and caches
 bin/
@@ -28,6 +41,7 @@ build/
 # Local data dumps / experiments
 *.jsonl
 *.duration.txt
+*.csv
 *.log
 
 # Ignore vendor if exists

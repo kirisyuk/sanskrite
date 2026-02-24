@@ -59,6 +59,8 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
   const [productIOLoading, setProductIOLoading] = React.useState(false);
   const [productIOError, setProductIOError] = React.useState<string | null>(null);
   const [productIOResult, setProductIOResult] = React.useState<{ nodes: number; edges: number } | null>(null);
+  const [newsLoading, setNewsLoading] = React.useState(false);
+  const [newsError, setNewsError] = React.useState<string | null>(null);
   const [onDemandOpen, setOnDemandOpen] = React.useState(false);
   const [onDemandCtx, setOnDemandCtx] = React.useState<HorizonOnDemandContext | null>(null);
 
@@ -195,6 +197,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     setProductIOError(null);
     setProductIOResult(null);
     setProductIOLoading(false);
+    setNewsError(null);
 
     const loadData = async () => {
       setLoading(true);
@@ -360,6 +363,29 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       setNodeExplainLoading(false);
     }
   }, [nodeId, nodeData, fragment]);
+
+  const handleLoadNewsForNode = React.useCallback(async () => {
+    const cp = String(nodeData?.canonicalPath || fragment?.canonicalPath || '').trim();
+    if (!cp || !cp.startsWith('/')) {
+      setNewsError('Node has no canonical path');
+      return;
+    }
+    setNewsLoading(true);
+    setNewsError(null);
+    try {
+      await api.fetchNewsByFragments({
+        fragments: [{
+          canonicalPath: cp,
+          canonicalName: preferDisplayLabel(nodeData?.label, cp, nodeData?.type) || preferDisplayLabel(fragment?.labels?.en, cp, fragment?.type) || undefined,
+        }],
+        daysBack: 7,
+      });
+    } catch (err: any) {
+      setNewsError(err?.response?.data?.error || err?.message || 'Failed to load news');
+    } finally {
+      setNewsLoading(false);
+    }
+  }, [nodeData, fragment]);
 
   // Load edge data when edgeId changes
   React.useEffect(() => {
@@ -2210,6 +2236,32 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               {nodeExplainText}
             </div>
           )}
+          </Disclosure>
+
+          <Disclosure title="News & ontology facts" subtitle="Fetch news, create events and signals">
+            <button
+              type="button"
+              onClick={handleLoadNewsForNode}
+              disabled={newsLoading}
+              style={{
+                padding: '8px 10px',
+                fontSize: 12,
+                fontWeight: 800,
+                borderRadius: 12,
+                border: '1px solid var(--border-subtle)',
+                background: newsLoading ? 'var(--bg-secondary)' : 'var(--bg-tertiary)',
+                color: 'var(--text-heading)',
+                cursor: newsLoading ? 'not-allowed' : 'pointer',
+                opacity: newsLoading ? 0.7 : 1,
+                width: '100%',
+              }}
+            >
+              {newsLoading ? 'Loading…' : 'Load news for this node'}
+            </button>
+            {newsError && <div style={{ fontSize: 12, color: '#f87171', marginTop: 10 }}>{newsError}</div>}
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 8 }}>
+              Uses Gemini search grounding. Creates ontology facts (events), 12-axis signals, propagation.
+            </div>
           </Disclosure>
 
           {(() => {

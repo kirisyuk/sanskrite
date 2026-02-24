@@ -91,6 +91,40 @@ func TestResolveEdgeDirectionAutoFixCommunityFoundedPerson(t *testing.T) {
 	}
 }
 
+func TestResolveEdgeDirectionAutoFixDepositAdministersOrg(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeAdministers,
+		horizonmodels.FragmentTypeDeposit,
+		horizonmodels.FragmentTypeOrganization,
+	)
+	if !ok {
+		t.Fatalf("expected auto-fix for DEPOSIT ADMINISTERS ORGANIZATION")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeAdministers {
+		t.Fatalf("expected newType ADMINISTERS (unchanged), got %s", fix.NewType)
+	}
+	if !fix.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true (ORG ADMINISTERS DEPOSIT)")
+	}
+}
+
+func TestResolveEdgeDirectionAutoFixFacilityAdministersOrg(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeAdministers,
+		horizonmodels.FragmentTypeFacility,
+		horizonmodels.FragmentTypeOrganization,
+	)
+	if !ok {
+		t.Fatalf("expected auto-fix for FACILITY ADMINISTERS ORGANIZATION")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeAdministers {
+		t.Fatalf("expected newType ADMINISTERS (unchanged), got %s", fix.NewType)
+	}
+	if !fix.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true (ORG ADMINISTERS FACILITY)")
+	}
+}
+
 func TestApplyEdgeCanonicalizationPolicyUsesDirectionAutoFix(t *testing.T) {
 	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
 		EdgeType:   horizonmodels.DependencyTypeInvestsIn,

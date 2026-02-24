@@ -13,7 +13,6 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -140,19 +139,6 @@ func main() {
 		return
 	}
 
-	// Initialize RAG components for reindexing
-	openaiAPIKey := os.Getenv("OPENAI_API_KEY")
-	if openaiAPIKey == "" {
-		log.Fatal("OPENAI_API_KEY environment variable is required for reindexing")
-	}
-
-	modelManager := ai.NewAIModelManager()
-	aiServices := []ai.AIService{
-		ai.NewOpenAIService(openaiAPIKey, modelManager),
-	}
-	exec := ai.NewAITaskExecutor(aiServices, modelManager)
-	emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
-
 	// Initialize GCS client for document storage
 	gcsClient, err := gcp.NewGCSClient(ctx, *projectID)
 	if err != nil {
@@ -160,7 +146,6 @@ func main() {
 	}
 
 	docsRepo := repo.NewDocumentsRepository(fsClient)
-	chunksRepo := repo.NewChunksRepository(fsClient)
 
 	// Configure Vertex AI Search sync if available
 	vertexSearchLocation := os.Getenv("VERTEX_SEARCH_LOCATION")
@@ -236,7 +221,7 @@ func main() {
 		}
 
 		// Reindex
-		if err := indexCoreDoc(ctx, cd, cd.TenantID, docsRepo, chunksRepo, emb); err != nil {
+		if err := indexCoreDoc(ctx, cd, cd.TenantID, docsRepo); err != nil {
 			log.Printf("✗ Failed to reindex %s (%s): %v", cd.ID, cd.Filename, err)
 			failed++
 		} else {
@@ -250,10 +235,10 @@ func main() {
 	log.Printf("  Failed: %d", failed)
 }
 
-// indexCoreDoc indexes a CoreDoc by creating/updating Document and Chunks with embeddings
-func indexCoreDoc(ctx context.Context, cd *models.CoreDoc, tenantID string, docsRepo *repo.DocumentsRepository, chunksRepo *repo.ChunksRepository, emb ai.EmbeddingProvider) error {
-	if docsRepo == nil || chunksRepo == nil || emb == nil {
-		return fmt.Errorf("RAG components not configured")
+// indexCoreDoc indexes a CoreDoc by creating/updating Document (uploads to GCS, triggers Vertex sync)
+func indexCoreDoc(ctx context.Context, cd *models.CoreDoc, tenantID string, docsRepo *repo.DocumentsRepository) error {
+	if docsRepo == nil {
+		return fmt.Errorf("document indexing not configured (DocumentsRepository required)")
 	}
 	if cd.ExtractedText == nil || strings.TrimSpace(*cd.ExtractedText) == "" {
 		return fmt.Errorf("no text to index")
@@ -287,10 +272,6 @@ func indexCoreDoc(ctx context.Context, cd *models.CoreDoc, tenantID string, docs
 			return fmt.Errorf("failed to update document: %w", err)
 		}
 		docID = existingDoc.ID
-		// Delete old chunks before creating new ones
-		if err := chunksRepo.DeleteByDoc(ctx, tenantID, docID); err != nil {
-			log.Printf("Warning: failed to delete old chunks for doc %s: %v", docID, err)
-		}
 	} else {
 		// Create new document
 		doc := &models.Document{
@@ -320,39 +301,9 @@ func indexCoreDoc(ctx context.Context, cd *models.CoreDoc, tenantID string, docs
 		docID = id
 	}
 
-	// Chunk and embed
-	parts := discovery.ChunkText(text, 1200)
-	if len(parts) == 0 {
-		return nil
-	}
-
-	vectors, err := emb.EmbedTexts(ctx, parts)
-	if err != nil {
-		return fmt.Errorf("failed to create embeddings: %w", err)
-	}
-
-	for i := range parts {
-		ch := &models.Chunk{
-			TenantID:         tenantID,
-			DocID:            docID,
-			SourceID:         virtualSourceID,
-			Position:         i,
-			Text:             parts[i],
-			Embedding:        vectors[i],
-			EmbeddingModel:   emb.ModelID(),
-			EmbeddingVersion: "v1",
-			Attrs:            map[string]any{"documentType": "coredoc", "coreDocId": cd.ID},
-			ContentHash:      repo.HashContent(parts[i]),
-			CreatedAt:        now,
-		}
-		if _, err := chunksRepo.Create(ctx, ch); err != nil {
-			return fmt.Errorf("failed to create chunk: %w", err)
-		}
-	}
-
-	// Mark document as embedded
+	// Mark document as indexed (GCS upload + Vertex sync handled by docsRepo.Create/Upsert)
 	if doc, _ := docsRepo.GetByID(ctx, docID); doc != nil {
-		doc.Status = "embedded"
+		doc.Status = "indexed"
 		_ = docsRepo.Upsert(ctx, doc)
 	}
 

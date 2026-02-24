@@ -40,7 +40,7 @@ func (e *FactCoordinateEnricher) WithFragmentsRepo(lookup FragmentLookupForCoord
 	return e
 }
 
-// Enrich resolves coordinates for a fact when LocationPath or canonicalPaths provide location hints.
+// Enrich resolves coordinates for a fact when LocationPath, EventAddress, EventPlace, or canonicalPaths provide location hints.
 // Returns true if coordinates were set.
 func (e *FactCoordinateEnricher) Enrich(ctx context.Context, f *coremodels.OntologyFact) (bool, error) {
 	if e == nil || f == nil {
@@ -48,6 +48,17 @@ func (e *FactCoordinateEnricher) Enrich(ctx context.Context, f *coremodels.Ontol
 	}
 	if hasValidCoordinates(f) {
 		return false, nil
+	}
+
+	// 0. EventISO6709 from LLM (coordinates already provided)
+	if f.EventISO6709 != nil {
+		s := strings.TrimSpace(*f.EventISO6709)
+		if s != "" {
+			if lat, lon, ok := hmodels.ParseISO6709Coordinates(s); ok && hmodels.IsRealGeoCoordinate(lat, lon) {
+				f.Coordinates = &coremodels.FactCoordinates{Lat: lat, Lon: lon}
+				return true, nil
+			}
+		}
 	}
 
 	// 1. LocationPath /loc/cc/admin/city -> GeoNames
@@ -197,7 +208,25 @@ func buildAddressFromFact(f *coremodels.OntologyFact) string {
 	if f == nil {
 		return ""
 	}
-	// Title often contains location: "Dubai airport closure", "Port of Houston"
+	// 1. EventAddress from LLM (best for geocoding)
+	if f.EventAddress != nil {
+		addr := strings.TrimSpace(*f.EventAddress)
+		if addr != "" {
+			return addr
+		}
+	}
+	// 2. EventPlace + country
+	cc := extractCountryFromFact(f)
+	if f.EventPlace != nil {
+		place := strings.TrimSpace(*f.EventPlace)
+		if place != "" {
+			if cc != "" {
+				return place + ", " + cc
+			}
+			return place
+		}
+	}
+	// 3. Title often contains location: "Dubai airport closure", "Port of Houston"
 	title := strings.TrimSpace(f.Title)
 	if title == "" {
 		title = strings.TrimSpace(f.Summary)
@@ -205,7 +234,6 @@ func buildAddressFromFact(f *coremodels.OntologyFact) string {
 	if len(title) > 100 {
 		title = title[:100]
 	}
-	cc := extractCountryFromFact(f)
 	if title != "" && cc != "" {
 		return title + ", " + cc
 	}

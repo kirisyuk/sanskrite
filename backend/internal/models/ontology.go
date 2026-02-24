@@ -28,7 +28,8 @@ type BaseOntologyFields struct {
 
 	// ---- Horizon taxonomy alignment + Vertex indexing fields ----
 	// CanonicalPaths are Horizon-first paths that link this ontology object to the unified taxonomy.
-	// This enables deterministic filtering and incremental watchdog processing without scanning sources.
+	// A fact can relate to multiple paths (e.g. event involving org + location); queries use array-contains
+	// to find facts where any path matches. This enables deterministic filtering and incremental watchdog processing.
 	CanonicalPaths []string `json:"canonicalPaths,omitempty" firestore:"canonicalPaths,omitempty"`
 	// LocationPath is a taxonomy path for a normalized location (if applicable).
 	LocationPath *string `json:"locationPath,omitempty" firestore:"locationPath,omitempty"`
@@ -83,7 +84,8 @@ type KBReference struct {
 
 // Location представляет местоположение
 type Location struct {
-	Name          string  `json:"name,omitempty" firestore:"name,omitempty"`
+	Name          string  `json:"name,omitempty" firestore:"name,omitempty"`                   // place name (e.g. "Dubai airport", "Port of Houston")
+	Address       *string `json:"address,omitempty" firestore:"address,omitempty"`             // full address for geocoding (e.g. "123 Main St, Houston, TX")
 	ISO6709       *string `json:"iso6709,omitempty" firestore:"iso6709,omitempty"`             // координаты ISO 6709
 	CountryAlpha2 *string `json:"countryAlpha2,omitempty" firestore:"countryAlpha2,omitempty"` // ISO3166-1 alpha2 lowercase (e.g., us, cn)
 	Admin1        *string `json:"admin1,omitempty" firestore:"admin1,omitempty"`               // state/province code or slug lowercase (e.g., ca, tx, sh)
@@ -186,6 +188,7 @@ const (
 	SourceTypeHorizonPolicyTelemetry = "horizon_policy_telemetry" // horizon_policy_telemetry doc id
 	SourceTypeAITrace                = "ai_trace"                 // correlation/trace id
 	SourceTypeAITask                 = "ai_task"                  // AI task/run id (if available)
+	SourceTypeLLMSearchGrounding     = "llm_search_grounding"    // Gemini search grounding (news-by-fragments canvas)
 )
 
 // Provenance информация о происхождении данных

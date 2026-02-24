@@ -313,7 +313,7 @@ type CoordinatedSource struct {
 	CoordinationScore float64 `json:"coordinationScore"`
 }
 
-// --- New RAG data model types ---
+// --- Source and project linking ---
 
 // SourceProject links a logical source to a project with per-project config
 type SourceProject struct {

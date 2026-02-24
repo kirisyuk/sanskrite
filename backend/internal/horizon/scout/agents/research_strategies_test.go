@@ -270,7 +270,7 @@ func TestSanitizeResearchResultForUnmarshal_StructuralDrift(t *testing.T) {
 	if len(rr.Relations) != 1 {
 		t.Fatalf("relations=%d, want 1", len(rr.Relations))
 	}
-	if rr.Relations[0].Metrics != nil && len(rr.Relations[0].Metrics) != 0 {
+	if len(rr.Relations[0].Metrics) != 0 {
 		t.Fatalf("metrics should be dropped for invalid shape, got=%v", rr.Relations[0].Metrics)
 	}
 }

@@ -220,6 +220,7 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
   sourceDetails: {
     uri?: string;
     rssUrl?: string;
+    category?: string;
     searchQuery?: string;
     originalSearchQuery?: string;
     channelUsername?: string;

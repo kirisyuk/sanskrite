@@ -25,6 +25,7 @@
 | Org identity anchor & transitions | ❌ | identity anchor, nameHistory, transition edges (RENAMED_TO, LEGAL_SUCCESSOR_OF…); см. `ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md` |
 | Scout domain phases & composable agents | ✅ | Domain modes (intent→job.State), allowlists, semantic groups; CriticPipeline/ResearchPipeline by mode; Phase 0–3 in engine; domain mode in child jobs; canonical edge types (ASSOCIATED_WITH, CORPORATE_TRANSITION, DOMAIN_RELATION). Toggle: `HORIZON_SCOUT_COMPOSABLE_PIPELINE=false` для отката на монолитный путь. ТЗ: `SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md`. |
 | Signaling Pipeline | ❌ | Отдельный пайплайн: news flow → events → 12-axis signals → propagation. Scout не создаёт сигналы. План: `SIGNALING_PIPELINE_IMPLEMENTATION_PLAN.md`. |
+| Fractal Hierarchy & Scale-Invariant Contracts | ❌ | 5 контрактов: Canonical Path Hierarchy, Resolution Level, Zoom, Metric Composition, Edge Projection. См. секцию «Fractal Hierarchy & Scale-Invariant Contracts». |
 
 ## Delta (2026-02-13): Internal-First Grounding (v5)
 
@@ -94,6 +95,7 @@
 
 **В roadmap (позже):**
 - **Fallback для слепых зон:** org в графе, но не попал ни в один event из концентрационных фидов — возможность точечного досмотра по запросу пользователя (например, "проверь новости по G42"). Не делать регулярным сканом по всем org.
+- **TODO: рассылка WS при propagation сигналов.** Сейчас `PropagateSignalFromSeeds` (news-by-fragments, signal pipeline) не шлёт WS; только `PropagateChange` (metric propagation) публикует `horizon.propagation.started`, `horizon.propagation.node_updated`, `horizon.graph.node.upserted`, `horizon.propagation.completed`. Добавить аналогичную рассылку при propagation сигналов, чтобы фронт мог обновлять граф в реальном времени во время news-by-fragments.
 
 ## Canonical Playbook: Systemic Dependency Investigation (semiconductor-class queries)
 
@@ -258,6 +260,181 @@
 
 ---
 
+## Fractal Hierarchy & Scale-Invariant Contracts
+
+**Контекст**: Граф знаний обладает свойством масштабной инвариантности — узлы на разных уровнях абстракции (макро-организация ↔ подразделение ↔ объект; рынок ↔ сегмент ↔ ниша; династия ↔ ветвь ↔ персона) описываются единым интерфейсом и обрабатываются одним механизмом распространения сигналов. Сейчас это **эмерджентное** свойство (следствие единообразия `HorizonFragment`), но не зафиксировано как архитектурный принцип. Цель — сделать фрактальность **явной** через пять контрактов.
+
+**Принцип**: явно ≠ строго. Контракты должны быть чёткими, но не навязывать математическую фрактальность. Реальный мир не фрактален в точном смысле; династия House of Saud не является уменьшенной копией рынка нефти. Они просто описываются одинаковым набором инструментов (узел + метрики + рёбра + propagation).
+
+### Контракт 1: Canonical Path Hierarchy (унификация первых N уровней)
+
+**Проблема**: Иерархия реализована шестью разными механизмами:
+- Markets: `ParentMarketPath` на фрагменте
+- Government: `ParentGovPath` на фрагменте
+- Communities: `HAS_SUBGROUP` ребро в графе
+- Products: сегменты canonical path (конвенция)
+- Orgs → Units: `OrgUnitProfile.ParentOrgRef` в отдельной структуре
+- Geo: `/loc/{country}/{admin1}/{city}` — конвенция пути
+
+**Решение**: Унифицировать **первые N уровней** canonical path; допускать разночтения только на концах — специфичных для отдельных типов сущностей.
+
+**Универсальные уровни (N=2)**:
+
+| Уровень | Семантика | Правило |
+|---------|-----------|---------|
+| L0 | namespace | org \| gov \| loc \| market \| community \| segment \| fac \| product \| ... |
+| L1 | primary scope | geo (ISO2/composite/regional/na) для geo-scoped; domain для segment/product; orgSlug для fac |
+
+**Тип-специфичный хвост (L2+)**:
+
+| Type | L2 | L3 | L4 | Примечание |
+|------|----|----|----|------------|
+| org | {slug} | — | — | |
+| gov | {slug} | — | — | |
+| loc | {admin1} | {city} | — | geo-иерархия |
+| market | {domain} | {vertical} | [subvertical...] | |
+| community | {type} | {slug} | — | |
+| segment | {vertical} | {geo} | — | geo в хвосте (отличие от org/gov) |
+| fac | {facilitySlug} | — | — | или {orgSlug}/{facilitySlug} |
+| product | {type} | {stage} | {slug}[...] | своя таксономия |
+
+**Единый примитив parent**: `parentPath(path) = path без последнего сегмента` для path-based иерархии. Для edge-based (HAS_SUBGROUP и т.п.) — отдельный канал, но `ParentPath` (или аналог) для консистентности.
+
+**TODO**:
+- [ ] Задокументировать контракт в `risk-architecture.md` / `canonicalization.md`
+- [ ] Добавить `ParentPath` (опционально) на `HorizonFragment` как derived/computed поле
+- [ ] Постепенно мигрировать `ParentMarketPath`, `ParentGovPath` к единому контракту (backward-compat)
+
+### Контракт 2: Resolution Level (уровень абстракции)
+
+**Проблема**: Нет поля, которое говорит «этот узел — макро-объект, а этот — его детализация». Unit Pipeline (P0→P5) — фазы исследования, а не атрибут сущности. PropagationEngine не знает, что сигнал на `/org/sa/aramco` (L0 macro) и сигнал на facility Aramco (L2) — разные масштабы одной сущности.
+
+**Решение**: Маркер `resolutionHint` — аннотация, не валидация.
+
+| Значение | Семантика | Примеры |
+|----------|-----------|---------|
+| `macro` | Макро-объект (ORG, MARKET, GEO_REGION country-level) | `/org/sa/aramco`, `/market/ae/oil-gas/upstream` |
+| `unit` | Подразделение/сегмент внутри macro | OrgUnit, submarket |
+| `detail` | Конкретный объект (facility, route, person) | `/fac/aramco/ghawar-refinery` |
+| `unspecified` | По умолчанию | legacy nodes |
+
+**Назначение**: UI zoom, propagation (учёт масштаба при damping/aggregation), explainability.
+
+**TODO**:
+- [ ] Добавить `ResolutionHint string` в `HorizonFragment` (опционально)
+- [ ] Заполнять при создании/обновлении по правилам (org→macro, fac→detail, unit→unit)
+- [ ] Backfill для существующих узлов (best-effort)
+
+### Контракт 3: Zoom (Drill / Roll-up)
+
+**Проблема**: Unit Pipeline делает drill для ORG→UNIT, но это hardcoded flow. Для markets, communities, gov — нет аналога. Нет операции «покажи то же самое, но детальнее».
+
+**Решение**: Единый интерфейс `zoomInto(node)` → возвращает дочерние узлы того же смыслового домена.
+
+| Тип узла | Реализация zoom | Источник дочерних |
+|----------|-----------------|-------------------|
+| ORG | units, subsidiaries | `OrgUnitProfile`, `SUBSIDIARY_OF` edges |
+| MARKET | sub-segments | `HAS_SUBMARKET`, `ParentMarketPath` |
+| COMMUNITY | sub-groups | `HAS_SUBGROUP` edges |
+| GOV | subordinate agencies | `ParentGovPath`, `ADMINISTERS` |
+| GEO_REGION | admin1, cities | path prefix match `/loc/{cc}/{admin1}/*` |
+| PRODUCT | sub-products, SKU | path prefix, taxonomy |
+
+**API**: `GET /api/horizon/fragments/{id}/children?depth=1` или аналогичный. Реализация — type-specific, но контракт единый.
+
+**TODO**:
+- [ ] Определить `ZoomResolver` interface
+- [ ] Реализовать по типам (ORG, MARKET, COMMUNITY, GOV, GEO, PRODUCT)
+- [ ] Endpoint или метод в graph service
+
+### Контракт 4: Metric Composition (агрегация метрик)
+
+**Проблема**: Метрики живут на конкретном узле. Propagation распространяет сигнал, но нет контракта «метрика организации — агрегат метрик её facility». Нет связи: «метрика X на узле A является roll-up метрики X на дочерних B, C, D».
+
+**Решение**: Не обязательно автоматическая агрегация. Явная связь — аннотация или контракт:
+
+1. **Семантическая совместимость**: метрика `/metric/risk/logistics/capacity` на macro-узле имеет тот же смысл, что на detail-узле. Propagation может учитывать это при roll-up.
+2. **Опциональный roll-up**: для узлов с `resolutionHint=macro` и известными детьми — вычислять агрегат (max, weighted avg) по дочерним метрикам того же axis. Не заменять propagation, а дополнять.
+3. **Provenance**: если метрика macro — roll-up, в provenance указывать `method: "rollup"` и `sourceNodeIds: [...]`.
+
+**TODO**:
+- [ ] Задокументировать контракт семантической совместимости метрик по уровням
+- [ ] Опционально: `MetricComposition` в propagation/rollup — учитывать дочерние узлы при score
+- [ ] Не блокировать MVP: propagation остаётся primary
+
+### Контракт 5: Edge Projection (проекция рёбер по масштабу)
+
+**Проблема**: Ребро `SUPPLIES_TO` между `/org/sa/aramco` и `/org/cn/sinopec` — одно. Ребро между refinery и terminal — другое. Они никак не связаны, хотя второе — «то же самое, но на другом масштабе».
+
+**Решение**: Не жёсткая связь, но **проекция** — знание о том, что edge на L2 является детализацией edge на L0.
+
+**Варианты**:
+1. **Мягкая связь**: qualifier `macroEdgeId` на micro-edge — ссылка на «родительское» макро-ребро (если известно).
+2. **Вывод**: при zoom — показывать, через какие конкретные связи реализуется макро-связь. BFS от macro source/target к detail nodes.
+3. **Propagation**: macro edge — «shadow» множества micro edges. При propagation на macro можно учитывать плотность micro edges (опционально).
+
+**TODO**:
+- [ ] Определить, нужна ли явная проекция (qualifier) или достаточно вывода через граф
+- [ ] Для zoom UI: при клике на macro edge — highlight реализующие micro paths
+- [ ] Отложено: propagation с учётом edge density (низкий приоритет)
+
+### Сводка: приоритеты реализации
+
+| Контракт | Приоритет | Зависимости | Оценка |
+|----------|-----------|-------------|--------|
+| 1. Canonical Path Hierarchy | P1 | — | Документация + опционально ParentPath |
+| 2. Resolution Level | P2 | — | 1 поле, backfill |
+| 3. Zoom | P2 | 1, 2 | Interface + реализации по типам |
+| 4. Metric Composition | P3 | 2, 3 | Документация; roll-up опционально |
+| 5. Edge Projection | P3 | 3 | Qualifier или вывод; UI highlight |
+
+### Фокус реализации: логика пайплайна, не промпты
+
+**Ключевой принцип**: Уровни, агрегация, проекция и zoom должны быть заложены в **логику пайплайна** — в структуру контрактов, фазы, правила выбора scope и сборку контекста. Промпты — лишь один слой; если логика не учитывает resolution/уровни, промпты будут компенсировать это ad-hoc и нестабильно.
+
+**Пять фокусных направлений**:
+
+1. **Уровни в графе и в canonical path**
+   - Имеет смысл выделять уровни для разных типов сущностей — и в графе (depth, parent, resolutionHint), и в структуре path (L0/L1/хвост).
+   - Оба слоя согласованы: path-иерархия и графовая иерархия не противоречат друг другу.
+
+2. **Агрегация сущностей и метрик**
+   - Имеет смысл агрегировать сущности (org ↔ fac, market ↔ submarket) и, как следствие — агрегировать метрики.
+   - org — агрегат своих facilities; roll-up метрик по иерархии (max, weighted avg). Propagation и roll-up — два дополняющих механизма.
+
+3. **Проекция рёбер (транзитивность)**
+   - Цепочка a→b→c→d и прямое a→d — одна и та же связь на разных масштабах. Macro-edge — «тень» micro-path.
+   - При zoom: «через какие конкретные шаги реализуется a→d». При propagation: macro-edge как сжатый путь.
+
+4. **Zoom in на уровне системы + Units как строго типизированные фрагменты**
+   - Zoom — системная операция (ZoomResolver, endpoint), не UI-трюк.
+   - **Units** — фрагменты с обязательным родителем (`ParentOrgRef` всегда задан). Строго типизированы (UNIT / ORG_UNIT), чтобы не расплываться. «Временно строго»: сначала жёсткий контракт, ослабление — по мере появления кейсов.
+   - TODO: рассмотреть материализацию Units как `HorizonFragment` (сейчас `OrgUnitProfile` в отдельной структуре) с `parentFragmentId` обязательным.
+
+5. **Учёт в логике пайплайна**
+   - DomainContractEngine, Unit Pipeline, Resolve → Steer → Gate — все фазы должны учитывать resolution/уровни.
+   - **Правила выбора scope**: что искать на macro vs unit vs detail — заложено в логику, не в свободный текст промпта.
+   - **Сборка контекста**: какие узлы/рёбра в scope в зависимости от resolution — детерминированно.
+   - **missingInfo / enrichment**: формулируются из структуры (facets, cross-facet expectations, resolution), а не только из LLM-интерпретации.
+   - TODO: вынести resolution-aware логику в отдельные модули (scope resolver, context builder), чтобы промпты получали уже отфильтрованный/собранный контекст.
+
+**Чеклист интеграции в пайплайн**:
+
+| Компонент | Что учитывать |
+|-----------|---------------|
+| IntentResolver / DomainContractEngine | resolution в domain contract (macro/unit/detail expectations) |
+| Steer / Gate | scope по resolution (macro → units, unit → facilities) |
+| Scout directives | что искать на каком уровне (не «всё подряд», а по resolution) |
+| Research/Critic prompts | получают pre-filtered context (узлы, edges, resolution hints) |
+| ZoomResolver | единая точка входа для drill-down |
+| Propagation / Rollup | resolutionHint при damping, roll-up по иерархии |
+
+**Формулировка для whitepaper** (как отвечать на вопрос «узлы имеют свойства фрактальности?»):
+
+> Граф знаний обладает свойством масштабной инвариантности: узлы на разных уровнях абстракции описываются единым интерфейсом и обрабатываются одним механизмом распространения сигналов. Это не математическая фрактальность, а архитектурная самоподобность — один и тот же «круг на воде» проходит через все масштабы одним алгоритмом. Пять контрактов (path hierarchy, resolution level, zoom, metric composition, edge projection) делают эту самоподобность из эмерджентной явной.
+
+---
+
 ## Текущий план: стабилизация → улучшения (backend-first)
 
 Ниже — актуальный TODO-план, который отражает **текущее состояние реализации** (код уже в основном готов) и следующие шаги.
@@ -292,6 +469,10 @@
   - В `IMPLEMENTATION_AUDIT.md` поддерживать актуальный “snapshot” (деплой/инфра/текущее состояние миграций).
 - **Операционные контуры**
   - После завершения backfill: безопасно включить обратно Cloud Tasks / Scout queue (если была на паузе).
+- **Technical debt: нейминг RAG → document indexing (отложено)**
+  - После рефакторинга document flow (Vertex AI Search вместо chunks/embeddings) остались устаревшие упоминания RAG в инфраструктурном коде.
+  - TODO: переименовать в CLI-утилитах, README и BigQuery — `RAG_DOCUMENTS_BUCKET`, "RAG documents", "RAG Documents bucket" и т.п. в пользу "documents bucket" / "document indexing".
+  - Env `RAG_DOCUMENTS_BUCKET` оставлен для обратной совместимости; при миграции можно ввести алиас `DOCUMENTS_BUCKET` и постепенно вывести RAG из названий.
 
 **Критерии приемки**:
 - Re-export/backfill завершены, поиск по fragments в Vertex работает в проде.
@@ -2103,3 +2284,4 @@ type PolicyDecision struct {
 - [Архитектурный обзор](../architecture/overview.md)
 - [Supply Chain & Influence Model](../architecture/supply-chain-influence-model.md)
 - [ТЗ: Domain-specific фазы Scout, composable Research/Critic, упрощение рёбер](SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md)
+- [Risk Architecture](../../../risk-architecture.md) — Canonical Paths, Signal Propagation, Lazy Interpretation

@@ -312,8 +312,10 @@ type ExtractedEventParticipant struct {
 }
 
 // ExtractedLocation is a minimal location payload extracted by LLM.
+// Place (name) and Address are returned by LLM; Coordinates are resolved via Google Geocoding.
 type ExtractedLocation struct {
-	Name          *string `json:"name,omitempty"`
+	Name          *string `json:"name,omitempty"`   // place name (e.g. "Dubai airport", "Port of Houston")
+	Address       *string `json:"address,omitempty"` // full address for geocoding (e.g. "123 Main St, Houston, TX, USA")
 	ISO6709       *string `json:"iso6709,omitempty"`
 	CountryAlpha2 *string `json:"countryAlpha2,omitempty"` // ISO3166-1 alpha2 lowercase
 	Admin1        *string `json:"admin1,omitempty"`        // state/province code or slug lowercase; "na" if unknown
@@ -766,15 +768,16 @@ func (e *OntologyExtractor) extractEvents(
 			},
 		}
 
-		// Location (best effort)
+		// Location (best effort): place name, address (for geocoding), structured geo
 		if ext.Location != nil {
 			locName := ""
 			if ext.Location.Name != nil {
 				locName = strings.TrimSpace(*ext.Location.Name)
 			}
-			if locName != "" || ext.Location.ISO6709 != nil || ext.Location.CountryAlpha2 != nil || ext.Location.Admin1 != nil || ext.Location.City != nil {
+			if locName != "" || ext.Location.Address != nil || ext.Location.ISO6709 != nil || ext.Location.CountryAlpha2 != nil || ext.Location.Admin1 != nil || ext.Location.City != nil {
 				event.Location = &models.Location{
 					Name:          locName,
+					Address:       ext.Location.Address,
 					ISO6709:       ext.Location.ISO6709,
 					CountryAlpha2: ext.Location.CountryAlpha2,
 					Admin1:        ext.Location.Admin1,
@@ -906,6 +909,16 @@ func (e *OntologyExtractor) extractEvents(
 					if locPath != "" && locPath != "/" {
 						f.LocationPath = &locPath
 					}
+				}
+				// EventPlace, EventAddress, EventISO6709 for geocoding (Google Geo resolves Address/Place to Coordinates)
+				if event.Location.Name != "" {
+					f.EventPlace = &event.Location.Name
+				}
+				if event.Location.Address != nil && strings.TrimSpace(*event.Location.Address) != "" {
+					f.EventAddress = event.Location.Address
+				}
+				if event.Location.ISO6709 != nil && strings.TrimSpace(*event.Location.ISO6709) != "" {
+					f.EventISO6709 = event.Location.ISO6709
 				}
 			}
 

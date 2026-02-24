@@ -18,7 +18,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
@@ -47,10 +46,8 @@ type ProjectsHandler struct {
 	pub     *realtime.Publisher
 	// ai executor for analysis tasks
 	exec *ai.AITaskExecutor
-	// RAG dependencies for CoreDoc indexing
-	docsRepo   *repo.DocumentsRepository
-	chunksRepo *repo.ChunksRepository
-	emb        ai.EmbeddingProvider
+	// Document indexing: docs repo + Vertex AI Search (GCS sync)
+	docsRepo *repo.DocumentsRepository
 	// Vertex AI Search client for checking document indexing status
 	vertexSearchClient *ai.VertexAISearchClient
 	// BigQuery client for checking document availability in BigQuery
@@ -123,11 +120,12 @@ func (h *ProjectsHandler) WithAIExecutor(exec *ai.AITaskExecutor) *ProjectsHandl
 	return h
 }
 
-// WithRAG wires RAG repositories and embedding provider for CoreDoc indexing
-func (h *ProjectsHandler) WithRAG(docs *repo.DocumentsRepository, chunks *repo.ChunksRepository, emb ai.EmbeddingProvider) *ProjectsHandler {
+// WithDocumentIndexing wires documents repository and Vertex AI Search for CoreDoc indexing (GCS + Vertex sync)
+func (h *ProjectsHandler) WithDocumentIndexing(docs *repo.DocumentsRepository, vertexSearch *ai.VertexAISearchClient) *ProjectsHandler {
 	h.docsRepo = docs
-	h.chunksRepo = chunks
-	h.emb = emb
+	if vertexSearch != nil {
+		h.vertexSearchClient = vertexSearch
+	}
 	return h
 }
 
@@ -388,20 +386,12 @@ func (h *ProjectsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) 
 			h.logger.Printf("Warning: cascade delete interactions for project %s: %v", projectID, err)
 		}
 	}
-	// Cascade: delete documents and chunks for sources tied to this project
+	// Cascade: delete documents for sources tied to this project
 	if h.docsRepo != nil && h.dataSources != nil {
 		sources, err := h.dataSources.ListByProject(r.Context(), authInfo.TenantID, projectID)
 		if err == nil {
 			for _, source := range sources {
-				// List documents first to delete chunks
-				docs, _ := h.docsRepo.ListBySource(r.Context(), authInfo.TenantID, source.ID, 0)
-				// Delete chunks for each document
-				if h.chunksRepo != nil {
-					for _, doc := range docs {
-						_ = h.chunksRepo.DeleteByDoc(r.Context(), authInfo.TenantID, doc.ID)
-					}
-				}
-				// Delete all documents for this source (which will also delete from GCS)
+				// Delete all documents for this source (also removes from GCS, triggers Vertex sync)
 				if err := h.docsRepo.DeleteBySource(r.Context(), authInfo.TenantID, source.ID); err != nil {
 					h.logger.Printf("Warning: cascade delete documents for source %s: %v", source.ID, err)
 				}
@@ -563,7 +553,7 @@ func (h *ProjectsHandler) CreateProjectDoc(w http.ResponseWriter, r *http.Reques
 	}
 	doc.ID = id
 	// Index CoreDoc for vector search if ExtractedText is available
-	if doc.ExtractedText != nil && h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+	if doc.ExtractedText != nil && h.docsRepo != nil {
 		if err := h.IndexCoreDoc(r.Context(), authInfo.TenantID, doc); err != nil {
 			h.logger.Printf("Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 		}
@@ -680,7 +670,7 @@ func (h *ProjectsHandler) CreateProjectDocFromText(w http.ResponseWriter, r *htt
 		})
 	}
 	// Index CoreDoc for vector search
-	if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+	if h.docsRepo != nil {
 		if err := h.IndexCoreDoc(r.Context(), authInfo.TenantID, doc); err != nil {
 			h.logger.Printf("Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 		}
@@ -1096,33 +1086,21 @@ func (h *ProjectsHandler) CheckDocumentIndexStatus(w http.ResponseWriter, r *htt
 		WriteNotFound(w, "Document not found")
 		return
 	}
-	// Check if document has storagePath (required for Vertex AI Search indexing)
-	// But local RAG indexing works without storagePath
-	// if cd.StoragePath == nil || *cd.StoragePath == "" {
-	// 	WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "no_storage_path"})
-	// 	return
-	// }
-
-	// Try to find corresponding Document in rag_documents
+	// Find corresponding Document (Firestore) — Vertex AI Search sync status in VertexSearchIndexedAt
 	if h.docsRepo != nil {
-		ragDoc, err := h.docsRepo.GetByCoreDocID(r.Context(), authInfo.TenantID, docID)
-		if err == nil && ragDoc != nil {
-			// Check if document has VertexSearchIndexedAt timestamp - this is the source of truth for Vertex AI
-			if ragDoc.VertexSearchIndexedAt != nil && !ragDoc.VertexSearchIndexedAt.IsZero() {
-				WriteJSON(w, http.StatusOK, map[string]any{"indexed": true, "indexedAt": ragDoc.VertexSearchIndexedAt, "engine": "vertex_ai_search"})
+		doc, err := h.docsRepo.GetByCoreDocID(r.Context(), authInfo.TenantID, docID)
+		if err == nil && doc != nil {
+			if doc.VertexSearchIndexedAt != nil && !doc.VertexSearchIndexedAt.IsZero() {
+				WriteJSON(w, http.StatusOK, map[string]any{"indexed": true, "indexedAt": doc.VertexSearchIndexedAt, "engine": "vertex_ai_search"})
 				return
 			}
-			// Fallback: check if indexed in local RAG (Firestore + Vector Search)
-			// If chunks exist (implied by Status="indexed" or just existence for now), consider it indexed locally
-			// For simplicity, if ragDoc exists, it's tracked by RAG system.
-			// Ideally we should check ragDoc.Status == "indexed" or check chunks count
-			WriteJSON(w, http.StatusOK, map[string]any{"indexed": true, "indexedAt": ragDoc.UpdatedAt, "engine": "local_rag"})
+			// Document exists, Vertex sync may be pending
+			WriteJSON(w, http.StatusOK, map[string]any{"indexed": true, "indexedAt": doc.UpdatedAt, "engine": "vertex_pending"})
 			return
 		}
 	}
 
-	// If no rag document found, document is not indexed
-	WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "no_rag_document"})
+	WriteJSON(w, http.StatusOK, map[string]any{"indexed": false, "reason": "no_indexed_document"})
 }
 
 // CheckDocumentBigQueryStatus checks if document is available in BigQuery
@@ -2468,7 +2446,7 @@ func (h *ProjectsHandler) AnalyzeEntities(w http.ResponseWriter, r *http.Request
 		}
 
 		// Index CoreDoc for vector search
-		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+		if h.docsRepo != nil {
 			if err := h.IndexCoreDoc(ctx, tenantID, doc); err != nil {
 				log.Printf("[AnalyzeEntities] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 			}
@@ -2647,7 +2625,7 @@ Guidelines:
 		}
 
 		// Index CoreDoc for vector search
-		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+		if h.docsRepo != nil {
 			if err := h.IndexCoreDoc(ctx, tenantID, doc); err != nil {
 				log.Printf("[AnalyzeFacts] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 			}
@@ -2824,7 +2802,7 @@ Rules: prefer precise timestamps if available; severity/confidence in 0..1.
 		}
 
 		// Index CoreDoc for vector search
-		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+		if h.docsRepo != nil {
 			if err := h.IndexCoreDoc(ctx, tenantID, doc); err != nil {
 				log.Printf("[AnalyzeEvents] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 			}
@@ -3030,7 +3008,7 @@ Guidelines: keys stable and normalized; prefer domain-specific scope.
 		}
 
 		// Index CoreDoc for vector search
-		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+		if h.docsRepo != nil {
 			if err := h.IndexCoreDoc(ctx, tenantID, doc); err != nil {
 				log.Printf("[AnalyzeMetrics] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 			}
@@ -3221,7 +3199,7 @@ Return STRICT JSON: { "decisions": [ {
 		}
 
 		// Index CoreDoc for vector search
-		if h.docsRepo != nil && h.chunksRepo != nil && h.emb != nil {
+		if h.docsRepo != nil {
 			if err := h.IndexCoreDoc(ctx, tenantID, doc); err != nil {
 				log.Printf("[AnalyzeDecisions] Warning: failed to index CoreDoc %s: %v", doc.ID, err)
 			}
@@ -3275,16 +3253,11 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 		WriteNotFound(w, "Document not found")
 		return
 	}
-	// Cascade delete: find and delete associated Document and Chunks
-	var hasRAGDocument bool
-	if h.docsRepo != nil && h.chunksRepo != nil {
+	// Cascade delete: find and delete associated Document (GCS + Vertex sync)
+	var hadIndexedDocument bool
+	if h.docsRepo != nil {
 		if doc, err := h.docsRepo.GetByCoreDocID(r.Context(), authInfo.TenantID, docID); err == nil && doc != nil {
-			hasRAGDocument = true
-			// Delete all chunks for this document
-			if err := h.chunksRepo.DeleteByDoc(r.Context(), authInfo.TenantID, doc.ID); err != nil {
-				h.logger.Printf("Warning: failed to delete chunks for doc %s: %v", doc.ID, err)
-			}
-			// Delete the document (this also deletes from GCS and triggers Vertex AI Search sync)
+			hadIndexedDocument = true
 			if err := h.docsRepo.Delete(r.Context(), doc.ID); err != nil {
 				h.logger.Printf("Warning: failed to delete document %s: %v", doc.ID, err)
 			}
@@ -3299,9 +3272,8 @@ func (h *ProjectsHandler) DeleteProjectDoc(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	// If document was not indexed in RAG, still sync Vertex AI Search to remove it
-	// (documents without RAG indexing are still synced to Vertex AI Search for semantic search)
-	if !hasRAGDocument && h.vertexSearchClient != nil && h.vertexSearchClient.IsConfigured() {
+	// If no indexed document existed, still trigger Vertex sync to remove any stale entries
+	if !hadIndexedDocument && h.vertexSearchClient != nil && h.vertexSearchClient.IsConfigured() {
 		go func(tenantID string) {
 			syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -3367,13 +3339,13 @@ func getFullExtractedTextFromCoreDoc(ctx context.Context, cd *models.CoreDoc, st
 	return "", nil
 }
 
-// shouldSkipRAGIndexing determines if a document should be excluded from RAG indexing
+// shouldSkipDocumentIndexing determines if a document should be excluded from Vertex indexing
 // based on file type and size. Returns true if indexing should be skipped.
-func shouldSkipRAGIndexing(cd *models.CoreDoc) bool {
+func shouldSkipDocumentIndexing(cd *models.CoreDoc) bool {
 	const sizeThreshold = 300 * 1024 // 300KB
 	
-	// TODO: Add ForceRAGIndexing flag to CoreDoc model to allow forced indexing
-	// of documents that would normally be excluded (e.g., large CSV files for RAG)
+	// TODO: Add ForceDocumentIndexing flag to CoreDoc model to allow forced indexing
+	// of documents that would normally be excluded (e.g., large CSV files)
 	// if cd.ForceRAGIndexing != nil && *cd.ForceRAGIndexing {
 	//     return false // Force indexing even if normally excluded
 	// }
@@ -3430,31 +3402,29 @@ func shouldSkipRAGIndexing(cd *models.CoreDoc) bool {
 	return false
 }
 
-// IndexCoreDoc indexes a CoreDoc by creating/updating Document and Chunks with embeddings
-// This is exported so it can be used as a callback in CoreDocsRepo
+// IndexCoreDoc indexes a CoreDoc by creating/updating Document (uploads to GCS, triggers Vertex sync).
+// No manual chunking or embeddings - Vertex AI Search handles indexing from GCS.
 func (h *ProjectsHandler) IndexCoreDoc(ctx context.Context, tenantID string, cd *models.CoreDoc) error {
-	if h.docsRepo == nil || h.chunksRepo == nil || h.emb == nil {
-		// RAG not configured, skip indexing
+	if h.docsRepo == nil {
 		if h.logger != nil {
-			h.logger.Printf("indexCoreDoc: RAG not configured, skipping indexing for doc %s", cd.ID)
+			h.logger.Printf("indexCoreDoc: document indexing not configured, skipping doc %s", cd.ID)
 		}
 		return nil
 	}
 	
-	// Check if document should be excluded from RAG indexing
-	if shouldSkipRAGIndexing(cd) {
+	if shouldSkipDocumentIndexing(cd) {
 		if h.logger != nil {
 			sizeStr := "unknown"
 			if cd.SizeBytes != nil {
 				sizeStr = fmt.Sprintf("%d bytes", *cd.SizeBytes)
 			}
-			h.logger.Printf("indexCoreDoc: skipping RAG indexing for doc %s (file type/size exclusion: %s, size=%s)", 
+			h.logger.Printf("indexCoreDoc: skipping indexing for doc %s (file type/size exclusion: %s, size=%s)",
 				cd.ID, cd.Filename, sizeStr)
 		}
 		return nil
 	}
 	
-	// Allow indexing for dynamic artifacts so they are searchable (RAG/Vertex)
+	// Allow indexing for dynamic artifacts so they are searchable (Vertex AI Search)
 
 	// Get full extracted text
 	var text string
@@ -3516,10 +3486,6 @@ func (h *ProjectsHandler) IndexCoreDoc(ctx context.Context, tenantID string, cd 
 			return fmt.Errorf("failed to update document: %w", err)
 		}
 		docID = existingDoc.ID
-		// Delete old chunks before creating new ones
-		if err := h.chunksRepo.DeleteByDoc(ctx, tenantID, docID); err != nil {
-			h.logger.Printf("Warning: failed to delete old chunks for doc %s: %v", docID, err)
-		}
 	} else {
 		// Create new document
 		doc := &models.Document{
@@ -3555,50 +3521,14 @@ func (h *ProjectsHandler) IndexCoreDoc(ctx context.Context, tenantID string, cd 
 		}
 	}
 
-	// Chunk and embed
-	parts := discovery.ChunkText(text, 1200)
-	if len(parts) == 0 {
-		return nil
-	}
-
-	vectors, err := h.emb.EmbedTexts(ctx, parts)
-	if err != nil {
-		if h.logger != nil {
-			h.logger.Printf("indexCoreDoc: failed to create embeddings for doc %s: %v", cd.ID, err)
-		}
-		return fmt.Errorf("failed to create embeddings: %w", err)
-	}
-	if h.logger != nil {
-		h.logger.Printf("indexCoreDoc: created %d embeddings for doc %s", len(vectors), cd.ID)
-	}
-
-	for i := range parts {
-		ch := &models.Chunk{
-			TenantID:         tenantID,
-			DocID:            docID,
-			SourceID:         virtualSourceID,
-			Position:         i,
-			Text:             parts[i],
-			Embedding:        vectors[i],
-			EmbeddingModel:   h.emb.ModelID(),
-			EmbeddingVersion: "v1",
-			Attrs:            map[string]any{"documentType": "coredoc", "coreDocId": cd.ID},
-			ContentHash:      repo.HashContent(parts[i]),
-			CreatedAt:        now,
-		}
-		if _, err := h.chunksRepo.Create(ctx, ch); err != nil {
-			return fmt.Errorf("failed to create chunk: %w", err)
-		}
-	}
-
-	// Mark document as embedded
+	// Mark document as indexed (GCS upload + Vertex sync handled by docsRepo.Create/Upsert)
 	if doc, _ := h.docsRepo.GetByID(ctx, docID); doc != nil {
-		doc.Status = "embedded"
+		doc.Status = "indexed"
 		_ = h.docsRepo.Upsert(ctx, doc)
 	}
 
 	if h.logger != nil {
-		h.logger.Printf("indexCoreDoc: successfully indexed CoreDoc %s (Document: %s, Chunks: %d)", cd.ID, docID, len(parts))
+		h.logger.Printf("indexCoreDoc: successfully indexed CoreDoc %s (Document: %s)", cd.ID, docID)
 	}
 	return nil
 }

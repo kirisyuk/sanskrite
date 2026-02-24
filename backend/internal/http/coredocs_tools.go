@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -17,18 +16,17 @@ import (
 
 // CoreDocsToolExecutor executes document-related tools for AI
 type CoreDocsToolExecutor struct {
-	coreDocs     *repo.CoreDocsRepo
-	interactions *repo.InteractionsRepository
-	docsRepo     *repo.DocumentsRepository
-	chunksRepo   *repo.ChunksRepository
-	emb          ai.EmbeddingProvider
-	storage      StorageClient
-	bucket       string
-	publisher    Publisher
-	tenantID     string
-	projectID    string
-	streamID     string
-	logger       *log.Logger
+	coreDocs           *repo.CoreDocsRepo
+	interactions       *repo.InteractionsRepository
+	docsRepo           *repo.DocumentsRepository
+	vertexSearchClient *ai.VertexAISearchClient
+	storage            StorageClient
+	bucket             string
+	publisher          Publisher
+	tenantID           string
+	projectID          string
+	streamID           string
+	logger             *log.Logger
 	// Active edit sessions: docId -> session
 	editSessions map[string]*DocumentEditSession
 }
@@ -47,8 +45,7 @@ func NewCoreDocsToolExecutor(
 	coreDocs *repo.CoreDocsRepo,
 	interactions *repo.InteractionsRepository,
 	docsRepo *repo.DocumentsRepository,
-	chunksRepo *repo.ChunksRepository,
-	emb ai.EmbeddingProvider,
+	vertexSearch *ai.VertexAISearchClient,
 	storage StorageClient,
 	bucket string,
 	publisher Publisher,
@@ -56,19 +53,18 @@ func NewCoreDocsToolExecutor(
 	logger *log.Logger,
 ) *CoreDocsToolExecutor {
 	return &CoreDocsToolExecutor{
-		coreDocs:     coreDocs,
-		interactions: interactions,
-		docsRepo:     docsRepo,
-		chunksRepo:   chunksRepo,
-		emb:          emb,
-		storage:      storage,
-		bucket:       bucket,
-		publisher:    publisher,
-		tenantID:     tenantID,
-		projectID:    projectID,
-		streamID:     streamID,
-		logger:       logger,
-		editSessions: make(map[string]*DocumentEditSession),
+		coreDocs:           coreDocs,
+		interactions:       interactions,
+		docsRepo:           docsRepo,
+		vertexSearchClient: vertexSearch,
+		storage:            storage,
+		bucket:             bucket,
+		publisher:          publisher,
+		tenantID:           tenantID,
+		projectID:          projectID,
+		streamID:           streamID,
+		logger:             logger,
+		editSessions:       make(map[string]*DocumentEditSession),
 	}
 }
 
@@ -105,10 +101,10 @@ func (e *CoreDocsToolExecutor) Execute(ctx context.Context, name string, args js
 	}
 }
 
-// indexCoreDoc indexes a CoreDoc for vector search
+// indexCoreDoc indexes a CoreDoc for vector search (Document Create/Upsert uploads to GCS, triggers Vertex sync)
 func (e *CoreDocsToolExecutor) indexCoreDoc(ctx context.Context, coreDoc *models.CoreDoc) error {
-	if e.docsRepo == nil || e.chunksRepo == nil || e.emb == nil {
-		return fmt.Errorf("RAG components not configured")
+	if e.docsRepo == nil {
+		return fmt.Errorf("document indexing not configured (DocumentsRepository required)")
 	}
 
 	if coreDoc.ExtractedText == nil || *coreDoc.ExtractedText == "" {
@@ -120,8 +116,8 @@ func (e *CoreDocsToolExecutor) indexCoreDoc(ctx context.Context, coreDoc *models
 		return nil
 	}
 
-	// Virtual sourceID for CoreDocs
-	virtualSourceID := fmt.Sprintf("core_docs_%s", coreDoc.ProjectID)
+	// Virtual sourceID for CoreDocs (project:projectID format to match projects handler)
+	virtualSourceID := fmt.Sprintf("project:%s", coreDoc.ProjectID)
 
 	// Check if Document already exists for this CoreDoc
 	existingDoc, err := e.docsRepo.GetByCoreDocID(ctx, e.tenantID, coreDoc.ID)
@@ -134,10 +130,6 @@ func (e *CoreDocsToolExecutor) indexCoreDoc(ctx context.Context, coreDoc *models
 		existingDoc.Status = "new" // Reset to trigger re-indexing
 		if err := e.docsRepo.Upsert(ctx, existingDoc); err != nil {
 			return fmt.Errorf("failed to update document: %w", err)
-		}
-		// Delete old chunks
-		if err := e.chunksRepo.DeleteByDoc(ctx, e.tenantID, existingDoc.ID); err != nil {
-			e.logger.Printf("Warning: failed to delete old chunks: %v", err)
 		}
 	} else {
 		// Create new Document
@@ -170,51 +162,16 @@ func (e *CoreDocsToolExecutor) indexCoreDoc(ctx context.Context, coreDoc *models
 		existingDoc = doc
 	}
 
-	// Chunk and embed
-	parts := discovery.ChunkText(text, 1200)
-	if len(parts) == 0 {
-		return nil
-	}
-
-	vectors, err := e.emb.EmbedTexts(ctx, parts)
-	if err != nil {
-		return fmt.Errorf("failed to create embeddings: %w", err)
-	}
-
-	now := time.Now().UTC()
-	for i := range parts {
-		ch := &models.Chunk{
-			TenantID:         e.tenantID,
-			DocID:            existingDoc.ID,
-			SourceID:        virtualSourceID,
-			Position:         i,
-			Text:             parts[i],
-			Embedding:        vectors[i],
-			EmbeddingModel:   e.emb.ModelID(),
-			EmbeddingVersion: "v1",
-			Attrs: map[string]any{
-				"coreDocId":   coreDoc.ID,
-				"projectId":   coreDoc.ProjectID,
-				"documentType": "coredoc",
-			},
-			ContentHash: repo.HashContent(parts[i]),
-			CreatedAt:   now,
-		}
-		if _, err := e.chunksRepo.Create(ctx, ch); err != nil {
-			return fmt.Errorf("failed to create chunk: %w", err)
-		}
-	}
-
-	// Mark document as embedded
-	existingDoc.Status = "embedded"
+	// Mark document as indexed (GCS upload + Vertex sync handled by docsRepo.Create/Upsert)
+	existingDoc.Status = "indexed"
 	if err := e.docsRepo.Upsert(ctx, existingDoc); err != nil {
-		return fmt.Errorf("failed to mark document as embedded: %w", err)
+		return fmt.Errorf("failed to mark document as indexed: %w", err)
 	}
 
 	return nil
 }
 
-// searchCoreDocs performs semantic search across CoreDocs
+// searchCoreDocs performs semantic search across CoreDocs using Vertex AI Search
 func (e *CoreDocsToolExecutor) searchCoreDocs(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var params struct {
 		Query string `json:"query"`
@@ -232,32 +189,25 @@ func (e *CoreDocsToolExecutor) searchCoreDocs(ctx context.Context, args json.Raw
 		limit = *params.Limit
 	}
 
-	// Embed query
-	qvecs, err := e.emb.EmbedTexts(ctx, []string{params.Query})
-	if err != nil || len(qvecs) == 0 {
-		return nil, fmt.Errorf("failed to embed query: %w", err)
+	if e.vertexSearchClient == nil || !e.vertexSearchClient.IsConfigured() {
+		return nil, fmt.Errorf("Vertex AI Search not configured")
 	}
-	qv := qvecs[0]
 
 	// Virtual sourceID for this project
-	virtualSourceID := fmt.Sprintf("core_docs_%s", e.projectID)
+	virtualSourceID := fmt.Sprintf("project:%s", e.projectID)
+	filter := fmt.Sprintf("tenantId:\"%s\" AND (sourceId:\"%s\" OR sourceId:\"global\")", e.tenantID, virtualSourceID)
 
-	// Vector search
-	index := ai.NewFirestoreVectorIndex(e.chunksRepo)
-	chunkIDs, err := index.Query(ctx, qv, limit*2, map[string]any{
-		"tenantId":  e.tenantID,
-		"sourceIds": []string{virtualSourceID},
-	})
+	searchReq := &ai.SearchRequest{
+		Query:    params.Query,
+		PageSize: limit * 2,
+		Filter:   filter,
+	}
+	searchResp, err := e.vertexSearchClient.Search(ctx, searchReq)
 	if err != nil {
-		return nil, fmt.Errorf("vector search failed: %w", err)
+		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	chunks, err := e.chunksRepo.GetByIDs(ctx, chunkIDs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load chunks: %w", err)
-	}
-
-	// Group by CoreDoc and collect relevant fragments
+	// Group by CoreDoc (docId from structData or URI) and collect snippets
 	type docResult struct {
 		DocID      string   `json:"docId"`
 		Filename   string   `json:"filename"`
@@ -266,24 +216,51 @@ func (e *CoreDocsToolExecutor) searchCoreDocs(ctx context.Context, args json.Raw
 	}
 	docMap := make(map[string]*docResult)
 
-	for _, chunk := range chunks {
+	for _, result := range searchResp.Results {
 		coreDocID := ""
-		if chunk.Attrs != nil {
-			if id, ok := chunk.Attrs["coreDocId"].(string); ok {
+		snippet := result.Document.Title
+		if result.Document.StructData != nil {
+			if id, ok := result.Document.StructData["coreDocId"].(string); ok {
 				coreDocID = id
+			}
+		}
+		if coreDocID == "" && result.Document.URI != "" && strings.HasPrefix(result.Document.URI, "gs://") {
+			uriParts := strings.Split(strings.TrimPrefix(result.Document.URI, "gs://"), "/")
+			if len(uriParts) >= 4 {
+				docID := strings.TrimSuffix(uriParts[len(uriParts)-1], ".txt")
+				// Try to get coreDocId from docsRepo
+				if e.docsRepo != nil {
+					doc, _ := e.docsRepo.GetByID(ctx, docID)
+					if doc != nil && doc.Attrs != nil {
+						if cid, ok := doc.Attrs["coreDocId"].(string); ok {
+							coreDocID = cid
+						}
+					}
+				}
+				if coreDocID == "" {
+					coreDocID = docID
+				}
+			}
+		}
+		if result.Document.DerivedStructData != nil {
+			if s, ok := result.Document.DerivedStructData["snippets"].([]interface{}); ok && len(s) > 0 {
+				if ss, ok := s[0].(map[string]interface{}); ok {
+					if snip, ok := ss["snippet"].(string); ok && snip != "" {
+						snippet = snip
+					}
+				}
 			}
 		}
 		if coreDocID == "" {
 			continue
 		}
-
 		if docMap[coreDocID] == nil {
 			docMap[coreDocID] = &docResult{
 				DocID:     coreDocID,
 				Fragments: make([]string, 0),
 			}
 		}
-		docMap[coreDocID].Fragments = append(docMap[coreDocID].Fragments, chunk.Text)
+		docMap[coreDocID].Fragments = append(docMap[coreDocID].Fragments, snippet)
 		docMap[coreDocID].MatchCount++
 	}
 
@@ -303,7 +280,6 @@ func (e *CoreDocsToolExecutor) searchCoreDocs(ctx context.Context, args json.Raw
 
 	// Sort by match count (descending) and limit
 	if len(results) > limit {
-		// Simple sort by match count
 		for i := 0; i < len(results)-1; i++ {
 			for j := i + 1; j < len(results); j++ {
 				if results[j].MatchCount > results[i].MatchCount {

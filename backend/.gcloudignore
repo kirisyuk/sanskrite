@@ -21,7 +21,26 @@ cmd/*/hatlone-ws
 
 # Local tool binaries produced by `go build` / `go install` for cmd/tools (often 40-80MB each)
 horizon_*
+add_*
 check_*
+check-*
+seed_*
+migrate_*
+inspect_*
+purge_*
+geonames_*
+loc_*
+watchdog_*
+test_*
+test-*
+sync-*
+reindex-*
+update-*
+clear_*
+run_*
+find_*
+gemini_*
+openai_*
 
 # Log files
 *.log
@@ -29,6 +48,11 @@ check_*
 # Local data dumps / experiments (can be huge; never needed for container builds)
 *.jsonl
 *.duration.txt
+*.csv
+
+# Temp
+tmp/
+temp/
 
 # Git
 .git/

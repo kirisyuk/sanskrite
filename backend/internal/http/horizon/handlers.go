@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
 	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -29,6 +30,7 @@ type HorizonHandlers struct {
 	propagationProfileLookup  *horizonprop.ProfileLookup
 	signalPipeline            *horizonscout.SignalPipeline
 	mergeFragmentsRepo        *horizonrepo.FragmentsMergeRepository
+	newsByFragmentsCanvas     *discovery.NewsByFragmentsCanvas
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -119,6 +121,12 @@ func (h *HorizonHandlers) WithMergeFragmentsRepo(r *horizonrepo.FragmentsMergeRe
 	return h
 }
 
+// WithNewsByFragmentsCanvas wires the news-by-fragments canvas (search → facts → 12-axis → propagation).
+func (h *HorizonHandlers) WithNewsByFragmentsCanvas(c *discovery.NewsByFragmentsCanvas) *HorizonHandlers {
+	h.newsByFragmentsCanvas = c
+	return h
+}
+
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Intent precheck (NL -> taxonomy-aligned intent)
@@ -168,6 +176,8 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 		mux.Handle("/api/horizon/events:inject", authMiddleware(http.HandlerFunc(h.InjectEvent)))
 		// Manual: extract 12-axis signals for existing event facts (no auto-invocation)
 		mux.Handle("/api/horizon/events:extract-signals", authMiddleware(http.HandlerFunc(h.ExtractEventSignals)))
+	mux.Handle("/api/horizon/canvas/news-by-fragments", authMiddleware(http.HandlerFunc(h.NewsByFragments)))
+	mux.Handle("/api/horizon/ontology-facts/by-canonical-path", authMiddleware(http.HandlerFunc(h.GetFactsByCanonicalPath)))
 
 		// Domain scenario: Encode → Propagate → Decode (policy-impact, etc.)
 		mux.Handle("/api/horizon/scenarios/run", authMiddleware(http.HandlerFunc(h.RunScenario)))

@@ -248,7 +248,7 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 			if w.orchestrator.sources != nil {
 				if dsTg, err := w.orchestrator.sources.Get(ctxP, payload.SourceID); err == nil && dsTg != nil && dsTg.Details.ChannelUsername != nil {
 					// Check if all dependencies are available
-					if w.orchestrator.telegram != nil && w.orchestrator.docs != nil && w.orchestrator.chunks != nil && w.orchestrator.emb != nil {
+					if w.orchestrator.telegram != nil && w.orchestrator.docs != nil {
 						ingestAttempted = true
 						last := 0
 						if dsTg.Details.LastProcessedMessageID != nil {
@@ -256,8 +256,8 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 						}
 						pollErr = w.orchestrator.IngestTelegram(ctxP, processingTenantID, payload.SourceID, *dsTg.Details.ChannelUsername, last)
 					} else {
-						w.logger.Printf("source poller: skipping Telegram ingest for source %s - missing dependencies (telegram=%v, docs=%v, chunks=%v, emb=%v)",
-							payload.SourceID, w.orchestrator.telegram != nil, w.orchestrator.docs != nil, w.orchestrator.chunks != nil, w.orchestrator.emb != nil)
+						w.logger.Printf("source poller: skipping Telegram ingest for source %s - missing dependencies (telegram=%v, docs=%v)",
+							payload.SourceID, w.orchestrator.telegram != nil, w.orchestrator.docs != nil)
 						pollErr = fmt.Errorf("ingest dependencies not wired")
 					}
 				} else {
@@ -268,12 +268,12 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 				pollErr = fmt.Errorf("sources repository not available")
 			}
 		case models.SourceKindHorizonFeed, models.SourceKindWorldMonitorLegacy:
-			if w.orchestrator.emb != nil && w.orchestrator.docs != nil && w.orchestrator.chunks != nil {
+			if w.orchestrator.docs != nil {
 				ingestAttempted = true
 				pollErr = w.orchestrator.IngestHorizonMonitorFeed(ctxP, processingTenantID, payload.SourceID, w.orchestrator.emb)
 			} else {
-				w.logger.Printf("source poller: skipping horizon_monitor_feed ingest for source %s - missing dependencies (emb=%v, docs=%v, chunks=%v)",
-					payload.SourceID, w.orchestrator.emb != nil, w.orchestrator.docs != nil, w.orchestrator.chunks != nil)
+				w.logger.Printf("source poller: skipping horizon_monitor_feed ingest for source %s - missing dependencies (docs=%v)",
+					payload.SourceID, w.orchestrator.docs != nil)
 				pollErr = fmt.Errorf("ingest dependencies not wired")
 			}
 		default:

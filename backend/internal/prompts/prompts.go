@@ -154,7 +154,7 @@ TASK:
 - If you cannot map confidently, use "other".
 - If unsure, prefer conservative outputs; omit or use nulls instead of inventing facts.
 - Include intangible events when they are clearly stated (partnerships, alliances/coalitions, union actions, new legal entities/incorporations, factory openings/closures, product/model releases & deprecations, pricing/availability changes, policy/regulatory changes, sanctions/licensing, investigations, dissolutions).
-- For event locations, prefer structured geo normalization fields (countryAlpha2/admin1/city) to support Horizon canonical geo taxonomy (/loc/{country}/{admin1}/{city}).
+- For event locations, extract place name (name), full address (address) when known, and structured geo (countryAlpha2/admin1/city). Place and address are used for geocoding; coordinates are resolved by the system.
 -
 - METRIC UPDATES:
   You may extract structured numeric metric updates when the content provides clear values.
@@ -210,8 +210,9 @@ REQUIRED JSON SCHEMA:
     "context": "string?",
     "summary": "string?",
     "location": {
-      "name": "string?",
-      "iso6709": "string?",
+      "name": "place name (e.g. Dubai airport, Port of Houston)?",
+      "address": "full address for geocoding (e.g. 123 Main St, Houston, TX, USA)?",
+      "iso6709": "coordinates in ISO6709 format (e.g. +25.27+55.30/)?",
       "countryAlpha2": "ISO3166-1 alpha2 lowercase (e.g., us, cn, de)?",
       "admin1": "state/province code or slug lowercase; use 'na' if unknown/not applicable?",
       "city": "city slug lowercase; use 'na' if unknown/not applicable?"

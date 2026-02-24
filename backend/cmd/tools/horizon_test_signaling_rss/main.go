@@ -55,6 +55,7 @@ func main() {
 	sourcesRepo := repo.NewDataSourcesRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
 	projectsRepo := repo.NewProjectsRepository(fsClient.Client())
+	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
 
 	// Ensure source exists
@@ -124,7 +125,7 @@ func main() {
 
 	orch := discovery.NewOrchestrator(exec, wc, nil, projectsRepo, sourcesRepo, publisher, logger)
 	orch = orch.WithSourceProjects(sourceProjectsRepo)
-	orch = orch.WithRAG(reg, nil, nil) // Facts-only: no docs/chunks
+	orch = orch.WithDocumentIngest(reg, docsRepo) // Facts-only path: publishes document.extract, no Vertex indexing
 	orch = orch.WithIngestHistory(ingestHistoryRepo)
 
 	// Run IngestRSS (facts-only: publishes document.extract)

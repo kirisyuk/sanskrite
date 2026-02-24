@@ -33,7 +33,7 @@ import {
   useHorizonRealtimeStore,
   type HorizonRealtimeEvent,
 } from '../stores/horizonRealtimeStore';
-import { humanizeCanonicalPath } from '../lib/uiUtils';
+import { humanizeCanonicalPath, normalizeCanonicalPath } from '../lib/uiUtils';
 import { isSphereCanonicalPath, isSphereEntity, isSphereType } from '../lib/horizonSphere';
 import {
   layoutExpansionWithGroups,
@@ -740,13 +740,149 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [hoveredGroupId, setHoveredGroupId] = React.useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = React.useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = React.useState<string | null>(null);
-  // Risk Shield (8-segment overlay around a node) — single active node at a time.
-  const [riskShieldActiveNodeId, setRiskShieldActiveNodeId] = React.useState<string | null>(null);
-  const toggleRiskShield = React.useCallback((fragmentId: string) => {
+  // Fragment Profile (Latest events + Signals panels under node) — single active node at a time.
+  const [fragmentProfileActiveNodeId, setFragmentProfileActiveNodeId] = React.useState<string | null>(null);
+  const [fragmentProfileEvents, setFragmentProfileEvents] = React.useState<Array<{ id: string; title: string; summary?: string; occurredAt?: string; type?: string }>>([]);
+  const [fragmentProfileSignals, setFragmentProfileSignals] = React.useState<Array<{ id: string; title: string; summary?: string; type?: string; observedAt?: string; tags?: string[] }>>([]);
+  const [fragmentProfileLoading, setFragmentProfileLoading] = React.useState(false);
+  const [fragmentProfileFetchTriggered, setFragmentProfileFetchTriggered] = React.useState(false);
+  const fragmentProfilePathRef = React.useRef<string | null>(null);
+  const toggleFragmentProfile = React.useCallback((fragmentId: string) => {
     const id = String(fragmentId || '').trim();
     if (!id) return;
-    setRiskShieldActiveNodeId((prev) => (String(prev || '').trim() === id ? null : id));
+    setFragmentProfileActiveNodeId((prev) => (String(prev || '').trim() === id ? null : id));
+    setFragmentProfileEvents([]);
+    setFragmentProfileSignals([]);
+    setFragmentProfileFetchTriggered(false);
   }, []);
+
+  // Load ontology facts (events + signals) when fragment profile opens; if no events, trigger news fetch.
+  React.useEffect(() => {
+    const fid = String(fragmentProfileActiveNodeId || '').trim();
+    if (!fid) return;
+    const nodeList = nodesStateRef.current || [];
+    const node = nodeList.find((n) => {
+      const nid = String((n as any)?.id || '').trim();
+      const nfid = String((n.data as any)?.fragmentId || '').trim();
+      return nid === fid || nfid === fid;
+    }) as any;
+    const cp = normalizeCanonicalPath((node?.data as any)?.canonicalPath);
+    if (!cp || !cp.startsWith('/')) return;
+    fragmentProfilePathRef.current = cp;
+    let cancelled = false;
+    const run = async () => {
+      setFragmentProfileLoading(true);
+      try {
+        const [eventsRes, signalsRes] = await Promise.all([
+          api.getOntologyFactsByCanonicalPath(cp, { kind: 'event', limit: 50 }),
+          api.getOntologyFactsByCanonicalPath(cp, { kind: 'signal', limit: 50 }),
+        ]);
+        if (cancelled) return;
+        const eventFacts = eventsRes?.facts || [];
+        const signalFacts = signalsRes?.facts || [];
+        setFragmentProfileSignals(signalFacts.map((f: any) => ({
+          id: f.id,
+          title: f.title || '',
+          summary: f.summary,
+          type: f.type,
+          observedAt: f.observedAt,
+          tags: f.tags,
+        })));
+        if (eventFacts.length > 0) {
+          setFragmentProfileEvents(eventFacts.map((f: any) => ({
+            id: f.id,
+            title: f.title || '',
+            summary: f.summary,
+            occurredAt: f.occurredAt,
+            type: f.type,
+          })));
+          setFragmentProfileFetchTriggered(false);
+          setFragmentProfileLoading(false);
+        } else {
+          setFragmentProfileEvents([]);
+          setFragmentProfileFetchTriggered(true);
+          try {
+            const newsRes = await api.fetchNewsByFragments({
+              fragments: [{ canonicalPath: cp }],
+              daysBack: 7,
+            });
+            if (cancelled) return;
+            const cpNorm = normalizeCanonicalPath(cp);
+            const items = newsRes?.newsByPath?.[cpNorm] || [];
+            if (items.length > 0) {
+              setFragmentProfileEvents(items.map((it: any) => ({
+                id: it.factId || '',
+                title: it.title || '',
+                summary: it.summary,
+                occurredAt: it.occurredAt,
+                type: it.eventType,
+              })));
+            }
+            setFragmentProfileFetchTriggered(false);
+            setFragmentProfileLoading(false);
+          } catch {
+            // HTTP failed — fall through; WS listener is a fallback
+          }
+        }
+      } catch {
+        if (!cancelled) { setFragmentProfileEvents([]); setFragmentProfileSignals([]); setFragmentProfileLoading(false); }
+      }
+    };
+    void run();
+    return () => { cancelled = true; fragmentProfilePathRef.current = null; };
+  }, [fragmentProfileActiveNodeId]);
+
+  // Fallback: refetch ontology facts when WS newsByFragments.completed arrives for our path.
+  // Primary path uses the HTTP response directly (above). This handles edge cases where
+  // the HTTP response was lost but WS arrived, or when facts were created by another tab.
+  const lastNewsWsRef = React.useRef<number>(0);
+  const latestNewsWsEvent = useHorizonRealtimeStore((s) => {
+    const all = s.events || [];
+    for (let i = all.length - 1; i >= 0; i--) {
+      if (all[i].type === 'horizon.canvas.newsByFragments.completed') return all[i];
+    }
+    return null;
+  });
+  React.useEffect(() => {
+    if (!latestNewsWsEvent) return;
+    const fid = String(fragmentProfileActiveNodeId || '').trim();
+    const cp = fragmentProfilePathRef.current;
+    if (!fid || !cp || !fragmentProfileFetchTriggered) return;
+    const newsByPath = latestNewsWsEvent?.data?.newsByPath;
+    const cpNorm = normalizeCanonicalPath(cp);
+    if (!newsByPath || !(cpNorm in newsByPath)) return;
+    const ts = latestNewsWsEvent.ts || 0;
+    if (ts <= lastNewsWsRef.current) return;
+    let active = true;
+    Promise.all([
+      api.getOntologyFactsByCanonicalPath(cp, { kind: 'event', limit: 50 }),
+      api.getOntologyFactsByCanonicalPath(cp, { kind: 'signal', limit: 50 }),
+    ]).then(([eventsRes, signalsRes]) => {
+      if (!active) return;
+      lastNewsWsRef.current = ts;
+      const eventFacts = eventsRes?.facts || [];
+      const signalFacts = signalsRes?.facts || [];
+      setFragmentProfileEvents(eventFacts.map((f: any) => ({
+        id: f.id,
+        title: f.title || '',
+        summary: f.summary,
+        occurredAt: f.occurredAt,
+        type: f.type,
+      })));
+      setFragmentProfileSignals(signalFacts.map((f: any) => ({
+        id: f.id,
+        title: f.title || '',
+        summary: f.summary,
+        type: f.type,
+        observedAt: f.observedAt,
+        tags: f.tags,
+      })));
+      setFragmentProfileFetchTriggered(false);
+      setFragmentProfileLoading(false);
+    }).catch(() => { if (active) setFragmentProfileLoading(false); });
+    return () => { active = false; };
+  }, [fragmentProfileActiveNodeId, fragmentProfileFetchTriggered, latestNewsWsEvent]);
+
   // Levels Two-Pane: click on a left group ("aggregated node") should reveal real parent<->child edges.
   const [selectedLevelsAggGroupId, setSelectedLevelsAggGroupId] = React.useState<string | null>(null);
   // When set, we only reveal edges of this type within the selected group (clicked agg edge).
@@ -6023,14 +6159,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setLensItems([]);
       setNodes([]);
       setEdges([]);
-      setRiskShieldActiveNodeId(null);
+      setFragmentProfileActiveNodeId(null);
       return;
     }
 
     const loadLensItems = async () => {
       try {
         // New lens / reload: reset risk shield state.
-        setRiskShieldActiveNodeId(null);
+        setFragmentProfileActiveNodeId(null);
         // New lens / reload: reset context-card state (collapsed blocks + overflow).
         setCollapsedSubcategories(new Set());
         setExpandedRoleGroups(new Set());
@@ -6284,7 +6420,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setLoading(true);
     setError(null);
     // Fresh graph load should always reset shield mode.
-    setRiskShieldActiveNodeId(null);
+    setFragmentProfileActiveNodeId(null);
 
     try {
       // Reset expansion/grid bookkeeping for a fresh load.
@@ -10168,21 +10304,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const displayEdges = React.useMemo(() => {
     const DIM_OPACITY = 0.22;
     const FADE_OPACITY = 0.12;
-    const riskId = String(riskShieldActiveNodeId || '').trim();
-    const riskActive = !!riskId;
+    const profileActiveId = String(fragmentProfileActiveNodeId || '').trim();
+    const profileActive = !!profileActiveId;
     const signalModeActive = hoverHighlightMode === 'signal-propagation';
 
-    const applyRiskShieldDimming = (arr: Edge[]) => {
-      if (!riskActive) return arr;
+    const applyFragmentProfileDimming = (arr: Edge[]) => {
+      if (!profileActive) return arr;
       return (arr || []).map((e: any) => {
         const baseStyle: any = (e as any)?.style || {};
         const curOpacity = typeof baseStyle.opacity === 'number' ? baseStyle.opacity : DIM_OPACITY;
-        // In shield mode, edges are not the primary semantic layer — keep ALL edges muted uniformly.
+        // In Fragment Profile mode, edges are muted uniformly.
         const nextOpacity = Math.min(curOpacity, 0.06);
         const d0: any = (e as any)?.data || {};
         return {
           ...(e as any),
-          // Keep labels suppressed; shield mode is meant to be quiet.
           label: undefined,
           data: { ...d0, showLabel: false },
           style: { ...baseStyle, opacity: nextOpacity },
@@ -10192,9 +10327,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Perf mode: do not derive per-edge styles/labels (avoids O(E) object cloning on hover),
     // just return filtered edges.
-    if (perfMode && !riskActive && !signalModeActive) return baseVisibleEdges;
-    // Risk Shield prevails over all hover/selection edge logic.
-    if (riskActive) return applyRiskShieldDimming(baseVisibleEdges);
+    if (perfMode && !profileActive && !signalModeActive) return baseVisibleEdges;
+    if (profileActive) return applyFragmentProfileDimming(baseVisibleEdges);
 
     // Levels Two-Pane aggregation:
     // - hide per-child edges by default (they exist for hover reveal)
@@ -10429,7 +10563,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           false,
         );
       });
-      return applyRiskShieldDimming(orderByRaised(out));
+      return applyFragmentProfileDimming(orderByRaised(out));
     }
 
     // Persisted selection highlight (keeps an edge emphasized until the user clicks elsewhere).
@@ -10511,7 +10645,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               }
               return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
             });
-            return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
+            return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
           }
         }
       }
@@ -10562,7 +10696,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             }
             return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
           });
-          return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
+          return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
         }
       }
     }
@@ -10591,7 +10725,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const groupNode = nodes.find((n) => n.id === hoveredGroupId);
       const gd: any = groupNode?.data;
       if (!groupNode || !gd?.isGroup) {
-        return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay.map((e) => {
+        return applyFragmentProfileDimming(applySelectedEdge(edgesForDisplay.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
         })));
@@ -10613,7 +10747,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           .map((n) => n.id),
       );
       if (!groupParentId || childIds.size === 0) {
-        return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay.map((e) => {
+        return applyFragmentProfileDimming(applySelectedEdge(edgesForDisplay.map((e) => {
           const { baseStyle } = baseStyled(e);
           return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
         })));
@@ -10651,7 +10785,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
-      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
+      return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
     }
 
     // Hover highlight mode: highlight selected relation cluster and fade everything else.
@@ -10695,7 +10829,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
-      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
+      return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
     }
 
     // Node hover: highlight incident edges and show their labels
@@ -10714,7 +10848,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
-      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
+      return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
     }
 
     // Selected node (when not hovering): highlight incident edges, show labels
@@ -10735,7 +10869,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: nonIncidentOpacity }, false);
       });
-      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
+      return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
     }
 
     const domainHoverEdgeSet = domainOverlayHoverEdgeIdSet;
@@ -10761,7 +10895,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: FADE_OPACITY }, false);
       });
-      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
+      return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
     }
 
     const domainEdgeSet = domainOverlayHighlightEdgeIds;
@@ -10787,12 +10921,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
       });
-      return applyRiskShieldDimming(applySelectedEdge(orderByRaised(out)));
+      return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
     }
 
     // Default: dim all edges, hide labels
-    return applyRiskShieldDimming(applySelectedEdge(edgesForDisplay));
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, hoverHighlightMode, signalPropagationOverlay, signalPropagationEdgeIdSet, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode, focusMode]);
+    return applyFragmentProfileDimming(applySelectedEdge(edgesForDisplay));
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, hoverHighlightMode, signalPropagationOverlay, signalPropagationEdgeIdSet, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, fragmentProfileActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode, focusMode]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -11246,14 +11380,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const dActive = !!dset && dset.size > 0;
     const topDepSet = signalModeActive ? null : (domainTopDependencyFocusActive && !domainHoverActive ? domainTopDependencyNodeIds : null);
     const topDepActive = !!topDepSet && topDepSet.size > 0;
-    if (perfMode && !signalActive && !qActive && !domainHoverActive && !dActive && !topDepActive && !String(riskShieldActiveNodeId || '').trim()) return nodes;
+    if (perfMode && !signalActive && !qActive && !domainHoverActive && !dActive && !topDepActive && !String(fragmentProfileActiveNodeId || '').trim()) return nodes;
 
     const owned = hoverHighlight?.nodeIds;
     const ultimatePersons: Set<string> | undefined = (hoverHighlight as any)?.ultimatePersonIds;
     const hovered = String(hoveredNodeId || '').trim();
     const hoverActive = !!hoverHighlight && !!hovered;
-    const riskId = String(riskShieldActiveNodeId || '').trim();
-    const riskActive = !!riskId;
+    const profileActiveId = String(fragmentProfileActiveNodeId || '').trim();
+    const profileActive = !!profileActiveId;
 
     return nodes.map((n) => {
       const id = String(n.id || '').trim();
@@ -11266,7 +11400,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const isDomain = dActive && !!dset && id && dset.has(id);
       const isTopDep = topDepActive && !!topDepSet && id && topDepSet.has(id);
       const isSignal = signalActive && !!signalSet && id && signalSet.has(id);
-      const isRiskNode = riskActive && !isGroup && id && id === riskId;
+      const isProfileNode = profileActive && !isGroup && id && id === profileActiveId;
 
       // Base hover highlight behavior (existing UX).
       let opacity = 1;
@@ -11317,9 +11451,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         zIndex = Math.max(zIndex, 46);
       }
 
-      // Risk Shield mode: dim everything except the active node.
-      if (riskActive) {
-        if (isRiskNode) {
+      // Fragment Profile mode: dim everything except the active node.
+      if (profileActive) {
+        if (isProfileNode) {
           opacity = 1;
           zIndex = Math.max(zIndex, 70);
         } else {
@@ -11455,26 +11589,36 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         changed = true;
       }
 
-      // Risk Shield: attach toggle callback + open flag only for real fragment nodes (not groups, not stacks).
-      const canRisk = !isGroup && !stackKey;
-      const wantRiskOpen = Boolean(canRisk && isRiskNode);
-      if (canRisk) {
+      // Fragment Profile: attach toggle callback + open flag only for real fragment nodes (not groups, not stacks).
+      const canProfile = !isGroup && !stackKey;
+      const wantProfileOpen = Boolean(canProfile && isProfileNode);
+      if (canProfile) {
         if (nextData === d0) {
           nextData = { ...d0 };
           changed = true;
         }
-        if (nextData.onToggleRiskShield !== toggleRiskShield) {
-          nextData.onToggleRiskShield = toggleRiskShield;
+        if (nextData.onToggleFragmentProfile !== toggleFragmentProfile) {
+          nextData.onToggleFragmentProfile = toggleFragmentProfile;
           changed = true;
         }
-        if (Boolean(nextData.riskShieldOpen) !== wantRiskOpen) {
-          nextData.riskShieldOpen = wantRiskOpen;
+        if (Boolean(nextData.fragmentProfileOpen) !== wantProfileOpen) {
+          nextData.fragmentProfileOpen = wantProfileOpen;
           changed = true;
         }
-      } else if (typeof nextData?.onToggleRiskShield === 'function' || typeof nextData?.riskShieldOpen !== 'undefined') {
+        if (wantProfileOpen) {
+          nextData.fragmentProfileEvents = fragmentProfileEvents;
+          nextData.fragmentProfileSignals = fragmentProfileSignals;
+          nextData.fragmentProfileLoading = fragmentProfileLoading;
+          nextData.fragmentProfileFetchTriggered = fragmentProfileFetchTriggered;
+        }
+      } else if (typeof nextData?.onToggleFragmentProfile === 'function' || typeof nextData?.fragmentProfileOpen !== 'undefined') {
         nextData = { ...d0 };
-        delete nextData.onToggleRiskShield;
-        delete nextData.riskShieldOpen;
+        delete nextData.onToggleFragmentProfile;
+        delete nextData.fragmentProfileOpen;
+        delete nextData.fragmentProfileEvents;
+        delete nextData.fragmentProfileSignals;
+        delete nextData.fragmentProfileLoading;
+        delete nextData.fragmentProfileFetchTriggered;
         changed = true;
       }
 
@@ -11597,8 +11741,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     openLocalFilters,
     toggleLocalFilter,
     levelsExpandEdgeTypes,
-    riskShieldActiveNodeId,
-    toggleRiskShield,
+    fragmentProfileActiveNodeId,
+    fragmentProfileEvents,
+    fragmentProfileSignals,
+    fragmentProfileLoading,
+    fragmentProfileFetchTriggered,
+    toggleFragmentProfile,
     domainTopDependencyFocusActive,
     domainTopDependencyNodeIds,
     controlCorridorMode,
@@ -13363,10 +13511,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     event.preventDefault();
 
     // Risk Shield: clicking any other node counts as "outside" and closes it.
-    const rid = String(riskShieldActiveNodeId || '').trim();
+    const rid = String(fragmentProfileActiveNodeId || '').trim();
     const nid = String(node?.id || '').trim();
     if (rid && nid && rid !== nid) {
-      setRiskShieldActiveNodeId(null);
+      setFragmentProfileActiveNodeId(null);
     }
 
     // Selecting a node should clear any selected edge highlight.
@@ -13568,7 +13716,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       onNodeSelect(selectedId, nodeDataWithContext);
     }
-  }, [onNodeSelect, onEdgeSelect, edges, nodes, layoutMode, riskShieldActiveNodeId]);
+  }, [onNodeSelect, onEdgeSelect, edges, nodes, layoutMode, fragmentProfileActiveNodeId]);
 
   // Handle edge click
   const handleEdgeClick = useCallback((event: React.MouseEvent, edge: Edge) => {
@@ -13581,7 +13729,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     event.preventDefault();
 
     // Risk Shield: edge click is "outside" => close.
-    if (riskShieldActiveNodeId) setRiskShieldActiveNodeId(null);
+    if (fragmentProfileActiveNodeId) setFragmentProfileActiveNodeId(null);
 
     // Levels Two-Pane: clicking an aggregated edge should toggle the same "real edges" preview
     // as clicking the left group node.
@@ -13672,7 +13820,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       
       onEdgeSelect(edge.id, edgeDataWithFragments);
     }
-  }, [onEdgeSelect, nodes, layoutMode, normalizeEdgeType, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, riskShieldActiveNodeId]);
+  }, [onEdgeSelect, nodes, layoutMode, normalizeEdgeType, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, fragmentProfileActiveNodeId]);
 
   // Handle pane click (click on empty space) - clear selection
   const handlePaneClick = useCallback(() => {
@@ -13686,7 +13834,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setHoveredNodeId(null);
     setHoveredEdgeId(null);
     // Risk Shield: pane click closes it.
-    if (riskShieldActiveNodeId) setRiskShieldActiveNodeId(null);
+    if (fragmentProfileActiveNodeId) setFragmentProfileActiveNodeId(null);
     if (onNodeSelect) {
       onNodeSelect(null, null);
     }
@@ -13733,7 +13881,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return { ...(n as any), data: nd } as any;
       }),
     );
-  }, [onNodeSelect, onEdgeSelect, graphQueryHighlightIds, riskShieldActiveNodeId]);
+  }, [onNodeSelect, onEdgeSelect, graphQueryHighlightIds, fragmentProfileActiveNodeId]);
 
   const handleNodeDragStop = useCallback(async (_event: React.MouseEvent, node: Node<HorizonNodeData>) => {
     const d: any = node?.data;
@@ -14291,6 +14439,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const graphEmpty = nodes.length === 0;
 
+  // Clear hover when overlays open to prevent "sticky" hover and ensure graph receives events after overlay closes
+  const clearHoverWhenOverlayOpens = React.useCallback(() => {
+    pendingHoverRef.current = { hoveredGroupId: null, hoveredNodeId: null, hoveredEdgeId: null };
+    setHoveredGroupId(null);
+    setHoveredNodeId(null);
+    setHoveredEdgeId(null);
+  }, []);
+
   const overlayPanelStyle: React.CSSProperties = {
     padding: '8px 10px',
     borderRadius: 12,
@@ -14301,25 +14457,31 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     overflow: 'visible',
     minWidth: 120,
     maxWidth: 'min(90vw, 720px)',
+    userSelect: 'none',
   };
 
   const pushableButtonStyle = (active: boolean): React.CSSProperties => ({
     width: 40,
     height: 40,
     borderRadius: 10,
-    border: '1px solid var(--border-subtle)',
-    background: active ? (theme === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)') : (theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.65)'),
+    border: active ? '1px solid rgba(245, 158, 11, 0.5)' : '1px solid var(--border-subtle)',
+    background: active
+      ? (theme === 'dark' ? 'rgba(245, 158, 11, 0.18)' : 'rgba(245, 158, 11, 0.14)')
+      : (theme === 'dark' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.65)'),
     color: 'var(--text-heading)',
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
-    transition: 'all 0.2s ease',
+    transition: 'background 0.15s ease, border-color 0.15s ease',
   });
 
   const actionsOverlayContent = (
-    <div style={{ ...overlayPanelStyle, display: 'flex', flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) setActionsOverlayOpen(false); }}
+      style={{ ...overlayPanelStyle, display: 'flex', flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap', gap: 6, overflow: 'visible', whiteSpace: 'nowrap', maxWidth: 'none' }}
+    >
         <IconButton onClick={handleLoadGraph} disabled={loading || !lensId} title="Load graph" icon={Icons.Refresh} />
         <IconButton
           onClick={() => { setActionsOverlayOpen(false); toggleCommandPalette(); }}
@@ -14344,7 +14506,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   );
 
   const viewOverlayContent = !graphEmpty ? (
-    <div style={{ ...overlayPanelStyle, display: 'flex', flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) setViewOverlayOpen(false); }}
+      style={{
+        ...overlayPanelStyle,
+        display: 'flex',
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexWrap: 'nowrap',
+        gap: 6,
+        overflow: 'visible',
+        whiteSpace: 'nowrap',
+        maxWidth: 'none',
+      }}
+    >
       {/* Modes */}
       <div ref={layoutMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
         <button
@@ -14813,7 +14988,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   ) : null;
 
   const infoOverlayContent = (
-    <div style={{ ...overlayPanelStyle, display: 'flex', flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) setInfoOverlayOpen(false); }}
+      style={{ ...overlayPanelStyle, display: 'flex', flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap', gap: 6, overflow: 'visible', whiteSpace: 'nowrap', maxWidth: 'none' }}
+    >
       <IconButton
         onClick={() => onToggleInspector?.()}
         disabled={!onToggleInspector}
@@ -15693,29 +15871,34 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           </div>
         )}
 
-        {/* Right-side vertical buttons; overlays expand left as horizontal toolbar rows */}
+        {/* Right-side vertical buttons; overlays expand left as horizontal toolbar rows.
+            pointerEvents: none on the wrapper so the graph underneath remains fully interactive.
+            Each button / overlay row sets pointerEvents: auto on itself. */}
         <div
           style={{
             position: 'absolute',
             top: 12,
             right: 12,
-            bottom: 12,
             zIndex: 80,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'flex-end',
             gap: 8,
-            pointerEvents: 'auto',
+            pointerEvents: 'none',
+            userSelect: 'none',
           }}
         >
           {/* 1. Actions */}
-          <div style={{ display: 'flex', flexDirection: 'row-reverse', alignItems: 'center', gap: 8 }}>
+          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
             <button
               type="button"
               onClick={() => {
                 setViewOverlayOpen(false);
                 setInfoOverlayOpen(false);
-                setActionsOverlayOpen((v) => !v);
+                setActionsOverlayOpen((v) => {
+                  if (!v) clearHoverWhenOverlayOpens();
+                  return !v;
+                });
               }}
               title="Actions"
               aria-label="Actions"
@@ -15725,18 +15908,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 21h5v-5" />
               </svg>
             </button>
-            {actionsOverlayOpen && actionsOverlayContent}
+            {actionsOverlayOpen && (
+              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 8px)' }}>
+                {actionsOverlayContent}
+              </div>
+            )}
           </div>
 
           {/* 2. View & highlight */}
-          <div style={{ display: 'flex', flexDirection: 'row-reverse', alignItems: 'center', gap: 8 }}>
+          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
             <button
               type="button"
               onClick={() => {
                 if (graphEmpty) return;
                 setActionsOverlayOpen(false);
                 setInfoOverlayOpen(false);
-                setViewOverlayOpen((v) => !v);
+                setViewOverlayOpen((v) => {
+                  if (!v) clearHoverWhenOverlayOpens();
+                  return !v;
+                });
               }}
               disabled={graphEmpty}
               title={graphEmpty ? 'Load graph first' : 'View & highlight'}
@@ -15747,17 +15937,24 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 <circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.648 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668c1.105 0 2.059-.215 2.98-.643 2.02-1.008 3.48-3.157 3.48-5.75 0-4.5-4.5-8.5-10-8.5z"/>
               </svg>
             </button>
-            {viewOverlayOpen && viewOverlayContent}
+            {viewOverlayOpen && (
+              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 8px)' }}>
+                {viewOverlayContent}
+              </div>
+            )}
           </div>
 
           {/* 3. Info & settings */}
-          <div style={{ display: 'flex', flexDirection: 'row-reverse', alignItems: 'center', gap: 8 }}>
+          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
             <button
               type="button"
               onClick={() => {
                 setActionsOverlayOpen(false);
                 setViewOverlayOpen(false);
-                setInfoOverlayOpen((v) => !v);
+                setInfoOverlayOpen((v) => {
+                  if (!v) clearHoverWhenOverlayOpens();
+                  return !v;
+                });
               }}
               title="Info & settings"
               aria-label="Info & settings"
@@ -15767,7 +15964,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 <circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />
               </svg>
             </button>
-            {infoOverlayOpen && infoOverlayContent}
+            {infoOverlayOpen && (
+              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 8px)' }}>
+                {infoOverlayContent}
+              </div>
+            )}
           </div>
         </div>
 

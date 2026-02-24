@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"cloud.google.com/go/firestore"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
@@ -32,9 +31,7 @@ type DiscoveryHandler struct {
 	docsRepo           *repo.DocumentsRepository
 	searchRepo         *repo.SearchEventsRepository
 	sourceProjectsRepo *repo.SourceProjectsRepository
-	chunksRepo         *repo.ChunksRepository
-	firestoreClient    *firestore.Client
-	// Vertex AI Search client
+	// Vertex AI Search client for document search
 	vertexSearchClient *ai.VertexAISearchClient
 }
 
@@ -81,19 +78,7 @@ func (h *DiscoveryHandler) WithSourceProjects(sp *repo.SourceProjectsRepository)
 	return h
 }
 
-// WithChunks wires chunks repository for vector search
-func (h *DiscoveryHandler) WithChunks(cr *repo.ChunksRepository) *DiscoveryHandler {
-	h.chunksRepo = cr
-	return h
-}
-
-// WithFirestoreClient wires Firestore client for native vector search
-func (h *DiscoveryHandler) WithFirestoreClient(client *firestore.Client) *DiscoveryHandler {
-	h.firestoreClient = client
-	return h
-}
-
-// WithVertexSearch wires Vertex AI Search client
+// WithVertexSearch wires Vertex AI Search client for document search
 func (h *DiscoveryHandler) WithVertexSearch(client *ai.VertexAISearchClient) *DiscoveryHandler {
 	h.vertexSearchClient = client
 	return h
@@ -349,7 +334,7 @@ type VectorSearchRequest struct {
 	Until        *string `json:"until,omitempty"`
 }
 
-// VectorSearch performs KNN over chunks using the configured VectorIndex
+// VectorSearch performs search using Vertex AI Search over GCS-indexed documents
 func (h *DiscoveryHandler) VectorSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
@@ -377,6 +362,11 @@ func (h *DiscoveryHandler) VectorSearch(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.TopK <= 0 {
 		body.TopK = 10
+	}
+
+	if h.vertexSearchClient == nil || !h.vertexSearchClient.IsConfigured() {
+		WriteInternalError(w, "Vertex AI Search is not configured")
+		return
 	}
 
 	// resolve sources and weights
@@ -407,44 +397,37 @@ func (h *DiscoveryHandler) VectorSearch(w http.ResponseWriter, r *http.Request) 
 		virtualSourceID := fmt.Sprintf("project:%s", projectID)
 		sourceIDs = append(sourceIDs, virtualSourceID)
 	}
-	if len(sourceIDs) == 0 {
-		WriteJSON(w, http.StatusOK, map[string]any{"items": []any{}})
-		return
+
+	// Build filter: tenantId + sourceIds
+	tenantFilter := fmt.Sprintf("tenantId:\"%s\" OR tenantId:\"global\"", auth.TenantID)
+	sourceConditions := make([]string, 0, len(sourceIDs))
+	for _, sid := range sourceIDs {
+		sourceConditions = append(sourceConditions, fmt.Sprintf("sourceId:\"%s\"", sid))
+	}
+	sourceFilter := strings.Join(sourceConditions, " OR ")
+	if sourceFilter == "" {
+		sourceFilter = "sourceId:\"\""
+	}
+	filter := fmt.Sprintf("(%s) AND (%s)", tenantFilter, sourceFilter)
+
+	searchReq := &ai.SearchRequest{
+		Query:    body.Query,
+		PageSize: body.TopK * 3, // Request more for client-side filtering
+		Filter:   filter,
+	}
+	searchResp, err := h.vertexSearchClient.Search(r.Context(), searchReq)
+	if err != nil {
+		// Fallback: try without source filter if filter fails
+		if strings.Contains(err.Error(), "Unsupported field") || strings.Contains(err.Error(), "Invalid filter") {
+			searchReq.Filter = tenantFilter
+			searchResp, err = h.vertexSearchClient.Search(r.Context(), searchReq)
+		}
+		if err != nil {
+			WriteInternalError(w, "Search failed")
+			return
+		}
 	}
 
-	// embed query
-	exec := h.orchestrator.Exec()
-	if exec == nil {
-		WriteInternalError(w, "Embedding executor not configured")
-		return
-	}
-	emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
-	qvecs, err := emb.EmbedTexts(r.Context(), []string{body.Query})
-	if err != nil || len(qvecs) == 0 {
-		WriteInternalError(w, "Embedding failed")
-		return
-	}
-	qv := qvecs[0]
-
-	// vector index query (using FirestoreVectorIndex adapter)
-	if h.chunksRepo == nil {
-		WriteInternalError(w, "Chunks repository not available")
-		return
-	}
-	index := ai.NewFirestoreVectorIndex(h.chunksRepo)
-	if h.firestoreClient != nil {
-		index = index.WithClient(h.firestoreClient)
-	}
-	ids, err := index.Query(r.Context(), qv, body.TopK, map[string]any{"tenantId": auth.TenantID, "sourceIds": sourceIDs})
-	if err != nil {
-		WriteInternalError(w, "Vector query failed")
-		return
-	}
-	chunks, err := h.chunksRepo.GetByIDs(r.Context(), ids)
-	if err != nil {
-		WriteInternalError(w, "Failed to load chunks")
-		return
-	}
 	var sinceT, untilT *time.Time
 	if body.Since != nil && strings.TrimSpace(*body.Since) != "" {
 		if t, err := time.Parse(time.RFC3339, *body.Since); err == nil {
@@ -456,68 +439,102 @@ func (h *DiscoveryHandler) VectorSearch(w http.ResponseWriter, r *http.Request) 
 			untilT = &t
 		}
 	}
-	type scored struct {
-		c     *models.Chunk
-		score float64
-		doc   *models.Document
-	}
-	var scoredItems []scored
+
+	// Map Vertex results to response format (docId, sourceId, position, score, text)
+	out := make([]map[string]any, 0, body.TopK)
 	nowT := time.Now().UTC()
-	for _, c := range chunks {
-		if body.DocumentType != nil && c.Attrs != nil {
-			if v, ok := c.Attrs["documentType"].(string); ok {
-				if strings.TrimSpace(v) != strings.TrimSpace(*body.DocumentType) {
+	sourceIDSet := make(map[string]bool)
+	for _, sid := range sourceIDs {
+		sourceIDSet[sid] = true
+	}
+	for _, result := range searchResp.Results {
+		docID := ""
+		sourceID := ""
+		snippet := result.Document.Title
+		if result.Document.StructData != nil {
+			if id, ok := result.Document.StructData["documentId"].(string); ok {
+				docID = id
+			}
+			if sid, ok := result.Document.StructData["sourceId"].(string); ok {
+				sourceID = sid
+			}
+		}
+		if docID == "" && result.Document.URI != "" && strings.HasPrefix(result.Document.URI, "gs://") {
+			// Extract from URI: gs://bucket/tenantId/sourceId/docId.txt
+			uriParts := strings.Split(strings.TrimPrefix(result.Document.URI, "gs://"), "/")
+			if len(uriParts) >= 4 {
+				sourceID = uriParts[2]
+				docID = strings.TrimSuffix(uriParts[len(uriParts)-1], ".txt")
+			}
+		}
+		if docID == "" {
+			docID = result.Document.ID
+		}
+		// Filter by sourceIds
+		if sourceID != "" && !sourceIDSet[sourceID] && !sourceIDSet["project:"+projectID] {
+			continue
+		}
+		// Optional: load doc for language/documentType/date filters
+		if h.docsRepo != nil && docID != "" {
+			doc, _ := h.docsRepo.GetByID(r.Context(), docID)
+			if body.Language != nil && doc != nil && strings.TrimSpace(doc.Language) != "" {
+				if !strings.EqualFold(strings.TrimSpace(doc.Language), strings.TrimSpace(*body.Language)) {
+					continue
+				}
+			}
+			if body.DocumentType != nil && doc != nil && strings.TrimSpace(doc.DocumentType) != "" {
+				if strings.TrimSpace(doc.DocumentType) != strings.TrimSpace(*body.DocumentType) {
+					continue
+				}
+			}
+			if (sinceT != nil || untilT != nil) && doc != nil && doc.OriginPublishedAt != nil {
+				if sinceT != nil && doc.OriginPublishedAt.Before(*sinceT) {
+					continue
+				}
+				if untilT != nil && doc.OriginPublishedAt.After(*untilT) {
 					continue
 				}
 			}
 		}
-		doc, _ := h.docsRepo.GetByID(r.Context(), c.DocID)
-		if body.Language != nil && doc != nil && strings.TrimSpace(doc.Language) != "" {
-			if !strings.EqualFold(strings.TrimSpace(doc.Language), strings.TrimSpace(*body.Language)) {
-				continue
+		score := result.RelevanceScore
+		if result.RankSignals != nil && score == 0 {
+			score = result.RankSignals.SemanticSimilarityScore
+		}
+		// Snippet from derivedStructData or title
+		if result.Document.DerivedStructData != nil {
+			if s, ok := result.Document.DerivedStructData["snippets"].([]interface{}); ok && len(s) > 0 {
+				if ss, ok := s[0].(map[string]interface{}); ok {
+					if snip, ok := ss["snippet"].(string); ok && snip != "" {
+						snippet = snip
+					}
+				}
 			}
 		}
-		if body.DocumentType != nil && doc != nil && strings.TrimSpace(doc.DocumentType) != "" {
-			if strings.TrimSpace(doc.DocumentType) != strings.TrimSpace(*body.DocumentType) {
-				continue
-			}
-		}
-		if (sinceT != nil || untilT != nil) && doc != nil && doc.OriginPublishedAt != nil {
-			if sinceT != nil && doc.OriginPublishedAt.Before(*sinceT) {
-				continue
-			}
-			if untilT != nil && doc.OriginPublishedAt.After(*untilT) {
-				continue
-			}
-		}
-		// similarity + recency + per-source weight boost
-		sim := 0.0
-		if len(c.Embedding) > 0 {
-			sim = ai.CosineSimilarity(qv, c.Embedding)
+		weight := 0.0
+		if wv, ok := weightsBySource[sourceID]; ok {
+			weight = wv
 		}
 		ageDays := 365.0
-		if doc != nil && doc.OriginPublishedAt != nil {
-			ageDays = nowT.Sub(*doc.OriginPublishedAt).Hours() / 24.0
-			if ageDays < 0 {
-				ageDays = 0
+		if h.docsRepo != nil && docID != "" {
+			if doc, _ := h.docsRepo.GetByID(r.Context(), docID); doc != nil && doc.OriginPublishedAt != nil {
+				ageDays = nowT.Sub(*doc.OriginPublishedAt).Hours() / 24.0
+				if ageDays < 0 {
+					ageDays = 0
+				}
 			}
 		}
 		recency := 1.0 / (1.0 + ageDays)
-		weight := 0.0
-		// weightsBySource computed earlier in handler
-		if wv, ok := weightsBySource[c.SourceID]; ok {
-			weight = wv
+		score = score + recency + weight
+		out = append(out, map[string]any{"docId": docID, "sourceId": sourceID, "position": 0, "score": score, "text": snippet})
+		if len(out) >= body.TopK {
+			break
 		}
-		scoredItems = append(scoredItems, scored{c: c, doc: doc, score: sim + recency + weight})
 	}
-	sort.Slice(scoredItems, func(i, j int) bool { return scoredItems[i].score > scoredItems[j].score })
-	if body.TopK > 0 && len(scoredItems) > body.TopK {
-		scoredItems = scoredItems[:body.TopK]
-	}
-	out := make([]map[string]any, 0, len(scoredItems))
-	for _, s := range scoredItems {
-		out = append(out, map[string]any{"docId": s.c.DocID, "sourceId": s.c.SourceID, "position": s.c.Position, "score": s.score, "text": s.c.Text})
-	}
+	sort.Slice(out, func(i, j int) bool {
+		si, _ := out[i]["score"].(float64)
+		sj, _ := out[j]["score"].(float64)
+		return si > sj
+	})
 	// publish ground.refresh for top 3
 	top := 3
 	if len(out) < top {

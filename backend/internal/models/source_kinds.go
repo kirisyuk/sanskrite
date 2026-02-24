@@ -9,6 +9,9 @@ const (
 	SourceKindHorizonFeed     = "horizon_monitor_feed"
 	// SourceKindWorldMonitorLegacy is kept only for backward compatibility with old records.
 	SourceKindWorldMonitorLegacy = "worldmonitor_feed"
+	// SourceKindLLMSearchGrounding is a quasi-source for facts from Gemini search grounding (news-by-fragments canvas).
+	// Not executable; used for provenance and Watchdog/Scout compatibility.
+	SourceKindLLMSearchGrounding = "llm_search_grounding"
 )
 
 // NormalizeSourceKind converts legacy aliases to the canonical kind.

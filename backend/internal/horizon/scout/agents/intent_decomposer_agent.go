@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 )
 
 // IntentDecomposerAgent proposes a reusable, taxonomy-aligned set of candidate relations
@@ -296,7 +297,7 @@ Return ONLY JSON with this schema:
       "targetLegalName": "string",
       "targetShortName": "string",
       "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "COMMUNITY",
-      "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "ASSURES" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "HAS_MARKET_SEGMENT" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "SURFACES",
+      "relationType": %s,
       "reason": "string",
       "confidence": 0.0,
       "targetCanonicalPath": "string (REQUIRED, stable, NOT /discovered/*)"
@@ -377,20 +378,9 @@ RULES:
   - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
   - canonicalPath MUST match expected prefix for targetType
   - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code
-- EDGE DIRECTION VALIDATION RULES (edges violating these will be REJECTED or REVERSED):
-  - REGULATES: source MUST be ORGANIZATION (only orgs can regulate)
-  - OWNS: source MUST be ORGANIZATION or PERSON (only orgs/persons can own)
-  - PRODUCES: source MUST be ORGANIZATION or FACILITY or DEPOSIT (producer actor/resource), target MUST be PRODUCT
-    - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO
-  - LOCATED_IN: target MUST be GEO_REGION
-  - OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY
-  - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (direction ORGANIZATION -> MARKET)
-  - GATEKEEPS_DECISION: source MUST be ORGANIZATION or GOV or COMMUNITY, target MUST be DECISION_POINT
-  - ASSURES: source MUST be ORGANIZATION, target MUST be ORGANIZATION or FACILITY or PROGRAM
-  - USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be MECHANISM
-  - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
-  - IMPOSES_CONDITION: source MUST be ORGANIZATION or GOV or COMMUNITY or DECISION_POINT, target MUST be ORGANIZATION/FACILITY/PRODUCT
-  - APPLIES_TO: source MUST be MECHANISM, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET
+%s
+  - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (direction ORGANIZATION -> MARKET).
+  - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO (not PRODUCES).
 - NEVER use "/discovered/*".
-- Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock, decompositionBlock)
+- Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock, decompositionBlock, edgesemantics.AllEdgeTypesForPrompt(), edgesemantics.EdgeDirectionValidationRulesForPrompt())
 }

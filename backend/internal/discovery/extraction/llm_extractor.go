@@ -85,6 +85,7 @@ func RunDocumentExtraction(
 	}
 	type extLocation struct {
 		Name          *string `json:"name,omitempty"`
+		Address       *string `json:"address,omitempty"`
 		ISO6709       *string `json:"iso6709,omitempty"`
 		CountryAlpha2 *string `json:"countryAlpha2,omitempty"`
 		Admin1        *string `json:"admin1,omitempty"`
@@ -294,6 +295,7 @@ func RunDocumentExtraction(
 				}
 				return &ontology.ExtractedLocation{
 					Name:          ev.Location.Name,
+					Address:       ev.Location.Address,
 					ISO6709:       ev.Location.ISO6709,
 					CountryAlpha2: ev.Location.CountryAlpha2,
 					Admin1:        ev.Location.Admin1,

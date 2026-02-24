@@ -1420,7 +1420,7 @@ deploy_api() {
   # Clean up any local binaries before Cloud Build (they're not needed, built in Docker)
   echo -e "${BLUE}[api] Cleaning up local build artifacts...${NC}"
   (cd "$API_DIR" && rm -f server ws-broker verified-proxy hatlone-ws main test-agent-orchestrator cmd/*/server cmd/*/ws-broker cmd/*/verified-proxy cmd/*/hatlone-ws cmd/*/main 2>/dev/null || true)
-  (cd "$API_DIR" && rm -f horizon_* check_* 2>/dev/null || true)
+  (cd "$API_DIR" && rm -f horizon_* add_* check_* check-* seed_* migrate_* inspect_* purge_* geonames_* loc_* watchdog_* test_* test-* sync-* reindex-* update-* clear_* run_* find_* gemini_* openai_* 2>/dev/null || true)
 
   echo -e "${BLUE}[api] Building container image (Artifact Registry)...${NC}"
   local service="h1horizon-api"

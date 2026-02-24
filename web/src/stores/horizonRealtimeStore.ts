@@ -1026,6 +1026,16 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             title: 'Enforcement Complete',
             description: `${parts.join(' • ') || 'No changes'}${details ? ` • ${short(details)}` : ''}`,
           };
+        } else if (type === 'horizon.canvas.newsByFragments.completed') {
+          icon = 'success';
+          const eventsCreated = typeof data?.eventsCreated === 'number' ? data.eventsCreated : 0;
+          const signalsProcessed = typeof data?.signalsProcessed === 'number' ? data.signalsProcessed : 0;
+          const pathCount = data?.newsByPath && typeof data.newsByPath === 'object' ? Object.keys(data.newsByPath).length : 0;
+          text = `News loaded: ${eventsCreated} events, ${signalsProcessed} signals for ${pathCount} node${pathCount !== 1 ? 's' : ''}`;
+          humanReadable = {
+            title: 'News & ontology facts',
+            description: `Created ${eventsCreated} event${eventsCreated !== 1 ? 's' : ''}, processed ${signalsProcessed} signal${signalsProcessed !== 1 ? 's' : ''} for ${pathCount} entit${pathCount !== 1 ? 'ies' : 'y'}.`,
+          };
         } else if (type.startsWith('horizon.propagation.')) {
           icon = 'propagation';
           const nodesUpdated =

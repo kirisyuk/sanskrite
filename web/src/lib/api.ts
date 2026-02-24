@@ -2331,6 +2331,37 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  /**
+   * GET /api/horizon/ontology-facts/by-canonical-path
+   * Returns ontology facts (events, signals, etc.) linked to the given canonical path.
+   */
+  async getOntologyFactsByCanonicalPath(
+    canonicalPath: string,
+    options?: { kind?: string; limit?: number }
+  ): Promise<{
+    canonicalPath: string;
+    canonicalPathCurrentName: string;
+    facts: Array<{
+      id: string;
+      kind: string;
+      type?: string;
+      title: string;
+      summary?: string;
+      confidence?: number;
+      occurredAt?: string;
+      observedAt?: string;
+      canonicalPaths?: string[];
+      canonicalNames?: string[];
+    }>;
+    count: number;
+  }> {
+    const params: Record<string, string | number> = { canonicalPath };
+    if (options?.kind) params.kind = options.kind;
+    if (options?.limit) params.limit = options.limit;
+    const response = await this.client.get('/api/horizon/ontology-facts/by-canonical-path', { params });
+    return response.data;
+  }
+
   async listHorizonFragments(lensId: string): Promise<{
     fragments: any[];
     total: number;
@@ -2472,6 +2503,40 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       console.error(`[API] enrichFragmentEntity error:`, error);
       throw error;
     }
+  }
+
+  /**
+   * POST /api/horizon/canvas/news-by-fragments
+   * Fetches news via Gemini search grounding, creates ontology facts (events), runs 12-axis signals + propagation.
+   * Result is also published via WS (horizon.canvas.newsByFragments.completed).
+   */
+  async fetchNewsByFragments(params: {
+    fragments: Array<{ canonicalPath: string; canonicalName?: string }>;
+    daysBack?: number;
+  }): Promise<{
+    jobId: string;
+    tenantId: string;
+    newsByPath: Record<string, Array<{
+      factId: string;
+      title: string;
+      summary?: string;
+      occurredAt?: string;
+      sourceUrl?: string;
+      canonicalPath: string;
+      canonicalNames?: string[];
+      spherePaths?: string[];
+      polarity?: string;
+      impactLevel?: string;
+      eventType?: string;
+    }>>;
+    eventsCreated: number;
+    signalsProcessed: number;
+  }> {
+    const response = await this.client.post('/api/horizon/canvas/news-by-fragments', {
+      fragments: params.fragments,
+      daysBack: params.daysBack ?? 7,
+    });
+    return response.data;
   }
 
   // --- Horizon Edges ---

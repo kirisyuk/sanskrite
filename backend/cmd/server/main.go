@@ -118,6 +118,33 @@ func (a *tavilyAdapterForSignalMonitoring) Search(ctx context.Context, query str
 	}, nil
 }
 
+// fragmentLookupForNewsCanvas adapts HorizonFragmentsRepository to discovery.FragmentLookup.
+type fragmentLookupForNewsCanvas struct {
+	repo *horizonrepo.HorizonFragmentsRepository
+}
+
+func (a *fragmentLookupForNewsCanvas) GetByCanonicalPath(ctx context.Context, path string) (*discovery.FragmentInfo, error) {
+	f, err := a.repo.GetByCanonicalPath(ctx, path)
+	if err != nil || f == nil {
+		return nil, err
+	}
+	label := ""
+	if f.Labels != nil {
+		if en, ok := f.Labels["en"]; ok && strings.TrimSpace(en) != "" {
+			label = strings.TrimSpace(en)
+		}
+	}
+	if label == "" && f.Labels != nil {
+		for _, l := range f.Labels {
+			if strings.TrimSpace(l) != "" {
+				label = strings.TrimSpace(l)
+				break
+			}
+		}
+	}
+	return &discovery.FragmentInfo{CanonicalPath: f.CanonicalPath, Label: label, Type: string(f.Type)}, nil
+}
+
 // enforcementRedirectRecorder adapts CanonicalPathResolver to RedirectRecorder for enforcement path fixes.
 type enforcementRedirectRecorder struct {
 	r *horizonscout.CanonicalPathResolver
@@ -227,15 +254,15 @@ func main() {
 	trustRepo := repo.NewTrustRepository(fsClient.Client())
 	uncertaintyRepo := repo.NewUncertaintyModelRepository(fsClient.Client())
 	ontologyFactsRepo := repo.NewOntologyFactsRepository(fsClient.Client())
-	// RAG repos
-	ragDocsBucket := getEnv("RAG_DOCUMENTS_BUCKET", "")
+	// Document indexing: bucket for Documents (GCS → Vertex AI Search)
+	// Env RAG_DOCUMENTS_BUCKET kept for backward compatibility
+	docsBucket := getEnv("RAG_DOCUMENTS_BUCKET", "")
 	var bqClient *gcp.BigQueryClient // Will be initialized later if BigQuery is enabled
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
-	if ragDocsBucket != "" && gcsClient != nil {
-		docsRepo = docsRepo.WithStorage(gcsClient, ragDocsBucket)
-		logger.Printf("RAG documents storage enabled: bucket=%s", ragDocsBucket)
+	if docsBucket != "" && gcsClient != nil {
+		docsRepo = docsRepo.WithStorage(gcsClient, docsBucket)
+		logger.Printf("Documents storage enabled: bucket=%s", docsBucket)
 	}
-	chunksRepo := repo.NewChunksRepository(fsClient.Client())
 
 	// Artifact templates repo/service/handler (will be wired with AITaskExecutor later)
 	artifactTemplatesRepo := repo.NewArtifactTemplatesRepository(fsClient.Client())
@@ -364,7 +391,7 @@ func main() {
 
 		// Artifact generation services
 		interactionsRepo := repo.NewInteractionsRepository(fsClient.Client())
-		artifactContextService := services.NewArtifactContextService(interactionsRepo, coreDocsRepo, chunksRepo)
+		artifactContextService := services.NewArtifactContextService(interactionsRepo, coreDocsRepo)
 
 		// Create genaiClient for artifact executor (using combined client)
 		// Import gen_combined and gen_gemini packages at top of file
@@ -461,7 +488,7 @@ func main() {
 		// Embedding provider (OpenAI small)
 		emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
 		_ = emb // wired into orchestrator when ingest endpoints are added
-		orchestrator = orchestrator.WithRAG(reg, docsRepo, chunksRepo).WithEmbedding(emb)
+		orchestrator = orchestrator.WithDocumentIngest(reg, docsRepo).WithEmbedding(emb)
 
 		// Wire ingest history repository EARLY to ensure poller has access to it
 		ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
@@ -491,12 +518,22 @@ func main() {
 			logger.Printf("SourcePoller worker started on topic %s", topicName)
 		}
 
+		// Initialize Vertex AI Search client early (needed for GenAI CoreDocs tools and DiscoveryHandler)
+		vertexSearchProjectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
+		vertexSearchLocation := getEnv("VERTEX_SEARCH_LOCATION", "global")
+		vertexSearchDataStoreID := getEnv("VERTEX_SEARCH_DATA_STORE_ID", "")
+		var vertexSearchClient *ai.VertexAISearchClient
+		if vertexSearchDataStoreID != "" {
+			vertexSearchClient = ai.NewVertexAISearchClient(vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID, "")
+			logger.Printf("Vertex AI Search enabled: project=%s, location=%s, dataStore=%s", vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID)
+		}
+
 		// Initialize GenAI handler with usage metrics and CoreDocs tools after all dependencies are ready
 		genaiHandler = httphandlers.NewGenAIHandler().
 			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client())).
 			WithModelManager(modelManager).
 			WithAIExecutor(exec). // Wire task executor for model mode (structured tasks)
-			WithCoreDocsTools(coreDocsRepo, interactionsRepo, docsRepo, chunksRepo, emb, gcsClient, bucket).
+			WithCoreDocsTools(coreDocsRepo, interactionsRepo, docsRepo, vertexSearchClient, gcsClient, bucket).
 			WithGraphTools(true) // Enable graph tools
 
 		// Initialize Tavily client (shared for both Research mode and Web Search tools)
@@ -621,56 +658,35 @@ func main() {
 			}
 		}()
 
-		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithChunks(chunksRepo).WithFirestoreClient(fsClient.Client()).WithOrchestrator(orchestrator)
-
-		// Initialize Vertex AI Search client if configured
-		vertexSearchProjectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
-		// Discovery Engine Data Stores are created in "global" region
-		// Default to "global" to match Data Store location
-		vertexSearchLocation := getEnv("VERTEX_SEARCH_LOCATION", "global")
-		vertexSearchDataStoreID := getEnv("VERTEX_SEARCH_DATA_STORE_ID", "")
-		// Vertex AI Search requires OAuth2 (Application Default Credentials), not API key
-		// Pass empty string to use OAuth2 authentication
-		// Note: GEMINI_API_KEY may be set for other services, but Vertex AI Search uses OAuth2
-		var vertexSearchClient *ai.VertexAISearchClient
-		if vertexSearchDataStoreID != "" {
-			vertexSearchClient = ai.NewVertexAISearchClient(vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID, "")
+		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithOrchestrator(orchestrator)
+		if vertexSearchClient != nil {
 			s.discoveryHandler = s.discoveryHandler.WithVertexSearch(vertexSearchClient)
-			logger.Printf("Vertex AI Search enabled: project=%s, location=%s, dataStore=%s", vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID)
+		}
 
-			// Настраиваем автоматическую синхронизацию документов с Vertex AI Search
-			// После загрузки документа в GCS автоматически триггерим импорт
-			if ragDocsBucket != "" {
-				docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
-					// Импортируем документы конкретного tenant (incremental sync)
-					gcsPath := fmt.Sprintf("gs://%s/%s/**", ragDocsBucket, tenantID)
-					importReq := &ai.ImportDocumentsRequest{
-						GCSPath:            gcsPath,
-						ReconciliationMode: "INCREMENTAL",
+		// Настраиваем автоматическую синхронизацию документов с Vertex AI Search
+		if vertexSearchClient != nil && docsBucket != "" {
+			docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
+				gcsPath := fmt.Sprintf("gs://%s/%s/**", docsBucket, tenantID)
+				importReq := &ai.ImportDocumentsRequest{
+					GCSPath:            gcsPath,
+					ReconciliationMode: "INCREMENTAL",
+				}
+				operationName, err := vertexSearchClient.ImportDocuments(ctx, importReq)
+				if err != nil {
+					logger.Printf("[VertexAISearch] Failed to trigger sync for tenant %s: %v", tenantID, err)
+					return "", err
+				}
+				logger.Printf("[VertexAISearch] Sync triggered for tenant %s: operation=%s", tenantID, operationName)
+				go func(opName string, tid string) {
+					trackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+					defer cancel()
+					if err := ai.TrackImportOperation(trackCtx, vertexSearchClient, docsRepo, opName, tid, 5*time.Minute); err != nil {
+						logger.Printf("[VertexAISearch] Failed to track operation %s: %v", opName, err)
 					}
-					operationName, err := vertexSearchClient.ImportDocuments(ctx, importReq)
-					if err != nil {
-						logger.Printf("[VertexAISearch] Failed to trigger sync for tenant %s: %v", tenantID, err)
-						return "", err
-					}
-					logger.Printf("[VertexAISearch] Sync triggered for tenant %s: operation=%s", tenantID, operationName)
-
-					// Start tracking operation asynchronously
-					go func(opName string, tid string) {
-						trackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-						defer cancel()
-						if err := ai.TrackImportOperation(trackCtx, vertexSearchClient, docsRepo, opName, tid, 5*time.Minute); err != nil {
-							logger.Printf("[VertexAISearch] Failed to track operation %s: %v", opName, err)
-						}
-					}(operationName, tenantID)
-
-					return operationName, nil
-				})
-				logger.Printf("Vertex AI Search auto-sync enabled: documents will sync automatically after GCS upload")
-			}
-		} else {
-			logger.Printf("Vertex AI Search disabled: VERTEX_SEARCH_DATA_STORE_ID not set")
-			logger.Printf("  Note: Vertex AI Search uses OAuth2 (Application Default Credentials), not API key")
+				}(operationName, tenantID)
+				return operationName, nil
+			})
+			logger.Printf("Vertex AI Search auto-sync enabled: documents will sync automatically after GCS upload")
 		}
 
 		// Start document processor worker (background)
@@ -866,20 +882,15 @@ func main() {
 		// coreDocsRepo was already created above and configured with BigQuery sync
 		// Don't create a new instance here, reuse the existing one
 		s.projectsHandler = s.projectsHandler.WithCoreDocs(coreDocsRepo).WithStorage(gcsClient, bucket).WithAIExecutor(exec)
-		// Wire RAG dependencies for CoreDoc indexing
-		if emb != nil {
-			s.projectsHandler = s.projectsHandler.WithRAG(docsRepo, chunksRepo, emb)
+		// Wire document indexing for CoreDoc (docs repo + Vertex AI Search)
+		if docsRepo != nil {
+			s.projectsHandler = s.projectsHandler.WithDocumentIndexing(docsRepo, vertexSearchClient)
 			// Configure automatic indexing callback in CoreDocsRepo
-			// This ensures CoreDocs are automatically indexed when created/updated
 			projectsHandlerRef := s.projectsHandler // Capture reference for closure
 			coreDocsRepo = coreDocsRepo.WithIndexingCallback(func(ctx context.Context, tenantID string, cd *models.CoreDoc) error {
 				return projectsHandlerRef.IndexCoreDoc(ctx, tenantID, cd)
 			})
 			logger.Printf("Automatic CoreDoc indexing enabled in repository")
-		}
-		// Wire Vertex Search client if configured
-		if vertexSearchClient != nil {
-			s.projectsHandler = s.projectsHandler.WithVertexSearch(vertexSearchClient)
 		}
 		// Wire BigQuery client if configured
 		if bqClient != nil {
@@ -1257,7 +1268,7 @@ func main() {
 		// We use a separate bucket to keep Horizon fragment indexing isolated and controllable.
 		horizonFragmentsBucket := strings.TrimSpace(getEnv("HORIZON_FRAGMENTS_BUCKET", ""))
 		if horizonFragmentsBucket == "" {
-			horizonFragmentsBucket = ragDocsBucket // fallback for legacy setups
+			horizonFragmentsBucket = docsBucket // fallback for legacy setups
 		}
 		if gcsClient != nil && horizonFragmentsBucket != "" {
 			horizonFragmentsRepo.WithStorage(gcsClient, horizonFragmentsBucket)
@@ -1306,11 +1317,11 @@ func main() {
 		}
 
 		// Configure GCS export + Vertex sync for ontology_facts (unified fact frames)
-		if gcsClient != nil && ragDocsBucket != "" {
-			ontologyFactsRepo = ontologyFactsRepo.WithStorage(gcsClient, ragDocsBucket)
+		if gcsClient != nil && docsBucket != "" {
+			ontologyFactsRepo = ontologyFactsRepo.WithStorage(gcsClient, docsBucket)
 			if vertexSearchClient != nil {
 				ontologyFactsRepo = ontologyFactsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
-					gcsPath := fmt.Sprintf("gs://%s/%s/ontology_facts/**", ragDocsBucket, tenantID)
+					gcsPath := fmt.Sprintf("gs://%s/%s/ontology_facts/**", docsBucket, tenantID)
 					importReq := &ai.ImportDocumentsRequest{
 						GCSPath:            gcsPath,
 						ReconciliationMode: "INCREMENTAL",
@@ -1350,7 +1361,6 @@ func main() {
 			RealtimePublisher:  pub,
 			EntitiesRepo:       entitiesRepo,
 			DocumentsRepo:      docsRepo,
-			ChunksRepo:         chunksRepo,
 			DataSourcesRepo:    s.dsrcs,
 			Crawler:            wc,
 			Logger:             logger,
@@ -2077,6 +2087,28 @@ func main() {
 					Logger:         logger,
 				})
 				logger.Printf("Canvas ingester initialized")
+
+				// News-by-fragments canvas: Gemini search grounding → facts (with CanonicalNames) → 12-axis → propagation; result via WS
+				// ontologyFactsRepo and signalPipeline are non-nil here (we're inside their init block)
+				if pub != nil {
+					var fragmentLookup discovery.FragmentLookup
+					if horizonFragmentsRepo != nil {
+						fragmentLookup = &fragmentLookupForNewsCanvas{repo: horizonFragmentsRepo}
+					}
+					newsByFragmentsCanvas := discovery.NewNewsByFragmentsCanvas(discovery.NewsByFragmentsCanvasConfig{
+						Exec:            exec,
+						FactsRepo:       ontologyFactsRepo,
+						DataSourcesRepo: s.dsrcs,
+						SignalPipeline:  signalPipeline,
+						FragmentLookup:  fragmentLookup,
+						Publisher: func(ctx context.Context, eventType string, tenantID string, payload interface{}) error {
+							return pub.PublishJSON(ctx, realtime.EventType(eventType), tenantID, payload)
+						},
+						Logger: logger,
+					})
+					horizonHandlers = horizonHandlers.WithNewsByFragmentsCanvas(newsByFragmentsCanvas)
+					logger.Printf("News-by-fragments canvas initialized (Gemini search grounding)")
+				}
 			}
 
 			logger.Printf("Horizon system initialized")

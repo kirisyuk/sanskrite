@@ -190,6 +190,42 @@ func (r *OntologyFactsRepository) ListUpdatedSinceByCanonicalPath(ctx context.Co
 	return out, nil
 }
 
+// ListByCanonicalPath returns facts linked to the given canonicalPath.
+// Facts can relate to multiple canonical paths (CanonicalPaths array); this query finds any fact
+// where canonicalPaths array-contains the given path. Use kind to filter by fact kind (event, claim, signal, etc.).
+func (r *OntologyFactsRepository) ListByCanonicalPath(ctx context.Context, tenantID string, canonicalPath string, kind string, limit int) ([]*models.OntologyFact, error) {
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	if canonicalPath == "" {
+		return nil, fmt.Errorf("canonicalPath is required")
+	}
+	q := r.col.
+		Where("tenantId", "==", tenantID).
+		Where("canonicalPaths", "array-contains", canonicalPath)
+	if kind != "" {
+		q = q.Where("kind", "==", strings.TrimSpace(kind))
+	}
+	q = q.OrderBy("updatedAt", firestore.Desc).Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.OntologyFact, 0, len(docs))
+	for _, d := range docs {
+		var f models.OntologyFact
+		if err := d.DataTo(&f); err != nil {
+			continue
+		}
+		out = append(out, &f)
+	}
+	return out, nil
+}
+
 // ListByCanonicalPathAndKind returns facts linked to the given canonicalPath with specific kind.
 // This is optimized for signal queries (kind="signal").
 func (r *OntologyFactsRepository) ListByCanonicalPathAndKind(ctx context.Context, tenantID string, canonicalPath string, kind string, limit int) ([]*models.OntologyFact, error) {
@@ -411,6 +447,15 @@ func (r *OntologyFactsRepository) exportToGCSAndSync(ctx context.Context, f *mod
 	}
 	if f.LocationPath != nil {
 		doc.StructData["locationPath"] = *f.LocationPath
+	}
+	if f.EventPlace != nil && strings.TrimSpace(*f.EventPlace) != "" {
+		doc.StructData["eventPlace"] = strings.TrimSpace(*f.EventPlace)
+	}
+	if f.EventAddress != nil && strings.TrimSpace(*f.EventAddress) != "" {
+		doc.StructData["eventAddress"] = strings.TrimSpace(*f.EventAddress)
+	}
+	if len(f.CanonicalNames) > 0 {
+		doc.StructData["canonicalNames"] = f.CanonicalNames
 	}
 	if f.Coordinates != nil {
 		doc.StructData["coordinates"] = map[string]interface{}{

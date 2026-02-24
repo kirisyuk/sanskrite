@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
@@ -19,6 +21,7 @@ type PairType string
 const (
 	PairTypeOrgOrg     PairType = "org_org"
 	PairTypeOrgGov     PairType = "org_gov"
+	PairTypeGovOrg     PairType = "gov_org" // gov as source, org as target (for ADMINISTERS, REGULATES)
 	PairTypeGovGov     PairType = "gov_gov"
 	PairTypePersonOrg  PairType = "person_org"
 	PairTypePersonGov  PairType = "person_gov"
@@ -26,20 +29,57 @@ const (
 	PairTypeOrgProduct PairType = "org_product"
 )
 
-// AllowedRelationTypes returns canonical relation types for each pair type.
-func (p PairType) AllowedRelationTypes() []string {
+// fragmentTypes maps pair type to (source, target) FragmentType using the same
+// ontology as EdgeDirectionPolicies. /gov/ and /org/ entities share FragmentTypeOrganization.
+func (p PairType) fragmentTypes() (models.FragmentType, models.FragmentType) {
 	switch p {
-	case PairTypeOrgOrg, PairTypeOrgGov, PairTypeGovGov:
-		return []string{"OWNS", "SUBSIDIARY_OF", "CONTROLS", "REGULATES", "ADMINISTERS", "SUPPLIES_TO", "DEPENDS_ON"}
+	case PairTypeOrgOrg, PairTypeOrgGov, PairTypeGovOrg, PairTypeGovGov:
+		return models.FragmentTypeOrganization, models.FragmentTypeOrganization
 	case PairTypePersonOrg, PairTypePersonGov:
-		return []string{"EMPLOYED_BY", "BOARD_MEMBER_OF", "OWNS", "FOUNDED", "MANAGES"}
+		return models.FragmentTypePerson, models.FragmentTypeOrganization
 	case PairTypeOrgMarket:
-		return []string{"PARTICIPATES_IN"}
+		return models.FragmentTypeOrganization, models.FragmentTypeMarket
 	case PairTypeOrgProduct:
-		return []string{"PRODUCES", "CONSUMES", "SUPPLIES_TO"}
+		return models.FragmentTypeOrganization, models.FragmentTypeProduct
 	default:
+		return "", ""
+	}
+}
+
+// AllowedRelationTypes derives allowed relation types from the unified
+// EdgeDirectionPolicies source of truth. An edge type is allowed if
+// (srcType, tgtType) or (tgtType, srcType) matches its direction policy
+// (canonicalization fixes reversed directions downstream).
+func (p PairType) AllowedRelationTypes() []string {
+	srcType, tgtType := p.fragmentTypes()
+	if srcType == "" || tgtType == "" {
 		return nil
 	}
+
+	seen := make(map[string]struct{})
+	for edgeType, rule := range edgesemantics.EdgeDirectionPolicies {
+		fwd := containsFT(rule.ValidSourceTypes, srcType) && containsFT(rule.ValidTargetTypes, tgtType)
+		rev := containsFT(rule.ValidSourceTypes, tgtType) && containsFT(rule.ValidTargetTypes, srcType)
+		if fwd || rev {
+			seen[string(edgeType)] = struct{}{}
+		}
+	}
+
+	out := make([]string, 0, len(seen))
+	for t := range seen {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containsFT(types []models.FragmentType, t models.FragmentType) bool {
+	for _, vt := range types {
+		if vt == t {
+			return true
+		}
+	}
+	return false
 }
 
 // Inferrer runs intra-graph link inference: finds direct relations between
@@ -104,19 +144,19 @@ func (inf *Inferrer) Infer(ctx context.Context, in InferInput) (*InferResult, er
 		}
 	}
 
-	// Build existing edges (sourcePath -> targetPath set) for transitive filter
-	existingEdges := inf.buildExistingEdges(ctx, fragments)
+	existing := inf.buildExistingEdges(ctx, fragments)
 
 	var allRels []agents.DiscoveredRelation
 	pairStats := make(map[string]int)
 
 	pairTypes := []struct {
-		pt         PairType
-		srcFilter  func(*models.HorizonFragment) bool
-		tgtFilter  func(*models.HorizonFragment) bool
+		pt        PairType
+		srcFilter func(*models.HorizonFragment) bool
+		tgtFilter func(*models.HorizonFragment) bool
 	}{
 		{PairTypeOrgOrg, fragOrgPath, fragOrgPath},
 		{PairTypeOrgGov, fragOrgPath, fragGovPath},
+		{PairTypeGovOrg, fragGovPath, fragOrgPath},
 		{PairTypeGovGov, fragGovPath, fragGovPath},
 		{PairTypePersonOrg, fragPersonPath, fragOrgPath},
 		{PairTypePersonGov, fragPersonPath, fragGovPath},
@@ -132,12 +172,12 @@ func (inf *Inferrer) Infer(ctx context.Context, in InferInput) (*InferResult, er
 			continue
 		}
 
-		rels, err := inf.inferForPairType(ctx, pt.pt, srcFrags, tgtFrags, existingEdges, fragByPath)
+		rels, err := inf.inferForPairType(ctx, pt.pt, srcFrags, tgtFrags, existing, fragByPath)
 		if err != nil {
 			fmt.Printf("[IntraGraph] pair %s inference error: %v\n", pt.pt, err)
 			continue
 		}
-		filtered := filterTransitive(rels, existingEdges)
+		filtered := filterDuplicatesAndTransitive(rels, existing)
 		allRels = append(allRels, filtered...)
 		pairStats[string(pt.pt)] = len(filtered)
 	}
@@ -209,9 +249,95 @@ func filterFragments(frags []*models.HorizonFragment, pred func(*models.HorizonF
 	return out
 }
 
-func (inf *Inferrer) buildExistingEdges(ctx context.Context, fragments []*models.HorizonFragment) map[string]map[string]struct{} {
-	// sourcePath -> set of targetPath (direct edges)
+// typedEdgeSet stores existing edges with their relation types, enabling
+// type-aware and bidirectional dedup.
+type typedEdgeSet struct {
+	// edges: srcPath → tgtPath → set of canonicalised edge types
+	edges map[string]map[string]map[string]struct{}
+}
+
+func newTypedEdgeSet() *typedEdgeSet {
+	return &typedEdgeSet{edges: make(map[string]map[string]map[string]struct{})}
+}
+
+func (s *typedEdgeSet) add(src, tgt, relType string) {
+	if s.edges[src] == nil {
+		s.edges[src] = make(map[string]map[string]struct{})
+	}
+	if s.edges[src][tgt] == nil {
+		s.edges[src][tgt] = make(map[string]struct{})
+	}
+	s.edges[src][tgt][relType] = struct{}{}
+}
+
+// hasEdge checks whether a canonical relation already exists in either
+// direction. Handles SUBSIDIARY_OF→OWNS alias and symmetric types.
+func (s *typedEdgeSet) hasEdge(src, tgt, relType string) bool {
+	canonical := canonicalType(relType)
+	// Forward: src → tgt with same canonical type.
+	if types, ok := s.edges[src][tgt]; ok {
+		for t := range types {
+			if canonicalType(t) == canonical {
+				return true
+			}
+		}
+	}
+	// Reverse: tgt → src with same canonical type (covers reversed direction).
+	if types, ok := s.edges[tgt][src]; ok {
+		for t := range types {
+			if canonicalType(t) == canonical {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// adjacencyPaths returns the set of direct neighbours (ignoring types) for
+// transitive‐path detection.
+func (s *typedEdgeSet) adjacencyPaths() map[string]map[string]struct{} {
 	out := make(map[string]map[string]struct{})
+	for src, tgts := range s.edges {
+		for tgt := range tgts {
+			if out[src] == nil {
+				out[src] = make(map[string]struct{})
+			}
+			out[src][tgt] = struct{}{}
+		}
+	}
+	return out
+}
+
+// promptLines returns human-readable lines "src -> tgt [TYPE1, TYPE2]" for LLM.
+func (s *typedEdgeSet) promptLines(limit int) []string {
+	var lines []string
+	for src, tgts := range s.edges {
+		for tgt, types := range tgts {
+			ts := make([]string, 0, len(types))
+			for t := range types {
+				ts = append(ts, t)
+			}
+			sort.Strings(ts)
+			lines = append(lines, fmt.Sprintf("  %s -> %s [%s]", src, tgt, strings.Join(ts, ", ")))
+		}
+	}
+	sort.Strings(lines)
+	if limit > 0 && len(lines) > limit {
+		lines = lines[:limit]
+	}
+	return lines
+}
+
+func canonicalType(t string) string {
+	t = strings.TrimSpace(strings.ToUpper(t))
+	if t == "SUBSIDIARY_OF" {
+		return "OWNS"
+	}
+	return t
+}
+
+func (inf *Inferrer) buildExistingEdges(ctx context.Context, fragments []*models.HorizonFragment) *typedEdgeSet {
+	out := newTypedEdgeSet()
 	tenantID := "global"
 	for _, f := range fragments {
 		if f == nil || f.ID == "" {
@@ -241,52 +367,30 @@ func (inf *Inferrer) buildExistingEdges(ctx context.Context, fragments []*models
 			if tgtPath == "" {
 				continue
 			}
-			if out[srcPath] == nil {
-				out[srcPath] = make(map[string]struct{})
-			}
-			out[srcPath][tgtPath] = struct{}{}
+			out.add(srcPath, tgtPath, string(e.Type))
 		}
 	}
 	return out
 }
 
-// filterTransitive drops relations A->B if a path A->...->B already exists (length > 1).
-func filterTransitive(rels []agents.DiscoveredRelation, existingEdges map[string]map[string]struct{}) []agents.DiscoveredRelation {
-	// Build adjacency for BFS: for each (src,tgt) we can check if path exists
-	// Simplified: if A has edge to C and C has edge to B, then A->B is transitive
-	// We use existingEdges: if A has any path to B through intermediates, skip A->B
-	// For simplicity: if A has direct edge to B in existingEdges, skip (duplicate)
-	// If A has path A->X->B (2 hops), skip A->B
-	// General: if there exists any path A -> ... -> B with length >= 1 in existingEdges, and we're adding A->B, skip
-	// Actually: existingEdges only has DIRECT edges. So if A->B is in existingEdges, it's a duplicate.
-	// For transitive: we need to compute reachability. A->B is transitive if we can reach B from A in existing graph (path len >= 2).
-	// Simpler heuristic: if A and B share a common "mediator" C such that A->C and C->B exist, then A->B is transitive.
-	reachable := computeReachable(existingEdges)
+// filterDuplicatesAndTransitive removes relations that already exist (type-aware,
+// bidirectional check) or are transitively implied (2-hop reachability).
+func filterDuplicatesAndTransitive(rels []agents.DiscoveredRelation, existing *typedEdgeSet) []agents.DiscoveredRelation {
+	adjacency := existing.adjacencyPaths()
+	reachable := computeReachable(adjacency)
 	var out []agents.DiscoveredRelation
 	for _, r := range rels {
 		src := strings.TrimSpace(r.SourceCanonicalPath)
 		tgt := strings.TrimSpace(r.TargetCanonicalPath)
-		if src == "" {
-			src = strings.TrimSpace(r.SourceCanonicalPath) // might be in different field for intra-graph
-		}
-		// For intra-graph, we always have explicit source and target
-		src = strings.TrimSpace(r.SourceCanonicalPath)
-		if src == "" {
+		rt := strings.TrimSpace(r.RelationType)
+		if src == "" || tgt == "" || src == tgt {
 			continue
 		}
-		if tgt == "" {
-			tgt = strings.TrimSpace(r.TargetCanonicalPath)
-		}
-		if tgt == "" || src == tgt {
+		// Type-aware bidirectional duplicate check.
+		if existing.hasEdge(src, tgt, rt) {
 			continue
 		}
-		// Skip if already exists (direct duplicate)
-		if existingEdges[src] != nil {
-			if _, ok := existingEdges[src][tgt]; ok {
-				continue
-			}
-		}
-		// Skip if transitive: path src -> ... -> tgt exists with length >= 2
+		// Transitive check (type-agnostic): if a 2-hop path src→…→tgt exists, skip.
 		if reachable[src] != nil {
 			if _, ok := reachable[src][tgt]; ok {
 				continue
@@ -298,12 +402,9 @@ func filterTransitive(rels []agents.DiscoveredRelation, existingEdges map[string
 }
 
 func computeReachable(direct map[string]map[string]struct{}) map[string]map[string]struct{} {
-	// reachable[src][tgt] = true if there exists path src -> ... -> tgt with >= 2 edges
-	// I.e. tgt is reachable from src via at least one intermediate
 	out := make(map[string]map[string]struct{})
 	for src, tgts := range direct {
 		for tgt := range tgts {
-			// For each src->tgt, find tgt's successors
 			if nexts, ok := direct[tgt]; ok {
 				for tgt2 := range nexts {
 					if tgt2 == src {
@@ -328,7 +429,7 @@ func (inf *Inferrer) inferForPairType(
 	ctx context.Context,
 	pt PairType,
 	srcFrags, tgtFrags []*models.HorizonFragment,
-	existingEdges map[string]map[string]struct{},
+	existing *typedEdgeSet,
 	fragByPath map[string]*models.HorizonFragment,
 ) ([]agents.DiscoveredRelation, error) {
 	allowed := pt.AllowedRelationTypes()
@@ -354,19 +455,21 @@ func (inf *Inferrer) inferForPairType(
 		return nil, nil
 	}
 
-	// Build existing edges summary for prompt
-	existingLines := []string{}
-	for src, tgts := range existingEdges {
-		for tgt := range tgts {
-			existingLines = append(existingLines, fmt.Sprintf("  %s -> %s", src, tgt))
-		}
-	}
+	existingLines := existing.promptLines(60)
 	existingBlock := "None"
 	if len(existingLines) > 0 {
-		if len(existingLines) > 50 {
-			existingLines = existingLines[:50]
-		}
 		existingBlock = strings.Join(existingLines, "\n")
+	}
+
+	directionRules := "\n" + edgesemantics.EdgeDirectionValidationRulesForPrompt()
+	if pt == PairTypeOrgGov || pt == PairTypeOrgOrg || pt == PairTypeGovOrg || pt == PairTypeGovGov {
+		directionRules += `
+GOV/ORG PATH-SPECIFIC DIRECTION RULES:
+- ADMINISTERS: source is the superior authority (typically /gov/...), target is subordinate. NEVER /org/ administers /gov/.
+- REGULATES: source is the regulator, target is regulated. Regulators are typically /gov/ but private standards bodies (/org/) can regulate too.
+- gov_org pair: natural for ADMINISTERS, REGULATES, CONTROLS (gov administers/regulates/controls org).
+- org_gov pair: for ADMINISTERS/REGULATES swap direction — source=TARGET (gov), target=SOURCE (org).
+`
 	}
 
 	prompt := fmt.Sprintf(`You are an intra-graph link inference agent. Given a set of entities discovered in the same research job, infer ONLY DIRECT relations between them.
@@ -383,12 +486,13 @@ SOURCE ENTITIES (canonical paths):
 TARGET ENTITIES (canonical paths):
 %s
 
-EXISTING DIRECT EDGES (do not duplicate; do not add transitive):
+EXISTING DIRECT EDGES with relation types (do NOT duplicate these; do NOT add transitive paths):
+%s
 %s
 
 For each DIRECT relation you infer, output:
-- sourceCanonicalPath, sourceType, sourceName (from the source list)
-- targetCanonicalPath, targetType, targetName (from the target list)
+- sourceCanonicalPath, sourceType, sourceName (from the source/target lists per direction rules)
+- targetCanonicalPath, targetType, targetName (from the source/target lists per direction rules)
 - relationType (must be one of the allowed)
 - reason (brief evidence)
 - confidence (0.6-0.9; only high-confidence direct links)
@@ -402,6 +506,7 @@ Return ONLY valid JSON. No markdown.`,
 		strings.Join(srcPaths, "\n"),
 		strings.Join(tgtPaths, "\n"),
 		existingBlock,
+		directionRules,
 	)
 
 	verifier := ai.NewSimpleJSONVerifier()

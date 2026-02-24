@@ -11,8 +11,6 @@ import (
 
 	"cloud.google.com/go/firestore"
 
-	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -40,34 +38,12 @@ func main() {
 	defer fsClient.Close()
 
 	docsRepo := repo.NewDocumentsRepository(fsClient)
-	chunksRepo := repo.NewChunksRepository(fsClient)
-
-	// Initialize embedding provider - try to get API keys from GCP Secret Manager
-	modelManager := ai.NewAIModelManager()
-	aiServices := []ai.AIService{}
-
-	// Try OpenAI first
-	openaiAPIKey := gcp.GetEnvOrSecret(ctx, *projectID, "OPENAI_API_KEY", "openai_api_key")
-	if openaiAPIKey != "" {
-		aiServices = append(aiServices, ai.NewOpenAIService(openaiAPIKey, modelManager))
-		log.Printf("Using OpenAI for embeddings")
+	// Configure GCS storage if available (required for Vertex AI Search sync)
+	ragDocsBucket := os.Getenv("RAG_DOCUMENTS_BUCKET")
+	if gcsClient, err := gcp.NewGCSClient(ctx, *projectID); err == nil && ragDocsBucket != "" {
+		docsRepo = docsRepo.WithStorage(gcsClient, ragDocsBucket)
+		log.Printf("RAG documents storage enabled: bucket=%s", ragDocsBucket)
 	}
-
-	// Try Gemini/Vertex AI as fallback
-	if len(aiServices) == 0 {
-		geminiAPIKey := gcp.GetEnvOrSecret(ctx, *projectID, "GEMINI_API_KEY", "gemini_api_key")
-		if geminiAPIKey != "" {
-			aiServices = append(aiServices, ai.NewGeminiService(geminiAPIKey, modelManager))
-			log.Printf("Using Vertex AI (Gemini) for embeddings")
-		}
-	}
-
-	if len(aiServices) == 0 {
-		log.Fatal("No API keys found. Set OPENAI_API_KEY or GEMINI_API_KEY env var, or ensure secrets exist in GCP Secret Manager")
-	}
-
-	exec := ai.NewAITaskExecutor(aiServices, modelManager)
-	emb := ai.NewOpenAIEmbedding(exec, "text-embedding-3-small")
 
 	// Query all CoreDocs
 	var docs []*firestore.DocumentSnapshot
@@ -110,7 +86,7 @@ func main() {
 		}
 
 		// Index the document
-		if err := indexCoreDoc(ctx, &cd, cd.TenantID, docsRepo, chunksRepo, emb); err != nil {
+		if err := indexCoreDoc(ctx, &cd, cd.TenantID, docsRepo); err != nil {
 			log.Printf("Failed to index CoreDoc %s (%s): %v", cd.ID, cd.Filename, err)
 			failed++
 			continue
@@ -127,8 +103,8 @@ func main() {
 	log.Printf("  Total:   %d", len(docs))
 }
 
-// indexCoreDoc indexes a CoreDoc by creating/updating Document and Chunks with embeddings
-func indexCoreDoc(ctx context.Context, cd *models.CoreDoc, tenantID string, docsRepo *repo.DocumentsRepository, chunksRepo *repo.ChunksRepository, emb ai.EmbeddingProvider) error {
+// indexCoreDoc indexes a CoreDoc by creating/updating Document (uploads to GCS, triggers Vertex sync)
+func indexCoreDoc(ctx context.Context, cd *models.CoreDoc, tenantID string, docsRepo *repo.DocumentsRepository) error {
 	// Get full extracted text
 	var text string
 	if cd.ExtractedText != nil {
@@ -160,8 +136,6 @@ func indexCoreDoc(ctx context.Context, cd *models.CoreDoc, tenantID string, docs
 			return fmt.Errorf("failed to update document: %w", err)
 		}
 		docID = existingDoc.ID
-		// Delete old chunks before creating new ones
-		_ = chunksRepo.DeleteByDoc(ctx, tenantID, docID)
 	} else {
 		// Create new document
 		now := time.Now().UTC()
@@ -192,40 +166,9 @@ func indexCoreDoc(ctx context.Context, cd *models.CoreDoc, tenantID string, docs
 		docID = id
 	}
 
-	// Chunk and embed
-	parts := discovery.ChunkText(text, 1200)
-	if len(parts) == 0 {
-		return nil
-	}
-
-	vectors, err := emb.EmbedTexts(ctx, parts)
-	if err != nil {
-		return fmt.Errorf("failed to create embeddings: %w", err)
-	}
-
-	now := time.Now().UTC()
-	for i := range parts {
-		ch := &models.Chunk{
-			TenantID:         tenantID,
-			DocID:            docID,
-			SourceID:         virtualSourceID,
-			Position:         i,
-			Text:             parts[i],
-			Embedding:        vectors[i],
-			EmbeddingModel:   emb.ModelID(),
-			EmbeddingVersion: "v1",
-			Attrs:            map[string]any{"documentType": "coredoc", "coreDocId": cd.ID},
-			ContentHash:      repo.HashContent(parts[i]),
-			CreatedAt:        now,
-		}
-		if _, err := chunksRepo.Create(ctx, ch); err != nil {
-			return fmt.Errorf("failed to create chunk: %w", err)
-		}
-	}
-
-	// Mark document as embedded
+	// Mark document as indexed (GCS upload + Vertex sync handled by docsRepo.Create/Upsert)
 	if doc, _ := docsRepo.GetByID(ctx, docID); doc != nil {
-		doc.Status = "embedded"
+		doc.Status = "indexed"
 		_ = docsRepo.Upsert(ctx, doc)
 	}
 

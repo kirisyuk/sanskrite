@@ -50,6 +50,7 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
+			models.FragmentTypeProduct,
 		},
 		Description: "Controller controls entity (non-equity or indirect control)",
 	},
@@ -319,8 +320,10 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeProgram,
 			models.FragmentTypeGeoRegion,
+			models.FragmentTypeFacility,
+			models.FragmentTypeDeposit,
 		},
-		Description: "Government body administers subordinate body (hierarchy)",
+		Description: "Government body administers subordinate body, facility, or deposit (hierarchy)",
 	},
 	models.DependencyTypeOperatesVia: {
 		ValidSourceTypes: []models.FragmentType{

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
@@ -644,7 +645,7 @@ Choose relationType to match the CORRECT semantic direction:
 -  Clarification: commercial flow from supplier -> customer/recipient; not ownership or control.
 - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
 -  Clarification: physical/geographic location only (HQ, plant site, office presence).
-- OPERATES_IN: source operates in target (source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY).
+- OPERATES_IN: source operates in target (source MUST be ORGANIZATION or PERSON, target MUST be GEO_REGION or FACILITY or DEPOSIT).
 -  Clarification: operational activity or facility operation; not just a registered address.
 - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
 -  Clarification: formal authority imposing rules/compliance (government or regulator), not soft influence.
@@ -668,7 +669,7 @@ Choose relationType to match the CORRECT semantic direction:
 -  Clarification: formal management authority or operational responsibility, not ownership.
 - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
 - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
-- FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
+- FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION, PROGRAM, or COMMUNITY). Not ownership.
 -  Clarification: historical origin event; does NOT imply ongoing ownership or control.
 - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
 -  Clarification: funding/minority stake; do not use unless investment is explicit.
@@ -701,7 +702,7 @@ Choose relationType to match the CORRECT semantic direction:
 === PHASE 2 STRATEGIC RELATIONS (may require EXPLICIT SOURCE) ===
 These edge types have strict direction rules. Use sourceCanonicalPath when THIS FRAGMENT is NOT the correct semantic source.
 
-- GATEKEEPS_DECISION: source MUST be ORG/GOV/COMMUNITY, target MUST be DECISION_POINT
+- GATEKEEPS_DECISION: source MUST be ORG/GOV/COMMUNITY/PERSON, target MUST be DECISION_POINT
   *** CRITICAL: If THIS FRAGMENT is DECISION_POINT ***:
     When answering "Who gatekeeps this decision?", you MUST use explicit source:
     - sourceCanonicalPath = gatekeeper path (e.g., /gov/sa/sama)
@@ -711,7 +712,7 @@ These edge types have strict direction rules. Use sourceCanonicalPath when THIS 
     - targetType = DECISION_POINT
     DO NOT output DECISION_POINT as source for GATEKEEPS_DECISION - this is semantically wrong!
 
-- USES_MECHANISM: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY, target MUST be MECHANISM (/mechanism/...)
+- USES_MECHANISM: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY/PROGRAM, target MUST be MECHANISM (/mechanism/...)
   *** CRITICAL: If THIS FRAGMENT is MECHANISM ***:
     When answering "Who uses this mechanism?", you MUST use explicit source:
     - sourceCanonicalPath = user path (e.g., /gov/sa/sama or /decision/...)
@@ -740,46 +741,8 @@ These edge types have strict direction rules. Use sourceCanonicalPath when THIS 
     - Use explicit sourceCanonicalPath = imposer path
     - targetCanonicalPath = THIS FRAGMENT's path
 
-EDGE DIRECTION VALIDATION RULES (CRITICAL - edges violating these will be REJECTED or REVERSED):
-- REGULATES: source MUST be ORGANIZATION, target can be ORGANIZATION/FACILITY/PRODUCT/GEO_REGION
-- OWNS: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PRODUCT/DEPOSIT/MEDIA_CHANNEL/COMMUNITY
-- CONTROLS: source MUST be ORGANIZATION or PERSON or COMMUNITY, target MUST be ORGANIZATION/FACILITY
-- MANAGES: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/FACILITY/PROGRAM
-- EMPLOYED_BY: source MUST be PERSON, target MUST be ORGANIZATION
-- BOARD_MEMBER_OF: source MUST be PERSON, target MUST be ORGANIZATION
-- FOUNDED: source MUST be PERSON or ORGANIZATION, target MUST be ORGANIZATION/PROGRAM
-- INVESTS_IN: source MUST be ORGANIZATION or PERSON, target MUST be ORGANIZATION/PROGRAM/PRODUCT
-- PARTNERS_WITH: source/target MUST be ORGANIZATION or FACILITY (symmetric)
-- PRODUCES: source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT
-- LOCATED_IN: target MUST be GEO_REGION
-- OPERATES_IN: source MUST be ORGANIZATION, target MUST be GEO_REGION or FACILITY or DEPOSIT
-- SUPPLIES_TO: source and target can be ORGANIZATION or FACILITY
-- DEPENDS_ON: source can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/COMMUNITY/MEDIA_CHANNEL/DEPOSIT, target can be DOMAIN/ORGANIZATION/PERSON/MARKET/PROGRAM/FACILITY/PRODUCT/GEO_REGION/MEDIA_CHANNEL/COMMUNITY/DEPOSIT
-- ASSURES: source MUST be ORGANIZATION, target MUST be ORGANIZATION or FACILITY or PROGRAM
-- AUDITED_BY: source MUST be ORGANIZATION or FACILITY or PROGRAM, target MUST be ORGANIZATION
-- RELATIVE_OF: source MUST be PERSON, target MUST be PERSON (symmetric)
-- RELATED_TO: source MUST be PERSON, target MUST be PERSON (symmetric)
-- RENAMED_TO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-- REBRANDED_TO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-- LEGAL_SUCCESSOR_OF: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-- MERGED_INTO: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-- SPUN_OFF_FROM: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-- ACQUIRED_BY: source MUST be ORGANIZATION, target MUST be ORGANIZATION
-- EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT
-- PARTICIPATES_IN: source MUST be ORGANIZATION or FACILITY or COMMUNITY, target MUST be MARKET
-- PARTICIPATES_IN: source MAY also be PRODUCT or PERSON, target MUST be MARKET
-- ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (ORG -> MARKET)
-- HAS_MARKET_SEGMENT: source MUST be MARKET, target MUST be MARKET (parent → segment; child path = parent path + one segment)
-- ADMINISTERS: source MUST be ORGANIZATION (/gov/...), target MUST be ORGANIZATION (/gov/...) (superior → subordinate)
-- OPERATES_VIA: source MUST be COMMUNITY or ORGANIZATION, target MUST be MEDIA_CHANNEL
-- MEMBER_OF: source MUST be PERSON, target MUST be COMMUNITY
-- AFFILIATED_WITH: source MUST be COMMUNITY or PERSON, target MUST be ORGANIZATION
-- HAS_SUBGROUP: source MUST be COMMUNITY, target MUST be COMMUNITY (parent group → narrower sub-group/branch/clan)
-- GATEKEEPS_DECISION: source MUST be ORGANIZATION or GOV or COMMUNITY or PERSON, target MUST be DECISION_POINT
-- USES_MECHANISM: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY or PROGRAM, target MUST be MECHANISM (path starts with /mechanism/)
-- CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION or GOV or COMMUNITY, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM
-- IMPOSES_CONDITION: source MUST be ORGANIZATION or GOV or COMMUNITY or DECISION_POINT, target MUST be ORGANIZATION/FACILITY/PRODUCT
-- APPLIES_TO: source MUST be MECHANISM, target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET
+%s
+- ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (ORG -> MARKET).
 - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
   DOMAIN targets are allowed only for DOMAIN scaffold relations (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, RELATED_DOMAIN, BROADENS_TO, NARROWS_TO, AFFECTS, DEPENDS_ON with DOMAIN source).
 
@@ -822,7 +785,7 @@ DiscoveredRelation Schema:
   "targetLegalName": "string",
   "targetShortName": "string",
   "targetType": %s,
-  "relationType": "SUPPLIES_TO" | "DEPENDS_ON" | "LOCATED_IN" | "OPERATES_IN" | "REGULATES" | "PRODUCES" | "CONSUMES" | "TRANSFORMS_INTO" | "OWNS" | "SUBSIDIARY_OF" | "CONTROLS" | "CONTROLS_ACCESS" | "IMPOSES_CONDITION" | "GATEKEEPS_DECISION" | "USES_MECHANISM" | "APPLIES_TO" | "MANAGES" | "EMPLOYED_BY" | "BOARD_MEMBER_OF" | "FOUNDED" | "INVESTS_IN" | "PARTNERS_WITH" | "ASSURES" | "AUDITED_BY" | "RELATIVE_OF" | "RELATED_TO" | "RENAMED_TO" | "REBRANDED_TO" | "LEGAL_SUCCESSOR_OF" | "MERGED_INTO" | "SPUN_OFF_FROM" | "ACQUIRED_BY" | "COMPETES_WITH" | "INFLUENCES" | "EXTRACTS_FROM" | "PARTICIPATES_IN" | "HAS_MARKET_SEGMENT" | "HAS_SUBGROUP" | "ADMINISTERS" | "OPERATES_VIA" | "MEMBER_OF" | "AFFILIATED_WITH",
+  "relationType": %s,
   "reason": "string",
   "confidence": 0.0,
   "targetCanonicalPath": "string, REQUIRED",
@@ -870,6 +833,25 @@ WHEN TO USE sourceCanonicalPath (MANDATORY):
      - Set sourceCanonicalPath = controller's path
      - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath
 
+5. CONTROLS: source MUST be ORG/PERSON/COMMUNITY. PRODUCT cannot be source.
+   - If THIS FRAGMENT is PRODUCT and you find "controlled by X" or "X controls this product":
+     - Set sourceCanonicalPath = X's path (the gov/org)
+     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the product)
+
+6. ADMINISTERS: source MUST be ORGANIZATION or GEO_REGION (superior), target MUST be ORG/PROGRAM/GEO_REGION/FACILITY/DEPOSIT. FACILITY/DEPOSIT cannot be source. /org/ cannot administer /gov/.
+   - FACILITY cannot be source. If THIS FRAGMENT is FACILITY and you find "administered by X":
+     - Set sourceCanonicalPath = X's path (the ministry/gov)
+     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the facility)
+   - DEPOSIT cannot be source. If THIS FRAGMENT is DEPOSIT and you find "administered by X":
+     - Set sourceCanonicalPath = X's path (the ministry/gov)
+     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the deposit)
+   - /org/ (company) cannot administer /gov/ (government). Gov bodies administer companies, not vice versa.
+     - If you find "ministry X administers company Y": source=X (/gov/...), target=Y (/org/...)
+     - Never output /org/... as source when target is /gov/...
+   - If THIS FRAGMENT is /gov/... or /org/... and you find "administers subordinate Y":
+     - Do NOT set sourceCanonicalPath (THIS FRAGMENT is correct source)
+     - Set targetCanonicalPath = Y's path (subordinate gov/org/program/facility/deposit)
+
 WHEN NOT TO USE sourceCanonicalPath:
 - For most Phase 1 relations (DEPENDS_ON, SUPPLIES_TO, LOCATED_IN, OWNS, etc.) the default "FROM THIS FRAGMENT" is correct.
 - When the semantic direction naturally flows FROM THIS FRAGMENT TO target.
@@ -885,7 +867,7 @@ METRIC VALUE FORMAT (IMPORTANT):
 - observedAt MUST be ISO8601 (\"YYYY-MM-DD\" or RFC3339)
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierUnitTemplateContractBlock, targetTypeEnum, canonicalRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierUnitTemplateContractBlock, edgesemantics.EdgeDirectionValidationRulesForPrompt(), targetTypeEnum, edgesemantics.AllEdgeTypesForPrompt(), canonicalRulesBlock)
 }
 
 func dedupNonEmptyStrings(in []string) []string {

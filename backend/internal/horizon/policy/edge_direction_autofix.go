@@ -134,6 +134,38 @@ func ResolveEdgeDirectionAutoFix(
 			Reason:     "canonicalize: COMMUNITY/ORGANIZATION FOUNDED PERSON -> PERSON FOUNDED COMMUNITY/ORGANIZATION",
 			Confidence: 0.95,
 		}, true
+	// ADMINISTERS: source MUST be ORGANIZATION/GEO_REGION. FACILITY cannot administer.
+	// "Facility administered by org" → swap to ORG ADMINISTERS FACILITY.
+	case edgeType == horizonmodels.DependencyTypeAdministers &&
+		sourceType == horizonmodels.FragmentTypeFacility &&
+		(targetType == horizonmodels.FragmentTypeOrganization || targetType == horizonmodels.FragmentTypeProgram || targetType == horizonmodels.FragmentTypeGeoRegion):
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeAdministers,
+			ShouldSwap: true,
+			Reason:     "canonicalize: FACILITY ADMINISTERS ORG -> ORG ADMINISTERS FACILITY (swap only)",
+			Confidence: 0.95,
+		}, true
+	// ADMINISTERS: DEPOSIT cannot administer. "Deposit administered by gov/org" → swap.
+	case edgeType == horizonmodels.DependencyTypeAdministers &&
+		sourceType == horizonmodels.FragmentTypeDeposit &&
+		(targetType == horizonmodels.FragmentTypeOrganization || targetType == horizonmodels.FragmentTypeProgram || targetType == horizonmodels.FragmentTypeGeoRegion):
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeAdministers,
+			ShouldSwap: true,
+			Reason:     "canonicalize: DEPOSIT ADMINISTERS ORG -> ORG ADMINISTERS DEPOSIT (swap only)",
+			Confidence: 0.95,
+		}, true
+	// CONTROLS: source MUST be ORG/PERSON/COMMUNITY. PRODUCT cannot control.
+	// "Product controlled by gov/org" → swap to ORG CONTROLS PRODUCT.
+	case edgeType == horizonmodels.DependencyTypeControls &&
+		sourceType == horizonmodels.FragmentTypeProduct &&
+		(targetType == horizonmodels.FragmentTypeOrganization || targetType == horizonmodels.FragmentTypeFacility):
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeControls,
+			ShouldSwap: true,
+			Reason:     "canonicalize: PRODUCT CONTROLS ORG -> ORG CONTROLS PRODUCT (swap only)",
+			Confidence: 0.95,
+		}, true
 	default:
 		return EdgeDirectionAutoFix{}, false
 	}

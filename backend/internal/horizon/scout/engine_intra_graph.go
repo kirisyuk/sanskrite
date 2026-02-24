@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/intra_graph"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -135,6 +136,30 @@ func (e *ScoutEngine) materializeIntraGraphRelations(ctx context.Context, job *m
 		if normalizedRelationType == "" {
 			continue
 		}
+
+		// Canonicalize direction before materialization (aligned with unified policy).
+		// Fixes ADMINISTERS/REGULATES /org/->/gov/, FACILITY->ORG, DEPOSIT->ORG, etc.
+		canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
+			EdgeType:   models.DependencyType(normalizedRelationType),
+			SourceType: srcFrag.Type,
+			TargetType: tgtFrag.Type,
+			SourcePath: srcPath,
+			TargetPath: tgtPath,
+			RawRelationType: rawRelationType,
+		})
+		if canon.Changed && canon.ShouldSwap {
+			srcPath, tgtPath = tgtPath, srcPath
+			srcFrag, tgtFrag = tgtFrag, srcFrag
+			rel.SourceCanonicalPath, rel.TargetCanonicalPath = rel.TargetCanonicalPath, rel.SourceCanonicalPath
+			rel.SourceType, rel.TargetType = rel.TargetType, rel.SourceType
+			rel.SourceName, rel.TargetName = rel.TargetName, rel.SourceName
+			targetType = tgtFrag.Type
+		}
+		if canon.Changed && string(canon.EdgeType) != "" {
+			rel.RelationType = string(canon.EdgeType)
+			normalizedRelationType = string(canon.EdgeType)
+		}
+
 		baseQualifiers := map[string]interface{}{"source": "intra_graph"}
 		err = e.materializeRelationEdge(ctx, job, srcFrag, tgtFrag, tgtFrag.ID, targetType, tgtPath, rel, rawRelationType, normalizedRelationType, "intra_graph", baseQualifiers, false, seenEdgeKeys)
 		if err == nil {

@@ -13,19 +13,16 @@ import (
 type ArtifactContextService struct {
 	interactionsRepo *repo.InteractionsRepository
 	coreDocsRepo     *repo.CoreDocsRepo
-	chunksRepo       *repo.ChunksRepository
 }
 
 // NewArtifactContextService creates a new context service
 func NewArtifactContextService(
 	interactionsRepo *repo.InteractionsRepository,
 	coreDocsRepo *repo.CoreDocsRepo,
-	chunksRepo *repo.ChunksRepository,
 ) *ArtifactContextService {
 	return &ArtifactContextService{
 		interactionsRepo: interactionsRepo,
 		coreDocsRepo:     coreDocsRepo,
-		chunksRepo:       chunksRepo,
 	}
 }
 
@@ -203,18 +200,14 @@ func (s *ArtifactContextService) gatherDocuments(
 	return docs, nil
 }
 
-// gatherSearchResults performs vector search and returns results
+// gatherSearchResults performs search via Vertex AI Search (placeholder for future integration)
 func (s *ArtifactContextService) gatherSearchResults(
 	_ context.Context,
 	_ string, // tenantID
 	_ string, // projectID
 	_ string, // query
 ) ([]SearchResult, error) {
-	// This is a placeholder - actual implementation would use vector search
-	// via chunksRepo and embedding service
-
-	// For now, return empty results
-	// TODO: Implement vector search integration
+	// TODO: Wire Vertex AI Search client and implement semantic search
 	return []SearchResult{}, nil
 }
 
