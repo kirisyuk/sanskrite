@@ -24,6 +24,7 @@ func TestBuildObjectTypeTaskSpecializationBlockWithHints_FacilitySupplyFocus(t *
 		"",
 		map[string]interface{}{"supplyRole": "supplier hub"},
 		nil,
+		nil,
 	)
 	for _, want := range []string{"supply-qualified fac", "upstream suppliers", "downstream customers"} {
 		if !strings.Contains(strings.ToLower(got), strings.ToLower(want)) {
@@ -39,6 +40,7 @@ func TestBuildObjectTypeTaskSpecializationBlockWithHints_FacilityProcurementFocu
 		"",
 		nil,
 		map[string]string{"facilityRole": "procurement"},
+		nil,
 	)
 	for _, want := range []string{"procurement-qualified fac", "vendors", "alternative supplier regions"} {
 		if !strings.Contains(strings.ToLower(got), strings.ToLower(want)) {
@@ -59,8 +61,8 @@ func TestBuildExtractionSpecializationModulesBlock_ContainsCoreSupplyChain(t *te
 	}
 }
 
-func TestBuildObjectQualifierUnitTemplateContractBlock_Facility(t *testing.T) {
-	got := buildObjectQualifierUnitTemplateContractBlockWithHints(
+func TestBuildObjectQualifierContractBlock_Facility(t *testing.T) {
+	got := buildObjectQualifierContractBlockWithHints(
 		"/fac/global/red-sea-corridor",
 		models.FragmentTypeFacility,
 		map[string]interface{}{"route": true},
@@ -68,14 +70,12 @@ func TestBuildObjectQualifierUnitTemplateContractBlock_Facility(t *testing.T) {
 		nil,
 	)
 	for _, want := range []string{
-		"OBJECT QUALIFIER + UNIT TEMPLATE CONTRACT (STRICT)",
+		"OBJECT QUALIFIER CONTRACT (STRICT)",
 		"objectQualifier CLOSED ENUM",
-		"unit_template_key=\"route_flow\"",
-		"source_unit_ref/code/label",
 		"Runtime-aligned facility lane detection: route.",
 	} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("contract block missing %q", want)
+			t.Fatalf("contract block missing %q\ngot:\n%s", want, got)
 		}
 	}
 }

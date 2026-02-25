@@ -164,8 +164,8 @@ IMPORTANT (spherePaths):
   - /sphere/geopolitics
   - /sphere/social
   - /sphere/social/information
-  - /sphere/cyber
-  - /sphere/digital
+  - /sphere/security/cyber
+  - /sphere/technology/digital
   - /sphere/logistics
   - /sphere/logistics/maritime
   - /sphere/energy

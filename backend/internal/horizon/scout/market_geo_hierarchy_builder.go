@@ -82,7 +82,7 @@ func (b *MarketGeoHierarchyBuilder) EnsureMarketGeoHierarchy(
 	}
 
 	// Find or create the global parent market fragment
-	globalID, err := b.ensureMarket(ctx, globalPath, b.deriveGlobalLabel(fragment, rest), provenanceMethod, sourceID)
+	globalID, err := b.ensureMarket(ctx, globalPath, b.deriveGlobalLabel(fragment, globalPath, rest), provenanceMethod, sourceID)
 	if err != nil || strings.TrimSpace(globalID) == "" {
 		return nil
 	}
@@ -92,8 +92,8 @@ func (b *MarketGeoHierarchyBuilder) EnsureMarketGeoHierarchy(
 	return nil
 }
 
-func (b *MarketGeoHierarchyBuilder) deriveGlobalLabel(fragment *models.HorizonFragment, rest []string) string {
-	// Prefer explicit label when it's already generic enough; otherwise fallback to last path segment.
+func (b *MarketGeoHierarchyBuilder) deriveGlobalLabel(fragment *models.HorizonFragment, path string, rest []string) string {
+	// Prefer explicit label when it's already generic enough; otherwise use structured market label.
 	if fragment != nil && fragment.Labels != nil {
 		if v := strings.TrimSpace(fragment.Labels["en"]); v != "" {
 			// Avoid copying region-specific labels like "China lithium market" as-is; keep it conservative:
@@ -102,6 +102,9 @@ func (b *MarketGeoHierarchyBuilder) deriveGlobalLabel(fragment *models.HorizonFr
 				return v
 			}
 		}
+	}
+	if lbl := marketDisplayLabel(path); lbl != "" {
+		return lbl
 	}
 	if len(rest) >= 2 {
 		// v2-ish paths: /market/{geo}/{domain}/{vertical}[...]

@@ -312,7 +312,6 @@ RULES:
 - Use stable canonical paths:
   - Organizations: /org/{iso2|na}/{slug}
     - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase). If unknown use "na".
-    - Legacy /org/{slug} may exist in the graph; prefer /org/{iso2}/{slug} for NEW entities to reduce collisions.
   - Government bodies: /gov/{iso2|na}/{slug}
     - Use for ministries, regulators, agencies, state bodies. If unknown, use /gov/na/{slug}.
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
@@ -343,7 +342,7 @@ RULES:
     - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy"
     - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly"
     - slug: lowercase-slug derived from product name
-    - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
+    - If category/type/stage is uncertain, still output the same 5-segment format with your best estimate
   - GEO regions/locations: MUST be /loc/{country}/{admin1}/{city}
     - country: ISO3166-1 alpha2 lowercase OR regional token (e.g., gcc, eu, asean, opec)
     - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
@@ -353,10 +352,11 @@ RULES:
     - country-only locations: /loc/{country}/na/na
     - CRITICAL: country code MUST be valid ISO3166-1 alpha2 (exactly 2 lowercase letters). Invalid codes will be REJECTED.
   - MARKET (segment-first preferred):
-    - Preferred: /market/{geo}/{domain}/{vertical}
-      - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
-    - Legacy /market/{geo}/{marketSlug} may exist in older data; do NOT emit legacy for new markets.
-      - Always provide domain/vertical for NEW outputs.
+    - HIERARCHY LEVELS:
+      - L1 (domain): /market/{geo}/{domain}; L2 (vertical): /market/{geo}/{domain}/{vertical}; L3+ (sub-vertical): parent path + one segment
+      - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
+      - Example chain: /market/sa/finance → /market/sa/finance/banking → /market/sa/finance/banking/islamic-banking
+    - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
     - geo: ISO2, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
     - GEOGRAPHY INHERITANCE: If TARGET is a regional market (e.g., /market/sa/...), new MARKET relations MUST inherit that geo
@@ -379,7 +379,7 @@ RULES:
   - canonicalPath MUST match expected prefix for targetType
   - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code
 %s
-  - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (direction ORGANIZATION -> MARKET).
+  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES.
   - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO (not PRODUCES).
 - NEVER use "/discovered/*".
 - Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock, decompositionBlock, edgesemantics.AllEdgeTypesForPrompt(), edgesemantics.EdgeDirectionValidationRulesForPrompt())

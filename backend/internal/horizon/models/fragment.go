@@ -50,7 +50,7 @@ type HorizonFragment struct {
 	MarketSegments []string `json:"marketSegments,omitempty" firestore:"marketSegments,omitempty"`
 
 	// MarketSegmentNorms are derived, normalized "market coordinates" for each MarketSegment entry.
-	// They are computed using a Firestore-backed dictionary (runtime taxonomy) and are intended for:
+	// They are computed from code-defined normalization rules (with optional runtime dictionary overlay) and are intended for:
 	// - consistent UI rendering (icons / grouping)
 	// - future filtering/indexing
 	MarketSegmentNorms []coremodels.MarketSegmentNorm `json:"marketSegmentNorms,omitempty" firestore:"marketSegmentNorms,omitempty"`
@@ -118,6 +118,19 @@ type HorizonFragment struct {
 	// Ограничено по размеру (см. BuildIndexPaths/NormalizeIndexPaths).
 	IndexPaths []string `json:"indexPaths,omitempty" firestore:"indexPaths,omitempty"`
 
+	// SpherePaths are canonical sphere-of-activity classifications applicable to all entity types.
+	// Format: /sphere/{L1}/{L2}/{L3...}. Multi-valued. Inferred from path, type, edges, and LLM enrichment.
+	SpherePaths []string `json:"spherePaths,omitempty" firestore:"spherePaths,omitempty"`
+	// ResolutionHint is a scale annotation: macro (top-level entity), unit (subdivision/segment),
+	// detail (concrete object), or empty (unspecified). Not validated, best-effort.
+	ResolutionHint string `json:"resolutionHint,omitempty" firestore:"resolutionHint,omitempty"`
+	// ParentPath is the canonical path of the parent fragment in the hierarchy (universal field).
+	// Synced from ParentGovPath, ParentMarketPath for backward compatibility.
+	ParentPath string `json:"parentPath,omitempty" firestore:"parentPath,omitempty"`
+	// GeoFeatureType classifies geographic entities (LOC). Values: city, region, country, strait, canal, port, pass, border-crossing, pipeline-corridor, airspace, other.
+	// Chokepoint subset: strait, canal, pass, pipeline-corridor (used for propagation amplification).
+	GeoFeatureType string `json:"geoFeatureType,omitempty" firestore:"geoFeatureType,omitempty"`
+
 	// Связь с Entity
 	EntityID *string `json:"entityId,omitempty" firestore:"entityId,omitempty"`
 
@@ -157,12 +170,12 @@ type HorizonFragment struct {
 
 	// Supply Link specific fields (when Type == FragmentTypeSupplyLink)
 	// These fields are only used for SUPPLY_LINK fragments (tenant-specific)
-	SupplierRef         *string `json:"supplierRef,omitempty" firestore:"supplierRef,omitempty"`                 // /org/... or /fac/... (nil = natural resource)
-	CustomerRef         *string `json:"customerRef,omitempty" firestore:"customerRef,omitempty"`                 // /org/... or /fac/... (nil = end consumer)
-	ProductRef          *string `json:"productRef,omitempty" firestore:"productRef,omitempty"`                   // /product/... (required for SUPPLY_LINK)
+	SupplierRef         *string  `json:"supplierRef,omitempty" firestore:"supplierRef,omitempty"`                 // /org/... or /fac/... (nil = natural resource)
+	CustomerRef         *string  `json:"customerRef,omitempty" firestore:"customerRef,omitempty"`                 // /org/... or /fac/... (nil = end consumer)
+	ProductRef          *string  `json:"productRef,omitempty" firestore:"productRef,omitempty"`                   // /product/... (required for SUPPLY_LINK)
 	SupplierFacilityRef *string  `json:"supplierFacilityRef,omitempty" firestore:"supplierFacilityRef,omitempty"` // /fac/... (optional)
 	CustomerFacilityRef *string  `json:"customerFacilityRef,omitempty" firestore:"customerFacilityRef,omitempty"` // /fac/... (optional)
-	TransportViaRefs   []string `json:"transportViaRefs,omitempty" firestore:"transportViaRefs,omitempty"`     // ordered /fac/... paths (ports, terminals, pipelines, warehouses)
+	TransportViaRefs    []string `json:"transportViaRefs,omitempty" firestore:"transportViaRefs,omitempty"`       // ordered /fac/... paths (ports, terminals, pipelines, warehouses)
 
 	// Lifecycle — real-world lifecycle stage and dates (for FACILITY, DEPOSIT, ORGANIZATION).
 	// LifecycleStage is a canonical value from AllowedLifecycleStages (e.g., "construction", "operational", "closed").
@@ -265,6 +278,29 @@ func (f *HorizonFragment) Validate() error {
 	// These fields can be produced by Scout/Research and should be canonicalized before persistence.
 	f.MarketSegments = taxonomy.NormalizeSegmentPaths(f.MarketSegments)
 	f.OrgSize = taxonomy.NormalizeOrgSize(f.OrgSize)
+
+	// SpherePaths: normalize via L1/L2/L3+ taxonomy rules.
+	if len(f.SpherePaths) > 0 {
+		f.SpherePaths = taxonomy.NormalizeSpherePaths(f.SpherePaths)
+	}
+	// ResolutionHint: lowercase, validate against macro|unit|detail (empty = unspecified).
+	if h := strings.ToLower(strings.TrimSpace(f.ResolutionHint)); h != "" {
+		switch h {
+		case "macro", "unit", "detail":
+			f.ResolutionHint = h
+		default:
+			f.ResolutionHint = ""
+		}
+	}
+	// ParentPath: sync from type-specific parent fields if empty.
+	if f.ParentPath == "" {
+		if f.ParentGovPath != "" {
+			f.ParentPath = f.ParentGovPath
+		} else if f.ParentMarketPath != "" {
+			f.ParentPath = f.ParentMarketPath
+		}
+	}
+	f.ParentPath = strings.TrimSpace(f.ParentPath)
 
 	// Best-effort: normalize MARKET canonical path + fields (non-blocking).
 	if f.Type == FragmentTypeMarket {
@@ -408,10 +444,31 @@ func (f *HorizonFragment) Validate() error {
 		f.MarketDomain,
 	)
 
+	// Chokepoint tagging: LOC fragments with geoFeatureType in (strait, canal, pass, pipeline-corridor) get tag "chokepoint".
+	if gt := strings.ToLower(strings.TrimSpace(f.GeoFeatureType)); gt != "" {
+		switch gt {
+		case "strait", "canal", "pass", "pipeline-corridor":
+			f.Tags = appendTagIfMissing(f.Tags, "chokepoint")
+		}
+	}
+
 	// Best-effort: ensure indexPaths is always present for new/updated fragments.
 	// This keeps expand/graph filtering deterministic without requiring backfills.
 	f.IndexPaths = BuildIndexPaths(f, nil)
 	return nil
+}
+
+func appendTagIfMissing(tags []string, tag string) []string {
+	tag = strings.ToLower(strings.TrimSpace(tag))
+	if tag == "" {
+		return tags
+	}
+	for _, t := range tags {
+		if strings.ToLower(strings.TrimSpace(t)) == tag {
+			return tags
+		}
+	}
+	return append(tags, tag)
 }
 
 func (f *HorizonFragment) normalizeNameHistory() {

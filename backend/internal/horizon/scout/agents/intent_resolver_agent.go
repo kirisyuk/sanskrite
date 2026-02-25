@@ -553,11 +553,11 @@ ANCHOR TAXONOMY
 %s
 
 ORGANIZATION: /org/{iso2|na}/{slug} (e.g., /org/sa/saudi-aramco). GOV bodies: /gov/{iso2|na}/{slug}.
-FACILITY: /fac/{orgSlug}/{facilitySlug} or /fac/{facilitySlug}
+FACILITY: /fac/{orgSlug}/{facilitySlug}. If org is unknown, use /fac/na/{facilitySlug}
 GEO_REGION: /loc/{countryAlpha2}/{admin1}/{city} — use "na" for unknown segments. Country-only: /loc/{cc}/na/na. Regional: /loc/gcc/na/na.
-PRODUCT: /product/{category}/{type}/{stage}/{slug} — category: raw|component|finished|service. Fallback: /product/{slug}.
+PRODUCT: /product/{category}/{type}/{stage}/{slug} — category: raw|component|finished|service. For services, use category=service and map service domain/subdomain into {type}/{stage}.
 MARKET: /market/{geo}/{domain}/{vertical} — geo: ISO2, composite, regional (gcc, eu), or "global". Inherit country ISO2 from query when geographic context is present.
-PROGRAM: /program/{jurisdictionSlug}/{programSlug} or /program/{slug}
+PROGRAM: /program/{jurisdictionSlug}/{programSlug}. If jurisdiction is unknown, use /program/global/{programSlug}
 PERSON: /person/{slug}
 EVENT: /event/{slug}
 MEDIA_CHANNEL: /media/{platform}/{slug}
@@ -1326,7 +1326,7 @@ RULES:
   - Prefer using a stable handle/username if present; otherwise use the quoted title as the slug source.
   - Add keyword "telegram" and consider /sphere/social/information.
 - ALL path segments MUST be lowercase slugs (use hyphens instead of spaces):
-  - CORRECT: /org/saudi-aramco, /fac/aramco/ras-tanura-refinery, /loc/ae/na/na, /product/raw/chemical/refining/lithium-carbonate
+  - CORRECT: /org/sa/saudi-aramco, /fac/aramco/ras-tanura-refinery, /loc/ae/na/na, /product/raw/chemical/refining/lithium-carbonate
   - WRONG: /loc/UAE, /org/Tesla Inc, /product/Lithium Carbonate
 
 - The anchor type MUST match the canonicalPath namespace:
@@ -1354,36 +1354,39 @@ RULES:
   - category: raw|component|finished|service
   - type: mineral|agricultural|chemical|electronic|mechanical|energy (best-effort)
   - stage: extraction|refining|processing|manufacturing|assembly (best-effort)
-  - If you truly cannot classify, use fallback: /product/{slug}
+  - If classification is uncertain, still keep this 5-segment format with your best taxonomy estimate
 
 - FACILITY canonicalPath:
-  - prefer /fac/{orgSlug}/{facilitySlug} when the owning org is known and stable
-  - otherwise use /fac/{facilitySlug}
+  - use /fac/{orgSlug}/{facilitySlug} when the owning org is known and stable
+  - if owning org is unknown, use /fac/na/{facilitySlug}
 
 - ORGANIZATION canonicalPath:
   - Organizations: /org/{iso2|na}/{slug}
     - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase, 2 letters). If unknown, use "na".
     - Regional tokens go in the geo slot (2nd segment): /org/gcc/{slug} (NOT /org/na/gcc/{slug}).
     - slug: lowercase slug derived from the base name (avoid legal suffixes like Inc/LLC in the path if possible)
-    - Legacy /org/{slug} may exist in the graph; prefer /org/{iso2}/{slug} for NEW anchors to reduce collisions.
   - Government bodies: /gov/{iso2|na}/{slug}
     - Use for ministries, regulators, agencies, state bodies (prevents collisions like "Ministry of Defence" across countries).
     - If jurisdiction is unknown, use /gov/na/{slug}.
     - Regional tokens go in the geo slot (2nd segment): /gov/gcc/{slug} (NOT /gov/na/gcc/{slug}).
 
 - PROGRAM/MARKET/EVENT/PERSON canonicalPath:
-  - /program/{slug}, /event/{slug}, /person/{slug}
+  - /program/{jurisdictionSlug}/{programSlug}, /event/{slug}, /person/{slug}
   - PROGRAM:
-    - If jurisdiction is known, prefer /program/{jurisdictionSlug}/{programSlug}
-      - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
-      - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
+    - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
+    - If jurisdiction is unknown, use "global"
+    - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
   - MARKET (segment-first):
-    - Preferred: /market/{geo}/{domain}/{vertical}
-      - domain/vertical SHOULD align with the /segment/{domain}/{vertical}/{geo} taxonomy used for organizations.
-      - Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
-      - This enables consistent market hierarchy + aggregation.
-    - Legacy /market/{geo}/{slug} may exist in older data; do NOT emit legacy for new markets.
-      - Always provide domain/vertical for NEW outputs.
+    - HIERARCHY LEVELS:
+      - L1 (domain): /market/{geo}/{domain} — entire sector
+      - L2 (vertical): /market/{geo}/{domain}/{vertical} — sub-segment of a domain
+      - L3+ (sub-vertical): /market/{geo}/{domain}/{vertical}/{sub} — narrower niche under a vertical
+      - Rule: child path = parent path + exactly one segment
+      - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
+      - Examples: /market/iq/agriculture (L1) → /market/iq/agriculture/crop-production (L2) → /market/iq/agriculture/crop-production/rice-production (L3)
+    - domain/vertical SHOULD align with the /segment/{domain}/{vertical}/{geo} taxonomy used for organizations.
+    - Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
+    - This enables consistent market hierarchy + aggregation.
   - MARKET geo MUST be ISO2 lowercase, composite ISO2, regional token (e.g., eu, gcc, asean, opec), or "global"/"int" (default "global" if unknown)
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
 
@@ -1392,9 +1395,9 @@ RULES:
     - The MARKET anchor MUST inherit that country's ISO2 code as geo
     - Do NOT default to "global" when geographic context is present in the query
   - Examples:
-    - "Saudi Arabia Event marketing market" → /market/sa/event-marketing (NOT /market/global/event-marketing)
-    - "German automotive industry" → /market/de/automotive (NOT /market/global/automotive)
-    - "UAE banking sector" → /market/ae/banking (NOT /market/global/banking)
+    - "Saudi Arabia Event marketing market" → /market/sa/professional-services/event-marketing (NOT /market/global/...)
+    - "German automotive industry" → /market/de/industrial/automotive (NOT /market/global/automotive)
+    - "UAE banking sector" → /market/ae/finance/banking (NOT /market/global/banking)
   - Use "global" as geo ONLY when NO geographic context is provided in the query
   - You CAN also include a separate GEO_REGION anchor for the country - that is fine and often useful
 

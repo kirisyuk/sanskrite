@@ -126,7 +126,6 @@ import { RiskBanner } from '../components/RiskBanner';
 import { ThinkingPlaceholder } from '../components/ThinkingPlaceholder';
 import { SettingsModal } from '../components/SettingsModal';
 import { AccountModal } from '../components/AccountModal';
-import { AdminModal } from '../components/AdminModal';
 import { WorkspaceCanvas } from '../components/WorkspaceCanvas';
 import { TelegramAddModal } from '../components/TelegramAddModal';
 import { RSSAddModal } from '../components/RSSAddModal';
@@ -281,7 +280,6 @@ const DiscoveryPage: React.FC = () => {
   const {
     showSettings,
     showAccount,
-    showAdmin,
     showWorkspace,
     workspaceProjectId,
     settingsParams,
@@ -1432,7 +1430,10 @@ const DiscoveryPage: React.FC = () => {
         onShowWorkspace={openWorkspace}
         onShowSettings={openSettings}
         onShowAccount={openAccount}
-        onShowAdmin={openAdmin}
+        onShowAdmin={() => {
+          closeAllModals();
+          useUIStore.getState().openAdminModal();
+        }}
         onCloseAllModals={closeAllModals}
         editingProjectId={editingProjectId}
         editingProjectName={editingProjectName}
@@ -1557,11 +1558,6 @@ const DiscoveryPage: React.FC = () => {
             isOpen={selectedJobTaskId !== null}
             taskId={selectedJobTaskId}
             onClose={() => setSelectedJobTaskId(null)}
-          />
-        ) : showAdmin ? (
-          <AdminModal
-            isOpen={showAdmin}
-            onClose={closeAllModals}
           />
         ) : staticPage ? (
           <div className="w-full h-full flex flex-col overflow-hidden">

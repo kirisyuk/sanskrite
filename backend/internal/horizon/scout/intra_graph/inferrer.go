@@ -461,14 +461,17 @@ func (inf *Inferrer) inferForPairType(
 		existingBlock = strings.Join(existingLines, "\n")
 	}
 
+	sphereBlock := buildSphereContextBlock(srcFrags, tgtFrags)
+
 	directionRules := "\n" + edgesemantics.EdgeDirectionValidationRulesForPrompt()
 	if pt == PairTypeOrgGov || pt == PairTypeOrgOrg || pt == PairTypeGovOrg || pt == PairTypeGovGov {
 		directionRules += `
 GOV/ORG PATH-SPECIFIC DIRECTION RULES:
+- OWNS: gov owns state-owned enterprises. Direction MUST be /gov/ -> /org/. NEVER /org/ OWNS /gov/ (canonicalizer will swap).
 - ADMINISTERS: source is the superior authority (typically /gov/...), target is subordinate. NEVER /org/ administers /gov/.
 - REGULATES: source is the regulator, target is regulated. Regulators are typically /gov/ but private standards bodies (/org/) can regulate too.
-- gov_org pair: natural for ADMINISTERS, REGULATES, CONTROLS (gov administers/regulates/controls org).
-- org_gov pair: for ADMINISTERS/REGULATES swap direction — source=TARGET (gov), target=SOURCE (org).
+- gov_org pair: natural for OWNS, ADMINISTERS, REGULATES, CONTROLS (gov owns/administers/regulates/controls org).
+- org_gov pair: for OWNS/ADMINISTERS/REGULATES swap direction — source=TARGET (gov), target=SOURCE (org).
 `
 	}
 
@@ -506,7 +509,7 @@ Return ONLY valid JSON. No markdown.`,
 		strings.Join(srcPaths, "\n"),
 		strings.Join(tgtPaths, "\n"),
 		existingBlock,
-		directionRules,
+		directionRules + sphereBlock,
 	)
 
 	verifier := ai.NewSimpleJSONVerifier()
@@ -564,4 +567,66 @@ Return ONLY valid JSON. No markdown.`,
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// buildSphereContextBlock adds sphere-aware hints to the intra-graph inference prompt.
+// Shared spheres -> sphere-specific relations (OWNS, PARTICIPATES_IN) more likely.
+// Different spheres -> cross-sphere relations (INFLUENCES, DEPENDS_ON) more likely.
+func buildSphereContextBlock(srcFrags, tgtFrags []*models.HorizonFragment) string {
+	srcSpheres := collectSpherePaths(srcFrags)
+	tgtSpheres := collectSpherePaths(tgtFrags)
+	if len(srcSpheres) == 0 && len(tgtSpheres) == 0 {
+		return ""
+	}
+	var shared []string
+	sharedSet := make(map[string]struct{})
+	for _, s := range srcSpheres {
+		if _, ok := sharedSet[s]; ok {
+			continue
+		}
+		for _, t := range tgtSpheres {
+			if s == t {
+				sharedSet[s] = struct{}{}
+				shared = append(shared, s)
+				break
+			}
+		}
+	}
+	sort.Strings(shared)
+	var sb strings.Builder
+	sb.WriteString("\n\nSPHERE CONTEXT:\n")
+	if len(shared) > 0 {
+		sb.WriteString(fmt.Sprintf("- Shared spheres: %s. Sphere-specific relations (OWNS, PARTICIPATES_IN, ADMINISTERS) are more likely.\n", strings.Join(shared, ", ")))
+	}
+	if len(srcSpheres) > 0 || len(tgtSpheres) > 0 {
+		allSrc := strings.Join(srcSpheres, ", ")
+		allTgt := strings.Join(tgtSpheres, ", ")
+		if allSrc != "" && allTgt != "" && len(shared) == 0 {
+			sb.WriteString(fmt.Sprintf("- Source spheres: %s. Target spheres: %s. Cross-sphere relations (INFLUENCES, DEPENDS_ON, REGULATES) are more likely.\n", allSrc, allTgt))
+		} else if allSrc != "" || allTgt != "" {
+			sb.WriteString(fmt.Sprintf("- Source spheres: %s. Target spheres: %s.\n", allSrc, allTgt))
+		}
+	}
+	return sb.String()
+}
+
+func collectSpherePaths(frags []*models.HorizonFragment) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, f := range frags {
+		if f == nil {
+			continue
+		}
+		for _, s := range f.SpherePaths {
+			s = strings.TrimSpace(s)
+			if s != "" && s != "/sphere/other" {
+				if _, ok := seen[s]; !ok {
+					seen[s] = struct{}{}
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }

@@ -15,7 +15,7 @@ import (
 // OpenCorporatesClient handles communication with OpenCorporates API.
 //
 // Docs: https://api.opencorporates.com/documentation/API-Reference
-// Auth: API token via OPEN_CORPORATES_API_TOKEN (optional for free tier).
+// Auth: API token via OPEN_CORPORATES_API_TOKEN (required; 401 without it).
 const openCorporatesBaseURL = "https://api.opencorporates.com/v0.4"
 
 // OpenCorporatesClient is the HTTP client for OpenCorporates API.
@@ -61,10 +61,16 @@ func NewOpenCorporatesClient(apiToken string) *OpenCorporatesClient {
 
 // GetOpenCorporatesClientFromEnv creates client from environment.
 //
-// Env: OPEN_CORPORATES_API_TOKEN (optional; free tier works without it but has limits).
+// Env: OPEN_CORPORATES_API_TOKEN (required; API returns 401 without it as of 2024).
 func GetOpenCorporatesClientFromEnv() *OpenCorporatesClient {
 	token := strings.Trim(strings.TrimSpace(os.Getenv("OPEN_CORPORATES_API_TOKEN")), "\"'")
 	return NewOpenCorporatesClient(token)
+}
+
+// IsConfigured returns true if the client has a valid API token.
+// OpenCorporates API requires a token; requests without it return 401 Unauthorized.
+func (c *OpenCorporatesClient) IsConfigured() bool {
+	return c != nil && strings.TrimSpace(c.apiToken) != ""
 }
 
 // SearchCompanies searches for companies by name.

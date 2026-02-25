@@ -3325,8 +3325,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
             )}
           </div>
 
-          {/* Bottom settings button */}
-          <div className="mt-auto pt-4">
+          {/* Bottom settings button — flex-shrink-0 so Admin/Account/Settings stay visible */}
+          <div className="mt-auto pt-4 flex-shrink-0">
             {isAdmin && (
               <button
                 type="button"

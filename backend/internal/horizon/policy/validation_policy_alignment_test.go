@@ -279,7 +279,7 @@ func TestValidationPolicy_OrgMarketNonParticipatesQuarantine(t *testing.T) {
 	}
 }
 
-func TestValidationPolicy_GovMarketNonParticipatesAlsoQuarantine(t *testing.T) {
+func TestValidationPolicy_GovRegulatesMarketAllowed(t *testing.T) {
 	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
 	decision, err := p.Decide(context.Background(), PolicyInput{
 		Kind: "edge",
@@ -295,7 +295,91 @@ func TestValidationPolicy_GovMarketNonParticipatesAlsoQuarantine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide() error = %v", err)
 	}
+	if decision.Action == ActionQuarantineSoft || decision.Action == "reject" {
+		t.Fatalf("GOV REGULATES MARKET should be allowed, got %s (reason: %v)", decision.Action, decision.Params["reason"])
+	}
+}
+
+func TestValidationPolicy_OrgNonGovMarketStillQuarantine(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind":      "edge",
+			"sourceType":          string(horizonmodels.FragmentTypeOrganization),
+			"targetType":          string(horizonmodels.FragmentTypeMarket),
+			"sourceCanonicalPath": "/org/us/jpmorgan-chase",
+			"targetCanonicalPath": "/market/us/finance/banking",
+			"relationType":        string(horizonmodels.DependencyTypeRegulates),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
 	if decision.Action != ActionQuarantineSoft {
-		t.Fatalf("expected quarantine_soft decision, got %s", decision.Action)
+		t.Fatalf("non-GOV ORG REGULATES MARKET should be quarantined, got %s", decision.Action)
+	}
+}
+
+func TestValidationPolicy_FragmentLegacyPathRejectedByContract(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+
+	tests := []struct {
+		name         string
+		fragmentType horizonmodels.FragmentType
+		path         string
+		wantDecision string
+	}{
+		{
+			name:         "legacy org path",
+			fragmentType: horizonmodels.FragmentTypeOrganization,
+			path:         "/org/acme",
+			wantDecision: "rule:hardcoded:invalid_canonical_path",
+		},
+		{
+			name:         "legacy market path",
+			fragmentType: horizonmodels.FragmentTypeMarket,
+			path:         "/market/semiconductors",
+			wantDecision: "rule:hardcoded:invalid_canonical_path",
+		},
+		{
+			name:         "legacy program path",
+			fragmentType: horizonmodels.FragmentTypeProgram,
+			path:         "/program/alem-ai",
+			wantDecision: "rule:hardcoded:invalid_canonical_path",
+		},
+		{
+			name:         "legacy community path",
+			fragmentType: horizonmodels.FragmentTypeCommunity,
+			path:         "/community/ae/hawala-network",
+			wantDecision: "rule:hardcoded:invalid_canonical_path",
+		},
+		{
+			name:         "legacy deposit path",
+			fragmentType: horizonmodels.FragmentTypeDeposit,
+			path:         "/deposit/permian-basin",
+			wantDecision: "rule:hardcoded:invalid_canonical_path",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := p.Decide(context.Background(), PolicyInput{
+				Kind: "fragment",
+				Fragment: &horizonmodels.HorizonFragment{
+					Type:          tt.fragmentType,
+					CanonicalPath: tt.path,
+				},
+			})
+			if err != nil {
+				t.Fatalf("Decide() error = %v", err)
+			}
+			if decision.Action != ActionQuarantineSoft {
+				t.Fatalf("expected %s, got %s", ActionQuarantineSoft, decision.Action)
+			}
+			if decision.DecisionPath != tt.wantDecision {
+				t.Fatalf("expected decisionPath %q, got %q", tt.wantDecision, decision.DecisionPath)
+			}
+		})
 	}
 }

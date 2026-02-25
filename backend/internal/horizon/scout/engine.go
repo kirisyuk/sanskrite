@@ -2,10 +2,7 @@ package scout
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -104,6 +101,223 @@ func appendMissingInfoUnique(list []string, item string) []string {
 		}
 	}
 	return append(list, item)
+}
+
+const (
+	// RuntimeContractContextEnvelope:
+	// bounded context budget for extraction/research/validation prompts.
+	maxAggregatedContentChars   = 48000
+	maxSourceContentBlockChars  = 9000
+	maxCriticSourceContentChars = 18000
+	maxResearchRawExcerptChars  = 7000
+	// RuntimeContractMissingInfoRelevance:
+	// upper bound for critic-generated missingInfo questions per entity.
+	defaultMissingInfoLimit = 12
+	personMissingInfoLimit  = 8
+	// RuntimeContractMetricsRefresh:
+	// recompute metrics only when missing, stale, or low-confidence.
+	metricsMaxAge              = 30 * 24 * time.Hour
+	metricsMinConfidence       = 0.60
+	metricsFutureSkewTolerance = 24 * time.Hour
+)
+
+func truncateWithHeadTail(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	if limit <= 32 {
+		return text[:limit]
+	}
+	head := (limit * 2) / 3
+	tail := limit - head - len("\n...[truncated]...\n")
+	if tail < 0 {
+		tail = 0
+	}
+	if head > len(text) {
+		head = len(text)
+	}
+	if tail > len(text)-head {
+		tail = len(text) - head
+	}
+	return text[:head] + "\n...[truncated]...\n" + text[len(text)-tail:]
+}
+
+func appendAggregatedContentBlock(current string, block string, maxChars int) string {
+	block = strings.TrimSpace(block)
+	if block == "" {
+		return strings.TrimSpace(current)
+	}
+	if strings.Contains(current, block) {
+		return strings.TrimSpace(current)
+	}
+	if strings.TrimSpace(current) == "" {
+		return truncateWithHeadTail(block, maxChars)
+	}
+	merged := strings.TrimSpace(current) + "\n\n" + block
+	return truncateWithHeadTail(merged, maxChars)
+}
+
+func buildSourceContentBlock(result *ExecuteDataSourceResult) string {
+	if result == nil {
+		return ""
+	}
+	content := truncateWithHeadTail(result.Content, maxSourceContentBlockChars)
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("SOURCE CONTENT")
+	if s := strings.TrimSpace(result.SourceType); s != "" {
+		b.WriteString(" [" + s + "]")
+	}
+	if u := strings.TrimSpace(result.SourceURL); u != "" {
+		b.WriteString(": " + u)
+	}
+	b.WriteString("\n")
+	b.WriteString(content)
+	return b.String()
+}
+
+func buildResearchContextBlock(rawContent string, relations []agents.DiscoveredRelation, chains []agents.SupplyChain, evidence *ai.GroundingEvidence) string {
+	var b strings.Builder
+	b.WriteString("RESEARCH ENRICHMENT CONTEXT:\n")
+
+	if len(relations) > 0 {
+		b.WriteString("Relations discovered:\n")
+		for i, rel := range relations {
+			if i >= 20 {
+				b.WriteString("- ...\n")
+				break
+			}
+			relType := strings.TrimSpace(rel.RelationType)
+			target := strings.TrimSpace(rel.TargetCanonicalPath)
+			if target == "" {
+				target = strings.TrimSpace(rel.TargetName)
+			}
+			if relType == "" && target == "" {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("- %s -> %s\n", relType, target))
+		}
+	}
+
+	if len(chains) > 0 {
+		b.WriteString("Supply chains discovered:\n")
+		for i, chain := range chains {
+			if i >= 10 {
+				b.WriteString("- ...\n")
+				break
+			}
+			nodes := make([]string, 0, len(chain.Nodes))
+			for _, node := range chain.Nodes {
+				path := strings.TrimSpace(node.CanonicalPath)
+				if path == "" {
+					path = strings.TrimSpace(node.Name)
+				}
+				if path != "" {
+					nodes = append(nodes, path)
+				}
+			}
+			if len(nodes) == 0 {
+				continue
+			}
+			b.WriteString("- " + strings.Join(nodes, " -> ") + "\n")
+		}
+	}
+
+	if evidence != nil && len(evidence.WebSources) > 0 {
+		b.WriteString("Grounded web sources:\n")
+		for i, src := range evidence.WebSources {
+			if i >= 8 {
+				b.WriteString("- ...\n")
+				break
+			}
+			url := strings.TrimSpace(src.URL)
+			title := strings.TrimSpace(src.Title)
+			switch {
+			case title != "" && url != "":
+				b.WriteString(fmt.Sprintf("- %s (%s)\n", title, url))
+			case url != "":
+				b.WriteString("- " + url + "\n")
+			case title != "":
+				b.WriteString("- " + title + "\n")
+			}
+		}
+	}
+
+	raw := strings.TrimSpace(rawContent)
+	if raw != "" {
+		b.WriteString("Research raw excerpt:\n")
+		b.WriteString(truncateWithHeadTail(raw, maxResearchRawExcerptChars))
+		b.WriteString("\n")
+	}
+
+	return strings.TrimSpace(b.String())
+}
+
+func criticSourceContent(content string) string {
+	return truncateWithHeadTail(content, maxCriticSourceContentChars)
+}
+
+func missingInfoLimitForFragment(fragment *models.HorizonFragment) int {
+	if fragment == nil {
+		return defaultMissingInfoLimit
+	}
+	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
+	if fragment.Type == models.FragmentTypePerson || strings.HasPrefix(cp, "/person/") {
+		return personMissingInfoLimit
+	}
+	return defaultMissingInfoLimit
+}
+
+func metricObservedAt(mv models.MetricValue) time.Time {
+	if !mv.ObservedAt.IsZero() {
+		return mv.ObservedAt
+	}
+	if mv.Provenance.ObservedAt != nil && !mv.Provenance.ObservedAt.IsZero() {
+		return *mv.Provenance.ObservedAt
+	}
+	return time.Time{}
+}
+
+// RuntimeContractMetricsRefresh:
+// evaluate whether metric recomputation is required for required metric paths.
+func evaluateMetricsRefreshContractReasons(fragment *models.HorizonFragment, requiredPaths []string, now time.Time) []string {
+	if fragment == nil {
+		return []string{"fragment_nil"}
+	}
+	if fragment.State == nil {
+		return []string{"state_missing"}
+	}
+	reasons := make([]string, 0)
+	for _, path := range requiredPaths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		mv, ok := fragment.State[path]
+		if !ok {
+			reasons = append(reasons, "missing:"+path)
+			continue
+		}
+		if mv.Confidence < metricsMinConfidence {
+			reasons = append(reasons, "low_confidence:"+path)
+			continue
+		}
+		observedAt := metricObservedAt(mv)
+		if observedAt.IsZero() {
+			reasons = append(reasons, "stale:"+path)
+			continue
+		}
+		age := now.Sub(observedAt)
+		if age > metricsMaxAge || observedAt.After(now.Add(metricsFutureSkewTolerance)) {
+			reasons = append(reasons, "stale:"+path)
+			continue
+		}
+	}
+	return reasons
 }
 
 // recordDeterministicRedirect records a redirect that becomes immediately stable.
@@ -253,7 +467,8 @@ func buildProductCanonicalizationMissingInfo(fragment *models.HorizonFragment, j
 
 	var sb strings.Builder
 	sb.WriteString("Resolve canonical product taxonomy for this product and disambiguate any acronym/short slug.")
-	sb.WriteString(" Provide a precise product name and canonical path using /product/{category}/{type}/{stage}/{slug} (or /product/service/{domain}/{subdomain}/{slug} for services).")
+	sb.WriteString(" Provide a precise product name and canonical path using /product/{category}/{type}/{stage}/{slug}.")
+	sb.WriteString(" For services, use category=service and map service domain/subdomain into {type}/{stage}.")
 	sb.WriteString(" If the current path is flat or acronym-like, expand it to the full product name and update fragment.canonicalPath plus labels/identifiers.")
 	sb.WriteString(" Examples: rice -> /product/raw/agricultural/extraction/rice; salt -> /product/raw/mineral/extraction/salt; swad (Indian savory snack) -> /product/finished/agricultural/processing/swad; processed/finished goods -> /product/finished/mechanical/assembly/{slug}.")
 	sb.WriteString(" Context:")
@@ -416,7 +631,7 @@ func buildRelationMissingInfo(relations []agents.DiscoveredRelation, limit int) 
 			out = append(out, fmt.Sprintf("Confirm the legal name, jurisdiction (ISO2), and canonical org path for related entity %s. Ensure the /org/{iso2}/{slug}-{legal_form} suffix is correct.", path))
 			seen[path] = struct{}{}
 		case relationNeedsProductCanonicalization(path):
-			out = append(out, fmt.Sprintf("Resolve canonical product taxonomy for related product %s. Provide a canonical path using /product/{category}/{type}/{stage}/{slug} (or /product/service/{domain}/{subdomain}/{slug} for services).", path))
+			out = append(out, fmt.Sprintf("Resolve canonical product taxonomy for related product %s. Use /product/{category}/{type}/{stage}/{slug}; for services, use category=service and map service domain/subdomain into {type}/{stage}.", path))
 			seen[path] = struct{}{}
 		case relationNeedsGeoDisambiguation(path):
 			out = append(out, fmt.Sprintf("Clarify geo scope for related entity %s and enrich display title. Keep canonicalPath best-effort, but resolve explicit country/region/city names and disambiguate placeholder-like segments.", path))
@@ -450,7 +665,13 @@ func filterDiscoveredRelationsByDomainModes(in []agents.DiscoveredRelation, doma
 	return out
 }
 
-func supplyChainsEnabled(_ []string, _ []string) bool {
+func supplyChainsEnabled(targetCanonicalPath string, targetType models.FragmentType, _ []string, _ []string) bool {
+	if targetType == models.FragmentTypePerson {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(targetCanonicalPath)), "/person/") {
+		return false
+	}
 	// Supply-chain discovery is part of the core scouting pipeline.
 	// Keep this enabled regardless of specialty/domain flags.
 	return true
@@ -695,19 +916,6 @@ func normalizeAndSetFragmentObjectQualifier(frag *models.HorizonFragment, fallba
 	return q
 }
 
-func resolveObjectQualifierForFragment(frag *models.HorizonFragment, fallbackTargetPath string) models.ObjectQualifier {
-	if frag == nil {
-		return models.ObjectQualifierNone
-	}
-	if raw := firstObjectQualifierRaw(frag); raw != "" {
-		q := models.NormalizeObjectQualifier(raw)
-		if models.IsAllowedObjectQualifierForType(frag.Type, frag.CanonicalPath, q) {
-			return q
-		}
-	}
-	return inferObjectQualifierForFragment(frag, fallbackTargetPath)
-}
-
 func parseRelationTargetType(raw string) models.FragmentType {
 	raw = strings.TrimSpace(strings.ToUpper(raw))
 	if raw == "" {
@@ -835,74 +1043,6 @@ func filterDiscoveredRelationsByFacilityQualifier(in []agents.DiscoveredRelation
 	return out
 }
 
-func applyUnitTemplateContractToRelations(in []agents.DiscoveredRelation, sourceFragment *models.HorizonFragment, fallbackTargetPath string) []agents.DiscoveredRelation {
-	if len(in) == 0 {
-		return nil
-	}
-	objectQualifier := resolveObjectQualifierForFragment(sourceFragment, fallbackTargetPath)
-	if objectQualifier == models.ObjectQualifierNone {
-		return in
-	}
-	out := make([]agents.DiscoveredRelation, 0, len(in))
-	for _, rel := range in {
-		if rel.Qualifiers == nil {
-			rel.Qualifiers = map[string]interface{}{}
-		}
-		rt := models.DependencyType(strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType)))
-		srcCode := models.NormalizeUnitCode(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitCode, "sourceUnitCode"))
-		dstCode := models.NormalizeUnitCode(firstStringQualifier(rel.Qualifiers, models.UnitQualifierTargetUnitCode, "targetUnitCode"))
-		srcCode, dstCode, templateKey, adjusted := models.ApplyUnitTemplatePairByQualifier(objectQualifier, rt, srcCode, dstCode)
-
-		srcRef := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitRef, "sourceUnitRef"))
-		dstRef := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, models.UnitQualifierTargetUnitRef, "targetUnitRef"))
-		srcLabel := strings.TrimSpace(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitLabel, "sourceUnitLabel"))
-		dstLabel := strings.TrimSpace(firstStringQualifier(rel.Qualifiers, models.UnitQualifierTargetUnitLabel, "targetUnitLabel"))
-
-		if srcCode != models.UnitCodeUnclassified {
-			if srcRef == "" || srcRef == string(models.UnitCodeUnclassified) {
-				srcRef = string(srcCode)
-			}
-			if srcLabel == "" || srcLabel == string(models.UnitCodeUnclassified) {
-				srcLabel = string(srcCode)
-			}
-		}
-		if dstCode != models.UnitCodeUnclassified {
-			if dstRef == "" || dstRef == string(models.UnitCodeUnclassified) {
-				dstRef = string(dstCode)
-			}
-			if dstLabel == "" || dstLabel == string(models.UnitCodeUnclassified) {
-				dstLabel = string(dstCode)
-			}
-		}
-		if srcRef == "" {
-			srcRef = string(models.UnitCodeUnclassified)
-		}
-		if dstRef == "" {
-			dstRef = string(models.UnitCodeUnclassified)
-		}
-		if srcLabel == "" {
-			srcLabel = string(srcCode)
-		}
-		if dstLabel == "" {
-			dstLabel = string(dstCode)
-		}
-		rel.Qualifiers[models.UnitQualifierSourceUnitCode] = string(srcCode)
-		rel.Qualifiers[models.UnitQualifierTargetUnitCode] = string(dstCode)
-		rel.Qualifiers[models.UnitQualifierSourceUnitRef] = srcRef
-		rel.Qualifiers[models.UnitQualifierTargetUnitRef] = dstRef
-		rel.Qualifiers[models.UnitQualifierSourceUnitLabel] = srcLabel
-		rel.Qualifiers[models.UnitQualifierTargetUnitLabel] = dstLabel
-		if templateKey != models.UnitTemplateGeneral {
-			rel.Qualifiers["unit_template_key"] = string(templateKey)
-		}
-		if adjusted {
-			rel.Qualifiers["unit_template_adjusted"] = true
-		}
-		out = append(out, rel)
-	}
-	return out
-}
-
 func containsAnyToken(text string, tokens []string) bool {
 	text = strings.ToLower(strings.TrimSpace(text))
 	if text == "" {
@@ -935,6 +1075,85 @@ func filterMissingInfoByFacilityQualifier(in []string, kind facilityQualifierSem
 			continue
 		}
 		out = appendMissingInfoUnique(out, q)
+	}
+	return out
+}
+
+func filterMissingInfoByFragmentRelevance(fragment *models.HorizonFragment, in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	if fragment == nil {
+		out := make([]string, 0, len(in))
+		for _, q := range in {
+			out = appendMissingInfoUnique(out, q)
+		}
+		return out
+	}
+
+	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
+	isPerson := fragment.Type == models.FragmentTypePerson || strings.HasPrefix(cp, "/person/")
+	isMarket := fragment.Type == models.FragmentTypeMarket || strings.HasPrefix(cp, "/market/")
+	isFacility := fragment.Type == models.FragmentTypeFacility || strings.HasPrefix(cp, "/fac/")
+	isDeposit := fragment.Type == models.FragmentTypeDeposit || strings.HasPrefix(cp, "/deposit/")
+	isCommunity := fragment.Type == models.FragmentTypeCommunity || strings.HasPrefix(cp, "/community/")
+
+	personOnlyTokens := []string{
+		"spouse", "children", "parents", "siblings", "relative", "close associates", "family",
+	}
+	marketOnlyTokens := []string{
+		"total addressable market", "/metric/market/tam_usd", "cagr", "cr4", "hhi", "marketdomain", "marketvertical", "sub-markets", "top players in <market>",
+	}
+	lifecycleOnlyTokens := []string{
+		"lifecycle stage", "operational status", "expected start date", "commissioning", "decommissioning",
+	}
+	supplyOnlyTokens := []string{
+		"supply chain", "upstream", "downstream", "suppliers", "customers", "transport chokepoints",
+	}
+
+	out := make([]string, 0, len(in))
+	for _, q := range in {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		if !isPerson && containsAnyToken(q, personOnlyTokens) {
+			continue
+		}
+		if !isMarket && containsAnyToken(q, marketOnlyTokens) {
+			continue
+		}
+		if !isFacility && !isDeposit && containsAnyToken(q, lifecycleOnlyTokens) {
+			continue
+		}
+		if (isPerson || isCommunity) && containsAnyToken(q, supplyOnlyTokens) {
+			continue
+		}
+		out = appendMissingInfoUnique(out, q)
+	}
+	return out
+}
+
+// RuntimeContractMissingInfoRelevance:
+// cap and sanitize critic questions to a bounded, entity-relevant set.
+func limitMissingInfoQuestions(in []string, maxItems int) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	if maxItems <= 0 {
+		maxItems = defaultMissingInfoLimit
+	}
+	out := make([]string, 0, len(in))
+	for _, q := range in {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		q = truncateWithHeadTail(q, 420)
+		out = appendMissingInfoUnique(out, q)
+		if len(out) >= maxItems {
+			break
+		}
 	}
 	return out
 }
@@ -1012,848 +1231,6 @@ func buildFacilityQualifierMissingInfo(targetCanonicalPath string, kind facility
 		return buildProcurementFacilityMissingInfo(targetCanonicalPath)
 	default:
 		return nil
-	}
-}
-
-func normalizeUnitRef(in string) string {
-	s := strings.TrimSpace(strings.ToLower(in))
-	if s == "" {
-		return ""
-	}
-	if s == "unknown" || s == "na" {
-		return string(models.UnitCodeUnclassified)
-	}
-	return s
-}
-
-func firstStringQualifier(m map[string]interface{}, keys ...string) string {
-	if len(m) == 0 {
-		return ""
-	}
-	for _, k := range keys {
-		if v, ok := m[k]; ok {
-			if s, ok := v.(string); ok {
-				s = strings.TrimSpace(s)
-				if s != "" {
-					return s
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func ensureUnitQualifiersForRelations(rels []agents.DiscoveredRelation, domainModes []string) []agents.DiscoveredRelation {
-	if len(rels) == 0 {
-		return nil
-	}
-	if !taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) && !taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGovernance) {
-		return rels
-	}
-	out := make([]agents.DiscoveredRelation, 0, len(rels))
-	for _, rel := range rels {
-		rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
-		if rel.Qualifiers == nil {
-			rel.Qualifiers = map[string]interface{}{}
-		}
-		sourceRef := normalizeUnitRef(firstStringQualifier(rel.Qualifiers,
-			models.UnitQualifierSourceUnitRef, "sourceUnitRef", "source_unit", "sourceUnit",
-		))
-		targetRef := normalizeUnitRef(firstStringQualifier(rel.Qualifiers,
-			models.UnitQualifierTargetUnitRef, "targetUnitRef", "target_unit", "targetUnit",
-		))
-		sourceCode := strings.TrimSpace(strings.ToLower(firstStringQualifier(rel.Qualifiers,
-			models.UnitQualifierSourceUnitCode, "sourceUnitCode",
-		)))
-		targetCode := strings.TrimSpace(strings.ToLower(firstStringQualifier(rel.Qualifiers,
-			models.UnitQualifierTargetUnitCode, "targetUnitCode",
-		)))
-		sourceLabel := strings.TrimSpace(firstStringQualifier(rel.Qualifiers,
-			models.UnitQualifierSourceUnitLabel, "sourceUnitLabel",
-		))
-		targetLabel := strings.TrimSpace(firstStringQualifier(rel.Qualifiers,
-			models.UnitQualifierTargetUnitLabel, "targetUnitLabel",
-		))
-
-		// Backward-compatible aliases for supply roles.
-		supplierRef := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, "supplier_unit_ref", "supplierUnitRef"))
-		customerRef := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, "customer_unit_ref", "customerUnitRef"))
-		supplierCode := strings.TrimSpace(strings.ToLower(firstStringQualifier(rel.Qualifiers, "supplier_unit_code", "supplierUnitCode")))
-		customerCode := strings.TrimSpace(strings.ToLower(firstStringQualifier(rel.Qualifiers, "customer_unit_code", "customerUnitCode")))
-		supplierLabel := strings.TrimSpace(firstStringQualifier(rel.Qualifiers, "supplier_unit_label", "supplierUnitLabel"))
-		customerLabel := strings.TrimSpace(firstStringQualifier(rel.Qualifiers, "customer_unit_label", "customerUnitLabel"))
-
-		switch rt {
-		case string(models.DependencyTypeSuppliesTo):
-			if sourceRef == "" {
-				sourceRef = supplierRef
-			}
-			if targetRef == "" {
-				targetRef = customerRef
-			}
-			if sourceCode == "" {
-				sourceCode = supplierCode
-			}
-			if targetCode == "" {
-				targetCode = customerCode
-			}
-			if sourceLabel == "" {
-				sourceLabel = supplierLabel
-			}
-			if targetLabel == "" {
-				targetLabel = customerLabel
-			}
-		case string(models.DependencyTypeDependsOn):
-			if sourceRef == "" {
-				sourceRef = customerRef
-			}
-			if targetRef == "" {
-				targetRef = supplierRef
-			}
-			if sourceCode == "" {
-				sourceCode = customerCode
-			}
-			if targetCode == "" {
-				targetCode = supplierCode
-			}
-			if sourceLabel == "" {
-				sourceLabel = customerLabel
-			}
-			if targetLabel == "" {
-				targetLabel = supplierLabel
-			}
-		}
-
-		if sourceRef == "" {
-			sourceRef = string(models.UnitCodeUnclassified)
-		}
-		if targetRef == "" {
-			targetRef = string(models.UnitCodeUnclassified)
-		}
-		if sourceCode == "" {
-			sourceCode = string(models.NormalizeUnitCode(""))
-		}
-		if targetCode == "" {
-			targetCode = string(models.NormalizeUnitCode(""))
-		}
-		if sourceLabel == "" {
-			sourceLabel = sourceCode
-		}
-		if targetLabel == "" {
-			targetLabel = targetCode
-		}
-		rel.Qualifiers[models.UnitQualifierSourceUnitRef] = sourceRef
-		rel.Qualifiers[models.UnitQualifierSourceUnitCode] = sourceCode
-		rel.Qualifiers[models.UnitQualifierSourceUnitLabel] = sourceLabel
-		rel.Qualifiers[models.UnitQualifierTargetUnitRef] = targetRef
-		rel.Qualifiers[models.UnitQualifierTargetUnitCode] = targetCode
-		rel.Qualifiers[models.UnitQualifierTargetUnitLabel] = targetLabel
-		out = append(out, rel)
-	}
-	return out
-}
-
-func normalizeUnitIDToken(s string) string {
-	s = strings.TrimSpace(strings.ToLower(s))
-	if s == "" {
-		return ""
-	}
-	var b strings.Builder
-	lastDash := false
-	for _, r := range s {
-		isAlpha := r >= 'a' && r <= 'z'
-		isNum := r >= '0' && r <= '9'
-		if isAlpha || isNum {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
-
-func normalizeOrgUnitProfiles(parentOrgRef string, in []models.OrgUnitProfile) []models.OrgUnitProfile {
-	if len(in) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(in))
-	out := make([]models.OrgUnitProfile, 0, len(in))
-	for idx, u := range in {
-		u.ParentOrgRef = strings.TrimSpace(u.ParentOrgRef)
-		if u.ParentOrgRef == "" {
-			u.ParentOrgRef = strings.TrimSpace(parentOrgRef)
-		}
-		u.UnitCode = models.NormalizeUnitCode(string(u.UnitCode))
-		u.Label = strings.TrimSpace(u.Label)
-		if u.Label == "" {
-			u.Label = string(u.UnitCode)
-		}
-		u.UnitID = normalizeUnitRef(u.UnitID)
-		if u.UnitID == "" {
-			base := normalizeUnitIDToken(u.Label)
-			if base == "" {
-				base = normalizeUnitIDToken(string(u.UnitCode))
-			}
-			if base == "" {
-				base = "unit"
-			}
-			u.UnitID = fmt.Sprintf("%s-%d", base, idx+1)
-		}
-		if _, ok := seen[u.UnitID]; ok {
-			continue
-		}
-		seen[u.UnitID] = struct{}{}
-		out = append(out, u)
-	}
-	return out
-}
-
-func deriveSourceUnitProfilesFromRelations(parentOrgRef string, rels []agents.DiscoveredRelation) []models.OrgUnitProfile {
-	if len(rels) == 0 {
-		return nil
-	}
-	out := make([]models.OrgUnitProfile, 0, 8)
-	seen := map[string]struct{}{}
-	for _, rel := range rels {
-		if rel.Qualifiers == nil {
-			continue
-		}
-		ref := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitRef, "sourceUnitRef"))
-		code := models.NormalizeUnitCode(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitCode, "sourceUnitCode"))
-		label := strings.TrimSpace(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitLabel, "sourceUnitLabel"))
-		if ref == "" && code == "" && label == "" {
-			continue
-		}
-		if ref == "" {
-			ref = normalizeUnitIDToken(label)
-			if ref == "" {
-				ref = string(code)
-			}
-			if ref == "" {
-				ref = string(models.UnitCodeUnclassified)
-			}
-		}
-		if code == "" {
-			code = models.NormalizeUnitCode(ref)
-		}
-		if label == "" {
-			label = string(code)
-		}
-		if _, ok := seen[ref]; ok {
-			continue
-		}
-		seen[ref] = struct{}{}
-		out = append(out, models.OrgUnitProfile{
-			UnitID:       ref,
-			ParentOrgRef: parentOrgRef,
-			UnitCode:     code,
-			Label:        label,
-		})
-	}
-	return out
-}
-
-func parseUnitProfilesState(raw interface{}) []models.OrgUnitProfile {
-	if raw == nil {
-		return nil
-	}
-	switch t := raw.(type) {
-	case []models.OrgUnitProfile:
-		return append([]models.OrgUnitProfile(nil), t...)
-	case []interface{}, []map[string]interface{}, map[string]interface{}, string:
-		b, err := json.Marshal(t)
-		if err != nil {
-			return nil
-		}
-		var out []models.OrgUnitProfile
-		if err := json.Unmarshal(b, &out); err != nil {
-			return nil
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-func mergeUnitProfiles(existing []models.OrgUnitProfile, incoming []models.OrgUnitProfile, parentOrgRef string) []models.OrgUnitProfile {
-	combined := append(append([]models.OrgUnitProfile{}, existing...), incoming...)
-	return normalizeOrgUnitProfiles(parentOrgRef, combined)
-}
-
-func buildUnitProfilesPromptContext(units []models.OrgUnitProfile) string {
-	if len(units) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("UNIT CONTEXT (identified upfront; align all relations to these unit contours when possible):\n")
-	for _, u := range units {
-		b.WriteString(fmt.Sprintf("  - unitId=%s unitCode=%s label=%s\n", strings.TrimSpace(u.UnitID), strings.TrimSpace(string(u.UnitCode)), strings.TrimSpace(u.Label)))
-	}
-	b.WriteString("If uncertain, use source_unit_ref/target_unit_ref = unclassified.\n\n")
-	return b.String()
-}
-
-func shouldPersistUnitProfilesToGlobal(job *models.ScoutingJob) bool {
-	if job == nil || job.State == nil {
-		return true
-	}
-	for _, key := range []string{
-		"disableGlobalUnitProfiles",
-		"unitProfilesLensOnly",
-	} {
-		if v, ok := job.State[key]; ok && parseStateBool(v, false) {
-			return false
-		}
-	}
-	for _, key := range []string{
-		"persistUnitProfilesToGlobal",
-		"unitProfilesGlobal",
-	} {
-		if v, ok := job.State[key]; ok && parseStateBool(v, false) {
-			return true
-		}
-	}
-	return true
-}
-
-func sanitizeUnitProfilesDomainKey(raw string) string {
-	key := strings.TrimSpace(raw)
-	if key == "" {
-		return taxonomy.DomainModeGeneral
-	}
-	// Firestore rejects reserved field names matching "__.*__".
-	if key == "__default__" || (strings.HasPrefix(key, "__") && strings.HasSuffix(key, "__")) {
-		return taxonomy.DomainModeGeneral
-	}
-	return key
-}
-
-func setFragmentUnitProfilesQualifier(fragment *models.HorizonFragment, units []models.OrgUnitProfile, domainCanonicalPath string, persist bool) {
-	if fragment == nil {
-		return
-	}
-	if fragment.Qualifiers == nil {
-		fragment.Qualifiers = map[string]interface{}{}
-	}
-	if !persist || len(units) == 0 {
-		delete(fragment.Qualifiers, "unitProfiles")
-		delete(fragment.Qualifiers, "unitProfilesByDomain")
-		return
-	}
-	domainKey := sanitizeUnitProfilesDomainKey(domainCanonicalPath)
-	byDomain := map[string]interface{}{}
-	if raw, ok := fragment.Qualifiers["unitProfilesByDomain"]; ok && raw != nil {
-		switch t := raw.(type) {
-		case map[string]interface{}:
-			for k, v := range t {
-				byDomain[sanitizeUnitProfilesDomainKey(k)] = v
-			}
-		default:
-			// Best-effort migration from unknown shape.
-			if b, err := json.Marshal(t); err == nil {
-				var decoded map[string]interface{}
-				if err := json.Unmarshal(b, &decoded); err == nil {
-					for k, v := range decoded {
-						byDomain[sanitizeUnitProfilesDomainKey(k)] = v
-					}
-				}
-			}
-		}
-	}
-	byDomain[domainKey] = units
-	fragment.Qualifiers["unitProfilesByDomain"] = byDomain
-	// Backward-compatible shortcut: latest domain-resolved slice.
-	fragment.Qualifiers["unitProfiles"] = units
-}
-
-func isUnitGraphActorPath(path string) bool {
-	path = strings.TrimSpace(path)
-	return strings.HasPrefix(path, "/org/") || strings.HasPrefix(path, "/gov/")
-}
-
-func buildUnitGraphEdgeID(supplierOrgRef, customerOrgRef, supplierUnitRef, customerUnitRef string, direction models.UnitGraphDirection) string {
-	key := strings.TrimSpace(strings.ToLower(supplierOrgRef)) + "|" +
-		strings.TrimSpace(strings.ToLower(customerOrgRef)) + "|" +
-		strings.TrimSpace(strings.ToLower(supplierUnitRef)) + "|" +
-		strings.TrimSpace(strings.ToLower(customerUnitRef)) + "|" +
-		strings.TrimSpace(strings.ToLower(string(direction)))
-	sum := sha1.Sum([]byte(key))
-	return "uge_" + hex.EncodeToString(sum[:])
-}
-
-func unitGraphEdgesFromRelations(sourceCanonicalPath string, rels []agents.DiscoveredRelation) []models.UnitGraphEdge {
-	sourceCanonicalPath = strings.TrimSpace(sourceCanonicalPath)
-	if !isUnitGraphActorPath(sourceCanonicalPath) || len(rels) == 0 {
-		return nil
-	}
-	seen := map[string]models.UnitGraphEdge{}
-	for _, rel := range rels {
-		targetCanonicalPath := strings.TrimSpace(rel.TargetCanonicalPath)
-		if !isUnitGraphActorPath(targetCanonicalPath) {
-			continue
-		}
-		rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
-		if rt == "" {
-			continue
-		}
-
-		sourceUnitRef := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitRef))
-		targetUnitRef := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, models.UnitQualifierTargetUnitRef))
-		if sourceUnitRef == "" {
-			sourceUnitRef = string(models.UnitCodeUnclassified)
-		}
-		if targetUnitRef == "" {
-			targetUnitRef = string(models.UnitCodeUnclassified)
-		}
-
-		var edge models.UnitGraphEdge
-		switch rt {
-		case string(models.DependencyTypeSuppliesTo):
-			edge = models.UnitGraphEdge{
-				SupplierOrgRef:  sourceCanonicalPath,
-				CustomerOrgRef:  targetCanonicalPath,
-				SupplierUnitRef: sourceUnitRef,
-				CustomerUnitRef: targetUnitRef,
-				Direction:       models.UnitGraphDirectionDownstream,
-			}
-		case string(models.DependencyTypeDependsOn):
-			// DEPENDS_ON is customer -> supplier in relation direction.
-			edge = models.UnitGraphEdge{
-				SupplierOrgRef:  targetCanonicalPath,
-				CustomerOrgRef:  sourceCanonicalPath,
-				SupplierUnitRef: targetUnitRef,
-				CustomerUnitRef: sourceUnitRef,
-				Direction:       models.UnitGraphDirectionUpstream,
-			}
-		default:
-			continue
-		}
-
-		edge.Confidence = normalizeEdgeConfidence(rel.Confidence)
-		if edge.Confidence <= 0 {
-			edge.Confidence = 0.6
-		}
-		edge.Weight = edge.Confidence
-		edge.EdgeID = buildUnitGraphEdgeID(edge.SupplierOrgRef, edge.CustomerOrgRef, edge.SupplierUnitRef, edge.CustomerUnitRef, edge.Direction)
-		if edge.EdgeID == "" {
-			continue
-		}
-		if prev, ok := seen[edge.EdgeID]; ok && prev.Confidence >= edge.Confidence {
-			continue
-		}
-		seen[edge.EdgeID] = edge
-	}
-
-	if len(seen) == 0 {
-		return nil
-	}
-	out := make([]models.UnitGraphEdge, 0, len(seen))
-	for _, e := range seen {
-		out = append(out, e)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].EdgeID < out[j].EdgeID })
-	return out
-}
-
-func mergeUnitGraphEdges(existing []models.UnitGraphEdge, incoming []models.UnitGraphEdge) []models.UnitGraphEdge {
-	if len(existing) == 0 && len(incoming) == 0 {
-		return nil
-	}
-	merged := map[string]models.UnitGraphEdge{}
-	add := func(items []models.UnitGraphEdge) {
-		for _, edge := range items {
-			if strings.TrimSpace(edge.SupplierUnitRef) == "" {
-				edge.SupplierUnitRef = string(models.UnitCodeUnclassified)
-			}
-			if strings.TrimSpace(edge.CustomerUnitRef) == "" {
-				edge.CustomerUnitRef = string(models.UnitCodeUnclassified)
-			}
-			if strings.TrimSpace(edge.EdgeID) == "" {
-				edge.EdgeID = buildUnitGraphEdgeID(edge.SupplierOrgRef, edge.CustomerOrgRef, edge.SupplierUnitRef, edge.CustomerUnitRef, edge.Direction)
-			}
-			if strings.TrimSpace(edge.EdgeID) == "" {
-				continue
-			}
-			if prev, ok := merged[edge.EdgeID]; ok && prev.Confidence >= edge.Confidence {
-				continue
-			}
-			merged[edge.EdgeID] = edge
-		}
-	}
-	add(existing)
-	add(incoming)
-
-	out := make([]models.UnitGraphEdge, 0, len(merged))
-	for _, edge := range merged {
-		out = append(out, edge)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].EdgeID < out[j].EdgeID })
-	return out
-}
-
-func inferDomainCanonicalPathForUnitStorage(job *models.ScoutingJob) string {
-	if job == nil {
-		return ""
-	}
-	if cp := strings.TrimSpace(job.TargetCanonicalPath); strings.HasPrefix(cp, "/domain/") {
-		return cp
-	}
-	if job.State == nil {
-		return ""
-	}
-	if cp := strings.TrimSpace(parseStateString(job.State["targetCanonicalPath"])); strings.HasPrefix(cp, "/domain/") {
-		return cp
-	}
-	raw, ok := job.State["domains"]
-	if !ok {
-		return ""
-	}
-	switch t := raw.(type) {
-	case []map[string]interface{}:
-		for _, it := range t {
-			if cp := strings.TrimSpace(parseStateString(it["canonicalPath"])); strings.HasPrefix(cp, "/domain/") {
-				return cp
-			}
-		}
-	case []interface{}:
-		for _, it := range t {
-			if m, ok := it.(map[string]interface{}); ok {
-				if cp := strings.TrimSpace(parseStateString(m["canonicalPath"])); strings.HasPrefix(cp, "/domain/") {
-					return cp
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func parseUnitDiveRequestState(raw interface{}) (*models.UnitDiveRequest, bool) {
-	if raw == nil {
-		return nil, false
-	}
-	var req models.UnitDiveRequest
-	switch t := raw.(type) {
-	case models.UnitDiveRequest:
-		req = t
-	case *models.UnitDiveRequest:
-		if t == nil {
-			return nil, false
-		}
-		req = *t
-	default:
-		b, err := json.Marshal(t)
-		if err != nil {
-			return nil, false
-		}
-		if err := json.Unmarshal(b, &req); err != nil {
-			return nil, false
-		}
-	}
-	req.RequestID = strings.TrimSpace(req.RequestID)
-	req.SupplierOrgRef = strings.TrimSpace(req.SupplierOrgRef)
-	req.CustomerOrgRef = strings.TrimSpace(req.CustomerOrgRef)
-	req.SupplierUnitRef = normalizeUnitRef(req.SupplierUnitRef)
-	req.CustomerUnitRef = normalizeUnitRef(req.CustomerUnitRef)
-	if req.SupplierUnitRef == "" {
-		req.SupplierUnitRef = string(models.UnitCodeUnclassified)
-	}
-	if req.CustomerUnitRef == "" {
-		req.CustomerUnitRef = string(models.UnitCodeUnclassified)
-	}
-	if req.RequestID == "" || req.SupplierOrgRef == "" || req.CustomerOrgRef == "" {
-		return nil, false
-	}
-	return &req, true
-}
-
-func collectUnitDiveNewSupplyLinkIDs(job *models.ScoutingJob) []string {
-	if job == nil || job.State == nil {
-		return nil
-	}
-	ids := map[string]struct{}{}
-	for _, id := range append(
-		parseStateStringSlice(job.State["createdEdgeIds"]),
-		parseStateStringSlice(job.State["modifiedEdgeIds"])...,
-	) {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		ids[id] = struct{}{}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(ids))
-	for id := range ids {
-		out = append(out, id)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func appendSetPath(out map[string]struct{}, path string) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return
-	}
-	out[path] = struct{}{}
-}
-
-func setToSortedSlice(set map[string]struct{}) []string {
-	if len(set) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(set))
-	for item := range set {
-		out = append(out, item)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func buildUnitDiveResultContract(
-	request *models.UnitDiveRequest,
-	sourceCanonicalPath string,
-	confidence float64,
-	relations []agents.DiscoveredRelation,
-	chains []agents.SupplyChain,
-	newSupplyLinks []string,
-) models.UnitDiveResult {
-	result := models.UnitDiveResult{
-		Status:         models.UnitDiveStatusCompleted,
-		NewSupplyLinks: append([]string(nil), newSupplyLinks...),
-		Confidence:     normalizeEdgeConfidence(confidence),
-	}
-	if request != nil {
-		result.RequestID = strings.TrimSpace(request.RequestID)
-	}
-	if result.RequestID == "" {
-		result.Status = models.UnitDiveStatusFailed
-		result.Notes = "unitDiveRequest missing or invalid"
-		return result
-	}
-
-	sourceCanonicalPath = strings.TrimSpace(sourceCanonicalPath)
-	supplierOrg := ""
-	customerOrg := ""
-	supplierUnit := string(models.UnitCodeUnclassified)
-	customerUnit := string(models.UnitCodeUnclassified)
-	if request != nil {
-		supplierOrg = strings.TrimSpace(request.SupplierOrgRef)
-		customerOrg = strings.TrimSpace(request.CustomerOrgRef)
-		supplierUnit = normalizeUnitRef(request.SupplierUnitRef)
-		customerUnit = normalizeUnitRef(request.CustomerUnitRef)
-		if supplierUnit == "" {
-			supplierUnit = string(models.UnitCodeUnclassified)
-		}
-		if customerUnit == "" {
-			customerUnit = string(models.UnitCodeUnclassified)
-		}
-	}
-
-	resolvedOrgs := map[string]struct{}{}
-	upstream := map[string]struct{}{}
-	downstream := map[string]struct{}{}
-	appendSetPath(resolvedOrgs, supplierOrg)
-	appendSetPath(resolvedOrgs, customerOrg)
-
-	for _, rel := range relations {
-		rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
-		if rt == "" {
-			continue
-		}
-		src := strings.TrimSpace(rel.SourceCanonicalPath)
-		if src == "" {
-			src = sourceCanonicalPath
-		}
-		dst := strings.TrimSpace(rel.TargetCanonicalPath)
-		srcUnit := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, models.UnitQualifierSourceUnitRef, "sourceUnitRef"))
-		dstUnit := normalizeUnitRef(firstStringQualifier(rel.Qualifiers, models.UnitQualifierTargetUnitRef, "targetUnitRef"))
-		if srcUnit == "" {
-			srcUnit = string(models.UnitCodeUnclassified)
-		}
-		if dstUnit == "" {
-			dstUnit = string(models.UnitCodeUnclassified)
-		}
-
-		if strings.HasPrefix(src, "/org/") {
-			appendSetPath(resolvedOrgs, src)
-		}
-		if strings.HasPrefix(dst, "/org/") {
-			appendSetPath(resolvedOrgs, dst)
-		}
-
-		switch rt {
-		case string(models.DependencyTypeSuppliesTo):
-			if supplierOrg != "" && src == supplierOrg && srcUnit == supplierUnit {
-				appendSetPath(downstream, dst)
-			}
-			if customerOrg != "" && dst == customerOrg && dstUnit == customerUnit {
-				appendSetPath(upstream, src)
-			}
-		case string(models.DependencyTypeDependsOn):
-			// DEPENDS_ON: source depends on target (source is customer; target is supplier).
-			if customerOrg != "" && src == customerOrg && srcUnit == customerUnit {
-				appendSetPath(upstream, dst)
-			}
-			if supplierOrg != "" && dst == supplierOrg && dstUnit == supplierUnit {
-				appendSetPath(downstream, src)
-			}
-		}
-	}
-
-	for _, chain := range chains {
-		ordered := make([]string, 0, len(chain.Nodes))
-		supplierIdx := -1
-		customerIdx := -1
-		for _, node := range chain.Nodes {
-			p := strings.TrimSpace(node.CanonicalPath)
-			if p == "" {
-				continue
-			}
-			ordered = append(ordered, p)
-			if supplierOrg != "" && supplierIdx < 0 && p == supplierOrg {
-				supplierIdx = len(ordered) - 1
-			}
-			if customerOrg != "" && customerIdx < 0 && p == customerOrg {
-				customerIdx = len(ordered) - 1
-			}
-			if strings.HasPrefix(p, "/org/") {
-				appendSetPath(resolvedOrgs, p)
-			}
-		}
-		if len(ordered) == 0 {
-			continue
-		}
-		switch {
-		case supplierIdx >= 0 && customerIdx >= 0 && supplierIdx <= customerIdx:
-			for _, p := range ordered[supplierIdx:] {
-				appendSetPath(downstream, p)
-			}
-		case supplierIdx >= 0 && customerIdx >= 0 && customerIdx < supplierIdx:
-			for _, p := range ordered[:supplierIdx+1] {
-				appendSetPath(upstream, p)
-			}
-		case supplierIdx >= 0:
-			for _, p := range ordered[supplierIdx:] {
-				appendSetPath(downstream, p)
-			}
-		case customerIdx >= 0:
-			for _, p := range ordered[:customerIdx+1] {
-				appendSetPath(upstream, p)
-			}
-		}
-	}
-
-	result.ResolvedLegalEntities = setToSortedSlice(resolvedOrgs)
-	result.UpstreamChain = setToSortedSlice(upstream)
-	result.DownstreamChain = setToSortedSlice(downstream)
-	result.Notes = fmt.Sprintf("auto-materialized from P5 outputs: relations=%d supplyChains=%d", len(relations), len(chains))
-	if len(result.NewSupplyLinks) == 0 && len(result.UpstreamChain) == 0 && len(result.DownstreamChain) == 0 {
-		result.Status = models.UnitDiveStatusPartial
-		result.Notes = "unit dive completed with no additional chains or links"
-	}
-	return result
-}
-
-func (e *ScoutEngine) persistUnitDiveResultFromJobState(
-	ctx context.Context,
-	job *models.ScoutingJob,
-	sourceCanonicalPath string,
-	confidence float64,
-	relations []agents.DiscoveredRelation,
-	chains []agents.SupplyChain,
-) {
-	if e == nil || e.unitDiveRepo == nil || job == nil {
-		return
-	}
-	if job.GetUnitPipelinePhase() != models.UnitPipelinePhaseP5 {
-		return
-	}
-	if job.State == nil {
-		return
-	}
-	req, ok := parseUnitDiveRequestState(job.State[models.StateKeyUnitDiveRequest])
-	if !ok || req == nil {
-		e.logLine(ctx, job, "warn", "> unit dive result skip: invalid unitDiveRequest payload")
-		return
-	}
-
-	lensID := strings.TrimSpace(job.LensID)
-	if lensID == "" {
-		lensID = strings.TrimSpace(parseStateString(job.State["lensId"]))
-	}
-	tenantID := strings.TrimSpace(job.TenantID)
-	if tenantID == "" || lensID == "" {
-		return
-	}
-
-	result := buildUnitDiveResultContract(
-		req,
-		sourceCanonicalPath,
-		confidence,
-		relations,
-		chains,
-		collectUnitDiveNewSupplyLinkIDs(job),
-	)
-	artifact := &models.UnitDiveResultArtifact{
-		TenantID:            tenantID,
-		ProjectID:           strings.TrimSpace(job.ProjectID),
-		LensID:              lensID,
-		DomainCanonicalPath: inferDomainCanonicalPathForUnitStorage(job),
-		RequestID:           result.RequestID,
-		Result:              result,
-		SourceJobID:         strings.TrimSpace(job.ID),
-	}
-	if _, err := e.unitDiveRepo.Upsert(ctx, artifact); err != nil {
-		e.logLine(ctx, job, "warn", fmt.Sprintf("> unit dive result persist failed: %v", err))
-	}
-}
-
-func (e *ScoutEngine) persistUnitGraphSnapshotFromRelations(ctx context.Context, job *models.ScoutingJob, sourceCanonicalPath string, rels []agents.DiscoveredRelation) {
-	if e == nil || e.unitGraphRepo == nil || job == nil || len(rels) == 0 {
-		return
-	}
-	tenantID := strings.TrimSpace(job.TenantID)
-	lensID := strings.TrimSpace(job.LensID)
-	if lensID == "" && job.State != nil {
-		lensID = strings.TrimSpace(parseStateString(job.State["lensId"]))
-	}
-	if tenantID == "" || lensID == "" {
-		return
-	}
-	incoming := unitGraphEdgesFromRelations(sourceCanonicalPath, rels)
-	if len(incoming) == 0 {
-		return
-	}
-	domainCanonicalPath := inferDomainCanonicalPathForUnitStorage(job)
-	var existing *models.UnitGraphSnapshot
-	if snap, err := e.unitGraphRepo.GetByLensAndDomain(ctx, lensID, domainCanonicalPath); err == nil {
-		existing = snap
-	} else if !errors.Is(err, repo.ErrUnitGraphSnapshotNotFound) {
-		e.logLine(ctx, job, "warn", fmt.Sprintf("> unit graph snapshot read failed: %v", err))
-	}
-
-	snapshot := &models.UnitGraphSnapshot{
-		TenantID:            tenantID,
-		ProjectID:           strings.TrimSpace(job.ProjectID),
-		LensID:              lensID,
-		DomainCanonicalPath: strings.TrimSpace(domainCanonicalPath),
-		Edges:               incoming,
-		SourceJobID:         strings.TrimSpace(job.ID),
-	}
-	if existing != nil {
-		snapshot.ID = strings.TrimSpace(existing.ID)
-		snapshot.CreatedAt = existing.CreatedAt
-		snapshot.Edges = mergeUnitGraphEdges(existing.Edges, incoming)
-	}
-	if _, err := e.unitGraphRepo.Upsert(ctx, snapshot); err != nil {
-		e.logLine(ctx, job, "warn", fmt.Sprintf("> unit graph snapshot persist failed: %v", err))
 	}
 }
 
@@ -2215,8 +1592,6 @@ type ScoutEngine struct {
 	// Lens artifacts for Phase 2 Strategic Overlay
 	lensArtifactsRepo *repo.LensArtifactsRepository         // Optional: accumulates finalized fragments/edges per lens
 	domainAnswersRepo *repo.DomainAnswerSnapshotsRepository // Optional: persisted DomainAnswerSnapshot artifacts
-	unitGraphRepo     *repo.UnitGraphSnapshotsRepository    // Optional: persisted L1 unit graph snapshots
-	unitDiveRepo      *repo.UnitDiveResultsRepository       // Optional: persisted unit-dive artifacts
 }
 
 // bestEffortDeferredScopeAdd adds canonicalPath to lens.Scope if under limit (max 5 per lens).
@@ -2891,18 +2266,6 @@ func (e *ScoutEngine) WithDomainAnswerSnapshotsRepo(repo *repo.DomainAnswerSnaps
 	return e
 }
 
-// WithUnitGraphSnapshotsRepo sets repository for persisted unit graph snapshots.
-func (e *ScoutEngine) WithUnitGraphSnapshotsRepo(repo *repo.UnitGraphSnapshotsRepository) *ScoutEngine {
-	e.unitGraphRepo = repo
-	return e
-}
-
-// WithUnitDiveResultsRepo sets repository for persisted unit dive results.
-func (e *ScoutEngine) WithUnitDiveResultsRepo(repo *repo.UnitDiveResultsRepository) *ScoutEngine {
-	e.unitDiveRepo = repo
-	return e
-}
-
 // persistLensArtifactsFromJobState persists finalized fragments and edges created/modified by this job
 // into the lens-owned artifacts collection.
 //
@@ -3428,18 +2791,6 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	if job.State == nil {
 		job.State = map[string]interface{}{}
 	}
-	unitPhase := job.GetUnitPipelinePhase()
-	// Default execution is auto flow up to Critic Lite.
-	// Deep dive (P5) must be explicitly requested via unitDiveRequest.
-	if unitPhase == models.UnitPipelinePhaseP5 && !job.HasUnitDiveRequest() {
-		unitPhase = models.UnitPipelinePhaseP3
-		job.SetUnitPipelinePhase(unitPhase)
-		e.logLine(ctx, job, "info", "> unit pipeline phase reset to P3 (P5 requires explicit unitDiveRequest)")
-	}
-	if _, ok := job.State[models.StateKeyUnitPipelinePhase]; !ok {
-		job.SetUnitPipelinePhase(unitPhase)
-	}
-
 	// Optional task focus modules (specialties) requested by UI/lens.
 	// These are stored in job.State to keep schemas stable.
 	specialties := []string(nil)
@@ -3468,6 +2819,14 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			lensID = strings.TrimSpace(v)
 		}
 	}
+	// Ensure assembly completion is checked when job reaches a terminal state,
+	// regardless of which code path caused the failure. Without this, a single
+	// rejected/failed job can hang the entire cascade forever.
+	defer func() {
+		if isTerminalScoutJob(job) && lensID != "" {
+			e.checkAndPublishAssemblyCompletion(context.Background(), tenantID, projectID, lensID)
+		}
+	}()
 	cascadeID := ""
 	if job.State != nil {
 		if v, ok := job.State["cascadeRootJobId"].(string); ok {
@@ -3553,12 +2912,6 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	if !policy.ScoutComposablePipelineEnabled() {
 		domainModesForComposable = nil
 	}
-	if job.State != nil {
-		if existingUnits := parseUnitProfilesState(job.State[models.StateKeyUnitProfiles]); len(existingUnits) > 0 {
-			chainContextForPrompt += buildUnitProfilesPromptContext(existingUnits)
-		}
-	}
-
 	// FRESHNESS CHECK: Проверяем, есть ли свежие данные
 	// Используем уже канонизированный и дедуплицированный путь
 	// Это предотвращает повторные дорогие поиски, если данные недавно обновлялись (волны/затухание)
@@ -3863,6 +3216,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	var allSourceIDs []string
 	var allDocumentIDs []string
 	var sourceResults []*ExecuteDataSourceResult
+	seenSourceContentHashes := map[string]struct{}{}
 
 	// Получаем источники из плана
 	for _, source := range sourcePlan.Sources {
@@ -3876,9 +3230,22 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> source failed %s (%s): %v", strings.TrimSpace(source.ID), strings.TrimSpace(source.Kind), err))
 			continue
 		}
-		if result.Content != "" {
-			aggregatedContent += result.Content + "\n\n"
-			sourceResults = append(sourceResults, result)
+		if strings.TrimSpace(result.Content) != "" {
+			contentHash := trace.HashText(strings.TrimSpace(result.Content))
+			if contentHash != "" {
+				if _, seen := seenSourceContentHashes[contentHash]; !seen {
+					seenSourceContentHashes[contentHash] = struct{}{}
+					if block := buildSourceContentBlock(result); strings.TrimSpace(block) != "" {
+						aggregatedContent = appendAggregatedContentBlock(aggregatedContent, block, maxAggregatedContentChars)
+						sourceResults = append(sourceResults, result)
+					}
+				}
+			} else {
+				if block := buildSourceContentBlock(result); strings.TrimSpace(block) != "" {
+					aggregatedContent = appendAggregatedContentBlock(aggregatedContent, block, maxAggregatedContentChars)
+					sourceResults = append(sourceResults, result)
+				}
+			}
 		}
 		allSourceIDs = append(allSourceIDs, result.SourceIDs...)
 		allDocumentIDs = append(allDocumentIDs, result.DocumentIDs...)
@@ -4083,24 +3450,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		if scoutResult != nil {
 			scoutResult.Relations = filterDiscoveredRelationsByDomainModes(scoutResult.Relations, domainModesForScout)
-			scoutResult.Relations = ensureUnitQualifiersForRelations(scoutResult.Relations, domainModesForScout)
-			scoutResult.Relations = applyUnitTemplateContractToRelations(scoutResult.Relations, &scoutResult.Fragment, job.TargetCanonicalPath)
 			scoutResult.Relations = filterDiscoveredRelationsByFacilityQualifier(scoutResult.Relations, &scoutResult.Fragment, job.TargetCanonicalPath)
-			e.persistUnitGraphSnapshotFromRelations(ctx, job, strings.TrimSpace(job.TargetCanonicalPath), scoutResult.Relations)
-			derivedUnits := deriveSourceUnitProfilesFromRelations(strings.TrimSpace(job.TargetCanonicalPath), scoutResult.Relations)
-			scoutResult.UnitProfiles = mergeUnitProfiles(scoutResult.UnitProfiles, derivedUnits, strings.TrimSpace(job.TargetCanonicalPath))
-			if len(scoutResult.UnitProfiles) > 0 {
-				if job.State == nil {
-					job.State = map[string]interface{}{}
-				}
-				existingUnits := parseUnitProfilesState(job.State[models.StateKeyUnitProfiles])
-				mergedUnits := mergeUnitProfiles(existingUnits, scoutResult.UnitProfiles, strings.TrimSpace(job.TargetCanonicalPath))
-				job.State[models.StateKeyUnitProfiles] = mergedUnits
-				chainContextForPrompt += buildUnitProfilesPromptContext(mergedUnits)
-				setFragmentUnitProfilesQualifier(&scoutResult.Fragment, mergedUnits, inferDomainCanonicalPathForUnitStorage(job), shouldPersistUnitProfilesToGlobal(job))
-				_ = e.scoutingJobsRepo.Update(ctx, job)
-			}
-			if !supplyChainsEnabled(domainModesForScout, specialties) {
+			if !supplyChainsEnabled(job.TargetCanonicalPath, scoutResult.Fragment.Type, domainModesForScout, specialties) {
 				scoutResult.SupplyChains = nil
 			}
 		}
@@ -4145,7 +3496,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") {
 			graphContext = e.buildGraphSkeletonContext(ctx, job.TargetCanonicalPath)
 		}
-		validationResult, err = e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, aggregatedContent, specialties, graphContext, domainModesForComposable, unitPhase)
+		validationResult, err = e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, criticSourceContent(aggregatedContent), specialties, graphContext, domainModesForComposable)
 		if err != nil {
 			// Логируем ошибку, но не останавливаем процесс (fail-open с низким confidence)
 			fmt.Printf("[ScoutEngine] critic validation error (fail-open): jobId=%s target=%s err=%v\n",
@@ -4192,6 +3543,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	}
 	if validationResult != nil {
+		beforeMissingInfo := len(validationResult.MissingInfo)
 		facilityQualifier := resolveFacilityQualifierSemantic(extractedFragment, job.TargetCanonicalPath)
 		if facilityQualifier == facilityQualifierSemanticNone {
 			facilityQualifier = resolveFacilityQualifierSemantic(existingFragment, job.TargetCanonicalPath)
@@ -4200,6 +3552,11 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			validationResult.MissingInfo = appendMissingInfoUnique(validationResult.MissingInfo, q)
 		}
 		validationResult.MissingInfo = filterMissingInfoByFacilityQualifier(validationResult.MissingInfo, facilityQualifier)
+		validationResult.MissingInfo = filterMissingInfoByFragmentRelevance(extractedFragment, validationResult.MissingInfo)
+		validationResult.MissingInfo = limitMissingInfoQuestions(validationResult.MissingInfo, missingInfoLimitForFragment(extractedFragment))
+		if afterMissingInfo := len(validationResult.MissingInfo); afterMissingInfo != beforeMissingInfo {
+			e.logLine(ctx, job, "info", fmt.Sprintf("> missingInfo normalized (%s): %d -> %d", RuntimeContractMissingInfoRelevance, beforeMissingInfo, afterMissingInfo))
+		}
 	}
 
 	// MARKET METRICS NORMALIZATION (best-effort):
@@ -4363,12 +3720,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}
 		}
 		// Phase 1 (domain expansion / research): ResearchPipeline when domain mode set, else EnrichFragmentWithGrounding; allowlist applied when appending relations.
-		enrichedFragment, newRelations, newSupplyChains, researchGroundingEvidence, err := e.researchAgent.EnrichFragmentWithGroundingWithDomainModes(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities, domainModesForComposable, unitPhase)
+		enrichedFragment, newRelations, newSupplyChains, researchGroundingEvidence, researchRawContent, err := e.researchAgent.EnrichFragmentWithGroundingWithDomainModes(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities, domainModesForComposable)
 		if err == nil {
 			researchSucceeded = true
 			groundingEvidence = mergeGroundingEvidence(groundingEvidence, researchGroundingEvidence)
-			newRelations = ensureUnitQualifiersForRelations(newRelations, domainModesForScout)
-			newRelations = applyUnitTemplateContractToRelations(newRelations, extractedFragment, job.TargetCanonicalPath)
 			newRelations = filterDiscoveredRelationsByFacilityQualifier(newRelations, extractedFragment, job.TargetCanonicalPath)
 			// Apply allowlist by domain mode: only persist relations (and supply chains) allowed for this job's mode(s).
 			if len(newRelations) > 0 || len(newSupplyChains) > 0 {
@@ -4389,23 +3744,15 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					// Supply chains are gated separately via supplyChainsEnabled().
 				}
 			}
-			if !supplyChainsEnabled(domainModesForScout, specialties) {
+			fragTypeForSupplyChain := models.FragmentType("")
+			if extractedFragment != nil {
+				fragTypeForSupplyChain = extractedFragment.Type
+			}
+			if !supplyChainsEnabled(job.TargetCanonicalPath, fragTypeForSupplyChain, domainModesForScout, specialties) {
 				newSupplyChains = nil
 			}
-			e.persistUnitGraphSnapshotFromRelations(ctx, job, strings.TrimSpace(job.TargetCanonicalPath), newRelations)
-			derivedUnits := deriveSourceUnitProfilesFromRelations(strings.TrimSpace(job.TargetCanonicalPath), newRelations)
-			if len(derivedUnits) > 0 {
-				if job.State == nil {
-					job.State = map[string]interface{}{}
-				}
-				existingUnits := parseUnitProfilesState(job.State[models.StateKeyUnitProfiles])
-				mergedUnits := mergeUnitProfiles(existingUnits, derivedUnits, strings.TrimSpace(job.TargetCanonicalPath))
-				job.State[models.StateKeyUnitProfiles] = mergedUnits
-				if extractedFragment != nil {
-					setFragmentUnitProfilesQualifier(extractedFragment, mergedUnits, inferDomainCanonicalPathForUnitStorage(job), shouldPersistUnitProfilesToGlobal(job))
-				}
-				chainContextForPrompt += buildUnitProfilesPromptContext(mergedUnits)
-				_ = e.scoutingJobsRepo.Update(ctx, job)
+			if researchContext := buildResearchContextBlock(researchRawContent, newRelations, newSupplyChains, researchGroundingEvidence); strings.TrimSpace(researchContext) != "" {
+				aggregatedContent = appendAggregatedContentBlock(aggregatedContent, researchContext, maxAggregatedContentChars)
 			}
 			if internalFirstGroundingEnabled() {
 				if researchGroundingEvidence != nil {
@@ -4487,6 +3834,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				"fragmentCanonicalPathAfter":  newCP,
 				"newRelationsN":               len(newRelations),
 				"newSupplyChainsN":            len(newSupplyChains),
+				"aggregatedContentLen":        len(aggregatedContent),
+				"aggregatedContentSha1":       trace.HashText(aggregatedContent),
 				"relationsTopCanonicalPaths": func() []string {
 					out := make([]string, 0, len(newRelations))
 					for _, r := range newRelations {
@@ -4546,7 +3895,7 @@ SKIP_RESEARCH:
 			chains = scoutResult.SupplyChains
 		}
 		// Phase 2 (domain validation / critic): re-validation after research — CriticPipeline when domain mode set.
-		revalidationResult, err := e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, rels, chains, aggregatedContent, specialties, graphContext, domainModesForComposable, unitPhase)
+		revalidationResult, err := e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, rels, chains, criticSourceContent(aggregatedContent), specialties, graphContext, domainModesForComposable)
 		if err != nil {
 			fmt.Printf("[ScoutEngine] critic re-validation error (fail-open): jobId=%s target=%s err=%v\n",
 				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
@@ -4561,29 +3910,30 @@ SKIP_RESEARCH:
 		if err := e.transition(ctx, job, models.ScoutingJobStateResolution, 0.85, "resolution"); err != nil {
 			return fmt.Errorf("failed to transition to RESOLUTION: %w", err)
 		}
+		e.logLine(ctx, job, "info", fmt.Sprintf("> resolver resolving %d conflicts", len(validationResult.Conflicts)))
 
-		resolutionResult, err := e.resolverAgent.Resolve(ctx, agents.ResolutionRequest{
+		resolverCtx, resolverCancel := context.WithTimeout(ctx, 3*time.Minute)
+		defer resolverCancel()
+		resolutionResult, err := e.resolverAgent.Resolve(resolverCtx, agents.ResolutionRequest{
 			ScoutData:       extractedFragment,
 			CriticArguments: validationResult.Conflicts,
 			SourceContent:   aggregatedContent,
 		})
 		if err != nil {
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> resolver failed: %v", err))
 			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "resolution_failed")
 			return fmt.Errorf("failed to resolve conflicts: %w", err)
 		}
+		e.logLine(ctx, job, "info", fmt.Sprintf("> resolver verdict: %s (confidence=%.2f)", strings.TrimSpace(resolutionResult.Verdict), resolutionResult.Confidence))
 
 		switch resolutionResult.Verdict {
 		case "Rejected":
 			_ = e.transition(ctx, job, models.ScoutingJobStateRejected, 1.0, "rejected")
 			return fmt.Errorf("data rejected by resolver: %s", resolutionResult.Reasoning)
 		case "Low_Confidence":
-			// Продолжаем с низкой уверенностью
 			if resolutionResult.ResolvedData != nil {
-				// Обновляем extractedFragment с исправленными данными из Resolver
 				if resolvedJSON, ok := resolutionResult.ResolvedData.(map[string]interface{}); ok {
-					// Извлекаем state из resolvedJSON если он есть
 					if resolvedState, ok := resolvedJSON["state"].(map[string]interface{}); ok {
-						// Обновляем метрики в extractedFragment.State
 						for metricName, metricValue := range extractedFragment.State {
 							if resolvedMetricValue, ok := resolvedState[metricName].(map[string]interface{}); ok {
 								if value, ok := resolvedMetricValue["value"].(float64); ok {
@@ -4643,15 +3993,30 @@ SKIP_RESEARCH:
 			}
 		}
 
-		metricsAgent := agents.NewMetricsAgent(e.aiExecutor)
-		state, err := metricsAgent.ComputeState(ctx, extractedFragment, sourceURLs, aggregatedContent, scoutResult.Relations, requested)
-		if err != nil {
-			fmt.Printf("[ScoutEngine] MetricsAgent failed (keeping existing state, len=%d): %v\n", len(extractedFragment.State), err)
-		} else if len(state) > 0 {
-			// IMPORTANT: Do NOT replace the entire state map.
-			// Research (especially for MARKET) can populate absolute market metrics (TAM/CAGR/HHI/CR4) which must be preserved.
-			for k, v := range state {
-				extractedFragment.State[k] = v
+		requiredMetricPaths := agents.RequiredMetricPathsForType(extractedFragment.Type, requested)
+		refreshReasons := evaluateMetricsRefreshContractReasons(extractedFragment, requiredMetricPaths, time.Now().UTC())
+		if len(refreshReasons) == 0 {
+			e.logLine(ctx, job, "info", fmt.Sprintf("> metrics skipped (%s: fresh/complete): required=%d", RuntimeContractMetricsRefresh, len(requiredMetricPaths)))
+		} else {
+			var metricRelations []agents.DiscoveredRelation
+			if scoutResult != nil {
+				metricRelations = scoutResult.Relations
+			}
+			metricsAgent := agents.NewMetricsAgent(e.aiExecutor)
+			e.logLine(ctx, job, "info", fmt.Sprintf("> computing risk metrics (%s; reasons=%d)", RuntimeContractMetricsRefresh, len(refreshReasons)))
+			metricsCtx, metricsCancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer metricsCancel()
+			state, err := metricsAgent.ComputeState(metricsCtx, extractedFragment, sourceURLs, aggregatedContent, metricRelations, requested)
+			if err != nil {
+				fmt.Printf("[ScoutEngine] MetricsAgent failed (keeping existing state, len=%d): %v\n", len(extractedFragment.State), err)
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> metrics failed (keeping existing): %v", err))
+			} else if len(state) > 0 {
+				// IMPORTANT: Do NOT replace the entire state map.
+				// Research (especially for MARKET) can populate absolute market metrics (TAM/CAGR/HHI/CR4) which must be preserved.
+				for k, v := range state {
+					extractedFragment.State[k] = v
+				}
+				e.logLine(ctx, job, "info", fmt.Sprintf("> metrics computed: %d entries", len(state)))
 			}
 		}
 	}
@@ -5414,7 +4779,6 @@ SKIP_RESEARCH:
 		job.State = map[string]interface{}{}
 	}
 	job.State = policyTracker.ApplyToState(job.State)
-	e.persistUnitDiveResultFromJobState(ctx, job, effectiveCanonicalPath, validationResult.Confidence, scoutResult.Relations, scoutResult.SupplyChains)
 	// Persist finalized job outputs into LensArtifacts (Phase 2 input).
 	e.persistLensArtifactsFromJobState(ctx, job)
 	e.runPolicyAudit(ctx, job)
@@ -5975,6 +5339,44 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 	if strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/") && e.govHierarchyBuilder != nil {
 		if err := e.govHierarchyBuilder.EnsureGovHierarchy(ctx, fragment.ID, fragment); err != nil {
 			fmt.Printf("[ScoutEngine] Warning: failed to infer gov hierarchy fields for %s: %v\n", fragment.CanonicalPath, err)
+		}
+	}
+
+	// Sphere and resolution inference (best-effort, only when empty)
+	if len(fragment.SpherePaths) == 0 {
+		qualifiers := make(map[string]interface{})
+		for k, v := range fragment.Qualifiers {
+			qualifiers[k] = v
+		}
+		if len(fragment.MarketSegmentNormDomains) > 0 {
+			qualifiers["marketSegmentNormDomains"] = fragment.MarketSegmentNormDomains
+		}
+		if fragment.MarketDomain != "" {
+			qualifiers["marketDomain"] = fragment.MarketDomain
+		}
+		if len(fragment.IndustryPaths) > 0 {
+			qualifiers["industryPaths"] = fragment.IndustryPaths
+		}
+		if fragment.CommunityType != "" {
+			qualifiers["communityType"] = fragment.CommunityType
+		}
+		if fragment.GeoFeatureType != "" {
+			qualifiers["geoFeatureType"] = fragment.GeoFeatureType
+		}
+		if inferred := InferSpherePaths(fragment.CanonicalPath, fragment.Type, fragment.GovType, qualifiers); len(inferred) > 0 {
+			fragment.SpherePaths = inferred
+		}
+	}
+	if fragment.ResolutionHint == "" {
+		parentPath := fragment.ParentPath
+		if parentPath == "" && fragment.ParentGovPath != "" {
+			parentPath = fragment.ParentGovPath
+		}
+		if parentPath == "" && fragment.ParentMarketPath != "" {
+			parentPath = fragment.ParentMarketPath
+		}
+		if h := InferResolutionHint(fragment.Type, fragment.GovType, fragment.CanonicalPath, parentPath); h != "" {
+			fragment.ResolutionHint = h
 		}
 	}
 }

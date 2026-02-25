@@ -93,6 +93,14 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 		identifiers = append(identifiers, "/id/"+key+"/"+val)
 	}
 
+	// SpherePaths from fragment (first-class field)
+	for _, p := range f.SpherePaths {
+		p = strings.TrimSpace(p)
+		if p != "" && strings.HasPrefix(p, "/sphere/") {
+			spheres = append(spheres, p)
+		}
+	}
+
 	// Org size (coarse bucket) → /orgsize/{value}
 	if s := slugToken(strings.TrimSpace(f.OrgSize)); s != "" {
 		other = append(other, "/orgsize/"+s)

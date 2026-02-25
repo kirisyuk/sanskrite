@@ -1,6 +1,10 @@
 package policy
 
-import horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+import (
+	"strings"
+
+	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+)
 
 // EdgeDirectionAutoFix describes deterministic rewrite for an invalid edge triple.
 type EdgeDirectionAutoFix struct {
@@ -12,10 +16,21 @@ type EdgeDirectionAutoFix struct {
 
 // ResolveEdgeDirectionAutoFix returns deterministic auto-fix for known invalid triples.
 // These rules are shared across policy checker, ingestion-time canonicalization and batch tools.
+// sourcePath/targetPath are optional; when provided, they enable GOV-aware exemptions.
 func ResolveEdgeDirectionAutoFix(
 	edgeType horizonmodels.DependencyType,
 	sourceType, targetType horizonmodels.FragmentType,
+	paths ...string,
 ) (EdgeDirectionAutoFix, bool) {
+	sourcePath := ""
+	targetPath := ""
+	if len(paths) > 0 {
+		sourcePath = paths[0]
+	}
+	if len(paths) > 1 {
+		targetPath = paths[1]
+	}
+	_ = targetPath
 	switch {
 	case edgeType == horizonmodels.DependencyTypeDominates &&
 		sourceType == horizonmodels.FragmentTypeGeoRegion &&
@@ -37,7 +52,8 @@ func ResolveEdgeDirectionAutoFix(
 		}, true
 	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
 		sourceType == horizonmodels.FragmentTypeOrganization &&
-		targetType == horizonmodels.FragmentTypeMarket:
+		targetType == horizonmodels.FragmentTypeMarket &&
+		!isGovRegulatorEdge(edgeType, sourcePath):
 		return EdgeDirectionAutoFix{
 			NewType:    horizonmodels.DependencyTypeParticipatesIn,
 			ShouldSwap: false,
@@ -46,7 +62,8 @@ func ResolveEdgeDirectionAutoFix(
 		}, true
 	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
 		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeOrganization:
+		targetType == horizonmodels.FragmentTypeOrganization &&
+		!isGovRegulatorEdge(edgeType, targetPath):
 		return EdgeDirectionAutoFix{
 			NewType:    horizonmodels.DependencyTypeParticipatesIn,
 			ShouldSwap: true,
@@ -169,4 +186,17 @@ func ResolveEdgeDirectionAutoFix(
 	default:
 		return EdgeDirectionAutoFix{}, false
 	}
+}
+
+// govRegulatorEdgeTypes are edge types that GOV entities legitimately use
+// towards MARKET targets. These must NOT be rewritten to PARTICIPATES_IN.
+var govRegulatorEdgeTypes = map[horizonmodels.DependencyType]bool{
+	horizonmodels.DependencyTypeRegulates:      true,
+	horizonmodels.DependencyTypeControlsAccess: true,
+	horizonmodels.DependencyTypeInfluences:     true,
+	horizonmodels.DependencyTypeAdministers:    true,
+}
+
+func isGovRegulatorEdge(edgeType horizonmodels.DependencyType, entityPath string) bool {
+	return strings.HasPrefix(entityPath, "/gov/") && govRegulatorEdgeTypes[edgeType]
 }

@@ -55,6 +55,26 @@ func TestNormalizeFragmentNames(t *testing.T) {
 	}
 }
 
+func TestNormalizeFragmentNames_HumanizesCanonicalLeafSlug(t *testing.T) {
+	labels := map[string]string{"en": "ri-chol-man"}
+	ids := map[string]string{
+		"legalName": "ri-chol-man",
+		"shortName": "ri-chol-man",
+	}
+
+	nLabels, nIDs := NormalizeFragmentNames("/person/ri-chol-man", labels, ids)
+	const want = "Ri Chol Man"
+	if nLabels["en"] != want {
+		t.Fatalf("labels.en = %q, want %q", nLabels["en"], want)
+	}
+	if nIDs["legalName"] != want {
+		t.Fatalf("legalName = %q, want %q", nIDs["legalName"], want)
+	}
+	if nIDs["shortName"] != want {
+		t.Fatalf("shortName = %q, want %q", nIDs["shortName"], want)
+	}
+}
+
 func TestNormalizeRelationNames(t *testing.T) {
 	name, legal, short := NormalizeRelationNames("ORGANIZATION", "T-Bank (formerly Tinkoff)", "", "")
 	if name != "T-Bank" {

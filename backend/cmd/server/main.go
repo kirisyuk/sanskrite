@@ -663,27 +663,19 @@ func main() {
 			s.discoveryHandler = s.discoveryHandler.WithVertexSearch(vertexSearchClient)
 		}
 
-		// Настраиваем автоматическую синхронизацию документов с Vertex AI Search
+		// Настраиваем автоматическую синхронизацию документов с Vertex AI Search.
+		// Передаём конкретный gs:// URI (не wildcard), чтобы не превышать лимит Discovery Engine (1000 файлов).
 		if vertexSearchClient != nil && docsBucket != "" {
-			docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
-				gcsPath := fmt.Sprintf("gs://%s/%s/**", docsBucket, tenantID)
-				importReq := &ai.ImportDocumentsRequest{
-					GCSPath:            gcsPath,
-					ReconciliationMode: "INCREMENTAL",
+			docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, gcsURI string) (string, error) {
+				if strings.TrimSpace(gcsURI) == "" {
+					return "", nil
 				}
-				operationName, err := vertexSearchClient.ImportDocuments(ctx, importReq)
+				operationName, err := vertexSearchClient.ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "content")
 				if err != nil {
-					logger.Printf("[VertexAISearch] Failed to trigger sync for tenant %s: %v", tenantID, err)
+					logger.Printf("[VertexAISearch] Failed to trigger sync for %s: %v", gcsURI, err)
 					return "", err
 				}
-				logger.Printf("[VertexAISearch] Sync triggered for tenant %s: operation=%s", tenantID, operationName)
-				go func(opName string, tid string) {
-					trackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-					defer cancel()
-					if err := ai.TrackImportOperation(trackCtx, vertexSearchClient, docsRepo, opName, tid, 5*time.Minute); err != nil {
-						logger.Printf("[VertexAISearch] Failed to track operation %s: %v", opName, err)
-					}
-				}(operationName, tenantID)
+				logger.Printf("[VertexAISearch] Sync triggered: operation=%s", operationName)
 				return operationName, nil
 			})
 			logger.Printf("Vertex AI Search auto-sync enabled: documents will sync automatically after GCS upload")
@@ -1109,8 +1101,6 @@ func main() {
 		horizonProfilePoliciesRepo := horizonrepo.NewFragmentProfileRefreshPoliciesRepository(fsClient.Client())
 		horizonLensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(fsClient.Client())
 		horizonDomainAnswerSnapshotsRepo := horizonrepo.NewDomainAnswerSnapshotsRepository(fsClient.Client())
-		horizonUnitGraphSnapshotsRepo := horizonrepo.NewUnitGraphSnapshotsRepository(fsClient.Client())
-		horizonUnitDiveResultsRepo := horizonrepo.NewUnitDiveResultsRepository(fsClient.Client())
 
 		// Horizon spend ledger (actual GenAI $ attribution) for budget enforcement.
 		horizonSpendLedger := horizonrepo.NewHorizonSpendLedger(fsClient.Client())
@@ -1320,14 +1310,11 @@ func main() {
 		if gcsClient != nil && docsBucket != "" {
 			ontologyFactsRepo = ontologyFactsRepo.WithStorage(gcsClient, docsBucket)
 			if vertexSearchClient != nil {
-				ontologyFactsRepo = ontologyFactsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
-					gcsPath := fmt.Sprintf("gs://%s/%s/ontology_facts/**", docsBucket, tenantID)
-					importReq := &ai.ImportDocumentsRequest{
-						GCSPath:            gcsPath,
-						ReconciliationMode: "INCREMENTAL",
-						DataSchema:         "document",
+				ontologyFactsRepo = ontologyFactsRepo.WithVertexSearchSync(func(ctx context.Context, gcsURI string) (string, error) {
+					if strings.TrimSpace(gcsURI) == "" {
+						return "", nil
 					}
-					return vertexSearchClient.ImportDocuments(ctx, importReq)
+					return vertexSearchClient.ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "document")
 				})
 				logger.Printf("Ontology facts: Vertex AI Search sync enabled")
 			}
@@ -1340,8 +1327,24 @@ func main() {
 				gnForFacts = geonames.NewCachedClient(geonames.NewAdapter(geonamesClient), externalCacheRepo, geonames.CacheOptionsFromEnv())
 			}
 			var gcForFacts ontology.GeocodingClientInterface
-			if gcClient := httphandlers.GetGoogleGeocodingClientFromEnv(); gcClient != nil {
-				gcForFacts = geocoding.NewCachedClient(geocoding.NewAdapter(gcClient), externalCacheRepo, geocoding.CacheOptionsFromEnv())
+			{
+				nomRaw := geocoding.NominatimOptionsFromEnv()
+				var nomBase ontology.GeocodingClientInterface = nomRaw
+				if horizonTelemetryRepo != nil {
+					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
+				}
+				nomCached := geocoding.NewCachedClient(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+
+				var googleFacts ontology.GeocodingClientInterface
+				if gcClient := httphandlers.GetGoogleGeocodingClientFromEnv(); gcClient != nil {
+					gcAdapter := geocoding.NewAdapter(gcClient)
+					var gcBase ontology.GeocodingClientInterface = gcAdapter
+					if horizonTelemetryRepo != nil {
+						gcBase = horizontelemetry.NewGeocodingTelemetryWrapper(gcAdapter, horizonTelemetryRepo)
+					}
+					googleFacts = geocoding.NewCachedClient(gcBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+				}
+				gcForFacts = geocoding.NewFallbackClient(nomCached, googleFacts, logger)
 			}
 			if gnForFacts != nil || gcForFacts != nil {
 				enricher := horizonenrich.NewFactCoordinateEnricher(gnForFacts, gcForFacts).WithFragmentsRepo(horizonFragmentsRepo)
@@ -1403,9 +1406,6 @@ func main() {
 			horizonService.SetLensService(lensService)
 			horizonService.SetLensArtifactsRepo(horizonLensArtifactsRepo)
 			horizonService.SetDomainAnswerSnapshotsRepo(horizonDomainAnswerSnapshotsRepo)
-			horizonService.SetUnitGraphSnapshotsRepo(horizonUnitGraphSnapshotsRepo)
-			horizonService.SetUnitDiveResultsRepo(horizonUnitDiveResultsRepo)
-
 			// Initialize Propagation subsystem
 			propagationEngine := horizonpropagation.NewPropagationEngine(
 				horizonFragmentsRepo,
@@ -1791,22 +1791,46 @@ func main() {
 				scoutEngine.WithGeoNamesClient(geonamesClientForHorizon)
 			}
 			// Wire OpenCorporates into Scout for organization enrichment (registry IDs).
-			// Enable via HORIZON_ENABLE_OPEN_CORPORATES=true; API token optional (OPEN_CORPORATES_API_TOKEN).
-			if ocClient := httphandlers.GetOpenCorporatesClientFromEnv(); ocClient != nil {
+			// Requires OPEN_CORPORATES_API_TOKEN (API returns 401 without it). Set HORIZON_ENABLE_OPEN_CORPORATES=false to disable.
+			ocClient := httphandlers.GetOpenCorporatesClientFromEnv()
+			if ocClient != nil && ocClient.IsConfigured() {
 				var ocForScout horizonenrich.OpenCorporatesClientInterface = ocClient
 				if horizonTelemetryRepo != nil {
 					ocForScout = horizontelemetry.NewOpenCorporatesTelemetryWrapper(ocClient, horizonTelemetryRepo)
 				}
 				scoutEngine.WithOpenCorporatesClient(ocForScout)
 				logger.Printf("OpenCorporates client wired (org enrichment; enable with HORIZON_ENABLE_OPEN_CORPORATES=true)")
+			} else {
+				logger.Printf("OpenCorporates skipped: OPEN_CORPORATES_API_TOKEN not set (API requires token; add open_corporates_api_token secret)")
 			}
-			// Wire Google Geocoding into Scout for address-to-coordinates (org/facility/gov).
-			// Uses GOOGLE_MAPS_API_KEY from env or Secret Manager. Cached via external_data_cache.
-			if gcClient := httphandlers.GetGoogleGeocodingClientFromEnv(); gcClient != nil {
-				gcAdapter := geocoding.NewAdapter(gcClient)
-				gcCached := geocoding.NewCachedClient(gcAdapter, externalCacheRepo, geocoding.CacheOptionsFromEnv())
-				scoutEngine.WithGeocodingClient(gcCached)
-				logger.Printf("Google Geocoding client wired (address-to-coordinates for org/facility/gov)")
+			// Wire geocoding into Scout for address-to-coordinates (org/facility/gov).
+			// Primary: Nominatim (free, OSM). Fallback: Google Geocoding (paid, GOOGLE_MAPS_API_KEY).
+			// Both wrapped with telemetry and cached via external_data_cache.
+			{
+				var nominatimClient ontology.GeocodingClientInterface
+				nomRaw := geocoding.NominatimOptionsFromEnv()
+				var nomBase ontology.GeocodingClientInterface = nomRaw
+				if horizonTelemetryRepo != nil {
+					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
+				}
+				nominatimClient = geocoding.NewCachedClient(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+				logger.Printf("Nominatim geocoding client wired (primary, free OSM-based)")
+
+				var googleClient ontology.GeocodingClientInterface
+				if gcRaw := httphandlers.GetGoogleGeocodingClientFromEnv(); gcRaw != nil {
+					gcAdapter := geocoding.NewAdapter(gcRaw)
+					var gcBase ontology.GeocodingClientInterface = gcAdapter
+					if horizonTelemetryRepo != nil {
+						gcBase = horizontelemetry.NewGeocodingTelemetryWrapper(gcAdapter, horizonTelemetryRepo)
+					}
+					googleClient = geocoding.NewCachedClient(gcBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+					logger.Printf("Google Geocoding client wired (fallback for Nominatim misses)")
+				}
+
+				combined := geocoding.NewFallbackClient(nominatimClient, googleClient, logger)
+				if combined != nil {
+					scoutEngine.WithGeocodingClient(combined)
+				}
 			}
 			// Unified ontology facts emitter: allows Scout to persist minimal OntologyFacts even when sources pipeline is paused.
 			scoutEngine.WithFactEmitter(ontology.NewFactEmitter(ontologyFactsRepo, pub))
@@ -1849,9 +1873,6 @@ func main() {
 			scoutEngine.WithLensArtifactsRepo(horizonLensArtifactsRepo)
 			// Wire DomainAnswerSnapshotsRepository for DomainContractEngine publish phase.
 			scoutEngine.WithDomainAnswerSnapshotsRepo(horizonDomainAnswerSnapshotsRepo)
-			// Wire unit-first persistent stores (L1 unit graph + dive artifacts).
-			scoutEngine.WithUnitGraphSnapshotsRepo(horizonUnitGraphSnapshotsRepo)
-			scoutEngine.WithUnitDiveResultsRepo(horizonUnitDiveResultsRepo)
 
 			// Подключаем триггер распространения изменений
 			scoutEngine.WithPropagationTrigger(func(ctx context.Context, fragmentID string) error {
@@ -2045,8 +2066,6 @@ func main() {
 				WithOntologyFactsRepo(ontologyFactsRepo).
 				WithExposurePathsRepo(horizonExposurePathsRepo).
 				WithRiskJobsRepo(riskJobsRepo).
-				WithUnitGraphRepo(horizonUnitGraphSnapshotsRepo).
-				WithUnitDiveRepo(horizonUnitDiveResultsRepo).
 				WithProfilesHandler(profilesHandler).
 				WithPropagationProfileLookup(propagationProfileLookup)
 
@@ -2215,21 +2234,29 @@ func main() {
 		defer cancel()
 
 		if err := scoutEngine.ExecuteScoutingJob(execCtx, job); err != nil {
-			// Log detailed error for debugging
 			logger.Printf("ERROR: Scout job execution failed: jobId=%s, canonicalPath=%s, error=%v", jobID, job.TargetCanonicalPath, err)
 
-			// Retry behavior:
-			// - transient failures: return 500 to let Cloud Tasks retry
-			// - last attempt: mark failed and ACK (200) so it becomes "poison" (no more retries)
+			// If the job is already in a terminal state (rejected/failed/verified),
+			// ACK immediately — retrying won't change the outcome.
+			refreshedJob, _ := horizonService.ScoutingJobs().Get(context.Background(), jobID)
+			if refreshedJob != nil {
+				switch refreshedJob.CurrentState {
+				case horizonmodels.ScoutingJobStateRejected, horizonmodels.ScoutingJobStateFailed, horizonmodels.ScoutingJobStateVerified:
+					logger.Printf("Scout job %s is terminal (state=%s), ACK to stop retries", jobID, refreshedJob.CurrentState)
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(fmt.Sprintf("terminal: %s", refreshedJob.CurrentState)))
+					return
+				}
+			}
+
+			// Transient failure: return 500 to let Cloud Tasks retry.
 			retryCount := 0
 			if v := strings.TrimSpace(r.Header.Get("X-CloudTasks-TaskRetryCount")); v != "" {
 				if n, perr := strconv.Atoi(v); perr == nil && n >= 0 {
 					retryCount = n
 				}
 			}
-			// MaxAttempts is configured on the queue (we set to 5). On the last attempt, retryCount will be 4.
 			if retryCount >= 4 {
-				// Best-effort: ensure job is terminal, then ACK to stop retries.
 				logger.Printf("ERROR: Scout job failed after max retries: jobId=%s, marking as failed", jobID)
 				_ = horizonscout.NewScoutWorkflow(agentJobsRepo).TransitionState(context.Background(), jobID, horizonmodels.ScoutingJobStateFailed)
 				w.WriteHeader(http.StatusOK)

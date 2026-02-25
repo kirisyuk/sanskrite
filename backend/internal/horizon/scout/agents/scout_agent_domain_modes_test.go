@@ -39,12 +39,6 @@ func TestBuildExtractionPrompt_EnablesSupplyChainModuleFromDomainMode(t *testing
 	if !strings.Contains(prompt, "targetCanonicalPath MUST NOT start with /domain/") {
 		t.Fatalf("expected scoped guardrail that non-domain relations must not target /domain/")
 	}
-	if !strings.Contains(prompt, "UNIT-FIRST PHASE ORDER (MANDATORY)") {
-		t.Fatalf("expected unit-first phase order block in scoped prompt")
-	}
-	if !strings.Contains(prompt, "\"unitProfiles\"") {
-		t.Fatalf("expected unitProfiles field in extraction task contract")
-	}
 	if strings.Contains(prompt, "RELATIVE_OF") {
 		t.Fatalf("supply_chain scoped prompt must not contain general-only relation taxonomy")
 	}
@@ -69,9 +63,6 @@ func TestBuildExtractionPrompt_GeneralModeKeepsFullRelationCatalog(t *testing.T)
 	}
 	if !strings.Contains(prompt, "RENAMED_TO") {
 		t.Fatalf("general prompt must include org lifecycle relation taxonomy")
-	}
-	if !strings.Contains(prompt, "\"unitProfiles\"") {
-		t.Fatalf("general prompt must still include unitProfiles contract")
 	}
 	if !strings.Contains(prompt, "targetCanonicalPath MUST NOT start with /domain/") {
 		t.Fatalf("general prompt must include non-domain target guardrail for /domain/")
@@ -112,7 +103,7 @@ func TestBuildExtractionPrompt_ContainsCanonicalNamespaceDetails(t *testing.T) {
 		"CANONICAL NAMESPACE DETAILS (strict addendum):",
 		"/segment/{domain}/{vertical}/{geo}",
 		"/media/{platform}/{slug}",
-		"/product/service/{domain}/{subdomain}/{slug}",
+		"/product/{category}/{type}/{stage}/{slug}",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected canonical details to include %q", want)

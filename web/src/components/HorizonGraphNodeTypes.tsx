@@ -308,11 +308,12 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     text: '#5A2E0D', textDark: '#F2D3B8',
     accent: '#8B4513', accentDark: '#C6903D',
   },
+  // Person: fuchsia (distinct from GOV_ORG teal; warm, human)
   'PERSON': {
-    bg: '#CFFAFE', bgDark: '#164E63',
-    border: '#06B6D4', borderDark: '#22D3EE',
-    text: '#155E75', textDark: '#A5F3FC',
-    accent: '#06B6D4', accentDark: '#22D3EE',
+    bg: '#FDF4FF', bgDark: '#4A044E',
+    border: '#D946EF', borderDark: '#E879F9',
+    text: '#86198F', textDark: '#F5D0FE',
+    accent: '#D946EF', accentDark: '#E879F9',
   },
   'TECHNOLOGY': {
     bg: '#EDE9FE', bgDark: '#4C1D95',

@@ -31,9 +31,7 @@ func PreferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 }
 
 // preferredCanonicalPaths returns ordered canonical path candidates derived from names only.
-// For facilities we emit both:
-//  1. /fac/{orgSlug}/{facilitySlug} (if name appears prefixed by an org token)
-//  2. /fac/{facilitySlug} (flat fallback)
+// For facilities we emit canonical /fac/{orgSlug}/{facilitySlug} candidates.
 //
 // Repo/Vertex checks decide which one is stable.
 func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
@@ -60,8 +58,7 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 	case models.FragmentTypeOrganization:
 		// Prefer jurisdiction-scoped org path to reduce cross-country name collisions.
 		// Without jurisdiction in the relation payload, we default to "na".
-		// Also keep legacy /org/{slug} as a secondary candidate for backward compatibility.
-		return []string{"/org/na/" + slug, "/org/" + slug}
+		return []string{"/org/na/" + slug}
 	case models.FragmentTypeFacility:
 		out := make([]string, 0, 2)
 		// Candidate nested: take first word as org token, remainder as facility label.
@@ -74,7 +71,9 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 				out = append(out, "/fac/"+orgSlug+"/"+facSlug)
 			}
 		}
-		out = append(out, "/fac/"+slug)
+		if len(out) == 0 {
+			out = append(out, "/fac/na/"+slug)
+		}
 		return out
 	case models.FragmentTypeProduct:
 		ls := strings.TrimSpace(strings.ToLower(short))
@@ -89,19 +88,17 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 		if err == nil && result != nil && result.CanonicalPath != "" {
 			return []string{result.CanonicalPath}
 		}
-		// Final fallback: flat structure
+		// Final fallback: keep strict hierarchical contract.
 		if slug == "na" {
 			return nil
 		}
-		return []string{"/product/" + slug}
+		return []string{BuildProductCanonicalPath("", "", "", slug)}
 	case models.FragmentTypeProgram:
-		// Preferred: /program/{jurisdiction}/{slug} when jurisdiction can be inferred; fallback: /program/{slug}
-		// We avoid guessing jurisdiction aggressively; LLM/inputs may provide it explicitly.
-		return []string{"/program/" + slug}
+		// Canonical: /program/{jurisdiction}/{slug}. Without explicit jurisdiction, default to global.
+		return []string{"/program/global/" + slug}
 	case models.FragmentTypeMarket:
-		// Preferred (NEW): /market/{geo}/{slug}. Without geo, default to global.
-		// Also keep legacy /market/{slug} as a secondary candidate for backward compatibility.
-		return []string{"/market/global/" + slug, "/market/" + slug}
+		// Canonical L1: /market/{geo}/{domain}. Without geo, default to global.
+		return []string{"/market/global/" + slug}
 	case models.FragmentTypeEvent:
 		return []string{"/event/" + slug}
 	case models.FragmentTypeGeoRegion:
@@ -114,11 +111,10 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 	case models.FragmentTypePerson:
 		return []string{"/person/" + slug}
 	case models.FragmentTypeCommunity:
-		// Preferred: /community/{geo}/{type}/{slug}. Without geo/type, default to global/interest.
-		// Also keep simpler fallback for backward compatibility.
-		return []string{"/community/global/interest/" + slug, "/community/global/" + slug}
+		// Canonical: /community/{geo}/{type}/{slug}. Without explicit geo/type, default to global/interest.
+		return []string{"/community/global/interest/" + slug}
 	default:
-		return []string{"/org/na/" + slug, "/org/" + slug}
+		return []string{"/org/na/" + slug}
 	}
 }
 
@@ -312,17 +308,6 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 				if strings.TrimSpace(pref) == "" {
 					continue
 				}
-				// For nested facilities, ensure the org fragment exists before preferring the nested path.
-				if strings.HasPrefix(pref, "/fac/") {
-					parts := strings.Split(strings.Trim(pref, "/"), "/")
-					// fac/{org}/{fac}
-					if len(parts) == 3 {
-						orgCP := "/org/" + parts[1]
-						if fOrg, err := e.fragmentsRepo.GetByCanonicalPath(ctx, orgCP); err != nil || fOrg == nil || fOrg.ID == "" {
-							continue
-						}
-					}
-				}
 				if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, pref); err == nil && f != nil && f.ID != "" {
 					return e.finalizeRelationCanonicalPath(ctx, rel, pref, relType), nil
 				}
@@ -336,16 +321,6 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		for _, pref := range preferredCanonicalPaths(rel) {
 			if strings.TrimSpace(pref) == "" {
 				continue
-			}
-			// For nested facilities, ensure the org fragment exists before preferring the nested path.
-			if strings.HasPrefix(pref, "/fac/") {
-				parts := strings.Split(strings.Trim(pref, "/"), "/")
-				if len(parts) == 3 {
-					orgCP := "/org/" + parts[1]
-					if fOrg, err := e.fragmentsRepo.GetByCanonicalPath(ctx, orgCP); err != nil || fOrg == nil || fOrg.ID == "" {
-						continue
-					}
-				}
 			}
 			if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, pref); err == nil && f != nil && f.ID != "" {
 				return e.finalizeRelationCanonicalPath(ctx, rel, pref, relType), nil
@@ -642,16 +617,6 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 			if strings.TrimSpace(pref) == "" {
 				continue
 			}
-			// For nested facilities, ensure the org fragment exists before preferring the nested path.
-			if strings.HasPrefix(pref, "/fac/") {
-				parts := strings.Split(strings.Trim(pref, "/"), "/")
-				if len(parts) == 3 {
-					orgCP := "/org/" + parts[1]
-					if fOrg, err := e.fragmentsRepo.GetByCanonicalPath(ctx, orgCP); err != nil || fOrg == nil || fOrg.ID == "" {
-						continue
-					}
-				}
-			}
 			if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, pref); err == nil && f != nil && f.ID != "" {
 				return pref, nil
 			}
@@ -753,11 +718,10 @@ RULES:
   - GovTypes: government, ministry, department, agency, authority, regulator, committee, service, bureau, office, council, commission
   - When canonicalizing, prefer specific agency names over generic ministry references
   - Example: "Saudi FDA" → /gov/sa/sfda (type: authority), parent would be /gov/sa/ministry-of-health
-- Use these namespaces:
+  - Use these namespaces:
   - ORGANIZATION:
     - /org/{iso2|na}/{lowercase-slug}-{legal_form} (companies, NGOs, etc.)
     - /gov/{iso2|na}/{lowercase-slug} (ministries, regulators, agencies, state bodies)
-    - Legacy /org/{lowercase-slug} may exist; prefer /org/{iso2}/{slug}-{legal_form} for NEW entities.
   - PERSON: /person/{lowercase-slug}
   - PRODUCT: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
     - category: "raw" | "component" | "finished" | "service"
@@ -769,36 +733,43 @@ RULES:
       - "Lithium Carbonate" -> /product/raw/chemical/refining/lithium-carbonate
       - "Battery Cell" -> /product/component/electronic/manufacturing/battery-cell
       - "Electric Vehicle" -> /product/finished/mechanical/assembly/electric-vehicle
-    - If category/type/stage cannot be determined, use flat /product/{slug} as fallback
+    - If category/type/stage cannot be determined, still output /product/{category}/{type}/{stage}/{slug} with your best classification
   - PROGRAM:
-    - Prefer /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known (e.g., "Kazakhstan Alem.ai" -> /program/kazakhstan/alem-ai)
+    - Use /program/{jurisdictionSlug}/{programSlug} (e.g., "Kazakhstan Alem.ai" -> /program/kazakhstan/alem-ai)
       - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
       - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
-    - Otherwise use /program/{programSlug}
+    - If jurisdiction is unknown, use "global" as jurisdiction
   - MARKET:
-    - Segment-first preferred: /market/{geo}/{domain}/{vertical}
-      - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
-      - Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
-      - geo: ISO3166-1 alpha2 lowercase, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
-      - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
-      - Example: "Saudi event marketing" → /market/sa/professional-services/event-marketing (if domain is known)
-    - Legacy /market/{geo}/{marketSlug} may exist in older data; do NOT emit legacy for new markets.
-      - Always provide domain/vertical for NEW outputs.
-      - GEOGRAPHY INFERENCE: Extract geo from the market name/context:
-        - If the name mentions a country/region, use that country's ISO2 code
-        - "Saudi event marketing" → /market/sa/event-marketing (NOT /market/global/...)
-        - "German automotive" → /market/de/automotive
-        - Use "global" ONLY when no geographic context is present
+    - HIERARCHY LEVELS:
+      - L1 (domain): /market/{geo}/{domain} — entire sector
+        - "Iraqi agriculture" → /market/iq/agriculture
+      - L2 (vertical): /market/{geo}/{domain}/{vertical} — sub-segment of a domain
+        - "Iraqi crop production" → /market/iq/agriculture/crop-production
+      - L3+ (sub-vertical): /market/{geo}/{domain}/{vertical}/{sub-vertical} — narrower niche under a vertical
+        - "Iraqi rice production" → /market/iq/agriculture/crop-production/rice-production
+        - "Saudi Islamic banking" → /market/sa/finance/banking/islamic-banking
+      - Rule: child path = parent path + exactly one segment
+      - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
+    - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
+    - Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
+    - geo: ISO3166-1 alpha2 lowercase, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
+    - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
+    - GEOGRAPHY INFERENCE: Extract geo from the market name/context:
+      - If the name mentions a country/region, use that country's ISO2 code
+      - Use "global" ONLY when no geographic context is present
     - MARKET HIERARCHY: Markets form broader → narrower hierarchies
       - Parent relationships are modeled as HAS_MARKET_SEGMENT edges (broader → narrower)
-      - Example: marketing → digital-marketing → event-marketing
+      - Example chain: /market/sa/finance → /market/sa/finance/banking → /market/sa/finance/banking/islamic-banking
     - Examples:
       - "SME banking in Iraq" -> /market/iq/finance/banking
+      - "Iraqi agriculture" -> /market/iq/agriculture (L1)
+      - "Iraqi crop production" -> /market/iq/agriculture/crop-production (L2)
+      - "Iraqi rice production" -> /market/iq/agriculture/crop-production/rice-production (L3)
       - "Global EV batteries" -> /market/global/automotive/ev-batteries
       - "UAE fintech sector" -> /market/ae/finance/fintech
   - FACILITY:
-    - Prefer /fac/{orgSlug}/{facilitySlug} when the org can be inferred from the facility name (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
-    - Otherwise use /fac/{facilitySlug}
+    - Use /fac/{orgSlug}/{facilitySlug} (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
+    - If org is unknown, use /fac/na/{facilitySlug}
   - GEO_REGION: MUST be /loc/{country}/{admin1}/{city}
     - country: ISO3166-1 alpha2 lowercase, or regional token (asean, brics, gcc, eu, eaeu)
     - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
@@ -845,7 +816,7 @@ RULES:
   - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
   - canonicalPath MUST match expected prefix for targetType:
     - ORGANIZATION -> /org/ OR /gov/
-    - FACILITY -> /fac/ (prefer /fac/{orgSlug}/{facilitySlug} over flat /fac/{facilitySlug})
+    - FACILITY -> /fac/ (format: /fac/{orgSlug}/{facilitySlug})
     - GEO_REGION -> /loc/ (strictly enforced)
     - PRODUCT -> /product/
     - PROGRAM -> /program/
@@ -859,15 +830,37 @@ RULES:
 `, rel.TargetName, rel.TargetLegalName, rel.TargetShortName, rel.TargetType, canonicalRulesBlock)
 }
 
+// collapseMarketDomainEqualVertical removes any segment that duplicates its immediate
+// predecessor in a market canonical path (e.g. /market/iq/agriculture/agriculture →
+// /market/iq/agriculture, /market/sa/finance/banking/banking → /market/sa/finance/banking).
+func collapseMarketDomainEqualVertical(cp string) string {
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) < 4 || parts[0] != "market" {
+		return cp
+	}
+	clean := parts[:2] // "market", geo
+	for i := 2; i < len(parts); i++ {
+		if parts[i] != parts[i-1] {
+			clean = append(clean, parts[i])
+		}
+	}
+	if len(clean) == len(parts) {
+		return cp
+	}
+	return "/" + strings.Join(clean, "/")
+}
+
 // normalizeMarketCanonicalDomain rewrites the domain segment of a /market/{geo}/{domain}/{vertical}
 // path using taxonomy.NormalizeMarketDomain. This prevents LLM from creating near-duplicate
 // markets with variant domain names (e.g., /market/sa/financials/fintech → /market/sa/finance/fintech).
+// Also collapses domain==vertical to prevent /market/iq/agriculture/agriculture duplicates.
 func normalizeMarketCanonicalDomain(cp string) string {
+	cp = collapseMarketDomainEqualVertical(cp)
 	trimmed := strings.Trim(cp, "/")
 	parts := strings.Split(trimmed, "/")
 	// /market/{geo}/{domain}/{vertical} → need at least 4 parts
 	if len(parts) < 4 || parts[0] != "market" {
-		return cp // legacy 2-segment or malformed — leave as-is
+		return cp // short or malformed — leave as-is
 	}
 	normalized := taxonomy.NormalizeMarketDomain(parts[2])
 	if normalized == parts[2] {

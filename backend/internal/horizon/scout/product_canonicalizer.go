@@ -30,11 +30,11 @@ func NewProductCanonicalizer() *ProductCanonicalizer {
 
 // CanonicalizeResult contains the result of product canonicalization.
 type CanonicalizeResult struct {
-	CanonicalPath string // /product/{category}/{type}/{stage}/{slug}
-	Category      string // "raw", "component", "finished", "service"
-	Type          string // "mineral", "agricultural", "chemical", etc.
-	Stage         string // "extraction", "refining", "processing", etc.
-	Slug          string // Product slug (e.g., "lithium-carbonate")
+	CanonicalPath string  // /product/{category}/{type}/{stage}/{slug}
+	Category      string  // "raw", "component", "finished", "service"
+	Type          string  // "mineral", "agricultural", "chemical", etc.
+	Stage         string  // "extraction", "refining", "processing", etc.
+	Slug          string  // Product slug (e.g., "lithium-carbonate")
 	Confidence    float64 // 0.0-1.0
 	Reason        string  // Explanation of classification
 }
@@ -44,7 +44,7 @@ type CanonicalizeResult struct {
 // 1. Check known products in taxonomy
 // 2. Normalize via synonyms
 // 3. Infer category/type/stage from name patterns
-// 4. Fallback to flat /product/{slug} if taxonomy unavailable
+// 4. Fallback to default hierarchical path if taxonomy unavailable
 func (c *ProductCanonicalizer) CanonicalizeProduct(ctx context.Context, productName string) (*CanonicalizeResult, error) {
 	if productName == "" {
 		return nil, fmt.Errorf("product name is required")
@@ -77,19 +77,23 @@ func (c *ProductCanonicalizer) CanonicalizeProduct(ctx context.Context, productN
 		return result, nil
 	}
 
-	// Step 4: Fallback to flat structure if taxonomy unavailable
+	// Step 4: Fallback to default hierarchical structure when classification is unknown.
+	// We keep one canonical contract for PRODUCT paths system-wide.
 	slug := normalizedName
 	if slug == "" {
 		slug = Slugify(productName)
 	}
+	category := "finished"
+	productType := "mechanical"
+	stage := "assembly"
 	return &CanonicalizeResult{
-		CanonicalPath: "/product/" + slug,
-		Category:      "",
-		Type:          "",
-		Stage:         "",
+		CanonicalPath: fmt.Sprintf("/product/%s/%s/%s/%s", category, productType, stage, slug),
+		Category:      category,
+		Type:          productType,
+		Stage:         stage,
 		Slug:          slug,
-		Confidence:    0.5,
-		Reason:        "fallback: taxonomy unavailable or unknown product",
+		Confidence:    0.35,
+		Reason:        "fallback: unknown product -> default hierarchical classification",
 	}, nil
 }
 
@@ -180,7 +184,7 @@ func (c *ProductCanonicalizer) inferFromPatterns(originalName, normalizedName st
 
 	// If we inferred something, validate against taxonomy
 	if category != "" && productType != "" && stage != "" {
-		// Validate against runtime taxonomy
+		// Validate against code-defined taxonomy contracts.
 		if taxonomy.IsValidProductCategory(category) &&
 			taxonomy.IsValidProductType(productType) &&
 			taxonomy.IsValidProductStage(stage) {
@@ -202,12 +206,14 @@ func (c *ProductCanonicalizer) inferFromPatterns(originalName, normalizedName st
 
 // BuildProductCanonicalPath builds a canonical path from components.
 func BuildProductCanonicalPath(category, productType, stage, slug string) string {
-	if category == "" || productType == "" || stage == "" || slug == "" {
-		// Fallback to flat structure
-		if slug != "" {
-			return "/product/" + slug
-		}
+	if slug == "" {
 		return ""
+	}
+	if category == "" || productType == "" || stage == "" {
+		// Keep a single PRODUCT canonical contract even on fallback.
+		category = "finished"
+		productType = "mechanical"
+		stage = "assembly"
 	}
 	return fmt.Sprintf("/product/%s/%s/%s/%s", category, productType, stage, slug)
 }
@@ -236,4 +242,3 @@ func ParseProductCanonicalPath(path string) (category, productType, stage, slug 
 
 	return "", "", "", "", fmt.Errorf("invalid product path format: expected 2 or 5 parts, got %d", len(parts))
 }
-

@@ -10,7 +10,7 @@ import (
 )
 
 type AnchorResolutionPhaseResult struct {
-	Anchors            []struct {
+	Anchors []struct {
 		CanonicalPath string  `json:"canonicalPath"`
 		Type          string  `json:"type"`
 		Name          string  `json:"name,omitempty"`
@@ -180,20 +180,18 @@ PRODUCT (CRITICAL):
   - category: raw|component|finished|service
   - type: mineral|agricultural|chemical|electronic|mechanical|energy (best-effort)
   - stage: extraction|refining|processing|manufacturing|assembly (best-effort)
-  - If you truly cannot classify, use fallback: /product/{slug}
+  - If classification is uncertain, still keep this 5-segment format with your best taxonomy estimate
   - Example: /product/raw/chemical/refining/lithium-carbonate
 
 FACILITY:
-- prefer /fac/{orgSlug}/{facilitySlug} when the owning org is known and stable
-- otherwise use /fac/{facilitySlug}
-- Example: /fac/aramco/ras-tanura-refinery, /fac/tesla/gigafactory-texas
+- use /fac/{orgSlug}/{facilitySlug}; if org is unknown, use /fac/na/{facilitySlug}
+- Example: /fac/aramco/ras-tanura-refinery, /fac/na/gigafactory-texas
 
 ORGANIZATION:
 - Organizations: /org/{iso2|na}/{slug}
   - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase, 2 letters). If unknown, use "na".
   - Regional tokens go in the geo slot (2nd segment): /org/gcc/{slug} (NOT /org/na/gcc/{slug}).
   - slug: lowercase slug derived from the base name (avoid legal suffixes like Inc/LLC in the path if possible)
-  - Legacy /org/{slug} may exist in the graph; prefer /org/{iso2}/{slug} for NEW anchors to reduce collisions.
 - Government bodies: /gov/{iso2|na}/{slug}
   - Use for ministries, regulators, agencies, state bodies (prevents collisions like "Ministry of Defence" across countries).
   - If jurisdiction is unknown, use /gov/na/{slug}.
@@ -206,17 +204,26 @@ GOV HIERARCHY (best-effort):
 - Example: "Saudi FDA" → /gov/sa/sfda (type: authority/regulator), parent would be /gov/sa/ministry-of-health
 
 PROGRAM/PERSON/EVENT:
-- /program/{slug}, /event/{slug}, /person/{slug}
+- /program/{jurisdictionSlug}/{programSlug}, /event/{slug}, /person/{slug}
 - PROGRAM:
-  - If jurisdiction is known, prefer /program/{jurisdictionSlug}/{programSlug}
-    - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
-    - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug}
+  - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
+  - If jurisdiction is unknown, use "global"
+  - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug}
 - PERSON: /person/{slug} (e.g., /person/ibrahim-al-rashid)
 
 MARKET (CRITICAL):
-- Preferred: /market/{geo}/{domain}/{vertical}
-  - domain/vertical SHOULD align with the /segment/{domain}/{vertical}/{geo} taxonomy used for organizations.
-  - Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
+- HIERARCHY LEVELS:
+  - L1 (domain): /market/{geo}/{domain} — entire sector
+  - L2 (vertical): /market/{geo}/{domain}/{vertical} — sub-segment of a domain
+  - L3+ (sub-vertical): /market/{geo}/{domain}/{vertical}/{sub} — narrower niche under a vertical
+  - Rule: child path = parent path + exactly one segment
+  - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
+  - Examples:
+    - "Iraqi agriculture" → /market/iq/agriculture (L1)
+    - "Iraqi crop production" → /market/iq/agriculture/crop-production (L2)
+    - "Iraqi rice production" → /market/iq/agriculture/crop-production/rice-production (L3)
+- domain/vertical SHOULD align with the /segment/{domain}/{vertical}/{geo} taxonomy used for organizations.
+- Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
 - geo MUST be ISO2 lowercase, composite ISO2, regional token (e.g., eu, gcc, asean, opec), or "global"/"int" (default "global" if unknown)
   - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical}
 
@@ -225,9 +232,9 @@ MARKET GEOGRAPHY INHERITANCE (CRITICAL):
   - The MARKET anchor MUST inherit that country's ISO2 code as geo
   - Do NOT default to "global" when geographic context is present in the query
 - Examples:
-  - "Saudi Arabia Event marketing market" → /market/sa/marketing/event-marketing (NOT /market/global/...)
-  - "German automotive industry" → /market/de/automotive/automotive (NOT /market/global/...)
-  - "UAE banking sector" → /market/ae/financials/banking (NOT /market/global/...)
+  - "Saudi Arabia Event marketing market" → /market/sa/professional-services/event-marketing (NOT /market/global/...)
+  - "German automotive industry" → /market/de/industrial/automotive (NOT /market/de/automotive/automotive)
+  - "UAE banking sector" → /market/ae/finance/banking (NOT /market/global/...)
 - Use "global" as geo ONLY when NO geographic context is provided in the query.
 
 MARKET HIERARCHY (best-effort):

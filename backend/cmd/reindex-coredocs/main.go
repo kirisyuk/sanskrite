@@ -171,29 +171,11 @@ func main() {
 	if vertexSearchDataStoreID != "" && ragDocsBucket != "" {
 		vertexSearchClient = ai.NewVertexAISearchClient(*projectID, vertexSearchLocation, vertexSearchDataStoreID, "")
 		// Configure automatic sync with Vertex AI Search
-		docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
-			gcsPath := fmt.Sprintf("gs://%s/%s/**", ragDocsBucket, tenantID)
-			importReq := &ai.ImportDocumentsRequest{
-				GCSPath:            gcsPath,
-				ReconciliationMode: "INCREMENTAL",
+		docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, gcsURI string) (string, error) {
+			if strings.TrimSpace(gcsURI) == "" {
+				return "", nil
 			}
-			operationName, err := vertexSearchClient.ImportDocuments(ctx, importReq)
-			if err != nil {
-				log.Printf("[VertexAISearch] Failed to trigger sync for tenant %s: %v", tenantID, err)
-				return "", err
-			}
-			log.Printf("[VertexAISearch] Sync triggered for tenant %s: operation=%s", tenantID, operationName)
-
-			// Start tracking operation asynchronously
-			go func(opName string, tid string) {
-				trackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-				defer cancel()
-				if err := ai.TrackImportOperation(trackCtx, vertexSearchClient, docsRepo, opName, tid, 5*time.Minute); err != nil {
-					log.Printf("[VertexAISearch] Failed to track operation %s: %v", opName, err)
-				}
-			}(operationName, tenantID)
-
-			return operationName, nil
+			return vertexSearchClient.ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "content")
 		})
 		log.Printf("Vertex AI Search sync configured: bucket=%s, location=%s, dataStore=%s", ragDocsBucket, vertexSearchLocation, vertexSearchDataStoreID)
 	} else {

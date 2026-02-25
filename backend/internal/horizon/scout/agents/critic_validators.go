@@ -18,7 +18,6 @@ type CriticValidatorInput struct {
 	Fragment          *models.HorizonFragment
 	Relations         []DiscoveredRelation
 	SupplyChains      []SupplyChain
-	SourceContent     string
-	GraphContext      string
-	UnitPipelinePhase models.UnitPipelinePhase
+	SourceContent string
+	GraphContext  string
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 )
 
-func TestParseSupplyChains_SupplyLinkSegmentCarriesUnitRefs(t *testing.T) {
+func TestParseSupplyChains_SupplyLinkSegmentBasic(t *testing.T) {
 	parser := NewSupplyChainParser()
 	chains := []agents.SupplyChain{
 		{
@@ -17,7 +17,6 @@ func TestParseSupplyChains_SupplyLinkSegmentCarriesUnitRefs(t *testing.T) {
 				{
 					CanonicalPath: "/org/cn/huawei-technologies-co-ltd",
 					Type:          "ORGANIZATION",
-					UnitRef:       "Enterprise",
 				},
 				{
 					CanonicalPath: "/product/telecom/mobile-phones",
@@ -26,7 +25,6 @@ func TestParseSupplyChains_SupplyLinkSegmentCarriesUnitRefs(t *testing.T) {
 				{
 					CanonicalPath: "/org/kz/kcell-jsc",
 					Type:          "ORGANIZATION",
-					UnitRef:       "consumer",
 				},
 			},
 		},
@@ -40,24 +38,18 @@ func TestParseSupplyChains_SupplyLinkSegmentCarriesUnitRefs(t *testing.T) {
 		t.Fatalf("segments=%d, want 1", len(result.SupplyLinkSegments))
 	}
 	seg := result.SupplyLinkSegments[0]
-	if seg.SupplierUnitRef != "enterprise" {
-		t.Fatalf("supplierUnitRef=%q, want enterprise", seg.SupplierUnitRef)
+	if seg.SupplierRef != "/org/cn/huawei-technologies-co-ltd" {
+		t.Fatalf("supplierRef=%q, want /org/cn/huawei-technologies-co-ltd", seg.SupplierRef)
 	}
-	if seg.SupplierUnitCode != "enterprise" {
-		t.Fatalf("supplierUnitCode=%q, want enterprise", seg.SupplierUnitCode)
-	}
-	if seg.CustomerUnitRef != "consumer" {
-		t.Fatalf("customerUnitRef=%q, want consumer", seg.CustomerUnitRef)
-	}
-	if seg.CustomerUnitCode != "consumer" {
-		t.Fatalf("customerUnitCode=%q, want consumer", seg.CustomerUnitCode)
+	if seg.CustomerRef != "/org/kz/kcell-jsc" {
+		t.Fatalf("customerRef=%q, want /org/kz/kcell-jsc", seg.CustomerRef)
 	}
 	if len(seg.TransportViaRefs) != 1 || seg.TransportViaRefs[0] != "/fac/ae/jebel-ali-port" {
 		t.Fatalf("transportViaRefs=%v, want only /fac/ae/jebel-ali-port", seg.TransportViaRefs)
 	}
 }
 
-func TestParseSupplyChains_SuppliesToEdgeCarriesUnitQualifiers(t *testing.T) {
+func TestParseSupplyChains_SuppliesToEdgeHasTransportVia(t *testing.T) {
 	parser := NewSupplyChainParser()
 	chains := []agents.SupplyChain{
 		{
@@ -67,7 +59,6 @@ func TestParseSupplyChains_SuppliesToEdgeCarriesUnitQualifiers(t *testing.T) {
 				{
 					CanonicalPath: "/org/us/intel-corporation",
 					Type:          "ORGANIZATION",
-					UnitCode:      "core_ops",
 				},
 				{
 					CanonicalPath: "/product/semiconductors/fabs/chips",
@@ -76,7 +67,6 @@ func TestParseSupplyChains_SuppliesToEdgeCarriesUnitQualifiers(t *testing.T) {
 				{
 					CanonicalPath: "/org/tw/tsmc",
 					Type:          "ORGANIZATION",
-					UnitCode:      "enterprise",
 				},
 			},
 		},
@@ -99,18 +89,6 @@ func TestParseSupplyChains_SuppliesToEdgeCarriesUnitQualifiers(t *testing.T) {
 	}
 	if suppliesEdge == nil {
 		t.Fatalf("expected inferred SUPPLIES_TO edge")
-	}
-	if got := suppliesEdge.Qualifiers[models.UnitQualifierSourceUnitRef]; got != "core_ops" {
-		t.Fatalf("source_unit_ref=%v, want core_ops", got)
-	}
-	if got := suppliesEdge.Qualifiers[models.UnitQualifierTargetUnitRef]; got != "enterprise" {
-		t.Fatalf("target_unit_ref=%v, want enterprise", got)
-	}
-	if got := suppliesEdge.Qualifiers[models.UnitQualifierSourceUnitCode]; got != "core_ops" {
-		t.Fatalf("source_unit_code=%v, want core_ops", got)
-	}
-	if got := suppliesEdge.Qualifiers[models.UnitQualifierTargetUnitCode]; got != "enterprise" {
-		t.Fatalf("target_unit_code=%v, want enterprise", got)
 	}
 	rawVia, ok := suppliesEdge.Qualifiers[models.QualifierTransportVia]
 	if !ok {

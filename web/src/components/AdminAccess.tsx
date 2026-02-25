@@ -787,7 +787,14 @@ const ExternalServicesTab: React.FC<{
   onLimitChange: (value: number) => void;
   onRefresh: () => void;
 }> = ({ services, loading, error, limit, onLimitChange, onRefresh }) => {
-  const serviceOrder = ['geonames', 'wikidata', 'opencorporates'];
+  const serviceOrder = ['geonames', 'wikidata', 'opencorporates', 'nominatim', 'google_geocoding'];
+  const serviceLabels: Record<string, string> = {
+    geonames: 'GeoNames',
+    wikidata: 'Wikidata',
+    opencorporates: 'OpenCorporates',
+    nominatim: 'Nominatim (OpenStreetMap)',
+    google_geocoding: 'Google Geocoding',
+  };
 
   return (
     <div>
@@ -819,11 +826,12 @@ const ExternalServicesTab: React.FC<{
           <div className="divide-y" style={{ borderColor: 'var(--overlay-line-90)' }}>
             {serviceOrder.map((name) => {
               const s = services[name] || { hit: 0, miss: 0, error: 0, calls: 0, hitRate: 0 };
+              const label = serviceLabels[name] ?? name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, ' ');
               return (
                 <div key={name} className="p-3" style={{ backgroundColor: 'var(--bg-elevated)' }}>
                   <div className="flex items-center justify-between mb-2">
                     <div className="text-13 font-medium" style={{ color: 'var(--text-heading)' }}>
-                      {name.charAt(0).toUpperCase() + name.slice(1)}
+                      {label}
                     </div>
                     <div className="text-12" style={{ color: 'var(--text-secondary)' }}>
                       Hit rate: <strong style={{ color: 'var(--text-heading)' }}>{(s.hitRate * 100).toFixed(2)}%</strong>

@@ -11,8 +11,9 @@ import (
 // - normalized domain
 // - normalized vertical
 //
-// Only segment-first market paths are accepted (/market/{geo}/{domain}/{vertical}).
-// Legacy market paths are intentionally ignored to avoid broad false-positive merges.
+// Only L2 segment-first paths (/market/{geo}/{domain}/{vertical}) are accepted.
+// L1 domain-level paths (/market/{geo}/{domain}) and legacy freeform paths return empty scope
+// and are excluded from tag-based dedup to avoid false merges (e.g. L1 with L2).
 func parseMarketDedupScope(canonicalPath string) (string, string, string) {
 	cp := strings.TrimSpace(canonicalPath)
 	if !strings.HasPrefix(cp, "/market/") {

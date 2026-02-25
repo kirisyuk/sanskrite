@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/addressvalidate"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/prompts"
@@ -131,69 +132,111 @@ func RunDocumentExtraction(
 		MetricUpdates []extMetricUpdate `json:"metricUpdates"`
 	}
 
+	// sanitize filters out individually invalid entries instead of rejecting the entire extraction.
+	sanitize := func(x *docExtraction) {
+		enums := map[string]bool{"article": true, "post": true, "report": true, "announcement": true, "interview": true, "transcript": true, "other": true}
+		if !enums[strings.ToLower(strings.TrimSpace(x.DocumentType))] {
+			x.DocumentType = "other"
+		}
+
+		validCats := x.Categories[:0]
+		for _, c := range x.Categories {
+			wds := strings.Fields(c.Label)
+			if len(wds) >= 1 && len(wds) <= 2 && c.Confidence >= 0 && c.Confidence <= 1 {
+				validCats = append(validCats, c)
+			}
+		}
+		x.Categories = validCats
+
+		validTopics := x.Topics[:0]
+		for _, t := range x.Topics {
+			if t.Name != "" && t.Share >= 0 && t.Share <= 1 {
+				validTopics = append(validTopics, t)
+			}
+		}
+		x.Topics = validTopics
+
+		validEntities := x.Entities[:0]
+		for _, e := range x.Entities {
+			if e.Type != "" && e.Value != "" && e.Confidence >= 0 && e.Confidence <= 1 {
+				validEntities = append(validEntities, e)
+			}
+		}
+		x.Entities = validEntities
+
+		validOutlinks := x.Outlinks[:0]
+		for _, ol := range x.Outlinks {
+			if strings.TrimSpace(ol.URL) != "" {
+				validOutlinks = append(validOutlinks, ol)
+			}
+		}
+		x.Outlinks = validOutlinks
+
+		validEvents := x.Events[:0]
+		for _, ev := range x.Events {
+			if ev.Title == "" || ev.DateISO == "" {
+				continue
+			}
+			if ev.Location != nil {
+				if ev.Location.CountryAlpha2 != nil {
+					cc := strings.TrimSpace(strings.ToLower(*ev.Location.CountryAlpha2))
+					if len(cc) != 2 {
+						ev.Location.CountryAlpha2 = nil
+					}
+				}
+				// Reject non-address strings in address field (headlines, metrics, etc.)
+				if ev.Location.Address != nil {
+					addr := strings.TrimSpace(*ev.Location.Address)
+					if addr != "" && !addressvalidate.IsPlausibleAddress(addr) {
+						ev.Location.Address = nil
+					}
+				}
+				// Reject non-place strings in name (used for geocoding when address is empty)
+				if ev.Location.Name != nil {
+					name := strings.TrimSpace(*ev.Location.Name)
+					if name != "" && !addressvalidate.IsPlausibleAddress(name) {
+						ev.Location.Name = nil
+					}
+				}
+			}
+			validParticipants := ev.Participants[:0]
+			for _, p := range ev.Participants {
+				if strings.TrimSpace(p.EntityName) != "" {
+					validParticipants = append(validParticipants, p)
+				}
+			}
+			ev.Participants = validParticipants
+			validEvents = append(validEvents, ev)
+		}
+		x.Events = validEvents
+
+		validClaims := x.Claims[:0]
+		for _, cl := range x.Claims {
+			if cl.Text != "" && cl.Confidence >= 0 && cl.Confidence <= 1 {
+				validClaims = append(validClaims, cl)
+			}
+		}
+		x.Claims = validClaims
+
+		validMetrics := x.MetricUpdates[:0]
+		for _, mu := range x.MetricUpdates {
+			if strings.TrimSpace(mu.MetricName) == "" {
+				continue
+			}
+			if mu.Confidence < 0 || mu.Confidence > 1 {
+				mu.Confidence = clamp01(mu.Confidence)
+			}
+			validMetrics = append(validMetrics, mu)
+		}
+		x.MetricUpdates = validMetrics
+	}
+
 	validate := func(x docExtraction) error {
 		if len(strings.TrimSpace(x.Language)) != 2 {
 			return fmt.Errorf("language must be ISO 639-1 code")
 		}
 		if x.Sentiment < -1 || x.Sentiment > 1 {
 			return fmt.Errorf("sentiment out of range [-1..1]")
-		}
-		for _, c := range x.Categories {
-			wds := strings.Fields(c.Label)
-			if len(wds) == 0 || len(wds) > 2 {
-				return fmt.Errorf("category label must be 1-2 words")
-			}
-			if c.Confidence < 0 || c.Confidence > 1 {
-				return fmt.Errorf("category confidence out of range")
-			}
-		}
-		for _, t := range x.Topics {
-			if t.Name == "" || t.Share < 0 || t.Share > 1 {
-				return fmt.Errorf("invalid topic entry")
-			}
-		}
-		for _, e := range x.Entities {
-			if e.Type == "" || e.Value == "" || e.Confidence < 0 || e.Confidence > 1 {
-				return fmt.Errorf("invalid entity entry")
-			}
-		}
-		enums := map[string]bool{"article": true, "post": true, "report": true, "announcement": true, "interview": true, "transcript": true, "other": true}
-		if !enums[strings.ToLower(strings.TrimSpace(x.DocumentType))] {
-			x.DocumentType = "other"
-		}
-		for _, ol := range x.Outlinks {
-			if strings.TrimSpace(ol.URL) == "" {
-				return fmt.Errorf("outlink url empty")
-			}
-		}
-		for _, ev := range x.Events {
-			if ev.Title == "" || ev.DateISO == "" {
-				return fmt.Errorf("invalid event entry")
-			}
-			if ev.Location != nil && ev.Location.CountryAlpha2 != nil {
-				cc := strings.TrimSpace(strings.ToLower(*ev.Location.CountryAlpha2))
-				if len(cc) != 2 {
-					return fmt.Errorf("event.location.countryAlpha2 must be ISO3166-1 alpha2 lowercase")
-				}
-			}
-			for _, p := range ev.Participants {
-				if strings.TrimSpace(p.EntityName) == "" {
-					return fmt.Errorf("invalid event participant")
-				}
-			}
-		}
-		for _, cl := range x.Claims {
-			if cl.Text == "" || cl.Confidence < 0 || cl.Confidence > 1 {
-				return fmt.Errorf("invalid claim entry")
-			}
-		}
-		for _, mu := range x.MetricUpdates {
-			if strings.TrimSpace(mu.MetricName) == "" {
-				continue
-			}
-			if mu.Confidence < 0 || mu.Confidence > 1 {
-				return fmt.Errorf("metric confidence out of range")
-			}
 		}
 		return nil
 	}
@@ -234,6 +277,7 @@ func RunDocumentExtraction(
 	if !ok {
 		return nil, fmt.Errorf("unexpected extraction type")
 	}
+	sanitize(&ex)
 
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 

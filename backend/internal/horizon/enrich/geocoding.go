@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/addressvalidate"
 	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
@@ -44,7 +45,7 @@ func EnrichCoordinatesFromGeocoding(
 	}
 
 	addr := BuildAddressFromFragment(fragment)
-	if addr == "" {
+	if addr == "" || !addressvalidate.IsPlausibleAddress(addr) {
 		return false, nil
 	}
 
@@ -76,57 +77,43 @@ func EnrichCoordinatesFromGeocoding(
 
 // BuildAddressFromFragment constructs an address string from fragment fields.
 // Exported for tooling (e.g. horizon_backfill_coordinates).
-// Priority: explicit address identifiers > homeLocation + name > canonical path + label.
+// Only returns strings that look like real addresses (street, city, place+country).
+// Does NOT use company names (label/legalName) — those are not addresses.
+//
+// Priority: explicit address identifiers > homeLocation (place name + country).
 func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 	if f == nil {
 		return ""
 	}
 
-	// Explicit address fields (from OpenCorporates, Wikidata P969, etc.)
+	// 1. Explicit address fields (from OpenCorporates, Wikidata P969, etc.)
 	for _, k := range []string{"registeredAddress", "address", "streetAddress", "street_address", "registered_address"} {
 		if f.Identifiers != nil {
 			if v := strings.TrimSpace(f.Identifiers[k]); v != "" {
-				// Optionally append country for disambiguation
+				addr := v
 				if cc := extractCountryFromFragment(f); cc != "" {
-					return v + ", " + cc
+					addr = v + ", " + cc
 				}
-				return v
+				if addressvalidate.IsPlausibleAddress(addr) {
+					return addr
+				}
 			}
 		}
 	}
 
-	// homeLocation.name + country
+	// 2. homeLocation: place name + country (e.g. "Dubai, AE", "Houston, US")
 	if f.HomeLocation != nil {
 		name := strings.TrimSpace(f.HomeLocation.Name)
 		cc := ""
 		if f.HomeLocation.ISO3166_1 != nil {
 			cc = strings.TrimSpace(*f.HomeLocation.ISO3166_1)
 		}
-		if name != "" || cc != "" {
-			if name != "" && cc != "" {
-				return name + ", " + cc
+		if name != "" && cc != "" {
+			addr := name + ", " + cc
+			if addressvalidate.IsPlausibleAddress(addr) {
+				return addr
 			}
-			if name != "" {
-				return name
-			}
-			return cc
 		}
-	}
-
-	// Fallback: label/legalName + country from canonical path
-	label := strings.TrimSpace(f.Labels["en"])
-	if label == "" && f.Identifiers != nil {
-		label = strings.TrimSpace(f.Identifiers["legalName"])
-	}
-	if label == "" && f.Identifiers != nil {
-		label = strings.TrimSpace(f.Identifiers["shortName"])
-	}
-	cc := extractCountryFromFragment(f)
-	if label != "" && cc != "" {
-		return label + ", " + cc
-	}
-	if cc != "" {
-		return cc
 	}
 	return ""
 }

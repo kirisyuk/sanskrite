@@ -57,8 +57,13 @@ func NewCachedClient(base ontology.GeocodingClientInterface, cache *repo.Externa
 }
 
 // Geocode implements ontology.GeocodingClientInterface with cache-first behavior.
+// Cache lookup is tolerant to minor address variations (e.g. "Moscow, RU" vs "Moscow, Russia")
+// via normalized keys and multi-variant lookup.
 func (c *CachedClient) Geocode(ctx context.Context, address string) (*ontology.GeocodingResult, error) {
 	if c == nil || c.base == nil {
+		return nil, nil
+	}
+	if !IsPlausibleAddress(address) {
 		return nil, nil
 	}
 	addr := normalizeAddressForCache(address)
@@ -66,11 +71,13 @@ func (c *CachedClient) Geocode(ctx context.Context, address string) (*ontology.G
 		return nil, nil
 	}
 
-	cacheKey := "address=" + addr
 	if c.opts.Enabled && c.cache != nil {
-		docID := repo.MakeCacheDocID("google_geocoding", "geocoding.geocode", cacheKey)
-		if hit := c.getCached(ctx, docID); hit != nil {
-			return hit, nil
+		for _, variant := range addressVariantsForCacheLookup(addr) {
+			cacheKey := "address=" + variant
+			docID := repo.MakeCacheDocID("google_geocoding", "geocoding.geocode", cacheKey)
+			if hit := c.getCached(ctx, docID); hit != nil {
+				return hit, nil
+			}
 		}
 	}
 
@@ -79,6 +86,7 @@ func (c *CachedClient) Geocode(ctx context.Context, address string) (*ontology.G
 		return nil, err
 	}
 	if c.opts.Enabled && c.cache != nil && resp != nil {
+		cacheKey := "address=" + addr
 		_ = c.putCached(ctx, cacheKey, resp)
 	}
 	return resp, nil
@@ -152,8 +160,19 @@ func isExpired(t *time.Time) bool {
 }
 
 // normalizeAddressForCache produces a stable cache key from an address.
+// Applies: trim/collapse spaces, lowercase, country part normalization (e.g. Russia→ru, RU→ru).
 func normalizeAddressForCache(addr string) string {
 	s := strings.TrimSpace(addr)
 	s = strings.Join(strings.Fields(s), " ")
+	s = strings.ToLower(s)
+	if s == "" {
+		return ""
+	}
+	parts := splitAddressParts(s)
+	if len(parts) >= 2 {
+		last := normalizeCountryPart(parts[len(parts)-1])
+		rest := strings.Join(parts[:len(parts)-1], ", ")
+		return rest + ", " + last
+	}
 	return s
 }

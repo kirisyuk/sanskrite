@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // =============================================================================
@@ -105,6 +105,9 @@ func (b *OrgHierarchyBuilder) EnsureOrgHierarchy(
 		return nil // Best effort
 	}
 
+	// Set ParentPath on subsidiary fragment for unified hierarchy (Entity = Type, SpherePaths[], ResolutionHint, ParentPath?).
+	fragment.ParentPath = parentPath
+
 	return nil
 }
 
@@ -148,20 +151,7 @@ func (b *OrgHierarchyBuilder) inferParentName(name string) string {
 
 // generateOrgPath creates a canonical path for an organization name.
 func (b *OrgHierarchyBuilder) generateOrgPath(name string) string {
-	if name == "" {
-		return ""
-	}
-
-	// Convert to lowercase, replace spaces with hyphens
-	slug := strings.ToLower(name)
-	slug = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(slug, "-")
-	slug = strings.Trim(slug, "-")
-
-	if slug == "" {
-		return ""
-	}
-
-	return "/org/" + slug
+	return taxonomy.OrgCanonicalPath("na", name)
 }
 
 // ensureParentOrg finds or creates the parent organization fragment.

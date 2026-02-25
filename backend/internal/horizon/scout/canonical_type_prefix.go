@@ -43,7 +43,7 @@ func coerceCanonicalPathForType(path string, fragType models.FragmentType, fallb
 		if slug == "" {
 			return cp, false
 		}
-		fixed := taxonomy.JoinPath("product", slug)
+		fixed := taxonomy.JoinPath("product", "finished", "mechanical", "assembly", slug)
 		return fixed, fixed != cp
 	}
 
@@ -57,4 +57,3 @@ func lastPathSlug(path string) string {
 	}
 	return taxonomy.Slugify(parts[len(parts)-1])
 }
-

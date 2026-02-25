@@ -19,6 +19,7 @@ import (
 )
 
 // horizon_fix_administers_facility_direction — исправляет исторические рёбра с неверным направлением:
+// OWNS: /org/→/gov/ (gov owns state-owned enterprises, not vice versa)
 // ADMINISTERS: FACILITY/DEPOSIT→ORG, /org/→/gov/
 // CONTROLS: PRODUCT→ORG/GOV
 //
@@ -34,7 +35,8 @@ var (
 	pageSize    = flag.Int("page-size", 500, "Firestore page size")
 	progressN   = flag.Int("progress-every", 100, "Print progress every N edges (0 disables)")
 	startAfter  = flag.String("start-after", "", "Resume cursor: start after this document ID")
-	edgeTypes   = flag.String("edge-types", "ADMINISTERS,CONTROLS", "Comma-separated: ADMINISTERS, CONTROLS")
+	edgeTypes   = flag.String("edge-types", "OWNS,ADMINISTERS,CONTROLS", "Comma-separated: OWNS, ADMINISTERS, CONTROLS")
+	onlyChanges = flag.Bool("only-changes", true, "Only output touched edges (swapped/skipped-duplicate/error), skip unchanged")
 )
 
 type ReportRow struct {
@@ -88,14 +90,14 @@ func main() {
 		log.Fatal("--edge-types resulted in empty list")
 	}
 
-	log.Printf("=== Horizon: fix edge direction (ADMINISTERS, CONTROLS) ===")
-	log.Printf("project=%s tenant=%s apply=%v edgeTypes=%v", *projectID, *tenantID, *apply, typesList)
+	log.Printf("=== Horizon: fix edge direction (OWNS, ADMINISTERS, CONTROLS) ===")
+	log.Printf("project=%s tenant=%s apply=%v edgeTypes=%v onlyChanges=%v", *projectID, *tenantID, *apply, typesList, *onlyChanges)
 
-	fixed, scanned, err := run(ctx, db, edgesRepo, fragmentsRepo, enc, typesList)
+	fixed, scanned, touched, err := run(ctx, db, edgesRepo, fragmentsRepo, enc, typesList)
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
-	log.Printf("Done. scanned=%d fixed=%d", scanned, fixed)
+	log.Printf("Done. scanned=%d touched=%d fixed=%d", scanned, touched, fixed)
 }
 
 func parseEdgeTypes(s string) []hmodels.DependencyType {
@@ -123,7 +125,7 @@ func run(
 	fragmentsRepo *hrepo.HorizonFragmentsRepository,
 	enc *json.Encoder,
 	edgeTypesList []hmodels.DependencyType,
-) (fixed, scanned int, err error) {
+) (fixed, scanned, touched int, err error) {
 	col := db.Collection("horizon_dependency_edges")
 
 	for _, edgeType := range edgeTypesList {
@@ -135,7 +137,7 @@ func run(
 		if s := strings.TrimSpace(*startAfter); s != "" && scanned == 0 {
 			snap, err := col.Doc(s).Get(ctx)
 			if err != nil {
-				return 0, 0, fmt.Errorf("start-after doc %q: %w", s, err)
+				return 0, 0, 0, fmt.Errorf("start-after doc %q: %w", s, err)
 			}
 			lastDoc = snap
 		}
@@ -155,7 +157,7 @@ func run(
 				}
 				if err != nil {
 					iter.Stop()
-					return fixed, scanned, err
+					return fixed, scanned, touched, err
 				}
 				pageCount++
 				scanned++
@@ -172,13 +174,20 @@ func run(
 				row := processEdge(ctx, edgesRepo, fragmentsRepo, &edge)
 				if row != nil {
 					row.EdgeType = string(edge.Type)
-					_ = enc.Encode(row)
+					unchanged := row.Action == "skipped" && strings.Contains(row.Reason, "no swap needed")
+					shouldOutput := !*onlyChanges || !unchanged
+					if shouldOutput {
+						_ = enc.Encode(row)
+					}
+					if !unchanged {
+						touched++
+					}
 					if row.Applied {
 						fixed++
 					}
 				}
 
-				if *progressN > 0 && scanned%*progressN == 0 {
+				if *progressN > 0 && !*onlyChanges && scanned%*progressN == 0 {
 					log.Printf("progress: scanned=%d fixed=%d lastDoc=%s", scanned, fixed, doc.Ref.ID)
 				}
 			}
@@ -188,7 +197,7 @@ func run(
 			}
 		}
 	}
-	return fixed, scanned, nil
+	return fixed, scanned, touched, nil
 }
 
 func processEdge(
@@ -233,6 +242,13 @@ func processEdge(
 	var fixReason string
 
 	switch edge.Type {
+	case hmodels.DependencyTypeOwns:
+		// /org/ → /gov/ (gov owns state-owned enterprises, not vice versa)
+		if srcFrag.Type == hmodels.FragmentTypeOrganization && tgtFrag.Type == hmodels.FragmentTypeOrganization &&
+			strings.HasPrefix(row.SourcePath, "/org/") && strings.HasPrefix(row.TargetPath, "/gov/") {
+			needSwap = true
+			fixReason = "OWNS /org/ -> /gov/ swapped to /gov/ -> /org/ (gov owns state-owned enterprises)"
+		}
 	case hmodels.DependencyTypeAdministers:
 		// 1. FACILITY → ORG/PROGRAM/GEO
 		if srcFrag.Type == hmodels.FragmentTypeFacility && tgtValidAdmin {

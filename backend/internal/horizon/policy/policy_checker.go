@@ -790,7 +790,7 @@ func (pc *PolicyChecker) checkProductPath(_ context.Context, frag *horizonmodels
 			DetectedAt:  time.Now(),
 			DetectedBy:  "deterministic",
 		}
-		// Best-effort deterministic fix if product is known in runtime taxonomy:
+		// Best-effort deterministic fix if product is known in code-defined taxonomy:
 		// Map /product/{...}/{slug} or /product/{slug} -> /product/{category}/{type}/{stage}/{slug}
 		parts := strings.Split(strings.Trim(path, "/"), "/")
 		if len(parts) >= 2 && parts[0] == "product" {

@@ -278,9 +278,15 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 			neighborsCache[item.fragmentID] = loadedNeighbors
 		}
 
+		// Chokepoint transit amplification: signal passing through a chokepoint is strengthened.
+		outgoingAmplitude := item.amplitude
+		if IsChokepointFragment(frag) {
+			outgoingAmplitude = TransitAmplify(outgoingAmplitude, item.axis)
+		}
+
 		for _, neighbor := range neighbors {
 			// Calculate damped amplitude (profile damping + strong-edge weight + edge physics)
-			breakdown := e.calculateDampedAmplitudeWithBreakdown(item.amplitude, neighbor.edge, profile)
+			breakdown := e.calculateDampedAmplitudeWithBreakdown(outgoingAmplitude, neighbor.edge, profile)
 			nextAmplitude := breakdown.Amplitude
 			traceFactors := cloneFactorMap(breakdown.Factors)
 
@@ -658,6 +664,11 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			continue
 		}
 
+		outgoingAmplitude := item.amplitude
+		if IsChokepointFragment(frag) {
+			outgoingAmplitude = TransitAmplify(outgoingAmplitude, item.axis)
+		}
+
 		neighbors, err := e.getNeighborsViaStrongEdges(ctx, frag, profile)
 		if err != nil {
 			traceCollector.add(SignalPropagationTraceEvent{
@@ -672,7 +683,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			continue
 		}
 		for _, neighbor := range neighbors {
-			breakdown := e.calculateDampedAmplitudeWithBreakdown(item.amplitude, neighbor.edge, profile)
+			breakdown := e.calculateDampedAmplitudeWithBreakdown(outgoingAmplitude, neighbor.edge, profile)
 			nextAmplitude := breakdown.Amplitude
 			traceFactors := cloneFactorMap(breakdown.Factors)
 			nextAxis, transformFactor := e.applyTransformation(item.axis, neighbor.edge, profile)

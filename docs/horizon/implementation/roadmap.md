@@ -25,7 +25,7 @@
 | Org identity anchor & transitions | ❌ | identity anchor, nameHistory, transition edges (RENAMED_TO, LEGAL_SUCCESSOR_OF…); см. `ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md` |
 | Scout domain phases & composable agents | ✅ | Domain modes (intent→job.State), allowlists, semantic groups; CriticPipeline/ResearchPipeline by mode; Phase 0–3 in engine; domain mode in child jobs; canonical edge types (ASSOCIATED_WITH, CORPORATE_TRANSITION, DOMAIN_RELATION). Toggle: `HORIZON_SCOUT_COMPOSABLE_PIPELINE=false` для отката на монолитный путь. ТЗ: `SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md`. |
 | Signaling Pipeline | ❌ | Отдельный пайплайн: news flow → events → 12-axis signals → propagation. Scout не создаёт сигналы. План: `SIGNALING_PIPELINE_IMPLEMENTATION_PLAN.md`. |
-| Fractal Hierarchy & Scale-Invariant Contracts | ❌ | 5 контрактов: Canonical Path Hierarchy, Resolution Level, Zoom, Metric Composition, Edge Projection. См. секцию «Fractal Hierarchy & Scale-Invariant Contracts». |
+| Fractal Hierarchy & Scale-Invariant Contracts | ◑ | Sphere taxonomy (L1/L2/L3+), SpherePaths, ResolutionHint, ParentPath — реализованы. Zoom, Metric Composition, Edge Projection — отложены. Units deprecated. Chokepoint transit amplification — реализовано. |
 
 ## Delta (2026-02-13): Internal-First Grounding (v5)
 
@@ -266,6 +266,40 @@
 
 **Принцип**: явно ≠ строго. Контракты должны быть чёткими, но не навязывать математическую фрактальность. Реальный мир не фрактален в точном смысле; династия House of Saud не является уменьшенной копией рынка нефти. Они просто описываются одинаковым набором инструментов (узел + метрики + рёбра + propagation).
 
+### Архитектурные решения (реализовано 2026-02)
+
+**Идентичность сущности**: `Entity = (Type, SpherePaths[], ResolutionHint, ParentPath?)`
+
+- **Units deleted**: `UnitCode`, `OrgUnitProfile`, `UnitGraphEdge`, `UnitSupplyLinkQualifier`, `UnitTemplatePair`, Unit Pipeline (P0–P5), unit graph snapshots, unit dive results — полностью удалены из кодовой базы. Классификация операционных подразделений заменена на `SpherePaths` + `ResolutionHint` + `ParentPath`.
+- **Sphere taxonomy**: L1 (closed list ~14), L2 (controlled per L1), L3+ (free-form, slugified). Валидация: `taxonomy.ValidateSpherePath`, `taxonomy.NormalizeSpherePath`.
+- **Chokepoint transit amplification**: при прохождении сигнала через chokepoint-фрагмент (geoFeatureType: strait/canal/pass/pipeline-corridor или tag `chokepoint`) амплитуда усиливается (TransitAmplify) вместо затухания. Коэффициенты по осям: logistics 1.25, physical flow 1.20, geo conflict 1.15, прочие 1.10.
+
+### Sphere Taxonomy Contract (реализовано)
+
+**L1** (closed list ~14): defense, finance, energy, trade, technology, logistics, health, legal, governance, security, environment, social, infrastructure, other.
+
+**L2** (controlled per L1): задаётся в seed taxonomy (`SphereL2Map`). Пример: defense → naval, air, land, cyber, space, procurement, intelligence, other.
+
+**L3+** (free-form): slugified, до 5 сегментов. Путь: `/sphere/L1/L2/L3/L4`.
+
+**Нормализация**: неизвестный L1 → `/sphere/other`; неизвестный L2 → `/sphere/{L1}/other`. `taxonomy.NormalizeSpherePaths`, `taxonomy.ValidateSpherePath`.
+
+**SpherePaths на HorizonFragment**: `[]string`, выводятся через `sphere_inferrer.InferSpherePaths` по типу сущности (GOV, ORG, MARKET, PRODUCT, FACILITY, GEO_REGION, COMMUNITY).
+
+### Chokepoint Transit Amplification Contract (реализовано)
+
+**Chokepoint** = фрагмент с `geoFeatureType` ∈ (strait, canal, pass, pipeline-corridor) или tag `chokepoint`.
+
+**Transit amplification**: при BFS-распространении сигнала, если текущий узел — chokepoint, амплитуда усиливается перед передачей соседям (вместо затухания):
+- AxisLogisticsCapacity / AxisLogisticsLatency: ×1.25
+- AxisPhysicalFlowSupply / AxisPhysicalFlowDemand: ×1.20
+- AxisGeoConflict: ×1.15
+- прочие: ×1.10
+
+**Discovery**: промпты Research/Critic для energy/logistics/trade сфер включают поиск chokepoint-зависимостей (DEPENDS_ON с qualifiers: throughputShare, substitutability, reroutePenalty).
+
+---
+
 ### Контракт 1: Canonical Path Hierarchy (унификация первых N уровней)
 
 **Проблема**: Иерархия реализована шестью разными механизмами:
@@ -300,10 +334,9 @@
 
 **Единый примитив parent**: `parentPath(path) = path без последнего сегмента` для path-based иерархии. Для edge-based (HAS_SUBGROUP и т.п.) — отдельный канал, но `ParentPath` (или аналог) для консистентности.
 
-**TODO**:
-- [ ] Задокументировать контракт в `risk-architecture.md` / `canonicalization.md`
-- [ ] Добавить `ParentPath` (опционально) на `HorizonFragment` как derived/computed поле
-- [ ] Постепенно мигрировать `ParentMarketPath`, `ParentGovPath` к единому контракту (backward-compat)
+**Реализовано**:
+- [x] `ParentPath` на `HorizonFragment` — универсальное поле
+- [x] Нормализация копирует `ParentGovPath`/`ParentMarketPath` в `ParentPath` при пустом (backward-compat)
 
 ### Контракт 2: Resolution Level (уровень абстракции)
 
@@ -320,12 +353,13 @@
 
 **Назначение**: UI zoom, propagation (учёт масштаба при damping/aggregation), explainability.
 
-**TODO**:
-- [ ] Добавить `ResolutionHint string` в `HorizonFragment` (опционально)
-- [ ] Заполнять при создании/обновлении по правилам (org→macro, fac→detail, unit→unit)
-- [ ] Backfill для существующих узлов (best-effort)
+**Реализовано**:
+- [x] `ResolutionHint string` в `HorizonFragment` (macro|unit|detail|unspecified)
+- [x] Вывод при создании/обновлении: `sphere_inferrer.InferResolutionHint` по правилам для GOV, ORG, MARKET, PRODUCT, FACILITY, GEO_REGION, COMMUNITY
 
-### Контракт 3: Zoom (Drill / Roll-up)
+### Контракт 3: Zoom (Drill / Roll-up) — отложен
+
+**Основа**: SpherePaths + ResolutionHint + ParentPath уже задают иерархию; ZoomResolver будет опираться на них.
 
 **Проблема**: Unit Pipeline делает drill для ORG→UNIT, но это hardcoded flow. Для markets, communities, gov — нет аналога. Нет операции «покажи то же самое, но детальнее».
 
@@ -380,13 +414,31 @@
 
 ### Сводка: приоритеты реализации
 
-| Контракт | Приоритет | Зависимости | Оценка |
+| Контракт | Приоритет | Зависимости | Статус |
 |----------|-----------|-------------|--------|
-| 1. Canonical Path Hierarchy | P1 | — | Документация + опционально ParentPath |
-| 2. Resolution Level | P2 | — | 1 поле, backfill |
-| 3. Zoom | P2 | 1, 2 | Interface + реализации по типам |
-| 4. Metric Composition | P3 | 2, 3 | Документация; roll-up опционально |
-| 5. Edge Projection | P3 | 3 | Qualifier или вывод; UI highlight |
+| 1. Canonical Path Hierarchy | P1 | — | ✅ `ParentPath` на фрагменте; sync из `ParentGovPath`/`ParentMarketPath` |
+| 2. Resolution Level | P1 | — | ✅ `ResolutionHint` на фрагменте; `InferResolutionHint` по типам |
+| Sphere Taxonomy | P1 | — | ✅ L1/L2/L3+ иерархия; `SpherePaths` на фрагменте; `InferSpherePaths` |
+| Chokepoint Transit Amplification | P1 | — | ✅ `TransitAmplify` в BFS; `IsChokepointFragment`; `GeoFeatureType` |
+| Units Deprecation | P1 | Sphere Taxonomy | ✅ Код заморожен; `SpherePathsFromUnitCode` |
+| 3. Zoom | P2 | 1, 2 | ❌ `ZoomResolver` interface + реализации по типам |
+| 4. Metric Composition | P3 | 2, 3 | ❌ Документация; roll-up опционально |
+| 5. Edge Projection | P3 | 3 | ❌ Qualifier или вывод; UI highlight |
+
+### Следующие шаги: спланировать и реализовать
+
+Отложенные задачи из Sphere Taxonomy & Resolution плана. Зависят от того, что SpherePaths/ResolutionHint/ParentPath уже заполняются на новых фрагментах.
+
+| # | Задача | Зависимости | Приоритет | Описание |
+|---|--------|-------------|-----------|----------|
+| 1 | **Backfill SpherePaths/ResolutionHint/ParentPath** | Sphere Taxonomy ✅ | P1 | Миграционный скрипт: пройти все существующие фрагменты, вызвать `InferSpherePaths` / `InferResolutionHint`, записать. Отдельный `cmd/tools/horizon_backfill_sphere_resolution`. |
+| 2 | **ZoomResolver** (Contract 3) | Backfill, Contract 1+2 ✅ | P2 | `ZoomResolver` interface: `ZoomInto(node) → children`. Реализации по типам: ORG (subsidiaries), MARKET (subsegments), GOV (subordinate agencies), GEO (admin hierarchy), COMMUNITY (subgroups), PRODUCT (path prefix children). Endpoint: `GET /api/horizon/fragments/{id}/children?depth=1`. |
+| 3 | **ProductHierarchyBuilder** | Backfill | P2 | Явный builder (аналог `OrgHierarchyBuilder`, `MarketHierarchyBuilder`): при создании продукта — найти/создать родителя по path prefix. Сейчас `ParentPath` выводится из prefix, но без гарантии существования родительского фрагмента. |
+| 4 | **Metric Composition / roll-up** (Contract 4) | ZoomResolver | P3 | Контракт семантической совместимости метрик по уровням. Опционально: `MetricComposition` в propagation/rollup — агрегат (max, weighted avg) по дочерним узлам для `resolutionHint=macro`. Provenance: `method: "rollup"`, `sourceNodeIds`. |
+| 5 | **Edge Projection** (Contract 5) | ZoomResolver, Resolution backfill | P3 | Проекция рёбер по масштабу: qualifier `macroEdgeId` на micro-edge; или вывод через граф при zoom. UI: клик на macro edge → highlight реализующие micro paths. Propagation: опционально учитывать edge density. |
+| 6 | **Sphere-aware signal propagation** | SpherePaths backfill | P2 | Фильтрация/приоритизация propagation paths по пересечению сфер. Сигнал в `/sphere/energy` сильнее распространяется по узлам с совпадающими SpherePaths; слабее — по узлам из несвязанных сфер. Коэффициент `sphereOverlapFactor` в damping. |
+| 7 | **~~Unit pipeline deletion~~** | ~~SpherePaths proven at scale~~ | ✅ Done | Удалено: `UnitCode`, `OrgUnitProfile`, `UnitGraphEdge`, `UnitSupplyLinkQualifier`, `UnitTemplatePair`, unit pipeline (P0–P5), unit graph snapshots, unit dive results, все unit-related функции в engine/agents/prompts. |
+| 8 | **Dynamic chokepoint discovery** | Chokepoint amplification ✅ | P3 | Автоматическое обнаружение bottleneck-узлов по топологии графа (high betweenness centrality) вместо явного тегирования. Дополняет ручные/seed chokepoints, не заменяет. |
 
 ### Фокус реализации: логика пайплайна, не промпты
 
@@ -406,10 +458,9 @@
    - Цепочка a→b→c→d и прямое a→d — одна и та же связь на разных масштабах. Macro-edge — «тень» micro-path.
    - При zoom: «через какие конкретные шаги реализуется a→d». При propagation: macro-edge как сжатый путь.
 
-4. **Zoom in на уровне системы + Units как строго типизированные фрагменты**
+4. **Zoom in на уровне системы**
    - Zoom — системная операция (ZoomResolver, endpoint), не UI-трюк.
-   - **Units** — фрагменты с обязательным родителем (`ParentOrgRef` всегда задан). Строго типизированы (UNIT / ORG_UNIT), чтобы не расплываться. «Временно строго»: сначала жёсткий контракт, ослабление — по мере появления кейсов.
-   - TODO: рассмотреть материализацию Units как `HorizonFragment` (сейчас `OrgUnitProfile` в отдельной структуре) с `parentFragmentId` обязательным.
+   - **Units deleted**: UnitCode/OrgUnitProfile/Unit Pipeline полностью удалены. Подразделения с собственным lifecycle материализуются как обычные HorizonFragment (ORGANIZATION) с `ResolutionHint=unit`, `ParentPath` родителя, `SpherePaths` уже родителя.
 
 5. **Учёт в логике пайплайна**
    - DomainContractEngine, Unit Pipeline, Resolve → Steer → Gate — все фазы должны учитывать resolution/уровни.

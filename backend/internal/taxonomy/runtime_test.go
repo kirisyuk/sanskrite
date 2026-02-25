@@ -99,31 +99,7 @@ func TestNormalizeRelationType_EXTRACTS_FROM_BuiltIn(t *testing.T) {
 }
 
 func TestNormalizeLifecycleStage(t *testing.T) {
-	withRuntimeTaxonomy(t, &RuntimeTaxonomy{
-		Version: "test",
-		AllowedLifecycleStages: map[string]struct{}{
-			"concept":         {},
-			"planning":        {},
-			"construction":    {},
-			"operational":     {},
-			"expansion":       {},
-			"suspended":       {},
-			"closed":          {},
-			"decommissioned":  {},
-			"other":           {},
-		},
-		LifecycleStageAliases: map[string]string{
-			"exploration":     "concept",
-			"pre-feasibility": "planning",
-			"feasibility":     "planning",
-			"development":     "construction",
-			"producing":       "operational",
-			"active":          "operational",
-			"mothballed":      "suspended",
-			"shut-in":         "suspended",
-			"abandoned":       "closed",
-		},
-	})
+	withRuntimeTaxonomy(t, nil)
 
 	tests := []struct {
 		in   string
@@ -132,15 +108,15 @@ func TestNormalizeLifecycleStage(t *testing.T) {
 		{"operational", "operational"},
 		{"OPERATIONAL", "operational"},
 		{"Operational", "operational"},
-		{"producing", "operational"},    // alias
-		{"active", "operational"},       // alias
-		{"exploration", "concept"},      // alias
-		{"feasibility", "planning"},     // alias
-		{"development", "construction"}, // alias
-		{"mothballed", "suspended"},     // alias
-		{"abandoned", "closed"},         // alias
+		{"producing", "operational"},       // alias
+		{"active", "operational"},          // alias
+		{"exploration", "concept"},         // alias
+		{"feasibility", "planning"},        // alias
+		{"development", "construction"},    // alias
+		{"mothballed", "suspended"},        // alias
+		{"abandoned", "closed"},            // alias
 		{"unknown_stage", "unknown_stage"}, // returns as-is if not found
-		{"", ""},                         // empty returns empty
+		{"", ""},                           // empty returns empty
 	}
 
 	for _, tt := range tests {
@@ -151,16 +127,7 @@ func TestNormalizeLifecycleStage(t *testing.T) {
 }
 
 func TestIsValidDepositResource(t *testing.T) {
-	withRuntimeTaxonomy(t, &RuntimeTaxonomy{
-		Version: "test",
-		AllowedDepositResources: map[string]struct{}{
-			"oil":         {},
-			"natural-gas": {},
-			"iron-ore":    {},
-			"lithium-ore": {},
-			"other":       {},
-		},
-	})
+	withRuntimeTaxonomy(t, nil)
 
 	tests := []struct {
 		resource string
@@ -171,7 +138,7 @@ func TestIsValidDepositResource(t *testing.T) {
 		{"iron-ore", true},
 		{"lithium-ore", true},
 		{"other", true},
-		{"uranium-ore", false},  // not in test allowlist
+		{"uranium-ore", false},
 		{"", false},
 		{"unknown", false},
 	}
@@ -184,13 +151,7 @@ func TestIsValidDepositResource(t *testing.T) {
 }
 
 func TestIsValidEdgeMetric(t *testing.T) {
-	withRuntimeTaxonomy(t, &RuntimeTaxonomy{
-		Version: "test",
-		AllowedEdgeMetrics: map[string][]string{
-			"OWNS":       {"ownership_percent", "voting_rights_percent"},
-			"INVESTS_IN": {"investment_amount", "valuation_at_investment"},
-		},
-	})
+	withRuntimeTaxonomy(t, nil)
 
 	tests := []struct {
 		edgeType   string
@@ -199,10 +160,10 @@ func TestIsValidEdgeMetric(t *testing.T) {
 	}{
 		{"OWNS", "ownership_percent", true},
 		{"OWNS", "voting_rights_percent", true},
-		{"OWNS", "investment_amount", false},  // wrong edge type
+		{"OWNS", "investment_amount", false}, // wrong edge type
 		{"INVESTS_IN", "investment_amount", true},
 		{"INVESTS_IN", "ownership_percent", false}, // wrong edge type
-		{"SUPPLIES_TO", "annual_volume", false},    // not in test allowlist
+		{"SUPPLIES_TO", "annual_volume", true},
 		{"", "ownership_percent", false},
 		{"OWNS", "", false},
 	}
@@ -245,15 +206,7 @@ func TestIsValidEdgeModality(t *testing.T) {
 }
 
 func TestIsValidServiceDomain(t *testing.T) {
-	withRuntimeTaxonomy(t, &RuntimeTaxonomy{
-		Version: "test",
-		AllowedServiceDomains: map[string]struct{}{
-			"it":          {},
-			"finance":     {},
-			"consulting":  {},
-			"other":       {},
-		},
-	})
+	withRuntimeTaxonomy(t, nil)
 
 	tests := []struct {
 		domain string
@@ -263,7 +216,7 @@ func TestIsValidServiceDomain(t *testing.T) {
 		{"finance", true},
 		{"consulting", true},
 		{"other", true},
-		{"healthcare", false}, // not in test allowlist
+		{"healthcare", true},
 		{"", false},
 	}
 
@@ -275,13 +228,7 @@ func TestIsValidServiceDomain(t *testing.T) {
 }
 
 func TestIsValidServiceSubdomain(t *testing.T) {
-	withRuntimeTaxonomy(t, &RuntimeTaxonomy{
-		Version: "test",
-		AllowedServiceSubdomains: map[string][]string{
-			"it":      {"software-development", "cloud-services", "cybersecurity", "other"},
-			"finance": {"banking", "insurance", "other"},
-		},
-	})
+	withRuntimeTaxonomy(t, nil)
 
 	tests := []struct {
 		domain    string
@@ -294,7 +241,7 @@ func TestIsValidServiceSubdomain(t *testing.T) {
 		{"it", "other", true},
 		{"finance", "banking", true},
 		{"finance", "insurance", true},
-		{"it", "healthcare", false},    // wrong subdomain for domain
+		{"it", "healthcare", false},   // wrong subdomain for domain
 		{"healthcare", "other", true}, // fallback allows "other" for any domain
 		{"", "software-development", false},
 		{"it", "", false},
@@ -334,7 +281,3 @@ func TestIsValidMetricUnit_RuntimeAllowlist_FailOpen(t *testing.T) {
 		t.Errorf("IsValidMetricUnit(USD$, true)=true, want false")
 	}
 }
-
-
-
-

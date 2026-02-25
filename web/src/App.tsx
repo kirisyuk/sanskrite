@@ -8,6 +8,9 @@ import { AuthLoading } from './components/AuthLoading';
 import { TopBar } from './components/TopBar';
 import { BottomBar } from './components/BottomBar';
 import { ServerUnavailableBanner } from './components/ServerUnavailableBanner';
+import { AdminModal } from './components/AdminModal';
+import { useUIStore } from './stores/uiStore';
+import { useIsAdmin } from './hooks/useIsAdmin';
 import DiscoveryPage from './pages/DiscoveryPage';
 import HorizonPage from './pages/HorizonPage';
 import ShareViewPage from './pages/ShareViewPage';
@@ -31,6 +34,9 @@ function AppContent() {
   const navigate = useNavigate();
   const [showModal, setShowModal] = useState<'terms' | 'privacy' | null>(null);
   const { user, loading } = useAuth();
+  const showAdminModal = useUIStore((s) => s.showAdminModal);
+  const setShowAdminModal = useUIStore((s) => s.setShowAdminModal);
+  const isAdmin = useIsAdmin();
 
   // Check if we're on a legal page route
   const isLegalPage = location.pathname === '/terms' || location.pathname === '/privacy';
@@ -114,6 +120,10 @@ function AppContent() {
         
         {/* Modal overlay */}
         {showModal && <LegalModal type={showModal} onClose={handleCloseModal} />}
+        {/* Admin modal: open from TopBar, sidebar, or Horizon Modeler */}
+        {showAdminModal && isAdmin && (
+          <AdminModal isOpen={showAdminModal} onClose={() => setShowAdminModal(false)} />
+        )}
       </div>
     </div>
   );

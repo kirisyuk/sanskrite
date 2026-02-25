@@ -187,24 +187,6 @@ func TestStrategicValidator_nilFragmentReturnsNil(t *testing.T) {
 	}
 }
 
-func TestComposableValidationPrompts_ContainPhaseGuardrails(t *testing.T) {
-	agent := NewCriticAgent(nil)
-	input := CriticValidatorInput{
-		Fragment:          &models.HorizonFragment{Type: "ORGANIZATION", CanonicalPath: "/org/us/example-inc"},
-		UnitPipelinePhase: models.UnitPipelinePhaseP3,
-	}
-	prompt := agent.buildCoreValidationPrompt(input)
-	if !strings.Contains(prompt, "UNIT PIPELINE PHASE: P0-P3") {
-		t.Fatalf("expected P0-P3 guardrails in core prompt")
-	}
-
-	input.UnitPipelinePhase = models.UnitPipelinePhaseP5
-	prompt = agent.buildCoreValidationPrompt(input)
-	if !strings.Contains(prompt, "UNIT PIPELINE PHASE: P5") {
-		t.Fatalf("expected P5 guardrails in core prompt")
-	}
-}
-
 func TestParseValidationResultMap_NormalizesObservedModelDrift(t *testing.T) {
 	payload := map[string]interface{}{
 		"hasConflicts": false,

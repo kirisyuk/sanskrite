@@ -26,7 +26,7 @@ type OntologyFactsRepository struct {
 	storage          *gcp.GCSClient
 	bucket           string
 	useGCS           bool
-	vertexSearchSync func(ctx context.Context, tenantID string) (operationName string, err error)
+	vertexSearchSync func(ctx context.Context, gcsURI string) (operationName string, err error)
 	coordEnricher    FactCoordinateEnricher
 }
 
@@ -44,7 +44,9 @@ func (r *OntologyFactsRepository) WithStorage(storage *gcp.GCSClient, bucket str
 }
 
 // WithVertexSearchSync configures async Vertex AI Search import after GCS upload.
-func (r *OntologyFactsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, tenantID string) (operationName string, err error)) *OntologyFactsRepository {
+// Pass the specific GCS URI (e.g. gs://bucket/tenantId/ontology_facts/id.json) to avoid
+// wildcard expansion that exceeds Discovery Engine's 1000-file limit per request.
+func (r *OntologyFactsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, gcsURI string) (operationName string, err error)) *OntologyFactsRepository {
 	r.vertexSearchSync = syncFn
 	return r
 }
@@ -490,13 +492,14 @@ func (r *OntologyFactsRepository) exportToGCSAndSync(ctx context.Context, f *mod
 	_ = r.getStoragePath(f) // keep for future linkage if needed
 
 	if r.vertexSearchSync != nil {
-		go func(tenantID string) {
+		gcsURI := r.getStoragePath(f)
+		go func(uri string) {
 			syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if _, err := r.vertexSearchSync(syncCtx, tenantID); err != nil {
+			if _, err := r.vertexSearchSync(syncCtx, uri); err != nil {
 				log.Printf("[OntologyFactsRepo] vertex sync failed: %v", err)
 			}
-		}(f.TenantID)
+		}(gcsURI)
 	}
 	return nil
 }

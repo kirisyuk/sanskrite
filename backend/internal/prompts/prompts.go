@@ -154,7 +154,10 @@ TASK:
 - If you cannot map confidently, use "other".
 - If unsure, prefer conservative outputs; omit or use nulls instead of inventing facts.
 - Include intangible events when they are clearly stated (partnerships, alliances/coalitions, union actions, new legal entities/incorporations, factory openings/closures, product/model releases & deprecations, pricing/availability changes, policy/regulatory changes, sanctions/licensing, investigations, dissolutions).
-- For event locations, extract place name (name), full address (address) when known, and structured geo (countryAlpha2/admin1/city). Place and address are used for geocoding; coordinates are resolved by the system.
+- For event locations:
+  - address: ONLY real physical addresses (e.g. "123 Main St, Houston, TX, USA"). Never use event titles, headlines, metrics, or non-address text.
+  - name: Place names for geocoding when address is unknown (e.g. "Dubai airport", "Port of Houston"). Short, location-like only.
+  - Extract countryAlpha2/admin1/city for structured geo. Place and address are used for geocoding.
 -
 - METRIC UPDATES:
   You may extract structured numeric metric updates when the content provides clear values.
@@ -210,8 +213,8 @@ REQUIRED JSON SCHEMA:
     "context": "string?",
     "summary": "string?",
     "location": {
-      "name": "place name (e.g. Dubai airport, Port of Houston)?",
-      "address": "full address for geocoding (e.g. 123 Main St, Houston, TX, USA)?",
+      "name": "place name for geocoding when address unknown (e.g. Dubai airport, Port of Houston)?",
+      "address": "ONLY real physical address (street, city, country). Never event title, headline, or metric. Example: 123 Main St, Houston, TX, USA?",
       "iso6709": "coordinates in ISO6709 format (e.g. +25.27+55.30/)?",
       "countryAlpha2": "ISO3166-1 alpha2 lowercase (e.g., us, cn, de)?",
       "admin1": "state/province code or slug lowercase; use 'na' if unknown/not applicable?",

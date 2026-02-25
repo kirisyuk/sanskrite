@@ -1543,8 +1543,8 @@ func horizonMonitorBlueprintFromSignal(signalType string) (horizonMonitorSignalB
 			SignalType: signalType,
 			Axis:       horizonmodels.AxisInfoUncertainty,
 			Mechanism:  "temporal_anomaly",
-			Sphere:     []string{"/sphere/info"},
-		}, true
+		Sphere:     []string{"/sphere/social/information"},
+	}, true
 	default:
 		return horizonMonitorSignalBlueprint{}, false
 	}
@@ -1576,9 +1576,9 @@ func spherePathsFromCategory(category string) []string {
 	case "natural":
 		return []string{"/sphere/environment"}
 	case "market", "economy", "economic":
-		return []string{"/sphere/economic"}
+		return []string{"/sphere/finance"}
 	default:
-		return []string{"/sphere/info"}
+		return []string{"/sphere/social/information"}
 	}
 }
 

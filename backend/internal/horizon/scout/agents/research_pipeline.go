@@ -19,12 +19,11 @@ type ResearchPipelineRunner struct {
 	agent *ResearchAgent
 }
 
-// Enrich runs the appropriate strategies for the given domain modes and merges fragment updates, relations, supply chains, and grounding evidence.
-func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrategyInput, domainModes []string) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
+// Enrich runs the appropriate strategies for the given domain modes and merges fragment updates, relations, supply chains, grounding evidence, and raw research content.
+func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrategyInput, domainModes []string) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, string, error) {
 	strategies := p.strategiesForModes(domainModes)
 	if len(strategies) == 0 {
-		// Defensive no-op: strategy routing should always return at least GeneralResearchStrategy.
-		return nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, "", nil
 	}
 
 	workingFragment := input.Fragment
@@ -34,11 +33,12 @@ func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrat
 	var allRelations []DiscoveredRelation
 	var allChains []SupplyChain
 	var mergedGrounding *ai.GroundingEvidence
+	var rawContentParts []string
 
 	for _, s := range strategies {
 		out, err := s.Enrich(ctx, input)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, "", err
 		}
 		if out == nil {
 			continue
@@ -51,9 +51,13 @@ func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrat
 		if out.GroundingEvidence != nil {
 			mergedGrounding = ai.MergeGroundingEvidence(mergedGrounding, out.GroundingEvidence)
 		}
+		if strings.TrimSpace(out.RawContent) != "" {
+			rawContentParts = append(rawContentParts, strings.TrimSpace(out.RawContent))
+		}
 	}
 
-	return workingFragment, allRelations, allChains, mergedGrounding, nil
+	rawContent := strings.Join(rawContentParts, "\n\n---\n\n")
+	return workingFragment, allRelations, allChains, mergedGrounding, rawContent, nil
 }
 
 // strategiesForModes returns the list of strategies to run for the given domain modes.

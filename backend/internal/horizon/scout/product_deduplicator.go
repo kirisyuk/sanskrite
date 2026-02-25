@@ -159,6 +159,16 @@ func (d *ProductDeduplicator) DeduplicateProduct(ctx context.Context, fragment *
 		}
 	}
 
+	// Strategy 4c: Cross-shape canonical-path variant lookup.
+	// This bridges flat vs hierarchical/legacy product paths:
+	// - /product/{slug}
+	// - /product/{category}/{type}/{stage}/{slug}
+	// - /product/{orgSlug}/{slug} (legacy)
+	// - malformed legacy tails like /product/{x}/{y}/{slug}
+	if existing, err := d.findByCanonicalPathVariants(ctx, fragment); err == nil && existing != nil && existing.ID != fragment.ID {
+		return existing, nil
+	}
+
 	// Strategy 5: Try to resolve Wikidata ID via API if we have a client
 	if isProductWikidataSearchDedupEnabled() && d.wikidataClient != nil && wikidataID == "" {
 		resolvedID := d.resolveWikidataID(ctx, fragment)
@@ -287,6 +297,33 @@ func (d *ProductDeduplicator) findByIdentifierExact(ctx context.Context, key, va
 				return frag, nil
 			}
 		}
+	}
+	return nil, nil
+}
+
+func (d *ProductDeduplicator) findByCanonicalPathVariants(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, error) {
+	if d == nil || d.fragmentsRepo == nil || fragment == nil {
+		return nil, nil
+	}
+	nameHints := []string{
+		strings.TrimSpace(fragment.Labels["en"]),
+		strings.TrimSpace(fragment.Identifiers["shortName"]),
+		strings.TrimSpace(fragment.Identifiers["legalName"]),
+	}
+	current := strings.TrimSpace(fragment.CanonicalPath)
+	for _, cp := range productCanonicalPathVariants(ctx, current, nameHints...) {
+		cp = strings.TrimSpace(cp)
+		if cp == "" || cp == current {
+			continue
+		}
+		existing, err := d.fragmentsRepo.GetByCanonicalPath(ctx, cp)
+		if err != nil || existing == nil || strings.TrimSpace(existing.ID) == "" {
+			continue
+		}
+		if existing.Type != "" && existing.Type != models.FragmentTypeProduct {
+			continue
+		}
+		return existing, nil
 	}
 	return nil, nil
 }
@@ -467,4 +504,3 @@ func parseProductCanonicalPath(path string) (category, productType, stage, slug 
 
 	return "", "", "", ""
 }
-

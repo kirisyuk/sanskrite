@@ -108,16 +108,14 @@ func main() {
 	// Repositories (use repo to keep GCS export + Vertex sync behavior)
 	fragmentsRepo := horizonrepo.NewHorizonFragmentsRepository(db).
 		WithStorage(gcsClient, *ragBucket).
-		WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
+		WithVertexSearchSync(func(ctx context.Context, gcsURI string) (string, error) {
 			if vertexSearchClient == nil || !vertexSearchClient.IsConfigured() {
 				return "", fmt.Errorf("vertex search client not configured")
 			}
-			gcsPath := fmt.Sprintf("gs://%s/%s/horizon_fragments/**", *ragBucket, tenantID)
-			return vertexSearchClient.ImportDocuments(ctx, &ai.ImportDocumentsRequest{
-				GCSPath:            gcsPath,
-				ReconciliationMode: "INCREMENTAL",
-				DataSchema:         "document",
-			})
+			if strings.TrimSpace(gcsURI) == "" {
+				return "", nil
+			}
+			return vertexSearchClient.ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "document")
 		})
 
 	edgesRepo := horizonrepo.NewDependencyEdgesRepository(db)

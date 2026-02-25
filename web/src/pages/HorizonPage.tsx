@@ -7,13 +7,13 @@ import { useProjectsStore } from '../stores/projectsStore';
 import { useUIStore } from '../stores/uiStore';
 import { SettingsModal } from '../components/SettingsModal';
 import { AccountModal } from '../components/AccountModal';
-import { AdminModal } from '../components/AdminModal';
 import { LensCanvas } from '../components/LensCanvas';
 import { WorldMapPanel } from '../components/WorldMapPanel';
 import AssembleLensRequestComponent, { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
 import { api } from '../lib/api';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 import { useWebSocketConnection } from '../hooks/useWebSocketConnection';
+import { useIsAdmin } from '../hooks/useIsAdmin';
 import { HorizonLoading } from '../components/HorizonLoading';
 import { HorizonEmptyState } from '../components/HorizonEmptyState';
 
@@ -33,7 +33,6 @@ const HorizonPage: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
   const [showSettings, setShowSettings] = React.useState(false);
   const [showAccount, setShowAccount] = React.useState(false);
-  const [showAdmin, setShowAdmin] = React.useState(false);
   const [showWorldMap, setShowWorldMap] = React.useState(false);
   
   // Load saved Horizon state from localStorage
@@ -106,8 +105,8 @@ const HorizonPage: React.FC = () => {
     query: string;
     prefetchScope: string[];
   } | null>(null);
-  
-  const isAdmin = currentUser?.email === 'igor@hatl.one' || currentUser?.email === 'admin@hatl.one';
+
+  const isAdmin = useIsAdmin();
   const isMobile = React.useMemo(() => window.innerWidth < 768, []);
   
   // Detect smartphone (smaller than Galaxy Fold, typically < 600px width)
@@ -300,7 +299,7 @@ const HorizonPage: React.FC = () => {
   const handleCloseAllModals = React.useCallback(() => {
     setShowSettings(false);
     setShowAccount(false);
-    setShowAdmin(false);
+    useUIStore.getState().setShowAdminModal(false);
     setSelectedLensId(null);
   }, []);
 
@@ -595,7 +594,7 @@ const HorizonPage: React.FC = () => {
         }}
         onShowAdmin={() => {
           handleCloseAllModals();
-          setShowAdmin(true);
+          useUIStore.getState().openAdminModal();
         }}
         onCloseAllModals={handleCloseAllModals}
         editingProjectId={editingProjectId}
@@ -723,7 +722,6 @@ const HorizonPage: React.FC = () => {
 
       {showSettings && <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />}
       {showAccount && <AccountModal isOpen={showAccount} onClose={() => setShowAccount(false)} />}
-      {showAdmin && isAdmin && <AdminModal isOpen={showAdmin} onClose={() => setShowAdmin(false)} />}
     </div>
   );
 };

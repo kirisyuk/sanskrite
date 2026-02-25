@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -160,6 +161,39 @@ func defaultMetricSpecsForType(t models.FragmentType) []metricSpec {
 			{Path: "/metric/risk/public_perception", Kind: metricKindDirectional},
 		}
 	}
+}
+
+// RequiredMetricPathsForType is the metrics schema contract for runtime refresh decisions:
+// it returns canonical metric paths that must exist (type defaults + explicit requested metrics).
+func RequiredMetricPathsForType(t models.FragmentType, requestedMetrics []string) []string {
+	specs := defaultMetricSpecsForType(t)
+	for _, rm := range requestedMetrics {
+		p := canonicalizeMetricPath(rm)
+		if p == "" {
+			continue
+		}
+		base := metricBaseName(p)
+		kind := metricKindMagnitude
+		if base == "geopolitical_alignment" || base == "market_sentiment" || base == "public_perception" {
+			kind = metricKindDirectional
+		}
+		specs = append(specs, metricSpec{Path: p, Kind: kind})
+	}
+
+	uniq := make(map[string]struct{}, len(specs))
+	for _, s := range specs {
+		cp := canonicalizeMetricPath(s.Path)
+		if cp == "" {
+			continue
+		}
+		uniq[cp] = struct{}{}
+	}
+	out := make([]string, 0, len(uniq))
+	for path := range uniq {
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ComputeState produces a normalized risk metric state map. If it cannot infer any meaningful metrics,
@@ -331,7 +365,7 @@ func (a *MetricsAgent) buildMetricsPrompt(fragment *models.HorizonFragment, sour
 		}
 	}
 
-return fmt.Sprintf(`You are a metrics scoring agent for a risk analysis system.
+	return fmt.Sprintf(`You are a metrics scoring agent for a risk analysis system.
 
 You MUST output standardized RISK METRICS for the entity as fragment.state.
 

@@ -6,7 +6,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
-// DomainContract captures a domain contract extracted from intent resolution or job state.
+// DomainContract captures the domain-intent contract layer extracted from intent resolution or job state.
 // This is a lightweight struct to avoid importing scout internals in the pipeline package.
 type DomainContract struct {
 	CanonicalPath      string

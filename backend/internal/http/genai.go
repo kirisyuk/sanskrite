@@ -424,7 +424,7 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 				// Save usage metrics asynchronously
 				if h.usageMetricsRepo != nil && h.modelManager != nil {
 					go func() {
-						metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 						defer cancel()
 						durationMs := int(time.Since(started).Milliseconds())
 						projectID := req.ProjectID
@@ -474,7 +474,7 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 			// Save usage metrics asynchronously with a new context
 			if h.usageMetricsRepo != nil && h.modelManager != nil {
 				go func() {
-					metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
 					durationMs := int(time.Since(started).Milliseconds())
 					_ = h.saveUsageMetric(metricCtx, auth, req, *resp, nil, nil, &durationMs)
@@ -529,7 +529,7 @@ func (h *GenAIHandler) Complete(w http.ResponseWriter, r *http.Request) {
 			if req.ProjectID != "" {
 				projID = &req.ProjectID
 			}
-			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			durationMs := int(time.Since(started).Milliseconds())
 			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs)
@@ -569,7 +569,7 @@ func (h *GenAIHandler) CompleteWithTools(w http.ResponseWriter, r *http.Request)
 			if req.ProjectID != "" {
 				projID = &req.ProjectID
 			}
-			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			durationMs := int(time.Since(started).Milliseconds())
 			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs)
@@ -607,7 +607,7 @@ func (h *GenAIHandler) CompleteJSON(w http.ResponseWriter, r *http.Request) {
 			if req.ProjectID != "" {
 				projID = &req.ProjectID
 			}
-			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			durationMs := int(time.Since(started).Milliseconds())
 			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs)
@@ -645,7 +645,7 @@ func (h *GenAIHandler) CompleteJSONStrict(w http.ResponseWriter, r *http.Request
 			if req.ProjectID != "" {
 				projID = &req.ProjectID
 			}
-			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			durationMs := int(time.Since(started).Milliseconds())
 			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs)
@@ -683,7 +683,7 @@ func (h *GenAIHandler) AdhocJSON(w http.ResponseWriter, r *http.Request) {
 			if req.ProjectID != "" {
 				projID = &req.ProjectID
 			}
-			metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			durationMs := int(time.Since(started).Milliseconds())
 			_ = h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs)
@@ -982,7 +982,7 @@ func (h *GenAIHandler) Stream(w http.ResponseWriter, r *http.Request) {
 						projID = &projectID
 					}
 					go func() {
-						metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 						defer cancel()
 						durationMs := int(time.Since(started).Milliseconds())
 						if err := h.saveUsageMetric(metricCtx, auth, genaiReq, genaiResp, projID, nil, &durationMs); err != nil {

@@ -1,10 +1,11 @@
 import React from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ThemeContext } from './ThemeProvider';
 import { useAuth } from '../contexts/AuthContext';
 import { UserProfile } from './UserProfile';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../stores/uiStore';
+import { useIsAdmin } from '../hooks/useIsAdmin';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useProjectsStore } from '../stores/projectsStore';
 import { api } from '../lib/api';
@@ -13,9 +14,11 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   const { theme, setTheme } = React.useContext(ThemeContext);
   const { currentUser } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   const { i18n } = useTranslation();
   const uiLanguage = useUIStore((s) => s.uiLanguage);
   const setUiLanguage = useUIStore((s) => s.setUiLanguage);
+  const isAdmin = useIsAdmin();
   // PERFORMANCE FIX: Subscribe only to specific values, not entire store
   const genaiChatProjectId = useGenaiChatStore((s) => s.projectId);
   const genaiChatInteractionsLength = useGenaiChatStore((s) => s.interactions.length);
@@ -502,27 +505,41 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
     <div className="topbar">
       {/* Left side - Logo (aligned to sidebar toggle spacing) */}
       <div className="flex items-center gap-3 px-3">
-        <div className="hzn-brand-mark" aria-label="Horizon navigation">
+        <div className="hzn-brand-mark" aria-label="Horizon navigation" ref={modeRef}>
           <span className="hzn-brand-primary">Horizon</span>
           <span className="hzn-brand-divider" aria-hidden="true">|</span>
-          <div className="hzn-brand-dropdown" ref={modeRef}>
+          {modeOpen ? (
+            <div className="hzn-brand-inline-choices hzn-brand-inline-choices-open" role="menu" aria-label="Mode selection">
+              <button
+                type="button"
+                role="menuitem"
+                className="hzn-brand-inline-choice"
+                onClick={() => { setModeOpen(false); navigate('/horizon'); }}
+              >
+                Structure
+              </button>
+              <span className="hzn-brand-divider" aria-hidden="true">|</span>
+              <button
+                type="button"
+                role="menuitem"
+                className="hzn-brand-inline-choice"
+                onClick={() => { setModeOpen(false); navigate('/'); }}
+              >
+                Discuss
+              </button>
+            </div>
+          ) : (
             <button
               type="button"
               className="hzn-brand-option hzn-brand-option-trigger"
               aria-label="Select mode"
               aria-haspopup="menu"
-              aria-expanded={modeOpen}
-              onClick={() => setModeOpen((v) => !v)}
+              aria-expanded={false}
+              onClick={() => setModeOpen(true)}
             >
               {currentMode}
             </button>
-            {modeOpen && (
-              <div className="hzn-brand-menu" role="menu" aria-label="Mode selection">
-                <a href="/horizon" role="menuitem" className="hzn-brand-menu-item">Structure</a>
-                <a href="/" role="menuitem" className="hzn-brand-menu-item">Discuss</a>
-              </div>
-            )}
-          </div>
+          )}
         </div>
       </div>
 
@@ -609,6 +626,28 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
           <option value="ru">RU</option>
           <option value="kz">KZ</option>
         </select>
+        {/* Admin (only when admin) */}
+        {currentUser && isAdmin && (
+          <button
+            type="button"
+            className="p-2 rounded"
+            aria-label="Admin panel"
+            title="Admin panel"
+            onClick={() => useUIStore.getState().openAdminModal()}
+            style={{ backgroundColor: 'transparent', transition: 'background-color 150ms ease' }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+            }}
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: 'var(--text-heading)' }}>
+              <path d="M12 3l7 3v6c0 5-3.5 8-7 9-3.5-1-7-4-7-9V6l7-3z" />
+              <path d="M9.5 12.5l1.8 1.8 3.2-3.3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
         {/* Theme toggle */}
         <button
           className="p-2 rounded"

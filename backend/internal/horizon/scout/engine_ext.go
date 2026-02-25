@@ -352,6 +352,81 @@ func bestEffortLabelFromCanonicalPath(cp string) string {
 	return ""
 }
 
+// marketGeoLabel returns a human-readable label for the geo segment of a market path.
+// e.g. "iq" → "Iraq", "global" → "Global", "gcc" → "GCC"
+func marketGeoLabel(geoSlug string) string {
+	geo := strings.ToLower(strings.TrimSpace(geoSlug))
+	if geo == "" {
+		return ""
+	}
+	if n := countryNameByISO2(geo); n != "" {
+		return n
+	}
+	switch geo {
+	case "global", "int":
+		return "Global"
+	case "gcc":
+		return "GCC"
+	case "eu":
+		return "EU"
+	case "asean":
+		return "ASEAN"
+	case "opec":
+		return "OPEC"
+	case "brics":
+		return "BRICS"
+	case "eaeu":
+		return "EAEU"
+	default:
+		return bestEffortTitleCase(strings.ReplaceAll(geo, "-", " "))
+	}
+}
+
+// marketDisplayLabel produces a deterministic, informative title for a market from its canonical path.
+// Template: "{Country} {Leaf Segment} Market" for all levels.
+// L1 /market/{geo}/{domain}                         → "Iraq Agriculture Market"
+// L2 /market/{geo}/{domain}/{vertical}              → "Iraq Crop Production Market"
+// L3+ /market/{geo}/{domain}/{vertical}/{sub}/...   → "Iraq Rice Production Market"
+func marketDisplayLabel(canonicalPath string) string {
+	cp := strings.TrimSpace(canonicalPath)
+	if cp == "" || !strings.HasPrefix(cp, "/market/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	geo := marketGeoLabel(parts[1])
+	if geo == "" {
+		geo = bestEffortTitleCase(parts[1])
+	}
+	leaf := parts[len(parts)-1]
+	leafLabel := bestEffortTitleCase(strings.ReplaceAll(leaf, "-", " "))
+	return fmt.Sprintf("%s %s Market", geo, leafLabel)
+}
+
+// isSubstantiveMarketLabel returns true if the LLM-provided label is meaningful enough
+// to keep instead of replacing with the structured template.
+// A label is substantive if it is non-empty, contains a space (not a bare slug),
+// and doesn't just repeat the last path segment.
+func isSubstantiveMarketLabel(label, canonicalPath string) bool {
+	if label == "" {
+		return false
+	}
+	if !strings.Contains(label, " ") {
+		return false
+	}
+	parts := strings.Split(strings.Trim(canonicalPath, "/"), "/")
+	lastSeg := ""
+	if len(parts) > 0 {
+		lastSeg = strings.ReplaceAll(parts[len(parts)-1], "-", " ")
+	}
+	if strings.EqualFold(label, lastSeg) {
+		return false
+	}
+	return true
+}
+
 func hasUnknownGeoSegments(path string) bool {
 	p := strings.ToLower(strings.TrimSpace(path))
 	if !strings.HasPrefix(p, "/loc/") {
@@ -395,6 +470,13 @@ func isSoftDeniedRelationForRecurse(sourceType, targetType models.FragmentType, 
 
 func bestEffortDisplayLabel(label string, canonicalPath string) string {
 	label = strings.TrimSpace(label)
+	if strings.HasPrefix(canonicalPath, "/market/") {
+		if candidate := marketDisplayLabel(canonicalPath); candidate != "" {
+			if !isSubstantiveMarketLabel(label, canonicalPath) {
+				return candidate
+			}
+		}
+	}
 	if strings.HasPrefix(canonicalPath, "/loc/") {
 		parts := strings.Split(strings.Trim(canonicalPath, "/"), "/")
 		if len(parts) >= 4 {
@@ -633,7 +715,7 @@ func copyDomainModeStateToChild(parentState map[string]interface{}, childState m
 	if parentState == nil || childState == nil {
 		return
 	}
-	for _, key := range []string{"domainMode", "domainModes", "domains", models.StateKeyUnitPipelinePhase, models.StateKeyUnitProfiles} {
+	for _, key := range []string{"domainMode", "domainModes", "domains"} {
 		if v, ok := parentState[key]; ok && v != nil {
 			childState[key] = v
 		}
@@ -2105,7 +2187,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				}
 			}
 		}
-		enrichedFragment, newRelations, newChains, evidence, err := e.researchAgent.EnrichFragmentWithGrounding(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, internalFirstContext, originalQuery, nil, existingEntities)
+		enrichedFragment, newRelations, newChains, evidence, _, err := e.researchAgent.EnrichFragmentWithGrounding(ctx, domainFragment, domainMissing, focus, spherePaths, keywords, specialties, internalFirstContext, originalQuery, nil, existingEntities)
 		_ = enrichedFragment
 		if err != nil {
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> domain research failed: %v", err))
@@ -2353,7 +2435,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 
 	// Facet-driven relations (deterministic; best-effort).
 	// - geo -> GEO_REGION via IN_GEO_SCOPE (country-level /loc/{cc}/na/na)
-	// - material/application/topic/subject -> PRODUCT via ABOUT (flat /product/{slug})
+	// - material/application/topic/subject -> PRODUCT via ABOUT (strict /product/{category}/{type}/{stage}/{slug})
 	if contract != nil && contract.Facets != nil && len(contract.Facets) > 0 {
 		// geo facet may have multiple tokens (e.g., bilateral relations)
 		if gs, ok := contract.Facets["geo"]; ok && len(gs) > 0 {
@@ -2405,14 +2487,9 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				if slug == "" || slug == "na" {
 					continue
 				}
-				cp := "/product/" + slug
+				cp := BuildProductCanonicalPath("", "", "", slug)
 				if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
-					// /product/{slug} is valid for some paths but if validator rejects due to taxonomy segments,
-					// still allow it (ScoutEngine has a canonicalizer for flat products).
-					// Keep this conservative: only allow flat /product/{slug}.
-					if strings.Count(strings.Trim(cp, "/"), "/") != 1 {
-						continue
-					}
+					continue
 				}
 				rels = append(rels, agents.DiscoveredRelation{
 					TargetName:          bestEffortDisplayLabel("", cp),
@@ -3442,7 +3519,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			continue
 		}
 
-		// Normalize relation type early (runtime taxonomy allowlist) to avoid creating edges with unsupported types.
+		// Normalize relation type early (code-defined allowlist) to avoid creating edges with unsupported types.
 		// IMPORTANT: preserve the raw relation type for debugging taxonomy drift / LLM outputs.
 		rawRelationType := strings.TrimSpace(rel.RelationType)
 		rel.RelationType = strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
@@ -3991,38 +4068,6 @@ func (e *ScoutEngine) processRelationsInternal(
 							ProjectID:   job.ProjectID,
 						},
 					}
-					// Supply-chain cascade visited set: prevent enqueueing same targetPath multiple times inside this cascade.
-					if isSupplyChainMode && e != nil && e.cascadeVisitedRepo != nil {
-						already, vErr := e.cascadeVisitedRepo.TryMarkVisited(
-							ctx,
-							job.TenantID,
-							job.ProjectID,
-							cascadeID,
-							targetPath,
-							job.ID,
-							currentDepth+1,
-						)
-						if vErr != nil {
-							logGroundingErrorWithContext(job, "scout", "relations.supply_chain_visited", "visited_mark_failed", "repo_update_error", true, vErr)
-							e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.supply_chain_visited", "visited_mark_failed", "repo_update_error", true)
-						} else if already {
-							msg := fmt.Sprintf("[SupplyChainVisited] SKIP alreadyVisited tenant=%s cascade=%s target=%s depth=%d",
-								strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), currentDepth+1)
-							fmt.Printf("%s\n", msg)
-							e.logLine(ctx, job, "info", msg)
-							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.skip", map[string]any{
-								"tenantId":  strings.TrimSpace(job.TenantID),
-								"projectId": strings.TrimSpace(job.ProjectID),
-								"lensId":    strings.TrimSpace(job.LensID),
-								"jobId":     strings.TrimSpace(job.ID),
-								"cascadeId": strings.TrimSpace(cascadeID),
-								"target":    strings.TrimSpace(targetPath),
-								"depth":     currentDepth + 1,
-							})
-							continue
-						}
-					}
-
 					if _, err := e.scoutingJobsRepo.Create(ctx, scoutingJob); err != nil {
 						logGroundingErrorWithContext(job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true, err)
 						e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true)
@@ -4277,6 +4322,15 @@ func (e *ScoutEngine) processRelationsInternal(
 						if v, ok := job.State["specialties"]; ok {
 							childState["specialties"] = v
 						}
+						if v, ok := job.State["focus"]; ok {
+							childState["focus"] = v
+						}
+						if v, ok := job.State["keywords"]; ok {
+							childState["keywords"] = v
+						}
+						if v, ok := job.State["spherePaths"]; ok {
+							childState["spherePaths"] = v
+						}
 						copyDomainModeStateToChild(job.State, childState)
 					}
 					scoutingJob := &models.ScoutingJob{
@@ -4372,7 +4426,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		/* LEGACY INLINE EDGE MATERIALIZER (disabled; kept for reference during migration)
 
 		// 3. Create Dependency Edge
-		// Normalize and validate relation types against runtime taxonomy (Firestore-backed).
+		// Normalize and validate relation types against code-defined taxonomy contracts.
 		edgeType := models.DependencyType(strings.TrimSpace(rel.RelationType))
 		edgeSourceID := sourceFragment.ID
 		edgeTargetID := targetID
@@ -5032,7 +5086,7 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 				}
 			}
 		}
-		enrichedFrag, newRelations, _, evidence, err := e.researchAgent.EnrichFragmentWithGrounding(
+		enrichedFrag, newRelations, _, evidence, _, err := e.researchAgent.EnrichFragmentWithGrounding(
 			researchCtx,
 			frag,
 			missing,
@@ -6163,28 +6217,6 @@ func (e *ScoutEngine) processSupplyChains(
 		supplierRef := supplier
 		customerRef := customer
 		productRef := product
-		supplierUnitRef := normalizeUnitRef(seg.SupplierUnitRef)
-		customerUnitRef := normalizeUnitRef(seg.CustomerUnitRef)
-		supplierUnitCode := models.NormalizeUnitCode(seg.SupplierUnitCode)
-		customerUnitCode := models.NormalizeUnitCode(seg.CustomerUnitCode)
-		if supplierUnitCode == models.UnitCodeUnclassified && supplierUnitRef != "" {
-			supplierUnitCode = models.NormalizeUnitCode(supplierUnitRef)
-		}
-		if customerUnitCode == models.UnitCodeUnclassified && customerUnitRef != "" {
-			customerUnitCode = models.NormalizeUnitCode(customerUnitRef)
-		}
-		if supplierUnitRef == "" {
-			supplierUnitRef = string(supplierUnitCode)
-		}
-		if customerUnitRef == "" {
-			customerUnitRef = string(customerUnitCode)
-		}
-		if supplierUnitRef == "" {
-			supplierUnitRef = string(models.UnitCodeUnclassified)
-		}
-		if customerUnitRef == "" {
-			customerUnitRef = string(models.UnitCodeUnclassified)
-		}
 		slFrag := &models.HorizonFragment{
 			Type:             models.FragmentTypeSupplyLink,
 			TenantID:         "global",
@@ -6198,26 +6230,6 @@ func (e *ScoutEngine) processSupplyChains(
 			Metadata:         models.FragmentMetadata{CreatedAt: time.Now().UTC(), LastUpdatedAt: time.Now().UTC(), EpistemicStatus: models.EpistemicStatusLowConfidence},
 		}
 		slFrag.Qualifiers = map[string]interface{}{
-			"supplierUnitRef":                  supplierUnitRef,
-			"supplierUnitCode":                 string(supplierUnitCode),
-			"customerUnitRef":                  customerUnitRef,
-			"customerUnitCode":                 string(customerUnitCode),
-			models.UnitQualifierSourceUnitRef:  supplierUnitRef,
-			models.UnitQualifierSourceUnitCode: string(supplierUnitCode),
-			models.UnitQualifierSourceUnitLabel: func() string {
-				if supplierUnitCode == models.UnitCodeUnclassified {
-					return string(models.UnitCodeUnclassified)
-				}
-				return string(supplierUnitCode)
-			}(),
-			models.UnitQualifierTargetUnitRef:  customerUnitRef,
-			models.UnitQualifierTargetUnitCode: string(customerUnitCode),
-			models.UnitQualifierTargetUnitLabel: func() string {
-				if customerUnitCode == models.UnitCodeUnclassified {
-					return string(models.UnitCodeUnclassified)
-				}
-				return string(customerUnitCode)
-			}(),
 			"fromSupplyChain": true,
 		}
 		slFrag.State = map[string]models.MetricValue{"confidence": {Value: seg.Confidence, Confidence: 0.8}}

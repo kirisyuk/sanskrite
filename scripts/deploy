@@ -1439,6 +1439,11 @@ deploy_api() {
     paypal_secrets="$paypal_secrets,GOOGLE_MAPS_API_KEY=google_maps_api_key:latest"
   fi
 
+  # OpenCorporates API token (optional - for org enrichment; API returns 401 without it)
+  if gcloud secrets describe open_corporates_api_token --project="$PROJECT_ID" >/dev/null 2>&1; then
+    paypal_secrets="$paypal_secrets,OPEN_CORPORATES_API_TOKEN=open_corporates_api_token:latest"
+  fi
+
   if gcloud secrets describe paypal_client_id >/dev/null 2>&1 && gcloud secrets describe paypal_secret >/dev/null 2>&1; then
     paypal_secrets="$paypal_secrets,PAYPAL_CLIENT_ID=paypal_client_id:latest,PAYPAL_SECRET=paypal_secret:latest"
     if gcloud secrets describe paypal_webhook_id >/dev/null 2>&1; then

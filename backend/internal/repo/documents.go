@@ -23,7 +23,7 @@ type DocumentsRepository struct {
 	useGCS           bool
 	uploadLimiter    *rate.Limiter                                                                // Rate limiter for GCS uploads to prevent 429 errors
 	limiterMu        sync.Mutex                                                                   // Mutex to protect limiter initialization
-	vertexSearchSync func(ctx context.Context, tenantID string) (operationName string, err error) // Опциональная функция синхронизации с Vertex AI Search, возвращает operationName
+	vertexSearchSync func(ctx context.Context, gcsURI string) (operationName string, err error) // Опциональная функция синхронизации с Vertex AI Search; передавать конкретный gs:// URI, не wildcard
 	bigquerySync     *gcp.BigQueryClient                                                          // Опциональная синхронизация с BigQuery
 }
 
@@ -55,9 +55,8 @@ func (r *DocumentsRepository) WithStorage(storage *gcp.GCSClient, bucket string)
 }
 
 // WithVertexSearchSync настраивает автоматическую синхронизацию с Vertex AI Search
-// syncFn будет вызвана асинхронно после успешной загрузки документа в GCS
-// syncFn должна возвращать operationName для отслеживания статуса операции
-func (r *DocumentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, tenantID string) (operationName string, err error)) *DocumentsRepository {
+// syncFn вызывается с конкретным gs:// URI файла (не wildcard), чтобы не превышать лимит Discovery Engine (1000 файлов на запрос).
+func (r *DocumentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, gcsURI string) (operationName string, err error)) *DocumentsRepository {
 	r.vertexSearchSync = syncFn
 	return r
 }
@@ -162,19 +161,16 @@ func (r *DocumentsRepository) Upsert(ctx context.Context, d *models.Document) er
 		}
 		if storagePath != nil {
 			d.StoragePath = storagePath
-			// Триггерим синхронизацию с Vertex AI Search асинхронно (не блокируем основной поток)
 			if r.vertexSearchSync != nil {
-				go func(tenantID string) {
-					// Используем background context с таймаутом
+				gcsURI := *storagePath
+				go func(uri string) {
 					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
-					operationName, err := r.vertexSearchSync(syncCtx, tenantID)
+					operationName, err := r.vertexSearchSync(syncCtx, uri)
 					if err == nil && operationName != "" {
-						// Operation tracking will be handled by a background worker
-						// For now, we just log it - full tracking implementation will be added separately
-						log.Printf("[DocumentsRepo] Vertex AI Search sync triggered for tenant %s: operation=%s", tenantID, operationName)
+						log.Printf("[DocumentsRepo] Vertex AI Search sync triggered: operation=%s", operationName)
 					}
-				}(d.TenantID)
+				}(gcsURI)
 			}
 		}
 	}
@@ -216,19 +212,16 @@ func (r *DocumentsRepository) Create(ctx context.Context, d *models.Document) (s
 		}
 		if storagePath != nil {
 			d.StoragePath = storagePath
-			// Триггерим синхронизацию с Vertex AI Search асинхронно (не блокируем основной поток)
 			if r.vertexSearchSync != nil {
-				go func(tenantID string) {
-					// Используем background context с таймаутом
+				gcsURI := *storagePath
+				go func(uri string) {
 					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
-					operationName, err := r.vertexSearchSync(syncCtx, tenantID)
+					operationName, err := r.vertexSearchSync(syncCtx, uri)
 					if err == nil && operationName != "" {
-						// Operation tracking will be handled by a background worker
-						// For now, we just log it - full tracking implementation will be added separately
-						log.Printf("[DocumentsRepo] Vertex AI Search sync triggered for tenant %s: operation=%s", tenantID, operationName)
+						log.Printf("[DocumentsRepo] Vertex AI Search sync triggered: operation=%s", operationName)
 					}
-				}(d.TenantID)
+				}(gcsURI)
 			}
 		}
 	}
@@ -629,14 +622,8 @@ func (r *DocumentsRepository) Delete(ctx context.Context, id string) error {
 	doc, err := r.GetByID(ctx, id)
 	if err == nil && doc != nil {
 		_ = r.deleteContent(ctx, doc) // Best effort deletion
-		// Триггерим синхронизацию после удаления (чтобы удалить из Vertex AI Search)
-		if r.vertexSearchSync != nil {
-			go func(tenantID string) {
-				syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				r.vertexSearchSync(syncCtx, tenantID)
-			}(doc.TenantID)
-		}
+		// Sync on delete would require full tenant reconcile (wildcard) which exceeds Discovery Engine 1000-file limit.
+		// Skip sync; index may be stale until next full reindex.
 	}
 	_, err = r.col.Doc(id).Delete(ctx)
 	return err
@@ -648,14 +635,7 @@ func (r *DocumentsRepository) DeleteWithStorage(ctx context.Context, d *models.D
 		return ErrInvalidDocument
 	}
 	_ = r.deleteContent(ctx, d) // Best effort deletion
-	// Триггерим синхронизацию после удаления (чтобы удалить из Vertex AI Search)
-	if r.vertexSearchSync != nil {
-		go func(tenantID string) {
-			syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			r.vertexSearchSync(syncCtx, tenantID)
-		}(d.TenantID)
-	}
+	// Sync on delete would require full tenant reconcile; skip to avoid 1000-file limit.
 	_, err := r.col.Doc(d.ID).Delete(ctx)
 	return err
 }

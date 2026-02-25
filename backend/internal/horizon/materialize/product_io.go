@@ -81,8 +81,8 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 		}
 		candidates := scout.PreferredCanonicalPaths(rel)
 		if len(candidates) == 0 {
-			// Fallback: /product/<slug>
-			candidates = []string{"/product/" + scout.Slugify(name)}
+			// Fallback keeps strict product canonical contract.
+			candidates = []string{scout.BuildProductCanonicalPath("", "", "", scout.Slugify(name))}
 		}
 
 		// Prefer existing fragments in candidate order (with optional canonicalization/dedup).
@@ -215,5 +215,3 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 
 	return out, nil
 }
-
-

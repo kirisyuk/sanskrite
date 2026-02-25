@@ -9,6 +9,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
@@ -146,6 +147,19 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		}, nil
 	}
 
+	// Policy 2.4: Enforce canonical path contract.
+	if err := taxonomy.ValidateCanonicalPath(strings.TrimSpace(fragment.CanonicalPath)); err != nil {
+		reason := fmt.Sprintf("invalid canonical path %q: %v", fragment.CanonicalPath, err)
+		log.Printf("%s REJECT: %s", logPrefix, reason)
+		fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
+		return PolicyDecision{
+			Action:       ActionQuarantineSoft,
+			Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
+			DecisionPath: "rule:hardcoded:invalid_canonical_path",
+			Confidence:   1.0,
+		}, nil
+	}
+
 	// Policy 2.5: Deterministic type/path reconciliation.
 	if reconciledType, changed := edgesemantics.ReconcileTypeWithCanonicalPath(fragment.Type, fragment.CanonicalPath); changed {
 		originalType := fragment.Type
@@ -231,26 +245,6 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		}
 
 		log.Printf("%s GEO_REGION validation passed: %s", logPrefix, fragment.CanonicalPath)
-	}
-
-	// Policy 5: Warn about flat facility paths (penalty, not reject)
-	if fragment.Type == horizonmodels.FragmentTypeFacility {
-		pathParts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
-		if len(pathParts) == 2 && pathParts[0] == "fac" {
-			warning := fmt.Sprintf("flat facility path %q - consider nesting under parent org: /fac/{org}/%s",
-				fragment.CanonicalPath, pathParts[1])
-			log.Printf("%s WARNING: %s", logPrefix, warning)
-			fragment.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, warning, 0.05)
-			return PolicyDecision{
-				Action: ActionAllowWithPenalty,
-				Params: map[string]interface{}{
-					"penalty": 0.05,
-					"reason":  warning,
-				},
-				DecisionPath: "rule:hardcoded:flat_facility",
-				Confidence:   0.95,
-			}, nil
-		}
 	}
 
 	// Check DB rules for additional validation
@@ -440,22 +434,34 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	}
 
 	// Policy 2.55: HAS_MARKET_SEGMENT path rule (best-effort). Ideal: child path = parent path + one segment.
-	// Policy 2.57: ORG↔MARKET must be PARTICIPATES_IN.
+	// Policy 2.57: ORG↔MARKET must be PARTICIPATES_IN — except GOV entities which may
+	// REGULATES/CONTROLS_ACCESS/INFLUENCES/ADMINISTERS markets.
 	isOrgMarketPair := (sourceType == string(horizonmodels.FragmentTypeOrganization) && targetType == string(horizonmodels.FragmentTypeMarket)) ||
 		(sourceType == string(horizonmodels.FragmentTypeMarket) && targetType == string(horizonmodels.FragmentTypeOrganization))
 	if isOrgMarketPair &&
 		relationType != string(horizonmodels.DependencyTypeParticipatesIn) {
-		reason := "ORG↔MARKET edges must use PARTICIPATES_IN (direction ORGANIZATION -> MARKET)"
-		log.Printf("%s QUARANTINE: %s", logPrefix, reason)
-		return PolicyDecision{
-			Action: ActionQuarantineSoft,
-			Params: map[string]interface{}{
-				"penalty": 0.30,
-				"reason":  reason,
-			},
-			DecisionPath: "rule:hardcoded:org_market_participates_only",
-			Confidence:   0.70,
-		}, nil
+		govPath := sourcePath
+		if targetType == string(horizonmodels.FragmentTypeOrganization) {
+			govPath = targetPath
+		}
+		isGovEntity := strings.HasPrefix(govPath, "/gov/")
+		isGovValidEdge := isGovEntity && (relationType == string(horizonmodels.DependencyTypeRegulates) ||
+			relationType == string(horizonmodels.DependencyTypeControlsAccess) ||
+			relationType == string(horizonmodels.DependencyTypeInfluences) ||
+			relationType == string(horizonmodels.DependencyTypeAdministers))
+		if !isGovValidEdge {
+			reason := "ORG↔MARKET edges must use PARTICIPATES_IN (direction ORGANIZATION -> MARKET); GOV entities may also use REGULATES/CONTROLS_ACCESS/INFLUENCES/ADMINISTERS"
+			log.Printf("%s QUARANTINE: %s", logPrefix, reason)
+			return PolicyDecision{
+				Action: ActionQuarantineSoft,
+				Params: map[string]interface{}{
+					"penalty": 0.30,
+					"reason":  reason,
+				},
+				DecisionPath: "rule:hardcoded:org_market_participates_only",
+				Confidence:   0.70,
+			}, nil
+		}
 	}
 
 	// Policy 2.55: HAS_MARKET_SEGMENT path rule (best-effort). Ideal: child path = parent path + one segment.

@@ -157,13 +157,11 @@ func main() {
 	if gcsClient != nil && ragDocsBucket != "" {
 		fragmentsRepo.WithStorage(gcsClient, ragDocsBucket)
 		if vertexSearchClient != nil && vertexSearchClient.IsConfigured() {
-			fragmentsRepo.WithVertexSearchSync(func(ctx context.Context, tenantID string) (string, error) {
-				gcsPath := fmt.Sprintf("gs://%s/%s/horizon_fragments/**", ragDocsBucket, tenantID)
-				return vertexSearchClient.ImportDocuments(ctx, &ai.ImportDocumentsRequest{
-					GCSPath:            gcsPath,
-					ReconciliationMode: "INCREMENTAL",
-					DataSchema:         "document",
-				})
+			fragmentsRepo.WithVertexSearchSync(func(ctx context.Context, gcsURI string) (string, error) {
+				if strings.TrimSpace(gcsURI) == "" {
+					return "", nil
+				}
+				return vertexSearchClient.ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "document")
 			})
 			log.Printf("Horizon Fragments: Vertex AI Search sync enabled (bucket=%s store=%s)", ragDocsBucket, vertexStoreID)
 		}

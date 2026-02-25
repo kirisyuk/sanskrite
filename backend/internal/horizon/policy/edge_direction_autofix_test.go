@@ -203,6 +203,46 @@ func TestApplyEdgeCanonicalizationPolicyAffiliatedWithOrgToCommunity(t *testing.
 	}
 }
 
+func TestResolveEdgeDirectionAutoFix_GovRegulatesMarketExempt(t *testing.T) {
+	_, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeRegulates,
+		horizonmodels.FragmentTypeOrganization,
+		horizonmodels.FragmentTypeMarket,
+		"/gov/us/federal-reserve", "/market/us/finance/banking",
+	)
+	if ok {
+		t.Fatalf("GOV REGULATES MARKET should NOT trigger auto-fix to PARTICIPATES_IN")
+	}
+}
+
+func TestResolveEdgeDirectionAutoFix_NonGovRegulatesMarketStillFixes(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeRegulates,
+		horizonmodels.FragmentTypeOrganization,
+		horizonmodels.FragmentTypeMarket,
+		"/org/us/jpmorgan-chase", "/market/us/finance/banking",
+	)
+	if !ok {
+		t.Fatalf("non-GOV ORG REGULATES MARKET should trigger auto-fix")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeParticipatesIn {
+		t.Fatalf("expected newType PARTICIPATES_IN, got %s", fix.NewType)
+	}
+}
+
+func TestApplyEdgeCanonicalizationPolicy_GovRegulatesMarketPreserved(t *testing.T) {
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:   horizonmodels.DependencyTypeRegulates,
+		SourceType: horizonmodels.FragmentTypeOrganization,
+		TargetType: horizonmodels.FragmentTypeMarket,
+		SourcePath: "/gov/us/federal-reserve",
+		TargetPath: "/market/us/finance/banking",
+	})
+	if got.Changed {
+		t.Fatalf("GOV REGULATES MARKET should not be rewritten, but got changed to %s (reason: %s)", got.EdgeType, got.Reason)
+	}
+}
+
 func TestApplyEdgeCanonicalizationPolicyHasMarketSegmentChildToParent(t *testing.T) {
 	// Child (more segments) as source, parent as target -> should swap to parent→child
 	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{

@@ -128,7 +128,7 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 			"maxRecursionDepth":  0.0,
 			"trigger":            "ui.graph.scope_scout_query",
 			"correlationId":      correlationID,
-			models.StateKeyDeferredScopeAdd: true,
+			"deferredScopeAdd": true,
 		}
 		if len(specialties) > 0 {
 			state["specialties"] = specialties

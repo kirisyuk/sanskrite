@@ -2,7 +2,6 @@ package agents
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
@@ -43,7 +42,7 @@ func buildSpecializationModulesBlock(specialties []string, domainModes []string,
 		b.WriteString("MODULE: products_and_services (outputs + inputs + transformations)\n")
 		b.WriteString("- For ORG/FAC: outputs via PRODUCES, inputs via CONSUMES.\n")
 		b.WriteString("- For PRODUCT: upstream/downstream value-chain via TRANSFORMS_INTO.\n")
-		b.WriteString("- Use canonical /product/... paths (fallback /product/{slug} only when classification is unknown).\n")
+		b.WriteString("- Use canonical /product/{category}/{type}/{stage}/{slug} paths consistently.\n")
 		b.WriteString("- Product/material names: prefer singular canonical terms; avoid brand prefixes unless officially part of the name.\n\n")
 	}
 	if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) {
@@ -108,30 +107,18 @@ func inferPromptFragmentType(canonicalPath string, fragmentType models.FragmentT
 	}
 }
 
-func unitTemplatePairsPromptString(pairs []models.UnitTemplatePair) string {
-	if len(pairs) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(pairs))
-	for _, p := range pairs {
-		parts = append(parts, string(p.Source)+"->"+string(p.Target))
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, ", ")
-}
-
-func buildObjectQualifierUnitTemplateContractBlock(canonicalPath string, fragmentType models.FragmentType, communityType string) string {
+func buildObjectQualifierContractBlock(canonicalPath string, fragmentType models.FragmentType, communityType string) string {
 	_ = communityType
-	return buildObjectQualifierUnitTemplateContractBlockWithHints(canonicalPath, fragmentType, nil, nil, nil)
+	return buildObjectQualifierContractBlockWithHints(canonicalPath, fragmentType, nil, nil, nil)
 }
 
-func buildObjectQualifierUnitTemplateContractBlockWithHints(canonicalPath string, fragmentType models.FragmentType, qualifiers map[string]interface{}, identifiers map[string]string, _ map[string]string) string {
+func buildObjectQualifierContractBlockWithHints(canonicalPath string, fragmentType models.FragmentType, qualifiers map[string]interface{}, identifiers map[string]string, _ map[string]string) string {
 	fragmentType = inferPromptFragmentType(canonicalPath, fragmentType)
 	allQualifiers := models.AllObjectQualifierStrings()
 	allowedQualifiers := models.AllowedObjectQualifierStringsForType(fragmentType, canonicalPath)
 
 	var b strings.Builder
-	b.WriteString("OBJECT QUALIFIER + UNIT TEMPLATE CONTRACT (STRICT):\n")
+	b.WriteString("OBJECT QUALIFIER CONTRACT (STRICT):\n")
 	b.WriteString(fmt.Sprintf("- objectQualifier CLOSED ENUM (global): %s\n", strings.Join(allQualifiers, ", ")))
 	if len(allowedQualifiers) > 0 {
 		b.WriteString(fmt.Sprintf("- objectQualifier allowed for this target (%s, %s): %s\n", string(fragmentType), strings.TrimSpace(canonicalPath), strings.Join(allowedQualifiers, ", ")))
@@ -139,27 +126,6 @@ func buildObjectQualifierUnitTemplateContractBlockWithHints(canonicalPath string
 		b.WriteString(fmt.Sprintf("- objectQualifier allowed for this target (%s, %s): none (omit objectQualifier)\n", string(fragmentType), strings.TrimSpace(canonicalPath)))
 	}
 	b.WriteString("- Never invent objectQualifier values outside CLOSED ENUM; if unsupported for this type/path, leave it unset.\n")
-	b.WriteString("- Unit template applies ONLY to relationType SUPPLIES_TO and DEPENDS_ON.\n")
-
-	for _, q := range []models.ObjectQualifier{
-		models.ObjectQualifierRoute,
-		models.ObjectQualifierSupply,
-		models.ObjectQualifierProcurement,
-	} {
-		contract, ok := models.UnitTemplateContractForQualifier(q)
-		if !ok {
-			continue
-		}
-		b.WriteString(fmt.Sprintf("- objectQualifier=%q -> unit_template_key=%q; allowed unit pairs: %s; default fallback: %s->%s.\n",
-			string(q),
-			string(contract.Key),
-			unitTemplatePairsPromptString(contract.AllowedPairs),
-			string(contract.DefaultPair.Source),
-			string(contract.DefaultPair.Target),
-		))
-	}
-	b.WriteString("- Always emit unit qualifiers on SUPPLIES_TO/DEPENDS_ON: source_unit_ref/code/label and target_unit_ref/code/label.\n")
-	b.WriteString("- If uncertain, use \"unclassified\"; do not fabricate non-contract unit codes.\n")
 
 	switch detectFacilityTaskSemantic(canonicalPath, qualifiers, identifiers) {
 	case facilityTaskSemanticRoute:
@@ -174,10 +140,10 @@ func buildObjectQualifierUnitTemplateContractBlockWithHints(canonicalPath string
 }
 
 func buildObjectTypeTaskSpecializationBlock(canonicalPath string, fragmentType models.FragmentType, communityType string) string {
-	return buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath, fragmentType, communityType, nil, nil)
+	return buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath, fragmentType, communityType, nil, nil, nil)
 }
 
-func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragmentType models.FragmentType, communityType string, qualifiers map[string]interface{}, identifiers map[string]string) string {
+func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragmentType models.FragmentType, communityType string, qualifiers map[string]interface{}, identifiers map[string]string, spherePaths []string) string {
 	key := entity_semantics.ResolveByPath(canonicalPath, fragmentType, communityType)
 	def := entity_semantics.GetDefinition(key)
 
@@ -227,6 +193,11 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 		b.WriteString("- Mechanisms must have users (USES_MECHANISM) and affected entities (APPLIES_TO).\n")
 	case entity_semantics.EntityTypeDomain:
 		b.WriteString("- Expand domain into first-order concrete anchors before adding overlays.\n")
+	}
+	if len(spherePaths) > 0 {
+		b.WriteString(fmt.Sprintf("- Active spheres: %s\n", strings.Join(spherePaths, ", ")))
+		b.WriteString("- Prioritize discovery of DECISION_POINT and MECHANISM entities within these spheres.\n")
+		b.WriteString("- For subordinate entities (ADMINISTERS targets, subsidiaries), prefer those operating in the same spheres.\n")
 	}
 	return b.String() + "\n"
 }

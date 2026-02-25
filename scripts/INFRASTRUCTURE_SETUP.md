@@ -69,6 +69,7 @@ vim scripts/create-secrets.sh
   - `google-custom-search-api-key`
   - `google-custom-search-cx`
   - `google_maps_api_key` — для Geocoding API (геокодирование адресов org/facility)
+  - `open_corporates_api_token` — для OpenCorporates API (обогащение org registry IDs; без токена API возвращает 401)
 
 - Другие:
   - `GEONAMES_USERNAME`

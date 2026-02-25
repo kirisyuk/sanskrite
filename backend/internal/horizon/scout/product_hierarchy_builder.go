@@ -14,6 +14,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // =============================================================================
@@ -779,9 +780,11 @@ func (b *ProductHierarchyBuilder) ensureProducerFromWikidata(
 		return nil, fmt.Errorf("entity %s has no label", qID)
 	}
 
-	// Build canonical path for organization
-	slug := Slugify(label)
-	canonicalPath := "/org/" + slug
+	// Build canonical path for organization in canonical /org/{geo}/{slug} shape.
+	canonicalPath := taxonomy.OrgCanonicalPath("na", label)
+	if canonicalPath == "" {
+		return nil, fmt.Errorf("failed to build canonical org path for %q", label)
+	}
 
 	// Create fragment
 	now := time.Now().UTC()

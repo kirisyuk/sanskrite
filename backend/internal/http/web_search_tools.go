@@ -233,9 +233,9 @@ func (e *WebSearchToolExecutor) saveTavilyUsageMetric(ctx context.Context, query
 	durationMs := int(duration.Milliseconds())
 	taskType := "tool.web_search"
 
-	// Save metric asynchronously to avoid blocking
+	// Save metric asynchronously to avoid blocking (30s for Firestore under load)
 	go func() {
-		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
 		useCase := "search"

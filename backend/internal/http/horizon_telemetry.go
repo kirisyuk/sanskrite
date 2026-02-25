@@ -156,7 +156,7 @@ func (h *HorizonTelemetryHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // ExternalServices GET /api/v1/admin/horizon/telemetry/external-services
-// Returns hit/miss/error counts and hit rate per external service (geonames, wikidata, opencorporates).
+// Returns hit/miss/error counts and hit rate per external service (geonames, wikidata, opencorporates, google_geocoding).
 func (h *HorizonTelemetryHandler) ExternalServices(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET is allowed", nil)
@@ -182,7 +182,7 @@ func (h *HorizonTelemetryHandler) ExternalServices(w http.ResponseWriter, r *htt
 		}
 	}
 
-	services := []string{"geonames", "wikidata", "opencorporates"}
+	services := []string{"geonames", "wikidata", "opencorporates", "google_geocoding", "nominatim"}
 	type serviceStats struct {
 		Hit     int64   `json:"hit"`
 		Miss    int64   `json:"miss"`

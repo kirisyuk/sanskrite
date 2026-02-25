@@ -160,6 +160,51 @@ func isStrategicChokepointPath(path string) bool {
 	return strategicChokepointID(path) != ""
 }
 
+// IsChokepointFragment returns true if the fragment is a strategic chokepoint (strait, canal, pass, pipeline-corridor).
+// Used for transit amplification during propagation.
+func IsChokepointFragment(fragment *horizonmodels.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	gt := strings.ToLower(strings.TrimSpace(fragment.GeoFeatureType))
+	switch gt {
+	case "strait", "canal", "pass", "pipeline-corridor":
+		return true
+	}
+	for _, t := range fragment.Tags {
+		if strings.ToLower(strings.TrimSpace(t)) == "chokepoint" {
+			return true
+		}
+	}
+	// Fallback: path-based detection (for fragments without geoFeatureType)
+	return isStrategicChokepointPath(fragment.CanonicalPath)
+}
+
+// TransitAmplify applies chokepoint transit amplification. Signal passing through a chokepoint
+// is strengthened (bottleneck: disruption cascades with amplification). Returns amplitude clamped to 1.0.
+func TransitAmplify(amplitude float64, axis string) float64 {
+	if amplitude <= 0 {
+		return amplitude
+	}
+	axis = strings.TrimSpace(axis)
+	var mult float64
+	switch axis {
+	case horizonmodels.AxisLogisticsCapacity, horizonmodels.AxisLogisticsLatency:
+		mult = 1.25
+	case horizonmodels.AxisPhysicalFlowSupply, horizonmodels.AxisPhysicalFlowDemand:
+		mult = 1.20
+	case horizonmodels.AxisGeoConflict:
+		mult = 1.15
+	default:
+		mult = 1.10
+	}
+	out := amplitude * mult
+	if out > 1.0 {
+		return 1.0
+	}
+	return out
+}
+
 func strategicChokepointID(path string) string {
 	path = normalizeGeoPath(path)
 	if path == "" {

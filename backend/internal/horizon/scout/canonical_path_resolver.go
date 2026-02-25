@@ -193,10 +193,12 @@ func (r *CanonicalPathResolver) Resolve(
 		}
 	}
 
-	// Step 1.6: Best-effort PRODUCT normalization for flat /product/{slug} paths into hierarchical taxonomy.
-	// We only attempt to "upgrade" flat product paths; if we cannot confidently classify, we keep the original path.
+	// Step 1.6: Best-effort PRODUCT normalization to a stable shape.
+	// Handles:
+	// - flat /product/{slug} -> hierarchical taxonomy when possible
+	// - legacy/malformed product paths (e.g. /product/{x}/{y}/{slug}) -> stable canonical fallback
 	if fragmentType == models.FragmentTypeProduct {
-		if norm := normalizeFlatProductPath(ctx, result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
+		if norm := normalizeProductPathForResolve(ctx, result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
 			atomic.AddInt64(&r.productTaxonomyRewrites, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps,
 				fmt.Sprintf("product_taxonomy: %s -> %s", result.CanonicalPath, norm))
@@ -222,6 +224,32 @@ func (r *CanonicalPathResolver) Resolve(
 				fmt.Sprintf("found_existing_fragment: %s (id=%s)", result.CanonicalPath, existing.ID))
 			log.Printf("%s Found existing fragment: %s (id=%s)", logPrefix, result.CanonicalPath, existing.ID)
 			return result, nil
+		}
+		// Product cross-shape dedup fallback:
+		// if exact path misses, probe stable product path variants sharing the same identity slug.
+		if fragmentType == models.FragmentTypeProduct {
+			for _, variantPath := range productCanonicalPathVariants(ctx, result.CanonicalPath) {
+				variantPath = strings.TrimSpace(variantPath)
+				if variantPath == "" || variantPath == strings.TrimSpace(result.CanonicalPath) {
+					continue
+				}
+				candidate, verr := r.fragmentsRepo.GetByCanonicalPath(ctx, variantPath)
+				if verr != nil || candidate == nil || strings.TrimSpace(candidate.ID) == "" {
+					continue
+				}
+				if candidate.Type != "" && candidate.Type != models.FragmentTypeProduct {
+					continue
+				}
+				atomic.AddInt64(&r.foundExistingByPath, 1)
+				result.ExistingFragment = candidate
+				if cp := strings.TrimSpace(candidate.CanonicalPath); cp != "" && cp != result.CanonicalPath {
+					result.NormalizationSteps = append(result.NormalizationSteps,
+						fmt.Sprintf("product_variant_match: %s -> %s (id=%s)", result.CanonicalPath, cp, candidate.ID))
+					result.CanonicalPath = cp
+				}
+				log.Printf("%s Product variant match: %s -> %s (id=%s)", logPrefix, inputPath, result.CanonicalPath, candidate.ID)
+				return result, nil
+			}
 		}
 	}
 
@@ -745,7 +773,7 @@ func normalizeFlatProductPath(ctx context.Context, path string) string {
 	}
 
 	// Use a human-ish label as input to canonicalizer (helps pattern matching).
-	// Note: canonicalizer will slugify + apply runtime taxonomy synonyms anyway.
+	// Note: canonicalizer will slugify + apply code-defined taxonomy synonyms.
 	name := strings.ReplaceAll(slug, "-", " ")
 	name = strings.ReplaceAll(name, "_", " ")
 	name = strings.TrimSpace(name)
@@ -859,6 +887,31 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 					fmt.Sprintf("gov_path_upgrade: %s -> %s", result.CanonicalPath, govPath))
 				result.CanonicalPath = govPath
 			}
+		}
+	}
+
+	// Step 1.25: Best-effort PRODUCT normalization to a stable shape.
+	if fragmentType == models.FragmentTypeProduct {
+		nameHints := make([]string, 0, 3)
+		if s := strings.TrimSpace(metadata["shortName"]); s != "" {
+			nameHints = append(nameHints, s)
+		}
+		if s := strings.TrimSpace(metadata["legalName"]); s != "" {
+			nameHints = append(nameHints, s)
+		}
+		if s := strings.TrimSpace(metadata["labelEN"]); s != "" {
+			nameHints = append(nameHints, s)
+		}
+		for _, variant := range productCanonicalPathVariants(ctx, result.CanonicalPath, nameHints...) {
+			variant = strings.TrimSpace(variant)
+			if variant == "" || variant == strings.TrimSpace(result.CanonicalPath) {
+				continue
+			}
+			atomic.AddInt64(&r.productTaxonomyRewrites, 1)
+			result.NormalizationSteps = append(result.NormalizationSteps,
+				fmt.Sprintf("product_taxonomy: %s -> %s", result.CanonicalPath, variant))
+			result.CanonicalPath = variant
+			break
 		}
 	}
 
@@ -984,6 +1037,35 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 			result.NormalizationSteps = append(result.NormalizationSteps,
 				fmt.Sprintf("found_existing_fragment: %s (id=%s)", result.CanonicalPath, existing.ID))
 			log.Printf("%s Found existing fragment: %s (id=%s)", logPrefix, result.CanonicalPath, existing.ID)
+		}
+		if result.ExistingFragment == nil && fragmentType == models.FragmentTypeProduct {
+			nameHints := []string{
+				strings.TrimSpace(metadata["shortName"]),
+				strings.TrimSpace(metadata["legalName"]),
+				strings.TrimSpace(metadata["labelEN"]),
+			}
+			for _, variantPath := range productCanonicalPathVariants(ctx, result.CanonicalPath, nameHints...) {
+				variantPath = strings.TrimSpace(variantPath)
+				if variantPath == "" || variantPath == strings.TrimSpace(result.CanonicalPath) {
+					continue
+				}
+				candidate, verr := r.fragmentsRepo.GetByCanonicalPath(ctx, variantPath)
+				if verr != nil || candidate == nil || strings.TrimSpace(candidate.ID) == "" {
+					continue
+				}
+				if candidate.Type != "" && candidate.Type != models.FragmentTypeProduct {
+					continue
+				}
+				atomic.AddInt64(&r.foundExistingByPath, 1)
+				result.ExistingFragment = candidate
+				if cp := strings.TrimSpace(candidate.CanonicalPath); cp != "" && cp != result.CanonicalPath {
+					result.NormalizationSteps = append(result.NormalizationSteps,
+						fmt.Sprintf("product_variant_match: %s -> %s (id=%s)", result.CanonicalPath, cp, candidate.ID))
+					result.CanonicalPath = cp
+				}
+				log.Printf("%s Product variant match (metadata): %s -> %s (id=%s)", logPrefix, inputPath, result.CanonicalPath, candidate.ID)
+				break
+			}
 		}
 	}
 

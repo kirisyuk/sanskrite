@@ -27,6 +27,8 @@ import {
   getHorizonNodeVisualType,
 } from './HorizonGraphNodeTypes';
 import { api } from '../lib/api';
+import { useIsAdmin } from '../hooks/useIsAdmin';
+import { useUIStore } from '../stores/uiStore';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -602,6 +604,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   onToggleInspector,
 }) => {
   const { theme } = React.useContext(ThemeContext);
+  const isAdmin = useIsAdmin();
   const DEV = import.meta.env.DEV;
   const dbg = React.useCallback((...args: any[]) => {
     if (DEV) console.log(...args);
@@ -17619,9 +17622,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   Encode -&gt; Transfer (12-axis propagation) -&gt; Decode
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => closeModeler()}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => useUIStore.getState().openAdminModal()}
+                    title="Admin panel"
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 10,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'transparent',
+                      color: 'var(--text-secondary-strong)',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}
+                  >
+                    Admin
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => closeModeler()}
                 style={{
                   width: 30,
                   height: 30,
@@ -17636,6 +17659,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               >
                 {Icons.X}
               </button>
+              </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(240px, 1fr))', gap: 10 }}>

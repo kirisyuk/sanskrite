@@ -76,8 +76,7 @@ func (c *OrgSelectiveCanonizer) ApplyFromCanonicalPath(frag *horizonmodels.Horiz
 		frag.CanonicalParts.Org.Geo = geo
 		changed = true
 		applied = append(applied, "org.geo")
-		// If the target is geo-scoped, legacy must be false.
-		if geo != "" && frag.CanonicalParts.Org.Legacy {
+		if frag.CanonicalParts.Org.Legacy {
 			frag.CanonicalParts.Org.Legacy = false
 			applied = append(applied, "org.legacy=false")
 		}
@@ -92,10 +91,13 @@ func (c *OrgSelectiveCanonizer) ApplyFromCanonicalPath(frag *horizonmodels.Horiz
 		changed = true
 		applied = append(applied, "org.baseSlug")
 	}
-	// Preserve legacy=true only when geo is absent.
+	// Canonical org paths are always geo-scoped.
 	if strings.TrimSpace(frag.CanonicalParts.Org.Geo) == "" {
-		frag.CanonicalParts.Org.Legacy = true
+		frag.CanonicalParts.Org.Geo = "na"
+		changed = true
+		applied = append(applied, "org.geo=na")
 	}
+	frag.CanonicalParts.Org.Legacy = false
 
 	return changed, applied, nil
 }

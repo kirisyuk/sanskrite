@@ -641,6 +641,45 @@ p {
   align-items: baseline;
 }
 
+.hzn-brand-inline-choices {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.hzn-brand-inline-choices-open {
+  animation: hzn-brand-inline-fade-in 0.2s ease-out;
+}
+
+@keyframes hzn-brand-inline-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.hzn-brand-inline-choice {
+  background: transparent;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: rgba(244, 248, 255, 0.92);
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.hzn-brand-inline-choice:hover {
+  color: #f4f8ff;
+}
+
+[data-theme="light"] .hzn-brand-inline-choice {
+  color: rgba(34, 58, 102, 0.9);
+}
+
+[data-theme="light"] .hzn-brand-inline-choice:hover {
+  color: #223a66;
+}
+
 .hzn-brand-option-trigger {
   background: transparent;
   border: 0;

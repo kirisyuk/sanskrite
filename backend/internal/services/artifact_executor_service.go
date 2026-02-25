@@ -603,9 +603,9 @@ func (s *ArtifactExecutorService) saveUsageMetric(_ context.Context, tenantID, p
 	}
 
 	// Save asynchronously to avoid blocking
-	// Use a new context with timeout to avoid cancellation from parent context
+	// Use a new context with timeout to avoid cancellation from parent context (30s for Firestore under load)
 	go func() {
-		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_, err := s.usageMetricsRepo.CreateMetric(metricCtx, tenantID, userID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs, useCasePtr)
 		if err != nil {

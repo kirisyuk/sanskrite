@@ -62,6 +62,25 @@ func isDynastyOrTribeCommunity(canonicalPath string) bool {
 	return communityType == "dynasty" || communityType == "tribe"
 }
 
+// isGovMarketRegulatorEdge returns true when a /gov/ entity uses a regulatory
+// edge type towards a MARKET, which should NOT be rewritten to PARTICIPATES_IN.
+func isGovMarketRegulatorEdge(edgeType DependencyType, sourceType, targetType FragmentType, sourcePath, targetPath string) bool {
+	govPath := ""
+	if sourceType == FragmentTypeOrganization && targetType == FragmentTypeMarket {
+		govPath = sourcePath
+	} else if sourceType == FragmentTypeMarket && targetType == FragmentTypeOrganization {
+		govPath = targetPath
+	}
+	if !strings.HasPrefix(strings.TrimSpace(govPath), "/gov/") {
+		return false
+	}
+	switch edgeType {
+	case DependencyTypeRegulates, DependencyTypeControlsAccess, DependencyTypeInfluences, DependencyTypeAdministers:
+		return true
+	}
+	return false
+}
+
 func canonicalizeOrgMarketToParticipates(
 	edgeType DependencyType,
 	sourceType, targetType FragmentType,
@@ -236,8 +255,7 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 	}
 
 	// ORG↔MARKET canonical contract: use only PARTICIPATES_IN in ORG -> MARKET direction.
-	// This guardrail is intentionally broad: regardless of raw relation type, normalize
-	// organization-market edges to participation semantics.
+	// NOTE: CanonicalizeEdge has no path info; GOV exemption is applied in CanonicalizeEdgeWithPaths.
 	if newType, shouldSwap, changed, reason := canonicalizeOrgMarketToParticipates(edgeType, sourceType, targetType); changed {
 		return newType, shouldSwap, changed, reason
 	}
@@ -493,6 +511,13 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 		return DependencyTypeAdministers, true, true, "canonicalize: ADMINISTERS /org -> /gov swapped to /gov -> /org"
 	}
 
+	// OWNS: /org/ → /gov/ is backwards (gov owns state-owned enterprises, not vice versa).
+	if edgeType == DependencyTypeOwns &&
+		strings.HasPrefix(strings.TrimSpace(sourcePath), "/org/") &&
+		strings.HasPrefix(strings.TrimSpace(targetPath), "/gov/") {
+		return DependencyTypeOwns, true, true, "canonicalize: OWNS /org -> /gov swapped to /gov -> /org (gov owns state-owned enterprises)"
+	}
+
 	// CONTROLS: /product/ → /gov/ or /org/ is backwards (gov/org controls product).
 	if edgeType == DependencyTypeControls &&
 		strings.HasPrefix(strings.TrimSpace(sourcePath), "/product/") &&
@@ -511,6 +536,12 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 		// Edge type stays PRODUCES (ORG → PRODUCT is valid).
 		// The caller should reconcile targetType to PRODUCT based on path.
 		return DependencyTypeProduces, false, true, "canonicalize: ORGANIZATION PRODUCES ORGANIZATION(path=/product/...) -> keep PRODUCES, target is mistyped PRODUCT"
+	}
+
+	// GOV→MARKET exemption: if a /gov/ entity uses a regulatory edge type towards
+	// a MARKET, preserve it as-is (do NOT let CanonicalizeEdge rewrite to PARTICIPATES_IN).
+	if isGovMarketRegulatorEdge(edgeType, sourceType, targetType, sourcePath, targetPath) {
+		return edgeType, false, false, ""
 	}
 
 	// First apply standard canonicalization

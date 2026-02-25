@@ -154,7 +154,7 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 					"/gov/sa/sfda",
 					"/gov/ae/adnoc",
 					"/gov/us/sec",
-					"/gov/ae-sa-om/gcc-council", // composite geo for intergovernmental
+					"/gov/ae-sa-om/gcc-council",   // composite geo for intergovernmental
 					"/gov/eu/european-commission", // regional token for EU-level bodies
 					"/gov/asean/asean-secretariat",
 				},
@@ -214,19 +214,23 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 			},
 		},
 		Market: MarketTaxonomyRules{
-			Format:  "/market/{geo}/{domain}/{vertical}",
+			Format:  "L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent path + one segment",
 			Domains: []string{"finance", "technology", "industrial", "consumer", "healthcare", "energy", "materials", "telecom", "real-estate", "public-sector"},
 			Examples: Examples{
 				Correct: []string{
-					"/market/sa/finance/banking",
+					"/market/sa/finance/banking",                 // L2
+					"/market/iq/agriculture",                     // L1
+					"/market/sa/finance/banking/islamic-banking", // L3
+					"/market/iq/agriculture/crop-production",     // L2
 					"/market/ae/energy/oil-gas",
 					"/market/global/technology/semiconductors",
-					"/market/eu/finance/banking",   // regional token for EU market
-					"/market/brics/energy/oil-gas", // regional token for BRICS
+					"/market/eu/finance/banking",   // regional geo
+					"/market/brics/energy/oil-gas", // regional geo
 				},
 				Incorrect: []string{
-					"/market/banking",    // missing geo and domain
-					"/market/sa/banking", // missing domain segment
+					"/market/banking",                    // missing geo and domain
+					"/market/sa/banking",                 // missing domain segment
+					"/market/iq/agriculture/agriculture", // repeated segment INVALID
 				},
 			},
 		},
@@ -248,6 +252,7 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "CONSUMES", Direction: "ORG|FACILITY|PRODUCT → PRODUCT", ValidSource: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}, ValidTarget: []string{"PRODUCT"}},
 				{EdgeType: "INVESTS_IN", Direction: "ORG|PERSON → ORG|PROGRAM|PRODUCT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "PRODUCT"}},
 				// PROGRAM can participate in markets (e.g., government programs active in a sector/segment).
+				// GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES toward MARKET.
 				{EdgeType: "PARTICIPATES_IN", Direction: "ORG|FACILITY|COMMUNITY|PRODUCT|PROGRAM → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PRODUCT", "PROGRAM"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "DOMINATES", Direction: "ORG|FACILITY|COMMUNITY → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "HAS_MARKET_SEGMENT", Direction: "MARKET → MARKET", ValidSource: []string{"MARKET"}, ValidTarget: []string{"MARKET"}},
@@ -514,17 +519,16 @@ func (r *TaxonomyRules) ValidateProductPath(path string) (bool, string) {
 	}
 
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	// /product/{slug}
-	if len(parts) == 2 {
-		return true, ""
-	}
-	// /product/{category}/{type}/{stage}/{slug}
 	if len(parts) != 5 {
-		return false, fmt.Sprintf("PRODUCT path must be /product/{slug} or /product/{category}/{type}/{stage}/{slug}, got %d segments", len(parts))
+		return false, fmt.Sprintf("PRODUCT path must be /product/{category}/{type}/{stage}/{slug}, got %d segments", len(parts))
 	}
 
 	if !containsString(r.Product.Categories, parts[1]) {
 		return false, fmt.Sprintf("Invalid product category: %s", parts[1])
+	}
+	// Service products use the same 5-part contract; type/stage are service domain/subdomain.
+	if parts[1] == "service" {
+		return true, ""
 	}
 	if !containsString(r.Product.Types, parts[2]) {
 		return false, fmt.Sprintf("Invalid product type: %s", parts[2])

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/addressvalidate"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -204,43 +205,31 @@ func enrichFromGeoNames(ctx context.Context, gn ontology.GeoNamesClientInterface
 	return true, nil
 }
 
+// buildAddressFromFact builds an address string for geocoding from fact.
+// Only uses EventAddress and EventPlace+country — never Title/Summary (often headlines).
 func buildAddressFromFact(f *coremodels.OntologyFact) string {
 	if f == nil {
 		return ""
 	}
-	// 1. EventAddress from LLM (best for geocoding)
+	// 1. EventAddress from LLM (best for geocoding when it's a real address)
 	if f.EventAddress != nil {
 		addr := strings.TrimSpace(*f.EventAddress)
-		if addr != "" {
+		if addr != "" && addressvalidate.IsPlausibleAddress(addr) {
 			return addr
 		}
 	}
-	// 2. EventPlace + country
+	// 2. EventPlace + country (e.g. "Dubai airport, AE")
 	cc := extractCountryFromFact(f)
 	if f.EventPlace != nil {
 		place := strings.TrimSpace(*f.EventPlace)
-		if place != "" {
-			if cc != "" {
-				return place + ", " + cc
+		if place != "" && cc != "" {
+			addr := place + ", " + cc
+			if addressvalidate.IsPlausibleAddress(addr) {
+				return addr
 			}
-			return place
 		}
 	}
-	// 3. Title often contains location: "Dubai airport closure", "Port of Houston"
-	title := strings.TrimSpace(f.Title)
-	if title == "" {
-		title = strings.TrimSpace(f.Summary)
-	}
-	if len(title) > 100 {
-		title = title[:100]
-	}
-	if title != "" && cc != "" {
-		return title + ", " + cc
-	}
-	if cc != "" {
-		return cc
-	}
-	return title
+	return ""
 }
 
 func extractCountryFromFact(f *coremodels.OntologyFact) string {

@@ -198,10 +198,6 @@ func ValidateCanonicalPath(path string) error {
 	}
 
 	// Namespace-specific shape constraints (keep deterministic and conservative).
-	//
-	// IMPORTANT:
-	// - We keep backward compatibility for legacy /org/{slug} paths.
-	// - We enforce stricter shapes for /gov and /segment to avoid ambiguous merges.
 	switch namespace {
 	case "gov":
 		// /gov/{geo}/{slug}
@@ -215,20 +211,41 @@ func ValidateCanonicalPath(path string) error {
 			return fmt.Errorf("gov canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, na, or regional token like eu/asean/brics): %s", parts[1], path)
 		}
 	case "org":
-		// Allowed:
-		// - legacy: /org/{slug}
-		// - preferred: /org/{geo}/{slug}
+		// Strict: /org/{geo}/{slug}
 		// geo: ISO3166-1 alpha2, composite (tr-sy, ae-sa-om), na, int, or regional (eu, asean, brics, gcc, etc.)
 		// Regional tokens allow EU/ASEAN/BRICS-level orgs (European Commission, ASEAN Secretariat, etc.)
-		if len(parts) == 2 {
-			return nil
-		}
 		if len(parts) != 3 {
-			return fmt.Errorf("org canonical path must be /org/{slug} (legacy) or /org/{geo}/{slug}: %s", path)
+			return fmt.Errorf("org canonical path must be /org/{geo}/{slug}: %s", path)
 		}
 		geo := strings.ToLower(strings.TrimSpace(parts[1]))
 		if geo != "na" && geo != "int" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) && !IsRegionalGeoToken(geo) {
 			return fmt.Errorf("org canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, na, int, or regional token like eu/asean/brics): %s", parts[1], path)
+		}
+	case "product":
+		// Strict: /product/{category}/{type}/{stage}/{slug}
+		//
+		// NOTE:
+		// - We keep one canonical contract for products across prompts/validators.
+		// - For service products, category MUST be "service"; type/stage carry service domain/subdomain.
+		if len(parts) != 5 {
+			return fmt.Errorf("product canonical path must have exactly 5 segments: /product/{category}/{type}/{stage}/{slug}: %s", path)
+		}
+		category := strings.ToLower(strings.TrimSpace(parts[1]))
+		if !IsValidProductCategory(category) {
+			return fmt.Errorf("product canonical path has invalid category %q (expected one of code-defined taxonomy categories): %s", parts[1], path)
+		}
+		// Service products use the same 5-part contract, but type/stage are service domain/subdomain
+		// and are not constrained by goods taxonomy allowlists.
+		if category == "service" {
+			break
+		}
+		productType := strings.ToLower(strings.TrimSpace(parts[2]))
+		stage := strings.ToLower(strings.TrimSpace(parts[3]))
+		if !IsValidProductType(productType) {
+			return fmt.Errorf("product canonical path has invalid type %q (expected one of code-defined taxonomy types): %s", parts[2], path)
+		}
+		if !IsValidProductStage(stage) {
+			return fmt.Errorf("product canonical path has invalid stage %q (expected one of code-defined taxonomy stages): %s", parts[3], path)
 		}
 	case "loc":
 		// /loc/{cc}/{admin1}/{city}
@@ -240,10 +257,9 @@ func ValidateCanonicalPath(path string) error {
 			return fmt.Errorf("loc canonical path has invalid country/region %q (expected ISO3166-1 alpha2, composite, or regional token): %s", parts[1], path)
 		}
 	case "community":
-		// /community/{geo}/{type}/{slug}
-		// Legacy: /community/{geo}/{slug}
-		if len(parts) != 3 && len(parts) != 4 {
-			return fmt.Errorf("community canonical path must be /community/{geo}/{slug} (legacy) or /community/{geo}/{type}/{slug}: %s", path)
+		// Strict: /community/{geo}/{type}/{slug}
+		if len(parts) != 4 {
+			return fmt.Errorf("community canonical path must be /community/{geo}/{type}/{slug}: %s", path)
 		}
 		geo := strings.ToLower(strings.TrimSpace(parts[1]))
 		if geo == "" {
@@ -251,6 +267,25 @@ func ValidateCanonicalPath(path string) error {
 		}
 		if geo != "global" && !reCountryAlpha2.MatchString(geo) && !IsRegionalGeoToken(geo) && !isCompositeGeo(geo) {
 			return fmt.Errorf("community canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, or regional token): %s", parts[1], path)
+		}
+	case "fac":
+		// Strict: /fac/{orgSlug}/{facilitySlug}
+		if len(parts) != 3 {
+			return fmt.Errorf("facility canonical path must have exactly 3 segments: /fac/{orgSlug}/{facilitySlug}: %s", path)
+		}
+	case "program":
+		// Strict: /program/{jurisdiction}/{slug}
+		if len(parts) != 3 {
+			return fmt.Errorf("program canonical path must have exactly 3 segments: /program/{jurisdiction}/{slug}: %s", path)
+		}
+	case "market":
+		// Strict: /market/{geo}/{domain}[/{vertical}...]
+		if len(parts) < 3 {
+			return fmt.Errorf("market canonical path must have at least 3 segments: /market/{geo}/{domain}: %s", path)
+		}
+		geo := strings.ToLower(strings.TrimSpace(parts[1]))
+		if geo != "global" && geo != "int" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) && !IsRegionalGeoToken(geo) {
+			return fmt.Errorf("market canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, global, int, or regional token): %s", parts[1], path)
 		}
 	case "segment":
 		// /segment/{domain}/{vertical}/{geo}
@@ -263,14 +298,12 @@ func ValidateCanonicalPath(path string) error {
 			return fmt.Errorf("segment canonical path has invalid geo %q (expected ISO3166-1 alpha2 or regional bucket: global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta): %s", parts[3], path)
 		}
 	case "deposit":
-		// Allowed:
-		// - preferred: /deposit/{resource-slug}/{deposit-slug}
-		// - legacy fallback: /deposit/{deposit-slug}
+		// Strict: /deposit/{resource-slug}/{deposit-slug}
 		//
 		// IMPORTANT: We intentionally do NOT enforce resource allow-lists here to avoid breaking ingestion
 		// when taxonomy drifts or LLM outputs a new resource type.
-		if len(parts) < 2 {
-			return fmt.Errorf("deposit canonical path must have at least 2 segments: /deposit/{slug} (legacy) or /deposit/{resource}/{slug}: %s", path)
+		if len(parts) != 3 {
+			return fmt.Errorf("deposit canonical path must have exactly 3 segments: /deposit/{resource}/{slug}: %s", path)
 		}
 	case "domain":
 		// /domain/v1/{contractType}/{facetKey}/{facetValue}...
@@ -865,9 +898,10 @@ func GovCanonicalPath(countryAlpha2OrNA string, agencyLabel string) string {
 	return JoinPath("gov", cc, slug)
 }
 
-// FacilityCanonicalPath returns a Horizon-canonical facility path.
-// Preferred format (when orgSlug is known and stable): /fac/{orgSlug}/{facilitySlug}
-// Fallback format: /fac/{facilitySlug}
+// FacilityCanonicalPath returns a Horizon-canonical facility path:
+// /fac/{orgSlug}/{facilitySlug}
+//
+// If orgSlug is unknown, "na" is used as a deterministic placeholder.
 func FacilityCanonicalPath(orgSlug string, facilityLabel string) string {
 	orgSlug = Slugify(orgSlug)
 	facSlug := Slugify(facilityLabel)
@@ -875,29 +909,29 @@ func FacilityCanonicalPath(orgSlug string, facilityLabel string) string {
 		return ""
 	}
 	if orgSlug == "" {
-		return JoinPath("fac", facSlug)
+		orgSlug = "na"
 	}
 	return JoinPath("fac", orgSlug, facSlug)
 }
 
-// ProductCanonicalPath returns a Horizon-canonical product path.
-// Preferred format (when orgSlug is known and stable): /product/{orgSlug}/{productSlug}
-// Fallback format: /product/{productSlug}
+// ProductCanonicalPath returns a Horizon-canonical product path:
+// /product/{category}/{type}/{stage}/{slug}
+//
+// orgSlug is kept for backward-compatible API shape and is intentionally ignored.
+// When classification is unknown, defaults to finished/mechanical/assembly.
 func ProductCanonicalPath(orgSlug string, productLabel string) string {
-	orgSlug = Slugify(orgSlug)
+	_ = orgSlug
 	pSlug := Slugify(productLabel)
 	if pSlug == "" {
 		return ""
 	}
-	if orgSlug == "" {
-		return JoinPath("product", pSlug)
-	}
-	return JoinPath("product", orgSlug, pSlug)
+	return JoinPath("product", "finished", "mechanical", "assembly", pSlug)
 }
 
-// ProgramCanonicalPath returns a Horizon-canonical program path.
-// Preferred format (when jurisdiction is known): /program/{jurisdictionSlug}/{programSlug}
-// Fallback format: /program/{programSlug}
+// ProgramCanonicalPath returns a Horizon-canonical program path:
+// /program/{jurisdictionSlug}/{programSlug}
+//
+// If jurisdiction is unknown, "global" is used as a deterministic placeholder.
 func ProgramCanonicalPath(jurisdiction string, programLabel string) string {
 	jSlug := Slugify(jurisdiction)
 	pSlug := Slugify(programLabel)
@@ -905,19 +939,20 @@ func ProgramCanonicalPath(jurisdiction string, programLabel string) string {
 		return ""
 	}
 	if jSlug == "" {
-		return JoinPath("program", pSlug)
+		jSlug = "global"
 	}
 	return JoinPath("program", jSlug, pSlug)
 }
 
-// MarketCanonicalPath returns a Horizon-canonical market path.
+// MarketCanonicalPath returns a Horizon-canonical L1 (domain-level) market path.
 // Canonical format: /market/{geo}/{marketSlug}
 // - geo: ISO3166-1 alpha2 lowercase (2 chars), composite ISO2, regional token, or "global"/"int"
 // - marketSlug: lowercase slug derived from market label
 //
+// This produces L1 paths. For L2 (vertical-level), use /market/{geo}/{domain}/{vertical} directly.
+//
 // NOTE:
 // - We intentionally default geo to "global" if missing/invalid to keep ingestion non-blocking.
-// - Legacy market paths (/market/{slug} or /market/{domain}/{slug}) may still exist; prefer this for NEW markets.
 func MarketCanonicalPath(geo string, marketLabel string) string {
 	g := strings.ToLower(strings.TrimSpace(geo))
 	if g == "" {
@@ -947,7 +982,7 @@ func EntityCanonicalPath(entityType string, canonicalName string) string {
 		// Prefer a stable nested product path when org context is known elsewhere; here we may only have a label.
 		return ProductCanonicalPath("", canonicalName)
 	case "Facility":
-		// Without a bound orgSlug, fall back to a stable single-segment facility slug.
+		// Without a bound orgSlug, use deterministic placeholder orgSlug="na".
 		return FacilityCanonicalPath("", canonicalName)
 	case "SupplyChainNode":
 		// Horizon canonical taxonomy does not have a dedicated supply-chain namespace.

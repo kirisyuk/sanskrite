@@ -33,6 +33,7 @@ func registerAll() {
 		},
 		ExtractionBlock: `ENTITY TYPE: ORGANIZATION
 - Required aspects to extract: products (PRODUCES), competitors (COMPETES_WITH), investors (INVESTS_IN), owners (OWNS/SUBSIDIARY_OF), markets (PARTICIPATES_IN), deposits (OPERATES_IN when extractive), locations (LOCATED_IN, OPERATES_IN).
+- Identify critical infrastructure dependencies: transport chokepoints (straits, canals, pipelines), key ports, and logistics corridors through which this entity's supply chain flows. Create DEPENDS_ON edges to these infrastructure nodes.
 - Taxonomically correct edge types:
   - Required/primary: PRODUCES, CONSUMES, COMPETES_WITH, INVESTS_IN, OWNS, SUBSIDIARY_OF, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN
   - Allowed when evidence exists: DEPENDS_ON, SUPPLIES_TO, CONTROLS, MANAGES, PARTNERS_WITH, REGULATES
@@ -139,6 +140,7 @@ func registerAll() {
   2) Resolve market structure: marketDomain, marketVertical, marketChannels, tags.
   3) Resolve players and leaders via PARTICIPATES_IN (leaders via qualifiers.marketRole=leader|dominant).
   4) Resolve market metrics (TAM/CAGR/CR4/HHI) and concentration evidence.
+- Identify critical infrastructure dependencies: transport chokepoints (straits, canals, pipelines) through which this market's flows pass. Create DEPENDS_ON edges to these infrastructure nodes.
 - Taxonomically correct edge types:
   - Required/primary: HAS_MARKET_SEGMENT, PARTICIPATES_IN
   - Allowed when evidence exists: REGULATES, DEPENDS_ON, INFLUENCES
@@ -153,6 +155,7 @@ func registerAll() {
   2) Resolve market structure: marketDomain, marketVertical, marketChannels, tags.
   3) Resolve players and leaders via PARTICIPATES_IN (leaders via qualifiers.marketRole=leader|dominant).
   4) Resolve market metrics (TAM/CAGR/CR4/HHI) and concentration evidence.
+- Identify critical infrastructure dependencies: transport chokepoints through which this market's flows pass. Create DEPENDS_ON edges.
 - Taxonomically correct edge types:
   - Required/primary: HAS_MARKET_SEGMENT, PARTICIPATES_IN
   - Allowed when evidence exists: REGULATES, DEPENDS_ON, INFLUENCES
@@ -182,6 +185,7 @@ func registerAll() {
   2) Build upstream/downstream product chain via TRANSFORMS_INTO.
   3) Connect actors/facilities that PRODUCE/CONSUME this product.
   4) Fill key supply-chain evidence (volumes/capacity/contracts where available).
+- Identify critical infrastructure dependencies: transport chokepoints (straits, canals, pipelines) through which this product's supply chain flows. Create DEPENDS_ON edges to these infrastructure nodes.
 - Taxonomically correct edge types:
   - Required/primary: TRANSFORMS_INTO, PRODUCES, CONSUMES
   - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, PARTICIPATES_IN
@@ -198,6 +202,7 @@ func registerAll() {
   2) Build upstream/downstream product chain via TRANSFORMS_INTO.
   3) Connect actors/facilities that PRODUCE/CONSUME this product.
   4) Fill key supply-chain evidence (volumes/capacity/contracts where available).
+- Identify critical infrastructure dependencies: transport chokepoints through which this product's supply chain flows. Create DEPENDS_ON edges.
 - Taxonomically correct edge types:
   - Required/primary: TRANSFORMS_INTO, PRODUCES, CONSUMES
   - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, PARTICIPATES_IN

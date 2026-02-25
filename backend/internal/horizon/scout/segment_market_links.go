@@ -92,10 +92,9 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 				// Unknown error; skip (best-effort).
 				continue
 			}
-			label := bestEffortDisplayLabel("", marketPath)
-			// For /market/{geo}/{domain}/{vertical}, try to synthesize a nicer label.
-			if strings.TrimSpace(label) == "" || label == "Market" {
-				label = strings.TrimPrefix(marketPath, "/market/")
+			label := marketDisplayLabel(marketPath)
+			if strings.TrimSpace(label) == "" {
+				label = bestEffortDisplayLabel("", marketPath)
 			}
 			marketFrag = &models.HorizonFragment{
 				TenantID:      "global",

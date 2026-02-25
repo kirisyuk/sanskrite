@@ -49,7 +49,7 @@ func (a *ResearchAgent) EnrichFragment(
 	decompositionHints []DecompositionHint,
 	existingEntities []string,
 ) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, error) {
-	enriched, relations, chains, _, err := a.EnrichFragmentWithGrounding(
+	enriched, relations, chains, _, _, err := a.EnrichFragmentWithGrounding(
 		ctx,
 		fragment,
 		missingInfo,
@@ -67,6 +67,8 @@ func (a *ResearchAgent) EnrichFragment(
 
 // EnrichFragmentWithGroundingWithDomainModes runs composable research pipeline by domain modes.
 // Empty/GENERAL modes are routed to GeneralResearchStrategy (not monolithic fallback).
+// The returned rawContent is the concatenated raw LLM response text from all strategies;
+// callers should append it to aggregatedContent so downstream Critic/Resolver have source material.
 func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 	ctx context.Context,
 	fragment *models.HorizonFragment,
@@ -80,10 +82,9 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 	decompositionHints []DecompositionHint,
 	existingEntities []string,
 	domainModes []string,
-	unitPhase models.UnitPipelinePhase,
-) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
+) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, string, error) {
 	if len(missingInfo) == 0 {
-		return fragment, nil, nil, nil, nil
+		return fragment, nil, nil, nil, "", nil
 	}
 
 	normalizedModes := taxonomy.NormalizeDomainModes(domainModes)
@@ -103,11 +104,10 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 			OriginalQuery:      originalQuery,
 			DecompositionHints: decompositionHints,
 			ExistingEntities:   existingEntities,
-			UnitPipelinePhase:  unitPhase,
 		}
-		enriched, relations, chains, groundingEvidence, err := a.ResearchPipeline().Enrich(ctx, input, normalizedModes)
+		enriched, relations, chains, groundingEvidence, rawContent, err := a.ResearchPipeline().Enrich(ctx, input, normalizedModes)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, "", err
 		}
 		if enriched != nil {
 			enriched.Labels, enriched.Identifiers = naming.NormalizeFragmentNames(
@@ -115,7 +115,7 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 				enriched.Labels,
 				enriched.Identifiers,
 			)
-			return enriched, relations, chains, groundingEvidence, nil
+			return enriched, relations, chains, groundingEvidence, rawContent, nil
 		}
 	}
 	return a.enrichFragmentWithGroundingMonolith(ctx, fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
@@ -135,9 +135,9 @@ func (a *ResearchAgent) EnrichFragmentWithGrounding(
 	originalQuery string,
 	decompositionHints []DecompositionHint,
 	existingEntities []string,
-) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
+) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, string, error) {
 	if len(missingInfo) == 0 {
-		return fragment, nil, nil, nil, nil
+		return fragment, nil, nil, nil, "", nil
 	}
 	if a.executor != nil {
 		input := ResearchStrategyInput{
@@ -151,11 +151,10 @@ func (a *ResearchAgent) EnrichFragmentWithGrounding(
 			OriginalQuery:      originalQuery,
 			DecompositionHints: decompositionHints,
 			ExistingEntities:   existingEntities,
-			UnitPipelinePhase:  models.UnitPipelinePhaseP0,
 		}
-		enriched, relations, chains, groundingEvidence, err := a.ResearchPipeline().Enrich(ctx, input, []string{taxonomy.DomainModeGeneral})
+		enriched, relations, chains, groundingEvidence, rawContent, err := a.ResearchPipeline().Enrich(ctx, input, []string{taxonomy.DomainModeGeneral})
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, "", err
 		}
 		if enriched != nil {
 			enriched.Labels, enriched.Identifiers = naming.NormalizeFragmentNames(
@@ -163,7 +162,7 @@ func (a *ResearchAgent) EnrichFragmentWithGrounding(
 				enriched.Labels,
 				enriched.Identifiers,
 			)
-			return enriched, relations, chains, groundingEvidence, nil
+			return enriched, relations, chains, groundingEvidence, rawContent, nil
 		}
 	}
 	return a.enrichFragmentWithGroundingMonolith(ctx, fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
@@ -182,9 +181,9 @@ func (a *ResearchAgent) enrichFragmentWithGroundingMonolith(
 	originalQuery string,
 	decompositionHints []DecompositionHint,
 	existingEntities []string,
-) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, error) {
+) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, string, error) {
 	if a == nil || a.executor == nil {
-		return fragment, nil, nil, nil, nil
+		return fragment, nil, nil, nil, "", nil
 	}
 
 	prompt := a.buildEnrichmentPrompt(fragment, missingInfo, focus, spherePaths, keywords, specialties, chainContext, originalQuery, decompositionHints, existingEntities)
@@ -211,33 +210,31 @@ func (a *ResearchAgent) enrichFragmentWithGroundingMonolith(
 
 	result, fullResult, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("failed to enrich fragment with research: %w", err)
+		return nil, nil, nil, nil, "", fmt.Errorf("failed to enrich fragment with research: %w", err)
 	}
 	var groundingEvidence *ai.GroundingEvidence
+	var rawContent string
 	if fullResult != nil {
 		groundingEvidence = fullResult.GroundingEvidence
+		rawContent = fullResult.Content
 	}
 
-	// Преобразуем результат
 	jsonData, err := json.Marshal(result)
 	if err != nil {
-		return nil, nil, nil, groundingEvidence, fmt.Errorf("failed to marshal research result: %w", err)
+		return nil, nil, nil, groundingEvidence, rawContent, fmt.Errorf("failed to marshal research result: %w", err)
 	}
 	fmt.Printf("[ResearchAgent] Raw Result: %s\n", jsonData)
 
 	var res researchResult
 	if err := json.Unmarshal(jsonData, &res); err != nil {
-		// Fallback для старого формата (только фрагмент)
 		var partialFrag models.HorizonFragment
 		if err2 := json.Unmarshal(jsonData, &partialFrag); err2 == nil {
-			// Merge only fragment, no relations
 			a.mergeFragment(fragment, &partialFrag)
-			return fragment, nil, nil, groundingEvidence, nil
+			return fragment, nil, nil, groundingEvidence, rawContent, nil
 		}
-		return nil, nil, nil, groundingEvidence, fmt.Errorf("failed to unmarshal enriched result: %w", err)
+		return nil, nil, nil, groundingEvidence, rawContent, fmt.Errorf("failed to unmarshal enriched result: %w", err)
 	}
 
-	// Merge Fragment
 	if res.Fragment != nil {
 		fragBytes, _ := json.Marshal(res.Fragment)
 		var partialFragment models.HorizonFragment
@@ -252,7 +249,7 @@ func (a *ResearchAgent) enrichFragmentWithGroundingMonolith(
 	)
 	normalizeDiscoveredRelationsNames(res.Relations)
 
-	return fragment, res.Relations, res.SupplyChains, groundingEvidence, nil
+	return fragment, res.Relations, res.SupplyChains, groundingEvidence, rawContent, nil
 }
 
 // mergeFragment merges partial data into the main fragment
@@ -482,6 +479,10 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 		if keywordsLine != "" {
 			focusBlock += fmt.Sprintf("- keywords: %s\n", keywordsLine)
 		}
+		// Chokepoint dependency discovery for energy/logistics/trade spheres
+		if hasChokepointRelevantSphere(spherePaths) {
+			focusBlock += "- CRITICAL: For entities in energy/logistics/trade spheres, identify transport chokepoints (Strait of Hormuz, Suez Canal, Strait of Malacca, Bab el-Mandeb, etc.) that this entity depends on. Create DEPENDS_ON edges to these infrastructure nodes with qualifiers: throughputShare (0-1), substitutability (0-1), reroutePenalty (0-1). These qualifiers feed signal propagation physics.\n"
+		}
 		focusBlock += "\n"
 	}
 
@@ -562,9 +563,9 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
 	// Object detail: from entity_semantics (unified per type).
 	profileBlock := entity_semantics.ResearchBlockForPath(fragment.CanonicalPath, fragment.Type, fragment.CommunityType)
-	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(fragment.CanonicalPath, fragment.Type, fragment.CommunityType, fragment.Qualifiers, fragment.Identifiers)
+	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(fragment.CanonicalPath, fragment.Type, fragment.CommunityType, fragment.Qualifiers, fragment.Identifiers, fragment.SpherePaths)
 	coreBusinessTaxonomyBlock := buildCoreBusinessTaxonomyBlock()
-	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlockWithHints(fragment.CanonicalPath, fragment.Type, fragment.Qualifiers, fragment.Identifiers, fragment.Labels)
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(fragment.CanonicalPath, fragment.Type, fragment.Qualifiers, fragment.Identifiers, fragment.Labels)
 	targetTypeEnum := entity_semantics.PromptRelationTargetTypesPipeList()
 	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
 	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt() + `
@@ -595,7 +596,7 @@ Return a JSON object with fields:
 1. "fragment": A JSON object containing ONLY the new or updated fields for the fragment that you found (e.g., "state", "homeLocation").
 2. "relations": An array of DiscoveredRelation objects if you found new dependencies (suppliers, competitors, etc.).
 3. "supplyChains": Array of supply chain objects, each with:
-   - "nodes": ordered array of {canonicalPath, name, type, role?, unitRef?, unitCode?, unitLabel?}
+   - "nodes": ordered array of {canonicalPath, name, type, role?}
    - "confidence": 0.0-1.0
    - "reason": evidence for this chain
 
@@ -603,7 +604,8 @@ Return a JSON object with fields:
 
 Product Canonicalization:
 - If you can resolve a more specific product name/path, update fragment.canonicalPath.
-- Prefer /product/{category}/{type}/{stage}/{slug} or /product/service/{domain}/{subdomain}/{slug}.
+- Prefer /product/{category}/{type}/{stage}/{slug} consistently.
+- For services, use category=service and map service domain/subdomain into {type}/{stage}.
 - If the current path is flat or acronym-like, expand to the full product name and ensure relations use the updated canonical path.
 - Examples: rice -> /product/raw/agricultural/extraction/rice; salt -> /product/raw/mineral/extraction/salt; swad (Indian savory snack) -> /product/finished/agricultural/processing/swad; processed/finished goods -> /product/finished/mechanical/assembly/{slug}.
 - Product/material naming rules (CRITICAL):
@@ -695,8 +697,9 @@ Choose relationType to match the CORRECT semantic direction:
   Clarification: entity is an active market participant (player).
   - If THIS FRAGMENT is MARKET, you may still emit PARTICIPATES_IN relations to player entities; backend will reverse the edge direction.
   - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
-- For ORGANIZATION ↔ MARKET pairs, use ONLY PARTICIPATES_IN.
-  Never use OPERATES_IN, DEPENDS_ON, CONSUMES, REGULATES, CONTROLS_ACCESS, INFLUENCES, or other relation types between ORGANIZATION and MARKET.
+- For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET).
+  Exception: GOV entities (/gov/...) may use REGULATES, CONTROLS_ACCESS, or INFLUENCES toward MARKET targets.
+  Never use OPERATES_IN, DEPENDS_ON, CONSUMES, or other non-market types between regular ORGANIZATION and MARKET.
   If leadership is known, keep relationType=PARTICIPATES_IN and set qualifiers.marketRole = "leader" | "dominant" (plus market_share metric when available).
 
 === PHASE 2 STRATEGIC RELATIONS (may require EXPLICIT SOURCE) ===
@@ -742,7 +745,7 @@ These edge types have strict direction rules. Use sourceCanonicalPath when THIS 
     - targetCanonicalPath = THIS FRAGMENT's path
 
 %s
-- ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (ORG -> MARKET).
+- ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES.
 - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
   DOMAIN targets are allowed only for DOMAIN scaffold relations (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, RELATED_DOMAIN, BROADENS_TO, NARROWS_TO, AFFECTS, DEPENDS_ON with DOMAIN source).
 
@@ -867,7 +870,17 @@ METRIC VALUE FORMAT (IMPORTANT):
 - observedAt MUST be ISO8601 (\"YYYY-MM-DD\" or RFC3339)
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierUnitTemplateContractBlock, edgesemantics.EdgeDirectionValidationRulesForPrompt(), targetTypeEnum, edgesemantics.AllEdgeTypesForPrompt(), canonicalRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierContractBlock, edgesemantics.EdgeDirectionValidationRulesForPrompt(), targetTypeEnum, edgesemantics.AllEdgeTypesForPrompt(), canonicalRulesBlock)
+}
+
+func hasChokepointRelevantSphere(spherePaths []string) bool {
+	for _, p := range spherePaths {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if strings.Contains(p, "/sphere/energy") || strings.Contains(p, "/sphere/logistics") || strings.Contains(p, "/sphere/trade") {
+			return true
+		}
+	}
+	return false
 }
 
 func dedupNonEmptyStrings(in []string) []string {

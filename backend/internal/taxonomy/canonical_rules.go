@@ -31,7 +31,6 @@ type ProductCanonicalRules struct {
 	Types      []string
 	Stages     []string
 	Example    string
-	Fallback   string
 }
 
 type GeoCanonicalRules struct {
@@ -77,38 +76,10 @@ func DefaultCanonicalRules() CanonicalRules {
 		},
 		Product: ProductCanonicalRules{
 			Format:     "/product/{category}/{type}/{stage}/{slug}",
-			Categories: []string{"raw", "component", "finished", "service"},
-			// NOTE: Keep in sync with Firestore seed taxonomy (cmd/tools/horizon_seed_taxonomy).
-			// This list must be operationally sufficient; it is not intended to be an exhaustive ontology of matter.
-			Types: []string{
-				"mineral",
-				"agricultural",
-				"chemical",
-				"electronic",
-				"mechanical",
-				"energy",
-				"hydrocarbon",
-				"fuel",
-				"petrochemical",
-				"healthcare",
-				"consumer",
-				// Common supply-chain product types that appear in extraction logs.
-				"metal",
-				"magnetic",
-			},
-			Stages: []string{
-				"extraction",
-				"refining",
-				// Common industrial stages that appear in supply-chain graphs.
-				"smelting",
-				"liquefaction",
-				"cracking",
-				"processing",
-				"manufacturing",
-				"assembly",
-			},
-			Example:  "/product/raw/mineral/refining/lithium-carbonate",
-			Fallback: "/product/{slug}",
+			Categories: ProductContractCategories(),
+			Types:      ProductContractTypes(),
+			Stages:     ProductContractStages(),
+			Example:    "/product/raw/mineral/refining/lithium-carbonate",
 		},
 		Geo: GeoCanonicalRules{
 			Format:  "/loc/{cc}/{admin1}/{city}",
@@ -135,10 +106,11 @@ func CanonicalPathRulesPrompt() string {
 	sb.WriteString(fmt.Sprintf("  - legal_form in {%s}\n", strings.Join(rules.Org.LegalForms, ", ")))
 	sb.WriteString(fmt.Sprintf("- GOVERNMENT: %s (example: %s)\n", rules.Gov.Format, rules.Gov.Example))
 	sb.WriteString(fmt.Sprintf("  - geo: ISO2, composite, na, or regional (%s). EU/ASEAN-level bodies use eu/asean\n", strings.Join(RegionalGeoTokenList(), ", ")))
-	sb.WriteString(fmt.Sprintf("- PRODUCT: %s (fallback: %s)\n", rules.Product.Format, rules.Product.Fallback))
+	sb.WriteString(fmt.Sprintf("- PRODUCT: %s\n", rules.Product.Format))
 	sb.WriteString(fmt.Sprintf("  - category: %s\n", strings.Join(rules.Product.Categories, " | ")))
 	sb.WriteString(fmt.Sprintf("  - type: %s\n", strings.Join(rules.Product.Types, " | ")))
 	sb.WriteString(fmt.Sprintf("  - stage: %s\n", strings.Join(rules.Product.Stages, " | ")))
+	sb.WriteString("  - for services: use category=service; map service domain/subdomain into {type}/{stage}\n")
 	sb.WriteString(fmt.Sprintf("  - example: %s\n", rules.Product.Example))
 	sb.WriteString(fmt.Sprintf("- GEO_REGION: %s (example: %s)\n", rules.Geo.Format, rules.Geo.Example))
 	for _, note := range rules.Geo.Notes {
@@ -153,13 +125,13 @@ func ExtendedCanonicalPathRulesPrompt() string {
 	regionalList := strings.Join(RegionalGeoTokenList(), ", ")
 	var sb strings.Builder
 	sb.WriteString(CanonicalPathRulesPrompt())
-	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug} (preferred) or /fac/{facilitySlug}. Example: /fac/tsmc/fab-21\n")
+	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug}. If org is unknown, use orgSlug=na. Example: /fac/tsmc/fab-21, /fac/na/fab-21\n")
 	sb.WriteString("- PERSON: /person/{slug}. Example: /person/elon-musk\n")
-	sb.WriteString(fmt.Sprintf("- MARKET: /market/{geo}/{domain}/{vertical} (preferred) or /market/{geo}/{slug}. geo: ISO2, composite (tr-sy), int, or regional (%s). Example: /market/sa/finance/banking. For HAS_MARKET_SEGMENT: child path = parent path + one segment.\n", regionalList))
+	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: ISO2, composite (tr-sy), int, or regional (%s). Examples: /market/iq/agriculture (L1), /market/sa/finance/banking (L2), /market/sa/finance/banking/islamic-banking (L3). HAS_MARKET_SEGMENT: child = parent + one segment.\n", regionalList))
 	sb.WriteString(fmt.Sprintf("- COMMUNITY: /community/{geo}/{type}/{slug}. geo: ISO2, composite, or regional (%s). type: trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe|representatives|industry-association|key-community. Example: /community/ae/trade/hawala-dubai-network, /community/sa/dynasty/house-of-saud, /community/af/tribe/pashtun, /community/eu/industry-association/steel-producers\n", regionalList))
 	sb.WriteString("- DEPOSIT: /deposit/{resource}/{slug}. resource: oil, natural-gas, iron-ore, lithium-ore, etc. Example: /deposit/oil/permian-basin. Fallback: /deposit/other/{slug}\n")
 	sb.WriteString("- EVENT: /event/{slug}. Example: /event/funding-round-series-a\n")
-	sb.WriteString(fmt.Sprintf("- PROGRAM: /program/{jurisdiction}/{slug} (preferred) or /program/{slug}. jurisdiction: ISO2, int, or regional (%s). Example: /program/kazakhstan/alem-ai\n", regionalList))
+	sb.WriteString(fmt.Sprintf("- PROGRAM: /program/{jurisdiction}/{slug}. If jurisdiction is unknown, use global. jurisdiction: ISO2, int, global, or regional (%s). Example: /program/kazakhstan/alem-ai, /program/global/alem-ai\n", regionalList))
 	sb.WriteString("- DECISION_POINT: /decision/{domain}/{slug}. Example: /decision/export/grant-license\n")
 	sb.WriteString("- MECHANISM: /mechanism/{category}/{slug}. category: regulatory, economic, technological, contractual, political. Example: /mechanism/regulatory/entity-list\n")
 	return sb.String()
@@ -184,10 +156,11 @@ func GraphIntentCanonicalPathRulesPrompt() string {
 	sb.WriteString("  Examples: /domain/v1/regulatory-impact/geo/ro/framework/investment, /domain/v1/policy-and-regulation/geo/ro, /domain/v1/other/foreign-investment-framework/geo/ro\n\n")
 	sb.WriteString("- ORGANIZATION: /org/{geo}/{slug}-{legal_form}. Example: /org/us/tesla-inc, /org/ro/invest-romania-na\n")
 	sb.WriteString(fmt.Sprintf("  geo: ISO2, composite, na, int, or regional (%s). legal_form: inc, ltd, gmbh, srl, etc.\n\n", regionalList))
-	sb.WriteString("- PRODUCT: /product/{category}/{type}/{stage}/{slug} or /product/{slug}. Example: /product/raw/mineral/refining/lithium-carbonate\n\n")
-	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug} or /fac/{facilitySlug}. Example: /fac/tsmc/fab-21\n\n")
+	sb.WriteString("- PRODUCT: /product/{category}/{type}/{stage}/{slug}. Example: /product/raw/mineral/refining/lithium-carbonate\n")
+	sb.WriteString("  For services, use category=service and map service domain/subdomain into {type}/{stage}.\n\n")
+	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug}. If org is unknown, use orgSlug=na. Example: /fac/tsmc/fab-21, /fac/na/fab-21\n\n")
 	sb.WriteString("- PERSON: /person/{slug}. Example: /person/elon-musk\n\n")
-	sb.WriteString(fmt.Sprintf("- MARKET: /market/{geo}/{domain}/{vertical}. geo: ISO2, composite, or regional (%s). Example: /market/ro/finance/investment. For HAS_MARKET_SEGMENT hierarchy: child path = parent path + one segment.\n\n", regionalList))
+	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: ISO2, composite, or regional (%s). Examples: /market/iq/agriculture (L1), /market/ro/finance/investment (L2), /market/sa/finance/banking/islamic-banking (L3). HAS_MARKET_SEGMENT: child = parent + one segment.\n\n", regionalList))
 	sb.WriteString("- COMMUNITY: /community/{geo}/{type}/{slug}. type: trade|activist|professional|dynasty|tribe|interest|representatives|industry-association|key-community. Example: /community/ro/interest/investors-association, /community/eu/industry-association/steel-producers\n\n")
 	sb.WriteString("- DEPOSIT: /deposit/{resource}/{slug}. Example: /deposit/oil/permian-basin\n\n")
 	sb.WriteString("- EVENT: /event/{slug}. Example: /event/funding-round-series-a\n\n")

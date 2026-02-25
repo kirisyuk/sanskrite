@@ -15,7 +15,8 @@ import (
 //     in the string path. (E.g., geo is always Org.Geo / Gov.Geo / Market.Geo / Loc.Country, etc.)
 //
 // NOTE:
-//   - This type is intentionally tolerant: it can represent legacy/flat paths as well as preferred ones.
+//   - This type is intentionally tolerant at parse time: older path shapes are best-effort
+//     normalized into current canonical contracts.
 //   - Storage strategy is decided elsewhere; callers may store the parts (e.g., in Firestore) and keep the
 //     assembled canonicalPath as the read path for the rest of the system.
 type CanonicalPathParts struct {
@@ -39,19 +40,17 @@ type CanonicalPathParts struct {
 	Mechanism *MechanismPathParts
 }
 
-// OrgPathParts represents /org paths. Canonical string form remains:
-// - preferred: /org/{geo}/{baseSlug}-{legalForm?}
-// - legacy:    /org/{slug} (no geo segment)
+// OrgPathParts represents /org/{geo}/{baseSlug}-{legalForm?}.
 //
 // legalForm is stored separately to allow selective fixes (e.g., add ltd) without touching geo.
 type OrgPathParts struct {
-	// Geo is ISO2, composite ISO2 (e.g. "ae-sa-om"), or "na". Empty when legacy path has no geo segment.
+	// Geo is ISO2, composite ISO2 (e.g. "ae-sa-om"), or "na".
 	Geo string
 	// BaseSlug is org slug without legal form suffix.
 	BaseSlug string
 	// LegalForm is canonical legal form token (e.g., "ltd", "inc", "llc"). Optional.
 	LegalForm string
-	// Legacy indicates the original path was /org/{slug} (no geo segment).
+	// Legacy is deprecated and kept only for transitional handling of pre-contract records.
 	Legacy bool
 }
 
@@ -63,11 +62,10 @@ type GovPathParts struct {
 
 // ProductPathParts represents /product paths.
 //
-// Supported shapes (non-exhaustive; best-effort):
+// Supported shapes (best-effort):
 // - hierarchical goods: /product/{category}/{type}/{stage}/{slug}[/{model-sku-slug}...]
 // - hierarchical services: /product/service/{domain}/{subdomain}/{slug}[/{offering-slug}...]
-// - flat fallback: /product/{slug}
-// - legacy org-scoped fallback (older code-path): /product/{orgSlug}/{productSlug}
+// - transitional flat inputs may still be parsed for migration, but builders emit hierarchical form.
 type ProductPathParts struct {
 	// Shape is a best-effort discriminator to aid callers.
 	// Values: "hierarchical", "service", "flat", "org_scoped_flat", "unknown".
@@ -89,14 +87,13 @@ type ProductPathParts struct {
 	// ServiceOffering is the first extra segment (if any) after {serviceSlug}. Kept for convenience.
 	ServiceOffering string
 
-	// Legacy org-scoped fallback (when Shape=="org_scoped_flat").
+	// Deprecated transitional field for parsing older records.
 	OrgSlug string
 }
 
 // CommunityPathParts represents community paths.
 //
-// Preferred format: /community/{geo}/{type}/{slug}
-// Legacy fallback:  /community/{geo}/{slug}
+// Canonical format: /community/{geo}/{type}/{slug}
 //
 // NOTE: "/community" is not currently a taxonomy namespace in taxonomy/paths.go,
 // but it is a first-class Horizon concept (see horizon models and scout prompts).
@@ -104,7 +101,7 @@ type CommunityPathParts struct {
 	Geo    string // ISO2 or regional token like "global"
 	Type   string // trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe|representatives|industry-association|key-community
 	Slug   string
-	Legacy bool // true if type segment is absent
+	Legacy bool // deprecated transitional flag
 }
 
 // LocPathParts represents /loc/{cc}/{admin1}/{city}.
@@ -122,28 +119,27 @@ type SegmentPathParts struct {
 }
 
 // MarketPathParts represents market paths.
-// Policy-preferred format: /market/{geo}/{domain}/{vertical}
-// Legacy format: /market/{geo}/{slug} or /market/{slug}
+// Canonical format: /market/{geo}/{domain}[/{vertical}...]
 type MarketPathParts struct {
 	Geo      string
 	Domain   string
 	Vertical string
 	Slug     string
-	Legacy   bool
+	Legacy   bool // deprecated transitional flag
 }
 
-// FacilityPathParts represents /fac/{orgSlug}/{facilitySlug} (preferred) or /fac/{facilitySlug} (legacy).
+// FacilityPathParts represents /fac/{orgSlug}/{facilitySlug}.
 type FacilityPathParts struct {
 	OrgSlug      string
 	FacilitySlug string
-	Legacy       bool
+	Legacy       bool // deprecated transitional flag
 }
 
-// ProgramPathParts represents /program/{jurisdiction?}/{slug}.
+// ProgramPathParts represents /program/{jurisdiction}/{slug}.
 type ProgramPathParts struct {
 	Jurisdiction string
 	Slug         string
-	Legacy       bool
+	Legacy       bool // deprecated transitional flag
 }
 
 // PersonPathParts represents /person/{slug} (honorific may be embedded in slug).
@@ -157,11 +153,11 @@ type MediaPathParts struct {
 	Slug     string
 }
 
-// DepositPathParts represents /deposit/{resource?}/{slug}.
+// DepositPathParts represents /deposit/{resource}/{slug}.
 type DepositPathParts struct {
 	Resource string
 	Slug     string
-	Legacy   bool
+	Legacy   bool // deprecated transitional flag
 }
 
 // SpherePathParts represents /sphere/{slug}.
@@ -187,7 +183,7 @@ type MechanismPathParts struct {
 }
 
 // ParseCanonicalPathParts parses a canonical path string into semantic parts.
-// It is best-effort and supports both preferred and legacy shapes.
+// It is best-effort and normalizes known transitional legacy shapes into current contracts.
 func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -205,10 +201,11 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 
 	switch ns {
 	case "org":
-		// /org/{slug} (legacy) OR /org/{geo}/{slug}
+		// Canonical: /org/{geo}/{slug}.
+		// Transitional normalization: /org/{slug} -> /org/na/{slug}.
 		if len(parts) == 2 {
 			base, lf := splitOrgSlugLegalForm(parts[1])
-			out.Org = &OrgPathParts{Geo: "", BaseSlug: base, LegalForm: lf, Legacy: true}
+			out.Org = &OrgPathParts{Geo: "na", BaseSlug: base, LegalForm: lf, Legacy: true}
 			return out, nil
 		}
 		if len(parts) == 3 {
@@ -216,7 +213,7 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 			out.Org = &OrgPathParts{Geo: parts[1], BaseSlug: base, LegalForm: lf, Legacy: false}
 			return out, nil
 		}
-		return nil, fmt.Errorf("org path must be /org/{slug} (legacy) or /org/{geo}/{slug}: %q", path)
+		return nil, fmt.Errorf("org path must be /org/{geo}/{slug}: %q", path)
 
 	case "gov":
 		// /gov/{geo}/{slug}
@@ -228,10 +225,11 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 
 	case "product":
 		// Supported:
-		// - /product/{slug}
-		// - /product/{orgSlug}/{productSlug} (legacy)
 		// - /product/{category}/{type}/{stage}/{slug}[/{model-sku-slug}...]
 		// - /product/service/{domain}/{subdomain}/{slug}[/{offering-slug}...]
+		// Transitional:
+		// - /product/{slug}
+		// - /product/{orgSlug}/{productSlug}
 		if len(parts) == 2 {
 			out.Product = &ProductPathParts{Shape: "flat", Slug: parts[1]}
 			return out, nil
@@ -273,17 +271,17 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 		return out, nil
 
 	case "community":
-		// Preferred: /community/{geo}/{type}/{slug} (4 parts)
-		// Legacy:    /community/{geo}/{slug} (3 parts)
+		// Canonical: /community/{geo}/{type}/{slug}.
+		// Transitional normalization: /community/{geo}/{slug} -> /community/{geo}/interest/{slug}.
 		if len(parts) == 3 {
-			out.Community = &CommunityPathParts{Geo: parts[1], Type: "", Slug: parts[2], Legacy: true}
+			out.Community = &CommunityPathParts{Geo: parts[1], Type: "interest", Slug: parts[2], Legacy: true}
 			return out, nil
 		}
 		if len(parts) == 4 {
 			out.Community = &CommunityPathParts{Geo: parts[1], Type: parts[2], Slug: parts[3], Legacy: false}
 			return out, nil
 		}
-		return nil, fmt.Errorf("community path must be /community/{geo}/{slug} (legacy) or /community/{geo}/{type}/{slug}: %q", path)
+		return nil, fmt.Errorf("community path must be /community/{geo}/{type}/{slug}: %q", path)
 
 	case "loc":
 		if len(parts) != 4 {
@@ -300,15 +298,16 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 		return out, nil
 
 	case "market":
-		// Preferred: /market/{geo}/{domain}/{vertical}
-		// Extended: /market/{geo}/{domain}/{vertical}[/{subvertical}...] (tolerant for deeper paths)
-		// Legacy: /market/{geo}/{slug} OR /market/{slug}
+		// Canonical: /market/{geo}/{domain}[/{vertical}...].
+		// Transitional normalization:
+		// - /market/{slug} -> /market/global/{slug}
+		// - /market/{geo}/{slug} -> /market/{geo}/{slug}
 		if len(parts) == 2 {
-			out.Market = &MarketPathParts{Geo: "", Slug: parts[1], Legacy: true}
+			out.Market = &MarketPathParts{Geo: "global", Domain: parts[1], Slug: parts[1], Legacy: true}
 			return out, nil
 		}
 		if len(parts) == 3 {
-			out.Market = &MarketPathParts{Geo: parts[1], Slug: parts[2], Legacy: true}
+			out.Market = &MarketPathParts{Geo: parts[1], Domain: parts[2], Slug: parts[2], Legacy: false}
 			return out, nil
 		}
 		if len(parts) >= 4 {
@@ -319,33 +318,33 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 			out.Market = &MarketPathParts{Geo: parts[1], Domain: parts[2], Vertical: vertical, Legacy: false}
 			return out, nil
 		}
-		return nil, fmt.Errorf("market path must be /market/{slug} (legacy), /market/{geo}/{slug} (legacy), or /market/{geo}/{domain}/{vertical}: %q", path)
+		return nil, fmt.Errorf("market path must be /market/{geo}/{domain}[/{vertical}...]: %q", path)
 
 	case "fac":
-		// Preferred: /fac/{orgSlug}/{facilitySlug}
-		// Legacy: /fac/{facilitySlug}
+		// Canonical: /fac/{orgSlug}/{facilitySlug}.
+		// Transitional normalization: /fac/{facilitySlug} -> /fac/na/{facilitySlug}.
 		if len(parts) == 2 {
-			out.Fac = &FacilityPathParts{OrgSlug: "", FacilitySlug: parts[1], Legacy: true}
+			out.Fac = &FacilityPathParts{OrgSlug: "na", FacilitySlug: parts[1], Legacy: true}
 			return out, nil
 		}
 		if len(parts) == 3 {
 			out.Fac = &FacilityPathParts{OrgSlug: parts[1], FacilitySlug: parts[2], Legacy: false}
 			return out, nil
 		}
-		return nil, fmt.Errorf("facility path must be /fac/{facilitySlug} (legacy) or /fac/{orgSlug}/{facilitySlug}: %q", path)
+		return nil, fmt.Errorf("facility path must be /fac/{orgSlug}/{facilitySlug}: %q", path)
 
 	case "program":
-		// Preferred: /program/{jurisdiction}/{slug}
-		// Legacy: /program/{slug}
+		// Canonical: /program/{jurisdiction}/{slug}.
+		// Transitional normalization: /program/{slug} -> /program/global/{slug}.
 		if len(parts) == 2 {
-			out.Program = &ProgramPathParts{Jurisdiction: "", Slug: parts[1], Legacy: true}
+			out.Program = &ProgramPathParts{Jurisdiction: "global", Slug: parts[1], Legacy: true}
 			return out, nil
 		}
 		if len(parts) == 3 {
 			out.Program = &ProgramPathParts{Jurisdiction: parts[1], Slug: parts[2], Legacy: false}
 			return out, nil
 		}
-		return nil, fmt.Errorf("program path must be /program/{slug} (legacy) or /program/{jurisdiction}/{slug}: %q", path)
+		return nil, fmt.Errorf("program path must be /program/{jurisdiction}/{slug}: %q", path)
 
 	case "person":
 		if len(parts) != 2 {
@@ -362,17 +361,17 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 		return out, nil
 
 	case "deposit":
-		// Preferred: /deposit/{resource}/{slug}
-		// Legacy: /deposit/{slug}
+		// Canonical: /deposit/{resource}/{slug}.
+		// Transitional normalization: /deposit/{slug} -> /deposit/other/{slug}.
 		if len(parts) == 2 {
-			out.Deposit = &DepositPathParts{Resource: "", Slug: parts[1], Legacy: true}
+			out.Deposit = &DepositPathParts{Resource: "other", Slug: parts[1], Legacy: true}
 			return out, nil
 		}
 		if len(parts) == 3 {
 			out.Deposit = &DepositPathParts{Resource: parts[1], Slug: parts[2], Legacy: false}
 			return out, nil
 		}
-		return nil, fmt.Errorf("deposit path must be /deposit/{slug} (legacy) or /deposit/{resource}/{slug}: %q", path)
+		return nil, fmt.Errorf("deposit path must be /deposit/{resource}/{slug}: %q", path)
 
 	case "sphere":
 		if len(parts) != 2 {
@@ -430,10 +429,11 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 		if lf := strings.TrimSpace(p.Org.LegalForm); lf != "" {
 			slug = slug + "-" + lf
 		}
-		if p.Org.Legacy || strings.TrimSpace(p.Org.Geo) == "" {
-			return JoinPath("org", slug), true
+		geo := strings.TrimSpace(p.Org.Geo)
+		if geo == "" {
+			geo = "na"
 		}
-		return JoinPath("org", p.Org.Geo, slug), true
+		return JoinPath("org", geo, slug), true
 
 	case "gov":
 		if p.Gov == nil || strings.TrimSpace(p.Gov.Geo) == "" || strings.TrimSpace(p.Gov.Slug) == "" {
@@ -464,28 +464,33 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 			}
 			return JoinPath("product", "service", pp.ServiceDomain, pp.ServiceSubdomain, pp.ServiceSlug), true
 		case "org_scoped_flat":
-			if pp.OrgSlug == "" || pp.Slug == "" {
+			if pp.Slug == "" {
 				return "", false
 			}
-			return JoinPath("product", pp.OrgSlug, pp.Slug), true
+			return JoinPath("product", "finished", "mechanical", "assembly", pp.Slug), true
 		case "flat":
 			if pp.Slug == "" {
 				return "", false
 			}
-			return JoinPath("product", pp.Slug), true
+			return JoinPath("product", "finished", "mechanical", "assembly", pp.Slug), true
 		default:
 			// Unknown shape: fail-safe.
 			return "", false
 		}
 
 	case "community":
-		if p.Community == nil || p.Community.Geo == "" || p.Community.Slug == "" {
+		if p.Community == nil || p.Community.Slug == "" {
 			return "", false
 		}
-		if p.Community.Legacy || strings.TrimSpace(p.Community.Type) == "" {
-			return JoinPath("community", p.Community.Geo, p.Community.Slug), true
+		geo := strings.TrimSpace(p.Community.Geo)
+		if geo == "" {
+			geo = "global"
 		}
-		return JoinPath("community", p.Community.Geo, p.Community.Type, p.Community.Slug), true
+		typ := strings.TrimSpace(p.Community.Type)
+		if typ == "" {
+			typ = "interest"
+		}
+		return JoinPath("community", geo, typ, p.Community.Slug), true
 
 	case "loc":
 		if p.Loc == nil || p.Loc.Country == "" || p.Loc.Admin1 == "" || p.Loc.City == "" {
@@ -507,14 +512,28 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 		if p.Market == nil {
 			return "", false
 		}
-		if p.Market.Geo != "" && p.Market.Domain != "" && p.Market.Vertical != "" {
-			return JoinPath("market", p.Market.Geo, p.Market.Domain, p.Market.Vertical), true
+		geo := strings.TrimSpace(p.Market.Geo)
+		if geo == "" {
+			geo = "global"
 		}
-		if p.Market.Geo != "" && p.Market.Slug != "" {
-			return JoinPath("market", p.Market.Geo, p.Market.Slug), true
+		domain := strings.TrimSpace(p.Market.Domain)
+		if domain == "" {
+			domain = strings.TrimSpace(p.Market.Slug)
 		}
-		if p.Market.Slug != "" {
-			return JoinPath("market", p.Market.Slug), true
+		if geo != "" && domain != "" && p.Market.Vertical != "" {
+			// Vertical may contain slashes for L3+ paths (e.g. "crop-production/rice-production").
+			// Split and pass each segment separately to preserve hierarchy.
+			segs := []string{"market", geo, domain}
+			for _, s := range strings.Split(p.Market.Vertical, "/") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					segs = append(segs, s)
+				}
+			}
+			return JoinPath(segs...), true
+		}
+		if geo != "" && domain != "" {
+			return JoinPath("market", geo, domain), true
 		}
 		return "", false
 
@@ -522,19 +541,21 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 		if p.Fac == nil || p.Fac.FacilitySlug == "" {
 			return "", false
 		}
-		if p.Fac.OrgSlug == "" {
-			return JoinPath("fac", p.Fac.FacilitySlug), true
+		org := strings.TrimSpace(p.Fac.OrgSlug)
+		if org == "" {
+			org = "na"
 		}
-		return JoinPath("fac", p.Fac.OrgSlug, p.Fac.FacilitySlug), true
+		return JoinPath("fac", org, p.Fac.FacilitySlug), true
 
 	case "program":
 		if p.Program == nil || p.Program.Slug == "" {
 			return "", false
 		}
-		if p.Program.Jurisdiction == "" {
-			return JoinPath("program", p.Program.Slug), true
+		j := strings.TrimSpace(p.Program.Jurisdiction)
+		if j == "" {
+			j = "global"
 		}
-		return JoinPath("program", p.Program.Jurisdiction, p.Program.Slug), true
+		return JoinPath("program", j, p.Program.Slug), true
 
 	case "person":
 		if p.Person == nil || p.Person.Slug == "" {
@@ -552,10 +573,11 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 		if p.Deposit == nil || p.Deposit.Slug == "" {
 			return "", false
 		}
-		if p.Deposit.Resource == "" {
-			return JoinPath("deposit", p.Deposit.Slug), true
+		resource := strings.TrimSpace(p.Deposit.Resource)
+		if resource == "" {
+			resource = "other"
 		}
-		return JoinPath("deposit", p.Deposit.Resource, p.Deposit.Slug), true
+		return JoinPath("deposit", resource, p.Deposit.Slug), true
 
 	case "sphere":
 		if p.Sphere == nil || p.Sphere.Slug == "" {

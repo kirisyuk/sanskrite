@@ -92,18 +92,28 @@ func (b *MarketHierarchyBuilder) EnsureMarketHierarchy(
 	parentPath := ""
 	parentNameSlug := ""
 
-	// v2: /market/{geo}/{domain}/{vertical}
 	if len(rest) >= 2 {
-		domain := strings.TrimSpace(rest[0])
-		vertical := strings.TrimSpace(rest[1])
+		// L1 market: domain==vertical means this IS the domain-level market, no parent to infer
+		if len(rest) == 2 && strings.TrimSpace(rest[0]) == strings.TrimSpace(rest[1]) {
+			return nil
+		}
 
-		if pv := taxonomy.SegmentVerticalParent(vertical); pv != "" && pv != vertical {
-			parentPath = "/market/" + geo + "/" + domain + "/" + pv
-			parentNameSlug = pv
+		// L3+: for paths deeper than L2, parent is always the path with the last segment removed.
+		// /market/{geo}/a/b/c → parent = /market/{geo}/a/b
+		if len(rest) > 2 {
+			parentPath = "/market/" + geo + "/" + strings.Join(rest[:len(rest)-1], "/")
+			parentNameSlug = rest[len(rest)-2]
 		} else {
-			// Fallback: parent is domain-level market.
-			parentPath = "/market/" + geo + "/" + domain
-			parentNameSlug = domain
+			// L2: /market/{geo}/{domain}/{vertical} → try taxonomy parent, fallback to L1
+			domain := strings.TrimSpace(rest[0])
+			vertical := strings.TrimSpace(rest[1])
+			if pv := taxonomy.SegmentVerticalParent(vertical); pv != "" && pv != vertical {
+				parentPath = "/market/" + geo + "/" + domain + "/" + pv
+				parentNameSlug = pv
+			} else {
+				parentPath = "/market/" + geo + "/" + domain
+				parentNameSlug = domain
+			}
 		}
 	} else {
 		// legacy: /market/{geo}/{slug}
@@ -191,17 +201,18 @@ func (b *MarketHierarchyBuilder) ensureParentMarket(ctx context.Context, path, s
 		return "", err
 	}
 
-	// Create minimal parent market fragment
-	// Convert slug to human-readable name
-	name := strings.ReplaceAll(slug, "-", " ")
-	name = strings.Title(name) //nolint:staticcheck // Title is deprecated but works fine here
+		// Create minimal parent market fragment with structured label
+		name := marketDisplayLabel(path)
+		if name == "" {
+			name = bestEffortTitleCase(strings.ReplaceAll(slug, "-", " "))
+		}
 
-	f := &models.HorizonFragment{
-		CanonicalPath: path,
-		Type:          models.FragmentTypeMarket,
-		Labels: map[string]string{
-			"en": name,
-		},
+		f := &models.HorizonFragment{
+			CanonicalPath: path,
+			Type:          models.FragmentTypeMarket,
+			Labels: map[string]string{
+				"en": name,
+			},
 		Status: string(models.FragmentStatusActive),
 		State:  map[string]models.MetricValue{},
 		Governance: models.Governance{

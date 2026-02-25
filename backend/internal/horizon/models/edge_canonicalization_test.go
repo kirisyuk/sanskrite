@@ -165,6 +165,28 @@ func TestCanonicalizeEdgeWithPaths_OrgAdministersGov_Swap(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeEdgeWithPaths_OrgOwnsGov_Swap(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdgeWithPaths(
+		DependencyTypeOwns,
+		FragmentTypeOrganization,
+		FragmentTypeOrganization,
+		"/org/iq/agricultural-cooperative-bank",
+		"/gov/iq/federal-government",
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change for OWNS /org/ -> /gov/")
+	}
+	if newType != DependencyTypeOwns {
+		t.Fatalf("expected OWNS (unchanged), got %s", newType)
+	}
+	if !shouldSwap {
+		t.Fatalf("expected shouldSwap=true (/gov/ OWNS /org/)")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty canonicalization reason")
+	}
+}
+
 func TestCanonicalizeEdge_FacilityAdministersOrg_SwapOnly(t *testing.T) {
 	newType, shouldSwap, changed, reason := CanonicalizeEdge(
 		DependencyTypeAdministers,

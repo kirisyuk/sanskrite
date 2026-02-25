@@ -127,7 +127,7 @@ func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *mode
 		return fmt.Errorf("sourceFragmentId and targetFragmentId must be different")
 	}
 
-	// Normalize relation type via runtime taxonomy (single source of truth).
+	// Normalize relation type via code-defined taxonomy contracts.
 	rawType := strings.TrimSpace(string(edge.Type))
 	normType := strings.TrimSpace(taxonomy.NormalizeRelationType(rawType))
 	edge.Type = models.DependencyType(normType)
@@ -211,20 +211,20 @@ func (h *HorizonHandlers) publishEdgeUpserted(ctx context.Context, authTenant st
 		return
 	}
 	payload := map[string]interface{}{
-		"tenantId":         strings.TrimSpace(authTenant),
-		"projectId":        strings.TrimSpace(projectID),
-		"lensId":           strings.TrimSpace(lensID),
-		"edgeId":           strings.TrimSpace(edge.ID),
-		"sourceFragmentId": strings.TrimSpace(edge.SourceFragmentID),
-		"targetFragmentId": strings.TrimSpace(edge.TargetFragmentID),
+		"tenantId":            strings.TrimSpace(authTenant),
+		"projectId":           strings.TrimSpace(projectID),
+		"lensId":              strings.TrimSpace(lensID),
+		"edgeId":              strings.TrimSpace(edge.ID),
+		"sourceFragmentId":    strings.TrimSpace(edge.SourceFragmentID),
+		"targetFragmentId":    strings.TrimSpace(edge.TargetFragmentID),
 		"sourceCanonicalPath": "",
 		"targetCanonicalPath": "",
 		"sourceLabel":         "",
 		"targetLabel":         "",
-		"type":             string(edge.Type),
-		"properties":       edge.Properties,
-		"qualifiers":       edge.Qualifiers,
-		"ts":               time.Now().UTC().Format(time.RFC3339Nano),
+		"type":                string(edge.Type),
+		"properties":          edge.Properties,
+		"qualifiers":          edge.Qualifiers,
+		"ts":                  time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if h.service != nil && h.service.Fragments() != nil {
 		if frag, err := h.service.Fragments().Get(ctx, strings.TrimSpace(edge.SourceFragmentID)); err == nil && frag != nil {

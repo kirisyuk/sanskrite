@@ -162,6 +162,29 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func canonicalLeafSlug(canonicalPath string) string {
+	cp := strings.Trim(strings.TrimSpace(canonicalPath), "/")
+	if cp == "" {
+		return ""
+	}
+	parts := strings.Split(cp, "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	leaf := strings.ToLower(strings.TrimSpace(parts[len(parts)-1]))
+	leaf = strings.ReplaceAll(leaf, "_", "-")
+	return leaf
+}
+
+func isRawLeafSlugValue(value, leafSlug string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" || leafSlug == "" {
+		return false
+	}
+	v = strings.ReplaceAll(v, "_", "-")
+	return v == leafSlug
+}
+
 func titleCaseWords(s string) string {
 	parts := strings.Fields(strings.TrimSpace(s))
 	for i, p := range parts {
@@ -218,6 +241,21 @@ func NormalizeFragmentNames(canonicalPath string, labels map[string]string, iden
 	legal := StripParentheticalAliasAnnotations(strings.TrimSpace(identifiers["legalName"]))
 	short := StripParentheticalAliasAnnotations(strings.TrimSpace(identifiers["shortName"]))
 	labelEN := StripParentheticalAliasAnnotations(strings.TrimSpace(labels["en"]))
+	leafSlug := canonicalLeafSlug(canonicalPath)
+	leafLabel := BestEffortLabelFromCanonicalPath(canonicalPath)
+
+	// If upstream returned canonical slug as a "name", restore readable display/name fields.
+	if leafLabel != "" && leafSlug != "" {
+		if isRawLeafSlugValue(labelEN, leafSlug) {
+			labelEN = leafLabel
+		}
+		if isRawLeafSlugValue(legal, leafSlug) {
+			legal = leafLabel
+		}
+		if isRawLeafSlugValue(short, leafSlug) {
+			short = leafLabel
+		}
+	}
 
 	if legal == "" && labelEN != "" {
 		legal = labelEN
@@ -316,7 +354,20 @@ func PromptEntityNameNormalizationRules() string {
   - fragment.labels.en: readable English name (official translation if exists, otherwise careful transliteration).
   - fragment.identifiers.legalName: official native-script name from primary source/registry.
   - If native language/script is known, also set fragment.labels.<iso639> (e.g., labels.th, labels.ms, labels.ar, labels.ru).
-  - Do NOT replace native official legalName with translation; keep translation/transliteration in labels.en.`
+  - Do NOT replace native official legalName with translation; keep translation/transliteration in labels.en.
+- PERSON naming (when canonicalPath starts with /person/):
+  - fragment.labels.en, fragment.identifiers.legalName, fragment.identifiers.shortName MUST be human-readable names, not URL slugs.
+  - NEVER output kebab-case slugs as names (BAD: "ri-chol-man"; GOOD: "Ri Chol Man").
+- MARKET naming (when canonicalPath starts with /market/):
+  - fragment.labels.en MUST follow the template: "{Country/Region} {Leaf Segment} Market"
+    - L1 (domain-level /market/{geo}/{domain}): "Iraq Agriculture Market", "Global Energy Market"
+    - L2 (vertical /market/{geo}/{domain}/{vertical}): "Iraq Crop Production Market", "UAE Fintech Market"
+    - L3+ (sub-vertical /market/{geo}/{domain}/{vertical}/{sub}/...): "Iraq Rice Production Market", "Saudi Arabia Islamic Banking Market"
+  - {Country/Region} = human-readable geo: "Iraq" (not "iq"), "Global", "GCC", "EU", "Saudi Arabia" (not "sa")
+  - {Leaf Segment} = the deepest (last) segment in the path, Title Cased
+  - fragment.identifiers.legalName and shortName: use the leaf segment name only (e.g., "Rice Production", "Islamic Banking")
+  - Do NOT use bare slugs like "agriculture" — always use Title Case with geo prefix.
+- PRODUCT/PROGRAM/COMMUNITY naming: fragment.labels.en should be a descriptive, human-readable title — not a slug.`
 }
 
 // PromptAnchorNameRules returns shared naming rules for intent anchors.

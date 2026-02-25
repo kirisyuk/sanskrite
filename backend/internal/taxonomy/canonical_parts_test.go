@@ -24,7 +24,7 @@ func TestCanonicalPathParts_Org(t *testing.T) {
 	}
 }
 
-func TestCanonicalPathParts_OrgLegacy(t *testing.T) {
+func TestCanonicalPathParts_OrgLegacyNormalized(t *testing.T) {
 	p, err := ParseCanonicalPathParts("/org/tesla-inc")
 	if err != nil {
 		t.Fatalf("ParseCanonicalPathParts(org legacy) error: %v", err)
@@ -32,8 +32,8 @@ func TestCanonicalPathParts_OrgLegacy(t *testing.T) {
 	if p == nil || p.Namespace != "org" || p.Org == nil || !p.Org.Legacy {
 		t.Fatalf("unexpected parts: %#v", p)
 	}
-	if got, ok := p.BuildCanonicalPath(); !ok || got != "/org/tesla-inc" {
-		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, "/org/tesla-inc")
+	if got, ok := p.BuildCanonicalPath(); !ok || got != "/org/na/tesla-inc" {
+		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, "/org/na/tesla-inc")
 	}
 }
 
@@ -127,7 +127,7 @@ func TestCanonicalPathParts_CommunityPreferred(t *testing.T) {
 	}
 }
 
-func TestCanonicalPathParts_CommunityLegacy(t *testing.T) {
+func TestCanonicalPathParts_CommunityLegacyNormalized(t *testing.T) {
 	p, err := ParseCanonicalPathParts("/community/global/osint-researchers")
 	if err != nil {
 		t.Fatalf("ParseCanonicalPathParts(community legacy) error: %v", err)
@@ -135,8 +135,8 @@ func TestCanonicalPathParts_CommunityLegacy(t *testing.T) {
 	if p == nil || p.Namespace != "community" || p.Community == nil || !p.Community.Legacy {
 		t.Fatalf("unexpected parts: %#v", p)
 	}
-	if got, ok := p.BuildCanonicalPath(); !ok || got != "/community/global/osint-researchers" {
-		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, "/community/global/osint-researchers")
+	if got, ok := p.BuildCanonicalPath(); !ok || got != "/community/global/interest/osint-researchers" {
+		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, "/community/global/interest/osint-researchers")
 	}
 }
 

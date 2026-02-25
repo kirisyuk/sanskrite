@@ -164,6 +164,12 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		return result, nil
 	}
 
+	// Normalize market paths: collapse domain==vertical to prevent duplicates
+	// (e.g. /market/iq/agriculture/agriculture → /market/iq/agriculture)
+	if fragment.Type == models.FragmentTypeMarket && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/market/") {
+		fragment.CanonicalPath = collapseMarketDomainEqualVertical(fragment.CanonicalPath)
+	}
+
 	// ==========================================================================
 	// Policy 1.5: Validate canonical path format (fail-open with deterministic repair)
 	// ==========================================================================
@@ -203,15 +209,14 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 				fragment.CanonicalPath, prefix, fragment.Type))
 	}
 
-	// Organization canonical paths: prefer /org/{iso2|na}/{slug}. Keep legacy /org/{slug} but warn.
+	// Organization canonical paths must be strict: /org/{iso2|na|int|regional}/{slug}.
 	if fragment.Type == models.FragmentTypeOrganization {
 		cp := strings.TrimSpace(fragment.CanonicalPath)
 		if strings.HasPrefix(cp, "/org/") {
 			parts := strings.Split(strings.Trim(cp, "/"), "/")
-			// legacy: ["org", "{slug}"]
-			if len(parts) == 2 {
+			if len(parts) != 3 {
 				result.Warnings = append(result.Warnings,
-					fmt.Sprintf("legacy org path %q: prefer /org/{iso2|na}/{slug} to avoid cross-country collisions", cp))
+					fmt.Sprintf("non-canonical org path %q: expected /org/{geo}/{slug}", cp))
 			}
 		}
 		// gov paths: enforce /gov/{iso2|na}/{slug} shape best-effort (warnings only; hard errors are handled by ValidateCanonicalPath elsewhere).
@@ -225,17 +230,15 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	}
 
 	// ==========================================================================
-	// Policy 3: Warn about flat facility paths
+	// Policy 3: Warn about non-canonical facility paths
 	// ==========================================================================
 	// Facilities should be nested under their parent organization:
-	// Good: /fac/tesla/gigafactory-texas
-	// Bad:  /fac/gigafactory-texas
+	// Good: /fac/tesla/gigafactory-texas (or /fac/na/gigafactory-texas when owner unknown)
 	if fragment.Type == models.FragmentTypeFacility {
 		pathParts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
-		if len(pathParts) == 2 && pathParts[0] == "fac" {
+		if len(pathParts) != 3 || pathParts[0] != "fac" {
 			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("flat facility path %q - consider nesting under parent org: /fac/{org}/%s",
-					fragment.CanonicalPath, pathParts[1]))
+				fmt.Sprintf("non-canonical facility path %q - expected /fac/{org}/{facility}", fragment.CanonicalPath))
 		}
 	}
 
@@ -634,9 +637,9 @@ func repairInvalidCanonicalPath(fragment *models.HorizonFragment) (string, bool)
 	case models.FragmentTypeGeoRegion:
 		candidate = taxonomy.JoinPath("loc", "na", "na", slug)
 	case models.FragmentTypeProduct:
-		candidate = taxonomy.JoinPath("product", slug)
+		candidate = taxonomy.JoinPath("product", "finished", "mechanical", "assembly", slug)
 	case models.FragmentTypeProgram:
-		candidate = taxonomy.JoinPath("program", "na", slug)
+		candidate = taxonomy.JoinPath("program", "global", slug)
 	case models.FragmentTypeMarket:
 		candidate = taxonomy.JoinPath("market", "global", slug)
 	case models.FragmentTypePerson:
@@ -650,7 +653,7 @@ func repairInvalidCanonicalPath(fragment *models.HorizonFragment) (string, bool)
 	case models.FragmentTypeDomain:
 		candidate = taxonomy.JoinPath("domain", "v1", "other", slug)
 	case models.FragmentTypeDeposit:
-		candidate = taxonomy.JoinPath("deposit", "unknown", slug)
+		candidate = taxonomy.JoinPath("deposit", "other", slug)
 	case models.FragmentTypeCommunity:
 		candidate = taxonomy.JoinPath("community", "global", "interest", slug)
 	case models.FragmentTypeEvent:
@@ -746,8 +749,8 @@ var CanonicalPathPolicies = map[models.FragmentType]CanonicalPathPolicy{
 	},
 	models.FragmentTypeProduct: {
 		Prefix:      "/product/",
-		Example:     "/product/tesla/model-3",
-		Description: "Product paths are nested under manufacturer organization",
+		Example:     "/product/finished/mechanical/assembly/model-3",
+		Description: "Product paths use strict taxonomy: /product/{category}/{type}/{stage}/{slug}",
 	},
 	models.FragmentTypePerson: {
 		Prefix:      "/person/",

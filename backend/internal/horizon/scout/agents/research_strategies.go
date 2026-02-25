@@ -18,9 +18,8 @@ type ResearchStrategyInput struct {
 	ChainContext       string
 	OriginalQuery      string
 	DecompositionHints []DecompositionHint
-	ExistingEntities   []string
-	GraphContext       string
-	UnitPipelinePhase  models.UnitPipelinePhase
+	ExistingEntities []string
+	GraphContext     string
 }
 
 // ResearchStrategyOutput holds the result of a single strategy: relations, supply chains, optional fragment merge, grounding evidence.
@@ -29,6 +28,7 @@ type ResearchStrategyOutput struct {
 	SupplyChains     []SupplyChain
 	FragmentPartial  *models.HorizonFragment // optional; merged into working fragment by pipeline
 	GroundingEvidence *ai.GroundingEvidence  // Vertex AI Search provenance from this strategy
+	RawContent       string                  // raw LLM response text; fed back into aggregatedContent so Critic/Resolver have source material
 }
 
 // ResearchStrategy is a domain-specific enrichment strategy (supply_chain, governance, market, strategic, general).

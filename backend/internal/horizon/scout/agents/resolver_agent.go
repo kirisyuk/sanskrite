@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 )
@@ -78,6 +79,11 @@ func (a *ResolverAgent) Resolve(ctx context.Context, req ResolutionRequest) (*Re
 func (a *ResolverAgent) buildResolutionPrompt(req ResolutionRequest) string {
 	scoutJSON, _ := json.MarshalIndent(req.ScoutData, "", "  ")
 	conflictsJSON, _ := json.MarshalIndent(req.CriticArguments, "", "  ")
+	sourceContent := strings.TrimSpace(req.SourceContent)
+	// Keep resolver input bounded to avoid long-running/timeout-prone model calls on huge raw corpora.
+	if len(sourceContent) > 12000 {
+		sourceContent = sourceContent[:12000] + "\n...[truncated]..."
+	}
 	return fmt.Sprintf(`You are a resolution agent (Resolver/Judge) for a risk analysis system. Your task is to resolve conflicts between extracted data (Scout) and validation results (Critic).
 
 SCOUT DATA (extracted):
@@ -100,5 +106,5 @@ Return a JSON object with:
 - resolvedData: Corrected data object (if verdict is Verified or Low_Confidence)
 - confidence: float (0..1) indicating confidence in the resolution
 
-Return ONLY valid JSON. Do not include markdown code fences.`, string(scoutJSON), string(conflictsJSON), req.SourceContent)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(scoutJSON), string(conflictsJSON), sourceContent)
 }

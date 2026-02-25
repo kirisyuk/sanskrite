@@ -11,9 +11,9 @@ func TestValidateCanonicalPath(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "valid org path",
+			name:    "invalid org path without geo",
 			path:    "/org/tesla",
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name:    "valid org path with country",
@@ -142,7 +142,7 @@ func TestValidateCanonicalPath(t *testing.T) {
 		},
 		{
 			name:    "valid product path",
-			path:    "/product/google/gemini",
+			path:    "/product/finished/mechanical/assembly/gemini",
 			wantErr: false,
 		},
 		{
@@ -152,7 +152,7 @@ func TestValidateCanonicalPath(t *testing.T) {
 		},
 		{
 			name:    "valid market path",
-			path:    "/market/energy/secondary-liquidity",
+			path:    "/market/global/energy/secondary-liquidity",
 			wantErr: false,
 		},
 		{
@@ -171,9 +171,9 @@ func TestValidateCanonicalPath(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "valid deposit path (legacy)",
+			name:    "invalid deposit path without resource",
 			path:    "/deposit/ghawar",
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name:    "namespace-only path is invalid",
@@ -231,6 +231,3 @@ func TestOrgCanonicalPath_ParentheticalAnnotations(t *testing.T) {
 		}
 	}
 }
-
-
-

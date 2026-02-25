@@ -53,7 +53,7 @@ func TestResearchPipeline_SupplyChainMode(t *testing.T) {
 	}
 	modes := []string{taxonomy.DomainModeSupplyChain}
 
-	frag, relations, chains, _, err := runner.Enrich(ctx, input, modes)
+	frag, relations, chains, _, _, err := runner.Enrich(ctx, input, modes)
 	if err != nil {
 		t.Fatalf("Enrich: %v", err)
 	}
@@ -91,25 +91,6 @@ func TestResearchPipeline_StrategiesForModes(t *testing.T) {
 	empty := runner.strategiesForModes(nil)
 	if len(empty) != 1 {
 		t.Errorf("empty mode should route to exactly one general strategy, got %d", len(empty))
-	}
-}
-
-func TestSupplyChainEnrichmentPrompt_PhaseGuardrails(t *testing.T) {
-	a := NewResearchAgent(nil)
-	input := ResearchStrategyInput{
-		Fragment:          &models.HorizonFragment{CanonicalPath: "/org/us/example"},
-		MissingInfo:       []string{"Find suppliers"},
-		UnitPipelinePhase: models.UnitPipelinePhaseP3,
-	}
-	prompt := a.buildSupplyChainEnrichmentPrompt(input)
-	if !strings.Contains(prompt, "UNIT PIPELINE PHASE: P0-P3") {
-		t.Fatalf("expected P0-P3 guardrails in prompt")
-	}
-
-	input.UnitPipelinePhase = models.UnitPipelinePhaseP5
-	prompt = a.buildSupplyChainEnrichmentPrompt(input)
-	if !strings.Contains(prompt, "UNIT PIPELINE PHASE: P5") {
-		t.Fatalf("expected P5 guardrails in prompt")
 	}
 }
 
@@ -164,7 +145,7 @@ func TestGeneralEnrichmentPrompt_ModularContract(t *testing.T) {
 	prompt := a.buildGeneralEnrichmentPrompt(input)
 	for _, want := range []string{
 		"OBJECT-TYPE TASK SPECIALIZATION",
-		"OBJECT QUALIFIER + UNIT TEMPLATE CONTRACT (STRICT)",
+		"OBJECT QUALIFIER CONTRACT (STRICT)",
 		"EXISTING ENTITIES (reuse instead of creating duplicates):",
 		"ALLOWED RELATION TAXONOMY:",
 		"CANONICAL PATH RULES:",

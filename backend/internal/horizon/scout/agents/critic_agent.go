@@ -45,7 +45,7 @@ type ValidationConflict struct {
 
 // Validate проверяет извлеченные данные на соответствие источникам
 func (a *CriticAgent) Validate(ctx context.Context, extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string) (*ValidationResult, error) {
-	return a.ValidateWithGraphContext(ctx, extractedData, relations, supplyChains, sourceContent, specialties, "", nil, models.UnitPipelinePhaseP3)
+	return a.ValidateWithGraphContext(ctx, extractedData, relations, supplyChains, sourceContent, specialties, "", nil)
 }
 
 // ValidateWithGraphContext validates extracted data and can optionally be given a compact "graph context"
@@ -59,7 +59,6 @@ func (a *CriticAgent) ValidateWithGraphContext(
 	specialties []string,
 	graphContext string,
 	domainModes []string,
-	unitPhase models.UnitPipelinePhase,
 ) (*ValidationResult, error) {
 	if a == nil {
 		return nil, fmt.Errorf("critic agent is nil")
@@ -67,24 +66,27 @@ func (a *CriticAgent) ValidateWithGraphContext(
 	domainModes = taxonomy.NormalizeDomainModes(domainModes)
 	if len(domainModes) > 0 {
 		input := CriticValidatorInput{
-			Fragment:          extractedData,
-			Relations:         relations,
-			SupplyChains:      supplyChains,
-			SourceContent:     sourceContent,
-			GraphContext:      graphContext,
-			UnitPipelinePhase: unitPhase,
+			Fragment:      extractedData,
+			Relations:     relations,
+			SupplyChains:  supplyChains,
+			SourceContent: sourceContent,
+			GraphContext:  graphContext,
 		}
 		out, err := a.CriticPipeline().Validate(ctx, input, domainModes)
 		if err != nil {
 			return nil, err
 		}
 		if out != nil {
-			return out, nil
+			return enforceValidationRelevance(extractedData, out), nil
 		}
 	}
 
-	prompt := a.buildValidationPrompt(extractedData, relations, supplyChains, sourceContent, specialties, graphContext, unitPhase)
-	return a.runValidationPrompt(ctx, prompt)
+	prompt := a.buildValidationPrompt(extractedData, relations, supplyChains, sourceContent, specialties, graphContext)
+	out, err := a.runValidationPrompt(ctx, prompt)
+	if err != nil {
+		return nil, err
+	}
+	return enforceValidationRelevance(extractedData, out), nil
 }
 
 // ValidateStrategicOverlay validates DECISION_POINT and MECHANISM entities in Phase 2.
@@ -271,7 +273,7 @@ Return ONLY valid JSON. No markdown fences.
 }
 
 // buildValidationPrompt строит промпт для валидации данных
-func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string, graphContext string, unitPhase models.UnitPipelinePhase) string {
+func (a *CriticAgent) buildValidationPrompt(extractedData *models.HorizonFragment, relations []DiscoveredRelation, supplyChains []SupplyChain, sourceContent string, specialties []string, graphContext string) string {
 	if extractedData == nil {
 		extractedData = &models.HorizonFragment{}
 	}
@@ -308,8 +310,8 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt() + "\n\n"
 	// Object detail: from entity_semantics (unified per type).
 	profileBlock := entity_semantics.ResearchBlockForPath(extractedData.CanonicalPath, extractedData.Type, extractedData.CommunityType) + "\n\n"
-	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(extractedData.CanonicalPath, extractedData.Type, extractedData.CommunityType, extractedData.Qualifiers, extractedData.Identifiers) + "\n"
-	unitPhaseBlock := buildUnitPhaseCriticBlock(unitPhase) + "\n\n"
+	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(extractedData.CanonicalPath, extractedData.Type, extractedData.CommunityType, extractedData.Qualifiers, extractedData.Identifiers, extractedData.SpherePaths) + "\n"
+	relevanceGateBlock := buildCriticRelevanceGate(extractedData)
 	nameRulesBlock := strings.ReplaceAll(naming.PromptEntityNameNormalizationRules(), "\n", "\n        ")
 
 	canonicalRules := taxonomy.DefaultCanonicalRules()
@@ -321,8 +323,8 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 	        - "Which country/jurisdiction does this government body belong to? REQUIRED FORMAT: %s with iso2 ISO3166-1 alpha2 lowercase OR regional token (gcc, eu, asean); regional tokens go in the geo slot (2nd segment). Example: %s."
 	      - Shared naming constraints (for fragment + relations):
 	        %s
-	      - If path is /product/... ensure it is either %s or %s; otherwise add a question:
-	        - "Resolve canonical product taxonomy for <product>. REQUIRED FORMAT: %s (or %s if unknown). category∈{%s}; type∈{%s}; stage∈{%s}. Example: %s."
+	      - If path is /product/... ensure it is %s; otherwise add a question:
+	        - "Resolve canonical product taxonomy for <product>. REQUIRED FORMAT: %s. category∈{%s}; type∈{%s}; stage∈{%s}. For services, use category=service and map service domain/subdomain into {type}/{stage}. Example: %s."
       - If path is /loc/... ensure it is %s; otherwise add a question:
         - "Resolve canonical GEO path for <location>. REQUIRED FORMAT: %s where cc is ISO3166-1 alpha2 lowercase (or allowed regional token: asean, brics, gcc, eu, eaeu), admin1 is GeoNames admin code or 'na', city is hyphenated English name. Example: %s."
       - If path is /program/... ensure it is /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known:
@@ -336,10 +338,8 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 		canonicalRules.Gov.Format,
 		canonicalRules.Gov.Example,
 		nameRulesBlock,
-		canonicalRules.Product.Fallback,
 		canonicalRules.Product.Format,
 		canonicalRules.Product.Format,
-		canonicalRules.Product.Fallback,
 		strings.Join(canonicalRules.Product.Categories, ", "),
 		strings.Join(canonicalRules.Product.Types, ", "),
 		strings.Join(canonicalRules.Product.Stages, ", "),
@@ -419,7 +419,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  
 	  - If this looks like a government body (ministry/agency/regulator) but canonicalPath is not /gov/{iso2}/{slug}, add a question:
 	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2|regional}/{slug} where regional tokens (gcc, eu, asean) go in the geo slot (2nd segment). If unknown, /gov/na/{slug}."
-	  - If canonicalPath is legacy (/org/{slug}) or uses /org/na/{slug}, add a question:
+	  - If canonicalPath uses /org/na/{slug}, add a question:
 	    - "What is the country of origin / primary jurisdiction (ISO2 or regional token) for <org>? Use the entity's legalName/shortName/label to disambiguate and update canonicalPath to /org/{iso2|regional}/{slug}-{legal_form}. If truly unknown, keep /org/na/... but state uncertainty."
 	
 %s
@@ -459,9 +459,9 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - For any /org/ (ORGANIZATION), first determine if it's a HOLDING company or OPERATING company:
 	    - HOLDING indicators: has OWNS edges to other /org/, sectorPath contains "Financials/Capital_Markets" or "Holding", labels contain "holding", "investment", "group"
 	    - OPERATING company: produces products/services directly
-	  - For OPERATING /org/: if there are NO PRODUCES relations with /product/... or /product/service/... targets, add:
+	  - For OPERATING /org/: if there are NO PRODUCES relations with /product/... targets, add:
 	    - "What products does <org> manufacture/produce? Return as /product/{category}/{type}/{stage}/{slug} canonical paths."
-	    - "What services does <org> provide? Return as /product/service/{domain}/{subdomain}/{slug} canonical paths."
+	    - "What services does <org> provide? Return as /product/{category}/{type}/{stage}/{slug} with category=service and service domain/subdomain in {type}/{stage}."
 	  - For HOLDING /org/: first require subsidiaries, then products on subsidiaries:
 	    - If no OWNS edges to other /org/: "What operating subsidiaries does <org> own? Include ownership percentage."
 	    - Flag subsidiaries for separate scouting with products/services requirement.
@@ -597,5 +597,112 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      - When asking for mechanism user (from MECHANISM fragment), ALWAYS request EXPLICIT SOURCE in missingInfo.
 	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET.
 
-Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, objectTypeTaskBlock, unitPhaseBlock, canonicalValidationBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, objectTypeTaskBlock, canonicalValidationBlock, relevanceGateBlock)
+}
+
+func buildCriticRelevanceGate(fragment *models.HorizonFragment) string {
+	if fragment == nil {
+		return ""
+	}
+	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
+	ft := fragment.Type
+
+	switch {
+	case ft == models.FragmentTypePerson || strings.HasPrefix(cp, "/person/"):
+		return `CRITICAL RELEVANCE GATE (PERSON):
+- Focus ONLY on person-relevant completeness: identity, affiliations, roles, relatives, associates, and person-specific relationship evidence.
+- Do NOT request org/fac/market operational packages for PERSON:
+  no orgSize, marketSegments, TAM/CAGR/CR4/HHI, supply-chain suppliers/customers, facility lifecycle, audit-assurance, products/services catalogs, ownership cap-table requests.
+- If uncertain, prefer fewer high-quality PERSON questions over broad business checklists.
+`
+	case ft == models.FragmentTypeMarket || strings.HasPrefix(cp, "/market/"):
+		return `CRITICAL RELEVANCE GATE (MARKET):
+- Focus on market hierarchy, participants, sizing and concentration metrics.
+- Avoid person-family/biography requests unless explicitly evidenced as relevant to this market.
+`
+	case ft == models.FragmentTypeCommunity || strings.HasPrefix(cp, "/community/"):
+		return `CRITICAL RELEVANCE GATE (COMMUNITY):
+- Focus on community type, channels, affiliations, subgroup hierarchy, and influence links.
+- Avoid generic corporate audit/market-sizing checklists unless explicitly grounded.
+`
+	default:
+		return `CRITICAL RELEVANCE GATE:
+- Apply only checks and missingInfo that are directly relevant to the entity type/canonicalPath.
+- Do NOT emit broad mandatory checklists that are unrelated to the current entity.
+`
+	}
+}
+
+func enforceValidationRelevance(fragment *models.HorizonFragment, out *ValidationResult) *ValidationResult {
+	if out == nil || fragment == nil {
+		return out
+	}
+	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
+	ft := fragment.Type
+	isPerson := ft == models.FragmentTypePerson || strings.HasPrefix(cp, "/person/")
+	if !isPerson {
+		return out
+	}
+
+	isIrrelevantForPerson := func(text string) bool {
+		t := strings.ToLower(strings.TrimSpace(text))
+		if t == "" {
+			return false
+		}
+		// PERSON guardrail: suppress known non-person business/market/supply-chain checklists.
+		return strings.Contains(t, "supplier") ||
+			strings.Contains(t, "supply chain") ||
+			strings.Contains(t, "upstream") ||
+			strings.Contains(t, "downstream") ||
+			strings.Contains(t, "orgsize") ||
+			strings.Contains(t, "marketsegments") ||
+			strings.Contains(t, "tam") ||
+			strings.Contains(t, "cagr") ||
+			strings.Contains(t, "cr4") ||
+			strings.Contains(t, "hhi") ||
+			strings.Contains(t, "audit") ||
+			strings.Contains(t, "assurance") ||
+			strings.Contains(t, "auditor") ||
+			strings.Contains(t, "subsidiar") ||
+			strings.Contains(t, "ownership percentage") ||
+			strings.Contains(t, "operational status") ||
+			strings.Contains(t, "facility") ||
+			strings.Contains(t, "deposit") ||
+			strings.Contains(t, "products and services") ||
+			strings.Contains(t, "produce") ||
+			strings.Contains(t, "consume")
+	}
+
+	if len(out.MissingInfo) > 0 {
+		filteredMissing := make([]string, 0, len(out.MissingInfo))
+		for _, q := range out.MissingInfo {
+			if isIrrelevantForPerson(q) {
+				continue
+			}
+			filteredMissing = append(filteredMissing, q)
+		}
+		out.MissingInfo = filteredMissing
+	}
+
+	if len(out.Conflicts) > 0 {
+		filteredConflicts := make([]ValidationConflict, 0, len(out.Conflicts))
+		for _, c := range out.Conflicts {
+			blob := strings.TrimSpace(
+				strings.Join([]string{
+					c.Field,
+					c.Reason,
+					fmt.Sprint(c.ExtractedValue),
+					fmt.Sprint(c.SourceValue),
+				}, " "),
+			)
+			if isIrrelevantForPerson(blob) {
+				continue
+			}
+			filteredConflicts = append(filteredConflicts, c)
+		}
+		out.Conflicts = filteredConflicts
+		out.HasConflicts = len(filteredConflicts) > 0
+	}
+
+	return out
 }

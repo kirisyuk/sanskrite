@@ -62,6 +62,16 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 		in.SourcePath, in.TargetPath = in.TargetPath, in.SourcePath
 	}
 
+	// --- OWNS /org → /gov swap (gov owns state-owned enterprises, not vice versa) ---
+	if in.EdgeType == horizonmodels.DependencyTypeOwns &&
+		strings.HasPrefix(in.SourcePath, "/org/") && strings.HasPrefix(in.TargetPath, "/gov/") {
+		res.ShouldSwap = true
+		res.Changed = true
+		res.Reason = "canonicalize: OWNS /org -> /gov swapped to /gov -> /org (gov owns state-owned enterprises)"
+		in.SourceType, in.TargetType = in.TargetType, in.SourceType
+		in.SourcePath, in.TargetPath = in.TargetPath, in.SourcePath
+	}
+
 	// --- CONTROLS /product/ → /gov/ or /org/ swap (gov/org controls product, not vice versa) ---
 	if in.EdgeType == horizonmodels.DependencyTypeControls &&
 		strings.HasPrefix(in.SourcePath, "/product/") &&
@@ -81,7 +91,7 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 		res.EdgeType = horizonmodels.DependencyTypeOwns
 		res.Changed = true
 		res.Reason = "canonicalize: ORGANIZATION INVESTS_IN FACILITY with ownership evidence -> ORGANIZATION OWNS FACILITY"
-	} else if fix, ok := ResolveEdgeDirectionAutoFix(in.EdgeType, in.SourceType, in.TargetType); ok {
+	} else if fix, ok := ResolveEdgeDirectionAutoFix(in.EdgeType, in.SourceType, in.TargetType, in.SourcePath, in.TargetPath); ok {
 		res.OriginalType = in.EdgeType
 		res.EdgeType = fix.NewType
 		res.ShouldSwap = fix.ShouldSwap

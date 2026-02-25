@@ -72,9 +72,8 @@ type DiscoveredRelation struct {
 
 // ScoutResult результат работы Scout Agent
 type ScoutResult struct {
-	Fragment     models.HorizonFragment  `json:"fragment"`
-	Relations    []DiscoveredRelation    `json:"relations"`
-	UnitProfiles []models.OrgUnitProfile `json:"unitProfiles,omitempty"`
+	Fragment  models.HorizonFragment `json:"fragment"`
+	Relations []DiscoveredRelation   `json:"relations"`
 	// SupplyChains is best-effort core output for business graph construction.
 	// Each chain is an ordered sequence of nodes representing a supply chain path.
 	SupplyChains []SupplyChain `json:"supplyChains,omitempty"`
@@ -106,13 +105,6 @@ type SupplyChainNode struct {
 	Type string `json:"type"`
 	// Role describes the node's function in the chain (optional): supplier, processor, assembler, distributor, customer
 	Role string `json:"role,omitempty"`
-	// UnitRef is a unit identifier for actor nodes when known (consumer, enterprise, core_ops, etc).
-	UnitRef string `json:"unitRef,omitempty"`
-	// UnitCode is a controlled unit code for actor nodes.
-	// Allowed values: consumer|enterprise|core_ops|it|logistics|corporate|rnd|unclassified.
-	UnitCode string `json:"unitCode,omitempty"`
-	// UnitLabel is a short human-readable label for the unit.
-	UnitLabel string `json:"unitLabel,omitempty"`
 }
 
 // Вспомогательная структура для парсинга, чтобы поймать name
@@ -126,10 +118,9 @@ type extractedFragment struct {
 }
 
 type scoutResultInternal struct {
-	Fragment     extractedFragment       `json:"fragment"`
-	Relations    []DiscoveredRelation    `json:"relations"`
-	UnitProfiles []models.OrgUnitProfile `json:"unitProfiles,omitempty"`
-	SupplyChains []SupplyChain           `json:"supplyChains,omitempty"`
+	Fragment     extractedFragment    `json:"fragment"`
+	Relations    []DiscoveredRelation `json:"relations"`
+	SupplyChains []SupplyChain        `json:"supplyChains,omitempty"`
 }
 
 // ExtractFragmentData извлекает данные HorizonFragment и связи из контента источника.
@@ -184,7 +175,6 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 		scoutResult = &ScoutResult{
 			Fragment:     internalResult.Fragment.HorizonFragment,
 			Relations:    internalResult.Relations,
-			UnitProfiles: normalizeUnitProfiles(targetCanonicalPath, internalResult.UnitProfiles),
 			SupplyChains: internalResult.SupplyChains,
 		}
 		// Handle name fields from internal struct (prefer LegalName)
@@ -194,21 +184,7 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 		}
 		short := strings.TrimSpace(internalResult.Fragment.ShortName)
 
-		if legal != "" {
-			if scoutResult.Fragment.Labels == nil {
-				scoutResult.Fragment.Labels = make(map[string]string)
-			}
-			scoutResult.Fragment.Labels["en"] = legal
-		}
-		if scoutResult.Fragment.Identifiers == nil {
-			scoutResult.Fragment.Identifiers = make(map[string]string)
-		}
-		if legal != "" && strings.TrimSpace(scoutResult.Fragment.Identifiers["legalName"]) == "" {
-			scoutResult.Fragment.Identifiers["legalName"] = legal
-		}
-		if short != "" && strings.TrimSpace(scoutResult.Fragment.Identifiers["shortName"]) == "" {
-			scoutResult.Fragment.Identifiers["shortName"] = short
-		}
+		applyExtractedNameHints(&scoutResult.Fragment, legal, short)
 	} else {
 		// Fallback: возможно, модель вернула только Fragment (старый формат)
 		var fragment models.HorizonFragment
@@ -339,69 +315,30 @@ func normalizeDiscoveredRelationsNames(relations []DiscoveredRelation) {
 	}
 }
 
-func normalizeUnitProfiles(parentOrgRef string, in []models.OrgUnitProfile) []models.OrgUnitProfile {
-	if len(in) == 0 {
-		return nil
+func applyExtractedNameHints(fragment *models.HorizonFragment, legal, short string) {
+	if fragment == nil {
+		return
 	}
-	parentOrgRef = strings.TrimSpace(parentOrgRef)
-	seen := make(map[string]struct{}, len(in))
-	out := make([]models.OrgUnitProfile, 0, len(in))
-	for idx, unit := range in {
-		unit.ParentOrgRef = strings.TrimSpace(unit.ParentOrgRef)
-		if unit.ParentOrgRef == "" {
-			unit.ParentOrgRef = parentOrgRef
-		}
-		unit.UnitCode = models.NormalizeUnitCode(string(unit.UnitCode))
-		unit.Label = strings.TrimSpace(unit.Label)
-		if unit.Label == "" {
-			unit.Label = string(unit.UnitCode)
-		}
-		unit.UnitID = strings.TrimSpace(unit.UnitID)
-		if unit.UnitID == "" {
-			unit.UnitID = normalizeUnitID(unit.Label, unit.UnitCode, idx)
-		}
-		if _, ok := seen[unit.UnitID]; ok {
-			continue
-		}
-		seen[unit.UnitID] = struct{}{}
-		out = append(out, unit)
+	if fragment.Labels == nil {
+		fragment.Labels = make(map[string]string)
 	}
-	return out
-}
+	if fragment.Identifiers == nil {
+		fragment.Identifiers = make(map[string]string)
+	}
 
-func normalizeUnitID(label string, code models.UnitCode, idx int) string {
-	base := slugifyUnitToken(label)
-	if base == "" {
-		base = slugifyUnitToken(string(code))
-	}
-	if base == "" {
-		base = "unit"
-	}
-	return fmt.Sprintf("%s-%d", base, idx+1)
-}
+	legal = strings.TrimSpace(legal)
+	short = strings.TrimSpace(short)
 
-func slugifyUnitToken(in string) string {
-	s := strings.TrimSpace(strings.ToLower(in))
-	if s == "" {
-		return ""
+	// Do not overwrite a non-empty label produced in fragment payload.
+	if legal != "" && strings.TrimSpace(fragment.Labels["en"]) == "" {
+		fragment.Labels["en"] = legal
 	}
-	var b strings.Builder
-	lastDash := false
-	for _, r := range s {
-		isAlpha := r >= 'a' && r <= 'z'
-		isNum := r >= '0' && r <= '9'
-		if isAlpha || isNum {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
+	if legal != "" && strings.TrimSpace(fragment.Identifiers["legalName"]) == "" {
+		fragment.Identifiers["legalName"] = legal
 	}
-	out := strings.Trim(b.String(), "-")
-	return out
+	if short != "" && strings.TrimSpace(fragment.Identifiers["shortName"]) == "" {
+		fragment.Identifiers["shortName"] = short
+	}
 }
 
 func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string {
@@ -475,7 +412,8 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - COMPETES_WITH: competitor relationship (direction is not important, still output as source->target).
    - INFLUENCES: source influences target (soft power; avoid for formal authority/ownership).
    - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
-   - For ORGANIZATION ↔ MARKET pairs, relationType MUST be PARTICIPATES_IN only (direction: ORGANIZATION -> MARKET).
+   - For ORGANIZATION ↔ MARKET pairs, relationType MUST be PARTICIPATES_IN (direction: ORGANIZATION -> MARKET).
+     Exception: GOV entities (/gov/...) may use REGULATES, CONTROLS_ACCESS, or INFLUENCES toward MARKET targets.
      Use qualifiers.marketRole ("leader"/"dominant") + market_share metrics for leadership semantics.
    - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
    - ADMINISTERS: government/body administers subordinate GOV, PROGRAM, GEO_REGION, FACILITY, or DEPOSIT.
@@ -488,7 +426,7 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - HAS_SUBGROUP: COMMUNITY parent -> narrower community subgroup.
 
    %s
-   - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (ORG -> MARKET).
+   - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES.
    - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/ for any relation.
 
    Each object must include:
@@ -500,7 +438,6 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    Optional edge enrichment fields (REQUIRED WHEN AVAILABLE):
    - validFrom, validTo
    - qualifiers: edgeModality, eventId, round, contractType, integration_type, facet, transmission qualifiers
-   - qualifiers (unit-first): source_unit_ref, source_unit_code, source_unit_label, target_unit_ref, target_unit_code, target_unit_label
    - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`
 
 func extractionGeneralRelationRulesBlock() string {
@@ -553,7 +490,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeMarket) {
 		b.WriteString(`   MARKET MODE:
    - PARTICIPATES_IN: entity -> market.
-   - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN only (ORG -> MARKET).
+   - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities may also REGULATES/CONTROLS_ACCESS/INFLUENCES market.
    - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
    - Keep focus on market structure and placement, not supply/governance edges.
 `)
@@ -584,49 +521,24 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
    Optional edge enrichment fields (REQUIRED WHEN AVAILABLE):
    - validFrom, validTo
    - qualifiers: edgeModality, eventId, round, contractType, integration_type, facet, transmission qualifiers
-   - qualifiers (unit-first): source_unit_ref, source_unit_code, source_unit_label, target_unit_ref, target_unit_code, target_unit_label
    - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`, entity_semantics.PromptRelationTargetTypesPipeList()))
 	return b.String()
-}
-
-func buildUnitIdentificationBlock(targetCanonicalPath string, domainModes []string) string {
-	cp := strings.TrimSpace(strings.ToLower(targetCanonicalPath))
-	needsUnits := strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/")
-	if !needsUnits && !taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) && !taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGovernance) {
-		return ""
-	}
-	return `UNIT-FIRST PHASE ORDER (MANDATORY):
-1) First identify macro units for THIS FRAGMENT and return them in "unitProfiles".
-2) Then extract relations and attach unit qualifiers.
-3) If uncertain, keep relation and set unit refs/codes to "unclassified" (do not drop relation).
-
-"unitProfiles" Field (Array):
-- Return 2-8 unit contours for ORG/GOV targets when evidence exists.
-- Each profile shape:
-  { "unitId", "parentOrgRef", "unitCode", "label", "status"?, "geo"?, "legalEntityRefs"?, "aliases"?, "confidence"?, "sources"? }
-- unitCode MUST be one of: consumer | enterprise | core_ops | it | logistics | corporate | rnd | unclassified.
-- parentOrgRef should point to THIS FRAGMENT canonical path.
-- unitId must be stable and unique within parentOrgRef.
-
-Relation unit qualifiers (on each relation.qualifiers):
-- source_unit_ref / target_unit_ref: unit identifiers or "unclassified"
-- source_unit_code / target_unit_code: same enum as unitCode
-- source_unit_label / target_unit_label: short human-readable labels`
 }
 
 func extractionCanonicalNamespaceDetailsBlock() string {
 	return `CANONICAL NAMESPACE DETAILS (strict addendum):
 - /segment/{domain}/{vertical}/{geo} for ORG marketSegments (exactly 3 parts after /segment).
 - /media/{platform}/{slug} for concrete media channels/endpoints.
-- Products:
-  - goods: /product/{category}/{type}/{stage}/{slug}[/{model-slug}]
-  - services: /product/service/{domain}/{subdomain}/{slug}[/{offering-slug}]
+- Products: /product/{category}/{type}/{stage}/{slug}[/{variant-slug}] (single format).
+  - For services, use category=service and map service domain/subdomain into {type}/{stage}.
 - Markets:
-  - prefer /market/{geo}/{domain}/{vertical}
+  - L1: /market/{geo}/{domain}; L2: /market/{geo}/{domain}/{vertical}; L3+: parent path + one segment
+  - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
+  - Example chain: /market/sa/finance → .../banking → .../banking/islamic-banking
   - HAS_MARKET_SEGMENT child path = parent path + one segment
 - Communities: /community/{geo}/{type}/{slug}; subgroup hierarchy via HAS_SUBGROUP (broader -> narrower).
-- Programs: prefer /program/{jurisdiction}/{slug} when jurisdiction is known.
-- Facilities: prefer /fac/{orgSlug}/{facilitySlug} over flat /fac/{facilitySlug}.`
+- Programs: /program/{jurisdiction}/{slug}; if jurisdiction is unknown, use global.
+- Facilities: /fac/{orgSlug}/{facilitySlug}; if org is unknown, use orgSlug=na.`
 }
 
 // buildExtractionPrompt строит промпт для извлечения данных
@@ -647,11 +559,6 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 		relationCatalogOverride += "\n"
 	}
 	relationRulesBlock := buildExtractionRelationsRulesBlock(domainModes)
-	unitIdentificationBlock := buildUnitIdentificationBlock(targetCanonicalPath, domainModes)
-	if strings.TrimSpace(unitIdentificationBlock) != "" {
-		unitIdentificationBlock += "\n\n"
-	}
-
 	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt()
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
 	// Object detail: from entity_semantics (unified per type). Scope from domain modes above.
@@ -661,7 +568,7 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 	}
 	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
 	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlock(targetCanonicalPath, "", "")
-	objectQualifierUnitTemplateContractBlock := buildObjectQualifierUnitTemplateContractBlock(targetCanonicalPath, "", "")
+	objectQualifierContractBlock := buildObjectQualifierContractBlock(targetCanonicalPath, "", "")
 	coreBusinessTaxonomyBlock := buildCoreBusinessTaxonomyBlock()
 	canonicalContractBlock := fmt.Sprintf(`CANONICAL PATH RULES:
 %s
@@ -691,25 +598,17 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
   - unit lowercase (or omitted when unitless)
   - confidence in 0..1
   - observedAt ISO8601
-  - provenance method + at least one sourceId`, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierUnitTemplateContractBlock)
-
-	unitProfilesContractBlock := `2. "unitProfiles" Field (Array of Objects):
-- Optional for non-org/non-gov targets. For /org/ and /gov/ return when evidence exists.
-- Shape:
-  - unitId (stable id), parentOrgRef, unitCode, label
-  - unitCode enum: consumer|enterprise|core_ops|it|logistics|corporate|rnd|unclassified
-  - optional: status, geo, legalEntityRefs, aliases, confidence, sources`
+  - provenance method + at least one sourceId`, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierContractBlock)
 
 	relationsContractBlock := fmt.Sprintf(`3. "relations" Field (Array of Objects):
 - Each relation is a directed edge FROM THIS FRAGMENT (source) TO targetCanonicalPath (target), unless explicit sourceCanonicalPath is provided.
 - relationType must follow semantic direction.
 %s
-%s
-%s`, relationCatalogOverride, unitIdentificationBlock, relationRulesBlock)
+%s`, relationCatalogOverride, relationRulesBlock)
 
 	supplyChainsContractBlock := `4. "supplyChains" Field (Array of Objects):
 - Each chain has: nodes[], confidence, reason, optional transportVia[].
-- Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|PROGRAM|MARKET|GEO_REGION|DEPOSIT|COMMUNITY), role?, unitRef?, unitCode?, unitLabel?
+- Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|PROGRAM|MARKET|GEO_REGION|DEPOSIT|COMMUNITY), role?
 - Nodes MUST alternate actor -> product -> actor -> product.
 - Include FACILITY where transformation occurs (product -> facility -> product).
 - For extractive flows: org -> facility -> deposit -> product.
@@ -731,12 +630,10 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 		`TASK:
 Extract all relevant information and return ONE JSON object with fields:
 - fragment
-- unitProfiles
 - relations
 - supplyChains
 Use [] for unknown arrays.`,
 		fragmentContractBlock,
-		unitProfilesContractBlock,
 		relationsContractBlock,
 		supplyChainsContractBlock,
 		"Return ONLY valid JSON. Do not include markdown code fences.",

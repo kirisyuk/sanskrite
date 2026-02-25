@@ -136,23 +136,30 @@ func main() {
 		}
 	}
 
-	// Google Geocoding client (for org/facility/community/program) with API call counter for cache hit rate
+	// Geocoding client (for org/facility/community/program) with API call counter for cache hit rate
+	// Primary: Nominatim (free, OSM). Fallback: Google Geocoding (paid).
 	var geocodingClient coreontology.GeocodingClientInterface
 	var geocodingCounter *countingGeocoding
 	if !*skipGeocoding {
+		nomRaw := geocoding.NominatimOptionsFromEnv()
+		nomCached := geocoding.NewCachedClient(nomRaw, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+		log.Printf("Nominatim geocoding client enabled (primary, free OSM-based)")
+
+		var googleClient coreontology.GeocodingClientInterface
 		gcBase := httphandlers.GetGoogleGeocodingClientFromEnv()
 		if gcBase != nil {
 			gcAdapter := geocoding.NewAdapter(gcBase)
 			geocodingCounter = &countingGeocoding{base: gcAdapter}
-			geocodingClient = geocoding.NewCachedClient(geocodingCounter, externalCacheRepo, geocoding.CacheOptionsFromEnv())
-			log.Printf("Google Geocoding client enabled (for org/facility/community/program)")
+			googleClient = geocoding.NewCachedClient(geocodingCounter, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+			log.Printf("Google Geocoding client enabled (fallback for Nominatim misses)")
 		} else {
-			log.Printf("Google Geocoding disabled: GOOGLE_MAPS_API_KEY not set")
+			log.Printf("Google Geocoding disabled: GOOGLE_MAPS_API_KEY not set (Nominatim-only mode)")
 		}
+		geocodingClient = geocoding.NewFallbackClient(nomCached, googleClient, log.Default())
 	}
 
 	if geonamesClient == nil && geocodingClient == nil {
-		log.Fatal("At least one of GeoNames or Google Geocoding must be enabled")
+		log.Fatal("At least one of GeoNames or Geocoding (Nominatim/Google) must be enabled")
 	}
 
 	typeFilter := parseTypesFilter(*typesFilter)

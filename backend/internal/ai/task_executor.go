@@ -817,9 +817,10 @@ func (e *AITaskExecutor) saveUsageMetric(ctx context.Context, task *AITask, mode
 	}
 
 	// Save asynchronously to avoid blocking
-	// Use a new context with timeout to avoid cancellation from parent context
+	// Use a new context with timeout to avoid cancellation from parent context.
+	// 30s allows for Firestore latency under load or cold start (10s was too short).
 	go func() {
-		metricCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		metricCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_, err := e.usageMetricsRepo.CreateMetric(metricCtx, tenantID, userID, provider, modelName, inputTokens, outputTokens, cost, taskTypePtr, projectIDPtr, durationMs, useCasePtr)
 		if err != nil {

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -30,20 +29,6 @@ const criticValidationOutputSchema = `STRICT OUTPUT SCHEMA (types are mandatory)
 Rules:
 - missingInfo items MUST be plain strings, not objects.
 - Return exactly one JSON object and no extra prose.`
-
-func buildUnitPhaseCriticBlock(phase models.UnitPipelinePhase) string {
-	switch phase {
-	case models.UnitPipelinePhaseP5:
-		return `UNIT PIPELINE PHASE: P5 (Unit Dive Execution)
-- Deep verification is allowed for selected unit-pair context.
-- Validate deep chain consistency only within provided dive scope and evidence.`
-	default:
-		return `UNIT PIPELINE PHASE: P0-P3 (Critic Lite)
-- Validate macro/unit coverage and qualifier quality.
-- Do not require full legal-entity decomposition or SKU/contract detail.
-- If deeper evidence is needed, return targeted missingInfo to trigger optional dive planning.`
-	}
-}
 
 func (a *CriticAgent) runValidationPrompt(ctx context.Context, prompt string) (*ValidationResult, error) {
 	if a == nil || a.executor == nil {
@@ -86,7 +71,6 @@ func (a *CriticAgent) buildCoreValidationPrompt(input CriticValidatorInput) stri
 	return fmt.Sprintf(`You are a Critic validator for core entity integrity.
 
 %s
-%s
 EXTRACTED FRAGMENT:
 %s
 
@@ -110,7 +94,7 @@ Return JSON:
 
 %s
 
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildSupplyChainValidationPrompt(input CriticValidatorInput) string {
@@ -123,7 +107,6 @@ func (a *CriticAgent) buildSupplyChainValidationPrompt(input CriticValidatorInpu
 	}
 	return fmt.Sprintf(`You are a Critic validator for SUPPLY CHAIN mode.
 
-%s
 Allowed relation types: DEPENDS_ON, PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN.
 Allowed actor types: %s.
 Canonical path rules:
@@ -149,12 +132,11 @@ Validate:
 4. transmission/logistics qualifiers quality for supply dependencies when present (facet, throughput_share, capacity_constraint, reroute_* best-effort);
 5. supplyChains node alternation actor→product and facility transformation hops;
 6. upstream/downstream coverage at broad or semi-depth level;
-7. qualifier quality (confidence, source hints, transport qualifiers when applicable);
-8. missing unit qualifiers should be explicit and resolved as unclassified when uncertain.
+7. qualifier quality (confidence, source hints, transport qualifiers when applicable).
 
 %s
 
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(chainsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(chainsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildGovernanceValidationPrompt(input CriticValidatorInput) string {
@@ -162,7 +144,6 @@ func (a *CriticAgent) buildGovernanceValidationPrompt(input CriticValidatorInput
 	relationsJSON, _ := json.MarshalIndent(input.Relations, "", "  ")
 	return fmt.Sprintf(`You are a Critic validator for GOVERNANCE mode.
 
-%s
 Allowed relation types: OWNS, SUBSIDIARY_OF, CONTROLS, INVESTS_IN, BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED, ADMINISTERS.
 Allowed actor types: %s.
 
@@ -180,7 +161,7 @@ Validate ownership and control coherence:
 
 %s
 
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeGovernance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeGovernance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildAssuranceValidationPrompt(input CriticValidatorInput) string {
@@ -188,7 +169,6 @@ func (a *CriticAgent) buildAssuranceValidationPrompt(input CriticValidatorInput)
 	relationsJSON, _ := json.MarshalIndent(input.Relations, "", "  ")
 	return fmt.Sprintf(`You are a Critic validator for ASSURANCE mode (Third Line: audit, certification, regulatory oversight).
 
-%s
 Allowed relation types: ASSURES (with qualifiers.assurance_type: audit|certification|regulatory|inspection), AUDITED_BY, REGULATES.
 Allowed actor types: %s.
 
@@ -206,7 +186,7 @@ Validate:
 
 %s
 
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeAssurance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeAssurance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildMarketValidationPrompt(input CriticValidatorInput) string {
@@ -218,8 +198,7 @@ func (a *CriticAgent) buildMarketValidationPrompt(input CriticValidatorInput) st
 	}
 	return fmt.Sprintf(`You are a Critic validator for MARKET mode.
 
-%s
-Allowed relation types: PARTICIPATES_IN, HAS_MARKET_SEGMENT.
+Allowed relation types: PARTICIPATES_IN, HAS_MARKET_SEGMENT. GOV entities (/gov/...) may also use REGULATES, CONTROLS_ACCESS, INFLUENCES toward MARKET targets.
 Allowed actor types: %s.
 
 %sFRAGMENT:
@@ -235,7 +214,7 @@ Validate:
 
 %s
 
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeMarket), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeMarket), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildPolicyImpactValidationPrompt(input CriticValidatorInput) string {
@@ -247,7 +226,6 @@ func (a *CriticAgent) buildPolicyImpactValidationPrompt(input CriticValidatorInp
 	}
 	return fmt.Sprintf(`You are a Critic validator for POLICY IMPACT mode.
 
-%s
 Allowed relation types: REGULATES, CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO, INFLUENCES, DEPENDS_ON, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN, ADMINISTERS.
 Allowed actor types: %s.
 Canonical path rules:
@@ -275,5 +253,5 @@ Validate:
 
 %s
 
-Return ONLY valid JSON.`, buildUnitPhaseCriticBlock(input.UnitPipelinePhase), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }

@@ -1234,7 +1234,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				"scoutingStrategy":              string(models.ScoutingStrategySnapshot),
 				"recursionDepth":                0.0,
 				"maxRecursionDepth":             float64(maxRecursionDepth),
-				models.StateKeyDeferredScopeAdd: true,
+				"deferredScopeAdd": true,
 			}
 			if ap := strings.TrimSpace(inputPath); ap != "" && ap != strings.TrimSpace(canonicalPath) {
 				state["aliasCanonicalPath"] = ap

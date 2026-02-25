@@ -40,13 +40,19 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChain(t *testing.T) {
 }
 
 func TestSupplyChainsEnabled(t *testing.T) {
-	if !supplyChainsEnabled([]string{taxonomy.DomainModeSupplyChain}, nil) {
+	if !supplyChainsEnabled("/org/us/test", "", []string{taxonomy.DomainModeSupplyChain}, nil) {
 		t.Fatalf("supply chains must be enabled in core mode")
 	}
-	if !supplyChainsEnabled([]string{taxonomy.DomainModeGovernance}, []string{taxonomy.SpecialtySupplyChain}) {
+	if !supplyChainsEnabled("/org/us/test", "", []string{taxonomy.DomainModeGovernance}, []string{taxonomy.SpecialtySupplyChain}) {
 		t.Fatalf("supply chains must remain enabled with specialty/domain overrides")
 	}
-	if !supplyChainsEnabled([]string{taxonomy.DomainModeGovernance}, nil) {
+	if !supplyChainsEnabled("/org/us/test", "", []string{taxonomy.DomainModeGovernance}, nil) {
 		t.Fatalf("supply chains must be enabled even outside explicit supply_chain mode/specialty")
+	}
+	if supplyChainsEnabled("/person/john-doe", "", []string{taxonomy.DomainModeSupplyChain}, nil) {
+		t.Fatalf("supply chains must be disabled for /person paths")
+	}
+	if supplyChainsEnabled("/org/us/test", "PERSON", []string{taxonomy.DomainModeSupplyChain}, nil) {
+		t.Fatalf("supply chains must be disabled for PERSON type")
 	}
 }
