@@ -261,6 +261,28 @@ SupplyLink может иметь (опционально) **агрегирова
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Supply Chain Metrics Vocabulary
+
+Canonical metric keys and allowed units for SupplyLink.State and SegmentMetrics. LLM chooses unit by context (batteries→gwh, lithium→metric_tons, oil→bbl); no product→unit mapping.
+
+| Metric key       | Description                    | Allowed units                                                                                  |
+|------------------|--------------------------------|------------------------------------------------------------------------------------------------|
+| volume           | Supply/production volume       | gwh_per_year, metric_tons_per_year, kt_per_year, bpd, mbpd, mcf_per_day, units_per_year, cells |
+| share            | Share of customer's total      | percent (0–100) or ratio (0–1)                                                                |
+| contract_value   | Contract value                 | usd, eur, rub                                                                                  |
+| lead_time_days   | Delivery lead time             | days                                                                                           |
+| on_time_delivery | On-time delivery ratio         | ratio (0–1)                                                                                    |
+| confidence       | Data confidence                | ratio (0–1), no unit                                                                            |
+
+**Examples by product type** (LLM chooses; no deterministic mapping):
+
+| Product          | Typical volume unit        |
+|------------------|----------------------------|
+| battery-cell     | gwh_per_year               |
+| lithium-carbonate| metric_tons_per_year, kt_per_year |
+| steel            | metric_tons_per_year       |
+| oil, gas         | bpd, mbpd, mcf_per_day    |
+
 ### Workflow создания SupplyLink
 
 **Источники SupplyLink:**

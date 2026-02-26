@@ -25,8 +25,8 @@ import (
 	// orchestrator deps
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
-	"github.com/igorkirisyuk/sanskrite/internal/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/adapters"
+	"github.com/igorkirisyuk/sanskrite/internal/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
@@ -52,6 +52,7 @@ import (
 	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonpathbuilder "github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/profile"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
@@ -60,8 +61,8 @@ import (
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
-	horizontelemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetry"
 	horizontasks "github.com/igorkirisyuk/sanskrite/internal/horizon/tasks"
+	horizontelemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetry"
 	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
 	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
 )
@@ -403,7 +404,7 @@ func main() {
 		genaiClient := gen_combined.NewClient(geminiClient, openaiAPIKey)
 
 		// Initialize BigQuery client and AI service
-		bigqueryDatasetID := getEnv("BIGQUERY_DATASET_ID", "h1horizon_documents")
+		bigqueryDatasetID := getEnv("BIGQUERY_DATASET_ID", "h1horizon_488615_documents")
 		if bq, err := gcp.NewBigQueryClient(ctx, projectID, bigqueryDatasetID, opts...); err == nil {
 			bqClient = bq
 			bigqueryAIService = services.NewBigQueryAIService(bqClient, genaiClient, logger)
@@ -1301,6 +1302,17 @@ func main() {
 					batchConfig,
 				)
 				horizonFragmentsRepo.WithVertexSyncBatcher(vertexSyncBatcher)
+				horizonFragmentsRepo.WithVertexSearchDelete(func(ctx context.Context, fragmentID string) error {
+					fragmentID = strings.TrimSpace(fragmentID)
+					if fragmentID == "" {
+						return nil
+					}
+					// Keep delete path aligned with import path: use dedicated Horizon datastore when configured.
+					if ds := strings.TrimSpace(getEnv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); ds != "" {
+						return vertexSearchClient.WithDataStore(ds).DeleteDocument(ctx, fragmentID)
+					}
+					return vertexSearchClient.DeleteDocument(ctx, fragmentID)
+				})
 				logger.Printf("Horizon Fragments: Vertex AI Search batched sync enabled (maxBatch=%d minBatch=%d interval=%v)",
 					batchConfig.MaxBatchSize, batchConfig.MinBatchSize, batchConfig.FlushInterval)
 			}
@@ -1860,6 +1872,15 @@ func main() {
 			}
 			if horizonTelemetryRepo != nil {
 				canonicalPathResolver.WithTelemetryRepo(horizonTelemetryRepo)
+			}
+			// Supply chain path materialization (Plan mode): parsed chains → MaterializedArtifact
+			if horizonMaterializedArtifactsRepo != nil {
+				supplyChainPathBuilder := horizonpathbuilder.NewSupplyChainPathBuilder(
+					horizonFragmentsRepo,
+					horizonEdgesRepo,
+					horizonMaterializedArtifactsRepo,
+				)
+				scoutEngine.WithSupplyChainPathBuilder(supplyChainPathBuilder)
 			}
 			if geonamesClientForHorizon != nil {
 				canonicalPathResolver.WithGeoNamesClient(geonamesClientForHorizon)
@@ -2509,11 +2530,11 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":            "ok",
-			"tenantId":          tenantID,
-			"docsFetched":       docsFetched,
-			"eventsCreated":     eventsCreated,
-			"signalsProcessed":  signalsProcessed,
+			"status":           "ok",
+			"tenantId":         tenantID,
+			"docsFetched":      docsFetched,
+			"eventsCreated":    eventsCreated,
+			"signalsProcessed": signalsProcessed,
 		})
 	})
 

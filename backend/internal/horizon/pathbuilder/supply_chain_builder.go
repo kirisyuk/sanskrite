@@ -125,7 +125,7 @@ func DefaultBuildPathOptions() BuildPathOptions {
 type PathSegment struct {
 	// SupplyLink fragment ID (if this is a SupplyLink segment)
 	SupplyLinkID string
-	// Supplier organization/facility canonical path
+	// Supplier organization/facility/deposit canonical path
 	SupplierRef string
 	// Product canonical path
 	ProductRef string
@@ -142,6 +142,8 @@ type PathSegment struct {
 	TenantID string
 	// IsTenantSpecific indicates if this is tenant-specific data
 	IsTenantSpecific bool
+	// Metrics from SupplyLink.State (volume, share, etc.)
+	Metrics map[string]models.MetricValue
 }
 
 // SupplyChainPath represents a complete supply chain path.
@@ -438,6 +440,12 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 			customerRefVal = *link.CustomerRef
 		}
 
+		metrics := make(map[string]models.MetricValue)
+		if link.State != nil {
+			for k, v := range link.State {
+				metrics[k] = v
+			}
+		}
 		segment := PathSegment{
 			SupplyLinkID:        link.ID,
 			SupplierRef:         supplierRef,
@@ -449,6 +457,7 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 			Confidence:          confidence,
 			TenantID:            link.TenantID,
 			IsTenantSpecific:    link.TenantID != "global",
+			Metrics:             metrics,
 		}
 
 		segments = append(segments, segment)
@@ -568,10 +577,11 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 	})
 
 	artifact := &models.MaterializedArtifact{
-		TenantID:     tenantID,
-		Kind:         models.MaterializedKindSupplyChainPath,
+		TenantID:    tenantID,
+		Kind:        models.MaterializedKindSupplyChainPath,
 		CanonicalKey: canonicalKey,
-		Payload:      payload,
+		Payload:     payload,
+		PathStatus:  "hypothesis", // validated after Critic invariants pass
 	}
 
 	if err := artifact.Validate(); err != nil {
@@ -599,6 +609,25 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 	return id, nil
 }
 
+// UpdatePathStatus updates the PathStatus of an existing MaterializedArtifact (hypothesis → validated after Critic).
+func (b *SupplyChainPathBuilder) UpdatePathStatus(
+	ctx context.Context,
+	tenantID string,
+	canonicalKey string,
+	pathStatus string,
+) error {
+	if canonicalKey == "" || pathStatus == "" {
+		return fmt.Errorf("canonicalKey and pathStatus are required")
+	}
+	existing, err := b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
+	if err != nil || existing == nil {
+		return fmt.Errorf("artifact not found: %w", err)
+	}
+	existing.PathStatus = pathStatus
+	existing.UpdatedAt = time.Now().UTC()
+	return b.artifactsRepo.Update(ctx, existing)
+}
+
 // pathToMaterializedPayload converts a SupplyChainPath to MaterializedArtifact payload format.
 func (b *SupplyChainPathBuilder) pathToMaterializedPayload(path *SupplyChainPath) (
 	[]models.SupplyChainPathNode,
@@ -617,6 +646,8 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(path *SupplyChainPath
 				nodeType := "org"
 				if strings.HasPrefix(segment.SupplierRef, "/fac/") {
 					nodeType = "fac"
+				} else if strings.HasPrefix(segment.SupplierRef, "/deposit/") {
+					nodeType = "deposit"
 				}
 				nodes = append(nodes, models.SupplyChainPathNode{
 					Type: nodeType,
@@ -641,6 +672,8 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(path *SupplyChainPath
 				nodeType := "org"
 				if strings.HasPrefix(segment.CustomerRef, "/fac/") {
 					nodeType = "fac"
+				} else if strings.HasPrefix(segment.CustomerRef, "/deposit/") {
+					nodeType = "deposit"
 				}
 				nodes = append(nodes, models.SupplyChainPathNode{
 					Type: nodeType,

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -120,6 +121,9 @@ type HorizonFragmentsRepository struct {
 	vertexSearchSync func(ctx context.Context, gcsURI string) (operationName string, err error) // Sync trigger (legacy, single URI)
 	// vertexSyncBatcher batches multiple URIs to reduce API quota usage
 	vertexSyncBatcher *VertexSyncBatcher
+	// vertexSearchDelete removes a single fragment document from Vertex AI Search index by document ID.
+	// Used on fragment delete to avoid stale search hits.
+	vertexSearchDelete func(ctx context.Context, fragmentID string) error
 }
 
 // NewHorizonFragmentsRepository создает новый репозиторий
@@ -160,6 +164,12 @@ func (r *HorizonFragmentsRepository) WithVertexSearchSync(syncFn func(ctx contex
 // significantly reducing quota usage (quota is per-request, not per-document).
 func (r *HorizonFragmentsRepository) WithVertexSyncBatcher(batcher *VertexSyncBatcher) *HorizonFragmentsRepository {
 	r.vertexSyncBatcher = batcher
+	return r
+}
+
+// WithVertexSearchDelete configures immediate delete from Vertex AI Search index on fragment deletion.
+func (r *HorizonFragmentsRepository) WithVertexSearchDelete(deleteFn func(ctx context.Context, fragmentID string) error) *HorizonFragmentsRepository {
+	r.vertexSearchDelete = deleteFn
 	return r
 }
 
@@ -225,20 +235,37 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 			"rawBytes": base64.StdEncoding.EncodeToString([]byte(content)),
 		},
 		"structData": map[string]interface{}{
-			"tenantId":       fragment.TenantID,
-			"type":           "horizon_fragment",
-			"canonicalPath":  fragment.CanonicalPath,
-			"entityPath":     fragment.EntityPath,
-			"sectorPath":     fragment.SectorPath,
-			"indexPaths":     fragment.IndexPaths,
-			"coordinates":    coordinatesToStructData(fragment.Coordinates),
-			"homeLocation":   locationToStructData(fragment.HomeLocation),
-			"horizonMonitor": horizonMonitorToStructData(fragment.EffectiveHorizonMonitor()),
-			"track":          trackToStructData(fragment.Track),
-			"status":         fragment.Governance.Status,
-			"updatedAt":      fragment.UpdatedAt.Format(time.RFC3339),
-			"createdAt":      fragment.CreatedAt.Format(time.RFC3339),
-			"uri":            gcsURI,
+			"tenantId":          fragment.TenantID,
+			"type":              "horizon_fragment",
+			"fragmentType":      fragment.Type,
+			"canonicalPath":     fragment.CanonicalPath,
+			"displayName":       fragmentDisplayName(fragment),
+			"labelEn":           strings.TrimSpace(fragment.Labels["en"]),
+			"aliases":           fragmentAliasesForStructData(fragment, 12),
+			"legalName":         firstNonEmptyIdentifier(fragment.Identifiers, "legalName"),
+			"shortName":         firstNonEmptyIdentifier(fragment.Identifiers, "shortName"),
+			"identifiers":       compactIdentifiers(fragment.Identifiers, 24),
+			"entityPath":        fragment.EntityPath,
+			"sectorPath":        fragment.SectorPath,
+			"spherePaths":       nonEmptyStrings(fragment.SpherePaths),
+			"indexPaths":        fragment.IndexPaths,
+			"parentPath":        strings.TrimSpace(fragment.ParentPath),
+			"parentGovPath":     strings.TrimSpace(fragment.ParentGovPath),
+			"parentMarketPath":  strings.TrimSpace(fragment.ParentMarketPath),
+			"affiliatedOrgPath": strings.TrimSpace(fragment.AffiliatedOrgPath),
+			"neighborhoodPaths": fragmentNeighborhoodPaths(fragment),
+			"marketDomain":      strings.TrimSpace(fragment.MarketDomain),
+			"marketVertical":    strings.TrimSpace(fragment.MarketVertical),
+			"govType":           strings.TrimSpace(fragment.GovType),
+			"communityType":     strings.TrimSpace(fragment.CommunityType),
+			"coordinates":       coordinatesToStructData(fragment.Coordinates),
+			"homeLocation":      locationToStructData(fragment.HomeLocation),
+			"horizonMonitor":    horizonMonitorToStructData(fragment.EffectiveHorizonMonitor()),
+			"track":             trackToStructData(fragment.Track),
+			"status":            fragment.Governance.Status,
+			"updatedAt":         fragment.UpdatedAt.Format(time.RFC3339),
+			"createdAt":         fragment.CreatedAt.Format(time.RFC3339),
+			"uri":               gcsURI,
 		},
 	}
 
@@ -282,6 +309,176 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 	}
 
 	return nil
+}
+
+func fragmentDisplayName(fragment *models.HorizonFragment) string {
+	if fragment == nil {
+		return ""
+	}
+	if v := strings.TrimSpace(fragment.Labels["en"]); v != "" {
+		return v
+	}
+	for _, v := range fragment.Labels {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	if v := firstNonEmptyIdentifier(fragment.Identifiers, "legalName"); v != "" {
+		return v
+	}
+	if v := firstNonEmptyIdentifier(fragment.Identifiers, "shortName"); v != "" {
+		return v
+	}
+	cp := strings.Trim(strings.TrimSpace(fragment.CanonicalPath), "/")
+	if cp == "" {
+		return ""
+	}
+	parts := strings.Split(cp, "/")
+	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+func firstNonEmptyIdentifier(ids map[string]string, key string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(ids[key])
+}
+
+func compactIdentifiers(ids map[string]string, limit int) map[string]string {
+	if len(ids) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 24
+	}
+	keys := make([]string, 0, len(ids))
+	for k, v := range ids {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	sort.Strings(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		out[k] = strings.TrimSpace(ids[k])
+	}
+	return out
+}
+
+func nonEmptyStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func fragmentAliasesForStructData(fragment *models.HorizonFragment, limit int) []string {
+	if fragment == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 12
+	}
+	primary := strings.TrimSpace(fragment.Labels["en"])
+	seen := map[string]struct{}{}
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" || v == primary {
+			return
+		}
+		seen[v] = struct{}{}
+	}
+	for _, v := range fragment.Labels {
+		add(v)
+	}
+	add(firstNonEmptyIdentifier(fragment.Identifiers, "legalName"))
+	add(firstNonEmptyIdentifier(fragment.Identifiers, "shortName"))
+	for _, entry := range fragment.NameHistory {
+		add(entry.Name)
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for v := range seen {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func fragmentNeighborhoodPaths(fragment *models.HorizonFragment) []string {
+	if fragment == nil {
+		return nil
+	}
+	set := map[string]struct{}{}
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		set[v] = struct{}{}
+	}
+	add(fragment.ParentPath)
+	add(fragment.ParentGovPath)
+	add(fragment.ParentMarketPath)
+	add(fragment.AffiliatedOrgPath)
+	if fragment.SupplierRef != nil {
+		add(*fragment.SupplierRef)
+	}
+	if fragment.CustomerRef != nil {
+		add(*fragment.CustomerRef)
+	}
+	if fragment.ProductRef != nil {
+		add(*fragment.ProductRef)
+	}
+	if fragment.SupplierFacilityRef != nil {
+		add(*fragment.SupplierFacilityRef)
+	}
+	if fragment.CustomerFacilityRef != nil {
+		add(*fragment.CustomerFacilityRef)
+	}
+	for _, v := range fragment.TransportViaRefs {
+		add(v)
+	}
+	for _, v := range fragment.CommunityPlatforms {
+		add(v)
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for v := range set {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func coordinatesToStructData(c *models.Coordinates) map[string]interface{} {
@@ -1384,6 +1581,22 @@ func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) erro
 	// Получаем фрагмент перед удалением, чтобы удалить файл из GCS
 	fragment, err := r.Get(ctx, id)
 	if err == nil && fragment != nil {
+		// Delete from Vertex index first to avoid stale search hits.
+		// If index deletion fails, abort delete to prevent Firestore/Vertex divergence.
+		if r.vertexSearchDelete != nil {
+			fragmentID := strings.TrimSpace(fragment.ID)
+			if fragmentID == "" {
+				fragmentID = strings.TrimSpace(id)
+			}
+			deleteCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			vErr := r.vertexSearchDelete(deleteCtx, fragmentID)
+			cancel()
+			if vErr != nil {
+				return fmt.Errorf("failed to delete fragment %s from vertex index: %w", fragmentID, vErr)
+			}
+			log.Printf("[HorizonFragments] Deleted fragment %s from Vertex index", fragmentID)
+		}
+
 		// Best-effort: delete dependency edges referencing this fragment.
 		if r.edgesRepo != nil {
 			tenantID := strings.TrimSpace(fragment.TenantID)
@@ -1437,9 +1650,6 @@ func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) erro
 			// NOTE: Do NOT add the deleted file's URI to vertexSyncBatcher.
 			// ImportDocuments expects files to exist in GCS; passing a deleted file URI causes
 			// INVALID_RESOURCE_ID ("Given gcs input path matched no files").
-			// Discovery Engine INCREMENTAL import only adds/updates; it does not remove docs
-			// when files disappear. To purge deleted docs, use PurgeDocuments API or run a
-			// FULL reconciliation periodically (e.g. horizon_merge_discovered).
 		}
 	}
 

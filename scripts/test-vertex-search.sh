@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Скрипт для проверки и тестирования Vertex AI Search
-# Использование: ./scripts/test-vertex-search.sh [-p|--project h1horizon]
+# Использование: ./scripts/test-vertex-search.sh [-p|--project h1horizon-488615]
 
-PROJECT="h1horizon"
+PROJECT="h1horizon-488615"
 DATA_STORE_ID="rag-documents-store"
 LOCATION="global"
 BUCKET="h1horizon-rag-documents"

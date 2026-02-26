@@ -43,8 +43,8 @@
 
 ### 4. Cloud Storage Buckets (3 основных)
 - `sanskrite-core-docs` - для хранения core документов
-- `h1horizon-rag-documents` - для хранения RAG документов
-- `h1horizon-horizon-fragments` - для хранения Horizon fragments (ДОБАВЛЕНО)
+- `h1horizon-488615-rag-documents` - для хранения RAG документов
+- `h1horizon-488615-horizon-fragments` - для хранения Horizon fragments (ДОБАВЛЕНО)
 - `sanskrite-web-static` - опционально (создается только если `CREATE_WEB_STATIC_BUCKET=1`)
 
 **Примечание:** Другие buckets (для Vertex AI Search импорта, системные) создаются автоматически и не требуют явного создания.
@@ -88,7 +88,7 @@
 
 1. ✅ **Cloud Tasks Queue `h1horizon-profile-refresh`** - для обновления профилей Horizon fragments
 2. ✅ **Cloud Scheduler Job `subscription-billing-daily`** - для ежедневного биллинга
-3. ✅ **GCS Bucket `h1horizon-horizon-fragments`** - для хранения Horizon fragments
+3. ✅ **GCS Bucket `h1horizon-488615-horizon-fragments`** - для хранения Horizon fragments
 4. ✅ **Pub/Sub топики** - `genai.stream.error`, `genai.stream.tool_call`, `genai.stream.tool_result`, `interaction.created`, `interaction.updated`
 5. ✅ **Pub/Sub подписки** - для interaction топиков
 

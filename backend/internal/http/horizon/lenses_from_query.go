@@ -543,6 +543,8 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		addDeferredScopeCandidate(a.CanonicalPath)
 	}
 	for _, d := range intent.Domains {
+		// Include domain paths so jobs are created for /domain/v1/... (enables pipeline/Domain Engine execution).
+		addDeferredScopeCandidate(d.CanonicalPath)
 		for _, cp := range d.FirstOrderEntities {
 			addDeferredScopeCandidate(cp)
 		}

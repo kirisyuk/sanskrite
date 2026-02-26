@@ -1,6 +1,6 @@
 {
   "collectionGroupId": "rag_documents",
-  "datasetId": "h1horizon_documents",
+  "datasetId": "h1horizon_488615_documents",
   "tableId": "documents_metadata",
   "location": "US",
   "useNewSchema": true,

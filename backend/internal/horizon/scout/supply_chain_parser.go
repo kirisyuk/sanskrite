@@ -7,6 +7,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // SupplyChainParser converts supply chain objects from agent output
@@ -16,6 +17,22 @@ type SupplyChainParser struct{}
 // NewSupplyChainParser creates a new supply chain parser instance.
 func NewSupplyChainParser() *SupplyChainParser {
 	return &SupplyChainParser{}
+}
+
+// FlowEdgeContract captures completeness and validation gaps for segment metrics (plan 5.3).
+// For validated: period/start/end required. For hypothesis: best-effort with partial marking.
+type FlowEdgeContract struct {
+	ContractCompleteness string                 `json:"contractCompleteness,omitempty"` // "full" | "partial"
+	ValidationGaps       []string               `json:"validationGaps,omitempty"`
+	RawPayload           map[string]interface{} `json:"rawPayload,omitempty"`
+	ParseWarnings        []string               `json:"parseWarnings,omitempty"` // repair/coercion traceability (plan 3.4.4)
+	Provenance           *FlowEdgeProvenance    `json:"provenance,omitempty"`    // method, source_ids (plan 5.3)
+}
+
+// FlowEdgeProvenance captures how the metric was obtained (plan 5.3).
+type FlowEdgeProvenance struct {
+	Method    string   `json:"method"`               // "reported" | "estimated" | "inferred"
+	SourceIDs []string `json:"source_ids,omitempty"` // canonical paths or fragment IDs
 }
 
 // SupplyLinkSegment represents one actor→product→actor segment for SupplyLink materialization.
@@ -28,6 +45,10 @@ type SupplyLinkSegment struct {
 	CustomerFacilityRef string
 	TransportViaRefs    []string
 	Confidence          float64
+	// State holds metrics (volume, share, etc.) from SegmentMetrics for SupplyLink.State
+	State map[string]models.MetricValue
+	// FlowEdgeContract: completeness, validation gaps, raw payload (plan 5.3, fail-open)
+	FlowEdgeContract *FlowEdgeContract
 }
 
 // ParsedChainResult contains fragments and edges extracted from supply chains.
@@ -42,6 +63,8 @@ type ParsedChainResult struct {
 	SupplyLinkSegments []*SupplyLinkSegment
 	// Stats contains diagnostic counters for parsing (for [SupplyChain*] telemetry).
 	Stats ParsedChainStats
+	// ParseWarnings collects parser-level warnings (repair, coercion, partial parse) for traceability.
+	ParseWarnings []string `json:"parseWarnings,omitempty"`
 }
 
 // ParsedChainStats captures diagnostics about parsing supply chains.
@@ -185,10 +208,10 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 				dstPath := strings.TrimSpace(b.CanonicalPath)
 				if srcPath != "" && prodPath != "" && dstPath != "" {
 					seg := &SupplyLinkSegment{
-						SupplierRef:  srcPath,
-						ProductRef:   prodPath,
-						CustomerRef:  dstPath,
-						Confidence:   chain.Confidence,
+						SupplierRef: srcPath,
+						ProductRef:  prodPath,
+						CustomerRef: dstPath,
+						Confidence:  chain.Confidence,
 					}
 					for _, pth := range chain.TransportVia {
 						pth = strings.TrimSpace(pth)
@@ -196,7 +219,62 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 							seg.TransportViaRefs = append(seg.TransportViaRefs, pth)
 						}
 					}
+					// Extract segmentMetrics for this segment (fromNodeIndex=i, toNodeIndex=i+2, productIndex=i+1)
+					state, contract := p.extractSegmentState(chain.SegmentMetrics, i, i+2, i+1, sourceFragmentPath, chain.Confidence)
+					if state == nil {
+						seg.State = make(map[string]models.MetricValue)
+					} else {
+						seg.State = state
+						seg.FlowEdgeContract = contract
+						if contract != nil && len(contract.ParseWarnings) > 0 {
+							for _, w := range contract.ParseWarnings {
+								result.ParseWarnings = append(result.ParseWarnings, fmt.Sprintf("segment %s→%s: %s", srcPath, dstPath, w))
+							}
+						}
+					}
 					result.SupplyLinkSegments = append(result.SupplyLinkSegments, seg)
+					// Alternatives: create additional SupplyLink segments for alternative suppliers
+					for _, alt := range chain.Alternatives {
+						if alt.CustomerNodeIndex == i+2 && alt.ProductNodeIndex == i+1 {
+							for _, sup := range alt.Suppliers {
+								supRef := strings.TrimSpace(sup.SupplierRef)
+								if supRef != "" && supRef != srcPath {
+									altState := map[string]models.MetricValue{
+										"technical_fit":  {Value: sup.TechnicalFit},
+										"regulatory_fit": {Value: sup.RegulatoryFit},
+										"confidence":     {Value: sup.Confidence},
+									}
+									if sup.AvailableCapacity != nil {
+										u := sup.AvailableCapacity.Unit
+										altState["available_capacity"] = models.MetricValue{Value: sup.AvailableCapacity.Value, Unit: &u, Confidence: sup.AvailableCapacity.Confidence}
+									}
+									if sup.LeadTimeToSwitch != nil {
+										u := sup.LeadTimeToSwitch.Unit
+										if u == "" {
+											u = "days"
+										}
+										altState["lead_time_to_switch"] = models.MetricValue{Value: sup.LeadTimeToSwitch.Value, Unit: &u, Confidence: sup.LeadTimeToSwitch.Confidence}
+									}
+									if sup.CostToSwitch != nil {
+										u := sup.CostToSwitch.Unit
+										if u == "" {
+											u = "usd"
+										}
+										altState["cost_to_switch"] = models.MetricValue{Value: sup.CostToSwitch.Value, Unit: &u, Confidence: sup.CostToSwitch.Confidence}
+									}
+									altSeg := &SupplyLinkSegment{
+										SupplierRef: supRef,
+										ProductRef:  prodPath,
+										CustomerRef: dstPath,
+										Confidence:  sup.Confidence,
+										State:       altState,
+									}
+									result.SupplyLinkSegments = append(result.SupplyLinkSegments, altSeg)
+								}
+							}
+							break
+						}
+					}
 				}
 			}
 		}
@@ -240,6 +318,100 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 	}
 
 	return result, nil
+}
+
+// extractSegmentState builds SupplyLink.State from SegmentMetrics for a given segment.
+// Returns state and FlowEdgeContract (contractCompleteness, validationGaps, rawPayload, provenance, parseWarnings) for fail-open.
+func (p *SupplyChainParser) extractSegmentState(metrics []agents.SegmentMetrics, fromIdx, toIdx, productIdx int, sourceFragmentPath string, chainConfidence float64) (map[string]models.MetricValue, *FlowEdgeContract) {
+	if len(metrics) == 0 {
+		return nil, nil
+	}
+	state := make(map[string]models.MetricValue)
+	var gaps []string
+	rawPayload := make(map[string]interface{})
+	completeness := "full"
+	for _, m := range metrics {
+		if m.FromNodeIndex != fromIdx || m.ToNodeIndex != toIdx || m.ProductIndex != productIdx {
+			continue
+		}
+		if m.Volume != nil {
+			origUnit := strings.TrimSpace(m.Volume.Unit)
+			unit := taxonomy.NormalizeSupplyChainMetricUnit(origUnit, false)
+			if origUnit != "" && !taxonomy.IsValidMetricUnit(unit, false) {
+				if unit == "" {
+					unit = strings.ToLower(origUnit)
+				}
+				gaps = append(gaps, "unknown_unit:"+unit)
+				completeness = "partial"
+			} else if unit == "" {
+				unit = origUnit
+			}
+			u := unit
+			state["volume"] = models.MetricValue{Value: m.Volume.Value, Unit: &u, Confidence: m.Volume.Confidence}
+			rawPayload["volume"] = map[string]interface{}{"value": m.Volume.Value, "unit": origUnit, "confidence": m.Volume.Confidence}
+		}
+		if m.Share != nil {
+			origUnit := strings.TrimSpace(m.Share.Unit)
+			unit := taxonomy.NormalizeSupplyChainMetricUnit(origUnit, false)
+			if origUnit != "" && !taxonomy.IsValidMetricUnit(unit, false) {
+				if unit == "" {
+					unit = strings.ToLower(origUnit)
+				}
+				gaps = append(gaps, "unknown_unit:"+unit)
+				completeness = "partial"
+			} else if unit == "" {
+				unit = origUnit
+			}
+			u := unit
+			state["share"] = models.MetricValue{Value: m.Share.Value, Unit: &u, Confidence: m.Share.Confidence}
+		}
+		if m.Period != "" {
+			u := m.Period
+			state["period"] = models.MetricValue{Value: 0, Unit: &u}
+		} else if m.Volume != nil || m.Share != nil {
+			gaps = append(gaps, "missing_period")
+			completeness = "partial"
+		}
+		if m.Start != "" || m.End != "" {
+			if m.Start != "" {
+				state["start"] = models.MetricValue{Value: 0, Unit: &m.Start}
+			}
+			if m.End != "" {
+				state["end"] = models.MetricValue{Value: 0, Unit: &m.End}
+			}
+		}
+		if m.Confidence > 0 {
+			if _, ok := state["confidence"]; !ok {
+				state["confidence"] = models.MetricValue{Value: m.Confidence, Confidence: 0.8}
+			}
+		}
+		break
+	}
+	if len(state) == 0 {
+		return nil, nil
+	}
+	contract := &FlowEdgeContract{
+		ContractCompleteness: completeness,
+		ValidationGaps:       gaps,
+	}
+	if len(rawPayload) > 0 {
+		contract.RawPayload = rawPayload
+	}
+	if len(gaps) > 0 {
+		contract.ParseWarnings = append([]string{}, gaps...)
+	}
+	// Provenance: inferred from LLM; reported if high confidence and no gaps
+	method := "inferred"
+	if chainConfidence >= 0.8 && completeness == "full" {
+		method = "reported"
+	} else if chainConfidence >= 0.6 {
+		method = "estimated"
+	}
+	contract.Provenance = &FlowEdgeProvenance{Method: method}
+	if sourceFragmentPath != "" {
+		contract.Provenance.SourceIDs = []string{sourceFragmentPath}
+	}
+	return state, contract
 }
 
 // createTransportFacilityFragment creates a minimal HorizonFragment for a transport facility path.
@@ -399,13 +571,13 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 	}
 }
 
-// isActorType checks if the node represents an actor (org or facility).
+// isActorType checks if the node represents an actor (org, facility, or deposit for extraction).
 func (p *SupplyChainParser) isActorType(nodeType string, canonicalPath string) bool {
 	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
-	if nodeType == "ORGANIZATION" || nodeType == "FACILITY" {
+	if nodeType == "ORGANIZATION" || nodeType == "FACILITY" || nodeType == "DEPOSIT" {
 		return true
 	}
-	return strings.HasPrefix(canonicalPath, "/org/") || strings.HasPrefix(canonicalPath, "/fac/")
+	return strings.HasPrefix(canonicalPath, "/org/") || strings.HasPrefix(canonicalPath, "/fac/") || strings.HasPrefix(canonicalPath, "/deposit/")
 }
 
 // isProductType checks if the node represents a product.

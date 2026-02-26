@@ -36,7 +36,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	gcpProject := flag.String("project", os.Getenv("GCP_PROJECT_ID"), "GCP project id (defaults to $GCP_PROJECT_ID, fallback 'h1horizon')")
+	gcpProject := flag.String("project", os.Getenv("GCP_PROJECT_ID"), "GCP project id (defaults to $GCP_PROJECT_ID, fallback 'h1horizon-488615')")
 	region := flag.String("region", "us-central1", "Cloud Run region for h1horizon-api (default us-central1)")
 	tenantID := flag.String("tenant", "kirisyuk@gmail.com", "tenantId (email). This creates core user+project under this tenant.")
 	email := flag.String("email", "kirisyuk@gmail.com", "user email (defaults to tenant)")
@@ -50,7 +50,7 @@ func main() {
 	flag.Parse()
 
 	if *gcpProject == "" {
-		*gcpProject = "h1horizon"
+		*gcpProject = "h1horizon-488615"
 	}
 	if *email == "" {
 		*email = *tenantID

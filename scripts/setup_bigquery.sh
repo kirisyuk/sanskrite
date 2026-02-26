@@ -5,7 +5,7 @@
 set -e
 
 PROJECT_ID="${GCP_PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
-DATASET="h1horizon_documents"
+DATASET="h1horizon_488615_documents"
 BUCKET="${PROJECT_ID}-rag-documents"
 REGION="US"
 

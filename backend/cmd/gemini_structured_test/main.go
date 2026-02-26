@@ -541,7 +541,7 @@ func main() {
 		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
 	}
 	if projectID == "" {
-		projectID = "h1horizon"
+		projectID = "h1horizon-488615"
 	}
 	location := os.Getenv("VERTEX_LOCATION")
 	if location == "" {

@@ -183,6 +183,17 @@ type DataSource struct {
 	ResearchID  *string `json:"researchId,omitempty" firestore:"researchId"`
 	SessionID   *string `json:"sessionId,omitempty" firestore:"sessionId"`
 
+	// SourceCategoryPaths stores source classification in canonical taxonomy style:
+	// /source/{category}/{subcategory}[/{topic}...]
+	// One source may have multiple paths, but usually one primary path is enough.
+	SourceCategoryPaths []string `json:"sourceCategoryPaths,omitempty" firestore:"sourceCategoryPaths,omitempty"`
+	// PrimarySourceCategoryPath points to the main category path (usually one path from SourceCategoryPaths).
+	PrimarySourceCategoryPath *string `json:"primarySourceCategoryPath,omitempty" firestore:"primarySourceCategoryPath,omitempty"`
+	// SourceGeoFacets stores coverage scope facets (ISO2, global blocs, international org scopes).
+	SourceGeoFacets []string `json:"sourceGeoFacets,omitempty" firestore:"sourceGeoFacets,omitempty"`
+	// SourceFormatFacets stores source format facets (wire, gov, think-tank, podcast, etc.).
+	SourceFormatFacets []string `json:"sourceFormatFacets,omitempty" firestore:"sourceFormatFacets,omitempty"`
+
 	OwnerUserID string        `json:"ownerUserId" firestore:"ownerUserId"`
 	Details     SourceDetails `json:"sourceDetails" firestore:"sourceDetails"`
 

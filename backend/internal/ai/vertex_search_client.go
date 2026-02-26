@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -251,7 +252,7 @@ func (c *VertexAISearchClient) Search(ctx context.Context, req *SearchRequest) (
 	}
 
 	log.Printf("[VertexAISearch] Found %d results", len(searchResp.Results))
-	
+
 	// Логируем структуру первого результата для отладки
 	if len(searchResp.Results) > 0 {
 		firstResult := searchResp.Results[0]
@@ -278,7 +279,7 @@ func (c *VertexAISearchClient) Search(ctx context.Context, req *SearchRequest) (
 			log.Printf("[VertexAISearch] Sample result JSON: %s", resultStr)
 		}
 	}
-	
+
 	return &searchResp, nil
 }
 
@@ -424,7 +425,7 @@ func (c *VertexAISearchClient) ImportDocuments(ctx context.Context, req *ImportD
 		},
 		"reconciliationMode": reconciliationMode,
 	}
-	
+
 	// Логируем параметры импорта для отладки
 	log.Printf("[VertexAISearch] Importing with dataSchema=%s, GCSPath=%s, reconciliationMode=%s", dataSchema, req.GCSPath, reconciliationMode)
 
@@ -483,6 +484,65 @@ func (c *VertexAISearchClient) ImportDocuments(ctx context.Context, req *ImportD
 
 	log.Printf("[VertexAISearch] Import operation started: %s", operationName)
 	return operationName, nil
+}
+
+// DeleteDocument removes a single document from Vertex AI Search by document ID.
+// This is used to keep the search index consistent with Firestore deletes.
+//
+// Endpoint:
+// DELETE /v1beta/projects/{project}/locations/{location}/collections/default_collection/dataStores/{dataStore}/branches/default_branch/documents/{documentId}
+func (c *VertexAISearchClient) DeleteDocument(ctx context.Context, documentID string) error {
+	if c.projectID == "" || c.location == "" || c.dataStoreID == "" {
+		return fmt.Errorf("vertex AI search not configured: project, location, or dataStoreID missing")
+	}
+	documentID = strings.TrimSpace(documentID)
+	if documentID == "" {
+		return fmt.Errorf("documentID is required")
+	}
+
+	escapedID := url.PathEscape(documentID)
+	endpoint := fmt.Sprintf(
+		"https://discoveryengine.googleapis.com/v1beta/projects/%s/locations/%s/collections/default_collection/dataStores/%s/branches/default_branch/documents/%s",
+		c.projectID,
+		c.location,
+		c.dataStoreID,
+		escapedID,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create delete request: %w", err)
+	}
+
+	if c.apiKey != "" {
+		req.Header.Set("x-goog-api-key", c.apiKey)
+	} else if c.tokenSource != nil {
+		token, err := c.tokenSource.Token()
+		if err != nil {
+			return fmt.Errorf("failed to get OAuth2 token: %w", err)
+		}
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
+	} else {
+		return fmt.Errorf("authentication required: either API key or Application Default Credentials")
+	}
+	req.Header.Set("X-Goog-User-Project", c.projectID)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to execute delete request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent:
+		return nil
+	case http.StatusNotFound:
+		// Already gone from index — treat as success for idempotency.
+		return nil
+	default:
+		return fmt.Errorf("vertex AI search delete API error %d: %s", resp.StatusCode, string(body))
+	}
 }
 
 // CheckDocumentStatus проверяет, доступен ли конкретный документ в Vertex AI Search

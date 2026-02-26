@@ -12,6 +12,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -1592,6 +1593,9 @@ type ScoutEngine struct {
 	// Lens artifacts for Phase 2 Strategic Overlay
 	lensArtifactsRepo *repo.LensArtifactsRepository         // Optional: accumulates finalized fragments/edges per lens
 	domainAnswersRepo *repo.DomainAnswerSnapshotsRepository // Optional: persisted DomainAnswerSnapshot artifacts
+
+	// Supply chain path materialization (Plan mode)
+	supplyChainPathBuilder *pathbuilder.SupplyChainPathBuilder // Optional: MaterializePath from parsed chains
 }
 
 // bestEffortDeferredScopeAdd adds canonicalPath to lens.Scope if under limit (max 5 per lens).
@@ -2263,6 +2267,12 @@ func (e *ScoutEngine) WithLensArtifactsRepo(repo *repo.LensArtifactsRepository) 
 // WithDomainAnswerSnapshotsRepo sets repository for Domain Answer snapshots.
 func (e *ScoutEngine) WithDomainAnswerSnapshotsRepo(repo *repo.DomainAnswerSnapshotsRepository) *ScoutEngine {
 	e.domainAnswersRepo = repo
+	return e
+}
+
+// WithSupplyChainPathBuilder sets the path builder for materializing supply chain paths from parsed chains (Plan mode).
+func (e *ScoutEngine) WithSupplyChainPathBuilder(b *pathbuilder.SupplyChainPathBuilder) *ScoutEngine {
+	e.supplyChainPathBuilder = b
 	return e
 }
 

@@ -14,7 +14,7 @@
 
 2. **GCS Buckets**
    - ✓ `sanskrite-core-docs` - существует
-   - ✓ `h1horizon-rag-documents` - существует
+   - ✓ `h1horizon-488615-rag-documents` - существует
 
 3. **Vertex AI Search**
    - ✓ Discovery Engine API включен
@@ -43,7 +43,7 @@
 7. **Переменные окружения Cloud Run**
    - ✓ `VERTEX_SEARCH_DATA_STORE_ID` = `rag-documents-store`
    - ✓ `VERTEX_SEARCH_LOCATION` = `global`
-   - ✓ `RAG_DOCUMENTS_BUCKET` = `h1horizon-rag-documents`
+   - ✓ `RAG_DOCUMENTS_BUCKET` = `h1horizon-488615-rag-documents`
    - ✓ `CORE_DOCS_BUCKET` = `sanskrite-core-docs`
 
 8. **Firestore Security Rules**
@@ -64,7 +64,7 @@ firebase deploy --only firestore:indexes
 
 Или через gcloud:
 ```bash
-gcloud firestore indexes create --project=h1horizon
+gcloud firestore indexes create --project=h1horizon-488615
 ```
 
 ### 3. Настроить Watchdog (рекомендация)

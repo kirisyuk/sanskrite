@@ -5,9 +5,9 @@ set -euo pipefail
 #   export ANTHROPIC_API_KEY=...
 #   export DEEPSEEK_API_KEY=...
 #   export TAVILY_API_KEY=...
-#   ./scripts/setup-prod-secrets.sh [-p|--project h1horizon]
+#   ./scripts/setup-prod-secrets.sh [-p|--project h1horizon-488615]
 
-PROJECT="h1horizon"
+PROJECT="h1horizon-488615"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -p|--project)

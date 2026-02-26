@@ -22,11 +22,11 @@
 
 ```sql
 -- Читаем текстовые документы из GCS напрямую
-SELECT * FROM `h1horizon.h1horizon_documents.documents_object_table`
+SELECT * FROM `h1horizon-488615.h1horizon_488615_documents.documents_object_table`
 WHERE uri LIKE '%tenant123%'
 
 -- Читаем JSON документы
-SELECT * FROM `h1horizon.h1horizon_documents.core_docs_json_table`
+SELECT * FROM `h1horizon-488615.h1horizon_488615_documents.core_docs_json_table`
 WHERE uri LIKE '%.json'
 ```
 
@@ -38,7 +38,7 @@ SELECT
   id,
   title,
   ML.GENERATE_TEXT(
-    MODEL `h1horizon.h1horizon_documents.gemini_model`,
+    MODEL `h1horizon-488615.h1horizon_488615_documents.gemini_model`,
     (SELECT content FROM documents_object_table WHERE uri = storagePath),
     STRUCT('Extract: product names, prices, dates, sentiment' AS prompt)
   ) AS extracted_data
@@ -51,19 +51,19 @@ BigQuery может создавать таблицы динамически и�
 **CREATE TABLE AS SELECT (CTAS):**
 ```sql
 -- Создать таблицу с результатами анализа
-CREATE TABLE `h1horizon.h1horizon_documents.document_analysis_results` AS
+CREATE TABLE `h1horizon-488615.h1horizon_488615_documents.document_analysis_results` AS
 SELECT 
   documentType,
   COUNT(*) as count,
   AVG(LENGTH(extractedText)) as avg_length
-FROM `h1horizon.h1horizon_documents.documents_metadata`
+FROM `h1horizon-488615.h1horizon_488615_documents.documents_metadata`
 GROUP BY documentType
 ```
 
 **WITH clauses (CTEs) - временные таблицы в запросе:**
 ```sql
 WITH filtered_docs AS (
-  SELECT * FROM `h1horizon.h1horizon_documents.documents_metadata`
+  SELECT * FROM `h1horizon-488615.h1horizon_488615_documents.documents_metadata`
   WHERE createdAt > '2024-01-01'
 ),
 aggregated AS (
@@ -85,7 +85,7 @@ WITH document_insights AS (
     m.storagePath,
     m.contentType,
     ML.GENERATE_TEXT(
-      MODEL `h1horizon.h1horizon_documents.gemini_model`,
+      MODEL `h1horizon-488615.h1horizon_488615_documents.gemini_model`,
       (SELECT data FROM documents_object_table WHERE uri = REPLACE(m.storagePath, 'gs://', '')),
       STRUCT('Extract key entities, sentiment, and main topics' AS prompt)
     ) AS insights
@@ -103,7 +103,7 @@ WITH json_analysis AS (
     m.projectId,
     -- Используем извлеченный текст или анализируем JSON структуру
     ML.GENERATE_TEXT(
-      MODEL `h1horizon.h1horizon_documents.gemini_model`,
+      MODEL `h1horizon-488615.h1horizon_488615_documents.gemini_model`,
       COALESCE(m.extractedText, CAST(j.data AS STRING)),
       STRUCT('Summarize key decisions and their impact' AS prompt)
     ) AS summary
@@ -124,7 +124,7 @@ WITH pdf_insights AS (
     m.filename,
     m.storagePath,
     ML.GENERATE_TEXT(
-      MODEL `h1horizon.h1horizon_documents.gemini_model`,
+      MODEL `h1horizon-488615.h1horizon_488615_documents.gemini_model`,
       m.extractedText,  -- Используем извлеченный текст из PDF
       STRUCT('Extract GTI score and product name from this pharmaceutical report' AS prompt)
     ) AS insights
@@ -161,18 +161,18 @@ bq mk --connection --location=US --connection_type=GCS \
 
 # Создать Object Table для RAG документов (текстовые файлы)
 bq query --use_legacy_sql=false <<EOF
-CREATE OR REPLACE EXTERNAL TABLE \`h1horizon.h1horizon_documents.documents_object_table\`
-WITH CONNECTION \`h1horizon.us.gcs-connection\`
+CREATE OR REPLACE EXTERNAL TABLE \`h1horizon-488615.h1horizon_488615_documents.documents_object_table\`
+WITH CONNECTION \`h1horizon-488615.us.gcs-connection\`
 OPTIONS (
   object_metadata = 'SIMPLE',
-  uris = ['gs://h1horizon-rag-documents/**/*.txt']
+  uris = ['gs://h1horizon-488615-rag-documents/**/*.txt']
 )
 EOF
 
 # Создать Object Table для CoreDocs - текстовые форматы
 bq query --use_legacy_sql=false <<EOF
-CREATE OR REPLACE EXTERNAL TABLE \`h1horizon.h1horizon_documents.core_docs_text_table\`
-WITH CONNECTION \`h1horizon.us.gcs-connection\`
+CREATE OR REPLACE EXTERNAL TABLE \`h1horizon-488615.h1horizon_488615_documents.core_docs_text_table\`
+WITH CONNECTION \`h1horizon-488615.us.gcs-connection\`
 OPTIONS (
   object_metadata = 'SIMPLE',
   uris = [
@@ -186,8 +186,8 @@ EOF
 
 # Создать Object Table для CoreDocs - JSON файлы
 bq query --use_legacy_sql=false <<EOF
-CREATE OR REPLACE EXTERNAL TABLE \`h1horizon.h1horizon_documents.core_docs_json_table\`
-WITH CONNECTION \`h1horizon.us.gcs-connection\`
+CREATE OR REPLACE EXTERNAL TABLE \`h1horizon-488615.h1horizon_488615_documents.core_docs_json_table\`
+WITH CONNECTION \`h1horizon-488615.us.gcs-connection\`
 OPTIONS (
   object_metadata = 'SIMPLE',
   uris = ['gs://sanskrite-core-docs/**/*.json'],
@@ -209,8 +209,8 @@ bq mk --connection --location=US --connection_type=CLOUD_RESOURCE \
 
 # Создать remote model
 bq query --use_legacy_sql=false <<EOF
-CREATE OR REPLACE MODEL \`h1horizon.h1horizon_documents.gemini_model\`
-REMOTE WITH CONNECTION \`h1horizon.us.vertex-ai-connection\`
+CREATE OR REPLACE MODEL \`h1horizon-488615.h1horizon_488615_documents.gemini_model\`
+REMOTE WITH CONNECTION \`h1horizon-488615.us.vertex-ai-connection\`
 OPTIONS (
   remote_service_type = 'CLOUD_AI_LARGE_LANGUAGE_MODEL_V1',
   endpoint = 'us-central1-aiplatform.googleapis.com'
@@ -221,7 +221,7 @@ EOF
 ### 3. Firebase Extension для Firestore → BigQuery
 ```bash
 # Установить extension для потокового экспорта
-firebase ext:install firebase/firestore-bigquery-export --project=h1horizon
+firebase ext:install firebase/firestore-bigquery-export --project=h1horizon-488615
 
 # Настроить экспорт коллекции rag_documents
 # Extension автоматически создаст таблицу и будет стримить изменения
@@ -246,7 +246,7 @@ FROM (
   SELECT 
     m.documentType,
     ML.GENERATE_TEXT(
-      MODEL `h1horizon.h1horizon_documents.gemini_model`,
+      MODEL `h1horizon-488615.h1horizon_488615_documents.gemini_model`,
       (SELECT content FROM documents_object_table WHERE uri = m.storagePath),
       STRUCT('Analyze sentiment: return JSON with sentiment_score 0-1' AS prompt)
     ) AS insights
@@ -265,7 +265,7 @@ WITH relevant_docs AS (
 SELECT 
   m.*,
   ML.GENERATE_TEXT(
-    MODEL `h1horizon.h1horizon_documents.gemini_model`,
+    MODEL `h1horizon-488615.h1horizon_488615_documents.gemini_model`,
     (SELECT content FROM documents_object_table WHERE uri = m.storagePath),
     STRUCT('Summarize key points' AS prompt)
   ) AS summary

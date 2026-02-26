@@ -14,7 +14,7 @@ set -euo pipefail
 #
 # Usage:
 #   scripts/backfill-horizon-fragments-vertex.sh
-#   PROJECT=h1horizon BUCKET=h1horizon-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 scripts/backfill-horizon-fragments-vertex.sh
+#   PROJECT=h1horizon-488615 BUCKET=h1horizon-488615-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 scripts/backfill-horizon-fragments-vertex.sh
 #
 
 require() {

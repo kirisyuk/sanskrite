@@ -7,7 +7,7 @@ set -euo pipefail
 TENANT_ID="${1:-}"
 FORCE_SYNC="${2:-}"
 
-GCP_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "h1horizon")
+GCP_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "h1horizon-488615")
 if [[ -z "$GCP_PROJECT" || "$GCP_PROJECT" == "(unset)" ]]; then
   echo "Error: GCP project is not set. Run: gcloud config set project <ID>"
   exit 1

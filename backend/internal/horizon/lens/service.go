@@ -2,6 +2,7 @@ package lens
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -392,9 +393,13 @@ func normalizeDomainContractMap(m map[string]interface{}) map[string]interface{}
 	if v, ok := get("reason", "Reason"); ok && v != nil {
 		out["reason"] = v
 	}
+	if v, ok := get("supplyChainExecutionPlan", "SupplyChainExecutionPlan"); ok && v != nil {
+		out["supplyChainExecutionPlan"] = v
+	}
 	known := map[string]struct{}{
 		"canonicalpath": {}, "contracttype": {}, "title": {}, "description": {}, "facets": {}, "projections": {},
 		"relateddomains": {}, "affecteddomains": {}, "firstorderentities": {}, "confidence": {}, "reason": {},
+		"supplychainexecutionplan": {},
 	}
 	for k, v := range m {
 		lk := strings.ToLower(strings.TrimSpace(k))
@@ -433,6 +438,15 @@ func normalizeDomainContractsForState(raw interface{}) []map[string]interface{} 
 			}
 			if len(d.FirstOrderEntities) > 0 {
 				m["firstOrderEntities"] = d.FirstOrderEntities
+			}
+			if d.SupplyChainExecutionPlan != nil {
+				// Persist as JSON-like map so job.State survives Firestore/JSON roundtrips.
+				if b, err := json.Marshal(d.SupplyChainExecutionPlan); err == nil {
+					var pm map[string]interface{}
+					if err := json.Unmarshal(b, &pm); err == nil && len(pm) > 0 {
+						m["supplyChainExecutionPlan"] = pm
+					}
+				}
 			}
 			out = append(out, m)
 		}
@@ -1143,11 +1157,9 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		}
 	}
 
-	// Process deferred scope paths (anchors): create scout jobs. Scope added when Scout creates fragment (max 5 per lens).
+	// Process deferred scope paths (anchors + domain paths): create scout jobs. Scope added when Scout creates fragment (max 5 per lens).
+	// Domain paths (/domain/v1/...) create jobs so pipeline/Domain Engine can execute domain contracts.
 	for _, inputPath := range deferredScopePaths {
-		if strings.HasPrefix(strings.TrimSpace(inputPath), "/domain/") {
-			continue
-		}
 		var canonicalPath string
 		var fragment *models.HorizonFragment
 		var isCacheHit bool
@@ -1174,6 +1186,11 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		if isCacheHit && fragment != nil && !fragment.Metadata.LastVerifiedAt.IsZero() && fragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
 			isFragmentFreshEnough = true
 		}
+		isDomainPath := strings.HasPrefix(strings.TrimSpace(canonicalPath), "/domain/")
+		if isDomainPath {
+			// Domain jobs execute contract logic; fragment freshness alone must not suppress execution.
+			isFragmentFreshEnough = false
+		}
 		// Cache hit for deferred path: add to scope so node shows (max 5 per lens).
 		if isCacheHit && fragment != nil {
 			addDeferredScopePathIfUnderLimit(ctx, s.lensesRepo, lens, lensID, strings.TrimSpace(canonicalPath), models.MaxAutoScopeAddsPerLens)
@@ -1197,7 +1214,11 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				"epistemicStatus": string(fragment.Metadata.EpistemicStatus),
 				"version":         fragment.Version,
 			})
-			continue
+			// /domain paths are executable contracts, not only cached nodes.
+			// Even with cache hit we still allow job creation below.
+			if !isDomainPath {
+				continue
+			}
 		}
 		if SkipScouting(ctx) {
 			if !isCacheHit {
@@ -1228,13 +1249,13 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			scoutingPlanned++
 			now := time.Now().UTC()
 			state := map[string]interface{}{
-				"targetCanonicalPath":           canonicalPath,
-				"lensId":                        lensID,
-				"currentState":                  string(models.ScoutingJobStatePending),
-				"scoutingStrategy":              string(models.ScoutingStrategySnapshot),
-				"recursionDepth":                0.0,
-				"maxRecursionDepth":             float64(maxRecursionDepth),
-				"deferredScopeAdd": true,
+				"targetCanonicalPath": canonicalPath,
+				"lensId":              lensID,
+				"currentState":        string(models.ScoutingJobStatePending),
+				"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
+				"recursionDepth":      0.0,
+				"maxRecursionDepth":   float64(maxRecursionDepth),
+				"deferredScopeAdd":    true,
 			}
 			if ap := strings.TrimSpace(inputPath); ap != "" && ap != strings.TrimSpace(canonicalPath) {
 				state["aliasCanonicalPath"] = ap

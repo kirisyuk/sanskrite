@@ -56,8 +56,7 @@ curl -X POST \
     "displayName": "RAG Documents Store",
     "industryVertical": "GENERIC",
     "solutionTypes": ["SOLUTION_TYPE_SEARCH"],
-    "contentConfig": "CONTENT_REQUIRED",
-    "createAdvancedSiteSearch": false
+    "contentConfig": "CONTENT_REQUIRED"
   }' || {
     echo ""
     echo "⚠ Ошибка создания через API. Попробуйте создать через консоль GCP:"

@@ -21,6 +21,11 @@ type NewsByFragmentsRequest struct {
 	DaysBack       int      `json:"daysBack,omitempty"`
 }
 
+const (
+	maxNewsByFragmentsRequestSize = 64
+	maxNewsByFragmentsDaysBack    = 30
+)
+
 // NewsByFragmentsHandler handles POST /api/horizon/canvas/news-by-fragments.
 // Calls Gemini with search grounding, creates ontology facts with CanonicalNames,
 // runs 12-axis + propagation, returns result and publishes via WS.
@@ -71,8 +76,14 @@ func (h *HorizonHandlers) NewsByFragments(w http.ResponseWriter, r *http.Request
 		http.Error(w, "fragments or canonicalPaths is required and must not be empty", http.StatusBadRequest)
 		return
 	}
+	if len(fragments) > maxNewsByFragmentsRequestSize {
+		http.Error(w, "too many fragments (max 64)", http.StatusBadRequest)
+		return
+	}
 	if req.DaysBack <= 0 {
 		req.DaysBack = 7
+	} else if req.DaysBack > maxNewsByFragmentsDaysBack {
+		req.DaysBack = maxNewsByFragmentsDaysBack
 	}
 
 	result, err := h.newsByFragmentsCanvas.Run(r.Context(), tenantID, fragments, req.DaysBack, "")

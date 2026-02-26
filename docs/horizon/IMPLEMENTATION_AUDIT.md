@@ -276,7 +276,7 @@
 **Проверка индексов**:
 ```bash
 # Проверить существующие индексы
-gcloud firestore indexes composite list --project=h1horizon
+gcloud firestore indexes composite list --project=h1horizon-488615
 
 # Применить индексы из firestore.indexes.json
 firebase deploy --only firestore:indexes
@@ -520,8 +520,8 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 - Создан `backend/cmd/tools/horizon_reexport_fragments/main.go` для массового re-export всех фрагментов из Firestore
 - Поддержка флага `--skip-existing` для продолжения с места остановки (пропускает уже экспортированные файлы)
 - Использование: 
-  - `go run ./cmd/tools/horizon_reexport_fragments -project h1horizon -bucket h1horizon-horizon-fragments -skip-existing`
-  - Или использовать скомпилированный бинарник: `./bin/horizon_reexport_fragments -project h1horizon -bucket h1horizon-horizon-fragments -skip-existing`
+  - `go run ./cmd/tools/horizon_reexport_fragments -project h1horizon-488615 -bucket h1horizon-horizon-fragments -skip-existing`
+  - Или использовать скомпилированный бинарник: `./bin/horizon_reexport_fragments -project h1horizon-488615 -bucket h1horizon-horizon-fragments -skip-existing`
 
 ### Инфраструктура (GCS + Vertex AI Search)
 
@@ -581,7 +581,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 Примеры запуска:
 - Простой: `bash scripts/backfill-horizon-fragments.sh`
-- С параметрами: `PROJECT=h1horizon BUCKET=h1horizon-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
+- С параметрами: `PROJECT=h1horizon-488615 BUCKET=h1horizon-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
 
 ### Frontend (подсказки в AssembleLensRequest)
 
@@ -596,11 +596,11 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 1) **GCloud auth + project**
 - `gcloud auth login`
-- `gcloud config set project h1horizon`
+- `gcloud config set project h1horizon-488615`
 
 2) **Проверить наличие ресурсов**
 - `gcloud storage buckets describe gs://h1horizon-horizon-fragments`
-- `ACCESS_TOKEN=$(gcloud auth print-access-token) && curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "X-Goog-User-Project: sanskrite" "https://discoveryengine.googleapis.com/v1beta/projects/h1horizon/locations/global/dataStores" | grep horizon-fragments-store`
+- `ACCESS_TOKEN=$(gcloud auth print-access-token) && curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "X-Goog-User-Project: sanskrite" "https://discoveryengine.googleapis.com/v1beta/projects/h1horizon-488615/locations/global/dataStores" | grep horizon-fragments-store`
 
 3) **Деплой API**
 - `bash scripts/deploy --api`
@@ -612,7 +612,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 - Рекомендуемый запуск (ресюмируемый, с чекпоинтом):
   - **Важно**: если в бакете уже есть файлы старого формата, `--skip-existing` нельзя — он НЕ перезапишет их.
   - Первый прогон для гарантированного приведения формата: **без** `--skip-existing`:
-    - `./bin/horizon_reexport_fragments -project h1horizon -bucket h1horizon-horizon-fragments -tenant global -resume -checkpoint-file /tmp/horizon_reexport_checkpoint.txt -checkpoint-every 100 -heartbeat 30s -stall-timeout 30m`
+    - `./bin/horizon_reexport_fragments -project h1horizon-488615 -bucket h1horizon-horizon-fragments -tenant global -resume -checkpoint-file /tmp/horizon_reexport_checkpoint.txt -checkpoint-every 100 -heartbeat 30s -stall-timeout 30m`
   - Если процесс прервался — повторить ту же команду (чекпоинт продолжит после последнего docID).
 - После того как ты уверен, что формат в бакете уже правильный, можно использовать `--skip-existing` для ускорения повторных прогонов.
 - Можно стартовать вручную после конкретного docID:
@@ -622,7 +622,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 6) **Backfill (после завершения re-export)**
 - Простой запуск: `bash scripts/backfill-horizon-fragments.sh`
-- Или с параметрами: `PROJECT=h1horizon BUCKET=h1horizon-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
+- Или с параметрами: `PROJECT=h1horizon-488615 BUCKET=h1horizon-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
 - **Важно**: Дождаться завершения re-export перед запуском backfill
 - **Важно (Discovery Engine)**: импорт `dataSchema=document` требует `Document.content` как **объект** (`{"mimeType":"text/plain","rawBytes":"<base64>"}`).
   Если `content` был строкой/лежал только в `structData`, импорты будут падать с ошибкой:
@@ -631,7 +631,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 7) **Cloud Tasks (после стабилизации/бэкфилла)**
 - Очередь Scout Cloud Tasks: `h1horizon-scout` (region: `us-central1`) — **сейчас PAUSED**.
 - Включать обратно **после** завершения бэкфилла/стабилизации:
-  - `gcloud tasks queues resume h1horizon-scout --project=h1horizon --location=us-central1`
+  - `gcloud tasks queues resume h1horizon-scout --project=h1horizon-488615 --location=us-central1`
 
 8) **Проверка эндпоинта**
 - `curl -X POST "$API_URL/api/horizon/entities/search" -H "Content-Type: application/json" -H "Authorization: Bearer <FIREBASE_ID_TOKEN>" -d '{"query":"Tesla","limit":10}'`
@@ -644,7 +644,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 ```bash
 # Применить индексы
-firebase deploy --only firestore:indexes --project h1horizon
+firebase deploy --only firestore:indexes --project h1horizon-488615
 
 # Или через gcloud (для векторных индексов)
 gcloud firestore indexes composite create \
@@ -653,12 +653,12 @@ gcloud firestore indexes composite create \
   --field-config='field-path=tenantId,order=ASCENDING' \
   --field-config='field-path=vectorEmbedding,vector-config={"dimension":"1536", "flat": "{}"}' \
   --database="(default)" \
-  --project=h1horizon
+  --project=h1horizon-488615
 ```
 
 **Проверка индексов**:
 ```bash
-gcloud firestore indexes composite list --project=h1horizon
+gcloud firestore indexes composite list --project=h1horizon-488615
 ```
 
 ### Текущий статус re-export (2025-12-22)

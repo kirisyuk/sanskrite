@@ -216,6 +216,10 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
   status: string;
   researchId?: string;
   sessionId?: string;
+  sourceCategoryPaths?: string[];
+  primarySourceCategoryPath?: string;
+  sourceGeoFacets?: string[];
+  sourceFormatFacets?: string[];
   ownerUserId: string;
   sourceDetails: {
     uri?: string;

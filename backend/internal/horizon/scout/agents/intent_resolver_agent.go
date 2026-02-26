@@ -50,6 +50,34 @@ type DomainResolution struct {
 	FirstOrderEntities []string            `json:"firstOrderEntities,omitempty"` // canonical paths of entities to add to lens scope
 	Confidence         float64             `json:"confidence"`
 	Reason             string              `json:"reason"`
+	// SupplyChainExecutionPlan is populated when contractType is in supply-chain group.
+	// Plan translates user question into structured supply chain queries for holistic Research.
+	SupplyChainExecutionPlan *SupplyChainExecutionPlan `json:"supplyChainExecutionPlan,omitempty"`
+}
+
+// SupplyChainExecutionPlan is a plan of executable supply chain queries.
+// Generated when contractType is in supply-chain group (supply-chain, value-chain, logistics-flow, etc.).
+type SupplyChainExecutionPlan struct {
+	Queries        []SupplyChainQuery        `json:"queries"`
+	OverlayQueries []SupplyChainOverlayQuery `json:"overlayQueries,omitempty"` // Stage 2, after physical chains
+}
+
+// SupplyChainQuery defines one holistic supply chain request (anchor + direction + filters).
+type SupplyChainQuery struct {
+	Anchor        string   `json:"anchor"`                  // canonical path /org/... or /product/... or /deposit/...
+	AnchorType    string   `json:"anchorType"`               // "org" | "product" | "deposit"
+	Direction     string   `json:"direction"`               // "upstream" | "downstream" | "both"
+	Depth         int      `json:"depth"`                    // 3-6
+	ProductFilter []string `json:"productFilter,omitempty"`  // e.g. ["ev-batteries", "lithium-carbonate"]
+	GeoFilter     []string `json:"geoFilter,omitempty"`      // e.g. ["de", "cn"]
+	Reason        string   `json:"reason"`
+}
+
+// SupplyChainOverlayQuery is a Stage 2 query over parsed chains (regulatory, market, decision points).
+type SupplyChainOverlayQuery struct {
+	Type    string   `json:"type"`    // "regulatory" | "market" | "decision_points"
+	Anchors []string `json:"anchors"` // from Stage 1 (org, market canonical paths)
+	Scope   string   `json:"scope"`   // "markets" | "orgs" | "both"
 }
 
 // DecompositionHint describes how to decompose an abstract anchor (MARKET, PROGRAM, etc.)
@@ -307,6 +335,8 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 			}
 		}
 		out.Domains = validDomains
+		// Apply supply chain plan quality rule: cap queries, prioritize by firstOrderEntities.
+		applySupplyChainPlanQualityRule(out.Domains, out.Anchors)
 	}
 
 	// Meaning-preserving policy for bilateral queries:
@@ -492,7 +522,13 @@ USER QUERY:
       "affectedDomains": ["string (/domain/v1/... optional)"],
       "firstOrderEntities": ["string (canonical paths to add to Lens scope)"],
       "confidence": 0.0,
-      "reason": "short reason"
+      "reason": "short reason",
+      "supplyChainExecutionPlan": {
+        "queries": [
+          { "anchor": "/org/de/bmw", "anchorType": "org", "direction": "upstream", "depth": 4, "productFilter": ["ev-batteries"], "geoFilter": ["de", "cn"], "reason": "..." }
+        ],
+        "overlayQueries": [{ "type": "regulatory", "anchors": [], "scope": "orgs" }]
+      }
     }
   ],
   "anchors": [
@@ -537,6 +573,7 @@ DOMAIN RULES
   SCENARIOS: scenario-analysis, macro-trends, megatrends, future-outlook
   SECTOR: sector-overview, industry-structure, vertical-deep-dive
   FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
+- SUPPLY CHAIN PLAN: When contractType is supply-chain, value-chain, logistics-flow, trade-flow, sourcing-map, or procurement-map, you MUST include supplyChainExecutionPlan with 1-10 queries. Each query: anchor (canonical path from anchors or firstOrderEntities), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. Prioritize coverage of critical products/regions. overlayQueries (Stage 2) optional.
 - BILATERAL: If query is about relations between two countries → contractType bilateral-relations, geo = {cc1}-{cc2} (alphabetically sorted lowercase ISO2).
 - OWNERSHIP: If query asks who owns/controls an entity → contractType ownership-structure, facet subject.
 - COMMONALITY: If query asks what connects/unifies X and Y → contractType commonality-analysis, facets subject.
@@ -572,6 +609,69 @@ GENERAL:
 - Provide 1-3 anchors (what the Lens should attach to).
 - Prefer stable, specific anchors.
 - Return ONLY JSON. No markdown. No commentary.`, query, existingDomainsBlock, quotedBlock, multiHint, anchorNamingBlock)
+}
+
+// IsSupplyChainContractType returns true if contractType is in the supply-chain group.
+func IsSupplyChainContractType(contractType string) bool {
+	ct := strings.ToLower(strings.TrimSpace(contractType))
+	switch ct {
+	case "supply-chain", "value-chain", "logistics-flow", "trade-flow", "sourcing-map", "procurement-map":
+		return true
+	}
+	return false
+}
+
+const maxSupplyChainQueriesPerPlan = 10
+
+// applySupplyChainPlanQualityRule caps queries at budget and prioritizes by firstOrderEntities.
+func applySupplyChainPlanQualityRule(domains []DomainResolution, anchors []struct {
+	CanonicalPath string  `json:"canonicalPath"`
+	Type          string  `json:"type"`
+	Name          string  `json:"name,omitempty"`
+	Confidence    float64 `json:"confidence"`
+	Reason        string  `json:"reason"`
+}) {
+	firstOrderSet := make(map[string]struct{})
+	for _, a := range anchors {
+		cp := strings.TrimSpace(a.CanonicalPath)
+		if cp != "" {
+			firstOrderSet[cp] = struct{}{}
+		}
+	}
+	for _, d := range domains {
+		for _, e := range d.FirstOrderEntities {
+			cp := strings.TrimSpace(e)
+			if cp != "" {
+				firstOrderSet[cp] = struct{}{}
+			}
+		}
+	}
+	for i := range domains {
+		d := &domains[i]
+		if d.SupplyChainExecutionPlan == nil || len(d.SupplyChainExecutionPlan.Queries) == 0 {
+			continue
+		}
+		queries := d.SupplyChainExecutionPlan.Queries
+		if len(queries) <= maxSupplyChainQueriesPerPlan {
+			continue
+		}
+		// Prioritize: anchors in firstOrderEntities first, then by order.
+		sort.Slice(queries, func(a, b int) bool {
+			inA := 0
+			if _, ok := firstOrderSet[strings.TrimSpace(queries[a].Anchor)]; ok {
+				inA = 1
+			}
+			inB := 0
+			if _, ok := firstOrderSet[strings.TrimSpace(queries[b].Anchor)]; ok {
+				inB = 1
+			}
+			if inA != inB {
+				return inA > inB
+			}
+			return a < b
+		})
+		d.SupplyChainExecutionPlan.Queries = queries[:maxSupplyChainQueriesPerPlan]
+	}
 }
 
 func parseDomainPathForIntent(canonicalPath string) (contractType string, facets map[string][]string) {

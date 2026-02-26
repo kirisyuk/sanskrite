@@ -69,6 +69,10 @@ type MaterializedArtifact struct {
 
 	// Status: active, deprecated, draft, archived
 	Status string `json:"status" firestore:"status"`
+
+	// PathStatus: hypothesis (from LLM/parsed chain, unvalidated) | validated (passed Critic invariants).
+	// For SUPPLY_CHAIN_PATH overlays.
+	PathStatus string `json:"pathStatus,omitempty" firestore:"pathStatus,omitempty"`
 }
 
 // Validate checks if MaterializedArtifact is valid.
@@ -194,8 +198,8 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 		if !ok || nodeType == "" {
 			return fmt.Errorf("payload node[%d] missing or invalid 'type'", i)
 		}
-		if nodeType != "org" && nodeType != "fac" && nodeType != "product" {
-			return fmt.Errorf("payload node[%d] invalid type: %q (expected org|fac|product)", i, nodeType)
+		if nodeType != "org" && nodeType != "fac" && nodeType != "product" && nodeType != "deposit" {
+			return fmt.Errorf("payload node[%d] invalid type: %q (expected org|fac|product|deposit)", i, nodeType)
 		}
 		ref, ok := nodeMap["ref"].(string)
 		if !ok || ref == "" {

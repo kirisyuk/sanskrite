@@ -13,7 +13,7 @@ if [[ -z "$DOC_IDS" ]]; then
   exit 1
 fi
 
-PROJECT_ID=$(gcloud config get-value project 2>/dev/null || echo "h1horizon")
+PROJECT_ID=$(gcloud config get-value project 2>/dev/null || echo "h1horizon-488615")
 if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "(unset)" ]]; then
   echo "Error: GCP project is not set. Run: gcloud config set project <ID>"
   exit 1

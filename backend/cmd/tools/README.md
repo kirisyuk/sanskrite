@@ -261,13 +261,13 @@ go run ./cmd/tools/horizon_merge_org_aliases \
 **Использование:**
 ```bash
 # Dry-run (по умолчанию)
-go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon --limit=500
+go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon-488615 --limit=500
 
 # Применить изменения
-go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon --apply --limit=1000
+go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon-488615 --apply --limit=1000
 
 # Только org/facility (без /loc)
-go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon --path-prefix=/org --skip-geonames
+go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon-488615 --path-prefix=/org --skip-geonames
 ```
 
 **Флаги:**

@@ -2,6 +2,8 @@ package scout
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
@@ -1496,6 +1499,126 @@ func bestEffortDomainTitleFromJobState(job *models.ScoutingJob) string {
 	return ""
 }
 
+// getSupplyChainExecutionPlanFromJobState extracts SupplyChainExecutionPlan for the matching domain.
+// Used for Plan mode when contractType is supply-chain group.
+func getSupplyChainExecutionPlanFromJobState(job *models.ScoutingJob, domainCanonicalPath string) *agents.SupplyChainExecutionPlan {
+	if job == nil || job.State == nil {
+		return nil
+	}
+	raw, ok := job.State["domains"]
+	if !ok || raw == nil {
+		return nil
+	}
+	cpNorm := normalizeDomainPathForMatch(strings.TrimSpace(domainCanonicalPath))
+	matchPaths := map[string]struct{}{cpNorm: {}}
+	cpCT, cpFacets := parseDomainPathFacets(cpNorm)
+	cpSig := domainFacetSignature(cpCT, cpFacets)
+	var bySignature *agents.SupplyChainExecutionPlan
+	if st := parseStateString(job.State["targetCanonicalPath"]); st != "" {
+		matchPaths[normalizeDomainPathForMatch(st)] = struct{}{}
+	}
+	if st := parseStateString(job.State["aliasCanonicalPath"]); st != "" {
+		matchPaths[normalizeDomainPathForMatch(st)] = struct{}{}
+	}
+	getPlanFromMap := func(m map[string]interface{}) *agents.SupplyChainExecutionPlan {
+		if m == nil {
+			return nil
+		}
+		if p := decodeSupplyChainExecutionPlan(m["supplyChainExecutionPlan"]); p != nil {
+			return p
+		}
+		return decodeSupplyChainExecutionPlan(m["SupplyChainExecutionPlan"])
+	}
+	getCanonicalPathFromMap := func(m map[string]interface{}) string {
+		if m == nil {
+			return ""
+		}
+		cp := parseStateString(m["canonicalPath"])
+		if cp == "" {
+			cp = parseStateString(m["CanonicalPath"])
+		}
+		return strings.TrimSpace(cp)
+	}
+	tryMatch := func(cp string, plan *agents.SupplyChainExecutionPlan) *agents.SupplyChainExecutionPlan {
+		if plan == nil || len(plan.Queries) == 0 {
+			return nil
+		}
+		cn := normalizeDomainPathForMatch(strings.TrimSpace(cp))
+		if _, ok := matchPaths[cn]; ok {
+			return plan
+		}
+		ct, facets := parseDomainPathFacets(cn)
+		if cpSig != "" && domainFacetSignature(ct, facets) == cpSig {
+			if bySignature == nil || len(plan.Queries) > len(bySignature.Queries) {
+				bySignature = plan
+			}
+		}
+		return nil
+	}
+	switch t := raw.(type) {
+	case []agents.DomainResolution:
+		for _, d := range t {
+			if found := tryMatch(d.CanonicalPath, d.SupplyChainExecutionPlan); found != nil {
+				return found
+			}
+		}
+	case []map[string]interface{}:
+		for _, m := range t {
+			if found := tryMatch(getCanonicalPathFromMap(m), getPlanFromMap(m)); found != nil {
+				return found
+			}
+		}
+	case []interface{}:
+		for _, it := range t {
+			if d, ok := it.(agents.DomainResolution); ok {
+				if found := tryMatch(d.CanonicalPath, d.SupplyChainExecutionPlan); found != nil {
+					return found
+				}
+				continue
+			}
+			m, ok := it.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if found := tryMatch(getCanonicalPathFromMap(m), getPlanFromMap(m)); found != nil {
+				return found
+			}
+		}
+	}
+	return bySignature
+}
+
+func decodeSupplyChainExecutionPlan(raw interface{}) *agents.SupplyChainExecutionPlan {
+	if raw == nil {
+		return nil
+	}
+	switch t := raw.(type) {
+	case *agents.SupplyChainExecutionPlan:
+		if t != nil && len(t.Queries) > 0 {
+			return t
+		}
+		return nil
+	case agents.SupplyChainExecutionPlan:
+		if len(t.Queries) == 0 {
+			return nil
+		}
+		cp := t
+		return &cp
+	}
+	b, err := json.Marshal(raw)
+	if err != nil || len(b) == 0 {
+		return nil
+	}
+	var plan agents.SupplyChainExecutionPlan
+	if err := json.Unmarshal(b, &plan); err != nil {
+		return nil
+	}
+	if len(plan.Queries) == 0 {
+		return nil
+	}
+	return &plan
+}
+
 func (e *ScoutEngine) bestEffortFindDomainContract(job *models.ScoutingJob, domainCanonicalPath string) *domainContractForExpansion {
 	cp := strings.TrimSpace(domainCanonicalPath)
 	if job == nil || job.State == nil || cp == "" {
@@ -2069,10 +2192,33 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 
 	// LLM-based domain research: reuse standard ResearchAgent to keep parity with non-domain research.
 	// IntentResolver is NOT required to fully expand domains; this step is responsible for that.
+	// Plan mode: when supply-chain contractType + SupplyChainExecutionPlan with queries, use holistic full-query strategy instead of fragment-centric ResearchPipeline.
 	var domainResearchRelations []agents.DiscoveredRelation
 	var domainResearchChains []agents.SupplyChain
 	var domainGroundingEvidence *ai.GroundingEvidence
-	if e.researchAgent != nil && !domainFastPathApplied {
+	supplyChainPlan := getSupplyChainExecutionPlanFromJobState(job, domainCP)
+	usePlanMode := agents.IsSupplyChainContractType(contractType) && supplyChainPlan != nil && len(supplyChainPlan.Queries) > 0
+	if usePlanMode && e.researchAgent != nil && !domainFastPathApplied {
+		// Supply Chain Plan mode: holistic full queries, merge chains, processSupplyChains.
+		for _, q := range supplyChainPlan.Queries {
+			chains, err := e.researchAgent.EnrichSupplyChainFull(ctx, q)
+			if err != nil {
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain plan query failed (anchor=%s): %v", strings.TrimSpace(q.Anchor), err))
+				continue
+			}
+			domainResearchChains = append(domainResearchChains, chains...)
+		}
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		job.State["domainResearch"] = map[string]interface{}{
+			"planMode":      true,
+			"queriesN":      len(supplyChainPlan.Queries),
+			"supplyChainsN": len(domainResearchChains),
+		}
+		_ = e.scoutingJobsRepo.Update(ctx, job)
+	}
+	if !usePlanMode && e.researchAgent != nil && !domainFastPathApplied {
 		originalQuery := ""
 		if job.State != nil {
 			if v, ok := job.State["originalQuery"].(string); ok {
@@ -2624,6 +2770,14 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		if err := e.processSupplyChains(ctx, job, frag, domainResearchChains); err != nil {
 			logGroundingErrorWithContext(job, "scout", "domain_expansion.supply_chains", "supply_chain_processing_failed", "materialization_error", true, err)
 			e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.supply_chains", "supply_chain_processing_failed", "materialization_error", true)
+		}
+		// Expand phase (optional): 1-hop for low-confidence nodes, alternatives check. Config: job.State["supplyChainExpandEnabled"], ["supplyChainExpandMaxNodes"].
+		if usePlanMode {
+			e.runSupplyChainExpandPhase(ctx, job, frag, domainResearchChains, supplyChainPlan)
+		}
+		// Stage 2 Overlay queries: regulatory, market, decision_points (anchors from parsed chains)
+		if usePlanMode && supplyChainPlan != nil && len(supplyChainPlan.OverlayQueries) > 0 {
+			e.runSupplyChainStage2Overlays(ctx, job, frag, domainResearchChains, supplyChainPlan.OverlayQueries)
 		}
 	}
 
@@ -5586,6 +5740,746 @@ func slicesEqual(a, b []string) bool {
 	return true
 }
 
+func extractCanonicalPathsFromHint(hint string) []string {
+	hint = strings.TrimSpace(hint)
+	if hint == "" {
+		return nil
+	}
+	tokens := strings.FieldsFunc(hint, func(r rune) bool {
+		if unicode.IsSpace(r) {
+			return true
+		}
+		switch r {
+		case ',', ';', ':', '(', ')', '[', ']', '{', '}', '<', '>', '"', '\'', '`':
+			return true
+		default:
+			return false
+		}
+	})
+	seen := make(map[string]struct{}, len(tokens))
+	out := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		tok = strings.TrimSpace(strings.Trim(tok, ".,!?"))
+		if tok == "" || !strings.HasPrefix(tok, "/") {
+			continue
+		}
+		if strings.Count(tok, "/") < 2 {
+			continue
+		}
+		if _, ok := seen[tok]; ok {
+			continue
+		}
+		seen[tok] = struct{}{}
+		out = append(out, tok)
+	}
+	return out
+}
+
+func mergeUniqueStrings(base []string, extra []string) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, s := range append(base, extra...) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
+func equalInterfaceMaps(a, b map[string]interface{}) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	ab, errA := json.Marshal(a)
+	bb, errB := json.Marshal(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return string(ab) == string(bb)
+}
+
+func shouldReplaceMetricValue(existing models.MetricValue, incoming models.MetricValue) bool {
+	if incoming.Confidence > existing.Confidence+0.05 {
+		return true
+	}
+	if existing.Value == 0 && incoming.Value != 0 {
+		return true
+	}
+	var oldUnit, newUnit string
+	if existing.Unit != nil {
+		oldUnit = strings.TrimSpace(*existing.Unit)
+	}
+	if incoming.Unit != nil {
+		newUnit = strings.TrimSpace(*incoming.Unit)
+	}
+	if oldUnit == "" && newUnit != "" {
+		return true
+	}
+	if !incoming.ObservedAt.IsZero() && incoming.ObservedAt.After(existing.ObservedAt) && incoming.Confidence >= existing.Confidence {
+		return true
+	}
+	return false
+}
+
+func mergeSupplyLinkMetricState(dst map[string]models.MetricValue, incoming map[string]models.MetricValue) bool {
+	if len(incoming) == 0 {
+		return false
+	}
+	changed := false
+	for key, mv := range incoming {
+		cur, ok := dst[key]
+		if !ok {
+			dst[key] = mv
+			changed = true
+			continue
+		}
+		if shouldReplaceMetricValue(cur, mv) {
+			dst[key] = mv
+			changed = true
+		}
+	}
+	return changed
+}
+
+func mergeSupplyLinkQualifiers(existing, incoming map[string]interface{}) map[string]interface{} {
+	if len(existing) == 0 && len(incoming) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(existing)+len(incoming))
+	for k, v := range existing {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		out[k] = v
+	}
+	for k, v := range incoming {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		if k == "flow_edge_contract" {
+			// Keep prior context and append new warnings/gaps when possible.
+			if oldMap, okOld := out[k].(map[string]interface{}); okOld {
+				if newMap, okNew := v.(map[string]interface{}); okNew {
+					merged := make(map[string]interface{}, len(oldMap)+len(newMap))
+					for mk, mv := range oldMap {
+						merged[mk] = mv
+					}
+					for mk, mv := range newMap {
+						switch mk {
+						case "parseWarnings", "validationGaps":
+							merged[mk] = mergeUniqueStrings(parseStateStringSlice(merged[mk]), parseStateStringSlice(mv))
+						default:
+							merged[mk] = mv
+						}
+					}
+					out[k] = merged
+					continue
+				}
+			}
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func isSupplyChainPlanMode(state map[string]interface{}) bool {
+	if state == nil {
+		return false
+	}
+	if parseStateBool(state["supplyChainPlanMode"], false) {
+		return true
+	}
+	if raw := state["domainResearch"]; raw != nil {
+		if m, ok := raw.(map[string]interface{}); ok {
+			return parseStateBool(m["planMode"], false)
+		}
+		if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
+			var m map[string]interface{}
+			if json.Unmarshal([]byte(s), &m) == nil {
+				return parseStateBool(m["planMode"], false)
+			}
+		}
+	}
+	return false
+}
+
+func buildSupplyChainArtifactCanonicalKey(job *models.ScoutingJob, anchorPath string, chainIndex int, segments []pathbuilder.PathSegment) string {
+	jobID := "unknown-job"
+	if job != nil && strings.TrimSpace(job.ID) != "" {
+		jobID = strings.TrimSpace(job.ID)
+	}
+	anchorToken := strings.Trim(strings.ReplaceAll(strings.TrimSpace(anchorPath), "/", "_"), "_")
+	if anchorToken == "" {
+		anchorToken = "unknown-anchor"
+	}
+	chainHash := hashSupplyChainSegments(segments)
+	if chainHash == "" {
+		chainHash = fmt.Sprintf("chain-%d", chainIndex)
+	}
+	return fmt.Sprintf("/supply-chain/global/%s/%s/%s", jobID, anchorToken, chainHash)
+}
+
+func hashSupplyChainSegments(segments []pathbuilder.PathSegment) string {
+	if len(segments) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, seg := range segments {
+		b.WriteString(strings.TrimSpace(seg.SupplierRef))
+		b.WriteString(">")
+		b.WriteString(strings.TrimSpace(seg.ProductRef))
+		b.WriteString(">")
+		b.WriteString(strings.TrimSpace(seg.CustomerRef))
+		b.WriteString("|")
+		if seg.SupplierFacilityRef != nil {
+			b.WriteString(strings.TrimSpace(*seg.SupplierFacilityRef))
+		}
+		b.WriteString("|")
+		if seg.CustomerFacilityRef != nil {
+			b.WriteString(strings.TrimSpace(*seg.CustomerFacilityRef))
+		}
+		b.WriteString("|")
+		if len(seg.TransportViaRefs) > 0 {
+			b.WriteString(strings.Join(seg.TransportViaRefs, ","))
+		}
+		if len(seg.Metrics) > 0 {
+			keys := make([]string, 0, len(seg.Metrics))
+			for k := range seg.Metrics {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				mv := seg.Metrics[k]
+				unit := ""
+				if mv.Unit != nil {
+					unit = strings.TrimSpace(*mv.Unit)
+				}
+				b.WriteString(fmt.Sprintf("|%s=%.6f@%s#%.3f", k, mv.Value, unit, mv.Confidence))
+			}
+		}
+		b.WriteString(";")
+	}
+	sum := sha1.Sum([]byte(b.String()))
+	return hex.EncodeToString(sum[:8])
+}
+
+// runSupplyChainExpandPhase runs optional expand (1-hop, alternatives check) after processSupplyChains in Plan mode.
+// Depth: 1-hop expand only when currentDepth < maxRecursionDepth (research depth set at job start).
+// Expand criteria: confidence < 0.6, OR node in gapHints, OR node matches productFilter (plan 5.1).
+// Config: job.State["supplyChainExpandEnabled"] (bool), job.State["supplyChainExpandMaxNodes"] (int, default 5).
+func (e *ScoutEngine) runSupplyChainExpandPhase(ctx context.Context, job *models.ScoutingJob, frag *models.HorizonFragment, chains []agents.SupplyChain, supplyChainPlan *agents.SupplyChainExecutionPlan) {
+	if job == nil || job.State == nil {
+		return
+	}
+	if !parseStateBool(job.State["supplyChainExpandEnabled"], false) {
+		return
+	}
+	// Research depth (maxRecursionDepth) is set at job start; expand only if we have room for 1 more hop.
+	currentDepth := parseStateInt(job.State["recursionDepth"], 0)
+	maxDepth := parseStateInt(job.State["maxRecursionDepth"], 2)
+	if maxDepth < 0 {
+		maxDepth = 0
+	}
+	if currentDepth >= maxDepth {
+		return
+	}
+	maxNodes := parseStateInt(job.State["supplyChainExpandMaxNodes"], 5)
+	if maxNodes <= 0 {
+		maxNodes = 5
+	}
+	// gapHints from chainContext (updated by processSupplyChains)
+	gapHints := make(map[string]struct{})
+	if job.State != nil {
+		if cc, _ := ParseChainContext(job.State["chainContext"]); cc != nil {
+			for _, g := range cc.GapHints {
+				g = strings.TrimSpace(g)
+				if g != "" {
+					if strings.HasPrefix(g, "/") {
+						gapHints[g] = struct{}{}
+					}
+					for _, cp := range extractCanonicalPathsFromHint(g) {
+						gapHints[cp] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+	// productFilter from plan queries
+	productFilterSet := make(map[string]struct{})
+	if supplyChainPlan != nil {
+		for _, q := range supplyChainPlan.Queries {
+			for _, pf := range q.ProductFilter {
+				pf = strings.TrimSpace(strings.ToLower(pf))
+				if pf != "" {
+					productFilterSet[pf] = struct{}{}
+				}
+			}
+		}
+	}
+	// nodeMatchesProductFilter: product path contains filter slug
+	nodeMatchesProductFilter := func(cp string) bool {
+		if len(productFilterSet) == 0 {
+			return false
+		}
+		cpLower := strings.ToLower(cp)
+		for pf := range productFilterSet {
+			if strings.Contains(cpLower, pf) {
+				return true
+			}
+		}
+		return false
+	}
+	// Collect nodes for 1-hop expand: confidence < 0.6 OR in gapHints OR matches productFilter (plan 5.1)
+	var expandCandidates []string
+	seen := make(map[string]struct{})
+	for _, ch := range chains {
+		for _, n := range ch.Nodes {
+			cp := strings.TrimSpace(n.CanonicalPath)
+			if cp == "" || strings.HasPrefix(cp, "/domain/") {
+				continue
+			}
+			if _, ok := seen[cp]; ok {
+				continue
+			}
+			conf := ch.Confidence
+			_, inGap := gapHints[cp]
+			shouldExpand := conf < 0.6 || inGap || nodeMatchesProductFilter(cp)
+			if shouldExpand {
+				seen[cp] = struct{}{}
+				expandCandidates = append(expandCandidates, cp)
+				if len(expandCandidates) >= maxNodes {
+					break
+				}
+			}
+		}
+		if len(expandCandidates) >= maxNodes {
+			break
+		}
+	}
+	if len(expandCandidates) > 0 && e.researchAgent != nil && e.fragmentsRepo != nil {
+		// 1-hop expand: call Research for each candidate (fragment-centric)
+		for _, cp := range expandCandidates {
+			existing, err := e.fragmentsRepo.GetByCanonicalPath(ctx, cp)
+			if err != nil || existing == nil {
+				continue
+			}
+			input := agents.ResearchStrategyInput{
+				Fragment:    existing,
+				MissingInfo: []string{"Identify upstream suppliers and downstream customers; products; facility locations."},
+			}
+			domainModes := []string{taxonomy.DomainModeSupplyChain}
+			if _, rels, newChains, _, _, err := e.researchAgent.ResearchPipeline().Enrich(ctx, input, domainModes); err == nil {
+				if len(newChains) > 0 {
+					_ = e.processSupplyChains(ctx, job, frag, newChains)
+				}
+				_ = rels // relations could be processed separately
+			}
+		}
+	}
+	// Alternatives check: one LLM call "For each (customer, product) pair, did you miss any alternative suppliers?"
+	if parseStateBool(job.State["supplyChainAlternativesCheckEnabled"], false) && e.aiExecutor != nil && e.researchAgent != nil {
+		e.runSupplyChainAlternativesCheck(ctx, job, frag, chains)
+	}
+	if job.State == nil {
+		job.State = make(map[string]interface{})
+	}
+	job.State["supplyChainExpandPhase"] = "completed"
+}
+
+// runSupplyChainAlternativesCheck asks LLM: "For each (customer, product) pair, did you miss any alternative suppliers?"
+// Merges returned alternatives into chains and processes via processSupplyChains.
+func (e *ScoutEngine) runSupplyChainAlternativesCheck(ctx context.Context, job *models.ScoutingJob, frag *models.HorizonFragment, chains []agents.SupplyChain) {
+	if len(chains) == 0 {
+		return
+	}
+	// Extract (customerRef, productRef) pairs from actor→product→actor segments
+	type pairKey struct {
+		customerRef string
+		productRef  string
+	}
+	pairs := make(map[pairKey][]int) // pairKey -> chain indices that contain this pair
+	for ci, ch := range chains {
+		for i := 0; i < len(ch.Nodes)-2; i++ {
+			a, prod, b := ch.Nodes[i], ch.Nodes[i+1], ch.Nodes[i+2]
+			if !isActorNode(a) || !isProductNode(prod) || !isActorNode(b) {
+				continue
+			}
+			srcPath := strings.TrimSpace(a.CanonicalPath)
+			prodPath := strings.TrimSpace(prod.CanonicalPath)
+			dstPath := strings.TrimSpace(b.CanonicalPath)
+			if srcPath == "" || prodPath == "" || dstPath == "" {
+				continue
+			}
+			k := pairKey{customerRef: dstPath, productRef: prodPath}
+			pairs[k] = append(pairs[k], ci)
+		}
+	}
+	if len(pairs) == 0 {
+		return
+	}
+	// Build prompt with explicit JSON schema
+	var sb strings.Builder
+	sb.WriteString("For each (customer, product) pair below, did you miss any alternative suppliers?\n")
+	sb.WriteString("Return ONLY valid JSON with this exact schema:\n")
+	sb.WriteString(`{ "alternatives": [ { "customerRef": "/org/...", "productRef": "/product/...", "suppliers": [ { "supplierRef": "/org/...", "technicalFit": 0.8, "regulatoryFit": 0.9, "confidence": 0.7, "availableCapacity": { "value": 100, "unit": "metric_tons_per_year", "confidence": 0.6 }, "leadTimeToSwitch": { "value": 90, "unit": "days", "confidence": 0.7 }, "costToSwitch": { "value": 500000, "unit": "usd", "confidence": 0.5 } } ] } ] }` + "\n")
+	sb.WriteString("customerRef and productRef must match exactly. supplierRef: canonical path. technicalFit, regulatoryFit, confidence: 0-1. availableCapacity, leadTimeToSwitch, costToSwitch optional.\n\n")
+	sb.WriteString("Pairs to check:\n")
+	for k := range pairs {
+		sb.WriteString(fmt.Sprintf("- customer=%s product=%s\n", k.customerRef, k.productRef))
+	}
+	prompt := sb.String()
+	verifier := ai.NewSimpleJSONVerifier()
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeKnowledgeSynthesis,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       7,
+			MinContextWindow:         8000,
+			MaxOutputSize:            4000,
+		},
+		Verifier: verifier,
+	}
+	result, _, err := e.aiExecutor.ExecuteStructuredTaskFull(ctx, task)
+	if err != nil || result == nil {
+		e.logLine(ctx, job, "warn", fmt.Sprintf("[AlternativesCheck] LLM failed: %v", err))
+		return
+	}
+	jsonData, _ := json.Marshal(result)
+	var parsed struct {
+		Alternatives []struct {
+			CustomerRef string `json:"customerRef"`
+			ProductRef  string `json:"productRef"`
+			Suppliers   []struct {
+				SupplierRef       string  `json:"supplierRef"`
+				TechnicalFit      float64 `json:"technicalFit"`
+				RegulatoryFit     float64 `json:"regulatoryFit"`
+				Confidence        float64 `json:"confidence"`
+				AvailableCapacity *struct {
+					Value      float64 `json:"value"`
+					Unit       string  `json:"unit"`
+					Confidence float64 `json:"confidence"`
+				} `json:"availableCapacity,omitempty"`
+				LeadTimeToSwitch *struct {
+					Value      float64 `json:"value"`
+					Unit       string  `json:"unit"`
+					Confidence float64 `json:"confidence"`
+				} `json:"leadTimeToSwitch,omitempty"`
+				CostToSwitch *struct {
+					Value      float64 `json:"value"`
+					Unit       string  `json:"unit"`
+					Confidence float64 `json:"confidence"`
+				} `json:"costToSwitch,omitempty"`
+			} `json:"suppliers"`
+		} `json:"alternatives"`
+	}
+	if err := json.Unmarshal(jsonData, &parsed); err != nil {
+		e.logLine(ctx, job, "warn", fmt.Sprintf("[AlternativesCheck] parse failed: %v", err))
+		return
+	}
+	if len(parsed.Alternatives) == 0 {
+		return
+	}
+	// Merge alternatives into chains
+	chainsCopy := make([]agents.SupplyChain, len(chains))
+	for i := range chains {
+		chainsCopy[i] = cloneSupplyChain(chains[i])
+	}
+	merged := 0
+	for _, alt := range parsed.Alternatives {
+		cust := strings.TrimSpace(alt.CustomerRef)
+		prod := strings.TrimSpace(alt.ProductRef)
+		if cust == "" || prod == "" || len(alt.Suppliers) == 0 {
+			continue
+		}
+		k := pairKey{customerRef: cust, productRef: prod}
+		chainIndices := pairs[k]
+		if len(chainIndices) == 0 {
+			continue
+		}
+		// Find customerNodeIndex and productNodeIndex in first matching chain
+		ch := &chainsCopy[chainIndices[0]]
+		customerIdx, productIdx := -1, -1
+		for i := 0; i < len(ch.Nodes)-2; i++ {
+			_, p, b := ch.Nodes[i], ch.Nodes[i+1], ch.Nodes[i+2]
+			if strings.TrimSpace(b.CanonicalPath) == cust && strings.TrimSpace(p.CanonicalPath) == prod {
+				customerIdx = i + 2
+				productIdx = i + 1
+				break
+			}
+		}
+		if customerIdx < 0 || productIdx < 0 {
+			continue
+		}
+		// Add new suppliers to Alternatives (avoid duplicates with existing)
+		existingRefs := make(map[string]struct{})
+		for _, a := range ch.Alternatives {
+			if a.CustomerNodeIndex == customerIdx && a.ProductNodeIndex == productIdx {
+				for _, s := range a.Suppliers {
+					existingRefs[strings.TrimSpace(s.SupplierRef)] = struct{}{}
+				}
+			}
+		}
+		var newSuppliers []agents.AlternativeContract
+		for _, s := range alt.Suppliers {
+			ref := strings.TrimSpace(s.SupplierRef)
+			if ref == "" || strings.HasPrefix(ref, "/domain/") {
+				continue
+			}
+			if _, ok := existingRefs[ref]; ok {
+				continue
+			}
+			existingRefs[ref] = struct{}{}
+			ac := agents.AlternativeContract{
+				SupplierRef:   ref,
+				TechnicalFit:  s.TechnicalFit,
+				RegulatoryFit: s.RegulatoryFit,
+				Confidence:    s.Confidence,
+			}
+			if s.AvailableCapacity != nil {
+				ac.AvailableCapacity = &agents.MetricWithConfidence{Value: s.AvailableCapacity.Value, Unit: s.AvailableCapacity.Unit, Confidence: s.AvailableCapacity.Confidence}
+			}
+			if s.LeadTimeToSwitch != nil {
+				ac.LeadTimeToSwitch = &agents.MetricWithConfidence{Value: s.LeadTimeToSwitch.Value, Unit: s.LeadTimeToSwitch.Unit, Confidence: s.LeadTimeToSwitch.Confidence}
+			}
+			if s.CostToSwitch != nil {
+				ac.CostToSwitch = &agents.MetricWithConfidence{Value: s.CostToSwitch.Value, Unit: s.CostToSwitch.Unit, Confidence: s.CostToSwitch.Confidence}
+			}
+			newSuppliers = append(newSuppliers, ac)
+		}
+		if len(newSuppliers) > 0 {
+			ch.Alternatives = append(ch.Alternatives, agents.AlternativeSuppliers{
+				CustomerNodeIndex: customerIdx,
+				ProductNodeIndex:  productIdx,
+				Suppliers:         newSuppliers,
+			})
+			merged++
+		}
+	}
+	if merged > 0 {
+		_ = e.processSupplyChains(ctx, job, frag, chainsCopy)
+		e.logLine(ctx, job, "info", fmt.Sprintf("[AlternativesCheck] merged=%d pairs", merged))
+	}
+}
+
+func isActorNode(n agents.SupplyChainNode) bool {
+	t := strings.ToUpper(strings.TrimSpace(n.Type))
+	cp := strings.TrimSpace(n.CanonicalPath)
+	return (t == "ORGANIZATION" || t == "FACILITY" || t == "DEPOSIT" || t == "PROGRAM" || t == "GOV" || t == "GEO_REGION") ||
+		strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/fac/") || strings.HasPrefix(cp, "/deposit/") || strings.HasPrefix(cp, "/gov/")
+}
+
+func isProductNode(n agents.SupplyChainNode) bool {
+	t := strings.ToUpper(strings.TrimSpace(n.Type))
+	cp := strings.TrimSpace(n.CanonicalPath)
+	return t == "PRODUCT" || strings.HasPrefix(cp, "/product/")
+}
+
+func cloneSupplyChain(ch agents.SupplyChain) agents.SupplyChain {
+	out := agents.SupplyChain{
+		Nodes:          make([]agents.SupplyChainNode, len(ch.Nodes)),
+		Confidence:     ch.Confidence,
+		Reason:         ch.Reason,
+		TransportVia:   append([]string(nil), ch.TransportVia...),
+		Alternatives:   make([]agents.AlternativeSuppliers, 0, len(ch.Alternatives)+4),
+		SegmentMetrics: append([]agents.SegmentMetrics(nil), ch.SegmentMetrics...),
+	}
+	copy(out.Nodes, ch.Nodes)
+	for _, a := range ch.Alternatives {
+		suppliers := make([]agents.AlternativeContract, len(a.Suppliers))
+		copy(suppliers, a.Suppliers)
+		out.Alternatives = append(out.Alternatives, agents.AlternativeSuppliers{
+			CustomerNodeIndex: a.CustomerNodeIndex,
+			ProductNodeIndex:  a.ProductNodeIndex,
+			Suppliers:         suppliers,
+		})
+	}
+	return out
+}
+
+// runSupplyChainStage2Overlays runs overlay queries (regulatory, market, decision_points) over parsed chains.
+// Anchors are extracted from chain nodes (org, market paths). Results: DependencyEdges (REGULATES, INFLUENCES).
+func (e *ScoutEngine) runSupplyChainStage2Overlays(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	frag *models.HorizonFragment,
+	chains []agents.SupplyChain,
+	overlayQueries []agents.SupplyChainOverlayQuery,
+) {
+	if job == nil || len(chains) == 0 || len(overlayQueries) == 0 {
+		return
+	}
+	// Extract anchors from chain nodes (org, market paths)
+	anchors := make(map[string]struct{})
+	for _, ch := range chains {
+		for _, n := range ch.Nodes {
+			cp := strings.TrimSpace(n.CanonicalPath)
+			if cp == "" {
+				continue
+			}
+			if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") || strings.HasPrefix(cp, "/market/") || strings.HasPrefix(cp, "/fac/") {
+				anchors[cp] = struct{}{}
+			}
+		}
+	}
+	anchorList := make([]string, 0, len(anchors))
+	for a := range anchors {
+		anchorList = append(anchorList, a)
+	}
+	for _, oq := range overlayQueries {
+		oqType := strings.TrimSpace(strings.ToLower(oq.Type))
+		oqAnchors := oq.Anchors
+		if len(oqAnchors) == 0 {
+			oqAnchors = anchorList
+		}
+		if len(oqAnchors) == 0 {
+			continue
+		}
+		switch oqType {
+		case "regulatory":
+			e.runStage2OverlayLLM(ctx, job, frag, "regulatory", oqAnchors, chains,
+				"Identify regulatory relationships: which gov/agency entities REGULATE these anchors (markets, orgs)? Return edges: sourceRef (regulator), targetRef (regulated), type=REGULATES, reason.")
+		case "market":
+			e.runStage2OverlayLLM(ctx, job, frag, "market", oqAnchors, chains,
+				"Identify market participation: which orgs PARTICIPATE_IN these markets? Return edges: sourceRef (org), targetRef (market), type=PARTICIPATES_IN, reason.")
+		case "decision_points":
+			e.runStage2OverlayLLM(ctx, job, frag, "decision_points", oqAnchors, chains,
+				"Identify decision points: who decides, which mechanisms apply? Return edges: sourceRef (org/gov), targetRef (market/org), type=REGULATES|INFLUENCES|IMPOSES_CONDITION, reason.")
+		default:
+			e.logLine(ctx, job, "info", fmt.Sprintf("[Stage2Overlay] unknown type=%q anchors=%d", oq.Type, len(oqAnchors)))
+		}
+	}
+	if job.State == nil {
+		job.State = make(map[string]interface{})
+	}
+	job.State["supplyChainStage2Overlays"] = "completed"
+}
+
+// extractChainNodePaths returns unique canonical paths from chain nodes (for prompt context).
+func extractChainNodePaths(chains []agents.SupplyChain) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, ch := range chains {
+		for _, n := range ch.Nodes {
+			cp := strings.TrimSpace(n.CanonicalPath)
+			if cp != "" && !strings.HasPrefix(cp, "/domain/") {
+				if _, ok := seen[cp]; !ok {
+					seen[cp] = struct{}{}
+					out = append(out, cp)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// runStage2OverlayLLM runs one overlay LLM call and persists DependencyEdges (REGULATES, INFLUENCES, PARTICIPATES_IN).
+func (e *ScoutEngine) runStage2OverlayLLM(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	frag *models.HorizonFragment,
+	overlayType string,
+	anchors []string,
+	chains []agents.SupplyChain,
+	instruction string,
+) {
+	if e.aiExecutor == nil || e.edgesRepo == nil || e.fragmentsRepo == nil {
+		e.logLine(ctx, job, "info", fmt.Sprintf("[Stage2Overlay] %s skipped (no aiExecutor/edgesRepo)", overlayType))
+		return
+	}
+	anchorsJSON, _ := json.Marshal(anchors)
+	anchorCtx := ""
+	if frag != nil && strings.TrimSpace(frag.CanonicalPath) != "" {
+		anchorCtx = fmt.Sprintf("\nSupply chain anchor: %s\n", strings.TrimSpace(frag.CanonicalPath))
+	}
+	chainNodes := extractChainNodePaths(chains)
+	chainCtx := ""
+	if len(chainNodes) > 0 {
+		chainCtx = fmt.Sprintf("\nSupply chain nodes (context): %s\n", strings.Join(chainNodes, ", "))
+	}
+	prompt := fmt.Sprintf(`%s%s%s
+
+Anchors (canonical paths): %s
+
+Return ONLY valid JSON: { "edges": [ { "sourceRef": "/org/... or /gov/...", "targetRef": "/org/... or /market/...", "type": "REGULATES|INFLUENCES|PARTICIPATES_IN|IMPOSES_CONDITION", "reason": "short evidence" } ] }
+Use canonical paths. type must be one of: REGULATES, INFLUENCES, PARTICIPATES_IN, IMPOSES_CONDITION.`, instruction, anchorCtx, chainCtx, string(anchorsJSON))
+	verifier := ai.NewSimpleJSONVerifier()
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeKnowledgeSynthesis,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       7,
+			MinContextWindow:         8000,
+			MaxOutputSize:            4000,
+		},
+		Verifier: verifier,
+	}
+	result, _, err := e.aiExecutor.ExecuteStructuredTaskFull(ctx, task)
+	if err != nil || result == nil {
+		e.logLine(ctx, job, "warn", fmt.Sprintf("[Stage2Overlay] %s LLM failed: %v", overlayType, err))
+		return
+	}
+	jsonData, _ := json.Marshal(result)
+	var parsed struct {
+		Edges []struct {
+			SourceRef string `json:"sourceRef"`
+			TargetRef string `json:"targetRef"`
+			Type      string `json:"type"`
+			Reason    string `json:"reason"`
+		} `json:"edges"`
+	}
+	if err := json.Unmarshal(jsonData, &parsed); err != nil {
+		e.logLine(ctx, job, "warn", fmt.Sprintf("[Stage2Overlay] %s parse failed: %v", overlayType, err))
+		return
+	}
+	created := 0
+	for _, ed := range parsed.Edges {
+		srcRef := strings.TrimSpace(ed.SourceRef)
+		tgtRef := strings.TrimSpace(ed.TargetRef)
+		typ := strings.TrimSpace(strings.ToUpper(ed.Type))
+		if srcRef == "" || tgtRef == "" || typ == "" {
+			continue
+		}
+		if typ != "REGULATES" && typ != "INFLUENCES" && typ != "PARTICIPATES_IN" && typ != "IMPOSES_CONDITION" {
+			continue
+		}
+		srcFrag, _ := e.fragmentsRepo.GetByCanonicalPath(ctx, srcRef)
+		tgtFrag, _ := e.fragmentsRepo.GetByCanonicalPath(ctx, tgtRef)
+		if srcFrag == nil || tgtFrag == nil || srcFrag.ID == "" || tgtFrag.ID == "" {
+			continue
+		}
+		edgeType := models.DependencyType(typ)
+		edge := &models.DependencyEdge{
+			TenantID:         "global",
+			SourceFragmentID: srcFrag.ID,
+			TargetFragmentID: tgtFrag.ID,
+			Type:             edgeType,
+			Properties:       models.EdgeProperties{Criticality: 0.6, Amplification: 1.0},
+			Provenance:       models.Provenance{Method: "scout_stage2_overlay", SourceIDs: []string{job.ID}},
+			Qualifiers:       map[string]interface{}{"overlay_type": overlayType, "reason": ed.Reason},
+		}
+		if err := edge.Validate(); err != nil {
+			continue
+		}
+		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", srcFrag.ID, tgtFrag.ID, edgeType); err == nil {
+			continue
+		}
+		if _, err := e.edgesRepo.Create(ctx, edge); err != nil {
+			continue
+		}
+		created++
+	}
+	e.logLine(ctx, job, "info", fmt.Sprintf("[Stage2Overlay] %s edges=%d", overlayType, created))
+}
+
 // processSupplyChains parses supply chain output from agents and persists fragments/edges.
 func (e *ScoutEngine) processSupplyChains(
 	ctx context.Context,
@@ -5598,7 +6492,11 @@ func (e *ScoutEngine) processSupplyChains(
 	}
 
 	parser := NewSupplyChainParser()
-	result, err := parser.ParseSupplyChains(chains, sourceFragment.CanonicalPath)
+	sourceCanonicalPath := ""
+	if sourceFragment != nil {
+		sourceCanonicalPath = strings.TrimSpace(sourceFragment.CanonicalPath)
+	}
+	result, err := parser.ParseSupplyChains(chains, sourceCanonicalPath)
 	if err != nil {
 		msg := fmt.Sprintf("[SupplyChainParse] failed to parse supplyChains: %v", err)
 		fmt.Printf("%s\n", msg)
@@ -6232,15 +7130,79 @@ func (e *ScoutEngine) processSupplyChains(
 		slFrag.Qualifiers = map[string]interface{}{
 			"fromSupplyChain": true,
 		}
+		if seg.FlowEdgeContract != nil {
+			q := map[string]interface{}{
+				"contractCompleteness": seg.FlowEdgeContract.ContractCompleteness,
+				"validationGaps":       seg.FlowEdgeContract.ValidationGaps,
+				"rawPayload":           seg.FlowEdgeContract.RawPayload,
+			}
+			if len(seg.FlowEdgeContract.ParseWarnings) > 0 {
+				q["parseWarnings"] = seg.FlowEdgeContract.ParseWarnings
+			}
+			if seg.FlowEdgeContract.Provenance != nil {
+				q["provenance"] = map[string]interface{}{
+					"method":     seg.FlowEdgeContract.Provenance.Method,
+					"source_ids": seg.FlowEdgeContract.Provenance.SourceIDs,
+				}
+			}
+			slFrag.Qualifiers["flow_edge_contract"] = q
+		}
 		slFrag.State = map[string]models.MetricValue{"confidence": {Value: seg.Confidence, Confidence: 0.8}}
+		if seg.State != nil {
+			for k, v := range seg.State {
+				slFrag.State[k] = v
+			}
+		}
 		if err := slFrag.Validate(); err != nil {
 			supplyLinksSkipped++
 			continue
 		}
-		// Dedup: SupplyLink canonicalPath is deterministic (tenant:supplier:product:customer).
-		// GetByCanonicalPath gives reliable lookup by unique key, unlike FindSupplyLinksByCustomer(limit 100).
-		if existing, _ := e.fragmentsRepo.GetByCanonicalPath(ctx, slFrag.CanonicalPath); existing != nil && strings.TrimSpace(existing.ID) != "" {
-			supplyLinksSkipped++
+		// Merge policy: keep existing data and add richer fields from new segment.
+		// Do not drop prior metrics just because a new observation has higher confidence on one field.
+		existing, _ := e.fragmentsRepo.GetByCanonicalPath(ctx, slFrag.CanonicalPath)
+		if existing != nil && strings.TrimSpace(existing.ID) != "" {
+			changed := false
+			if existing.State == nil {
+				existing.State = make(map[string]models.MetricValue)
+			}
+			if mergeSupplyLinkMetricState(existing.State, slFrag.State) {
+				changed = true
+			}
+			// Explicitly keep max confidence regardless of unit/value replacement policy.
+			existingConf := 0.0
+			if mv, ok := existing.State["confidence"]; ok {
+				existingConf = mv.Value
+			}
+			if seg.Confidence > existingConf {
+				existing.State["confidence"] = models.MetricValue{Value: seg.Confidence, Confidence: 0.8}
+				changed = true
+			}
+			mergedVia := mergeUniqueStrings(existing.TransportViaRefs, slFrag.TransportViaRefs)
+			if !slicesEqual(mergedVia, existing.TransportViaRefs) {
+				existing.TransportViaRefs = mergedVia
+				changed = true
+			}
+			mergedQualifiers := mergeSupplyLinkQualifiers(existing.Qualifiers, slFrag.Qualifiers)
+			if !equalInterfaceMaps(existing.Qualifiers, mergedQualifiers) {
+				existing.Qualifiers = mergedQualifiers
+				changed = true
+			}
+			mergedSources := mergeUniqueStrings(existing.Provenance.SourceIDs, slFrag.Provenance.SourceIDs)
+			if !slicesEqual(mergedSources, existing.Provenance.SourceIDs) {
+				existing.Provenance.SourceIDs = mergedSources
+				changed = true
+			}
+			if !changed {
+				supplyLinksSkipped++
+				continue
+			}
+			existing.UpdatedAt = time.Now().UTC()
+			existing.Metadata.LastUpdatedAt = time.Now().UTC()
+			if err := e.fragmentsRepo.Update(ctx, existing); err != nil {
+				supplyLinksSkipped++
+			} else {
+				supplyLinksCreated++
+			}
 			continue
 		}
 		if _, createErr := e.fragmentsRepo.Create(ctx, slFrag); createErr != nil {
@@ -6252,6 +7214,111 @@ func (e *ScoutEngine) processSupplyChains(
 
 	if supplyLinksCreated > 0 || supplyLinksSkipped > 0 {
 		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyLinkMaterialize] created=%d skipped=%d", supplyLinksCreated, supplyLinksSkipped))
+	}
+
+	// Materialize supply chain paths as MaterializedArtifact only in SupplyChain Plan mode.
+	// Keep tenant global and materialize per chain to avoid stitching unrelated chains.
+	if e.supplyChainPathBuilder != nil && len(chains) > 0 && job.State != nil && isSupplyChainPlanMode(job.State) {
+		maxDepth := parseStateInt(job.State["maxRecursionDepth"], 2)
+		if maxDepth <= 0 {
+			maxDepth = 6
+		}
+		tenantID := "global"
+		anchorPath := ""
+		if sourceFragment != nil {
+			anchorPath = strings.TrimSpace(sourceFragment.CanonicalPath)
+		}
+		criticPassed := false
+		if e.criticAgent != nil {
+			input := agents.CriticValidatorInput{
+				Fragment:     sourceFragment,
+				SupplyChains: chains,
+			}
+			if vr, err := e.criticAgent.CriticPipeline().Validate(ctx, input, []string{taxonomy.DomainModeSupplyChain}); err == nil && vr != nil && vr.IsValid && len(vr.MissingInfo) == 0 {
+				criticPassed = true
+			}
+		}
+		materializedCount := 0
+		for idx, chain := range chains {
+			singleParsed, perr := parser.ParseSupplyChains([]agents.SupplyChain{chain}, sourceCanonicalPath)
+			if perr != nil || singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
+				continue
+			}
+			segments := make([]pathbuilder.PathSegment, 0, len(singleParsed.SupplyLinkSegments))
+			for _, seg := range singleParsed.SupplyLinkSegments {
+				supplier := strings.TrimSpace(seg.SupplierRef)
+				product := strings.TrimSpace(seg.ProductRef)
+				customer := strings.TrimSpace(seg.CustomerRef)
+				if rp, ok := pathRewrites[supplier]; ok && rp != "" {
+					supplier = strings.TrimSpace(rp)
+				}
+				if rp, ok := pathRewrites[product]; ok && rp != "" {
+					product = strings.TrimSpace(rp)
+				}
+				if rp, ok := pathRewrites[customer]; ok && rp != "" {
+					customer = strings.TrimSpace(rp)
+				}
+				if supplier == "" || product == "" || customer == "" {
+					continue
+				}
+				var supFac, custFac *string
+				if seg.SupplierFacilityRef != "" {
+					sup := strings.TrimSpace(seg.SupplierFacilityRef)
+					if rp, ok := pathRewrites[sup]; ok && rp != "" {
+						sup = strings.TrimSpace(rp)
+					}
+					if sup != "" {
+						supFac = &sup
+					}
+				}
+				if seg.CustomerFacilityRef != "" {
+					cust := strings.TrimSpace(seg.CustomerFacilityRef)
+					if rp, ok := pathRewrites[cust]; ok && rp != "" {
+						cust = strings.TrimSpace(rp)
+					}
+					if cust != "" {
+						custFac = &cust
+					}
+				}
+				segments = append(segments, pathbuilder.PathSegment{
+					SupplierRef:         supplier,
+					ProductRef:          product,
+					CustomerRef:         customer,
+					SupplierFacilityRef: supFac,
+					CustomerFacilityRef: custFac,
+					TransportViaRefs:    seg.TransportViaRefs,
+					Confidence:          seg.Confidence,
+					TenantID:            "global",
+					IsTenantSpecific:    false,
+					Metrics:             seg.State,
+				})
+			}
+			if len(segments) == 0 {
+				continue
+			}
+			canonicalKey := buildSupplyChainArtifactCanonicalKey(job, anchorPath, idx, segments)
+			path := &pathbuilder.SupplyChainPath{
+				Segments:   segments,
+				Confidence: normalizeEdgeConfidence(chain.Confidence),
+				BuildMode:  "scout_parsed_plan",
+				MaxDepth:   maxDepth,
+			}
+			id, err := e.supplyChainPathBuilder.MaterializePath(ctx, path, tenantID, canonicalKey)
+			if err != nil {
+				e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] failed key=%s err=%v", canonicalKey, err))
+				continue
+			}
+			materializedCount++
+			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] artifact=%s chain=%d segments=%d", id, idx, len(segments)))
+			if criticPassed {
+				if updErr := e.supplyChainPathBuilder.UpdatePathStatus(ctx, tenantID, canonicalKey, "validated"); updErr != nil {
+					e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] PathStatus update failed key=%s err=%v", canonicalKey, updErr))
+				}
+			}
+		}
+		if materializedCount > 0 {
+			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] done artifacts=%d", materializedCount))
+		}
 	}
 
 	// Update chain context in job state for propagation to child jobs

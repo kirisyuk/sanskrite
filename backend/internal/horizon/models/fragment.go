@@ -735,6 +735,13 @@ func (f *HorizonFragment) GenerateVectorText() string {
 		}
 	}
 
+	legalName := ""
+	shortName := ""
+	if f.Identifiers != nil {
+		legalName = strings.TrimSpace(f.Identifiers["legalName"])
+		shortName = strings.TrimSpace(f.Identifiers["shortName"])
+	}
+
 	primaryLabel := ""
 	if name, ok := f.Labels["en"]; ok && strings.TrimSpace(name) != "" {
 		primaryLabel = strings.TrimSpace(name)
@@ -750,6 +757,28 @@ func (f *HorizonFragment) GenerateVectorText() string {
 	// Основная идентичность
 	if primaryLabel != "" {
 		add(primaryLabel)
+	}
+	identityParts := make([]string, 0, 6)
+	if primaryLabel != "" {
+		identityParts = append(identityParts, fmt.Sprintf("label=%s", primaryLabel))
+	}
+	if f.Type != "" {
+		identityParts = append(identityParts, fmt.Sprintf("type=%s", f.Type))
+	}
+	if cp := strings.TrimSpace(f.CanonicalPath); cp != "" {
+		identityParts = append(identityParts, fmt.Sprintf("canonicalPath=%s", cp))
+	}
+	if legalName != "" {
+		identityParts = append(identityParts, fmt.Sprintf("legalName=%s", legalName))
+	}
+	if shortName != "" {
+		identityParts = append(identityParts, fmt.Sprintf("shortName=%s", shortName))
+	}
+	if j := canonicalJurisdiction(f.CanonicalPath); j != "" {
+		identityParts = append(identityParts, fmt.Sprintf("jurisdiction=%s", j))
+	}
+	if len(identityParts) > 0 {
+		add("Identity envelope: " + strings.Join(identityParts, ", "))
 	}
 	if f.Description != "" {
 		add(f.Description)
@@ -771,6 +800,12 @@ func (f *HorizonFragment) GenerateVectorText() string {
 	}
 	if f.CanonicalPath != "" {
 		add("Canonical path: " + f.CanonicalPath)
+	}
+	if legalName != "" {
+		add("Legal name: " + legalName)
+	}
+	if shortName != "" {
+		add("Short name: " + shortName)
 	}
 
 	// Алиасы из labels
@@ -794,6 +829,42 @@ func (f *HorizonFragment) GenerateVectorText() string {
 		}
 	}
 
+	// Смысловой контекст (окружение): родительские/связанные узлы для лучшей идентификации.
+	contextPaths := make([]string, 0, 10)
+	if v := strings.TrimSpace(f.ParentPath); v != "" {
+		contextPaths = append(contextPaths, "parent="+v)
+	}
+	if v := strings.TrimSpace(f.ParentGovPath); v != "" {
+		contextPaths = append(contextPaths, "parentGov="+v)
+	}
+	if v := strings.TrimSpace(f.ParentMarketPath); v != "" {
+		contextPaths = append(contextPaths, "parentMarket="+v)
+	}
+	if v := strings.TrimSpace(f.AffiliatedOrgPath); v != "" {
+		contextPaths = append(contextPaths, "affiliatedOrg="+v)
+	}
+	if f.SupplierRef != nil && strings.TrimSpace(*f.SupplierRef) != "" {
+		contextPaths = append(contextPaths, "supplier="+strings.TrimSpace(*f.SupplierRef))
+	}
+	if f.CustomerRef != nil && strings.TrimSpace(*f.CustomerRef) != "" {
+		contextPaths = append(contextPaths, "customer="+strings.TrimSpace(*f.CustomerRef))
+	}
+	if f.ProductRef != nil && strings.TrimSpace(*f.ProductRef) != "" {
+		contextPaths = append(contextPaths, "product="+strings.TrimSpace(*f.ProductRef))
+	}
+	if f.SupplierFacilityRef != nil && strings.TrimSpace(*f.SupplierFacilityRef) != "" {
+		contextPaths = append(contextPaths, "supplierFacility="+strings.TrimSpace(*f.SupplierFacilityRef))
+	}
+	if f.CustomerFacilityRef != nil && strings.TrimSpace(*f.CustomerFacilityRef) != "" {
+		contextPaths = append(contextPaths, "customerFacility="+strings.TrimSpace(*f.CustomerFacilityRef))
+	}
+	if len(f.TransportViaRefs) > 0 {
+		contextPaths = append(contextPaths, "transportVia="+strings.Join(f.TransportViaRefs, ","))
+	}
+	if len(contextPaths) > 0 {
+		add("Neighborhood context: " + strings.Join(contextPaths, ", "))
+	}
+
 	// Иерархические пути (дублируются в разных форматах)
 	if f.EntityPath != "" {
 		pathParts := strings.Split(strings.Trim(f.EntityPath, "/"), "/")
@@ -812,6 +883,20 @@ func (f *HorizonFragment) GenerateVectorText() string {
 	if len(f.IndustryPaths) > 0 {
 		add("Industry paths: " + strings.Join(f.IndustryPaths, ", "))
 	}
+	if len(f.SpherePaths) > 0 {
+		add("Sphere paths: " + strings.Join(f.SpherePaths, ", "))
+	}
+	if len(f.IndexPaths) > 0 {
+		indexPaths := append([]string(nil), f.IndexPaths...)
+		sort.Strings(indexPaths)
+		const maxIndexPaths = 20
+		if len(indexPaths) > maxIndexPaths {
+			add("Index paths: " + strings.Join(indexPaths[:maxIndexPaths], ", "))
+			add(fmt.Sprintf("Index paths omitted: %d", len(indexPaths)-maxIndexPaths))
+		} else {
+			add("Index paths: " + strings.Join(indexPaths, ", "))
+		}
+	}
 
 	// Маркет-сегменты и нормализации
 	if len(f.MarketSegments) > 0 {
@@ -822,6 +907,27 @@ func (f *HorizonFragment) GenerateVectorText() string {
 	}
 	if f.OrgSize != "" {
 		add("Organization size: " + f.OrgSize)
+	}
+	if f.MarketDomain != "" {
+		add("Market domain: " + f.MarketDomain)
+	}
+	if f.MarketVertical != "" {
+		add("Market vertical: " + f.MarketVertical)
+	}
+	if len(f.MarketChannels) > 0 {
+		add("Market channels: " + strings.Join(f.MarketChannels, ", "))
+	}
+	if f.GovType != "" {
+		add("Government type: " + f.GovType)
+	}
+	if f.CommunityType != "" {
+		add("Community type: " + f.CommunityType)
+	}
+	if len(f.CommunityPlatforms) > 0 {
+		add("Community platforms: " + strings.Join(f.CommunityPlatforms, ", "))
+	}
+	if v := strings.TrimSpace(f.CommunityEstimatedSize); v != "" {
+		add("Community estimated size: " + v)
 	}
 
 	// Локация
@@ -927,14 +1033,28 @@ func (f *HorizonFragment) GenerateVectorText() string {
 			metricKeys = append(metricKeys, key)
 		}
 		sort.Strings(metricKeys)
-		for _, metricName := range metricKeys {
+		const maxMetrics = 40
+		limit := len(metricKeys)
+		if limit > maxMetrics {
+			limit = maxMetrics
+		}
+		for _, metricName := range metricKeys[:limit] {
 			metricValue := f.State[metricName]
 			metricNameHuman := strings.ReplaceAll(metricName, "_", " ")
 			line := fmt.Sprintf("Metric %s value %.4f", metricNameHuman, metricValue.Value)
 			if metricValue.Unit != nil && strings.TrimSpace(*metricValue.Unit) != "" {
 				line += " " + strings.TrimSpace(*metricValue.Unit)
 			}
+			if metricValue.Confidence > 0 {
+				line += fmt.Sprintf(" confidence %.2f", metricValue.Confidence)
+			}
+			if !metricValue.ObservedAt.IsZero() {
+				line += " observed " + metricValue.ObservedAt.UTC().Format("2006-01-02")
+			}
 			add(line)
+		}
+		if len(metricKeys) > maxMetrics {
+			add(fmt.Sprintf("Metrics omitted: %d", len(metricKeys)-maxMetrics))
 		}
 	}
 
@@ -999,4 +1119,17 @@ func (f *HorizonFragment) GenerateVectorText() string {
 	}
 
 	return strings.Join(parts, "\n")
+}
+
+func canonicalJurisdiction(canonicalPath string) string {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(canonicalPath), "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	switch parts[0] {
+	case "org", "gov", "program", "market", "community", "loc":
+		return strings.TrimSpace(parts[1])
+	default:
+		return ""
+	}
 }

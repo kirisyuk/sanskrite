@@ -404,6 +404,9 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		}
 		resp, err := e.planner.vertexSearchClient.Search(ctx, req)
 		if err == nil && resp != nil {
+			acceptVertexPath := func(candidate string) (string, bool) {
+				return e.acceptVertexCanonicalPath(ctx, rel, relType, candidate)
+			}
 			// Extract source jurisdiction for filtering
 			sourceJurisdiction := extractJurisdiction(strings.TrimSpace(rel.SourceCanonicalPath))
 
@@ -417,7 +420,9 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 						continue
 					}
 					if cp, ok := r.Document.StructData["canonicalPath"].(string); ok && strings.TrimSpace(cp) == pref {
-						return e.finalizeRelationCanonicalPath(ctx, rel, pref, relType), nil
+						if resolved, accepted := acceptVertexPath(cp); accepted {
+							return resolved, nil
+						}
 					}
 				}
 			}
@@ -432,7 +437,9 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 						if strings.HasPrefix(cp, "/loc/") {
 							parts := strings.Split(strings.Trim(cp, "/"), "/")
 							if len(parts) == 4 {
-								return e.finalizeRelationCanonicalPath(ctx, rel, cp, relType), nil
+								if resolved, accepted := acceptVertexPath(cp); accepted {
+									return resolved, nil
+								}
 							}
 						}
 					}
@@ -449,7 +456,9 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 						resultJurisdiction := extractJurisdiction(cp)
 						if resultJurisdiction == sourceJurisdiction {
 							fmt.Printf("%s Vertex hit with matching jurisdiction: %s (source=%s)\n", logPrefix, cp, sourceJurisdiction)
-							return e.finalizeRelationCanonicalPath(ctx, rel, cp, relType), nil
+							if resolved, accepted := acceptVertexPath(cp); accepted {
+								return resolved, nil
+							}
 						}
 					}
 				}
@@ -462,7 +471,9 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 						resultJurisdiction := extractJurisdiction(cp)
 						if resultJurisdiction == "" || resultJurisdiction == "global" {
 							fmt.Printf("%s Vertex hit with global jurisdiction: %s\n", logPrefix, cp)
-							return e.finalizeRelationCanonicalPath(ctx, rel, cp, relType), nil
+							if resolved, accepted := acceptVertexPath(cp); accepted {
+								return resolved, nil
+							}
 						}
 					}
 				}
@@ -474,7 +485,9 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 					continue
 				}
 				if cp, ok := r.Document.StructData["canonicalPath"].(string); ok && cp != "" && !strings.HasPrefix(cp, "/discovered/") {
-					return e.finalizeRelationCanonicalPath(ctx, rel, cp, relType), nil
+					if resolved, accepted := acceptVertexPath(cp); accepted {
+						return resolved, nil
+					}
 				}
 			}
 		}
@@ -623,6 +636,79 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		}
 	}
 	return e.finalizeRelationCanonicalPath(ctx, rel, out.CanonicalPath, relType), nil
+}
+
+func (e *ScoutEngine) acceptVertexCanonicalPath(
+	ctx context.Context,
+	rel agents.DiscoveredRelation,
+	relType models.FragmentType,
+	candidate string,
+) (string, bool) {
+	cp := strings.TrimSpace(candidate)
+	if cp == "" || strings.HasPrefix(cp, "/discovered/") {
+		return "", false
+	}
+	if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+		return "", false
+	}
+	if relType != "" && !canonicalPathMatchesType(cp, relType) {
+		return "", false
+	}
+	cp = e.finalizeRelationCanonicalPath(ctx, rel, cp, relType)
+	if cp == "" {
+		return "", false
+	}
+	if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
+		return "", false
+	}
+	if relType != "" && !canonicalPathMatchesType(cp, relType) {
+		return "", false
+	}
+	// Firestore is source of truth; stale Vertex rows must not win canonical resolution.
+	if e.fragmentsRepo != nil {
+		frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, cp)
+		if err != nil || frag == nil || strings.TrimSpace(frag.ID) == "" {
+			return "", false
+		}
+		if relType != "" && frag.Type != "" && frag.Type != relType {
+			if !(relType == models.FragmentTypeOrganization && strings.HasPrefix(cp, "/gov/")) {
+				return "", false
+			}
+		}
+		return strings.TrimSpace(frag.CanonicalPath), true
+	}
+	return cp, true
+}
+
+func canonicalPathMatchesType(canonicalPath string, relType models.FragmentType) bool {
+	cp := strings.TrimSpace(canonicalPath)
+	if cp == "" || relType == "" {
+		return true
+	}
+	switch relType {
+	case models.FragmentTypeOrganization:
+		return strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/")
+	case models.FragmentTypeFacility:
+		return strings.HasPrefix(cp, "/fac/")
+	case models.FragmentTypeProduct:
+		return strings.HasPrefix(cp, "/product/")
+	case models.FragmentTypeProgram:
+		return strings.HasPrefix(cp, "/program/")
+	case models.FragmentTypeMarket:
+		return strings.HasPrefix(cp, "/market/")
+	case models.FragmentTypeGeoRegion:
+		return strings.HasPrefix(cp, "/loc/")
+	case models.FragmentTypeEvent:
+		return strings.HasPrefix(cp, "/event/")
+	case models.FragmentTypePerson:
+		return strings.HasPrefix(cp, "/person/")
+	case models.FragmentTypeDeposit:
+		return strings.HasPrefix(cp, "/deposit/")
+	case models.FragmentTypeCommunity:
+		return strings.HasPrefix(cp, "/community/")
+	default:
+		return true
+	}
 }
 
 func (e *ScoutEngine) finalizeRelationCanonicalPath(ctx context.Context, rel agents.DiscoveredRelation, candidate string, relType models.FragmentType) string {

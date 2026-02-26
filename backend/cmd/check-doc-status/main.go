@@ -16,7 +16,7 @@ import (
 func main() {
 	projectID := flag.String("project", "", "GCP project ID")
 	docID := flag.String("doc", "", "CoreDoc ID to check")
-	datasetID := flag.String("dataset", "h1horizon_documents", "BigQuery dataset ID")
+	datasetID := flag.String("dataset", "h1horizon_488615_documents", "BigQuery dataset ID")
 	flag.Parse()
 
 	if *projectID == "" {

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Скрипт для конвертации документов из .txt в JSONL и импорта в Vertex AI Search
-# Использование: ./scripts/import-documents-to-vertex-search.sh [-p|--project h1horizon]
+# Использование: ./scripts/import-documents-to-vertex-search.sh [-p|--project h1horizon-488615]
 
-PROJECT="h1horizon"
+PROJECT="h1horizon-488615"
 DATA_STORE_ID="rag-documents-store"
 LOCATION="global"
 SOURCE_BUCKET="h1horizon-rag-documents"

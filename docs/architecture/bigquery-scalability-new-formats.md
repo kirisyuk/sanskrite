@@ -19,7 +19,7 @@ GCS Buckets (источник данных):
 ### BigQuery Object Tables (читают из GCS):
 
 ```
-BigQuery Dataset: h1horizon_documents
+BigQuery Dataset: h1horizon_488615_documents
 ├── documents_object_table (GCS: rag-documents/*.txt)
 ├── core_docs_object_table (GCS: core-docs/*)
 └── core_docs_json_table (GCS: core-docs/*.json)
@@ -48,8 +48,8 @@ BigQuery Dataset: h1horizon_documents
 
 ```sql
 -- Для Parquet файлов
-CREATE OR REPLACE EXTERNAL TABLE `h1horizon.h1horizon_documents.core_docs_parquet_table`
-WITH CONNECTION `h1horizon.us.gcs-connection`
+CREATE OR REPLACE EXTERNAL TABLE `h1horizon-488615.h1horizon_488615_documents.core_docs_parquet_table`
+WITH CONNECTION `h1horizon-488615.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
   uris = ['gs://sanskrite-core-docs/**/*.parquet'],
@@ -57,8 +57,8 @@ OPTIONS (
 )
 
 -- Для Avro файлов
-CREATE OR REPLACE EXTERNAL TABLE `h1horizon.h1horizon_documents.core_docs_avro_table`
-WITH CONNECTION `h1horizon.us.gcs-connection`
+CREATE OR REPLACE EXTERNAL TABLE `h1horizon-488615.h1horizon_488615_documents.core_docs_avro_table`
+WITH CONNECTION `h1horizon-488615.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
   uris = ['gs://sanskrite-core-docs/**/*.avro'],
@@ -66,8 +66,8 @@ OPTIONS (
 )
 
 -- Для Excel файлов (конвертируем в CSV или используем как бинарные)
-CREATE OR REPLACE EXTERNAL TABLE `h1horizon.h1horizon_documents.core_docs_excel_table`
-WITH CONNECTION `h1horizon.us.gcs-connection`
+CREATE OR REPLACE EXTERNAL TABLE `h1horizon-488615.h1horizon_488615_documents.core_docs_excel_table`
+WITH CONNECTION `h1horizon-488615.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
   uris = ['gs://sanskrite-core-docs/**/*.xlsx', 'gs://sanskrite-core-docs/**/*.xls']
@@ -151,8 +151,8 @@ gcsClient.UploadBytes(ctx, bucket, objectPath, parquetData, "application/parquet
 
 ```bash
 bq query --use_legacy_sql=false <<EOF
-CREATE OR REPLACE EXTERNAL TABLE `h1horizon.h1horizon_documents.core_docs_parquet_table`
-WITH CONNECTION `h1horizon.us.gcs-connection`
+CREATE OR REPLACE EXTERNAL TABLE `h1horizon-488615.h1horizon_488615_documents.core_docs_parquet_table`
+WITH CONNECTION `h1horizon-488615.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
   uris = ['gs://sanskrite-core-docs/**/*.parquet'],
@@ -165,7 +165,7 @@ EOF
 
 ```sql
 -- AI автоматически сгенерирует правильный SQL
-SELECT * FROM `h1horizon.h1horizon_documents.core_docs_parquet_table`
+SELECT * FROM `h1horizon-488615.h1horizon_488615_documents.core_docs_parquet_table`
 WHERE uri LIKE '%tenant123%'
 ```
 

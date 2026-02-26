@@ -466,8 +466,17 @@ setup_infrastructure() {
     local VERTEX_AI_SA="service-${PROJECT_NUMBER}@gcp-sa-aiplatform.iam.gserviceaccount.com"
     echo -e "${BLUE}[infra] Vertex AI service account:${NC} $VERTEX_AI_SA"
     
+    # Vertex AI SA (gcp-sa-aiplatform) is Google-managed and provisioned on first Vertex AI use.
+    # Try to provision it by calling Vertex AI API, then grant bucket access.
+    if ! gcloud iam service-accounts describe "$VERTEX_AI_SA" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      echo -e "${BLUE}[infra] Vertex AI SA not yet provisioned, triggering via API...${NC}"
+      curl -s -o /dev/null -H "Authorization: Bearer $(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null)" \
+        -H "X-Goog-User-Project: $PROJECT_ID" \
+        "https://us-central1-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/us-central1/models" 2>/dev/null || true
+      sleep 3
+    fi
+    
     # Grant Vertex AI service account access to RAG documents bucket
-    # Check if Vertex AI SA already has access
     local has_access=$(gcloud storage buckets get-iam-policy "gs://${rag_docs_bucket}" \
       --format="value(bindings[].members)" 2>/dev/null | grep -q "${VERTEX_AI_SA}" && echo "yes" || echo "no")
     
@@ -475,16 +484,21 @@ setup_infrastructure() {
       echo -e "${GREEN}[infra] Vertex AI SA already has access to bucket${NC}"
     else
       echo -e "${BLUE}[infra] Granting Vertex AI SA access to RAG documents bucket...${NC}"
-      # Try gcloud first (more reliable)
-      gcloud storage buckets add-iam-policy-binding "gs://${rag_docs_bucket}" \
+      if gcloud storage buckets add-iam-policy-binding "gs://${rag_docs_bucket}" \
         --member="serviceAccount:${VERTEX_AI_SA}" \
-        --role="roles/storage.objectViewer" 2>/dev/null || {
-        # Fallback to gsutil
-        gsutil iam ch "serviceAccount:${VERTEX_AI_SA}:objectViewer" "gs://${rag_docs_bucket}" || {
-          echo -e "${YELLOW}[infra] Warning: Failed to grant bucket access (may need manual setup)${NC}"
-          echo -e "${YELLOW}[infra] Run manually: gcloud storage buckets add-iam-policy-binding gs://${rag_docs_bucket} --member='serviceAccount:${VERTEX_AI_SA}' --role='roles/storage.objectViewer'${NC}"
-        }
-      }
+        --role="roles/storage.objectViewer" 2>/dev/null; then
+        echo -e "${GREEN}[infra] Vertex AI SA granted bucket access${NC}"
+      else
+        echo -e "${YELLOW}[infra] Vertex AI SA may not exist yet (provisioned on first Vertex AI use). Retrying in 30s...${NC}"
+        sleep 30
+        if gcloud storage buckets add-iam-policy-binding "gs://${rag_docs_bucket}" \
+          --member="serviceAccount:${VERTEX_AI_SA}" \
+          --role="roles/storage.objectViewer" 2>/dev/null; then
+          echo -e "${GREEN}[infra] Vertex AI SA granted bucket access (retry succeeded)${NC}"
+        else
+          echo -e "${YELLOW}[infra] Run after first Vertex AI use: ./scripts/ensure-vertex-ai-sa-bucket-access.sh${NC}"
+        fi
+      fi
     fi
   else
     echo -e "${YELLOW}[infra] Warning: Could not determine project number, skipping Vertex AI SA setup${NC}"
@@ -527,10 +541,10 @@ setup_infrastructure() {
     if [[ -z "$access_token" ]]; then
       echo -e "${YELLOW}[infra] Warning: Could not get access token, skipping Data Store check${NC}"
     else
-      # Try to get data stores via REST API (use global region for Discovery Engine)
+      # Try to get data stores via REST API (collections/default_collection path)
       local api_response=$(curl -s -H "Authorization: Bearer ${access_token}" \
         -H "X-Goog-User-Project: ${PROJECT_ID}" \
-        "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores" 2>/dev/null || echo "")
+        "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores" 2>/dev/null || echo "")
     
       # Check if response contains data stores
       if echo "$api_response" | grep -q "\"name\"" && ! echo "$api_response" | grep -q "\"error\""; then
@@ -584,13 +598,13 @@ except:
       local access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || echo "")
       if [[ -z "$access_token" ]]; then
         echo -e "${YELLOW}[infra] Cannot create Data Store: access token unavailable${NC}"
-        echo -e "${YELLOW}[infra] Create manually: https://console.cloud.google.com/gen-app-builder/data-stores${NC}"
+        echo -e "${YELLOW}[infra] Or run: ./scripts/create-vertex-search-datastore.sh${NC}"
       else
-        # Create Data Store via REST API
+        # Create Data Store via REST API (collections/default_collection path)
         local create_response=$(curl -X POST -s -H "Authorization: Bearer ${access_token}" \
           -H "X-Goog-User-Project: ${PROJECT_ID}" \
           -H "Content-Type: application/json" \
-          "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores?dataStoreId=${datastore_id_value}" \
+          "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores?dataStoreId=${datastore_id_value}" \
           -d "{
             \"displayName\": \"${datastore_display_name}\",
             \"industryVertical\": \"GENERIC\",
@@ -604,7 +618,7 @@ except:
         else
           echo -e "${YELLOW}[infra] Failed to create Data Store via REST API:${NC}"
           echo "$create_response" | grep -o '"message":"[^"]*"' | head -1 | sed 's/"message":"\(.*\)"/\1/' || echo "Unknown error"
-          echo -e "${YELLOW}[infra] Create manually: https://console.cloud.google.com/gen-app-builder/data-stores${NC}"
+          echo -e "${YELLOW}[infra] Or run: ./scripts/create-vertex-search-datastore.sh${NC}"
         fi
       fi
     fi
@@ -1192,7 +1206,8 @@ except:
         fi
         echo -e "${GREEN}[infra] ✓${NC} Artifact scheduler job ensured (runs hourly)"
 
-        # 5c. Subscription billing job (daily billing cycle)
+        # 5c. Subscription billing job (daily billing cycle) — skip when SKIP_SUBSCRIPTION_BILLING_JOB=1 (e.g. before billing enabled)
+        if [[ "${SKIP_SUBSCRIPTION_BILLING_JOB:-0}" != "1" ]]; then
         JOB_NAME="subscription-billing-daily"
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http "$JOB_NAME" \
@@ -1216,6 +1231,9 @@ except:
             --quiet || true
         fi
         echo -e "${GREEN}[infra] ✓${NC} Subscription billing scheduler job ensured (runs daily at 02:00 UTC)"
+        else
+          echo -e "${YELLOW}[infra] Skipping subscription-billing-daily job (SKIP_SUBSCRIPTION_BILLING_JOB=1)${NC}"
+        fi
 
         # 5d. Horizon Watchdog job (optional; enabled via --horizon-watchdog)
         if [[ "${TARGET_HORIZON_WATCHDOG}" -eq 1 ]]; then
@@ -1357,7 +1375,7 @@ deploy_api() {
     local ds_list
     ds_list=$(curl -s -H "Authorization: Bearer ${access_token}" \
       -H "X-Goog-User-Project: ${PROJECT_ID}" \
-      "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores" 2>/dev/null || echo "")
+      "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores" 2>/dev/null || echo "")
     if echo "$ds_list" | grep -q "dataStores/${horizon_fragments_datastore}\""; then
       echo -e "${GREEN}[api] Horizon fragments Data Store exists:${NC} ${horizon_fragments_datastore}"
     else
@@ -1366,7 +1384,7 @@ deploy_api() {
         -H "Authorization: Bearer ${access_token}" \
         -H "X-Goog-User-Project: ${PROJECT_ID}" \
         -H "Content-Type: application/json" \
-        "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores?dataStoreId=${horizon_fragments_datastore}" \
+        "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores?dataStoreId=${horizon_fragments_datastore}" \
         -d "{
           \"displayName\": \"Horizon Fragments Store\",
           \"industryVertical\": \"GENERIC\",
@@ -1433,8 +1451,18 @@ deploy_api() {
   (cd "$API_DIR" && rm -f horizon_* check_* 2>/dev/null || true)
 
   echo -e "${BLUE}[api] Building container image (Artifact Registry)...${NC}"
+  local api_repo="cloud-run-source-deploy"
+  if ! gcloud artifacts repositories describe "$api_repo" --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${YELLOW}[api] Artifact Registry repo '${api_repo}' not found, creating...${NC}"
+    gcloud artifacts repositories create "$api_repo" \
+      --repository-format=docker \
+      --location="$REGION" \
+      --project="$PROJECT_ID" \
+      --description="Cloud Run source deploy images" \
+      --quiet
+  fi
   local service="h1horizon-api"
-  local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"
+  local image="us-central1-docker.pkg.dev/$PROJECT_ID/$api_repo/$service:$(date +%s)"
 
   # PayPal secrets (optional - PayPal integration will be disabled if not set)
   local paypal_secrets="GEMINI_API_KEY=gemini_api_key:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest,TAVILY_API_KEY=tavily_api_key:latest,ADMIN_JOB_TOKEN=${SECRET_ADMIN_JOB_TOKEN}:latest"

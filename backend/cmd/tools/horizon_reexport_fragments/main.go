@@ -26,7 +26,7 @@ import (
 
 func main() {
 	var (
-		projectID       = flag.String("project", getenvDefault("GCP_PROJECT", "h1horizon"), "GCP project id")
+		projectID       = flag.String("project", getenvDefault("GCP_PROJECT", "h1horizon-488615"), "GCP project id")
 		bucket          = flag.String("bucket", "", "GCS bucket for horizon fragments (default: ${PROJECT_ID}-horizon-fragments)")
 		tenantID        = flag.String("tenant", "global", "TenantID for Horizon fragments (normally 'global')")
 		limit           = flag.Int("limit", 0, "Max number of fragments to export (0 = no limit)")

@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // SourcesHandler manages project–source links and data sources
@@ -274,10 +276,14 @@ func (h *SourcesHandler) CreateSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Kind        string               `json:"kind"` // rss, telegram_channel, web, horizon_monitor_feed
-		DisplayName string               `json:"displayName"`
-		Details     models.SourceDetails `json:"details"`
-		Status      string               `json:"status"` // active, paused, completed
+		Kind                      string               `json:"kind"` // rss, telegram_channel, web, horizon_monitor_feed
+		DisplayName               string               `json:"displayName"`
+		Details                   models.SourceDetails `json:"details"`
+		Status                    string               `json:"status"` // active, paused, completed
+		SourceCategoryPaths       []string             `json:"sourceCategoryPaths,omitempty"`
+		PrimarySourceCategoryPath *string              `json:"primarySourceCategoryPath,omitempty"`
+		SourceGeoFacets           []string             `json:"sourceGeoFacets,omitempty"`
+		SourceFormatFacets        []string             `json:"sourceFormatFacets,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
@@ -339,21 +345,40 @@ func (h *SourcesHandler) CreateSource(w http.ResponseWriter, r *http.Request) {
 			displayName = req.Kind + " source"
 		}
 	}
+	sourceCategoryPaths, primarySourceCategoryPath, categoryErr := normalizeSourceCategoryAssignment(req.SourceCategoryPaths, req.PrimarySourceCategoryPath)
+	if categoryErr != nil {
+		WriteBadRequest(w, "INVALID_SOURCE_CATEGORIES", categoryErr.Error()+" Allowed categories: "+strings.Join(taxonomy.AllowedSourceCategories(), ", "))
+		return
+	}
+	sourceGeoFacets, geoErr := normalizeSourceGeoFacetAssignment(req.SourceGeoFacets)
+	if geoErr != nil {
+		WriteBadRequest(w, "INVALID_SOURCE_GEO_FACETS", geoErr.Error()+" Allowed geo facets: ISO2 + global/int + common blocs/orgs (eu, asean, brics, nato, un, g7, g20)")
+		return
+	}
+	sourceFormatFacets, formatErr := normalizeSourceFormatFacetAssignment(req.SourceFormatFacets)
+	if formatErr != nil {
+		WriteBadRequest(w, "INVALID_SOURCE_FORMAT_FACETS", formatErr.Error()+" Allowed formats: "+strings.Join(taxonomy.AllowedSourceFormatFacets(), ", "))
+		return
+	}
 
 	now := time.Now().UTC()
 	ds := &models.DataSource{
-		TenantID:    auth.TenantID, // Will be cleared for public sources in Create()
-		DisplayName: displayName,
-		Kind:        req.Kind,
-		Status:      status,
-		Details:     req.Details,
-		OwnerUserID: auth.UID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		FirstSeen:   now,
-		LastSeen:    now,
-		ErrorCount:  0,
-		TrustLevel:  0.5, // Default trust level
+		TenantID:                  auth.TenantID, // Will be cleared for public sources in Create()
+		DisplayName:               displayName,
+		Kind:                      req.Kind,
+		Status:                    status,
+		Details:                   req.Details,
+		SourceCategoryPaths:       sourceCategoryPaths,
+		PrimarySourceCategoryPath: primarySourceCategoryPath,
+		SourceGeoFacets:           sourceGeoFacets,
+		SourceFormatFacets:        sourceFormatFacets,
+		OwnerUserID:               auth.UID,
+		CreatedAt:                 now,
+		UpdatedAt:                 now,
+		FirstSeen:                 now,
+		LastSeen:                  now,
+		ErrorCount:                0,
+		TrustLevel:                0.5, // Default trust level
 	}
 
 	id, err := h.ds.Create(r.Context(), ds)
@@ -423,9 +448,13 @@ func (h *SourcesHandler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		DisplayName *string               `json:"displayName,omitempty"`
-		Details     *models.SourceDetails `json:"details,omitempty"`
-		Status      *string               `json:"status,omitempty"`
+		DisplayName               *string               `json:"displayName,omitempty"`
+		Details                   *models.SourceDetails `json:"details,omitempty"`
+		Status                    *string               `json:"status,omitempty"`
+		SourceCategoryPaths       *[]string             `json:"sourceCategoryPaths,omitempty"`
+		PrimarySourceCategoryPath *string               `json:"primarySourceCategoryPath,omitempty"`
+		SourceGeoFacets           *[]string             `json:"sourceGeoFacets,omitempty"`
+		SourceFormatFacets        *[]string             `json:"sourceFormatFacets,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteBadRequest(w, "INVALID_JSON", "Failed to parse request body")
@@ -445,6 +474,33 @@ func (h *SourcesHandler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 			ds.Status = status
 		}
 	}
+	categoryPaths, primaryCategory := resolveSourceCategoryUpdate(
+		ds.SourceCategoryPaths,
+		ds.PrimarySourceCategoryPath,
+		req.SourceCategoryPaths,
+		req.PrimarySourceCategoryPath,
+	)
+	normalizedCategories, normalizedPrimary, categoryErr := normalizeSourceCategoryAssignment(categoryPaths, primaryCategory)
+	if categoryErr != nil {
+		WriteBadRequest(w, "INVALID_SOURCE_CATEGORIES", categoryErr.Error()+" Allowed categories: "+strings.Join(taxonomy.AllowedSourceCategories(), ", "))
+		return
+	}
+	ds.SourceCategoryPaths = normalizedCategories
+	ds.PrimarySourceCategoryPath = normalizedPrimary
+	geoFacets := resolveFacetArrayUpdate(ds.SourceGeoFacets, req.SourceGeoFacets)
+	normalizedGeoFacets, geoErr := normalizeSourceGeoFacetAssignment(geoFacets)
+	if geoErr != nil {
+		WriteBadRequest(w, "INVALID_SOURCE_GEO_FACETS", geoErr.Error()+" Allowed geo facets: ISO2 + global/int + common blocs/orgs (eu, asean, brics, nato, un, g7, g20)")
+		return
+	}
+	ds.SourceGeoFacets = normalizedGeoFacets
+	formatFacets := resolveFacetArrayUpdate(ds.SourceFormatFacets, req.SourceFormatFacets)
+	normalizedFormatFacets, formatErr := normalizeSourceFormatFacetAssignment(formatFacets)
+	if formatErr != nil {
+		WriteBadRequest(w, "INVALID_SOURCE_FORMAT_FACETS", formatErr.Error()+" Allowed formats: "+strings.Join(taxonomy.AllowedSourceFormatFacets(), ", "))
+		return
+	}
+	ds.SourceFormatFacets = normalizedFormatFacets
 
 	if err := h.ds.Upsert(r.Context(), ds); err != nil {
 		h.logger.Printf("Failed to update source: %v", err)
@@ -901,4 +957,142 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+const maxSourceCategoryPathsPerSource = 8
+const maxSourceGeoFacetsPerSource = 16
+const maxSourceFormatFacetsPerSource = 8
+
+func resolveSourceCategoryUpdate(existingPaths []string, existingPrimary *string, reqPaths *[]string, reqPrimary *string) ([]string, *string) {
+	categoryPaths := existingPaths
+	primaryCategory := existingPrimary
+
+	// If paths are explicitly provided, treat them as a full replacement and
+	// recalculate primary unless a new primary is explicitly provided as well.
+	if reqPaths != nil {
+		categoryPaths = *reqPaths
+		primaryCategory = nil
+	}
+
+	if reqPrimary != nil {
+		v := strings.TrimSpace(*reqPrimary)
+		if v == "" {
+			primaryCategory = nil
+		} else {
+			primaryCategory = &v
+		}
+	}
+
+	return categoryPaths, primaryCategory
+}
+
+func resolveFacetArrayUpdate(existing []string, req *[]string) []string {
+	if req == nil {
+		return existing
+	}
+	return *req
+}
+
+func normalizeSourceCategoryAssignment(paths []string, primary *string) ([]string, *string, error) {
+	seen := map[string]struct{}{}
+	normalized := make([]string, 0, len(paths))
+	for _, raw := range paths {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		p, ok := taxonomy.NormalizeSourceCategoryPath(raw)
+		if !ok {
+			return nil, nil, fmt.Errorf("invalid sourceCategoryPath %q (expected /source/{category}/{subcategory})", raw)
+		}
+		if _, exists := seen[p]; exists {
+			continue
+		}
+		seen[p] = struct{}{}
+		normalized = append(normalized, p)
+	}
+	var normalizedPrimary *string
+	if primary != nil {
+		rawPrimary := strings.TrimSpace(*primary)
+		if rawPrimary != "" {
+			p, ok := taxonomy.NormalizeSourceCategoryPath(rawPrimary)
+			if !ok {
+				return nil, nil, fmt.Errorf("invalid primarySourceCategoryPath %q (expected /source/{category}/{subcategory})", rawPrimary)
+			}
+			normalizedPrimary = &p
+			if _, exists := seen[p]; !exists {
+				seen[p] = struct{}{}
+				normalized = append([]string{p}, normalized...)
+			} else {
+				// Keep primary first for deterministic ranking.
+				out := make([]string, 0, len(normalized))
+				out = append(out, p)
+				for _, v := range normalized {
+					if v != p {
+						out = append(out, v)
+					}
+				}
+				normalized = out
+			}
+		}
+	}
+	if len(normalized) > maxSourceCategoryPathsPerSource {
+		return nil, nil, fmt.Errorf("too many sourceCategoryPaths (%d > %d)", len(normalized), maxSourceCategoryPathsPerSource)
+	}
+	if normalizedPrimary == nil && len(normalized) > 0 {
+		v := normalized[0]
+		normalizedPrimary = &v
+	}
+	if len(normalized) == 0 {
+		normalizedPrimary = nil
+	}
+	return normalized, normalizedPrimary, nil
+}
+
+func normalizeSourceGeoFacetAssignment(values []string) ([]string, error) {
+	seen := map[string]struct{}{}
+	normalized := make([]string, 0, len(values))
+	for _, raw := range values {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		v, ok := taxonomy.NormalizeSourceGeoFacet(raw)
+		if !ok {
+			return nil, fmt.Errorf("invalid sourceGeoFacet %q (expected ISO2 or known geo token)", raw)
+		}
+		if _, exists := seen[v]; exists {
+			continue
+		}
+		seen[v] = struct{}{}
+		normalized = append(normalized, v)
+	}
+	if len(normalized) > maxSourceGeoFacetsPerSource {
+		return nil, fmt.Errorf("too many sourceGeoFacets (%d > %d)", len(normalized), maxSourceGeoFacetsPerSource)
+	}
+	return normalized, nil
+}
+
+func normalizeSourceFormatFacetAssignment(values []string) ([]string, error) {
+	seen := map[string]struct{}{}
+	normalized := make([]string, 0, len(values))
+	for _, raw := range values {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		v, ok := taxonomy.NormalizeSourceFormatFacet(raw)
+		if !ok {
+			return nil, fmt.Errorf("invalid sourceFormatFacet %q", raw)
+		}
+		if _, exists := seen[v]; exists {
+			continue
+		}
+		seen[v] = struct{}{}
+		normalized = append(normalized, v)
+	}
+	if len(normalized) > maxSourceFormatFacetsPerSource {
+		return nil, fmt.Errorf("too many sourceFormatFacets (%d > %d)", len(normalized), maxSourceFormatFacetsPerSource)
+	}
+	return normalized, nil
 }

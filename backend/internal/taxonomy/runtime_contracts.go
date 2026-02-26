@@ -323,9 +323,12 @@ var builtInServiceSynonyms = map[string]string{
 }
 
 var builtInAllowedMetricUnits = setOf(
-	"usd", "eur", "rub", "units", "units_per_day", "days", "hours", "ratio", "index_point", "code",
+	"usd", "eur", "rub", "units", "units_per_day", "units_per_year", "days", "hours", "ratio", "index_point", "code",
 	"percent", "years", "count",
 	"bbl", "mbbl", "mmbbl", "bcf", "tcf", "mcf", "boe", "bpd", "mbpd", "mcf_per_day", "mmcf_per_day",
 	"metric_tons", "kt", "mt", "tons", "oz", "moz", "kg", "g", "lbs", "carats",
 	"metric_tons_per_year", "oz_per_year", "kt_per_year",
+	// Supply chain / energy / batteries
+	"gwh", "mwh", "kwh", "gwh_per_year", "mwh_per_year", "kwh_per_year",
+	"cells",
 )

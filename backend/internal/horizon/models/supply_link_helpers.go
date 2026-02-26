@@ -110,10 +110,10 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 	if !strings.HasPrefix(*f.ProductRef, "/product/") {
 		return fmt.Errorf("productRef must be a product canonical path (starts with /product/)")
 	}
-	// Validate supplierRef if present
+	// Validate supplierRef if present (org, fac, or deposit for extraction layer)
 	if f.SupplierRef != nil && strings.TrimSpace(*f.SupplierRef) != "" {
-		if !strings.HasPrefix(*f.SupplierRef, "/org/") && !strings.HasPrefix(*f.SupplierRef, "/fac/") {
-			return fmt.Errorf("supplierRef must be an organization or facility canonical path (starts with /org/ or /fac/)")
+		if !strings.HasPrefix(*f.SupplierRef, "/org/") && !strings.HasPrefix(*f.SupplierRef, "/fac/") && !strings.HasPrefix(*f.SupplierRef, "/deposit/") {
+			return fmt.Errorf("supplierRef must be an organization, facility, or deposit canonical path (starts with /org/, /fac/, or /deposit/)")
 		}
 	}
 	// Validate customerRef if present

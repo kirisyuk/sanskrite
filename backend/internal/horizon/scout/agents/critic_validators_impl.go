@@ -2,6 +2,11 @@ package agents
 
 import (
 	"context"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -33,7 +38,261 @@ func (v *SupplyChainValidator) Validate(ctx context.Context, input CriticValidat
 		return nil, nil
 	}
 	prompt := v.agent.buildSupplyChainValidationPrompt(input)
-	return v.agent.runValidationPrompt(ctx, prompt)
+	result, err := v.agent.runValidationPrompt(ctx, prompt)
+	if err != nil || result == nil {
+		return result, err
+	}
+	// Deterministic invariant checks: time overlap, unit norm, flow conservation, allocation
+	invariantGaps := checkSupplyChainInvariants(input.SupplyChains)
+	if len(invariantGaps) > 0 {
+		if result.MissingInfo == nil {
+			result.MissingInfo = []string{}
+		}
+		result.MissingInfo = append(result.MissingInfo, invariantGaps...)
+		result.IsValid = false
+		if result.Confidence > 0.5 {
+			result.Confidence = 0.5
+		}
+	}
+	return result, nil
+}
+
+// checkSupplyChainInvariants runs deterministic checks: time overlap, unit normalization, flow conservation, allocation consistency (plan 8.1).
+// Returns missingInfo items for failed invariants.
+func checkSupplyChainInvariants(chains []SupplyChain) []string {
+	var gaps []string
+	for _, ch := range chains {
+		// Time overlap: adjacent segment metrics should have overlapping periods (plan 8.1)
+		for i := 0; i < len(ch.SegmentMetrics)-1; i++ {
+			m1, m2 := ch.SegmentMetrics[i], ch.SegmentMetrics[i+1]
+			if !segmentPeriodsOverlap(&m1, &m2) {
+				gaps = append(gaps, "supply_chain_invariant: adjacent segment periods do not overlap")
+			}
+		}
+		// Unit normalization: detect incompatible unit families (not raw unit-token variety).
+		seenFamilies := make(map[string]struct{})
+		for _, m := range ch.SegmentMetrics {
+			if m.Volume != nil && m.Volume.Unit != "" {
+				if fam := volumeUnitFamily(m.Volume.Unit); fam != "" {
+					seenFamilies[fam] = struct{}{}
+				}
+			}
+		}
+		if len(seenFamilies) > 2 {
+			gaps = append(gaps, "supply_chain_invariant: unit mix in chain may violate flow conservation")
+		}
+		// Flow conservation: mass/energy balance — sum in ≈ sum out (with tolerance)
+		if flowGap := checkFlowConservation(ch); flowGap != "" {
+			gaps = append(gaps, flowGap)
+		}
+		// Allocation: shares for same customer should sum to ~100%
+		if allocGap := checkAllocationConsistency(ch); allocGap != "" {
+			gaps = append(gaps, allocGap)
+		}
+	}
+	return gaps
+}
+
+// segmentPeriodsOverlap returns true if m1 and m2 have overlapping time periods, or if we cannot determine (fail-open).
+// Supports Period ("2023", "2023-Q1"), Start/End (ISO8601).
+func segmentPeriodsOverlap(m1, m2 *SegmentMetrics) bool {
+	s1, e1 := segmentBounds(m1)
+	s2, e2 := segmentBounds(m2)
+	if s1 == nil || e1 == nil || s2 == nil || e2 == nil {
+		return true // fail-open: cannot determine, assume OK
+	}
+	// Overlap: start1 <= end2 && start2 <= end1
+	return !s1.After(*e2) && !s2.After(*e1)
+}
+
+// segmentBounds returns (start, end) for a SegmentMetrics. Returns (nil, nil) if cannot parse.
+var periodYearRe = regexp.MustCompile(`^(\d{4})$`)
+var periodQuarterRe = regexp.MustCompile(`^(\d{4})-Q([1-4])$`)
+
+func segmentBounds(m *SegmentMetrics) (*time.Time, *time.Time) {
+	if m == nil {
+		return nil, nil
+	}
+	// Prefer Start/End if both present
+	if m.Start != "" && m.End != "" {
+		for _, layout := range []string{time.RFC3339, "2006-01-02", "2006-01"} {
+			s, err1 := time.Parse(layout, m.Start)
+			e, err2 := time.Parse(layout, m.End)
+			if err1 == nil && err2 == nil {
+				return &s, &e
+			}
+		}
+	}
+	// Parse Period: "2023", "2023-Q1"
+	if m.Period != "" {
+		if sub := periodYearRe.FindStringSubmatch(m.Period); len(sub) == 2 {
+			y, _ := strconv.Atoi(sub[1])
+			s := time.Date(y, 1, 1, 0, 0, 0, 0, time.UTC)
+			e := time.Date(y, 12, 31, 23, 59, 59, 999999999, time.UTC)
+			return &s, &e
+		}
+		if sub := periodQuarterRe.FindStringSubmatch(m.Period); len(sub) == 3 {
+			y, _ := strconv.Atoi(sub[1])
+			q, _ := strconv.Atoi(sub[2])
+			monthStart := (q-1)*3 + 1
+			monthEnd := q * 3
+			s := time.Date(y, time.Month(monthStart), 1, 0, 0, 0, 0, time.UTC)
+			e := time.Date(y, time.Month(monthEnd), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, -1)
+			return &s, &e
+		}
+	}
+	return nil, nil
+}
+
+// checkFlowConservation: for nodes with both in/out edges, sum(volume in) ≈ sum(volume out).
+func checkFlowConservation(ch SupplyChain) string {
+	if len(ch.Nodes) < 3 || len(ch.SegmentMetrics) == 0 {
+		return ""
+	}
+	// Build node index -> unit family -> total volume in/out (normalized to family base units).
+	volIn := make(map[int]map[string]float64)
+	volOut := make(map[int]map[string]float64)
+	add := func(dst map[int]map[string]float64, nodeIdx int, family string, value float64) {
+		if _, ok := dst[nodeIdx]; !ok {
+			dst[nodeIdx] = make(map[string]float64)
+		}
+		dst[nodeIdx][family] += value
+	}
+	for _, m := range ch.SegmentMetrics {
+		if m.Volume == nil {
+			continue
+		}
+		family, normalized, ok := normalizeVolumeToFamilyBase(m.Volume.Value, m.Volume.Unit)
+		if !ok || normalized <= 0 {
+			continue
+		}
+		add(volOut, m.FromNodeIndex, family, normalized)
+		add(volIn, m.ToNodeIndex, family, normalized)
+	}
+	for nodeIdx, inByFamily := range volIn {
+		outByFamily, ok := volOut[nodeIdx]
+		if !ok {
+			continue
+		}
+		for family, in := range inByFamily {
+			out := outByFamily[family]
+			if out <= 0 {
+				continue
+			}
+			ratio := in / out
+			if ratio < 0.5 || ratio > 2.0 {
+				return fmt.Sprintf("supply_chain_invariant: flow conservation violated for unit_family=%s (sum in / sum out ratio out of 0.5–2.0)", family)
+			}
+		}
+	}
+	return ""
+}
+
+// checkAllocationConsistency: shares for same customer (productNodeIndex) should sum to ~100%.
+func checkAllocationConsistency(ch SupplyChain) string {
+	if len(ch.SegmentMetrics) == 0 {
+		return ""
+	}
+	type shareGroup struct {
+		sumPercent float64
+		count      int
+		hasUnknown bool
+	}
+	// Group by (ToNodeIndex, ProductIndex) — same customer receiving same product from multiple suppliers.
+	shareByCustomerProduct := make(map[string]shareGroup)
+	for _, m := range ch.SegmentMetrics {
+		if m.Share == nil {
+			continue
+		}
+		unit := taxonomy.NormalizeSupplyChainMetricUnit(m.Share.Unit, false)
+		v := m.Share.Value
+		percentValue := 0.0
+		switch unit {
+		case "ratio":
+			percentValue = v * 100.0
+		case "percent":
+			percentValue = v
+		case "":
+			// Best-effort: infer from value range when unit omitted.
+			if v >= 0 && v <= 1 {
+				percentValue = v * 100.0
+			} else {
+				percentValue = v
+			}
+		default:
+			g := shareByCustomerProduct[fmt.Sprintf("%d-%d", m.ToNodeIndex, m.ProductIndex)]
+			g.hasUnknown = true
+			shareByCustomerProduct[fmt.Sprintf("%d-%d", m.ToNodeIndex, m.ProductIndex)] = g
+			continue
+		}
+		key := fmt.Sprintf("%d-%d", m.ToNodeIndex, m.ProductIndex)
+		g := shareByCustomerProduct[key]
+		g.sumPercent += percentValue
+		g.count++
+		shareByCustomerProduct[key] = g
+	}
+	for key, g := range shareByCustomerProduct {
+		if g.hasUnknown || g.count < 2 {
+			continue
+		}
+		sum := g.sumPercent
+		if sum < 80 || sum > 120 {
+			_ = key
+			return "supply_chain_invariant: allocation shares for same customer/product should sum to ~100%"
+		}
+	}
+	return ""
+}
+
+func normalizeVolumeToFamilyBase(value float64, unit string) (family string, normalized float64, ok bool) {
+	if value <= 0 {
+		return "", 0, false
+	}
+	u := taxonomy.NormalizeSupplyChainMetricUnit(strings.TrimSpace(unit), false)
+	switch u {
+	case "gwh_per_year":
+		return "energy", value, true
+	case "mwh_per_year":
+		return "energy", value * 0.001, true
+	case "kwh_per_year":
+		return "energy", value * 0.000001, true
+	case "metric_tons_per_year":
+		return "mass", value, true
+	case "kt_per_year":
+		return "mass", value * 1000.0, true
+	case "oz_per_year":
+		return "mass", value * 0.000028349523125, true
+	case "bpd":
+		return "liquid", value, true
+	case "mbpd":
+		return "liquid", value * 1_000_000.0, true
+	case "mcf_per_day":
+		return "gas", value, true
+	case "mmcf_per_day":
+		return "gas", value * 1_000_000.0, true
+	case "units_per_year", "cells":
+		return "units", value, true
+	default:
+		return "", 0, false
+	}
+}
+
+func volumeUnitFamily(unit string) string {
+	u := taxonomy.NormalizeSupplyChainMetricUnit(strings.TrimSpace(unit), false)
+	switch u {
+	case "gwh_per_year", "mwh_per_year", "kwh_per_year":
+		return "energy"
+	case "metric_tons_per_year", "kt_per_year", "oz_per_year":
+		return "mass"
+	case "bpd", "mbpd":
+		return "liquid"
+	case "mcf_per_day", "mmcf_per_day":
+		return "gas"
+	case "units_per_year", "cells":
+		return "units"
+	default:
+		return ""
+	}
 }
 
 // GovernanceValidator validates ownership, board, key persons.

@@ -73,7 +73,7 @@ AVAILABLE DATA:
     - delivery_date: TIMESTAMP (Дата Поставки)
     - delivery_period: STRING
     - status_overdue: STRING
-  * Example: SELECT delivery_date, product, volume, amount FROM \`h1horizon.h1horizon_documents.analytics_cleaned_data\` WHERE EXTRACT(YEAR FROM delivery_date) = 2025
+  * Example: SELECT delivery_date, product, volume, amount FROM \`h1horizon-488615.h1horizon_488615_documents.analytics_cleaned_data\` WHERE EXTRACT(YEAR FROM delivery_date) = 2025
 
 IMPORTANT ABOUT extractedText and parseMeta:
 - extractedText is a STRING field, NOT JSON. Do NOT use JSON_EXTRACT_ARRAY or JSON_EXTRACT on extractedText.

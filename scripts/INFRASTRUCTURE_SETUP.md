@@ -2,6 +2,15 @@
 
 Этот документ описывает скрипты для настройки инфраструктуры проекта.
 
+## GCP проект
+
+**Проект по умолчанию:** `h1horizon-488615` (имя: h1horizon)
+
+Перед развёртыванием убедитесь, что gcloud настроен на нужный проект:
+```bash
+gcloud config set project h1horizon-488615
+```
+
 ## Скрипты
 
 ### 1. `scripts/deploy` - Основной скрипт развертывания
@@ -114,6 +123,8 @@ python3 /tmp/check_infrastructure.py
 
 - `scripts/setup-interaction-topics.sh` - создание топиков для interaction событий (интегрировано в deploy)
 - `scripts/setup-horizon-pubsub.sh` - создание топиков для Horizon (интегрировано в deploy)
+- `scripts/create-vertex-search-datastore.sh` - создание Vertex AI Search Data Store (rag-documents-store)
+- `scripts/ensure-vertex-ai-sa-bucket-access.sh` - выдача Vertex AI SA доступа к RAG bucket (если deploy не смог — SA создаётся при первом использовании Vertex AI)
 
 ## Примечания
 

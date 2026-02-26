@@ -19,7 +19,7 @@ echo ""
 
 # Get key from secrets
 echo -e "${BLUE}[Step 1] Getting Tavily API key from GCP secrets...${NC}"
-TAVILY_KEY=$(gcloud secrets versions access latest --secret=tavily_api_key --project=h1horizon 2>/dev/null | tr -d '\n\r ' || echo "")
+TAVILY_KEY=$(gcloud secrets versions access latest --secret=tavily_api_key --project=h1horizon-488615 2>/dev/null | tr -d '\n\r ' || echo "")
 
 if [[ -z "$TAVILY_KEY" ]]; then
     echo -e "${RED}✗ Failed to get key from secrets${NC}"
@@ -70,7 +70,7 @@ RECENT_LOGS=$(gcloud logging read \
     "resource.type=cloud_run_revision AND resource.labels.service_name=h1horizon-api AND (textPayload=~\"Tavily\" OR textPayload=~\"tavily\" OR textPayload=~\"web_search\")" \
     --limit=5 \
     --format="value(textPayload)" \
-    --project=h1horizon \
+    --project=h1horizon-488615 \
     --freshness=1h 2>/dev/null || echo "")
 
 if [[ -n "$RECENT_LOGS" ]]; then
@@ -87,7 +87,7 @@ echo -e "${BLUE}[Step 4] Verifying Cloud Run configuration...${NC}"
 HAS_TAVILY_ENV=$(gcloud run services describe h1horizon-api \
     --region=us-central1 \
     --format="get(spec.template.spec.containers[0].env)" \
-    --project=h1horizon 2>/dev/null | grep -o "TAVILY_API_KEY" || echo "")
+    --project=h1horizon-488615 2>/dev/null | grep -o "TAVILY_API_KEY" || echo "")
 
 if [[ -n "$HAS_TAVILY_ENV" ]]; then
     echo -e "${GREEN}✓ TAVILY_API_KEY is configured in Cloud Run${NC}"
@@ -96,7 +96,7 @@ else
 fi
 
 # Check secret exists
-if gcloud secrets describe tavily_api_key --project=h1horizon >/dev/null 2>&1; then
+if gcloud secrets describe tavily_api_key --project=h1horizon-488615 >/dev/null 2>&1; then
     echo -e "${GREEN}✓ tavily_api_key secret exists${NC}"
 else
     echo -e "${RED}✗ tavily_api_key secret not found${NC}"

@@ -173,13 +173,17 @@ func (b *VertexSyncBatcher) scheduleFlushAfter(d time.Duration, forceReset bool)
 		b.timerMu.Lock()
 		b.flushTimer = nil
 		b.timerMu.Unlock()
-		b.Flush()
+		b.flush(true)
 	})
 }
 
 // Flush sends all pending URIs to Vertex AI Search.
 // Safe to call concurrently.
 func (b *VertexSyncBatcher) Flush() {
+	b.flush(false)
+}
+
+func (b *VertexSyncBatcher) flush(force bool) {
 	// Ensure only one flush runs at a time (prevents import spamming under high concurrency).
 	b.flushMu.Lock()
 	if b.flushing {
@@ -205,8 +209,14 @@ func (b *VertexSyncBatcher) Flush() {
 			return
 		}
 	}
-	if len(b.pendingURIs) < b.minBatchSize {
+	if len(b.pendingURIs) == 0 {
 		b.mu.Unlock()
+		return
+	}
+	if !force && len(b.pendingURIs) < b.minBatchSize {
+		b.mu.Unlock()
+		// Keep an eventual timer-based forced flush for low-volume traffic.
+		b.scheduleFlush()
 		return
 	}
 
@@ -299,17 +309,7 @@ func isRateLimit429(err error) bool {
 
 // FlushSync flushes synchronously and waits for completion.
 func (b *VertexSyncBatcher) FlushSync() {
-	// Temporarily set minBatchSize to 1 to force flush
-	b.mu.Lock()
-	oldMin := b.minBatchSize
-	b.minBatchSize = 1
-	b.mu.Unlock()
-
-	b.Flush()
-
-	b.mu.Lock()
-	b.minBatchSize = oldMin
-	b.mu.Unlock()
+	b.flush(true)
 }
 
 // Stats returns current statistics.
@@ -336,8 +336,5 @@ func (b *VertexSyncBatcher) Close() {
 	b.timerMu.Unlock()
 
 	// Final flush
-	b.mu.Lock()
-	b.minBatchSize = 1
-	b.mu.Unlock()
-	b.Flush()
+	b.flush(true)
 }

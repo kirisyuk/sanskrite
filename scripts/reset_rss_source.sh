@@ -11,7 +11,7 @@ echo "Resetting status and errorCount for source $SOURCE_ID..."
 
 # Construct the resource path
 # Assuming default database
-RESOURCE_PATH="projects/h1horizon/databases/(default)/documents/core_datasources/$SOURCE_ID"
+RESOURCE_PATH="projects/h1horizon-488615/databases/(default)/documents/core_datasources/$SOURCE_ID"
 
 echo "Updating $RESOURCE_PATH..."
 

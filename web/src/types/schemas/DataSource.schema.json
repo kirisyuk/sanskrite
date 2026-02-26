@@ -26,6 +26,27 @@
     "sessionId": {
       "type": "string"
     },
+    "sourceCategoryPaths": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "primarySourceCategoryPath": {
+      "type": "string"
+    },
+    "sourceGeoFacets": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "sourceFormatFacets": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "ownerUserId": {
       "type": "string"
     },

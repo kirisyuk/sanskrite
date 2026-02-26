@@ -93,6 +93,48 @@ type SupplyChain struct {
 	// TransportVia lists facility canonical paths the product passes through (ports, terminals, pipelines, warehouses).
 	// Same canonicalization and deduplication rules apply as for other fragments.
 	TransportVia []string `json:"transportVia,omitempty"`
+	// SegmentMetrics: per-segment volume, share, period (from full-query strategy).
+	SegmentMetrics []SegmentMetrics `json:"segmentMetrics,omitempty"`
+	// Alternatives: alternative suppliers at each (customer, product) step.
+	Alternatives []AlternativeSuppliers `json:"alternatives,omitempty"`
+}
+
+// SegmentMetrics holds metrics for a single segment (fromNodeIndex → toNodeIndex, productIndex).
+type SegmentMetrics struct {
+	FromNodeIndex int                    `json:"fromNodeIndex"`
+	ToNodeIndex   int                    `json:"toNodeIndex"`
+	ProductIndex  int                    `json:"productIndex"`
+	Volume        *MetricWithConfidence  `json:"volume,omitempty"`
+	Share         *MetricWithConfidence  `json:"share,omitempty"`
+	Period        string                 `json:"period,omitempty"`   // "2023", "2023-Q1"
+	Start         string                 `json:"start,omitempty"`    // ISO8601
+	End           string                 `json:"end,omitempty"`     // ISO8601
+	Confidence    float64                `json:"confidence"`
+}
+
+// MetricWithConfidence is a metric value with unit and confidence.
+type MetricWithConfidence struct {
+	Value      float64 `json:"value"`
+	Unit       string  `json:"unit,omitempty"`
+	Confidence float64 `json:"confidence"`
+}
+
+// AlternativeSuppliers lists alternative suppliers for a (customer, product) pair.
+type AlternativeSuppliers struct {
+	CustomerNodeIndex int                  `json:"customerNodeIndex"`
+	ProductNodeIndex  int                  `json:"productNodeIndex"`
+	Suppliers         []AlternativeContract `json:"suppliers"`
+}
+
+// AlternativeContract describes one alternative supplier with substitutability fields.
+type AlternativeContract struct {
+	SupplierRef       string                 `json:"supplierRef"`       // canonical path
+	TechnicalFit      float64                `json:"technicalFit"`       // 0-1
+	RegulatoryFit    float64                `json:"regulatoryFit"`     // 0-1
+	AvailableCapacity *MetricWithConfidence `json:"availableCapacity,omitempty"`
+	LeadTimeToSwitch  *MetricWithConfidence `json:"leadTimeToSwitch,omitempty"`  // days
+	CostToSwitch      *MetricWithConfidence `json:"costToSwitch,omitempty"`      // usd
+	Confidence        float64                `json:"confidence"`
 }
 
 // SupplyChainNode represents a single node in a supply chain.

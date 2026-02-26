@@ -121,7 +121,7 @@ gcloud functions deploy horizon-watchdog-trigger \
   --entry-point=OnWatchdogConfigChange \
   --trigger-event-filters="type=document.update" \
   --trigger-event-filters="database=(default)" \
-  --trigger-resource="projects/h1horizon/databases/(default)/documents/horizon_watchdog_configs/{configId}" \
+  --trigger-resource="projects/h1horizon-488615/databases/(default)/documents/horizon_watchdog_configs/{configId}" \
   --service-account=backend@sanskrite.iam.gserviceaccount.com
 ```
 

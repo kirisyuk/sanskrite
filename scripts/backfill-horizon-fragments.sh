@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-PROJECT="${PROJECT:-h1horizon}"
+PROJECT="${PROJECT:-h1horizon-488615}"
 BUCKET="${BUCKET:-h1horizon-horizon-fragments}"
 DATA_STORE_ID="${DATA_STORE_ID:-horizon-fragments-store}"
 TENANT="${TENANT:-global}"

@@ -113,6 +113,19 @@ Do NOT create duplicate entities. Only create new entities when no suitable exis
 `
 }
 
+func strategySupplyChainMetricsVocabularyBlock() string {
+	return `SUPPLY CHAIN METRICS (use ONLY these units):
+volume: gwh_per_year | metric_tons_per_year | kt_per_year | bpd | mbpd | mcf_per_day | units_per_year | cells
+share: percent (0-100) | ratio (0-1)
+contract_value: usd | eur | rub
+lead_time_days: days
+on_time_delivery: ratio (0-1)
+
+Format per segment: { "volume": { "value": 15, "unit": "gwh_per_year", "confidence": 0.8 }, "share": { "value": 40, "unit": "percent", "confidence": 0.7 } }
+Choose unit by product type: batteries/energy → gwh; ores/chemicals → metric_tons; oil/gas → bbl/bcf; discrete → units/cells.
+`
+}
+
 func strategyMetricValueFormatBlock() string {
 	return `METRIC VALUE FORMAT (STRICT):
 - For fragment.state and relations[].metrics, each metric entry MUST be either:
@@ -135,6 +148,8 @@ func strategySupplyChainsJSONContractBlock() string {
   - "confidence": REQUIRED number in 0..1
   - "reason": REQUIRED short evidence string
   - "transportVia": OPTIONAL array of facility canonical paths (/fac/...)
+  - "segmentMetrics": OPTIONAL array of { fromNodeIndex, toNodeIndex, productIndex, volume: { value, unit, confidence }, share, period, confidence }
+  - "alternatives": OPTIONAL array of { customerNodeIndex, productNodeIndex, suppliers: [{ supplierRef, technicalFit, regulatoryFit, confidence }] }
 - Node object schema (each nodes[i]):
   - "canonicalPath": REQUIRED string
   - "name": REQUIRED string
@@ -419,9 +434,202 @@ func sanitizeResearchSupplyChains(root map[string]interface{}) {
 		} else {
 			delete(chainMap, "transportVia")
 		}
+		if metrics := sanitizeSupplyChainSegmentMetricsField(chainMap["segmentMetrics"]); len(metrics) > 0 {
+			chainMap["segmentMetrics"] = metrics
+		} else {
+			delete(chainMap, "segmentMetrics")
+		}
+		if alts := sanitizeSupplyChainAlternativesField(chainMap["alternatives"]); len(alts) > 0 {
+			chainMap["alternatives"] = alts
+		} else {
+			delete(chainMap, "alternatives")
+		}
 		cleanChains = append(cleanChains, chainMap)
 	}
 	root["supplyChains"] = cleanChains
+}
+
+func sanitizeSupplyChainSegmentMetricsField(raw interface{}) []interface{} {
+	items := toInterfaceSlice(raw)
+	if items == nil {
+		return nil
+	}
+	out := make([]interface{}, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		fromIdx, okFrom := coerceIndexValue(firstValue(m, "fromNodeIndex", "from_node_index", "from"))
+		toIdx, okTo := coerceIndexValue(firstValue(m, "toNodeIndex", "to_node_index", "to"))
+		productIdx, okProduct := coerceIndexValue(firstValue(m, "productIndex", "product_index", "product"))
+		if !okFrom || !okTo || !okProduct {
+			continue
+		}
+		entry := map[string]interface{}{
+			"fromNodeIndex": fromIdx,
+			"toNodeIndex":   toIdx,
+			"productIndex":  productIdx,
+		}
+		if v := sanitizeMetricWithConfidenceField(firstValue(m, "volume")); v != nil {
+			entry["volume"] = v
+		}
+		if v := sanitizeMetricWithConfidenceField(firstValue(m, "share")); v != nil {
+			entry["share"] = v
+		}
+		if s := strings.TrimSpace(firstStringValue(m, "period")); s != "" {
+			entry["period"] = s
+		}
+		if s := strings.TrimSpace(firstStringValue(m, "start")); s != "" {
+			entry["start"] = s
+		}
+		if s := strings.TrimSpace(firstStringValue(m, "end")); s != "" {
+			entry["end"] = s
+		}
+		coerceFloatField(m, "confidence", 0.5)
+		entry["confidence"] = m["confidence"]
+		out = append(out, entry)
+	}
+	return out
+}
+
+func sanitizeSupplyChainAlternativesField(raw interface{}) []interface{} {
+	items := toInterfaceSlice(raw)
+	if items == nil {
+		return nil
+	}
+	out := make([]interface{}, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		customerIdx, okCustomer := coerceIndexValue(firstValue(m, "customerNodeIndex", "customer_node_index", "customerIndex"))
+		productIdx, okProduct := coerceIndexValue(firstValue(m, "productNodeIndex", "product_node_index", "productIndex"))
+		if !okCustomer || !okProduct {
+			continue
+		}
+		suppliers := toInterfaceSlice(firstValue(m, "suppliers"))
+		if len(suppliers) == 0 {
+			continue
+		}
+		cleanSuppliers := make([]interface{}, 0, len(suppliers))
+		for _, supplierRaw := range suppliers {
+			supplierMap, ok := supplierRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			supplierRef := firstStringValue(supplierMap, "supplierRef", "supplier", "canonicalPath", "path")
+			if strings.TrimSpace(supplierRef) == "" {
+				continue
+			}
+			entry := map[string]interface{}{
+				"supplierRef": strings.TrimSpace(supplierRef),
+			}
+			coerceFloatField(supplierMap, "technicalFit", 0.5)
+			coerceFloatField(supplierMap, "regulatoryFit", 0.5)
+			coerceFloatField(supplierMap, "confidence", 0.5)
+			entry["technicalFit"] = supplierMap["technicalFit"]
+			entry["regulatoryFit"] = supplierMap["regulatoryFit"]
+			entry["confidence"] = supplierMap["confidence"]
+			if v := sanitizeMetricWithConfidenceField(firstValue(supplierMap, "availableCapacity")); v != nil {
+				entry["availableCapacity"] = v
+			}
+			if v := sanitizeMetricWithConfidenceField(firstValue(supplierMap, "leadTimeToSwitch")); v != nil {
+				entry["leadTimeToSwitch"] = v
+			}
+			if v := sanitizeMetricWithConfidenceField(firstValue(supplierMap, "costToSwitch")); v != nil {
+				entry["costToSwitch"] = v
+			}
+			cleanSuppliers = append(cleanSuppliers, entry)
+		}
+		if len(cleanSuppliers) == 0 {
+			continue
+		}
+		out = append(out, map[string]interface{}{
+			"customerNodeIndex": customerIdx,
+			"productNodeIndex":  productIdx,
+			"suppliers":         cleanSuppliers,
+		})
+	}
+	return out
+}
+
+func sanitizeMetricWithConfidenceField(raw interface{}) map[string]interface{} {
+	m, ok := raw.(map[string]interface{})
+	if !ok || m == nil {
+		return nil
+	}
+	out := map[string]interface{}{}
+	coerceFloatField(m, "value", 0.0)
+	out["value"] = m["value"]
+	if u := strings.TrimSpace(firstStringValue(m, "unit")); u != "" {
+		out["unit"] = u
+	}
+	coerceFloatField(m, "confidence", 0.5)
+	out["confidence"] = m["confidence"]
+	return out
+}
+
+func firstValue(holder map[string]interface{}, keys ...string) interface{} {
+	for _, key := range keys {
+		if v, ok := holder[key]; ok && v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+func coerceIndexValue(raw interface{}) (int, bool) {
+	switch v := raw.(type) {
+	case int:
+		if v < 0 {
+			return 0, false
+		}
+		return v, true
+	case int32:
+		if v < 0 {
+			return 0, false
+		}
+		return int(v), true
+	case int64:
+		if v < 0 {
+			return 0, false
+		}
+		return int(v), true
+	case float64:
+		if v < 0 {
+			return 0, false
+		}
+		return int(v), true
+	case float32:
+		if v < 0 {
+			return 0, false
+		}
+		return int(v), true
+	case json.Number:
+		if i, err := v.Int64(); err == nil && i >= 0 {
+			return int(i), true
+		}
+		if f, err := v.Float64(); err == nil && f >= 0 {
+			return int(f), true
+		}
+		return 0, false
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return 0, false
+		}
+		if i, err := strconv.Atoi(s); err == nil && i >= 0 {
+			return i, true
+		}
+		if f, err := strconv.ParseFloat(s, 64); err == nil && f >= 0 {
+			return int(f), true
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
 }
 
 func sanitizeSupplyChainNodesField(raw interface{}) []interface{} {
@@ -1112,7 +1320,71 @@ For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transp
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
+%s
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
+}
+
+// EnrichSupplyChainFull runs anchor-centric full supply chain query (Plan mode).
+// Input: SupplyChainQuery (anchor, direction, depth, filters). No fragment.
+// Output: SupplyChains with nodes, segmentMetrics, alternatives. Called directly, not via ResearchPipeline.
+func (a *ResearchAgent) EnrichSupplyChainFull(ctx context.Context, query SupplyChainQuery) ([]SupplyChain, error) {
+	if a == nil || a.executor == nil {
+		return nil, nil
+	}
+	prompt := a.buildSupplyChainFullQueryPrompt(query)
+	out, err := a.runResearchPrompt(ctx, prompt)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out.SupplyChains, nil
+}
+
+// buildSupplyChainFullQueryPrompt builds anchor-centric prompt for full supply chain (no fragment).
+func (a *ResearchAgent) buildSupplyChainFullQueryPrompt(query SupplyChainQuery) string {
+	anchor := strings.TrimSpace(query.Anchor)
+	direction := strings.TrimSpace(query.Direction)
+	if direction == "" {
+		direction = "upstream"
+	}
+	depth := query.Depth
+	if depth < 3 || depth > 6 {
+		depth = 4
+	}
+	productFilter := strings.Join(query.ProductFilter, ", ")
+	geoFilter := strings.Join(query.GeoFilter, ", ")
+	intent := fmt.Sprintf("anchor=%s, direction=%s, depth=%d", anchor, direction, depth)
+	if productFilter != "" {
+		intent += ", productFilter=[" + productFilter + "]"
+	}
+	if geoFilter != "" {
+		intent += ", geoFilter=[" + geoFilter + "]"
+	}
+	return fmt.Sprintf(`You are a research agent. Return a FULL supply chain as a HOLISTIC structure (not node-by-node).
+
+TASK: Build the complete supply chain for: %s
+
+Use ONLY these relation types: DEPENDS_ON, PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN.
+ENTITY TYPES: %s.
+
+CANONICAL PATH RULES:
+%s
+
+%s
+
+OUTPUT: Return a JSON object with "supplyChains" array. Each chain:
+- nodes: alternating actor→product→actor (org/fac/deposit → product → org/fac). Include FACILITY where transformation happens. Use /deposit/... for extraction sources.
+- segmentMetrics: for each segment (fromNodeIndex→toNodeIndex), add volume { value, unit, confidence }, share, period (e.g. "2023", "2023-Q1"), confidence. Units: gwh_per_year, metric_tons_per_year, kt_per_year, bpd, percent, ratio.
+- alternatives: for each (customerNodeIndex, productNodeIndex), list alternative suppliers with supplierRef, technicalFit (0-1), regulatoryFit (0-1), confidence.
+- transportVia: facility paths product passes through.
+- confidence, reason.
+
+%s
+
+%s
+
+Return ONLY valid JSON: { "supplyChains": [ { "nodes": [...], "segmentMetrics": [...], "alternatives": [...], "confidence", "reason" } ] }
+No markdown.`, intent, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategySupplyChainsJSONContractBlock())
 }
 
 // buildGovernanceEnrichmentPrompt builds a prompt for ownership, board, key persons, gov hierarchy (canonical types).
