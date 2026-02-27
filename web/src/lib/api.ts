@@ -2219,6 +2219,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
 
   async getHorizonLensAssemblyStatus(lensId: string): Promise<{
     status: string;
+    stage?: string;
     phase: string;
     progress: number;
     phases: {
@@ -2230,6 +2231,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     graph: {
       nodes: any[];
       edges: any[];
+    };
+    fatalError?: {
+      code?: string;
+      message?: string;
+      phase?: string;
+      fatal?: boolean;
     };
   }> {
     try {

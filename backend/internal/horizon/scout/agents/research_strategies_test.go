@@ -36,11 +36,31 @@ func TestGovernanceEnrichmentPrompt_OnlyCanonicalTypes(t *testing.T) {
 	}
 	prompt := a.buildGovernanceEnrichmentPrompt(input)
 	if !strings.Contains(prompt, "OWNS") || !strings.Contains(prompt, "BOARD_MEMBER_OF") ||
-		!strings.Contains(prompt, "SUBSIDIARY_OF") {
-		t.Error("Governance prompt should list canonical types: OWNS, BOARD_MEMBER_OF, SUBSIDIARY_OF")
+		!strings.Contains(prompt, "SUBSIDIARY_OF") || !strings.Contains(prompt, "ASSURES") {
+		t.Error("Governance prompt should list canonical types: OWNS, BOARD_MEMBER_OF, SUBSIDIARY_OF, ASSURES")
 	}
 	if !strings.Contains(strings.ToUpper(prompt), "USE ONLY") {
 		t.Error("Governance prompt should restrict to canonical types only (Use ONLY ...)")
+	}
+}
+
+func TestGovernanceEnrichmentPrompt_OwnsDirectionGuardrails(t *testing.T) {
+	a := NewResearchAgent(nil)
+	input := ResearchStrategyInput{
+		Fragment:    &models.HorizonFragment{CanonicalPath: "/org/us/example"},
+		MissingInfo: []string{"Who owns this org?"},
+	}
+	prompt := a.buildGovernanceEnrichmentPrompt(input)
+	for _, want := range []string{
+		"For OWNS, direction is ALWAYS owner -> owned entity.",
+		"NEVER output reversed OWNS (CURRENT FRAGMENT -> its owner).",
+		"For INVESTS_IN, direction is ALWAYS investor -> investee.",
+		"qualifiers.source_role and qualifiers.target_role",
+		"\"sourceCanonicalPath?\", \"sourceType?\", \"sourceName?\"",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("governance prompt missing OWNS direction guardrail %q", want)
+		}
 	}
 }
 
@@ -157,6 +177,27 @@ func TestGeneralEnrichmentPrompt_ModularContract(t *testing.T) {
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("general enrichment prompt missing %q", want)
+		}
+	}
+}
+
+func TestGeneralEnrichmentPrompt_OwnsDirectionGuardrails(t *testing.T) {
+	a := NewResearchAgent(nil)
+	input := ResearchStrategyInput{
+		Fragment:    &models.HorizonFragment{CanonicalPath: "/org/us/example", Type: models.FragmentTypeOrganization},
+		MissingInfo: []string{"Who owns this org?"},
+	}
+	prompt := a.buildGeneralEnrichmentPrompt(input)
+	for _, want := range []string{
+		"THIS FRAGMENT is owned by X",
+		"THIS FRAGMENT is invested in by X",
+		"Never emit reversed OWNS (THIS FRAGMENT -> its owner).",
+		"use explicit source whenever THIS FRAGMENT is the semantic target",
+		"qualifiers.source_role and qualifiers.target_role",
+		"dependent->dependency, supplier->customer",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("general prompt missing OWNS direction guardrail %q", want)
 		}
 	}
 }

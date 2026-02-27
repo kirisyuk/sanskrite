@@ -30,8 +30,7 @@ gcloud config set project h1horizon-488615
   - Aggregated топики: `hatlone.*` (9 топиков)
 
 - **Pub/Sub подписки** (11 подписок):
-  - Подписки для aggregated топиков: `<topic>-ws-broker` (9 подписок)
-  - Подписки для interaction топиков: `interaction.created-ws-broker`, `interaction.updated-ws-broker` (2 подписки)
+  - Подписки для hatlone-ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
 
 - **Cloud Scheduler Jobs** (4 jobs):
   - `h1horizon-source-poller` - опрос источников каждые 5 минут

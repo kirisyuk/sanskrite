@@ -592,8 +592,8 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 		sourceType == FragmentTypeProduct &&
 		targetType == FragmentTypeProduct &&
 		sourcePath != "" && targetPath != "" {
-		srcStageRank, srcOk := productStageRankFromCanonicalPath(sourcePath)
-		tgtStageRank, tgtOk := productStageRankFromCanonicalPath(targetPath)
+		srcStageRank, srcOk := ProductStageRankFromCanonicalPath(sourcePath)
+		tgtStageRank, tgtOk := ProductStageRankFromCanonicalPath(targetPath)
 		if srcOk && tgtOk && srcStageRank > tgtStageRank {
 			return edgeType, !shouldSwap, true, "canonicalize: TRANSFORMS_INTO downstream->upstream -> upstream->downstream (by product stage order)"
 		}
@@ -610,7 +610,9 @@ func pathSegmentCount(path string) int {
 	return len(strings.Split(p, "/"))
 }
 
-func productStageRankFromCanonicalPath(path string) (int, bool) {
+// ProductStageRankFromCanonicalPath returns the stage-order rank for a product canonical path.
+// Single source of truth for stage-rank comparison (used by canonicalization policy and supply chain parser).
+func ProductStageRankFromCanonicalPath(path string) (int, bool) {
 	path = strings.TrimSpace(path)
 	if path == "" || !strings.HasPrefix(path, "/product/") {
 		return 0, false

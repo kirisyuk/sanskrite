@@ -100,8 +100,8 @@ for topic in "${REQUIRED_TOPICS[@]}"; do
 done
 
 echo ""
-echo "4.1 Проверка Pub/Sub подписок для ws-broker..."
-# Для нового ws-broker (hatlone-ws) подписка имеет фиксированный нейминг: <topic>-ws-broker
+echo "4.1 Проверка Pub/Sub подписок для hatlone-ws..."
+# Подписка имеет фиксированный нейминг: <topic>-ws-broker
 REQUIRED_SUBS=("hatlone.horizon.events-ws-broker")
 for sub in "${REQUIRED_SUBS[@]}"; do
   if gcloud pubsub subscriptions describe "$sub" --format="value(name)" 2>/dev/null | grep -q "$sub"; then

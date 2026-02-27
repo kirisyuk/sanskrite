@@ -10,8 +10,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
@@ -718,11 +721,83 @@ func copyDomainModeStateToChild(parentState map[string]interface{}, childState m
 	if parentState == nil || childState == nil {
 		return
 	}
-	for _, key := range []string{"domainMode", "domainModes", "domains"} {
+	for _, key := range []string{
+		"domainMode", "domainModes", "domains",
+		ExecutionPlanStateKey,
+		"maxRootJobs", "maxRecursionDepth", "maxChildrenPerJob", "maxCascadeJobs", "maxSupplyChainQueries",
+		"budgetCeilingUSD", "budgetCeilingOutputTokens", "stopOnBudgetExhaustion",
+		"supplyChainMode", "supplyChainPhase", "supplyChainPhases", "supplyChainExpandEnabled", "supplyChainExpandMaxNodes",
+	} {
 		if v, ok := parentState[key]; ok && v != nil {
 			childState[key] = v
 		}
 	}
+}
+
+func (e *ScoutEngine) estimateCascadeRemainingCapacity(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	lensID string,
+	cascadeID string,
+	maxCascadeJobs int,
+) (remaining int, used int) {
+	if maxCascadeJobs <= 0 {
+		return 0, 0
+	}
+	if e == nil || e.scoutingJobsRepo == nil || job == nil {
+		return maxCascadeJobs, 0
+	}
+	lensID = strings.TrimSpace(lensID)
+	if lensID == "" {
+		lensID = strings.TrimSpace(job.LensID)
+	}
+	if lensID == "" && job.State != nil {
+		lensID = parseStateString(job.State["lensId"])
+	}
+	cascadeID = strings.TrimSpace(cascadeID)
+	if cascadeID == "" && job.State != nil {
+		cascadeID = parseStateString(job.State["cascadeRootJobId"])
+	}
+	if cascadeID == "" {
+		cascadeID = strings.TrimSpace(job.ID)
+	}
+	if strings.TrimSpace(job.TenantID) == "" || strings.TrimSpace(job.ProjectID) == "" || lensID == "" || cascadeID == "" {
+		return maxCascadeJobs, 0
+	}
+
+	queryLimit := maxCascadeJobs + 256
+	if queryLimit < 400 {
+		queryLimit = 400
+	}
+	if queryLimit > 5000 {
+		queryLimit = 5000
+	}
+
+	jobs, err := e.scoutingJobsRepo.ListByProjectAndLens(ctx, job.TenantID, job.ProjectID, lensID, queryLimit)
+	if err != nil {
+		return maxCascadeJobs, 0
+	}
+	for _, j := range jobs {
+		if j == nil {
+			continue
+		}
+		rootID := ""
+		if j.State != nil {
+			rootID = parseStateString(j.State["cascadeRootJobId"])
+		}
+		if strings.TrimSpace(rootID) == "" {
+			rootID = strings.TrimSpace(j.ID)
+		}
+		if strings.TrimSpace(rootID) != cascadeID {
+			continue
+		}
+		used++
+	}
+	remaining = maxCascadeJobs - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining, used
 }
 
 // getJobDomainModes returns domain mode(s) from job state for composable Critic/Research.
@@ -2199,8 +2274,16 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	supplyChainPlan := getSupplyChainExecutionPlanFromJobState(job, domainCP)
 	usePlanMode := agents.IsSupplyChainContractType(contractType) && supplyChainPlan != nil && len(supplyChainPlan.Queries) > 0
 	if usePlanMode && e.researchAgent != nil && !domainFastPathApplied {
+		queries := supplyChainPlan.Queries
+		if job != nil && HasExecutionPlanContractState(job.State) {
+			planContract := ExecutionPlanContractFromState(job.State)
+			if planContract.MaxSupplyChainQueries > 0 && len(queries) > planContract.MaxSupplyChainQueries {
+				queries = queries[:planContract.MaxSupplyChainQueries]
+				e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain plan capped (%s): %d", RuntimeContractExecutionPlan, len(queries)))
+			}
+		}
 		// Supply Chain Plan mode: holistic full queries, merge chains, processSupplyChains.
-		for _, q := range supplyChainPlan.Queries {
+		for _, q := range queries {
 			chains, err := e.researchAgent.EnrichSupplyChainFull(ctx, q)
 			if err != nil {
 				e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain plan query failed (anchor=%s): %v", strings.TrimSpace(q.Anchor), err))
@@ -2211,12 +2294,13 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		if job.State == nil {
 			job.State = map[string]interface{}{}
 		}
-		job.State["domainResearch"] = map[string]interface{}{
+		domainResearch := map[string]interface{}{
 			"planMode":      true,
-			"queriesN":      len(supplyChainPlan.Queries),
+			"queriesN":      len(queries),
 			"supplyChainsN": len(domainResearchChains),
 		}
-		_ = e.scoutingJobsRepo.Update(ctx, job)
+		job.State["domainResearch"] = domainResearch
+		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainResearch": domainResearch})
 	}
 	if !usePlanMode && e.researchAgent != nil && !domainFastPathApplied {
 		originalQuery := ""
@@ -2384,11 +2468,12 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			if job.State == nil {
 				job.State = map[string]interface{}{}
 			}
-			job.State["domainResearch"] = map[string]interface{}{
+			domainResearch := map[string]interface{}{
 				"relationsN":    len(newRelations),
 				"supplyChainsN": len(newChains),
 			}
-			if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+			job.State["domainResearch"] = domainResearch
+			if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainResearch": domainResearch}); err != nil {
 				logGroundingErrorWithContext(job, "scout", "domain_expansion.persist_research_state", "job_state_update_failed", "repo_update_error", true, err)
 				e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.persist_research_state", "job_state_update_failed", "repo_update_error", true)
 			}
@@ -2712,7 +2797,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	}
 	// Persist finalized job outputs into LensArtifacts (Phase 2 input).
 	e.persistLensArtifactsFromJobState(ctx, job)
-	job.State["domainExpansion"] = map[string]interface{}{
+	domainExpansion := map[string]interface{}{
 		"canonicalPath":       domainCP,
 		"title":               title,
 		"firstOrderEntitiesN": len(firstOrder),
@@ -2720,7 +2805,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		"affectedDomainsN":    len(affected),
 		"relationsEmittedN":   len(rels),
 	}
-	if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+	job.State["domainExpansion"] = domainExpansion
+	if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainExpansion": domainExpansion}); err != nil {
 		logGroundingErrorWithContext(job, "scout", "domain_expansion.persist_state", "job_state_update_failed", "repo_update_error", true, err)
 		e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.persist_state", "job_state_update_failed", "repo_update_error", true)
 	}
@@ -3393,7 +3479,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	}
 	// Persist finalized job outputs into LensArtifacts (Phase 2 input).
 	e.persistLensArtifactsFromJobState(ctx, job)
-	job.State["domainOverlay"] = map[string]interface{}{
+	domainOverlay := map[string]interface{}{
 		"canonicalPath":    domainCP,
 		"title":            title,
 		"decisions":        decisionCount,
@@ -3401,7 +3487,8 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		"surfacesEdges":    surfacesCount,
 		"relationsEmitted": edgesEmitted,
 	}
-	if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+	job.State["domainOverlay"] = domainOverlay
+	if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainOverlay": domainOverlay}); err != nil {
 		logGroundingErrorWithContext(job, "scout", "domain_overlay.persist_state", "job_state_update_failed", "repo_update_error", true, err)
 		e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.persist_state", "job_state_update_failed", "repo_update_error", true)
 	}
@@ -3505,6 +3592,11 @@ func (e *ScoutEngine) processRelationsInternal(
 	// - Breadth is capped per parent job to avoid runaway fanout (LLM can emit many relations).
 	// - Domain-derived jobs use lower cap to control cost explosion.
 	// - We deduplicate targets within this job execution to avoid enqueueing the same target multiple times.
+	hasExecutionPlan := job != nil && HasExecutionPlanContractState(job.State)
+	executionPlan := ExecutionPlanContract{}
+	if hasExecutionPlan {
+		executionPlan = ExecutionPlanContractFromState(job.State)
+	}
 	maxChildren := 25
 	if job != nil && job.State != nil {
 		if v, ok := job.State["maxChildrenPerJob"]; ok {
@@ -3515,8 +3607,40 @@ func (e *ScoutEngine) processRelationsInternal(
 			maxChildren = 6
 		}
 	}
+	if hasExecutionPlan && executionPlan.MaxChildrenPerJob > 0 && (maxChildren == 0 || executionPlan.MaxChildrenPerJob < maxChildren) {
+		maxChildren = executionPlan.MaxChildrenPerJob
+	}
 	if maxChildren < 0 {
 		maxChildren = 0
+	}
+	budgetPressure := 0.0
+	budgetFreezeDepth := false
+	if e != nil && job != nil {
+		lensIDForBudget := strings.TrimSpace(job.LensID)
+		if lensIDForBudget == "" && job.State != nil {
+			if v, ok := job.State["lensId"]; ok {
+				lensIDForBudget = parseStateString(v)
+			}
+		}
+		cascadeIDForBudget := ""
+		if job.State != nil {
+			if v, ok := job.State["cascadeRootJobId"].(string); ok {
+				cascadeIDForBudget = strings.TrimSpace(v)
+			}
+		}
+		if cascadeIDForBudget == "" {
+			cascadeIDForBudget = strings.TrimSpace(job.ID)
+		}
+		if scale, snap, ok := e.computeRuntimeBudgetAdaptation(ctx, job.TenantID, lensIDForBudget, cascadeIDForBudget); ok {
+			budgetPressure = snap.MaxPressure
+			adaptedCap := scaleCapByBudget(maxChildren, 1, scale)
+			if adaptedCap < maxChildren {
+				e.logLine(ctx, job, "info", fmt.Sprintf("> fanout budget adapted (%s): maxChildren %d -> %d (%s)",
+					RuntimeContractBudgetAdaptiveFanout, maxChildren, adaptedCap, snap.summary()))
+				maxChildren = adaptedCap
+			}
+			budgetFreezeDepth = shouldFreezeDepthByBudgetPressure(budgetPressure)
+		}
 	}
 	scheduledChildren := map[string]struct{}{}
 	scheduledIdentityChildren := map[string]struct{}{}
@@ -3587,6 +3711,19 @@ func (e *ScoutEngine) processRelationsInternal(
 	if !isGovernanceMode {
 		isGovernanceMode = taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) || taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement)
 	}
+	supplyChainPhase := ""
+	if job != nil && job.State != nil {
+		supplyChainPhase = strings.TrimSpace(strings.ToLower(parseStateString(job.State["supplyChainPhase"])))
+	}
+	if isSupplyChainMode && supplyChainPhase != "targeted_enrich" {
+		before := len(relations)
+		relations = filterDiscoveredRelationsByDomainModes(relations, []string{taxonomy.DomainModeSupplyChain})
+		after := len(relations)
+		if after != before {
+			e.logLine(ctx, job, "info", fmt.Sprintf("> phase-A relation filter (%s): %d -> %d",
+				RuntimeContractExecutionPlan, before, after))
+		}
+	}
 	relationsResolvedByGrounding := 0
 	relationsCreatedNew := 0
 	dedupRedirectsByGrounding := 0
@@ -3600,6 +3737,24 @@ func (e *ScoutEngine) processRelationsInternal(
 	}
 	if cascadeID == "" && job != nil {
 		cascadeID = strings.TrimSpace(job.ID)
+	}
+	lensIDForCascade := ""
+	if job != nil {
+		lensIDForCascade = strings.TrimSpace(job.LensID)
+		if lensIDForCascade == "" && job.State != nil {
+			lensIDForCascade = parseStateString(job.State["lensId"])
+		}
+	}
+	cascadeRemaining := 0
+	cascadeUsed := 0
+	cascadeLimitActive := hasExecutionPlan && executionPlan.MaxCascadeJobs > 0
+	if cascadeLimitActive {
+		cascadeRemaining, cascadeUsed = e.estimateCascadeRemainingCapacity(ctx, job, lensIDForCascade, cascadeID, executionPlan.MaxCascadeJobs)
+		if cascadeRemaining <= 0 {
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> execution plan cascade cap reached (%s): used=%d limit=%d",
+				RuntimeContractExecutionPlan,
+				cascadeUsed, executionPlan.MaxCascadeJobs))
+		}
 	}
 	sourceFacilityQualifier := resolveFacilityQualifierSemantic(sourceFragment, "")
 
@@ -3667,6 +3822,11 @@ func (e *ScoutEngine) processRelationsInternal(
 	}
 	enableManagement := taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement)
 	runtimeGroundingEvidence := groundingEvidenceFromJobState(job)
+
+	// Enable edge batch buffering: edges are accumulated during the loop and
+	// flushed in a single Firestore batch write after all relations are processed.
+	edgeBuf := NewEdgeBatchBuffer()
+	batchCtx := WithEdgeBatchBuffer(ctx, edgeBuf)
 
 	for _, rel := range relations {
 		if rel.TargetName == "" {
@@ -3817,7 +3977,28 @@ func (e *ScoutEngine) processRelationsInternal(
 		if targetFragment == nil {
 			// Resolve path through canonicalPathResolver to reuse existing fragment or canonical form (reduces duplicates).
 			if e.canonicalPathResolver != nil {
-				resolved, rerr := e.canonicalPathResolver.Resolve(ctx, targetPath, targetType)
+				meta := map[string]string{}
+				if v := strings.TrimSpace(rel.TargetShortName); v != "" {
+					meta["shortName"] = v
+				}
+				if v := strings.TrimSpace(rel.TargetLegalName); v != "" {
+					meta["legalName"] = v
+				}
+				if v := strings.TrimSpace(rel.TargetName); v != "" {
+					meta["labelEN"] = v
+					if _, ok := meta["shortName"]; !ok {
+						meta["shortName"] = v
+					}
+				}
+				var (
+					resolved *ResolveResult
+					rerr     error
+				)
+				if len(meta) > 0 {
+					resolved, rerr = e.canonicalPathResolver.ResolveWithMetadata(ctx, targetPath, targetType, meta)
+				} else {
+					resolved, rerr = e.canonicalPathResolver.Resolve(ctx, targetPath, targetType)
+				}
 				if rerr == nil && resolved != nil {
 					if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
 						targetFragment = resolved.ExistingFragment
@@ -3955,47 +4136,17 @@ func (e *ScoutEngine) processRelationsInternal(
 				maxDepth = 0
 			}
 
-			// Daily budget guardrails (depth limiting, not breadth):
-			// If we've exceeded cascade or lens daily limits, stop expanding deeper.
-			if e.budgetPolicy.Enabled && e.spendLedger != nil && job != nil {
-				lensID := ""
-				if job.State != nil {
-					if v, ok := job.State["lensId"].(string); ok {
-						lensID = strings.TrimSpace(v)
-					}
-				}
-				cascadeID := ""
-				if job.State != nil {
-					if v, ok := job.State["cascadeRootJobId"].(string); ok {
-						cascadeID = strings.TrimSpace(v)
-					}
-				}
-				if cascadeID == "" {
-					cascadeID = job.ID
-				}
-				if lensID != "" && cascadeID != "" {
-					day := time.Now().UTC().Format("2006-01-02")
-					if cSpend, _, cOut, err := e.spendLedger.GetCascadeSpendUSD(ctx, job.TenantID, cascadeID, day); err == nil {
-						if e.budgetPolicy.CascadeDailyMaxUSD > 0 && cSpend >= e.budgetPolicy.CascadeDailyMaxUSD {
-							maxDepth = currentDepth
-						}
-						if e.budgetPolicy.CascadeDailyMaxOutputTokens > 0 && cOut >= e.budgetPolicy.CascadeDailyMaxOutputTokens {
-							maxDepth = currentDepth
-						}
-					}
-					if dSpend, _, dOut, err := e.spendLedger.GetLensDaySpendUSD(ctx, job.TenantID, lensID, day); err == nil {
-						if e.budgetPolicy.LensDailyMaxUSD > 0 && dSpend >= e.budgetPolicy.LensDailyMaxUSD {
-							maxDepth = currentDepth
-						}
-						if e.budgetPolicy.LensDailyMaxOutputTokens > 0 && dOut >= e.budgetPolicy.LensDailyMaxOutputTokens {
-							maxDepth = currentDepth
-						}
-					}
-				}
+			// RuntimeContractBudgetAdaptiveFanout:
+			// keep pipeline progress under budget pressure; freeze depth only in severe overrun.
+			if budgetFreezeDepth {
+				maxDepth = currentDepth
 			}
 
 			// Ограничиваем глубину
 			if currentDepth < maxDepth {
+				if cascadeLimitActive && cascadeRemaining <= 0 {
+					continue
+				}
 				// Breadth cap + per-parent dedup (in-memory).
 				effectiveCap := maxChildren
 				// Depth-aware cap: keep the graph tight for shallow (depth=2) lenses.
@@ -4241,6 +4392,9 @@ func (e *ScoutEngine) processRelationsInternal(
 							})
 						}
 					} else {
+						if cascadeLimitActive && cascadeRemaining > 0 {
+							cascadeRemaining--
+						}
 						fmt.Printf("Triggered recursive scouting for: %s\n", targetPath)
 					}
 				}
@@ -4269,45 +4423,16 @@ func (e *ScoutEngine) processRelationsInternal(
 				maxDepth = 0
 			}
 
-			// Daily budget guardrails (depth limiting, not breadth)
-			if e.budgetPolicy.Enabled && e.spendLedger != nil && job != nil {
-				lensID := ""
-				if job.State != nil {
-					if v, ok := job.State["lensId"].(string); ok {
-						lensID = strings.TrimSpace(v)
-					}
-				}
-				cascadeID := ""
-				if job.State != nil {
-					if v, ok := job.State["cascadeRootJobId"].(string); ok {
-						cascadeID = strings.TrimSpace(v)
-					}
-				}
-				if cascadeID == "" {
-					cascadeID = job.ID
-				}
-				if lensID != "" && cascadeID != "" {
-					day := time.Now().UTC().Format("2006-01-02")
-					if cSpend, _, cOut, err := e.spendLedger.GetCascadeSpendUSD(ctx, job.TenantID, cascadeID, day); err == nil {
-						if e.budgetPolicy.CascadeDailyMaxUSD > 0 && cSpend >= e.budgetPolicy.CascadeDailyMaxUSD {
-							maxDepth = currentDepth
-						}
-						if e.budgetPolicy.CascadeDailyMaxOutputTokens > 0 && cOut >= e.budgetPolicy.CascadeDailyMaxOutputTokens {
-							maxDepth = currentDepth
-						}
-					}
-					if dSpend, _, dOut, err := e.spendLedger.GetLensDaySpendUSD(ctx, job.TenantID, lensID, day); err == nil {
-						if e.budgetPolicy.LensDailyMaxUSD > 0 && dSpend >= e.budgetPolicy.LensDailyMaxUSD {
-							maxDepth = currentDepth
-						}
-						if e.budgetPolicy.LensDailyMaxOutputTokens > 0 && dOut >= e.budgetPolicy.LensDailyMaxOutputTokens {
-							maxDepth = currentDepth
-						}
-					}
-				}
+			// RuntimeContractBudgetAdaptiveFanout:
+			// keep pipeline progress under budget pressure; freeze depth only in severe overrun.
+			if budgetFreezeDepth {
+				maxDepth = currentDepth
 			}
 
 			if shouldScout && currentDepth < maxDepth {
+				if cascadeLimitActive && cascadeRemaining <= 0 {
+					continue
+				}
 				// Breadth cap + per-parent dedup (in-memory).
 				effectiveCap := maxChildren
 				if currentDepth <= 0 && effectiveCap > 12 {
@@ -4506,6 +4631,9 @@ func (e *ScoutEngine) processRelationsInternal(
 						},
 					}
 					if _, err := e.scoutingJobsRepo.Create(ctx, scoutingJob); err == nil {
+						if cascadeLimitActive && cascadeRemaining > 0 {
+							cascadeRemaining--
+						}
 						fmt.Printf("Triggered recursive scouting (existing fragment) for: %s\n", targetPath)
 					} else {
 						logGroundingErrorWithContext(job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true, err)
@@ -4557,7 +4685,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		// The legacy inline materialization block below is kept temporarily for safe diffing/migration,
 		// but is bypassed via continue.
 		if matErr := e.materializeRelationEdge(
-			ctx,
+			batchCtx,
 			job,
 			sourceFragment,
 			targetFragment,
@@ -4760,6 +4888,8 @@ func (e *ScoutEngine) processRelationsInternal(
 			SourcePath:        srcPathActual,
 			TargetPath:        dstPathActual,
 			RawRelationType:   rawRelationType,
+			Reason:            strings.TrimSpace(rel.Reason),
+			Qualifiers:        rel.Qualifiers,
 			OwnershipEvidence: models.HasOwnershipEvidence(rel.Reason, rel.Qualifiers, rel.Metrics),
 		})
 		if canon.Changed {
@@ -4838,6 +4968,8 @@ func (e *ScoutEngine) processRelationsInternal(
 					"sourceCanonicalPath": srcPathActual,
 					"targetCanonicalPath": dstPathActual,
 					"relationType":     string(edgeType),
+					"reason":           strings.TrimSpace(rel.Reason),
+					"qualifiers":       rel.Qualifiers,
 				},
 				// IMPORTANT: do not pass Fragment here, or ValidationPolicy will overwrite sourceType from it,
 				// which can be incorrect after edge normalization swaps.
@@ -4931,10 +5063,28 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 		}
 
+		// Fail-closed for invalid edge semantics: quarantined edges must not be persisted.
+		if policyStatus == models.PolicyStatusQuarantined {
+			msg := fmt.Sprintf("[ScoutEngine] Skipping quarantined edge source=%s target=%s type=%s reason=%s",
+				strings.TrimSpace(srcPathActual),
+				strings.TrimSpace(dstPathActual),
+				string(edgeType),
+				strings.TrimSpace(policyReason),
+			)
+			fmt.Printf("%s\n", msg)
+			e.logLine(ctx, job, "warn", msg)
+			continue
+		}
+
 		// In-memory dedup (per job run), after all normalization.
 		ek := EdgeKey(edgeSourceID, edgeTargetID, edgeType)
+		if e.seenEdgeDedupRecently(ek) {
+			fmt.Printf("Skipping duplicate edge (cross-job recent cache): %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
+			continue
+		}
 		if _, ok := seenEdgeKeys[ek]; ok {
 			fmt.Printf("Skipping duplicate edge (in-memory): %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
+			e.rememberEdgeDedupRecently(ek)
 			continue
 		}
 		seenEdgeKeys[ek] = struct{}{}
@@ -4942,6 +5092,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		// Firestore dedup check (cross-run).
 		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", edgeSourceID, edgeTargetID, edgeType); err == nil {
 			fmt.Printf("Skipping duplicate edge: %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
+			e.rememberEdgeDedupRecently(ek)
 			continue
 		}
 
@@ -5064,6 +5215,7 @@ func (e *ScoutEngine) processRelationsInternal(
 				// Edge exists: update properties/qualifiers instead of creating new
 				// Or skip if identical. For now, we skip to be safe and simple.
 				// In future, we might want to merge confidence or update timestamps.
+				e.rememberEdgeDedupRecently(EdgeKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type))
 				continue
 			}
 		}
@@ -5086,6 +5238,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			e.logLine(ctx, job, "warn", msg)
 		} else {
 			edge.ID = id
+			e.rememberEdgeDedupRecently(EdgeKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type))
 			fmt.Printf("Created edge: %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
 			// Realtime: edge materialized/updated for UI graph.
 			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
@@ -5105,6 +5258,12 @@ func (e *ScoutEngine) processRelationsInternal(
 			})
 		}
 		*/
+	}
+	// Flush buffered edges in a single batch write.
+	if edgeBuf.Len() > 0 {
+		if flushErr := edgeBuf.Flush(ctx, e); flushErr != nil {
+			fmt.Printf("[ScoutEngine] edge batch flush error: %v\n", flushErr)
+		}
 	}
 	if job != nil {
 		if job.State == nil {
@@ -5978,6 +6137,19 @@ func (e *ScoutEngine) runSupplyChainExpandPhase(ctx context.Context, job *models
 	if job == nil || job.State == nil {
 		return
 	}
+	prevPhase := parseStateString(job.State["supplyChainPhase"])
+	job.State["supplyChainPhase"] = "targeted_enrich"
+	job.State["contextScope"] = map[string]interface{}{
+		"layer":    "optional_enrich",
+		"contract": RuntimeContractContextScope,
+	}
+	defer func() {
+		if prevPhase == "" {
+			job.State["supplyChainPhase"] = "chain_core"
+		} else {
+			job.State["supplyChainPhase"] = prevPhase
+		}
+	}()
 	if !parseStateBool(job.State["supplyChainExpandEnabled"], false) {
 		return
 	}
@@ -6064,23 +6236,33 @@ func (e *ScoutEngine) runSupplyChainExpandPhase(ctx context.Context, job *models
 		}
 	}
 	if len(expandCandidates) > 0 && e.researchAgent != nil && e.fragmentsRepo != nil {
-		// 1-hop expand: call Research for each candidate (fragment-centric)
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(3) // max 3 concurrent LLM calls
+		var mu sync.Mutex
+		var allChains []agents.SupplyChain
 		for _, cp := range expandCandidates {
-			existing, err := e.fragmentsRepo.GetByCanonicalPath(ctx, cp)
-			if err != nil || existing == nil {
-				continue
-			}
-			input := agents.ResearchStrategyInput{
-				Fragment:    existing,
-				MissingInfo: []string{"Identify upstream suppliers and downstream customers; products; facility locations."},
-			}
-			domainModes := []string{taxonomy.DomainModeSupplyChain}
-			if _, rels, newChains, _, _, err := e.researchAgent.ResearchPipeline().Enrich(ctx, input, domainModes); err == nil {
-				if len(newChains) > 0 {
-					_ = e.processSupplyChains(ctx, job, frag, newChains)
+			cp := cp
+			g.Go(func() error {
+				existing, err := e.fragmentsRepo.GetByCanonicalPath(gctx, cp)
+				if err != nil || existing == nil {
+					return nil
 				}
-				_ = rels // relations could be processed separately
-			}
+				input := agents.ResearchStrategyInput{
+					Fragment:    existing,
+					MissingInfo: []string{"Identify upstream suppliers and downstream customers; products; facility locations."},
+				}
+				domainModes := []string{taxonomy.DomainModeSupplyChain}
+				if _, _, newChains, _, _, err := e.researchAgent.ResearchPipeline().Enrich(gctx, input, domainModes); err == nil && len(newChains) > 0 {
+					mu.Lock()
+					allChains = append(allChains, newChains...)
+					mu.Unlock()
+				}
+				return nil
+			})
+		}
+		_ = g.Wait()
+		if len(allChains) > 0 {
+			_ = e.processSupplyChains(ctx, job, frag, allChains)
 		}
 	}
 	// Alternatives check: one LLM call "For each (customer, product) pair, did you miss any alternative suppliers?"
@@ -6490,6 +6672,18 @@ func (e *ScoutEngine) processSupplyChains(
 	if len(chains) == 0 {
 		return nil
 	}
+	if job != nil {
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		if strings.TrimSpace(parseStateString(job.State["supplyChainPhase"])) == "" {
+			job.State["supplyChainPhase"] = "chain_core"
+		}
+		job.State["contextScope"] = map[string]interface{}{
+			"layer":    "chain_core",
+			"contract": RuntimeContractContextScope,
+		}
+	}
 
 	parser := NewSupplyChainParser()
 	sourceCanonicalPath := ""
@@ -6722,6 +6916,7 @@ func (e *ScoutEngine) processSupplyChains(
 	edgeCreateErrors := 0
 	edgeReversed := 0
 	edgePenalized := 0
+	acceptedContextEdges := make([]*ChainEdge, 0, len(result.Edges))
 	edgePreviewLimit := 40
 	for _, chainEdge := range result.Edges {
 		srcPath := strings.TrimSpace(chainEdge.SourceCanonicalPath)
@@ -6890,12 +7085,45 @@ func (e *ScoutEngine) processSupplyChains(
 		srcTypeActual := resolveTypeByCanonical(srcPath)
 		dstTypeActual := resolveTypeByCanonical(dstPath)
 
+		// Canonicalization policy (stage-rank direction fix for TRANSFORMS_INTO, type rewrites, gov/market rules).
+		// Must run before validation policy so that edge type and direction are corrected first.
+		canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
+			EdgeType:   edgeType,
+			SourceType: srcTypeActual,
+			TargetType: dstTypeActual,
+			SourcePath: srcPath,
+			TargetPath: dstPath,
+			Reason:     strings.TrimSpace(chainEdge.Reason),
+			Qualifiers: chainEdge.Qualifiers,
+		})
+		if canon.Changed {
+			edgeType = canon.EdgeType
+			if canon.ShouldSwap {
+				sourceID, targetID = targetID, sourceID
+				srcPath, dstPath = dstPath, srcPath
+				srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
+			}
+			sourceID, targetID, edgeType, _ = NormalizeSymmetricEdge(sourceID, targetID, edgeType)
+		}
+
 		// Policy: direction validation & reversal (best-effort, same behavior as processDiscoveredRelations).
 		edgeCriticality := normalizeEdgeConfidence(chainEdge.Confidence)
 		directionChanged := false
+		directionReversed := false
 		policyStatus := models.PolicyStatusClean
 		policyReason := ""
 		policyPenalty := 0.0
+		if canon.PolicyPenalty > 0 {
+			policyPenalty = canon.PolicyPenalty
+			policyStatus = policy.MergePolicyStatus(policyStatus, canon.PolicyStatus)
+			if strings.TrimSpace(canon.PolicyReason) != "" {
+				policyReason = strings.TrimSpace(canon.PolicyReason)
+			}
+			edgeCriticality = edgeCriticality * canon.ConfidenceMult
+			if edgeCriticality < 0 {
+				edgeCriticality = 0
+			}
+		}
 		if e.validationPolicy != nil {
 			policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageInput, map[string]interface{}{
 				"trace_id":       "na",
@@ -6922,6 +7150,8 @@ func (e *ScoutEngine) processSupplyChains(
 					"sourceCanonicalPath": srcPath,
 					"targetCanonicalPath": dstPath,
 					"relationType":        string(edgeType),
+					"reason":              strings.TrimSpace(chainEdge.Reason),
+					"qualifiers":          chainEdge.Qualifiers,
 				},
 				Fragment: nil,
 			})
@@ -6949,6 +7179,7 @@ func (e *ScoutEngine) processSupplyChains(
 					Reverse: func() {
 						sourceID, targetID = targetID, sourceID
 						directionChanged = true
+						directionReversed = true
 						edgeReversed++
 						msg := fmt.Sprintf("%s REVERSE edge=%s -[%s]-> %s path=%s",
 							logPrefix, chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, decision.DecisionPath)
@@ -7012,6 +7243,19 @@ func (e *ScoutEngine) processSupplyChains(
 			e.logLine(ctx, job, "warn", msg)
 			continue
 		}
+
+		contextSrcPath := srcPath
+		contextDstPath := dstPath
+		if directionReversed {
+			contextSrcPath, contextDstPath = contextDstPath, contextSrcPath
+		}
+		acceptedContextEdges = append(acceptedContextEdges, &ChainEdge{
+			SourceCanonicalPath: contextSrcPath,
+			TargetCanonicalPath: contextDstPath,
+			RelationType:        string(edgeType),
+			Confidence:          chainEdge.Confidence,
+			Reason:              chainEdge.Reason,
+		})
 
 		// Check for existing edge
 		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceID, targetID, edgeType); err == nil {
@@ -7326,20 +7570,48 @@ func (e *ScoutEngine) processSupplyChains(
 		job.State = make(map[string]interface{})
 	}
 	existingContext, _ := ParseChainContext(job.State["chainContext"])
-	existingContext.MergeFromParsedResult(result)
+	contextResult := &ParsedChainResult{
+		Fragments: result.Fragments,
+		Edges:     acceptedContextEdges,
+	}
+	existingContext.MergeFromParsedResult(contextResult)
 
 	// Identify gaps: nodes that have only incoming or only outgoing edges
 	gapHints := e.identifyChainGaps(result, existingContext)
 	existingContext.GapHints = gapHints
+	dupeCreateRatio := 0.0
+	if createdEdges > 0 {
+		dupeCreateRatio = float64(edgeDupes) / float64(createdEdges)
+	}
+	reverseRate := 0.0
+	if createdEdges > 0 {
+		reverseRate = float64(edgeReversed) / float64(createdEdges)
+	}
+	job.State["supplyChainSummary"] = map[string]interface{}{
+		"createdFragments":   float64(createdFrags),
+		"updatedFragments":   float64(updatedFrags),
+		"fragmentErrors":     float64(createErrors),
+		"createdEdges":       float64(createdEdges),
+		"edgeDupes":          float64(edgeDupes),
+		"edgeErrors":         float64(edgeCreateErrors),
+		"edgeReversed":       float64(edgeReversed),
+		"edgePenalized":      float64(edgePenalized),
+		"supplyLinksCreated": float64(supplyLinksCreated),
+		"supplyLinksSkipped": float64(supplyLinksSkipped),
+		"gapHints":           float64(len(gapHints)),
+		"dupeCreateRatio":    dupeCreateRatio,
+		"reverseRate":        reverseRate,
+		"kpiGuardrailDCR":    dupeCreateRatio > 0.2,
+		"kpiGuardrailRR":     reverseRate > 0.25,
+	}
 
 	if contextJSON, err := existingContext.ToJSON(); err == nil {
 		if job.State == nil {
 			job.State = make(map[string]interface{})
 		}
 		job.State["chainContext"] = contextJSON
-		// Update job state in repository
 		if e.scoutingJobsRepo != nil {
-			if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+			if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"chainContext": contextJSON}); err != nil {
 				logGroundingErrorWithContext(job, "scout", "supply_chain.persist_chain_context", "job_state_update_failed", "repo_update_error", true, err)
 				e.emitGroundingErrorTelemetry(ctx, job, "scout", "supply_chain.persist_chain_context", "job_state_update_failed", "repo_update_error", true)
 			}
@@ -7421,6 +7693,14 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 	// Depth guardrails
 	currentDepth := parseStateInt(job.State["recursionDepth"], 0)
 	maxDepth := parseStateInt(job.State["maxRecursionDepth"], 2)
+	hasExecutionPlan := HasExecutionPlanContractState(job.State)
+	executionPlan := ExecutionPlanContract{}
+	if hasExecutionPlan {
+		executionPlan = ExecutionPlanContractFromState(job.State)
+	}
+	if hasExecutionPlan && executionPlan.MaxRecursionDepth >= 0 && executionPlan.MaxRecursionDepth < maxDepth {
+		maxDepth = executionPlan.MaxRecursionDepth
+	}
 	if maxDepth < 0 {
 		maxDepth = 0
 	}
@@ -7433,21 +7713,50 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 	if v, ok := job.State["maxChildrenPerJob"]; ok {
 		maxChildren = parseStateInt(v, maxChildren)
 	}
+	if hasExecutionPlan && executionPlan.MaxChildrenPerJob > 0 && executionPlan.MaxChildrenPerJob < maxChildren {
+		maxChildren = executionPlan.MaxChildrenPerJob
+	}
 	if maxChildren < 0 {
 		maxChildren = 0
 	}
 	if maxChildren == 0 {
 		return nil
 	}
+	lensID := strings.TrimSpace(job.LensID)
+	if lensID == "" {
+		lensID = parseStateString(job.State["lensId"])
+	}
+	cascadeID := ""
+	if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
+		cascadeID = strings.TrimSpace(v)
+	}
+	if cascadeID == "" {
+		cascadeID = strings.TrimSpace(job.ID)
+	}
+	cascadeLimitActive := hasExecutionPlan && executionPlan.MaxCascadeJobs > 0
+	cascadeRemaining := 0
+	cascadeUsed := 0
+	if cascadeLimitActive {
+		cascadeRemaining, cascadeUsed = e.estimateCascadeRemainingCapacity(ctx, job, lensID, cascadeID, executionPlan.MaxCascadeJobs)
+		if cascadeRemaining <= 0 {
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> supply-chain cascade cap reached (%s): used=%d limit=%d",
+				RuntimeContractExecutionPlan, cascadeUsed, executionPlan.MaxCascadeJobs))
+			return nil
+		}
+	}
+	if scale, snap, ok := e.computeRuntimeBudgetAdaptation(ctx, job.TenantID, lensID, cascadeID); ok && scale < 1.0 {
+		before := maxChildren
+		maxChildren = scaleCapByBudget(maxChildren, 1, scale)
+		if maxChildren < before {
+			e.logLine(ctx, job, "info", fmt.Sprintf("> supply-chain fanout budget adapted (%s): maxChildren %d -> %d (%s)",
+				RuntimeContractBudgetAdaptiveFanout, before, maxChildren, snap.summary()))
+		}
+	}
 
 	// Best-effort: prefetch active (pending/running) scout jobs for this project/lens
 	activeJobByPath := map[string]string{}     // canonicalPath -> jobId
 	activeJobByIdentity := map[string]string{} // targetIdentityKey -> jobId
 	{
-		lensID := strings.TrimSpace(job.LensID)
-		if lensID == "" {
-			lensID = parseStateString(job.State["lensId"])
-		}
 		if jobs, err := e.scoutingJobsRepo.ListByProjectAndLens(ctx, job.TenantID, job.ProjectID, lensID, 300); err == nil {
 			for _, j := range jobs {
 				if j == nil {
@@ -7547,14 +7856,10 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 	skippedOutOfScope := 0
 	sourceFacilityQualifier := resolveFacilityQualifierSemantic(sourceFragment, "")
 
-	cascadeID := ""
-	if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
-		cascadeID = strings.TrimSpace(v)
-	}
-	if cascadeID == "" {
-		cascadeID = strings.TrimSpace(job.ID)
-	}
 	for _, targetPath := range candidates {
+		if cascadeLimitActive && cascadeRemaining <= 0 {
+			break
+		}
 		if scheduled >= maxChildren {
 			break
 		}
@@ -7717,6 +8022,8 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 					"target":    strings.TrimSpace(targetPath),
 				})
 			}
+		} else if cascadeLimitActive && cascadeRemaining > 0 {
+			cascadeRemaining--
 		}
 	}
 

@@ -10,6 +10,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,8 @@ type AITaskExecutor struct {
 	horizonSpendSink interface {
 		AddHorizonSpend(ctx context.Context, tenantID, lensID, cascadeID string, amountUSD float64, inputTokens, outputTokens int) error
 	}
+	providerPressureMu sync.Mutex
+	providerPressure   map[AIProvider]providerPressureState
 }
 
 // NewAITaskExecutor создает новый экземпляр AITaskExecutor
@@ -46,6 +49,7 @@ func NewAITaskExecutor(aiServices []AIService, modelManager *AIModelManager) *AI
 		aiServices:       servicesMap,
 		modelManager:     modelManager,
 		usageMetricsRepo: nil,
+		providerPressure: make(map[AIProvider]providerPressureState),
 	}
 }
 
@@ -78,7 +82,7 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 	startedAt := time.Now()
 
 	for {
-		currentModel := e.modelManager.SelectFallbackModel(task.AIRequirements, inputTokens, triedModels)
+		currentModel := e.selectFallbackModelAdaptive(task.AIRequirements, inputTokens, triedModels)
 		if currentModel == "" {
 			log.Printf("All models have been tried or are unavailable. Unable to complete the task.")
 			return &AITaskResult{
@@ -106,10 +110,12 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 		log.Printf("Executing task using %s with model %s", modelCapabilities.Provider, currentModel)
 		result, err := aiService.ExecuteTask(ctx, task, currentModel)
 		if err != nil {
+			e.recordProviderFailure(modelCapabilities.Provider, currentModel, err)
 			log.Printf("Error executing task with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
+		e.recordProviderSuccess(modelCapabilities.Provider)
 
 		result.Status = AITaskStatusCompleted
 		result.InputTokens = inputTokens
@@ -166,7 +172,7 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 	for {
 		attempt := len(triedModels) + 1
 
-		currentModel := e.modelManager.SelectFallbackModel(activeTask.AIRequirements, inputTokens, triedModels)
+		currentModel := e.selectFallbackModelAdaptive(activeTask.AIRequirements, inputTokens, triedModels)
 		if currentModel == "" {
 			if !geminiSearchGroundingFallbackApplied && e.enableGeminiSearchGroundingFallback(&activeTask, inputChars) {
 				geminiSearchGroundingFallbackApplied = true
@@ -205,6 +211,7 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 		attemptStartedAt := time.Now()
 		result, err := aiService.ExecuteTask(ctx, &activeTask, currentModel)
 		if err != nil {
+			e.recordProviderFailure(modelCapabilities.Provider, currentModel, err)
 			// Log detailed information about the request when it fails
 			elapsed := time.Since(attemptStartedAt)
 			log.Printf("WARNING: Task failed with model %s after %s (task=%s provider=%s attempt=%d input=%d chars %d tokens est). Error: %v",
@@ -226,6 +233,7 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
+		e.recordProviderSuccess(modelCapabilities.Provider)
 
 		if debug && result != nil {
 			out := strings.TrimSpace(result.Content)
@@ -495,7 +503,7 @@ func (e *AITaskExecutor) ExecuteTaskWithTools(ctx context.Context, task *AITask,
 	startedAt := time.Now()
 
 	for {
-		currentModel := e.modelManager.SelectFallbackToolCallingModel(task.AIRequirements, inputTokens, triedModels)
+		currentModel := e.selectFallbackToolModelAdaptive(task.AIRequirements, inputTokens, triedModels)
 		if currentModel == "" {
 			log.Printf("All models tried or unavailable for ExecuteTaskWithTools.")
 			return &AITaskResult{
@@ -533,6 +541,7 @@ func (e *AITaskExecutor) ExecuteTaskWithTools(ctx context.Context, task *AITask,
 
 		step, err := svc.BeginChatWithTools(ctx, task, currentModel, tools)
 		if err != nil {
+			e.recordProviderFailure(caps.Provider, currentModel, err)
 			log.Printf("Error beginning chat with tools with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
@@ -573,6 +582,7 @@ func (e *AITaskExecutor) ExecuteTaskWithTools(ctx context.Context, task *AITask,
 
 			step, err = svc.ContinueWithToolResults(ctx, step.SessionID, currentModel, execResults)
 			if err != nil {
+				e.recordProviderFailure(caps.Provider, currentModel, err)
 				log.Printf("Error continuing with tool results with model %s. Message: %v. Attempting fallback.", currentModel, err)
 				triedModels = append(triedModels, currentModel)
 				break
@@ -601,6 +611,7 @@ func (e *AITaskExecutor) ExecuteTaskWithTools(ctx context.Context, task *AITask,
 			ToolCalls:          callLogs,
 			ProcessingTime:     time.Since(startedAt),
 		}
+		e.recordProviderSuccess(caps.Provider)
 
 		cost, _ := e.modelManager.CalculateProcessingCost(currentModel, result.InputTokens, result.OutputTokens)
 		result.ProcessingCost = cost

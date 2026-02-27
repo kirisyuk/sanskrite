@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"math"
 	"regexp"
 	"strconv"
@@ -33,6 +34,49 @@ type Location struct {
 	ISO6709   *string `json:"iso6709,omitempty" firestore:"iso6709,omitempty"`     // координаты ISO 6709
 	ISO3166_1 *string `json:"iso3166_1,omitempty" firestore:"iso3166_1,omitempty"` // ISO 3166-1 alpha-2 (страна)
 	ISO3166_2 *string `json:"iso3166_2,omitempty" firestore:"iso3166_2,omitempty"` // ISO 3166-2 (субъект)
+}
+
+// locationJSON is used for flexible unmarshalling (LLMs often return "country" instead of "iso3166_1").
+type locationJSON struct {
+	Name          string  `json:"name,omitempty"`
+	ISO6709       *string `json:"iso6709,omitempty"`
+	ISO3166_1     *string `json:"iso3166_1,omitempty"`
+	ISO3166_2     *string `json:"iso3166_2,omitempty"`
+	Country       *string `json:"country,omitempty"`        // LLM alias
+	CountryCode   *string `json:"countryCode,omitempty"`    // LLM alias
+	CountryAlpha2 *string `json:"countryAlpha2,omitempty"`  // ontology extractor style
+}
+
+// UnmarshalJSON accepts both canonical fields and common LLM aliases (country, countryCode, countryAlpha2).
+func (l *Location) UnmarshalJSON(data []byte) error {
+	var raw locationJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	l.Name = strings.TrimSpace(raw.Name)
+	l.ISO6709 = raw.ISO6709
+	l.ISO3166_2 = raw.ISO3166_2
+	// ISO3166_1: prefer canonical, then aliases
+	if raw.ISO3166_1 != nil && strings.TrimSpace(*raw.ISO3166_1) != "" {
+		v := strings.TrimSpace(*raw.ISO3166_1)
+		l.ISO3166_1 = &v
+	} else if raw.CountryAlpha2 != nil && strings.TrimSpace(*raw.CountryAlpha2) != "" {
+		v := strings.TrimSpace(*raw.CountryAlpha2)
+		if len(v) == 2 {
+			l.ISO3166_1 = &v
+		}
+	} else if raw.CountryCode != nil && strings.TrimSpace(*raw.CountryCode) != "" {
+		v := strings.TrimSpace(*raw.CountryCode)
+		if len(v) == 2 {
+			l.ISO3166_1 = &v
+		}
+	} else if raw.Country != nil && strings.TrimSpace(*raw.Country) != "" {
+		v := strings.TrimSpace(*raw.Country)
+		if len(v) == 2 {
+			l.ISO3166_1 = &v
+		}
+	}
+	return nil
 }
 
 // Coordinates is a typed geographic coordinate.

@@ -14,7 +14,6 @@ API_DIR="$ROOT_DIR/backend"
 
 TARGET_WEB=1
 TARGET_API=1
-TARGET_WS=0
 TARGET_HATLONE_WS=0
 TARGET_VERIFIED_PROXY=0
 TARGET_CHECK_INFRA=0
@@ -37,15 +36,14 @@ SA_BACKEND="backend@${PROJECT_ID}.iam.gserviceaccount.com"
 SECRET_ADMIN_JOB_TOKEN="admin_job_token"
 
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py] [--ws] [--hatlone-ws] [--verified-proxy] [--check-infra] [--horizon-watchdog] [--horizon-watchdog-only] [--cleanup-revisions]"
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--hatlone-ws] [--verified-proxy] [--check-infra] [--horizon-watchdog] [--horizon-watchdog-only] [--cleanup-revisions]"
   echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
   echo ""
   echo "Flags:"
   echo "  --web           Deploy frontend only"
   echo "  --api           Deploy backend API only (skips infra checks)"
   echo "  --py            Deploy Telegram service only (skips infra checks)"
-  echo "  --ws            Deploy legacy WS broker only (skips infra checks)"
-  echo "  --hatlone-ws    Deploy new hatlone WS broker only (skips infra checks)"
+  echo "  --hatlone-ws    Deploy WS broker only (skips infra checks)"
   echo "  --verified-proxy Deploy verified-proxy only (skips infra checks)"
   echo "  --check-infra   Run infrastructure checks only (no deployments)"
   echo "  --horizon-watchdog Ensure Cloud Scheduler job for Horizon Watchdog (calls API cron endpoint)"
@@ -59,13 +57,12 @@ while [[ $# -gt 0 ]]; do
     --web) TARGET_API=0 ;;
     --api) TARGET_WEB=0; TARGET_CHECK_INFRA=0 ;;
     --py) TARGET_WEB=0; TARGET_API=0; TARGET_PY=1; TARGET_CHECK_INFRA=0 ;;
-    --ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=1; TARGET_HATLONE_WS=0; TARGET_CHECK_INFRA=0 ;;
-    --hatlone-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=1; TARGET_CHECK_INFRA=0; TARGET_SETUP_HATLONE_INFRA=1 ;;
-    --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
-    --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
+    --hatlone-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_HATLONE_WS=1; TARGET_CHECK_INFRA=0; TARGET_SETUP_HATLONE_INFRA=1 ;;
+    --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
+    --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
     --horizon-watchdog) TARGET_HORIZON_WATCHDOG=1 ;;
-    --horizon-watchdog-only) TARGET_HORIZON_WATCHDOG=1; TARGET_HORIZON_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
-    --cleanup-revisions) TARGET_CLEANUP_REVISIONS=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
+    --horizon-watchdog-only) TARGET_HORIZON_WATCHDOG=1; TARGET_HORIZON_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
+    --cleanup-revisions) TARGET_CLEANUP_REVISIONS=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo -e "${YELLOW}Unknown arg: $1${NC}"; usage; exit 1 ;;
   esac
@@ -111,14 +108,14 @@ deploy_web() {
     exit 1
   fi
   
-  # Try to resolve ws-broker URL for Vite env
+  # Try to resolve WS broker URL for Vite env (hatlone-ws)
   local WS_URL="${WS_URL:-}"
   if [[ -z "$WS_URL" ]]; then
-    if gcloud run services describe h1horizon-ws --region "$REGION" >/dev/null 2>&1; then
-      WS_URL=$(gcloud run services describe h1horizon-ws --region "$REGION" --format='value(status.url)')
-      echo -e "${GREEN}[web] Found h1horizon-ws URL:${NC} $WS_URL"
+    if gcloud run services describe hatlone-ws --region "$REGION" >/dev/null 2>&1; then
+      WS_URL=$(gcloud run services describe hatlone-ws --region "$REGION" --format='value(status.url)')
+      echo -e "${GREEN}[web] Found hatlone-ws URL:${NC} $WS_URL"
     else
-      echo -e "${YELLOW}[web] ws-broker service not found (will use default from env if set)${NC}"
+      echo -e "${YELLOW}[web] WS broker (hatlone-ws) not found (will use default from env if set)${NC}"
     fi
   fi
   
@@ -150,9 +147,16 @@ deploy_web() {
   # Build with environment variables
   echo -e "${BLUE}[web] Building Vite app...${NC}"
   local build_env_vars=()
+  # Firebase config for h1horizon-488615 (created via firebase apps:create WEB)
+  build_env_vars+=("VITE_FIREBASE_PROJECT_ID=$FIREBASE_PROJECT_ID")
+  build_env_vars+=("VITE_FIREBASE_AUTH_DOMAIN=${FIREBASE_PROJECT_ID}.firebaseapp.com")
+  build_env_vars+=("VITE_FIREBASE_STORAGE_BUCKET=${FIREBASE_PROJECT_ID}.firebasestorage.app")
+  build_env_vars+=("VITE_FIREBASE_API_KEY=AIzaSyA57nw_YlFBn7DZEcpjwQ28iEXueTz7nJA")
+  build_env_vars+=("VITE_FIREBASE_MESSAGING_SENDER_ID=849799327589")
+  build_env_vars+=("VITE_FIREBASE_APP_ID=1:849799327589:web:d0783eb9cf75ec8e80bb8c")
   if [[ -n "$WS_URL" ]]; then
     build_env_vars+=("VITE_WS_BROKER_URL=$WS_URL")
-    echo -e "${BLUE}[web] Using ws-broker URL for build:${NC} $WS_URL"
+    echo -e "${BLUE}[web] Using WS broker URL for build:${NC} $WS_URL"
   fi
   if [[ -n "$VERIFIED_PROXY_URL" ]]; then
     build_env_vars+=("VITE_VERIFIED_PROXY_URL=$VERIFIED_PROXY_URL")
@@ -838,13 +842,12 @@ except:
     # Update Cloud Run services with Redis connection info if they exist
     if gcloud run services describe h1horizon-api --region="$REGION" >/dev/null 2>&1; then
       gcloud run services update h1horizon-api --region="$REGION" \
-        --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port" \
+        --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port,REDIS_ADDR=$redis_host:$redis_port" \
         --quiet >/dev/null 2>&1 && \
         echo -e "${GREEN}[infra] Updated h1horizon-api with Redis connection info${NC}" || \
         echo -e "${YELLOW}[infra] Warning: Failed to update h1horizon-api with Redis info${NC}"
     fi
-    # Note: h1horizon-ws does NOT use Redis, so skip Redis env vars update
-    # WS broker only uses Pub/Sub, Firestore, and Firebase Auth (all accessible without VPC)
+    # Note: hatlone-ws does NOT use Redis, so skip Redis env vars update
   else
     echo -e "${BLUE}[infra] Creating Redis instance (this may take 10-20 minutes)...${NC}"
     
@@ -935,13 +938,12 @@ except:
         # Update Cloud Run API service с новыми env (VPC не используем)
         if gcloud run services describe h1horizon-api --region="$REGION" >/dev/null 2>&1; then
           gcloud run services update h1horizon-api --region="$REGION" \
-            --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port" \
+            --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port,REDIS_ADDR=$redis_host:$redis_port" \
             --quiet >/dev/null 2>&1 && \
             echo -e "${GREEN}[infra] Updated h1horizon-api with Redis connection info${NC}" || \
             echo -e "${YELLOW}[infra] Warning: Failed to update h1horizon-api (may need manual update)${NC}"
         fi
-        # Note: h1horizon-ws does NOT use Redis, so no VPC connector needed
-        # WS broker only uses Pub/Sub, Firestore, and Firebase Auth (all accessible without VPC)
+        # Note: hatlone-ws does NOT use Redis, so no VPC connector needed
         
         echo -e "${GREEN}[infra] Redis setup completed successfully${NC}"
         echo -e "${BLUE}[infra] Connection string:${NC} $redis_host:$redis_port"
@@ -1004,8 +1006,8 @@ except:
     fi
   done
 
-  # 4.2 Ensure ws-broker subscriptions exist for aggregated topics (Subscriber uses <topic>-ws-broker)
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for ws-broker...${NC}"
+  # 4.2 Ensure hatlone-ws subscriptions exist for aggregated topics (Subscriber uses <topic>-ws-broker)
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for hatlone-ws...${NC}"
   for topic in "${agg_topics[@]}"; do
     sub_id="${topic}-ws-broker"
     if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -1028,63 +1030,6 @@ except:
         --enable-message-ordering \
         --quiet >/dev/null 2>&1 || true
       echo -e "${GREEN}  ✓${NC} Created subscription: $sub_id"
-    fi
-  done
-
-  # 4.3 Ensure ws-broker subscriptions exist for interaction topics
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for interaction topics...${NC}"
-  local interaction_topics=(
-    "interaction.created"
-    "interaction.updated"
-  )
-  for topic in "${interaction_topics[@]}"; do
-    local sub_id="${topic}-ws-broker"
-    if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      # Ensure message ordering is enabled (recreate if needed)
-      local ordering
-      ordering=$(gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" --format="value(enableMessageOrdering)" 2>/dev/null || echo "False")
-      if [[ "$ordering" != "True" ]]; then
-        echo -e "${YELLOW}[infra] Recreating subscription with ordering enabled:${NC} $sub_id"
-        gcloud pubsub subscriptions delete "$sub_id" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
-        gcloud pubsub subscriptions create "$sub_id" \
-          --project="$PROJECT_ID" \
-          --topic="$topic" \
-          --enable-message-ordering \
-          --quiet >/dev/null 2>&1 || true
-      fi
-      echo -e "${GREEN}  ✓${NC} $sub_id exists"
-    else
-      gcloud pubsub subscriptions create "$sub_id" \
-        --project="$PROJECT_ID" \
-        --topic="$topic" \
-        --enable-message-ordering \
-        --quiet >/dev/null 2>&1 || true
-      echo -e "${GREEN}  ✓${NC} Created subscription: $sub_id"
-    fi
-  done
-
-  # 4.4 Ensure ws-broker subscriptions for base topics (aggregator / legacy h1horizon-ws)
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for base topics (ws-broker)...${NC}"
-  local base_ws_topics=(
-    discovery.status discovery.profile discovery.answer discovery.project
-    document.process analysis.status agent.update verified.stream
-    artifact.generation.started artifact.section.generating artifact.generation.error
-    artifact.assembly.started artifact.assembly.chunk artifact.assembly.completed
-    artifact.section.completed artifact.section.chunk artifact.generation.completed
-  )
-  for topic in "${base_ws_topics[@]}"; do
-    local sub_id="${topic}-ws-broker"
-    if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      echo -e "${GREEN}  ✓${NC} $sub_id exists"
-    else
-      if gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
-        gcloud pubsub subscriptions create "$sub_id" \
-          --project="$PROJECT_ID" \
-          --topic="$topic" \
-          --enable-message-ordering \
-          --quiet >/dev/null 2>&1 || true
-        echo -e "${GREEN}  ✓${NC} Created subscription: $sub_id"
-      fi
     fi
   done
 
@@ -1419,7 +1364,7 @@ deploy_api() {
 
   # Clean up any local binaries before Cloud Build (they're not needed, built in Docker)
   echo -e "${BLUE}[api] Cleaning up local build artifacts...${NC}"
-  (cd "$API_DIR" && rm -f server ws-broker verified-proxy hatlone-ws main test-agent-orchestrator cmd/*/server cmd/*/ws-broker cmd/*/verified-proxy cmd/*/hatlone-ws cmd/*/main 2>/dev/null || true)
+  (cd "$API_DIR" && rm -f server verified-proxy hatlone-ws main test-agent-orchestrator cmd/*/server cmd/*/verified-proxy cmd/*/hatlone-ws cmd/*/main 2>/dev/null || true)
   (cd "$API_DIR" && rm -f horizon_* add_* check_* check-* seed_* migrate_* inspect_* purge_* geonames_* loc_* watchdog_* test_* test-* sync-* reindex-* update-* clear_* run_* find_* gemini_* openai_* 2>/dev/null || true)
 
   echo -e "${BLUE}[api] Building container image (Artifact Registry)...${NC}"
@@ -1519,9 +1464,9 @@ deploy_api() {
     env_vars="$env_vars,DISABLE_HORIZON_WATCHDOG_TICKER=true,HORIZON_WATCHDOG_CRON_LIMIT=${HORIZON_WATCHDOG_CRON_LIMIT:-200},HORIZON_WATCHDOG_CRON_LOCK_TTL=${HORIZON_WATCHDOG_CRON_LOCK_TTL:-9m}"
   fi
   
-  # Add Redis env vars if available
+  # Add Redis env vars if available (REDIS_HOST/PORT for cache package, REDIS_ADDR for legacy applicability_evaluator)
   if [[ -n "$redis_host" ]]; then
-    env_vars="$env_vars,REDIS_HOST=$redis_host,REDIS_PORT=$redis_port"
+    env_vars="$env_vars,REDIS_HOST=$redis_host,REDIS_PORT=$redis_port,REDIS_ADDR=$redis_host:$redis_port"
     echo -e "${BLUE}[api] Using Redis:${NC} $redis_host:$redis_port"
   fi
   
@@ -1534,6 +1479,8 @@ deploy_api() {
   fi
   
   echo -e "${BLUE}[api] Deploying to Cloud Run from image...${NC}"
+  # Direct VPC egress for Redis Memorystore access (private IP).
+  # --network/--subnet replaces the old --clear-vpc-connector approach.
   gcloud run deploy "$service" \
     --image "$image" \
     --region "$REGION" \
@@ -1546,7 +1493,9 @@ deploy_api() {
     --timeout=3600 \
     --set-env-vars "$env_vars" \
     --set-secrets "$paypal_secrets" \
-    --clear-vpc-connector \
+    --network=default \
+    --subnet=default \
+    --vpc-egress=private-ranges-only \
     --project "$PROJECT_ID" \
     --quiet
 
@@ -1691,82 +1640,6 @@ deploy_verified_proxy() {
   else
     echo -e "${YELLOW}[verified-proxy] Deployment completed but URL not available (check Cloud Run console)${NC}"
   fi
-}
-
-deploy_ws() {
-  echo -e "${BLUE}[ws] Pre-deployment: validating Go build...${NC}"
-  (cd "$API_DIR" && go build -o /dev/null ./cmd/ws-broker) || {
-    echo -e "${RED}[ws] Go build failed! Fix errors before deploying.${NC}"
-    exit 1
-  }
-  echo -e "${GREEN}[ws] Go build successful locally${NC}"
-
-  echo -e "${BLUE}[ws] Building ws-broker image...${NC}"
-  local service="h1horizon-ws"
-  # Must match cloudbuild.ws.yaml output image
-  local image="us-central1-docker.pkg.dev/$PROJECT_ID/h1horizon/h1horizon-ws:latest"
-  local ws_repo="h1horizon"
-
-  if ! gcloud artifacts repositories describe "$ws_repo" --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
-    echo -e "${YELLOW}[ws] Artifact Registry repo '${ws_repo}' not found, creating...${NC}"
-    gcloud artifacts repositories create "$ws_repo" \
-      --repository-format=docker \
-      --location "$REGION" \
-      --description="WS broker images" \
-      --project "$PROJECT_ID" \
-      --quiet >/dev/null 2>&1 || true
-  fi
-  if ! gcloud artifacts repositories describe "$ws_repo" --location "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
-    echo -e "${RED}[ws] Error: Artifact Registry repo '${ws_repo}' is required but could not be created${NC}" >&2
-    exit 1
-  fi
-
-  # Build using cloudbuild with explicit Dockerfile
-  gcloud builds submit "$API_DIR" \
-    --config="$API_DIR/cloudbuild.ws.yaml" \
-    --project "$PROJECT_ID" \
-    --quiet
-
-  # Check if Redis exists and get connection info
-  local redis_host=""
-  local redis_port="6379"
-  local redis_instance="h1horizon-redis"
-  if gcloud redis instances describe "$redis_instance" --region="$REGION" >/dev/null 2>&1; then
-    redis_host=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(host)' 2>/dev/null || echo "")
-    redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
-  fi
-  
-  # Build env vars string
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
-  
-  # Add Redis env vars if available
-  if [[ -n "$redis_host" ]]; then
-    env_vars="$env_vars,REDIS_HOST=$redis_host,REDIS_PORT=$redis_port"
-    echo -e "${BLUE}[ws] Using Redis:${NC} $redis_host:$redis_port"
-  fi
-  
-  echo -e "${BLUE}[ws] Deploying ws-broker to Cloud Run...${NC}"
-  gcloud run deploy "$service" \
-    --image "$image" \
-    --region "$REGION" \
-    --allow-unauthenticated \
-    --service-account "$SA_BACKEND" \
-    --min-instances=1 \
-    --max-instances=1 \
-    --cpu=1 \
-    --memory=256Mi \
-    --timeout=3600s \
-    --set-env-vars "$env_vars" \
-    --clear-vpc-connector \
-    --project "$PROJECT_ID" \
-    --quiet
-
-  # Route traffic to latest revision
-  gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet
-
-  WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
-  echo -e "${GREEN}[ws] Deployed successfully${NC}"
-  echo -e "${BLUE}[ws] URL:${NC} $WS_URL"
 }
 
 deploy_hatlone_ws() {
@@ -2035,7 +1908,7 @@ if [[ "$TARGET_CHECK_INFRA" -eq 1 ]]; then
 elif [[ "$TARGET_HORIZON_WATCHDOG" -eq 1 ]]; then
   # Minimal infra needed for watchdog Cloud Scheduler job creation/update.
   setup_infrastructure
-elif [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_WS" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
+elif [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
   # Full deploy: run infrastructure checks
   setup_infrastructure
 elif [[ "$TARGET_SETUP_HATLONE_INFRA" -eq 1 ]]; then
@@ -2064,8 +1937,8 @@ elif [[ "$TARGET_SETUP_HATLONE_INFRA" -eq 1 ]]; then
       echo -e "${GREEN}  ✓${NC} $topic exists"
     fi
   done
-  # 4.2 Ensure ws-broker subscriptions
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for ws-broker...${NC}"
+  # 4.2 Ensure hatlone-ws subscriptions
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for hatlone-ws...${NC}"
   for topic in "${agg_topics[@]}"; do
     sub_id="${topic}-ws-broker"
     if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -2099,10 +1972,6 @@ if [[ "$TARGET_API" -eq 1 ]]; then
   deploy_api
 fi
 
-if [[ "$TARGET_WS" -eq 1 ]]; then
-  deploy_ws
-fi
-
 if [[ "$TARGET_HATLONE_WS" -eq 1 ]]; then
   deploy_hatlone_ws
 fi
@@ -2117,7 +1986,7 @@ fi
 
 # Firestore indexes are only relevant for backend; skip for web-only
 # Create indexes only on full deploy (already handled in --check-infra path above)
-if [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_WS" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
+if [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
   if [[ "$TARGET_API" -eq 1 || "$TARGET_PY" -eq 1 ]]; then
     create_indexes
   fi
@@ -2131,7 +2000,7 @@ if [[ "$TARGET_CLEANUP_REVISIONS" -eq 1 ]]; then
   echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
   
   # Clean up revisions for all services (keep last 10 per service)
-  services=("h1horizon-api" "h1horizon-telegram" "h1horizon-ws" "hatlone-ws" "verified-proxy")
+  services=("h1horizon-api" "h1horizon-telegram" "hatlone-ws" "verified-proxy")
   for service in "${services[@]}"; do
     if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
       cleanup_old_revisions "$service" "$REGION" 10
@@ -2156,11 +2025,8 @@ fi
 if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]] && [[ -n "${VERIFIED_PROXY_URL:-}" ]]; then
   echo -e "${BLUE}Verified Proxy:${NC} $VERIFIED_PROXY_URL"
 fi
-if [[ "$TARGET_WS" -eq 1 ]] && [[ -n "${WS_URL:-}" ]]; then
-  echo -e "${BLUE}WS Broker:${NC} $WS_URL"
-fi
 if [[ "$TARGET_HATLONE_WS" -eq 1 ]] && [[ -n "${HATLONE_WS_URL:-}" ]]; then
-  echo -e "${BLUE}hatlone WS:${NC} $HATLONE_WS_URL"
+  echo -e "${BLUE}WS Broker:${NC} $HATLONE_WS_URL"
 fi
 if [[ "$TARGET_PY" -eq 1 ]] && [[ -n "${TG_URL:-}" ]]; then
   echo -e "${BLUE}Telegram Service:${NC} $TG_URL"

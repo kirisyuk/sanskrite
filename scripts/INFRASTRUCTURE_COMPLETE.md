@@ -6,10 +6,9 @@
 
 ## Создаваемые ресурсы
 
-### 1. Cloud Run Services (5 сервисов)
+### 1. Cloud Run Services (4 сервиса)
 - `h1horizon-api` - основной backend API
-- `h1horizon-ws` - WebSocket broker (legacy)
-- `hatlone-ws` - новый WebSocket broker для realtime событий
+- `hatlone-ws` - WebSocket broker для realtime событий
 - `h1horizon-telegram` - Telegram сервис
 - `verified-proxy` - прокси для verified URL анализа
 
@@ -37,9 +36,9 @@
 - `hatlone.operations.events`
 - `source.poll`
 
-### 3. Pub/Sub Subscriptions (11 подписок)
-- Подписки для aggregated топиков: `<topic>-ws-broker` (9 подписок)
-- Подписки для interaction топиков: `interaction.created-ws-broker`, `interaction.updated-ws-broker` (2 подписки)
+### 3. Pub/Sub Subscriptions (14 подписок)
+- Подписки для hatlone-ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
+- Worker подписки: `source.poll.worker`, `source.poll.due.worker`, `ground.refresh.worker`, и др.
 
 ### 4. Cloud Storage Buckets (3 основных)
 - `sanskrite-core-docs` - для хранения core документов

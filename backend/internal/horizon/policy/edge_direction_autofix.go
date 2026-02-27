@@ -50,6 +50,31 @@ func ResolveEdgeDirectionAutoFix(
 			Reason:     "canonicalize: ORGANIZATION OWNS PROGRAM -> ORGANIZATION ADMINISTERS PROGRAM",
 			Confidence: 0.95,
 		}, true
+	// GOV (/gov/...) -> MARKET with non-regulator edge: convert to REGULATES.
+	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
+		sourceType == horizonmodels.FragmentTypeOrganization &&
+		targetType == horizonmodels.FragmentTypeMarket &&
+		!isGovRegulatorEdge(edgeType, sourcePath) &&
+		strings.HasPrefix(sourcePath, "/gov/"):
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeRegulates,
+			ShouldSwap: false,
+			Reason:     "canonicalize: GOV * MARKET -> GOV REGULATES MARKET",
+			Confidence: 0.95,
+		}, true
+	// MARKET * GOV: swap so GOV REGULATES MARKET.
+	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
+		sourceType == horizonmodels.FragmentTypeMarket &&
+		targetType == horizonmodels.FragmentTypeOrganization &&
+		!isGovRegulatorEdge(edgeType, targetPath) &&
+		strings.HasPrefix(targetPath, "/gov/"):
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeRegulates,
+			ShouldSwap: true,
+			Reason:     "canonicalize: MARKET * GOV -> GOV REGULATES MARKET",
+			Confidence: 0.95,
+		}, true
+	// Non-GOV ORG -> MARKET: convert to PARTICIPATES_IN.
 	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
 		sourceType == horizonmodels.FragmentTypeOrganization &&
 		targetType == horizonmodels.FragmentTypeMarket &&

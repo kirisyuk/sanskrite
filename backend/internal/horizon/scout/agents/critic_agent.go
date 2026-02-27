@@ -89,6 +89,105 @@ func (a *CriticAgent) ValidateWithGraphContext(
 	return enforceValidationRelevance(extractedData, out), nil
 }
 
+// RuleBasedQuickValidation performs deterministic structural completeness checks per active
+// domain mode, producing missingInfo for the research agent. This replaces the first LLM-based
+// critic pass for all non-general modes, saving one LLM call per entity. Returns nil for
+// general-only mode (signals caller to fall through to LLM-based critic).
+func RuleBasedQuickValidation(
+	fragment *models.HorizonFragment,
+	relations []DiscoveredRelation,
+	supplyChains []SupplyChain,
+	domainModes []string,
+) *ValidationResult {
+	domainModes = taxonomy.NormalizeDomainModes(domainModes)
+	hasSpecific := false
+	for _, m := range domainModes {
+		if m != taxonomy.DomainModeGeneral {
+			hasSpecific = true
+			break
+		}
+	}
+	if !hasSpecific {
+		return nil
+	}
+
+	relTypes := make(map[string]bool)
+	for _, r := range relations {
+		rt := strings.TrimSpace(strings.ToUpper(r.RelationType))
+		if rt != "" {
+			relTypes[rt] = true
+		}
+	}
+
+	var missing []string
+
+	for _, m := range domainModes {
+		switch m {
+		case taxonomy.DomainModeSupplyChain:
+			if !relTypes["PRODUCES"] && !relTypes["CONSUMES"] {
+				missing = append(missing, "products produced or consumed by this entity")
+			}
+			if !relTypes["LOCATED_IN"] && !relTypes["OPERATES_IN"] {
+				missing = append(missing, "facility locations and operating regions")
+			}
+			if !relTypes["EXTRACTS_FROM"] && fragment != nil && isMiningOrExtractive(fragment.CanonicalPath) {
+				missing = append(missing, "extractive source links (deposits, mines)")
+			}
+			if len(relations) < 3 {
+				missing = append(missing, "upstream suppliers and downstream customers")
+			}
+			invariantGaps := checkSupplyChainInvariants(supplyChains)
+			missing = append(missing, invariantGaps...)
+
+		case taxonomy.DomainModeGovernance:
+			if !relTypes["OWNS"] && !relTypes["SUBSIDIARY_OF"] {
+				missing = append(missing, "ownership chain and ultimate parent entity")
+			}
+			if !relTypes["BOARD_MEMBER_OF"] {
+				missing = append(missing, "board composition and key executives")
+			}
+			if !relTypes["CONTROLS"] {
+				missing = append(missing, "control structure and voting rights")
+			}
+
+		case taxonomy.DomainModeMarket:
+			if !relTypes["PARTICIPATES_IN"] {
+				missing = append(missing, "major market participants and market share")
+			}
+			if !relTypes["HAS_MARKET_SEGMENT"] {
+				missing = append(missing, "market hierarchy and segment breakdown")
+			}
+
+		case taxonomy.DomainModeAssurance:
+			if !relTypes["ASSURES"] {
+				missing = append(missing, "audit and certification relationships")
+			}
+
+		case taxonomy.DomainModePolicyImpact:
+			if !relTypes["REGULATES"] {
+				missing = append(missing, "regulatory relationships and oversight bodies")
+			}
+			if !relTypes["IMPOSES_CONDITION"] {
+				missing = append(missing, "policy impact channels and conditions")
+			}
+		}
+	}
+
+	return &ValidationResult{
+		IsValid:    true,
+		Confidence: 0.5,
+		MissingInfo: missing,
+		Conflicts:  []ValidationConflict{},
+	}
+}
+
+// isMiningOrExtractive returns true if the canonical path suggests an extractive/mining entity.
+func isMiningOrExtractive(path string) bool {
+	p := strings.ToLower(path)
+	return strings.Contains(p, "/mining/") || strings.Contains(p, "/extractive/") ||
+		strings.Contains(p, "/mineral/") || strings.Contains(p, "/deposit/")
+}
+
 // ValidateStrategicOverlay validates DECISION_POINT and MECHANISM entities in Phase 2.
 // This is a dedicated method with a focused prompt that only covers strategic layer rules,
 // without the general org/fac/person/market validation logic.
@@ -393,8 +492,8 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - FOUNDED: historical origin event; does NOT imply ongoing ownership or control.
 	  - INFLUENCES: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
 	- If the entity is an Organization, Facility, or Government body (/org/, /fac/, /gov/):
-	- If no assurance/audit is present (ASSURES or AUDITED_BY), add a question:
-	    - "Who provides external assurance to <org>? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit) or AUDITED_BY. Provide audit firm and source."
+	- If no assurance/audit is present (ASSURES), add a question:
+	    - "Who provides external assurance to <org>? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit|certification|regulatory|inspection). Provide assurer and source."
 	  
 	  - *** CRITICAL *** If marketSegments is empty or missing, you MUST add this question:
 	    - "What industry/sector does <entity> operate in? Return as marketSegments array with canonical paths:
@@ -541,6 +640,9 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - Add questions for missing transformations and metrics.
 	  - For PRODUCT: if there are no product-to-product transformation relations (TRANSFORMS_INTO), add a question:
 	    - "What is this product produced from and what does it transform into? Provide upstream/downstream products."
+	  - TRANSFORMS_INTO DIRECTION INVARIANT: source MUST be upstream (raw/earlier-stage), target MUST be downstream (refined/later-stage).
+	    Stage order: extraction < refining < smelting < processing < manufacturing < assembly.
+	    If any TRANSFORMS_INTO edge points from a later-stage product to an earlier-stage product, flag it as a direction error.
 	- If "supply_chain" specialty is requested:
 	  - Validate that extracted supply chains are COMPLETE and COHERENT:
 	    - Nodes must alternate: actor (org/fac) → product → actor → product → ...
@@ -551,10 +653,10 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - "Who are the downstream customers and what products do they receive?"
 	    - "What intermediate products/materials flow through this supply chain?"
 	  - Check for GAPS: if an actor produces a product but no downstream consumer is found, flag it.
-	- If "equity" specialty is requested:
-	  - Ensure ownership/control relations are present (OWNS / SUBSIDIARY_OF / CONTROLS / INVESTS_IN).
-	  - If none are found for an ORGANIZATION, add questions like:
-	    - "Who owns <org> (shareholders/parent company/UBO)?" and "What subsidiaries does <org> own/control?"
+		- If "equity" specialty is requested:
+		  - Ensure ownership/control relations are present (OWNS / SUBSIDIARY_OF / CONTROLS / INVESTS_IN).
+		  - If none are found for an ORGANIZATION, add questions like:
+		    - "Who owns <org> (shareholders/parent company/UBO)? Return OWNS with owner as SOURCE and <org> as TARGET (use explicit sourceCanonicalPath/sourceType/sourceName when owner is not current fragment)." and "What subsidiaries does <org> own/control?"
 	- If the entity is a PERSON:
 	  - If no RELATIVE_OF relations are present, add a question:
 	    - "Who are the direct public relatives (spouse/children/parents/siblings) of <person>? Return RELATIVE_OF links with sources."

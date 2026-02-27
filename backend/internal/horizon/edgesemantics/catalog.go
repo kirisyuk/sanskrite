@@ -48,6 +48,12 @@ var domainModeAllowlists = map[string][]models.DependencyType{
 		models.DependencyTypeExtractsFrom,
 		models.DependencyTypeLocatedIn,
 		models.DependencyTypeOperatesIn,
+		// GOV entities regulate markets/orgs; ORG/FAC participate in markets.
+		// Without these, LLM is forced into DEPENDS_ON catch-all for GOV->MARKET
+		// and autofix silently rewrites to PARTICIPATES_IN.
+		models.DependencyTypeRegulates,
+		models.DependencyTypeParticipatesIn,
+		models.DependencyTypeAdministers,
 	},
 	taxonomy.DomainModeGovernance: {
 		models.DependencyTypeOwns,
@@ -59,10 +65,11 @@ var domainModeAllowlists = map[string][]models.DependencyType{
 		models.DependencyTypeEmployedBy,
 		models.DependencyTypeFounded,
 		models.DependencyTypeAdministers,
+		// Governance can include external assurance actors (auditors/certifiers).
+		models.DependencyTypeAssures,
 	},
 	taxonomy.DomainModeAssurance: {
 		models.DependencyTypeAssures,
-		models.DependencyTypeAuditedBy,
 		models.DependencyTypeRegulates,
 	},
 	taxonomy.DomainModeMarket: {

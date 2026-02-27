@@ -1,6 +1,5 @@
 # Ignore build artifacts and service binaries
 server
-ws-broker
 verified-proxy
 hatlone-ws
 main

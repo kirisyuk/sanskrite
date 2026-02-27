@@ -73,10 +73,12 @@ func (h *HorizonHandlers) CreateLens(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Optional header: suppress scouting for scope-only creates (deterministic UI-selected objects).
+	skipScouting := false
 	if v := strings.TrimSpace(r.Header.Get("X-Horizon-Skip-Scouting")); v != "" {
 		v = strings.ToLower(v)
 		if v == "1" || v == "true" || v == "yes" || v == "on" {
 			ctx = hlens.WithSkipScouting(ctx)
+			skipScouting = true
 		}
 	}
 
@@ -88,6 +90,34 @@ func (h *HorizonHandlers) CreateLens(w http.ResponseWriter, r *http.Request) {
 		"scopeN":    len(lens.Scope),
 		"scopeTop":  trace.StrSlice(lens.Scope, 12),
 	})
+
+	if !skipScouting {
+		ready, reason, message := h.scoutExecutionAvailability()
+		if !ready {
+			trace.Log(ctx, "lens_create", "lens.create.blocked", map[string]any{
+				"tenantId":         authInfo.TenantID,
+				"projectId":        lens.ProjectID,
+				"scopeN":           len(lens.Scope),
+				"scoutReady":       false,
+				"scoutReadyReason": reason,
+			})
+			h.publishAssemblyFatal(
+				ctx,
+				authInfo.TenantID,
+				lens.ProjectID,
+				"",
+				"scouting",
+				correlationID,
+				sessionID,
+				reason,
+				message,
+			)
+			writeFatalPipelineError(w, http.StatusServiceUnavailable, reason, message, "scouting", map[string]interface{}{
+				"mode": "create_lens",
+			})
+			return
+		}
+	}
 
 	lensID, err := h.service.Lens().CreateLens(ctx, &lens)
 	if err != nil {

@@ -180,29 +180,25 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 	if !ok {
 		return fmt.Errorf("payload missing 'nodes' field")
 	}
-	nodesArray, ok := nodes.([]interface{})
-	if !ok {
-		return fmt.Errorf("payload 'nodes' must be an array")
+	decodedNodes, err := decodeSupplyChainPathNodes(nodes)
+	if err != nil {
+		return err
 	}
-	if len(nodesArray) == 0 {
+	if len(decodedNodes) == 0 {
 		return fmt.Errorf("payload 'nodes' array cannot be empty")
 	}
 
 	// Validate each node
-	for i, n := range nodesArray {
-		nodeMap, ok := n.(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("payload node[%d] must be an object", i)
-		}
-		nodeType, ok := nodeMap["type"].(string)
-		if !ok || nodeType == "" {
+	for i, node := range decodedNodes {
+		nodeType := node.Type
+		if nodeType == "" {
 			return fmt.Errorf("payload node[%d] missing or invalid 'type'", i)
 		}
 		if nodeType != "org" && nodeType != "fac" && nodeType != "product" && nodeType != "deposit" {
 			return fmt.Errorf("payload node[%d] invalid type: %q (expected org|fac|product|deposit)", i, nodeType)
 		}
-		ref, ok := nodeMap["ref"].(string)
-		if !ok || ref == "" {
+		ref := node.Ref
+		if ref == "" {
 			return fmt.Errorf("payload node[%d] missing or invalid 'ref'", i)
 		}
 		if !strings.HasPrefix(ref, "/") {
@@ -212,30 +208,18 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 
 	// Edges are optional, but if present, validate indices
 	if edges, ok := payload["edges"]; ok {
-		edgesArray, ok := edges.([]interface{})
-		if !ok {
-			return fmt.Errorf("payload 'edges' must be an array")
+		decodedEdges, err := decodeSupplyChainPathEdges(edges)
+		if err != nil {
+			return err
 		}
-		for i, e := range edgesArray {
-			edgeMap, ok := e.(map[string]interface{})
-			if !ok {
-				return fmt.Errorf("payload edge[%d] must be an object", i)
+		for i, edge := range decodedEdges {
+			fromIdx := edge.From
+			toIdx := edge.To
+			if fromIdx < 0 || fromIdx >= len(decodedNodes) {
+				return fmt.Errorf("payload edge[%d] 'from' index %d out of range (nodes length: %d)", i, fromIdx, len(decodedNodes))
 			}
-			from, ok := toFloat64(edgeMap["from"])
-			if !ok {
-				return fmt.Errorf("payload edge[%d] missing or invalid 'from'", i)
-			}
-			to, ok := toFloat64(edgeMap["to"])
-			if !ok {
-				return fmt.Errorf("payload edge[%d] missing or invalid 'to'", i)
-			}
-			fromIdx := int(from)
-			toIdx := int(to)
-			if fromIdx < 0 || fromIdx >= len(nodesArray) {
-				return fmt.Errorf("payload edge[%d] 'from' index %d out of range (nodes length: %d)", i, fromIdx, len(nodesArray))
-			}
-			if toIdx < 0 || toIdx >= len(nodesArray) {
-				return fmt.Errorf("payload edge[%d] 'to' index %d out of range (nodes length: %d)", i, toIdx, len(nodesArray))
+			if toIdx < 0 || toIdx >= len(decodedNodes) {
+				return fmt.Errorf("payload edge[%d] 'to' index %d out of range (nodes length: %d)", i, toIdx, len(decodedNodes))
 			}
 		}
 	}
@@ -265,4 +249,3 @@ func toFloat64(v interface{}) (float64, bool) {
 		return 0, false
 	}
 }
-

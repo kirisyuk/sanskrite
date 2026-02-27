@@ -39,6 +39,9 @@ func TestNormalizeRelationType_RuntimeTaxonomyDriftAllowsBuiltIns(t *testing.T) 
 		{"MANAGES", "MANAGES"},
 		{"controlled_by", "CONTROLS"}, // alias -> CONTROLS
 		{"owned_by", "SUBSIDIARY_OF"}, // alias -> SUBSIDIARY_OF
+		{"corporate_transition", "CORPORATE_TRANSITION"},
+		{"domain_relation", "DOMAIN_RELATION"},
+		{"has_submarket", "HAS_MARKET_SEGMENT"},
 		{"", "INFLUENCES"},
 		{"some_new_unknown_type", "INFLUENCES"},
 	}

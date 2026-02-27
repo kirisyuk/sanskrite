@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	redis "github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -124,6 +125,8 @@ type HorizonFragmentsRepository struct {
 	// vertexSearchDelete removes a single fragment document from Vertex AI Search index by document ID.
 	// Used on fragment delete to avoid stale search hits.
 	vertexSearchDelete func(ctx context.Context, fragmentID string) error
+
+	redisCache *redis.Client
 }
 
 // NewHorizonFragmentsRepository создает новый репозиторий
@@ -149,6 +152,12 @@ func (r *HorizonFragmentsRepository) WithStorage(storage *gcp.GCSClient, bucket 
 // WithEdgesRepo attaches DependencyEdgesRepository for best-effort edge cleanup on delete.
 func (r *HorizonFragmentsRepository) WithEdgesRepo(edgesRepo *DependencyEdgesRepository) *HorizonFragmentsRepository {
 	r.edgesRepo = edgesRepo
+	return r
+}
+
+// WithRedis sets a shared Redis client for L1 fragment caching (GetByCanonicalPath).
+func (r *HorizonFragmentsRepository) WithRedis(c *redis.Client) *HorizonFragmentsRepository {
+	r.redisCache = c
 	return r
 }
 
@@ -704,6 +713,7 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 		}
 	}
 	tracking.RecordFragmentCreated(ctx, fragment.ID)
+	r.invalidateFragmentRedis(ctx, cp)
 
 	// Экспорт в GCS для поиска (с синхронизацией)
 	if err := r.uploadToGCS(ctx, fragment, false); err != nil {
@@ -742,6 +752,9 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 		return nil, ErrInvalidDocument
 	}
 	cp := strings.TrimSpace(canonicalPath)
+	if frag := r.getFragmentFromRedis(ctx, cp); frag != nil {
+		return frag, nil
+	}
 	q := r.col.Where("tenantId", "==", "global").Where("canonicalPath", "==", cp)
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
@@ -787,6 +800,7 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	if len(docs) > 1 {
 		log.Printf("[HorizonFragments] WARNING: duplicate canonicalPath detected canonicalPath=%q matches=%d selectedId=%s", cp, len(docs), strings.TrimSpace(best.ID))
 	}
+	r.setFragmentInRedis(ctx, cp, best)
 	return best, nil
 }
 
@@ -1149,6 +1163,7 @@ func (r *HorizonFragmentsRepository) updateWithOptions(ctx context.Context, frag
 		return err
 	}
 	tracking.RecordFragmentUpdated(ctx, fragment.ID)
+	r.invalidateFragmentRedis(ctx, strings.TrimSpace(fragment.CanonicalPath))
 
 	// Экспорт в GCS для поиска (с синхронизацией)
 	if !opts.SkipIndexExport {
@@ -1655,7 +1670,58 @@ func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) erro
 
 	// Удаляем из Firestore
 	_, err = r.col.Doc(id).Delete(ctx)
+	if err == nil && fragment != nil {
+		r.invalidateFragmentRedis(ctx, strings.TrimSpace(fragment.CanonicalPath))
+	}
 	return err
 }
 
 var ErrInvalidDocument = errors.New("invalid document")
+
+const fragRedisPrefix = "h:frag:cp:"
+const fragRedisTTL = 5 * time.Minute
+const fragRedisTimeout = 70 * time.Millisecond
+
+func fragRedisKey(canonicalPath string) string {
+	sum := sha1.Sum([]byte(canonicalPath))
+	return fragRedisPrefix + hex.EncodeToString(sum[:])
+}
+
+func (r *HorizonFragmentsRepository) getFragmentFromRedis(ctx context.Context, canonicalPath string) *models.HorizonFragment {
+	if r == nil || r.redisCache == nil || canonicalPath == "" {
+		return nil
+	}
+	rctx, cancel := context.WithTimeout(ctx, fragRedisTimeout)
+	defer cancel()
+	val, err := r.redisCache.Get(rctx, fragRedisKey(canonicalPath)).Bytes()
+	if err != nil || len(val) == 0 {
+		return nil
+	}
+	var frag models.HorizonFragment
+	if err := json.Unmarshal(val, &frag); err != nil {
+		return nil
+	}
+	return &frag
+}
+
+func (r *HorizonFragmentsRepository) setFragmentInRedis(ctx context.Context, canonicalPath string, frag *models.HorizonFragment) {
+	if r == nil || r.redisCache == nil || canonicalPath == "" || frag == nil {
+		return
+	}
+	b, err := json.Marshal(frag)
+	if err != nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, fragRedisTimeout)
+	defer cancel()
+	_ = r.redisCache.Set(rctx, fragRedisKey(canonicalPath), b, fragRedisTTL).Err()
+}
+
+func (r *HorizonFragmentsRepository) invalidateFragmentRedis(ctx context.Context, canonicalPath string) {
+	if r == nil || r.redisCache == nil || canonicalPath == "" {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, fragRedisTimeout)
+	defer cancel()
+	_ = r.redisCache.Del(rctx, fragRedisKey(canonicalPath)).Err()
+}

@@ -41,17 +41,11 @@ done
 [[ -z "$INFRA_TOPICS" ]] && echo "  (нет топиков или ошибка доступа)"
 
 # --- Pub/Sub Subscriptions ---
-# Deploy создаёт: hatlone-ws (agg_topics), interaction, base topics (ws-broker), worker subs.
+# Deploy создаёт: hatlone-ws (agg_topics), worker subs.
 DEPLOY_SUBS=(
   "hatlone.genai.streams-ws-broker" "hatlone.discovery.events-ws-broker" "hatlone.artifact.events-ws-broker"
   "hatlone.interaction.events-ws-broker" "hatlone.analysis.events-ws-broker" "hatlone.verified.streams-ws-broker"
   "hatlone.horizon.events-ws-broker" "hatlone.operations.events-ws-broker" "source.poll-ws-broker"
-  "interaction.created-ws-broker" "interaction.updated-ws-broker"
-  "discovery.status-ws-broker" "discovery.profile-ws-broker" "discovery.answer-ws-broker" "discovery.project-ws-broker"
-  "document.process-ws-broker" "analysis.status-ws-broker" "agent.update-ws-broker" "verified.stream-ws-broker"
-  "artifact.generation.started-ws-broker" "artifact.section.generating-ws-broker" "artifact.generation.error-ws-broker"
-  "artifact.assembly.started-ws-broker" "artifact.assembly.chunk-ws-broker" "artifact.assembly.completed-ws-broker"
-  "artifact.section.completed-ws-broker" "artifact.section.chunk-ws-broker" "artifact.generation.completed-ws-broker"
   "source.poll.worker" "source.poll.due.worker" "ground.refresh.worker"
   "hatlone.operations.events.worker" "hatlone.artifact.events.document-processor.worker"
   "chat.ontology.process.worker"
@@ -150,9 +144,8 @@ for j in $INFRA_JOBS; do
 done
 
 # --- Cloud Run Services: deploy creates ---
-# hatlone-ws = текущий WS-брокер; h1horizon-ws = legacy
 DEPLOY_SERVICES=(
-  h1horizon-api hatlone-ws h1horizon-ws verified-proxy h1horizon-telegram
+  h1horizon-api hatlone-ws verified-proxy h1horizon-telegram
 )
 
 echo ""

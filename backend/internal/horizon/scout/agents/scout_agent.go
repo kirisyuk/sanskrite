@@ -101,15 +101,15 @@ type SupplyChain struct {
 
 // SegmentMetrics holds metrics for a single segment (fromNodeIndex → toNodeIndex, productIndex).
 type SegmentMetrics struct {
-	FromNodeIndex int                    `json:"fromNodeIndex"`
-	ToNodeIndex   int                    `json:"toNodeIndex"`
-	ProductIndex  int                    `json:"productIndex"`
-	Volume        *MetricWithConfidence  `json:"volume,omitempty"`
-	Share         *MetricWithConfidence  `json:"share,omitempty"`
-	Period        string                 `json:"period,omitempty"`   // "2023", "2023-Q1"
-	Start         string                 `json:"start,omitempty"`    // ISO8601
-	End           string                 `json:"end,omitempty"`     // ISO8601
-	Confidence    float64                `json:"confidence"`
+	FromNodeIndex int                   `json:"fromNodeIndex"`
+	ToNodeIndex   int                   `json:"toNodeIndex"`
+	ProductIndex  int                   `json:"productIndex"`
+	Volume        *MetricWithConfidence `json:"volume,omitempty"`
+	Share         *MetricWithConfidence `json:"share,omitempty"`
+	Period        string                `json:"period,omitempty"` // "2023", "2023-Q1"
+	Start         string                `json:"start,omitempty"`  // ISO8601
+	End           string                `json:"end,omitempty"`    // ISO8601
+	Confidence    float64               `json:"confidence"`
 }
 
 // MetricWithConfidence is a metric value with unit and confidence.
@@ -121,20 +121,20 @@ type MetricWithConfidence struct {
 
 // AlternativeSuppliers lists alternative suppliers for a (customer, product) pair.
 type AlternativeSuppliers struct {
-	CustomerNodeIndex int                  `json:"customerNodeIndex"`
-	ProductNodeIndex  int                  `json:"productNodeIndex"`
+	CustomerNodeIndex int                   `json:"customerNodeIndex"`
+	ProductNodeIndex  int                   `json:"productNodeIndex"`
 	Suppliers         []AlternativeContract `json:"suppliers"`
 }
 
 // AlternativeContract describes one alternative supplier with substitutability fields.
 type AlternativeContract struct {
-	SupplierRef       string                 `json:"supplierRef"`       // canonical path
-	TechnicalFit      float64                `json:"technicalFit"`       // 0-1
-	RegulatoryFit    float64                `json:"regulatoryFit"`     // 0-1
+	SupplierRef       string                `json:"supplierRef"`   // canonical path
+	TechnicalFit      float64               `json:"technicalFit"`  // 0-1
+	RegulatoryFit     float64               `json:"regulatoryFit"` // 0-1
 	AvailableCapacity *MetricWithConfidence `json:"availableCapacity,omitempty"`
-	LeadTimeToSwitch  *MetricWithConfidence `json:"leadTimeToSwitch,omitempty"`  // days
-	CostToSwitch      *MetricWithConfidence `json:"costToSwitch,omitempty"`      // usd
-	Confidence        float64                `json:"confidence"`
+	LeadTimeToSwitch  *MetricWithConfidence `json:"leadTimeToSwitch,omitempty"` // days
+	CostToSwitch      *MetricWithConfidence `json:"costToSwitch,omitempty"`     // usd
+	Confidence        float64               `json:"confidence"`
 }
 
 // SupplyChainNode represents a single node in a supply chain.
@@ -432,24 +432,38 @@ func extractionDomainRelationCatalogOverrideBlock(domainModes []string) string {
 
 const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends on target (use this for suppliers, contractors, infrastructure).
      Example: If Panasonic supplies Tesla battery cells, for Tesla (source) -> Panasonic (target) use DEPENDS_ON (NOT SUPPLIES_TO).
-   - SUPPLIES_TO: source supplies goods/services to target (use this for customers/recipients).
+     For actor↔actor dependencies (ORG/FACILITY/PROGRAM/COMMUNITY/PERSON), include qualifiers.source_role=dependent and qualifiers.target_role=dependency (or supplier/provider).
+   - SUPPLIES_TO: source supplies goods/services to target (use this for customers/recipients). Source MUST be ORGANIZATION or FACILITY (never DEPOSIT).
+     For ORG/FACILITY -> ORG/FACILITY supply links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
    - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
    - OPERATES_IN: source operates in target (source MUST be ORGANIZATION or PERSON, target MUST be GEO_REGION or FACILITY or DEPOSIT).
    - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
    - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
+     Direction is strict: owner -> owned entity.
+     If evidence says THIS FRAGMENT is owned by X, keep relationType=OWNS and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = THIS FRAGMENT.
+     Never output reversed OWNS (THIS FRAGMENT -> its owner).
    - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
    - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control).
+     Do NOT use CONTROLS for external audit/certification/inspection oversight; use ASSURES with qualifiers.assurance_type.
    - MANAGES: source manages target (formal authority: CEO/executive/director/operator).
    - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION).
    - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
    - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM or COMMUNITY).
    - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT).
+     Direction is strict: investor -> investee.
+     If THIS FRAGMENT is the investee (e.g., "invested in by X"), set explicit sourceCanonicalPath/sourceType/sourceName = X and targetCanonicalPath = THIS FRAGMENT.
    - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
    - CONSUMES: source consumes target (source MUST be ORGANIZATION or FACILITY or PRODUCT, target MUST be PRODUCT).
-   - TRANSFORMS_INTO: PRODUCT -> PRODUCT value-chain transformation.
+   - TRANSFORMS_INTO: upstream PRODUCT -> downstream PRODUCT (value-chain transformation).
+     Direction is strict: source MUST be the raw/earlier-stage product, target MUST be the refined/later-stage product.
+     Example: copper-ore TRANSFORMS_INTO copper-concentrate (NEVER the reverse). iron-ore TRANSFORMS_INTO iron-pellet (NEVER the reverse).
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
+   - If THIS FRAGMENT is DEPOSIT and evidence says "X extracts from this deposit" or "X depends on this deposit":
+     use explicit sourceCanonicalPath/sourceType/sourceName for X and keep targetCanonicalPath = THIS FRAGMENT.
+     Never emit DEPOSIT -> ORGANIZATION|FACILITY via SUPPLIES_TO.
    - ASSURES: source (ORGANIZATION) provides independent assurance to target (ORGANIZATION/FACILITY/PROGRAM). Add qualifiers.assurance_type: audit | certification | regulatory | inspection.
-   - AUDITED_BY: source (ORGANIZATION/FACILITY/PROGRAM) is audited by target (ORGANIZATION). Prefer ASSURES for new data.
+     If THIS FRAGMENT is audited/certified/inspected by X, keep relationType=ASSURES and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = THIS FRAGMENT.
+   - AUDITED_BY is legacy input only. Do NOT emit it; convert to ASSURES and preserve semantics (auditor -> audited entity).
    - PARTNERS_WITH: partnership/collaboration (symmetric; still output as source->target).
    - COMPETES_WITH: competitor relationship (direction is not important, still output as source->target).
    - INFLUENCES: source influences target (soft power; avoid for formal authority/ownership).
@@ -467,6 +481,15 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO: strategic overlay.
    - HAS_SUBGROUP: COMMUNITY parent -> narrower community subgroup.
 
+   ROLE-FIRST DIRECTION CONTRACT (CRITICAL for ORG<->ORG):
+   - Do NOT assume source = THIS FRAGMENT for OWNS / INVESTS_IN / ASSURES / CONTROLS.
+   - Determine semantic roles first, then set edge direction.
+   - For ORG->ORG directed edges above, include:
+     qualifiers.source_role and qualifiers.target_role (e.g., owner->owned_entity, investor->investee, assurer->assuree, controller->controlled_entity).
+   - For directional actor↔actor DEPENDS_ON/SUPPLIES_TO, also include source_role/target_role (dependent->dependency, supplier->customer).
+   - If semantic source is not THIS FRAGMENT, sourceCanonicalPath/sourceType/sourceName is REQUIRED.
+   - If direction is unclear, omit the relation (do not guess).
+
    %s
    - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES.
    - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/ for any relation.
@@ -479,7 +502,7 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
 
    Optional edge enrichment fields (REQUIRED WHEN AVAILABLE):
    - validFrom, validTo
-   - qualifiers: edgeModality, eventId, round, contractType, integration_type, facet, transmission qualifiers
+   - qualifiers: edgeModality, eventId, round, contractType, integration_type, facet, transmission qualifiers, source_role, target_role, direction_basis
    - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`
 
 func extractionGeneralRelationRulesBlock() string {
@@ -503,13 +526,18 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 		b.WriteString(`   SUPPLY CHAIN MODE:
    - DEPENDS_ON: consumer -> supplier/infrastructure dependency.
    - SUPPLIES_TO: supplier -> customer flow.
+   - For actor↔actor DEPENDS_ON and ORG/FACILITY SUPPLIES_TO links, include qualifiers.source_role and qualifiers.target_role.
    - PRODUCES/CONSUMES: actor -> product.
-   - TRANSFORMS_INTO: product -> downstream product.
+   - TRANSFORMS_INTO: upstream raw product -> downstream refined product (NEVER reversed; e.g. ore -> concentrate -> anode -> cathode).
    - EXTRACTS_FROM: facility -> deposit.
    - LOCATED_IN/OPERATES_IN only for geo/facility anchoring.
+   - PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial market participation).
+   - REGULATES: GOV entity (/gov/...) -> MARKET or ORG (regulatory oversight). NEVER use DEPENDS_ON or PARTICIPATES_IN for government regulation.
+   - ADMINISTERS: GOV entity (/gov/...) -> subordinate GOV/PROGRAM/FACILITY (administrative hierarchy).
    - Prefer qualifiers.facet for DEPENDS_ON (communication|infrastructure|payment|distribution|logistics|supply|labor|legitimization|enforcement|regulatory).
    - For transmission dependencies add throughput_share, capacity_constraint, reroute_penalty, reroute_latency_delta_hours, reroute_cost_delta_pct when known.
 `)
+		b.WriteString(GovEntityRelationRulesBlock())
 	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGovernance) {
 		b.WriteString(`   GOVERNANCE MODE:
@@ -519,13 +547,17 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
    - INVESTS_IN for minority/stake investments.
    - BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED for people governance links.
    - ADMINISTERS for GOV/ORG hierarchy into GOV/PROGRAM.
+   - ASSURES for external auditors/certifiers participating in corporate governance.
+   - Role-first direction for OWNS/SUBSIDIARY_OF/INVESTS_IN/ASSURES/CONTROLS on ORG<->ORG.
+   - For those directed ORG->ORG edges include qualifiers.source_role and qualifiers.target_role.
    - Add metrics.ownership_percent and/or voting_percent when evidence exists.
 `)
 	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeAssurance) {
 		b.WriteString(`   ASSURANCE MODE:
    - ASSURES: assurer -> assuree. Add qualifiers.assurance_type: audit|certification|regulatory|inspection.
-   - AUDITED_BY: assuree -> auditor (legacy).
+   - For ORG->ORG ASSURES edges include qualifiers.source_role=assurer and qualifiers.target_role=assuree.
+   - Do NOT emit AUDITED_BY (legacy inverse form).
    - REGULATES: regulator -> regulated entity.
 `)
 	}
@@ -562,7 +594,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 
    Optional edge enrichment fields (REQUIRED WHEN AVAILABLE):
    - validFrom, validTo
-   - qualifiers: edgeModality, eventId, round, contractType, integration_type, facet, transmission qualifiers
+   - qualifiers: edgeModality, eventId, round, contractType, integration_type, facet, transmission qualifiers, source_role, target_role, direction_basis
    - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`, entity_semantics.PromptRelationTargetTypesPipeList()))
 	return b.String()
 }
@@ -630,7 +662,7 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 %s
 - state: map of MetricValue entries
 - description: short factual summary
-- homeLocation: location object when available
+- homeLocation: when geo is relevant, object with { name: string (city/place), iso3166_1: string (ISO3166-1 alpha2, e.g. "AE", "US") }. Required for org/facility/gov to enable geocoding.
 - lifecycleStage: concept|planning|permitting|financing|construction|commissioning|operational|expansion|suspended|decommissioning|closed
 - expectedStartDate, actualStartDate, expectedEndDate, actualEndDate: ISO8601 when known
 - identifiers: ISIN/LEI/Ticker/etc when available
@@ -643,7 +675,8 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
   - provenance method + at least one sourceId`, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierContractBlock)
 
 	relationsContractBlock := fmt.Sprintf(`3. "relations" Field (Array of Objects):
-- Each relation is a directed edge FROM THIS FRAGMENT (source) TO targetCanonicalPath (target), unless explicit sourceCanonicalPath is provided.
+- Direction is ROLE-FIRST: for directed ORG<->ORG edges (OWNS/INVESTS_IN/ASSURES/CONTROLS), determine semantic source by role (owner/investor/assurer/controller), not by "current fragment".
+- If THIS FRAGMENT is the semantic target for these types, sourceCanonicalPath/sourceType/sourceName is REQUIRED.
 - relationType must follow semantic direction.
 %s
 %s`, relationCatalogOverride, relationRulesBlock)

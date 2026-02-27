@@ -95,6 +95,25 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 		SessionID:     sessionID,
 	})
 
+	ready, reason, message := h.scoutExecutionAvailability()
+	if !ready {
+		h.publishAssemblyFatal(
+			ctx,
+			authInfo.TenantID,
+			lens.ProjectID,
+			lens.ID,
+			"scouting",
+			correlationID,
+			sessionID,
+			reason,
+			message,
+		)
+		writeFatalPipelineError(w, http.StatusServiceUnavailable, reason, message, "scouting", map[string]interface{}{
+			"mode": "scope_scout_query",
+		})
+		return
+	}
+
 	// Resolve intent -> pick the first anchor canonical path as the target.
 	existingDomains := h.collectNearbyDomainPaths(ctx, lens)
 	intentAgent := agents.NewIntentResolverAgent(h.service.AIExecutor())
@@ -119,16 +138,16 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 		now := time.Now().UTC()
 		specialties := taxonomy.NormalizeSpecialties(body.Specialties)
 		state := map[string]interface{}{
-			"query":              q,
+			"query":               q,
 			"targetCanonicalPath": targetCanonicalPath,
-			"lensId":             lens.ID,
-			"currentState":       string(models.ScoutingJobStatePending),
-			"scoutingStrategy":   string(models.ScoutingStrategySnapshot),
-			"recursionDepth":     0.0,
-			"maxRecursionDepth":  0.0,
-			"trigger":            "ui.graph.scope_scout_query",
-			"correlationId":      correlationID,
-			"deferredScopeAdd": true,
+			"lensId":              lens.ID,
+			"currentState":        string(models.ScoutingJobStatePending),
+			"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
+			"recursionDepth":      0.0,
+			"maxRecursionDepth":   0.0,
+			"trigger":             "ui.graph.scope_scout_query",
+			"correlationId":       correlationID,
+			"deferredScopeAdd":    true,
 		}
 		if len(specialties) > 0 {
 			state["specialties"] = specialties
@@ -157,6 +176,23 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 		}
 		if id, cerr := h.service.ScoutingJobs().Create(ctx, scoutingJob); cerr == nil && strings.TrimSpace(id) != "" {
 			jobID = strings.TrimSpace(id)
+		} else if cerr != nil {
+			msg := "Failed to enqueue scouting job: " + strings.TrimSpace(cerr.Error())
+			h.publishAssemblyFatal(
+				ctx,
+				authInfo.TenantID,
+				lens.ProjectID,
+				lens.ID,
+				"scouting",
+				correlationID,
+				sessionID,
+				"scout_job_enqueue_failed",
+				msg,
+			)
+			writeFatalPipelineError(w, http.StatusServiceUnavailable, "scout_job_enqueue_failed", msg, "scouting", map[string]interface{}{
+				"targetCanonicalPath": targetCanonicalPath,
+			})
+			return
 		}
 	}
 
@@ -171,4 +207,3 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 		Lens:       lens,
 	})
 }
-

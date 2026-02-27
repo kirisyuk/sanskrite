@@ -103,29 +103,45 @@ func EntityActorTypesForDomainMode(mode string) string {
 	}
 }
 
-// GovernanceEdgeTypes returns the canonical edge types for governance/organ management context.
+// SupplyChainEdgeTypes returns canonical edge types for supply chain context.
+// Used by: Scout SupplyChainResearchStrategy, Research agent supply chain enrichment.
+// Single source of truth for supply chain relation semantics.
+var SupplyChainEdgeTypes = []string{
+	"DEPENDS_ON", "PRODUCES", "CONSUMES", "SUPPLIES_TO",
+	"TRANSFORMS_INTO", "EXTRACTS_FROM", "LOCATED_IN", "OPERATES_IN",
+	"REGULATES", "PARTICIPATES_IN", "ADMINISTERS",
+}
+
+// SupplyChainEdgeTypesString returns comma-separated list for prompts.
+func SupplyChainEdgeTypesString() string {
+	return "DEPENDS_ON, PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, REGULATES, PARTICIPATES_IN, ADMINISTERS"
+}
+
+// GovernanceEdgeTypes returns canonical edge types for governance/organizational management context.
 // Used by: Scout GovernanceResearchStrategy, frontend layout (GOVERNANCE_EDGE_SET), ObjectInspector.
-// Single source of truth for "орган управления" semantics: ownership, control, board, management, founders.
+// Single source of truth for "орган управления" semantics: ownership, control, board, management, founders,
+// and external assurance actors (auditors/certifiers).
 var GovernanceEdgeTypes = []string{
 	"OWNS", "SUBSIDIARY_OF", "CONTROLS", "MANAGES", "INVESTS_IN",
 	"BOARD_MEMBER_OF", "EXECUTIVE_OF", "EMPLOYED_BY", "FOUNDED", "ADMINISTERS",
+	"ASSURES",
 }
 
 // GovernanceEdgeTypesString returns comma-separated list for prompts.
 // Must stay in sync with GovernanceEdgeTypes (EXECUTIVE_OF excluded — display alias for EMPLOYED_BY).
 func GovernanceEdgeTypesString() string {
-	return "OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, INVESTS_IN, BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED, ADMINISTERS"
+	return "OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, INVESTS_IN, BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED, ADMINISTERS, ASSURES"
 }
 
 // AssuranceEdgeTypes — Third Line: independent audit, certification, regulatory approval, inspection.
 // Single source of truth for "assurance & oversight" semantics.
 var AssuranceEdgeTypes = []string{
-	"ASSURES", "AUDITED_BY", "REGULATES",
+	"ASSURES", "REGULATES",
 }
 
 // AssuranceEdgeTypesString returns comma-separated list for prompts.
 func AssuranceEdgeTypesString() string {
-	return "ASSURES, AUDITED_BY, REGULATES"
+	return "ASSURES, REGULATES"
 }
 
 // AssuranceTypeQualifierValues — allowed values for qualifiers.assurance_type on ASSURES edges.

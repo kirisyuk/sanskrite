@@ -111,6 +111,25 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		SessionID:     sessionID,
 	})
 
+	ready, reason, message := h.scoutExecutionAvailability()
+	if !ready {
+		h.publishAssemblyFatal(
+			ctx,
+			authInfo.TenantID,
+			lens.ProjectID,
+			lens.ID,
+			"scouting",
+			correlationID,
+			sessionID,
+			reason,
+			message,
+		)
+		writeFatalPipelineError(w, http.StatusServiceUnavailable, reason, message, "scouting", map[string]interface{}{
+			"mode": "scope_scout",
+		})
+		return
+	}
+
 	// Ensure scope contains this canonical path
 	scopeAdded := false
 	{
@@ -174,6 +193,23 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		// Emitting here would cause duplicate "Scout Job Created" messages in the UI.
 		if id, cerr := h.service.ScoutingJobs().Create(ctx, scoutingJob); cerr == nil && strings.TrimSpace(id) != "" {
 			jobID = strings.TrimSpace(id)
+		} else if cerr != nil {
+			msg := "Failed to enqueue scouting job: " + strings.TrimSpace(cerr.Error())
+			h.publishAssemblyFatal(
+				ctx,
+				authInfo.TenantID,
+				lens.ProjectID,
+				lens.ID,
+				"scouting",
+				correlationID,
+				sessionID,
+				"scout_job_enqueue_failed",
+				msg,
+			)
+			writeFatalPipelineError(w, http.StatusServiceUnavailable, "scout_job_enqueue_failed", msg, "scouting", map[string]interface{}{
+				"targetCanonicalPath": targetCanonicalPath,
+			})
+			return
 		}
 	}
 

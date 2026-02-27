@@ -5,6 +5,66 @@ import (
 	"fmt"
 )
 
+func decodeSupplyChainPathNodes(raw interface{}) ([]SupplyChainPathNode, error) {
+	switch nodes := raw.(type) {
+	case []SupplyChainPathNode:
+		return nodes, nil
+	case []interface{}:
+		out := make([]SupplyChainPathNode, 0, len(nodes))
+		for i, n := range nodes {
+			switch node := n.(type) {
+			case SupplyChainPathNode:
+				out = append(out, node)
+			case map[string]interface{}:
+				nodeJSON, err := json.Marshal(node)
+				if err != nil {
+					return nil, fmt.Errorf("payload node[%d] marshal failed: %w", i, err)
+				}
+				var parsed SupplyChainPathNode
+				if err := json.Unmarshal(nodeJSON, &parsed); err != nil {
+					return nil, fmt.Errorf("payload node[%d] unmarshal failed: %w", i, err)
+				}
+				out = append(out, parsed)
+			default:
+				return nil, fmt.Errorf("payload node[%d] must be an object", i)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload 'nodes' must be an array")
+	}
+}
+
+func decodeSupplyChainPathEdges(raw interface{}) ([]SupplyChainPathEdge, error) {
+	switch edges := raw.(type) {
+	case []SupplyChainPathEdge:
+		return edges, nil
+	case []interface{}:
+		out := make([]SupplyChainPathEdge, 0, len(edges))
+		for i, e := range edges {
+			switch edge := e.(type) {
+			case SupplyChainPathEdge:
+				out = append(out, edge)
+			case map[string]interface{}:
+				edgeJSON, err := json.Marshal(edge)
+				if err != nil {
+					return nil, fmt.Errorf("payload edge[%d] marshal failed: %w", i, err)
+				}
+				var parsed SupplyChainPathEdge
+				if err := json.Unmarshal(edgeJSON, &parsed); err != nil {
+					return nil, fmt.Errorf("payload edge[%d] unmarshal failed: %w", i, err)
+				}
+				out = append(out, parsed)
+			default:
+				return nil, fmt.Errorf("payload edge[%d] must be an object", i)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload 'edges' must be an array")
+	}
+}
+
 // BuildSupplyChainPathPayload creates a v1 SUPPLY_CHAIN_PATH payload from nodes and edges.
 func BuildSupplyChainPathPayload(nodes []SupplyChainPathNode, edges []SupplyChainPathEdge, notes map[string]interface{}) map[string]interface{} {
 	payload := map[string]interface{}{
@@ -42,51 +102,18 @@ func ParseSupplyChainPathPayload(payload map[string]interface{}) (*SupplyChainPa
 	if !ok {
 		return nil, fmt.Errorf("payload missing 'nodes' field")
 	}
-	nodesArray, ok := nodesRaw.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("payload 'nodes' must be an array")
-	}
-
-	nodes := make([]SupplyChainPathNode, 0, len(nodesArray))
-	for i, n := range nodesArray {
-		nodeMap, ok := n.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("payload node[%d] must be an object", i)
-		}
-
-		// Convert to JSON and back to ensure proper type conversion
-		nodeJSON, err := json.Marshal(nodeMap)
-		if err != nil {
-			return nil, fmt.Errorf("payload node[%d] marshal failed: %w", i, err)
-		}
-		var node SupplyChainPathNode
-		if err := json.Unmarshal(nodeJSON, &node); err != nil {
-			return nil, fmt.Errorf("payload node[%d] unmarshal failed: %w", i, err)
-		}
-		nodes = append(nodes, node)
+	nodes, err := decodeSupplyChainPathNodes(nodesRaw)
+	if err != nil {
+		return nil, err
 	}
 
 	edges := []SupplyChainPathEdge{}
 	if edgesRaw, ok := payload["edges"]; ok {
-		edgesArray, ok := edgesRaw.([]interface{})
-		if !ok {
-			return nil, fmt.Errorf("payload 'edges' must be an array")
+		parsedEdges, err := decodeSupplyChainPathEdges(edgesRaw)
+		if err != nil {
+			return nil, err
 		}
-		for i, e := range edgesArray {
-			edgeMap, ok := e.(map[string]interface{})
-			if !ok {
-				return nil, fmt.Errorf("payload edge[%d] must be an object", i)
-			}
-			edgeJSON, err := json.Marshal(edgeMap)
-			if err != nil {
-				return nil, fmt.Errorf("payload edge[%d] marshal failed: %w", i, err)
-			}
-			var edge SupplyChainPathEdge
-			if err := json.Unmarshal(edgeJSON, &edge); err != nil {
-				return nil, fmt.Errorf("payload edge[%d] unmarshal failed: %w", i, err)
-			}
-			edges = append(edges, edge)
-		}
+		edges = parsedEdges
 	}
 
 	notes := map[string]interface{}{}
@@ -198,4 +225,3 @@ func ValidateSupplyChainPathStructure(nodes []SupplyChainPathNode, edges []Suppl
 
 	return nil
 }
-

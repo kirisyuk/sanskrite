@@ -7,15 +7,15 @@ import (
 
 func TestMaterializedArtifact_Validate(t *testing.T) {
 	tests := []struct {
-		name    string
+		name     string
 		artifact *MaterializedArtifact
-		wantErr bool
+		wantErr  bool
 	}{
 		{
 			name: "valid SUPPLY_CHAIN_PATH",
 			artifact: &MaterializedArtifact{
-				TenantID:    "bmw",
-				Kind:        MaterializedKindSupplyChainPath,
+				TenantID:     "bmw",
+				Kind:         MaterializedKindSupplyChainPath,
 				CanonicalKey: "/supply-chain/bmw/test-path",
 				Payload: map[string]interface{}{
 					"v": float64(1), // JSON unmarshal uses float64 for numbers
@@ -32,21 +32,44 @@ func TestMaterializedArtifact_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid SUPPLY_CHAIN_PATH built payload",
+			artifact: &MaterializedArtifact{
+				TenantID:     "bmw",
+				Kind:         MaterializedKindSupplyChainPath,
+				CanonicalKey: "/supply-chain/bmw/test-built-path",
+				Payload: BuildSupplyChainPathPayload(
+					[]SupplyChainPathNode{
+						{Type: "org", Ref: "/org/catl"},
+						{Type: "product", Ref: "/product/component/electronic/manufacturing/battery-cell"},
+						{Type: "org", Ref: "/org/bmw"},
+					},
+					[]SupplyChainPathEdge{
+						{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1)},
+					},
+					nil,
+				),
+				Status:    "active",
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			},
+			wantErr: false,
+		},
+		{
 			name: "missing tenantId",
 			artifact: &MaterializedArtifact{
-				Kind:        MaterializedKindSupplyChainPath,
+				Kind:         MaterializedKindSupplyChainPath,
 				CanonicalKey: "/supply-chain/test",
-				Payload:     map[string]interface{}{"v": 1, "nodes": []interface{}{}},
+				Payload:      map[string]interface{}{"v": 1, "nodes": []interface{}{}},
 			},
 			wantErr: true,
 		},
 		{
 			name: "invalid kind",
 			artifact: &MaterializedArtifact{
-				TenantID:    "bmw",
-				Kind:        MaterializedKind("INVALID"),
+				TenantID:     "bmw",
+				Kind:         MaterializedKind("INVALID"),
 				CanonicalKey: "/supply-chain/test",
-				Payload:     map[string]interface{}{"v": 1, "nodes": []interface{}{}},
+				Payload:      map[string]interface{}{"v": 1, "nodes": []interface{}{}},
 			},
 			wantErr: true,
 		},
@@ -62,10 +85,10 @@ func TestMaterializedArtifact_Validate(t *testing.T) {
 		{
 			name: "invalid payload version",
 			artifact: &MaterializedArtifact{
-				TenantID:    "bmw",
-				Kind:        MaterializedKindSupplyChainPath,
+				TenantID:     "bmw",
+				Kind:         MaterializedKindSupplyChainPath,
 				CanonicalKey: "/supply-chain/test",
-				Payload:     map[string]interface{}{"v": float64(2), "nodes": []interface{}{}},
+				Payload:      map[string]interface{}{"v": float64(2), "nodes": []interface{}{}},
 			},
 			wantErr: true,
 		},
@@ -156,6 +179,31 @@ func TestParseSupplyChainPathPayload(t *testing.T) {
 	if parsed.Nodes[0].Ref != "/org/catl" {
 		t.Errorf("expected first node ref /org/catl, got %s", parsed.Nodes[0].Ref)
 	}
+
+	t.Run("typed arrays from builder", func(t *testing.T) {
+		builtPayload := BuildSupplyChainPathPayload(
+			[]SupplyChainPathNode{
+				{Type: "org", Ref: "/org/catl"},
+				{Type: "product", Ref: "/product/.../battery-cell"},
+				{Type: "org", Ref: "/org/bmw"},
+			},
+			[]SupplyChainPathEdge{
+				{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1)},
+			},
+			nil,
+		)
+
+		typedParsed, err := ParseSupplyChainPathPayload(builtPayload)
+		if err != nil {
+			t.Fatalf("ParseSupplyChainPathPayload() typed payload error = %v", err)
+		}
+		if len(typedParsed.Nodes) != 3 {
+			t.Fatalf("expected 3 nodes, got %d", len(typedParsed.Nodes))
+		}
+		if len(typedParsed.Edges) != 1 {
+			t.Fatalf("expected 1 edge, got %d", len(typedParsed.Edges))
+		}
+	})
 }
 
 func TestValidateSupplyChainPathStructure(t *testing.T) {
@@ -219,4 +267,3 @@ func TestValidateSupplyChainPathStructure(t *testing.T) {
 func intPtr(i int) *int {
 	return &i
 }
-

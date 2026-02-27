@@ -155,7 +155,6 @@ func (e *ScoutEngine) buildMarketSkeletonContext(ctx context.Context, canonicalP
 		edgeType := models.DependencyTypeHasMarketSegment
 		parents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &edgeType, 5)
 		children, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &edgeType, 15)
-		// Also include legacy HAS_SUBMARKET for backward compatibility
 		legacyType := models.DependencyTypeHasSubmarket
 		if legParents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &legacyType, 5); len(legParents) > 0 {
 			parents = append(parents, legParents...)
@@ -164,60 +163,102 @@ func (e *ScoutEngine) buildMarketSkeletonContext(ctx context.Context, canonicalP
 			children = append(children, legChildren...)
 		}
 
-		// Parent edges (incoming)
+		// Collect all fragment IDs referenced by edges, then batch-fetch.
+		fragIDSet := make(map[string]struct{})
 		for _, ed := range parents {
 			if ed == nil {
 				continue
 			}
-			v := skeletonEdgeView{
-				Type:        string(ed.Type),
-				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
-				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
-				Criticality: ed.Properties.Criticality,
-			}
-			if sf, err := e.fragmentsRepo.Get(ctx, v.SourceID); err == nil && sf != nil {
-				v.SourcePath = strings.TrimSpace(sf.CanonicalPath)
-			}
-			if tf, err := e.fragmentsRepo.Get(ctx, v.TargetID); err == nil && tf != nil {
-				v.TargetPath = strings.TrimSpace(tf.CanonicalPath)
-			}
-			out.ParentEdges = append(out.ParentEdges, v)
+			fragIDSet[strings.TrimSpace(ed.SourceFragmentID)] = struct{}{}
+			fragIDSet[strings.TrimSpace(ed.TargetFragmentID)] = struct{}{}
 		}
-
-		// Child edges (outgoing)
 		for _, ed := range children {
 			if ed == nil {
 				continue
 			}
-			v := skeletonEdgeView{
-				Type:        string(ed.Type),
-				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
-				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
-				Criticality: ed.Properties.Criticality,
-			}
-			if sf, err := e.fragmentsRepo.Get(ctx, v.SourceID); err == nil && sf != nil {
-				v.SourcePath = strings.TrimSpace(sf.CanonicalPath)
-			}
-			if tf, err := e.fragmentsRepo.Get(ctx, v.TargetID); err == nil && tf != nil {
-				v.TargetPath = strings.TrimSpace(tf.CanonicalPath)
-			}
-			out.ChildEdges = append(out.ChildEdges, v)
+			fragIDSet[strings.TrimSpace(ed.SourceFragmentID)] = struct{}{}
+			fragIDSet[strings.TrimSpace(ed.TargetFragmentID)] = struct{}{}
 		}
 
-		// Siblings: other children of the same parent (if we have a parent edge)
-		if len(out.ParentEdges) > 0 && out.ParentEdges[0].SourceID != "" {
-			parentID := out.ParentEdges[0].SourceID
-			sibEdges, _ := e.edgesRepo.ListBySource(ctx, "global", parentID, &edgeType, 20)
-			if legSib, _ := e.edgesRepo.ListBySource(ctx, "global", parentID, &legacyType, 20); len(legSib) > 0 {
-				sibEdges = append(sibEdges, legSib...)
+		// Sibling edges: load from parent before batch-fetch so we include sibling target IDs.
+		var sibEdges []*models.DependencyEdge
+		if len(parents) > 0 {
+			firstParentSourceID := ""
+			for _, ed := range parents {
+				if ed != nil && strings.TrimSpace(ed.SourceFragmentID) != "" {
+					firstParentSourceID = strings.TrimSpace(ed.SourceFragmentID)
+					break
+				}
 			}
-			for _, ed := range sibEdges {
-				if ed == nil || strings.TrimSpace(ed.TargetFragmentID) == "" || strings.TrimSpace(ed.TargetFragmentID) == out.FragmentID {
-					continue
+			if firstParentSourceID != "" {
+				sibEdges, _ = e.edgesRepo.ListBySource(ctx, "global", firstParentSourceID, &edgeType, 20)
+				if legSib, _ := e.edgesRepo.ListBySource(ctx, "global", firstParentSourceID, &legacyType, 20); len(legSib) > 0 {
+					sibEdges = append(sibEdges, legSib...)
 				}
-				if tf, err := e.fragmentsRepo.Get(ctx, strings.TrimSpace(ed.TargetFragmentID)); err == nil && tf != nil && strings.TrimSpace(tf.CanonicalPath) != "" {
-					out.SiblingPaths = append(out.SiblingPaths, strings.TrimSpace(tf.CanonicalPath))
+				for _, ed := range sibEdges {
+					if ed != nil && strings.TrimSpace(ed.TargetFragmentID) != "" {
+						fragIDSet[strings.TrimSpace(ed.TargetFragmentID)] = struct{}{}
+					}
 				}
+			}
+		}
+
+		var fragIDs []string
+		for id := range fragIDSet {
+			if id != "" {
+				fragIDs = append(fragIDs, id)
+			}
+		}
+		fragMap, _ := e.fragmentsRepo.GetMany(ctx, fragIDs)
+		if fragMap == nil {
+			fragMap = map[string]*models.HorizonFragment{}
+		}
+
+		resolvePath := func(id string) string {
+			if f := fragMap[id]; f != nil {
+				return strings.TrimSpace(f.CanonicalPath)
+			}
+			return ""
+		}
+
+		for _, ed := range parents {
+			if ed == nil {
+				continue
+			}
+			out.ParentEdges = append(out.ParentEdges, skeletonEdgeView{
+				Type:       string(ed.Type),
+				SourceID:   strings.TrimSpace(ed.SourceFragmentID),
+				TargetID:   strings.TrimSpace(ed.TargetFragmentID),
+				SourcePath: resolvePath(strings.TrimSpace(ed.SourceFragmentID)),
+				TargetPath: resolvePath(strings.TrimSpace(ed.TargetFragmentID)),
+				Criticality: ed.Properties.Criticality,
+			})
+		}
+
+		for _, ed := range children {
+			if ed == nil {
+				continue
+			}
+			out.ChildEdges = append(out.ChildEdges, skeletonEdgeView{
+				Type:       string(ed.Type),
+				SourceID:   strings.TrimSpace(ed.SourceFragmentID),
+				TargetID:   strings.TrimSpace(ed.TargetFragmentID),
+				SourcePath: resolvePath(strings.TrimSpace(ed.SourceFragmentID)),
+				TargetPath: resolvePath(strings.TrimSpace(ed.TargetFragmentID)),
+				Criticality: ed.Properties.Criticality,
+			})
+		}
+
+		for _, ed := range sibEdges {
+			if ed == nil {
+				continue
+			}
+			tgtID := strings.TrimSpace(ed.TargetFragmentID)
+			if tgtID == "" || tgtID == out.FragmentID {
+				continue
+			}
+			if p := resolvePath(tgtID); p != "" {
+				out.SiblingPaths = append(out.SiblingPaths, p)
 			}
 		}
 	}
@@ -280,55 +321,98 @@ func (e *ScoutEngine) buildGovSkeletonContext(ctx context.Context, canonicalPath
 		parents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &edgeType, 5)
 		children, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &edgeType, 15)
 
+		// Collect all referenced fragment IDs for batch fetch.
+		fragIDSet := make(map[string]struct{})
 		for _, ed := range parents {
 			if ed == nil {
 				continue
 			}
-			v := skeletonEdgeView{
+			fragIDSet[strings.TrimSpace(ed.SourceFragmentID)] = struct{}{}
+			fragIDSet[strings.TrimSpace(ed.TargetFragmentID)] = struct{}{}
+		}
+		for _, ed := range children {
+			if ed == nil {
+				continue
+			}
+			fragIDSet[strings.TrimSpace(ed.SourceFragmentID)] = struct{}{}
+			fragIDSet[strings.TrimSpace(ed.TargetFragmentID)] = struct{}{}
+		}
+
+		var sibEdges []*models.DependencyEdge
+		if len(parents) > 0 {
+			firstParentSourceID := ""
+			for _, ed := range parents {
+				if ed != nil && strings.TrimSpace(ed.SourceFragmentID) != "" {
+					firstParentSourceID = strings.TrimSpace(ed.SourceFragmentID)
+					break
+				}
+			}
+			if firstParentSourceID != "" {
+				sibEdges, _ = e.edgesRepo.ListBySource(ctx, "global", firstParentSourceID, &edgeType, 20)
+				for _, ed := range sibEdges {
+					if ed != nil && strings.TrimSpace(ed.TargetFragmentID) != "" {
+						fragIDSet[strings.TrimSpace(ed.TargetFragmentID)] = struct{}{}
+					}
+				}
+			}
+		}
+
+		var fragIDs []string
+		for id := range fragIDSet {
+			if id != "" {
+				fragIDs = append(fragIDs, id)
+			}
+		}
+		fragMap, _ := e.fragmentsRepo.GetMany(ctx, fragIDs)
+		if fragMap == nil {
+			fragMap = map[string]*models.HorizonFragment{}
+		}
+
+		resolvePath := func(id string) string {
+			if f := fragMap[id]; f != nil {
+				return strings.TrimSpace(f.CanonicalPath)
+			}
+			return ""
+		}
+
+		for _, ed := range parents {
+			if ed == nil {
+				continue
+			}
+			out.ParentEdges = append(out.ParentEdges, skeletonEdgeView{
 				Type:        string(ed.Type),
 				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
 				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
+				SourcePath:  resolvePath(strings.TrimSpace(ed.SourceFragmentID)),
+				TargetPath:  resolvePath(strings.TrimSpace(ed.TargetFragmentID)),
 				Criticality: ed.Properties.Criticality,
-			}
-			if sf, err := e.fragmentsRepo.Get(ctx, v.SourceID); err == nil && sf != nil {
-				v.SourcePath = strings.TrimSpace(sf.CanonicalPath)
-			}
-			if tf, err := e.fragmentsRepo.Get(ctx, v.TargetID); err == nil && tf != nil {
-				v.TargetPath = strings.TrimSpace(tf.CanonicalPath)
-			}
-			out.ParentEdges = append(out.ParentEdges, v)
+			})
 		}
 
 		for _, ed := range children {
 			if ed == nil {
 				continue
 			}
-			v := skeletonEdgeView{
+			out.ChildEdges = append(out.ChildEdges, skeletonEdgeView{
 				Type:        string(ed.Type),
 				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
 				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
+				SourcePath:  resolvePath(strings.TrimSpace(ed.SourceFragmentID)),
+				TargetPath:  resolvePath(strings.TrimSpace(ed.TargetFragmentID)),
 				Criticality: ed.Properties.Criticality,
-			}
-			if sf, err := e.fragmentsRepo.Get(ctx, v.SourceID); err == nil && sf != nil {
-				v.SourcePath = strings.TrimSpace(sf.CanonicalPath)
-			}
-			if tf, err := e.fragmentsRepo.Get(ctx, v.TargetID); err == nil && tf != nil {
-				v.TargetPath = strings.TrimSpace(tf.CanonicalPath)
-			}
-			out.ChildEdges = append(out.ChildEdges, v)
+			})
 		}
 
-		// Siblings: other subordinates of the same parent (if we have a parent edge)
-		if len(out.ParentEdges) > 0 && out.ParentEdges[0].SourceID != "" {
-			parentID := out.ParentEdges[0].SourceID
-			sibEdges, _ := e.edgesRepo.ListBySource(ctx, "global", parentID, &edgeType, 20)
-			for _, ed := range sibEdges {
-				if ed == nil || strings.TrimSpace(ed.TargetFragmentID) == "" || strings.TrimSpace(ed.TargetFragmentID) == out.FragmentID {
-					continue
-				}
-				if tf, err := e.fragmentsRepo.Get(ctx, strings.TrimSpace(ed.TargetFragmentID)); err == nil && tf != nil && strings.TrimSpace(tf.CanonicalPath) != "" {
-					out.SiblingPaths = append(out.SiblingPaths, strings.TrimSpace(tf.CanonicalPath))
-				}
+		for _, ed := range sibEdges {
+			if ed == nil {
+				continue
+			}
+			tgtID := strings.TrimSpace(ed.TargetFragmentID)
+			if tgtID == "" || tgtID == out.FragmentID {
+				continue
+			}
+			if p := resolvePath(tgtID); p != "" {
+				out.SiblingPaths = append(out.SiblingPaths, p)
 			}
 		}
 	}

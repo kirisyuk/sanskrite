@@ -1104,14 +1104,21 @@ func generalResearchNameHistoryBlock() string {
 }
 
 func generalResearchExplicitSourceRulesBlock() string {
-	return `EXPLICIT SOURCE RULES (CRITICAL for strategic edges):
-- Default source is THIS FRAGMENT.
+	return `EXPLICIT SOURCE RULES (CRITICAL for strict direction semantics):
+- Use ROLE-FIRST direction for OWNS/SUBSIDIARY_OF/INVESTS_IN/ASSURES/CONTROLS (ORG<->ORG): source is defined by semantic role, not by CURRENT FRAGMENT.
 - Use sourceCanonicalPath/sourceType/sourceName when semantic source is different.
+- OWNS: direction is owner -> owned entity. If THIS FRAGMENT is owned by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.
+- Never emit reversed OWNS (THIS FRAGMENT -> its owner).
+- INVESTS_IN: direction is investor -> investee. If THIS FRAGMENT is invested in by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.
+- Never emit reversed INVESTS_IN (THIS FRAGMENT -> its investor).
 - GATEKEEPS_DECISION: source must be gatekeeper (ORG/GOV/COMMUNITY), target is DECISION_POINT.
 - USES_MECHANISM: source is decision/org/gov/community/program, target is MECHANISM.
 - APPLIES_TO: source is MECHANISM, target is affected entity.
 - CONTROLS_ACCESS / IMPOSES_CONDITION: source is controller/imposer, target is affected entity.
-- For phase-1 business edges (DEPENDS_ON, SUPPLIES_TO, LOCATED_IN, OWNS, etc.), keep default source unless evidence explicitly requires otherwise.`
+- For actor↔actor DEPENDS_ON and ORG/FACILITY SUPPLIES_TO, include qualifiers.source_role/target_role (dependent->dependency, supplier->customer).
+- For phase-1 business edges (DEPENDS_ON, SUPPLIES_TO, LOCATED_IN, etc.), keep default source unless evidence explicitly requires otherwise.
+- Exception: for OWNS/INVESTS_IN/ASSURES/CONTROLS, use explicit source whenever THIS FRAGMENT is the semantic target.
+- For directed ORG->ORG edges above, include qualifiers.source_role and qualifiers.target_role.`
 }
 
 func buildResearchDecompositionGuidanceBlock(fragment *models.HorizonFragment, hints []DecompositionHint, originalQuery string) string {
@@ -1270,8 +1277,9 @@ func (a *ResearchAgent) buildSupplyChainEnrichmentPrompt(input ResearchStrategyI
 	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for SUPPLY CHAIN context. Build coherent chains.
 
-Use ONLY these relation types (canonical): DEPENDS_ON, PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN.
+Use ONLY these relation types (canonical): %s.
 Do NOT use RELATED_TO, AFFILIATED_WITH, PARTNERS_WITH, OWNS, COMPETES_WITH, or other non-supply-chain types.
+%s
 
 ENTITY TYPES in supply chain: %s. Use correct targetType for each relation.
 
@@ -1283,11 +1291,13 @@ CANONICAL PATH RULES (targetCanonicalPath MUST follow; supplyChains nodes too):
 %s
 
 WHAT TO FIND (prioritize completeness):
-1. Upstream: direct suppliers, then one next tier when confidence allows. Use DEPENDS_ON (consumer side) or SUPPLIES_TO (supplier side) consistently. Use PRODUCES/CONSUMES (org, facility, program→product). For raw materials: trace to extraction/mining when relevant.
-2. Downstream: direct customers, then one next tier when confidence allows. Include distribution channels and end users when known.
-3. Products: PRODUCES (org/facility/program→product), CONSUMES (org/facility/program→product). Value chain: PRODUCT TRANSFORMS_INTO PRODUCT (upstream→downstream). Include capacity/volume in metrics when you find figures (production_capacity, annual_volume).
+1. Upstream: direct suppliers, then one next tier when confidence allows. Use DEPENDS_ON (consumer side) or SUPPLIES_TO (supplier side) consistently. For actor↔actor DEPENDS_ON/SUPPLIES_TO, set qualifiers.source_role/target_role (dependent->dependency, supplier->customer). Use PRODUCES/CONSUMES (org, facility, program→product). For raw materials: trace to extraction/mining when relevant.
+2. Downstream: direct customers, then one next tier when confidence allows. Include distribution channels and end users when known. Keep SUPPLIES_TO direction supplier->customer and keep source_role/target_role aligned.
+3. Products: PRODUCES (org/facility/program→product), CONSUMES (org/facility/program→product). Value chain: PRODUCT TRANSFORMS_INTO PRODUCT (source=upstream raw material → target=downstream refined product; NEVER reversed). Stage order: extraction→refining→smelting→processing→manufacturing→assembly. Example: copper-ore→copper-concentrate→copper-anode→copper-cathode. Include capacity/volume in metrics when you find figures (production_capacity, annual_volume).
 4. Facilities & geography: LOCATED_IN (org/facility/person→GEO_REGION), OPERATES_IN (org/facility→region/deposit). For each facility: what it produces, capacity if known.
 5. Extractive (mining, O&G): EXTRACTS_FROM (FACILITY→DEPOSIT). Add reserves/production to fragment.state (/metric/reserves_volume, /metric/production_annual).
+   - If CURRENT FRAGMENT is DEPOSIT: output incoming extractive/dependency edges with explicit sourceCanonicalPath/sourceType/sourceName (facility/org as source, THIS FRAGMENT as target).
+   - Never emit SUPPLIES_TO with DEPOSIT as source.
 6. Supply chains: Build end-to-end chains with detail appropriate to phase. Output supplyChains with nodes [{canonicalPath, name, type, role?}].
    - CRITICAL: Include FACILITY nodes where transformation happens. Pattern: product → facility → product (e.g. lithium-ore → refinery → lithium-carbonate).
    - For extractive: subsidiary → facility → deposit → product (e.g. KMG → mine → /deposit/lithium/salares → lithium-ore).
@@ -1310,7 +1320,7 @@ QUESTIONS TO ANSWER (from Critic; prioritize these):
 Return a JSON object:
 {
   "fragment": { updated fields if found: homeLocation, state (e.g. /metric/reserves_volume, /metric/production_annual for extractive) },
-  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length", "transport_via"?: ["/fac/port/...", "/fac/terminal/..."] } } ],
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?", "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length", "transport_via"?: ["/fac/port/...", "/fac/terminal/..."], "source_role"?: "supplier|dependent", "target_role"?: "customer|dependency" } } ],
   "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"? } ], "confidence", "reason", "transportVia"?: ["/fac/port/...", "/fac/terminal/..."] } ]
 }
 Nodes MUST alternate actor→product. Include FACILITY where transformation happens (product→facility→product).
@@ -1322,7 +1332,7 @@ For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transp
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.SupplyChainEdgeTypesString(), GovEntityRelationRulesBlock(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
 }
 
 // EnrichSupplyChainFull runs anchor-centric full supply chain query (Plan mode).
@@ -1364,7 +1374,7 @@ func (a *ResearchAgent) buildSupplyChainFullQueryPrompt(query SupplyChainQuery) 
 
 TASK: Build the complete supply chain for: %s
 
-Use ONLY these relation types: DEPENDS_ON, PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN.
+Use ONLY these relation types: %s.
 ENTITY TYPES: %s.
 
 CANONICAL PATH RULES:
@@ -1384,7 +1394,7 @@ OUTPUT: Return a JSON object with "supplyChains" array. Each chain:
 %s
 
 Return ONLY valid JSON: { "supplyChains": [ { "nodes": [...], "segmentMetrics": [...], "alternatives": [...], "confidence", "reason" } ] }
-No markdown.`, intent, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategySupplyChainsJSONContractBlock())
+No markdown.`, intent, taxonomy.SupplyChainEdgeTypesString(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategySupplyChainsJSONContractBlock())
 }
 
 // buildGovernanceEnrichmentPrompt builds a prompt for ownership, board, key persons, gov hierarchy (canonical types).
@@ -1414,14 +1424,28 @@ CANONICAL PATH RULES (targetCanonicalPath MUST follow):
 Use ONLY these relation types (canonical): %s.
 Do NOT use RELATED_TO, AFFILIATED_WITH, KEY_PERSON, HAS_KEY_PERSON, or other non-governance types.
 
+DIRECTION RULES (CRITICAL):
+- Use ROLE-FIRST direction for OWNS/SUBSIDIARY_OF/INVESTS_IN/ASSURES/CONTROLS (ORG<->ORG): source is semantic owner/investor/assurer/controller, not automatically CURRENT FRAGMENT.
+- For OWNS, direction is ALWAYS owner -> owned entity.
+- If CURRENT FRAGMENT is owned by X, you MUST keep relationType=OWNS and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = CURRENT FRAGMENT.
+- NEVER output reversed OWNS (CURRENT FRAGMENT -> its owner).
+- For INVESTS_IN, direction is ALWAYS investor -> investee.
+- If CURRENT FRAGMENT is invested in by X, you MUST keep relationType=INVESTS_IN and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = CURRENT FRAGMENT.
+- NEVER output reversed INVESTS_IN (CURRENT FRAGMENT -> its investor).
+- For ASSURES, direction is ALWAYS assurer -> assuree.
+- If CURRENT FRAGMENT is audited/certified/inspected by X, you MUST keep relationType=ASSURES and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = CURRENT FRAGMENT.
+- SUBSIDIARY_OF remains child -> parent and is not a replacement for OWNS direction.
+- For directed ORG->ORG edges above, include qualifiers.source_role and qualifiers.target_role.
+
 WHAT TO FIND (prioritize completeness):
 1. Ownership chain: Trace to ultimate parent or beneficial owner. OWNS (parent→subsidiary): ORG/PERSON/COMMUNITY→ORG. SUBSIDIARY_OF (subsidiary→parent). Include intermediate holding companies. metrics.ownership_percent when known. COMMUNITY (dynasty, tribe) can OWNS ORGANIZATION.
-2. Control: CONTROLS (controller→controlled): ORG/PERSON/COMMUNITY→ORG/FACILITY. State control, voting rights, contractual control. Who controls at each level?
+2. Control: CONTROLS (controller→controlled): ORG/PERSON/COMMUNITY→ORG/FACILITY. State control, voting rights, contractual control. Who controls at each level? Do NOT model external audit/certification oversight as CONTROLS; use ASSURES with assurance_type.
 3. Full board: BOARD_MEMBER_OF (PERSON→ORG). All board members for significant organizations.
 4. Management: MANAGES (manager→managed). CEO, director, operator — formal authority over org/subsidiary. Full C-suite: EMPLOYED_BY (PERSON→ORG) for employment. FOUNDED (PERSON→ORG) for founders.
 5. Investment: INVESTS_IN (investor→target). Include metrics (investment_amount, round, valuation) when known.
 6. Government hierarchy: ADMINISTERS (GOV/ORG with /gov/ path → subordinate GOV or PROGRAM). Full hierarchy to leaf agencies.
-7. Return entities (parents, subsidiaries, board members, investors, gov bodies, programs) that should be explored further (child jobs will recurse).
+7. External assurance in governance: ASSURES for auditors and certifiers linked to this org/facility/program (do not emit AUDITED_BY legacy inverse).
+8. Return entities (parents, subsidiaries, board members, investors, gov bodies, auditors/certifiers, programs) that should be explored further (child jobs will recurse).
 
 INTEGRATION_TYPE qualifier (for OWNS): When the ownership fits a known pattern, add qualifiers.integration_type:
 - "vertical": subsidiary is part of vertically integrated supply chain (e.g., BYD owning battery/cell producers)
@@ -1437,7 +1461,7 @@ QUESTIONS TO ANSWER (from Critic; prioritize these):
 Return a JSON object:
 {
   "fragment": { updated fields if any },
-  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "metrics": { "ownership_percent", "investment_amount", ... }, "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length" } } ],
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?", "metrics": { "ownership_percent", "investment_amount", ... }, "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length", "source_role"?: "owner|investor|assurer|controller|subsidiary", "target_role"?: "owned_entity|investee|assuree|controlled_entity|parent_owner" } } ],
   "supplyChains": []
 }
 
@@ -1473,11 +1497,12 @@ CANONICAL PATH RULES (targetCanonicalPath MUST follow):
 Use ONLY these relation types (canonical): %s.
 For ASSURES: add qualifiers.assurance_type = "audit" | "certification" | "regulatory" | "inspection".
 Direction: assurer (source) → assuree (target). E.g. audit firm ASSURES org, certifier ASSURES org.
-AUDITED_BY: legacy direction (assuree → assurer). Prefer ASSURES for new data.
+If CURRENT FRAGMENT is audited/certified/inspected by X, set explicit sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = CURRENT FRAGMENT.
+Do NOT emit AUDITED_BY (legacy inverse direction assuree → assurer).
 REGULATES: regulator (source) → regulated entity (target).
 
 WHAT TO FIND (prioritize completeness):
-1. External audit: Who audits this org/facility? ASSURES(assurance_type:audit) from auditor to org, or AUDITED_BY (org→auditor). Include audit firm legal name.
+1. External audit: Who audits this org/facility? ASSURES(assurance_type:audit) from auditor to org. Include audit firm legal name.
 2. Certifications: ISO, sector-specific (e.g. FDA approval, banking license). ASSURES(assurance_type:certification). Certifier → org.
 3. Regulatory oversight: Which regulators oversee this entity? REGULATES (regulator→entity). Or ASSURES(assurance_type:regulatory) when regulator grants license/approval.
 4. Inspections: ASSURES(assurance_type:inspection) for inspection bodies.
@@ -1492,7 +1517,7 @@ QUESTIONS TO ANSWER (from Critic; prioritize these):
 Return a JSON object:
 {
   "fragment": { updated fields if any },
-  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "qualifiers": { "assurance_type"?: "audit|certification|regulatory|inspection" } } ],
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?", "qualifiers": { "assurance_type"?: "audit|certification|regulatory|inspection", "source_role"?: "assurer", "target_role"?: "assuree" } } ],
   "supplyChains": []
 }
 

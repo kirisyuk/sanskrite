@@ -47,6 +47,12 @@ export interface LensCanvasProps {
     onCancel: () => void;
     onContinue: (mode?: 'just_open' | 'research_first') => void;
   } | null;
+  fatalError?: {
+    title?: string;
+    message: string;
+    code?: string;
+    phase?: string;
+  } | null;
   onClose: () => void;
 }
 
@@ -61,6 +67,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   activeCreateCorrelationId = null,
   activeCreateSessionId = null,
   preflight = null,
+  fatalError = null,
   onClose,
 }) => {
   const { theme } = React.useContext(ThemeContext);
@@ -257,6 +264,19 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     return 'Lens';
   };
 
+  const assemblyFatalError = React.useMemo(() => {
+    const fatal = assemblyStatus?.fatalError;
+    if (!fatal || typeof fatal !== 'object') return null;
+    const message = String(fatal?.message || '').trim();
+    if (!message) return null;
+    return {
+      title: 'Fatal pipeline error',
+      message,
+      code: String(fatal?.code || '').trim() || undefined,
+      phase: String(fatal?.phase || '').trim() || undefined,
+    };
+  }, [assemblyStatus]);
+
   return (
     <ModalWithHeader
       title={getTitle()}
@@ -450,6 +470,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 activeCreateCorrelationId={activeCreateCorrelationId}
                 activeCreateSessionId={activeCreateSessionId}
                 preflight={preflight}
+                fatalError={fatalError || assemblyFatalError}
               />
             )}
             {viewMode === 'details' && lens && (
@@ -578,4 +599,3 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     </ModalWithHeader>
   );
 };
-

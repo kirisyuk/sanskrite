@@ -106,15 +106,30 @@ func TestEdgeDirectionPolicies_OPERATES_IN_IncludesDeposit(t *testing.T) {
 	}
 }
 
+func TestEdgeDirectionPolicies_CanonicalAndLegacyAliasCoverage(t *testing.T) {
+	cases := []models.DependencyType{
+		models.DependencyTypeAssociatedWith,
+		models.DependencyTypeCorporateTransition,
+		models.DependencyTypeDomainRelation,
+		models.DependencyTypeSubsidiaryOf,
+		models.DependencyTypeHasSubmarket,
+	}
+	for _, edgeType := range cases {
+		if _, exists := EdgeDirectionPolicies[edgeType]; !exists {
+			t.Fatalf("edge direction policy missing for %s", edgeType)
+		}
+	}
+}
+
 func TestNormalizeSymmetricEdge(t *testing.T) {
 	tests := []struct {
-		name          string
-		sourceID      string
-		targetID      string
-		edgeType      models.DependencyType
-		wantSource    string
-		wantTarget    string
-		wantSwapped   bool
+		name        string
+		sourceID    string
+		targetID    string
+		edgeType    models.DependencyType
+		wantSource  string
+		wantTarget  string
+		wantSwapped bool
 	}{
 		{
 			name:        "symmetric COMPETES_WITH - no swap needed",

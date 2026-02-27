@@ -4,10 +4,17 @@ export function apiBaseToWs(baseUrl: string) {
   return baseUrl.replace(/^https?:/, (m) => (m === 'https:' ? 'wss:' : 'ws:'));
 }
 
-const WS_BROKER_URL = 'https://h1horizon-ws-yulmgw47va-uc.a.run.app';
+/** WebSocket broker base URL (https). Falls back to API base if unset. */
+export function getWsBrokerBaseUrl(): string {
+  const wsUrl = import.meta.env.VITE_WS_BASE_URL || import.meta.env.VITE_WS_BROKER_URL;
+  if (wsUrl) return wsUrl.replace(/\/$/, '');
+  const apiUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+  return apiUrl.replace(/\/$/, '');
+}
 
 export function buildWsUrl(_tenantId: string) {
-  const wsBase = apiBaseToWs(WS_BROKER_URL.replace(/\/$/, ''));
+  const base = getWsBrokerBaseUrl();
+  const wsBase = apiBaseToWs(base);
   return `${wsBase}/ws`;
 }
 

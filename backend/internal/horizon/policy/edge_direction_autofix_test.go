@@ -230,6 +230,42 @@ func TestResolveEdgeDirectionAutoFix_NonGovRegulatesMarketStillFixes(t *testing.
 	}
 }
 
+func TestResolveEdgeDirectionAutoFix_GovDependsOnMarketBecomesRegulates(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeDependsOn,
+		horizonmodels.FragmentTypeOrganization,
+		horizonmodels.FragmentTypeMarket,
+		"/gov/cl/ministerio-de-mineria", "/market/cl/materials/raw-materials",
+	)
+	if !ok {
+		t.Fatalf("GOV DEPENDS_ON MARKET should trigger auto-fix")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeRegulates {
+		t.Fatalf("expected newType REGULATES, got %s", fix.NewType)
+	}
+	if fix.ShouldSwap {
+		t.Fatalf("expected shouldSwap=false (GOV is already source)")
+	}
+}
+
+func TestResolveEdgeDirectionAutoFix_MarketDependsOnGovBecomesRegulatesSwap(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeDependsOn,
+		horizonmodels.FragmentTypeMarket,
+		horizonmodels.FragmentTypeOrganization,
+		"/market/cl/materials/raw-materials", "/gov/cl/ministerio-de-mineria",
+	)
+	if !ok {
+		t.Fatalf("MARKET DEPENDS_ON GOV should trigger auto-fix")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeRegulates {
+		t.Fatalf("expected newType REGULATES, got %s", fix.NewType)
+	}
+	if !fix.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true (GOV should become source)")
+	}
+}
+
 func TestApplyEdgeCanonicalizationPolicy_GovRegulatesMarketPreserved(t *testing.T) {
 	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
 		EdgeType:   horizonmodels.DependencyTypeRegulates,
@@ -260,5 +296,91 @@ func TestApplyEdgeCanonicalizationPolicyHasMarketSegmentChildToParent(t *testing
 	}
 	if !got.ShouldSwap {
 		t.Fatalf("expected shouldSwap=true (parent→child)")
+	}
+}
+
+func TestApplyEdgeCanonicalizationPolicy_LegacyAuditedByToAssures(t *testing.T) {
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:        horizonmodels.DependencyTypeAuditedBy,
+		SourceType:      horizonmodels.FragmentTypeOrganization,
+		TargetType:      horizonmodels.FragmentTypeOrganization,
+		SourcePath:      "/org/cn/wingtech",
+		TargetPath:      "/org/us/deloitte",
+		RawRelationType: "AUDITED_BY",
+		Qualifiers:      map[string]interface{}{},
+	})
+	if !got.Changed {
+		t.Fatalf("expected canonicalization change for legacy AUDITED_BY")
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeAssures {
+		t.Fatalf("expected ASSURES, got %s", got.EdgeType)
+	}
+	if !got.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true (auditor should become source)")
+	}
+}
+
+func TestApplyEdgeCanonicalizationPolicy_RawAuditedByAssuresSwap(t *testing.T) {
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:        horizonmodels.DependencyTypeAssures,
+		SourceType:      horizonmodels.FragmentTypeOrganization,
+		TargetType:      horizonmodels.FragmentTypeOrganization,
+		SourcePath:      "/org/cn/wingtech",
+		TargetPath:      "/org/us/deloitte",
+		RawRelationType: "AUDITED_BY",
+		Qualifiers:      map[string]interface{}{},
+	})
+	if !got.Changed {
+		t.Fatalf("expected direction canonicalization change for raw AUDITED_BY")
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeAssures {
+		t.Fatalf("expected ASSURES, got %s", got.EdgeType)
+	}
+	if !got.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true for raw AUDITED_BY semantics")
+	}
+}
+
+func TestApplyEdgeCanonicalizationPolicy_ControlsAuditCueToAssures(t *testing.T) {
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:        horizonmodels.DependencyTypeControls,
+		SourceType:      horizonmodels.FragmentTypeOrganization,
+		TargetType:      horizonmodels.FragmentTypeOrganization,
+		SourcePath:      "/org/cn/wingtech",
+		TargetPath:      "/org/us/deloitte",
+		RawRelationType: "CONTROLS",
+		Reason:          "external auditor for Wingtech in annual report",
+		Qualifiers:      map[string]interface{}{},
+	})
+	if !got.Changed {
+		t.Fatalf("expected CONTROLS with audit cue to be canonicalized")
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeAssures {
+		t.Fatalf("expected ASSURES, got %s", got.EdgeType)
+	}
+	if got.ShouldSwap {
+		t.Fatalf("expected shouldSwap=false for source-assures-target cue")
+	}
+}
+
+func TestApplyEdgeCanonicalizationPolicy_ControlsAuditedByCueSwaps(t *testing.T) {
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:        horizonmodels.DependencyTypeControls,
+		SourceType:      horizonmodels.FragmentTypeOrganization,
+		TargetType:      horizonmodels.FragmentTypeOrganization,
+		SourcePath:      "/org/cn/wingtech",
+		TargetPath:      "/org/us/deloitte",
+		RawRelationType: "CONTROLS",
+		Reason:          "Wingtech is audited by Deloitte",
+		Qualifiers:      map[string]interface{}{},
+	})
+	if !got.Changed {
+		t.Fatalf("expected CONTROLS with audited-by cue to be canonicalized")
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeAssures {
+		t.Fatalf("expected ASSURES, got %s", got.EdgeType)
+	}
+	if !got.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true for audited-by cue")
 	}
 }

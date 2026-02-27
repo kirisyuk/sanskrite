@@ -131,7 +131,7 @@ def should_exclude(path: Path, root: Path) -> bool:
             pass
     
     # Исключаем известные бинарники по имени
-    binary_names = {'server', 'ws-broker', 'verified-proxy'}
+    binary_names = {'server', 'verified-proxy'}
     if name in binary_names:
         return True
     
@@ -153,7 +153,7 @@ def is_text_file(file_path: Path) -> bool:
     # Файлы без расширения могут быть текстовыми (например, Makefile)
     # Но исключаем известные бинарники
     if not file_path.suffix:
-        binary_names = {'server', 'ws-broker', 'verified-proxy'}
+        binary_names = {'server', 'verified-proxy'}
         if file_path.name in binary_names:
             return False
         # Если файл исполняемый и большой (>100KB), вероятно бинарник

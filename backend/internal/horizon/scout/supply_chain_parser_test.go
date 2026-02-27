@@ -1,6 +1,7 @@
 package scout
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -101,6 +102,129 @@ func TestParseSupplyChains_SuppliesToEdgeHasTransportVia(t *testing.T) {
 	if len(via) != 1 || via[0] != "/fac/us/port-long-beach" {
 		t.Fatalf("transport_via=%v, want [/fac/us/port-long-beach]", via)
 	}
+	if got, _ := suppliesEdge.Qualifiers["source_role"].(string); got != "supplier" {
+		t.Fatalf("source_role=%q, want supplier", got)
+	}
+	if got, _ := suppliesEdge.Qualifiers["target_role"].(string); got != "customer" {
+		t.Fatalf("target_role=%q, want customer", got)
+	}
+	if got, _ := suppliesEdge.Qualifiers["direction_basis"].(string); got != "supply_flow" {
+		t.Fatalf("direction_basis=%q, want supply_flow", got)
+	}
+	if got, _ := suppliesEdge.Qualifiers["product_ref"].(string); got != "/product/semiconductors/fabs/chips" {
+		t.Fatalf("product_ref=%q, want /product/semiconductors/fabs/chips", got)
+	}
+}
+
+func TestParseSupplyChains_SuppliesToEdgeWithoutTransportStillHasDirectionalQualifiers(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.9,
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/org/br/vale-sa",
+					Type:          "ORGANIZATION",
+				},
+				{
+					CanonicalPath: "/product/raw/minerals/iron-ore",
+					Type:          "PRODUCT",
+				},
+				{
+					CanonicalPath: "/fac/cn/baosteel-shanghai",
+					Type:          "FACILITY",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/org/br/vale-sa")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+
+	var suppliesEdge *ChainEdge
+	for _, edge := range result.Edges {
+		if edge == nil || edge.RelationType != string(models.DependencyTypeSuppliesTo) {
+			continue
+		}
+		if edge.SourceCanonicalPath == "/org/br/vale-sa" && edge.TargetCanonicalPath == "/fac/cn/baosteel-shanghai" {
+			suppliesEdge = edge
+			break
+		}
+	}
+	if suppliesEdge == nil {
+		t.Fatalf("expected SUPPLIES_TO edge for actor->product->actor pattern")
+	}
+	if _, ok := suppliesEdge.Qualifiers[models.QualifierTransportVia]; ok {
+		t.Fatalf("transport_via should be omitted when route is unknown")
+	}
+	if got, _ := suppliesEdge.Qualifiers["source_role"].(string); got != "supplier" {
+		t.Fatalf("source_role=%q, want supplier", got)
+	}
+	if got, _ := suppliesEdge.Qualifiers["target_role"].(string); got != "customer" {
+		t.Fatalf("target_role=%q, want customer", got)
+	}
+	if got, _ := suppliesEdge.Qualifiers["direction_basis"].(string); got != "supply_flow" {
+		t.Fatalf("direction_basis=%q, want supply_flow", got)
+	}
+	if got, _ := suppliesEdge.Qualifiers["product_ref"].(string); got != "/product/raw/minerals/iron-ore" {
+		t.Fatalf("product_ref=%q, want /product/raw/minerals/iron-ore", got)
+	}
+}
+
+func TestParseSupplyChains_ExtractivePatternUsesExtractsFromAndAvoidsDepositSupplies(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.88,
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/org/br/vale-sa",
+					Type:          "ORGANIZATION",
+				},
+				{
+					CanonicalPath: "/fac/vale/carajas-mine",
+					Type:          "FACILITY",
+				},
+				{
+					CanonicalPath: "/deposit/iron-ore/carajas-complex",
+					Type:          "DEPOSIT",
+				},
+				{
+					CanonicalPath: "/product/raw/minerals/iron-ore",
+					Type:          "PRODUCT",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/org/br/vale-sa")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+
+	hasExtractsFrom := false
+	for _, edge := range result.Edges {
+		if edge == nil {
+			continue
+		}
+		if edge.RelationType == string(models.DependencyTypeExtractsFrom) &&
+			edge.SourceCanonicalPath == "/fac/vale/carajas-mine" &&
+			edge.TargetCanonicalPath == "/deposit/iron-ore/carajas-complex" {
+			hasExtractsFrom = true
+		}
+		if edge.RelationType == string(models.DependencyTypeSuppliesTo) &&
+			(strings.Contains(edge.SourceCanonicalPath, "/deposit/") || strings.Contains(edge.TargetCanonicalPath, "/deposit/")) {
+			t.Fatalf("unexpected deposit-involved SUPPLIES_TO edge: %s -> %s", edge.SourceCanonicalPath, edge.TargetCanonicalPath)
+		}
+	}
+	if !hasExtractsFrom {
+		t.Fatalf("expected EXTRACTS_FROM edge for FACILITY -> DEPOSIT")
+	}
+	if len(result.SupplyLinkSegments) != 0 {
+		t.Fatalf("extractive pattern should not produce actor->product->actor supply-link segments, got %d", len(result.SupplyLinkSegments))
+	}
 }
 
 func TestParseSupplyChains_ProgramAndMarketNodesCreateFragments(t *testing.T) {
@@ -155,5 +279,189 @@ func TestParseSupplyChains_ProgramAndMarketNodesCreateFragments(t *testing.T) {
 	}
 	if len(result.Edges) == 0 {
 		t.Fatalf("expected edges to be created")
+	}
+}
+
+func TestParseSupplyChains_TransformsIntoDirectionSwap_ProductToProduct(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.90,
+			Reason:     "Copper value chain",
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/product/component/mineral/smelting/copper-anode",
+					Name:          "Copper Anode",
+					Type:          "PRODUCT",
+				},
+				{
+					CanonicalPath: "/product/raw/mineral/extraction/copper-ore",
+					Name:          "Copper Ore",
+					Type:          "PRODUCT",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/product/component/mineral/smelting/copper-anode")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+
+	var transformEdge *ChainEdge
+	for _, e := range result.Edges {
+		if e.RelationType == string(models.DependencyTypeTransformsInto) {
+			transformEdge = e
+			break
+		}
+	}
+	if transformEdge == nil {
+		t.Fatalf("expected TRANSFORMS_INTO edge")
+	}
+	if transformEdge.SourceCanonicalPath != "/product/raw/mineral/extraction/copper-ore" {
+		t.Fatalf("TRANSFORMS_INTO source=%q, want copper-ore (upstream)", transformEdge.SourceCanonicalPath)
+	}
+	if transformEdge.TargetCanonicalPath != "/product/component/mineral/smelting/copper-anode" {
+		t.Fatalf("TRANSFORMS_INTO target=%q, want copper-anode (downstream)", transformEdge.TargetCanonicalPath)
+	}
+}
+
+func TestParseSupplyChains_TransformsIntoDirectionCorrect_NoSwap(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.90,
+			Reason:     "Iron value chain",
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/product/raw/mineral/extraction/iron-ore",
+					Name:          "Iron Ore",
+					Type:          "PRODUCT",
+				},
+				{
+					CanonicalPath: "/product/finished/mineral/processing/iron-pellet",
+					Name:          "Iron Pellet",
+					Type:          "PRODUCT",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/product/raw/mineral/extraction/iron-ore")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+
+	var transformEdge *ChainEdge
+	for _, e := range result.Edges {
+		if e.RelationType == string(models.DependencyTypeTransformsInto) {
+			transformEdge = e
+			break
+		}
+	}
+	if transformEdge == nil {
+		t.Fatalf("expected TRANSFORMS_INTO edge")
+	}
+	if transformEdge.SourceCanonicalPath != "/product/raw/mineral/extraction/iron-ore" {
+		t.Fatalf("TRANSFORMS_INTO source=%q, want iron-ore (upstream)", transformEdge.SourceCanonicalPath)
+	}
+	if transformEdge.TargetCanonicalPath != "/product/finished/mineral/processing/iron-pellet" {
+		t.Fatalf("TRANSFORMS_INTO target=%q, want iron-pellet (downstream)", transformEdge.TargetCanonicalPath)
+	}
+}
+
+func TestParseSupplyChains_TransformsIntoViaFacility_DirectionSwap(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.85,
+			Reason:     "Copper smelting chain",
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/product/component/mineral/smelting/copper-anode",
+					Name:          "Copper Anode",
+					Type:          "PRODUCT",
+				},
+				{
+					CanonicalPath: "/fac/codelco/chuquicamata-smelter",
+					Name:          "Chuquicamata Smelter",
+					Type:          "FACILITY",
+				},
+				{
+					CanonicalPath: "/product/raw/mineral/extraction/copper-ore",
+					Name:          "Copper Ore",
+					Type:          "PRODUCT",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/product/component/mineral/smelting/copper-anode")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+
+	var transformEdge *ChainEdge
+	for _, e := range result.Edges {
+		if e.RelationType == string(models.DependencyTypeTransformsInto) {
+			transformEdge = e
+			break
+		}
+	}
+	if transformEdge == nil {
+		t.Fatalf("expected TRANSFORMS_INTO edge (via facility pattern)")
+	}
+	if transformEdge.SourceCanonicalPath != "/product/raw/mineral/extraction/copper-ore" {
+		t.Fatalf("TRANSFORMS_INTO source=%q, want copper-ore (upstream)", transformEdge.SourceCanonicalPath)
+	}
+	if transformEdge.TargetCanonicalPath != "/product/component/mineral/smelting/copper-anode" {
+		t.Fatalf("TRANSFORMS_INTO target=%q, want copper-anode (downstream)", transformEdge.TargetCanonicalPath)
+	}
+}
+
+func TestShouldSwapProductStageOrder(t *testing.T) {
+	tests := []struct {
+		name     string
+		src, dst string
+		want     bool
+	}{
+		{
+			name: "downstream->upstream should swap",
+			src:  "/product/finished/mineral/processing/iron-pellet",
+			dst:  "/product/raw/mineral/extraction/iron-ore",
+			want: true,
+		},
+		{
+			name: "upstream->downstream no swap",
+			src:  "/product/raw/mineral/extraction/iron-ore",
+			dst:  "/product/finished/mineral/processing/iron-pellet",
+			want: false,
+		},
+		{
+			name: "smelting->extraction should swap",
+			src:  "/product/component/mineral/smelting/copper-anode",
+			dst:  "/product/raw/mineral/extraction/copper-ore",
+			want: true,
+		},
+		{
+			name: "flat paths no stage info - no swap",
+			src:  "/product/copper-anode",
+			dst:  "/product/copper-ore",
+			want: false,
+		},
+		{
+			name: "same stage - no swap",
+			src:  "/product/raw/mineral/extraction/copper-ore",
+			dst:  "/product/raw/mineral/extraction/iron-ore",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldSwapProductStageOrder(tt.src, tt.dst)
+			if got != tt.want {
+				t.Fatalf("shouldSwapProductStageOrder(%q, %q) = %v, want %v", tt.src, tt.dst, got, tt.want)
+			}
+		})
 	}
 }

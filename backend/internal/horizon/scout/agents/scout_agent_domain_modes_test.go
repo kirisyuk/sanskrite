@@ -110,3 +110,27 @@ func TestBuildExtractionPrompt_ContainsCanonicalNamespaceDetails(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildExtractionPrompt_RoleFirstDirectionContract(t *testing.T) {
+	a := NewScoutAgent(nil)
+	prompt := a.buildExtractionPrompt(
+		"content",
+		"/org/tw/tsmc",
+		"/entity/organization",
+		"/sector/semiconductor",
+		nil,
+		"",
+		nil,
+	)
+	for _, want := range []string{
+		"ROLE-FIRST DIRECTION CONTRACT",
+		"Do NOT assume source = THIS FRAGMENT for OWNS / INVESTS_IN / ASSURES / CONTROLS.",
+		"qualifiers.source_role and qualifiers.target_role",
+		"DEPENDS_ON/SUPPLIES_TO",
+		"Direction is ROLE-FIRST",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("extraction prompt missing role-first contract %q", want)
+		}
+	}
+}

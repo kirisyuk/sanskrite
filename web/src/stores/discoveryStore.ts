@@ -14,7 +14,7 @@ let listenersAttached = false; // Track if event listeners are already attached
 let projectsStoreUnsubscribe: (() => void) | null = null; // Store unsubscribe function to prevent memory leaks
 let windowEventListeners: { visibilitychange: () => void; online: () => void } | null = null; // Store listeners for cleanup
 let lastSubscribedProjectId: string | undefined = undefined; // Track last subscribed projectId to restore on reconnect
-const WS_BROKER_URL = 'https://h1horizon-ws-yulmgw47va-uc.a.run.app';
+// WebSocket broker URL: VITE_WS_BASE_URL or derived from VITE_API_BASE_URL
 
 type SubscriptionWaiter = {
   timeoutId: number;
@@ -911,8 +911,9 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
         }
         const token = await user.getIdToken(true);
 
+        const { getWsBrokerBaseUrl } = await import('../lib/ws');
         const toWs = (u: string) => u.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
-        const wsUrl = `${toWs(WS_BROKER_URL.replace(/\/$/, ''))}/ws?token=${encodeURIComponent(token)}`;
+        const wsUrl = `${toWs(getWsBrokerBaseUrl())}/ws?token=${encodeURIComponent(token)}`;
 
         // Close previous if any
         if (wsRef) {

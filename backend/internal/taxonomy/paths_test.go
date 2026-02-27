@@ -219,6 +219,8 @@ func TestOrgCanonicalPath_ParentheticalAnnotations(t *testing.T) {
 		{"sa", "STC Bank PJSC", "/org/sa/stc-bank-pjsc"},
 		{"na", "stc Bank PLC", "/org/na/stc-bank-plc"},
 		{"sa", "Stc Bank Jsc", "/org/sa/stc-bank-jsc"},
+		{"nl", "Nexperia B.V.", "/org/nl/nexperia-bv"},
+		{"nl", "Nexperia B V", "/org/nl/nexperia-bv"},
 		// Parenthetical "(formerly ...)" must be stripped — slug core should be "stc-bank".
 		{"sa", "STC Bank (formerly stc pay) PJSC", "/org/sa/stc-bank-pjsc"},
 		// No legal form after stripping parenthetical — slug is plain "stc-bank".

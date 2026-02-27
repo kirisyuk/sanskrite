@@ -86,7 +86,17 @@ func NormalizeLegalName(name string) string {
 				changed = true
 				break
 			}
+			if spaced := spacedAbbreviationVariant(sfx); spaced != "" && strings.HasSuffix(name, " "+spaced) {
+				name = strings.TrimSpace(strings.TrimSuffix(name, " "+spaced))
+				changed = true
+				break
+			}
 			if name == sfx {
+				name = ""
+				changed = true
+				break
+			}
+			if spaced := spacedAbbreviationVariant(sfx); spaced != "" && name == spaced {
 				name = ""
 				changed = true
 				break
@@ -105,10 +115,41 @@ func NormalizeLegalName(name string) string {
 			name = strings.TrimSpace(strings.TrimPrefix(name, pfx))
 			break
 		}
+		if spaced := spacedAbbreviationVariant(strings.TrimSpace(pfx)); spaced != "" {
+			spaced = spaced + " "
+			if strings.HasPrefix(name, spaced) {
+				name = strings.TrimSpace(strings.TrimPrefix(name, spaced))
+				break
+			}
+		}
 	}
 
 	name = strings.Join(strings.Fields(name), " ")
 	return name
+}
+
+func spacedAbbreviationVariant(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" || strings.Contains(token, " ") {
+		return ""
+	}
+	runes := []rune(token)
+	if len(runes) < 2 || len(runes) > 6 {
+		return ""
+	}
+	for _, r := range runes {
+		if !unicode.IsLetter(r) {
+			return ""
+		}
+	}
+	var b strings.Builder
+	for i, r := range runes {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // NormalizeLookupText lowercases and strips punctuation for tolerant lookup/indexing.

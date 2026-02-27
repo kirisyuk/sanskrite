@@ -222,6 +222,149 @@ func TestValidationPolicy_InfluencesOrgToSphereGetsPenaltyPotential(t *testing.T
 	}
 }
 
+func TestValidationPolicy_OrgOrgInvestsInRequiresDirectionEvidence(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
+			"targetType":     string(horizonmodels.FragmentTypeOrganization),
+			"relationType":   string(horizonmodels.DependencyTypeInvestsIn),
+			"reason":         "Vanguard invested in TSMC",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionQuarantineSoft {
+		t.Fatalf("expected %s for ambiguous ORG->ORG INVESTS_IN, got %s", ActionQuarantineSoft, decision.Action)
+	}
+
+	decision2, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
+			"targetType":     string(horizonmodels.FragmentTypeOrganization),
+			"relationType":   string(horizonmodels.DependencyTypeInvestsIn),
+			"reason":         "Vanguard invested in TSMC",
+			"qualifiers": map[string]interface{}{
+				"source_role": "investor",
+				"target_role": "investee",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() with roles error = %v", err)
+	}
+	if decision2.Action == ActionQuarantineSoft {
+		t.Fatalf("expected non-quarantine with explicit investor/investee roles, got %s", decision2.Action)
+	}
+}
+
+func TestValidationPolicy_OrgOrgAssuresPassiveCueWithoutRolesIsQuarantined(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
+			"targetType":     string(horizonmodels.FragmentTypeOrganization),
+			"relationType":   string(horizonmodels.DependencyTypeAssures),
+			"reason":         "TSMC is audited by Deloitte",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionQuarantineSoft {
+		t.Fatalf("expected %s for passive ambiguous ASSURES without roles, got %s", ActionQuarantineSoft, decision.Action)
+	}
+}
+
+func TestValidationPolicy_DependsOnActorPairRequiresDirectionEvidence(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
+			"targetType":     string(horizonmodels.FragmentTypeOrganization),
+			"relationType":   string(horizonmodels.DependencyTypeDependsOn),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionQuarantineSoft {
+		t.Fatalf("expected %s for ambiguous ORG->ORG DEPENDS_ON, got %s", ActionQuarantineSoft, decision.Action)
+	}
+
+	decision2, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
+			"targetType":     string(horizonmodels.FragmentTypeOrganization),
+			"relationType":   string(horizonmodels.DependencyTypeDependsOn),
+			"qualifiers": map[string]interface{}{
+				"source_role": "dependent",
+				"target_role": "dependency",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() with roles error = %v", err)
+	}
+	if decision2.Action == ActionQuarantineSoft {
+		t.Fatalf("expected non-quarantine with explicit dependent/dependency roles, got %s", decision2.Action)
+	}
+}
+
+func TestValidationPolicy_SuppliesToActorPairRequiresDirectionEvidence(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
+			"targetType":     string(horizonmodels.FragmentTypeOrganization),
+			"relationType":   string(horizonmodels.DependencyTypeSuppliesTo),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionQuarantineSoft {
+		t.Fatalf("expected %s for ambiguous ORG->ORG SUPPLIES_TO, got %s", ActionQuarantineSoft, decision.Action)
+	}
+
+	decision2, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
+			"targetType":     string(horizonmodels.FragmentTypeOrganization),
+			"relationType":   string(horizonmodels.DependencyTypeSuppliesTo),
+			"qualifiers": map[string]interface{}{
+				"source_role": "supplier",
+				"target_role": "customer",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() with roles error = %v", err)
+	}
+	if decision2.Action == ActionQuarantineSoft {
+		t.Fatalf("expected non-quarantine with explicit supplier/customer roles, got %s", decision2.Action)
+	}
+}
+
 func TestValidationPolicy_OrgConsumesOrgQuarantine(t *testing.T) {
 	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
 	decision, err := p.Decide(context.Background(), PolicyInput{

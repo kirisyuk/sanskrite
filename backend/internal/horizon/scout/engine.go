@@ -7,10 +7,15 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"crypto/sha1"
+	"encoding/hex"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
+	redis "github.com/redis/go-redis/v9"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -89,6 +94,31 @@ func shouldRequestProductCanonicalization(frag *models.HorizonFragment) bool {
 	}
 	// Any flat /product/{slug} should be canonicalized into taxonomy.
 	return true
+}
+
+// mergeHomeLocation fills dst's empty fields from src (in-place). Used when merging extracted geo into existing fragment.
+func mergeHomeLocation(dst, src *models.Location) {
+	if dst == nil || src == nil {
+		return
+	}
+	if strings.TrimSpace(dst.Name) == "" && strings.TrimSpace(src.Name) != "" {
+		dst.Name = strings.TrimSpace(src.Name)
+	}
+	if (dst.ISO3166_1 == nil || strings.TrimSpace(*dst.ISO3166_1) == "") &&
+		src.ISO3166_1 != nil && strings.TrimSpace(*src.ISO3166_1) != "" {
+		v := strings.TrimSpace(*src.ISO3166_1)
+		dst.ISO3166_1 = &v
+	}
+	if (dst.ISO3166_2 == nil || strings.TrimSpace(*dst.ISO3166_2) == "") &&
+		src.ISO3166_2 != nil && strings.TrimSpace(*src.ISO3166_2) != "" {
+		v := strings.TrimSpace(*src.ISO3166_2)
+		dst.ISO3166_2 = &v
+	}
+	if (dst.ISO6709 == nil || strings.TrimSpace(*dst.ISO6709) == "") &&
+		src.ISO6709 != nil && strings.TrimSpace(*src.ISO6709) != "" {
+		v := strings.TrimSpace(*src.ISO6709)
+		dst.ISO6709 = &v
+	}
 }
 
 func appendMissingInfoUnique(list []string, item string) []string {
@@ -1589,6 +1619,10 @@ type ScoutEngine struct {
 	enforcementJobsRepo    *repo.EnforcementJobsRepository    // Optional: persists enforcement jobs
 	policyCheckResultsRepo *repo.PolicyCheckResultsRepository // Optional: persists policy check results
 	policyWSPublisher      *policy.PolicyWSPublisher          // Optional: publishes policy check results via WebSocket
+	policyPersistQueueMu   sync.Mutex
+	policyPersistQueue     map[string]*policyPersistTask
+	policyPersistDLQ       map[string]*policyPersistTask
+	policyPersistWorkerOn  bool
 
 	// Lens artifacts for Phase 2 Strategic Overlay
 	lensArtifactsRepo *repo.LensArtifactsRepository         // Optional: accumulates finalized fragments/edges per lens
@@ -1596,6 +1630,15 @@ type ScoutEngine struct {
 
 	// Supply chain path materialization (Plan mode)
 	supplyChainPathBuilder *pathbuilder.SupplyChainPathBuilder // Optional: MaterializePath from parsed chains
+
+	// Cross-job early dedup cache for edge candidates (short-lived, best-effort).
+	edgeRecentDedupMu         sync.Mutex
+	edgeRecentDedup           map[string]time.Time
+	edgeRecentDedupTTL        time.Duration
+	edgeRecentDedupMaxEntries int
+
+	// Shared Redis client for cross-job caching (skeleton context, edge dedup).
+	redisClient *redis.Client
 }
 
 // bestEffortDeferredScopeAdd adds canonicalPath to lens.Scope if under limit (max 5 per lens).
@@ -2125,34 +2168,39 @@ func NewScoutEngine(
 	productHierarchy := NewProductHierarchyBuilder(fragmentsRepo, edgesRepo, nil) // WikidataClient set via WithWikidataClient
 
 	engine := &ScoutEngine{
-		planner:                 planner,
-		executor:                executor,
-		scoutAgent:              scoutAgent,
-		criticAgent:             criticAgent,
-		resolverAgent:           resolverAgent,
-		researchAgent:           researchAgent,
-		frameBuilder:            frameBuilder,
-		workflow:                workflow,
-		fragmentsRepo:           fragmentsRepo,
-		framesRepo:              framesRepo,
-		edgesRepo:               edgesRepo,
-		scoutingJobsRepo:        scoutingJobsRepo,
-		cascadeVisitedRepo:      nil,
-		cascadeEntityRegistry:   nil,
-		realtime:                realtime,
-		taxonomyClassifier:      NewTaxonomyClassifier(aiExecutor),
-		aiExecutor:              aiExecutor,
-		spendLedger:             nil,
-		budgetPolicy:            BudgetPolicyFromEnv(),
-		geoHierarchyBuilder:     geoBuilder,
-		orgDeduplicator:         orgDedup,
-		personDeduplicator:      personDedup,
-		orgHierarchyBuilder:     orgHierarchy,
-		marketHierarchyBuilder:  marketHierarchy,
-		marketGeoHierarchy:      marketGeoHierarchy,
-		govHierarchyBuilder:     govHierarchy,
-		productDeduplicator:     productDedup,
-		productHierarchyBuilder: productHierarchy,
+		planner:                   planner,
+		executor:                  executor,
+		scoutAgent:                scoutAgent,
+		criticAgent:               criticAgent,
+		resolverAgent:             resolverAgent,
+		researchAgent:             researchAgent,
+		frameBuilder:              frameBuilder,
+		workflow:                  workflow,
+		fragmentsRepo:             fragmentsRepo,
+		framesRepo:                framesRepo,
+		edgesRepo:                 edgesRepo,
+		scoutingJobsRepo:          scoutingJobsRepo,
+		cascadeVisitedRepo:        nil,
+		cascadeEntityRegistry:     nil,
+		realtime:                  realtime,
+		taxonomyClassifier:        NewTaxonomyClassifier(aiExecutor),
+		aiExecutor:                aiExecutor,
+		spendLedger:               nil,
+		budgetPolicy:              BudgetPolicyFromEnv(),
+		geoHierarchyBuilder:       geoBuilder,
+		orgDeduplicator:           orgDedup,
+		personDeduplicator:        personDedup,
+		orgHierarchyBuilder:       orgHierarchy,
+		marketHierarchyBuilder:    marketHierarchy,
+		marketGeoHierarchy:        marketGeoHierarchy,
+		govHierarchyBuilder:       govHierarchy,
+		productDeduplicator:       productDedup,
+		productHierarchyBuilder:   productHierarchy,
+		policyPersistQueue:        make(map[string]*policyPersistTask),
+		policyPersistDLQ:          make(map[string]*policyPersistTask),
+		edgeRecentDedup:           make(map[string]time.Time),
+		edgeRecentDedupTTL:        10 * time.Minute,
+		edgeRecentDedupMaxEntries: 20000,
 	}
 	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup, productDedup).WithPersonDedup(personDedup)
 	engine.groundingResolver = NewGroundingEvidenceResolver(fragmentsRepo)
@@ -2273,6 +2321,12 @@ func (e *ScoutEngine) WithDomainAnswerSnapshotsRepo(repo *repo.DomainAnswerSnaps
 // WithSupplyChainPathBuilder sets the path builder for materializing supply chain paths from parsed chains (Plan mode).
 func (e *ScoutEngine) WithSupplyChainPathBuilder(b *pathbuilder.SupplyChainPathBuilder) *ScoutEngine {
 	e.supplyChainPathBuilder = b
+	return e
+}
+
+// WithRedisClient sets the shared Redis client for cross-job caching (skeleton context, edge dedup).
+func (e *ScoutEngine) WithRedisClient(client *redis.Client) *ScoutEngine {
+	e.redisClient = client
 	return e
 }
 
@@ -2511,7 +2565,7 @@ func isTerminalScoutJob(job *models.ScoutingJob) bool {
 		return true
 	}
 	switch job.Status {
-	case coreModels.AgentJobStatusCompleted, coreModels.AgentJobStatusFailed:
+	case coreModels.AgentJobStatusCompleted, coreModels.AgentJobStatusFailed, coreModels.AgentJobStatusPartial:
 		return true
 	}
 	return false
@@ -2691,7 +2745,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	if job.CurrentState == models.ScoutingJobStateVerified ||
 		job.CurrentState == models.ScoutingJobStateFailed ||
 		job.Status == coreModels.AgentJobStatusCompleted ||
-		job.Status == coreModels.AgentJobStatusFailed {
+		job.Status == coreModels.AgentJobStatusFailed ||
+		job.Status == coreModels.AgentJobStatusPartial {
 		trace.Log(ctx, "scout_exec", "scout.job.idempotent_skip", map[string]any{
 			"tenantId":            strings.TrimSpace(job.TenantID),
 			"projectId":           strings.TrimSpace(job.ProjectID),
@@ -2704,6 +2759,59 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		fmt.Printf("[ScoutEngine] Job %s already terminal (CurrentState=%s, Status=%s). Skipping (idempotent).\n",
 			job.ID, job.CurrentState, job.Status)
 		return nil // Success: already processed
+	}
+
+	// Strict Domain Plan Contract: domain jobs without valid execution plan are not executed.
+	// Also short-circuit budget-exhausted roots into deterministic partial terminal state.
+	{
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		targetCP := strings.TrimSpace(job.TargetCanonicalPath)
+		lensID := strings.TrimSpace(job.LensID)
+		shouldStop := false
+		stopHint := ""
+		stopOutcome := ""
+		stopReason := map[string]interface{}{}
+		if strings.HasPrefix(targetCP, "/domain/") {
+			if _, err := ValidateDomainExecutionPlanState(job.State); err != nil {
+				shouldStop = true
+				stopHint = "invalid_execution_plan"
+				stopOutcome = TerminalOutcomeFailed
+				stopReason["error"] = err.Error()
+			}
+		}
+		if !shouldStop && parseStateBool(job.State["budgetExhausted"], false) && parseStateBool(job.State["stopOnBudgetExhaustion"], false) {
+			shouldStop = true
+			stopHint = "budget_exhausted_partial"
+			stopOutcome = TerminalOutcomeBudgetExhausted
+			stopReason["budgetExhaustedPartial"] = true
+		}
+		if shouldStop {
+			job.State["terminalOutcome"] = stopOutcome
+			job.State["terminalOutcomeReasons"] = stopReason
+			job.State["terminalizedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+			if stopOutcome == TerminalOutcomeFailed {
+				job.Status = coreModels.AgentJobStatusFailed
+				job.CurrentState = models.ScoutingJobStateFailed
+			} else {
+				job.Status = coreModels.AgentJobStatusPartial
+				job.CurrentState = models.ScoutingJobStateVerified
+			}
+			_ = e.scoutingJobsRepo.Update(ctx, job)
+			e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+				"tenantId":        job.TenantID,
+				"projectId":       job.ProjectID,
+				"lensId":          lensID,
+				"jobId":           job.ID,
+				"canonicalPath":   targetCP,
+				"terminalOutcome": stopOutcome,
+				"reasonMap":       stopReason,
+				"hint":            stopHint,
+			})
+			e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, lensID)
+			return nil
+		}
 	}
 
 	// CIRCUIT BREAKER: prevent infinite retarget/alias loops within a single job.
@@ -2752,7 +2860,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}
 			attempts[cp] = attempts[cp] + 1
 			job.State["canonicalPathAttempts"] = attempts
-			if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+			if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"canonicalPathAttempts": attempts}); err != nil {
 				fmt.Printf("[ScoutEngine] Failed to persist circuit breaker state (best-effort): jobId=%s target=%s err=%v\n",
 					strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
 			}
@@ -2850,7 +2958,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	if job.State != nil {
 		if v, ok := job.State["cascadeRootJobId"].(string); !ok || strings.TrimSpace(v) == "" {
 			job.State["cascadeRootJobId"] = cascadeID
-			_ = e.scoutingJobsRepo.Update(ctx, job)
+			_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"cascadeRootJobId": cascadeID})
 		}
 	}
 	ctx = ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.scout", lensID, cascadeID)
@@ -3396,7 +3504,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") ||
 			strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/fac/") {
 			validationResult.MissingInfo = append(validationResult.MissingInfo,
-				fmt.Sprintf("Who provides external assurance to %s? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit) or AUDITED_BY. Provide audit firm and source.", job.TargetCanonicalPath),
+				fmt.Sprintf("Who provides external assurance to %s? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit|certification|regulatory|inspection). Provide assurer and source.", job.TargetCanonicalPath),
 				fmt.Sprintf("[HIGH PRIORITY] What industry/sector does %s operate in? Return marketSegments as array of paths /segment/{domain}/{vertical}/{geo}. Domains: finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate|public-sector|professional-services. For government use public-sector domain. Geo: ISO2 lowercase or regional bucket (global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta). Example: /segment/technology/semiconductors/tw", job.TargetCanonicalPath),
 				fmt.Sprintf("[HIGH PRIORITY] What is the size of %s? Find employee count or revenue to determine orgSize: sme (<500 emp or <$100M rev), le (500-5000 emp or $100M-$1B), enterprise (5000-50000 emp or $1B-$10B), mega (>50000 emp or >$10B). For government: federal G20 ministries=enterprise/mega, regional=le/enterprise. Use 'na' only if truly unknown.", job.TargetCanonicalPath),
 			)
@@ -3504,9 +3612,15 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		// so it can explicitly request "build up/down" actions as missingInfo without blocking the pipeline.
 		graphContext := ""
 		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") {
-			graphContext = e.buildGraphSkeletonContext(ctx, job.TargetCanonicalPath)
+			graphContext = e.getSkeletonContextCached(ctx, job.TargetCanonicalPath)
 		}
-		validationResult, err = e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, criticSourceContent(aggregatedContent), specialties, graphContext, domainModesForComposable)
+		// First validation pass: use rule-based quick validation for non-general modes.
+		// This avoids an LLM call; missingInfo is generated deterministically from structural gaps.
+		validationResult = agents.RuleBasedQuickValidation(extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, domainModesForComposable)
+		if validationResult == nil {
+			// General mode or unknown: fall through to LLM-based critic.
+			validationResult, err = e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, criticSourceContent(aggregatedContent), specialties, graphContext, domainModesForComposable)
+		}
 		if err != nil {
 			// Логируем ошибку, но не останавливаем процесс (fail-open с низким confidence)
 			fmt.Printf("[ScoutEngine] critic validation error (fail-open): jobId=%s target=%s err=%v\n",
@@ -3602,33 +3716,20 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		if len(validationResult.MissingInfo) == 0 {
 			goto SKIP_RESEARCH
 		}
-		// Daily guardrails (USD + token caps) to keep costs bounded.
-		// Domain contract jobs are now subject to budget (previously bypassed).
-		if e.budgetPolicy.Enabled && e.spendLedger != nil && lensID != "" && cascadeID != "" {
-			day := time.Now().UTC().Format("2006-01-02")
-			if cSpend, _, cOut, err := e.spendLedger.GetCascadeSpendUSD(ctx, tenantID, cascadeID, day); err == nil {
-				if e.budgetPolicy.CascadeDailyMaxUSD > 0 && cSpend >= e.budgetPolicy.CascadeDailyMaxUSD {
-					fmt.Printf("[ScoutEngine] Skipping research: cascade daily USD budget exceeded: cascade=%s spend=%.4f\n", cascadeID, cSpend)
-					goto SKIP_RESEARCH
-				}
-				if e.budgetPolicy.CascadeDailyMaxOutputTokens > 0 && cOut >= e.budgetPolicy.CascadeDailyMaxOutputTokens {
-					fmt.Printf("[ScoutEngine] Skipping research: cascade daily token cap exceeded: cascade=%s outTokens=%d\n", cascadeID, cOut)
-					goto SKIP_RESEARCH
-				}
-			}
-			if dSpend, _, dOut, err := e.spendLedger.GetLensDaySpendUSD(ctx, tenantID, lensID, day); err == nil {
-				if e.budgetPolicy.LensDailyMaxUSD > 0 && dSpend >= e.budgetPolicy.LensDailyMaxUSD {
-					fmt.Printf("[ScoutEngine] Skipping research: lens daily USD budget exceeded: lens=%s day=%s spend=%.4f\n", lensID, day, dSpend)
-					goto SKIP_RESEARCH
-				}
-				if e.budgetPolicy.LensDailyMaxOutputTokens > 0 && dOut >= e.budgetPolicy.LensDailyMaxOutputTokens {
-					fmt.Printf("[ScoutEngine] Skipping research: lens daily token cap exceeded: lens=%s day=%s outTokens=%d\n", lensID, day, dOut)
-					goto SKIP_RESEARCH
-				}
+		// RuntimeContractBudgetAdaptiveFanout:
+		// do not hard-stop on budget overflow; reduce in-flight research workload adaptively.
+		researchMissingInfo := validationResult.MissingInfo
+		if scale, snap, ok := e.computeRuntimeBudgetAdaptation(ctx, tenantID, lensID, cascadeID); ok && scale < 1.0 {
+			before := len(researchMissingInfo)
+			capN := scaleCapByBudget(before, 1, scale)
+			if capN < before {
+				researchMissingInfo = researchMissingInfo[:capN]
+				e.logLine(ctx, job, "info", fmt.Sprintf("> research budget adapted (%s): missingInfo %d -> %d (%s)",
+					RuntimeContractBudgetAdaptiveFanout, before, capN, snap.summary()))
 			}
 		}
-		fmt.Printf("[ScoutEngine] Starting research for job %s, missing info: %v\n", job.ID, validationResult.MissingInfo)
-		e.logLine(ctx, job, "info", fmt.Sprintf("> research started (missing=%d)", len(validationResult.MissingInfo)))
+		fmt.Printf("[ScoutEngine] Starting research for job %s, missing info: %v\n", job.ID, researchMissingInfo)
+		e.logLine(ctx, job, "info", fmt.Sprintf("> research started (missing=%d)", len(researchMissingInfo)))
 		researchCtx := ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.research", lensID, cascadeID)
 		// Pass focus signals to grounded research (best-effort).
 		focus := ""
@@ -3696,8 +3797,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			"lensId":              strings.TrimSpace(lensID),
 			"jobId":               strings.TrimSpace(job.ID),
 			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-			"missingN":            len(validationResult.MissingInfo),
-			"missingTop":          trace.StrSlice(validationResult.MissingInfo, 6),
+			"missingN":            len(researchMissingInfo),
+			"missingTop":          trace.StrSlice(researchMissingInfo, 6),
 			"focus":               trace.Trunc(focus, 140),
 			"spherePathsTop":      trace.StrSlice(spherePaths, 10),
 			"keywordsTop":         trace.StrSlice(keywords, 10),
@@ -3730,7 +3831,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}
 		}
 		// Phase 1 (domain expansion / research): ResearchPipeline when domain mode set, else EnrichFragmentWithGrounding; allowlist applied when appending relations.
-		enrichedFragment, newRelations, newSupplyChains, researchGroundingEvidence, researchRawContent, err := e.researchAgent.EnrichFragmentWithGroundingWithDomainModes(researchCtx, extractedFragment, validationResult.MissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities, domainModesForComposable)
+		enrichedFragment, newRelations, newSupplyChains, researchGroundingEvidence, researchRawContent, err := e.researchAgent.EnrichFragmentWithGroundingWithDomainModes(researchCtx, extractedFragment, researchMissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities, domainModesForComposable)
 		if err == nil {
 			researchSucceeded = true
 			groundingEvidence = mergeGroundingEvidence(groundingEvidence, researchGroundingEvidence)
@@ -3858,7 +3959,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			// A question is considered resolved if new relations/data were found.
 			if e.missingInfoStatusRepo != nil {
 				foundSomething := len(newRelations) > 0 || len(newSupplyChains) > 0
-				for _, q := range validationResult.MissingInfo {
+				for _, q := range researchMissingInfo {
 					if recErr := e.missingInfoStatusRepo.RecordAttempt(ctx, extractedFragment.ID, q, foundSomething, 0); recErr != nil {
 						fmt.Printf("[ScoutEngine] missingInfo RecordAttempt failed: jobId=%s fragmentId=%s target=%s found=%v err=%v q=%q\n",
 							strings.TrimSpace(job.ID), strings.TrimSpace(extractedFragment.ID), strings.TrimSpace(job.TargetCanonicalPath), foundSomething, recErr, trace.Trunc(q, 160))
@@ -3879,7 +3980,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			})
 			// Record failed research attempts (increment counter, apply cooldown).
 			if e.missingInfoStatusRepo != nil {
-				for _, q := range validationResult.MissingInfo {
+				for _, q := range researchMissingInfo {
 					if recErr := e.missingInfoStatusRepo.RecordAttempt(ctx, extractedFragment.ID, q, false, 0); recErr != nil {
 						fmt.Printf("[ScoutEngine] missingInfo RecordAttempt failed: jobId=%s fragmentId=%s target=%s found=%v err=%v q=%q\n",
 							strings.TrimSpace(job.ID), strings.TrimSpace(extractedFragment.ID), strings.TrimSpace(job.TargetCanonicalPath), false, recErr, trace.Trunc(q, 160))
@@ -3896,7 +3997,7 @@ SKIP_RESEARCH:
 		e.logLine(ctx, job, "info", "> critic re-validating enriched data")
 		graphContext := ""
 		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") {
-			graphContext = e.buildGraphSkeletonContext(ctx, job.TargetCanonicalPath)
+			graphContext = e.getSkeletonContextCached(ctx, job.TargetCanonicalPath)
 		}
 		var rels []agents.DiscoveredRelation
 		var chains []agents.SupplyChain
@@ -4380,6 +4481,14 @@ SKIP_RESEARCH:
 							existingFragment.State[k] = v
 						}
 					}
+					// Merge HomeLocation so geocoding chain can run
+					if extractedFragment.HomeLocation != nil {
+						if existingFragment.HomeLocation == nil {
+							existingFragment.HomeLocation = extractedFragment.HomeLocation
+						} else {
+							mergeHomeLocation(existingFragment.HomeLocation, extractedFragment.HomeLocation)
+						}
+					}
 					existingFragment.Metadata.LastUpdatedAt = time.Now()
 					existingFragment.Metadata.LastVerifiedAt = time.Now()
 					existingFragment.Metadata.SourceFrameID = frameID
@@ -4429,6 +4538,14 @@ SKIP_RESEARCH:
 					// Best-effort: apply the newly extracted state onto the existing fragment.
 					// This keeps the current scouting run effective even when creation raced.
 					existingFragment.State = extractedFragment.State
+					// Merge HomeLocation so geocoding chain can run
+					if extractedFragment.HomeLocation != nil {
+						if existingFragment.HomeLocation == nil {
+							existingFragment.HomeLocation = extractedFragment.HomeLocation
+						} else {
+							mergeHomeLocation(existingFragment.HomeLocation, extractedFragment.HomeLocation)
+						}
+					}
 					existingFragment.Metadata.LastUpdatedAt = time.Now()
 					existingFragment.Metadata.LastVerifiedAt = time.Now()
 					existingFragment.Metadata.SourceFrameID = frameID
@@ -4485,17 +4602,7 @@ SKIP_RESEARCH:
 						existingFragment.Labels["en"] = bestEffortDisplayLabel(existingFragment.Labels["en"], cp)
 					}
 
-					// Conservative Wikidata enrichment (QID-known only) to keep names/industryPaths filled when possible.
-					if e.wikidataClient != nil {
-						_, _ = henrich.EnrichFragmentFromWikidataIfPresent(ctx, e.wikidataClient, existingFragment, henrich.ConservativeWikidataOptions{
-							Force:     false,
-							Overwrite: true,
-						})
-					}
-					// Geocoding fallback when coordinates still missing.
-					if e.geocodingClient != nil {
-						_, _ = henrich.EnrichCoordinatesFromGeocoding(ctx, e.geocodingClient, existingFragment)
-					}
+					e.enrichFragmentParallel(ctx, existingFragment)
 
 					if uerr := e.fragmentsRepo.Update(ctx, existingFragment); uerr != nil {
 						return fmt.Errorf("failed to update fragment after race-guard hit: %w", uerr)
@@ -4550,6 +4657,16 @@ SKIP_RESEARCH:
 			}
 		}
 		existingFragment.State = extractedFragment.State
+
+		// Merge HomeLocation: fill when extracted has geo data (enables geocoding chain)
+		if extractedFragment.HomeLocation != nil {
+			if existingFragment.HomeLocation == nil {
+				existingFragment.HomeLocation = extractedFragment.HomeLocation
+			} else {
+				// Fill missing fields from extracted (prefer extracted when existing is empty)
+				mergeHomeLocation(existingFragment.HomeLocation, extractedFragment.HomeLocation)
+			}
+		}
 
 		// Merge OrgSize: fill if existing is empty/unknown ("na")
 		if strings.TrimSpace(extractedFragment.OrgSize) != "" {
@@ -4609,19 +4726,7 @@ SKIP_RESEARCH:
 			existingFragment.Metadata.EpistemicStatus = models.EpistemicStatusLowConfidence
 		}
 
-		// IMPORTANT: Re-scout of an existing fragment should also (re)apply conservative Wikidata enrichment
-		// when a QID is already present, so industryPaths and canonical names stay filled.
-		// This is deterministic and does not perform Wikidata search.
-		if e.wikidataClient != nil {
-			_, _ = henrich.EnrichFragmentFromWikidataIfPresent(ctx, e.wikidataClient, existingFragment, henrich.ConservativeWikidataOptions{
-				Force:     false,
-				Overwrite: true,
-			})
-		}
-		// Geocoding fallback when coordinates still missing.
-		if e.geocodingClient != nil {
-			_, _ = henrich.EnrichCoordinatesFromGeocoding(ctx, e.geocodingClient, existingFragment)
-		}
+		e.enrichFragmentParallel(ctx, existingFragment)
 		if internalFirstGroundingEnabled() {
 			var resolutionStats *models.GroundingResolutionStats
 			if job.State != nil {
@@ -4658,12 +4763,7 @@ SKIP_RESEARCH:
 	// This runs on both create and update to ensure best-effort enrichment even for existing fragments.
 	if existingFragment != nil {
 		e.enrichFragmentHierarchy(ctx, existingFragment, job.ID)
-		// OpenCorporates: attach registry ID for ORGANIZATION fragments when enabled.
-		if henrich.OpenCorporatesEnabled() && e.openCorporatesClient != nil && existingFragment.Type == models.FragmentTypeOrganization {
-			if attached, ocID := henrich.AttachOpenCorporatesIDIfMissing(ctx, e.openCorporatesClient, existingFragment); attached && ocID != "" {
-				_ = e.fragmentsRepo.Update(ctx, existingFragment)
-			}
-		}
+		// OpenCorporates runs inside enrichFragmentParallel (above); no separate call needed.
 		if e.enrichRouteFacilityGeoContext(ctx, existingFragment, scoutResult) {
 			_ = e.fragmentsRepo.Update(ctx, existingFragment)
 		}
@@ -4922,7 +5022,7 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 	}
 	if len(rels) == 0 {
 		job.State["intentDecompositionDone"] = true
-		if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+		if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"intentDecompositionDone": true}); err != nil {
 			fmt.Printf("[ScoutEngine] Failed to persist intentDecompositionDone (best-effort): jobId=%s target=%s err=%v\n",
 				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
 		}
@@ -5007,7 +5107,7 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 	}
 
 	job.State["intentDecompositionDone"] = true
-	if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
+	if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"intentDecompositionDone": true}); err != nil {
 		fmt.Printf("[ScoutEngine] Failed to persist intentDecompositionDone (best-effort): jobId=%s target=%s err=%v\n",
 			strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
 	}
@@ -5187,119 +5287,316 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 	return nil
 }
 
+func normalizeTerminalOutcome(raw string) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case TerminalOutcomeCompleted:
+		return TerminalOutcomeCompleted
+	case TerminalOutcomePartialCompleted:
+		return TerminalOutcomePartialCompleted
+	case TerminalOutcomeFailed:
+		return TerminalOutcomeFailed
+	case TerminalOutcomeBudgetExhausted:
+		return TerminalOutcomeBudgetExhausted
+	case TerminalOutcomeCompletedWithPolicyPersistError:
+		return TerminalOutcomeCompletedWithPolicyPersistError
+	default:
+		return ""
+	}
+}
+
+func scoutJobHasBudgetExhaustion(job *models.ScoutingJob) bool {
+	if job == nil || job.State == nil {
+		return false
+	}
+	if parseStateBool(job.State["budgetExhausted"], false) {
+		return true
+	}
+	if parseStateBool(job.State["budgetExhaustedPartial"], false) {
+		return true
+	}
+	if normalizeTerminalOutcome(parseStateString(job.State["terminalOutcome"])) == TerminalOutcomeBudgetExhausted {
+		return true
+	}
+	return false
+}
+
+func scoutJobHasPolicyPersistError(job *models.ScoutingJob) bool {
+	if job == nil || job.State == nil {
+		return false
+	}
+	if parseStateBool(job.State["policyPersistError"], false) {
+		return true
+	}
+	return normalizeTerminalOutcome(parseStateString(job.State["terminalOutcome"])) == TerminalOutcomeCompletedWithPolicyPersistError
+}
+
+func isRootLensScoutJob(job *models.ScoutingJob) bool {
+	if job == nil {
+		return false
+	}
+	if job.State == nil {
+		return true
+	}
+	return strings.TrimSpace(parseStateString(job.State["parentJobId"])) == ""
+}
+
+func (e *ScoutEngine) markRootJobsTerminalOutcome(
+	ctx context.Context,
+	jobs []*models.ScoutingJob,
+	outcome string,
+	reasons map[string]interface{},
+	completedAt string,
+) {
+	if e == nil || e.scoutingJobsRepo == nil || len(jobs) == 0 {
+		return
+	}
+	outcome = normalizeTerminalOutcome(outcome)
+	if outcome == "" {
+		return
+	}
+	for _, job := range jobs {
+		if !isRootLensScoutJob(job) {
+			continue
+		}
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		job.State["terminalOutcome"] = outcome
+		job.State["terminalOutcomeReasons"] = reasons
+		job.State["terminalizedAt"] = completedAt
+		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{
+			"terminalOutcome":        outcome,
+			"terminalOutcomeReasons": reasons,
+			"terminalizedAt":         completedAt,
+		})
+	}
+}
+
 // checkAndPublishAssemblyCompletion checks if all scout jobs for a lens are completed
-// and publishes horizon.assembly.ready event when all jobs are done.
+// and publishes horizon.assembly.ready with deterministic terminal outcome.
 func (e *ScoutEngine) checkAndPublishAssemblyCompletion(ctx context.Context, tenantID, projectID, lensID string) {
 	if e == nil || e.scoutingJobsRepo == nil || lensID == "" {
 		return
 	}
 
-	// Get all scout jobs for this lens
 	jobs, err := e.scoutingJobsRepo.ListByProjectAndLens(ctx, tenantID, projectID, lensID, 1000)
-	if err != nil {
-		return // Best-effort: don't fail if we can't check
+	if err != nil || len(jobs) == 0 {
+		return
 	}
 
-	if len(jobs) == 0 {
-		return // No jobs to check
-	}
-
-	// Count jobs by status
-	var totalJobs, completedJobs, failedJobs, pendingJobs, runningJobs int
+	var totalJobs, rootJobs, completedJobs, partialJobs, failedJobs, pendingJobs, runningJobs int
+	var budgetExhaustedJobs, policyPersistErrorJobs int
+	var scEdgesCreated, scEdgeDupes, scEdgesReversed int
+	var policyViolationsTotal, policyAutoFixableTotal int
 	for _, job := range jobs {
 		if job == nil {
 			continue
 		}
 		totalJobs++
+		if isRootLensScoutJob(job) {
+			rootJobs++
+		}
+		if scoutJobHasBudgetExhaustion(job) {
+			budgetExhaustedJobs++
+		}
+		if scoutJobHasPolicyPersistError(job) {
+			policyPersistErrorJobs++
+		}
+		if job.State != nil {
+			if sc, ok := job.State["supplyChainSummary"].(map[string]interface{}); ok {
+				scEdgesCreated += parseStateInt(sc["createdEdges"], 0)
+				scEdgeDupes += parseStateInt(sc["edgeDupes"], 0)
+				scEdgesReversed += parseStateInt(sc["edgeReversed"], 0)
+			}
+			if ps, ok := job.State["policySummary"].(map[string]interface{}); ok {
+				policyViolationsTotal += parseStateInt(ps["violationsTotal"], 0)
+				policyAutoFixableTotal += parseStateInt(ps["autoFixable"], 0)
+			}
+		}
 		switch job.Status {
 		case coreModels.AgentJobStatusCompleted:
 			completedJobs++
+		case coreModels.AgentJobStatusPartial:
+			partialJobs++
 		case coreModels.AgentJobStatusFailed:
 			failedJobs++
 		case coreModels.AgentJobStatusPending:
 			pendingJobs++
 		case coreModels.AgentJobStatusRunning:
 			runningJobs++
+		default:
+			switch job.CurrentState {
+			case models.ScoutingJobStateVerified:
+				completedJobs++
+			case models.ScoutingJobStateFailed, models.ScoutingJobStateRejected:
+				failedJobs++
+			case models.ScoutingJobStatePending:
+				pendingJobs++
+			default:
+				runningJobs++
+			}
 		}
 	}
+	if totalJobs == 0 {
+		return
+	}
 
-	// If all jobs are completed or failed, run intra-graph inference then publish assembly.ready
-	if totalJobs > 0 && pendingJobs == 0 && runningJobs == 0 {
-		progress := 1.0
-		if totalJobs > 0 {
-			progress = float64(completedJobs+failedJobs) / float64(totalJobs)
+	doneJobs := completedJobs + partialJobs + failedJobs
+	progress := float64(doneJobs) / float64(totalJobs)
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 1 {
+		progress = 1
+	}
+	terminal := pendingJobs == 0 && runningJobs == 0
+	terminalOutcome := ""
+	if terminal {
+		switch {
+		case budgetExhaustedJobs > 0:
+			terminalOutcome = TerminalOutcomeBudgetExhausted
+		case completedJobs == 0 && partialJobs == 0 && failedJobs > 0:
+			terminalOutcome = TerminalOutcomeFailed
+		case failedJobs > 0 || partialJobs > 0 || policyPersistErrorJobs > 0:
+			terminalOutcome = TerminalOutcomePartialCompleted
+		default:
+			terminalOutcome = TerminalOutcomeCompleted
 		}
+		progress = 1.0
+	}
+	fanOutPerRoot := 0.0
+	if rootJobs > 0 {
+		fanOutPerRoot = float64(totalJobs) / float64(rootJobs)
+	}
+	dupeCreateRatio := 0.0
+	reverseRate := 0.0
+	if scEdgesCreated > 0 {
+		dupeCreateRatio = float64(scEdgeDupes) / float64(scEdgesCreated)
+		reverseRate = float64(scEdgesReversed) / float64(scEdgesCreated)
+	}
+	kpiGuardrailTriggered := false
+	kpiGuardReasons := []string{}
+	if scEdgesCreated >= 10 && dupeCreateRatio > 0.2 {
+		kpiGuardrailTriggered = true
+		kpiGuardReasons = append(kpiGuardReasons, "dupe_create_ratio_exceeded")
+	}
+	if scEdgesCreated >= 10 && reverseRate > 0.25 {
+		kpiGuardrailTriggered = true
+		kpiGuardReasons = append(kpiGuardReasons, "reverse_rate_exceeded")
+	}
+	if rootJobs > 0 && fanOutPerRoot > 12.0 {
+		kpiGuardrailTriggered = true
+		kpiGuardReasons = append(kpiGuardReasons, "fanout_per_root_exceeded")
+	}
+	if terminal && terminalOutcome == TerminalOutcomeCompleted && kpiGuardrailTriggered {
+		terminalOutcome = TerminalOutcomePartialCompleted
+	}
 
-		// Publish final progress update
+	reasonMap := map[string]interface{}{
+		"jobsTotal":              totalJobs,
+		"jobsRoot":               rootJobs,
+		"jobsCompleted":          completedJobs,
+		"jobsPartial":            partialJobs,
+		"jobsFailed":             failedJobs,
+		"jobsPending":            pendingJobs,
+		"jobsRunning":            runningJobs,
+		"jobsBudgetExhausted":    budgetExhaustedJobs,
+		"jobsPolicyPersistError": policyPersistErrorJobs,
+		"kpi": map[string]interface{}{
+			"fanOutPerRoot":          fanOutPerRoot,
+			"supplyChainEdges":       scEdgesCreated,
+			"supplyChainEdgeDupes":   scEdgeDupes,
+			"supplyChainEdgeReverse": scEdgesReversed,
+			"dupeCreateRatio":        dupeCreateRatio,
+			"reverseRate":            reverseRate,
+			"policyViolationsTotal":  policyViolationsTotal,
+			"policyAutoFixableTotal": policyAutoFixableTotal,
+		},
+		"kpiGuardrailTriggered": kpiGuardrailTriggered,
+		"kpiGuardrailReasons":   kpiGuardReasons,
+	}
+	if q := e.policyPersistQueueSnapshot(); q != nil {
+		reasonMap["policyPersistQueue"] = q
+	}
+
+	if terminal {
+		nowISO := time.Now().UTC().Format(time.RFC3339Nano)
 		e.publish(ctx, realtime.EventType("horizon.assembly.progress"), map[string]interface{}{
-			"tenantId":  tenantID,
-			"projectId": projectID,
-			"lensId":    lensID,
-			"phase":     "ready",
-			"progress":  progress,
+			"tenantId":        tenantID,
+			"projectId":       projectID,
+			"lensId":          lensID,
+			"phase":           "ready",
+			"progress":        progress,
+			"terminalOutcome": terminalOutcome,
+			"reasonMap":       reasonMap,
 			"counters": map[string]interface{}{
 				"jobsTotal":   totalJobs,
-				"jobsDone":    completedJobs,
+				"jobsDone":    doneJobs,
 				"jobsFailed":  failedJobs,
 				"jobsRunning": 0,
 			},
 		})
 
-		// Intra-graph link inference: infer direct relations between entities in scope
 		e.runIntraGraphInference(ctx, tenantID, projectID, lensID)
 
-		// Publish final assembly.ready event
 		e.publish(ctx, realtime.EventType("horizon.assembly.ready"), map[string]interface{}{
-			"tenantId":  tenantID,
-			"projectId": projectID,
-			"lensId":    lensID,
-			"phase":     "ready",
-			"progress":  progress,
+			"tenantId":        tenantID,
+			"projectId":       projectID,
+			"lensId":          lensID,
+			"phase":           "ready",
+			"progress":        progress,
+			"terminalOutcome": terminalOutcome,
+			"reasonMap":       reasonMap,
 			"counters": map[string]interface{}{
-				"jobsTotal":  totalJobs,
-				"jobsDone":   completedJobs,
-				"jobsFailed": failedJobs,
+				"jobsTotal":   totalJobs,
+				"jobsDone":    doneJobs,
+				"jobsFailed":  failedJobs,
+				"jobsPartial": partialJobs,
 			},
 		})
 
-		// Update lens ViewConfig with assembly completion status
+		e.markRootJobsTerminalOutcome(ctx, jobs, terminalOutcome, reasonMap, nowISO)
+
 		if e.lensesRepo != nil {
-			lens, err := e.lensesRepo.Get(ctx, lensID)
-			if err == nil && lens != nil {
+			lens, getErr := e.lensesRepo.Get(ctx, lensID)
+			if getErr == nil && lens != nil {
 				if lens.ViewConfig == nil {
 					lens.ViewConfig = make(map[string]interface{})
 				}
 				lens.ViewConfig["assemblyStatus"] = map[string]interface{}{
-					"phase":       "ready",
-					"progress":    progress,
-					"completedAt": time.Now().UTC().Format(time.RFC3339Nano),
+					"phase":           "ready",
+					"progress":        progress,
+					"terminalOutcome": terminalOutcome,
+					"reasonMap":       reasonMap,
+					"completedAt":     nowISO,
 					"counters": map[string]interface{}{
-						"jobsTotal":  totalJobs,
-						"jobsDone":   completedJobs,
-						"jobsFailed": failedJobs,
+						"jobsTotal":   totalJobs,
+						"jobsDone":    doneJobs,
+						"jobsFailed":  failedJobs,
+						"jobsPartial": partialJobs,
 					},
 				}
-				_ = e.lensesRepo.Update(ctx, lens) // Best-effort: don't fail if update fails
+				_ = e.lensesRepo.Update(ctx, lens)
 			}
 		}
-	} else if totalJobs > 0 {
-		// Publish progress update (not final yet)
-		progress := float64(completedJobs+failedJobs) / float64(totalJobs)
-		e.publish(ctx, realtime.EventType("horizon.assembly.progress"), map[string]interface{}{
-			"tenantId":  tenantID,
-			"projectId": projectID,
-			"lensId":    lensID,
-			"phase":     "scouting",
-			"progress":  progress,
-			"counters": map[string]interface{}{
-				"jobsTotal":   totalJobs,
-				"jobsDone":    completedJobs,
-				"jobsFailed":  failedJobs,
-				"jobsRunning": runningJobs,
-				"jobsPending": pendingJobs,
-			},
-		})
+		return
 	}
+
+	e.publish(ctx, realtime.EventType("horizon.assembly.progress"), map[string]interface{}{
+		"tenantId":  tenantID,
+		"projectId": projectID,
+		"lensId":    lensID,
+		"phase":     "scouting",
+		"progress":  progress,
+		"counters": map[string]interface{}{
+			"jobsTotal":   totalJobs,
+			"jobsDone":    doneJobs,
+			"jobsFailed":  failedJobs,
+			"jobsPartial": partialJobs,
+			"jobsRunning": runningJobs,
+			"jobsPending": pendingJobs,
+		},
+	})
 }
 
 // enrichFragmentHierarchy best-effort builds external hierarchies (Geo, Org, Product/Wikidata) for a fragment.
@@ -5389,6 +5686,82 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 			fragment.ResolutionHint = h
 		}
 	}
+}
+
+// enrichFragmentParallel runs Wikidata and OpenCorporates concurrently (Group 1),
+// then geo enrichment sequentially (Group 2 — depends on Wikidata results for address data).
+func (e *ScoutEngine) enrichFragmentParallel(ctx context.Context, frag *models.HorizonFragment) {
+	if frag == nil {
+		return
+	}
+	var wg sync.WaitGroup
+
+	// Group 1: independent external lookups.
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if e.wikidataClient != nil {
+			_, _ = henrich.EnrichFragmentFromWikidataIfPresent(ctx, e.wikidataClient, frag, henrich.ConservativeWikidataOptions{
+				Force:     false,
+				Overwrite: true,
+			})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if henrich.OpenCorporatesEnabled() && e.openCorporatesClient != nil && frag.Type == models.FragmentTypeOrganization {
+			henrich.AttachOpenCorporatesIDIfMissing(ctx, e.openCorporatesClient, frag)
+		}
+	}()
+	wg.Wait()
+
+	// Group 2: geo chain (sequential — may depend on Wikidata-provided address data).
+	if e.geonamesClient != nil && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/loc/") {
+		_, _ = henrich.EnrichCoordinatesFromGeoNames(ctx, e.geonamesClient, frag)
+	}
+	if e.geocodingClient != nil {
+		_, _ = henrich.EnrichCoordinatesFromGeocoding(ctx, e.geocodingClient, frag)
+	}
+	if !models.HasRealGeoCoordinates(frag.Coordinates) {
+		_ = e.tryPropagateCoordinatesFromParent(ctx, frag)
+	}
+}
+
+// tryPropagateCoordinatesFromParent applies parent-org coordinates when direct geocoding didn't produce a result.
+// Uses explicit parent pointers only (deterministic and cheap for scout-time updates).
+func (e *ScoutEngine) tryPropagateCoordinatesFromParent(ctx context.Context, fragment *models.HorizonFragment) bool {
+	if e == nil || fragment == nil || e.fragmentsRepo == nil {
+		return false
+	}
+	if models.HasRealGeoCoordinates(fragment.Coordinates) {
+		return false
+	}
+	seen := map[string]struct{}{}
+	candidates := []string{
+		strings.TrimSpace(fragment.ParentPath),
+		strings.TrimSpace(fragment.AffiliatedOrgPath),
+		strings.TrimSpace(fragment.Identifiers["parentOrgPath"]),
+		strings.TrimSpace(fragment.Identifiers["orgPath"]),
+		strings.TrimSpace(fragment.Identifiers["operatorPath"]),
+		strings.TrimSpace(fragment.Identifiers["ownerPath"]),
+	}
+	for _, cp := range candidates {
+		if cp == "" || !strings.HasPrefix(cp, "/org/") {
+			continue
+		}
+		if _, ok := seen[cp]; ok {
+			continue
+		}
+		seen[cp] = struct{}{}
+		parent, err := e.fragmentsRepo.GetByCanonicalPath(ctx, cp)
+		if err != nil || parent == nil {
+			continue
+		}
+		if henrich.EnrichCoordinatesFromParent(fragment, parent) {
+			return true
+		}
+	}
+	return false
 }
 
 // =============================================================================
@@ -5548,19 +5921,27 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 		// Persist policy check results (best-effort) and publish realtime output.
 		if result != nil {
 			if e.policyCheckResultsRepo != nil {
-				if err := e.policyCheckResultsRepo.Save(policyCtx, result); err != nil {
-					policy.LogPolicyEvent("policy_checker_policy", policy.PolicyLogStageError, map[string]interface{}{
-						"trace_id":       "na",
-						"tenant_id":      job.TenantID,
-						"job_id":         job.ID,
-						"action":         "persist_policy_check_result",
-						"policy_status":  "na",
-						"policy_reason":  err.Error(),
-						"policy_penalty": 0,
-						"decision_path":  "policy_audit",
-						"error_class":    "policy_check_persist_error",
-						"confidence":     0,
-					})
+				e.enqueuePolicyPersistTask(job, result)
+				policy.LogPolicyEvent("policy_checker_policy", policy.PolicyLogStageResult, map[string]interface{}{
+					"trace_id":       "na",
+					"tenant_id":      job.TenantID,
+					"job_id":         job.ID,
+					"action":         "persist_policy_check_result_enqueued",
+					"policy_status":  "queued",
+					"policy_reason":  "idempotent_retry_queue",
+					"policy_penalty": 0,
+					"decision_path":  "policy_audit",
+					"confidence":     1,
+					"queue_snapshot": e.formatPolicyPersistQueueSnapshot(),
+				})
+			}
+			if job != nil {
+				if job.State == nil {
+					job.State = map[string]interface{}{}
+				}
+				job.State["policySummary"] = map[string]interface{}{
+					"violationsTotal": float64(result.TotalViolations),
+					"autoFixable":     float64(result.AutoFixableCount),
 				}
 			}
 		}
@@ -5984,6 +6365,46 @@ func (e *ScoutEngine) publishEnforcementBatchComplete(ctx context.Context, job *
 		payload["lensId"] = v
 	}
 	e.publish(ctx, realtime.EventType("horizon.policy.enforcement_batch_complete"), payload)
+}
+
+// getSkeletonContextCached returns skeleton context with 3-level cache: SessionGraph (L0) → Redis (L1) → DB build.
+func (e *ScoutEngine) getSkeletonContextCached(ctx context.Context, canonicalPath string) string {
+	cp := strings.TrimSpace(canonicalPath)
+	if cp == "" {
+		return ""
+	}
+	sg := SessionGraphFromContext(ctx)
+	if sg != nil {
+		if cached, ok := sg.GetSkeletonContext(cp); ok {
+			return cached
+		}
+	}
+	if e.redisClient != nil {
+		rctx, cancel := context.WithTimeout(ctx, 70*time.Millisecond)
+		val, err := e.redisClient.Get(rctx, "h:skel:"+engineSha1Hex(cp)).Result()
+		cancel()
+		if err == nil && val != "" {
+			if sg != nil {
+				sg.SetSkeletonContext(cp, val)
+			}
+			return val
+		}
+	}
+	result := e.buildGraphSkeletonContext(ctx, cp)
+	if sg != nil {
+		sg.SetSkeletonContext(cp, result)
+	}
+	if e.redisClient != nil && result != "" {
+		rctx, cancel := context.WithTimeout(ctx, 70*time.Millisecond)
+		_ = e.redisClient.Set(rctx, "h:skel:"+engineSha1Hex(cp), result, 30*time.Minute).Err()
+		cancel()
+	}
+	return result
+}
+
+func engineSha1Hex(s string) string {
+	sum := sha1.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // extractStringSlice extracts a string slice from job state.

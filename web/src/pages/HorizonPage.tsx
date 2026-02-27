@@ -17,6 +17,14 @@ import { useIsAdmin } from '../hooks/useIsAdmin';
 import { HorizonLoading } from '../components/HorizonLoading';
 import { HorizonEmptyState } from '../components/HorizonEmptyState';
 
+type HorizonFatalPipelineError = {
+  title: string;
+  message: string;
+  code?: string;
+  phase?: string;
+  ts: number;
+};
+
 const HorizonPage: React.FC = () => {
   const { t } = useTranslation();
   const { currentUser } = useAuth();
@@ -86,6 +94,7 @@ const HorizonPage: React.FC = () => {
   const [isCreatingLens, setIsCreatingLens] = React.useState(false);
   const [activeCreateCorrelationId, setActiveCreateCorrelationId] = React.useState<string | null>(null);
   const [activeCreateSessionId, setActiveCreateSessionId] = React.useState<string | null>(null);
+  const [createFatalError, setCreateFatalError] = React.useState<HorizonFatalPipelineError | null>(null);
   const creatingLensRef = React.useRef(false);
   const feedRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -152,23 +161,21 @@ const HorizonPage: React.FC = () => {
   
   // Step 1: Restore project selection
   React.useEffect(() => {
-    if (!currentUser || projects.length === 0 || hasRestoredProject) return;
-    
+    // Wait until projects loading completes; otherwise an empty initial array can cause false restore state.
+    if (!currentUser || hasRestoredProject || projectsLoading) return;
+
     const saved = getSavedHorizonState();
-    
+
     if (saved.projectId && !currentProject) {
       const project = projects.find((p) => p.id === saved.projectId && p.projectType === 'horizon');
       if (project) {
         setCurrentProject(project);
-        setHasRestoredProject(true);
-      } else {
-        // Project not found, clear saved state
-        setHasRestoredProject(true);
       }
-    } else {
-      setHasRestoredProject(true);
     }
-  }, [currentUser, projects, currentProject, getSavedHorizonState, setCurrentProject, hasRestoredProject]);
+
+    // Mark restoration finished even when projects are empty, so empty state can render.
+    setHasRestoredProject(true);
+  }, [currentUser, projects, currentProject, getSavedHorizonState, setCurrentProject, hasRestoredProject, projectsLoading]);
 
   // Step 2: Restore lens selection after project is restored
   React.useEffect(() => {
@@ -280,6 +287,7 @@ const HorizonPage: React.FC = () => {
     setSelectedLensId(null);
     setShowWorldMap(false);
     saveHorizonState(null, null);
+    setCreateFatalError(null);
   }, [setCurrentProject, setSelectedLensId, saveHorizonState]);
 
   const handleCreateProject = React.useCallback(async () => {
@@ -301,14 +309,79 @@ const HorizonPage: React.FC = () => {
     setShowAccount(false);
     useUIStore.getState().setShowAdminModal(false);
     setSelectedLensId(null);
+    setCreateFatalError(null);
   }, []);
+
+  const parseFatalPipelineError = React.useCallback((err: any, fallbackMessage: string, fallbackPhase = 'scouting'): HorizonFatalPipelineError => {
+    const data = err?.response?.data;
+    const nested = (data && typeof data === 'object' && data.fatalError && typeof data.fatalError === 'object')
+      ? data.fatalError
+      : null;
+
+    const messageFromObject = (obj: any) =>
+      String(obj?.message || obj?.error || '').trim();
+
+    const message =
+      (nested && messageFromObject(nested)) ||
+      (data && typeof data === 'object' && messageFromObject(data)) ||
+      (typeof data === 'string' ? data.trim() : '') ||
+      String(err?.message || '').trim() ||
+      fallbackMessage;
+
+    const code =
+      (nested && String(nested?.code || '').trim()) ||
+      (data && typeof data === 'object' ? String(data?.code || '').trim() : '') ||
+      undefined;
+
+    const phase =
+      (nested && String(nested?.phase || '').trim()) ||
+      (data && typeof data === 'object' ? String(data?.phase || '').trim() : '') ||
+      fallbackPhase;
+
+    return {
+      title: 'Fatal pipeline error',
+      message: message || fallbackMessage,
+      code: code || undefined,
+      phase,
+      ts: Date.now(),
+    };
+  }, []);
+
+  const reportFatalPipelineError = React.useCallback((
+    err: any,
+    context: { projectId: string; correlationId?: string | null; sessionId?: string | null; fallbackMessage: string; fallbackPhase?: string },
+  ) => {
+    const fatal = parseFatalPipelineError(err, context.fallbackMessage, context.fallbackPhase || 'scouting');
+    setCreateFatalError(fatal);
+    try {
+      useHorizonRealtimeStore.getState().handleWsEvent('horizon.assembly.failed', {
+        projectId: context.projectId,
+        correlationId: context.correlationId || undefined,
+        sessionId: context.sessionId || undefined,
+        phase: fatal.phase || 'scouting',
+        stage: 'failed',
+        fatal: true,
+        code: fatal.code,
+        error: fatal.message,
+        humanReadable: {
+          title: fatal.title,
+          description: fatal.message,
+        },
+      });
+    } catch {
+      // ignore
+    }
+  }, [parseFatalPipelineError]);
 
   const handleAssembleLens = React.useCallback(async (request: AssembleLensRequest) => {
     // Guard against double-submit (e.g. double Enter / fast double click)
     if (creatingLensRef.current) return;
     creatingLensRef.current = true;
     setIsCreatingLens(true);
+    setCreateFatalError(null);
 
+    let attemptCorrelationId: string | null = null;
+    let attemptSessionId: string | null = null;
     let openedPreflight = false;
     try {
       if (request.createEmptyLens) {
@@ -344,6 +417,8 @@ const HorizonPage: React.FC = () => {
         : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const sessionId = (window as any).__horizonSessionId || correlationId;
       (window as any).__horizonSessionId = sessionId;
+      attemptCorrelationId = correlationId;
+      attemptSessionId = sessionId;
 
       // Mark current create attempt so Progress view can ignore unrelated background jobs.
       setActiveCreateCorrelationId(correlationId);
@@ -446,6 +521,17 @@ const HorizonPage: React.FC = () => {
       openedPreflight = true;
     } catch (error) {
       console.error('Failed to assemble lens:', error);
+      setLensStarted(false);
+      setSelectedLensId(null);
+      setActiveCreateCorrelationId(null);
+      setActiveCreateSessionId(null);
+      reportFatalPipelineError(error, {
+        projectId: request.projectId,
+        correlationId: attemptCorrelationId,
+        sessionId: attemptSessionId,
+        fallbackMessage: 'Failed to start Horizon pipeline.',
+        fallbackPhase: 'decomposition',
+      });
     } finally {
       creatingLensRef.current = false;
       setIsCreatingLens(false);
@@ -455,7 +541,7 @@ const HorizonPage: React.FC = () => {
         setActiveCreateSessionId(null);
       }
     }
-  }, [resetEvents]);
+  }, [reportFatalPipelineError, resetEvents, setSelectedLensId]);
 
   const closePreflight = React.useCallback(() => {
     setPreflightOpen(false);
@@ -475,6 +561,7 @@ const HorizonPage: React.FC = () => {
     resetEvents();
     resetRealtime();
     setSelectedLensId(null);
+    setCreateFatalError(null);
   }, [resetEvents, resetRealtime, setSelectedLensId]);
 
   const confirmPreflightAndCreate = React.useCallback(async (modeOverride?: 'just_open' | 'research_first') => {
@@ -485,6 +572,7 @@ const HorizonPage: React.FC = () => {
 
     creatingLensRef.current = true;
     setIsCreatingLens(true);
+    setCreateFatalError(null);
     try {
       const filteredDomains = (preflightDomainsDraft || []).filter((d: any) => {
         const cp = String(d?.canonicalPath || '').trim();
@@ -548,12 +636,22 @@ const HorizonPage: React.FC = () => {
       }
     } catch (err) {
       console.error('[HorizonPage] Failed to create lens after preflight', err);
+      setLensStarted(false);
+      setActiveCreateCorrelationId(null);
+      setActiveCreateSessionId(null);
+      reportFatalPipelineError(err, {
+        projectId: pending.request.projectId,
+        correlationId: pending.correlationId,
+        sessionId: pending.sessionId,
+        fallbackMessage: 'Failed to create and start Horizon lens.',
+        fallbackPhase: 'scouting',
+      });
     } finally {
       creatingLensRef.current = false;
       setIsCreatingLens(false);
       // Keep correlation/session IDs while we stay in Progress (until user opens the lens).
     }
-  }, [preflightMode, preflightResult, preflightSelectedAnchors, preflightSelectedDomains, preflightDomainsDraft, preflightAnchorsDraft, preflightFocus, setSelectedLensId]);
+  }, [preflightMode, preflightResult, preflightSelectedAnchors, preflightSelectedDomains, preflightDomainsDraft, preflightAnchorsDraft, preflightFocus, reportFatalPipelineError, setSelectedLensId]);
 
   const isValidCanonicalPath = React.useCallback((cp: string) => {
     const s = String(cp || '').trim();
@@ -615,6 +713,7 @@ const HorizonPage: React.FC = () => {
           setLensStarted(false);
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
+          setCreateFatalError(null);
         }}
         selectedLensId={selectedLensId}
         onOpenWorldMap={() => {
@@ -622,6 +721,7 @@ const HorizonPage: React.FC = () => {
           setLensStarted(false);
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
+          setCreateFatalError(null);
         }}
         isWorldMapActive={showWorldMap}
         onNewLens={() => {
@@ -633,6 +733,7 @@ const HorizonPage: React.FC = () => {
           resetEvents();
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
+          setCreateFatalError(null);
           // Note: currentProject should already be set from SidebarPanel project selection
           // LensCanvas will use currentProject.id as projectId for creating the lens
         }}
@@ -676,6 +777,7 @@ const HorizonPage: React.FC = () => {
               isCreatingLens={isCreatingLens || lensStarted}
               activeCreateCorrelationId={activeCreateCorrelationId}
               activeCreateSessionId={activeCreateSessionId}
+              fatalError={createFatalError}
               preflight={
                 preflightOpen && preflightResult
                   ? {
@@ -708,6 +810,7 @@ const HorizonPage: React.FC = () => {
                 setLensStarted(false);
                 setActiveCreateCorrelationId(null);
                 setActiveCreateSessionId(null);
+                setCreateFatalError(null);
               }}
             />
           ) : projectsLoading || !hasRestoredProject ? (

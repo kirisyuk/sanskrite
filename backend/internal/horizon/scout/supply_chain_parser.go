@@ -181,9 +181,13 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 					nextPath := strings.TrimSpace(nextNode.CanonicalPath)
 					facPath := strings.TrimSpace(node.CanonicalPath)
 					if prevPath != "" && nextPath != "" && facPath != "" {
+						srcPath, dstPath := prevPath, nextPath
+						if shouldSwapProductStageOrder(prevPath, nextPath) {
+							srcPath, dstPath = nextPath, prevPath
+						}
 						transformEdge := &ChainEdge{
-							SourceCanonicalPath: prevPath,
-							TargetCanonicalPath: nextPath,
+							SourceCanonicalPath: srcPath,
+							TargetCanonicalPath: dstPath,
 							RelationType:        string(models.DependencyTypeTransformsInto),
 							Confidence:          chain.Confidence,
 							Reason:              fmt.Sprintf("Supply chain: %s transforms into %s at %s. %s", prevNode.Name, nextNode.Name, node.Name, chain.Reason),
@@ -197,12 +201,12 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 				}
 			}
 		}
-		// Extract SupplyLink segments (actor→product→actor) for PathBuilder materialization
+		// Extract SupplyLink segments (supplier actor→product→customer actor) for PathBuilder materialization
 		for i := 0; i < len(chain.Nodes)-2; i++ {
 			a, prod, b := chain.Nodes[i], chain.Nodes[i+1], chain.Nodes[i+2]
-			if p.isActorType(a.Type, a.CanonicalPath) &&
+			if p.isSupplyActorType(a.Type, a.CanonicalPath) &&
 				p.isProductType(prod.Type, prod.CanonicalPath) &&
-				p.isActorType(b.Type, b.CanonicalPath) {
+				p.isSupplyActorType(b.Type, b.CanonicalPath) {
 				srcPath := strings.TrimSpace(a.CanonicalPath)
 				prodPath := strings.TrimSpace(prod.CanonicalPath)
 				dstPath := strings.TrimSpace(b.CanonicalPath)
@@ -233,6 +237,30 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 						}
 					}
 					result.SupplyLinkSegments = append(result.SupplyLinkSegments, seg)
+					// Material flow semantics: supplier actor -> customer actor via product.
+					// This is the only place where SUPPLIES_TO is inferred from chain topology.
+					supQualifiers := map[string]interface{}{
+						"source_role":     "supplier",
+						"target_role":     "customer",
+						"direction_basis": "supply_flow",
+						"product_ref":     prodPath,
+					}
+					if len(seg.TransportViaRefs) > 0 {
+						supQualifiers[models.QualifierTransportVia] = seg.TransportViaRefs
+					}
+					supReason := fmt.Sprintf("Supply chain: %s supplies %s to %s. %s", a.Name, prod.Name, b.Name, chain.Reason)
+					if len(seg.TransportViaRefs) > 0 {
+						supReason = fmt.Sprintf("Supply chain: %s supplies %s to %s via %v. %s", a.Name, prod.Name, b.Name, seg.TransportViaRefs, chain.Reason)
+					}
+					result.Edges = append(result.Edges, &ChainEdge{
+						SourceCanonicalPath: srcPath,
+						TargetCanonicalPath: dstPath,
+						RelationType:        string(models.DependencyTypeSuppliesTo),
+						Confidence:          chain.Confidence,
+						Reason:              supReason,
+						Qualifiers:          supQualifiers,
+					})
+					result.Stats.EdgesCreated++
 					// Alternatives: create additional SupplyLink segments for alternative suppliers
 					for _, alt := range chain.Alternatives {
 						if alt.CustomerNodeIndex == i+2 && alt.ProductNodeIndex == i+1 {
@@ -279,42 +307,6 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 			}
 		}
 
-		// Infer SUPPLIES_TO with transport_via when pattern: actor -> product -> actor and chain has transportVia
-		if len(chain.Nodes) >= 3 && len(chain.TransportVia) > 0 {
-			for i := 0; i < len(chain.Nodes)-2; i++ {
-				a, prod, b := chain.Nodes[i], chain.Nodes[i+1], chain.Nodes[i+2]
-				if p.isActorType(a.Type, a.CanonicalPath) &&
-					p.isProductType(prod.Type, prod.CanonicalPath) &&
-					p.isActorType(b.Type, b.CanonicalPath) {
-					srcPath := strings.TrimSpace(a.CanonicalPath)
-					dstPath := strings.TrimSpace(b.CanonicalPath)
-					if srcPath != "" && dstPath != "" {
-						via := make([]string, 0, len(chain.TransportVia))
-						for _, pth := range chain.TransportVia {
-							pth = strings.TrimSpace(pth)
-							if pth != "" && strings.HasPrefix(pth, "/fac/") {
-								via = append(via, pth)
-							}
-						}
-						if len(via) > 0 {
-							supEdge := &ChainEdge{
-								SourceCanonicalPath: srcPath,
-								TargetCanonicalPath: dstPath,
-								RelationType:        string(models.DependencyTypeSuppliesTo),
-								Confidence:          chain.Confidence,
-								Reason:              fmt.Sprintf("Supply chain: %s supplies %s to %s via %v. %s", a.Name, prod.Name, b.Name, via, chain.Reason),
-								Qualifiers: map[string]interface{}{
-									models.QualifierTransportVia: via,
-								},
-							}
-							result.Edges = append(result.Edges, supEdge)
-							result.Stats.EdgesCreated++
-						}
-					}
-					break // one SUPPLIES_TO per chain with transport
-				}
-			}
-		}
 	}
 
 	return result, nil
@@ -525,7 +517,8 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 // Supply chain pattern: actor → product → actor → product
 // - Actor (org/fac) → Product: PRODUCES
 // - Product → Actor: actor CONSUMES product (or invert to DEPENDS_ON)
-// - Actor → Actor: SUPPLIES_TO
+// - Facility → Deposit: EXTRACTS_FROM
+// - Actor → Actor: no direct inference (ambiguous without product-flow context)
 // - Product → Product: TRANSFORMS_INTO
 func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNode, confidence float64, reason string) *ChainEdge {
 	fromPath := strings.TrimSpace(from.CanonicalPath)
@@ -552,10 +545,29 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 			Confidence:          confidence,
 			Reason:              fmt.Sprintf("Supply chain: %s consumes %s. %s", to.Name, from.Name, reason),
 		}
+	case p.isFacilityType(from.Type, fromPath) && p.isDepositType(to.Type, toPath):
+		return &ChainEdge{
+			SourceCanonicalPath: fromPath,
+			TargetCanonicalPath: toPath,
+			RelationType:        string(models.DependencyTypeExtractsFrom),
+			Confidence:          confidence,
+			Reason:              fmt.Sprintf("Supply chain: %s extracts from %s. %s", from.Name, to.Name, reason),
+		}
 	case fromIsActor && toIsActor:
-		relationType = string(models.DependencyTypeSuppliesTo)
+		return nil
 	case fromIsProduct && toIsProduct:
 		relationType = string(models.DependencyTypeTransformsInto)
+		srcPath, dstPath := fromPath, toPath
+		if shouldSwapProductStageOrder(fromPath, toPath) {
+			srcPath, dstPath = toPath, fromPath
+		}
+		return &ChainEdge{
+			SourceCanonicalPath: srcPath,
+			TargetCanonicalPath: dstPath,
+			RelationType:        relationType,
+			Confidence:          confidence,
+			Reason:              fmt.Sprintf("Supply chain: %s → %s. %s", from.Name, to.Name, reason),
+		}
 	default:
 		relationType = string(models.DependencyTypeDependsOn)
 	}
@@ -578,6 +590,35 @@ func (p *SupplyChainParser) isActorType(nodeType string, canonicalPath string) b
 		return true
 	}
 	return strings.HasPrefix(canonicalPath, "/org/") || strings.HasPrefix(canonicalPath, "/fac/") || strings.HasPrefix(canonicalPath, "/deposit/")
+}
+
+// isSupplyActorType checks if a node can be a supplier/customer endpoint in SUPPLIES_TO.
+func (p *SupplyChainParser) isSupplyActorType(nodeType string, canonicalPath string) bool {
+	return p.isOrganizationType(nodeType, canonicalPath) || p.isFacilityType(nodeType, canonicalPath)
+}
+
+func (p *SupplyChainParser) isOrganizationType(nodeType string, canonicalPath string) bool {
+	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
+	if nodeType == "ORGANIZATION" {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(canonicalPath), "/org/")
+}
+
+func (p *SupplyChainParser) isFacilityType(nodeType string, canonicalPath string) bool {
+	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
+	if nodeType == "FACILITY" {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(canonicalPath), "/fac/")
+}
+
+func (p *SupplyChainParser) isDepositType(nodeType string, canonicalPath string) bool {
+	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
+	if nodeType == "DEPOSIT" {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(canonicalPath), "/deposit/")
 }
 
 // isProductType checks if the node represents a product.
@@ -728,4 +769,17 @@ func (cc *ChainContext) ToPromptContext() string {
 	sb.WriteString("\nEXTEND these chains by finding new suppliers, products, or customers.\n\n")
 
 	return sb.String()
+}
+
+// shouldSwapProductStageOrder returns true when a TRANSFORMS_INTO edge has
+// downstream product as source and upstream product as target.
+// Correct semantics: upstream (lower stage rank) → downstream (higher stage rank).
+// Delegates to models.ProductStageRankFromCanonicalPath (single source of truth).
+func shouldSwapProductStageOrder(sourcePath, targetPath string) bool {
+	srcRank, srcOk := models.ProductStageRankFromCanonicalPath(sourcePath)
+	tgtRank, tgtOk := models.ProductStageRankFromCanonicalPath(targetPath)
+	if srcOk && tgtOk && srcRank > tgtRank {
+		return true
+	}
+	return false
 }

@@ -63,6 +63,24 @@ func (r *AgentJobsRepository) Update(ctx context.Context, job *models.AgentJob) 
 	return err
 }
 
+// UpdateState performs a partial update of individual fields within the job's State map,
+// without replacing the entire document. Significantly reduces Firestore write payload.
+func (r *AgentJobsRepository) UpdateState(ctx context.Context, jobID string, fields map[string]interface{}) error {
+	if jobID == "" {
+		return ErrInvalidAgentJob
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	updates := make([]firestore.Update, 0, len(fields)+1)
+	for key, value := range fields {
+		updates = append(updates, firestore.Update{Path: "state." + key, Value: value})
+	}
+	updates = append(updates, firestore.Update{Path: "updatedAt", Value: time.Now().UTC()})
+	_, err := r.col.Doc(jobID).Update(ctx, updates)
+	return err
+}
+
 // UpdateStatus обновляет только статус и прогресс
 func (r *AgentJobsRepository) UpdateStatus(ctx context.Context, id string, status models.AgentJobStatus, progress float64) error {
 	if id == "" {

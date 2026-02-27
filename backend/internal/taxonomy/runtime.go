@@ -124,6 +124,10 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"GATEKEEPS_DECISION": {},
 	"USES_MECHANISM":     {},
 	"APPLIES_TO":         {},
+	// Canonical consolidated types
+	"ASSOCIATED_WITH":      {},
+	"CORPORATE_TRANSITION": {},
+	"DOMAIN_RELATION":      {},
 	// Domain-to-strategic entities (Phase 2 overlay)
 	"SURFACES": {},
 	// People/org meta-relations
@@ -261,16 +265,23 @@ func NormalizeRelationType(in string) string {
 	}
 	// Normalize legacy / common aliases.
 	switch s {
-	case "AUDITOR", "AUDITORS", "AUDITOR_OF", "AUDITED", "AUDIT_FIRM":
-		return "AUDITED_BY"
+	case "AUDITOR", "AUDITORS", "AUDITOR_OF", "AUDITED", "AUDIT_FIRM", "AUDITED_BY":
+		// Legacy inverse relation; canonical runtime output is ASSURES.
+		return "ASSURES"
 	case "ASSURED_BY", "CERTIFIED_BY", "CERTIFIES", "INSPECTED_BY", "INSPECTS":
 		return "ASSURES"
 	case "RELATIVE", "RELATIVES", "FAMILY_OF", "FAMILY_MEMBER_OF", "KIN_OF":
 		return "RELATIVE_OF"
 	case "RELATED", "ASSOCIATED_WITH", "ASSOCIATE_OF", "FRIEND_OF", "BUSINESS_PARTNER_OF", "CLASSMATE_OF", "ALUMNI_OF":
 		return "RELATED_TO"
+	case "CORPORATE_TRANSITION":
+		return "CORPORATE_TRANSITION"
+	case "DOMAIN_RELATION":
+		return "DOMAIN_RELATION"
 	case "SUBSIDIARY_OF", "OWNED_BY":
 		return "SUBSIDIARY_OF"
+	case "HAS_SUBMARKET":
+		return "HAS_MARKET_SEGMENT"
 	case "CONTROLLED_BY":
 		return "CONTROLS"
 	case "MANAGED_BY":

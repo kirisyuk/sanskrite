@@ -48,7 +48,7 @@ for topic in "${TOPICS[@]}"; do
 done
 
 echo ""
-echo "=== Настройка подписок для ws-broker ==="
+echo "=== Настройка подписок для hatlone-ws ==="
 echo "Subscriber создает подписки автоматически, но для надежности фиксируем их здесь (idempotent)."
 echo ""
 

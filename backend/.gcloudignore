@@ -2,7 +2,6 @@
 bin/
 build/
 server
-ws-broker
 main
 verified-proxy
 hatlone-ws
@@ -15,7 +14,6 @@ test-agent-orchestrator
 # All Go binaries (catch-all)
 cmd/*/main
 cmd/*/server
-cmd/*/ws-broker
 cmd/*/verified-proxy
 cmd/*/hatlone-ws
 

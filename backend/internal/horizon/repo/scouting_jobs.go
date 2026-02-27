@@ -457,6 +457,14 @@ func (r *ScoutingJobsRepository) Update(ctx context.Context, job *models.Scoutin
 	return r.agentJobsRepo.Update(ctx, agentJob)
 }
 
+// UpdateState performs a partial update of individual fields within the job's State map.
+func (r *ScoutingJobsRepository) UpdateState(ctx context.Context, jobID string, fields map[string]interface{}) error {
+	if jobID == "" {
+		return ErrInvalidDocument
+	}
+	return r.agentJobsRepo.UpdateState(ctx, jobID, fields)
+}
+
 // ListByLens получает список ScoutingJob для Lens
 // Если lensID пустой, возвращает все ScoutingJob для tenant (фильтрованные по AgentID="scout")
 func (r *ScoutingJobsRepository) ListByLens(ctx context.Context, tenantID, lensID string, limit int) ([]*models.ScoutingJob, error) {

@@ -73,6 +73,20 @@ func (c *Client) modelFrom(opts Options) string {
 	return "gpt-5-nano" // Default to cheapest model
 }
 
+func effectiveMaxOutputTokens(model string, requested int) int {
+	if requested > 0 {
+		return requested
+	}
+	name := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(name, "gpt-5") {
+		return 8192
+	}
+	if strings.HasPrefix(name, "gpt-") || strings.HasPrefix(name, "o") {
+		return 4096
+	}
+	return 3072
+}
+
 // Generate uses Responses API (non-stream) and returns first text output; supports function tools
 func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts Options) (*GenerateResponse, error) {
 	model := c.modelFrom(opts)
@@ -94,8 +108,8 @@ func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts
 	if opts.Temperature > 0 && !(strings.HasPrefix(strings.ToLower(model), "gpt-5")) {
 		req["temperature"] = opts.Temperature
 	}
-	if opts.MaxOutputTokens > 0 {
-		req["max_output_tokens"] = opts.MaxOutputTokens
+	if maxOut := effectiveMaxOutputTokens(model, opts.MaxOutputTokens); maxOut > 0 {
+		req["max_output_tokens"] = maxOut
 	}
 	// Build tools list (function tools + optional web_search)
 	tdefs := make([]map[string]interface{}, 0, len(tools)+1)
@@ -296,8 +310,8 @@ func (c *Client) Respond(ctx context.Context, input []map[string]interface{}, to
 	if opts.SystemInstruction != "" {
 		req["instructions"] = opts.SystemInstruction
 	}
-	if opts.MaxOutputTokens > 0 {
-		req["max_output_tokens"] = opts.MaxOutputTokens
+	if maxOut := effectiveMaxOutputTokens(model, opts.MaxOutputTokens); maxOut > 0 {
+		req["max_output_tokens"] = maxOut
 	}
 	if len(tools) > 0 {
 		tdefs := make([]map[string]interface{}, 0, len(tools))
@@ -516,8 +530,8 @@ func (c *Client) Stream(ctx context.Context, prompt string, tools []Tool, opts O
 	if opts.SystemInstruction != "" {
 		req["instructions"] = opts.SystemInstruction
 	}
-	if opts.MaxOutputTokens > 0 {
-		req["max_output_tokens"] = opts.MaxOutputTokens
+	if maxOut := effectiveMaxOutputTokens(model, opts.MaxOutputTokens); maxOut > 0 {
+		req["max_output_tokens"] = maxOut
 	}
 	if len(tools) > 0 {
 		tdefs := make([]map[string]interface{}, 0, len(tools))
@@ -645,8 +659,8 @@ func (c *Client) StreamWithExtras(ctx context.Context, prompt string, tools []To
 	if opts.SystemInstruction != "" {
 		req["instructions"] = opts.SystemInstruction
 	}
-	if opts.MaxOutputTokens > 0 {
-		req["max_output_tokens"] = opts.MaxOutputTokens
+	if maxOut := effectiveMaxOutputTokens(model, opts.MaxOutputTokens); maxOut > 0 {
+		req["max_output_tokens"] = maxOut
 	}
 	if len(tools) > 0 {
 		tdefs := make([]map[string]interface{}, 0, len(tools))

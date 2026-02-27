@@ -280,6 +280,21 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypePerson},
 		Description:      "Person is related to person (symmetric)",
 	},
+	models.DependencyTypeAssociatedWith: {
+		ValidSourceTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypePerson,
+			models.FragmentTypeCommunity,
+		},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypeFacility,
+			models.FragmentTypePerson,
+			models.FragmentTypeCommunity,
+		},
+		Description: "Canonical associative link (symmetric)",
+	},
 	models.DependencyTypeParticipatesIn: {
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
@@ -305,6 +320,11 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeMarket},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
 		Description:      "Market has sub-market (hierarchy)",
+	},
+	models.DependencyTypeHasSubmarket: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeMarket},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
+		Description:      "Legacy alias of HAS_MARKET_SEGMENT",
 	},
 	models.DependencyTypeHasSubgroup: {
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeCommunity},
@@ -376,6 +396,20 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
 		Description:      "Organization acquired by organization",
 	},
+	models.DependencyTypeCorporateTransition: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		Description:      "Canonical corporate transition relation",
+	},
+	models.DependencyTypeSubsidiaryOf: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
+		ValidTargetTypes: []models.FragmentType{
+			models.FragmentTypeOrganization,
+			models.FragmentTypePerson,
+			models.FragmentTypeCommunity,
+		},
+		Description: "Inverse ownership relation: subsidiary/entity is owned by parent/owner",
+	},
 	models.DependencyTypeFocusesOn: {
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
 		ValidTargetTypes: []models.FragmentType{
@@ -428,6 +462,11 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDomain},
 		Description:      "Related domains (symmetric)",
+	},
+	models.DependencyTypeDomainRelation: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDomain},
+		Description:      "Canonical domain-to-domain relation (symmetric)",
 	},
 	models.DependencyTypeBroadensTo: {
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},

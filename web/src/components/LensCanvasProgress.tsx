@@ -32,6 +32,12 @@ export interface LensCanvasProgressProps {
     onCancel: () => void;
     onContinue: (mode?: 'just_open' | 'research_first') => void;
   } | null;
+  fatalError?: {
+    title?: string;
+    message: string;
+    code?: string;
+    phase?: string;
+  } | null;
 }
 
 const formatEdgeType = (type: string) => {
@@ -109,6 +115,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
   activeCreateCorrelationId = null,
   activeCreateSessionId = null,
   preflight = null,
+  fatalError = null,
 }) => {
   const events = useHorizonRealtimeStore((s) => s.events);
   const feedRef = React.useRef<HTMLDivElement | null>(null);
@@ -251,6 +258,36 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
 
     return base;
   }, [events, lensId, projectId, isCreatingLens, preflightActive, activeCreateCorrelationId, activeCreateSessionId]);
+
+  const streamFatalError = React.useMemo(() => {
+    const failed = [...filteredEvents].reverse().find((ev) => {
+      const d: any = ev?.data;
+      return ev.type === 'horizon.assembly.failed' || d?.fatal === true || !!d?.fatalError;
+    });
+    if (!failed) return null;
+    const d: any = failed.data || {};
+    const nested = d?.fatalError && typeof d.fatalError === 'object' ? d.fatalError : null;
+    const title =
+      String(failed.humanReadable?.title || '').trim() ||
+      (nested && String(nested?.title || '').trim()) ||
+      'Fatal pipeline error';
+    const message =
+      (nested && String(nested?.message || '').trim()) ||
+      String(d?.message || d?.error || failed.humanReadable?.description || failed.text || '').trim() ||
+      'Pipeline failed and cannot continue.';
+    const code =
+      (nested && String(nested?.code || '').trim()) ||
+      String(d?.code || '').trim() ||
+      undefined;
+    const phase =
+      (nested && String(nested?.phase || '').trim()) ||
+      String(d?.phase || '').trim() ||
+      undefined;
+    return { title, message, code, phase };
+  }, [filteredEvents]);
+
+  const fatalAlert = fatalError || streamFatalError;
+  const hasFatalAlert = !!fatalAlert;
 
   const updatePinnedState = React.useCallback(() => {
     const el = feedRef.current;
@@ -943,7 +980,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
             />
 
             {/* Initial Loading State */}
-            {filteredEvents.length === 0 && isCreatingLens && (
+            {filteredEvents.length === 0 && isCreatingLens && !hasFatalAlert && (
               <div
                 style={{
                   position: 'relative',
@@ -1175,6 +1212,36 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
       )}
 
       {/* Input field */}
+      {fatalAlert && (
+        <div style={{ width: '100%', padding: '0 24px 12px' }}>
+          <div style={{ maxWidth: 960, margin: '0 auto' }}>
+            <div
+              style={{
+                border: '1px solid rgba(239, 68, 68, 0.45)',
+                background: 'rgba(127, 29, 29, 0.16)',
+                borderRadius: 12,
+                padding: '12px 14px',
+                color: 'var(--text-primary)',
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 800, color: '#fca5a5' }}>
+                {String(fatalAlert.title || 'Fatal pipeline error')}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)' }}>
+                {String(fatalAlert.message || '').trim() || 'Pipeline failed and cannot continue.'}
+              </div>
+              {(fatalAlert.code || fatalAlert.phase) && (
+                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
+                  {[fatalAlert.code ? `code=${fatalAlert.code}` : '', fatalAlert.phase ? `phase=${fatalAlert.phase}` : '']
+                    .filter(Boolean)
+                    .join(' ')}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showInput && projectId && (
         <div style={{ 
           flexShrink: 0, 

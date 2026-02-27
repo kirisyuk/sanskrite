@@ -14,6 +14,8 @@ type EdgeCanonicalizationInput struct {
 	SourcePath        string
 	TargetPath        string
 	RawRelationType   string
+	Reason            string
+	Qualifiers        map[string]interface{}
 	OwnershipEvidence bool
 }
 
@@ -37,6 +39,46 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 		EdgeType:       in.EdgeType,
 		PolicyStatus:   horizonmodels.PolicyStatusClean,
 		ConfidenceMult: 1.0,
+	}
+
+	// --- Legacy AUDITED_BY canonicalization ---
+	// Keep AUDITED_BY as input-compat only; canonical runtime type is ASSURES.
+	if shouldCanonicalizeLegacyAuditedBy(in.EdgeType, in.RawRelationType) {
+		if res.OriginalType == "" {
+			res.OriginalType = in.EdgeType
+		}
+		res.EdgeType = horizonmodels.DependencyTypeAssures
+		res.Changed = true
+		res.ShouldSwap = true // AUDITED_BY: assuree -> assurer; ASSURES: assurer -> assuree.
+		res.Reason = "canonicalize: legacy AUDITED_BY -> ASSURES (swap direction)"
+		in.EdgeType = horizonmodels.DependencyTypeAssures
+		in.SourceType, in.TargetType = in.TargetType, in.SourceType
+		in.SourcePath, in.TargetPath = in.TargetPath, in.SourcePath
+		if in.Qualifiers != nil {
+			if _, ok := in.Qualifiers["assurance_type"]; !ok {
+				in.Qualifiers["assurance_type"] = "audit"
+			}
+		}
+	}
+
+	// --- Assurance semantics rescue ---
+	// If extraction emitted DEPENDS_ON/INFLUENCES for an audit/certification relation,
+	// restore canonical ASSURES semantics (assurer -> assuree).
+	if shouldRewrite, shouldSwap, assuranceType := shouldCanonicalizeToAssures(in.EdgeType, in.RawRelationType, in.Reason, in.Qualifiers); shouldRewrite {
+		res.OriginalType = in.EdgeType
+		res.EdgeType = horizonmodels.DependencyTypeAssures
+		res.Changed = true
+		res.Reason = "canonicalize: dependency/influence with assurance semantics -> ASSURES"
+		if shouldSwap {
+			res.ShouldSwap = true
+			in.SourceType, in.TargetType = in.TargetType, in.SourceType
+			in.SourcePath, in.TargetPath = in.TargetPath, in.SourcePath
+		}
+		if assuranceType != "" && in.Qualifiers != nil {
+			if _, ok := in.Qualifiers["assurance_type"]; !ok {
+				in.Qualifiers["assurance_type"] = assuranceType
+			}
+		}
 	}
 
 	// --- REGULATES /org → /gov swap (gov bodies are regulators, not the regulated) ---
@@ -164,6 +206,133 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 	}
 
 	return res
+}
+
+func shouldCanonicalizeLegacyAuditedBy(
+	edgeType horizonmodels.DependencyType,
+	rawRelationType string,
+) bool {
+	if edgeType == horizonmodels.DependencyTypeAuditedBy {
+		return true
+	}
+	raw := strings.ToUpper(strings.TrimSpace(rawRelationType))
+	return raw == "AUDITED_BY"
+}
+
+func shouldCanonicalizeToAssures(
+	edgeType horizonmodels.DependencyType,
+	rawRelationType, reason string,
+	qualifiers map[string]interface{},
+) (shouldRewrite bool, shouldSwap bool, assuranceType string) {
+	raw := strings.ToUpper(strings.TrimSpace(rawRelationType))
+	reasonLower := strings.ToLower(strings.TrimSpace(reason))
+	assuranceType = extractAssuranceType(qualifiers)
+	if assuranceType == "" {
+		assuranceType = inferAssuranceTypeFromReason(reasonLower)
+	}
+
+	if edgeType != horizonmodels.DependencyTypeDependsOn &&
+		edgeType != horizonmodels.DependencyTypeInfluences &&
+		edgeType != horizonmodels.DependencyTypeControls {
+		return false, false, ""
+	}
+	hasAssuranceRaw := raw == "ASSURES" || raw == "AUDITED_BY" || strings.Contains(raw, "AUDIT") || strings.Contains(raw, "ASSUR") || strings.Contains(raw, "CERTIF")
+	hasAssuranceCue := assuranceType != "" || hasAssuranceRaw || reasonHasAssuranceCue(reasonLower)
+	if !hasAssuranceCue {
+		return false, false, ""
+	}
+
+	// Direction inference:
+	// - "audited by/certified by/assured by" => target assures source (swap)
+	// - "audits/certifies/assures" => source assures target (no swap)
+	// - DEPENDS_ON fallback => swap (dependent is usually assuree).
+	switch {
+	case raw == "ASSURES":
+		shouldSwap = false
+	case raw == "AUDITED_BY":
+		shouldSwap = true
+	case reasonSuggestsSourceAssuresTarget(reasonLower):
+		shouldSwap = false
+	case reasonSuggestsTargetAssuresSource(reasonLower):
+		shouldSwap = true
+	default:
+		// DEPENDS_ON default is usually assuree -> assurer; invert to canonical ASSURES.
+		// For CONTROLS/INFLUENCES keep emitted direction unless linguistic cues indicate inversion.
+		shouldSwap = edgeType == horizonmodels.DependencyTypeDependsOn
+	}
+
+	return true, shouldSwap, assuranceType
+}
+
+func extractAssuranceType(qualifiers map[string]interface{}) string {
+	if qualifiers == nil {
+		return ""
+	}
+	if v, ok := qualifiers["assurance_type"]; ok {
+		return normalizeAssuranceType(v)
+	}
+	if v, ok := qualifiers["assuranceType"]; ok {
+		return normalizeAssuranceType(v)
+	}
+	return ""
+}
+
+func normalizeAssuranceType(v interface{}) string {
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "audit", "certification", "regulatory", "inspection":
+		return s
+	default:
+		return ""
+	}
+}
+
+func inferAssuranceTypeFromReason(reason string) string {
+	switch {
+	case strings.Contains(reason, "audit"), strings.Contains(reason, "auditor"), strings.Contains(reason, "audited"):
+		return "audit"
+	case strings.Contains(reason, "certif"):
+		return "certification"
+	case strings.Contains(reason, "inspect"):
+		return "inspection"
+	default:
+		return ""
+	}
+}
+
+func reasonHasAssuranceCue(reason string) bool {
+	return strings.Contains(reason, "audit") ||
+		strings.Contains(reason, "auditor") ||
+		strings.Contains(reason, "audited") ||
+		strings.Contains(reason, "assurance") ||
+		strings.Contains(reason, "assured") ||
+		strings.Contains(reason, "certif") ||
+		strings.Contains(reason, "inspection") ||
+		strings.Contains(reason, "inspected")
+}
+
+func reasonSuggestsTargetAssuresSource(reason string) bool {
+	return strings.Contains(reason, "audited by") ||
+		strings.Contains(reason, "is audited by") ||
+		strings.Contains(reason, "certified by") ||
+		strings.Contains(reason, "is certified by") ||
+		strings.Contains(reason, "assured by") ||
+		strings.Contains(reason, "is assured by") ||
+		strings.Contains(reason, "inspected by") ||
+		strings.Contains(reason, "is inspected by")
+}
+
+func reasonSuggestsSourceAssuresTarget(reason string) bool {
+	return strings.Contains(reason, "audits ") ||
+		strings.Contains(reason, "certifies ") ||
+		strings.Contains(reason, "assures ") ||
+		strings.Contains(reason, "inspects ") ||
+		strings.Contains(reason, "provides assurance to") ||
+		strings.Contains(reason, "external auditor for")
 }
 
 // ApplyEdgeDirectionValidation validates and optionally reverses edge direction using

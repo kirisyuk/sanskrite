@@ -30,15 +30,20 @@ type SessionGraph struct {
 
 	// byID maps fragment ID → fragment (for quick ID lookups)
 	byID map[string]*models.HorizonFragment
+
+	// skeletonCache caches buildGraphSkeletonContext results per canonical path.
+	// Avoids redundant DB-heavy skeleton rebuilds within the same job session.
+	skeletonCache map[string]string
 }
 
 // NewSessionGraph creates a new empty session graph.
 func NewSessionGraph() *SessionGraph {
 	return &SessionGraph{
-		byPath:      make(map[string]*models.HorizonFragment),
-		byName:      make(map[string][]*models.HorizonFragment),
-		pathAliases: make(map[string]string),
-		byID:        make(map[string]*models.HorizonFragment),
+		byPath:        make(map[string]*models.HorizonFragment),
+		byName:        make(map[string][]*models.HorizonFragment),
+		pathAliases:   make(map[string]string),
+		byID:          make(map[string]*models.HorizonFragment),
+		skeletonCache: make(map[string]string),
 	}
 }
 
@@ -306,6 +311,7 @@ func (sg *SessionGraph) Clear() {
 	sg.byName = make(map[string][]*models.HorizonFragment)
 	sg.pathAliases = make(map[string]string)
 	sg.byID = make(map[string]*models.HorizonFragment)
+	sg.skeletonCache = make(map[string]string)
 }
 
 // extractNames returns searchable names from a fragment.
@@ -418,6 +424,21 @@ func extractJurisdiction(canonicalPath string) string {
 	default:
 		return ""
 	}
+}
+
+// GetSkeletonContext returns the cached skeleton context for a canonical path.
+func (sg *SessionGraph) GetSkeletonContext(canonicalPath string) (string, bool) {
+	sg.mu.RLock()
+	defer sg.mu.RUnlock()
+	v, ok := sg.skeletonCache[canonicalPath]
+	return v, ok
+}
+
+// SetSkeletonContext stores a skeleton context string for the given canonical path.
+func (sg *SessionGraph) SetSkeletonContext(canonicalPath, context string) {
+	sg.mu.Lock()
+	defer sg.mu.Unlock()
+	sg.skeletonCache[canonicalPath] = context
 }
 
 // --- Context key for SessionGraph ---

@@ -149,6 +149,20 @@ func (e *ScoutEngine) materializeRelationEdge(
 	if symmetricSwapped {
 		directionChanged = true
 	}
+	earlyDedupVariant := edgeDedupVariant(edgeType, rawRelationType, rel.Qualifiers, rel.Reason)
+	earlyDedupKey := edgeDedupKey(edgeSourceID, edgeTargetID, edgeType, earlyDedupVariant)
+	if e.seenEdgeDedupRecently(earlyDedupKey) {
+		fmt.Printf("Skipping duplicate edge (cross-job recent cache): %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
+		return nil
+	}
+	// Early in-memory dedup: skip canonicalization+validation for edges already seen in this job.
+	if seenEdgeKeys != nil {
+		if _, ok := seenEdgeKeys[earlyDedupKey]; ok {
+			fmt.Printf("Skipping duplicate edge (early in-memory): %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
+			e.rememberEdgeDedupRecently(earlyDedupKey)
+			return nil
+		}
+	}
 
 	// Resolve *actual* endpoint types for validation (must match edgeSourceID/edgeTargetID after swaps).
 	resolveTypeByID := func(id string) models.FragmentType {
@@ -219,6 +233,8 @@ func (e *ScoutEngine) materializeRelationEdge(
 		SourcePath:        srcPathActual,
 		TargetPath:        dstPathActual,
 		RawRelationType:   rawRelationType,
+		Reason:            strings.TrimSpace(rel.Reason),
+		Qualifiers:        rel.Qualifiers,
 		OwnershipEvidence: models.HasOwnershipEvidence(rel.Reason, rel.Qualifiers, rel.Metrics),
 	})
 	if canon.Changed {
@@ -300,6 +316,8 @@ func (e *ScoutEngine) materializeRelationEdge(
 				"sourceCanonicalPath": srcPathActual,
 				"targetCanonicalPath": dstPathActual,
 				"relationType":        string(edgeType),
+				"reason":              strings.TrimSpace(rel.Reason),
+				"qualifiers":          rel.Qualifiers,
 			},
 			Fragment: nil,
 		})
@@ -401,19 +419,35 @@ func (e *ScoutEngine) materializeRelationEdge(
 		}
 	}
 
+	// Fail-closed for invalid edge semantics: quarantined edges must not be persisted.
+	if policyStatus == models.PolicyStatusQuarantined {
+		msg := fmt.Sprintf("[ScoutEngine] Skipping quarantined edge source=%s target=%s type=%s reason=%s",
+			strings.TrimSpace(srcPathActual),
+			strings.TrimSpace(dstPathActual),
+			string(edgeType),
+			strings.TrimSpace(policyReason),
+		)
+		fmt.Printf("%s\n", msg)
+		e.logLine(ctx, job, "warn", msg)
+		return nil
+	}
+
 	// In-memory dedup (per job run), after all normalization.
+	dedupVariant := edgeDedupVariant(edgeType, rawRelationType, rel.Qualifiers, rel.Reason)
 	if seenEdgeKeys != nil {
-		ek := EdgeKey(edgeSourceID, edgeTargetID, edgeType)
+		ek := edgeDedupKey(edgeSourceID, edgeTargetID, edgeType, dedupVariant)
 		if _, ok := seenEdgeKeys[ek]; ok {
 			fmt.Printf("Skipping duplicate edge (in-memory): %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
+			e.rememberEdgeDedupRecently(ek)
 			return nil
 		}
 		seenEdgeKeys[ek] = struct{}{}
 	}
 
 	// Firestore dedup check (cross-run).
-	if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", edgeSourceID, edgeTargetID, edgeType); err == nil {
+	if e.hasDuplicateEdgeByVariant(ctx, "global", edgeSourceID, edgeTargetID, edgeType, dedupVariant) {
 		fmt.Printf("Skipping duplicate edge: %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
+		e.rememberEdgeDedupRecently(edgeDedupKey(edgeSourceID, edgeTargetID, edgeType, dedupVariant))
 		return nil
 	}
 
@@ -466,6 +500,10 @@ func (e *ScoutEngine) materializeRelationEdge(
 			LastUpdatedAt: time.Now(),
 		},
 	}
+	// Mark that this edge was processed by canonicalization+validation during materialization.
+	// policy_checker.go uses this to skip redundant re-processing on already-persisted edges.
+	edge.Qualifiers["pipelineCanonicalized"] = true
+	edge.Qualifiers["pipelineValidated"] = true
 	if canonFromEdgeType != "" {
 		edge.Qualifiers["canonicalized"] = true
 		edge.Qualifiers["canonicalizedFromEdgeType"] = canonFromEdgeType
@@ -513,13 +551,36 @@ func (e *ScoutEngine) materializeRelationEdge(
 		edge.Qualifiers["canonicalizedGovRegulatesSwap"] = true
 		edge.Qualifiers["govRegulatesSwapReason"] = canon.GovRegulatesSwapReason
 	}
+	if edge.Type == models.DependencyTypeAssures {
+		if normalizeAssuranceTypeQualifier(edge.Qualifiers) == "" {
+			if dedupVariant := edgeDedupVariant(edge.Type, rawRelationType, edge.Qualifiers, rel.Reason); dedupVariant == "assurance_type=audit" {
+				edge.Qualifiers["assurance_type"] = "audit"
+			}
+		}
+	}
 	edge.SetPolicyStatus(policyStatus, policyReason, policyPenalty)
 	if canonFromEdgeType != "" {
 		edge.SetPolicyOriginalType(models.DependencyType(canonFromEdgeType))
 	}
 	applyBestEffortEdgeEnrichment(edge)
+	dedupVariant = edgeDedupVariant(edge.Type, rawRelationType, edge.Qualifiers, rel.Reason)
+	if e.hasDuplicateEdgeByVariant(ctx, "global", edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, dedupVariant) {
+		e.rememberEdgeDedupRecently(edgeDedupKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, dedupVariant))
+		return nil
+	}
 
-	if existing, _ := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", edge.SourceFragmentID, edge.TargetFragmentID, edge.Type); existing != nil {
+	e.rememberEdgeDedupRecently(edgeDedupKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, dedupVariant))
+
+	// If a batch buffer is attached to the context, accumulate the edge for batch persist.
+	if buf := EdgeBatchBufferFromContext(ctx); buf != nil {
+		buf.Add(edge, edgeBatchMeta{
+			sourcePath:  resolvedSourcePath,
+			targetPath:  resolvedTargetPath,
+			sourceLabel: strings.TrimSpace(sourceFragment.Labels["en"]),
+			targetLabel: strings.TrimSpace(firstNonEmpty(rel.TargetShortName, rel.TargetName, rel.TargetLegalName)),
+			job:         job,
+		})
+		fmt.Printf("Buffered edge: %s -> %s (%s)\n", resolvedSourcePath, resolvedTargetPath, edgeType)
 		return nil
 	}
 
@@ -559,6 +620,93 @@ func (e *ScoutEngine) materializeRelationEdge(
 	return nil
 }
 
+func edgeDedupKey(sourceID, targetID string, edgeType models.DependencyType, variant string) string {
+	base := EdgeKey(sourceID, targetID, edgeType)
+	variant = strings.TrimSpace(variant)
+	if variant == "" {
+		return base
+	}
+	return base + "|" + variant
+}
+
+func edgeDedupVariant(
+	edgeType models.DependencyType,
+	rawRelationType string,
+	qualifiers map[string]interface{},
+	reason string,
+) string {
+	if edgeType != models.DependencyTypeAssures {
+		return ""
+	}
+	if t := normalizeAssuranceTypeQualifier(qualifiers); t != "" {
+		return "assurance_type=" + t
+	}
+	raw := strings.ToUpper(strings.TrimSpace(rawRelationType))
+	reasonLower := strings.ToLower(strings.TrimSpace(reason))
+	if raw == "AUDITED_BY" ||
+		strings.Contains(reasonLower, "audit") ||
+		strings.Contains(reasonLower, "auditor") ||
+		strings.Contains(reasonLower, "audited") {
+		return "assurance_type=audit"
+	}
+	return ""
+}
+
+func normalizeAssuranceTypeQualifier(qualifiers map[string]interface{}) string {
+	if qualifiers == nil {
+		return ""
+	}
+	candidate := ""
+	if v, ok := qualifiers["assurance_type"]; ok {
+		if s, ok := v.(string); ok {
+			candidate = s
+		}
+	}
+	if candidate == "" {
+		if v, ok := qualifiers["assuranceType"]; ok {
+			if s, ok := v.(string); ok {
+				candidate = s
+			}
+		}
+	}
+	candidate = strings.ToLower(strings.TrimSpace(candidate))
+	switch candidate {
+	case "audit", "certification", "regulatory", "inspection":
+		return candidate
+	default:
+		return ""
+	}
+}
+
+func (e *ScoutEngine) hasDuplicateEdgeByVariant(
+	ctx context.Context,
+	tenantID, sourceID, targetID string,
+	edgeType models.DependencyType,
+	variant string,
+) bool {
+	if e == nil || e.edgesRepo == nil {
+		return false
+	}
+	variant = strings.TrimSpace(variant)
+	if variant == "" {
+		_, err := e.edgesRepo.GetBySourceTargetAndType(ctx, tenantID, sourceID, targetID, edgeType)
+		return err == nil
+	}
+	edges, err := e.edgesRepo.ListBySourceTargetAndType(ctx, tenantID, sourceID, targetID, edgeType, 50)
+	if err != nil {
+		return false
+	}
+	for _, ex := range edges {
+		if ex == nil {
+			continue
+		}
+		if edgeDedupVariant(ex.Type, "", ex.Qualifiers, "") == variant {
+			return true
+		}
+	}
+	return false
+}
+
 // isCrossJurisdictionSuspicious checks if an edge between two jurisdictions is suspicious
 // based on the edge type. For "local" relations like REGULATES, CONTROLS_ACCESS, etc.,
 // cross-jurisdiction edges are likely errors (e.g., Indian regulator controlling Saudi company).
@@ -593,4 +741,90 @@ func isCrossJurisdictionSuspicious(edgeType models.DependencyType, srcPath, dstP
 	}
 
 	return false
+}
+
+type edgeBatchBufferKey struct{}
+
+// WithEdgeBatchBuffer attaches an EdgeBatchBuffer to a context.
+// When present, materializeRelationEdge will buffer edges instead of persisting them individually.
+func WithEdgeBatchBuffer(ctx context.Context, buf *EdgeBatchBuffer) context.Context {
+	return context.WithValue(ctx, edgeBatchBufferKey{}, buf)
+}
+
+// EdgeBatchBufferFromContext retrieves the EdgeBatchBuffer from context, or nil.
+func EdgeBatchBufferFromContext(ctx context.Context) *EdgeBatchBuffer {
+	if buf, ok := ctx.Value(edgeBatchBufferKey{}).(*EdgeBatchBuffer); ok {
+		return buf
+	}
+	return nil
+}
+
+// EdgeBatchBuffer accumulates materialized edges and flushes them via CreateMany.
+// Used as an optional optimization: when set on ScoutEngine, materializeRelationEdge
+// buffers edges instead of persisting them individually.
+type EdgeBatchBuffer struct {
+	edges    []*models.DependencyEdge
+	metadata []edgeBatchMeta
+}
+
+type edgeBatchMeta struct {
+	sourcePath string
+	targetPath string
+	sourceLabel string
+	targetLabel string
+	job        *models.ScoutingJob
+}
+
+// NewEdgeBatchBuffer creates an empty batch buffer.
+func NewEdgeBatchBuffer() *EdgeBatchBuffer {
+	return &EdgeBatchBuffer{}
+}
+
+// Add appends an edge to the buffer.
+func (b *EdgeBatchBuffer) Add(edge *models.DependencyEdge, meta edgeBatchMeta) {
+	b.edges = append(b.edges, edge)
+	b.metadata = append(b.metadata, meta)
+}
+
+// Len returns the number of buffered edges.
+func (b *EdgeBatchBuffer) Len() int {
+	if b == nil {
+		return 0
+	}
+	return len(b.edges)
+}
+
+// Flush persists all buffered edges via CreateMany and publishes realtime events.
+func (b *EdgeBatchBuffer) Flush(ctx context.Context, e *ScoutEngine) error {
+	if b == nil || len(b.edges) == 0 {
+		return nil
+	}
+	ids, err := e.edgesRepo.CreateMany(ctx, b.edges)
+	if err != nil {
+		fmt.Printf("[EdgeBatchBuffer] batch flush error: %v (created %d of %d)\n", err, len(ids), len(b.edges))
+	}
+	for i, edge := range b.edges {
+		if edge == nil || edge.ID == "" {
+			continue
+		}
+		meta := b.metadata[i]
+		e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
+			"tenantId":            edge.TenantID,
+			"projectId":           meta.job.ProjectID,
+			"lensId":              strings.TrimSpace(meta.job.LensID),
+			"edgeId":              edge.ID,
+			"sourceFragmentId":    edge.SourceFragmentID,
+			"targetFragmentId":    edge.TargetFragmentID,
+			"sourceCanonicalPath": meta.sourcePath,
+			"targetCanonicalPath": meta.targetPath,
+			"sourceLabel":         meta.sourceLabel,
+			"targetLabel":         meta.targetLabel,
+			"type":                string(edge.Type),
+			"properties":          edge.Properties,
+			"qualifiers":          edge.Qualifiers,
+		})
+	}
+	b.edges = nil
+	b.metadata = nil
+	return err
 }

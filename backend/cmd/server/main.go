@@ -44,6 +44,9 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/wikidata"
 	"google.golang.org/api/idtoken"
 
+	// Redis cache
+	"github.com/igorkirisyuk/sanskrite/internal/cache"
+
 	// Horizon system
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
@@ -558,6 +561,15 @@ func main() {
 		// Used by external providers to avoid repeated calls and stabilize normalization.
 		externalCacheRepo := repo.NewExternalDataCacheRepository(fsClient.Client())
 
+		// Shared Redis client (L1 cache for external data, fragments, skeleton, edge dedup).
+		redisClient := cache.NewRedisClient()
+		if redisClient != nil {
+			externalCacheRepo.WithRedis(redisClient)
+			logger.Printf("Redis client initialized (L1 cache enabled)")
+		} else {
+			logger.Printf("Redis not configured (REDIS_ADDR/REDIS_URL/REDIS_HOST not set; L1 cache disabled)")
+		}
+
 		// Initialize Wikidata client (for Knowledge Search tool)
 		// Wikidata doesn't require API key - uses public API
 		wikidataClient := httphandlers.GetWikidataClientFromEnv()
@@ -625,7 +637,9 @@ func main() {
 		var entityEnricher *ontology.EntityEnricher
 		if wikidataClient != nil {
 			wikidataAdapter := wikidata.NewAdapter(wikidataClient)
-			entityEnricher = ontology.NewEntityEnricher(entitiesRepo, wikidataAdapter, logger)
+			var wdForEnricher ontology.WikidataClientInterface = wikidataAdapter
+			wdForEnricher = wikidata.NewCachedClient(wdForEnricher, externalCacheRepo, wikidata.CacheOptionsFromEnv())
+			entityEnricher = ontology.NewEntityEnricher(entitiesRepo, wdForEnricher, logger)
 		}
 
 		// CanonizationPolicy for path normalization (shared with Horizon; unified rules)
@@ -1077,6 +1091,9 @@ func main() {
 
 		// Horizon repositories
 		horizonFragmentsRepo := horizonrepo.NewHorizonFragmentsRepository(fsClient.Client())
+		if redisClient != nil {
+			horizonFragmentsRepo.WithRedis(redisClient)
+		}
 		horizonFramesRepo := horizonrepo.NewFramesRepository(fsClient.Client())
 		horizonLensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
 		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
@@ -1110,6 +1127,10 @@ func main() {
 			exec.WithHorizonSpendSink(horizonSpendLedger)
 		}
 
+		// Scout execution runtime status (Cloud Tasks preferred, Firestore poller fallback).
+		scoutExecutionReady := false
+		scoutExecutionReason := "scout_dispatch_unavailable"
+
 		// Cloud Tasks dispatcher for Scout jobs (managed queue + autoscaling + retries).
 		var scoutTasksDispatcher *horizontasks.ScoutCloudTasksDispatcher
 		{
@@ -1129,6 +1150,8 @@ func main() {
 					}
 					if d, err := horizontasks.NewScoutCloudTasksDispatcher(ctx, projectID, location, queue, targetURL, saEmail, aud); err == nil {
 						scoutTasksDispatcher = d
+						scoutExecutionReady = true
+						scoutExecutionReason = "scout_cloud_tasks_enabled"
 						logger.Printf("Cloud Tasks (Scout) enabled: queue=%s location=%s target=%s", queue, location, targetURL)
 						horizonScoutingJobsRepo.WithOnCreate(func(c context.Context, job *horizonmodels.ScoutingJob) error {
 							// Best-effort realtime: job created (for Hook->Assemble "Sled" UI).
@@ -1170,11 +1193,15 @@ func main() {
 							return nil
 						})
 					} else {
+						scoutExecutionReason = "scout_cloud_tasks_init_failed"
 						logger.Printf("WARNING: Cloud Tasks (Scout) disabled due to init error: %v", err)
 					}
 				} else {
+					scoutExecutionReason = "scout_cloud_tasks_not_configured"
 					logger.Printf("WARNING: Cloud Tasks (Scout) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
 				}
+			} else {
+				scoutExecutionReason = "scout_cloud_tasks_disabled"
 			}
 		}
 
@@ -1395,6 +1422,8 @@ func main() {
 		if err != nil {
 			logger.Printf("WARNING: Horizon service initialization failed: %v", err)
 		} else {
+			horizonService.SetScoutExecutionRuntime(scoutExecutionReady, scoutExecutionReason)
+			logger.Printf("Horizon scout execution runtime: ready=%t reason=%s", scoutExecutionReady, scoutExecutionReason)
 			horizonService.SetOntologyFactsRepository(ontologyFactsRepo)
 
 			// Initialize Lens subsystem
@@ -1796,7 +1825,12 @@ func main() {
 				if horizonTelemetryRepo != nil {
 					wdForScout = horizontelemetry.NewWikidataTelemetryWrapper(wdAdapter, horizonTelemetryRepo)
 				}
+				wdForScout = wikidata.NewCachedClient(wdForScout, externalCacheRepo, wikidata.CacheOptionsFromEnv())
 				scoutEngine.WithWikidataClient(wdForScout)
+			}
+			// Wire shared Redis client for cross-job caching (skeleton context, edge dedup).
+			if redisClient != nil {
+				scoutEngine.WithRedisClient(redisClient)
 			}
 			// Wire GeoNames into Scout for deterministic /loc normalization (country/admin1/city).
 			if geonamesClientForHorizon != nil {
@@ -1978,7 +2012,12 @@ func main() {
 
 			// Legacy Firestore poller (disabled by default in prod).
 			// Cloud Tasks is the preferred mechanism for executing Scout jobs.
-			if strings.TrimSpace(getEnv("ENABLE_SCOUT_FIRESTORE_POLLER", "0")) == "1" {
+			scoutFirestorePollerEnabled := strings.TrimSpace(getEnv("ENABLE_SCOUT_FIRESTORE_POLLER", "0")) == "1"
+			if !scoutExecutionReady && scoutFirestorePollerEnabled {
+				scoutExecutionReady = true
+				scoutExecutionReason = "scout_firestore_poller_enabled"
+			}
+			if scoutFirestorePollerEnabled {
 				go func() {
 					// Задержка перед стартом
 					time.Sleep(5 * time.Second)

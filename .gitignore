@@ -11,6 +11,7 @@ web/coverage/
 # Env & Secrets
 .env
 .env.*
+!web/.env.example
 web/.env
 web/.env.local
 backend/.env

@@ -43,3 +43,12 @@ func TestNormalizeProductPathForResolve_HierarchicalStays(t *testing.T) {
 		t.Fatalf("normalizeProductPathForResolve(%q) = %q, want empty (already stable)", in, got)
 	}
 }
+
+func TestNormalizeProductPathForResolve_PowerMosfetToComponent(t *testing.T) {
+	ctx := context.Background()
+	in := "/product/finished/mechanical/assembly/power-mosfet"
+	got := normalizeProductPathForResolve(ctx, in)
+	if got != "/product/component/electronic/manufacturing/power-mosfet" {
+		t.Fatalf("normalizeProductPathForResolve(%q) = %q, want %q", in, got, "/product/component/electronic/manufacturing/power-mosfet")
+	}
+}

@@ -45,7 +45,9 @@ type HorizonService struct {
 	fragmentVersionsRepo *repo.HorizonFragmentVersionsRepository
 	lensArtifactsRepo    *repo.LensArtifactsRepository // Phase 2 Strategic Overlay artifacts
 	domainAnswersRepo    *repo.DomainAnswerSnapshotsRepository
-	ontologyFactsRepo *corerepo.OntologyFactsRepository
+	ontologyFactsRepo    *corerepo.OntologyFactsRepository
+	scoutExecutionReady  bool
+	scoutExecutionReason string
 }
 
 // NewHorizonService создает новый экземпляр HorizonService с валидацией зависимостей
@@ -237,6 +239,24 @@ func (s *HorizonService) RealtimePublisher() *realtime.Publisher {
 		return nil
 	}
 	return s.deps.RealtimePublisher
+}
+
+// SetScoutExecutionRuntime stores runtime readiness for scout execution (Cloud Tasks or fallback worker).
+// It is set during server bootstrap and read by HTTP handlers to fail fast when pipeline execution is unavailable.
+func (s *HorizonService) SetScoutExecutionRuntime(ready bool, reason string) {
+	if s == nil {
+		return
+	}
+	s.scoutExecutionReady = ready
+	s.scoutExecutionReason = strings.TrimSpace(reason)
+}
+
+// ScoutExecutionRuntime returns whether scout execution is currently available and the status reason code.
+func (s *HorizonService) ScoutExecutionRuntime() (bool, string) {
+	if s == nil {
+		return false, "horizon_service_unavailable"
+	}
+	return s.scoutExecutionReady, strings.TrimSpace(s.scoutExecutionReason)
 }
 
 // HealthCheck проверяет состояние сервиса

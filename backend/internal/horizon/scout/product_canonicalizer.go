@@ -134,10 +134,12 @@ func (c *ProductCanonicalizer) inferFromPatterns(originalName, normalizedName st
 	if category == "" {
 		if strings.Contains(name, "component") || strings.Contains(name, "part") || strings.Contains(name, "module") ||
 			strings.Contains(name, "semiconductor") || strings.Contains(name, "wafer") || strings.Contains(name, "chip") ||
+			strings.Contains(name, "mosfet") || strings.Contains(name, "transistor") || strings.Contains(name, "igbt") || strings.Contains(name, "diode") ||
 			strings.Contains(name, "battery") && (strings.Contains(name, "cell") || strings.Contains(name, "cathode") || strings.Contains(name, "anode")) {
 			category = "component"
 			if strings.Contains(name, "semiconductor") || strings.Contains(name, "wafer") || strings.Contains(name, "chip") ||
-				strings.Contains(name, "electronic") {
+				strings.Contains(name, "electronic") || strings.Contains(name, "mosfet") || strings.Contains(name, "transistor") ||
+				strings.Contains(name, "igbt") || strings.Contains(name, "diode") {
 				productType = "electronic"
 				stage = "manufacturing"
 			} else if strings.Contains(name, "battery") {

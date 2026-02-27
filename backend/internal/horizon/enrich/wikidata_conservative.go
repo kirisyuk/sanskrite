@@ -69,7 +69,28 @@ func EnrichFragmentFromWikidataIfPresent(
 	if err != nil || ed == nil {
 		return false, fmt.Errorf("GetEntityData(%s) failed: %w", qid, err)
 	}
-	return EnrichFragmentFromEntityData(fragment, ed, time.Now().UTC(), opts)
+	changed, err = EnrichFragmentFromEntityData(fragment, ed, time.Now().UTC(), opts)
+	if err != nil {
+		return changed, err
+	}
+	if hmodels.HasRealGeoCoordinates(fragment.Coordinates) {
+		return changed, nil
+	}
+
+	// Fallback: some entities don't carry P625 directly, but have location links
+	// (e.g., headquarters location P159) that do carry P625.
+	locationQID := extractWikidataLocationEntityQID(ed.PropertiesRaw)
+	if locationQID == "" || locationQID == qid {
+		return changed, nil
+	}
+	locData, locErr := client.GetEntityData(ctx, locationQID)
+	if locErr != nil || locData == nil {
+		return changed, nil
+	}
+	if applyCoordinatesFromWikidata(fragment, locData.PropertiesRaw, opts.Overwrite) {
+		changed = true
+	}
+	return changed, nil
 }
 
 // EnrichFragmentFromEntityData applies enrichment from an already-fetched Wikidata entity data.
@@ -203,9 +224,9 @@ func applyCoordinatesFromWikidata(fragment *hmodels.HorizonFragment, props map[s
 	}
 
 	changed := false
-	existingValid := fragment.Coordinates != nil && hmodels.IsValidCoordinates(fragment.Coordinates.Lat, fragment.Coordinates.Lon)
-	if overwrite || !existingValid {
-		if !existingValid || fragment.Coordinates.Lat != lat || fragment.Coordinates.Lon != lon {
+	existingReal := hmodels.HasRealGeoCoordinates(fragment.Coordinates)
+	if overwrite || !existingReal {
+		if !existingReal || fragment.Coordinates.Lat != lat || fragment.Coordinates.Lon != lon {
 			fragment.Coordinates = &hmodels.Coordinates{Lat: lat, Lon: lon}
 			changed = true
 		}
@@ -523,6 +544,22 @@ func extractEntityIDs(props map[string]interface{}, propID string) []string {
 		return nil
 	}
 	return out
+}
+
+func extractWikidataLocationEntityQID(props map[string]interface{}) string {
+	if props == nil {
+		return ""
+	}
+	for _, pid := range []string{"P159", "P276", "P131"} {
+		ids := extractEntityIDs(props, pid)
+		for _, id := range ids {
+			qid := strings.TrimSpace(id)
+			if strings.HasPrefix(qid, "Q") {
+				return qid
+			}
+		}
+	}
+	return ""
 }
 
 func firstNonEmptyMonolingual(props map[string]interface{}, propID string) string {

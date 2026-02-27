@@ -27,6 +27,11 @@ const (
 	RuntimeContractContextEnvelope      = "runtime.context_envelope"
 	RuntimeContractMissingInfoRelevance = "runtime.missing_info_relevance"
 	RuntimeContractMetricsRefresh       = "runtime.metrics_refresh"
+	RuntimeContractBudgetAdaptiveFanout = "runtime.budget_adaptive_fanout"
+	RuntimeContractContextScope         = "runtime.context_scope"
+	RuntimeContractExecutionPlan        = "runtime.execution_plan"
+	RuntimeContractCompletionSemantics  = "runtime.completion_semantics"
+	RuntimeContractPolicyOutcome        = "runtime.policy_outcome"
 )
 
 const (

@@ -55,9 +55,11 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 
 	var totalJobs int
 	var completedJobs int
+	var partialJobs int
 	var failedJobs int
 	var pendingJobs int
 	var runningJobs int
+	var fatalError map[string]interface{}
 	for _, job := range jobs {
 		if job == nil {
 			continue
@@ -65,7 +67,11 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 		totalJobs++
 		// Prefer AgentJob.Status, fall back to CurrentState (best-effort).
 		switch strings.ToLower(string(job.Status)) {
-		case "completed", "partial":
+		case "completed":
+			completedJobs++
+			continue
+		case "partial":
+			partialJobs++
 			completedJobs++
 			continue
 		case "failed":
@@ -100,23 +106,64 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 	if totalJobs > 0 && (pendingJobs > 0 || runningJobs > 0) {
 		status = "scouting"
 		stage = "scouting"
+		ready, reason, message := h.scoutExecutionAvailability()
+		if !ready {
+			status = "failed"
+			stage = "failed"
+			fatalError = map[string]interface{}{
+				"code":    reason,
+				"message": message,
+				"phase":   "scouting",
+				"fatal":   true,
+			}
+		}
 	}
 	if totalJobs > 0 {
 		progress = float64(completedJobs+failedJobs) / float64(totalJobs)
 	}
 	// If all jobs are terminal (completed/failed), we are ready.
-	if totalJobs > 0 && pendingJobs == 0 && runningJobs == 0 {
+	if totalJobs > 0 && pendingJobs == 0 && runningJobs == 0 && fatalError == nil {
 		status = "ready"
 		stage = "ready"
 	}
 
 	// Формируем ответ согласно документации
+	terminalOutcome := ""
+	var reasonMap map[string]interface{}
+	if lens.ViewConfig != nil {
+		if asRaw, ok := lens.ViewConfig["assemblyStatus"].(map[string]interface{}); ok && asRaw != nil {
+			if v, ok2 := asRaw["terminalOutcome"].(string); ok2 {
+				terminalOutcome = strings.TrimSpace(v)
+			}
+			if rm, ok2 := asRaw["reasonMap"].(map[string]interface{}); ok2 && rm != nil {
+				reasonMap = rm
+			}
+		}
+	}
+	if terminalOutcome == "" && fatalError != nil {
+		terminalOutcome = "failed"
+	}
+	if terminalOutcome == "" && stage == "ready" {
+		switch {
+		case completedJobs == 0 && failedJobs > 0:
+			terminalOutcome = "failed"
+		case failedJobs > 0 || partialJobs > 0:
+			terminalOutcome = "partial_completed"
+		default:
+			terminalOutcome = "completed"
+		}
+	}
+
 	scoutingPhaseStatus := "completed"
-	if totalJobs > 0 && (pendingJobs > 0 || runningJobs > 0) {
+	if fatalError != nil {
+		scoutingPhaseStatus = "failed"
+	} else if totalJobs > 0 && (pendingJobs > 0 || runningJobs > 0) {
 		scoutingPhaseStatus = "scouting"
 	}
 	readyPhaseStatus := "pending"
-	if stage == "ready" {
+	if fatalError != nil {
+		readyPhaseStatus = "failed"
+	} else if stage == "ready" {
 		readyPhaseStatus = "ready"
 	}
 	stageMap := map[string]interface{}{
@@ -138,11 +185,15 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 			"status": readyPhaseStatus,
 		},
 	}
+	if fatalError != nil {
+		stageMap["scouting"].(map[string]interface{})["error"] = fatalError
+	}
 	response := map[string]interface{}{
-		"status":   status,
-		"stage":    stage,
-		"progress": progress,
-		"stages":   stageMap,
+		"status":          status,
+		"stage":           stage,
+		"progress":        progress,
+		"terminalOutcome": terminalOutcome,
+		"stages":          stageMap,
 		// Backward compatibility: keep old field names for a deprecation window.
 		"phase":  stage,
 		"phases": stageMap,
@@ -150,6 +201,12 @@ func (h *HorizonHandlers) GetAssemblyStatus(w http.ResponseWriter, r *http.Reque
 			"nodes": []interface{}{}, // TODO: Получить узлы графа
 			"edges": []interface{}{}, // TODO: Получить рёбра графа
 		},
+	}
+	if reasonMap != nil {
+		response["reasonMap"] = reasonMap
+	}
+	if fatalError != nil {
+		response["fatalError"] = fatalError
 	}
 
 	w.Header().Set("Content-Type", "application/json")

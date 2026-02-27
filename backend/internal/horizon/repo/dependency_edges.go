@@ -51,6 +51,7 @@ func getEdgeAffectCollector(ctx context.Context) func(string, string) {
 
 // DependencyEdgesRepository репозиторий для работы с DependencyEdge
 type DependencyEdgesRepository struct {
+	db               *firestore.Client
 	col              *firestore.CollectionRef
 	validationPolicy *policy.PolicyExecutor      // Optional: for edge validation
 	fragmentsRepo    *HorizonFragmentsRepository // Optional: for fragment type lookup
@@ -60,6 +61,7 @@ type DependencyEdgesRepository struct {
 // NewDependencyEdgesRepository создает новый репозиторий
 func NewDependencyEdgesRepository(db *firestore.Client) *DependencyEdgesRepository {
 	return &DependencyEdgesRepository{
+		db:  db,
 		col: db.Collection("horizon_dependency_edges"),
 	}
 }
@@ -133,6 +135,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 		// Example: PRODUCT OWNS ORGANIZATION -> ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
 		// Use path-aware canonicalization to handle community subtypes (dynasty/tribe).
 		if sourceType != "" && targetType != "" {
+			reason, _ := edge.Qualifiers["reason"].(string)
 			canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
 				EdgeType:          edge.Type,
 				SourceType:        srcTypeActual,
@@ -140,6 +143,8 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 				SourcePath:        sourcePath,
 				TargetPath:        targetPath,
 				RawRelationType:   string(edge.Type),
+				Reason:            strings.TrimSpace(reason),
+				Qualifiers:        edge.Qualifiers,
 				OwnershipEvidence: models.HasOwnershipEvidence("", edge.Qualifiers, edge.Metrics),
 			})
 			if canon.Changed {
@@ -158,6 +163,11 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 				}
 				if edge.Qualifiers == nil {
 					edge.Qualifiers = map[string]interface{}{}
+				}
+				if edge.Type == models.DependencyTypeAssures && oldType == models.DependencyTypeAuditedBy {
+					if _, ok := edge.Qualifiers["assurance_type"]; !ok {
+						edge.Qualifiers["assurance_type"] = "audit"
+					}
 				}
 				edge.Qualifiers["canonicalized"] = true
 				edge.Qualifiers["canonicalizedFromEdgeType"] = string(canonFromEdgeType)
@@ -302,6 +312,9 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 		if canonFromEdgeType != "" {
 			edge.SetPolicyOriginalType(canonFromEdgeType)
 		}
+		if edge.GetPolicyStatus() == models.PolicyStatusQuarantined {
+			return "", fmt.Errorf("edge blocked by validation policy: %s", strings.TrimSpace(policyReason))
+		}
 		r.recordPolicyDecisionTelemetry(
 			ctx,
 			edge.TenantID,
@@ -391,6 +404,57 @@ func (r *DependencyEdgesRepository) recordPolicyDecisionTelemetry(
 	}
 }
 
+// CreateMany batch-creates pre-validated edges in Firestore. Skips per-edge policy validation
+// (assumes edges were already canonicalized and validated by the caller, e.g. edge_materializer).
+// Respects Firestore's 500-write batch limit by chunking automatically.
+func (r *DependencyEdgesRepository) CreateMany(ctx context.Context, edges []*models.DependencyEdge) ([]string, error) {
+	if r == nil || r.db == nil || r.col == nil {
+		return nil, ErrInvalidDocument
+	}
+	if len(edges) == 0 {
+		return nil, nil
+	}
+
+	const batchLimit = 500
+	ids := make([]string, 0, len(edges))
+	now := time.Now().UTC()
+	fn := getEdgeAffectCollector(ctx)
+
+	for i := 0; i < len(edges); i += batchLimit {
+		end := i + batchLimit
+		if end > len(edges) {
+			end = len(edges)
+		}
+		chunk := edges[i:end]
+
+		batch := r.db.Batch()
+		for _, edge := range chunk {
+			if edge == nil {
+				continue
+			}
+			edge.Metadata.CreatedAt = now
+			edge.Metadata.LastUpdatedAt = now
+			ref := r.col.NewDoc()
+			edge.ID = ref.ID
+			ids = append(ids, ref.ID)
+			batch.Set(ref, edge)
+		}
+		if _, err := batch.Commit(ctx); err != nil {
+			return ids, fmt.Errorf("batch commit failed at offset %d: %w", i, err)
+		}
+		for _, edge := range chunk {
+			if edge != nil {
+				tracking.RecordEdgeCreated(ctx, edge.ID)
+				if fn != nil {
+					fn(edge.SourceFragmentID, edge.TargetFragmentID)
+				}
+			}
+		}
+	}
+
+	return ids, nil
+}
+
 // Get получает DependencyEdge по ID
 func (r *DependencyEdgesRepository) Get(ctx context.Context, id string) (*models.DependencyEdge, error) {
 	if id == "" {
@@ -447,6 +511,32 @@ func (r *DependencyEdgesRepository) GetBySourceTargetAndType(ctx context.Context
 		return nil, err
 	}
 	return &edge, nil
+}
+
+// ListBySourceTargetAndType returns all edges for exact source/target/type triple (best-effort capped).
+func (r *DependencyEdgesRepository) ListBySourceTargetAndType(ctx context.Context, tenantID, sourceFragmentID, targetFragmentID string, edgeType models.DependencyType, limit int) ([]*models.DependencyEdge, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	q := r.col.Where("tenantId", "==", tenantID).
+		Where("sourceFragmentId", "==", sourceFragmentID).
+		Where("targetFragmentId", "==", targetFragmentID).
+		Where("type", "==", edgeType).
+		Limit(limit)
+
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.DependencyEdge, 0, len(docs))
+	for _, d := range docs {
+		var edge models.DependencyEdge
+		if err := d.DataTo(&edge); err != nil {
+			continue
+		}
+		out = append(out, &edge)
+	}
+	return out, nil
 }
 
 // ListBySource получает список исходящих DependencyEdge

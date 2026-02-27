@@ -1162,67 +1162,77 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 	sourcePath := sourceFrag.CanonicalPath
 	targetPath := targetFrag.CanonicalPath
 
-	useUnified := policyUnifiedContractEnabled() && pc.validationExec != nil
-	shadow := policyUnifiedShadowModeEnabled() && pc.validationExec != nil
-	if useUnified || shadow {
-		unifiedViolations, decision, err := pc.checkEdgeDirectionWithValidationPolicy(ctx, edge, sourceType, targetType, sourcePath, targetPath)
-		if err != nil {
-			LogPolicyEvent("policy_checker_policy", PolicyLogStageError, map[string]interface{}{
-				"edge_id":     edge.ID,
-				"action":      "validation_executor_error",
-				"error_class": "policy_execution_error",
-				"error":       err,
-			})
-		} else if useUnified {
-			violations = append(violations, unifiedViolations...)
-			if shadow {
+	// If the edge was already validated during materialization, skip redundant re-validation.
+	_, alreadyValidated := edge.Qualifiers["pipelineValidated"]
+	if !alreadyValidated {
+		useUnified := policyUnifiedContractEnabled() && pc.validationExec != nil
+		shadow := policyUnifiedShadowModeEnabled() && pc.validationExec != nil
+		if useUnified || shadow {
+			unifiedViolations, decision, err := pc.checkEdgeDirectionWithValidationPolicy(ctx, edge, sourceType, targetType, sourcePath, targetPath)
+			if err != nil {
+				LogPolicyEvent("policy_checker_policy", PolicyLogStageError, map[string]interface{}{
+					"edge_id":     edge.ID,
+					"action":      "validation_executor_error",
+					"error_class": "policy_execution_error",
+					"error":       err,
+				})
+			} else if useUnified {
+				violations = append(violations, unifiedViolations...)
+				if shadow {
+					legacy := pc.checkEdgeDirectionLegacy(edge, sourceType, targetType)
+					pc.logEdgeDirectionShadowDiff(edge, decision, unifiedViolations, legacy)
+				}
+			} else {
 				legacy := pc.checkEdgeDirectionLegacy(edge, sourceType, targetType)
+				violations = append(violations, legacy...)
 				pc.logEdgeDirectionShadowDiff(edge, decision, unifiedViolations, legacy)
 			}
 		} else {
-			legacy := pc.checkEdgeDirectionLegacy(edge, sourceType, targetType)
-			violations = append(violations, legacy...)
-			pc.logEdgeDirectionShadowDiff(edge, decision, unifiedViolations, legacy)
+			violations = append(violations, pc.checkEdgeDirectionLegacy(edge, sourceType, targetType)...)
 		}
-	} else {
-		violations = append(violations, pc.checkEdgeDirectionLegacy(edge, sourceType, targetType)...)
 	}
 
-	// Check edge canonicalization with the same path-aware policy as ingestion/repo.
-	canon := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
-		EdgeType:        edge.Type,
-		SourceType:      sourceType,
-		TargetType:      targetType,
-		SourcePath:      sourcePath,
-		TargetPath:      targetPath,
-		RawRelationType: string(edge.Type),
-	})
-	if canon.Changed {
-		v := PolicyViolation{
-			ID:          uuid.New().String(),
-			Type:        ViolationTypeMismatch,
-			Severity:    SeverityWarning,
-			EdgeID:      edge.ID,
-			ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
-			Rule:        "edge_canonicalization",
-			Description: canon.Reason,
-			Confidence:  0.9,
-			AutoFixable: true,
-			DetectedAt:  time.Now(),
-			DetectedBy:  "deterministic",
-		}
+	// If the edge was already canonicalized during materialization, skip redundant re-canonicalization.
+	_, alreadyCanonicalized := edge.Qualifiers["pipelineCanonicalized"]
+	if !alreadyCanonicalized {
+		reason, _ := edge.Qualifiers["reason"].(string)
+		canon := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+			EdgeType:        edge.Type,
+			SourceType:      sourceType,
+			TargetType:      targetType,
+			SourcePath:      sourcePath,
+			TargetPath:      targetPath,
+			RawRelationType: string(edge.Type),
+			Reason:          strings.TrimSpace(reason),
+			Qualifiers:      edge.Qualifiers,
+		})
+		if canon.Changed {
+			v := PolicyViolation{
+				ID:          uuid.New().String(),
+				Type:        ViolationTypeMismatch,
+				Severity:    SeverityWarning,
+				EdgeID:      edge.ID,
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				Rule:        "edge_canonicalization",
+				Description: canon.Reason,
+				Confidence:  0.9,
+				AutoFixable: true,
+				DetectedAt:  time.Now(),
+				DetectedBy:  "deterministic",
+			}
 
-		v.ExpectedValue = string(canon.EdgeType)
-		v.SuggestedFix = &EnforcementTask{
-			Type:     TaskCanonicalizeEdge,
-			TargetID: edge.ID,
-			Params: map[string]interface{}{
-				"newType":    string(canon.EdgeType),
-				"shouldSwap": canon.ShouldSwap,
-			},
-		}
+			v.ExpectedValue = string(canon.EdgeType)
+			v.SuggestedFix = &EnforcementTask{
+				Type:     TaskCanonicalizeEdge,
+				TargetID: edge.ID,
+				Params: map[string]interface{}{
+					"newType":    string(canon.EdgeType),
+					"shouldSwap": canon.ShouldSwap,
+				},
+			}
 
-		violations = append(violations, v)
+			violations = append(violations, v)
+		}
 	}
 
 	// Check symmetric edge normalization

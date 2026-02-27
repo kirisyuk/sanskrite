@@ -316,17 +316,23 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	var sourceType, targetType, relationType string
 	var sourceID, targetID string
 	var sourcePath, targetPath string
+	var relationReason string
+	var relationQualifiers map[string]interface{}
 
 	if input.Edge != nil {
 		sourceID = input.Edge.SourceFragmentID
 		targetID = input.Edge.TargetFragmentID
 		relationType = string(input.Edge.Type)
+		relationQualifiers = input.Edge.Qualifiers
 		if input.Edge.Qualifiers != nil {
 			if v, ok := input.Edge.Qualifiers["sourceCanonicalPath"].(string); ok {
 				sourcePath = strings.TrimSpace(v)
 			}
 			if v, ok := input.Edge.Qualifiers["targetCanonicalPath"].(string); ok {
 				targetPath = strings.TrimSpace(v)
+			}
+			if v, ok := input.Edge.Qualifiers["reason"].(string); ok {
+				relationReason = strings.TrimSpace(v)
 			}
 		}
 		log.Printf("%s Validating edge: sourceID=%s, targetID=%s, type=%s",
@@ -339,6 +345,8 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		relationType, _ = input.Context["relationType"].(string)
 		sourcePath, _ = input.Context["sourceCanonicalPath"].(string)
 		targetPath, _ = input.Context["targetCanonicalPath"].(string)
+		relationReason, _ = input.Context["reason"].(string)
+		relationQualifiers = mapFromAny(input.Context["qualifiers"])
 		log.Printf("%s Validating edge from context: sourceType=%s, targetType=%s, type=%s",
 			logPrefix, sourceType, targetType, relationType)
 	}
@@ -430,6 +438,26 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		} else if rule != nil {
 			log.Printf("%s Direction validation passed: %s -> %s (%s). Rule: %s",
 				logPrefix, sourceType, targetType, relationType, rule.Description)
+		}
+	}
+
+	// Policy 2.2: role-based disambiguation for directionally ambiguous edges.
+	// Type compatibility alone does not resolve source/target semantics for these relations.
+	if relationType != "" {
+		edgeType := horizonmodels.DependencyType(relationType)
+		if requiresDirectionalRoleEvidence(edgeType, horizonmodels.FragmentType(sourceType), horizonmodels.FragmentType(targetType)) &&
+			!hasDirectionalRoleEvidence(edgeType, relationReason, relationQualifiers) {
+			reason := fmt.Sprintf("%s requires explicit direction evidence: qualifiers.source_role/target_role (or direction_basis)", edgeType)
+			log.Printf("%s QUARANTINE: %s", logPrefix, reason)
+			return PolicyDecision{
+				Action: ActionQuarantineSoft,
+				Params: map[string]interface{}{
+					"penalty": 0.35,
+					"reason":  reason,
+				},
+				DecisionPath: "rule:hardcoded:direction_role_ambiguous",
+				Confidence:   0.65,
+			}, nil
 		}
 	}
 
@@ -667,5 +695,153 @@ func quarantinePenaltyForTriple(edgeType horizonmodels.DependencyType, sourceTyp
 		return 0.30, "quarantine: FOCUSES_ON requires DOMAIN source"
 	default:
 		return 0.20, ""
+	}
+}
+
+func requiresDirectionalRoleEvidence(
+	edgeType horizonmodels.DependencyType,
+	sourceType, targetType horizonmodels.FragmentType,
+) bool {
+	isOrg := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeOrganization }
+	isFac := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeFacility }
+	isProgram := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeProgram }
+	isCommunity := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeCommunity }
+	isPerson := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypePerson }
+	isActorLike := func(t horizonmodels.FragmentType) bool {
+		return isOrg(t) || isFac(t) || isProgram(t) || isCommunity(t) || isPerson(t)
+	}
+
+	switch edgeType {
+	case horizonmodels.DependencyTypeOwns,
+		horizonmodels.DependencyTypeSubsidiaryOf,
+		horizonmodels.DependencyTypeInvestsIn,
+		horizonmodels.DependencyTypeAssures,
+		horizonmodels.DependencyTypeControls:
+		return isOrg(sourceType) && isOrg(targetType)
+	case horizonmodels.DependencyTypeDependsOn:
+		return isActorLike(sourceType) && isActorLike(targetType)
+	case horizonmodels.DependencyTypeSuppliesTo:
+		return (isOrg(sourceType) || isFac(sourceType)) && (isOrg(targetType) || isFac(targetType))
+	default:
+		return false
+	}
+}
+
+func hasDirectionalRoleEvidence(edgeType horizonmodels.DependencyType, reason string, qualifiers map[string]interface{}) bool {
+	_ = reason // role qualifiers are the deterministic contract for directional ambiguity handling.
+	sourceRole := normalizedRole(readStringAny(qualifiers, "source_role", "sourceRole", "subject_role", "subjectRole"))
+	targetRole := normalizedRole(readStringAny(qualifiers, "target_role", "targetRole", "object_role", "objectRole"))
+	if sourceRole != "" || targetRole != "" {
+		return rolePairMatchesEdgeType(edgeType, sourceRole, targetRole)
+	}
+
+	dir := normalizedRole(readStringAny(qualifiers, "direction_basis", "directionBasis", "relation_direction", "relationDirection"))
+	return directionQualifierMatchesEdgeType(edgeType, dir)
+}
+
+func rolePairMatchesEdgeType(edgeType horizonmodels.DependencyType, sourceRole, targetRole string) bool {
+	switch edgeType {
+	case horizonmodels.DependencyTypeOwns:
+		return inRole(sourceRole, "owner", "parent_owner", "shareholder", "beneficial_owner") &&
+			inRole(targetRole, "owned_entity", "subsidiary", "asset")
+	case horizonmodels.DependencyTypeSubsidiaryOf:
+		return inRole(sourceRole, "subsidiary", "owned_entity", "child_entity") &&
+			inRole(targetRole, "parent_owner", "owner", "parent")
+	case horizonmodels.DependencyTypeInvestsIn:
+		return inRole(sourceRole, "investor") &&
+			inRole(targetRole, "investee", "portfolio_company", "target")
+	case horizonmodels.DependencyTypeAssures:
+		return inRole(sourceRole, "assurer", "auditor", "certifier", "inspector", "regulator") &&
+			inRole(targetRole, "assuree", "audited_entity", "certified_entity", "inspected_entity", "regulated_entity")
+	case horizonmodels.DependencyTypeControls:
+		return inRole(sourceRole, "controller") &&
+			inRole(targetRole, "controlled", "controlled_entity")
+	case horizonmodels.DependencyTypeDependsOn:
+		return inRole(sourceRole, "dependent", "consumer", "requirer", "requester") &&
+			inRole(targetRole, "dependency", "supplier", "provider", "enabler", "input")
+	case horizonmodels.DependencyTypeSuppliesTo:
+		return inRole(sourceRole, "supplier", "provider", "seller", "producer", "vendor") &&
+			inRole(targetRole, "customer", "buyer", "consumer", "recipient", "offtaker")
+	default:
+		return false
+	}
+}
+
+func directionQualifierMatchesEdgeType(edgeType horizonmodels.DependencyType, direction string) bool {
+	switch edgeType {
+	case horizonmodels.DependencyTypeOwns:
+		return inRole(direction, "owner_to_owned", "parent_to_subsidiary")
+	case horizonmodels.DependencyTypeSubsidiaryOf:
+		return inRole(direction, "subsidiary_to_parent", "child_to_parent")
+	case horizonmodels.DependencyTypeInvestsIn:
+		return inRole(direction, "investor_to_investee")
+	case horizonmodels.DependencyTypeAssures:
+		return inRole(direction, "assurer_to_assuree", "auditor_to_audited")
+	case horizonmodels.DependencyTypeControls:
+		return inRole(direction, "controller_to_controlled")
+	case horizonmodels.DependencyTypeDependsOn:
+		return inRole(direction, "dependent_to_dependency", "consumer_to_supplier")
+	case horizonmodels.DependencyTypeSuppliesTo:
+		return inRole(direction, "supplier_to_customer", "provider_to_recipient")
+	default:
+		return false
+	}
+}
+
+func readStringAny(m map[string]interface{}, keys ...string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			switch s := v.(type) {
+			case string:
+				if strings.TrimSpace(s) != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func inRole(role string, allowed ...string) bool {
+	role = normalizedRole(role)
+	if role == "" {
+		return false
+	}
+	for _, a := range allowed {
+		if role == normalizedRole(a) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedRole(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, "-", "_")
+	s = strings.ReplaceAll(s, " ", "_")
+	return s
+}
+
+func mapFromAny(v interface{}) map[string]interface{} {
+	if v == nil {
+		return nil
+	}
+	switch m := v.(type) {
+	case map[string]interface{}:
+		return m
+	case map[string]string:
+		out := make(map[string]interface{}, len(m))
+		for k, vv := range m {
+			out[k] = vv
+		}
+		return out
+	default:
+		return nil
 	}
 }

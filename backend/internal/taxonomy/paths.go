@@ -1099,6 +1099,8 @@ func normalizeLegalForm(legalForm string) (canonical string, original string) {
 		"as": "jsc", "aksjeselskap": "jsc", "anonim şirket": "jsc",
 		"ab": "jsc", "aktiebolag": "jsc",
 		"kk": "jsc", "kabushiki kaisha": "jsc", "株式会社": "jsc",
+		"nv": "nv", "naamloze vennootschap": "nv",
+		"bv": "bv", "besloten vennootschap": "bv",
 
 		// LTD/Limited equivalents
 		"ltd": "ltd", "limited": "ltd",
@@ -1132,7 +1134,13 @@ func normalizeLegalForm(legalForm string) (canonical string, original string) {
 	// Remove common punctuation and try again
 	cleaned := strings.ReplaceAll(normalized, ".", "")
 	cleaned = strings.ReplaceAll(cleaned, ",", "")
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
 	if canonical, ok := legalFormMap[cleaned]; ok {
+		return canonical, legalForm
+	}
+	// Handle spaced letter abbreviations (e.g., "b v", "p j s c").
+	condensed := strings.ReplaceAll(cleaned, " ", "")
+	if canonical, ok := legalFormMap[condensed]; ok {
 		return canonical, legalForm
 	}
 
@@ -1175,23 +1183,37 @@ func extractLegalFormFromName(orgName string) (nameWithoutForm string, legalForm
 	// Try end of name first (most common pattern)
 	words := strings.Fields(orgName)
 	if len(words) > 0 {
-		lastWord := strings.Trim(words[len(words)-1], ".,;:!?()[]{}")
-		if canonical, original := normalizeLegalForm(lastWord); canonical != "" {
-			// Found legal form at the end
-			nameWithoutForm = strings.TrimSpace(strings.TrimSuffix(orgName, lastWord))
-			nameWithoutForm = strings.Trim(nameWithoutForm, ".,;:!?()[]{}")
-			return nameWithoutForm, canonical, original
+		maxParts := 4
+		if len(words) < maxParts {
+			maxParts = len(words)
+		}
+		for n := maxParts; n >= 1; n-- {
+			tail := strings.Join(words[len(words)-n:], " ")
+			tail = strings.Trim(tail, ".,;:!?()[]{}")
+			if canonical, original := normalizeLegalForm(tail); canonical != "" {
+				// Found legal form at the end (supports "B V", "P J S C", etc.)
+				nameWithoutForm = strings.Join(words[:len(words)-n], " ")
+				nameWithoutForm = strings.Trim(nameWithoutForm, ".,;:!?()[]{}")
+				return nameWithoutForm, canonical, original
+			}
 		}
 	}
 
 	// Try beginning (less common, e.g., "GmbH Company Name")
 	if len(words) > 0 {
-		firstWord := strings.Trim(words[0], ".,;:!?()[]{}")
-		if canonical, original := normalizeLegalForm(firstWord); canonical != "" {
-			// Found legal form at the beginning
-			nameWithoutForm = strings.TrimSpace(strings.TrimPrefix(orgName, firstWord))
-			nameWithoutForm = strings.Trim(nameWithoutForm, ".,;:!?()[]{}")
-			return nameWithoutForm, canonical, original
+		maxParts := 4
+		if len(words) < maxParts {
+			maxParts = len(words)
+		}
+		for n := maxParts; n >= 1; n-- {
+			head := strings.Join(words[:n], " ")
+			head = strings.Trim(head, ".,;:!?()[]{}")
+			if canonical, original := normalizeLegalForm(head); canonical != "" {
+				// Found legal form at the beginning (supports "P J S C Company").
+				nameWithoutForm = strings.Join(words[n:], " ")
+				nameWithoutForm = strings.Trim(nameWithoutForm, ".,;:!?()[]{}")
+				return nameWithoutForm, canonical, original
+			}
 		}
 	}
 

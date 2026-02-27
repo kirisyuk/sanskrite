@@ -379,6 +379,10 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		http.Error(w, "query or intent is required", http.StatusBadRequest)
 		return
 	}
+	requestedMode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if requestedMode == "" {
+		requestedMode = "research_first"
+	}
 
 	// Correlation/session IDs (optional, but recommended for realtime UX).
 	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
@@ -412,6 +416,35 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		"requestedMetricsN": len(req.RequestedMetrics),
 		"prefetchScopeN":    len(req.PrefetchScope),
 	})
+
+	if requestedMode != "just_open" {
+		ready, reason, message := h.scoutExecutionAvailability()
+		if !ready {
+			trace.Log(ctx, "lens_create", "lens.from_query.blocked", map[string]any{
+				"tenantId":          authInfo.TenantID,
+				"projectId":         req.ProjectID,
+				"mode":              requestedMode,
+				"scoutReady":        false,
+				"scoutReadyReason":  reason,
+				"maxRecursionDepth": req.MaxRecursionDepth,
+			})
+			h.publishAssemblyFatal(
+				ctx,
+				authInfo.TenantID,
+				req.ProjectID,
+				"",
+				"scouting",
+				correlationID,
+				sessionID,
+				reason,
+				message,
+			)
+			writeFatalPipelineError(w, http.StatusServiceUnavailable, reason, message, "scouting", map[string]interface{}{
+				"mode": requestedMode,
+			})
+			return
+		}
+	}
 
 	// 1) Resolve intent (precheck). Pass existing domains so LLM can avoid duplicates.
 	intent := (*agents.IntentResolution)(nil)
@@ -738,11 +771,7 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	// Mode semantics:
 	// - just_open: create lens without creating initial scouting jobs (best-effort)
 	// - research_first: normal behavior (jobs created for scope + deferred anchors/first-order entities)
-	mode := strings.ToLower(strings.TrimSpace(req.Mode))
-	if mode == "" {
-		// Default: if domains exist, research first; else keep legacy behavior (research first).
-		mode = "research_first"
-	}
+	mode := requestedMode
 	createCtx := ctx
 	if mode == "just_open" {
 		createCtx = hlens.WithSkipScouting(createCtx)

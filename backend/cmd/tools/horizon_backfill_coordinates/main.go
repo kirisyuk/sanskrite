@@ -26,6 +26,7 @@ import (
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/wikidata"
 )
 
 var (
@@ -40,10 +41,15 @@ var (
 	dryRun = flag.Bool("dry-run", false, "Force dry-run even if --apply")
 
 	// Source selection
-	skipGeonames   = flag.Bool("skip-geonames", false, "Skip GeoNames (for /loc/*)")
-	skipGeocoding  = flag.Bool("skip-geocoding", false, "Skip Google Geocoding (for org/facility)")
-	typesFilter    = flag.String("types", "", "Comma-separated fragment types to process (empty = all geo-relevant)")
-	pathPrefix     = flag.String("path-prefix", "", "Only process canonicalPath with this prefix (e.g. /org/)")
+	skipGeonames        = flag.Bool("skip-geonames", false, "Skip GeoNames (for /loc/*)")
+	skipGeocoding       = flag.Bool("skip-geocoding", false, "Skip Google Geocoding (for org/facility)")
+	skipWikidata        = flag.Bool("skip-wikidata", false, "Skip Wikidata enrichment/resolution channel")
+	resolveWikidataQID  = flag.Bool("resolve-wikidata-qid", true, "Resolve missing Wikidata QID for organizations and enrich from Wikidata")
+	wikidataScoreMin    = flag.Int("wikidata-score-min", 140, "Minimum score for missing Wikidata QID auto-attach")
+	enableParentGeoProp = flag.Bool("enable-parent-geo-propagation", true, "Enable parent-org coordinate propagation for facilities/community/program")
+	enableFacilityPipe  = flag.Bool("enable-facility-pipeline", true, "Enable facility-specific parent-aware geocoding candidates")
+	typesFilter         = flag.String("types", "", "Comma-separated fragment types to process (empty = all geo-relevant)")
+	pathPrefix          = flag.String("path-prefix", "", "Only process canonicalPath with this prefix (e.g. /org/)")
 
 	progressEvery = flag.Int("progress-every", 50, "Log progress every N processed (0=disable)")
 )
@@ -77,18 +83,27 @@ func (c *countingGeoNames) GetHierarchy(ctx context.Context, geonameID int) (*co
 }
 
 type stats struct {
-	Scanned         int64
-	Processed       int64
-	FromGeonames    int64
-	FromGeocoding   int64
-	SkippedHas      int64
-	SkippedNoAddr   int64
-	Errors          int64
-	Applied         int64
-	GeocodingCalls  int64 // total Geocode() invocations (with address)
-	GeocodingAPI    int64 // actual API calls (cache misses)
-	GeonamesCalls   int64
-	GeonamesAPI     int64
+	Scanned        int64
+	Processed      int64
+	FromGeonames   int64
+	FromGeocoding  int64
+	FromWikidata   int64
+	FromParent     int64
+	FromFacility   int64
+	WikidataQIDNew int64
+	SkippedHas     int64
+	SkippedNoAddr  int64
+	Errors         int64
+	Applied        int64
+	GeocodingCalls int64 // total Geocode() invocations (with address)
+	GeocodingAPI   int64 // actual API calls (cache misses)
+	GeonamesCalls  int64
+	GeonamesAPI    int64
+}
+
+type orgGeoIndex struct {
+	byPath map[string]*hmodels.HorizonFragment
+	bySlug map[string][]*hmodels.HorizonFragment
 }
 
 func main() {
@@ -158,15 +173,38 @@ func main() {
 		geocodingClient = geocoding.NewFallbackClient(nomCached, googleClient, log.Default())
 	}
 
-	if geonamesClient == nil && geocodingClient == nil {
-		log.Fatal("At least one of GeoNames or Geocoding (Nominatim/Google) must be enabled")
+	// Wikidata client (for external KB-ID based coordinate enrichment).
+	var wikidataClient coreontology.WikidataClientInterface
+	if !*skipWikidata {
+		wdBase := httphandlers.GetWikidataClientFromEnv()
+		if wdBase != nil {
+			wikidataClient = wikidata.NewAdapter(wdBase)
+			log.Printf("Wikidata client enabled (external KB enrichment)")
+		} else {
+			log.Printf("Wikidata disabled: client is not configured")
+		}
+	}
+
+	if geonamesClient == nil && geocodingClient == nil && wikidataClient == nil {
+		log.Fatal("At least one of GeoNames, Geocoding (Nominatim/Google), or Wikidata must be enabled")
+	}
+
+	orgIndex := &orgGeoIndex{byPath: map[string]*hmodels.HorizonFragment{}, bySlug: map[string][]*hmodels.HorizonFragment{}}
+	if *enableParentGeoProp || *enableFacilityPipe {
+		idx, err := buildOrgGeoIndex(ctx, db, *tenantID)
+		if err != nil {
+			log.Fatalf("Build org geo index: %v", err)
+		}
+		orgIndex = idx
+		log.Printf("Parent-org geo index loaded: byPath=%d slugs=%d", len(orgIndex.byPath), len(orgIndex.bySlug))
 	}
 
 	typeFilter := parseTypesFilter(*typesFilter)
 	prefix := strings.TrimSpace(*pathPrefix)
 
-	log.Printf("Starting coordinates backfill (project=%s apply=%v limit=%d maxScan=%d prefix=%q types=%v)",
-		*projectID, *apply && !*dryRun, *limit, *maxScan, prefix, typeFilter)
+	log.Printf("Starting coordinates backfill (project=%s apply=%v limit=%d maxScan=%d prefix=%q types=%v wikidata=%v resolveQID=%v parentProp=%v facilityPipeline=%v)",
+		*projectID, *apply && !*dryRun, *limit, *maxScan, prefix, typeFilter,
+		wikidataClient != nil, *resolveWikidataQID, *enableParentGeoProp, *enableFacilityPipe)
 
 	var st stats
 	lastSeen := strings.TrimSpace(*startAfter)
@@ -250,11 +288,7 @@ func main() {
 				}
 			}
 
-			// Skip if already has valid coordinates
-			if frag.Coordinates != nil && hmodels.IsValidCoordinates(frag.Coordinates.Lat, frag.Coordinates.Lon) {
-				atomic.AddInt64(&st.SkippedHas, 1)
-				continue
-			}
+			// Skip only when fragment already has real (non-Null-Island) coordinates.
 			if hmodels.HasRealGeoCoordinates(frag.Coordinates) {
 				atomic.AddInt64(&st.SkippedHas, 1)
 				continue
@@ -263,6 +297,7 @@ func main() {
 			atomic.AddInt64(&st.Processed, 1)
 
 			changed := false
+			attemptedAddressGeocoding := false
 
 			// /loc/*: GeoNames
 			if geonamesClient != nil && strings.HasPrefix(cp, "/loc/") {
@@ -274,11 +309,42 @@ func main() {
 				}
 			}
 
-			// org/facility/community/program: Google Geocoding
-			if !changed && geocodingClient != nil {
+			// External KB IDs (Wikidata): attach missing QID for ORG, then enrich coordinates from P625 when available.
+			if !hmodels.HasRealGeoCoordinates(frag.Coordinates) && wikidataClient != nil {
+				if *resolveWikidataQID && frag.Type == hmodels.FragmentTypeOrganization {
+					_, _, attached, err := henrich.ResolveAndAttachWikidataQIDIfMissing(ctx, wikidataClient, &frag, henrich.QIDResolveOptions{
+						Enabled:       true,
+						MinScore:      *wikidataScoreMin,
+						MaxCandidates: 5,
+					})
+					if err != nil {
+						log.Printf("Wikidata resolve %s: %v", frag.ID, err)
+					} else if attached {
+						changed = true
+						atomic.AddInt64(&st.WikidataQIDNew, 1)
+					}
+				}
+				before := hmodels.HasRealGeoCoordinates(frag.Coordinates)
+				enriched, err := henrich.EnrichFragmentFromWikidataIfPresent(ctx, wikidataClient, &frag, henrich.ConservativeWikidataOptions{
+					Force:     true,
+					Overwrite: true,
+				})
+				if err != nil {
+					log.Printf("Wikidata enrich %s: %v", frag.ID, err)
+				} else if enriched {
+					changed = true
+					if !before && hmodels.HasRealGeoCoordinates(frag.Coordinates) {
+						atomic.AddInt64(&st.FromWikidata, 1)
+					}
+				}
+			}
+
+			// Standard geocoding.
+			if !hmodels.HasRealGeoCoordinates(frag.Coordinates) && geocodingClient != nil {
 				addr := henrich.BuildAddressFromFragment(&frag)
 				if addr != "" {
 					atomic.AddInt64(&st.GeocodingCalls, 1)
+					attemptedAddressGeocoding = true
 				}
 				enriched, err := henrich.EnrichCoordinatesFromGeocoding(ctx, geocodingClient, &frag)
 				if err != nil {
@@ -289,9 +355,42 @@ func main() {
 				if enriched {
 					changed = true
 					atomic.AddInt64(&st.FromGeocoding, 1)
-				} else if addr != "" {
-					atomic.AddInt64(&st.SkippedNoAddr, 1) // had address but geocoding returned nothing
 				}
+			}
+
+			// Parent-org coordinate propagation for facility/community/program when direct geocoding fails.
+			var parentOrg *hmodels.HorizonFragment
+			if !hmodels.HasRealGeoCoordinates(frag.Coordinates) && (*enableParentGeoProp || *enableFacilityPipe) {
+				parentOrg = resolveParentOrgForFragment(&frag, orgIndex)
+			}
+			if !hmodels.HasRealGeoCoordinates(frag.Coordinates) && *enableParentGeoProp && parentOrg != nil {
+				if henrich.EnrichCoordinatesFromParent(&frag, parentOrg) {
+					changed = true
+					atomic.AddInt64(&st.FromParent, 1)
+				}
+			}
+
+			// Facility-only pipeline: parent-aware address candidates.
+			if !hmodels.HasRealGeoCoordinates(frag.Coordinates) && *enableFacilityPipe &&
+				frag.Type == hmodels.FragmentTypeFacility && geocodingClient != nil {
+				candidates := henrich.BuildFacilityAddressCandidates(&frag, parentOrg)
+				applied, attempted, err := geocodeWithCandidates(ctx, geocodingClient, &frag, candidates, &st)
+				if err != nil {
+					atomic.AddInt64(&st.Errors, 1)
+					log.Printf("Facility geocoding %s: %v", frag.ID, err)
+					continue
+				}
+				if attempted {
+					attemptedAddressGeocoding = true
+				}
+				if applied {
+					changed = true
+					atomic.AddInt64(&st.FromFacility, 1)
+				}
+			}
+
+			if !hmodels.HasRealGeoCoordinates(frag.Coordinates) && attemptedAddressGeocoding {
+				atomic.AddInt64(&st.SkippedNoAddr, 1)
 			}
 
 			if changed && (*apply && !*dryRun) {
@@ -302,6 +401,9 @@ func main() {
 					continue
 				}
 				atomic.AddInt64(&st.Applied, 1)
+				if frag.Type == hmodels.FragmentTypeOrganization && hmodels.HasRealGeoCoordinates(frag.Coordinates) {
+					upsertOrgGeoIndex(orgIndex, &frag)
+				}
 			}
 
 			if *progressEvery > 0 && atomic.LoadInt64(&st.Processed)%int64(*progressEvery) == 0 {
@@ -320,9 +422,10 @@ func main() {
 					pct := 100.0 * float64(hits) / float64(gcCalls)
 					gcHitRate = fmt.Sprintf(" geoCacheHit=%.1f%%", pct)
 				}
-				log.Printf("Progress: scanned=%d processed=%d fromGeonames=%d fromGeocoding=%d skippedHas=%d skippedNoAddr=%d applied=%d errors=%d geoAPI=%d gnAPI=%d%s last=%s",
+				log.Printf("Progress: scanned=%d processed=%d fromGeonames=%d fromWikidata=%d fromGeocoding=%d fromParent=%d fromFacility=%d wikidataQID=%d skippedHas=%d skippedNoAddr=%d applied=%d errors=%d geoAPI=%d gnAPI=%d%s last=%s",
 					atomic.LoadInt64(&st.Scanned), atomic.LoadInt64(&st.Processed),
-					atomic.LoadInt64(&st.FromGeonames), atomic.LoadInt64(&st.FromGeocoding),
+					atomic.LoadInt64(&st.FromGeonames), atomic.LoadInt64(&st.FromWikidata), atomic.LoadInt64(&st.FromGeocoding),
+					atomic.LoadInt64(&st.FromParent), atomic.LoadInt64(&st.FromFacility), atomic.LoadInt64(&st.WikidataQIDNew),
 					atomic.LoadInt64(&st.SkippedHas), atomic.LoadInt64(&st.SkippedNoAddr),
 					atomic.LoadInt64(&st.Applied), atomic.LoadInt64(&st.Errors), gcAPI, gnAPI, gcHitRate, lastSeen)
 			}
@@ -357,9 +460,10 @@ func main() {
 		gnHitRate = fmt.Sprintf("%.1f%%", pct)
 	}
 
-	log.Printf("Done. scanned=%d processed=%d fromGeonames=%d fromGeocoding=%d skippedHas=%d skippedNoAddr=%d applied=%d errors=%d",
+	log.Printf("Done. scanned=%d processed=%d fromGeonames=%d fromWikidata=%d fromGeocoding=%d fromParent=%d fromFacility=%d wikidataQID=%d skippedHas=%d skippedNoAddr=%d applied=%d errors=%d",
 		atomic.LoadInt64(&st.Scanned), atomic.LoadInt64(&st.Processed),
-		atomic.LoadInt64(&st.FromGeonames), atomic.LoadInt64(&st.FromGeocoding),
+		atomic.LoadInt64(&st.FromGeonames), atomic.LoadInt64(&st.FromWikidata), atomic.LoadInt64(&st.FromGeocoding),
+		atomic.LoadInt64(&st.FromParent), atomic.LoadInt64(&st.FromFacility), atomic.LoadInt64(&st.WikidataQIDNew),
 		atomic.LoadInt64(&st.SkippedHas), atomic.LoadInt64(&st.SkippedNoAddr),
 		atomic.LoadInt64(&st.Applied), atomic.LoadInt64(&st.Errors))
 	log.Printf("Cache: geocoding calls=%d API=%d hitRate=%s | geonames calls=%d API=%d hitRate=%s",
@@ -405,9 +509,9 @@ func maybeAttachGeoNamesIDAndCoords(ctx context.Context, gn coreontology.GeoName
 
 	for _, r := range f.KBRefs {
 		if strings.EqualFold(strings.TrimSpace(r.KB), "GeoNames") && strings.TrimSpace(r.ExternalID) != "" {
-			// Already has ID - try GetPlace for coordinates if missing
+			// Already has ID - try GetPlace for coordinates if real coordinates are still missing.
 			gid, _ := parseInt(strings.TrimSpace(r.ExternalID))
-			if gid > 0 && (f.Coordinates == nil || !hmodels.IsValidCoordinates(f.Coordinates.Lat, f.Coordinates.Lon)) {
+			if gid > 0 && !hmodels.HasRealGeoCoordinates(f.Coordinates) {
 				place, err := gn.GetPlace(ctx, gid)
 				if err == nil && place != nil && place.Lat != "" && place.Lng != "" {
 					attachGeoCoordsFromPlace(f, place)
@@ -485,7 +589,7 @@ func attachGeoCoordsFromPlace(f *hmodels.HorizonFragment, p *coreontology.GeoNam
 	}
 	lat, _ := parseFloat(p.Lat)
 	lon, _ := parseFloat(p.Lng)
-	if !hmodels.IsValidCoordinates(lat, lon) {
+	if !hmodels.IsRealGeoCoordinate(lat, lon) {
 		return
 	}
 	f.Coordinates = &hmodels.Coordinates{Lat: lat, Lon: lon}
@@ -506,4 +610,166 @@ func parseFloat(s string) (float64, error) {
 	var f float64
 	_, err := fmt.Sscanf(strings.TrimSpace(s), "%f", &f)
 	return f, err
+}
+
+func geocodeWithCandidates(
+	ctx context.Context,
+	client coreontology.GeocodingClientInterface,
+	frag *hmodels.HorizonFragment,
+	candidates []string,
+	st *stats,
+) (applied bool, attempted bool, err error) {
+	if client == nil || frag == nil {
+		return false, false, nil
+	}
+	seen := map[string]struct{}{}
+	for _, raw := range candidates {
+		addr := strings.TrimSpace(raw)
+		if addr == "" {
+			continue
+		}
+		key := strings.ToLower(addr)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		attempted = true
+		if st != nil {
+			atomic.AddInt64(&st.GeocodingCalls, 1)
+		}
+		result, gerr := client.Geocode(ctx, addr)
+		if gerr != nil {
+			return false, true, fmt.Errorf("geocoding %q: %w", addr, gerr)
+		}
+		if result == nil {
+			continue
+		}
+		if !hmodels.IsRealGeoCoordinate(result.Lat, result.Lon) {
+			continue
+		}
+		applyGeocodedCoordinates(frag, result.Lat, result.Lon)
+		return true, true, nil
+	}
+	return false, attempted, nil
+}
+
+func applyGeocodedCoordinates(f *hmodels.HorizonFragment, lat, lon float64) {
+	if f == nil || !hmodels.IsRealGeoCoordinate(lat, lon) {
+		return
+	}
+	f.Coordinates = &hmodels.Coordinates{Lat: lat, Lon: lon}
+	if f.HomeLocation == nil {
+		f.HomeLocation = &hmodels.Location{}
+	}
+	iso := fmt.Sprintf("%+.6f%+.6f/", lat, lon)
+	if f.HomeLocation.ISO6709 == nil || strings.TrimSpace(*f.HomeLocation.ISO6709) == "" {
+		f.HomeLocation.ISO6709 = &iso
+	}
+}
+
+func buildOrgGeoIndex(ctx context.Context, db *firestore.Client, tenant string) (*orgGeoIndex, error) {
+	out := &orgGeoIndex{
+		byPath: map[string]*hmodels.HorizonFragment{},
+		bySlug: map[string][]*hmodels.HorizonFragment{},
+	}
+	q := db.Collection("horizon_fragments").
+		Where("tenantId", "==", tenant).
+		Where("governance.status", "==", string(hmodels.FragmentStatusActive)).
+		Where("type", "==", string(hmodels.FragmentTypeOrganization)).
+		OrderBy(firestore.DocumentID, firestore.Asc).
+		Limit(2000)
+
+	var lastSeen string
+	for {
+		paged := q
+		if lastSeen != "" {
+			paged = q.StartAfter(lastSeen)
+		}
+		docs, err := paged.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
+		if len(docs) == 0 {
+			break
+		}
+		for _, d := range docs {
+			lastSeen = d.Ref.ID
+			var frag hmodels.HorizonFragment
+			if err := d.DataTo(&frag); err != nil {
+				continue
+			}
+			if strings.TrimSpace(frag.ID) == "" {
+				frag.ID = d.Ref.ID
+			}
+			upsertOrgGeoIndex(out, &frag)
+		}
+		if len(docs) < 2000 {
+			break
+		}
+	}
+	return out, nil
+}
+
+func upsertOrgGeoIndex(idx *orgGeoIndex, frag *hmodels.HorizonFragment) {
+	if idx == nil || frag == nil {
+		return
+	}
+	if frag.Type != hmodels.FragmentTypeOrganization {
+		return
+	}
+	cp := strings.TrimSpace(frag.CanonicalPath)
+	if cp == "" {
+		return
+	}
+	cloned := *frag
+	idx.byPath[cp] = &cloned
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) >= 3 && strings.EqualFold(parts[0], "org") {
+		slug := strings.TrimSpace(parts[2])
+		if slug != "" && !strings.EqualFold(slug, "na") {
+			arr := idx.bySlug[slug]
+			for i := range arr {
+				if strings.TrimSpace(arr[i].CanonicalPath) == cp {
+					arr[i] = &cloned
+					idx.bySlug[slug] = arr
+					return
+				}
+			}
+			idx.bySlug[slug] = append(arr, &cloned)
+		}
+	}
+}
+
+func resolveParentOrgForFragment(f *hmodels.HorizonFragment, idx *orgGeoIndex) *hmodels.HorizonFragment {
+	if f == nil || idx == nil {
+		return nil
+	}
+	for _, p := range []string{
+		strings.TrimSpace(f.ParentPath),
+		strings.TrimSpace(f.AffiliatedOrgPath),
+		strings.TrimSpace(f.ParentGovPath),
+		strings.TrimSpace(f.Identifiers["parentOrgPath"]),
+		strings.TrimSpace(f.Identifiers["orgPath"]),
+		strings.TrimSpace(f.Identifiers["operatorPath"]),
+		strings.TrimSpace(f.Identifiers["ownerPath"]),
+	} {
+		if p == "" || !strings.HasPrefix(p, "/org/") {
+			continue
+		}
+		if parent, ok := idx.byPath[p]; ok && parent != nil {
+			return parent
+		}
+	}
+
+	cp := strings.TrimSpace(f.CanonicalPath)
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) >= 3 && strings.EqualFold(parts[0], "fac") {
+		slug := strings.TrimSpace(parts[1])
+		if slug != "" && !strings.EqualFold(slug, "na") {
+			if cands := idx.bySlug[slug]; len(cands) == 1 && cands[0] != nil {
+				return cands[0]
+			}
+		}
+	}
+	return nil
 }

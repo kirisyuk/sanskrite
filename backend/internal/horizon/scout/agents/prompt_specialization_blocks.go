@@ -202,6 +202,17 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 	return b.String() + "\n"
 }
 
+// GovEntityRelationRulesBlock returns composable prompt text explaining
+// GOV (/gov/...) vs non-GOV ORG relation type selection for MARKET/ORG targets.
+// Included in any domain mode prompt where REGULATES and PARTICIPATES_IN are both available.
+func GovEntityRelationRulesBlock() string {
+	return `   - GOV vs ORG distinction (CRITICAL): entities with canonicalPath /gov/... are government bodies.
+     For GOV -> MARKET: use REGULATES (not PARTICIPATES_IN, not DEPENDS_ON).
+     For GOV -> ORG: use REGULATES when regulatory, ADMINISTERS when hierarchical.
+     For ORG -> MARKET: use PARTICIPATES_IN.
+`
+}
+
 func buildCoreBusinessTaxonomyBlock() string {
 	return `BUSINESS TAXONOMY CONTRACT (single source for typical business objects):
 - ORG/FAC/GOV:

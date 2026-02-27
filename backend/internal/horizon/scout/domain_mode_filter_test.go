@@ -21,6 +21,20 @@ func TestEdgeAllowlistByDomainMode_PolicyImpactIncludesInfluences(t *testing.T) 
 	}
 }
 
+func TestEdgeAllowlistByDomainMode_GovernanceIncludesAssurance(t *testing.T) {
+	allow := EdgeAllowlistByDomainMode(taxonomy.DomainModeGovernance)
+	if !AllowlistContains(allow, "ASSURES") {
+		t.Fatalf("governance allowlist must include ASSURES for auditor/certifier governance links")
+	}
+}
+
+func TestEdgeAllowlistByDomainMode_AssuranceExcludesLegacyAuditedBy(t *testing.T) {
+	allow := EdgeAllowlistByDomainMode(taxonomy.DomainModeAssurance)
+	if AllowlistContains(allow, "AUDITED_BY") {
+		t.Fatalf("assurance allowlist must not include legacy AUDITED_BY output")
+	}
+}
+
 func TestFilterDiscoveredRelationsByDomainModes_SupplyChain(t *testing.T) {
 	in := []agents.DiscoveredRelation{
 		{RelationType: "SUPPLIES_TO"},

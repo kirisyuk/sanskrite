@@ -18,6 +18,8 @@ func TestNormalizeLegalName(t *testing.T) {
 		// "Joint Stock Company" prefix (Samruk-Kazyna)
 		{"Joint Stock Company Sovereign Wealth Fund Samruk-Kazyna", "sovereign wealth fund samruk kazyna"},
 		{"Sovereign Wealth Fund Samruk Kazyna Jsc", "sovereign wealth fund samruk kazyna"},
+		{"Nexperia B.V.", "nexperia"},
+		{"Nexperia B V", "nexperia"},
 	}
 	for _, tt := range tests {
 		got := NormalizeLegalName(tt.in)

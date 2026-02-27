@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -338,6 +339,301 @@ func parseInt(v interface{}, def int) int {
 	default:
 		return def
 	}
+}
+
+func plannerBudgetScaleForPressure(pressure float64) float64 {
+	switch {
+	case pressure <= 0:
+		return 1.0
+	case pressure <= 0.50:
+		return 1.0
+	case pressure <= 0.75:
+		return 0.85
+	case pressure <= 0.90:
+		return 0.70
+	case pressure <= 1.00:
+		return 0.55
+	case pressure <= 1.10:
+		return 0.40
+	case pressure <= 1.25:
+		return 0.30
+	default:
+		return 0.15
+	}
+}
+
+func scalePlanCap(baseCap, minCap int, factor float64) int {
+	if baseCap <= 0 {
+		return 0
+	}
+	if minCap < 0 {
+		minCap = 0
+	}
+	if factor <= 0 {
+		factor = 0.15
+	}
+	out := int(math.Ceil(float64(baseCap) * factor))
+	if out < minCap {
+		out = minCap
+	}
+	if out > baseCap {
+		out = baseCap
+	}
+	return out
+}
+
+func budgetRatioPlanner(used, cap float64) float64 {
+	if cap <= 0 || used <= 0 {
+		return 0
+	}
+	return used / cap
+}
+
+func (s *LensService) adaptExecutionPlanByPlannerBudget(
+	ctx context.Context,
+	tenantID string,
+	lensID string,
+	plan scout.ExecutionPlanContract,
+) (scout.ExecutionPlanContract, bool, map[string]interface{}) {
+	if s == nil || s.spendLedger == nil {
+		return plan, false, nil
+	}
+	policy := scout.BudgetPolicyFromEnv()
+	if !policy.Enabled {
+		return plan, false, nil
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	lensID = strings.TrimSpace(lensID)
+	if tenantID == "" || lensID == "" {
+		return plan, false, nil
+	}
+
+	day := time.Now().UTC().Format("2006-01-02")
+	lensSpendUSD, _, lensOut, err := s.spendLedger.GetLensDaySpendUSD(ctx, tenantID, lensID, day)
+	if err != nil {
+		// Fail-open for planner: if budget ledger is unavailable, do not block jobs.
+		return plan, false, nil
+	}
+
+	pressure := 0.0
+	updatePressure := func(v float64) {
+		if v > pressure {
+			pressure = v
+		}
+	}
+	updatePressure(budgetRatioPlanner(lensSpendUSD, policy.LensDailyMaxUSD))
+	updatePressure(budgetRatioPlanner(float64(lensOut), float64(policy.LensDailyMaxOutputTokens)))
+	if plan.BudgetCeilingUSD > 0 {
+		updatePressure(budgetRatioPlanner(lensSpendUSD, plan.BudgetCeilingUSD))
+	}
+	if plan.BudgetCeilingOutputTokens > 0 {
+		updatePressure(budgetRatioPlanner(float64(lensOut), float64(plan.BudgetCeilingOutputTokens)))
+	}
+
+	snapshot := map[string]interface{}{
+		"dayUtc":                day,
+		"pressure":              pressure,
+		"lensSpendUSD":          lensSpendUSD,
+		"lensOutputTokens":      lensOut,
+		"lensDailyMaxUSD":       policy.LensDailyMaxUSD,
+		"lensDailyMaxOutTokens": policy.LensDailyMaxOutputTokens,
+	}
+	exhausted := pressure > 1.0 && plan.StopOnBudgetExhaustion
+	if exhausted {
+		plan.MaxRootJobs = 1
+		plan.MaxAnchors = 1
+		plan.MaxCascadeJobs = 1
+		plan.MaxChildrenPerJob = 0
+		plan.MaxRecursionDepth = 0
+		snapshot["scale"] = 0.0
+		snapshot["exhausted"] = true
+		return plan, true, snapshot
+	}
+
+	scale := plannerBudgetScaleForPressure(pressure)
+	snapshot["scale"] = scale
+	snapshot["exhausted"] = false
+	if scale < 1.0 {
+		plan.MaxAnchors = scalePlanCap(plan.MaxAnchors, 1, scale)
+		plan.MaxRootJobs = scalePlanCap(plan.MaxRootJobs, 1, scale)
+		plan.MaxCascadeJobs = scalePlanCap(plan.MaxCascadeJobs, plan.MaxRootJobs, scale)
+		plan.MaxChildrenPerJob = scalePlanCap(plan.MaxChildrenPerJob, 1, scale)
+		if pressure >= 1.0 {
+			plan.MaxRecursionDepth = 0
+		}
+	}
+	return plan, false, snapshot
+}
+
+type plannerTierBudget struct {
+	allow map[string]int
+	used  map[string]int
+}
+
+func canonicalPlannerPriorityTier(raw string) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "high", "critical", "p0":
+		return "high"
+	case "normal", "medium", "p1":
+		return "normal"
+	case "low", "background", "p2", "p3":
+		return "low"
+	default:
+		return strings.TrimSpace(strings.ToLower(raw))
+	}
+}
+
+func normalizePlannerPriorityTiers(tiers []string) []string {
+	if len(tiers) == 0 {
+		return []string{"high", "normal", "low"}
+	}
+	out := make([]string, 0, len(tiers))
+	seen := map[string]struct{}{}
+	for _, t := range tiers {
+		ct := canonicalPlannerPriorityTier(t)
+		if ct == "" {
+			continue
+		}
+		if _, ok := seen[ct]; ok {
+			continue
+		}
+		seen[ct] = struct{}{}
+		out = append(out, ct)
+	}
+	if len(out) == 0 {
+		return []string{"high", "normal", "low"}
+	}
+	return out
+}
+
+func inferPlannerPriorityTier(canonicalPath string, deferred bool, supplyChainMode bool) string {
+	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
+	if deferred || strings.HasPrefix(cp, "/domain/") {
+		return "high"
+	}
+	if supplyChainMode {
+		switch {
+		case strings.HasPrefix(cp, "/org/"), strings.HasPrefix(cp, "/fac/"), strings.HasPrefix(cp, "/deposit/"), strings.HasPrefix(cp, "/product/"):
+			return "high"
+		case strings.HasPrefix(cp, "/market/"), strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"), strings.HasPrefix(cp, "/geo/"):
+			return "normal"
+		default:
+			return "low"
+		}
+	}
+	switch {
+	case strings.HasPrefix(cp, "/person/"), strings.HasPrefix(cp, "/org/"), strings.HasPrefix(cp, "/gov/"):
+		return "high"
+	case strings.HasPrefix(cp, "/product/"), strings.HasPrefix(cp, "/fac/"), strings.HasPrefix(cp, "/market/"), strings.HasPrefix(cp, "/program/"):
+		return "normal"
+	default:
+		return "low"
+	}
+}
+
+func newPlannerTierBudget(
+	maxRootJobs int,
+	priorityTiers []string,
+	staticPaths []string,
+	deferredPaths []string,
+	supplyChainMode bool,
+) *plannerTierBudget {
+	if maxRootJobs <= 0 {
+		return nil
+	}
+	order := normalizePlannerPriorityTiers(priorityTiers)
+	countByTier := map[string]int{}
+	seen := map[string]struct{}{}
+	addPaths := func(paths []string, deferred bool) {
+		for _, p := range paths {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			key := strings.ToLower(p) + "|deferred=" + fmt.Sprintf("%t", deferred)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			tier := inferPlannerPriorityTier(p, deferred, supplyChainMode)
+			if tier == "" {
+				tier = "low"
+			}
+			countByTier[tier]++
+		}
+	}
+	addPaths(staticPaths, false)
+	addPaths(deferredPaths, true)
+	if len(countByTier) == 0 {
+		return nil
+	}
+
+	allow := map[string]int{}
+	remaining := maxRootJobs
+	ordered := make([]string, 0, len(order)+len(countByTier))
+	ordered = append(ordered, order...)
+	seenOrder := map[string]struct{}{}
+	for _, t := range ordered {
+		seenOrder[t] = struct{}{}
+	}
+	for t := range countByTier {
+		if _, ok := seenOrder[t]; ok {
+			continue
+		}
+		ordered = append(ordered, t)
+	}
+	for _, tier := range ordered {
+		if remaining <= 0 {
+			break
+		}
+		candidates := countByTier[tier]
+		if candidates <= 0 {
+			continue
+		}
+		grant := candidates
+		if grant > remaining {
+			grant = remaining
+		}
+		allow[tier] = grant
+		remaining -= grant
+	}
+
+	return &plannerTierBudget{
+		allow: allow,
+		used:  map[string]int{},
+	}
+}
+
+func (b *plannerTierBudget) canSchedule(tier string, rootJobsScheduled, maxRootJobs int) bool {
+	if b == nil {
+		if maxRootJobs > 0 && rootJobsScheduled >= maxRootJobs {
+			return false
+		}
+		return true
+	}
+	tier = canonicalPlannerPriorityTier(tier)
+	if tier == "" {
+		tier = "low"
+	}
+	if maxRootJobs > 0 && rootJobsScheduled >= maxRootJobs {
+		return false
+	}
+	allowed, ok := b.allow[tier]
+	if !ok {
+		allowed = 0
+	}
+	return b.used[tier] < allowed
+}
+
+func (b *plannerTierBudget) markScheduled(tier string) {
+	if b == nil {
+		return
+	}
+	tier = canonicalPlannerPriorityTier(tier)
+	if tier == "" {
+		tier = "low"
+	}
+	b.used[tier] = b.used[tier] + 1
 }
 
 func normalizeDomainContractMap(m map[string]interface{}) map[string]interface{} {
@@ -754,6 +1050,21 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	if maxRecursionDepth < 0 {
 		maxRecursionDepth = 0
 	}
+	domainModes := taxonomy.NormalizeDomainModes(effectiveDomainModesForLens(lens))
+	supplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
+	executionPlan := scout.BuildExecutionPlanContract(lens.ViewConfig, domainModes, specialties)
+	plannerBudgetExhausted := false
+	plannerBudgetSnapshot := map[string]interface{}(nil)
+	executionPlan, plannerBudgetExhausted, plannerBudgetSnapshot = s.adaptExecutionPlanByPlannerBudget(ctx, lens.TenantID, lensID, executionPlan)
+	maxRecursionDepth = executionPlan.MaxRecursionDepth
+	if lens.ViewConfig == nil {
+		lens.ViewConfig = make(map[string]interface{})
+	}
+	lens.ViewConfig[scout.ExecutionPlanStateKey] = executionPlan.ToStateMap()
+	if plannerBudgetSnapshot != nil {
+		lens.ViewConfig["plannerBudget"] = plannerBudgetSnapshot
+	}
 
 	// Инициализируем кэш fragment IDs для оптимизации будущих операций
 	if lens.ScopeFragments == nil {
@@ -837,6 +1148,15 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// Увеличиваем activeSubscribers для всех HorizonFragment в scope
 	cacheHits := 0
 	scoutingPlanned := 0
+	rootJobsScheduled := 0
+	rootJobsSkippedByPlan := 0
+	rootTierBudget := newPlannerTierBudget(
+		executionPlan.MaxRootJobs,
+		executionPlan.PriorityTiers,
+		staticPaths,
+		deferredScopePaths,
+		supplyChainMode,
+	)
 
 	// Best-effort: prefetch active (pending/running) scout jobs for this lens to avoid duplicates per canonicalPath.
 	// This addresses observed repeated processing in logs when multiple jobs are enqueued for the same node.
@@ -981,6 +1301,19 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		// Create ScoutingJob only when we DON'T already have sufficiently verified data.
 		// This prevents excessive Cloud Tasks for queries that are already in the system (e.g., Astana/LRT).
 		if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
+			plannerPriorityTier := inferPlannerPriorityTier(canonicalPath, false, supplyChainMode)
+			if !rootTierBudget.canSchedule(plannerPriorityTier, rootJobsScheduled, executionPlan.MaxRootJobs) {
+				rootJobsSkippedByPlan++
+				trace.Log(ctx, "root_jobs", "root_jobs.plan_contract.skip_max_root_jobs", map[string]any{
+					"tenantId":      strings.TrimSpace(lens.TenantID),
+					"projectId":     strings.TrimSpace(lens.ProjectID),
+					"lensId":        lensID,
+					"canonicalPath": strings.TrimSpace(canonicalPath),
+					"maxRootJobs":   executionPlan.MaxRootJobs,
+					"priorityTier":  plannerPriorityTier,
+				})
+				continue
+			}
 			if existingJobID, ok := activeScoutJobs[strings.TrimSpace(canonicalPath)]; ok && existingJobID != "" {
 				trace.Log(ctx, "root_jobs", "root_jobs.dedup_skip_active", map[string]any{
 					"tenantId":      strings.TrimSpace(lens.TenantID),
@@ -1004,12 +1337,15 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				continue
 			}
 			scoutingPlanned++
+			rootJobsScheduled++
+			rootTierBudget.markScheduled(plannerPriorityTier)
 			trace.Log(ctx, "root_jobs", "root_jobs.create.start", map[string]any{
 				"tenantId":      strings.TrimSpace(lens.TenantID),
 				"projectId":     strings.TrimSpace(lens.ProjectID),
 				"lensId":        lensID,
 				"canonicalPath": strings.TrimSpace(canonicalPath),
 				"cacheHit":      isCacheHit,
+				"priorityTier":  plannerPriorityTier,
 			})
 			now := time.Now().UTC()
 			state := map[string]interface{}{
@@ -1017,6 +1353,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				"lensId":              lensID,
 				"currentState":        string(models.ScoutingJobStatePending),
 				"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
+				"plannerPriorityTier": plannerPriorityTier,
 				// Recursion control (used by ScoutEngine.processDiscoveredRelations)
 				"recursionDepth":    0.0,
 				"maxRecursionDepth": float64(maxRecursionDepth),
@@ -1049,10 +1386,12 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			if len(specialties) > 0 {
 				state["specialties"] = specialties
 			}
-			// Supply chain mode needs higher breadth to build branching chains.
-			// Keep general behavior unchanged by only setting this when supply_chain specialty is enabled.
-			if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
-				state["maxChildrenPerJob"] = 80.0
+			if supplyChainMode {
+				state["supplyChainMode"] = true
+				state["supplyChainPhase"] = "chain_core"
+				state["supplyChainPhases"] = []string{"chain_core", "targeted_enrich"}
+				state["supplyChainExpandEnabled"] = true
+				state["supplyChainExpandMaxNodes"] = 5.0
 			}
 			// Pass through originalQuery and decompositionHints for MARKET-aware research.
 			if oq, ok := lens.ViewConfig["originalQuery"].(string); ok && strings.TrimSpace(oq) != "" {
@@ -1067,8 +1406,17 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			}
 			// DomainModes from lens (execution contracts) — preferred when set.
 			// Fallback: compute from ViewConfig["domains"] for legacy lenses.
-			if domainModes := effectiveDomainModesForLens(lens); len(domainModes) > 0 {
+			if len(domainModes) > 0 {
 				state["domainModes"] = domainModes
+			}
+			scout.ApplyExecutionPlanToState(state, executionPlan)
+			if plannerBudgetExhausted {
+				state["budgetExhausted"] = true
+				state["budgetExhaustedPartial"] = true
+				state["terminalOutcome"] = scout.TerminalOutcomeBudgetExhausted
+				if plannerBudgetSnapshot != nil {
+					state["plannerBudget"] = plannerBudgetSnapshot
+				}
 			}
 			scoutingJob := &models.ScoutingJob{
 				AgentJob: agentmodels.AgentJob{
@@ -1234,6 +1582,20 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			continue
 		}
 		if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
+			plannerPriorityTier := inferPlannerPriorityTier(canonicalPath, true, supplyChainMode)
+			if !rootTierBudget.canSchedule(plannerPriorityTier, rootJobsScheduled, executionPlan.MaxRootJobs) {
+				rootJobsSkippedByPlan++
+				trace.Log(ctx, "root_jobs", "root_jobs.plan_contract.skip_max_root_jobs", map[string]any{
+					"tenantId":      strings.TrimSpace(lens.TenantID),
+					"projectId":     strings.TrimSpace(lens.ProjectID),
+					"lensId":        lensID,
+					"canonicalPath": strings.TrimSpace(canonicalPath),
+					"maxRootJobs":   executionPlan.MaxRootJobs,
+					"deferred":      true,
+					"priorityTier":  plannerPriorityTier,
+				})
+				continue
+			}
 			if existingJobID, ok := activeScoutJobs[strings.TrimSpace(canonicalPath)]; ok && existingJobID != "" {
 				s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 					"tenantId":      lens.TenantID,
@@ -1247,12 +1609,15 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				continue
 			}
 			scoutingPlanned++
+			rootJobsScheduled++
+			rootTierBudget.markScheduled(plannerPriorityTier)
 			now := time.Now().UTC()
 			state := map[string]interface{}{
 				"targetCanonicalPath": canonicalPath,
 				"lensId":              lensID,
 				"currentState":        string(models.ScoutingJobStatePending),
 				"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
+				"plannerPriorityTier": plannerPriorityTier,
 				"recursionDepth":      0.0,
 				"maxRecursionDepth":   float64(maxRecursionDepth),
 				"deferredScopeAdd":    true,
@@ -1283,8 +1648,12 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			if len(specialties) > 0 {
 				state["specialties"] = specialties
 			}
-			if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain) {
-				state["maxChildrenPerJob"] = 80.0
+			if supplyChainMode {
+				state["supplyChainMode"] = true
+				state["supplyChainPhase"] = "chain_core"
+				state["supplyChainPhases"] = []string{"chain_core", "targeted_enrich"}
+				state["supplyChainExpandEnabled"] = true
+				state["supplyChainExpandMaxNodes"] = 5.0
 			}
 			if oq, ok := lens.ViewConfig["originalQuery"].(string); ok && strings.TrimSpace(oq) != "" {
 				state["originalQuery"] = strings.TrimSpace(oq)
@@ -1295,8 +1664,17 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			if ds, ok := lens.ViewConfig["domains"]; ok && ds != nil {
 				state["domains"] = normalizeDomainContractsForState(ds)
 			}
-			if domainModes := effectiveDomainModesForLens(lens); len(domainModes) > 0 {
+			if len(domainModes) > 0 {
 				state["domainModes"] = domainModes
+			}
+			scout.ApplyExecutionPlanToState(state, executionPlan)
+			if plannerBudgetExhausted {
+				state["budgetExhausted"] = true
+				state["budgetExhaustedPartial"] = true
+				state["terminalOutcome"] = scout.TerminalOutcomeBudgetExhausted
+				if plannerBudgetSnapshot != nil {
+					state["plannerBudget"] = plannerBudgetSnapshot
+				}
 			}
 			scoutingJob := &models.ScoutingJob{
 				AgentJob: agentmodels.AgentJob{
@@ -1411,21 +1789,49 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		}(),
 		"progress": progress,
 		"counters": map[string]interface{}{
-			"nodesKnown":  len(staticPaths),
-			"nodesCached": cacheHits,
-			"jobsTotal":   scoutingPlanned,
-			"jobsRunning": 0,
-			"jobsDone":    0,
-			"jobsFailed":  0,
+			"nodesKnown":         len(staticPaths),
+			"nodesCached":        cacheHits,
+			"jobsTotal":          scoutingPlanned,
+			"jobsRunning":        0,
+			"jobsDone":           0,
+			"jobsFailed":         0,
+			"jobsSkippedByPlan":  rootJobsSkippedByPlan,
+			"maxRootJobsApplied": executionPlan.MaxRootJobs,
 		},
 	})
 	if scoutingPlanned == 0 {
+		terminalOutcome := scout.TerminalOutcomeCompleted
+		reasonMap := map[string]interface{}{
+			"jobsTotal":         scoutingPlanned,
+			"jobsSkippedByPlan": rootJobsSkippedByPlan,
+			"maxRootJobs":       executionPlan.MaxRootJobs,
+		}
+		if plannerBudgetExhausted {
+			terminalOutcome = scout.TerminalOutcomeBudgetExhausted
+			reasonMap["budgetExhaustedPartial"] = true
+			if plannerBudgetSnapshot != nil {
+				reasonMap["plannerBudget"] = plannerBudgetSnapshot
+			}
+		}
+		if lens.ViewConfig == nil {
+			lens.ViewConfig = make(map[string]interface{})
+		}
+		lens.ViewConfig["assemblyStatus"] = map[string]interface{}{
+			"phase":           "ready",
+			"progress":        1.0,
+			"terminalOutcome": terminalOutcome,
+			"reasonMap":       reasonMap,
+			"completedAt":     time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		_ = s.lensesRepo.Update(ctx, lens)
 		s.publish(ctx, realtime.EventType("horizon.assembly.ready"), map[string]interface{}{
-			"tenantId":  lens.TenantID,
-			"projectId": lens.ProjectID,
-			"lensId":    lensID,
-			"phase":     "ready",
-			"progress":  1.0,
+			"tenantId":        lens.TenantID,
+			"projectId":       lens.ProjectID,
+			"lensId":          lensID,
+			"phase":           "ready",
+			"progress":        1.0,
+			"terminalOutcome": terminalOutcome,
+			"reasonMap":       reasonMap,
 		})
 	}
 
@@ -1638,6 +2044,21 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	if maxRecursionDepth < 0 {
 		maxRecursionDepth = 0
 	}
+	domainModes := taxonomy.NormalizeDomainModes(effectiveDomainModesForLens(lens))
+	supplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
+	executionPlan := scout.BuildExecutionPlanContract(lens.ViewConfig, domainModes, specialties)
+	plannerBudgetExhausted := false
+	plannerBudgetSnapshot := map[string]interface{}(nil)
+	executionPlan, plannerBudgetExhausted, plannerBudgetSnapshot = s.adaptExecutionPlanByPlannerBudget(ctx, lens.TenantID, lens.ID, executionPlan)
+	maxRecursionDepth = executionPlan.MaxRecursionDepth
+	if lens.ViewConfig == nil {
+		lens.ViewConfig = make(map[string]interface{})
+	}
+	lens.ViewConfig[scout.ExecutionPlanStateKey] = executionPlan.ToStateMap()
+	if plannerBudgetSnapshot != nil {
+		lens.ViewConfig["plannerBudget"] = plannerBudgetSnapshot
+	}
 
 	// Создаем map для быстрой проверки старых canonical paths
 	oldPathsMap := make(map[string]bool)
@@ -1649,6 +2070,15 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	// Best-effort: avoid duplicate Scout jobs for the same canonicalPath within the same lens/project.
 	// We prefetch active (pending/running) scout jobs and skip creation if one already exists.
 	activeScoutJobs := map[string]string{} // canonicalPath -> jobId
+	rootJobsScheduled := 0
+	rootJobsSkippedByPlan := 0
+	rootTierBudget := newPlannerTierBudget(
+		executionPlan.MaxRootJobs,
+		executionPlan.PriorityTiers,
+		allNewStaticPaths,
+		nil,
+		supplyChainMode,
+	)
 	if s.scoutingJobsRepo != nil {
 		if jobs, jerr := s.scoutingJobsRepo.ListByProjectAndLens(ctx, lens.TenantID, lens.ProjectID, lens.ID, 400); jerr == nil {
 			for _, j := range jobs {
@@ -1780,6 +2210,20 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 			// Это гарантирует, что данные для нового узла будут собраны немедленно,
 			// а не ждать первого Watchdog scan (который может быть через 1 час)
 			if s.scoutingJobsRepo != nil && !isFragmentFreshEnough {
+				plannerPriorityTier := inferPlannerPriorityTier(canonicalPath, false, supplyChainMode)
+				if !rootTierBudget.canSchedule(plannerPriorityTier, rootJobsScheduled, executionPlan.MaxRootJobs) {
+					rootJobsSkippedByPlan++
+					trace.Log(ctx, "root_jobs", "root_jobs.plan_contract.skip_max_root_jobs", map[string]any{
+						"tenantId":      strings.TrimSpace(lens.TenantID),
+						"projectId":     strings.TrimSpace(lens.ProjectID),
+						"lensId":        strings.TrimSpace(lens.ID),
+						"canonicalPath": strings.TrimSpace(canonicalPath),
+						"maxRootJobs":   executionPlan.MaxRootJobs,
+						"op":            "update_lens",
+						"priorityTier":  plannerPriorityTier,
+					})
+					continue
+				}
 				if existingJobID, ok := activeScoutJobs[strings.TrimSpace(canonicalPath)]; ok && existingJobID != "" {
 					// Skip creating duplicate job; best-effort signal for UI.
 					s.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
@@ -1793,12 +2237,15 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 					})
 					continue
 				}
+				rootJobsScheduled++
+				rootTierBudget.markScheduled(plannerPriorityTier)
 				now := time.Now().UTC()
 				state := map[string]interface{}{
 					"targetCanonicalPath": canonicalPath,
 					"lensId":              lens.ID,
 					"currentState":        string(models.ScoutingJobStatePending),
 					"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
+					"plannerPriorityTier": plannerPriorityTier,
 					// Recursion control (used by ScoutEngine.processDiscoveredRelations)
 					"recursionDepth":    0.0,
 					"maxRecursionDepth": float64(maxRecursionDepth),
@@ -1821,6 +2268,13 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				if len(specialties) > 0 {
 					state["specialties"] = specialties
 				}
+				if supplyChainMode {
+					state["supplyChainMode"] = true
+					state["supplyChainPhase"] = "chain_core"
+					state["supplyChainPhases"] = []string{"chain_core", "targeted_enrich"}
+					state["supplyChainExpandEnabled"] = true
+					state["supplyChainExpandMaxNodes"] = 5.0
+				}
 				// Pass through originalQuery + decompositionHints + domains for consistency with CreateLens jobs.
 				if lens.ViewConfig != nil {
 					if oq, ok := lens.ViewConfig["originalQuery"].(string); ok && strings.TrimSpace(oq) != "" {
@@ -1832,8 +2286,17 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 					if ds, ok := lens.ViewConfig["domains"]; ok && ds != nil {
 						state["domains"] = normalizeDomainContractsForState(ds)
 					}
-					if domainModes := effectiveDomainModesForLens(lens); len(domainModes) > 0 {
+					if len(domainModes) > 0 {
 						state["domainModes"] = domainModes
+					}
+				}
+				scout.ApplyExecutionPlanToState(state, executionPlan)
+				if plannerBudgetExhausted {
+					state["budgetExhausted"] = true
+					state["budgetExhaustedPartial"] = true
+					state["terminalOutcome"] = scout.TerminalOutcomeBudgetExhausted
+					if plannerBudgetSnapshot != nil {
+						state["plannerBudget"] = plannerBudgetSnapshot
 					}
 				}
 				scoutingJob := &models.ScoutingJob{
@@ -1874,6 +2337,17 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				})
 			}
 		}
+	}
+	if rootJobsSkippedByPlan > 0 {
+		trace.Log(ctx, "root_jobs", "root_jobs.plan_contract.summary", map[string]any{
+			"tenantId":           strings.TrimSpace(lens.TenantID),
+			"projectId":          strings.TrimSpace(lens.ProjectID),
+			"lensId":             strings.TrimSpace(lens.ID),
+			"scheduled":          rootJobsScheduled,
+			"skippedByPlan":      rootJobsSkippedByPlan,
+			"maxRootJobsApplied": executionPlan.MaxRootJobs,
+			"op":                 "update_lens",
+		})
 	}
 
 	return nil

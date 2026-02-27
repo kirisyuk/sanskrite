@@ -229,10 +229,12 @@ Choose relationType to match this direction:
 - SUPPLIES_TO: source supplies goods/services to target (use for customers/recipients).
 - LOCATED_IN / OPERATES_IN: source located/operates in GEO target.
 - OWNS: source owns target.
+  Direction is strict: owner -> owned entity.
+  In this decomposition prompt, SOURCE is fixed to TARGET; therefore emit OWNS only for entities that TARGET itself owns.
+  Do NOT emit OWNS to describe who owns TARGET (that would reverse direction).
   CRITICAL: NEVER output OWNS where targetType=PERSON.
   CRITICAL: NEVER output OWNS from ORGANIZATION to COMMUNITY if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}.
-    Dynasties and tribes own organizations, not the reverse. If an organization is owned by a dynasty/tribe, use SUBSIDIARY_OF from org to community (will be normalized to OWNS with reversed direction).
-  If TARGET is owned/controlled by a person or parent org, use SUBSIDIARY_OF with the owner as target (it will be normalized to OWNS).
+    Dynasties and tribes own organizations, not the reverse.
   Use OWNS ONLY for equity ownership/control relationships (shareholder, stake, holding company, ultimate beneficial owner).
   Do NOT use OWNS for roles/employment/management like CEO, director, founder, chairman; use INFLUENCES if relevant, or omit the relation.
 - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
@@ -242,6 +244,8 @@ Choose relationType to match this direction:
 - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
 - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
 - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
+  In this decomposition prompt, SOURCE is fixed to TARGET; therefore emit INVESTS_IN only when TARGET invests in others.
+  Do NOT use INVESTS_IN here to represent incoming investors into TARGET.
 - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
 - PRODUCES: source produces target (source MUST be ORGANIZATION/FACILITY/DEPOSIT; target is a PRODUCT).
   For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO (NOT PRODUCES).
@@ -256,7 +260,7 @@ Choose relationType to match this direction:
 - GATEKEEPS_DECISION: source (ORG/GOV/COMMUNITY) gatekeeps target (DECISION_POINT).
 - ASSURES: source (ORGANIZATION) provides independent assurance to target (ORG/FACILITY/PROGRAM). Add qualifiers.assurance_type: audit | certification | regulatory | inspection.
   Direction: assurer → assuree. E.g. audit firm ASSURES org, certifier ASSURES org.
-- AUDITED_BY: legacy; source (ORG/FACILITY/PROGRAM) is audited by target (ORGANIZATION). Prefer ASSURES for new data.
+- AUDITED_BY is legacy inverse form; do NOT emit it. Use ASSURES with canonical direction.
 - OPERATES_VIA: source uses target channel/platform for communication/operations.
   Direction: COMMUNITY/ORGANIZATION → MEDIA_CHANNEL
   Example: /community/ru/criminal/kazan-dealers OPERATES_VIA /media/telegram/kazan-zakaz

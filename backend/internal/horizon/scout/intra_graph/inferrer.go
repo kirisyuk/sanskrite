@@ -330,8 +330,13 @@ func (s *typedEdgeSet) promptLines(limit int) []string {
 
 func canonicalType(t string) string {
 	t = strings.TrimSpace(strings.ToUpper(t))
-	if t == "SUBSIDIARY_OF" {
+	switch t {
+	case "SUBSIDIARY_OF":
 		return "OWNS"
+	case "AUDITED_BY":
+		return "ASSURES"
+	case "HAS_SUBMARKET":
+		return "HAS_MARKET_SEGMENT"
 	}
 	return t
 }
@@ -339,6 +344,16 @@ func canonicalType(t string) string {
 func (inf *Inferrer) buildExistingEdges(ctx context.Context, fragments []*models.HorizonFragment) *typedEdgeSet {
 	out := newTypedEdgeSet()
 	tenantID := "global"
+
+	// Phase 1: collect all edges via ListBySource.
+	type edgeWithSrc struct {
+		srcPath string
+		edge    *models.DependencyEdge
+	}
+	var allEdges []edgeWithSrc
+	var allTargetIDs []string
+	targetIDSet := make(map[string]struct{})
+
 	for _, f := range fragments {
 		if f == nil || f.ID == "" {
 			continue
@@ -359,16 +374,32 @@ func (inf *Inferrer) buildExistingEdges(ctx context.Context, fragments []*models
 			if tgtID == "" {
 				continue
 			}
-			tgtFrag, err := inf.fragmentsRepo.Get(ctx, tgtID)
-			if err != nil || tgtFrag == nil {
-				continue
+			allEdges = append(allEdges, edgeWithSrc{srcPath: srcPath, edge: e})
+			if _, ok := targetIDSet[tgtID]; !ok {
+				targetIDSet[tgtID] = struct{}{}
+				allTargetIDs = append(allTargetIDs, tgtID)
 			}
-			tgtPath := strings.TrimSpace(tgtFrag.CanonicalPath)
-			if tgtPath == "" {
-				continue
-			}
-			out.add(srcPath, tgtPath, string(e.Type))
 		}
+	}
+
+	// Phase 2: batch-fetch all target fragments in one call.
+	targetFrags, err := inf.fragmentsRepo.GetMany(ctx, allTargetIDs)
+	if err != nil {
+		return out
+	}
+
+	// Phase 3: build edge set from batch results.
+	for _, ews := range allEdges {
+		tgtID := strings.TrimSpace(ews.edge.TargetFragmentID)
+		tgtFrag := targetFrags[tgtID]
+		if tgtFrag == nil {
+			continue
+		}
+		tgtPath := strings.TrimSpace(tgtFrag.CanonicalPath)
+		if tgtPath == "" {
+			continue
+		}
+		out.add(ews.srcPath, tgtPath, string(ews.edge.Type))
 	}
 	return out
 }
@@ -509,7 +540,7 @@ Return ONLY valid JSON. No markdown.`,
 		strings.Join(srcPaths, "\n"),
 		strings.Join(tgtPaths, "\n"),
 		existingBlock,
-		directionRules + sphereBlock,
+		directionRules+sphereBlock,
 	)
 
 	verifier := ai.NewSimpleJSONVerifier()
@@ -518,11 +549,11 @@ Return ONLY valid JSON. No markdown.`,
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability:        true,
-			SearchGroundingCapability:      true,
+			SearchGroundingCapability:       true,
 			InternalDataGroundingCapability: true,
 			MinCapabilityScore:              7,
-			MinContextWindow:               8000,
-			MaxOutputSize:                  4000,
+			MinContextWindow:                8000,
+			MaxOutputSize:                   4000,
 		},
 		Verifier: verifier,
 	}
