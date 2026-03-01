@@ -103,10 +103,10 @@ func (h *PayPalHandler) CreateSubscription(w http.ResponseWriter, r *http.Reques
 	returnURL := os.Getenv("PAYPAL_RETURN_URL")
 	cancelURL := os.Getenv("PAYPAL_CANCEL_URL")
 	if returnURL == "" {
-		returnURL = "https://hatl.one/subscription/success"
+		returnURL = "https://etigram.one/subscription/success"
 	}
 	if cancelURL == "" {
-		cancelURL = "https://hatl.one/subscription/cancel"
+		cancelURL = "https://etigram.one/subscription/cancel"
 	}
 
 	subscription, err := h.paypalClient.CreateSubscription(r.Context(), plan.ID, returnURL, cancelURL)

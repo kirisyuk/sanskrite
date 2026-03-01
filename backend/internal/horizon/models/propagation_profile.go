@@ -138,6 +138,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 				{Type: "OWNS", Direction: "target_to_source", Weight: 1.0},
 				{Type: "MANAGES", Direction: "target_to_source", Weight: 0.9},
 				{Type: "PRODUCES", Direction: "target_to_source", Weight: 0.8},
+				{Type: "AFFECTS", Direction: "source_to_target", Weight: 0.9}, // zone → facility/org (disaster/conflict zone affects operations)
 			},
 			Transformations: []TransformationRule{},
 		},
@@ -173,6 +174,8 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			StrongEdges: []StrongEdgeSpec{
 				{Type: "LOCATED_IN", Direction: "both", Weight: 1.0},
 				{Type: "OPERATES_IN", Direction: "both", Weight: 0.9},
+				{Type: "AFFECTS", Direction: "source_to_target", Weight: 1.0},       // zone → facility/org (conflict risk propagates to affected entities)
+				{Type: "TRIGGERED_BY", Direction: "source_to_target", Weight: 0.95}, // event → zone (event triggers zone; signal flows event→zone)
 			},
 			Transformations: []TransformationRule{},
 		},

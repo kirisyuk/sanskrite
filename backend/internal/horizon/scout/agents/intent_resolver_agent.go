@@ -39,60 +39,118 @@ type IntentResolution struct {
 // DomainResolution describes an executable domain contract extracted from a user query.
 // Domain is config (contract), not a graph node; used for domainModes and contract rules.
 type DomainResolution struct {
-	CanonicalPath      string              `json:"canonicalPath"`
-	ContractType       string              `json:"contractType"` // allowlisted, must match /domain/v1/{contractType}/...
-	Title              string              `json:"title"`        // human-readable English title (not a slug)
-	Description        string              `json:"description"`  // actionable contract (“what to reveal/show”)
-	Facets             map[string][]string `json:"facets,omitempty"`
-	Projections        []string            `json:"projections,omitempty"`
-	RelatedDomains     []string            `json:"relatedDomains,omitempty"`     // canonical /domain/... paths
-	AffectedDomains    []string            `json:"affectedDomains,omitempty"`    // canonical /domain/... paths
-	FirstOrderEntities []string            `json:"firstOrderEntities,omitempty"` // canonical paths of entities to add to lens scope
-	Confidence         float64             `json:"confidence"`
-	Reason             string              `json:"reason"`
+	CanonicalPath      string              `json:"canonicalPath" firestore:"canonicalPath"`
+	ContractType       string              `json:"contractType" firestore:"contractType"` // allowlisted, must match /domain/v1/{contractType}/...
+	Title              string              `json:"title" firestore:"title"`        // human-readable English title (not a slug)
+	Description        string              `json:"description" firestore:"description"`  // actionable contract (“what to reveal/show”)
+	Facets             map[string][]string `json:"facets,omitempty" firestore:"facets,omitempty"`
+	Projections        []string            `json:"projections,omitempty" firestore:"projections,omitempty"`
+	RelatedDomains     []string            `json:"relatedDomains,omitempty" firestore:"relatedDomains,omitempty"`         // canonical /domain/... paths
+	AffectedDomains    []string            `json:"affectedDomains,omitempty" firestore:"affectedDomains,omitempty"`       // canonical /domain/... paths
+	FirstOrderEntities []string            `json:"firstOrderEntities,omitempty" firestore:"firstOrderEntities,omitempty"` // canonical paths of entities to add to lens scope
+	Confidence         float64             `json:"confidence" firestore:"confidence"`
+	Reason             string              `json:"reason" firestore:"reason"`
 	// SupplyChainExecutionPlan is populated when contractType is in supply-chain group.
-	// Plan translates user question into structured supply chain queries for holistic Research.
-	SupplyChainExecutionPlan *SupplyChainExecutionPlan `json:"supplyChainExecutionPlan,omitempty"`
+	SupplyChainExecutionPlan *SupplyChainExecutionPlan `json:"supplyChainExecutionPlan,omitempty" firestore:"supplyChainExecutionPlan,omitempty"`
+	// RegulatoryImpactExecutionPlan is populated when contractType is policy-impact or regulatory-impact.
+	RegulatoryImpactExecutionPlan *RegulatoryImpactExecutionPlan `json:"regulatoryImpactExecutionPlan,omitempty" firestore:"regulatoryImpactExecutionPlan,omitempty"`
+	// GovernanceExecutionPlan is populated when contractType is ownership-structure or control-map.
+	GovernanceExecutionPlan *GovernanceExecutionPlan `json:"governanceExecutionPlan,omitempty" firestore:"governanceExecutionPlan,omitempty"`
+	// EcosystemExecutionPlan is populated when contractType is ecosystem-mapping or influence-network.
+	EcosystemExecutionPlan *EcosystemExecutionPlan `json:"ecosystemExecutionPlan,omitempty" firestore:"ecosystemExecutionPlan,omitempty"`
 }
 
 // SupplyChainExecutionPlan is a plan of executable supply chain queries.
 // Generated when contractType is in supply-chain group (supply-chain, value-chain, logistics-flow, etc.).
 type SupplyChainExecutionPlan struct {
-	Queries        []SupplyChainQuery        `json:"queries"`
-	OverlayQueries []SupplyChainOverlayQuery `json:"overlayQueries,omitempty"` // Stage 2, after physical chains
+	Queries        []SupplyChainQuery        `json:"queries" firestore:"queries"`
+	OverlayQueries []SupplyChainOverlayQuery `json:"overlayQueries,omitempty" firestore:"overlayQueries,omitempty"` // Stage 2, after physical chains
 }
 
 // SupplyChainQuery defines one holistic supply chain request (anchor + direction + filters).
 type SupplyChainQuery struct {
-	Anchor        string   `json:"anchor"`                  // canonical path /org/... or /product/... or /deposit/...
-	AnchorType    string   `json:"anchorType"`               // "org" | "product" | "deposit"
-	Direction     string   `json:"direction"`               // "upstream" | "downstream" | "both"
-	Depth         int      `json:"depth"`                    // 3-6
-	ProductFilter []string `json:"productFilter,omitempty"`  // e.g. ["ev-batteries", "lithium-carbonate"]
-	GeoFilter     []string `json:"geoFilter,omitempty"`      // e.g. ["de", "cn"]
-	Reason        string   `json:"reason"`
+	Anchor        string   `json:"anchor" firestore:"anchor"`                            // canonical path /org/... or /product/... or /deposit/...
+	AnchorType    string   `json:"anchorType" firestore:"anchorType"`                    // "org" | "product" | "deposit"
+	Direction     string   `json:"direction" firestore:"direction"`                      // "upstream" | "downstream" | "both"
+	Depth         int      `json:"depth" firestore:"depth"`                              // 3-6
+	ProductFilter []string `json:"productFilter,omitempty" firestore:"productFilter,omitempty"`  // e.g. ["ev-batteries", "lithium-carbonate"]
+	GeoFilter     []string `json:"geoFilter,omitempty" firestore:"geoFilter,omitempty"`          // e.g. ["de", "cn"]
+	Reason        string   `json:"reason" firestore:"reason"`
 }
 
 // SupplyChainOverlayQuery is a Stage 2 query over parsed chains (regulatory, market, decision points).
 type SupplyChainOverlayQuery struct {
-	Type    string   `json:"type"`    // "regulatory" | "market" | "decision_points"
-	Anchors []string `json:"anchors"` // from Stage 1 (org, market canonical paths)
-	Scope   string   `json:"scope"`   // "markets" | "orgs" | "both"
+	Type    string   `json:"type" firestore:"type"`       // "regulatory" | "market" | "decision_points"
+	Anchors []string `json:"anchors" firestore:"anchors"` // from Stage 1 (org, market canonical paths)
+	Scope   string   `json:"scope" firestore:"scope"`     // "markets" | "orgs" | "both"
+}
+
+// RegulatoryImpactExecutionPlan is a plan of regulatory/policy impact queries.
+type RegulatoryImpactExecutionPlan struct {
+	Queries []RegulatoryImpactQuery `json:"queries" firestore:"queries"`
+}
+
+type RegulatoryImpactQuery struct {
+	Instrument   string            `json:"instrument" firestore:"instrument"`
+	Jurisdiction string            `json:"jurisdiction" firestore:"jurisdiction"`
+	Parameters   map[string]string `json:"parameters,omitempty" firestore:"parameters,omitempty"`
+	ImpactScope  string            `json:"impactScope" firestore:"impactScope"`
+	Depth        int               `json:"depth" firestore:"depth"`
+	SectorFilter []string          `json:"sectorFilter,omitempty" firestore:"sectorFilter,omitempty"`
+	Reason       string            `json:"reason" firestore:"reason"`
+}
+
+// GovernanceExecutionPlan is a plan for tracing ownership/control structures.
+type GovernanceExecutionPlan struct {
+	Queries []GovernanceQuery `json:"queries" firestore:"queries"`
+}
+
+type GovernanceQuery struct {
+	Target       string   `json:"target" firestore:"target"`
+	TargetType   string   `json:"targetType" firestore:"targetType"`
+	Direction    string   `json:"direction" firestore:"direction"`
+	Depth        int      `json:"depth" firestore:"depth"`
+	IncludeBoard bool     `json:"includeBoard" firestore:"includeBoard"`
+	GeoFilter    []string `json:"geoFilter,omitempty" firestore:"geoFilter,omitempty"`
+	Reason       string   `json:"reason" firestore:"reason"`
+}
+
+// EcosystemExecutionPlan is a plan for mapping multi-actor ecosystems.
+type EcosystemExecutionPlan struct {
+	Queries []EcosystemQuery `json:"queries" firestore:"queries"`
+}
+
+type EcosystemQuery struct {
+	Focus        string   `json:"focus" firestore:"focus"`
+	FocusType    string   `json:"focusType" firestore:"focusType"`
+	Depth        int      `json:"depth" firestore:"depth"`
+	ActorTypes   []string `json:"actorTypes" firestore:"actorTypes"`
+	SectorFilter []string `json:"sectorFilter,omitempty" firestore:"sectorFilter,omitempty"`
+	GeoFilter    []string `json:"geoFilter,omitempty" firestore:"geoFilter,omitempty"`
+	Reason       string   `json:"reason" firestore:"reason"`
+}
+
+// AffectedZoneQuery holds parameters for holistic affected-zone discovery.
+// Geo is ISO2 code(s) or composite (e.g. "tr-sy"). No execution plan needed—derived from contract facets.
+type AffectedZoneQuery struct {
+	Geo    string `json:"geo" firestore:"geo"`
+	Reason string `json:"reason" firestore:"reason"`
+	Title  string `json:"title,omitempty" firestore:"title,omitempty"`
 }
 
 // DecompositionHint describes how to decompose an abstract anchor (MARKET, PROGRAM, etc.)
 // into more concrete entities for research and scouting.
 type DecompositionHint struct {
 	// AnchorPath is the canonicalPath of the anchor this hint applies to.
-	AnchorPath string `json:"anchorPath"`
+	AnchorPath string `json:"anchorPath" firestore:"anchorPath"`
 	// EntityTypes suggest what types of entities should be discovered (e.g., ["ORGANIZATION", "PRODUCT"]).
-	EntityTypes []string `json:"entityTypes"`
-	// SubMarkets suggest market segmentations to explore (e.g., ["commercial banking", "consumer banking"]).
-	SubMarkets []string `json:"subMarkets,omitempty"`
+	EntityTypes []string `json:"entityTypes" firestore:"entityTypes"`
+	// SubMarkets suggest market segmentations to explore (e.g., ["upstream", "midstream", "downstream"] for energy; ["commercial", "retail"] for finance).
+	SubMarkets []string `json:"subMarkets,omitempty" firestore:"subMarkets,omitempty"`
 	// PlayerCategories suggest categories of players (e.g., ["local banks", "international banks", "fintechs"]).
-	PlayerCategories []string `json:"playerCategories,omitempty"`
+	PlayerCategories []string `json:"playerCategories,omitempty" firestore:"playerCategories,omitempty"`
 	// SearchQueries are concrete search queries to use for grounded research.
-	SearchQueries []string `json:"searchQueries"`
+	SearchQueries []string `json:"searchQueries" firestore:"searchQueries"`
 }
 
 // IntentResolverAgent extracts anchors/spheres/keywords from a natural language query.
@@ -292,6 +350,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 			} else {
 				d.ContractType = strings.TrimSpace(d.ContractType)
 			}
+			d.ContractType = normalizeContractTypeAlias(d.ContractType)
 			d.CanonicalPath = cp
 			d.Title = strings.TrimSpace(d.Title)
 			d.Description = strings.TrimSpace(d.Description)
@@ -528,6 +587,21 @@ USER QUERY:
           { "anchor": "/org/de/bmw", "anchorType": "org", "direction": "upstream", "depth": 4, "productFilter": ["ev-batteries"], "geoFilter": ["de", "cn"], "reason": "..." }
         ],
         "overlayQueries": [{ "type": "regulatory", "anchors": [], "scope": "orgs" }]
+      },
+      "regulatoryImpactExecutionPlan": {
+        "queries": [
+          { "instrument": "/mechanism/tax/vat-rate", "jurisdiction": "tr", "parameters": {"rate_from": "18%%", "rate_to": "20%%"}, "impactScope": "sector-specific", "depth": 4, "sectorFilter": ["energy"], "reason": "..." }
+        ]
+      },
+      "governanceExecutionPlan": {
+        "queries": [
+          { "target": "/org/tr/botas", "targetType": "org", "direction": "upward", "depth": 5, "includeBoard": true, "geoFilter": ["tr"], "reason": "..." }
+        ]
+      },
+      "ecosystemExecutionPlan": {
+        "queries": [
+          { "focus": "/market/semiconductor", "focusType": "sector", "depth": 4, "actorTypes": ["ORGANIZATION","GOV","FACILITY"], "sectorFilter": ["semiconductors"], "geoFilter": [], "reason": "..." }
+        ]
       }
     }
   ],
@@ -560,21 +634,25 @@ DOMAIN RULES
 - DOMAIN canonicalPath: /domain/v1/{contractType}/{facetKey}/{facetValue}...
   Examples: /domain/v1/ecosystem-mapping/geo/my/sector/energy, /domain/v1/bilateral-relations/geo/sa-ye
 - facetKey MUST be one of: geo, topic, subject, project, asset, material, application, sector, industry, market, regulation, framework, time
-- contractType MUST be one of:
-  SUPPLY CHAIN: supply-chain, value-chain, logistics-flow, trade-flow, sourcing-map, procurement-map
-  RISK/GEOPOLITICS: risk-assessment, geopolitical-risk, bilateral-relations, sanctions-exposure, conflict-dynamics
-  MARKETS: market-opportunity, competitive-landscape, geographic-concentration, market-entry, market-sizing, demand-forecast, pricing-dynamics
-  INVESTMENT: investment-thesis, funding-landscape, exit-strategy, valuation-drivers, portfolio-exposure
+- contractType MUST be one of (prefer canonical types; aliases accepted but auto-normalized):
+  SUPPLY CHAIN: supply-chain, value-chain (aliases, avoid if possible: logistics-flow, trade-flow, sourcing-map, procurement-map)
+  RISK/GEOPOLITICS: geopolitical-risk, bilateral-relations, sanctions-exposure, affected-zone (aliases: risk-assessment, conflict-dynamics)
+  MARKETS: market-opportunity, competitive-landscape, geographic-concentration (aliases: market-entry, market-sizing → market-opportunity; demand-forecast, pricing-dynamics → competitive-landscape)
+  INVESTMENT: investment-thesis, portfolio-exposure (aliases: funding-landscape, exit-strategy, valuation-drivers → investment-thesis)
   OWNERSHIP/STRUCTURE: ownership-structure, control-map
   TECHNOLOGY: technology-landscape, innovation-map, patent-landscape, rd-landscape, adoption-curve, disruption-analysis
-  ECOSYSTEM: ecosystem-mapping, stakeholder-mapping, partnership-landscape, influence-network, power-dynamics
+  ECOSYSTEM: ecosystem-mapping, influence-network (aliases: stakeholder-mapping, partnership-landscape, power-dynamics → ecosystem-mapping)
   RELATIONSHIP/COMMONALITY: commonality-analysis
-  POLICY: policy-impact, regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
-  SCENARIOS: scenario-analysis, macro-trends, megatrends, future-outlook
-  SECTOR: sector-overview, industry-structure, vertical-deep-dive
+  POLICY: policy-impact, regulatory-impact (aliases: policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape → policy-impact)
+  SCENARIOS: scenario-analysis, future-outlook (aliases: macro-trends, megatrends → scenario-analysis)
+  SECTOR: sector-overview, industry-structure (aliases: vertical-deep-dive → sector-overview)
   FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
-- SUPPLY CHAIN PLAN: When contractType is supply-chain, value-chain, logistics-flow, trade-flow, sourcing-map, or procurement-map, you MUST include supplyChainExecutionPlan with 1-10 queries. Each query: anchor (canonical path from anchors or firstOrderEntities), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. Prioritize coverage of critical products/regions. overlayQueries (Stage 2) optional.
+- SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. Each query: anchor (canonical path from anchors or firstOrderEntities), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. Prioritize coverage of critical products/regions. overlayQueries (Stage 2) optional.
+- REGULATORY IMPACT PLAN: When contractType is policy-impact or regulatory-impact, you MUST include regulatoryImpactExecutionPlan with 1-5 queries. Each query: instrument (canonical path /mechanism/... or /program/...), jurisdiction (ISO2), parameters (rate_from, rate_to, effective_date when applicable), impactScope (economy-wide|sector-specific|entity-specific), depth (3-5), sectorFilter from facets, reason.
+- GOVERNANCE PLAN: When contractType is ownership-structure or control-map, you MUST include governanceExecutionPlan with 1-5 queries. Each query: target (canonical path /org/... or /gov/...), targetType (org|gov|person), direction (upward|downward|both), depth (3-6), includeBoard (true/false), geoFilter, reason.
+- ECOSYSTEM PLAN: When contractType is ecosystem-mapping or influence-network, you MUST include ecosystemExecutionPlan with 1-5 queries. Each query: focus (canonical path or description), focusType (geo|sector|market|org), depth (3-5), actorTypes (subset of [ORGANIZATION, GOV, PERSON, FACILITY]), sectorFilter, geoFilter, reason.
 - BILATERAL: If query is about relations between two countries → contractType bilateral-relations, geo = {cc1}-{cc2} (alphabetically sorted lowercase ISO2).
+- AFFECTED ZONE: If query asks about conflict zones, military conflicts, disaster zones, earthquake-affected areas, tension zones, humanitarian crisis areas, flood zones → contractType affected-zone, facet geo. geo: ISO2 (sy, ye), composite (tr-sy), or regional (africa, ssa, mena). Examples: /domain/v1/affected-zone/geo/tr-sy, /domain/v1/affected-zone/geo/sy, /domain/v1/affected-zone/geo/africa, /domain/v1/affected-zone/geo/ssa.
 - OWNERSHIP: If query asks who owns/controls an entity → contractType ownership-structure, facet subject.
 - COMMONALITY: If query asks what connects/unifies X and Y → contractType commonality-analysis, facets subject.
 - title: Title Case, specific to query (BAD: "Market Landscape", GOOD: "EV Lithium Batteries Market Landscape"), Latin-script only, 6-10 words.
@@ -611,14 +689,97 @@ GENERAL:
 - Return ONLY JSON. No markdown. No commentary.`, query, existingDomainsBlock, quotedBlock, multiHint, anchorNamingBlock)
 }
 
+// contractTypeAliases maps alias contract types to their canonical forms.
+// All aliases are still accepted by the LLM prompt and validation, but
+// post-processing normalizes them so downstream pipeline logic only sees canonical types.
+var contractTypeAliases = map[string]string{
+	// Supply chain aliases -> supply-chain
+	"logistics-flow":  "supply-chain",
+	"trade-flow":      "supply-chain",
+	"sourcing-map":    "supply-chain",
+	"procurement-map": "supply-chain",
+	// Risk aliases -> geopolitical-risk
+	"risk-assessment":  "geopolitical-risk",
+	"conflict-dynamics": "geopolitical-risk",
+	// Policy aliases -> policy-impact
+	"policy-and-regulation":   "policy-impact",
+	"compliance-landscape":    "policy-impact",
+	"security-and-compliance": "policy-impact",
+	"licensing-requirements":  "policy-impact",
+	"esg-landscape":           "policy-impact",
+	// Market aliases
+	"market-entry":     "market-opportunity",
+	"market-sizing":    "market-opportunity",
+	"demand-forecast":  "competitive-landscape",
+	"pricing-dynamics": "competitive-landscape",
+	// Investment aliases -> investment-thesis
+	"funding-landscape": "investment-thesis",
+	"exit-strategy":     "investment-thesis",
+	"valuation-drivers": "investment-thesis",
+	// Ecosystem aliases -> ecosystem-mapping
+	"stakeholder-mapping":   "ecosystem-mapping",
+	"partnership-landscape": "ecosystem-mapping",
+	"power-dynamics":        "ecosystem-mapping",
+	// Sector aliases -> sector-overview
+	"vertical-deep-dive": "sector-overview",
+	// Scenario aliases -> scenario-analysis
+	"macro-trends": "scenario-analysis",
+	"megatrends":   "scenario-analysis",
+}
+
+// normalizeContractTypeAlias maps alias contract types to their canonical form.
+// If the contract type is already canonical, it is returned unchanged.
+func normalizeContractTypeAlias(ct string) string {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	if canonical, ok := contractTypeAliases[ct]; ok {
+		return canonical
+	}
+	return ct
+}
+
 // IsSupplyChainContractType returns true if contractType is in the supply-chain group.
 func IsSupplyChainContractType(contractType string) bool {
-	ct := strings.ToLower(strings.TrimSpace(contractType))
+	ct := normalizeContractTypeAlias(contractType)
 	switch ct {
-	case "supply-chain", "value-chain", "logistics-flow", "trade-flow", "sourcing-map", "procurement-map":
+	case "supply-chain", "value-chain":
 		return true
 	}
 	return false
+}
+
+// IsPolicyImpactContractType returns true if contractType is in the policy/regulatory impact group.
+func IsPolicyImpactContractType(contractType string) bool {
+	ct := normalizeContractTypeAlias(contractType)
+	switch ct {
+	case "policy-impact", "regulatory-impact":
+		return true
+	}
+	return false
+}
+
+// IsGovernanceContractType returns true if contractType is in the governance/ownership group.
+func IsGovernanceContractType(contractType string) bool {
+	ct := normalizeContractTypeAlias(contractType)
+	switch ct {
+	case "ownership-structure", "control-map":
+		return true
+	}
+	return false
+}
+
+// IsEcosystemContractType returns true if contractType is in the ecosystem group.
+func IsEcosystemContractType(contractType string) bool {
+	ct := normalizeContractTypeAlias(contractType)
+	switch ct {
+	case "ecosystem-mapping", "influence-network":
+		return true
+	}
+	return false
+}
+
+// IsAffectedZoneContractType returns true if contractType is affected-zone.
+func IsAffectedZoneContractType(contractType string) bool {
+	return normalizeContractTypeAlias(contractType) == "affected-zone"
 }
 
 const maxSupplyChainQueriesPerPlan = 10
@@ -1352,6 +1513,8 @@ RULES:
   - If the query is about relations/interaction between two countries or actors, you MUST create a DOMAIN of contractType bilateral-relations (in addition to anchors).
     Example: "Saudi Arabia and Yemen bilateral relations" -> domain:
       /domain/v1/bilateral-relations/geo/sa/geo/ye
+  - If the query asks about conflict zones, military conflicts, disaster zones, earthquake-affected areas, tension zones, humanitarian crisis areas, flood zones, you MUST create a DOMAIN of contractType affected-zone with facet geo. geo: ISO2, composite (tr-sy), or regional (africa, ssa, mena).
+    Examples: "Northern Syria conflict zone" -> /domain/v1/affected-zone/geo/tr-sy; "Turkey earthquake" -> /domain/v1/affected-zone/geo/tr; "Africa military conflicts" -> /domain/v1/affected-zone/geo/africa
   - If the query asks who owns/controls an entity, you MUST create a DOMAIN of contractType ownership-structure.
   - If the query asks what connects/unifies two entities, you MUST create a DOMAIN of contractType commonality-analysis (in addition to anchors).
   - DOMAIN canonicalPath MUST start with /domain/ and follow the DOMAIN taxonomy. /market/... is NEVER a DOMAIN path.
@@ -1359,15 +1522,19 @@ RULES:
   - Domain canonicalPath MUST be: /domain/v1/{contractType}/{facetKey}/{facetValue}...
     Good DOMAIN examples:
       /domain/v1/ecosystem-mapping/geo/my/sector/energy
+      /domain/v1/sector-overview/geo/kz/sector/agro-food
       /domain/v1/market-opportunity/geo/sg/industry/finance
+      /domain/v1/affected-zone/geo/tr-sy
     Bad DOMAIN examples (these are ANCHORS, not DOMAINS):
       /market/global/finance
       /market/sg/finance/banking
+      /market/global/technology/semiconductors
+      /market/kz/industrial/agriculture
   - contractType MUST be one of (choose the BEST fit):
     SUPPLY CHAIN / INDUSTRY:
       supply-chain, value-chain, logistics-flow, trade-flow, sourcing-map, procurement-map
     RISK / GEOPOLITICS:
-      risk-assessment, geopolitical-risk, bilateral-relations, sanctions-exposure, conflict-dynamics
+      risk-assessment, geopolitical-risk, bilateral-relations, sanctions-exposure, conflict-dynamics, affected-zone
     MARKETS / OPPORTUNITY:
       market-opportunity, competitive-landscape, geographic-concentration, market-entry, market-sizing, demand-forecast, pricing-dynamics
     INVESTMENT / FINANCE:
@@ -1384,8 +1551,10 @@ RULES:
       policy-impact, regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
     SCENARIOS / TRENDS:
       scenario-analysis, macro-trends, megatrends, future-outlook
-    SECTOR / INDUSTRY SPECIFIC:
+    SECTOR / INDUSTRY SPECIFIC (universal; no domain fallback):
       sector-overview, industry-structure, vertical-deep-dive
+      - sector-overview: top-level domain branch for any sector (energy, agro, tech, finance, etc.)
+      - market-opportunity: sub-contract for /market/ scope; can be auto-triggered under sector-overview
     FALLBACK (use ONLY if none of the above fit):
       other — Format: /domain/v1/other/{custom-slug}/... where {custom-slug} is a lowercase kebab-case descriptor (e.g., energy-ecosystem-mapping, startup-landscape, talent-pool-analysis).
       Example: /domain/v1/other/energy-ecosystem-mapping/geo/my
@@ -1420,7 +1589,7 @@ RULES:
       - FACILITY: /fac/tesla/gigafactory-texas
       - GEO_REGION: /loc/us/tx/austin
 - canonicalPath MUST be a valid canonical path with allowed namespaces:
-  /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media, /domain
+  /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media, /domain, /zone
 - If the query refers to a media brand/channel (e.g. a Telegram channel), do NOT collapse it to a GEO_REGION just because it contains a city name.
   - Example: Telegram channel "В казани поймут" should be anchored as a MEDIA_CHANNEL: /media/telegram/{channel-slug}, not as /loc/... for Kazan.
   - Prefer using a stable handle/username if present; otherwise use the quoted title as the slug source.
@@ -1439,6 +1608,8 @@ RULES:
   - PROGRAM      -> /program/...
   - MARKET       -> /market/...
   - EVENT        -> /event/...
+  - AFFECTED_ZONE -> /zone/{geo}/{condition_type}/{slug}
+    - slug: descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER "na".
 
 - GEO_REGION canonicalPath MUST be strict: /loc/{countryAlpha2}/{admin1}/{city}
   - countryAlpha2: ISO3166-1 alpha2 lowercase OR regional token (e.g., gcc, eu, asean, opec)
@@ -1490,22 +1661,7 @@ RULES:
   - MARKET geo MUST be ISO2 lowercase, composite ISO2, regional token (e.g., eu, gcc, asean, opec), or "global"/"int" (default "global" if unknown)
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
 
-- MARKET GEOGRAPHY INHERITANCE (CRITICAL):
-  - When the query mentions a specific country/region AND a market/industry together:
-    - The MARKET anchor MUST inherit that country's ISO2 code as geo
-    - Do NOT default to "global" when geographic context is present in the query
-  - Examples:
-    - "Saudi Arabia Event marketing market" → /market/sa/professional-services/event-marketing (NOT /market/global/...)
-    - "German automotive industry" → /market/de/industrial/automotive (NOT /market/global/automotive)
-    - "UAE banking sector" → /market/ae/finance/banking (NOT /market/global/banking)
-  - Use "global" as geo ONLY when NO geographic context is provided in the query
-  - You CAN also include a separate GEO_REGION anchor for the country - that is fine and often useful
-
-- MARKET HIERARCHY (best-effort):
-  - Markets form hierarchies: broader → narrower (e.g., marketing → digital-marketing → event-marketing)
-  - When creating a MARKET anchor, consider if there's an obvious parent market
-  - In decompositionHints.subMarkets, list narrower segments that belong to this market
-  - Example hierarchy (segment-first): /market/sa/{domain}/marketing → /market/sa/{domain}/digital-marketing → /market/sa/{domain}/event-marketing
+%s
 
 - GOV HIERARCHY (best-effort):
   - Government bodies form administrative hierarchies: government → ministry → department → agency/authority
@@ -1519,26 +1675,9 @@ RULES:
 - Provide 1-3 anchors (anchor = what the Lens should attach to).
 - Provide 1-3 spherePaths.
 
-DECOMPOSITION HINTS (REQUIRED for MARKET/PROGRAM anchors):
-- If any anchor has type MARKET or PROGRAM, you MUST provide decompositionHints for that anchor.
-- decompositionHints help downstream research know HOW to explore abstract anchors.
-- For MARKET anchors:
-  - entityTypes: what entities to discover (typically ["ORGANIZATION", "PRODUCT", "FACILITY"])
-  - subMarkets: market segments to explore (e.g., ["commercial banking", "retail banking", "islamic banking"])
-  - playerCategories: types of players (e.g., ["local banks", "international banks", "fintechs", "regulators"])
-  - searchQueries: 3-5 concrete search queries in English for grounded research
-    - searchQueries MUST be designed to yield REAL-WORLD entities (company/bank/regulator names) that we can anchor as /org/... etc.
-    - Avoid "market size" / "market share" queries that only return abstract numbers.
-      - If you include a market-share query, phrase it as "top X by market share" so the intent is to extract PLAYERS.
-    - Example for "Saudi B2B SME banking":
-      ["top SME banks in Saudi Arabia 2024", "Saudi Arabia SME banking providers list", "Saudi B2B banking platforms for SMEs", "Saudi Arabian Monetary Authority SME banking regulations"]
-- For PROGRAM anchors:
-  - entityTypes: what entities participate (e.g., ["ORGANIZATION", "FACILITY", "PRODUCT"])
-  - playerCategories: types of participants (e.g., ["implementing agencies", "contractors", "beneficiaries"])
-  - searchQueries: 3-5 concrete search queries about the program
-- searchQueries MUST be in English and actionable for web search.
+%s
 - Return ONLY JSON. No markdown. No commentary.`,
-		query, quotedBlock, multiHint, existingDomainsBlock)
+		query, quotedBlock, multiHint, existingDomainsBlock, taxonomy.MarketGeographyAndHierarchyPromptBlock(), taxonomy.DecompositionHintsPromptBlock())
 }
 
 // looksLikeMultiEntityQuery is a cheap heuristic to hint the LLM to avoid collapsing multiple entities into one anchor.
@@ -1677,7 +1816,7 @@ func normalizeCanonicalPathForTools(raw string) string {
 		return s
 	}
 	// IMPORTANT: keep this list in sync with allowed canonical namespaces (including /gov).
-	candidates := []string{"/gov/", "/org/", "/person/", "/product/", "/fac/", "/loc/", "/event/", "/sphere/", "/program/", "/market/", "/segment/", "/media/", "/domain/"}
+	candidates := []string{"/gov/", "/org/", "/person/", "/product/", "/fac/", "/loc/", "/event/", "/sphere/", "/program/", "/market/", "/segment/", "/media/", "/domain/", "/zone/"}
 	for _, c := range candidates {
 		if idx := strings.Index(s, c); idx > 0 {
 			s = s[idx:]

@@ -3,5 +3,4 @@ Allow: /
 Allow: /terms
 Allow: /privacy
 
-Sitemap: https://hatl.one/sitemap.xml
-
+Sitemap: https://etigram.one/sitemap.xml

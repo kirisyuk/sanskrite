@@ -25,6 +25,7 @@ var canonicalPrefixToType = []struct {
 	{prefix: "/decision/", typ: models.FragmentTypeDecisionPoint},
 	{prefix: "/mechanism/", typ: models.FragmentTypeMechanism},
 	{prefix: "/event/", typ: models.FragmentTypeEvent},
+	{prefix: "/zone/", typ: models.FragmentTypeAffectedZone},
 	{prefix: "/sphere/", typ: models.FragmentTypeSphere},
 	{prefix: "/supply-link/", typ: models.FragmentTypeSupplyLink},
 	{prefix: "/track/", typ: models.FragmentTypeTrack},

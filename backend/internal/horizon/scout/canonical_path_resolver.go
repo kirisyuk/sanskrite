@@ -570,7 +570,7 @@ func pickUnambiguousCityCandidate(ctx context.Context, client coreontology.GeoNa
 		return &resp.Results[0], true
 	}
 
-	// Heuristic: select the highest-population exact-name match if it dominates runner-up.
+	// Heuristic: highest-population exact-name match (see docs/horizon/scout/HEURISTICS_REGISTRY.md)
 	if best, ok := pickDominantByPopulation(resp.Results, cityName); ok {
 		return best, true
 	}
@@ -1112,7 +1112,7 @@ func parseMarketGeoSector(canonicalPath string) (string, string, string) {
 }
 
 // RecordRedirect stores a canonical path rewrite for future fast-path resolution.
-// Uses warmup threshold of 5 observations before becoming stable (suitable for heuristic rewrites).
+// Heuristic: warmup threshold 5 observations (see docs/horizon/scout/HEURISTICS_REGISTRY.md)
 func (r *CanonicalPathResolver) RecordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string) (bool, bool, bool) {
 	return r.recordRedirect(ctx, fromPath, toPath, fragmentType, reason, 5)
 }
@@ -1124,6 +1124,41 @@ func (r *CanonicalPathResolver) RecordDeterministicRedirect(ctx context.Context,
 	return r.recordRedirect(ctx, fromPath, toPath, fragmentType, reason, 1)
 }
 
+// extractMarketDomain extracts the domain segment from a MARKET canonical path.
+// Format: /market/{geo}/{domain}[/{vertical}...]. Returns empty string if not a valid market path.
+func extractMarketDomain(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/market/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	// parts[0]=market, parts[1]=geo, parts[2]=domain
+	if len(parts) < 3 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parts[2]))
+}
+
+// ValidateRedirectCompatibility checks if a redirect from sourcePath to targetPath is semantically
+// compatible for the given fragment type. For MARKET paths, cross-domain redirects (e.g. finance→technology)
+// are rejected to prevent stateful feedback loops that produce ontologically invalid outputs.
+func ValidateRedirectCompatibility(sourcePath, targetPath string, fragmentType models.FragmentType) bool {
+	sourcePath = strings.TrimSpace(sourcePath)
+	targetPath = strings.TrimSpace(targetPath)
+	if sourcePath == "" || targetPath == "" {
+		return false
+	}
+	if fragmentType != models.FragmentTypeMarket {
+		return true
+	}
+	srcDomain := extractMarketDomain(sourcePath)
+	tgtDomain := extractMarketDomain(targetPath)
+	if srcDomain == "" || tgtDomain == "" {
+		return true
+	}
+	return srcDomain == tgtDomain
+}
+
 func (r *CanonicalPathResolver) recordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string, warmupThreshold int) (bool, bool, bool) {
 	if r == nil || r.redirectsRepo == nil {
 		return false, false, false
@@ -1131,6 +1166,11 @@ func (r *CanonicalPathResolver) recordRedirect(ctx context.Context, fromPath str
 	fromPath = strings.TrimSpace(fromPath)
 	toPath = strings.TrimSpace(toPath)
 	if fromPath == "" || toPath == "" || fromPath == toPath {
+		return false, false, false
+	}
+	if !ValidateRedirectCompatibility(fromPath, toPath, fragmentType) {
+		log.Printf("[CanonicalPathResolver] redirect rejected: cross-domain incompatible %s -> %s (fragmentType=%s)",
+			fromPath, toPath, fragmentType)
 		return false, false, false
 	}
 	redirect, becameStable, variability, err := r.redirectsRepo.RecordObservation(
@@ -1173,6 +1213,12 @@ func (r *CanonicalPathResolver) applyRedirects(ctx context.Context, result *Reso
 			break
 		}
 		if _, ok := seen[target]; ok {
+			break
+		}
+		ft := models.FragmentType(strings.TrimSpace(redirect.FragmentType))
+		if !ValidateRedirectCompatibility(current, target, ft) {
+			log.Printf("[CanonicalPathResolver] redirect skipped: cross-domain incompatible %s -> %s (fragmentType=%s)",
+				current, target, redirect.FragmentType)
 			break
 		}
 		steps = append(steps, fmt.Sprintf("redirect_cache: %s -> %s", current, target))

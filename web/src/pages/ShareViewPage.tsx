@@ -8,8 +8,8 @@ import ChatMessage from '../components/ChatMessage';
 import { api } from '../lib/api';
 import { useTranslation } from 'react-i18next';
 import { ThemeContext } from '../components/ThemeProvider';
-import logoDarkTheme from '../assets/hatl-dark-theme.png';
-import logoLightTheme from '../assets/hatl-light-theme.png';
+import logoDarkTheme from '../assets/etigram-dark-theme.png';
+import logoLightTheme from '../assets/etigram-light-theme.png';
 
 export default function ShareViewPage() {
   const { token } = useParams<{ token: string }>();
@@ -697,7 +697,7 @@ export default function ShareViewPage() {
                   {/* Dark theme logo */}
                   <img
                     src={logoDarkTheme}
-                    alt="hatl.one"
+                    alt="etigram.one"
                     className="h-4 w-auto"
                     style={{
                       display: theme === 'dark' ? 'block' : 'none',
@@ -708,7 +708,7 @@ export default function ShareViewPage() {
                   {/* Light theme logo */}
                   <img
                     src={logoLightTheme}
-                    alt="hatl.one"
+                    alt="etigram.one"
                     className="h-4 w-auto"
                     style={{
                       display: theme === 'light' ? 'block' : 'none',

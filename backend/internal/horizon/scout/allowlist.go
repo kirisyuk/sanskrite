@@ -19,3 +19,13 @@ func EdgeAllowlistByDomainModes(modes []string) []models.DependencyType {
 func AllowlistContains(allowlist []models.DependencyType, t models.DependencyType) bool {
 	return edgesemantics.AllowlistContains(allowlist, t)
 }
+
+// DomainScaffoldRelationTypesString delegates to edgesemantics (single source of truth).
+func DomainScaffoldRelationTypesString() string {
+	return edgesemantics.DomainScaffoldRelationTypesString()
+}
+
+// IsDomainScaffoldRelationType delegates to edgesemantics (single source of truth).
+func IsDomainScaffoldRelationType(t models.DependencyType) bool {
+	return edgesemantics.IsDomainScaffoldRelationType(t)
+}

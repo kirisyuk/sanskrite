@@ -67,7 +67,7 @@ echo -n "YOUR_API_HASH" | gcloud secrets create telegram-api-hash --data-file=-
 echo -n "YOUR_SESSION_STRING" | gcloud secrets create telegram-session --data-file=-
 
 # Deploy with secrets
-gcloud run deploy h1horizon-telegram \
+gcloud run deploy etigram-telegram \
   --source . \
   --region us-central1 \
   --platform managed \
@@ -80,7 +80,7 @@ gcloud run deploy h1horizon-telegram \
   --set-secrets "TELEGRAM_SESSION_STRING=telegram-session:latest"
 
 # Get the service URL
-TELEGRAM_URL=$(gcloud run services describe h1horizon-telegram \
+TELEGRAM_URL=$(gcloud run services describe etigram-telegram \
   --region us-central1 --format='value(status.url)')
 
 echo "Telegram Service URL: $TELEGRAM_URL"
@@ -170,7 +170,7 @@ echo "Visit: https://your-app.web.app"
 gcloud run services logs read sanskrite-backend --region us-central1
 
 # Telegram service logs
-gcloud run services logs read h1horizon-telegram --region us-central1
+gcloud run services logs read etigram-telegram --region us-central1
 ```
 
 ## Troubleshooting

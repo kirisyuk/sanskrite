@@ -21,8 +21,9 @@ var GeoRelevantTypes = map[hmodels.FragmentType]struct{}{
 	hmodels.FragmentTypeProgram:      {},
 	hmodels.FragmentTypeGeoRegion:    {},
 	hmodels.FragmentTypeDeposit:      {},
-	hmodels.FragmentTypeEvent:        {},
-	hmodels.FragmentTypeMarket:       {},
+	hmodels.FragmentTypeEvent:       {},
+	hmodels.FragmentTypeMarket:      {},
+	hmodels.FragmentTypeAffectedZone: {},
 }
 
 // EnrichCoordinatesFromGeoNames resolves coordinates via GeoNames.
@@ -44,6 +45,9 @@ func EnrichCoordinatesFromGeoNames(
 	}
 
 	if changed, err := enrichCoordinatesFromGeoNamesCanonicalLoc(ctx, gn, fragment); changed || err != nil {
+		return changed, err
+	}
+	if changed, err := enrichCoordinatesFromGeoNamesCanonicalZone(ctx, gn, fragment); changed || err != nil {
 		return changed, err
 	}
 
@@ -115,6 +119,55 @@ func enrichCoordinatesFromGeoNamesCanonicalLoc(
 	}
 
 	best, err := searchBestGeoNamesPlace(ctx, gn, city, cc, adm)
+	if err != nil {
+		return false, err
+	}
+	if best == nil || best.GeoNameID <= 0 {
+		return false, nil
+	}
+	place, err := gn.GetPlace(ctx, best.GeoNameID)
+	if err != nil {
+		return false, err
+	}
+	if !applyGeoNamesCoordinates(fragment, place) {
+		return false, nil
+	}
+	if fragment.Identifiers == nil {
+		fragment.Identifiers = map[string]string{}
+	}
+	fragment.Identifiers["geonamesId"] = strconv.Itoa(best.GeoNameID)
+	return true, nil
+}
+
+func enrichCoordinatesFromGeoNamesCanonicalZone(
+	ctx context.Context,
+	gn coreontology.GeoNamesClientInterface,
+	fragment *hmodels.HorizonFragment,
+) (bool, error) {
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	if !strings.HasPrefix(cp, "/zone/") || fragment.Type != hmodels.FragmentTypeAffectedZone {
+		return false, nil
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) < 4 || parts[0] != "zone" {
+		return false, nil
+	}
+	geo := strings.TrimSpace(strings.ToLower(parts[1]))
+	slug := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(parts[3])))
+	if slug == "" || strings.EqualFold(slug, "na") {
+		return false, nil
+	}
+	cc := ""
+	if len(geo) == 2 && geo != "na" {
+		cc = strings.ToUpper(geo)
+	} else if idx := strings.Index(geo, "-"); idx > 0 && len(geo[:idx]) == 2 {
+		cc = strings.ToUpper(geo[:idx])
+	}
+	if cc == "" {
+		return false, nil
+	}
+
+	best, err := searchBestGeoNamesPlace(ctx, gn, slug, cc, "")
 	if err != nil {
 		return false, err
 	}
@@ -382,9 +435,43 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 			}
 		}
 		// For geo-centric fragment kinds, a plain place name can still be geocoded.
-		if name != "" && (f.Type == hmodels.FragmentTypeGeoRegion || f.Type == hmodels.FragmentTypeEvent) {
+		if name != "" && (f.Type == hmodels.FragmentTypeGeoRegion || f.Type == hmodels.FragmentTypeEvent || f.Type == hmodels.FragmentTypeAffectedZone) {
 			if addressvalidate.IsPlausibleAddress(name) {
 				return name
+			}
+		}
+	}
+
+	// 2b. /zone/{geo}/{condition_type}/{slug}: build "slug, CC" from canonical path for AFFECTED_ZONE.
+	if f.Type == hmodels.FragmentTypeAffectedZone && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/zone/") {
+		parts := strings.Split(strings.Trim(strings.TrimSpace(f.CanonicalPath), "/"), "/")
+		if len(parts) >= 4 && parts[0] == "zone" {
+			geo := strings.TrimSpace(parts[1])
+			slug := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(parts[3])))
+			if slug != "" && !strings.EqualFold(slug, "na") {
+				cc := extractCountryFromCanonicalPath("/zone/" + geo) // uses zone geo handling below
+				if cc != "" {
+					addr := slug + ", " + cc
+					if addressvalidate.IsPlausibleAddress(addr) {
+						return addr
+					}
+				}
+				// Fallback: slug + geo as-is (for composite tr-sy use first part for geocoding)
+				if len(geo) == 2 && geo != "na" {
+					addr := slug + ", " + strings.ToUpper(geo)
+					if addressvalidate.IsPlausibleAddress(addr) {
+						return addr
+					}
+				}
+				if idx := strings.Index(geo, "-"); idx > 0 {
+					firstCC := strings.ToUpper(geo[:idx])
+					if len(firstCC) == 2 {
+						addr := slug + ", " + firstCC
+						if addressvalidate.IsPlausibleAddress(addr) {
+							return addr
+						}
+					}
+				}
 			}
 		}
 	}
@@ -647,6 +734,19 @@ func extractCountryFromCanonicalPath(rawPath string) string {
 	switch parts[0] {
 	case "org", "gov", "loc", "market", "community":
 		return normalizeISO2(parts[1])
+	case "zone":
+		// /zone/{geo}/{condition_type}/{slug}: geo can be ISO2 (tr, sy) or composite (tr-sy)
+		geo := strings.TrimSpace(strings.ToLower(parts[1]))
+		if len(geo) == 2 && geo != "na" {
+			return strings.ToUpper(geo)
+		}
+		if idx := strings.Index(geo, "-"); idx > 0 {
+			firstCC := geo[:idx]
+			if len(firstCC) == 2 {
+				return strings.ToUpper(firstCC)
+			}
+		}
+		return ""
 	default:
 		return ""
 	}

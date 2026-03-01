@@ -4,7 +4,7 @@ build/
 server
 main
 verified-proxy
-hatlone-ws
+etigram-ws
 test-agent-orchestrator
 *.exe
 *.dll
@@ -15,7 +15,7 @@ test-agent-orchestrator
 cmd/*/main
 cmd/*/server
 cmd/*/verified-proxy
-cmd/*/hatlone-ws
+cmd/*/etigram-ws
 
 # Local tool binaries produced by `go build` / `go install` for cmd/tools (often 40-80MB each)
 horizon_*

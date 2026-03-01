@@ -554,7 +554,179 @@ func (b *SupplyChainPathBuilder) areProductsCompatible(
 	return true
 }
 
+// buildChainDisplayName generates a human-readable name from path segments.
+// Single segment:  "CATL → Lithium Battery Cell → BMW AG"
+// Multi-segment:   "CATL → ... → BMW AG (Lithium Battery Cell)"
+func buildChainDisplayName(segments []PathSegment) string {
+	if len(segments) == 0 {
+		return ""
+	}
+
+	rootSupplier := slugToTitle(lastPathSegment(segments[0].SupplierRef))
+	leafProduct := slugToTitle(lastPathSegment(segments[len(segments)-1].ProductRef))
+	leafCustomer := slugToTitle(lastPathSegment(segments[len(segments)-1].CustomerRef))
+
+	if rootSupplier == "" || leafCustomer == "" {
+		return ""
+	}
+
+	if len(segments) == 1 {
+		if leafProduct != "" {
+			return rootSupplier + " → " + leafProduct + " → " + leafCustomer
+		}
+		return rootSupplier + " → " + leafCustomer
+	}
+
+	if leafProduct != "" {
+		return rootSupplier + " → ... → " + leafCustomer + " (" + leafProduct + ")"
+	}
+	return rootSupplier + " → ... → " + leafCustomer
+}
+
+// buildChainLabels extracts structured labels from path segments.
+func buildChainLabels(segments []PathSegment) map[string]string {
+	if len(segments) == 0 {
+		return nil
+	}
+
+	labels := map[string]string{
+		"anchorSupplier": segments[0].SupplierRef,
+		"anchorCustomer": segments[len(segments)-1].CustomerRef,
+		"productAxis":    segments[len(segments)-1].ProductRef,
+		"segmentCount":   fmt.Sprintf("%d", len(segments)),
+	}
+
+	if segments[0].SupplierFacilityRef != nil {
+		geo := extractGeoFromPath(*segments[0].SupplierFacilityRef)
+		if geo != "" {
+			labels["geoFrom"] = geo
+		}
+	}
+
+	last := segments[len(segments)-1]
+	if last.CustomerFacilityRef != nil {
+		geo := extractGeoFromPath(*last.CustomerFacilityRef)
+		if geo != "" {
+			labels["geoTo"] = geo
+		}
+	}
+
+	return labels
+}
+
+// collectNodeRefs gathers unique canonical paths of all participants.
+func collectNodeRefs(segments []PathSegment) []string {
+	seen := map[string]bool{}
+	var refs []string
+
+	add := func(ref string) {
+		if ref == "" || ref == "natural" || ref == "end-consumer" || seen[ref] {
+			return
+		}
+		seen[ref] = true
+		refs = append(refs, ref)
+	}
+
+	for _, seg := range segments {
+		add(seg.SupplierRef)
+		add(seg.ProductRef)
+		add(seg.CustomerRef)
+		if seg.SupplierFacilityRef != nil {
+			add(*seg.SupplierFacilityRef)
+		}
+		if seg.CustomerFacilityRef != nil {
+			add(*seg.CustomerFacilityRef)
+		}
+		for _, t := range seg.TransportViaRefs {
+			add(t)
+		}
+	}
+
+	sort.Strings(refs)
+	return refs
+}
+
+// BuildStructuralCanonicalKey builds a canonical key based on structural identity:
+// /supply-chain/{tenant}/{rootSupplierSlug}/{leafProductSlug}/{leafCustomerSlug}
+func BuildStructuralCanonicalKey(tenantID string, segments []PathSegment) string {
+	if len(segments) == 0 {
+		return ""
+	}
+	rootSupplier := canonicalSlug(segments[0].SupplierRef)
+	leafProduct := canonicalSlug(segments[len(segments)-1].ProductRef)
+	leafCustomer := canonicalSlug(segments[len(segments)-1].CustomerRef)
+	if rootSupplier == "" || leafProduct == "" || leafCustomer == "" {
+		return ""
+	}
+	return fmt.Sprintf("/supply-chain/%s/%s/%s/%s", tenantID, rootSupplier, leafProduct, leafCustomer)
+}
+
+func lastPathSegment(canonicalPath string) string {
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	if canonicalPath == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(canonicalPath, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}
+
+func canonicalSlug(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	slug := strings.Trim(strings.ReplaceAll(ref, "/", "_"), "_")
+	return slug
+}
+
+func slugToTitle(slug string) string {
+	if slug == "" {
+		return ""
+	}
+	words := strings.Split(strings.ReplaceAll(slug, "-", " "), "_")
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+func extractGeoFromPath(facilityPath string) string {
+	// /fac/{country-iso}/{slug} -> /loc/{country-iso}
+	facilityPath = strings.TrimSpace(facilityPath)
+	if !strings.HasPrefix(facilityPath, "/fac/") {
+		return ""
+	}
+	parts := strings.Split(strings.TrimPrefix(facilityPath, "/fac/"), "/")
+	if len(parts) >= 1 && len(parts[0]) == 2 {
+		return "/loc/" + parts[0]
+	}
+	return ""
+}
+
+// mergeStringSlices returns the union of two string slices, sorted.
+func mergeStringSlices(a, b []string) []string {
+	seen := map[string]bool{}
+	for _, s := range a {
+		seen[s] = true
+	}
+	for _, s := range b {
+		seen[s] = true
+	}
+	merged := make([]string, 0, len(seen))
+	for s := range seen {
+		merged = append(merged, s)
+	}
+	sort.Strings(merged)
+	return merged
+}
+
 // MaterializePath saves a SupplyChainPath as a MaterializedArtifact.
+// If an artifact with the same canonical key already exists, payloads are merged (union of nodes/edges).
 func (b *SupplyChainPathBuilder) MaterializePath(
 	ctx context.Context,
 	path *SupplyChainPath,
@@ -568,7 +740,6 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 		return "", fmt.Errorf("canonicalKey is required")
 	}
 
-	// Convert path segments to MaterializedArtifact payload
 	nodes, edges := b.pathToMaterializedPayload(path)
 
 	payload := models.BuildSupplyChainPathPayload(nodes, edges, map[string]interface{}{
@@ -576,37 +747,204 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 		"maxDepth":  fmt.Sprintf("%d", path.MaxDepth),
 	})
 
+	displayName := buildChainDisplayName(path.Segments)
+	labels := buildChainLabels(path.Segments)
+	nodeRefs := collectNodeRefs(path.Segments)
+
 	artifact := &models.MaterializedArtifact{
-		TenantID:    tenantID,
-		Kind:        models.MaterializedKindSupplyChainPath,
+		TenantID:     tenantID,
+		Kind:         models.MaterializedKindSupplyChainPath,
 		CanonicalKey: canonicalKey,
-		Payload:     payload,
-		PathStatus:  "hypothesis", // validated after Critic invariants pass
+		Payload:      payload,
+		PathStatus:   "hypothesis",
+		DisplayName:  displayName,
+		Labels:       labels,
+		NodeRefs:     nodeRefs,
+	}
+
+	// Check if artifact already exists — merge instead of overwrite
+	existing, err := b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
+	if err == nil && existing != nil {
+		merged := models.MergePayloads(existing.Payload, artifact.Payload)
+		artifact.Payload = merged
+		artifact.NodeRefs = mergeStringSlices(existing.NodeRefs, artifact.NodeRefs)
+		artifact.ID = existing.ID
+		artifact.CreatedAt = existing.CreatedAt
+		artifact.CreatedBy = existing.CreatedBy
+
+		// Downgrade validated status if new nodes appeared
+		if existing.PathStatus == "validated" && models.PayloadNodesChanged(existing.Payload, merged) {
+			artifact.PathStatus = "hypothesis"
+		} else if existing.PathStatus != "" {
+			artifact.PathStatus = existing.PathStatus
+		}
+
+		// Regenerate display from merged data
+		artifact.DisplayName = displayName
+		artifact.Labels = labels
+
+		if err := artifact.Validate(); err != nil {
+			return "", fmt.Errorf("validation error after merge: %w", err)
+		}
+
+		if err := b.artifactsRepo.Update(ctx, artifact); err != nil {
+			return "", fmt.Errorf("failed to update artifact: %w", err)
+		}
+		return artifact.ID, nil
 	}
 
 	if err := artifact.Validate(); err != nil {
 		return "", fmt.Errorf("validation error: %w", err)
 	}
 
-	// Check if artifact already exists
-	existing, err := b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
-	if err == nil && existing != nil {
-		// Update existing
-		artifact.ID = existing.ID
-		artifact.CreatedAt = existing.CreatedAt
-		if err := b.artifactsRepo.Upsert(ctx, artifact); err != nil {
-			return "", fmt.Errorf("failed to update artifact: %w", err)
-		}
-		return artifact.ID, nil
-	}
-
-	// Create new
 	id, err := b.artifactsRepo.Create(ctx, artifact)
 	if err != nil {
 		return "", fmt.Errorf("failed to create artifact: %w", err)
 	}
 
 	return id, nil
+}
+
+// MaterializePathsBatch saves multiple SupplyChainPaths as MaterializedArtifacts in a single batch.
+// Uses BatchGetByCanonicalKeys and BatchUpsert for efficiency. Returns artifact IDs in same order as paths.
+func (b *SupplyChainPathBuilder) MaterializePathsBatch(
+	ctx context.Context,
+	paths []*SupplyChainPath,
+	tenantID string,
+	canonicalKeys []string,
+) ([]string, error) {
+	if b.artifactsRepo == nil || len(paths) == 0 || len(canonicalKeys) == 0 {
+		return nil, nil
+	}
+	if len(paths) != len(canonicalKeys) {
+		return nil, fmt.Errorf("paths and canonicalKeys must have same length")
+	}
+	existingMap, err := b.artifactsRepo.BatchGetByCanonicalKeys(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKeys)
+	if err != nil {
+		return nil, fmt.Errorf("batch get failed: %w", err)
+	}
+	artifacts := make([]*models.MaterializedArtifact, 0, len(paths))
+	for i, path := range paths {
+		if path == nil {
+			continue
+		}
+		key := canonicalKeys[i]
+		if key == "" {
+			continue
+		}
+		nodes, edges := b.pathToMaterializedPayload(path)
+		payload := models.BuildSupplyChainPathPayload(nodes, edges, map[string]interface{}{
+			"buildMode": path.BuildMode,
+			"maxDepth":  fmt.Sprintf("%d", path.MaxDepth),
+		})
+		displayName := buildChainDisplayName(path.Segments)
+		labels := buildChainLabels(path.Segments)
+		nodeRefs := collectNodeRefs(path.Segments)
+		artifact := &models.MaterializedArtifact{
+			TenantID:     tenantID,
+			Kind:         models.MaterializedKindSupplyChainPath,
+			CanonicalKey: key,
+			Payload:      payload,
+			PathStatus:   "hypothesis",
+			DisplayName:  displayName,
+			Labels:       labels,
+			NodeRefs:     nodeRefs,
+		}
+		if existing := existingMap[key]; existing != nil {
+			merged := models.MergePayloads(existing.Payload, artifact.Payload)
+			artifact.Payload = merged
+			artifact.NodeRefs = mergeStringSlices(existing.NodeRefs, artifact.NodeRefs)
+			artifact.ID = existing.ID
+			artifact.CreatedAt = existing.CreatedAt
+			artifact.CreatedBy = existing.CreatedBy
+			if existing.PathStatus == "validated" && models.PayloadNodesChanged(existing.Payload, merged) {
+				artifact.PathStatus = "hypothesis"
+			} else if existing.PathStatus != "" {
+				artifact.PathStatus = existing.PathStatus
+			}
+			artifact.DisplayName = displayName
+			artifact.Labels = labels
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	if len(artifacts) == 0 {
+		return nil, nil
+	}
+	for _, a := range artifacts {
+		if err := a.Validate(); err != nil {
+			return nil, fmt.Errorf("validation error: %w", err)
+		}
+	}
+	return b.artifactsRepo.BatchUpsert(ctx, artifacts)
+}
+
+// FindChainsByNodeRef finds all MaterializedArtifacts (supply chain paths) where the given
+// canonical path is a participant. Delegates to the underlying repository.
+func (b *SupplyChainPathBuilder) FindChainsByNodeRef(ctx context.Context, tenantID string, nodeRef string) ([]*models.MaterializedArtifact, error) {
+	if b.artifactsRepo == nil {
+		return nil, nil
+	}
+	return b.artifactsRepo.FindByNodeRef(ctx, tenantID, nodeRef, models.MaterializedKindSupplyChainPath)
+}
+
+// GetChainByCanonicalKey returns a MaterializedArtifact by its structural canonical key.
+// Returns (nil, nil) when repository is not wired or nothing is found.
+func (b *SupplyChainPathBuilder) GetChainByCanonicalKey(ctx context.Context, tenantID, canonicalKey string) (*models.MaterializedArtifact, error) {
+	if b.artifactsRepo == nil {
+		return nil, nil
+	}
+	return b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
+}
+
+// RebuildFromSupplyLinks rebuilds an existing MaterializedArtifact by re-traversing SupplyLinks
+// upstream from the chain's leaf customer. Merges any newly discovered nodes/edges into the artifact.
+func (b *SupplyChainPathBuilder) RebuildFromSupplyLinks(ctx context.Context, artifact *models.MaterializedArtifact, leafCustomerRef string) error {
+	if artifact == nil || leafCustomerRef == "" {
+		return nil
+	}
+
+	maxDepth := 6
+	if artifact.Payload != nil {
+		if notes, ok := artifact.Payload["notes"].(map[string]interface{}); ok {
+			if md, ok := notes["maxDepth"].(string); ok {
+				var v int
+				if _, scanErr := fmt.Sscanf(md, "%d", &v); scanErr == nil && v > 0 {
+					maxDepth = v
+				}
+			}
+		}
+	}
+
+	opts := BuildPathOptions{
+		MaxDepth:     maxDepth,
+		MaxBranching: 5,
+		MaxPaths:     1,
+	}
+
+	paths, err := b.BuildUpstreamPaths(ctx, leafCustomerRef, opts)
+	if err != nil || len(paths) == 0 {
+		return err
+	}
+
+	bestPath := paths[0]
+	nodes, edges := b.pathToMaterializedPayload(bestPath)
+	newPayload := models.BuildSupplyChainPathPayload(nodes, edges, map[string]interface{}{
+		"buildMode": "rebuild_from_supply_links",
+		"maxDepth":  fmt.Sprintf("%d", maxDepth),
+	})
+
+	merged := models.MergePayloads(artifact.Payload, newPayload)
+	newNodeRefs := collectNodeRefs(bestPath.Segments)
+
+	artifact.Payload = merged
+	artifact.NodeRefs = mergeStringSlices(artifact.NodeRefs, newNodeRefs)
+	artifact.UpdatedAt = time.Now().UTC()
+
+	if artifact.PathStatus == "validated" && models.PayloadNodesChanged(artifact.Payload, merged) {
+		artifact.PathStatus = "hypothesis"
+	}
+
+	return b.artifactsRepo.Update(ctx, artifact)
 }
 
 // UpdatePathStatus updates the PathStatus of an existing MaterializedArtifact (hypothesis → validated after Critic).

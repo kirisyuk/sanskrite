@@ -47,14 +47,40 @@ func NewCascadeVisitedRepository(db *firestore.Client) *CascadeVisitedRepository
 	}
 }
 
-func (r *CascadeVisitedRepository) docID(tenantID, cascadeID, canonicalPath string) string {
+// docIDWithRelationHash produces a doc ID. When relationHash is non-empty, it distinguishes
+// (targetPath, relationType) for relation-driven child jobs.
+func (r *CascadeVisitedRepository) docIDWithRelationHash(tenantID, cascadeID, canonicalPath, relationHash string) string {
 	tenantID = strings.TrimSpace(tenantID)
 	cascadeID = strings.TrimSpace(cascadeID)
 	canonicalPath = strings.TrimSpace(canonicalPath)
-	sum := sha1.Sum([]byte(canonicalPath))
-	// 8 bytes (16 hex chars) is enough for low collision risk at our scale.
+	relationHash = strings.TrimSpace(relationHash)
+	key := canonicalPath
+	if relationHash != "" {
+		key = canonicalPath + "|" + relationHash
+	}
+	sum := sha1.Sum([]byte(key))
 	h := hex.EncodeToString(sum[:8])
 	return fmt.Sprintf("%s_%s_%s", tenantID, cascadeID, h)
+}
+
+// TryMarkVisitedWithRelation is like TryMarkVisited but includes relationHash for relation-driven children.
+// When relationHash is non-empty, the key distinguishes (targetPath, relationType) to avoid
+// duplicate jobs for different relations to the same target.
+func (r *CascadeVisitedRepository) TryMarkVisitedWithRelation(
+	ctx context.Context,
+	tenantID string,
+	projectID string,
+	cascadeID string,
+	canonicalPath string,
+	relationHash string,
+	jobID string,
+	depth int,
+) (alreadyVisited bool, err error) {
+	if r == nil || r.col == nil {
+		return false, nil
+	}
+	id := r.docIDWithRelationHash(tenantID, cascadeID, canonicalPath, relationHash)
+	return r.tryMarkVisitedByID(ctx, tenantID, projectID, cascadeID, canonicalPath, id, jobID, depth)
 }
 
 // TryMarkVisited tries to create a visited marker for (cascadeId, canonicalPath).
@@ -71,9 +97,19 @@ func (r *CascadeVisitedRepository) TryMarkVisited(
 	jobID string,
 	depth int,
 ) (alreadyVisited bool, err error) {
-	if r == nil || r.col == nil {
-		return false, nil
-	}
+	return r.TryMarkVisitedWithRelation(ctx, tenantID, projectID, cascadeID, canonicalPath, "", jobID, depth)
+}
+
+func (r *CascadeVisitedRepository) tryMarkVisitedByID(
+	ctx context.Context,
+	tenantID string,
+	projectID string,
+	cascadeID string,
+	canonicalPath string,
+	docID string,
+	jobID string,
+	depth int,
+) (alreadyVisited bool, err error) {
 	tenantID = strings.TrimSpace(tenantID)
 	projectID = strings.TrimSpace(projectID)
 	cascadeID = strings.TrimSpace(cascadeID)
@@ -84,8 +120,7 @@ func (r *CascadeVisitedRepository) TryMarkVisited(
 	}
 
 	now := time.Now().UTC()
-	id := r.docID(tenantID, cascadeID, canonicalPath)
-	doc := r.col.Doc(id)
+	doc := r.col.Doc(docID)
 
 	visit := CascadeVisit{
 		TenantID:       tenantID,
@@ -104,7 +139,6 @@ func (r *CascadeVisitedRepository) TryMarkVisited(
 	_, err = doc.Create(ctx, visit)
 	if err != nil {
 		if status.Code(err) == codes.AlreadyExists {
-			// Best-effort bump lastSeenAt + count for observability.
 			_, _ = doc.Set(ctx, map[string]interface{}{
 				"lastSeenAt":     now,
 				"lastJobId":      jobID,
@@ -120,6 +154,11 @@ func (r *CascadeVisitedRepository) TryMarkVisited(
 
 // DeleteVisited removes the marker for (cascadeId, canonicalPath). Best-effort.
 func (r *CascadeVisitedRepository) DeleteVisited(ctx context.Context, tenantID, cascadeID, canonicalPath string) error {
+	return r.DeleteVisitedWithRelation(ctx, tenantID, cascadeID, canonicalPath, "")
+}
+
+// DeleteVisitedWithRelation removes the marker, including relationHash when provided.
+func (r *CascadeVisitedRepository) DeleteVisitedWithRelation(ctx context.Context, tenantID, cascadeID, canonicalPath, relationHash string) error {
 	if r == nil || r.col == nil {
 		return nil
 	}
@@ -129,7 +168,7 @@ func (r *CascadeVisitedRepository) DeleteVisited(ctx context.Context, tenantID, 
 	if tenantID == "" || cascadeID == "" || canonicalPath == "" {
 		return nil
 	}
-	id := r.docID(tenantID, cascadeID, canonicalPath)
+	id := r.docIDWithRelationHash(tenantID, cascadeID, canonicalPath, relationHash)
 	_, err := r.col.Doc(id).Delete(ctx)
 	return err
 }

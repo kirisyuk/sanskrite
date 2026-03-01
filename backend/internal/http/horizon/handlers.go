@@ -27,8 +27,9 @@ type HorizonHandlers struct {
 	riskJobsRepo              *horizonrepo.RiskJobsRepository
 	propagationProfileLookup *horizonprop.ProfileLookup
 	signalPipeline            *horizonscout.SignalPipeline
-	mergeFragmentsRepo        *horizonrepo.FragmentsMergeRepository
-	newsByFragmentsCanvas     *discovery.NewsByFragmentsCanvas
+	mergeFragmentsRepo          *horizonrepo.FragmentsMergeRepository
+	materializedArtifactsRepo   *horizonrepo.MaterializedArtifactsRepository
+	newsByFragmentsCanvas       *discovery.NewsByFragmentsCanvas
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -109,6 +110,12 @@ func (h *HorizonHandlers) WithMergeFragmentsRepo(r *horizonrepo.FragmentsMergeRe
 	return h
 }
 
+// WithMaterializedArtifactsRepo wires MaterializedArtifactsRepository for supply chains by-node endpoint.
+func (h *HorizonHandlers) WithMaterializedArtifactsRepo(r *horizonrepo.MaterializedArtifactsRepository) *HorizonHandlers {
+	h.materializedArtifactsRepo = r
+	return h
+}
+
 // WithNewsByFragmentsCanvas wires the news-by-fragments canvas (search → facts → 12-axis → propagation).
 func (h *HorizonHandlers) WithNewsByFragmentsCanvas(c *discovery.NewsByFragmentsCanvas) *HorizonHandlers {
 	h.newsByFragmentsCanvas = c
@@ -132,6 +139,9 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/fragments", authMiddleware(http.HandlerFunc(h.HandleFragmentsRoot)))
 	mux.Handle("/api/horizon/fragments/by-path", authMiddleware(http.HandlerFunc(h.GetFragmentByPath)))
 	mux.Handle("/api/horizon/fragments/", authMiddleware(http.HandlerFunc(h.HandleFragmentRoutes)))
+
+	// Supply chains: materialized artifacts by canonical path
+	mux.Handle("/api/horizon/supply-chains/by-node", authMiddleware(http.HandlerFunc(h.GetSupplyChainsByNode)))
 	mux.Handle("/api/horizon/geo-objects", authMiddleware(http.HandlerFunc(h.ListGeoObjects)))
 
 	// Fragment profiles (direct access by profile ID)
@@ -306,6 +316,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			return
 		case "scope-scout-query":
 			h.ScopeScoutLensQuery(w, r)
+			return
+		case "scope-scout-full":
+			h.ScopeScoutLensFull(w, r)
 			return
 		case "graph-query":
 			h.QueryGraph(w, r)

@@ -6,7 +6,7 @@
 - TavilyClient реализован
 - WebSearchToolExecutor использует Tavily
 - TAVILY_API_KEY настроен в Cloud Run через секреты
-- Ревизия: `h1horizon-api-00469-jht`
+- Ревизия: `etigram-api-00469-jht`
 
 ⚠️ **Примечание:** Dev ключи могут работать только из Cloud Run (IP whitelist или активация при первом использовании)
 
@@ -20,7 +20,7 @@
 ### Вариант 2: Через API (с аутентификацией)
 ```bash
 # Получите токен аутентификации, затем:
-curl -X POST "https://h1horizon-api-sqt63d2k2q-uc.a.run.app/api/v1/genai/complete-with-tools" \
+curl -X POST "https://etigram-api-sqt63d2k2q-uc.a.run.app/api/v1/genai/complete-with-tools" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -48,11 +48,11 @@ curl -X POST "https://h1horizon-api-sqt63d2k2q-uc.a.run.app/api/v1/genai/complet
 # После вызова web_search tool, проверьте логи:
 gcloud logging read \
   'resource.type=cloud_run_revision AND 
-   resource.labels.service_name=h1horizon-api AND 
+   resource.labels.service_name=etigram-api AND 
    (textPayload~"Tavily" OR textPayload~"WebSearch" OR textPayload~"web_search")' \
   --limit=20 \
   --format="table(timestamp,textPayload)" \
-  --project=h1horizon-488615 \
+  --project=etigram \
   --freshness=10m
 ```
 
@@ -82,17 +82,17 @@ gcloud logging read \
 ### Если видите ошибку 401:
 1. Проверьте что ключ правильный в секретах:
    ```bash
-   gcloud secrets versions access latest --secret=tavily_api_key --project=h1horizon-488615
+   gcloud secrets versions access latest --secret=tavily_api_key --project=etigram
    ```
 
 2. Убедитесь что ключ активирован в Tavily dashboard
 
 3. Проверьте что Cloud Run имеет доступ к секрету:
    ```bash
-   gcloud run services describe h1horizon-api \
+   gcloud run services describe etigram-api \
      --region=us-central1 \
      --format="get(spec.template.spec.containers[0].env)" \
-     --project=h1horizon-488615 | grep TAVILY
+     --project=etigram | grep TAVILY
    ```
 
 ### Если tool не вызывается:
@@ -108,7 +108,7 @@ echo -n "NEW_KEY_HERE" | gcloud secrets versions add tavily_api_key --data-file=
 
 # Cloud Run автоматически подхватит новый ключ (используется :latest)
 # Перезапуск не требуется, но можно принудительно:
-gcloud run services update h1horizon-api --region=us-central1 --project=h1horizon-488615
+gcloud run services update etigram-api --region=us-central1 --project=etigram
 ```
 
 ## Мониторинг
@@ -119,7 +119,7 @@ gcloud run services update h1horizon-api --region=us-central1 --project=h1horizo
 gcloud logging metrics create tavily_errors \
   --description="Tavily API errors" \
   --log-filter='resource.type=cloud_run_revision AND 
-                resource.labels.service_name=h1horizon-api AND 
+                resource.labels.service_name=etigram-api AND 
                 textPayload~"Tavily API error"'
 ```
 

@@ -42,6 +42,10 @@ func (f *fakeGeoNamesClient) GetHierarchy(_ context.Context, _ int) (*ontology.G
 	return nil, nil
 }
 
+func (f *fakeGeoNamesClient) GetCountryCode(_ context.Context, _, _ float64) (string, error) {
+	return "", nil
+}
+
 func TestEnrichCoordinatesFromGeocoding_NullIslandDoesNotBlock(t *testing.T) {
 	cc := "AE"
 	frag := &hmodels.HorizonFragment{

@@ -23,6 +23,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/geonames"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
@@ -2688,6 +2689,23 @@ func main() {
 					log.Printf("  ERROR: merge %s -> %s failed: %v", dup.ID, canonical.ID, err)
 					continue
 				}
+				// Record aliases on the winning fragment for future dedup lookups.
+				var altNames []string
+				if ln := strings.TrimSpace(dup.Identifiers["legalName"]); ln != "" {
+					altNames = append(altNames, ln)
+				}
+				if sn := strings.TrimSpace(dup.Identifiers["shortName"]); sn != "" {
+					altNames = append(altNames, sn)
+				}
+				if label := strings.TrimSpace(dup.Labels["en"]); label != "" {
+					altNames = append(altNames, label)
+				}
+				var altPaths []string
+				if cp := strings.TrimSpace(dup.CanonicalPath); cp != "" && cp != canonical.CanonicalPath {
+					altPaths = append(altPaths, cp)
+				}
+				fragmentsRepo.AppendDedupAliases(ctx, canonical.ID, altNames, altPaths)
+
 				stats.EdgesReassigned += res.EdgesReassigned
 				stats.EdgesDeleted += res.EdgesDeleted
 				stats.FragmentsDeleted++
@@ -5242,6 +5260,9 @@ func normalizeLegalName(name string) string {
 			break
 		}
 	}
+
+	// Strip diacritics for cross-transliteration matching (BOTAŞ → BOTAS, São → Sao).
+	normalized = naming.StripDiacritics(normalized)
 
 	return strings.TrimSpace(normalized)
 }

@@ -1,6 +1,7 @@
 package scout
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -19,6 +20,25 @@ func TestBuildRelationTargetIdentityKey_ProductSlugStable(t *testing.T) {
 	}
 	if k1 != k2 {
 		t.Fatalf("product identity keys differ: %q vs %q", k1, k2)
+	}
+}
+
+func TestBuildRelationTargetIdentityKey_MarketIncludesGeoDomain(t *testing.T) {
+	rel := agents.DiscoveredRelation{TargetType: string(models.FragmentTypeMarket)}
+	k1 := buildRelationTargetIdentityKey(rel, "/market/sa/finance/banking", models.FragmentTypeMarket)
+	k2 := buildRelationTargetIdentityKey(rel, "/market/sa/technology/banking", models.FragmentTypeMarket)
+	k3 := buildRelationTargetIdentityKey(rel, "/market/ae/finance/banking", models.FragmentTypeMarket)
+	if k1 == "" || k2 == "" || k3 == "" {
+		t.Fatalf("identity keys must not be empty: k1=%q k2=%q k3=%q", k1, k2, k3)
+	}
+	if k1 == k2 {
+		t.Fatalf("different domains (finance vs technology) must produce different keys: %q == %q", k1, k2)
+	}
+	if k1 == k3 {
+		t.Fatalf("different geo (sa vs ae) must produce different keys: %q == %q", k1, k3)
+	}
+	if !strings.Contains(k1, "geo=sa") || !strings.Contains(k1, "domain=finance") {
+		t.Fatalf("market identity key must include geo and domain: %q", k1)
 	}
 }
 

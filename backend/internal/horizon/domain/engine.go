@@ -21,6 +21,10 @@ type LensArtifactsReader interface {
 	ListByLens(ctx context.Context, lensID string, limit int) ([]*models.LensArtifact, error)
 }
 
+type lensArtifactsPaginatedReader interface {
+	ListByLensPaginated(ctx context.Context, lensID string, limit int, cursor *time.Time) ([]*models.LensArtifact, *time.Time, error)
+}
+
 type FragmentsReader interface {
 	Get(ctx context.Context, id string) (*models.HorizonFragment, error)
 	GetByCanonicalPath(ctx context.Context, canonicalPath string) (*models.HorizonFragment, error)
@@ -49,6 +53,13 @@ type Engine struct {
 	aiExecutor    *ai.AITaskExecutor
 	publisher     EventPublisher
 }
+
+const (
+	domainCollectArtifactsPageSize = 1000
+	domainCollectArtifactsMaxTotal = 20000
+	domainEnrichAwaitTimeout       = 20 * time.Second
+	domainEnrichAwaitPoll          = 1500 * time.Millisecond
+)
 
 func NewEngine(
 	lensArtifacts LensArtifactsReader,
@@ -92,11 +103,12 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 	expectations := generateCrossFacetExpectations(contract)
 	originalQuery := extractOriginalQuery(in.Job)
 	logDomainContract(ctx, "run.start", in.Job, &contract, map[string]any{
-		"domainId":         domainID,
-		"steeringProfile":  string(steeringProfile),
-		"facetCount":       len(contract.Facets),
-		"expectationCount": len(expectations),
-		"maxCycles":        e.gateConfig.MaxEnrichmentCycles,
+		"domainId":          domainID,
+		"steeringProfile":   string(steeringProfile),
+		"facetCount":        len(contract.Facets),
+		"expectationCount":  len(expectations),
+		"maxCycles":         e.gateConfig.MaxEnrichmentCycles,
+		"maxAdaptiveCycles": e.gateConfig.MaxAdaptiveCycles,
 	})
 
 	e.emit(ctx, in.Job, contract, "horizon.domain.contract.resolve.started",
@@ -167,9 +179,14 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		},
 	)
 
-	maxCycles := e.gateConfig.MaxEnrichmentCycles
-	if maxCycles < 0 {
-		maxCycles = 0
+	baseMaxCycles := e.gateConfig.MaxEnrichmentCycles
+	if baseMaxCycles < 0 {
+		baseMaxCycles = 0
+	}
+	maxCycles := baseMaxCycles
+	adaptiveRemaining := e.gateConfig.MaxAdaptiveCycles
+	if adaptiveRemaining < 0 {
+		adaptiveRemaining = 0
 	}
 	cycle := 0
 	var finalSnapshot *models.DomainAnswerSnapshot
@@ -178,6 +195,8 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 	var initialExplanatory *models.DomainExplanatoryLayer
 	initialExplanatoryHash := ""
 	initialSnapshotPublished := false
+	graphTruncatedObserved := false
+	partialWaitTimeoutObserved := false
 
 	for {
 		logDomainContract(ctx, "cycle.start", in.Job, &contract, map[string]any{
@@ -185,11 +204,15 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 			"cycle":    cycle,
 		})
 		lastGraph = e.collectGraph(ctx, in.Job, contract)
+		if lastGraph.ArtifactsTruncated {
+			graphTruncatedObserved = true
+		}
 		logDomainContract(ctx, "cycle.graph.collected", in.Job, &contract, map[string]any{
 			"domainId":  domainID,
 			"cycle":     cycle,
 			"nodeCount": len(lastGraph.NodesByID),
 			"edgeCount": len(lastGraph.Edges),
+			"truncated": lastGraph.ArtifactsTruncated,
 		})
 		snapshot := e.assembleDeterministic(in.Job, contract, domainID, expectations, lastGraph)
 		if cycle == 0 {
@@ -273,13 +296,14 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 					"Completeness check passed (L2)",
 					"Semantic completeness reached",
 					map[string]interface{}{
-						"domainId": domainID,
-						"level":    2,
-						"score":    l2.Score,
-						"checks":   l2.Checks,
+						"domainId":           domainID,
+						"level":              2,
+						"score":              l2.Score,
+						"checks":             l2.Checks,
+						"recoverableReasons": gateSummaryWithRuntime(l2, graphTruncatedObserved, partialWaitTimeoutObserved).RecoverableReasons,
 					},
 				)
-				snapshot.Gate = l2.toSummary()
+				snapshot.Gate = gateSummaryWithRuntime(l2, graphTruncatedObserved, partialWaitTimeoutObserved)
 				finalSnapshot = snapshot
 				finalGate = l2
 				break
@@ -290,7 +314,7 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		finalGate = l1
 		if cycle == 0 && !initialSnapshotPublished && e.snapshots != nil {
 			snapshot.ReadinessStatus = models.DomainReadinessReadyWithGaps
-			snapshot.Gate = l1.toSummary()
+			snapshot.Gate = gateSummaryWithRuntime(l1, graphTruncatedObserved, partialWaitTimeoutObserved)
 			snapshot.EnrichmentCycles = cycle
 			if id, err := e.snapshots.Upsert(ctx, snapshot); err == nil {
 				snapshot.ID = id
@@ -310,17 +334,39 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 			}
 		}
 		if cycle >= maxCycles {
-			logDomainContract(ctx, "enrich.limit_reached", in.Job, &contract, map[string]any{
-				"domainId":     domainID,
-				"cycle":        cycle,
-				"maxCycles":    maxCycles,
-				"failedChecks": l1.failedCheckIDs(),
-				"gateLevel":    l1.Level,
-				"gateStatus":   l1.OverallStatus,
-			})
-			break
+			if adaptiveRemaining > 0 && shouldGrantAdaptiveCycle(l1) {
+				adaptiveRemaining--
+				maxCycles++
+				logDomainContract(ctx, "enrich.adaptive_cycle_granted", in.Job, &contract, map[string]any{
+					"domainId":           domainID,
+					"cycle":              cycle,
+					"baseMaxCycles":      baseMaxCycles,
+					"effectiveMaxCycles": maxCycles,
+					"adaptiveRemaining":  adaptiveRemaining,
+					"failedChecks":       l1.failedCheckIDs(),
+				})
+			} else {
+				logDomainContract(ctx, "enrich.limit_reached", in.Job, &contract, map[string]any{
+					"domainId":     domainID,
+					"cycle":        cycle,
+					"maxCycles":    maxCycles,
+					"failedChecks": l1.failedCheckIDs(),
+					"gateLevel":    l1.Level,
+					"gateStatus":   l1.OverallStatus,
+				})
+				break
+			}
 		}
 		tasks := buildEnrichmentTasks(contract, l1)
+		if graphTruncatedObserved {
+			tasks = append(tasks, EnrichmentTask{
+				Priority:    "P1",
+				GapType:     "artifact_coverage_expand",
+				Hint:        "Artifact collection was truncated; expand artifact coverage and rerun enrichment",
+				MissingInfo: []string{"Expand artifact coverage beyond current truncation cap for this domain"},
+				TargetPath:  strings.TrimSpace(in.Job.TargetCanonicalPath),
+			})
+		}
 		if warning := buildDomainBudgetWarning(in.Job, cycle+1, maxCycles); warning != nil {
 			e.emit(ctx, in.Job, contract, "horizon.domain.contract.budget.warning",
 				warning.Title,
@@ -376,22 +422,32 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 				})
 			}
 		}
-		afterGraph := e.collectGraph(ctx, in.Job, contract)
+		afterGraph := e.awaitGraphDelta(ctx, in.Job, contract, beforeNodes, beforeEdges, cycle+1)
+		if afterGraph.ArtifactsTruncated {
+			graphTruncatedObserved = true
+		}
+		if afterGraph.PartialWaitTimeout {
+			partialWaitTimeoutObserved = true
+		}
 		e.emit(ctx, in.Job, contract, "horizon.domain.contract.enrich.completed",
 			fmt.Sprintf("Enrichment cycle %d complete", cycle+1),
 			"Graph enriched with additional tasks",
 			map[string]interface{}{
-				"domainId": domainID,
-				"cycle":    cycle + 1,
-				"newNodes": maxInt(0, len(afterGraph.NodesByID)-beforeNodes),
-				"newEdges": maxInt(0, len(afterGraph.Edges)-beforeEdges),
+				"domainId":           domainID,
+				"cycle":              cycle + 1,
+				"newNodes":           maxInt(0, len(afterGraph.NodesByID)-beforeNodes),
+				"newEdges":           maxInt(0, len(afterGraph.Edges)-beforeEdges),
+				"partialWaitTimeout": afterGraph.PartialWaitTimeout,
+				"graphTruncated":     afterGraph.ArtifactsTruncated,
 			},
 		)
 		logDomainContract(ctx, "enrich.completed", in.Job, &contract, map[string]any{
-			"domainId": domainID,
-			"cycle":    cycle + 1,
-			"newNodes": maxInt(0, len(afterGraph.NodesByID)-beforeNodes),
-			"newEdges": maxInt(0, len(afterGraph.Edges)-beforeEdges),
+			"domainId":             domainID,
+			"cycle":                cycle + 1,
+			"newNodes":             maxInt(0, len(afterGraph.NodesByID)-beforeNodes),
+			"newEdges":             maxInt(0, len(afterGraph.Edges)-beforeEdges),
+			"partial_wait_timeout": afterGraph.PartialWaitTimeout,
+			"graph_truncated":      afterGraph.ArtifactsTruncated,
 		})
 		cycle++
 	}
@@ -399,7 +455,7 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 	if finalSnapshot == nil {
 		finalSnapshot = e.assembleDeterministic(in.Job, contract, domainID, expectations, lastGraph)
 		finalSnapshot.ReadinessStatus = models.DomainReadinessReadyWithGaps
-		finalSnapshot.Gate = finalGate.toSummary()
+		finalSnapshot.Gate = gateSummaryWithRuntime(finalGate, graphTruncatedObserved, partialWaitTimeoutObserved)
 	}
 	if finalSnapshot.ExplanatoryLayer == nil && initialExplanatory != nil {
 		finalSnapshot.ExplanatoryLayer = cloneDomainExplanatoryLayer(initialExplanatory)
@@ -467,18 +523,23 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 	if strings.TrimSpace(finalSnapshot.ReadinessStatus) == "" {
 		finalSnapshot.ReadinessStatus = models.DomainReadinessReady
 	}
+	publishBlockedRecoverable := hasRecoverableCriticalOpen(finalGate, graphTruncatedObserved, partialWaitTimeoutObserved)
 	if finalGate.OverallStatus != "pass" {
 		finalSnapshot.ReadinessStatus = models.DomainReadinessReadyWithGaps
 		e.emit(ctx, in.Job, contract, "horizon.domain.contract.fallback",
 			"Answer ready with gaps",
 			"Reached enrichment cycle limit with unresolved critical checks",
 			map[string]interface{}{
-				"domainId":        domainID,
-				"gapCount":        len(finalSnapshot.DataGaps),
-				"readinessStatus": finalSnapshot.ReadinessStatus,
+				"domainId":                  domainID,
+				"gapCount":                  len(finalSnapshot.DataGaps),
+				"readinessStatus":           finalSnapshot.ReadinessStatus,
+				"graphTruncated":            graphTruncatedObserved,
+				"partialWaitTimeout":        partialWaitTimeoutObserved,
+				"publishBlockedRecoverable": publishBlockedRecoverable,
 			},
 		)
 	}
+	finalSnapshot.Gate = gateSummaryWithRuntime(finalGate, graphTruncatedObserved, partialWaitTimeoutObserved)
 
 	if e.snapshots != nil {
 		if id, err := e.snapshots.Upsert(ctx, finalSnapshot); err == nil {
@@ -496,30 +557,54 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		}
 	}
 
-	e.emit(ctx, in.Job, contract, "horizon.domain.contract.publish.completed",
-		"Domain answer published",
-		fmt.Sprintf("Snapshot %s", strings.TrimSpace(finalSnapshot.ID)),
-		map[string]interface{}{
-			"domainId":        domainID,
-			"snapshotId":      finalSnapshot.ID,
-			"contractType":    contract.ContractType,
-			"readinessStatus": finalSnapshot.ReadinessStatus,
-		},
-	)
+	if publishBlockedRecoverable {
+		e.emit(ctx, in.Job, contract, "horizon.domain.contract.publish.blocked",
+			"Domain answer publication deferred",
+			"Recoverable critical gaps detected (graph truncation / wait timeout); rerun enrichment before publish",
+			map[string]interface{}{
+				"domainId":             domainID,
+				"snapshotId":           finalSnapshot.ID,
+				"contractType":         contract.ContractType,
+				"readinessStatus":      finalSnapshot.ReadinessStatus,
+				"graphTruncated":       graphTruncatedObserved,
+				"partialWaitTimeout":   partialWaitTimeoutObserved,
+				"recoverableReasons":   finalSnapshot.Gate.RecoverableReasons,
+				"criticalOpenCount":    finalSnapshot.Gate.CriticalOpenCount,
+				"evidenceCoverage":     finalSnapshot.Gate.EvidenceCoverage,
+				"partial_wait_timeout": partialWaitTimeoutObserved,
+			},
+		)
+	} else {
+		e.emit(ctx, in.Job, contract, "horizon.domain.contract.publish.completed",
+			"Domain answer published",
+			fmt.Sprintf("Snapshot %s", strings.TrimSpace(finalSnapshot.ID)),
+			map[string]interface{}{
+				"domainId":           domainID,
+				"snapshotId":         finalSnapshot.ID,
+				"contractType":       contract.ContractType,
+				"readinessStatus":    finalSnapshot.ReadinessStatus,
+				"graphTruncated":     graphTruncatedObserved,
+				"partialWaitTimeout": partialWaitTimeoutObserved,
+			},
+		)
+	}
 
 	out := &RunResult{
 		Snapshot:      finalSnapshot,
 		ViewDirective: adaptSnapshotToViewDirective(finalSnapshot),
 	}
 	logDomainContract(ctx, "run.completed", in.Job, &contract, map[string]any{
-		"domainId":          domainID,
-		"snapshotId":        strings.TrimSpace(finalSnapshot.ID),
-		"readinessStatus":   strings.TrimSpace(finalSnapshot.ReadinessStatus),
-		"enrichmentCycles":  cycle,
-		"criticalDeps":      len(finalSnapshot.CriticalDependencies),
-		"impactPaths":       len(finalSnapshot.ImpactPaths),
-		"dataGaps":          len(finalSnapshot.DataGaps),
-		"gateOverallStatus": finalGate.OverallStatus,
+		"domainId":                    domainID,
+		"snapshotId":                  strings.TrimSpace(finalSnapshot.ID),
+		"readinessStatus":             strings.TrimSpace(finalSnapshot.ReadinessStatus),
+		"enrichmentCycles":            cycle,
+		"criticalDeps":                len(finalSnapshot.CriticalDependencies),
+		"impactPaths":                 len(finalSnapshot.ImpactPaths),
+		"dataGaps":                    len(finalSnapshot.DataGaps),
+		"gateOverallStatus":           finalGate.OverallStatus,
+		"graph_truncated":             graphTruncatedObserved,
+		"partial_wait_timeout":        partialWaitTimeoutObserved,
+		"publish_blocked_recoverable": publishBlockedRecoverable,
 		"explanatoryUnits": func() int {
 			if finalSnapshot.ExplanatoryLayer == nil {
 				return 0
@@ -531,9 +616,92 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 }
 
 type graphSnapshot struct {
-	NodesByID   map[string]*models.HorizonFragment
-	NodesByPath map[string]*models.HorizonFragment
-	Edges       []*models.DependencyEdge
+	NodesByID          map[string]*models.HorizonFragment
+	NodesByPath        map[string]*models.HorizonFragment
+	Edges              []*models.DependencyEdge
+	ArtifactsTruncated bool
+	PartialWaitTimeout bool
+}
+
+func (e *Engine) listLensArtifacts(ctx context.Context, lensID string) ([]*models.LensArtifact, bool, error) {
+	if e == nil || e.lensArtifacts == nil {
+		return nil, false, nil
+	}
+	if paged, ok := e.lensArtifacts.(lensArtifactsPaginatedReader); ok {
+		all := make([]*models.LensArtifact, 0, domainCollectArtifactsPageSize)
+		var cursor *time.Time
+		for len(all) < domainCollectArtifactsMaxTotal {
+			batch, next, err := paged.ListByLensPaginated(ctx, lensID, domainCollectArtifactsPageSize, cursor)
+			if err != nil {
+				return nil, false, err
+			}
+			if len(batch) == 0 {
+				return all, false, nil
+			}
+			all = append(all, batch...)
+			if next == nil {
+				return all, false, nil
+			}
+			if len(all) >= domainCollectArtifactsMaxTotal {
+				return all[:domainCollectArtifactsMaxTotal], true, nil
+			}
+			cursor = next
+		}
+		return all, len(all) >= domainCollectArtifactsMaxTotal, nil
+	}
+
+	artifacts, err := e.lensArtifacts.ListByLens(ctx, lensID, domainCollectArtifactsMaxTotal)
+	if err != nil {
+		return nil, false, err
+	}
+	return artifacts, len(artifacts) >= domainCollectArtifactsMaxTotal, nil
+}
+
+func (e *Engine) awaitGraphDelta(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	contract Contract,
+	beforeNodes, beforeEdges, cycle int,
+) graphSnapshot {
+	snapshot := e.collectGraph(ctx, job, contract)
+	if len(snapshot.NodesByID) > beforeNodes || len(snapshot.Edges) > beforeEdges {
+		return snapshot
+	}
+
+	startedAt := time.Now()
+	deadline := time.Now().Add(domainEnrichAwaitTimeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			snapshot.PartialWaitTimeout = true
+			return snapshot
+		case <-time.After(domainEnrichAwaitPoll):
+		}
+
+		snapshot = e.collectGraph(ctx, job, contract)
+		if len(snapshot.NodesByID) > beforeNodes || len(snapshot.Edges) > beforeEdges {
+			logDomainContract(ctx, "enrich.await_graph_delta.ok", job, &contract, map[string]any{
+				"cycle":   cycle,
+				"waitMs":  int64(time.Since(startedAt) / time.Millisecond),
+				"nodes":   len(snapshot.NodesByID),
+				"edges":   len(snapshot.Edges),
+				"beforeN": beforeNodes,
+				"beforeE": beforeEdges,
+			})
+			return snapshot
+		}
+	}
+
+	logDomainContract(ctx, "enrich.await_graph_delta.timeout", job, &contract, map[string]any{
+		"cycle":   cycle,
+		"timeout": domainEnrichAwaitTimeout.String(),
+		"nodes":   len(snapshot.NodesByID),
+		"edges":   len(snapshot.Edges),
+		"beforeN": beforeNodes,
+		"beforeE": beforeEdges,
+	})
+	snapshot.PartialWaitTimeout = true
+	return snapshot
 }
 
 func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, contract Contract) graphSnapshot {
@@ -555,13 +723,21 @@ func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, cont
 		})
 		return out
 	}
-	artifacts, err := e.lensArtifacts.ListByLens(ctx, lensID, 4000)
+	artifacts, truncated, err := e.listLensArtifacts(ctx, lensID)
 	if err != nil {
 		logDomainContract(ctx, "collect.artifacts.error", job, &contract, map[string]any{
 			"lensId": lensID,
 			"error":  err.Error(),
 		})
 		return out
+	}
+	if truncated {
+		out.ArtifactsTruncated = true
+		logDomainContract(ctx, "collect.artifacts.truncated", job, &contract, map[string]any{
+			"lensId":    lensID,
+			"maxTotal":  domainCollectArtifactsMaxTotal,
+			"artifacts": len(artifacts),
+		})
 	}
 	if len(artifacts) == 0 {
 		logDomainContract(ctx, "collect.artifacts.empty", job, &contract, map[string]any{
@@ -777,6 +953,9 @@ func expectedRelationsForContractType(contractType string) []string {
 		return []string{"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "ADMINISTERS"}
 	case SteeringProfileCompetitiveLandscape:
 		return []string{"PARTICIPATES_IN", "COMPETES_WITH", "PRODUCES"}
+	case SteeringProfileSectorIndustry:
+		// Universal sector: same market semantics (market research is sub-contract for /market/ scope)
+		return []string{"PARTICIPATES_IN", "HAS_MARKET_SEGMENT", "REGULATES", "COMPETES_WITH", "SUPPLIES_TO", "PRODUCES"}
 	case SteeringProfileGeographicConcentration:
 		return []string{"LOCATED_IN", "OPERATES_IN", "EXTRACTS_FROM"}
 	default:
@@ -1361,6 +1540,88 @@ func (r gateResult) toSummary() models.DomainGateSummary {
 	}
 }
 
+func (r gateResult) criticalOpenCount() int {
+	total := 0
+	for _, c := range r.Checks {
+		if strings.TrimSpace(strings.ToLower(c.Status)) != "fail" {
+			continue
+		}
+		priority := strings.TrimSpace(strings.ToUpper(c.Priority))
+		if priority == "P0" || priority == "P1" {
+			total++
+		}
+	}
+	return total
+}
+
+func (r gateResult) evidenceCoverage() float64 {
+	if r.TotalChecks <= 0 {
+		return 1.0
+	}
+	score := float64(r.Passed) + 0.5*float64(r.Partial)
+	coverage := score / float64(r.TotalChecks)
+	if coverage < 0 {
+		return 0
+	}
+	if coverage > 1 {
+		return 1
+	}
+	return coverage
+}
+
+func gateSummaryWithRuntime(r gateResult, graphTruncated, partialWaitTimeout bool) models.DomainGateSummary {
+	summary := r.toSummary()
+	summary.GraphTruncated = graphTruncated
+	summary.PartialWaitTimeout = partialWaitTimeout
+	summary.CriticalOpenCount = r.criticalOpenCount()
+	summary.EvidenceCoverage = r.evidenceCoverage()
+	reasons := make([]string, 0, 2)
+	if graphTruncated {
+		reasons = append(reasons, "graph_truncated")
+	}
+	if partialWaitTimeout {
+		reasons = append(reasons, "partial_wait_timeout")
+	}
+	summary.RecoverableReasons = reasons
+	return summary
+}
+
+func hasRecoverableCriticalOpen(gate gateResult, graphTruncated, partialWaitTimeout bool) bool {
+	if strings.TrimSpace(strings.ToLower(gate.OverallStatus)) == "pass" {
+		return false
+	}
+	if !graphTruncated && !partialWaitTimeout {
+		return false
+	}
+	return gate.criticalOpenCount() > 0
+}
+
+func shouldGrantAdaptiveCycle(gate gateResult) bool {
+	// Adaptive cycle is useful only when unresolved checks include critical P0/P1 fails
+	// that can improve via async enrichment catch-up.
+	if strings.TrimSpace(strings.ToLower(gate.OverallStatus)) == "pass" {
+		return false
+	}
+	hasCritical := false
+	allTemporalOrDiversity := true
+	for _, c := range gate.Checks {
+		if c.Status != "fail" {
+			continue
+		}
+		priority := strings.TrimSpace(strings.ToUpper(c.Priority))
+		if priority == "P0" || priority == "P1" {
+			hasCritical = true
+		}
+		if c.CheckID != "U7_temporal_validity" && c.CheckID != "U8_source_diversity" {
+			allTemporalOrDiversity = false
+		}
+	}
+	if !hasCritical {
+		return false
+	}
+	return !allTemporalOrDiversity
+}
+
 func capDataGaps(gaps []models.DataGap, max int) []models.DataGap {
 	if max <= 0 || len(gaps) <= max {
 		return gaps
@@ -1587,20 +1848,40 @@ func (e *Engine) evaluateGateL1(contract Contract, expectations []CrossFacetExpe
 
 	// U8 source diversity.
 	sourceDiversityOK := true
+	depsChecked := 0
+	depsBelowThreshold := 0
+	depsWithoutSources := 0
 	for i, dep := range snapshot.CriticalDependencies {
 		if i >= e.gateConfig.TopKDependencies {
 			break
 		}
-		if len(dep.SourceRefs) < e.gateConfig.MinSourcesPerDep {
+		depsChecked++
+		srcN := len(dep.SourceRefs)
+		if srcN == 0 {
+			depsWithoutSources++
+		}
+		if srcN < e.gateConfig.MinSourcesPerDep {
+			depsBelowThreshold++
 			sourceDiversityOK = false
-			break
+		}
+	}
+	u8Status := "pass"
+	u8Priority := "P3"
+	if depsChecked > 0 && !sourceDiversityOK {
+		// When at least one source exists, treat as advisory partial rather than hard fail.
+		// Strict fail is kept only for total source absence across checked dependencies.
+		if depsWithoutSources == depsChecked {
+			u8Status = "fail"
+			u8Priority = "P2"
+		} else {
+			u8Status = "partial"
 		}
 	}
 	checks = append(checks, models.DomainGateCheck{
 		CheckID:        "U8_source_diversity",
-		Status:         ternary(sourceDiversityOK, "pass", "fail"),
-		Priority:       "P3",
-		GapDescription: fmt.Sprintf("min_sources_per_dep=%d", e.gateConfig.MinSourcesPerDep),
+		Status:         u8Status,
+		Priority:       u8Priority,
+		GapDescription: fmt.Sprintf("min_sources_per_dep=%d checked=%d below_threshold=%d without_sources=%d", e.gateConfig.MinSourcesPerDep, depsChecked, depsBelowThreshold, depsWithoutSources),
 		EnrichmentHint: "Corroborate single-source dependencies with additional sources",
 	})
 
@@ -1620,7 +1901,7 @@ func (e *Engine) contractSpecificChecks(contract Contract, g graphSnapshot, face
 			checkSupplyChainEdges(g, facetNodes),
 			checkUpstreamDownstream(g, facetNodes),
 			checkMarketMetrics(snapshot),
-			checkConcentrationEvidence(snapshot),
+			checkConcentrationEvidence(snapshot, g),
 			checkSubstitutionData(snapshot),
 			checkGeoCoverage(snapshot, e.gateConfig.MinGeoCoverage),
 		)
@@ -1635,7 +1916,13 @@ func (e *Engine) contractSpecificChecks(contract Contract, g graphSnapshot, face
 		out = append(out,
 			checkMarketParticipation(g),
 			checkMarketShareData(g),
-			checkConcentrationEvidence(snapshot),
+			checkConcentrationEvidence(snapshot, g),
+		)
+	case SteeringProfileSectorIndustry:
+		// Universal sector overview: market participation + structure (market research = sub-contract for markets)
+		out = append(out,
+			checkMarketParticipation(g),
+			checkConcentrationEvidence(snapshot, g),
 		)
 	case SteeringProfileGeographicConcentration:
 		out = append(out,
@@ -2769,6 +3056,8 @@ func defaultFilterRelTypes(contractType string) []string {
 		return []string{"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "ADMINISTERS"}
 	case SteeringProfileCompetitiveLandscape:
 		return []string{"PARTICIPATES_IN", "COMPETES_WITH", "PRODUCES"}
+	case SteeringProfileSectorIndustry:
+		return []string{"PARTICIPATES_IN", "HAS_MARKET_SEGMENT", "REGULATES", "COMPETES_WITH", "SUPPLIES_TO", "PRODUCES"}
 	case SteeringProfileGeographicConcentration:
 		return []string{"LOCATED_IN", "OPERATES_IN", "EXTRACTS_FROM"}
 	default:
@@ -2912,8 +3201,9 @@ func edgeOverlapsHorizon(edge *models.DependencyEdge, contract Contract) bool {
 	start := contract.TemporalStart
 	end := contract.TemporalEnd
 	if start == nil && end == nil {
-		// No explicit horizon: treat timestamped edges as valid, otherwise unknown.
-		return edge.ValidFrom != nil || edge.ValidTo != nil
+		// No explicit horizon: temporal check is non-blocking.
+		// Missing ValidFrom/ValidTo should not fail domain readiness in timeless contracts.
+		return true
 	}
 	ef := edge.ValidFrom
 	et := edge.ValidTo
@@ -3071,7 +3361,7 @@ func checkMarketMetrics(snapshot *models.DomainAnswerSnapshot) models.DomainGate
 	}
 }
 
-func checkConcentrationEvidence(snapshot *models.DomainAnswerSnapshot) models.DomainGateCheck {
+func checkConcentrationEvidence(snapshot *models.DomainAnswerSnapshot, g graphSnapshot) models.DomainGateCheck {
 	if snapshot == nil {
 		return models.DomainGateCheck{CheckID: "SC4_concentration_evidence", Status: "fail", Priority: "P1"}
 	}
@@ -3080,11 +3370,23 @@ func checkConcentrationEvidence(snapshot *models.DomainAnswerSnapshot) models.Do
 			return models.DomainGateCheck{CheckID: "SC4_concentration_evidence", Status: "pass", Priority: "P1"}
 		}
 	}
+	stats := computeMarketParticipationStats(g)
+	if stats.MarketsWith3Orgs > 0 || stats.UniqueOrgParticipants >= 3 {
+		return models.DomainGateCheck{
+			CheckID:        "SC4_concentration_evidence",
+			Status:         "partial",
+			Priority:       "P1",
+			GapDescription: fmt.Sprintf("CR4/HHI missing; proxy_org_participation markets_ge_3=%d unique_orgs=%d", stats.MarketsWith3Orgs, stats.UniqueOrgParticipants),
+			Affected:       append([]string(nil), stats.MarketCanonicalPaths...),
+			EnrichmentHint: "Collect CR4/HHI to replace participation proxy",
+		}
+	}
 	return models.DomainGateCheck{
 		CheckID:        "SC4_concentration_evidence",
 		Status:         "fail",
 		Priority:       "P1",
 		GapDescription: "CR4/HHI missing",
+		Affected:       append([]string(nil), stats.MarketCanonicalPaths...),
 		EnrichmentHint: "Collect concentration metrics or proxy via market participation counts",
 	}
 }
@@ -3223,26 +3525,90 @@ func checkMechanismSpecificity(g graphSnapshot) models.DomainGateCheck {
 
 func checkMarketParticipation(g graphSnapshot) models.DomainGateCheck {
 	marketOK := false
-	countByMarket := map[string]int{}
-	for _, edge := range g.Edges {
-		if edge == nil || edge.Type != models.DependencyTypeParticipatesIn {
-			continue
-		}
-		countByMarket[edge.TargetFragmentID]++
+	stats := computeMarketParticipationStats(g)
+	if stats.MarketsWith3Orgs > 0 {
+		marketOK = true
 	}
-	for _, c := range countByMarket {
-		if c >= 3 {
-			marketOK = true
-			break
+	if marketOK {
+		return models.DomainGateCheck{
+			CheckID:        "CL1_market_participation",
+			Status:         "pass",
+			Priority:       "P0",
+			GapDescription: fmt.Sprintf("markets_with_3_org_participants=%d", stats.MarketsWith3Orgs),
+			Affected:       append([]string(nil), stats.MarketCanonicalPaths...),
+			EnrichmentHint: "Add PARTICIPATES_IN edges from at least 3 organizations per primary market",
+		}
+	}
+	if stats.UniqueOrgParticipants >= 3 {
+		return models.DomainGateCheck{
+			CheckID:        "CL1_market_participation",
+			Status:         "partial",
+			Priority:       "P1",
+			GapDescription: fmt.Sprintf("strict_market_participation_missing; proxy_unique_org_participants=%d", stats.UniqueOrgParticipants),
+			Affected:       append([]string(nil), stats.MarketCanonicalPaths...),
+			EnrichmentHint: "Concentrate PARTICIPATES_IN edges into primary market node(s)",
 		}
 	}
 	return models.DomainGateCheck{
 		CheckID:        "CL1_market_participation",
-		Status:         ternary(marketOK, "pass", "fail"),
+		Status:         "fail",
 		Priority:       "P0",
-		GapDescription: fmt.Sprintf("markets_with_3_participants=%v", marketOK),
+		GapDescription: "markets_with_3_org_participants=0",
+		Affected:       append([]string(nil), stats.MarketCanonicalPaths...),
 		EnrichmentHint: "Add PARTICIPATES_IN edges from at least 3 organizations per primary market",
 	}
+}
+
+type marketParticipationStats struct {
+	MarketsWith3Orgs      int
+	UniqueOrgParticipants int
+	MarketCanonicalPaths  []string
+}
+
+func computeMarketParticipationStats(g graphSnapshot) marketParticipationStats {
+	countByMarket := map[string]map[string]struct{}{}
+	uniqueOrgs := map[string]struct{}{}
+	for _, edge := range g.Edges {
+		if edge == nil || edge.Type != models.DependencyTypeParticipatesIn {
+			continue
+		}
+		src := g.NodesByID[edge.SourceFragmentID]
+		if src == nil || src.Type != models.FragmentTypeOrganization {
+			continue
+		}
+		targetID := strings.TrimSpace(edge.TargetFragmentID)
+		if targetID == "" {
+			continue
+		}
+		if _, ok := countByMarket[targetID]; !ok {
+			countByMarket[targetID] = map[string]struct{}{}
+		}
+		sourceID := strings.TrimSpace(edge.SourceFragmentID)
+		if sourceID == "" {
+			continue
+		}
+		countByMarket[targetID][sourceID] = struct{}{}
+		uniqueOrgs[sourceID] = struct{}{}
+	}
+	stats := marketParticipationStats{
+		UniqueOrgParticipants: len(uniqueOrgs),
+		MarketCanonicalPaths:  make([]string, 0, len(countByMarket)),
+	}
+	for targetID, participants := range countByMarket {
+		if len(participants) >= 3 {
+			stats.MarketsWith3Orgs++
+		}
+		if target := g.NodesByID[targetID]; target != nil {
+			if cp := strings.TrimSpace(target.CanonicalPath); cp != "" {
+				stats.MarketCanonicalPaths = append(stats.MarketCanonicalPaths, cp)
+			}
+		}
+	}
+	sort.Strings(stats.MarketCanonicalPaths)
+	if len(stats.MarketCanonicalPaths) > 8 {
+		stats.MarketCanonicalPaths = stats.MarketCanonicalPaths[:8]
+	}
+	return stats
 }
 
 func checkMarketShareData(g graphSnapshot) models.DomainGateCheck {

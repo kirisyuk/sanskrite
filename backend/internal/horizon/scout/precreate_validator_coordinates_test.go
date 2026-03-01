@@ -38,6 +38,10 @@ func (f *fakeGeoNamesCoordinates) GetHierarchy(ctx context.Context, geonameID in
 	return nil, nil
 }
 
+func (f *fakeGeoNamesCoordinates) GetCountryCode(ctx context.Context, lat, lon float64) (string, error) {
+	return "", nil
+}
+
 func TestPreCreateValidator_AttachesCoordinatesFromGeoNames(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil).WithGeoNamesClient(&fakeGeoNamesCoordinates{})
 

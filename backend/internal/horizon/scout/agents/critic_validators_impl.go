@@ -368,3 +368,18 @@ func (v *PolicyImpactValidator) Validate(ctx context.Context, input CriticValida
 	prompt := v.agent.buildPolicyImpactValidationPrompt(input)
 	return v.agent.runValidationPrompt(ctx, prompt)
 }
+
+// EcosystemValidator validates ecosystem/stakeholder mapping relation quality and coverage.
+type EcosystemValidator struct {
+	agent *CriticAgent
+}
+
+func (v *EcosystemValidator) DomainMode() string { return taxonomy.DomainModeEcosystem }
+
+func (v *EcosystemValidator) Validate(ctx context.Context, input CriticValidatorInput) (*ValidationResult, error) {
+	if v.agent == nil {
+		return nil, nil
+	}
+	prompt := v.agent.buildEcosystemValidationPrompt(input)
+	return v.agent.runValidationPrompt(ctx, prompt)
+}

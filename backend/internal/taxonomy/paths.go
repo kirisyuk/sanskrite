@@ -16,7 +16,9 @@ var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
 var regionalGeoTokens = map[string]struct{}{
 	// Regional buckets (shared with /segment geo rules).
 	"global":  {},
+	"int":     {}, // International (gov, org: African Union, UN, etc.)
 	"mena":    {},
+	"me":      {}, // Middle East (conflict with Montenegro ISO2, but used for zones like middle-east-conflict-zones)
 	"emea":    {},
 	"apac":    {},
 	"latam":   {},
@@ -29,6 +31,7 @@ var regionalGeoTokens = map[string]struct{}{
 	"anz":     {},
 	"cis":     {},
 	"ssa":     {},
+	"africa":  {},
 	"usmca":   {},
 	"nafta":   {},
 
@@ -56,6 +59,28 @@ var regionalGeoTokens = map[string]struct{}{
 	"sadc":            {},
 	"ecowas":          {},
 	"pacific-islands": {},
+
+	// Continents and geographic zones (for loc, gov, org, market, zone, etc.).
+	"oceania":              {},
+	"europe":               {},
+	"asia":                 {},
+	"north-america":        {},
+	"south-america":        {},
+	"antarctica":           {},
+	"latin-america":        {},
+	"central-america":      {},
+	"middle-east":          {},
+	"southeast-asia":       {},
+	"eastern-africa":       {},
+	"central-africa":       {},
+	"north-africa":         {},
+	"central-eastern-africa": {},
+	"central-asia":         {},
+	"east-asia":            {},
+	"west-asia":            {},
+	"sub-saharan-africa":   {},
+	"mediterranean":        {},
+	"sea":                  {},
 }
 
 // IsRegionalGeoToken returns true for allowed non-ISO2 regional geo tokens.
@@ -152,6 +177,8 @@ var ValidCanonicalPathNamespace = map[string]bool{
 	"decision": true,
 	// Strategic mechanisms of control (global tools of control).
 	"mechanism": true,
+	// Affected zones (conflict, disaster, tension) — /zone/{geo}/{condition_type}/{slug}
+	"zone": true,
 }
 
 // ValidateCanonicalPath validates that a canonical path matches the expected format.
@@ -187,12 +214,18 @@ func ValidateCanonicalPath(path string) error {
 	}
 
 	// All segments must be non-empty after slugification
+	slugRe := regexp.MustCompile(`^[a-z0-9-]+$`)
+	zoneConditionRe := regexp.MustCompile(`^[a-z0-9_-]+$`) // zone condition_type allows underscore (military_conflict, political_tension)
 	for i, part := range parts {
 		if part == "" {
 			return fmt.Errorf("canonical path segment %d is empty: %s", i, path)
 		}
-		// Check that segment matches slug format (lowercase alphanumeric and hyphens)
-		if !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(part) {
+		// Zone: segment 2 (condition_type) may use underscore (military_conflict, political_tension)
+		if namespace == "zone" && i == 2 {
+			if !zoneConditionRe.MatchString(part) {
+				return fmt.Errorf("canonical path segment %d contains invalid characters: %s", i, path)
+			}
+		} else if !slugRe.MatchString(part) {
 			return fmt.Errorf("canonical path segment %d contains invalid characters: %s", i, path)
 		}
 	}
@@ -328,6 +361,22 @@ func ValidateCanonicalPath(path string) error {
 		default:
 			return fmt.Errorf("mechanism canonical path has invalid category %q (expected one of: regulatory, economic, technological, contractual, political): %s", parts[1], path)
 		}
+	case "zone":
+		// /zone/{geo}/{condition_type}/{slug}
+		// geo: ISO2, composite (tr-sy), or regional token (same rules as market/community)
+		// condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone, etc.
+		// slug: descriptive place name (northern-rakhine, gaza-strip, donbas) — NEVER "na"
+		if len(parts) != 4 {
+			return fmt.Errorf("zone canonical path must have exactly 4 segments: /zone/{geo}/{condition_type}/{slug}: %s", path)
+		}
+		geo := strings.ToLower(strings.TrimSpace(parts[1]))
+		if geo != "global" && !reCountryAlpha2.MatchString(geo) && !IsRegionalGeoToken(geo) && !isCompositeGeo(geo) {
+			return fmt.Errorf("zone canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, or regional token): %s", parts[1], path)
+		}
+		slug := strings.ToLower(strings.TrimSpace(parts[3]))
+		if slug == "" || slug == "na" {
+			return fmt.Errorf("zone canonical path slug must be a descriptive place name (e.g. northern-rakhine, gaza-strip), never 'na': %s", path)
+		}
 	}
 
 	return nil
@@ -352,6 +401,7 @@ var domainContractTypes = map[string]struct{}{
 	"bilateral-relations": {},
 	"sanctions-exposure":  {},
 	"conflict-dynamics":   {},
+	"resource-dispute":    {},
 
 	// Markets / opportunity / competitive
 	"market-opportunity":       {},
@@ -368,6 +418,7 @@ var domainContractTypes = map[string]struct{}{
 	"exit-strategy":      {},
 	"valuation-drivers":  {},
 	"portfolio-exposure": {},
+	"ownership-structure": {},
 
 	// Technology / innovation
 	"technology-landscape": {},
@@ -404,6 +455,9 @@ var domainContractTypes = map[string]struct{}{
 	"industry-structure": {},
 	"vertical-deep-dive": {},
 
+	// Affected zones (conflict, disaster, tension) — holistic discovery by qualifier types
+	"affected-zone": {},
+
 	// Catch-all: /domain/v1/other/{custom-slug}
 	// When the user's intent doesn't fit any predefined contract type,
 	// the LLM can use "other" and provide a descriptive slug.
@@ -434,6 +488,57 @@ func DomainContractTypes() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// domainContractTypeCategories defines the prompt grouping for DomainContractTypesPromptForLLM.
+// Order and labels must match domain_resolver_agent expectations.
+var domainContractTypeCategories = []struct {
+	Label string
+	Types []string
+}{
+	{"SUPPLY CHAIN / INDUSTRY", []string{"supply-chain", "value-chain", "logistics-flow", "trade-flow", "sourcing-map", "procurement-map"}},
+	{"RISK / GEOPOLITICS", []string{"risk-assessment", "geopolitical-risk", "bilateral-relations", "sanctions-exposure", "conflict-dynamics", "affected-zone"}},
+	{"MARKETS / OPPORTUNITY", []string{"market-opportunity", "competitive-landscape", "geographic-concentration", "market-entry", "market-sizing", "demand-forecast", "pricing-dynamics"}},
+	{"INVESTMENT / FINANCE", []string{"investment-thesis", "funding-landscape", "exit-strategy", "valuation-drivers", "portfolio-exposure"}},
+	{"TECHNOLOGY / INNOVATION", []string{"technology-landscape", "innovation-map", "patent-landscape", "rd-landscape", "adoption-curve", "disruption-analysis"}},
+	{"ECOSYSTEM / STAKEHOLDER", []string{"ecosystem-mapping", "stakeholder-mapping", "partnership-landscape", "influence-network", "power-dynamics"}},
+	{"POLICY / REGULATION", []string{"policy-impact", "regulatory-impact", "policy-and-regulation", "compliance-landscape", "security-and-compliance", "licensing-requirements", "esg-landscape"}},
+	{"SCENARIOS / TRENDS", []string{"scenario-analysis", "macro-trends", "megatrends", "future-outlook"}},
+	{"SECTOR / INDUSTRY SPECIFIC", []string{"sector-overview", "industry-structure", "vertical-deep-dive"}},
+	{"FALLBACK (use ONLY if none of the above fit)", []string{"other"}},
+}
+
+// domainContractTypeOtherFormat is the format/example for the "other" contract type.
+const domainContractTypeOtherFormat = "other - Format: /domain/v1/other/{custom-slug}/... where {custom-slug} is a lowercase kebab-case descriptor.\n    Example: /domain/v1/other/energy-ecosystem-mapping/geo/my"
+
+// DomainContractTypesPromptForLLM returns the contract types block for intent resolver prompt.
+// Grouped by category for LLM selection. BILATERAL RELATIONS rule is NOT included —
+// domain_resolver_agent must append it after this call (business rule for bilateral-relations).
+func DomainContractTypesPromptForLLM() string {
+	var b strings.Builder
+	b.WriteString("- contractType MUST be one of (choose the BEST fit):\n")
+	for _, cat := range domainContractTypeCategories {
+		// Filter to only types that exist in domainContractTypes
+		var valid []string
+		for _, ct := range cat.Types {
+			if _, ok := domainContractTypes[ct]; ok {
+				valid = append(valid, ct)
+			}
+		}
+		if len(valid) == 0 {
+			continue
+		}
+		b.WriteString("  ")
+		b.WriteString(cat.Label)
+		b.WriteString(":\n    ")
+		if len(valid) == 1 && valid[0] == "other" {
+			b.WriteString(domainContractTypeOtherFormat)
+		} else {
+			b.WriteString(strings.Join(valid, ", "))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func validateDomainCanonicalPathParts(parts []string, originalPath string) error {
@@ -688,12 +793,15 @@ func NormalizeDomainCanonicalPath(path string) (string, error) {
 	return out.String(), nil
 }
 
+// reGeoSlug accepts any slug-like regional descriptor (africa, oceania, southeast-asia).
+// Intent resolver and downstream pipelines understand semantic meaning; strict allowlist was blocking valid intents.
+var reGeoSlug = regexp.MustCompile(`^[a-z][a-z0-9-]{1,47}[a-z0-9]$|^[a-z0-9]{2}$`)
+
 func isValidDomainGeoToken(geo string) bool {
 	geo = strings.ToLower(strings.TrimSpace(geo))
 	if geo == "" {
 		return false
 	}
-	// Allow same family as /loc and /org plus "int" for international scope.
 	if geo == "global" || geo == "int" {
 		return true
 	}
@@ -704,6 +812,10 @@ func isValidDomainGeoToken(geo string) bool {
 		return true
 	}
 	if isCompositeGeo(geo) {
+		return true
+	}
+	// Allow any slug-like regional descriptor — system understands africa, oceania, etc.
+	if len(geo) >= 2 && len(geo) <= 48 && reGeoSlug.MatchString(geo) {
 		return true
 	}
 	return false
@@ -835,7 +947,7 @@ func stripLegalFormSuffix(slug string) string {
 	if slug == "" {
 		return slug
 	}
-	legalForms := []string{"inc", "llc", "jsc", "pjsc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa", "as", "ab", "bv", "nv", "se", "co", "pty"}
+	legalForms := LegalForms()
 	changed := true
 	for changed {
 		changed = false
@@ -851,15 +963,15 @@ func stripLegalFormSuffix(slug string) string {
 	return slug
 }
 
-// isCompositeGeo checks if a string is a valid composite geo (e.g., "tr-sy", "ae-sa-om").
-// Composite geo consists of 2-3 ISO3166-1 alpha2 codes joined by hyphens, sorted lexicographically.
+// isCompositeGeo checks if a string is a valid composite geo (e.g., "tr-sy", "ae-sa-om", "at-cz-pl-ro").
+// Composite geo consists of 2-6 ISO3166-1 alpha2 codes joined by hyphens.
 // Each component must be exactly 2 lowercase letters (ISO3166-1 alpha2).
 func isCompositeGeo(s string) bool {
 	if s == "" {
 		return false
 	}
 	parts := strings.Split(s, "-")
-	if len(parts) < 2 || len(parts) > 3 {
+	if len(parts) < 2 || len(parts) > 6 {
 		return false
 	}
 	// Each part must be valid ISO3166-1 alpha2 (exactly 2 lowercase letters)

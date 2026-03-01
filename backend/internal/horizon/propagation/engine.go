@@ -746,12 +746,13 @@ func (e *PropagationEngine) propagateHotPathAxisBased(
 	}
 
 	type queueItem struct {
-		frag       *models.HorizonFragment
-		metricName string
-		axis       string
-		d          float64
-		hops       int
-		path       []string
+		frag        *models.HorizonFragment
+		metricName  string
+		axis        string
+		d           float64
+		hops        int
+		path        []string
+		artifactKey string
 	}
 
 	visited := make(map[string]float64) // nodeID|metric -> abs(delta)
@@ -831,6 +832,18 @@ func (e *PropagationEngine) propagateHotPathAxisBased(
 					}
 				}
 			}
+
+			// Waveguide coherence bonus
+			neighborArtifactKey := EdgeArtifactKey(neighbor.edge)
+			coherence := WaveguideCoherenceBonus(it.artifactKey, neighborArtifactKey)
+			if coherence != 1.0 {
+				sign := 1.0
+				if nextAmp < 0 {
+					sign = -1.0
+				}
+				nextAmp = sign * math.Min(math.Abs(nextAmp)*coherence, 1.0)
+			}
+
 			if !e.threshold.ExceedsThreshold(nextMetric, nextAmp, unit) {
 				continue
 			}
@@ -861,12 +874,13 @@ func (e *PropagationEngine) propagateHotPathAxisBased(
 				}
 			}
 			queue = append(queue, queueItem{
-				frag:       targetFrag,
-				metricName: nextMetric,
-				axis:       nextAxis,
-				d:          nextAmp,
-				hops:       it.hops + 1,
-				path:       newPath,
+				frag:        targetFrag,
+				metricName:  nextMetric,
+				axis:        nextAxis,
+				d:           nextAmp,
+				hops:        it.hops + 1,
+				path:        newPath,
+				artifactKey: neighborArtifactKey,
 			})
 		}
 	}

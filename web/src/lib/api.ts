@@ -1979,6 +1979,33 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   /**
+   * Horizon - Full scouting inside lens: intent resolution, anchors + domains + firstOrderEntities,
+   * multiple ScoutingJobs with full context, first 5 objects added to scope and graph.
+   * POST /api/horizon/lenses/{lensId}/scope-scout-full
+   */
+  async scopeScoutHorizonLensFull(
+    lensId: string,
+    input: { query: string; maxAnchors?: number; maxRecursionDepth?: number; specialties?: string[] },
+    options?: { correlationId?: string; sessionId?: string }
+  ): Promise<{
+    jobIds: string[];
+    canonicalPaths: string[];
+    firstFiveForGraph: string[];
+    intent?: { focus?: string; anchors?: any[]; domains?: any[] };
+  }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/scope-scout-full`, input, { headers });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] scopeScoutHorizonLensFull error:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Horizon - Ask a grounded question against the currently visible graph snapshot.
    * POST /api/horizon/lenses/{lensId}/graph-query
    */
@@ -2388,6 +2415,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     limit?: number;
     pathPrefix?: string;
     onlyLoc?: boolean;
+    types?: string[];
+    createdAfter?: string;
+    createdBefore?: string;
   }): Promise<{
     items: Array<{
       id: string;
@@ -2397,6 +2427,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       description?: string;
       status?: string;
       coordinates?: { lat: number; lon: number };
+      radiusKm?: number;
+      createdAt?: string;
       updatedAt?: string;
     }>;
     total: number;
@@ -2408,6 +2440,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       if (options?.limit !== undefined) params.limit = String(options.limit);
       if (options?.pathPrefix) params.pathPrefix = options.pathPrefix;
       if (options?.onlyLoc !== undefined) params.onlyLoc = options.onlyLoc ? '1' : '0';
+      if (options?.types?.length) params.types = options.types.join(',');
+      if (options?.createdAfter) params.createdAfter = options.createdAfter;
+      if (options?.createdBefore) params.createdBefore = options.createdBefore;
       const response = await this.client.get('/api/horizon/geo-objects', { params });
       return response.data;
     } catch (error: any) {

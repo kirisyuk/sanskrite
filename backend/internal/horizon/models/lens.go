@@ -56,6 +56,19 @@ type Lens struct {
 	// Example:
 	//   /exposure/SUPPLY_CHAIN_RISK/objective/fragment/<fragmentId>/path/<pathId>
 	ExposurePaths []string `json:"exposurePaths,omitempty" firestore:"exposurePaths,omitempty"`
+
+	// ScopeArtifacts maps artifact canonical key to artifact metadata cache.
+	// Populated when scope contains /artifact/ entries (supply chains, governance chains, etc.).
+	// Serves as both a cache for graph loading and a registry for frontend to enumerate chains.
+	ScopeArtifacts map[string]ScopeArtifactRef `json:"scopeArtifacts,omitempty" firestore:"scopeArtifacts,omitempty"`
+}
+
+// ScopeArtifactRef caches metadata for a MaterializedArtifact referenced from lens scope.
+type ScopeArtifactRef struct {
+	Kind        string   `json:"kind" firestore:"kind"`
+	DisplayName string   `json:"displayName,omitempty" firestore:"displayName,omitempty"`
+	NodeRefs    []string `json:"nodeRefs,omitempty" firestore:"nodeRefs,omitempty"`
+	Status      string   `json:"status,omitempty" firestore:"status,omitempty"`
 }
 
 // LensIntent is a living question the user wants to answer within the lens.

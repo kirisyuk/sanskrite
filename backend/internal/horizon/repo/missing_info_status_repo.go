@@ -72,13 +72,13 @@ func (r *MissingInfoStatusRepository) GetAllForFragment(ctx context.Context, fra
 	if limit <= 0 {
 		limit = 100
 	}
-	
+
 	iter := r.db.Collection(missingInfoStatusCollection).
 		Where("fragmentId", "==", fragmentID).
 		OrderBy("createdAt", firestore.Desc).
 		Limit(limit).
 		Documents(ctx)
-	
+
 	docs, err := iter.GetAll()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list missing info statuses: %w", err)
@@ -131,16 +131,18 @@ func (r *MissingInfoStatusRepository) Upsert(ctx context.Context, status *models
 }
 
 // RecordAttempt records a research attempt and updates cooldown.
-func (r *MissingInfoStatusRepository) RecordAttempt(ctx context.Context, fragmentID, questionText string, found bool, cooldownHours int) error {
+// sourceFingerprint must represent the source/evidence state used in this attempt.
+func (r *MissingInfoStatusRepository) RecordAttempt(ctx context.Context, fragmentID, questionText string, found bool, cooldownHours int, sourceFingerprint string) error {
 	id := GenerateMissingInfoID(fragmentID, questionText)
-	
+	sourceFingerprint = strings.TrimSpace(sourceFingerprint)
+
 	return r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		docRef := r.db.Collection(missingInfoStatusCollection).Doc(id)
 		doc, err := tx.Get(docRef)
-		
+
 		now := time.Now().UTC()
 		var status models.MissingInfoStatus
-		
+
 		if err != nil {
 			// Create new record ONLY when doc doesn't exist. Any other error should propagate.
 			if grpcstatus.Code(err) != codes.NotFound {
@@ -148,13 +150,14 @@ func (r *MissingInfoStatusRepository) RecordAttempt(ctx context.Context, fragmen
 			}
 			// Create new record
 			status = models.MissingInfoStatus{
-				ID:           id,
-				FragmentID:   fragmentID,
-				QuestionHash: GenerateQuestionHash(questionText),
-				QuestionText: questionText,
-				Status:       models.MissingInfoStatusOpen,
-				Attempts:     0,
-				CreatedAt:    now,
+				ID:                id,
+				FragmentID:        fragmentID,
+				QuestionHash:      GenerateQuestionHash(questionText),
+				QuestionText:      questionText,
+				Status:            models.MissingInfoStatusOpen,
+				Attempts:          0,
+				SourceFingerprint: sourceFingerprint,
+				CreatedAt:         now,
 			}
 		} else {
 			if err := doc.DataTo(&status); err != nil {
@@ -171,8 +174,14 @@ func (r *MissingInfoStatusRepository) RecordAttempt(ctx context.Context, fragmen
 			status.Status = models.MissingInfoStatusResolved
 			status.ResolvedAt = &now
 			status.NextAttemptAt = nil
+			if sourceFingerprint != "" {
+				status.SourceFingerprint = sourceFingerprint
+			}
 		} else {
 			// Check if exhausted
+			if sourceFingerprint != "" {
+				status.SourceFingerprint = sourceFingerprint
+			}
 			if status.Attempts >= models.DefaultMaxAttempts {
 				status.Status = models.MissingInfoStatusExhausted
 				status.ExhaustedAt = &now
@@ -192,10 +201,13 @@ func (r *MissingInfoStatusRepository) RecordAttempt(ctx context.Context, fragmen
 }
 
 // ResetForNewSources resets an exhausted status when new sources are available.
-func (r *MissingInfoStatusRepository) ResetForNewSources(ctx context.Context, fragmentID, questionText, newFingerprint string) error {
+// Returns true when reset was applied.
+func (r *MissingInfoStatusRepository) ResetForNewSources(ctx context.Context, fragmentID, questionText, newFingerprint string) (bool, error) {
 	id := GenerateMissingInfoID(fragmentID, questionText)
-	
-	return r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+	newFingerprint = strings.TrimSpace(newFingerprint)
+
+	resetApplied := false
+	if err := r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		docRef := r.db.Collection(missingInfoStatusCollection).Doc(id)
 		doc, err := tx.Get(docRef)
 		if err != nil {
@@ -217,10 +229,14 @@ func (r *MissingInfoStatusRepository) ResetForNewSources(ctx context.Context, fr
 			status.ExhaustedAt = nil
 			status.NextAttemptAt = nil
 			status.UpdatedAt = time.Now().UTC()
+			resetApplied = true
 			return tx.Set(docRef, &status)
 		}
 		return nil
-	})
+	}); err != nil {
+		return false, err
+	}
+	return resetApplied, nil
 }
 
 // FilterSearchable filters a list of questions to only those that are searchable.
@@ -253,4 +269,3 @@ func (r *MissingInfoStatusRepository) FilterSearchable(ctx context.Context, frag
 
 	return searchable, filtered, nil
 }
-

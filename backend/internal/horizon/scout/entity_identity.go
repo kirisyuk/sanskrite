@@ -41,6 +41,20 @@ func extractPathJurisdiction(path string) string {
 	}
 }
 
+// extractMarketPathGeoDomain extracts geo and domain from a MARKET canonical path.
+// Format: /market/{geo}/{domain}[/{vertical}...]. Returns ("", "") if not a valid market path.
+func extractMarketPathGeoDomain(path string) (geo, domain string) {
+	p := strings.TrimSpace(path)
+	if p == "" || !strings.HasPrefix(p, "/market/") {
+		return "", ""
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) < 3 {
+		return "", ""
+	}
+	return strings.ToLower(strings.TrimSpace(parts[1])), strings.ToLower(strings.TrimSpace(parts[2]))
+}
+
 func bestNameForIdentityFromRelation(rel agents.DiscoveredRelation) string {
 	if s := strings.TrimSpace(rel.TargetShortName); s != "" {
 		return s
@@ -94,6 +108,25 @@ func buildRelationTargetIdentityKey(rel agents.DiscoveredRelation, canonicalPath
 			parts = append(parts, "name="+orgNorm)
 		} else if slug != "" && slug != "na" {
 			parts = append(parts, "slug="+slug)
+		}
+		if len(parts) > 1 {
+			return strings.Join(parts, "|")
+		}
+	case models.FragmentTypeMarket:
+		geo, domain := extractMarketPathGeoDomain(canonicalPath)
+		slug := leafSlug(canonicalPath)
+		parts := []string{"market"}
+		if geo != "" && geo != "na" {
+			parts = append(parts, "geo="+geo)
+		}
+		if domain != "" && domain != "na" {
+			parts = append(parts, "domain="+domain)
+		}
+		if slug != "" && slug != "na" {
+			parts = append(parts, "slug="+slug)
+		}
+		if nameNorm != "" && len(parts) == 1 {
+			parts = append(parts, "name="+nameNorm)
 		}
 		if len(parts) > 1 {
 			return strings.Join(parts, "|")

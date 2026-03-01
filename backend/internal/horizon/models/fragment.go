@@ -113,6 +113,11 @@ type HorizonFragment struct {
 	// Example: /community/ae/trade/hawala-dubai might be affiliated with /org/ae/exchange-house-xyz
 	AffiliatedOrgPath string `json:"affiliatedOrgPath,omitempty" firestore:"affiliatedOrgPath,omitempty"`
 
+	// --- AFFECTED_ZONE-specific (when Type == AFFECTED_ZONE) ---
+	// RadiusKm is the approximate radius of the affected zone in kilometers (best-effort).
+	// Used for exposure analysis and geographic scope estimation.
+	RadiusKm float64 `json:"radiusKm,omitempty" firestore:"radiusKm,omitempty"`
+
 	// IndexPaths — денормализованные "координаты" фрагмента для детерминированного картографирования/фильтрации.
 	// Собирается из canonicalPath + (sectorPath/entityPath + ancestors) + location + tags + identifiers + (optional spheres).
 	// Ограничено по размеру (см. BuildIndexPaths/NormalizeIndexPaths).
@@ -144,6 +149,13 @@ type HorizonFragment struct {
 	Identifiers map[string]string `json:"identifiers,omitempty" firestore:"identifiers,omitempty"`
 	// NameHistory stores temporal aliases/rebrands/legacy names for explainable org identity transitions.
 	NameHistory []NameHistoryEntry `json:"nameHistory,omitempty" firestore:"nameHistory,omitempty"`
+
+	// AlternativeNames stores alternative entity names discovered during dedup merges.
+	// These are raw names (not normalized) for future lookup and display.
+	AlternativeNames []string `json:"alternativeNames,omitempty" firestore:"alternativeNames,omitempty"`
+	// AlternativePaths stores canonical paths of fragments that were merged into this one.
+	// Used by redirect lookup and alias resolution to avoid re-creating duplicates.
+	AlternativePaths []string `json:"alternativePaths,omitempty" firestore:"alternativePaths,omitempty"`
 
 	// Временная валидность
 	ValidFrom *time.Time `json:"validFrom,omitempty" firestore:"validFrom,omitempty"`
@@ -928,6 +940,9 @@ func (f *HorizonFragment) GenerateVectorText() string {
 	}
 	if v := strings.TrimSpace(f.CommunityEstimatedSize); v != "" {
 		add("Community estimated size: " + v)
+	}
+	if f.RadiusKm > 0 {
+		add(fmt.Sprintf("Affected zone radius: %.1f km", f.RadiusKm))
 	}
 
 	// Локация

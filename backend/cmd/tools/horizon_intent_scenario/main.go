@@ -25,7 +25,7 @@ import (
 )
 
 func getSecret(secretName string) string {
-	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret="+secretName, "--project=h1horizon-488615")
+	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret="+secretName, "--project=etigram")
 	out, err := cmd.Output()
 	if err != nil {
 		log.Printf("Warning: Failed to fetch secret %s: %v", secretName, err)
@@ -36,7 +36,7 @@ func getSecret(secretName string) string {
 
 func main() {
 	ctx := context.Background()
-	projectID := "h1horizon-488615"
+	projectID := "etigram"
 
 	query := "How does Tesla's battery logistics work?"
 	if len(os.Args) > 1 {

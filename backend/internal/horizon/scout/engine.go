@@ -14,8 +14,9 @@ import (
 	"encoding/hex"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
-	redis "github.com/redis/go-redis/v9"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -32,6 +33,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	redis "github.com/redis/go-redis/v9"
 )
 
 func isLegacyOrgPath(cp string) bool {
@@ -132,6 +134,266 @@ func appendMissingInfoUnique(list []string, item string) []string {
 		}
 	}
 	return append(list, item)
+}
+
+func isFreshSkipEligible(fragment *models.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	if fragment.Metadata.EpistemicStatus != models.EpistemicStatusVerified {
+		return false
+	}
+	if fragment.Metadata.LastVerifiedAt.IsZero() {
+		return false
+	}
+	return true
+}
+
+func isHighRiskCanonicalPath(path string) bool {
+	path = strings.TrimSpace(strings.ToLower(path))
+	if path == "" {
+		return false
+	}
+	return strings.HasPrefix(path, "/zone/") ||
+		strings.HasPrefix(path, "/event/") ||
+		strings.HasPrefix(path, "/market/") ||
+		strings.HasPrefix(path, "/gov/") ||
+		strings.HasPrefix(path, "/domain/")
+}
+
+func hasRecoverabilitySignals(job *models.ScoutingJob) bool {
+	if job == nil {
+		return false
+	}
+	if len(job.SourceIDs) > 0 {
+		return true
+	}
+	if job.State == nil {
+		return false
+	}
+	if parseStateBool(job.State["allowRecoveryPass"], false) ||
+		parseStateBool(job.State["hasNewGroundingEvidence"], false) ||
+		parseStateBool(job.State["domainExpansionPeerAvailable"], false) {
+		return true
+	}
+	originMode := strings.TrimSpace(strings.ToLower(parseStateString(job.State["originMode"])))
+	return originMode == "watchdog" || originMode == "grounded_web"
+}
+
+func uniqueSortedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func buildMissingInfoSourceFingerprint(targetCanonicalPath string, sourceIDs, documentIDs []string, content string) string {
+	targetCanonicalPath = strings.TrimSpace(targetCanonicalPath)
+	sourceIDs = uniqueSortedStrings(sourceIDs)
+	documentIDs = uniqueSortedStrings(documentIDs)
+	contentHash := strings.TrimSpace(trace.HashText(content))
+	if len(sourceIDs) == 0 && len(documentIDs) == 0 && contentHash == "" {
+		return ""
+	}
+	raw := strings.Join([]string{
+		targetCanonicalPath,
+		strings.Join(sourceIDs, ","),
+		strings.Join(documentIDs, ","),
+		contentHash,
+	}, "|")
+	sum := sha1.Sum([]byte(raw))
+	return hex.EncodeToString(sum[:12])
+}
+
+func isCriticalMissingInfoQuestion(question string) bool {
+	q := strings.ToLower(strings.TrimSpace(question))
+	if q == "" {
+		return false
+	}
+	if strings.Contains(q, "[high priority]") || strings.Contains(q, "critical") {
+		return true
+	}
+	criticalMarkers := []string{
+		"country", "jurisdiction", "location", "gatekeeper", "controls access",
+		"auditor", "certifier", "regulator", "market domain", "market concentration",
+		"tam", "cagr", "hhi", "cr4", "upstream", "downstream",
+	}
+	for _, marker := range criticalMarkers {
+		if strings.Contains(q, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func countCriticalOpenMissingInfo(questions []string) int {
+	if len(questions) == 0 {
+		return 0
+	}
+	critical := 0
+	for _, q := range questions {
+		if isCriticalMissingInfoQuestion(q) {
+			critical++
+		}
+	}
+	// Conservative fallback: if critic produced gaps but none matched heuristics,
+	// keep at least one critical gap to avoid silent false-stop.
+	if critical == 0 {
+		return 1
+	}
+	return critical
+}
+
+func estimateEvidenceCoverage(plannedSources, sourceIDsN, documentIDsN, aggregatedContentLen int) float64 {
+	score := 0.0
+	if plannedSources > 0 {
+		score += 0.35
+	}
+	if sourceIDsN > 0 {
+		score += 0.20
+	}
+	if documentIDsN > 0 {
+		score += 0.25
+	}
+	switch {
+	case aggregatedContentLen >= 2048:
+		score += 0.20
+	case aggregatedContentLen > 0:
+		score += 0.20 * (float64(aggregatedContentLen) / 2048.0)
+	}
+	if score < 0 {
+		return 0
+	}
+	if score > 1 {
+		return 1
+	}
+	return score
+}
+
+func setJobStopTelemetryState(job *models.ScoutingJob, criticalOpenCount int, evidenceCoverage float64) {
+	if job == nil {
+		return
+	}
+	if job.State == nil {
+		job.State = map[string]interface{}{}
+	}
+	if criticalOpenCount < 0 {
+		criticalOpenCount = 0
+	}
+	if evidenceCoverage < 0 {
+		evidenceCoverage = 0
+	}
+	if evidenceCoverage > 1 {
+		evidenceCoverage = 1
+	}
+	job.State["critical_open_count"] = float64(criticalOpenCount)
+	job.State["criticalOpenCount"] = float64(criticalOpenCount)
+	job.State["evidence_coverage"] = evidenceCoverage
+	job.State["evidenceCoverage"] = evidenceCoverage
+}
+
+var missingInfoStopWords = map[string]struct{}{
+	"the": {}, "and": {}, "for": {}, "with": {}, "from": {}, "into": {}, "that": {}, "this": {},
+	"what": {}, "when": {}, "where": {}, "which": {}, "whose": {}, "their": {}, "there": {}, "about": {},
+	"across": {}, "between": {}, "under": {}, "over": {}, "have": {}, "has": {}, "been": {},
+	"were": {}, "will": {}, "would": {}, "could": {}, "should": {}, "does": {}, "did": {}, "are": {},
+	"is": {}, "of": {}, "to": {}, "in": {}, "on": {}, "at": {}, "by": {}, "or": {}, "a": {}, "an": {},
+}
+
+func normalizeQuestionTokens(question string) []string {
+	if strings.TrimSpace(question) == "" {
+		return nil
+	}
+	normalized := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + ('a' - 'A')
+		case r >= '0' && r <= '9':
+			return r
+		default:
+			return ' '
+		}
+	}, question)
+	fields := strings.Fields(normalized)
+	if len(fields) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(fields))
+	out := make([]string, 0, len(fields))
+	for _, token := range fields {
+		if len(token) < 3 {
+			continue
+		}
+		if _, stop := missingInfoStopWords[token]; stop {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		out = append(out, token)
+	}
+	return out
+}
+
+func buildResearchEvidenceIndex(relations []agents.DiscoveredRelation, chains []agents.SupplyChain, rawContent string) string {
+	var b strings.Builder
+	b.WriteString(strings.ToLower(strings.TrimSpace(rawContent)))
+	for _, rel := range relations {
+		b.WriteByte(' ')
+		b.WriteString(strings.ToLower(strings.TrimSpace(rel.RelationType)))
+		b.WriteByte(' ')
+		b.WriteString(strings.ToLower(strings.TrimSpace(rel.TargetCanonicalPath)))
+		b.WriteByte(' ')
+		b.WriteString(strings.ToLower(strings.TrimSpace(rel.SourceCanonicalPath)))
+		b.WriteByte(' ')
+		b.WriteString(strings.ToLower(strings.TrimSpace(rel.TargetName)))
+		b.WriteByte(' ')
+		b.WriteString(strings.ToLower(strings.TrimSpace(rel.Reason)))
+	}
+	for _, chain := range chains {
+		for _, node := range chain.Nodes {
+			b.WriteByte(' ')
+			b.WriteString(strings.ToLower(strings.TrimSpace(node.CanonicalPath)))
+			b.WriteByte(' ')
+			b.WriteString(strings.ToLower(strings.TrimSpace(node.Name)))
+		}
+	}
+	return b.String()
+}
+
+func isMissingInfoQuestionResolved(question string, researchEvidenceIndex string) bool {
+	tokens := normalizeQuestionTokens(question)
+	if len(tokens) == 0 || strings.TrimSpace(researchEvidenceIndex) == "" {
+		return false
+	}
+	matched := 0
+	for _, token := range tokens {
+		if strings.Contains(researchEvidenceIndex, token) {
+			matched++
+		}
+	}
+	threshold := 2
+	if len(tokens) <= 2 {
+		threshold = 1
+	}
+	return matched >= threshold
 }
 
 const (
@@ -375,8 +637,7 @@ func hasLegalFormSuffix(slug string) bool {
 	if slug == "" {
 		return false
 	}
-	legalForms := []string{"inc", "llc", "jsc", "pjsc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa", "as", "ab", "bv", "nv"}
-	for _, lf := range legalForms {
+	for _, lf := range taxonomy.LegalForms() {
 		if strings.HasSuffix(slug, "-"+lf) {
 			return true
 		}
@@ -953,6 +1214,96 @@ func parseRelationTargetType(raw string) models.FragmentType {
 		return ""
 	}
 	return models.FragmentType(raw)
+}
+
+func (e *ScoutEngine) sanitizeRelationsByDirectionPolicy(
+	ctx context.Context,
+	sourceFragment *models.HorizonFragment,
+	rels []agents.DiscoveredRelation,
+) ([]agents.DiscoveredRelation, int, int) {
+	if len(rels) == 0 {
+		return nil, 0, 0
+	}
+	sourcePath := ""
+	sourceType := models.FragmentType("")
+	sourceLabel := ""
+	if sourceFragment != nil {
+		sourcePath = strings.TrimSpace(sourceFragment.CanonicalPath)
+		sourceType = sourceFragment.Type
+		if sourceFragment.Labels != nil {
+			sourceLabel = strings.TrimSpace(sourceFragment.Labels["en"])
+		}
+		if sourceType == "" && sourcePath != "" {
+			sourceType = InferFragmentTypeFromCanonicalPath(sourcePath)
+		}
+	}
+
+	out := make([]agents.DiscoveredRelation, 0, len(rels))
+	dropped := 0
+	autoReversed := 0
+	for _, rel := range rels {
+		normalizedType := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+		if normalizedType == "" {
+			normalizedType = strings.TrimSpace(rel.RelationType)
+		}
+		if normalizedType == "" {
+			dropped++
+			continue
+		}
+		edgeType := models.DependencyType(normalizedType)
+
+		currSourcePath := strings.TrimSpace(rel.SourceCanonicalPath)
+		currSourceType := models.FragmentType("")
+		if e != nil {
+			currSourceType = e.normalizeFragmentType(ctx, strings.TrimSpace(rel.SourceType))
+		}
+		if currSourceType == "" && currSourcePath != "" {
+			currSourceType = InferFragmentTypeFromCanonicalPath(currSourcePath)
+		}
+		if currSourceType == "" {
+			currSourceType = sourceType
+			if currSourcePath == "" {
+				currSourcePath = sourcePath
+			}
+		}
+
+		targetPath := strings.TrimSpace(rel.TargetCanonicalPath)
+		targetType := parseRelationTargetType(rel.TargetType)
+		if targetType == "" && targetPath != "" {
+			targetType = InferFragmentTypeFromCanonicalPath(targetPath)
+		}
+		if targetType == "" || currSourceType == "" {
+			// Cannot pre-validate deterministically here; keep for downstream materializer checks.
+			rel.RelationType = normalizedType
+			out = append(out, rel)
+			continue
+		}
+
+		valid, shouldReverse, _ := edgesemantics.ValidateEdgeDirection(edgeType, currSourceType, targetType)
+		if valid {
+			rel.RelationType = normalizedType
+			out = append(out, rel)
+			continue
+		}
+		if shouldReverse && currSourcePath != "" && targetPath != "" && currSourcePath != targetPath {
+			rel.RelationType = normalizedType
+			rel.SourceCanonicalPath = targetPath
+			rel.SourceType = string(targetType)
+			if strings.TrimSpace(rel.SourceName) == "" {
+				rel.SourceName = strings.TrimSpace(rel.TargetName)
+			}
+			rel.TargetCanonicalPath = currSourcePath
+			rel.TargetType = string(currSourceType)
+			if strings.TrimSpace(rel.TargetName) == "" && sourceLabel != "" {
+				rel.TargetName = sourceLabel
+			}
+			out = append(out, rel)
+			autoReversed++
+			continue
+		}
+		dropped++
+	}
+	return out, dropped, autoReversed
 }
 
 func targetPathHasAnyPrefix(path string, prefixes ...string) bool {
@@ -1600,6 +1951,7 @@ type ScoutEngine struct {
 	orgDeduplicator         *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
 	personDeduplicator      *PersonDeduplicator               // Deduplicates persons by name/phonetic match
 	preCreateValidator      *PreCreateValidator               // Validates fragments before creation
+	contractNormalizer      *ContractNormalizer               // Applies persist contract before materialization
 	orgHierarchyBuilder     *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
 	marketHierarchyBuilder  *MarketHierarchyBuilder           // Auto-creates market hierarchy (segment-first when possible)
 	marketGeoHierarchy      *MarketGeoHierarchyBuilder        // Auto-creates market geo parent (regional -> global)
@@ -1628,8 +1980,11 @@ type ScoutEngine struct {
 	lensArtifactsRepo *repo.LensArtifactsRepository         // Optional: accumulates finalized fragments/edges per lens
 	domainAnswersRepo *repo.DomainAnswerSnapshotsRepository // Optional: persisted DomainAnswerSnapshot artifacts
 
-	// Supply chain path materialization (Plan mode)
+	// Supply chain path materialization
 	supplyChainPathBuilder *pathbuilder.SupplyChainPathBuilder // Optional: MaterializePath from parsed chains
+
+	// Domain relations graph materialization (governance, regulatory, ecosystem)
+	domainArtifactBuilder *pathbuilder.DomainArtifactBuilder
 
 	// Cross-job early dedup cache for edge candidates (short-lived, best-effort).
 	edgeRecentDedupMu         sync.Mutex
@@ -1639,6 +1994,10 @@ type ScoutEngine struct {
 
 	// Shared Redis client for cross-job caching (skeleton context, edge dedup).
 	redisClient *redis.Client
+
+	// Transactional outbox dispatcher state (per job).
+	scoutOutboxMu       sync.Mutex
+	scoutOutboxInFlight map[string]struct{}
 }
 
 // bestEffortDeferredScopeAdd adds canonicalPath to lens.Scope if under limit (max 5 per lens).
@@ -1678,6 +2037,49 @@ func (e *ScoutEngine) bestEffortDeferredScopeAdd(ctx context.Context, lensID, ca
 		"path":   canonicalPath,
 		"count":  res.DeferredScopeAddCount,
 	})
+}
+
+// isScopeEligibleEntityType returns true for entity types that should be auto-added
+// to the lens scope when discovered by the pipeline. Excludes small/auxiliary types
+// (SPHERE, TRACK, EVENT, SUPPLY_LINK) to keep the scope meaningful.
+func isScopeEligibleEntityType(ft models.FragmentType) bool {
+	switch ft {
+	case models.FragmentTypeOrganization,
+		models.FragmentTypeFacility,
+		models.FragmentTypeProduct,
+		models.FragmentTypeGeoRegion,
+		models.FragmentTypeDeposit,
+		models.FragmentTypeCommunity,
+		models.FragmentTypeMarket,
+		models.FragmentTypePerson,
+		models.FragmentTypeProgram,
+		models.FragmentTypeDecisionPoint,
+		models.FragmentTypeMechanism:
+		return true
+	default:
+		return false
+	}
+}
+
+// runDomainHolisticResearch dispatches to the domain-specific holistic research method
+// based on the primary domain mode.
+func (e *ScoutEngine) runDomainHolisticResearch(ctx context.Context, input agents.HolisticResearchInput) (*agents.ResearchStrategyOutput, error) {
+	switch input.DomainMode {
+	case taxonomy.DomainModeSupplyChain:
+		return e.researchAgent.EnrichHolisticSupplyChain(ctx, input)
+	case taxonomy.DomainModeGovernance:
+		return e.researchAgent.EnrichHolisticGovernance(ctx, input)
+	case taxonomy.DomainModePolicyImpact:
+		return e.researchAgent.EnrichHolisticRegulatory(ctx, input)
+	case taxonomy.DomainModeEcosystem:
+		return e.researchAgent.EnrichHolisticEcosystem(ctx, input)
+	case taxonomy.DomainModeMarket:
+		return e.researchAgent.EnrichHolisticMarket(ctx, input)
+	case taxonomy.DomainModeStrategic:
+		return e.researchAgent.EnrichHolisticStrategic(ctx, input)
+	default:
+		return e.researchAgent.EnrichQueryContextual(ctx, input.Fragment, input.OriginalQuery)
+	}
 }
 
 // bestEffortRemoveOrphanScopePaths removes scope paths that have no corresponding fragment.
@@ -2198,11 +2600,13 @@ func NewScoutEngine(
 		productHierarchyBuilder:   productHierarchy,
 		policyPersistQueue:        make(map[string]*policyPersistTask),
 		policyPersistDLQ:          make(map[string]*policyPersistTask),
+		scoutOutboxInFlight:       make(map[string]struct{}),
 		edgeRecentDedup:           make(map[string]time.Time),
 		edgeRecentDedupTTL:        10 * time.Minute,
 		edgeRecentDedupMaxEntries: 20000,
 	}
 	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup, productDedup).WithPersonDedup(personDedup)
+	engine.contractNormalizer = &ContractNormalizer{PreCreateValidator: engine.preCreateValidator}
 	engine.groundingResolver = NewGroundingEvidenceResolver(fragmentsRepo)
 	return engine
 }
@@ -2318,9 +2722,15 @@ func (e *ScoutEngine) WithDomainAnswerSnapshotsRepo(repo *repo.DomainAnswerSnaps
 	return e
 }
 
-// WithSupplyChainPathBuilder sets the path builder for materializing supply chain paths from parsed chains (Plan mode).
+// WithSupplyChainPathBuilder sets the path builder for materializing supply chain paths from parsed chains.
 func (e *ScoutEngine) WithSupplyChainPathBuilder(b *pathbuilder.SupplyChainPathBuilder) *ScoutEngine {
 	e.supplyChainPathBuilder = b
+	return e
+}
+
+// WithDomainArtifactBuilder sets the builder for domain relation graph materialization.
+func (e *ScoutEngine) WithDomainArtifactBuilder(b *pathbuilder.DomainArtifactBuilder) *ScoutEngine {
+	e.domainArtifactBuilder = b
 	return e
 }
 
@@ -2571,6 +2981,25 @@ func isTerminalScoutJob(job *models.ScoutingJob) bool {
 	return false
 }
 
+// FinalizePipelineRunForceFailed finalizes the pipeline with TerminalOutcomeFailed.
+// Used when an error is returned before finalize (e.g. non-retryable contract error).
+func (e *ScoutEngine) FinalizePipelineRunForceFailed(ctx context.Context, job *models.ScoutingJob, hint string) error {
+	if e == nil || job == nil || isTerminalScoutJob(job) {
+		return nil
+	}
+	if hint == "" {
+		hint = "non-retryable contract error"
+	}
+	return e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+		Pipeline:      pipelineRuntimeEntity,
+		Hint:          hint,
+		LegacyHint:    hint,
+		CanonicalPath: strings.TrimSpace(job.TargetCanonicalPath),
+		Confidence:    1.0,
+		ForceOutcome:  TerminalOutcomeFailed,
+	})
+}
+
 func (e *ScoutEngine) finalizePipelinePassIfNeeded(
 	ctx context.Context,
 	job *models.ScoutingJob,
@@ -2584,20 +3013,15 @@ func (e *ScoutEngine) finalizePipelinePassIfNeeded(
 	if strings.TrimSpace(string(passName)) == "" {
 		hint = "pipeline_pass"
 	}
-	if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, hint); err != nil {
-		return err
-	}
-	e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-		"tenantId":      job.TenantID,
-		"projectId":     job.ProjectID,
-		"lensId":        strings.TrimSpace(job.LensID),
-		"jobId":         job.ID,
-		"canonicalPath": strings.TrimSpace(effectiveCanonicalPath),
-		"confidence":    1.0,
-		"hint":          hint,
+	pipelineName, requiredStages := requiredStagesForPipelinePass(passName)
+	return e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+		Pipeline:       pipelineName,
+		RequiredStages: requiredStages,
+		Hint:           hint,
+		LegacyHint:     hint,
+		CanonicalPath:  strings.TrimSpace(effectiveCanonicalPath),
+		Confidence:     1.0,
 	})
-	e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
-	return nil
 }
 
 func (e *ScoutEngine) runPipelinePass(
@@ -2627,11 +3051,21 @@ func (e *ScoutEngine) runPipelinePass(
 		EffectiveCanonicalPath: effectiveCanonicalPath,
 		ExistingFragment:       existingFragment,
 	}); err != nil {
-		_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "pipeline_pass_failed")
-		return fmt.Errorf("pipeline pass %q failed: %w", strings.TrimSpace(string(passName)), err)
+		pipelineName, requiredStages := requiredStagesForPipelinePass(passName)
+		e.pipelineStageFail(ctx, job, pipelineName, stageMaterialize, true, "pipeline_pass_failed", true, err)
+		if finalizeErr := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+			Pipeline:       pipelineName,
+			RequiredStages: requiredStages,
+			Hint:           "pipeline_pass_failed",
+			LegacyHint:     "pipeline_pass_failed",
+			CanonicalPath:  strings.TrimSpace(effectiveCanonicalPath),
+			Confidence:     1.0,
+		}); finalizeErr != nil {
+			return fmt.Errorf("pipeline pass %q failed: %w (finalize: %v)", strings.TrimSpace(string(passName)), err, finalizeErr)
+		}
+		return nil
 	}
 	if err := e.finalizePipelinePassIfNeeded(ctx, job, effectiveCanonicalPath, passName); err != nil {
-		_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "pipeline_pass_finalize_failed")
 		return fmt.Errorf("pipeline pass %q finalize failed: %w", strings.TrimSpace(string(passName)), err)
 	}
 	trace.Log(ctx, "scout_exec", "scout.pipeline_pass.completed", map[string]any{
@@ -2728,6 +3162,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	// Solves: Vertex indexing delay, duplicate creation, path update tracking.
 	sessionGraph := NewSessionGraph()
 	ctx = WithSessionGraph(ctx, sessionGraph)
+	ctx = withCanonCache(ctx, newCanonCache())
 
 	trace.Log(ctx, "scout_exec", "scout.job.start", map[string]any{
 		"tenantId":            strings.TrimSpace(job.TenantID),
@@ -2761,6 +3196,30 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		return nil // Success: already processed
 	}
 
+	// CHECKPOINT/RESUME: Detect terminal state from previous run (failed stage with retryable=false).
+	// If a prior attempt failed with non-retryable error, ResolveResumeStage returns err and we finalize + return.
+	resumeStage, resumeErr := e.ResolveResumeStage(job, pipelineRuntimeEntity)
+	if resumeErr != nil {
+		if err := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+			Pipeline:       pipelineRuntimeEntity,
+			RequiredStages: requiredStagesForPipeline(pipelineRuntimeEntity),
+			Hint:           "resume_terminal",
+			LegacyHint:     "resume_terminal",
+			CanonicalPath:  strings.TrimSpace(job.TargetCanonicalPath),
+			Confidence:     1.0,
+		}); err != nil {
+			return fmt.Errorf("resume detected terminal state: %w (finalize: %v)", resumeErr, err)
+		}
+		return fmt.Errorf("resume detected terminal state: %w", resumeErr)
+	}
+	// RESUME: When last failed stage was entity_persistence (retryable), restore from stageArtifacts and skip to persistence.
+	if resumeStage == stageEntityPersistence {
+		if err := e.tryResumeEntityPersistence(ctx, job); err == nil {
+			return nil
+		}
+		// If resume failed (e.g. missing artifacts), fall through to full pipeline
+	}
+
 	// Strict Domain Plan Contract: domain jobs without valid execution plan are not executed.
 	// Also short-circuit budget-exhausted roots into deterministic partial terminal state.
 	{
@@ -2768,48 +3227,53 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			job.State = map[string]interface{}{}
 		}
 		targetCP := strings.TrimSpace(job.TargetCanonicalPath)
-		lensID := strings.TrimSpace(job.LensID)
 		shouldStop := false
 		stopHint := ""
-		stopOutcome := ""
 		stopReason := map[string]interface{}{}
+		stopErr := error(nil)
 		if strings.HasPrefix(targetCP, "/domain/") {
 			if _, err := ValidateDomainExecutionPlanState(job.State); err != nil {
 				shouldStop = true
 				stopHint = "invalid_execution_plan"
-				stopOutcome = TerminalOutcomeFailed
+				stopErr = err
 				stopReason["error"] = err.Error()
 			}
 		}
 		if !shouldStop && parseStateBool(job.State["budgetExhausted"], false) && parseStateBool(job.State["stopOnBudgetExhaustion"], false) {
-			shouldStop = true
-			stopHint = "budget_exhausted_partial"
-			stopOutcome = TerminalOutcomeBudgetExhausted
-			stopReason["budgetExhaustedPartial"] = true
+			if isHighRiskCanonicalPath(targetCP) || hasRecoverabilitySignals(job) {
+				job.State["budgetExhaustedSoftStop"] = true
+				stopReason["budgetExhaustedSoftStop"] = true
+			} else {
+				shouldStop = true
+				stopHint = "budget_exhausted_partial"
+				job.State["budgetExhaustedPartial"] = true
+				stopReason["budgetExhaustedPartial"] = true
+			}
 		}
 		if shouldStop {
-			job.State["terminalOutcome"] = stopOutcome
-			job.State["terminalOutcomeReasons"] = stopReason
-			job.State["terminalizedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
-			if stopOutcome == TerminalOutcomeFailed {
-				job.Status = coreModels.AgentJobStatusFailed
-				job.CurrentState = models.ScoutingJobStateFailed
+			if stopErr != nil {
+				e.pipelineStageFail(ctx, job, pipelineRuntimeEntity, stagePlanning, true, stopHint, false, stopErr)
 			} else {
-				job.Status = coreModels.AgentJobStatusPartial
-				job.CurrentState = models.ScoutingJobStateVerified
+				e.pipelineStageComplete(ctx, job, pipelineRuntimeEntity, stagePlanning, true, stopHint)
 			}
-			_ = e.scoutingJobsRepo.Update(ctx, job)
-			e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-				"tenantId":        job.TenantID,
-				"projectId":       job.ProjectID,
-				"lensId":          lensID,
-				"jobId":           job.ID,
-				"canonicalPath":   targetCP,
-				"terminalOutcome": stopOutcome,
-				"reasonMap":       stopReason,
-				"hint":            stopHint,
-			})
-			e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, lensID)
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stageExtraction, true, stopHint+"_skip_extraction")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stageCritic, true, stopHint+"_skip_critic")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stageResearch, true, stopHint+"_skip_research")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stageRevalidation, true, stopHint+"_skip_revalidation")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stageMaterialize, true, stopHint+"_skip_materialization")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stagePolicyAudit, true, stopHint+"_skip_policy")
+			job.State["preflightStopReason"] = stopReason
+			if err := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+				Pipeline:       pipelineRuntimeEntity,
+				RequiredStages: requiredStagesForPipeline(pipelineRuntimeEntity),
+				Hint:           stopHint,
+				LegacyHint:     stopHint,
+				CanonicalPath:  targetCP,
+				Confidence:     1.0,
+			}); err != nil {
+				fmt.Printf("[ScoutEngine] Preflight finalize returned error (terminal already set): jobId=%s target=%s err=%v\n",
+					strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+			}
 			return nil
 		}
 	}
@@ -2873,7 +3337,12 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				"attempts":      attempts[cp],
 			})
 
-			if attempts[cp] >= 5 {
+			stopLimit := 5
+			if isHighRiskCanonicalPath(cp) || hasRecoverabilitySignals(job) {
+				stopLimit = 7
+			}
+
+			if attempts[cp] >= stopLimit {
 				trace.Log(ctx, "scout_exec", "scout.job.circuit_breaker.trip", map[string]any{
 					"tenantId":      strings.TrimSpace(job.TenantID),
 					"projectId":     strings.TrimSpace(job.ProjectID),
@@ -2881,24 +3350,33 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					"jobId":         strings.TrimSpace(job.ID),
 					"canonicalPath": cp,
 					"attempts":      attempts[cp],
+					"stopLimit":     stopLimit,
 				})
 				fmt.Printf("[ScoutEngine] Circuit breaker tripped: job=%s canonicalPath=%s attempts=%d. Hard-stopping.\n",
 					strings.TrimSpace(job.ID), cp, attempts[cp])
-				if err := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "circuit_breaker"); err != nil {
-					fmt.Printf("[ScoutEngine] Failed to transition job to FAILED on circuit breaker (best-effort): jobId=%s target=%s err=%v\n",
+				circuitErr := fmt.Errorf("circuit breaker tripped at %d attempts", attempts[cp])
+				e.pipelineStageFail(ctx, job, pipelineRuntimeEntity, stagePlanning, true, "circuit_breaker", false, circuitErr)
+				e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stageExtraction, true, "circuit_breaker_skip_extraction")
+				e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stageCritic, true, "circuit_breaker_skip_critic")
+				e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stageResearch, true, "circuit_breaker_skip_research")
+				e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stageRevalidation, true, "circuit_breaker_skip_revalidation")
+				e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stageMaterialize, true, "circuit_breaker_skip_materialization")
+				e.pipelineStageSkip(ctx, job, pipelineRuntimeEntity, stagePolicyAudit, true, "circuit_breaker_skip_policy")
+				if err := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+					Pipeline:       pipelineRuntimeEntity,
+					RequiredStages: requiredStagesForPipeline(pipelineRuntimeEntity),
+					Hint:           "circuit_breaker",
+					LegacyHint:     "circuit_breaker",
+					CanonicalPath:  cp,
+					Confidence:     1.0,
+				}); err != nil {
+					fmt.Printf("[ScoutEngine] Circuit breaker finalize returned error (terminal already set): jobId=%s target=%s err=%v\n",
 						strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
 				}
-				e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-					"tenantId":      job.TenantID,
-					"projectId":     job.ProjectID,
-					"lensId":        strings.TrimSpace(job.LensID),
-					"jobId":         job.ID,
-					"canonicalPath": cp,
-					"hint":          "circuit_breaker",
-				})
-				// Check if all jobs are completed
-				e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
 				return nil // ACK: stop Cloud Tasks retries for this branch
+			}
+			if attempts[cp] >= 5 && stopLimit > 5 {
+				e.logLine(ctx, job, "info", fmt.Sprintf("> circuit breaker recovery window active: attempts=%d limit=%d", attempts[cp], stopLimit))
 			}
 		}
 	}
@@ -3030,6 +3508,17 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	if !policy.ScoutComposablePipelineEnabled() {
 		domainModesForComposable = nil
 	}
+	// Unified PostProcessingPolicy: gates every pipeline step centrally.
+	policy := NewPostProcessingPolicy(job)
+	pipelineTier := policy.PipelineTier
+	if job.State != nil {
+		job.State["pipeline_tier"] = float64(pipelineTier)
+		job.State["pipelineTier"] = float64(pipelineTier)
+		job.State["recursion_depth"] = float64(policy.RecursionDepth)
+		job.State["recursionDepth"] = float64(policy.RecursionDepth)
+	}
+	pipelineRuntimeName := pipelineRuntimeEntity
+
 	// FRESHNESS CHECK: Проверяем, есть ли свежие данные
 	// Используем уже канонизированный и дедуплицированный путь
 	// Это предотвращает повторные дорогие поиски, если данные недавно обновлялись (волны/затухание)
@@ -3046,17 +3535,86 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	}
 
-	// Domain jobs are executed by explicit pipeline passes (base_enrichment/strategic_projection).
+	// Domain jobs are executed by explicit pipeline passes (base_enrichment/strategic_projection)
+	// regardless of recursion tier.
 	if passName, ok := e.resolvePipelinePassForJob(ctx, job, effectiveCanonicalPath); ok {
 		if err := e.runPipelinePass(ctx, job, passName, effectiveCanonicalPath, existingFragment); err != nil {
+			if isTerminalScoutJob(job) {
+				return nil
+			}
 			return err
 		}
 		return nil
 	}
 
+	// TIER 2 FAST PATH: depth-2+ child jobs only check existence and create stubs.
+	// High-risk scopes keep full execution to avoid false-stop collapse.
+	tier2FastPathEligible := pipelineTier >= 2 && !isHighRiskCanonicalPath(effectiveCanonicalPath)
+	if tier2FastPathEligible {
+		e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stagePlanning, true, "tier2_fast_path")
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageExtraction, true, "tier2_skip_extraction")
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageCritic, true, "tier2_skip_critic")
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageResearch, true, "tier2_skip_research")
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageRevalidation, true, "tier2_skip_revalidation")
+		if existingFragment != nil {
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageMaterialize, true, "tier2_existing_fragment")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "tier2_skip_policy")
+			if err := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+				Pipeline:       pipelineRuntimeName,
+				RequiredStages: requiredStagesForPipeline(pipelineRuntimeName),
+				Hint:           "tier2_exists",
+				LegacyHint:     "tier2_exists",
+				CanonicalPath:  strings.TrimSpace(job.TargetCanonicalPath),
+				FragmentID:     strings.TrimSpace(existingFragment.ID),
+				Confidence:     1.0,
+			}); err != nil {
+				return err
+			}
+			return nil
+		}
+		stubType := InferFragmentTypeFromCanonicalPath(effectiveCanonicalPath)
+		if stubType == "" {
+			stubType = models.FragmentTypeOrganization
+		}
+		stub := &models.HorizonFragment{
+			CanonicalPath: effectiveCanonicalPath,
+			TenantID:      tenantID,
+			Type:          stubType,
+			Labels:        map[string]string{"en": slugToLabel(effectiveCanonicalPath)},
+			Metadata: models.FragmentMetadata{
+				EpistemicStatus: models.EpistemicStatusLowConfidence,
+				CreatedAt:       time.Now().UTC(),
+			},
+		}
+		if createdID, err := e.fragmentsRepo.Create(ctx, stub); err == nil && createdID != "" {
+			stub.ID = createdID
+			if sg := SessionGraphFromContext(ctx); sg != nil {
+				sg.Add(stub)
+			}
+		}
+		e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageMaterialize, true, "tier2_stub_created")
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "tier2_skip_policy")
+		if err := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+			Pipeline:       pipelineRuntimeName,
+			RequiredStages: requiredStagesForPipeline(pipelineRuntimeName),
+			Hint:           "tier2_stub_created",
+			LegacyHint:     "tier2_stub_created",
+			CanonicalPath:  strings.TrimSpace(job.TargetCanonicalPath),
+			FragmentID:     strings.TrimSpace(stub.ID),
+			Confidence:     0.5,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
+	if pipelineTier >= 2 && !tier2FastPathEligible {
+		e.logLine(ctx, job, "info", fmt.Sprintf("> tier2 fast path bypassed for high-risk target: %s", strings.TrimSpace(effectiveCanonicalPath)))
+	}
+
 	if existingFragment != nil {
 		freshnessThreshold := 1 * time.Hour // Для теста. В проде может быть конфигурируемо.
-		isFresh := !existingFragment.Metadata.LastVerifiedAt.IsZero() && time.Since(existingFragment.Metadata.LastVerifiedAt) < freshnessThreshold
+		freshnessEligible := isFreshSkipEligible(existingFragment)
+		isFresh := freshnessEligible && time.Since(existingFragment.Metadata.LastVerifiedAt) < freshnessThreshold
 		// Watermark for facts: prefer dedicated LastFactsSeenAt, fall back to LastVerifiedAt.
 		if !existingFragment.Metadata.LastFactsSeenAt.IsZero() {
 			sinceFacts = &existingFragment.Metadata.LastFactsSeenAt
@@ -3070,6 +3628,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			"jobId":               strings.TrimSpace(job.ID),
 			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
 			"fragmentId":          strings.TrimSpace(existingFragment.ID),
+			"freshnessEligible":   freshnessEligible,
 			"isFresh":             isFresh,
 			"epistemicStatus":     string(existingFragment.Metadata.EpistemicStatus),
 			"lastVerifiedAt": func() string {
@@ -3135,23 +3694,24 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 							}
 						})
 					}
-					if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "fast_path_applied_facts"); err != nil {
-						fmt.Printf("[ScoutEngine] Failed to transition job to VERIFIED on fast-path (best-effort): jobId=%s target=%s err=%v\n",
-							strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+					e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stagePlanning, true, "fast_path_skip_planning")
+					e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageExtraction, true, "fast_path_skip_extraction")
+					e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageCritic, true, "fast_path_skip_critic")
+					e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageResearch, true, "fast_path_skip_research")
+					e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageRevalidation, true, "fast_path_skip_revalidation")
+					e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageMaterialize, true, "fast_path_applied_facts")
+					e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "fast_path_skip_policy")
+					if err := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+						Pipeline:       pipelineRuntimeName,
+						RequiredStages: requiredStagesForPipeline(pipelineRuntimeName),
+						Hint:           "fast_path_applied_facts",
+						LegacyHint:     "fast_path_applied_facts",
+						CanonicalPath:  strings.TrimSpace(job.TargetCanonicalPath),
+						FragmentID:     strings.TrimSpace(existingFragment.ID),
+						Confidence:     1.0,
+					}); err != nil {
+						return err
 					}
-					// Emit completion + node upsert for UI.
-					e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-						"tenantId":        job.TenantID,
-						"projectId":       projectID,
-						"lensId":          lensID,
-						"jobId":           job.ID,
-						"fragmentId":      existingFragment.ID,
-						"canonicalPath":   strings.TrimSpace(job.TargetCanonicalPath),
-						"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
-						"confidence":      1.0,
-					})
-					// Check if all jobs are completed
-					e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, projectID, lensID)
 					e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 						"tenantId":        job.TenantID,
 						"projectId":       projectID,
@@ -3172,25 +3732,32 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		if isFresh && len(facts) == 0 && len(job.SourceIDs) == 0 {
 			fmt.Printf("[ScoutEngine] Data for %s is fresh (verified %v ago) and no new facts. Skipping active scouting.\n",
 				job.TargetCanonicalPath, time.Since(existingFragment.Metadata.LastVerifiedAt))
-			_ = e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "fresh_no_new_facts")
-			e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-				"tenantId":        job.TenantID,
-				"projectId":       projectID,
-				"lensId":          lensID,
-				"jobId":           job.ID,
-				"fragmentId":      existingFragment.ID,
-				"canonicalPath":   strings.TrimSpace(job.TargetCanonicalPath),
-				"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
-				"confidence":      1.0,
-			})
-			// Check if all jobs are completed
-			e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, projectID, lensID)
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stagePlanning, true, "fresh_data_skip_planning")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageExtraction, true, "fresh_data_skip_extraction")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageCritic, true, "fresh_data_skip_critic")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageResearch, true, "fresh_data_skip_research")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageRevalidation, true, "fresh_data_skip_revalidation")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageMaterialize, true, "fresh_no_new_facts")
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "fresh_data_skip_policy")
+			if err := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+				Pipeline:       pipelineRuntimeName,
+				RequiredStages: requiredStagesForPipeline(pipelineRuntimeName),
+				Hint:           "fresh_no_new_facts",
+				LegacyHint:     "fresh_no_new_facts",
+				CanonicalPath:  strings.TrimSpace(job.TargetCanonicalPath),
+				FragmentID:     strings.TrimSpace(existingFragment.ID),
+				Confidence:     1.0,
+			}); err != nil {
+				return err
+			}
 			return nil
 		}
 	}
 
 	// PLANNING: Планирование источников
+	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntitySourcePlanning, false, "planning")
 	if err := e.transition(ctx, job, models.ScoutingJobStatePlanning, 0.1, "planning"); err != nil {
+		e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntitySourcePlanning, false, "planning_transition_failed", true, err)
 		return fmt.Errorf("failed to transition to PLANNING: %w", err)
 	}
 	e.logLine(ctx, job, "info", fmt.Sprintf("> planning sources for %s", strings.TrimSpace(job.TargetCanonicalPath)))
@@ -3216,8 +3783,17 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			Strategy:      job.ScoutingStrategy,
 			Sources:       sources,
 		}
+	} else if policy.CanSkipPlanning() {
+		fmt.Printf("[ScoutEngine] Skipping source planning for %s (tier=%d, policy gated, critical=%d coverage=%.2f)\n",
+			job.TargetCanonicalPath, pipelineTier, policy.CriticalOpenCount, policy.EvidenceCoverage)
+		e.logLine(ctx, job, "info", fmt.Sprintf("> skipping source planning (tier=%d critical=%d coverage=%.2f)",
+			pipelineTier, policy.CriticalOpenCount, policy.EvidenceCoverage))
+		// Keep execution path nil-safe when planning is intentionally skipped by policy.
+		sourcePlan = &SourcePlan{
+			Strategy: job.ScoutingStrategy,
+			Sources:  []*coreModels.DataSource{},
+		}
 	} else {
-		// Полное планирование только если sourceIDs не указаны (Lens-driven jobs)
 		fmt.Printf("[ScoutEngine] Running full planning for %s (Lens-driven)\n", job.TargetCanonicalPath)
 		e.logLine(ctx, job, "info", "> running full planning (lens-driven)")
 		var err error
@@ -3305,13 +3881,21 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		sourcePlan, err = e.planner.PlanSources(ctx, tenantID, projectID, job.TargetCanonicalPath, models.ScoutingStrategy(job.ScoutingStrategy), sinceFacts, searchQuery)
 		if err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntitySourcePlanning, false, "planning_failed", true, err)
 			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "planning_failed")
 			return fmt.Errorf("failed to plan sources: %w", err)
 		}
 	}
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntitySourcePlanning, false, "planning_done")
+	e.UpdateStageArtifacts(ctx, job, map[string]interface{}{
+		"effectiveCanonicalPath": effectiveCanonicalPath,
+		"planningCompleted":      true,
+	})
 
 	// EXECUTION: Выполнение запросов к источникам
+	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntitySourceExecution, true, "execution")
 	if err := e.transition(ctx, job, models.ScoutingJobStateExecution, 0.25, "execution"); err != nil {
+		e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntitySourceExecution, true, "execution_transition_failed", true, err)
 		return fmt.Errorf("failed to transition to EXECUTION: %w", err)
 	}
 	e.logLine(ctx, job, "info", "> executing sources")
@@ -3333,13 +3917,23 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	var aggregatedContent string
 	var allSourceIDs []string
 	var allDocumentIDs []string
+	var sourceFingerprint string
 	var sourceResults []*ExecuteDataSourceResult
 	seenSourceContentHashes := map[string]struct{}{}
 
 	// Получаем источники из плана
+	if sourcePlan == nil {
+		sourcePlan = &SourcePlan{
+			Strategy: job.ScoutingStrategy,
+			Sources:  []*coreModels.DataSource{},
+		}
+	}
 	for _, source := range sourcePlan.Sources {
 		if source != nil {
 			e.logLine(ctx, job, "info", fmt.Sprintf("> fetching source %s (%s)", strings.TrimSpace(source.ID), strings.TrimSpace(source.Kind)))
+		} else {
+			e.logLine(ctx, job, "warn", "> skipping nil source from plan")
+			continue
 		}
 		result, err := e.executor.ExecuteDataSource(ctx, source)
 		if err != nil {
@@ -3380,6 +3974,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		"sourceIdsN":            len(allSourceIDs),
 		"documentIdsN":          len(allDocumentIDs),
 	})
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntitySourceExecution, true, "execution_done")
+	e.UpdateStageArtifacts(ctx, job, map[string]interface{}{
+		"extractionCompleted": true,
+	})
 
 	// Hybrid internal-content fallback:
 	// If source/doc aggregation is empty, try deterministic graph-backed context
@@ -3399,11 +3997,16 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			})
 		}
 	}
+	sourceFingerprint = buildMissingInfoSourceFingerprint(strings.TrimSpace(job.TargetCanonicalPath), allSourceIDs, allDocumentIDs, aggregatedContent)
+	evidenceCoverage := estimateEvidenceCoverage(len(sourcePlan.Sources), len(allSourceIDs), len(allDocumentIDs), len(strings.TrimSpace(aggregatedContent)))
+	setJobStopTelemetryState(job, policy.CriticalOpenCount, evidenceCoverage)
+	policy.EvidenceCoverage = evidenceCoverage
 
 	var scoutResult *agents.ScoutResult
 	var extractedFragment *models.HorizonFragment
 	var validationResult *agents.ValidationResult
 	var groundingEvidence *ai.GroundingEvidence
+	criticExecuted := false
 
 	if aggregatedContent == "" {
 		fmt.Printf("[ScoutEngine] No internal content for %s. Initiating full research.\n", job.TargetCanonicalPath)
@@ -3479,52 +4082,35 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			extractedFragment.SectorPath = sectorPath
 		}
 
-		// Формируем результат валидации, требующий полного исследования
-		validationResult = &agents.ValidationResult{
-			IsValid:    true,
-			Confidence: 0.1,
-			MissingInfo: []string{
+		// Synthetic seed: use entity_semantics.MissingInfoRules (EvaluateModeSeed) as single source of truth.
+		key := entity_semantics.ResolveByPath(job.TargetCanonicalPath, defaultType, "")
+		def := entity_semantics.GetDefinition(key)
+		rules := make([]entity_semantics.MissingInfoRule, 0)
+		if def != nil && len(def.MissingInfoRules) > 0 {
+			rules = append(rules, def.MissingInfoRules...)
+		}
+		rules = append(rules, entity_semantics.DomainModeRulesForModes(domainModesForComposable)...)
+		seedMissing := entity_semantics.EvaluateMissingInfoRules(nil, nil, rules, nil, job.TargetCanonicalPath, entity_semantics.EvaluateModeSeed)
+		if len(seedMissing) == 0 {
+			seedMissing = []string{
 				fmt.Sprintf("Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships.", job.TargetCanonicalPath),
-			},
+			}
 		}
-		// MARKET: When internal sources are empty, we must explicitly seed market sizing/concentration questions.
-		// Critic is not run in this branch, so without these prompts market metrics are often never populated.
-		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || defaultType == models.FragmentTypeMarket {
-			validationResult.MissingInfo = append(validationResult.MissingInfo,
-				fmt.Sprintf("What is the market domain and vertical for %s? Return marketDomain (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate) and marketVertical (specific vertical) with sources.", job.TargetCanonicalPath),
-				fmt.Sprintf("What is the TAM (total addressable market) in USD for %s (latest available year)? Provide value (number), year, and sources.", job.TargetCanonicalPath),
-				fmt.Sprintf("What is the market CAGR percent for %s (provide period, e.g. 2024-2029)? Provide percent and sources.", job.TargetCanonicalPath),
-				fmt.Sprintf("What is the market concentration for %s? Provide CR4 (top-4 share percent) and/or HHI (0..10000) with sources.", job.TargetCanonicalPath),
-				fmt.Sprintf("Who are the key players in %s and who dominates? Provide top players and (if available) market shares.", job.TargetCanonicalPath),
-			)
+		validationResult = &agents.ValidationResult{
+			IsValid:     true,
+			Confidence:  0.1,
+			MissingInfo: seedMissing,
+			Conflicts:   []agents.ValidationConflict{},
 		}
-		// Always request ORG/FACILITY classifiers and governance facts when internal sources are empty.
-		// Critic is not run in this branch, so we seed missingInfo explicitly for grounded research.
-		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/org/") ||
-			strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") ||
-			strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/fac/") {
-			validationResult.MissingInfo = append(validationResult.MissingInfo,
-				fmt.Sprintf("Who provides external assurance to %s? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit|certification|regulatory|inspection). Provide assurer and source.", job.TargetCanonicalPath),
-				fmt.Sprintf("[HIGH PRIORITY] What industry/sector does %s operate in? Return marketSegments as array of paths /segment/{domain}/{vertical}/{geo}. Domains: finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate|public-sector|professional-services. For government use public-sector domain. Geo: ISO2 lowercase or regional bucket (global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta). Example: /segment/technology/semiconductors/tw", job.TargetCanonicalPath),
-				fmt.Sprintf("[HIGH PRIORITY] What is the size of %s? Find employee count or revenue to determine orgSize: sme (<500 emp or <$100M rev), le (500-5000 emp or $100M-$1B), enterprise (5000-50000 emp or $1B-$10B), mega (>50000 emp or >$10B). For government: federal G20 ministries=enterprise/mega, regional=le/enterprise. Use 'na' only if truly unknown.", job.TargetCanonicalPath),
-			)
-		}
-		// If a gov path uses /gov/na/... we MUST resolve jurisdiction to avoid cross-country collisions.
+		// Path-specific: gov/na and org/na jurisdiction resolution (edge cases not in entity rules).
 		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/na/") {
 			validationResult.MissingInfo = append(validationResult.MissingInfo,
 				fmt.Sprintf("Which country/jurisdiction does %s belong to? Replace /gov/na/... with /gov/{iso2}/... based on evidence.", job.TargetCanonicalPath),
 			)
 		}
-		// If an org path is legacy (/org/{slug}) or uses /org/na/... we should try to resolve the country of origin.
 		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/org/na/") || isLegacyOrgPath(strings.TrimSpace(job.TargetCanonicalPath)) {
 			validationResult.MissingInfo = append(validationResult.MissingInfo,
 				fmt.Sprintf("What is the country of origin / primary jurisdiction for %s? Prefer /org/{iso2}/{slug} canonical path. If unknown, keep /org/na/...", job.TargetCanonicalPath),
-			)
-		}
-		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/person/") {
-			validationResult.MissingInfo = append(validationResult.MissingInfo,
-				fmt.Sprintf("Who are the direct public relatives (spouse/children/parents/siblings) of %s? Output RELATIVE_OF links with sources.", job.TargetCanonicalPath),
-				fmt.Sprintf("Who are the publicly known close associates of %s (business partners/friends/classmates)? Output RELATED_TO links with evidence and sources.", job.TargetCanonicalPath),
 			)
 		}
 		// Add specialty-specific research prompts when internal sources are empty (Critic is not run in this branch).
@@ -3545,9 +4131,12 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				)
 			}
 		}
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "no_internal_content_synthetic_seed")
 	} else {
 		// EXTRACTION: Извлечение данных через Scout Agent
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "extraction")
 		if err := e.transition(ctx, job, models.ScoutingJobStateExtraction, 0.5, "extraction"); err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "extraction_transition_failed", true, err)
 			return fmt.Errorf("failed to transition to EXTRACTION: %w", err)
 		}
 		e.logLine(ctx, job, "info", "> extracting structured data")
@@ -3556,6 +4145,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		// Определяем entityPath и sectorPath из targetCanonicalPath через LLM
 		entityPath, sectorPath, err := e.taxonomyClassifier.ClassifyTaxonomy(ctx, job.TargetCanonicalPath)
 		if err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "taxonomy_failed", false, err)
 			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "taxonomy_failed")
 			return fmt.Errorf("failed to classify taxonomy: %w", err)
 		}
@@ -3563,8 +4153,15 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 
 		scoutResult, groundingEvidence, err = e.scoutAgent.ExtractFragmentDataWithGrounding(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, sectorPath, specialties, chainContextForPrompt, domainModesForScout)
 		if err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "extraction_failed", true, err)
 			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "extraction_failed")
 			return fmt.Errorf("failed to extract fragment data: %w", err)
+		}
+		if scoutResult == nil {
+			nilResultErr := fmt.Errorf("extractor returned nil scout result")
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "extraction_nil_result", false, nilResultErr)
+			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "extraction_nil_result")
+			return nilResultErr
 		}
 		if scoutResult != nil {
 			scoutResult.Relations = filterDiscoveredRelationsByDomainModes(scoutResult.Relations, domainModesForScout)
@@ -3602,35 +4199,50 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		normalizeAndSetFragmentObjectQualifier(extractedFragment, job.TargetCanonicalPath)
 
 		// Phase 2 (domain validation / critic): first validation — CriticPipeline when domain mode set, else monolithic prompt.
-		// VALIDATION: Валидация через Critic Agent
+		// Gated by PostProcessingPolicy.ShouldRun(StepCritic).
 		if err := e.transition(ctx, job, models.ScoutingJobStateValidation, 0.7, "validation"); err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "validation_transition_failed", true, err)
 			return fmt.Errorf("failed to transition to VALIDATION: %w", err)
 		}
-		e.logLine(ctx, job, "info", "> critic validating extracted data")
+		if !policy.ShouldRun(StepCritic) {
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageCritic, false, "critic_skip_policy_gate")
+			validationResult = &agents.ValidationResult{IsValid: true}
+		} else {
+			e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageCritic, false, "critic_validation")
+			criticExecuted = true
+			e.logLine(ctx, job, "info", "> critic validating extracted data")
 
-		// Provide Critic with a compact view of the existing hierarchy skeleton for MARKET/GOV targets,
-		// so it can explicitly request "build up/down" actions as missingInfo without blocking the pipeline.
-		graphContext := ""
-		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") {
-			graphContext = e.getSkeletonContextCached(ctx, job.TargetCanonicalPath)
-		}
-		// First validation pass: use rule-based quick validation for non-general modes.
-		// This avoids an LLM call; missingInfo is generated deterministically from structural gaps.
-		validationResult = agents.RuleBasedQuickValidation(extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, domainModesForComposable)
-		if validationResult == nil {
-			// General mode or unknown: fall through to LLM-based critic.
-			validationResult, err = e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, criticSourceContent(aggregatedContent), specialties, graphContext, domainModesForComposable)
-		}
-		if err != nil {
-			// Логируем ошибку, но не останавливаем процесс (fail-open с низким confidence)
-			fmt.Printf("[ScoutEngine] critic validation error (fail-open): jobId=%s target=%s err=%v\n",
-				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
-			e.logLine(ctx, job, "warn", fmt.Sprintf("> critic validation error (fail-open): %v", err))
-			validationResult = &agents.ValidationResult{
-				IsValid:    true,
-				Confidence: 0.5,
+			// Provide Critic with a compact view of the existing hierarchy skeleton for MARKET/GOV targets,
+			// so it can explicitly request "build up/down" actions as missingInfo without blocking the pipeline.
+			graphContext := ""
+			if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") {
+				graphContext = e.getSkeletonContextCached(ctx, job.TargetCanonicalPath)
 			}
+			// First validation pass: use rule-based quick validation for non-general modes.
+			// This avoids an LLM call; missingInfo is generated deterministically from structural gaps.
+			validationResult = agents.RuleBasedQuickValidation(extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, domainModesForComposable)
+			if validationResult == nil {
+				// General mode or unknown: fall through to LLM-based critic.
+				validationResult, err = e.criticAgent.ValidateWithGraphContext(ctx, extractedFragment, scoutResult.Relations, scoutResult.SupplyChains, criticSourceContent(aggregatedContent), specialties, graphContext, domainModesForComposable)
+			}
+			if err != nil {
+				// Логируем ошибку, но не останавливаем процесс (fail-open с низким confidence)
+				fmt.Printf("[ScoutEngine] critic validation error (fail-open): jobId=%s target=%s err=%v\n",
+					strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> critic validation error (fail-open): %v", err))
+				recordPipelineIssue(job, "critic_validation_fail_open", err.Error())
+				validationResult = &agents.ValidationResult{
+					IsValid:    true,
+					Confidence: 0.5,
+				}
+			}
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageCritic, false, "critic_validation_done")
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "extraction_validated")
 		}
+	}
+
+	if !criticExecuted {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageCritic, false, "critic_skip_no_internal_content")
 	}
 
 	if extractedFragment != nil {
@@ -3678,9 +4290,35 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		validationResult.MissingInfo = filterMissingInfoByFacilityQualifier(validationResult.MissingInfo, facilityQualifier)
 		validationResult.MissingInfo = filterMissingInfoByFragmentRelevance(extractedFragment, validationResult.MissingInfo)
 		validationResult.MissingInfo = limitMissingInfoQuestions(validationResult.MissingInfo, missingInfoLimitForFragment(extractedFragment))
+		// Fallback: when critic returned empty MissingInfo but we have extracted fragment, evaluate rules directly.
+		if len(validationResult.MissingInfo) == 0 && extractedFragment != nil {
+			key := entity_semantics.ResolveByPath(job.TargetCanonicalPath, extractedFragment.Type, extractedFragment.CommunityType)
+			def := entity_semantics.GetDefinition(key)
+			if def != nil && len(def.MissingInfoRules) > 0 {
+				rules := append([]entity_semantics.MissingInfoRule(nil), def.MissingInfoRules...)
+				rules = append(rules, entity_semantics.DomainModeRulesForModes(domainModesForComposable)...)
+				var relTypes []string
+				if scoutResult != nil {
+					for _, r := range scoutResult.Relations {
+						rt := strings.TrimSpace(strings.ToUpper(r.RelationType))
+						if rt != "" {
+							relTypes = append(relTypes, rt)
+						}
+					}
+				}
+				fallback := entity_semantics.EvaluateMissingInfoRules(extractedFragment, relTypes, rules, domainModesForComposable, job.TargetCanonicalPath, entity_semantics.EvaluateModeFull)
+				if len(fallback) > 0 {
+					validationResult.MissingInfo = append(validationResult.MissingInfo, fallback...)
+					validationResult.MissingInfo = limitMissingInfoQuestions(validationResult.MissingInfo, missingInfoLimitForFragment(extractedFragment))
+				}
+			}
+		}
 		if afterMissingInfo := len(validationResult.MissingInfo); afterMissingInfo != beforeMissingInfo {
 			e.logLine(ctx, job, "info", fmt.Sprintf("> missingInfo normalized (%s): %d -> %d", RuntimeContractMissingInfoRelevance, beforeMissingInfo, afterMissingInfo))
 		}
+		criticalOpenCount := countCriticalOpenMissingInfo(validationResult.MissingInfo)
+		setJobStopTelemetryState(job, criticalOpenCount, policy.EvidenceCoverage)
+		policy.CriticalOpenCount = criticalOpenCount
 	}
 
 	// MARKET METRICS NORMALIZATION (best-effort):
@@ -3693,11 +4331,40 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	}
 
 	researchSucceeded := false
+	// Update policy with post-critic context for ResearchMode() decision.
+	if extractedFragment != nil {
+		policy.EpistemicStatus = extractedFragment.Metadata.EpistemicStatus
+	}
+	if validationResult != nil {
+		policy.CriticGapCount = len(validationResult.MissingInfo)
+		policy.CriticalOpenCount = countCriticalOpenMissingInfo(validationResult.MissingInfo)
+		setJobStopTelemetryState(job, policy.CriticalOpenCount, policy.EvidenceCoverage)
+	}
 	// RESEARCH: Дообогащение данных через Research Agent
-	if len(validationResult.MissingInfo) > 0 {
+	// Gated by PostProcessingPolicy: tier 2+ and planModeResearchDone skip.
+	if len(validationResult.MissingInfo) > 0 && policy.ShouldRun(StepResearch) {
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntityResearch, false, "research")
+		originalMissingInfo := append([]string(nil), validationResult.MissingInfo...)
 		// Filter out missingInfo items that are exhausted or in cooldown to prevent infinite loops.
 		// This uses the horizon_missing_info_status collection to track attempts per question.
 		if e.missingInfoStatusRepo != nil {
+			if sourceFingerprint != "" {
+				resetCount := 0
+				for _, q := range validationResult.MissingInfo {
+					resetApplied, resetErr := e.missingInfoStatusRepo.ResetForNewSources(ctx, extractedFragment.ID, q, sourceFingerprint)
+					if resetErr != nil {
+						fmt.Printf("[ScoutEngine] missingInfo reset-for-sources error (best-effort): jobId=%s fragmentId=%s target=%s err=%v q=%q\n",
+							strings.TrimSpace(job.ID), strings.TrimSpace(extractedFragment.ID), strings.TrimSpace(job.TargetCanonicalPath), resetErr, trace.Trunc(q, 160))
+						continue
+					}
+					if resetApplied {
+						resetCount++
+					}
+				}
+				if resetCount > 0 {
+					e.logLine(ctx, job, "info", fmt.Sprintf("> reset %d exhausted missingInfo entries (new evidence fingerprint)", resetCount))
+				}
+			}
 			searchable, filteredCount, err := e.missingInfoStatusRepo.FilterSearchable(ctx, extractedFragment.ID, validationResult.MissingInfo)
 			if err != nil {
 				// Fail-open: keep missingInfo list, but log loudly so issues are visible.
@@ -3710,10 +4377,38 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					e.logLine(ctx, job, "info", fmt.Sprintf("> filtered %d exhausted/cooldown missingInfo items", filteredCount))
 				}
 				validationResult.MissingInfo = searchable
+				filteredCritical := countCriticalOpenMissingInfo(validationResult.MissingInfo)
+				policy.CriticalOpenCount = filteredCritical
+				setJobStopTelemetryState(job, filteredCritical, policy.EvidenceCoverage)
+				// Probe mode: prevent full deadlock when all questions are filtered out but new evidence exists.
+				if len(validationResult.MissingInfo) == 0 && filteredCount == len(originalMissingInfo) && len(originalMissingInfo) > 0 && sourceFingerprint != "" {
+					probeQuestion := strings.TrimSpace(originalMissingInfo[0])
+					if probeQuestion != "" {
+						validationResult.MissingInfo = []string{probeQuestion}
+						e.logLine(ctx, job, "info", fmt.Sprintf("> no searchable gaps after filtering; running single probe question (%s)", RuntimeContractMissingInfoRelevance))
+						filteredCritical = countCriticalOpenMissingInfo(validationResult.MissingInfo)
+						policy.CriticalOpenCount = filteredCritical
+						setJobStopTelemetryState(job, filteredCritical, policy.EvidenceCoverage)
+					}
+				}
 			}
 		}
 		// Check if there are still items to research after filtering
 		if len(validationResult.MissingInfo) == 0 {
+			setJobStopTelemetryState(job, countCriticalOpenMissingInfo(originalMissingInfo), policy.EvidenceCoverage)
+			if err := e.enqueueResearchDebtOutboxIntent(ctx, job, map[string]interface{}{
+				"reason_code":          "research_skipped_no_searchable_gaps",
+				"targetCanonicalPath":  strings.TrimSpace(job.TargetCanonicalPath),
+				"fragmentId":           strings.TrimSpace(extractedFragment.ID),
+				"sourceFingerprint":    sourceFingerprint,
+				"critical_open_count":  countCriticalOpenMissingInfo(originalMissingInfo),
+				"evidence_coverage":    policy.EvidenceCoverage,
+				"filtered_gap_count":   len(originalMissingInfo),
+				"filtered_gaps_sample": trace.StrSlice(originalMissingInfo, 8),
+			}); err != nil {
+				recordPipelineIssue(job, "research_debt_enqueue", err.Error())
+			}
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntityResearch, false, "research_skipped_no_searchable_gaps")
 			goto SKIP_RESEARCH
 		}
 		// RuntimeContractBudgetAdaptiveFanout:
@@ -3830,9 +4525,36 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				}
 			}
 		}
-		// Phase 1 (domain expansion / research): ResearchPipeline when domain mode set, else EnrichFragmentWithGrounding; allowlist applied when appending relations.
-		enrichedFragment, newRelations, newSupplyChains, researchGroundingEvidence, researchRawContent, err := e.researchAgent.EnrichFragmentWithGroundingWithDomainModes(researchCtx, extractedFragment, researchMissingInfo, focus, spherePaths, keywords, specialties, chainContextForPrompt, originalQuery, decompositionHints, existingEntities, domainModesForComposable)
-		if err == nil {
+		var enrichedFragment *models.HorizonFragment
+		var newRelations []agents.DiscoveredRelation
+		var newSupplyChains []agents.SupplyChain
+		var researchGroundingEvidence *ai.GroundingEvidence
+		var researchRawContent string
+		orchestrated, researchErr := e.runResearchOrchestrator(researchCtx, job, policy, researchOrchestratorInput{
+			Fragment:            extractedFragment,
+			MissingInfo:         researchMissingInfo,
+			Focus:               focus,
+			SpherePaths:         spherePaths,
+			Keywords:            keywords,
+			Specialties:         specialties,
+			ChainContext:        chainContextForPrompt,
+			OriginalQuery:       originalQuery,
+			DecompositionHints:  decompositionHints,
+			ExistingEntities:    existingEntities,
+			DomainModes:         domainModesForComposable,
+			PreferredDomainMode: policy.PrimaryDomainMode(),
+		})
+		if researchErr == nil && orchestrated != nil {
+			enrichedFragment = orchestrated.FragmentPartial
+			newRelations = orchestrated.Relations
+			newSupplyChains = orchestrated.SupplyChains
+			researchGroundingEvidence = orchestrated.GroundingEvidence
+			researchRawContent = orchestrated.RawContent
+		}
+		if researchErr == nil && enrichedFragment == nil {
+			researchErr = fmt.Errorf("research returned nil fragment")
+		}
+		if researchErr == nil {
 			researchSucceeded = true
 			groundingEvidence = mergeGroundingEvidence(groundingEvidence, researchGroundingEvidence)
 			newRelations = filterDiscoveredRelationsByFacilityQualifier(newRelations, extractedFragment, job.TargetCanonicalPath)
@@ -3861,6 +4583,13 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}
 			if !supplyChainsEnabled(job.TargetCanonicalPath, fragTypeForSupplyChain, domainModesForScout, specialties) {
 				newSupplyChains = nil
+			}
+			if len(newRelations) > 0 {
+				sanitizedRelations, droppedByDirection, autoReversed := e.sanitizeRelationsByDirectionPolicy(ctx, extractedFragment, newRelations)
+				newRelations = sanitizedRelations
+				if droppedByDirection > 0 || autoReversed > 0 {
+					e.logLine(ctx, job, "info", fmt.Sprintf("> relation prefilter (direction policy): kept=%d dropped=%d reversed=%d", len(newRelations), droppedByDirection, autoReversed))
+				}
 			}
 			if researchContext := buildResearchContextBlock(researchRawContent, newRelations, newSupplyChains, researchGroundingEvidence); strings.TrimSpace(researchContext) != "" {
 				aggregatedContent = appendAggregatedContentBlock(aggregatedContent, researchContext, maxAggregatedContentChars)
@@ -3895,11 +4624,19 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			if extractedFragment != nil {
 				oldCP = strings.TrimSpace(extractedFragment.CanonicalPath)
 			}
+			// Research can return partial fragment updates depending on mode.
+			// Always merge partial updates into the current working fragment to preserve required fields.
+			if extractedFragment != nil && enrichedFragment != nil && extractedFragment != enrichedFragment && e.researchAgent != nil {
+				enrichedFragment = e.researchAgent.MergeFragmentPartial(extractedFragment, enrichedFragment)
+			}
 			newCP := ""
 			if enrichedFragment != nil {
 				newCP = strings.TrimSpace(enrichedFragment.CanonicalPath)
 			}
 			extractedFragment = enrichedFragment
+			if extractedFragment != nil && strings.TrimSpace(extractedFragment.CanonicalPath) == "" {
+				extractedFragment.CanonicalPath = strings.TrimSpace(job.TargetCanonicalPath)
+			}
 			normalizeAndSetFragmentObjectQualifier(extractedFragment, job.TargetCanonicalPath)
 			// Best-effort: if research upgraded canonicalPath (e.g., /product/{slug} -> /product/{cat}/{type}/{stage}/{slug}),
 			// propagate the rewrite into job state + lens scope so UI and in-flight execution follow the canonical path.
@@ -3926,6 +4663,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				scoutResult.Relations = append(scoutResult.Relations, newRelations...)
 				fmt.Printf("[ScoutEngine] Research found %d new relations.\n", len(newRelations))
 				e.logLine(ctx, job, "info", fmt.Sprintf("> research found %d new relations", len(newRelations)))
+			} else if len(researchMissingInfo) > 0 {
+				e.logLine(ctx, job, "info", "> research returned 0 relations (no parent/subsidiary/ownership links from web search)")
 			}
 			// Append supply chains from research (if supply_chain mode enabled)
 			if len(newSupplyChains) > 0 {
@@ -3956,44 +4695,70 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				}(),
 			})
 			// Record successful research attempts for resolved questions.
-			// A question is considered resolved if new relations/data were found.
+			// Resolution is tracked per question against strict evidence index (not a single aggregate bool).
 			if e.missingInfoStatusRepo != nil {
-				foundSomething := len(newRelations) > 0 || len(newSupplyChains) > 0
+				researchEvidenceIndex := buildResearchEvidenceIndex(newRelations, newSupplyChains, researchRawContent)
+				resolvedQuestions := 0
 				for _, q := range researchMissingInfo {
-					if recErr := e.missingInfoStatusRepo.RecordAttempt(ctx, extractedFragment.ID, q, foundSomething, 0); recErr != nil {
+					foundForQuestion := isMissingInfoQuestionResolved(q, researchEvidenceIndex)
+					if foundForQuestion {
+						resolvedQuestions++
+					}
+					if recErr := e.missingInfoStatusRepo.RecordAttempt(ctx, extractedFragment.ID, q, foundForQuestion, 0, sourceFingerprint); recErr != nil {
 						fmt.Printf("[ScoutEngine] missingInfo RecordAttempt failed: jobId=%s fragmentId=%s target=%s found=%v err=%v q=%q\n",
-							strings.TrimSpace(job.ID), strings.TrimSpace(extractedFragment.ID), strings.TrimSpace(job.TargetCanonicalPath), foundSomething, recErr, trace.Trunc(q, 160))
+							strings.TrimSpace(job.ID), strings.TrimSpace(extractedFragment.ID), strings.TrimSpace(job.TargetCanonicalPath), foundForQuestion, recErr, trace.Trunc(q, 160))
 						e.logLine(ctx, job, "warn", fmt.Sprintf("> missingInfo RecordAttempt failed: %v", recErr))
 					}
 				}
+				e.logLine(ctx, job, "info", fmt.Sprintf("> missingInfo resolved by evidence: %d/%d", resolvedQuestions, len(researchMissingInfo)))
+				unresolved := maxInt(0, len(researchMissingInfo)-resolvedQuestions)
+				setJobStopTelemetryState(job, unresolved, policy.EvidenceCoverage)
+				policy.CriticalOpenCount = unresolved
 			}
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntityResearch, false, "research_done")
+			e.UpdateStageArtifacts(ctx, job, map[string]interface{}{
+				"researchCompleted":         true,
+				"researchRelationsCount":    len(newRelations),
+				"researchSupplyChainsCount": len(newSupplyChains),
+			})
 		} else {
-			fmt.Printf("[ScoutEngine] Research failed: %v\n", err)
-			e.logLine(ctx, job, "warn", fmt.Sprintf("> research failed: %v", err))
+			fmt.Printf("[ScoutEngine] Research failed: %v\n", researchErr)
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> research failed: %v", researchErr))
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityResearch, false, "research_failed", true, researchErr)
+			recordPipelineIssue(job, "research", researchErr.Error())
 			trace.Log(ctx, "scout_research", "scout.research.error", map[string]any{
 				"tenantId":            strings.TrimSpace(job.TenantID),
 				"projectId":           strings.TrimSpace(job.ProjectID),
 				"lensId":              strings.TrimSpace(lensID),
 				"jobId":               strings.TrimSpace(job.ID),
 				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-				"error":               err.Error(),
+				"error":               researchErr.Error(),
 			})
 			// Record failed research attempts (increment counter, apply cooldown).
 			if e.missingInfoStatusRepo != nil {
 				for _, q := range researchMissingInfo {
-					if recErr := e.missingInfoStatusRepo.RecordAttempt(ctx, extractedFragment.ID, q, false, 0); recErr != nil {
+					if recErr := e.missingInfoStatusRepo.RecordAttempt(ctx, extractedFragment.ID, q, false, 0, sourceFingerprint); recErr != nil {
 						fmt.Printf("[ScoutEngine] missingInfo RecordAttempt failed: jobId=%s fragmentId=%s target=%s found=%v err=%v q=%q\n",
 							strings.TrimSpace(job.ID), strings.TrimSpace(extractedFragment.ID), strings.TrimSpace(job.TargetCanonicalPath), false, recErr, trace.Trunc(q, 160))
 						e.logLine(ctx, job, "warn", fmt.Sprintf("> missingInfo RecordAttempt failed: %v", recErr))
 					}
 				}
 			}
+			setJobStopTelemetryState(job, countCriticalOpenMissingInfo(researchMissingInfo), policy.EvidenceCoverage)
+			policy.CriticalOpenCount = countCriticalOpenMissingInfo(researchMissingInfo)
 		}
+	} else {
+		if validationResult != nil {
+			policy.CriticalOpenCount = countCriticalOpenMissingInfo(validationResult.MissingInfo)
+			setJobStopTelemetryState(job, policy.CriticalOpenCount, policy.EvidenceCoverage)
+		}
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntityResearch, false, "research_policy_or_gap_skip")
 	}
 SKIP_RESEARCH:
 
 	// RE-VALIDATION: run Critic once after Research (best-effort).
-	if researchSucceeded && extractedFragment != nil && validationResult != nil {
+	if researchSucceeded && policy.ShouldRun(StepReValidation) && extractedFragment != nil && validationResult != nil {
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageRevalidation, false, "critic_revalidation")
 		e.logLine(ctx, job, "info", "> critic re-validating enriched data")
 		graphContext := ""
 		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/") || strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/gov/") {
@@ -4011,9 +4776,13 @@ SKIP_RESEARCH:
 			fmt.Printf("[ScoutEngine] critic re-validation error (fail-open): jobId=%s target=%s err=%v\n",
 				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> critic re-validation error (fail-open): %v", err))
+			recordPipelineIssue(job, "critic_revalidation_fail_open", err.Error())
 		} else {
 			validationResult = revalidationResult
 		}
+		e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageRevalidation, false, "critic_revalidation_done")
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageRevalidation, false, "critic_revalidation_skip")
 	}
 
 	// RESOLUTION: Разрешение конфликтов если необходимо
@@ -4064,6 +4833,12 @@ SKIP_RESEARCH:
 	// METRICS: Ensure standardized risk metrics are present in fragment.State.
 	// Upstream extraction/research can yield facts but may omit normalized risk scores,
 	// which would make Lens metrics aggregation and propagation ineffective.
+	if !policy.ShouldRun(StepMetrics) {
+		goto SKIP_METRICS
+	}
+	if extractedFragment != nil && strings.TrimSpace(extractedFragment.CanonicalPath) == "" {
+		extractedFragment.CanonicalPath = strings.TrimSpace(job.TargetCanonicalPath)
+	}
 	if extractedFragment.State == nil {
 		extractedFragment.State = make(map[string]models.MetricValue)
 	}
@@ -4106,6 +4881,16 @@ SKIP_RESEARCH:
 
 		requiredMetricPaths := agents.RequiredMetricPathsForType(extractedFragment.Type, requested)
 		refreshReasons := evaluateMetricsRefreshContractReasons(extractedFragment, requiredMetricPaths, time.Now().UTC())
+		// Additional freshness heuristic: if existing fragment has sufficient metrics
+		// that were verified recently and research didn't produce new data, skip.
+		if len(refreshReasons) > 0 && existingFragment != nil && !researchSucceeded {
+			hasMetrics := len(existingFragment.State) >= 3
+			metricsFresh := !existingFragment.Metadata.LastVerifiedAt.IsZero() &&
+				time.Since(existingFragment.Metadata.LastVerifiedAt) < 2*time.Hour
+			if hasMetrics && metricsFresh {
+				refreshReasons = nil
+			}
+		}
 		if len(refreshReasons) == 0 {
 			e.logLine(ctx, job, "info", fmt.Sprintf("> metrics skipped (%s: fresh/complete): required=%d", RuntimeContractMetricsRefresh, len(requiredMetricPaths)))
 		} else {
@@ -4131,6 +4916,8 @@ SKIP_RESEARCH:
 			}
 		}
 	}
+
+SKIP_METRICS:
 
 	// CANONICAL RETARGET:
 	// If Research (or any upstream step) produced a different canonicalPath than the job started with,
@@ -4241,10 +5028,8 @@ SKIP_RESEARCH:
 		e.logLine(ctx, job, "info", fmt.Sprintf("> canonicalized org path: %s -> %s", old, effectiveCanonicalPath))
 	}
 
-	// VERIFIED: Создание Frame и обновление HorizonFragment
-	if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "verified"); err != nil {
-		return fmt.Errorf("failed to transition to VERIFIED: %w", err)
-	}
+	// PERSISTENCE: создание frame и upsert HorizonFragment.
+	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntityPersistence, true, "entity_persistence")
 	trace.Log(ctx, "scout_persist", "scout.persist.start", map[string]any{
 		"tenantId":               strings.TrimSpace(job.TenantID),
 		"projectId":              strings.TrimSpace(job.ProjectID),
@@ -4295,6 +5080,7 @@ SKIP_RESEARCH:
 		return fmt.Errorf("failed to create frame: %w", err)
 	}
 	frame.ID = frameID
+	e.UpdateStageArtifacts(ctx, job, map[string]interface{}{"materializationFrameID": frameID})
 
 	// Обновляем или создаем HorizonFragment
 	// Note: existingFragment may already be set from early canonicalization above
@@ -4364,22 +5150,130 @@ SKIP_RESEARCH:
 			}
 		}
 
-		// Pre-create validation: check policies and deduplication
+		// ContractNormalizer: apply persist contract (invariants + validation + pre-create).
+		// Research may return partial fragment payloads; ContractNormalizer ensures valid snapshot.
 		usedExistingDuplicate := false
-		if e.preCreateValidator != nil {
-			preValidation, valErr := e.preCreateValidator.ValidateAndProcess(ctx, extractedFragment)
-			if valErr != nil {
-				fmt.Printf("[ScoutEngine] Warning: pre-create validation error: %v\n", valErr)
-			} else if preValidation != nil {
-				// Log warnings
-				for _, w := range preValidation.Warnings {
-					fmt.Printf("[ScoutEngine] Pre-create warning: %s\n", w)
+		var normResult *NormalizeResult
+		if e.contractNormalizer != nil {
+			normResult = e.contractNormalizer.NormalizeFromFragment(ctx, extractedFragment, effectiveCanonicalPath)
+		} else {
+			// Fallback when contract normalizer not wired (tests)
+			normResult = (&ContractNormalizer{}).NormalizeFromFragment(ctx, extractedFragment, effectiveCanonicalPath)
+		}
+		if normResult.Error != nil {
+			err := fmt.Errorf("contract normalization failed: %w", normResult.Error)
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityPersistence, true, "contract_normalization_failed", normResult.Retryable, err)
+			if job.State == nil {
+				job.State = map[string]interface{}{}
+			}
+			job.State["normalizationReasonCode"] = normResult.ReasonCode
+			job.State["normalizationRetryable"] = normResult.Retryable
+			return err
+		}
+		if normResult.Snapshot == nil {
+			return fmt.Errorf("contract normalization produced nil snapshot")
+		}
+		// If pre-create returned a replacement fragment (dedup), use it
+		if strings.TrimSpace(normResult.Snapshot.ID) != "" && normResult.Snapshot.ID != extractedFragment.ID {
+			fmt.Printf("[ScoutEngine] Using existing fragment %s instead of creating new\n", normResult.Snapshot.ID)
+			existingFragment = normResult.Snapshot
+			fragmentID = existingFragment.ID
+			usedExistingDuplicate = true
+
+			// Merge OrgSize/MarketSegments from extracted into existing (fill-only)
+			if strings.TrimSpace(extractedFragment.OrgSize) != "" {
+				cur := strings.TrimSpace(strings.ToLower(existingFragment.OrgSize))
+				in := strings.TrimSpace(extractedFragment.OrgSize)
+				if cur == "" || cur == "na" {
+					existingFragment.OrgSize = in
 				}
-				// If pre-create validation normalized the canonicalPath (e.g., /loc/uae -> /loc/ae/na/na),
-				// retarget the job so all subsequent steps operate on the canonical path.
-				if strings.TrimSpace(extractedFragment.CanonicalPath) != "" && extractedFragment.CanonicalPath != effectiveCanonicalPath {
+			}
+			if len(extractedFragment.MarketSegments) > 0 {
+				if existingFragment.MarketSegments == nil {
+					existingFragment.MarketSegments = make([]string, 0, len(extractedFragment.MarketSegments))
+				}
+				seen := make(map[string]bool)
+				for _, s := range existingFragment.MarketSegments {
+					s = strings.TrimSpace(s)
+					if s != "" {
+						seen[s] = true
+					}
+				}
+				for _, s := range extractedFragment.MarketSegments {
+					s = strings.TrimSpace(s)
+					if s == "" {
+						continue
+					}
+					if seen[s] {
+						continue
+					}
+					seen[s] = true
+					existingFragment.MarketSegments = append(existingFragment.MarketSegments, s)
+				}
+			}
+			if len(extractedFragment.Tags) > 0 {
+				if existingFragment.Tags == nil {
+					existingFragment.Tags = make([]string, 0, len(extractedFragment.Tags))
+				}
+				seen := make(map[string]bool)
+				for _, t := range existingFragment.Tags {
+					t = strings.TrimSpace(t)
+					if t != "" {
+						seen[t] = true
+					}
+				}
+				for _, t := range extractedFragment.Tags {
+					t = strings.TrimSpace(t)
+					if t == "" {
+						continue
+					}
+					if seen[t] {
+						continue
+					}
+					seen[t] = true
+					existingFragment.Tags = append(existingFragment.Tags, t)
+				}
+				if existingFragment.Type == models.FragmentTypeMarket {
+					existingFragment.Tags = taxonomy.NormalizeMarketTags(existingFragment.Tags)
+				}
+			}
+
+			// Also merge State/Metadata from extracted fragment so new scouting is effective
+			if len(extractedFragment.State) > 0 {
+				if existingFragment.State == nil {
+					existingFragment.State = make(map[string]models.MetricValue)
+				}
+				for k, v := range extractedFragment.State {
+					existingFragment.State[k] = v
+				}
+			}
+			// Merge HomeLocation so geocoding chain can run
+			if extractedFragment.HomeLocation != nil {
+				if existingFragment.HomeLocation == nil {
+					existingFragment.HomeLocation = extractedFragment.HomeLocation
+				} else {
+					mergeHomeLocation(existingFragment.HomeLocation, extractedFragment.HomeLocation)
+				}
+			}
+			existingFragment.Metadata.LastUpdatedAt = time.Now()
+			existingFragment.Metadata.LastVerifiedAt = time.Now()
+			existingFragment.Metadata.SourceFrameID = frameID
+
+			// Best-effort: save the merged OrgSize/MarketSegments back to Firestore
+			if uerr := e.fragmentsRepo.Update(ctx, existingFragment); uerr != nil {
+				fmt.Printf("[ScoutEngine] Warning: failed to update fragment after dedup merge: %v\n", uerr)
+			} else if sg := SessionGraphFromContext(ctx); sg != nil {
+				sg.Add(existingFragment)
+			}
+
+			// If dedup selected a replacement fragment, we must retarget the job to it as well.
+			// Otherwise subsequent steps (events, decomposition, retries) will keep using the alias.
+			if existingFragment != nil {
+				if cp := strings.TrimSpace(existingFragment.CanonicalPath); cp != "" && cp != effectiveCanonicalPath {
 					old := effectiveCanonicalPath
-					effectiveCanonicalPath = strings.TrimSpace(extractedFragment.CanonicalPath)
+					effectiveCanonicalPath = cp
+					fmt.Printf("[ScoutEngine] Retargeting job %s to dedup replacement canonicalPath: %s -> %s\n",
+						strings.TrimSpace(job.ID), old, effectiveCanonicalPath)
 					job.TargetCanonicalPath = effectiveCanonicalPath
 					if job.State == nil {
 						job.State = map[string]interface{}{}
@@ -4388,141 +5282,30 @@ SKIP_RESEARCH:
 					if _, ok := job.State["aliasCanonicalPath"]; !ok && strings.TrimSpace(old) != "" {
 						job.State["aliasCanonicalPath"] = strings.TrimSpace(old)
 					}
-					fmt.Printf("[ScoutEngine] Retargeting job %s to normalized canonicalPath: %s -> %s\n",
-						strings.TrimSpace(job.ID), strings.TrimSpace(old), effectiveCanonicalPath)
 					_ = e.scoutingJobsRepo.Update(ctx, job)
 					// Update lens scope so UI/graph doesn't keep alias paths.
-					e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
-					e.recordDeterministicRedirect(ctx, old, effectiveCanonicalPath, "precreate_normalization")
-				}
-				// Only block on critical issues (empty path/type, /discovered/ paths)
-				// Warnings don't block creation - they're logged for post-factum fixes
-				if !preValidation.IsValid && preValidation.BlockReason != "" {
-					// Only block on critical cases that cannot be fixed post-factum
-					if strings.Contains(preValidation.BlockReason, "/discovered/") ||
-						strings.Contains(preValidation.BlockReason, "canonical path is required") ||
-						strings.Contains(preValidation.BlockReason, "fragment type is required") {
-						return fmt.Errorf("fragment creation blocked: %s", preValidation.BlockReason)
-					}
-					// For other cases, log warning but continue
-					fmt.Printf("[ScoutEngine] WARNING (non-blocking): %s\n", preValidation.BlockReason)
-				}
-				// Check if we should use an existing fragment instead (deduplication)
-				if preValidation.ReplacementFrag != nil && preValidation.ReplacementFrag.ID != "" {
-					fmt.Printf("[ScoutEngine] Using existing fragment %s instead of creating new\n", preValidation.ReplacementFrag.ID)
-					existingFragment = preValidation.ReplacementFrag
-					fragmentID = existingFragment.ID
-					usedExistingDuplicate = true
-
-					// Merge OrgSize/MarketSegments from extracted into existing (fill-only)
-					if strings.TrimSpace(extractedFragment.OrgSize) != "" {
-						cur := strings.TrimSpace(strings.ToLower(existingFragment.OrgSize))
-						in := strings.TrimSpace(extractedFragment.OrgSize)
-						if cur == "" || cur == "na" {
-							existingFragment.OrgSize = in
-						}
-					}
-					if len(extractedFragment.MarketSegments) > 0 {
-						if existingFragment.MarketSegments == nil {
-							existingFragment.MarketSegments = make([]string, 0, len(extractedFragment.MarketSegments))
-						}
-						seen := make(map[string]bool)
-						for _, s := range existingFragment.MarketSegments {
-							s = strings.TrimSpace(s)
-							if s != "" {
-								seen[s] = true
-							}
-						}
-						for _, s := range extractedFragment.MarketSegments {
-							s = strings.TrimSpace(s)
-							if s == "" {
-								continue
-							}
-							if seen[s] {
-								continue
-							}
-							seen[s] = true
-							existingFragment.MarketSegments = append(existingFragment.MarketSegments, s)
-						}
-					}
-					if len(extractedFragment.Tags) > 0 {
-						if existingFragment.Tags == nil {
-							existingFragment.Tags = make([]string, 0, len(extractedFragment.Tags))
-						}
-						seen := make(map[string]bool)
-						for _, t := range existingFragment.Tags {
-							t = strings.TrimSpace(t)
-							if t != "" {
-								seen[t] = true
-							}
-						}
-						for _, t := range extractedFragment.Tags {
-							t = strings.TrimSpace(t)
-							if t == "" {
-								continue
-							}
-							if seen[t] {
-								continue
-							}
-							seen[t] = true
-							existingFragment.Tags = append(existingFragment.Tags, t)
-						}
-						if existingFragment.Type == models.FragmentTypeMarket {
-							existingFragment.Tags = taxonomy.NormalizeMarketTags(existingFragment.Tags)
-						}
-					}
-
-					// Also merge State/Metadata from extracted fragment so new scouting is effective
-					if len(extractedFragment.State) > 0 {
-						if existingFragment.State == nil {
-							existingFragment.State = make(map[string]models.MetricValue)
-						}
-						for k, v := range extractedFragment.State {
-							existingFragment.State[k] = v
-						}
-					}
-					// Merge HomeLocation so geocoding chain can run
-					if extractedFragment.HomeLocation != nil {
-						if existingFragment.HomeLocation == nil {
-							existingFragment.HomeLocation = extractedFragment.HomeLocation
-						} else {
-							mergeHomeLocation(existingFragment.HomeLocation, extractedFragment.HomeLocation)
-						}
-					}
-					existingFragment.Metadata.LastUpdatedAt = time.Now()
-					existingFragment.Metadata.LastVerifiedAt = time.Now()
-					existingFragment.Metadata.SourceFrameID = frameID
-
-					// Best-effort: save the merged OrgSize/MarketSegments back to Firestore
-					if uerr := e.fragmentsRepo.Update(ctx, existingFragment); uerr != nil {
-						fmt.Printf("[ScoutEngine] Warning: failed to update fragment after dedup merge: %v\n", uerr)
-					} else if sg := SessionGraphFromContext(ctx); sg != nil {
-						sg.Add(existingFragment)
-					}
-
-					// If dedup selected a replacement fragment, we must retarget the job to it as well.
-					// Otherwise subsequent steps (events, decomposition, retries) will keep using the alias.
-					if existingFragment != nil {
-						if cp := strings.TrimSpace(existingFragment.CanonicalPath); cp != "" && cp != effectiveCanonicalPath {
-							old := effectiveCanonicalPath
-							effectiveCanonicalPath = cp
-							fmt.Printf("[ScoutEngine] Retargeting job %s to dedup replacement canonicalPath: %s -> %s\n",
-								strings.TrimSpace(job.ID), old, effectiveCanonicalPath)
-							job.TargetCanonicalPath = effectiveCanonicalPath
-							if job.State == nil {
-								job.State = map[string]interface{}{}
-							}
-							job.State["targetCanonicalPath"] = effectiveCanonicalPath
-							if _, ok := job.State["aliasCanonicalPath"]; !ok && strings.TrimSpace(old) != "" {
-								job.State["aliasCanonicalPath"] = strings.TrimSpace(old)
-							}
-							_ = e.scoutingJobsRepo.Update(ctx, job)
-							// Update lens scope so UI/graph doesn't keep alias paths.
-							e.bestEffortRewriteLensScope(ctx, tenantID, lensID, strings.TrimSpace(old), effectiveCanonicalPath)
-						}
-					}
+					e.bestEffortRewriteLensScope(ctx, tenantID, lensID, strings.TrimSpace(old), effectiveCanonicalPath)
 				}
 			}
+		}
+		// When not replacement: extractedFragment was normalized in place by ContractNormalizer.
+		// If pre-create normalized the canonicalPath, retarget the job.
+		if !usedExistingDuplicate && strings.TrimSpace(extractedFragment.CanonicalPath) != "" && extractedFragment.CanonicalPath != effectiveCanonicalPath {
+			old := effectiveCanonicalPath
+			effectiveCanonicalPath = strings.TrimSpace(extractedFragment.CanonicalPath)
+			job.TargetCanonicalPath = effectiveCanonicalPath
+			if job.State == nil {
+				job.State = map[string]interface{}{}
+			}
+			job.State["targetCanonicalPath"] = effectiveCanonicalPath
+			if _, ok := job.State["aliasCanonicalPath"]; !ok && strings.TrimSpace(old) != "" {
+				job.State["aliasCanonicalPath"] = strings.TrimSpace(old)
+			}
+			fmt.Printf("[ScoutEngine] Retargeting job %s to normalized canonicalPath: %s -> %s\n",
+				strings.TrimSpace(job.ID), strings.TrimSpace(old), effectiveCanonicalPath)
+			_ = e.scoutingJobsRepo.Update(ctx, job)
+			e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
+			e.recordDeterministicRedirect(ctx, old, effectiveCanonicalPath, "precreate_normalization")
 		}
 
 		// Only create if we didn't find a duplicate
@@ -4614,6 +5397,16 @@ SKIP_RESEARCH:
 			if usedExistingDuplicate {
 				// Skip Create path; we've adopted an existing fragment.
 			} else {
+				// Persist for resume: if Create fails, retry can restore and retry Create.
+				if fragJSON, jerr := json.Marshal(extractedFragment); jerr == nil {
+					e.UpdateStageArtifacts(ctx, job, map[string]interface{}{
+						"materializationFragment":       string(fragJSON),
+						"materializationScoutResult":    marshalScoutResultForResume(scoutResult),
+						"materializationEffectivePath":  effectiveCanonicalPath,
+						"materializationAllSourceIDs":   allSourceIDs,
+						"materializationAllDocumentIDs": allDocumentIDs,
+					})
+				}
 				fragmentID, err = e.fragmentsRepo.Create(ctx, extractedFragment)
 				if err != nil {
 					return fmt.Errorf("failed to create fragment: %w", err)
@@ -4797,22 +5590,12 @@ SKIP_RESEARCH:
 		}
 		e.bestEffortRemoveOrphanScopePaths(ctx, lensID)
 	}
-
-	// Realtime: job completed + node materialized/updated.
-	e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-		"tenantId":            tenantID,
-		"projectId":           projectID,
-		"lensId":              lensID,
-		"jobId":               job.ID,
-		"fragmentId":          fragmentID,
-		"canonicalPath":       strings.TrimSpace(job.TargetCanonicalPath),
-		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-		"epistemicStatus":     string(existingFragment.Metadata.EpistemicStatus),
-		"confidence":          validationResult.Confidence,
-	})
-
-	// Check if all scout jobs for this lens are completed and publish final assembly.ready event
-	e.checkAndPublishAssemblyCompletion(ctx, tenantID, projectID, lensID)
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntityPersistence, true, "entity_persistence_done")
+	if existingFragment != nil && strings.TrimSpace(existingFragment.ID) != "" {
+		e.UpdateStageArtifacts(ctx, job, map[string]interface{}{
+			"extractedFragmentId": existingFragment.ID,
+		})
+	}
 
 	e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 		"tenantId":      tenantID,
@@ -4832,6 +5615,7 @@ SKIP_RESEARCH:
 
 	// DECOMPOSITION: Обработка найденных связей (рекурсивный скаутинг)
 	if len(scoutResult.Relations) > 0 {
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntityRelationMaterialize, false, "relation_materialization")
 		var resolvedGrounding *ResolvedGroundingContext
 		if internalFirstGroundingEnabled() && e.groundingResolver != nil && groundingEvidence != nil {
 			resolvedGrounding = e.groundingResolver.Resolve(ctx, groundingEvidence)
@@ -4856,7 +5640,16 @@ SKIP_RESEARCH:
 		if err != nil {
 			logGroundingErrorWithContext(job, "scout", "materialization.decomposition", "decomposition_failed", "materialization_error", true, err)
 			e.emitGroundingErrorTelemetry(ctx, job, "scout", "materialization.decomposition", "decomposition_failed", "materialization_error", true)
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityRelationMaterialize, false, "relation_materialization_failed", true, err)
+			recordPipelineIssue(job, "relation_materialization", err.Error())
+		} else {
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntityRelationMaterialize, false, "relation_materialization_done")
 		}
+		// Gov entities discovered as side-effects of Research on non-gov entities
+		// should still trigger the strategic overlay for the parent lens.
+		e.triggerGovStrategicOverlayFromEntityJob(ctx, job, scoutResult.Relations)
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntityRelationMaterialize, false, "relation_materialization_skip_no_relations")
 	}
 	if internalFirstGroundingEnabled() && job.State != nil {
 		if raw, ok := job.State[stateKeyResolutionStats]; ok {
@@ -4878,20 +5671,35 @@ SKIP_RESEARCH:
 
 	// SUPPLY CHAIN: Parse and persist supply chain fragments and edges
 	if len(scoutResult.SupplyChains) > 0 {
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntitySupplyChainMaterialize, false, "supply_chain_materialization")
 		if err := e.processSupplyChains(ctx, job, existingFragment, scoutResult.SupplyChains); err != nil {
 			fmt.Printf("[ScoutEngine] Supply chain processing failed: %v\n", err)
 			e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain processing failed: %v", err))
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntitySupplyChainMaterialize, false, "supply_chain_materialization_failed", true, err)
+			recordPipelineIssue(job, "supply_chain_materialization", err.Error())
+		} else {
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntitySupplyChainMaterialize, false, "supply_chain_materialization_done")
 		}
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntitySupplyChainMaterialize, false, "supply_chain_materialization_skip_no_chains")
 	}
 
 	// POLICY ENFORCEMENT: Run final validation on all created/modified entities
 	if job.State == nil {
 		job.State = map[string]interface{}{}
 	}
+	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageArtifactPersistence, true, "artifact_persistence")
 	job.State = policyTracker.ApplyToState(job.State)
 	// Persist finalized job outputs into LensArtifacts (Phase 2 input).
 	e.persistLensArtifactsFromJobState(ctx, job)
-	e.runPolicyAudit(ctx, job)
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageArtifactPersistence, true, "artifact_persistence_done")
+	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatch")
+	if err := e.enqueuePolicyAuditOutboxIntent(ctx, job, pipelineRuntimeName); err != nil {
+		e.pipelineStageFail(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatch_failed", true, err)
+		recordPipelineIssue(job, "policy_audit_dispatch", err.Error())
+	} else {
+		e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatched")
+	}
 
 	// Запускаем распространение изменений в графе
 	if e.propagationTrigger != nil {
@@ -4911,6 +5719,21 @@ SKIP_RESEARCH:
 				fmt.Printf("Propagation trigger failed for fragment %s: %v\n", fid, err)
 			}
 		})
+	}
+
+	finalConfidence := 1.0
+	if validationResult != nil && validationResult.Confidence > 0 {
+		finalConfidence = validationResult.Confidence
+	}
+	if err := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+		Pipeline:       pipelineRuntimeName,
+		RequiredStages: requiredStagesForPipeline(pipelineRuntimeName),
+		Hint:           "verified",
+		CanonicalPath:  strings.TrimSpace(job.TargetCanonicalPath),
+		FragmentID:     fragmentID,
+		Confidence:     finalConfidence,
+	}); err != nil {
+		return err
 	}
 
 	return nil
@@ -5295,10 +6118,9 @@ func normalizeTerminalOutcome(raw string) string {
 		return TerminalOutcomePartialCompleted
 	case TerminalOutcomeFailed:
 		return TerminalOutcomeFailed
-	case TerminalOutcomeBudgetExhausted:
-		return TerminalOutcomeBudgetExhausted
-	case TerminalOutcomeCompletedWithPolicyPersistError:
-		return TerminalOutcomeCompletedWithPolicyPersistError
+	case TerminalOutcomeBudgetExhausted, TerminalOutcomeCompletedWithPolicyPersistError:
+		// Legacy outcomes are normalized into the strict orchestrator contract.
+		return TerminalOutcomePartialCompleted
 	default:
 		return ""
 	}
@@ -5314,7 +6136,7 @@ func scoutJobHasBudgetExhaustion(job *models.ScoutingJob) bool {
 	if parseStateBool(job.State["budgetExhaustedPartial"], false) {
 		return true
 	}
-	if normalizeTerminalOutcome(parseStateString(job.State["terminalOutcome"])) == TerminalOutcomeBudgetExhausted {
+	if strings.TrimSpace(strings.ToLower(parseStateString(job.State["terminalOutcome"]))) == TerminalOutcomeBudgetExhausted {
 		return true
 	}
 	return false
@@ -5327,7 +6149,7 @@ func scoutJobHasPolicyPersistError(job *models.ScoutingJob) bool {
 	if parseStateBool(job.State["policyPersistError"], false) {
 		return true
 	}
-	return normalizeTerminalOutcome(parseStateString(job.State["terminalOutcome"])) == TerminalOutcomeCompletedWithPolicyPersistError
+	return strings.TrimSpace(strings.ToLower(parseStateString(job.State["terminalOutcome"]))) == TerminalOutcomeCompletedWithPolicyPersistError
 }
 
 func isRootLensScoutJob(job *models.ScoutingJob) bool {
@@ -5453,11 +6275,9 @@ func (e *ScoutEngine) checkAndPublishAssemblyCompletion(ctx context.Context, ten
 	terminalOutcome := ""
 	if terminal {
 		switch {
-		case budgetExhaustedJobs > 0:
-			terminalOutcome = TerminalOutcomeBudgetExhausted
 		case completedJobs == 0 && partialJobs == 0 && failedJobs > 0:
 			terminalOutcome = TerminalOutcomeFailed
-		case failedJobs > 0 || partialJobs > 0 || policyPersistErrorJobs > 0:
+		case failedJobs > 0 || partialJobs > 0 || policyPersistErrorJobs > 0 || budgetExhaustedJobs > 0:
 			terminalOutcome = TerminalOutcomePartialCompleted
 		default:
 			terminalOutcome = TerminalOutcomeCompleted
@@ -5716,7 +6536,7 @@ func (e *ScoutEngine) enrichFragmentParallel(ctx context.Context, frag *models.H
 	wg.Wait()
 
 	// Group 2: geo chain (sequential — may depend on Wikidata-provided address data).
-	if e.geonamesClient != nil && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/loc/") {
+	if e.geonamesClient != nil && (strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/loc/") || strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/zone/")) {
 		_, _ = henrich.EnrichCoordinatesFromGeoNames(ctx, e.geonamesClient, frag)
 	}
 	if e.geocodingClient != nil {
@@ -6405,6 +7225,161 @@ func (e *ScoutEngine) getSkeletonContextCached(ctx context.Context, canonicalPat
 func engineSha1Hex(s string) string {
 	sum := sha1.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// marshalScoutResultForResume serializes Relations and SupplyChains for stageArtifacts resume.
+func marshalScoutResultForResume(sr *agents.ScoutResult) string {
+	if sr == nil {
+		return "{}"
+	}
+	m := map[string]interface{}{
+		"relations":    sr.Relations,
+		"supplyChains": sr.SupplyChains,
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// tryResumeEntityPersistence restores from stageArtifacts and runs the persistence block when last failed stage was entity_persistence (retryable).
+// Returns nil if resume succeeded; returns error if artifacts missing or resume failed (caller falls through to full pipeline).
+func (e *ScoutEngine) tryResumeEntityPersistence(ctx context.Context, job *models.ScoutingJob) error {
+	artifacts := GetStageArtifacts(job)
+	if artifacts == nil {
+		return fmt.Errorf("no stage artifacts")
+	}
+	fragJSON, _ := artifacts["materializationFragment"].(string)
+	frameID, _ := artifacts["materializationFrameID"].(string)
+	effectivePath, _ := artifacts["materializationEffectivePath"].(string)
+	if fragJSON == "" || frameID == "" || effectivePath == "" {
+		return fmt.Errorf("missing resume artifacts (fragment=%t frameID=%t path=%t)", fragJSON != "", frameID != "", effectivePath != "")
+	}
+	var extractedFragment models.HorizonFragment
+	if err := json.Unmarshal([]byte(fragJSON), &extractedFragment); err != nil {
+		return fmt.Errorf("unmarshal fragment: %w", err)
+	}
+	extractedFragment.Metadata.SourceFrameID = frameID
+	extractedFragment.CanonicalPath = effectivePath
+	extractedFragment.TenantID = "global"
+
+	pipelineRuntimeName := pipelineRuntimeEntity
+
+	// Restore scoutResult for processRelations/processSupplyChains
+	var scoutResult *agents.ScoutResult
+	if raw, ok := artifacts["materializationScoutResult"].(string); ok && raw != "" {
+		var m struct {
+			Relations    []agents.DiscoveredRelation `json:"relations"`
+			SupplyChains []agents.SupplyChain        `json:"supplyChains"`
+		}
+		if json.Unmarshal([]byte(raw), &m) == nil {
+			scoutResult = &agents.ScoutResult{
+				Relations:    m.Relations,
+				SupplyChains: m.SupplyChains,
+			}
+		}
+	}
+	if scoutResult == nil {
+		scoutResult = &agents.ScoutResult{}
+	}
+
+	// ContractNormalizer
+	var normResult *NormalizeResult
+	if e.contractNormalizer != nil {
+		normResult = e.contractNormalizer.NormalizeFromFragment(ctx, &extractedFragment, effectivePath)
+	} else {
+		normResult = (&ContractNormalizer{}).NormalizeFromFragment(ctx, &extractedFragment, effectivePath)
+	}
+	if normResult == nil {
+		return fmt.Errorf("contract normalizer returned nil")
+	}
+	if normResult.Error != nil {
+		return fmt.Errorf("contract normalization failed on resume: %w", normResult.Error)
+	}
+	if normResult.Snapshot == nil {
+		return fmt.Errorf("contract normalizer produced nil snapshot")
+	}
+
+	existingFragment := normResult.Snapshot
+	var fragmentID string
+	if strings.TrimSpace(existingFragment.ID) != "" {
+		// Pre-create dedup returned existing fragment
+		fragmentID = existingFragment.ID
+	} else {
+		// Create new fragment
+		existingFragment.Metadata.SourceFrameID = frameID
+		existingFragment.CanonicalPath = effectivePath
+		existingFragment.TenantID = "global"
+		if existingFragment.Labels == nil {
+			existingFragment.Labels = map[string]string{}
+		}
+		if strings.TrimSpace(existingFragment.Labels["en"]) == "" {
+			seed := ""
+			if existingFragment.Identifiers != nil {
+				seed = strings.TrimSpace(existingFragment.Identifiers["legalName"])
+			}
+			existingFragment.Labels["en"] = bestEffortDisplayLabel(seed, effectivePath)
+		}
+		id, err := e.fragmentsRepo.Create(ctx, existingFragment)
+		if err != nil {
+			return fmt.Errorf("resume create fragment: %w", err)
+		}
+		existingFragment.ID = id
+		fragmentID = id
+		if sg := SessionGraphFromContext(ctx); sg != nil {
+			sg.Add(existingFragment)
+		}
+	}
+
+	// Clear resume artifacts on success to avoid reusing on future runs
+	e.UpdateStageArtifacts(ctx, job, map[string]interface{}{
+		"materializationFragment":      nil,
+		"materializationFrameID":       nil,
+		"materializationScoutResult":   nil,
+		"materializationEffectivePath": nil,
+	})
+	e.UpdateStageArtifacts(ctx, job, map[string]interface{}{
+		"extractedFragmentId":    existingFragment.ID,
+		"effectiveCanonicalPath": effectivePath,
+	})
+
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntityPersistence, true, "entity_persistence_done_resume")
+
+	// processRelations
+	if len(scoutResult.Relations) > 0 {
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntityRelationMaterialize, false, "relation_materialization")
+		if err := e.processDiscoveredRelations(ctx, job, existingFragment, scoutResult.Relations); err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityRelationMaterialize, false, "relation_materialization_failed", true, err)
+			return err
+		}
+		e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntityRelationMaterialize, false, "relation_materialization_done")
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntityRelationMaterialize, false, "relation_materialization_skip_no_relations")
+	}
+
+	// processSupplyChains
+	if len(scoutResult.SupplyChains) > 0 {
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntitySupplyChainMaterialize, false, "supply_chain_materialization")
+		if err := e.processSupplyChains(ctx, job, existingFragment, scoutResult.SupplyChains); err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntitySupplyChainMaterialize, false, "supply_chain_materialization_failed", true, err)
+			return err
+		}
+		e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntitySupplyChainMaterialize, false, "supply_chain_materialization_done")
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntitySupplyChainMaterialize, false, "supply_chain_materialization_skip_no_chains")
+	}
+
+	// Finalize
+	if err := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+		Pipeline:       pipelineRuntimeName,
+		RequiredStages: requiredStagesForPipeline(pipelineRuntimeName),
+		Hint:           "resume_persistence_done",
+		LegacyHint:     "resume_persistence_done",
+		CanonicalPath:  effectivePath,
+		FragmentID:     fragmentID,
+		Confidence:     1.0,
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // extractStringSlice extracts a string slice from job state.

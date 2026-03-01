@@ -209,14 +209,93 @@ function humanizeDomainCanonicalPath(path: string): string {
   return `${base} — ${label}`;
 }
 
+/** Short real names for geo/region codes (ISO2 + regional buckets). Used for domain path display. */
+const GEO_CODE_TO_SHORT_NAME: Record<string, string> = {
+  // ISO2 countries (common)
+  br: 'Brazil', us: 'USA', gb: 'UK', de: 'Germany', fr: 'France', cn: 'China', jp: 'Japan', in: 'India',
+  ru: 'Russia', kz: 'Kazakhstan', sa: 'Saudi Arabia', ae: 'UAE', eg: 'Egypt', tr: 'Turkey', my: 'Malaysia',
+  id: 'Indonesia', sg: 'Singapore', kr: 'South Korea', tw: 'Taiwan', au: 'Australia', nz: 'New Zealand',
+  ca: 'Canada', mx: 'Mexico', ar: 'Argentina', cl: 'Chile', co: 'Colombia', pe: 'Peru', za: 'South Africa',
+  ng: 'Nigeria', ke: 'Kenya', pl: 'Poland', nl: 'Netherlands', it: 'Italy', es: 'Spain', pt: 'Portugal',
+  se: 'Sweden', no: 'Norway', fi: 'Finland', dk: 'Denmark', ch: 'Switzerland', at: 'Austria', be: 'Belgium',
+  ie: 'Ireland', il: 'Israel', qa: 'Qatar', kw: 'Kuwait', bh: 'Bahrain', om: 'Oman', pk: 'Pakistan',
+  th: 'Thailand', vn: 'Vietnam', ph: 'Philippines', hk: 'Hong Kong', ua: 'Ukraine', cz: 'Czechia',
+  ro: 'Romania', hu: 'Hungary', gr: 'Greece',
+  // Regional buckets (from backend)
+  mena: 'MENA', emea: 'EMEA', apac: 'APAC', latam: 'Latam', na: 'North America', gcc: 'GCC',
+  eu: 'EU', asean: 'ASEAN', nordics: 'Nordics', benelux: 'Benelux', anz: 'ANZ', cis: 'CIS',
+  ssa: 'Sub-Saharan Africa', usmca: 'USMCA', nafta: 'NAFTA', global: 'Global',
+};
+
+/** Returns short real name for a geo code (ISO2 or regional). */
+export function geoCodeToShortName(code: string): string {
+  const c = String(code || '').trim().toLowerCase();
+  if (!c) return '';
+  return GEO_CODE_TO_SHORT_NAME[c] || titleCaseWords(c) || c.toUpperCase();
+}
+
+/** Extracts geo codes from domain path and returns first region label for display. */
+export function getDomainRegionLabel(path: string): string | null {
+  const codes = extractDomainGeoCodes(path);
+  if (codes.length === 0) return null;
+  const first = codes[0];
+  const name = geoCodeToShortName(first);
+  return name || null;
+}
+
+/**
+ * Extracts geo/country from scope fragment path (org, market, loc, gov, community, segment)
+ * and returns short real name for display chip. Skips "na" (not applicable/unknown).
+ */
+export function getScopeGeoLabel(path: string): string | null {
+  const p = String(path || '').trim();
+  if (!p.startsWith('/')) return null;
+  const parts = p.split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+
+  const ns = String(parts[0] || '').toLowerCase();
+  let geoCode = '';
+
+  switch (ns) {
+    case 'org':
+    case 'market':
+    case 'loc':
+    case 'gov':
+    case 'community':
+      geoCode = String(parts[1] || '').trim().toLowerCase();
+      break;
+    case 'segment':
+      if (parts.length >= 4) geoCode = String(parts[3] || '').trim().toLowerCase();
+      break;
+    default:
+      return null;
+  }
+
+  if (!geoCode || geoCode === 'na') return null;
+
+  const name = geoCodeToShortName(geoCode);
+  if (!name) return null;
+
+  const composite = geoCode.includes('-');
+  if (composite) {
+    const first = geoCode.split('-')[0];
+    if (first === 'na') return null;
+    return geoCodeToShortName(first) || name;
+  }
+
+  return name;
+}
+
 function extractDomainGeoCodes(path: string): string[] {
   const p = String(path || '').trim();
-  if (!p.startsWith('/domain/v1/')) return [];
+  if (!p.startsWith('/domain/')) return [];
   const parts = p.split('/').filter(Boolean);
   if (parts.length < 3) return [];
-  const contractType = String(parts[2] || '').trim().toLowerCase();
-  // For "other" contract type, facets start after custom slug (index 4).
-  const facetStartIdx = contractType === 'other' ? 4 : 3;
+  // Support both /domain/v1/{contract}/... and /domain/{contract}/...
+  const hasV1 = parts[1] === 'v1';
+  const contractIdx = hasV1 ? 2 : 1;
+  const contractType = String(parts[contractIdx] || '').trim().toLowerCase();
+  const facetStartIdx = contractType === 'other' ? (hasV1 ? 4 : 3) : (hasV1 ? 3 : 2);
   const rest = parts.slice(facetStartIdx);
   if (rest.length < 2 || rest.length % 2 !== 0) return [];
   const geos: string[] = [];

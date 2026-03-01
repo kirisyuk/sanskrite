@@ -2,7 +2,7 @@
 set -e
 
 SOURCE_ID="0juOUd5xxhFMZ4GydpHz"
-PROJECT_ID="h1horizon-488615"
+PROJECT_ID="etigram"
 
 echo "Fetching recent logs for source $SOURCE_ID in project $PROJECT_ID..."
 

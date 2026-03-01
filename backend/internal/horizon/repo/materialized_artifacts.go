@@ -2,13 +2,18 @@ package repo
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"golang.org/x/time/rate"
 
+	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
@@ -16,8 +21,13 @@ var ErrMaterializedArtifactNotFound = errors.New("materialized artifact not foun
 
 // MaterializedArtifactsRepository репозиторий для работы с MaterializedArtifact
 type MaterializedArtifactsRepository struct {
-	col *firestore.CollectionRef
-	db  *firestore.Client
+	col               *firestore.CollectionRef
+	db                *firestore.Client
+	storage           *gcp.GCSClient
+	bucket            string
+	useGCS            bool
+	uploadLimiter     *rate.Limiter
+	vertexSyncBatcher *VertexSyncBatcher
 }
 
 // NewMaterializedArtifactsRepository создает новый репозиторий
@@ -26,6 +36,82 @@ func NewMaterializedArtifactsRepository(db *firestore.Client) *MaterializedArtif
 		col: db.Collection("horizon_materialized_artifacts"),
 		db:  db,
 	}
+}
+
+// WithStorage configures GCS storage for exporting materialized artifacts.
+func (r *MaterializedArtifactsRepository) WithStorage(storage *gcp.GCSClient, bucket string) *MaterializedArtifactsRepository {
+	r.storage = storage
+	r.bucket = bucket
+	r.useGCS = storage != nil && bucket != ""
+	if r.useGCS {
+		r.uploadLimiter = rate.NewLimiter(rate.Limit(10), 10)
+	}
+	return r
+}
+
+// WithVertexSyncBatcher configures batched Vertex AI Search sync for materialized artifacts.
+func (r *MaterializedArtifactsRepository) WithVertexSyncBatcher(batcher *VertexSyncBatcher) *MaterializedArtifactsRepository {
+	r.vertexSyncBatcher = batcher
+	return r
+}
+
+// uploadToGCS exports the artifact to GCS for Vertex AI Search indexing.
+func (r *MaterializedArtifactsRepository) uploadToGCS(ctx context.Context, artifact *horizonmodels.MaterializedArtifact) error {
+	if !r.useGCS || artifact == nil {
+		return nil
+	}
+	if r.uploadLimiter != nil {
+		if err := r.uploadLimiter.Wait(ctx); err != nil {
+			return fmt.Errorf("rate limiter wait failed: %w", err)
+		}
+	}
+
+	content := artifact.GenerateVectorText()
+
+	objectPath := fmt.Sprintf("%s/supply_chain_artifacts/%s.json", artifact.TenantID, artifact.ID)
+	gcsURI := fmt.Sprintf("gs://%s/%s", r.bucket, objectPath)
+
+	doc := map[string]interface{}{
+		"id": artifact.ID,
+		"content": map[string]interface{}{
+			"mimeType": "text/plain",
+			"rawBytes": base64.StdEncoding.EncodeToString([]byte(content)),
+		},
+		"structData": map[string]interface{}{
+			"tenantId":     artifact.TenantID,
+			"type":         "supply_chain",
+			"kind":         string(artifact.Kind),
+			"displayName":  artifact.DisplayName,
+			"canonicalKey": artifact.CanonicalKey,
+			"labels":       artifact.Labels,
+			"nodeRefs":     artifact.NodeRefs,
+			"pathStatus":   artifact.PathStatus,
+			"status":       artifact.Status,
+			"updatedAt":    artifact.UpdatedAt.Format(time.RFC3339),
+			"uri":          gcsURI,
+		},
+	}
+
+	jsonData, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal artifact to json: %w", err)
+	}
+
+	metadata := map[string]string{
+		"type":     "supply_chain",
+		"tenantId": artifact.TenantID,
+	}
+
+	log.Printf("[MaterializedArtifacts] Exporting artifact %s (%s) to GCS for Vertex Indexing...", artifact.ID, artifact.CanonicalKey)
+	if err := r.storage.UploadBytes(ctx, r.bucket, objectPath, jsonData, "application/json", metadata); err != nil {
+		return fmt.Errorf("failed to upload artifact to GCS: %w", err)
+	}
+
+	if r.vertexSyncBatcher != nil {
+		r.vertexSyncBatcher.Add(gcsURI)
+	}
+
+	return nil
 }
 
 // Create создает новый MaterializedArtifact
@@ -58,6 +144,12 @@ func (r *MaterializedArtifactsRepository) Create(ctx context.Context, artifact *
 
 	if _, err := doc.Set(ctx, artifact); err != nil {
 		return "", fmt.Errorf("firestore set failed: %w", err)
+	}
+
+	if r.useGCS {
+		if err := r.uploadToGCS(ctx, artifact); err != nil {
+			log.Printf("[MaterializedArtifacts] GCS upload failed for %s: %v", artifact.ID, err)
+		}
 	}
 
 	return artifact.ID, nil
@@ -121,6 +213,39 @@ func (r *MaterializedArtifactsRepository) GetByCanonicalKey(ctx context.Context,
 	return &artifact, nil
 }
 
+// GetByCanonicalKeyAnyKind looks up a MaterializedArtifact by canonical key without
+// requiring a specific kind. Used when the artifact kind is not known in advance
+// (e.g., resolving /artifact/ scope entries in lens).
+func (r *MaterializedArtifactsRepository) GetByCanonicalKeyAnyKind(ctx context.Context, tenantID string, canonicalKey string) (*horizonmodels.MaterializedArtifact, error) {
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenantID is required")
+	}
+	if canonicalKey == "" {
+		return nil, fmt.Errorf("canonicalKey is required")
+	}
+
+	q := r.col.
+		Where("tenantId", "==", tenantID).
+		Where("canonicalKey", "==", canonicalKey).
+		Limit(1)
+
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("firestore query failed: %w", err)
+	}
+
+	if len(docs) == 0 {
+		return nil, ErrMaterializedArtifactNotFound
+	}
+
+	var artifact horizonmodels.MaterializedArtifact
+	if err := docs[0].DataTo(&artifact); err != nil {
+		return nil, fmt.Errorf("data unmarshal failed: %w", err)
+	}
+
+	return &artifact, nil
+}
+
 // Update обновляет существующий MaterializedArtifact
 func (r *MaterializedArtifactsRepository) Update(ctx context.Context, artifact *horizonmodels.MaterializedArtifact) error {
 	if artifact == nil {
@@ -143,7 +268,111 @@ func (r *MaterializedArtifactsRepository) Update(ctx context.Context, artifact *
 		return fmt.Errorf("firestore set failed: %w", err)
 	}
 
+	if r.useGCS {
+		if err := r.uploadToGCS(ctx, artifact); err != nil {
+			log.Printf("[MaterializedArtifacts] GCS upload failed for %s: %v", artifact.ID, err)
+		}
+	}
+
 	return nil
+}
+
+// BatchGetByCanonicalKeys fetches multiple artifacts by (tenantID, kind, canonicalKeys).
+// Returns map[canonicalKey]*Artifact. Firestore "in" query limit is 30, so keys are chunked.
+func (r *MaterializedArtifactsRepository) BatchGetByCanonicalKeys(ctx context.Context, tenantID string, kind horizonmodels.MaterializedKind, canonicalKeys []string) (map[string]*horizonmodels.MaterializedArtifact, error) {
+	if tenantID == "" || !kind.Valid() || len(canonicalKeys) == 0 {
+		return nil, nil
+	}
+	result := make(map[string]*horizonmodels.MaterializedArtifact)
+	const chunkSize = 30 // Firestore "in" query limit
+	for i := 0; i < len(canonicalKeys); i += chunkSize {
+		end := i + chunkSize
+		if end > len(canonicalKeys) {
+			end = len(canonicalKeys)
+		}
+		chunk := canonicalKeys[i:end]
+		q := r.col.
+			Where("tenantId", "==", tenantID).
+			Where("kind", "==", string(kind)).
+			Where("canonicalKey", "in", chunk).
+			Limit(len(chunk) * 2) // allow multiple docs per key (shouldn't happen)
+		docs, err := q.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, fmt.Errorf("batch get by canonical keys failed: %w", err)
+		}
+		for _, doc := range docs {
+			var a horizonmodels.MaterializedArtifact
+			if err := doc.DataTo(&a); err != nil {
+				continue
+			}
+			if a.CanonicalKey != "" {
+				result[a.CanonicalKey] = &a
+			}
+		}
+	}
+	return result, nil
+}
+
+// BatchUpsert creates or updates multiple MaterializedArtifacts in a single Firestore batch.
+// Artifacts must have TenantID, Kind, CanonicalKey set. For updates, ID must be set.
+// Returns created/updated IDs. Firestore batch limit is 500 ops.
+func (r *MaterializedArtifactsRepository) BatchUpsert(ctx context.Context, artifacts []*horizonmodels.MaterializedArtifact) ([]string, error) {
+	if len(artifacts) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(artifacts))
+	now := time.Now().UTC()
+	const batchLimit = 500
+	for i := 0; i < len(artifacts); i += batchLimit {
+		end := i + batchLimit
+		if end > len(artifacts) {
+			end = len(artifacts)
+		}
+		batch := artifacts[i:end]
+		fb := r.db.Batch()
+		for _, a := range batch {
+			if a == nil {
+				continue
+			}
+			if err := a.Validate(); err != nil {
+				return ids, fmt.Errorf("artifact validation failed: %w", err)
+			}
+			if a.UpdatedAt.IsZero() {
+				a.UpdatedAt = now
+			}
+			if a.UpdatedBy == "" {
+				a.UpdatedBy = "system"
+			}
+			if a.ID == "" {
+				a.CreatedAt = now
+				a.UpdatedAt = now
+				if a.CreatedBy == "" {
+					a.CreatedBy = "system"
+				}
+				if a.Status == "" {
+					a.Status = "active"
+				}
+				doc := r.col.NewDoc()
+				a.ID = doc.ID
+				fb.Set(doc, a)
+				ids = append(ids, a.ID)
+			} else {
+				fb.Set(r.col.Doc(a.ID), a)
+				ids = append(ids, a.ID)
+			}
+		}
+		if _, err := fb.Commit(ctx); err != nil {
+			return ids, fmt.Errorf("batch commit failed: %w", err)
+		}
+		for _, a := range batch {
+			if a != nil && r.useGCS {
+				if err := r.uploadToGCS(ctx, a); err != nil {
+					log.Printf("[MaterializedArtifacts] GCS upload failed for %s: %v", a.ID, err)
+				}
+			}
+		}
+	}
+	return ids, nil
 }
 
 // Upsert создает или обновляет MaterializedArtifact по CanonicalKey
@@ -224,6 +453,36 @@ func (r *MaterializedArtifactsRepository) ListByLens(ctx context.Context, lensID
 		Where("lensId", "==", lensID).
 		OrderBy("updatedAt", firestore.Desc).
 		Limit(limit)
+
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("firestore query failed: %w", err)
+	}
+
+	artifacts := make([]*horizonmodels.MaterializedArtifact, 0, len(docs))
+	for _, doc := range docs {
+		var artifact horizonmodels.MaterializedArtifact
+		if err := doc.DataTo(&artifact); err != nil {
+			continue
+		}
+		artifacts = append(artifacts, &artifact)
+	}
+
+	return artifacts, nil
+}
+
+// FindByNodeRef returns all MaterializedArtifacts where nodeRefs contains the given canonical path.
+// Uses Firestore array-contains query. Requires composite index on (tenantId, kind, nodeRefs).
+func (r *MaterializedArtifactsRepository) FindByNodeRef(ctx context.Context, tenantID string, nodeCanonicalPath string, kind horizonmodels.MaterializedKind) ([]*horizonmodels.MaterializedArtifact, error) {
+	if tenantID == "" || nodeCanonicalPath == "" {
+		return nil, nil
+	}
+
+	q := r.col.
+		Where("tenantId", "==", tenantID).
+		Where("kind", "==", string(kind)).
+		Where("nodeRefs", "array-contains", nodeCanonicalPath).
+		Limit(50)
 
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {

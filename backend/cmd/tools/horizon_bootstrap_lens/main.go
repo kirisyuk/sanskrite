@@ -36,8 +36,8 @@ import (
 func main() {
 	ctx := context.Background()
 
-	gcpProject := flag.String("project", os.Getenv("GCP_PROJECT_ID"), "GCP project id (defaults to $GCP_PROJECT_ID, fallback 'h1horizon-488615')")
-	region := flag.String("region", "us-central1", "Cloud Run region for h1horizon-api (default us-central1)")
+	gcpProject := flag.String("project", os.Getenv("GCP_PROJECT_ID"), "GCP project id (defaults to $GCP_PROJECT_ID, fallback 'etigram')")
+	region := flag.String("region", "us-central1", "Cloud Run region for etigram-api (default us-central1)")
 	tenantID := flag.String("tenant", "kirisyuk@gmail.com", "tenantId (email). This creates core user+project under this tenant.")
 	email := flag.String("email", "kirisyuk@gmail.com", "user email (defaults to tenant)")
 	apiURL := flag.String("api-url", "", "Cloud Run base URL (if empty, auto-detect via gcloud)")
@@ -50,7 +50,7 @@ func main() {
 	flag.Parse()
 
 	if *gcpProject == "" {
-		*gcpProject = "h1horizon-488615"
+		*gcpProject = "etigram"
 	}
 	if *email == "" {
 		*email = *tenantID
@@ -309,7 +309,7 @@ func main() {
 	// --- 8) Call real backend watchdog cron endpoint.
 	baseURL := strings.TrimSpace(*apiURL)
 	if baseURL == "" {
-		baseURL = strings.TrimSpace(runCmd("gcloud", "run", "services", "describe", "h1horizon-api", "--region", *region, "--format=value(status.url)"))
+		baseURL = strings.TrimSpace(runCmd("gcloud", "run", "services", "describe", "etigram-api", "--region", *region, "--format=value(status.url)"))
 	}
 	if baseURL == "" {
 		log.Fatal("cannot resolve Cloud Run API URL (pass --api-url or ensure gcloud run services describe works)")

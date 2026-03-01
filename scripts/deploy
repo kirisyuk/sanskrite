@@ -14,15 +14,16 @@ API_DIR="$ROOT_DIR/backend"
 
 TARGET_WEB=1
 TARGET_API=1
-TARGET_HATLONE_WS=0
+TARGET_ETIGRAM_WS=0
 TARGET_VERIFIED_PROXY=0
 TARGET_CHECK_INFRA=0
-TARGET_SETUP_HATLONE_INFRA=0
-TARGET_HORIZON_WATCHDOG=0
-TARGET_HORIZON_WATCHDOG_ONLY=0
+TARGET_SETUP_ETIGRAM_INFRA=0
+TARGET_ETIGRAM_WATCHDOG=0
+TARGET_ETIGRAM_WATCHDOG_ONLY=0
 TARGET_CLEANUP_REVISIONS=0
 
 REGION=${REGION:-us-central1}
+FIRESTORE_LOCATION=${FIRESTORE_LOCATION:-$REGION}
 PROJECT_ID=$(gcloud config get-value project 2>/dev/null || true)
 if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "(unset)" ]]; then
   echo -e "${RED}GCP project is not set. Run: gcloud config set project <ID>${NC}" >&2
@@ -36,18 +37,18 @@ SA_BACKEND="backend@${PROJECT_ID}.iam.gserviceaccount.com"
 SECRET_ADMIN_JOB_TOKEN="admin_job_token"
 
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py] [--hatlone-ws] [--verified-proxy] [--check-infra] [--horizon-watchdog] [--horizon-watchdog-only] [--cleanup-revisions]"
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--etigram-ws] [--verified-proxy] [--check-infra] [--etigram-watchdog] [--etigram-watchdog-only] [--cleanup-revisions]"
   echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
   echo ""
   echo "Flags:"
   echo "  --web           Deploy frontend only"
   echo "  --api           Deploy backend API only (skips infra checks)"
   echo "  --py            Deploy Telegram service only (skips infra checks)"
-  echo "  --hatlone-ws    Deploy WS broker only (skips infra checks)"
+  echo "  --etigram-ws    Deploy WS broker only (skips infra checks)"
   echo "  --verified-proxy Deploy verified-proxy only (skips infra checks)"
   echo "  --check-infra   Run infrastructure checks only (no deployments)"
-  echo "  --horizon-watchdog Ensure Cloud Scheduler job for Horizon Watchdog (calls API cron endpoint)"
-  echo "  --horizon-watchdog-only Only ensure Horizon Watchdog infra/job/env (no API build/deploy)"
+  echo "  --etigram-watchdog Ensure Cloud Scheduler job for Etigram Watchdog (calls API cron endpoint)"
+  echo "  --etigram-watchdog-only Only ensure Etigram Watchdog infra/job/env (no API build/deploy)"
   echo "  --cleanup-revisions Clean up old Cloud Run revisions (keeps last 10 per service, manual operation)"
 }
 
@@ -57,12 +58,12 @@ while [[ $# -gt 0 ]]; do
     --web) TARGET_API=0 ;;
     --api) TARGET_WEB=0; TARGET_CHECK_INFRA=0 ;;
     --py) TARGET_WEB=0; TARGET_API=0; TARGET_PY=1; TARGET_CHECK_INFRA=0 ;;
-    --hatlone-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_HATLONE_WS=1; TARGET_CHECK_INFRA=0; TARGET_SETUP_HATLONE_INFRA=1 ;;
-    --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
-    --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
-    --horizon-watchdog) TARGET_HORIZON_WATCHDOG=1 ;;
-    --horizon-watchdog-only) TARGET_HORIZON_WATCHDOG=1; TARGET_HORIZON_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
-    --cleanup-revisions) TARGET_CLEANUP_REVISIONS=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_HATLONE_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
+    --etigram-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=1; TARGET_CHECK_INFRA=0; TARGET_SETUP_ETIGRAM_INFRA=1 ;;
+    --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
+    --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
+    --etigram-watchdog) TARGET_ETIGRAM_WATCHDOG=1 ;;
+    --etigram-watchdog-only) TARGET_ETIGRAM_WATCHDOG=1; TARGET_ETIGRAM_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
+    --cleanup-revisions) TARGET_CLEANUP_REVISIONS=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo -e "${YELLOW}Unknown arg: $1${NC}"; usage; exit 1 ;;
   esac
@@ -108,14 +109,25 @@ deploy_web() {
     exit 1
   fi
   
-  # Try to resolve WS broker URL for Vite env (hatlone-ws)
+  # Try to resolve WS broker URL for Vite env (etigram-ws)
+  local API_BASE_URL="${VITE_API_BASE_URL:-}"
+  if [[ -z "$API_BASE_URL" ]]; then
+    if gcloud run services describe etigram-api --region "$REGION" >/dev/null 2>&1; then
+      API_BASE_URL=$(gcloud run services describe etigram-api --region "$REGION" --format='value(status.url)')
+      echo -e "${GREEN}[web] Found etigram-api URL:${NC} $API_BASE_URL"
+    else
+      echo -e "${YELLOW}[web] API service (etigram-api) not found (will use default from env if set)${NC}"
+    fi
+  fi
+
+  # Try to resolve WS broker URL for Vite env (etigram-ws)
   local WS_URL="${WS_URL:-}"
   if [[ -z "$WS_URL" ]]; then
-    if gcloud run services describe hatlone-ws --region "$REGION" >/dev/null 2>&1; then
-      WS_URL=$(gcloud run services describe hatlone-ws --region "$REGION" --format='value(status.url)')
-      echo -e "${GREEN}[web] Found hatlone-ws URL:${NC} $WS_URL"
+    if gcloud run services describe etigram-ws --region "$REGION" >/dev/null 2>&1; then
+      WS_URL=$(gcloud run services describe etigram-ws --region "$REGION" --format='value(status.url)')
+      echo -e "${GREEN}[web] Found etigram-ws URL:${NC} $WS_URL"
     else
-      echo -e "${YELLOW}[web] WS broker (hatlone-ws) not found (will use default from env if set)${NC}"
+      echo -e "${YELLOW}[web] WS broker (etigram-ws) not found (will use default from env if set)${NC}"
     fi
   fi
   
@@ -147,13 +159,17 @@ deploy_web() {
   # Build with environment variables
   echo -e "${BLUE}[web] Building Vite app...${NC}"
   local build_env_vars=()
-  # Firebase config for h1horizon-488615 (created via firebase apps:create WEB)
+  # Firebase config for etigram (created via firebase apps:create WEB)
+  if [[ -n "$API_BASE_URL" ]]; then
+    build_env_vars+=("VITE_API_BASE_URL=$API_BASE_URL")
+    echo -e "${BLUE}[web] Using API base URL for build:${NC} $API_BASE_URL"
+  fi
   build_env_vars+=("VITE_FIREBASE_PROJECT_ID=$FIREBASE_PROJECT_ID")
   build_env_vars+=("VITE_FIREBASE_AUTH_DOMAIN=${FIREBASE_PROJECT_ID}.firebaseapp.com")
   build_env_vars+=("VITE_FIREBASE_STORAGE_BUCKET=${FIREBASE_PROJECT_ID}.firebasestorage.app")
-  build_env_vars+=("VITE_FIREBASE_API_KEY=AIzaSyA57nw_YlFBn7DZEcpjwQ28iEXueTz7nJA")
-  build_env_vars+=("VITE_FIREBASE_MESSAGING_SENDER_ID=849799327589")
-  build_env_vars+=("VITE_FIREBASE_APP_ID=1:849799327589:web:d0783eb9cf75ec8e80bb8c")
+  build_env_vars+=("VITE_FIREBASE_API_KEY=AIzaSyAJDpTQvYQJPpTFCN9droNmUoWZNJ0JUc0")
+  build_env_vars+=("VITE_FIREBASE_MESSAGING_SENDER_ID=844185759625")
+  build_env_vars+=("VITE_FIREBASE_APP_ID=1:844185759625:web:fa13be4a45bc39da397b58")
   if [[ -n "$WS_URL" ]]; then
     build_env_vars+=("VITE_WS_BROKER_URL=$WS_URL")
     echo -e "${BLUE}[web] Using WS broker URL for build:${NC} $WS_URL"
@@ -233,6 +249,7 @@ setup_infrastructure() {
   enable_api aiplatform.googleapis.com
   enable_api generativelanguage.googleapis.com
   enable_api discoveryengine.googleapis.com  # Vertex AI Search API
+  enable_api geocoding-backend.googleapis.com  # Google Geocoding API
   enable_api bigquery.googleapis.com  # BigQuery API
   enable_api bigqueryconnection.googleapis.com  # BigQuery Connections API (for Object Tables and ML)
   enable_api apikeys.googleapis.com
@@ -242,6 +259,38 @@ setup_infrastructure() {
   enable_api redis.googleapis.com
   enable_api vpcaccess.googleapis.com
   enable_api compute.googleapis.com
+
+  # Best-effort: ensure Google-managed service identities for Vertex services exist.
+  # Some IAM bindings fail in fresh projects until these identities are provisioned.
+  if gcloud beta services identity create --help >/dev/null 2>&1; then
+    echo -e "${BLUE}[infra] Ensuring Vertex service identities...${NC}"
+    for svc in aiplatform.googleapis.com discoveryengine.googleapis.com; do
+      gcloud beta services identity create --service="$svc" --project="$PROJECT_ID" >/dev/null 2>&1 || true
+    done
+  fi
+
+  # Ensure Firestore default database exists before any index operations.
+  # Fresh GCP projects may have Firestore API enabled but no "(default)" database.
+  echo -e "${BLUE}[infra] Ensuring Firestore default database...${NC}"
+  if gcloud firestore databases describe --project="$PROJECT_ID" --database="(default)" >/dev/null 2>&1; then
+    local fs_location
+    fs_location=$(gcloud firestore databases describe --project="$PROJECT_ID" --database="(default)" --format='value(locationId)' 2>/dev/null || echo "")
+    echo -e "${GREEN}[infra] Firestore (default) exists${NC}${fs_location:+ (${fs_location})}"
+  else
+    echo -e "${BLUE}[infra] Creating Firestore (default) in location:${NC} ${FIRESTORE_LOCATION}"
+    if gcloud firestore databases create \
+      --project="$PROJECT_ID" \
+      --database="(default)" \
+      --location="${FIRESTORE_LOCATION}" \
+      --type=firestore-native \
+      --quiet; then
+      echo -e "${GREEN}[infra] Created Firestore (default) database${NC}"
+    else
+      echo -e "${RED}[infra] Failed to create Firestore (default) database${NC}" >&2
+      echo -e "${YELLOW}[infra] Create manually:${NC} gcloud firestore databases create --project=${PROJECT_ID} --database='(default)' --location=${FIRESTORE_LOCATION} --type=firestore-native" >&2
+      exit 1
+    fi
+  fi
   
   echo -e "${BLUE}[infra] Setting up service accounts and permissions...${NC}"
   
@@ -282,7 +331,7 @@ setup_infrastructure() {
     GROK_API_KEY GROK_API_KEY_TEST OPENAI_API_KEY_TEST VERTEX_API_KEY VERTEX_API_KEY_TEST
     TELEGRAM_API_ID TELEGRAM_API_HASH TELEGRAM_BOT_TOKEN TELEGRAM_SESSION_STRING
     paypal_client_id paypal_secret paypal_webhook_id
-    google-custom-search-api-key
+    google-custom-search-api-key google_maps_api_key
     GEONAMES_USERNAME functions-key
     ACLED_ACCESS_TOKEN NASA_FIRMS_API_KEY FRED_API_KEY EIA_API_KEY FINNHUB_API_KEY
     CLOUDFLARE_API_TOKEN OPENSKY_USERNAME OPENSKY_PASSWORD
@@ -307,8 +356,8 @@ setup_infrastructure() {
   fi
 
   # 3.2 Ensure Cloud Tasks queue for Scout exists and is configured (managed retries).
-  # NOTE: The original queue name "h1horizon-scout" may be temporarily unavailable after deletion.
-  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-h1horizon-scout-v2}"
+  # NOTE: Queue name "etigram-scout" may be temporarily unavailable after deletion.
+  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-etigram-scout}"
   if gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $scout_queue"
   else
@@ -329,7 +378,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $scout_queue (maxAttempts=5)"
 
   # 3.4.1 Ensure Cloud Tasks queue for Profile refresh exists
-  local profile_queue="${CLOUD_TASKS_PROFILE_QUEUE:-h1horizon-profile-refresh}"
+  local profile_queue="${CLOUD_TASKS_PROFILE_QUEUE:-etigram-profile-refresh}"
   if gcloud tasks queues describe "$profile_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $profile_queue"
   else
@@ -350,7 +399,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $profile_queue (maxConcurrentDispatches=1000)"
 
   # 3.4.2 Ensure Cloud Tasks queue for Risk pipeline exists
-  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-h1horizon-risk-v1}"
+  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-etigram-risk}"
   if gcloud tasks queues describe "$risk_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $risk_queue"
   else
@@ -388,13 +437,13 @@ setup_infrastructure() {
     echo -e "${GREEN}[infra] Created RAG documents bucket:${NC} gs://${rag_docs_bucket}"
   fi
   
-  # 3.6.1 Ensure GCS bucket for Horizon fragments exists
-  local horizon_fragments_bucket="${PROJECT_ID}-horizon-fragments"
-  if gcloud storage buckets describe "gs://${horizon_fragments_bucket}" >/dev/null 2>&1; then
-    echo -e "${GREEN}[infra] Horizon fragments bucket exists:${NC} gs://${horizon_fragments_bucket}"
+  # 3.6.1 Ensure GCS bucket for Etigram fragments exists
+  local etigram_fragments_bucket="${PROJECT_ID}-etigram-fragments"
+  if gcloud storage buckets describe "gs://${etigram_fragments_bucket}" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Etigram fragments bucket exists:${NC} gs://${etigram_fragments_bucket}"
   else
-    gcloud storage buckets create "gs://${horizon_fragments_bucket}" --location=US --uniform-bucket-level-access
-    echo -e "${GREEN}[infra] Created Horizon fragments bucket:${NC} gs://${horizon_fragments_bucket}"
+    gcloud storage buckets create "gs://${etigram_fragments_bucket}" --location=US --uniform-bucket-level-access
+    echo -e "${GREEN}[infra] Created Etigram fragments bucket:${NC} gs://${etigram_fragments_bucket}"
   fi
   
   # 3.6.2 Ensure GCS bucket for web static files exists (optional, may be created by Firebase Hosting)
@@ -453,35 +502,82 @@ setup_infrastructure() {
   else
     echo -e "${YELLOW}[infra] Warning: gemini_api_key secret not found${NC}"
   fi
+
+  # Verify Google Geocoding API + key secret (required for paid geocoding fallback).
+  if gcloud services list --enabled --project="$PROJECT_ID" --format='value(config.name)' 2>/dev/null | grep -q '^geocoding-backend.googleapis.com$'; then
+    echo -e "${GREEN}[infra] Google Geocoding API is enabled${NC}"
+  else
+    echo -e "${YELLOW}[infra] Warning: Google Geocoding API not enabled${NC}"
+  fi
+  if gcloud secrets describe google_maps_api_key --project="$PROJECT_ID" >/dev/null 2>&1; then
+    local google_maps_key
+    google_maps_key=$(gcloud secrets versions access latest --secret=google_maps_api_key --project="$PROJECT_ID" 2>/dev/null || echo "")
+    if [[ -n "$google_maps_key" && "$google_maps_key" != "PLACEHOLDER_UPDATE_ME" ]]; then
+      echo -e "${GREEN}[infra] google_maps_api_key secret exists${NC}"
+    else
+      echo -e "${YELLOW}[infra] Warning: google_maps_api_key secret is empty or placeholder${NC}"
+    fi
+  else
+    echo -e "${YELLOW}[infra] Warning: google_maps_api_key secret not found${NC}"
+  fi
   
-  # Get project number for Vertex AI service account
+  # Get project number for Google-managed Vertex/Discovery service accounts
   local PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null || echo "")
   if [[ -n "$PROJECT_NUMBER" ]]; then
     local VERTEX_AI_SA="service-${PROJECT_NUMBER}@gcp-sa-aiplatform.iam.gserviceaccount.com"
+    local DISCOVERY_ENGINE_SA="service-${PROJECT_NUMBER}@gcp-sa-discoveryengine.iam.gserviceaccount.com"
     echo -e "${BLUE}[infra] Vertex AI service account:${NC} $VERTEX_AI_SA"
-    
-    # Grant Vertex AI service account access to RAG documents bucket
-    # Check if Vertex AI SA already has access
-    local has_access=$(gcloud storage buckets get-iam-policy "gs://${rag_docs_bucket}" \
-      --format="value(bindings[].members)" 2>/dev/null | grep -q "${VERTEX_AI_SA}" && echo "yes" || echo "no")
-    
-    if [[ "$has_access" == "yes" ]]; then
-      echo -e "${GREEN}[infra] Vertex AI SA already has access to bucket${NC}"
-    else
-      echo -e "${BLUE}[infra] Granting Vertex AI SA access to RAG documents bucket...${NC}"
-      # Try gcloud first (more reliable)
-      gcloud storage buckets add-iam-policy-binding "gs://${rag_docs_bucket}" \
-        --member="serviceAccount:${VERTEX_AI_SA}" \
+    echo -e "${BLUE}[infra] Discovery Engine service account:${NC} $DISCOVERY_ENGINE_SA"
+
+    grant_bucket_viewer_access() {
+      local bucket_name="$1"
+      local service_account="$2"
+      local service_label="$3"
+      local member="serviceAccount:${service_account}"
+      local has_access="no"
+      has_access=$(gcloud storage buckets get-iam-policy "gs://${bucket_name}" --format=json 2>/dev/null | grep -q "\"${member}\"" && echo "yes" || echo "no")
+
+      if [[ "$has_access" == "yes" ]]; then
+        echo -e "${GREEN}[infra] ${service_label} already has access:${NC} gs://${bucket_name}"
+        return 0
+      fi
+
+      echo -e "${BLUE}[infra] Granting ${service_label} access to:${NC} gs://${bucket_name}"
+      gcloud storage buckets add-iam-policy-binding "gs://${bucket_name}" \
+        --member="${member}" \
         --role="roles/storage.objectViewer" 2>/dev/null || {
-        # Fallback to gsutil
-        gsutil iam ch "serviceAccount:${VERTEX_AI_SA}:objectViewer" "gs://${rag_docs_bucket}" || {
-          echo -e "${YELLOW}[infra] Warning: Failed to grant bucket access (may need manual setup)${NC}"
-          echo -e "${YELLOW}[infra] Run manually: gcloud storage buckets add-iam-policy-binding gs://${rag_docs_bucket} --member='serviceAccount:${VERTEX_AI_SA}' --role='roles/storage.objectViewer'${NC}"
+        gsutil iam ch "${member}:objectViewer" "gs://${bucket_name}" || {
+          echo -e "${YELLOW}[infra] Warning: Failed to grant bucket access${NC}"
+          echo -e "${YELLOW}[infra] Run manually: gcloud storage buckets add-iam-policy-binding gs://${bucket_name} --member='${member}' --role='roles/storage.objectViewer'${NC}"
         }
       }
+    }
+
+    if gcloud iam service-accounts describe "$VERTEX_AI_SA" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      grant_bucket_viewer_access "$rag_docs_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
+      grant_bucket_viewer_access "$etigram_fragments_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
+    else
+      echo -e "${YELLOW}[infra] Warning: Vertex AI service account not found yet (skip bucket IAM for now)${NC}"
+      echo -e "${YELLOW}[infra] Retry check-infra later after Vertex services fully provision${NC}"
+    fi
+
+    if gcloud iam service-accounts describe "$DISCOVERY_ENGINE_SA" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      grant_bucket_viewer_access "$rag_docs_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
+      grant_bucket_viewer_access "$etigram_fragments_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
+      # Discovery Engine import jobs can request temporary bucket creation in the project.
+      # Without storage.buckets.create, imports fail with PERMISSION_DENIED.
+      gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+        --member="serviceAccount:${DISCOVERY_ENGINE_SA}" \
+        --role="roles/storage.admin" \
+        --condition=None 2>/dev/null || {
+        echo -e "${YELLOW}[infra] Warning: Failed to grant roles/storage.admin to Discovery Engine SA${NC}"
+      }
+    else
+      echo -e "${YELLOW}[infra] Warning: Discovery Engine service account not found yet (skip bucket IAM for now)${NC}"
+      echo -e "${YELLOW}[infra] Retry check-infra later after Discovery Engine services fully provision${NC}"
     fi
   else
-    echo -e "${YELLOW}[infra] Warning: Could not determine project number, skipping Vertex AI SA setup${NC}"
+    echo -e "${YELLOW}[infra] Warning: Could not determine project number, skipping Vertex/Discovery SA setup${NC}"
   fi
   
   # Grant backend service account access to Vertex AI / Vertex AI Search
@@ -498,166 +594,111 @@ setup_infrastructure() {
     }
   done
   
-  # Check and create Vertex AI Search Data Store if needed
-  echo -e "${BLUE}[infra] Checking for existing Vertex AI Search Data Stores...${NC}"
+  # Ensure Vertex AI Search Data Stores exist (global/default_collection).
+  echo -e "${BLUE}[infra] Checking/creating Vertex AI Search Data Stores...${NC}"
   local datastore_id=""
-  local datastore_display_name="RAG Documents Store"
-  local datastore_id_value="rag-documents-store"
-  local use_gcloud_cli=false
-  
-  # Try to use gcloud CLI first (if available)
-  if gcloud discovery-engine data-stores list --location=global --project="$PROJECT_ID" --format="value(name)" >/dev/null 2>&1; then
-    echo -e "${GREEN}[infra] Using gcloud CLI for Discovery Engine${NC}"
-    use_gcloud_cli=true
-    local existing_stores=$(gcloud discovery-engine data-stores list --location=global --project="$PROJECT_ID" --format="value(name)" 2>/dev/null || echo "")
-    # Extract store ID from full path (format: projects/.../dataStores/rag-documents-store)
-    if echo "$existing_stores" | grep -q "rag-documents-store"; then
-      datastore_id="$datastore_id_value"
-    fi
-  else
-    echo -e "${BLUE}[infra] gcloud discovery-engine commands not available, using REST API${NC}"
-    local access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || echo "")
-    
+  local rag_datastore_id="rag-documents-store"
+  local rag_datastore_display_name="${VERTEX_SEARCH_DATA_STORE_DISPLAY_NAME:-RAG Documents Store}"
+  local etigram_fragments_datastore_id="${VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID:-etigram-fragments-store}"
+  local etigram_fragments_display_name="${VERTEX_SEARCH_ETIGRAM_DATA_STORE_DISPLAY_NAME:-Etigram Fragments Store}"
+  local discovery_base_url="https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores"
+  local access_token
+  access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || echo "")
+
+  ensure_vertex_datastore() {
+    local ds_id="$1"
+    local ds_display_name="$2"
+    local ds_get_url="${discovery_base_url}/${ds_id}"
+    local ds_create_url="${discovery_base_url}?dataStoreId=${ds_id}"
+
     if [[ -z "$access_token" ]]; then
-      echo -e "${YELLOW}[infra] Warning: Could not get access token, skipping Data Store check${NC}"
-    else
-      # Try to get data stores via REST API (use global region for Discovery Engine)
-      local api_response=$(curl -s -H "Authorization: Bearer ${access_token}" \
-        -H "X-Goog-User-Project: ${PROJECT_ID}" \
-        "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores" 2>/dev/null || echo "")
-    
-      # Check if response contains data stores
-      if echo "$api_response" | grep -q "\"name\"" && ! echo "$api_response" | grep -q "\"error\""; then
-        # Extract data store ID from response (look for our specific store or use first one)
-        datastore_id=$(echo "$api_response" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    stores = data.get('dataStores', [])
-    if stores:
-        # Try to find our store by ID or use first one
-        for store in stores:
-            name = store.get('name', '')
-            if 'rag-documents-store' in name or 'rag' in name.lower():
-                print(name.split('/')[-1])
-                break
-        else:
-            print(stores[0]['name'].split('/')[-1])
-except:
-    pass
-" 2>/dev/null || echo "")
-      fi
+      echo -e "${YELLOW}[infra] Warning: cannot ensure Data Store ${ds_id} (no access token).${NC}"
+      return 1
     fi
+
+    local get_http
+    get_http=$(curl -sS -o /dev/null -w "%{http_code}" \
+      -H "Authorization: Bearer ${access_token}" \
+      -H "X-Goog-User-Project: ${PROJECT_ID}" \
+      "$ds_get_url" 2>/dev/null || echo "000")
+
+    if [[ "$get_http" == "200" ]]; then
+      echo -e "${GREEN}[infra] Data Store exists:${NC} ${ds_id}"
+      return 0
+    fi
+
+    echo -e "${BLUE}[infra] Creating Data Store:${NC} ${ds_id}"
+    local create_response
+    create_response=$(curl -sS -X POST \
+      -H "Authorization: Bearer ${access_token}" \
+      -H "X-Goog-User-Project: ${PROJECT_ID}" \
+      -H "Content-Type: application/json" \
+      "$ds_create_url" \
+      -d "{
+        \"displayName\": \"${ds_display_name}\",
+        \"industryVertical\": \"GENERIC\",
+        \"solutionTypes\": [\"SOLUTION_TYPE_SEARCH\"],
+        \"contentConfig\": \"CONTENT_REQUIRED\"
+      }" 2>/dev/null || echo "")
+
+    # Success path: operation/resource name present and no explicit error.
+    if echo "$create_response" | grep -q "\"name\"" && ! echo "$create_response" | grep -q "\"error\""; then
+      echo -e "${GREEN}[infra] Created Data Store:${NC} ${ds_id}"
+      return 0
+    fi
+
+    # Idempotent path: already exists.
+    if echo "$create_response" | grep -qi "already exists"; then
+      echo -e "${GREEN}[infra] Data Store already exists:${NC} ${ds_id}"
+      return 0
+    fi
+
+    echo -e "${YELLOW}[infra] Failed to create Data Store:${NC} ${ds_id}"
+    echo "$create_response" | grep -o '"message":"[^"]*"' | head -1 | sed 's/"message":"\(.*\)"/\1/' || echo "Unknown error"
+    echo -e "${YELLOW}[infra] Create manually: https://console.cloud.google.com/gen-app-builder/data-stores?project=${PROJECT_ID}${NC}"
+    return 1
+  }
+
+  if ensure_vertex_datastore "$rag_datastore_id" "$rag_datastore_display_name"; then
+    datastore_id="$rag_datastore_id"
   fi
-  
-  if [[ -n "$datastore_id" ]]; then
-    echo -e "${GREEN}[infra] Found existing Data Store:${NC} $datastore_id"
-    # Note: Import is not triggered for existing stores to avoid unnecessary re-imports
-    # If you need to re-import, do it manually or set FORCE_REIMPORT=true
-  else
-    echo -e "${YELLOW}[infra] No existing Data Store found, creating new one...${NC}"
-    
-    if [[ "$use_gcloud_cli" == "true" ]]; then
-      # Try to create using gcloud CLI
-      if gcloud discovery-engine data-stores create "$datastore_id_value" \
-        --project="$PROJECT_ID" \
-        --location="global" \
-        --display-name="$datastore_display_name" \
-        --industry-vertical="GENERIC" \
-        --solution-types="SOLUTION_TYPE_SEARCH" \
-        --content-config="CONTENT_REQUIRED" 2>/dev/null; then
-        datastore_id="$datastore_id_value"
-        echo -e "${GREEN}[infra] Created Data Store using gcloud CLI:${NC} $datastore_id"
-      else
-        echo -e "${YELLOW}[infra] gcloud CLI creation failed, falling back to REST API${NC}"
-        use_gcloud_cli=false
+  ensure_vertex_datastore "$etigram_fragments_datastore_id" "$etigram_fragments_display_name" || true
+
+  # Import documents from GCS into RAG Data Store (best-effort).
+  if [[ -n "$datastore_id" && -n "$access_token" ]]; then
+    echo -e "${BLUE}[infra] Importing documents from GCS bucket to ${datastore_id}...${NC}"
+    local import_response
+    import_response=$(curl -sS -X POST \
+      -H "Authorization: Bearer ${access_token}" \
+      -H "X-Goog-User-Project: ${PROJECT_ID}" \
+      -H "Content-Type: application/json" \
+      "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores/${datastore_id}/branches/default_branch/documents:import" \
+      -d "{
+        \"gcsSource\": {
+          \"inputUris\": [\"gs://${rag_docs_bucket}/**\"],
+          \"dataSchema\": \"document\"
+        },
+        \"reconciliationMode\": \"INCREMENTAL\"
+      }" 2>/dev/null || echo "")
+
+    if echo "$import_response" | grep -q "\"name\"" && ! echo "$import_response" | grep -q "\"error\""; then
+      echo -e "${GREEN}[infra] GCS import initiated${NC}"
+      local operation_name
+      operation_name=$(echo "$import_response" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('name', ''))" 2>/dev/null || echo "")
+      if [[ -n "$operation_name" ]]; then
+        echo -e "${BLUE}[infra] Import operation:${NC} $operation_name"
       fi
-    fi
-    
-    if [[ "$use_gcloud_cli" == "false" ]]; then
-      local access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || echo "")
-      if [[ -z "$access_token" ]]; then
-        echo -e "${YELLOW}[infra] Cannot create Data Store: access token unavailable${NC}"
-        echo -e "${YELLOW}[infra] Create manually: https://console.cloud.google.com/gen-app-builder/data-stores${NC}"
-      else
-        # Create Data Store via REST API
-        local create_response=$(curl -X POST -s -H "Authorization: Bearer ${access_token}" \
-          -H "X-Goog-User-Project: ${PROJECT_ID}" \
-          -H "Content-Type: application/json" \
-          "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores?dataStoreId=${datastore_id_value}" \
-          -d "{
-            \"displayName\": \"${datastore_display_name}\",
-            \"industryVertical\": \"GENERIC\",
-            \"solutionTypes\": [\"SOLUTION_TYPE_SEARCH\"],
-            \"contentConfig\": \"CONTENT_REQUIRED\"
-          }" 2>/dev/null || echo "")
-      
-        if echo "$create_response" | grep -q "\"name\"" && ! echo "$create_response" | grep -q "\"error\""; then
-          datastore_id="$datastore_id_value"
-          echo -e "${GREEN}[infra] Created Data Store via REST API:${NC} $datastore_id"
-        else
-          echo -e "${YELLOW}[infra] Failed to create Data Store via REST API:${NC}"
-          echo "$create_response" | grep -o '"message":"[^"]*"' | head -1 | sed 's/"message":"\(.*\)"/\1/' || echo "Unknown error"
-          echo -e "${YELLOW}[infra] Create manually: https://console.cloud.google.com/gen-app-builder/data-stores${NC}"
-        fi
-      fi
-    fi
-    
-    # Import documents from GCS bucket (if Data Store was created)
-    if [[ -n "$datastore_id" ]]; then
-      echo -e "${BLUE}[infra] Importing documents from GCS bucket...${NC}"
-      
-      if [[ "$use_gcloud_cli" == "true" ]]; then
-        # Try using gcloud CLI for import
-        if gcloud discovery-engine documents import \
-          --project="$PROJECT_ID" \
-          --location="global" \
-          --data-store="$datastore_id" \
-          --gcs-source="gs://${rag_docs_bucket}/**" \
-          --reconciliation-mode="INCREMENTAL" 2>/dev/null; then
-          echo -e "${GREEN}[infra] GCS import initiated via gcloud CLI${NC}"
-        else
-          echo -e "${YELLOW}[infra] gcloud import failed, falling back to REST API${NC}"
-          use_gcloud_cli=false
-        fi
-      fi
-      
-      if [[ "$use_gcloud_cli" == "false" ]]; then
-        # Use REST API for import
-        local access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || echo "")
-        if [[ -n "$access_token" ]]; then
-          local import_response=$(curl -X POST -s -H "Authorization: Bearer ${access_token}" \
-            -H "X-Goog-User-Project: ${PROJECT_ID}" \
-            -H "Content-Type: application/json" \
-            "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores/${datastore_id}/branches/default_branch/documents:import" \
-            -d "{
-              \"gcsSource\": {
-                \"inputUris\": [\"gs://${rag_docs_bucket}/**\"],
-                \"dataSchema\": \"document\"
-              },
-              \"reconciliationMode\": \"INCREMENTAL\"
-            }" 2>/dev/null || echo "")
-          
-          if echo "$import_response" | grep -q "\"name\"" && ! echo "$import_response" | grep -q "\"error\""; then
-            echo -e "${GREEN}[infra] GCS import initiated via REST API${NC}"
-            local operation_name=$(echo "$import_response" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('name', ''))" 2>/dev/null || echo "")
-            if [[ -n "$operation_name" ]]; then
-              echo -e "${BLUE}[infra] Import operation:${NC} $operation_name"
-            fi
-          else
-            echo -e "${YELLOW}[infra] Note: GCS import may require manual configuration${NC}"
-            echo -e "${YELLOW}[infra] Configure in console: https://console.cloud.google.com/gen-app-builder/data-stores?project=${PROJECT_ID}${NC}"
-          fi
-        fi
-      fi
+    else
+      echo -e "${YELLOW}[infra] Note: GCS import may require manual configuration${NC}"
+      echo -e "${YELLOW}[infra] Configure in console: https://console.cloud.google.com/gen-app-builder/data-stores?project=${PROJECT_ID}${NC}"
     fi
   fi
   
   # Update Cloud Run service with Data Store ID if we have one
   if [[ -n "$datastore_id" ]]; then
     echo -e "${BLUE}[infra] Updating Cloud Run service with Data Store ID...${NC}"
-    if gcloud run services describe h1horizon-api --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      gcloud run services update h1horizon-api --region="$REGION" --project="$PROJECT_ID" \
+    if gcloud run services describe etigram-api --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      gcloud run services update etigram-api --region="$REGION" --project="$PROJECT_ID" \
         --update-env-vars "VERTEX_SEARCH_DATA_STORE_ID=$datastore_id" \
         --quiet >/dev/null 2>&1 && \
         echo -e "${GREEN}[infra] Updated Cloud Run service with VERTEX_SEARCH_DATA_STORE_ID=$datastore_id${NC}" || \
@@ -826,7 +867,7 @@ except:
   
   # 3.9 Setup Redis (Memorystore)
   echo -e "${BLUE}[infra] Setting up Redis (Memorystore)...${NC}"
-  local redis_instance="h1horizon-redis"
+  local redis_instance="etigram-redis"
   local redis_tier="BASIC"
   local redis_size="1"
   # Use lowercase value expected by gcloud: redis_7_0
@@ -840,14 +881,14 @@ except:
     echo -e "${BLUE}[infra] Redis host:${NC} $redis_host:$redis_port"
     
     # Update Cloud Run services with Redis connection info if they exist
-    if gcloud run services describe h1horizon-api --region="$REGION" >/dev/null 2>&1; then
-      gcloud run services update h1horizon-api --region="$REGION" \
+    if gcloud run services describe etigram-api --region="$REGION" >/dev/null 2>&1; then
+      gcloud run services update etigram-api --region="$REGION" \
         --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port,REDIS_ADDR=$redis_host:$redis_port" \
         --quiet >/dev/null 2>&1 && \
-        echo -e "${GREEN}[infra] Updated h1horizon-api with Redis connection info${NC}" || \
-        echo -e "${YELLOW}[infra] Warning: Failed to update h1horizon-api with Redis info${NC}"
+        echo -e "${GREEN}[infra] Updated etigram-api with Redis connection info${NC}" || \
+        echo -e "${YELLOW}[infra] Warning: Failed to update etigram-api with Redis info${NC}"
     fi
-    # Note: hatlone-ws does NOT use Redis, so skip Redis env vars update
+    # Note: etigram-ws does NOT use Redis, so skip Redis env vars update
   else
     echo -e "${BLUE}[infra] Creating Redis instance (this may take 10-20 minutes)...${NC}"
     
@@ -936,14 +977,14 @@ except:
         echo -e "${BLUE}[infra] Redis host:${NC} $redis_host:$redis_port"
         
         # Update Cloud Run API service с новыми env (VPC не используем)
-        if gcloud run services describe h1horizon-api --region="$REGION" >/dev/null 2>&1; then
-          gcloud run services update h1horizon-api --region="$REGION" \
+        if gcloud run services describe etigram-api --region="$REGION" >/dev/null 2>&1; then
+          gcloud run services update etigram-api --region="$REGION" \
             --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port,REDIS_ADDR=$redis_host:$redis_port" \
             --quiet >/dev/null 2>&1 && \
-            echo -e "${GREEN}[infra] Updated h1horizon-api with Redis connection info${NC}" || \
-            echo -e "${YELLOW}[infra] Warning: Failed to update h1horizon-api (may need manual update)${NC}"
+            echo -e "${GREEN}[infra] Updated etigram-api with Redis connection info${NC}" || \
+            echo -e "${YELLOW}[infra] Warning: Failed to update etigram-api (may need manual update)${NC}"
         fi
-        # Note: hatlone-ws does NOT use Redis, so no VPC connector needed
+        # Note: etigram-ws does NOT use Redis, so no VPC connector needed
         
         echo -e "${GREEN}[infra] Redis setup completed successfully${NC}"
         echo -e "${BLUE}[infra] Connection string:${NC} $redis_host:$redis_port"
@@ -984,17 +1025,17 @@ except:
     fi
   done
 
-  # 4.1 Ensure aggregated topics used by hatlone-ws exist (Horizon realtime depends on hatlone.horizon.events)
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for hatlone-ws...${NC}"
+  # 4.1 Ensure aggregated topics used by etigram-ws exist (Etigram realtime depends on etigram.horizon.events)
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for etigram-ws...${NC}"
   agg_topics=(
-    "hatlone.genai.streams"
-    "hatlone.discovery.events"
-    "hatlone.artifact.events"
-    "hatlone.interaction.events"
-    "hatlone.analysis.events"
-    "hatlone.verified.streams"
-    "hatlone.horizon.events"
-    "hatlone.operations.events"
+    "etigram.genai.streams"
+    "etigram.discovery.events"
+    "etigram.artifact.events"
+    "etigram.interaction.events"
+    "etigram.analysis.events"
+    "etigram.verified.streams"
+    "etigram.horizon.events"
+    "etigram.operations.events"
     "source.poll"
   )
   for topic in "${agg_topics[@]}"; do
@@ -1006,8 +1047,8 @@ except:
     fi
   done
 
-  # 4.2 Ensure hatlone-ws subscriptions exist for aggregated topics (Subscriber uses <topic>-ws-broker)
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for hatlone-ws...${NC}"
+  # 4.2 Ensure etigram-ws subscriptions exist for aggregated topics (Subscriber uses <topic>-ws-broker)
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for etigram-ws...${NC}"
   for topic in "${agg_topics[@]}"; do
     sub_id="${topic}-ws-broker"
     if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -1039,8 +1080,8 @@ except:
     "source.poll:source.poll.worker"
     "source.poll.due:source.poll.due.worker"
     "ground.refresh:ground.refresh.worker"
-    "hatlone.operations.events:hatlone.operations.events.worker"
-    "hatlone.artifact.events:hatlone.artifact.events.document-processor.worker"
+    "etigram.operations.events:etigram.operations.events.worker"
+    "etigram.artifact.events:etigram.artifact.events.document-processor.worker"
     "chat.ontology.process:chat.ontology.process.worker"
   )
   for pair in "${worker_subs[@]}"; do
@@ -1059,11 +1100,11 @@ except:
     fi
   done
 
-  # 5. Ensure Cloud Scheduler jobs when deploying API OR when explicitly asked (e.g. --horizon-watchdog-only)
-  if [[ "$TARGET_API" -eq 1 || "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
+  # 5. Ensure Cloud Scheduler jobs when deploying API OR when explicitly asked (e.g. --etigram-watchdog-only)
+  if [[ "$TARGET_API" -eq 1 || "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 ]]; then
     echo -e "${BLUE}[infra] Ensuring Cloud Scheduler jobs (optional)...${NC}"
     if gcloud services list --enabled --filter="config.name: cloudscheduler.googleapis.com" --format="value(config.name)" | grep -q cloudscheduler.googleapis.com; then
-      SVC_URL=$(gcloud run services describe h1horizon-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+      SVC_URL=$(gcloud run services describe etigram-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
       
       if [[ -n "$SVC_URL" ]]; then
         # Resolve the stable admin job token from Secret Manager (single source of truth).
@@ -1075,7 +1116,7 @@ except:
         fi
 
         # 5a. Source poller job
-        JOB_NAME="h1horizon-source-poller"
+        JOB_NAME="etigram-source-poller"
         # Create or update a job that calls admin publish-due with header X-Job-Token
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http "$JOB_NAME" \
@@ -1103,7 +1144,7 @@ except:
         echo -e "${GREEN}[infra] ✓${NC} Source poller scheduler job ensured"
         
         # 5b. Artifact scheduler job (checks for scheduled artifact updates)
-        JOB_NAME="h1horizon-artifact-scheduler"
+        JOB_NAME="etigram-artifact-scheduler"
         # Schedule: every hour at minute 0 (e.g., 00:00, 01:00, 02:00, ...)
         # This checks all artifacts and triggers updates for those with daily/weekly schedules
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
@@ -1152,20 +1193,20 @@ except:
         fi
         echo -e "${GREEN}[infra] ✓${NC} Subscription billing scheduler job ensured (runs daily at 02:00 UTC)"
 
-        # 5d. Horizon Watchdog job (optional; enabled via --horizon-watchdog)
-        if [[ "${TARGET_HORIZON_WATCHDOG}" -eq 1 ]]; then
+        # 5d. Etigram Watchdog job (optional; enabled via --etigram-watchdog)
+        if [[ "${TARGET_ETIGRAM_WATCHDOG}" -eq 1 ]]; then
           echo -e "${BLUE}[infra] Ensuring Horizon Watchdog scheduler job...${NC}"
 
           # Ensure API env vars aligned with Cloud Scheduler mode
           # (disable any internal ticker if introduced later; keep knobs explicit)
-          gcloud run services update h1horizon-api --region "$REGION" \
-            --update-env-vars "ENABLE_HORIZON_WATCHDOG=1,DISABLE_HORIZON_WATCHDOG_TICKER=true,HORIZON_WATCHDOG_CRON_LIMIT=200,HORIZON_WATCHDOG_CRON_LOCK_TTL=9m" \
+          gcloud run services update etigram-api --region "$REGION" \
+            --update-env-vars "ENABLE_ETIGRAM_WATCHDOG=1,DISABLE_ETIGRAM_WATCHDOG_TICKER=true,ETIGRAM_WATCHDOG_CRON_LIMIT=200,ETIGRAM_WATCHDOG_CRON_LOCK_TTL=9m" \
             --quiet || true
 
-          JOB_NAME="h1horizon-horizon-watchdog"
-          WATCHDOG_LIMIT="${HORIZON_WATCHDOG_CRON_LIMIT:-200}"
-          WATCHDOG_SCHEDULE="${HORIZON_WATCHDOG_CRON_SCHEDULE:-*/5 * * * *}"
-          WATCHDOG_URI="$SVC_URL/api/v1/admin/horizon/watchdog/run?limit=$WATCHDOG_LIMIT"
+          JOB_NAME="etigram-watchdog"
+          WATCHDOG_LIMIT="${ETIGRAM_WATCHDOG_CRON_LIMIT:-200}"
+          WATCHDOG_SCHEDULE="${ETIGRAM_WATCHDOG_CRON_SCHEDULE:-*/5 * * * *}"
+          WATCHDOG_URI="$SVC_URL/api/v1/admin/etigram/watchdog/run?limit=$WATCHDOG_LIMIT"
 
           if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
             gcloud scheduler jobs update http "$JOB_NAME" \
@@ -1190,7 +1231,7 @@ except:
               --attempt-deadline=540s \
               --quiet || true
           fi
-          echo -e "${GREEN}[infra] ✓${NC} Horizon Watchdog scheduler job ensured ($WATCHDOG_SCHEDULE)"
+          echo -e "${GREEN}[infra] ✓${NC} Etigram Watchdog scheduler job ensured ($WATCHDOG_SCHEDULE)"
         fi
       else
         echo -e "${YELLOW}[infra] Skipping scheduler jobs (api url not resolved).${NC}"
@@ -1275,47 +1316,50 @@ deploy_api() {
   }
   echo -e "${GREEN}[api] Go build successful locally${NC}"
 
-  # Ensure Horizon fragments dedicated bucket exists (even on --api deploys that skip infra).
-  local horizon_fragments_bucket="${HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-horizon-fragments}"
-  if gcloud storage buckets describe "gs://${horizon_fragments_bucket}" --project="$PROJECT_ID" >/dev/null 2>&1; then
-    echo -e "${GREEN}[api] Horizon fragments bucket exists:${NC} gs://${horizon_fragments_bucket}"
+  # Ensure Etigram fragments dedicated bucket exists (even on --api deploys that skip infra).
+  local etigram_fragments_bucket="${ETIGRAM_FRAGMENTS_BUCKET:-${PROJECT_ID}-etigram-fragments}"
+  if gcloud storage buckets describe "gs://${etigram_fragments_bucket}" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[api] Etigram fragments bucket exists:${NC} gs://${etigram_fragments_bucket}"
   else
-    echo -e "${BLUE}[api] Creating Horizon fragments bucket:${NC} gs://${horizon_fragments_bucket}"
-    gcloud storage buckets create "gs://${horizon_fragments_bucket}" --location=US --uniform-bucket-level-access --project="$PROJECT_ID" || true
+    echo -e "${BLUE}[api] Creating Etigram fragments bucket:${NC} gs://${etigram_fragments_bucket}"
+    gcloud storage buckets create "gs://${etigram_fragments_bucket}" --location=US --uniform-bucket-level-access --project="$PROJECT_ID" || true
   fi
 
-  # Ensure dedicated Vertex AI Search Data Store for Horizon fragments exists (store isolation; no filters).
-  local horizon_fragments_datastore="${VERTEX_SEARCH_HORIZON_DATA_STORE_ID:-horizon-fragments-store}"
+  # Ensure dedicated Vertex AI Search Data Store for Etigram fragments exists (store isolation; no filters).
+  local etigram_fragments_datastore="${VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID:-etigram-fragments-store}"
   local access_token
   access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || true)
   if [[ -n "$access_token" ]]; then
-    local ds_list
-    ds_list=$(curl -s -H "Authorization: Bearer ${access_token}" \
+    local ds_get_url="https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores/${etigram_fragments_datastore}"
+    local ds_create_url="https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores?dataStoreId=${etigram_fragments_datastore}"
+    local ds_http
+    ds_http=$(curl -sS -o /dev/null -w "%{http_code}" \
+      -H "Authorization: Bearer ${access_token}" \
       -H "X-Goog-User-Project: ${PROJECT_ID}" \
-      "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores" 2>/dev/null || echo "")
-    if echo "$ds_list" | grep -q "dataStores/${horizon_fragments_datastore}\""; then
-      echo -e "${GREEN}[api] Horizon fragments Data Store exists:${NC} ${horizon_fragments_datastore}"
+      "$ds_get_url" 2>/dev/null || echo "000")
+    if [[ "$ds_http" == "200" ]]; then
+      echo -e "${GREEN}[api] Etigram fragments Data Store exists:${NC} ${etigram_fragments_datastore}"
     else
-      echo -e "${BLUE}[api] Creating Horizon fragments Data Store:${NC} ${horizon_fragments_datastore}"
-      curl -s -X POST \
+      echo -e "${BLUE}[api] Creating Etigram fragments Data Store:${NC} ${etigram_fragments_datastore}"
+      curl -sS -X POST \
         -H "Authorization: Bearer ${access_token}" \
         -H "X-Goog-User-Project: ${PROJECT_ID}" \
         -H "Content-Type: application/json" \
-        "https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/dataStores?dataStoreId=${horizon_fragments_datastore}" \
+        "$ds_create_url" \
         -d "{
-          \"displayName\": \"Horizon Fragments Store\",
+          \"displayName\": \"Etigram Fragments Store\",
           \"industryVertical\": \"GENERIC\",
           \"solutionTypes\": [\"SOLUTION_TYPE_SEARCH\"],
           \"contentConfig\": \"CONTENT_REQUIRED\"
         }" >/dev/null 2>&1 || true
     fi
   else
-    echo -e "${YELLOW}[api] Warning: cannot ensure Horizon Data Store (no access token).${NC}"
+    echo -e "${YELLOW}[api] Warning: cannot ensure Etigram fragments Data Store (no access token).${NC}"
   fi
 
   # Ensure Cloud Tasks queue exists even for --api-only deploys (managed Scout execution).
   # NOTE: default queue is v2 to avoid the "recently deleted queue" lockout.
-  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-h1horizon-scout-v2}"
+  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-etigram-scout}"
   if ! gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $scout_queue"
     gcloud tasks queues create "$scout_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1332,7 +1376,7 @@ deploy_api() {
     --quiet >/dev/null 2>&1 || true
 
   # Ensure Cloud Tasks queue exists for risk pipeline as well.
-  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-h1horizon-risk-v1}"
+  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-etigram-risk}"
   if ! gcloud tasks queues describe "$risk_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $risk_queue"
     gcloud tasks queues create "$risk_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1364,11 +1408,11 @@ deploy_api() {
 
   # Clean up any local binaries before Cloud Build (they're not needed, built in Docker)
   echo -e "${BLUE}[api] Cleaning up local build artifacts...${NC}"
-  (cd "$API_DIR" && rm -f server verified-proxy hatlone-ws main test-agent-orchestrator cmd/*/server cmd/*/verified-proxy cmd/*/hatlone-ws cmd/*/main 2>/dev/null || true)
-  (cd "$API_DIR" && rm -f horizon_* add_* check_* check-* seed_* migrate_* inspect_* purge_* geonames_* loc_* watchdog_* test_* test-* sync-* reindex-* update-* clear_* run_* find_* gemini_* openai_* 2>/dev/null || true)
+  (cd "$API_DIR" && rm -f server verified-proxy etigram-ws main test-agent-orchestrator cmd/*/server cmd/*/verified-proxy cmd/*/etigram-ws cmd/*/main 2>/dev/null || true)
+  (cd "$API_DIR" && rm -f etigram_* add_* check_* check-* seed_* migrate_* inspect_* purge_* geonames_* loc_* watchdog_* test_* test-* sync-* reindex-* update-* clear_* run_* find_* gemini_* openai_* 2>/dev/null || true)
 
   echo -e "${BLUE}[api] Building container image (Artifact Registry)...${NC}"
-  local service="h1horizon-api"
+  local service="etigram-api"
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"
 
   # PayPal secrets (optional - PayPal integration will be disabled if not set)
@@ -1420,7 +1464,7 @@ deploy_api() {
   # Check if Redis exists and get connection info
   local redis_host=""
   local redis_port="6379"
-  local redis_instance="h1horizon-redis"
+  local redis_instance="etigram-redis"
   if gcloud redis instances describe "$redis_instance" --region="$REGION" >/dev/null 2>&1; then
     redis_host=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(host)' 2>/dev/null || echo "")
     redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
@@ -1428,7 +1472,7 @@ deploy_api() {
   
   # Get Telegram service URL if it exists
   local telegram_url=""
-  local telegram_service="h1horizon-telegram"
+  local telegram_service="etigram-telegram"
   if gcloud run services describe "$telegram_service" --region="$REGION" >/dev/null 2>&1; then
     telegram_url=$(gcloud run services describe "$telegram_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
     if [[ -n "$telegram_url" ]]; then
@@ -1446,22 +1490,22 @@ deploy_api() {
     existing_api_url=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)' 2>/dev/null || echo "")
   fi
 
-  local enable_horizon_watchdog="${ENABLE_HORIZON_WATCHDOG:-0}"
-  if [[ "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
-    enable_horizon_watchdog="1"
+  local enable_etigram_watchdog="${ENABLE_ETIGRAM_WATCHDOG:-0}"
+  if [[ "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 ]]; then
+    enable_etigram_watchdog="1"
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://hatl.one|https://www.hatl.one|https://*.hatl.one|https://h1horizon.web.app|https://h1horizon.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_HORIZON_WATCHDOG=${enable_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://hatl.one/subscription/success,PAYPAL_CANCEL_URL=https://hatl.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
-  # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Store
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://etigram.one|https://www.etigram.one|https://*.etigram.one|https://etigram.web.app|https://etigram.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_ETIGRAM_WATCHDOG=${enable_etigram_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://etigram.one/subscription/success,PAYPAL_CANCEL_URL=https://etigram.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  # Etigram Fragments: dedicated bucket + dedicated Vertex AI Search Data Store
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
-  local horizon_fragments_bucket="${HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-horizon-fragments}"
-  local horizon_fragments_datastore="${VERTEX_SEARCH_HORIZON_DATA_STORE_ID:-horizon-fragments-store}"
-  env_vars="$env_vars,HORIZON_FRAGMENTS_BUCKET=${horizon_fragments_bucket},VERTEX_SEARCH_HORIZON_DATA_STORE_ID=${horizon_fragments_datastore}"
+  local etigram_fragments_bucket="${ETIGRAM_FRAGMENTS_BUCKET:-${PROJECT_ID}-etigram-fragments}"
+  local etigram_fragments_datastore="${VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID:-etigram-fragments-store}"
+  env_vars="$env_vars,ETIGRAM_FRAGMENTS_BUCKET=${etigram_fragments_bucket},VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID=${etigram_fragments_datastore}"
 
   # NOTE: ADMIN_JOB_TOKEN is provided via Secret Manager (see --set-secrets) to avoid rotation/desync.
 
-  # If deploying Horizon Watchdog scheduler mode, keep related env vars in sync (also replaced by deploy).
-  if [[ "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
-    env_vars="$env_vars,DISABLE_HORIZON_WATCHDOG_TICKER=true,HORIZON_WATCHDOG_CRON_LIMIT=${HORIZON_WATCHDOG_CRON_LIMIT:-200},HORIZON_WATCHDOG_CRON_LOCK_TTL=${HORIZON_WATCHDOG_CRON_LOCK_TTL:-9m}"
+  # If deploying Etigram Watchdog scheduler mode, keep related env vars in sync (also replaced by deploy).
+  if [[ "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 ]]; then
+    env_vars="$env_vars,DISABLE_ETIGRAM_WATCHDOG_TICKER=true,ETIGRAM_WATCHDOG_CRON_LIMIT=${ETIGRAM_WATCHDOG_CRON_LIMIT:-200},ETIGRAM_WATCHDOG_CRON_LOCK_TTL=${ETIGRAM_WATCHDOG_CRON_LOCK_TTL:-9m}"
   fi
   
   # Add Redis env vars if available (REDIS_HOST/PORT for cache package, REDIS_ADDR for legacy applicability_evaluator)
@@ -1484,7 +1528,7 @@ deploy_api() {
   gcloud run deploy "$service" \
     --image "$image" \
     --region "$REGION" \
-    --allow-unauthenticated \
+    --no-invoker-iam-check \
     --service-account "$SA_BACKEND" \
     --min-instances=1 \
     --max-instances=3 \
@@ -1519,19 +1563,19 @@ deploy_api() {
   if [[ -z "$admin_token" ]]; then
     admin_token=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
   fi
-  if gcloud scheduler jobs describe "h1horizon-horizon-watchdog" --location="$REGION" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "h1horizon-horizon-watchdog" \
+  if gcloud scheduler jobs describe "etigram-watchdog" --location="$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "etigram-watchdog" \
       --location="$REGION" \
       --update-headers="X-Job-Token=$admin_token" \
       --quiet >/dev/null 2>&1 || true
-    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for h1horizon-horizon-watchdog"
+    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for etigram-watchdog"
   fi
-  if gcloud scheduler jobs describe "h1horizon-source-poller" --location="$REGION" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "h1horizon-source-poller" \
+  if gcloud scheduler jobs describe "etigram-source-poller" --location="$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "etigram-source-poller" \
       --location="$REGION" \
       --update-headers="X-Job-Token=$admin_token" \
       --quiet >/dev/null 2>&1 || true
-    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for h1horizon-source-poller"
+    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for etigram-source-poller"
   fi
 }
 
@@ -1549,7 +1593,7 @@ deploy_verified_proxy() {
   # Get backend URL and functions key
   local backend_url="${API_URL:-}"
   if [[ -z "$backend_url" ]]; then
-    backend_url=$(gcloud run services describe h1horizon-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+    backend_url=$(gcloud run services describe etigram-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
   fi
   
   if [[ -z "$backend_url" ]]; then
@@ -1568,7 +1612,7 @@ deploy_verified_proxy() {
   # Support FRONTEND_ORIGINS (comma-separated) or FRONTEND_ORIGIN (single)
   local allowed_origins="${FRONTEND_ORIGINS:-}"
   if [[ -z "$allowed_origins" ]]; then
-    local single_origin="${FRONTEND_ORIGIN:-https://hatl.one}"
+    local single_origin="${FRONTEND_ORIGIN:-https://etigram.one}"
     # Add localhost if not already in the list
     if [[ "$single_origin" != *"localhost"* ]]; then
       allowed_origins="${single_origin},http://localhost:5173"
@@ -1642,27 +1686,27 @@ deploy_verified_proxy() {
   fi
 }
 
-deploy_hatlone_ws() {
-  echo -e "${BLUE}[hatlone-ws] Building image...${NC}"
-  local service="hatlone-ws"
-  local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/hatlone-ws:latest"
+deploy_etigram_ws() {
+  echo -e "${BLUE}[etigram-ws] Building image...${NC}"
+  local service="etigram-ws"
+  local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/etigram-ws:latest"
 
   gcloud builds submit "$API_DIR" \
-    --config="$API_DIR/cloudbuild.hatlone-ws.yaml" \
+    --config="$API_DIR/cloudbuild.etigram-ws.yaml" \
     --project "$PROJECT_ID" \
     --quiet
 
   if [[ "$FIREBASE_PROJECT_ID" != "$PROJECT_ID" ]]; then
-    echo -e "${YELLOW}[hatlone-ws] FIREBASE_PROJECT_ID ($FIREBASE_PROJECT_ID) differs from project ($PROJECT_ID). Forcing FIREBASE_AUTH_PROJECT_ID=$PROJECT_ID.${NC}"
+    echo -e "${YELLOW}[etigram-ws] FIREBASE_PROJECT_ID ($FIREBASE_PROJECT_ID) differs from project ($PROJECT_ID). Forcing FIREBASE_AUTH_PROJECT_ID=$PROJECT_ID.${NC}"
   fi
-  # hatlone-ws must verify tokens issued by the active project for this deployment.
+  # etigram-ws must verify tokens issued by the active project for this deployment.
   local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$PROJECT_ID"
 
-  echo -e "${BLUE}[hatlone-ws] Deploying to Cloud Run...${NC}"
+  echo -e "${BLUE}[etigram-ws] Deploying to Cloud Run...${NC}"
   gcloud run deploy "$service" \
     --image "$image" \
     --region "$REGION" \
-    --allow-unauthenticated \
+    --no-invoker-iam-check \
     --service-account "$SA_BACKEND" \
     --min-instances=1 \
     --max-instances=2 \
@@ -1676,20 +1720,20 @@ deploy_hatlone_ws() {
 
   gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet
 
-  HATLONE_WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
-  echo -e "${GREEN}[hatlone-ws] Deployed successfully${NC}"
-  echo -e "${BLUE}[hatlone-ws] URL:${NC} $HATLONE_WS_URL"
+  ETIGRAM_WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
+  echo -e "${GREEN}[etigram-ws] Deployed successfully${NC}"
+  echo -e "${BLUE}[etigram-ws] URL:${NC} $ETIGRAM_WS_URL"
 }
 
 deploy_py() {
   echo -e "${BLUE}[py] Deploying Telegram service to Cloud Run...${NC}"
-  local service="h1horizon-telegram"
+  local service="etigram-telegram"
   local SRC_DIR="$ROOT_DIR/python/telegram_service"
   gcloud run deploy "$service" \
     --source "$SRC_DIR" \
     --region "$REGION" \
     --service-account "$SA_BACKEND" \
-    --allow-unauthenticated \
+    --no-invoker-iam-check \
     --min-instances=1 \
     --max-instances=3 \
     --cpu=1 \
@@ -1707,9 +1751,9 @@ deploy_py() {
   
   # Update backend with TELEGRAM_SERVICE_URL if we have it (only if API was not just deployed)
   # If API was deployed, TELEGRAM_SERVICE_URL is already set in env_vars during deploy
-  if [[ -n "$TG_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe h1horizon-api --region "$REGION" >/dev/null 2>&1; then
+  if [[ -n "$TG_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe etigram-api --region "$REGION" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Updating existing backend with TELEGRAM_SERVICE_URL=$TG_URL...${NC}"
-    gcloud run services update h1horizon-api \
+    gcloud run services update etigram-api \
       --region "$REGION" \
       --update-env-vars "TELEGRAM_SERVICE_URL=$TG_URL" \
       --quiet || {
@@ -1899,36 +1943,36 @@ create_indexes() {
 
 # Setup infrastructure only on full deploy or explicit check.
 # Individual service deploys (--api, --ws, --verified-proxy, --py) usually skip infra checks for speed,
-# BUT some flags (e.g. --horizon-watchdog) require infra steps (Cloud Scheduler jobs, env vars).
+# BUT some flags (e.g. --etigram-watchdog) require infra steps (Cloud Scheduler jobs, env vars).
 if [[ "$TARGET_CHECK_INFRA" -eq 1 ]]; then
   setup_infrastructure
   create_indexes
   echo -e "${GREEN}[infra] Infrastructure checks completed${NC}"
   exit 0
-elif [[ "$TARGET_HORIZON_WATCHDOG" -eq 1 ]]; then
+elif [[ "$TARGET_ETIGRAM_WATCHDOG" -eq 1 ]]; then
   # Minimal infra needed for watchdog Cloud Scheduler job creation/update.
   setup_infrastructure
 elif [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
   # Full deploy: run infrastructure checks
   setup_infrastructure
-elif [[ "$TARGET_SETUP_HATLONE_INFRA" -eq 1 ]]; then
-  # Deploy hatlone-ws: ensure Pub/Sub topics and subscriptions exist
-  # Call the same setup function but only for hatlone-ws infrastructure
-  echo -e "${BLUE}[infra] Setting up infrastructure for hatlone-ws...${NC}"
+elif [[ "$TARGET_SETUP_ETIGRAM_INFRA" -eq 1 ]]; then
+  # Deploy etigram-ws: ensure Pub/Sub topics and subscriptions exist
+  # Call the same setup function but only for etigram-ws infrastructure
+  echo -e "${BLUE}[infra] Setting up infrastructure for etigram-ws...${NC}"
   # Ensure aggregated topics and subscriptions (reuse logic from setup_infrastructure)
   agg_topics=(
-    "hatlone.genai.streams"
-    "hatlone.discovery.events"
-    "hatlone.artifact.events"
-    "hatlone.interaction.events"
-    "hatlone.analysis.events"
-    "hatlone.verified.streams"
-    "hatlone.horizon.events"
-    "hatlone.operations.events"
+    "etigram.genai.streams"
+    "etigram.discovery.events"
+    "etigram.artifact.events"
+    "etigram.interaction.events"
+    "etigram.analysis.events"
+    "etigram.verified.streams"
+    "etigram.horizon.events"
+    "etigram.operations.events"
     "source.poll"
   )
   # 4.1 Ensure aggregated topics
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for hatlone-ws...${NC}"
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for etigram-ws...${NC}"
   for topic in "${agg_topics[@]}"; do
     if ! gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
       gcloud pubsub topics create "$topic" --project="$PROJECT_ID" --quiet || true
@@ -1937,8 +1981,8 @@ elif [[ "$TARGET_SETUP_HATLONE_INFRA" -eq 1 ]]; then
       echo -e "${GREEN}  ✓${NC} $topic exists"
     fi
   done
-  # 4.2 Ensure hatlone-ws subscriptions
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for hatlone-ws...${NC}"
+  # 4.2 Ensure etigram-ws subscriptions
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for etigram-ws...${NC}"
   for topic in "${agg_topics[@]}"; do
     sub_id="${topic}-ws-broker"
     if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -1964,24 +2008,25 @@ elif [[ "$TARGET_SETUP_HATLONE_INFRA" -eq 1 ]]; then
   done
 fi
 
-if [[ "$TARGET_WEB" -eq 1 ]]; then
-  deploy_web
-fi
-
 if [[ "$TARGET_API" -eq 1 ]]; then
   deploy_api
 fi
 
-if [[ "$TARGET_HATLONE_WS" -eq 1 ]]; then
-  deploy_hatlone_ws
-fi
-
-if [[ "$TARGET_PY" -eq 1 ]]; then
-  deploy_py
+if [[ "$TARGET_ETIGRAM_WS" -eq 1 ]]; then
+  deploy_etigram_ws
 fi
 
 if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]]; then
   deploy_verified_proxy
+fi
+
+if [[ "$TARGET_WEB" -eq 1 ]]; then
+  # Build web last so it can pick up freshly deployed API/WS/proxy URLs.
+  deploy_web
+fi
+
+if [[ "$TARGET_PY" -eq 1 ]]; then
+  deploy_py
 fi
 
 # Firestore indexes are only relevant for backend; skip for web-only
@@ -2000,7 +2045,7 @@ if [[ "$TARGET_CLEANUP_REVISIONS" -eq 1 ]]; then
   echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
   
   # Clean up revisions for all services (keep last 10 per service)
-  services=("h1horizon-api" "h1horizon-telegram" "hatlone-ws" "verified-proxy")
+  services=("etigram-api" "etigram-telegram" "etigram-ws" "verified-proxy")
   for service in "${services[@]}"; do
     if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
       cleanup_old_revisions "$service" "$REGION" 10
@@ -2025,8 +2070,8 @@ fi
 if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]] && [[ -n "${VERIFIED_PROXY_URL:-}" ]]; then
   echo -e "${BLUE}Verified Proxy:${NC} $VERIFIED_PROXY_URL"
 fi
-if [[ "$TARGET_HATLONE_WS" -eq 1 ]] && [[ -n "${HATLONE_WS_URL:-}" ]]; then
-  echo -e "${BLUE}WS Broker:${NC} $HATLONE_WS_URL"
+if [[ "$TARGET_ETIGRAM_WS" -eq 1 ]] && [[ -n "${ETIGRAM_WS_URL:-}" ]]; then
+  echo -e "${BLUE}WS Broker:${NC} $ETIGRAM_WS_URL"
 fi
 if [[ "$TARGET_PY" -eq 1 ]] && [[ -n "${TG_URL:-}" ]]; then
   echo -e "${BLUE}Telegram Service:${NC} $TG_URL"

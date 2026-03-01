@@ -1,5 +1,5 @@
 #!/bin/bash
-# Скрипт проверки инфраструктуры GCP для Horizon
+# Скрипт проверки инфраструктуры GCP для Etigram
 
 set -e
 
@@ -9,7 +9,7 @@ if [ -z "$PROJECT_ID" ]; then
   exit 1
 fi
 
-echo "=== Проверка инфраструктуры Horizon для проекта: $PROJECT_ID ==="
+echo "=== Проверка инфраструктуры Etigram для проекта: $PROJECT_ID ==="
 echo ""
 
 # Цвета для вывода
@@ -48,7 +48,7 @@ if echo "$BUCKETS" | grep -q "core-docs\|rag-documents"; then
     check "Bucket существует: $bucket"
   done
 else
-  warn "Не найдены buckets для Horizon (core-docs или rag-documents)"
+  warn "Не найдены buckets для Etigram (core-docs или rag-documents)"
 fi
 
 echo ""
@@ -90,7 +90,7 @@ fi
 echo ""
 echo "4. Проверка Pub/Sub топиков..."
 # Проверка основных топиков (агрегированные создаются автоматически)
-REQUIRED_TOPICS=("source.poll" "hatlone.operations.events" "hatlone.interaction.events" "hatlone.horizon.events")
+REQUIRED_TOPICS=("source.poll" "etigram.operations.events" "etigram.interaction.events" "etigram.horizon.events")
 for topic in "${REQUIRED_TOPICS[@]}"; do
   if gcloud pubsub topics describe "$topic" --format="value(name)" 2>/dev/null | grep -q "$topic"; then
     check "Топик существует: $topic"
@@ -100,14 +100,14 @@ for topic in "${REQUIRED_TOPICS[@]}"; do
 done
 
 echo ""
-echo "4.1 Проверка Pub/Sub подписок для hatlone-ws..."
+echo "4.1 Проверка Pub/Sub подписок для etigram-ws..."
 # Подписка имеет фиксированный нейминг: <topic>-ws-broker
-REQUIRED_SUBS=("hatlone.horizon.events-ws-broker")
+REQUIRED_SUBS=("etigram.horizon.events-ws-broker")
 for sub in "${REQUIRED_SUBS[@]}"; do
   if gcloud pubsub subscriptions describe "$sub" --format="value(name)" 2>/dev/null | grep -q "$sub"; then
     check "Подписка существует: $sub"
   else
-    warn "Подписка не найдена: $sub (создайте: scripts/setup-horizon-pubsub.sh)"
+    warn "Подписка не найдена: $sub (создайте: scripts/setup-etigram-pubsub.sh)"
   fi
 done
 
@@ -145,7 +145,7 @@ fi
 
 echo ""
 echo "7. Проверка переменных окружения Cloud Run..."
-SERVICE="h1horizon-api"
+SERVICE="etigram-api"
 REGION="us-central1"
 if gcloud run services describe "$SERVICE" --region="$REGION" --format="value(metadata.name)" 2>/dev/null | grep -q "$SERVICE"; then
   check "Cloud Run сервис существует: $SERVICE"
@@ -167,10 +167,10 @@ fi
 echo ""
 echo "8. Проверка Firestore Security Rules..."
 if [ -f "backend/firestore.rules" ]; then
-  if grep -q "horizon" backend/firestore.rules; then
-    check "Правила для Horizon найдены в firestore.rules"
+  if grep -q "etigram\|horizon" backend/firestore.rules; then
+    check "Правила для Etigram найдены в firestore.rules"
   else
-    warn "Правила для Horizon не найдены в firestore.rules (добавьте правила для коллекций horizon_*)"
+    warn "Правила для Etigram не найдены в firestore.rules (добавьте правила для коллекций horizon_*)"
   fi
 else
   warn "Файл firestore.rules не найден"
@@ -180,10 +180,10 @@ echo ""
 echo "9. Проверка Firestore индексов..."
 if [ -f "web/firestore.indexes.json" ]; then
   if grep -q "horizon_fragments\|horizon_lenses\|horizon_dependency_edges\|horizon_frames\|horizon_watchdog_configs" web/firestore.indexes.json; then
-    check "Индексы для Horizon найдены в firestore.indexes.json"
+    check "Индексы для Etigram найдены в firestore.indexes.json"
     echo "   Разверните индексы: firebase deploy --only firestore:indexes"
   else
-    warn "Индексы для Horizon не найдены в firestore.indexes.json"
+    warn "Индексы для Etigram не найдены в firestore.indexes.json"
   fi
 else
   warn "Файл firestore.indexes.json не найден"
@@ -202,4 +202,3 @@ fi
 
 echo ""
 echo "Все проверки пройдены успешно!"
-

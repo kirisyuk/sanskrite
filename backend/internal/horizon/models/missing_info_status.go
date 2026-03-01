@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // MissingInfoStatus tracks the status of missingInfo questions to prevent infinite research loops.
 // Each record represents a specific question for a specific fragment.
@@ -22,11 +25,11 @@ type MissingInfoStatus struct {
 	Status string `json:"status" firestore:"status"`
 
 	// Attempt tracking
-	Attempts       int        `json:"attempts" firestore:"attempts"`             // Number of research attempts
-	LastAttemptAt  *time.Time `json:"lastAttemptAt" firestore:"lastAttemptAt"`   // When the last attempt was made
-	NextAttemptAt  *time.Time `json:"nextAttemptAt" firestore:"nextAttemptAt"`   // Earliest time for next attempt (cooldown)
-	ExhaustedAt    *time.Time `json:"exhaustedAt" firestore:"exhaustedAt"`       // When it was marked exhausted
-	ResolvedAt     *time.Time `json:"resolvedAt" firestore:"resolvedAt"`         // When it was resolved
+	Attempts      int        `json:"attempts" firestore:"attempts"`           // Number of research attempts
+	LastAttemptAt *time.Time `json:"lastAttemptAt" firestore:"lastAttemptAt"` // When the last attempt was made
+	NextAttemptAt *time.Time `json:"nextAttemptAt" firestore:"nextAttemptAt"` // Earliest time for next attempt (cooldown)
+	ExhaustedAt   *time.Time `json:"exhaustedAt" firestore:"exhaustedAt"`     // When it was marked exhausted
+	ResolvedAt    *time.Time `json:"resolvedAt" firestore:"resolvedAt"`       // When it was resolved
 
 	// Fingerprint for cache invalidation
 	// If the fragment state changes significantly (new sources), we reset the status.
@@ -86,9 +89,13 @@ func (s *MissingInfoStatus) ShouldResetForNewSources(newFingerprint string) bool
 	if s.Status != MissingInfoStatusExhausted {
 		return false
 	}
-	if newFingerprint == "" || s.SourceFingerprint == "" {
+	newFingerprint = strings.TrimSpace(newFingerprint)
+	if newFingerprint == "" {
 		return false
 	}
-	return newFingerprint != s.SourceFingerprint
+	current := strings.TrimSpace(s.SourceFingerprint)
+	if current == "" {
+		return true
+	}
+	return newFingerprint != current
 }
-

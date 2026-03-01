@@ -24,9 +24,9 @@ DEPLOY_TOPICS=(
   artifact.generation.completed artifact.generation.error
   analysis.status agent.update
   interaction.created interaction.updated verified.stream
-  hatlone.genai.streams hatlone.discovery.events hatlone.artifact.events
-  hatlone.interaction.events hatlone.analysis.events hatlone.verified.streams
-  hatlone.horizon.events hatlone.operations.events source.poll
+  etigram.genai.streams etigram.discovery.events etigram.artifact.events
+  etigram.interaction.events etigram.analysis.events etigram.verified.streams
+  etigram.horizon.events etigram.operations.events source.poll
 )
 
 echo "--- Pub/Sub Topics (есть в GCP, нет в deploy) ---"
@@ -41,13 +41,13 @@ done
 [[ -z "$INFRA_TOPICS" ]] && echo "  (нет топиков или ошибка доступа)"
 
 # --- Pub/Sub Subscriptions ---
-# Deploy создаёт: hatlone-ws (agg_topics), worker subs.
+# Deploy создаёт: etigram-ws (agg_topics), worker subs.
 DEPLOY_SUBS=(
-  "hatlone.genai.streams-ws-broker" "hatlone.discovery.events-ws-broker" "hatlone.artifact.events-ws-broker"
-  "hatlone.interaction.events-ws-broker" "hatlone.analysis.events-ws-broker" "hatlone.verified.streams-ws-broker"
-  "hatlone.horizon.events-ws-broker" "hatlone.operations.events-ws-broker" "source.poll-ws-broker"
+  "etigram.genai.streams-ws-broker" "etigram.discovery.events-ws-broker" "etigram.artifact.events-ws-broker"
+  "etigram.interaction.events-ws-broker" "etigram.analysis.events-ws-broker" "etigram.verified.streams-ws-broker"
+  "etigram.horizon.events-ws-broker" "etigram.operations.events-ws-broker" "source.poll-ws-broker"
   "source.poll.worker" "source.poll.due.worker" "ground.refresh.worker"
-  "hatlone.operations.events.worker" "hatlone.artifact.events.document-processor.worker"
+  "etigram.operations.events.worker" "etigram.artifact.events.document-processor.worker"
   "chat.ontology.process.worker"
 )
 
@@ -88,7 +88,7 @@ done
 
 # --- Cloud Tasks Queues: deploy creates ---
 DEPLOY_QUEUES=(
-  h1horizon-scout-v2 h1horizon-profile-refresh h1horizon-risk-v1
+  etigram-scout etigram-profile-refresh etigram-risk
 )
 
 echo ""
@@ -106,7 +106,7 @@ done
 DEPLOY_BUCKETS=(
   "${PROJECT_ID}-core-docs"
   "${PROJECT_ID}-rag-documents"
-  "${PROJECT_ID}-horizon-fragments"
+  "${PROJECT_ID}-etigram-fragments"
   "${PROJECT_ID}-web-static"  # only if CREATE_WEB_STATIC_BUCKET=1
 )
 
@@ -128,8 +128,8 @@ done
 
 # --- Cloud Scheduler Jobs: deploy creates ---
 DEPLOY_JOBS=(
-  h1horizon-source-poller h1horizon-artifact-scheduler subscription-billing-daily
-  h1horizon-horizon-watchdog  # only with --horizon-watchdog
+  etigram-source-poller etigram-artifact-scheduler subscription-billing-daily
+  etigram-watchdog  # only with --etigram-watchdog
 )
 
 echo ""
@@ -145,7 +145,7 @@ done
 
 # --- Cloud Run Services: deploy creates ---
 DEPLOY_SERVICES=(
-  h1horizon-api hatlone-ws verified-proxy h1horizon-telegram
+  etigram-api etigram-ws verified-proxy etigram-telegram
 )
 
 echo ""

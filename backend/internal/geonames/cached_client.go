@@ -127,6 +127,13 @@ func (c *CachedClient) GetHierarchy(ctx context.Context, geonameID int) (*ontolo
 	return resp, nil
 }
 
+func (c *CachedClient) GetCountryCode(ctx context.Context, lat, lon float64) (string, error) {
+	if c == nil || c.base == nil {
+		return "", nil
+	}
+	return c.base.GetCountryCode(ctx, lat, lon)
+}
+
 func (c *CachedClient) getCachedSearch(ctx context.Context, docID string) *ontology.GeoNamesSearchResponse {
 	e, err := c.cache.Get(ctx, docID)
 	if err != nil || e == nil {

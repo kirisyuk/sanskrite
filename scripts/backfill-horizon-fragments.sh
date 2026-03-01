@@ -4,15 +4,15 @@
 
 set -euo pipefail
 
-PROJECT="${PROJECT:-h1horizon-488615}"
-BUCKET="${BUCKET:-h1horizon-horizon-fragments}"
-DATA_STORE_ID="${DATA_STORE_ID:-horizon-fragments-store}"
+PROJECT="${PROJECT:-etigram}"
+BUCKET="${BUCKET:-etigram-etigram-fragments}"
+DATA_STORE_ID="${DATA_STORE_ID:-etigram-fragments-store}"
 TENANT="${TENANT:-global}"
 BATCH_SIZE="${BATCH_SIZE:-100}"
 START_BATCH="${START_BATCH:-}"
 END_BATCH="${END_BATCH:-}"
 
-echo "=== Backfill Horizon Fragments to Vertex AI Search ==="
+echo "=== Backfill Etigram Fragments to Vertex AI Search ==="
 echo "Project: $PROJECT"
 echo "Bucket: $BUCKET"
 echo "Data Store: $DATA_STORE_ID"

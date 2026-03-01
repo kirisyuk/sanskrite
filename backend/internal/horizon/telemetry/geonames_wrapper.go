@@ -62,3 +62,17 @@ func (w *GeoNamesTelemetryWrapper) GetHierarchy(ctx context.Context, geonameID i
 	}
 	return resp, nil
 }
+
+func (w *GeoNamesTelemetryWrapper) GetCountryCode(ctx context.Context, lat, lon float64) (string, error) {
+	cc, err := w.Base.GetCountryCode(ctx, lat, lon)
+	if err != nil {
+		RecordExternalServiceCall(ctx, w.Repo, "geonames", OutcomeError)
+		return "", err
+	}
+	if cc != "" {
+		RecordExternalServiceCall(ctx, w.Repo, "geonames", OutcomeHit)
+	} else {
+		RecordExternalServiceCall(ctx, w.Repo, "geonames", OutcomeMiss)
+	}
+	return cc, nil
+}

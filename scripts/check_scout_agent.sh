@@ -19,8 +19,8 @@ NC='\033[0m' # No Color
 # Параметры по умолчанию
 PROJECT_ID="${GCP_PROJECT_ID:-}"
 REGION="${GCP_REGION:-us-central1}"
-SERVICE="${CLOUD_RUN_SERVICE:-h1horizon-api}"
-QUEUE="${CLOUD_TASKS_SCOUT_QUEUE:-h1horizon-scout-v2}"
+SERVICE="${CLOUD_RUN_SERVICE:-etigram-api}"
+QUEUE="${CLOUD_TASKS_SCOUT_QUEUE:-etigram-scout}"
 
 # Проверка наличия gcloud
 if ! command -v gcloud &> /dev/null; then

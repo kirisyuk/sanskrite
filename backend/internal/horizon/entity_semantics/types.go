@@ -24,8 +24,29 @@ const (
 	EntityTypeDecisionPoint         EntityTypeKey = "DECISION_POINT"
 	EntityTypeMechanism             EntityTypeKey = "MECHANISM"
 	EntityTypeDomain                EntityTypeKey = "DOMAIN"
+	EntityTypeAffectedZone          EntityTypeKey = "AFFECTED_ZONE"
 	EntityTypeGeneral               EntityTypeKey = "GENERAL"
 )
+
+// MissingInfoTrigger defines when a MissingInfoRule fires.
+const (
+	TriggerRelationMissing   = "relation_missing"
+	TriggerFieldEmpty        = "field_empty"
+	TriggerRelationCountBelow = "relation_count_below"
+	TriggerSeed              = "seed"
+)
+
+// MissingInfoRule is a structured rule for generating missingInfo questions.
+// Used by RuleBasedQuickValidation, synthetic seed, and fallback in extraction path.
+type MissingInfoRule struct {
+	Trigger          string   // relation_missing | field_empty | relation_count_below | seed
+	RelationType     string   // for relation_missing (PRODUCES, HAS_MARKET_SEGMENT, ...)
+	RelationTypes    []string // when set, rule fires when ALL listed types are missing (e.g. PRODUCES+CONSUMES)
+	FieldPath        string   // for field_empty: Labels.en, MarketDomain, State./metric/market/tam_usd
+	MinCount         int      // for relation_count_below
+	DomainMode       string   // "" = general; "market" = only when DomainModeMarket active
+	QuestionTemplate string   // fmt.Sprintf template, %s = targetCanonicalPath
+}
 
 // EntityTypeDefinition is the single source of truth for object-detail logic per entity type.
 // Domain modes and specialties define SCOPE; this defines how to detail each object.
@@ -45,4 +66,8 @@ type EntityTypeDefinition struct {
 	// ResearchBlock: type-specific prompt block for research/critic (object detail).
 	// Same content as ExtractionBlock for consistency; used by research_agent and critic_agent.
 	ResearchBlock string
+
+	// MissingInfoRules: structured rules for deterministic missingInfo generation.
+	// Used by RuleBasedQuickValidation, synthetic seed, and fallback in extraction path.
+	MissingInfoRules []MissingInfoRule
 }

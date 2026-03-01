@@ -4,23 +4,59 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 )
 
-// splitScope разделяет scope на статические пути и QueryAddress
-func splitScope(scope []string) (staticPaths []string, queryAddresses []string) {
+// ArtifactScopePrefix is the canonical prefix for MaterializedArtifact scope entries.
+const ArtifactScopePrefix = "/artifact/"
+
+// IsArtifactScopeEntry returns true if the scope entry references a MaterializedArtifact.
+func IsArtifactScopeEntry(entry string) bool {
+	return strings.HasPrefix(strings.TrimSpace(entry), ArtifactScopePrefix)
+}
+
+// ArtifactKeyFromScopeEntry extracts the artifact canonical key from a scope entry.
+func ArtifactKeyFromScopeEntry(entry string) string {
+	entry = strings.TrimSpace(entry)
+	if !strings.HasPrefix(entry, ArtifactScopePrefix) {
+		return ""
+	}
+	raw := strings.TrimPrefix(entry, ArtifactScopePrefix)
+	if !strings.HasPrefix(raw, "/") {
+		raw = "/" + raw
+	}
+	return strings.TrimSpace(raw)
+}
+
+// classifyScope splits scope entries into three groups: static canonical paths,
+// query addresses, and artifact references. Artifact references use the /artifact/ prefix
+// and point to MaterializedArtifact canonical keys.
+func classifyScope(scope []string) (staticPaths, queryAddresses, artifactRefs []string) {
 	staticPaths = make([]string, 0, len(scope))
 	queryAddresses = make([]string, 0, len(scope))
-	
+	artifactRefs = make([]string, 0)
+
 	for _, entry := range scope {
-		if IsQueryAddress(entry) {
+		switch {
+		case IsQueryAddress(entry):
 			queryAddresses = append(queryAddresses, entry)
-		} else {
+		case IsArtifactScopeEntry(entry):
+			artifactRefs = append(artifactRefs, entry)
+		default:
 			staticPaths = append(staticPaths, entry)
 		}
 	}
-	
-	return staticPaths, queryAddresses
+
+	return staticPaths, queryAddresses, artifactRefs
+}
+
+// splitScope разделяет scope на статические пути и QueryAddress.
+// Deprecated: use classifyScope which also handles /artifact/ entries.
+func splitScope(scope []string) (staticPaths []string, queryAddresses []string) {
+	s, q, artifacts := classifyScope(scope)
+	s = append(s, artifacts...)
+	return s, q
 }
 
 // resolveQueryAddresses резолвит QueryAddress в canonical paths с логированием ошибок

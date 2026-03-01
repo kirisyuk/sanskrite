@@ -28,6 +28,9 @@ type AITaskExecutor struct {
 	}
 	providerPressureMu sync.Mutex
 	providerPressure   map[AIProvider]providerPressureState
+
+	admissionController AdmissionController
+	circuitBreaker      *CircuitBreaker
 }
 
 // NewAITaskExecutor создает новый экземпляр AITaskExecutor
@@ -70,6 +73,18 @@ func (e *AITaskExecutor) WithHorizonSpendSink(sink interface {
 	return e
 }
 
+// WithAdmissionController installs an optional admission controller for rate limiting.
+func (e *AITaskExecutor) WithAdmissionController(ac AdmissionController) *AITaskExecutor {
+	e.admissionController = ac
+	return e
+}
+
+// WithCircuitBreaker installs an optional circuit breaker for provider failures.
+func (e *AITaskExecutor) WithCircuitBreaker(cb *CircuitBreaker) *AITaskExecutor {
+	e.circuitBreaker = cb
+	return e
+}
+
 // ExecuteTask выполняет общую текстовую задачу с автоматическим выбором модели и отказоустойчивостью
 func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITaskResult, error) {
 	log.Printf("ExecuteTask called with task type: %s", task.TaskType)
@@ -107,15 +122,33 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 			continue
 		}
 
+		tenantID := strings.TrimSpace(task.TenantID)
+		cascadeID := strings.TrimSpace(task.CascadeID)
+		if e.admissionController != nil {
+			if allow, retryAfter := e.admissionController.Allow(ctx, modelCapabilities.Provider, tenantID, cascadeID); !allow {
+				return nil, fmt.Errorf("admission control: rate limit exceeded, retry after %v (retryable)", retryAfter)
+			}
+		}
+
 		log.Printf("Executing task using %s with model %s", modelCapabilities.Provider, currentModel)
 		result, err := aiService.ExecuteTask(ctx, task, currentModel)
 		if err != nil {
 			e.recordProviderFailure(modelCapabilities.Provider, currentModel, err)
+			if e.circuitBreaker != nil {
+				e.circuitBreaker.RecordFailure(modelCapabilities.Provider, err)
+			}
 			log.Printf("Error executing task with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
 		e.recordProviderSuccess(modelCapabilities.Provider)
+		if e.circuitBreaker != nil {
+			e.circuitBreaker.RecordSuccess(modelCapabilities.Provider)
+		}
+		if e.admissionController != nil {
+			tokens := inputTokens + len(result.Content)/4
+			e.admissionController.RecordUsage(ctx, modelCapabilities.Provider, tenantID, cascadeID, tokens)
+		}
 
 		result.Status = AITaskStatusCompleted
 		result.InputTokens = inputTokens
@@ -205,6 +238,14 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 			remainingStr = time.Until(d).String()
 		}
 
+		tenantID := strings.TrimSpace(task.TenantID)
+		cascadeID := strings.TrimSpace(task.CascadeID)
+		if e.admissionController != nil {
+			if allow, retryAfter := e.admissionController.Allow(ctx, modelCapabilities.Provider, tenantID, cascadeID); !allow {
+				return nil, nil, "", fmt.Errorf("admission control: rate limit exceeded, retry after %v (retryable)", retryAfter)
+			}
+		}
+
 		log.Printf("[%s] Executing structured task with model %s (attempt=%d input: %d chars, %d tokens est, ctxDeadline=%s, remaining=%s)",
 			modelCapabilities.Provider, currentModel, attempt, inputChars, inputTokens, deadlineStr, remainingStr)
 
@@ -212,6 +253,9 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 		result, err := aiService.ExecuteTask(ctx, &activeTask, currentModel)
 		if err != nil {
 			e.recordProviderFailure(modelCapabilities.Provider, currentModel, err)
+			if e.circuitBreaker != nil {
+				e.circuitBreaker.RecordFailure(modelCapabilities.Provider, err)
+			}
 			// Log detailed information about the request when it fails
 			elapsed := time.Since(attemptStartedAt)
 			log.Printf("WARNING: Task failed with model %s after %s (task=%s provider=%s attempt=%d input=%d chars %d tokens est). Error: %v",
@@ -234,6 +278,13 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 			continue
 		}
 		e.recordProviderSuccess(modelCapabilities.Provider)
+		if e.circuitBreaker != nil {
+			e.circuitBreaker.RecordSuccess(modelCapabilities.Provider)
+		}
+		if e.admissionController != nil && result != nil {
+			tokens := inputTokens + len(result.Content)/4
+			e.admissionController.RecordUsage(ctx, modelCapabilities.Provider, tenantID, cascadeID, tokens)
+		}
 
 		if debug && result != nil {
 			out := strings.TrimSpace(result.Content)

@@ -107,7 +107,7 @@ func (a *CriticAgent) buildSupplyChainValidationPrompt(input CriticValidatorInpu
 	}
 	return fmt.Sprintf(`You are a Critic validator for SUPPLY CHAIN mode.
 
-Allowed relation types: DEPENDS_ON, PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN.
+Allowed relation types: %s.
 Allowed actor types: %s.
 Canonical path rules:
 %s
@@ -136,7 +136,7 @@ Validate:
 
 %s
 
-Return ONLY valid JSON.`, taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(chainsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(chainsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildGovernanceValidationPrompt(input CriticValidatorInput) string {
@@ -162,7 +162,7 @@ RELATIONS:
 
 %s
 
-Return ONLY valid JSON.`, taxonomy.GovernanceEdgeTypesString(), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeGovernance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeGovernance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildAssuranceValidationPrompt(input CriticValidatorInput) string {
@@ -170,7 +170,7 @@ func (a *CriticAgent) buildAssuranceValidationPrompt(input CriticValidatorInput)
 	relationsJSON, _ := json.MarshalIndent(input.Relations, "", "  ")
 	return fmt.Sprintf(`You are a Critic validator for ASSURANCE mode (Third Line: audit, certification, regulatory oversight).
 
-Allowed relation types: ASSURES (with qualifiers.assurance_type: audit|certification|regulatory|inspection), REGULATES.
+Allowed relation types: %s (for ASSURES keep qualifiers.assurance_type: audit|certification|regulatory|inspection).
 Allowed actor types: %s.
 
 FRAGMENT:
@@ -187,7 +187,7 @@ Validate:
 
 %s
 
-Return ONLY valid JSON.`, taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeAssurance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, relationTypesPromptForDomainMode(taxonomy.DomainModeAssurance), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeAssurance), string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildMarketValidationPrompt(input CriticValidatorInput) string {
@@ -199,7 +199,7 @@ func (a *CriticAgent) buildMarketValidationPrompt(input CriticValidatorInput) st
 	}
 	return fmt.Sprintf(`You are a Critic validator for MARKET mode.
 
-Allowed relation types: PARTICIPATES_IN, HAS_MARKET_SEGMENT. GOV entities (/gov/...) may also use REGULATES, CONTROLS_ACCESS, INFLUENCES toward MARKET targets.
+Allowed relation types: %s.
 Allowed actor types: %s.
 
 %sFRAGMENT:
@@ -215,7 +215,7 @@ Validate:
 
 %s
 
-Return ONLY valid JSON.`, taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeMarket), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, relationTypesPromptForDomainMode(taxonomy.DomainModeMarket), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeMarket), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }
 
 // buildComposedValidationPrompt merges Core + all non-strategic domain validators into a single
@@ -263,7 +263,7 @@ Validate:
 5. supplyChains node alternation actor→product and facility transformation hops;
 6. upstream/downstream coverage at broad or semi-depth level;
 7. qualifier quality (confidence, source hints, transport qualifiers when applicable).`,
-				taxonomy.SupplyChainEdgeTypesString(),
+				relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain),
 				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain),
 				taxonomy.ExtendedCanonicalPathRulesPrompt(),
 				string(chainsJSON)))
@@ -279,12 +279,12 @@ Validate ownership and control coherence:
 3. government hierarchy consistency when /gov/ entities appear;
 4. assurance linkage quality when auditors/certifiers are present;
 5. missing information that should be researched before deep dive.`,
-				taxonomy.GovernanceEdgeTypesString(),
+				relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance),
 				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeGovernance)))
 
 		case taxonomy.DomainModeAssurance:
 			sections = append(sections, fmt.Sprintf(`== ASSURANCE VALIDATION ==
-Allowed relation types: ASSURES (with qualifiers.assurance_type: audit|certification|regulatory|inspection), REGULATES.
+Allowed relation types: %s (for ASSURES keep qualifiers.assurance_type: audit|certification|regulatory|inspection).
 Allowed actor types: %s.
 
 Validate:
@@ -292,22 +292,24 @@ Validate:
 2. external audit coverage for significant orgs/facilities;
 3. certification and regulatory oversight when relevant to sector;
 4. missing assurance information that should be researched.`,
+				relationTypesPromptForDomainMode(taxonomy.DomainModeAssurance),
 				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeAssurance)))
 
 		case taxonomy.DomainModeMarket:
 			sections = append(sections, fmt.Sprintf(`== MARKET VALIDATION ==
-Allowed relation types: PARTICIPATES_IN, HAS_MARKET_SEGMENT. GOV entities (/gov/...) may also use REGULATES, CONTROLS_ACCESS, INFLUENCES toward MARKET targets.
+Allowed relation types: %s.
 Allowed actor types: %s.
 
 Validate:
 1. market hierarchy placement and immediate parent/children coverage;
 2. major participant coverage and market share plausibility when available;
 3. required market metrics presence at broad level (tam, cagr, concentration).`,
+				relationTypesPromptForDomainMode(taxonomy.DomainModeMarket),
 				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeMarket)))
 
 		case taxonomy.DomainModePolicyImpact:
 			sections = append(sections, fmt.Sprintf(`== POLICY IMPACT VALIDATION ==
-Allowed relation types: REGULATES, CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO, INFLUENCES, DEPENDS_ON, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN, ADMINISTERS.
+Allowed relation types: %s.
 Allowed actor types: %s.
 Canonical path rules:
 %s
@@ -319,8 +321,23 @@ Validate:
 4. scenario modeling readiness (quantitative qualifiers on edges);
 5. observability completeness;
 6. five-layer coverage check: Policy Source, Transmission Channel, Exposure, Response, Observability.`,
+				relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact),
 				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModePolicyImpact),
 				taxonomy.ExtendedCanonicalPathRulesPrompt()))
+
+		case taxonomy.DomainModeEcosystem:
+			sections = append(sections, fmt.Sprintf(`== ECOSYSTEM VALIDATION ==
+Allowed relation types: %s.
+Allowed actor types: %s.
+
+Validate:
+1. ecosystem actor coverage: all significant actors are represented (organizations, gov bodies, investors, communities);
+2. relationship diversity: not just one relation type dominates; ownership, supply, competition, regulation, partnership should all be present where applicable;
+3. directional consistency: OWNS goes owner->owned, SUBSIDIARY_OF goes child->parent, REGULATES goes regulator->regulated;
+4. power dynamics coverage: key influencers, gatekeepers, and bottleneck nodes are identified;
+5. geographic and sectoral coherence: actors and relations are consistent with the ecosystem's geography and industry.`,
+				relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem),
+				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeEcosystem)))
 		}
 	}
 
@@ -348,7 +365,7 @@ func (a *CriticAgent) buildPolicyImpactValidationPrompt(input CriticValidatorInp
 	}
 	return fmt.Sprintf(`You are a Critic validator for POLICY IMPACT mode.
 
-Allowed relation types: REGULATES, CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO, INFLUENCES, DEPENDS_ON, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN, ADMINISTERS.
+Allowed relation types: %s.
 Allowed actor types: %s.
 Canonical path rules:
 %s
@@ -375,5 +392,35 @@ Validate:
 
 %s
 
-Return ONLY valid JSON.`, taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
+}
+
+func (a *CriticAgent) buildEcosystemValidationPrompt(input CriticValidatorInput) string {
+	fragmentJSON, _ := json.MarshalIndent(input.Fragment, "", "  ")
+	relationsJSON, _ := json.MarshalIndent(input.Relations, "", "  ")
+	graphBlock := ""
+	if strings.TrimSpace(input.GraphContext) != "" {
+		graphBlock = "GRAPH CONTEXT:\n" + strings.TrimSpace(input.GraphContext) + "\n\n"
+	}
+	return fmt.Sprintf(`You are a Critic validator for ECOSYSTEM mode.
+
+Allowed relation types: %s.
+Allowed actor types: %s.
+
+%sFRAGMENT:
+%s
+
+RELATIONS:
+%s
+
+Validate:
+1. ecosystem actor coverage: all significant actors are represented (organizations, gov bodies, investors, communities);
+2. relationship diversity: not just one relation type dominates; ownership, supply, competition, regulation, partnership should all be present where applicable;
+3. directional consistency: OWNS goes owner->owned, SUBSIDIARY_OF goes child->parent, REGULATES goes regulator->regulated;
+4. power dynamics coverage: key influencers, gatekeepers, and bottleneck nodes are identified;
+5. geographic and sectoral coherence: actors and relations are consistent with the ecosystem geography and industry.
+
+%s
+
+Return ONLY valid JSON.`, relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeEcosystem), graphBlock, string(fragmentJSON), string(relationsJSON), criticValidationOutputSchema)
 }

@@ -11,7 +11,7 @@ const resources = {
         title: 'Homepage',
         soon: 'Content coming soon',
         reclaimMind: 'From 20 iterations to 3. From answers to insights.',
-        tagline: 'HATL thinks ahead, around, and through your problems.',
+        tagline: 'Etigram thinks ahead, around, and through your problems.',
         description: 'Remembers everything. Connects dots you missed. Asks questions you haven\'t thought\u00A0of.',
         description2: 'This is AI thinking like a system, not pretending to be human.',
         accessNote: 'Sign in and registration are available only to authorized users and organizations.',
@@ -581,7 +581,7 @@ const resources = {
           assistant: 'assistant',
           agent: 'agent',
           footer: {
-            tagline: 'hatl.one — cognitive environment that turns discussions into actions.',
+            tagline: 'etigram.one — cognitive environment that turns discussions into actions.',
           },
         },
         horizon: {
@@ -756,7 +756,7 @@ const resources = {
         title: 'Главная',
         soon: 'Скоро здесь будет контент',
         reclaimMind: 'От 20 итераций до 3. От ответов к инсайтам.',
-        tagline: 'HATL думает вперед, вокруг и сквозь ваши проблемы.',
+        tagline: 'Etigram думает вперед, вокруг и сквозь ваши проблемы.',
         description: 'Помнит всё. Связывает точки, которые вы пропустили. Задает вопросы, о которых вы не думали.',
         description2: 'Это ИИ, который думает как система, а не притворяется человеком.',
         accessNote: 'Вход и регистрация доступны только авторизованным пользователям и организациям.',
@@ -1325,7 +1325,7 @@ const resources = {
           assistant: 'ассистент',
           agent: 'агент',
           footer: {
-            tagline: 'hatl.one — когнитивная среда, превращающая дискуссии в действия.',
+            tagline: 'etigram.one — когнитивная среда, превращающая дискуссии в действия.',
           },
         },
         horizon: {
@@ -1500,7 +1500,7 @@ const resources = {
         title: 'Startseite',
         soon: 'Inhalt folgt in Kürze',
         reclaimMind: 'Von 20 Iterationen zu 3. Von Antworten zu Erkenntnissen.',
-        tagline: 'HATL denkt voraus, umher und durch Ihre Probleme.',
+        tagline: 'Etigram denkt voraus, umher und durch Ihre Probleme.',
         description: 'Erinnert sich an alles. Verbindet Punkte, die Sie übersehen haben. Stellt Fragen, an die Sie nicht gedacht haben.',
         description2: 'Das ist KI, die wie ein System denkt, nicht so tut, als wäre sie menschlich.',
         beta: 'Private Beta. Nur auf Einladung.',
@@ -1886,7 +1886,7 @@ const resources = {
           assistant: 'Assistent',
           agent: 'Agent',
           footer: {
-            tagline: 'hatl.one — kognitive Umgebung, die Diskussionen in Aktionen verwandelt.',
+            tagline: 'etigram.one — kognitive Umgebung, die Diskussionen in Aktionen verwandelt.',
           },
         },
         startup: {
@@ -2044,7 +2044,7 @@ const resources = {
         title: 'Inicio',
         soon: 'Contenido próximamente',
         reclaimMind: 'De 20 iteraciones a 3. De respuestas a insights.',
-        tagline: 'HATL piensa adelante, alrededor y a través de tus problemas.',
+        tagline: 'Etigram piensa adelante, alrededor y a través de tus problemas.',
         description: 'Recuerda todo. Conecta puntos que te perdiste. Hace preguntas en las que no habías pensado.',
         description2: 'Esta es IA pensando como un sistema, no pretendiendo ser humano.',
         beta: 'Beta privada. Solo por invitación.',
@@ -2426,7 +2426,7 @@ const resources = {
           assistant: 'asistente',
           agent: 'agente',
           footer: {
-            tagline: 'hatl.one — entorno cognitivo que convierte las discusiones en acciones.',
+            tagline: 'etigram.one — entorno cognitivo que convierte las discusiones en acciones.',
           },
         },
         startup: {
@@ -2579,7 +2579,7 @@ const resources = {
         title: 'Басты бет',
         soon: 'Жақында мазмұн пайда болады',
         reclaimMind: '20 итерациядан 3-ке. Жауаптардан инсайттарға.',
-        tagline: 'HATL сіздің мәселелеріңізді алдын ала, айналасында және арқылы ойлайды.',
+        tagline: 'Etigram сіздің мәселелеріңізді алдын ала, айналасында және арқылы ойлайды.',
         description: 'Барлығын есте сақтайды. Сіз жіберіп алған нүктелерді байланыстырады. Сіз ойламаған сұрақтар қояды.',
         description2: 'Бұл жүйе сияқты ойлайтын AI, адам болып көрінуге тырыспайды.',
         beta: 'Жеке бета. Тек шақыру бойынша.',
@@ -3068,7 +3068,7 @@ const resources = {
           assistant: 'көмекші',
           agent: 'агент',
           footer: {
-            tagline: 'hatl.one — талқылауларды іс-әрекеттерге айналдыратын когнитивті орта.',
+            tagline: 'etigram.one — талқылауларды іс-әрекеттерге айналдыратын когнитивті орта.',
           },
         },
         horizon: {

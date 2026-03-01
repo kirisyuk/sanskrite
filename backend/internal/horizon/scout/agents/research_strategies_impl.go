@@ -110,6 +110,17 @@ func researchPreferExistingEntitiesBlock() string {
 Your search has access to existing entities in the knowledge base (grounding/datastore results).
 When you find an entity that matches an existing one — even with minor naming differences (e.g., "Tesla Inc" vs "Tesla Inc.", "JPMorgan" vs "JPMorgan Chase", "Ministry of Finance" vs "MOF", abbreviations vs full names) — use the EXISTING canonical path from the grounding context.
 Do NOT create duplicate entities. Only create new entities when no suitable existing match is found in your search results.
+
+DIRECTION ROLE CONTRACT (mandatory when applicable):
+- For OWNS/SUBSIDIARY_OF/INVESTS_IN/ASSURES/CONTROLS (ORG↔ORG), DEPENDS_ON (actor↔actor), and SUPPLIES_TO (ORG/FACILITY↔ORG/FACILITY), ALWAYS include qualifiers.source_role and qualifiers.target_role.
+- Use role pairs: owner->owned_entity, subsidiary->parent_owner, investor->investee, assurer->assuree, controller->controlled_entity, dependent->dependency, supplier->customer.
+- Also include qualifiers.direction_basis when direction is explicit (owner_to_owned, investor_to_investee, dependent_to_dependency, supplier_to_customer).
+- If direction is unclear, omit the relation instead of guessing.
+
+ZONE GEO CONTRACT:
+- In /zone/{geo}/{condition_type}/{slug}, geo must be ISO2, composite (tr-sy), or an allowed regional token.
+- Sea-area zones are valid and must use geo=sea (example: /zone/sea/political_tension/spratly-islands).
+- Do not invent natural-feature geo tokens like ocean/gulf/strait for {geo}; keep specific place naming in slug.
 `
 }
 
@@ -172,7 +183,7 @@ func (s *SupplyChainResearchStrategy) Enrich(ctx context.Context, input Research
 		return nil, nil
 	}
 	prompt := s.agent.buildSupplyChainEnrichmentPrompt(input)
-	out, err := s.agent.runResearchPrompt(ctx, prompt)
+	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
 	if err != nil || out == nil {
 		return nil, err
 	}
@@ -191,7 +202,7 @@ func (s *GovernanceResearchStrategy) Enrich(ctx context.Context, input ResearchS
 		return nil, nil
 	}
 	prompt := s.agent.buildGovernanceEnrichmentPrompt(input)
-	out, err := s.agent.runResearchPrompt(ctx, prompt)
+	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
 	if err != nil || out == nil {
 		return nil, err
 	}
@@ -210,7 +221,7 @@ func (s *AssuranceResearchStrategy) Enrich(ctx context.Context, input ResearchSt
 		return nil, nil
 	}
 	prompt := s.agent.buildAssuranceEnrichmentPrompt(input)
-	out, err := s.agent.runResearchPrompt(ctx, prompt)
+	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
 	if err != nil || out == nil {
 		return nil, err
 	}
@@ -229,7 +240,7 @@ func (s *MarketResearchStrategy) Enrich(ctx context.Context, input ResearchStrat
 		return nil, nil
 	}
 	prompt := s.agent.buildMarketEnrichmentPrompt(input)
-	out, err := s.agent.runResearchPrompt(ctx, prompt)
+	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
 	if err != nil || out == nil {
 		return nil, err
 	}
@@ -248,7 +259,7 @@ func (s *StrategicResearchStrategy) Enrich(ctx context.Context, input ResearchSt
 		return nil, nil
 	}
 	prompt := s.agent.buildStrategicEnrichmentPrompt(input)
-	out, err := s.agent.runResearchPrompt(ctx, prompt)
+	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
 	if err != nil || out == nil {
 		return nil, err
 	}
@@ -267,7 +278,26 @@ func (s *PolicyImpactResearchStrategy) Enrich(ctx context.Context, input Researc
 		return nil, nil
 	}
 	prompt := s.agent.buildPolicyImpactEnrichmentPrompt(input)
-	out, err := s.agent.runResearchPrompt(ctx, prompt)
+	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// EcosystemResearchStrategy enriches for ecosystem/stakeholder mapping (multi-actor relationships).
+type EcosystemResearchStrategy struct {
+	agent *ResearchAgent
+}
+
+func (s *EcosystemResearchStrategy) DomainMode() string { return taxonomy.DomainModeEcosystem }
+
+func (s *EcosystemResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
+	if s.agent == nil || s.agent.executor == nil {
+		return nil, nil
+	}
+	prompt := s.agent.buildEcosystemEnrichmentPrompt(input)
+	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
 	if err != nil || out == nil {
 		return nil, err
 	}
@@ -286,7 +316,7 @@ func (s *GeneralResearchStrategy) Enrich(ctx context.Context, input ResearchStra
 		return nil, nil
 	}
 	prompt := s.agent.buildGeneralEnrichmentPrompt(input)
-	out, err := s.agent.runResearchPrompt(ctx, prompt)
+	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
 	if err != nil || out == nil {
 		return nil, err
 	}
@@ -295,7 +325,8 @@ func (s *GeneralResearchStrategy) Enrich(ctx context.Context, input ResearchStra
 
 // runResearchPrompt runs a research prompt and parses result into ResearchStrategyOutput.
 // Returns grounding evidence from Vertex AI Search when available.
-func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*ResearchStrategyOutput, error) {
+// inputFragment is used as fallback when LLM omits fragment or returns invalid structure.
+func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string, inputFragment *models.HorizonFragment) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil {
 		return nil, nil
 	}
@@ -347,6 +378,10 @@ func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string) (*
 			out.FragmentPartial = &partial
 		}
 	}
+	// When LLM omits fragment or returns invalid structure, preserve input fragment so we don't lose data.
+	if out.FragmentPartial == nil && inputFragment != nil {
+		out.FragmentPartial = inputFragment
+	}
 	normalizeDiscoveredRelationsNames(out.Relations)
 	return out, nil
 }
@@ -363,7 +398,9 @@ func sanitizeResearchResultForUnmarshal(data []byte) ([]byte, error) {
 		if fragmentMap, mapOK := fragmentRaw.(map[string]interface{}); mapOK {
 			sanitizeMetricMapField(fragmentMap, "state")
 		} else {
-			delete(root, "fragment")
+			// LLM returned fragment as null, string, array, etc. Replace with empty object
+			// so we preserve structure instead of losing fragment entirely.
+			root["fragment"] = map[string]interface{}{}
 		}
 	}
 
@@ -1055,11 +1092,13 @@ func buildGeneralResearchDomainExpansionBlock(fragment *models.HorizonFragment) 
 	}
 	return `DOMAIN EXPANSION GUIDANCE (CRITICAL OVERRIDE):
 - This fragment is a DOMAIN contract. Your primary goal is to expand it into first-order entities.
-- Use ONLY domain relation types: FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON.
+- Use ONLY domain relation types: ` + domainScaffoldRelationTypesPromptString() + `.
 - Target canonicalPath MUST match targetType:
-  ORGANIZATION->/org or /gov, PERSON->/person, PRODUCT->/product, PROGRAM->/program, MARKET->/market, FACILITY->/fac, GEO_REGION->/loc, EVENT->/event, MEDIA_CHANNEL->/media, COMMUNITY->/community, DOMAIN->/domain
+  ORGANIZATION->/org or /gov, PERSON->/person, PRODUCT->/product, PROGRAM->/program, MARKET->/market, FACILITY->/fac, GEO_REGION->/loc, EVENT->/event, MEDIA_CHANNEL->/media, COMMUNITY->/community, DOMAIN->/domain, AFFECTED_ZONE->/zone
 - If the user asks about a market, use /market/... as a TARGET (anchor), NOT as a DOMAIN.
-- Do NOT output placeholder names like NA/N-A/Unknown. Use fewer entities instead.`
+- Do NOT output placeholder names like NA/N-A/Unknown. Use fewer entities instead.
+- For AFFECTED_ZONE: slug MUST be descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER "na".
+- ZONE vs EVENT: ZONE = geographic area; EVENT = discrete occurrence. TRIGGERED_BY: zone→event.`
 }
 
 func generalResearchCanonicalSupplementBlock() string {
@@ -1069,6 +1108,7 @@ func generalResearchCanonicalSupplementBlock() string {
 - Markets: prefer /market/{geo}/{domain}/{vertical}; for HAS_MARKET_SEGMENT child path = parent path + one segment
 - Communities: /community/{geo}/{type}/{slug}; use HAS_SUBGROUP for parent->narrower subgroup
 - Programs: prefer /program/{jurisdiction}/{slug} when jurisdiction is known
+- AFFECTED_ZONE: /zone/{geo}/{condition_type}/{slug}. geo: ISO2 or composite (tr-sy). condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone. slug: descriptive place/region name (northern-syria, donbas, gaza-strip, northern-rakhine). NEVER use "na" as slug — use region name or condition-specific name (e.g. myanmar-crisis-area).
 - NEVER use "/discovered/*" (not allowed)
 - canonicalPath MUST match expected prefix for targetType; if unsure, still output your best stable canonicalPath`
 }
@@ -1076,7 +1116,7 @@ func generalResearchCanonicalSupplementBlock() string {
 func buildGeneralResearchRelationTaxonomyBlock(isDomain bool) string {
 	if isDomain {
 		return `ALLOWED RELATION TAXONOMY (DOMAIN OVERRIDE):
-- Use ONLY: FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON.
+- Use ONLY: ` + domainScaffoldRelationTypesPromptString() + `.
 - Do not emit non-domain relations for DOMAIN fragments.
 - Domain is configuration, not a graph node for non-domain relation families.`
 	}
@@ -1332,7 +1372,7 @@ For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transp
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.SupplyChainEdgeTypesString(), GovEntityRelationRulesBlock(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
+Return ONLY valid JSON. No markdown.`, relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain), GovEntityRelationRulesBlock(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
 }
 
 // EnrichSupplyChainFull runs anchor-centric full supply chain query (Plan mode).
@@ -1343,7 +1383,7 @@ func (a *ResearchAgent) EnrichSupplyChainFull(ctx context.Context, query SupplyC
 		return nil, nil
 	}
 	prompt := a.buildSupplyChainFullQueryPrompt(query)
-	out, err := a.runResearchPrompt(ctx, prompt)
+	out, err := a.runResearchPrompt(ctx, prompt, nil)
 	if err != nil || out == nil {
 		return nil, err
 	}
@@ -1394,7 +1434,7 @@ OUTPUT: Return a JSON object with "supplyChains" array. Each chain:
 %s
 
 Return ONLY valid JSON: { "supplyChains": [ { "nodes": [...], "segmentMetrics": [...], "alternatives": [...], "confidence", "reason" } ] }
-No markdown.`, intent, taxonomy.SupplyChainEdgeTypesString(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategySupplyChainsJSONContractBlock())
+No markdown.`, intent, relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategySupplyChainsJSONContractBlock())
 }
 
 // buildGovernanceEnrichmentPrompt builds a prompt for ownership, board, key persons, gov hierarchy (canonical types).
@@ -1426,9 +1466,9 @@ Do NOT use RELATED_TO, AFFILIATED_WITH, KEY_PERSON, HAS_KEY_PERSON, or other non
 
 DIRECTION RULES (CRITICAL):
 - Use ROLE-FIRST direction for OWNS/SUBSIDIARY_OF/INVESTS_IN/ASSURES/CONTROLS (ORG<->ORG): source is semantic owner/investor/assurer/controller, not automatically CURRENT FRAGMENT.
-- For OWNS, direction is ALWAYS owner -> owned entity.
+- For OWNS, direction is ALWAYS owner -> owned entity. Example: "PIF owns Noon" → source=PIF (owner), target=Noon (owned_entity). NEVER the reverse (Noon -> PIF).
 - If CURRENT FRAGMENT is owned by X, you MUST keep relationType=OWNS and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = CURRENT FRAGMENT.
-- NEVER output reversed OWNS (CURRENT FRAGMENT -> its owner).
+- NEVER output reversed OWNS (CURRENT FRAGMENT -> its owner). If scouting Noon and PIF owns it, source=PIF, target=Noon.
 - For INVESTS_IN, direction is ALWAYS investor -> investee.
 - If CURRENT FRAGMENT is invested in by X, you MUST keep relationType=INVESTS_IN and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = CURRENT FRAGMENT.
 - NEVER output reversed INVESTS_IN (CURRENT FRAGMENT -> its investor).
@@ -1467,7 +1507,7 @@ Return a JSON object:
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, taxonomy.GovernanceEdgeTypesString(), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildAssuranceEnrichmentPrompt builds a prompt for Third Line: audit, certification, regulatory oversight.
@@ -1503,7 +1543,7 @@ REGULATES: regulator (source) → regulated entity (target).
 
 WHAT TO FIND (prioritize completeness):
 1. External audit: Who audits this org/facility? ASSURES(assurance_type:audit) from auditor to org. Include audit firm legal name.
-2. Certifications: ISO, sector-specific (e.g. FDA approval, banking license). ASSURES(assurance_type:certification). Certifier → org.
+2. Certifications: ISO, sector-specific (e.g. FDA approval, mining license, banking license). ASSURES(assurance_type:certification). Certifier → org.
 3. Regulatory oversight: Which regulators oversee this entity? REGULATES (regulator→entity). Or ASSURES(assurance_type:regulatory) when regulator grants license/approval.
 4. Inspections: ASSURES(assurance_type:inspection) for inspection bodies.
 5. Return assurers (audit firms, certifiers, regulators) that should be explored further (child jobs will recurse).
@@ -1523,7 +1563,7 @@ Return a JSON object:
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeAssurance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, taxonomy.AssuranceEdgeTypesString(), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeAssurance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeAssurance), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildMarketEnrichmentPrompt builds a prompt for market participation, sizing, concentration, submarkets.
@@ -1548,7 +1588,7 @@ CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 %s
 
-Use ONLY these relation types: PARTICIPATES_IN (with marketRole and metrics.market_share), HAS_MARKET_SEGMENT.
+Use ONLY these relation types: %s.
 Do NOT use DOMINATES, COMPETES_WITH, or other non-market types.
 STRICT DIRECTION/TYPING RULES (MANDATORY):
 - PARTICIPATES_IN direction is participant -> market.
@@ -1558,7 +1598,7 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
   - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES.
 - HAS_MARKET_SEGMENT direction is parent-market -> child-market (segment).
   - source and target MUST both be MARKET paths (/market/...).
-  - Ideal rule: child path = parent path + exactly one segment (e.g. /market/sa/finance -> /market/sa/finance/banking).
+  - Ideal rule: child path = parent path + exactly one segment (e.g. /market/sa/finance -> /market/sa/finance/banking; /market/global/technology -> /market/global/technology/semiconductors).
   - targetCanonicalPath MUST NOT start with /domain/.
 - If CURRENT FRAGMENT is MARKET and you need player -> THIS MARKET, you MUST set explicit source:
   - sourceCanonicalPath/sourceType/sourceName = player
@@ -1589,7 +1629,7 @@ Return a JSON object:
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeMarket), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildStrategicEnrichmentPrompt builds a prompt for strategic layer (decision points, mechanisms, gatekeepers).
@@ -1614,7 +1654,7 @@ CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 %s
 
-Use ONLY these relation types: CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO.
+Use ONLY these relation types: %s.
 Do NOT use generic relation types.
 
 WHAT TO FIND (downstream impact is required):
@@ -1639,7 +1679,7 @@ Return a JSON object:
 For GATEKEEPS_DECISION and USES_MECHANISM: set sourceCanonicalPath, sourceType, sourceName when the SOURCE is not the current fragment (e.g. gatekeeper org, mechanism user).
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeStrategic), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildPolicyImpactEnrichmentPrompt builds a prompt for policy impact channels and exposure graph.
@@ -1664,7 +1704,7 @@ CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 %s
 
-Use ONLY these relation types: REGULATES, CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO, INFLUENCES, DEPENDS_ON, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN, ADMINISTERS.
+Use ONLY these relation types: %s.
 Do NOT use generic relation types outside this list.
 STRICT DIRECTION/TYPING RULES (MANDATORY):
 - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
@@ -1710,5 +1750,834 @@ Return a JSON object:
 For relations where SOURCE is not the current fragment, set sourceCanonicalPath, sourceType, sourceName.
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+}
+
+func (a *ResearchAgent) buildEcosystemEnrichmentPrompt(input ResearchStrategyInput) string {
+	frag := input.Fragment
+	if frag == nil {
+		frag = &models.HorizonFragment{}
+	}
+	fragmentJSON, _ := json.MarshalIndent(frag, "", "  ")
+	questions := strings.Join(input.MissingInfo, "\n- ")
+	if questions == "" {
+		questions = "Map all actors in this ecosystem, their roles, mutual relationships, power dynamics, and dependencies."
+	}
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
+	return fmt.Sprintf(`You are a research agent. Enrich the entity for ECOSYSTEM/STAKEHOLDER MAPPING context.
+
+ENTITY TYPES in ecosystem context: %s. Use correct targetType for each relation.
+
+CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
+%s
+
+%s
+%s
+
+Use ONLY these relation types: %s.
+Do NOT use generic relation types outside this list.
+STRICT DIRECTION/TYPING RULES (MANDATORY):
+- Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
+- PARTICIPATES_IN direction is participant -> market. source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON. target MUST be MARKET.
+- OWNS direction is owner -> owned.
+- SUBSIDIARY_OF direction is subsidiary -> parent.
+- REGULATES direction is regulator -> regulated.
+- INFLUENCES direction is influencer -> influenced.
+- For any relation where semantic source is not CURRENT FRAGMENT, explicit sourceCanonicalPath/sourceType/sourceName is REQUIRED.
+
+WHAT TO FIND:
+1. All significant actors in this ecosystem: organizations, government bodies, communities, persons, facilities.
+2. Their roles and positions: producers, regulators, investors, competitors, partners, gatekeepers.
+3. Mutual relationships: supply links, ownership/control, partnerships, competition, regulatory oversight.
+4. Power dynamics: who influences whom, dependencies, bottlenecks, critical nodes.
+5. Competitive positions: market shares, dominance, niche roles.
+6. Geographic scope: where actors operate and interact.
+
+CURRENT FRAGMENT:
+%s
+
+QUESTIONS TO ANSWER (from Critic; prioritize these):
+- %s
+
+Return a JSON object:
+{
+  "fragment": { updated fields if any },
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?" } ],
+  "supplyChains": []
+}
+
+For relations where SOURCE is not the current fragment, set sourceCanonicalPath, sourceType, sourceName.
+%s
+
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeEcosystem), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+}
+
+// EnrichRegulatoryImpactFull performs holistic regulatory impact research in a single LLM call.
+// Builds the full impact DAG: decision points, mechanisms, affected segments.
+func (a *ResearchAgent) EnrichRegulatoryImpactFull(ctx context.Context, query RegulatoryImpactQuery) ([]DiscoveredRelation, error) {
+	if a == nil || a.executor == nil {
+		return nil, nil
+	}
+	prompt := a.buildRegulatoryImpactFullPrompt(query)
+	out, err := a.runResearchPrompt(ctx, prompt, nil)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out.Relations, nil
+}
+
+func (a *ResearchAgent) buildRegulatoryImpactFullPrompt(query RegulatoryImpactQuery) string {
+	instrument := strings.TrimSpace(query.Instrument)
+	jurisdiction := strings.TrimSpace(query.Jurisdiction)
+	if jurisdiction == "" {
+		jurisdiction = "global"
+	}
+	depth := query.Depth
+	if depth < 3 || depth > 5 {
+		depth = 4
+	}
+	impactScope := strings.TrimSpace(query.ImpactScope)
+	if impactScope == "" {
+		impactScope = "economy-wide"
+	}
+	sectorFilter := strings.Join(query.SectorFilter, ", ")
+
+	var paramBlock string
+	if len(query.Parameters) > 0 {
+		var parts []string
+		for k, v := range query.Parameters {
+			parts = append(parts, fmt.Sprintf("%s=%s", k, v))
+		}
+		paramBlock = "Parameters: " + strings.Join(parts, ", ")
+	}
+
+	intent := fmt.Sprintf("instrument=%s, jurisdiction=%s, impactScope=%s, depth=%d", instrument, jurisdiction, impactScope, depth)
+	if sectorFilter != "" {
+		intent += ", sectorFilter=[" + sectorFilter + "]"
+	}
+	if paramBlock != "" {
+		intent += ", " + paramBlock
+	}
+
+	return fmt.Sprintf(`You are a research agent. Build a FULL regulatory impact graph as a HOLISTIC structure.
+
+TASK: Map the full impact graph for: %s
+Reason: %s
+
+Use ONLY these relation types: %s.
+ENTITY TYPES: %s.
+
+CANONICAL PATH RULES:
+%s
+
+%s
+
+BUILD THREE LAYERS:
+1. DECISION LAYER: Government entities (GOV) --GATEKEEPS_DECISION/REGULATES--> DECISION_POINT
+2. MECHANISM LAYER: DECISION_POINT --USES_MECHANISM--> MECHANISM; MECHANISM --APPLIES_TO--> MARKET/ORG
+3. IMPACT LAYER: MECHANISM --IMPOSES_CONDITION/INFLUENCES--> affected segments/organizations
+
+QUANTITATIVE QUALIFIERS (CRITICAL):
+- For REGULATES/IMPOSES_CONDITION: qualifiers.rate_from, qualifiers.rate_to, qualifiers.effective_date
+- For exposure edges: qualifiers.pass_through_estimate (0.0-1.0), qualifiers.elasticity_hint, qualifiers.sector_sensitivity
+- For INFLUENCES: qualifiers.channel_type, qualifiers.lag_quarters, qualifiers.observability
+%s
+
+Return a JSON object:
+{
+  "fragment": null,
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "qualifiers": {}, "sourceCanonicalPath?", "sourceType?", "sourceName?" } ],
+  "supplyChains": []
+}
+
+For each relation, set sourceCanonicalPath/sourceType/sourceName explicitly.
+Chain depth target: %d hops from instrument to furthest affected segment.
+
+Return ONLY valid JSON. No markdown.`, intent, strings.TrimSpace(query.Reason), relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategyMetricValueFormatBlock(), depth)
+}
+
+// EnrichGovernanceFull performs holistic governance/ownership research in a single LLM call.
+// Builds ownership trees, control layers, and board/people structures.
+func (a *ResearchAgent) EnrichGovernanceFull(ctx context.Context, query GovernanceQuery) ([]DiscoveredRelation, error) {
+	if a == nil || a.executor == nil {
+		return nil, nil
+	}
+	prompt := a.buildGovernanceFullPrompt(query)
+	out, err := a.runResearchPrompt(ctx, prompt, nil)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out.Relations, nil
+}
+
+func (a *ResearchAgent) buildGovernanceFullPrompt(query GovernanceQuery) string {
+	target := strings.TrimSpace(query.Target)
+	targetType := strings.TrimSpace(query.TargetType)
+	if targetType == "" {
+		targetType = "org"
+	}
+	direction := strings.TrimSpace(query.Direction)
+	if direction == "" {
+		direction = "both"
+	}
+	depth := query.Depth
+	if depth < 3 || depth > 6 {
+		depth = 4
+	}
+	geoFilter := strings.Join(query.GeoFilter, ", ")
+
+	intent := fmt.Sprintf("target=%s, targetType=%s, direction=%s, depth=%d, includeBoard=%v", target, targetType, direction, depth, query.IncludeBoard)
+	if geoFilter != "" {
+		intent += ", geoFilter=[" + geoFilter + "]"
+	}
+
+	boardBlock := ""
+	if query.IncludeBoard {
+		boardBlock = `
+BOARD/PEOPLE LAYER:
+- PERSON --BOARD_MEMBER_OF--> ORGANIZATION
+- PERSON --EMPLOYED_BY--> ORGANIZATION (for C-suite / key executives)
+- Include key persons: CEO, CFO, board chairman, major shareholders (individuals).`
+	}
+
+	return fmt.Sprintf(`You are a research agent. Build a FULL governance/ownership structure as a HOLISTIC graph.
+
+TASK: Map the ownership and control structure for: %s
+Reason: %s
+
+Use ONLY these relation types: %s.
+ENTITY TYPES: %s.
+
+CANONICAL PATH RULES:
+%s
+
+%s
+
+BUILD THESE LAYERS:
+1. OWNERSHIP TREE (%s):
+   - UBO (Ultimate Beneficial Owner) --OWNS--> Holding --OWNS--> Subsidiary
+   - ORG --SUBSIDIARY_OF--> Parent
+2. CONTROL LAYER:
+   - ORG/GOV --CONTROLS/MANAGES--> ORG
+3. INVESTMENT:
+   - ORG --INVESTS_IN--> ORG
+%s
+
+QUALIFIERS on OWNS edges: qualifiers.share (ownership percentage 0.0-1.0), qualifiers.share_type (direct|indirect|beneficial).
+QUALIFIERS on CONTROLS edges: qualifiers.control_type (operational|strategic|regulatory), qualifiers.mechanism (board_majority|golden_share|veto_right|...).
+
+Return a JSON object:
+{
+  "fragment": null,
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "qualifiers": {}, "sourceCanonicalPath?", "sourceType?", "sourceName?" } ],
+  "supplyChains": []
+}
+
+For each relation, set sourceCanonicalPath/sourceType/sourceName explicitly.
+Chain depth target: %d levels from target entity.
+
+Return ONLY valid JSON. No markdown.`, intent, strings.TrimSpace(query.Reason), relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), direction, boardBlock, depth)
+}
+
+// EnrichEcosystemFull performs holistic ecosystem mapping in a single LLM call.
+// Discovers all significant actors and their multi-dimensional relationships.
+func (a *ResearchAgent) EnrichEcosystemFull(ctx context.Context, query EcosystemQuery) ([]DiscoveredRelation, error) {
+	if a == nil || a.executor == nil {
+		return nil, nil
+	}
+	prompt := a.buildEcosystemFullPrompt(query)
+	out, err := a.runResearchPrompt(ctx, prompt, nil)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out.Relations, nil
+}
+
+func (a *ResearchAgent) buildEcosystemFullPrompt(query EcosystemQuery) string {
+	focus := strings.TrimSpace(query.Focus)
+	focusType := strings.TrimSpace(query.FocusType)
+	if focusType == "" {
+		focusType = "sector"
+	}
+	depth := query.Depth
+	if depth < 3 || depth > 5 {
+		depth = 4
+	}
+	actorTypes := strings.Join(query.ActorTypes, ", ")
+	if actorTypes == "" {
+		actorTypes = "ORGANIZATION, GOV, PERSON, FACILITY"
+	}
+	sectorFilter := strings.Join(query.SectorFilter, ", ")
+	geoFilter := strings.Join(query.GeoFilter, ", ")
+
+	intent := fmt.Sprintf("focus=%s, focusType=%s, depth=%d, actorTypes=[%s]", focus, focusType, depth, actorTypes)
+	if sectorFilter != "" {
+		intent += ", sectorFilter=[" + sectorFilter + "]"
+	}
+	if geoFilter != "" {
+		intent += ", geoFilter=[" + geoFilter + "]"
+	}
+
+	return fmt.Sprintf(`You are a research agent. Map a FULL ecosystem as a HOLISTIC multi-actor relationship graph.
+
+TASK: Map all actors and relationships in ecosystem: %s
+Reason: %s
+
+Use ONLY these relation types: %s.
+ENTITY TYPES: %s.
+Target actor types: %s.
+
+CANONICAL PATH RULES:
+%s
+
+%s
+
+DISCOVER AND MAP:
+1. ALL significant actors: producers, consumers, regulators, investors, competitors, partners, gatekeepers.
+2. MULTI-DIMENSIONAL relationships between actors:
+   - Supply: SUPPLIES_TO, DEPENDS_ON
+   - Ownership/Control: OWNS, SUBSIDIARY_OF, CONTROLS, INVESTS_IN
+   - Competition: COMPETES_WITH
+   - Cooperation: PARTNERS_WITH
+   - Regulation: REGULATES
+   - Influence: INFLUENCES
+   - Market: PARTICIPATES_IN
+   - Geographic: LOCATED_IN, OPERATES_IN
+3. Power dynamics: who are the key influencers, gatekeepers, and bottleneck nodes?
+4. Competitive positions: market shares, dominance, niche roles where known.
+
+Return a JSON object:
+{
+  "fragment": null,
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "qualifiers": {}, "sourceCanonicalPath?", "sourceType?", "sourceName?" } ],
+  "supplyChains": []
+}
+
+For each relation, set sourceCanonicalPath/sourceType/sourceName explicitly.
+Aim for %d levels of relationship depth from the focal entity/area.
+
+Return ONLY valid JSON. No markdown.`, intent, strings.TrimSpace(query.Reason), relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeEcosystem), actorTypes, taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), depth)
+}
+
+// EnrichAffectedZoneFull performs holistic affected-zone discovery in a single LLM call.
+// Discovers zones across condition types (military_conflict, natural_disaster, etc.) for the given geo.
+func (a *ResearchAgent) EnrichAffectedZoneFull(ctx context.Context, query AffectedZoneQuery) ([]DiscoveredRelation, error) {
+	if a == nil || a.executor == nil {
+		return nil, nil
+	}
+	prompt := a.buildAffectedZoneFullPrompt(query)
+	out, err := a.runResearchPrompt(ctx, prompt, nil)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out.Relations, nil
+}
+
+func (a *ResearchAgent) buildAffectedZoneFullPrompt(query AffectedZoneQuery) string {
+	geo := strings.TrimSpace(query.Geo)
+	if geo == "" {
+		geo = "global"
+	}
+	reason := strings.TrimSpace(query.Reason)
+	if reason == "" {
+		reason = "Discover affected zones for risk and exposure analysis"
+	}
+	title := strings.TrimSpace(query.Title)
+	if title != "" {
+		reason = title + ". " + reason
+	}
+	return fmt.Sprintf(`You are a research agent. Discover AFFECTED_ZONE entities and their FULL related graph in a HOLISTIC single query (like supply-chain: complete picture in one pass).
+
+TASK: Find all significant affected zones in geo: %s and for EACH zone discover related entities.
+Reason: %s
+
+%s
+
+PHASE 1 — Discover zones (5-15 across condition types):
+- military_conflict (conflict zones, disputed territories)
+- natural_disaster (earthquake_affected, flood_zone, wildfire, etc.)
+- political_tension (unrest, sanctions-affected areas)
+- humanitarian_crisis (displacement, famine, disease outbreak zones)
+
+PHASE 2 — For EACH zone, discover related entities in the SAME holistic pass:
+- LOCATED_IN: zone → GEO_REGION (parent geo where zone is located). Set sourceCanonicalPath=zone path, sourceType=AFFECTED_ZONE.
+- AFFECTS: zone → FACILITY (affected plants, ports, warehouses), ORGANIZATION (affected companies, NGOs, gov bodies), PRODUCT (affected commodities), PROGRAM (humanitarian programs). Set sourceCanonicalPath=zone path.
+- TRIGGERED_BY: zone → EVENT (earthquake, flood, conflict event that caused the zone). Set sourceCanonicalPath=zone path.
+
+PHASE 2b — For military_conflict zones ONLY:
+- Sides: AFFECTS zone → ORGANIZATION/GOV/COMMUNITY (combatants). qualifiers: conflictRole=combatant, conflictSide=side_a|side_b.
+- Force strength: qualifiers.forceStrengthEstimate ("major"|"minor"|"paramilitary"|"state" when known).
+- Resources used: AFFECTS zone → PRODUCT (weapons, equipment). qualifiers: conflictRole=resource_used.
+- External support: AFFECTS zone → ORGANIZATION/GOV (backers). qualifiers: conflictRole=external_supporter, supportsSide=side_a|side_b.
+Discover at least 2 sides, forces, key resources, 1-3 external supporters per side when evidence exists.
+
+PHASE 2c — For natural_disaster zones (earthquake_affected, flood_zone, wildfire, etc.) ONLY:
+- Damaged assets: AFFECTS zone → FACILITY (damaged plants, ports, hospitals, power), ORGANIZATION (affected companies). qualifiers: disasterRole=affected, damageScope ("partial"|"severe"|"destroyed" when known).
+- Response actors: AFFECTS zone → ORGANIZATION/GOV/PROGRAM (relief agencies, first responders, gov disaster units). qualifiers: disasterRole=responder.
+- Critical infrastructure at risk: AFFECTS zone → FACILITY (key sites). qualifiers: disasterRole=critical_infrastructure.
+Discover 2-5 damaged/at-risk entities and 1-3 response actors per zone when evidence exists.
+
+PHASE 2d — For political_tension zones (unrest, sanctions-affected) ONLY:
+- Parties: AFFECTS zone → ORGANIZATION/GOV/COMMUNITY (sides to tension, protestors, opposition). qualifiers: tensionRole=party, tensionSide=side_a|side_b.
+- Sanctions targets: AFFECTS zone → ORGANIZATION (entities under sanctions). qualifiers: tensionRole=sanctions_target.
+- Mediators: AFFECTS zone → ORGANIZATION/GOV (mediators, observers). qualifiers: tensionRole=mediator.
+- Disputed assets: AFFECTS zone → FACILITY/PRODUCT (disputed resources, assets). qualifiers: tensionRole=disputed.
+Discover parties, sanctions targets when applicable, and mediators when evidence exists.
+
+PHASE 2e — For humanitarian_crisis zones (displacement, famine, disease outbreak) ONLY:
+- Affected populations: AFFECTS zone → GEO_REGION (displacement destinations, refugee host areas). qualifiers: crisisRole=displacement_flow.
+- Relief actors: AFFECTS zone → PROGRAM/ORGANIZATION (NGOs, UN agencies, donors). qualifiers: crisisRole=relief_actor.
+- Critical needs: AFFECTS zone → PRODUCT (food, medicine, shelter, water). qualifiers: crisisRole=critical_need.
+- Access control: AFFECTS zone → ORGANIZATION/GOV (who controls access, blockades). qualifiers: crisisRole=access_controller.
+Discover 1-3 relief actors, critical needs, and access bottlenecks when evidence exists.
+
+RELATION TYPES: FOCUSES_ON (domain→zone), LOCATED_IN, AFFECTS, TRIGGERED_BY.
+
+CANONICAL PATH RULES:
+%s
+
+ZONE PATH: /zone/{geo}/{condition_type}/{slug}. slug MUST be descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER "na". When creating zone fragments, include radiusKm (approximate zone radius in km) ONLY when you have reliable, evidence-based data. Be conservative: prefer smaller, verifiable estimates; avoid overly broad interpretations. Do NOT extrapolate or guess—omit radiusKm if uncertain. Other types: /org/, /gov/, /fac/, /loc/, /product/, /program/, /event/ per rules.
+
+%s
+
+Return a JSON object:
+{
+  "fragment": null,
+  "relations": [
+    { "relationType": "FOCUSES_ON", "targetType": "AFFECTED_ZONE", "targetName", "targetCanonicalPath", "reason", "confidence", "qualifiers": { "radiusKm": 50 } },
+    { "relationType": "LOCATED_IN", "sourceCanonicalPath": "/zone/...", "sourceType": "AFFECTED_ZONE", "sourceName", "targetType": "GEO_REGION", "targetName", "targetCanonicalPath", "reason", "confidence", "qualifiers": { "radiusKm": 25 } },
+    { "relationType": "AFFECTS", "sourceCanonicalPath": "/zone/...", "sourceType": "AFFECTED_ZONE", "sourceName", "targetType": "FACILITY|ORGANIZATION|PRODUCT|PROGRAM", "targetName", "targetCanonicalPath", "reason", "confidence" },
+    { "relationType": "AFFECTS", "sourceCanonicalPath": "/zone/...", "sourceType": "AFFECTED_ZONE", "targetType": "ORGANIZATION", "targetName", "targetCanonicalPath", "reason", "confidence", "qualifiers": { "conflictRole": "combatant", "conflictSide": "side_a", "forceStrengthEstimate": "major" } },
+    { "relationType": "AFFECTS", "sourceCanonicalPath": "/zone/...", "sourceType": "AFFECTED_ZONE", "targetType": "ORGANIZATION", "targetName", "targetCanonicalPath", "reason", "confidence", "qualifiers": { "conflictRole": "external_supporter", "supportsSide": "side_b" } },
+    { "relationType": "AFFECTS", "sourceCanonicalPath": "/zone/...", "sourceType": "AFFECTED_ZONE", "targetType": "FACILITY", "targetName", "targetCanonicalPath", "reason", "confidence", "qualifiers": { "disasterRole": "affected", "damageScope": "severe" } },
+    { "relationType": "AFFECTS", "sourceCanonicalPath": "/zone/...", "sourceType": "AFFECTED_ZONE", "targetType": "PROGRAM", "targetName", "targetCanonicalPath", "reason", "confidence", "qualifiers": { "disasterRole": "responder" } },
+    { "relationType": "AFFECTS", "sourceCanonicalPath": "/zone/...", "sourceType": "AFFECTED_ZONE", "targetType": "ORGANIZATION", "targetName", "targetCanonicalPath", "reason", "confidence", "qualifiers": { "tensionRole": "sanctions_target" } },
+    { "relationType": "AFFECTS", "sourceCanonicalPath": "/zone/...", "sourceType": "AFFECTED_ZONE", "targetType": "PRODUCT", "targetName", "targetCanonicalPath", "reason", "confidence", "qualifiers": { "crisisRole": "critical_need" } },
+    { "relationType": "TRIGGERED_BY", "sourceCanonicalPath": "/zone/...", "sourceType": "AFFECTED_ZONE", "sourceName", "targetType": "EVENT", "targetName", "targetCanonicalPath", "reason", "confidence" }
+  ],
+  "supplyChains": []
+}
+
+For zone relations (source or target is AFFECTED_ZONE): include qualifiers.radiusKm (numeric, km) ONLY when you have reliable, evidence-based data. Be conservative and verifiable—avoid overly broad interpretations. Omit radiusKm if uncertain.
+
+CRITICAL: For zone→X relations, ALWAYS set sourceCanonicalPath, sourceType, sourceName to the zone. For FOCUSES_ON (domain→zone), source can be omitted.
+Discover 5-15 zones and 2-8 related entities per zone (facilities, orgs, events, parent geo). Apply condition-type-specific blocks (2b–2e) per zone: military_conflict→sides/forces/support; natural_disaster→damage/responders; political_tension→parties/sanctions/mediators; humanitarian_crisis→relief/needs/access. Politically neutral, factual descriptions.
+
+Return ONLY valid JSON. No markdown.`, geo, reason, taxonomy.ZoneVsEventDistinctionPrompt(), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock())
+}
+
+// ---------------------------------------------------------------------------
+// Holistic entity research methods (Phase 4 of Unified Post-Processing Pipeline)
+// ---------------------------------------------------------------------------
+
+// HolisticResearchInput holds context for holistic entity research.
+type HolisticResearchInput struct {
+	Fragment      *models.HorizonFragment
+	OriginalQuery string
+	DomainMode    string
+	ChainContext  string
+}
+
+// EnrichHolisticSupplyChain performs domain-specific holistic research for an entity
+// in the supply-chain domain context.
+func (a *ResearchAgent) EnrichHolisticSupplyChain(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
+	if a == nil || a.executor == nil || input.Fragment == nil {
+		return nil, nil
+	}
+	frag := input.Fragment
+	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
+	prompt := fmt.Sprintf(`You are an analytical research agent enriching entity data for a supply chain analysis.
+
+ANALYTICAL CONTEXT: %q
+
+ENTITY: %s (type: %s, canonical path: %s)
+%s
+
+In the context of the analytical query above, provide a COMPREHENSIVE description of this entity's role in the supply chain:
+- Upstream suppliers and raw material sources
+- Downstream customers and distribution channels
+- Key products/services in this context
+- Logistics and infrastructure dependencies
+- Bottleneck risks and single points of failure
+- Market position and competitive alternatives
+
+Use ONLY these relation types: %s
+ENTITY TYPES: %s
+
+%s
+%s
+
+Return JSON: {"fragment": {partial fields to merge}, "relations": [...], "supplyChains": [...]}
+Return ONLY valid JSON. No markdown.`,
+		input.OriginalQuery,
+		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		string(fragJSON),
+		relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain),
+		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain),
+		taxonomy.ExtendedCanonicalPathRulesPrompt(),
+		researchPreferExistingEntitiesBlock())
+	return a.runResearchPrompt(ctx, prompt, input.Fragment)
+}
+
+// EnrichHolisticEcosystem performs domain-specific holistic research for ecosystem context.
+func (a *ResearchAgent) EnrichHolisticEcosystem(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
+	if a == nil || a.executor == nil || input.Fragment == nil {
+		return nil, nil
+	}
+	frag := input.Fragment
+	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
+	prompt := fmt.Sprintf(`You are an analytical research agent enriching entity data for an ecosystem analysis.
+
+ANALYTICAL CONTEXT: %q
+
+ENTITY: %s (type: %s, canonical path: %s)
+%s
+
+Describe this entity's position in the ecosystem:
+- Key partners, collaborators, and alliances
+- Competitors and substitutes
+- Dependencies on other actors (technology, resources, infrastructure)
+- Influence and power dynamics
+- Substitution risks and resilience factors
+
+Use ONLY these relation types: %s
+ENTITY TYPES: %s
+
+%s
+%s
+
+Return JSON: {"fragment": {partial fields to merge}, "relations": [...]}
+Return ONLY valid JSON. No markdown.`,
+		input.OriginalQuery,
+		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		string(fragJSON),
+		relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem),
+		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeEcosystem),
+		taxonomy.ExtendedCanonicalPathRulesPrompt(),
+		researchPreferExistingEntitiesBlock())
+	return a.runResearchPrompt(ctx, prompt, input.Fragment)
+}
+
+// EnrichHolisticGovernance performs domain-specific holistic research for governance context.
+func (a *ResearchAgent) EnrichHolisticGovernance(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
+	if a == nil || a.executor == nil || input.Fragment == nil {
+		return nil, nil
+	}
+	frag := input.Fragment
+	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
+	prompt := fmt.Sprintf(`You are an analytical research agent enriching entity data for a governance/ownership analysis.
+
+ANALYTICAL CONTEXT: %q
+
+ENTITY: %s (type: %s, canonical path: %s)
+%s
+
+Describe this entity's governance structure and ownership:
+- Ownership structure (parent companies, UBOs, shareholders)
+- Board composition and key personnel
+- Control chains (subsidiaries, controlled entities)
+- Beneficial owners and investment relationships
+- Governance risks (concentration, opacity, cross-jurisdictional)
+
+Use ONLY these relation types: %s
+ENTITY TYPES: %s
+
+%s
+%s
+
+Return JSON: {"fragment": {partial fields to merge}, "relations": [...]}
+Return ONLY valid JSON. No markdown.`,
+		input.OriginalQuery,
+		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		string(fragJSON),
+		relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance),
+		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance),
+		taxonomy.ExtendedCanonicalPathRulesPrompt(),
+		researchPreferExistingEntitiesBlock())
+	return a.runResearchPrompt(ctx, prompt, input.Fragment)
+}
+
+// EnrichHolisticRegulatory performs domain-specific holistic research for regulatory impact context.
+func (a *ResearchAgent) EnrichHolisticRegulatory(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
+	if a == nil || a.executor == nil || input.Fragment == nil {
+		return nil, nil
+	}
+	frag := input.Fragment
+	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
+	prompt := fmt.Sprintf(`You are an analytical research agent enriching entity data for a regulatory impact analysis.
+
+ANALYTICAL CONTEXT: %q
+
+ENTITY: %s (type: %s, canonical path: %s)
+%s
+
+Describe this entity's relationship with the regulatory context:
+- Regulatory instruments affecting this entity
+- Decision points and mechanisms this entity participates in
+- Compliance status and exposure
+- Affected stakeholders and downstream impact
+- Regulatory risks and opportunities
+
+Use ONLY these relation types: %s
+ENTITY TYPES: %s
+
+%s
+%s
+
+Return JSON: {"fragment": {partial fields to merge}, "relations": [...]}
+Return ONLY valid JSON. No markdown.`,
+		input.OriginalQuery,
+		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		string(fragJSON),
+		relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact),
+		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact),
+		taxonomy.ExtendedCanonicalPathRulesPrompt(),
+		researchPreferExistingEntitiesBlock())
+	return a.runResearchPrompt(ctx, prompt, input.Fragment)
+}
+
+// EnrichHolisticMarket performs domain-specific holistic research for market context.
+func (a *ResearchAgent) EnrichHolisticMarket(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
+	if a == nil || a.executor == nil || input.Fragment == nil {
+		return nil, nil
+	}
+	frag := input.Fragment
+	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
+	prompt := fmt.Sprintf(`You are an analytical research agent enriching entity data for a market analysis.
+
+ANALYTICAL CONTEXT: %q
+
+ENTITY: %s (type: %s, canonical path: %s)
+%s
+
+Describe this entity's market position:
+- Market share and competitive position
+- Pricing power and demand/supply drivers
+- Key competitors and alternatives
+- Growth trajectory and market outlook
+- Barriers to entry and regulatory environment
+
+Use ONLY these relation types: %s
+ENTITY TYPES: %s
+
+%s
+%s
+
+Return JSON: {"fragment": {partial fields to merge}, "relations": [...]}
+Return ONLY valid JSON. No markdown.`,
+		input.OriginalQuery,
+		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		string(fragJSON),
+		relationTypesPromptForDomainMode(taxonomy.DomainModeMarket),
+		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket),
+		taxonomy.ExtendedCanonicalPathRulesPrompt(),
+		researchPreferExistingEntitiesBlock())
+	return a.runResearchPrompt(ctx, prompt, input.Fragment)
+}
+
+// EnrichHolisticStrategic performs domain-specific holistic research for strategic context.
+func (a *ResearchAgent) EnrichHolisticStrategic(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
+	if a == nil || a.executor == nil || input.Fragment == nil {
+		return nil, nil
+	}
+	frag := input.Fragment
+	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
+	prompt := fmt.Sprintf(`You are an analytical research agent enriching entity data for a strategic/geopolitical analysis.
+
+ANALYTICAL CONTEXT: %q
+
+ENTITY: %s (type: %s, canonical path: %s)
+%s
+
+Describe this entity's strategic position:
+- Power dynamics and leverage points
+- Geopolitical dependencies and alliances
+- Strategic assets and vulnerabilities
+- Influence networks and key relationships
+- Risk exposure and resilience factors
+
+Use ONLY these relation types: %s
+ENTITY TYPES: %s
+
+%s
+%s
+
+Return JSON: {"fragment": {partial fields to merge}, "relations": [...]}
+Return ONLY valid JSON. No markdown.`,
+		input.OriginalQuery,
+		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		string(fragJSON),
+		relationTypesPromptForDomainMode(taxonomy.DomainModeStrategic),
+		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic),
+		taxonomy.ExtendedCanonicalPathRulesPrompt(),
+		researchPreferExistingEntitiesBlock())
+	return a.runResearchPrompt(ctx, prompt, input.Fragment)
+}
+
+// EnrichQueryContextual performs query-contextualized research (Level 2).
+func (a *ResearchAgent) EnrichQueryContextual(ctx context.Context, frag *models.HorizonFragment, originalQuery string) (*ResearchStrategyOutput, error) {
+	if a == nil || a.executor == nil || frag == nil {
+		return nil, nil
+	}
+	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
+	prompt := fmt.Sprintf(`You are an analytical research agent enriching entity data.
+
+ANALYTICAL CONTEXT: %q
+
+ENTITY: %s (type: %s, canonical path: %s)
+%s
+
+In the context of the analytical query above, provide all relevant information about this entity:
+- Key facts, relationships, and dependencies relevant to the query
+- Role and significance in the described context
+- Connected entities and their relationships
+- Risk factors and important data points
+
+%s
+%s
+
+Return JSON: {"fragment": {partial fields to merge}, "relations": [...]}
+Return ONLY valid JSON. No markdown.`,
+		originalQuery,
+		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		string(fragJSON),
+		taxonomy.ExtendedCanonicalPathRulesPrompt(),
+		researchPreferExistingEntitiesBlock())
+	return a.runResearchPrompt(ctx, prompt, frag)
+}
+
+// EnrichEntityTypeHolistic performs entity-type-specific comprehensive research (Level 3).
+func (a *ResearchAgent) EnrichEntityTypeHolistic(ctx context.Context, frag *models.HorizonFragment) (*ResearchStrategyOutput, error) {
+	if a == nil || a.executor == nil || frag == nil {
+		return nil, nil
+	}
+	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
+	focusAreas := entityTypeHolisticFocusAreas(frag.Type)
+	prompt := fmt.Sprintf(`You are an analytical research agent building a comprehensive profile of an entity.
+
+ENTITY: %s (type: %s, canonical path: %s)
+%s
+
+Provide a comprehensive profile covering:
+%s
+
+%s
+%s
+
+Return JSON: {"fragment": {partial fields to merge}, "relations": [...]}
+Return ONLY valid JSON. No markdown.`,
+		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		string(fragJSON),
+		focusAreas,
+		taxonomy.ExtendedCanonicalPathRulesPrompt(),
+		researchPreferExistingEntitiesBlock())
+	return a.runResearchPrompt(ctx, prompt, frag)
+}
+
+func entityTypeHolisticFocusAreas(ft models.FragmentType) string {
+	switch ft {
+	case models.FragmentTypeOrganization:
+		return `- Ownership structure and parent/subsidiary relationships
+- Products and services offered
+- Key markets and geographic presence
+- Financial overview (revenue, employees, market cap if public)
+- Key personnel (CEO, board members)
+- Principal facilities and operations`
+	case models.FragmentTypeFacility:
+		return `- Operator and owner
+- Capacity and throughput
+- Geographic location and coordinates
+- Inputs and outputs (what it processes/produces)
+- Connected infrastructure (pipelines, ports, grids)
+- Operational status and commissioning date`
+	case models.FragmentTypeProduct:
+		return `- Major producers and suppliers
+- Key consumers and end markets
+- Alternative products and substitutes
+- Price dynamics and benchmarks
+- Position in supply chains
+- Quality grades and specifications`
+	case models.FragmentTypeGeoRegion:
+		return `- Key industries and economic base
+- Major organizations and employers
+- Infrastructure and logistics
+- Regulatory environment
+- Demographics and population
+- Political structure and governance`
+	case models.FragmentTypeDeposit:
+		return `- Resource type and classification
+- Proven and probable reserves
+- Current operators and concession holders
+- Extraction methods and technology
+- Grade and quality characteristics
+- Infrastructure connectivity`
+	case models.FragmentTypeCommunity:
+		return `- Geographic scope and boundaries
+- Demographics and population
+- Economic base and key industries
+- Political structure and governance
+- Key institutions and organizations
+- Infrastructure and services`
+	case models.FragmentTypeMarket:
+		return `- Market size and value
+- Growth dynamics and trends
+- Key players and market shares
+- Barriers to entry
+- Regulatory environment
+- Demand and supply drivers`
+	default:
+		return `- Key relationships with other entities
+- Role and significance in its domain
+- Important data points and metrics
+- Risk factors and dependencies
+- Geographic presence and scope`
+	}
+}
+
+func nameForPrompt(frag *models.HorizonFragment) string {
+	if frag == nil {
+		return ""
+	}
+	if frag.Labels != nil {
+		if en := strings.TrimSpace(frag.Labels["en"]); en != "" {
+			return en
+		}
+	}
+	if frag.Identifiers != nil {
+		if ln := strings.TrimSpace(frag.Identifiers["legalName"]); ln != "" {
+			return ln
+		}
+		if sn := strings.TrimSpace(frag.Identifiers["shortName"]); sn != "" {
+			return sn
+		}
+	}
+	parts := strings.Split(strings.Trim(frag.CanonicalPath, "/"), "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return frag.CanonicalPath
+}
+
+func compactFragmentForPrompt(frag *models.HorizonFragment) map[string]interface{} {
+	if frag == nil {
+		return nil
+	}
+	m := map[string]interface{}{
+		"canonicalPath": frag.CanonicalPath,
+		"type":          frag.Type,
+	}
+	if len(frag.Labels) > 0 {
+		m["labels"] = frag.Labels
+	}
+	if len(frag.Identifiers) > 0 {
+		m["identifiers"] = frag.Identifiers
+	}
+	if frag.Description != "" {
+		desc := frag.Description
+		if len(desc) > 500 {
+			desc = desc[:500] + "..."
+		}
+		m["description"] = desc
+	}
+	return m
 }

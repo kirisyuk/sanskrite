@@ -744,7 +744,7 @@ func MapGraphIntentNodeTypeToFragmentType(nodeType, canonicalPathHint string) Fr
 		return FragmentTypeOrganization
 	case "COMMUNITY_DYNASTY", "COMMUNITY_TRIBE":
 		return FragmentTypeCommunity
-	case "ORGANIZATION", "FACILITY", "GEO_REGION", "DOMAIN", "SPHERE", "EVENT", "PRODUCT", "PROGRAM", "MARKET", "PERSON", "MEDIA_CHANNEL", "DECISION_POINT", "MECHANISM", "SUPPLY_LINK", "TRACK", "DEPOSIT", "COMMUNITY":
+	case "ORGANIZATION", "FACILITY", "GEO_REGION", "DOMAIN", "SPHERE", "EVENT", "PRODUCT", "PROGRAM", "MARKET", "PERSON", "MEDIA_CHANNEL", "DECISION_POINT", "MECHANISM", "SUPPLY_LINK", "TRACK", "DEPOSIT", "COMMUNITY", "AFFECTED_ZONE":
 		return FragmentType(nt)
 	}
 	cp := strings.TrimSpace(strings.ToLower(canonicalPathHint))
@@ -779,6 +779,8 @@ func MapGraphIntentNodeTypeToFragmentType(nodeType, canonicalPathHint string) Fr
 		return FragmentTypeSphere
 	case strings.HasPrefix(cp, "/event/"):
 		return FragmentTypeEvent
+	case strings.HasPrefix(cp, "/zone/"):
+		return FragmentTypeAffectedZone
 	}
 	return FragmentTypeOrganization
 }
@@ -921,6 +923,7 @@ var graphIntentAllowedNodeTypes = map[string]struct{}{
 	string(FragmentTypeTrack):         {},
 	string(FragmentTypeDeposit):       {},
 	string(FragmentTypeCommunity):     {},
+	string(FragmentTypeAffectedZone):  {},
 	"GOVERNMENT_AGENCY":               {},
 	"COMMUNITY_DYNASTY":               {},
 	"COMMUNITY_TRIBE":                 {},

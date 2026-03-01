@@ -298,5 +298,4 @@ The `useAgentsStore` provides:
 2. **Unified Interface**: Both agents use the same communication patterns (Task → Result → Updates)
 3. **Real-time Updates**: Progress is tracked via WebSocket events, not polling
 4. **Stateless**: Agents don't store anything; storage and usage are the caller's responsibility
-5. **Authentication**: Agents use unified authentication across HATL (via Firebase token)
-
+5. **Authentication**: Agents use unified authentication across Etigram (via Firebase token)

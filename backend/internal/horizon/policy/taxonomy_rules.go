@@ -217,16 +217,7 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 			Format:  "L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent path + one segment",
 			Domains: []string{"finance", "technology", "industrial", "consumer", "healthcare", "energy", "materials", "telecom", "real-estate", "public-sector"},
 			Examples: Examples{
-				Correct: []string{
-					"/market/sa/finance/banking",                 // L2
-					"/market/iq/agriculture",                     // L1
-					"/market/sa/finance/banking/islamic-banking", // L3
-					"/market/iq/agriculture/crop-production",     // L2
-					"/market/ae/energy/oil-gas",
-					"/market/global/technology/semiconductors",
-					"/market/eu/finance/banking",   // regional geo
-					"/market/brics/energy/oil-gas", // regional geo
-				},
+				Correct: taxonomy.MarketExamplePathsForPrompt(),
 				Incorrect: []string{
 					"/market/banking",                    // missing geo and domain
 					"/market/sa/banking",                 // missing domain segment
@@ -245,7 +236,7 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "CONTROLS", Direction: "ORG|PERSON|COMMUNITY → ORG|FACILITY|PRODUCT", ValidSource: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}},
 				{EdgeType: "REGULATES", Direction: "ORGANIZATION → *", ValidSource: []string{"ORGANIZATION"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "MARKET"}},
 				// PROGRAM can also be located in a GEO region (e.g., incubator/government program operating in a city).
-				{EdgeType: "LOCATED_IN", Direction: "* → GEO_REGION", ValidSource: []string{"FACILITY", "ORGANIZATION", "PERSON", "PRODUCT", "PROGRAM", "GEO_REGION", "DEPOSIT", "COMMUNITY"}, ValidTarget: []string{"GEO_REGION"}},
+				{EdgeType: "LOCATED_IN", Direction: "* → GEO_REGION", ValidSource: []string{"FACILITY", "ORGANIZATION", "PERSON", "PRODUCT", "PROGRAM", "GEO_REGION", "DEPOSIT", "COMMUNITY", "AFFECTED_ZONE"}, ValidTarget: []string{"GEO_REGION"}},
 				{EdgeType: "OPERATES_IN", Direction: "ORGANIZATION|PERSON → GEO_REGION|FACILITY|DEPOSIT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"GEO_REGION", "FACILITY", "DEPOSIT"}},
 				{EdgeType: "SUPPLIES_TO", Direction: "ORG|FACILITY → ORG|FACILITY", ValidSource: []string{"ORGANIZATION", "FACILITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY"}},
 				{EdgeType: "PRODUCES", Direction: "ORG|FACILITY|DEPOSIT → PRODUCT", ValidSource: []string{"ORGANIZATION", "FACILITY", "DEPOSIT"}, ValidTarget: []string{"PRODUCT"}},
@@ -276,7 +267,8 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "RELATED_DOMAIN", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
 				{EdgeType: "BROADENS_TO", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
 				{EdgeType: "NARROWS_TO", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
-				{EdgeType: "AFFECTS", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
+				{EdgeType: "AFFECTS", Direction: "DOMAIN|AFFECTED_ZONE → DOMAIN|FACILITY|ORGANIZATION|GEO_REGION", ValidSource: []string{"DOMAIN", "AFFECTED_ZONE"}, ValidTarget: []string{"DOMAIN", "FACILITY", "ORGANIZATION", "GEO_REGION", "PRODUCT", "PROGRAM"}},
+				{EdgeType: "TRIGGERED_BY", Direction: "AFFECTED_ZONE → EVENT", ValidSource: []string{"AFFECTED_ZONE"}, ValidTarget: []string{"EVENT"}},
 				// DEPENDS_ON is broadly used; allow DOMAIN and existing entity usage.
 				{EdgeType: "DEPENDS_ON", Direction: "* → *", ValidSource: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
 

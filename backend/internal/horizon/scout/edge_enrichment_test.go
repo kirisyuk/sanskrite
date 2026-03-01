@@ -170,3 +170,89 @@ func assertHasNumericQualifier(t *testing.T, edge *models.DependencyEdge, key st
 		t.Fatalf("qualifier %s is not numeric: %v", key, raw)
 	}
 }
+
+func TestWithDeterministicDirectionalRoleQualifiers_OwnsFillsMissingRoles(t *testing.T) {
+	quals, changed := withDeterministicDirectionalRoleQualifiers(
+		models.DependencyTypeOwns,
+		models.FragmentTypeOrganization,
+		models.FragmentTypeOrganization,
+		nil,
+	)
+	if !changed {
+		t.Fatalf("expected changed=true for OWNS org->org without qualifiers")
+	}
+	if got := quals["source_role"]; got != "owner" {
+		t.Fatalf("expected source_role=owner, got %v", got)
+	}
+	if got := quals["target_role"]; got != "owned_entity" {
+		t.Fatalf("expected target_role=owned_entity, got %v", got)
+	}
+	if got := quals["direction_basis"]; got != "owner_to_owned" {
+		t.Fatalf("expected direction_basis=owner_to_owned, got %v", got)
+	}
+}
+
+func TestWithDeterministicDirectionalRoleQualifiers_DoesNotOverrideExisting(t *testing.T) {
+	in := map[string]interface{}{
+		"source_role": "investor",
+	}
+	quals, changed := withDeterministicDirectionalRoleQualifiers(
+		models.DependencyTypeInvestsIn,
+		models.FragmentTypeOrganization,
+		models.FragmentTypeOrganization,
+		in,
+	)
+	if !changed {
+		t.Fatalf("expected changed=true because target role and direction basis are missing")
+	}
+	if got := quals["source_role"]; got != "investor" {
+		t.Fatalf("expected existing source_role preserved, got %v", got)
+	}
+	if got := quals["target_role"]; got != "investee" {
+		t.Fatalf("expected target_role=investee, got %v", got)
+	}
+	if got := quals["direction_basis"]; got != "investor_to_investee" {
+		t.Fatalf("expected direction_basis=investor_to_investee, got %v", got)
+	}
+}
+
+func TestWithDeterministicDirectionalRoleQualifiers_RepairsInvalidDirectionalPayload(t *testing.T) {
+	in := map[string]interface{}{
+		"source_role":     "shareholder",
+		"target_role":     "bank",
+		"direction_basis": "to_target",
+	}
+	quals, changed := withDeterministicDirectionalRoleQualifiers(
+		models.DependencyTypeOwns,
+		models.FragmentTypeOrganization,
+		models.FragmentTypeOrganization,
+		in,
+	)
+	if !changed {
+		t.Fatalf("expected changed=true for invalid directional payload")
+	}
+	if got := quals["source_role"]; got != "owner" {
+		t.Fatalf("expected repaired source_role=owner, got %v", got)
+	}
+	if got := quals["target_role"]; got != "owned_entity" {
+		t.Fatalf("expected repaired target_role=owned_entity, got %v", got)
+	}
+	if got := quals["direction_basis"]; got != "owner_to_owned" {
+		t.Fatalf("expected repaired direction_basis=owner_to_owned, got %v", got)
+	}
+}
+
+func TestWithDeterministicDirectionalRoleQualifiers_SkipsNonAmbiguousTypePairs(t *testing.T) {
+	quals, changed := withDeterministicDirectionalRoleQualifiers(
+		models.DependencyTypeDependsOn,
+		models.FragmentTypeOrganization,
+		models.FragmentTypeProduct,
+		nil,
+	)
+	if changed {
+		t.Fatalf("expected changed=false for non actor-like DEPENDS_ON pair")
+	}
+	if quals != nil {
+		t.Fatalf("expected nil qualifiers passthrough, got %#v", quals)
+	}
+}

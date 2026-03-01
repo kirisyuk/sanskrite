@@ -165,3 +165,26 @@ func TestCanonicalPathParts_Mechanism(t *testing.T) {
 		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, "/mechanism/regulatory/export-control")
 	}
 }
+
+func TestCanonicalPathParts_DomainSupplyLinkZone(t *testing.T) {
+	tests := []struct {
+		path string
+	}{
+		{"/domain/v1/affected-zone/geo/mena"},
+		{"/domain/v1/ecosystem-mapping/geo/central-eastern-africa/topic/geopolitics"},
+		{"/supply-link/global/saudi-arabian-oil-company-jsc/crude-oil/ras-tanura"},
+		{"/zone/sea/political_tension/spratly-islands"},
+	}
+	for _, tt := range tests {
+		p, err := ParseCanonicalPathParts(tt.path)
+		if err != nil {
+			t.Fatalf("ParseCanonicalPathParts(%q) error: %v", tt.path, err)
+		}
+		if p == nil || p.RawPathParts == nil || len(p.RawPathParts.Segments) < 2 {
+			t.Fatalf("ParseCanonicalPathParts(%q): unexpected parts %#v", tt.path, p)
+		}
+		if got, ok := p.BuildCanonicalPath(); !ok || got != tt.path {
+			t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, tt.path)
+		}
+	}
+}

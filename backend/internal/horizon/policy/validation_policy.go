@@ -231,8 +231,9 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			}, nil
 		}
 
-		if !reCountryAlpha2.MatchString(parts[1]) {
-			reason := fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country code %q (expected ISO3166-1 alpha2 lowercase)",
+		cc := strings.ToLower(strings.TrimSpace(parts[1]))
+		if !reCountryAlpha2.MatchString(cc) && !taxonomy.IsRegionalGeoToken(cc) && !taxonomy.IsCompositeGeoToken(cc) {
+			reason := fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country/region %q (expected ISO3166-1 alpha2, composite, or regional token)",
 				fragment.CanonicalPath, parts[1])
 			log.Printf("%s REJECT: %s", logPrefix, reason)
 			fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
@@ -443,7 +444,10 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 
 	// Policy 2.2: role-based disambiguation for directionally ambiguous edges.
 	// Type compatibility alone does not resolve source/target semantics for these relations.
-	if relationType != "" {
+	// Exception: supply-chain-originated edges already have structurally determined direction
+	// (the parser resolves source/target based on fragment type analysis).
+	fromSupplyChain, _ := input.Context["fromSupplyChain"].(bool)
+	if relationType != "" && !fromSupplyChain {
 		edgeType := horizonmodels.DependencyType(relationType)
 		if requiresDirectionalRoleEvidence(edgeType, horizonmodels.FragmentType(sourceType), horizonmodels.FragmentType(targetType)) &&
 			!hasDirectionalRoleEvidence(edgeType, relationReason, relationQualifiers) {

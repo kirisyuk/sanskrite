@@ -252,6 +252,19 @@ func (a *ResearchAgent) enrichFragmentWithGroundingMonolith(
 	return fragment, res.Relations, res.SupplyChains, groundingEvidence, rawContent, nil
 }
 
+// MergeFragmentPartial merges a partial fragment update into the current fragment
+// and returns the resulting working fragment.
+func (a *ResearchAgent) MergeFragmentPartial(main *models.HorizonFragment, partial *models.HorizonFragment) *models.HorizonFragment {
+	if main == nil {
+		return partial
+	}
+	if partial == nil || main == partial {
+		return main
+	}
+	a.mergeFragment(main, partial)
+	return main
+}
+
 // mergeFragment merges partial data into the main fragment
 func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *models.HorizonFragment) {
 	if main.State == nil {
@@ -580,11 +593,13 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 	if isDomain {
 		domainBlock = "DOMAIN EXPANSION GUIDANCE (CRITICAL OVERRIDE):\n"
 		domainBlock += "This fragment is a DOMAIN contract. Your primary goal is to expand it into first-order entities.\n"
-		domainBlock += "Use ONLY domain relation types: FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON.\n"
+		domainBlock += fmt.Sprintf("Use ONLY domain relation types: %s.\n", domainScaffoldRelationTypesPromptString())
 		domainBlock += "Target canonicalPath MUST match targetType:\n"
-		domainBlock += "  ORGANIZATION->/org or /gov, PERSON->/person, PRODUCT->/product, PROGRAM->/program, MARKET->/market, FACILITY->/fac, GEO_REGION->/loc, EVENT->/event, MEDIA_CHANNEL->/media, COMMUNITY->/community, DOMAIN->/domain\n"
+		domainBlock += "  ORGANIZATION->/org or /gov, PERSON->/person, PRODUCT->/product, PROGRAM->/program, MARKET->/market, FACILITY->/fac, GEO_REGION->/loc, EVENT->/event, MEDIA_CHANNEL->/media, COMMUNITY->/community, DOMAIN->/domain, AFFECTED_ZONE->/zone\n"
 		domainBlock += "If the user asks about a market, use /market/... as a TARGET (anchor), NOT as a DOMAIN.\n"
-		domainBlock += "Do NOT output placeholder names like NA/N-A/Unknown. Use fewer entities instead.\n\n"
+		domainBlock += "Do NOT output placeholder names like NA/N-A/Unknown. Use fewer entities instead.\n"
+		domainBlock += "For AFFECTED_ZONE: slug MUST be descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER \"na\".\n"
+		domainBlock += taxonomy.ZoneVsEventDistinctionPrompt() + "\n\n"
 	}
 	specBlock := buildResearchSpecializationModulesBlock(specialties)
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
@@ -869,9 +884,7 @@ WHEN TO USE sourceCanonicalPath (MANDATORY):
      - Set sourceName = gatekeeper's name
      - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the decision point)
      - Set targetType = DECISION_POINT
-   - Example: { "sourceCanonicalPath": "/gov/sa/sama", "sourceType": "ORGANIZATION", "sourceName": "SAMA",
-               "targetCanonicalPath": "/decision/islamic-finance/grant-banking-license", "targetType": "DECISION_POINT",
-               "relationType": "GATEKEEPS_DECISION" }
+   - Examples: { "sourceCanonicalPath": "/gov/sa/sama", "targetCanonicalPath": "/decision/islamic-finance/grant-banking-license", "relationType": "GATEKEEPS_DECISION" }; { "sourceCanonicalPath": "/gov/us/bis", "targetCanonicalPath": "/decision/export-control/approve-euv-export", "relationType": "GATEKEEPS_DECISION" }
 
 3. USES_MECHANISM: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY, target MUST be MECHANISM
    - If THIS FRAGMENT is MECHANISM and you are answering "Who uses this mechanism?":

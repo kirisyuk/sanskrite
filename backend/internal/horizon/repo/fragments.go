@@ -80,6 +80,19 @@ func bestEffortBackfillCanonicalPartsFromPath(fragment *models.HorizonFragment) 
 	fragment.CanonicalParts = parts
 }
 
+// PrepareFragmentForValidation runs the same best-effort normalization steps as Create/Update
+// before validation. Used by ContractNormalizer to ensure fragments are ready for Validate().
+// Safe to call from scout package.
+func PrepareFragmentForValidation(fragment *models.HorizonFragment) {
+	if fragment == nil {
+		return
+	}
+	bestEffortBackfillCanonicalPartsFromPath(fragment)
+	bestEffortAssembleCanonicalPathFromParts(fragment)
+	canonical.NormalizeFragmentForPersist(fragment)
+	bestEffortReconcileFragmentTypeFromPath(fragment)
+}
+
 // bestEffortReconcileFragmentTypeFromPath keeps fragment.Type aligned with canonical path namespace.
 // This guarantees deterministic type<->path mapping at the repository boundary.
 func bestEffortReconcileFragmentTypeFromPath(fragment *models.HorizonFragment) {
@@ -267,6 +280,7 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 			"marketVertical":    strings.TrimSpace(fragment.MarketVertical),
 			"govType":           strings.TrimSpace(fragment.GovType),
 			"communityType":     strings.TrimSpace(fragment.CommunityType),
+			"radiusKm":          fragment.RadiusKm,
 			"coordinates":       coordinatesToStructData(fragment.Coordinates),
 			"homeLocation":      locationToStructData(fragment.HomeLocation),
 			"horizonMonitor":    horizonMonitorToStructData(fragment.EffectiveHorizonMonitor()),
@@ -672,8 +686,12 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	// Инициализация Metadata
 	if fragment.Metadata.CreatedAt.IsZero() {
 		fragment.Metadata.CreatedAt = now
+	}
+	if fragment.Metadata.LastUpdatedAt.IsZero() {
 		fragment.Metadata.LastUpdatedAt = now
-		fragment.Metadata.LastVerifiedAt = now
+	}
+	// New fragments should not look "freshly verified" unless verification really happened.
+	if fragment.Metadata.EpistemicStatus == "" {
 		fragment.Metadata.EpistemicStatus = models.EpistemicStatusLowConfidence
 	}
 
@@ -1303,6 +1321,38 @@ func (r *HorizonFragmentsRepository) ListByStatus(ctx context.Context, status st
 	return fragments, nil
 }
 
+// GeoListFilter holds optional filters for geo-object listing.
+type GeoListFilter struct {
+	Types         []models.FragmentType
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+}
+
+func (f *GeoListFilter) matchesType(t models.FragmentType) bool {
+	if f == nil || len(f.Types) == 0 {
+		return true
+	}
+	for _, ft := range f.Types {
+		if ft == t {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *GeoListFilter) matchesCreatedAt(t time.Time) bool {
+	if f == nil {
+		return true
+	}
+	if f.CreatedAfter != nil && t.Before(*f.CreatedAfter) {
+		return false
+	}
+	if f.CreatedBefore != nil && t.After(*f.CreatedBefore) {
+		return false
+	}
+	return true
+}
+
 // ListGeoBound returns global fragments with resolved valid coordinates for map rendering.
 // Coordinates are resolved in best-effort order:
 //  1. fragment.coordinates
@@ -1311,10 +1361,12 @@ func (r *HorizonFragmentsRepository) ListByStatus(ctx context.Context, status st
 //  4. homeLocation.iso6709
 //
 // If pathPrefix is not empty, only canonical paths with that prefix are scanned.
+// If filter is non-nil, results are narrowed by fragment type and/or creation date range.
 func (r *HorizonFragmentsRepository) ListGeoBound(
 	ctx context.Context,
 	limit int,
 	pathPrefix string,
+	filter *GeoListFilter,
 ) ([]*models.HorizonFragment, error) {
 	if limit <= 0 {
 		limit = 1000
@@ -1369,6 +1421,12 @@ func (r *HorizonFragmentsRepository) ListGeoBound(
 			continue
 		}
 		if _, exists := seen[fragment.ID]; exists {
+			continue
+		}
+		if !filter.matchesType(fragment.Type) {
+			continue
+		}
+		if !filter.matchesCreatedAt(fragment.CreatedAt) {
 			continue
 		}
 		if lat, lon, ok := resolveFragmentCoordinates(&fragment); ok {
@@ -1724,4 +1782,57 @@ func (r *HorizonFragmentsRepository) invalidateFragmentRedis(ctx context.Context
 	rctx, cancel := context.WithTimeout(ctx, fragRedisTimeout)
 	defer cancel()
 	_ = r.redisCache.Del(rctx, fragRedisKey(canonicalPath)).Err()
+}
+
+// FindByAlternativePath finds fragments that have the given path in their AlternativePaths array.
+// Uses Firestore array-contains for efficient lookup.
+func (r *HorizonFragmentsRepository) FindByAlternativePath(ctx context.Context, altPath string) (*models.HorizonFragment, error) {
+	if altPath == "" {
+		return nil, nil
+	}
+	docs, err := r.col.Where("alternativePaths", "array-contains", altPath).Limit(1).Documents(ctx).GetAll()
+	if err != nil || len(docs) == 0 {
+		return nil, err
+	}
+	var frag models.HorizonFragment
+	if err := docs[0].DataTo(&frag); err != nil {
+		return nil, err
+	}
+	return &frag, nil
+}
+
+// AppendDedupAliases appends alternative names and paths to an existing fragment.
+// Uses Firestore ArrayUnion to atomically add without duplicates.
+// This is a best-effort operation; errors are logged but not propagated.
+func (r *HorizonFragmentsRepository) AppendDedupAliases(ctx context.Context, fragmentID string, altNames []string, altPaths []string) {
+	if r == nil || fragmentID == "" {
+		return
+	}
+	if len(altNames) == 0 && len(altPaths) == 0 {
+		return
+	}
+	var updates []firestore.Update
+	if len(altNames) > 0 {
+		ifaces := make([]interface{}, len(altNames))
+		for i, n := range altNames {
+			ifaces[i] = n
+		}
+		updates = append(updates, firestore.Update{
+			Path:  "alternativeNames",
+			Value: firestore.ArrayUnion(ifaces...),
+		})
+	}
+	if len(altPaths) > 0 {
+		ifaces := make([]interface{}, len(altPaths))
+		for i, p := range altPaths {
+			ifaces[i] = p
+		}
+		updates = append(updates, firestore.Update{
+			Path:  "alternativePaths",
+			Value: firestore.ArrayUnion(ifaces...),
+		})
+	}
+	if _, err := r.col.Doc(fragmentID).Update(ctx, updates); err != nil {
+		fmt.Printf("[FragmentsRepo] AppendDedupAliases warn: id=%s err=%v\n", fragmentID, err)
+	}
 }

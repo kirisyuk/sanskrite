@@ -111,3 +111,10 @@ func (a *Adapter) GetHierarchy(ctx context.Context, geonameID int) (*ontology.Ge
 		Results:   results,
 	}, nil
 }
+
+func (a *Adapter) GetCountryCode(ctx context.Context, lat, lon float64) (string, error) {
+	if a.client == nil {
+		return "", nil
+	}
+	return a.client.GetCountryCode(ctx, lat, lon)
+}

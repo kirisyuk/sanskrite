@@ -11,7 +11,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	fsClient, err := gcp.NewFirestoreClient(ctx, "h1horizon-488615")
+	fsClient, err := gcp.NewFirestoreClient(ctx, "etigram")
 	if err != nil {
 		log.Fatal(err)
 	}

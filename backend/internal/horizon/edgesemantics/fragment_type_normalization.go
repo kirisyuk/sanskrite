@@ -86,4 +86,7 @@ var fragmentTypeAliases = map[string]models.FragmentType{
 	"NETWORK":                             models.FragmentTypeCommunity,
 	"GROUP":                               models.FragmentTypeCommunity,
 	"COLLECTIVE":                          models.FragmentTypeCommunity,
+	string(models.FragmentTypeAffectedZone): models.FragmentTypeAffectedZone,
+	"ZONE":                                models.FragmentTypeAffectedZone,
+	"AFFECTEDZONE":                        models.FragmentTypeAffectedZone,
 }

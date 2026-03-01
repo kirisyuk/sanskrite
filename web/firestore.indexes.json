@@ -1086,6 +1086,15 @@
       ]
     },
     {
+      "collectionGroup": "horizon_materialized_artifacts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "nodeRefs", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
       "collectionGroup": "horizon_missing_info_status",
       "queryScope": "COLLECTION",
       "fields": [

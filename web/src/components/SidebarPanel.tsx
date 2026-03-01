@@ -1404,6 +1404,16 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
       });
   }, [createProject, isMobile, isModernSidebarMode, onClose, onCloseAllModals, openCreateProjectPalette, setCurrentProject]);
 
+  React.useEffect(() => {
+    const handleExternalCreateProject = () => {
+      handleCreateHorizonProject();
+    };
+    window.addEventListener('horizon:create-project', handleExternalCreateProject as EventListener);
+    return () => {
+      window.removeEventListener('horizon:create-project', handleExternalCreateProject as EventListener);
+    };
+  }, [handleCreateHorizonProject]);
+
   const runPaletteSelection = React.useCallback(
     (item: PaletteItem) => {
       if (item.kind === 'project') {

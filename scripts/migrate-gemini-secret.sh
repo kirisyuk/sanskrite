@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Миграция секрета VERTEX_API_KEY -> GEMINI_API_KEY
-# Использование: ./scripts/migrate-gemini-secret.sh [-p|--project h1horizon-488615]
+# Использование: ./scripts/migrate-gemini-secret.sh [-p|--project etigram]
 
-PROJECT="h1horizon-488615"
+PROJECT="etigram"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -p|--project) PROJECT="$2"; shift 2;;

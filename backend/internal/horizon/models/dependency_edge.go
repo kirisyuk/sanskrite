@@ -163,6 +163,9 @@ const (
 	DependencyTypeBroadensTo    DependencyType = "BROADENS_TO"
 	DependencyTypeNarrowsTo     DependencyType = "NARROWS_TO"
 	DependencyTypeAffects       DependencyType = "AFFECTS"
+	// TRIGGERED_BY: AFFECTED_ZONE was caused/triggered by an EVENT (e.g. earthquake zone by earthquake event).
+	// Direction: AFFECTED_ZONE → EVENT
+	DependencyTypeTriggeredBy DependencyType = "TRIGGERED_BY"
 
 	// --- Community hierarchy ---
 	// HAS_SUBGROUP: community hierarchy (parent group → child/narrower group).

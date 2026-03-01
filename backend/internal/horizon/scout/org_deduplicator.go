@@ -27,6 +27,7 @@ type OrgDeduplicatorStats struct {
 	HitLabelEN            int64
 	HitShortName          int64
 	HitNameHistory        int64
+	HitCrossFieldName     int64
 	HitNormalizedLegal    int64
 	HitWikidataSearch     int64
 }
@@ -128,6 +129,7 @@ type OrgDeduplicator struct {
 	hitLabelEN            int64
 	hitShortName          int64
 	hitNameHistory        int64
+	hitCrossFieldName     int64
 	hitNormalizedLegal    int64
 	hitWikidataSearch     int64
 }
@@ -166,6 +168,17 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		return fragment, nil
 	}
 	atomic.AddInt64(&d.calls, 1)
+
+	result, err := d.deduplicateOrgInner(ctx, fragment)
+	if err != nil || result == nil || result.ID == fragment.ID || result.ID == "" {
+		return result, err
+	}
+	// Record aliases: store losing fragment's names/path on the winning fragment.
+	d.recordDedupAliases(ctx, fragment, result)
+	return result, nil
+}
+
+func (d *OrgDeduplicator) deduplicateOrgInner(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, error) {
 	// Government bodies (/gov/{iso2|na}/{slug}) are modeled as ORGANIZATION, but MUST NOT be deduplicated by name-only
 	// across jurisdictions (e.g., "Ministry of Defence").
 	//
@@ -197,6 +210,12 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 					return best, nil
 				}
 			}
+		}
+
+		// 0a.5) Check AlternativePaths: find existing fragment that previously absorbed this path.
+		if existing, err := d.fragmentsRepo.FindByAlternativePath(ctx, cp); err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
+			atomic.AddInt64(&d.hitAliasReverseLookup, 1)
+			return existing, nil
 		}
 
 		// 0b) Canonical path normalization: treat '-' and '_' variants as equivalent for /org/* slugs.
@@ -308,6 +327,14 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 		}
 	}
 
+	// Strategy 4.3: Cross-field matching — check normalized shortName/label against
+	// existing fragments' normalized legalName. Catches cases where LLM returns
+	// "BOTAS" as shortName but an existing fragment has legalName="BOTAS Petroleum Pipeline Corp."
+	if existing, err := d.findByCrossFieldName(ctx, fragment); err == nil && existing != nil && existing.ID != fragment.ID {
+		atomic.AddInt64(&d.hitCrossFieldName, 1)
+		return existing, nil
+	}
+
 	// Strategy 4.5: Match current names against history and history against current names.
 	if existing, err := d.findByNameHistory(ctx, fragment); err == nil && existing != nil && existing.ID != fragment.ID {
 		atomic.AddInt64(&d.hitNameHistory, 1)
@@ -360,6 +387,29 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 // fragment when we have strong signals that they represent the same real-world entity.
 //
 // This is intentionally narrow and conservative:
+// recordDedupAliases stores the losing fragment's names and canonical path on the
+// winning fragment so future lookups can find it via aliases.
+func (d *OrgDeduplicator) recordDedupAliases(ctx context.Context, loser, winner *models.HorizonFragment) {
+	if d.fragmentsRepo == nil || winner.ID == "" {
+		return
+	}
+	var altNames []string
+	if ln := strings.TrimSpace(loser.Identifiers["legalName"]); ln != "" {
+		altNames = append(altNames, ln)
+	}
+	if sn := strings.TrimSpace(loser.Identifiers["shortName"]); sn != "" {
+		altNames = append(altNames, sn)
+	}
+	if label := strings.TrimSpace(loser.Labels["en"]); label != "" {
+		altNames = append(altNames, label)
+	}
+	var altPaths []string
+	if cp := strings.TrimSpace(loser.CanonicalPath); cp != "" && cp != winner.CanonicalPath {
+		altPaths = append(altPaths, cp)
+	}
+	d.fragmentsRepo.AppendDedupAliases(ctx, winner.ID, altNames, altPaths)
+}
+
 // - requires explicit ISO2 on BOTH sides and they must match
 // - requires exact legalName, and also requires (shortName OR label[en]) to match when provided
 // - forbids conflicting Wikidata IDs
@@ -575,6 +625,44 @@ func (d *OrgDeduplicator) findByLabelEN(ctx context.Context, fragment *models.Ho
 		return chooseBestOrgCandidate(existing), nil
 	}
 
+	return nil, nil
+}
+
+// findByCrossFieldName checks the new fragment's shortName or label[en] (normalized)
+// against existing fragments' normalized legalName. This catches cases where the LLM
+// returns "BOTAS" as shortName but an existing fragment has legalName "BOTAS Petroleum Pipeline Corp."
+// Guards: same jurisdiction required, no conflicting Wikidata IDs.
+func (d *OrgDeduplicator) findByCrossFieldName(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, error) {
+	// Collect candidate names from the new fragment (shortName, label[en])
+	var candidateNames []string
+	if sn := strings.TrimSpace(fragment.Identifiers["shortName"]); sn != "" {
+		candidateNames = append(candidateNames, sn)
+	}
+	if label := strings.TrimSpace(fragment.Labels["en"]); label != "" {
+		candidateNames = append(candidateNames, label)
+	}
+	if len(candidateNames) == 0 {
+		return nil, nil
+	}
+
+	for _, name := range candidateNames {
+		normalized := naming.NormalizeEntityName(name)
+		if normalized == "" || len(normalized) < 3 {
+			continue
+		}
+		existing, err := d.fragmentsRepo.FindByNormalizedLegalName(ctx, normalized)
+		if err != nil || len(existing) == 0 {
+			continue
+		}
+		existing = filterOrgDedupCandidates(fragment, existing, "crossField")
+		existing = filterSelfConsistentOrgCandidates(existing)
+		best := chooseBestOrgCandidate(existing)
+		if best != nil && best.ID != fragment.ID {
+			fmt.Printf("[OrgDeduplicator] Cross-field dedup: %s (%q) -> %s (via normalized %q)\n",
+				fragment.CanonicalPath, name, best.CanonicalPath, normalized)
+			return best, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -1210,6 +1298,7 @@ func (d *OrgDeduplicator) Stats() OrgDeduplicatorStats {
 		HitLabelEN:            atomic.LoadInt64(&d.hitLabelEN),
 		HitShortName:          atomic.LoadInt64(&d.hitShortName),
 		HitNameHistory:        atomic.LoadInt64(&d.hitNameHistory),
+		HitCrossFieldName:     atomic.LoadInt64(&d.hitCrossFieldName),
 		HitNormalizedLegal:    atomic.LoadInt64(&d.hitNormalizedLegal),
 		HitWikidataSearch:     atomic.LoadInt64(&d.hitWikidataSearch),
 	}

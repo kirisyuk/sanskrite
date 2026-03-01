@@ -29,13 +29,18 @@ type DomainGateCheck struct {
 }
 
 type DomainGateSummary struct {
-	OverallStatus  string            `json:"overallStatus" firestore:"overallStatus"`
-	TotalChecks    int               `json:"totalChecks" firestore:"totalChecks"`
-	Passed         int               `json:"passed" firestore:"passed"`
-	Failed         int               `json:"failed" firestore:"failed"`
-	Partial        int               `json:"partial" firestore:"partial"`
-	Checks         []DomainGateCheck `json:"checks,omitempty" firestore:"checks,omitempty"`
-	FailedCheckIDs []string          `json:"failedCheckIds,omitempty" firestore:"failedCheckIds,omitempty"`
+	OverallStatus      string            `json:"overallStatus" firestore:"overallStatus"`
+	TotalChecks        int               `json:"totalChecks" firestore:"totalChecks"`
+	Passed             int               `json:"passed" firestore:"passed"`
+	Failed             int               `json:"failed" firestore:"failed"`
+	Partial            int               `json:"partial" firestore:"partial"`
+	Checks             []DomainGateCheck `json:"checks,omitempty" firestore:"checks,omitempty"`
+	FailedCheckIDs     []string          `json:"failedCheckIds,omitempty" firestore:"failedCheckIds,omitempty"`
+	GraphTruncated     bool              `json:"graphTruncated,omitempty" firestore:"graphTruncated,omitempty"`
+	PartialWaitTimeout bool              `json:"partialWaitTimeout,omitempty" firestore:"partialWaitTimeout,omitempty"`
+	RecoverableReasons []string          `json:"recoverableReasons,omitempty" firestore:"recoverableReasons,omitempty"`
+	CriticalOpenCount  int               `json:"criticalOpenCount,omitempty" firestore:"criticalOpenCount,omitempty"`
+	EvidenceCoverage   float64           `json:"evidenceCoverage,omitempty" firestore:"evidenceCoverage,omitempty"`
 }
 
 type CriticalDependency struct {

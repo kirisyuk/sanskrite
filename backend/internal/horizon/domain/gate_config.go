@@ -11,6 +11,7 @@ type GateConfig struct {
 	MinSourcesPerDep    int
 	MinGeoCoverage      float64
 	MaxEnrichmentCycles int
+	MaxAdaptiveCycles   int
 	MaxCrossFacetChecks int
 	MaxGateChecks       int
 	MaxDataGaps         int
@@ -33,7 +34,8 @@ func DefaultGateConfig() GateConfig {
 		MinTemporalCoverage: 0.5,
 		MinSourcesPerDep:    2,
 		MinGeoCoverage:      0.8,
-		MaxEnrichmentCycles: 1,
+		MaxEnrichmentCycles: 2,
+		MaxAdaptiveCycles:   1,
 		MaxCrossFacetChecks: 24,
 		MaxGateChecks:       60,
 		MaxDataGaps:         30,

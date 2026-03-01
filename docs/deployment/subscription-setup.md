@@ -69,7 +69,7 @@ cd web && firebase deploy --only firestore:indexes
 
 ```bash
 # Получить URL вашего backend сервиса
-API_URL=$(gcloud run services describe h1horizon-api --region us-central1 --format='value(status.url)')
+API_URL=$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')
 
 # Создать секрет с токеном для системных вызовов (если еще не создан)
 # Используйте тот же токен, что и для других admin jobs
@@ -97,7 +97,7 @@ gcloud scheduler jobs create http subscription-billing-daily \
 Если используете Cloud Scheduler, отключите встроенный таймер через переменную окружения:
 
 ```bash
-gcloud run services update h1horizon-api \
+gcloud run services update etigram-api \
   --region us-central1 \
   --update-env-vars DISABLE_SUBSCRIPTION_BILLING=true
 ```

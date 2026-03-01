@@ -10,7 +10,7 @@ Watchdog Service должен:
 
 ## Варианты реализации
 
-### Вариант 1: Cloud Scheduler → HTTP endpoint в Cloud Run `h1horizon-api` (РЕКОМЕНДУЕТСЯ)
+### Вариант 1: Cloud Scheduler → HTTP endpoint в Cloud Run `etigram-api` (РЕКОМЕНДУЕТСЯ)
 
 **Преимущества:**
 - ✅ Простота развертывания и управления
@@ -28,7 +28,7 @@ Watchdog Service должен:
 ```
 Cloud Scheduler (каждые 5 минут)
   ↓
-Cloud Run: h1horizon-api (cron endpoint)
+Cloud Run: etigram-api (cron endpoint)
   ↓
 Watchdog Service (internal/horizon/watchdog)
   ↓
@@ -38,7 +38,7 @@ Scout Engine (создание ScoutingJob)
 ```
 
 **Реализация:**
-- Cloud Scheduler вызывает cron endpoint в `h1horizon-api`
+- Cloud Scheduler вызывает cron endpoint в `etigram-api`
 - Endpoint защищён через `X-Job-Token` (переменная `ADMIN_JOB_TOKEN`), как и другие scheduler jobs
 - Endpoint берет due-конфиги из Firestore, сканирует источники, при необходимости запускает Scout
 
@@ -76,7 +76,7 @@ Scout Engine (создание ScoutingJob)
 - Если Watchdog интегрирован в основной сервис
 - Если нужна тесная интеграция с другими компонентами
 
-## Рекомендация: Cloud Scheduler → HTTP endpoint в Cloud Run `h1horizon-api`
+## Рекомендация: Cloud Scheduler → HTTP endpoint в Cloud Run `etigram-api`
 
 ### Обоснование
 
@@ -97,7 +97,7 @@ Endpoint:
 #### 2. Создание/обновление Cloud Scheduler Job (через deploy)
 
 ```bash
-./scripts/deploy --api --horizon-watchdog
+./scripts/deploy --api --etigram-watchdog
 ```
 
 #### 3. Параметры (env vars)
@@ -121,7 +121,7 @@ gcloud functions deploy horizon-watchdog-trigger \
   --entry-point=OnWatchdogConfigChange \
   --trigger-event-filters="type=document.update" \
   --trigger-event-filters="database=(default)" \
-  --trigger-resource="projects/h1horizon-488615/databases/(default)/documents/horizon_watchdog_configs/{configId}" \
+  --trigger-resource="projects/etigram/databases/(default)/documents/horizon_watchdog_configs/{configId}" \
   --service-account=backend@sanskrite.iam.gserviceaccount.com
 ```
 
@@ -136,7 +136,7 @@ gcloud functions deploy horizon-watchdog-trigger \
 
 ## Итоговая рекомендация
 
-**Использовать Cloud Scheduler → HTTP endpoint в Cloud Run `h1horizon-api`** для периодических проверок.
+**Использовать Cloud Scheduler → HTTP endpoint в Cloud Run `etigram-api`** для периодических проверок.
 
 **Причины:**
 1. Простота реализации и поддержки
@@ -149,4 +149,3 @@ gcloud functions deploy horizon-watchdog-trigger \
 2. Интегрировать с существующим `WatchdogService`
 3. Настроить Cloud Scheduler для периодического запуска
 4. Протестировать на тестовом окружении
-

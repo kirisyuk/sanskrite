@@ -48,3 +48,40 @@ func TestNormalizeDomainCanonicalPath_DefaultSortsFacets(t *testing.T) {
 	}
 }
 
+func TestValidateCanonicalPath_AffectedZoneAfricaGeo(t *testing.T) {
+	paths := []string{
+		"/domain/v1/affected-zone/geo/africa",
+		"/domain/v1/affected-zone/geo/ssa",
+		"/domain/v1/affected-zone/geo/mena",
+		"/domain/v1/affected-zone/geo/oceania",
+		"/domain/v1/affected-zone/geo/sea",
+		"/domain/v1/affected-zone/geo/southeast-asia",
+		"/domain/v1/affected-zone/geo/central-east-africa",
+		"/domain/v1/geopolitical-risk/geo/central-east-africa/topic/military-conflict",
+		"/loc/africa/na/na",
+	}
+	for _, p := range paths {
+		if err := ValidateCanonicalPath(p); err != nil {
+			t.Errorf("ValidateCanonicalPath(%q) = %v, want nil", p, err)
+		}
+	}
+}
+
+func TestValidateCanonicalPath_ContinentsAndZones(t *testing.T) {
+	paths := []string{
+		"/loc/oceania/na/na",
+		"/loc/europe/na/na",
+		"/loc/asia/na/na",
+		"/loc/southeast-asia/na/na",
+		"/gov/oceania/regional-body",
+		"/gov/int/african-union",
+		"/org/oceania/pacific-org",
+		"/market/oceania/technology/software",
+		"/zone/sea/political_tension/spratly-islands",
+	}
+	for _, p := range paths {
+		if err := ValidateCanonicalPath(p); err != nil {
+			t.Errorf("ValidateCanonicalPath(%q) = %v, want nil", p, err)
+		}
+	}
+}

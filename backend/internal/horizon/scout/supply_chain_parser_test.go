@@ -8,6 +8,42 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 )
 
+func TestSupplyChainParser_AbstainsOnUnknownPair(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.8,
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/market/sa/finance/banking", Type: "MARKET", Name: "Saudi Banking"},
+				{CanonicalPath: "/loc/sa/na/na", Type: "GEO_REGION", Name: "Saudi Arabia"},
+			},
+		},
+	}
+	result, err := parser.ParseSupplyChains(chains, "/market/sa/finance/banking")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+	if len(result.Edges) != 0 {
+		t.Fatalf("unknown pair (MARKET->GEO_REGION) should abstain, got %d edges", len(result.Edges))
+	}
+	if result.Stats.EdgesAbstainedUnknownPair != 1 {
+		t.Fatalf("EdgesAbstainedUnknownPair=%d, want 1", result.Stats.EdgesAbstainedUnknownPair)
+	}
+	if len(result.ParseWarnings) == 0 {
+		t.Fatalf("expected ParseWarning for abstained unknown pair")
+	}
+	found := false
+	for _, w := range result.ParseWarnings {
+		if strings.Contains(w, "abstain:") && strings.Contains(w, "unknown pair") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected abstain warning in ParseWarnings: %v", result.ParseWarnings)
+	}
+}
+
 func TestParseSupplyChains_SupplyLinkSegmentBasic(t *testing.T) {
 	parser := NewSupplyChainParser()
 	chains := []agents.SupplyChain{
@@ -277,8 +313,12 @@ func TestParseSupplyChains_ProgramAndMarketNodesCreateFragments(t *testing.T) {
 	if result.Stats.NodesSkippedUnknownType != 0 {
 		t.Fatalf("nodesSkippedUnknownType=%d, want 0", result.Stats.NodesSkippedUnknownType)
 	}
-	if len(result.Edges) == 0 {
-		t.Fatalf("expected edges to be created")
+	// PROGRAM->MARKET is an unknown pair: parser abstains (no generic DEPENDS_ON) per GAP-03.
+	if len(result.Edges) != 0 {
+		t.Fatalf("PROGRAM->MARKET unknown pair should abstain, got %d edges", len(result.Edges))
+	}
+	if result.Stats.EdgesAbstainedUnknownPair < 1 {
+		t.Fatalf("EdgesAbstainedUnknownPair=%d, want >= 1", result.Stats.EdgesAbstainedUnknownPair)
 	}
 }
 

@@ -249,6 +249,14 @@ const (
 	// - /community/by/activist/nexta-supporters
 	// - /community/global/professional/osint-researchers
 	FragmentTypeCommunity FragmentType = "COMMUNITY"
+	// FragmentTypeAffectedZone represents a geographic area with an ongoing condition (conflict, disaster, tension).
+	// Canonical path format: /zone/{geo}/{condition_type}/{slug}
+	// - geo: ISO3166-1 alpha2, composite (e.g. tr-sy), or regional token (eu, gcc, etc.)
+	// - condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone, etc.
+	// - slug: lowercase descriptive slug (donbas, marawi, epicenter-xyz)
+	// Relations: AFFECTS (zone → facility/org/route), LOCATED_IN (zone → geo), TRIGGERED_BY (zone → event)
+	// State metrics: zone_severity_score, population_affected_estimate; Description: politically-neutral.
+	FragmentTypeAffectedZone FragmentType = "AFFECTED_ZONE"
 )
 
 // EpistemicStatus статус эпистемической достоверности

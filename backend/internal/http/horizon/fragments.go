@@ -12,6 +12,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -26,8 +27,11 @@ type geoObjectResponseItem struct {
 	Description   string              `json:"description,omitempty"`
 	Status        string              `json:"status,omitempty"`
 	Coordinates   *models.Coordinates `json:"coordinates,omitempty"`
+	RadiusKm      float64             `json:"radiusKm,omitempty"` // AFFECTED_ZONE: zone radius in km for circle rendering
+	CreatedAt     time.Time           `json:"createdAt"`
 	UpdatedAt     time.Time           `json:"updatedAt"`
 }
+
 
 // ListFragments получает список HorizonFragment через Lens scope
 func (h *HorizonHandlers) ListFragments(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +83,7 @@ func (h *HorizonHandlers) ListFragments(w http.ResponseWriter, r *http.Request) 
 }
 
 // ListGeoObjects returns geo-bound fragments for map rendering.
-// GET /api/horizon/geo-objects?limit=2000&pathPrefix=/loc/
+// GET /api/horizon/geo-objects?limit=2000&pathPrefix=/loc/&types=ORGANIZATION,FACILITY&createdAfter=2024-01-01&createdBefore=2025-12-31
 func (h *HorizonHandlers) ListGeoObjects(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -107,10 +111,33 @@ func (h *HorizonHandlers) ListGeoObjects(w http.ResponseWriter, r *http.Request)
 		pathPrefix = "/loc/"
 	}
 
-	fragments, err := h.service.Fragments().ListGeoBound(r.Context(), limit, pathPrefix)
+	var filter horizonrepo.GeoListFilter
+	if raw := strings.TrimSpace(r.URL.Query().Get("types")); raw != "" {
+		for _, t := range strings.Split(raw, ",") {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				filter.Types = append(filter.Types, models.FragmentType(strings.ToUpper(t)))
+			}
+		}
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("createdAfter")); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			filter.CreatedAfter = &t
+		} else if t, err := time.Parse("2006-01-02", raw); err == nil {
+			filter.CreatedAfter = &t
+		}
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("createdBefore")); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			filter.CreatedBefore = &t
+		} else if t, err := time.Parse("2006-01-02", raw); err == nil {
+			end := t.Add(24*time.Hour - time.Nanosecond)
+			filter.CreatedBefore = &end
+		}
+	}
+
+	fragments, err := h.service.Fragments().ListGeoBound(r.Context(), limit, pathPrefix, &filter)
 	if err != nil {
-		// IMPORTANT: Cloud Run request logs only show HTTP 500; without explicit logging
-		// we lose the underlying Firestore error (e.g. missing composite index).
 		log.Printf("ListGeoObjects error: limit=%d pathPrefix=%q: %v", limit, pathPrefix, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -136,6 +163,8 @@ func (h *HorizonHandlers) ListGeoObjects(w http.ResponseWriter, r *http.Request)
 			Description:   strings.TrimSpace(f.Description),
 			Status:        strings.TrimSpace(f.Governance.Status),
 			Coordinates:   f.Coordinates,
+			RadiusKm:      f.RadiusKm,
+			CreatedAt:     f.CreatedAt,
 			UpdatedAt:     f.UpdatedAt,
 		})
 	}

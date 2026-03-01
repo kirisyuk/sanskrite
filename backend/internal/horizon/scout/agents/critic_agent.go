@@ -90,9 +90,8 @@ func (a *CriticAgent) ValidateWithGraphContext(
 }
 
 // RuleBasedQuickValidation performs deterministic structural completeness checks per active
-// domain mode, producing missingInfo for the research agent. This replaces the first LLM-based
-// critic pass for all non-general modes, saving one LLM call per entity. Returns nil for
-// general-only mode (signals caller to fall through to LLM-based critic).
+// domain mode, producing missingInfo for the research agent. Uses entity_semantics.MissingInfoRules
+// and taxonomy domain mode rules as single source of truth.
 func RuleBasedQuickValidation(
 	fragment *models.HorizonFragment,
 	relations []DiscoveredRelation,
@@ -100,92 +99,53 @@ func RuleBasedQuickValidation(
 	domainModes []string,
 ) *ValidationResult {
 	domainModes = taxonomy.NormalizeDomainModes(domainModes)
-	hasSpecific := false
-	for _, m := range domainModes {
-		if m != taxonomy.DomainModeGeneral {
-			hasSpecific = true
-			break
-		}
-	}
-	if !hasSpecific {
-		return nil
-	}
 
-	relTypes := make(map[string]bool)
+	// Extract relation types for evaluation
+	relTypes := make([]string, 0, len(relations))
 	for _, r := range relations {
 		rt := strings.TrimSpace(strings.ToUpper(r.RelationType))
 		if rt != "" {
-			relTypes[rt] = true
+			relTypes = append(relTypes, rt)
 		}
 	}
 
-	var missing []string
+	targetPath := ""
+	communityType := ""
+	if fragment != nil {
+		targetPath = strings.TrimSpace(fragment.CanonicalPath)
+		communityType = strings.TrimSpace(fragment.CommunityType)
+	}
 
-	for _, m := range domainModes {
-		switch m {
-		case taxonomy.DomainModeSupplyChain:
-			if !relTypes["PRODUCES"] && !relTypes["CONSUMES"] {
-				missing = append(missing, "products produced or consumed by this entity")
-			}
-			if !relTypes["LOCATED_IN"] && !relTypes["OPERATES_IN"] {
-				missing = append(missing, "facility locations and operating regions")
-			}
-			if !relTypes["EXTRACTS_FROM"] && fragment != nil && isMiningOrExtractive(fragment.CanonicalPath) {
-				missing = append(missing, "extractive source links (deposits, mines)")
-			}
-			if len(relations) < 3 {
-				missing = append(missing, "upstream suppliers and downstream customers")
-			}
-			invariantGaps := checkSupplyChainInvariants(supplyChains)
-			missing = append(missing, invariantGaps...)
+	// Resolve entity type and collect rules
+	key := entity_semantics.ResolveByPath(targetPath, fragmentTypeOrEmpty(fragment), communityType)
+	def := entity_semantics.GetDefinition(key)
+	rules := make([]entity_semantics.MissingInfoRule, 0)
+	if def != nil && len(def.MissingInfoRules) > 0 {
+		rules = append(rules, def.MissingInfoRules...)
+	}
+	rules = append(rules, entity_semantics.DomainModeRulesForModes(domainModes)...)
 
-		case taxonomy.DomainModeGovernance:
-			if !relTypes["OWNS"] && !relTypes["SUBSIDIARY_OF"] {
-				missing = append(missing, "ownership chain and ultimate parent entity")
-			}
-			if !relTypes["BOARD_MEMBER_OF"] {
-				missing = append(missing, "board composition and key executives")
-			}
-			if !relTypes["CONTROLS"] {
-				missing = append(missing, "control structure and voting rights")
-			}
+	missing := entity_semantics.EvaluateMissingInfoRules(fragment, relTypes, rules, domainModes, targetPath, entity_semantics.EvaluateModeFull)
 
-		case taxonomy.DomainModeMarket:
-			if !relTypes["PARTICIPATES_IN"] {
-				missing = append(missing, "major market participants and market share")
-			}
-			if !relTypes["HAS_MARKET_SEGMENT"] {
-				missing = append(missing, "market hierarchy and segment breakdown")
-			}
-
-		case taxonomy.DomainModeAssurance:
-			if !relTypes["ASSURES"] {
-				missing = append(missing, "audit and certification relationships")
-			}
-
-		case taxonomy.DomainModePolicyImpact:
-			if !relTypes["REGULATES"] {
-				missing = append(missing, "regulatory relationships and oversight bodies")
-			}
-			if !relTypes["IMPOSES_CONDITION"] {
-				missing = append(missing, "policy impact channels and conditions")
-			}
-		}
+	// Supply chain invariants (deterministic checks)
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
+		invariantGaps := checkSupplyChainInvariants(supplyChains)
+		missing = append(missing, invariantGaps...)
 	}
 
 	return &ValidationResult{
-		IsValid:    true,
-		Confidence: 0.5,
+		IsValid:     true,
+		Confidence:  0.5,
 		MissingInfo: missing,
-		Conflicts:  []ValidationConflict{},
+		Conflicts:   []ValidationConflict{},
 	}
 }
 
-// isMiningOrExtractive returns true if the canonical path suggests an extractive/mining entity.
-func isMiningOrExtractive(path string) bool {
-	p := strings.ToLower(path)
-	return strings.Contains(p, "/mining/") || strings.Contains(p, "/extractive/") ||
-		strings.Contains(p, "/mineral/") || strings.Contains(p, "/deposit/")
+func fragmentTypeOrEmpty(f *models.HorizonFragment) models.FragmentType {
+	if f == nil {
+		return ""
+	}
+	return f.Type
 }
 
 // ValidateStrategicOverlay validates DECISION_POINT and MECHANISM entities in Phase 2.
@@ -286,7 +246,7 @@ MECHANISM = A SPECIFIC INSTRUMENT/REGIME OF CONTROL (noun-based)
   - Path format: /mechanism/{category}/{slug}
   - category MUST be: regulatory | economic | technological | contractual | political
   - slug MUST specify the object ("license WHAT?", "controls WHAT?")
-  - GOOD slugs: "banking-license", "euv-export-control", "entity-list"
+  - GOOD slugs: %s
   - BAD slugs: "licensing", "regulation", "oversight", "supervision" (too abstract)
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -368,7 +328,7 @@ Return a JSON object:
 }
 
 Return ONLY valid JSON. No markdown fences.
-`, entityType, string(fragmentJSON), string(relationsJSON), graphContextBlock)
+`, entityType, string(fragmentJSON), string(relationsJSON), graphContextBlock, taxonomy.MechanismSlugExamplesString())
 }
 
 // buildValidationPrompt строит промпт для валидации данных
@@ -501,7 +461,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      Domains: finance, technology, industrial, consumer, healthcare, energy, materials, telecom, real-estate, public-sector, professional-services
 	      Verticals: banking, software, automotive, oil-gas, government, consulting, etc.
 	      Geo: ISO2 lowercase (us, de, cn) or regional bucket (global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta)
-	      Examples: /segment/technology/semiconductors/tw, /segment/public-sector/government/ru, /segment/finance/banking/us
+	      Examples: /segment/technology/semiconductors/tw, /segment/industrial/agriculture/kz, /segment/public-sector/government/ru, /segment/finance/banking/us
 	      For government bodies use domain=public-sector, vertical=government or specific function (defense, treasury, regulation)."
 	  
 	  - *** CRITICAL *** If orgSize is empty, missing, or "na", you MUST add this question:
@@ -682,7 +642,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - If category is not valid, add conflict with HIGH severity.
 	    - Mechanism slugs MUST be specific about the object ("license what? / controls what?").
 	      - If slug is generic (licensing, regulation, oversight, supervision, compliance, monitoring, enforcement) without object, add:
-	        - "Specify what <mechanism> applies to (license what / regulate what) and update to a concrete mechanism slug (e.g., banking-license, capital-market-service-licensing)."
+	      - "Specify what <mechanism> applies to (license what / regulate what) and update to a concrete mechanism slug (e.g., %s)."
 	    - If no USES_MECHANISM edges exist (agents using this mechanism), add:
 	      - "What agents/organizations use <mechanism>? Return USES_MECHANISM edges with EXPLICIT SOURCE: sourceCanonicalPath=/org/... or /gov/... or /decision/... (the user), sourceType, sourceName. Target is THIS MECHANISM."
 	    - If no APPLIES_TO edges exist (what the mechanism affects), add:
@@ -699,7 +659,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      - When asking for mechanism user (from MECHANISM fragment), ALWAYS request EXPLICIT SOURCE in missingInfo.
 	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET.
 
-Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, objectTypeTaskBlock, canonicalValidationBlock, relevanceGateBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, objectTypeTaskBlock, canonicalValidationBlock, taxonomy.MechanismSlugExamplesString(), relevanceGateBlock)
 }
 
 func buildCriticRelevanceGate(fragment *models.HorizonFragment) string {

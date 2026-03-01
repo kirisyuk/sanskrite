@@ -2,6 +2,8 @@ package repo
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -178,6 +180,14 @@ func (r *ScoutingJobsRepository) syncReusedJobIntentState(ctx context.Context, j
 	return r.agentJobsRepo.Update(ctx, existing)
 }
 
+// RelationHashForDedup computes a short hash for (sourcePath, targetPath, relationType)
+// to distinguish child jobs from different relations to the same target.
+func RelationHashForDedup(sourcePath, targetPath, relationType string) string {
+	s := strings.TrimSpace(sourcePath) + "|" + strings.TrimSpace(targetPath) + "|" + strings.TrimSpace(relationType)
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:8])
+}
+
 func buildScoutJobDedupKey(job *models.ScoutingJob) string {
 	if job == nil {
 		return ""
@@ -208,9 +218,29 @@ func buildScoutJobDedupKey(job *models.ScoutingJob) string {
 		}
 	}
 
+	// Cascade child idempotency: include cascadeRootJobId + relationHash when present.
+	// Prevents duplicate child jobs when the same (source,target,relationType) is scheduled multiple times.
+	cascadeID := ""
+	relationHash := ""
+	if job.State != nil {
+		if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
+			cascadeID = strings.TrimSpace(v)
+		}
+		if v, ok := job.State["relationHash"].(string); ok && strings.TrimSpace(v) != "" {
+			relationHash = strings.TrimSpace(v)
+		}
+	}
+
 	// The core idempotency scope:
 	// (tenant, project, lens, agent, identityKey|canonicalPath)
-	// NOTE: We intentionally do NOT include sourceIds here. If a job already exists, we merge sourceIds.
+	// For cascade children: (..., cascade, target, relationHash)
+	if cascadeID != "" {
+		if relationHash != "" {
+			return fmt.Sprintf("agent_job_dedup|tenant=%s|project=%s|lens=%s|agent=%s|cascade=%s|target=%s|relationHash=%s", tenantID, projectID, lensID, agentID, cascadeID, target, relationHash)
+		}
+		return fmt.Sprintf("agent_job_dedup|tenant=%s|project=%s|lens=%s|agent=%s|cascade=%s|target=%s", tenantID, projectID, lensID, agentID, cascadeID, target)
+	}
+
 	if identityKey != "" {
 		return fmt.Sprintf("agent_job_dedup|tenant=%s|project=%s|lens=%s|agent=%s|identity=%s", tenantID, projectID, lensID, agentID, identityKey)
 	}

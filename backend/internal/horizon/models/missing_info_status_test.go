@@ -278,13 +278,13 @@ func TestMissingInfoStatus_ShouldResetForNewSources(t *testing.T) {
 			want:           false,
 		},
 		{
-			name: "empty old fingerprint - should not reset",
+			name: "empty old fingerprint - should reset",
 			mis: MissingInfoStatus{
 				Status:            MissingInfoStatusExhausted,
 				SourceFingerprint: "",
 			},
 			newFingerprint: "new-fingerprint",
-			want:           false,
+			want:           true,
 		},
 	}
 

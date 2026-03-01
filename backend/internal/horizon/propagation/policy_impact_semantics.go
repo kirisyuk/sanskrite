@@ -158,6 +158,15 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisOperationalContinuity: 0.90,
 		},
 	},
+	horizonmodels.DependencyTypeTriggeredBy: {
+		BaseFactor:        0.95,
+		DefaultAxisFactor: 0.75,
+		AxisFactor: map[string]float64{
+			horizonmodels.AxisGeoConflict:           1.20,
+			horizonmodels.AxisOperationalContinuity: 1.10,
+			horizonmodels.AxisInfoUncertainty:       1.05,
+		},
+	},
 	horizonmodels.DependencyTypeInfluences: {
 		BaseFactor:        0.80,
 		DefaultAxisFactor: 0.50,
@@ -235,13 +244,16 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 		},
 	},
 	horizonmodels.DependencyTypeAffects: {
-		BaseFactor:        0.90,
-		DefaultAxisFactor: 0.65,
+		BaseFactor:        0.92,
+		DefaultAxisFactor: 0.70,
 		AxisFactor: map[string]float64{
-			horizonmodels.AxisPhysicalFlowDemand:  0.95,
-			horizonmodels.AxisFinancialSettlement: 0.95,
-			horizonmodels.AxisLegalCompliance:     0.90,
-			horizonmodels.AxisInfoUncertainty:     0.95,
+			horizonmodels.AxisGeoConflict:           1.15,
+			horizonmodels.AxisOperationalContinuity: 1.10,
+			horizonmodels.AxisPhysicalFlowDemand:    0.95,
+			horizonmodels.AxisFinancialSettlement:   0.95,
+			horizonmodels.AxisLegalCompliance:       0.90,
+			horizonmodels.AxisInfoUncertainty:      0.95,
+			horizonmodels.AxisLogisticsCapacity:     0.85,
 		},
 	},
 	horizonmodels.DependencyTypeInGeoScope: {
@@ -283,6 +295,17 @@ func policyImpactTransferNodeFactor(node *horizonmodels.HorizonFragment, axis st
 	}
 	cp := strings.TrimSpace(node.CanonicalPath)
 	switch node.Type {
+	case horizonmodels.FragmentTypeAffectedZone:
+		switch axis {
+		case horizonmodels.AxisGeoConflict:
+			return 1.25
+		case horizonmodels.AxisOperationalContinuity:
+			return 1.15
+		case horizonmodels.AxisInfoUncertainty:
+			return 1.08
+		default:
+			return 0.90
+		}
 	case horizonmodels.FragmentTypeGeoRegion:
 		switch axis {
 		case horizonmodels.AxisGeoConflict:

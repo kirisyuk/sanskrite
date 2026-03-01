@@ -497,7 +497,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
                   <LensCanvasCockpit 
                     lensId={lensId} 
-                    projectId={lens.projectId}
+                    projectId={lens.projectId ?? projectId}
                     onScopeScout={handleScopeScout}
                     inspectorActive={panelType === 'object-inspector'}
                     onToggleInspector={() => setPanelType(panelType === 'object-inspector' ? null : 'object-inspector')}

@@ -609,6 +609,33 @@ func attachGeoCoordinatesFromGeoNames(fragment *models.HorizonFragment, place *c
 	}
 }
 
+// isFinancialProductContext returns true if the fragment suggests a financial product
+// (path prefix, labels, or identifiers indicate finance/banking/investment context).
+// Used to avoid coercing financial products into generic mechanical/assembly paths.
+func isFinancialProductContext(fragment *models.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
+	if strings.HasPrefix(cp, "/product/finance/") || strings.HasPrefix(cp, "/product/financial/") {
+		return true
+	}
+	joined := cp + " " +
+		strings.ToLower(strings.TrimSpace(fragment.Labels["en"])) + " " +
+		strings.ToLower(strings.TrimSpace(fragment.Identifiers["legalName"])) + " " +
+		strings.ToLower(strings.TrimSpace(fragment.Identifiers["shortName"]))
+	keywords := []string{
+		"equity", "equity-investment", "investment", "shareholding", "loan", "credit", "bond",
+		"securities", "derivative", "fund", "deposit", "capital", "financing", "banking",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(joined, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // repairInvalidCanonicalPath tries to deterministically map an invalid canonical path
 // into a valid, type-compatible fallback path so creation can proceed without breaking
 // the scouting -> research -> critic -> policy chain.
@@ -637,7 +664,11 @@ func repairInvalidCanonicalPath(fragment *models.HorizonFragment) (string, bool)
 	case models.FragmentTypeGeoRegion:
 		candidate = taxonomy.JoinPath("loc", "na", "na", slug)
 	case models.FragmentTypeProduct:
-		candidate = taxonomy.JoinPath("product", "finished", "mechanical", "assembly", slug)
+		if isFinancialProductContext(fragment) {
+			candidate = taxonomy.JoinPath("product", "service", "financial", "na", slug)
+		} else {
+			candidate = taxonomy.JoinPath("product", "finished", "mechanical", "assembly", slug)
+		}
 	case models.FragmentTypeProgram:
 		candidate = taxonomy.JoinPath("program", "global", slug)
 	case models.FragmentTypeMarket:

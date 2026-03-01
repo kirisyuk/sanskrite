@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "site": "h1horizon-488615",
+    "site": "etigram",
     "public": "dist",
     "ignore": [
       "firebase.json",

@@ -29,6 +29,36 @@ func TestNormalizeGeoPathToStrict(t *testing.T) {
 	}
 }
 
+func TestValidateRedirectCompatibility_MarketSameDomain(t *testing.T) {
+	if !ValidateRedirectCompatibility("/market/sa/finance/banking", "/market/sa/finance/islamic-banking", models.FragmentTypeMarket) {
+		t.Fatalf("same domain (finance) redirect should be compatible")
+	}
+}
+
+func TestValidateRedirectCompatibility_MarketCrossDomainRejected(t *testing.T) {
+	if ValidateRedirectCompatibility("/market/sa/finance/banking", "/market/sa/technology/banking", models.FragmentTypeMarket) {
+		t.Fatalf("cross-domain redirect (finance->technology) should be rejected")
+	}
+}
+
+func TestValidateRedirectCompatibility_NonMarketAllowed(t *testing.T) {
+	if !ValidateRedirectCompatibility("/org/na/foo", "/org/us/foo-inc", models.FragmentTypeOrganization) {
+		t.Fatalf("non-MARKET redirect should be allowed")
+	}
+}
+
+func TestExtractMarketDomain(t *testing.T) {
+	if got := extractMarketDomain("/market/sa/finance/banking"); got != "finance" {
+		t.Fatalf("extractMarketDomain(/market/sa/finance/banking)=%q, want finance", got)
+	}
+	if got := extractMarketDomain("/market/sa/technology/banking"); got != "technology" {
+		t.Fatalf("extractMarketDomain(/market/sa/technology/banking)=%q, want technology", got)
+	}
+	if got := extractMarketDomain("/org/us/tesla"); got != "" {
+		t.Fatalf("extractMarketDomain(/org/us/tesla)=%q, want empty", got)
+	}
+}
+
 func TestInferFragmentTypeFromCanonicalPath(t *testing.T) {
 	cases := []struct {
 		in   string

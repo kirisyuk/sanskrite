@@ -1,84 +1,129 @@
 package lens
 
 import (
+	"reflect"
+	"sort"
 	"testing"
 )
 
-func TestSplitScope(t *testing.T) {
+func TestClassifyScope(t *testing.T) {
 	tests := []struct {
-		name           string
-		scope          []string
-		wantStatic     []string
-		wantQueryAddrs []string
+		name             string
+		scope            []string
+		wantStatic       []string
+		wantQueries      []string
+		wantArtifactRefs []string
 	}{
 		{
-			name:           "only static paths",
-			scope:          []string{"/org/tsmc", "/fac/tsmc/fab-21"},
-			wantStatic:     []string{"/org/tsmc", "/fac/tsmc/fab-21"},
-			wantQueryAddrs: []string{},
+			name:             "empty scope",
+			scope:            nil,
+			wantStatic:       []string{},
+			wantQueries:      []string{},
+			wantArtifactRefs: []string{},
 		},
 		{
-			name:           "only query addresses",
-			scope:          []string{"/query/sector:/Technology/**", "/query/location:/loc/id/**"},
-			wantStatic:     []string{},
-			wantQueryAddrs: []string{"/query/sector:/Technology/**", "/query/location:/loc/id/**"},
+			name:             "static paths only",
+			scope:            []string{"/org/albemarle", "/product/lithium"},
+			wantStatic:       []string{"/org/albemarle", "/product/lithium"},
+			wantQueries:      []string{},
+			wantArtifactRefs: []string{},
 		},
 		{
-			name:           "mixed scope",
-			scope:          []string{"/org/tsmc", "/query/sector:/Technology/**", "/fac/tsmc/fab-21"},
-			wantStatic:     []string{"/org/tsmc", "/fac/tsmc/fab-21"},
-			wantQueryAddrs: []string{"/query/sector:/Technology/**"},
+			name:             "mixed scope",
+			scope:            []string{"/org/albemarle", "/query/sector:/Technology/**", "/artifact/supply-chain/global/test"},
+			wantStatic:       []string{"/org/albemarle"},
+			wantQueries:      []string{"/query/sector:/Technology/**"},
+			wantArtifactRefs: []string{"/artifact/supply-chain/global/test"},
 		},
 		{
-			name:           "empty scope",
-			scope:          []string{},
-			wantStatic:     []string{},
-			wantQueryAddrs: []string{},
+			name:             "artifact refs only",
+			scope:            []string{"/artifact/supply-chain/global/a", "/artifact/governance-chain/global/b"},
+			wantStatic:       []string{},
+			wantQueries:      []string{},
+			wantArtifactRefs: []string{"/artifact/supply-chain/global/a", "/artifact/governance-chain/global/b"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotStatic, gotQueryAddrs := splitScope(tt.scope)
-			
-			if len(gotStatic) != len(tt.wantStatic) {
-				t.Errorf("splitScope() static paths count = %d, want %d", len(gotStatic), len(tt.wantStatic))
+			gotStatic, gotQueries, gotArtifacts := classifyScope(tt.scope)
+			if !reflect.DeepEqual(gotStatic, tt.wantStatic) {
+				t.Errorf("staticPaths = %v, want %v", gotStatic, tt.wantStatic)
 			}
-			
-			if len(gotQueryAddrs) != len(tt.wantQueryAddrs) {
-				t.Errorf("splitScope() query addresses count = %d, want %d", len(gotQueryAddrs), len(tt.wantQueryAddrs))
+			if !reflect.DeepEqual(gotQueries, tt.wantQueries) {
+				t.Errorf("queryAddresses = %v, want %v", gotQueries, tt.wantQueries)
 			}
-			
-			// Check static paths
-			staticMap := make(map[string]bool)
-			for _, p := range gotStatic {
-				staticMap[p] = true
-			}
-			for _, want := range tt.wantStatic {
-				if !staticMap[want] {
-					t.Errorf("splitScope() missing static path %q", want)
-				}
-			}
-			
-			// Check query addresses
-			queryMap := make(map[string]bool)
-			for _, p := range gotQueryAddrs {
-				queryMap[p] = true
-			}
-			for _, want := range tt.wantQueryAddrs {
-				if !queryMap[want] {
-					t.Errorf("splitScope() missing query address %q", want)
-				}
+			sort.Strings(gotArtifacts)
+			sort.Strings(tt.wantArtifactRefs)
+			if !reflect.DeepEqual(gotArtifacts, tt.wantArtifactRefs) {
+				t.Errorf("artifactRefs = %v, want %v", gotArtifacts, tt.wantArtifactRefs)
 			}
 		})
 	}
 }
 
+func TestIsArtifactScopeEntry(t *testing.T) {
+	tests := []struct {
+		entry string
+		want  bool
+	}{
+		{"/artifact/supply-chain/global/test", true},
+		{"/artifact/governance-chain/global/x", true},
+		{"/org/albemarle", false},
+		{"/query/sector:/Technology/**", false},
+		{"", false},
+		{"artifact/no-slash-prefix", false},
+		{" /artifact/with-space ", true},
+	}
 
+	for _, tt := range tests {
+		t.Run(tt.entry, func(t *testing.T) {
+			got := IsArtifactScopeEntry(tt.entry)
+			if got != tt.want {
+				t.Errorf("IsArtifactScopeEntry(%q) = %v, want %v", tt.entry, got, tt.want)
+			}
+		})
+	}
+}
 
+func TestArtifactKeyFromScopeEntry(t *testing.T) {
+	tests := []struct {
+		entry string
+		want  string
+	}{
+		{"/artifact/supply-chain/global/test", "/supply-chain/global/test"},
+		{"/artifact//already-has-slash", "/already-has-slash"},
+		{"/artifact/no-leading-slash", "/no-leading-slash"},
+		{"/org/albemarle", ""},
+		{"", ""},
+	}
 
+	for _, tt := range tests {
+		t.Run(tt.entry, func(t *testing.T) {
+			got := ArtifactKeyFromScopeEntry(tt.entry)
+			if got != tt.want {
+				t.Errorf("ArtifactKeyFromScopeEntry(%q) = %q, want %q", tt.entry, got, tt.want)
+			}
+		})
+	}
+}
 
+func TestSplitScopeBackwardCompat(t *testing.T) {
+	scope := []string{"/org/test", "/query/sector:/Tech/**", "/artifact/supply-chain/global/x"}
+	staticPaths, queryAddresses := splitScope(scope)
 
+	if len(queryAddresses) != 1 || queryAddresses[0] != "/query/sector:/Tech/**" {
+		t.Errorf("splitScope queryAddresses = %v, want 1 query address", queryAddresses)
+	}
 
-
-
+	found := false
+	for _, p := range staticPaths {
+		if p == "/artifact/supply-chain/global/x" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("splitScope should include artifact refs in static paths for backward compat, got %v", staticPaths)
+	}
+}

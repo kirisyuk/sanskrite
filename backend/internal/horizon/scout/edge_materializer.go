@@ -130,7 +130,8 @@ func (e *ScoutEngine) materializeRelationEdge(
 	}
 
 	// Enforce directional semantics for common relations (best-effort, heuristic).
-	edgeSourceID, edgeTargetID, edgeType, directionChanged := normalizeRelationEdge(explicitSourceFragment, edgeSourceID, edgeTargetID, edgeType, targetType, enableManagement)
+	// Pass qualifiers for role-based swap when LLM outputs inverted direction (e.g. subsidiary->owner for OWNS).
+	edgeSourceID, edgeTargetID, edgeType, directionChanged := normalizeRelationEdge(explicitSourceFragment, edgeSourceID, edgeTargetID, edgeType, targetType, enableManagement, rel.Qualifiers)
 	switch edgeType {
 	case "SUBSIDIARY_OF":
 		edgeType = models.DependencyTypeOwns
@@ -287,6 +288,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 			})
 		}
 	}
+	effectiveQualifiers, _ := withDeterministicDirectionalRoleQualifiers(edgeType, srcTypeActual, dstTypeActual, rel.Qualifiers)
 
 	// Policy: direction validation and reversal (enforced for known edge types).
 	if e.validationPolicy != nil {
@@ -317,7 +319,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 				"targetCanonicalPath": dstPathActual,
 				"relationType":        string(edgeType),
 				"reason":              strings.TrimSpace(rel.Reason),
-				"qualifiers":          rel.Qualifiers,
+				"qualifiers":          effectiveQualifiers,
 			},
 			Fragment: nil,
 		})
@@ -433,7 +435,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 	}
 
 	// In-memory dedup (per job run), after all normalization.
-	dedupVariant := edgeDedupVariant(edgeType, rawRelationType, rel.Qualifiers, rel.Reason)
+	dedupVariant := edgeDedupVariant(edgeType, rawRelationType, effectiveQualifiers, rel.Reason)
 	if seenEdgeKeys != nil {
 		ek := edgeDedupKey(edgeSourceID, edgeTargetID, edgeType, dedupVariant)
 		if _, ok := seenEdgeKeys[ek]; ok {
@@ -528,8 +530,8 @@ func (e *ScoutEngine) materializeRelationEdge(
 			}
 		}
 	}
-	if len(rel.Qualifiers) > 0 {
-		edge.Qualifiers = mergeQualifiers(edge.Qualifiers, rel.Qualifiers)
+	if len(effectiveQualifiers) > 0 {
+		edge.Qualifiers = mergeQualifiers(edge.Qualifiers, effectiveQualifiers)
 	}
 	// Canonicalize qualifier facility paths (at_facility, transport_via) — same rules as other fragments
 	edge.Qualifiers = e.canonicalizeQualifierFacilityPaths(ctx, edge.Qualifiers, nil)
@@ -768,11 +770,11 @@ type EdgeBatchBuffer struct {
 }
 
 type edgeBatchMeta struct {
-	sourcePath string
-	targetPath string
+	sourcePath  string
+	targetPath  string
 	sourceLabel string
 	targetLabel string
-	job        *models.ScoutingJob
+	job         *models.ScoutingJob
 }
 
 // NewEdgeBatchBuffer creates an empty batch buffer.

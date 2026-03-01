@@ -71,7 +71,7 @@ func getPayPalLocale() string {
 func (c *Client) CreateSubscriptionPlan(ctx context.Context, tier string, price string, currency string, productID string) (*paypal.SubscriptionPlan, error) {
 	// Create product first if not provided (one-time, should be created separately)
 	// For now, we'll assume productID is provided or create it inline
-	
+
 	plan := paypal.SubscriptionPlan{
 		ProductId:   productID,
 		Name:        fmt.Sprintf("%s Monthly Subscription", tier),
@@ -95,12 +95,12 @@ func (c *Client) CreateSubscriptionPlan(ctx context.Context, tier string, price 
 			},
 		},
 		PaymentPreferences: &paypal.PaymentPreferences{
-			AutoBillOutstanding:     true,
+			AutoBillOutstanding: true,
 			SetupFee: &paypal.Money{
 				Currency: currency,
 				Value:    "0",
 			},
-			SetupFeeFailureAction: "CONTINUE",
+			SetupFeeFailureAction:   "CONTINUE",
 			PaymentFailureThreshold: 3,
 		},
 		QuantitySupported: false,
@@ -113,7 +113,7 @@ func (c *Client) CreateSubscriptionPlan(ctx context.Context, tier string, price 
 	if taxPercentage == "" {
 		taxPercentage = "12" // Default VAT for Kazakhstan
 	}
-	
+
 	// If tax is not included in price (inclusive=false), PayPal will add it
 	// If inclusive=true, tax is already included in the price
 	taxInclusive := os.Getenv("PAYPAL_TAX_INCLUSIVE") == "true"
@@ -140,18 +140,18 @@ func (c *Client) CreateSubscriptionPlan(ctx context.Context, tier string, price 
 // CreateSubscription creates a subscription from a plan
 func (c *Client) CreateSubscription(ctx context.Context, planID string, returnURL string, cancelURL string) (*paypal.SubscriptionDetailResp, error) {
 	startTime := time.Now().Add(1 * time.Minute) // Start 1 minute from now
-	
+
 	startTimeJSON := paypal.JSONTime(startTime)
 	subscription := paypal.SubscriptionBase{
-		PlanID: planID,
+		PlanID:    planID,
 		StartTime: &startTimeJSON,
 		ApplicationContext: &paypal.ApplicationContext{
-			BrandName:          "HATLONE",
+			BrandName:          "ETIGRAM",
 			Locale:             getPayPalLocale(), // Default to en-US, can be configured
 			ShippingPreference: paypal.ShippingPreferenceNoShipping,
 			UserAction:         paypal.UserActionSubscribeNow,
-			ReturnURL:           returnURL,
-			CancelURL:           cancelURL,
+			ReturnURL:          returnURL,
+			CancelURL:          cancelURL,
 		},
 		AutoRenewal: true,
 	}

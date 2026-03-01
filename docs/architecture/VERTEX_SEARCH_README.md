@@ -7,7 +7,7 @@ Set these in your deployment:
 - `VERTEX_SEARCH_DATA_STORE_ID=rag-documents-store`
 - `VERTEX_SEARCH_LOCATION=global`
 - `GEMINI_API_KEY=<your-key>`
-- `RAG_DOCUMENTS_BUCKET=h1horizon-488615-rag-documents`
+- `RAG_DOCUMENTS_BUCKET=etigram-rag-documents`
 
 Backend automatically sets up sync - no manual setup needed!
 
@@ -73,6 +73,6 @@ See [vertex-search-multi-tenancy.md](./vertex-search-multi-tenancy.md) for detai
    curl -X POST \
      -H "Authorization: Bearer $ACCESS_TOKEN" \
      -H "Content-Type: application/json" \
-     "https://discoveryengine.googleapis.com/v1beta/projects/h1horizon-488615/locations/global/collections/default_collection/dataStores/rag-documents-store/branches/default_branch/documents:import" \
-     -d '{"gcsSource": {"inputUris": ["gs://h1horizon-488615-rag-documents/**"], "dataSchema": "content"}, "reconciliationMode": "INCREMENTAL"}'
+     "https://discoveryengine.googleapis.com/v1beta/projects/etigram/locations/global/collections/default_collection/dataStores/rag-documents-store/branches/default_branch/documents:import" \
+     -d '{"gcsSource": {"inputUris": ["gs://etigram-rag-documents/**"], "dataSchema": "content"}, "reconciliationMode": "INCREMENTAL"}'
    ```

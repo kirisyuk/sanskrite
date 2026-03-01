@@ -9,7 +9,8 @@ import (
 var registry = make(map[EntityTypeKey]*EntityTypeDefinition)
 
 // ResolveByPath returns the entity type key for a canonical path.
-// Path takes precedence over fragment type (e.g. /gov/ -> GOV even with ORGANIZATION type).
+// Path takes precedence over fragment type (e.g. /market/ -> MARKET even when extraction returns ORGANIZATION).
+// This prevents taxonomy/extraction misclassification from yielding wrong MissingInfoRules.
 func ResolveByPath(canonicalPath string, fragmentType models.FragmentType, communityType string) EntityTypeKey {
 	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
 	ct := strings.TrimSpace(strings.ToLower(communityType))
@@ -18,8 +19,39 @@ func ResolveByPath(canonicalPath string, fragmentType models.FragmentType, commu
 		ft = inferFragmentTypeFromPath(cp)
 	}
 
+	// Path precedence: canonical path overrides fragment type from extraction.
 	if strings.HasPrefix(cp, "/gov/") {
 		return EntityTypeGov
+	}
+	if strings.HasPrefix(cp, "/market/") {
+		return EntityTypeMarket
+	}
+	if strings.HasPrefix(cp, "/product/") {
+		return EntityTypeProduct
+	}
+	if strings.HasPrefix(cp, "/person/") {
+		return EntityTypePerson
+	}
+	if strings.HasPrefix(cp, "/fac/") {
+		return EntityTypeFacility
+	}
+	if strings.HasPrefix(cp, "/deposit/") {
+		return EntityTypeDeposit
+	}
+	if strings.HasPrefix(cp, "/community/") {
+		if ct == "dynasty" || strings.Contains(cp, "/dynasty/") {
+			return EntityTypeCommunityDynasty
+		}
+		if ct == "tribe" || strings.Contains(cp, "/tribe/") {
+			return EntityTypeCommunityTribe
+		}
+		return EntityTypeCommunity
+	}
+	if strings.HasPrefix(cp, "/program/") {
+		return EntityTypeProgram
+	}
+	if strings.HasPrefix(cp, "/loc/") || strings.HasPrefix(cp, "/region/") || strings.HasPrefix(cp, "/geo/") {
+		return EntityTypeGeoRegion
 	}
 	if strings.HasPrefix(cp, "/decision/") || ft == models.FragmentTypeDecisionPoint {
 		return EntityTypeDecisionPoint
@@ -29,6 +61,12 @@ func ResolveByPath(canonicalPath string, fragmentType models.FragmentType, commu
 	}
 	if strings.HasPrefix(cp, "/domain/") || ft == models.FragmentTypeDomain {
 		return EntityTypeDomain
+	}
+	if strings.HasPrefix(cp, "/zone/") || ft == models.FragmentTypeAffectedZone {
+		return EntityTypeAffectedZone
+	}
+	if strings.HasPrefix(cp, "/org/") {
+		return EntityTypeOrganization
 	}
 
 	switch ft {
@@ -54,6 +92,8 @@ func ResolveByPath(canonicalPath string, fragmentType models.FragmentType, commu
 		return EntityTypePerson
 	case models.FragmentTypeGeoRegion:
 		return EntityTypeGeoRegion
+	case models.FragmentTypeAffectedZone:
+		return EntityTypeAffectedZone
 	case models.FragmentTypeOrganization:
 		return EntityTypeOrganization
 	}
@@ -86,6 +126,8 @@ func inferFragmentTypeFromPath(cp string) models.FragmentType {
 		return models.FragmentTypePerson
 	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"), strings.HasPrefix(cp, "/geo/"):
 		return models.FragmentTypeGeoRegion
+	case strings.HasPrefix(cp, "/zone/"):
+		return models.FragmentTypeAffectedZone
 	default:
 		return ""
 	}

@@ -4,11 +4,11 @@
 
 ## GCP проект
 
-**Проект по умолчанию:** `h1horizon-488615` (имя: h1horizon)
+**Проект по умолчанию:** `etigram` (имя: etigram)
 
 Перед развёртыванием убедитесь, что gcloud настроен на нужный проект:
 ```bash
-gcloud config set project h1horizon-488615
+gcloud config set project etigram
 ```
 
 ## Скрипты
@@ -27,16 +27,16 @@ gcloud config set project h1horizon-488615
   - Agent топики: `agent.update`
   - Interaction топики: `interaction.created`, `interaction.updated`
   - Verified топики: `verified.stream`
-  - Aggregated топики: `hatlone.*` (9 топиков)
+  - Aggregated топики: `etigram.*` (9 топиков)
 
 - **Pub/Sub подписки** (11 подписок):
-  - Подписки для hatlone-ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
+  - Подписки для etigram-ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
 
 - **Cloud Scheduler Jobs** (4 jobs):
-  - `h1horizon-source-poller` - опрос источников каждые 5 минут
-  - `h1horizon-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
+  - `etigram-source-poller` - опрос источников каждые 5 минут
+  - `etigram-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
   - `subscription-billing-daily` - ежедневный биллинг подписок в 02:00 UTC
-  - `h1horizon-horizon-watchdog` - опциональный watchdog для Horizon (только с флагом `--horizon-watchdog`)
+  - `etigram-watchdog` - опциональный watchdog для Etigram Horizon (только с флагом `--etigram-watchdog`)
 
 ### 2. `scripts/create-secrets.sh` - Создание секретов
 
@@ -121,7 +121,7 @@ python3 /tmp/check_infrastructure.py
 ## Дополнительные скрипты
 
 - `scripts/setup-interaction-topics.sh` - создание топиков для interaction событий (интегрировано в deploy)
-- `scripts/setup-horizon-pubsub.sh` - создание топиков для Horizon (интегрировано в deploy)
+- `scripts/setup-etigram-pubsub.sh` - создание топиков для Etigram (интегрировано в deploy)
 - `scripts/create-vertex-search-datastore.sh` - создание Vertex AI Search Data Store (rag-documents-store)
 - `scripts/ensure-vertex-ai-sa-bucket-access.sh` - выдача Vertex AI SA доступа к RAG bucket (если deploy не смог — SA создаётся при первом использовании Vertex AI)
 

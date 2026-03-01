@@ -8,6 +8,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 type StrategicOverlayResult struct {
@@ -192,10 +193,11 @@ MECHANISM = A SPECIFIC INSTRUMENT/REGIME OF CONTROL (noun-based)
   - NOT scoped to domain (mechanisms are shared across domains)
   - MUST specify the object ("license WHAT?", "controls WHAT?")
   - Examples of GOOD titles:
-    ✓ "Banking License" (specific: license for banking)
     ✓ "EUV Export Control" (specific: export control for EUV)
     ✓ "Entity List" (specific sanction mechanism)
-    ✓ "Capital Market Service Licensing" (specific: licensing for capital market services)
+    ✓ "Banking License" (specific: license for banking)
+    ✓ "Mining License" (specific: license for mining operations)
+    ✓ "Pharmaceutical Approval" (specific: approval for drugs)
   - Examples of BAD titles (too abstract):
     ✗ "Licensing" (license what?)
     ✗ "Regulation" (regulate what?)
@@ -203,8 +205,8 @@ MECHANISM = A SPECIFIC INSTRUMENT/REGIME OF CONTROL (noun-based)
     ✗ "Compliance" (compliance with what?)
 
 KEY DIFFERENCE:
-  - DECISION POINT: "The act of granting a banking license" (verb: grant)
-  - MECHANISM: "The banking license regime" (noun: the regime itself)
+  - DECISION POINT: "The act of granting a license" (verb: grant) — e.g., grant mining license, grant banking license
+  - MECHANISM: "The license regime itself" (noun) — e.g., mining-license, banking-license
   - One agent GATEKEEPS the decision, another agent USES the mechanism to enforce it.
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -234,12 +236,13 @@ MECHANISM PATH & FORMAT RULES
   - technological: IP lock-in, standards control, patent portfolio
   - contractual: exclusivity, long-term agreements, joint ventures
   - political: diplomatic pressure, trade negotiations, alliances
-- slug: lowercase kebab-case, MUST include the object (e.g., "banking-license" not "licensing")
+- slug: lowercase kebab-case, MUST include the object (e.g., %s — NOT "licensing")
 - VALIDATION: If slug is generic (licensing, regulation, oversight, supervision, compliance, monitoring, enforcement), REJECT and rephrase with object.
 - Mechanisms are REUSABLE across domains. Same mechanism can be used by multiple agents.
 - Examples:
   - /mechanism/regulatory/euv-export-control → "EUV Export Control Regime"
   - /mechanism/regulatory/entity-list → "Entity List"
+  - /mechanism/regulatory/mining-license → "Mining License"
   - /mechanism/regulatory/banking-license → "Banking License"
   - /mechanism/economic/capacity-allocation → "Capacity Allocation"
   - /mechanism/contractual/exclusivity-agreement → "Exclusivity Agreement"
@@ -279,7 +282,7 @@ STRATEGIC EDGE RULES:
      - mode: "block" | "enable" | "delay" | "monitor"
      - mechanism: /mechanism/... canonical path (if known)
      - reason: short rationale (optional)
-   - Example: /gov/sa/sama --[GATEKEEPS_DECISION]--> /decision/sa-banking/grant-banking-license
+   - Examples: /gov/sa/sama --[GATEKEEPS_DECISION]--> /decision/sa-banking/grant-banking-license; /gov/us/bis --[GATEKEEPS_DECISION]--> /decision/export-control/approve-euv-export
 
 4. USES_MECHANISM (tool possession):
    - Source: DECISION_POINT, ORGANIZATION, GOV, or COMMUNITY
@@ -322,5 +325,5 @@ OUTPUT RULES:
 - Each mechanism MUST have at least one APPLIES_TO edge to a graph entity (what it affects).
 - STRICT: Prefer 2–5 high-quality, well-connected decision points over 10+ abstract ones. When in doubt, omit.
 - Focus on ACTIONABLE control: what can actually be blocked/enabled/delayed, and WHO/WHAT is affected.
-`, domainPath, domainTitle, domainDesc, focusBlock, graphBlock)
+`, domainPath, domainTitle, domainDesc, focusBlock, graphBlock, taxonomy.MechanismSlugExamplesString())
 }

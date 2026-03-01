@@ -21,14 +21,65 @@ func TestShouldRunInlineStrategicCollect_DefaultOffAndOptIn(t *testing.T) {
 
 func TestShouldRunStrategicOverlay_NoSupplyChainFallback(t *testing.T) {
 	e := &ScoutEngine{}
-	if e.shouldRunStrategicOverlay("supply-chain", 3, 2) {
+	if e.shouldRunStrategicOverlay("supply-chain", 3, 2, nil) {
 		t.Fatalf("supply-chain must not auto-run strategic overlay")
 	}
-	if e.shouldRunStrategicOverlay("unknown-contract", 3, 2) {
+	if e.shouldRunStrategicOverlay("unknown-contract", 3, 2, nil) {
 		t.Fatalf("unknown contracts must not auto-run strategic overlay")
 	}
-	if !e.shouldRunStrategicOverlay("risk-assessment", 3, 2) {
+	if !e.shouldRunStrategicOverlay("risk-assessment", 3, 2, nil) {
 		t.Fatalf("risk-assessment should auto-run strategic overlay")
+	}
+}
+
+func TestShouldRunStrategicOverlay_AlwaysForGovEntities(t *testing.T) {
+	e := &ScoutEngine{}
+
+	govPaths := []string{"/org/kz/telecom", "/gov/sa/sama", "/market/kz/banking"}
+	if !e.shouldRunStrategicOverlay("supply-chain", 3, 2, govPaths) {
+		t.Fatalf("strategic overlay must auto-run when /gov/ entities are present, regardless of contract type")
+	}
+
+	nonGovPaths := []string{"/org/kz/telecom", "/market/kz/banking"}
+	if e.shouldRunStrategicOverlay("supply-chain", 3, 2, nonGovPaths) {
+		t.Fatalf("supply-chain without gov entities must not auto-run strategic overlay")
+	}
+
+	if !e.shouldRunStrategicOverlay("supply-chain", 1, 0, []string{"/gov/iq/federal-government"}) {
+		t.Fatalf("single gov entity must trigger strategic overlay")
+	}
+
+	if !e.shouldRunStrategicOverlay("ecosystem-mapping", 2, 1, nil) {
+		t.Fatalf("ecosystem-mapping should still trigger strategic overlay via contract type")
+	}
+
+	if e.shouldRunStrategicOverlay("supply-chain", 0, 0, []string{"/gov/sa/sama"}) {
+		t.Fatalf("zero entities and relations must not trigger strategic overlay even with gov paths")
+	}
+}
+
+func TestCollectAllEntityPaths_IncludesRelationTargets(t *testing.T) {
+	firstOrder := []string{"/org/ar/barrick-gold", "/fac/minera-argentina-gold/veladero-mine"}
+	rels := []agents.DiscoveredRelation{
+		{TargetCanonicalPath: "/org/ar/barrick-gold"}, // duplicate
+		{TargetCanonicalPath: "/gov/ar/secretaria-de-mineria"},
+		{TargetCanonicalPath: "/loc/ar/na/na"},
+		{TargetCanonicalPath: ""}, // empty
+	}
+	paths := collectAllEntityPaths(firstOrder, rels)
+	expected := map[string]bool{
+		"/org/ar/barrick-gold":                true,
+		"/fac/minera-argentina-gold/veladero-mine": true,
+		"/gov/ar/secretaria-de-mineria":        true,
+		"/loc/ar/na/na":                        true,
+	}
+	if len(paths) != len(expected) {
+		t.Fatalf("expected %d paths, got %d: %v", len(expected), len(paths), paths)
+	}
+	for _, p := range paths {
+		if !expected[p] {
+			t.Fatalf("unexpected path: %s", p)
+		}
 	}
 }
 
@@ -46,7 +97,7 @@ func TestSanitizeDomainResearchRelations_StripsCrossModeNoise(t *testing.T) {
 		{
 			SourceCanonicalPath: "/org/cn/huawei",
 			TargetCanonicalPath: "/org/kz/kazakhtelecom",
-			RelationType:        "PARTICIPATES_IN",
+			RelationType:        "BOARD_MEMBER_OF",
 		},
 	}
 	out := sanitizeDomainResearchRelations("/domain/v1/supply-chain/telecom", "supply-chain", in)

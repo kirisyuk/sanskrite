@@ -24,6 +24,10 @@ func (f *fakeGeoNames) GetHierarchy(ctx context.Context, geonameID int) (*coreon
 	return nil, nil
 }
 
+func (f *fakeGeoNames) GetCountryCode(ctx context.Context, lat, lon float64) (string, error) {
+	return "", nil
+}
+
 func TestNormalizeGeoPathViaGeoNames_StrictAdminFix(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeGeoNames{

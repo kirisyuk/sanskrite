@@ -78,6 +78,7 @@ type ParsedChainStats struct {
 	EdgesCreated             int `json:"edgesCreated"`
 	EdgesSkippedMissingCP    int `json:"edgesSkippedMissingCanonicalPath"`
 	EdgesInvertedToDependsOn int `json:"edgesInvertedToDependsOn"`
+	EdgesAbstainedUnknownPair int `json:"edgesAbstainedUnknownPair"`
 }
 
 // ChainEdge represents an edge in a supply chain graph.
@@ -155,8 +156,13 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 					continue
 				}
 
-				edge := p.createEdgeBetweenNodes(node, nextNode, chain.Confidence, chain.Reason)
-				if edge != nil {
+				edge, abstained := p.createEdgeBetweenNodes(node, nextNode, chain.Confidence, chain.Reason)
+				if abstained {
+					result.Stats.EdgesAbstainedUnknownPair++
+					result.ParseWarnings = append(result.ParseWarnings,
+						fmt.Sprintf("abstain: unknown pair fromType=%s toType=%s paths=%s,%s",
+							node.Type, nextNode.Type, canonicalPath, nextPath))
+				} else if edge != nil {
 					result.Edges = append(result.Edges, edge)
 					result.Stats.EdgesCreated++
 					if edge.RelationType == string(models.DependencyTypeDependsOn) &&
@@ -211,6 +217,11 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 				prodPath := strings.TrimSpace(prod.CanonicalPath)
 				dstPath := strings.TrimSpace(b.CanonicalPath)
 				if srcPath != "" && prodPath != "" && dstPath != "" {
+					if p.isFinancialFlowProduct(prodPath, prod.Name) {
+						result.ParseWarnings = append(result.ParseWarnings,
+							fmt.Sprintf("segment %s→%s skipped SUPPLIES_TO: financial-flow product %s", srcPath, dstPath, prodPath))
+						continue
+					}
 					seg := &SupplyLinkSegment{
 						SupplierRef: srcPath,
 						ProductRef:  prodPath,
@@ -520,11 +531,12 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 // - Facility → Deposit: EXTRACTS_FROM
 // - Actor → Actor: no direct inference (ambiguous without product-flow context)
 // - Product → Product: TRANSFORMS_INTO
-func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNode, confidence float64, reason string) *ChainEdge {
+// - Unknown pair: abstain (return nil, true) instead of creating generic DEPENDS_ON.
+func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNode, confidence float64, reason string) (*ChainEdge, bool) {
 	fromPath := strings.TrimSpace(from.CanonicalPath)
 	toPath := strings.TrimSpace(to.CanonicalPath)
 	if fromPath == "" || toPath == "" {
-		return nil
+		return nil, false
 	}
 
 	fromIsActor := p.isActorType(from.Type, fromPath)
@@ -544,7 +556,12 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 			RelationType:        string(models.DependencyTypeDependsOn),
 			Confidence:          confidence,
 			Reason:              fmt.Sprintf("Supply chain: %s consumes %s. %s", to.Name, from.Name, reason),
-		}
+			Qualifiers: map[string]interface{}{
+				"source_role":     "dependent",
+				"target_role":     "dependency",
+				"direction_basis": "consumer_to_supplier",
+			},
+		}, false
 	case p.isFacilityType(from.Type, fromPath) && p.isDepositType(to.Type, toPath):
 		return &ChainEdge{
 			SourceCanonicalPath: fromPath,
@@ -552,9 +569,9 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 			RelationType:        string(models.DependencyTypeExtractsFrom),
 			Confidence:          confidence,
 			Reason:              fmt.Sprintf("Supply chain: %s extracts from %s. %s", from.Name, to.Name, reason),
-		}
+		}, false
 	case fromIsActor && toIsActor:
-		return nil
+		return nil, false
 	case fromIsProduct && toIsProduct:
 		relationType = string(models.DependencyTypeTransformsInto)
 		srcPath, dstPath := fromPath, toPath
@@ -567,9 +584,9 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 			RelationType:        relationType,
 			Confidence:          confidence,
 			Reason:              fmt.Sprintf("Supply chain: %s → %s. %s", from.Name, to.Name, reason),
-		}
+		}, false
 	default:
-		relationType = string(models.DependencyTypeDependsOn)
+		return nil, true
 	}
 	_ = fromIsProduct
 	_ = toIsProduct
@@ -580,7 +597,7 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 		RelationType:        relationType,
 		Confidence:          confidence,
 		Reason:              fmt.Sprintf("Supply chain: %s → %s. %s", from.Name, to.Name, reason),
-	}
+	}, false
 }
 
 // isActorType checks if the node represents an actor (org, facility, or deposit for extraction).
@@ -628,6 +645,27 @@ func (p *SupplyChainParser) isProductType(nodeType string, canonicalPath string)
 		return true
 	}
 	return strings.HasPrefix(canonicalPath, "/product/")
+}
+
+func (p *SupplyChainParser) isFinancialFlowProduct(canonicalPath, name string) bool {
+	cp := strings.ToLower(strings.TrimSpace(canonicalPath))
+	if cp == "" {
+		return false
+	}
+	if strings.HasPrefix(cp, "/product/finance/") || strings.HasPrefix(cp, "/product/financial/") {
+		return true
+	}
+	joined := cp + " " + strings.ToLower(strings.TrimSpace(name))
+	keywords := []string{
+		"equity", "equity-investment", "investment", "shareholding", "loan", "credit", "bond",
+		"securities", "derivative", "fund", "deposit", "capital", "financing",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(joined, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // ChainContext represents the cumulative supply chain state passed between jobs.

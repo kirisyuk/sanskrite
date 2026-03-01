@@ -338,6 +338,26 @@ func deferredScopeAddCount(viewConfig map[string]interface{}) int {
 	return 0
 }
 
+// UpsertScopeArtifact atomically sets a single key in the lens scopeArtifacts map.
+// Uses Firestore dot-notation so only the specified key is touched without overwriting
+// the entire scopeArtifacts map.
+func (r *LensesRepository) UpsertScopeArtifact(ctx context.Context, lensID, artKey string, ref models.ScopeArtifactRef) error {
+	if lensID == "" || artKey == "" {
+		return ErrInvalidDocument
+	}
+	key := sanitizeFirestoreKey(artKey)
+	_, err := r.col.Doc(lensID).Set(ctx, map[string]interface{}{
+		"scopeArtifacts." + key: ref,
+		"updatedAt":             time.Now().UTC(),
+	}, firestore.MergeAll)
+	return err
+}
+
+// sanitizeFirestoreKey replaces dots in keys (Firestore uses dots as path separators in field paths).
+func sanitizeFirestoreKey(key string) string {
+	return strings.ReplaceAll(strings.TrimSpace(key), ".", "_")
+}
+
 // AddExposurePathKey appends a canonical exposure key string to the lens document using array union.
 // This is intentionally partial (does not validate full Lens), to support incremental workflows.
 func (r *LensesRepository) AddExposurePathKey(ctx context.Context, lensID string, rawKey string) (string, error) {

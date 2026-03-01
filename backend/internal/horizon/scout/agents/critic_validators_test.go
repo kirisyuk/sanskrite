@@ -187,6 +187,60 @@ func TestStrategicValidator_nilFragmentReturnsNil(t *testing.T) {
 	}
 }
 
+func TestRuleBasedQuickValidation_MarketWithEmptyRelations(t *testing.T) {
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeMarket,
+		CanonicalPath: "/market/global/public-safety",
+	}
+	relations := []DiscoveredRelation{}
+	domainModes := []string{taxonomy.DomainModeMarket}
+
+	result := RuleBasedQuickValidation(frag, relations, nil, domainModes)
+	if result == nil {
+		t.Fatal("expected non-nil ValidationResult")
+	}
+	if len(result.MissingInfo) == 0 {
+		t.Fatal("Market with empty relations should produce missingInfo (HAS_MARKET_SEGMENT, PARTICIPATES_IN, etc.)")
+	}
+	// Should include market-specific questions
+	hasMarket := false
+	for _, q := range result.MissingInfo {
+		if strings.Contains(strings.ToLower(q), "market") || strings.Contains(strings.ToLower(q), "segment") ||
+			strings.Contains(strings.ToLower(q), "participant") || strings.Contains(strings.ToLower(q), "tam") ||
+			strings.Contains(strings.ToLower(q), "cagr") {
+			hasMarket = true
+			break
+		}
+	}
+	if !hasMarket {
+		t.Errorf("expected market-specific questions, got %v", result.MissingInfo)
+	}
+}
+
+func TestRuleBasedQuickValidation_SupplyChainModeRequestsProduceConsume(t *testing.T) {
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeOrganization,
+		CanonicalPath: "/org/us/acme",
+	}
+	relations := []DiscoveredRelation{}
+	domainModes := []string{taxonomy.DomainModeSupplyChain}
+
+	result := RuleBasedQuickValidation(frag, relations, nil, domainModes)
+	if result == nil {
+		t.Fatal("expected non-nil ValidationResult")
+	}
+	hasProduceConsume := false
+	for _, q := range result.MissingInfo {
+		if strings.Contains(strings.ToLower(q), "produc") || strings.Contains(strings.ToLower(q), "consum") {
+			hasProduceConsume = true
+			break
+		}
+	}
+	if !hasProduceConsume {
+		t.Errorf("supply_chain mode with no relations should request products produced/consumed, got %v", result.MissingInfo)
+	}
+}
+
 func TestParseValidationResultMap_NormalizesObservedModelDrift(t *testing.T) {
 	payload := map[string]interface{}{
 		"hasConflicts": false,

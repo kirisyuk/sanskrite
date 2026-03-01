@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // DomainResolutionPhaseResult captures the first-phase output for intent resolution.
@@ -120,37 +121,18 @@ DOMAIN RULES:
 - DOMAIN canonicalPath MUST be: /domain/v1/{contractType}/{facetKey}/{facetValue}...
   Good examples:
     /domain/v1/ecosystem-mapping/geo/my/sector/energy
+    /domain/v1/sector-overview/geo/kz/sector/agro-food
     /domain/v1/market-opportunity/geo/sg/industry/finance
     /domain/v1/bilateral-relations/geo/sa-ye (composite geo for two countries)
   Bad examples (these are ANCHORS, not DOMAINS):
     /market/global/finance
     /market/sg/finance/banking
+    /market/tw/technology/semiconductors
 
 - facetKey MUST be one of: geo, topic, subject, project, asset, material, application, sector, industry, market, regulation, framework, time
 - facets MUST match the canonicalPath (best-effort). If you provide facets, keep them consistent with the path.
 
-- contractType MUST be one of (choose the BEST fit):
-  SUPPLY CHAIN / INDUSTRY:
-    supply-chain, value-chain, logistics-flow, trade-flow, sourcing-map, procurement-map
-  RISK / GEOPOLITICS:
-    risk-assessment, geopolitical-risk, bilateral-relations, sanctions-exposure, conflict-dynamics
-  MARKETS / OPPORTUNITY:
-    market-opportunity, competitive-landscape, geographic-concentration, market-entry, market-sizing, demand-forecast, pricing-dynamics
-  INVESTMENT / FINANCE:
-    investment-thesis, funding-landscape, exit-strategy, valuation-drivers, portfolio-exposure
-  TECHNOLOGY / INNOVATION:
-    technology-landscape, innovation-map, patent-landscape, rd-landscape, adoption-curve, disruption-analysis
-  ECOSYSTEM / STAKEHOLDER:
-    ecosystem-mapping, stakeholder-mapping, partnership-landscape, influence-network, power-dynamics
-  POLICY / REGULATION:
-    policy-impact, regulatory-impact, policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape
-  SCENARIOS / TRENDS:
-    scenario-analysis, macro-trends, megatrends, future-outlook
-  SECTOR / INDUSTRY SPECIFIC:
-    sector-overview, industry-structure, vertical-deep-dive
-  FALLBACK (use ONLY if none of the above fit):
-    other - Format: /domain/v1/other/{custom-slug}/... where {custom-slug} is a lowercase kebab-case descriptor.
-    Example: /domain/v1/other/energy-ecosystem-mapping/geo/my
+%s
 
 - BILATERAL RELATIONS (CRITICAL):
   - If the query is about relations/interaction between two countries or actors, you MUST create a DOMAIN of contractType bilateral-relations.
@@ -170,5 +152,5 @@ DOMAIN RULES:
 
 - projections suggest what entity types to discover: ORGANIZATION, MARKET, FACILITY, GEO_REGION, PRODUCT, PERSON, EVENT, PROGRAM, GOV.
 
-- Return ONLY JSON. No markdown. No commentary.`, query, existingDomainsBlock)
+- Return ONLY JSON. No markdown. No commentary.`, query, existingDomainsBlock, taxonomy.DomainContractTypesPromptForLLM())
 }

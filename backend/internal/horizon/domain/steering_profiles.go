@@ -37,6 +37,7 @@ var profileByContractType = map[string]SteeringProfileName{
 	"bilateral-relations":     SteeringProfileRegulatoryExposure,
 	"sanctions-exposure":      SteeringProfileRegulatoryExposure,
 	"conflict-dynamics":       SteeringProfileRegulatoryExposure,
+	"affected-zone":           SteeringProfileRegulatoryExposure,
 	"policy-impact":           SteeringProfilePolicyImpact,
 	"regulatory-impact":       SteeringProfilePolicyImpact,
 	"policy-and-regulation":   SteeringProfileRegulatoryExposure,
@@ -61,6 +62,7 @@ var profileByContractType = map[string]SteeringProfileName{
 	"valuation-drivers":   SteeringProfileInvestmentFinance,
 	"portfolio-exposure":  SteeringProfileInvestmentFinance,
 	"ownership-structure": SteeringProfileInvestmentFinance,
+	"control-map":        SteeringProfileInvestmentFinance,
 	"equity":              SteeringProfileInvestmentFinance,
 
 	// Technology / innovation
@@ -115,9 +117,9 @@ var profileToDomainMode = map[SteeringProfileName]string{
 	SteeringProfileGeographicConcentration: taxonomy.DomainModeMarket,
 	SteeringProfileInvestmentFinance:       taxonomy.DomainModeGovernance,
 	SteeringProfileTechnologyInnovation:    taxonomy.DomainModeGeneral,
-	SteeringProfileEcosystemStakeholder:    taxonomy.DomainModeGeneral,
+	SteeringProfileEcosystemStakeholder:    taxonomy.DomainModeEcosystem,
 	SteeringProfileScenarioTrends:          taxonomy.DomainModeStrategic,
-	SteeringProfileSectorIndustry:          taxonomy.DomainModeSupplyChain,
+	SteeringProfileSectorIndustry:          taxonomy.DomainModeMarket,
 	SteeringProfilePolicyImpact:            taxonomy.DomainModePolicyImpact,
 }
 

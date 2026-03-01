@@ -15,8 +15,12 @@ const extractCountryCode = (canonicalPath?: string): string | null => {
   
   const namespace = parts[0];
   // These namespaces have country code as second segment
-  if (['org', 'gov', 'market', 'loc', 'fac', 'deposit', 'community'].includes(namespace)) {
-    const cc = parts[1];
+  if (['org', 'gov', 'market', 'loc', 'fac', 'deposit', 'community', 'zone'].includes(namespace)) {
+    let cc = parts[1];
+    // For zone: geo can be composite (tr-sy); use first ISO2 segment
+    if (namespace === 'zone' && cc && cc.includes('-')) {
+      cc = cc.split('-')[0] || cc;
+    }
     // Must be exactly 2 letters and not 'na' (not applicable)
     if (cc && cc.length === 2 && /^[a-z]{2}$/.test(cc) && cc !== 'na') {
       return cc.toUpperCase();
@@ -381,12 +385,47 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     text: '#7F1D1D', textDark: '#FECACA',
     accent: '#DC2626', accentDark: '#EF4444',
   },
+  // AFFECTED_ZONE: conflict zones, disaster zones, tension zones (rust/amber — distinct from GEO green, EVENT red)
+  'AFFECTED_ZONE': {
+    bg: '#FFF7ED', bgDark: '#431407',
+    border: '#EA580C', borderDark: '#FB923C',
+    text: '#9A3412', textDark: '#FED7AA',
+    accent: '#EA580C', accentDark: '#FB923C',
+  },
   'default': {
     bg: '#F1F5F9', bgDark: '#1E293B',
     border: '#64748B', borderDark: '#94A3B8',
     text: '#334155', textDark: '#CBD5E1',
     accent: '#64748B', accentDark: '#94A3B8',
   },
+};
+
+/** Extract condition_type from /zone/{geo}/{condition_type}/{slug}. */
+export const extractZoneConditionType = (canonicalPath?: string | null): string => {
+  const cp = String(canonicalPath || '').trim();
+  if (!cp.startsWith('/zone/')) return '';
+  const parts = cp.split('/').filter(Boolean);
+  return (parts[2] || '').toLowerCase();
+};
+
+/** AFFECTED_ZONE accent color by condition_type for map/circle rendering. Same icon, different color. */
+const ZONE_CONDITION_COLORS: Record<string, { light: string; dark: string }> = {
+  military_conflict: { light: '#dc2626', dark: '#ef4444' }, // scarlet
+  earthquake_affected: { light: '#92400e', dark: '#b45309' }, // brown
+  flood_zone: { light: '#92400e', dark: '#b45309' },
+  natural_disaster: { light: '#92400e', dark: '#b45309' },
+  wildfire: { light: '#92400e', dark: '#b45309' },
+  volcanic: { light: '#92400e', dark: '#b45309' },
+  political_tension: { light: '#d97706', dark: '#f59e0b' }, // amber
+  humanitarian_crisis: { light: '#0d9488', dark: '#2dd4bf' }, // teal
+};
+
+/** Get accent color for AFFECTED_ZONE on map by condition_type. Falls back to default AFFECTED_ZONE color. */
+export const getAffectedZoneMapAccent = (canonicalPath?: string | null, theme: 'light' | 'dark' = 'light'): string => {
+  const ct = extractZoneConditionType(canonicalPath);
+  const scheme = ct ? ZONE_CONDITION_COLORS[ct] : null;
+  if (scheme) return theme === 'dark' ? scheme.dark : scheme.light;
+  return theme === 'dark' ? NODE_COLORS['AFFECTED_ZONE'].accentDark : NODE_COLORS['AFFECTED_ZONE'].accent;
 };
 
 // Получить цветовую схему для типа
@@ -657,6 +696,9 @@ export const formatHorizonFragmentType = (
   if (t.toUpperCase() === 'PRODUCT' && isQuranReference(label, canonicalPath)) {
     return 'Sacred Text';
   }
+  if (t.toUpperCase() === 'AFFECTED_ZONE' || String(canonicalPath || '').startsWith('/zone/')) {
+    return 'Affected Zone';
+  }
   return t.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
@@ -676,6 +718,10 @@ export const getHorizonNodeVisualType = (
   // Any /market/* fragment should look like a market node, regardless of declared type.
   if (cp.startsWith('/market/')) {
     return 'MARKET';
+  }
+  // Any /zone/* fragment is an affected zone (conflict, disaster, tension zones).
+  if (cp.startsWith('/zone/')) {
+    return 'AFFECTED_ZONE';
   }
   // Community subtypes can have distinct visuals (e.g., dynasty).
   if (cp.startsWith('/community/')) {
@@ -698,6 +744,9 @@ const getHorizonNodeDisplayType = (
   const t = String(type || '').trim();
   const cp = String(canonicalPath || '').trim().toLowerCase();
   if (!t) return 'Unknown';
+  if (cp.startsWith('/zone/') || t.toUpperCase() === 'AFFECTED_ZONE') {
+    return 'Affected Zone';
+  }
   if (cp.startsWith('/community/')) {
     const parts = cp.split('/').filter(Boolean);
     const communityType = parts[2] || '';
@@ -1168,6 +1217,15 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
           <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
           <line x1="12" y1="9" x2="12" y2="13" />
           <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+      );
+
+    case 'AFFECTED_ZONE':
+      // Zone marker: map pin with zone boundary (conflict/disaster/tension zones)
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+          <circle cx="12" cy="10" r="3" strokeDasharray="2 2" />
         </svg>
       );
     

@@ -38,6 +38,15 @@ type CanonicalPathParts struct {
 	Event     *EventPathParts
 	Decision  *DecisionPathParts
 	Mechanism *MechanismPathParts
+	// RawPathParts stores path segments for namespaces without dedicated structs (domain, zone, supply-link).
+	// BuildCanonicalPath reconstructs from RawPathParts when set.
+	RawPathParts *RawPathParts
+}
+
+// RawPathParts stores raw segments for domain, zone, supply-link and other namespaces.
+// Used when full semantic parsing is not yet implemented; enables parse->build round-trip.
+type RawPathParts struct {
+	Segments []string
 }
 
 // OrgPathParts represents /org/{geo}/{baseSlug}-{legalForm?}.
@@ -401,6 +410,11 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 		out.Mechanism = &MechanismPathParts{Category: parts[1], Slug: parts[2]}
 		return out, nil
 
+	case "domain", "zone", "supply-link":
+		// Store raw segments for parse->build round-trip. Full semantic parsing can be added later.
+		out.RawPathParts = &RawPathParts{Segments: append([]string{}, parts...)}
+		return out, nil
+
 	default:
 		// Unknown namespace: return a minimal struct. Validation is handled elsewhere.
 		return out, nil
@@ -602,6 +616,12 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 			return "", false
 		}
 		return JoinPath("mechanism", p.Mechanism.Category, p.Mechanism.Slug), true
+
+	case "domain", "zone", "supply-link":
+		if p.RawPathParts == nil || len(p.RawPathParts.Segments) < 2 {
+			return "", false
+		}
+		return "/" + strings.Join(p.RawPathParts.Segments, "/"), true
 	}
 	return "", false
 }

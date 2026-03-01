@@ -27,6 +27,505 @@
 | Signaling Pipeline | ❌ | Отдельный пайплайн: news flow → events → 12-axis signals → propagation. Scout не создаёт сигналы. План: `SIGNALING_PIPELINE_IMPLEMENTATION_PLAN.md`. |
 | Fractal Hierarchy & Scale-Invariant Contracts | ◑ | Sphere taxonomy (L1/L2/L3+), SpherePaths, ResolutionHint, ParentPath — реализованы. Zoom, Metric Composition, Edge Projection — отложены. Units deprecated. Chokepoint transit amplification — реализовано. |
 
+## Unified Remediation Plan (единый всеобъемлющий план, 2026-03)
+
+Этот раздел фиксирует один объединенный план исправлений. Он заменяет разрозненные списки "12 пунктов" и "8 пунктов": это не два разных плана, а одна программа с общим порядком исполнения.
+
+Цель программы: устранить корневые причины ошибок в онтологической материализации, ложных остановок исследования, дефицита глубины/ширины evidence и преждевременного `ready_with_gaps`, сохранив управляемость стоимости и откатываемость.
+
+### Принципы исполнения
+
+1. Причина-first: сначала устраняем архитектурную причину, потом симптом.
+2. Hard-stop и soft-stop разведены явно; soft-stop не может завершать исследование без fallback-прохода.
+3. Один source of truth для direction/allowed triples.
+4. Fail-open допустим для discovery, но fail-closed для decision-grade выводов при P0/P1 gaps.
+5. Каждый шаг: код -> тесты -> replay -> canary -> rollout.
+
+### Workstream 0. Baseline и инвентаризация причин остановок
+
+Проблема: причины остановок и деградаций наблюдаются как "шум", но не как формализованный реестр первопричин.
+
+Исправление:
+1. Ввести единый реестр stop-причин с классификацией `hard_stop|soft_stop|recoverable`.
+2. Нормализовать reason codes по стадиям pipeline, чтобы одна и та же причина не логировалась разными кодами.
+3. Собрать baseline по 7 дням до изменений (по contractType и depth tiers).
+
+Файлы:
+1. `backend/internal/horizon/scout/engine.go`
+2. `backend/internal/horizon/scout/post_processing_policy.go`
+3. `backend/internal/horizon/domain/engine.go`
+
+DoD:
+1. Любой stop в runtime имеет нормализованный reason code.
+2. Доступна baseline-таблица "причина -> частота -> доля провалов gate".
+
+### Workstream 1. Единый онтологический контракт (USOT)
+
+Проблема: direction/edge contract размазан между prompt, canonicalization, policy и runtime-sanitizer.
+
+Корень:
+1. Разные источники правды для допустимых source/target пар.
+2. Lossy нормализация (например, принудительное сведение в `FOCUSES_ON`) конфликтует с direction policy.
+
+Исправление:
+1. Зафиксировать `edgesemantics` как USOT для валидных направлений.
+2. Удалить/ограничить lossy rewriting, которое разрушает валидные стратегические связи.
+3. Привести policy canonicalization к строгому подчинению USOT.
+
+Файлы:
+1. `backend/internal/horizon/edgesemantics/direction_policy.go`
+2. `backend/internal/horizon/models/edge_canonicalization.go`
+3. `backend/internal/horizon/policy/edge_canonicalization_policy.go`
+4. `backend/internal/horizon/scout/engine_ext.go`
+
+Тесты:
+1. Табличные tests по всем strategic/domain edge types.
+2. Отдельный regression на `DOMAIN -> MECHANISM|DECISION_POINT`.
+
+DoD:
+1. Нулевая рассинхронизация allowlist/direction между слоями.
+2. Системные quarantine по валидным triple исчезают.
+
+### Workstream 2. Удаление двойного контура генерации отношений
+
+Проблема: часть путей идет через mode-aware стратегии, часть через general/monolith, что создает конфликт контрактов.
+
+Исправление:
+1. Все domain expansion и strategic overlay перевести на `EnrichFragmentWithGroundingWithDomainModes`.
+2. Запретить скрытый fallback в general mode для mode-specific задач.
+3. Добавить явное логирование выбранного mode и prompt family.
+
+Файлы:
+1. `backend/internal/horizon/scout/engine_ext.go`
+2. `backend/internal/horizon/scout/agents/research_agent.go`
+3. `backend/internal/horizon/scout/research_orchestrator.go`
+
+DoD:
+1. Для mode-specific job в логах нет запуска general monolith.
+2. Снижение direction-invalid edges на affected-zone/policy-impact.
+
+### Workstream 3. Синхронизация prompt-словарей relation types
+
+Проблема: `DomainMode` строки и фактические prompt allowlists расходятся.
+
+Исправление:
+1. Генерировать prompt allowlist из единого декларативного источника.
+2. Убрать ручные разрозненные списки relation types в стратегиях.
+3. Добавить compile-time/CI проверку синхронности списков.
+
+Файлы:
+1. `backend/internal/taxonomy/domain_mode.go`
+2. `backend/internal/horizon/scout/agents/research_strategies_impl.go`
+3. `backend/internal/horizon/scout/agents/research_agent.go`
+
+DoD:
+1. Один mode всегда дает один и тот же набор edge types.
+2. CI падает при drift списков.
+
+### Workstream 4. False-stop elimination (глубинные причины ложных остановок)
+
+Проблема: исследование преждевременно останавливается по эвристическим причинам, которые не являются бизнес-окончанием.
+
+Корень:
+1. `tier`-гейтинг source planning на depth>0.
+2. Freshness skip без учета незакрытых критических checks.
+3. `no_searchable_gaps` трактуется как конец работы.
+4. Cooldown/exhaustion маскируют неразрешенные P0/P1.
+5. `LastVerifiedAt` используется как признак "свежести" даже для low-confidence/stub узлов.
+6. Tier-2 fast path создает stub и завершает run без попытки доглубления.
+7. MissingInfo status обновляется агрегатно (`foundSomething`), что может ложноположительно "закрывать" все вопросы.
+8. Reset exhausted по новым источникам фактически не срабатывает (нет вызовов + пустой fingerprint).
+9. Domain enrichment цикл не ожидает завершения child enrichment jobs (enqueue -> immediate collect).
+10. Domain graph collection жестко ограничен `limit=4000` без пагинации (ложный "нет прогресса").
+11. Preflight `budget_exhausted_partial` и circuit breaker работают как безусловный hard-stop без проверки recoverability.
+
+Исправление:
+1. Ввести обязательный fallback-проход для любого soft-stop.
+2. Разрешать freshness-skip только при закрытых P0/P1 и достаточном evidence coverage.
+3. Заменить бинарный запрет source planning на risk-aware policy.
+4. При `no_searchable_gaps` запускать deterministic question seeding по типу сущности.
+5. При cooldown/exhaustion формировать `research_debt_queue` на доглубление.
+6. Развести `verified_fresh` и `recently_touched`: freshness учитывать только для `EpistemicStatus=verified`.
+7. Убрать автоприсвоение `LastVerifiedAt` на create для low-confidence/stub либо в freshness-чеке игнорировать такие узлы.
+8. Для tier-2 fast path: вместо финализации ставить `deferred_deep_research` task при критичных контрактах.
+9. Перевести учет missingInfo с агрегатного на per-question/per-evidence outcome (resolved/failed частично, а не массово).
+10. Включить `ResetForNewSources` в runtime и заполнять/обновлять `SourceFingerprint` при каждом исследовании.
+11. Для DomainEngine добавить await/poll child job completion перед `collectGraph` в enrichment cycle.
+12. Добавить пагинацию `collectGraph` (artifact pages) и явный флаг truncation в gate checks.
+13. Для budget/circuit-breaker: проверять recoverability и разрешать ограниченный recovery-pass до hard-stop.
+
+Файлы:
+1. `backend/internal/horizon/scout/post_processing_policy.go`
+2. `backend/internal/horizon/scout/engine.go`
+3. `backend/internal/horizon/scout/agents/critic_agent.go`
+4. `backend/internal/horizon/scout/scout_outbox.go`
+5. `backend/internal/horizon/repo/fragments.go`
+6. `backend/internal/horizon/repo/missing_info_status_repo.go`
+7. `backend/internal/horizon/models/missing_info_status.go`
+8. `backend/internal/horizon/domain/engine.go`
+
+Тесты:
+1. Scenario tests: soft-stop не завершает pipeline без fallback.
+2. P0/P1 unresolved + fresh data -> исследование продолжается.
+3. Low-confidence stub не может проходить `fresh_no_new_facts` short-circuit.
+4. MissingInfo: частичный успех не закрывает все вопросы; exhausted reset работает при новом fingerprint.
+5. Domain enrichment: после enqueue cycle дожидается фактического прироста графа или фиксирует timeout reason.
+6. collectGraph pagination: truncation детектируется и не маскируется под "полноту недостаточно".
+
+DoD:
+1. Soft-stop больше не приводит к silent terminate.
+2. Доля `ready_with_gaps` по soft-stop причинам снижается до целевого уровня.
+3. Причины `fresh_no_new_facts` и `research_skipped_no_searchable_gaps` больше не встречаются при незакрытых P0/P1.
+4. Для каждого false-stop reason code есть deterministic recovery path.
+
+### Workstream 5. Управление глубиной и шириной исследований
+
+Проблема: ширина и глубина ограничиваются внутренними лимитами, а не бизнес-контрактом.
+
+Исправление:
+1. Ввести per-contract минимумы: actors, geo coverage, mechanisms, independent sources.
+2. При недоборе автоматически включать broadening pass.
+3. Ввести depth budget не как фиксированное число, а как адаптивный budget от unresolved critical checks.
+
+Файлы:
+1. `backend/internal/horizon/domain/gate_config.go`
+2. `backend/internal/horizon/domain/engine.go`
+3. `backend/internal/horizon/scout/planner.go`
+
+DoD:
+1. Каждый contractType достигает минимальной требуемой ширины.
+2. Недобор ширины фиксируется как причина enrichment, а не как "готово".
+
+### Workstream 6. Cycle governance и запрет преждевременного `ready_with_gaps`
+
+Проблема: при лимите циклов система может публиковать `ready_with_gaps` с незакрытыми критическими проверками.
+
+Исправление:
+1. При наличии P0/P1 вводится mandatory recovery cycle (минимум один доп. цикл).
+2. `ready_with_gaps` допускается только при выполнении строгого guard condition.
+3. Явно логировать effective cycle budget (base + adaptive + mandatory recovery).
+
+Файлы:
+1. `backend/internal/horizon/domain/engine.go`
+2. `backend/internal/horizon/domain/gate_config.go`
+
+DoD:
+1. `ready_with_gaps` не публикуется для необработанных recoverable P0/P1.
+2. Решение о fallback полностью трассируемо.
+
+### Workstream 7. CanonicalParts completeness и geo-token contract
+
+Проблема: `canonicalParts present but incomplete` системно повторяется для `zone/domain`.
+
+Исправление:
+1. Добавить parse/build поддержку `/zone/...` и `/domain/...`.
+2. Зафиксировать `sea` как валидный geo token для соответствующих сценариев.
+3. Выполнить backfill существующих фрагментов.
+
+Файлы:
+1. `backend/internal/taxonomy/canonical_parts.go`
+2. `backend/internal/taxonomy/paths.go`
+3. `backend/internal/horizon/repo/fragments.go`
+
+DoD:
+1. Warning по incomplete canonicalParts для zone/domain стремится к нулю.
+2. Ошибка `invalid geo sea` отсутствует.
+
+### Workstream 8. ISO2 remediation без unsafe auto-fix
+
+Проблема: `fix_iso2` зависит от LLM confidence и часто отклоняется при слабом контексте.
+
+Исправление:
+1. Добавить deterministic pre-resolver (homeLocation, edge-derived geo hints, alias dictionary).
+2. LLM оставить как fallback, не как первый шаг.
+3. Расширить evidence-пакет для inference без снижения precision guard.
+
+Файлы:
+1. `backend/internal/horizon/policy/enforcement_executor.go`
+
+DoD:
+1. Частота `low_confidence_iso2_inference` снижается, без роста ошибочных автофиксов.
+
+### Workstream 9. Разделение physical supply и financial flow
+
+Проблема: parser может материализовать `SUPPLIES_TO` в финансовом контексте.
+
+Исправление:
+1. Явно ввести `flow_kind` в parser contract: `physical|financial|capital`.
+2. Для `financial|capital` запретить materialization в `SUPPLIES_TO`.
+3. Добавить map в соответствующие финансовые relation types.
+
+Файлы:
+1. `backend/internal/horizon/scout/supply_chain_parser.go`
+2. `backend/internal/horizon/scout/agents/research_strategies_impl.go`
+
+DoD:
+1. Ложные `SUPPLIES_TO` в banking/investment кейсах устранены.
+
+### Workstream 10. Directional role evidence contract hardening
+
+Проблема: частичные/неканоничные role qualifiers приводят к quarantine при формально заданных ролях.
+
+Исправление:
+1. Унифицировать canonical role vocabulary между autofill и validation.
+2. Добавить pre-normalization role qualifiers перед directional validation.
+3. Добавить explicit reject-reasons для диагностики pair mismatch.
+
+Файлы:
+1. `backend/internal/horizon/scout/edge_directional_roles.go`
+2. `backend/internal/horizon/policy/validation_policy.go`
+
+DoD:
+1. Плавающие allow/quarantine по одинаковым relation cases исчезают.
+
+### Workstream 11. Test matrix, replay и shadow validation
+
+Проблема: без replay легко получить скрытые регрессии.
+
+Исправление:
+1. Зафиксировать golden log suite по affected-zone, policy-impact, sector-overview.
+2. Запустить counterfactual replay: "что было бы без soft-stop".
+3. Shadow-режим на production трафике до canary.
+
+DoD:
+1. Любой критический регресс ловится до rollout.
+2. Отчет replay подтверждает сокращение ложных остановок.
+
+### Workstream 12. Rollout, guardrails и эксплуатационная фиксация нормы
+
+Исправление:
+1. Feature flags для рискованных изменений (USOT rewrite, stop-policy, flow-kind parser).
+2. Canary 10% -> 50% -> 100% с авто-rollback при деградации.
+3. Обновить OK-правила: что является бизнес-нормой, а что инцидентом.
+
+Acceptance criteria программы:
+1. `quarantined_edge_rate` по affected-zone/policy-impact снижен минимум на 50%.
+2. `ready_with_gaps` с незакрытыми recoverable P0/P1 исключен.
+3. `soft_stop_recovered_rate` достигает целевого порога (вводится как release gate).
+4. `invalid geo sea` = 0.
+5. `canonicalParts incomplete (zone/domain)` -> near-zero.
+6. `low_confidence_iso2_inference` снижена до допустимого уровня без роста false-fix.
+
+### Порядок выполнения (dependency-safe sequence)
+
+1. WS0 -> WS1 -> WS2 -> WS3.
+2. WS4 -> WS5 -> WS6.
+3. WS7 -> WS8 -> WS9 -> WS10.
+4. WS11 -> WS12.
+
+Release gate:
+1. Следующий этап разрешается только после выполнения DoD предыдущего этапа и прохождения replay/shadow checks.
+
+### Детализация исполнения (обязательная надстройка к WS0-WS12)
+
+Этот блок задает точный backlog исполнения с идентификаторами задач. Любая реализация в PR должна ссылаться на `Task ID`.
+
+#### 1) Реестр корневых причин (Root Cause Register)
+
+| RC ID | Корневая причина | Где проявляется | Текущий эффект | Целевое исправление |
+|------|-------------------|-----------------|----------------|---------------------|
+| RC-FS-01 | Tier-gating отключает planning/research на depth>0 | Scout policy/runtime | Ложные stop на дочерних job | Risk-aware gating + soft-stop fallback |
+| RC-FS-02 | Freshness опирается на `LastVerifiedAt` для low-confidence/stub | Scout preflight | `fresh_no_new_facts` при незакрытых критичных gaps | Freshness only for verified-quality nodes |
+| RC-FS-03 | Tier2 fast path финализирует run после stub | Scout tier2 path | Глубина исследования “обрывается” | Deferred deep-research scheduling |
+| RC-FS-04 | `no_searchable_gaps` трактуется как terminal skip | Scout research stage | Преждевременный skip исследования | Deterministic reseeding + debt queue |
+| RC-FS-05 | MissingInfo attempts пишутся агрегатно (`foundSomething`) | MissingInfo status lifecycle | Ложное "resolved" для части вопросов | Per-question outcome accounting |
+| RC-FS-06 | Exhausted reset по новым источникам не работает в runtime | MissingInfo repo/runtime | “Залипшие” exhausted вопросы | Fingerprint update + runtime reset hook |
+| RC-FS-07 | DomainEngine не дожидается child enrichment jobs | Domain enrichment cycle | Мнимый “нет прогресса” в цикле | Await/poll + timeout reasoning |
+| RC-FS-08 | Graph collect limit=4000 без пагинации | Domain graph collection | Усеченная картина и ложные gaps | Pagination + truncation signal |
+| RC-FS-09 | Budget/circuit-breaker hard-stop без recoverability-pass | Scout preflight | Ранний terminal outcome | Recovery pass before hard-stop |
+| RC-FS-10 | Разрозненные reason codes остановок | Logs/telemetry | Невозможность точной диагностики | Unified stop reason taxonomy |
+
+#### 2) Пошаговый backlog (Task-level plan)
+
+##### Статус исполнения (факт на 2026-03-01)
+
+| Task ID | Статус | Что реализовано |
+|--------|--------|-----------------|
+| TASK-S0-01 | ✅ | Введена унифицированная stop-taxonomy (`reason_code`, `stop_kind`, `recoverable`) в stage runtime и terminal outcome. |
+| TASK-S0-02 | ✅ | В telemetry добавлены обязательные поля `critical_open_count`, `evidence_coverage`, `domain_mode`, `pipeline_tier`, `recursion_depth`. |
+| TASK-S0-03 | ✅ | Добавлен runtime contract-assert: soft/skip terminal при `critical_open_count>0` помечается как pipeline issue и переводится в partial outcome. |
+| TASK-S1-01 | ✅ | Добавлен risk-aware `CanSkipPlanning()` (учет `critical_open_count` + `evidence_coverage`), заменен бинарный tier-skip planning. |
+| TASK-S1-02 | ✅ | Freshness skip ограничен verified-фрагментами (`EpistemicStatus=VERIFIED`). |
+| TASK-S1-03 | ✅ | Убрана автопростановка `Metadata.LastVerifiedAt` при `fragments.Create` для low-confidence. |
+| TASK-S2-01 | ✅ | MissingInfo attempts пишутся per-question (не агрегатный `foundSomething`). |
+| TASK-S2-02 | ✅ Частично | Добавлен deterministic probe mode при `FilterSearchable -> empty` и новом evidence fingerprint. |
+| TASK-S2-03 | ✅ | В lifecycle attempts передается и сохраняется `sourceFingerprint`. |
+| TASK-S2-04 | ✅ | Runtime вызывает `ResetForNewSources` до финального skip вопросов. |
+| TASK-S2-05 | ✅ | Реализована `research_debt_queue` через scout outbox intent `research_debt_queue` и enqueue при `no_searchable_gaps`. |
+| TASK-S3-01 | ✅ | В DomainEngine добавлен bounded await/poll (`awaitGraphDelta`) после enqueue enrichment. |
+| TASK-S3-02 | ✅ | Timeout/cancel await enrichment маркируется как `partial_wait_timeout` в runtime snapshot/gate summary. |
+| TASK-S3-03 | ✅ | `collectGraph` переведен на пагинацию (`ListByLensPaginated`) с cap и сигналом truncation. |
+| TASK-S3-04 | ✅ | `graph_truncated=true` добавлен в `DomainGateSummary`; при truncation форсируется enrichment task `artifact_coverage_expand`. |
+| TASK-S1-04 | ✅ Частично | Для high-risk canonical paths tier2 fast path bypassed (вместо stub-only terminal выполняется full pipeline). |
+| TASK-S1-05 | ✅ Частично | Добавлен recoverability-pass: `budget_exhausted_partial` переводится в soft-stop при recovery сигналах; circuit-breaker окно расширяется до 7 попыток. |
+| TASK-S3-05 | ✅ | Добавлен publish guard: при recoverable critical gaps (`graph_truncated`/`partial_wait_timeout`) `publish.completed` блокируется и заменяется `publish.blocked`. |
+
+Кодовые изменения этого этапа:
+1. `backend/internal/horizon/scout/post_processing_policy.go`
+2. `backend/internal/horizon/scout/engine.go`
+3. `backend/internal/horizon/scout/engine_ext.go`
+4. `backend/internal/horizon/repo/fragments.go`
+5. `backend/internal/horizon/repo/missing_info_status_repo.go`
+6. `backend/internal/horizon/models/missing_info_status.go`
+7. `backend/internal/horizon/domain/engine.go`
+
+##### Sprint A (S0): Инструментация причин остановок
+
+1. `TASK-S0-01`: Ввести единый enum reason codes для stop/skip/fallback.
+2. `TASK-S0-02`: Добавить в telemetry обязательные поля: `stop_kind`, `recoverable`, `critical_open_count`, `evidence_coverage`.
+3. `TASK-S0-03`: Добавить runtime-assert: terminal skip при `critical_open_count>0` логируется как ошибка контракта.
+
+Изменяемые файлы:
+1. `backend/internal/horizon/scout/engine.go`
+2. `backend/internal/horizon/scout/post_processing_policy.go`
+3. `backend/internal/horizon/domain/engine.go`
+
+Acceptance:
+1. Все stop/skip события имеют нормализованный `reason_code`.
+2. Нет `reason_code=unknown` на production replay.
+
+##### Sprint B (S1): Устранение false-stop в Scout preflight/runtime
+
+1. `TASK-S1-01` (RC-FS-01): заменить бинарный `PipelineTier` gating на policy-функцию `CanSkipPlanning(...)` с входами `domainMode`, `critical_open_count`, `evidence_coverage`.
+2. `TASK-S1-02` (RC-FS-02): freshness skip разрешать только при `EpistemicStatus=verified` и `critical_open_count=0`.
+3. `TASK-S1-03` (RC-FS-02): убрать влияние автоматически проставленного `LastVerifiedAt` для low-confidence/stub в freshness branch.
+4. `TASK-S1-04` (RC-FS-03): в tier2 path заменить terminal finalize на enqueue `deferred_deep_research` при high-risk contract types.
+5. `TASK-S1-05` (RC-FS-09): добавить `recoverability_check` перед `budget_exhausted_partial` и `circuit_breaker` hard-stop.
+
+Изменяемые файлы:
+1. `backend/internal/horizon/scout/post_processing_policy.go`
+2. `backend/internal/horizon/scout/engine.go`
+3. `backend/internal/horizon/repo/fragments.go`
+
+Acceptance:
+1. `fresh_no_new_facts` не встречается, если есть P0/P1 gaps.
+2. Tier2 jobs для high-risk контрактов больше не теряются после stub.
+
+##### Sprint C (S2): MissingInfo lifecycle correctness
+
+1. `TASK-S2-01` (RC-FS-05): заменить агрегатный `foundSomething` на per-question resolution map.
+2. `TASK-S2-02` (RC-FS-04): если после `FilterSearchable` список пуст, запускать `deterministic_gap_reseed`.
+3. `TASK-S2-03` (RC-FS-06): сохранять и обновлять `SourceFingerprint` в конце каждого research цикла.
+4. `TASK-S2-04` (RC-FS-06): вызывать `ResetForNewSources` перед окончательным skip exhausted вопросов.
+5. `TASK-S2-05`: добавить `research_debt_queue` запись для каждого filtered-out critical gap.
+
+Изменяемые файлы:
+1. `backend/internal/horizon/scout/engine.go`
+2. `backend/internal/horizon/repo/missing_info_status_repo.go`
+3. `backend/internal/horizon/models/missing_info_status.go`
+4. `backend/internal/horizon/scout/scout_outbox.go`
+
+Acceptance:
+1. Нет массового закрытия missingInfo одним успешным relation batch.
+2. Exhausted вопросы возобновляются при новом source fingerprint.
+
+##### Sprint D (S3): DomainEngine cycle reliability
+
+1. `TASK-S3-01` (RC-FS-07): после `enqueueEnrichmentTasks` ввести `awaitEnrichmentCompletion` с таймаутом и лимитом retries.
+2. `TASK-S3-02` (RC-FS-07): если child jobs не завершены вовремя, помечать gate как `partial_wait_timeout`, а не `ready_with_gaps`.
+3. `TASK-S3-03` (RC-FS-08): заменить `ListByLens(..., 4000)` на постраничный сбор артефактов до configured cap.
+4. `TASK-S3-04` (RC-FS-08): добавить `graph_truncated=true` в gate summary и принудительный enrichment task `artifact_coverage_expand`.
+5. `TASK-S3-05`: ограничить публикацию `ready_with_gaps` при наличии recoverable truncation/timeout причин.
+
+Изменяемые файлы:
+1. `backend/internal/horizon/domain/engine.go`
+2. `backend/internal/horizon/domain/gate_config.go`
+
+Acceptance:
+1. Domain cycles фиксируют фактический прогресс, а не “нулевой” из-за async race.
+2. Усечение графа не маскируется под business gap.
+
+##### Sprint E (S4): USOT + prompt drift cleanup (стабилизация направления)
+
+1. `TASK-S4-01`: синхронизировать strategy prompts с USOT relation contracts.
+2. `TASK-S4-02`: убрать конфликтующие lossy rewrites, нарушающие direction policy.
+3. `TASK-S4-03`: добавить CI check на согласованность edge allowlists.
+
+Статус (2026-03-01):
+1. `TASK-S4-01` выполнен: relation lists в Research/Critic prompt-ах переведены на USOT (`edgesemantics` allowlists/domain scaffold contract), удалены hardcoded mode lists.
+2. `TASK-S4-02` выполнен: domain canonicalization больше не схлопывает валидные relation types в `FOCUSES_ON`; для `DOMAIN -> MECHANISM|DECISION_POINT` fallback теперь `SURFACES`.
+3. `TASK-S4-03` выполнен: добавлены CI tests на drift prompt relation sets vs USOT allowlists (`backend/internal/taxonomy/domain_mode_prompt_contract_test.go` + tests в `scout/agents` и `edgesemantics`).
+
+Изменяемые файлы:
+1. `backend/internal/horizon/edgesemantics/direction_policy.go`
+2. `backend/internal/horizon/policy/edge_canonicalization_policy.go`
+3. `backend/internal/horizon/scout/agents/research_strategies_impl.go`
+4. `backend/internal/taxonomy/domain_mode.go`
+
+Acceptance:
+1. Снижение quarantine по direction-contract mismatch.
+
+##### Sprint F (S5): Canary, shadow, rollout
+
+1. `TASK-S5-01`: запустить shadow replay на historical logs (affected-zone/policy-impact/sector-overview).
+2. `TASK-S5-02`: canary 10% -> 50% -> 100% с auto-rollback policy.
+3. `TASK-S5-03`: зафиксировать обновленные OK-rules и SLO.
+
+Статус (2026-03-01):
+1. `TASK-S5-01` выполнен: добавлен `scripts/horizon_shadow_replay.sh` (лог-анализ + release gates + JSON report).
+2. `TASK-S5-02` выполнен: добавлен `scripts/horizon_canary_rollout.sh` (10/50/100 phases + gate checks + auto-rollback).
+3. `TASK-S5-03` выполнен: зафиксирован runbook `docs/horizon/implementation/SHADOW_CANARY_ROLLOUT.md` с OK-rules/SLO gate-порогами и операционной процедурой.
+
+Acceptance:
+1. Все release gates выполнены (см. секцию ниже).
+
+#### 3) Детальная тест-матрица (обязательная)
+
+| Test ID | Сценарий | Проверка | Ожидаемый результат |
+|--------|----------|----------|---------------------|
+| T-FS-01 | Fresh node + unresolved P0/P1 | Skip policy | Нет `fresh_no_new_facts` terminal |
+| T-FS-02 | Tier2 high-risk child | Tier2 behavior | Ставится deferred deep research |
+| T-FS-03 | FilterSearchable -> empty | Research stage | Выполняется reseed/debt queue |
+| T-FS-04 | Partial research success | MissingInfo state | Резолвятся только подтвержденные вопросы |
+| T-FS-05 | New sources after exhausted | MissingInfo reset | Статус reset в `open` |
+| T-FS-06 | Domain enqueue async lag | Domain cycle | Await/poll, no false no-progress |
+| T-FS-07 | Artifact count > 4000 | collectGraph | Пагинация + `graph_truncated` signal |
+| T-FS-08 | budget exhausted recoverable | preflight stop | Recovery pass before hard-stop |
+
+Минимальный набор автоматизации:
+1. Unit tests для policy/reasoning веток.
+2. Integration tests для Scout pipeline stop semantics.
+3. Replay tests на real logs.
+
+#### 4) Контракт наблюдаемости (Telemetry Contract)
+
+Каждое stop/skip/recovery событие обязано включать:
+1. `reason_code`
+2. `stop_kind` (`hard|soft|recovery`)
+3. `recoverable` (`true|false`)
+4. `critical_open_count`
+5. `evidence_coverage`
+6. `domain_mode`
+7. `pipeline_tier`
+8. `recursion_depth`
+9. `graph_truncated` (для domain cycle)
+10. `source_fingerprint_changed` (для missingInfo reset path)
+
+#### 5) Release gates (точные пороги)
+
+Перед переходом на следующий этап:
+1. `fresh_no_new_facts` при `critical_open_count>0` = 0.
+2. `research_skipped_no_searchable_gaps` при `critical_open_count>0` = 0.
+3. `ready_with_gaps` с recoverable P0/P1 = 0.
+4. `soft_stop_recovered_rate >= 0.80` на canary.
+5. `direction_contract_quarantine_rate` снижен минимум на 50% от baseline.
+
+#### 6) План отката (Rollback Plan)
+
+Если любой release gate нарушен:
+1. Откат соответствующего feature flag до предыдущего stable value.
+2. Заморозка перехода к следующему sprint.
+3. Инцидентный разбор: `reason_code distribution`, `top failing contracts`, `regressed test IDs`.
+4. Повторный canary только после закрытия root-cause action items.
+
+#### 7) Ответственность и артефакты результата
+
+Для каждого Workstream обязателен набор deliverables:
+1. PR со ссылкой на `Task ID`.
+2. Тесты (unit/integration/replay) + отчет выполнения.
+3. Сводка telemetry до/после (baseline vs candidate).
+4. Решение по rollout gate (`pass|hold|rollback`) с конкретной причиной.
+
 ## Delta (2026-02-13): Internal-First Grounding (v5)
 
 Источник: `docs/horizon/implementation/INTERNAL_FIRST_GROUNDING_IMPLEMENTATION_PLAN.md` (rev v5).
@@ -228,6 +727,283 @@
 **Инкрементальность (deferred)**:
 - Пересборка `DomainAnswerSnapshot` при изменениях графа — **отложено**.
 - Когда будет нужно: `assembledAt` + `staleAfter`; stale-маркировка при изменениях в critical paths; пересборка lazy/eager. Естественная ответственность фазы `Watch` в DomainContractEngine.
+
+## Decision-Grade Reasoning Upgrade (Prompt + Algorithms)
+
+### Контекст и формулировка проблемы
+
+Текущее состояние системы можно считать **достаточным для discovery (примерно 7/10)**, но **недостаточным для принятия управленческих решений (примерно 5/10)**. Ключевой лимит находится не в одном компоненте, а в комбинации:
+
+1. Промпты хорошо формируют графовые факты, но слабо требуют конкурентных гипотез и явного опровержения альтернатив.
+2. Алгоритмика пайплайна больше оптимизирована под materialization и policy safety, чем под decision-quality inference.
+3. Confidence локален (узел/ребро), но не агрегируется в уровень решения (вариант действия, сценарий, trade-off).
+4. Нет полноценного контура «обоснование ↔ контробоснование ↔ арбитраж».
+5. Нет полного feedback loop от решений аналитика обратно в prompt/policy behavior.
+
+### Цель программы
+
+Перевести контур reasoning из режима «graph discovery» в режим **decision-grade reasoning** без разрушения текущей архитектуры Scout/Critic/Research/Policy:
+
+1. Повысить качество решения до **8+/10** по внутренним benchmark-кейсам.
+2. Для каждого управленческого вывода давать:
+   - набор конкурирующих гипотез,
+   - выбранную гипотезу с причиной выбора,
+   - список отвергнутых альтернатив с reason codes,
+   - чувствительность к ключевым предположениям,
+   - машиночитаемую неопределенность.
+3. Сохранить обратную совместимость с текущими графовыми артефактами и UI.
+
+### Non-goals (что не делаем в этом треке)
+
+1. Не переписываем с нуля весь ScoutEngine.
+2. Не удаляем существующий graph/materialization pipeline.
+3. Не делаем «AGI-оркестратор»; изменения должны быть локально объяснимы, тестируемы и откатываемы.
+4. Не блокируем текущий production flow ради полной идеальности.
+
+### Принципы дизайна
+
+1. **Hypothesis-first, not fact-first**: решение строится вокруг конкурирующих гипотез, а не вокруг единственного «лучшего» ответа.
+2. **Adversarial-by-design**: каждая гипотеза обязана проходить фазу опровержения.
+3. **Deterministic scoring envelope**: финальный рейтинг гипотез считается алгоритмически, а не только LLM confidence.
+4. **Uncertainty is first-class**: неопределенность хранится и распространяется по контуру, а не теряется при агрегации.
+5. **Fail-open для discovery, fail-closed для decisions**: для decision artifacts при нехватке качества — `ready_with_gaps`, а не псевдо-уверенный вывод.
+
+### Целевая архитектура reasoning-контура
+
+Новый логический слой над текущим Scout/Critic/Research:
+
+1. `Hypothesis Generation` (N=2..4 конкурентных гипотез).
+2. `Evidence Packing` (детерминированная сборка evidence units из графа + сигналов + provenance).
+3. `Adversarial Critique` (попытка опровергнуть каждую гипотезу).
+4. `Contradiction Graph` (обнаружение конфликтов между утверждениями).
+5. `Deterministic Arbitration` (алгоритмический ranking + фильтры quality gate).
+6. `Uncertainty Propagation` (перенос uncertainty по цепочке влияния).
+7. `Decision Artifact Assembly` (action options, conditions, failure modes).
+8. `Learning Feedback` (подтверждение/отклонение пользователем).
+
+### Рабочие потоки (Workstreams)
+
+#### WS-A: Prompt Contracts 2.0 (Hypothesis-First)
+
+**Цель**: сделать промпты структурно «decision-aware».
+
+1. Ввести обязательный JSON-контракт в research/critic:
+   - `hypotheses[]` (id, claim, assumptions, expected_signals),
+   - `counterarguments[]`,
+   - `disconfirming_evidence[]`,
+   - `decision_implications[]`.
+2. Запретить single-path reasoning в decision mode:
+   - минимум 2 гипотезы, если задача не тривиальна.
+3. Ввести требование «negative evidence»:
+   - если evidence против гипотезы найден, он не может быть скрыт.
+4. Ввести явный `abstain` контракт:
+   - когда evidence не хватает, модель возвращает `insufficient_evidence` вместо домысливания.
+5. Привязать prompts к allowed reason codes:
+   - чтобы downstream scoring использовал не свободный текст, а канонические классификаторы.
+
+**Изменяемые точки (первый этап):**
+
+1. `backend/internal/horizon/scout/agents/research_strategies_impl.go`
+2. `backend/internal/horizon/scout/agents/critic_agent.go`
+3. `backend/internal/horizon/scout/agents/critic_validators_impl.go`
+
+#### WS-B: Algorithmic Arbitration Layer
+
+**Цель**: исключить зависимость финального решения от «последнего LLM-ответа».
+
+1. Добавить детерминированный scoring гипотез:
+   - `score = evidence_strength * coherence * impact * robustness * policy_cleanliness * uncertainty_penalty`.
+2. Ввести компонент `HypothesisArbiter`:
+   - принимает normalized hypotheses + evidence graph,
+   - выдает ranking + reasoned rejection list.
+3. Ввести `ContradictionResolver`:
+   - фиксирует конфликтующие claim pairs,
+   - маркирует гипотезу как `contested` до разрешения.
+4. Ввести hard-gates перед публикацией decision artifact:
+   - min evidence coverage,
+   - max unresolved contradictions,
+   - max uncertainty band.
+5. Добавить fallback mode:
+   - если gates не пройдены, публиковать `ready_with_gaps`, не «recommended_action».
+
+**Изменяемые точки (первый этап):**
+
+1. `backend/internal/horizon/domain/engine.go`
+2. `backend/internal/horizon/scout/engine.go`
+3. `backend/internal/horizon/scout/agents/research_pipeline.go`
+4. `backend/internal/horizon/scout/agents/critic_pipeline.go`
+
+#### WS-C: Uncertainty Model and Propagation
+
+**Цель**: перенести uncertainty с edge-level на decision-level.
+
+1. Ввести unified uncertainty schema:
+   - `epistemic_uncertainty`, `model_uncertainty`, `data_freshness_uncertainty`.
+2. Считать uncertainty band для каждой гипотезы:
+   - lower/median/upper estimate.
+3. Для top decision options считать sensitivity:
+   - какие 3-5 предположений сильнее всего меняют выбор.
+4. Ввести propagation правил:
+   - uncertainty не усредняется наивно, а агрегируется с учетом weakest-link и corroboration count.
+5. Экспортировать uncertainty в UI/API:
+   - decision карточка должна показывать не только score, но и uncertainty band.
+
+**Изменяемые точки (первый этап):**
+
+1. `backend/internal/horizon/models/*` (новые decision/uncertainty структуры)
+2. `backend/internal/horizon/propagation/*` (агрегация uncertainty)
+3. `backend/internal/http/horizon/*` (контракт ответа)
+
+#### WS-D: Decision Semantics and Output Contract
+
+**Цель**: выдача, пригодная к управленческим действиям.
+
+1. Ввести новый артефакт `DecisionAssessment`:
+   - `recommended_option`,
+   - `alternatives[]`,
+   - `conditions_of_validity[]`,
+   - `failure_modes[]`,
+   - `monitoring_triggers[]`.
+2. Ввести обязательные секции:
+   - `what_we_know`,
+   - `what_can_break_this`,
+   - `what_to_measure_next`.
+3. Привязать каждый пункт к source/evidence paths.
+4. Ввести machine-readable actionability levels:
+   - `informational`, `monitor`, `prepare`, `act_now`.
+
+#### WS-E: Learning Loop (Human Feedback → System Behavior)
+
+**Цель**: системно обучать reasoning-контур на решениях команды.
+
+1. Собирать feedback события:
+   - accepted/rejected/deferred decision options.
+2. Логировать причины отклонения:
+   - `too_speculative`, `wrong_assumption`, `missing_evidence`, `policy_conflict`.
+3. Еженедельно обновлять:
+   - prompt templates,
+   - policy weights,
+   - arbitration thresholds.
+4. Ввести `Reasoning Regression Suite`:
+   - фиксированные кейсы, где ожидаем стабильный выбор гипотезы.
+
+### Декомпозиция этапов внедрения (итеративно)
+
+#### Phase R0 (1 спринт): Foundation
+
+1. Зафиксировать decision-mode JSON schemas.
+2. Добавить feature flags:
+   - `HORIZON_DECISION_MODE_ENABLED`
+   - `HORIZON_HYPOTHESIS_ARBITER_ENABLED`
+   - `HORIZON_UNCERTAINTY_BAND_ENABLED`
+3. Подготовить benchmark-набор из 30-50 кейсов (market/affected-zone/event/regulatory).
+4. Добавить telemetry baseline:
+   - contradiction rate,
+   - abstain rate,
+   - top-1 flip rate между повторами.
+
+**DoD R0**:
+
+1. Схемы и флаги в коде.
+2. Baseline метрики снимаются автоматически.
+
+#### Phase R1 (2 спринта): Hypothesis + Adversarial Critic
+
+1. Обновить prompts на hypothesis-first контракт.
+2. Добавить adversarial critique шаг в critic pipeline.
+3. Добавить rejection reasons в output.
+4. Включить на shadow traffic (без влияния на production decisions).
+
+**DoD R1**:
+
+1. Для decision-mode задач возвращается >=2 гипотез.
+2. Каждая гипотеза имеет хотя бы 1 counterargument или explicit `none_found`.
+3. Нет schema drift в 95%+ запусков.
+
+#### Phase R2 (2 спринта): Deterministic Arbitration
+
+1. Внедрить HypothesisArbiter.
+2. Внедрить contradiction graph + gates.
+3. Выводить ranked options + rejected alternatives.
+4. Включить limited rollout (10-20% decision-mode запросов).
+
+**DoD R2**:
+
+1. Повторяемость top-1 решения растет (target: +25% к baseline).
+2. Доля «необъяснимых» рекомендаций (без reason path) < 5%.
+
+#### Phase R3 (2 спринта): Uncertainty Propagation
+
+1. Добавить uncertainty schema и агрегатор.
+2. Добавить sensitivity analysis в decision artifact.
+3. Добавить UI/API поля uncertainty band.
+
+**DoD R3**:
+
+1. 100% decision options имеют uncertainty band.
+2. 90%+ options имеют минимум 1 sensitivity driver.
+
+#### Phase R4 (постоянный цикл): Learning Loop
+
+1. Собирать человеческий feedback.
+2. Ввести еженедельный tuning cadence.
+3. Регрессионно проверять, что улучшения не ломают existing discovery quality.
+
+**DoD R4**:
+
+1. Есть стабильный процесс улучшения с KPI-tracking.
+2. Regression suite запускается автоматически в CI.
+
+### Изменения в данных и контрактах (детально)
+
+1. Новый доменный объект `DecisionHypothesis`:
+   - `id`, `claim`, `assumptions[]`, `supporting_evidence[]`, `opposing_evidence[]`, `status`.
+2. Новый объект `DecisionOption`:
+   - `option_id`, `action`, `score`, `uncertainty_band`, `preconditions[]`, `failure_modes[]`.
+3. Новый объект `DecisionAssessment`:
+   - `recommended_option_id`, `alternatives[]`, `rationale`, `gaps`, `monitoring_plan`.
+4. Обязательные поля provenance для decision outputs:
+   - `source_refs[]`, `evidence_paths[]`, `policy_status_trace[]`.
+
+### Метрики качества и SLO для decision-grade
+
+1. `decision_reproducibility_rate`:
+   - одинаковый top-1 на повторных прогонах.
+2. `contradiction_resolution_rate`:
+   - доля resolved конфликтов до публикации.
+3. `abstain_precision`:
+   - как часто abstain совпадает с ручной оценкой «нельзя рекомендовать».
+4. `false_confidence_rate`:
+   - high-confidence решения, позднее отклоненные аналитиком.
+5. `time_to_decision_artifact`:
+   - latency от запроса до decision output.
+6. `human_acceptance_rate`:
+   - доля принятых рекомендаций.
+
+### Риски и меры снижения
+
+1. Риск: рост latency из-за multi-hypothesis.
+   - Митигатор: budget caps, adaptive depth, caching evidence packs.
+2. Риск: prompt усложнение увеличит schema drift.
+   - Митигатор: strict verifiers + auto-repair + contract tests.
+3. Риск: arbitration будет переусложнен.
+   - Митигатор: сначала минимальная формула scoring, далее тюнинг.
+4. Риск: uncertainty будет непонятен пользователю.
+   - Митигатор: стандартизованный UI-паттерн band + sensitivity explanation.
+
+### Definition of Done для всей программы
+
+Программа считается завершенной, когда одновременно выполнены условия:
+
+1. На benchmark-наборе decision quality >= 8/10 по экспертной оценке.
+2. Не менее 90% decision outputs имеют:
+   - ranked alternatives,
+   - explicit rejection reasons,
+   - uncertainty band,
+   - evidence paths.
+3. False-confidence rate снижен минимум на 40% от baseline.
+4. Production rollout 100% для decision-mode задач без деградации discovery SLO.
+5. Learning loop работает как постоянный операционный процесс (не ad-hoc).
 
 ## Пайплайн Scout → Critic → Research → Policy
 
@@ -1864,7 +2640,7 @@ type PolicyDecision struct {
   - Top LLM fallback reasons (DecisionPath анализ)
   - Cost per policy (tokens × pricing)
   - Latency distribution (p50/p95/p99) по policy
-- [ ] Альтернатива (lightweight): простой Firestore-based UI в админке hatl.one для просмотра последних N решений и агрегированных метрик
+- [ ] Альтернатива (lightweight): простой Firestore-based UI в админке etigram.one для просмотра последних N решений и агрегированных метрик
 
 **Acceptance**:
 - Все Horizon-службы используют Policy interface для принятия решений
@@ -1880,6 +2656,16 @@ type PolicyDecision struct {
 **Детальный план**: см. [signals-and-semantic-propagation-plan.md](signals-and-semantic-propagation-plan.md)
 
 **TODO (критические пути)**:
+
+- **Chain Waveguide + Chain Scope + Edge-Triggered Re-Propagation (высокий приоритет)**
+  - **Проблема**: propagation работает по отдельным рёбрам без awareness цепочки как целого; supply chains рассыпаются на отдельные scope entries; новые рёбра не провоцируют переток уже накопленных сигналов.
+  - **Решение** (4 фазы):
+    - **Phase 1 (Edge Annotation)**: при создании рёбер в scout pipeline, проставлять `artifactKey` qualifier = canonical key MaterializedArtifact. Привязка ребра к цепочке. Kind-agnostic (не только supply chains).
+    - **Phase 2 (Chain Scope)**: новый тип scope entry `/artifact/{canonicalKey}` в Lens. Загрузка всей цепочки целиком (все узлы + все рёбра) при создании/обновлении линзы. Новое поле `ScopeArtifacts` в Lens.
+    - **Phase 3 (Waveguide)**: рёбра с `artifactKey` получают waveguide boost (1.10-1.25x) в `calculateDampedAmplitudeWithBreakdown`. BFS queue item получает `artifactKey` для chain-direction preference (coherence bonus при движении по одной цепочке).
+    - **Phase 4 (Edge-Triggered Re-Propagation)**: при создании нового ребра проверять `fragment.State` обоих endpoint'ов. Если есть accumulated signal > threshold — асинхронно запускать re-propagation через новое ребро. Использует существующий `propagateHotPathAxisBased` с dedup через visited map.
+  - **Детальный план**: см. `.cursor/plans/chain_waveguide_and_scope_*.plan.md`
+  - **Acceptance**: сигнал `physical_flow/supply` по 5-hop supply chain доходит до конца с amplitude >= 0.60 (vs 0.32 сейчас); supply chains появляются в scope как единый entry; новые рёбра провоцируют re-propagation.
 
 - **Critical Paths в Propagation (высокий приоритет)**
   - **Проблема**: сейчас затухание "тупое" — все рёбра равны, а некоторые ветки распространения важнее других.
@@ -1924,7 +2710,7 @@ type PolicyDecision struct {
 - **Async LLM Queue для сложных Propagation-решений (низкий приоритет)**
   - **Когда**: классификация неоднозначна, conflict resolution, causal inference для explain trace.
   - **Решение**:
-    - Отдельная Cloud Tasks queue `h1horizon-propagation-llm` с throttling.
+    - Отдельная Cloud Tasks queue `etigram-propagation-llm` с throttling.
     - `PropagationLLMTask` содержит контекст (fragment, metric, signals, damping state).
     - `PropagationLLMExecutor` подчиняется тем же правилам затухания (depth check, damping factor), использует `min_capability_score=6`.
   - **Acceptance**: LLM вызывается только async, подчиняется damping, не блокирует hot path.
@@ -1939,7 +2725,56 @@ type PolicyDecision struct {
 - Можно ответить на "Top supply disruption risks for Tesla battery logistics" из структурированных данных.
 - Propagation policies и synthesis rules управляются через Firestore без редеплоя.
 
-### E.1) Гибкие кластеры сущностей для упрощения управления рисками (идея/требование)
+### E.1) Node Impedance — сопротивление среды при пропагации (идея/roadmap)
+
+**Цель**: моделировать **пассивное сопротивление** узлов графа к проходящим сигналам. Сейчас пропагация знает только два модификатора на уровне узла: chokepoint amplification (усиление на бутылочных горлышках) и waveguide (ослабление затухания внутри цепочек). Отсутствует обратный механизм — **импеданс**: узел с высокой устойчивостью (диверсификация поставщиков, стратегические запасы, geo-diversification) должен ослаблять проходящий сигнал.
+
+**Физическая аналогия**: в электрических цепях импеданс — свойство компонента (не провода), определяющее, как сильно он сопротивляется прохождению тока. Аналогично, `NodeImpedance` — свойство фрагмента, определяющее, как сильно он ослабляет сигнал определённой оси.
+
+**Три вида "сопротивления" в реальном мире**:
+
+| Вид | Описание | Моделируемость |
+|---|---|---|
+| **A. Passive impedance** | Узел ослабляет сигнал из-за своих свойств (диверсификация, запасы, ликвидность) | Ложится на физическую модель; реализуемо |
+| **B. Active reaction** | Узел порождает контр-сигнал (контрсанкции, перестройка логистики) | Другая парадигма (trigger rules); отложено |
+| **C. Structural adaptation** | Узел перестраивает связи (поиск новых поставщиков) | Scouting/discovery, не propagation |
+
+**Реализация passive impedance (когда будут данные)**:
+
+- Функция `NodeImpedance(frag *HorizonFragment, axis string) float64` возвращает множитель `[0.0, 1.0]`:
+  - `1.0` = нет сопротивления (сигнал проходит полностью)
+  - `0.5` = высокое сопротивление (сигнал ослабляется вдвое)
+- Место вызова: рядом с `IsChokepointFragment` / `TransitAmplify` в propagation loop
+- Impedance per axis: один узел может быть устойчив к `physical_flow/supply` (5 альтернативных поставщиков), но уязвим к `legal/access` (одна юрисдикция)
+
+**Источники impedance value**:
+
+| Источник | Axis | Пример |
+|---|---|---|
+| Количество incoming SUPPLIES_TO edges | physical_flow/supply | 5 поставщиков = impedance 0.6 |
+| Geo-diversification (unique jurisdictions) | legal/access, geo/conflict | Операции в 8 странах = impedance 0.5 |
+| Market liquidity / participant count | financial/settlement | Высоколиквидный рынок = impedance 0.4 |
+| Strategic reserves / buffer capacity | logistics/capacity | Стратегические запасы лития = impedance 0.7 |
+
+**Три топологических модификатора propagation**:
+
+| Modifier | Level | Effect | Status |
+|---|---|---|---|
+| Chokepoint amplification | Node | Усиливает | Реализовано |
+| Chain waveguide | Edge/path | Снижает затухание | В разработке |
+| **Node impedance** | Node | Ослабляет | Roadmap (нужен источник данных) |
+
+**Блокер**: для impedance нужен **надёжный continuous-valued** источник данных. Chokepoint работает потому что `GeoFeatureType = "strait"` — бинарный и надёжный. Impedance требует вычисляемых значений (count of edges, diversity metrics), и ошибки в них будут искажать всю пропагацию.
+
+**Предварительные шаги**:
+- [ ] Определить минимальный набор impedance-источников (начать с graph-structural: count of alternative edges)
+- [ ] Реализовать `NodeImpedance()` как read-only diagnostic (логирование, не влияет на пропагацию)
+- [ ] Калибровать на реальных данных (сравнить impedance-aware vs текущий propagation)
+- [ ] Включить impedance в propagation после калибровки
+
+**Оценка**: 2-3 недели (когда будут данные для калибровки)
+
+### E.2) Гибкие кластеры сущностей для упрощения управления рисками (идея/требование)
 
 **Цель**: реализовать гибкие, нечёткие и, возможно, пересекающиеся кластеры сущностей в Horizon, к которым будут применимы те же идеи — рисковое управление, распространение, ресурсная общность, что и к обычным сущностям.
 

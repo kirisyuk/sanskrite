@@ -7,7 +7,7 @@
 Horizon использует общий realtime pipeline:
 
 - Backend публикует события через `internal/realtime.Publisher` в **Google Cloud Pub/Sub**.
-- Отдельный сервис WS-брокера `cmd/hatlone-ws` подписан на Pub/Sub топики и ретранслирует события в WebSocket клиентов.
+- Отдельный сервис WS-брокера `cmd/etigram-ws` подписан на Pub/Sub топики и ретранслирует события в WebSocket клиентов.
 - Клиент открывает WebSocket и **подписывается на проект** control-сообщением `subscribe`.
 
 ## WebSocket подключение
@@ -63,7 +63,7 @@ WS сервер отвечает ACK:
 
 ## Event types (актуальные)
 
-Все события Horizon используют namespace **`horizon.*`** и уходят в отдельный Pub/Sub топик `hatlone.horizon.events`.
+Все события Horizon используют namespace **`horizon.*`** и уходят в отдельный Pub/Sub топик `etigram.horizon.events`.
 
 Envelope всегда одинаковый:
 
@@ -154,13 +154,13 @@ Legacy (kept during migration):
 ### WebSocket / broker plumbing
 
 - **WS endpoint `/ws`**
-  - `backend/cmd/hatlone-ws/main.go` (отдельный сервис брокера)
+  - `backend/cmd/etigram-ws/main.go` (отдельный сервис брокера)
   - `backend/internal/realtime/ws.go` (Hub: subscribe + project routing)
   - `backend/internal/realtime/subscriber.go` (Pub/Sub → WS delivery)
 - **Pub/Sub routing по топикам**
   - `backend/internal/realtime/pubsub.go`
-    - `TopicHorizonEvents = "hatlone.horizon.events"`
-    - `routeTopicName(...)` — `horizon.*` → `hatlone.horizon.events`
+    - `TopicHorizonEvents = "etigram.horizon.events"`
+    - `routeTopicName(...)` — `horizon.*` → `etigram.horizon.events`
 
 ### Hook → Assemble (создание Lens) / Assembly events
 

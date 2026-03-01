@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -32,35 +31,6 @@ func prettyJSON(s string) string {
 		return s
 	}
 	return string(b)
-}
-
-// resolveRedirect was used in early tests; currently unused. Keep for future debugging.
-// nolint:unused
-func resolveRedirect(raw string) string {
-	// Follow redirects without sending auth; return final URL or the original if failure
-	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
-			return http.ErrUseLastResponse
-		}
-		return nil
-	}}
-	req, err := http.NewRequest("GET", raw, nil)
-	if err != nil {
-		return raw
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return raw
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		loc := resp.Header.Get("Location")
-		if loc != "" {
-			return loc
-		}
-	}
-	// If no redirect status, return the requested URL
-	return resp.Request.URL.String()
 }
 
 func runOnce(client *gen_combined.Client, modelAlias string, prompt string, schema map[string]interface{}) error {
@@ -541,7 +511,7 @@ func main() {
 		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
 	}
 	if projectID == "" {
-		projectID = "h1horizon-488615"
+		projectID = "etigram"
 	}
 	location := os.Getenv("VERTEX_LOCATION")
 	if location == "" {

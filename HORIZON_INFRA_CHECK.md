@@ -14,7 +14,7 @@
 
 2. **GCS Buckets**
    - ✓ `sanskrite-core-docs` - существует
-   - ✓ `h1horizon-488615-rag-documents` - существует
+   - ✓ `etigram-rag-documents` - существует
 
 3. **Vertex AI Search**
    - ✓ Discovery Engine API включен
@@ -22,8 +22,8 @@
 
 4. **Pub/Sub**
    - ✓ Топик `source.poll` - существует
-   - ✓ Топик `hatlone.operations.events` - существует
-   - ✓ Топик `hatlone.interaction.events` - существует
+   - ✓ Топик `etigram.operations.events` - существует
+   - ✓ Топик `etigram.interaction.events` - существует
    - ✓ Остальные агрегированные топики создаются автоматически
 
 5. **Secret Manager**
@@ -43,7 +43,7 @@
 7. **Переменные окружения Cloud Run**
    - ✓ `VERTEX_SEARCH_DATA_STORE_ID` = `rag-documents-store`
    - ✓ `VERTEX_SEARCH_LOCATION` = `global`
-   - ✓ `RAG_DOCUMENTS_BUCKET` = `h1horizon-488615-rag-documents`
+   - ✓ `RAG_DOCUMENTS_BUCKET` = `etigram-rag-documents`
    - ✓ `CORE_DOCS_BUCKET` = `sanskrite-core-docs`
 
 8. **Firestore Security Rules**
@@ -64,7 +64,7 @@ firebase deploy --only firestore:indexes
 
 Или через gcloud:
 ```bash
-gcloud firestore indexes create --project=h1horizon-488615
+gcloud firestore indexes create --project=etigram
 ```
 
 ### 3. Настроить Watchdog (рекомендация)
@@ -75,8 +75,8 @@ gcloud firestore indexes create --project=h1horizon-488615
 
 ## Скрипты для проверки и настройки
 
-1. **`scripts/check-horizon-infra.sh`** - полная проверка инфраструктуры
-2. **`scripts/setup-horizon-pubsub.sh`** - настройка Pub/Sub топиков
+1. **`scripts/check-etigram-infra.sh`** - полная проверка инфраструктуры
+2. **`scripts/setup-etigram-pubsub.sh`** - настройка Pub/Sub топиков
 3. **`scripts/create-vertex-search-datastore.sh`** - создание Data Store
 4. **`scripts/setup-horizon-watchdog.md`** - рекомендации по Watchdog
 
@@ -87,4 +87,3 @@ gcloud firestore indexes create --project=h1horizon-488615
 2. Настроить Watchdog (опционально, можно отложить)
 
 Все остальные компоненты настроены и готовы к работе.
-

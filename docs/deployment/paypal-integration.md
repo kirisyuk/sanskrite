@@ -78,7 +78,7 @@ The deployment script (`scripts/deploy`) has been updated to automatically inclu
 ### 3. Configure PayPal Dashboard
 
 1. Go to PayPal Developer Dashboard
-2. Set webhook URL: `https://h1horizon-api-sqt63d2k2q-uc.a.run.app/api/v1/paypal/webhook`
+2. Set webhook URL: `https://etigram-api-xxxx.run.app/api/v1/paypal/webhook`
 3. Subscribe to events:
    - `PAYMENT.SALE.COMPLETED`
    - `BILLING.SUBSCRIPTION.CANCELLED`

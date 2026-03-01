@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # Скрипт для конвертации документов из .txt в JSONL и импорта в Vertex AI Search
-# Использование: ./scripts/import-documents-to-vertex-search.sh [-p|--project h1horizon-488615]
+# Использование: ./scripts/import-documents-to-vertex-search.sh [-p|--project etigram]
 
-PROJECT="h1horizon-488615"
+PROJECT="etigram"
 DATA_STORE_ID="rag-documents-store"
 LOCATION="global"
-SOURCE_BUCKET="h1horizon-rag-documents"
-TEMP_BUCKET="${PROJECT}-vertex-search-import"
+SOURCE_BUCKET=""
+TEMP_BUCKET=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -16,6 +16,9 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown arg: $1" >&2; exit 2;;
   esac
 done
+
+SOURCE_BUCKET="${SOURCE_BUCKET:-${PROJECT}-rag-documents}"
+TEMP_BUCKET="${TEMP_BUCKET:-${PROJECT}-vertex-search-import}"
 
 echo "Importing documents to Vertex AI Search"
 echo "Project: $PROJECT"

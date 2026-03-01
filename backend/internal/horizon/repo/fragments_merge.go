@@ -39,13 +39,16 @@ type MergeResult struct {
 }
 
 // FragmentsMergeRepository is the single entry point for fragment merge operations.
-// It performs: data merge (merged_paths), edge reassign+dedup, duplicate delete, audit.
+// It performs: data merge (merged_paths), edge reassign+dedup, duplicate delete, audit,
+// materialized artifacts path rewrite, lens scope rewrite.
 // When redirectsRepo is set, records canonical path redirects so Resolve() returns the final path after merges.
 type FragmentsMergeRepository struct {
-	fragmentsRepo   *HorizonFragmentsRepository
-	edgesRepo       *DependencyEdgesRepository
-	mergeAuditRepo  *FragmentMergeAuditRepository
-	redirectsRepo   *CanonicalPathRedirectsRepository
+	fragmentsRepo      *HorizonFragmentsRepository
+	edgesRepo          *DependencyEdgesRepository
+	mergeAuditRepo     *FragmentMergeAuditRepository
+	redirectsRepo      *CanonicalPathRedirectsRepository
+	materializedRepo   *MaterializedArtifactsRepository
+	lensesRepo         *LensesRepository
 }
 
 // NewFragmentsMergeRepository creates a new merge repository.
@@ -69,6 +72,27 @@ func (r *FragmentsMergeRepository) WithRedirectsRepo(repo *CanonicalPathRedirect
 		return r
 	}
 	r.redirectsRepo = repo
+	return r
+}
+
+// WithMaterializedRepo wires the materialized artifacts repository. When set, merge
+// rewrites NodeRefs, Payload nodes, and Labels in MaterializedArtifacts (supply chains,
+// domain artifacts) so canonical paths stay consistent after fragment merge.
+func (r *FragmentsMergeRepository) WithMaterializedRepo(repo *MaterializedArtifactsRepository) *FragmentsMergeRepository {
+	if r == nil {
+		return r
+	}
+	r.materializedRepo = repo
+	return r
+}
+
+// WithLensesRepo wires the lenses repository. When set, merge rewrites lens.Scope,
+// ScopeFragments, and ResolvedQueries so paths reference the surviving canonical path.
+func (r *FragmentsMergeRepository) WithLensesRepo(repo *LensesRepository) *FragmentsMergeRepository {
+	if r == nil {
+		return r
+	}
+	r.lensesRepo = repo
 	return r
 }
 
@@ -152,6 +176,12 @@ func (r *FragmentsMergeRepository) mergeFragment(ctx context.Context, req MergeR
 	// 4.5. Record canonical path redirects so Resolve() returns the final path after merges.
 	r.recordMergeRedirects(ctx, dup, primary)
 
+	// 4.6. Rewrite canonical paths in materialized artifacts (supply chains, domain artifacts).
+	r.rewriteMaterializedArtifactsPaths(ctx, tenantID, dup, primary)
+
+	// 4.7. Rewrite lens scope entries (fromPath -> toPath) so UI/graph stay consistent.
+	r.rewriteLensScopePaths(ctx, tenantID, dup, primary)
+
 	// 5. Delete duplicate
 	if err := r.fragmentsRepo.Delete(ctx, dupID); err != nil {
 		return nil, fmt.Errorf("failed to delete duplicate: %w", err)
@@ -192,6 +222,173 @@ func (r *FragmentsMergeRepository) recordMergeRedirects(ctx context.Context, dup
 	for src := range sources {
 		_, _, _, _ = r.redirectsRepo.RecordObservation(ctx,
 			"global", src, target, "merge", fragType, 1, mergeRedirectStableTTL)
+	}
+}
+
+// rewriteMaterializedArtifactsPaths replaces old canonical paths with the primary path in all
+// MaterializedArtifacts (supply chains, domain artifacts) that reference the duplicate.
+func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPaths(ctx context.Context, tenantID string, dup, primary *models.HorizonFragment) {
+	if r.materializedRepo == nil || dup == nil || primary == nil {
+		return
+	}
+	target := strings.TrimSpace(primary.CanonicalPath)
+	if target == "" {
+		return
+	}
+	// Collect all paths that map to target: duplicate path + merged_paths
+	pathsToReplace := make(map[string]struct{})
+	if p := strings.TrimSpace(dup.CanonicalPath); p != "" && p != target {
+		pathsToReplace[p] = struct{}{}
+	}
+	if merged := strings.TrimSpace(dup.Identifiers["merged_paths"]); merged != "" {
+		for _, p := range strings.Split(merged, ",") {
+			if p = strings.TrimSpace(p); p != "" && p != target {
+				pathsToReplace[p] = struct{}{}
+			}
+		}
+	}
+	if len(pathsToReplace) == 0 {
+		return
+	}
+
+	kinds := []models.MaterializedKind{
+		models.MaterializedKindSupplyChainPath,
+		models.MaterializedKindRegulatoryImpactMap,
+		models.MaterializedKindGovernanceChain,
+		models.MaterializedKindEcosystemMap,
+	}
+	// Collect all artifacts that reference any old path
+	toUpdate := make(map[string]*models.MaterializedArtifact)
+	findAndCollect := func(tid, oldPath string) {
+		for _, kind := range kinds {
+			artifacts, err := r.materializedRepo.FindByNodeRef(ctx, tid, oldPath, kind)
+			if err != nil || len(artifacts) == 0 {
+				continue
+			}
+			for _, art := range artifacts {
+				if art != nil && art.ID != "" {
+					toUpdate[art.ID] = art
+				}
+			}
+		}
+	}
+	for oldPath := range pathsToReplace {
+		findAndCollect(tenantID, oldPath)
+		if tenantID != "global" {
+			findAndCollect("global", oldPath)
+		}
+	}
+	// Replace all old paths with target in each artifact, then update once
+	for _, art := range toUpdate {
+		changed := false
+		for oldPath := range pathsToReplace {
+			if models.ReplaceCanonicalPathInArtifact(art, oldPath, target) {
+				changed = true
+			}
+		}
+		if changed {
+			_ = r.materializedRepo.Update(ctx, art)
+		}
+	}
+}
+
+// rewriteLensScopePaths replaces old canonical paths with the primary path in lens.Scope,
+// ScopeFragments, and ResolvedQueries for all lenses that reference the duplicate.
+func (r *FragmentsMergeRepository) rewriteLensScopePaths(ctx context.Context, tenantID string, dup, primary *models.HorizonFragment) {
+	if r.lensesRepo == nil || dup == nil || primary == nil {
+		return
+	}
+	target := strings.TrimSpace(primary.CanonicalPath)
+	if target == "" {
+		return
+	}
+	pathsToReplace := make([]string, 0, 8)
+	if p := strings.TrimSpace(dup.CanonicalPath); p != "" && p != target {
+		pathsToReplace = append(pathsToReplace, p)
+	}
+	if merged := strings.TrimSpace(dup.Identifiers["merged_paths"]); merged != "" {
+		for _, p := range strings.Split(merged, ",") {
+			if p = strings.TrimSpace(p); p != "" && p != target {
+				pathsToReplace = append(pathsToReplace, p)
+			}
+		}
+	}
+	if len(pathsToReplace) == 0 {
+		return
+	}
+
+	for _, fromPath := range pathsToReplace {
+		lenses, err := r.lensesRepo.FindByScope(ctx, tenantID, fromPath, 200)
+		if err != nil || len(lenses) == 0 {
+			continue
+		}
+		for _, lens := range lenses {
+			if lens == nil {
+				continue
+			}
+			changed := false
+			for i, s := range lens.Scope {
+				if strings.TrimSpace(s) == fromPath {
+					lens.Scope[i] = target
+					changed = true
+				}
+			}
+			if lens.ScopeFragments != nil {
+				if fid, ok := lens.ScopeFragments[fromPath]; ok {
+					delete(lens.ScopeFragments, fromPath)
+					if _, ok2 := lens.ScopeFragments[target]; !ok2 && strings.TrimSpace(fid) != "" {
+						lens.ScopeFragments[target] = fid
+					}
+					changed = true
+				}
+			}
+			if lens.ResolvedQueries != nil {
+				for queryAddr, resolvedPaths := range lens.ResolvedQueries {
+					updated := false
+					for i, p := range resolvedPaths {
+						if strings.TrimSpace(p) == fromPath {
+							resolvedPaths[i] = target
+							updated = true
+						}
+					}
+					if updated {
+						seen := map[string]struct{}{}
+						out := make([]string, 0, len(resolvedPaths))
+						for _, p := range resolvedPaths {
+							p = strings.TrimSpace(p)
+							if p == "" {
+								continue
+							}
+							if _, ok := seen[p]; ok {
+								continue
+							}
+							seen[p] = struct{}{}
+							out = append(out, p)
+						}
+						lens.ResolvedQueries[queryAddr] = out
+						changed = true
+					}
+				}
+			}
+			if changed {
+				// De-dupe scope after rewrite
+				seen := map[string]struct{}{}
+				out := make([]string, 0, len(lens.Scope))
+				for _, s := range lens.Scope {
+					s = strings.TrimSpace(s)
+					if s == "" {
+						continue
+					}
+					if _, ok := seen[s]; ok {
+						continue
+					}
+					seen[s] = struct{}{}
+					out = append(out, s)
+				}
+				lens.Scope = out
+				_ = r.lensesRepo.Update(ctx, lens)
+			}
+		}
 	}
 }
 

@@ -27,10 +27,11 @@ const (
 
 // SeedInjector injects signal metrics into seed nodes.
 type SeedInjector struct {
-	fragmentsRepo *repo.HorizonFragmentsRepository
-	edgesRepo     *repo.DependencyEdgesRepository
-	applicability ApplicabilityEvaluator
-	vertexSearch  *ai.VertexAISearchClient
+	fragmentsRepo   *repo.HorizonFragmentsRepository
+	edgesRepo       *repo.DependencyEdgesRepository
+	applicability   ApplicabilityEvaluator
+	vertexSearch    *ai.VertexAISearchClient
+	materializedRepo *repo.MaterializedArtifactsRepository
 }
 
 // NewSeedInjector creates a new SeedInjector.
@@ -43,6 +44,12 @@ func NewSeedInjector(fragmentsRepo *repo.HorizonFragmentsRepository, edgesRepo *
 
 func (s *SeedInjector) WithApplicabilityEvaluator(evaluator ApplicabilityEvaluator) *SeedInjector {
 	s.applicability = evaluator
+	return s
+}
+
+// WithMaterializedRepo sets the materialized artifacts repository for supply chain attribution.
+func (s *SeedInjector) WithMaterializedRepo(r *repo.MaterializedArtifactsRepository) *SeedInjector {
+	s.materializedRepo = r
 	return s
 }
 
@@ -156,6 +163,35 @@ func (s *SeedInjector) Inject(ctx context.Context, signal *horizonmodels.SignalD
 			len(signal.SeedPaths),
 		)
 		return nil, fmt.Errorf("no seed nodes found for signal")
+	}
+
+	// Step 2.5: Resolve supply chain attribution for seed nodes.
+	if s.materializedRepo != nil {
+		chainIDs := map[string]bool{}
+		for _, path := range signal.SeedPaths {
+			path = strings.TrimSpace(path)
+			if path == "" {
+				continue
+			}
+			chains, err := s.materializedRepo.FindByNodeRef(ctx, "global", path, horizonmodels.MaterializedKindSupplyChainPath)
+			if err != nil {
+				continue
+			}
+			for _, c := range chains {
+				if c.ID != "" && !chainIDs[c.ID] {
+					chainIDs[c.ID] = true
+				}
+			}
+		}
+		if len(chainIDs) > 0 {
+			refs := make([]string, 0, len(chainIDs))
+			for id := range chainIDs {
+				refs = append(refs, id)
+			}
+			sort.Strings(refs)
+			signal.ChainRefs = refs
+			log.Printf("%s chain_attribution signalId=%s chains=%d", signalsys.LogSeed, strings.TrimSpace(signal.ID), len(refs))
+		}
 	}
 
 	// Step 3: Update metrics on seed nodes

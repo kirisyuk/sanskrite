@@ -18,7 +18,7 @@
 
 ```bash
 curl -X POST \
-  https://h1horizon-api-sqt63d2k2q-uc.a.run.app/api/v1/sources/{sourceId}/reprocess \
+  https://etigram-api-sqt63d2k2q-uc.a.run.app/api/v1/sources/{sourceId}/reprocess \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -36,7 +36,7 @@ curl -X POST \
 ### Что происходит
 
 1. Эндпоинт находит все документы со статусом `"embedded"` для источника
-2. Асинхронно публикует события `EventDocProcess` в топик `hatlone.artifact.events`
+2. Асинхронно публикует события `EventDocProcess` в топик `etigram.artifact.events`
 3. DocumentProcessor получает события и обрабатывает документы:
    - LLM-извлечение (категории, темы, сущности, события, claims)
    - Извлечение онтологии через `OntologyExtractor`

@@ -13,9 +13,9 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Параметры по умолчанию
-PROJECT_ID="${GCP_PROJECT_ID:-h1horizon-488615}"
+PROJECT_ID="${GCP_PROJECT_ID:-etigram}"
 REGION="${GCP_REGION:-us-central1}"
-SERVICE="${CLOUD_RUN_SERVICE:-h1horizon-api}"
+SERVICE="${CLOUD_RUN_SERVICE:-etigram-api}"
 
 echo -e "${BLUE}=== Отключение агента запуска скаутов ===${NC}"
 echo -e "Проект: ${GREEN}$PROJECT_ID${NC}"

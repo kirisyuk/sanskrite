@@ -12,8 +12,14 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Configuration
-API_URL="${API_URL:-https://h1horizon-api-sqt63d2k2q-uc.a.run.app}"
+API_URL="${API_URL:-$(gcloud run services describe etigram-api --region=us-central1 --project=etigram --format='value(status.url)' 2>/dev/null || echo "")}"
 TEST_QUERY="${TEST_QUERY:-latest news about AI}"
+
+if [[ -z "$API_URL" ]]; then
+    echo -e "${RED}Error: API_URL not set and etigram-api Cloud Run service not found${NC}"
+    echo -e "${YELLOW}Set API_URL environment variable or deploy etigram-api first${NC}"
+    exit 1
+fi
 
 # Get Tavily API key
 if [[ -z "${TAVILY_API_KEY:-}" ]]; then
@@ -194,7 +200,7 @@ echo ""
 # Test 4: Verify Tavily key is accessible in Cloud Run
 echo -e "${BLUE}[Test 4] Verifying Tavily secret in Cloud Run...${NC}"
 if command -v gcloud >/dev/null 2>&1; then
-    SECRET_CHECK=$(gcloud run services describe h1horizon-api --region=us-central1 \
+    SECRET_CHECK=$(gcloud run services describe etigram-api --region=us-central1 \
         --format="value(spec.template.spec.containers[0].env)" 2>/dev/null | grep -o "TAVILY_API_KEY" || echo "")
     
     if [[ -n "$SECRET_CHECK" ]]; then
@@ -233,4 +239,3 @@ echo -e "     ${BLUE}cd backend && TAVILY_API_KEY=\$TAVILY_API_KEY go run ./cmd/
 echo -e "  2. Test with authentication (requires valid token):"
 echo -e "     ${BLUE}curl -H \"Authorization: Bearer <token>\" ...${NC}"
 echo ""
-

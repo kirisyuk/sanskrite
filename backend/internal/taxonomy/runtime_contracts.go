@@ -109,6 +109,7 @@ var builtInProductTypesOrdered = []string{
 	"consumer",
 	"metal",
 	"magnetic",
+	"goods", // generic goods (general-cargo, etc.)
 }
 
 var builtInProductStagesOrdered = []string{
@@ -120,6 +121,11 @@ var builtInProductStagesOrdered = []string{
 	"processing",
 	"manufacturing",
 	"assembly",
+	"medical-supplies", // healthcare products
+	"delivery",         // logistics stage
+	"distribution",     // logistics
+	"export",           // trade stage
+	"service",          // service subdomain (e.g. healthcare/service)
 }
 
 var builtInAllowedProductCategories = setOf(builtInProductCategoriesOrdered...)

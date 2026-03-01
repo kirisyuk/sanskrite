@@ -37,7 +37,7 @@
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_deduplicate_fragments \
-  --project=hatlone-test \
+  --project=etigram \
   --dry-run=false \
   --limit=100 \
   --verbose
@@ -101,13 +101,13 @@ go run ./cmd/tools/horizon_deduplicate_fragments \
 ```bash
 # Дедупликация всех типов
 go run ./cmd/tools/horizon_smart_dedup \
-  --project=hatlone-test \
+  --project=etigram \
   --apply \
   --verbose
 
 # Только организации
 go run ./cmd/tools/horizon_smart_dedup \
-  --project=hatlone-test \
+  --project=etigram \
   --type=ORGANIZATION \
   --apply \
   --enable-org-name-only \
@@ -115,7 +115,7 @@ go run ./cmd/tools/horizon_smart_dedup \
 
 # Только исправление рёбер (без дедупликации фрагментов)
 go run ./cmd/tools/horizon_smart_dedup \
-  --project=hatlone-test \
+  --project=etigram \
   --fix-edges-only \
   --apply
 ```
@@ -151,7 +151,7 @@ go run ./cmd/tools/horizon_smart_dedup \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_cleanup_orphaned_versions \
-  --project=hatlone-test \
+  --project=etigram \
   --dry-run=false
 ```
 
@@ -181,7 +181,7 @@ go run ./cmd/tools/horizon_cleanup_orphaned_versions \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_merge_discovered \
-  --project=hatlone-test \
+  --project=etigram \
   --apply \
   --limit=100
 ```
@@ -221,7 +221,7 @@ go run ./cmd/tools/horizon_merge_discovered \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_merge_org_aliases \
-  --project=hatlone-test \
+  --project=etigram \
   --apply \
   --min-confidence=0.85 \
   --only=ford-motor-company,byd-company
@@ -261,13 +261,13 @@ go run ./cmd/tools/horizon_merge_org_aliases \
 **Использование:**
 ```bash
 # Dry-run (по умолчанию)
-go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon-488615 --limit=500
+go run ./cmd/tools/horizon_backfill_coordinates --project=etigram --limit=500
 
 # Применить изменения
-go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon-488615 --apply --limit=1000
+go run ./cmd/tools/horizon_backfill_coordinates --project=etigram --apply --limit=1000
 
 # Только org/facility (без /loc)
-go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon-488615 --path-prefix=/org --skip-geonames
+go run ./cmd/tools/horizon_backfill_coordinates --project=etigram --path-prefix=/org --skip-geonames
 ```
 
 **Флаги:**
@@ -306,13 +306,13 @@ go run ./cmd/tools/horizon_backfill_coordinates --project=h1horizon-488615 --pat
 ```bash
 # Dry-run с прикреплением GeoNames ID
 go run ./cmd/tools/horizon_normalize_loc_geonames \
-  --project=hatlone-test \
+  --project=etigram \
   --limit=1000 \
   --skip-confidence-below=0.8
 
 # Применить изменения
 go run ./cmd/tools/horizon_normalize_loc_geonames \
-  --project=hatlone-test \
+  --project=etigram \
   --apply \
   --apply-geonames-id \
   --cursor-file=/tmp/normalize_cursor.json
@@ -396,12 +396,12 @@ go run ./cmd/tools/horizon_fix_administers_facility_direction \
 ```bash
 # Dry-run
 go run ./cmd/tools/horizon_backfill_index_paths \
-  --project=hatlone-test \
+  --project=etigram \
   --page-size=200
 
 # Применить изменения
 go run ./cmd/tools/horizon_backfill_index_paths \
-  --project=hatlone-test \
+  --project=etigram \
   --dry-run=false \
   --touch-timestamps \
   --start-after=lastDocID
@@ -438,16 +438,72 @@ go run ./cmd/tools/horizon_backfill_index_paths \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_check_signals \
-  --project=hatlone-test \
+  --project=etigram \
   --path=/org/byd \
   --limit=200
 ```
 
 **Флаги:**
-- `--project` (default: "hatlone-test") - GCP project ID
+- `--project` (default: "etigram") - GCP project ID
 - `--tenant` (default: "global") - Tenant ID
 - `--path` (required) - canonical path для инспекции (например, `/org/byd`)
 - `--limit` (default: 200) - максимальное количество фактов для сканирования
+
+---
+
+### `horizon_audit_zone_radii`
+
+**Назначение:** Аудит радиусов AFFECTED_ZONE. Проходит по зонам и оценивает адекватность радиуса через LLM (adequate / overly_broad / uncertain / suggest_radius).
+
+**Как работает:**
+1. Сканирует фрагменты с canonicalPath prefix `/zone/` (по умолчанию только radiusKm > 0; с `--include-zero` — все)
+2. Для каждой зоны вызывает LLM с контекстом (path, condition_type, radius, description)
+3. LLM возвращает verdict, confidence, reason, suggestedKm
+4. Выводит JSONL отчёт (stdout или файл)
+
+**Использование:**
+```bash
+go run ./cmd/tools/horizon_audit_zone_radii \
+  --project=etigram \
+  --limit=0 \
+  --include-zero \
+  --out=audit_zones_full.jsonl
+```
+
+**Флаги:**
+- `--project` (default: "etigram") - GCP project ID
+- `--limit` (default: 100) - макс. зон для аудита (0 = все)
+- `--include-zero` - включить зоны с radiusKm=0 (LLM предложит радиус)
+- `--model` (default: "gemini-2.5-flash-lite") - LLM модель
+- `--out` - путь к JSONL файлу (по умолчанию stdout)
+
+**Требования:** GEMINI_API_KEY, опционально OPENAI_API_KEY и GROK_API_KEY в env/Secret Manager.
+
+---
+
+### `horizon_apply_zone_radius_audit`
+
+**Назначение:** Применяет исправления из JSONL-отчёта `horizon_audit_zone_radii` к Firestore.
+
+**Как работает:**
+1. Читает JSONL с verdict и suggestedKm
+2. Для строк с verdict=overly_broad или suggest_radius и suggestedKm > 0 обновляет fragment.RadiusKm
+3. По умолчанию dry-run (без записи)
+
+**Использование:**
+```bash
+# Dry-run (показать, что будет изменено)
+go run ./cmd/tools/horizon_apply_zone_radius_audit --project=etigram --in=audit_zones_full.jsonl
+
+# Применить изменения
+go run ./cmd/tools/horizon_apply_zone_radius_audit --project=etigram --in=audit_zones_full.jsonl --apply --dry-run=false
+```
+
+**Флаги:**
+- `--project` (default: "etigram") - GCP project ID
+- `--in` (default: "audit_zones_full.jsonl") - входной JSONL
+- `--apply` - разрешить запись
+- `--dry-run` (default: true) - только показать, не писать
 
 ---
 
@@ -457,8 +513,8 @@ go run ./cmd/tools/horizon_check_signals \
 
 **Использование:**
 ```bash
-go run ./cmd/tools/check_market_submarket_bidirectional --project=hatlone-test
-go run ./cmd/tools/check_market_submarket_bidirectional --project=hatlone-test --limit=20
+go run ./cmd/tools/check_market_submarket_bidirectional --project=etigram
+go run ./cmd/tools/check_market_submarket_bidirectional --project=etigram --limit=20
 ```
 
 **Флаги:**
@@ -483,7 +539,7 @@ go run ./cmd/tools/check_market_submarket_bidirectional --project=hatlone-test -
 go run ./cmd/tools/check_founded_edges
 ```
 
-**Примечание:** Использует хардкод project ID "hatlone-test". Для других проектов нужно изменить код.
+**Примечание:** Использует хардкод project ID "etigram". Для других проектов нужно изменить код.
 
 ---
 
@@ -502,7 +558,7 @@ go run ./cmd/tools/check_founded_edges
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_reexport_fragments \
-  --project=hatlone-test \
+  --project=etigram \
   --bucket=my-bucket \
   --resume \
   --checkpoint-file=/tmp/reexport_checkpoint.txt
@@ -536,14 +592,14 @@ go run ./cmd/tools/horizon_reexport_fragments \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_propagate_metric \
-  --project=hatlone-test \
+  --project=etigram \
   --path=/org/byd \
   --metric=/metric/risk/supply_chain_criticality \
   --delta=0.1
 ```
 
 **Флаги:**
-- `--project` (default: "hatlone-test") - GCP project ID
+- `--project` (default: "etigram") - GCP project ID
 - `--path` (required) - canonical path фрагмента
 - `--metric` (required) - имя метрики для изменения
 - `--delta` (default: 0.1) - изменение значения метрики
@@ -612,7 +668,7 @@ go run ./cmd/tools/horizon_propagation_calibration \
 **Использование:**
 ```bash
 go run ./cmd/tools/horizon_edge_policy_report \
-  --project=hatlone-test \
+  --project=etigram \
   --tenant=global \
   --window-hours=24 \
   --baseline-shift-hours=24 \
@@ -644,19 +700,19 @@ go run ./cmd/tools/horizon_edge_policy_report \
 ```bash
 # Найти фрагменты без Wikidata
 go run ./cmd/tools/horizon_find_missing_wikidata \
-  --project=hatlone-test \
+  --project=etigram \
   --limit=1000 \
   --format=jsonl
 
 # С предложениями Wikidata
 go run ./cmd/tools/horizon_find_missing_wikidata \
-  --project=hatlone-test \
+  --project=etigram \
   --suggest-wikidata \
   --limit=100
 
 # Применить найденные Wikidata ID
 go run ./cmd/tools/horizon_find_missing_wikidata \
-  --project=hatlone-test \
+  --project=etigram \
   --suggest-wikidata \
   --apply-wikidata-ref \
   --apply-industry \
@@ -716,7 +772,7 @@ go run ./cmd/tools/horizon_find_missing_wikidata \
 ```bash
 # Dry-run: backfill MARKET profile + market metrics
 go run ./cmd/tools/horizon_llm_backfill \
-  --project=hatlone-test \
+  --project=etigram \
   --features=market_profile,market_metrics \
   --types=MARKET \
   --limit=200 \
@@ -725,7 +781,7 @@ go run ./cmd/tools/horizon_llm_backfill \
 
 # Apply: backfill org classifiers
 go run ./cmd/tools/horizon_llm_backfill \
-  --project=hatlone-test \
+  --project=etigram \
   --apply \
   --features=org_classifiers \
   --types=ORGANIZATION \
@@ -882,10 +938,10 @@ go run ./cmd/tools/horizon_llm_backfill \
 
 ```bash
 # Только отчет
-go run ./cmd/tools/horizon_deduplicate_fragments --project=hatlone-test
+go run ./cmd/tools/horizon_deduplicate_fragments --project=etigram
 
 # Применить изменения
-go run ./cmd/tools/horizon_deduplicate_fragments --project=hatlone-test --dry-run=false
+go run ./cmd/tools/horizon_deduplicate_fragments --project=etigram --dry-run=false
 ```
 
 ### Миграция ссылок

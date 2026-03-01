@@ -15,6 +15,85 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 )
 
+// normalizeViewConfigForClient fixes PascalCase keys in viewConfig.domains
+// that result from storing DomainResolution structs without firestore tags.
+// Existing Firestore documents may have PascalCase field names (CanonicalPath,
+// ContractType, etc.); this normalizes them to camelCase for the frontend.
+func normalizeViewConfigForClient(lens *models.Lens) {
+	if lens == nil || lens.ViewConfig == nil {
+		return
+	}
+	raw, ok := lens.ViewConfig["domains"]
+	if !ok || raw == nil {
+		return
+	}
+	items, ok := toSliceOfMaps(raw)
+	if !ok || len(items) == 0 {
+		return
+	}
+	normalized := make([]map[string]interface{}, 0, len(items))
+	for _, m := range items {
+		nm := normalizeDomainMapKeys(m)
+		if len(nm) > 0 {
+			normalized = append(normalized, nm)
+		}
+	}
+	lens.ViewConfig["domains"] = normalized
+}
+
+func toSliceOfMaps(v interface{}) ([]map[string]interface{}, bool) {
+	switch t := v.(type) {
+	case []map[string]interface{}:
+		return t, true
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(t))
+		for _, item := range t {
+			if m, ok := item.(map[string]interface{}); ok {
+				out = append(out, m)
+			}
+		}
+		return out, len(out) > 0
+	default:
+		return nil, false
+	}
+}
+
+func normalizeDomainMapKeys(m map[string]interface{}) map[string]interface{} {
+	if m == nil {
+		return nil
+	}
+	pick := func(camel, pascal string) (interface{}, bool) {
+		if v, ok := m[camel]; ok {
+			return v, true
+		}
+		if v, ok := m[pascal]; ok {
+			return v, true
+		}
+		return nil, false
+	}
+	out := make(map[string]interface{}, len(m))
+	mapping := [][2]string{
+		{"canonicalPath", "CanonicalPath"},
+		{"contractType", "ContractType"},
+		{"title", "Title"},
+		{"description", "Description"},
+		{"facets", "Facets"},
+		{"projections", "Projections"},
+		{"relatedDomains", "RelatedDomains"},
+		{"affectedDomains", "AffectedDomains"},
+		{"firstOrderEntities", "FirstOrderEntities"},
+		{"confidence", "Confidence"},
+		{"reason", "Reason"},
+		{"supplyChainExecutionPlan", "SupplyChainExecutionPlan"},
+	}
+	for _, pair := range mapping {
+		if v, ok := pick(pair[0], pair[1]); ok && v != nil {
+			out[pair[0]] = v
+		}
+	}
+	return out
+}
+
 func lensValidationStatus(err error) int {
 	if err == nil {
 		return http.StatusOK
@@ -184,6 +263,8 @@ func (h *HorizonHandlers) GetLens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	normalizeViewConfigForClient(lens)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(lens)
 }
@@ -310,6 +391,10 @@ func (h *HorizonHandlers) ListLenses(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	for _, l := range lenses {
+		normalizeViewConfigForClient(l)
 	}
 
 	response := map[string]interface{}{

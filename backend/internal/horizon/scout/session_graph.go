@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 )
 
 // SessionGraph provides an in-memory cache for fragments discovered/created during a single job session.
@@ -378,17 +379,14 @@ func (sg *SessionGraph) removeFragmentFromNameIndex(frag *models.HorizonFragment
 }
 
 // normalizeName normalizes a name for index lookup.
+// Uses NormalizeEntityName which strips 30+ legal suffixes/prefixes,
+// removes dots/commas, normalizes spacing, and strips diacritics.
 func (sg *SessionGraph) normalizeName(name string) string {
 	name = strings.TrimSpace(name)
-	name = strings.ToLower(name)
-	// Remove common suffixes that cause false mismatches
-	for _, suffix := range []string{" inc", " inc.", " corp", " corp.", " ltd", " ltd.", " llc", " plc", " co", " co."} {
-		if strings.HasSuffix(name, suffix) {
-			name = strings.TrimSuffix(name, suffix)
-			name = strings.TrimSpace(name)
-		}
+	if name == "" {
+		return ""
 	}
-	return name
+	return naming.NormalizeEntityName(name)
 }
 
 // extractJurisdiction extracts the jurisdiction (country code) from a canonical path.

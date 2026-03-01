@@ -86,7 +86,7 @@
 2. **WebSocket события**
    - ✅ WebSocket endpoint реализован через общий realtime broker (`/ws?token=...`)
    - ✅ Подписка по проекту реализована control message `{"type":"subscribe","projectId":"..."}`
-   - ✅ Horizon события публикуются через `realtime.Publisher` и маршрутизируются по `horizon.*` в отдельный Pub/Sub топик `hatlone.horizon.events`
+   - ✅ Horizon события публикуются через `realtime.Publisher` и маршрутизируются по `horizon.*` в отдельный Pub/Sub топик `etigram.horizon.events`
    - ✅ Реализованы события: `horizon.assembly.failed`, `horizon.graph.edge.upserted`, `horizon.propagation.node_updated`, `horizon.propagation.completed`
    - ⚠️ Lens-based subscription (server-side фильтрация по lensId) пока не реализована (фильтрация по lensId делается на клиенте)
 
@@ -252,8 +252,8 @@
 #### ⚠️ Частично реализовано
 
 - События публикуются через `realtime.Publisher`
-- Реализация WS: общий `/ws` (через `cmd/hatlone-ws`) + project subscription `subscribe`
-- Horizon события: namespace `horizon.*` + отдельный Pub/Sub топик `hatlone.horizon.events`
+- Реализация WS: общий `/ws` (через `cmd/etigram-ws`) + project subscription `subscribe`
+- Horizon события: namespace `horizon.*` + отдельный Pub/Sub топик `etigram.horizon.events`
 - В старой документации встречается `wss://.../ws/risk` — заменить на `/ws` (см. `docs/horizon/realtime.md`)
 
 ### 10. Индексы Firestore
@@ -276,7 +276,7 @@
 **Проверка индексов**:
 ```bash
 # Проверить существующие индексы
-gcloud firestore indexes composite list --project=h1horizon-488615
+gcloud firestore indexes composite list --project=etigram
 
 # Применить индексы из firestore.indexes.json
 firebase deploy --only firestore:indexes
@@ -459,7 +459,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 - **Новые env vars** (Cloud Run):
   - `HORIZON_FRAGMENTS_BUCKET` — отдельный bucket для JSON‑экспорта фрагментов.
-    - В деплое по умолчанию: `${PROJECT_ID}-horizon-fragments` (в проде: `h1horizon-horizon-fragments`).
+    - В деплое по умолчанию: `${PROJECT_ID}-horizon-fragments` (в проде: `etigram-etigram-fragments`).
   - `VERTEX_SEARCH_HORIZON_DATA_STORE_ID` — отдельный Data Store для фрагментов.
     - В деплое по умолчанию: `horizon-fragments-store`.
 
@@ -520,15 +520,15 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 - Создан `backend/cmd/tools/horizon_reexport_fragments/main.go` для массового re-export всех фрагментов из Firestore
 - Поддержка флага `--skip-existing` для продолжения с места остановки (пропускает уже экспортированные файлы)
 - Использование: 
-  - `go run ./cmd/tools/horizon_reexport_fragments -project h1horizon-488615 -bucket h1horizon-horizon-fragments -skip-existing`
-  - Или использовать скомпилированный бинарник: `./bin/horizon_reexport_fragments -project h1horizon-488615 -bucket h1horizon-horizon-fragments -skip-existing`
+  - `go run ./cmd/tools/horizon_reexport_fragments -project etigram -bucket etigram-etigram-fragments -skip-existing`
+  - Или использовать скомпилированный бинарник: `./bin/horizon_reexport_fragments -project etigram -bucket etigram-etigram-fragments -skip-existing`
 
 ### Инфраструктура (GCS + Vertex AI Search)
 
 #### 1) Созданы отдельные ресурсы
 
 - **GCS bucket** для фрагментов:
-  - `gs://h1horizon-horizon-fragments`
+  - `gs://etigram-etigram-fragments`
 - **Discovery Engine Data Store** для фрагментов:
   - `horizon-fragments-store` (location: `global`)
 
@@ -539,15 +539,15 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
   - `bash scripts/deploy --api`
 
 - Результат:
-  - Cloud Run service: `h1horizon-api`
-  - URL: `https://h1horizon-api-sqt63d2k2q-uc.a.run.app`
-  - Revision: `h1horizon-api-00709-dn4` (последний деплой с исправленным форматом экспорта)
-  - Предыдущая ревизия: `h1horizon-api-00708-xfn` (2025-12-21)
+  - Cloud Run service: `etigram-api`
+  - URL: `https://etigram-api-sqt63d2k2q-uc.a.run.app`
+  - Revision: `etigram-api-00709-dn4` (последний деплой с исправленным форматом экспорта)
+  - Предыдущая ревизия: `etigram-api-00708-xfn` (2025-12-21)
 
 #### 3) Что было сделано вручную/скриптами
 
 - Создание bucket:
-  - `gcloud storage buckets create gs://h1horizon-horizon-fragments --location=US --uniform-bucket-level-access`
+  - `gcloud storage buckets create gs://etigram-etigram-fragments --location=US --uniform-bucket-level-access`
 - Создание Data Store:
   - REST call `.../dataStores?dataStoreId=horizon-fragments-store` (добавлено и в `scripts/deploy`).
 
@@ -557,7 +557,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 Перенос существующих файлов:
 
-- `gcloud storage rsync -r gs://h1horizon-rag-documents/global/horizon_fragments gs://h1horizon-horizon-fragments/global/horizon_fragments`
+- `gcloud storage rsync -r gs://etigram-rag-documents/global/horizon_fragments gs://etigram-etigram-fragments/global/horizon_fragments`
 
 Пояснение:
 - `6999` — количество JSON‑файлов (по одному на фрагмент) в папке `global/horizon_fragments/`.
@@ -581,7 +581,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 Примеры запуска:
 - Простой: `bash scripts/backfill-horizon-fragments.sh`
-- С параметрами: `PROJECT=h1horizon-488615 BUCKET=h1horizon-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
+- С параметрами: `PROJECT=etigram BUCKET=etigram-etigram-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
 
 ### Frontend (подсказки в AssembleLensRequest)
 
@@ -596,23 +596,23 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 1) **GCloud auth + project**
 - `gcloud auth login`
-- `gcloud config set project h1horizon-488615`
+- `gcloud config set project etigram`
 
 2) **Проверить наличие ресурсов**
-- `gcloud storage buckets describe gs://h1horizon-horizon-fragments`
-- `ACCESS_TOKEN=$(gcloud auth print-access-token) && curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "X-Goog-User-Project: sanskrite" "https://discoveryengine.googleapis.com/v1beta/projects/h1horizon-488615/locations/global/dataStores" | grep horizon-fragments-store`
+- `gcloud storage buckets describe gs://etigram-etigram-fragments`
+- `ACCESS_TOKEN=$(gcloud auth print-access-token) && curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "X-Goog-User-Project: sanskrite" "https://discoveryengine.googleapis.com/v1beta/projects/etigram/locations/global/dataStores" | grep horizon-fragments-store`
 
 3) **Деплой API**
 - `bash scripts/deploy --api`
 
 4) **Проверка, что env применились**
-- `gcloud run services describe h1horizon-api --region us-central1 --format='value(spec.template.spec.containers[0].env)' | grep -E 'HORIZON_FRAGMENTS_BUCKET|VERTEX_SEARCH_HORIZON_DATA_STORE_ID'`
+- `gcloud run services describe etigram-api --region us-central1 --format='value(spec.template.spec.containers[0].env)' | grep -E 'HORIZON_FRAGMENTS_BUCKET|VERTEX_SEARCH_HORIZON_DATA_STORE_ID'`
 
 5) **Re-export фрагментов (если нужно пересоздать файлы в новом формате)**
 - Рекомендуемый запуск (ресюмируемый, с чекпоинтом):
   - **Важно**: если в бакете уже есть файлы старого формата, `--skip-existing` нельзя — он НЕ перезапишет их.
   - Первый прогон для гарантированного приведения формата: **без** `--skip-existing`:
-    - `./bin/horizon_reexport_fragments -project h1horizon-488615 -bucket h1horizon-horizon-fragments -tenant global -resume -checkpoint-file /tmp/horizon_reexport_checkpoint.txt -checkpoint-every 100 -heartbeat 30s -stall-timeout 30m`
+    - `./bin/horizon_reexport_fragments -project etigram -bucket etigram-etigram-fragments -tenant global -resume -checkpoint-file /tmp/horizon_reexport_checkpoint.txt -checkpoint-every 100 -heartbeat 30s -stall-timeout 30m`
   - Если процесс прервался — повторить ту же команду (чекпоинт продолжит после последнего docID).
 - После того как ты уверен, что формат в бакете уже правильный, можно использовать `--skip-existing` для ускорения повторных прогонов.
 - Можно стартовать вручную после конкретного docID:
@@ -622,16 +622,16 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 6) **Backfill (после завершения re-export)**
 - Простой запуск: `bash scripts/backfill-horizon-fragments.sh`
-- Или с параметрами: `PROJECT=h1horizon-488615 BUCKET=h1horizon-horizon-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
+- Или с параметрами: `PROJECT=etigram BUCKET=etigram-etigram-fragments DATA_STORE_ID=horizon-fragments-store TENANT=global BATCH_SIZE=100 bash scripts/backfill-horizon-fragments-vertex.sh`
 - **Важно**: Дождаться завершения re-export перед запуском backfill
 - **Важно (Discovery Engine)**: импорт `dataSchema=document` требует `Document.content` как **объект** (`{"mimeType":"text/plain","rawBytes":"<base64>"}`).
   Если `content` был строкой/лежал только в `structData`, импорты будут падать с ошибкой:
   `To create document without content, content config of data store must be NO_CONTENT.`
 
 7) **Cloud Tasks (после стабилизации/бэкфилла)**
-- Очередь Scout Cloud Tasks: `h1horizon-scout` (region: `us-central1`) — **сейчас PAUSED**.
+- Очередь Scout Cloud Tasks: `etigram-scout` (region: `us-central1`) — **сейчас PAUSED**.
 - Включать обратно **после** завершения бэкфилла/стабилизации:
-  - `gcloud tasks queues resume h1horizon-scout --project=h1horizon-488615 --location=us-central1`
+  - `gcloud tasks queues resume etigram-scout --project=etigram --location=us-central1`
 
 8) **Проверка эндпоинта**
 - `curl -X POST "$API_URL/api/horizon/entities/search" -H "Content-Type: application/json" -H "Authorization: Bearer <FIREBASE_ID_TOKEN>" -d '{"query":"Tesla","limit":10}'`
@@ -644,7 +644,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 ```bash
 # Применить индексы
-firebase deploy --only firestore:indexes --project h1horizon-488615
+firebase deploy --only firestore:indexes --project etigram
 
 # Или через gcloud (для векторных индексов)
 gcloud firestore indexes composite create \
@@ -653,12 +653,12 @@ gcloud firestore indexes composite create \
   --field-config='field-path=tenantId,order=ASCENDING' \
   --field-config='field-path=vectorEmbedding,vector-config={"dimension":"1536", "flat": "{}"}' \
   --database="(default)" \
-  --project=h1horizon-488615
+  --project=etigram
 ```
 
 **Проверка индексов**:
 ```bash
-gcloud firestore indexes composite list --project=h1horizon-488615
+gcloud firestore indexes composite list --project=etigram
 ```
 
 ### Текущий статус re-export (2025-12-22)
@@ -687,7 +687,7 @@ tail -f /tmp/reexport_final.log
 cat /tmp/horizon_reexport_checkpoint.txt
 
 # Проверить количество файлов в бакете
-gcloud storage ls gs://h1horizon-horizon-fragments/global/horizon_fragments/*.json | wc -l
+gcloud storage ls gs://etigram-etigram-fragments/global/horizon_fragments/*.json | wc -l
 ```
 
 **После завершения re-export**:
@@ -703,4 +703,4 @@ gcloud storage ls gs://h1horizon-horizon-fragments/global/horizon_fragments/*.js
 - **Backfill может падать посередине из-за OAuth**: токен истекает/требует reauth (`401 UNAUTHENTICATED`). Решение — обновлять access token на каждом батче и уметь продолжать с `START_BATCH`.
 - **Firestore “Unavailable” чаще всего вызван длинным стримом + минутными P99**: полный скан `ORDER_BY __name__ ASC` на `Documents().Next()` может сыпаться. Надёжнее читать страницами (`Limit(pageSize)` + `StartAfter(lastDocID)` + `GetAll()`), плюс чекпоинт/`--resume`.
 - **Не давать логам съедать диск**: `tee` в `/tmp/*.log` легко раздувается при tight-loop ошибках. Нужны backoff/троттлинг логов и ротация/очистка больших логов.
-- **Cloud Tasks queue `h1horizon-scout`**: `PAUSED` — это ручное действие (не “пустая очередь”), после стабилизации/бэкфилла нужно явно вернуть в `RESUME`.
+- **Cloud Tasks queue `etigram-scout`**: `PAUSED` — это ручное действие (не “пустая очередь”), после стабилизации/бэкфилла нужно явно вернуть в `RESUME`.

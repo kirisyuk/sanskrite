@@ -1,5 +1,5 @@
 #!/bin/bash
-# Скрипт настройки Pub/Sub топиков для Horizon
+# Скрипт настройки Pub/Sub топиков для Etigram
 
 set -e
 
@@ -9,23 +9,23 @@ if [ -z "$PROJECT_ID" ]; then
   exit 1
 fi
 
-echo "=== Настройка Pub/Sub топиков для Horizon ==="
+echo "=== Настройка Pub/Sub топиков для Etigram ==="
 echo "Проект: $PROJECT_ID"
 echo ""
 
-# Service account that publishes/subscribes (API + hatlone-ws usually share it)
+# Service account that publishes/subscribes (API + etigram-ws usually share it)
 SA="${PUBSUB_SERVICE_ACCOUNT:-backend@${PROJECT_ID}.iam.gserviceaccount.com}"
 
-# Агрегированные топики (используются системой realtime / hatlone-ws broker)
+# Агрегированные топики (используются системой realtime / etigram-ws broker)
 TOPICS=(
-  "hatlone.genai.streams"
-  "hatlone.discovery.events"
-  "hatlone.artifact.events"
-  "hatlone.interaction.events"
-  "hatlone.analysis.events"
-  "hatlone.verified.streams"
-  "hatlone.horizon.events"
-  "hatlone.operations.events"
+  "etigram.genai.streams"
+  "etigram.discovery.events"
+  "etigram.artifact.events"
+  "etigram.interaction.events"
+  "etigram.analysis.events"
+  "etigram.verified.streams"
+  "etigram.horizon.events"
+  "etigram.operations.events"
   "source.poll"
 )
 
@@ -48,7 +48,7 @@ for topic in "${TOPICS[@]}"; do
 done
 
 echo ""
-echo "=== Настройка подписок для hatlone-ws ==="
+echo "=== Настройка подписок для etigram-ws ==="
 echo "Subscriber создает подписки автоматически, но для надежности фиксируем их здесь (idempotent)."
 echo ""
 
@@ -77,6 +77,5 @@ for topic in "${TOPICS[@]}"; do
 done
 
 echo "Готово!"
-
 
 

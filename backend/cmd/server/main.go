@@ -348,7 +348,7 @@ func main() {
 			if err != nil {
 				log.Printf("HZN_GROUNDING WARN: component=bootstrap phase=vertex_service_init reasonCode=vertex_service_init_failed errorClass=provider_init_error err=%v", err)
 			} else {
-				if ds := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID")); ds != "" {
+				if ds := getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""); ds != "" {
 					vertexService = vertexService.WithDataStore(ds)
 				}
 				aiServices = append(aiServices, vertexService)
@@ -371,7 +371,14 @@ func main() {
 		}
 
 		exec := ai.NewAITaskExecutor(aiServices, modelManager).
-			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client()))
+			WithUsageMetrics(repo.NewUsageMetricsRepository(fsClient.Client())).
+			WithCircuitBreaker(ai.NewCircuitBreaker())
+		// Admission control: optional via env. Default disabled (NoopAdmissionController).
+		if maxTokens, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("AI_ADMISSION_MAX_TOKENS_PER_CASCADE_MIN"))); maxTokens > 0 {
+			exec = exec.WithAdmissionController(ai.NewInMemoryAdmissionController(maxTokens))
+		} else {
+			exec = exec.WithAdmissionController(ai.NoopAdmissionController())
+		}
 		aiExec = exec
 		aiExecHandler = httphandlers.NewAIExecHandler(exec)
 		wc := crawler.NewWebCrawler()
@@ -407,7 +414,7 @@ func main() {
 		genaiClient := gen_combined.NewClient(geminiClient, openaiAPIKey)
 
 		// Initialize BigQuery client and AI service
-		bigqueryDatasetID := getEnv("BIGQUERY_DATASET_ID", "h1horizon_488615_documents")
+		bigqueryDatasetID := getEnv("BIGQUERY_DATASET_ID", "etigram_documents")
 		if bq, err := gcp.NewBigQueryClient(ctx, projectID, bigqueryDatasetID, opts...); err == nil {
 			bqClient = bq
 			bigqueryAIService = services.NewBigQueryAIService(bqClient, genaiClient, logger)
@@ -700,7 +707,7 @@ func main() {
 		if pub != nil {
 			psClient := pub.Client()
 			// Передаем OntologyExtractor в DocumentProcessor
-			// Используем агрегированный топик hatlone.artifact.events, куда публикуются события EventDocProcess
+			// Используем агрегированный топик etigram.artifact.events, куда публикуются события EventDocProcess
 			worker := discovery.NewDocumentProcessor(psClient, string(realtime.TopicArtifactEvents), docsRepo, rulesRepo, exec, ontologyExtractor, logger)
 			go func() {
 				ctxW, cancelW := context.WithCancel(ctx)
@@ -1108,7 +1115,8 @@ func main() {
 			horizonFragmentsRepo,
 			horizonEdgesRepo,
 			horizonFragmentMergeAuditRepo,
-		).WithRedirectsRepo(horizonCanonicalPathRedirectsRepo)
+		).WithRedirectsRepo(horizonCanonicalPathRedirectsRepo).
+			WithLensesRepo(horizonLensesRepo)
 		horizonTelemetryRepo = horizonrepo.NewHorizonTelemetryRepository(fsClient.Client())
 		horizonEdgesRepo.WithTelemetryRepo(horizonTelemetryRepo)
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
@@ -1137,9 +1145,9 @@ func main() {
 			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_SCOUT", "1"))
 			if enabled == "1" || strings.EqualFold(enabled, "true") {
 				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
-				// NOTE: The original queue name "h1horizon-scout" may be temporarily unavailable after deletion.
+				// NOTE: The original queue name "etigram-scout" may be temporarily unavailable after deletion.
 				// Use env override in prod; default to a safe v2 name.
-				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_SCOUT_QUEUE", "h1horizon-scout-v2"))
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_SCOUT_QUEUE", "etigram-scout"))
 				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
 				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
 				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
@@ -1211,7 +1219,7 @@ func main() {
 			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_RISK", "1"))
 			if enabled == "1" || strings.EqualFold(enabled, "true") {
 				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
-				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_RISK_QUEUE", "h1horizon-risk-v1"))
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_RISK_QUEUE", "etigram-risk"))
 				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
 				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
 				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
@@ -1261,7 +1269,7 @@ func main() {
 			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_PROFILE", "1"))
 			if enabled == "1" || strings.EqualFold(enabled, "true") {
 				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
-				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_PROFILE_QUEUE", "h1horizon-profile-refresh"))
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_PROFILE_QUEUE", "etigram-profile-refresh"))
 				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
 				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
 				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
@@ -1284,10 +1292,11 @@ func main() {
 
 		// Configure dedicated GCS storage and Vertex AI Search sync for Horizon Fragments
 		// We use a separate bucket to keep Horizon fragment indexing isolated and controllable.
-		horizonFragmentsBucket := strings.TrimSpace(getEnv("HORIZON_FRAGMENTS_BUCKET", ""))
+		horizonFragmentsBucket := getEnvWithAlt("ETIGRAM_FRAGMENTS_BUCKET", "HORIZON_FRAGMENTS_BUCKET", "")
 		if horizonFragmentsBucket == "" {
 			horizonFragmentsBucket = docsBucket // fallback for legacy setups
 		}
+		var horizonVertexSyncBatcher *horizonrepo.VertexSyncBatcher
 		if gcsClient != nil && horizonFragmentsBucket != "" {
 			horizonFragmentsRepo.WithStorage(gcsClient, horizonFragmentsBucket)
 			if vertexSearchClient != nil {
@@ -1317,10 +1326,10 @@ func main() {
 						batchConfig.FlushInterval = time.Duration(n) * time.Second
 					}
 				}
-				vertexSyncBatcher := horizonrepo.NewVertexSyncBatcher(
+				horizonVertexSyncBatcher = horizonrepo.NewVertexSyncBatcher(
 					func(ctx context.Context, uris []string) (string, error) {
 						// Prefer a dedicated datastore for horizon fragments (store isolation instead of filters).
-						if ds := strings.TrimSpace(getEnv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); ds != "" {
+						if ds := getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""); ds != "" {
 							return vertexSearchClient.WithDataStore(ds).ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "document")
 						}
 						// Fallback: legacy behavior (shared datastore)
@@ -1328,14 +1337,14 @@ func main() {
 					},
 					batchConfig,
 				)
-				horizonFragmentsRepo.WithVertexSyncBatcher(vertexSyncBatcher)
+				horizonFragmentsRepo.WithVertexSyncBatcher(horizonVertexSyncBatcher)
 				horizonFragmentsRepo.WithVertexSearchDelete(func(ctx context.Context, fragmentID string) error {
 					fragmentID = strings.TrimSpace(fragmentID)
 					if fragmentID == "" {
 						return nil
 					}
 					// Keep delete path aligned with import path: use dedicated Horizon datastore when configured.
-					if ds := strings.TrimSpace(getEnv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); ds != "" {
+					if ds := getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""); ds != "" {
 						return vertexSearchClient.WithDataStore(ds).DeleteDocument(ctx, fragmentID)
 					}
 					return vertexSearchClient.DeleteDocument(ctx, fragmentID)
@@ -1436,6 +1445,13 @@ func main() {
 			horizonLensItemsRepo := horizonrepo.NewLensItemsRepository(fsClient.Client())
 			horizonExposurePathsRepo := horizonrepo.NewExposurePathsRepository(fsClient.Client())
 			horizonMaterializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(fsClient.Client())
+			if gcsClient != nil && horizonFragmentsBucket != "" {
+				horizonMaterializedArtifactsRepo.WithStorage(gcsClient, horizonFragmentsBucket)
+				if horizonVertexSyncBatcher != nil {
+					horizonMaterializedArtifactsRepo.WithVertexSyncBatcher(horizonVertexSyncBatcher)
+				}
+			}
+			horizonFragmentsMergeRepo = horizonFragmentsMergeRepo.WithMaterializedRepo(horizonMaterializedArtifactsRepo)
 			lensService.WithCleanupRepos(
 				horizonLensItemsRepo,
 				horizonExposurePathsRepo,
@@ -1779,6 +1795,9 @@ func main() {
 
 			// Initialize Scout subsystem
 			scoutPlanner := horizonscout.NewScoutPlanner(s.dsrcs, ontologyFactsRepo, vertexSearchClient)
+			if horizonMaterializedArtifactsRepo != nil {
+				scoutPlanner.WithMaterializedRepo(horizonMaterializedArtifactsRepo)
+			}
 
 			// Source Executor (Telegram client skipped for now)
 			rssProvider := prov.NewRSSProvider()
@@ -1907,7 +1926,7 @@ func main() {
 			if horizonTelemetryRepo != nil {
 				canonicalPathResolver.WithTelemetryRepo(horizonTelemetryRepo)
 			}
-			// Supply chain path materialization (Plan mode): parsed chains → MaterializedArtifact
+			// Supply chain path materialization: parsed chains → MaterializedArtifact
 			if horizonMaterializedArtifactsRepo != nil {
 				supplyChainPathBuilder := horizonpathbuilder.NewSupplyChainPathBuilder(
 					horizonFragmentsRepo,
@@ -1915,6 +1934,12 @@ func main() {
 					horizonMaterializedArtifactsRepo,
 				)
 				scoutEngine.WithSupplyChainPathBuilder(supplyChainPathBuilder)
+				domainArtifactBuilder := horizonpathbuilder.NewDomainArtifactBuilder(
+					horizonFragmentsRepo,
+					horizonEdgesRepo,
+					horizonMaterializedArtifactsRepo,
+				)
+				scoutEngine.WithDomainArtifactBuilder(domainArtifactBuilder)
 			}
 			if geonamesClientForHorizon != nil {
 				canonicalPathResolver.WithGeoNamesClient(geonamesClientForHorizon)
@@ -1988,7 +2013,7 @@ func main() {
 			// Initialize Watchdog subsystem (requires ScoutEngine + SourceExecutor)
 			// Watchdog (background monitoring) can generate large volumes of Scout jobs.
 			// Keep it disabled by default; enable explicitly via env.
-			if strings.TrimSpace(getEnv("ENABLE_HORIZON_WATCHDOG", "0")) == "1" {
+			if strings.TrimSpace(getEnvWithAlt("ENABLE_ETIGRAM_WATCHDOG", "ENABLE_HORIZON_WATCHDOG", "0")) == "1" {
 				watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, ontologyFactsRepo, horizonScoutingJobsRepo, scoutEngine, sourceExecutor, exec).
 					WithRiskJobsRepository(riskJobsRepo)
 				watchdogScheduler := horizonwatchdog.NewScheduler()
@@ -2007,7 +2032,7 @@ func main() {
 				})
 				logger.Printf("Horizon Watchdog enabled")
 			} else {
-				logger.Printf("Horizon Watchdog disabled (set ENABLE_HORIZON_WATCHDOG=1 to enable)")
+				logger.Printf("Etigram Watchdog disabled (set ENABLE_ETIGRAM_WATCHDOG=1 to enable)")
 			}
 
 			// Legacy Firestore poller (disabled by default in prod).
@@ -2119,6 +2144,7 @@ func main() {
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
 				WithMergeFragmentsRepo(horizonFragmentsMergeRepo).
+				WithMaterializedArtifactsRepo(horizonMaterializedArtifactsRepo).
 				WithDocumentsRepo(docsRepo).
 				WithUsersRepo(s.users).
 				WithGenAIHandler(genaiHandler).
@@ -2140,8 +2166,11 @@ func main() {
 				}
 				seedInjector := horizonsignals.NewSeedInjector(horizonFragmentsRepo, horizonEdgesRepo).
 					WithApplicabilityEvaluator(applicability)
+				if horizonMaterializedArtifactsRepo != nil {
+					seedInjector = seedInjector.WithMaterializedRepo(horizonMaterializedArtifactsRepo)
+				}
 				if vertexSearchClient != nil && vertexSearchClient.IsConfigured() {
-					if horizonDS := strings.TrimSpace(getEnv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); horizonDS != "" {
+					if horizonDS := getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""); horizonDS != "" {
 						seedInjector = seedInjector.WithVertexSearch(vertexSearchClient.WithDataStore(horizonDS))
 					}
 				}
@@ -2307,6 +2336,24 @@ func main() {
 					_, _ = w.Write([]byte(fmt.Sprintf("terminal: %s", refreshedJob.CurrentState)))
 					return
 				}
+			}
+
+			// Deterministic data-contract failures should not be retried by Cloud Tasks:
+			// retries only replay expensive LLM stages and create load spikes.
+			jobForCheck := job
+			if refreshedJob != nil {
+				jobForCheck = refreshedJob
+			}
+			if isNonRetryableScoutExecutionErrorWithJob(err, jobForCheck) {
+				logger.Printf("Scout job %s failed with non-retryable error; finalizing and ACK", jobID)
+				// Finalize before ACK if job not yet terminal (error returned before finalize).
+				// Use job (mutated by ExecuteScoutingJob) for pipeline state; it has the latest stage info.
+				if job.CurrentState != horizonmodels.ScoutingJobStateRejected && job.CurrentState != horizonmodels.ScoutingJobStateFailed && job.CurrentState != horizonmodels.ScoutingJobStateVerified {
+					_ = scoutEngine.FinalizePipelineRunForceFailed(context.Background(), job, "non-retryable contract error")
+				}
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("failed (non-retryable)"))
+				return
 			}
 
 			// Transient failure: return 500 to let Cloud Tasks retry.
@@ -3584,9 +3631,9 @@ func main() {
 			allowedOrigins = []string{
 				"http://localhost:5173",
 				"http://localhost:3000",
-				"https://hatl.one",
-				"https://www.hatl.one",
-				"https://*.hatl.one",
+				"https://etigram.one",
+				"https://www.etigram.one",
+				"https://*.etigram.one",
 			}
 			log.Printf("CORS: using default allowed origins: %v", allowedOrigins)
 		}
@@ -3620,10 +3667,10 @@ func main() {
 	// Attach admin route without Firebase auth, but with jobAuth
 	mux.Handle("/api/v1/admin/sources/publish-due", jobAuth(http.HandlerFunc(s.discoveryHandler.PublishDue)))
 
-	// Horizon Watchdog cron endpoint (Cloud Scheduler)
-	// POST /api/v1/admin/horizon/watchdog/run?limit=200
+	// Etigram Watchdog cron endpoint (Cloud Scheduler)
+	// POST /api/v1/admin/etigram/watchdog/run?limit=200
 	// Secured via the same jobAuth (X-Job-Token header) to avoid exposing cron publicly.
-	mux.Handle("/api/v1/admin/horizon/watchdog/run", jobAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	watchdogCronHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -3651,8 +3698,12 @@ func main() {
 		// Distributed lock in Firestore to avoid overlapping runs (scheduler retries / multi-instance).
 		// Collection is intentionally separate from domain data.
 		lockTTL := 9 * time.Minute
-		if v := os.Getenv("HORIZON_WATCHDOG_CRON_LOCK_TTL"); strings.TrimSpace(v) != "" {
-			if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil && d >= 30*time.Second {
+		lockTTLEnv := os.Getenv("ETIGRAM_WATCHDOG_CRON_LOCK_TTL")
+		if lockTTLEnv == "" {
+			lockTTLEnv = os.Getenv("HORIZON_WATCHDOG_CRON_LOCK_TTL")
+		}
+		if strings.TrimSpace(lockTTLEnv) != "" {
+			if d, err := time.ParseDuration(strings.TrimSpace(lockTTLEnv)); err == nil && d >= 30*time.Second {
 				lockTTL = d
 			}
 		}
@@ -3749,7 +3800,9 @@ func main() {
 			"ok":    true,
 			"stats": stats,
 		})
-	})))
+	}
+	mux.Handle("/api/v1/admin/etigram/watchdog/run", jobAuth(http.HandlerFunc(watchdogCronHandler)))
+	mux.Handle("/api/v1/admin/horizon/watchdog/run", jobAuth(http.HandlerFunc(watchdogCronHandler))) // legacy alias
 
 	handler := withCORS(allowedOrigins)(mux)
 
@@ -3897,14 +3950,14 @@ func withCORS(allowedOrigins []string) func(http.Handler) http.Handler {
 						}
 					}
 				}
-				// Subdomain wildcard entries like "*.hatl.one" or URL with scheme
+				// Subdomain wildcard entries like "*.etigram.one" or URL with scheme
 				if allowOrigin == "" {
 					u, err := url.Parse(origin)
 					if err == nil {
 						host := u.Hostname()
 						scheme := u.Scheme
 						for _, ao := range allowedOrigins {
-							// Handle wildcard patterns with scheme like "https://*.hatl.one"
+							// Handle wildcard patterns with scheme like "https://*.etigram.one"
 							if strings.HasPrefix(ao, "http://") || strings.HasPrefix(ao, "https://") {
 								// Extract hostname from pattern, handling wildcards
 								aoScheme := ""
@@ -3919,9 +3972,9 @@ func withCORS(allowedOrigins []string) func(http.Handler) http.Handler {
 
 								if aoHost != "" && aoScheme == scheme {
 									if strings.HasPrefix(aoHost, "*.") {
-										// Wildcard pattern: "*.hatl.one" matches "hatl.one", "www.hatl.one", etc.
+										// Wildcard pattern: "*.etigram.one" matches "etigram.one", "www.etigram.one", etc.
 										suffix := strings.TrimPrefix(aoHost, "*")
-										// Match exact domain (hatl.one) or subdomain (www.hatl.one)
+										// Match exact domain (etigram.one) or subdomain (www.etigram.one)
 										if host == strings.TrimPrefix(suffix, ".") || strings.HasSuffix(host, suffix) {
 											allowOrigin = origin
 											break
@@ -3929,9 +3982,9 @@ func withCORS(allowedOrigins []string) func(http.Handler) http.Handler {
 									}
 								}
 							} else if strings.HasPrefix(ao, "*.") {
-								// Wildcard pattern without scheme: "*.hatl.one"
+								// Wildcard pattern without scheme: "*.etigram.one"
 								suffix := strings.TrimPrefix(ao, "*")
-								// Match exact domain (hatl.one) or subdomain (www.hatl.one)
+								// Match exact domain (etigram.one) or subdomain (www.etigram.one)
 								if host == strings.TrimPrefix(suffix, ".") || strings.HasSuffix(host, suffix) {
 									allowOrigin = origin
 									break
@@ -3977,4 +4030,59 @@ func getEnv(key, def string) string {
 		return def
 	}
 	return v
+}
+
+// getEnvWithAlt returns value from key, or altKey if key is empty, or def.
+func getEnvWithAlt(key, altKey, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv(altKey)); v != "" {
+		return v
+	}
+	return def
+}
+
+// isNonRetryableScoutExecutionErrorWithJob checks both the error and job state (reason_code).
+func isNonRetryableScoutExecutionErrorWithJob(err error, job *horizonmodels.ScoutingJob) bool {
+	if err != nil {
+		msg := strings.ToLower(strings.TrimSpace(err.Error()))
+		if msg != "" {
+			if strings.Contains(msg, "fragment creation blocked:") {
+				return true
+			}
+			if strings.Contains(msg, "governance.owner must be 'system'") {
+				return true
+			}
+			if strings.Contains(msg, "type is required") && (strings.Contains(msg, "fragment") || strings.Contains(msg, "validation error") || strings.Contains(msg, "contract normalization")) {
+				return true
+			}
+			if strings.Contains(msg, "validation error") && (strings.Contains(msg, "type is required") || strings.Contains(msg, "governance.owner") || strings.Contains(msg, "canonicalpath")) {
+				return true
+			}
+			if strings.Contains(msg, "resume detected terminal") || strings.Contains(msg, "failed with non-retryable error") {
+				return true
+			}
+		}
+	}
+	if job != nil && job.State != nil {
+		if rc, ok := job.State["normalizationReasonCode"].(string); ok && strings.TrimSpace(rc) != "" {
+			switch strings.TrimSpace(strings.ToLower(rc)) {
+			case "type_required", "governance_owner", "canonical_path_required":
+				return true
+			}
+		}
+		if v, ok := job.State["normalizationRetryable"].(bool); ok && !v {
+			return true
+		}
+		if reasons, ok := job.State["terminalOutcomeReasons"].(map[string]interface{}); ok && reasons != nil {
+			if rc, ok := reasons["reason_code"].(string); ok {
+				switch strings.TrimSpace(strings.ToLower(rc)) {
+				case "non_retryable_contract_error", "type_required", "governance_owner", "canonical_path_required":
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

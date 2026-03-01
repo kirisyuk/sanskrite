@@ -36,7 +36,6 @@ const HorizonPage: React.FC = () => {
   const currentProject = useProjectsStore((s) => s.currentProject);
   const deleteProject = useProjectsStore((s) => s.deleteProject);
   const updateProject = useProjectsStore((s) => s.updateProject);
-  const createProject = useProjectsStore((s) => s.createProject);
   
   const [sidebarOpen, setSidebarOpen] = React.useState(true);
   const [showSettings, setShowSettings] = React.useState(false);
@@ -290,19 +289,9 @@ const HorizonPage: React.FC = () => {
     setCreateFatalError(null);
   }, [setCurrentProject, setSelectedLensId, saveHorizonState]);
 
-  const handleCreateProject = React.useCallback(async () => {
-    const name = window.prompt('Project name') || '';
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    
-    try {
-      const project = await createProject({ displayName: trimmed, view: 'horizon' });
-      const updated = await updateProject(project.id, { projectType: 'horizon' });
-      setCurrentProject(updated);
-    } catch (e) {
-      console.error('[HorizonPage] Failed to create project', e);
-    }
-  }, [createProject, updateProject, setCurrentProject]);
+  const handleCreateProject = React.useCallback(() => {
+    window.dispatchEvent(new CustomEvent('horizon:create-project'));
+  }, []);
   
   const handleCloseAllModals = React.useCallback(() => {
     setShowSettings(false);

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 type AnchorResolutionPhaseResult struct {
@@ -227,49 +228,19 @@ MARKET (CRITICAL):
 - geo MUST be ISO2 lowercase, composite ISO2, regional token (e.g., eu, gcc, asean, opec), or "global"/"int" (default "global" if unknown)
   - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical}
 
-MARKET GEOGRAPHY INHERITANCE (CRITICAL):
-- When the query mentions a specific country/region AND a market/industry together:
-  - The MARKET anchor MUST inherit that country's ISO2 code as geo
-  - Do NOT default to "global" when geographic context is present in the query
-- Examples:
-  - "Saudi Arabia Event marketing market" → /market/sa/professional-services/event-marketing (NOT /market/global/...)
-  - "German automotive industry" → /market/de/industrial/automotive (NOT /market/de/automotive/automotive)
-  - "UAE banking sector" → /market/ae/finance/banking (NOT /market/global/...)
-- Use "global" as geo ONLY when NO geographic context is provided in the query.
-
-MARKET HIERARCHY (best-effort):
-- Markets form hierarchies: broader → narrower (e.g., marketing → digital-marketing → event-marketing)
-- When creating a MARKET anchor, consider if there's an obvious parent market.
-- In decompositionHints.subMarkets, list narrower segments that belong to this market.
+%s
 
 MEDIA_CHANNEL:
 - If the query refers to a media brand/channel (e.g., a Telegram channel), do NOT collapse it to a GEO_REGION just because it contains a city name.
   - Example: Telegram channel "В казани поймут" should be anchored as /media/telegram/{channel-slug}, not as /loc/... for Kazan.
   - Prefer using a stable handle/username if present; otherwise use the quoted title as the slug source.
 
-DECOMPOSITION HINTS (REQUIRED for MARKET/PROGRAM anchors):
-- If any anchor has type MARKET or PROGRAM, you MUST provide decompositionHints for that anchor.
-- decompositionHints help downstream research know HOW to explore abstract anchors.
-- For MARKET anchors:
-  - entityTypes: what entities to discover (typically ["ORGANIZATION", "PRODUCT", "FACILITY"])
-  - subMarkets: market segments to explore (e.g., ["commercial banking", "retail banking", "islamic banking"])
-  - playerCategories: types of players (e.g., ["local banks", "international banks", "fintechs", "regulators"])
-  - searchQueries: 3-5 concrete search queries in English for grounded research
-    - searchQueries MUST be designed to yield REAL-WORLD entities (company/bank/regulator names) that we can anchor as /org/... etc.
-    - Avoid "market size" / "market share" queries that only return abstract numbers.
-      - If you include a market-share query, phrase it as "top X by market share" so the intent is to extract PLAYERS.
-    - Example for "Saudi B2B SME banking":
-      ["top SME banks in Saudi Arabia 2024", "Saudi Arabia SME banking providers list", "Saudi B2B banking platforms for SMEs", "Saudi Arabian Monetary Authority SME banking regulations"]
-- For PROGRAM anchors:
-  - entityTypes: what entities participate (e.g., ["ORGANIZATION", "FACILITY", "PRODUCT"])
-  - playerCategories: types of participants (e.g., ["implementing agencies", "contractors", "beneficiaries"])
-  - searchQueries: 3-5 concrete search queries about the program
-- searchQueries MUST be in English and actionable for web search.
+%s
 
 - Prefer STABLE anchors:
   - choose country canonical paths for country scope, not adjective/alias forms
   - choose products/materials at the right level (raw vs component vs finished) when possible
 - Provide 1-3 anchors (anchor = what the Lens should attach to).
 
-- Return ONLY JSON. No markdown. No commentary.`, query, domainContext, quotedBlock, multiHint)
+- Return ONLY JSON. No markdown. No commentary.`, query, domainContext, quotedBlock, multiHint, taxonomy.MarketGeographyAndHierarchyPromptBlock(), taxonomy.DecompositionHintsPromptBlock())
 }

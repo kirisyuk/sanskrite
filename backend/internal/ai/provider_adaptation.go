@@ -3,7 +3,6 @@ package ai
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -20,6 +19,14 @@ type providerPressureState struct {
 const (
 	providerPressureBaseBackoff = 3 * time.Second
 	providerPressureMaxBackoff  = 90 * time.Second
+
+	providerPressureBillingBackoff = 30 * time.Minute
+	providerPressureQuotaBackoff   = 10 * time.Minute
+
+	pressureClassBilling      = "billing"
+	pressureClassQuota        = "quota"
+	pressureClassRateLimit    = "rate_limit"
+	pressureClassEmptyResp    = "empty_response"
 )
 
 func classifyProviderPressureError(err error) (string, bool) {
@@ -30,24 +37,46 @@ func classifyProviderPressureError(err error) (string, bool) {
 		return "", false
 	}
 	msg := strings.ToLower(strings.TrimSpace(err.Error()))
-	switch {
-	case strings.Contains(msg, "429"),
-		strings.Contains(msg, "rate limit"),
-		strings.Contains(msg, "too many requests"),
-		strings.Contains(msg, "quota exceeded"),
-		strings.Contains(msg, "resource exhausted"):
-		return "rate_limit", true
-	case strings.Contains(msg, "empty response"),
-		strings.Contains(msg, "no content"),
-		strings.Contains(msg, "empty text"),
-		strings.Contains(msg, "null or empty response"):
-		return "empty_response", true
-	default:
-		return "", false
+
+	// Persistent: billing/payment — provider will not serve requests until account is topped up.
+	if strings.Contains(msg, "insufficient") ||
+		strings.Contains(msg, "billing") ||
+		strings.Contains(msg, "payment") ||
+		strings.Contains(msg, "deactivated") ||
+		(strings.Contains(msg, "account") && (strings.Contains(msg, "suspended") || strings.Contains(msg, "disabled"))) {
+		return pressureClassBilling, true
 	}
+
+	// Semi-persistent: quota exceeded — may recover after quota window resets.
+	if strings.Contains(msg, "quota exceeded") || strings.Contains(msg, "resource exhausted") {
+		return pressureClassQuota, true
+	}
+
+	// Transient: rate limiting.
+	if strings.Contains(msg, "429") ||
+		strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "too many requests") {
+		return pressureClassRateLimit, true
+	}
+
+	if strings.Contains(msg, "empty response") ||
+		strings.Contains(msg, "no content") ||
+		strings.Contains(msg, "empty text") ||
+		strings.Contains(msg, "null or empty response") {
+		return pressureClassEmptyResp, true
+	}
+
+	return "", false
 }
 
-func providerPressureBackoff(consecutive int) time.Duration {
+func providerPressureBackoff(consecutive int, errorClass string) time.Duration {
+	switch errorClass {
+	case pressureClassBilling:
+		return providerPressureBillingBackoff
+	case pressureClassQuota:
+		return providerPressureQuotaBackoff
+	}
+
 	if consecutive < 1 {
 		consecutive = 1
 	}
@@ -82,7 +111,7 @@ func (e *AITaskExecutor) recordProviderFailure(provider AIProvider, model string
 	st.LastErrorClass = errorClass
 	st.LastError = strings.TrimSpace(err.Error())
 	st.UpdatedAt = time.Now().UTC()
-	backoff := providerPressureBackoff(st.ConsecutiveFailures)
+	backoff := providerPressureBackoff(st.ConsecutiveFailures, errorClass)
 	st.BlockedUntil = st.UpdatedAt.Add(backoff)
 	e.providerPressure[provider] = st
 	log.Printf("[AITaskExecutor] provider pressure: provider=%s model=%s class=%s consecutive=%d blocked_for=%s err=%s",
@@ -117,6 +146,11 @@ func (e *AITaskExecutor) blockedProviders(now time.Time) map[AIProvider]struct{}
 	out := map[AIProvider]struct{}{}
 	if e == nil {
 		return out
+	}
+	if e.circuitBreaker != nil {
+		for p := range e.circuitBreaker.OpenProviders() {
+			out[p] = struct{}{}
+		}
 	}
 	e.providerPressureMu.Lock()
 	defer e.providerPressureMu.Unlock()
@@ -227,11 +261,4 @@ func (e *AITaskExecutor) selectFallbackToolModelAdaptive(req AIRequirements, inp
 		}
 	}
 	return model
-}
-
-func providerFailureSummary(provider AIProvider, model string, err error) string {
-	if err == nil {
-		return ""
-	}
-	return fmt.Sprintf("provider=%s model=%s err=%s", provider, strings.TrimSpace(model), strings.TrimSpace(err.Error()))
 }

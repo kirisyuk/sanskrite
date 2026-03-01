@@ -180,6 +180,31 @@ func TestValidateCanonicalPath(t *testing.T) {
 			path:    "/org",
 			wantErr: true,
 		},
+		{
+			name:    "valid zone path with descriptive slug",
+			path:    "/zone/mm/military-conflict/northern-rakhine",
+			wantErr: false,
+		},
+		{
+			name:    "valid zone path with composite geo",
+			path:    "/zone/tr-sy/military-conflict/northern-syria",
+			wantErr: false,
+		},
+		{
+			name:    "invalid zone path with na slug",
+			path:    "/zone/mm/military-conflict/na",
+			wantErr: true,
+		},
+		{
+			name:    "valid zone path with underscore in condition_type (LLM output)",
+			path:    "/zone/ye/military_conflict/hodeidah-region",
+			wantErr: false,
+		},
+		{
+			name:    "valid zone path political_tension",
+			path:    "/zone/mena/political_tension/strait-of-hormuz",
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

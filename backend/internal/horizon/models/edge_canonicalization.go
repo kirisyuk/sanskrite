@@ -97,6 +97,54 @@ func canonicalizeOrgMarketToParticipates(
 	return edgeType, false, false, ""
 }
 
+func canonicalDomainAnchorFallbackType(targetType FragmentType) DependencyType {
+	if targetType == FragmentTypeMechanism || targetType == FragmentTypeDecisionPoint {
+		return DependencyTypeSurfaces
+	}
+	return DependencyTypeFocusesOn
+}
+
+func isDomainRelationTypeCompatibleWithTarget(edgeType DependencyType, targetType FragmentType) bool {
+	switch edgeType {
+	case DependencyTypeFocusesOn:
+		switch targetType {
+		case FragmentTypeDomain, FragmentTypeOrganization, FragmentTypePerson, FragmentTypeMarket,
+			FragmentTypeProduct, FragmentTypeProgram, FragmentTypeFacility, FragmentTypeGeoRegion,
+			FragmentTypeAffectedZone, FragmentTypeCommunity, FragmentTypeMediaChannel, FragmentTypeDeposit:
+			return true
+		}
+	case DependencyTypeInvolvesActor:
+		return targetType == FragmentTypeOrganization || targetType == FragmentTypePerson || targetType == FragmentTypeCommunity
+	case DependencyTypeInGeoScope:
+		return targetType == FragmentTypeGeoRegion
+	case DependencyTypeAbout:
+		switch targetType {
+		case FragmentTypeDomain, FragmentTypeOrganization, FragmentTypePerson, FragmentTypeMarket,
+			FragmentTypeProduct, FragmentTypeProgram, FragmentTypeFacility, FragmentTypeGeoRegion,
+			FragmentTypeCommunity, FragmentTypeMediaChannel, FragmentTypeDeposit:
+			return true
+		}
+	case DependencyTypeRelatedDomain, DependencyTypeDomainRelation, DependencyTypeBroadensTo, DependencyTypeNarrowsTo:
+		return targetType == FragmentTypeDomain
+	case DependencyTypeAffects:
+		switch targetType {
+		case FragmentTypeDomain, FragmentTypeFacility, FragmentTypeOrganization, FragmentTypeGeoRegion,
+			FragmentTypeProduct, FragmentTypeProgram:
+			return true
+		}
+	case DependencyTypeSurfaces:
+		return targetType == FragmentTypeDecisionPoint || targetType == FragmentTypeMechanism
+	case DependencyTypeDependsOn:
+		switch targetType {
+		case FragmentTypeDomain, FragmentTypeOrganization, FragmentTypePerson, FragmentTypeMarket,
+			FragmentTypeProgram, FragmentTypeFacility, FragmentTypeProduct, FragmentTypeGeoRegion,
+			FragmentTypeMediaChannel, FragmentTypeCommunity, FragmentTypeDeposit:
+			return true
+		}
+	}
+	return false
+}
+
 // CanonicalizeEdge rewrites an edge type (and optionally direction) based on endpoint fragment types.
 // Returns: (newType, shouldSwapEndpoints, changed, reason).
 //
@@ -134,16 +182,16 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		}
 	}
 
-	// Domain → non-domain (entity): only FOCUSES_ON (TZ §6.1).
+	// Domain → non-domain (entity): preserve valid domain-scaffold relation semantics.
 	if sourceType == FragmentTypeDomain && targetType != FragmentTypeDomain {
-		switch edgeType {
-		case DependencyTypeFocusesOn:
+		if isDomainRelationTypeCompatibleWithTarget(edgeType, targetType) {
 			return edgeType, false, false, ""
-		case DependencyTypeAbout, DependencyTypeAffects, DependencyTypeSurfaces, DependencyTypeInvolvesActor, DependencyTypeInGeoScope:
-			return DependencyTypeFocusesOn, false, true, "canonicalize: domain→entity -> FOCUSES_ON"
-		default:
-			return DependencyTypeFocusesOn, false, true, "canonicalize: domain→entity unknown -> FOCUSES_ON"
 		}
+		fallback := canonicalDomainAnchorFallbackType(targetType)
+		if fallback == DependencyTypeSurfaces {
+			return fallback, false, true, "canonicalize: domain→strategic-target -> SURFACES"
+		}
+		return fallback, false, true, "canonicalize: domain→entity incompatible -> FOCUSES_ON"
 	}
 
 	// AFFILIATED_WITH(PERSON → COMMUNITY) → MEMBER_OF (canonical membership).

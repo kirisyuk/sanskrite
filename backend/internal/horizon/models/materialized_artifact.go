@@ -10,19 +10,16 @@ import (
 type MaterializedKind string
 
 const (
-	// MaterializedKindSupplyChainPath represents a materialized supply chain path/slice.
-	// Payload schema: see SupplyChainPathPayload.
-	MaterializedKindSupplyChainPath MaterializedKind = "SUPPLY_CHAIN_PATH"
-
-	// Future kinds:
-	// MaterializedKindInfluenceSlice  MaterializedKind = "INFLUENCE_SLICE"
-	// MaterializedKindExposurePath    MaterializedKind = "EXPOSURE_PATH"
+	MaterializedKindSupplyChainPath      MaterializedKind = "SUPPLY_CHAIN_PATH"
+	MaterializedKindRegulatoryImpactMap  MaterializedKind = "REGULATORY_IMPACT_MAP"
+	MaterializedKindGovernanceChain      MaterializedKind = "GOVERNANCE_CHAIN"
+	MaterializedKindEcosystemMap         MaterializedKind = "ECOSYSTEM_MAP"
 )
 
 // Valid checks if the MaterializedKind is valid.
 func (k MaterializedKind) Valid() bool {
 	switch k {
-	case MaterializedKindSupplyChainPath:
+	case MaterializedKindSupplyChainPath, MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
 		return true
 	default:
 		return false
@@ -73,6 +70,17 @@ type MaterializedArtifact struct {
 	// PathStatus: hypothesis (from LLM/parsed chain, unvalidated) | validated (passed Critic invariants).
 	// For SUPPLY_CHAIN_PATH overlays.
 	PathStatus string `json:"pathStatus,omitempty" firestore:"pathStatus,omitempty"`
+
+	// DisplayName is a human-readable name for the artifact (e.g., "CATL → Lithium Battery Cell → BMW AG").
+	DisplayName string `json:"displayName,omitempty" firestore:"displayName,omitempty"`
+
+	// Labels are structured key-value attributes for filtering and display.
+	// For SUPPLY_CHAIN_PATH: productAxis, geoFrom, geoTo, anchorSupplier, anchorCustomer, segmentCount.
+	Labels map[string]string `json:"labels,omitempty" firestore:"labels,omitempty"`
+
+	// NodeRefs lists canonical paths of all participating entities.
+	// Used as a reverse index (Firestore array-contains) to find chains through a given node.
+	NodeRefs []string `json:"nodeRefs,omitempty" firestore:"nodeRefs,omitempty"`
 }
 
 // Validate checks if MaterializedArtifact is valid.
@@ -99,8 +107,91 @@ func (a *MaterializedArtifact) Validate() error {
 		if err := validateSupplyChainPathPayload(a.Payload); err != nil {
 			return fmt.Errorf("invalid SUPPLY_CHAIN_PATH payload: %w", err)
 		}
+	case MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
+		if err := validateRelationsGraphPayload(a.Payload); err != nil {
+			return fmt.Errorf("invalid %s payload: %w", string(a.Kind), err)
+		}
 	}
 
+	return nil
+}
+
+// RelationsGraphPayload represents the payload structure for domain-specific relation graphs
+// (GOVERNANCE_CHAIN, REGULATORY_IMPACT_MAP, ECOSYSTEM_MAP).
+type RelationsGraphPayload struct {
+	Version    int                     `json:"v"`
+	Nodes      []RelationsGraphNode    `json:"nodes"`
+	Edges      []RelationsGraphEdge    `json:"edges,omitempty"`
+	DomainMode string                  `json:"domainMode,omitempty"`
+	RootEntity string                  `json:"rootEntity,omitempty"`
+	Notes      map[string]interface{}  `json:"notes,omitempty"`
+}
+
+// RelationsGraphNode represents an entity node in a domain relations graph.
+type RelationsGraphNode struct {
+	Type string `json:"type"`
+	Ref  string `json:"ref"`
+	Name string `json:"name,omitempty"`
+}
+
+// RelationsGraphEdge represents a typed relationship edge in a domain relations graph.
+type RelationsGraphEdge struct {
+	From     int    `json:"from"`
+	To       int    `json:"to"`
+	Relation string `json:"relation"`
+}
+
+func validateRelationsGraphPayload(payload map[string]interface{}) error {
+	if payload == nil {
+		return fmt.Errorf("payload is nil")
+	}
+	v, ok := payload["v"]
+	if !ok {
+		return fmt.Errorf("payload missing version field 'v'")
+	}
+	version, ok := toFloat64(v)
+	if !ok {
+		return fmt.Errorf("payload version 'v' must be a number")
+	}
+	if int(version) != 1 {
+		return fmt.Errorf("unsupported payload version: %d (expected 1)", int(version))
+	}
+	nodesRaw, ok := payload["nodes"]
+	if !ok {
+		return fmt.Errorf("payload missing 'nodes' field")
+	}
+	nodes, err := decodeRelationsGraphNodes(nodesRaw)
+	if err != nil {
+		return err
+	}
+	if len(nodes) == 0 {
+		return fmt.Errorf("payload 'nodes' array cannot be empty")
+	}
+	for i, node := range nodes {
+		if node.Ref == "" {
+			return fmt.Errorf("payload node[%d] missing 'ref'", i)
+		}
+		if !strings.HasPrefix(node.Ref, "/") {
+			return fmt.Errorf("payload node[%d] 'ref' must be a canonical path (start with /)", i)
+		}
+	}
+	if edgesRaw, ok := payload["edges"]; ok {
+		edges, err := decodeRelationsGraphEdges(edgesRaw)
+		if err != nil {
+			return err
+		}
+		for i, edge := range edges {
+			if edge.From < 0 || edge.From >= len(nodes) {
+				return fmt.Errorf("payload edge[%d] 'from' index %d out of range (nodes: %d)", i, edge.From, len(nodes))
+			}
+			if edge.To < 0 || edge.To >= len(nodes) {
+				return fmt.Errorf("payload edge[%d] 'to' index %d out of range (nodes: %d)", i, edge.To, len(nodes))
+			}
+			if edge.Relation == "" {
+				return fmt.Errorf("payload edge[%d] missing 'relation'", i)
+			}
+		}
+	}
 	return nil
 }
 

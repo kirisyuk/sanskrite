@@ -40,8 +40,8 @@ gs://sanskrite-core-docs/
 
 ### 2. Создаем Object Table:
 ```sql
-CREATE EXTERNAL TABLE `h1horizon-488615.h1horizon_488615_documents.core_docs_text_table`
-WITH CONNECTION `h1horizon-488615.us.gcs-connection`
+CREATE EXTERNAL TABLE `etigram.etigram_documents.core_docs_text_table`
+WITH CONNECTION `etigram.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
   uris = ['gs://sanskrite-core-docs/**/*.txt']
@@ -50,7 +50,7 @@ OPTIONS (
 
 ### 3. Используем как обычную таблицу:
 ```sql
-SELECT * FROM `h1horizon-488615.h1horizon_488615_documents.core_docs_text_table`
+SELECT * FROM `etigram.etigram_documents.core_docs_text_table`
 WHERE uri LIKE '%tenant1%'
 ```
 
@@ -63,7 +63,7 @@ BigQuery автоматически читает файлы из GCS при вы
 ### Текущие Object Tables (уже созданы):
 ```sql
 -- Для текстовых файлов
-documents_object_table          → gs://h1horizon-488615-rag-documents/**/*.txt
+documents_object_table          → gs://etigram-rag-documents/**/*.txt
 core_docs_text_table           → gs://sanskrite-core-docs/**/*.{txt,md,csv,tsv}
 core_docs_json_table           → gs://sanskrite-core-docs/**/*.json
 ```
@@ -85,7 +85,7 @@ core_docs_excel_table          → gs://sanskrite-core-docs/**/*.{xlsx,xls}
 ### Что возвращает Object Table:
 
 ```sql
-SELECT * FROM `h1horizon-488615.h1horizon_488615_documents.documents_object_table`
+SELECT * FROM `etigram.etigram_documents.documents_object_table`
 ```
 
 Результат:
@@ -137,7 +137,7 @@ SELECT
   uri,
   size,
   content_type
-FROM `h1horizon-488615.h1horizon_488615_documents.documents_object_table`
+FROM `etigram.etigram_documents.documents_object_table`
 WHERE uri LIKE '%tenant123%'
 LIMIT 10
 ```
@@ -148,7 +148,7 @@ LIMIT 10
 SELECT 
   uri,
   JSON_EXTRACT_SCALAR(data, '$.decisions') as decisions
-FROM `h1horizon-488615.h1horizon_488615_documents.core_docs_json_table`
+FROM `etigram.etigram_documents.core_docs_json_table`
 WHERE uri LIKE '%.json'
 ```
 
@@ -161,8 +161,8 @@ SELECT
   m.createdAt,
   o.size,
   o.content_type
-FROM `h1horizon-488615.h1horizon_488615_documents.core_docs_metadata` m
-JOIN `h1horizon-488615.h1horizon_488615_documents.core_docs_object_table` o
+FROM `etigram.etigram_documents.core_docs_metadata` m
+JOIN `etigram.etigram_documents.core_docs_object_table` o
   ON o.uri = REPLACE(m.storagePath, 'gs://', '')
 WHERE m.projectId = 'project-x'
 ```
@@ -191,8 +191,8 @@ gs://sanskrite-core-docs/tenant1/project1/data.parquet
 
 ### Шаг 2: Создаем Object Table
 ```sql
-CREATE OR REPLACE EXTERNAL TABLE `h1horizon-488615.h1horizon_488615_documents.core_docs_parquet_table`
-WITH CONNECTION `h1horizon-488615.us.gcs-connection`
+CREATE OR REPLACE EXTERNAL TABLE `etigram.etigram_documents.core_docs_parquet_table`
+WITH CONNECTION `etigram.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
   uris = ['gs://sanskrite-core-docs/**/*.parquet'],
@@ -202,7 +202,7 @@ OPTIONS (
 
 ### Шаг 3: Используем в запросах
 ```sql
-SELECT * FROM `h1horizon-488615.h1horizon_488615_documents.core_docs_parquet_table`
+SELECT * FROM `etigram.etigram_documents.core_docs_parquet_table`
 ```
 
 ## Итог

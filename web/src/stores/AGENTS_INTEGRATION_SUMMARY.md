@@ -119,7 +119,7 @@ console.log(`${taskState.progress * 100}% - ${taskState.message}`);
 
 ## 🔒 Security & Authentication
 
-- ✅ Unified authentication across HATL (Firebase token)
+- ✅ Unified authentication across Etigram (Firebase token)
 - ✅ `projectId` is mandatory in all agent tasks
 - ✅ Automatic context injection from authentication
 

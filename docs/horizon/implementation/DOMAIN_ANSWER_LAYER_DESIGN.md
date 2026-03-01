@@ -561,7 +561,7 @@ ContractOutput{ViewDirective: adapted}          ← pipeline sees normal output
 
 ### R9. WS-события DomainContractEngine — realtime лог для фронта
 
-**Контекст**: инфраструктура WS-событий полностью готова. Backend публикует через `ScoutEngine.publish()` → Pub/Sub (`hatlone.horizon.events`) → WS Hub → фронт (`horizonRealtimeStore.ts`). Для domain jobs уже есть события:
+**Контекст**: инфраструктура WS-событий полностью готова. Backend публикует через `ScoutEngine.publish()` → Pub/Sub (`etigram.horizon.events`) → WS Hub → фронт (`horizonRealtimeStore.ts`). Для domain jobs уже есть события:
 
 | Существующее событие | Файл |
 |---------------------|------|

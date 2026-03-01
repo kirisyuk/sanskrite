@@ -8,6 +8,9 @@ type GeoNamesClientInterface interface {
 	Search(ctx context.Context, query string, maxResults int, opts GeoNamesSearchOptions) (*GeoNamesSearchResponse, error)
 	GetPlace(ctx context.Context, geonameID int) (*GeoNamesPlace, error)
 	GetHierarchy(ctx context.Context, geonameID int) (*GeoNamesHierarchyResponse, error)
+	// GetCountryCode returns ISO3166-1 alpha2 country code for given lat/lon (reverse geocoding).
+	// Returns empty string if point is in water or unknown.
+	GetCountryCode(ctx context.Context, lat, lon float64) (string, error)
 }
 
 // GeoNamesPlace represents a GeoNames feature/entity (minimal subset).

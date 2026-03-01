@@ -95,6 +95,8 @@ func (p *ResearchPipelineRunner) strategiesForModes(modes []string) []ResearchSt
 			list = append(list, &StrategicResearchStrategy{agent: p.agent})
 		case taxonomy.DomainModePolicyImpact:
 			list = append(list, &PolicyImpactResearchStrategy{agent: p.agent})
+		case taxonomy.DomainModeEcosystem:
+			list = append(list, &EcosystemResearchStrategy{agent: p.agent})
 		}
 	}
 	if !hasNonGeneral {

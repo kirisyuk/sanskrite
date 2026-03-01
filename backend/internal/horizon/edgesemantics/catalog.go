@@ -36,6 +36,44 @@ func AllEdgeTypesList() []string {
 	return types
 }
 
+var domainScaffoldRelationTypes = []models.DependencyType{
+	models.DependencyTypeFocusesOn,
+	models.DependencyTypeInvolvesActor,
+	models.DependencyTypeInGeoScope,
+	models.DependencyTypeAbout,
+	models.DependencyTypeAffects,
+	models.DependencyTypeDependsOn,
+	models.DependencyTypeSurfaces,
+	models.DependencyTypeRelatedDomain,
+}
+
+// DomainScaffoldRelationTypes returns canonical relation types used for DOMAIN expansion prompts
+// and domain-anchor sanitization.
+func DomainScaffoldRelationTypes() []models.DependencyType {
+	out := make([]models.DependencyType, len(domainScaffoldRelationTypes))
+	copy(out, domainScaffoldRelationTypes)
+	return out
+}
+
+// DomainScaffoldRelationTypesString returns a prompt-ready comma-separated list of relation types.
+func DomainScaffoldRelationTypesString() string {
+	parts := make([]string, 0, len(domainScaffoldRelationTypes))
+	for _, rt := range domainScaffoldRelationTypes {
+		parts = append(parts, string(rt))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// IsDomainScaffoldRelationType reports whether edge type belongs to DOMAIN expansion scaffold relation set.
+func IsDomainScaffoldRelationType(t models.DependencyType) bool {
+	for _, allowed := range domainScaffoldRelationTypes {
+		if allowed == t {
+			return true
+		}
+	}
+	return false
+}
+
 // EdgeAllowlistByDomainMode returns dependency types allowed for the given domain mode.
 // Returns nil for general mode (no restriction: all types allowed).
 var domainModeAllowlists = map[string][]models.DependencyType{
@@ -87,6 +125,7 @@ var domainModeAllowlists = map[string][]models.DependencyType{
 		models.DependencyTypeRegulates,
 		models.DependencyTypeControlsAccess,
 		models.DependencyTypeImposesCondition,
+		models.DependencyTypeGatekeepsDecision,
 		models.DependencyTypeUsesMechanism,
 		models.DependencyTypeAppliesTo,
 		models.DependencyTypeInfluences,
@@ -95,6 +134,21 @@ var domainModeAllowlists = map[string][]models.DependencyType{
 		models.DependencyTypeLocatedIn,
 		models.DependencyTypeOperatesIn,
 		models.DependencyTypeAdministers,
+	},
+	taxonomy.DomainModeEcosystem: {
+		models.DependencyTypeParticipatesIn,
+		models.DependencyTypeOwns,
+		models.DependencyTypeSubsidiaryOf,
+		models.DependencyTypeControls,
+		models.DependencyTypeSuppliesTo,
+		models.DependencyTypeDependsOn,
+		models.DependencyTypeCompetesWith,
+		models.DependencyTypeRegulates,
+		models.DependencyTypeInfluences,
+		models.DependencyTypeInvestsIn,
+		models.DependencyTypePartnersWith,
+		models.DependencyTypeLocatedIn,
+		models.DependencyTypeOperatesIn,
 	},
 }
 

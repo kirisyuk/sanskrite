@@ -206,3 +206,77 @@ func TestCanonicalizeEdge_FacilityAdministersOrg_SwapOnly(t *testing.T) {
 		t.Fatalf("expected non-empty canonicalization reason")
 	}
 }
+
+func TestCanonicalizeEdge_DomainToMechanismFallbacksToSurfaces(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeFocusesOn,
+		FragmentTypeDomain,
+		FragmentTypeMechanism,
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeSurfaces {
+		t.Fatalf("expected SURFACES, got %s", newType)
+	}
+	if shouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty canonicalization reason")
+	}
+}
+
+func TestCanonicalizeEdge_DomainToGeoInGeoScopePreserved(t *testing.T) {
+	newType, shouldSwap, changed, _ := CanonicalizeEdge(
+		DependencyTypeInGeoScope,
+		FragmentTypeDomain,
+		FragmentTypeGeoRegion,
+	)
+	if changed {
+		t.Fatalf("expected no canonicalization change")
+	}
+	if newType != DependencyTypeInGeoScope {
+		t.Fatalf("expected IN_GEO_SCOPE, got %s", newType)
+	}
+	if shouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+}
+
+func TestCanonicalizeEdge_DomainToProductInGeoScopeFallbacksToFocusesOn(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeInGeoScope,
+		FragmentTypeDomain,
+		FragmentTypeProduct,
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeFocusesOn {
+		t.Fatalf("expected FOCUSES_ON, got %s", newType)
+	}
+	if shouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty canonicalization reason")
+	}
+}
+
+func TestCanonicalizeEdge_DomainToOrganizationAboutPreserved(t *testing.T) {
+	newType, shouldSwap, changed, _ := CanonicalizeEdge(
+		DependencyTypeAbout,
+		FragmentTypeDomain,
+		FragmentTypeOrganization,
+	)
+	if changed {
+		t.Fatalf("expected no canonicalization change")
+	}
+	if newType != DependencyTypeAbout {
+		t.Fatalf("expected ABOUT, got %s", newType)
+	}
+	if shouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+}

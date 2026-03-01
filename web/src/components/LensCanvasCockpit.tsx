@@ -35,7 +35,7 @@ import {
   useHorizonRealtimeStore,
   type HorizonRealtimeEvent,
 } from '../stores/horizonRealtimeStore';
-import { humanizeCanonicalPath, normalizeCanonicalPath } from '../lib/uiUtils';
+import { getDomainRegionLabel, getScopeGeoLabel, humanizeCanonicalPath, normalizeCanonicalPath } from '../lib/uiUtils';
 import { isSphereCanonicalPath, isSphereEntity, isSphereType } from '../lib/horizonSphere';
 import {
   layoutExpansionWithGroups,
@@ -3003,10 +3003,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         lensMetaRef.current = lens || null;
         setLensName(typeof lens?.name === 'string' ? lens.name : null);
         const scope = Array.isArray(lens?.scope) ? lens.scope : [];
-        const cleaned = scope
-          .map((s: any) => String(s || '').trim())
+        const domainPaths = (Array.isArray(lens?.viewConfig?.domains) ? lens.viewConfig.domains : [])
+          .map((d: any) => (d?.canonicalPath || '').trim())
           .filter(Boolean);
-        setLensScopePaths(cleaned);
+        const combined: string[] = [];
+        scope.forEach((s: any) => {
+          const p = String(s || '').trim();
+          if (p && !combined.includes(p)) combined.push(p);
+        });
+        domainPaths.forEach((p: string) => {
+          if (p && !combined.includes(p)) combined.push(p);
+        });
+        setLensScopePaths(combined);
       } catch (e) {
         if (!alive) return;
         // Best-effort: keep empty scope preview if we can't load lens metadata
@@ -3132,6 +3140,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const limited = paths.slice(0, 24);
       const results = await Promise.all(
         limited.map(async (p) => {
+          // Domain paths don't have fragments — resolve from path structure.
+          if (p.startsWith('/domain/')) {
+            const segments = p.split('/').filter(Boolean);
+            const contractType = segments.length >= 3 ? segments[2] : 'domain';
+            const name = segments.slice(3).join(' / ') || contractType;
+            return { canonicalPath: p, name, type: 'DOMAIN' };
+          }
+          // Artifact paths don't have fragments — use scopeArtifacts metadata.
+          if (p.startsWith('/artifact/')) {
+            const artKey = p.replace(/^\/artifact\//, '');
+            const name = artKey.split('/').filter(Boolean).slice(-1)[0] || p;
+            return { canonicalPath: p, name, type: 'ARTIFACT' };
+          }
           try {
             const f = await api.getHorizonFragmentByPath(p);
             const name =
@@ -3166,7 +3187,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const isDomainScopePreviewEntry = React.useCallback((entry: { canonicalPath: string; type?: string }) => {
     const cp = String(entry?.canonicalPath || '').trim().toLowerCase();
     const t = String(entry?.type || '').trim().toUpperCase();
-    return t === 'DOMAIN' || cp.startsWith('/domain/');
+    return t === 'DOMAIN' || t === 'ARTIFACT' || cp.startsWith('/domain/') || cp.startsWith('/artifact/');
   }, []);
 
   const scopePreviewDomains = React.useMemo(() => {
@@ -12778,11 +12799,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     [isFreeformLayout, gridState.cells, nodes, ELK_NODE_WIDTH],
   );
 
-  // --- Scout from query (no manual type selection) ---
-  // Uses existing WS pipeline + new /scope-scout-query endpoint.
+  // --- Scout from query (full pipeline: scope-scout-full) ---
   const rtGraphNodes = useHorizonRealtimeStore((s) => s.nodes);
   const pendingScoutRef = React.useRef<
-    Map<string, { placeholderId: string; query: string; canonicalPath?: string; createdAt: number }>
+    Map<
+      string,
+      {
+        placeholders: { placeholderId: string; canonicalPath: string }[];
+        restPaths: string[];
+      }
+    >
   >(new Map());
 
   const genCorrelationId = React.useCallback((): string => {
@@ -13052,93 +13078,227 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     ],
   );
 
-  // WS-driven placeholder reconciliation: once a scouted canonicalPath is materialized, swap in the real node.
+  const materializeScoutedNodeWithoutPlaceholder = React.useCallback(
+    async (args: { fragmentId: string; canonicalPath: string }) => {
+      const fragmentId = norm(args.fragmentId);
+      const canonicalPath = String(args.canonicalPath || '').trim();
+      if (!lensId || !fragmentId || !canonicalPath) return;
+
+      const existing = (nodesStateRef.current || nodes).find((n) => norm((n.data as any)?.fragmentId || n.id) === fragmentId);
+      if (existing) return;
+
+      let fragment: any;
+      try {
+        fragment = await api.getHorizonFragmentByPath(canonicalPath);
+      } catch (e) {
+        console.warn('[Cockpit] Failed to resolve scouted fragment by path', canonicalPath, e);
+        return;
+      }
+
+      const label =
+        String(fragment?.labels?.en || fragment?.label || '').trim() ||
+        humanizeCanonicalPath(canonicalPath) ||
+        fragmentId;
+      const type = String(fragment?.type || '').trim() || undefined;
+      const state = extractStateMetrics(fragment?.state);
+      const placement = computeNewRootPosition(fragmentId);
+      const position = placement.position;
+
+      let createdId = '';
+      try {
+        const res = await api.createLensItem(lensId, {
+          kind: 'node',
+          subkind: 'fragment',
+          fragmentId,
+          canonicalPath,
+          label,
+          type,
+          state,
+          status: fragment?.status,
+          expanded: false,
+          collapsed: false,
+          critical: false,
+          position,
+        });
+        createdId = String(res?.id || '').trim();
+      } catch (e) {
+        console.warn('[Cockpit] Failed to create lens item for scouted node', e);
+        return;
+      }
+
+      const newNode: Node<HorizonNodeData> = {
+        id: fragmentId,
+        type: 'horizonFragment',
+        position,
+        data: {
+          id: fragmentId,
+          lensItemId: createdId,
+          fragmentId,
+          canonicalPath,
+          label,
+          type,
+          state,
+          showMetrics: showNodeMetrics,
+          status: fragment?.status,
+          expanded: false,
+          collapsed: false,
+          critical: false,
+          parentFragmentId: undefined,
+          rootFragmentId: fragmentId,
+          depth: 0,
+          onLoadRelated: invokeLoadRelated,
+          onCollapse: invokeCollapse,
+          onScopeScout: invokeScopeScout,
+        },
+      } as any;
+
+      setNodes((prev) => [...(prev || []), newNode as any]);
+    },
+    [
+      lensId,
+      nodes,
+      setNodes,
+      computeNewRootPosition,
+      extractStateMetrics,
+      showNodeMetrics,
+      invokeLoadRelated,
+      invokeCollapse,
+      invokeScopeScout,
+    ],
+  );
+
+  // WS-driven reconciliation: placeholders -> materializeScoutedNode; restPaths -> materializeScoutedNodeWithoutPlaceholder.
   React.useEffect(() => {
     if (!lensId) return;
     const pending = pendingScoutRef.current;
     if (!pending || pending.size === 0) return;
 
     for (const [cid, st] of pending.entries()) {
-      const cp = String(st.canonicalPath || '').trim();
-      if (!cp) continue;
-      const fid = findFragmentIdByCanonicalPath(cp);
-      if (!fid) continue;
-      pending.delete(cid);
-      void materializeScoutedNode({ placeholderId: st.placeholderId, fragmentId: fid, canonicalPath: cp });
+      let changed = false;
+      const nextPlaceholders = st.placeholders.filter((p) => {
+        const cp = String(p.canonicalPath || '').trim();
+        if (!cp) return true;
+        const fid = findFragmentIdByCanonicalPath(cp);
+        if (!fid) return true;
+        void materializeScoutedNode({ placeholderId: p.placeholderId, fragmentId: fid, canonicalPath: cp });
+        changed = true;
+        return false;
+      });
+      const nextRestPaths = st.restPaths.filter((cp) => {
+        const c = String(cp || '').trim();
+        if (!c) return false;
+        const fid = findFragmentIdByCanonicalPath(c);
+        if (!fid) return true;
+        void materializeScoutedNodeWithoutPlaceholder({ fragmentId: fid, canonicalPath: c });
+        changed = true;
+        return false;
+      });
+      if (changed) {
+        if (nextPlaceholders.length === 0 && nextRestPaths.length === 0) {
+          pending.delete(cid);
+        } else {
+          pending.set(cid, { placeholders: nextPlaceholders, restPaths: nextRestPaths });
+        }
+      }
     }
-  }, [lensId, rtGraphNodes, findFragmentIdByCanonicalPath, materializeScoutedNode]);
+  }, [lensId, rtGraphNodes, findFragmentIdByCanonicalPath, materializeScoutedNode, materializeScoutedNodeWithoutPlaceholder]);
 
-  const scoutForQuery = React.useCallback(
+  const scoutFullForQuery = React.useCallback(
     async (query: string) => {
       const q = String(query || '').trim();
       if (!lensId || q.length < 2) return;
 
       const correlationId = genCorrelationId();
-      const placeholderId = `scout:${correlationId}`;
-
-      // Add placeholder node immediately.
-      const placement = computeNewRootPosition(placeholderId);
-      const position = placement.position;
-      const ph: Node<HorizonNodeData> = {
-        id: placeholderId,
-        type: 'horizonFragment',
-        position,
-        data: {
-          id: placeholderId,
-          fragmentId: placeholderId,
-          canonicalPath: '',
-          label: `Scouting: ${q}`,
-          type: 'UNKNOWN',
-          showMetrics: showNodeMetrics,
-          status: 'scouting',
-          expanded: false,
-          collapsed: false,
-          critical: false,
-          parentFragmentId: undefined,
-          rootFragmentId: placeholderId,
-          depth: 0,
-          isScopeScouting: true,
-          onLoadRelated: invokeLoadRelated,
-          onCollapse: invokeCollapse,
-          onScopeScout: invokeScopeScout,
-        } as any,
-      } as any;
-      setNodes((prev) => [...(prev || []), ph as any]);
-
-      pendingScoutRef.current.set(correlationId, { placeholderId, query: q, createdAt: Date.now() });
+      const firstFiveForGraph: string[] = [];
+      const placeholders: { placeholderId: string; canonicalPath: string }[] = [];
+      const restPaths: string[] = [];
 
       // Close palette quickly (user stays on graph).
       closeAddNode();
 
       try {
-        const res = await api.scopeScoutHorizonLensQuery(lensId, { query: q }, { correlationId });
-        const cp = String(res?.targetCanonicalPath || '').trim();
-        if (cp) {
-          // Optimistic scope preview update (pin state and UI consistency).
-          setLensScopePaths((prev) => (prev.includes(cp) ? prev : [...prev, cp]));
+        const res = await api.scopeScoutHorizonLensFull(lensId, { query: q }, { correlationId });
+        const firstFive = res?.firstFiveForGraph || [];
+        const allPaths = res?.canonicalPaths || [];
 
-          // Update placeholder node with canonicalPath to enable WS reconciliation.
-          setNodes((prev) =>
-            (prev || []).map((n) => {
-              if (String((n as any)?.id || '').trim() !== placeholderId) return n;
-              const d0: any = (n as any)?.data || {};
-              const d = { ...d0, canonicalPath: cp, label: d0?.label || `Scouting: ${q}` };
-              return { ...(n as any), data: d } as any;
-            }),
-          );
-          const st = pendingScoutRef.current.get(correlationId);
-          if (st) pendingScoutRef.current.set(correlationId, { ...st, canonicalPath: cp });
+        for (let i = 0; i < firstFive.length; i++) {
+          const cp = String(firstFive[i] || '').trim();
+          if (!cp) continue;
+          firstFiveForGraph.push(cp);
+          const placeholderId = `scout:${correlationId}:${i}`;
+          placeholders.push({ placeholderId, canonicalPath: cp });
+
+          const placement = computeNewRootPosition(placeholderId);
+          const ph: Node<HorizonNodeData> = {
+            id: placeholderId,
+            type: 'horizonFragment',
+            position: placement.position,
+            data: {
+              id: placeholderId,
+              fragmentId: placeholderId,
+              canonicalPath: cp,
+              label: `Scouting: ${cp.split('/').pop() || q}`,
+              type: 'UNKNOWN',
+              showMetrics: showNodeMetrics,
+              status: 'scouting',
+              expanded: false,
+              collapsed: false,
+              critical: false,
+              parentFragmentId: undefined,
+              rootFragmentId: placeholderId,
+              depth: 0,
+              isScopeScouting: true,
+              onLoadRelated: invokeLoadRelated,
+              onCollapse: invokeCollapse,
+              onScopeScout: invokeScopeScout,
+            } as any,
+          } as any;
+          setNodes((prev) => [...(prev || []), ph as any]);
         }
+
+        for (let i = firstFive.length; i < allPaths.length; i++) {
+          const cp = String(allPaths[i] || '').trim();
+          if (cp && !firstFiveForGraph.includes(cp)) restPaths.push(cp);
+        }
+
+        setLensScopePaths((prev) => {
+          const next = [...prev];
+          for (const cp of firstFiveForGraph) {
+            if (!next.includes(cp)) next.push(cp);
+          }
+          return next;
+        });
+
+        pendingScoutRef.current.set(correlationId, { placeholders, restPaths });
       } catch (e) {
-        console.warn('[Cockpit] scope-scout-query failed', e);
-        // Mark placeholder as failed (keep visible so user understands something happened).
-        setNodes((prev) =>
-          (prev || []).map((n) => {
-            if (String((n as any)?.id || '').trim() !== placeholderId) return n;
-            const d0: any = (n as any)?.data || {};
-            return { ...(n as any), data: { ...d0, isScopeScouting: false, status: 'failed', label: `Scout failed: ${q}` } } as any;
-          }),
-        );
+        console.warn('[Cockpit] scope-scout-full failed', e);
+        const placeholderId = `scout:${correlationId}:0`;
+        const placement = computeNewRootPosition(placeholderId);
+        const ph: Node<HorizonNodeData> = {
+          id: placeholderId,
+          type: 'horizonFragment',
+          position: placement.position,
+          data: {
+            id: placeholderId,
+            fragmentId: placeholderId,
+            canonicalPath: '',
+            label: `Scout failed: ${q}`,
+            type: 'UNKNOWN',
+            showMetrics: showNodeMetrics,
+            status: 'failed',
+            expanded: false,
+            collapsed: false,
+            critical: false,
+            parentFragmentId: undefined,
+            rootFragmentId: placeholderId,
+            depth: 0,
+            isScopeScouting: false,
+            onLoadRelated: invokeLoadRelated,
+            onCollapse: invokeCollapse,
+            onScopeScout: invokeScopeScout,
+          } as any,
+        } as any;
+        setNodes((prev) => [...(prev || []), ph as any]);
       }
     },
     [
@@ -16789,57 +16949,75 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                                 color: theme === 'dark' ? 'rgba(251,191,36,0.92)' : 'rgba(180,83,9,0.92)',
                               }}
                             >
-                              Domains ({scopePreviewDomains.length})
+                              Domains & Artifacts ({scopePreviewDomains.length})
                             </div>
-                            {scopePreviewDomains.slice(0, SCOPE_PREVIEW_SECTION_LIMIT).map((it) => (
-                              <div
-                                key={it.canonicalPath}
-                                style={{
-                                  padding: '8px 16px',
-                                  display: 'flex',
-                                  alignItems: 'baseline',
-                                  gap: 10,
-                                  borderBottom: '1px solid transparent',
-                                }}
-                              >
+                            {scopePreviewDomains.slice(0, SCOPE_PREVIEW_SECTION_LIMIT).map((it) => {
+                              const regionLabel = getDomainRegionLabel(it.canonicalPath);
+                              return (
                                 <div
+                                  key={it.canonicalPath}
                                   style={{
-                                    width: 6,
-                                    height: 6,
-                                    borderRadius: '50%',
-                                    background: theme === 'dark' ? 'rgba(251,191,36,0.95)' : '#D97706',
-                                    flexShrink: 0,
-                                    marginTop: 6,
-                                  }}
-                                />
-                                <div
-                                  style={{
-                                    flex: 1,
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                    fontSize: 13,
-                                    fontWeight: 700,
-                                    color: 'var(--text-heading)',
-                                  }}
-                                  title={it.name || it.canonicalPath}
-                                >
-                                  {it.name || it.canonicalPath}
-                                </div>
-                                <div
-                                  style={{
-                                    fontSize: 10,
-                                    color: theme === 'dark' ? 'rgba(251,191,36,0.9)' : 'rgba(180,83,9,0.9)',
-                                    textTransform: 'uppercase',
-                                    fontWeight: 700,
-                                    flexShrink: 0,
-                                    opacity: 0.9,
+                                    padding: '8px 16px',
+                                    display: 'flex',
+                                    alignItems: 'baseline',
+                                    gap: 10,
+                                    borderBottom: '1px solid transparent',
                                   }}
                                 >
-                                  {it.type || 'DOMAIN'}
+                                  <div
+                                    style={{
+                                      width: 6,
+                                      height: 6,
+                                      borderRadius: '50%',
+                                      background: theme === 'dark' ? 'rgba(251,191,36,0.95)' : '#D97706',
+                                      flexShrink: 0,
+                                      marginTop: 6,
+                                    }}
+                                  />
+                                  {regionLabel ? (
+                                    <span
+                                      style={{
+                                        fontSize: 10,
+                                        fontWeight: 700,
+                                        padding: '2px 6px',
+                                        borderRadius: 4,
+                                        background: theme === 'dark' ? 'rgba(251,191,36,0.2)' : 'rgba(180,83,9,0.2)',
+                                        color: theme === 'dark' ? 'rgba(251,191,36,0.95)' : '#B45309',
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      {regionLabel}
+                                    </span>
+                                  ) : null}
+                                  <div
+                                    style={{
+                                      flex: 1,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                      fontSize: 13,
+                                      fontWeight: 700,
+                                      color: 'var(--text-heading)',
+                                    }}
+                                    title={it.name || it.canonicalPath}
+                                  >
+                                    {it.name || it.canonicalPath}
+                                  </div>
+                                  <div
+                                    style={{
+                                      fontSize: 10,
+                                      color: theme === 'dark' ? 'rgba(251,191,36,0.9)' : 'rgba(180,83,9,0.9)',
+                                      textTransform: 'uppercase',
+                                      fontWeight: 700,
+                                      flexShrink: 0,
+                                      opacity: 0.9,
+                                    }}
+                                  >
+                                    {it.type || 'DOMAIN'}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                             {scopePreviewDomains.length > SCOPE_PREVIEW_SECTION_LIMIT && (
                               <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
                                 ...and {scopePreviewDomains.length - SCOPE_PREVIEW_SECTION_LIMIT} more domains
@@ -16862,57 +17040,75 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                             >
                               Scope ({scopePreviewNonDomains.length})
                             </div>
-                            {scopePreviewNonDomains.slice(0, SCOPE_PREVIEW_SECTION_LIMIT).map((it) => (
-                              <div
-                                key={it.canonicalPath}
-                                style={{
-                                  padding: '8px 16px',
-                                  display: 'flex',
-                                  alignItems: 'baseline',
-                                  gap: 10,
-                                  borderBottom: '1px solid transparent',
-                                }}
-                              >
+                            {scopePreviewNonDomains.slice(0, SCOPE_PREVIEW_SECTION_LIMIT).map((it) => {
+                              const geoLabel = getScopeGeoLabel(it.canonicalPath);
+                              return (
                                 <div
+                                  key={it.canonicalPath}
                                   style={{
-                                    width: 6,
-                                    height: 6,
-                                    borderRadius: '50%',
-                                    background: 'var(--accent-primary, #3B82F6)',
-                                    flexShrink: 0,
-                                    marginTop: 6,
+                                    padding: '8px 16px',
+                                    display: 'flex',
+                                    alignItems: 'baseline',
+                                    gap: 10,
+                                    borderBottom: '1px solid transparent',
                                   }}
-                                />
-                                <div
-                                  style={{
-                                    flex: 1,
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                    fontSize: 13,
-                                    fontWeight: 600,
-                                    color: 'var(--text-heading)',
-                                  }}
-                                  title={it.name || it.canonicalPath}
                                 >
-                                  {it.name || it.canonicalPath}
-                                </div>
-                                {it.type && (
                                   <div
                                     style={{
-                                      fontSize: 10,
-                                      color: 'var(--text-secondary-strong)',
-                                      textTransform: 'uppercase',
-                                      fontWeight: 600,
+                                      width: 6,
+                                      height: 6,
+                                      borderRadius: '50%',
+                                      background: 'var(--accent-primary, #3B82F6)',
                                       flexShrink: 0,
-                                      opacity: 0.7,
+                                      marginTop: 6,
                                     }}
+                                  />
+                                  {geoLabel ? (
+                                    <span
+                                      style={{
+                                        fontSize: 10,
+                                        fontWeight: 700,
+                                        padding: '2px 6px',
+                                        borderRadius: 4,
+                                        background: theme === 'dark' ? 'rgba(251,191,36,0.2)' : 'rgba(180,83,9,0.2)',
+                                        color: theme === 'dark' ? 'rgba(251,191,36,0.95)' : '#B45309',
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      {geoLabel}
+                                    </span>
+                                  ) : null}
+                                  <div
+                                    style={{
+                                      flex: 1,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                      fontSize: 13,
+                                      fontWeight: 600,
+                                      color: 'var(--text-heading)',
+                                    }}
+                                    title={it.name || it.canonicalPath}
                                   >
-                                    {it.type}
+                                    {it.name || it.canonicalPath}
                                   </div>
-                                )}
-                              </div>
-                            ))}
+                                  {it.type && (
+                                    <div
+                                      style={{
+                                        fontSize: 10,
+                                        color: 'var(--text-secondary-strong)',
+                                        textTransform: 'uppercase',
+                                        fontWeight: 600,
+                                        flexShrink: 0,
+                                        opacity: 0.7,
+                                      }}
+                                    >
+                                      {it.type}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                             {scopePreviewNonDomains.length > SCOPE_PREVIEW_SECTION_LIMIT && (
                               <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
                                 ...and {scopePreviewNonDomains.length - SCOPE_PREVIEW_SECTION_LIMIT} more
@@ -17262,7 +17458,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                       return;
                     }
                     if (picked.kind === 'scout') {
-                      void scoutForQuery(picked.query);
+                      void scoutFullForQuery(picked.query);
                       return;
                     }
                     if (picked.kind === 'graph') {
@@ -17365,7 +17561,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                       <button
                         key={`scout-${addNodeQueryTrim}`}
                         type="button"
-                        onClick={() => void scoutForQuery(addNodeQueryTrim)}
+                        onClick={() => void scoutFullForQuery(addNodeQueryTrim)}
                         onMouseEnter={() => setAddNodeActiveIndex(absIdx)}
                         style={{
                           width: '100%',
@@ -17392,7 +17588,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                           </div>
                         </div>
                         <div style={{ fontSize: 12, color: 'var(--text-secondary)', opacity: 0.9 }}>
-                          Adds to scope and starts scouting; node will appear when ready.
+                          Full expansion: anchors, domains, first 5 to graph.
                         </div>
                       </button>
                     );

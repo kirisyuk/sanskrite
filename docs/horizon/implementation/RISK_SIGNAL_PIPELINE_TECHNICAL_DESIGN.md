@@ -217,7 +217,7 @@ Forbidden:
 
 Dedicated queue:
 
-`CLOUD_TASKS_RISK_QUEUE` (default `h1horizon-risk-v1`)
+`CLOUD_TASKS_RISK_QUEUE` (default `etigram-risk`)
 
 Initial config:
 

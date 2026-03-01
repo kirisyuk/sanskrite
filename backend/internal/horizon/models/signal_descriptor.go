@@ -34,6 +34,11 @@ type SignalDescriptor struct {
 	Confidence float64   `json:"confidence" firestore:"confidence"`                     // [0.0, 1.0]
 	SourceRefs []string  `json:"sourceRefs,omitempty" firestore:"sourceRefs,omitempty"` // Document IDs
 	ObservedAt time.Time `json:"observedAt" firestore:"observedAt"`                     // When the event occurred
+
+	// === Supply Chain Attribution ===
+	// ChainRefs lists IDs of MaterializedArtifact (supply chain paths) affected by this signal.
+	// Populated during seed injection when seed nodes belong to identified supply chains.
+	ChainRefs []string `json:"chainRefs,omitempty" firestore:"chainRefs,omitempty"`
 }
 
 // SignalConstraints represents conditions and scope for signal propagation.

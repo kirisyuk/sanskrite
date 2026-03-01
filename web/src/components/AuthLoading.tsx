@@ -9,8 +9,8 @@ const START_MESSAGES = [
   'Thinking differently...',
   'Not agreeing. Thinking.',
   'Beyond yes or no',
-  'This is HATL',
-  'hatl.one',
+  'This is Etigram',
+  'etigram.one',
   'Pushing boundaries',
   'That one',
   'Questions you haven\'t thought of.',
@@ -31,10 +31,10 @@ export const AuthLoading: React.FC<AuthLoadingProps> = ({ message = 'Signing you
   
   // Render message with special formatting
   const renderMessage = () => {
-    if (randomMessage === 'hatl.one') {
+    if (randomMessage === 'etigram.one') {
       return (
         <>
-          hatl<span style={{ color: '#20b2aa' }}>.</span>one
+          etigram<span style={{ color: '#20b2aa' }}>.</span>one
         </>
       );
     }
@@ -55,4 +55,3 @@ export const AuthLoading: React.FC<AuthLoadingProps> = ({ message = 'Signing you
     </div>
   );
 };
-

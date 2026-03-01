@@ -47,7 +47,7 @@
 SELECT 
   id,
   ML.GENERATE_TEXT(
-    MODEL `h1horizon-488615.h1horizon_488615_documents.gemini_model`,
+    MODEL `etigram.etigram_documents.gemini_model`,
     extractedText,
     STRUCT('Summarize this document' AS prompt)
   ) AS summary

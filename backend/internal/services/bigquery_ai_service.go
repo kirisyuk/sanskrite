@@ -158,7 +158,7 @@ func (s *BigQueryAIService) ProjectID() string {
 func (s *BigQueryAIService) DatasetID() string {
 	datasetID := s.bqClient.DatasetID()
 	if datasetID == "" {
-		return "h1horizon_488615_documents"
+		return "etigram_documents"
 	}
 	return datasetID
 }
@@ -167,7 +167,7 @@ func (s *BigQueryAIService) DatasetID() string {
 func (s *BigQueryAIService) getSchemaInfo(ctx context.Context) (string, error) {
 	datasetID := s.bqClient.DatasetID()
 	if datasetID == "" {
-		datasetID = "h1horizon_488615_documents"
+		datasetID = "etigram_documents"
 	}
 
 	tables, err := s.bqClient.ListTables(ctx)
@@ -210,7 +210,7 @@ func (s *BigQueryAIService) generateSQL(ctx context.Context, naturalQuery, schem
 	projectID := s.bqClient.ProjectID()
 	datasetID := s.bqClient.DatasetID()
 	if datasetID == "" {
-		datasetID = "h1horizon_488615_documents"
+		datasetID = "etigram_documents"
 	}
 
 	// Build filter instructions for project/tenant filtering
@@ -422,7 +422,7 @@ func (s *BigQueryAIService) fixSQLQuery(ctx context.Context, originalSQL, errorM
 	projectID := s.bqClient.ProjectID()
 	datasetID := s.bqClient.DatasetID()
 	if datasetID == "" {
-		datasetID = "h1horizon_488615_documents"
+		datasetID = "etigram_documents"
 	}
 
 	prompt := fmt.Sprintf(`You are a BigQuery SQL expert. A SQL query failed with errors. Your task is to fix the query.

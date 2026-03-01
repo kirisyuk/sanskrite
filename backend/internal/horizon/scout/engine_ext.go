@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
@@ -81,17 +83,25 @@ func mergeQualifiers(dst map[string]interface{}, extra map[string]interface{}) m
 
 func isDomainScaffoldRelationType(rt string) bool {
 	rt = strings.TrimSpace(taxonomy.NormalizeRelationType(rt))
-	switch rt {
-	case string(models.DependencyTypeFocusesOn),
-		string(models.DependencyTypeInvolvesActor),
-		string(models.DependencyTypeInGeoScope),
-		string(models.DependencyTypeAbout),
-		string(models.DependencyTypeDependsOn),
-		string(models.DependencyTypeAffects),
-		string(models.DependencyTypeRelatedDomain):
-		return true
+	return IsDomainScaffoldRelationType(models.DependencyType(rt))
+}
+
+func canonicalDomainAnchorRelationType(rawType, targetPath string) string {
+	rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rawType))
+	if rt == "" {
+		rt = string(models.DependencyTypeFocusesOn)
+	}
+	if isDomainScaffoldRelationType(rt) {
+		return rt
+	}
+	// Domain -> MECHANISM/DECISION_POINT must use strategic domain-scaffold relation.
+	// Fallback to FOCUSES_ON here caused systematic quarantine (direction contract mismatch).
+	targetType := InferFragmentTypeFromCanonicalPath(strings.TrimSpace(targetPath))
+	switch targetType {
+	case models.FragmentTypeMechanism, models.FragmentTypeDecisionPoint:
+		return string(models.DependencyTypeSurfaces)
 	default:
-		return false
+		return string(models.DependencyTypeFocusesOn)
 	}
 }
 
@@ -130,9 +140,7 @@ func sanitizeDomainResearchRelations(domainCanonicalPath, contractType string, r
 
 		if strings.HasPrefix(sourcePath, "/domain/") {
 			// Domain anchor edges must remain in domain-scaffold relation space.
-			if !isDomainScaffoldRelationType(rt) {
-				rt = string(models.DependencyTypeFocusesOn)
-			}
+			rt = canonicalDomainAnchorRelationType(rt, targetPath)
 		} else {
 			// For non-domain source relations (explicit source from research), enforce domain-mode allowlist.
 			if allowlist != nil && !AllowlistContains(allowlist, models.DependencyType(rt)) && !isDomainScaffoldRelationType(rt) {
@@ -144,6 +152,22 @@ func sanitizeDomainResearchRelations(domainCanonicalPath, contractType string, r
 		out = append(out, rel)
 	}
 	return out
+}
+
+// extractRadiusKmFromQualifiers extracts zone radius (km) from relation qualifiers.
+// Supports "radiusKm" and "radius_km" keys. Returns (value, true) when valid and > 0.
+func extractRadiusKmFromQualifiers(q map[string]interface{}) (float64, bool) {
+	if q == nil {
+		return 0, false
+	}
+	for _, key := range []string{"radiusKm", "radius_km"} {
+		if raw, ok := q[key]; ok && raw != nil {
+			if v, ok := parseNumericQualifier(raw); ok && v > 0 {
+				return v, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func parseStateInt(v interface{}, def int) int {
@@ -727,9 +751,20 @@ func copyDomainModeStateToChild(parentState map[string]interface{}, childState m
 		"maxRootJobs", "maxRecursionDepth", "maxChildrenPerJob", "maxCascadeJobs", "maxSupplyChainQueries",
 		"budgetCeilingUSD", "budgetCeilingOutputTokens", "stopOnBudgetExhaustion",
 		"supplyChainMode", "supplyChainPhase", "supplyChainPhases", "supplyChainExpandEnabled", "supplyChainExpandMaxNodes",
+		"planModeResearchDone", "supplyChainPlanMode",
 	} {
 		if v, ok := parentState[key]; ok && v != nil {
 			childState[key] = v
+		}
+	}
+	// Derive planModeResearchDone from any plan mode when not already set.
+	if _, ok := childState["planModeResearchDone"]; !ok {
+		if parseStateBool(parentState["supplyChainPlanMode"], false) {
+			childState["planModeResearchDone"] = true
+		} else if dr, ok := parentState["domainResearch"].(map[string]interface{}); ok {
+			if parseStateBool(dr["planMode"], false) {
+				childState["planModeResearchDone"] = true
+			}
 		}
 	}
 }
@@ -1694,6 +1729,231 @@ func decodeSupplyChainExecutionPlan(raw interface{}) *agents.SupplyChainExecutio
 	return &plan
 }
 
+// getRegulatoryImpactPlanFromJobState extracts RegulatoryImpactExecutionPlan for the matching domain.
+func getRegulatoryImpactPlanFromJobState(job *models.ScoutingJob, domainCanonicalPath string) *agents.RegulatoryImpactExecutionPlan {
+	if job == nil || job.State == nil {
+		return nil
+	}
+	raw, ok := job.State["domains"]
+	if !ok || raw == nil {
+		return nil
+	}
+	cpNorm := normalizeDomainPathForMatch(strings.TrimSpace(domainCanonicalPath))
+	decodePlan := func(v interface{}) *agents.RegulatoryImpactExecutionPlan {
+		if v == nil {
+			return nil
+		}
+		if p, ok := v.(*agents.RegulatoryImpactExecutionPlan); ok && p != nil && len(p.Queries) > 0 {
+			return p
+		}
+		if p, ok := v.(agents.RegulatoryImpactExecutionPlan); ok && len(p.Queries) > 0 {
+			return &p
+		}
+		b, err := json.Marshal(v)
+		if err != nil || len(b) == 0 {
+			return nil
+		}
+		var plan agents.RegulatoryImpactExecutionPlan
+		if err := json.Unmarshal(b, &plan); err != nil || len(plan.Queries) == 0 {
+			return nil
+		}
+		return &plan
+	}
+	tryFromMap := func(m map[string]interface{}) *agents.RegulatoryImpactExecutionPlan {
+		if p := decodePlan(m["regulatoryImpactExecutionPlan"]); p != nil {
+			return p
+		}
+		return decodePlan(m["RegulatoryImpactExecutionPlan"])
+	}
+	switch t := raw.(type) {
+	case []agents.DomainResolution:
+		for _, d := range t {
+			if normalizeDomainPathForMatch(strings.TrimSpace(d.CanonicalPath)) == cpNorm {
+				return d.RegulatoryImpactExecutionPlan
+			}
+		}
+	case []map[string]interface{}:
+		for _, m := range t {
+			cp := parseStateString(m["canonicalPath"])
+			if cp == "" {
+				cp = parseStateString(m["CanonicalPath"])
+			}
+			if normalizeDomainPathForMatch(strings.TrimSpace(cp)) == cpNorm {
+				return tryFromMap(m)
+			}
+		}
+	case []interface{}:
+		for _, it := range t {
+			if d, ok := it.(agents.DomainResolution); ok {
+				if normalizeDomainPathForMatch(strings.TrimSpace(d.CanonicalPath)) == cpNorm {
+					return d.RegulatoryImpactExecutionPlan
+				}
+				continue
+			}
+			if m, ok := it.(map[string]interface{}); ok {
+				cp := parseStateString(m["canonicalPath"])
+				if cp == "" {
+					cp = parseStateString(m["CanonicalPath"])
+				}
+				if normalizeDomainPathForMatch(strings.TrimSpace(cp)) == cpNorm {
+					return tryFromMap(m)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// getGovernancePlanFromJobState extracts GovernanceExecutionPlan for the matching domain.
+func getGovernancePlanFromJobState(job *models.ScoutingJob, domainCanonicalPath string) *agents.GovernanceExecutionPlan {
+	if job == nil || job.State == nil {
+		return nil
+	}
+	raw, ok := job.State["domains"]
+	if !ok || raw == nil {
+		return nil
+	}
+	cpNorm := normalizeDomainPathForMatch(strings.TrimSpace(domainCanonicalPath))
+	decodePlan := func(v interface{}) *agents.GovernanceExecutionPlan {
+		if v == nil {
+			return nil
+		}
+		if p, ok := v.(*agents.GovernanceExecutionPlan); ok && p != nil && len(p.Queries) > 0 {
+			return p
+		}
+		if p, ok := v.(agents.GovernanceExecutionPlan); ok && len(p.Queries) > 0 {
+			return &p
+		}
+		b, err := json.Marshal(v)
+		if err != nil || len(b) == 0 {
+			return nil
+		}
+		var plan agents.GovernanceExecutionPlan
+		if err := json.Unmarshal(b, &plan); err != nil || len(plan.Queries) == 0 {
+			return nil
+		}
+		return &plan
+	}
+	tryFromMap := func(m map[string]interface{}) *agents.GovernanceExecutionPlan {
+		if p := decodePlan(m["governanceExecutionPlan"]); p != nil {
+			return p
+		}
+		return decodePlan(m["GovernanceExecutionPlan"])
+	}
+	switch t := raw.(type) {
+	case []agents.DomainResolution:
+		for _, d := range t {
+			if normalizeDomainPathForMatch(strings.TrimSpace(d.CanonicalPath)) == cpNorm {
+				return d.GovernanceExecutionPlan
+			}
+		}
+	case []map[string]interface{}:
+		for _, m := range t {
+			cp := parseStateString(m["canonicalPath"])
+			if cp == "" {
+				cp = parseStateString(m["CanonicalPath"])
+			}
+			if normalizeDomainPathForMatch(strings.TrimSpace(cp)) == cpNorm {
+				return tryFromMap(m)
+			}
+		}
+	case []interface{}:
+		for _, it := range t {
+			if d, ok := it.(agents.DomainResolution); ok {
+				if normalizeDomainPathForMatch(strings.TrimSpace(d.CanonicalPath)) == cpNorm {
+					return d.GovernanceExecutionPlan
+				}
+				continue
+			}
+			if m, ok := it.(map[string]interface{}); ok {
+				cp := parseStateString(m["canonicalPath"])
+				if cp == "" {
+					cp = parseStateString(m["CanonicalPath"])
+				}
+				if normalizeDomainPathForMatch(strings.TrimSpace(cp)) == cpNorm {
+					return tryFromMap(m)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// getEcosystemPlanFromJobState extracts EcosystemExecutionPlan for the matching domain.
+func getEcosystemPlanFromJobState(job *models.ScoutingJob, domainCanonicalPath string) *agents.EcosystemExecutionPlan {
+	if job == nil || job.State == nil {
+		return nil
+	}
+	raw, ok := job.State["domains"]
+	if !ok || raw == nil {
+		return nil
+	}
+	cpNorm := normalizeDomainPathForMatch(strings.TrimSpace(domainCanonicalPath))
+	decodePlan := func(v interface{}) *agents.EcosystemExecutionPlan {
+		if v == nil {
+			return nil
+		}
+		if p, ok := v.(*agents.EcosystemExecutionPlan); ok && p != nil && len(p.Queries) > 0 {
+			return p
+		}
+		if p, ok := v.(agents.EcosystemExecutionPlan); ok && len(p.Queries) > 0 {
+			return &p
+		}
+		b, err := json.Marshal(v)
+		if err != nil || len(b) == 0 {
+			return nil
+		}
+		var plan agents.EcosystemExecutionPlan
+		if err := json.Unmarshal(b, &plan); err != nil || len(plan.Queries) == 0 {
+			return nil
+		}
+		return &plan
+	}
+	tryFromMap := func(m map[string]interface{}) *agents.EcosystemExecutionPlan {
+		if p := decodePlan(m["ecosystemExecutionPlan"]); p != nil {
+			return p
+		}
+		return decodePlan(m["EcosystemExecutionPlan"])
+	}
+	switch t := raw.(type) {
+	case []agents.DomainResolution:
+		for _, d := range t {
+			if normalizeDomainPathForMatch(strings.TrimSpace(d.CanonicalPath)) == cpNorm {
+				return d.EcosystemExecutionPlan
+			}
+		}
+	case []map[string]interface{}:
+		for _, m := range t {
+			cp := parseStateString(m["canonicalPath"])
+			if cp == "" {
+				cp = parseStateString(m["CanonicalPath"])
+			}
+			if normalizeDomainPathForMatch(strings.TrimSpace(cp)) == cpNorm {
+				return tryFromMap(m)
+			}
+		}
+	case []interface{}:
+		for _, it := range t {
+			if d, ok := it.(agents.DomainResolution); ok {
+				if normalizeDomainPathForMatch(strings.TrimSpace(d.CanonicalPath)) == cpNorm {
+					return d.EcosystemExecutionPlan
+				}
+				continue
+			}
+			if m, ok := it.(map[string]interface{}); ok {
+				cp := parseStateString(m["canonicalPath"])
+				if cp == "" {
+					cp = parseStateString(m["CanonicalPath"])
+				}
+				if normalizeDomainPathForMatch(strings.TrimSpace(cp)) == cpNorm {
+					return tryFromMap(m)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (e *ScoutEngine) bestEffortFindDomainContract(job *models.ScoutingJob, domainCanonicalPath string) *domainContractForExpansion {
 	cp := strings.TrimSpace(domainCanonicalPath)
 	if job == nil || job.State == nil || cp == "" {
@@ -2081,6 +2341,11 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	if domainCP == "" || !strings.HasPrefix(domainCP, "/domain/") {
 		return nil
 	}
+	pipelineRuntimeName := pipelineRuntimeDomainBase
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stagePlanning, true, "domain_base_planning_done")
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageExtraction, true, "domain_base_extraction_done")
+	e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageCritic, true, "domain_base_critic_skip")
+	e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageRevalidation, true, "domain_base_revalidation_skip")
 	internalFirstContext := ""
 	domainFastPathApplied := false
 	if internalFirstGroundingEnabled() {
@@ -2230,8 +2495,9 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			}
 		}
 		switch strings.TrimSpace(strings.ToLower(contractType)) {
-		case "supply-chain", "market-opportunity":
-			// Minimal deterministic market anchor:
+		case "supply-chain", "market-opportunity", "sector-overview":
+			// Minimal deterministic anchors (universal sector; market is one facet):
+			// sector-overview: top-level domain branch; market-opportunity: market-focused sub-contract.
 			// - If material present: /market/{geo}/materials/{material}
 			if mats := getFacet("material"); len(mats) > 0 {
 				mat := taxonomy.Slugify(mats[0])
@@ -2271,6 +2537,13 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	var domainResearchRelations []agents.DiscoveredRelation
 	var domainResearchChains []agents.SupplyChain
 	var domainGroundingEvidence *ai.GroundingEvidence
+	researchStageActive := false
+	if domainFastPathApplied {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageResearch, true, "domain_base_research_skip_fast_path")
+	} else {
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageResearch, true, "domain_base_research")
+		researchStageActive = true
+	}
 	supplyChainPlan := getSupplyChainExecutionPlanFromJobState(job, domainCP)
 	usePlanMode := agents.IsSupplyChainContractType(contractType) && supplyChainPlan != nil && len(supplyChainPlan.Queries) > 0
 	if usePlanMode && e.researchAgent != nil && !domainFastPathApplied {
@@ -2302,7 +2575,134 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		job.State["domainResearch"] = domainResearch
 		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainResearch": domainResearch})
 	}
-	if !usePlanMode && e.researchAgent != nil && !domainFastPathApplied {
+
+	// Regulatory Impact plan-mode: holistic impact graph queries.
+	regulatoryPlan := getRegulatoryImpactPlanFromJobState(job, domainCP)
+	useRegPlanMode := !usePlanMode && agents.IsPolicyImpactContractType(contractType) && regulatoryPlan != nil && len(regulatoryPlan.Queries) > 0
+	if useRegPlanMode && e.researchAgent != nil && !domainFastPathApplied {
+		for _, q := range regulatoryPlan.Queries {
+			rels, err := e.researchAgent.EnrichRegulatoryImpactFull(ctx, q)
+			if err != nil {
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> regulatory impact plan query failed (instrument=%s): %v", strings.TrimSpace(q.Instrument), err))
+				continue
+			}
+			domainResearchRelations = append(domainResearchRelations, rels...)
+		}
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		domainResearch := map[string]interface{}{
+			"planMode":   true,
+			"planType":   "regulatoryImpact",
+			"queriesN":   len(regulatoryPlan.Queries),
+			"relationsN": len(domainResearchRelations),
+		}
+		job.State["domainResearch"] = domainResearch
+		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainResearch": domainResearch})
+	}
+
+	// Governance plan-mode: holistic ownership/control graph queries.
+	govPlan := getGovernancePlanFromJobState(job, domainCP)
+	useGovPlanMode := !usePlanMode && !useRegPlanMode && agents.IsGovernanceContractType(contractType) && govPlan != nil && len(govPlan.Queries) > 0
+	if useGovPlanMode && e.researchAgent != nil && !domainFastPathApplied {
+		for _, q := range govPlan.Queries {
+			rels, err := e.researchAgent.EnrichGovernanceFull(ctx, q)
+			if err != nil {
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> governance plan query failed (target=%s): %v", strings.TrimSpace(q.Target), err))
+				continue
+			}
+			domainResearchRelations = append(domainResearchRelations, rels...)
+		}
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		domainResearch := map[string]interface{}{
+			"planMode":   true,
+			"planType":   "governance",
+			"queriesN":   len(govPlan.Queries),
+			"relationsN": len(domainResearchRelations),
+		}
+		job.State["domainResearch"] = domainResearch
+		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainResearch": domainResearch})
+	}
+
+	// Ecosystem plan-mode: holistic multi-actor ecosystem mapping queries.
+	ecoPlan := getEcosystemPlanFromJobState(job, domainCP)
+	useEcoPlanMode := !usePlanMode && !useRegPlanMode && !useGovPlanMode && agents.IsEcosystemContractType(contractType) && ecoPlan != nil && len(ecoPlan.Queries) > 0
+	if useEcoPlanMode && e.researchAgent != nil && !domainFastPathApplied {
+		for _, q := range ecoPlan.Queries {
+			rels, err := e.researchAgent.EnrichEcosystemFull(ctx, q)
+			if err != nil {
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> ecosystem plan query failed (focus=%s): %v", strings.TrimSpace(q.Focus), err))
+				continue
+			}
+			domainResearchRelations = append(domainResearchRelations, rels...)
+		}
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		domainResearch := map[string]interface{}{
+			"planMode":   true,
+			"planType":   "ecosystem",
+			"queriesN":   len(ecoPlan.Queries),
+			"relationsN": len(domainResearchRelations),
+		}
+		job.State["domainResearch"] = domainResearch
+		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainResearch": domainResearch})
+	}
+
+	// Affected-zone holistic mode: single query across condition types (no execution plan needed).
+	geoToken := ""
+	if g := parsedFacets["geo"]; len(g) > 0 {
+		geoToken = strings.Join(g, "-")
+	}
+	useAffectedZoneMode := !usePlanMode && !useRegPlanMode && !useGovPlanMode && !useEcoPlanMode && agents.IsAffectedZoneContractType(contractType) && e.researchAgent != nil && !domainFastPathApplied
+	if useAffectedZoneMode {
+		log.Printf("[ScoutEngine] affected-zone: holistic mode triggered jobId=%s target=%s geo=%s", strings.TrimSpace(job.ID), domainCP, geoToken)
+		aq := agents.AffectedZoneQuery{Geo: geoToken, Title: title}
+		if job.State != nil {
+			if v, ok := job.State["originalQuery"].(string); ok {
+				aq.Reason = strings.TrimSpace(v)
+			}
+		}
+		rels, err := e.researchAgent.EnrichAffectedZoneFull(ctx, aq)
+		if err != nil {
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> affected-zone holistic query failed (geo=%s): %v", geoToken, err))
+			log.Printf("[ScoutEngine] affected-zone: holistic query FAILED jobId=%s geo=%s err=%v", strings.TrimSpace(job.ID), geoToken, err)
+		} else {
+			zonePaths := make([]string, 0, len(rels)*2)
+			seen := make(map[string]struct{})
+			for _, r := range rels {
+				for _, p := range []string{strings.TrimSpace(r.TargetCanonicalPath), strings.TrimSpace(r.SourceCanonicalPath)} {
+					if p != "" && strings.HasPrefix(p, "/zone/") {
+						if _, ok := seen[p]; !ok {
+							seen[p] = struct{}{}
+							zonePaths = append(zonePaths, p)
+						}
+					}
+				}
+			}
+			domainResearchRelations = append(domainResearchRelations, rels...)
+			sample := zonePaths
+			if len(sample) > 5 {
+				sample = sample[:5]
+			}
+			log.Printf("[ScoutEngine] affected-zone: holistic query OK jobId=%s geo=%s relationsN=%d zonePathsN=%d sample=%v", strings.TrimSpace(job.ID), geoToken, len(rels), len(zonePaths), sample)
+		}
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		domainResearch := map[string]interface{}{
+			"planMode":   true,
+			"planType":   "affectedZone",
+			"relationsN": len(domainResearchRelations),
+		}
+		job.State["domainResearch"] = domainResearch
+		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainResearch": domainResearch})
+	}
+
+	anyPlanMode := usePlanMode || useRegPlanMode || useGovPlanMode || useEcoPlanMode || useAffectedZoneMode
+	if !anyPlanMode && e.researchAgent != nil && !domainFastPathApplied {
 		originalQuery := ""
 		if job.State != nil {
 			if v, ok := job.State["originalQuery"].(string); ok {
@@ -2378,7 +2778,16 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			Status:        "active",
 		}
 		domainMissing := []string{
-			fmt.Sprintf("Expand this DOMAIN contract into 5-10 first-order entities and relations. Use DOMAIN relation types (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON) and valid canonical paths only. ContractType=%s; Facets=%v; Title=%s.", strings.TrimSpace(contractType), parsedFacets, title),
+			fmt.Sprintf(
+				"Expand this DOMAIN contract into 5-10 first-order entities and relations. Use DOMAIN relation types (%s) and valid canonical paths only. ContractType=%s; Facets=%v; Title=%s.",
+				DomainScaffoldRelationTypesString(),
+				strings.TrimSpace(contractType),
+				parsedFacets,
+				title,
+			),
+		}
+		if strings.TrimSpace(strings.ToLower(contractType)) == "affected-zone" {
+			domainMissing = append(domainMissing, "For affected-zone: output AFFECTED_ZONE targets with /zone/{geo}/{condition_type}/{slug}. slug MUST be descriptive place/region name (northern-rakhine, gaza-strip, donbas, northern-syria). NEVER use \"na\" as slug — use region name or condition-specific name (e.g. myanmar-crisis-area). condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone. geo from facets or query context. ZONE = geographic area; EVENT = discrete occurrence (TRIGGERED_BY links zone→event). Request radius_km ONLY when you have reliable, evidence-based data; be conservative and verifiable—avoid overly broad interpretations.")
 		}
 		// Collect existing entities from session graph for duplicate prevention.
 		// Domain jobs never populate session graph before this step, so fall back to lens scope.
@@ -2453,10 +2862,11 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 					string(models.DependencyTypeInGeoScope),
 					string(models.DependencyTypeAbout),
 					string(models.DependencyTypeDependsOn),
-					string(models.DependencyTypeAffects):
+					string(models.DependencyTypeAffects),
+					string(models.DependencyTypeSurfaces):
 					// ok
 				default:
-					rt = string(models.DependencyTypeFocusesOn)
+					rt = canonicalDomainAnchorRelationType(rt, cp)
 				}
 				researchRelByPath[cp] = relHint{
 					rel:    rt,
@@ -2491,6 +2901,9 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				"entityName":  title,
 			},
 		})
+	}
+	if researchStageActive {
+		e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageResearch, true, "domain_base_research_done")
 	}
 
 	// Normalize/validate referenced canonical paths (fail-open, best-effort).
@@ -2600,9 +3013,11 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	}
 
 	var fragmentID string
+	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageDomainFragmentUpsert, true, "domain_fragment_upsert")
 	if existingFragment == nil || strings.TrimSpace(existingFragment.ID) == "" {
 		id, err := e.fragmentsRepo.Create(ctx, frag)
 		if err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainFragmentUpsert, true, "domain_fragment_create_failed", true, err)
 			if !inlineDomainContractRun {
 				if trErr := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_fragment_create_failed"); trErr != nil {
 					logGroundingErrorWithContext(job, "scout", "domain_expansion.transition_failed", "job_transition_failed", "state_transition_error", true, trErr)
@@ -2625,6 +3040,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		}
 	} else {
 		if err := e.fragmentsRepo.Update(ctx, frag); err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainFragmentUpsert, true, "domain_fragment_update_failed", true, err)
 			if !inlineDomainContractRun {
 				if trErr := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_fragment_update_failed"); trErr != nil {
 					logGroundingErrorWithContext(job, "scout", "domain_expansion.transition_failed", "job_transition_failed", "state_transition_error", true, trErr)
@@ -2646,6 +3062,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			}
 		}
 	}
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainFragmentUpsert, true, "domain_fragment_upsert_done")
 
 	// Emit node upsert to UI (use updated domainCP if path changed).
 	e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
@@ -2786,6 +3203,15 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	}
 	if len(domainResearchRelations) > 0 {
 		rels = append(rels, domainResearchRelations...)
+		zoneN := 0
+		for _, r := range domainResearchRelations {
+			if strings.HasPrefix(strings.TrimSpace(r.TargetCanonicalPath), "/zone/") || strings.HasPrefix(strings.TrimSpace(r.SourceCanonicalPath), "/zone/") {
+				zoneN++
+			}
+		}
+		if zoneN > 0 {
+			log.Printf("[ScoutEngine] affected-zone: domain expansion rels include zone relations jobId=%s relsTotal=%d zoneRelatedN=%d", strings.TrimSpace(job.ID), len(domainResearchRelations), zoneN)
+		}
 	}
 
 	// Persist tracker state into job.State before policy check.
@@ -2796,6 +3222,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		job.State = map[string]interface{}{}
 	}
 	// Persist finalized job outputs into LensArtifacts (Phase 2 input).
+	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageArtifactPersistence, true, "artifact_persistence")
 	e.persistLensArtifactsFromJobState(ctx, job)
 	domainExpansion := map[string]interface{}{
 		"canonicalPath":       domainCP,
@@ -2809,30 +3236,13 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainExpansion": domainExpansion}); err != nil {
 		logGroundingErrorWithContext(job, "scout", "domain_expansion.persist_state", "job_state_update_failed", "repo_update_error", true, err)
 		e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.persist_state", "job_state_update_failed", "repo_update_error", true)
+		recordPipelineIssue(job, "domain_expansion_state_persist", err.Error())
 	}
-
-	if !inlineDomainContractRun {
-		if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "domain_expansion_done"); err != nil {
-			logGroundingErrorWithContext(job, "scout", "domain_expansion.transition_verified", "job_transition_failed", "state_transition_error", true, err)
-			e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.transition_verified", "job_transition_failed", "state_transition_error", true)
-		}
-
-		// Realtime: job completed.
-		e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-			"tenantId":      job.TenantID,
-			"projectId":     job.ProjectID,
-			"lensId":        strings.TrimSpace(job.LensID),
-			"jobId":         job.ID,
-			"fragmentId":    fragmentID,
-			"canonicalPath": domainCP,
-			"confidence":    1.0,
-			"hint":          "base_enrichment",
-			"legacyHint":    "domain_expansion",
-		})
-	}
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageArtifactPersistence, true, "artifact_persistence_done")
 
 	// Decomposition: schedule first-order entity scouts.
 	if len(rels) > 0 {
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageDomainRelationMaterialize, false, "domain_relation_materialization")
 		var resolvedGrounding *ResolvedGroundingContext
 		if internalFirstGroundingEnabled() && e.groundingResolver != nil {
 			ev := mergeGroundingEvidence(domainGroundingEvidence, groundingEvidenceFromJobState(job))
@@ -2844,18 +3254,33 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			if err := e.processDiscoveredRelationsWithGrounding(ctx, job, frag, rels, resolvedGrounding); err != nil {
 				logGroundingErrorWithContext(job, "scout", "domain_expansion.relations_grounded", "relations_materialization_failed", "materialization_error", true, err)
 				e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.relations_grounded", "relations_materialization_failed", "materialization_error", true)
+				e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainRelationMaterialize, false, "domain_relation_materialization_failed", true, err)
+				recordPipelineIssue(job, "domain_relation_materialization", err.Error())
+			} else {
+				e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainRelationMaterialize, false, "domain_relation_materialization_done")
 			}
 		} else {
 			if err := e.processDiscoveredRelations(ctx, job, frag, rels); err != nil {
 				logGroundingErrorWithContext(job, "scout", "domain_expansion.relations_fallback", "relations_materialization_failed", "materialization_error", true, err)
 				e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.relations_fallback", "relations_materialization_failed", "materialization_error", true)
+				e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainRelationMaterialize, false, "domain_relation_materialization_failed", true, err)
+				recordPipelineIssue(job, "domain_relation_materialization", err.Error())
+			} else {
+				e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainRelationMaterialize, false, "domain_relation_materialization_done")
 			}
 		}
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageDomainRelationMaterialize, false, "domain_relation_materialization_skip_no_relations")
 	}
 	if len(domainResearchChains) > 0 {
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization")
 		if err := e.processSupplyChains(ctx, job, frag, domainResearchChains); err != nil {
 			logGroundingErrorWithContext(job, "scout", "domain_expansion.supply_chains", "supply_chain_processing_failed", "materialization_error", true, err)
 			e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.supply_chains", "supply_chain_processing_failed", "materialization_error", true)
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_failed", true, err)
+			recordPipelineIssue(job, "domain_supply_chain_materialization", err.Error())
+		} else {
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_done")
 		}
 		// Expand phase (optional): 1-hop for low-confidence nodes, alternatives check. Config: job.State["supplyChainExpandEnabled"], ["supplyChainExpandMaxNodes"].
 		if usePlanMode {
@@ -2865,11 +3290,62 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		if usePlanMode && supplyChainPlan != nil && len(supplyChainPlan.OverlayQueries) > 0 {
 			e.runSupplyChainStage2Overlays(ctx, job, frag, domainResearchChains, supplyChainPlan.OverlayQueries)
 		}
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_skip_no_chains")
+	}
+
+	// Domain artifact materialization: build relations graph for governance/regulatory/ecosystem.
+	if e.domainArtifactBuilder != nil {
+		domainModes := taxonomy.NormalizeDomainModes(getJobDomainModes(job))
+		for _, dm := range domainModes {
+			if dm == taxonomy.DomainModeGovernance || dm == taxonomy.DomainModePolicyImpact || dm == taxonomy.DomainModeEcosystem {
+				rootPath := ""
+				if frag != nil {
+					rootPath = strings.TrimSpace(frag.CanonicalPath)
+				}
+				if rootPath == "" || strings.HasPrefix(rootPath, "/domain/") {
+					for _, fo := range firstOrder {
+						if p := strings.TrimSpace(fo); p != "" && !strings.HasPrefix(p, "/domain/") {
+							rootPath = p
+							break
+						}
+					}
+				}
+				if rootPath != "" && !strings.HasPrefix(rootPath, "/domain/") {
+					artifact, matErr := e.domainArtifactBuilder.MaterializeRelationsGraph(
+						ctx,
+						strings.TrimSpace(job.TenantID),
+						strings.TrimSpace(job.ProjectID),
+						strings.TrimSpace(job.LensID),
+						rootPath, dm, title,
+					)
+					if matErr != nil {
+						fmt.Printf("[DomainArtifact] materialization failed: jobId=%s mode=%s root=%s err=%v\n",
+							strings.TrimSpace(job.ID), dm, rootPath, matErr)
+					} else if artifact != nil {
+						fmt.Printf("[DomainArtifact] materialized: jobId=%s mode=%s kind=%s key=%s nodes=%d\n",
+							strings.TrimSpace(job.ID), dm, string(artifact.Kind), artifact.CanonicalKey, len(artifact.NodeRefs))
+						if lensID := strings.TrimSpace(job.LensID); lensID != "" && artifact.CanonicalKey != "" {
+							scopePath := fmt.Sprintf("/artifact/%s", artifact.CanonicalKey)
+							e.bestEffortDeferredScopeAdd(ctx, lensID, scopePath)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Policy audit + optional enforcement (best-effort).
 	if !inlineDomainContractRun {
-		e.runPolicyAudit(ctx, job)
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatch")
+		if err := e.enqueuePolicyAuditOutboxIntent(ctx, job, pipelineRuntimeName); err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatch_failed", true, err)
+			recordPipelineIssue(job, "domain_policy_audit_dispatch", err.Error())
+		} else {
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatched")
+		}
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_inline_skip")
 	}
 
 	// Best-effort propagation trigger for the domain node.
@@ -2936,14 +3412,10 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			skipAutoStrategicOverlay = parseStateBool(v, false)
 		}
 	}
-	if !skipAutoStrategicOverlay && e.shouldRunStrategicOverlay(contractType, len(firstOrder), len(rels)) {
+	if !skipAutoStrategicOverlay && e.shouldRunStrategicOverlay(contractType, len(firstOrder), len(rels), collectAllEntityPaths(firstOrder, rels)) {
 		e.triggerPhase2StrategicOverlay(ctx, job, domainCP)
 	}
 
-	// Check if all scout jobs for this lens are completed.
-	if !inlineDomainContractRun {
-		e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
-	}
 	return nil
 }
 
@@ -2963,6 +3435,8 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	if domainCP == "" || !strings.HasPrefix(domainCP, "/domain/") {
 		return nil
 	}
+	pipelineRuntimeName := pipelineRuntimeDomainLayer
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stagePlanning, true, "domain_overlay_planning_done")
 
 	inlineDomainContractRun := false
 	if job.State != nil {
@@ -3050,9 +3524,11 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	}
 
 	var fragmentID string
+	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageDomainFragmentUpsert, true, "domain_fragment_upsert")
 	if existingFragment == nil || strings.TrimSpace(existingFragment.ID) == "" {
 		id, err := e.fragmentsRepo.Create(ctx, frag)
 		if err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainFragmentUpsert, true, "domain_overlay_fragment_create_failed", true, err)
 			if !inlineDomainContractRun {
 				if trErr := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_overlay_fragment_create_failed"); trErr != nil {
 					logGroundingErrorWithContext(job, "scout", "domain_overlay.transition_failed", "job_transition_failed", "state_transition_error", true, trErr)
@@ -3073,6 +3549,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		}
 	} else {
 		if err := e.fragmentsRepo.Update(ctx, frag); err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainFragmentUpsert, true, "domain_overlay_fragment_update_failed", true, err)
 			if !inlineDomainContractRun {
 				if trErr := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_overlay_fragment_update_failed"); trErr != nil {
 					logGroundingErrorWithContext(job, "scout", "domain_overlay.transition_failed", "job_transition_failed", "state_transition_error", true, trErr)
@@ -3092,6 +3569,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 			}
 		}
 	}
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainFragmentUpsert, true, "domain_fragment_upsert_done")
 
 	e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]interface{}{
 		"tenantId":        job.TenantID,
@@ -3200,8 +3678,10 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	}
 
 	overlayAgent := agents.NewStrategicOverlayAgent(e.aiExecutor)
+	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageDomainOverlayExtraction, true, "domain_overlay_extraction")
 	overlayResult, overlayEvidence, err := overlayAgent.ExtractWithGrounding(ctx, frag, graphContext, focus, keywords)
 	if err != nil {
+		e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainOverlayExtraction, true, "domain_overlay_extraction_failed", true, err)
 		if !inlineDomainContractRun {
 			if trErr := e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "domain_overlay_failed"); trErr != nil {
 				logGroundingErrorWithContext(job, "scout", "domain_overlay.transition_failed", "job_transition_failed", "state_transition_error", true, trErr)
@@ -3210,6 +3690,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		}
 		return err
 	}
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainOverlayExtraction, true, "domain_overlay_extraction_done")
 	if internalFirstGroundingEnabled() && overlayEvidence != nil {
 		applyGroundingEvidenceToJobState(job, overlayEvidence, nil, nil)
 		logGroundingInfof("domain overlay extraction grounding: jobId=%s target=%s datastore=%v(%d) web=%v(%d)",
@@ -3384,6 +3865,9 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	// Do NOT append strategic overlay nodes (DECISION_POINT / MECHANISM) to lens.Scope.
 	// Scope is meant to stay anchored on domains/subdomains (and user-selected anchors), otherwise the UI becomes noisy.
 	// The Cockpit loader should include strategic nodes via graph expansion (neighbors), not by inflating scope.
+	e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageCritic, true, "domain_overlay_critic_skip")
+	e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageResearch, true, "domain_overlay_research_skip")
+	e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageRevalidation, true, "domain_overlay_revalidation_skip")
 
 	relationsBySource := map[string][]agents.DiscoveredRelation{}
 	sourceTypeByPath := map[string]models.FragmentType{}
@@ -3447,15 +3931,34 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		)
 		relationsBySource[src] = append(relationsBySource[src], rel)
 	}
-	for sourcePath, rels := range relationsBySource {
-		ft := sourceTypeByPath[sourcePath]
-		sourceFrag, err := e.getOrCreateFragmentByPath(ctx, sourcePath, ft, "", "", "strategic_overlay", job.ID)
-		if err != nil || sourceFrag == nil {
-			continue
+	if len(relationsBySource) > 0 {
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageDomainOverlayRelations, false, "domain_overlay_relation_materialization")
+		overlayRelationErr := false
+		for sourcePath, rels := range relationsBySource {
+			ft := sourceTypeByPath[sourcePath]
+			sourceFrag, err := e.getOrCreateFragmentByPath(ctx, sourcePath, ft, "", "", "strategic_overlay", job.ID)
+			if err != nil || sourceFrag == nil {
+				overlayRelationErr = true
+				if err != nil {
+					recordPipelineIssue(job, "domain_overlay_relation_materialization", err.Error())
+				}
+				continue
+			}
+			if err := e.processRelationsInternal(ctx, job, sourceFrag, rels, "strategic_overlay", map[string]interface{}{"source": "strategic_overlay", "domainOverlay": true}, nil); err == nil {
+				edgesEmitted += len(rels)
+				continue
+			} else {
+				overlayRelationErr = true
+				recordPipelineIssue(job, "domain_overlay_relation_materialization", err.Error())
+			}
 		}
-		if err := e.processRelationsInternal(ctx, job, sourceFrag, rels, "strategic_overlay", map[string]interface{}{"source": "strategic_overlay", "domainOverlay": true}, nil); err == nil {
-			edgesEmitted += len(rels)
+		if overlayRelationErr {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainOverlayRelations, false, "domain_overlay_relation_materialization_failed", true, fmt.Errorf("overlay relation materialization had failures"))
+		} else {
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainOverlayRelations, false, "domain_overlay_relation_materialization_done")
 		}
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageDomainOverlayRelations, false, "domain_overlay_relation_materialization_skip_no_relations")
 	}
 
 	// Phase 2 critic + research enrichment (best-effort).
@@ -3478,6 +3981,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		job.State = tr.ApplyToState(job.State)
 	}
 	// Persist finalized job outputs into LensArtifacts (Phase 2 input).
+	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageArtifactPersistence, true, "artifact_persistence")
 	e.persistLensArtifactsFromJobState(ctx, job)
 	domainOverlay := map[string]interface{}{
 		"canonicalPath":    domainCP,
@@ -3491,6 +3995,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainOverlay": domainOverlay}); err != nil {
 		logGroundingErrorWithContext(job, "scout", "domain_overlay.persist_state", "job_state_update_failed", "repo_update_error", true, err)
 		e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.persist_state", "job_state_update_failed", "repo_update_error", true)
+		recordPipelineIssue(job, "domain_overlay_state_persist", err.Error())
 	}
 
 	// Mark all lens artifacts as processed for strategic overlay
@@ -3506,32 +4011,22 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 				if err := e.lensArtifactsRepo.MarkProcessedForStrategic(ctx, artIDs); err != nil {
 					logGroundingErrorWithContext(job, "scout", "domain_overlay.mark_artifacts_processed", "artifact_mark_processed_failed", "repo_update_error", true, err)
 					e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.mark_artifacts_processed", "artifact_mark_processed_failed", "repo_update_error", true)
+					recordPipelineIssue(job, "domain_overlay_mark_artifacts_processed", err.Error())
 				}
 			}
 		}
 	}
-
+	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageArtifactPersistence, true, "artifact_persistence_done")
 	if !inlineDomainContractRun {
-		if err := e.transition(ctx, job, models.ScoutingJobStateVerified, 1.0, "domain_overlay_done"); err != nil {
-			logGroundingErrorWithContext(job, "scout", "domain_overlay.transition_verified", "job_transition_failed", "state_transition_error", true, err)
-			e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.transition_verified", "job_transition_failed", "state_transition_error", true)
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatch")
+		if err := e.enqueuePolicyAuditOutboxIntent(ctx, job, pipelineRuntimeName); err != nil {
+			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatch_failed", true, err)
+			recordPipelineIssue(job, "domain_overlay_policy_audit_dispatch", err.Error())
+		} else {
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatched")
 		}
-	}
-	if !inlineDomainContractRun {
-		e.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
-			"tenantId":      job.TenantID,
-			"projectId":     job.ProjectID,
-			"lensId":        strings.TrimSpace(job.LensID),
-			"jobId":         job.ID,
-			"fragmentId":    fragmentID,
-			"canonicalPath": domainCP,
-			"confidence":    1.0,
-			"hint":          "strategic_projection",
-			"legacyHint":    "domain_overlay",
-		})
-	}
-	if !inlineDomainContractRun {
-		e.runPolicyAudit(ctx, job)
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_inline_skip")
 	}
 	e.publish(ctx, realtime.EventType("horizon.domain.overlay.completed"), map[string]interface{}{
 		"tenantId":      job.TenantID,
@@ -3568,9 +4063,6 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 			"entityName":  title,
 		},
 	})
-	if !inlineDomainContractRun {
-		e.checkAndPublishAssemblyCompletion(ctx, job.TenantID, job.ProjectID, strings.TrimSpace(job.LensID))
-	}
 	return nil
 }
 
@@ -3584,7 +4076,16 @@ func (e *ScoutEngine) processRelationsInternal(
 	groundingCtx *ResolvedGroundingContext,
 ) error {
 	if len(relations) == 0 {
+		e.logLine(ctx, job, "info", "> relation_child_scheduling_skip: no relations from extraction+research")
 		return nil
+	}
+
+	// PostProcessingPolicy: check if this job is allowed to schedule relation children.
+	relPolicy := NewPostProcessingPolicy(job)
+	allowRelationChildren := relPolicy.ShouldRun(StepRelationChildScheduling)
+	if !allowRelationChildren {
+		e.logLine(ctx, job, "info", fmt.Sprintf("> relation_child_scheduling_disabled: policy (recursionDepth=%d maxRecursionDepth=%d hasDomainExpansionPeer=%v)",
+			relPolicy.RecursionDepth, relPolicy.MaxRecursionDepth, relPolicy.HasDomainExpansionPeer))
 	}
 
 	// Guardrails for recursive scouting:
@@ -3828,7 +4329,10 @@ func (e *ScoutEngine) processRelationsInternal(
 	edgeBuf := NewEdgeBatchBuffer()
 	batchCtx := WithEdgeBatchBuffer(ctx, edgeBuf)
 
-	for _, rel := range relations {
+	// Batch pre-resolve canonical paths (Phase 2 LLM optimization).
+	batchCanonResults := e.resolveCanonicalPathsBatch(ctx, relations)
+
+	for relIdx, rel := range relations {
 		if rel.TargetName == "" {
 			continue
 		}
@@ -3849,12 +4353,18 @@ func (e *ScoutEngine) processRelationsInternal(
 		targetTypeHint := e.normalizeFragmentType(ctx, rel.TargetType)
 		targetType := targetTypeHint
 
-		// 1. Determine target canonical path
-		targetPath, err := e.resolveCanonicalPath(ctx, rel)
-		if err != nil {
-			logGroundingErrorWithContext(job, "scout", "relations.resolve_canonical_path", "canonicalization_failed", "canonicalization_error", true, err)
-			e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.resolve_canonical_path", "canonicalization_failed", "canonicalization_error", true)
-			continue
+		// 1. Determine target canonical path (use batch result if available, fall back to per-relation)
+		var targetPath string
+		if relIdx < len(batchCanonResults) && batchCanonResults[relIdx].Resolved && batchCanonResults[relIdx].Result != "" {
+			targetPath = batchCanonResults[relIdx].Result
+		} else {
+			var err error
+			targetPath, err = e.resolveCanonicalPath(ctx, rel)
+			if err != nil {
+				logGroundingErrorWithContext(job, "scout", "relations.resolve_canonical_path", "canonicalization_failed", "canonicalization_error", true, err)
+				e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.resolve_canonical_path", "canonicalization_failed", "canonicalization_error", true)
+				continue
+			}
 		}
 		// Align targetType with canonical path prefix (auto-fix mismatches).
 		if inferred := InferFragmentTypeFromCanonicalPath(targetPath); inferred != "" && inferred != targetType {
@@ -4018,6 +4528,9 @@ func (e *ScoutEngine) processRelationsInternal(
 			// We do NOT use /discovered paths; canonicalPath must already be stable here.
 			ft := e.normalizeFragmentType(ctx, rel.TargetType)
 			if ft == "" {
+				ft = InferFragmentTypeFromCanonicalPath(targetPath)
+			}
+			if ft == "" {
 				ft = models.FragmentTypeOrganization
 			}
 			targetType = ft
@@ -4053,6 +4566,12 @@ func (e *ScoutEngine) processRelationsInternal(
 			applyGroundingProvenance(&newFragment.Provenance, runtimeGroundingEvidence, nil, nil, nil)
 			if rel.TargetShortName != "" {
 				newFragment.Identifiers["shortName"] = rel.TargetShortName
+			}
+			// AFFECTED_ZONE: extract radiusKm from relation qualifiers when creating zone fragment
+			if ft == models.FragmentTypeAffectedZone && rel.Qualifiers != nil {
+				if v, ok := extractRadiusKmFromQualifiers(rel.Qualifiers); ok && v > 0 {
+					newFragment.RadiusKm = v
+				}
 			}
 
 			// Pre-create validation: check policies and deduplication (same as in processScoutResult)
@@ -4113,6 +4632,9 @@ func (e *ScoutEngine) processRelationsInternal(
 				targetID = id
 				targetFragment = newFragment
 				targetFragment.ID = id
+				if strings.HasPrefix(strings.TrimSpace(targetPath), "/zone/") {
+					log.Printf("[ScoutEngine] zone: fragment CREATED jobId=%s path=%s fragmentId=%s", strings.TrimSpace(job.ID), targetPath, id)
+				}
 				relationsCreatedNew++
 			}
 
@@ -4142,8 +4664,8 @@ func (e *ScoutEngine) processRelationsInternal(
 				maxDepth = currentDepth
 			}
 
-			// Ограничиваем глубину
-			if currentDepth < maxDepth {
+			// Ограничиваем глубину; skip if policy disallows relation child scheduling.
+			if allowRelationChildren && currentDepth < maxDepth {
 				if cascadeLimitActive && cascadeRemaining <= 0 {
 					continue
 				}
@@ -4229,15 +4751,21 @@ func (e *ScoutEngine) processRelationsInternal(
 						continue // Skip to next relation
 					}
 
-					// Supply-chain cascade visited set: prevent enqueueing same targetPath multiple times inside this cascade.
-					// This is a guardrail against cycles/avalanche fanout; enabled only in supply_chain mode.
-					if isSupplyChainMode && e != nil && e.cascadeVisitedRepo != nil {
-						already, vErr := e.cascadeVisitedRepo.TryMarkVisited(
+					// Cascade visited set: prevent enqueueing same (targetPath, relationType) multiple times.
+					// For relations: relationHash distinguishes different relations to same target.
+					// For supply chain: relationHash empty.
+					relationHash := ""
+					if sourceFragment != nil {
+						relationHash = horizonrepo.RelationHashForDedup(sourceFragment.CanonicalPath, targetPath, rel.RelationType)
+					}
+					if (isSupplyChainMode || cascadeID != "") && e != nil && e.cascadeVisitedRepo != nil {
+						already, vErr := e.cascadeVisitedRepo.TryMarkVisitedWithRelation(
 							ctx,
 							job.TenantID,
 							job.ProjectID,
 							cascadeID,
 							targetPath,
+							relationHash,
 							job.ID,
 							currentDepth+1,
 						)
@@ -4320,6 +4848,9 @@ func (e *ScoutEngine) processRelationsInternal(
 					} else {
 						childState["cascadeRootJobId"] = job.ID
 					}
+					if relationHash != "" {
+						childState["relationHash"] = relationHash
+					}
 					// Propagate requestedMetrics, if present (ensures identical dynamic metrics behavior across prod/test).
 					if job != nil && job.State != nil {
 						if rm, ok := job.State["requestedMetrics"]; ok {
@@ -4377,8 +4908,8 @@ func (e *ScoutEngine) processRelationsInternal(
 						logGroundingErrorWithContext(job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true, err)
 						e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true)
 						// Best-effort: undo visited marker so quality isn't blocked by transient enqueue failures.
-						if isSupplyChainMode && e != nil && e.cascadeVisitedRepo != nil {
-							if delErr := e.cascadeVisitedRepo.DeleteVisited(ctx, job.TenantID, cascadeID, targetPath); delErr != nil {
+						if (isSupplyChainMode || cascadeID != "") && e != nil && e.cascadeVisitedRepo != nil {
+							if delErr := e.cascadeVisitedRepo.DeleteVisitedWithRelation(ctx, job.TenantID, cascadeID, targetPath, relationHash); delErr != nil {
 								logGroundingErrorWithContext(job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true, delErr)
 								e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true)
 							}
@@ -4429,7 +4960,7 @@ func (e *ScoutEngine) processRelationsInternal(
 				maxDepth = currentDepth
 			}
 
-			if shouldScout && currentDepth < maxDepth {
+			if allowRelationChildren && shouldScout && currentDepth < maxDepth {
 				if cascadeLimitActive && cascadeRemaining <= 0 {
 					continue
 				}
@@ -4594,6 +5125,13 @@ func (e *ScoutEngine) processRelationsInternal(
 					} else {
 						childState["cascadeRootJobId"] = job.ID
 					}
+					relationHash2 := ""
+					if sourceFragment != nil {
+						relationHash2 = horizonrepo.RelationHashForDedup(sourceFragment.CanonicalPath, targetPath, rel.RelationType)
+					}
+					if relationHash2 != "" {
+						childState["relationHash"] = relationHash2
+					}
 					if job != nil && job.State != nil {
 						if rm, ok := job.State["requestedMetrics"]; ok {
 							childState["requestedMetrics"] = rm
@@ -4639,8 +5177,8 @@ func (e *ScoutEngine) processRelationsInternal(
 						logGroundingErrorWithContext(job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true, err)
 						e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.enqueue_recursive_job", "recursive_job_create_failed", "repo_write_error", true)
 						// Best-effort: undo visited marker so quality isn't blocked by transient enqueue failures.
-						if isSupplyChainMode && e != nil && e.cascadeVisitedRepo != nil {
-							if delErr := e.cascadeVisitedRepo.DeleteVisited(ctx, job.TenantID, cascadeID, targetPath); delErr != nil {
+						if (isSupplyChainMode || cascadeID != "") && e != nil && e.cascadeVisitedRepo != nil {
+							if delErr := e.cascadeVisitedRepo.DeleteVisitedWithRelation(ctx, job.TenantID, cascadeID, targetPath, relationHash2); delErr != nil {
 								logGroundingErrorWithContext(job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true, delErr)
 								e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true)
 							}
@@ -4677,6 +5215,13 @@ func (e *ScoutEngine) processRelationsInternal(
 					e.recordDeterministicRedirect(ctx, targetPath, bound, "cascade_identity_registry_bind")
 					targetPath = bound
 				}
+			}
+		}
+
+		// Best-effort: add key entities to lens scope so they appear in frontend list.
+		if targetFragment != nil && lensIDForCascade != "" && strings.TrimSpace(targetPath) != "" {
+			if isScopeEligibleEntityType(targetType) {
+				e.bestEffortDeferredScopeAdd(ctx, lensIDForCascade, strings.TrimSpace(targetPath))
 			}
 		}
 
@@ -4764,6 +5309,12 @@ func (e *ScoutEngine) processRelationsInternal(
 						SourceIDs: []string{"explicit_source_" + provenanceMethod},
 						Method:    provenanceMethod,
 					},
+				}
+				// AFFECTED_ZONE: extract radiusKm from relation qualifiers when creating zone as explicit source
+				if srcType == models.FragmentTypeAffectedZone && rel.Qualifiers != nil {
+					if v, ok := extractRadiusKmFromQualifiers(rel.Qualifiers); ok && v > 0 {
+						newSrcFrag.RadiusKm = v
+					}
 				}
 					if createdID, createErr := e.fragmentsRepo.Create(ctx, newSrcFrag); createErr == nil {
 						edgeSourceID = createdID
@@ -4908,8 +5459,8 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 			edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
 		}
-		if canon.PolicyPenalty > 0 {
-			relConfidence = relConfidence * canon.ConfidenceMult
+			if canon.PolicyPenalty > 0 {
+				relConfidence = relConfidence * canon.ConfidenceMult
 			if relConfidence < 0 {
 				relConfidence = 0
 			}
@@ -4935,12 +5486,13 @@ func (e *ScoutEngine) processRelationsInternal(
 					"policy_penalty": policyPenalty,
 					"decision_path": "runtime_scout_relations",
 					"confidence":    canon.ConfidenceMult,
-				})
+					})
+				}
 			}
-		}
-		// Policy: direction validation and reversal (enforced for known edge types).
-		// Use unified ValidationPolicy if available, otherwise fallback to hardcoded rules
-		if e.validationPolicy != nil && sourceFragment != nil {
+			effectiveQualifiers, _ := withDeterministicDirectionalRoleQualifiers(edgeType, srcTypeActual, dstTypeActual, rel.Qualifiers)
+			// Policy: direction validation and reversal (enforced for known edge types).
+			// Use unified ValidationPolicy if available, otherwise fallback to hardcoded rules
+			if e.validationPolicy != nil && sourceFragment != nil {
 			logPrefix := "[ScoutEngine:processRelations]"
 			policy.LogPolicyEvent("edge_validation_policy", policy.PolicyLogStageInput, map[string]interface{}{
 				"trace_id":      "na",
@@ -4966,11 +5518,11 @@ func (e *ScoutEngine) processRelationsInternal(
 					"sourceType":       string(srcTypeActual),
 					"targetType":       string(dstTypeActual),
 					"sourceCanonicalPath": srcPathActual,
-					"targetCanonicalPath": dstPathActual,
-					"relationType":     string(edgeType),
-					"reason":           strings.TrimSpace(rel.Reason),
-					"qualifiers":       rel.Qualifiers,
-				},
+						"targetCanonicalPath": dstPathActual,
+						"relationType":     string(edgeType),
+						"reason":           strings.TrimSpace(rel.Reason),
+						"qualifiers":       effectiveQualifiers,
+					},
 				// IMPORTANT: do not pass Fragment here, or ValidationPolicy will overwrite sourceType from it,
 				// which can be incorrect after edge normalization swaps.
 				Fragment: nil,
@@ -5185,9 +5737,9 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 		}
 		// Merge structured qualifiers from LLM (edgeModality, eventId, round, etc.) without overwriting debug/base fields.
-		if len(rel.Qualifiers) > 0 {
-			edge.Qualifiers = mergeQualifiers(edge.Qualifiers, rel.Qualifiers)
-		}
+			if len(effectiveQualifiers) > 0 {
+				edge.Qualifiers = mergeQualifiers(edge.Qualifiers, effectiveQualifiers)
+			}
 		if strings.TrimSpace(policyEdgeModality) != "" {
 			if _, exists := edge.Qualifiers["edgeModality"]; !exists {
 				edge.Qualifiers["edgeModality"] = policyEdgeModality
@@ -5263,6 +5815,22 @@ func (e *ScoutEngine) processRelationsInternal(
 	if edgeBuf.Len() > 0 {
 		if flushErr := edgeBuf.Flush(ctx, e); flushErr != nil {
 			fmt.Printf("[ScoutEngine] edge batch flush error: %v\n", flushErr)
+			if job != nil {
+				if job.State == nil {
+					job.State = map[string]interface{}{}
+				}
+				job.State["edgeBatchFlushError"] = true
+				job.State["edgeBatchFlushErrorMessage"] = strings.TrimSpace(flushErr.Error())
+				recordPipelineIssue(job, "edge_batch_flush", flushErr.Error())
+				e.persistPipelineRuntimeState(ctx, job)
+				if e.scoutingJobsRepo != nil {
+					_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{
+						"edgeBatchFlushError":        true,
+						"edgeBatchFlushErrorMessage": strings.TrimSpace(flushErr.Error()),
+						stateKeyPipelineIssues:       job.State[stateKeyPipelineIssues],
+					})
+				}
+			}
 		}
 	}
 	if job != nil {
@@ -5315,6 +5883,10 @@ func (e *ScoutEngine) processRelationsInternal(
 				})
 			}
 		}
+	}
+	if len(relations) > 0 && scheduledCount == 0 && allowRelationChildren {
+		e.logLine(ctx, job, "info", fmt.Sprintf("> relation_child_scheduling_summary: %d relations processed, 0 child jobs scheduled (filtered by shouldRecurse/shouldScout/visited/cap)",
+			len(relations)))
 	}
 	return nil
 }
@@ -5468,7 +6040,7 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 		if e.missingInfoStatusRepo != nil && strings.TrimSpace(frag.ID) != "" {
 			foundSomething := len(newRelations) > 0
 			for _, q := range missing {
-				_ = e.missingInfoStatusRepo.RecordAttempt(ctx, strings.TrimSpace(frag.ID), q, foundSomething, 0)
+				_ = e.missingInfoStatusRepo.RecordAttempt(ctx, strings.TrimSpace(frag.ID), q, foundSomething, 0, "")
 			}
 		}
 	}
@@ -5480,8 +6052,10 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 
 // normalizeRelationEdge enforces directional semantics for common relation types.
 // It returns possibly swapped source/target IDs and/or adjusted edge type.
+// qualifiers may contain source_role/target_role; when both endpoints are ORG and roles
+// indicate inversion (e.g. source=owned_entity, target=owner for OWNS), direction is swapped.
 // This is intentionally conservative: if unsure, it leaves the relation as-is.
-func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetID string, edgeType models.DependencyType, targetType models.FragmentType, enableManagement bool) (string, string, models.DependencyType, bool) {
+func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetID string, edgeType models.DependencyType, targetType models.FragmentType, enableManagement bool, qualifiers map[string]interface{}) (string, string, models.DependencyType, bool) {
 	if sourceFrag == nil {
 		return sourceID, targetID, edgeType, false
 	}
@@ -5493,6 +6067,13 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 	isPerson := func(t models.FragmentType) bool { return t == models.FragmentTypePerson }
 
 	changed := false
+
+	// Role-based direction correction for ORG->ORG edges when LLM outputs inverted direction.
+	// E.g. PIF owns Noon, but LLM outputs Noon->PIF with source_role=owned_entity, target_role=owner.
+	if isOrg(srcType) && isOrg(targetType) && isRoleInvertedForDirection(edgeType, qualifiers) {
+		sourceID, targetID = targetID, sourceID
+		changed = true
+	}
 
 	switch edgeType {
 	case models.DependencyTypeOperatesIn:
@@ -6067,6 +6648,107 @@ func isSupplyChainPlanMode(state map[string]interface{}) bool {
 		}
 	}
 	return false
+}
+
+// buildSegmentsFromParsed converts SupplyLinkSegments from a ParsedChainResult into pathbuilder.PathSegment slice,
+// applying pathRewrites for canonical path consistency.
+func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]string) []pathbuilder.PathSegment {
+	if parsed == nil {
+		return nil
+	}
+	segments := make([]pathbuilder.PathSegment, 0, len(parsed.SupplyLinkSegments))
+	for _, seg := range parsed.SupplyLinkSegments {
+		supplier := strings.TrimSpace(seg.SupplierRef)
+		product := strings.TrimSpace(seg.ProductRef)
+		customer := strings.TrimSpace(seg.CustomerRef)
+		if rp, ok := pathRewrites[supplier]; ok && rp != "" {
+			supplier = strings.TrimSpace(rp)
+		}
+		if rp, ok := pathRewrites[product]; ok && rp != "" {
+			product = strings.TrimSpace(rp)
+		}
+		if rp, ok := pathRewrites[customer]; ok && rp != "" {
+			customer = strings.TrimSpace(rp)
+		}
+		if supplier == "" || product == "" || customer == "" {
+			continue
+		}
+		var supFac, custFac *string
+		if seg.SupplierFacilityRef != "" {
+			sup := strings.TrimSpace(seg.SupplierFacilityRef)
+			if rp, ok := pathRewrites[sup]; ok && rp != "" {
+				sup = strings.TrimSpace(rp)
+			}
+			if sup != "" {
+				supFac = &sup
+			}
+		}
+		if seg.CustomerFacilityRef != "" {
+			cust := strings.TrimSpace(seg.CustomerFacilityRef)
+			if rp, ok := pathRewrites[cust]; ok && rp != "" {
+				cust = strings.TrimSpace(rp)
+			}
+			if cust != "" {
+				custFac = &cust
+			}
+		}
+		segments = append(segments, pathbuilder.PathSegment{
+			SupplierRef:         supplier,
+			ProductRef:          product,
+			CustomerRef:         customer,
+			SupplierFacilityRef: supFac,
+			CustomerFacilityRef: custFac,
+			TransportViaRefs:    seg.TransportViaRefs,
+			Confidence:          seg.Confidence,
+			TenantID:            "global",
+			IsTenantSpecific:    false,
+			Metrics:             seg.State,
+		})
+	}
+	return segments
+}
+
+// enqueueEdgeTriggeredPropagation checks if the endpoints of a newly created edge
+// have accumulated signals. If so, it triggers async propagation from those endpoints
+// so signals flow along the new edge.
+func (e *ScoutEngine) enqueueEdgeTriggeredPropagation(ctx context.Context, edge *models.DependencyEdge, job *models.ScoutingJob) {
+	if e.propagationTrigger == nil || edge == nil {
+		return
+	}
+	if e.fragmentsRepo == nil {
+		return
+	}
+
+	srcFrag, srcErr := e.fragmentsRepo.Get(ctx, edge.SourceFragmentID)
+	tgtFrag, tgtErr := e.fragmentsRepo.Get(ctx, edge.TargetFragmentID)
+
+	signals := propagation.CollectEdgeTriggeredSignals(ctx, edge, srcFrag, tgtFrag)
+	signals = propagation.DeduplicateEdgeTriggeredSignals(signals)
+	if len(signals) == 0 {
+		return
+	}
+
+	// Collect unique fragment IDs that need re-propagation.
+	fragIDs := make(map[string]struct{}, 2)
+	for _, s := range signals {
+		fragIDs[s.FragmentID] = struct{}{}
+	}
+
+	for fid := range fragIDs {
+		fid := fid
+		runAsyncSafe("edge_triggered_propagation", func() {
+			propCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := e.propagationTrigger(propCtx, fid); err != nil {
+				fmt.Printf("[EdgeTriggeredPropagation] trigger failed fragmentId=%s edgeId=%s err=%v\n", fid, edge.ID, err)
+			}
+		})
+	}
+
+	if srcErr == nil && tgtErr == nil {
+		e.logLine(ctx, job, "info", fmt.Sprintf("[EdgeTriggeredPropagation] enqueued=%d signals=%d edge=%s",
+			len(fragIDs), len(signals), edge.ID))
+	}
 }
 
 func buildSupplyChainArtifactCanonicalKey(job *models.ScoutingJob, anchorPath string, chainIndex int, segments []pathbuilder.PathSegment) string {
@@ -6698,11 +7380,9 @@ func (e *ScoutEngine) processSupplyChains(
 		return fmt.Errorf("failed to parse supply chains: %w", err)
 	}
 
-	lensID := ""
-	if job.State != nil {
-		if v, ok := job.State["lensId"]; ok {
-			lensID, _ = v.(string)
-		}
+	lensID := strings.TrimSpace(job.LensID)
+	if lensID == "" && job.State != nil {
+		lensID = parseStateString(job.State["lensId"])
 	}
 
 	{
@@ -6738,6 +7418,11 @@ func (e *ScoutEngine) processSupplyChains(
 	// Track canonical-path rewrites within this supply-chain run so edge endpoints remain consistent
 	// even when we normalize (legacy geo -> /loc, /loc country aliases, product taxonomy upgrades, etc.).
 	pathRewrites := map[string]string{} // originalPath -> canonicalPath
+
+	// Chain reuse counters (populated in materialization loop, used in summary).
+	chainReuseSkipped := 0
+	chainReuseMerged := 0
+	chainReuseScopeAdded := 0
 
 	// Persist fragments discovered in supply chains
 	createdFrags := 0
@@ -6857,6 +7542,9 @@ func (e *ScoutEngine) processSupplyChains(
 			frag.ID = id
 			pathToID[frag.CanonicalPath] = id
 			e.ensureOrgGeoFallbackLink(ctx, frag, "scout_supply_chain", job.ID)
+			if lensID != "" && isScopeEligibleEntityType(frag.Type) {
+				e.bestEffortDeferredScopeAdd(ctx, lensID, frag.CanonicalPath)
+			}
 			createdFrags++
 			if createdFrags <= previewLimit {
 				msg := fmt.Sprintf("[SupplyChainFragmentCreate] OK canonicalPath=%s id=%s type=%s", frag.CanonicalPath, id, frag.Type)
@@ -6866,6 +7554,9 @@ func (e *ScoutEngine) processSupplyChains(
 			// Fragment exists, store ID for edge creation
 			pathToID[frag.CanonicalPath] = existing.ID
 			e.ensureOrgGeoFallbackLink(ctx, existing, "scout_supply_chain", job.ID)
+			if lensID != "" && isScopeEligibleEntityType(existing.Type) {
+				e.bestEffortDeferredScopeAdd(ctx, lensID, existing.CanonicalPath)
+			}
 
 			// Optionally update labels/identifiers if new info
 			if existing.Labels == nil {
@@ -6906,6 +7597,37 @@ func (e *ScoutEngine) processSupplyChains(
 			msg := fmt.Sprintf("[SupplyChainFragmentLookup] FAILED canonicalPath=%s err=%v", frag.CanonicalPath, err)
 			fmt.Printf("%s\n", msg)
 			e.logLine(ctx, job, "warn", msg)
+		}
+	}
+
+	// Pre-compute artifact keys per chain so edges can be annotated with chain membership.
+	// This maps "srcPath|dstPath" -> artifactCanonicalKey for each edge in each chain.
+	edgeArtifactKeyMap := make(map[string]string)
+	if e.supplyChainPathBuilder != nil {
+		anchorPath := ""
+		if sourceFragment != nil {
+			anchorPath = strings.TrimSpace(sourceFragment.CanonicalPath)
+		}
+		for idx, chain := range chains {
+			singleParsed, perr := parser.ParseSupplyChains([]agents.SupplyChain{chain}, sourceCanonicalPath)
+			if perr != nil || singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
+				continue
+			}
+			segments := buildSegmentsFromParsed(singleParsed, pathRewrites)
+			if len(segments) == 0 {
+				continue
+			}
+			canonicalKey := pathbuilder.BuildStructuralCanonicalKey("global", segments)
+			if canonicalKey == "" {
+				canonicalKey = buildSupplyChainArtifactCanonicalKey(job, anchorPath, idx, segments)
+			}
+			if canonicalKey == "" {
+				continue
+			}
+			for _, ce := range singleParsed.Edges {
+				key := strings.TrimSpace(ce.SourceCanonicalPath) + "|" + strings.TrimSpace(ce.TargetCanonicalPath)
+				edgeArtifactKeyMap[key] = canonicalKey
+			}
 		}
 	}
 
@@ -7143,6 +7865,7 @@ func (e *ScoutEngine) processSupplyChains(
 				Kind: "edge",
 				Context: map[string]interface{}{
 					"validationKind":      "edge",
+					"fromSupplyChain":     true,
 					"sourceFragmentID":    sourceID,
 					"targetFragmentID":    targetID,
 					"sourceType":          string(srcTypeActual),
@@ -7271,6 +7994,9 @@ func (e *ScoutEngine) processSupplyChains(
 			"rawConfidence":       chainEdge.Confidence,
 			"fromSupplyChain":     true,
 		}
+		if ak := edgeArtifactKeyMap[strings.TrimSpace(chainEdge.SourceCanonicalPath)+"|"+strings.TrimSpace(chainEdge.TargetCanonicalPath)]; ak != "" {
+			qualifiers["artifactKey"] = ak
+		}
 		if chainEdge.Qualifiers != nil {
 			for k, v := range chainEdge.Qualifiers {
 				if k != "" && v != nil {
@@ -7333,6 +8059,10 @@ func (e *ScoutEngine) processSupplyChains(
 				"properties":       edge.Properties,
 				"fromSupplyChain":  true,
 			})
+
+			// Edge-triggered re-propagation: if endpoints have accumulated signals,
+			// propagate them along the new edge asynchronously.
+			e.enqueueEdgeTriggeredPropagation(ctx, edge, job)
 		}
 	}
 
@@ -7460,9 +8190,41 @@ func (e *ScoutEngine) processSupplyChains(
 		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyLinkMaterialize] created=%d skipped=%d", supplyLinksCreated, supplyLinksSkipped))
 	}
 
-	// Materialize supply chain paths as MaterializedArtifact only in SupplyChain Plan mode.
-	// Keep tenant global and materialize per chain to avoid stitching unrelated chains.
-	if e.supplyChainPathBuilder != nil && len(chains) > 0 && job.State != nil && isSupplyChainPlanMode(job.State) {
+	// Rebuild existing chains that might be extended by newly created SupplyLinks.
+	if supplyLinksCreated > 0 && e.supplyChainPathBuilder != nil {
+		rebuiltCount := 0
+		seen := map[string]bool{}
+		for _, seg := range result.SupplyLinkSegments {
+			for _, ref := range []string{seg.SupplierRef, seg.CustomerRef} {
+				if ref == "" || seen[ref] {
+					continue
+				}
+				seen[ref] = true
+				affected, _ := e.supplyChainPathBuilder.FindChainsByNodeRef(ctx, "global", ref)
+				for _, art := range affected {
+					if art.Labels == nil {
+						continue
+					}
+					leafCustomer := strings.TrimSpace(art.Labels["anchorCustomer"])
+					if leafCustomer == "" {
+						continue
+					}
+					if err := e.supplyChainPathBuilder.RebuildFromSupplyLinks(ctx, art, leafCustomer); err == nil {
+						rebuiltCount++
+					}
+				}
+			}
+		}
+		if rebuiltCount > 0 {
+			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainRebuild] rebuilt=%d existing chains from new SupplyLinks", rebuiltCount))
+		}
+	}
+
+	// Materialize supply chain paths as MaterializedArtifact for every chain discovery.
+	// Uses structural canonical key (rootSupplier/leafProduct/leafCustomer) for idempotent dedup & merge.
+	// Chain reuse: checks if a MaterializedArtifact already exists with sufficient quality to skip re-processing.
+	// Batches create/update for efficiency (BatchGetByCanonicalKeys + BatchUpsert).
+	if e.supplyChainPathBuilder != nil && len(chains) > 0 {
 		maxDepth := parseStateInt(job.State["maxRecursionDepth"], 2)
 		if maxDepth <= 0 {
 			maxDepth = 6
@@ -7482,86 +8244,82 @@ func (e *ScoutEngine) processSupplyChains(
 				criticPassed = true
 			}
 		}
-		materializedCount := 0
+		var pathsToMaterialize []*pathbuilder.SupplyChainPath
+		var keysToMaterialize []string
 		for idx, chain := range chains {
 			singleParsed, perr := parser.ParseSupplyChains([]agents.SupplyChain{chain}, sourceCanonicalPath)
 			if perr != nil || singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
 				continue
 			}
-			segments := make([]pathbuilder.PathSegment, 0, len(singleParsed.SupplyLinkSegments))
-			for _, seg := range singleParsed.SupplyLinkSegments {
-				supplier := strings.TrimSpace(seg.SupplierRef)
-				product := strings.TrimSpace(seg.ProductRef)
-				customer := strings.TrimSpace(seg.CustomerRef)
-				if rp, ok := pathRewrites[supplier]; ok && rp != "" {
-					supplier = strings.TrimSpace(rp)
-				}
-				if rp, ok := pathRewrites[product]; ok && rp != "" {
-					product = strings.TrimSpace(rp)
-				}
-				if rp, ok := pathRewrites[customer]; ok && rp != "" {
-					customer = strings.TrimSpace(rp)
-				}
-				if supplier == "" || product == "" || customer == "" {
-					continue
-				}
-				var supFac, custFac *string
-				if seg.SupplierFacilityRef != "" {
-					sup := strings.TrimSpace(seg.SupplierFacilityRef)
-					if rp, ok := pathRewrites[sup]; ok && rp != "" {
-						sup = strings.TrimSpace(rp)
-					}
-					if sup != "" {
-						supFac = &sup
-					}
-				}
-				if seg.CustomerFacilityRef != "" {
-					cust := strings.TrimSpace(seg.CustomerFacilityRef)
-					if rp, ok := pathRewrites[cust]; ok && rp != "" {
-						cust = strings.TrimSpace(rp)
-					}
-					if cust != "" {
-						custFac = &cust
-					}
-				}
-				segments = append(segments, pathbuilder.PathSegment{
-					SupplierRef:         supplier,
-					ProductRef:          product,
-					CustomerRef:         customer,
-					SupplierFacilityRef: supFac,
-					CustomerFacilityRef: custFac,
-					TransportViaRefs:    seg.TransportViaRefs,
-					Confidence:          seg.Confidence,
-					TenantID:            "global",
-					IsTenantSpecific:    false,
-					Metrics:             seg.State,
-				})
-			}
+			segments := buildSegmentsFromParsed(singleParsed, pathRewrites)
 			if len(segments) == 0 {
 				continue
 			}
-			canonicalKey := buildSupplyChainArtifactCanonicalKey(job, anchorPath, idx, segments)
+
+			reuseDecision := evaluateChainReuse(ctx, e.supplyChainPathBuilder, tenantID, segments)
+			logChainReuseDecision(ctx, job, reuseDecision, idx)
+
+			if reuseDecision.Level == ChainReuseFullSkip {
+				chainReuseSkipped++
+				if reuseDecision.Artifact != nil && strings.TrimSpace(lensID) != "" && e.lensesRepo != nil {
+					if addArtifactToLensScope(ctx, e.lensesRepo, lensID, reuseDecision.Artifact) {
+						chainReuseScopeAdded++
+					}
+				}
+				e.logLine(ctx, job, "info", fmt.Sprintf("[ChainReuse] SKIP chain=%d key=%s reason=%s", idx, reuseDecision.CanonicalKey, reuseDecision.Reason))
+				continue
+			}
+
+			if reuseDecision.Level == ChainReuseEnrichMerge {
+				chainReuseMerged++
+				e.logLine(ctx, job, "info", fmt.Sprintf("[ChainReuse] MERGE chain=%d key=%s reason=%s", idx, reuseDecision.CanonicalKey, reuseDecision.Reason))
+			}
+
+			canonicalKey := pathbuilder.BuildStructuralCanonicalKey(tenantID, segments)
+			if canonicalKey == "" {
+				canonicalKey = buildSupplyChainArtifactCanonicalKey(job, anchorPath, idx, segments)
+			}
+			buildMode := "scout_parsed_auto"
+			if isSupplyChainPlanMode(job.State) {
+				buildMode = "scout_parsed_plan"
+			}
 			path := &pathbuilder.SupplyChainPath{
 				Segments:   segments,
 				Confidence: normalizeEdgeConfidence(chain.Confidence),
-				BuildMode:  "scout_parsed_plan",
+				BuildMode:  buildMode,
 				MaxDepth:   maxDepth,
 			}
-			id, err := e.supplyChainPathBuilder.MaterializePath(ctx, path, tenantID, canonicalKey)
+			pathsToMaterialize = append(pathsToMaterialize, path)
+			keysToMaterialize = append(keysToMaterialize, canonicalKey)
+		}
+		if len(pathsToMaterialize) > 0 {
+			ids, err := e.supplyChainPathBuilder.MaterializePathsBatch(ctx, pathsToMaterialize, tenantID, keysToMaterialize)
 			if err != nil {
-				e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] failed key=%s err=%v", canonicalKey, err))
-				continue
-			}
-			materializedCount++
-			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] artifact=%s chain=%d segments=%d", id, idx, len(segments)))
-			if criticPassed {
-				if updErr := e.supplyChainPathBuilder.UpdatePathStatus(ctx, tenantID, canonicalKey, "validated"); updErr != nil {
-					e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] PathStatus update failed key=%s err=%v", canonicalKey, updErr))
+				e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] batch failed: %v", err))
+			} else {
+				materializedCount := len(ids)
+				for i, id := range ids {
+					canonicalKey := keysToMaterialize[i]
+					e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] artifact=%s chain=%d segments=%d", id, i, len(pathsToMaterialize[i].Segments)))
+					if criticPassed && canonicalKey != "" {
+						if updErr := e.supplyChainPathBuilder.UpdatePathStatus(ctx, tenantID, canonicalKey, "validated"); updErr != nil {
+							e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] PathStatus update failed key=%s err=%v", canonicalKey, updErr))
+						}
+					}
+					if strings.TrimSpace(lensID) != "" && e.lensesRepo != nil && id != "" {
+						art, artErr := e.supplyChainPathBuilder.GetChainByCanonicalKey(ctx, tenantID, canonicalKey)
+						if artErr == nil && art != nil {
+							if addArtifactToLensScope(ctx, e.lensesRepo, lensID, art) {
+								chainReuseScopeAdded++
+							}
+						}
+					}
+				}
+				if materializedCount > 0 || chainReuseSkipped > 0 {
+					e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] done artifacts=%d skipped=%d merged=%d scopeAdded=%d",
+						materializedCount, chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded))
 				}
 			}
-		}
-		if materializedCount > 0 {
-			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] done artifacts=%d", materializedCount))
 		}
 	}
 
@@ -7588,21 +8346,24 @@ func (e *ScoutEngine) processSupplyChains(
 		reverseRate = float64(edgeReversed) / float64(createdEdges)
 	}
 	job.State["supplyChainSummary"] = map[string]interface{}{
-		"createdFragments":   float64(createdFrags),
-		"updatedFragments":   float64(updatedFrags),
-		"fragmentErrors":     float64(createErrors),
-		"createdEdges":       float64(createdEdges),
-		"edgeDupes":          float64(edgeDupes),
-		"edgeErrors":         float64(edgeCreateErrors),
-		"edgeReversed":       float64(edgeReversed),
-		"edgePenalized":      float64(edgePenalized),
-		"supplyLinksCreated": float64(supplyLinksCreated),
-		"supplyLinksSkipped": float64(supplyLinksSkipped),
-		"gapHints":           float64(len(gapHints)),
-		"dupeCreateRatio":    dupeCreateRatio,
-		"reverseRate":        reverseRate,
-		"kpiGuardrailDCR":    dupeCreateRatio > 0.2,
-		"kpiGuardrailRR":     reverseRate > 0.25,
+		"createdFragments":     float64(createdFrags),
+		"updatedFragments":     float64(updatedFrags),
+		"fragmentErrors":       float64(createErrors),
+		"createdEdges":         float64(createdEdges),
+		"edgeDupes":            float64(edgeDupes),
+		"edgeErrors":           float64(edgeCreateErrors),
+		"edgeReversed":         float64(edgeReversed),
+		"edgePenalized":        float64(edgePenalized),
+		"supplyLinksCreated":   float64(supplyLinksCreated),
+		"supplyLinksSkipped":   float64(supplyLinksSkipped),
+		"gapHints":             float64(len(gapHints)),
+		"dupeCreateRatio":      dupeCreateRatio,
+		"reverseRate":          reverseRate,
+		"kpiGuardrailDCR":      dupeCreateRatio > 0.2,
+		"kpiGuardrailRR":       reverseRate > 0.25,
+		"chainReuseSkipped":    float64(chainReuseSkipped),
+		"chainReuseMerged":     float64(chainReuseMerged),
+		"chainReuseScopeAdded": float64(chainReuseScopeAdded),
 	}
 
 	if contextJSON, err := existingContext.ToJSON(); err == nil {
@@ -7618,10 +8379,12 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 	}
 
-	// In supply_chain mode, schedule follow-up scout jobs based on supply chain nodes/gaps,
-	// not only on plain relations. This enables branching chain expansion even when LLM outputs
-	// most structure via supplyChains.
-	_ = e.scheduleSupplyChainChildJobs(ctx, job, sourceFragment, result, existingContext)
+	// Cascade child scheduling: only if policy allows. Entity jobs with domain expansion
+	// peer only materialize chains, they don't schedule children (domain expansion owns cascade).
+	scPolicy := NewPostProcessingPolicy(job)
+	if scPolicy.ShouldRun(StepCascadeChildScheduling) {
+		_ = e.scheduleSupplyChainChildJobs(ctx, job, sourceFragment, result, existingContext)
+	}
 
 	trace.Log(ctx, "scout_supply_chain", "scout.supply_chain.processed", map[string]any{
 		"tenantId":       strings.TrimSpace(job.TenantID),
@@ -7633,21 +8396,24 @@ func (e *ScoutEngine) processSupplyChains(
 		"edgesCount":     len(result.Edges),
 		"gapHintsCount":  len(gapHints),
 		"supplyChainLogSummary": map[string]any{
-			"createdFragments":   createdFrags,
-			"updatedFragments":   updatedFrags,
-			"fragmentErrors":     createErrors,
-			"createdEdges":       createdEdges,
-			"edgeDupes":          edgeDupes,
-			"edgeErrors":         edgeCreateErrors,
-			"edgeReversed":       edgeReversed,
-			"edgePenalized":      edgePenalized,
-			"supplyLinksCreated": supplyLinksCreated,
-			"supplyLinksSkipped": supplyLinksSkipped,
+			"createdFragments":     createdFrags,
+			"updatedFragments":     updatedFrags,
+			"fragmentErrors":       createErrors,
+			"createdEdges":         createdEdges,
+			"edgeDupes":            edgeDupes,
+			"edgeErrors":           edgeCreateErrors,
+			"edgeReversed":         edgeReversed,
+			"edgePenalized":        edgePenalized,
+			"supplyLinksCreated":   supplyLinksCreated,
+			"supplyLinksSkipped":   supplyLinksSkipped,
+			"chainReuseSkipped":    chainReuseSkipped,
+			"chainReuseMerged":     chainReuseMerged,
+			"chainReuseScopeAdded": chainReuseScopeAdded,
 		},
 	})
 	{
-		msg := fmt.Sprintf("[SupplyChainSummary] fragments(created=%d updated=%d err=%d) edges(created=%d dupes=%d err=%d reversed=%d penalized=%d) supplyLinks(created=%d skipped=%d) gaps=%d",
-			createdFrags, updatedFrags, createErrors, createdEdges, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, supplyLinksCreated, supplyLinksSkipped, len(gapHints))
+		msg := fmt.Sprintf("[SupplyChainSummary] fragments(created=%d updated=%d err=%d) edges(created=%d dupes=%d err=%d reversed=%d penalized=%d) supplyLinks(created=%d skipped=%d) gaps=%d chainReuse(skipped=%d merged=%d scopeAdded=%d)",
+			createdFrags, updatedFrags, createErrors, createdEdges, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, supplyLinksCreated, supplyLinksSkipped, len(gapHints), chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded)
 		fmt.Printf("%s\n", msg)
 		e.logLine(ctx, job, "info", msg)
 	}
@@ -8107,14 +8873,20 @@ func (e *ScoutEngine) identifyChainGaps(_ *ParsedChainResult, context *ChainCont
 
 // shouldRunStrategicOverlay determines if Phase 2 (Strategic Layer Overlay) should run
 // after Phase 1 (Domain Expansion) completes.
-func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount, relationCount int) bool {
-	// Must have at least some entities or relations to analyze
+func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount, relationCount int, entityPaths []string) bool {
 	if entityCount == 0 && relationCount == 0 {
 		return false
 	}
 
-	// Strategic overlay is opt-in by contract family.
-	// Supply-chain/market broad runs should not auto-mix strategic layer.
+	// Gov entities are inherently decision-makers: always run strategic overlay
+	// when the domain scope includes governance entities, regardless of contract type.
+	for _, p := range entityPaths {
+		if strings.HasPrefix(strings.TrimSpace(p), "/gov/") {
+			return true
+		}
+	}
+
+	// For non-gov scopes, strategic overlay is opt-in by contract family.
 	strategicContractTypes := map[string]bool{
 		// Risk / geopolitics
 		"risk-assessment":     true,
@@ -8143,6 +8915,111 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 
 	ct := strings.ToLower(strings.TrimSpace(contractType))
 	return strategicContractTypes[ct]
+}
+
+// collectAllEntityPaths merges explicit first-order entity paths with target paths
+// extracted from synthesized relations. This gives shouldRunStrategicOverlay full
+// visibility into entities discovered during domain research (not just the initial set).
+func collectAllEntityPaths(firstOrder []string, rels []agents.DiscoveredRelation) []string {
+	seen := make(map[string]struct{}, len(firstOrder)+len(rels))
+	out := make([]string, 0, len(firstOrder)+len(rels))
+	for _, p := range firstOrder {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	for _, r := range rels {
+		p := strings.TrimSpace(r.TargetCanonicalPath)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+// triggerGovStrategicOverlayFromEntityJob checks if an entity-level scouting job
+// discovered gov entities during Research and triggers the strategic overlay if
+// no overlay job already exists for this lens.
+func (e *ScoutEngine) triggerGovStrategicOverlayFromEntityJob(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	relations []agents.DiscoveredRelation,
+) {
+	if e == nil || e.scoutingJobsRepo == nil || job == nil || len(relations) == 0 {
+		return
+	}
+	lensID := strings.TrimSpace(job.LensID)
+	if lensID == "" {
+		return
+	}
+
+	hasGov := false
+	for _, r := range relations {
+		if strings.HasPrefix(strings.TrimSpace(r.TargetCanonicalPath), "/gov/") {
+			hasGov = true
+			break
+		}
+	}
+	if !hasGov {
+		return
+	}
+
+	// Check if a strategic overlay job already exists for this lens.
+	existingJobs, err := e.scoutingJobsRepo.ListByProjectAndLens(ctx, job.TenantID, job.ProjectID, lensID, 200)
+	if err != nil {
+		fmt.Printf("[ScoutEngine] Failed to list jobs for gov overlay check: %v\n", err)
+		return
+	}
+	for _, ej := range existingJobs {
+		if ej.State != nil {
+			if pp, ok := ej.State["pipelinePass"].(string); ok && pp == "strategic_overlay" {
+				return // already scheduled/running
+			}
+		}
+	}
+
+	// Derive domain path: use cascadeRootJobId to find the domain expansion job,
+	// or fall back to constructing from the lens scope.
+	domainCP := ""
+	if job.State != nil {
+		if v, ok := job.State["cascadeRootJobId"].(string); ok && strings.TrimSpace(v) != "" {
+			rootJobID := strings.TrimSpace(v)
+			for _, ej := range existingJobs {
+				if strings.TrimSpace(ej.ID) == rootJobID && strings.HasPrefix(strings.TrimSpace(ej.TargetCanonicalPath), "/domain/") {
+					domainCP = strings.TrimSpace(ej.TargetCanonicalPath)
+					break
+				}
+			}
+		}
+	}
+	if domainCP == "" {
+		// Fallback: find any domain job in this lens.
+		for _, ej := range existingJobs {
+			if strings.HasPrefix(strings.TrimSpace(ej.TargetCanonicalPath), "/domain/") {
+				domainCP = strings.TrimSpace(ej.TargetCanonicalPath)
+				break
+			}
+		}
+	}
+	if domainCP == "" {
+		fmt.Printf("[ScoutEngine] Gov entities found but no domain path for strategic overlay (lens=%s)\n", lensID)
+		return
+	}
+
+	fmt.Printf("[ScoutEngine] Gov entity discovered during entity scouting — triggering strategic overlay (lens=%s, domain=%s)\n", lensID, domainCP)
+	e.logLine(ctx, job, "info", fmt.Sprintf("> gov entity discovered during research — triggering strategic overlay for %s", domainCP))
+	e.triggerPhase2StrategicOverlay(ctx, job, domainCP)
 }
 
 // triggerPhase2StrategicOverlay creates a new ScoutingJob for the strategic projection pass

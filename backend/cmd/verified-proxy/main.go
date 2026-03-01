@@ -42,7 +42,7 @@ func parseAllowedOrigins() []string {
 	// Default: allow localhost and production
 	return []string{
 		"http://localhost:5173",
-		"https://hatl.one",
+		"https://etigram.one",
 	}
 }
 
@@ -77,7 +77,7 @@ func VerifiedProxy(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		// Subdomain wildcard entries like "*.hatl.one"
+		// Subdomain wildcard entries like "*.etigram.one"
 		if allowOrigin == "" {
 			u, err := url.Parse(origin)
 			if err == nil {

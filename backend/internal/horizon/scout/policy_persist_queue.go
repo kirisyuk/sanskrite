@@ -216,7 +216,7 @@ func (e *ScoutEngine) processPolicyPersistTask(task *policyPersistTask) {
 			j.State["policyPersistErrorAt"] = time.Now().UTC().Format(time.RFC3339Nano)
 			j.State["policyPersistAttempts"] = float64(task.Attempt)
 			j.State["policyPersistLastError"] = task.LastError
-			j.State["terminalOutcome"] = TerminalOutcomeCompletedWithPolicyPersistError
+			j.State["terminalOutcome"] = TerminalOutcomePartialCompleted
 			if j.Status == coreModels.AgentJobStatusCompleted {
 				j.Status = coreModels.AgentJobStatusPartial
 			}

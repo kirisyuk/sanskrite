@@ -44,13 +44,13 @@ if o.publish != nil {
 **Процесс:**
 1. `PublishJSON()` получает `EventDocProcess`
 2. `routeTopicName()` определяет целевой топик:
-   - `EventDocProcess` → `TopicArtifactEvents` = `"hatlone.artifact.events"`
-3. Событие публикуется в топик `hatlone.artifact.events` с атрибутами:
+   - `EventDocProcess` → `TopicArtifactEvents` = `"etigram.artifact.events"`
+3. Событие публикуется в топик `etigram.artifact.events` с атрибутами:
    - `tenantId`
    - `eventType: "document.process"`
    - `ts` (timestamp)
 
-**Исправлено:** DocumentProcessor теперь подписывается на `hatlone.artifact.events` и фильтрует события по `eventType = "document.process"`.
+**Исправлено:** DocumentProcessor теперь подписывается на `etigram.artifact.events` и фильтрует события по `eventType = "document.process"`.
 
 ---
 
@@ -62,7 +62,7 @@ if o.publish != nil {
 ```go
 worker := discovery.NewDocumentProcessor(
     psClient, 
-    string(realtime.TopicArtifactEvents), // = "hatlone.artifact.events"
+    string(realtime.TopicArtifactEvents), // = "etigram.artifact.events"
     docsRepo, 
     rulesRepo, 
     exec, 
@@ -72,8 +72,8 @@ worker := discovery.NewDocumentProcessor(
 ```
 
 **Подписка:**
-- Топик: `hatlone.artifact.events`
-- Подписка: `hatlone.artifact.events.document-processor.worker`
+- Топик: `etigram.artifact.events`
+- Подписка: `etigram.artifact.events.document-processor.worker`
 - Фильтрация: только события с `eventType = "document.process"`
 
 **Обработка сообщения:**
@@ -197,13 +197,13 @@ worker := discovery.NewDocumentProcessor(
 ### ✅ Исправлено: Несоответствие топиков
 
 **Проблема:**
-- События публикуются в топик `hatlone.artifact.events` (через `routeTopicName()`)
+- События публикуются в топик `etigram.artifact.events` (через `routeTopicName()`)
 - DocumentProcessor был подписан на топик `document.process`
 
 **Решение:**
-1. Изменен DocumentProcessor для подписки на `hatlone.artifact.events`
+1. Изменен DocumentProcessor для подписки на `etigram.artifact.events`
 2. Добавлена фильтрация по `eventType = "document.process"` в обработчике сообщений
-3. Изменено имя подписки на `hatlone.artifact.events.document-processor.worker`
+3. Изменено имя подписки на `etigram.artifact.events.document-processor.worker`
 
 **Изменения:**
 - `backend/cmd/server/main.go:367` - использует `TopicArtifactEvents` вместо `EventDocProcess`

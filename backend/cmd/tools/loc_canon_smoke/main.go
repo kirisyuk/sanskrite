@@ -37,6 +37,10 @@ func (c *countingGeoNames) GetHierarchy(ctx context.Context, geonameID int) (*on
 	c.n.Add(1)
 	return c.base.GetHierarchy(ctx, geonameID)
 }
+func (c *countingGeoNames) GetCountryCode(ctx context.Context, lat, lon float64) (string, error) {
+	c.n.Add(1)
+	return c.base.GetCountryCode(ctx, lat, lon)
+}
 
 func main() {
 	var (

@@ -9,8 +9,14 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-API_URL="${API_URL:-https://h1horizon-api-sqt63d2k2q-uc.a.run.app}"
+API_URL="${API_URL:-$(gcloud run services describe etigram-api --region=us-central1 --project=etigram --format='value(status.url)' 2>/dev/null || echo "")}"
 TEST_QUERY="${TEST_QUERY:-latest news about AI}"
+
+if [[ -z "$API_URL" ]]; then
+    echo -e "${RED}✗ API_URL not set and etigram-api Cloud Run service not found${NC}"
+    echo -e "${YELLOW}Set API_URL manually or deploy etigram-api first${NC}"
+    exit 1
+fi
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
 echo -e "${BLUE}Real Tavily API Test via Cloud Run${NC}"
@@ -19,7 +25,7 @@ echo ""
 
 # Get key from secrets
 echo -e "${BLUE}[Step 1] Getting Tavily API key from GCP secrets...${NC}"
-TAVILY_KEY=$(gcloud secrets versions access latest --secret=tavily_api_key --project=h1horizon-488615 2>/dev/null | tr -d '\n\r ' || echo "")
+TAVILY_KEY=$(gcloud secrets versions access latest --secret=tavily_api_key --project=etigram 2>/dev/null | tr -d '\n\r ' || echo "")
 
 if [[ -z "$TAVILY_KEY" ]]; then
     echo -e "${RED}✗ Failed to get key from secrets${NC}"
@@ -67,10 +73,10 @@ echo ""
 # Test 2: Check Cloud Run logs for Tavily usage
 echo -e "${BLUE}[Step 3] Checking Cloud Run logs for Tavily activity...${NC}"
 RECENT_LOGS=$(gcloud logging read \
-    "resource.type=cloud_run_revision AND resource.labels.service_name=h1horizon-api AND (textPayload=~\"Tavily\" OR textPayload=~\"tavily\" OR textPayload=~\"web_search\")" \
+    "resource.type=cloud_run_revision AND resource.labels.service_name=etigram-api AND (textPayload=~\"Tavily\" OR textPayload=~\"tavily\" OR textPayload=~\"web_search\")" \
     --limit=5 \
     --format="value(textPayload)" \
-    --project=h1horizon-488615 \
+    --project=etigram \
     --freshness=1h 2>/dev/null || echo "")
 
 if [[ -n "$RECENT_LOGS" ]]; then
@@ -84,10 +90,10 @@ echo ""
 
 # Test 3: Check if TAVILY_API_KEY is accessible in Cloud Run
 echo -e "${BLUE}[Step 4] Verifying Cloud Run configuration...${NC}"
-HAS_TAVILY_ENV=$(gcloud run services describe h1horizon-api \
+HAS_TAVILY_ENV=$(gcloud run services describe etigram-api \
     --region=us-central1 \
     --format="get(spec.template.spec.containers[0].env)" \
-    --project=h1horizon-488615 2>/dev/null | grep -o "TAVILY_API_KEY" || echo "")
+    --project=etigram 2>/dev/null | grep -o "TAVILY_API_KEY" || echo "")
 
 if [[ -n "$HAS_TAVILY_ENV" ]]; then
     echo -e "${GREEN}✓ TAVILY_API_KEY is configured in Cloud Run${NC}"
@@ -96,7 +102,7 @@ else
 fi
 
 # Check secret exists
-if gcloud secrets describe tavily_api_key --project=h1horizon-488615 >/dev/null 2>&1; then
+if gcloud secrets describe tavily_api_key --project=etigram >/dev/null 2>&1; then
     echo -e "${GREEN}✓ tavily_api_key secret exists${NC}"
 else
     echo -e "${RED}✗ tavily_api_key secret not found${NC}"
@@ -158,6 +164,5 @@ echo ""
 echo -e "${YELLOW}Next steps:${NC}"
 echo -e "  1. If key is invalid, update it: ${BLUE}gcloud secrets versions add tavily_api_key --data-file=-${NC}"
 echo -e "  2. Trigger a real web search request through the UI or API with auth"
-echo -e "  3. Check logs: ${BLUE}gcloud logging read 'resource.labels.service_name=h1horizon-api AND textPayload~\"Tavily\"' --limit=20${NC}"
+echo -e "  3. Check logs: ${BLUE}gcloud logging read 'resource.labels.service_name=etigram-api AND textPayload~\"Tavily\"' --limit=20${NC}"
 echo ""
-

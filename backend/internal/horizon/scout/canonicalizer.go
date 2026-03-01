@@ -5,14 +5,102 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
+
+// canonCache provides a cascade-scoped LRU-style cache for resolved canonical paths.
+// Keyed by NormalizeEntityName(name) + "|" + fragmentType.
+// Created once per job execution alongside SessionGraph.
+type canonCache struct {
+	mu    sync.RWMutex
+	store map[string]string
+}
+
+func newCanonCache() *canonCache {
+	return &canonCache{store: make(map[string]string)}
+}
+
+func (c *canonCache) get(key string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.store[key]
+	return v, ok
+}
+
+func (c *canonCache) set(key, canonicalPath string) {
+	if c == nil || key == "" || canonicalPath == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.store[key] = canonicalPath
+}
+
+func canonCacheKey(name string, fragType models.FragmentType) string {
+	return naming.NormalizeEntityName(name) + "|" + string(fragType)
+}
+
+type canonCacheCtxKey struct{}
+
+func withCanonCache(ctx context.Context, cc *canonCache) context.Context {
+	return context.WithValue(ctx, canonCacheCtxKey{}, cc)
+}
+
+// slugToLabel converts the last segment of a canonical path into a human-readable label.
+// Example: "/org/tr/botas" -> "Botas", "/fac/na/lng-terminal" -> "Lng Terminal".
+func slugToLabel(cp string) string {
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) == 0 {
+		return cp
+	}
+	slug := parts[len(parts)-1]
+	words := strings.Split(slug, "-")
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+func canonCacheFromContext(ctx context.Context) *canonCache {
+	if cc, ok := ctx.Value(canonCacheCtxKey{}).(*canonCache); ok {
+		return cc
+	}
+	return nil
+}
+
+// isCanonicalPathValid checks whether a canonical path is structurally valid and
+// consistent with the expected fragment type. Used to short-circuit Vertex/LLM
+// canonicalization when the LLM-produced path already satisfies all structural rules.
+func isCanonicalPathValid(path string, relType models.FragmentType) bool {
+	path = strings.TrimSpace(path)
+	if path == "" || strings.HasPrefix(path, "/discovered/") {
+		return false
+	}
+	if err := taxonomy.ValidateCanonicalPath(path); err != nil {
+		return false
+	}
+	if relType == "" {
+		return true
+	}
+	inferred := InferFragmentTypeFromCanonicalPath(path)
+	if inferred == "" {
+		return true
+	}
+	return inferred == relType
+}
 
 func slugify(s string) string {
 	// Single source of truth: taxonomy.Slugify includes best-effort Cyrillic transliteration
@@ -189,11 +277,32 @@ func normalizeFragmentType(s string) models.FragmentType {
 // 1) Use relation.TargetCanonicalPath if it is provided and not /discovered/*
 // 2) Vertex AI Search lookup by name (prefers already-known canonicalPath)
 // 3) LLM canonicalization (strict JSON) as a last resort
-func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.DiscoveredRelation) (string, error) {
+func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.DiscoveredRelation) (resolvedPath string, resolveErr error) {
 	logPrefix := "[ScoutEngine:resolveCanonicalPath]"
 
 	// Normalize fragment type using CanonizationPolicy if available
 	relType := e.normalizeFragmentType(ctx, rel.TargetType)
+
+	// Deferred cache write: store resolved path in canon cache for future lookups.
+	defer func() {
+		if resolveErr != nil || resolvedPath == "" {
+			return
+		}
+		cc := canonCacheFromContext(ctx)
+		if cc == nil {
+			return
+		}
+		targetName := strings.TrimSpace(rel.TargetShortName)
+		if targetName == "" {
+			targetName = strings.TrimSpace(rel.TargetLegalName)
+		}
+		if targetName == "" {
+			targetName = rel.TargetName
+		}
+		if targetName != "" {
+			cc.set(canonCacheKey(targetName, relType), resolvedPath)
+		}
+	}()
 
 	// Align fragment type with any provided canonical path prefix (auto-fix mismatches).
 	if cp := strings.TrimSpace(rel.TargetCanonicalPath); cp != "" {
@@ -261,6 +370,22 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 				}
 				// Use canonicalized path
 				return e.finalizeRelationCanonicalPath(ctx, rel, result.CanonicalPath, relType), nil
+			}
+		}
+	}
+
+	// 0-pre) CANON CACHE: fastest path — exact name+type already resolved in this cascade.
+	{
+		targetName := strings.TrimSpace(rel.TargetShortName)
+		if targetName == "" {
+			targetName = strings.TrimSpace(rel.TargetLegalName)
+		}
+		if targetName == "" {
+			targetName = rel.TargetName
+		}
+		if cc := canonCacheFromContext(ctx); cc != nil && targetName != "" {
+			if cached, ok := cc.get(canonCacheKey(targetName, relType)); ok {
+				return e.finalizeRelationCanonicalPath(ctx, rel, cached, relType), nil
 			}
 		}
 	}
@@ -385,6 +510,45 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 					return e.finalizeRelationCanonicalPath(ctx, rel, bestMatch.CanonicalPath, relType), nil
 				}
 			}
+
+			// 1.9) Normalized legal name fallback: catches "Gazprom PJSC" vs "Gazprom",
+			// "BOTAS A.S." vs "BOTAS", etc. by stripping legal suffixes + diacritics.
+			if relType == models.FragmentTypeOrganization || relType == "" {
+				normalizedTarget := naming.NormalizeEntityName(targetName)
+				if normalizedTarget != "" && normalizedTarget != strings.ToLower(targetName) {
+					normCandidates, normErr := e.fragmentsRepo.FindByNormalizedLegalName(ctx, normalizedTarget)
+					if normErr == nil && len(normCandidates) > 0 {
+						var normExact, normGlobal, normAny *models.HorizonFragment
+						for _, cand := range normCandidates {
+							candJurisdiction := extractJurisdiction(cand.CanonicalPath)
+							if sourceJurisdiction != "" && candJurisdiction == sourceJurisdiction {
+								normExact = cand
+								break
+							}
+							if candJurisdiction == "" || candJurisdiction == "global" {
+								if normGlobal == nil {
+									normGlobal = cand
+								}
+							}
+							if normAny == nil {
+								normAny = cand
+							}
+						}
+						bestNorm := normExact
+						if bestNorm == nil {
+							bestNorm = normGlobal
+						}
+						if bestNorm == nil {
+							bestNorm = normAny
+						}
+						if bestNorm != nil && bestNorm.ID != "" {
+							fmt.Printf("%s Firestore-first hit (normalizedLegalName): %q -> %s (normalized=%q, sourceJurisdiction=%s)\n",
+								logPrefix, targetName, bestNorm.CanonicalPath, normalizedTarget, sourceJurisdiction)
+							return e.finalizeRelationCanonicalPath(ctx, rel, bestNorm.CanonicalPath, relType), nil
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -493,6 +657,51 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		}
 	}
 
+	// 2.5) Retry Vertex with normalized name if raw search missed.
+	// Catches cross-run duplicates where "Gazprom PJSC" is indexed but we're searching for "Gazprom".
+	if e.planner != nil && e.planner.vertexSearchClient != nil && e.planner.vertexSearchClient.IsConfigured() {
+		rawQuery := strings.TrimSpace(rel.TargetShortName)
+		if rawQuery == "" {
+			rawQuery = strings.TrimSpace(rel.TargetLegalName)
+		}
+		if rawQuery == "" {
+			rawQuery = rel.TargetName
+		}
+		normalizedQuery := naming.NormalizeEntityName(rawQuery)
+		if normalizedQuery != "" && normalizedQuery != strings.ToLower(rawQuery) {
+			req := &ai.SearchRequest{
+				Query:    normalizedQuery,
+				PageSize: 5,
+				Filter:   `structData.type: "horizon_fragment"`,
+			}
+			resp, err := e.planner.vertexSearchClient.Search(ctx, req)
+			if err == nil && resp != nil {
+				sourceJurisdiction := extractJurisdiction(strings.TrimSpace(rel.SourceCanonicalPath))
+				for _, r := range resp.Results {
+					if r.Document.StructData == nil {
+						continue
+					}
+					cp, ok := r.Document.StructData["canonicalPath"].(string)
+					if !ok || cp == "" || strings.HasPrefix(cp, "/discovered/") {
+						continue
+					}
+					resultJurisdiction := extractJurisdiction(cp)
+					jurisdictionOK := sourceJurisdiction == "" ||
+						resultJurisdiction == sourceJurisdiction ||
+						resultJurisdiction == "" || resultJurisdiction == "global"
+					if !jurisdictionOK {
+						continue
+					}
+					if resolved, accepted := e.acceptVertexCanonicalPath(ctx, rel, relType, cp); accepted {
+						fmt.Printf("%s Vertex normalized-retry hit: %q (normalized=%q) -> %s\n",
+							logPrefix, rawQuery, normalizedQuery, cp)
+						return resolved, nil
+					}
+				}
+			}
+		}
+	}
+
 	// 3) LLM canonicalization
 	if e.aiExecutor == nil {
 		return "", fmt.Errorf("ai executor not configured for canonicalization")
@@ -533,6 +742,12 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		return "", fmt.Errorf("canonicalization returned forbidden /discovered canonicalPath: %s", out.CanonicalPath)
 	}
 
+	// Normalize org/gov slugs: strip legal suffixes that LLMs embed in slugs.
+	// Example: /org/tr/botas-as → /org/tr/botas, /org/ru/gazprom-pjsc → /org/ru/gazprom
+	if strings.HasPrefix(out.CanonicalPath, "/org/") || strings.HasPrefix(out.CanonicalPath, "/gov/") {
+		out.CanonicalPath = normalizeOrgSlugLegalSuffix(out.CanonicalPath)
+	}
+
 	// Enforce namespace consistency when targetType is known.
 	if relType != "" {
 		expectedPrefix := ""
@@ -560,6 +775,8 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 			expectedPrefix = "/deposit/"
 		case models.FragmentTypeCommunity:
 			expectedPrefix = "/community/"
+		case models.FragmentTypeAffectedZone:
+			expectedPrefix = "/zone/"
 		}
 		if expectedPrefix != "" {
 			if relType == models.FragmentTypeOrganization {
@@ -706,6 +923,8 @@ func canonicalPathMatchesType(canonicalPath string, relType models.FragmentType)
 		return strings.HasPrefix(cp, "/deposit/")
 	case models.FragmentTypeCommunity:
 		return strings.HasPrefix(cp, "/community/")
+	case models.FragmentTypeAffectedZone:
+		return strings.HasPrefix(cp, "/zone/")
 	default:
 		return true
 	}
@@ -834,6 +1053,7 @@ RULES:
       - L3+ (sub-vertical): /market/{geo}/{domain}/{vertical}/{sub-vertical} — narrower niche under a vertical
         - "Iraqi rice production" → /market/iq/agriculture/crop-production/rice-production
         - "Saudi Islamic banking" → /market/sa/finance/banking/islamic-banking
+        - "Taiwan semiconductor foundry" → /market/tw/technology/semiconductors/foundry
       - Rule: child path = parent path + exactly one segment
       - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
     - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
@@ -845,9 +1065,10 @@ RULES:
       - Use "global" ONLY when no geographic context is present
     - MARKET HIERARCHY: Markets form broader → narrower hierarchies
       - Parent relationships are modeled as HAS_MARKET_SEGMENT edges (broader → narrower)
-      - Example chain: /market/sa/finance → /market/sa/finance/banking → /market/sa/finance/banking/islamic-banking
+      - Example chains: /market/sa/finance → .../banking → .../islamic-banking; /market/tw/technology → .../semiconductors → .../foundry
     - Examples:
       - "SME banking in Iraq" -> /market/iq/finance/banking
+      - "Taiwan semiconductor foundries" -> /market/tw/technology/semiconductors
       - "Iraqi agriculture" -> /market/iq/agriculture (L1)
       - "Iraqi crop production" -> /market/iq/agriculture/crop-production (L2)
       - "Iraqi rice production" -> /market/iq/agriculture/crop-production/rice-production (L3)
@@ -954,4 +1175,291 @@ func normalizeMarketCanonicalDomain(cp string) string {
 	}
 	parts[2] = normalized
 	return "/" + strings.Join(parts, "/")
+}
+
+// slugLegalSuffixes are legal form tokens that LLMs embed in canonical slugs.
+// Kept short and unambiguous to avoid false positives (e.g., "co" is NOT included
+// because it's a common word fragment like "colorado").
+var slugLegalSuffixes = []string{
+	"-pjsc", "-jsc", "-cjsc", "-ojsc",
+	"-llc", "-pllc", "-inc", "-ltd", "-corp", "-corporation",
+	"-gmbh", "-ag", "-se", "-spa", "-sa", "-ab", "-oy",
+	"-nv", "-bv", "-sarl", "-srl", "-plc", "-lp", "-llp",
+	"-as", "-pty-ltd", "-limited", "-company", "-holdings", "-group",
+}
+
+// normalizeOrgSlugLegalSuffix strips legal form suffixes from the slug part of
+// org/gov canonical paths. Example: /org/tr/botas-as → /org/tr/botas.
+// Guards: only touches paths with >=3 parts, never produces empty slugs.
+func normalizeOrgSlugLegalSuffix(cp string) string {
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) < 3 {
+		return cp
+	}
+	slug := parts[len(parts)-1]
+	original := slug
+	for _, sfx := range slugLegalSuffixes {
+		if strings.HasSuffix(slug, sfx) {
+			candidate := strings.TrimSuffix(slug, sfx)
+			if len(candidate) >= 2 {
+				slug = candidate
+				break
+			}
+		}
+	}
+	if slug == original {
+		return cp
+	}
+	parts[len(parts)-1] = slug
+	return "/" + strings.Join(parts, "/")
+}
+
+// --- Batch canonicalization ---
+
+type canonBatchEntry struct {
+	Index    int
+	Relation agents.DiscoveredRelation
+	Result   string
+	Resolved bool
+	RelType  models.FragmentType
+}
+
+const batchCanonMaxPerLLMCall = 20
+
+// resolveCanonicalPathsBatch pre-resolves canonical paths for all relations in two passes:
+// Pass 1: deterministic (cache, SessionGraph, Firestore, inline validation) — no LLM cost.
+// Pass 2: batch LLM for any unresolved entries (batches of up to 20).
+func (e *ScoutEngine) resolveCanonicalPathsBatch(
+	ctx context.Context,
+	relations []agents.DiscoveredRelation,
+) []canonBatchEntry {
+	entries := make([]canonBatchEntry, len(relations))
+	for i, rel := range relations {
+		entries[i] = canonBatchEntry{Index: i, Relation: rel}
+
+		relType := e.normalizeFragmentType(ctx, rel.TargetType)
+		if cp := strings.TrimSpace(rel.TargetCanonicalPath); cp != "" {
+			if inferred := InferFragmentTypeFromCanonicalPath(cp); inferred != "" && inferred != relType {
+				relType = inferred
+			}
+		}
+		entries[i].RelType = relType
+
+		// Fast path 1: canon cache
+		targetName := batchEntryTargetName(rel)
+		if cc := canonCacheFromContext(ctx); cc != nil && targetName != "" {
+			if cached, ok := cc.get(canonCacheKey(targetName, relType)); ok {
+				entries[i].Result = cached
+				entries[i].Resolved = true
+				continue
+			}
+		}
+
+		// Fast path 2: inline validation — structurally valid provided path
+		if cp := strings.TrimSpace(rel.TargetCanonicalPath); cp != "" && !strings.HasPrefix(cp, "/discovered/") {
+			if isCanonicalPathValid(cp, relType) {
+				if e.fragmentsRepo != nil {
+					if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, cp); err == nil && f != nil && f.ID != "" {
+						entries[i].Result = f.CanonicalPath
+						entries[i].Resolved = true
+						continue
+					}
+				}
+				entries[i].Result = cp
+				entries[i].Resolved = true
+				continue
+			}
+		}
+
+		// Fast path 3: SessionGraph
+		if sg := SessionGraphFromContext(ctx); sg != nil {
+			for _, pref := range preferredCanonicalPaths(rel) {
+				if pref == "" {
+					continue
+				}
+				resolved := sg.ResolvePath(pref)
+				if frag := sg.GetByPath(resolved); frag != nil && frag.ID != "" {
+					entries[i].Result = frag.CanonicalPath
+					entries[i].Resolved = true
+					break
+				}
+			}
+			if entries[i].Resolved {
+				continue
+			}
+			if targetName != "" {
+				sourceJurisdiction := extractJurisdiction(strings.TrimSpace(rel.SourceCanonicalPath))
+				if frag := sg.GetByNamePreferJurisdiction(targetName, sourceJurisdiction); frag != nil && frag.ID != "" {
+					entries[i].Result = frag.CanonicalPath
+					entries[i].Resolved = true
+					continue
+				}
+			}
+		}
+
+		// Fast path 4: preferred canonical paths in Firestore
+		if e.fragmentsRepo != nil {
+			for _, pref := range preferredCanonicalPaths(rel) {
+				if pref == "" {
+					continue
+				}
+				if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, pref); err == nil && f != nil && f.ID != "" {
+					entries[i].Result = f.CanonicalPath
+					entries[i].Resolved = true
+					break
+				}
+			}
+		}
+	}
+
+	// Pass 2: batch LLM for unresolved
+	var unresolved []int
+	for i, ent := range entries {
+		if !ent.Resolved {
+			unresolved = append(unresolved, i)
+		}
+	}
+
+	if len(unresolved) > 0 && e.aiExecutor != nil {
+		results := e.batchCanonicalizeLLM(ctx, entries, unresolved)
+		for idx, cp := range results {
+			if cp != "" {
+				entries[idx].Result = cp
+				entries[idx].Resolved = true
+				if cc := canonCacheFromContext(ctx); cc != nil {
+					name := batchEntryTargetName(entries[idx].Relation)
+					if name != "" {
+						cc.set(canonCacheKey(name, entries[idx].RelType), cp)
+					}
+				}
+			}
+		}
+	}
+
+	// Remaining unresolved: fall through to per-relation resolveCanonicalPath
+	return entries
+}
+
+func batchEntryTargetName(rel agents.DiscoveredRelation) string {
+	n := strings.TrimSpace(rel.TargetShortName)
+	if n == "" {
+		n = strings.TrimSpace(rel.TargetLegalName)
+	}
+	if n == "" {
+		n = strings.TrimSpace(rel.TargetName)
+	}
+	return n
+}
+
+type batchCanonLLMResult struct {
+	Index         int    `json:"index"`
+	CanonicalPath string `json:"canonicalPath"`
+	LegalName     string `json:"legalName"`
+	ShortName     string `json:"shortName"`
+}
+
+// batchCanonicalizeLLM sends unresolved entries to the LLM in batches, returning
+// a map of entry index -> resolved canonical path.
+func (e *ScoutEngine) batchCanonicalizeLLM(
+	ctx context.Context,
+	entries []canonBatchEntry,
+	indices []int,
+) map[int]string {
+	result := make(map[int]string, len(indices))
+
+	for batchStart := 0; batchStart < len(indices); batchStart += batchCanonMaxPerLLMCall {
+		batchEnd := batchStart + batchCanonMaxPerLLMCall
+		if batchEnd > len(indices) {
+			batchEnd = len(indices)
+		}
+		batch := indices[batchStart:batchEnd]
+
+		prompt := buildBatchCanonicalizationPrompt(entries, batch)
+		verifier := ai.NewSimpleJSONVerifier()
+
+		task := &ai.AITask{
+			TaskType:     ai.TaskTypeDomainClassification,
+			InputContent: prompt,
+			AIRequirements: ai.AIRequirements{
+				TextGenerationCapability: true,
+				MinCapabilityScore:       7,
+				MinContextWindow:         8000,
+				MaxOutputSize:            4096,
+			},
+			Verifier: verifier,
+		}
+
+		res, err := e.aiExecutor.ExecuteStructuredTask(ctx, task)
+		if err != nil {
+			fmt.Printf("[ScoutEngine:batchCanon] batch LLM call failed: %v, falling back to per-relation\n", err)
+			continue
+		}
+
+		b, _ := json.Marshal(res)
+		var parsed []batchCanonLLMResult
+		if err := json.Unmarshal(b, &parsed); err != nil {
+			var wrapper struct {
+				Results []batchCanonLLMResult `json:"results"`
+			}
+			if err2 := json.Unmarshal(b, &wrapper); err2 != nil {
+				fmt.Printf("[ScoutEngine:batchCanon] failed to parse batch result: %v\n", err)
+				continue
+			}
+			parsed = wrapper.Results
+		}
+
+		for _, r := range parsed {
+			cp := strings.TrimSpace(r.CanonicalPath)
+			if cp == "" || strings.HasPrefix(cp, "/discovered/") {
+				continue
+			}
+			if r.Index < 0 || r.Index >= len(batch) {
+				continue
+			}
+			entryIdx := batch[r.Index]
+			relType := entries[entryIdx].RelType
+			if isCanonicalPathValid(cp, relType) {
+				cp = e.finalizeRelationCanonicalPath(ctx, entries[entryIdx].Relation, cp, relType)
+				if cp != "" {
+					result[entryIdx] = cp
+				}
+			}
+		}
+	}
+
+	return result
+}
+
+func buildBatchCanonicalizationPrompt(entries []canonBatchEntry, indices []int) string {
+	canonicalRulesBlock := taxonomy.CanonicalPathRulesPrompt()
+
+	var sb strings.Builder
+	sb.WriteString(`You are a canonicalization agent for a risk analysis system.
+
+TASK: Canonicalize ALL entities below into stable canonical paths.
+
+INPUT ENTITIES (JSON array):
+[
+`)
+	for i, idx := range indices {
+		rel := entries[idx].Relation
+		if i > 0 {
+			sb.WriteString(",\n")
+		}
+		fmt.Fprintf(&sb, `  {"index": %d, "targetName": %q, "targetLegalName": %q, "targetShortName": %q, "targetType": %q}`,
+			i, rel.TargetName, rel.TargetLegalName, rel.TargetShortName, rel.TargetType)
+	}
+	sb.WriteString("\n]\n\n")
+	fmt.Fprintf(&sb, "CANONICAL PATH RULES:\n%s\n\n", canonicalRulesBlock)
+	sb.WriteString(`OUTPUT FORMAT: Return a JSON array where each element has:
+{
+  "index": <same index from input>,
+  "canonicalPath": "/prefix/...",
+  "legalName": "...",
+  "shortName": "..."
+}
+
+Return ONLY the JSON array. No markdown fences. Every input entity MUST have a corresponding output entry.
+`)
+	return sb.String()
 }

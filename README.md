@@ -71,7 +71,10 @@ Create `.env` or set environment variables:
 ```bash
 # GCP
 GCP_PROJECT_ID=your-gcp-project-id
-GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account.json
+GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+FIREBASE_AUTH_PROJECT_ID=your-gcp-project-id
+# Prefer ADC (gcloud auth application-default login)
+GOOGLE_APPLICATION_CREDENTIALS=$HOME/.config/gcloud/application_default_credentials.json
 
 # Server
 PORT=8080
@@ -202,11 +205,11 @@ echo "YOUR_KEY" | gcloud secrets versions add grok_api_key --data-file=-
 
 ```bash
 # Check health
-API_URL=$(gcloud run services describe h1horizon-api --region us-central1 --format='value(status.url)')
+API_URL=$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')
 curl $API_URL/health
 
 # View logs
-gcloud run services logs read h1horizon-api --region us-central1 --limit 20
+gcloud run services logs read etigram-api --region us-central1 --limit 20
 ```
 
 ## Features

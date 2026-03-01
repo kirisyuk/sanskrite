@@ -359,7 +359,7 @@ RULES:
     - HIERARCHY LEVELS:
       - L1 (domain): /market/{geo}/{domain}; L2 (vertical): /market/{geo}/{domain}/{vertical}; L3+ (sub-vertical): parent path + one segment
       - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
-      - Example chain: /market/sa/finance → /market/sa/finance/banking → /market/sa/finance/banking/islamic-banking
+      - Example chains: /market/sa/finance → /market/sa/finance/banking → .../islamic-banking; /market/tw/technology → /market/tw/technology/semiconductors → .../foundry
     - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
     - geo: ISO2, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)

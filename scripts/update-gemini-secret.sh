@@ -35,4 +35,4 @@ else
 fi
 
 echo "Cloud Run uses GEMINI_API_KEY=gemini_api_key:latest — new revisions will pick the new value."
-echo "To apply immediately: redeploy API (e.g. bash scripts/deploy.sh --api)"
+echo "To apply immediately: redeploy API (e.g. bash scripts/deploy --api)"

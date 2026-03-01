@@ -15,7 +15,7 @@
    - ✅ `gemini_api_key_test` - существует в Secret Manager
 
 3. **BigQuery:**
-   - ✅ Dataset `h1horizon_488615_documents` существует
+   - ✅ Dataset `etigram_documents` существует
    - ✅ Таблица `documents_metadata` существует
    - ✅ Таблица `core_docs_metadata` существует ✅ (создано)
    - ✅ View `documents_full` существует
@@ -27,7 +27,7 @@
    - ✅ `gcs-connection` существует (для Object Tables) ✅ (создано)
 
 5. **GCS Buckets:**
-   - ✅ `h1horizon-488615-rag-documents` существует
+   - ✅ `etigram-rag-documents` существует
    - ✅ `sanskrite-core-docs` существует
 
 6. **Service Account права:**
@@ -44,7 +44,7 @@
    ```bash
    # Для автоматического экспорта RAG documents из Firestore в BigQuery
    firebase ext:install firebase/firestore-bigquery-export \
-     --project=h1horizon-488615 \
+     --project=etigram \
      --params=scripts/firestore-bigquery-config.json
    
    # Для CoreDocs (нужно создать отдельный конфиг)
@@ -65,13 +65,13 @@
 ```bash
 # Обязательные
 GCP_PROJECT_ID=sanskrite
-GOOGLE_CLOUD_PROJECT=h1horizon-488615
+GOOGLE_CLOUD_PROJECT=etigram
 GEMINI_API_KEY=<из Secret Manager>
 
 # Опциональные (есть значения по умолчанию)
-BIGQUERY_DATASET_ID=h1horizon_488615_documents  # по умолчанию
+BIGQUERY_DATASET_ID=etigram_documents  # по умолчанию
 VERTEX_LOCATION=us-central1              # по умолчанию
-RAG_DOCUMENTS_BUCKET=h1horizon-488615-rag-documents
+RAG_DOCUMENTS_BUCKET=etigram-rag-documents
 CORE_DOCS_BUCKET=sanskrite-core-docs
 ```
 
@@ -80,14 +80,14 @@ CORE_DOCS_BUCKET=sanskrite-core-docs
 1. **Проверить доступ к BigQuery:**
    ```bash
    bq query --use_legacy_sql=false \
-     "SELECT COUNT(*) as count FROM \`h1horizon-488615.h1horizon_488615_documents.documents_metadata\`"
+     "SELECT COUNT(*) as count FROM \`etigram.etigram_documents.documents_metadata\`"
    ```
 
 2. **Проверить доступ к Vertex AI:**
    ```bash
    # Проверить через API
    curl -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-     "https://us-central1-aiplatform.googleapis.com/v1/projects/h1horizon-488615/locations/us-central1/models"
+     "https://us-central1-aiplatform.googleapis.com/v1/projects/etigram/locations/us-central1/models"
    ```
 
 3. **Проверить доступ к секретам:**

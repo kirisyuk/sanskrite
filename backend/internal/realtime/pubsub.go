@@ -47,19 +47,19 @@ const (
 	// Verified URL analysis streaming: all events go to a single topic for ordering
 	EventVerifiedStream EventType = "verified.stream"
 	// Horizon events namespace (graph/lens/scout/propagation assembly)
-	// NOTE: Horizon uses "horizon.*" event types for routing to a dedicated topic.
+	// Both "horizon.*" and any legacy "etigram.*" event types route to the Horizon topic.
 )
 
-// Aggregated Pub/Sub topic names for the hatlone broker
+// Aggregated Pub/Sub topic names for the etigram broker
 const (
-	TopicGenAIStreams      = "hatlone.genai.streams"
-	TopicDiscoveryEvents   = "hatlone.discovery.events"
-	TopicArtifactEvents    = "hatlone.artifact.events"
-	TopicInteractionEvents = "hatlone.interaction.events"
-	TopicAnalysisEvents    = "hatlone.analysis.events"
-	TopicVerifiedStreams   = "hatlone.verified.streams"
-	TopicHorizonEvents     = "hatlone.horizon.events"
-	TopicOperationsEvents  = "hatlone.operations.events"
+	TopicGenAIStreams      = "etigram.genai.streams"
+	TopicDiscoveryEvents   = "etigram.discovery.events"
+	TopicArtifactEvents    = "etigram.artifact.events"
+	TopicInteractionEvents = "etigram.interaction.events"
+	TopicAnalysisEvents    = "etigram.analysis.events"
+	TopicVerifiedStreams   = "etigram.verified.streams"
+	TopicHorizonEvents     = "etigram.horizon.events"
+	TopicOperationsEvents  = "etigram.operations.events"
 	TopicSourcePoll        = "source.poll"
 )
 
@@ -245,7 +245,7 @@ func (p *Publisher) Client() *pubsub.Client { return p.client }
 
 func routeTopicName(et EventType) string {
 	switch {
-	case strings.HasPrefix(string(et), "horizon."):
+	case strings.HasPrefix(string(et), "etigram.") || strings.HasPrefix(string(et), "horizon."):
 		return TopicHorizonEvents
 	case genaiStreamEventTypes[et] || strings.HasPrefix(string(et), "genai.stream."):
 		return TopicGenAIStreams

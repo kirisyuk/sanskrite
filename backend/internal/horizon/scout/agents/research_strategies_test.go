@@ -167,6 +167,8 @@ func TestGeneralEnrichmentPrompt_ModularContract(t *testing.T) {
 		"OBJECT-TYPE TASK SPECIALIZATION",
 		"OBJECT QUALIFIER CONTRACT (STRICT)",
 		"EXISTING ENTITIES (reuse instead of creating duplicates):",
+		"DIRECTION ROLE CONTRACT (mandatory when applicable):",
+		"geo=sea",
 		"ALLOWED RELATION TAXONOMY:",
 		"CANONICAL PATH RULES:",
 		"SUPPLY CHAIN CONTEXT:",
@@ -214,12 +216,91 @@ func TestGeneralEnrichmentPrompt_DomainOverride(t *testing.T) {
 	prompt := a.buildGeneralEnrichmentPrompt(input)
 	for _, want := range []string{
 		"DOMAIN EXPANSION GUIDANCE (CRITICAL OVERRIDE)",
-		"Use ONLY domain relation types: FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, AFFECTS, DEPENDS_ON.",
+		"Use ONLY domain relation types: " + domainScaffoldRelationTypesPromptString() + ".",
 		"ALLOWED RELATION TAXONOMY (DOMAIN OVERRIDE):",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("domain general prompt missing %q", want)
 		}
+	}
+}
+
+func TestModePrompts_UseUSOTRelationAllowlists(t *testing.T) {
+	a := NewResearchAgent(nil)
+	baseInput := ResearchStrategyInput{
+		Fragment:    &models.HorizonFragment{CanonicalPath: "/org/us/example", Type: models.FragmentTypeOrganization},
+		MissingInfo: []string{"collect key relations"},
+	}
+
+	tests := []struct {
+		name   string
+		prompt string
+		want   string
+	}{
+		{
+			name:   "supply_chain_enrichment",
+			prompt: a.buildSupplyChainEnrichmentPrompt(baseInput),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain),
+		},
+		{
+			name:   "governance_enrichment",
+			prompt: a.buildGovernanceEnrichmentPrompt(baseInput),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance),
+		},
+		{
+			name:   "assurance_enrichment",
+			prompt: a.buildAssuranceEnrichmentPrompt(baseInput),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeAssurance),
+		},
+		{
+			name:   "ecosystem_enrichment",
+			prompt: a.buildEcosystemEnrichmentPrompt(baseInput),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem),
+		},
+		{
+			name:   "market_enrichment",
+			prompt: a.buildMarketEnrichmentPrompt(baseInput),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeMarket),
+		},
+		{
+			name:   "strategic_enrichment",
+			prompt: a.buildStrategicEnrichmentPrompt(baseInput),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeStrategic),
+		},
+		{
+			name:   "policy_impact_enrichment",
+			prompt: a.buildPolicyImpactEnrichmentPrompt(baseInput),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact),
+		},
+		{
+			name:   "supply_chain_full",
+			prompt: a.buildSupplyChainFullQueryPrompt(SupplyChainQuery{Anchor: "/org/us/example", AnchorType: "org", Direction: "both", Depth: 3}),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain),
+		},
+		{
+			name:   "governance_full",
+			prompt: a.buildGovernanceFullPrompt(GovernanceQuery{Target: "/org/us/example", TargetType: "organization", Direction: "upstream", Depth: 3}),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance),
+		},
+		{
+			name:   "ecosystem_full",
+			prompt: a.buildEcosystemFullPrompt(EcosystemQuery{Focus: "/org/us/example", FocusType: "organization", Depth: 3}),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem),
+		},
+		{
+			name:   "policy_impact_full",
+			prompt: a.buildRegulatoryImpactFullPrompt(RegulatoryImpactQuery{Instrument: "VAT", Jurisdiction: "sa", Depth: 3}),
+			want:   relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact),
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(tc.prompt, tc.want) {
+				t.Fatalf("prompt %s missing USOT relation list %q", tc.name, tc.want)
+			}
+		})
 	}
 }
 

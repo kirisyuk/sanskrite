@@ -68,3 +68,31 @@ func TestMergeFragment_HomeLocationFillsMissingISOFields(t *testing.T) {
 		t.Fatalf("iso6709 should be filled, got %+v", main.HomeLocation.ISO6709)
 	}
 }
+
+func TestMergeFragmentPartial_DoesNotLoseCanonicalPathOnPartialUpdate(t *testing.T) {
+	a := NewResearchAgent(nil)
+
+	main := &models.HorizonFragment{
+		CanonicalPath: "/org/eg/general-motors-egypt",
+		Description:   "old",
+		State:         map[string]models.MetricValue{},
+	}
+	partial := &models.HorizonFragment{
+		CanonicalPath: "   ",
+		Description:   "new",
+	}
+
+	got := a.MergeFragmentPartial(main, partial)
+	if got == nil {
+		t.Fatalf("expected merged fragment, got nil")
+	}
+	if got != main {
+		t.Fatalf("expected merge to keep working fragment pointer")
+	}
+	if strings.TrimSpace(got.CanonicalPath) != "/org/eg/general-motors-egypt" {
+		t.Fatalf("canonicalPath should be preserved, got %q", got.CanonicalPath)
+	}
+	if got.Description != "new" {
+		t.Fatalf("description should be merged from partial, got %q", got.Description)
+	}
+}

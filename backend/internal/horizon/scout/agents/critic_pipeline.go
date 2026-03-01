@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -42,11 +43,18 @@ func (p *CriticPipelineRunner) Validate(ctx context.Context, input CriticValidat
 		result = &ValidationResult{IsValid: true, Confidence: 1.0, MissingInfo: []string{}, Conflicts: []ValidationConflict{}}
 	}
 
-	// Strategic overlay: separate validation (uses different prompt structure).
+	// Strategic overlay: only for DECISION_POINT/MECHANISM entities. Skip for MARKET/GEO_REGION/ORG
+	// to avoid false "Rejected" when Critic expects strategic schema but Scout produced different type.
 	if hasStrategic && input.Fragment != nil && p.agent != nil {
-		stratResult, err := p.agent.ValidateStrategicOverlay(ctx, input.Fragment, input.Relations, input.GraphContext)
-		if err == nil && stratResult != nil {
-			result = mergeValidationResults(result, stratResult)
+		ft := input.Fragment.Type
+		cp := strings.ToLower(strings.TrimSpace(input.Fragment.CanonicalPath))
+		isStrategicEntity := ft == models.FragmentTypeDecisionPoint || ft == models.FragmentTypeMechanism ||
+			strings.HasPrefix(cp, "/decision/") || strings.HasPrefix(cp, "/mechanism/")
+		if isStrategicEntity {
+			stratResult, err := p.agent.ValidateStrategicOverlay(ctx, input.Fragment, input.Relations, input.GraphContext)
+			if err == nil && stratResult != nil {
+				result = mergeValidationResults(result, stratResult)
+			}
 		}
 	}
 
@@ -125,6 +133,8 @@ func (p *CriticPipelineRunner) validatorsForModes(modes []string) []CriticValida
 			out = append(out, &StrategicValidator{agent: p.agent})
 		case taxonomy.DomainModePolicyImpact:
 			out = append(out, &PolicyImpactValidator{agent: p.agent})
+		case taxonomy.DomainModeEcosystem:
+			out = append(out, &EcosystemValidator{agent: p.agent})
 		}
 	}
 	return out

@@ -94,7 +94,9 @@ func classifySignalChannel(axis string, edgeType horizonmodels.DependencyType) s
 		return "informational"
 	case horizonmodels.DependencyTypeOperatesIn,
 		horizonmodels.DependencyTypeLocatedIn,
-		horizonmodels.DependencyTypeInGeoScope:
+		horizonmodels.DependencyTypeInGeoScope,
+		horizonmodels.DependencyTypeAffects,
+		horizonmodels.DependencyTypeTriggeredBy:
 		return "geopolitical"
 	case horizonmodels.DependencyTypeManages:
 		return "operational"

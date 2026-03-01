@@ -43,6 +43,15 @@ func registerAll() {
   - Missing competitors and market participation.
   - Missing ownership/investor structure.
   - Missing locations and deposits (for extractive orgs).`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerFieldEmpty, FieldPath: "Identifiers.legalName", QuestionTemplate: "official legal name for %s"},
+			{Trigger: TriggerFieldEmpty, FieldPath: "MarketSegments", QuestionTemplate: "industry sector classification for %s"},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Who provides external assurance to %s? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit|certification|regulatory|inspection). Provide assurer and source."},
+			{Trigger: TriggerSeed, QuestionTemplate: "[HIGH PRIORITY] What industry/sector does %s operate in? Return marketSegments as array of paths /segment/{domain}/{vertical}/{geo}."},
+			{Trigger: TriggerSeed, QuestionTemplate: "[HIGH PRIORITY] What is the size of %s? Find employee count or revenue to determine orgSize: sme, le, enterprise, mega."},
+		},
 		ResearchBlock: `ENTITY TYPE: ORGANIZATION
 - Required aspects: products, competitors, investors, owners, markets, deposits, locations.
 - Taxonomically correct edge types: PRODUCES, CONSUMES, COMPETES_WITH, INVESTS_IN, OWNS, SUBSIDIARY_OF, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN.
@@ -91,6 +100,15 @@ func registerAll() {
   - Missing parent body or subordinate agencies.
   - Missing regulated entities and scope qualifiers.
   - Missing formal legal basis/events for powers.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerFieldEmpty, FieldPath: "MarketSegments", QuestionTemplate: "industry sector classification for %s"},
+			{Trigger: TriggerFieldEmpty, FieldPath: "OrgSize", QuestionTemplate: "What is the size of %s? Find employee count or revenue to determine orgSize: sme, le, enterprise, mega. For government: federal G20 ministries=enterprise/mega, regional=le/enterprise."},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Who provides external assurance to %s? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit|certification|regulatory|inspection). Provide assurer and source."},
+			{Trigger: TriggerSeed, QuestionTemplate: "[HIGH PRIORITY] What industry/sector does %s operate in? Return marketSegments as array of paths /segment/{domain}/{vertical}/{geo}."},
+			{Trigger: TriggerSeed, QuestionTemplate: "[HIGH PRIORITY] What is the size of %s? Find employee count or revenue to determine orgSize: sme, le, enterprise, mega. For government: federal G20 ministries=enterprise/mega, regional=le/enterprise."},
+		},
 	}
 
 	registry[EntityTypePerson] = &EntityTypeDefinition{
@@ -118,6 +136,14 @@ func registerAll() {
 - Required aspects: family ties, companies managed, companies owned, business locations.
 - Taxonomically correct edge types: RELATIVE_OF, RELATED_TO, MANAGES, OWNS, BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED, INVESTS_IN.
 - Missing info priorities: family links, governance ties, locations.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerRelationMissing, RelationType: "RELATIVE_OF", QuestionTemplate: "Who are the direct public relatives (spouse/children/parents/siblings) of %s? Output RELATIVE_OF links with sources."},
+			{Trigger: TriggerRelationMissing, RelationType: "RELATED_TO", QuestionTemplate: "Who are the publicly known close associates of %s (business partners/friends/classmates)? Output RELATED_TO links with evidence and sources."},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Who are the direct public relatives (spouse/children/parents/siblings) of %s? Output RELATIVE_OF links with sources."},
+			{Trigger: TriggerSeed, QuestionTemplate: "Who are the publicly known close associates of %s (business partners/friends/classmates)? Output RELATED_TO links with evidence and sources."},
+		},
 	}
 
 	registry[EntityTypeMarket] = &EntityTypeDefinition{
@@ -164,6 +190,22 @@ func registerAll() {
   - Missing parent/children market nodes.
   - Missing top players and dominance shares.
   - Missing sizing/concentration metrics with units and dates.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerRelationMissing, RelationType: "HAS_MARKET_SEGMENT", QuestionTemplate: "What are the key immediate sub-markets of %s? Return 5-10 /market/... canonical paths and HAS_MARKET_SEGMENT edges (broader -> narrower; child path = parent path + one segment)."},
+			{Trigger: TriggerRelationMissing, RelationType: "PARTICIPATES_IN", QuestionTemplate: "Who are the key players in %s and who dominates? Provide top players and (if available) market shares."},
+			{Trigger: TriggerFieldEmpty, FieldPath: "MarketDomain", QuestionTemplate: "What is the market domain and vertical for %s? Return marketDomain (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate) and marketVertical (specific vertical) with sources."},
+			{Trigger: TriggerFieldEmpty, FieldPath: "MarketVertical", QuestionTemplate: "What is the market domain and vertical for %s? Return marketDomain and marketVertical with sources."},
+			{Trigger: TriggerFieldEmpty, FieldPath: "State./metric/market/tam_usd", QuestionTemplate: "What is the TAM (total addressable market) in USD for %s (latest available year)? Provide value (number), year, and sources."},
+			{Trigger: TriggerFieldEmpty, FieldPath: "State./metric/market/cagr_percent", QuestionTemplate: "What is the market CAGR percent for %s (provide period, e.g. 2024-2029)? Provide percent and sources."},
+			{Trigger: TriggerFieldEmpty, FieldPath: "State./metric/market/cr4_percent", QuestionTemplate: "What is the market concentration for %s? Provide CR4 (top-4 share percent) and/or HHI (0..10000) with sources."},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships."},
+			{Trigger: TriggerSeed, QuestionTemplate: "What is the market domain and vertical for %s? Return marketDomain (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate) and marketVertical (specific vertical) with sources."},
+			{Trigger: TriggerSeed, QuestionTemplate: "What is the TAM (total addressable market) in USD for %s (latest available year)? Provide value (number), year, and sources."},
+			{Trigger: TriggerSeed, QuestionTemplate: "What is the market CAGR percent for %s (provide period, e.g. 2024-2029)? Provide percent and sources."},
+			{Trigger: TriggerSeed, QuestionTemplate: "What is the market concentration for %s? Provide CR4 (top-4 share percent) and/or HHI (0..10000) with sources."},
+			{Trigger: TriggerSeed, QuestionTemplate: "Who are the key players in %s and who dominates? Provide top players and (if available) market shares."},
+		},
 	}
 
 	registry[EntityTypeProduct] = &EntityTypeDefinition{
@@ -213,6 +255,14 @@ func registerAll() {
   - Missing upstream raw inputs.
   - Missing downstream transformed products.
   - Missing producer/facility nodes and chain continuity gaps.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerRelationMissing, RelationType: "TRANSFORMS_INTO", QuestionTemplate: "What are the upstream materials and downstream derived products for %s (produced from / used to produce)? Return TRANSFORMS_INTO relationships between products."},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "What products and services does %s produce/offer? Provide a canonical list of outputs suitable for /product/... paths."},
+			{Trigger: TriggerSeed, QuestionTemplate: "What key inputs/materials/components does %s consume? Provide a canonical list of inputs suitable for /product/... paths."},
+			{Trigger: TriggerSeed, QuestionTemplate: "What are the upstream materials and downstream derived products for %s (produced from / used to produce)? Return TRANSFORMS_INTO relationships between products."},
+		},
 	}
 
 	registry[EntityTypeFacility] = &EntityTypeDefinition{
@@ -254,6 +304,14 @@ func registerAll() {
   - Missing output products and consumed materials.
   - Missing lifecycle dates and current stage.
   - Missing capacity/volume metrics.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerFieldEmpty, FieldPath: "HomeLocation", QuestionTemplate: "facility geographic location for %s"},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Who provides external assurance to %s? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit|certification|regulatory|inspection). Provide assurer and source."},
+			{Trigger: TriggerSeed, QuestionTemplate: "[HIGH PRIORITY] What industry/sector does %s operate in? Return marketSegments as array of paths /segment/{domain}/{vertical}/{geo}."},
+			{Trigger: TriggerSeed, QuestionTemplate: "[HIGH PRIORITY] What is the size of %s? Find employee count or revenue to determine orgSize: sme, le, enterprise, mega."},
+		},
 	}
 
 	registry[EntityTypeGeoRegion] = &EntityTypeDefinition{
@@ -282,6 +340,11 @@ func registerAll() {
 - Required aspects: organizations, markets, deposits, regulatory environment.
 - Taxonomically correct edge types: LOCATED_IN, OPERATES_IN, REGULATES, PARTICIPATES_IN.
 - Missing info priorities: actors, markets, deposits, regulation.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships."},
+		},
 	}
 
 	registry[EntityTypeProgram] = &EntityTypeDefinition{
@@ -320,6 +383,12 @@ func registerAll() {
   - APPLIES_TO is valid when source is MECHANISM; for program context use explicit mechanism source when needed.
 - Missing info priorities:
   - Missing admin body, timeline, and scope boundaries.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerRelationMissing, RelationType: "ADMINISTERS", QuestionTemplate: "Which government body administers %s? Return ADMINISTERS edge."},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships."},
+		},
 	}
 
 	registry[EntityTypeCommunity] = &EntityTypeDefinition{
@@ -349,6 +418,12 @@ func registerAll() {
 - Required aspects: org affiliations, members, hierarchy, locations, market participation.
 - Taxonomically correct edge types: HAS_SUBGROUP, MEMBER_OF, AFFILIATED_WITH, PARTICIPATES_IN, LOCATED_IN.
 - Missing info priorities: hierarchy, members, affiliations, markets.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerFieldEmpty, FieldPath: "CommunityType", QuestionTemplate: "What type of community is %s? Return one of trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe|representatives|industry-association|key-community."},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships."},
+		},
 	}
 
 	registry[EntityTypeCommunityDynasty] = &EntityTypeDefinition{
@@ -474,6 +549,11 @@ func registerAll() {
   - Missing operator facilities.
   - Missing reserves/grade/annual output.
   - Missing downstream resource transformation path.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships."},
+		},
 	}
 
 	registry[EntityTypeDecisionPoint] = &EntityTypeDefinition{
@@ -584,6 +664,47 @@ func registerAll() {
 - Missing info priorities:
   - Missing anchor entities by each required scope dimension.
   - Missing domain->entity evidence for top-risk edges.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships."},
+		},
+	}
+
+	registry[EntityTypeAffectedZone] = &EntityTypeDefinition{
+		Key: EntityTypeAffectedZone,
+		RequiredAspects: []string{
+			"condition_type", "affected_entities", "trigger_event", "metrics", "description",
+		},
+		ProfileSections: []models.ProfileSectionSpec{
+			{Key: "overview", Title: "Overview", Description: "Politically-neutral description of the zone, boundaries, and condition type", Required: true, Order: 1},
+			{Key: "characteristics", Title: "Characteristics", Description: "zone_severity_score, population_affected_estimate, condition_type", Required: false, Order: 2},
+			{Key: "affected_entities", Title: "Affected Entities", Description: "Facilities, routes, organizations impacted (AFFECTS edges)", Required: false, Order: 3},
+			{Key: "trigger_event", Title: "Trigger Event", Description: "Event that caused the zone (TRIGGERED_BY → EVENT)", Required: false, Order: 4},
+		},
+		ExtractionBlock: `ENTITY TYPE: AFFECTED_ZONE
+- Canonical path: /zone/{geo}/{condition_type}/{slug}. geo: ISO2, composite (tr-sy), or regional token. slug: descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER use "na" as slug.
+- Required aspects: condition_type (Qualifiers), affected entities (AFFECTS), parent geo (LOCATED_IN), trigger event (TRIGGERED_BY), radius_km (approximate zone radius in km when reliably known).
+- State metrics (politically-neutral): zone_severity_score (0-10), population_affected_estimate. radiusKm: dedicated field for zone radius in km. Be conservative and evidence-based—avoid overly broad interpretations; omit if uncertain.
+- Taxonomically correct edge types:
+  - Required/primary: LOCATED_IN (zone → GEO_REGION), AFFECTS (zone → FACILITY|ORGANIZATION|GEO_REGION for routes)
+  - Allowed when evidence exists: TRIGGERED_BY (zone → EVENT)
+- Missing info priorities:
+  - Missing condition_type and severity metrics.
+  - Missing politically-neutral description.
+  - Missing AFFECTS links to facilities/routes/orgs.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerFieldEmpty, FieldPath: "RadiusKm", QuestionTemplate: "What is the approximate radius of the affected zone in kilometers (evidence-based, conservative estimate)? Return radiusKm (numeric, km). Avoid overly broad interpretations."},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+		},
+		ResearchBlock: `ENTITY TYPE: AFFECTED_ZONE
+- ZONE vs EVENT: ZONE = geographic area (conflict zone, disaster zone); EVENT = discrete occurrence (earthquake, flood incident). TRIGGERED_BY: zone→event.
+- slug: descriptive place/region name. NEVER "na".
+- Required aspects: condition_type, affected entities, trigger event, metrics, description, radius_km (zone radius in km when reliably known; be conservative, omit if uncertain).
+- Taxonomically correct edge types: LOCATED_IN, AFFECTS, TRIGGERED_BY.
+- State: zone_severity_score, population_affected_estimate. Description: politically-neutral.
+- Missing info priorities: metrics, affected entities, trigger event.`,
 	}
 
 	registry[EntityTypeGeneral] = &EntityTypeDefinition{

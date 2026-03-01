@@ -110,14 +110,15 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 	affectedFragments := make(map[string]bool)
 	propagationPaths := make([][]string, 0)
 
-	// Queue for BFS: (fragmentID, amplitude, hops, path)
+	// Queue for BFS: (fragmentID, amplitude, hops, path, artifactKey)
 	type queueItem struct {
-		fragmentID string
-		amplitude  float64
-		hops       int
-		pathIDs    []string
-		pathCanon  []string
-		axis       string // Current axis (may transform)
+		fragmentID  string
+		amplitude   float64
+		hops        int
+		pathIDs     []string
+		pathCanon   []string
+		axis        string // Current axis (may transform)
+		artifactKey string // Chain waveguide context (empty = free space)
 	}
 
 	queue := make([]queueItem, 0, len(seedFragmentIDs))
@@ -361,6 +362,22 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 			traceFactors = mergeFactorMaps(traceFactors, map[string]float64{
 				"after_adapter": nextAmplitude,
 			}, "")
+
+			// Waveguide coherence bonus: signal staying on-chain gets a small boost.
+			neighborArtifactKey := EdgeArtifactKey(neighbor.edge)
+			coherence := WaveguideCoherenceBonus(item.artifactKey, neighborArtifactKey)
+			if coherence != 1.0 {
+				nextAmplitude *= coherence
+				if nextAmplitude > 1.0 {
+					nextAmplitude = 1.0
+				}
+			}
+			traceFactors["waveguide_coherence"] = coherence
+			traceFactors["artifact_key"] = 0
+			if neighborArtifactKey != "" {
+				traceFactors["artifact_key"] = 1
+			}
+
 			meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Type, nextAxis, fragmentCache)
 			if nextAmplitude < MinAmplitudeThreshold {
 				traceCollector.add(SignalPropagationTraceEvent{
@@ -412,14 +429,15 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 				Factors:      traceFactors,
 			})
 
-			// Add to queue
+			// Add to queue — propagate artifact key for chain-direction coherence
 			queue = append(queue, queueItem{
-				fragmentID: neighbor.fragmentID,
-				amplitude:  nextAmplitude,
-				hops:       item.hops + 1,
-				pathIDs:    append(append([]string{}, item.pathIDs...), neighbor.fragmentID),
-				pathCanon:  append(append([]string{}, item.pathCanon...), ""), // fill lazily
-				axis:       nextAxis,
+				fragmentID:  neighbor.fragmentID,
+				amplitude:   nextAmplitude,
+				hops:        item.hops + 1,
+				pathIDs:     append(append([]string{}, item.pathIDs...), neighbor.fragmentID),
+				pathCanon:   append(append([]string{}, item.pathCanon...), ""), // fill lazily
+				axis:        nextAxis,
+				artifactKey: neighborArtifactKey,
 			})
 		}
 	}
@@ -504,12 +522,13 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 	)
 
 	type queueItem struct {
-		fragmentID string
-		amplitude  float64
-		hops       int
-		pathIDs    []string
-		pathCanon  []string
-		axis       string
+		fragmentID  string
+		amplitude   float64
+		hops        int
+		pathIDs     []string
+		pathCanon   []string
+		axis        string
+		artifactKey string
 	}
 
 	visited := make(map[string]float64) // key(nodeID|axis) -> max amplitude seen
@@ -756,6 +775,17 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			traceFactors = mergeFactorMaps(traceFactors, map[string]float64{
 				"after_adapter": nextAmplitude,
 			}, "")
+
+			neighborArtifactKey := EdgeArtifactKey(neighbor.edge)
+			coherence := WaveguideCoherenceBonus(item.artifactKey, neighborArtifactKey)
+			if coherence != 1.0 {
+				nextAmplitude *= coherence
+				if nextAmplitude > 1.0 {
+					nextAmplitude = 1.0
+				}
+			}
+			traceFactors["waveguide_coherence"] = coherence
+
 			meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Type, nextAxis, fragmentCache)
 			if nextAmplitude < MinAmplitudeThreshold {
 				traceCollector.add(SignalPropagationTraceEvent{
@@ -806,12 +836,13 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 				Factors:      traceFactors,
 			})
 			queue = append(queue, queueItem{
-				fragmentID: neighbor.fragmentID,
-				amplitude:  nextAmplitude,
-				hops:       item.hops + 1,
-				pathIDs:    append(append([]string{}, item.pathIDs...), neighbor.fragmentID),
-				pathCanon:  append(append([]string{}, item.pathCanon...), ""),
-				axis:       nextAxis,
+				fragmentID:  neighbor.fragmentID,
+				amplitude:   nextAmplitude,
+				hops:        item.hops + 1,
+				pathIDs:     append(append([]string{}, item.pathIDs...), neighbor.fragmentID),
+				pathCanon:   append(append([]string{}, item.pathCanon...), ""),
+				axis:        nextAxis,
+				artifactKey: neighborArtifactKey,
 			})
 		}
 	}
@@ -1126,6 +1157,12 @@ func (e *PropagationEngine) calculateDampedAmplitudeWithBreakdown(
 		out *= costFactor
 	}
 	factors["cost_factor"] = costFactor
+
+	// Waveguide: edges belonging to a materialized artifact (chain) experience reduced damping.
+	wgFactor := WaveguideBoostForEdge(edge, profile)
+	out *= wgFactor
+	factors["waveguide_factor"] = wgFactor
+
 	factors["amplitude_after_physics_pre_clamp"] = out
 	if inputAmplitude > 0 {
 		factors["physics_factor_total"] = out / inputAmplitude

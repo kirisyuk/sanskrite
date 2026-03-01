@@ -69,7 +69,7 @@ if storagePath != nil {
 VERTEX_SEARCH_DATA_STORE_ID=rag-documents-store
 VERTEX_SEARCH_LOCATION=global
 GEMINI_API_KEY=<your-key>
-RAG_DOCUMENTS_BUCKET=h1horizon-488615-rag-documents
+RAG_DOCUMENTS_BUCKET=etigram-rag-documents
 ```
 
 Бэкенд автоматически:
@@ -88,6 +88,6 @@ RAG_DOCUMENTS_BUCKET=h1horizon-488615-rag-documents
 ```bash
 gcloud discovery-engine operations list \
   --location=global \
-  --project=h1horizon-488615 \
+  --project=etigram \
   --filter="metadata.operationType=IMPORT"
 ```

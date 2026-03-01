@@ -11,6 +11,7 @@ const (
 	DomainModeMarket       = "market"
 	DomainModeStrategic    = "strategic"
 	DomainModePolicyImpact = "policy_impact"
+	DomainModeEcosystem    = "ecosystem"
 	DomainModeGeneral      = "general"
 )
 
@@ -31,7 +32,7 @@ func NormalizeDomainModes(in []string) []string {
 			continue
 		}
 		switch s {
-		case DomainModeSupplyChain, DomainModeGovernance, DomainModeAssurance, DomainModeMarket, DomainModeStrategic, DomainModePolicyImpact, DomainModeGeneral:
+		case DomainModeSupplyChain, DomainModeGovernance, DomainModeAssurance, DomainModeMarket, DomainModeStrategic, DomainModePolicyImpact, DomainModeEcosystem, DomainModeGeneral:
 			if _, ok := seen[s]; !ok {
 				seen[s] = struct{}{}
 				out = append(out, s)
@@ -60,6 +61,7 @@ var domainModeSynonyms = map[string]string{
 	"policy_impact": DomainModePolicyImpact,
 	"policy-impact": DomainModePolicyImpact,
 	"general":       DomainModeGeneral,
+	"ecosystem":     DomainModeEcosystem,
 	"equity":        DomainModeGovernance, // specialty equity -> governance mode
 }
 
@@ -79,6 +81,8 @@ func EntityTypesForDomainMode(mode string) string {
 		return "ORGANIZATION (including /gov/), PERSON, COMMUNITY, DECISION_POINT, MECHANISM"
 	case DomainModePolicyImpact:
 		return "ORGANIZATION (including /gov/), PROGRAM, MARKET, COMMUNITY, GEO_REGION, DECISION_POINT, MECHANISM"
+	case DomainModeEcosystem:
+		return "ORGANIZATION (including /gov/), FACILITY, PERSON, COMMUNITY, PROGRAM, MARKET, GEO_REGION, PRODUCT"
 	default:
 		return ""
 	}
@@ -98,6 +102,8 @@ func EntityActorTypesForDomainMode(mode string) string {
 		return "ORGANIZATION, FACILITY, COMMUNITY, PROGRAM"
 	case DomainModePolicyImpact:
 		return "ORGANIZATION (including /gov/), PROGRAM, COMMUNITY"
+	case DomainModeEcosystem:
+		return "ORGANIZATION, PERSON, COMMUNITY, PROGRAM"
 	default:
 		return ""
 	}
@@ -151,6 +157,33 @@ const (
 	AssuranceTypeRegulatory    = "regulatory"
 	AssuranceTypeInspection    = "inspection"
 )
+
+// EcosystemEdgeTypes returns canonical edge types for ecosystem/stakeholder mapping context.
+var EcosystemEdgeTypes = []string{
+	"PARTICIPATES_IN", "OWNS", "SUBSIDIARY_OF", "CONTROLS", "SUPPLIES_TO",
+	"DEPENDS_ON", "COMPETES_WITH", "REGULATES", "INFLUENCES", "INVESTS_IN",
+	"PARTNERS_WITH", "LOCATED_IN", "OPERATES_IN",
+}
+
+// EcosystemEdgeTypesString returns comma-separated list for prompts.
+func EcosystemEdgeTypesString() string {
+	return "PARTICIPATES_IN, OWNS, SUBSIDIARY_OF, CONTROLS, SUPPLIES_TO, DEPENDS_ON, COMPETES_WITH, REGULATES, INFLUENCES, INVESTS_IN, PARTNERS_WITH, LOCATED_IN, OPERATES_IN"
+}
+
+// MarketEdgeTypesString returns comma-separated list for prompts (market/competitive analysis).
+func MarketEdgeTypesString() string {
+	return "PARTICIPATES_IN, HAS_MARKET_SEGMENT"
+}
+
+// StrategicEdgeTypesString returns comma-separated list for prompts (strategic/geopolitical analysis).
+func StrategicEdgeTypesString() string {
+	return "CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO"
+}
+
+// PolicyImpactEdgeTypesString returns comma-separated list for prompts (regulatory impact).
+func PolicyImpactEdgeTypesString() string {
+	return "REGULATES, CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO, INFLUENCES, DEPENDS_ON, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN, ADMINISTERS"
+}
 
 // HasDomainMode returns true if modes contain the given mode (after normalizing the target).
 func HasDomainMode(modes []string, mode string) bool {

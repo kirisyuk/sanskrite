@@ -1,7 +1,7 @@
 # Ignore build artifacts and service binaries
 server
 verified-proxy
-hatlone-ws
+etigram-ws
 main
 *.exe
 *.dll

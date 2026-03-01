@@ -217,6 +217,8 @@ func inferFragmentTypeFromPath(path string) models.FragmentType {
 		return models.FragmentTypeOrganization
 	case strings.HasPrefix(path, "/domain/"):
 		return models.FragmentTypeDomain
+	case strings.HasPrefix(path, "/zone/"):
+		return models.FragmentTypeAffectedZone
 	default:
 		return models.FragmentTypeOrganization
 	}
@@ -1074,17 +1076,52 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		lens.ResolvedQueries = make(map[string][]string)
 	}
 
-	// Разделяем Scope на статические пути и QueryAddress
-	staticPaths, queryAddresses := splitScope(lens.Scope)
+	// Разделяем Scope на статические пути, QueryAddress и artifact refs
+	staticPaths, queryAddresses, artifactRefs := classifyScope(lens.Scope)
 	trace.Log(ctx, "scope", "scope.split", map[string]any{
 		"tenantId":          strings.TrimSpace(lens.TenantID),
 		"projectId":         strings.TrimSpace(lens.ProjectID),
 		"lensId":            lensID,
 		"staticPathsN":      len(staticPaths),
 		"queryAddressesN":   len(queryAddresses),
+		"artifactRefsN":     len(artifactRefs),
 		"staticPathsTop":    trace.StrSlice(staticPaths, 12),
 		"queryAddressesTop": trace.StrSlice(queryAddresses, 12),
 	})
+
+	// Resolve artifact scope entries: load MaterializedArtifacts and expand their node refs into static paths
+	if len(artifactRefs) > 0 && s.materializedRepo != nil {
+		if lens.ScopeArtifacts == nil {
+			lens.ScopeArtifacts = make(map[string]models.ScopeArtifactRef)
+		}
+		for _, ref := range artifactRefs {
+			artKey := ArtifactKeyFromScopeEntry(ref)
+			if artKey == "" {
+				continue
+			}
+			artifact, err := s.materializedRepo.GetByCanonicalKeyAnyKind(ctx, lens.TenantID, artKey)
+			if err != nil || artifact == nil {
+				trace.Log(ctx, "scope", "scope.artifact.not_found", map[string]any{
+					"lensId":      lensID,
+					"artifactKey": artKey,
+				})
+				continue
+			}
+			lens.ScopeArtifacts[artKey] = models.ScopeArtifactRef{
+				Kind:        string(artifact.Kind),
+				DisplayName: artifact.DisplayName,
+				NodeRefs:    artifact.NodeRefs,
+				Status:      artifact.PathStatus,
+			}
+			staticPaths = append(staticPaths, artifact.NodeRefs...)
+			trace.Log(ctx, "scope", "scope.artifact.resolved", map[string]any{
+				"lensId":      lensID,
+				"artifactKey": artKey,
+				"kind":        string(artifact.Kind),
+				"nodesN":      len(artifact.NodeRefs),
+			})
+		}
+	}
 
 	// Резолвим QueryAddress в canonical paths
 	now := time.Now().UTC()
@@ -1197,6 +1234,25 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// Track scope rewrites so we can persist canonical scope back into the lens document.
 	// This prevents UI/graph from being stuck on alias paths like /loc/uae.
 	scopeRewrites := map[string]string{} // inputPath -> canonicalPath
+
+	// Detect whether any domain expansion paths exist (deferred or static).
+	// When they do, entity jobs are marked with hasDomainExpansionPeer=true
+	// so PostProcessingPolicy can gate cascade child scheduling.
+	hasDomainExpansionPeer := false
+	for _, p := range deferredScopePaths {
+		if strings.HasPrefix(strings.TrimSpace(p), "/domain/") {
+			hasDomainExpansionPeer = true
+			break
+		}
+	}
+	if !hasDomainExpansionPeer {
+		for _, p := range staticPaths {
+			if strings.HasPrefix(strings.TrimSpace(p), "/domain/") {
+				hasDomainExpansionPeer = true
+				break
+			}
+		}
+	}
 
 	for _, inputPath := range staticPaths {
 		// Domain is config, not a graph node — skip /domain/ paths.
@@ -1538,6 +1594,8 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		if isDomainPath {
 			// Domain jobs execute contract logic; fragment freshness alone must not suppress execution.
 			isFragmentFreshEnough = false
+			// Domain paths are always added to scope (they don't have fragments but must be visible).
+			addDeferredScopePathIfUnderLimit(ctx, s.lensesRepo, lens, lensID, strings.TrimSpace(canonicalPath), models.MaxAutoScopeAddsPerLens)
 		}
 		// Cache hit for deferred path: add to scope so node shows (max 5 per lens).
 		if isCacheHit && fragment != nil {
@@ -1884,11 +1942,35 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 		newScope[path] = true
 	}
 
-	// Разделяем новый Scope на статические пути и QueryAddress
-	newStaticPaths, newQueryAddresses := splitScope(lens.Scope)
+	// Разделяем новый Scope на статические пути, QueryAddress, и artifact refs
+	newStaticPaths, newQueryAddresses, newArtifactRefs := classifyScope(lens.Scope)
 
 	// Разделяем старый Scope на статические пути и QueryAddress
-	oldStaticPaths, oldQueryAddresses := splitScope(oldLens.Scope)
+	oldStaticPaths, oldQueryAddresses, _ := classifyScope(oldLens.Scope)
+
+	// Resolve artifact scope entries in new scope
+	if len(newArtifactRefs) > 0 && s.materializedRepo != nil {
+		if lens.ScopeArtifacts == nil {
+			lens.ScopeArtifacts = make(map[string]models.ScopeArtifactRef)
+		}
+		for _, ref := range newArtifactRefs {
+			artKey := ArtifactKeyFromScopeEntry(ref)
+			if artKey == "" {
+				continue
+			}
+			artifact, err := s.materializedRepo.GetByCanonicalKeyAnyKind(ctx, lens.TenantID, artKey)
+			if err != nil || artifact == nil {
+				continue
+			}
+			lens.ScopeArtifacts[artKey] = models.ScopeArtifactRef{
+				Kind:        string(artifact.Kind),
+				DisplayName: artifact.DisplayName,
+				NodeRefs:    artifact.NodeRefs,
+				Status:      artifact.PathStatus,
+			}
+			newStaticPaths = append(newStaticPaths, artifact.NodeRefs...)
+		}
+	}
 
 	// Резолвим новые QueryAddress
 	now := time.Now().UTC()
@@ -2515,6 +2597,32 @@ func (s *LensService) cascadeDeleteLensData(ctx context.Context, tenantID, proje
 // GetLens получает Lens по ID
 func (s *LensService) GetLens(ctx context.Context, lensID string) (*models.Lens, error) {
 	return s.lensesRepo.Get(ctx, lensID)
+}
+
+// AddScopePathsAutoLimited adds canonical paths to lens scope one by one, respecting maxCount (MaxAutoScopeAddsPerLens).
+// Returns the paths that were successfully added or already in scope. Stops when limit is reached.
+func (s *LensService) AddScopePathsAutoLimited(ctx context.Context, lensID string, canonicalPaths []string, maxCount int) ([]string, error) {
+	if s == nil || s.lensesRepo == nil || lensID == "" || maxCount <= 0 {
+		return nil, nil
+	}
+	added := make([]string, 0, len(canonicalPaths))
+	for _, cp := range canonicalPaths {
+		cp = strings.TrimSpace(cp)
+		if cp == "" {
+			continue
+		}
+		res, err := s.lensesRepo.AddScopeCanonicalPathAutoLimited(ctx, lensID, cp, maxCount)
+		if err != nil {
+			return added, err
+		}
+		if res.Added || res.AlreadyInScope {
+			added = append(added, cp)
+		}
+		if res.LimitReached {
+			break
+		}
+	}
+	return added, nil
 }
 
 // ListLensesByProject получает список Lens для проекта

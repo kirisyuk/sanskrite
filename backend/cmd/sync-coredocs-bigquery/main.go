@@ -14,7 +14,7 @@ import (
 
 func main() {
 	projectID := flag.String("project", "", "GCP project ID")
-	datasetID := flag.String("dataset", "h1horizon_488615_documents", "BigQuery dataset ID")
+	datasetID := flag.String("dataset", "etigram_documents", "BigQuery dataset ID")
 	tenantID := flag.String("tenant", "", "Tenant ID (optional, syncs all tenants if not specified)")
 	flag.Parse()
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Создание Vertex AI Search Data Store для Horizon
+# Создание Vertex AI Search Data Store для Etigram
 
 set -e
 
@@ -11,11 +11,20 @@ fi
 
 DATA_STORE_ID="${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store}"
 LOCATION="${VERTEX_SEARCH_LOCATION:-global}"
+DISPLAY_NAME="${VERTEX_SEARCH_DATA_STORE_DISPLAY_NAME:-}"
+if [ -z "$DISPLAY_NAME" ]; then
+  if [ "$DATA_STORE_ID" = "etigram-fragments-store" ]; then
+    DISPLAY_NAME="Etigram Fragments Store"
+  else
+    DISPLAY_NAME="RAG Documents Store"
+  fi
+fi
 
 echo "=== Создание Vertex AI Search Data Store ==="
 echo "Проект: $PROJECT_ID"
 echo "Data Store ID: $DATA_STORE_ID"
 echo "Location: $LOCATION"
+echo "Display Name: $DISPLAY_NAME"
 echo ""
 
 # Проверка существования (через REST API, т.к. gcloud discovery-engine может быть недоступен)
@@ -53,7 +62,7 @@ curl -X POST \
   -H "x-goog-user-project: $PROJECT_ID" \
   -H "Content-Type: application/json" \
   -d '{
-    "displayName": "RAG Documents Store",
+    "displayName": "'"$DISPLAY_NAME"'",
     "industryVertical": "GENERIC",
     "solutionTypes": ["SOLUTION_TYPE_SEARCH"],
     "contentConfig": "CONTENT_REQUIRED"
@@ -92,4 +101,3 @@ fi
 
 echo ""
 echo "Готово!"
-

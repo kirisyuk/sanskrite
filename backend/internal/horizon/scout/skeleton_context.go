@@ -85,6 +85,10 @@ type govSkeletonContext struct {
 	ChildEdges   []skeletonEdgeView `json:"childEdges,omitempty"`  // outgoing ADMINISTERS (this -> child)
 	SiblingPaths []string           `json:"siblingPaths,omitempty"`
 
+	// Strategic decision layer: edges connecting this gov entity to decision points and mechanisms.
+	DecisionEdges []skeletonEdgeView `json:"decisionEdges,omitempty"` // GATEKEEPS_DECISION, CONTROLS_ACCESS, USES_MECHANISM, APPLIES_TO outgoing
+	IncomingStratEdges []skeletonEdgeView `json:"incomingStrategicEdges,omitempty"` // strategic edges targeting this gov entity
+
 	NearbyPaths []string `json:"nearbyPaths,omitempty"` // existing gov nodes in same jurisdiction prefix (cap)
 }
 
@@ -321,22 +325,29 @@ func (e *ScoutEngine) buildGovSkeletonContext(ctx context.Context, canonicalPath
 		parents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &edgeType, 5)
 		children, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &edgeType, 15)
 
+		// Strategic decision layer: query edges connecting this gov entity to decision points and mechanisms.
+		stratOutgoing := e.queryGovStrategicEdgesOutgoing(ctx, out.FragmentID)
+		stratIncoming := e.queryGovStrategicEdgesIncoming(ctx, out.FragmentID)
+
 		// Collect all referenced fragment IDs for batch fetch.
 		fragIDSet := make(map[string]struct{})
-		for _, ed := range parents {
-			if ed == nil {
-				continue
+		collectEdgeFragIDs := func(edges []*models.DependencyEdge) {
+			for _, ed := range edges {
+				if ed == nil {
+					continue
+				}
+				if sid := strings.TrimSpace(ed.SourceFragmentID); sid != "" {
+					fragIDSet[sid] = struct{}{}
+				}
+				if tid := strings.TrimSpace(ed.TargetFragmentID); tid != "" {
+					fragIDSet[tid] = struct{}{}
+				}
 			}
-			fragIDSet[strings.TrimSpace(ed.SourceFragmentID)] = struct{}{}
-			fragIDSet[strings.TrimSpace(ed.TargetFragmentID)] = struct{}{}
 		}
-		for _, ed := range children {
-			if ed == nil {
-				continue
-			}
-			fragIDSet[strings.TrimSpace(ed.SourceFragmentID)] = struct{}{}
-			fragIDSet[strings.TrimSpace(ed.TargetFragmentID)] = struct{}{}
-		}
+		collectEdgeFragIDs(parents)
+		collectEdgeFragIDs(children)
+		collectEdgeFragIDs(stratOutgoing)
+		collectEdgeFragIDs(stratIncoming)
 
 		var sibEdges []*models.DependencyEdge
 		if len(parents) > 0 {
@@ -375,32 +386,36 @@ func (e *ScoutEngine) buildGovSkeletonContext(ctx context.Context, canonicalPath
 			return ""
 		}
 
-		for _, ed := range parents {
-			if ed == nil {
-				continue
-			}
-			out.ParentEdges = append(out.ParentEdges, skeletonEdgeView{
+		toView := func(ed *models.DependencyEdge) skeletonEdgeView {
+			return skeletonEdgeView{
 				Type:        string(ed.Type),
 				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
 				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
 				SourcePath:  resolvePath(strings.TrimSpace(ed.SourceFragmentID)),
 				TargetPath:  resolvePath(strings.TrimSpace(ed.TargetFragmentID)),
 				Criticality: ed.Properties.Criticality,
-			})
+			}
 		}
 
-		for _, ed := range children {
-			if ed == nil {
-				continue
+		for _, ed := range parents {
+			if ed != nil {
+				out.ParentEdges = append(out.ParentEdges, toView(ed))
 			}
-			out.ChildEdges = append(out.ChildEdges, skeletonEdgeView{
-				Type:        string(ed.Type),
-				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
-				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
-				SourcePath:  resolvePath(strings.TrimSpace(ed.SourceFragmentID)),
-				TargetPath:  resolvePath(strings.TrimSpace(ed.TargetFragmentID)),
-				Criticality: ed.Properties.Criticality,
-			})
+		}
+		for _, ed := range children {
+			if ed != nil {
+				out.ChildEdges = append(out.ChildEdges, toView(ed))
+			}
+		}
+		for _, ed := range stratOutgoing {
+			if ed != nil {
+				out.DecisionEdges = append(out.DecisionEdges, toView(ed))
+			}
+		}
+		for _, ed := range stratIncoming {
+			if ed != nil {
+				out.IncomingStratEdges = append(out.IncomingStratEdges, toView(ed))
+			}
 		}
 
 		for _, ed := range sibEdges {
@@ -438,4 +453,42 @@ func (e *ScoutEngine) buildGovSkeletonContext(ctx context.Context, canonicalPath
 		return "", err
 	}
 	return string(b), nil
+}
+
+// govStrategicEdgeTypes lists edge types that connect gov entities to the decision/mechanism layer.
+var govStrategicEdgeTypes = []models.DependencyType{
+	models.DependencyTypeGatekeepsDecision,
+	models.DependencyTypeControlsAccess,
+	models.DependencyTypeUsesMechanism,
+	models.DependencyTypeImposesCondition,
+	models.DependencyTypeAppliesTo,
+	models.DependencyTypeRegulates,
+}
+
+// queryGovStrategicEdgesOutgoing returns outgoing strategic edges from this gov entity
+// (e.g., gov GATEKEEPS_DECISION decision_point, gov CONTROLS_ACCESS org, gov USES_MECHANISM mechanism).
+func (e *ScoutEngine) queryGovStrategicEdgesOutgoing(ctx context.Context, fragmentID string) []*models.DependencyEdge {
+	var out []*models.DependencyEdge
+	for _, et := range govStrategicEdgeTypes {
+		et := et
+		edges, err := e.edgesRepo.ListBySource(ctx, "global", fragmentID, &et, 10)
+		if err == nil {
+			out = append(out, edges...)
+		}
+	}
+	return out
+}
+
+// queryGovStrategicEdgesIncoming returns incoming strategic edges targeting this gov entity
+// (e.g., decision_point APPLIES_TO gov, mechanism APPLIES_TO gov, org DEPENDS_ON gov).
+func (e *ScoutEngine) queryGovStrategicEdgesIncoming(ctx context.Context, fragmentID string) []*models.DependencyEdge {
+	var out []*models.DependencyEdge
+	for _, et := range govStrategicEdgeTypes {
+		et := et
+		edges, err := e.edgesRepo.ListByTarget(ctx, "global", fragmentID, &et, 10)
+		if err == nil {
+			out = append(out, edges...)
+		}
+	}
+	return out
 }

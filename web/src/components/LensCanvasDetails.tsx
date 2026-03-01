@@ -1,6 +1,6 @@
 import React from 'react';
 import { api } from '../lib/api';
-import { humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
+import { getDomainRegionLabel, getScopeGeoLabel, humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
 
 function pruneMapToMax<K, V>(m: Map<K, V>, maxSize: number) {
   if (maxSize <= 0) {
@@ -63,6 +63,8 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
 
   const scope: string[] = Array.isArray(lens?.scope) ? lens.scope : [];
   const scopeFragments: Record<string, string> = (lens?.scopeFragments && typeof lens.scopeFragments === 'object') ? lens.scopeFragments : {};
+  const scopeArtifacts: Record<string, { kind?: string; displayName?: string; nodeRefs?: string[]; status?: string }> =
+    (lens?.scopeArtifacts && typeof lens.scopeArtifacts === 'object') ? lens.scopeArtifacts : {};
   const resolvedQueries: Record<string, string[]> = (lens?.resolvedQueries && typeof lens.resolvedQueries === 'object') ? lens.resolvedQueries : {};
   const intents = Array.isArray(lens?.intents) ? lens.intents : [];
   const domains = Array.isArray(lens?.viewConfig?.domains) ? lens.viewConfig.domains : [];
@@ -211,7 +213,7 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
     const lensId = String(lens?.id || '').trim();
     if (!lensId) return;
 
-    const paths = scope.map((s) => (s || '').trim()).filter((p) => isStaticCanonicalPath(p));
+    const paths = scope.map((s) => (s || '').trim()).filter((p) => isStaticCanonicalPath(p) && !p.startsWith('/artifact/') && !p.startsWith('/domain/'));
     if (paths.length === 0) return;
 
     let cancelled = false;
@@ -369,13 +371,15 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
     </div>
   );
 
-  const Pill: React.FC<{ text: string; tone?: 'neutral' | 'success' | 'danger' }> = ({ text, tone = 'neutral' }) => {
+  const Pill: React.FC<{ text: string; tone?: 'neutral' | 'success' | 'danger' | 'amber' }> = ({ text, tone = 'neutral' }) => {
     const styles =
       tone === 'success'
         ? { bg: 'var(--success-20)', fg: 'var(--accent-success)' }
         : tone === 'danger'
           ? { bg: 'rgba(248, 113, 113, 0.18)', fg: '#f87171' }
-          : { bg: 'var(--white-10)', fg: 'var(--text-secondary-strong)' };
+          : tone === 'amber'
+            ? { bg: 'rgba(251, 191, 36, 0.18)', fg: 'rgba(251, 191, 36, 0.92)' }
+            : { bg: 'var(--white-10)', fg: 'var(--text-secondary-strong)' };
     return (
       <span
         style={{
@@ -636,9 +640,11 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                             <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {r.name}
                             </div>
-                            <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)', flexShrink: 0 }}>
-                              {String(r.type || '').toUpperCase()}
-                            </div>
+                            {(() => {
+                              const t = String(r.type || '').trim();
+                              const isNonFragment = /^(supply-chain|domain|intent|artifact|SUPPLY_CHAIN|GOVERNANCE|REGULATORY|ECOSYSTEM)/i.test(t) || (r.canonicalPath || '').startsWith('/domain/') || (r.canonicalPath || '').startsWith('/artifact/');
+                              return <Pill text={t ? t.toUpperCase() : '—'} tone={isNonFragment ? 'amber' : 'neutral'} />;
+                            })()}
                           </div>
                           <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', ...mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {r.canonicalPath}
@@ -678,10 +684,12 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                   const path = (d?.canonicalPath || '').trim();
                   const ct = (d?.contractType || '').trim();
                   const title = (d?.title || d?.description || '').trim();
+                  const regionLabel = getDomainRegionLabel(path);
                   return (
                     <div key={`domain-${path || idx}`} style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                        <Pill text={ct || 'DOMAIN'} />
+                        <Pill text={ct || 'DOMAIN'} tone="amber" />
+                        {regionLabel ? <Pill text={regionLabel} tone="amber" /> : null}
                         <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {title || humanizeCanonicalPath(path) || '—'}
                         </div>
@@ -707,14 +715,91 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                 {scope.map((entry: string, index: number) => {
                   const path = (entry || '').trim();
                   const isQuery = path.startsWith('/query/');
+                  const isArtifact = path.startsWith('/artifact/');
+                  const isDomain = path.startsWith('/domain/');
                   const resolved = scopeResolved[path];
                   const resolvedList = isQuery ? (resolvedQueries?.[path] || []) : [];
+
+                  const removeBtnStyle = {
+                    padding: '6px 10px',
+                    borderRadius: 10,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'transparent',
+                    color: 'var(--text-secondary-strong)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: !onUpdateScope || savingScope ? 'not-allowed' : 'pointer',
+                    opacity: !onUpdateScope || savingScope ? 0.5 : 1,
+                  } as const;
+
+                  if (isDomain) {
+                    const segments = path.split('/').filter(Boolean);
+                    const contractType = segments.length >= 3 ? segments[2] : 'domain';
+                    const domainName = humanizeCanonicalPath(path) || contractType;
+                    const matchedDomain = domains.find((d: any) => (d?.canonicalPath || '').trim() === path);
+                    const displayTitle = matchedDomain?.title || matchedDomain?.description || domainName;
+                    const regionLabel = getDomainRegionLabel(path);
+                    return (
+                      <div key={`scope-${path}-${index}`} style={{ padding: '10px 12px', background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                          <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                              <Pill text={contractType} tone="amber" />
+                              {regionLabel ? <Pill text={regionLabel} tone="amber" /> : null}
+                              <div style={{ minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {displayTitle}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', ...mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={path}>
+                              {path}
+                            </div>
+                          </div>
+                          <button type="button" onClick={() => void handleRemoveScope(path)} disabled={!onUpdateScope || savingScope} style={removeBtnStyle} title="Remove">Remove</button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (isArtifact) {
+                    const artKey = path.replace(/^\/artifact\//, '');
+                    const artMeta = scopeArtifacts[artKey];
+                    const kindLabel = artMeta?.kind
+                      ? artMeta.kind.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+                      : 'Supply Chain';
+                    return (
+                      <div key={`scope-${path}-${index}`} style={{ padding: '10px 12px', background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                          <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                              <Pill text={kindLabel} tone="amber" />
+                              <div style={{ minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {artMeta?.displayName || humanizeCanonicalPath(path) || '—'}
+                              </div>
+                              {artMeta?.status && <Pill text={artMeta.status} tone={artMeta.status === 'validated' ? 'success' : 'neutral'} />}
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', ...mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={path}>
+                              {path}
+                            </div>
+                            {artMeta?.nodeRefs && artMeta.nodeRefs.length > 0 && (
+                              <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                {artMeta.nodeRefs.length} entities in chain
+                              </div>
+                            )}
+                          </div>
+                          <button type="button" onClick={() => void handleRemoveScope(path)} disabled={!onUpdateScope || savingScope} style={removeBtnStyle} title="Remove">Remove</button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  const scopeGeoLabel = !isQuery && !path.startsWith('/domain/') ? getScopeGeoLabel(path) : null;
                   return (
                     <div key={`scope-${path}-${index}`} style={{ padding: '10px 12px', background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}>
                       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
                         <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                             {isQuery ? <Pill text="Query" /> : resolved?.type ? <Pill text={String(resolved.type)} /> : null}
+                            {scopeGeoLabel ? <Pill text={scopeGeoLabel} tone="amber" /> : null}
                             <div style={{ minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {!isQuery ? (resolved?.name ? resolved.name : humanizeCanonicalPath(path) || '—') : '—'}
                             </div>
@@ -726,25 +811,7 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                             {path}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => void handleRemoveScope(path)}
-                          disabled={!onUpdateScope || savingScope}
-                          style={{
-                            padding: '6px 10px',
-                            borderRadius: 10,
-                            border: '1px solid var(--border-subtle)',
-                            background: 'transparent',
-                            color: 'var(--text-secondary-strong)',
-                            fontSize: 12,
-                            fontWeight: 700,
-                            cursor: !onUpdateScope || savingScope ? 'not-allowed' : 'pointer',
-                            opacity: !onUpdateScope || savingScope ? 0.5 : 1,
-                          }}
-                          title="Remove"
-                        >
-                          Remove
-                        </button>
+                        <button type="button" onClick={() => void handleRemoveScope(path)} disabled={!onUpdateScope || savingScope} style={removeBtnStyle} title="Remove">Remove</button>
                       </div>
                     </div>
                   );

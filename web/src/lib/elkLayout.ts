@@ -501,6 +501,9 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'AFFECTS':
     case 'IMPACTS':
       return 'context';
+    // Zone → Event (zone was triggered by event)
+    case 'TRIGGERED_BY':
+      return 'context';
     // Decision-corridor synthetic parent-edge types.
     case 'CORRIDOR_AUTHORITY':
     case 'CORRIDOR_DECISION':
@@ -627,6 +630,8 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'INFLUENCES',
     'AFFECTS',
     'IMPACTS',
+    // Zone → Event (zone triggered by event)
+    'TRIGGERED_BY',
     // Strategic overlay relations
     'CONTROLS_ACCESS',
     'IMPOSES_CONDITION',
@@ -1882,6 +1887,7 @@ export async function layoutLevelsTwoPane<T = any>(
       // Geographic Presence
       'GEO_REGION': 'Geo Presence',
       'LOCATION': 'Geo Presence',
+      'AFFECTED_ZONE': 'Affected Zones',
       'COUNTRY': 'Geo Presence',
       'STATE': 'Geo Presence',
       'PROVINCE': 'Geo Presence',
@@ -1924,6 +1930,7 @@ export async function layoutLevelsTwoPane<T = any>(
     if (tt === 'DEPOSIT') return 215;
     if (tt === 'GEO_REGION') return 220;
     if (tt === 'LOCATION') return 230;
+    if (tt === 'AFFECTED_ZONE') return 225; // Conflict/disaster zones (between GEO and LOCATION)
     // Domains (meta-anchors, compact in left pane)
     if (tt === 'DOMAIN') return 250;
     // Other domain objects
@@ -1977,7 +1984,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'IN_GEO_SCOPE',
   ]);
   const LEFT_GEO_TYPES = new Set([
-    'GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY',
+    'GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY', 'AFFECTED_ZONE',
   ]);
   const LEFT_REGULATORY_TYPES = new Set(['MECHANISM', 'DECISION_POINT']);
   const LEFT_MARKET_TYPES = new Set(['MARKET']);
@@ -3679,7 +3686,7 @@ export async function layoutLevelsTwoPane<T = any>(
   const PERSON_GOVERNANCE_EDGE_TYPES = new Set(['FOUNDED', 'INVESTS_IN', 'OWNS', 'CONTROLS', 'MANAGES', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF']);
   // Strong governance: override all other connections (Board, Manages)
   const STRONG_GOVERNANCE_EDGE_TYPES = new Set(['BOARD_MEMBER_OF', 'BOARD', 'MANAGES']);
-  const GEO_TYPES = new Set(['GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY']);
+  const GEO_TYPES = new Set(['GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY', 'AFFECTED_ZONE']);
   const SUPPLY_EDGE_TYPES = new Set(['SUPPLIES_TO', 'PRODUCES']);
   const DEPENDENCY_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
   const SUPPLY_CHAIN_EDGE_TYPES = new Set([...SUPPLY_EDGE_TYPES, ...DEPENDENCY_EDGE_TYPES]);
@@ -3770,6 +3777,8 @@ export async function layoutLevelsTwoPane<T = any>(
       }
       return { kind: 'persons', title: 'People', visualType: 'PERSON' };
     }
+    // Affected zones: conflict, disaster, tension zones (distinct from general geolocation)
+    if (tk === 'AFFECTED_ZONE') return { kind: 'affected_zones', title: 'Affected Zones', visualType: 'AFFECTED_ZONE' };
     // Operating footprint: geo-like nodes
     if (GEO_TYPES.has(tk) || tk.includes('GEO')) return { kind: 'geolocation', title: 'Operating Footprint', visualType: 'GEO_REGION' };
     // Products: incoming products (produced by expanded or supplied to us)
@@ -3887,6 +3896,7 @@ export async function layoutLevelsTwoPane<T = any>(
         dockKeys = ['supply'];
         break;
       case 'geolocation':
+      case 'affected_zones':
       case 'dominates':
       case 'submarket':
       case 'subgroup':

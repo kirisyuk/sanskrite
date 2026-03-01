@@ -3,20 +3,32 @@ package scout
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
+
+// ChainSourceContext carries supply chain context discovered for a target node.
+// Passed through SourcePlan to the engine for prompt enrichment.
+type ChainSourceContext struct {
+	ArtifactID   string            `json:"artifactId"`
+	DisplayName  string            `json:"displayName"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	PeerNodeRefs []string          `json:"peerNodeRefs,omitempty"`
+}
 
 // SourcePlan план источников для ScoutingJob
 type SourcePlan struct {
 	DataSourceIDs []string             `json:"dataSourceIds"` // DataSource IDs из проекта
 	Strategy      string               `json:"strategy"`      // "Snapshot" или "DeepDive"
 	Sources       []*models.DataSource `json:"sources"`       // Полные объекты DataSource
+	ChainContexts []ChainSourceContext `json:"chainContexts,omitempty"`
 }
 
 // ScoutPlanner планирует источники данных для ScoutingJob
@@ -24,6 +36,7 @@ type ScoutPlanner struct {
 	dataSourcesRepo    *repo.DataSourcesRepository
 	factsRepo          *repo.OntologyFactsRepository
 	vertexSearchClient *ai.VertexAISearchClient
+	materializedRepo   *horizonrepo.MaterializedArtifactsRepository
 }
 
 // NewScoutPlanner создает новый планировщик источников
@@ -33,6 +46,12 @@ func NewScoutPlanner(dataSourcesRepo *repo.DataSourcesRepository, factsRepo *rep
 		factsRepo:          factsRepo,
 		vertexSearchClient: horizonVertexClient(vertexSearchClient),
 	}
+}
+
+// WithMaterializedRepo sets the materialized artifacts repository for chain-aware source planning.
+func (p *ScoutPlanner) WithMaterializedRepo(r *horizonrepo.MaterializedArtifactsRepository) *ScoutPlanner {
+	p.materializedRepo = r
+	return p
 }
 
 // PlanSources планирует источники для ScoutingJob
@@ -52,18 +71,26 @@ func (p *ScoutPlanner) PlanSources(ctx context.Context, tenantID, projectID stri
 		projectSources = append(projectSources, globalSources...)
 	}
 
+	// 2.5 Resolve supply chain context for the target node.
+	var chainContexts []ChainSourceContext
+	enrichedQuery := searchQuery
+	if p.materializedRepo != nil && strings.TrimSpace(targetCanonicalPath) != "" {
+		chainContexts, enrichedQuery = p.resolveChainContext(ctx, tenantID, targetCanonicalPath, searchQuery)
+	}
+
 	// 3. Фильтруем релевантные Sources для целевого узла.
 	// Приоритет: Firestore facts (immediate availability) -> Vertex AI Search (fallback for semantic search) -> legacy doc-based -> heuristic.
-	relevantSources := p.filterRelevantSourcesByFacts(ctx, tenantID, projectSources, targetCanonicalPath, strategy, since, searchQuery)
+	relevantSources := p.filterRelevantSourcesByFacts(ctx, tenantID, projectSources, targetCanonicalPath, strategy, since, enrichedQuery)
 	if relevantSources == nil {
 		// legacy behavior: use doc search heuristic
-		relevantSources = p.filterRelevantSources(ctx, projectSources, targetCanonicalPath, strategy, searchQuery)
+		relevantSources = p.filterRelevantSources(ctx, projectSources, targetCanonicalPath, strategy, enrichedQuery)
 	}
 
 	return &SourcePlan{
 		DataSourceIDs: extractDataSourceIDs(relevantSources),
 		Strategy:      string(strategy),
 		Sources:       relevantSources,
+		ChainContexts: chainContexts,
 	}, nil
 }
 
@@ -279,6 +306,58 @@ func (p *ScoutPlanner) fallbackFiltering(sources []*models.DataSource, strategy 
 	}
 	// DeepDive: используем все источники
 	return sources
+}
+
+// resolveChainContext discovers supply chain artifacts the target node participates in
+// and enriches the search query with chain-level keywords (display names, product axes).
+func (p *ScoutPlanner) resolveChainContext(ctx context.Context, tenantID, targetCanonicalPath, searchQuery string) ([]ChainSourceContext, string) {
+	chains, err := p.materializedRepo.FindByNodeRef(ctx, tenantID, targetCanonicalPath, horizonmodels.MaterializedKindSupplyChainPath)
+	if err != nil || len(chains) == 0 {
+		// Also try "global" tenant if tenantID is not global
+		if tenantID != "global" {
+			chains, err = p.materializedRepo.FindByNodeRef(ctx, "global", targetCanonicalPath, horizonmodels.MaterializedKindSupplyChainPath)
+			if err != nil || len(chains) == 0 {
+				return nil, searchQuery
+			}
+		} else {
+			return nil, searchQuery
+		}
+	}
+
+	contexts := make([]ChainSourceContext, 0, len(chains))
+	var queryParts []string
+	if searchQuery != "" {
+		queryParts = append(queryParts, searchQuery)
+	}
+
+	const maxChains = 5
+	for i, chain := range chains {
+		if i >= maxChains {
+			break
+		}
+		peerRefs := make([]string, 0, len(chain.NodeRefs))
+		for _, ref := range chain.NodeRefs {
+			if ref != targetCanonicalPath {
+				peerRefs = append(peerRefs, ref)
+			}
+		}
+		contexts = append(contexts, ChainSourceContext{
+			ArtifactID:   chain.ID,
+			DisplayName:  chain.DisplayName,
+			Labels:       chain.Labels,
+			PeerNodeRefs: peerRefs,
+		})
+		if chain.DisplayName != "" {
+			queryParts = append(queryParts, chain.DisplayName)
+		}
+	}
+
+	enriched := strings.Join(queryParts, " | ")
+	if len(contexts) > 0 {
+		log.Printf("[ScoutPlanner] Enriched query with %d supply chain(s) for %s", len(contexts), targetCanonicalPath)
+	}
+
+	return contexts, enriched
 }
 
 // extractDataSourceIDs извлекает ID из источников

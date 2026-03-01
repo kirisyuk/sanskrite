@@ -233,6 +233,9 @@ type AITask struct {
 
 	// SpanID идентификатор спана для телеметрии
 	SpanID string `json:"spanId,omitempty"`
+
+	// CascadeID optional cascade id for admission control (e.g. Horizon scout cascade).
+	CascadeID string `json:"cascadeId,omitempty"`
 }
 
 // WebCitation представляет ссылку на веб-источник

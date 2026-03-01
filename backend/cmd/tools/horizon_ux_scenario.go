@@ -26,7 +26,7 @@ import (
 )
 
 func getSecret(secretName string) string {
-	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret="+secretName, "--project=h1horizon-488615")
+	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret="+secretName, "--project=etigram")
 	out, err := cmd.Output()
 	if err != nil {
 		log.Printf("Warning: Failed to fetch secret %s: %v", secretName, err)
@@ -60,7 +60,7 @@ func normalizeCanonicalPath(raw string) string {
 func main() {
 	log.Println("=== Starting Horizon UX Test Scenario ===")
 	ctx := context.Background()
-	projectID := "h1horizon-488615"
+	projectID := "etigram"
 
 	// Scenario flags (so we can test different branches without editing code)
 	targetFlag := flag.String("target", "/org/tesla", "Target canonical path for the scenario (e.g., /product/tesla-batteries)")

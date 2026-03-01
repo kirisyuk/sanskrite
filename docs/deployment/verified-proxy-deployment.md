@@ -19,7 +19,7 @@ When you run `scripts/deploy --api` or `scripts/deploy` (which includes API), th
 
 ### Deployment Flow
 
-1. Main API (`h1horizon-api`) is deployed
+1. Main API (`etigram-api`) is deployed
 2. Verified proxy (`verified-proxy`) is automatically deployed using the API URL
 3. Proxy URL is displayed in the deployment summary
 
@@ -56,7 +56,7 @@ cd backend
 # Build and deploy using Cloud Build
 gcloud builds submit \
   --config=cmd/verified-proxy/cloudbuild.yaml \
-  --substitutions=_BACKEND_URL=$BACKEND_URL,_FUNCTIONS_KEY=functions-key:latest,_ALLOWED_ORIGIN=https://hatl.one \
+  --substitutions=_BACKEND_URL=$BACKEND_URL,_FUNCTIONS_KEY=functions-key:latest,_ALLOWED_ORIGIN=https://etigram.one \
   .
 ```
 
@@ -87,8 +87,8 @@ curl -X POST $PROXY_URL/verified \
 ## Environment Variables
 
 Set automatically during deployment:
-- `BACKEND_URL`: Full URL of the backend API (from `h1horizon-api` service)
-- `ALLOWED_ORIGIN`: CORS allowed origin (default: `https://hatl.one`)
+- `BACKEND_URL`: Full URL of the backend API (from `etigram-api` service)
+- `ALLOWED_ORIGIN`: CORS allowed origin (default: `https://etigram.one`)
 
 From Secret Manager:
 - `FUNCTIONS_KEY`: System authentication key (from `functions-key` secret)

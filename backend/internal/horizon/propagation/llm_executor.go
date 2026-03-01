@@ -137,7 +137,7 @@ func (e *PropagationLLMExecutor) Execute(ctx context.Context, task *PropagationL
 	// This would be handled by a Cloud Tasks queue dispatcher (not implemented here)
 	if response.ContinuePropagation && task.CurrentDepth+1 < task.MaxDepth {
 		// TODO: Create child PropagationLLMTasks for downstream fragments
-		// This requires integration with Cloud Tasks queue: h1horizon-propagation-llm
+		// This requires integration with Cloud Tasks queue: etigram-propagation-llm
 	}
 
 	return nil

@@ -238,15 +238,14 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 	}
 
 	// Common Defaults & Validation
-	if scoutResult.Fragment.CanonicalPath == "" {
-		scoutResult.Fragment.CanonicalPath = targetCanonicalPath
-	}
+	ensureFragmentCanonicalPath(&scoutResult.Fragment, targetCanonicalPath)
 
 	// Валидация Fragment (повторная, если нужно)
-	if scoutResult.Fragment.CanonicalPath == "" {
+	if strings.TrimSpace(scoutResult.Fragment.CanonicalPath) == "" {
 		var fragment models.HorizonFragment
-		if err := json.Unmarshal(jsonData, &fragment); err == nil && fragment.CanonicalPath != "" {
+		if err := json.Unmarshal(jsonData, &fragment); err == nil {
 			scoutResult.Fragment = fragment
+			ensureFragmentCanonicalPath(&scoutResult.Fragment, targetCanonicalPath)
 		}
 	}
 
@@ -381,6 +380,17 @@ func applyExtractedNameHints(fragment *models.HorizonFragment, legal, short stri
 	if short != "" && strings.TrimSpace(fragment.Identifiers["shortName"]) == "" {
 		fragment.Identifiers["shortName"] = short
 	}
+}
+
+func ensureFragmentCanonicalPath(fragment *models.HorizonFragment, targetCanonicalPath string) {
+	if fragment == nil {
+		return
+	}
+	if strings.TrimSpace(fragment.CanonicalPath) == "" {
+		fragment.CanonicalPath = strings.TrimSpace(targetCanonicalPath)
+		return
+	}
+	fragment.CanonicalPath = strings.TrimSpace(fragment.CanonicalPath)
 }
 
 func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string {
@@ -608,7 +618,7 @@ func extractionCanonicalNamespaceDetailsBlock() string {
 - Markets:
   - L1: /market/{geo}/{domain}; L2: /market/{geo}/{domain}/{vertical}; L3+: parent path + one segment
   - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
-  - Example chain: /market/sa/finance → .../banking → .../banking/islamic-banking
+  - Example chains: /market/sa/finance → .../banking → .../banking/islamic-banking; /market/tw/technology → .../semiconductors → .../semiconductors/foundry
   - HAS_MARKET_SEGMENT child path = parent path + one segment
 - Communities: /community/{geo}/{type}/{slug}; subgroup hierarchy via HAS_SUBGROUP (broader -> narrower).
 - Programs: /program/{jurisdiction}/{slug}; if jurisdiction is unknown, use global.

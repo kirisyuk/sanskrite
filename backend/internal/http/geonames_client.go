@@ -286,6 +286,48 @@ func (c *GeoNamesClient) GetPlace(ctx context.Context, geonameID int) (*GeoNames
 	return &place, nil
 }
 
+// GetCountryCode returns ISO3166-1 alpha2 country code for given lat/lon (reverse geocoding).
+// Uses countryCode JSON endpoint. Returns empty string if point is in water or unknown.
+func (c *GeoNamesClient) GetCountryCode(ctx context.Context, lat, lon float64) (string, error) {
+	if c == nil || strings.TrimSpace(c.username) == "" {
+		return "", fmt.Errorf("GeoNames client not configured: username missing")
+	}
+	if c.limiter != nil {
+		if err := c.limiter.Wait(ctx); err != nil {
+			return "", fmt.Errorf("geonames rate limit wait failed: %w", err)
+		}
+	}
+	u, _ := url.Parse(c.baseURL + "/countryCodeJSON")
+	q := u.Query()
+	q.Set("username", c.username)
+	q.Set("lat", strconv.FormatFloat(lat, 'f', 6, 64))
+	q.Set("lng", strconv.FormatFloat(lon, 'f', 6, 64))
+	u.RawQuery = q.Encode()
+
+	body, err := c.doGET(ctx, u.String())
+	if err != nil {
+		return "", err
+	}
+	defer body.Close()
+
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read geonames countryCode response: %w", err)
+	}
+	var env geonamesStatusEnvelope
+	_ = json.Unmarshal(raw, &env)
+	if env.Status != nil {
+		return "", &GeoNamesStatusError{Message: env.Status.Message, Value: env.Status.Value}
+	}
+	var resp struct {
+		CountryCode string `json:"countryCode,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return "", fmt.Errorf("failed to parse geonames countryCode response: %w", err)
+	}
+	return strings.ToUpper(strings.TrimSpace(resp.CountryCode)), nil
+}
+
 // GetHierarchy loads the canonical hierarchy for a given geonameId.
 // Typically returns a list including country (PCLI) and admin1 (ADM1) when available.
 func (c *GeoNamesClient) GetHierarchy(ctx context.Context, geonameID int) (*GeoNamesHierarchyResponse, error) {

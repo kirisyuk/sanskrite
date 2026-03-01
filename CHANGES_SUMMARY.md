@@ -85,7 +85,7 @@
 ```bash
 # Backend
 cd backend
-gcloud run deploy h1horizon-api --source . --region us-central1 --platform managed --allow-unauthenticated --set-env-vars="PROJECT_ID=sanskrite"
+gcloud run deploy etigram-api --source . --region us-central1 --platform managed --allow-unauthenticated --set-env-vars="PROJECT_ID=sanskrite"
 
 # Frontend
 cd ../web

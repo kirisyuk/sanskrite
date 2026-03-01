@@ -184,15 +184,15 @@ FROM FILES (
 
 ```sql
 -- Текстовые файлы через Object Tables
-SELECT * FROM `h1horizon-488615.h1horizon_488615_documents.documents_object_table`
+SELECT * FROM `etigram.etigram_documents.documents_object_table`
 WHERE uri LIKE '%.txt'
 
 -- JSON файлы
-SELECT * FROM `h1horizon-488615.h1horizon_488615_documents.core_docs_json_table`
+SELECT * FROM `etigram.etigram_documents.core_docs_json_table`
 WHERE uri LIKE '%.json'
 
 -- CSV файлы (можно создать отдельную Object Table)
-SELECT * FROM `h1horizon-488615.h1horizon_488615_documents.core_docs_text_table`
+SELECT * FROM `etigram.etigram_documents.core_docs_text_table`
 WHERE uri LIKE '%.csv'
 ```
 
@@ -230,7 +230,7 @@ WHERE uri LIKE '%.csv'
 
 ### Загрузка CSV:
 ```sql
-LOAD DATA INTO `h1horizon-488615.h1horizon_488615_documents.sales_data`
+LOAD DATA INTO `etigram.etigram_documents.sales_data`
 FROM FILES (
   format = 'CSV',
   uris = ['gs://bucket/sales/*.csv'],
@@ -240,7 +240,7 @@ FROM FILES (
 
 ### Загрузка JSON:
 ```sql
-LOAD DATA INTO `h1horizon-488615.h1horizon_488615_documents.events`
+LOAD DATA INTO `etigram.etigram_documents.events`
 FROM FILES (
   format = 'JSON',
   uris = ['gs://bucket/events/*.json']
@@ -249,7 +249,7 @@ FROM FILES (
 
 ### Загрузка Parquet:
 ```sql
-LOAD DATA INTO `h1horizon-488615.h1horizon_488615_documents.analytics`
+LOAD DATA INTO `etigram.etigram_documents.analytics`
 FROM FILES (
   format = 'PARQUET',
   uris = ['gs://bucket/analytics/*.parquet']
@@ -258,7 +258,7 @@ FROM FILES (
 
 ### Чтение через External Table:
 ```sql
-CREATE OR REPLACE EXTERNAL TABLE `h1horizon-488615.h1horizon_488615_documents.external_data`
+CREATE OR REPLACE EXTERNAL TABLE `etigram.etigram_documents.external_data`
 OPTIONS (
   format = 'CSV',
   uris = ['gs://bucket/data/*.csv']

@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // LegalSuffixesToRemove defines common legal suffixes to strip during identity normalization.
@@ -126,6 +128,29 @@ func NormalizeLegalName(name string) string {
 
 	name = strings.Join(strings.Fields(name), " ")
 	return name
+}
+
+// StripDiacritics removes combining marks from Unicode text (NFD decomposition).
+// Examples: BOTAŞ → BOTAS, Ölçü → Olcu, São Paulo → Sao Paulo.
+func StripDiacritics(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range norm.NFD.String(s) {
+		if !unicode.Is(unicode.Mn, r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// NormalizeEntityName applies full normalization for entity name matching:
+// legal suffix/prefix stripping + diacritics removal. Suitable for dedup index keys.
+func NormalizeEntityName(name string) string {
+	name = NormalizeLegalName(name)
+	if name == "" {
+		return ""
+	}
+	return StripDiacritics(name)
 }
 
 func spacedAbbreviationVariant(token string) string {
