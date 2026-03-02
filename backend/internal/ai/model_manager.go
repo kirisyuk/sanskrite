@@ -836,6 +836,57 @@ func (mm *AIModelManager) SelectFallbackModel(requirements AIRequirements, input
 	return mm.SelectModel(requirements, inputTokens, excludeModels, false)
 }
 
+// SelectModelForProviders returns the best model that belongs to one of the given providers.
+// Used when normal selection returns only models from unregistered providers (e.g. Vertex-only executor).
+func (mm *AIModelManager) SelectModelForProviders(requirements AIRequirements, inputTokens int, excludeModels []string, providers map[AIProvider]struct{}) string {
+	if len(providers) == 0 {
+		return ""
+	}
+	providerSet := make(map[AIProvider]bool)
+	for p := range providers {
+		providerSet[p] = true
+	}
+	requiredContextWindow := max(requirements.MinContextWindow, inputTokens)
+	searchRequired := requirements.BuiltInSearchCapability
+	groundingRequired := requirements.SearchGroundingCapability
+	internalGroundingRequired := requirements.InternalDataGroundingCapability
+
+	type modelCandidate struct {
+		name  string
+		model AIModelCapabilities
+	}
+	var capableModels []modelCandidate
+	for name, m := range mm.models {
+		if !providerSet[m.Provider] {
+			continue
+		}
+		if m.ContextWindow < requiredContextWindow || contains(excludeModels, name) ||
+			m.CapabilityScore < requirements.MinCapabilityScore {
+			continue
+		}
+		if requirements.TextGenerationCapability && !m.TextGenerationCapability {
+			continue
+		}
+		if (searchRequired && !m.BuiltInSearchCapability) || (!searchRequired && m.BuiltInSearchCapability) {
+			continue
+		}
+		if groundingRequired && !m.SearchGroundingCapability {
+			continue
+		}
+		if internalGroundingRequired && !m.InternalDataGroundingCapability {
+			continue
+		}
+		capableModels = append(capableModels, modelCandidate{name: name, model: m})
+	}
+	if len(capableModels) == 0 {
+		return ""
+	}
+	sort.Slice(capableModels, func(i, j int) bool {
+		return capableModels[i].model.PricePerOutputToken < capableModels[j].model.PricePerOutputToken
+	})
+	return capableModels[0].name
+}
+
 // SelectToolCallingModel выбирает оптимальную модель с поддержкой tool-calling
 func (mm *AIModelManager) SelectToolCallingModel(requirements AIRequirements, inputTokens int, excludeModels []string, preferNearlyRealTime bool) string {
 	// Нормализация флагов

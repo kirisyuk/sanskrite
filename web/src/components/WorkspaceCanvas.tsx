@@ -317,6 +317,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   
   // State for source preview
   const [previewSource, setPreviewSource] = React.useState<DataSource | null>(null);
+  const sourceLoadTimeoutsRef = React.useRef<ReturnType<typeof setTimeout>[]>([]);
   const [documentsViewSource, setDocumentsViewSource] = React.useState<DataSource | null>(null);
   
   // Sync local state with store
@@ -796,6 +797,7 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
   // Handler for source added callback
   const handleSourceAdded = React.useCallback(() => {
     if (!projectId) return;
+    const timeouts = sourceLoadTimeoutsRef.current;
     // Reload sources with retry logic (since source creation is async)
     const loadSources = async (retryCount = 0) => {
       try {
@@ -812,13 +814,23 @@ export const WorkspaceCanvas: React.FC<WorkspaceCanvasProps> = ({
         // Retry up to 3 times with exponential backoff
         if (retryCount < 3) {
           const delay = Math.pow(2, retryCount) * 500; // 500ms, 1000ms, 2000ms
-          setTimeout(() => loadSources(retryCount + 1), delay);
+          const id = setTimeout(() => loadSources(retryCount + 1), delay);
+          timeouts.push(id);
         }
       }
     };
     // Wait a bit for source creation to complete, then load
-    setTimeout(() => loadSources(), 500);
+    const id = setTimeout(() => loadSources(), 500);
+    timeouts.push(id);
   }, [projectId, setProjectSourcesStore]);
+
+  // Cleanup source load timeouts on unmount
+  React.useEffect(() => {
+    return () => {
+      sourceLoadTimeoutsRef.current.forEach((id) => clearTimeout(id));
+      sourceLoadTimeoutsRef.current = [];
+    };
+  }, []);
 
   // Handler for adding Telegram source
   const handleAddTelegramSource = async () => {

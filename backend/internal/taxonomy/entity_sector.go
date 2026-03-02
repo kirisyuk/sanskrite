@@ -80,6 +80,18 @@ func EntityPathTaxonomy() []EntityPathEntry {
 		{"/Deposit/BaseMetal", "Base metal deposit", ""},
 		{"/Deposit/FerrousMetal", "Ferrous metal deposit", ""},
 		{"/Deposit/StrategicMineral", "Strategic mineral deposit", ""},
+		// Market (industry domain / market segment — not an organization)
+		{"/Market/Geo/Global", "Global or international market (/market/global, /market/no, /market/int)", ""},
+		{"/Market/Geo/Country", "Country-level market (/market/{iso2}/...)", ""},
+		{"/Market/Geo/Regional", "Regional market (/market/brics, /market/gcc, /market/eu, ...)", ""},
+		{"/Market/Domain/Industry", "Market segment / industry domain (fallback)", ""},
+		// Track (movable objects: vessels, aircraft) — /track/{kind}/{geo}/{id_scheme}-{id}
+		{"/Track/Air/Aircraft", "Aircraft (ICAO24, flight callsign)", ""},
+		{"/Track/Air/MilitaryAircraft", "Military aircraft", ""},
+		{"/Track/Sea/Vessel", "Vessel (MMSI, IMO)", ""},
+		{"/Track/Sea/BulkCarrier", "Bulk carrier", ""},
+		{"/Track/Sea/Tanker", "Tanker (oil, LNG, chemicals)", ""},
+		{"/Track/Ground/Vehicle", "Ground vehicle or convoy", ""},
 	}
 }
 

@@ -104,6 +104,29 @@ function keyForNode(data: any): string {
   return fid || cp || 'unknown';
 }
 
+const MAX_NODES = 5000;
+const MAX_EDGES = 10000;
+
+function pruneNodes(nodes: Record<string, HorizonNodeState>): Record<string, HorizonNodeState> {
+  const keys = Object.keys(nodes);
+  if (keys.length <= MAX_NODES) return nodes;
+  const sorted = keys.sort((a, b) => (nodes[b].updatedAt ?? 0) - (nodes[a].updatedAt ?? 0));
+  const toKeep = sorted.slice(0, MAX_NODES);
+  const next: Record<string, HorizonNodeState> = {};
+  for (const k of toKeep) next[k] = nodes[k];
+  return next;
+}
+
+function pruneEdges(edges: Record<string, HorizonEdgeState>): Record<string, HorizonEdgeState> {
+  const keys = Object.keys(edges);
+  if (keys.length <= MAX_EDGES) return edges;
+  const sorted = keys.sort((a, b) => (edges[b].updatedAt ?? 0) - (edges[a].updatedAt ?? 0));
+  const toKeep = sorted.slice(0, MAX_EDGES);
+  const next: Record<string, HorizonEdgeState> = {};
+  for (const k of toKeep) next[k] = edges[k];
+  return next;
+}
+
 export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
   (set, get) => ({
     assembly: {},
@@ -1175,8 +1198,8 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
       if (type === 'horizon.graph.node.upserted') {
         const k = keyForNode(data);
         if (!k) return;
-        set((s) => ({
-          nodes: {
+        set((s) => {
+          const nextNodes = {
             ...s.nodes,
             [k]: {
               ...s.nodes[k],
@@ -1193,8 +1216,9 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
                   : s.nodes[k]?.version,
               updatedAt: now,
             },
-          },
-        }));
+          };
+          return { nodes: pruneNodes(nextNodes) };
+        });
         return;
       }
 
@@ -1202,8 +1226,8 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
       if (type === 'horizon.graph.edge.upserted') {
         const edgeId = typeof data?.edgeId === 'string' ? data.edgeId : '';
         if (!edgeId) return;
-        set((s) => ({
-          edges: {
+        set((s) => {
+          const nextEdges = {
             ...s.edges,
             [edgeId]: {
               ...(s.edges[edgeId] || { edgeId }),
@@ -1217,8 +1241,9 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
               qualifiers: data?.qualifiers ?? s.edges[edgeId]?.qualifiers,
               updatedAt: now,
             },
-          },
-        }));
+          };
+          return { edges: pruneEdges(nextEdges) };
+        });
         return;
       }
 

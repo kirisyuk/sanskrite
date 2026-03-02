@@ -129,6 +129,7 @@ type horizonMonitorNewsClassification struct {
 type horizonTrackObservation struct {
 	Kind            horizonmodels.TrackKind
 	ObjectType      string
+	IdScheme        string // mmsi, icao24, imo, flight — for ID-in-path canonical format
 	ExternalTrackID string
 	DisplayName     string
 	HeadingDeg      *float64
@@ -297,6 +298,87 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 		}
 	}
 
+	return nil
+}
+
+// ProcessFeedEvents processes pre-built feed events (for EventAdapter path).
+// Plan §8: use when adapter returns events directly instead of payload.
+func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID string, ds *coremodels.DataSource, feedURL string, events []*horizonMonitorFeedEvent) error {
+	if p == nil || p.factsRepo == nil || ds == nil {
+		return nil
+	}
+	if len(events) == 0 {
+		return nil
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	mode := normalizeHorizonMonitorIngestMode(ds)
+	if mode == wmIngestModeQueryOnly {
+		return nil
+	}
+	newObservations := make([]horizonMonitorSignalObservation, 0, len(events))
+	aiClassificationsUsed := 0
+	for _, event := range events {
+		if event == nil {
+			continue
+		}
+		if err := p.upsertTrackFragment(ctx, tenantID, event); err != nil {
+			p.logf("horizon monitor pipeline: track upsert failed source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
+		}
+		if mode == wmIngestModeOntologyFact {
+			eventFact, err := p.upsertEventFact(ctx, tenantID, ds.ID, event)
+			if err != nil {
+				p.logf("horizon monitor pipeline: failed to upsert event fact source=%s feedType=%s ext=%s: %v", ds.ID, event.FeedType, event.ExternalID, err)
+			} else {
+				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil {
+					if err := p.upsertAndPropagateSignal(ctx, tenantID, ds.ID, signal, eventFact); err != nil {
+						p.logf("horizon monitor pipeline: signal propagation failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
+					}
+				}
+			}
+		}
+		classification := classifyHorizonMonitorNewsKeyword(event.Title)
+		if p.exec != nil && mode == wmIngestModeOntologyFact && classification.Confidence < 0.65 && aiClassificationsUsed < 4 {
+			if refined, ok := p.classifyHorizonMonitorNewsWithAI(ctx, event.Title); ok {
+				classification = refined
+				aiClassificationsUsed++
+			}
+		}
+		if err := p.upsertNewsClassificationFact(ctx, tenantID, ds.ID, event, classification); err != nil {
+			p.logf("horizon monitor pipeline: failed to upsert news classification source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
+		}
+		newObservations = append(newObservations, horizonMonitorSignalObservation{
+			CountryCode:      event.CountryCode,
+			CountryName:      event.CountryName,
+			SignalType:       firstNonEmptyString(strings.TrimSpace(event.SignalType), "risk:temporal_anomaly"),
+			Severity:         strings.TrimSpace(event.Severity),
+			Title:            event.Title,
+			Timestamp:        event.OccurredAt,
+			Lat:              event.Lat,
+			Lon:              event.Lon,
+			HasCoordinates:   event.HasCoordinates,
+			SourceID:         ds.ID,
+			Classification:   classification,
+			ClassificationOK: true,
+		})
+	}
+	if len(newObservations) == 0 {
+		return nil
+	}
+	countries, cells := p.mergeAndAggregate(newObservations)
+	if err := p.upsertCountryRollupFacts(ctx, tenantID, countries); err != nil {
+		p.logf("horizon monitor pipeline: failed to upsert country rollups: %v", err)
+	}
+	if err := p.upsertGridCellFacts(ctx, tenantID, cells); err != nil {
+		p.logf("horizon monitor pipeline: failed to upsert grid rollups: %v", err)
+	}
+	if mode == wmIngestModeOntologyFact {
+		if err := p.upsertCountryBriefFacts(ctx, tenantID, countries); err != nil {
+			p.logf("horizon monitor pipeline: failed to upsert country briefs: %v", err)
+		}
+	}
 	return nil
 }
 
@@ -836,13 +918,13 @@ func extractTrackObservation(e *horizonMonitorFeedEvent) (horizonTrackObservatio
 		return horizonTrackObservation{}, false
 	}
 
-	readID := func(keys ...string) string {
-		for _, key := range keys {
-			if v := strings.TrimSpace(asString(raw[key])); v != "" {
-				return v
+	readIDWithScheme := func(keys []struct{ k, scheme string }) (id, scheme string) {
+		for _, kv := range keys {
+			if v := strings.TrimSpace(asString(raw[kv.k])); v != "" {
+				return v, kv.scheme
 			}
 		}
-		return ""
+		return "", ""
 	}
 	heading, _ := lookupFloat(raw, "heading", "track", "true_track", "course")
 	speed, speedOK := lookupFloat(raw, "velocity", "speed", "speed_knots", "sog")
@@ -869,9 +951,12 @@ func extractTrackObservation(e *horizonMonitorFeedEvent) (horizonTrackObservatio
 	if air {
 		out.Kind = horizonmodels.TrackKindAir
 		out.ObjectType = "military_aircraft"
-		out.ExternalTrackID = readID("icao24", "icao", "hex", "flight", "callsign", "id")
+		out.ExternalTrackID, out.IdScheme = readIDWithScheme([]struct{ k, scheme string }{
+			{"icao24", "icao24"}, {"icao", "icao24"}, {"hex", "icao24"},
+			{"flight", "flight"}, {"callsign", "flight"}, {"id", "flight"},
+		})
 		if strings.TrimSpace(out.DisplayName) == "" {
-			out.DisplayName = firstNonEmptyString(readID("callsign", "flight"), out.ExternalTrackID, "air-track")
+			out.DisplayName = firstNonEmptyString(asString(raw["callsign"]), asString(raw["flight"]), out.ExternalTrackID, "air-track")
 		}
 		if !hasMovableTrackEvidence(out) {
 			return horizonTrackObservation{}, false
@@ -880,9 +965,11 @@ func extractTrackObservation(e *horizonMonitorFeedEvent) (horizonTrackObservatio
 	}
 	out.Kind = horizonmodels.TrackKindSea
 	out.ObjectType = "vessel"
-	out.ExternalTrackID = readID("mmsi", "imo", "vessel_id", "ship_id", "id")
+	out.ExternalTrackID, out.IdScheme = readIDWithScheme([]struct{ k, scheme string }{
+		{"mmsi", "mmsi"}, {"imo", "imo"}, {"vessel_id", "mmsi"}, {"ship_id", "mmsi"}, {"id", "mmsi"},
+	})
 	if strings.TrimSpace(out.DisplayName) == "" {
-		out.DisplayName = firstNonEmptyString(readID("name", "ship_name", "vessel_name"), out.ExternalTrackID, "sea-track")
+		out.DisplayName = firstNonEmptyString(asString(raw["name"]), asString(raw["ship_name"]), asString(raw["vessel_name"]), out.ExternalTrackID, "sea-track")
 	}
 	if !hasMovableTrackEvidence(out) {
 		return horizonTrackObservation{}, false
@@ -900,7 +987,8 @@ func hasMovableTrackEvidence(out horizonTrackObservation) bool {
 
 func isAllowedTrackObjectType(objectType string) bool {
 	switch strings.TrimSpace(strings.ToLower(objectType)) {
-	case "military_aircraft", "vessel", "ground_vehicle":
+	case "military_aircraft", "vessel", "ground_vehicle", "convoy",
+		"bulk_carrier", "tanker", "cargo", "ore_carrier":
 		return true
 	default:
 		return false
@@ -2065,6 +2153,7 @@ func trackCanonicalPath(e *horizonMonitorFeedEvent, tr horizonTrackObservation) 
 		geoToken = "global"
 	}
 	trackIdentity := strings.TrimSpace(tr.ExternalTrackID)
+	idScheme := strings.TrimSpace(strings.ToLower(tr.IdScheme))
 	if trackIdentity == "" {
 		trackIdentity = "event-" + shortHash(strings.Join([]string{
 			strings.TrimSpace(e.SourceID),
@@ -2072,13 +2161,72 @@ func trackCanonicalPath(e *horizonMonitorFeedEvent, tr horizonTrackObservation) 
 			strconv.FormatFloat(e.Lat, 'f', 6, 64),
 			strconv.FormatFloat(e.Lon, 'f', 6, 64),
 		}, "|"))
+		idScheme = ""
 	}
-	baseName := firstNonEmptyString(strings.TrimSpace(tr.DisplayName), trackIdentity, strings.TrimSpace(e.Title), "track")
-	canonicalPath := strings.Join([]string{
-		"/track",
-		string(tr.Kind),
-		geoToken,
-		slug(baseName) + "-" + shortHash(strings.Join([]string{string(tr.Kind), trackIdentity}, "|")),
-	}, "/")
+	var lastSeg string
+	if idScheme != "" && isValidTrackIdScheme(idScheme) {
+		lastSeg = idScheme + "-" + normalizeTrackIdForPath(idScheme, trackIdentity)
+	} else {
+		baseName := firstNonEmptyString(strings.TrimSpace(tr.DisplayName), trackIdentity, strings.TrimSpace(e.Title), "track")
+		lastSeg = slug(baseName) + "-" + shortHash(strings.Join([]string{string(tr.Kind), trackIdentity}, "|"))
+	}
+	canonicalPath := strings.Join([]string{"/track", string(tr.Kind), geoToken, lastSeg}, "/")
 	return strings.ReplaceAll(canonicalPath, "//", "/")
+}
+
+func isValidTrackIdScheme(s string) bool {
+	switch s {
+	case "mmsi", "icao24", "imo", "flight":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeTrackIdForPath(scheme, id string) string {
+	id = strings.TrimSpace(strings.ToLower(id))
+	switch scheme {
+	case "mmsi":
+		// 9 digits, leading zeros allowed
+		if len(id) == 9 && isDigits(id) {
+			return id
+		}
+		return slug(id)
+	case "icao24":
+		// 6 hex chars, lowercase
+		if len(id) == 6 && isHex(id) {
+			return id
+		}
+		return slug(id)
+	case "imo":
+		// 7 digits (IMO ship number)
+		if len(id) == 7 && isDigits(id) {
+			return id
+		}
+		return slug(id)
+	case "flight":
+		// callsign: slug, lowercase
+		return slug(id)
+	default:
+		return slug(id)
+	}
+}
+
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(s string) bool {
+	for _, r := range s {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
 }

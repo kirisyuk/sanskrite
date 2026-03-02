@@ -79,6 +79,7 @@ type ParsedChainStats struct {
 	EdgesSkippedMissingCP    int `json:"edgesSkippedMissingCanonicalPath"`
 	EdgesInvertedToDependsOn int `json:"edgesInvertedToDependsOn"`
 	EdgesAbstainedUnknownPair int `json:"edgesAbstainedUnknownPair"`
+	ConsecutiveSameTypeNodes  int `json:"consecutiveSameTypeNodes"`
 }
 
 // ChainEdge represents an edge in a supply chain graph.
@@ -109,11 +110,15 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 	}
 	result.Stats.ChainsIn = len(chains)
 
-	for _, chain := range chains {
+	for chainIdx, chain := range chains {
 		if len(chain.Nodes) < 2 {
 			// Need at least 2 nodes to form an edge
 			continue
 		}
+
+		altWarnings, altCount := p.validateChainAlternation(chain.Nodes, chainIdx)
+		result.ParseWarnings = append(result.ParseWarnings, altWarnings...)
+		result.Stats.ConsecutiveSameTypeNodes += altCount
 
 		// Ensure transport facilities become fragments (same canonicalization/dedup as other nodes)
 		for _, pth := range chain.TransportVia {
@@ -820,4 +825,41 @@ func shouldSwapProductStageOrder(sourcePath, targetPath string) bool {
 		return true
 	}
 	return false
+}
+
+// validateChainAlternation checks for consecutive same-type nodes (actor-actor or product-product)
+// which violate the expected actor→product→actor alternation. Returns warnings and count.
+func (p *SupplyChainParser) validateChainAlternation(nodes []agents.SupplyChainNode, chainIdx int) ([]string, int) {
+	var warnings []string
+	count := 0
+	for i := 1; i < len(nodes); i++ {
+		prevType := classifyNodeType(nodes[i-1])
+		currType := classifyNodeType(nodes[i])
+		if prevType == currType && prevType != "unknown" {
+			count++
+			warnings = append(warnings, fmt.Sprintf(
+				"chain[%d]: consecutive same-type nodes at positions %d-%d (%s, %s): both %s",
+				chainIdx, i-1, i, strings.TrimSpace(nodes[i-1].CanonicalPath), strings.TrimSpace(nodes[i].CanonicalPath), prevType))
+		}
+	}
+	return warnings, count
+}
+
+func classifyNodeType(node agents.SupplyChainNode) string {
+	nt := strings.ToLower(strings.TrimSpace(node.Type))
+	switch nt {
+	case "actor", "org", "government", "gov":
+		return "actor"
+	case "product", "resource", "material":
+		return "product"
+	default:
+		cp := strings.ToLower(strings.TrimSpace(node.CanonicalPath))
+		if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
+			return "actor"
+		}
+		if strings.HasPrefix(cp, "/product/") {
+			return "product"
+		}
+		return "unknown"
+	}
 }

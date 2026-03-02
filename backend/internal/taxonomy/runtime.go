@@ -432,6 +432,27 @@ func IsValidProductStage(stage string) bool {
 	return ok
 }
 
+// IsValidCommunityType checks if a community type slug is in the allowlist.
+func IsValidCommunityType(communityType string) bool {
+	ct := strings.ToLower(strings.TrimSpace(communityType))
+	if ct == "" {
+		return false
+	}
+	_, ok := builtInAllowedCommunityTypes[ct]
+	return ok
+}
+
+// IsValidMarketDomain checks if a market domain slug is in the allowlist.
+func IsValidMarketDomain(domain string) bool {
+	d := strings.ToLower(strings.TrimSpace(domain))
+	if d == "" {
+		return false
+	}
+	d = NormalizeMarketDomain(d)
+	_, ok := builtInAllowedMarketDomains[d]
+	return ok
+}
+
 // GetProductStageOrder returns the ordered list of product stages for propagation.
 func GetProductStageOrder() []string {
 	out := make([]string, len(builtInProductStageOrder))

@@ -11,6 +11,7 @@ import {
 } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase';
 import { api } from '../lib/api';
+import { cleanupDiscoveryStore } from '../stores/discoveryStore';
 
 type SubscriptionTier = 'free' | 'pro' | 'max';
 
@@ -261,6 +262,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signOut = async () => {
     if (!auth) return;
+    try {
+      cleanupDiscoveryStore();
+    } catch (e) {
+      console.warn('[Auth] cleanupDiscoveryStore failed', e);
+    }
     await firebaseSignOut(auth);
   };
 

@@ -65,6 +65,7 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
   const setPendingAttachedDocIds = useGenaiChatStore((state) => state.setPendingAttachedDocIds);
   const [previewSource, setPreviewSource] = React.useState<DataSource | null>(null);
   const [documentsViewSource, setDocumentsViewSource] = React.useState<DataSource | null>(null);
+  const loadDataTimeoutsRef = React.useRef<ReturnType<typeof setTimeout>[]>([]);
   
   // Get current model settings for context window calculation
   const genAISettings = useGenAISettings();
@@ -285,9 +286,8 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
   React.useImperativeHandle(ref, () => ({
     reloadData: async () => {
       // Wait a bit for backend to process, then reload
-      setTimeout(() => {
-        loadData();
-      }, 500);
+      const id = setTimeout(() => loadData(), 500);
+      loadDataTimeoutsRef.current.push(id);
     },
   }), [loadData]);
 
@@ -302,9 +302,8 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
       if (event.detail?.projectId === projectId) {
         console.log('[WorkspaceLibrary] sources.updated event received, reloading...');
         // Reload with a small delay to ensure backend consistency
-        setTimeout(() => {
-          loadData();
-        }, 500);
+        const id = setTimeout(() => loadData(), 500);
+        loadDataTimeoutsRef.current.push(id);
       }
     };
 
@@ -313,6 +312,14 @@ const WorkspaceLibrary = React.forwardRef<WorkspaceLibraryRef, WorkspaceLibraryP
       window.removeEventListener('sources.updated', handleSourcesUpdated as EventListener);
     };
   }, [projectId, loadData]);
+
+  // Cleanup loadData timeouts on unmount
+  React.useEffect(() => {
+    return () => {
+      loadDataTimeoutsRef.current.forEach((id) => clearTimeout(id));
+      loadDataTimeoutsRef.current = [];
+    };
+  }, []);
   
   // Sync sources from store when they change (e.g., from WorkspaceCanvas)
   React.useEffect(() => {

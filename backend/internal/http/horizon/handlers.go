@@ -6,7 +6,9 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
+	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
+	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
@@ -30,6 +32,14 @@ type HorizonHandlers struct {
 	mergeFragmentsRepo          *horizonrepo.FragmentsMergeRepository
 	materializedArtifactsRepo   *horizonrepo.MaterializedArtifactsRepository
 	newsByFragmentsCanvas       *discovery.NewsByFragmentsCanvas
+
+	// Lens Q&A (Analysis view)
+	qaEngine         *horizonqa.Engine
+	qaContextBuilder *horizonqa.AnswerContextBuilder
+	qaSynthesizer    *horizonqa.AnswerSynthesizer
+	qaSessionsRepo   *horizonrepo.QASessionsRepository
+	qaInterpreter         *horizoninterp.Interpreter  // optional: humanization at finish
+	qaRelevanceEvaluator  *horizonqa.BusinessRelevanceEvaluator // optional: score answer vs question
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -119,6 +129,27 @@ func (h *HorizonHandlers) WithMaterializedArtifactsRepo(r *horizonrepo.Materiali
 // WithNewsByFragmentsCanvas wires the news-by-fragments canvas (search → facts → 12-axis → propagation).
 func (h *HorizonHandlers) WithNewsByFragmentsCanvas(c *discovery.NewsByFragmentsCanvas) *HorizonHandlers {
 	h.newsByFragmentsCanvas = c
+	return h
+}
+
+// WithQAEngine wires the Lens Q&A engine (Decompose → Simulate → Synthesize).
+func (h *HorizonHandlers) WithQAEngine(engine *horizonqa.Engine, ctxBuilder *horizonqa.AnswerContextBuilder, synthesizer *horizonqa.AnswerSynthesizer, sessionsRepo *horizonrepo.QASessionsRepository) *HorizonHandlers {
+	h.qaEngine = engine
+	h.qaContextBuilder = ctxBuilder
+	h.qaSynthesizer = synthesizer
+	h.qaSessionsRepo = sessionsRepo
+	return h
+}
+
+// WithQAInterpreter wires the Interpreter for humanization at finish (optional).
+func (h *HorizonHandlers) WithQAInterpreter(interp *horizoninterp.Interpreter) *HorizonHandlers {
+	h.qaInterpreter = interp
+	return h
+}
+
+// WithQARelevanceEvaluator wires the BusinessRelevanceEvaluator (optional).
+func (h *HorizonHandlers) WithQARelevanceEvaluator(eval *horizonqa.BusinessRelevanceEvaluator) *HorizonHandlers {
+	h.qaRelevanceEvaluator = eval
 	return h
 }
 
@@ -319,6 +350,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			return
 		case "scope-scout-full":
 			h.ScopeScoutLensFull(w, r)
+			return
+		case "qa":
+			h.LensQA(w, r)
 			return
 		case "graph-query":
 			h.QueryGraph(w, r)

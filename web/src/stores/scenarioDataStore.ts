@@ -4,6 +4,8 @@
  */
 
 import { create } from 'zustand';
+
+const MAX_DATA_ITEMS_PER_SCENARIO = 1000;
 import type { ScenarioData } from '../types/scenarioData';
 
 interface ScenarioDataState {
@@ -46,10 +48,10 @@ export const useScenarioDataStore = create<ScenarioDataState>((set, get) => ({
         // Update existing
         scenarioArray[existingIndex] = scenarioData;
       } else {
-        // Add new data at the end (newest at bottom)
-        scenarioArray = [...scenarioArray, scenarioData];
+        // Add new data at the end (newest at bottom), limit array size to prevent unbounded growth
+        scenarioArray = [...scenarioArray, scenarioData].slice(-MAX_DATA_ITEMS_PER_SCENARIO);
+        projectMap.set(scenarioData.scenarioId, scenarioArray);
       }
-      projectMap.set(scenarioData.scenarioId, scenarioArray);
       
       return { data: newData };
     });

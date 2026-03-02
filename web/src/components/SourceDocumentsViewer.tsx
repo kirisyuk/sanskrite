@@ -33,6 +33,7 @@ const closeBtnStyle: React.CSSProperties = {
 
 export const SourceDocumentsViewer: React.FC<SourceDocumentsViewerProps> = ({ source, onClose, style }) => {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const reprocessTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [documents, setDocuments] = React.useState<any[]>([]);
   const [loadingDocs, setLoadingDocs] = React.useState(false);
   const [documentsError, setDocumentsError] = React.useState<string | null>(null);
@@ -79,13 +80,15 @@ export const SourceDocumentsViewer: React.FC<SourceDocumentsViewerProps> = ({ so
 
   const handleReprocess = async () => {
     if (!source?.id) return;
+    if (reprocessTimeoutRef.current) clearTimeout(reprocessTimeoutRef.current);
     setReprocessing(true);
     setReprocessMessage(null);
     try {
       const result = await api.reprocessSource(source.id);
       setReprocessMessage(`Reprocessing queued for ${result.count} documents`);
       // Reload documents after a delay to see updated statuses
-      setTimeout(() => {
+      reprocessTimeoutRef.current = setTimeout(() => {
+        reprocessTimeoutRef.current = null;
         api.getSourceDocuments(source.id, 100)
           .then((docs) => {
             setDocuments(docs || []);
@@ -101,6 +104,15 @@ export const SourceDocumentsViewer: React.FC<SourceDocumentsViewerProps> = ({ so
       setReprocessing(false);
     }
   };
+
+  React.useEffect(() => {
+    return () => {
+      if (reprocessTimeoutRef.current) {
+        clearTimeout(reprocessTimeoutRef.current);
+        reprocessTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const isTelegramSource = source.kind === 'telegram_channel';
 

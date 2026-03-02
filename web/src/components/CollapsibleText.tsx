@@ -19,6 +19,8 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
   const contentRef = useRef<HTMLDivElement>(null);
   const isCheckingRef = useRef(false);
 
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     let resizeObserver: ResizeObserver | null = null;
     let debounceTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -59,7 +61,9 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
         });
       } finally {
         // Reconnect ResizeObserver after a delay to allow DOM to settle
-        setTimeout(() => {
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null;
           isCheckingRef.current = false;
           if (contentRef.current && resizeObserver) {
             resizeObserver.observe(contentRef.current);
@@ -100,6 +104,10 @@ export const CollapsibleText: React.FC<CollapsibleTextProps> = ({
       clearTimeout(timeoutId3);
       if (debounceTimeout) {
         clearTimeout(debounceTimeout);
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
       if (resizeObserver) {
         resizeObserver.disconnect();

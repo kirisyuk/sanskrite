@@ -551,6 +551,81 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 	return ""
 }
 
+// BuildLastSegmentAddressCandidates builds geocoding candidates from the last segment of the canonical path.
+// Useful when the path slug itself identifies a place (e.g. "north-sinai-insurgency-zone" → North Sinai).
+// Returns candidates for zone, geo-region, deposit, and other geo-relevant types when the slug looks place-like.
+func BuildLastSegmentAddressCandidates(f *hmodels.HorizonFragment) []string {
+	if f == nil {
+		return nil
+	}
+	if _, ok := GeoRelevantTypes[f.Type]; !ok {
+		return nil
+	}
+	cp := strings.TrimSpace(f.CanonicalPath)
+	if cp == "" {
+		return nil
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) < 2 {
+		return nil
+	}
+	slug := strings.TrimSpace(parts[len(parts)-1])
+	if slug == "" || strings.EqualFold(slug, "na") {
+		return nil
+	}
+	// Humanize: north-sinai-insurgency-zone → North Sinai Insurgency Zone
+	humanized := strings.Title(strings.ToLower(strings.NewReplacer("-", " ", "_", " ").Replace(slug)))
+	if humanized == "" {
+		return nil
+	}
+	cc := extractCountryFromFragment(f)
+	if cc == "" {
+		cc = extractCountryFromCanonicalPath(cp)
+	}
+
+	out := make([]string, 0, 6)
+	seen := map[string]struct{}{}
+	add := func(raw string) {
+		addr := strings.TrimSpace(raw)
+		if addr == "" {
+			return
+		}
+		key := strings.ToLower(addr)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		if !addressvalidate.IsPlausibleAddress(addr) {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, addr)
+	}
+
+	if cc != "" {
+		add(humanized + ", " + cc)
+	}
+	add(humanized)
+
+	// Shorter variants: "north-sinai-insurgency-zone" → try "North Sinai" (first 2 parts)
+	slugParts := strings.Split(slug, "-")
+	if len(slugParts) >= 2 {
+		short := strings.Title(strings.ToLower(strings.Join(slugParts[:2], " ")))
+		if short != "" {
+			if cc != "" {
+				add(short + ", " + cc)
+			}
+			add(short)
+		}
+	}
+	if len(slugParts) >= 1 && cc != "" {
+		single := strings.Title(strings.ToLower(slugParts[0]))
+		if single != "" && len(single) >= 2 {
+			add(single + ", " + cc)
+		}
+	}
+	return out
+}
+
 // BuildFacilityAddressCandidates builds additional facility geocoding candidates using parent-org context.
 // The first candidate (when present) is always BuildAddressFromFragment(fragment).
 func BuildFacilityAddressCandidates(fragment *hmodels.HorizonFragment, parent *hmodels.HorizonFragment) []string {

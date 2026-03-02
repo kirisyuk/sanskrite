@@ -3982,19 +3982,26 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	// Hybrid internal-content fallback:
 	// If source/doc aggregation is empty, try deterministic graph-backed context
 	// (fragments + edges + facts) before switching to full web research.
+	// Exception: when user explicitly asked to research (Scout-it / relationChildSchedulingOptIn),
+	// skip graph fallback — they want research beyond the baseline, not extraction from existing graph.
 	if strings.TrimSpace(aggregatedContent) == "" {
-		if graphCtx := e.buildGraphBackedInternalContext(ctx, tenantID, job.TargetCanonicalPath); strings.TrimSpace(graphCtx) != "" {
-			aggregatedContent = graphCtx
-			e.logLine(ctx, job, "info", "> no source content; using graph-backed internal context")
-			trace.Log(ctx, "scout_exec", "scout.internal_context.graph_fallback", map[string]any{
-				"tenantId":            strings.TrimSpace(job.TenantID),
-				"projectId":           strings.TrimSpace(job.ProjectID),
-				"lensId":              strings.TrimSpace(lensID),
-				"jobId":               strings.TrimSpace(job.ID),
-				"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
-				"contextLen":          len(aggregatedContent),
-				"contextSha1":         trace.HashText(aggregatedContent),
-			})
+		useGraphFallback := !parseStateBool(job.State["relationChildSchedulingOptIn"], false)
+		if useGraphFallback {
+			if graphCtx := e.buildGraphBackedInternalContext(ctx, tenantID, job.TargetCanonicalPath); strings.TrimSpace(graphCtx) != "" {
+				aggregatedContent = graphCtx
+				e.logLine(ctx, job, "info", "> no source content; using graph-backed internal context")
+				trace.Log(ctx, "scout_exec", "scout.internal_context.graph_fallback", map[string]any{
+					"tenantId":            strings.TrimSpace(job.TenantID),
+					"projectId":           strings.TrimSpace(job.ProjectID),
+					"lensId":              strings.TrimSpace(lensID),
+					"jobId":               strings.TrimSpace(job.ID),
+					"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+					"contextLen":          len(aggregatedContent),
+					"contextSha1":         trace.HashText(aggregatedContent),
+				})
+			}
+		} else {
+			e.logLine(ctx, job, "info", "> no source content; skipping graph fallback (user requested research) — will use full research")
 		}
 	}
 	sourceFingerprint = buildMissingInfoSourceFingerprint(strings.TrimSpace(job.TargetCanonicalPath), allSourceIDs, allDocumentIDs, aggregatedContent)

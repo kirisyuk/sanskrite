@@ -26,6 +26,20 @@ function clearAgentTimersForProject(projectId: string) {
   // This is safe because timers check projectId before executing
   clearAllAgentTimers();
 }
+
+// Limit Record size to prevent unbounded memory growth (keeps last N entries)
+function limitRecordKeys<T>(record: Record<string, T>, max: number): Record<string, T> {
+  const keys = Object.keys(record);
+  if (keys.length <= max) return record;
+  const toKeep = keys.slice(-max);
+  const next: Record<string, T> = {};
+  for (const k of toKeep) next[k] = record[k];
+  return next;
+}
+
+const MAX_METRIC_OVERLAY_CACHE = 50;
+const MAX_EVALUATIONS = 500;
+const MAX_MESSAGE_META = 500;
 import { processOntologyCommands } from '../lib/ontologyCommandProcessor';
 import { mapAliasToModel } from '../lib/modelMapping';
 
@@ -960,7 +974,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           perspectives: perspectivesMap,
           searchQueries: [],
           sources: [],
-          messageMeta: restoredMeta,
+          messageMeta: limitRecordKeys(restoredMeta, MAX_MESSAGE_META),
           hydrating: false,
           hydratingProjectId: undefined,
         } as any;
@@ -1464,7 +1478,10 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
       const maxTok = Math.max(2048, settings.maxOutputTokens || 4096);
       const res = await api.genaiGenerate({ model, prompt, strictJSONEnabled: false, maxOutputTokens: maxTok, webSearchEnabled: true, systemInstruction: settings.systemInstruction || undefined });
       const content = (res?.content || '').toString().trim();
-      set((s) => ({ metricOverlayCache: { ...s.metricOverlayCache, [key]: { key, metric, content, fetchedAt: new Date().toISOString() } }, metricOverlayLoading: false, metricOverlayOpenKey: key } as any));
+      set((s) => {
+        const nextCache = { ...s.metricOverlayCache, [key]: { key, metric, content, fetchedAt: new Date().toISOString() } };
+        return { metricOverlayCache: limitRecordKeys(nextCache, MAX_METRIC_OVERLAY_CACHE), metricOverlayLoading: false, metricOverlayOpenKey: key } as any;
+      });
     } catch (e) {
       console.error('[metricOverlay] fetch failed', e);
       set({ metricOverlayLoading: false });
@@ -4464,7 +4481,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
           }
         })();
 
-        return { streaming: false, currentStreamId: undefined, abortController: undefined, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: nextInteractions, artifacts: { entities: nextEntities, metrics: nextMetrics } } as any;
+        return { streaming: false, currentStreamId: undefined, abortController: undefined, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: limitRecordKeys(nextMeta, MAX_MESSAGE_META), interactions: nextInteractions, artifacts: { entities: nextEntities, metrics: nextMetrics } } as any;
       }
       // If we are here, assistant produced no chunks and content is empty.
       // Remove the trailing empty placeholder and create a stub interaction so the user sees the outcome.
@@ -4532,7 +4549,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
         nextMeta[id] = { headerText: meta.displayName, leftAccent: true, refineEnabled: !!meta?.agentProfile?.capabilities?.refinePrevious, agentProfile: meta?.agentProfile };
       }
       console.warn('[GenAI Stream] done without chunks: created empty reply stub');
-      return { streaming: false, currentStreamId: undefined, abortController: undefined, messages: msgs, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: nextMeta, interactions: [...s.interactions, base] } as any;
+      return { streaming: false, currentStreamId: undefined, abortController: undefined, messages: msgs, pendingAssistantMeta: undefined, pendingAssistantOptions: undefined, pendingAssistantPrompt: undefined, pendingAssistantTools: undefined, messageMeta: limitRecordKeys(nextMeta, MAX_MESSAGE_META), interactions: [...s.interactions, base] } as any;
     }),
   onError: (err) => {
     try {
@@ -4904,7 +4921,7 @@ export const useGenaiChatStore = create<GenaiChatState>((set, get) => ({
     } as any;
   }),
   setEvaluation: (messageId, ev) => set((s) => {
-    const next = { ...s.evaluations, [messageId]: ev };
+    const next = limitRecordKeys({ ...s.evaluations, [messageId]: ev }, MAX_EVALUATIONS);
     // Only update evaluation map; creation/persistence of eval.bias interactions
     // is handled by the caller (e.g., unified evaluateBias in DiscoveryPage).
     return { evaluations: next } as any;

@@ -1637,6 +1637,16 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       spherePaths: string[];
       keywords: string[];
       anchors: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
+      domains?: Array<{
+        canonicalPath: string;
+        contractType?: string;
+        title?: string;
+        description?: string;
+        firstOrderEntities?: string[];
+        confidence?: number;
+        reason?: string;
+      }>;
+      decompositionHints?: string[];
     };
   }> {
     try {
@@ -3073,6 +3083,77 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     } catch (error: any) {
       console.error(`[API] deleteHorizonLensArtifacts error:`, error);
       throw error;
+    }
+  }
+
+  /**
+   * Lens Q&A — POST /api/horizon/lenses/{lensId}/qa
+   * Returns SSE stream. Use postHorizonLensQAStream for typed event handling.
+   */
+  async postHorizonLensQAStream(
+    lensId: string,
+    question: string,
+    callbacks: {
+      onStatus?: (data: { status: string; sessionId?: string; error?: string }) => void;
+      onHighlights?: (data: { highlightedNodeIds?: string[]; tracePaths?: unknown[] }) => void;
+      onAnswerChunk?: (data: { text: string }) => void;
+      onAnswerComplete?: (data: Record<string, unknown>) => void;
+      onError?: (err: Error) => void;
+    },
+    signal?: AbortSignal
+  ): Promise<void> {
+    const user = auth?.currentUser;
+    const token = user ? await user.getIdToken() : '';
+    const url = `${API_BASE_URL}/api/horizon/lenses/${lensId}/qa`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ question: question.trim() }),
+      signal,
+    });
+    if (!res.ok) {
+      const err = new Error(res.statusText || `QA request failed: ${res.status}`);
+      callbacks.onError?.(err);
+      throw err;
+    }
+    const reader = res.body?.getReader();
+    if (!reader) {
+      callbacks.onError?.(new Error('No response body'));
+      return;
+    }
+    const dec = new TextDecoder();
+    let buf = '';
+    let currentEvent = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ') && currentEvent) {
+            try {
+              const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
+              if (currentEvent === 'status') callbacks.onStatus?.(data as { status: string; sessionId?: string; error?: string });
+              else if (currentEvent === 'highlights') callbacks.onHighlights?.(data as { highlightedNodeIds?: string[]; tracePaths?: unknown[] });
+              else if (currentEvent === 'answer_chunk') callbacks.onAnswerChunk?.(data as { text: string });
+              else if (currentEvent === 'answer_complete') callbacks.onAnswerComplete?.(data);
+            } catch {
+              // ignore parse errors
+            }
+            currentEvent = '';
+          }
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') callbacks.onError?.(e as Error);
     }
   }
 }

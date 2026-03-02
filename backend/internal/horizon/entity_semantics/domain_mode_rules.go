@@ -16,6 +16,8 @@ var DomainModeMissingInfoRules = map[string][]MissingInfoRule{
 		{Trigger: TriggerRelationCountBelow, MinCount: 3, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "upstream suppliers and downstream customers for %s"},
 	},
 	taxonomy.DomainModeGovernance: {
+		// Seed: always ask upstream (who owns/controls) — critical for org/gov/fac.
+		{Trigger: TriggerSeed, DomainMode: taxonomy.DomainModeGovernance, QuestionTemplate: "Who owns %s (shareholders, parent, UBO)? Who controls it? Who invests in it? Return OWNS/CONTROLS/INVESTS_IN with explicit sourceCanonicalPath when owner/controller is not current fragment. What subsidiaries does it own/control?"},
 		{Trigger: TriggerRelationMissing, RelationType: "OWNS", DomainMode: taxonomy.DomainModeGovernance, QuestionTemplate: "ownership chain and ultimate parent entity for %s"},
 		{Trigger: TriggerRelationMissing, RelationType: "SUBSIDIARY_OF", DomainMode: taxonomy.DomainModeGovernance, QuestionTemplate: "ownership chain and ultimate parent entity for %s"},
 		{Trigger: TriggerRelationMissing, RelationType: "BOARD_MEMBER_OF", DomainMode: taxonomy.DomainModeGovernance, QuestionTemplate: "board composition and key executives for %s"},

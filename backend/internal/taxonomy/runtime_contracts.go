@@ -235,6 +235,21 @@ var builtInAllowedDepositResources = setOf(
 	"potash", "phosphate", "sulfur",
 )
 
+var builtInAllowedCommunityTypes = setOf(
+	"trade", "activist", "professional", "criminal", "religious", "ethnic",
+	"interest", "dynasty", "tribe", "representatives", "industry-association", "key-community",
+)
+
+var builtInAllowedMarketDomains = setOf(
+	"finance", "technology", "healthcare", "energy", "materials",
+	"industrial", "consumer", "telecom", "real-estate",
+	"professional-services", "public-sector", "utilities",
+	"transportation", "agriculture", "defense", "education",
+	"media", "entertainment", "hospitality", "retail",
+	"automotive", "aerospace", "mining", "oil-gas",
+	"pharmaceuticals", "chemicals", "construction",
+)
+
 var builtInAllowedLifecycleStages = setOf(
 	"concept", "planning", "permitting", "financing",
 	"construction", "commissioning", "operational", "expansion",

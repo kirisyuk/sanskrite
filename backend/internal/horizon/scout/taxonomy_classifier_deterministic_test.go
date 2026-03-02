@@ -48,12 +48,14 @@ func TestClassifyTaxonomyDeterministic(t *testing.T) {
 		{"loc country", "/loc/tr/na/na", "/Geo/Region/Country", "/Geography", true},
 		{"loc city", "/loc/us/ca/san-francisco", "/Geo/Region/Country", "/Geography", true},
 
-		// --- MARKET ---
-		{"market energy", "/market/global/energy/oil-gas", "/Organization/Corporation/Private", "/Energy/Fossil_Fuels/Oil_Gas_Upstream", true},
-		{"market semiconductor", "/market/global/semiconductor", "/Organization/Corporation/Private", "/Technology/Semiconductors/Manufacturing", true},
-		{"market finance", "/market/kz/finance/banking", "/Organization/Corporation/Private", "/Financials/Banking/Systemic", true},
-		{"market automotive", "/market/de/automotive/ev", "/Organization/Corporation/Private", "/Automotive/Vehicles/EV", true},
-		{"market generic", "/market/global/professional-services/consulting", "/Organization/Corporation/Private", "/Industrials/Machinery/Industrial_Automation", true},
+		// --- MARKET (entityPath by geo scope) ---
+		{"market energy global", "/market/global/energy/oil-gas", "/Market/Geo/Global", "/Energy/Fossil_Fuels/Oil_Gas_Upstream", true},
+		{"market semiconductor", "/market/global/semiconductor", "/Market/Geo/Global", "/Technology/Semiconductors/Manufacturing", true},
+		{"market finance country", "/market/kz/finance/banking", "/Market/Geo/Country", "/Financials/Banking/Systemic", true},
+		{"market automotive", "/market/de/automotive/ev", "/Market/Geo/Country", "/Automotive/Vehicles/EV", true},
+		{"market generic", "/market/global/professional-services/consulting", "/Market/Geo/Global", "/Industrials/Machinery/Industrial_Automation", true},
+		{"market ict", "/market/no/technology/ict", "/Market/Geo/Global", "/Technology/Software/Enterprise", true},
+		{"market regional", "/market/brics/energy/oil-gas", "/Market/Geo/Regional", "/Energy/Fossil_Fuels/Oil_Gas_Upstream", true},
 
 		// --- PERSON ---
 		{"person", "/person/elon-musk", "/Person/Executive", "/Financials/Capital_Markets/Asset_Management", true},

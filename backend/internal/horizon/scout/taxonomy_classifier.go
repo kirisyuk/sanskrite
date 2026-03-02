@@ -206,36 +206,53 @@ func classifyProductDeterministic(parts []string) (string, string, bool) {
 }
 
 func classifyMarketDeterministic(parts []string) (string, string, bool) {
+	geo := ""
 	domain := ""
+	if len(parts) >= 2 {
+		geo = strings.ToLower(strings.TrimSpace(parts[1]))
+	}
 	if len(parts) >= 3 {
 		domain = parts[2]
 	}
 
+	// Market entityPath by geo scope (aligned with /market/{geo}/{domain}...)
+	var entityPath string
+	switch {
+	case geo == "global" || geo == "no" || geo == "int":
+		entityPath = "/Market/Geo/Global"
+	case taxonomy.IsRegionalGeoToken(geo):
+		entityPath = "/Market/Geo/Regional"
+	case taxonomy.IsCompositeGeoToken(geo), len(geo) == 2 && geo[0] >= 'a' && geo[0] <= 'z' && geo[1] >= 'a' && geo[1] <= 'z':
+		entityPath = "/Market/Geo/Country"
+	default:
+		entityPath = "/Market/Domain/Industry"
+	}
+
 	switch {
 	case containsAny(domain, "energy", "oil", "gas", "lng", "power", "fuel"):
-		return "/Organization/Corporation/Private", "/Energy/Fossil_Fuels/Oil_Gas_Upstream", true
+		return entityPath, "/Energy/Fossil_Fuels/Oil_Gas_Upstream", true
 	case containsAny(domain, "mining", "metals", "mineral", "rare-earth"):
-		return "/Organization/Corporation/Private", "/Materials/Mining/Industrial_Metals", true
+		return entityPath, "/Materials/Mining/Industrial_Metals", true
 	case containsAny(domain, "chemical", "fertilizer", "pharma"):
-		return "/Organization/Corporation/Private", "/Materials/Chemicals/Specialty", true
+		return entityPath, "/Materials/Chemicals/Specialty", true
 	case containsAny(domain, "semiconductor", "chip", "electronics"):
-		return "/Organization/Corporation/Private", "/Technology/Semiconductors/Manufacturing", true
+		return entityPath, "/Technology/Semiconductors/Manufacturing", true
 	case containsAny(domain, "software", "saas", "cloud", "cyber", "tech", "technology", "ai"):
-		return "/Organization/Corporation/Private", "/Technology/Software/Enterprise", true
+		return entityPath, "/Technology/Software/Enterprise", true
 	case containsAny(domain, "automotive", "ev", "vehicle"):
-		return "/Organization/Corporation/Private", "/Automotive/Vehicles/EV", true
+		return entityPath, "/Automotive/Vehicles/EV", true
 	case containsAny(domain, "bank", "finance", "insurance", "fintech", "capital"):
-		return "/Organization/Corporation/Private", "/Financials/Banking/Systemic", true
+		return entityPath, "/Financials/Banking/Systemic", true
 	case containsAny(domain, "defense", "defence", "aerospace", "military"):
-		return "/Organization/Corporation/Private", "/Industrials/Aerospace_Defense/Defense_Prime", true
+		return entityPath, "/Industrials/Aerospace_Defense/Defense_Prime", true
 	case containsAny(domain, "transport", "logistics", "shipping", "freight"):
-		return "/Organization/Corporation/Private", "/Industrials/Transportation/Marine", true
+		return entityPath, "/Industrials/Transportation/Marine", true
 	case containsAny(domain, "agriculture", "food", "crop", "agri"):
-		return "/Organization/Corporation/Private", "/Materials/Chemicals/Fertilizers", true
+		return entityPath, "/Materials/Chemicals/Fertilizers", true
 	case containsAny(domain, "health", "medical", "biotech"):
-		return "/Organization/Corporation/Private", "/Healthcare/Pharma/Biotech", true
+		return entityPath, "/Healthcare/Pharma/Biotech", true
 	default:
-		return "/Organization/Corporation/Private", "/Industrials/Machinery/Industrial_Automation", true
+		return entityPath, "/Industrials/Machinery/Industrial_Automation", true
 	}
 }
 

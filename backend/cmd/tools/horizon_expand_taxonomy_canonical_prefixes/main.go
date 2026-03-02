@@ -81,6 +81,7 @@ func main() {
 		"/decision/",
 		"/mechanism/",
 		"/industry/",
+		"/track/",
 	}
 
 	normalize := func(p string) string {

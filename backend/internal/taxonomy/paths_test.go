@@ -205,6 +205,36 @@ func TestValidateCanonicalPath(t *testing.T) {
 			path:    "/zone/mena/political_tension/strait-of-hormuz",
 			wantErr: false,
 		},
+		{
+			name:    "valid track path mmsi",
+			path:    "/track/sea/id/mmsi-525123456",
+			wantErr: false,
+		},
+		{
+			name:    "valid track path icao24",
+			path:    "/track/air/us/icao24-a1b2c3",
+			wantErr: false,
+		},
+		{
+			name:    "valid track path global geo",
+			path:    "/track/sea/global/imo-9123456",
+			wantErr: false,
+		},
+		{
+			name:    "valid track path flight callsign",
+			path:    "/track/air/ru/flight-su123",
+			wantErr: false,
+		},
+		{
+			name:    "invalid track path bad kind",
+			path:    "/track/space/us/icao24-abc123",
+			wantErr: true,
+		},
+		{
+			name:    "invalid track path too few segments",
+			path:    "/track/air/us",
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

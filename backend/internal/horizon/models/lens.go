@@ -74,10 +74,11 @@ type ScopeArtifactRef struct {
 // LensIntent is a living question the user wants to answer within the lens.
 // Does not define execution (that's DomainModes); situational.
 type LensIntent struct {
-	ID        string    `json:"id,omitempty" firestore:"id,omitempty"`
-	Question  string    `json:"question" firestore:"question"`
-	CreatedAt time.Time `json:"createdAt,omitempty" firestore:"createdAt,omitempty"`
-	Status    string    `json:"status,omitempty" firestore:"status,omitempty"` // pending, answered, archived
+	ID          string    `json:"id,omitempty" firestore:"id,omitempty"`
+	Question    string    `json:"question" firestore:"question"`
+	CreatedAt   time.Time `json:"createdAt,omitempty" firestore:"createdAt,omitempty"`
+	Status      string    `json:"status,omitempty" firestore:"status,omitempty"`       // pending, answered, archived
+	QASessionID string    `json:"qaSessionId,omitempty" firestore:"qaSessionId,omitempty"` // Link to QASession when answered
 }
 
 // LensStatus статус Lens

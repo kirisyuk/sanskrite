@@ -245,6 +245,18 @@ func (e *AITaskExecutor) selectFallbackModelAdaptive(req AIRequirements, inputTo
 			log.Printf("[AITaskExecutor] fail-open provider selection used model=%s despite pressure blocks", model)
 		}
 	}
+	// When normal selection returns only unregistered providers (e.g. Vertex-only executor),
+	// try models from registered providers directly.
+	if model == "" && len(e.aiServices) > 0 {
+		providers := make(map[AIProvider]struct{})
+		for p := range e.aiServices {
+			providers[p] = struct{}{}
+		}
+		model = e.modelManager.SelectModelForProviders(req, inputTokens, triedModels, providers)
+		if model != "" {
+			log.Printf("[AITaskExecutor] using model from registered provider: %s", model)
+		}
+	}
 	return model
 }
 

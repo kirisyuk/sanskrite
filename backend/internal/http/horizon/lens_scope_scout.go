@@ -154,14 +154,15 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		// Normalize specialties (ignore unknown values).
 		specialties := taxonomy.NormalizeSpecialties(body.Specialties)
 		state := map[string]interface{}{
-			"targetCanonicalPath": targetCanonicalPath,
-			"lensId":              lens.ID,
-			"currentState":        string(models.ScoutingJobStatePending),
-			"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
-			"recursionDepth":      0.0,
-			"maxRecursionDepth":   float64(maxDepth),
-			"trigger":             "ui.graph.scope_scout",
-			"correlationId":       correlationID,
+			"targetCanonicalPath":           targetCanonicalPath,
+			"lensId":                        lens.ID,
+			"currentState":                  string(models.ScoutingJobStatePending),
+			"scoutingStrategy":              string(models.ScoutingStrategySnapshot),
+			"recursionDepth":                0.0,
+			"maxRecursionDepth":             float64(maxDepth),
+			"trigger":                       "ui.graph.scope_scout",
+			"correlationId":                 correlationID,
+			"relationChildSchedulingOptIn":  true, // User explicitly requested hop depth — allow relation children regardless of domain expansion
 		}
 		if len(specialties) > 0 {
 			state["specialties"] = specialties

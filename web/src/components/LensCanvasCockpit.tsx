@@ -73,6 +73,7 @@ import { DynastyProfileModal } from './DynastyProfileModal';
 import { TribeProfileModal } from './TribeProfileModal';
 import { ProgramProfileModal } from './ProgramProfileModal';
 import { GraphIntentResultCard } from './GraphIntentResultCard';
+import { ScoutIntentModal, type ScoutIntentResolution } from './ScoutIntentModal';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
@@ -592,6 +593,8 @@ export interface LensCanvasCockpitProps {
   onScopeScout?: (input: { fragmentId: string; canonicalPath?: string; maxRecursionDepth?: number }) => Promise<void>;
   inspectorActive?: boolean;
   onToggleInspector?: () => void;
+  /** QA answer highlight — nodes in impact chain (plan §10.6 X-Ray). */
+  qaHighlightNodeIds?: string[];
 }
 
 export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
@@ -602,6 +605,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   onScopeScout,
   inspectorActive,
   onToggleInspector,
+  qaHighlightNodeIds,
 }) => {
   const { theme } = React.useContext(ThemeContext);
   const isAdmin = useIsAdmin();
@@ -2132,6 +2136,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [graphIntentError, setGraphIntentError] = React.useState<string | null>(null);
   const [graphIntentApplyLoading, setGraphIntentApplyLoading] = React.useState(false);
 
+  const [scoutIntentModalOpen, setScoutIntentModalOpen] = React.useState(false);
+  const [scoutIntentQuery, setScoutIntentQuery] = React.useState('');
+  const [scoutIntentIntent, setScoutIntentIntent] = React.useState<ScoutIntentResolution | null>(null);
+  const [scoutIntentLoading, setScoutIntentLoading] = React.useState(false);
+  const [scoutIntentError, setScoutIntentError] = React.useState<string | null>(null);
+  const [scoutProgressLog, setScoutProgressLog] = React.useState<string[]>([]);
+  const [scoutRunLoading, setScoutRunLoading] = React.useState(false);
+
   const graphIntentNodeIdToLabel = React.useMemo(() => {
     const m: Record<string, string> = {};
     for (const n of nodes) {
@@ -2568,6 +2580,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
   }, [domainOverlayGraphIndex, resolveDomainOverlayNodeId]);
 
+  const qaHighlightNodeIdSet = React.useMemo<Set<string> | null>(() => {
+    if (!qaHighlightNodeIds || qaHighlightNodeIds.length === 0) return null;
+    const out = new Set<string>();
+    for (const id of qaHighlightNodeIds) {
+      const s = String(id || '').trim();
+      if (s) out.add(s);
+    }
+    return out.size > 0 ? out : null;
+  }, [qaHighlightNodeIds]);
+
   const domainOverlayHighlightNodeIds = React.useMemo<Set<string> | null>(() => {
     if (!domainOverlayHighlightEnabled || !activeDomainAnswer) return null;
     const out = new Set<string>();
@@ -2980,6 +3002,33 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [modelerOpen]);
+
+  // Scout intent modal: resolve intent when opened with query
+  React.useEffect(() => {
+    if (!scoutIntentModalOpen || !scoutIntentQuery.trim()) return;
+    let alive = true;
+    setScoutIntentLoading(true);
+    setScoutIntentError(null);
+    setScoutIntentIntent(null);
+    (async () => {
+      try {
+        const res = await api.resolveHorizonIntent({ query: scoutIntentQuery.trim() });
+        if (!alive) return;
+        setScoutIntentIntent(res?.intent as ScoutIntentResolution);
+        setScoutIntentError(null);
+      } catch (e: any) {
+        if (!alive) return;
+        const msg = e?.response?.data?.error || e?.message || 'Failed to resolve intent';
+        setScoutIntentError(String(msg));
+        setScoutIntentIntent(null);
+      } finally {
+        if (alive) setScoutIntentLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [scoutIntentModalOpen, scoutIntentQuery]);
 
   // (Old domain overlay focus effect removed — replaced by DomainOverlayPanel)
 
@@ -11398,13 +11447,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const signalActive = !!signalSet && signalSet.size > 0;
     const qset = signalModeActive ? null : graphQueryHighlightIds;
     const qActive = !!qset && qset.size > 0;
-    const hoverSet = qActive ? null : domainOverlayHoverNodeIdSet;
+    const qaSet = signalModeActive || qActive ? null : qaHighlightNodeIdSet;
+    const qaActive = !!qaSet && qaSet.size > 0;
+    const hoverSet = qActive || qaActive ? null : domainOverlayHoverNodeIdSet;
     const domainHoverActive = !!hoverSet && hoverSet.size > 0;
-    const dset = qActive || domainHoverActive ? null : domainOverlayHighlightNodeIds;
+    const dset = qActive || qaActive || domainHoverActive ? null : domainOverlayHighlightNodeIds;
     const dActive = !!dset && dset.size > 0;
     const topDepSet = signalModeActive ? null : (domainTopDependencyFocusActive && !domainHoverActive ? domainTopDependencyNodeIds : null);
     const topDepActive = !!topDepSet && topDepSet.size > 0;
-    if (perfMode && !signalActive && !qActive && !domainHoverActive && !dActive && !topDepActive && !String(fragmentProfileActiveNodeId || '').trim()) return nodes;
+    if (perfMode && !signalActive && !qActive && !qaActive && !domainHoverActive && !dActive && !topDepActive && !String(fragmentProfileActiveNodeId || '').trim()) return nodes;
 
     const owned = hoverHighlight?.nodeIds;
     const ultimatePersons: Set<string> | undefined = (hoverHighlight as any)?.ultimatePersonIds;
@@ -11420,6 +11471,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const isOwnedNode = !!owned && id && owned.has(id);
       const isHovered = id === hovered;
       const isQuery = qActive && !!qset && id && qset.has(id);
+      const isQaHighlight = qaActive && !!qaSet && id && qaSet.has(id);
       const isDomainHover = domainHoverActive && !!hoverSet && id && hoverSet.has(id);
       const isDomain = dActive && !!dset && id && dset.has(id);
       const isTopDep = topDepActive && !!topDepSet && id && topDepSet.has(id);
@@ -11443,13 +11495,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       let style: any = prevStyle;
       let styleChanged = false;
 
-      const highlightMode: '' | 'signal' | 'query' | 'domain-hover' | 'domain' =
-        signalActive ? 'signal' : qActive ? 'query' : domainHoverActive ? 'domain-hover' : dActive ? 'domain' : '';
+      const highlightMode: '' | 'signal' | 'query' | 'qa' | 'domain-hover' | 'domain' =
+        signalActive ? 'signal' : qActive ? 'query' : qaActive ? 'qa' : domainHoverActive ? 'domain-hover' : dActive ? 'domain' : '';
       const wantPrimaryHighlight =
         highlightMode === 'signal'
           ? Boolean(isSignal && !isGroup)
           : highlightMode === 'query'
           ? Boolean(isQuery && !isGroup)
+          : highlightMode === 'qa'
+          ? Boolean(isQaHighlight && !isGroup)
           : highlightMode === 'domain-hover'
             ? Boolean(isDomainHover && !isGroup)
           : highlightMode === 'domain'
@@ -11461,6 +11515,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           highlightMode === 'signal'
             ? (isGroup ? 0.06 : Math.min(opacity, 0.18))
             : highlightMode === 'query'
+            ? (isGroup ? 0.12 : Math.min(opacity, 0.55))
+            : highlightMode === 'qa'
             ? (isGroup ? 0.12 : Math.min(opacity, 0.55))
             : highlightMode === 'domain-hover'
               ? (isGroup ? 0.10 : Math.min(opacity, 0.38))
@@ -11750,6 +11806,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     hoverHighlightMode,
     hoveredNodeId,
     graphQueryHighlightIds,
+    qaHighlightNodeIdSet,
     signalPropagationNodeIdSet,
     domainOverlayHoverNodeIdSet,
     domainOverlayHighlightNodeIds,
@@ -12292,6 +12349,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setAddNodeLoading(false);
     setAddNodeError(null);
     setAddNodeActiveIndex(0);
+  }, []);
+
+  const openScoutIntentModal = React.useCallback((query: string) => {
+    const q = String(query || '').trim();
+    if (!q) return;
+    closeAddNode();
+    setScoutIntentQuery(q);
+    setScoutIntentIntent(null);
+    setScoutIntentError(null);
+    setScoutProgressLog([]);
+    setScoutRunLoading(false);
+    setScoutIntentModalOpen(true);
+  }, [closeAddNode]);
+
+  const closeScoutIntentModal = React.useCallback(() => {
+    setScoutIntentModalOpen(false);
+    setScoutIntentQuery('');
+    setScoutIntentIntent(null);
+    setScoutIntentError(null);
+    setScoutProgressLog([]);
+    setScoutRunLoading(false);
   }, []);
 
   const openCommandPalette = React.useCallback(() => {
@@ -13204,22 +13282,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, [lensId, rtGraphNodes, findFragmentIdByCanonicalPath, materializeScoutedNode, materializeScoutedNodeWithoutPlaceholder]);
 
   const scoutFullForQuery = React.useCallback(
-    async (query: string) => {
+    async (query: string, options?: { onProgress?: (msg: string) => void }) => {
       const q = String(query || '').trim();
       if (!lensId || q.length < 2) return;
+
+      const onProgress = options?.onProgress;
+      if (!onProgress) {
+        closeAddNode();
+      }
 
       const correlationId = genCorrelationId();
       const firstFiveForGraph: string[] = [];
       const placeholders: { placeholderId: string; canonicalPath: string }[] = [];
       const restPaths: string[] = [];
 
-      // Close palette quickly (user stays on graph).
-      closeAddNode();
-
       try {
+        onProgress?.('Calling scope-scout-full…');
         const res = await api.scopeScoutHorizonLensFull(lensId, { query: q }, { correlationId });
         const firstFive = res?.firstFiveForGraph || [];
         const allPaths = res?.canonicalPaths || [];
+        const jobIds = res?.jobIds || [];
+
+        onProgress?.(`Intent resolved. Jobs created: ${jobIds.length}, paths: ${allPaths.length}`);
+        onProgress?.(`First 5 for graph: ${firstFive.join(', ') || '(none)'}`);
 
         for (let i = 0; i < firstFive.length; i++) {
           const cp = String(firstFive[i] || '').trim();
@@ -13270,8 +13355,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         });
 
         pendingScoutRef.current.set(correlationId, { placeholders, restPaths });
+        onProgress?.(`Placeholders created: ${firstFiveForGraph.length}. ${restPaths.length} more in queue.`);
       } catch (e) {
         console.warn('[Cockpit] scope-scout-full failed', e);
+        onProgress?.(`Error: ${(e as Error)?.message || 'scope-scout-full failed'}`);
         const placeholderId = `scout:${correlationId}:0`;
         const placement = computeNewRootPosition(placeholderId);
         const ph: Node<HorizonNodeData> = {
@@ -13314,6 +13401,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setLensScopePaths,
     ],
   );
+
+  const runScoutFromModal = React.useCallback(async () => {
+    const q = scoutIntentQuery.trim();
+    if (!q || !lensId) return;
+    setScoutRunLoading(true);
+    setScoutProgressLog((prev) => [...prev, 'Starting scout…']);
+    try {
+      await scoutFullForQuery(q, {
+        onProgress: (msg) => setScoutProgressLog((prev) => [...prev, msg]),
+      });
+    } finally {
+      setScoutRunLoading(false);
+    }
+  }, [lensId, scoutIntentQuery, scoutFullForQuery]);
 
   const addNodeToLens = React.useCallback(
     async (entity: HorizonSearchEntity) => {
@@ -17458,7 +17559,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                       return;
                     }
                     if (picked.kind === 'scout') {
-                      void scoutFullForQuery(picked.query);
+                      openScoutIntentModal(picked.query);
                       return;
                     }
                     if (picked.kind === 'graph') {
@@ -17561,7 +17662,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                       <button
                         key={`scout-${addNodeQueryTrim}`}
                         type="button"
-                        onClick={() => void scoutFullForQuery(addNodeQueryTrim)}
+                        onClick={() => openScoutIntentModal(addNodeQueryTrim)}
                         onMouseEnter={() => setAddNodeActiveIndex(absIdx)}
                         style={{
                           width: '100%',
@@ -18869,6 +18970,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           label={programProfileModal.label}
         />
       )}
+
+      <ScoutIntentModal
+        visible={scoutIntentModalOpen}
+        query={scoutIntentQuery}
+        intent={scoutIntentIntent}
+        intentLoading={scoutIntentLoading}
+        intentError={scoutIntentError}
+        runLoading={scoutRunLoading}
+        progressLog={scoutProgressLog}
+        onClose={closeScoutIntentModal}
+        onRunScout={() => void runScoutFromModal()}
+        theme={theme as 'light' | 'dark'}
+      />
     </div>
   );
 };

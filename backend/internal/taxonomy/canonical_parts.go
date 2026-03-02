@@ -40,13 +40,16 @@ type CanonicalPathParts struct {
 	Mechanism *MechanismPathParts
 	// RawPathParts stores path segments for namespaces without dedicated structs (domain, zone, supply-link).
 	// BuildCanonicalPath reconstructs from RawPathParts when set.
-	RawPathParts *RawPathParts
+	// Firestore tag ensures correct serialization when CanonicalPathParts is stored in Firestore.
+	RawPathParts *RawPathParts `json:"rawPathParts,omitempty" firestore:"RawPathParts,omitempty"`
 }
 
 // RawPathParts stores raw segments for domain, zone, supply-link and other namespaces.
 // Used when full semantic parsing is not yet implemented; enables parse->build round-trip.
+// Firestore tags ensure correct serialization/deserialization (without them, RawPathParts.Segments
+// can be lost when loading from Firestore, causing "canonicalParts present but incomplete" warning).
 type RawPathParts struct {
-	Segments []string
+	Segments []string `json:"segments" firestore:"Segments"`
 }
 
 // OrgPathParts represents /org/{geo}/{baseSlug}-{legalForm?}.

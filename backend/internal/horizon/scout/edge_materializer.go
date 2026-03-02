@@ -139,6 +139,14 @@ func (e *ScoutEngine) materializeRelationEdge(
 		directionChanged = true
 	}
 
+	// Detect likely inverted ownership when no explicit source (e.g. "owned by" in Reason).
+	if rel.SourceCanonicalPath == "" {
+		if detectLikelyInvertedOwnershipEdge(edgeType, rel) {
+			edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+			directionChanged = true
+		}
+	}
+
 	// Policy: self-loop prevention (reject).
 	if IsSelfLoop(edgeSourceID, edgeTargetID) {
 		fmt.Printf("Skipping self-edge: %s -> %s (%s)\n", sourceFragment.CanonicalPath, targetPath, edgeType)
@@ -463,15 +471,20 @@ func (e *ScoutEngine) materializeRelationEdge(
 		resolvedTargetPath = strings.TrimSpace(targetPath)
 	}
 
-	// POST-RESOLUTION SANITY CHECK: Flag suspicious cross-jurisdiction edges.
+	// POST-RESOLUTION SANITY CHECK: Penalize suspicious cross-jurisdiction edges.
 	// For "local" relation types (REGULATES, CONTROLS_ACCESS, etc.), source and target
-	// jurisdictions should typically match. Log a warning if they differ.
+	// jurisdictions should typically match. Apply confidence penalty and policy status.
 	if isCrossJurisdictionSuspicious(edgeType, resolvedSourcePath, resolvedTargetPath) {
 		srcJurisdiction := extractJurisdiction(resolvedSourcePath)
 		dstJurisdiction := extractJurisdiction(resolvedTargetPath)
-		fmt.Printf("[CrossJurisdiction] SUSPICIOUS edge: %s (%s) -> %s (%s) [%s]. Proceeding with caution.\n",
+		fmt.Printf("[CrossJurisdiction] PENALIZED edge: %s (%s) -> %s (%s) [%s]\n",
 			resolvedSourcePath, srcJurisdiction, resolvedTargetPath, dstJurisdiction, edgeType)
-		// We log but don't reject - let the edge be created, but it may need manual review.
+		relConfidence = relConfidence * 0.7
+		if 0.3 > policyPenalty {
+			policyPenalty = 0.3
+		}
+		policyStatus = policy.MergePolicyStatus(policyStatus, models.PolicyStatusPenalized)
+		policyReason = fmt.Sprintf("cross_jurisdiction_%s_%s", srcJurisdiction, dstJurisdiction)
 	}
 
 	edge := &models.DependencyEdge{
@@ -829,4 +842,35 @@ func (b *EdgeBatchBuffer) Flush(ctx context.Context, e *ScoutEngine) error {
 	b.edges = nil
 	b.metadata = nil
 	return err
+}
+
+// detectLikelyInvertedOwnershipEdge returns true when Reason or qualifiers suggest the edge direction
+// is inverted (e.g. "owned by" implies target->source but we have source->target).
+func detectLikelyInvertedOwnershipEdge(edgeType models.DependencyType, rel agents.DiscoveredRelation) bool {
+	switch edgeType {
+	case models.DependencyTypeOwns, models.DependencyTypeInvestsIn,
+		models.DependencyTypeControls, models.DependencyTypeAssures:
+		// check
+	default:
+		return false
+	}
+	reason := strings.ToLower(strings.TrimSpace(rel.Reason))
+	invertedPhrases := []string{"owned by", "invested in by", "controlled by", "subsidiary of", "audited by"}
+	for _, phrase := range invertedPhrases {
+		if strings.Contains(reason, phrase) {
+			return true
+		}
+	}
+	if q := rel.Qualifiers; q != nil {
+		sr, _ := q["source_role"].(string)
+		tr, _ := q["target_role"].(string)
+		sr = strings.ToLower(strings.TrimSpace(sr))
+		tr = strings.ToLower(strings.TrimSpace(tr))
+		invertedSourceRoles := map[string]bool{"owned_entity": true, "investee": true, "controlled_entity": true}
+		invertedTargetRoles := map[string]bool{"owner": true, "investor": true, "controller": true}
+		if invertedSourceRoles[sr] || invertedTargetRoles[tr] {
+			return true
+		}
+	}
+	return false
 }

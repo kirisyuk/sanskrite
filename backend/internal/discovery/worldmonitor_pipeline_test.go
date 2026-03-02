@@ -133,3 +133,33 @@ func TestTrackCanonicalPath(t *testing.T) {
 		t.Fatalf("expected slugged display name in canonical path, got %q", got)
 	}
 }
+
+func TestTrackCanonicalPathIdInPath(t *testing.T) {
+	e := &horizonMonitorFeedEvent{CountryCode: "ID", SourceID: "src-ais", ExternalID: "evt-1"}
+	tr := horizonTrackObservation{
+		Kind:            horizonmodels.TrackKindSea,
+		ObjectType:      "vessel",
+		IdScheme:        "mmsi",
+		ExternalTrackID: "525123456",
+		DisplayName:     "MV Test",
+	}
+	got := trackCanonicalPath(e, tr)
+	want := "/track/sea/id/mmsi-525123456"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+
+	e2 := &horizonMonitorFeedEvent{CountryCode: "US", SourceID: "src-opensky", ExternalID: "evt-2"}
+	tr2 := horizonTrackObservation{
+		Kind:            horizonmodels.TrackKindAir,
+		ObjectType:      "military_aircraft",
+		IdScheme:        "icao24",
+		ExternalTrackID: "a1b2c3",
+		DisplayName:     "RCH456",
+	}
+	got2 := trackCanonicalPath(e2, tr2)
+	want2 := "/track/air/us/icao24-a1b2c3"
+	if got2 != want2 {
+		t.Fatalf("got %q, want %q", got2, want2)
+	}
+}

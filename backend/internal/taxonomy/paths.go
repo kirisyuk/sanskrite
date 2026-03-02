@@ -179,6 +179,8 @@ var ValidCanonicalPathNamespace = map[string]bool{
 	"mechanism": true,
 	// Affected zones (conflict, disaster, tension) — /zone/{geo}/{condition_type}/{slug}
 	"zone": true,
+	// Tracked movable objects (vessels, aircraft) — /track/{kind}/{geo}/{id_scheme}-{id}
+	"track": true,
 }
 
 // ValidateCanonicalPath validates that a canonical path matches the expected format.
@@ -301,6 +303,10 @@ func ValidateCanonicalPath(path string) error {
 		if geo != "global" && !reCountryAlpha2.MatchString(geo) && !IsRegionalGeoToken(geo) && !isCompositeGeo(geo) {
 			return fmt.Errorf("community canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, or regional token): %s", parts[1], path)
 		}
+		communityType := strings.ToLower(strings.TrimSpace(parts[2]))
+		if communityType != "" && !IsValidCommunityType(communityType) {
+			return fmt.Errorf("community canonical path has unknown type %q: %s", communityType, path)
+		}
 	case "fac":
 		// Strict: /fac/{orgSlug}/{facilitySlug}
 		if len(parts) != 3 {
@@ -319,6 +325,10 @@ func ValidateCanonicalPath(path string) error {
 		geo := strings.ToLower(strings.TrimSpace(parts[1]))
 		if geo != "global" && geo != "int" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) && !IsRegionalGeoToken(geo) {
 			return fmt.Errorf("market canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, global, int, or regional token): %s", parts[1], path)
+		}
+		domain := strings.ToLower(strings.TrimSpace(parts[2]))
+		if domain != "" && !IsValidMarketDomain(domain) {
+			fmt.Printf("[ValidateCanonicalPath] WARNING: unknown market domain %q in %s\n", domain, path)
 		}
 	case "segment":
 		// /segment/{domain}/{vertical}/{geo}
@@ -376,6 +386,22 @@ func ValidateCanonicalPath(path string) error {
 		slug := strings.ToLower(strings.TrimSpace(parts[3]))
 		if slug == "" || slug == "na" {
 			return fmt.Errorf("zone canonical path slug must be a descriptive place name (e.g. northern-rakhine, gaza-strip), never 'na': %s", path)
+		}
+	case "track":
+		// /track/{kind}/{geo}/{id_scheme}-{id} or /track/{kind}/{geo}/{slug}-{hash}
+		// kind: air, sea, ground
+		// geo: ISO3166-1 alpha2 or global
+		// last segment: mmsi-{9digits}, icao24-{6hex}, imo-{7digits}, flight-{slug}, or {slug}-{hash}
+		if len(parts) != 4 {
+			return fmt.Errorf("track canonical path must have exactly 4 segments: /track/{kind}/{geo}/{id_scheme}-{id}: %s", path)
+		}
+		kind := strings.ToLower(strings.TrimSpace(parts[1]))
+		if kind != "air" && kind != "sea" && kind != "ground" {
+			return fmt.Errorf("track canonical path has invalid kind %q (expected air, sea, or ground): %s", parts[1], path)
+		}
+		geo := strings.ToLower(strings.TrimSpace(parts[2]))
+		if geo != "global" && !reCountryAlpha2.MatchString(geo) && !IsRegionalGeoToken(geo) {
+			return fmt.Errorf("track canonical path has invalid geo %q (expected ISO3166-1 alpha2 or global): %s", parts[2], path)
 		}
 	}
 

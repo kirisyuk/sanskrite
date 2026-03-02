@@ -55,6 +55,7 @@ func main() {
 			"/industry/",
 			"/media/",
 			"/deposit/", // Natural resource deposits
+			"/track/",   // Tracked movable objects (vessels, aircraft)
 		},
 		// Generated from taxonomy.SphereL1Allowlist + SphereL2Map (single source of truth).
 		AllowedSpherePaths: taxonomy.AllSpherePaths(),

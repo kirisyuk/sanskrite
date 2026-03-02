@@ -91,6 +91,46 @@ func TestPostProcessingPolicy_CascadeBlockedByDomainPeer(t *testing.T) {
 	}
 }
 
+func TestPostProcessingPolicy_RelationChildOptInOverridesDomainPeer(t *testing.T) {
+	p := &PostProcessingPolicy{
+		PipelineTier:                 0,
+		RecursionDepth:               0,
+		MaxRecursionDepth:            2,
+		HasDomainExpansionPeer:       true,
+		RelationChildSchedulingOptIn: true,
+	}
+	if !p.ShouldRun(StepRelationChildScheduling) {
+		t.Error("scout-it with relationChildSchedulingOptIn should allow relation children despite domain peer")
+	}
+}
+
+func TestPostProcessingPolicy_MarketTargetAllowsRelationChildrenInDomainExpansion(t *testing.T) {
+	p := &PostProcessingPolicy{
+		PipelineTier:           0,
+		RecursionDepth:        0,
+		MaxRecursionDepth:     2,
+		HasDomainExpansionPeer: true,
+		TargetIsMarket:        true,
+	}
+	if !p.ShouldRun(StepRelationChildScheduling) {
+		t.Error("market target in domain expansion should allow relation children (participants, sub-markets)")
+	}
+}
+
+func TestPostProcessingPolicy_MarketAtMaxDepthGetsOneExtraHop(t *testing.T) {
+	// recursionDepth=1, maxRecursionDepth=1: normally blocked, but market target gets one extra hop.
+	p := &PostProcessingPolicy{
+		PipelineTier:           0,
+		RecursionDepth:        1,
+		MaxRecursionDepth:     1,
+		HasDomainExpansionPeer: true,
+		TargetIsMarket:        true,
+	}
+	if !p.ShouldRun(StepRelationChildScheduling) {
+		t.Error("market at max depth in domain expansion should get one extra hop for participants/sub-markets")
+	}
+}
+
 func TestPostProcessingPolicy_CascadeAllowedForDomainExpansionJob(t *testing.T) {
 	p := &PostProcessingPolicy{
 		PipelineTier:           0,

@@ -92,9 +92,10 @@ type stats struct {
 	FromGeonames   int64
 	FromGeocoding  int64
 	FromWikidata   int64
-	FromParent     int64
-	FromFacility   int64
-	WikidataQIDNew int64
+	FromParent      int64
+	FromFacility    int64
+	FromLastSegment int64
+	WikidataQIDNew  int64
 	SkippedHas     int64
 	SkippedNoAddr  int64
 	Errors         int64
@@ -156,7 +157,11 @@ func main() {
 	}
 
 	// Geocoding client (for org/facility/community/program) with API call counter for cache hit rate
-	// Primary: Nominatim (free, OSM). Fallback: Google Geocoding (paid).
+	// Primary: Nominatim (free, OSM). Fallback: Google Geocoding (paid). Load Google key from env or Secret Manager.
+	proj := strings.TrimSpace(*projectID)
+	if key := gcp.GetEnvOrSecret(ctx, proj, "GOOGLE_MAPS_API_KEY", "google_maps_api_key"); key != "" && os.Getenv("GOOGLE_MAPS_API_KEY") == "" {
+		os.Setenv("GOOGLE_MAPS_API_KEY", key)
+	}
 	var geocodingClient coreontology.GeocodingClientInterface
 	var geocodingCounter *countingGeocoding
 	if !*skipGeocoding {
@@ -393,6 +398,26 @@ func main() {
 				}
 			}
 
+			// Last-segment fallback: use the path slug as a place name (e.g. north-sinai-insurgency-zone → North Sinai).
+			if !hmodels.HasRealGeoCoordinates(frag.Coordinates) && geocodingClient != nil {
+				candidates := henrich.BuildLastSegmentAddressCandidates(&frag)
+				if len(candidates) > 0 {
+					applied, attempted, err := geocodeWithCandidates(ctx, geocodingClient, &frag, candidates, &st)
+					if err != nil {
+						atomic.AddInt64(&st.Errors, 1)
+						log.Printf("Last-segment geocoding %s: %v", frag.ID, err)
+						continue
+					}
+					if attempted {
+						attemptedAddressGeocoding = true
+					}
+					if applied {
+						changed = true
+						atomic.AddInt64(&st.FromLastSegment, 1)
+					}
+				}
+			}
+
 			if !hmodels.HasRealGeoCoordinates(frag.Coordinates) && attemptedAddressGeocoding {
 				atomic.AddInt64(&st.SkippedNoAddr, 1)
 			}
@@ -426,10 +451,10 @@ func main() {
 					pct := 100.0 * float64(hits) / float64(gcCalls)
 					gcHitRate = fmt.Sprintf(" geoCacheHit=%.1f%%", pct)
 				}
-				log.Printf("Progress: scanned=%d processed=%d fromGeonames=%d fromWikidata=%d fromGeocoding=%d fromParent=%d fromFacility=%d wikidataQID=%d skippedHas=%d skippedNoAddr=%d applied=%d errors=%d geoAPI=%d gnAPI=%d%s last=%s",
+				log.Printf("Progress: scanned=%d processed=%d fromGeonames=%d fromWikidata=%d fromGeocoding=%d fromParent=%d fromFacility=%d fromLastSegment=%d wikidataQID=%d skippedHas=%d skippedNoAddr=%d applied=%d errors=%d geoAPI=%d gnAPI=%d%s last=%s",
 					atomic.LoadInt64(&st.Scanned), atomic.LoadInt64(&st.Processed),
 					atomic.LoadInt64(&st.FromGeonames), atomic.LoadInt64(&st.FromWikidata), atomic.LoadInt64(&st.FromGeocoding),
-					atomic.LoadInt64(&st.FromParent), atomic.LoadInt64(&st.FromFacility), atomic.LoadInt64(&st.WikidataQIDNew),
+					atomic.LoadInt64(&st.FromParent), atomic.LoadInt64(&st.FromFacility), atomic.LoadInt64(&st.FromLastSegment), atomic.LoadInt64(&st.WikidataQIDNew),
 					atomic.LoadInt64(&st.SkippedHas), atomic.LoadInt64(&st.SkippedNoAddr),
 					atomic.LoadInt64(&st.Applied), atomic.LoadInt64(&st.Errors), gcAPI, gnAPI, gcHitRate, lastSeen)
 			}
@@ -464,10 +489,10 @@ func main() {
 		gnHitRate = fmt.Sprintf("%.1f%%", pct)
 	}
 
-	log.Printf("Done. scanned=%d processed=%d fromGeonames=%d fromWikidata=%d fromGeocoding=%d fromParent=%d fromFacility=%d wikidataQID=%d skippedHas=%d skippedNoAddr=%d applied=%d errors=%d",
+	log.Printf("Done. scanned=%d processed=%d fromGeonames=%d fromWikidata=%d fromGeocoding=%d fromParent=%d fromFacility=%d fromLastSegment=%d wikidataQID=%d skippedHas=%d skippedNoAddr=%d applied=%d errors=%d",
 		atomic.LoadInt64(&st.Scanned), atomic.LoadInt64(&st.Processed),
 		atomic.LoadInt64(&st.FromGeonames), atomic.LoadInt64(&st.FromWikidata), atomic.LoadInt64(&st.FromGeocoding),
-		atomic.LoadInt64(&st.FromParent), atomic.LoadInt64(&st.FromFacility), atomic.LoadInt64(&st.WikidataQIDNew),
+		atomic.LoadInt64(&st.FromParent), atomic.LoadInt64(&st.FromFacility), atomic.LoadInt64(&st.FromLastSegment), atomic.LoadInt64(&st.WikidataQIDNew),
 		atomic.LoadInt64(&st.SkippedHas), atomic.LoadInt64(&st.SkippedNoAddr),
 		atomic.LoadInt64(&st.Applied), atomic.LoadInt64(&st.Errors))
 	log.Printf("Cache: geocoding calls=%d API=%d hitRate=%s | geonames calls=%d API=%d hitRate=%s",

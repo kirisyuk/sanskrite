@@ -4884,6 +4884,9 @@ func (e *ScoutEngine) processRelationsInternal(
 						if v, ok := job.State["decompositionHints"]; ok {
 							childState["decompositionHints"] = v
 						}
+						if v, ok := job.State["relationChildSchedulingOptIn"]; ok && parseStateBool(v, false) {
+							childState["relationChildSchedulingOptIn"] = true
+						}
 						copyDomainModeStateToChild(job.State, childState)
 					}
 					scoutingJob := &models.ScoutingJob{
@@ -5147,6 +5150,9 @@ func (e *ScoutEngine) processRelationsInternal(
 						}
 						if v, ok := job.State["spherePaths"]; ok {
 							childState["spherePaths"] = v
+						}
+						if v, ok := job.State["relationChildSchedulingOptIn"]; ok && parseStateBool(v, false) {
+							childState["relationChildSchedulingOptIn"] = true
 						}
 						copyDomainModeStateToChild(job.State, childState)
 					}
@@ -8753,6 +8759,9 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 		}
 		if v, ok := job.State["decompositionHints"]; ok {
 			childState["decompositionHints"] = v
+		}
+		if v, ok := job.State["relationChildSchedulingOptIn"]; ok && parseStateBool(v, false) {
+			childState["relationChildSchedulingOptIn"] = true
 		}
 		copyDomainModeStateToChild(job.State, childState)
 

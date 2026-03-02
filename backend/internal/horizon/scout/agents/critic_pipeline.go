@@ -43,13 +43,16 @@ func (p *CriticPipelineRunner) Validate(ctx context.Context, input CriticValidat
 		result = &ValidationResult{IsValid: true, Confidence: 1.0, MissingInfo: []string{}, Conflicts: []ValidationConflict{}}
 	}
 
-	// Strategic overlay: only for DECISION_POINT/MECHANISM entities. Skip for MARKET/GEO_REGION/ORG
-	// to avoid false "Rejected" when Critic expects strategic schema but Scout produced different type.
+	// Strategic overlay: only for DECISION_POINT/MECHANISM entities or entities with strategic relations.
+	// Skip for MARKET/GEO_REGION/ORG to avoid false "Rejected" when Critic expects strategic schema but Scout produced different type.
 	if hasStrategic && input.Fragment != nil && p.agent != nil {
 		ft := input.Fragment.Type
 		cp := strings.ToLower(strings.TrimSpace(input.Fragment.CanonicalPath))
 		isStrategicEntity := ft == models.FragmentTypeDecisionPoint || ft == models.FragmentTypeMechanism ||
 			strings.HasPrefix(cp, "/decision/") || strings.HasPrefix(cp, "/mechanism/")
+		if !isStrategicEntity {
+			isStrategicEntity = hasStrategicRelations(input.Relations)
+		}
 		if isStrategicEntity {
 			stratResult, err := p.agent.ValidateStrategicOverlay(ctx, input.Fragment, input.Relations, input.GraphContext)
 			if err == nil && stratResult != nil {
@@ -85,13 +88,63 @@ func mergeValidationResults(a, b *ValidationResult) *ValidationResult {
 		return a
 	}
 	a.HasConflicts = a.HasConflicts || b.HasConflicts
-	a.Conflicts = append(a.Conflicts, b.Conflicts...)
-	a.MissingInfo = append(a.MissingInfo, b.MissingInfo...)
+
+	// Dedup conflicts by Field — keep higher severity per field.
+	severityOrder := map[string]int{"info": 0, "warning": 1, "error": 2, "critical": 3}
+	conflictByField := make(map[string]ValidationConflict, len(a.Conflicts))
+	for _, c := range a.Conflicts {
+		conflictByField[c.Field] = c
+	}
+	for _, c := range b.Conflicts {
+		if existing, ok := conflictByField[c.Field]; ok {
+			if severityOrder[strings.ToLower(c.Severity)] > severityOrder[strings.ToLower(existing.Severity)] {
+				conflictByField[c.Field] = c
+			}
+		} else {
+			conflictByField[c.Field] = c
+		}
+	}
+	deduped := make([]ValidationConflict, 0, len(conflictByField))
+	for _, c := range conflictByField {
+		deduped = append(deduped, c)
+	}
+	a.Conflicts = deduped
+
+	// Dedup MissingInfo by lowercased trimmed string.
+	seenMissing := make(map[string]struct{}, len(a.MissingInfo))
+	merged := make([]string, 0, len(a.MissingInfo)+len(b.MissingInfo))
+	for _, m := range a.MissingInfo {
+		k := strings.ToLower(strings.TrimSpace(m))
+		if _, ok := seenMissing[k]; !ok {
+			seenMissing[k] = struct{}{}
+			merged = append(merged, m)
+		}
+	}
+	for _, m := range b.MissingInfo {
+		k := strings.ToLower(strings.TrimSpace(m))
+		if _, ok := seenMissing[k]; !ok {
+			seenMissing[k] = struct{}{}
+			merged = append(merged, m)
+		}
+	}
+	a.MissingInfo = merged
+
 	if b.Confidence < a.Confidence {
 		a.Confidence = b.Confidence
 	}
 	a.IsValid = a.IsValid && b.IsValid
 	return a
+}
+
+// hasStrategicRelations returns true if any relation type maps to SemanticGroupStrategic.
+func hasStrategicRelations(relations []DiscoveredRelation) bool {
+	for _, r := range relations {
+		dt := models.DependencyType(strings.ToUpper(strings.TrimSpace(r.RelationType)))
+		if models.SemanticGroupForEdgeType(dt) == models.SemanticGroupStrategic {
+			return true
+		}
+	}
+	return false
 }
 
 // filterOutMode returns a copy of modes with the specified mode removed.

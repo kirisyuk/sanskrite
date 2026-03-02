@@ -56,6 +56,7 @@ func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrat
 		}
 	}
 
+	allRelations = deduplicateRelations(allRelations)
 	rawContent := strings.Join(rawContentParts, "\n\n---\n\n")
 	return workingFragment, allRelations, allChains, mergedGrounding, rawContent, nil
 }
@@ -103,4 +104,29 @@ func (p *ResearchPipelineRunner) strategiesForModes(modes []string) []ResearchSt
 		return []ResearchStrategy{&GeneralResearchStrategy{agent: p.agent}}
 	}
 	return list
+}
+
+func deduplicateRelations(rels []DiscoveredRelation) []DiscoveredRelation {
+	if len(rels) <= 1 {
+		return rels
+	}
+	type relKey struct{ rt, tcp, scp string }
+	seen := make(map[relKey]int, len(rels))
+	out := make([]DiscoveredRelation, 0, len(rels))
+	for _, r := range rels {
+		k := relKey{
+			rt:  strings.TrimSpace(strings.ToUpper(r.RelationType)),
+			tcp: strings.TrimSpace(r.TargetCanonicalPath),
+			scp: strings.TrimSpace(r.SourceCanonicalPath),
+		}
+		if idx, ok := seen[k]; ok {
+			if r.Confidence > out[idx].Confidence {
+				out[idx] = r
+			}
+			continue
+		}
+		seen[k] = len(out)
+		out = append(out, r)
+	}
+	return out
 }

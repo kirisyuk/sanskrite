@@ -34,8 +34,8 @@ var ErrFragmentNotFound = errors.New("horizon fragment not found")
 
 // bestEffortAssembleCanonicalPathFromParts rebuilds fragment.CanonicalPath from CanonicalParts, if present.
 // It is intentionally fail-open:
-// - If parts are incomplete (or cannot assemble), it keeps the existing canonicalPath and logs a warning.
-// - This allows gradual adoption: callers may start writing canonicalParts, while older code still writes canonicalPath.
+// - If parts are incomplete (or cannot assemble), it tries to re-parse from canonicalPath and self-heal.
+// - This fixes zone/domain/supply-link fragments where RawPathParts was lost after Firestore deserialization.
 func bestEffortAssembleCanonicalPathFromParts(fragment *models.HorizonFragment) {
 	if fragment == nil || fragment.CanonicalParts == nil {
 		return
@@ -43,12 +43,24 @@ func bestEffortAssembleCanonicalPathFromParts(fragment *models.HorizonFragment) 
 	parts := fragment.CanonicalParts
 	built, ok := parts.BuildCanonicalPath()
 	if !ok || strings.TrimSpace(built) == "" {
-		log.Printf("[HorizonFragments] WARNING: canonicalParts present but incomplete; keeping canonicalPath=%q fragmentId=%q namespace=%q",
-			strings.TrimSpace(fragment.CanonicalPath), strings.TrimSpace(fragment.ID), strings.TrimSpace(parts.Namespace))
-		return
+		// Self-heal: re-parse from canonicalPath and replace broken CanonicalParts.
+		cp := strings.TrimSpace(fragment.CanonicalPath)
+		if cp != "" {
+			if fresh, err := taxonomy.ParseCanonicalPathParts(cp); err == nil && fresh != nil {
+				if rebuilt, ok2 := fresh.BuildCanonicalPath(); ok2 && strings.TrimSpace(rebuilt) != "" {
+					fragment.CanonicalParts = fresh
+					built = rebuilt
+					ok = true
+				}
+			}
+		}
+		if !ok {
+			fragment.CanonicalParts = nil // Clear broken parts so next cycle will backfill from path
+			return
+		}
 	}
 	// Only update when changed to avoid noisy updates/exports.
-	if strings.TrimSpace(fragment.CanonicalPath) != strings.TrimSpace(built) {
+	if ok && strings.TrimSpace(fragment.CanonicalPath) != strings.TrimSpace(built) {
 		fragment.CanonicalPath = strings.TrimSpace(built)
 	}
 }

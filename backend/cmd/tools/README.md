@@ -651,6 +651,47 @@ go run ./cmd/tools/horizon_propagation_calibration \
 
 ---
 
+### `horizon_qa_e2e`
+
+**Назначение:** E2E-тест полного Lens Q&A пайплайна на реальном графе. Вопрос → decompose → simulate → leaf evidence → synthesize. Для поиска плавающей логики и отладки ядра.
+
+**Как работает:**
+1. Загружает lens + fragments из Firestore
+2. Decompose (LLM) — структурирует вопрос
+3. Simulate (propagation, in-memory) — прогоняет сигналы
+4. Leaf evidence — собирает ontology facts, fragment state на концах
+5. Synthesize (LLM) — генерирует ответ
+
+**Использование (реальный граф):**
+```bash
+go run ./cmd/tools/horizon_qa_e2e \
+  --project=PROJECT \
+  --lens=LENS_ID \
+  --question="How would a 5% VAT increase in Indonesia affect battery costs?"
+```
+
+**Демо (локально, без Firestore):**
+```bash
+# Ключи из Secret Manager (gcloud auth application-default login)
+go run ./cmd/tools/horizon_qa_e2e -demo -project=sanskrite
+# или с другим вопросом:
+go run ./cmd/tools/horizon_qa_e2e -demo -project=sanskrite -question="What are the main supply chain risks for nickel?"
+```
+
+Демо использует stub-данные цепочки Indonesia nickel → EV battery. Ключи: Secret Manager (gemini_api_key) или Vertex AI при `-project`. Полный пайплайн: Decompose → Interpret (humanization at finish) → Synthesize → Business relevance.
+
+**Флаги:**
+- `--project` (required) - GCP project ID (не нужен при -demo)
+- `--lens` (required) - Lens ID (не нужен при -demo)
+- `--question` - вопрос (default: VAT Indonesia battery)
+- `--demo` - режим без Firestore, stub EV battery supply chain
+- `--grounding` - зарезервировано (будущий fallback: news → 12-axis)
+- `--verbose` - вывести context prompt и node interpretations
+
+**Требования:** для демо — `-project=PROJECT` + ADC (gcloud auth application-default login), ключи из Secret Manager; для реального графа — Firestore + то же
+
+---
+
 ### `horizon_edge_policy_report`
 
 **Назначение:** Строит comparison-report для KPI Big Bang Edge Policy (`baseline` vs `after`) и печатает `top invalid triples`.

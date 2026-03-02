@@ -4,22 +4,31 @@
  */
 
 import React from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { ModalWithHeader } from './ModalWithHeader';
 import { ThemeContext } from './ThemeProvider';
 import { api } from '../lib/api';
 import { LensCanvasDetails } from './LensCanvasDetails';
 import { LensCanvasCockpit } from './LensCanvasCockpit';
 import { LensCanvasProgress } from './LensCanvasProgress';
+import { WorldMapPanel } from './WorldMapPanel';
+import { QAPanel } from './QAPanel';
 import { HorizonRealtimeCallouts } from './HorizonRealtimeCallouts';
 import { HorizonDrawers, HorizonPanelType } from './HorizonDrawers';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 import type { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
 
+/** Lens view modes: Graph | Map | Analysis (plan §1). Graph persists when switching. */
+export type LensViewMode = 'graph' | 'map' | 'analysis';
+
 export interface LensCanvasProps {
   isOpen: boolean;
   lensId: string | null;
   projectId?: string | null;
+  /** @deprecated Use lensView for graph/map/analysis. Kept for backward compat with initialViewMode. */
   initialViewMode?: 'details' | 'cockpit' | 'progress';
+  /** Initial lens view (Graph | Map | Analysis). Synced with URL ?view= */
+  initialLensView?: LensViewMode;
   showInputInProgress?: boolean;
   onAssemble?: (request: AssembleLensRequest) => void;
   isCreatingLens?: boolean;
@@ -61,6 +70,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   lensId,
   projectId,
   initialViewMode = 'details',
+  initialLensView,
   showInputInProgress = false,
   onAssemble,
   isCreatingLens = false,
@@ -78,7 +88,40 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [loadingJobs, setLoadingJobs] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [viewMode, setViewMode] = React.useState<'details' | 'cockpit' | 'progress'>(initialViewMode);
-  
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Lens view: Graph | Map | Analysis. Synced with URL ?view=graph|map|analysis
+  const lensViewFromUrl = searchParams.get('view') as LensViewMode | null;
+  const validLensView = (v: string | null): v is LensViewMode =>
+    v === 'graph' || v === 'map' || v === 'analysis';
+  const [lensView, setLensViewState] = React.useState<LensViewMode>(() => {
+    if (validLensView(lensViewFromUrl)) return lensViewFromUrl;
+    if (initialLensView && validLensView(initialLensView)) return initialLensView;
+    return 'graph';
+  });
+
+  const setLensView = React.useCallback(
+    (next: LensViewMode) => {
+      setLensViewState(next);
+      setSearchParams(
+        (prev) => {
+          const p = new URLSearchParams(prev);
+          p.set('view', next);
+          return p;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
+
+  // Sync lensView from URL (e.g. deep link)
+  React.useEffect(() => {
+    if (validLensView(lensViewFromUrl) && lensViewFromUrl !== lensView) {
+      setLensViewState(lensViewFromUrl);
+    }
+  }, [lensViewFromUrl]);
+
   // Drawer state for cockpit mode
   const [panelType, setPanelType] = React.useState<HorizonPanelType>(null);
   const [drawerWidth, setDrawerWidth] = React.useState(400);
@@ -86,7 +129,8 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [selectedNodeData, setSelectedNodeData] = React.useState<HorizonNodeData | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
   const [selectedEdgeData, setSelectedEdgeData] = React.useState<any | null>(null);
-  
+  const [qaHighlightNodeIds, setQaHighlightNodeIds] = React.useState<string[]>([]);
+
   // Toolbar container for Cockpit
   // NOTE: Cockpit toolbar is rendered as an overlay inside the graph canvas.
   
@@ -111,6 +155,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     setSelectedNodeData(null);
     setSelectedEdgeId(null);
     setSelectedEdgeData(null);
+    setQaHighlightNodeIds([]);
 
     if (!lensId) {
       setViewMode('progress');
@@ -309,6 +354,77 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         >
           {(lensId || lens) && (
             <>
+              {/* Graph | Map | Analysis — plan §1. Graph persists when switching. */}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={lensView === 'graph'}
+                aria-controls="lens-graph-panel"
+                onClick={() => { setLensView('graph'); setViewMode('cockpit'); }}
+                title="Graph"
+                style={{
+                  border: 'none',
+                  background: lensView === 'graph' ? 'var(--white-10)' : 'transparent',
+                  color: 'var(--text-heading)',
+                  borderRadius: 10,
+                  padding: '6px 10px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Graph
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={lensView === 'map'}
+                aria-controls="lens-map-panel"
+                onClick={() => { setLensView('map'); setViewMode('cockpit'); }}
+                title="Map"
+                style={{
+                  border: 'none',
+                  background: lensView === 'map' ? 'var(--white-10)' : 'transparent',
+                  color: 'var(--text-heading)',
+                  borderRadius: 10,
+                  padding: '6px 10px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Map
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={lensView === 'analysis'}
+                aria-controls="lens-analysis-panel"
+                onClick={() => { setLensView('analysis'); setViewMode('cockpit'); }}
+                title="Analysis"
+                style={{
+                  border: 'none',
+                  background: lensView === 'analysis' ? 'var(--white-10)' : 'transparent',
+                  color: 'var(--text-heading)',
+                  borderRadius: 10,
+                  padding: '6px 10px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Analysis
+              </button>
+              <div style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 4px' }} />
               <button
                 type="button"
                 role="tab"
@@ -332,32 +448,6 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                   <circle cx="12" cy="12" r="10" />
                   <path d="M12 16v-4" />
                   <path d="M12 8h.01" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewMode === 'cockpit'}
-                aria-controls="lens-cockpit-panel"
-                onClick={() => setViewMode('cockpit')}
-                title="Cockpit"
-                style={{
-                  border: 'none',
-                  background: viewMode === 'cockpit' ? 'var(--white-10)' : 'transparent',
-                  color: 'var(--text-heading)',
-                  borderRadius: 10,
-                  padding: '6px 8px',
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
-                  <rect x="3" y="3" width="7" height="7" rx="1.2" />
-                  <rect x="14" y="3" width="7" height="7" rx="1.2" />
-                  <rect x="3" y="14" width="7" height="7" rx="1.2" />
-                  <rect x="14" y="14" width="7" height="7" rx="1.2" />
                 </svg>
               </button>
             </>
@@ -484,20 +574,41 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               />
             )}
             {viewMode === 'cockpit' && lens && (
-              <div style={{ 
-                flex: 1, 
-                minHeight: 0, 
-                display: 'flex', 
-                flexDirection: 'row',
-                gap: 0,
-                width: '100%', 
-                height: '100%' 
-              }}>
-                {/* Graph area - flexible width */}
-                <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
-                  <LensCanvasCockpit 
-                    lensId={lensId} 
+              <>
+                {/* Map — render only when active to avoid loading map until needed */}
+                {lensView === 'map' && (
+                  <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                    <WorldMapPanel />
+                  </div>
+                )}
+                {/* Analysis — Q&A (plan §10) */}
+                {lensView === 'analysis' && (
+                  <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                    <QAPanel
+                      lensId={lensId!}
+                      projectId={lens?.projectId ?? projectId ?? undefined}
+                      onHighlightNodes={setQaHighlightNodeIds}
+                      onHighlightTracePaths={(_paths) => {
+                        /* Trace paths: could pan/zoom to path; keep for future */
+                      }}
+                    />
+                  </div>
+                )}
+                {/* Graph — persists when switching (plan §1). Hidden but mounted when Map/Analysis active. */}
+                <div style={{ 
+                  flex: 1, 
+                  minHeight: 0, 
+                  display: lensView === 'graph' ? 'flex' : 'none',
+                  flexDirection: 'row',
+                  gap: 0,
+                  width: '100%', 
+                  height: '100%' 
+                }}>
+                  <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
+                    <LensCanvasCockpit
+                    lensId={lensId}
                     projectId={lens.projectId ?? projectId}
+                    qaHighlightNodeIds={qaHighlightNodeIds.length > 0 ? qaHighlightNodeIds : undefined}
                     onScopeScout={handleScopeScout}
                     inspectorActive={panelType === 'object-inspector'}
                     onToggleInspector={() => setPanelType(panelType === 'object-inspector' ? null : 'object-inspector')}
@@ -539,6 +650,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                   selectedEdgeData={selectedEdgeData}
                 />
               </div>
+            </>
             )}
             {viewMode !== 'progress' && !lens && (
               <div

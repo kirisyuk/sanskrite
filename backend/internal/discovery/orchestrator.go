@@ -15,6 +15,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
+	"github.com/igorkirisyuk/sanskrite/internal/discovery/adapters"
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/prompts"
@@ -793,8 +794,12 @@ func (o *Orchestrator) IngestHorizonMonitorFeed(ctx context.Context, tenantID, s
 		return fmt.Errorf("horizon_monitor_feed source %s has empty URI", sourceID)
 	}
 
+	feedType := ""
+	if sourceDS != nil && sourceDS.Details.HorizonMonitorFeedType != nil {
+		feedType = strings.TrimSpace(*sourceDS.Details.HorizonMonitorFeedType)
+	}
 	startTime := time.Now().UTC()
-	docs, fetchErr := o.fetchHorizonMonitorDocuments(ctx, feedURL)
+	docs, fetchErr := o.fetchHorizonMonitorDocuments(ctx, feedURL, feedType)
 	if fetchErr != nil {
 		// Even on error, keep polling state moving to avoid source starvation.
 		if o.sources != nil {
@@ -926,10 +931,10 @@ func (o *Orchestrator) IngestHorizonMonitorFeed(ctx context.Context, tenantID, s
 // FetchHorizonMonitorDocuments fetches and parses a Horizon Monitor feed URL into normalized documents.
 // Used by CanvasIngester for system canvas.
 func (o *Orchestrator) FetchHorizonMonitorDocuments(ctx context.Context, feedURL string) ([]prov.NormalizedDocument, error) {
-	return o.fetchHorizonMonitorDocuments(ctx, feedURL)
+	return o.fetchHorizonMonitorDocuments(ctx, feedURL, "")
 }
 
-func (o *Orchestrator) fetchHorizonMonitorDocuments(ctx context.Context, feedURL string) ([]prov.NormalizedDocument, error) {
+func (o *Orchestrator) fetchHorizonMonitorDocuments(ctx context.Context, feedURL, feedType string) ([]prov.NormalizedDocument, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
 	if err != nil {
 		return nil, err
@@ -947,17 +952,27 @@ func (o *Orchestrator) fetchHorizonMonitorDocuments(ctx context.Context, feedURL
 	if err != nil {
 		return nil, err
 	}
-	return parseHorizonMonitorDocuments(feedURL, body, strings.ToLower(resp.Header.Get("Content-Type")))
+	return parseHorizonMonitorDocuments(feedURL, body, strings.ToLower(resp.Header.Get("Content-Type")), feedType)
 }
 
-func parseHorizonMonitorDocuments(feedURL string, body []byte, contentType string) ([]prov.NormalizedDocument, error) {
+func parseHorizonMonitorDocuments(feedURL string, body []byte, contentType, feedType string) ([]prov.NormalizedDocument, error) {
 	raw := strings.TrimSpace(string(body))
 	if raw == "" {
 		return nil, nil
 	}
 	if strings.Contains(contentType, "json") || strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[") {
 		var payload any
-		if err := json.Unmarshal(body, &payload); err == nil {
+		if feedType != "" {
+			if normalized, err := adapters.Normalize(feedType, body); err == nil && normalized != nil {
+				payload = normalized
+			}
+		}
+		if payload == nil {
+			if err := json.Unmarshal(body, &payload); err != nil {
+				payload = nil
+			}
+		}
+		if payload != nil {
 			if docs := parseHorizonMonitorJSONPayload(feedURL, payload); len(docs) > 0 {
 				return docs, nil
 			}
@@ -988,11 +1003,15 @@ func parseHorizonMonitorJSONPayload(feedURL string, payload any) []prov.Normaliz
 	case []any:
 		return horizonMonitorDocsFromItems(feedURL, v, "items")
 	case map[string]any:
-		keys := []string{"items", "events", "signals", "news", "data", "results"}
+		// Plan §8.3: features (USGS), Result (UCDP), regions (FIRMS), states (OpenSky)
+		keys := []string{"items", "events", "signals", "news", "data", "results", "features", "regions"}
 		for _, key := range keys {
 			if arrAny, ok := v[key].([]any); ok && len(arrAny) > 0 {
 				return horizonMonitorDocsFromItems(feedURL, arrAny, key)
 			}
+		}
+		if res, ok := v["Result"].([]any); ok && len(res) > 0 {
+			return horizonMonitorDocsFromItems(feedURL, res, "Result")
 		}
 		pretty, _ := json.MarshalIndent(v, "", "  ")
 		ext := "hm-" + hashShort(feedURL+"|"+string(pretty))

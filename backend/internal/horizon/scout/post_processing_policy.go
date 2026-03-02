@@ -38,19 +38,21 @@ const (
 // PostProcessingPolicy is the unified decision point that gates every post-processing
 // step for both entity-scouting and domain-expansion job paths.
 type PostProcessingPolicy struct {
-	PipelineTier           int
-	RecursionDepth         int
-	MaxRecursionDepth      int
-	PlanModeResearchDone   bool
-	HasDomainExpansionPeer bool
-	IsDomainExpansionJob   bool
-	CascadeBudgetScale     float64
-	DomainModes            []string
-	OriginalQuery          string
-	EpistemicStatus        models.EpistemicStatus
-	CriticGapCount         int
-	CriticalOpenCount      int
-	EvidenceCoverage       float64
+	PipelineTier                  int
+	RecursionDepth                int
+	MaxRecursionDepth             int
+	PlanModeResearchDone          bool
+	HasDomainExpansionPeer        bool
+	IsDomainExpansionJob          bool
+	CascadeBudgetScale            float64
+	DomainModes                   []string
+	OriginalQuery                 string
+	EpistemicStatus               models.EpistemicStatus
+	CriticGapCount                int
+	CriticalOpenCount             int
+	EvidenceCoverage              float64
+	RelationChildSchedulingOptIn  bool // Scout-it from modal: user explicitly requested hop depth
+	TargetIsMarket                 bool // Target path is /market/... — allow relation children in domain expansion
 }
 
 func stateCollectionLen(raw interface{}) int {
@@ -136,6 +138,11 @@ func NewPostProcessingPolicy(job *models.ScoutingJob) *PostProcessingPolicy {
 		isDomainExpansionJob = true
 	}
 	hasDomainExpansionPeer := deriveHasDomainExpansionPeer(job, isDomainExpansionJob)
+	relationChildSchedulingOptIn := false
+	if job.State != nil {
+		relationChildSchedulingOptIn = parseStateBool(job.State["relationChildSchedulingOptIn"], false)
+	}
+	targetIsMarket := strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/market/")
 
 	tier := 0
 	if recursionDepth == 1 {
@@ -146,16 +153,18 @@ func NewPostProcessingPolicy(job *models.ScoutingJob) *PostProcessingPolicy {
 	}
 
 	return &PostProcessingPolicy{
-		PipelineTier:           tier,
-		RecursionDepth:         recursionDepth,
-		MaxRecursionDepth:      maxRecursionDepth,
-		PlanModeResearchDone:   planModeResearchDone,
-		HasDomainExpansionPeer: hasDomainExpansionPeer,
-		IsDomainExpansionJob:   isDomainExpansionJob,
-		DomainModes:            domainModes,
-		OriginalQuery:          originalQuery,
-		CriticalOpenCount:      criticalOpenCount,
-		EvidenceCoverage:       evidenceCoverage,
+		PipelineTier:                 tier,
+		RecursionDepth:               recursionDepth,
+		MaxRecursionDepth:            maxRecursionDepth,
+		PlanModeResearchDone:         planModeResearchDone,
+		HasDomainExpansionPeer:       hasDomainExpansionPeer,
+		IsDomainExpansionJob:         isDomainExpansionJob,
+		DomainModes:                  domainModes,
+		OriginalQuery:                originalQuery,
+		CriticalOpenCount:            criticalOpenCount,
+		EvidenceCoverage:             evidenceCoverage,
+		RelationChildSchedulingOptIn: relationChildSchedulingOptIn,
+		TargetIsMarket:                 targetIsMarket,
 	}
 }
 
@@ -212,10 +221,23 @@ func (p *PostProcessingPolicy) ShouldRun(step PostProcessingStep) bool {
 		return !p.HasDomainExpansionPeer
 
 	case StepRelationChildScheduling:
-		if p.RecursionDepth >= p.MaxRecursionDepth {
+		// Depth limit: block when past max. At max: block unless market target in domain expansion (one extra hop).
+		if p.RecursionDepth > p.MaxRecursionDepth {
+			return false
+		}
+		if p.RecursionDepth >= p.MaxRecursionDepth && !(p.HasDomainExpansionPeer && p.TargetIsMarket) {
 			return false
 		}
 		if p.IsDomainExpansionJob {
+			return true
+		}
+		// Scout-it from modal: user explicitly requested hop depth — allow relation children.
+		if p.RelationChildSchedulingOptIn {
+			return true
+		}
+		// Market targets in domain expansion: allow relation children so we explore participants, sub-markets.
+		// Without this, markets find relations (Participates In, Has Market Segment) but never schedule child jobs.
+		if p.HasDomainExpansionPeer && p.TargetIsMarket {
 			return true
 		}
 		return !p.HasDomainExpansionPeer

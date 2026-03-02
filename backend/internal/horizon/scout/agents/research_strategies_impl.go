@@ -1314,6 +1314,7 @@ func (a *ResearchAgent) buildSupplyChainEnrichmentPrompt(input ResearchStrategyI
 		questions = "Identify upstream suppliers and downstream customers; products produced or consumed; facility locations; extractive links to deposits."
 	}
 	geoContext := geoAndSectorContext(frag)
+	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
 	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for SUPPLY CHAIN context. Build coherent chains.
 
@@ -1326,6 +1327,7 @@ ENTITY TYPES in supply chain: %s. Use correct targetType for each relation.
 CANONICAL PATH RULES (targetCanonicalPath MUST follow; supplyChains nodes too):
 %s
 
+%s
 %s
 %s
 %s
@@ -1372,7 +1374,7 @@ For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transp
 
 %s
 
-Return ONLY valid JSON. No markdown.`, relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain), GovEntityRelationRulesBlock(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
+Return ONLY valid JSON. No markdown.`, relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain), GovEntityRelationRulesBlock(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
 }
 
 // EnrichSupplyChainFull runs anchor-centric full supply chain query (Plan mode).
@@ -1449,6 +1451,7 @@ func (a *ResearchAgent) buildGovernanceEnrichmentPrompt(input ResearchStrategyIn
 		questions = "Identify owners, subsidiaries, board members, key executives; ownership percentages; government hierarchy (ADMINISTERS)."
 	}
 	geoContext := geoAndSectorContext(frag)
+	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
 	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for GOVERNANCE context. Aim for COMPLETE ownership and control structure:
 
@@ -1459,6 +1462,8 @@ CANONICAL PATH RULES (targetCanonicalPath MUST follow):
 
 %s
 %s
+%s
+
 %s
 
 Use ONLY these relation types (canonical): %s.
@@ -1478,7 +1483,7 @@ DIRECTION RULES (CRITICAL):
 - For directed ORG->ORG edges above, include qualifiers.source_role and qualifiers.target_role.
 
 WHAT TO FIND (prioritize completeness):
-1. Ownership chain: Trace to ultimate parent or beneficial owner. OWNS (parent→subsidiary): ORG/PERSON/COMMUNITY→ORG. SUBSIDIARY_OF (subsidiary→parent). Include intermediate holding companies. metrics.ownership_percent when known. COMMUNITY (dynasty, tribe) can OWNS ORGANIZATION.
+1. Ownership chain: Trace to ultimate parent or beneficial owner. OWNS (parent→subsidiary): ORG/PERSON/COMMUNITY→ORG. SUBSIDIARY_OF (subsidiary→parent). Include intermediate holding companies. metrics.ownership_percent when known. COMMUNITY (dynasty, tribe) can OWNS ORGANIZATION. UPSTREAM: when this entity is owned/controlled by X, emit OWNS/CONTROLS with explicit sourceCanonicalPath/sourceType/sourceName = X, target = CURRENT FRAGMENT.
 2. Control: CONTROLS (controller→controlled): ORG/PERSON/COMMUNITY→ORG/FACILITY. State control, voting rights, contractual control. Who controls at each level? Do NOT model external audit/certification oversight as CONTROLS; use ASSURES with assurance_type.
 3. Full board: BOARD_MEMBER_OF (PERSON→ORG). All board members for significant organizations.
 4. Management: MANAGES (manager→managed). CEO, director, operator — formal authority over org/subsidiary. Full C-suite: EMPLOYED_BY (PERSON→ORG) for employment. FOUNDED (PERSON→ORG) for founders.
@@ -1507,7 +1512,7 @@ Return a JSON object:
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildAssuranceEnrichmentPrompt builds a prompt for Third Line: audit, certification, regulatory oversight.
@@ -1522,6 +1527,7 @@ func (a *ResearchAgent) buildAssuranceEnrichmentPrompt(input ResearchStrategyInp
 		questions = "Identify external auditors, certifiers, regulators; audit firm, certifications, regulatory oversight."
 	}
 	geoContext := geoAndSectorContext(frag)
+	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
 	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for ASSURANCE context (Third Line: independent audit, certification, regulatory oversight). Aim for COMPLETE assurance picture:
 
@@ -1530,6 +1536,7 @@ ENTITY TYPES in assurance: %s. Assurers are audit firms, certifiers, regulators.
 CANONICAL PATH RULES (targetCanonicalPath MUST follow):
 %s
 
+%s
 %s
 %s
 %s
@@ -1563,7 +1570,7 @@ Return a JSON object:
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeAssurance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeAssurance), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeAssurance), taxonomy.ExtendedCanonicalPathRulesPrompt(), geoContext, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeAssurance), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildMarketEnrichmentPrompt builds a prompt for market participation, sizing, concentration, submarkets.
@@ -1577,6 +1584,7 @@ func (a *ResearchAgent) buildMarketEnrichmentPrompt(input ResearchStrategyInput)
 	if questions == "" {
 		questions = "Identify market participation, sub-markets, key players, market sizing (TAM, CAGR, HHI, CR4), geographic concentration."
 	}
+	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
 	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for MARKET context. Aim for COMPLETE market picture:
 
@@ -1585,6 +1593,7 @@ ENTITY TYPES in market: %s. PARTICIPATES_IN source can be any of these. Use corr
 CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
+%s
 %s
 %s
 
@@ -1629,7 +1638,7 @@ Return a JSON object:
 
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeMarket), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket), taxonomy.ExtendedCanonicalPathRulesPrompt(), existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeMarket), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildStrategicEnrichmentPrompt builds a prompt for strategic layer (decision points, mechanisms, gatekeepers).
@@ -1643,6 +1652,7 @@ func (a *ResearchAgent) buildStrategicEnrichmentPrompt(input ResearchStrategyInp
 	if questions == "" {
 		questions = "Identify decision points, mechanisms, gatekeepers, control/access relations, export controls, sanctions, licensing."
 	}
+	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
 	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for STRATEGIC context only.
 
@@ -1651,6 +1661,7 @@ ENTITY TYPES in strategic: %s. Gatekeepers can be org, gov, community, or person
 CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
+%s
 %s
 %s
 
@@ -1679,7 +1690,7 @@ Return a JSON object:
 For GATEKEEPS_DECISION and USES_MECHANISM: set sourceCanonicalPath, sourceType, sourceName when the SOURCE is not the current fragment (e.g. gatekeeper org, mechanism user).
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeStrategic), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic), taxonomy.ExtendedCanonicalPathRulesPrompt(), existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeStrategic), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // buildPolicyImpactEnrichmentPrompt builds a prompt for policy impact channels and exposure graph.
@@ -1693,6 +1704,7 @@ func (a *ResearchAgent) buildPolicyImpactEnrichmentPrompt(input ResearchStrategy
 	if questions == "" {
 		questions = "Identify policy parameters, affected segments, impact channels, and regulator/program links."
 	}
+	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
 	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for POLICY IMPACT context.
 
@@ -1701,6 +1713,7 @@ ENTITY TYPES in policy impact: %s. Use correct targetType for each relation.
 CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
+%s
 %s
 %s
 
@@ -1750,7 +1763,7 @@ Return a JSON object:
 For relations where SOURCE is not the current fragment, set sourceCanonicalPath, sourceType, sourceName.
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact), taxonomy.ExtendedCanonicalPathRulesPrompt(), existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 func (a *ResearchAgent) buildEcosystemEnrichmentPrompt(input ResearchStrategyInput) string {
@@ -1763,6 +1776,7 @@ func (a *ResearchAgent) buildEcosystemEnrichmentPrompt(input ResearchStrategyInp
 	if questions == "" {
 		questions = "Map all actors in this ecosystem, their roles, mutual relationships, power dynamics, and dependencies."
 	}
+	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
 	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for ECOSYSTEM/STAKEHOLDER MAPPING context.
 
@@ -1771,6 +1785,7 @@ ENTITY TYPES in ecosystem context: %s. Use correct targetType for each relation.
 CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
 
+%s
 %s
 %s
 
@@ -1809,7 +1824,7 @@ Return a JSON object:
 For relations where SOURCE is not the current fragment, set sourceCanonicalPath, sourceType, sourceName.
 %s
 
-Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeEcosystem), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
+Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeEcosystem), taxonomy.ExtendedCanonicalPathRulesPrompt(), existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem), string(fragmentJSON), questions, strategyMetricValueFormatBlock())
 }
 
 // EnrichRegulatoryImpactFull performs holistic regulatory impact research in a single LLM call.

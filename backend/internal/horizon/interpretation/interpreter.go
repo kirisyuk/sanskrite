@@ -320,10 +320,125 @@ func (i *Interpreter) buildTopEvents(ctx context.Context, fragment *horizonmodel
 	return events
 }
 
-// buildInterpretationPrompt builds the LLM prompt for interpretation.
-func (i *Interpreter) buildInterpretationPrompt(
-	_ *horizonmodels.HorizonFragment,
-	request *InterpretationRequest,
+// InterpretFromNodeImpact produces human-readable interpretation from QA simulation output.
+// Humanization only at the end: takes NodeImpact (12-axis amplitudes from propagation) and
+// leaf evidence, returns RiskInterpretation. No fragment.State — uses simulation data.
+func (i *Interpreter) InterpretFromNodeImpact(
+	ctx context.Context,
+	fragment *horizonmodels.HorizonFragment,
+	ni *horizonmodels.NodeImpact,
+	leafEvidenceForNode []horizonmodels.LeafSignalEvidence,
+	polarity string,
+) (*RiskInterpretation, error) {
+	if ni == nil || len(ni.AxisAmplitudes) == 0 {
+		return nil, fmt.Errorf("node impact is nil or has no axis amplitudes")
+	}
+	if polarity == "" {
+		polarity = "risk"
+	}
+
+	nodeLabel := ni.Name
+	if nodeLabel == "" && fragment != nil && fragment.Labels != nil {
+		if lbl, ok := fragment.Labels["en"]; ok && strings.TrimSpace(lbl) != "" {
+			nodeLabel = strings.TrimSpace(lbl)
+		}
+	}
+	if nodeLabel == "" {
+		nodeLabel = ni.CanonicalPath
+	}
+
+	// Build axisBreakdown from simulation output (12-axis amplitudes)
+	axisBreakdown := make([]AxisContribution, 0, len(ni.AxisAmplitudes))
+	metrics := make(map[string]float64)
+	for axis, amp := range ni.AxisAmplitudes {
+		axisBreakdown = append(axisBreakdown, AxisContribution{Axis: axis, Amplitude: amp})
+		metrics["/metric/"+polarity+"/"+axis] = amp
+	}
+	sort.Slice(axisBreakdown, func(a, b int) bool { return axisBreakdown[a].Amplitude > axisBreakdown[b].Amplitude })
+
+	// Build topEvents from leaf evidence (physical signals at this node)
+	topEvents := make([]EventProvenance, 0, len(leafEvidenceForNode))
+	for _, le := range leafEvidenceForNode {
+		topEvents = append(topEvents, EventProvenance{
+			SignalID:     le.SignalType,
+			EventSummary: le.Summary,
+			Amplitude:    le.Amplitude,
+		})
+	}
+
+	prompt := i.buildInterpretationPromptFromData(nodeLabel, ni.CanonicalPath, polarity, metrics, axisBreakdown, topEvents)
+
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContentGeneration,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       6,
+			MaxOutputSize:            4096,
+			MinContextWindow:         8000,
+		},
+		Verifier: ai.NewMapVerifier([]string{"summary", "impact", "mitigations"}, nil),
+	}
+
+	parsed, err := i.aiExecutor.ExecuteStructuredTask(ctx, task)
+	if err != nil {
+		return nil, fmt.Errorf("LLM interpretation failed: %w", err)
+	}
+
+	resultMap, ok := parsed.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type: %T", parsed)
+	}
+
+	interpretation := &RiskInterpretation{
+		NodeID:        ni.FragmentID,
+		CanonicalPath: ni.CanonicalPath,
+		Polarity:      polarity,
+		AxisBreakdown: axisBreakdown,
+		TopEvents:     topEvents,
+		Confidence:    0.8,
+		GeneratedAt:   time.Now(),
+		ExpiresAt:     time.Now().Add(24 * time.Hour),
+	}
+
+	if summary, ok := resultMap["summary"].(string); ok {
+		interpretation.Summary = summary
+	}
+	if impactRaw, ok := resultMap["impact"].(map[string]interface{}); ok {
+		if op, ok := impactRaw["operational"].(string); ok {
+			interpretation.Impact.Operational = op
+		}
+		if fin, ok := impactRaw["financial"].(string); ok {
+			interpretation.Impact.Financial = fin
+		}
+		if timeline, ok := impactRaw["timeline"].(string); ok {
+			interpretation.Impact.Timeline = timeline
+		}
+	}
+	if mitigationsRaw, ok := resultMap["mitigations"].([]interface{}); ok {
+		for _, mRaw := range mitigationsRaw {
+			if mMap, ok := mRaw.(map[string]interface{}); ok {
+				mitigation := Mitigation{}
+				if action, ok := mMap["action"].(string); ok {
+					mitigation.Action = action
+				}
+				if desc, ok := mMap["description"].(string); ok {
+					mitigation.Description = desc
+				}
+				if mitigation.Action != "" {
+					interpretation.Mitigations = append(interpretation.Mitigations, mitigation)
+				}
+			}
+		}
+	}
+
+	log.Printf("%s qa_interpret fragmentId=%s polarity=%s axes=%d", signalsys.LogInterpret, strings.TrimSpace(ni.FragmentID), polarity, len(axisBreakdown))
+	return interpretation, nil
+}
+
+// buildInterpretationPromptFromData builds the prompt from raw data (for QA simulation path).
+func (i *Interpreter) buildInterpretationPromptFromData(
+	nodeLabel, canonicalPath, polarity string,
 	metrics map[string]float64,
 	axisBreakdown []AxisContribution,
 	topEvents []EventProvenance,
@@ -332,15 +447,13 @@ func (i *Interpreter) buildInterpretationPrompt(
 	for path, value := range metrics {
 		metricsText += fmt.Sprintf("- %s: %.2f\n", path, value)
 	}
-
 	axisText := ""
 	for _, contrib := range axisBreakdown {
 		axisText += fmt.Sprintf("- %s: %.2f\n", contrib.Axis, contrib.Amplitude)
 	}
-
 	eventsText := ""
-	for i, event := range topEvents {
-		eventsText += fmt.Sprintf("%d. %s (Signal: %s)\n   - Contribution: %.2f\n", i+1, event.EventSummary, event.SignalID, event.Amplitude)
+	for j, event := range topEvents {
+		eventsText += fmt.Sprintf("%d. %s (Signal: %s)\n   - Contribution: %.2f\n", j+1, event.EventSummary, event.SignalID, event.Amplitude)
 	}
 
 	return fmt.Sprintf(`You are interpreting %s signals for an entity in a knowledge graph.
@@ -378,14 +491,25 @@ OUTPUT FORMAT (strict JSON):
 }
 
 Return ONLY valid JSON, no markdown code fences.`,
-		request.Polarity,
+		polarity, nodeLabel, canonicalPath, polarity, metricsText, axisText, eventsText, polarity)
+}
+
+// buildInterpretationPrompt builds the LLM prompt for interpretation.
+func (i *Interpreter) buildInterpretationPrompt(
+	_ *horizonmodels.HorizonFragment,
+	request *InterpretationRequest,
+	metrics map[string]float64,
+	axisBreakdown []AxisContribution,
+	topEvents []EventProvenance,
+) string {
+	return i.buildInterpretationPromptFromData(
 		request.NodeLabel,
 		request.CanonicalPath,
 		request.Polarity,
-		metricsText,
-		axisText,
-		eventsText,
-		request.Polarity)
+		metrics,
+		axisBreakdown,
+		topEvents,
+	)
 }
 
 // Helper functions (local; keep names unique within package to avoid collisions).

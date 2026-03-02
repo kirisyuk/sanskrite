@@ -56,6 +56,7 @@ import (
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpathbuilder "github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
+	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/profile"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
@@ -529,10 +530,14 @@ func main() {
 			logger.Printf("SourcePoller worker started on topic %s", topicName)
 		}
 
-		// Initialize Vertex AI Search client early (needed for GenAI CoreDocs tools and DiscoveryHandler)
+		// Initialize Vertex AI Search client early (needed for GenAI CoreDocs, DiscoveryHandler, Horizon fragment sync, QA alternatives).
+		// Same config as horizon fragment indexing: VERTEX_SEARCH_DATA_STORE_ID or VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID / VERTEX_SEARCH_HORIZON_DATA_STORE_ID.
 		vertexSearchProjectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
 		vertexSearchLocation := getEnv("VERTEX_SEARCH_LOCATION", "global")
 		vertexSearchDataStoreID := getEnv("VERTEX_SEARCH_DATA_STORE_ID", "")
+		if vertexSearchDataStoreID == "" {
+			vertexSearchDataStoreID = getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")
+		}
 		var vertexSearchClient *ai.VertexAISearchClient
 		if vertexSearchDataStoreID != "" {
 			vertexSearchClient = ai.NewVertexAISearchClient(vertexSearchProjectID, vertexSearchLocation, vertexSearchDataStoreID, "")
@@ -2217,6 +2222,48 @@ func main() {
 					horizonHandlers = horizonHandlers.WithNewsByFragmentsCanvas(newsByFragmentsCanvas)
 					logger.Printf("News-by-fragments canvas initialized (Gemini search grounding)")
 				}
+			}
+
+			// Lens Q&A (Analysis view): Decompose → Simulate → Interpret (at finish) → Synthesize
+			if exec != nil && propagationEngine != nil && propagationProfileLookup != nil &&
+				horizonFragmentsRepo != nil && horizonMaterializedArtifactsRepo != nil && ontologyFactsRepo != nil {
+				horizonQASessionsRepo := horizonrepo.NewQASessionsRepository(fsClient.Client())
+				qaDecomposer := horizonqa.NewQuestionDecomposer(exec)
+				qaSeedResolver := horizonqa.NewSeedResolver()
+				qaLeafEvidence := horizonqa.NewLeafEvidenceCollector(horizoninterp.NewOntologyEventFactsResolver(ontologyFactsRepo))
+				qaEngine := horizonqa.NewEngine(
+					qaDecomposer,
+					qaSeedResolver,
+					qaLeafEvidence,
+					propagationEngine,
+					propagationProfileLookup,
+					horizonFragmentsRepo,
+					horizonMaterializedArtifactsRepo,
+				)
+				// Vertex AI Search: same client/datastore as horizon fragment sync (GCS-indexed fragments). Required for QA alternatives.
+				if vertexSearchClient != nil && vertexSearchClient.IsConfigured() {
+					horizonDS := getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")
+					client := vertexSearchClient
+					if horizonDS != "" {
+						client = vertexSearchClient.WithDataStore(horizonDS)
+					}
+					qaEngine = qaEngine.WithVertexSearch(client)
+					dsLabel := horizonDS
+					if dsLabel == "" {
+						dsLabel = "default"
+					}
+					logger.Printf("Lens Q&A: Vertex AI Search wired for alternative entities (datastore=%s)", dsLabel)
+				}
+				qaContextBuilder := horizonqa.NewAnswerContextBuilder()
+				qaSynthesizer := horizonqa.NewAnswerSynthesizer(exec)
+				horizonHandlers = horizonHandlers.WithQAEngine(qaEngine, qaContextBuilder, qaSynthesizer, horizonQASessionsRepo)
+				// Humanization at finish: Interpreter turns 12-axis simulation output into human-readable summaries
+				qaInterpreter := horizoninterp.NewInterpreter(exec, horizonFragmentsRepo, horizoninterp.NewOntologySignalFactsRepo(ontologyFactsRepo))
+				horizonHandlers = horizonHandlers.WithQAInterpreter(qaInterpreter)
+				// Business relevance: how well the answer addresses the question
+				qaRelevanceEvaluator := horizonqa.NewBusinessRelevanceEvaluator(exec)
+				horizonHandlers = horizonHandlers.WithQARelevanceEvaluator(qaRelevanceEvaluator)
+				logger.Printf("Lens Q&A (Analysis view) initialized")
 			}
 
 			logger.Printf("Horizon system initialized")
