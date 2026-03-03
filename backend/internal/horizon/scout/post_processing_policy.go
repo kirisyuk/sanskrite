@@ -203,6 +203,10 @@ func (p *PostProcessingPolicy) ShouldRun(step PostProcessingStep) bool {
 		return p.PipelineTier < 2 && !p.PlanModeResearchDone
 
 	case StepCritic:
+		// Temporarily disabled for supply chain refactor branch
+		if taxonomy.HasDomainMode(p.DomainModes, taxonomy.DomainModeSupplyChain) {
+			return false
+		}
 		return p.PipelineTier <= 1
 
 	case StepReValidation:
@@ -215,21 +219,23 @@ func (p *PostProcessingPolicy) ShouldRun(step PostProcessingStep) bool {
 		return true
 
 	case StepCascadeChildScheduling:
+		// Domain contracts: execute only within their internal logic, don't spawn entity jobs separately.
 		if p.IsDomainExpansionJob {
-			return true
+			return false
 		}
 		return !p.HasDomainExpansionPeer
 
 	case StepRelationChildScheduling:
+		// Domain contracts: don't spawn entity jobs for discovered nodes.
+		if p.IsDomainExpansionJob {
+			return false
+		}
 		// Depth limit: block when past max. At max: block unless market target in domain expansion (one extra hop).
 		if p.RecursionDepth > p.MaxRecursionDepth {
 			return false
 		}
 		if p.RecursionDepth >= p.MaxRecursionDepth && !(p.HasDomainExpansionPeer && p.TargetIsMarket) {
 			return false
-		}
-		if p.IsDomainExpansionJob {
-			return true
 		}
 		// Scout-it from modal: user explicitly requested hop depth — allow relation children.
 		if p.RelationChildSchedulingOptIn {

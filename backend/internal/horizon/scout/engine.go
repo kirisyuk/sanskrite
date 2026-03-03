@@ -1707,8 +1707,8 @@ func buildSupplyFacilityMissingInfo(targetCanonicalPath string) []string {
 		t = "this supply facility"
 	}
 	return []string{
-		fmt.Sprintf("Who are the direct upstream suppliers for %s (companies + input products/materials)? Return DEPENDS_ON/SUPPLIES_TO + PRODUCES/CONSUMES continuity.", t),
-		fmt.Sprintf("Who are the direct downstream customers/recipients for %s and what outputs flow to them? Include product/facility paths and confidence.", t),
+		fmt.Sprintf("Who supplies to %s? Find producing facilities and their orgs. Return PRODUCES/SUPPLIES_TO. Format: JSON.", t),
+		fmt.Sprintf("Who does %s supply to? Find org-recipients. Return product/facility paths. Format: JSON.", t),
 		fmt.Sprintf("Which logistics operators and transport facilities are critical for %s (ports, terminals, rail hubs, warehouses)? Add transport_via and facet=logistics qualifiers where known.", t),
 		fmt.Sprintf("What are the key sourcing/serving regions for %s? Return /loc/... paths and LOCATED_IN/OPERATES_IN links for major flow segments.", t),
 	}
@@ -1722,7 +1722,7 @@ func buildProcurementFacilityMissingInfo(targetCanonicalPath string) []string {
 	return []string{
 		fmt.Sprintf("Who are the key vendors/suppliers contracted by %s and what categories/products do they cover? Return supplier organization/product links.", t),
 		fmt.Sprintf("What are the primary procurement channels and logistics partners for %s (distributors, freight forwarders, carriers, procurement service providers)?", t),
-		fmt.Sprintf("Which sourcing regions and alternative suppliers exist for %s to reduce concentration risk? Return /loc/... + supplier paths.", t),
+		fmt.Sprintf("Which sourcing regions exist for %s? Return /loc/... + supplier paths.", t),
 		fmt.Sprintf("What are the critical contract/tender dependencies for %s (single-source risks, framework agreements, procurement bottlenecks) with evidence?", t),
 	}
 }
@@ -4922,9 +4922,11 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 SKIP_RESEARCH:
 
 	// SUPPLY CHAIN REFINE: iterative gap analysis + patch-based refinement (supply_chain mode only).
+	// Skip when domain contracts are in play — they own supply chain logic; entity refine pollutes the graph.
 	if scoutResult != nil && len(scoutResult.SupplyChains) > 0 &&
 		taxonomy.HasDomainMode(domainModesForComposable, taxonomy.DomainModeSupplyChain) &&
-		researchSucceeded {
+		researchSucceeded &&
+		!policy.HasDomainExpansionPeer {
 
 		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine")
 		const maxRefineRounds = 2
@@ -5051,6 +5053,9 @@ SKIP_RESEARCH:
 			"exitReason":          exitReason,
 		})
 		e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine_done")
+	} else if policy.HasDomainExpansionPeer {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine_skip_domain_contract")
+		e.logLine(ctx, job, "info", "> supply chain refine skipped: domain contract owns supply chain logic (no cascade/refine)")
 	} else {
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine_skip")
 	}

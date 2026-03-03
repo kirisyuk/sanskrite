@@ -1698,6 +1698,251 @@ func getSupplyChainExecutionPlanFromJobState(job *models.ScoutingJob, domainCano
 	return bySignature
 }
 
+// expandSupplyChainQueriesWithOrgs expands product/market-anchored queries to org/fac-anchored.
+// Discovers BOTH org and fac via IntentDecomposer recursively (max 5 hops). For org: uses
+// /fac/{orgSlug}-general-production fallback when no specific fac. EnrichSupplyChainFull
+// builds chains from each anchor; SupplyChainOrgResolver handles fac→org at depth 5.
+func (e *ScoutEngine) expandSupplyChainQueriesWithOrgs(ctx context.Context, job *models.ScoutingJob, queries []agents.SupplyChainQuery) []agents.SupplyChainQuery {
+	if e == nil || e.aiExecutor == nil || job == nil || len(queries) == 0 {
+		return queries
+	}
+	needsExpansion := func(q *agents.SupplyChainQuery) bool {
+		if len(q.Anchors) > 0 {
+			return false // already has anchors
+		}
+		anchor := strings.TrimSpace(q.Anchor)
+		if anchor == "" {
+			return false
+		}
+		return strings.EqualFold(strings.TrimSpace(q.AnchorType), "product") ||
+			strings.HasPrefix(anchor, "/market/") ||
+			strings.HasPrefix(anchor, "/product/")
+	}
+	maxHops := SupplyChainMaxTraversalDepth
+	if maxHops < 1 || maxHops > 5 {
+		maxHops = 5
+	}
+	maxAnchors := 12
+	if job.State != nil {
+		if n := parseStateInt(job.State["maxSupplyChainAnchors"], 0); n > 0 && n <= 24 {
+			maxAnchors = n
+		}
+	}
+	out := make([]agents.SupplyChainQuery, 0, len(queries))
+	for i := range queries {
+		q := &queries[i]
+		if !needsExpansion(q) {
+			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainExpansion] query[%d] skip: already has %d anchors", i, len(q.Anchors)))
+			out = append(out, *q)
+			continue
+		}
+		focus := ""
+		if v, ok := job.State["focus"].(string); ok {
+			focus = strings.TrimSpace(v)
+		}
+		var keywords, spherePaths []string
+		if v := job.State["keywords"]; v != nil {
+			keywords = parseStateStringSlice(v)
+		}
+		if v := job.State["spherePaths"]; v != nil {
+			spherePaths = parseStateStringSlice(v)
+		}
+		originalQuery := ""
+		if v, ok := job.State["originalQuery"].(string); ok {
+			originalQuery = strings.TrimSpace(v)
+		}
+		var decompositionHints []agents.DecompositionHint
+		if v := job.State["decompositionHints"]; v != nil {
+			if b, err := json.Marshal(v); err == nil {
+				_ = json.Unmarshal(b, &decompositionHints)
+			}
+		}
+		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainExpansion] query[%d] expanding anchor=%q (product/market→org+fac discovery)", i, q.Anchor))
+		anchors := e.discoverOrgAndFacAnchorsRecursive(ctx, job, q.Anchor, focus, spherePaths, keywords, originalQuery, decompositionHints, maxHops, maxAnchors)
+		if len(anchors) == 0 {
+			e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainExpansion] query[%d] discovery failed for anchor=%q, keeping original", i, q.Anchor))
+			out = append(out, *q)
+			continue
+		}
+		expanded := *q
+		expanded.Anchors = anchors
+		expanded.AnchorType = "org"
+		expanded.Anchor = ""
+		out = append(out, expanded)
+		e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain query expanded product/market→org+fac: %d anchors (e.g. %s)", len(anchors), anchors[0]))
+	}
+	return out
+}
+
+// discoverOrgAndFacAnchorsRecursive discovers org and fac anchors via IntentDecomposer.
+// Recursion: round 0 = decompose product/market; rounds 1..maxHops-1 = decompose each org to find facilities.
+// Returns normalized anchors: /fac/ for facilities (incl. /fac/{org}-general-production for org-only).
+func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
+	ctx context.Context,
+	job *models.ScoutingJob,
+	initialAnchor string,
+	focus string,
+	spherePaths, keywords []string,
+	originalQuery string,
+	decompositionHints []agents.DecompositionHint,
+	maxHops, maxAnchors int,
+) []string {
+	agent := agents.NewIntentDecomposerAgent(e.aiExecutor)
+	opts := agents.DecomposeOptions{IsAbstractAnchor: strings.HasPrefix(initialAnchor, "/market/") || strings.HasPrefix(initialAnchor, "/program/"), DecompositionHints: decompositionHints, OriginalQuery: originalQuery}
+
+	seen := make(map[string]struct{})
+	addAnchor := func(cp string) bool {
+		cp = strings.TrimSpace(cp)
+		if cp == "" {
+			return false
+		}
+		key := strings.ToLower(cp)
+		if _, ok := seen[key]; ok {
+			return false
+		}
+		seen[key] = struct{}{}
+		return true
+	}
+
+	// Normalize path to effective anchor: /org/ -> /fac/{slug}-general-production; /fac/ stays.
+	toEffectiveAnchor := func(cp string) string {
+		cp = strings.TrimSpace(cp)
+		if cp == "" {
+			return ""
+		}
+		if strings.HasPrefix(cp, "/fac/") || strings.HasPrefix(cp, "/deposit/") {
+			return cp
+		}
+		if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
+			if norm := models.NormalizeOrgRefToFacilityFallback(cp); norm != "" {
+				return norm
+			}
+		}
+		return ""
+	}
+
+	// Round 0: decompose initial (product/market)
+	rels, err := agent.DecomposeWithOptions(ctx, initialAnchor, focus, spherePaths, keywords, opts)
+	if err != nil {
+		e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainDiscovery] IntentDecomposer round=0 anchor=%q failed: %v", initialAnchor, err))
+		return nil
+	}
+	if len(rels) == 0 {
+		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainDiscovery] IntentDecomposer round=0 anchor=%q → 0 relations, no expansion", initialAnchor))
+		return nil
+	}
+	sample := ""
+	if len(rels) > 0 {
+		r0 := rels[0]
+		sample = fmt.Sprintf("%s (%s→%s conf=%.2f)", r0.TargetCanonicalPath, r0.RelationType, r0.TargetType, r0.Confidence)
+	}
+	if len(rels) > 1 {
+		sample += fmt.Sprintf(" +%d more", len(rels)-1)
+	}
+	e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainDiscovery] IntentDecomposer round=0 anchor=%q → relations=%d sample=%s", initialAnchor, len(rels), sample))
+	type queueItem struct {
+		path  string
+		round int
+	}
+	queue := make([]queueItem, 0, 32)
+	decomposed := make(map[string]struct{}) // avoid re-decomposing same org
+	facAnchors := make([]string, 0, maxAnchors)
+	for _, r := range rels {
+		cp := strings.TrimSpace(r.TargetCanonicalPath)
+		if cp == "" {
+			continue
+		}
+		if strings.HasPrefix(cp, "/fac/") {
+			eff := toEffectiveAnchor(cp)
+			if eff != "" && addAnchor(eff) {
+				facAnchors = append(facAnchors, eff)
+				if len(facAnchors) >= maxAnchors {
+					return facAnchors
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
+			eff := toEffectiveAnchor(cp)
+			if eff != "" && addAnchor(eff) {
+				facAnchors = append(facAnchors, eff)
+				if len(facAnchors) >= maxAnchors {
+					return facAnchors
+				}
+			}
+			if maxHops > 1 {
+				key := strings.ToLower(cp)
+				if _, done := decomposed[key]; !done {
+					decomposed[key] = struct{}{}
+					queue = append(queue, queueItem{path: cp, round: 1})
+				}
+			}
+		}
+	}
+	fromOrg, fromFac := 0, 0
+	for _, eff := range facAnchors {
+		if strings.Contains(eff, "-general-production") {
+			fromOrg++
+		} else {
+			fromFac++
+		}
+	}
+	e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainDiscovery] round=0 decided anchors=%d (from_org=%d from_fac=%d): %v", len(facAnchors), fromOrg, fromFac, facAnchors))
+
+	// Rounds 1..maxHops-1: decompose orgs to discover facilities
+	for len(queue) > 0 && len(facAnchors) < maxAnchors {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur.round >= maxHops {
+			continue
+		}
+		rels2, err2 := agent.DecomposeWithOptions(ctx, cur.path, focus, spherePaths, keywords, opts)
+		if err2 != nil {
+			e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainDiscovery] IntentDecomposer round=%d org=%q failed: %v", cur.round, cur.path, err2))
+			continue
+		}
+		if len(rels2) == 0 {
+			continue
+		}
+		prevN := len(facAnchors)
+		for _, r := range rels2 {
+			cp := strings.TrimSpace(r.TargetCanonicalPath)
+			if cp == "" {
+				continue
+			}
+			if strings.HasPrefix(cp, "/fac/") {
+				eff := toEffectiveAnchor(cp)
+				if eff != "" && addAnchor(eff) {
+					facAnchors = append(facAnchors, eff)
+					if len(facAnchors) >= maxAnchors {
+						return facAnchors
+					}
+				}
+				continue
+			}
+			if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
+				eff := toEffectiveAnchor(cp)
+				if eff != "" && addAnchor(eff) {
+					facAnchors = append(facAnchors, eff)
+					if len(facAnchors) >= maxAnchors {
+						return facAnchors
+					}
+				}
+				if cur.round+1 < maxHops {
+					key := strings.ToLower(cp)
+					if _, done := decomposed[key]; !done {
+						decomposed[key] = struct{}{}
+						queue = append(queue, queueItem{path: cp, round: cur.round + 1})
+					}
+				}
+			}
+		}
+		newN := len(facAnchors) - prevN
+		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainDiscovery] IntentDecomposer round=%d org=%q → relations=%d new_anchors=%d total=%d", cur.round, cur.path, len(rels2), newN, len(facAnchors)))
+	}
+	return facAnchors
+}
+
 func decodeSupplyChainExecutionPlan(raw interface{}) *agents.SupplyChainExecutionPlan {
 	if raw == nil {
 		return nil
@@ -1727,6 +1972,31 @@ func decodeSupplyChainExecutionPlan(raw interface{}) *agents.SupplyChainExecutio
 		return nil
 	}
 	return &plan
+}
+
+// chainsNodeSample returns a short log-friendly summary of chains (node counts, first path per chain).
+func chainsNodeSample(chains []agents.SupplyChain) string {
+	if len(chains) == 0 {
+		return "[]"
+	}
+	parts := make([]string, 0, len(chains))
+	for i, ch := range chains {
+		n := len(ch.Nodes)
+		sample := ""
+		if n > 0 && len(ch.Nodes[0].CanonicalPath) > 0 {
+			sample = ch.Nodes[0].CanonicalPath
+			if n > 1 {
+				sample += "→..."
+			}
+		} else {
+			sample = fmt.Sprintf("%dnodes", n)
+		}
+		parts = append(parts, fmt.Sprintf("#%d:%d(%s)", i, n, sample))
+		if len(parts) >= 3 {
+			break
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // getRegulatoryImpactPlanFromJobState extracts RegulatoryImpactExecutionPlan for the matching domain.
@@ -2555,14 +2825,23 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain plan capped (%s): %d", RuntimeContractExecutionPlan, len(queries)))
 			}
 		}
+		// Expand product/market anchors to org/fac list: first query should go FROM organizations or facilities.
+		queriesBefore := len(queries)
+		queries = e.expandSupplyChainQueriesWithOrgs(ctx, job, queries)
+		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainPlan] queries before=%d after_expansion=%d", queriesBefore, len(queries)))
 		// Supply Chain Plan mode: holistic full queries, merge chains, processSupplyChains.
-		for _, q := range queries {
+		for qi, q := range queries {
+			anchorDesc := strings.TrimSpace(q.Anchor)
+			if len(q.Anchors) > 0 {
+				anchorDesc = strings.Join(q.Anchors, ", ")
+			}
 			chains, err := e.researchAgent.EnrichSupplyChainFull(ctx, q)
 			if err != nil {
-				e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain plan query failed (anchor=%s): %v", strings.TrimSpace(q.Anchor), err))
+				e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainPlan] EnrichSupplyChainFull query[%d] anchor=%s failed: %v", qi, anchorDesc, err))
 				continue
 			}
 			domainResearchChains = append(domainResearchChains, chains...)
+			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainPlan] EnrichSupplyChainFull query[%d] anchor=%s → chains=%d (nodes_sample=%v)", qi, anchorDesc, len(chains), chainsNodeSample(chains)))
 		}
 		if job.State == nil {
 			job.State = map[string]interface{}{}
@@ -6817,6 +7096,25 @@ func hashSupplyChainSegments(segments []pathbuilder.PathSegment) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// buildSupplyChainExpandMissingInfo returns node-type-specific MissingInfo for supply chain expand phase.
+// Model: org→fac→product→fac→org trees from source org downward.
+func buildSupplyChainExpandMissingInfo(frag *models.HorizonFragment) []string {
+	if frag == nil {
+		return []string{"Build org→fac→product→fac→org tree. Format: JSON."}
+	}
+	p := strings.TrimSpace(frag.CanonicalPath)
+	switch {
+	case strings.HasPrefix(p, "/org/"):
+		return []string{"Find organizations under this organization (subsidiaries, controlled, partners). If org has own productions — return their facilities. Format: JSON."}
+	case strings.HasPrefix(p, "/fac/"):
+		return []string{"Find products/services that THIS facility creates directly. Do NOT list products of related or parent companies. Format: JSON."}
+	case strings.HasPrefix(p, "/product/"):
+		return []string{"Find org-recipients of this product (orgs that receive it via their facilities). Format: JSON."}
+	default:
+		return []string{"Build org→fac→product→fac→org tree from this node. Format: JSON."}
+	}
+}
+
 // runSupplyChainExpandPhase runs optional expand (1-hop, alternatives check) after processSupplyChains in Plan mode.
 // Depth: 1-hop expand only when currentDepth < maxRecursionDepth (research depth set at job start).
 // Expand criteria: confidence < 0.6, OR node in gapHints, OR node matches productFilter (plan 5.1).
@@ -6924,6 +7222,15 @@ func (e *ScoutEngine) runSupplyChainExpandPhase(ctx context.Context, job *models
 		}
 	}
 	if len(expandCandidates) > 0 && e.researchAgent != nil && e.fragmentsRepo != nil {
+		chainContextStr := ""
+		existingEntities := make([]string, 0)
+		if cc, _ := ParseChainContext(job.State["chainContext"]); cc != nil {
+			chainContextStr = cc.ToPromptContext()
+			existingEntities = cc.DiscoveredNodes
+			if len(existingEntities) > 50 {
+				existingEntities = existingEntities[:50]
+			}
+		}
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(3) // max 3 concurrent LLM calls
 		var mu sync.Mutex
@@ -6935,9 +7242,12 @@ func (e *ScoutEngine) runSupplyChainExpandPhase(ctx context.Context, job *models
 				if err != nil || existing == nil {
 					return nil
 				}
+				missingInfo := buildSupplyChainExpandMissingInfo(existing)
 				input := agents.ResearchStrategyInput{
-					Fragment:    existing,
-					MissingInfo: []string{"Identify upstream suppliers and downstream customers; products; facility locations."},
+					Fragment:         existing,
+					MissingInfo:      missingInfo,
+					ChainContext:     chainContextStr,
+					ExistingEntities: existingEntities,
 				}
 				domainModes := []string{taxonomy.DomainModeSupplyChain}
 				if _, _, newChains, _, _, err := e.researchAgent.ResearchPipeline().Enrich(gctx, input, domainModes); err == nil && len(newChains) > 0 {
@@ -6998,8 +7308,8 @@ func (e *ScoutEngine) runSupplyChainAlternativesCheck(ctx context.Context, job *
 	var sb strings.Builder
 	sb.WriteString("For each (customer, product) pair below, did you miss any alternative suppliers?\n")
 	sb.WriteString("Return ONLY valid JSON with this exact schema:\n")
-	sb.WriteString(`{ "alternatives": [ { "customerRef": "/org/...", "productRef": "/product/...", "suppliers": [ { "supplierRef": "/org/...", "technicalFit": 0.8, "regulatoryFit": 0.9, "confidence": 0.7, "availableCapacity": { "value": 100, "unit": "metric_tons_per_year", "confidence": 0.6 }, "leadTimeToSwitch": { "value": 90, "unit": "days", "confidence": 0.7 }, "costToSwitch": { "value": 500000, "unit": "usd", "confidence": 0.5 } } ] } ] }` + "\n")
-	sb.WriteString("customerRef and productRef must match exactly. supplierRef: canonical path. technicalFit, regulatoryFit, confidence: 0-1. availableCapacity, leadTimeToSwitch, costToSwitch optional.\n\n")
+	sb.WriteString(`{ "alternatives": [ { "customerRef": "/fac/...", "productRef": "/product/...", "suppliers": [ { "supplierRef": "/fac/...", "technicalFit": 0.8, "regulatoryFit": 0.9, "confidence": 0.7, ... } ] } ] }` + "\n")
+	sb.WriteString("customerRef and supplierRef: MUST be /fac/ paths (supply chain actors). productRef: /product/ path. Match pairs exactly. technicalFit, regulatoryFit, confidence: 0-1.\n\n")
 	sb.WriteString("Pairs to check:\n")
 	for k := range pairs {
 		sb.WriteString(fmt.Sprintf("- customer=%s product=%s\n", k.customerRef, k.productRef))
@@ -7638,6 +7948,8 @@ func (e *ScoutEngine) processSupplyChains(
 	}
 
 	// Create edges using fragment IDs
+	// Supply chain strict validator: reject org→org, forbidden types, non-facility endpoints.
+	scValidator := NewSupplyChainStrictValidator()
 	provenanceMethod := "scout_supply_chain"
 	createdEdges := 0
 	edgeDupes := 0
@@ -7646,7 +7958,11 @@ func (e *ScoutEngine) processSupplyChains(
 	edgePenalized := 0
 	acceptedContextEdges := make([]*ChainEdge, 0, len(result.Edges))
 	edgePreviewLimit := 40
-	for _, chainEdge := range result.Edges {
+	jobIDStr := ""
+	if job != nil {
+		jobIDStr = strings.TrimSpace(job.ID)
+	}
+	for edgeIdx, chainEdge := range result.Edges {
 		srcPath := strings.TrimSpace(chainEdge.SourceCanonicalPath)
 		dstPath := strings.TrimSpace(chainEdge.TargetCanonicalPath)
 		if rp, ok := pathRewrites[srcPath]; ok && strings.TrimSpace(rp) != "" {
@@ -7654,6 +7970,16 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 		if rp, ok := pathRewrites[dstPath]; ok && strings.TrimSpace(rp) != "" {
 			dstPath = strings.TrimSpace(rp)
+		}
+		// Strict validation: reject invalid supply chain edges (no transform, no persist)
+		edgeToValidate := &ChainEdge{
+			SourceCanonicalPath: srcPath,
+			TargetCanonicalPath: dstPath,
+			RelationType:        chainEdge.RelationType,
+		}
+		if err := scValidator.ValidateEdge(edgeToValidate, jobIDStr, edgeIdx); err != nil {
+			e.logLine(ctx, job, "warn", err.Error())
+			continue
 		}
 
 		sourceID := pathToID[srcPath]
@@ -8074,13 +8400,20 @@ func (e *ScoutEngine) processSupplyChains(
 
 	// Materialize SupplyLink fragments from parsed segments so PathBuilder can traverse
 	// SupplyLink provenance: Scout/Research supply chains → parser → SupplyLink fragments
+	// Normalize org→fac before materialization; only /fac/ and /deposit/ allowed for SupplierRef/CustomerRef.
 	supplyLinksCreated := 0
 	supplyLinksSkipped := 0
 	for _, seg := range result.SupplyLinkSegments {
-		supplier := strings.TrimSpace(seg.SupplierRef)
+		supplier := models.NormalizeOrgRefToFacilityFallback(strings.TrimSpace(seg.SupplierRef))
+		customer := models.NormalizeOrgRefToFacilityFallback(strings.TrimSpace(seg.CustomerRef))
 		product := strings.TrimSpace(seg.ProductRef)
-		customer := strings.TrimSpace(seg.CustomerRef)
-		if supplier == "" || product == "" || customer == "" {
+		if supplier == "" || customer == "" || product == "" {
+			continue
+		}
+		if !strings.HasPrefix(supplier, "/fac/") && !strings.HasPrefix(supplier, "/deposit/") {
+			continue
+		}
+		if !strings.HasPrefix(customer, "/fac/") {
 			continue
 		}
 		if rp, ok := pathRewrites[supplier]; ok && rp != "" {
@@ -8327,6 +8660,21 @@ func (e *ScoutEngine) processSupplyChains(
 				}
 			}
 		}
+	}
+
+	// Level 3 FAC→ORG resolution: traverse OWNS/CONTROLS to owning ORG, max depth 5, cycle-prohibited
+	resolver := NewSupplyChainOrgResolver(e.edgesRepo, e.fragmentsRepo)
+	resolveTenantID := strings.TrimSpace(job.TenantID)
+	if resolveTenantID == "" {
+		resolveTenantID = "global"
+	}
+	facToOrgResult := resolver.Resolve(ctx, resolveTenantID, pathToID)
+	if len(facToOrgResult.FacToOrg) > 0 {
+		if job.State == nil {
+			job.State = make(map[string]interface{})
+		}
+		job.State["facToOrgMap"] = facToOrgResult.FacToOrg
+		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainOrgResolver] resolved=%d FAC→ORG mappings", len(facToOrgResult.FacToOrg)))
 	}
 
 	// Update chain context in job state for propagation to child jobs
@@ -8854,20 +9202,20 @@ func (e *ScoutEngine) identifyChainGaps(_ *ParsedChainResult, context *ChainCont
 		isActor := strings.HasPrefix(node, "/org/") || strings.HasPrefix(node, "/fac/")
 
 		if isProduct {
-			// Products should have both incoming (producer) and outgoing (consumer) edges
+			// Products: producer (fac) and org-recipients
 			if incomingCount[node] == 0 {
-				hints = append(hints, fmt.Sprintf("Who produces %s? Find upstream supplier.", node))
+				hints = append(hints, fmt.Sprintf("Who produces %s? Find facility that produces it. Format: JSON.", node))
 			}
 			if outgoingCount[node] == 0 {
-				hints = append(hints, fmt.Sprintf("Who consumes %s? Find downstream customer.", node))
+				hints = append(hints, fmt.Sprintf("Who receives %s? Find org-recipients. Format: JSON.", node))
 			}
 		} else if isActor {
-			// Actors at chain ends might need extension
+			// Actors at chain ends: producing facs or org-recipients
 			if incomingCount[node] == 0 && outgoingCount[node] > 0 {
-				hints = append(hints, fmt.Sprintf("Who supplies to %s? Find upstream supplier.", node))
+				hints = append(hints, fmt.Sprintf("Who supplies to %s? Find producing facilities. Format: JSON.", node))
 			}
 			if outgoingCount[node] == 0 && incomingCount[node] > 0 {
-				hints = append(hints, fmt.Sprintf("Who does %s supply to? Find downstream customer.", node))
+				hints = append(hints, fmt.Sprintf("Who does %s supply to? Find org-recipients. Format: JSON.", node))
 			}
 		}
 	}

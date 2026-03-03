@@ -106,13 +106,13 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid supply link",
+			name: "valid supply link (facility refs only)",
 			fragment: &HorizonFragment{
 				Type:     FragmentTypeSupplyLink,
 				TenantID: "tenant-123",
 				ProductRef: strPtr("/product/lithium-carbonate"),
-				SupplierRef: strPtr("/org/albemarle"),
-				CustomerRef: strPtr("/org/catl"),
+				SupplierRef: strPtr("/fac/albemarle-general-production"),
+				CustomerRef: strPtr("/fac/catl-general-production"),
 			},
 			wantErr: false,
 		},
@@ -130,7 +130,7 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 				Type:     FragmentTypeSupplyLink,
 				TenantID: "global",
 				ProductRef: strPtr("/product/lithium-carbonate"),
-				SupplierRef: strPtr("/org/albemarle"),
+				SupplierRef: strPtr("/fac/albemarle-general-production"),
 			},
 			wantErr: false,
 		},
@@ -176,7 +176,7 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 				Type:     FragmentTypeSupplyLink,
 				TenantID: "tenant-123",
 				ProductRef: strPtr("/product/lithium-carbonate"),
-				SupplierRef: strPtr("/org/albemarle"),
+				SupplierRef: strPtr("/fac/albemarle-general-production"),
 			},
 			wantErr: false,
 		},
@@ -186,9 +186,31 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 				Type:     FragmentTypeSupplyLink,
 				TenantID: "tenant-123",
 				ProductRef: strPtr("/product/lithium-carbonate"),
-				CustomerRef: strPtr("/org/catl"),
+				CustomerRef: strPtr("/fac/catl-general-production"),
 			},
 			wantErr: false,
+		},
+		{
+			name: "error: org refs not allowed (supplier)",
+			fragment: &HorizonFragment{
+				Type:     FragmentTypeSupplyLink,
+				TenantID: "tenant-123",
+				ProductRef: strPtr("/product/lithium-carbonate"),
+				SupplierRef: strPtr("/org/albemarle"),
+				CustomerRef: strPtr("/fac/catl-general-production"),
+			},
+			wantErr: true,
+		},
+		{
+			name: "error: org refs not allowed (customer)",
+			fragment: &HorizonFragment{
+				Type:     FragmentTypeSupplyLink,
+				TenantID: "tenant-123",
+				ProductRef: strPtr("/product/lithium-carbonate"),
+				SupplierRef: strPtr("/fac/albemarle-general-production"),
+				CustomerRef: strPtr("/org/catl"),
+			},
+			wantErr: true,
 		},
 		{
 			name: "valid: with transportViaRefs",
@@ -196,8 +218,8 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 				Type:     FragmentTypeSupplyLink,
 				TenantID: "tenant-123",
 				ProductRef: strPtr("/product/lithium-carbonate"),
-				SupplierRef: strPtr("/org/albemarle"),
-				CustomerRef: strPtr("/org/catl"),
+				SupplierRef: strPtr("/fac/albemarle-general-production"),
+				CustomerRef: strPtr("/fac/catl-general-production"),
 				TransportViaRefs: []string{"/fac/port/antofagasta", "/fac/port/shanghai"},
 			},
 			wantErr: false,
@@ -353,6 +375,29 @@ func TestNormalizeSlug(t *testing.T) {
 	}
 }
 
+func TestNormalizeOrgRefToFacilityFallback(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "org simple", in: "/org/albemarle", want: "/fac/albemarle-general-production"},
+		{name: "org with geo", in: "/org/cn/tsmc", want: "/fac/tsmc-general-production"},
+		{name: "org us", in: "/org/us/albemarle-corp", want: "/fac/albemarle-corp-general-production"},
+		{name: "fac unchanged", in: "/fac/albemarle/silver-peak", want: "/fac/albemarle/silver-peak"},
+		{name: "deposit unchanged", in: "/deposit/lithium/salar-de-atacama", want: "/deposit/lithium/salar-de-atacama"},
+		{name: "product returns empty", in: "/product/lithium-carbonate", want: ""},
+		{name: "empty returns empty", in: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeOrgRefToFacilityFallback(tt.in); got != tt.want {
+				t.Errorf("NormalizeOrgRefToFacilityFallback(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExtractSlugFromPath(t *testing.T) {
 	tests := []struct {
 		name string
@@ -406,8 +451,8 @@ func TestFragmentValidateAutoGeneratesCanonicalPath(t *testing.T) {
 		Type:     FragmentTypeSupplyLink,
 		TenantID: "tenant-123",
 		ProductRef: strPtr("/product/lithium-carbonate"),
-		SupplierRef: strPtr("/org/albemarle"),
-		CustomerRef: strPtr("/org/catl"),
+		SupplierRef: strPtr("/fac/albemarle-general-production"),
+		CustomerRef: strPtr("/fac/catl-general-production"),
 		Governance: Governance{Owner: "SYSTEM"},
 		State: make(map[string]MetricValue),
 		Metadata: FragmentMetadata{

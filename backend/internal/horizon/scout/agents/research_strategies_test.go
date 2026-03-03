@@ -18,11 +18,11 @@ func TestSupplyChainEnrichmentPrompt_OnlyCanonicalTypes(t *testing.T) {
 		MissingInfo: []string{"Find suppliers"},
 	}
 	prompt := a.buildSupplyChainEnrichmentPrompt(input)
-	if !strings.Contains(prompt, "PRODUCES") || !strings.Contains(prompt, "CONSUMES") ||
-		!strings.Contains(prompt, "SUPPLIES_TO") || !strings.Contains(prompt, "EXTRACTS_FROM") {
-		t.Error("SupplyChain prompt should list canonical types: PRODUCES, CONSUMES, SUPPLIES_TO, EXTRACTS_FROM")
+	// Operational types only (fractal model): PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM
+	if !strings.Contains(prompt, "PRODUCES") || !strings.Contains(prompt, "SUPPLIES_TO") ||
+		!strings.Contains(prompt, "TRANSFORMS_INTO") || !strings.Contains(prompt, "EXTRACTS_FROM") {
+		t.Error("SupplyChain prompt should list operational types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM")
 	}
-	// Must not allow deprecated types as valid outputs (e.g. "use ... RELATED_TO" as allowed)
 	if !strings.Contains(strings.ToUpper(prompt), "USE ONLY") {
 		t.Error("SupplyChain prompt should restrict to canonical types only (Use ONLY ...)")
 	}
@@ -73,16 +73,13 @@ func TestResearchPipeline_SupplyChainMode(t *testing.T) {
 	}
 	modes := []string{taxonomy.DomainModeSupplyChain}
 
-	frag, relations, chains, _, _, err := runner.Enrich(ctx, input, modes)
-	if err != nil {
-		t.Fatalf("Enrich: %v", err)
+	_, _, _, _, _, err := runner.Enrich(ctx, input, modes)
+	// With nil executor, supply-chain strategy returns "not configured"; pipeline propagates the error
+	if err == nil {
+		t.Fatal("expected error when supply-chain strategy has nil executor")
 	}
-	if frag == nil {
-		t.Fatal("expected non-nil fragment")
-	}
-	if len(relations) != 0 || len(chains) != 0 {
-		// With nil executor, strategies return nil output; pipeline still returns fragment with empty lists
-		t.Logf("relations=%d chains=%d (nil executor yields no results)", len(relations), len(chains))
+	if !strings.Contains(err.Error(), "supply-chain") && !strings.Contains(err.Error(), "supply_chain") {
+		t.Errorf("expected supply-chain config error, got: %v", err)
 	}
 }
 
@@ -240,7 +237,7 @@ func TestModePrompts_UseUSOTRelationAllowlists(t *testing.T) {
 		{
 			name:   "supply_chain_enrichment",
 			prompt: a.buildSupplyChainEnrichmentPrompt(baseInput),
-			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain),
+			want:   taxonomy.SupplyChainOperationalEdgeTypesString(),
 		},
 		{
 			name:   "governance_enrichment",
@@ -275,7 +272,7 @@ func TestModePrompts_UseUSOTRelationAllowlists(t *testing.T) {
 		{
 			name:   "supply_chain_full",
 			prompt: a.buildSupplyChainFullQueryPrompt(SupplyChainQuery{Anchor: "/org/us/example", AnchorType: "org", Direction: "both", Depth: 3}),
-			want:   relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain),
+			want:   taxonomy.SupplyChainOperationalEdgeTypesString(),
 		},
 		{
 			name:   "governance_full",
@@ -413,8 +410,9 @@ func TestSanitizeNode_GeneratesCanonicalPath(t *testing.T) {
 	if cp == "" {
 		t.Fatal("canonicalPath should be auto-generated")
 	}
-	if cp != "/org/discovered/arcelormittal" {
-		t.Errorf("canonicalPath = %q, want /org/discovered/arcelormittal", cp)
+	// Fractal model: ORGANIZATION in supply chain → /fac/{slug}-general-production
+	if cp != "/fac/arcelormittal-general-production" {
+		t.Errorf("canonicalPath = %q, want /fac/arcelormittal-general-production", cp)
 	}
 }
 
@@ -442,8 +440,9 @@ func TestSanitizeNodeString_GeneratesCanonicalPath(t *testing.T) {
 	if cp == "" {
 		t.Fatal("canonicalPath should be auto-generated for string node")
 	}
-	if !strings.HasPrefix(cp, "/org/discovered/") {
-		t.Errorf("canonicalPath = %q, should start with /org/discovered/", cp)
+	// Fractal model: string defaults to ORGANIZATION → /fac/{slug}-general-production
+	if !strings.HasPrefix(cp, "/fac/") || !strings.HasSuffix(cp, "-general-production") {
+		t.Errorf("canonicalPath = %q, should be /fac/...-general-production", cp)
 	}
 }
 

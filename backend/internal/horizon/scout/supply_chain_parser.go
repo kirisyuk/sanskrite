@@ -10,6 +10,9 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
+// generalProductionFacilityTitle is the label for facility fallback nodes.
+const generalProductionFacilityTitle = "General production"
+
 // SupplyChainParser converts supply chain objects from agent output
 // into HorizonFragments and DependencyEdges for graph insertion.
 type SupplyChainParser struct{}
@@ -212,113 +215,161 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 				}
 			}
 		}
-		// Extract SupplyLink segments (supplier actor→product→customer actor) for PathBuilder materialization
-		for i := 0; i < len(chain.Nodes)-2; i++ {
+		// Pseudo-cycle guard: product must not appear more than once in a single chain.
+		productSeen := make(map[string]int)
+		for _, n := range chain.Nodes {
+			if p.isProductType(n.Type, n.CanonicalPath) {
+				cp := strings.TrimSpace(n.CanonicalPath)
+				if cp != "" {
+					productSeen[cp]++
+				}
+			}
+		}
+		hasDuplicateProduct := false
+		for pth, cnt := range productSeen {
+			if cnt > 1 {
+				result.ParseWarnings = append(result.ParseWarnings,
+					fmt.Sprintf("chain %d: product %s appears %d times (pseudo-cycle); skipping SupplyLink segments", chainIdx, pth, cnt))
+				hasDuplicateProduct = true
+				break
+			}
+		}
+
+		// Extract SupplyLink segments (supplier actor→product→customer actor) for PathBuilder materialization.
+		// Only fac→product→fac (or deposit for extraction). Org actors are normalized to /fac/{orgSlug}-general-production.
+		for i := 0; i < len(chain.Nodes)-2 && !hasDuplicateProduct; i++ {
 			a, prod, b := chain.Nodes[i], chain.Nodes[i+1], chain.Nodes[i+2]
-			if p.isSupplyActorType(a.Type, a.CanonicalPath) &&
-				p.isProductType(prod.Type, prod.CanonicalPath) &&
-				p.isSupplyActorType(b.Type, b.CanonicalPath) {
-				srcPath := strings.TrimSpace(a.CanonicalPath)
-				prodPath := strings.TrimSpace(prod.CanonicalPath)
-				dstPath := strings.TrimSpace(b.CanonicalPath)
-				if srcPath != "" && prodPath != "" && dstPath != "" {
-					if p.isFinancialFlowProduct(prodPath, prod.Name) {
-						result.ParseWarnings = append(result.ParseWarnings,
-							fmt.Sprintf("segment %s→%s skipped SUPPLIES_TO: financial-flow product %s", srcPath, dstPath, prodPath))
-						continue
+			srcPathRaw := strings.TrimSpace(a.CanonicalPath)
+			prodPath := strings.TrimSpace(prod.CanonicalPath)
+			dstPathRaw := strings.TrimSpace(b.CanonicalPath)
+			if srcPathRaw == "" || prodPath == "" || dstPathRaw == "" {
+				continue
+			}
+			// Normalize org→fac for supply chain: only facility-level endpoints allowed.
+			srcPath := models.NormalizeOrgRefToFacilityFallback(srcPathRaw)
+			dstPath := models.NormalizeOrgRefToFacilityFallback(dstPathRaw)
+			if srcPath == "" || dstPath == "" {
+				continue
+			}
+			// Supplier: /fac/ or /deposit/. Customer: /fac/ only (deposit is supplier-only for extraction).
+			if !strings.HasPrefix(srcPath, "/fac/") && !strings.HasPrefix(srcPath, "/deposit/") {
+				continue
+			}
+			if !strings.HasPrefix(dstPath, "/fac/") {
+				continue
+			}
+			if !p.isProductType(prod.Type, prodPath) {
+				continue
+			}
+			// Create facility fragments for normalized org→general-production paths
+			if strings.HasPrefix(srcPathRaw, "/org/") && result.Fragments[srcPath] == nil {
+				result.Fragments[srcPath] = p.createGeneralProductionFacilityFragment(srcPath)
+			}
+			if strings.HasPrefix(dstPathRaw, "/org/") && result.Fragments[dstPath] == nil {
+				result.Fragments[dstPath] = p.createGeneralProductionFacilityFragment(dstPath)
+			}
+			if p.isFinancialFlowProduct(prodPath, prod.Name) {
+				result.ParseWarnings = append(result.ParseWarnings,
+					fmt.Sprintf("segment %s→%s skipped SUPPLIES_TO: financial-flow product %s", srcPath, dstPath, prodPath))
+				continue
+			}
+			seg := &SupplyLinkSegment{
+					SupplierRef: srcPath,
+				ProductRef:  prodPath,
+				CustomerRef: dstPath,
+				Confidence:  chain.Confidence,
+			}
+			for _, pth := range chain.TransportVia {
+				pth = strings.TrimSpace(pth)
+				if pth != "" && strings.HasPrefix(pth, "/fac/") {
+					seg.TransportViaRefs = append(seg.TransportViaRefs, pth)
+				}
+			}
+			// Extract segmentMetrics for this segment (fromNodeIndex=i, toNodeIndex=i+2, productIndex=i+1)
+			state, contract := p.extractSegmentState(chain.SegmentMetrics, i, i+2, i+1, sourceFragmentPath, chain.Confidence)
+			if state == nil {
+				seg.State = make(map[string]models.MetricValue)
+			} else {
+				seg.State = state
+				seg.FlowEdgeContract = contract
+				if contract != nil && len(contract.ParseWarnings) > 0 {
+					for _, w := range contract.ParseWarnings {
+						result.ParseWarnings = append(result.ParseWarnings, fmt.Sprintf("segment %s→%s: %s", srcPath, dstPath, w))
 					}
-					seg := &SupplyLinkSegment{
-						SupplierRef: srcPath,
-						ProductRef:  prodPath,
-						CustomerRef: dstPath,
-						Confidence:  chain.Confidence,
-					}
-					for _, pth := range chain.TransportVia {
-						pth = strings.TrimSpace(pth)
-						if pth != "" && strings.HasPrefix(pth, "/fac/") {
-							seg.TransportViaRefs = append(seg.TransportViaRefs, pth)
+				}
+			}
+			result.SupplyLinkSegments = append(result.SupplyLinkSegments, seg)
+			// Material flow semantics: supplier actor -> customer actor via product.
+			// This is the only place where SUPPLIES_TO is inferred from chain topology.
+			supQualifiers := map[string]interface{}{
+				"source_role":     "supplier",
+				"target_role":     "customer",
+				"direction_basis": "supply_flow",
+				"product_ref":     prodPath,
+			}
+			if len(seg.TransportViaRefs) > 0 {
+				supQualifiers[models.QualifierTransportVia] = seg.TransportViaRefs
+			}
+			supReason := fmt.Sprintf("Supply chain: %s supplies %s to %s. %s", a.Name, prod.Name, b.Name, chain.Reason)
+			if len(seg.TransportViaRefs) > 0 {
+				supReason = fmt.Sprintf("Supply chain: %s supplies %s to %s via %v. %s", a.Name, prod.Name, b.Name, seg.TransportViaRefs, chain.Reason)
+			}
+			result.Edges = append(result.Edges, &ChainEdge{
+				SourceCanonicalPath: srcPath,
+				TargetCanonicalPath: dstPath,
+				RelationType:        string(models.DependencyTypeSuppliesTo),
+				Confidence:          chain.Confidence,
+				Reason:              supReason,
+				Qualifiers:          supQualifiers,
+			})
+			result.Stats.EdgesCreated++
+			// Alternatives: create additional SupplyLink segments for alternative suppliers
+			for _, alt := range chain.Alternatives {
+				if alt.CustomerNodeIndex == i+2 && alt.ProductNodeIndex == i+1 {
+					for _, sup := range alt.Suppliers {
+						supRefRaw := strings.TrimSpace(sup.SupplierRef)
+						if supRefRaw == "" {
+							continue
 						}
-					}
-					// Extract segmentMetrics for this segment (fromNodeIndex=i, toNodeIndex=i+2, productIndex=i+1)
-					state, contract := p.extractSegmentState(chain.SegmentMetrics, i, i+2, i+1, sourceFragmentPath, chain.Confidence)
-					if state == nil {
-						seg.State = make(map[string]models.MetricValue)
-					} else {
-						seg.State = state
-						seg.FlowEdgeContract = contract
-						if contract != nil && len(contract.ParseWarnings) > 0 {
-							for _, w := range contract.ParseWarnings {
-								result.ParseWarnings = append(result.ParseWarnings, fmt.Sprintf("segment %s→%s: %s", srcPath, dstPath, w))
+						supRef := models.NormalizeOrgRefToFacilityFallback(supRefRaw)
+						if supRef == "" || (!strings.HasPrefix(supRef, "/fac/") && !strings.HasPrefix(supRef, "/deposit/")) {
+							continue
+						}
+						if supRef != srcPath {
+							altState := map[string]models.MetricValue{
+								"technical_fit":  {Value: sup.TechnicalFit},
+								"regulatory_fit": {Value: sup.RegulatoryFit},
+								"confidence":     {Value: sup.Confidence},
 							}
-						}
-					}
-					result.SupplyLinkSegments = append(result.SupplyLinkSegments, seg)
-					// Material flow semantics: supplier actor -> customer actor via product.
-					// This is the only place where SUPPLIES_TO is inferred from chain topology.
-					supQualifiers := map[string]interface{}{
-						"source_role":     "supplier",
-						"target_role":     "customer",
-						"direction_basis": "supply_flow",
-						"product_ref":     prodPath,
-					}
-					if len(seg.TransportViaRefs) > 0 {
-						supQualifiers[models.QualifierTransportVia] = seg.TransportViaRefs
-					}
-					supReason := fmt.Sprintf("Supply chain: %s supplies %s to %s. %s", a.Name, prod.Name, b.Name, chain.Reason)
-					if len(seg.TransportViaRefs) > 0 {
-						supReason = fmt.Sprintf("Supply chain: %s supplies %s to %s via %v. %s", a.Name, prod.Name, b.Name, seg.TransportViaRefs, chain.Reason)
-					}
-					result.Edges = append(result.Edges, &ChainEdge{
-						SourceCanonicalPath: srcPath,
-						TargetCanonicalPath: dstPath,
-						RelationType:        string(models.DependencyTypeSuppliesTo),
-						Confidence:          chain.Confidence,
-						Reason:              supReason,
-						Qualifiers:          supQualifiers,
-					})
-					result.Stats.EdgesCreated++
-					// Alternatives: create additional SupplyLink segments for alternative suppliers
-					for _, alt := range chain.Alternatives {
-						if alt.CustomerNodeIndex == i+2 && alt.ProductNodeIndex == i+1 {
-							for _, sup := range alt.Suppliers {
-								supRef := strings.TrimSpace(sup.SupplierRef)
-								if supRef != "" && supRef != srcPath {
-									altState := map[string]models.MetricValue{
-										"technical_fit":  {Value: sup.TechnicalFit},
-										"regulatory_fit": {Value: sup.RegulatoryFit},
-										"confidence":     {Value: sup.Confidence},
-									}
-									if sup.AvailableCapacity != nil {
-										u := sup.AvailableCapacity.Unit
-										altState["available_capacity"] = models.MetricValue{Value: sup.AvailableCapacity.Value, Unit: &u, Confidence: sup.AvailableCapacity.Confidence}
-									}
-									if sup.LeadTimeToSwitch != nil {
-										u := sup.LeadTimeToSwitch.Unit
-										if u == "" {
-											u = "days"
-										}
-										altState["lead_time_to_switch"] = models.MetricValue{Value: sup.LeadTimeToSwitch.Value, Unit: &u, Confidence: sup.LeadTimeToSwitch.Confidence}
-									}
-									if sup.CostToSwitch != nil {
-										u := sup.CostToSwitch.Unit
-										if u == "" {
-											u = "usd"
-										}
-										altState["cost_to_switch"] = models.MetricValue{Value: sup.CostToSwitch.Value, Unit: &u, Confidence: sup.CostToSwitch.Confidence}
-									}
-									altSeg := &SupplyLinkSegment{
-										SupplierRef: supRef,
-										ProductRef:  prodPath,
-										CustomerRef: dstPath,
-										Confidence:  sup.Confidence,
-										State:       altState,
-									}
-									result.SupplyLinkSegments = append(result.SupplyLinkSegments, altSeg)
+							if sup.AvailableCapacity != nil {
+								u := sup.AvailableCapacity.Unit
+								altState["available_capacity"] = models.MetricValue{Value: sup.AvailableCapacity.Value, Unit: &u, Confidence: sup.AvailableCapacity.Confidence}
+							}
+							if sup.LeadTimeToSwitch != nil {
+								u := sup.LeadTimeToSwitch.Unit
+								if u == "" {
+									u = "days"
 								}
+								altState["lead_time_to_switch"] = models.MetricValue{Value: sup.LeadTimeToSwitch.Value, Unit: &u, Confidence: sup.LeadTimeToSwitch.Confidence}
 							}
-							break
+							if sup.CostToSwitch != nil {
+								u := sup.CostToSwitch.Unit
+								if u == "" {
+									u = "usd"
+								}
+								altState["cost_to_switch"] = models.MetricValue{Value: sup.CostToSwitch.Value, Unit: &u, Confidence: sup.CostToSwitch.Confidence}
+							}
+							altSeg := &SupplyLinkSegment{
+								SupplierRef: supRef,
+								ProductRef:  prodPath,
+								CustomerRef: dstPath,
+								Confidence:  sup.Confidence,
+								State:       altState,
+							}
+							result.SupplyLinkSegments = append(result.SupplyLinkSegments, altSeg)
 						}
 					}
+					break
 				}
 			}
 		}
@@ -420,6 +471,22 @@ func (p *SupplyChainParser) extractSegmentState(metrics []agents.SegmentMetrics,
 		contract.Provenance.SourceIDs = []string{sourceFragmentPath}
 	}
 	return state, contract
+}
+
+// createGeneralProductionFacilityFragment creates a facility fragment for /fac/{orgSlug}-general-production.
+// Used when org actor is normalized to facility fallback in supply chain context.
+func (p *SupplyChainParser) createGeneralProductionFacilityFragment(canonicalPath string) *models.HorizonFragment {
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	if canonicalPath == "" || !strings.HasPrefix(canonicalPath, "/fac/") || !strings.HasSuffix(canonicalPath, "-general-production") {
+		return nil
+	}
+	return &models.HorizonFragment{
+		CanonicalPath: canonicalPath,
+		Type:          models.FragmentTypeFacility,
+		Labels:        map[string]string{"en": generalProductionFacilityTitle},
+		Identifiers:   map[string]string{},
+		State:         make(map[string]models.MetricValue),
+	}
 }
 
 // createTransportFacilityFragment creates a minimal HorizonFragment for a transport facility path.
@@ -614,19 +681,6 @@ func (p *SupplyChainParser) isActorType(nodeType string, canonicalPath string) b
 	return strings.HasPrefix(canonicalPath, "/org/") || strings.HasPrefix(canonicalPath, "/fac/") || strings.HasPrefix(canonicalPath, "/deposit/")
 }
 
-// isSupplyActorType checks if a node can be a supplier/customer endpoint in SUPPLIES_TO.
-func (p *SupplyChainParser) isSupplyActorType(nodeType string, canonicalPath string) bool {
-	return p.isOrganizationType(nodeType, canonicalPath) || p.isFacilityType(nodeType, canonicalPath)
-}
-
-func (p *SupplyChainParser) isOrganizationType(nodeType string, canonicalPath string) bool {
-	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
-	if nodeType == "ORGANIZATION" {
-		return true
-	}
-	return strings.HasPrefix(strings.TrimSpace(canonicalPath), "/org/")
-}
-
 func (p *SupplyChainParser) isFacilityType(nodeType string, canonicalPath string) bool {
 	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
 	if nodeType == "FACILITY" {
@@ -675,11 +729,15 @@ func (p *SupplyChainParser) isFinancialFlowProduct(canonicalPath, name string) b
 
 // ChainContext represents the cumulative supply chain state passed between jobs.
 // It contains discovered nodes and edges so far, allowing agents to extend chains.
+// NodeLabels maps canonical path -> human-readable name (title) for LLM prompts.
 type ChainContext struct {
 	// DiscoveredNodes are canonical paths of all discovered supply chain entities.
 	DiscoveredNodes []string `json:"discoveredNodes"`
 	// DiscoveredEdges are edges between nodes (source -> target with type).
 	DiscoveredEdges []ChainContextEdge `json:"discoveredEdges"`
+	// NodeLabels maps canonical path -> human-readable name (Labels["en"] or derived).
+	// Used in prompts so LLM understands context; paths alone are opaque.
+	NodeLabels map[string]string `json:"nodeLabels,omitempty"`
 	// GapHints are specific gaps to fill (e.g., "find upstream supplier for /product/x").
 	GapHints []string `json:"gapHints,omitempty"`
 }
@@ -705,16 +763,28 @@ func (cc *ChainContext) MergeFromParsedResult(result *ParsedChainResult) {
 	if result == nil {
 		return
 	}
+	if cc.NodeLabels == nil {
+		cc.NodeLabels = make(map[string]string)
+	}
 
-	// Add nodes (deduplicated)
+	// Add nodes (deduplicated) and labels
 	nodeSet := make(map[string]struct{})
 	for _, n := range cc.DiscoveredNodes {
 		nodeSet[n] = struct{}{}
 	}
-	for path := range result.Fragments {
+	for path, frag := range result.Fragments {
 		if _, exists := nodeSet[path]; !exists {
 			cc.DiscoveredNodes = append(cc.DiscoveredNodes, path)
 			nodeSet[path] = struct{}{}
+		}
+		if frag != nil {
+			if name := strings.TrimSpace(frag.Labels["en"]); name != "" {
+				cc.NodeLabels[path] = name
+			} else if name := strings.TrimSpace(frag.Description); name != "" && len(name) < 80 {
+				cc.NodeLabels[path] = name
+			} else if name := slugToReadableName(path); name != "" {
+				cc.NodeLabels[path] = name
+			}
 		}
 	}
 
@@ -779,7 +849,41 @@ func ParseChainContext(data interface{}) (*ChainContext, error) {
 	return &cc, nil
 }
 
+// slugToReadableName converts path slug (e.g. "silver-peak") to readable form ("Silver Peak").
+func slugToReadableName(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	last := strings.TrimSpace(parts[len(parts)-1])
+	last = strings.ReplaceAll(last, "-", " ")
+	last = strings.ReplaceAll(last, "_", " ")
+	if last == "" {
+		return ""
+	}
+	return strings.Title(strings.ToLower(last))
+}
+
+// nodeLabelForPrompt returns "Name (path)" when name known, else just path.
+func (cc *ChainContext) nodeLabelForPrompt(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if cc.NodeLabels != nil {
+		if name := strings.TrimSpace(cc.NodeLabels[path]); name != "" {
+			return fmt.Sprintf("%s (%s)", name, path)
+		}
+	}
+	return path
+}
+
 // ToPromptContext generates a human-readable context string for LLM prompts.
+// Uses titles/names when available (LLM understands names; paths alone are opaque).
 func (cc *ChainContext) ToPromptContext() string {
 	if len(cc.DiscoveredNodes) == 0 && len(cc.DiscoveredEdges) == 0 {
 		return ""
@@ -787,18 +891,27 @@ func (cc *ChainContext) ToPromptContext() string {
 
 	var sb strings.Builder
 	sb.WriteString("EXISTING SUPPLY CHAIN CONTEXT (discovered so far):\n")
+	sb.WriteString("Use names for context; canonical paths in parentheses are for exact matching.\n\n")
 
 	if len(cc.DiscoveredNodes) > 0 {
 		sb.WriteString("Known entities:\n")
 		for _, n := range cc.DiscoveredNodes {
-			sb.WriteString(fmt.Sprintf("  - %s\n", n))
+			sb.WriteString(fmt.Sprintf("  - %s\n", cc.nodeLabelForPrompt(n)))
 		}
 	}
 
 	if len(cc.DiscoveredEdges) > 0 {
-		sb.WriteString("Known connections:\n")
+		sb.WriteString("Known connections (supplier —[type]—> customer):\n")
 		for _, e := range cc.DiscoveredEdges {
-			sb.WriteString(fmt.Sprintf("  - %s -[%s]-> %s\n", e.Source, e.EdgeType, e.Target))
+			src := cc.nodeLabelForPrompt(e.Source)
+			tgt := cc.nodeLabelForPrompt(e.Target)
+			if src == "" {
+				src = e.Source
+			}
+			if tgt == "" {
+				tgt = e.Target
+			}
+			sb.WriteString(fmt.Sprintf("  - %s —[%s]—> %s\n", src, e.EdgeType, tgt))
 		}
 	}
 

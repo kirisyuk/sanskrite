@@ -3,14 +3,21 @@ package scout
 import (
 	"testing"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
-func TestEdgeAllowlistByDomainMode_SupplyChainIncludesDependsOn(t *testing.T) {
+func TestEdgeAllowlistByDomainMode_SupplyChainOperationalTypesOnly(t *testing.T) {
 	allow := EdgeAllowlistByDomainMode(taxonomy.DomainModeSupplyChain)
-	if !AllowlistContains(allow, "DEPENDS_ON") {
-		t.Fatalf("supply_chain allowlist must include DEPENDS_ON")
+	operational := []string{"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM"}
+	for _, ot := range operational {
+		if !AllowlistContains(allow, models.DependencyType(ot)) {
+			t.Fatalf("supply_chain allowlist must include %s", ot)
+		}
+	}
+	if AllowlistContains(allow, models.DependencyType("DEPENDS_ON")) || AllowlistContains(allow, models.DependencyType("CONSUMES")) {
+		t.Fatalf("supply_chain allowlist must exclude DEPENDS_ON and CONSUMES (operational types only)")
 	}
 }
 
@@ -39,17 +46,20 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChain(t *testing.T) {
 	in := []agents.DiscoveredRelation{
 		{RelationType: "SUPPLIES_TO"},
 		{RelationType: "depends_on"},
+		{RelationType: "PRODUCES"},
 		{RelationType: "OWNS"},
 	}
 	out := filterDiscoveredRelationsByDomainModes(in, []string{taxonomy.DomainModeSupplyChain})
+	// DEPENDS_ON and OWNS excluded (operational types only); SUPPLIES_TO and PRODUCES pass
 	if len(out) != 2 {
 		t.Fatalf("expected 2 relations after supply_chain filter, got %d", len(out))
 	}
-	if out[0].RelationType != "SUPPLIES_TO" {
-		t.Fatalf("first relationType=%q, want SUPPLIES_TO", out[0].RelationType)
+	types := map[string]bool{}
+	for _, r := range out {
+		types[r.RelationType] = true
 	}
-	if out[1].RelationType != "DEPENDS_ON" {
-		t.Fatalf("second relationType=%q, want DEPENDS_ON", out[1].RelationType)
+	if !types["SUPPLIES_TO"] || !types["PRODUCES"] {
+		t.Fatalf("expected SUPPLIES_TO and PRODUCES, got %v", types)
 	}
 }
 

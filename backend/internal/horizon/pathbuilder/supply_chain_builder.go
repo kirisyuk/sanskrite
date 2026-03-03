@@ -168,10 +168,15 @@ func (b *SupplyChainPathBuilder) BuildUpstreamPaths(
 	if customerRef == "" {
 		return nil, fmt.Errorf("customerRef is required")
 	}
-
-	// Normalize customerRef (ensure it's a canonical path)
-	if !strings.HasPrefix(customerRef, "/org/") && !strings.HasPrefix(customerRef, "/fac/") {
-		return nil, fmt.Errorf("customerRef must be an organization or facility canonical path")
+	customerRef = strings.TrimSpace(customerRef)
+	// Normalize org→fac: SupplyLinks only have /fac/ as CustomerRef. When lens scope uses /org/, resolve to /fac/{orgSlug}-general-production.
+	if strings.HasPrefix(customerRef, "/org/") {
+		if norm := models.NormalizeOrgRefToFacilityFallback(customerRef); norm != "" {
+			customerRef = norm
+		}
+	}
+	if !strings.HasPrefix(customerRef, "/fac/") {
+		return nil, fmt.Errorf("customerRef must be a facility canonical path (use /fac/... or /org/... for auto-normalization)")
 	}
 
 	// Find all SupplyLinks where customer matches
@@ -184,10 +189,10 @@ func (b *SupplyChainPathBuilder) BuildUpstreamPaths(
 		return []*SupplyChainPath{}, nil
 	}
 
-	// Build paths recursively upstream
+	// Build paths recursively upstream (with pseudo-cycle guard: no duplicate ProductRef in path)
 	var allPaths []*SupplyChainPath
 	for _, segment := range segments {
-		path, err := b.buildPathRecursive(ctx, segment, opts, 1, map[string]bool{})
+		path, err := b.buildPathRecursive(ctx, segment, opts, 1, map[string]bool{}, map[string]bool{})
 		if err != nil {
 			continue // Skip paths with errors
 		}
@@ -236,12 +241,14 @@ func (b *SupplyChainPathBuilder) BuildUpstreamPath(
 }
 
 // buildPathRecursive recursively builds a path upstream from a segment.
+// visited tracks supplier+product for cycle detection; visitedProducts guards against pseudo-cycles (same product twice in path).
 func (b *SupplyChainPathBuilder) buildPathRecursive(
 	ctx context.Context,
 	currentSegment PathSegment,
 	opts BuildPathOptions,
 	depth int,
 	visited map[string]bool,
+	visitedProducts map[string]bool,
 ) (*SupplyChainPath, error) {
 	if depth > opts.MaxDepth {
 		return &SupplyChainPath{
@@ -252,7 +259,16 @@ func (b *SupplyChainPathBuilder) buildPathRecursive(
 		}, nil
 	}
 
-	// Check for cycles
+	// Pseudo-cycle guard: product must not appear more than once in a single path
+	if currentSegment.ProductRef != "" {
+		if visitedProducts[currentSegment.ProductRef] {
+			return nil, fmt.Errorf("pseudo-cycle: product %s already in path", currentSegment.ProductRef)
+		}
+		visitedProducts[currentSegment.ProductRef] = true
+		defer delete(visitedProducts, currentSegment.ProductRef)
+	}
+
+	// Check for cycles (supplier+product pair)
 	if currentSegment.SupplierRef != "" {
 		key := fmt.Sprintf("%s:%s", currentSegment.SupplierRef, currentSegment.ProductRef)
 		if visited[key] {
@@ -319,7 +335,11 @@ func (b *SupplyChainPathBuilder) buildPathRecursive(
 			}
 		}
 
-		upstreamPath, err := b.buildPathRecursive(ctx, nextSegment, opts, depth+1, visited)
+		// Pseudo-cycle: skip next segments that would introduce a duplicate product
+		if nextSegment.ProductRef != "" && visitedProducts[nextSegment.ProductRef] {
+			continue
+		}
+		upstreamPath, err := b.buildPathRecursive(ctx, nextSegment, opts, depth+1, visited, visitedProducts)
 		if err != nil {
 			continue
 		}
@@ -356,11 +376,18 @@ func (b *SupplyChainPathBuilder) buildPathRecursive(
 
 // findSupplyLinksForCustomer finds all SupplyLink fragments where customer matches.
 // Implements tenant-first, global-fallback precedence.
+// Normalizes /org/ to /fac/{orgSlug}-general-production (SupplyLinks store facility refs only).
 func (b *SupplyChainPathBuilder) findSupplyLinksForCustomer(
 	ctx context.Context,
 	customerRef string,
 	opts BuildPathOptions,
 ) ([]PathSegment, error) {
+	customerRef = strings.TrimSpace(customerRef)
+	if strings.HasPrefix(customerRef, "/org/") {
+		if norm := models.NormalizeOrgRefToFacilityFallback(customerRef); norm != "" {
+			customerRef = norm
+		}
+	}
 	// Segment-level precedence:
 	// - If tenant segments exist for this step, use them and do NOT mix with global.
 	// - Otherwise, fall back to global to avoid path breaks.

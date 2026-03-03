@@ -75,11 +75,12 @@ func TestParseSupplyChains_SupplyLinkSegmentBasic(t *testing.T) {
 		t.Fatalf("segments=%d, want 1", len(result.SupplyLinkSegments))
 	}
 	seg := result.SupplyLinkSegments[0]
-	if seg.SupplierRef != "/org/cn/huawei-technologies-co-ltd" {
-		t.Fatalf("supplierRef=%q, want /org/cn/huawei-technologies-co-ltd", seg.SupplierRef)
+	// Org actors are normalized to /fac/{orgSlug}-general-production per fractal model
+	if seg.SupplierRef != "/fac/huawei-technologies-co-ltd-general-production" {
+		t.Fatalf("supplierRef=%q, want /fac/huawei-technologies-co-ltd-general-production", seg.SupplierRef)
 	}
-	if seg.CustomerRef != "/org/kz/kcell-jsc" {
-		t.Fatalf("customerRef=%q, want /org/kz/kcell-jsc", seg.CustomerRef)
+	if seg.CustomerRef != "/fac/kcell-jsc-general-production" {
+		t.Fatalf("customerRef=%q, want /fac/kcell-jsc-general-production", seg.CustomerRef)
 	}
 	if len(seg.TransportViaRefs) != 1 || seg.TransportViaRefs[0] != "/fac/ae/jebel-ali-port" {
 		t.Fatalf("transportViaRefs=%v, want only /fac/ae/jebel-ali-port", seg.TransportViaRefs)
@@ -119,13 +120,14 @@ func TestParseSupplyChains_SuppliesToEdgeHasTransportVia(t *testing.T) {
 		if edge == nil || edge.RelationType != string(models.DependencyTypeSuppliesTo) {
 			continue
 		}
-		if edge.SourceCanonicalPath == "/org/us/intel-corporation" && edge.TargetCanonicalPath == "/org/tw/tsmc" {
+		// Org actors normalized to /fac/{slug}-general-production
+		if edge.SourceCanonicalPath == "/fac/intel-corporation-general-production" && edge.TargetCanonicalPath == "/fac/tsmc-general-production" {
 			suppliesEdge = edge
 			break
 		}
 	}
 	if suppliesEdge == nil {
-		t.Fatalf("expected inferred SUPPLIES_TO edge")
+		t.Fatalf("expected inferred SUPPLIES_TO edge (org→org normalized to fac→fac)")
 	}
 	rawVia, ok := suppliesEdge.Qualifiers[models.QualifierTransportVia]
 	if !ok {
@@ -184,7 +186,8 @@ func TestParseSupplyChains_SuppliesToEdgeWithoutTransportStillHasDirectionalQual
 		if edge == nil || edge.RelationType != string(models.DependencyTypeSuppliesTo) {
 			continue
 		}
-		if edge.SourceCanonicalPath == "/org/br/vale-sa" && edge.TargetCanonicalPath == "/fac/cn/baosteel-shanghai" {
+		// Org supplier normalized to /fac/{slug}-general-production
+		if edge.SourceCanonicalPath == "/fac/vale-sa-general-production" && edge.TargetCanonicalPath == "/fac/cn/baosteel-shanghai" {
 			suppliesEdge = edge
 			break
 		}

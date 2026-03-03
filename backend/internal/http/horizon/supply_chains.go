@@ -78,3 +78,51 @@ func (h *HorizonHandlers) GetSupplyChainsByNode(w http.ResponseWriter, r *http.R
 		"total":     len(artifacts),
 	})
 }
+
+// GetSupplyChainsByLens returns materialized supply chain artifacts (SUPPLY_CHAIN_PATH) for a lens.
+// GET /api/horizon/supply-chains/by-lens?lensId=...
+func (h *HorizonHandlers) GetSupplyChainsByLens(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authInfo := httputil.GetAuthInfo(r.Context())
+	if authInfo == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	lensID := strings.TrimSpace(r.URL.Query().Get("lensId"))
+	if lensID == "" {
+		http.Error(w, "lensId query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	if h.materializedArtifactsRepo == nil {
+		http.Error(w, "Supply chains not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	limit := 100
+	artifacts, err := h.materializedArtifactsRepo.ListByLens(r.Context(), lensID, limit)
+	if err != nil {
+		http.Error(w, "Failed to fetch supply chains", http.StatusInternalServerError)
+		return
+	}
+
+	// Filter to SUPPLY_CHAIN_PATH only
+	chains := make([]*horizonmodels.MaterializedArtifact, 0, len(artifacts))
+	for _, a := range artifacts {
+		if a.Kind == horizonmodels.MaterializedKindSupplyChainPath {
+			chains = append(chains, a)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"lensId": lensID,
+		"chains": chains,
+		"total":  len(chains),
+	})
+}

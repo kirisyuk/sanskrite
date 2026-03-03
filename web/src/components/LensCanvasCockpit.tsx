@@ -57,6 +57,7 @@ import {
   type GridCell,
   type SemanticGroup,
 } from '../lib/elkLayout';
+import { layoutSupplyChain, filterSupplyChainEdges } from '../lib/supplyChainLayout';
 import type { LensItem } from '../types/lensItem';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 import {
@@ -74,6 +75,7 @@ import { TribeProfileModal } from './TribeProfileModal';
 import { ProgramProfileModal } from './ProgramProfileModal';
 import { GraphIntentResultCard } from './GraphIntentResultCard';
 import { ScoutIntentModal, type ScoutIntentResolution } from './ScoutIntentModal';
+import { SupplyChainOverlay, type MaterializedArtifact } from './SupplyChainOverlay';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
@@ -1760,11 +1762,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const [showMiniMap, setShowMiniMap] = React.useState(false);
   const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
-  const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear' | 'levels'>('levels');
+  const [layoutMode, setLayoutMode] = React.useState<'freeform' | 'linear' | 'levels' | 'supply-chain'>('levels');
   // Layout mode helpers - shared across callbacks/effects below.
   const isFreeformLayout = layoutMode === 'freeform';
   const isLinearLayout = layoutMode === 'linear';
   const isLevelsLayout = layoutMode === 'levels';
+  const isSupplyChainLayout = layoutMode === 'supply-chain';
   const [showToolbarMenu, setShowToolbarMenu] = React.useState(false);
   const toolbarMenuRef = React.useRef<HTMLDivElement | null>(null);
   // Right-side pushable overlays: actions, view, info
@@ -1797,6 +1800,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [levelsExpandMode, setLevelsExpandMode] = React.useState<LevelsExpandMode>('all');
   const [showLevelsExpandMenu, setShowLevelsExpandMenu] = React.useState(false);
   const levelsExpandMenuRef = React.useRef<HTMLDivElement | null>(null);
+  const [supplyChainRefreshKey, setSupplyChainRefreshKey] = React.useState(0);
 
   const levelsExpandLabel = React.useCallback((m: LevelsExpandMode): string => {
     switch (m) {
@@ -1880,6 +1884,36 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return [];
     }
   }, [levelsExpandMode]);
+
+  /** Supply Chain layout: edge types for expansion (supply-chain links only). */
+  const supplyChainExpandEdgeTypes = React.useMemo((): string[] => [
+    'EXTRACTS_FROM',
+    'PRODUCES',
+    'TRANSFORMS_INTO',
+    'SUPPLIES_TO',
+    'CONSUMES',
+    'DEPENDS_ON',
+    'REQUIRES',
+    'NEEDS',
+    'USES',
+    'LOCATED_IN',
+    'OPERATES_IN',
+    'BASED_IN',
+    'HEADQUARTERED_IN',
+    'REGULATES',
+    'ADMINISTERS',
+    'PARTICIPATES_IN',
+    'DOMINATES',
+    'INFLUENCES',
+    'AFFECTS',
+    'IMPACTS',
+  ], []);
+
+  /** Edge types used for expansion in current layout (levels vs supply-chain). */
+  const expandEdgeTypesForLayout = React.useMemo(
+    () => (isSupplyChainLayout ? supplyChainExpandEdgeTypes : levelsExpandEdgeTypes),
+    [isSupplyChainLayout, supplyChainExpandEdgeTypes, levelsExpandEdgeTypes],
+  );
 
   // Trace (multi-hop exploration that adds nodes/edges to the current Lens).
   type TraceDirection = 'up' | 'down' | 'both';
@@ -2902,7 +2936,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, [isLevelsLayout, levelsExpandMode]);
 
   // Prevent mode-switch relayout loops
-  const lastAppliedLayoutModeRef = React.useRef<'freeform' | 'linear' | 'levels' | null>(null);
+  const lastAppliedLayoutModeRef = React.useRef<'freeform' | 'linear' | 'levels' | 'supply-chain' | null>(null);
   const autoArrangeOnceRef = React.useRef<boolean>(false);
   // Proxy ref to avoid TDZ when effects above reference convertLensItemsToGraph (defined later).
   // We set this ref to the real callback after it's initialized.
@@ -3385,7 +3419,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   React.useEffect(() => {
     if (!collapsedSubcategoriesChangedRef.current) return;
     collapsedSubcategoriesChangedRef.current = false;
-    if (layoutMode === 'levels') {
+    if (layoutMode === 'levels' || layoutMode === 'supply-chain') {
       // Use ref directly (bypassing debounce) to ensure latest closure is called immediately.
       // onArrangeRef is updated each render to point to current handleArrange.
       const fn = onArrangeRef.current;
@@ -3397,17 +3431,17 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   React.useEffect(() => {
     if (!expandedRoleGroupsChangedRef.current) return;
     expandedRoleGroupsChangedRef.current = false;
-    if (layoutMode === 'levels') {
+    if (layoutMode === 'levels' || layoutMode === 'supply-chain') {
       const fn = onArrangeRef.current;
       if (typeof fn === 'function') fn();
     }
   }, [expandedRoleGroups, layoutMode]);
 
-  // Trigger relayout when right dock state changes (in Levels mode).
+  // Trigger relayout when right dock state changes (in Levels or Supply Chain mode).
   React.useEffect(() => {
     if (!rightDockChangedRef.current) return;
     rightDockChangedRef.current = false;
-    if (layoutMode === 'levels') {
+    if (layoutMode === 'levels' || layoutMode === 'supply-chain') {
       const fn = onArrangeRef.current;
       if (typeof fn === 'function') fn();
     }
@@ -4525,6 +4559,128 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
     setScopeScoutModal({ fragmentId: fid, canonicalPath, label });
   }, []);
+
+  const handleLoadSupplyChain = React.useCallback(
+    async (paths: string[], artifact: MaterializedArtifact) => {
+      const currentNodes = nodesStateRef.current || [];
+      const refToNodeId = new Map<string, string>();
+      for (const n of currentNodes) {
+        if ((n.data as any)?.isGroup) continue;
+        const cp = String((n.data as any)?.canonicalPath || '').trim();
+        if (cp) refToNodeId.set(cp, String(n.id || '').trim());
+      }
+
+      const newNodes: Node<HorizonNodeData>[] = [];
+      const newEdges: Edge[] = [];
+      const pathsToFetch = paths.filter((p) => !refToNodeId.has(String(p || '').trim()));
+      const fragments = await Promise.all(
+        pathsToFetch.map((p) => api.getHorizonFragmentByPath(p).catch(() => null))
+      );
+
+      for (let i = 0; i < pathsToFetch.length; i++) {
+        const frag = fragments[i];
+        const path = String(pathsToFetch[i] || '').trim();
+        if (!path || refToNodeId.has(path)) continue;
+        const nodeId = frag?.id || path;
+        const label = frag?.labels?.en || frag?.displayLabel || frag?.name || path.split('/').pop() || path;
+        newNodes.push({
+          id: nodeId,
+          type: 'horizonFragment',
+          position: { x: 100 + (i % 4) * 220, y: 100 + Math.floor(i / 4) * 180 },
+          data: {
+            id: nodeId,
+            fragmentId: frag?.id || nodeId,
+            canonicalPath: path,
+            label,
+            type: frag?.type || 'ORGANIZATION',
+            state: frag?.state,
+            showMetrics: showNodeMetrics,
+            expanded: false,
+            onLoadRelated: invokeLoadRelated,
+            onCollapse: invokeCollapse,
+            onScopeScout: invokeScopeScout,
+          } as any,
+        });
+        refToNodeId.set(path, nodeId);
+      }
+
+      const payloadNodes = artifact.payload?.nodes || [];
+      const payloadEdges = artifact.payload?.edges || [];
+      const existingEdgeIds = new Set((edges || []).map((e) => String((e as any)?.id || '').trim()));
+      const addEdge = (id: string, sourceId: string, targetId: string, edgeType: string) => {
+        if (existingEdgeIds.has(id)) return;
+        const baseStyle = getEdgeStyle(edgeType, undefined);
+        const stroke = getEdgeStroke(baseStyle);
+        newEdges.push({
+          id,
+          source: sourceId,
+          target: targetId,
+          type: 'default',
+          markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+          style: baseStyle,
+          data: {
+            edgeType,
+            edgeCaption: getEdgeCaptionShort(edgeType),
+          } as any,
+        });
+        existingEdgeIds.add(id);
+      };
+      for (const e of payloadEdges) {
+        const fromRef = payloadNodes[e.from]?.ref;
+        const toRef = payloadNodes[e.to]?.ref;
+        if (!fromRef || !toRef) continue;
+        const srcId = refToNodeId.get(fromRef);
+        const trgId = refToNodeId.get(toRef);
+        if (!srcId || !trgId) continue;
+
+        const viaIdx = e.viaProductIndex ?? (e as any).viaProductIndex;
+        if (e.type === 'SUPPLY_LINK' && typeof viaIdx === 'number' && viaIdx >= 0 && viaIdx < payloadNodes.length) {
+          const productRef = payloadNodes[viaIdx]?.ref;
+          const productId = productRef ? refToNodeId.get(productRef) : undefined;
+          if (productId) {
+            addEdge(
+              `supply:${artifact.id}:${e.from}-via${viaIdx}`,
+              srcId,
+              productId,
+              'PRODUCES',
+            );
+            addEdge(
+              `supply:${artifact.id}:via${viaIdx}-${e.to}`,
+              productId,
+              trgId,
+              'SUPPLIES_TO',
+            );
+            continue;
+          }
+        }
+
+        const edgeType =
+          e.type === 'ONTOLOGY' && e.relation
+            ? e.relation
+            : e.type === 'SUPPLY_LINK'
+              ? 'SUPPLIES_TO'
+              : 'DEPENDS_ON';
+        addEdge(`supply:${artifact.id}:${e.from}-${e.to}`, srcId, trgId, edgeType);
+      }
+
+      setNodes((prev) => {
+        const byId = new Map((prev || []).map((n) => [n.id, n]));
+        for (const n of newNodes) {
+          if (!byId.has(n.id)) byId.set(n.id, n);
+        }
+        return Array.from(byId.values());
+      });
+      setEdges((prev) => {
+        const byId = new Map((prev || []).map((e) => [e.id, e]));
+        for (const e of newEdges) {
+          if (!byId.has(e.id)) byId.set(e.id, e);
+        }
+        return Array.from(byId.values());
+      });
+      invokeArrange();
+    },
+    [setNodes, setEdges, invokeArrange, getEdgeStyle, getEdgeStroke, getEdgeCaptionShort, showNodeMetrics, invokeLoadRelated, invokeCollapse, invokeScopeScout, edges]
+  );
 
   // Track per-node expansions so we can "collapse" (undo expand) safely.
   type ExpansionRecord = {
@@ -6206,6 +6362,46 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     });
   }, []);
 
+  /**
+   * Recalculate edge handles for Supply Chain (horizontal hierarchy).
+   * Uses only left/right handles: source on the right → source-right, target-left; source on the left → source-left, target-right.
+   */
+  const recalculateSupplyChainHandles = useCallback((
+    edgeList: Edge[],
+    nodeList: Node<HorizonNodeData>[]
+  ): Edge[] => {
+    const nodeMap = new Map<string, Node<HorizonNodeData>>();
+    for (const n of nodeList) {
+      const d = n.data as any;
+      if (d?.isGroup) continue;
+      nodeMap.set(n.id, n);
+      if (d?.fragmentId) nodeMap.set(String(d.fragmentId), n);
+    }
+    const nearColumnBand = 40;
+    return edgeList.map((e) => {
+      const sourceNode = nodeMap.get(e.source) || nodeMap.get(String((e as any).source));
+      const targetNode = nodeMap.get(e.target) || nodeMap.get(String((e as any).target));
+      if (!sourceNode || !targetNode) {
+        return { ...e, sourceHandle: e.sourceHandle || 'source-right', targetHandle: e.targetHandle || 'target-left' };
+      }
+      const sx = Number((sourceNode as any)?.position?.x) ?? 0;
+      const tx = Number((targetNode as any)?.position?.x) ?? 0;
+      let sourceHandle: string;
+      let targetHandle: string;
+      if (tx > sx + nearColumnBand) {
+        sourceHandle = 'source-right';
+        targetHandle = 'target-left';
+      } else if (tx < sx - nearColumnBand) {
+        sourceHandle = 'source-left';
+        targetHandle = 'target-right';
+      } else {
+        sourceHandle = 'source-right';
+        targetHandle = 'target-left';
+      }
+      return { ...e, sourceHandle, targetHandle };
+    });
+  }, []);
+
   // ELK layout options
   const ELK_NODE_WIDTH = 180;
   // Layout height includes the "+" button protruding half outside the visual card:
@@ -7304,6 +7500,66 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return;
       }
 
+      if (isSupplyChainLayout) {
+        // Supply Chain: pure hierarchical layout (right-to-left).
+        const nextNodesClean = (nextNodes as any[]).filter((n) => {
+          const id = String((n as any)?.id || '').trim();
+          const d: any = (n as any)?.data;
+          // Filter out group containers and UI artifacts
+          if (d?.isGroup) return false;
+          if (id.startsWith('levels:')) return false;
+          if (id.startsWith('group:')) return false;
+          if (id.startsWith('stack:group:')) return false;
+          if (Boolean(d?.isStackGroup)) return false;
+          if (id.includes(':ctrl:')) return false;
+          if (id.includes(':card:')) return false;
+          return true;
+        });
+
+        // Reset parents to ensure flat layout
+        const nodesWithResetParents = nextNodesClean.map(n => ({
+          ...n,
+          parentNode: undefined,
+          parentId: undefined,
+          extent: undefined,
+          expandParent: undefined,
+          data: {
+            ...n.data,
+            parentId: undefined,
+            parentNode: undefined
+          }
+        }));
+
+        const arranged = await layoutSupplyChain(nodesWithResetParents as any, nextEdges as any, {
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        });
+
+        const finalFragments = arranged.map((node) => {
+          const fid = String((node.data as any)?.fragmentId || node.id || '').trim();
+          const shouldBeExpanded = fid && expandedNodesRef.current.has(fid);
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              expanded: shouldBeExpanded ? true : (node.data as any)?.expanded || false,
+              onLoadRelated: invokeLoadRelated,
+              onCollapse: invokeCollapse,
+              onScopeScout: invokeScopeScout,
+            },
+          };
+        });
+
+        const updatedEdges = recalculateSupplyChainHandles(nextEdges, finalFragments as any);
+        setNodes(finalFragments as any);
+        setEdges(updatedEdges as any);
+        setTimeout(() => focusOnFragment(fragmentId), 80);
+        return;
+      }
+
       // Freeform (and fallback): rebuild group containers for current fragment nodes
       withGroups = rebuildGroupContainers(
         await layoutFullGraph(fragmentNodes as any, nextEdges as any, {
@@ -7345,6 +7601,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setEdges,
     isLinearLayout,
     isLevelsLayout,
+    isSupplyChainLayout,
     isFreeformLayout,
     setGridState,
     recalculateLinearHandles,
@@ -7701,15 +7958,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           _corridorTotalPaths: corridorPaths.length,
         };
       } else {
-        // When expanding a MARKET, always include PARTICIPATES_IN and DOMINATES so participants appear in left group
+        // When expanding a MARKET (levels only), always include PARTICIPATES_IN and DOMINATES so participants appear in left group
+        // Supply-chain layout: use supply-chain edge types only
         const edgeTypesForRequest =
-          isLevelsLayout && levelsExpandEdgeTypes.length > 0
+          (isLevelsLayout && levelsExpandEdgeTypes.length > 0)
             ? isMarket
               ? Array.from(new Set([...levelsExpandEdgeTypes, 'PARTICIPATES_IN', 'DOMINATES']))
               : levelsExpandEdgeTypes
-            : undefined;
+            : isSupplyChainLayout && supplyChainExpandEdgeTypes.length > 0
+              ? supplyChainExpandEdgeTypes
+              : undefined;
 
-        const requestOptions = isLevelsLayout
+        const usesFilteredExpansion = (isLevelsLayout && levelsExpandEdgeTypes.length > 0) || (isSupplyChainLayout && supplyChainExpandEdgeTypes.length > 0);
+        const requestOptions = usesFilteredExpansion
           ? {
               direction: 'both' as const,
               ...(edgeTypesForRequest && edgeTypesForRequest.length > 0 ? { edgeTypes: edgeTypesForRequest } : {}),
@@ -8578,7 +8839,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                       handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
                }
           }
-        } else if (isLinearLayout || isLevelsLayout) {
+        } else if (isLinearLayout || isLevelsLayout || isSupplyChainLayout) {
           // Linear layout: специальная логика для нижних групп
           // Проверяем, находятся ли ноды в одном grid
           const isSameGrid = 
@@ -8796,7 +9057,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Levels mode (Two-Pane contract): if user expands a node that was inside a group,
       // it must become a "right" node immediately (before layout), otherwise its newly fetched
       // neighbors won't be placed under its own left block.
-      if (isLevelsLayout && isNodeInGroup) {
+      if ((isLevelsLayout || isSupplyChainLayout) && isNodeInGroup) {
         preprocessedNodes = preprocessedNodes.map((n) => {
           const nodeFragmentId = norm(n.data?.fragmentId || n.id);
           if (nodeFragmentId !== fragmentId) return n;
@@ -8854,7 +9115,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             ...n.data,
             // Freeform uses parentFragmentId for container parenting; Linear uses global section containers,
             // but still needs edgeType/direction + depth for correct quadrant placement.
-            ...(isFreeformLayout || isLevelsLayout ? { parentFragmentId: fragmentId } : {}),
+            ...(isFreeformLayout || isLevelsLayout || isSupplyChainLayout ? { parentFragmentId: fragmentId } : {}),
             edgeTypeFromParent,
             directionFromParent,
             ...(corridorLaneForNode ? { corridorLane: corridorLaneForNode } : {}),
@@ -8868,7 +9129,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       });
 
       // Reset expanded stack state when loading new graph (expand node).
-      if (isLevelsLayout) expandedStackKeysRef.current.clear();
+      if (isLevelsLayout || isSupplyChainLayout) expandedStackKeysRef.current.clear();
 
       // Применяем layout для позиционирования новых узлов относительно родителя
       // Логика зависит от режима раскладки (freeform или linear)
@@ -8987,6 +9248,50 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           expandedStackKeysOverride: expandedStackKeysRef.current,
         });
         linearEdgesAfterLayout = recalculateLevelsTwoPaneHandles(filteredMergedEdges as any, layoutedNodes as any);
+      } else if (isSupplyChainLayout) {
+        // Supply Chain: full flat relayout, no groups
+        const mergedEdges: Edge[] = (() => {
+          const out: Edge[] = [];
+          const seen = new Set<string>();
+          for (const e of [...currentEdges, ...newEdges]) {
+            if (!e) continue;
+            const id = String((e as any).id || '');
+            if (id) { if (seen.has(id)) continue; seen.add(id); out.push(e); continue; }
+            const t = String((e as any).data?.edgeType || (e as any).label || (e as any).type || 'UNKNOWN');
+            const k = `${(e as any).source}::${(e as any).target}::${t}`;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push({ ...(e as any), id: `edge-${k}` });
+          }
+          return out;
+        })();
+        const allNodes = [...updatedCurrentNodes, ...newNodes];
+        const clean = (allNodes as any[]).filter((n) => {
+          const id = String((n as any)?.id || '').trim();
+          const d: any = (n as any)?.data;
+          if (d?.isGroup) return false;
+          if (id.startsWith('levels:')) return false;
+          if (id.startsWith('group:')) return false;
+          if (id.startsWith('stack:group:')) return false;
+          if (id.includes(':ctrl:') || id.includes(':card:')) return false;
+          return true;
+        });
+        const withResetParents = clean.map((n) => ({
+          ...n,
+          parentNode: undefined,
+          parentId: undefined,
+          extent: undefined,
+          expandParent: undefined,
+          data: { ...(n.data || {}), parentId: undefined, parentNode: undefined },
+        }));
+        layoutedNodes = await layoutSupplyChain(withResetParents as any, mergedEdges as any, {
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        }) as any;
+        linearEdgesAfterLayout = recalculateSupplyChainHandles(mergedEdges as any, layoutedNodes as any);
       } else {
         // Fallback: используем freeform
         layoutedNodes = await layoutExpansionWithGroups(
@@ -9047,7 +9352,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       // Обновляем состояние
       setNodes(finalNodes);
-      if ((isLinearLayout || isLevelsLayout) && linearEdgesAfterLayout) {
+      if ((isLinearLayout || isLevelsLayout || isSupplyChainLayout) && linearEdgesAfterLayout) {
         setEdges(suppressDominatedEdges(linearEdgesAfterLayout as any, finalNodes as any) as any);
       } else {
         setEdges((prev) => {
@@ -9159,7 +9464,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // This ensures subsequent expansions see the correct values
       // NOTE: Levels mode also needs "expanded" tracking to avoid regrouping already-expanded nodes
       // when using the contract-driven Two-Pane layout.
-      if (isFreeformLayout || isLevelsLayout) {
+      if (isFreeformLayout || isLevelsLayout || isSupplyChainLayout) {
         expandedNodesRef.current.add(fragmentId);
         if (rootNodeIdRef.current === null) {
           rootNodeIdRef.current = fragmentId;
@@ -9250,8 +9555,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     layoutMode,
     isLinearLayout,
     isLevelsLayout,
+    isSupplyChainLayout,
     isFreeformLayout,
     levelsExpandEdgeTypes,
+    supplyChainExpandEdgeTypes,
     gridState,
     setEdges,
     setNodes,
@@ -9261,6 +9568,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     invokeArrange,
     recalculateLinearHandles,
     recalculateFreeformHandles,
+    recalculateSupplyChainHandles,
     levelsExpandMode,
     expandedRoleGroups,
     toggleRoleOverflow,
@@ -10117,7 +10425,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Levels (right graph): if multiple control/governance edges exist between the same pair,
     // keep only the strongest one (avoid drawing multiple parallel control edges).
-    if (isLevelsLayout) {
+    if (isLevelsLayout || isSupplyChainLayout) {
       const CONTROLISH = new Set([
         'OWNS',
         'PARENT_OF',
@@ -10226,6 +10534,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     hiddenNodeIds,
     nodes,
     isLevelsLayout,
+    isSupplyChainLayout,
     viewDirective,
     DEV,
     domainTopDependencyFocusActive,
@@ -10339,7 +10648,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   // Levels: derive aggKeys per node once per edge-set, so hover can suppress aggregated edges without an extra full scan.
   const levelsAggKeysByNodeId = React.useMemo(() => {
-    if (!isLevelsLayout) return new Map<string, Set<string>>();
+    if (!isLevelsLayout && !isSupplyChainLayout) return new Map<string, Set<string>>();
     const map = new Map<string, Set<string>>();
     for (const e of baseVisibleEdges) {
       const d: any = (e as any)?.data || {};
@@ -10421,7 +10730,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // - show per-child edges incident to hovered node
     // - hide the aggregated edge for the hovered node's bucket to reduce clutter
     let edgesForDisplay: Edge[] = baseVisibleEdges;
-    if (isLevelsLayout) {
+    if (isLevelsLayout || isSupplyChainLayout) {
       const hovered = String(hoveredNodeId || '').trim();
       const aggKeysToSuppress = hovered ? (levelsAggKeysByNodeId.get(hovered) || null) : null;
 
@@ -10678,7 +10987,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Levels Two-Pane: persisted "real edges preview" from clicking an aggregated edge / group.
     // This should take precedence over hover modes (edge hover, node hover, group hover) so it doesn't look "in the background".
-    if (isLevelsLayout) {
+    if (isLevelsLayout || isSupplyChainLayout) {
       const selectedGroupId = String(selectedLevelsAggGroupId || '').trim();
       const selectedEdgeType = normalizeEdgeType(selectedLevelsAggEdgeType ?? undefined);
       const selectedAggKey = String(selectedLevelsAggKey || '').trim();
@@ -11301,8 +11610,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
   }, [nodes, edges, setNodes, layoutMode, invokeArrange, normalizeEdgeType]);
 
-  // Local relation filters (Levels layout): per-node toggles to show/hide neighbors by edge type.
-  // When a node is clicked, we show icons for each edge type in levelsExpandEdgeTypes.
+  // Local relation filters (Levels/Supply Chain layout): per-node toggles to show/hide neighbors by edge type.
+  // When a node is clicked, we show icons for each edge type in expandEdgeTypesForLayout.
   // Clicking an icon toggles visibility of neighbors connected by that edge type for that specific node.
   const getDependentEdgeTypesForNode = React.useCallback((centerNodeId: string): string[] => {
     const centerId = String(centerNodeId || '').trim();
@@ -11310,7 +11619,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const snapNodes: Node<HorizonNodeData>[] = (nodesStateRef.current || nodes) as any;
     const snapEdges: Edge[] = (edgesStateRef.current || edges) as any;
     const isGroup = (n: any) => Boolean((n as any)?.data?.isGroup);
-    const allExpand = new Set((levelsExpandEdgeTypes || []).map((x) => String(x || '').toUpperCase().trim()).filter(Boolean));
+    const allExpand = new Set((expandEdgeTypesForLayout || []).map((x) => String(x || '').toUpperCase().trim()).filter(Boolean));
     if (allExpand.size === 0) return [];
 
     // Dependents = nodes created/attached from this node expansion (parentFragmentId is node.id).
@@ -11346,7 +11655,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return a.localeCompare(b);
     });
     return out;
-  }, [nodes, edges, levelsExpandEdgeTypes, normalizeEdgeType, getEdgePriority]);
+  }, [nodes, edges, expandEdgeTypesForLayout, normalizeEdgeType, getEdgePriority]);
 
   const openLocalFilters = React.useCallback((nodeId: string, nextOpen: boolean) => {
     const id = String(nodeId || '').trim();
@@ -11791,9 +12100,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         changed = true;
       }
 
-      // Local relation filters (all non-group nodes in Levels mode)
+      // Local relation filters (non-group nodes in Levels or Supply Chain mode)
       const isLevelsMode = layoutMode === 'levels';
-      if (!isGroup && isLevelsMode && levelsExpandEdgeTypes.length > 0) {
+      const hasLocalFilters =
+        (isLevelsMode && levelsExpandEdgeTypes.length > 0) ||
+        (isSupplyChainLayout && supplyChainExpandEdgeTypes.length > 0);
+      if (!isGroup && hasLocalFilters) {
         if (nextData === d0) {
           nextData = { ...d0 };
           changed = true;
@@ -11859,6 +12171,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     openLocalFilters,
     toggleLocalFilter,
     levelsExpandEdgeTypes,
+    supplyChainExpandEdgeTypes,
+    isSupplyChainLayout,
     fragmentProfileActiveNodeId,
     fragmentProfileEvents,
     fragmentProfileSignals,
@@ -12047,6 +12361,76 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         // Levels Two-Pane: attach edges to left/right handles based on columns + group membership.
         const updatedEdges = recalculateLevelsTwoPaneHandles(edges, finalFragments as any);
         setEdges(updatedEdges);
+      } else if (isSupplyChainLayout) {
+        // Supply Chain: pure hierarchical layout (right-to-left).
+        const nodesForLayout = (nodesStateRef.current?.length ? nodesStateRef.current : nodes) as any[];
+        // Strip any existing groups
+        const nodesClean = nodesForLayout.filter((n) => {
+          const id = String((n as any)?.id || '').trim();
+          const d: any = (n as any)?.data;
+          // Filter out group containers
+          if (d?.isGroup) return false;
+          if (id.startsWith('levels:')) return false;
+          if (id.startsWith('group:')) return false;
+          if (id.startsWith('stack:group:')) return false;
+          if (Boolean(d?.isStackGroup)) return false;
+          
+          // CRITICAL: Filter out any nodes that are just UI controls or placeholders
+          if (id.includes(':ctrl:')) return false;
+          if (id.includes(':card:')) return false;
+          
+          return true;
+        });
+
+        const nodesWithExpandedRestored = nodesClean.map((n) => {
+          const fid = String((n.data as any)?.fragmentId || n.id || '').trim();
+          if (!fid) return n;
+          if (expandedNodesRef.current.has(fid) && !(n.data as any)?.expanded) {
+            return { ...n, data: { ...(n.data || {}), expanded: true } as any };
+          }
+          return n;
+        });
+
+        // Reset parentId for all nodes to ensure they are top-level for ELK
+        const nodesWithResetParents = nodesWithExpandedRestored.map(n => ({
+          ...n,
+          parentNode: undefined,
+          parentId: undefined,
+          extent: undefined,
+          expandParent: undefined,
+          data: {
+            ...n.data,
+            parentId: undefined,
+            parentNode: undefined
+          }
+        }));
+
+        arrangedFragments = await layoutSupplyChain(nodesWithResetParents as any, edges as any, {
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        });
+
+        const finalFragments = arrangedFragments.map((node) => {
+          const fid = String((node.data as any)?.fragmentId || node.id || '').trim();
+          const shouldBeExpanded = fid && expandedNodesRef.current.has(fid);
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              expanded: shouldBeExpanded ? true : (node.data as any)?.expanded || false,
+              onLoadRelated: invokeLoadRelated,
+              onCollapse: invokeCollapse,
+              onScopeScout: invokeScopeScout,
+            },
+          };
+        });
+
+        withGroups = finalFragments;
+        const updatedEdges = recalculateSupplyChainHandles(edges, finalFragments as any);
+        setEdges(updatedEdges);
       } else {
         // Fallback: используем freeform
         // CRITICAL: Restore expanded flag from expandedNodesRef before relayout.
@@ -12088,7 +12472,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         });
       }
       // Add onGroupPageChange callback to group nodes
-      const withCallbacks = withGroups.map((node) => {
+      let withCallbacks = withGroups.map((node) => {
         if ((node.data as any)?.isGroup) {
           return {
             ...node,
@@ -12097,6 +12481,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
         return node;
       });
+      // Supply Chain: strip parent refs to levels:/group: so React Flow never sees "Parent node ... not found"
+      if (isSupplyChainLayout) {
+        withCallbacks = withCallbacks.map((n) => {
+          const pid = String((n as any)?.parentId ?? (n as any)?.parentNode ?? '').trim();
+          if (pid.startsWith('levels:') || pid.startsWith('group:')) {
+            return {
+              ...n,
+              parentId: undefined,
+              parentNode: undefined,
+              extent: undefined,
+              expandParent: undefined,
+              data: { ...(n.data || {}), parentId: undefined, parentNode: undefined },
+            };
+          }
+          return n;
+        });
+      }
       setNodes(withCallbacks);
 
       // Focus behavior after arrange:
@@ -12141,7 +12542,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     } finally {
       setArranging(false);
     }
-  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, isLinearLayout, isFreeformLayout, isLevelsLayout, levelsExpandMode, collapsedSubcategories, toggleSubcategoryCollapse, rightDockStateByNodeId, toggleRightDock, expandedRoleGroups, toggleRoleOverflow]);
+  }, [nodes, edges, arranging, handleLoadRelatedFragments, handleGroupPageChange, setNodes, setEdges, recalculateLinearHandles, recalculateFreeformHandles, recalculateSupplyChainHandles, recalculateLevelsTwoPaneHandles, isLinearLayout, isFreeformLayout, isLevelsLayout, isSupplyChainLayout, levelsExpandMode, collapsedSubcategories, toggleSubcategoryCollapse, rightDockStateByNodeId, toggleRightDock, expandedRoleGroups, toggleRoleOverflow]);
 
   // Keep ref updated for stack toggle re-layout (avoid TDZ / circular deps).
   onArrangeRef.current = () => { void handleArrange(); };
@@ -12208,6 +12609,28 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
           // Levels Two-Pane: attach edges to left/right handles based on columns + group membership.
           nextEdges = recalculateLevelsTwoPaneHandles(nextEdges, nextNodes);
+        } else if (isSupplyChainLayout) {
+          // Supply Chain: pure hierarchical layout (right-to-left).
+          // Strip any existing groups before layout to ensure they don't persist.
+          const fragmentNodesClean = (fragmentNodes as any[]).filter((n) => {
+            const id = String((n as any)?.id || '').trim();
+            const d: any = (n as any)?.data;
+            if (d?.isGroup) return false;
+            if (id.startsWith('levels:')) return false;
+            if (id.startsWith('stack:group:')) return false;
+            if (Boolean(d?.isStackGroup)) return false;
+            return true;
+          });
+          
+          const laidOut = await layoutSupplyChain(fragmentNodesClean as any, nextEdges as any, {
+            nodeWidth: ELK_NODE_WIDTH,
+            nodeHeight: ELK_NODE_HEIGHT,
+            nodeSpacing: ELK_NODE_SPACING,
+            layerSpacing: ELK_LAYER_SPACING,
+            maxChildRows: ELK_MAX_CHILD_ROWS,
+          });
+          nextNodes = laidOut as any;
+          nextEdges = recalculateSupplyChainHandles(nextEdges, nextNodes);
         } else {
           // Freeform layout: run ELK on fragments then rebuild semantic-group containers.
           const arrangedFragments = await layoutFullGraph(fragmentNodes, nextEdges, {
@@ -12258,14 +12681,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
 
         // Add onGroupPageChange callback to groups (both modes)
-        const finalNodes = (nextNodes as any[]).map((n) => {
+        let finalNodes = (nextNodes as any[]).map((n) => {
           if ((n.data as any)?.isGroup) {
             return { ...n, data: { ...n.data, onGroupPageChange: handleGroupPageChange } };
           }
-          // Ensure onLoadRelated is present on fragment nodes
           return { ...n, data: { ...n.data, onLoadRelated: invokeLoadRelated, onCollapse: invokeCollapse, onScopeScout: invokeScopeScout } };
         });
-
+        // Supply Chain: strip parent refs to levels:/group: to avoid "Parent node ... not found"
+        if (layoutMode === 'supply-chain') {
+          finalNodes = finalNodes.map((n) => {
+            const pid = String((n as any)?.parentId ?? (n as any)?.parentNode ?? '').trim();
+            if (pid.startsWith('levels:') || pid.startsWith('group:')) {
+              return {
+                ...n,
+                parentId: undefined,
+                parentNode: undefined,
+                extent: undefined,
+                expandParent: undefined,
+                data: { ...(n.data || {}), parentId: undefined, parentNode: undefined },
+              };
+            }
+            return n;
+          });
+        }
         setEdges(nextEdges as any);
         setNodes(finalNodes as any);
       } catch (e: any) {
@@ -14208,11 +14646,39 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (isLinearLayout) return;
 
     try {
-      // Пересборка групп после перетаскивания (freeform layout)
       let relayouted: Node<HorizonNodeData>[];
-      
-      if (isFreeformLayout) {
-        // Freeform layout: используем текущую логику с группами
+      const edgesNow = edgesStateRef.current || edges;
+
+      if (isSupplyChainLayout) {
+        // Supply Chain: full flat relayout, no groups
+        const clean = (currentNodes as any[]).filter((n) => {
+          const id = String((n as any)?.id || '').trim();
+          const d: any = (n as any)?.data;
+          if (d?.isGroup) return false;
+          if (id.startsWith('levels:')) return false;
+          if (id.startsWith('group:')) return false;
+          if (id.startsWith('stack:group:')) return false;
+          if (id.includes(':ctrl:') || id.includes(':card:')) return false;
+          return true;
+        });
+        const withResetParents = clean.map((n) => ({
+          ...n,
+          parentNode: undefined,
+          parentId: undefined,
+          extent: undefined,
+          expandParent: undefined,
+          data: { ...(n.data || {}), parentId: undefined, parentNode: undefined },
+        }));
+        relayouted = await layoutSupplyChain(withResetParents as any, edgesNow as any, {
+          nodeWidth: ELK_NODE_WIDTH,
+          nodeHeight: ELK_NODE_HEIGHT,
+          nodeSpacing: ELK_NODE_SPACING,
+          layerSpacing: ELK_LAYER_SPACING,
+          maxChildRows: ELK_MAX_CHILD_ROWS,
+        }) as any;
+        const updatedEdges = recalculateSupplyChainHandles(edgesNow as any, relayouted as any);
+        setEdges(updatedEdges);
+      } else if (isFreeformLayout) {
         relayouted = await layoutExpansionWithGroups(
           currentNodes,
           [],
@@ -14226,7 +14692,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           },
         );
       } else {
-        // Fallback: используем freeform
         relayouted = await layoutExpansionWithGroups(
           currentNodes,
           [],
@@ -14240,7 +14705,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           },
         );
       }
-      // Add onGroupPageChange callback to groups
+      // Add onGroupPageChange callback to groups (no-op in supply chain, no groups)
       const withCallbacks = relayouted.map((n) => {
         if ((n.data as any)?.isGroup) {
           return { ...n, data: { ...n.data, onGroupPageChange: handleGroupPageChange } };
@@ -14251,7 +14716,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     } catch (err) {
       console.warn('[Cockpit] Failed to relayout groups after drag stop', err);
     }
-  }, [nodes, setNodes, handleGroupPageChange]);
+  }, [nodes, edges, setNodes, setEdges, handleGroupPageChange, isSupplyChainLayout, isFreeformLayout, layoutSupplyChain, recalculateSupplyChainHandles]);
 
   const confirmScopeScout = React.useCallback(async () => {
     if (!lensId) return;
@@ -14686,6 +15151,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     LayoutFreeform: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="2.4"/><circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="19" r="2.4"/><path d="M8.1 11.2 15.8 6.2"/><path d="M8.1 12.8 15.8 17.8"/></svg>,
     LayoutLinear: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="6" height="16" rx="2"/><rect x="15" y="4" width="6" height="16" rx="2"/><path d="M10.5 12h3"/></svg>,
     LayoutLevels: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/><circle cx="8" cy="7" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="16" cy="17" r="1.6"/></svg>,
+    LayoutSupplyChain: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="12" r="2.4"/><circle cx="12" cy="12" r="2.4"/><circle cx="19" cy="12" r="2.4"/><path d="M7.4 12h2.2"/><path d="M14.4 12h2.2"/></svg>,
     ChevronDown: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
     Info: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg>,
     Target: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>,
@@ -14694,7 +15160,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     Filter: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>,
   };
 
-  const layoutModeLabel = React.useCallback((m: 'freeform' | 'linear' | 'levels'): string => {
+  const layoutModeLabel = React.useCallback((m: 'freeform' | 'linear' | 'levels' | 'supply-chain'): string => {
     switch (m) {
       case 'freeform':
         return 'Freeform';
@@ -14702,12 +15168,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return 'Linear';
       case 'levels':
         return 'Hierarchical';
+      case 'supply-chain':
+        return 'Supply Chain';
       default:
         return 'Layout';
     }
   }, []);
 
-  const layoutModeIcon = React.useCallback((m: 'freeform' | 'linear' | 'levels') => {
+  const layoutModeIcon = React.useCallback((m: 'freeform' | 'linear' | 'levels' | 'supply-chain') => {
     switch (m) {
       case 'freeform':
         return Icons.LayoutFreeform;
@@ -14715,6 +15183,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return Icons.LayoutLinear;
       case 'levels':
         return Icons.LayoutLevels;
+      case 'supply-chain':
+        return Icons.LayoutSupplyChain;
       default:
         return Icons.Layout;
     }
@@ -14887,15 +15357,21 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 { key: 'freeform', label: 'Freeform' },
                 { key: 'linear', label: 'Linear' },
                 { key: 'levels', label: 'Hierarchical' },
-              ] as Array<{ key: 'freeform' | 'linear' | 'levels'; label: string }>
-            ).map((opt) => {
-              const active = layoutMode === opt.key;
+                { type: 'separator' as const },
+                { key: 'supply-chain', label: 'Supply Chain' },
+              ] as Array<{ key?: 'freeform' | 'linear' | 'levels' | 'supply-chain'; label?: string; type?: 'separator' }>
+            ).map((opt, idx) => {
+              if ((opt as any).type === 'separator') {
+                return <div key={`sep-${idx}`} style={{ height: 1, background: 'var(--border-subtle)', margin: '6px 0' }} />;
+              }
+              const active = layoutMode === (opt as any).key;
+              const key = (opt as any).key;
               return (
                 <button
-                  key={opt.key}
+                  key={key}
                   type="button"
                   onClick={() => {
-                    setLayoutMode(opt.key);
+                    setLayoutMode(key);
                     setShowLayoutMenu(false);
                   }}
                   style={{
@@ -14914,9 +15390,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                     <span style={{ color: 'var(--text-secondary-strong)', display: 'inline-flex' }}>
-                      {layoutModeIcon(opt.key)}
+                      {layoutModeIcon(key)}
                     </span>
-                    <span style={{ fontSize: 12, fontWeight: 800 }}>{opt.label}</span>
+                    <span style={{ fontSize: 12, fontWeight: 800 }}>{(opt as any).label}</span>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>{active ? '✓' : ''}</div>
                 </button>
@@ -15483,6 +15959,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }, 90);
   }, [
     isLevelsLayout,
+    isSupplyChainLayout,
     levelsExpandMode,
     controlCorridorMode,
     controlCorridorSeedId,
@@ -15528,6 +16005,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, [
     lensId,
     isLevelsLayout,
+    isSupplyChainLayout,
     levelsExpandMode,
     controlCorridorMode,
     controlCorridorSeedId,
@@ -16225,6 +16703,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               </div>
             )}
           </div>
+
+          {/* Supply Chain overlay - always visible in supply-chain mode */}
+          {isSupplyChainLayout && (
+            <div style={{ pointerEvents: 'auto' }}>
+              <SupplyChainOverlay
+                lensId={lensId}
+                nodes={nodes}
+                isVisible={true}
+                onLoadChain={handleLoadSupplyChain}
+                onRetry={() => { setSupplyChainRefreshKey((k) => k + 1); }}
+                refreshKey={supplyChainRefreshKey}
+              />
+            </div>
+          )}
 
           {/* 2. View & highlight */}
           <div style={{ position: 'relative', pointerEvents: 'auto' }}>

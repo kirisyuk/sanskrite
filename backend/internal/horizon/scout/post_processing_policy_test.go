@@ -76,6 +76,22 @@ func TestPostProcessingPolicy_ShouldRun_Tier2(t *testing.T) {
 	}
 }
 
+func TestPostProcessingPolicy_StepCriticDisabledForSupplyChain(t *testing.T) {
+	// Critic temporarily disabled for supply chain refactor branch
+	p := &PostProcessingPolicy{
+		PipelineTier:   0,
+		DomainModes:    []string{taxonomy.DomainModeSupplyChain},
+	}
+	if p.ShouldRun(StepCritic) {
+		t.Error("StepCritic should be disabled when DomainModeSupplyChain is in DomainModes")
+	}
+	// Without supply_chain, tier 0 should allow critic
+	p2 := &PostProcessingPolicy{PipelineTier: 0, DomainModes: []string{taxonomy.DomainModeGeneral}}
+	if !p2.ShouldRun(StepCritic) {
+		t.Error("StepCritic should run for tier 0 when supply_chain not in DomainModes")
+	}
+}
+
 func TestPostProcessingPolicy_CascadeBlockedByDomainPeer(t *testing.T) {
 	p := &PostProcessingPolicy{
 		PipelineTier:           0,
@@ -131,19 +147,19 @@ func TestPostProcessingPolicy_MarketAtMaxDepthGetsOneExtraHop(t *testing.T) {
 	}
 }
 
-func TestPostProcessingPolicy_CascadeAllowedForDomainExpansionJob(t *testing.T) {
+func TestPostProcessingPolicy_DomainContractBlocksAllChildScheduling(t *testing.T) {
+	// Domain contracts: execute only within their internal logic, don't spawn entity jobs.
 	p := &PostProcessingPolicy{
-		PipelineTier:           0,
-		RecursionDepth:         0,
-		MaxRecursionDepth:      2,
-		HasDomainExpansionPeer: true,
-		IsDomainExpansionJob:   true,
+		PipelineTier:          0,
+		RecursionDepth:       0,
+		MaxRecursionDepth:    2,
+		IsDomainExpansionJob: true,
 	}
-	if !p.ShouldRun(StepCascadeChildScheduling) {
-		t.Error("domain expansion job should always allow cascade children")
+	if p.ShouldRun(StepCascadeChildScheduling) {
+		t.Error("domain contract should NOT schedule cascade children")
 	}
-	if !p.ShouldRun(StepRelationChildScheduling) {
-		t.Error("domain expansion job should allow relation children")
+	if p.ShouldRun(StepRelationChildScheduling) {
+		t.Error("domain contract should NOT schedule relation children")
 	}
 }
 

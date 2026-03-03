@@ -299,18 +299,24 @@ func chainLooksManufacturing(ch SupplyChain) bool {
 
 // checkUpstreamDownstream verifies the anchor fragment (if present in chains)
 // has both upstream (incoming supply) and downstream (outgoing supply) links.
+// For /org/ targets, also checks NormalizeOrgRefToFacilityFallback so chains
+// with /fac/{slug}-general-production are matched (fractal model).
 func (a *SupplyChainGapAnalyzer) checkUpstreamDownstream(chains []SupplyChain, fragment *models.HorizonFragment, report *SupplyChainGapReport) {
 	if fragment == nil || strings.TrimSpace(fragment.CanonicalPath) == "" {
 		return
 	}
 	anchorPath := strings.TrimSpace(fragment.CanonicalPath)
+	anchorFacFallback := models.NormalizeOrgRefToFacilityFallback(anchorPath)
 	hasUpstream := false
 	hasDownstream := false
+	matchedPath := "" // path of the node we found (for directive anchoring)
 	for _, ch := range chains {
 		for ni, n := range ch.Nodes {
-			if strings.TrimSpace(n.CanonicalPath) != anchorPath {
+			np := strings.TrimSpace(n.CanonicalPath)
+			if np != anchorPath && np != anchorFacFallback {
 				continue
 			}
+			matchedPath = np
 			if ni > 0 {
 				hasUpstream = true
 			}
@@ -319,11 +325,18 @@ func (a *SupplyChainGapAnalyzer) checkUpstreamDownstream(chains []SupplyChain, f
 			}
 		}
 	}
+	// Use matched path for directive anchor (so refine patch can find it); fallback to normalized for /org/
+	termNode := anchorPath
+	if matchedPath != "" {
+		termNode = matchedPath
+	} else if anchorFacFallback != "" {
+		termNode = anchorFacFallback
+	}
 	if !hasUpstream {
 		report.DepthGaps = append(report.DepthGaps, DepthGap{
 			ChainIndex:   0,
 			Direction:    "upstream",
-			TerminalNode: anchorPath,
+			TerminalNode: termNode,
 			CurrentDepth: 0,
 			Reason:       fmt.Sprintf("anchor %s missing upstream coverage", anchorPath),
 		})
@@ -332,7 +345,7 @@ func (a *SupplyChainGapAnalyzer) checkUpstreamDownstream(chains []SupplyChain, f
 		report.DepthGaps = append(report.DepthGaps, DepthGap{
 			ChainIndex:   0,
 			Direction:    "downstream",
-			TerminalNode: anchorPath,
+			TerminalNode: termNode,
 			CurrentDepth: 0,
 			Reason:       fmt.Sprintf("anchor %s missing downstream coverage", anchorPath),
 		})
@@ -601,10 +614,16 @@ func (a *SupplyChainGapAnalyzer) buildDirectives(report *SupplyChainGapReport, c
 		})
 	}
 	for _, g := range report.DepthGaps {
+		var query string
+		if g.Direction == "upstream" {
+			query = fmt.Sprintf("From %s find producing facilities and their orgs. Format: JSON.", resolve(g.TerminalNode))
+		} else {
+			query = fmt.Sprintf("From %s find org-recipients. Format: JSON.", resolve(g.TerminalNode))
+		}
 		d := RefineDirective{
 			GapType:    "depth_gap",
 			ChainIndex: g.ChainIndex,
-			Query:      fmt.Sprintf("Extend the supply chain %s from %s", g.Direction, resolve(g.TerminalNode)),
+			Query:      query,
 			Priority:   "P0",
 		}
 		if g.Direction == "upstream" {
@@ -616,19 +635,7 @@ func (a *SupplyChainGapAnalyzer) buildDirectives(report *SupplyChainGapReport, c
 		}
 		add(d)
 	}
-	for _, g := range report.ConcentrationRisks {
-		if !g.AlternativesNeeded {
-			continue
-		}
-		add(RefineDirective{
-			GapType:            "concentration_risk",
-			ChainIndex:         g.ChainIndex,
-			AnchorUpstream:     g.ProductPath,
-			Query:              fmt.Sprintf("Find alternative suppliers for %s (%s)", resolve(g.ProductPath), g.ProductPath),
-			Priority:           "P1",
-			SuggestedPatchType: "alternatives",
-		})
-	}
+	// concentration_risk: skip — model is org→fac→product→fac→org trees, not alternatives.
 	for _, g := range report.LogisticsGaps {
 		add(RefineDirective{
 			GapType:            "logistics_gap",
@@ -739,9 +746,9 @@ func (a *SupplyChainGapAnalyzer) buildLLMGapAnalysisPrompt(
 
 	deterministicSummary := formatDeterministicGapSummary(report)
 
-	return fmt.Sprintf(`You are a supply chain domain expert. Analyze the following supply chains for an entity and identify SEMANTIC gaps that deterministic checks cannot catch.
+	return fmt.Sprintf(`You are a supply chain domain expert. Analyze the following supply chains for an entity and identify STRUCTURAL gaps (missing nodes/edges) that deterministic checks missed.
 
-ENTITY TYPES in supply chain: %s.
+ENTITY TYPES: %s.
 RELATION TYPES: %s.
 
 %s
@@ -749,24 +756,24 @@ RELATION TYPES: %s.
 SUPPLY CHAINS (JSON):
 %s
 
-DETERMINISTIC GAPS ALREADY FOUND:
+DETERMINISTIC GAPS FOUND:
 %s
 
-YOUR TASK:
-1. Given the industry/product context, identify typical value chain stages that are MISSING from these chains.
-2. Identify known logistics chokepoints (Suez, Malacca, Panama, major ports) that should appear but don't.
-3. Identify geopolitical/regulatory risks affecting this supply chain that are not represented.
-4. Identify substitution opportunities that should be explored.
+YOUR TASK (STRUCTURAL ONLY — missing /fac/ or /product/ nodes):
+1. MISSING_STAGE: chain jumps from A to B without a facility or product node in between (e.g. raw→finished without processor). Give betweenUpstream, betweenDownstream, expectedStage — use additionalTierGaps.
+2. MISSING_LOGISTICS: chain spans regions but has no /fac/ node for transport (port, terminal). anchorPath = nearest node.
+
+Output ONLY gaps that map to adding a CONCRETE node (/fac/ or /product/) to the graph. NO climate, geopolitical, regulatory, or generic "research" topics.
 
 Return JSON:
 {
   "industryGaps": [
     {
       "chainIndex": 0,
-      "gapKind": "missing_stage" | "chokepoint" | "geopolitical_risk" | "substitution_opportunity",
-      "description": "human-readable description of the gap and what should be researched",
-      "anchorPath": "/path/to/nearest/existing/node (optional)",
-      "reason": "why this matters for supply chain resilience"
+      "gapKind": "missing_stage" | "missing_logistics",
+      "description": "Actionable query: 'Add facility between {up} and {down}' or 'Extend from {path} (org→fac→product→fac→org)'",
+      "anchorPath": "/fac/... or /product/... (REQUIRED)",
+      "reason": "Why this node belongs in the chain"
     }
   ],
   "additionalTierGaps": [
@@ -775,7 +782,7 @@ Return JSON:
       "betweenUpstream": "/path/to/upstream/node",
       "betweenDownstream": "/path/to/downstream/node",
       "expectedStage": "refining",
-      "reason": "why this stage is expected"
+      "reason": "Technical reason for missing stage"
     }
   ]
 }

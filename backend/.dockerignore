@@ -12,6 +12,8 @@ main
 # Local tool binaries (can be very large; not needed for Docker builds)
 # Go build outputs from cmd/tools/* and cmd/* - exclude all known patterns
 horizon_*
+supply_chain_*
+unstuck_*
 add_*
 check_*
 check-*

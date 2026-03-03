@@ -146,6 +146,11 @@ func TestValidateCanonicalPath(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid product path fruit fresh",
+			path:    "/product/raw/fruit/fresh/fruits",
+			wantErr: false,
+		},
+		{
 			name:    "valid program path",
 			path:    "/program/kazakhstan/alem-ai",
 			wantErr: false,

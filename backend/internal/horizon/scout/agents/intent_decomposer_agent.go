@@ -209,6 +209,11 @@ func (a *IntentDecomposerAgent) buildPromptWithOptions(targetCanonicalPath strin
 				break
 			}
 		}
+	} else if strings.HasPrefix(targetCanonicalPath, "/product/") {
+		decompositionBlock = "PRODUCT DECOMPOSITION MODE:\n"
+		decompositionBlock += "TARGET is a product. Output relations to ORGANIZATIONS and FACILITIES that produce, process, or supply this product.\n"
+		decompositionBlock += "Focus on: producers, processors, key suppliers. Use targetType ORGANIZATION or FACILITY. targetCanonicalPath: /org/... or /fac/...\n"
+		decompositionBlock += "Use DEPENDS_ON (product depends on supplier) or similar. Output concrete /org/ and /fac/ paths only.\n\n"
 	}
 
 	return fmt.Sprintf(`You are an intent decomposition agent for a risk analysis system.

@@ -678,6 +678,29 @@ func TestCheckUpstreamDownstream_BothDirections(t *testing.T) {
 	}
 }
 
+// TestCheckUpstreamDownstream_OrgFallbackToFac verifies fractal model: when frag is /org/
+// and chain has /fac/{slug}-general-production, we match and use facility path for directives.
+func TestCheckUpstreamDownstream_OrgFallbackToFac(t *testing.T) {
+	ch := SupplyChain{
+		Nodes: []SupplyChainNode{
+			{CanonicalPath: "/fac/smic-shanghai", Name: "SMIC Shanghai", Type: "FACILITY"},
+			{CanonicalPath: "/product/kirin-9000s", Name: "Kirin 9000s", Type: "PRODUCT"},
+			{CanonicalPath: "/fac/huawei-general-production", Name: "Huawei", Type: "FACILITY"},
+			{CanonicalPath: "/product/smartphone", Name: "Smartphone", Type: "PRODUCT"},
+			{CanonicalPath: "/fac/retailer", Name: "Retailer", Type: "FACILITY"},
+		},
+	}
+	frag := &models.HorizonFragment{CanonicalPath: "/org/cn/huawei"}
+	analyzer := NewSupplyChainGapAnalyzer(nil)
+	report := &SupplyChainGapReport{}
+	analyzer.checkUpstreamDownstream([]SupplyChain{ch}, frag, report)
+
+	// Huawei (as /fac/huawei-general-production) is in middle: has both upstream and downstream
+	if len(report.DepthGaps) != 0 {
+		t.Errorf("org target /org/cn/huawei should match /fac/huawei-general-production; expected 0 depth gaps, got %d", len(report.DepthGaps))
+	}
+}
+
 func TestDirectives_HaveSuggestedPatchType(t *testing.T) {
 	ch := lithiumBatteryChain()
 	frag := &models.HorizonFragment{
@@ -700,9 +723,7 @@ func TestDirectives_HaveSuggestedPatchType(t *testing.T) {
 				t.Errorf("depth_gap directive should suggest extend_*, got %q", d.SuggestedPatchType)
 			}
 		case "concentration_risk":
-			if d.SuggestedPatchType != "alternatives" {
-				t.Errorf("concentration_risk directive should suggest alternatives, got %q", d.SuggestedPatchType)
-			}
+			// no longer added (org→fac→product→fac→org model); no assertion
 		case "logistics_gap":
 			if d.SuggestedPatchType != "splice" {
 				t.Errorf("logistics_gap directive should suggest splice, got %q", d.SuggestedPatchType)

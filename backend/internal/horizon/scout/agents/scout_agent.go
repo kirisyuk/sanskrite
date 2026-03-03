@@ -693,12 +693,15 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 %s`, relationCatalogOverride, relationRulesBlock)
 
 	supplyChainsContractBlock := `4. "supplyChains" Field (Array of Objects):
+- Actor nodes MUST be FACILITY when possible. Use /fac/{orgSlug}/{facilitySlug}. When facility unknown: /fac/{orgSlug}-general-production.
+- Do NOT use ORGANIZATION as supplier/customer in supply links. Organizations appear in ownership (OWNS) layer only.
 - Each chain has: nodes[], confidence, reason, optional transportVia[].
-- Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|PROGRAM|MARKET|GEO_REGION|DEPOSIT|COMMUNITY), role?
+- Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: FACILITY|PRODUCT|DEPOSIT for supply endpoints; ORGANIZATION only for context), role?
 - Nodes MUST alternate actor -> product -> actor -> product.
 - Include FACILITY where transformation occurs (product -> facility -> product).
-- For extractive flows: org -> facility -> deposit -> product.
-- transportVia should contain facility canonical paths for ports/terminals/pipelines/warehouses when known.`
+- For extractive flows: facility -> deposit -> product.
+- transportVia should contain facility canonical paths for ports/terminals/pipelines/warehouses when known.
+- Product granularity: use model line/product family (iPhone, MacBook, Claude Code), NOT specific SKU (iPhone 17, MacBook Pro M4, Claude Opus). Natural resources: keep taxonomy granularity, avoid over-generalization.`
 
 	return joinPromptBlocks(
 		`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.`,

@@ -48,6 +48,19 @@ func TestNormalizeDomainCanonicalPath_DefaultSortsFacets(t *testing.T) {
 	}
 }
 
+func TestValidateCanonicalPath_SupplyChainProductFacet(t *testing.T) {
+	paths := []string{
+		"/domain/v1/supply-chain/geo/th/product/fruits",
+		"/domain/v1/supply-chain/geo/th/crop/rice",
+		"/domain/v1/supply-chain/geo/th/commodity/rubber",
+	}
+	for _, p := range paths {
+		if err := ValidateCanonicalPath(p); err != nil {
+			t.Errorf("ValidateCanonicalPath(%q) = %v", p, err)
+		}
+	}
+}
+
 func TestValidateCanonicalPath_AffectedZoneAfricaGeo(t *testing.T) {
 	paths := []string{
 		"/domain/v1/affected-zone/geo/africa",

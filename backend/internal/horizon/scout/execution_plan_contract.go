@@ -11,6 +11,9 @@ import (
 
 const (
 	ExecutionPlanStateKey = "executionPlan"
+
+	// SupplyChainMaxTraversalDepth limits Level 3 (FAC→ORG) resolution to 5 hops. Cycles prohibited.
+	SupplyChainMaxTraversalDepth = 5
 )
 
 const (
@@ -71,7 +74,7 @@ func defaultExecutionPlanContract(domainModes, specialties []string) ExecutionPl
 		p.Mode = "supply_chain"
 		p.MaxAnchors = 12
 		p.MaxRootJobs = 12
-		p.MaxRecursionDepth = 3
+		p.MaxRecursionDepth = SupplyChainMaxTraversalDepth
 		p.MaxChildrenPerJob = 18
 		p.MaxCascadeJobs = 120
 		p.MaxSupplyChainQueries = 6

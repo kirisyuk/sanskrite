@@ -159,7 +159,7 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 		b.WriteString("- Prioritize regulatory perimeter and affected entities: REGULATES for domestic jurisdiction oversight, CONTROLS_ACCESS for sanctions/extra-territorial restrictions, APPLIES_TO via mechanism.\n")
 	case entity_semantics.EntityTypeOrganization:
 		b.WriteString("- Separate operating business vs holding structure early; for holdings prioritize ownership map before product map.\n")
-		b.WriteString("- For operating orgs, prioritize products/services, upstream suppliers, downstream customers, and market participation.\n")
+		b.WriteString("- For operating orgs, prioritize products/services, child orgs + their facilities, org-recipients, and market participation.\n")
 	case entity_semantics.EntityTypeFacility:
 		b.WriteString("- Prioritize lifecycle, location validity, IO profile (CONSUMES -> PRODUCES), and throughput/capacity signals.\n")
 		switch detectFacilityTaskSemantic(canonicalPath, qualifiers, identifiers) {
@@ -168,10 +168,10 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 			b.WriteString("- Route-qualified FAC: prioritize suppliers/logistics operators/customers by business flow semantics (DEPENDS_ON facet=supply|logistics, SUPPLIES_TO when flow is explicit).\n")
 			b.WriteString("- Route-qualified FAC: avoid non-business detours (biography/family/person-centric discovery) and avoid route->route recursion by default.\n")
 		case facilityTaskSemanticSupply:
-			b.WriteString("- Supply-qualified FAC: prioritize upstream suppliers, downstream customers, input/output products, and transport chain constraints.\n")
+			b.WriteString("- Supply-qualified FAC: prioritize producing facilities, org-recipients, products THIS fac produces, and transport chain constraints.\n")
 			b.WriteString("- Supply-qualified FAC: prioritize ORG/FAC/PRODUCT/GEO targets with flow evidence; avoid person-centric and social-noise entities.\n")
 		case facilityTaskSemanticProcurement:
-			b.WriteString("- Procurement-qualified FAC: prioritize vendors, sourcing channels, procurement service providers, and alternative supplier regions.\n")
+			b.WriteString("- Procurement-qualified FAC: prioritize vendors, sourcing channels, procurement service providers, and sourcing regions.\n")
 			b.WriteString("- Procurement-qualified FAC: prioritize business contract/dependency semantics (DEPENDS_ON/SUPPLIES_TO/PARTNERS_WITH) and supplier concentration signals.\n")
 		default:
 			b.WriteString("- If route semantics appear (route/route_path/route_waypoints), resolve route regions and waypoint coordinates (prefer Google geocoding-backed matches).\n")

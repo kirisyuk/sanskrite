@@ -68,11 +68,15 @@ type SupplyChainExecutionPlan struct {
 }
 
 // SupplyChainQuery defines one holistic supply chain request (anchor + direction + filters).
+// Optional Level: 1 = top ORGs only (depth 1), 2 = ORG+FACs+products expansion (depth 2-3).
+// When Anchors is non-empty, it takes precedence over Anchor: build chains FROM each of these orgs (producers).
 type SupplyChainQuery struct {
-	Anchor        string   `json:"anchor" firestore:"anchor"`                            // canonical path /org/... or /product/... or /deposit/...
+	Anchor        string   `json:"anchor" firestore:"anchor"`                            // canonical path (single). Used when Anchors is empty.
+	Anchors       []string `json:"anchors,omitempty" firestore:"anchors,omitempty"`      // list of org paths for "from organizations" queries
 	AnchorType    string   `json:"anchorType" firestore:"anchorType"`                    // "org" | "product" | "deposit"
 	Direction     string   `json:"direction" firestore:"direction"`                      // "upstream" | "downstream" | "both"
 	Depth         int      `json:"depth" firestore:"depth"`                              // 3-6
+	Level         int      `json:"level,omitempty" firestore:"level,omitempty"`          // optional: 1 = top ORGs, 2 = expansion (staged queries)
 	ProductFilter []string `json:"productFilter,omitempty" firestore:"productFilter,omitempty"`  // e.g. ["ev-batteries", "lithium-carbonate"]
 	GeoFilter     []string `json:"geoFilter,omitempty" firestore:"geoFilter,omitempty"`          // e.g. ["de", "cn"]
 	Reason        string   `json:"reason" firestore:"reason"`
@@ -330,6 +334,8 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 				fmt.Printf("[IntentResolver] Domain rejected (non-domain path): original=%q, normalized=%q\n", orig, cp)
 				continue
 			}
+			// Lenient: if LLM returns trailing facet key without value (odd segments), drop it.
+			cp = trimDomainPathTrailingIncompleteFacet(cp)
 			// Normalize using taxonomy validation (now includes /domain/v1).
 			if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
 				fmt.Printf("[IntentResolver] Domain rejected: original=%q, normalized=%q, error=%v\n", orig, cp, err)
@@ -584,7 +590,8 @@ USER QUERY:
       "reason": "short reason",
       "supplyChainExecutionPlan": {
         "queries": [
-          { "anchor": "/org/de/bmw", "anchorType": "org", "direction": "upstream", "depth": 4, "productFilter": ["ev-batteries"], "geoFilter": ["de", "cn"], "reason": "..." }
+          { "anchor": "/org/de/bmw", "anchorType": "org", "direction": "upstream", "depth": 4, "productFilter": ["ev-batteries"], "geoFilter": ["de", "cn"], "reason": "..." },
+          { "anchors": ["/org/th/cp-group", "/org/th/riceland"], "anchorType": "org", "direction": "both", "depth": 4, "productFilter": ["rice"], "geoFilter": ["th"], "reason": "Thai rice producers" }
         ],
         "overlayQueries": [{ "type": "regulatory", "anchors": [], "scope": "orgs" }]
       },
@@ -633,7 +640,7 @@ DOMAIN RULES
 - If a matching DOMAIN already exists, reuse the SAME canonicalPath.
 - DOMAIN canonicalPath: /domain/v1/{contractType}/{facetKey}/{facetValue}...
   Examples: /domain/v1/ecosystem-mapping/geo/my/sector/energy, /domain/v1/bilateral-relations/geo/sa-ye
-- facetKey MUST be one of: geo, topic, subject, project, asset, material, application, sector, industry, market, regulation, framework, time
+- facetKey MUST be one of: geo, topic, subject, project, asset, material, product, commodity, crop, goods, item, application, sector, industry, market, regulation, framework, time
 - contractType MUST be one of (prefer canonical types; aliases accepted but auto-normalized):
   SUPPLY CHAIN: supply-chain, value-chain (aliases, avoid if possible: logistics-flow, trade-flow, sourcing-map, procurement-map)
   RISK/GEOPOLITICS: geopolitical-risk, bilateral-relations, sanctions-exposure, affected-zone (aliases: risk-assessment, conflict-dynamics)
@@ -647,7 +654,7 @@ DOMAIN RULES
   SCENARIOS: scenario-analysis, future-outlook (aliases: macro-trends, megatrends → scenario-analysis)
   SECTOR: sector-overview, industry-structure (aliases: vertical-deep-dive → sector-overview)
   FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
-- SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. Each query: anchor (canonical path from anchors or firstOrderEntities), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. Prioritize coverage of critical products/regions. overlayQueries (Stage 2) optional.
+- SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. CRITICAL: The FIRST queries must go FROM ORGANIZATIONS (as producers/suppliers). Supply chains are actor-centric: org→product→org. For product+geo queries (e.g. "Thai rice supply chain", "Thailand fruits supply chain", "EV battery supply chain Germany"): contractType MUST be supply-chain, facets MUST include geo and product or material (e.g. geo/th + product/fruits or material/rice). anchorType MUST be org. Use anchors (or anchors array) with canonical /org/... paths of key producers you can infer (e.g. CP Group, Thai rice exporters). Populate firstOrderEntities with 2-5 representative producer org paths. If you cannot name specific orgs, add decompositionHints with searchQueries like "top [product] producers [country]", "[country] [product] exporters" to guide discovery. Each query: anchor (single) or anchors (array of org paths), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries (Stage 2) optional.
 - REGULATORY IMPACT PLAN: When contractType is policy-impact or regulatory-impact, you MUST include regulatoryImpactExecutionPlan with 1-5 queries. Each query: instrument (canonical path /mechanism/... or /program/...), jurisdiction (ISO2), parameters (rate_from, rate_to, effective_date when applicable), impactScope (economy-wide|sector-specific|entity-specific), depth (3-5), sectorFilter from facets, reason.
 - GOVERNANCE PLAN: When contractType is ownership-structure or control-map, you MUST include governanceExecutionPlan with 1-5 queries. Each query: target (canonical path /org/... or /gov/...), targetType (org|gov|person), direction (upward|downward|both), depth (3-6), includeBoard (true/false), geoFilter, reason.
 - ECOSYSTEM PLAN: When contractType is ecosystem-mapping or influence-network, you MUST include ecosystemExecutionPlan with 1-5 queries. Each query: focus (canonical path or description), focusType (geo|sector|market|org), depth (3-5), actorTypes (subset of [ORGANIZATION, GOV, PERSON, FACILITY]), sectorFilter, geoFilter, reason.
@@ -816,18 +823,24 @@ func applySupplyChainPlanQualityRule(domains []DomainResolution, anchors []struc
 		if len(queries) <= maxSupplyChainQueriesPerPlan {
 			continue
 		}
-		// Prioritize: anchors in firstOrderEntities first, then by order.
+		// Prioritize: queries whose anchor(s) are in firstOrderEntities first, then by order.
+		anchorInSet := func(q *SupplyChainQuery) bool {
+			if cp := strings.TrimSpace(q.Anchor); cp != "" {
+				if _, ok := firstOrderSet[cp]; ok {
+					return true
+				}
+			}
+			for _, cp := range q.Anchors {
+				if _, ok := firstOrderSet[strings.TrimSpace(cp)]; ok {
+					return true
+				}
+			}
+			return false
+		}
 		sort.Slice(queries, func(a, b int) bool {
-			inA := 0
-			if _, ok := firstOrderSet[strings.TrimSpace(queries[a].Anchor)]; ok {
-				inA = 1
-			}
-			inB := 0
-			if _, ok := firstOrderSet[strings.TrimSpace(queries[b].Anchor)]; ok {
-				inB = 1
-			}
+			inA, inB := anchorInSet(&queries[a]), anchorInSet(&queries[b])
 			if inA != inB {
-				return inA > inB
+				return inA
 			}
 			return a < b
 		})
@@ -1559,7 +1572,7 @@ RULES:
       other — Format: /domain/v1/other/{custom-slug}/... where {custom-slug} is a lowercase kebab-case descriptor (e.g., energy-ecosystem-mapping, startup-landscape, talent-pool-analysis).
       Example: /domain/v1/other/energy-ecosystem-mapping/geo/my
   - facetKey MUST be one of:
-    geo, topic, subject, project, asset, material, application, sector, industry, market, regulation, framework, time
+    geo, topic, subject, project, asset, material, product, commodity, crop, goods, item, application, sector, industry, market, regulation, framework, time
   - facets MUST match the canonicalPath (best-effort). If you provide facets, keep them consistent with the path.
   - title MUST follow Title Case and be human-readable.
   - title MUST be specific and grounded in the user's query (avoid generic titles).
@@ -1808,17 +1821,43 @@ func slugifyCanonicalPath(path string) string {
 	return "/" + strings.Join(filtered, "/")
 }
 
+// trimDomainPathTrailingIncompleteFacet fixes domain paths where LLM returned a trailing facet key without value.
+// Example: /domain/v1/supply-chain/geo/th/product -> /domain/v1/supply-chain/geo/th
+func trimDomainPathTrailingIncompleteFacet(path string) string {
+	p := strings.TrimSpace(path)
+	if p == "" || !strings.HasPrefix(p, "/domain/") {
+		return p
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	// domain, v1, contractType, [k,v]* — need at least 5 segments
+	if len(parts) < 5 {
+		return p
+	}
+	rest := parts[3:]
+	if len(rest)%2 == 0 {
+		return p
+	}
+	// Odd: drop last (incomplete key)
+	return "/" + strings.Join(parts[:len(parts)-1], "/")
+}
+
 // normalizeCanonicalPathForTools fixes MSYS/Git-Bash path conversion for canonical paths.
-// Example: "/org/tesla" -> "C:/Program Files/Git/org/tesla" (we strip prefix).
+// Example: "C:/Program Files/Git/org/tesla" -> "/org/tesla" (we strip prefix to first namespace).
+// Must NOT strip when path already starts with / — domain paths like /domain/v1/.../product/fruits
+// contain "/product/" as a facet key and would be incorrectly truncated.
 func normalizeCanonicalPathForTools(raw string) string {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return s
 	}
-	// IMPORTANT: keep this list in sync with allowed canonical namespaces (including /gov).
-	candidates := []string{"/gov/", "/org/", "/person/", "/product/", "/fac/", "/loc/", "/event/", "/sphere/", "/program/", "/market/", "/segment/", "/media/", "/domain/", "/zone/"}
+	if strings.HasPrefix(s, "/") {
+		return s
+	}
+	// Path does not start with / — likely MSYS corruption. Find first canonical namespace.
+	// Order matters: /domain/ first — domain paths contain other ns as facets (e.g. .../product/fruits, .../org/partners).
+	candidates := []string{"/domain/", "/zone/", "/gov/", "/org/", "/person/", "/product/", "/fac/", "/loc/", "/event/", "/sphere/", "/program/", "/market/", "/segment/", "/media/"}
 	for _, c := range candidates {
-		if idx := strings.Index(s, c); idx > 0 {
+		if idx := strings.Index(s, c); idx >= 0 {
 			s = s[idx:]
 			break
 		}

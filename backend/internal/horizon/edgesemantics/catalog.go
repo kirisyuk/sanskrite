@@ -74,25 +74,21 @@ func IsDomainScaffoldRelationType(t models.DependencyType) bool {
 	return false
 }
 
+// supplyChainAllowlistFromTaxonomy derives allowlist from taxonomy.SupplyChainEdgeTypes (single source of truth).
+func supplyChainAllowlistFromTaxonomy() []models.DependencyType {
+	types := taxonomy.SupplyChainEdgeTypes
+	out := make([]models.DependencyType, 0, len(types))
+	for _, t := range types {
+		out = append(out, models.DependencyType(t))
+	}
+	return out
+}
+
 // EdgeAllowlistByDomainMode returns dependency types allowed for the given domain mode.
 // Returns nil for general mode (no restriction: all types allowed).
 var domainModeAllowlists = map[string][]models.DependencyType{
-	taxonomy.DomainModeSupplyChain: {
-		models.DependencyTypeDependsOn,
-		models.DependencyTypeProduces,
-		models.DependencyTypeConsumes,
-		models.DependencyTypeSuppliesTo,
-		models.DependencyTypeTransformsInto,
-		models.DependencyTypeExtractsFrom,
-		models.DependencyTypeLocatedIn,
-		models.DependencyTypeOperatesIn,
-		// GOV entities regulate markets/orgs; ORG/FAC participate in markets.
-		// Without these, LLM is forced into DEPENDS_ON catch-all for GOV->MARKET
-		// and autofix silently rewrites to PARTICIPATES_IN.
-		models.DependencyTypeRegulates,
-		models.DependencyTypeParticipatesIn,
-		models.DependencyTypeAdministers,
-	},
+	// Supply chain: set in init() from taxonomy.SupplyChainEdgeTypes (single source of truth).
+	taxonomy.DomainModeSupplyChain: nil,
 	taxonomy.DomainModeGovernance: {
 		models.DependencyTypeOwns,
 		models.DependencyTypeSubsidiaryOf,
@@ -150,6 +146,10 @@ var domainModeAllowlists = map[string][]models.DependencyType{
 		models.DependencyTypeLocatedIn,
 		models.DependencyTypeOperatesIn,
 	},
+}
+
+func init() {
+	domainModeAllowlists[taxonomy.DomainModeSupplyChain] = supplyChainAllowlistFromTaxonomy()
 }
 
 func EdgeAllowlistByDomainMode(mode string) []models.DependencyType {

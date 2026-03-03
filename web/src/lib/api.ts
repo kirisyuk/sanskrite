@@ -2376,6 +2376,22 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   /**
+   * GET /api/horizon/supply-chains/by-lens?lensId=...
+   * Returns materialized supply chain artifacts for a lens.
+   */
+  async getSupplyChainsByLens(lensId: string): Promise<{ chains: any[]; total: number; lensId: string }> {
+    try {
+      const response = await this.client.get('/api/horizon/supply-chains/by-lens', {
+        params: { lensId },
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getSupplyChainsByLens error:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * GET /api/horizon/ontology-facts/by-canonical-path
    * Returns ontology facts (events, signals, etc.) linked to the given canonical path.
    */

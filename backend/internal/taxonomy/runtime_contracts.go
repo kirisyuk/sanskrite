@@ -98,6 +98,9 @@ var builtInProductCategoriesOrdered = []string{"raw", "component", "finished", "
 var builtInProductTypesOrdered = []string{
 	"mineral",
 	"agricultural",
+	"fruit",      // alias for agricultural (fruits, produce)
+	"crop",       // alias for agricultural (crops, grains)
+	"commodity",  // generic raw goods
 	"chemical",
 	"electronic",
 	"mechanical",
@@ -121,6 +124,7 @@ var builtInProductStagesOrdered = []string{
 	"processing",
 	"manufacturing",
 	"assembly",
+	"fresh",            // unprocessed/minimal (produce, fruits)
 	"medical-supplies", // healthcare products
 	"delivery",         // logistics stage
 	"distribution",     // logistics

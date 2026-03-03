@@ -19,6 +19,8 @@ cmd/*/etigram-ws
 
 # Local tool binaries produced by `go build` / `go install` for cmd/tools (often 40-80MB each)
 horizon_*
+supply_chain_*
+unstuck_*
 add_*
 check_*
 check-*

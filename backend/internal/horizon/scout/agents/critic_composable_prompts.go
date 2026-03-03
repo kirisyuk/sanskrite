@@ -136,7 +136,7 @@ Validate:
 
 %s
 
-Return ONLY valid JSON.`, relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(chainsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, taxonomy.SupplyChainOperationalEdgeTypesString(), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(chainsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildGovernanceValidationPrompt(input CriticValidatorInput) string {
@@ -263,7 +263,7 @@ Validate:
 5. supplyChains node alternation actor→product and facility transformation hops;
 6. upstream/downstream coverage at broad or semi-depth level;
 7. qualifier quality (confidence, source hints, transport qualifiers when applicable).`,
-				relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain),
+				taxonomy.SupplyChainOperationalEdgeTypesString(),
 				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain),
 				taxonomy.ExtendedCanonicalPathRulesPrompt(),
 				string(chainsJSON)))

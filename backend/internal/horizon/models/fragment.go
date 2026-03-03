@@ -186,8 +186,8 @@ type HorizonFragment struct {
 
 	// Supply Link specific fields (when Type == FragmentTypeSupplyLink)
 	// These fields are only used for SUPPLY_LINK fragments (tenant-specific)
-	SupplierRef         *string  `json:"supplierRef,omitempty" firestore:"supplierRef,omitempty"`                 // /org/... or /fac/... (nil = natural resource)
-	CustomerRef         *string  `json:"customerRef,omitempty" firestore:"customerRef,omitempty"`                 // /org/... or /fac/... (nil = end consumer)
+	SupplierRef         *string  `json:"supplierRef,omitempty" firestore:"supplierRef,omitempty"`                 // MUST be /fac/... or /deposit/... for extraction. NOT /org/. (nil = natural resource)
+	CustomerRef         *string  `json:"customerRef,omitempty" firestore:"customerRef,omitempty"`                 // MUST be /fac/... NOT /org/. (nil = end consumer)
 	ProductRef          *string  `json:"productRef,omitempty" firestore:"productRef,omitempty"`                   // /product/... (required for SUPPLY_LINK)
 	SupplierFacilityRef *string  `json:"supplierFacilityRef,omitempty" firestore:"supplierFacilityRef,omitempty"` // /fac/... (optional)
 	CustomerFacilityRef *string  `json:"customerFacilityRef,omitempty" firestore:"customerFacilityRef,omitempty"` // /fac/... (optional)

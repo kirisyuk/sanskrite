@@ -236,7 +236,7 @@ func ExtendedCanonicalPathRulesPrompt() string {
 	regionalList := strings.Join(RegionalGeoTokenList(), ", ")
 	var sb strings.Builder
 	sb.WriteString(CanonicalPathRulesPrompt())
-	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug}. If org is unknown, use orgSlug=na. Example: /fac/tsmc/fab-21, /fac/na/fab-21\n")
+	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug}. If org is unknown, use orgSlug=na. When facility is unknown (supply chain): use /fac/{orgSlug}-general-production with title \"General production\". NEVER use /org/ as supplier or customer in supply chain links. Example: /fac/tsmc/fab-21, /fac/na/fab-21, /fac/asml-general-production\n")
 	sb.WriteString("- PERSON: /person/{slug}. Example: /person/elon-musk\n")
 	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: ISO2, composite (tr-sy), int, or regional (%s). Examples: %s. HAS_MARKET_SEGMENT: child = parent + one segment.\n", regionalList, MarketExamplePathsString()))
 	sb.WriteString(fmt.Sprintf("- COMMUNITY: /community/{geo}/{type}/{slug}. geo: ISO2, composite, or regional (%s). type: trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe|representatives|industry-association|key-community. Example: /community/ae/trade/hawala-dubai-network, /community/sa/dynasty/house-of-saud, /community/af/tribe/pashtun, /community/eu/industry-association/steel-producers\n", regionalList))
@@ -280,7 +280,7 @@ func GraphIntentCanonicalPathRulesPrompt() string {
 	sb.WriteString(fmt.Sprintf("  geo: ISO2, composite, na, int, or regional (%s). legal_form: inc, ltd, gmbh, srl, etc.\n\n", regionalList))
 	sb.WriteString("- PRODUCT: /product/{category}/{type}/{stage}/{slug}. Example: /product/raw/mineral/refining/lithium-carbonate\n")
 	sb.WriteString("  For services, use category=service and map service domain/subdomain into {type}/{stage}.\n\n")
-	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug}. If org is unknown, use orgSlug=na. Example: /fac/tsmc/fab-21, /fac/na/fab-21\n\n")
+	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug}. If org is unknown, use orgSlug=na. When facility is unknown (supply chain): use /fac/{orgSlug}-general-production. NEVER use /org/ as supplier or customer in supply chain links. Example: /fac/tsmc/fab-21, /fac/asml-general-production\n\n")
 	sb.WriteString("- PERSON: /person/{slug}. Example: /person/elon-musk\n\n")
 	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: ISO2, composite, or regional (%s). Examples: %s. HAS_MARKET_SEGMENT: child = parent + one segment.\n\n", regionalList, MarketExamplePathsString()))
 	sb.WriteString("- COMMUNITY: /community/{geo}/{type}/{slug}. type: trade|activist|professional|dynasty|tribe|interest|representatives|industry-association|key-community. Example: /community/ro/interest/investors-association, /community/eu/industry-association/steel-producers\n\n")

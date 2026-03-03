@@ -497,6 +497,11 @@ var domainFacetKeys = map[string]struct{}{
 	"project":     {},
 	"asset":       {},
 	"material":    {},
+	"product":     {}, // supply-chain: product filter (e.g. fruits, rice, lithium)
+	"commodity":   {}, // supply-chain: commodity class
+	"crop":        {}, // supply-chain: agricultural (e.g. rice, wheat)
+	"goods":       {}, // supply-chain: generic goods
+	"item":        {}, // supply-chain: generic item
 	"application": {},
 	"sector":      {},
 	"industry":    {},
@@ -1034,6 +1039,17 @@ func GovCanonicalPath(countryAlpha2OrNA string, agencyLabel string) string {
 		return ""
 	}
 	return JoinPath("gov", cc, slug)
+}
+
+// FacilityGeneralProductionPath returns a fallback facility path when the specific facility is unknown.
+// Format: /fac/{orgSlug}-general-production
+// Used when an organization is known but its producing facility is not (e.g. for supply chain normalization).
+func FacilityGeneralProductionPath(orgSlug string) string {
+	slug := Slugify(orgSlug)
+	if slug == "" {
+		return ""
+	}
+	return JoinPath("fac", slug+"-general-production")
 }
 
 // FacilityCanonicalPath returns a Horizon-canonical facility path:

@@ -609,11 +609,11 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - Nodes must alternate: actor (org/fac) → product → actor → product → ...
 	    - Each chain should have at least 3 nodes (actor → product → actor)
 	    - Products should have valid /product/... canonical paths
-	  - If chains are incomplete or missing, add specific questions:
-	    - "Who are the upstream suppliers and what materials do they provide?"
-	    - "Who are the downstream customers and what products do they receive?"
-	    - "What intermediate products/materials flow through this supply chain?"
-	  - Check for GAPS: if an actor produces a product but no downstream consumer is found, flag it.
+	  - If chains are incomplete or missing, add specific questions (org→fac→product→fac→org model):
+	    - "From org: find child orgs (subsidiaries, controlled, partners) and their facilities. Format: JSON."
+	    - "From fac: find products THIS facility produces directly. Not products of related/parent companies. Format: JSON."
+	    - "From product: find org-recipients (orgs that receive this product). Format: JSON."
+	  - Check for GAPS: if an actor produces a product but no org-recipient is found, flag it.
 		- If "equity" specialty is requested:
 		  - Ensure ownership/control relations are present (OWNS / SUBSIDIARY_OF / CONTROLS / INVESTS_IN).
 		  - If none are found for an ORGANIZATION, add questions like:

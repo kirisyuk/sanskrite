@@ -1155,6 +1155,8 @@ export async function layoutLevelsTwoPane<T = any>(
     compactLeftPane = false,
     leftPaneMode = 'default',
     rightDockMode = false,
+    /** Supply chain: right-to-left flow, single downstream block, no vertical role groups */
+    supplyChainFlow = false,
     rightDockStateByNodeId,
     onToggleRightDock,
     expandedStackKeysOverride,
@@ -1164,6 +1166,7 @@ export async function layoutLevelsTwoPane<T = any>(
 
   const isGroup = (n: Node<T>) => Boolean((n.data as any)?.isGroup);
   const isDecisionChainLeftPane = compactLeftPane && leftPaneMode === 'decision-chain';
+  const isSupplyChainLeftPane = supplyChainFlow || leftPaneMode === 'supply-chain';
   const isSyntheticRightStackControllerId = (idRaw: any): boolean => {
     const id = String(idRaw || '').trim();
     return id.startsWith('levels:rightstack:ctrl:') || id.startsWith('levels:rightstackp:ctrl:');
@@ -2084,6 +2087,7 @@ export async function layoutLevelsTwoPane<T = any>(
     // Compact role labels (used in compact left pane)
     'supply': 'Supply',
     'context': 'Context',
+    '__supply_chain_downstream__': 'Downstream',
   };
   const SEMANTIC_ROLE_ORDER: Record<string, number> = {
     'governance': 100,
@@ -2107,6 +2111,8 @@ export async function layoutLevelsTwoPane<T = any>(
     'corridor_propagation': 110,
     'corridor_execution': 150,
     'corridor_authority': 190,
+    // Supply chain: single downstream block (no vertical role groups)
+    '__supply_chain_downstream__': 0,
   };
 
   // Maximum visible nodes per semantic category in left group.
@@ -2765,7 +2771,7 @@ export async function layoutLevelsTwoPane<T = any>(
     };
 
     // Bucket by semantic business role (edge type + node type → Governance, Supply Chain, etc.).
-    // This gives the left group business meaning instead of raw entity-type grouping.
+    // Supply chain: single block, no vertical role groups — all downstream in one horizontal flow.
     const byType = new Map<string, Node<T>[]>();
     for (const n of safeChildren) {
       if (isDecisionChainLeftPane) {
@@ -2775,6 +2781,13 @@ export async function layoutLevelsTwoPane<T = any>(
           continue;
         }
       }
+      if (isSupplyChainLeftPane) {
+        // Single block: all downstream in one horizontal flow (right=upstream, left=downstream)
+        const arr = byType.get('__supply_chain_downstream__') || [];
+        arr.push(n);
+        byType.set('__supply_chain_downstream__', arr);
+        continue;
+      }
       const role = resolveLeftBlockForChild(n);
       const arr = byType.get(role) || [];
       arr.push(n);
@@ -2782,7 +2795,7 @@ export async function layoutLevelsTwoPane<T = any>(
     }
 
     // Safety: in compact mode, ensure any legacy roles are merged into compact business blocks.
-    if (compactLeftPane && !isDecisionChainLeftPane) {
+    if (compactLeftPane && !isDecisionChainLeftPane && !isSupplyChainLeftPane) {
       const mergeRole = (from: string, to: string) => {
         const list = byType.get(from) || [];
         if (list.length === 0) return;
@@ -2811,10 +2824,9 @@ export async function layoutLevelsTwoPane<T = any>(
     });
 
     // Per-category cap: limit visible nodes to prevent horizontal sprawl.
-    // Decision Chain and compact left pane: show all nodes (no cap) — compact layout handles many nodes.
-    // Store overflow counts for "+N more" pill rendering (only when cap is applied).
+    // Decision Chain, compact left pane, and supply chain: show all nodes (no cap).
     const overflowByRole = new Map<string, number>();
-    const applyRoleCap = !isDecisionChainLeftPane && !compactLeftPane;
+    const applyRoleCap = !isDecisionChainLeftPane && !compactLeftPane && !isSupplyChainLeftPane;
     if (applyRoleCap) {
       for (const [role, nodes] of byType.entries()) {
         const overflowKey = `levels:lefttype:${effectiveGroupId}:${role}`;
@@ -3199,7 +3211,7 @@ export async function layoutLevelsTwoPane<T = any>(
       const NO_REL_GROUPING_ROLES = new Set([
         'products', 'geography', 'context', 'supply',
       ]);
-      const isCompactGridRole = NO_REL_GROUPING_ROLES.has(typeKey);
+      const isCompactGridRole = NO_REL_GROUPING_ROLES.has(typeKey) || typeKey === '__supply_chain_downstream__';
       const useCorridorTypeGrouping =
         isDecisionChainLeftPane &&
         (typeKey === 'corridor_authority' || typeKey === 'corridor_execution' || typeKey === 'corridor_propagation');
@@ -3361,7 +3373,20 @@ export async function layoutLevelsTwoPane<T = any>(
           compactLeftPane && isCompactGridRole
             ? Math.max(1, Math.min(maxVerticalForNodes(list), list.length))
             : Math.max(minRowsForBlock, rowsForCount(list.length));
-        const nodesFlat = corridorNodeSorter(list.slice());
+        let nodesFlat = corridorNodeSorter(list.slice());
+        // Supply chain: single horizontal flow, right-to-left (upstream right, downstream left).
+        // Sort: customers (outgoing) first → left, suppliers (incoming) last → right.
+        if (typeKey === '__supply_chain_downstream__') {
+          nodesFlat = nodesFlat.slice().sort((a, b) => {
+            const aIn = String((a.data as any)?.directionFromParent || '').trim() === 'incoming';
+            const bIn = String((b.data as any)?.directionFromParent || '').trim() === 'incoming';
+            // Outgoing (customers) first, incoming (suppliers) last
+            if (aIn !== bIn) return aIn ? 1 : -1;
+            const al = String((a.data as any)?.label || a.id);
+            const bl = String((b.data as any)?.label || b.id);
+            return al.localeCompare(bl);
+          });
+        }
         // Compute per-row max height (supports mixed compact/full nodes).
         const minBase = compactLeftPane ? COMPACT_NODE_LAYOUT_HEIGHT : nodeHeight;
         const rowHeights = new Array(rowsForType).fill(minBase);
@@ -6591,8 +6616,13 @@ export interface LayoutOptions_Custom {
    * Optional left-pane semantic mode.
    * - default: standard business-role grouping
    * - decision-chain: authority/execution/propagation grouping for corridor expansions
+   * - supply-chain: single horizontal flow, no vertical role blocks; right-to-left (upstream right, downstream left)
    */
-  leftPaneMode?: 'default' | 'decision-chain';
+  leftPaneMode?: 'default' | 'decision-chain' | 'supply-chain';
+  /**
+   * Supply chain flow: right-to-left hierarchy, single downstream block, no vertical role groups.
+   */
+  supplyChainFlow?: boolean;
 
   /**
    * Right Dock mode (Levels layout).

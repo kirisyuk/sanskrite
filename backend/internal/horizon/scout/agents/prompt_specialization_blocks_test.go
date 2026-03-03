@@ -26,7 +26,7 @@ func TestBuildObjectTypeTaskSpecializationBlockWithHints_FacilitySupplyFocus(t *
 		nil,
 		nil,
 	)
-	for _, want := range []string{"supply-qualified fac", "upstream suppliers", "downstream customers"} {
+	for _, want := range []string{"supply-qualified fac", "producing facilities", "org-recipients"} {
 		if !strings.Contains(strings.ToLower(got), strings.ToLower(want)) {
 			t.Fatalf("facility supply specialization block missing %q", want)
 		}
@@ -42,7 +42,7 @@ func TestBuildObjectTypeTaskSpecializationBlockWithHints_FacilityProcurementFocu
 		map[string]string{"facilityRole": "procurement"},
 		nil,
 	)
-	for _, want := range []string{"procurement-qualified fac", "vendors", "alternative supplier regions"} {
+	for _, want := range []string{"procurement-qualified fac", "vendors", "sourcing regions"} {
 		if !strings.Contains(strings.ToLower(got), strings.ToLower(want)) {
 			t.Fatalf("facility procurement specialization block missing %q", want)
 		}

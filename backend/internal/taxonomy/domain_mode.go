@@ -70,7 +70,7 @@ var domainModeSynonyms = map[string]string{
 func EntityTypesForDomainMode(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case DomainModeSupplyChain:
-		return "ORGANIZATION, FACILITY, PRODUCT, GEO_REGION, DEPOSIT, COMMUNITY (informal trade networks), PROGRAM (procurement/subsidy programs)"
+		return "FACILITY (primary actor for supplies/produces), ORGANIZATION (OWNS, LOCATED_IN — supply flow endpoints are FACILITY), PRODUCT, GEO_REGION, DEPOSIT, COMMUNITY (informal trade), PROGRAM (procurement)"
 	case DomainModeGovernance:
 		return "ORGANIZATION (including /gov/ government bodies), PERSON, COMMUNITY (dynasty/tribe can OWNS), PROGRAM (ADMINISTERS target)"
 	case DomainModeAssurance:
@@ -109,18 +109,28 @@ func EntityActorTypesForDomainMode(mode string) string {
 	}
 }
 
-// SupplyChainEdgeTypes returns canonical edge types for supply chain context.
-// Used by: Scout SupplyChainResearchStrategy, Research agent supply chain enrichment.
-// Single source of truth for supply chain relation semantics.
+// SupplyChainEdgeTypes is the allowlist for supply_chain mode (filtering, gap analyzer).
+// Operational types (4) + geographic (LOCATED_IN, OPERATES_IN). Single source of truth.
+// Must stay in sync with edgesemantics.domainModeAllowlists[supply_chain].
 var SupplyChainEdgeTypes = []string{
-	"DEPENDS_ON", "PRODUCES", "CONSUMES", "SUPPLIES_TO",
-	"TRANSFORMS_INTO", "EXTRACTS_FROM", "LOCATED_IN", "OPERATES_IN",
-	"REGULATES", "PARTICIPATES_IN", "ADMINISTERS",
+	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM",
+	"LOCATED_IN", "OPERATES_IN",
 }
 
-// SupplyChainEdgeTypesString returns comma-separated list for prompts.
+// SupplyChainEdgeTypesString returns comma-separated list for prompts. Derives from SupplyChainEdgeTypes.
 func SupplyChainEdgeTypesString() string {
-	return "DEPENDS_ON, PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, REGULATES, PARTICIPATES_IN, ADMINISTERS"
+	return strings.Join(SupplyChainEdgeTypes, ", ")
+}
+
+// SupplyChainOperationalEdgeTypes are the only edge types for supply chain structural links (fac→fac, fac→product).
+// Use for "Use ONLY these" in supply chain prompts. Subset of SupplyChainEdgeTypes.
+var SupplyChainOperationalEdgeTypes = []string{
+	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM",
+}
+
+// SupplyChainOperationalEdgeTypesString returns comma-separated list for operational-link prompts.
+func SupplyChainOperationalEdgeTypesString() string {
+	return "PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM"
 }
 
 // GovernanceEdgeTypes returns canonical edge types for governance/organizational management context.
