@@ -377,3 +377,291 @@ func TestSanitizeResearchResultForUnmarshal_StructuralDrift(t *testing.T) {
 		t.Fatalf("metrics should be dropped for invalid shape, got=%v", rr.Relations[0].Metrics)
 	}
 }
+
+func TestInferCanonicalPathFromNameAndType(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodeType string
+		want     string
+	}{
+		{"Forvia", "ORGANIZATION", "/org/discovered/forvia"},
+		{"Steel Coil", "PRODUCT", "/product/discovered/steel-coil"},
+		{"Shanghai Port", "FACILITY", "/fac/discovered/shanghai-port"},
+		{"EU Automotive", "MARKET", "/market/discovered/eu-automotive"},
+		{"East Asia", "GEO_REGION", "/loc/discovered/east-asia"},
+		{"Iron Ore Mine", "DEPOSIT", "/deposit/discovered/iron-ore-mine"},
+		{"", "ORGANIZATION", ""},
+		{"   ", "ORGANIZATION", ""},
+	}
+	for _, tt := range tests {
+		got := inferCanonicalPathFromNameAndType(tt.name, tt.nodeType)
+		if got != tt.want {
+			t.Errorf("inferCanonicalPathFromNameAndType(%q, %q) = %q, want %q", tt.name, tt.nodeType, got, tt.want)
+		}
+	}
+}
+
+func TestSanitizeNode_GeneratesCanonicalPath(t *testing.T) {
+	node := sanitizeSupplyChainNode(map[string]interface{}{
+		"name": "ArcelorMittal",
+		"type": "ORGANIZATION",
+	})
+	if node == nil {
+		t.Fatal("node should not be nil")
+	}
+	cp, _ := node["canonicalPath"].(string)
+	if cp == "" {
+		t.Fatal("canonicalPath should be auto-generated")
+	}
+	if cp != "/org/discovered/arcelormittal" {
+		t.Errorf("canonicalPath = %q, want /org/discovered/arcelormittal", cp)
+	}
+}
+
+func TestSanitizeNode_PreservesExistingCanonicalPath(t *testing.T) {
+	node := sanitizeSupplyChainNode(map[string]interface{}{
+		"canonicalPath": "/org/lu/arcelormittal",
+		"name":          "ArcelorMittal",
+		"type":          "ORGANIZATION",
+	})
+	if node == nil {
+		t.Fatal("node should not be nil")
+	}
+	cp := node["canonicalPath"].(string)
+	if cp != "/org/lu/arcelormittal" {
+		t.Errorf("canonicalPath = %q, want /org/lu/arcelormittal (should not override)", cp)
+	}
+}
+
+func TestSanitizeNodeString_GeneratesCanonicalPath(t *testing.T) {
+	node := sanitizeSupplyChainNodeString("Nippon Steel Corporation")
+	if node == nil {
+		t.Fatal("node should not be nil")
+	}
+	cp := node["canonicalPath"].(string)
+	if cp == "" {
+		t.Fatal("canonicalPath should be auto-generated for string node")
+	}
+	if !strings.HasPrefix(cp, "/org/discovered/") {
+		t.Errorf("canonicalPath = %q, should start with /org/discovered/", cp)
+	}
+}
+
+func TestRepairSupplyChainNodePaths(t *testing.T) {
+	chains := []SupplyChain{{
+		Nodes: []SupplyChainNode{
+			{Name: "Steel Mill", Type: "FACILITY"},
+			{CanonicalPath: "/org/de/forvia", Name: "Forvia", Type: "ORGANIZATION"},
+			{Name: "Volkswagen", Type: "ORGANIZATION"},
+		},
+	}}
+	repairSupplyChainNodePaths(chains)
+	if chains[0].Nodes[0].CanonicalPath == "" {
+		t.Error("node[0] should have generated canonical path")
+	}
+	if chains[0].Nodes[1].CanonicalPath != "/org/de/forvia" {
+		t.Error("node[1] existing path should be preserved")
+	}
+	if chains[0].Nodes[2].CanonicalPath == "" {
+		t.Error("node[2] should have generated canonical path")
+	}
+}
+
+func TestSanitizeRefinePatchesRaw_CoercesRegFit(t *testing.T) {
+	raw := []byte(`{
+		"patches": [{
+			"patchType": "alternatives",
+			"chainIndex": 0,
+			"nodes": [],
+			"alternatives": [{
+				"customerNodeIndex": 2,
+				"productNodeIndex": 1,
+				"suppliers": [{
+					"supplierRef": "/org/de/basf",
+					"technicalFit": 0.8,
+					"regulatoryFit": "0.9",
+					"confidence": "0.7"
+				}]
+			}]
+		}]
+	}`)
+	sanitized, err := sanitizeRefinePatchesRaw(raw)
+	if err != nil {
+		t.Fatalf("sanitizeRefinePatchesRaw() error = %v", err)
+	}
+	var parsed struct {
+		Patches []SupplyChainPatch `json:"patches"`
+	}
+	if err := json.Unmarshal(sanitized, &parsed); err != nil {
+		t.Fatalf("unmarshal after sanitize should succeed: %v\npayload=%s", err, string(sanitized))
+	}
+	if len(parsed.Patches) != 1 {
+		t.Fatalf("patches=%d, want 1", len(parsed.Patches))
+	}
+	if len(parsed.Patches[0].Alternatives) != 1 {
+		t.Fatalf("alternatives=%d, want 1", len(parsed.Patches[0].Alternatives))
+	}
+	sup := parsed.Patches[0].Alternatives[0].Suppliers[0]
+	if sup.RegulatoryFit != 0.9 {
+		t.Errorf("regulatoryFit = %v, want 0.9", sup.RegulatoryFit)
+	}
+	if sup.Confidence != 0.7 {
+		t.Errorf("confidence = %v, want 0.7", sup.Confidence)
+	}
+}
+
+func TestSanitizeRefinePatches_GeneratesCPForNodesWithoutPath(t *testing.T) {
+	patches := []SupplyChainPatch{{
+		PatchType: "extend_downstream",
+		Nodes: []SupplyChainNode{
+			{CanonicalPath: "/org/de/forvia", Name: "Forvia", Type: "ORGANIZATION"},
+			{Name: "Aluminum Sheet", Type: "PRODUCT"},
+			{Name: "Novelis Inc", Type: "ORGANIZATION"},
+		},
+	}}
+	result := sanitizeRefinePatches(patches)
+	if len(result) != 1 {
+		t.Fatalf("patches=%d, want 1", len(result))
+	}
+	for i, n := range result[0].Nodes {
+		if n.CanonicalPath == "" {
+			t.Errorf("node[%d] (%s) should have canonical path", i, n.Name)
+		}
+	}
+}
+
+func TestExtractNodesMultiKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		chain    map[string]interface{}
+		wantN    int
+		wantName string
+	}{
+		{
+			name: "standard nodes key",
+			chain: map[string]interface{}{
+				"nodes": []interface{}{
+					map[string]interface{}{"name": "Forvia", "type": "ORGANIZATION"},
+				},
+			},
+			wantN: 1, wantName: "Forvia",
+		},
+		{
+			name: "participants key",
+			chain: map[string]interface{}{
+				"participants": []interface{}{
+					map[string]interface{}{"name": "ThyssenKrupp", "type": "ORGANIZATION"},
+					map[string]interface{}{"name": "Steel Coil", "type": "PRODUCT"},
+				},
+			},
+			wantN: 2, wantName: "ThyssenKrupp",
+		},
+		{
+			name: "steps key",
+			chain: map[string]interface{}{
+				"steps": []interface{}{
+					map[string]interface{}{"name": "ArcelorMittal", "type": "ORGANIZATION"},
+				},
+			},
+			wantN: 1, wantName: "ArcelorMittal",
+		},
+		{
+			name: "chain key",
+			chain: map[string]interface{}{
+				"chain": []interface{}{
+					map[string]interface{}{"name": "BASF", "type": "ORGANIZATION"},
+				},
+			},
+			wantN: 1, wantName: "BASF",
+		},
+		{
+			name: "stages key (observed in prod)",
+			chain: map[string]interface{}{
+				"stages": []interface{}{
+					map[string]interface{}{"name": "Supplier A", "type": "ORGANIZATION"},
+					map[string]interface{}{"name": "Steel Coil", "type": "PRODUCT"},
+					map[string]interface{}{"name": "OEM", "type": "ORGANIZATION"},
+				},
+			},
+			wantN: 3, wantName: "Supplier A",
+		},
+		{
+			name:  "no matching key",
+			chain: map[string]interface{}{"flow": "A → B → C"},
+			wantN: 0,
+		},
+		{
+			name:  "empty nodes",
+			chain: map[string]interface{}{"nodes": []interface{}{}},
+			wantN: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractNodesMultiKey(tt.chain)
+			if len(got) != tt.wantN {
+				t.Errorf("extractNodesMultiKey() got %d nodes, want %d", len(got), tt.wantN)
+			}
+			if tt.wantN > 0 && tt.wantName != "" {
+				if m, ok := got[0].(map[string]interface{}); ok {
+					if m["name"] != tt.wantName {
+						t.Errorf("first node name = %v, want %v", m["name"], tt.wantName)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAlwaysSanitizeSupplyChains(t *testing.T) {
+	// Simulate LLM output where supply chains use "participants" instead of "nodes"
+	// and "reliability" instead of "confidence". Direct unmarshal would produce
+	// zero-value SupplyChain structs.
+	rawJSON := `{
+		"fragment": {"description": "Test entity"},
+		"relations": [],
+		"supplyChains": [
+			{
+				"participants": [
+					{"name": "ArcelorMittal", "type": "ORGANIZATION"},
+					{"name": "Hot-rolled Steel", "type": "PRODUCT"},
+					{"name": "Forvia", "type": "ORGANIZATION"}
+				],
+				"reliability": 0.85,
+				"explanation": "Steel supply chain"
+			}
+		]
+	}`
+
+	// Direct unmarshal should produce zero-value chains
+	var directRes researchResult
+	if err := json.Unmarshal([]byte(rawJSON), &directRes); err != nil {
+		t.Fatalf("direct unmarshal should succeed: %v", err)
+	}
+	if len(directRes.SupplyChains) != 1 {
+		t.Fatalf("direct unmarshal should find 1 chain, got %d", len(directRes.SupplyChains))
+	}
+	if len(directRes.SupplyChains[0].Nodes) != 0 {
+		t.Errorf("direct unmarshal should have 0 nodes (field name mismatch), got %d",
+			len(directRes.SupplyChains[0].Nodes))
+	}
+
+	// Sanitize-first path should recover the nodes
+	sanitized, err := sanitizeResearchResultForUnmarshal([]byte(rawJSON))
+	if err != nil {
+		t.Fatalf("sanitize failed: %v", err)
+	}
+	var sanitizedRes researchResult
+	if err := json.Unmarshal(sanitized, &sanitizedRes); err != nil {
+		t.Fatalf("unmarshal after sanitize failed: %v", err)
+	}
+	if len(sanitizedRes.SupplyChains) != 1 {
+		t.Fatalf("sanitized should find 1 chain, got %d", len(sanitizedRes.SupplyChains))
+	}
+	if len(sanitizedRes.SupplyChains[0].Nodes) != 3 {
+		t.Errorf("sanitized should recover 3 nodes, got %d", len(sanitizedRes.SupplyChains[0].Nodes))
+	}
+	if sanitizedRes.SupplyChains[0].Confidence < 0.8 {
+		t.Errorf("sanitized confidence should be ~0.85, got %.2f", sanitizedRes.SupplyChains[0].Confidence)
+	}
+}

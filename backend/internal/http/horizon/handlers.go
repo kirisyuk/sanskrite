@@ -6,7 +6,6 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
-	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -34,12 +33,18 @@ type HorizonHandlers struct {
 	newsByFragmentsCanvas       *discovery.NewsByFragmentsCanvas
 
 	// Lens Q&A (Analysis view)
-	qaEngine         *horizonqa.Engine
-	qaContextBuilder *horizonqa.AnswerContextBuilder
-	qaSynthesizer    *horizonqa.AnswerSynthesizer
-	qaSessionsRepo   *horizonrepo.QASessionsRepository
-	qaInterpreter         *horizoninterp.Interpreter  // optional: humanization at finish
-	qaRelevanceEvaluator  *horizonqa.BusinessRelevanceEvaluator // optional: score answer vs question
+	qaEngine               *horizonqa.Engine
+	qaContextBuilder       *horizonqa.AnswerContextBuilder
+	qaSynthesizer          *horizonqa.AnswerSynthesizer
+	qaSessionsRepo         *horizonrepo.QASessionsRepository
+	qaSufficiencyChecker   *horizonqa.SufficiencyChecker
+	qaSignalGapDetector    *horizonqa.SignalGapDetector
+	qaGroundingQueryBuilder *horizonqa.GroundingQueryBuilder
+	qaBestEffortFiller     *horizonqa.BestEffortFiller
+	scoutingJobsRepo       *horizonrepo.ScoutingJobsRepository
+
+	// Job-level telemetry (LLM cost tracking)
+	jobTelemetryRepo *horizonrepo.JobTelemetryRepository
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -141,17 +146,42 @@ func (h *HorizonHandlers) WithQAEngine(engine *horizonqa.Engine, ctxBuilder *hor
 	return h
 }
 
-// WithQAInterpreter wires the Interpreter for humanization at finish (optional).
-func (h *HorizonHandlers) WithQAInterpreter(interp *horizoninterp.Interpreter) *HorizonHandlers {
-	h.qaInterpreter = interp
+// WithQASufficiencyChecker wires the sufficiency checker for the QA handler.
+func (h *HorizonHandlers) WithQASufficiencyChecker(c *horizonqa.SufficiencyChecker) *HorizonHandlers {
+	h.qaSufficiencyChecker = c
 	return h
 }
 
-// WithQARelevanceEvaluator wires the BusinessRelevanceEvaluator (optional).
-func (h *HorizonHandlers) WithQARelevanceEvaluator(eval *horizonqa.BusinessRelevanceEvaluator) *HorizonHandlers {
-	h.qaRelevanceEvaluator = eval
+// WithQASignalGapDetector wires the signal gap detector for the QA handler.
+func (h *HorizonHandlers) WithQASignalGapDetector(d *horizonqa.SignalGapDetector) *HorizonHandlers {
+	h.qaSignalGapDetector = d
 	return h
 }
+
+// WithQAGroundingQueryBuilder wires the grounding query builder for the QA handler.
+func (h *HorizonHandlers) WithQAGroundingQueryBuilder(b *horizonqa.GroundingQueryBuilder) *HorizonHandlers {
+	h.qaGroundingQueryBuilder = b
+	return h
+}
+
+// WithQABestEffortFiller wires the best-effort signal filler for the QA handler.
+func (h *HorizonHandlers) WithQABestEffortFiller(f *horizonqa.BestEffortFiller) *HorizonHandlers {
+	h.qaBestEffortFiller = f
+	return h
+}
+
+// WithScoutingJobsRepo wires the ScoutingJobsRepository for auto-scout in QA.
+func (h *HorizonHandlers) WithScoutingJobsRepo(r *horizonrepo.ScoutingJobsRepository) *HorizonHandlers {
+	h.scoutingJobsRepo = r
+	return h
+}
+
+// WithJobTelemetryRepo wires the JobTelemetryRepository for per-job LLM cost tracking.
+func (h *HorizonHandlers) WithJobTelemetryRepo(r *horizonrepo.JobTelemetryRepository) *HorizonHandlers {
+	h.jobTelemetryRepo = r
+	return h
+}
+
 
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
@@ -353,6 +383,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			return
 		case "qa":
 			h.LensQA(w, r)
+			return
+		case "telemetry":
+			h.HandleTelemetryRoutes(w, r)
 			return
 		case "graph-query":
 			h.QueryGraph(w, r)

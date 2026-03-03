@@ -707,6 +707,101 @@ func registerAll() {
 - Missing info priorities: metrics, affected entities, trigger event.`,
 	}
 
+	registry[EntityTypeSupplyLink] = &EntityTypeDefinition{
+		Key: EntityTypeSupplyLink,
+		RequiredAspects: []string{
+			"supplier", "customer", "product", "volume", "route",
+		},
+		ProfileSections: []models.ProfileSectionSpec{
+			{Key: "overview", Title: "Overview", Description: "Supply link description: supplier, product, customer", Required: true, Order: 1},
+			{Key: "flow_metrics", Title: "Flow Metrics", Description: "Volume, capacity, frequency, contract terms", Required: false, Order: 2},
+			{Key: "route", Title: "Route & Logistics", Description: "Transport mode, route, chokepoints, lead time", Required: false, Order: 3},
+			{Key: "risks", Title: "Risks & Dependencies", Description: "Concentration risk, alternatives, disruption history", Required: false, Order: 4},
+		},
+		ExtractionBlock: `ENTITY TYPE: SUPPLY_LINK
+- Canonical path: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}. Tenant-scoped.
+- Required execution order:
+  1) Resolve supplier and customer entities (SUPPLIES_TO direction: supplier → customer).
+  2) Resolve product being supplied (CARRIES or via-product reference).
+  3) Resolve volume/capacity metrics and contract evidence.
+  4) Resolve logistics route and chokepoints (DEPENDS_ON infrastructure).
+- Taxonomically correct edge types:
+  - Required/primary: SUPPLIES_TO (supplier → customer), CARRIES (link → product)
+  - Allowed when evidence exists: DEPENDS_ON (link → infrastructure/chokepoint), LOCATED_IN
+  - Avoid: PRODUCES/CONSUMES on the link itself; those belong on supplier/customer nodes.
+- Missing info priorities:
+  - Missing supplier or customer identity.
+  - Missing product specification.
+  - Missing volume/capacity metrics.
+  - Missing route and infrastructure dependencies.`,
+		ResearchBlock: `ENTITY TYPE: SUPPLY_LINK
+- Canonical path: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}. Tenant-scoped.
+- Required execution order:
+  1) Resolve supplier and customer entities.
+  2) Resolve product being supplied.
+  3) Resolve volume/capacity metrics.
+  4) Resolve logistics route and chokepoints.
+- Taxonomically correct edge types:
+  - Required/primary: SUPPLIES_TO, CARRIES
+  - Allowed when evidence exists: DEPENDS_ON, LOCATED_IN
+- Missing info priorities: supplier/customer, product, volume, route.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "description/label for supply link %s"},
+			{Trigger: TriggerRelationMissing, RelationType: "SUPPLIES_TO", QuestionTemplate: "Who is the supplier and who is the customer in %s? Return SUPPLIES_TO edge from supplier org/facility to customer org/facility."},
+			{Trigger: TriggerRelationMissing, RelationType: "CARRIES", QuestionTemplate: "What product is transported/supplied in %s? Return CARRIES edge to the product canonical path."},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "What are the volume, capacity, and logistics details for %s? Include transport mode, route, lead time, and any chokepoint dependencies."},
+		},
+	}
+
+	registry[EntityTypeTrack] = &EntityTypeDefinition{
+		Key: EntityTypeTrack,
+		RequiredAspects: []string{
+			"kind", "id_scheme", "operator", "vessel_type", "flag",
+		},
+		ProfileSections: []models.ProfileSectionSpec{
+			{Key: "identity", Title: "Identity & Classification", Description: "Kind (sea/air/land), ID scheme (MMSI/IMO/ICAO), external track ID, vessel/vehicle type, flag state", Required: true, Order: 1},
+			{Key: "operator", Title: "Operator & Ownership", Description: "Operating entity, owner, fleet affiliation", Required: true, Order: 2},
+			{Key: "operations", Title: "Operations", Description: "Ports/facilities frequented, routes, cargo types carried", Required: false, Order: 3},
+			{Key: "status", Title: "Current Status", Description: "Last known position, operational status, draught, speed", Required: false, Order: 4},
+		},
+		ExtractionBlock: `ENTITY TYPE: TRACK
+- Canonical path: /track/{kind}/{geo}/{id_scheme}-{id}. kind: sea|air|land. id_scheme: mmsi|imo|icao. geo: ISO2 flag or region.
+- Required fields: kind, idScheme, externalTrackId.
+- Sub-types: bulk_carrier, tanker, cargo, ore_carrier, container.
+- Required execution order:
+  1) Resolve identity: kind, idScheme, externalTrackId, vesselType, flag.
+  2) Resolve operator/owner via OPERATES_AT, OWNED_BY.
+  3) Resolve cargo/goods carried via CARRIES.
+- Taxonomically correct edge types:
+  - Required/primary: OPERATES_AT (track → facility/port), CARRIES (track → product), OWNED_BY (track → org)
+  - Allowed when evidence exists: LOCATED_IN, DEPENDS_ON
+  - Avoid: PRODUCES/CONSUMES for tracks; use CARRIES for cargo association.
+- Missing info priorities:
+  - Missing operator/owner.
+  - Missing vessel type and flag.
+  - Missing cargo and route information.`,
+		ResearchBlock: `ENTITY TYPE: TRACK
+- Canonical path: /track/{kind}/{geo}/{id_scheme}-{id}. kind: sea|air|land. id_scheme: mmsi|imo|icao.
+- Required fields: kind, idScheme, externalTrackId.
+- Sub-types: bulk_carrier, tanker, cargo, ore_carrier, container.
+- Taxonomically correct edge types:
+  - Required/primary: OPERATES_AT, CARRIES, OWNED_BY
+  - Allowed when evidence exists: LOCATED_IN, DEPENDS_ON
+- Missing info priorities: operator/owner, vessel type, flag, cargo, routes.`,
+		MissingInfoRules: []MissingInfoRule{
+			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
+			{Trigger: TriggerFieldEmpty, FieldPath: "Qualifiers.vesselType", QuestionTemplate: "What is the vessel/vehicle type for %s? Return one of bulk_carrier|tanker|cargo|ore_carrier|container or other specific type."},
+			{Trigger: TriggerFieldEmpty, FieldPath: "Qualifiers.flag", QuestionTemplate: "What is the flag state (ISO2) for %s?"},
+			{Trigger: TriggerFieldEmpty, FieldPath: "Qualifiers.operator", QuestionTemplate: "Who is the operator of %s? Return the operating entity name and canonical path."},
+			{Trigger: TriggerRelationMissing, RelationType: "OPERATES_AT", QuestionTemplate: "Which ports or facilities does %s frequently operate at? Return OPERATES_AT edges with facility/port canonical paths."},
+			{Trigger: TriggerRelationMissing, RelationType: "CARRIES", QuestionTemplate: "What cargo or goods does %s carry? Return CARRIES edges to product canonical paths."},
+			{Trigger: TriggerRelationMissing, RelationType: "OWNED_BY", QuestionTemplate: "Who owns %s? Return OWNED_BY edge to the owning organization."},
+			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
+			{Trigger: TriggerSeed, QuestionTemplate: "Comprehensive information about tracked entity '%s' is missing. Identify its kind (sea/air/land), ID scheme (mmsi/imo/icao), vessel type, flag, operator, and relationships."},
+		},
+	}
+
 	registry[EntityTypeGeneral] = &EntityTypeDefinition{
 		Key:             EntityTypeGeneral,
 		RequiredAspects: []string{},

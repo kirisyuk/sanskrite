@@ -3,12 +3,10 @@ package qa
 import (
 	"context"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -16,14 +14,13 @@ import (
 
 // Engine runs the Q&A pipeline: Decompose → Simulate → Synthesize.
 type Engine struct {
-	decomposer          *QuestionDecomposer
-	seedResolver        *SeedResolver
-	leafEvidence        *LeafEvidenceCollector
-	propagationEngine   *propagation.PropagationEngine
-	profileLookup       *propagation.ProfileLookup
-	fragmentsRepo       *horizonrepo.HorizonFragmentsRepository
-	artifactsRepo       *horizonrepo.MaterializedArtifactsRepository
-	vertexSearchClient  *ai.VertexAISearchClient
+	decomposer        *QuestionDecomposer
+	seedResolver      *SeedResolver
+	leafEvidence      *LeafEvidenceCollector
+	propagationEngine *propagation.PropagationEngine
+	profileLookup     *propagation.ProfileLookup
+	fragmentsRepo     *horizonrepo.HorizonFragmentsRepository
+	artifactsRepo     *horizonrepo.MaterializedArtifactsRepository
 }
 
 // NewEngine creates a new QA Engine.
@@ -47,16 +44,6 @@ func NewEngine(
 	}
 }
 
-// WithVertexSearch wires Vertex AI Search for alternative entity enrichment.
-// Same client/datastore as horizon fragment sync (GCS-indexed fragments). Part of the pipeline.
-func (e *Engine) WithVertexSearch(client *ai.VertexAISearchClient) *Engine {
-	if e == nil {
-		return e
-	}
-	e.vertexSearchClient = client
-	return e
-}
-
 // Run executes the full Q&A pipeline and returns a SimulationResult.
 // Caller is responsible for AnswerContextBuilder and AnswerSynthesizer (Phase 3).
 func (e *Engine) Run(ctx context.Context, req *QARequest) (*horizonmodels.SimulationResult, *horizonmodels.QuestionPlan, error) {
@@ -71,16 +58,16 @@ func (e *Engine) Run(ctx context.Context, req *QARequest) (*horizonmodels.Simula
 	lensCtx := &DecomposeContext{
 		ScopePaths:        req.Lens.Scope[:minInt(30, len(req.Lens.Scope))],
 		DomainModes:       req.Lens.DomainModes,
-		ActiveSignals:    req.ActiveSignals,
+		ActiveSignals:     req.ActiveSignals,
 		ArtifactSummaries: req.ArtifactSummaries,
 	}
-	plan, err := e.decomposer.Decompose(ctx, req.Question, lensCtx)
+	plan, err := e.Decompose(ctx, req.Question, lensCtx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decompose: %w", err)
 	}
 	if plan.AnswerMode == "out_of_scope" {
 		return &horizonmodels.SimulationResult{
-			NodeImpacts:   nil,
+			NodeImpacts:  nil,
 			TracePaths:   nil,
 			LeafEvidence: nil,
 			ChainImpacts: nil,
@@ -93,25 +80,8 @@ func (e *Engine) Run(ctx context.Context, req *QARequest) (*horizonmodels.Simula
 		scopeFragments = make(map[string]string)
 	}
 
-	// Vertex AI Search enrichment: find alternative entities (products, orgs) for alternatives in answer
-	var vertexAlternatives []*horizonmodels.HorizonFragment
-	if e.vertexSearchClient != nil && e.vertexSearchClient.IsConfigured() && e.fragmentsRepo != nil {
-		alts, err := e.enrichFromVertexSearch(ctx, plan.NormalizedQuestion, scopeFragments, 8)
-		if err != nil {
-			log.Printf("[QA] Vertex Search enrichment failed (non-fatal): %v", err)
-		} else if len(alts) > 0 {
-			vertexAlternatives = alts
-			log.Printf("[QA] Vertex Search found %d alternative entities", len(alts))
-		}
-	}
-
 	// Phase 2: Simulate
-	var simResult *horizonmodels.SimulationResult
-	if len(plan.HypotheticalSignals) > 0 {
-		simResult, err = e.simulateHypothetical(ctx, plan, scopeFragments, req.Fragments)
-	} else {
-		simResult, err = e.collectCurrentState(ctx, plan, scopeFragments, req.Fragments)
-	}
+	simResult, err := e.Simulate(ctx, plan, scopeFragments, req.Fragments)
 	if err != nil {
 		return nil, plan, fmt.Errorf("simulate: %w", err)
 	}
@@ -121,22 +91,123 @@ func (e *Engine) Run(ctx context.Context, req *QARequest) (*horizonmodels.Simula
 	for _, ni := range simResult.NodeImpacts {
 		affectedIDs[ni.FragmentID] = true
 	}
-	leafEv := e.leafEvidence.Collect(ctx, req.Fragments, affectedIDs)
+	leafEv := e.CollectLeafEvidence(ctx, req.Fragments, affectedIDs)
 	simResult.LeafEvidence = append(simResult.LeafEvidence, leafEv...)
-
-	// Attach Vertex Search alternatives
-	simResult.VertexAlternatives = vertexAlternatives
 
 	return simResult, plan, nil
 }
 
 // QARequest is the input for the Q&A pipeline.
 type QARequest struct {
-	Question           string
-	Lens               *horizonmodels.Lens
-	Fragments          []*horizonmodels.HorizonFragment
-	ActiveSignals      []string
-	ArtifactSummaries  []string
+	Question          string
+	Lens              *horizonmodels.Lens
+	Fragments         []*horizonmodels.HorizonFragment
+	ActiveSignals     []string
+	ArtifactSummaries []string
+}
+
+// Decompose wraps the decomposer call: question → QuestionPlan.
+func (e *Engine) Decompose(ctx context.Context, question string, lensCtx *DecomposeContext) (*horizonmodels.QuestionPlan, error) {
+	return e.decomposer.Decompose(ctx, question, lensCtx)
+}
+
+// Simulate runs either simulateHypothetical or collectCurrentState based on plan.
+func (e *Engine) Simulate(ctx context.Context, plan *horizonmodels.QuestionPlan, scopeFragments map[string]string, fragments []*horizonmodels.HorizonFragment) (*horizonmodels.SimulationResult, error) {
+	if len(plan.HypotheticalSignals) > 0 {
+		return e.simulateHypothetical(ctx, plan, scopeFragments, fragments)
+	}
+	return e.collectCurrentState(ctx, plan, scopeFragments, fragments)
+}
+
+// CollectLeafEvidence wraps leafEvidence.Collect.
+func (e *Engine) CollectLeafEvidence(ctx context.Context, fragments []*horizonmodels.HorizonFragment, affectedIDs map[string]bool) []horizonmodels.LeafSignalEvidence {
+	return e.leafEvidence.Collect(ctx, fragments, affectedIDs)
+}
+
+// ComputeChainImpacts computes impact on materialized chains. Stub for now (will be implemented separately).
+func ComputeChainImpacts(artifacts []*horizonmodels.MaterializedArtifact, nodeImpacts []horizonmodels.NodeImpact) []horizonmodels.ChainImpact {
+	if len(artifacts) == 0 || len(nodeImpacts) == 0 {
+		return nil
+	}
+	affectedPaths := make(map[string]float64)
+	for _, ni := range nodeImpacts {
+		cp := strings.TrimSpace(ni.CanonicalPath)
+		if cp != "" {
+			if ni.TotalAmplitude > affectedPaths[cp] {
+				affectedPaths[cp] = ni.TotalAmplitude
+			}
+		}
+	}
+	var out []horizonmodels.ChainImpact
+	for _, a := range artifacts {
+		if a == nil || len(a.NodeRefs) == 0 {
+			continue
+		}
+		var maxAmp float64
+		affected := 0
+		for _, ref := range a.NodeRefs {
+			ref = strings.TrimSpace(ref)
+			if amp, ok := affectedPaths[ref]; ok {
+				affected++
+				if amp > maxAmp {
+					maxAmp = amp
+				}
+			}
+		}
+		if affected == 0 {
+			continue
+		}
+		name := strings.TrimSpace(a.CanonicalKey)
+		if a.Labels != nil {
+			if dn, ok := a.Labels["displayName"]; ok && strings.TrimSpace(dn) != "" {
+				name = strings.TrimSpace(dn)
+			}
+		}
+		out = append(out, horizonmodels.ChainImpact{
+			ArtifactID:    a.ID,
+			DisplayName:   name,
+			Kind:          string(a.Kind),
+			MaxAmplitude:  maxAmp,
+			AffectedNodes: affected,
+			TotalNodes:    len(a.NodeRefs),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].MaxAmplitude > out[j].MaxAmplitude
+	})
+	return out
+}
+
+// ApplyTargetFilter applies ObservePathPatterns filter to a SimulationResult.
+func ApplyTargetFilter(_ context.Context, result *horizonmodels.SimulationResult, plan *horizonmodels.QuestionPlan) *horizonmodels.SimulationResult {
+	if result == nil || plan == nil || len(plan.TargetFilter.ObservePathPatterns) == 0 {
+		return result
+	}
+	patterns := plan.TargetFilter.ObservePathPatterns
+	var filtered []horizonmodels.NodeImpact
+	for _, ni := range result.NodeImpacts {
+		if matchesAnyPattern(ni.CanonicalPath, patterns) {
+			filtered = append(filtered, ni)
+		}
+	}
+	result.NodeImpacts = filtered
+	return result
+}
+
+func matchesAnyPattern(path string, patterns []string) bool {
+	for _, p := range patterns {
+		if p == "" {
+			continue
+		}
+		if strings.HasSuffix(p, "*") {
+			if strings.HasPrefix(path, strings.TrimSuffix(p, "*")) {
+				return true
+			}
+		} else if path == p {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) simulateHypothetical(
@@ -153,10 +224,9 @@ func (e *Engine) simulateHypothetical(
 	}
 
 	var allNodeImpacts []horizonmodels.NodeImpact
-	var allTracePaths []horizonmodels.TracePath
+	allTracePaths := make([]horizonmodels.TracePath, 0)
 	affectedSet := make(map[string]bool)
 
-	// Build fragmentID -> canonicalPath for SeedPaths (Validate requires SeedPaths or LocationPath)
 	idToPath := make(map[string]string)
 	for path, id := range scopeFragments {
 		if path != "" && id != "" {
@@ -169,8 +239,11 @@ func (e *Engine) simulateHypothetical(
 		}
 	}
 
+	var allSeedFailures []horizonmodels.SeedFailure
 	for _, hyp := range plan.HypotheticalSignals {
-		seedIDs := e.seedResolver.Resolve(hyp.SeedHints, scopeFragments)
+		resolution := e.seedResolver.ResolveWithFailures(hyp.SeedHints, scopeFragments)
+		allSeedFailures = append(allSeedFailures, resolution.Failures...)
+		seedIDs := resolution.ResolvedIDs
 		if len(seedIDs) == 0 {
 			continue
 		}
@@ -182,7 +255,7 @@ func (e *Engine) simulateHypothetical(
 			}
 		}
 		if len(seedPaths) == 0 {
-			seedPaths = append(seedPaths, hyp.SeedHints...) // fallback: use hints as paths
+			seedPaths = append(seedPaths, hyp.SeedHints...)
 		}
 
 		sig := &horizonmodels.SignalDescriptor{
@@ -206,9 +279,35 @@ func (e *Engine) simulateHypothetical(
 			return nil, err
 		}
 
-		// Convert from Accumulated (fragmentID -> []AccumulatedSignal)
+		fragIDToCanon := make(map[string]string)
+		for _, f := range fragments {
+			if f != nil && f.ID != "" && f.CanonicalPath != "" {
+				fragIDToCanon[f.ID] = f.CanonicalPath
+			}
+		}
+
+		fragPathFromSeed := make(map[string][]string)
+		for _, path := range sim.PropagationPaths {
+			if len(path) < 2 {
+				continue
+			}
+			lastID := path[len(path)-1]
+			if _, ok := fragPathFromSeed[lastID]; !ok {
+				canonPaths := make([]string, 0, len(path))
+				for _, fid := range path {
+					if cp := fragIDToCanon[fid]; cp != "" {
+						canonPaths = append(canonPaths, cp)
+					}
+				}
+				if len(canonPaths) > 0 {
+					fragPathFromSeed[lastID] = canonPaths
+				}
+			}
+		}
+
 		for fragID, accList := range sim.Accumulated {
 			var total float64
+			minHops := -1
 			axisAmps := make(map[string]float64)
 			for _, a := range accList {
 				if a.Amplitude > 0.05 {
@@ -216,10 +315,16 @@ func (e *Engine) simulateHypothetical(
 					if a.Amplitude > total {
 						total = a.Amplitude
 					}
+					if minHops < 0 || a.HopCount < minHops {
+						minHops = a.HopCount
+					}
 				}
 			}
 			if total < 0.05 {
 				continue
+			}
+			if minHops < 0 {
+				minHops = 0
 			}
 			affectedSet[fragID] = true
 			frag := fragByID[fragID]
@@ -242,13 +347,12 @@ func (e *Engine) simulateHypothetical(
 				Type:           typ,
 				AxisAmplitudes: axisAmps,
 				TotalAmplitude: total,
-				Hops:           0,
+				Hops:           minHops,
+				PathFromSeed:   fragPathFromSeed[fragID],
 			})
 		}
 
-		// Trace paths from PropagationPaths (canonical paths)
 		for _, path := range sim.PropagationPaths {
-			// Filter empty paths
 			cleanPaths := make([]string, 0, len(path))
 			for _, p := range path {
 				if p = strings.TrimSpace(p); p != "" {
@@ -259,6 +363,10 @@ func (e *Engine) simulateHypothetical(
 				continue
 			}
 			amps := make([]float64, len(cleanPaths))
+			// Only last node matters for sorting by impact
+			var lastAmp float64
+			var lastFragID string
+
 			for i, canonPath := range cleanPaths {
 				fragID := scopeFragments[canonPath]
 				if fragID == "" {
@@ -277,8 +385,29 @@ func (e *Engine) simulateHypothetical(
 							}
 						}
 					}
+					if i == len(cleanPaths)-1 {
+						lastAmp = amps[i]
+						lastFragID = fragID
+					}
 				}
 			}
+			
+			// Only include paths that end at a significant node (one of the top impacted nodes)
+			// AND have non-trivial amplitude at the end.
+			if lastAmp < 0.05 {
+				continue
+			}
+			isImpactedNode := false
+			for _, ni := range allNodeImpacts {
+				if ni.FragmentID == lastFragID {
+					isImpactedNode = true
+					break
+				}
+			}
+			if !isImpactedNode {
+				continue
+			}
+
 			allTracePaths = append(allTracePaths, horizonmodels.TracePath{
 				NodeCanonicalPaths: cleanPaths,
 				Axis:               hyp.Axis,
@@ -287,21 +416,39 @@ func (e *Engine) simulateHypothetical(
 		}
 	}
 
-	// Sort by amplitude desc
 	sort.Slice(allNodeImpacts, func(i, j int) bool {
 		return allNodeImpacts[i].TotalAmplitude > allNodeImpacts[j].TotalAmplitude
 	})
 
-	// Limit to top 20 for context
 	if len(allNodeImpacts) > 20 {
 		allNodeImpacts = allNodeImpacts[:20]
 	}
+	
+	// Sort trace paths by final amplitude and cap at 50 to avoid UI flood
+	sort.Slice(allTracePaths, func(i, j int) bool {
+		endI := 0.0
+		if len(allTracePaths[i].Amplitudes) > 0 {
+			endI = allTracePaths[i].Amplitudes[len(allTracePaths[i].Amplitudes)-1]
+		}
+		endJ := 0.0
+		if len(allTracePaths[j].Amplitudes) > 0 {
+			endJ = allTracePaths[j].Amplitudes[len(allTracePaths[j].Amplitudes)-1]
+		}
+		return endI > endJ
+	})
+	if len(allTracePaths) > 50 {
+		allTracePaths = allTracePaths[:50]
+	}
+
+	_ = affectedSet
 
 	return &horizonmodels.SimulationResult{
-		NodeImpacts:  allNodeImpacts,
-		TracePaths:   allTracePaths,
-		LeafEvidence: nil,
-		ChainImpacts: nil,
+		NodeImpacts:        allNodeImpacts,
+		TracePaths:         allTracePaths,
+		LeafEvidence:       nil,
+		ChainImpacts:       nil,
+		SeedFailures:       allSeedFailures,
+		HighlightedEdgeIDs: ExtractEdgeIDsFromTracePaths(allTracePaths, scopeFragments),
 	}, nil
 }
 
@@ -321,6 +468,9 @@ func (e *Engine) collectCurrentState(
 	}
 
 	var impacts []horizonmodels.NodeImpact
+	tracePaths := make([]horizonmodels.TracePath, 0)
+	tracePathSeen := make(map[string]bool)
+
 	for _, frag := range fragments {
 		if frag == nil || frag.State == nil {
 			continue
@@ -351,6 +501,24 @@ func (e *Engine) collectCurrentState(
 			if mv.Value > total {
 				total = mv.Value
 			}
+
+			for _, contrib := range mv.Provenance.Contributions {
+				if len(contrib.Path) < 2 {
+					continue
+				}
+				key := strings.Join(contrib.Path, "->")
+				if tracePathSeen[key] {
+					continue
+				}
+				tracePathSeen[key] = true
+				amps := make([]float64, len(contrib.Path))
+				amps[len(amps)-1] = contrib.Amplitude
+				tracePaths = append(tracePaths, horizonmodels.TracePath{
+					NodeCanonicalPaths: contrib.Path,
+					Axis:               axis,
+					Amplitudes:         amps,
+				})
+			}
 		}
 		if total <= 0 {
 			continue
@@ -378,7 +546,7 @@ func (e *Engine) collectCurrentState(
 	}
 	return &horizonmodels.SimulationResult{
 		NodeImpacts:  impacts,
-		TracePaths:   nil,
+		TracePaths:   tracePaths,
 		LeafEvidence: nil,
 		ChainImpacts: nil,
 	}, nil
@@ -387,10 +555,64 @@ func (e *Engine) collectCurrentState(
 func extractAxisFromMetricPath(path string) string {
 	path = strings.TrimSpace(path)
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 3 {
+	// /metric/{polarity}/{axis_part1}/{axis_part2}/{mechanism}
+	if len(parts) < 4 {
+		if len(parts) == 3 {
+			// Backward-compatible mapping for legacy risk metrics:
+			// /metric/risk/<metric_name> -> 12-axis bucket.
+			if parts[0] == "metric" {
+				if axis, ok := legacyRiskMetricAxisMap[parts[2]]; ok {
+					return axis
+				}
+			}
+			return parts[2]
+		}
 		return ""
 	}
-	return parts[2]
+	return parts[2] + "/" + parts[3]
+}
+
+var legacyRiskMetricAxisMap = map[string]string{
+	"supply_chain_criticality": "physical_flow/supply",
+	"capacity_utilization":     "operational/continuity",
+	"operational_health":       "operational/continuity",
+	"sanction_exposure":        "legal/compliance",
+	"geopolitical_alignment":   "geo/conflict",
+	"stability_index":          "info/uncertainty",
+	"corruption_vulnerability": "info/uncertainty",
+	"market_sentiment":         "info/reputation",
+	"public_perception":        "info/reputation",
+}
+
+// ExtractEdgeIDsFromTracePaths builds consecutive-pair edge keys from trace paths.
+// The edge keys are "source->target" canonical path pairs that can be matched against edge IDs.
+func ExtractEdgeIDsFromTracePaths(tracePaths []horizonmodels.TracePath, scopeFragments map[string]string) []string {
+	if len(tracePaths) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, tp := range tracePaths {
+		for i := 0; i < len(tp.NodeCanonicalPaths)-1; i++ {
+			from := strings.TrimSpace(tp.NodeCanonicalPaths[i])
+			to := strings.TrimSpace(tp.NodeCanonicalPaths[i+1])
+			if from == "" || to == "" {
+				continue
+			}
+			fromID := scopeFragments[from]
+			toID := scopeFragments[to]
+			if fromID == "" || toID == "" {
+				continue
+			}
+			key := fromID + "->" + toID
+			reverseKey := toID + "->" + fromID
+			if !seen[key] && !seen[reverseKey] {
+				seen[key] = true
+				out = append(out, key)
+			}
+		}
+	}
+	return out
 }
 
 func minInt(a, b int) int {
@@ -398,54 +620,4 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// enrichFromVertexSearch finds alternative entities via Vertex AI Search (GCS-indexed horizon fragments).
-// Excludes fragments already in scope. Returns up to limit fragments.
-func (e *Engine) enrichFromVertexSearch(ctx context.Context, query string, scopeFragments map[string]string, limit int) ([]*horizonmodels.HorizonFragment, error) {
-	if e.vertexSearchClient == nil || !e.vertexSearchClient.IsConfigured() || e.fragmentsRepo == nil {
-		return nil, nil
-	}
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return nil, nil
-	}
-	// Add "alternative" to bias toward substitute suppliers/products
-	searchQuery := query + " alternative supplier"
-	resp, err := e.vertexSearchClient.Search(ctx, &ai.SearchRequest{
-		Query:    searchQuery,
-		PageSize: limit * 2, // fetch extra in case some are filtered
-	})
-	if err != nil {
-		return nil, err
-	}
-	scopeIDs := make(map[string]bool)
-	for _, id := range scopeFragments {
-		scopeIDs[id] = true
-	}
-	var out []*horizonmodels.HorizonFragment
-	seen := make(map[string]bool)
-	for _, r := range resp.Results {
-		id := strings.TrimSpace(r.Document.ID)
-		id = strings.TrimSuffix(id, ".json")
-		if id == "" || seen[id] || scopeIDs[id] {
-			continue
-		}
-		seen[id] = true
-		frag, err := e.fragmentsRepo.Get(ctx, id)
-		if err != nil {
-			continue // skip stale index entries
-		}
-		if frag != nil && frag.CanonicalPath != "" {
-			// Also exclude by canonical path if already in scope
-			if scopeFragments[frag.CanonicalPath] != "" {
-				continue
-			}
-			out = append(out, frag)
-			if len(out) >= limit {
-				break
-			}
-		}
-	}
-	return out, nil
 }

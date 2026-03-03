@@ -130,11 +130,25 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
   const [selectedEdgeData, setSelectedEdgeData] = React.useState<any | null>(null);
   const [qaHighlightNodeIds, setQaHighlightNodeIds] = React.useState<string[]>([]);
+  const [qaHighlightEdgeIds, setQaHighlightEdgeIds] = React.useState<string[]>([]);
+  const [qaOpenTrigger, setQaOpenTrigger] = React.useState(0);
 
   // Toolbar container for Cockpit
   // NOTE: Cockpit toolbar is rendered as an overlay inside the graph canvas.
   
   const isMobile = React.useMemo(() => window.innerWidth < 768, []);
+
+  // Ctrl+K / Cmd+K opens QA palette when in analysis view
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k' && lensView === 'analysis') {
+        e.preventDefault();
+        setQaOpenTrigger((prev) => prev + 1);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [lensView]);
 
   // Update view mode when initialViewMode changes
   React.useEffect(() => {
@@ -156,6 +170,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     setSelectedEdgeId(null);
     setSelectedEdgeData(null);
     setQaHighlightNodeIds([]);
+    setQaHighlightEdgeIds([]);
 
     if (!lensId) {
       setViewMode('progress');
@@ -578,7 +593,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 {/* Map — render only when active to avoid loading map until needed */}
                 {lensView === 'map' && (
                   <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                    <WorldMapPanel />
+                    <WorldMapPanel scope={lensId ? { lensId } : undefined} />
                   </div>
                 )}
                 {/* Analysis — Q&A (plan §10) */}
@@ -588,9 +603,11 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                       lensId={lensId!}
                       projectId={lens?.projectId ?? projectId ?? undefined}
                       onHighlightNodes={setQaHighlightNodeIds}
+                      onHighlightEdges={setQaHighlightEdgeIds}
                       onHighlightTracePaths={(_paths) => {
                         /* Trace paths: could pan/zoom to path; keep for future */
                       }}
+                      externalOpenTrigger={qaOpenTrigger}
                     />
                   </div>
                 )}
@@ -609,6 +626,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                     lensId={lensId}
                     projectId={lens.projectId ?? projectId}
                     qaHighlightNodeIds={qaHighlightNodeIds.length > 0 ? qaHighlightNodeIds : undefined}
+                    qaHighlightEdgeIds={qaHighlightEdgeIds.length > 0 ? qaHighlightEdgeIds : undefined}
                     onScopeScout={handleScopeScout}
                     inspectorActive={panelType === 'object-inspector'}
                     onToggleInspector={() => setPanelType(panelType === 'object-inspector' ? null : 'object-inspector')}

@@ -103,6 +103,31 @@ func PrepareFragmentForValidation(fragment *models.HorizonFragment) {
 	bestEffortAssembleCanonicalPathFromParts(fragment)
 	canonical.NormalizeFragmentForPersist(fragment)
 	bestEffortReconcileFragmentTypeFromPath(fragment)
+	ensurePersistInvariants(fragment)
+}
+
+// ensurePersistInvariants applies minimal required defaults before Validate().
+// This keeps repository writes robust even when callers bypass ContractNormalizer.
+func ensurePersistInvariants(fragment *models.HorizonFragment) {
+	if fragment == nil {
+		return
+	}
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	if fragment.Type == "" && cp != "" {
+		if inferred, ok := edgesemantics.ExpectedTypeFromCanonicalPath(cp); ok && inferred != "" {
+			fragment.Type = inferred
+		}
+	}
+	if fragment.Type != models.FragmentTypeSupplyLink && strings.TrimSpace(fragment.TenantID) == "" {
+		fragment.TenantID = "global"
+	}
+	owner := strings.TrimSpace(fragment.Governance.Owner)
+	if owner == "" || strings.EqualFold(owner, "system") {
+		fragment.Governance.Owner = "SYSTEM"
+	}
+	if strings.TrimSpace(fragment.Governance.Status) == "" {
+		fragment.Governance.Status = string(models.FragmentStatusActive)
+	}
 }
 
 // bestEffortReconcileFragmentTypeFromPath keeps fragment.Type aligned with canonical path namespace.
@@ -656,14 +681,7 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	if fragment == nil {
 		return "", ErrInvalidDocument
 	}
-	// Best-effort: if only canonicalPath was provided, parse it into canonicalParts for future selective fixes.
-	bestEffortBackfillCanonicalPartsFromPath(fragment)
-	// Best-effort: if canonicalParts were provided, assemble canonicalPath before validation.
-	bestEffortAssembleCanonicalPathFromParts(fragment)
-	// Best-effort: shared canonical-path normalization at repository boundary.
-	canonical.NormalizeFragmentForPersist(fragment)
-	// Keep fragment type deterministic with canonicalPath namespace.
-	bestEffortReconcileFragmentTypeFromPath(fragment)
+	PrepareFragmentForValidation(fragment)
 	if err := fragment.Validate(); err != nil {
 		return "", fmt.Errorf("validation error: %w", err)
 	}
@@ -1407,9 +1425,10 @@ func (r *HorizonFragmentsRepository) ListGeoBound(
 			OrderBy("canonicalPath", firestore.Asc).
 			Limit(scanLimit)
 	} else {
+		// Scan by updatedAt and filter in-memory for coordinate presence.
+		// TODO: switch to Where("hasCoordinates","==",true) once existing docs are backfilled.
 		fsQ = r.col.
 			Where("tenantId", "==", "global").
-			Where("governance.status", "==", "ACTIVE").
 			OrderBy("updatedAt", firestore.Desc).
 			Limit(scanLimit)
 	}
@@ -1441,7 +1460,7 @@ func (r *HorizonFragmentsRepository) ListGeoBound(
 		if !filter.matchesCreatedAt(fragment.CreatedAt) {
 			continue
 		}
-		if lat, lon, ok := resolveFragmentCoordinates(&fragment); ok {
+		if lat, lon, ok := ResolveFragmentCoordinates(&fragment); ok {
 			fragment.Coordinates = &models.Coordinates{Lat: lat, Lon: lon}
 		} else {
 			continue
@@ -1455,7 +1474,8 @@ func (r *HorizonFragmentsRepository) ListGeoBound(
 	return out, nil
 }
 
-func resolveFragmentCoordinates(fragment *models.HorizonFragment) (float64, float64, bool) {
+// ResolveFragmentCoordinates resolves lat/lon from the best available source on a fragment.
+func ResolveFragmentCoordinates(fragment *models.HorizonFragment) (float64, float64, bool) {
 	if fragment == nil {
 		return 0, 0, false
 	}

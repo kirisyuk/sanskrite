@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	telemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetrycollector"
 )
 
 // AITaskExecutor центральный оркестратор для выполнения AI-задач.
@@ -151,8 +153,12 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 		}
 
 		result.Status = AITaskStatusCompleted
-		result.InputTokens = inputTokens
-		result.OutputTokens = len(result.Content) / 4
+		if result.InputTokens == 0 {
+			result.InputTokens = inputTokens
+		}
+		if result.OutputTokens == 0 {
+			result.OutputTokens = len(result.Content) / 4
+		}
 		cost, _ := e.modelManager.CalculateProcessingCost(currentModel, result.InputTokens, result.OutputTokens)
 		result.ProcessingCost = cost
 		result.ProcessingTime = time.Since(startedAt)
@@ -160,6 +166,12 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 		// Save usage metrics if repository is available
 		durationMs := int(result.ProcessingTime.Milliseconds())
 		e.saveUsageMetric(ctx, task, currentModel, result.InputTokens, result.OutputTokens, len(result.Content), cost, &durationMs)
+
+		// Auto-record in telemetry collector if present in context
+		if tc := telemetry.CollectorFromContext(ctx); tc != nil {
+			provider := string(modelCapabilities.Provider)
+			tc.RecordLLMCall(provider, currentModel, "", result.InputTokens, result.OutputTokens, cost, durationMs, false)
+		}
 
 		return result, nil
 	}
@@ -329,14 +341,24 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 
 		// Calculate and save usage metrics
 		if result != nil && result.Status == AITaskStatusCompleted {
-			inputToks := inputChars / 4
-			outputToks := len(result.Content) / 4
+			inputToks := result.InputTokens
+			if inputToks == 0 {
+				inputToks = inputChars / 4
+			}
+			outputToks := result.OutputTokens
+			if outputToks == 0 {
+				outputToks = len(result.Content) / 4
+			}
 			cost, _ := e.modelManager.CalculateProcessingCost(currentModel, inputToks, outputToks)
 			durationMs := int(time.Since(startedAt).Milliseconds())
 			e.saveUsageMetric(ctx, &activeTask, currentModel, inputToks, outputToks, len(result.Content), cost, &durationMs)
+
+			if tc := telemetry.CollectorFromContext(ctx); tc != nil {
+				provider := string(modelCapabilities.Provider)
+				tc.RecordLLMCall(provider, currentModel, "", inputToks, outputToks, cost, durationMs, false)
+			}
 		}
 
-		_ = startedAt // для телеметрии
 		return parsedResult, result, currentModel, nil
 	}
 }

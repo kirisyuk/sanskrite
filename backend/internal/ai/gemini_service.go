@@ -157,6 +157,11 @@ func (s *GeminiService) ExecuteTask(ctx context.Context, task *AITask, model str
 				} `json:"parts"`
 			} `json:"content"`
 		} `json:"candidates"`
+		UsageMetadata struct {
+			PromptTokenCount     int `json:"promptTokenCount"`
+			CandidatesTokenCount int `json:"candidatesTokenCount"`
+			TotalTokenCount      int `json:"totalTokenCount"`
+		} `json:"usageMetadata"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -180,12 +185,19 @@ func (s *GeminiService) ExecuteTask(ctx context.Context, task *AITask, model str
 		return nil, fmt.Errorf("empty response from Gemini API (empty text). raw=%s", preview)
 	}
 
-	return &AITaskResult{
+	taskResult := &AITaskResult{
 		Content:  content,
 		Model:    model,
 		TaskType: task.TaskType,
 		Status:   AITaskStatusCompleted,
-	}, nil
+	}
+	if result.UsageMetadata.PromptTokenCount > 0 {
+		taskResult.InputTokens = result.UsageMetadata.PromptTokenCount
+	}
+	if result.UsageMetadata.CandidatesTokenCount > 0 {
+		taskResult.OutputTokens = result.UsageMetadata.CandidatesTokenCount
+	}
+	return taskResult, nil
 }
 
 // ExecuteSearch выполняет веб-поиск с помощью встроенных возможностей Gemini
@@ -253,6 +265,15 @@ func (s *GeminiService) ExecuteSearch(ctx context.Context, query string, modelNa
 	var root map[string]interface{}
 	if err := json.Unmarshal(body, &root); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	// Check finishReason for truncation
+	if candidates, ok := root["candidates"].([]interface{}); ok && len(candidates) > 0 {
+		if c0, ok := candidates[0].(map[string]interface{}); ok {
+			if fr, ok := c0["finishReason"].(string); ok && fr != "" && fr != "STOP" {
+				log.Printf("[GeminiAPI] WARNING: finishReason=%s (output may be truncated)", fr)
+			}
+		}
 	}
 
 	// Extract content

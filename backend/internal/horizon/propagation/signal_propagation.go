@@ -109,6 +109,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 	visited := make(map[string]float64) // key(nodeID|axis) -> max amplitude seen
 	affectedFragments := make(map[string]bool)
 	propagationPaths := make([][]string, 0)
+	const maxRecordedPaths = 5000 // Safety cap (increased to capture full trace, filtering happens in Engine)
 
 	// Queue for BFS: (fragmentID, amplitude, hops, path, artifactKey)
 	type queueItem struct {
@@ -233,7 +234,9 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 		// Save fragment
 		if err := e.fragmentsRepo.UpdateFast(ctx, frag); err == nil {
 			affectedFragments[item.fragmentID] = true
-			propagationPaths = append(propagationPaths, append([]string{}, item.pathCanon...))
+			if len(propagationPaths) < maxRecordedPaths {
+				propagationPaths = append(propagationPaths, append([]string{}, item.pathCanon...))
+			}
 			e.fireFragmentChangedHook(ctx, item.fragmentID)
 			traceCollector.add(SignalPropagationTraceEvent{
 				SignalID:     signal.ID,
@@ -534,6 +537,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 	visited := make(map[string]float64) // key(nodeID|axis) -> max amplitude seen
 	affectedFragments := make(map[string]bool)
 	propagationPaths := make([][]string, 0)
+	const maxRecordedPaths = 500
 	acc := make(map[string]map[string]AccumulatedSignal) // fragmentID -> (axis|polarity -> signal)
 
 	queue := make([]queueItem, 0, len(seedFragmentIDs))
@@ -566,6 +570,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 		adapter = e.resolveDomainAdapter(ctx, nil)
 	}
 	fragmentCache := make(map[string]*horizonmodels.HorizonFragment, len(seedFragmentIDs)*2)
+	neighborsCache := make(map[string][]neighborInfo, len(seedFragmentIDs)*2)
 
 	track := func(fragmentID, axis, polarity string, amplitude float64, hops int) {
 		fragmentID = strings.TrimSpace(fragmentID)
@@ -659,7 +664,9 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			item.pathCanon[len(item.pathCanon)-1] = strings.TrimSpace(frag.CanonicalPath)
 		}
 		affectedFragments[item.fragmentID] = true
-		propagationPaths = append(propagationPaths, append([]string{}, item.pathCanon...))
+		if len(propagationPaths) < maxRecordedPaths {
+			propagationPaths = append(propagationPaths, append([]string{}, item.pathCanon...))
+		}
 		track(item.fragmentID, item.axis, signal.Polarity, item.amplitude, item.hops)
 		traceCollector.add(SignalPropagationTraceEvent{
 			SignalID:     signal.ID,
@@ -688,19 +695,25 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			outgoingAmplitude = TransitAmplify(outgoingAmplitude, item.axis)
 		}
 
-		neighbors, err := e.getNeighborsViaStrongEdges(ctx, frag, profile)
-		if err != nil {
-			traceCollector.add(SignalPropagationTraceEvent{
-				SignalID:     signal.ID,
-				ToFragment:   item.fragmentID,
-				AxisOut:      item.axis,
-				AmplitudeOut: item.amplitude,
-				Hops:         item.hops,
-				Outcome:      "dropped",
-				Reason:       "neighbor_lookup_failed",
-			})
-			continue
+		neighbors, ok := neighborsCache[item.fragmentID]
+		if !ok {
+			loadedNeighbors, err := e.getNeighborsViaStrongEdges(ctx, frag, profile)
+			if err != nil {
+				traceCollector.add(SignalPropagationTraceEvent{
+					SignalID:     signal.ID,
+					ToFragment:   item.fragmentID,
+					AxisOut:      item.axis,
+					AmplitudeOut: item.amplitude,
+					Hops:         item.hops,
+					Outcome:      "dropped",
+					Reason:       "neighbor_lookup_failed",
+				})
+				continue
+			}
+			neighbors = loadedNeighbors
+			neighborsCache[item.fragmentID] = loadedNeighbors
 		}
+
 		for _, neighbor := range neighbors {
 			breakdown := e.calculateDampedAmplitudeWithBreakdown(outgoingAmplitude, neighbor.edge, profile)
 			nextAmplitude := breakdown.Amplitude

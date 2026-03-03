@@ -104,23 +104,6 @@ func main() {
 	seedResolver := horizonqa.NewSeedResolver()
 	leafEvidence := horizonqa.NewLeafEvidenceCollector(horizoninterp.NewOntologyEventFactsResolver(ontologyFactsRepo))
 	qaEngine := horizonqa.NewEngine(decomposer, seedResolver, leafEvidence, propEngine, profileLookup, frRepo, artifactsRepo)
-	// Vertex AI Search: same config as horizon fragment indexing (GCS → Vertex). Required for QA alternatives.
-	vertexDS := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_DATA_STORE_ID"))
-	if vertexDS == "" {
-		vertexDS = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID"))
-	}
-	if vertexDS == "" {
-		vertexDS = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"))
-	}
-	if vertexDS != "" {
-		vertexLoc := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_LOCATION"))
-		if vertexLoc == "" {
-			vertexLoc = "global"
-		}
-		vertexClient := ai.NewVertexAISearchClient(proj, vertexLoc, vertexDS, "")
-		qaEngine = qaEngine.WithVertexSearch(vertexClient)
-		log.Printf("Vertex AI Search wired for QA alternatives (dataStore=%s)", vertexDS)
-	}
 	contextBuilder := horizonqa.NewAnswerContextBuilder()
 	synthesizer := horizonqa.NewAnswerSynthesizer(exec)
 
@@ -180,25 +163,8 @@ func main() {
 		return
 	}
 
-	// Humanization at finish: run Interpreter on top affected nodes (optional)
-	var nodeInterpretations []*horizoninterp.RiskInterpretation
-	if len(simResult.NodeImpacts) > 0 {
-		interpreter := horizoninterp.NewInterpreter(exec, frRepo, horizoninterp.NewOntologySignalFactsRepo(ontologyFactsRepo))
-		polarity := "risk"
-		if len(plan.HypotheticalSignals) > 0 && plan.HypotheticalSignals[0].Polarity != "" {
-			polarity = plan.HypotheticalSignals[0].Polarity
-		}
-		nodeInterpretations = horizonqa.RunFinishInterpretation(ctx, interpreter, simResult, fragments, polarity, 5)
-		if *verbose && len(nodeInterpretations) > 0 {
-			fmt.Println("\n--- NODE INTERPRETATIONS (humanization at finish) ---")
-			for i, interp := range nodeInterpretations {
-				fmt.Printf("[%d] %s: %s\n", i+1, interp.CanonicalPath, truncate(interp.Summary, 120))
-			}
-		}
-	}
-
 	// Synthesize
-	contextPrompt, ctxErr := contextBuilder.BuildContext(ctx, plan, simResult, nil, artifactSummaries, nodeInterpretations, simResult.VertexAlternatives)
+	contextPrompt, ctxErr := contextBuilder.BuildContext(ctx, plan, simResult, nil, artifactSummaries)
 	if ctxErr != nil {
 		log.Fatalf("BuildContext failed: %v", ctxErr)
 	}
@@ -208,17 +174,9 @@ func main() {
 		fmt.Println(truncate(contextPrompt, 2000))
 	}
 
-	answer, synthErr := synthesizer.Synthesize(ctx, contextPrompt, plan, simResult)
+	answer, synthErr := synthesizer.Synthesize(ctx, contextPrompt, plan, simResult, scopeFragments)
 	if synthErr != nil {
 		log.Fatalf("Synthesize failed: %v", synthErr)
-	}
-
-	// Business relevance evaluation
-	if answer.Text != "" {
-		evaluator := horizonqa.NewBusinessRelevanceEvaluator(exec)
-		if score, err := evaluator.Evaluate(ctx, req.Question, answer); err == nil {
-			answer.BusinessRelevanceScore = score
-		}
 	}
 
 	printResult(req.Question, plan, simResult, answer, elapsed.Milliseconds())
@@ -245,14 +203,14 @@ func initAIExecutor(ctx context.Context, projectID string) *ai.AITaskExecutor {
 		services = append(services, ai.NewGeminiService(apiKey, mm))
 	}
 
-	// Vertex AI (ADC) — всегда добавляем при наличии project для fallback
+	// Vertex AI (ADC) — same env as server
 	if projectID != "" {
 		loc := strings.TrimSpace(os.Getenv("VERTEX_LOCATION"))
 		if loc == "" {
 			loc = "us-central1"
 		}
 		if svc, err := ai.NewVertexAIService(projectID, loc, mm); err == nil {
-			if ds := os.Getenv("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID"); ds != "" {
+			if ds := resolveVertexDataStoreID(ctx, projectID); ds != "" {
 				svc = svc.WithDataStore(ds)
 			}
 			services = append(services, svc)
@@ -273,10 +231,19 @@ func truncate(s string, max int) string {
 	return s[:max-3] + "..."
 }
 
-// runDemo runs the full QA pipeline with stub data (no Firestore). For local validation.
-func runDemo(ctx context.Context, question string) {
-	log.Printf("DEMO MODE: stub EV battery supply chain, no Firestore")
+// resolveVertexDataStoreID uses same env vars as server (cmd/server/main.go).
+func resolveVertexDataStoreID(ctx context.Context, projectID string) string {
+	if s := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_DATA_STORE_ID")); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID")); s != "" {
+		return s
+	}
+	return strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"))
+}
 
+// runDemo runs the full QA pipeline with stub propagation + real Vertex Search for alternatives.
+func runDemo(ctx context.Context, question string) {
 	proj := strings.TrimSpace(*projectID)
 	if proj == "" {
 		proj = os.Getenv("GCP_PROJECT_ID")
@@ -301,15 +268,6 @@ func runDemo(ctx context.Context, question string) {
 			"/product/cathode-material",
 			"/product/ev-battery-cell",
 		},
-	}
-
-	// Stub fragments
-	fragments := []*horizonmodels.HorizonFragment{
-		{ID: "f1", CanonicalPath: "/org/pt-vale-indonesia", Labels: map[string]string{"en": "PT Vale Indonesia"}},
-		{ID: "f2", CanonicalPath: "/product/nickel-ore", Labels: map[string]string{"en": "Nickel ore"}},
-		{ID: "f3", CanonicalPath: "/org/catl", Labels: map[string]string{"en": "CATL"}},
-		{ID: "f4", CanonicalPath: "/product/cathode-material", Labels: map[string]string{"en": "Cathode material"}},
-		{ID: "f5", CanonicalPath: "/product/ev-battery-cell", Labels: map[string]string{"en": "EV battery cell"}},
 	}
 
 	// Decompose (LLM)
@@ -351,21 +309,7 @@ func runDemo(ctx context.Context, question string) {
 		},
 	}
 
-	// Humanization at finish: Interpreter on top nodes
-	interpreter := horizoninterp.NewInterpreter(exec, nil, nil)
-	polarity := "risk"
-	if len(plan.HypotheticalSignals) > 0 && plan.HypotheticalSignals[0].Polarity != "" {
-		polarity = plan.HypotheticalSignals[0].Polarity
-	}
-	nodeInterpretations := horizonqa.RunFinishInterpretation(ctx, interpreter, simResult, fragments, polarity, 5)
-	if *verbose && len(nodeInterpretations) > 0 {
-		fmt.Println("\n--- NODE INTERPRETATIONS (humanization at finish) ---")
-		for i, interp := range nodeInterpretations {
-			fmt.Printf("[%d] %s: %s\n", i+1, interp.CanonicalPath, truncate(interp.Summary, 120))
-		}
-	}
-
-	// Stub DomainSnapshot for demo: concentration, alternatives, data gaps
+	// DomainSnapshot: concentration, data gaps. Alternatives only from Vertex.
 	cr4 := 0.72
 	domainSnapshot := &horizonmodels.DomainAnswerSnapshot{
 		Thesis: horizonmodels.DomainThesis{
@@ -374,10 +318,7 @@ func runDemo(ctx context.Context, question string) {
 		ConcentrationEvidence: []horizonmodels.ConcentrationEvidence{
 			{MarketCanonicalPath: "/product/nickel-ore", CR4: &cr4, DataGap: "Indonesia ~40% of global nickel ore"},
 		},
-		Alternatives: []horizonmodels.Alternative{
-			{Title: "Australian nickel (BHP, Ravensthorpe)", CostDelta: "+8% logistics", Feasibility: "medium"},
-			{Title: "Increase cathode buffer stock", CostDelta: "~6 weeks inventory", Feasibility: "high"},
-		},
+		Alternatives: nil,
 		DataGaps: []horizonmodels.DataGap{
 			{GapType: "throughput", Hint: "CATL Morowali actual throughput — last reported Q2 2025"},
 		},
@@ -386,7 +327,7 @@ func runDemo(ctx context.Context, question string) {
 	// Synthesize
 	contextBuilder := horizonqa.NewAnswerContextBuilder()
 	artifactSummaries := []string{"Indonesia Nickel → EV Battery: /org/pt-vale-indonesia → /product/nickel-ore → /org/catl → /product/ev-battery-cell"}
-	contextPrompt, ctxErr := contextBuilder.BuildContext(ctx, plan, simResult, domainSnapshot, artifactSummaries, nodeInterpretations, nil)
+	contextPrompt, ctxErr := contextBuilder.BuildContext(ctx, plan, simResult, domainSnapshot, artifactSummaries)
 	if ctxErr != nil {
 		log.Fatalf("BuildContext failed: %v", ctxErr)
 	}
@@ -396,21 +337,16 @@ func runDemo(ctx context.Context, question string) {
 		fmt.Println(truncate(contextPrompt, 2000))
 	}
 
+	demoScope := map[string]string{
+		"/org/pt-vale-indonesia": "f1", "/product/nickel-ore": "f2", "/org/catl": "f3",
+		"/product/cathode-material": "f4", "/product/ev-battery-cell": "f5",
+	}
 	synthesizer := horizonqa.NewAnswerSynthesizer(exec)
-	answer, synthErr := synthesizer.Synthesize(ctx, contextPrompt, plan, simResult)
+	answer, synthErr := synthesizer.Synthesize(ctx, contextPrompt, plan, simResult, demoScope)
 	if synthErr != nil {
 		log.Fatalf("Synthesize failed: %v", synthErr)
 	}
 
-	// Business relevance
-	if answer.Text != "" {
-		evaluator := horizonqa.NewBusinessRelevanceEvaluator(exec)
-		if score, err := evaluator.Evaluate(ctx, question, answer); err == nil {
-			answer.BusinessRelevanceScore = score
-		}
-	}
-
-	// Output
 	printResult(question, plan, simResult, answer, 0)
 }
 

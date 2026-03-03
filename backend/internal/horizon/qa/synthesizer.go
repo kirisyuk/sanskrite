@@ -21,7 +21,9 @@ func NewAnswerSynthesizer(executor *ai.AITaskExecutor) *AnswerSynthesizer {
 }
 
 // Synthesize generates a QAAnswer from the context.
-func (s *AnswerSynthesizer) Synthesize(ctx context.Context, contextPrompt string, plan *horizonmodels.QuestionPlan, simResult *horizonmodels.SimulationResult) (*horizonmodels.QAAnswer, error) {
+// scopeFragments (canonicalPath -> fragmentID) is used for post-synthesis evidence validation;
+// pass nil to skip validation.
+func (s *AnswerSynthesizer) Synthesize(ctx context.Context, contextPrompt string, plan *horizonmodels.QuestionPlan, simResult *horizonmodels.SimulationResult, scopeFragments map[string]string) (*horizonmodels.QAAnswer, error) {
 	prompt := contextPrompt + "\n\nGenerate the answer JSON now."
 
 	verifier := ai.NewGenericVerifier[map[string]interface{}](nil)
@@ -61,6 +63,30 @@ func (s *AnswerSynthesizer) Synthesize(ctx context.Context, contextPrompt string
 	if t, ok := m["text"].(string); ok {
 		answer.Text = strings.TrimSpace(t)
 	}
+	if es, ok := m["executiveSummary"].(string); ok {
+		answer.ExecutiveSummary = strings.TrimSpace(es)
+	}
+	if rl, ok := m["riskLevel"].(string); ok {
+		answer.RiskLevel = strings.ToUpper(strings.TrimSpace(rl))
+	}
+	if rs, ok := m["riskScenario"].(string); ok {
+		answer.RiskScenario = strings.TrimSpace(rs)
+	}
+	if recs, ok := m["recommendations"].([]interface{}); ok {
+		for _, r := range recs {
+			if s, ok := r.(string); ok {
+				answer.Recommendations = append(answer.Recommendations, strings.TrimSpace(s))
+			}
+		}
+	}
+	// Fallback for Executive Summary if LLM missed it
+	if answer.ExecutiveSummary == "" && answer.Text != "" {
+		parts := splitIntoSentences(answer.Text)
+		if len(parts) > 0 {
+			answer.ExecutiveSummary = parts[0]
+		}
+	}
+
 	if c, ok := m["confidence"].(float64); ok {
 		answer.Confidence = c
 	}
@@ -93,6 +119,21 @@ func (s *AnswerSynthesizer) Synthesize(ctx context.Context, contextPrompt string
 				if v, ok := em["sourceRef"].(string); ok {
 					ev.SourceRef = v
 				}
+
+				// Post-processing: Filter out evidence with 0 confidence or "simulation" in sourceRef
+				// unless it's explicitly valid.
+				if ev.Confidence <= 0.01 {
+					// Fallback: if sourceRef looks real (e.g. [L1]), boost confidence to default
+					if strings.HasPrefix(ev.SourceRef, "[L") || strings.HasPrefix(ev.SourceRef, "L") {
+						ev.Confidence = 0.8 // High confidence for leaf evidence
+					} else if strings.Contains(strings.ToLower(ev.Summary), "simulation") {
+						// It's just a simulation restatement — penalize or skip
+						ev.Confidence = 0.1
+					} else {
+						ev.Confidence = 0.5 // Default medium confidence
+					}
+				}
+
 				answer.Evidence = append(answer.Evidence, ev)
 			}
 		}
@@ -178,5 +219,54 @@ func (s *AnswerSynthesizer) Synthesize(ctx context.Context, contextPrompt string
 		}
 	}
 
+	if len(scopeFragments) > 0 {
+		answer.Evidence = ValidateEvidence(answer.Evidence, scopeFragments)
+	}
+
 	return answer, nil
+}
+
+// ValidateEvidence checks each evidence path against actual scope fragments.
+// Paths not found in scope get " [unverified]" appended to Summary and Confidence reduced to 0.3.
+func ValidateEvidence(evidence []horizonmodels.AnswerEvidence, scopeFragments map[string]string) []horizonmodels.AnswerEvidence {
+	if len(evidence) == 0 || len(scopeFragments) == 0 {
+		return evidence
+	}
+	for i := range evidence {
+		if evidence[i].CanonicalPath == "" {
+			continue
+		}
+		if _, ok := scopeFragments[evidence[i].CanonicalPath]; !ok {
+			if !strings.HasSuffix(evidence[i].Summary, " [unverified]") {
+				evidence[i].Summary += " [unverified]"
+			}
+			evidence[i].Confidence = 0.3
+		}
+	}
+	return evidence
+}
+
+func splitIntoSentences(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	delimiter := func(r rune) bool {
+		switch r {
+		case '.', '!', '?', ';', '\n':
+			return true
+		default:
+			return false
+		}
+	}
+	raw := strings.FieldsFunc(text, delimiter)
+	out := make([]string, 0, len(raw))
+	for _, s := range raw {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }

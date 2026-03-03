@@ -5,152 +5,138 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 // AnswerContextBuilder assembles the LLM prompt context for answer synthesis.
-type AnswerContextBuilder struct{}
+type AnswerContextBuilder struct {
+	fillReport *FillReport
+}
 
 // NewAnswerContextBuilder creates a new AnswerContextBuilder.
 func NewAnswerContextBuilder() *AnswerContextBuilder {
 	return &AnswerContextBuilder{}
 }
 
+// WithFillReport attaches a best-effort grounding report. When set,
+// a "RECENTLY ENRICHED SIGNALS" section is appended to the context.
+func (b *AnswerContextBuilder) WithFillReport(report *FillReport) *AnswerContextBuilder {
+	b.fillReport = report
+	return b
+}
+
+const contextTokenBudget = 24000 // ~6000 tokens at ~4 chars/token
+
+type contextHintFlags struct {
+	skipAlternatives bool
+	skipGaps         bool
+	prioritizeImpact bool
+	prioritizeTraces bool
+}
+
+func parseContextHints(hints []string) contextHintFlags {
+	var f contextHintFlags
+	for _, h := range hints {
+		switch h {
+		case "skip_alternatives":
+			f.skipAlternatives = true
+		case "prioritize_impact":
+			f.prioritizeImpact = true
+		case "prioritize_traces":
+			f.prioritizeTraces = true
+		case "skip_gaps":
+			f.skipGaps = true
+		}
+	}
+	return f
+}
+
 // BuildContext assembles the structured context for the AnswerSynthesizer LLM call.
-// Hard limit: ~6000 tokens input. Aggressive pruning.
-// When nodeInterpretations is non-nil, uses human-readable interpretations (humanization at finish)
-// instead of raw axis/amplitude — per design: humanization only at the ends.
-// vertexAlternatives: entities from Vertex AI Search (alternative suppliers/products) — use for alternatives section.
+// Token budget: ~6000 tokens (~24000 chars). Sections are capped and skipped when over budget.
+// ContextHints from the QuestionPlan control section ordering and inclusion.
+// Alternatives come from DomainAnswerSnapshot.
 func (b *AnswerContextBuilder) BuildContext(
 	ctx context.Context,
 	plan *horizonmodels.QuestionPlan,
 	simResult *horizonmodels.SimulationResult,
 	domainSnapshot *horizonmodels.DomainAnswerSnapshot,
 	artifactSummaries []string,
-	nodeInterpretations []*interpretation.RiskInterpretation,
-	vertexAlternatives []*horizonmodels.HorizonFragment,
 ) (string, error) {
-	var sb strings.Builder
+	hints := parseContextHints(plan.ContextHints)
 
+	var sb strings.Builder
+	overBudget := func() bool { return sb.Len() > contextTokenBudget }
+
+	// Header — always included
 	sb.WriteString(fmt.Sprintf("QUESTION: %s\n", plan.NormalizedQuestion))
 	sb.WriteString(fmt.Sprintf("ANSWER MODE: %s\n", plan.AnswerMode))
 	sb.WriteString(fmt.Sprintf("TIME HORIZON: %s\n\n", plan.TimeHorizon))
 
-	// IMPACT MAP — human-readable when interpretations present (humanization at finish)
-	if len(nodeInterpretations) > 0 {
-		sb.WriteString("=== NODE INTERPRETATIONS (human-readable, from propagation + physical signals) ===\n")
-		for i, interp := range nodeInterpretations {
-			if i >= 15 {
-				break
-			}
-			sb.WriteString(fmt.Sprintf("[%d] %s (%s)\n", i+1, interp.CanonicalPath, interp.NodeID))
-			sb.WriteString(fmt.Sprintf("    Summary: %s\n", strings.TrimSpace(interp.Summary)))
-			if interp.Impact.Operational != "" {
-				sb.WriteString(fmt.Sprintf("    Operational: %s\n", interp.Impact.Operational))
-			}
-			if len(interp.Mitigations) > 0 {
-				sb.WriteString("    Mitigations: ")
-				for j, m := range interp.Mitigations {
-					if j > 0 {
-						sb.WriteString("; ")
-					}
-					sb.WriteString(m.Action)
-				}
-				sb.WriteString("\n")
-			}
-		}
-		sb.WriteString("\n")
+	// SCENARIO PROJECTION (Simulation) — explicitly labeled as hypothetical
+	// This prevents the LLM from confusing "what-if" simulation with "ground truth".
+	if len(simResult.NodeImpacts) > 0 {
+		sb.WriteString("=== SCENARIO PROJECTION (HYPOTHETICAL SIMULATION RESULTS) ===\n")
+		sb.WriteString("NOTE: These are projected impacts based on the graph structure. They are NOT current real-world observations.\n")
+		sb.WriteString("Use these to answer \"what would happen\" or \"how would it spread\".\n")
+		
+		impactSection := b.buildImpactMapSection(simResult)
+		sb.WriteString(impactSection)
+		
+		tracesSection := b.buildTracesSection(simResult, true)
+		sb.WriteString(tracesSection)
 	} else {
-		// Fallback: raw simulation output (when interpreter not wired)
-		sb.WriteString("=== IMPACT MAP (simulation: nodes affected by propagated signals) ===\n")
-		topK := 15
-		if len(simResult.NodeImpacts) < topK {
-			topK = len(simResult.NodeImpacts)
-		}
-		for i := 0; i < topK; i++ {
-			ni := simResult.NodeImpacts[i]
-			sb.WriteString(fmt.Sprintf("[%d] %s — ", i+1, ni.CanonicalPath))
-			for axis, amp := range ni.AxisAmplitudes {
-				sb.WriteString(fmt.Sprintf("%s: %.2f ", axis, amp))
-			}
-			sb.WriteString(fmt.Sprintf("(%d hops)\n", ni.Hops))
-			if ni.Name != "" && ni.Name != ni.CanonicalPath {
-				sb.WriteString(fmt.Sprintf("    Name: %s\n", ni.Name))
-			}
-		}
-		if topK == 0 {
-			sb.WriteString("(no propagation — answer from leaf evidence and artifacts only)\n")
-		}
-		sb.WriteString("\n")
+		sb.WriteString("(No simulation impacts projected)\n\n")
 	}
 
-	// PROPAGATION CHAINS — how the signal flows (seed → node1 → node2)
-	sb.WriteString("=== PROPAGATION CHAINS (how influence flows through the graph) ===\n")
-	for i, tp := range simResult.TracePaths {
-		if len(tp.NodeCanonicalPaths) == 0 {
-			continue
-		}
-		pathStr := ""
-		for j, p := range tp.NodeCanonicalPaths {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			if pathStr != "" {
-				pathStr += " → "
-			}
-			ampStr := ""
-			if j < len(tp.Amplitudes) && tp.Amplitudes[j] > 0 {
-				ampStr = fmt.Sprintf(" [%.2f]", tp.Amplitudes[j])
-			}
-			pathStr += p + ampStr
-		}
-		if pathStr != "" {
-			sb.WriteString(fmt.Sprintf("Chain %d (axis=%s): %s\n", i+1, tp.Axis, pathStr))
-		}
-	}
-	if len(simResult.TracePaths) == 0 && (len(nodeInterpretations) > 0 || len(simResult.NodeImpacts) > 0) {
-		sb.WriteString("(paths available in IMPACT MAP above)\n")
-	}
-	sb.WriteString("\n")
+	// REAL-WORLD EVIDENCE (Ground Truth)
+	sb.WriteString("=== REAL-WORLD EVIDENCE (GROUND TRUTH) ===\n")
+	sb.WriteString("NOTE: These are actual observed facts (leaf signals) or known supply chains. Use these to ground your answer in reality.\n")
 
 	// SUPPLY CHAIN PATHS (from artifact summaries)
-	sb.WriteString("=== SUPPLY CHAIN PATHS (from MaterializedArtifacts) ===\n")
-	for _, s := range artifactSummaries {
-		sb.WriteString(fmt.Sprintf("- %s\n", s))
-	}
-	sb.WriteString("\n")
-
-	// LEAF EVIDENCE — real-world signals at endpoints (AIS, satellite, news)
-	sb.WriteString("=== LEAF EVIDENCE (physical signals at endpoints — interpret these) ===\n")
-	for i, le := range simResult.LeafEvidence {
-		sb.WriteString(fmt.Sprintf("[L%d] %s: %s = %.2f — %s [%s, %s]\n",
-			i+1, le.CanonicalPath, le.Axis, le.Amplitude, le.Summary, le.Modality, le.ObservedAt.Format("2006-01-02 15:04")))
-	}
-	if len(simResult.LeafEvidence) == 0 {
-		sb.WriteString("(no leaf signals — answer from simulation only)\n")
-	}
-	sb.WriteString("\n")
-
-	// PRE-COMPUTED IMPACT BREAKDOWN (from simulation — use this, do not invent)
-	sb.WriteString("=== IMPACT BREAKDOWN (from simulation — use for impactBreakdown in JSON) ===\n")
-	for i, ni := range simResult.NodeImpacts {
-		if i >= 15 {
-			break
+	if !overBudget() {
+		sb.WriteString("\n-- KNOWN SUPPLY CHAINS (MaterializedArtifacts) --\n")
+		for _, s := range artifactSummaries {
+			sb.WriteString(fmt.Sprintf("- %s\n", s))
 		}
-		for axis, amp := range ni.AxisAmplitudes {
-			entity := ni.CanonicalPath
-			if ni.Name != "" {
-				entity = ni.Name
+	}
+
+	// LEAF EVIDENCE — cap at 10 for better grounding
+	if !overBudget() {
+		sb.WriteString("\n-- OBSERVED SIGNALS (Leaf Evidence) --\n")
+		maxLeaf := 10
+		for i, le := range simResult.LeafEvidence {
+			if i >= maxLeaf {
+				break
 			}
-			sb.WriteString(fmt.Sprintf("- entity=%s axis=%s amplitude=%.2f hops=%d\n", entity, axis, amp, ni.Hops))
+			sb.WriteString(fmt.Sprintf("[L%d] %s: %s = %.2f — %s [%s, %s]\n",
+				i+1, le.CanonicalPath, le.Axis, le.Amplitude, le.Summary, le.Modality, le.ObservedAt.Format("2006-01-02 15:04")))
 		}
+		if len(simResult.LeafEvidence) == 0 {
+			sb.WriteString("(no external leaf signals observed)\n")
+		}
+		sb.WriteString("\n")
 	}
-	sb.WriteString("\n")
 
-	// QUANTITATIVE HINT — for cost/tariff questions, help synthesizer produce numeric ranges
-	if b.shouldAddQuantitativeHint(plan, simResult) {
+	// PRE-COMPUTED IMPACT BREAKDOWN — cap at 10 nodes for budget
+	if !overBudget() {
+		sb.WriteString("=== IMPACT BREAKDOWN (from simulation — use for impactBreakdown in JSON) ===\n")
+		for i, ni := range simResult.NodeImpacts {
+			if i >= 10 {
+				break
+			}
+			for axis, amp := range ni.AxisAmplitudes {
+				entity := ni.CanonicalPath
+				if ni.Name != "" {
+					entity = ni.Name
+				}
+				sb.WriteString(fmt.Sprintf("- entity=%s axis=%s amplitude=%.2f hops=%d\n", entity, axis, amp, ni.Hops))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// QUANTITATIVE HINT
+	if !overBudget() && b.shouldAddQuantitativeHint(plan, simResult) {
 		sb.WriteString("=== QUANTITATIVE HINT (use for cost/price impact — provide numeric ranges) ===\n")
 		sb.WriteString("- Pass-through heuristic: amplitude 0.6+ → 60-80% pass-through; 0.3-0.6 → 30-50%; <0.3 → 10-30%\n")
 		sb.WriteString("- For VAT/tariff: input % × pass-through × amplitude ≈ cost delta at that stage. Example: 5% VAT, amplitude 0.72 at nickel ore → ~3-4% cost increase there; amplitude 0.12 at battery cell → ~0.5-1.5% at final product.\n")
@@ -159,7 +145,7 @@ func (b *AnswerContextBuilder) BuildContext(
 	}
 
 	// EXISTING ANALYSIS (DomainAnswerSnapshot)
-	if domainSnapshot != nil {
+	if !overBudget() && domainSnapshot != nil {
 		sb.WriteString("=== EXISTING ANALYSIS ===\n")
 		if domainSnapshot.Thesis.Text != "" {
 			sb.WriteString(fmt.Sprintf("Domain thesis: %s\n", domainSnapshot.Thesis.Text))
@@ -191,7 +177,7 @@ func (b *AnswerContextBuilder) BuildContext(
 			}
 			sb.WriteString("\n")
 		}
-		if len(domainSnapshot.Alternatives) > 0 {
+		if !hints.skipAlternatives && len(domainSnapshot.Alternatives) > 0 {
 			sb.WriteString("Alternatives: ")
 			for i, alt := range domainSnapshot.Alternatives {
 				if i > 0 {
@@ -211,66 +197,166 @@ func (b *AnswerContextBuilder) BuildContext(
 		sb.WriteString("\n")
 	}
 
-	// VERTEX SEARCH ALTERNATIVES (entities from semantic search — use for alternatives in answer)
-	if len(vertexAlternatives) > 0 {
-		sb.WriteString("=== ALTERNATIVE ENTITIES FROM SEARCH (use for alternatives — real data from index) ===\n")
-		for i, f := range vertexAlternatives {
-			if i >= 10 {
-				break
-			}
-			name := f.CanonicalPath
-			if f.Labels != nil {
-				if en, ok := f.Labels["en"]; ok && en != "" {
-					name = en
+	// DATA GAPS — skippable via "skip_gaps" hint, cap at 3 for budget
+	if !overBudget() && !hints.skipGaps {
+		sb.WriteString("=== DATA GAPS ===\n")
+		if domainSnapshot != nil && len(domainSnapshot.DataGaps) > 0 {
+			maxGaps := 3
+			for i, g := range domainSnapshot.DataGaps {
+				if i >= maxGaps {
+					break
+				}
+				desc := g.Hint
+				if desc == "" {
+					desc = g.GapType
+				}
+				if desc != "" {
+					sb.WriteString(fmt.Sprintf("- %s\n", desc))
 				}
 			}
-			sb.WriteString(fmt.Sprintf("[V%d] %s (%s) — %s\n", i+1, name, f.CanonicalPath, string(f.Type)))
 		}
 		sb.WriteString("\n")
 	}
 
-	// DATA GAPS
-	sb.WriteString("=== DATA GAPS ===\n")
-	if domainSnapshot != nil && len(domainSnapshot.DataGaps) > 0 {
-		for _, g := range domainSnapshot.DataGaps {
-			desc := g.Hint
-			if desc == "" {
-				desc = g.GapType
+	// RECENTLY ENRICHED SIGNALS — from best-effort grounding (optional)
+	if !overBudget() && b.fillReport != nil && len(b.fillReport.FilledGaps) > 0 {
+		sb.WriteString("=== RECENTLY ENRICHED SIGNALS (from best-effort web grounding — treat as supplementary) ===\n")
+		maxEnriched := 5
+		for i, fg := range b.fillReport.FilledGaps {
+			if i >= maxEnriched {
+				break
 			}
-			if desc != "" {
-				sb.WriteString(fmt.Sprintf("- %s\n", desc))
+			sb.WriteString(fmt.Sprintf("[E%d] %s — axis=%s amplitude=%.2f confidence=%.2f\n",
+				i+1, fg.Gap.CanonicalPath, fg.InjectedAxis, fg.Amplitude, fg.Confidence))
+			for _, src := range fg.Sources {
+				title := src.Title
+				if title == "" {
+					title = src.URL
+				}
+				sb.WriteString(fmt.Sprintf("     source: %s (%s)\n", title, src.URL))
 			}
 		}
+		if len(b.fillReport.FilledGaps) > maxEnriched {
+			sb.WriteString(fmt.Sprintf("(%d more enriched signals omitted)\n", len(b.fillReport.FilledGaps)-maxEnriched))
+		}
+		if len(b.fillReport.FailedGaps) > 0 {
+			sb.WriteString(fmt.Sprintf("Note: %d gaps could not be filled (data may be incomplete).\n", len(b.fillReport.FailedGaps)))
+		}
+		sb.WriteString("\n")
+	}
+
+	// INSTRUCTIONS — always included
+	enrichedHint := ""
+	if b.fillReport != nil && len(b.fillReport.FilledGaps) > 0 {
+		enrichedHint = "\n- ENRICHED SIGNALS [E1]-[EN]: supplementary web-grounded data. Cite as [E1], [E2] etc. Lower confidence than primary evidence."
+	}
+
+	sb.WriteString(fmt.Sprintf(`ROLE: You are an expert Supply Chain Risk Analyst advising a C-level executive.
+TONE: Professional, concise, actionable. No fluff. No technical jargon (amplitude, hops).
+
+TRANSLATION RULES (Internal Math -> Business Language):
+- Amplitude 0.75 - 1.00 → CRITICAL Impact (e.g. stoppage)
+- Amplitude 0.40 - 0.74 → HIGH Impact (e.g. major cost spike)
+- Amplitude 0.15 - 0.39 → MODERATE Impact
+- Amplitude < 0.15      → LOW Impact
+
+MANDATORY OUTPUT STRUCTURE (JSON):
+{
+  "executiveSummary": "One powerful sentence summarizing the net impact.",
+  "riskLevel": "CRITICAL" | "HIGH" | "MODERATE" | "LOW",
+  "riskScenario": "A clear narrative: The event at [Source] causes [Impact A], which cascades to [Impact B], ultimately affecting [Target].",
+  "recommendations": ["Action 1", "Action 2", "Action 3"],
+  "text": "Full detailed analysis...",
+  "confidence": 0.0-1.0,
+  "evidence": [...],
+  "impactBreakdown": [...]
+}
+
+%s
+- impactBreakdown: derive from SCENARIO PROJECTION — entity, axis, amplitude, hops.
+- QUANTIFICATION: When QUANTITATIVE HINT is present, translate amplitudes into estimated % impacts on cost/time.
+- Recommendations: Suggest specific mitigation steps (diversify, stockpile, hedge) based on the graph structure.
+`, enrichedHint))
+
+	return sb.String(), nil
+}
+
+// buildImpactMapSection renders the IMPACT MAP section.
+// Capped at 15 nodes for token budget.
+func (b *AnswerContextBuilder) buildImpactMapSection(
+	simResult *horizonmodels.SimulationResult,
+) string {
+	const maxNodes = 15
+	var sb strings.Builder
+
+	sb.WriteString("-- PROJECTED NODE IMPACTS (Simulation) --\n")
+	topK := maxNodes
+	if len(simResult.NodeImpacts) < topK {
+		topK = len(simResult.NodeImpacts)
+	}
+	for i := 0; i < topK; i++ {
+		ni := simResult.NodeImpacts[i]
+		// Don't use [1], [2] numbering to avoid confusion with evidence citations.
+		sb.WriteString(fmt.Sprintf("> Node: %s\n", ni.CanonicalPath))
+		if ni.Name != "" && ni.Name != ni.CanonicalPath {
+			sb.WriteString(fmt.Sprintf("  Name: %s\n", ni.Name))
+		}
+		for axis, amp := range ni.AxisAmplitudes {
+			sb.WriteString(fmt.Sprintf("  - %s: %.2f (hops: %d)\n", axis, amp, ni.Hops))
+		}
+	}
+	if topK == 0 {
+		sb.WriteString("(no nodes affected in simulation)\n")
 	}
 	sb.WriteString("\n")
 
-	if len(nodeInterpretations) > 0 {
-		sb.WriteString(`INSTRUCTIONS:
-- GROUND EVERY CLAIM in the data above. Do NOT invent evidence.
-- NODE INTERPRETATIONS [1]-[N]: human-readable summaries from propagation + physical signals. Use these directly.
-- PROPAGATION CHAINS: show how influence flows (seed → node1 → node2). Use this to explain "how does it propagate?"
-- LEAF EVIDENCE [L1]-[LN]: real-world signals. Cite these when available. If none, say "based on simulation only."
-- Cite as [1], [2], [L1] etc. matching the numbered items above.
-- impactBreakdown: derive from NODE INTERPRETATIONS or IMPACT BREAKDOWN — entity, axis, amplitude, hops. Do NOT invent.
-- QUANTIFICATION: When QUANTITATIVE HINT is present, include specific numeric ranges (e.g. "2-4% cost increase"). Avoid only "likely" or "potentially" without numbers.
-- ALTERNATIVES: For impact_assessment or alternative_sourcing, suggest 1-3 actionable alternatives. Prefer ALTERNATIVE ENTITIES FROM SEARCH [V1]-[VN] when present (real indexed data); else use ALTERNATIVES from EXISTING ANALYSIS; else infer from graph.
-- Return JSON: { "text": "...", "confidence": 0.0-1.0, "evidence": [{type, canonicalPath, summary, sourceRef}], "impactBreakdown": [{entity, axis, amplitude, hops}], "alternatives": [...], "dataGaps": [...] }
-`)
-	} else {
-		sb.WriteString(`INSTRUCTIONS:
-- GROUND EVERY CLAIM in the data above. Do NOT invent evidence.
-- IMPACT MAP [1]-[N]: simulation results (which nodes got which signal amplitudes). Interpret: what does amplitude 0.7 on legal/access mean for that entity?
-- PROPAGATION CHAINS: show how influence flows (seed → node1 → node2). Use this to explain "how does it propagate?"
-- LEAF EVIDENCE [L1]-[LN]: real-world signals. Cite these when available. If none, say "based on simulation only."
-- Cite as [1], [2], [L1] etc. matching the numbered items above.
-- impactBreakdown: derive from IMPACT MAP — entity, axis, amplitude, hops. Do NOT invent.
-- QUANTIFICATION: When QUANTITATIVE HINT is present, include specific numeric ranges (e.g. "2-4% cost increase"). Avoid only "likely" or "potentially" without numbers.
-- ALTERNATIVES: For impact_assessment or alternative_sourcing, suggest 1-3 actionable alternatives. Prefer ALTERNATIVE ENTITIES FROM SEARCH [V1]-[VN] when present (real indexed data); else use ALTERNATIVES from EXISTING ANALYSIS; else infer from graph.
-- Return JSON: { "text": "...", "confidence": 0.0-1.0, "evidence": [{type, canonicalPath, summary, sourceRef}], "impactBreakdown": [{entity, axis, amplitude, hops}], "alternatives": [...], "dataGaps": [...] }
-`)
-	}
+	return sb.String()
+}
 
-	return sb.String(), nil
+// buildTracesSection renders the PROPAGATION CHAINS section.
+// Capped at 3 chains for token budget.
+func (b *AnswerContextBuilder) buildTracesSection(
+	simResult *horizonmodels.SimulationResult,
+	hasImpacts bool,
+) string {
+	const maxChains = 3
+	var sb strings.Builder
+
+	sb.WriteString("-- PROJECTED PROPAGATION PATHS --\n")
+	count := 0
+	for i, tp := range simResult.TracePaths {
+		if count >= maxChains {
+			break
+		}
+		if len(tp.NodeCanonicalPaths) == 0 {
+			continue
+		}
+		pathStr := ""
+		for j, p := range tp.NodeCanonicalPaths {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if pathStr != "" {
+				pathStr += " → "
+			}
+			ampStr := ""
+			if j < len(tp.Amplitudes) && tp.Amplitudes[j] > 0 {
+				ampStr = fmt.Sprintf(" (%.2f)", tp.Amplitudes[j])
+			}
+			pathStr += p + ampStr
+		}
+		if pathStr != "" {
+			sb.WriteString(fmt.Sprintf("Path %d [%s]: %s\n", i+1, tp.Axis, pathStr))
+			count++
+		}
+	}
+	if len(simResult.TracePaths) == 0 && hasImpacts {
+		sb.WriteString("(paths available in IMPACT MAP above)\n")
+	}
+	sb.WriteString("\n")
+
+	return sb.String()
 }
 
 // shouldAddQuantitativeHint returns true when the question likely asks about cost/price impact

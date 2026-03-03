@@ -2428,6 +2428,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     types?: string[];
     createdAfter?: string;
     createdBefore?: string;
+    lensId?: string;
   }): Promise<{
     items: Array<{
       id: string;
@@ -2438,12 +2439,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       status?: string;
       coordinates?: { lat: number; lon: number };
       radiusKm?: number;
+      inScope?: boolean;
       createdAt?: string;
       updatedAt?: string;
     }>;
     total: number;
     limit: number;
     pathPrefix?: string;
+    lensId?: string;
   }> {
     try {
       const params: Record<string, string> = {};
@@ -2453,6 +2456,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       if (options?.types?.length) params.types = options.types.join(',');
       if (options?.createdAfter) params.createdAfter = options.createdAfter;
       if (options?.createdBefore) params.createdBefore = options.createdBefore;
+      if (options?.lensId) params.lensId = options.lensId;
       const response = await this.client.get('/api/horizon/geo-objects', { params });
       return response.data;
     } catch (error: any) {
@@ -2813,6 +2817,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       includeFragments?: boolean;
       includeUnindexed?: boolean;
       includeCounts?: boolean;
+      includeCoordinates?: boolean;
       // Optional budgets (applied only when provided)
       maxNeighbors?: number;
       maxEdges?: number;
@@ -2830,6 +2835,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     total: number;
     fragments?: any[];
     counts?: any;
+    coordinates?: Record<string, { lat: number; lon: number }>;
   }> {
     try {
       const direction = options?.direction || 'both';
@@ -2844,6 +2850,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       if (options?.includeFragments) params.includeFragments = '1';
       if (options?.includeUnindexed) params.includeUnindexed = '1';
       if (options?.includeCounts) params.includeCounts = '1';
+      if (options?.includeCoordinates) params.includeCoordinates = '1';
       if (typeof options?.maxNeighbors === 'number' && options.maxNeighbors > 0) params.maxNeighbors = String(options.maxNeighbors);
       if (typeof options?.maxEdges === 'number' && options.maxEdges > 0) params.maxEdges = String(options.maxEdges);
       if (typeof options?.maxPerType === 'number' && options.maxPerType > 0) params.maxPerType = String(options.maxPerType);
@@ -3095,12 +3102,18 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     question: string,
     callbacks: {
       onStatus?: (data: { status: string; sessionId?: string; error?: string }) => void;
-      onHighlights?: (data: { highlightedNodeIds?: string[]; tracePaths?: unknown[] }) => void;
+      onHighlights?: (data: { highlightedNodeIds?: string[]; highlightedEdgeIds?: string[]; tracePaths?: unknown[] }) => void;
       onAnswerChunk?: (data: { text: string }) => void;
       onAnswerComplete?: (data: Record<string, unknown>) => void;
+      onSufficiencyReport?: (data: { score: number; sufficient: boolean; gaps: Array<{ description: string; whyItMatters?: string }>; recommendedFacets?: string[] }) => void;
+      onScoutStarted?: (data: { jobId: string }) => void;
+      onScoutProgress?: (data: { jobId: string; state?: string; progress?: number }) => void;
+      onScoutComplete?: (data: { jobId: string; newFragments?: number }) => void;
+      onSignalFillReport?: (data: { filledCount: number; failedCount: number; totalSignals: number; sources: Array<{ url: string; title: string }> }) => void;
       onError?: (err: Error) => void;
     },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: { autoScout?: boolean },
   ): Promise<void> {
     const user = auth?.currentUser;
     const token = user ? await user.getIdToken() : '';
@@ -3111,7 +3124,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ question: question.trim() }),
+      body: JSON.stringify({ question: question.trim(), ...(options?.autoScout != null ? { autoScout: options.autoScout } : {}) }),
       signal,
     });
     if (!res.ok) {
@@ -3141,10 +3154,15 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
           } else if (line.startsWith('data: ') && currentEvent) {
             try {
               const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
-              if (currentEvent === 'status') callbacks.onStatus?.(data as { status: string; sessionId?: string; error?: string });
-              else if (currentEvent === 'highlights') callbacks.onHighlights?.(data as { highlightedNodeIds?: string[]; tracePaths?: unknown[] });
-              else if (currentEvent === 'answer_chunk') callbacks.onAnswerChunk?.(data as { text: string });
+              if (currentEvent === 'status') callbacks.onStatus?.(data as any);
+              else if (currentEvent === 'highlights') callbacks.onHighlights?.(data as any);
+              else if (currentEvent === 'answer_chunk') callbacks.onAnswerChunk?.(data as any);
               else if (currentEvent === 'answer_complete') callbacks.onAnswerComplete?.(data);
+              else if (currentEvent === 'sufficiency_report') callbacks.onSufficiencyReport?.(data as any);
+              else if (currentEvent === 'scout_started') callbacks.onScoutStarted?.(data as any);
+              else if (currentEvent === 'scout_progress') callbacks.onScoutProgress?.(data as any);
+              else if (currentEvent === 'scout_complete') callbacks.onScoutComplete?.(data as any);
+              else if (currentEvent === 'signal_fill_report') callbacks.onSignalFillReport?.(data as any);
             } catch {
               // ignore parse errors
             }

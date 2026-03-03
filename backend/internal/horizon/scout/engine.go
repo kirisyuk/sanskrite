@@ -15,8 +15,8 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -26,6 +26,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
+	telemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetrycollector"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -575,6 +576,30 @@ func metricObservedAt(mv models.MetricValue) time.Time {
 	return time.Time{}
 }
 
+// canonicalPathsEquivalentForRetarget compares canonical paths with domain-specific normalization.
+// For /domain/v1 paths, facet order is normalized before comparison to avoid retarget ping-pong.
+func canonicalPathsEquivalentForRetarget(a string, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == b {
+		return true
+	}
+	if a == "" || b == "" {
+		return false
+	}
+	isDomainPath := func(p string) bool {
+		return strings.HasPrefix(strings.ToLower(strings.TrimSpace(p)), "/domain/v1/")
+	}
+	if isDomainPath(a) && isDomainPath(b) {
+		na, errA := taxonomy.NormalizeDomainCanonicalPath(a)
+		nb, errB := taxonomy.NormalizeDomainCanonicalPath(b)
+		if errA == nil && errB == nil {
+			return strings.TrimSpace(na) == strings.TrimSpace(nb)
+		}
+	}
+	return false
+}
+
 // RuntimeContractMetricsRefresh:
 // evaluate whether metric recomputation is required for required metric paths.
 func evaluateMetricsRefreshContractReasons(fragment *models.HorizonFragment, requiredPaths []string, now time.Time) []string {
@@ -630,6 +655,43 @@ func (e *ScoutEngine) recordDeterministicRedirect(ctx context.Context, fromPath 
 		fragType = InferFragmentTypeFromCanonicalPath(fromPath)
 	}
 	_, _, _ = e.canonicalPathResolver.RecordDeterministicRedirect(ctx, fromPath, toPath, fragType, reason)
+}
+
+// persistRetargetState stores retarget-related fields without replacing the whole job document.
+// This avoids last-write-wins state clobbering between parallel deliveries/retries.
+func (e *ScoutEngine) persistRetargetState(ctx context.Context, job *models.ScoutingJob, oldPath string, newPath string, reason string, extra map[string]interface{}) {
+	if e == nil || e.scoutingJobsRepo == nil || job == nil {
+		return
+	}
+	oldPath = strings.TrimSpace(oldPath)
+	newPath = strings.TrimSpace(newPath)
+	if newPath == "" || canonicalPathsEquivalentForRetarget(oldPath, newPath) {
+		return
+	}
+	job.TargetCanonicalPath = newPath
+	if job.State == nil {
+		job.State = map[string]interface{}{}
+	}
+	job.State["targetCanonicalPath"] = newPath
+	fields := map[string]interface{}{
+		"targetCanonicalPath": newPath,
+	}
+	if oldPath != "" {
+		if _, ok := job.State["aliasCanonicalPath"]; !ok {
+			job.State["aliasCanonicalPath"] = oldPath
+			fields["aliasCanonicalPath"] = oldPath
+		}
+	}
+	for k, v := range extra {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		fields[k] = v
+	}
+	if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, fields); err != nil {
+		fmt.Printf("[ScoutEngine] Failed to persist retarget state (best-effort): jobId=%s from=%s to=%s reason=%s err=%v\n",
+			strings.TrimSpace(job.ID), oldPath, newPath, strings.TrimSpace(reason), err)
+	}
 }
 
 func hasLegalFormSuffix(slug string) bool {
@@ -955,6 +1017,68 @@ func filterDiscoveredRelationsByDomainModes(in []agents.DiscoveredRelation, doma
 		out = append(out, rel)
 	}
 	return out
+}
+
+func countTotalNodes(chains []agents.SupplyChain) int {
+	n := 0
+	for _, ch := range chains {
+		n += len(ch.Nodes)
+	}
+	return n
+}
+
+// filterEmptySupplyChains removes chains that have no nodes (LLM returned
+// structure but no parseable content). This prevents the gap analyzer from
+// scoring an empty chain as "no gaps found".
+func filterEmptySupplyChains(chains []agents.SupplyChain) []agents.SupplyChain {
+	out := make([]agents.SupplyChain, 0, len(chains))
+	for _, ch := range chains {
+		if len(ch.Nodes) > 0 {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+// buildSeedSupplyChain creates a minimal single-node chain from the target entity
+// so the refine loop has an anchor to attach extend_upstream/extend_downstream patches.
+func buildSeedSupplyChain(frag *models.HorizonFragment) *agents.SupplyChain {
+	cp := strings.TrimSpace(frag.CanonicalPath)
+	if cp == "" {
+		return nil
+	}
+	name := strings.TrimSpace(frag.Identifiers["legalName"])
+	if name == "" {
+		name = strings.TrimSpace(frag.Identifiers["shortName"])
+	}
+	if name == "" {
+		name = deriveNameFromPath(cp)
+	}
+	nodeType := string(frag.Type)
+	if nodeType == "" {
+		nodeType = string(models.FragmentTypeOrganization)
+	}
+	return &agents.SupplyChain{
+		Nodes: []agents.SupplyChainNode{{
+			CanonicalPath: cp,
+			Name:          name,
+			Type:          nodeType,
+		}},
+		Confidence: 0.1,
+		Reason:     "seed chain: target entity only, pending refinement",
+	}
+}
+
+// deriveNameFromPath extracts a human-readable name from the last segment of a canonical path.
+func deriveNameFromPath(cp string) string {
+	parts := strings.Split(cp, "/")
+	if len(parts) == 0 {
+		return cp
+	}
+	last := parts[len(parts)-1]
+	last = strings.ReplaceAll(last, "-", " ")
+	last = strings.ReplaceAll(last, "_", " ")
+	return strings.Title(last) //nolint:staticcheck
 }
 
 func supplyChainsEnabled(targetCanonicalPath string, targetType models.FragmentType, _ []string, _ []string) bool {
@@ -1964,6 +2088,7 @@ type ScoutEngine struct {
 	missingInfoStatusRepo   *repo.MissingInfoStatusRepository // Tracks missingInfo attempts to prevent infinite loops
 	groundingResolver       *GroundingEvidenceResolver        // Resolves Vertex AI grounding evidence → real fragments from DB
 	telemetryRepo           *repo.HorizonTelemetryRepository  // Optional: grounding/risk counters
+	jobTelemetryRepo        *repo.JobTelemetryRepository      // Optional: per-job telemetry persistence
 
 	// Policy enforcement (final validation step)
 	policyChecker          *policy.PolicyChecker              // Optional: validates job output before completion
@@ -2465,6 +2590,11 @@ func (e *ScoutEngine) WithTelemetryRepo(telemetryRepo *repo.HorizonTelemetryRepo
 	if e.edgesRepo != nil {
 		e.edgesRepo.WithTelemetryRepo(telemetryRepo)
 	}
+	return e
+}
+
+func (e *ScoutEngine) WithJobTelemetryRepo(r *repo.JobTelemetryRepository) *ScoutEngine {
+	e.jobTelemetryRepo = r
 	return e
 }
 
@@ -3278,6 +3408,27 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	}
 
+	// DOMAIN CANONICAL PRE-FLIGHT:
+	// Normalize /domain/v1 facet ordering before circuit breaker accounting.
+	// This prevents oscillation between equivalent facet-order variants.
+	{
+		cp := strings.TrimSpace(job.TargetCanonicalPath)
+		if strings.HasPrefix(strings.ToLower(cp), "/domain/v1/") {
+			if norm, nerr := taxonomy.NormalizeDomainCanonicalPath(cp); nerr == nil && strings.TrimSpace(norm) != "" &&
+				!canonicalPathsEquivalentForRetarget(cp, norm) {
+				old := cp
+				job.TargetCanonicalPath = strings.TrimSpace(norm)
+				if job.State == nil {
+					job.State = map[string]interface{}{}
+				}
+				job.State["targetCanonicalPath"] = strings.TrimSpace(norm)
+				e.persistRetargetState(ctx, job, old, strings.TrimSpace(norm), "domain_preflight_normalization", nil)
+				e.recordDeterministicRedirect(ctx, old, strings.TrimSpace(norm), "domain_preflight_normalization")
+				e.logLine(ctx, job, "info", fmt.Sprintf("> normalized domain canonicalPath preflight: %s -> %s", old, strings.TrimSpace(norm)))
+			}
+		}
+	}
+
 	// CIRCUIT BREAKER: prevent infinite retarget/alias loops within a single job.
 	// If the same canonicalPath is processed repeatedly (e.g., due to alias/dedup oscillation),
 	// hard-stop this branch to avoid runaway Cloud Tasks retries and repeated research.
@@ -3440,6 +3591,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 	}
 	ctx = ai.WithUsageContext(ctx, tenantID, "SYSTEM", projectID, "horizon.scout", lensID, cascadeID)
+	telCol := telemetry.New(tenantID, projectID, lensID, strings.TrimSpace(job.ID), "scout", "pipeline")
+	ctx = telemetry.WithCollector(ctx, telCol)
 	ctx = e.attachRealtimeContext(ctx, job, tenantID, projectID, lensID)
 	trace.Log(ctx, "scout_exec", "scout.job.context", map[string]any{
 		"tenantId":            strings.TrimSpace(tenantID),
@@ -3465,7 +3618,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			effectiveCanonicalPath = resolved.CanonicalPath
 
 			// If path was changed (canonicalized or deduplicated), update job
-			if effectiveCanonicalPath != strings.TrimSpace(job.TargetCanonicalPath) {
+			if !canonicalPathsEquivalentForRetarget(effectiveCanonicalPath, strings.TrimSpace(job.TargetCanonicalPath)) {
 				oldPath := strings.TrimSpace(job.TargetCanonicalPath)
 				fmt.Printf("[ScoutEngine] Early canonicalization/dedup: %s -> %s\n", oldPath, effectiveCanonicalPath)
 				trace.Log(ctx, "scout_exec", "scout.early_canonicalization", map[string]any{
@@ -3488,7 +3641,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					job.State["aliasCanonicalPath"] = oldPath
 				}
 				job.State["targetCanonicalPath"] = effectiveCanonicalPath
-				_ = e.scoutingJobsRepo.Update(ctx, job)
+				e.persistRetargetState(ctx, job, oldPath, effectiveCanonicalPath, "early_canonicalization", nil)
 				// Update lens scope so UI/graph doesn't keep alias paths.
 				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, oldPath, effectiveCanonicalPath)
 			}
@@ -3755,6 +3908,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	}
 
 	// PLANNING: Планирование источников
+	telCol.BeginGroup("planning")
 	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntitySourcePlanning, false, "planning")
 	if err := e.transition(ctx, job, models.ScoutingJobStatePlanning, 0.1, "planning"); err != nil {
 		e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntitySourcePlanning, false, "planning_transition_failed", true, err)
@@ -4141,6 +4295,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "no_internal_content_synthetic_seed")
 	} else {
 		// EXTRACTION: Извлечение данных через Scout Agent
+		telCol.EndGroup()
+		telCol.BeginGroup("research")
 		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "extraction")
 		if err := e.transition(ctx, job, models.ScoutingJobStateExtraction, 0.5, "extraction"); err != nil {
 			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "extraction_transition_failed", true, err)
@@ -4338,6 +4494,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	}
 
 	researchSucceeded := false
+	var existingEntities []string // hoisted for reuse in supply chain refine
 	// Update policy with post-critic context for ResearchMode() decision.
 	if extractedFragment != nil {
 		policy.EpistemicStatus = extractedFragment.Metadata.EpistemicStatus
@@ -4349,6 +4506,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	}
 	// RESEARCH: Дообогащение данных через Research Agent
 	// Gated by PostProcessingPolicy: tier 2+ and planModeResearchDone skip.
+	telCol.EndGroup()
+	telCol.BeginGroup("enrichment")
 	if len(validationResult.MissingInfo) > 0 && policy.ShouldRun(StepResearch) {
 		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntityResearch, false, "research")
 		originalMissingInfo := append([]string(nil), validationResult.MissingInfo...)
@@ -4508,7 +4667,6 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			"decompositionHintsN": len(decompositionHints),
 		})
 		// Collect existing entities from session graph for duplicate prevention
-		var existingEntities []string
 		if sg := SessionGraphFromContext(ctx); sg != nil {
 			for _, frag := range sg.AllFragments() {
 				if frag == nil {
@@ -4647,7 +4805,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			normalizeAndSetFragmentObjectQualifier(extractedFragment, job.TargetCanonicalPath)
 			// Best-effort: if research upgraded canonicalPath (e.g., /product/{slug} -> /product/{cat}/{type}/{stage}/{slug}),
 			// propagate the rewrite into job state + lens scope so UI and in-flight execution follow the canonical path.
-			if oldCP != "" && newCP != "" && oldCP != newCP {
+			if oldCP != "" && newCP != "" && !canonicalPathsEquivalentForRetarget(oldCP, newCP) {
 				if job.State == nil {
 					job.State = make(map[string]interface{})
 				}
@@ -4657,10 +4815,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				// Keep a stable "effective target" in state (used by dedup keys and downstream tooling).
 				job.State["targetCanonicalPath"] = strings.TrimSpace(newCP)
 				// If the job target equals the old canonical path, upgrade it so subsequent steps align.
-				if strings.TrimSpace(job.TargetCanonicalPath) == strings.TrimSpace(oldCP) {
+				if canonicalPathsEquivalentForRetarget(strings.TrimSpace(job.TargetCanonicalPath), strings.TrimSpace(oldCP)) {
 					job.TargetCanonicalPath = strings.TrimSpace(newCP)
 				}
-				_ = e.scoutingJobsRepo.Update(ctx, job)
+				e.persistRetargetState(ctx, job, oldCP, strings.TrimSpace(newCP), "scout_research_upgrade", nil)
 				// Update lens scope so UI/graph doesn't keep alias paths.
 				e.bestEffortRewriteLensScope(ctx, tenantID, lensID, oldCP, newCP)
 				e.recordDeterministicRedirect(ctx, oldCP, newCP, "scout_research_upgrade")
@@ -4762,6 +4920,140 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntityResearch, false, "research_policy_or_gap_skip")
 	}
 SKIP_RESEARCH:
+
+	// SUPPLY CHAIN REFINE: iterative gap analysis + patch-based refinement (supply_chain mode only).
+	if scoutResult != nil && len(scoutResult.SupplyChains) > 0 &&
+		taxonomy.HasDomainMode(domainModesForComposable, taxonomy.DomainModeSupplyChain) &&
+		researchSucceeded {
+
+		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine")
+		const maxRefineRounds = 2
+		gapAnalyzer := agents.NewSupplyChainGapAnalyzer(e.aiExecutor)
+		chains := filterEmptySupplyChains(scoutResult.SupplyChains)
+		if dropped := len(scoutResult.SupplyChains) - len(chains); dropped > 0 {
+			e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain refine: dropped %d chain(s) with 0 valid nodes", dropped))
+		}
+		if len(chains) == 0 && extractedFragment != nil {
+			seed := buildSeedSupplyChain(extractedFragment)
+			if seed != nil {
+				chains = []agents.SupplyChain{*seed}
+				e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain refine: created seed chain from target entity %s", strings.TrimSpace(extractedFragment.CanonicalPath)))
+			}
+		}
+		initialChainCount := len(chains)
+		totalPatchesApplied := 0
+		completedRounds := 0
+		var lastScore float64
+
+		var exitReason string
+		for round := 0; round < maxRefineRounds; round++ {
+			gapReport, gapErr := gapAnalyzer.Analyze(ctx, chains, extractedFragment)
+			if gapErr != nil {
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain gap analysis error (round %d): %v", round, gapErr))
+				exitReason = fmt.Sprintf("gap_analysis_error: %v", gapErr)
+				break
+			}
+			lastScore = gapReport.Score
+
+			gapFields := map[string]any{
+				"tenantId":           strings.TrimSpace(job.TenantID),
+				"jobId":              strings.TrimSpace(job.ID),
+				"target":             strings.TrimSpace(job.TargetCanonicalPath),
+				"round":              round,
+				"score":              gapReport.Score,
+				"sufficient":         gapReport.Sufficient,
+				"tierGaps":           len(gapReport.TierGaps),
+				"concentrationRisks": len(gapReport.ConcentrationRisks),
+				"metricGaps":         len(gapReport.MetricGaps),
+				"logisticsGaps":      len(gapReport.LogisticsGaps),
+				"temporalGaps":       len(gapReport.TemporalGaps),
+				"depthGaps":          len(gapReport.DepthGaps),
+				"industryGaps":       len(gapReport.IndustryGaps),
+				"directives":         len(gapReport.RefineDirectives),
+			}
+			for k, v := range gapReport.DiagnosticFields() {
+				gapFields[k] = v
+			}
+			trace.Log(ctx, "SupplyChain", "SupplyChain.gap_analysis", gapFields)
+
+			e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain gap analysis round %d: score=%.2f sufficient=%v directives=%d tier_gaps=%d conc_risks=%d llm_ok=%v",
+				round, gapReport.Score, gapReport.Sufficient, len(gapReport.RefineDirectives),
+				len(gapReport.TierGaps), len(gapReport.ConcentrationRisks), !gapReport.DiagnosticFields()["llmFailed"].(bool)))
+
+			if gapReport.Sufficient {
+				completedRounds = round + 1
+				exitReason = "sufficient"
+				break
+			}
+			if len(gapReport.RefineDirectives) == 0 {
+				completedRounds = round + 1
+				exitReason = "no_directives"
+				break
+			}
+
+			for _, ds := range gapReport.DirectiveSummaries() {
+				e.logLine(ctx, job, "debug", fmt.Sprintf("> directive: %s", ds))
+			}
+
+			patches, refineErr := e.researchAgent.RefineSupplyChain(ctx, chains, gapReport.RefineDirectives, extractedFragment, existingEntities)
+			if refineErr != nil {
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain refine error (round %d): %v", round, refineErr))
+				exitReason = fmt.Sprintf("refine_error: %v", refineErr)
+				break
+			}
+			if len(patches) == 0 {
+				e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain refine round %d: no patches returned", round))
+				completedRounds = round + 1
+				exitReason = "no_patches"
+				break
+			}
+
+			for _, p := range patches {
+				e.logLine(ctx, job, "debug", fmt.Sprintf("> patch: %s", p.PatchSummary()))
+			}
+
+			refined, warnings := agents.ApplyPatches(chains, patches)
+			appliedCount := len(patches) - len(warnings)
+			totalPatchesApplied += appliedCount
+			for _, w := range warnings {
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain patch warning: %s", w))
+			}
+			trace.Log(ctx, "SupplyChain", "SupplyChain.refine_round", map[string]any{
+				"tenantId":        strings.TrimSpace(job.TenantID),
+				"jobId":           strings.TrimSpace(job.ID),
+				"round":           round,
+				"patchesTotal":    len(patches),
+				"patchesApplied":  appliedCount,
+				"patchesWarnings": len(warnings),
+				"patchTypeCounts": agents.PatchTypeCounts(patches),
+				"nodesBeforeN":    countTotalNodes(chains),
+				"nodesAfterN":     countTotalNodes(refined),
+			})
+			e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain refine round %d: applied %d/%d patches (types: %v)", round, appliedCount, len(patches), agents.PatchTypeCounts(patches)))
+			chains = refined
+			completedRounds = round + 1
+			if round == maxRefineRounds-1 {
+				exitReason = "max_rounds"
+			}
+		}
+
+		scoutResult.SupplyChains = chains
+		trace.Log(ctx, "SupplyChain", "SupplyChain.refine_summary", map[string]any{
+			"tenantId":            strings.TrimSpace(job.TenantID),
+			"jobId":               strings.TrimSpace(job.ID),
+			"target":              strings.TrimSpace(job.TargetCanonicalPath),
+			"initialChains":       initialChainCount,
+			"finalChains":         len(chains),
+			"completedRounds":     completedRounds,
+			"totalPatchesApplied": totalPatchesApplied,
+			"finalScore":          lastScore,
+			"nodesTotal":          countTotalNodes(chains),
+			"exitReason":          exitReason,
+		})
+		e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine_done")
+	} else {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine_skip")
+	}
 
 	// RE-VALIDATION: run Critic once after Research (best-effort).
 	if researchSucceeded && policy.ShouldRun(StepReValidation) && extractedFragment != nil && validationResult != nil {
@@ -4939,7 +5231,7 @@ SKIP_METRICS:
 			effectiveCanonicalPath = cp
 		}
 	}
-	if effectiveCanonicalPath != "" && strings.TrimSpace(job.TargetCanonicalPath) != effectiveCanonicalPath {
+	if effectiveCanonicalPath != "" && !canonicalPathsEquivalentForRetarget(strings.TrimSpace(job.TargetCanonicalPath), effectiveCanonicalPath) {
 		old := strings.TrimSpace(job.TargetCanonicalPath)
 		trace.Log(ctx, "scout_persist", "scout.retarget.start", map[string]any{
 			"tenantId":          strings.TrimSpace(job.TenantID),
@@ -4962,10 +5254,7 @@ SKIP_METRICS:
 		if _, ok := job.State["aliasCanonicalPath"]; !ok && old != "" {
 			job.State["aliasCanonicalPath"] = old
 		}
-		if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
-			fmt.Printf("[ScoutEngine] Failed to persist job retarget (best-effort): jobId=%s from=%s to=%s err=%v\n",
-				strings.TrimSpace(job.ID), old, effectiveCanonicalPath, err)
-		}
+		e.persistRetargetState(ctx, job, old, effectiveCanonicalPath, "scout_retarget", nil)
 		// Update lens scope so UI/graph doesn't keep alias paths.
 		e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 		e.recordDeterministicRedirect(ctx, old, effectiveCanonicalPath, "scout_retarget")
@@ -5009,10 +5298,10 @@ SKIP_METRICS:
 		job.State["targetCanonicalPath"] = effectiveCanonicalPath
 		job.State["orgLegacyCanonicalPath"] = old
 		job.State["orgCanonicalPathUpgradedTo"] = effectiveCanonicalPath
-		if err := e.scoutingJobsRepo.Update(ctx, job); err != nil {
-			fmt.Printf("[ScoutEngine] Failed to persist org path upgrade (best-effort): jobId=%s from=%s to=%s err=%v\n",
-				strings.TrimSpace(job.ID), old, effectiveCanonicalPath, err)
-		}
+		e.persistRetargetState(ctx, job, old, effectiveCanonicalPath, "org_path_upgrade", map[string]interface{}{
+			"orgLegacyCanonicalPath":     old,
+			"orgCanonicalPathUpgradedTo": effectiveCanonicalPath,
+		})
 		e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 		e.recordDeterministicRedirect(ctx, old, effectiveCanonicalPath, "org_path_upgrade")
 		if extractedFragment != nil {
@@ -5036,6 +5325,7 @@ SKIP_METRICS:
 	}
 
 	// PERSISTENCE: создание frame и upsert HorizonFragment.
+	telCol.EndGroup()
 	e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntityPersistence, true, "entity_persistence")
 	trace.Log(ctx, "scout_persist", "scout.persist.start", map[string]any{
 		"tenantId":               strings.TrimSpace(job.TenantID),
@@ -5133,22 +5423,14 @@ SKIP_METRICS:
 				"tags": strings.Join(extractedFragment.Tags, ","),
 			}
 			if resolved, rerr := e.canonicalPathResolver.ResolveWithMetadata(ctx, extractedFragment.CanonicalPath, extractedFragment.Type, meta); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
-				if strings.TrimSpace(resolved.CanonicalPath) != strings.TrimSpace(extractedFragment.CanonicalPath) {
+				if !canonicalPathsEquivalentForRetarget(strings.TrimSpace(resolved.CanonicalPath), strings.TrimSpace(extractedFragment.CanonicalPath)) {
 					old := strings.TrimSpace(extractedFragment.CanonicalPath)
 					extractedFragment.CanonicalPath = strings.TrimSpace(resolved.CanonicalPath)
-					if effectiveCanonicalPath != extractedFragment.CanonicalPath {
+					if !canonicalPathsEquivalentForRetarget(effectiveCanonicalPath, extractedFragment.CanonicalPath) {
 						effectiveCanonicalPath = extractedFragment.CanonicalPath
-						job.TargetCanonicalPath = effectiveCanonicalPath
-						if job.State == nil {
-							job.State = map[string]interface{}{}
-						}
-						job.State["targetCanonicalPath"] = effectiveCanonicalPath
-						if _, ok := job.State["aliasCanonicalPath"]; !ok && old != "" {
-							job.State["aliasCanonicalPath"] = old
-						}
 						fmt.Printf("[ScoutEngine] Retargeting job %s to market dedup canonicalPath: %s -> %s\n",
 							strings.TrimSpace(job.ID), old, effectiveCanonicalPath)
-						_ = e.scoutingJobsRepo.Update(ctx, job)
+						e.persistRetargetState(ctx, job, old, effectiveCanonicalPath, "market_dedup", nil)
 						// Update lens scope so UI/graph doesn't keep alias paths.
 						e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 						e.recordDeterministicRedirect(ctx, old, effectiveCanonicalPath, "market_dedup")
@@ -5276,41 +5558,27 @@ SKIP_METRICS:
 			// If dedup selected a replacement fragment, we must retarget the job to it as well.
 			// Otherwise subsequent steps (events, decomposition, retries) will keep using the alias.
 			if existingFragment != nil {
-				if cp := strings.TrimSpace(existingFragment.CanonicalPath); cp != "" && cp != effectiveCanonicalPath {
+				if cp := strings.TrimSpace(existingFragment.CanonicalPath); cp != "" && !canonicalPathsEquivalentForRetarget(cp, effectiveCanonicalPath) {
 					old := effectiveCanonicalPath
 					effectiveCanonicalPath = cp
 					fmt.Printf("[ScoutEngine] Retargeting job %s to dedup replacement canonicalPath: %s -> %s\n",
 						strings.TrimSpace(job.ID), old, effectiveCanonicalPath)
-					job.TargetCanonicalPath = effectiveCanonicalPath
-					if job.State == nil {
-						job.State = map[string]interface{}{}
-					}
-					job.State["targetCanonicalPath"] = effectiveCanonicalPath
-					if _, ok := job.State["aliasCanonicalPath"]; !ok && strings.TrimSpace(old) != "" {
-						job.State["aliasCanonicalPath"] = strings.TrimSpace(old)
-					}
-					_ = e.scoutingJobsRepo.Update(ctx, job)
+					e.persistRetargetState(ctx, job, strings.TrimSpace(old), effectiveCanonicalPath, "dedup_replacement", nil)
 					// Update lens scope so UI/graph doesn't keep alias paths.
 					e.bestEffortRewriteLensScope(ctx, tenantID, lensID, strings.TrimSpace(old), effectiveCanonicalPath)
+					e.recordDeterministicRedirect(ctx, strings.TrimSpace(old), effectiveCanonicalPath, "dedup_replacement")
 				}
 			}
 		}
 		// When not replacement: extractedFragment was normalized in place by ContractNormalizer.
 		// If pre-create normalized the canonicalPath, retarget the job.
-		if !usedExistingDuplicate && strings.TrimSpace(extractedFragment.CanonicalPath) != "" && extractedFragment.CanonicalPath != effectiveCanonicalPath {
+		if !usedExistingDuplicate && strings.TrimSpace(extractedFragment.CanonicalPath) != "" &&
+			!canonicalPathsEquivalentForRetarget(strings.TrimSpace(extractedFragment.CanonicalPath), strings.TrimSpace(effectiveCanonicalPath)) {
 			old := effectiveCanonicalPath
 			effectiveCanonicalPath = strings.TrimSpace(extractedFragment.CanonicalPath)
-			job.TargetCanonicalPath = effectiveCanonicalPath
-			if job.State == nil {
-				job.State = map[string]interface{}{}
-			}
-			job.State["targetCanonicalPath"] = effectiveCanonicalPath
-			if _, ok := job.State["aliasCanonicalPath"]; !ok && strings.TrimSpace(old) != "" {
-				job.State["aliasCanonicalPath"] = strings.TrimSpace(old)
-			}
 			fmt.Printf("[ScoutEngine] Retargeting job %s to normalized canonicalPath: %s -> %s\n",
 				strings.TrimSpace(job.ID), strings.TrimSpace(old), effectiveCanonicalPath)
-			_ = e.scoutingJobsRepo.Update(ctx, job)
+			e.persistRetargetState(ctx, job, strings.TrimSpace(old), effectiveCanonicalPath, "precreate_normalization", nil)
 			e.bestEffortRewriteLensScope(ctx, tenantID, lensID, old, effectiveCanonicalPath)
 			e.recordDeterministicRedirect(ctx, old, effectiveCanonicalPath, "precreate_normalization")
 		}

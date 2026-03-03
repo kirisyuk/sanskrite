@@ -56,10 +56,10 @@ import (
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpathbuilder "github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
-	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/profile"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
+	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
@@ -1126,6 +1126,7 @@ func main() {
 		horizonEdgesRepo.WithTelemetryRepo(horizonTelemetryRepo)
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
+		horizonJobTelemetryRepo := horizonrepo.NewJobTelemetryRepository(fsClient.Client())
 		riskJobsRepo = horizonrepo.NewRiskJobsRepository(fsClient.Client())
 		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
 		horizonProfilesRepo := horizonrepo.NewFragmentProfilesRepository(fsClient.Client())
@@ -1915,6 +1916,9 @@ func main() {
 			scoutEngine.WithCanonizationPolicy(canonizationPolicyExecutor)
 			scoutEngine.WithValidationPolicy(validationPolicyExecutor)
 			scoutEngine.WithTelemetryRepo(horizonTelemetryRepo)
+			if horizonJobTelemetryRepo != nil {
+				scoutEngine.WithJobTelemetryRepo(horizonJobTelemetryRepo)
+			}
 
 			// Create and wire CanonicalPathResolver for early canonicalization and deduplication
 			// This ensures all paths are canonicalized and deduplicated before processing
@@ -2161,6 +2165,7 @@ func main() {
 				WithPropagationProfileLookup(propagationProfileLookup)
 
 			// SignalPipeline for manual 12-axis extraction (events:extract-signals)
+			var signalPipelineForQA *horizonscout.SignalPipeline
 			if aiExec != nil && ontologyFactsRepo != nil {
 				signalExtractor := horizonsignals.NewSignalExtractor(nil, aiExec)
 				applicability := horizonsignals.NewExternalApplicabilityEvaluator().
@@ -2186,6 +2191,7 @@ func main() {
 					propagationProfileLookup,
 					ontologyFactsRepo,
 				).WithEscalationLLM(aiExec)
+				signalPipelineForQA = signalPipeline
 				horizonHandlers = horizonHandlers.WithSignalPipeline(signalPipeline)
 
 				// Canvas ingester: system sources → batch LLM extraction → ontology facts → 12-axis signals
@@ -2240,30 +2246,24 @@ func main() {
 					horizonFragmentsRepo,
 					horizonMaterializedArtifactsRepo,
 				)
-				// Vertex AI Search: same client/datastore as horizon fragment sync (GCS-indexed fragments). Required for QA alternatives.
-				if vertexSearchClient != nil && vertexSearchClient.IsConfigured() {
-					horizonDS := getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")
-					client := vertexSearchClient
-					if horizonDS != "" {
-						client = vertexSearchClient.WithDataStore(horizonDS)
-					}
-					qaEngine = qaEngine.WithVertexSearch(client)
-					dsLabel := horizonDS
-					if dsLabel == "" {
-						dsLabel = "default"
-					}
-					logger.Printf("Lens Q&A: Vertex AI Search wired for alternative entities (datastore=%s)", dsLabel)
-				}
 				qaContextBuilder := horizonqa.NewAnswerContextBuilder()
 				qaSynthesizer := horizonqa.NewAnswerSynthesizer(exec)
-				horizonHandlers = horizonHandlers.WithQAEngine(qaEngine, qaContextBuilder, qaSynthesizer, horizonQASessionsRepo)
-				// Humanization at finish: Interpreter turns 12-axis simulation output into human-readable summaries
-				qaInterpreter := horizoninterp.NewInterpreter(exec, horizonFragmentsRepo, horizoninterp.NewOntologySignalFactsRepo(ontologyFactsRepo))
-				horizonHandlers = horizonHandlers.WithQAInterpreter(qaInterpreter)
-				// Business relevance: how well the answer addresses the question
-				qaRelevanceEvaluator := horizonqa.NewBusinessRelevanceEvaluator(exec)
-				horizonHandlers = horizonHandlers.WithQARelevanceEvaluator(qaRelevanceEvaluator)
+				horizonHandlers = horizonHandlers.WithQAEngine(qaEngine, qaContextBuilder, qaSynthesizer, horizonQASessionsRepo).
+					WithQASufficiencyChecker(horizonqa.NewSufficiencyChecker()).
+					WithQASignalGapDetector(horizonqa.NewSignalGapDetector()).
+					WithQAGroundingQueryBuilder(horizonqa.NewGroundingQueryBuilder()).
+					WithScoutingJobsRepo(horizonScoutingJobsRepo)
+				if signalPipelineForQA != nil && docsRepo != nil {
+					horizonHandlers = horizonHandlers.WithQABestEffortFiller(
+						horizonqa.NewBestEffortFiller(exec, docsRepo, ontologyFactsRepo, signalPipelineForQA, horizonFragmentsRepo),
+					)
+				}
 				logger.Printf("Lens Q&A (Analysis view) initialized")
+			}
+
+			if horizonJobTelemetryRepo != nil {
+				horizonHandlers = horizonHandlers.WithJobTelemetryRepo(horizonJobTelemetryRepo)
+				logger.Printf("Horizon job telemetry API initialized")
 			}
 
 			logger.Printf("Horizon system initialized")
@@ -2292,6 +2292,13 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+	scoutMaxInflightPerInstance := getEnvInt("SCOUT_MAX_INFLIGHT_PER_INSTANCE", 1)
+	if scoutMaxInflightPerInstance < 1 {
+		scoutMaxInflightPerInstance = 1
+	}
+	scoutInflightLimiter := make(chan struct{}, scoutMaxInflightPerInstance)
+	var scoutInFlightByJob sync.Map
+	logger.Printf("Scout task limiter enabled: max_inflight_per_instance=%d", scoutMaxInflightPerInstance)
 
 	// Cloud Tasks -> Scout job execution (managed queue + retries + autoscaling).
 	// Secured via OIDC token issued for the configured service account.
@@ -2363,6 +2370,30 @@ func main() {
 			if v, ok := job.State["scoutingStrategy"].(string); ok && strings.TrimSpace(v) != "" {
 				job.ScoutingStrategy = strings.TrimSpace(v)
 			}
+		}
+		if skip, finalize, reason := shouldSkipScoutTaskExecution(job); skip {
+			logger.Printf("Scout job %s delivery skipped before execute: reason=%s state=%s", jobID, reason, job.CurrentState)
+			if finalize {
+				_ = scoutEngine.FinalizePipelineRunForceFailed(context.Background(), job, reason)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("skipped: " + reason))
+			return
+		}
+		if _, alreadyRunning := scoutInFlightByJob.LoadOrStore(jobID, struct{}{}); alreadyRunning {
+			logger.Printf("Scout job %s duplicate delivery while in-flight; ACK", jobID)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("already in-flight"))
+			return
+		}
+		defer scoutInFlightByJob.Delete(jobID)
+		select {
+		case scoutInflightLimiter <- struct{}{}:
+			defer func() { <-scoutInflightLimiter }()
+		default:
+			logger.Printf("Scout executor saturated: jobId=%s target=%s", jobID, job.TargetCanonicalPath)
+			http.Error(w, "scout executor saturated (retry later)", http.StatusTooManyRequests)
+			return
 		}
 
 		// Execute with generous timeout (Cloud Run request timeout is 3600s).
@@ -4079,6 +4110,18 @@ func getEnv(key, def string) string {
 	return v
 }
 
+func getEnvInt(key string, def int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
 // getEnvWithAlt returns value from key, or altKey if key is empty, or def.
 func getEnvWithAlt(key, altKey, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
@@ -4119,7 +4162,7 @@ func isNonRetryableScoutExecutionErrorWithJob(err error, job *horizonmodels.Scou
 				return true
 			}
 		}
-		if v, ok := job.State["normalizationRetryable"].(bool); ok && !v {
+		if !readInterfaceBool(job.State["normalizationRetryable"], true) {
 			return true
 		}
 		if reasons, ok := job.State["terminalOutcomeReasons"].(map[string]interface{}); ok && reasons != nil {
@@ -4130,6 +4173,94 @@ func isNonRetryableScoutExecutionErrorWithJob(err error, job *horizonmodels.Scou
 				}
 			}
 		}
+		if reasons, ok := job.State["terminalOutcomeReasons"].(map[string]string); ok && reasons != nil {
+			if rc, ok := reasons["reason_code"]; ok {
+				switch strings.TrimSpace(strings.ToLower(rc)) {
+				case "non_retryable_contract_error", "type_required", "governance_owner", "canonical_path_required":
+					return true
+				}
+			}
+		}
 	}
 	return false
+}
+
+func shouldSkipScoutTaskExecution(job *horizonmodels.ScoutingJob) (skip bool, finalize bool, reason string) {
+	if job == nil {
+		return true, false, "missing_job"
+	}
+	if isTerminalScoutState(job.CurrentState) {
+		return true, false, "terminal_state_" + strings.ToLower(strings.TrimSpace(string(job.CurrentState)))
+	}
+	if isNonRetryableScoutExecutionErrorWithJob(nil, job) {
+		return true, true, "non_retryable_job_state"
+	}
+	if hasNonRetryablePipelineStageFailure(job) {
+		return true, true, "pipeline_non_retryable_stage_failure"
+	}
+	return false, false, ""
+}
+
+func isTerminalScoutState(state horizonmodels.ScoutingJobState) bool {
+	switch state {
+	case horizonmodels.ScoutingJobStateRejected, horizonmodels.ScoutingJobStateFailed, horizonmodels.ScoutingJobStateVerified:
+		return true
+	default:
+		return false
+	}
+}
+
+func hasNonRetryablePipelineStageFailure(job *horizonmodels.ScoutingJob) bool {
+	if job == nil || job.State == nil {
+		return false
+	}
+	runtime, _ := job.State["pipelineRuntime"].(map[string]interface{})
+	if runtime == nil {
+		return false
+	}
+	stages, _ := runtime["stages"].(map[string]interface{})
+	if stages == nil {
+		return false
+	}
+	for _, raw := range stages {
+		entry, _ := raw.(map[string]interface{})
+		if entry == nil {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(readInterfaceString(entry["status"])))
+		if status != "failed" {
+			continue
+		}
+		if !readInterfaceBool(entry["retryable"], true) {
+			return true
+		}
+	}
+	return false
+}
+
+func readInterfaceString(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	default:
+		return ""
+	}
+}
+
+func readInterfaceBool(v interface{}, def bool) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		if b, err := strconv.ParseBool(strings.TrimSpace(t)); err == nil {
+			return b
+		}
+	case float64:
+		return t != 0
+	case int:
+		return t != 0
+	case int64:
+		return t != 0
+	}
+	return def
 }

@@ -2618,6 +2618,9 @@ export async function layoutLevelsTwoPane<T = any>(
       const nodesLocal = (nodesIn || []).slice();
       if (!isDecisionChainLeftPane || nodesLocal.length <= 1) {
         return nodesLocal.sort((a, b) => {
+          const ta = typeOrderScore(normalizeFragmentType((a.data as any)?.type));
+          const tb = typeOrderScore(normalizeFragmentType((b.data as any)?.type));
+          if (ta !== tb) return ta - tb;
           const al = String((a.data as any)?.label || a.id);
           const bl = String((b.data as any)?.label || b.id);
           return al.localeCompare(bl);
@@ -2967,6 +2970,9 @@ export async function layoutLevelsTwoPane<T = any>(
 
       if (isBusinessBlockType) {
         const nodesFlat = list.slice().sort((a, b) => {
+          const ta = typeOrderScore(normalizeFragmentType((a.data as any)?.type));
+          const tb = typeOrderScore(normalizeFragmentType((b.data as any)?.type));
+          if (ta !== tb) return ta - tb;
           const al = String((a.data as any)?.label || a.id);
           const bl = String((b.data as any)?.label || b.id);
           return al.localeCompare(bl);
@@ -3146,6 +3152,9 @@ export async function layoutLevelsTwoPane<T = any>(
       // Market-related nodes in left pane: mini-nodes, 6 per column.
       if (compactLeftPane && (typeKey === 'market' || typeKey === 'market_regulation')) {
         const nodesFlat = list.slice().sort((a, b) => {
+          const ta = typeOrderScore(normalizeFragmentType((a.data as any)?.type));
+          const tb = typeOrderScore(normalizeFragmentType((b.data as any)?.type));
+          if (ta !== tb) return ta - tb;
           const al = String((a.data as any)?.label || a.id);
           const bl = String((b.data as any)?.label || b.id);
           return al.localeCompare(bl);

@@ -333,9 +333,10 @@ Allowed actor types: %s.
 Validate:
 1. ecosystem actor coverage: all significant actors are represented (organizations, gov bodies, investors, communities);
 2. relationship diversity: not just one relation type dominates; ownership, supply, competition, regulation, partnership should all be present where applicable;
-3. directional consistency: OWNS goes owner->owned, SUBSIDIARY_OF goes child->parent, REGULATES goes regulator->regulated;
-4. power dynamics coverage: key influencers, gatekeepers, and bottleneck nodes are identified;
-5. geographic and sectoral coherence: actors and relations are consistent with the ecosystem's geography and industry.`,
+3. directional consistency: OWNS goes owner->owned, SUBSIDIARY_OF goes child->parent, REGULATES goes regulator->regulated (same jurisdiction only);
+4. REGULATES jurisdiction check: if source is a government body from country X and target is a foreign entity from country Y, REGULATES is incorrect — flag as missingInfo and suggest CONTROLS_ACCESS or IMPOSES_CONDITION instead;
+5. power dynamics coverage: key influencers, gatekeepers, and bottleneck nodes are identified;
+6. geographic and sectoral coherence: actors and relations are consistent with the ecosystem's geography and industry.`,
 				relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem),
 				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeEcosystem)))
 		}
@@ -416,9 +417,10 @@ RELATIONS:
 Validate:
 1. ecosystem actor coverage: all significant actors are represented (organizations, gov bodies, investors, communities);
 2. relationship diversity: not just one relation type dominates; ownership, supply, competition, regulation, partnership should all be present where applicable;
-3. directional consistency: OWNS goes owner->owned, SUBSIDIARY_OF goes child->parent, REGULATES goes regulator->regulated;
-4. power dynamics coverage: key influencers, gatekeepers, and bottleneck nodes are identified;
-5. geographic and sectoral coherence: actors and relations are consistent with the ecosystem geography and industry.
+3. directional consistency: OWNS goes owner->owned, SUBSIDIARY_OF goes child->parent, REGULATES goes regulator->regulated (same jurisdiction only);
+4. REGULATES jurisdiction check: if source is a government body from country X and target is a foreign entity from country Y, REGULATES is incorrect — flag and suggest CONTROLS_ACCESS or IMPOSES_CONDITION;
+5. power dynamics coverage: key influencers, gatekeepers, and bottleneck nodes are identified;
+6. geographic and sectoral coherence: actors and relations are consistent with the ecosystem geography and industry.
 
 %s
 

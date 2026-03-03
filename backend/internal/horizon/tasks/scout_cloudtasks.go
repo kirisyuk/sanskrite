@@ -2,6 +2,8 @@ package tasks
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,6 +11,8 @@ import (
 
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -91,6 +95,9 @@ func (d *ScoutCloudTasksDispatcher) EnqueueScoutJob(ctx context.Context, jobID s
 	req := &taskspb.CreateTaskRequest{
 		Parent: parent,
 		Task: &taskspb.Task{
+			// Deterministic task name gives enqueue idempotency for a job:
+			// duplicate create calls for the same job become AlreadyExists.
+			Name: fmt.Sprintf("%s/tasks/%s", parent, scoutTaskIDForJob(jobID)),
 			MessageType: &taskspb.Task_HttpRequest{
 				HttpRequest: &taskspb.HttpRequest{
 					HttpMethod: taskspb.HttpMethod_POST,
@@ -113,7 +120,13 @@ func (d *ScoutCloudTasksDispatcher) EnqueueScoutJob(ctx context.Context, jobID s
 	}
 
 	_, err := d.client.CreateTask(apiCtx, req)
-	return err
+	if err != nil {
+		if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func targetAudienceFromURL(u string) string {
@@ -132,4 +145,9 @@ func targetAudienceFromURL(u string) string {
 		return u
 	}
 	return u
+}
+
+func scoutTaskIDForJob(jobID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(jobID)))
+	return "scout-" + hex.EncodeToString(sum[:12])
 }

@@ -156,7 +156,7 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 	switch key {
 	case entity_semantics.EntityTypeGov:
 		b.WriteString("- Resolve govType + parentGovPath and enforce hierarchy edges via ADMINISTERS (superior -> subordinate).\n")
-		b.WriteString("- Prioritize regulatory perimeter and affected entities (REGULATES / CONTROLS_ACCESS / APPLIES_TO via mechanism).\n")
+		b.WriteString("- Prioritize regulatory perimeter and affected entities: REGULATES for domestic jurisdiction oversight, CONTROLS_ACCESS for sanctions/extra-territorial restrictions, APPLIES_TO via mechanism.\n")
 	case entity_semantics.EntityTypeOrganization:
 		b.WriteString("- Separate operating business vs holding structure early; for holdings prioritize ownership map before product map.\n")
 		b.WriteString("- For operating orgs, prioritize products/services, upstream suppliers, downstream customers, and market participation.\n")
@@ -207,8 +207,9 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 // Included in any domain mode prompt where REGULATES and PARTICIPATES_IN are both available.
 func GovEntityRelationRulesBlock() string {
 	return `   - GOV vs ORG distinction (CRITICAL): entities with canonicalPath /gov/... are government bodies.
-     For GOV -> MARKET: use REGULATES (not PARTICIPATES_IN, not DEPENDS_ON).
-     For GOV -> ORG: use REGULATES when regulatory, ADMINISTERS when hierarchical.
+     For GOV -> MARKET (domestic): use REGULATES (not PARTICIPATES_IN, not DEPENDS_ON).
+     For GOV -> ORG (same jurisdiction, regulatory oversight): use REGULATES when regulatory, ADMINISTERS when hierarchical.
+     For GOV -> foreign ORG/MARKET (sanctions, trade restrictions, extra-territorial enforcement): use CONTROLS_ACCESS or IMPOSES_CONDITION, NOT REGULATES.
      For ORG -> MARKET: use PARTICIPATES_IN.
 `
 }

@@ -38,6 +38,12 @@ func ResolveByPath(canonicalPath string, fragmentType models.FragmentType, commu
 	if strings.HasPrefix(cp, "/deposit/") {
 		return EntityTypeDeposit
 	}
+	if strings.HasPrefix(cp, "/supply-link/") {
+		return EntityTypeSupplyLink
+	}
+	if strings.HasPrefix(cp, "/track/") {
+		return EntityTypeTrack
+	}
 	if strings.HasPrefix(cp, "/community/") {
 		if ct == "dynasty" || strings.Contains(cp, "/dynasty/") {
 			return EntityTypeCommunityDynasty
@@ -78,6 +84,10 @@ func ResolveByPath(canonicalPath string, fragmentType models.FragmentType, commu
 		return EntityTypeFacility
 	case models.FragmentTypeDeposit:
 		return EntityTypeDeposit
+	case models.FragmentTypeSupplyLink:
+		return EntityTypeSupplyLink
+	case models.FragmentTypeTrack:
+		return EntityTypeTrack
 	case models.FragmentTypeProgram:
 		return EntityTypeProgram
 	case models.FragmentTypeCommunity:
@@ -110,6 +120,10 @@ func inferFragmentTypeFromPath(cp string) models.FragmentType {
 		return models.FragmentTypeFacility
 	case strings.HasPrefix(cp, "/deposit/"):
 		return models.FragmentTypeDeposit
+	case strings.HasPrefix(cp, "/supply-link/"):
+		return models.FragmentTypeSupplyLink
+	case strings.HasPrefix(cp, "/track/"):
+		return models.FragmentTypeTrack
 	case strings.HasPrefix(cp, "/gov/"), strings.HasPrefix(cp, "/org/"):
 		return models.FragmentTypeOrganization
 	case strings.HasPrefix(cp, "/community/"):
@@ -126,6 +140,10 @@ func inferFragmentTypeFromPath(cp string) models.FragmentType {
 		return models.FragmentTypePerson
 	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"), strings.HasPrefix(cp, "/geo/"):
 		return models.FragmentTypeGeoRegion
+	case strings.HasPrefix(cp, "/event/"):
+		return models.FragmentTypeEvent
+	case strings.HasPrefix(cp, "/media/"):
+		return models.FragmentTypeMediaChannel
 	case strings.HasPrefix(cp, "/zone/"):
 		return models.FragmentTypeAffectedZone
 	default:

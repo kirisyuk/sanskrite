@@ -92,6 +92,10 @@ func (s *ClaudeService) ExecuteTask(ctx context.Context, task *AITask, model str
 		Content []struct {
 			Text string `json:"text"`
 		} `json:"content"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 
 	if err := json.Unmarshal(body, &response); err != nil {
@@ -105,12 +109,19 @@ func (s *ClaudeService) ExecuteTask(ctx context.Context, task *AITask, model str
 	content := response.Content[0].Text
 	log.Printf("[Claude] AI response content length: %d", len(content))
 
-	return &AITaskResult{
+	taskResult := &AITaskResult{
 		Content:  content,
 		Model:    model,
 		TaskType: task.TaskType,
 		Status:   AITaskStatusCompleted,
-	}, nil
+	}
+	if response.Usage.InputTokens > 0 {
+		taskResult.InputTokens = response.Usage.InputTokens
+	}
+	if response.Usage.OutputTokens > 0 {
+		taskResult.OutputTokens = response.Usage.OutputTokens
+	}
+	return taskResult, nil
 }
 
 // ExecuteEmbeddingTask генерация эмбеддингов не поддерживается API Claude

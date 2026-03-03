@@ -64,3 +64,15 @@ const (
 	ChargeModelAccess ChargeModel = "Access"  // Последующие проекты получают доступ
 )
 
+// ScoutingJobParams carries the parameters needed to create a new ScoutingJob.
+// Used by QAScoutRequestBuilder to bridge QA sufficiency gaps into scouting work.
+type ScoutingJobParams struct {
+	LensID              string   `json:"lensId"`
+	TenantID            string   `json:"tenantId"`
+	ProjectID           string   `json:"projectId"`
+	TargetCanonicalPath string   `json:"targetCanonicalPath"`
+	SeedHints           []string `json:"seedHints,omitempty"`
+	RecommendedFacets   []string `json:"recommendedFacets,omitempty"`
+	Strategy            string   `json:"strategy"`
+}
+

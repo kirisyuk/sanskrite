@@ -118,6 +118,10 @@ type HorizonFragment struct {
 	// Used for exposure analysis and geographic scope estimation.
 	RadiusKm float64 `json:"radiusKm,omitempty" firestore:"radiusKm,omitempty"`
 
+	// HasCoordinates is set to true at write time when the fragment has valid geo coordinates.
+	// Enables efficient Firestore queries for map rendering without 4x overscan.
+	HasCoordinates bool `json:"hasCoordinates,omitempty" firestore:"hasCoordinates,omitempty"`
+
 	// IndexPaths — денормализованные "координаты" фрагмента для детерминированного картографирования/фильтрации.
 	// Собирается из canonicalPath + (sectorPath/entityPath + ancestors) + location + tags + identifiers + (optional spheres).
 	// Ограничено по размеру (см. BuildIndexPaths/NormalizeIndexPaths).
@@ -711,12 +715,14 @@ func (f *HorizonFragment) ensureCoordinatesMirroring() {
 	}
 
 	if f.Coordinates != nil && IsValidCoordinates(f.Coordinates.Lat, f.Coordinates.Lon) {
+		f.HasCoordinates = true
 		return
 	}
 	f.Coordinates = nil
 
 	if f.Track != nil && IsValidCoordinates(f.Track.Lat, f.Track.Lon) {
 		f.Coordinates = &Coordinates{Lat: f.Track.Lat, Lon: f.Track.Lon}
+		f.HasCoordinates = true
 		return
 	}
 
@@ -726,14 +732,19 @@ func (f *HorizonFragment) ensureCoordinatesMirroring() {
 			Lat: wm.Coordinates.Lat,
 			Lon: wm.Coordinates.Lon,
 		}
+		f.HasCoordinates = true
 		return
 	}
 
 	if f.HomeLocation != nil && f.HomeLocation.ISO6709 != nil {
 		if lat, lon, ok := ParseISO6709Coordinates(*f.HomeLocation.ISO6709); ok {
 			f.Coordinates = &Coordinates{Lat: lat, Lon: lon}
+			f.HasCoordinates = true
+			return
 		}
 	}
+
+	f.HasCoordinates = false
 }
 
 // GenerateVectorText генерирует vectorText для семантического поиска

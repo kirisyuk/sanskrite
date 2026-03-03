@@ -295,7 +295,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		}
 	}
 
-	return &AITaskResult{
+	taskResult := &AITaskResult{
 		Content:           content,
 		Model:             model,
 		TaskType:          task.TaskType,
@@ -303,7 +303,24 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		Citations:         citations,
 		ProcessingTime:    elapsed,
 		GroundingEvidence: evidence,
-	}, nil
+	}
+	// Parse real token counts from usageMetadata
+	var usageMeta struct {
+		UsageMetadata struct {
+			PromptTokenCount     int `json:"promptTokenCount"`
+			CandidatesTokenCount int `json:"candidatesTokenCount"`
+			TotalTokenCount      int `json:"totalTokenCount"`
+		} `json:"usageMetadata"`
+	}
+	if err := json.Unmarshal(body, &usageMeta); err == nil {
+		if usageMeta.UsageMetadata.PromptTokenCount > 0 {
+			taskResult.InputTokens = usageMeta.UsageMetadata.PromptTokenCount
+		}
+		if usageMeta.UsageMetadata.CandidatesTokenCount > 0 {
+			taskResult.OutputTokens = usageMeta.UsageMetadata.CandidatesTokenCount
+		}
+	}
+	return taskResult, nil
 }
 
 // parseResponse extracts content, citations, and grounding evidence from a Vertex AI response.
@@ -322,6 +339,10 @@ func (s *VertexAIService) parseResponse(body []byte, expectGrounding bool) (stri
 	candidate, ok := candidates[0].(map[string]interface{})
 	if !ok {
 		return "", nil, nil
+	}
+
+	if finishReason, ok := candidate["finishReason"].(string); ok && finishReason != "" && finishReason != "STOP" {
+		log.Printf("[VertexAI] WARNING: finishReason=%s (output may be truncated)", finishReason)
 	}
 
 	// Extract text content

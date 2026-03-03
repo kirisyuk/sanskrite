@@ -55,7 +55,7 @@ func TestAwaitGraphDeltaMarksPartialWaitTimeoutOnCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	job := &models.ScoutingJob{}
-	snapshot := e.awaitGraphDelta(ctx, job, Contract{}, 0, 0, 1)
+	snapshot := e.awaitGraphDelta(ctx, job, Contract{}, 0, 0, 1, nil)
 	if !snapshot.PartialWaitTimeout {
 		t.Fatal("expected partial wait timeout marker on canceled context")
 	}

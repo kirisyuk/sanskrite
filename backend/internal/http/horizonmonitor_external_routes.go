@@ -89,8 +89,8 @@ func (a *horizonMonitorExternalAPI) register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/eia/petroleum", a.handleNotImplemented("eia-petroleum"))
 	mux.HandleFunc("/api/tech-events", a.handleNotImplemented("tech-events"))
 
-	// Not implemented yet (auth-heavy / websocket relay). Keep endpoint stable.
-	mux.HandleFunc("/api/ais-snapshot", a.handleNotImplemented("ais-snapshot"))
+	// AIS vessel tracking: proxied from configurable upstream (AIS_API_URL + AIS_API_KEY).
+	mux.HandleFunc("/api/ais-snapshot", a.handleAISSnapshot)
 	mux.HandleFunc("/api/cloudflare-outages", a.handleNotImplemented("cloudflare-outages"))
 	mux.HandleFunc("/api/firms-fires", a.handleNotImplemented("firms-fires"))
 	mux.HandleFunc("/api/finnhub", a.handleNotImplemented("finnhub"))
@@ -873,6 +873,159 @@ func hmUSGSEarthquakesToItems(body []byte) []any {
 		out = append(out, m)
 	}
 	return out
+}
+
+// -----------------------------
+// AIS Snapshot (vessel tracking)
+// -----------------------------
+
+func (a *horizonMonitorExternalAPI) handleAISSnapshot(w http.ResponseWriter, r *http.Request) {
+	if !a.requireGETOrOPTIONS(w, r) {
+		return
+	}
+
+	apiURL := strings.TrimSpace(os.Getenv("AIS_API_URL"))
+	apiKey := strings.TrimSpace(os.Getenv("AIS_API_KEY"))
+	if apiURL == "" {
+		a.writeJSON(w, http.StatusOK, map[string]any{
+			"success":    false,
+			"configured": false,
+			"error":      "AIS_API_URL not configured",
+			"items":      []any{},
+			"cached_at":  time.Now().UTC().Format(time.RFC3339),
+		}, 30*time.Second)
+		return
+	}
+
+	cacheKey := "ais:snapshot:v1"
+	if b, ok := a.cacheGet(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=60")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
+		return
+	}
+
+	headers := map[string]string{}
+	if apiKey != "" {
+		headers["Authorization"] = "Bearer " + apiKey
+	}
+
+	body, _, err := a.fetch(r.Context(), apiURL, headers)
+	if err != nil {
+		a.writeJSON(w, http.StatusBadGateway, map[string]any{
+			"success":   false,
+			"error":     "AIS fetch failed",
+			"details":   err.Error(),
+			"items":     []any{},
+			"cached_at": time.Now().UTC().Format(time.RFC3339),
+		}, 30*time.Second)
+		return
+	}
+
+	items := hmAISSnapshotToItems(body)
+	out := map[string]any{
+		"success":   true,
+		"count":     len(items),
+		"items":     items,
+		"cached_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	enc, _ := json.Marshal(out)
+	a.cacheSet(cacheKey, enc, 2*time.Minute)
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(enc)
+}
+
+// hmAISSnapshotToItems normalizes AIS upstream responses into pipeline-compatible items.
+// Supports both array-of-vessels and {disruptions:[], density:[]} envelope formats.
+// Each item carries mmsi/imo, lat/lon, and metadata that extractTrackObservation expects
+// for building /track/sea/{geo}/mmsi-{id} canonical paths.
+func hmAISSnapshotToItems(body []byte) []any {
+	var vessels []map[string]any
+	if err := json.Unmarshal(body, &vessels); err == nil && len(vessels) > 0 {
+		return hmAISNormalizeVessels(vessels)
+	}
+
+	var envelope struct {
+		Disruptions []map[string]any `json:"disruptions"`
+		Density     []map[string]any `json:"density"`
+		Vessels     []map[string]any `json:"vessels"`
+		Data        []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return []any{}
+	}
+	var merged []map[string]any
+	merged = append(merged, envelope.Vessels...)
+	merged = append(merged, envelope.Data...)
+	merged = append(merged, envelope.Disruptions...)
+	merged = append(merged, envelope.Density...)
+	return hmAISNormalizeVessels(merged)
+}
+
+func hmAISNormalizeVessels(vessels []map[string]any) []any {
+	out := make([]any, 0, len(vessels))
+	for _, v := range vessels {
+		m := make(map[string]any, len(v))
+		for k, val := range v {
+			m[k] = val
+		}
+
+		// Ensure pipeline-expected keys exist via common AIS field aliases.
+		ensureAISAlias(m, "mmsi", "MMSI", "vessel_id", "ship_id")
+		ensureAISAlias(m, "imo", "IMO")
+		ensureAISAlias(m, "name", "ship_name", "vessel_name", "shipName")
+		ensureAISAlias(m, "latitude", "lat", "LAT")
+		ensureAISAlias(m, "longitude", "lon", "LON")
+		ensureAISAlias(m, "speed", "sog", "speed_knots", "velocity")
+		ensureAISAlias(m, "heading", "course", "cog", "true_track")
+		ensureAISAlias(m, "flag", "country", "flag_country")
+
+		if mmsi := asStringAny(m["mmsi"]); mmsi != "" {
+			if _, ok := m["title"]; !ok {
+				name, _ := m["name"].(string)
+				if strings.TrimSpace(name) != "" {
+					m["title"] = fmt.Sprintf("%s (MMSI %s)", name, mmsi)
+				} else {
+					m["title"] = fmt.Sprintf("Vessel MMSI %s", mmsi)
+				}
+			}
+		}
+
+		if lat, ok := m["latitude"]; ok {
+			m["lat"] = lat
+		}
+		if lon, ok := m["longitude"]; ok {
+			m["lon"] = lon
+		}
+
+		if _, ok := m["publishedAt"]; !ok {
+			if ts := asStringAny(m["timestamp"]); ts != "" {
+				m["publishedAt"] = ts
+			} else {
+				m["publishedAt"] = time.Now().UTC().Format(time.RFC3339)
+			}
+		}
+
+		out = append(out, m)
+	}
+	return out
+}
+
+// ensureAISAlias copies the first non-empty alias value into the primary key if the primary is empty.
+func ensureAISAlias(m map[string]any, primary string, aliases ...string) {
+	if v := asStringAny(m[primary]); v != "" {
+		return
+	}
+	for _, alias := range aliases {
+		if v := asStringAny(m[alias]); v != "" {
+			m[primary] = m[alias]
+			return
+		}
+	}
 }
 
 // -----------------------------

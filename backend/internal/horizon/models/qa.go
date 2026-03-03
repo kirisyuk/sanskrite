@@ -36,7 +36,14 @@ type SimulationResult struct {
 	TracePaths         []TracePath          `json:"tracePaths" firestore:"tracePaths"`
 	LeafEvidence       []LeafSignalEvidence `json:"leafEvidence" firestore:"leafEvidence"`
 	ChainImpacts       []ChainImpact        `json:"chainImpacts" firestore:"chainImpacts"`
-	VertexAlternatives []*HorizonFragment   `json:"vertexAlternatives,omitempty" firestore:"vertexAlternatives,omitempty"` // Alternative entities from Vertex AI Search
+	HighlightedEdgeIDs []string             `json:"highlightedEdgeIds,omitempty" firestore:"highlightedEdgeIds,omitempty"`
+	SeedFailures       []SeedFailure        `json:"seedFailures,omitempty" firestore:"seedFailures,omitempty"`
+}
+
+// SeedFailure records a seed hint that could not be resolved.
+type SeedFailure struct {
+	Hint   string `json:"hint" firestore:"hint"`
+	Reason string `json:"reason" firestore:"reason"`
 }
 
 // NodeImpact describes per-node impact from propagation.
@@ -93,19 +100,26 @@ type SimulationResultSummary struct {
 
 // QAAnswer is the synthesized answer with evidence and highlights.
 type QAAnswer struct {
+	// --- Business Layer (Client Facing) ---
+	ExecutiveSummary string   `json:"executiveSummary" firestore:"executiveSummary"` // One-line "TL;DR"
+	RiskLevel        string   `json:"riskLevel" firestore:"riskLevel"`               // CRITICAL, HIGH, MODERATE, LOW, NEGLIGIBLE
+	RiskScenario     string   `json:"riskScenario" firestore:"riskScenario"`         // Narrative: Cause -> Effect chain
+	Recommendations  []string `json:"recommendations" firestore:"recommendations"`   // Actionable next steps
+
+	// --- Legacy/Technical Layer (Hidden/Debug) ---
 	Text                   string            `json:"text" firestore:"text"`
 	Confidence             float64           `json:"confidence" firestore:"confidence"`
 	BusinessRelevanceScore float64           `json:"businessRelevanceScore,omitempty" firestore:"businessRelevanceScore,omitempty"` // 0-1: how well answer addresses the question
 	Evidence               []AnswerEvidence  `json:"evidence" firestore:"evidence"`
 	HighlightedNodeIDs     []string          `json:"highlightedNodeIds" firestore:"highlightedNodeIds"`
-	HighlightedEdgeIDs    []string          `json:"highlightedEdgeIds" firestore:"highlightedEdgeIds"`
+	HighlightedEdgeIDs     []string          `json:"highlightedEdgeIds" firestore:"highlightedEdgeIds"`
 	TracePaths             []TracePath       `json:"tracePaths" firestore:"tracePaths"`
 	ImpactBreakdown        []ImpactItem      `json:"impactBreakdown,omitempty" firestore:"impactBreakdown,omitempty"`
 	Alternatives           []QAAlternative   `json:"alternatives,omitempty" firestore:"alternatives,omitempty"`
-	DataGaps               []QADataGap      `json:"dataGaps,omitempty" firestore:"dataGaps,omitempty"`
-	AnswerMode             string           `json:"answerMode" firestore:"answerMode"`
-	TimeHorizon             string           `json:"timeHorizon" firestore:"timeHorizon"`
-	SimulatedAxes           []string         `json:"simulatedAxes" firestore:"simulatedAxes"`
+	DataGaps               []QADataGap       `json:"dataGaps,omitempty" firestore:"dataGaps,omitempty"`
+	AnswerMode             string            `json:"answerMode" firestore:"answerMode"`
+	TimeHorizon            string            `json:"timeHorizon" firestore:"timeHorizon"`
+	SimulatedAxes          []string          `json:"simulatedAxes" firestore:"simulatedAxes"`
 }
 
 // AnswerEvidence backs a claim in the answer.

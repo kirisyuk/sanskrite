@@ -20,6 +20,7 @@ import (
 type ScoutingJobsRepository struct {
 	agentJobsRepo *repo.AgentJobsRepository
 	onCreate      func(ctx context.Context, job *models.ScoutingJob) error
+	onComplete    func(ctx context.Context, job *models.ScoutingJob) error
 }
 
 // NewScoutingJobsRepository создает новый репозиторий
@@ -34,6 +35,20 @@ func NewScoutingJobsRepository(agentJobsRepo *repo.AgentJobsRepository) *Scoutin
 func (r *ScoutingJobsRepository) WithOnCreate(hook func(ctx context.Context, job *models.ScoutingJob) error) *ScoutingJobsRepository {
 	r.onCreate = hook
 	return r
+}
+
+// WithOnComplete installs an optional hook invoked after a job reaches terminal state.
+func (r *ScoutingJobsRepository) WithOnComplete(hook func(ctx context.Context, job *models.ScoutingJob) error) *ScoutingJobsRepository {
+	r.onComplete = hook
+	return r
+}
+
+// FireOnComplete fires the on-complete hook if installed. Called by workflow on terminal transitions.
+func (r *ScoutingJobsRepository) FireOnComplete(ctx context.Context, job *models.ScoutingJob) error {
+	if r == nil || r.onComplete == nil || job == nil {
+		return nil
+	}
+	return r.onComplete(ctx, job)
 }
 
 // Create создает новый ScoutingJob через AgentJobsRepository

@@ -2446,8 +2446,8 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
               (ring ? `, 0 0 0 3px ${ring}` : ''))),
         // Groups are real containers in Freeform/Linear pagination modes; they must allow interaction
         // (pagination buttons). Backdrop-only groups should not intercept clicks unless they contain
-        // an interactive overflow pill.
-        pointerEvents: (isBackdrop && !canToggleOverflow) ? 'none' : 'auto',
+        // an interactive overflow pill or a collapse-back button.
+        pointerEvents: (isBackdrop && !canToggleOverflow && !((data as any)?.groupBlockCollapseKey)) ? 'none' : 'auto',
         position: 'relative',
         // Allow the owner chip to sit on the border without being clipped.
         overflow: 'visible',
@@ -2877,17 +2877,20 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, maxWidth: isStackGroup ? '85%' : '70%' }}>
             {!isStackGroup && icon && <span style={{ fontSize: 12 }}>{icon}</span>}
-            <div style={{
-              fontSize: 11,
-              fontWeight: isStackGroup ? 600 : 700,
-              letterSpacing: isStackGroup ? '0.15px' : '0.5px',
-              textTransform: isStackGroup ? 'none' : 'uppercase',
-              color: titleColor,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}>
+            <div
+              title={title}
+              style={{
+                fontSize: 11,
+                fontWeight: isStackGroup ? 600 : 700,
+                letterSpacing: isStackGroup ? '0.15px' : '0.5px',
+                textTransform: isStackGroup ? 'none' : 'uppercase',
+                color: titleColor,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                minWidth: 0,
+              }}
+            >
               {title}
             </div>
             {!isStackGroup && count !== undefined && (
@@ -2944,51 +2947,67 @@ const HorizonGroupNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ dat
                 </svg>
               </button>
             )}
-            {/* Expanded business block: collapse-back to summary card */}
-            {(() => {
-              const blockCollapseKey = String((data as any)?.groupBlockCollapseKey || '').trim();
-              const blockCollapseGroupId = String((data as any)?.groupBlockCollapseGroupId || '').trim();
-              const toggleFn = (data as any)?.onToggleSubcategoryCollapse as ((gid: string, et: string, collapsed: boolean) => void) | undefined;
-              if (!blockCollapseKey || !blockCollapseGroupId || typeof toggleFn !== 'function') return null;
-              return (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    toggleFn(blockCollapseGroupId, blockCollapseKey, true);
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  aria-label="Collapse back"
-                  title="Collapse back"
-                  style={{
-                    width: 24,
-                    height: 24,
-                    position: 'absolute',
-                    right: 12,
-                    bottom: 12,
-                    borderRadius: 9,
-                    border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
-                    background: theme === 'dark' ? 'rgba(245, 158, 11, 0.28)' : 'rgba(245, 158, 11, 0.18)',
-                    color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
-                    cursor: 'pointer',
-                    pointerEvents: 'auto',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
-                    zIndex: 3,
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M15 18l-6-6 6-6" />
-                  </svg>
-                </button>
-              );
-            })()}
           </div>
         </div>
       )}
+
+      {/* Expanded business block: collapse-back to summary card.
+          Rendered as direct child of the group container (not inside the header)
+          so it has a stable position and receives pointer events reliably.
+          className="nodrag nopan" prevents ReactFlow from intercepting events. */}
+      {(() => {
+        const blockCollapseKey = String((data as any)?.groupBlockCollapseKey || '').trim();
+        const blockCollapseGroupId = String((data as any)?.groupBlockCollapseGroupId || '').trim();
+        const toggleFn = (data as any)?.onToggleSubcategoryCollapse as ((gid: string, et: string, collapsed: boolean) => void) | undefined;
+        if (!blockCollapseKey || !blockCollapseGroupId || typeof toggleFn !== 'function') return null;
+        const handleCollapse = (e: React.MouseEvent | React.PointerEvent) => {
+          e.stopPropagation();
+          e.preventDefault();
+          toggleFn(blockCollapseGroupId, blockCollapseKey, true);
+        };
+        return (
+          <div
+            className="nodrag nopan"
+            style={{
+              position: 'absolute',
+              right: 10,
+              top: 10,
+              zIndex: 10,
+              pointerEvents: 'auto',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="nodrag nopan"
+              onClick={handleCollapse}
+              onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+              onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+              aria-label="Collapse back"
+              title="Collapse back"
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 10,
+                border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(15,23,42,0.18)'}`,
+                background: theme === 'dark' ? 'rgba(245, 158, 11, 0.28)' : 'rgba(245, 158, 11, 0.18)',
+                color: theme === 'dark' ? 'rgba(255,255,255,0.88)' : 'rgba(15,23,42,0.78)',
+                cursor: 'pointer',
+                pointerEvents: 'auto',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: theme === 'dark' ? '0 8px 18px rgba(0,0,0,0.42)' : '0 8px 18px rgba(0,0,0,0.12)',
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Pagination Controls (Bottom) */}
       {hasPagination && (

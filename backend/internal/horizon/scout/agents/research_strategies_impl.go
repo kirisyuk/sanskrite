@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 
@@ -180,7 +181,7 @@ func (s *SupplyChainResearchStrategy) DomainMode() string { return taxonomy.Doma
 
 func (s *SupplyChainResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
 	if s.agent == nil || s.agent.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("supply-chain strategy is not configured")
 	}
 	prompt := s.agent.buildSupplyChainEnrichmentPrompt(input)
 	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
@@ -199,7 +200,7 @@ func (s *GovernanceResearchStrategy) DomainMode() string { return taxonomy.Domai
 
 func (s *GovernanceResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
 	if s.agent == nil || s.agent.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("governance strategy is not configured")
 	}
 	prompt := s.agent.buildGovernanceEnrichmentPrompt(input)
 	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
@@ -218,7 +219,7 @@ func (s *AssuranceResearchStrategy) DomainMode() string { return taxonomy.Domain
 
 func (s *AssuranceResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
 	if s.agent == nil || s.agent.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("assurance strategy is not configured")
 	}
 	prompt := s.agent.buildAssuranceEnrichmentPrompt(input)
 	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
@@ -237,7 +238,7 @@ func (s *MarketResearchStrategy) DomainMode() string { return taxonomy.DomainMod
 
 func (s *MarketResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
 	if s.agent == nil || s.agent.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("market strategy is not configured")
 	}
 	prompt := s.agent.buildMarketEnrichmentPrompt(input)
 	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
@@ -256,7 +257,7 @@ func (s *StrategicResearchStrategy) DomainMode() string { return taxonomy.Domain
 
 func (s *StrategicResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
 	if s.agent == nil || s.agent.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("strategic strategy is not configured")
 	}
 	prompt := s.agent.buildStrategicEnrichmentPrompt(input)
 	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
@@ -275,7 +276,7 @@ func (s *PolicyImpactResearchStrategy) DomainMode() string { return taxonomy.Dom
 
 func (s *PolicyImpactResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
 	if s.agent == nil || s.agent.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("policy-impact strategy is not configured")
 	}
 	prompt := s.agent.buildPolicyImpactEnrichmentPrompt(input)
 	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
@@ -294,7 +295,7 @@ func (s *EcosystemResearchStrategy) DomainMode() string { return taxonomy.Domain
 
 func (s *EcosystemResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
 	if s.agent == nil || s.agent.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("ecosystem strategy is not configured")
 	}
 	prompt := s.agent.buildEcosystemEnrichmentPrompt(input)
 	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
@@ -313,7 +314,7 @@ func (s *GeneralResearchStrategy) DomainMode() string { return taxonomy.DomainMo
 
 func (s *GeneralResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
 	if s.agent == nil || s.agent.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("general strategy is not configured")
 	}
 	prompt := s.agent.buildGeneralEnrichmentPrompt(input)
 	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
@@ -328,7 +329,7 @@ func (s *GeneralResearchStrategy) Enrich(ctx context.Context, input ResearchStra
 // inputFragment is used as fallback when LLM omits fragment or returns invalid structure.
 func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string, inputFragment *models.HorizonFragment) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("research agent executor is not configured")
 	}
 	verifier := ai.NewSimpleJSONVerifier()
 	task := &ai.AITask{
@@ -352,16 +353,46 @@ func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string, in
 	if err != nil {
 		return nil, err
 	}
+	// Always sanitize before unmarshal: the sanitizer normalizes field names
+	// (e.g. LLM uses "participants" instead of "nodes"), coerces types, and
+	// filters broken entries. Without this, json.Unmarshal silently produces
+	// zero-value SupplyChain structs when field names don't match tags.
+	sanitized, sanitizeErr := sanitizeResearchResultForUnmarshal(jsonData)
+	unmarshalPath := "sanitized"
+	unmarshalInput := sanitized
+	if sanitizeErr != nil {
+		unmarshalPath = "direct"
+		unmarshalInput = jsonData
+	}
 	var res researchResult
-	if err := json.Unmarshal(jsonData, &res); err != nil {
-		sanitized, sanitizeErr := sanitizeResearchResultForUnmarshal(jsonData)
-		if sanitizeErr != nil {
-			return nil, fmt.Errorf("unmarshal research result: %w", err)
-		}
-		if err2 := json.Unmarshal(sanitized, &res); err2 != nil {
+	if err := json.Unmarshal(unmarshalInput, &res); err != nil {
+		if unmarshalPath == "sanitized" {
+			// Sanitized input failed too — try raw as last resort
+			if err2 := json.Unmarshal(jsonData, &res); err2 != nil {
+				return nil, fmt.Errorf("unmarshal research result: %w (sanitize: %v)", err2, sanitizeErr)
+			}
+			unmarshalPath = "direct_fallback"
+		} else {
 			return nil, fmt.Errorf("unmarshal research result: %w", err)
 		}
 	}
+
+	// Diagnostic: log chain quality after unmarshal (before repair)
+	for i, sc := range res.SupplyChains {
+		nodesWithCP := 0
+		for _, n := range sc.Nodes {
+			if strings.TrimSpace(n.CanonicalPath) != "" {
+				nodesWithCP++
+			}
+		}
+		log.Printf("[ResearchParse] chain[%d]: nodesTotal=%d nodesWithCP=%d confidence=%.2f unmarshalPath=%s jsonBytes=%d",
+			i, len(sc.Nodes), nodesWithCP, sc.Confidence, unmarshalPath, len(jsonData))
+	}
+	if len(res.SupplyChains) == 0 {
+		rawWhat := logRawSupplyChainsFromJSON(jsonData)
+		log.Printf("[ResearchParse] 0 supply chains in response unmarshalPath=%s jsonBytes=%d raw=%s", unmarshalPath, len(jsonData), rawWhat)
+	}
+	repairSupplyChainNodePaths(res.SupplyChains)
 	out := &ResearchStrategyOutput{
 		Relations:         res.Relations,
 		SupplyChains:      res.SupplyChains,
@@ -459,13 +490,14 @@ func sanitizeResearchSupplyChains(root map[string]interface{}) {
 		if !ok {
 			continue
 		}
-		nodes := sanitizeSupplyChainNodesField(chainMap["nodes"])
+		nodes := extractNodesMultiKey(chainMap)
 		if len(nodes) == 0 {
+			logChainKeysOnEmpty(chainMap)
 			continue
 		}
 		chainMap["nodes"] = nodes
-		coerceFloatField(chainMap, "confidence", 0.5)
-		ensureStringField(chainMap, "reason")
+		coerceFloatFieldMultiKey(chainMap, 0.5, "confidence", "conf", "reliability", "score")
+		ensureStringFieldMultiKey(chainMap, "reason", "reason", "explanation", "description", "evidence")
 		if via := sanitizeStringArrayField(chainMap["transportVia"]); len(via) > 0 {
 			chainMap["transportVia"] = via
 		} else {
@@ -669,6 +701,108 @@ func coerceIndexValue(raw interface{}) (int, bool) {
 	}
 }
 
+// extractNodesMultiKey looks for the nodes array under multiple possible field names
+// that the LLM may use instead of the expected "nodes".
+func extractNodesMultiKey(chainMap map[string]interface{}) []interface{} {
+	for _, key := range []string{"nodes", "node_list", "chain_nodes", "participants", "steps", "stages", "chain", "entities", "members", "elements", "links"} {
+		if raw, ok := chainMap[key]; ok && raw != nil {
+			nodes := sanitizeSupplyChainNodesField(raw)
+			if len(nodes) > 0 {
+				return nodes
+			}
+		}
+	}
+	return nil
+}
+
+// coerceFloatFieldMultiKey looks for a float value under multiple keys and normalizes it
+// into the first key name. Used because LLM may return "confidence" as "reliability", etc.
+func coerceFloatFieldMultiKey(m map[string]interface{}, defaultVal float64, keys ...string) {
+	if len(keys) == 0 {
+		return
+	}
+	canonicalKey := keys[0]
+	for _, key := range keys {
+		if raw, ok := m[key]; ok && raw != nil {
+			if key != canonicalKey {
+				m[canonicalKey] = raw
+				delete(m, key)
+			}
+			coerceFloatField(m, canonicalKey, defaultVal)
+			return
+		}
+	}
+	m[canonicalKey] = defaultVal
+}
+
+// ensureStringFieldMultiKey looks for a string value under multiple keys and normalizes it.
+func ensureStringFieldMultiKey(m map[string]interface{}, canonicalKey string, keys ...string) {
+	for _, key := range keys {
+		if raw, ok := m[key]; ok && raw != nil {
+			if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
+				if key != canonicalKey {
+					m[canonicalKey] = s
+					delete(m, key)
+				}
+				return
+			}
+		}
+	}
+	ensureStringField(m, canonicalKey)
+}
+
+// logChainKeysOnEmpty logs the actual keys of a chain object when no nodes were found,
+// to help diagnose what field names the LLM used.
+func logChainKeysOnEmpty(chainMap map[string]interface{}) {
+	keys := make([]string, 0, len(chainMap))
+	for k := range chainMap {
+		keys = append(keys, k)
+	}
+	log.Printf("[ResearchParse] WARN: chain with 0 nodes dropped. keys=%v", keys)
+}
+
+// logRawSupplyChainsFromJSON extracts supplyChains from raw LLM JSON and returns a short
+// diagnostic string (missing|null|[]|len=N,sample=...) so logs show exactly what the LLM returned.
+func logRawSupplyChainsFromJSON(jsonData []byte) string {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(jsonData, &raw); err != nil {
+		return "parse_err"
+	}
+	v, exists := raw["supplyChains"]
+	if !exists {
+		return "missing"
+	}
+	if v == nil {
+		return "null"
+	}
+	arr, ok := v.([]interface{})
+	if !ok {
+		return fmt.Sprintf("type=%T", v)
+	}
+	if len(arr) == 0 {
+		return "[]"
+	}
+	// Log structure of first chain: keys and len(nodes/steps/etc)
+	sample := ""
+	if len(arr) > 0 {
+		if m, ok := arr[0].(map[string]interface{}); ok {
+			keys := make([]string, 0, len(m))
+			for k, val := range m {
+				if s, ok := val.([]interface{}); ok {
+					keys = append(keys, fmt.Sprintf("%s[len=%d]", k, len(s)))
+				} else {
+					keys = append(keys, k)
+				}
+			}
+			sample = strings.Join(keys, ",")
+			if len(sample) > 200 {
+				sample = sample[:200] + "..."
+			}
+		}
+	}
+	return fmt.Sprintf("len=%d first=%s", len(arr), sample)
+}
+
 func sanitizeSupplyChainNodesField(raw interface{}) []interface{} {
 	nodes := toInterfaceSlice(raw)
 	if nodes == nil {
@@ -689,7 +823,7 @@ func sanitizeSupplyChainNode(raw interface{}) map[string]interface{} {
 	switch v := raw.(type) {
 	case map[string]interface{}:
 		cp := firstStringValue(v, "canonicalPath", "canonical_path", "path")
-		name := firstStringValue(v, "name")
+		name := firstStringValue(v, "name", "step", "entity", "label", "id")
 		nodeType := firstStringValue(v, "type")
 		if cp == "" && name == "" {
 			return nil
@@ -703,8 +837,10 @@ func sanitizeSupplyChainNode(raw interface{}) map[string]interface{} {
 		if nodeType == "" {
 			nodeType = "ORGANIZATION"
 		}
-		// Normalize to runtime-supported enum (prevents drift when LLM returns "network", "group", etc.)
 		nodeType = normalizeSupplyChainNodeType(nodeType)
+		if cp == "" && name != "" {
+			cp = inferCanonicalPathFromNameAndType(name, nodeType)
+		}
 		node := map[string]interface{}{
 			"canonicalPath": cp,
 			"name":          name,
@@ -734,10 +870,12 @@ func sanitizeSupplyChainNodeString(raw string) map[string]interface{} {
 			"type":          inferSupplyChainNodeTypeFromPath(parsedPath),
 		}
 	}
+	nodeType := "ORGANIZATION"
+	cp := inferCanonicalPathFromNameAndType(s, nodeType)
 	return map[string]interface{}{
-		"canonicalPath": "",
+		"canonicalPath": cp,
 		"name":          s,
-		"type":          "ORGANIZATION",
+		"type":          nodeType,
 	}
 }
 
@@ -917,6 +1055,96 @@ func deriveNameFromCanonicalPath(cp string) string {
 	}
 	last = strings.ReplaceAll(last, "-", " ")
 	return last
+}
+
+// inferCanonicalPathFromNameAndType generates a best-effort canonical path
+// when the LLM provides a name and type but omits canonicalPath.
+// Paths use /discovered/ as the intermediate segment to signal auto-generation;
+// the downstream canonicalizer resolves them to proper stable paths.
+func inferCanonicalPathFromNameAndType(name, nodeType string) string {
+	slug := slugifyNodeName(name)
+	if slug == "" {
+		return ""
+	}
+	prefix := nodeTypeToPathPrefix(strings.ToUpper(strings.TrimSpace(nodeType)))
+	return prefix + slug
+}
+
+func nodeTypeToPathPrefix(nodeType string) string {
+	switch nodeType {
+	case "FACILITY":
+		return "/fac/discovered/"
+	case "PRODUCT":
+		return "/product/discovered/"
+	case "PROGRAM":
+		return "/program/discovered/"
+	case "MARKET":
+		return "/market/discovered/"
+	case "GEO_REGION":
+		return "/loc/discovered/"
+	case "DEPOSIT":
+		return "/deposit/discovered/"
+	case "COMMUNITY":
+		return "/community/discovered/"
+	default:
+		return "/org/discovered/"
+	}
+}
+
+func slugifyNodeName(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	if s == "" {
+		return ""
+	}
+	var buf strings.Builder
+	buf.Grow(len(s))
+	prevDash := false
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			buf.WriteRune(r)
+			prevDash = false
+		case r == ' ', r == '_', r == '.', r == ',', r == '(', r == ')', r == '&':
+			if !prevDash && buf.Len() > 0 {
+				buf.WriteByte('-')
+				prevDash = true
+			}
+		case r == '-':
+			if !prevDash && buf.Len() > 0 {
+				buf.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	result := strings.TrimRight(buf.String(), "-")
+	if len(result) > 80 {
+		result = result[:80]
+		result = strings.TrimRight(result, "-")
+	}
+	return result
+}
+
+// repairSupplyChainNodePaths fills in empty CanonicalPath fields on supply chain
+// nodes that survived direct json.Unmarshal but were returned by the LLM without
+// a canonical path. Without this repair they would be dropped by the parser.
+func repairSupplyChainNodePaths(chains []SupplyChain) {
+	for i := range chains {
+		for j := range chains[i].Nodes {
+			n := &chains[i].Nodes[j]
+			if strings.TrimSpace(n.CanonicalPath) != "" {
+				continue
+			}
+			name := strings.TrimSpace(n.Name)
+			if name == "" {
+				continue
+			}
+			nodeType := strings.TrimSpace(n.Type)
+			if nodeType == "" {
+				nodeType = "ORGANIZATION"
+			}
+			n.CanonicalPath = inferCanonicalPathFromNameAndType(name, normalizeSupplyChainNodeType(nodeType))
+		}
+	}
 }
 
 func inferSupplyChainNodeTypeFromPath(cp string) string {
@@ -1382,7 +1610,7 @@ Return ONLY valid JSON. No markdown.`, relationTypesPromptForDomainMode(taxonomy
 // Output: SupplyChains with nodes, segmentMetrics, alternatives. Called directly, not via ResearchPipeline.
 func (a *ResearchAgent) EnrichSupplyChainFull(ctx context.Context, query SupplyChainQuery) ([]SupplyChain, error) {
 	if a == nil || a.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("research agent executor not configured")
 	}
 	prompt := a.buildSupplyChainFullQueryPrompt(query)
 	out, err := a.runResearchPrompt(ctx, prompt, nil)
@@ -1437,6 +1665,230 @@ OUTPUT: Return a JSON object with "supplyChains" array. Each chain:
 
 Return ONLY valid JSON: { "supplyChains": [ { "nodes": [...], "segmentMetrics": [...], "alternatives": [...], "confidence", "reason" } ] }
 No markdown.`, intent, relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategySupplyChainsJSONContractBlock())
+}
+
+// ---------------------------------------------------------------------------
+// Supply chain refinement (patch-based)
+// ---------------------------------------------------------------------------
+
+// RefineSupplyChain sends existing chains + gap directives to LLM and returns patches.
+// existingEntities is the list of already-known canonical paths (from session graph)
+// so the LLM reuses them instead of inventing new paths for the same entities.
+func (a *ResearchAgent) RefineSupplyChain(
+	ctx context.Context,
+	chains []SupplyChain,
+	directives []RefineDirective,
+	fragment *models.HorizonFragment,
+	existingEntities []string,
+) ([]SupplyChainPatch, error) {
+	if a == nil || a.executor == nil || len(directives) == 0 {
+		return nil, nil
+	}
+	prompt := a.buildSupplyChainRefinePrompt(chains, directives, fragment, existingEntities)
+	verifier := ai.NewSimpleJSONVerifier()
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeKnowledgeSynthesis,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability:        true,
+			SearchGroundingCapability:       true,
+			InternalDataGroundingCapability: true,
+			MinCapabilityScore:              7,
+			MinContextWindow:                16000,
+			MaxOutputSize:                   16000,
+		},
+		Verifier: verifier,
+		UseCase:  "horizon.scout.supply_chain_refine",
+	}
+	result, err := a.executor.ExecuteStructuredTask(ctx, task)
+	if err != nil {
+		return nil, fmt.Errorf("supply chain refine: %w", err)
+	}
+	jsonData, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("marshal refine result: %w", err)
+	}
+	var parsed struct {
+		Patches []SupplyChainPatch `json:"patches"`
+	}
+	if err := json.Unmarshal(jsonData, &parsed); err != nil {
+		sanitized, sanitizeErr := sanitizeRefinePatchesRaw(jsonData)
+		if sanitizeErr != nil {
+			return nil, fmt.Errorf("unmarshal refine patches: %w", err)
+		}
+		if err2 := json.Unmarshal(sanitized, &parsed); err2 != nil {
+			return nil, fmt.Errorf("unmarshal refine patches after sanitize: %w", err2)
+		}
+	}
+	return sanitizeRefinePatches(parsed.Patches), nil
+}
+
+// sanitizeRefinePatchesRaw repairs type drifts in raw refine-patch JSON
+// (e.g. regulatoryFit as string instead of float64) so json.Unmarshal succeeds.
+func sanitizeRefinePatchesRaw(data []byte) ([]byte, error) {
+	var root map[string]interface{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+	patchesRaw := toInterfaceSlice(root["patches"])
+	if patchesRaw == nil {
+		return json.Marshal(root)
+	}
+	for _, pRaw := range patchesRaw {
+		pMap, ok := pRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if nodes := sanitizeSupplyChainNodesField(pMap["nodes"]); len(nodes) > 0 {
+			pMap["nodes"] = nodes
+		}
+		coerceFloatField(pMap, "confidence", 0.5)
+		if alts := sanitizeSupplyChainAlternativesField(pMap["alternatives"]); len(alts) > 0 {
+			pMap["alternatives"] = alts
+		} else {
+			delete(pMap, "alternatives")
+		}
+		if metrics := sanitizeSupplyChainSegmentMetricsField(pMap["segmentMetrics"]); len(metrics) > 0 {
+			pMap["segmentMetrics"] = metrics
+		} else {
+			delete(pMap, "segmentMetrics")
+		}
+	}
+	root["patches"] = patchesRaw
+	return json.Marshal(root)
+}
+
+// sanitizeRefinePatches repairs patch nodes: generates canonical paths from
+// name+type when missing, drops truly irrecoverable nodes, and skips
+// patches that become too short after cleanup.
+func sanitizeRefinePatches(patches []SupplyChainPatch) []SupplyChainPatch {
+	out := make([]SupplyChainPatch, 0, len(patches))
+	for _, p := range patches {
+		clean := make([]SupplyChainNode, 0, len(p.Nodes))
+		for _, n := range p.Nodes {
+			if strings.TrimSpace(n.Type) == "" {
+				n.Type = "ORGANIZATION"
+			}
+			if strings.TrimSpace(n.CanonicalPath) == "" {
+				name := strings.TrimSpace(n.Name)
+				if name == "" {
+					continue
+				}
+				n.CanonicalPath = inferCanonicalPathFromNameAndType(name, normalizeSupplyChainNodeType(n.Type))
+			}
+			if strings.TrimSpace(n.CanonicalPath) == "" {
+				continue
+			}
+			clean = append(clean, n)
+		}
+		p.Nodes = clean
+
+		switch p.PatchType {
+		case "splice":
+			if len(p.Nodes) < 3 {
+				continue
+			}
+		case "extend_upstream", "extend_downstream":
+			if len(p.Nodes) < 2 {
+				continue
+			}
+		case "alternatives":
+			if len(p.Alternatives) == 0 {
+				continue
+			}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func (a *ResearchAgent) buildSupplyChainRefinePrompt(
+	chains []SupplyChain,
+	directives []RefineDirective,
+	fragment *models.HorizonFragment,
+	existingEntities []string,
+) string {
+	chainsJSON, _ := json.MarshalIndent(chains, "", "  ")
+	directivesJSON, _ := json.MarshalIndent(directives, "", "  ")
+
+	entityContext := ""
+	if fragment != nil {
+		entityContext = fmt.Sprintf("Entity: %s (type: %s, path: %s)\n",
+			researchFragmentLabel(fragment), string(fragment.Type), fragment.CanonicalPath)
+	}
+
+	existingEntitiesBlock := buildResearchExistingEntitiesBlock(existingEntities)
+
+	return fmt.Sprintf(`You are a supply chain research agent. You are given EXISTING supply chains and a list of GAP DIRECTIVES describing specific white spots to fill.
+
+For each directive, return a PATCH — a mini supply chain that fills the gap.
+
+RULES:
+- Use ONLY these relation types: %s.
+- Entity types: %s.
+- Canonical path rules: %s
+- Nodes MUST alternate actor→product→actor→product.
+- For "splice" patches: first AND last node MUST be anchor nodes that ALREADY EXIST in the chain (copy their exact canonicalPath). Inner nodes are NEW.
+- For "extend_upstream" patches: LAST node is the existing anchor (copy its exact canonicalPath). Earlier nodes are NEW.
+- For "extend_downstream" patches: FIRST node is the existing anchor (copy its exact canonicalPath). Later nodes are NEW.
+- For "alternatives" patches: return alternatives array only (no new nodes needed).
+- Include segmentMetrics (volume, share, period) for new segments when data is available.
+- Do NOT re-create or modify existing nodes. Only add NEW information.
+- Each directive has a "suggestedPatchType" field — use it as the patchType unless you have a strong reason to choose differently.
+- CRITICAL: anchor nodes in patches MUST use the EXACT canonicalPath from the existing chains. Copy the path character-for-character.
+- For NEW nodes: if the entity matches one from the EXISTING ENTITIES list below, reuse its canonical path exactly. Do NOT invent a new path for an entity that already exists.
+
+%s
+%s
+%s
+EXISTING SUPPLY CHAINS (read-only context):
+%s
+
+GAP DIRECTIVES (fill these):
+%s
+
+Return JSON:
+{
+  "patches": [
+    {
+      "directiveIndex": 0,
+      "patchType": "splice" | "extend_upstream" | "extend_downstream" | "alternatives",
+      "nodes": [
+        {"canonicalPath": "/org/...", "name": "...", "type": "ORGANIZATION", "role": "supplier"},
+        {"canonicalPath": "/product/...", "name": "...", "type": "PRODUCT"}
+      ],
+      "segmentMetrics": [
+        {"fromNodeIndex": 0, "toNodeIndex": 1, "volume": {"value": 1000, "unit": "metric_tons_per_year", "confidence": 0.5}, "period": "2023", "confidence": 0.6}
+      ],
+      "alternatives": [],
+      "confidence": 0.7,
+      "reason": "why this patch fills the gap"
+    }
+  ]
+}
+
+%s
+
+Return ONLY valid JSON. No markdown.`,
+		relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain),
+		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain),
+		taxonomy.ExtendedCanonicalPathRulesPrompt(),
+		entityContext,
+		existingEntitiesBlock,
+		researchPreferExistingEntitiesBlock(),
+		string(chainsJSON),
+		string(directivesJSON),
+		strategySupplyChainsJSONContractBlock(),
+	)
+}
+
+func researchFragmentLabel(f *models.HorizonFragment) string {
+	if f.Labels != nil {
+		if en, ok := f.Labels["en"]; ok && strings.TrimSpace(en) != "" {
+			return strings.TrimSpace(en)
+		}
+	}
+	return strings.TrimSpace(f.CanonicalPath)
 }
 
 // buildGovernanceEnrichmentPrompt builds a prompt for ownership, board, key persons, gov hierarchy (canonical types).
@@ -1546,12 +1998,12 @@ For ASSURES: add qualifiers.assurance_type = "audit" | "certification" | "regula
 Direction: assurer (source) → assuree (target). E.g. audit firm ASSURES org, certifier ASSURES org.
 If CURRENT FRAGMENT is audited/certified/inspected by X, set explicit sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = CURRENT FRAGMENT.
 Do NOT emit AUDITED_BY (legacy inverse direction assuree → assurer).
-REGULATES: regulator (source) → regulated entity (target).
+REGULATES: regulator (source) → regulated entity (target). JURISDICTION RULE: use only for domestic regulatory oversight within the regulator's own jurisdiction. For sanctions, trade restrictions, or extra-territorial enforcement against foreign entities use CONTROLS_ACCESS or IMPOSES_CONDITION instead.
 
 WHAT TO FIND (prioritize completeness):
 1. External audit: Who audits this org/facility? ASSURES(assurance_type:audit) from auditor to org. Include audit firm legal name.
 2. Certifications: ISO, sector-specific (e.g. FDA approval, mining license, banking license). ASSURES(assurance_type:certification). Certifier → org.
-3. Regulatory oversight: Which regulators oversee this entity? REGULATES (regulator→entity). Or ASSURES(assurance_type:regulatory) when regulator grants license/approval.
+3. Regulatory oversight: Which domestic regulators oversee this entity within their jurisdiction? REGULATES (regulator→entity). Or ASSURES(assurance_type:regulatory) when regulator grants license/approval. For foreign sanctions or extra-territorial restrictions use CONTROLS_ACCESS.
 4. Inspections: ASSURES(assurance_type:inspection) for inspection bodies.
 5. Return assurers (audit firms, certifiers, regulators) that should be explored further (child jobs will recurse).
 
@@ -1604,7 +2056,7 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
   - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
   - targetCanonicalPath MUST NOT start with /domain/.
-  - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES.
+  - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
 - HAS_MARKET_SEGMENT direction is parent-market -> child-market (segment).
   - source and target MUST both be MARKET paths (/market/...).
   - Ideal rule: child path = parent path + exactly one segment (e.g. /market/sa/finance -> /market/sa/finance/banking; /market/global/technology -> /market/global/technology/semiconductors).
@@ -1724,9 +2176,9 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
 - PARTICIPATES_IN direction is participant -> market.
   - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
-  - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES.
+  - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
   - When CURRENT FRAGMENT is MARKET, use explicit sourceCanonicalPath/sourceType/sourceName for participant -> THIS MARKET.
-- REGULATES/ADMINISTERS must originate from regulator/admin source (/gov/...), not from affected market/entity.
+- REGULATES/ADMINISTERS must originate from regulator/admin source (/gov/...), not from affected market/entity. REGULATES is for same-jurisdiction oversight only; for sanctions use CONTROLS_ACCESS.
 - For any relation where semantic source is not CURRENT FRAGMENT, explicit sourceCanonicalPath/sourceType/sourceName is REQUIRED.
 
 WHAT TO FIND:
@@ -1735,7 +2187,7 @@ WHAT TO FIND:
 3. Exposure links to affected segments (markets, organizations, communities, geographies).
 4. Influence channels suitable for propagation modeling (formal and indirect channels).
 5. QUANTITATIVE QUALIFIERS (CRITICAL for scenario modeling — provide best estimates even when uncertain):
-   - For REGULATES/IMPOSES_CONDITION edges: qualifiers.rate_from, qualifiers.rate_to, qualifiers.effective_date when the instrument has numeric parameters.
+   - For REGULATES/CONTROLS_ACCESS/IMPOSES_CONDITION edges: qualifiers.rate_from, qualifiers.rate_to, qualifiers.effective_date when the instrument has numeric parameters.
    - For exposure edges (to markets/orgs/communities): qualifiers.pass_through_estimate (0.0-1.0: share of cost passed downstream),
      qualifiers.elasticity_hint ("inelastic"|"unit_elastic"|"elastic"|"unknown"),
      qualifiers.tax_base_coverage ("full"|"partial"|"exempt"),
@@ -1796,7 +2248,7 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
 - PARTICIPATES_IN direction is participant -> market. source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON. target MUST be MARKET.
 - OWNS direction is owner -> owned.
 - SUBSIDIARY_OF direction is subsidiary -> parent.
-- REGULATES direction is regulator -> regulated.
+- REGULATES direction is regulator -> regulated (same-jurisdiction domestic oversight only; for sanctions/restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION).
 - INFLUENCES direction is influencer -> influenced.
 - For any relation where semantic source is not CURRENT FRAGMENT, explicit sourceCanonicalPath/sourceType/sourceName is REQUIRED.
 
@@ -1831,7 +2283,7 @@ Return ONLY valid JSON. No markdown.`, taxonomy.EntityTypesForDomainMode(taxonom
 // Builds the full impact DAG: decision points, mechanisms, affected segments.
 func (a *ResearchAgent) EnrichRegulatoryImpactFull(ctx context.Context, query RegulatoryImpactQuery) ([]DiscoveredRelation, error) {
 	if a == nil || a.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("research agent executor not configured")
 	}
 	prompt := a.buildRegulatoryImpactFullPrompt(query)
 	out, err := a.runResearchPrompt(ctx, prompt, nil)
@@ -1888,12 +2340,13 @@ CANONICAL PATH RULES:
 %s
 
 BUILD THREE LAYERS:
-1. DECISION LAYER: Government entities (GOV) --GATEKEEPS_DECISION/REGULATES--> DECISION_POINT
+1. DECISION LAYER: Government entities (GOV) --GATEKEEPS_DECISION/REGULATES(domestic only)/CONTROLS_ACCESS(sanctions)--> DECISION_POINT
 2. MECHANISM LAYER: DECISION_POINT --USES_MECHANISM--> MECHANISM; MECHANISM --APPLIES_TO--> MARKET/ORG
 3. IMPACT LAYER: MECHANISM --IMPOSES_CONDITION/INFLUENCES--> affected segments/organizations
+Note: use REGULATES only for domestic jurisdictional authority. For sanctions, trade bans, or extra-territorial restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION.
 
 QUANTITATIVE QUALIFIERS (CRITICAL):
-- For REGULATES/IMPOSES_CONDITION: qualifiers.rate_from, qualifiers.rate_to, qualifiers.effective_date
+- For REGULATES/CONTROLS_ACCESS/IMPOSES_CONDITION: qualifiers.rate_from, qualifiers.rate_to, qualifiers.effective_date
 - For exposure edges: qualifiers.pass_through_estimate (0.0-1.0), qualifiers.elasticity_hint, qualifiers.sector_sensitivity
 - For INFLUENCES: qualifiers.channel_type, qualifiers.lag_quarters, qualifiers.observability
 %s
@@ -1915,7 +2368,7 @@ Return ONLY valid JSON. No markdown.`, intent, strings.TrimSpace(query.Reason), 
 // Builds ownership trees, control layers, and board/people structures.
 func (a *ResearchAgent) EnrichGovernanceFull(ctx context.Context, query GovernanceQuery) ([]DiscoveredRelation, error) {
 	if a == nil || a.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("research agent executor not configured")
 	}
 	prompt := a.buildGovernanceFullPrompt(query)
 	out, err := a.runResearchPrompt(ctx, prompt, nil)
@@ -1998,7 +2451,7 @@ Return ONLY valid JSON. No markdown.`, intent, strings.TrimSpace(query.Reason), 
 // Discovers all significant actors and their multi-dimensional relationships.
 func (a *ResearchAgent) EnrichEcosystemFull(ctx context.Context, query EcosystemQuery) ([]DiscoveredRelation, error) {
 	if a == nil || a.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("research agent executor not configured")
 	}
 	prompt := a.buildEcosystemFullPrompt(query)
 	out, err := a.runResearchPrompt(ctx, prompt, nil)
@@ -2054,7 +2507,7 @@ DISCOVER AND MAP:
    - Ownership/Control: OWNS, SUBSIDIARY_OF, CONTROLS, INVESTS_IN
    - Competition: COMPETES_WITH
    - Cooperation: PARTNERS_WITH
-   - Regulation: REGULATES
+   - Regulation: REGULATES (domestic jurisdiction), CONTROLS_ACCESS (sanctions/restrictions)
    - Influence: INFLUENCES
    - Market: PARTICIPATES_IN
    - Geographic: LOCATED_IN, OPERATES_IN
@@ -2078,7 +2531,7 @@ Return ONLY valid JSON. No markdown.`, intent, strings.TrimSpace(query.Reason), 
 // Discovers zones across condition types (military_conflict, natural_disaster, etc.) for the given geo.
 func (a *ResearchAgent) EnrichAffectedZoneFull(ctx context.Context, query AffectedZoneQuery) ([]DiscoveredRelation, error) {
 	if a == nil || a.executor == nil {
-		return nil, nil
+		return nil, fmt.Errorf("research agent executor not configured")
 	}
 	prompt := a.buildAffectedZoneFullPrompt(query)
 	out, err := a.runResearchPrompt(ctx, prompt, nil)
@@ -2197,7 +2650,7 @@ type HolisticResearchInput struct {
 // in the supply-chain domain context.
 func (a *ResearchAgent) EnrichHolisticSupplyChain(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil || input.Fragment == nil {
-		return nil, nil
+		return nil, fmt.Errorf("holistic supply-chain research input is incomplete")
 	}
 	frag := input.Fragment
 	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
@@ -2222,7 +2675,16 @@ ENTITY TYPES: %s
 %s
 %s
 
-Return JSON: {"fragment": {partial fields to merge}, "relations": [...], "supplyChains": [...]}
+Return JSON object:
+{
+  "fragment": { partial fields to merge },
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?" } ],
+  "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"? } ], "confidence", "reason", "transportVia"?: ["/fac/port/...", "/fac/terminal/..."] } ]
+}
+Nodes MUST alternate actor→product. Include FACILITY where transformation happens (product→facility→product).
+
+%s
+
 Return ONLY valid JSON. No markdown.`,
 		input.OriginalQuery,
 		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
@@ -2230,14 +2692,15 @@ Return ONLY valid JSON. No markdown.`,
 		relationTypesPromptForDomainMode(taxonomy.DomainModeSupplyChain),
 		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain),
 		taxonomy.ExtendedCanonicalPathRulesPrompt(),
-		researchPreferExistingEntitiesBlock())
+		researchPreferExistingEntitiesBlock(),
+		strategySupplyChainsJSONContractBlock())
 	return a.runResearchPrompt(ctx, prompt, input.Fragment)
 }
 
 // EnrichHolisticEcosystem performs domain-specific holistic research for ecosystem context.
 func (a *ResearchAgent) EnrichHolisticEcosystem(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil || input.Fragment == nil {
-		return nil, nil
+		return nil, fmt.Errorf("holistic ecosystem research input is incomplete")
 	}
 	frag := input.Fragment
 	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
@@ -2276,7 +2739,7 @@ Return ONLY valid JSON. No markdown.`,
 // EnrichHolisticGovernance performs domain-specific holistic research for governance context.
 func (a *ResearchAgent) EnrichHolisticGovernance(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil || input.Fragment == nil {
-		return nil, nil
+		return nil, fmt.Errorf("holistic governance research input is incomplete")
 	}
 	frag := input.Fragment
 	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
@@ -2315,7 +2778,7 @@ Return ONLY valid JSON. No markdown.`,
 // EnrichHolisticRegulatory performs domain-specific holistic research for regulatory impact context.
 func (a *ResearchAgent) EnrichHolisticRegulatory(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil || input.Fragment == nil {
-		return nil, nil
+		return nil, fmt.Errorf("holistic regulatory research input is incomplete")
 	}
 	frag := input.Fragment
 	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
@@ -2354,7 +2817,7 @@ Return ONLY valid JSON. No markdown.`,
 // EnrichHolisticMarket performs domain-specific holistic research for market context.
 func (a *ResearchAgent) EnrichHolisticMarket(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil || input.Fragment == nil {
-		return nil, nil
+		return nil, fmt.Errorf("holistic market research input is incomplete")
 	}
 	frag := input.Fragment
 	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
@@ -2393,7 +2856,7 @@ Return ONLY valid JSON. No markdown.`,
 // EnrichHolisticStrategic performs domain-specific holistic research for strategic context.
 func (a *ResearchAgent) EnrichHolisticStrategic(ctx context.Context, input HolisticResearchInput) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil || input.Fragment == nil {
-		return nil, nil
+		return nil, fmt.Errorf("holistic strategic research input is incomplete")
 	}
 	frag := input.Fragment
 	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
@@ -2432,7 +2895,7 @@ Return ONLY valid JSON. No markdown.`,
 // EnrichQueryContextual performs query-contextualized research (Level 2).
 func (a *ResearchAgent) EnrichQueryContextual(ctx context.Context, frag *models.HorizonFragment, originalQuery string) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil || frag == nil {
-		return nil, nil
+		return nil, fmt.Errorf("query-contextual research input is incomplete")
 	}
 	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
 	prompt := fmt.Sprintf(`You are an analytical research agent enriching entity data.
@@ -2464,7 +2927,7 @@ Return ONLY valid JSON. No markdown.`,
 // EnrichEntityTypeHolistic performs entity-type-specific comprehensive research (Level 3).
 func (a *ResearchAgent) EnrichEntityTypeHolistic(ctx context.Context, frag *models.HorizonFragment) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil || frag == nil {
-		return nil, nil
+		return nil, fmt.Errorf("entity-type holistic research input is incomplete")
 	}
 	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
 	focusAreas := entityTypeHolisticFocusAreas(frag.Type)

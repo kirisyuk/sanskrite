@@ -25,6 +25,8 @@ const (
 	EntityTypeMechanism             EntityTypeKey = "MECHANISM"
 	EntityTypeDomain                EntityTypeKey = "DOMAIN"
 	EntityTypeAffectedZone          EntityTypeKey = "AFFECTED_ZONE"
+	EntityTypeSupplyLink            EntityTypeKey = "SUPPLY_LINK"
+	EntityTypeTrack                 EntityTypeKey = "TRACK"
 	EntityTypeGeneral               EntityTypeKey = "GENERAL"
 )
 

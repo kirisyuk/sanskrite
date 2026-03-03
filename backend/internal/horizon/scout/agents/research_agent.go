@@ -697,8 +697,10 @@ Choose relationType to match the CORRECT semantic direction:
 -  Clarification: physical/geographic location only (HQ, plant site, office presence).
 - OPERATES_IN: source operates in target (source MUST be ORGANIZATION or PERSON, target MUST be GEO_REGION or FACILITY or DEPOSIT).
 -  Clarification: operational activity or facility operation; not just a registered address.
-- REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
--  Clarification: formal authority imposing rules/compliance (government or regulator), not soft influence.
+- REGULATES: source regulates target (source MUST be ORGANIZATION — only orgs can regulate).
+   JURISDICTION RULE: REGULATES means ongoing domestic regulatory oversight within the regulator's own jurisdiction (e.g., SEC regulates US-listed companies, BaFin regulates German banks).
+   Do NOT use REGULATES for sanctions, trade restrictions, or extra-territorial enforcement against foreign entities. For those, use CONTROLS_ACCESS or IMPOSES_CONDITION instead.
+   Example: US Treasury OFAC → Iranian company = CONTROLS_ACCESS (sanctions), NOT REGULATES.
 - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
   Clarification: ownership flows from the higher/parent entity to the lower/subordinate entity in the corporate hierarchy.
   Use OWNS only when the source is the true owner/controller of the target (parent → subsidiary, owner → asset).
@@ -754,7 +756,7 @@ Choose relationType to match the CORRECT semantic direction:
   - If THIS FRAGMENT is MARKET, you may still emit PARTICIPATES_IN relations to player entities; backend will reverse the edge direction.
   - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
 - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET).
-  Exception: GOV entities (/gov/...) may use REGULATES, CONTROLS_ACCESS, or INFLUENCES toward MARKET targets.
+  Exception: GOV entities (/gov/...) may use REGULATES (domestic regulatory oversight only), CONTROLS_ACCESS (sanctions, restrictions), or INFLUENCES toward MARKET targets.
   Never use OPERATES_IN, DEPENDS_ON, CONSUMES, or other non-market types between regular ORGANIZATION and MARKET.
   If leadership is known, keep relationType=PARTICIPATES_IN and set qualifiers.marketRole = "leader" | "dominant" (plus market_share metric when available).
 
@@ -801,7 +803,7 @@ These edge types have strict direction rules. Use sourceCanonicalPath when THIS 
     - targetCanonicalPath = THIS FRAGMENT's path
 
 %s
-- ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES.
+- ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight only), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
 - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
   DOMAIN targets are allowed only for DOMAIN scaffold relations (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, RELATED_DOMAIN, BROADENS_TO, NARROWS_TO, AFFECTS, DEPENDS_ON with DOMAIN source).
 

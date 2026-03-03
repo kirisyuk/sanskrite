@@ -451,6 +451,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - CONTROLS: authority without clear equity ownership (state control, voting rights, contractual control). Do NOT use for formal regulation (REGULATES) or ownership (OWNS).
 	  - FOUNDED: historical origin event; does NOT imply ongoing ownership or control.
 	  - INFLUENCES: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
+	  - REGULATES: domestic jurisdictional oversight only (regulator oversees entities within its own jurisdiction). If a government body targets a FOREIGN entity (different country in canonical path), this is NOT REGULATES — it is CONTROLS_ACCESS (sanctions, trade restrictions) or IMPOSES_CONDITION. Flag cross-jurisdiction REGULATES as missingInfo.
 	- If the entity is an Organization, Facility, or Government body (/org/, /fac/, /gov/):
 	- If no assurance/audit is present (ASSURES), add a question:
 	    - "Who provides external assurance to <org>? Auditor, certifier, or regulator. Use ASSURES(assurance_type:audit|certification|regulatory|inspection). Provide assurer and source."

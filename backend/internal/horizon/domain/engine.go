@@ -14,6 +14,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	telemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetrycollector"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
@@ -33,10 +34,12 @@ type FragmentsReader interface {
 
 type EdgesReader interface {
 	Get(ctx context.Context, id string) (*models.DependencyEdge, error)
+	GetMany(ctx context.Context, ids []string) (map[string]*models.DependencyEdge, error)
 }
 
 type ScoutingJobsWriter interface {
 	Create(ctx context.Context, job *models.ScoutingJob) (string, error)
+	Get(ctx context.Context, id string) (*models.ScoutingJob, error)
 }
 
 type SnapshotsWriter interface {
@@ -85,6 +88,51 @@ func NewEngine(
 func (e *Engine) WithGateConfig(cfg GateConfig) *Engine {
 	e.gateConfig = cfg
 	return e
+}
+
+// RunModeDiagnostic performs a lightweight analysis: collectGraph + assembleDeterministic + Gate L1 only.
+// Skips enrichment loop and LLM gates. Returns a DomainAnswerSnapshot with deterministic signals.
+func (e *Engine) RunModeDiagnostic(ctx context.Context, in RunInput) (*models.DomainAnswerSnapshot, error) {
+	if e == nil {
+		return nil, fmt.Errorf("domain engine is nil")
+	}
+	if in.Job == nil {
+		return nil, fmt.Errorf("run input job is nil")
+	}
+	contract := normalizeContract(in.Contract, in.Job)
+	if strings.TrimSpace(contract.ContractType) == "" {
+		return nil, fmt.Errorf("contractType is required")
+	}
+	domainID := domainIDFromContract(contract, in.Job)
+	expectations := generateCrossFacetExpectations(contract)
+
+	graph := e.collectGraph(ctx, in.Job, contract)
+	if len(graph.NodesByID) == 0 {
+		return nil, fmt.Errorf("diagnostic: no nodes in graph for lens %s", strings.TrimSpace(in.Job.LensID))
+	}
+
+	snapshot := e.assembleDeterministic(in.Job, contract, domainID, expectations, graph)
+	l1 := e.evaluateGateL1(contract, expectations, snapshot, graph)
+	failedIDs := make([]string, 0)
+	for _, c := range l1.Checks {
+		if c.Status == "fail" {
+			failedIDs = append(failedIDs, c.CheckID)
+		}
+	}
+	snapshot.Gate = models.DomainGateSummary{
+		OverallStatus:   l1.OverallStatus,
+		TotalChecks:     l1.TotalChecks,
+		Passed:          l1.Passed,
+		Failed:          l1.Failed,
+		Partial:         l1.Partial,
+		Checks:          l1.Checks,
+		FailedCheckIDs:  failedIDs,
+		EvidenceCoverage: l1.Score,
+	}
+	snapshot.EnrichmentCycles = 0
+	snapshot.ReadinessStatus = models.DomainReadinessDiagnostic
+
+	return snapshot, nil
 }
 
 func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
@@ -198,14 +246,21 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 	graphTruncatedObserved := false
 	partialWaitTimeoutObserved := false
 
+	telCol := telemetry.CollectorFromContext(ctx)
 	for {
 		logDomainContract(ctx, "cycle.start", in.Job, &contract, map[string]any{
 			"domainId": domainID,
 			"cycle":    cycle,
 		})
+		if telCol != nil {
+			telCol.BeginGroup("collect_graph")
+		}
 		lastGraph = e.collectGraph(ctx, in.Job, contract)
 		if lastGraph.ArtifactsTruncated {
 			graphTruncatedObserved = true
+		}
+		if telCol != nil {
+			telCol.EndGroup()
 		}
 		logDomainContract(ctx, "cycle.graph.collected", in.Job, &contract, map[string]any{
 			"domainId":  domainID,
@@ -214,6 +269,9 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 			"edgeCount": len(lastGraph.Edges),
 			"truncated": lastGraph.ArtifactsTruncated,
 		})
+		if telCol != nil {
+			telCol.BeginGroup("assemble_deterministic")
+		}
 		snapshot := e.assembleDeterministic(in.Job, contract, domainID, expectations, lastGraph)
 		if cycle == 0 {
 			e.emit(ctx, in.Job, contract, "horizon.domain.contract.explain.started",
@@ -260,6 +318,9 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 			)
 		}
 
+		if telCol != nil {
+			telCol.EndGroup()
+		}
 		e.emit(ctx, in.Job, contract, "horizon.domain.contract.gate.started",
 			"Checking completeness",
 			fmt.Sprintf("Running Gate L1 cycle %d", cycle),
@@ -269,7 +330,13 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 				"cycle":    cycle,
 			},
 		)
+		if telCol != nil {
+			telCol.BeginGroup("gate_l1")
+		}
 		l1 := e.evaluateGateL1(contract, expectations, snapshot, lastGraph)
+		if telCol != nil {
+			telCol.EndGroup()
+		}
 		if l1.OverallStatus == "pass" {
 			e.emit(ctx, in.Job, contract, "horizon.domain.contract.gate.passed",
 				"Completeness check passed (L1)",
@@ -403,7 +470,7 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 		)
 		beforeNodes := len(lastGraph.NodesByID)
 		beforeEdges := len(lastGraph.Edges)
-		e.enqueueEnrichmentTasks(ctx, in.Job, contract, tasks, cycle+1)
+		childJobIDs := e.enqueueEnrichmentTasks(ctx, in.Job, contract, tasks, cycle+1)
 		if in.ExecuteBaseCollect != nil {
 			if err := in.ExecuteBaseCollect(ctx, in.GroundingEvidence); err != nil {
 				logDomainContract(ctx, "enrich.base_collect.error", in.Job, &contract, map[string]any{
@@ -422,7 +489,7 @@ func (e *Engine) Run(ctx context.Context, in RunInput) (*RunResult, error) {
 				})
 			}
 		}
-		afterGraph := e.awaitGraphDelta(ctx, in.Job, contract, beforeNodes, beforeEdges, cycle+1)
+		afterGraph := e.awaitGraphDelta(ctx, in.Job, contract, beforeNodes, beforeEdges, cycle+1, childJobIDs)
 		if afterGraph.ArtifactsTruncated {
 			graphTruncatedObserved = true
 		}
@@ -662,6 +729,7 @@ func (e *Engine) awaitGraphDelta(
 	job *models.ScoutingJob,
 	contract Contract,
 	beforeNodes, beforeEdges, cycle int,
+	childJobIDs []string,
 ) graphSnapshot {
 	snapshot := e.collectGraph(ctx, job, contract)
 	if len(snapshot.NodesByID) > beforeNodes || len(snapshot.Edges) > beforeEdges {
@@ -670,12 +738,42 @@ func (e *Engine) awaitGraphDelta(
 
 	startedAt := time.Now()
 	deadline := time.Now().Add(domainEnrichAwaitTimeout)
+
+	useJobPolling := len(childJobIDs) > 0 && e.scoutingJobs != nil
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			snapshot.PartialWaitTimeout = true
 			return snapshot
 		case <-time.After(domainEnrichAwaitPoll):
+		}
+
+		if useJobPolling {
+			allTerminal := true
+			for _, jid := range childJobIDs {
+				childJob, err := e.scoutingJobs.Get(ctx, jid)
+				if err != nil {
+					continue
+				}
+				st := string(childJob.Status)
+				if st != "completed" && st != "failed" && st != "partial" {
+					allTerminal = false
+					break
+				}
+			}
+			if allTerminal {
+				snapshot = e.collectGraph(ctx, job, contract)
+				logDomainContract(ctx, "enrich.await_graph_delta.jobs_terminal", job, &contract, map[string]any{
+					"cycle":    cycle,
+					"waitMs":   int64(time.Since(startedAt) / time.Millisecond),
+					"nodes":    len(snapshot.NodesByID),
+					"edges":    len(snapshot.Edges),
+					"beforeN":  beforeNodes,
+					"beforeE":  beforeEdges,
+					"childJobs": len(childJobIDs),
+				})
+				return snapshot
+			}
 		}
 
 		snapshot = e.collectGraph(ctx, job, contract)
@@ -795,29 +893,37 @@ func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, cont
 			}
 		}
 	}
-	edgeReadErrors := 0
-	for _, edgeID := range edgeIDs {
-		edge, err := e.edges.Get(ctx, edgeID)
+	if len(edgeIDs) > 0 {
+		edgesByID, err := e.edges.GetMany(ctx, edgeIDs)
 		if err != nil {
-			edgeReadErrors++
-			continue
+			logDomainContract(ctx, "collect.edges.error", job, &contract, map[string]any{
+				"edgeIdCount": len(edgeIDs),
+				"error":       err.Error(),
+			})
 		}
-		if edge == nil {
-			continue
+		if edgesByID == nil {
+			edgesByID = map[string]*models.DependencyEdge{}
 		}
-		if edge.SourceFragmentID == "" || edge.TargetFragmentID == "" {
-			continue
+		for _, edgeID := range edgeIDs {
+			edge := edgesByID[strings.TrimSpace(edgeID)]
+			if edge == nil {
+				continue
+			}
+			if edge.SourceFragmentID == "" || edge.TargetFragmentID == "" {
+				continue
+			}
+			if out.NodesByID[edge.SourceFragmentID] == nil || out.NodesByID[edge.TargetFragmentID] == nil {
+				continue
+			}
+			out.Edges = append(out.Edges, edge)
 		}
-		if out.NodesByID[edge.SourceFragmentID] == nil || out.NodesByID[edge.TargetFragmentID] == nil {
-			continue
+		missing := len(edgeIDs) - len(edgesByID)
+		if missing > 0 {
+			logDomainContract(ctx, "collect.edges.missing", job, &contract, map[string]any{
+				"edgeIdCount": len(edgeIDs),
+				"missing":     missing,
+			})
 		}
-		out.Edges = append(out.Edges, edge)
-	}
-	if edgeReadErrors > 0 {
-		logDomainContract(ctx, "collect.edges.error", job, &contract, map[string]any{
-			"edgeReadErrors": edgeReadErrors,
-			"edgeIdCount":    len(edgeIDs),
-		})
 	}
 	fallbackFragmentErrors := 0
 	if len(out.NodesByID) == 0 && len(contract.FirstOrderEntities) > 0 && e.fragments != nil {
@@ -2168,14 +2274,15 @@ func priorityRank(p string) int {
 	}
 }
 
-func (e *Engine) enqueueEnrichmentTasks(ctx context.Context, parent *models.ScoutingJob, contract Contract, tasks []EnrichmentTask, cycle int) {
+func (e *Engine) enqueueEnrichmentTasks(ctx context.Context, parent *models.ScoutingJob, contract Contract, tasks []EnrichmentTask, cycle int) []string {
 	if e.scoutingJobs == nil || parent == nil {
 		logDomainContract(ctx, "enrich.enqueue.skipped", parent, &contract, map[string]any{
 			"reason": "missing_scouting_jobs_or_parent",
 			"cycle":  cycle,
 		})
-		return
+		return nil
 	}
+	var createdJobIDs []string
 	maxJobs := 8
 	for i, task := range tasks {
 		if i >= maxJobs {
@@ -2260,6 +2367,7 @@ func (e *Engine) enqueueEnrichmentTasks(ctx context.Context, parent *models.Scou
 			})
 			continue
 		}
+		createdJobIDs = append(createdJobIDs, strings.TrimSpace(jobID))
 		logDomainContract(ctx, "enrich.enqueue.ok", parent, &contract, map[string]any{
 			"cycle":      cycle,
 			"targetPath": targetPath,
@@ -2268,6 +2376,7 @@ func (e *Engine) enqueueEnrichmentTasks(ctx context.Context, parent *models.Scou
 			"childJobId": strings.TrimSpace(jobID),
 		})
 	}
+	return createdJobIDs
 }
 
 type explanatoryUnitResponse struct {

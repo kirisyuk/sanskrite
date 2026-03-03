@@ -8,6 +8,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
+	telemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetrycollector"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
@@ -56,6 +57,7 @@ const (
 	stageEntityPersistence            = "entity_persistence"
 	stageEntityRelationMaterialize    = "relation_materialization"
 	stageEntitySupplyChainMaterialize = "supply_chain_materialization"
+	stageEntitySupplyChainRefine      = "supply_chain_refine"
 
 	stageDomainFragmentUpsert      = "domain_fragment_upsert"
 	stageDomainRelationMaterialize = "domain_relation_materialization"
@@ -134,6 +136,7 @@ func pipelineStageOrder(pipelineName string) []string {
 			stageEntityExtraction,
 			stageCritic,
 			stageEntityResearch,
+			stageEntitySupplyChainRefine,
 			stageRevalidation,
 			stageEntityPersistence,
 			stageEntityRelationMaterialize,
@@ -166,6 +169,8 @@ func normalizePipelineStage(stage string) string {
 		return stageCritic
 	case stageResearch, stageEntityResearch:
 		return stageResearch
+	case stageEntitySupplyChainRefine:
+		return stageEntitySupplyChainRefine
 	case stageRevalidation, stageEntityRevalidation:
 		return stageRevalidation
 	case stageMaterialize,
@@ -1041,5 +1046,12 @@ func (e *ScoutEngine) finalizePipelineRun(ctx context.Context, job *models.Scout
 	}
 	e.pipelineStageComplete(ctx, job, pipelineName, stageFinalize, true, "finalize_done")
 	e.triggerScoutOutboxDispatch(job)
+
+	if e.jobTelemetryRepo != nil {
+		if telCol := telemetry.CollectorFromContext(ctx); telCol != nil {
+			_ = telCol.Flush(ctx, string(outcome), e.jobTelemetryRepo.Save)
+		}
+	}
+
 	return nil
 }

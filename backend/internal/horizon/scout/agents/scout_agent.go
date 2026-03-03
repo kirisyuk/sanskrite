@@ -447,7 +447,8 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
      For ORG/FACILITY -> ORG/FACILITY supply links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
    - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
    - OPERATES_IN: source operates in target (source MUST be ORGANIZATION or PERSON, target MUST be GEO_REGION or FACILITY or DEPOSIT).
-   - REGULATES: source regulates target (source MUST be ORGANIZATION - only orgs can regulate).
+   - REGULATES: source regulates target (source MUST be ORGANIZATION — only orgs can regulate).
+     JURISDICTION RULE: use REGULATES only for domestic regulatory oversight within the regulator's own jurisdiction. For sanctions, trade restrictions, or extra-territorial enforcement use CONTROLS_ACCESS or IMPOSES_CONDITION.
    - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
      Direction is strict: owner -> owned entity.
      If evidence says THIS FRAGMENT is owned by X, keep relationType=OWNS and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = THIS FRAGMENT.
@@ -479,7 +480,7 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - INFLUENCES: source influences target (soft power; avoid for formal authority/ownership).
    - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
    - For ORGANIZATION ↔ MARKET pairs, relationType MUST be PARTICIPATES_IN (direction: ORGANIZATION -> MARKET).
-     Exception: GOV entities (/gov/...) may use REGULATES, CONTROLS_ACCESS, or INFLUENCES toward MARKET targets.
+     Exception: GOV entities (/gov/...) may use REGULATES (domestic oversight only), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES toward MARKET targets.
      Use qualifiers.marketRole ("leader"/"dominant") + market_share metrics for leadership semantics.
    - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
    - ADMINISTERS: government/body administers subordinate GOV, PROGRAM, GEO_REGION, FACILITY, or DEPOSIT.
@@ -501,7 +502,7 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - If direction is unclear, omit the relation (do not guess).
 
    %s
-   - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES.
+   - ORGANIZATION ↔ MARKET: relationType MUST be PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
    - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/ for any relation.
 
    Each object must include:
@@ -542,7 +543,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
    - EXTRACTS_FROM: facility -> deposit.
    - LOCATED_IN/OPERATES_IN only for geo/facility anchoring.
    - PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial market participation).
-   - REGULATES: GOV entity (/gov/...) -> MARKET or ORG (regulatory oversight). NEVER use DEPENDS_ON or PARTICIPATES_IN for government regulation.
+   - REGULATES: GOV entity (/gov/...) -> MARKET or ORG (domestic regulatory oversight within the regulator's own jurisdiction only). NEVER use DEPENDS_ON or PARTICIPATES_IN for government regulation. For sanctions or extra-territorial restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION.
    - ADMINISTERS: GOV entity (/gov/...) -> subordinate GOV/PROGRAM/FACILITY (administrative hierarchy).
    - Prefer qualifiers.facet for DEPENDS_ON (communication|infrastructure|payment|distribution|logistics|supply|labor|legitimization|enforcement|regulatory).
    - For transmission dependencies add throughput_share, capacity_constraint, reroute_penalty, reroute_latency_delta_hours, reroute_cost_delta_pct when known.
@@ -568,13 +569,13 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
    - ASSURES: assurer -> assuree. Add qualifiers.assurance_type: audit|certification|regulatory|inspection.
    - For ORG->ORG ASSURES edges include qualifiers.source_role=assurer and qualifiers.target_role=assuree.
    - Do NOT emit AUDITED_BY (legacy inverse form).
-   - REGULATES: regulator -> regulated entity.
+   - REGULATES: regulator -> regulated entity (same-jurisdiction domestic oversight only; for sanctions/restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION).
 `)
 	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeMarket) {
 		b.WriteString(`   MARKET MODE:
    - PARTICIPATES_IN: entity -> market.
-   - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities may also REGULATES/CONTROLS_ACCESS/INFLUENCES market.
+   - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities may also REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES market.
    - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
    - Keep focus on market structure and placement, not supply/governance edges.
 `)
@@ -588,8 +589,8 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModePolicyImpact) {
 		b.WriteString(`   POLICY IMPACT MODE:
    - Focus on policy transmission channels from regulator/program to market/org/community.
-   - REGULATES/ADMINISTERS for formal public-policy authority.
-   - CONTROLS_ACCESS/IMPOSES_CONDITION/USES_MECHANISM/APPLIES_TO for explicit instruments and constraints.
+   - REGULATES/ADMINISTERS for formal domestic public-policy authority (same jurisdiction). For sanctions, trade bans, or extra-territorial restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION.
+   - CONTROLS_ACCESS/IMPOSES_CONDITION/USES_MECHANISM/APPLIES_TO for explicit instruments and constraints (including sanctions).
    - INFLUENCES for soft or second-order impact channels when formal authority is absent.
    - DEPENDS_ON/PARTICIPATES_IN/LOCATED_IN/OPERATES_IN for exposure context needed in impact modeling.
 `)

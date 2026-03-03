@@ -1036,6 +1036,88 @@ Acceptance:
 
 ---
 
+## Financial Data Sources & Canonicalization (future)
+
+**Контекст**: Финансовые данные — одна из ключевых осей 12-axis basis (`financial/settlement`, `financial/credit`), но сейчас нет ни одного подключённого финансового источника. Заглушки существуют (yahoo-finance, coingecko, finnhub, fred-data, etf-flows, stablecoin-markets, stock-index, eia-petroleum, macro-signals), но не реализованы. Финансовые сущности моделируются как `/org/`, что теряет специфику.
+
+**Цель**: Полноценное покрытие финансовых данных в системе — от raw data до 12-axis сигналов, с правильной канонизацией и провенансом.
+
+### Этап 1: Canonical paths для финансовых сущностей
+
+Новые namespace-ы в `fragment_path_policy.go`:
+- `/instrument/{type}/{exchange}/{ticker}` — финансовые инструменты (акции, облигации, ETF, фьючерсы)
+  - Примеры: `/instrument/equity/nasdaq/tsla`, `/instrument/commodity/nymex/cl-2026-06`, `/instrument/etf/nyse/spy`
+- `/index/{provider}/{slug}` — индексы
+  - Примеры: `/index/sp/sp500`, `/index/msci/em`, `/index/bdi/baltic-dry`
+- `/rate/{type}/{geo}/{slug}` — ставки, курсы
+  - Примеры: `/rate/interest/us/fed-funds`, `/rate/fx/eur-usd`, `/rate/cds/br/5y`
+
+Существующие namespace-ы покрывают:
+- `/org/` — банки, фонды, брокеры (остаются как организации)
+- `/market/` — финансовые рынки как сегменты
+- `/gov/` — регуляторы (ЦБ, SEC, и т.д.)
+
+### Этап 2: Источники данных (приоритизация)
+
+**Высокий приоритет** (широкое покрытие, бесплатные/дешёвые API):
+
+| Источник | Данные | Оси 12-axis | API |
+|----------|--------|-------------|-----|
+| **Yahoo Finance** | Цены, объёмы, фундаментал | `financial/settlement`, `financial/credit` | Неофициальный, бесплатный |
+| **FRED (Federal Reserve)** | Макро-индикаторы (ставки, инфляция, GDP, M2) | `financial/credit`, `info/uncertainty` | Бесплатный (API key) |
+| **EIA Petroleum** | Нефтяные запасы, добыча, цены | `physical_flow/supply`, `financial/settlement` | Бесплатный |
+| **Baltic Exchange / Freightos** | Фрахтовые индексы (BDI, FBX) | `logistics/capacity`, `financial/settlement` | Платный |
+
+**Средний приоритет** (специализированные):
+
+| Источник | Данные | Оси 12-axis | API |
+|----------|--------|-------------|-----|
+| **Finnhub** | Real-time котировки, новости, SEC filings | `financial/settlement`, `info/reputation` | Freemium |
+| **CoinGecko** | Крипто цены, объёмы, market cap | `financial/settlement` | Бесплатный |
+| **Polymarket** | Prediction markets (вероятности событий) | `info/uncertainty` | Бесплатный |
+
+**Низкий приоритет** (нишевые):
+
+| Источник | Данные | Оси 12-axis |
+|----------|--------|-------------|
+| **Stablecoin flows** | Объёмы USDT/USDC | `financial/settlement` |
+| **ETF flows** | Потоки в ETF | `financial/credit`, `physical_flow/demand` |
+
+### Этап 3: Адаптеры и Signal Pipeline
+
+Для каждого источника:
+
+1. **HTTP Client** (`internal/http/{source}_client.go`) — API wrapper с rate limiting, retry, auth
+2. **Adapter** (`internal/discovery/adapters/{source}.go`) — нормализация в `HorizonMonitorItem` с:
+   - Canonical path (e.g., Yahoo Finance TSLA → `/instrument/equity/nasdaq/tsla`)
+   - Metric values mapped to 12-axis (price change → `financial/settlement`, volatility → `info/uncertainty`)
+3. **Feed registration** — как `horizon_monitor_feed` DataSource kind
+4. **Telemetry wrapper** (`internal/horizon/telemetry/{source}_wrapper.go`) — мониторинг API вызовов
+5. **Signal extraction rules** (`SignalExtractionRule`) для автоматического маппинга финансовых событий на оси
+
+### Этап 4: EntityTypeKey и семантика
+
+- Добавить `INSTRUMENT`, `INDEX`, `RATE` в `EntityTypeKey` (`entity_semantics/types.go`)
+- Правила валидации: ticker required, exchange required для instruments
+- Связи: `INSTRUMENT --LISTED_ON--> ORG(exchange)`, `INSTRUMENT --ISSUED_BY--> ORG`, `INDEX --TRACKS--> MARKET`
+- `InferFragmentTypeFromCanonicalPath`: `/instrument/` → INSTRUMENT, `/index/` → INDEX, `/rate/` → RATE
+
+### Этап 5: Канонизация и дедупликация
+
+- `InstrumentCanonicalizer` по аналогии с `ProductCanonicalizer`:
+  - Нормализация тикеров (TSLA = Tesla Inc. equity on NASDAQ)
+  - Дедупликация: один инструмент на разных биржах — разные фрагменты, связанные `SAME_AS`
+  - Cross-listing resolution через ISIN/FIGI/CUSIP где доступно
+- Wikidata enrichment: компании имеют P414 (stock exchange), P249 (ticker symbol)
+
+### Зависимости
+
+- Требует стабильной работы HorizonMonitor feed pipeline
+- Требует `fragment_path_policy.go` обновления для новых namespace-ов
+- Не блокирует текущий QA план — финансовые вопросы покрываются через Gemini Search Grounding (best-effort)
+
+---
+
 ## Fractal Hierarchy & Scale-Invariant Contracts
 
 **Контекст**: Граф знаний обладает свойством масштабной инвариантности — узлы на разных уровнях абстракции (макро-организация ↔ подразделение ↔ объект; рынок ↔ сегмент ↔ ниша; династия ↔ ветвь ↔ персона) описываются единым интерфейсом и обрабатываются одним механизмом распространения сигналов. Сейчас это **эмерджентное** свойство (следствие единообразия `HorizonFragment`), но не зафиксировано как архитектурный принцип. Цель — сделать фрактальность **явной** через пять контрактов.

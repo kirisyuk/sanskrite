@@ -35,6 +35,10 @@ func InferFragmentTypeFromCanonicalPath(path string) models.FragmentType {
 		return models.FragmentTypeMediaChannel
 	case strings.HasPrefix(p, "/deposit/"):
 		return models.FragmentTypeDeposit
+	case strings.HasPrefix(p, "/track/"):
+		return models.FragmentTypeTrack
+	case strings.HasPrefix(p, "/supply-link/"):
+		return models.FragmentTypeSupplyLink
 	case strings.HasPrefix(p, "/community/"):
 		return models.FragmentTypeCommunity
 	case strings.HasPrefix(p, "/zone/"):

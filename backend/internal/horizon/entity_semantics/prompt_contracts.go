@@ -21,6 +21,8 @@ var promptRelationTargetTypes = []EntityTypeKey{
 	EntityTypeDecisionPoint,
 	EntityTypeMechanism,
 	EntityTypeAffectedZone,
+	EntityTypeSupplyLink,
+	EntityTypeTrack,
 }
 
 // PromptRelationTargetTypes returns the stable relation target type list used by Scout/Research prompts.

@@ -27,9 +27,36 @@ type geoObjectResponseItem struct {
 	Description   string              `json:"description,omitempty"`
 	Status        string              `json:"status,omitempty"`
 	Coordinates   *models.Coordinates `json:"coordinates,omitempty"`
-	RadiusKm      float64             `json:"radiusKm,omitempty"` // AFFECTED_ZONE: zone radius in km for circle rendering
+	RadiusKm      float64             `json:"radiusKm,omitempty"`
+	InScope       bool                `json:"inScope"`
 	CreatedAt     time.Time           `json:"createdAt"`
 	UpdatedAt     time.Time           `json:"updatedAt"`
+}
+
+func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectResponseItem, bool) {
+	if f == nil || f.Coordinates == nil {
+		return geoObjectResponseItem{}, false
+	}
+	label := strings.TrimSpace(f.Labels["en"])
+	if label == "" {
+		label = strings.TrimSpace(f.Identifiers["legalName"])
+	}
+	if label == "" {
+		label = strings.TrimSpace(f.Identifiers["shortName"])
+	}
+	return geoObjectResponseItem{
+		ID:            f.ID,
+		CanonicalPath: f.CanonicalPath,
+		Type:          f.Type,
+		Label:         label,
+		Description:   strings.TrimSpace(f.Description),
+		Status:        strings.TrimSpace(f.Governance.Status),
+		Coordinates:   f.Coordinates,
+		RadiusKm:      f.RadiusKm,
+		InScope:       inScope,
+		CreatedAt:     f.CreatedAt,
+		UpdatedAt:     f.UpdatedAt,
+	}, true
 }
 
 
@@ -136,45 +163,228 @@ func (h *HorizonHandlers) ListGeoObjects(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	fragments, err := h.service.Fragments().ListGeoBound(r.Context(), limit, pathPrefix, &filter)
-	if err != nil {
-		log.Printf("ListGeoObjects error: limit=%d pathPrefix=%q: %v", limit, pathPrefix, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	lensID := strings.TrimSpace(r.URL.Query().Get("lensId"))
+
+	var items []geoObjectResponseItem
+	if lensID != "" {
+		var err error
+		items, err = h.listGeoObjectsForLens(r.Context(), lensID, &filter)
+		if err != nil {
+			log.Printf("ListGeoObjects lens error: lensId=%s: %v", lensID, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		fragments, err := h.service.Fragments().ListGeoBound(r.Context(), limit, pathPrefix, &filter)
+		if err != nil {
+			log.Printf("ListGeoObjects error: limit=%d pathPrefix=%q: %v", limit, pathPrefix, err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		items = make([]geoObjectResponseItem, 0, len(fragments))
+		for _, f := range fragments {
+			if item, ok := fragmentToGeoItem(f, true); ok {
+				items = append(items, item)
+			}
+		}
 	}
 
-	items := make([]geoObjectResponseItem, 0, len(fragments))
-	for _, f := range fragments {
-		if f == nil || f.Coordinates == nil {
-			continue
-		}
-		label := strings.TrimSpace(f.Labels["en"])
-		if label == "" {
-			label = strings.TrimSpace(f.Identifiers["legalName"])
-		}
-		if label == "" {
-			label = strings.TrimSpace(f.Identifiers["shortName"])
-		}
-		items = append(items, geoObjectResponseItem{
-			ID:            f.ID,
-			CanonicalPath: f.CanonicalPath,
-			Type:          f.Type,
-			Label:         label,
-			Description:   strings.TrimSpace(f.Description),
-			Status:        strings.TrimSpace(f.Governance.Status),
-			Coordinates:   f.Coordinates,
-			RadiusKm:      f.RadiusKm,
-			CreatedAt:     f.CreatedAt,
-			UpdatedAt:     f.UpdatedAt,
-		})
-	}
-
+	w.Header().Set("Cache-Control", "private, max-age=60")
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"items":      items,
 		"total":      len(items),
 		"limit":      limit,
 		"pathPrefix": pathPrefix,
+		"lensId":     lensID,
 	})
+}
+
+// listGeoObjectsForLens returns geo-bound fragments for a lens: scope members + 1-hop neighbors.
+func (h *HorizonHandlers) listGeoObjectsForLens(
+	ctx context.Context,
+	lensID string,
+	filter *horizonrepo.GeoListFilter,
+) ([]geoObjectResponseItem, error) {
+	lens, err := h.service.Lens().GetLens(ctx, lensID)
+	if err != nil {
+		return nil, fmt.Errorf("lens not found: %w", err)
+	}
+
+	// --- Resolve scope paths (same pattern as cockpit) ---
+	rawScope := append([]string(nil), lens.Scope...)
+	scopePaths := make([]string, 0, len(rawScope)+8)
+	seen := map[string]struct{}{}
+	for _, s := range rawScope {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if strings.HasPrefix(s, "/query/") && lens.ResolvedQueries != nil {
+			if resolved := lens.ResolvedQueries[s]; len(resolved) > 0 {
+				for _, rp := range resolved {
+					rp = strings.TrimSpace(rp)
+					if rp == "" {
+						continue
+					}
+					if _, ok := seen[rp]; ok {
+						continue
+					}
+					seen[rp] = struct{}{}
+					scopePaths = append(scopePaths, rp)
+				}
+				continue
+			}
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		scopePaths = append(scopePaths, s)
+	}
+
+	// Canonicalize via resolver (best-effort).
+	resolvedScope := make([]string, 0, len(scopePaths))
+	if se := h.service.Scout(); se != nil {
+		if resolver := se.CanonicalPathResolver(); resolver != nil {
+			for _, p := range scopePaths {
+				ft := scout.InferFragmentTypeFromCanonicalPath(p)
+				if ft == "" {
+					ft = models.FragmentTypeOrganization
+				}
+				if rr, rerr := resolver.Resolve(ctx, p, ft); rerr == nil && rr != nil && strings.TrimSpace(rr.CanonicalPath) != "" {
+					resolvedScope = append(resolvedScope, strings.TrimSpace(rr.CanonicalPath))
+				} else {
+					resolvedScope = append(resolvedScope, p)
+				}
+			}
+		}
+	}
+	if len(resolvedScope) == 0 {
+		resolvedScope = scopePaths
+	}
+
+	// Dedupe.
+	seen2 := map[string]struct{}{}
+	outScope := make([]string, 0, len(resolvedScope))
+	for _, p := range resolvedScope {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen2[p]; ok {
+			continue
+		}
+		seen2[p] = struct{}{}
+		outScope = append(outScope, p)
+	}
+
+	// --- Fetch scope fragments ---
+	scopeFragments, err := h.service.Fragments().ListByCanonicalPaths(ctx, outScope)
+	if err != nil {
+		return nil, fmt.Errorf("scope fragments: %w", err)
+	}
+
+	scopeIDs := make(map[string]struct{}, len(scopeFragments))
+	for _, f := range scopeFragments {
+		if f != nil && f.ID != "" {
+			scopeIDs[f.ID] = struct{}{}
+		}
+	}
+
+	// --- Collect 1-hop neighbor IDs via edges ---
+	edgesRepo := h.service.Edges()
+	neighborIDs := make(map[string]struct{}, 64)
+	for _, f := range scopeFragments {
+		if f == nil || f.ID == "" {
+			continue
+		}
+		outgoing, _ := edgesRepo.ListBySource(ctx, "global", f.ID, nil, 200)
+		for _, e := range outgoing {
+			if e == nil {
+				continue
+			}
+			tid := strings.TrimSpace(e.TargetFragmentID)
+			if tid != "" {
+				if _, inScope := scopeIDs[tid]; !inScope {
+					neighborIDs[tid] = struct{}{}
+				}
+			}
+		}
+		incoming, _ := edgesRepo.ListByTarget(ctx, "global", f.ID, nil, 200)
+		for _, e := range incoming {
+			if e == nil {
+				continue
+			}
+			sid := strings.TrimSpace(e.SourceFragmentID)
+			if sid != "" {
+				if _, inScope := scopeIDs[sid]; !inScope {
+					neighborIDs[sid] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// --- Batch-fetch neighbor fragments ---
+	var neighborFragments []*models.HorizonFragment
+	if len(neighborIDs) > 0 {
+		ids := make([]string, 0, len(neighborIDs))
+		for id := range neighborIDs {
+			ids = append(ids, id)
+		}
+		nbMap, err := h.service.Fragments().GetMany(ctx, ids)
+		if err != nil {
+			log.Printf("listGeoObjectsForLens: GetMany neighbors error: %v", err)
+		} else {
+			for _, f := range nbMap {
+				neighborFragments = append(neighborFragments, f)
+			}
+		}
+	}
+
+	// --- Build response items with coordinate resolution ---
+	items := make([]geoObjectResponseItem, 0, len(scopeFragments)+len(neighborFragments))
+	addFragment := func(f *models.HorizonFragment, inScope bool) {
+		if f == nil {
+			return
+		}
+		if filter != nil {
+			if len(filter.Types) > 0 {
+				match := false
+				for _, ft := range filter.Types {
+					if ft == f.Type {
+						match = true
+						break
+					}
+				}
+				if !match {
+					return
+				}
+			}
+			if filter.CreatedAfter != nil && f.CreatedAt.Before(*filter.CreatedAfter) {
+				return
+			}
+			if filter.CreatedBefore != nil && f.CreatedAt.After(*filter.CreatedBefore) {
+				return
+			}
+		}
+		if lat, lon, ok := horizonrepo.ResolveFragmentCoordinates(f); ok {
+			f.Coordinates = &models.Coordinates{Lat: lat, Lon: lon}
+		} else {
+			return
+		}
+		if item, ok := fragmentToGeoItem(f, inScope); ok {
+			items = append(items, item)
+		}
+	}
+
+	for _, f := range scopeFragments {
+		addFragment(f, true)
+	}
+	for _, f := range neighborFragments {
+		addFragment(f, false)
+	}
+
+	return items, nil
 }
 
 // GetFragment получает HorizonFragment по ID

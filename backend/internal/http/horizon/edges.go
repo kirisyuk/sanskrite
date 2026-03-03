@@ -1065,6 +1065,46 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 		}
 	}
 
+	// includeCoordinates: resolve geo coordinates for all edge endpoints.
+	includeCoordinatesStr := strings.TrimSpace(r.URL.Query().Get("includeCoordinates"))
+	includeCoordinates := includeCoordinatesStr == "1" || strings.EqualFold(includeCoordinatesStr, "true")
+	var coordsMap map[string]*models.Coordinates
+	if includeCoordinates && len(edges) > 0 {
+		uniqIDs := make(map[string]struct{}, len(edges)*2)
+		for _, e := range edges {
+			if e == nil {
+				continue
+			}
+			if sid := strings.TrimSpace(e.SourceFragmentID); sid != "" {
+				uniqIDs[sid] = struct{}{}
+			}
+			if tid := strings.TrimSpace(e.TargetFragmentID); tid != "" {
+				uniqIDs[tid] = struct{}{}
+			}
+		}
+		ids := make([]string, 0, len(uniqIDs))
+		for id := range uniqIDs {
+			ids = append(ids, id)
+		}
+		fetchMap := neighborMap
+		if fetchMap == nil {
+			if nm, ferr := h.service.Fragments().GetMany(r.Context(), ids); ferr == nil {
+				fetchMap = nm
+			}
+		}
+		if fetchMap != nil {
+			coordsMap = make(map[string]*models.Coordinates, len(fetchMap))
+			for id, f := range fetchMap {
+				if f == nil {
+					continue
+				}
+				if f.Coordinates != nil && models.IsValidCoordinates(f.Coordinates.Lat, f.Coordinates.Lon) {
+					coordsMap[id] = f.Coordinates
+				}
+			}
+		}
+	}
+
 	response := map[string]interface{}{
 		"edges": edges,
 		"total": len(edges),
@@ -1074,6 +1114,9 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 	}
 	if includeCounts {
 		response["counts"] = counts
+	}
+	if coordsMap != nil {
+		response["coordinates"] = coordsMap
 	}
 
 	w.Header().Set("Content-Type", "application/json")

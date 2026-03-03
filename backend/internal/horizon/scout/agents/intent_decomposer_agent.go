@@ -249,7 +249,7 @@ Choose relationType to match this direction:
 - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
 - PRODUCES: source produces target (source MUST be ORGANIZATION/FACILITY/DEPOSIT; target is a PRODUCT).
   For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO (NOT PRODUCES).
-- REGULATES: source regulates target (source is typically a government/agency org).
+- REGULATES: source regulates target (domestic jurisdictional oversight only; source is typically a government/agency org regulating entities within its jurisdiction). For sanctions or extra-territorial restrictions use CONTROLS_ACCESS.
 - COMPETES_WITH / INFLUENCES: as labeled.
 - RENAMED_TO: organization legal rename (ORG -> ORG).
 - REBRANDED_TO: organization brand rename/repositioning (ORG -> ORG).
@@ -383,7 +383,7 @@ RULES:
   - canonicalPath MUST match expected prefix for targetType
   - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code
 %s
-  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES.
+  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
   - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO (not PRODUCES).
 - NEVER use "/discovered/*".
 - Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock, decompositionBlock, edgesemantics.AllEdgeTypesForPrompt(), edgesemantics.EdgeDirectionValidationRulesForPrompt())

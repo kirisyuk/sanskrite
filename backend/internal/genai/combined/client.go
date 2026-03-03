@@ -6,13 +6,31 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	cl "github.com/igorkirisyuk/sanskrite/internal/genai/claude"
 	ds "github.com/igorkirisyuk/sanskrite/internal/genai/deepseek"
 	g "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	gr "github.com/igorkirisyuk/sanskrite/internal/genai/grok"
 	oa "github.com/igorkirisyuk/sanskrite/internal/genai/openai"
+	telemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetrycollector"
 )
+
+// recordGenAITelemetry records an LLM call in the telemetry collector if present.
+func recordGenAITelemetry(ctx context.Context, provider string, resp *GenerateResponse, startedAt time.Time) {
+	if resp == nil {
+		return
+	}
+	tc := telemetry.CollectorFromContext(ctx)
+	if tc == nil {
+		return
+	}
+	durationMs := int(time.Since(startedAt).Milliseconds())
+	model := resp.Model
+	inputTokens := resp.Usage.PromptTokens
+	outputTokens := resp.Usage.OutputTokens
+	tc.RecordLLMCall(provider, model, "", inputTokens, outputTokens, 0, durationMs, false)
+}
 
 // Re-export types so HTTP layer can remain unchanged
 type Tool = g.Tool
@@ -271,57 +289,76 @@ func (c *Client) normalizeOptionsForDeepSeek(opts Options) ds.Options {
 }
 
 func (c *Client) Generate(ctx context.Context, prompt string, tools []Tool, opts Options) (*GenerateResponse, error) {
-	switch route(opts) {
+	startedAt := time.Now()
+	provider := route(opts)
+	var resp *GenerateResponse
+	var err error
+
+	switch provider {
 	case "openai":
 		if c.oa == nil {
 			return nil, errors.New("openai not configured")
 		}
-		oar, err := c.oa.Generate(ctx, prompt, toOATools(tools), c.normalizeOptionsForOpenAI(opts))
-		if err != nil {
-			return nil, err
+		oar, oaErr := c.oa.Generate(ctx, prompt, toOATools(tools), c.normalizeOptionsForOpenAI(opts))
+		if oaErr != nil {
+			return nil, oaErr
 		}
-		gr := &GenerateResponse{Content: oar.Content, ToolCalls: toGemCalls(oar.ToolCalls), IsToolStep: oar.IsToolStep, Usage: toGemUsage(oar.Usage), Model: oar.Model}
-		gr.RawJSON = oar.RawJSON
-		gr.OutputRaw = oar.OutputRaw
-		// propagate extras
-		gr.SearchQueries = oar.SearchQueries
-		gr.Sources = oar.Sources
-		return gr, nil
+		resp = &GenerateResponse{Content: oar.Content, ToolCalls: toGemCalls(oar.ToolCalls), IsToolStep: oar.IsToolStep, Usage: toGemUsage(oar.Usage), Model: oar.Model}
+		resp.RawJSON = oar.RawJSON
+		resp.OutputRaw = oar.OutputRaw
+		resp.SearchQueries = oar.SearchQueries
+		resp.Sources = oar.Sources
 	case "grok":
 		if c.gr == nil {
 			return nil, errors.New("grok not configured")
 		}
-		r, err := c.gr.Generate(ctx, prompt, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
-		if err != nil {
-			return nil, err
+		r, grErr := c.gr.Generate(ctx, prompt, toGrokTools(tools), c.normalizeOptionsForGrok(opts))
+		if grErr != nil {
+			return nil, grErr
 		}
-		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromGrok(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromGrok(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+		resp = &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromGrok(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromGrok(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}
 	case "claude":
 		if c.cl == nil {
 			return nil, errors.New("claude not configured")
 		}
-		r, err := c.cl.Generate(ctx, prompt, toClaudeTools(tools), c.normalizeOptionsForClaude(opts))
-		if err != nil {
-			return nil, err
+		r, clErr := c.cl.Generate(ctx, prompt, toClaudeTools(tools), c.normalizeOptionsForClaude(opts))
+		if clErr != nil {
+			return nil, clErr
 		}
-		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromClaude(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromClaude(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+		resp = &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromClaude(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromClaude(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}
 	case "deepseek":
 		if c.ds == nil {
 			return nil, errors.New("deepseek not configured")
 		}
-		r, err := c.ds.Generate(ctx, prompt, toDeepSeekTools(tools), c.normalizeOptionsForDeepSeek(opts))
+		r, dsErr := c.ds.Generate(ctx, prompt, toDeepSeekTools(tools), c.normalizeOptionsForDeepSeek(opts))
+		if dsErr != nil {
+			return nil, dsErr
+		}
+		resp = &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromDeepSeek(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromDeepSeek(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}
+	default:
+		goOpts := c.normalizeOptionsForGemini(opts)
+		resp, err = c.gem.Generate(ctx, prompt, tools, goOpts)
 		if err != nil {
 			return nil, err
 		}
-		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromDeepSeek(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromDeepSeek(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
-	default:
-		goOpts := c.normalizeOptionsForGemini(opts)
-		return c.gem.Generate(ctx, prompt, tools, goOpts)
+		provider = "gemini"
 	}
+
+	recordGenAITelemetry(ctx, provider, resp, startedAt)
+	return resp, nil
 }
 
 func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, jsonSchema map[string]interface{}, opts Options) (*GenerateResponse, error) {
-	if route(opts) == "openai" {
+	startedAt := time.Now()
+	provider := route(opts)
+	defer func() {
+		// Telemetry is best-effort; recover from any deferred issues.
+	}()
+	recordTelemetry := func(resp *GenerateResponse) {
+		recordGenAITelemetry(ctx, provider, resp, startedAt)
+	}
+	_ = recordTelemetry
+	if provider == "openai" {
 		// Responses API: enforce JSON by setting max tokens + instruction; simplest is to request plain text JSON.
 		if c.oa == nil {
 			return nil, errors.New("openai not configured")
@@ -340,9 +377,10 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 		gr.OutputRaw = oar.OutputRaw
 		gr.SearchQueries = oar.SearchQueries
 		gr.Sources = oar.Sources
+		recordTelemetry(gr)
 		return gr, nil
 	}
-	if route(opts) == "claude" {
+	if provider == "claude" {
 		if c.cl == nil {
 			return nil, errors.New("claude not configured")
 		}
@@ -360,9 +398,11 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 		if err != nil {
 			return nil, err
 		}
-		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromClaude(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromClaude(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+		clResp := &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromClaude(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromClaude(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}
+		recordTelemetry(clResp)
+		return clResp, nil
 	}
-	if route(opts) == "deepseek" {
+	if provider == "deepseek" {
 		if c.ds == nil {
 			return nil, errors.New("deepseek not configured")
 		}
@@ -379,16 +419,27 @@ func (c *Client) GenerateJSON(ctx context.Context, prompt string, tools []Tool, 
 		if err != nil {
 			return nil, err
 		}
-		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromDeepSeek(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromDeepSeek(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+		dsResp := &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromDeepSeek(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromDeepSeek(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}
+		recordTelemetry(dsResp)
+		return dsResp, nil
 	}
-	return c.gem.GenerateJSON(ctx, prompt, tools, jsonSchema, c.normalizeOptionsForGemini(opts))
+	gemResp, gemErr := c.gem.GenerateJSON(ctx, prompt, tools, jsonSchema, c.normalizeOptionsForGemini(opts))
+	if gemErr == nil {
+		recordTelemetry(gemResp)
+	}
+	return gemResp, gemErr
 }
 
 // GenerateJSONStrict enforces structured output using provider-native strict schema when supported.
 func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []Tool, jsonSchema map[string]interface{}, opts Options) (*GenerateResponse, error) {
-	switch route(opts) {
+	startedAt := time.Now()
+	provider := route(opts)
+	recordStrict := func(resp *GenerateResponse) {
+		recordGenAITelemetry(ctx, provider, resp, startedAt)
+	}
+	switch provider {
 	case "openai":
-		// Fallback: reuse JSON mode; OpenAI strictness handled via system instruction or tool defs.
+		// Fallback: reuse JSON mode (telemetry is recorded inside GenerateJSON).
 		return c.GenerateJSON(ctx, prompt, tools, jsonSchema, opts)
 	case "grok":
 		if c.gr == nil {
@@ -416,7 +467,9 @@ func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []
 		if err != nil {
 			return nil, err
 		}
-		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromGrok(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromGrok(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+		grokResp := &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromGrok(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromGrok(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}
+		recordStrict(grokResp)
+		return grokResp, nil
 	case "claude":
 		if c.cl == nil {
 			return nil, errors.New("claude not configured")
@@ -442,7 +495,9 @@ func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []
 		if err != nil {
 			return nil, err
 		}
-		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromClaude(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromClaude(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+		clResp := &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromClaude(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromClaude(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}
+		recordStrict(clResp)
+		return clResp, nil
 	case "deepseek":
 		if c.ds == nil {
 			return nil, errors.New("deepseek not configured")
@@ -467,9 +522,15 @@ func (c *Client) GenerateJSONStrict(ctx context.Context, prompt string, tools []
 		if err != nil {
 			return nil, err
 		}
-		return &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromDeepSeek(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromDeepSeek(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}, nil
+		dsResp := &GenerateResponse{Content: r.Content, ToolCalls: toGemToolsFromDeepSeek(r.ToolCalls), IsToolStep: r.IsToolStep, Usage: toGemUsageFromDeepSeek(r.Usage), Model: r.Model, RawJSON: r.RawJSON, OutputRaw: r.OutputRaw, SearchQueries: r.SearchQueries, Sources: r.Sources}
+		recordStrict(dsResp)
+		return dsResp, nil
 	default:
-		return c.gem.GenerateJSONStrict(ctx, prompt, tools, jsonSchema, c.normalizeOptionsForGemini(opts))
+		gemResp, gemErr := c.gem.GenerateJSONStrict(ctx, prompt, tools, jsonSchema, c.normalizeOptionsForGemini(opts))
+		if gemErr == nil {
+			recordStrict(gemResp)
+		}
+		return gemResp, gemErr
 	}
 }
 

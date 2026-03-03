@@ -455,6 +455,63 @@ func (r *DependencyEdgesRepository) CreateMany(ctx context.Context, edges []*mod
 	return ids, nil
 }
 
+// GetMany batch-retrieves edges by IDs using Firestore's GetAll (single round-trip).
+// Missing or deleted edges are silently skipped. Returns map[edgeID]*DependencyEdge.
+func (r *DependencyEdgesRepository) GetMany(ctx context.Context, ids []string) (map[string]*models.DependencyEdge, error) {
+	if r == nil || r.db == nil {
+		return nil, ErrInvalidDocument
+	}
+	if len(ids) == 0 {
+		return map[string]*models.DependencyEdge{}, nil
+	}
+
+	seen := map[string]struct{}{}
+	refs := make([]*firestore.DocumentRef, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		refs = append(refs, r.col.Doc(id))
+	}
+	if len(refs) == 0 {
+		return map[string]*models.DependencyEdge{}, nil
+	}
+
+	const batchSize = 100
+	var snaps []*firestore.DocumentSnapshot
+	for i := 0; i < len(refs); i += batchSize {
+		end := i + batchSize
+		if end > len(refs) {
+			end = len(refs)
+		}
+		batch, err := r.db.GetAll(ctx, refs[i:end])
+		if err != nil {
+			return nil, err
+		}
+		snaps = append(snaps, batch...)
+	}
+	out := make(map[string]*models.DependencyEdge, len(snaps))
+	for _, snap := range snaps {
+		if snap == nil || !snap.Exists() {
+			continue
+		}
+		var edge models.DependencyEdge
+		if err := snap.DataTo(&edge); err != nil {
+			continue
+		}
+		if edge.ID == "" {
+			edge.ID = snap.Ref.ID
+		}
+		out[edge.ID] = &edge
+	}
+	return out, nil
+}
+
 // Get получает DependencyEdge по ID
 func (r *DependencyEdgesRepository) Get(ctx context.Context, id string) (*models.DependencyEdge, error) {
 	if id == "" {

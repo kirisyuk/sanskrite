@@ -595,6 +595,8 @@ export interface LensCanvasCockpitProps {
   onToggleInspector?: () => void;
   /** QA answer highlight — nodes in impact chain (plan §10.6 X-Ray). */
   qaHighlightNodeIds?: string[];
+  /** QA answer highlight — edges in trace paths (plan §10.6 X-Ray). */
+  qaHighlightEdgeIds?: string[];
 }
 
 export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
@@ -606,6 +608,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   inspectorActive,
   onToggleInspector,
   qaHighlightNodeIds,
+  qaHighlightEdgeIds,
 }) => {
   const { theme } = React.useContext(ThemeContext);
   const isAdmin = useIsAdmin();
@@ -2589,6 +2592,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
     return out.size > 0 ? out : null;
   }, [qaHighlightNodeIds]);
+
+  const qaHighlightEdgeIdSet = React.useMemo<Set<string> | null>(() => {
+    if (!qaHighlightEdgeIds || qaHighlightEdgeIds.length === 0) return null;
+    const out = new Set<string>();
+    for (const id of qaHighlightEdgeIds) {
+      const s = String(id || '').trim();
+      if (s) out.add(s);
+    }
+    return out.size > 0 ? out : null;
+  }, [qaHighlightEdgeIds]);
 
   const domainOverlayHighlightNodeIds = React.useMemo<Set<string> | null>(() => {
     if (!domainOverlayHighlightEnabled || !activeDomainAnswer) return null;
@@ -10945,6 +10958,30 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
     }
 
+    // QA edge highlight: accent stroke + increased width for trace-path edges
+    const qaEdgeSet = qaHighlightEdgeIdSet;
+    const qaEdgeActive = !!qaEdgeSet && qaEdgeSet.size > 0;
+    if (qaEdgeActive) {
+      const accentStroke = '#3B82F6';
+      const out = edgesForDisplay.map((e) => {
+        const { baseStyle } = baseStyled(e);
+        const eid = String((e as any)?.id || '').trim();
+        const isQaEdge = !!eid && !!qaEdgeSet && qaEdgeSet.has(eid);
+        if (isQaEdge) {
+          const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+          return withLabel(e, true, {
+            ...baseStyle,
+            opacity: 1,
+            stroke: accentStroke,
+            strokeWidth: Math.max(3, strokeWidth + 1.5),
+            filter: 'drop-shadow(0 0 4px rgba(59,130,246,0.5))',
+          }, true);
+        }
+        return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
+      });
+      return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
+    }
+
     const domainHoverEdgeSet = domainOverlayHoverEdgeIdSet;
     const domainHoverNodeSet = domainOverlayHoverNodeIdSet;
     const domainHoverEdgeActive = !!domainHoverEdgeSet && domainHoverEdgeSet.size > 0;
@@ -10999,7 +11036,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
     // Default: dim all edges, hide labels
     return applyFragmentProfileDimming(applySelectedEdge(edgesForDisplay));
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, hoverHighlightMode, signalPropagationOverlay, signalPropagationEdgeIdSet, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, fragmentProfileActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode, focusMode]);
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, hoverHighlightMode, signalPropagationOverlay, signalPropagationEdgeIdSet, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, fragmentProfileActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode, focusMode, qaHighlightEdgeIdSet]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -13785,6 +13822,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setSelectedEdgeId(null);
     onEdgeSelect?.(null, null);
 
+    // Levels Two-Pane: clicking a type-column group with a collapse key triggers collapse-back.
+    if (layoutMode === 'levels' && Boolean((node.data as any)?.isGroup) && String(node.id || '').trim().startsWith('levels:lefttype:')) {
+      const blockCollapseKey = String((node.data as any)?.groupBlockCollapseKey || '').trim();
+      const blockCollapseGroupId = String((node.data as any)?.groupBlockCollapseGroupId || '').trim();
+      if (blockCollapseKey && blockCollapseGroupId) {
+        toggleSubcategoryCollapse(blockCollapseGroupId, blockCollapseKey, true);
+        return;
+      }
+    }
+
     // Levels Two-Pane: clicking an aggregated left group toggles "real edges" preview.
     // Clicking any other node clears the preview (returns to default aggregated view).
     if (layoutMode === 'levels' && Boolean((node.data as any)?.isGroup) && String(node.id || '').trim().startsWith('levels:left:')) {
@@ -13980,7 +14027,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       onNodeSelect(selectedId, nodeDataWithContext);
     }
-  }, [onNodeSelect, onEdgeSelect, edges, nodes, layoutMode, fragmentProfileActiveNodeId]);
+  }, [onNodeSelect, onEdgeSelect, edges, nodes, layoutMode, fragmentProfileActiveNodeId, toggleSubcategoryCollapse]);
 
   // Handle edge click
   const handleEdgeClick = useCallback((event: React.MouseEvent, edge: Edge) => {

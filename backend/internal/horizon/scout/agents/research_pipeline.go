@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
@@ -22,13 +23,12 @@ type ResearchPipelineRunner struct {
 // Enrich runs the appropriate strategies for the given domain modes and merges fragment updates, relations, supply chains, grounding evidence, and raw research content.
 func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrategyInput, domainModes []string) (*models.HorizonFragment, []DiscoveredRelation, []SupplyChain, *ai.GroundingEvidence, string, error) {
 	strategies := p.strategiesForModes(domainModes)
-	if len(strategies) == 0 {
-		return nil, nil, nil, nil, "", nil
-	}
-
 	workingFragment := input.Fragment
 	if workingFragment == nil {
 		workingFragment = &models.HorizonFragment{}
+	}
+	if len(strategies) == 0 {
+		return workingFragment, nil, nil, nil, "", nil
 	}
 	var allRelations []DiscoveredRelation
 	var allChains []SupplyChain
@@ -41,7 +41,7 @@ func (p *ResearchPipelineRunner) Enrich(ctx context.Context, input ResearchStrat
 			return nil, nil, nil, nil, "", err
 		}
 		if out == nil {
-			continue
+			return nil, nil, nil, nil, "", fmt.Errorf("research strategy %T returned nil output", s)
 		}
 		if out.FragmentPartial != nil {
 			p.agent.mergeFragment(workingFragment, out.FragmentPartial)

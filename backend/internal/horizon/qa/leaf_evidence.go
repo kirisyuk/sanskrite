@@ -21,10 +21,10 @@ func NewLeafEvidenceCollector(eventFactsResolver horizoninterp.EventFactsResolve
 
 // Leaf fragment types that accumulate real-world signals.
 var leafFragmentTypes = map[string]bool{
-	string(horizonmodels.FragmentTypeFacility):    true,
-	string(horizonmodels.FragmentTypeDeposit):     true,
+	string(horizonmodels.FragmentTypeFacility):     true,
+	string(horizonmodels.FragmentTypeDeposit):      true,
 	string(horizonmodels.FragmentTypeAffectedZone): true,
-	string(horizonmodels.FragmentTypeGeoRegion):   true,
+	string(horizonmodels.FragmentTypeGeoRegion):    true,
 }
 
 // Collect returns leaf evidence for the given fragments.
@@ -70,9 +70,8 @@ func (c *LeafEvidenceCollector) collectFromFragment(ctx context.Context, frag *h
 		if axis == "" {
 			continue
 		}
-		// Prefer actual/confirmed modality
-		if modality != "" && modality != "actual" && modality != "confirmed" {
-			// Still include projected etc. but we could filter
+		if modality == "" {
+			modality = inferModalityFromProvenance(mv.Provenance, mv.ObservedAt)
 		}
 		summary := ""
 		if c.eventFactsResolver != nil && len(mv.Provenance.Contributions) > 0 {
@@ -117,14 +116,36 @@ func extractAxisModalityFromMetricPath(path string) (axis, modality string) {
 		return "", ""
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 3 {
+	// /metric/{polarity}/{axis_part1}/{axis_part2}/{mechanism?}
+	if len(parts) < 4 {
+		if len(parts) == 3 {
+			if parts[0] == "metric" {
+				if mapped, ok := legacyRiskMetricAxisMap[parts[2]]; ok {
+					return mapped, ""
+				}
+			}
+			return parts[2], ""
+		}
 		return "", ""
 	}
-	// /metric/{polarity}/{axis}/{mechanism?}
-	axis = parts[2]
-	modality = ""
-	// Modality might be in mechanism or we infer from path - for now axis is enough
+	axis = parts[2] + "/" + parts[3]
 	return axis, modality
+}
+
+func inferModalityFromProvenance(prov horizonmodels.Provenance, observedAt time.Time) string {
+	method := strings.ToLower(strings.TrimSpace(prov.Method))
+	switch {
+	case method == "horizon_monitor" || method == "ais" || method == "satellite":
+		return "actual"
+	case method == "signal_propagation":
+		return "projected"
+	case method == "curated" || method == "imported":
+		return "confirmed"
+	}
+	if !observedAt.IsZero() && time.Since(observedAt) < 7*24*time.Hour {
+		return "actual"
+	}
+	return "projected"
 }
 
 func inferSignalType(metricPath string) string {

@@ -53,10 +53,15 @@ func (r *QASessionsRepository) Create(ctx context.Context, session *models.QASes
 		session.Status = models.QASessionStatusPending
 	}
 
-	doc := r.col.NewDoc()
-	session.ID = doc.ID
+	docRef := r.col.NewDoc()
+	session.ID = strings.TrimSpace(session.ID)
+	if session.ID != "" {
+		docRef = r.col.Doc(session.ID)
+	} else {
+		session.ID = docRef.ID
+	}
 
-	if _, err := doc.Set(ctx, session); err != nil {
+	if _, err := docRef.Set(ctx, session); err != nil {
 		return "", err
 	}
 	return session.ID, nil

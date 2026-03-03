@@ -5,6 +5,7 @@ import "time"
 const (
 	DomainReadinessReady         = "ready"
 	DomainReadinessReadyWithGaps = "ready_with_gaps"
+	DomainReadinessDiagnostic    = "diagnostic"
 )
 
 type DomainContractSnapshot struct {
