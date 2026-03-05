@@ -1920,7 +1920,7 @@ func locationPathFromCountryCode(cc string) string {
 	if len(cc) != 2 {
 		return ""
 	}
-	return "/loc/" + cc + "/na/na"
+	return "/loc/" + cc
 }
 
 func normalizeCountryCode(v string) string {

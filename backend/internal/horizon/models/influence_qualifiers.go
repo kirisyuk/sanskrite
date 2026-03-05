@@ -8,7 +8,7 @@ import (
 // Standard qualifier keys for influence edges
 const (
 	// QualifierVia specifies the channel/mechanism through which influence is exerted.
-	// Value: canonical path to a fragment (e.g., "/product/.../natural-gas", "/org/swift", "/fac/bosphorus-strait")
+	// Value: canonical path to a fragment (e.g., "/product/.../natural-gas", "/org/swift", "/fac/tr/bosphorus-strait")
 	QualifierVia = "via"
 
 	// QualifierMechanism describes the type of influence mechanism.

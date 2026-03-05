@@ -27,6 +27,9 @@ func TestBuildExtractionPrompt_EnablesSupplyChainModuleFromDomainMode(t *testing
 	if !strings.Contains(prompt, "DEPENDS_ON") || !strings.Contains(prompt, "SUPPLIES_TO") {
 		t.Fatalf("expected supply-chain relation taxonomy in domain guardrails")
 	}
+	if !strings.Contains(prompt, "OWNS is allowed ONLY for supply-relevant ownership") {
+		t.Fatalf("expected scoped OWNS supply-chain guidance in extraction prompt")
+	}
 	if !strings.Contains(prompt, "DOMAIN-SCOPED RELATION CATALOG (strict override)") {
 		t.Fatalf("expected strict relation catalog override in domain mode prompt")
 	}

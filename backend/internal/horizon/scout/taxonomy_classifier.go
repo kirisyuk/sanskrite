@@ -137,33 +137,11 @@ func classifyFacDeterministic(parts []string) (string, string, bool) {
 	} else if len(parts) >= 2 {
 		slug = parts[1]
 	}
-
-	switch {
-	case containsAny(slug, "pipeline", "pipe"):
-		return "/Infrastructure/Energy/Pipeline/Gas", "/Energy/Fossil_Fuels/Oil_Gas_Midstream", true
-	case containsAny(slug, "refinery", "refining"):
-		return "/Infrastructure/Manufacturing/Factory", "/Energy/Fossil_Fuels/Oil_Gas_Downstream", true
-	case containsAny(slug, "terminal", "lng-terminal", "storage", "tank"):
-		return "/Infrastructure/Logistics/Warehouse", "/Energy/Fossil_Fuels/Oil_Gas_Midstream", true
-	case containsAny(slug, "mine", "mining"):
-		return "/Infrastructure/Manufacturing/Mine", "/Materials/Mining/Industrial_Metals", true
-	case containsAny(slug, "port", "seaport", "harbor"):
-		return "/Infrastructure/Logistics/Seaport", "/Industrials/Transportation/Marine", true
-	case containsAny(slug, "airport"):
-		return "/Infrastructure/Logistics/Airport", "/Industrials/Transportation/Air_Freight", true
-	case containsAny(slug, "plant", "power-plant", "powerplant"):
-		return "/Infrastructure/Energy/PowerPlant/Thermal", "/Energy/Fossil_Fuels/Oil_Gas_Downstream", true
-	case containsAny(slug, "solar", "wind", "renewable"):
+	kind := taxonomy.FacilityKindFromSlug(slug)
+	if kind == taxonomy.FacilityKindPowerPlant && containsAny(slug, "solar", "wind", "renewable") {
 		return "/Infrastructure/Energy/PowerPlant/Renewable", "/Energy/Renewable/Solar", true
-	case containsAny(slug, "datacenter", "data-center"):
-		return "/Infrastructure/Digital/DataCenter", "/Technology/Hardware/Consumer_Electronics", true
-	case containsAny(slug, "factory", "fab", "gigafactory", "foundry"):
-		return "/Infrastructure/Manufacturing/Factory", "/Technology/Semiconductors/Manufacturing", true
-	case containsAny(slug, "substation", "grid"):
-		return "/Infrastructure/Energy/Grid/Substation", "/Energy/Renewable/Wind", true
-	default:
-		return "/Infrastructure/Manufacturing/Factory", "/Industrials/Machinery/Industrial_Automation", true
 	}
+	return taxonomy.FacilityKindToVertexEntityPath(kind), taxonomy.FacilityKindToVertexSectorPath(kind), true
 }
 
 func classifyProductDeterministic(parts []string) (string, string, bool) {

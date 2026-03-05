@@ -76,19 +76,24 @@ func TestPostProcessingPolicy_ShouldRun_Tier2(t *testing.T) {
 	}
 }
 
-func TestPostProcessingPolicy_StepCriticDisabledForSupplyChain(t *testing.T) {
-	// Critic temporarily disabled for supply chain refactor branch
+func TestPostProcessingPolicy_StepCriticDisabledForDomainPeer(t *testing.T) {
 	p := &PostProcessingPolicy{
-		PipelineTier:   0,
-		DomainModes:    []string{taxonomy.DomainModeSupplyChain},
+		PipelineTier:           0,
+		HasDomainExpansionPeer: true,
+		DomainModes:            []string{taxonomy.DomainModeSupplyChain},
 	}
 	if p.ShouldRun(StepCritic) {
-		t.Error("StepCritic should be disabled when DomainModeSupplyChain is in DomainModes")
+		t.Error("StepCritic should be disabled when HasDomainExpansionPeer is true")
 	}
-	// Without supply_chain, tier 0 should allow critic
+	for _, step := range []PostProcessingStep{StepSourcePlanning, StepResearch, StepReValidation, StepMetrics} {
+		if p.ShouldRun(step) {
+			t.Errorf("step %d should be disabled when HasDomainExpansionPeer is true", step)
+		}
+	}
+	// Without domain peer, tier 0 should allow critic
 	p2 := &PostProcessingPolicy{PipelineTier: 0, DomainModes: []string{taxonomy.DomainModeGeneral}}
 	if !p2.ShouldRun(StepCritic) {
-		t.Error("StepCritic should run for tier 0 when supply_chain not in DomainModes")
+		t.Error("StepCritic should run for tier 0 without domain peer")
 	}
 }
 

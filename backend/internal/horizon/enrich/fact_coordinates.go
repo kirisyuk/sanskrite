@@ -6,8 +6,9 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/addressvalidate"
-	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
@@ -145,14 +146,22 @@ func enrichFromGeoNames(ctx context.Context, gn ontology.GeoNamesClientInterface
 	if !strings.HasPrefix(lp, "/loc/") {
 		return false, nil
 	}
-	parts := strings.Split(strings.Trim(lp, "/"), "/")
-	if len(parts) != 4 || parts[0] != "loc" {
+	ccLower, level1, level2, ok := taxonomy.ParseLocCanonicalPath(lp)
+	if !ok {
 		return false, nil
 	}
-	cc := strings.ToUpper(strings.TrimSpace(parts[1]))
-	adm := strings.TrimSpace(parts[2])
-	city := strings.TrimSpace(parts[3])
-	if len(cc) != 2 || strings.EqualFold(city, "na") || city == "" {
+	cc := strings.ToUpper(strings.TrimSpace(ccLower))
+	if len(cc) != 2 {
+		return false, nil
+	}
+	adm := strings.TrimSpace(level1)
+	city := strings.TrimSpace(level2)
+	// For 2-level /loc/{cc}/{token}, treat token as city candidate.
+	if city == "" {
+		city = strings.TrimSpace(level1)
+		adm = ""
+	}
+	if city == "" {
 		return false, nil
 	}
 
@@ -236,7 +245,7 @@ func extractCountryFromFact(f *coremodels.OntologyFact) string {
 	if f == nil {
 		return ""
 	}
-	// From LocationPath: /loc/ir/na/na -> ir
+	// From LocationPath: /loc/ir -> ir
 	if f.LocationPath != nil {
 		lp := strings.TrimSpace(*f.LocationPath)
 		if strings.HasPrefix(lp, "/loc/") {

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 var registry = make(map[EntityTypeKey]*EntityTypeDefinition)
@@ -186,9 +187,21 @@ func defaultProfileSections() []models.ProfileSectionSpec {
 // ExtractionBlockForPath returns the type-specific extraction block (object detail).
 // Empty string if no block for this type.
 func ExtractionBlockForPath(canonicalPath string, fragmentType models.FragmentType, communityType string) string {
+	return ExtractionBlockForPathAndDomainModes(canonicalPath, fragmentType, communityType, nil)
+}
+
+// ExtractionBlockForPathAndDomainModes returns the extraction block, with supply-chain-specific overrides
+// when domain modes include supply_chain. Supply chain contract: use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO,
+// EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, HAS_MARKET_SEGMENT (no DEPENDS_ON).
+func ExtractionBlockForPathAndDomainModes(canonicalPath string, fragmentType models.FragmentType, communityType string, domainModes []string) string {
 	def := GetDefinitionByPath(canonicalPath, fragmentType, communityType)
 	if def == nil {
 		return ""
+	}
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
+		if override := supplyChainExtractionBlockOverrides[def.Key]; override != "" {
+			return override
+		}
 	}
 	return def.ExtractionBlock
 }

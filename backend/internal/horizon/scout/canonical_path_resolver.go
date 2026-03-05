@@ -168,20 +168,17 @@ func (r *CanonicalPathResolver) Resolve(
 		}
 	}
 
-	// Step 1.5: Strict GEO normalization for country-only paths.
-	// Lens/intent often provides /loc/{slug} (e.g., /loc/uae, /loc/saudi-arabia), but Horizon canonical geo is
-	// /loc/{countryAlpha2}/na/na for country-only locations.
+	// Step 1.5: Normalize GEO paths into canonical variable-depth /loc hierarchy.
 	if fragmentType == models.FragmentTypeGeoRegion {
 		if norm := normalizeGeoPathToStrict(result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
 			atomic.AddInt64(&r.geoStrictified, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps,
-				fmt.Sprintf("geo_strictify: %s -> %s", result.CanonicalPath, norm))
+				fmt.Sprintf("geo_normalize: %s -> %s", result.CanonicalPath, norm))
 			result.CanonicalPath = norm
 		}
 	}
 
 	// Step 1.55: GeoNames-backed GEO normalization/validation for /loc paths.
-	// Keep our canonical schema (/loc/{cc}/{admin1}/{city}) but verify/correct admin1/country using GeoNames.
 	if fragmentType == models.FragmentTypeGeoRegion && r.geonamesClient != nil {
 		if norm, step, confPenalty := normalizeGeoPathViaGeoNames(ctx, result.CanonicalPath, r.geonamesClient); norm != "" && norm != result.CanonicalPath {
 			atomic.AddInt64(&r.geoNamesRewrites, 1)
@@ -365,11 +362,12 @@ func (r *CanonicalPathResolver) Stats() CanonicalPathResolverStats {
 	}
 }
 
-// normalizeGeoPathViaGeoNames normalizes /loc paths using GeoNames (cache-first via the injected client).
+// normalizeGeoPathViaGeoNames normalizes /loc paths using GeoNames.
 //
 // Supported inputs:
-// - strict: /loc/{cc}/{admin1}/{city} (may correct admin1/country if a city is unambiguous)
-// - loose:  /loc/{slug} (may upgrade to strict if a city is unambiguous; country-only aliases are handled elsewhere)
+// - /loc/{country}
+// - /loc/{country}/{level1}
+// - /loc/{country}/{level1}/{level2}
 //
 // Returns:
 // - normalized path (or "" if no change)
@@ -393,7 +391,7 @@ func normalizeGeoPathViaGeoNames(ctx context.Context, path string, client coreon
 			return "", "", 0
 		}
 		// Avoid interfering with country alias normalization logic (handled earlier).
-		if len(slug) == 2 && reCountryAlpha2.MatchString(strings.ToLower(slug)) {
+		if taxonomy.IsISO2CountryCode(slug) {
 			return "", "", 0
 		}
 		// If it looks like a known country name, also skip (handled earlier).
@@ -409,62 +407,70 @@ func normalizeGeoPathViaGeoNames(ctx context.Context, path string, client coreon
 		}
 		cc := strings.ToLower(strings.TrimSpace(best.CountryCode))
 		admin := strings.ToLower(strings.TrimSpace(best.AdminCode1))
-		if admin == "" {
-			admin = "na"
-		}
 		citySlug := slugify(best.Name)
 		if citySlug == "" {
 			citySlug = slugify(cityName)
 		}
-		norm := fmt.Sprintf("/loc/%s/%s/%s", cc, admin, citySlug)
+		norm := taxonomy.GeoCanonicalPath(cc, admin, citySlug)
 		if norm != p {
 			return norm, fmt.Sprintf("geonames_city_upgrade: %s -> %s", p, norm), 0.05
 		}
 		return "", "", 0
 	}
 
-	// Strict form: /loc/{cc}/{admin1}/{city}
+	// /loc/{cc}/{level1} can be either admin or city. Try city upgrade first (non-destructive).
+	if len(parts) == 3 && taxonomy.IsISO2CountryCode(parts[1]) {
+		cc := strings.ToLower(strings.TrimSpace(parts[1]))
+		token := strings.ToLower(strings.TrimSpace(parts[2]))
+		if token == "" || token == "na" {
+			return "", "", 0
+		}
+		cityName := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(token))
+		best, ok := pickUnambiguousCityCandidate(ctx, client, cityName, cc, "")
+		if !ok || best == nil || strings.TrimSpace(best.CountryCode) == "" {
+			return "", "", 0
+		}
+		bestCC := strings.ToLower(strings.TrimSpace(best.CountryCode))
+		bestAdmin := strings.ToLower(strings.TrimSpace(best.AdminCode1))
+		bestCity := slugify(best.Name)
+		if bestCity == "" {
+			bestCity = token
+		}
+		norm := taxonomy.GeoCanonicalPath(bestCC, bestAdmin, bestCity)
+		if norm != p {
+			return norm, fmt.Sprintf("geonames_city_upgrade: %s -> %s", p, norm), 0.05
+		}
+		return "", "", 0
+	}
+
+	// Deep form: /loc/{cc}/{level1}/{level2}. Treat last segment as city candidate.
 	if len(parts) != 4 {
 		return "", "", 0
 	}
 	cc := strings.ToLower(strings.TrimSpace(parts[1]))
-	admin := strings.ToLower(strings.TrimSpace(parts[2]))
+	level1 := strings.ToLower(strings.TrimSpace(parts[2]))
 	city := strings.ToLower(strings.TrimSpace(parts[3]))
-	if cc == "" || len(cc) != 2 || !reCountryAlpha2.MatchString(cc) {
+	if !taxonomy.IsISO2CountryCode(cc) {
 		return "", "", 0
 	}
-	if admin == "" {
-		admin = "na"
-	}
-	if city == "" {
-		city = "na"
-	}
-	// No-op: country-only.
-	if admin == "na" && city == "na" {
-		return "", "", 0
-	}
-	// We only attempt GeoNames validation when city is present (non-na).
-	if city == "na" {
+	if city == "" || city == "na" {
 		return "", "", 0
 	}
 
 	cityName := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(city))
-	best, ok := pickUnambiguousCityCandidate(ctx, client, cityName, cc, admin)
+	best, ok := pickUnambiguousCityCandidate(ctx, client, cityName, cc, level1)
 	if !ok || best == nil || strings.TrimSpace(best.CountryCode) == "" {
 		return "", "", 0
 	}
 
 	bestCC := strings.ToLower(strings.TrimSpace(best.CountryCode))
 	bestAdmin := strings.ToLower(strings.TrimSpace(best.AdminCode1))
-	if bestAdmin == "" {
-		bestAdmin = "na"
-	}
 	bestCity := slugify(best.Name)
 	if bestCity == "" {
 		bestCity = city
 	}
 
-	norm := fmt.Sprintf("/loc/%s/%s/%s", bestCC, bestAdmin, bestCity)
+	norm := taxonomy.GeoCanonicalPath(bestCC, bestAdmin, bestCity)
 	if norm != p {
 		return norm, fmt.Sprintf("geonames_geo_fix: %s -> %s", p, norm), 0.05
 	}
@@ -622,13 +628,12 @@ func pickDominantByPopulation(results []coreontology.GeoNamesPlace, cityName str
 	return nil, false
 }
 
-// normalizeGeoPathToStrict converts non-strict /loc shapes into strict /loc/{cc}/{adm1}/{city},
-// applying safe country alias normalization and padding missing positions with "na".
+// normalizeGeoPathToStrict converts non-strict /loc shapes into canonical variable-depth /loc paths.
 //
 // Supported:
-// - /loc/{country}                   -> /loc/{cc}/na/na (when safe)
-// - /loc/{cc}                        -> /loc/{cc}/na/na
-// - /loc/{country}/{adm1}            -> /loc/{cc}/{adm1}/na (when safe)
+// - /loc/{country}                   -> /loc/{cc} (when safe)
+// - /loc/{cc}                        -> /loc/{cc}
+// - /loc/{country}/{level1}          -> /loc/{cc}/{level1} (when safe)
 // - /loc/{country}/{adm1}/{city}     -> /loc/{cc}/{adm1}/{city} (when safe)
 // Returns "" if no safe normalization is possible.
 func normalizeGeoPathToStrict(path string) string {
@@ -650,7 +655,7 @@ func normalizeGeoPathToStrict(path string) string {
 	// Normalize country segment (parts[1]) to ISO alpha2 when possible.
 	countryRaw := strings.TrimSpace(parts[1])
 	cc := ""
-	if len(countryRaw) == 2 && reCountryAlpha2.MatchString(strings.ToLower(countryRaw)) {
+	if taxonomy.IsISO2CountryCode(countryRaw) {
 		cc = strings.ToLower(countryRaw)
 	} else if taxonomy.IsRegionalGeoToken(countryRaw) {
 		cc = strings.ToLower(countryRaw)
@@ -670,10 +675,10 @@ func normalizeGeoPathToStrict(path string) string {
 			return ""
 		}
 		cp := GetCountryCanonicalPath(countrySlug)
-		// Expected: /loc/{cc}/na/na
+		// Expected: /loc/{cc}
 		if strings.HasPrefix(cp, "/loc/") {
 			ccParts := strings.Split(strings.Trim(cp, "/"), "/")
-			if len(ccParts) == 4 && ccParts[0] == "loc" && len(ccParts[1]) == 2 {
+			if len(ccParts) >= 2 && ccParts[0] == "loc" && len(ccParts[1]) == 2 {
 				cc = strings.ToLower(ccParts[1])
 			}
 		}
@@ -682,26 +687,17 @@ func normalizeGeoPathToStrict(path string) string {
 		}
 	}
 
-	// Strictify shape.
+	// Normalize shape.
 	switch len(parts) {
 	case 2:
-		return fmt.Sprintf("/loc/%s/na/na", cc)
+		return taxonomy.GeoCanonicalPath(cc, "", "")
 	case 3:
-		adm1 := strings.ToLower(strings.TrimSpace(parts[2]))
-		if adm1 == "" {
-			adm1 = "na"
-		}
-		return fmt.Sprintf("/loc/%s/%s/na", cc, adm1)
+		level1 := strings.ToLower(strings.TrimSpace(parts[2]))
+		return taxonomy.GeoCanonicalPath(cc, level1, "")
 	case 4:
-		adm1 := strings.ToLower(strings.TrimSpace(parts[2]))
-		city := strings.ToLower(strings.TrimSpace(parts[3]))
-		if adm1 == "" {
-			adm1 = "na"
-		}
-		if city == "" {
-			city = "na"
-		}
-		return fmt.Sprintf("/loc/%s/%s/%s", cc, adm1, city)
+		level1 := strings.ToLower(strings.TrimSpace(parts[2]))
+		level2 := strings.ToLower(strings.TrimSpace(parts[3]))
+		return taxonomy.GeoCanonicalPath(cc, level1, level2)
 	default:
 		// Unknown legacy shapes (e.g., /loc/island/fj/viti-levu) - do not touch.
 		return ""

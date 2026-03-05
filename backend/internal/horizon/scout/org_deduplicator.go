@@ -236,7 +236,7 @@ func (d *OrgDeduplicator) deduplicateOrgInner(ctx context.Context, fragment *mod
 	// Tier 0: Type normalization — is this actually a country?
 	// =========================================================================
 	// Organizations with legalName matching a known country should be treated as GEO_REGION.
-	// Example: /org/usa with legalName="United States of America" → /loc/us/na/na
+	// Example: /org/usa with legalName="United States of America" → /loc/us
 	if d.typeNormalizer != nil {
 		normResult := d.typeNormalizer.NormalizeFragmentType(fragment)
 		if normResult.ShouldNormalize && normResult.NormalizedType == models.FragmentTypeGeoRegion && normResult.MergeWithPath != "" {

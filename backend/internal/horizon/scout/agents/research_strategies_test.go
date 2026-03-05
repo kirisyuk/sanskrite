@@ -237,7 +237,7 @@ func TestModePrompts_UseUSOTRelationAllowlists(t *testing.T) {
 		{
 			name:   "supply_chain_enrichment",
 			prompt: a.buildSupplyChainEnrichmentPrompt(baseInput),
-			want:   taxonomy.SupplyChainOperationalEdgeTypesString(),
+			want:   taxonomy.SupplyChainEdgeTypesString(),
 		},
 		{
 			name:   "governance_enrichment",
@@ -272,7 +272,7 @@ func TestModePrompts_UseUSOTRelationAllowlists(t *testing.T) {
 		{
 			name:   "supply_chain_full",
 			prompt: a.buildSupplyChainFullQueryPrompt(SupplyChainQuery{Anchor: "/org/us/example", AnchorType: "org", Direction: "both", Depth: 3}),
-			want:   taxonomy.SupplyChainOperationalEdgeTypesString(),
+			want:   taxonomy.SupplyChainEdgeTypesString(),
 		},
 		{
 			name:   "governance_full",
@@ -304,14 +304,14 @@ func TestModePrompts_UseUSOTRelationAllowlists(t *testing.T) {
 func TestSupplyChainEnrichmentPrompt_StrictSupplyChainsContractBlock(t *testing.T) {
 	a := NewResearchAgent(nil)
 	input := ResearchStrategyInput{
-		Fragment:    &models.HorizonFragment{CanonicalPath: "/fac/kazakhstan/aktau-sea-port", Type: models.FragmentTypeFacility},
+		Fragment:    &models.HorizonFragment{CanonicalPath: "/fac/kz/aktau-sea-port", Type: models.FragmentTypeFacility},
 		MissingInfo: []string{"Find route links"},
 	}
 	prompt := a.buildSupplyChainEnrichmentPrompt(input)
 	for _, want := range []string{
 		"SUPPLY CHAINS JSON CONTRACT (STRICT):",
 		"\"nodes\": REQUIRED array of objects (NOT string and NOT shorthand)",
-		"PROGRAM|MARKET",
+		"ORGANIZATION|FACILITY|PRODUCT|DEPOSIT",
 		"INVALID shape example: \"nodes\": \"A -> B -> C\"",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -338,10 +338,10 @@ func TestSanitizeResearchResultForUnmarshal_StructuralDrift(t *testing.T) {
   ],
   "supplyChains": [
     {
-      "nodes": "/fac/kazakhstan/aktau-sea-port -> /program/int/titr-middle-corridor -> /market/eu/all/logistics",
+      "nodes": "/fac/kz/aktau-sea-port -> /program/int/titr-middle-corridor -> /market/eu/all/logistics",
       "confidence": "0.9",
       "reason": 777,
-      "transportVia": "/fac/kazakhstan/aktau-sea-port"
+      "transportVia": "/fac/kz/aktau-sea-port"
     }
   ]
 }`)
@@ -410,9 +410,9 @@ func TestSanitizeNode_GeneratesCanonicalPath(t *testing.T) {
 	if cp == "" {
 		t.Fatal("canonicalPath should be auto-generated")
 	}
-	// Fractal model: ORGANIZATION in supply chain → /fac/{slug}-general-production
-	if cp != "/fac/arcelormittal-general-production" {
-		t.Errorf("canonicalPath = %q, want /fac/arcelormittal-general-production", cp)
+	// ORGANIZATION stays as /org/ in supply chain
+	if cp != "/org/discovered/arcelormittal" {
+		t.Errorf("canonicalPath = %q, want /org/discovered/arcelormittal", cp)
 	}
 }
 
@@ -440,9 +440,9 @@ func TestSanitizeNodeString_GeneratesCanonicalPath(t *testing.T) {
 	if cp == "" {
 		t.Fatal("canonicalPath should be auto-generated for string node")
 	}
-	// Fractal model: string defaults to ORGANIZATION → /fac/{slug}-general-production
-	if !strings.HasPrefix(cp, "/fac/") || !strings.HasSuffix(cp, "-general-production") {
-		t.Errorf("canonicalPath = %q, should be /fac/...-general-production", cp)
+	// ORGANIZATION stays as /org/ in supply chain
+	if !strings.HasPrefix(cp, "/org/") {
+		t.Errorf("canonicalPath = %q, should start with /org/", cp)
 	}
 }
 
@@ -463,69 +463,6 @@ func TestRepairSupplyChainNodePaths(t *testing.T) {
 	}
 	if chains[0].Nodes[2].CanonicalPath == "" {
 		t.Error("node[2] should have generated canonical path")
-	}
-}
-
-func TestSanitizeRefinePatchesRaw_CoercesRegFit(t *testing.T) {
-	raw := []byte(`{
-		"patches": [{
-			"patchType": "alternatives",
-			"chainIndex": 0,
-			"nodes": [],
-			"alternatives": [{
-				"customerNodeIndex": 2,
-				"productNodeIndex": 1,
-				"suppliers": [{
-					"supplierRef": "/org/de/basf",
-					"technicalFit": 0.8,
-					"regulatoryFit": "0.9",
-					"confidence": "0.7"
-				}]
-			}]
-		}]
-	}`)
-	sanitized, err := sanitizeRefinePatchesRaw(raw)
-	if err != nil {
-		t.Fatalf("sanitizeRefinePatchesRaw() error = %v", err)
-	}
-	var parsed struct {
-		Patches []SupplyChainPatch `json:"patches"`
-	}
-	if err := json.Unmarshal(sanitized, &parsed); err != nil {
-		t.Fatalf("unmarshal after sanitize should succeed: %v\npayload=%s", err, string(sanitized))
-	}
-	if len(parsed.Patches) != 1 {
-		t.Fatalf("patches=%d, want 1", len(parsed.Patches))
-	}
-	if len(parsed.Patches[0].Alternatives) != 1 {
-		t.Fatalf("alternatives=%d, want 1", len(parsed.Patches[0].Alternatives))
-	}
-	sup := parsed.Patches[0].Alternatives[0].Suppliers[0]
-	if sup.RegulatoryFit != 0.9 {
-		t.Errorf("regulatoryFit = %v, want 0.9", sup.RegulatoryFit)
-	}
-	if sup.Confidence != 0.7 {
-		t.Errorf("confidence = %v, want 0.7", sup.Confidence)
-	}
-}
-
-func TestSanitizeRefinePatches_GeneratesCPForNodesWithoutPath(t *testing.T) {
-	patches := []SupplyChainPatch{{
-		PatchType: "extend_downstream",
-		Nodes: []SupplyChainNode{
-			{CanonicalPath: "/org/de/forvia", Name: "Forvia", Type: "ORGANIZATION"},
-			{Name: "Aluminum Sheet", Type: "PRODUCT"},
-			{Name: "Novelis Inc", Type: "ORGANIZATION"},
-		},
-	}}
-	result := sanitizeRefinePatches(patches)
-	if len(result) != 1 {
-		t.Fatalf("patches=%d, want 1", len(result))
-	}
-	for i, n := range result[0].Nodes {
-		if n.CanonicalPath == "" {
-			t.Errorf("node[%d] (%s) should have canonical path", i, n.Name)
-		}
 	}
 }
 

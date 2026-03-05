@@ -15,9 +15,8 @@ type CanonicalRules struct {
 }
 
 type OrgCanonicalRules struct {
-	Format     string
-	LegalForms []string
-	Example    string
+	Format  string
+	Example string
 }
 
 type GovCanonicalRules struct {
@@ -37,12 +36,6 @@ type GeoCanonicalRules struct {
 	Format  string
 	Example string
 	Notes   []string
-}
-
-// LegalForms returns the canonical list of legal form tokens for org canonical paths.
-// Single source of truth for legal_form suffix parsing, prompts, and validation.
-func LegalForms() []string {
-	return append([]string(nil), DefaultCanonicalRules().Org.LegalForms...)
 }
 
 // MarketExamplePathsForPrompt returns canonical market path examples for prompts and validation.
@@ -83,6 +76,19 @@ func MarketExamplePathsString() string {
 		}
 	}
 	return strings.Join(parts, ", ")
+}
+
+// CompositeGeoDescriptionForPrompts returns the composite geo description for prompts.
+// Single source of truth: 2-6 ISO2 codes hyphenated (e.g. tr-sy, ae-sa-om).
+func CompositeGeoDescriptionForPrompts() string {
+	return "composite (2-6 ISO2 hyphenated, e.g. tr-sy, ae-sa-om)"
+}
+
+// ISO2GeoDescriptionForPrompts returns the canonical geo/iso2 description for LLM prompts.
+// Single source of truth for ISO2, composite, regional in all canonical path prompts.
+// Use in "geo: ..." or "iso2: ..." clauses.
+func ISO2GeoDescriptionForPrompts() string {
+	return fmt.Sprintf("ISO3166-1 alpha2 lowercase (exactly 2 letters, e.g. us, sa, kz), %s, na, int, or regional (%s)", CompositeGeoDescriptionForPrompts(), strings.Join(RegionalGeoTokenList(), ", "))
 }
 
 // MechanismSlugExamples returns canonical mechanism slug examples for prompts.
@@ -154,32 +160,8 @@ func MarketGeographyAndDecompositionPromptBlock() string {
 func DefaultCanonicalRules() CanonicalRules {
 	return CanonicalRules{
 		Org: OrgCanonicalRules{
-			Format: "/org/{iso2|na|int|regional}/{slug}-{legal_form}",
-			// NOTE: legal_form tokens are a compact allowlist used by:
-			// - LLM prompts (canonicalization + enforcement)
-			// - deterministic suffix parsing in canonical_parts.go
-			//
-			// This is not meant to be exhaustive, but it must cover common national corporate forms.
-			LegalForms: []string{
-				// US/UK & generic
-				"inc", "llc", "corp", "ltd", "plc", "llp", "lp",
-				// Civil law / EU common
-				"gmbh", "ag", "sarl", "srl", "sa", "sas", "sasu", "spa", "bv", "nv",
-				// Luxembourg / partnerships / funds (common in holding structures)
-				"scs", "sca", "snc", "senc",
-				// Nordics
-				"as", "asa", "ab", // NO/SE/DK common
-				// Norway cooperative / association forms are covered by "sa" above (often written "... SA")
-				// CEE/EEU / post-soviet
-				"jsc", "pjsc", "ao", "oao", "zao", "ooo",
-				// APAC
-				"kk", "oy", "oyj", "pteltd",
-				// LATAM / other
-				"ltda", "sdnbhd", "ptyltd", "spzoo",
-				// Ireland / common offshore-ish corporate suffixes
-				"dac", "teo", "ulc",
-			},
-			Example: "/org/us/tesla-inc",
+			Format:  "/org/{iso2|na|int|regional}/{slug}",
+			Example: "/org/us/tesla",
 		},
 		Gov: GovCanonicalRules{
 			Format:  "/gov/{iso2|na|regional}/{slug}",
@@ -193,15 +175,14 @@ func DefaultCanonicalRules() CanonicalRules {
 			Example:    "/product/raw/mineral/refining/lithium-carbonate",
 		},
 		Geo: GeoCanonicalRules{
-			Format:  "/loc/{cc}/{admin1}/{city}",
+			Format:  "/loc/{cc}[/{level1}[/{level2}]]",
 			Example: "/loc/us/ca/san-francisco",
 			Notes: []string{
-				"cc: ISO3166-1 alpha2 (2 chars), composite (e.g. tr-sy, ae-sa-om), or regional token",
+				"cc: " + ISO2GeoDescriptionForPrompts(),
 				"regional tokens: " + strings.Join(RegionalGeoTokenList(), ", "),
 				"extend via HORIZON_REGIONAL_GEO_TOKENS env",
-				"admin1: GeoNames admin code or \"na\"",
-				"city: lowercase slug or \"na\"",
-				"country-only: /loc/{cc}/na/na",
+				"level1/level2: optional lowercase subdivision/city slugs",
+				"country-only: /loc/{cc}",
 			},
 		},
 	}
@@ -213,10 +194,10 @@ func CanonicalPathRulesPrompt() string {
 	var sb strings.Builder
 	sb.WriteString("CANONICAL PATH RULES (REQUIRED):\n")
 	sb.WriteString(fmt.Sprintf("- ORGANIZATION: %s (example: %s)\n", rules.Org.Format, rules.Org.Example))
-	sb.WriteString(fmt.Sprintf("  - geo: ISO2 (us, sa), composite (tr-sy, ae-sa-om), na, int, or regional (%s). EU/ASEAN/BRICS-level orgs use eu/asean/brics\n", strings.Join(RegionalGeoTokenList(), ", ")))
-	sb.WriteString(fmt.Sprintf("  - legal_form in {%s}\n", strings.Join(rules.Org.LegalForms, ", ")))
+	sb.WriteString(fmt.Sprintf("  - geo: %s. EU/ASEAN/BRICS-level orgs use eu/asean/brics\n", ISO2GeoDescriptionForPrompts()))
+	sb.WriteString("- Do NOT include legal form (Inc., Ltd., LLC, GmbH, etc.) in org slug — use base name only.\n")
 	sb.WriteString(fmt.Sprintf("- GOVERNMENT: %s (example: %s)\n", rules.Gov.Format, rules.Gov.Example))
-	sb.WriteString(fmt.Sprintf("  - geo: ISO2, composite, na, or regional (%s). EU/ASEAN-level bodies use eu/asean\n", strings.Join(RegionalGeoTokenList(), ", ")))
+	sb.WriteString(fmt.Sprintf("  - geo: %s. EU/ASEAN-level bodies use eu/asean\n", ISO2GeoDescriptionForPrompts()))
 	sb.WriteString(fmt.Sprintf("- PRODUCT: %s\n", rules.Product.Format))
 	sb.WriteString(fmt.Sprintf("  - category: %s\n", strings.Join(rules.Product.Categories, " | ")))
 	sb.WriteString(fmt.Sprintf("  - type: %s\n", strings.Join(rules.Product.Types, " | ")))
@@ -230,22 +211,32 @@ func CanonicalPathRulesPrompt() string {
 	return sb.String()
 }
 
+// FacilityCanonicalRulesPrompt returns the facility path rules fragment (single source of truth).
+// Used by supply chain steps and ExtendedCanonicalPathRulesPrompt.
+// Format: /fac/{geo}/{facilitySlug} — geo like org/gov (ISO2, na, or regional). Dedup-friendly, no org context in path.
+func FacilityCanonicalRulesPrompt() string {
+	return "- Facilities: /fac/{geo}/{facilitySlug}. Example: /fac/ma/bouskoura-plant, /fac/us/fremont-factory, /fac/de/ludwigshafen-verbund\n" +
+		"- geo: " + ISO2GeoDescriptionForPrompts() + "\n" +
+		"- facilityKind: " + FacilityKindsForPrompts() + " (physical type: seaport, factory, cable, pipeline, mine, etc.)\n" +
+		"- When specific facility is unknown but org is known: /fac/{geo}/{orgSlug}-general-production. When both unknown: /fac/na/{facilitySlug}\n" +
+		"- slug: lowercase, hyphens only, no spaces or special chars"
+}
+
 // ExtendedCanonicalPathRulesPrompt returns canonical path rules for all entity types used in Research/Critic.
 // Includes FACILITY, PERSON, MARKET, COMMUNITY, DEPOSIT, EVENT, PROGRAM, DECISION_POINT, MECHANISM.
 func ExtendedCanonicalPathRulesPrompt() string {
-	regionalList := strings.Join(RegionalGeoTokenList(), ", ")
 	var sb strings.Builder
 	sb.WriteString(CanonicalPathRulesPrompt())
-	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug}. If org is unknown, use orgSlug=na. When facility is unknown (supply chain): use /fac/{orgSlug}-general-production with title \"General production\". NEVER use /org/ as supplier or customer in supply chain links. Example: /fac/tsmc/fab-21, /fac/na/fab-21, /fac/asml-general-production\n")
+	sb.WriteString(fmt.Sprintf("- FACILITY: /fac/{geo}/{facilitySlug}. geo: %s. facilityKind: %s. When facility unknown but org known: /fac/{geo}/{orgSlug}-general-production. Example: /fac/ma/bouskoura-plant, /fac/tw/fab-21, /fac/na/fab-21, /fac/nl/asml-general-production\n", ISO2GeoDescriptionForPrompts(), FacilityKindsForPrompts()))
 	sb.WriteString("- PERSON: /person/{slug}. Example: /person/elon-musk\n")
-	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: ISO2, composite (tr-sy), int, or regional (%s). Examples: %s. HAS_MARKET_SEGMENT: child = parent + one segment.\n", regionalList, MarketExamplePathsString()))
-	sb.WriteString(fmt.Sprintf("- COMMUNITY: /community/{geo}/{type}/{slug}. geo: ISO2, composite, or regional (%s). type: trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe|representatives|industry-association|key-community. Example: /community/ae/trade/hawala-dubai-network, /community/sa/dynasty/house-of-saud, /community/af/tribe/pashtun, /community/eu/industry-association/steel-producers\n", regionalList))
+	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: %s. Examples: %s. HAS_MARKET_SEGMENT: child = parent + one segment.\n", ISO2GeoDescriptionForPrompts(), MarketExamplePathsString()))
+	sb.WriteString(fmt.Sprintf("- COMMUNITY: /community/{geo}/{type}/{slug}. geo: %s. type: trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe|representatives|industry-association|key-community. Example: /community/ae/trade/hawala-dubai-network, /community/sa/dynasty/house-of-saud, /community/af/tribe/pashtun, /community/eu/industry-association/steel-producers\n", ISO2GeoDescriptionForPrompts()))
 	sb.WriteString("- DEPOSIT: /deposit/{resource}/{slug}. resource: oil, natural-gas, iron-ore, lithium-ore, etc. Example: /deposit/oil/permian-basin. Fallback: /deposit/other/{slug}\n")
 	sb.WriteString("- EVENT: /event/{slug}. Example: /event/funding-round-series-a\n")
-	sb.WriteString(fmt.Sprintf("- PROGRAM: /program/{jurisdiction}/{slug}. If jurisdiction is unknown, use global. jurisdiction: ISO2, int, global, or regional (%s). Example: /program/kazakhstan/alem-ai, /program/global/alem-ai\n", regionalList))
+	sb.WriteString(fmt.Sprintf("- PROGRAM: /program/{jurisdiction}/{slug}. If jurisdiction is unknown, use global. jurisdiction: %s. Example: /program/kazakhstan/alem-ai, /program/global/alem-ai\n", ISO2GeoDescriptionForPrompts()))
 	sb.WriteString("- DECISION_POINT: /decision/{domain}/{slug}. Example: /decision/export/grant-license\n")
 	sb.WriteString(fmt.Sprintf("- MECHANISM: /mechanism/{category}/{slug}. category: regulatory, economic, technological, contractual, political. Examples: %s.\n", MechanismSlugExamplesString()))
-	sb.WriteString(fmt.Sprintf("- AFFECTED_ZONE: /zone/{geo}/{condition_type}/{slug}. geo: ISO2, composite (tr-sy), or regional (%s). condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone. slug: descriptive place/region name (northern-syria, donbas, gaza-strip, northern-rakhine). NEVER use \"na\" as slug — use region name or condition-specific name (e.g. myanmar-crisis-area). Example: /zone/tr-sy/military_conflict/northern-syria\n", regionalList))
+	sb.WriteString(fmt.Sprintf("- AFFECTED_ZONE: /zone/{geo}/{condition_type}/{slug}. geo: %s. condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone. slug: descriptive place/region name (northern-syria, donbas, gaza-strip, northern-rakhine). NEVER use \"na\" as slug — use region name or condition-specific name (e.g. myanmar-crisis-area). Example: /zone/tr-sy/military_conflict/northern-syria\n", ISO2GeoDescriptionForPrompts()))
 	return sb.String()
 }
 
@@ -263,32 +254,32 @@ func ZoneVsEventDistinctionPrompt() string {
 // Covers all allowed node types (GOVERNMENT_AGENCY, GEO_REGION, DOMAIN, ORGANIZATION, etc.)
 // and includes DOMAIN path format.
 func GraphIntentCanonicalPathRulesPrompt() string {
-	regionalList := strings.Join(RegionalGeoTokenList(), ", ")
+	iso2Desc := ISO2GeoDescriptionForPrompts()
 	domainTypes := strings.Join(DomainContractTypes(), ", ")
 	var sb strings.Builder
 	sb.WriteString("CANONICAL PATH RULES (REQUIRED for every node):\n")
 	sb.WriteString("Every node MUST have canonicalPathHint in the exact format below. No other formats allowed.\n\n")
 	sb.WriteString("Forbidden namespaces/forms: /policy/*, /geo/*, /economy/*, /society/*, /org/gov/*.\n\n")
 	sb.WriteString("- GOVERNMENT_AGENCY: /gov/{iso2}/{slug}. Example: /gov/ro/ministry-of-finance, /gov/us/department-of-state\n")
-	sb.WriteString(fmt.Sprintf("  geo: ISO2 (ro, us, sa), composite (tr-sy), or regional (%s). EU/ASEAN bodies use eu/asean\n\n", regionalList))
-	sb.WriteString("- GEO_REGION: /loc/{cc}/{admin1}/{city}. Country-only: /loc/{cc}/na/na. Example: /loc/ro/na/na (Romania), /loc/us/ca/san-francisco\n")
-	sb.WriteString(fmt.Sprintf("  cc: ISO2, composite (tr-sy), or regional (%s). admin1/city: GeoNames code or \"na\"\n\n", regionalList))
+	sb.WriteString(fmt.Sprintf("  geo: %s. EU/ASEAN bodies use eu/asean\n\n", iso2Desc))
+	sb.WriteString("- GEO_REGION: /loc/{cc}[/{level1}[/{level2}]]. Country-only: /loc/{cc}. Example: /loc/ro (Romania), /loc/us/ca/san-francisco\n")
+	sb.WriteString(fmt.Sprintf("  cc: %s. level1/level2 are optional slugs\n\n", iso2Desc))
 	sb.WriteString("- DOMAIN: /domain/v1/{contractType}/{facetKey}/{facetValue}... or /domain/v1/other/{custom-slug}/geo/{cc}\n")
 	sb.WriteString(fmt.Sprintf("  contractType (allowlist): %s\n", domainTypes))
 	sb.WriteString("  Examples: /domain/v1/regulatory-impact/geo/ro/framework/investment, /domain/v1/policy-and-regulation/geo/ro, /domain/v1/other/foreign-investment-framework/geo/ro\n\n")
-	sb.WriteString("- ORGANIZATION: /org/{geo}/{slug}-{legal_form}. Example: /org/us/tesla-inc, /org/ro/invest-romania-na\n")
-	sb.WriteString(fmt.Sprintf("  geo: ISO2, composite, na, int, or regional (%s). legal_form: inc, ltd, gmbh, srl, etc.\n\n", regionalList))
+	sb.WriteString("- ORGANIZATION: /org/{geo}/{slug}. Example: /org/us/tesla, /org/ro/invest-romania\n")
+	sb.WriteString(fmt.Sprintf("  geo: %s. Do NOT include legal form in slug.\n\n", iso2Desc))
 	sb.WriteString("- PRODUCT: /product/{category}/{type}/{stage}/{slug}. Example: /product/raw/mineral/refining/lithium-carbonate\n")
 	sb.WriteString("  For services, use category=service and map service domain/subdomain into {type}/{stage}.\n\n")
-	sb.WriteString("- FACILITY: /fac/{orgSlug}/{facilitySlug}. If org is unknown, use orgSlug=na. When facility is unknown (supply chain): use /fac/{orgSlug}-general-production. NEVER use /org/ as supplier or customer in supply chain links. Example: /fac/tsmc/fab-21, /fac/asml-general-production\n\n")
+	sb.WriteString(fmt.Sprintf("- FACILITY: /fac/{geo}/{facilitySlug}. geo: %s. facilityKind: %s. When facility unknown but org known: /fac/{geo}/{orgSlug}-general-production. Example: /fac/ma/bouskoura-plant, /fac/tw/fab-21, /fac/nl/asml-general-production\n\n", iso2Desc, FacilityKindsForPrompts()))
 	sb.WriteString("- PERSON: /person/{slug}. Example: /person/elon-musk\n\n")
-	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: ISO2, composite, or regional (%s). Examples: %s. HAS_MARKET_SEGMENT: child = parent + one segment.\n\n", regionalList, MarketExamplePathsString()))
+	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: %s. Examples: %s. HAS_MARKET_SEGMENT: child = parent + one segment.\n\n", iso2Desc, MarketExamplePathsString()))
 	sb.WriteString("- COMMUNITY: /community/{geo}/{type}/{slug}. type: trade|activist|professional|dynasty|tribe|interest|representatives|industry-association|key-community. Example: /community/ro/interest/investors-association, /community/eu/industry-association/steel-producers\n\n")
 	sb.WriteString("- DEPOSIT: /deposit/{resource}/{slug}. Example: /deposit/oil/permian-basin\n\n")
 	sb.WriteString("- EVENT: /event/{slug}. Example: /event/funding-round-series-a\n\n")
 	sb.WriteString("- PROGRAM: /program/{jurisdiction}/{slug}. Example: /program/ro/invest-romania-program\n\n")
 	sb.WriteString("- DECISION_POINT: /decision/{domain}/{slug}. Example: /decision/export/grant-license\n")
 	sb.WriteString(fmt.Sprintf("- MECHANISM: /mechanism/{category}/{slug}. category: regulatory, economic, technological, contractual, political. Examples: %s.\n", MechanismSlugExamplesString()))
-	sb.WriteString(fmt.Sprintf("- AFFECTED_ZONE: /zone/{geo}/{condition_type}/{slug}. geo: ISO2, composite, or regional (%s). condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone. slug: descriptive place/region name. NEVER \"na\". Example: /zone/tr-sy/military_conflict/northern-syria\n", regionalList))
+	sb.WriteString(fmt.Sprintf("- AFFECTED_ZONE: /zone/{geo}/{condition_type}/{slug}. geo: %s. condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone. slug: descriptive place/region name. NEVER \"na\". Example: /zone/tr-sy/military_conflict/northern-syria\n", iso2Desc))
 	return sb.String()
 }

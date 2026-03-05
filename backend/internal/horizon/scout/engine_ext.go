@@ -462,12 +462,11 @@ func hasUnknownGeoSegments(path string) bool {
 	if !strings.HasPrefix(p, "/loc/") {
 		return false
 	}
-	parts := strings.Split(strings.Trim(p, "/"), "/")
-	// Strict geo shape: /loc/{country}/{admin1}/{city}
-	if len(parts) < 4 {
+	_, level1, level2, ok := taxonomy.ParseLocCanonicalPath(p)
+	if !ok {
 		return true
 	}
-	return parts[2] == "na" || parts[3] == "na"
+	return level1 == "" || level2 == ""
 }
 
 func hasUnknownJurisdiction(path string) bool {
@@ -508,16 +507,11 @@ func bestEffortDisplayLabel(label string, canonicalPath string) string {
 		}
 	}
 	if strings.HasPrefix(canonicalPath, "/loc/") {
-		parts := strings.Split(strings.Trim(canonicalPath, "/"), "/")
-		if len(parts) >= 4 {
-			cc := strings.TrimSpace(strings.ToLower(parts[1]))
-			admin1 := strings.TrimSpace(strings.ToLower(parts[2]))
-			city := strings.TrimSpace(strings.ToLower(parts[3]))
-			if cc != "" && admin1 == "na" && city == "na" {
-				if label == "" || len(label) <= 2 || strings.EqualFold(label, cc) {
-					if n := countryNameByISO2(cc); n != "" {
-						return n
-					}
+		cc, level1, level2, ok := taxonomy.ParseLocCanonicalPath(canonicalPath)
+		if ok && cc != "" && level1 == "" && level2 == "" {
+			if label == "" || len(label) <= 2 || strings.EqualFold(label, cc) {
+				if n := countryNameByISO2(cc); n != "" {
+					return n
 				}
 			}
 		}
@@ -546,15 +540,9 @@ func shouldRefreshDisplayLabel(current string, canonicalPath string) bool {
 	}
 	if strings.HasPrefix(cp, "/loc/") {
 		lcur := strings.ToLower(cur)
-		parts := strings.Split(strings.Trim(cp, "/"), "/")
-		if len(parts) >= 4 {
-			cc := strings.ToLower(strings.TrimSpace(parts[1]))
-			admin1 := strings.ToLower(strings.TrimSpace(parts[2]))
-			city := strings.ToLower(strings.TrimSpace(parts[3]))
-			// /loc/{cc}/na/na is valid taxonomy, but never a good display label.
-			if (admin1 == "na" && city == "na") && (lcur == "na" || lcur == cc || lcur == city) {
-				return true
-			}
+		cc, level1, level2, ok := taxonomy.ParseLocCanonicalPath(cp)
+		if ok && level1 == "" && level2 == "" && (lcur == "na" || lcur == cc) {
+			return true
 		}
 	}
 	return false
@@ -1330,9 +1318,9 @@ func (e *ScoutEngine) getOrCreateFragmentByPath(
 // Rule:
 // - if fragment is /org/{geo}/{slug} or /gov/{geo}/{slug}, and geo != "na"
 // - and organization has no outgoing LOCATED_IN/OPERATES_IN geo edges yet
-// then create LOCATED_IN -> /loc/{geo}/na/na (best effort).
+// then create LOCATED_IN -> /loc/{geo} (best effort).
 // Special-case:
-// - /org/int/... maps to /loc/global/na/na as the international bucket.
+// - /org/int/... maps to /loc/global as the international bucket.
 func (e *ScoutEngine) ensureOrgGeoFallbackLink(ctx context.Context, frag *models.HorizonFragment, provenanceMethod, sourceID string) {
 	if e == nil || e.fragmentsRepo == nil || e.edgesRepo == nil || frag == nil {
 		return
@@ -1379,7 +1367,7 @@ func (e *ScoutEngine) ensureOrgGeoFallbackLink(ctx context.Context, frag *models
 	if !taxonomy.IsRegionalGeoToken(geoToken) && !taxonomy.IsCompositeGeoToken(geoToken) && len(geoToken) != 2 {
 		return
 	}
-	targetPath := fmt.Sprintf("/loc/%s/na/na", geoToken)
+	targetPath := fmt.Sprintf("/loc/%s", geoToken)
 	if err := taxonomy.ValidateCanonicalPath(targetPath); err != nil {
 		return
 	}
@@ -1700,7 +1688,7 @@ func getSupplyChainExecutionPlanFromJobState(job *models.ScoutingJob, domainCano
 
 // expandSupplyChainQueriesWithOrgs expands product/market-anchored queries to org/fac-anchored.
 // Discovers BOTH org and fac via IntentDecomposer recursively (max 5 hops). For org: uses
-// /fac/{orgSlug}-general-production fallback when no specific fac. EnrichSupplyChainFull
+// /fac/{geo}/{orgSlug}-general-production fallback when no specific fac. EnrichSupplyChainFull
 // builds chains from each anchor; SupplyChainOrgResolver handles fac→org at depth 5.
 func (e *ScoutEngine) expandSupplyChainQueriesWithOrgs(ctx context.Context, job *models.ScoutingJob, queries []agents.SupplyChainQuery) []agents.SupplyChainQuery {
 	if e == nil || e.aiExecutor == nil || job == nil || len(queries) == 0 {
@@ -1776,7 +1764,7 @@ func (e *ScoutEngine) expandSupplyChainQueriesWithOrgs(ctx context.Context, job 
 
 // discoverOrgAndFacAnchorsRecursive discovers org and fac anchors via IntentDecomposer.
 // Recursion: round 0 = decompose product/market; rounds 1..maxHops-1 = decompose each org to find facilities.
-// Returns normalized anchors: /fac/ for facilities (incl. /fac/{org}-general-production for org-only).
+// Returns normalized anchors: /fac/ for facilities (incl. /fac/{geo}/{org}-general-production for org-only).
 func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 	ctx context.Context,
 	job *models.ScoutingJob,
@@ -1788,7 +1776,12 @@ func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 	maxHops, maxAnchors int,
 ) []string {
 	agent := agents.NewIntentDecomposerAgent(e.aiExecutor)
-	opts := agents.DecomposeOptions{IsAbstractAnchor: strings.HasPrefix(initialAnchor, "/market/") || strings.HasPrefix(initialAnchor, "/program/"), DecompositionHints: decompositionHints, OriginalQuery: originalQuery}
+	opts := agents.DecomposeOptions{
+		IsAbstractAnchor:   strings.HasPrefix(initialAnchor, "/market/") || strings.HasPrefix(initialAnchor, "/program/"),
+		DecompositionHints: decompositionHints,
+		OriginalQuery:      originalQuery,
+		DomainModes:        []string{taxonomy.DomainModeSupplyChain}, // always supply-chain context
+	}
 
 	seen := make(map[string]struct{})
 	addAnchor := func(cp string) bool {
@@ -1804,7 +1797,7 @@ func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 		return true
 	}
 
-	// Normalize path to effective anchor: /org/ -> /fac/{slug}-general-production; /fac/ stays.
+	// Normalize path to effective anchor: /org/ -> /fac/{geo}/{slug}-general-production; /fac/ stays.
 	toEffectiveAnchor := func(cp string) string {
 		cp = strings.TrimSpace(cp)
 		if cp == "" {
@@ -1974,30 +1967,6 @@ func decodeSupplyChainExecutionPlan(raw interface{}) *agents.SupplyChainExecutio
 	return &plan
 }
 
-// chainsNodeSample returns a short log-friendly summary of chains (node counts, first path per chain).
-func chainsNodeSample(chains []agents.SupplyChain) string {
-	if len(chains) == 0 {
-		return "[]"
-	}
-	parts := make([]string, 0, len(chains))
-	for i, ch := range chains {
-		n := len(ch.Nodes)
-		sample := ""
-		if n > 0 && len(ch.Nodes[0].CanonicalPath) > 0 {
-			sample = ch.Nodes[0].CanonicalPath
-			if n > 1 {
-				sample += "→..."
-			}
-		} else {
-			sample = fmt.Sprintf("%dnodes", n)
-		}
-		parts = append(parts, fmt.Sprintf("#%d:%d(%s)", i, n, sample))
-		if len(parts) >= 3 {
-			break
-		}
-	}
-	return strings.Join(parts, " ")
-}
 
 // getRegulatoryImpactPlanFromJobState extracts RegulatoryImpactExecutionPlan for the matching domain.
 func getRegulatoryImpactPlanFromJobState(job *models.ScoutingJob, domainCanonicalPath string) *agents.RegulatoryImpactExecutionPlan {
@@ -2616,9 +2585,22 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageExtraction, true, "domain_base_extraction_done")
 	e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageCritic, true, "domain_base_critic_skip")
 	e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageRevalidation, true, "domain_base_revalidation_skip")
+
+	// Early detection: supply chain plan mode skips grounding, overlays, facet relations, artifact builder.
+	earlyContract := e.bestEffortFindDomainContract(job, domainCP)
+	earlyContractType := ""
+	if earlyContract != nil {
+		earlyContractType = strings.TrimSpace(earlyContract.ContractType)
+	}
+	if earlyContractType == "" {
+		earlyContractType, _ = parseDomainPathFacets(domainCP)
+	}
+	earlySupplyChainPlan := getSupplyChainExecutionPlanFromJobState(job, domainCP)
+	isSupplyChainFastPath := agents.IsSupplyChainContractType(earlyContractType) && earlySupplyChainPlan != nil && len(earlySupplyChainPlan.Queries) > 0
+
 	internalFirstContext := ""
 	domainFastPathApplied := false
-	if internalFirstGroundingEnabled() {
+	if internalFirstGroundingEnabled() && !isSupplyChainFastPath {
 		if e.planner != nil && e.executor != nil {
 			sourcePlan, err := e.planner.PlanSources(ctx, strings.TrimSpace(job.TenantID), strings.TrimSpace(job.ProjectID), domainCP, models.ScoutingStrategySnapshot, nil, "")
 			if err != nil {
@@ -2817,6 +2799,10 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	supplyChainPlan := getSupplyChainExecutionPlanFromJobState(job, domainCP)
 	usePlanMode := agents.IsSupplyChainContractType(contractType) && supplyChainPlan != nil && len(supplyChainPlan.Queries) > 0
 	if usePlanMode && e.researchAgent != nil && !domainFastPathApplied {
+		if job.State == nil {
+			job.State = map[string]interface{}{}
+		}
+		job.State["supplyChainIncrementalMaterialized"] = false
 		queries := supplyChainPlan.Queries
 		if job != nil && HasExecutionPlanContractState(job.State) {
 			planContract := ExecutionPlanContractFromState(job.State)
@@ -2829,19 +2815,37 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		queriesBefore := len(queries)
 		queries = e.expandSupplyChainQueriesWithOrgs(ctx, job, queries)
 		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainPlan] queries before=%d after_expansion=%d", queriesBefore, len(queries)))
-		// Supply Chain Plan mode: holistic full queries, merge chains, processSupplyChains.
-		for qi, q := range queries {
-			anchorDesc := strings.TrimSpace(q.Anchor)
-			if len(q.Anchors) > 0 {
-				anchorDesc = strings.Join(q.Anchors, ", ")
+		// Collect anchors by direction: downstream (producer→consumer) and upstream (consumer→supplier).
+		defaultDirection := "down"
+		if strings.TrimSpace(job.LensID) != "" {
+			defaultDirection = "both"
+		}
+		downOrgs, downFacs, upOrgs, upFacs := collectAnchorOrgsFromQueriesByDirection(queries, defaultDirection)
+		scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainPlan] anchors: down orgs=%d facs=%d, up orgs=%d facs=%d", len(downOrgs), len(downFacs), len(upOrgs), len(upFacs)))
+		unwindMaxDepth := 2
+		if strings.HasPrefix(strings.TrimSpace(domainCP), "/domain/v1/supply-chain/") {
+			if _, facets := parseDomainPathFacets(domainCP); facets != nil {
+				hasGeo := len(facets["geo"]) > 0 && strings.TrimSpace(facets["geo"][0]) != ""
+				hasProduct := len(facets["product"]) > 0 && strings.TrimSpace(facets["product"][0]) != ""
+				if hasGeo && hasProduct {
+					// Tight contract (geo + product) should stay focused and avoid global fanout.
+					unwindMaxDepth = 1
+				}
 			}
-			chains, err := e.researchAgent.EnrichSupplyChainFull(ctx, q)
-			if err != nil {
-				e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainPlan] EnrichSupplyChainFull query[%d] anchor=%s failed: %v", qi, anchorDesc, err))
-				continue
+		}
+		if job != nil && job.State != nil {
+			if v := parseStateInt(job.State["supplyChainUnwindMaxDepth"], 0); v > 0 && v < 6 {
+				unwindMaxDepth = v
 			}
+		}
+		scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainPlan] unwind maxDepth=%d", unwindMaxDepth))
+		if len(downOrgs) > 0 || len(downFacs) > 0 {
+			chains := e.runSupplyChainRecursiveUnwinding(ctx, job, downOrgs, downFacs, unwindMaxDepth)
 			domainResearchChains = append(domainResearchChains, chains...)
-			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainPlan] EnrichSupplyChainFull query[%d] anchor=%s → chains=%d (nodes_sample=%v)", qi, anchorDesc, len(chains), chainsNodeSample(chains)))
+		}
+		if len(upOrgs) > 0 || len(upFacs) > 0 {
+			upChains := e.runSupplyChainUpstreamUnwinding(ctx, job, upOrgs, upFacs, unwindMaxDepth)
+			domainResearchChains = append(domainResearchChains, upChains...)
 		}
 		if job.State == nil {
 			job.State = map[string]interface{}{}
@@ -3360,10 +3364,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	// Synthesize relations for decomposition.
 	rels := make([]agents.DiscoveredRelation, 0, len(firstOrder)+len(related)+len(affected)+len(domainResearchRelations))
 
-	// Facet-driven relations (deterministic; best-effort).
-	// - geo -> GEO_REGION via IN_GEO_SCOPE (country-level /loc/{cc}/na/na)
-	// - material/application/topic/subject -> PRODUCT via ABOUT (strict /product/{category}/{type}/{stage}/{slug})
-	if contract != nil && contract.Facets != nil && len(contract.Facets) > 0 {
+	// Facet-driven relations (deterministic; best-effort). Skipped for supply chain fast-path.
+	if !isSupplyChainFastPath && contract != nil && contract.Facets != nil && len(contract.Facets) > 0 {
 		// geo facet may have multiple tokens (e.g., bilateral relations)
 		if gs, ok := contract.Facets["geo"]; ok && len(gs) > 0 {
 			for _, g := range gs {
@@ -3376,7 +3378,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 					if len(cc) != 2 {
 						return
 					}
-					loc := "/loc/" + cc + "/na/na"
+					loc := "/loc/" + cc
 					if err := taxonomy.ValidateCanonicalPath(loc); err == nil {
 						rels = append(rels, agents.DiscoveredRelation{
 							TargetName:          bestEffortDisplayLabel("", loc),
@@ -3553,28 +3555,32 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	}
 	if len(domainResearchChains) > 0 {
 		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization")
-		if err := e.processSupplyChains(ctx, job, frag, domainResearchChains); err != nil {
-			logGroundingErrorWithContext(job, "scout", "domain_expansion.supply_chains", "supply_chain_processing_failed", "materialization_error", true, err)
-			e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.supply_chains", "supply_chain_processing_failed", "materialization_error", true)
-			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_failed", true, err)
-			recordPipelineIssue(job, "domain_supply_chain_materialization", err.Error())
+		if parseStateBool(job.State["supplyChainIncrementalMaterialized"], false) {
+			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_done_incremental")
 		} else {
-			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_done")
+			if err := e.processSupplyChains(ctx, job, frag, domainResearchChains); err != nil {
+				logGroundingErrorWithContext(job, "scout", "domain_expansion.supply_chains", "supply_chain_processing_failed", "materialization_error", true, err)
+				e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_expansion.supply_chains", "supply_chain_processing_failed", "materialization_error", true)
+				e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_failed", true, err)
+				recordPipelineIssue(job, "domain_supply_chain_materialization", err.Error())
+			} else {
+				e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_done")
+			}
 		}
 		// Expand phase (optional): 1-hop for low-confidence nodes, alternatives check. Config: job.State["supplyChainExpandEnabled"], ["supplyChainExpandMaxNodes"].
 		if usePlanMode {
 			e.runSupplyChainExpandPhase(ctx, job, frag, domainResearchChains, supplyChainPlan)
 		}
-		// Stage 2 Overlay queries: regulatory, market, decision_points (anchors from parsed chains)
-		if usePlanMode && supplyChainPlan != nil && len(supplyChainPlan.OverlayQueries) > 0 {
+		// Stage 2 Overlay queries: skipped for supply chain fast-path (pure org→fac→product→fac→org).
+		if usePlanMode && !isSupplyChainFastPath && supplyChainPlan != nil && len(supplyChainPlan.OverlayQueries) > 0 {
 			e.runSupplyChainStage2Overlays(ctx, job, frag, domainResearchChains, supplyChainPlan.OverlayQueries)
 		}
 	} else {
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_skip_no_chains")
 	}
 
-	// Domain artifact materialization: build relations graph for governance/regulatory/ecosystem.
-	if e.domainArtifactBuilder != nil {
+	// Domain artifact materialization: build relations graph for governance/regulatory/ecosystem. Skipped for supply chain fast-path.
+	if !isSupplyChainFastPath && e.domainArtifactBuilder != nil {
 		domainModes := taxonomy.NormalizeDomainModes(getJobDomainModes(job))
 		for _, dm := range domainModes {
 			if dm == taxonomy.DomainModeGovernance || dm == taxonomy.DomainModePolicyImpact || dm == taxonomy.DomainModeEcosystem {
@@ -3614,8 +3620,10 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		}
 	}
 
-	// Policy audit + optional enforcement (best-effort).
-	if !inlineDomainContractRun {
+	// Policy audit + optional enforcement (best-effort). Skipped for supply chain fast-path.
+	if isSupplyChainFastPath {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_supply_chain_fast_path_skip")
+	} else if !inlineDomainContractRun {
 		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatch")
 		if err := e.enqueuePolicyAuditOutboxIntent(ctx, job, pipelineRuntimeName); err != nil {
 			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_dispatch_failed", true, err)
@@ -3627,8 +3635,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_inline_skip")
 	}
 
-	// Best-effort propagation trigger for the domain node.
-	if e.propagationTrigger != nil {
+	// Best-effort propagation trigger for the domain node. Skipped for supply chain fast-path.
+	if !isSupplyChainFastPath && e.propagationTrigger != nil {
 		rc, _ := rtctx.Get(ctx)
 		fid := fragmentID
 		runAsyncSafe("domain_node_propagation", func() {
@@ -4497,11 +4505,15 @@ func (e *ScoutEngine) processRelationsInternal(
 	}
 	if isSupplyChainMode && supplyChainPhase != "targeted_enrich" {
 		before := len(relations)
-		relations = filterDiscoveredRelationsByDomainModes(relations, []string{taxonomy.DomainModeSupplyChain})
+		sourcePath := ""
+		if sourceFragment != nil {
+			sourcePath = strings.TrimSpace(sourceFragment.CanonicalPath)
+		}
+		relations, droppedTypes := filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment, relations, []string{taxonomy.DomainModeSupplyChain})
 		after := len(relations)
 		if after != before {
-			e.logLine(ctx, job, "info", fmt.Sprintf("> phase-A relation filter (%s): %d -> %d",
-				RuntimeContractExecutionPlan, before, after))
+			e.logLine(ctx, job, "info", fmt.Sprintf("> phase-A relation filter (%s): %d -> %d source=%q droppedTypes=%v",
+				RuntimeContractExecutionPlan, before, after, sourcePath, droppedTypes))
 		}
 	}
 	relationsResolvedByGrounding := 0
@@ -5056,26 +5068,7 @@ func (e *ScoutEngine) processRelationsInternal(
 								strings.TrimSpace(job.TenantID), strings.TrimSpace(cascadeID), strings.TrimSpace(targetPath), currentDepth+1)
 							fmt.Printf("%s\n", msg)
 							e.logLine(ctx, job, "info", msg)
-							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.skip", map[string]any{
-								"tenantId":  strings.TrimSpace(job.TenantID),
-								"projectId": strings.TrimSpace(job.ProjectID),
-								"lensId":    strings.TrimSpace(job.LensID),
-								"jobId":     strings.TrimSpace(job.ID),
-								"cascadeId": strings.TrimSpace(cascadeID),
-								"target":    strings.TrimSpace(targetPath),
-								"depth":     currentDepth + 1,
-							})
 							continue
-						} else {
-							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.mark", map[string]any{
-								"tenantId":  strings.TrimSpace(job.TenantID),
-								"projectId": strings.TrimSpace(job.ProjectID),
-								"lensId":    strings.TrimSpace(job.LensID),
-								"jobId":     strings.TrimSpace(job.ID),
-								"cascadeId": strings.TrimSpace(cascadeID),
-								"target":    strings.TrimSpace(targetPath),
-								"depth":     currentDepth + 1,
-							})
 						}
 					}
 
@@ -5195,14 +5188,6 @@ func (e *ScoutEngine) processRelationsInternal(
 								logGroundingErrorWithContext(job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true, delErr)
 								e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true)
 							}
-							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.unmark_on_create_fail", map[string]any{
-								"tenantId":  strings.TrimSpace(job.TenantID),
-								"projectId": strings.TrimSpace(job.ProjectID),
-								"lensId":    strings.TrimSpace(job.LensID),
-								"jobId":     strings.TrimSpace(job.ID),
-								"cascadeId": strings.TrimSpace(cascadeID),
-								"target":    strings.TrimSpace(targetPath),
-							})
 						}
 					} else {
 						if cascadeLimitActive && cascadeRemaining > 0 {
@@ -5267,27 +5252,11 @@ func (e *ScoutEngine) processRelationsInternal(
 
 					// CRITICAL: Skip self-reference (prevents infinite loops)
 					if sourceFragment != nil && strings.TrimSpace(targetPath) == strings.TrimSpace(sourceFragment.CanonicalPath) {
-						trace.Log(ctx, "scout_decompose", "child_job.skip.self_reference", map[string]any{
-							"tenantId":            strings.TrimSpace(job.TenantID),
-							"projectId":           strings.TrimSpace(job.ProjectID),
-							"lensId":              strings.TrimSpace(job.LensID),
-							"jobId":               strings.TrimSpace(job.ID),
-							"sourceCanonicalPath": strings.TrimSpace(sourceFragment.CanonicalPath),
-							"targetCanonicalPath": strings.TrimSpace(targetPath),
-						})
 						fmt.Printf("[ScoutEngine] Skipping self-reference job: %s -> %s. Circular dependency avoided.\n",
 							sourceFragment.CanonicalPath, targetPath)
 						shouldSkipJob = true
 					}
 					if !shouldSkipJob && shouldSkipSameFacilityQualifierRecursion(sourceFragment, targetPath, targetType, targetFragment) {
-						trace.Log(ctx, "scout_decompose", "child_job.skip.same_facility_qualifier", map[string]any{
-							"tenantId":            strings.TrimSpace(job.TenantID),
-							"projectId":           strings.TrimSpace(job.ProjectID),
-							"lensId":              strings.TrimSpace(job.LensID),
-							"jobId":               strings.TrimSpace(job.ID),
-							"sourceCanonicalPath": strings.TrimSpace(sourceFragment.CanonicalPath),
-							"targetCanonicalPath": strings.TrimSpace(targetPath),
-						})
 						fmt.Printf("[ScoutEngine] Skipping same-qualifier FAC recursion: %s -> %s.\n",
 							sourceFragment.CanonicalPath, targetPath)
 						shouldSkipJob = true
@@ -5296,14 +5265,6 @@ func (e *ScoutEngine) processRelationsInternal(
 					// CRITICAL: Skip if target fragment is already verified (regardless of edge existence)
 					// This prevents re-scouting entities that were just processed
 					if !shouldSkipJob && targetFragment.Metadata.EpistemicStatus != models.EpistemicStatusLowConfidence {
-						trace.Log(ctx, "scout_decompose", "child_job.skip.target_verified", map[string]any{
-							"tenantId":            strings.TrimSpace(job.TenantID),
-							"projectId":           strings.TrimSpace(job.ProjectID),
-							"lensId":              strings.TrimSpace(job.LensID),
-							"jobId":               strings.TrimSpace(job.ID),
-							"targetCanonicalPath": strings.TrimSpace(targetPath),
-							"epistemicStatus":     string(targetFragment.Metadata.EpistemicStatus),
-						})
 						fmt.Printf("[ScoutEngine] Target fragment already verified: %s (status=%s). Skipping scouting job.\n",
 							targetPath, targetFragment.Metadata.EpistemicStatus)
 						shouldSkipJob = true
@@ -5326,14 +5287,6 @@ func (e *ScoutEngine) processRelationsInternal(
 					// Check if there's already an active scouting job for this canonicalPath (pending/running).
 					if !shouldSkipJob {
 						if existingJobID, ok := activeJobByPath[strings.TrimSpace(targetPath)]; ok && strings.TrimSpace(existingJobID) != "" {
-							trace.Log(ctx, "scout_decompose", "child_job.skip.active_exists", map[string]any{
-								"tenantId":            strings.TrimSpace(job.TenantID),
-								"projectId":           strings.TrimSpace(job.ProjectID),
-								"lensId":              strings.TrimSpace(job.LensID),
-								"jobId":               strings.TrimSpace(job.ID),
-								"targetCanonicalPath": strings.TrimSpace(targetPath),
-								"existingJobId":       strings.TrimSpace(existingJobID),
-							})
 							fmt.Printf("[ScoutEngine] Active scouting job already exists for %s (jobId=%s). Skipping duplicate.\n",
 								targetPath, existingJobID)
 							scheduledChildren[targetPath] = struct{}{}
@@ -5342,15 +5295,6 @@ func (e *ScoutEngine) processRelationsInternal(
 					}
 					if !shouldSkipJob && targetIdentityKey != "" {
 						if existingJobID, ok := activeJobByIdentity[targetIdentityKey]; ok && strings.TrimSpace(existingJobID) != "" {
-							trace.Log(ctx, "scout_decompose", "child_job.skip.active_identity_exists", map[string]any{
-								"tenantId":            strings.TrimSpace(job.TenantID),
-								"projectId":           strings.TrimSpace(job.ProjectID),
-								"lensId":              strings.TrimSpace(job.LensID),
-								"jobId":               strings.TrimSpace(job.ID),
-								"targetIdentityKey":   targetIdentityKey,
-								"targetCanonicalPath": strings.TrimSpace(targetPath),
-								"existingJobId":       strings.TrimSpace(existingJobID),
-							})
 							scheduledChildren[targetPath] = struct{}{}
 							scheduledIdentityChildren[targetIdentityKey] = struct{}{}
 							shouldSkipJob = true
@@ -5467,14 +5411,6 @@ func (e *ScoutEngine) processRelationsInternal(
 								logGroundingErrorWithContext(job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true, delErr)
 								e.emitGroundingErrorTelemetry(ctx, job, "scout", "relations.supply_chain_visited", "visited_unmark_failed", "repo_update_error", true)
 							}
-							trace.Log(ctx, "SupplyChain", "SupplyChain.visited.unmark_on_create_fail", map[string]any{
-								"tenantId":  strings.TrimSpace(job.TenantID),
-								"projectId": strings.TrimSpace(job.ProjectID),
-								"lensId":    strings.TrimSpace(job.LensID),
-								"jobId":     strings.TrimSpace(job.ID),
-								"cascadeId": strings.TrimSpace(cascadeID),
-								"target":    strings.TrimSpace(targetPath),
-							})
 						}
 					}
 				}
@@ -5507,6 +5443,27 @@ func (e *ScoutEngine) processRelationsInternal(
 		if targetFragment != nil && lensIDForCascade != "" && strings.TrimSpace(targetPath) != "" {
 			if isScopeEligibleEntityType(targetType) {
 				e.bestEffortDeferredScopeAdd(ctx, lensIDForCascade, strings.TrimSpace(targetPath))
+			}
+		}
+
+		// Pre-materialization supply-chain type guard: reject out-of-contract types before persistence.
+		// Catches any relation type that slipped through phase-A filter (e.g. from canonicalization, strategic overlay).
+		if isSupplyChainMode {
+			srcPath := ""
+			if sourceFragment != nil {
+				srcPath = strings.TrimSpace(sourceFragment.CanonicalPath)
+			}
+			if explicitSrc := strings.TrimSpace(rel.SourceCanonicalPath); explicitSrc != "" {
+				srcPath = explicitSrc
+			}
+			allowed := IsSupplyChainEdgeType(normalizedRelationType)
+			if !allowed && strings.EqualFold(normalizedRelationType, "OWNS") {
+				allowed = allowSupplyChainOwnsByPath(srcPath, targetPath)
+			}
+			if !allowed {
+				e.logLine(ctx, job, "info", fmt.Sprintf("> pre_materialization_supply_chain_guard: dropped type=%q source=%q target=%q reason=out_of_contract",
+					normalizedRelationType, srcPath, targetPath))
+				continue
 			}
 		}
 
@@ -6680,7 +6637,7 @@ func (e *ScoutEngine) enrichRouteFacilityGeoContext(ctx context.Context, fragmen
 				if waypoint.HomeLocation != nil && waypoint.HomeLocation.ISO3166_1 != nil {
 					cc := strings.ToLower(strings.TrimSpace(*waypoint.HomeLocation.ISO3166_1))
 					if cc != "" && cc != "na" {
-						regionPaths = append(regionPaths, "/loc/"+cc+"/na/na")
+						regionPaths = append(regionPaths, "/loc/"+cc)
 					}
 				}
 			}
@@ -7096,22 +7053,22 @@ func hashSupplyChainSegments(segments []pathbuilder.PathSegment) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// buildSupplyChainExpandMissingInfo returns node-type-specific MissingInfo for supply chain expand phase.
-// Model: org→fac→product→fac→org trees from source org downward.
-func buildSupplyChainExpandMissingInfo(frag *models.HorizonFragment) []string {
-	if frag == nil {
-		return []string{"Build org→fac→product→fac→org tree. Format: JSON."}
+// buildBatchedSupplyChainExpandMissingInfo builds a single MissingInfo prompt for multiple nodes of the same type.
+// This allows one LLM call instead of N separate calls.
+func buildBatchedSupplyChainExpandMissingInfo(nodeType string, paths []string) []string {
+	if len(paths) == 0 {
+		return nil
 	}
-	p := strings.TrimSpace(frag.CanonicalPath)
-	switch {
-	case strings.HasPrefix(p, "/org/"):
-		return []string{"Find organizations under this organization (subsidiaries, controlled, partners). If org has own productions — return their facilities. Format: JSON."}
-	case strings.HasPrefix(p, "/fac/"):
-		return []string{"Find products/services that THIS facility creates directly. Do NOT list products of related or parent companies. Format: JSON."}
-	case strings.HasPrefix(p, "/product/"):
-		return []string{"Find org-recipients of this product (orgs that receive it via their facilities). Format: JSON."}
+	pathList := strings.Join(paths, ", ")
+	switch nodeType {
+	case "org":
+		return []string{fmt.Sprintf("For EACH of these organizations: [%s]\nFind ALL child organizations (subsidiaries, controlled, partners) and ALL own facilities. One org → many child orgs + many facs. Return results per org. Format: JSON.", pathList)}
+	case "fac":
+		return []string{fmt.Sprintf("For EACH of these facilities: [%s]\nFind ALL products/services that EACH facility creates directly. One fac → many products. Do NOT list products of related or parent companies. Return results per facility. Format: JSON.", pathList)}
+	case "product":
+		return []string{fmt.Sprintf("For EACH of these products: [%s]\nFind ALL org-recipients (orgs that receive each product via their facilities). One product → many recipients. Return results per product. Format: JSON.", pathList)}
 	default:
-		return []string{"Build org→fac→product→fac→org tree from this node. Format: JSON."}
+		return []string{fmt.Sprintf("For EACH of these nodes: [%s]\nBuild org→fac→product→fac→org trees (1-to-many at each level). Return results per node. Format: JSON.", pathList)}
 	}
 }
 
@@ -7231,20 +7188,45 @@ func (e *ScoutEngine) runSupplyChainExpandPhase(ctx context.Context, job *models
 				existingEntities = existingEntities[:50]
 			}
 		}
-		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(3) // max 3 concurrent LLM calls
-		var mu sync.Mutex
-		var allChains []agents.SupplyChain
+		// Group candidates by node type for batched LLM calls (1 call per type instead of N calls).
+		groups := map[string][]string{"org": {}, "fac": {}, "product": {}, "other": {}}
 		for _, cp := range expandCandidates {
-			cp := cp
+			switch {
+			case strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/"):
+				groups["org"] = append(groups["org"], cp)
+			case strings.HasPrefix(cp, "/fac/") || strings.HasPrefix(cp, "/deposit/"):
+				groups["fac"] = append(groups["fac"], cp)
+			case strings.HasPrefix(cp, "/product/"):
+				groups["product"] = append(groups["product"], cp)
+			default:
+				groups["other"] = append(groups["other"], cp)
+			}
+		}
+		var allChains []agents.SupplyChain
+		var mu sync.Mutex
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(3)
+		for nodeType, paths := range groups {
+			if len(paths) == 0 {
+				continue
+			}
+			nodeType := nodeType
+			paths := paths
 			g.Go(func() error {
-				existing, err := e.fragmentsRepo.GetByCanonicalPath(gctx, cp)
-				if err != nil || existing == nil {
-					return nil
+				// Use first fragment as representative for the batch prompt context.
+				var repFrag *models.HorizonFragment
+				for _, cp := range paths {
+					if f, err := e.fragmentsRepo.GetByCanonicalPath(gctx, cp); err == nil && f != nil {
+						repFrag = f
+						break
+					}
 				}
-				missingInfo := buildSupplyChainExpandMissingInfo(existing)
+				if repFrag == nil {
+					repFrag = &models.HorizonFragment{CanonicalPath: paths[0]}
+				}
+				missingInfo := buildBatchedSupplyChainExpandMissingInfo(nodeType, paths)
 				input := agents.ResearchStrategyInput{
-					Fragment:         existing,
+					Fragment:         repFrag,
 					MissingInfo:      missingInfo,
 					ChainContext:     chainContextStr,
 					ExistingEntities: existingEntities,
@@ -7263,225 +7245,10 @@ func (e *ScoutEngine) runSupplyChainExpandPhase(ctx context.Context, job *models
 			_ = e.processSupplyChains(ctx, job, frag, allChains)
 		}
 	}
-	// Alternatives check: one LLM call "For each (customer, product) pair, did you miss any alternative suppliers?"
-	if parseStateBool(job.State["supplyChainAlternativesCheckEnabled"], false) && e.aiExecutor != nil && e.researchAgent != nil {
-		e.runSupplyChainAlternativesCheck(ctx, job, frag, chains)
-	}
 	if job.State == nil {
 		job.State = make(map[string]interface{})
 	}
 	job.State["supplyChainExpandPhase"] = "completed"
-}
-
-// runSupplyChainAlternativesCheck asks LLM: "For each (customer, product) pair, did you miss any alternative suppliers?"
-// Merges returned alternatives into chains and processes via processSupplyChains.
-func (e *ScoutEngine) runSupplyChainAlternativesCheck(ctx context.Context, job *models.ScoutingJob, frag *models.HorizonFragment, chains []agents.SupplyChain) {
-	if len(chains) == 0 {
-		return
-	}
-	// Extract (customerRef, productRef) pairs from actor→product→actor segments
-	type pairKey struct {
-		customerRef string
-		productRef  string
-	}
-	pairs := make(map[pairKey][]int) // pairKey -> chain indices that contain this pair
-	for ci, ch := range chains {
-		for i := 0; i < len(ch.Nodes)-2; i++ {
-			a, prod, b := ch.Nodes[i], ch.Nodes[i+1], ch.Nodes[i+2]
-			if !isActorNode(a) || !isProductNode(prod) || !isActorNode(b) {
-				continue
-			}
-			srcPath := strings.TrimSpace(a.CanonicalPath)
-			prodPath := strings.TrimSpace(prod.CanonicalPath)
-			dstPath := strings.TrimSpace(b.CanonicalPath)
-			if srcPath == "" || prodPath == "" || dstPath == "" {
-				continue
-			}
-			k := pairKey{customerRef: dstPath, productRef: prodPath}
-			pairs[k] = append(pairs[k], ci)
-		}
-	}
-	if len(pairs) == 0 {
-		return
-	}
-	// Build prompt with explicit JSON schema
-	var sb strings.Builder
-	sb.WriteString("For each (customer, product) pair below, did you miss any alternative suppliers?\n")
-	sb.WriteString("Return ONLY valid JSON with this exact schema:\n")
-	sb.WriteString(`{ "alternatives": [ { "customerRef": "/fac/...", "productRef": "/product/...", "suppliers": [ { "supplierRef": "/fac/...", "technicalFit": 0.8, "regulatoryFit": 0.9, "confidence": 0.7, ... } ] } ] }` + "\n")
-	sb.WriteString("customerRef and supplierRef: MUST be /fac/ paths (supply chain actors). productRef: /product/ path. Match pairs exactly. technicalFit, regulatoryFit, confidence: 0-1.\n\n")
-	sb.WriteString("Pairs to check:\n")
-	for k := range pairs {
-		sb.WriteString(fmt.Sprintf("- customer=%s product=%s\n", k.customerRef, k.productRef))
-	}
-	prompt := sb.String()
-	verifier := ai.NewSimpleJSONVerifier()
-	task := &ai.AITask{
-		TaskType:     ai.TaskTypeKnowledgeSynthesis,
-		InputContent: prompt,
-		AIRequirements: ai.AIRequirements{
-			TextGenerationCapability: true,
-			MinCapabilityScore:       7,
-			MinContextWindow:         8000,
-			MaxOutputSize:            4000,
-		},
-		Verifier: verifier,
-	}
-	result, _, err := e.aiExecutor.ExecuteStructuredTaskFull(ctx, task)
-	if err != nil || result == nil {
-		e.logLine(ctx, job, "warn", fmt.Sprintf("[AlternativesCheck] LLM failed: %v", err))
-		return
-	}
-	jsonData, _ := json.Marshal(result)
-	var parsed struct {
-		Alternatives []struct {
-			CustomerRef string `json:"customerRef"`
-			ProductRef  string `json:"productRef"`
-			Suppliers   []struct {
-				SupplierRef       string  `json:"supplierRef"`
-				TechnicalFit      float64 `json:"technicalFit"`
-				RegulatoryFit     float64 `json:"regulatoryFit"`
-				Confidence        float64 `json:"confidence"`
-				AvailableCapacity *struct {
-					Value      float64 `json:"value"`
-					Unit       string  `json:"unit"`
-					Confidence float64 `json:"confidence"`
-				} `json:"availableCapacity,omitempty"`
-				LeadTimeToSwitch *struct {
-					Value      float64 `json:"value"`
-					Unit       string  `json:"unit"`
-					Confidence float64 `json:"confidence"`
-				} `json:"leadTimeToSwitch,omitempty"`
-				CostToSwitch *struct {
-					Value      float64 `json:"value"`
-					Unit       string  `json:"unit"`
-					Confidence float64 `json:"confidence"`
-				} `json:"costToSwitch,omitempty"`
-			} `json:"suppliers"`
-		} `json:"alternatives"`
-	}
-	if err := json.Unmarshal(jsonData, &parsed); err != nil {
-		e.logLine(ctx, job, "warn", fmt.Sprintf("[AlternativesCheck] parse failed: %v", err))
-		return
-	}
-	if len(parsed.Alternatives) == 0 {
-		return
-	}
-	// Merge alternatives into chains
-	chainsCopy := make([]agents.SupplyChain, len(chains))
-	for i := range chains {
-		chainsCopy[i] = cloneSupplyChain(chains[i])
-	}
-	merged := 0
-	for _, alt := range parsed.Alternatives {
-		cust := strings.TrimSpace(alt.CustomerRef)
-		prod := strings.TrimSpace(alt.ProductRef)
-		if cust == "" || prod == "" || len(alt.Suppliers) == 0 {
-			continue
-		}
-		k := pairKey{customerRef: cust, productRef: prod}
-		chainIndices := pairs[k]
-		if len(chainIndices) == 0 {
-			continue
-		}
-		// Find customerNodeIndex and productNodeIndex in first matching chain
-		ch := &chainsCopy[chainIndices[0]]
-		customerIdx, productIdx := -1, -1
-		for i := 0; i < len(ch.Nodes)-2; i++ {
-			_, p, b := ch.Nodes[i], ch.Nodes[i+1], ch.Nodes[i+2]
-			if strings.TrimSpace(b.CanonicalPath) == cust && strings.TrimSpace(p.CanonicalPath) == prod {
-				customerIdx = i + 2
-				productIdx = i + 1
-				break
-			}
-		}
-		if customerIdx < 0 || productIdx < 0 {
-			continue
-		}
-		// Add new suppliers to Alternatives (avoid duplicates with existing)
-		existingRefs := make(map[string]struct{})
-		for _, a := range ch.Alternatives {
-			if a.CustomerNodeIndex == customerIdx && a.ProductNodeIndex == productIdx {
-				for _, s := range a.Suppliers {
-					existingRefs[strings.TrimSpace(s.SupplierRef)] = struct{}{}
-				}
-			}
-		}
-		var newSuppliers []agents.AlternativeContract
-		for _, s := range alt.Suppliers {
-			ref := strings.TrimSpace(s.SupplierRef)
-			if ref == "" || strings.HasPrefix(ref, "/domain/") {
-				continue
-			}
-			if _, ok := existingRefs[ref]; ok {
-				continue
-			}
-			existingRefs[ref] = struct{}{}
-			ac := agents.AlternativeContract{
-				SupplierRef:   ref,
-				TechnicalFit:  s.TechnicalFit,
-				RegulatoryFit: s.RegulatoryFit,
-				Confidence:    s.Confidence,
-			}
-			if s.AvailableCapacity != nil {
-				ac.AvailableCapacity = &agents.MetricWithConfidence{Value: s.AvailableCapacity.Value, Unit: s.AvailableCapacity.Unit, Confidence: s.AvailableCapacity.Confidence}
-			}
-			if s.LeadTimeToSwitch != nil {
-				ac.LeadTimeToSwitch = &agents.MetricWithConfidence{Value: s.LeadTimeToSwitch.Value, Unit: s.LeadTimeToSwitch.Unit, Confidence: s.LeadTimeToSwitch.Confidence}
-			}
-			if s.CostToSwitch != nil {
-				ac.CostToSwitch = &agents.MetricWithConfidence{Value: s.CostToSwitch.Value, Unit: s.CostToSwitch.Unit, Confidence: s.CostToSwitch.Confidence}
-			}
-			newSuppliers = append(newSuppliers, ac)
-		}
-		if len(newSuppliers) > 0 {
-			ch.Alternatives = append(ch.Alternatives, agents.AlternativeSuppliers{
-				CustomerNodeIndex: customerIdx,
-				ProductNodeIndex:  productIdx,
-				Suppliers:         newSuppliers,
-			})
-			merged++
-		}
-	}
-	if merged > 0 {
-		_ = e.processSupplyChains(ctx, job, frag, chainsCopy)
-		e.logLine(ctx, job, "info", fmt.Sprintf("[AlternativesCheck] merged=%d pairs", merged))
-	}
-}
-
-func isActorNode(n agents.SupplyChainNode) bool {
-	t := strings.ToUpper(strings.TrimSpace(n.Type))
-	cp := strings.TrimSpace(n.CanonicalPath)
-	return (t == "ORGANIZATION" || t == "FACILITY" || t == "DEPOSIT" || t == "PROGRAM" || t == "GOV" || t == "GEO_REGION") ||
-		strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/fac/") || strings.HasPrefix(cp, "/deposit/") || strings.HasPrefix(cp, "/gov/")
-}
-
-func isProductNode(n agents.SupplyChainNode) bool {
-	t := strings.ToUpper(strings.TrimSpace(n.Type))
-	cp := strings.TrimSpace(n.CanonicalPath)
-	return t == "PRODUCT" || strings.HasPrefix(cp, "/product/")
-}
-
-func cloneSupplyChain(ch agents.SupplyChain) agents.SupplyChain {
-	out := agents.SupplyChain{
-		Nodes:          make([]agents.SupplyChainNode, len(ch.Nodes)),
-		Confidence:     ch.Confidence,
-		Reason:         ch.Reason,
-		TransportVia:   append([]string(nil), ch.TransportVia...),
-		Alternatives:   make([]agents.AlternativeSuppliers, 0, len(ch.Alternatives)+4),
-		SegmentMetrics: append([]agents.SegmentMetrics(nil), ch.SegmentMetrics...),
-	}
-	copy(out.Nodes, ch.Nodes)
-	for _, a := range ch.Alternatives {
-		suppliers := make([]agents.AlternativeContract, len(a.Suppliers))
-		copy(suppliers, a.Suppliers)
-		out.Alternatives = append(out.Alternatives, agents.AlternativeSuppliers{
-			CustomerNodeIndex: a.CustomerNodeIndex,
-			ProductNodeIndex:  a.ProductNodeIndex,
-			Suppliers:         suppliers,
-		})
-	}
-	return out
 }
 
 // runSupplyChainStage2Overlays runs overlay queries (regulatory, market, decision_points) over parsed chains.
@@ -7822,7 +7589,6 @@ func (e *ScoutEngine) processSupplyChains(
 				if !pre.IsValid && strings.TrimSpace(pre.BlockReason) != "" {
 					msg := fmt.Sprintf("[SupplyChainFragmentCreate] BLOCKED canonicalPath=%s reason=%s", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(pre.BlockReason))
 					fmt.Printf("%s\n", msg)
-					e.logLine(ctx, job, "warn", msg)
 					continue
 				}
 			}
@@ -7852,7 +7618,6 @@ func (e *ScoutEngine) processSupplyChains(
 				createErrors++
 				msg := fmt.Sprintf("[SupplyChainFragmentCreate] FAILED canonicalPath=%s err=%v", frag.CanonicalPath, createErr)
 				fmt.Printf("%s\n", msg)
-				e.logLine(ctx, job, "warn", msg)
 				continue
 			}
 			frag.ID = id
@@ -7864,7 +7629,7 @@ func (e *ScoutEngine) processSupplyChains(
 			createdFrags++
 			if createdFrags <= previewLimit {
 				msg := fmt.Sprintf("[SupplyChainFragmentCreate] OK canonicalPath=%s id=%s type=%s", frag.CanonicalPath, id, frag.Type)
-				e.logLine(ctx, job, "info", msg)
+				fmt.Printf("%s\n", msg)
 			}
 		} else if err == nil && existing != nil {
 			// Fragment exists, store ID for edge creation
@@ -7899,12 +7664,11 @@ func (e *ScoutEngine) processSupplyChains(
 				if err := e.fragmentsRepo.Update(ctx, existing); err != nil {
 					msg := fmt.Sprintf("[SupplyChainFragmentUpdate] FAILED canonicalPath=%s id=%s err=%v", frag.CanonicalPath, existing.ID, err)
 					fmt.Printf("%s\n", msg)
-					e.logLine(ctx, job, "warn", msg)
 				} else {
 					updatedFrags++
 					if updatedFrags <= previewLimit {
 						msg := fmt.Sprintf("[SupplyChainFragmentUpdate] OK canonicalPath=%s id=%s", frag.CanonicalPath, existing.ID)
-						e.logLine(ctx, job, "info", msg)
+						fmt.Printf("%s\n", msg)
 					}
 				}
 			}
@@ -7912,7 +7676,6 @@ func (e *ScoutEngine) processSupplyChains(
 			createErrors++
 			msg := fmt.Sprintf("[SupplyChainFragmentLookup] FAILED canonicalPath=%s err=%v", frag.CanonicalPath, err)
 			fmt.Printf("%s\n", msg)
-			e.logLine(ctx, job, "warn", msg)
 		}
 	}
 
@@ -8141,14 +7904,16 @@ func (e *ScoutEngine) processSupplyChains(
 
 		// Canonicalization policy (stage-rank direction fix for TRANSFORMS_INTO, type rewrites, gov/market rules).
 		// Must run before validation policy so that edge type and direction are corrected first.
+		// SupplyChainMode: true — this path is always supply-chain edge materialization.
 		canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
-			EdgeType:   edgeType,
-			SourceType: srcTypeActual,
-			TargetType: dstTypeActual,
-			SourcePath: srcPath,
-			TargetPath: dstPath,
-			Reason:     strings.TrimSpace(chainEdge.Reason),
-			Qualifiers: chainEdge.Qualifiers,
+			EdgeType:        edgeType,
+			SourceType:      srcTypeActual,
+			TargetType:      dstTypeActual,
+			SourcePath:      srcPath,
+			TargetPath:      dstPath,
+			Reason:          strings.TrimSpace(chainEdge.Reason),
+			Qualifiers:      chainEdge.Qualifiers,
+			SupplyChainMode: true,
 		})
 		if canon.Changed {
 			edgeType = canon.EdgeType
@@ -8365,31 +8130,44 @@ func (e *ScoutEngine) processSupplyChains(
 		edge.SetPolicyStatus(policyStatus, policyReason, policyPenalty)
 		applyBestEffortEdgeEnrichment(edge)
 
+		// Final allowlist gate: never persist out-of-contract types for supply-chain edges.
+		allowed := IsSupplyChainEdgeType(string(edgeType))
+		if !allowed && strings.EqualFold(string(edgeType), "OWNS") {
+			allowed = allowSupplyChainOwnsByPath(srcPath, dstPath)
+		}
+		if !allowed {
+			e.logLine(ctx, job, "info", fmt.Sprintf("> persist_final_gate_supply_chain: skipped type=%q source=%q target=%q reason=out_of_contract",
+				edgeType, srcPath, dstPath))
+			continue
+		}
+
 		if id, createErr := e.edgesRepo.Create(ctx, edge); createErr != nil {
 			edgeCreateErrors++
 			msg := fmt.Sprintf("[SupplyChainEdgeCreate] FAILED %s -[%s]-> %s err=%v",
 				chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, createErr)
 			fmt.Printf("%s\n", msg)
-			e.logLine(ctx, job, "warn", msg)
 		} else {
 			edge.ID = id
 			createdEdges++
 			if createdEdges <= edgePreviewLimit {
-				e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainEdgeCreate] OK %s -[%s]-> %s id=%s crit=%.3f raw=%.3f",
-					chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, id, edge.Properties.Criticality, chainEdge.Confidence))
+				fmt.Printf("[SupplyChainEdgeCreate] OK %s -[%s]-> %s id=%s crit=%.3f raw=%.3f\n",
+					chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, id, edge.Properties.Criticality, chainEdge.Confidence)
 			}
 
-			// Realtime event
+			// Realtime event: include sourceCanonicalPath/targetCanonicalPath so UI shows readable names, not fragment IDs
 			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
-				"tenantId":         job.TenantID,
-				"projectId":        job.ProjectID,
-				"lensId":           lensID,
-				"edgeId":           edge.ID,
-				"sourceFragmentId": edge.SourceFragmentID,
-				"targetFragmentId": edge.TargetFragmentID,
-				"type":             string(edge.Type),
-				"properties":       edge.Properties,
-				"fromSupplyChain":  true,
+				"tenantId":            job.TenantID,
+				"projectId":           job.ProjectID,
+				"lensId":              lensID,
+				"edgeId":              edge.ID,
+				"sourceFragmentId":    edge.SourceFragmentID,
+				"targetFragmentId":    edge.TargetFragmentID,
+				"sourceCanonicalPath": srcPath,
+				"targetCanonicalPath": dstPath,
+				"type":                string(edge.Type),
+				"properties":          edge.Properties,
+				"qualifiers":          edge.Qualifiers,
+				"fromSupplyChain":     true,
 			})
 
 			// Edge-triggered re-propagation: if endpoints have accumulated signals,
@@ -8400,20 +8178,20 @@ func (e *ScoutEngine) processSupplyChains(
 
 	// Materialize SupplyLink fragments from parsed segments so PathBuilder can traverse
 	// SupplyLink provenance: Scout/Research supply chains → parser → SupplyLink fragments
-	// Normalize org→fac before materialization; only /fac/ and /deposit/ allowed for SupplierRef/CustomerRef.
+	// Full chain org→fac→product→fac→org. Keep org as-is; do not convert.
 	supplyLinksCreated := 0
 	supplyLinksSkipped := 0
 	for _, seg := range result.SupplyLinkSegments {
-		supplier := models.NormalizeOrgRefToFacilityFallback(strings.TrimSpace(seg.SupplierRef))
-		customer := models.NormalizeOrgRefToFacilityFallback(strings.TrimSpace(seg.CustomerRef))
+		supplier := strings.TrimSpace(seg.SupplierRef)
+		customer := strings.TrimSpace(seg.CustomerRef)
 		product := strings.TrimSpace(seg.ProductRef)
 		if supplier == "" || customer == "" || product == "" {
 			continue
 		}
-		if !strings.HasPrefix(supplier, "/fac/") && !strings.HasPrefix(supplier, "/deposit/") {
+		if !strings.HasPrefix(supplier, "/fac/") && !strings.HasPrefix(supplier, "/deposit/") && !strings.HasPrefix(supplier, "/org/") {
 			continue
 		}
-		if !strings.HasPrefix(customer, "/fac/") {
+		if !strings.HasPrefix(customer, "/fac/") && !strings.HasPrefix(customer, "/org/") {
 			continue
 		}
 		if rp, ok := pathRewrites[supplier]; ok && rp != "" {
@@ -8574,6 +8352,13 @@ func (e *ScoutEngine) processSupplyChains(
 			anchorPath = strings.TrimSpace(sourceFragment.CanonicalPath)
 		}
 		criticPassed := false
+		materializationStage := "step4"
+		if job != nil && job.State != nil {
+			if st := strings.TrimSpace(strings.ToLower(parseStateString(job.State["supplyChainMaterializationStage"]))); st != "" {
+				materializationStage = st
+			}
+		}
+		isFinalMaterializationStage := materializationStage == "step4"
 		if e.criticAgent != nil {
 			input := agents.CriticValidatorInput{
 				Fragment:     sourceFragment,
@@ -8585,6 +8370,9 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 		var pathsToMaterialize []*pathbuilder.SupplyChainPath
 		var keysToMaterialize []string
+		const chainReuseLogSampleLimit = 6
+		skipSamples := make([]string, 0, chainReuseLogSampleLimit)
+		mergeSamples := make([]string, 0, chainReuseLogSampleLimit)
 		for idx, chain := range chains {
 			singleParsed, perr := parser.ParseSupplyChains([]agents.SupplyChain{chain}, sourceCanonicalPath)
 			if perr != nil || singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
@@ -8597,6 +8385,16 @@ func (e *ScoutEngine) processSupplyChains(
 
 			reuseDecision := evaluateChainReuse(ctx, e.supplyChainPathBuilder, tenantID, segments)
 			logChainReuseDecision(ctx, job, reuseDecision, idx)
+			// Never full-skip on provisional staged materialization (step1/step2/step3/U1/U2):
+			// we want to preserve downstream enrichment at final step4 and avoid losing business links.
+			if !isFinalMaterializationStage && reuseDecision.Level == ChainReuseFullSkip {
+				reuseDecision.Level = ChainReuseEnrichMerge
+				if strings.TrimSpace(reuseDecision.Reason) == "" {
+					reuseDecision.Reason = fmt.Sprintf("provisional_stage=%s", materializationStage)
+				} else {
+					reuseDecision.Reason = fmt.Sprintf("%s,provisional_stage=%s", reuseDecision.Reason, materializationStage)
+				}
+			}
 
 			if reuseDecision.Level == ChainReuseFullSkip {
 				chainReuseSkipped++
@@ -8605,13 +8403,17 @@ func (e *ScoutEngine) processSupplyChains(
 						chainReuseScopeAdded++
 					}
 				}
-				e.logLine(ctx, job, "info", fmt.Sprintf("[ChainReuse] SKIP chain=%d key=%s reason=%s", idx, reuseDecision.CanonicalKey, reuseDecision.Reason))
+				if len(skipSamples) < chainReuseLogSampleLimit {
+					skipSamples = append(skipSamples, fmt.Sprintf("chain=%d key=%s reason=%s", idx, reuseDecision.CanonicalKey, reuseDecision.Reason))
+				}
 				continue
 			}
 
 			if reuseDecision.Level == ChainReuseEnrichMerge {
 				chainReuseMerged++
-				e.logLine(ctx, job, "info", fmt.Sprintf("[ChainReuse] MERGE chain=%d key=%s reason=%s", idx, reuseDecision.CanonicalKey, reuseDecision.Reason))
+				if len(mergeSamples) < chainReuseLogSampleLimit {
+					mergeSamples = append(mergeSamples, fmt.Sprintf("chain=%d key=%s reason=%s", idx, reuseDecision.CanonicalKey, reuseDecision.Reason))
+				}
 			}
 
 			canonicalKey := pathbuilder.BuildStructuralCanonicalKey(tenantID, segments)
@@ -8630,6 +8432,14 @@ func (e *ScoutEngine) processSupplyChains(
 			}
 			pathsToMaterialize = append(pathsToMaterialize, path)
 			keysToMaterialize = append(keysToMaterialize, canonicalKey)
+		}
+		if chainReuseSkipped > 0 {
+			e.logLine(ctx, job, "info", fmt.Sprintf("[ChainReuse] SKIP summary skipped=%d stage=%s samples=[%s]",
+				chainReuseSkipped, materializationStage, strings.Join(skipSamples, " | ")))
+		}
+		if chainReuseMerged > 0 {
+			e.logLine(ctx, job, "info", fmt.Sprintf("[ChainReuse] MERGE summary merged=%d stage=%s samples=[%s]",
+				chainReuseMerged, materializationStage, strings.Join(mergeSamples, " | ")))
 		}
 		if len(pathsToMaterialize) > 0 {
 			ids, err := e.supplyChainPathBuilder.MaterializePathsBatch(ctx, pathsToMaterialize, tenantID, keysToMaterialize)
@@ -8654,11 +8464,14 @@ func (e *ScoutEngine) processSupplyChains(
 						}
 					}
 				}
-				if materializedCount > 0 || chainReuseSkipped > 0 {
+				if materializedCount > 0 || chainReuseSkipped > 0 || chainReuseMerged > 0 {
 					e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] done artifacts=%d skipped=%d merged=%d scopeAdded=%d",
 						materializedCount, chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded))
 				}
 			}
+		} else if chainReuseSkipped > 0 || chainReuseMerged > 0 {
+			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] done artifacts=0 skipped=%d merged=%d scopeAdded=%d",
+				chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded))
 		}
 	}
 
@@ -8769,7 +8582,42 @@ func (e *ScoutEngine) processSupplyChains(
 		msg := fmt.Sprintf("[SupplyChainSummary] fragments(created=%d updated=%d err=%d) edges(created=%d dupes=%d err=%d reversed=%d penalized=%d) supplyLinks(created=%d skipped=%d) gaps=%d chainReuse(skipped=%d merged=%d scopeAdded=%d)",
 			createdFrags, updatedFrags, createErrors, createdEdges, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, supplyLinksCreated, supplyLinksSkipped, len(gapHints), chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded)
 		fmt.Printf("%s\n", msg)
-		e.logLine(ctx, job, "info", msg)
+
+		var parts []string
+		if createdFrags > 0 {
+			parts = append(parts, fmt.Sprintf("+%d new", createdFrags))
+		}
+		if updatedFrags > 0 {
+			parts = append(parts, fmt.Sprintf("%d updated", updatedFrags))
+		}
+		if createdEdges > 0 {
+			parts = append(parts, fmt.Sprintf("+%d links", createdEdges))
+		}
+		if len(gapHints) > 0 {
+			noun := "gap"
+			if len(gapHints) != 1 {
+				noun = "gaps"
+			}
+			parts = append(parts, fmt.Sprintf("%d %s identified", len(gapHints), noun))
+		}
+		desc := "No changes"
+		if len(parts) > 0 {
+			desc = strings.Join(parts, " • ")
+		}
+
+		e.publish(ctx, realtime.EventType("horizon.scout.job.log"), map[string]interface{}{
+			"tenantId":            job.TenantID,
+			"projectId":           job.ProjectID,
+			"lensId":              strings.TrimSpace(job.LensID),
+			"jobId":               job.ID,
+			"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+			"level":               "info",
+			"line":                msg,
+			"humanReadable": map[string]interface{}{
+				"title":       "Supply chain saved",
+				"description": desc,
+			},
+		})
 	}
 
 	// Best-effort: rewrite lens scope entries if any canonical paths were normalized/deduplicated
@@ -9136,14 +8984,6 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 			// Undo visited marker on enqueue failure.
 			if e.cascadeVisitedRepo != nil {
 				_ = e.cascadeVisitedRepo.DeleteVisited(ctx, job.TenantID, cascadeID, targetPath)
-				trace.Log(ctx, "SupplyChain", "SupplyChain.visited.unmark_on_create_fail", map[string]any{
-					"tenantId":  strings.TrimSpace(job.TenantID),
-					"projectId": strings.TrimSpace(job.ProjectID),
-					"lensId":    strings.TrimSpace(job.LensID),
-					"jobId":     strings.TrimSpace(job.ID),
-					"cascadeId": strings.TrimSpace(cascadeID),
-					"target":    strings.TrimSpace(targetPath),
-				})
 			}
 		} else if cascadeLimitActive && cascadeRemaining > 0 {
 			cascadeRemaining--
@@ -9155,25 +8995,6 @@ func (e *ScoutEngine) scheduleSupplyChainChildJobs(
 			scheduled, len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, skippedPlaceholder, skippedSameQualifier, skippedOutOfScope, currentDepth, maxDepth, maxChildren)
 		fmt.Printf("%s\n", msg)
 		e.logLine(ctx, job, "info", msg)
-		trace.Log(ctx, "SupplyChain", "SupplyChain.schedule.children", map[string]any{
-			"tenantId":         strings.TrimSpace(job.TenantID),
-			"projectId":        strings.TrimSpace(job.ProjectID),
-			"lensId":           strings.TrimSpace(job.LensID),
-			"jobId":            strings.TrimSpace(job.ID),
-			"candidatesN":      len(candidates),
-			"enqueuedN":        scheduled,
-			"skippedActiveN":   skippedActive,
-			"skippedVerifiedN": skippedVerified,
-			"skippedMissingN":  skippedMissingFrag,
-			"skippedDupN":      skippedDup,
-			"skippedVisitedN":  skippedVisited,
-			"skippedPlaceN":    skippedPlaceholder,
-			"skippedSameQN":    skippedSameQualifier,
-			"skippedScopeN":    skippedOutOfScope,
-			"depth":            currentDepth,
-			"maxDepth":         maxDepth,
-			"cap":              maxChildren,
-		})
 	} else {
 		msg := fmt.Sprintf("[SupplyChainSchedule] enqueued=0 candidates=%d skipped(active=%d verified=%d missingFrag=%d dup=%d visited=%d placeholder=%d sameQualifier=%d outOfScope=%d) depth=%d/%d cap=%d",
 			len(candidates), skippedActive, skippedVerified, skippedMissingFrag, skippedDup, skippedVisited, skippedPlaceholder, skippedSameQualifier, skippedOutOfScope, currentDepth, maxDepth, maxChildren)
@@ -9508,4 +9329,1064 @@ func (e *ScoutEngine) triggerPhase2StrategicOverlay(
 			"description": fmt.Sprintf("Strategic projection scheduled for %s", domainCP),
 		},
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Supply Chain Recursive Unwinding
+// ---------------------------------------------------------------------------
+
+// collectAnchorOrgsFromQueriesByDirection splits anchors by direction for upstream vs downstream unwinding.
+// Returns (downOrgs, downFacs, upOrgs, upFacs). For direction "both", anchors go to both.
+func collectAnchorOrgsFromQueriesByDirection(queries []agents.SupplyChainQuery, defaultDirection string) (downOrgs, downFacs, upOrgs, upFacs []string) {
+	downSeen := map[string]struct{}{}
+	upSeen := map[string]struct{}{}
+	addDown := func(p string) {
+		if p == "" {
+			return
+		}
+		if _, ok := downSeen[p]; ok {
+			return
+		}
+		downSeen[p] = struct{}{}
+		if strings.HasPrefix(p, "/org/") || strings.HasPrefix(p, "/gov/") {
+			downOrgs = append(downOrgs, p)
+		} else if strings.HasPrefix(p, "/fac/") {
+			downFacs = append(downFacs, p)
+		}
+	}
+	addUp := func(p string) {
+		if p == "" {
+			return
+		}
+		if _, ok := upSeen[p]; ok {
+			return
+		}
+		upSeen[p] = struct{}{}
+		if strings.HasPrefix(p, "/org/") || strings.HasPrefix(p, "/gov/") {
+			upOrgs = append(upOrgs, p)
+		} else if strings.HasPrefix(p, "/fac/") {
+			upFacs = append(upFacs, p)
+		}
+	}
+	for _, q := range queries {
+		paths := q.Anchors
+		if len(paths) == 0 && strings.TrimSpace(q.Anchor) != "" {
+			paths = []string{q.Anchor}
+		}
+		dir := strings.ToLower(strings.TrimSpace(q.Direction))
+		if dir == "" {
+			dir = strings.ToLower(strings.TrimSpace(defaultDirection))
+			if dir == "" {
+				dir = "down"
+			}
+		}
+		for _, p := range paths {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			switch dir {
+			case "up", "upstream":
+				addUp(p)
+			case "both":
+				addDown(p)
+				addUp(p)
+			default: // down, downstream, ""
+				addDown(p)
+			}
+		}
+	}
+	return
+}
+
+func buildSupplyChainStepPromptContext(job *models.ScoutingJob, depth int, direction string) agents.SupplyChainStepPromptContext {
+	out := agents.SupplyChainStepPromptContext{
+		Depth:     depth,
+		Direction: strings.TrimSpace(direction),
+	}
+	if job == nil {
+		return out
+	}
+	if job.State != nil {
+		if q := strings.TrimSpace(parseStateString(job.State["originalQuery"])); q != "" {
+			out.OriginalQuery = q
+		} else if q := strings.TrimSpace(parseStateString(job.State["query"])); q != "" {
+			out.OriginalQuery = q
+		}
+		if dm, ok := job.State["domainExpansion"]; ok && dm != nil {
+			if m, ok := dm.(map[string]interface{}); ok {
+				if cp := strings.TrimSpace(parseStateString(m["canonicalPath"])); cp != "" {
+					out.DomainPath = cp
+				}
+			}
+		}
+	}
+	if out.DomainPath == "" {
+		out.DomainPath = strings.TrimSpace(job.TargetCanonicalPath)
+	}
+	if strings.HasPrefix(out.DomainPath, "/domain/") {
+		_, facets := parseDomainPathFacets(out.DomainPath)
+		if facets != nil {
+			if g, ok := facets["geo"]; ok && len(g) > 0 {
+				out.Geo = strings.TrimSpace(g[0])
+			}
+			if p, ok := facets["product"]; ok && len(p) > 0 {
+				out.Product = strings.TrimSpace(p[0])
+			}
+		}
+	}
+	return out
+}
+
+// runSupplyChainRecursiveUnwinding implements step-by-step algorithmic unwinding:
+// org→fac→product→recipientFac→recipientOrg, recursing from recipient orgs.
+// Each step is a focused batched LLM call. maxDepth controls how many full
+// cycles (org→fac→product→fac→org) to execute.
+// anchorOrgs: initial /org/ paths to start from (Step 1).
+// seedFacs: /fac/ anchors that skip Step 1 and enter directly at Step 2.
+func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
+	ctx context.Context, job *models.ScoutingJob, anchorOrgs []string, seedFacs []string, maxDepth int,
+) []agents.SupplyChain {
+	if e.researchAgent == nil || (len(anchorOrgs) == 0 && len(seedFacs) == 0) {
+		return nil
+	}
+
+	visited := map[string]struct{}{}
+	for _, p := range anchorOrgs {
+		visited[p] = struct{}{}
+	}
+	for _, p := range seedFacs {
+		visited[p] = struct{}{}
+	}
+
+	type chainSegment struct {
+		orgPath      string
+		facPath      string
+		productPath  string
+		recipientFac string
+		recipientOrg string
+	}
+	type productSource struct {
+		productPath string
+		facPath     string
+	}
+	type recipientLink struct {
+		recipientFac string
+		productPath  string
+	}
+	// facOwner tracks which org owns which fac across all depths.
+	facOwner := map[string]string{}
+	buildChains := func(segments []chainSegment) []agents.SupplyChain {
+		chains := make([]agents.SupplyChain, 0, len(segments))
+		for _, seg := range segments {
+			nodes := []agents.SupplyChainNode{
+				{CanonicalPath: seg.orgPath, Type: "ORGANIZATION", Role: "supplier"},
+				{CanonicalPath: seg.facPath, Type: "FACILITY", Role: "producer"},
+				{CanonicalPath: seg.productPath, Type: "PRODUCT"},
+				{CanonicalPath: seg.recipientFac, Type: "FACILITY", Role: "consumer"},
+				{CanonicalPath: seg.recipientOrg, Type: "ORGANIZATION", Role: "customer"},
+			}
+			chains = append(chains, agents.SupplyChain{
+				Nodes:      nodes,
+				Confidence: 0.7,
+				Reason:     "recursive unwinding",
+			})
+		}
+		return chains
+	}
+	buildStep1Chains := func(depthFacs []string) []agents.SupplyChain {
+		chains := make([]agents.SupplyChain, 0, len(depthFacs))
+		seen := map[string]struct{}{}
+		for _, fac := range depthFacs {
+			fac = strings.TrimSpace(fac)
+			org := strings.TrimSpace(facOwner[fac])
+			if fac == "" || org == "" {
+				continue
+			}
+			if !strings.HasPrefix(org, "/org/") && !strings.HasPrefix(org, "/gov/") {
+				continue
+			}
+			key := org + "|" + fac
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			chains = append(chains, agents.SupplyChain{
+				Nodes: []agents.SupplyChainNode{
+					{CanonicalPath: org, Type: "ORGANIZATION", Role: "supplier"},
+					{CanonicalPath: fac, Type: "FACILITY", Role: "producer"},
+				},
+				Confidence: 0.6,
+				Reason:     "recursive unwinding step1",
+			})
+		}
+		return chains
+	}
+	buildStep2Chains := func(productSources []productSource) []agents.SupplyChain {
+		chains := make([]agents.SupplyChain, 0, len(productSources))
+		seen := map[string]struct{}{}
+		for _, ps := range productSources {
+			fac := strings.TrimSpace(ps.facPath)
+			prod := strings.TrimSpace(ps.productPath)
+			org := strings.TrimSpace(facOwner[fac])
+			if fac == "" || prod == "" || org == "" {
+				continue
+			}
+			if !strings.HasPrefix(org, "/org/") && !strings.HasPrefix(org, "/gov/") {
+				continue
+			}
+			key := org + "|" + fac + "|" + prod
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			chains = append(chains, agents.SupplyChain{
+				Nodes: []agents.SupplyChainNode{
+					{CanonicalPath: org, Type: "ORGANIZATION", Role: "supplier"},
+					{CanonicalPath: fac, Type: "FACILITY", Role: "producer"},
+					{CanonicalPath: prod, Type: "PRODUCT"},
+				},
+				Confidence: 0.65,
+				Reason:     "recursive unwinding step2",
+			})
+		}
+		return chains
+	}
+	buildStep3Chains := func(productToSourceFacs map[string][]string, recipientLinks []recipientLink) []agents.SupplyChain {
+		chains := make([]agents.SupplyChain, 0, len(recipientLinks))
+		seen := map[string]struct{}{}
+		for _, rl := range recipientLinks {
+			recipFac := strings.TrimSpace(rl.recipientFac)
+			prod := strings.TrimSpace(rl.productPath)
+			if recipFac == "" || prod == "" {
+				continue
+			}
+			for _, srcFac := range productToSourceFacs[prod] {
+				srcFac = strings.TrimSpace(srcFac)
+				srcOrg := strings.TrimSpace(facOwner[srcFac])
+				if srcFac == "" || srcOrg == "" {
+					continue
+				}
+				if !strings.HasPrefix(srcOrg, "/org/") && !strings.HasPrefix(srcOrg, "/gov/") {
+					continue
+				}
+				key := srcOrg + "|" + srcFac + "|" + prod + "|" + recipFac
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				chains = append(chains, agents.SupplyChain{
+					Nodes: []agents.SupplyChainNode{
+						{CanonicalPath: srcOrg, Type: "ORGANIZATION", Role: "supplier"},
+						{CanonicalPath: srcFac, Type: "FACILITY", Role: "producer"},
+						{CanonicalPath: prod, Type: "PRODUCT"},
+						{CanonicalPath: recipFac, Type: "FACILITY", Role: "consumer"},
+					},
+					Confidence: 0.68,
+					Reason:     "recursive unwinding step3",
+				})
+			}
+		}
+		return chains
+	}
+	materializeStage := func(stage string, depth int, direction string, chains []agents.SupplyChain) {
+		if len(chains) == 0 {
+			return
+		}
+		prevStage := ""
+		if job != nil {
+			if job.State == nil {
+				job.State = map[string]interface{}{}
+			}
+			prevStage = parseStateString(job.State["supplyChainMaterializationStage"])
+			job.State["supplyChainMaterializationStage"] = stage
+		}
+		if err := e.processSupplyChains(ctx, job, nil, chains); err != nil {
+			if job != nil {
+				if strings.TrimSpace(prevStage) == "" {
+					delete(job.State, "supplyChainMaterializationStage")
+				} else {
+					job.State["supplyChainMaterializationStage"] = prevStage
+				}
+			}
+			scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwind] incremental materialization failed stage=%s depth=%d chains=%d: %v", stage, depth, len(chains), err))
+			return
+		}
+		if job != nil {
+			if job.State == nil {
+				job.State = map[string]interface{}{}
+			}
+			job.State["supplyChainIncrementalMaterialized"] = true
+			e.publish(ctx, realtime.EventType("horizon.supply_chain.depth.materialized"), map[string]interface{}{
+				"tenantId":      job.TenantID,
+				"projectId":     job.ProjectID,
+				"lensId":        strings.TrimSpace(job.LensID),
+				"jobId":         job.ID,
+				"canonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+				"depth":         depth,
+				"chainsN":       len(chains),
+				"direction":     direction,
+				"stage":         stage,
+			})
+			if strings.TrimSpace(prevStage) == "" {
+				delete(job.State, "supplyChainMaterializationStage")
+			} else {
+				job.State["supplyChainMaterializationStage"] = prevStage
+			}
+		}
+	}
+
+	var allSegments []chainSegment
+	orgQueue := append([]string{}, anchorOrgs...)
+
+	for depth := 0; depth < maxDepth; depth++ {
+		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, buildSupplyChainStepPromptContext(job, depth, "downstream"))
+		// ---- Step 1: org → child orgs + facilities ----
+		var depthFacs []string
+		var childOrgs []string
+
+		if len(orgQueue) > 0 {
+			orgsForStep1 := orgQueue
+			if len(orgsForStep1) > agents.ScUnwindMaxOrgsPerDepth {
+				orgsForStep1 = orgsForStep1[:agents.ScUnwindMaxOrgsPerDepth]
+				scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step1 orgQueue capped %d→%d", depth, len(orgQueue), len(orgsForStep1)))
+			}
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step1 orgQueue=%d orgs=%v", depth, len(orgsForStep1), truncateSlice(orgsForStep1, 5)))
+
+			orgFacResults, err := e.researchAgent.FindFacilitiesForOrgs(stepCtx, orgsForStep1)
+			if err != nil {
+				scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwind] step1 org→fac failed depth=%d: %v", depth, err))
+				break
+			}
+
+			for _, r := range orgFacResults {
+				for _, child := range r.ChildOrgs {
+					child = strings.TrimSpace(child)
+					if child == "" || !strings.HasPrefix(child, "/org/") || hasUnknownJurisdiction(child) {
+						continue
+					}
+					if _, ok := visited[child]; !ok {
+						visited[child] = struct{}{}
+						childOrgs = append(childOrgs, child)
+					}
+				}
+				for _, f := range r.Facilities {
+					fp := strings.TrimSpace(f.Path)
+					if fp == "" || !strings.HasPrefix(fp, "/fac/") {
+						continue
+					}
+					if _, ok := visited[fp]; !ok {
+						visited[fp] = struct{}{}
+						depthFacs = append(depthFacs, fp)
+						if owner := strings.TrimSpace(r.OrgPath); owner != "" && !hasUnknownJurisdiction(owner) {
+							facOwner[fp] = owner
+						}
+					}
+				}
+			}
+
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] step1 done depth=%d facs=%d childOrgs=%d", depth, len(depthFacs), len(childOrgs)))
+		}
+
+		// Inject seed facs at depth 0 (anchors that were already /fac/ paths).
+		if depth == 0 && len(seedFacs) > 0 {
+			depthFacs = append(depthFacs, seedFacs...)
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=0 injected %d seed facs", len(seedFacs)))
+		}
+
+		// If child orgs were found, recurse Step 1 for them (capped levels and batch size).
+		for recurseLevel := 0; recurseLevel < agents.ScUnwindMaxChildOrgRecurseLevels && len(childOrgs) > 0; recurseLevel++ {
+			childOrgsBatch := childOrgs
+			if len(childOrgsBatch) > agents.ScUnwindMaxChildOrgsRecurse {
+				childOrgsBatch = childOrgsBatch[:agents.ScUnwindMaxChildOrgsRecurse]
+				scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step1-recurse level=%d childOrgs capped %d→%d", depth, recurseLevel, len(childOrgs), len(childOrgsBatch)))
+			}
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step1-recurse level=%d childOrgs=%d", depth, recurseLevel, len(childOrgsBatch)))
+			childResults, err := e.researchAgent.FindFacilitiesForOrgs(stepCtx, childOrgsBatch)
+			if err != nil {
+				scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwind] step1-recurse failed depth=%d level=%d: %v", depth, recurseLevel, err))
+				break
+			}
+			var nextChildren []string
+			for _, r := range childResults {
+				for _, child := range r.ChildOrgs {
+					child = strings.TrimSpace(child)
+					if child == "" || !strings.HasPrefix(child, "/org/") || hasUnknownJurisdiction(child) {
+						continue
+					}
+					if _, ok := visited[child]; !ok {
+						visited[child] = struct{}{}
+						nextChildren = append(nextChildren, child)
+					}
+				}
+				for _, f := range r.Facilities {
+					fp := strings.TrimSpace(f.Path)
+					if fp == "" || !strings.HasPrefix(fp, "/fac/") {
+						continue
+					}
+					if _, ok := visited[fp]; !ok {
+						visited[fp] = struct{}{}
+						depthFacs = append(depthFacs, fp)
+						if owner := strings.TrimSpace(r.OrgPath); owner != "" && !hasUnknownJurisdiction(owner) {
+							facOwner[fp] = owner
+						}
+					}
+				}
+			}
+			childOrgs = nextChildren
+		}
+
+		if len(depthFacs) == 0 {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] no facilities at depth=%d, stopping", depth))
+			break
+		}
+		materializeStage("step1", depth, "downstream", buildStep1Chains(depthFacs))
+
+		// ---- Step 2: fac → products ----
+		facsForStep2 := depthFacs
+		if len(facsForStep2) > agents.ScUnwindMaxFacsPerDepth {
+			facsForStep2 = facsForStep2[:agents.ScUnwindMaxFacsPerDepth]
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step2 depthFacs capped %d→%d", depth, len(depthFacs), len(facsForStep2)))
+		}
+		facProdResults, err := e.researchAgent.FindProductsForFacs(stepCtx, facsForStep2)
+		if err != nil {
+			scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwind] step2 fac→product failed depth=%d: %v", depth, err))
+			break
+		}
+
+		// One fac can produce many products: store (product, sourceFac) pairs.
+		var productSources []productSource
+		for _, r := range facProdResults {
+			for _, p := range r.Products {
+				pp := strings.TrimSpace(p.Path)
+				if pp == "" || !strings.HasPrefix(pp, "/product/") {
+					continue
+				}
+				if _, ok := visited[pp]; !ok {
+					visited[pp] = struct{}{}
+				}
+				productSources = append(productSources, productSource{productPath: pp, facPath: r.FacPath})
+			}
+		}
+
+		uniqueProducts := map[string]struct{}{}
+		var productList []string
+		for _, ps := range productSources {
+			if _, ok := uniqueProducts[ps.productPath]; !ok {
+				uniqueProducts[ps.productPath] = struct{}{}
+				productList = append(productList, ps.productPath)
+			}
+		}
+
+		scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] step2 done depth=%d products=%d (from %d facs)", depth, len(productList), len(depthFacs)))
+		materializeStage("step2", depth, "downstream", buildStep2Chains(productSources))
+
+		if len(productList) == 0 {
+			break
+		}
+
+		// ---- Step 3: product → recipient facilities ----
+		productsForStep3 := productList
+		if len(productsForStep3) > agents.ScUnwindMaxProductsPerDepth {
+			productsForStep3 = productsForStep3[:agents.ScUnwindMaxProductsPerDepth]
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step3 productList capped %d→%d", depth, len(productList), len(productsForStep3)))
+		}
+		prodRecipResults, err := e.researchAgent.FindRecipientFacsForProducts(stepCtx, productsForStep3)
+		if err != nil {
+			scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwind] step3 product→recipientFac failed depth=%d: %v", depth, err))
+			break
+		}
+
+		// One product can go to many recipients: store (recipientFac, productPath) pairs.
+		var recipientLinks []recipientLink
+		var recipientFacList []string
+		recipientSeen := map[string]struct{}{}
+		for _, r := range prodRecipResults {
+			for _, rf := range r.Recipients {
+				rfp := strings.TrimSpace(rf.Path)
+				if rfp == "" || !strings.HasPrefix(rfp, "/fac/") {
+					continue
+				}
+				recipientLinks = append(recipientLinks, recipientLink{recipientFac: rfp, productPath: r.ProductPath})
+				if _, ok := recipientSeen[rfp]; !ok {
+					recipientSeen[rfp] = struct{}{}
+					if _, ok2 := visited[rfp]; !ok2 {
+						visited[rfp] = struct{}{}
+					}
+					recipientFacList = append(recipientFacList, rfp)
+				}
+			}
+		}
+
+		scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] step3 done depth=%d recipientFacs=%d links=%d", depth, len(recipientFacList), len(recipientLinks)))
+
+		if len(recipientFacList) == 0 {
+			break
+		}
+		productToSourceFacs := map[string][]string{}
+		for _, ps := range productSources {
+			productToSourceFacs[ps.productPath] = append(productToSourceFacs[ps.productPath], ps.facPath)
+		}
+		materializeStage("step3", depth, "downstream", buildStep3Chains(productToSourceFacs, recipientLinks))
+
+		// ---- Step 4: recipient fac → owning org ----
+		recipFacsForStep4 := recipientFacList
+		if len(recipFacsForStep4) > agents.ScUnwindMaxRecipientFacsPerDepth {
+			recipFacsForStep4 = recipFacsForStep4[:agents.ScUnwindMaxRecipientFacsPerDepth]
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step4 recipientFacList capped %d→%d", depth, len(recipientFacList), len(recipFacsForStep4)))
+		}
+		facOrgResults, err := e.researchAgent.FindOrgsForFacs(stepCtx, recipFacsForStep4)
+		if err != nil {
+			scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwind] step4 fac→org failed depth=%d: %v", depth, err))
+			break
+		}
+
+		recipFacOrg := map[string]string{}
+		for _, r := range facOrgResults {
+			orgP := strings.TrimSpace(r.OrgPath)
+			facP := strings.TrimSpace(r.FacPath)
+			if orgP != "" && facP != "" && !hasUnknownJurisdiction(orgP) {
+				recipFacOrg[facP] = orgP
+				facOwner[facP] = orgP
+			}
+		}
+
+		// Build segments from the full linkage: for each recipientLink, trace back
+		// through productSources to build org→fac→product→recipientFac→recipientOrg.
+		segmentsBeforeDepth := len(allSegments)
+		nextOrgQueue := map[string]struct{}{}
+		for _, rl := range recipientLinks {
+			recipOrg := recipFacOrg[rl.recipientFac]
+			sourceFacs := productToSourceFacs[rl.productPath]
+			for _, sf := range sourceFacs {
+				srcOrg := facOwner[sf]
+				// Skip segments with empty orgs — parser can't materialize valid edges.
+				if srcOrg == "" || recipOrg == "" {
+					continue
+				}
+				if !strings.HasPrefix(srcOrg, "/org/") && !strings.HasPrefix(srcOrg, "/gov/") {
+					continue
+				}
+				if !strings.HasPrefix(recipOrg, "/org/") && !strings.HasPrefix(recipOrg, "/gov/") {
+					continue
+				}
+				allSegments = append(allSegments, chainSegment{
+					orgPath:      srcOrg,
+					facPath:      sf,
+					productPath:  rl.productPath,
+					recipientFac: rl.recipientFac,
+					recipientOrg: recipOrg,
+				})
+			}
+			if recipOrg != "" && (strings.HasPrefix(recipOrg, "/org/") || strings.HasPrefix(recipOrg, "/gov/")) {
+				if hasUnknownJurisdiction(recipOrg) {
+					continue
+				}
+				if _, ok := visited[recipOrg]; !ok {
+					visited[recipOrg] = struct{}{}
+					nextOrgQueue[recipOrg] = struct{}{}
+				}
+			}
+		}
+
+		orgQueue = make([]string, 0, len(nextOrgQueue))
+		for o := range nextOrgQueue {
+			orgQueue = append(orgQueue, o)
+		}
+		if len(orgQueue) > agents.ScUnwindMaxOrgsPerDepth {
+			orgQueue = orgQueue[:agents.ScUnwindMaxOrgsPerDepth]
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d nextOrgQueue capped to %d", depth, agents.ScUnwindMaxOrgsPerDepth))
+		}
+
+		scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] step4 done depth=%d totalSegments=%d nextOrgs=%d", depth, len(allSegments), len(orgQueue)))
+		if len(allSegments) > segmentsBeforeDepth {
+			newChains := buildChains(allSegments[segmentsBeforeDepth:])
+			materializeStage("step4", depth, "downstream", newChains)
+		}
+
+		if len(orgQueue) == 0 {
+			break
+		}
+	}
+
+	scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] complete: totalSegments=%d visited=%d", len(allSegments), len(visited)))
+
+	return buildChains(allSegments)
+}
+
+// runSupplyChainUpstreamUnwinding implements step-by-step UPSTREAM unwinding:
+// consumerOrg→consumerFac→product→supplierFac→supplierOrg, recursing from supplier orgs.
+// Flow: Step 1 (org→fac), U1 (fac→input products), U2 (product→supplier facs), Step 4 (fac→org).
+func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
+	ctx context.Context, job *models.ScoutingJob, anchorOrgs []string, seedFacs []string, maxDepth int,
+) []agents.SupplyChain {
+	if e.researchAgent == nil || (len(anchorOrgs) == 0 && len(seedFacs) == 0) {
+		return nil
+	}
+
+	visited := map[string]struct{}{}
+	for _, p := range anchorOrgs {
+		visited[p] = struct{}{}
+	}
+	for _, p := range seedFacs {
+		visited[p] = struct{}{}
+	}
+
+	type chainSegment struct {
+		supplierOrg   string
+		supplierFac   string
+		productPath   string
+		consumerFac   string
+		consumerOrg   string
+	}
+	type facProductLink struct {
+		consumerFac string
+		productPath string
+	}
+	facOwner := map[string]string{}
+	buildChains := func(segments []chainSegment) []agents.SupplyChain {
+		chains := make([]agents.SupplyChain, 0, len(segments))
+		for _, seg := range segments {
+			nodes := []agents.SupplyChainNode{
+				{CanonicalPath: seg.supplierOrg, Type: "ORGANIZATION", Role: "supplier"},
+				{CanonicalPath: seg.supplierFac, Type: "FACILITY", Role: "producer"},
+				{CanonicalPath: seg.productPath, Type: "PRODUCT"},
+				{CanonicalPath: seg.consumerFac, Type: "FACILITY", Role: "consumer"},
+				{CanonicalPath: seg.consumerOrg, Type: "ORGANIZATION", Role: "customer"},
+			}
+			chains = append(chains, agents.SupplyChain{
+				Nodes:      nodes,
+				Confidence: 0.7,
+				Reason:     "upstream unwinding",
+			})
+		}
+		return chains
+	}
+	buildStep1Chains := func(depthFacs []string) []agents.SupplyChain {
+		chains := make([]agents.SupplyChain, 0, len(depthFacs))
+		seen := map[string]struct{}{}
+		for _, fac := range depthFacs {
+			fac = strings.TrimSpace(fac)
+			org := strings.TrimSpace(facOwner[fac])
+			if fac == "" || org == "" {
+				continue
+			}
+			if !strings.HasPrefix(org, "/org/") && !strings.HasPrefix(org, "/gov/") {
+				continue
+			}
+			key := org + "|" + fac
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			chains = append(chains, agents.SupplyChain{
+				Nodes: []agents.SupplyChainNode{
+					{CanonicalPath: org, Type: "ORGANIZATION", Role: "customer"},
+					{CanonicalPath: fac, Type: "FACILITY", Role: "consumer"},
+				},
+				Confidence: 0.6,
+				Reason:     "upstream unwinding step1",
+			})
+		}
+		return chains
+	}
+	buildU1Chains := func(facProductLinks []facProductLink) []agents.SupplyChain {
+		chains := make([]agents.SupplyChain, 0, len(facProductLinks))
+		seen := map[string]struct{}{}
+		for _, fpl := range facProductLinks {
+			fac := strings.TrimSpace(fpl.consumerFac)
+			prod := strings.TrimSpace(fpl.productPath)
+			org := strings.TrimSpace(facOwner[fac])
+			if fac == "" || prod == "" || org == "" {
+				continue
+			}
+			if !strings.HasPrefix(org, "/org/") && !strings.HasPrefix(org, "/gov/") {
+				continue
+			}
+			key := org + "|" + fac + "|" + prod
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			chains = append(chains, agents.SupplyChain{
+				Nodes: []agents.SupplyChainNode{
+					{CanonicalPath: org, Type: "ORGANIZATION", Role: "customer"},
+					{CanonicalPath: fac, Type: "FACILITY", Role: "consumer"},
+					{CanonicalPath: prod, Type: "PRODUCT"},
+				},
+				Confidence: 0.65,
+				Reason:     "upstream unwinding U1",
+			})
+		}
+		return chains
+	}
+	buildU2Chains := func(facProductLinks []facProductLink, productToSupplierFacs map[string][]string) []agents.SupplyChain {
+		chains := make([]agents.SupplyChain, 0, len(facProductLinks))
+		seen := map[string]struct{}{}
+		for _, fpl := range facProductLinks {
+			consumerFac := strings.TrimSpace(fpl.consumerFac)
+			prod := strings.TrimSpace(fpl.productPath)
+			if consumerFac == "" || prod == "" {
+				continue
+			}
+			consumerOrg := strings.TrimSpace(facOwner[consumerFac])
+			if consumerOrg == "" {
+				continue
+			}
+			if !strings.HasPrefix(consumerOrg, "/org/") && !strings.HasPrefix(consumerOrg, "/gov/") {
+				continue
+			}
+			for _, supplierFac := range productToSupplierFacs[prod] {
+				supplierFac = strings.TrimSpace(supplierFac)
+				if supplierFac == "" {
+					continue
+				}
+				key := consumerOrg + "|" + supplierFac + "|" + prod + "|" + consumerFac
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				chains = append(chains, agents.SupplyChain{
+					Nodes: []agents.SupplyChainNode{
+						{CanonicalPath: consumerOrg, Type: "ORGANIZATION", Role: "customer"},
+						{CanonicalPath: supplierFac, Type: "FACILITY", Role: "supplier"},
+						{CanonicalPath: prod, Type: "PRODUCT"},
+						{CanonicalPath: consumerFac, Type: "FACILITY", Role: "consumer"},
+					},
+					Confidence: 0.68,
+					Reason:     "upstream unwinding U2",
+				})
+			}
+		}
+		return chains
+	}
+	materializeStage := func(stage string, depth int, direction string, chains []agents.SupplyChain) {
+		if len(chains) == 0 {
+			return
+		}
+		prevStage := ""
+		if job != nil {
+			if job.State == nil {
+				job.State = map[string]interface{}{}
+			}
+			prevStage = parseStateString(job.State["supplyChainMaterializationStage"])
+			job.State["supplyChainMaterializationStage"] = stage
+		}
+		if err := e.processSupplyChains(ctx, job, nil, chains); err != nil {
+			if job != nil {
+				if strings.TrimSpace(prevStage) == "" {
+					delete(job.State, "supplyChainMaterializationStage")
+				} else {
+					job.State["supplyChainMaterializationStage"] = prevStage
+				}
+			}
+			scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwindUp] incremental materialization failed stage=%s depth=%d chains=%d: %v", stage, depth, len(chains), err))
+			return
+		}
+		if job != nil {
+			if job.State == nil {
+				job.State = map[string]interface{}{}
+			}
+			job.State["supplyChainIncrementalMaterialized"] = true
+			e.publish(ctx, realtime.EventType("horizon.supply_chain.depth.materialized"), map[string]interface{}{
+				"tenantId":      job.TenantID,
+				"projectId":     job.ProjectID,
+				"lensId":        strings.TrimSpace(job.LensID),
+				"jobId":         job.ID,
+				"canonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+				"depth":         depth,
+				"chainsN":       len(chains),
+				"direction":     direction,
+				"stage":         stage,
+			})
+			if strings.TrimSpace(prevStage) == "" {
+				delete(job.State, "supplyChainMaterializationStage")
+			} else {
+				job.State["supplyChainMaterializationStage"] = prevStage
+			}
+		}
+	}
+
+	var allSegments []chainSegment
+	orgQueue := append([]string{}, anchorOrgs...)
+
+	for depth := 0; depth < maxDepth; depth++ {
+		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, buildSupplyChainStepPromptContext(job, depth, "upstream"))
+		var depthFacs []string
+		var childOrgs []string
+
+		if len(orgQueue) > 0 {
+			orgsForStep1 := orgQueue
+			if len(orgsForStep1) > agents.ScUnwindMaxOrgsPerDepth {
+				orgsForStep1 = orgsForStep1[:agents.ScUnwindMaxOrgsPerDepth]
+				scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d step1 orgQueue capped %d→%d", depth, len(orgQueue), len(orgsForStep1)))
+			}
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d step1 orgQueue=%d orgs=%v", depth, len(orgsForStep1), truncateSlice(orgsForStep1, 5)))
+
+			orgFacResults, err := e.researchAgent.FindFacilitiesForOrgs(stepCtx, orgsForStep1)
+			if err != nil {
+				scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwindUp] step1 org→fac failed depth=%d: %v", depth, err))
+				break
+			}
+
+			for _, r := range orgFacResults {
+				for _, child := range r.ChildOrgs {
+					child = strings.TrimSpace(child)
+					if child == "" || !strings.HasPrefix(child, "/org/") || hasUnknownJurisdiction(child) {
+						continue
+					}
+					if _, ok := visited[child]; !ok {
+						visited[child] = struct{}{}
+						childOrgs = append(childOrgs, child)
+					}
+				}
+				for _, f := range r.Facilities {
+					fp := strings.TrimSpace(f.Path)
+					if fp == "" || !strings.HasPrefix(fp, "/fac/") {
+						continue
+					}
+					if _, ok := visited[fp]; !ok {
+						visited[fp] = struct{}{}
+						depthFacs = append(depthFacs, fp)
+						if owner := strings.TrimSpace(r.OrgPath); owner != "" && !hasUnknownJurisdiction(owner) {
+							facOwner[fp] = owner
+						}
+					}
+				}
+			}
+
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] step1 done depth=%d facs=%d childOrgs=%d", depth, len(depthFacs), len(childOrgs)))
+		}
+
+		if depth == 0 && len(seedFacs) > 0 {
+			depthFacs = append(depthFacs, seedFacs...)
+			// Populate facOwner for seed facs (they skip Step 1)
+			seedOrgResults, _ := e.researchAgent.FindOrgsForFacs(stepCtx, seedFacs)
+			for _, r := range seedOrgResults {
+				if fp, op := strings.TrimSpace(r.FacPath), strings.TrimSpace(r.OrgPath); fp != "" && op != "" && !hasUnknownJurisdiction(op) {
+					facOwner[fp] = op
+				}
+			}
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=0 injected %d seed facs", len(seedFacs)))
+		}
+
+		for recurseLevel := 0; recurseLevel < agents.ScUnwindMaxChildOrgRecurseLevels && len(childOrgs) > 0; recurseLevel++ {
+			childOrgsBatch := childOrgs
+			if len(childOrgsBatch) > agents.ScUnwindMaxChildOrgsRecurse {
+				childOrgsBatch = childOrgsBatch[:agents.ScUnwindMaxChildOrgsRecurse]
+				scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d step1-recurse level=%d childOrgs capped %d→%d", depth, recurseLevel, len(childOrgs), len(childOrgsBatch)))
+			}
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d step1-recurse level=%d childOrgs=%d", depth, recurseLevel, len(childOrgsBatch)))
+			childResults, err := e.researchAgent.FindFacilitiesForOrgs(stepCtx, childOrgsBatch)
+			if err != nil {
+				scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwindUp] step1-recurse failed depth=%d level=%d: %v", depth, recurseLevel, err))
+				break
+			}
+			var nextChildren []string
+			for _, r := range childResults {
+				for _, child := range r.ChildOrgs {
+					child = strings.TrimSpace(child)
+					if child == "" || !strings.HasPrefix(child, "/org/") || hasUnknownJurisdiction(child) {
+						continue
+					}
+					if _, ok := visited[child]; !ok {
+						visited[child] = struct{}{}
+						nextChildren = append(nextChildren, child)
+					}
+				}
+				for _, f := range r.Facilities {
+					fp := strings.TrimSpace(f.Path)
+					if fp == "" || !strings.HasPrefix(fp, "/fac/") {
+						continue
+					}
+					if _, ok := visited[fp]; !ok {
+						visited[fp] = struct{}{}
+						depthFacs = append(depthFacs, fp)
+						if owner := strings.TrimSpace(r.OrgPath); owner != "" && !hasUnknownJurisdiction(owner) {
+							facOwner[fp] = owner
+						}
+					}
+				}
+			}
+			childOrgs = nextChildren
+		}
+
+		if len(depthFacs) == 0 {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] no facilities at depth=%d, stopping", depth))
+			break
+		}
+		materializeStage("step1", depth, "upstream", buildStep1Chains(depthFacs))
+
+		// ---- Step U1: fac → input products ----
+		facsForU1 := depthFacs
+		if len(facsForU1) > agents.ScUnwindMaxFacsPerDepth {
+			facsForU1 = facsForU1[:agents.ScUnwindMaxFacsPerDepth]
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d U1 depthFacs capped %d→%d", depth, len(depthFacs), len(facsForU1)))
+		}
+		facInputResults, err := e.researchAgent.FindInputProductsForFacs(stepCtx, facsForU1)
+		if err != nil {
+			scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwindUp] U1 fac→inputProducts failed depth=%d: %v", depth, err))
+			break
+		}
+
+		var facProductLinks []facProductLink
+		productSeen := map[string]struct{}{}
+		var productList []string
+		for _, r := range facInputResults {
+			for _, p := range r.InputProducts {
+				pp := strings.TrimSpace(p.Path)
+				if pp == "" || !strings.HasPrefix(pp, "/product/") {
+					continue
+				}
+				facProductLinks = append(facProductLinks, facProductLink{consumerFac: r.FacPath, productPath: pp})
+				if _, ok := productSeen[pp]; !ok {
+					productSeen[pp] = struct{}{}
+					productList = append(productList, pp)
+				}
+			}
+		}
+
+		scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] U1 done depth=%d products=%d (from %d facs)", depth, len(productList), len(depthFacs)))
+		materializeStage("U1", depth, "upstream", buildU1Chains(facProductLinks))
+
+		if len(productList) == 0 {
+			break
+		}
+
+		// ---- Step U2: product → supplier facilities ----
+		productsForU2 := productList
+		if len(productsForU2) > agents.ScUnwindMaxProductsPerDepth {
+			productsForU2 = productsForU2[:agents.ScUnwindMaxProductsPerDepth]
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d U2 productList capped %d→%d", depth, len(productList), len(productsForU2)))
+		}
+		prodSuppResults, err := e.researchAgent.FindSupplierFacsForProducts(stepCtx, productsForU2)
+		if err != nil {
+			scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwindUp] U2 product→suppliers failed depth=%d: %v", depth, err))
+			break
+		}
+
+		productToSupplierFacs := map[string][]string{}
+		var supplierFacList []string
+		supplierSeen := map[string]struct{}{}
+		for _, r := range prodSuppResults {
+			for _, sf := range r.Suppliers {
+				sfp := strings.TrimSpace(sf.Path)
+				if sfp == "" || !strings.HasPrefix(sfp, "/fac/") {
+					continue
+				}
+				productToSupplierFacs[r.ProductPath] = append(productToSupplierFacs[r.ProductPath], sfp)
+				if _, ok := supplierSeen[sfp]; !ok {
+					supplierSeen[sfp] = struct{}{}
+					supplierFacList = append(supplierFacList, sfp)
+				}
+			}
+		}
+
+		scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] U2 done depth=%d supplierFacs=%d", depth, len(supplierFacList)))
+
+		if len(supplierFacList) == 0 {
+			break
+		}
+		materializeStage("U2", depth, "upstream", buildU2Chains(facProductLinks, productToSupplierFacs))
+
+		// ---- Step 4: supplier fac → owning org ----
+		supplierFacsForStep4 := supplierFacList
+		if len(supplierFacsForStep4) > agents.ScUnwindMaxRecipientFacsPerDepth {
+			supplierFacsForStep4 = supplierFacsForStep4[:agents.ScUnwindMaxRecipientFacsPerDepth]
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d step4 supplierFacList capped %d→%d", depth, len(supplierFacList), len(supplierFacsForStep4)))
+		}
+		facOrgResults, err := e.researchAgent.FindOrgsForFacs(stepCtx, supplierFacsForStep4)
+		if err != nil {
+			scLog(ctx, e, job, "warn", fmt.Sprintf("[SCUnwindUp] step4 fac→org failed depth=%d: %v", depth, err))
+			break
+		}
+
+		supplierFacOrg := map[string]string{}
+		for _, r := range facOrgResults {
+			orgP := strings.TrimSpace(r.OrgPath)
+			facP := strings.TrimSpace(r.FacPath)
+			if orgP != "" && facP != "" && !hasUnknownJurisdiction(orgP) {
+				supplierFacOrg[facP] = orgP
+				facOwner[facP] = orgP
+			}
+		}
+
+		// Build segments: for each facProductLink, trace to supplierFacs and build supplierOrg→supplierFac→product→consumerFac→consumerOrg.
+		segmentsBeforeDepth := len(allSegments)
+		nextOrgQueue := map[string]struct{}{}
+		for _, fpl := range facProductLinks {
+			supplierFacs := productToSupplierFacs[fpl.productPath]
+			consumerOrg := facOwner[fpl.consumerFac]
+			for _, sf := range supplierFacs {
+				supplierOrg := supplierFacOrg[sf]
+				// Skip segments with empty orgs — parser can't materialize valid edges.
+				if supplierOrg == "" || consumerOrg == "" {
+					continue
+				}
+				if !strings.HasPrefix(supplierOrg, "/org/") && !strings.HasPrefix(supplierOrg, "/gov/") {
+					continue
+				}
+				if !strings.HasPrefix(consumerOrg, "/org/") && !strings.HasPrefix(consumerOrg, "/gov/") {
+					continue
+				}
+				allSegments = append(allSegments, chainSegment{
+					supplierOrg:   supplierOrg,
+					supplierFac:   sf,
+					productPath:   fpl.productPath,
+					consumerFac:   fpl.consumerFac,
+					consumerOrg:   consumerOrg,
+				})
+			}
+			for _, sf := range supplierFacs {
+				supplierOrg := supplierFacOrg[sf]
+				if supplierOrg != "" && (strings.HasPrefix(supplierOrg, "/org/") || strings.HasPrefix(supplierOrg, "/gov/")) {
+					if hasUnknownJurisdiction(supplierOrg) {
+						continue
+					}
+					if _, ok := visited[supplierOrg]; !ok {
+						visited[supplierOrg] = struct{}{}
+						nextOrgQueue[supplierOrg] = struct{}{}
+					}
+				}
+			}
+		}
+
+		orgQueue = make([]string, 0, len(nextOrgQueue))
+		for o := range nextOrgQueue {
+			orgQueue = append(orgQueue, o)
+		}
+		if len(orgQueue) > agents.ScUnwindMaxOrgsPerDepth {
+			orgQueue = orgQueue[:agents.ScUnwindMaxOrgsPerDepth]
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d nextOrgQueue capped to %d", depth, agents.ScUnwindMaxOrgsPerDepth))
+		}
+
+		scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] step4 done depth=%d totalSegments=%d nextOrgs=%d", depth, len(allSegments), len(orgQueue)))
+		if len(allSegments) > segmentsBeforeDepth {
+			newChains := buildChains(allSegments[segmentsBeforeDepth:])
+			materializeStage("step4", depth, "upstream", newChains)
+		}
+
+		if len(orgQueue) == 0 {
+			break
+		}
+	}
+
+	scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] complete: totalSegments=%d visited=%d", len(allSegments), len(visited)))
+
+	return buildChains(allSegments)
+}
+
+// scLog logs to both realtime (frontend) and stderr (GCP).
+func scLog(ctx context.Context, e *ScoutEngine, job *models.ScoutingJob, level string, msg string) {
+	log.Printf("%s", msg)
+	if e != nil {
+		e.logLine(ctx, job, level, msg)
+	}
+}
+
+func truncateSlice(s []string, max int) []string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
 }

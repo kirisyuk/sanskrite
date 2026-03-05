@@ -676,7 +676,7 @@ func (h *HorizonHandlers) runAutoScout(
 		}
 
 		newFragCount := 0
-		if finishedJob != nil && finishedJob.Result != nil {
+		if finishedJob.Result != nil {
 			if v, ok := finishedJob.Result["fragmentsCreated"]; ok {
 				switch n := v.(type) {
 				case float64:

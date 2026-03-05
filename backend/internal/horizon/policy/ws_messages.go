@@ -151,7 +151,7 @@ func NewWSEnforcementBatchComplete(parentJobID, tenantID string, jobs []*PolicyE
 				switch job.Task.Type {
 				case TaskMergeFragments:
 					msg.FragmentsMerged++
-				case TaskFixPath, TaskResolveGeoNames, TaskFixLegalForm, TaskFixISO2:
+				case TaskFixPath, TaskResolveGeoNames, TaskFixISO2:
 					msg.PathsFixed++
 				case TaskReverseEdge:
 					msg.EdgesReversed++

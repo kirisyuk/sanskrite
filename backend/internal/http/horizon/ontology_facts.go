@@ -15,7 +15,7 @@ import (
 // canonical paths (canonicalPaths array); the response includes the full array for each fact.
 //
 // Query params:
-//   - canonicalPath (required): e.g. /org/emirates, /loc/us/na/na
+//   - canonicalPath (required): e.g. /org/emirates, /loc/us
 //   - kind (optional): filter by fact kind (event, claim, signal, metric, relation, other)
 //   - limit (optional): max results, default 100
 func (h *HorizonHandlers) GetFactsByCanonicalPath(w http.ResponseWriter, r *http.Request) {

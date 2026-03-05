@@ -75,12 +75,12 @@ func TestParseSupplyChains_SupplyLinkSegmentBasic(t *testing.T) {
 		t.Fatalf("segments=%d, want 1", len(result.SupplyLinkSegments))
 	}
 	seg := result.SupplyLinkSegments[0]
-	// Org actors are normalized to /fac/{orgSlug}-general-production per fractal model
-	if seg.SupplierRef != "/fac/huawei-technologies-co-ltd-general-production" {
-		t.Fatalf("supplierRef=%q, want /fac/huawei-technologies-co-ltd-general-production", seg.SupplierRef)
+	// Full chain org→fac→product→fac→org: keep org as-is, do not convert
+	if seg.SupplierRef != "/org/cn/huawei-technologies-co-ltd" {
+		t.Fatalf("supplierRef=%q, want /org/cn/huawei-technologies-co-ltd", seg.SupplierRef)
 	}
-	if seg.CustomerRef != "/fac/kcell-jsc-general-production" {
-		t.Fatalf("customerRef=%q, want /fac/kcell-jsc-general-production", seg.CustomerRef)
+	if seg.CustomerRef != "/org/kz/kcell-jsc" {
+		t.Fatalf("customerRef=%q, want /org/kz/kcell-jsc", seg.CustomerRef)
 	}
 	if len(seg.TransportViaRefs) != 1 || seg.TransportViaRefs[0] != "/fac/ae/jebel-ali-port" {
 		t.Fatalf("transportViaRefs=%v, want only /fac/ae/jebel-ali-port", seg.TransportViaRefs)
@@ -120,14 +120,14 @@ func TestParseSupplyChains_SuppliesToEdgeHasTransportVia(t *testing.T) {
 		if edge == nil || edge.RelationType != string(models.DependencyTypeSuppliesTo) {
 			continue
 		}
-		// Org actors normalized to /fac/{slug}-general-production
-		if edge.SourceCanonicalPath == "/fac/intel-corporation-general-production" && edge.TargetCanonicalPath == "/fac/tsmc-general-production" {
+		// Full chain: keep org as endpoint
+		if edge.SourceCanonicalPath == "/org/us/intel-corporation" && edge.TargetCanonicalPath == "/org/tw/tsmc" {
 			suppliesEdge = edge
 			break
 		}
 	}
 	if suppliesEdge == nil {
-		t.Fatalf("expected inferred SUPPLIES_TO edge (org→org normalized to fac→fac)")
+		t.Fatalf("expected inferred SUPPLIES_TO edge (org→org kept as-is)")
 	}
 	rawVia, ok := suppliesEdge.Qualifiers[models.QualifierTransportVia]
 	if !ok {
@@ -186,8 +186,8 @@ func TestParseSupplyChains_SuppliesToEdgeWithoutTransportStillHasDirectionalQual
 		if edge == nil || edge.RelationType != string(models.DependencyTypeSuppliesTo) {
 			continue
 		}
-		// Org supplier normalized to /fac/{slug}-general-production
-		if edge.SourceCanonicalPath == "/fac/vale-sa-general-production" && edge.TargetCanonicalPath == "/fac/cn/baosteel-shanghai" {
+		// Full chain: keep org as supplier
+		if edge.SourceCanonicalPath == "/org/br/vale-sa" && edge.TargetCanonicalPath == "/fac/cn/baosteel-shanghai" {
 			suppliesEdge = edge
 			break
 		}
@@ -223,7 +223,7 @@ func TestParseSupplyChains_ExtractivePatternUsesExtractsFromAndAvoidsDepositSupp
 					Type:          "ORGANIZATION",
 				},
 				{
-					CanonicalPath: "/fac/vale/carajas-mine",
+					CanonicalPath: "/fac/br/carajas-mine",
 					Type:          "FACILITY",
 				},
 				{
@@ -249,7 +249,7 @@ func TestParseSupplyChains_ExtractivePatternUsesExtractsFromAndAvoidsDepositSupp
 			continue
 		}
 		if edge.RelationType == string(models.DependencyTypeExtractsFrom) &&
-			edge.SourceCanonicalPath == "/fac/vale/carajas-mine" &&
+			edge.SourceCanonicalPath == "/fac/br/carajas-mine" &&
 			edge.TargetCanonicalPath == "/deposit/iron-ore/carajas-complex" {
 			hasExtractsFrom = true
 		}
@@ -274,7 +274,7 @@ func TestParseSupplyChains_ProgramAndMarketNodesCreateFragments(t *testing.T) {
 			Reason:     "Aktau port route to TITR and EU logistics market",
 			Nodes: []agents.SupplyChainNode{
 				{
-					CanonicalPath: "/fac/kazakhstan/aktau-sea-port",
+					CanonicalPath: "/fac/kz/aktau-sea-port",
 					Name:          "Aktau Sea Port",
 					Type:          "FACILITY",
 				},
@@ -426,7 +426,7 @@ func TestParseSupplyChains_TransformsIntoViaFacility_DirectionSwap(t *testing.T)
 					Type:          "PRODUCT",
 				},
 				{
-					CanonicalPath: "/fac/codelco/chuquicamata-smelter",
+					CanonicalPath: "/fac/cl/chuquicamata-smelter",
 					Name:          "Chuquicamata Smelter",
 					Type:          "FACILITY",
 				},

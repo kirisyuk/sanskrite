@@ -11,10 +11,10 @@ func TestNormalizeGeoPathToStrict(t *testing.T) {
 		in   string
 		want string
 	}{
-		{in: "/loc/uae", want: "/loc/ae/na/na"},
-		{in: "/loc/us", want: "/loc/us/na/na"},
-		{in: "/loc/saudi-arabia", want: "/loc/sa/na/na"},
-		{in: "/loc/us/tx", want: "/loc/us/tx/na"},
+		{in: "/loc/uae", want: "/loc/ae"},
+		{in: "/loc/us", want: "/loc/us"},
+		{in: "/loc/saudi-arabia", want: "/loc/sa"},
+		{in: "/loc/us/tx", want: "/loc/us/tx"},
 		{in: "/loc/us/tx/austin", want: "/loc/us/tx/austin"},
 		{in: "/loc/georgia", want: ""}, // ambiguous (country vs US state) -> refuse to guess
 		{in: "/loc/not-a-country", want: ""},
@@ -67,7 +67,7 @@ func TestInferFragmentTypeFromCanonicalPath(t *testing.T) {
 		{in: "/gov/sa/sfda", want: string(models.FragmentTypeOrganization)},
 		{in: "/org/us/tesla", want: string(models.FragmentTypeOrganization)},
 		{in: "/product/raw/mineral/extraction/lithium-ore", want: string(models.FragmentTypeProduct)},
-		{in: "/fac/tesla/gigafactory-texas", want: string(models.FragmentTypeFacility)},
+		{in: "/fac/us/gigafactory-texas", want: string(models.FragmentTypeFacility)},
 		{in: "/loc/us/tx/austin", want: string(models.FragmentTypeGeoRegion)},
 		{in: "/region/na/us/tx/austin", want: string(models.FragmentTypeGeoRegion)},
 		{in: "/event/ces-2026", want: string(models.FragmentTypeEvent)},
@@ -84,4 +84,3 @@ func TestInferFragmentTypeFromCanonicalPath(t *testing.T) {
 		}
 	}
 }
-

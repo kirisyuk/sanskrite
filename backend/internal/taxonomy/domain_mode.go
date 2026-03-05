@@ -110,16 +110,45 @@ func EntityActorTypesForDomainMode(mode string) string {
 }
 
 // SupplyChainEdgeTypes is the allowlist for supply_chain mode (filtering, gap analyzer).
-// Operational types (4) + geographic (LOCATED_IN, OPERATES_IN). Single source of truth.
+// Operational edges only; DEPENDS_ON excluded to avoid generic dependency proliferation.
+// Use CONSUMES for input products, SUPPLIES_TO for flow. Single source of truth.
 // Must stay in sync with edgesemantics.domainModeAllowlists[supply_chain].
 var SupplyChainEdgeTypes = []string{
-	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM",
-	"LOCATED_IN", "OPERATES_IN",
+	"PRODUCES", "CONSUMES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM",
+	"LOCATED_IN", "OPERATES_IN", "PARTICIPATES_IN",
+	"HAS_MARKET_SEGMENT",
 }
 
 // SupplyChainEdgeTypesString returns comma-separated list for prompts. Derives from SupplyChainEdgeTypes.
 func SupplyChainEdgeTypesString() string {
 	return strings.Join(SupplyChainEdgeTypes, ", ")
+}
+
+// SupplyChainEdgeTypesForPrompt returns prompt enum string for supply-chain-only schemas:
+// `"PRODUCES" | "SUPPLIES_TO" | ...`. Use in supply-chain contract prompts instead of AllEdgeTypesForPrompt.
+func SupplyChainEdgeTypesForPrompt() string {
+	quoted := make([]string, 0, len(SupplyChainEdgeTypes))
+	for _, t := range SupplyChainEdgeTypes {
+		quoted = append(quoted, `"`+t+`"`)
+	}
+	return strings.Join(quoted, " | ")
+}
+
+// supplyChainEdgeTypesSet is initialized at startup for O(1) allowlist checks.
+var supplyChainEdgeTypesSet map[string]struct{}
+
+func init() {
+	supplyChainEdgeTypesSet = make(map[string]struct{}, len(SupplyChainEdgeTypes))
+	for _, t := range SupplyChainEdgeTypes {
+		supplyChainEdgeTypesSet[strings.TrimSpace(strings.ToUpper(t))] = struct{}{}
+	}
+}
+
+// IsSupplyChainEdgeType returns true if t is in SupplyChainEdgeTypes (case-insensitive).
+// Use for runtime guards before materialization.
+func IsSupplyChainEdgeType(t string) bool {
+	_, ok := supplyChainEdgeTypesSet[strings.TrimSpace(strings.ToUpper(t))]
+	return ok
 }
 
 // SupplyChainOperationalEdgeTypes are the only edge types for supply chain structural links (fac→fac, fac→product).
@@ -177,22 +206,81 @@ var EcosystemEdgeTypes = []string{
 
 // EcosystemEdgeTypesString returns comma-separated list for prompts.
 func EcosystemEdgeTypesString() string {
-	return "PARTICIPATES_IN, OWNS, SUBSIDIARY_OF, CONTROLS, SUPPLIES_TO, DEPENDS_ON, COMPETES_WITH, REGULATES, INFLUENCES, INVESTS_IN, PARTNERS_WITH, LOCATED_IN, OPERATES_IN"
+	return strings.Join(EcosystemEdgeTypes, ", ")
+}
+
+// MarketEdgeTypes is the allowlist for market mode.
+var MarketEdgeTypes = []string{
+	"PARTICIPATES_IN", "HAS_MARKET_SEGMENT",
 }
 
 // MarketEdgeTypesString returns comma-separated list for prompts (market/competitive analysis).
 func MarketEdgeTypesString() string {
-	return "PARTICIPATES_IN, HAS_MARKET_SEGMENT"
+	return strings.Join(MarketEdgeTypes, ", ")
+}
+
+// StrategicEdgeTypes is the allowlist for strategic mode.
+var StrategicEdgeTypes = []string{
+	"CONTROLS_ACCESS", "IMPOSES_CONDITION", "GATEKEEPS_DECISION", "USES_MECHANISM", "APPLIES_TO",
 }
 
 // StrategicEdgeTypesString returns comma-separated list for prompts (strategic/geopolitical analysis).
 func StrategicEdgeTypesString() string {
-	return "CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO"
+	return strings.Join(StrategicEdgeTypes, ", ")
+}
+
+// PolicyImpactEdgeTypes is the allowlist for policy_impact mode.
+var PolicyImpactEdgeTypes = []string{
+	"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "GATEKEEPS_DECISION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "PARTICIPATES_IN", "LOCATED_IN", "OPERATES_IN", "ADMINISTERS",
 }
 
 // PolicyImpactEdgeTypesString returns comma-separated list for prompts (regulatory impact).
 func PolicyImpactEdgeTypesString() string {
-	return "REGULATES, CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO, INFLUENCES, DEPENDS_ON, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN, ADMINISTERS"
+	return strings.Join(PolicyImpactEdgeTypes, ", ")
+}
+
+// AllowedEntityTypesForDomainMode returns the strict programmatic list of allowed entity types for a given domain mode.
+func AllowedEntityTypesForDomainMode(mode string) []string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case DomainModeSupplyChain:
+		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "DEPOSIT", "COMMUNITY", "PROGRAM"}
+	case DomainModeGovernance:
+		return []string{"ORGANIZATION", "PERSON", "COMMUNITY", "PROGRAM"}
+	case DomainModeAssurance:
+		return []string{"ORGANIZATION", "FACILITY", "PROGRAM"}
+	case DomainModeMarket:
+		return []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PROGRAM", "MARKET"}
+	case DomainModeStrategic:
+		return []string{"ORGANIZATION", "PERSON", "COMMUNITY", "DECISION_POINT", "MECHANISM"}
+	case DomainModePolicyImpact:
+		return []string{"ORGANIZATION", "PROGRAM", "MARKET", "COMMUNITY", "GEO_REGION", "DECISION_POINT", "MECHANISM"}
+	case DomainModeEcosystem:
+		return []string{"ORGANIZATION", "FACILITY", "PERSON", "COMMUNITY", "PROGRAM", "MARKET", "GEO_REGION", "PRODUCT"}
+	default:
+		return nil
+	}
+}
+
+// AllowedEdgeTypesForDomainMode returns the strict programmatic list of allowed edge types for a given domain mode.
+func AllowedEdgeTypesForDomainMode(mode string) []string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case DomainModeSupplyChain:
+		return SupplyChainEdgeTypes
+	case DomainModeGovernance:
+		return GovernanceEdgeTypes
+	case DomainModeAssurance:
+		return AssuranceEdgeTypes
+	case DomainModeMarket:
+		return MarketEdgeTypes
+	case DomainModeStrategic:
+		return StrategicEdgeTypes
+	case DomainModePolicyImpact:
+		return PolicyImpactEdgeTypes
+	case DomainModeEcosystem:
+		return EcosystemEdgeTypes
+	default:
+		return nil
+	}
 }
 
 // HasDomainMode returns true if modes contain the given mode (after normalizing the target).

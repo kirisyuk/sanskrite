@@ -119,7 +119,7 @@ func PreferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 }
 
 // preferredCanonicalPaths returns ordered canonical path candidates derived from names only.
-// For facilities we emit canonical /fac/{orgSlug}/{facilitySlug} candidates.
+// For facilities we emit /fac/{geo}/{facilitySlug}; without geo context we use "na".
 //
 // Repo/Vertex checks decide which one is stable.
 func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
@@ -148,21 +148,8 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 		// Without jurisdiction in the relation payload, we default to "na".
 		return []string{"/org/na/" + slug}
 	case models.FragmentTypeFacility:
-		out := make([]string, 0, 2)
-		// Candidate nested: take first word as org token, remainder as facility label.
-		if parts := strings.Fields(short); len(parts) >= 2 {
-			orgTok := strings.TrimSpace(parts[0])
-			rest := strings.TrimSpace(strings.TrimPrefix(short, parts[0]))
-			orgSlug := slugify(orgTok)
-			facSlug := slugify(rest)
-			if orgSlug != "" && facSlug != "" {
-				out = append(out, "/fac/"+orgSlug+"/"+facSlug)
-			}
-		}
-		if len(out) == 0 {
-			out = append(out, "/fac/na/"+slug)
-		}
-		return out
+		// Format: /fac/{geo}/{facilitySlug}. Without geo context we use "na".
+		return []string{"/fac/na/" + slug}
 	case models.FragmentTypeProduct:
 		ls := strings.TrimSpace(strings.ToLower(short))
 		if ls == "na" || ls == "n/a" || ls == "unknown" || ls == "none" {
@@ -206,10 +193,10 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 	}
 }
 
-// normalizeLegacyGeoPath maps older geo namespaces to the strict /loc/{country}/{admin1}/{city} model.
+// normalizeLegacyGeoPath maps older geo namespaces to /loc variable-depth model.
 // Supported legacy patterns:
-// - /region/na/{country}/{admin1}/{city} -> /loc/{country}/{admin1}/{city}
-// - /region/{country}/{admin1}/{city}    -> /loc/{country}/{admin1}/{city}
+// - /region/na/{country}/{admin1}/{city} -> /loc/{country}/{level1}/{level2}
+// - /region/{country}/{admin1}/{city}    -> /loc/{country}/{level1}/{level2}
 func normalizeLegacyGeoPath(path string) string {
 	p := strings.TrimSpace(path)
 	if p == "" {
@@ -222,12 +209,46 @@ func normalizeLegacyGeoPath(path string) string {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(p, "/"), "/")
+	extractCountry := func(idx int) string {
+		if idx < 0 || idx >= len(parts) {
+			return ""
+		}
+		c := strings.ToLower(strings.TrimSpace(parts[idx]))
+		if c == "" || c == "na" {
+			return ""
+		}
+		return c
+	}
 	// parts[0] == "region"
 	if len(parts) == 5 && parts[1] == "na" {
-		return fmt.Sprintf("/loc/%s/%s/%s", parts[2], parts[3], parts[4])
+		if c := extractCountry(2); c != "" {
+			return taxonomy.GeoCanonicalPath(c, parts[3], parts[4])
+		}
+		return ""
 	}
 	if len(parts) == 4 {
-		return fmt.Sprintf("/loc/%s/%s/%s", parts[1], parts[2], parts[3])
+		if c := extractCountry(1); c != "" {
+			return taxonomy.GeoCanonicalPath(c, parts[2], parts[3])
+		}
+		return ""
+	}
+	if len(parts) == 3 && parts[1] == "na" {
+		if c := extractCountry(2); c != "" {
+			return taxonomy.GeoCanonicalPath(c, "", "")
+		}
+		return ""
+	}
+	if len(parts) == 3 {
+		if c := extractCountry(1); c != "" {
+			return taxonomy.GeoCanonicalPath(c, parts[2], "")
+		}
+		return ""
+	}
+	if len(parts) == 2 {
+		if c := extractCountry(1); c != "" {
+			return taxonomy.GeoCanonicalPath(c, "", "")
+		}
+		return ""
 	}
 	return ""
 }
@@ -590,7 +611,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 					}
 				}
 			}
-			// For GEO_REGION: strongly prefer /loc/{country}/{admin1}/{city}
+			// For GEO_REGION: strongly prefer already-valid /loc hierarchy.
 			if relType == models.FragmentTypeGeoRegion {
 				for _, r := range resp.Results {
 					if r.Document.StructData == nil {
@@ -599,8 +620,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 					if cp, ok := r.Document.StructData["canonicalPath"].(string); ok {
 						cp = strings.TrimSpace(cp)
 						if strings.HasPrefix(cp, "/loc/") {
-							parts := strings.Split(strings.Trim(cp, "/"), "/")
-							if len(parts) == 4 {
+							if _, _, _, ok := taxonomy.ParseLocCanonicalPath(cp); ok {
 								if resolved, accepted := acceptVertexPath(cp); accepted {
 									return resolved, nil
 								}
@@ -823,20 +843,18 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		}
 	}
 
-	// GEO strictness: require /loc/{country}/{admin1}/{city} with valid country code
+	// GEO strictness: require valid /loc hierarchy with valid country/region token.
 	if relType == models.FragmentTypeGeoRegion {
 		cp := out.CanonicalPath
 		if !strings.HasPrefix(cp, "/loc/") {
-			return "", fmt.Errorf("geo canonicalization must return /loc/{country}/{admin1}/{city}, got: %s", cp)
+			return "", fmt.Errorf("geo canonicalization must return /loc/{country}[/{level1}[/{level2}]], got: %s", cp)
 		}
-		parts := strings.Split(strings.Trim(cp, "/"), "/")
-		if len(parts) != 4 {
-			return "", fmt.Errorf("geo canonicalization must have 3 components after /loc, got: %s", cp)
+		countryCode, _, _, ok := taxonomy.ParseLocCanonicalPath(cp)
+		if !ok {
+			return "", fmt.Errorf("geo canonicalization must match /loc/{country}[/{level1}[/{level2}]], got: %s", cp)
 		}
-		// Validate country code format (ISO3166-1 alpha2, lowercase, 2 chars)
-		countryCode := parts[1]
-		if len(countryCode) != 2 || !reCountryAlpha2.MatchString(countryCode) {
-			return "", fmt.Errorf("geo canonicalization has invalid country code %q (must be ISO3166-1 alpha2 lowercase, 2 characters), got: %s", countryCode, cp)
+		if !taxonomy.IsValidLocCountryToken(countryCode) {
+			return "", fmt.Errorf("geo canonicalization has invalid country/region %q, got: %s", countryCode, cp)
 		}
 		fmt.Printf("%s GEO_REGION validation passed: %s\n", logPrefix, cp)
 	}
@@ -1010,14 +1028,13 @@ RULES:
 - canonicalPath MUST be stable and must NOT start with "/discovered/".
 - ORGANIZATION NAMING (CRITICAL):
   - Do NOT include country in the name — use only the official name (e.g., "Core42 UAE" → "Core42"; country is already in /org/{geo}/...).
-  - Do NOT include legal form (LLC, Inc, Ltd, GmbH, AG, etc.) in legalName or shortName — legal form belongs ONLY in canonicalPath as -{legal_form} suffix.
+  - Do NOT include legal form (LLC, Inc, Ltd, GmbH, AG, etc.) in legalName, shortName, or canonicalPath slug.
   - legalName: official name without country suffix and without legal form.
   - shortName: base/trade name without country and without legal form.
 - %s
-- canonicalPath slug MUST be derived from shortName (without ownership suffix) to avoid duplicates when legal form changes.
-- If a legal form is known, append it as -{legal_form} to satisfy org canonical format.
+- canonicalPath slug MUST be derived from shortName (base name only, no legal form).
 - Intangible-but-real actors (alliances, coalitions, unions, regulators, ministries, agencies, associations) are ORGANIZATION.
-- Government bodies MUST use /gov/{iso2|na}/{slug} (iso2 = jurisdiction). Other orgs use /org/{iso2|na}/{slug}-{legal_form}.
+- Government bodies MUST use /gov/{iso2|na}/{slug} (iso2 = jurisdiction). Other orgs use /org/{iso2|na}/{slug} (base name only, no legal form).
 - GOV HIERARCHY: Government bodies form administrative hierarchies:
   - government → ministry → department → agency/authority/regulator
   - GovTypes: government, ministry, department, agency, authority, regulator, committee, service, bureau, office, council, commission
@@ -1025,7 +1042,7 @@ RULES:
   - Example: "Saudi FDA" → /gov/sa/sfda (type: authority), parent would be /gov/sa/ministry-of-health
   - Use these namespaces:
   - ORGANIZATION:
-    - /org/{iso2|na}/{lowercase-slug}-{legal_form} (companies, NGOs, etc.)
+    - /org/{iso2|na}/{lowercase-slug} (companies, NGOs, etc.; base name only, no legal form)
     - /gov/{iso2|na}/{lowercase-slug} (ministries, regulators, agencies, state bodies)
   - PERSON: /person/{lowercase-slug}
   - PRODUCT: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
@@ -1058,7 +1075,7 @@ RULES:
       - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
     - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
     - Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
-    - geo: ISO3166-1 alpha2 lowercase, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
+    - geo: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
     - GEOGRAPHY INFERENCE: Extract geo from the market name/context:
       - If the name mentions a country/region, use that country's ISO2 code
@@ -1075,26 +1092,25 @@ RULES:
       - "Global EV batteries" -> /market/global/automotive/ev-batteries
       - "UAE fintech sector" -> /market/ae/finance/fintech
   - FACILITY:
-    - Use /fac/{orgSlug}/{facilitySlug} (e.g., "TSMC Fab 21" -> /fac/tsmc/fab-21)
-    - If org is unknown, use /fac/na/{facilitySlug}
-  - GEO_REGION: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase, or regional token (asean, brics, gcc, eu, eaeu)
+    - Use /fac/{geo}/{facilitySlug} (e.g., "TSMC Fab 21 in Taiwan" -> /fac/tw/fab-21)
+    - geo: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `
+  - GEO_REGION: MUST be /loc/{country}[/{level1}[/{level2}]]
+    - country: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `
     - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
-      - GCC → /loc/gcc/na/na (NOT /loc/na/na/gcc)
-    - admin1: state/province/region code or slug lowercase; use "na" if not applicable/unknown
-    - city: lowercase slug; use "na" if not applicable/unknown
-    - For country-only locations, use: /loc/{country}/na/na
-    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 or an allowed regional token.
+      - GCC → /loc/gcc (NOT /loc/global/gcc)
+    - level1/level2: optional subdivision/city slugs; omit unknown trailing levels
+    - For country-only locations, use: /loc/{country}
+    - CRITICAL: country code MUST be valid.
     Examples (3-position model):
     - USA / Texas / Austin: /loc/us/tx/austin
     - Germany / Bavaria / Munich: /loc/de/by/munich
     - France / Île-de-France / Paris: /loc/fr/idf/paris
     - Russia / Moscow Oblast / Moscow: /loc/ru/mos/moscow
     - Brazil / São Paulo / São Paulo: /loc/br/sp/sao-paulo
-    - Kazakhstan / Astana: /loc/kz/na/astana
+    - Kazakhstan / Astana: /loc/kz/astana
   - EVENT: /event/{lowercase-slug}
   - COMMUNITY: /community/{geo}/{type}/{slug}
-    - geo: ISO2, regional token, or "global"/"int"
+    - geo: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
     - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe | representatives | industry-association | key-community
       - trade: commercial networks without formal structure (hawala, informal trade networks)
@@ -1123,7 +1139,7 @@ RULES:
   - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
   - canonicalPath MUST match expected prefix for targetType:
     - ORGANIZATION -> /org/ OR /gov/
-    - FACILITY -> /fac/ (format: /fac/{orgSlug}/{facilitySlug})
+    - FACILITY -> /fac/ (format: /fac/{geo}/{facilitySlug})
     - GEO_REGION -> /loc/ (strictly enforced)
     - PRODUCT -> /product/
     - PROGRAM -> /program/
@@ -1131,8 +1147,8 @@ RULES:
     - EVENT -> /event/
     - PERSON -> /person/
     - COMMUNITY -> /community/ (format: /community/{geo}/{type}/{slug})
-  - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city}
-  - GEO_REGION country code MUST be valid ISO3166-1 alpha2 (2 lowercase letters)
+  - GEO_REGION paths MUST match /loc/{country}[/{level1}[/{level2}]]
+  - GEO_REGION country token MUST be valid
 - Output only JSON, no markdown, no extra text.
 `, rel.TargetName, rel.TargetLegalName, rel.TargetShortName, rel.TargetType, canonicalRulesBlock)
 }

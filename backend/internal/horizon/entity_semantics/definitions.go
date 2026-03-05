@@ -816,3 +816,29 @@ func registerAll() {
 		ResearchBlock:   "",
 	}
 }
+
+// supplyChainExtractionBlockOverrides: when domain mode is supply_chain, use these blocks instead.
+// No DEPENDS_ON; only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, HAS_MARKET_SEGMENT.
+var supplyChainExtractionBlockOverrides = map[EntityTypeKey]string{
+	EntityTypeOrganization: `ENTITY TYPE: ORGANIZATION (supply chain scope)
+- Required aspects: products (PRODUCES), customers/suppliers (SUPPLIES_TO), locations (LOCATED_IN, OPERATES_IN).
+- Use PRODUCES for outputs; SUPPLIES_TO for supplier→customer flow. Do NOT use DEPENDS_ON.
+- Taxonomically correct edge types: PRODUCES, SUPPLIES_TO, LOCATED_IN, OPERATES_IN, PARTICIPATES_IN (ORG→MARKET).
+- For input products: use SUPPLIES_TO from supplier org to this org (supplier is source). Avoid generic DEPENDS_ON.
+- Missing info priorities: products, facilities, supply chain counterparties.`,
+	EntityTypeMarket: `ENTITY TYPE: MARKET (supply chain scope)
+- Required: HAS_MARKET_SEGMENT (hierarchy), PARTICIPATES_IN (players: ORG/FACILITY→MARKET).
+- Do NOT use DEPENDS_ON. Use PARTICIPATES_IN for org/facility participation (direction: ORG→MARKET).
+- Taxonomically correct edge types: HAS_MARKET_SEGMENT, PARTICIPATES_IN only.
+- Missing info priorities: market segments, key players.`,
+	EntityTypeProduct: `ENTITY TYPE: PRODUCT (supply chain scope)
+- Required: TRANSFORMS_INTO (upstream/downstream), PRODUCES (actor→product), SUPPLIES_TO (flow).
+- Do NOT use DEPENDS_ON. Use TRANSFORMS_INTO for product chain; PRODUCES/CONSUMES for actor links.
+- Taxonomically correct edge types: TRANSFORMS_INTO, PRODUCES, CONSUMES, SUPPLIES_TO, PARTICIPATES_IN.
+- Missing info priorities: upstream inputs, downstream products, producers, consumers.`,
+	EntityTypeFacility: `ENTITY TYPE: FACILITY (supply chain scope)
+- Required: PRODUCES (outputs), CONSUMES (inputs), SUPPLIES_TO (to customers), LOCATED_IN, OPERATES_IN.
+- Do NOT use DEPENDS_ON. Use SUPPLIES_TO for flow; CONSUMES for input products.
+- Taxonomically correct edge types: PRODUCES, CONSUMES, SUPPLIES_TO, LOCATED_IN, OPERATES_IN, EXTRACTS_FROM.
+- Missing info priorities: products, counterparties, capacity.`,
+}

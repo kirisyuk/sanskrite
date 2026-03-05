@@ -308,8 +308,7 @@ func (pc *PolicyChecker) checkFragmentPath(ctx context.Context, frag *horizonmod
 			}
 			// Best-effort deterministic auto-fixes for common canonical path errors:
 			// - normalize obvious ISO2 aliases (uae->ae, usa->us, uk->gb)
-			// - upgrade incomplete /loc/{cc}/{admin1} -> /loc/{cc}/{admin1}/na
-			// - upgrade incomplete /loc/{cc} -> /loc/{cc}/na/na
+			// - normalize /loc depth without forced "na" padding
 			if fixed := pc.bestEffortFixCanonicalPath(path); fixed != "" && fixed != path {
 				if fixErr := taxonomy.ValidateCanonicalPath(fixed); fixErr == nil {
 					v.ExpectedValue = fixed
@@ -522,103 +521,6 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 	}
 
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	geo := ""
-	if len(parts) >= 3 && parts[0] == "org" {
-		geo = strings.ToLower(strings.TrimSpace(parts[1]))
-	}
-
-	// If canonicalParts already has legal form, treat legal-form enforcement as already applied.
-	// We intentionally do NOT try to "fix again" even if the string path is stale or the allowlist
-	// does not cover some national form: a populated struct is a strong signal the system already
-	// checked and decided on legalForm.
-	hasLegalForm := false
-	if frag != nil && frag.CanonicalParts != nil && frag.CanonicalParts.Org != nil {
-		if strings.TrimSpace(frag.CanonicalParts.Org.LegalForm) != "" {
-			hasLegalForm = true
-		}
-	}
-
-	// Special-case: international organizations (/org/int/...) do not require a legal form suffix.
-	// Rationale: many intergovernmental / international bodies are not incorporated as companies.
-	if geo == "int" {
-		hasLegalForm = true
-	}
-
-	if !hasLegalForm {
-		valid, reason := pc.taxonomyRules.ValidateOrgPath(path)
-		if !valid {
-			v := PolicyViolation{
-				ID:          uuid.New().String(),
-				Type:        ViolationMissingLegalForm,
-				Severity:    SeverityWarning,
-				FragmentID:  frag.ID,
-				ActualValue: path,
-				Rule:        "org_legal_form",
-				Description: reason,
-				Confidence:  0.9,
-				AutoFixable: false,
-				DetectedAt:  time.Now(),
-				DetectedBy:  "deterministic",
-			}
-
-			// Try to suggest fix based on legalName
-			// Prefer legalName, but fall back to label/shortName when legalName is missing.
-			candNames := []string{
-				strings.TrimSpace(frag.Identifiers["legalName"]),
-				strings.TrimSpace(frag.Labels["en"]),
-				strings.TrimSpace(frag.Identifiers["shortName"]),
-			}
-			// As a last resort, try to infer from slug-like values.
-			if strings.TrimSpace(path) != "" {
-				parts := strings.Split(strings.Trim(path, "/"), "/")
-				if len(parts) > 0 {
-					candNames = append(candNames, strings.ReplaceAll(strings.TrimSpace(parts[len(parts)-1]), "-", " "))
-				}
-			}
-			legalForm := ""
-			for _, nm := range candNames {
-				legalForm = extractLegalForm(nm)
-				if legalForm != "" {
-					break
-				}
-			}
-			if legalForm != "" {
-				parts := strings.Split(strings.Trim(path, "/"), "/")
-				if len(parts) >= 2 {
-					slug := parts[len(parts)-1]
-					if !strings.HasSuffix(slug, "-"+legalForm) {
-						correctPath := path + "-" + legalForm
-						v.ExpectedValue = correctPath
-						v.SuggestedFix = &EnforcementTask{
-							Type:     TaskFixLegalForm,
-							TargetID: frag.ID,
-							Params: map[string]interface{}{
-								"currentPath": path,
-								"correctPath": correctPath,
-								"legalForm":   legalForm,
-							},
-						}
-						v.AutoFixable = true
-					}
-				}
-			} else {
-				// If we cannot deterministically infer legal form from known suffixes, enqueue an LLM-based fix.
-				// The enforcement executor will infer the most likely legal form and update canonicalParts selectively.
-				v.AutoFixable = true
-				v.Confidence = 0.7
-				v.SuggestedFix = &EnforcementTask{
-					Type:     TaskFixLegalForm,
-					TargetID: frag.ID,
-					Params: map[string]interface{}{
-						"currentPath": path,
-						"mode":        "infer_legal_form_llm",
-					},
-				}
-			}
-
-			violations = append(violations, v)
-		}
-	}
 
 	// Check ISO2 validity
 	if len(parts) >= 2 {
@@ -650,7 +552,7 @@ func (pc *PolicyChecker) checkOrgPath(_ context.Context, frag *horizonmodels.Hor
 			violations = append(violations, v)
 		}
 		// "int" is special for international orgs. Regional tokens (eu, asean, brics, gcc) are allowed.
-		if iso2 != "na" && iso2 != "int" && len(iso2) != 2 && !strings.Contains(iso2, "-") && !taxonomy.IsRegionalGeoToken(iso2) {
+		if !taxonomy.IsValidGeoForOrgGovFac(iso2) {
 			v := PolicyViolation{
 				ID:          uuid.New().String(),
 				Type:        ViolationInvalidISO2,
@@ -749,7 +651,7 @@ func (pc *PolicyChecker) checkGovPath(_ context.Context, frag *horizonmodels.Hor
 				FragmentID:  frag.ID,
 				ActualValue: path,
 				Rule:        "gov_geo_unknown",
-				Description: "Government canonical path uses geo token 'na' (unknown jurisdiction). Try to infer ISO3166-1 alpha-2 (or a composite like ae-sa-om for intergovernmental bodies) from fragment context and nearby GEO edges.",
+				Description: "Government canonical path uses geo token 'na' (unknown jurisdiction). Try to infer ISO3166-1 alpha-2 or " + taxonomy.CompositeGeoDescriptionForPrompts() + " (for intergovernmental bodies) from fragment context and nearby GEO edges.",
 				Confidence:  0.8,
 				AutoFixable: true,
 				DetectedAt:  time.Now(),
@@ -854,17 +756,21 @@ func (pc *PolicyChecker) bestEffortFixCanonicalPath(path string) string {
 		return "/" + strings.Join(parts, "/")
 
 	case "loc":
-		// /loc/{cc} -> /loc/{cc}/na/na
-		// /loc/{cc}/{admin1} -> /loc/{cc}/{admin1}/na
 		if len(parts) >= 2 {
 			if norm := normalizeISO2Alias(parts[1]); norm != "" {
 				parts[1] = norm
 			}
 		}
-		if len(parts) == 2 {
-			parts = append(parts, "na", "na")
-		} else if len(parts) == 3 {
-			parts = append(parts, "na")
+		level1 := ""
+		level2 := ""
+		if len(parts) >= 3 {
+			level1 = parts[2]
+		}
+		if len(parts) >= 4 {
+			level2 = parts[3]
+		}
+		if fixed := taxonomy.GeoCanonicalPath(parts[1], level1, level2); fixed != "" {
+			return fixed
 		}
 		return "/" + strings.Join(parts, "/")
 
@@ -1964,13 +1870,8 @@ func normalizeOrgPathForNearDup(path string) (geo string, slug string, ok bool) 
 		return "", "", false
 	}
 
-	// Strip legalForm suffix if present.
-	allowed := taxonomy.DefaultCanonicalRules().Org.LegalForms
-	for _, lf := range allowed {
-		lf = strings.ToLower(strings.TrimSpace(lf))
-		if lf == "" {
-			continue
-		}
+	// Strip legal form suffix if present (for legacy paths).
+	for _, lf := range []string{"pjsc", "cjsc", "ojsc", "jsc", "ooo", "llc", "inc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa", "as", "ab", "bv", "nv"} {
 		if strings.HasSuffix(slug, "-"+lf) {
 			slug = strings.TrimSuffix(slug, "-"+lf)
 			break
@@ -2264,27 +2165,6 @@ func slugify(s string) string {
 	return s
 }
 
-func extractLegalForm(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	legalForms := taxonomy.DefaultCanonicalRules().Org.LegalForms
-
-	// Also handle slug-like forms (e.g., "lynas-rare-earths-ltd") and punctuation.
-	slug := strings.ReplaceAll(name, ".", "")
-	slug = strings.ReplaceAll(slug, ",", "")
-	slug = strings.ReplaceAll(slug, "_", "-")
-	for strings.Contains(slug, "--") {
-		slug = strings.ReplaceAll(slug, "--", "-")
-	}
-
-	for _, lf := range legalForms {
-		if strings.HasSuffix(name, " "+lf) || strings.HasSuffix(name, " "+lf+".") ||
-			strings.HasSuffix(slug, "-"+lf) {
-			return lf
-		}
-	}
-	return ""
-}
-
 func shouldSkipDuplicateCandidate(frag *horizonmodels.HorizonFragment, candidate *horizonmodels.HorizonFragment) bool {
 	fid := strings.TrimSpace(frag.Identifiers["wikidataId"])
 	cid := strings.TrimSpace(candidate.Identifiers["wikidataId"])
@@ -2535,8 +2415,8 @@ func isCanonicalPathFormat(path string, fragType horizonmodels.FragmentType) boo
 
 	switch fragType {
 	case horizonmodels.FragmentTypeGeoRegion:
-		parts := strings.Split(strings.Trim(path, "/"), "/")
-		return len(parts) == 4 && parts[0] == "loc"
+		_, _, _, ok := taxonomy.ParseLocCanonicalPath(path)
+		return ok
 
 	case horizonmodels.FragmentTypeOrganization:
 		parts := strings.Split(strings.Trim(path, "/"), "/")

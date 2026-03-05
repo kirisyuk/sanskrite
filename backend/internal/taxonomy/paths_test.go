@@ -72,7 +72,7 @@ func TestValidateCanonicalPath(t *testing.T) {
 		},
 		{
 			name:    "valid facility path",
-			path:    "/fac/tsmc/fab-21",
+			path:    "/fac/tw/fab-21",
 			wantErr: false,
 		},
 		{
@@ -273,23 +273,117 @@ func TestJoinPath_UsesSlugify(t *testing.T) {
 }
 
 func TestOrgCanonicalPath_ParentheticalAnnotations(t *testing.T) {
+	// Legal form is NOT included in org paths; slug is base name only.
 	cases := []struct {
 		cc, name, want string
 	}{
-		{"sa", "STC Bank PJSC", "/org/sa/stc-bank-pjsc"},
-		{"na", "stc Bank PLC", "/org/na/stc-bank-plc"},
-		{"sa", "Stc Bank Jsc", "/org/sa/stc-bank-jsc"},
-		{"nl", "Nexperia B.V.", "/org/nl/nexperia-bv"},
-		{"nl", "Nexperia B V", "/org/nl/nexperia-bv"},
+		{"sa", "STC Bank PJSC", "/org/sa/stc-bank"},
+		{"na", "stc Bank PLC", "/org/na/stc-bank"},
+		{"sa", "Stc Bank Jsc", "/org/sa/stc-bank"},
+		{"nl", "Nexperia B.V.", "/org/nl/nexperia"},
+		{"nl", "Nexperia B V", "/org/nl/nexperia"},
 		// Parenthetical "(formerly ...)" must be stripped — slug core should be "stc-bank".
-		{"sa", "STC Bank (formerly stc pay) PJSC", "/org/sa/stc-bank-pjsc"},
-		// No legal form after stripping parenthetical — slug is plain "stc-bank".
+		{"sa", "STC Bank (formerly stc pay) PJSC", "/org/sa/stc-bank"},
 		{"sa", "STC Bank (formerly stc pay)", "/org/sa/stc-bank"},
 	}
 	for _, c := range cases {
 		got := OrgCanonicalPath(c.cc, c.name)
 		if got != c.want {
 			t.Errorf("OrgCanonicalPath(%q, %q) = %q, want %q", c.cc, c.name, got, c.want)
+		}
+	}
+}
+
+func TestOrgCanonicalPath_GeoVariants(t *testing.T) {
+	cases := []struct {
+		geo  string
+		want string
+	}{
+		{geo: "us", want: "/org/us/acme"},
+		{geo: "int", want: "/org/int/acme"},
+		{geo: "eu", want: "/org/eu/acme"},
+		{geo: "ae-sa-om", want: "/org/ae-sa-om/acme"},
+		{geo: "bad-geo-token", want: "/org/na/acme"},
+	}
+	for _, c := range cases {
+		got := OrgCanonicalPath(c.geo, "Acme LLC")
+		if got != c.want {
+			t.Errorf("OrgCanonicalPath(%q) = %q, want %q", c.geo, got, c.want)
+		}
+	}
+}
+
+func TestGovCanonicalPath_GeoVariants(t *testing.T) {
+	cases := []struct {
+		geo  string
+		want string
+	}{
+		{geo: "us", want: "/gov/us/ministry-of-justice"},
+		{geo: "eu", want: "/gov/eu/ministry-of-justice"},
+		{geo: "ae-sa-om", want: "/gov/ae-sa-om/ministry-of-justice"},
+		{geo: "int", want: "/gov/int/ministry-of-justice"},
+	}
+	for _, c := range cases {
+		got := GovCanonicalPath(c.geo, "Ministry of Justice")
+		if got != c.want {
+			t.Errorf("GovCanonicalPath(%q) = %q, want %q", c.geo, got, c.want)
+		}
+	}
+}
+
+func TestGeoCanonicalPath_GeoVariants(t *testing.T) {
+	if got := GeoCanonicalPath("ae-sa-om", "na", "na"); got != "/loc/ae-sa-om" {
+		t.Fatalf("GeoCanonicalPath composite = %q, want %q", got, "/loc/ae-sa-om")
+	}
+	if got := GeoCanonicalPath("eu", "na", "na"); got != "/loc/eu" {
+		t.Fatalf("GeoCanonicalPath regional = %q, want %q", got, "/loc/eu")
+	}
+}
+
+func TestProgramCanonicalPath_JurisdictionNormalization(t *testing.T) {
+	cases := []struct {
+		jurisdiction string
+		wantPrefix   string
+	}{
+		{jurisdiction: "us", wantPrefix: "/program/us/"},
+		{jurisdiction: "int", wantPrefix: "/program/int/"},
+		{jurisdiction: "global", wantPrefix: "/program/global/"},
+		{jurisdiction: "eu", wantPrefix: "/program/eu/"},
+		{jurisdiction: "kazakhstan", wantPrefix: "/program/global/"},
+	}
+	for _, c := range cases {
+		got := ProgramCanonicalPath(c.jurisdiction, "Alem AI")
+		if len(got) == 0 || got[:len(c.wantPrefix)] != c.wantPrefix {
+			t.Errorf("ProgramCanonicalPath(%q) = %q, want prefix %q", c.jurisdiction, got, c.wantPrefix)
+		}
+	}
+}
+
+func TestIsISO2CountryCode(t *testing.T) {
+	for _, s := range []string{"us", "sa", "kz", "ae", "gb"} {
+		if !IsISO2CountryCode(s) {
+			t.Errorf("IsISO2CountryCode(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "usa", "uae", "1", "a"} {
+		if IsISO2CountryCode(s) {
+			t.Errorf("IsISO2CountryCode(%q) = true, want false", s)
+		}
+	}
+	if !IsISO2CountryCode("  sa  ") {
+		t.Errorf("IsISO2CountryCode(\"  sa  \") = false, want true (trimmed)")
+	}
+}
+
+func TestIsValidGeoForOrgGovFac(t *testing.T) {
+	for _, s := range []string{"na", "int", "us", "sa", "eu", "gcc", "asean", "tr-sy", "ae-sa-om"} {
+		if !IsValidGeoForOrgGovFac(s) {
+			t.Errorf("IsValidGeoForOrgGovFac(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "usa", "uae", "xyz123"} {
+		if IsValidGeoForOrgGovFac(s) {
+			t.Errorf("IsValidGeoForOrgGovFac(%q) = true, want false", s)
 		}
 	}
 }

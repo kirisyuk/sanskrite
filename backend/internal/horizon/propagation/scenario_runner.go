@@ -611,7 +611,7 @@ func scenarioLocationPath(params map[string]interface{}) string {
 	if s, ok := firstStringFromMap(params, "jurisdiction", "country", "country_code", "countryCode"); ok {
 		cc := strings.ToLower(strings.TrimSpace(s))
 		if len(cc) == 2 || len(cc) == 3 {
-			return "/loc/" + cc + "/na/na"
+			return "/loc/" + cc
 		}
 	}
 	return ""

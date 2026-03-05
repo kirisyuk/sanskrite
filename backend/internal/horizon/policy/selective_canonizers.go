@@ -67,10 +67,7 @@ func (c *OrgSelectiveCanonizer) ApplyFromCanonicalPath(frag *horizonmodels.Horiz
 	applied := make([]string, 0, 3)
 	changed := false
 
-	// Owned fields for org:
-	// - Geo (jurisdiction)
-	// - LegalForm (ownership suffix)
-	//
+	// Owned fields for org: Geo (jurisdiction). Legal form is not used.
 	// We intentionally do NOT overwrite BaseSlug unless it is currently empty, to avoid accidental identity drift.
 	if geo := strings.TrimSpace(newParts.Org.Geo); geo != "" && geo != strings.TrimSpace(frag.CanonicalParts.Org.Geo) {
 		frag.CanonicalParts.Org.Geo = geo
@@ -80,11 +77,6 @@ func (c *OrgSelectiveCanonizer) ApplyFromCanonicalPath(frag *horizonmodels.Horiz
 			frag.CanonicalParts.Org.Legacy = false
 			applied = append(applied, "org.legacy=false")
 		}
-	}
-	if lf := strings.TrimSpace(newParts.Org.LegalForm); lf != "" && lf != strings.TrimSpace(frag.CanonicalParts.Org.LegalForm) {
-		frag.CanonicalParts.Org.LegalForm = lf
-		changed = true
-		applied = append(applied, "org.legalForm")
 	}
 	if strings.TrimSpace(frag.CanonicalParts.Org.BaseSlug) == "" && strings.TrimSpace(newParts.Org.BaseSlug) != "" {
 		frag.CanonicalParts.Org.BaseSlug = strings.TrimSpace(newParts.Org.BaseSlug)

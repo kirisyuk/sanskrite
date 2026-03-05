@@ -123,7 +123,7 @@ DOMAIN RULES:
     /domain/v1/ecosystem-mapping/geo/my/sector/energy
     /domain/v1/sector-overview/geo/kz/sector/agro-food
     /domain/v1/market-opportunity/geo/sg/industry/finance
-    /domain/v1/bilateral-relations/geo/sa-ye (composite geo for two countries)
+    /domain/v1/bilateral-relations/geo/sa-ye (` + taxonomy.CompositeGeoDescriptionForPrompts() + ` for two countries)
   Bad examples (these are ANCHORS, not DOMAINS):
     /market/global/finance
     /market/sg/finance/banking
@@ -136,7 +136,7 @@ DOMAIN RULES:
 
 - BILATERAL RELATIONS (CRITICAL):
   - If the query is about relations/interaction between two countries or actors, you MUST create a DOMAIN of contractType bilateral-relations.
-  - Use composite geo token for two countries: /domain/v1/bilateral-relations/geo/{cc1}-{cc2} (alphabetically sorted, lowercase ISO2).
+  - Use ` + taxonomy.CompositeGeoDescriptionForPrompts() + ` for two countries: /domain/v1/bilateral-relations/geo/{cc1}-{cc2} (alphabetically sorted, lowercase ISO2).
   - Examples:
     "Saudi Arabia and Yemen relations" -> /domain/v1/bilateral-relations/geo/sa-ye
     "UAE-Iran tensions" -> /domain/v1/bilateral-relations/geo/ae-ir

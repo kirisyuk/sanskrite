@@ -10,6 +10,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // materializeRelationEdge centralizes edge normalization/validation/persistence for discovered relations.
@@ -235,6 +236,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 	dstPathActual := resolvePathByID(edgeTargetID)
 	canonFromEdgeType := ""
 	canonReason := ""
+	isSupplyChainMode := taxonomy.HasDomainMode(getJobDomainModes(job), taxonomy.DomainModeSupplyChain)
 	canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
 		EdgeType:          edgeType,
 		SourceType:        srcTypeActual,
@@ -245,6 +247,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 		Reason:            strings.TrimSpace(rel.Reason),
 		Qualifiers:        rel.Qualifiers,
 		OwnershipEvidence: models.HasOwnershipEvidence(rel.Reason, rel.Qualifiers, rel.Metrics),
+		SupplyChainMode:   isSupplyChainMode,
 	})
 	if canon.Changed {
 		if canon.OriginalType != "" {
@@ -585,6 +588,20 @@ func (e *ScoutEngine) materializeRelationEdge(
 	}
 
 	e.rememberEdgeDedupRecently(edgeDedupKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, dedupVariant))
+
+	// Final allowlist gate (supply-chain): never persist out-of-contract types.
+	// Defense-in-depth: catches any edge that slipped through pre-materialization guard or canonicalization.
+	if isSupplyChainMode {
+		allowed := IsSupplyChainEdgeType(string(edgeType))
+		if !allowed && strings.EqualFold(string(edgeType), "OWNS") {
+			allowed = allowSupplyChainOwnsByPath(resolvedSourcePath, resolvedTargetPath)
+		}
+		if !allowed {
+			e.logLine(ctx, job, "info", fmt.Sprintf("> persist_final_gate: skipped type=%q source=%q target=%q reason=out_of_contract",
+				edgeType, resolvedSourcePath, resolvedTargetPath))
+			return nil
+		}
+	}
 
 	// If a batch buffer is attached to the context, accumulate the edge for batch persist.
 	if buf := EdgeBatchBufferFromContext(ctx); buf != nil {

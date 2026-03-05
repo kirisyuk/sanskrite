@@ -138,6 +138,62 @@ go run ./cmd/tools/horizon_smart_dedup \
 
 ## Очистка orphaned данных
 
+### `testenv_janitor`
+
+**Назначение:** Полная регулярная очистка тестовой среды: Firestore (включая неизвестные коллекции), GCS, Vertex AI Search, Cloud Tasks, Pub/Sub backlog.  
+По умолчанию работает в `dry-run`.
+
+**Что делает:**
+1. Purge Cloud Tasks очередей (`etigram-scout`, `etigram-risk`, `etigram-profile-refresh` или ваши).
+2. Purge Pub/Sub backlog через `seek to now` по подпискам.
+3. Sweep top-level Firestore коллекций с рекурсивным удалением subcollections.
+4. Удаление файлов из GCS buckets (режим `full` или `prefix`).
+5. Очистка Vertex AI Search data stores (list + delete документов).
+6. Опционально: очистка BigQuery таблиц (`tenant` или `truncate` режим).
+
+**Важные режимы:**
+- `--scope=all` — удалить всё (кроме whitelist коллекций/пользователей)
+- `--scope=tenant --tenant=...` — удалять только документы конкретного tenant, когда поле tenant определяется
+- `--preserve-collections` — полный whitelist коллекций (по умолчанию включает `core_projects` и config-коллекции)
+- `--keep-user-doc-ids`, `--keep-user-uids` — whitelist для `core_users`
+- Firestore удаление в `--apply` работает **только через bulk-delete API** (без fallback на cursor).
+- Ограничение bulk-delete: `--apply` поддерживает только `--scope=all` (tenant-scope доступен только в dry-run отчёте).
+
+**Антитаймаут настройки для больших коллекций:**
+- `--firestore-page-size=500` (уменьшить до 200-300 при перегрузке)
+- `--firestore-page-timeout=45s`
+- `--firestore-max-retries=8`
+- `--firestore-retry-base=2s`
+- `--scan-subcollections-dry-run=false` (по умолчанию) — ускоряет dry-run на очень больших коллекциях
+
+**Использование (dry-run):**
+```bash
+go run ./cmd/tools/testenv_janitor \
+  --project=etigram-test \
+  --tenant=global \
+  --keep-user-uids=<YOUR_UID>
+```
+
+**Применить очистку:**
+```bash
+go run ./cmd/tools/testenv_janitor \
+  --project=etigram-test \
+  --tenant=global \
+  --keep-user-uids=<YOUR_UID> \
+  --apply
+```
+
+**Точечная очистка только Firestore + GCS (без очередей/PubSub/Vertex):**
+```bash
+go run ./cmd/tools/testenv_janitor \
+  --project=etigram-test \
+  --keep-user-uids=<YOUR_UID> \
+  --purge-cloud-tasks=false \
+  --purge-pubsub=false \
+  --clean-vertex=false \
+  --apply
+```
+
 ### `horizon_cleanup_orphaned_versions`
 
 **Назначение:** Находит и удаляет версии фрагментов, которые ссылаются на несуществующие фрагменты.

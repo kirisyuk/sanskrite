@@ -9,6 +9,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/addressvalidate"
 	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // GeoRelevantTypes are fragment types where coordinates are useful for map rendering.
@@ -107,14 +108,22 @@ func enrichCoordinatesFromGeoNamesCanonicalLoc(
 	if !strings.HasPrefix(cp, "/loc/") {
 		return false, nil
 	}
-	parts := strings.Split(strings.Trim(cp, "/"), "/")
-	if len(parts) != 4 || parts[0] != "loc" {
+	ccParsed, level1, level2, ok := taxonomy.ParseLocCanonicalPath(cp)
+	if !ok {
 		return false, nil
 	}
-	cc := normalizeISO2(parts[1])
-	adm := strings.TrimSpace(parts[2])
-	city := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(parts[3])))
-	if cc == "" || city == "" || strings.EqualFold(city, "na") {
+	cc := normalizeISO2(ccParsed)
+	if cc == "" {
+		return false, nil
+	}
+	adm := strings.TrimSpace(level1)
+	cityToken := strings.TrimSpace(level2)
+	if cityToken == "" {
+		cityToken = strings.TrimSpace(level1)
+		adm = ""
+	}
+	city := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(cityToken)))
+	if city == "" {
 		return false, nil
 	}
 
@@ -476,12 +485,16 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 		}
 	}
 
-	// 3. /loc/{cc}/{adm1}/{city}: build "city, CC" from canonical path for geocoding fallback when GeoNames unavailable.
+	// 3. /loc/{country}[/{level1}[/{level2}]]: build "city, CC" from canonical path when possible.
 	if strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/loc/") {
-		parts := strings.Split(strings.Trim(strings.TrimSpace(f.CanonicalPath), "/"), "/")
-		if len(parts) >= 4 && parts[0] == "loc" {
-			cc := strings.ToUpper(strings.TrimSpace(parts[1]))
-			city := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(parts[3])))
+		ccParsed, level1, level2, ok := taxonomy.ParseLocCanonicalPath(strings.TrimSpace(f.CanonicalPath))
+		if ok {
+			cc := strings.ToUpper(strings.TrimSpace(ccParsed))
+			cityToken := level2
+			if strings.TrimSpace(cityToken) == "" {
+				cityToken = level1
+			}
+			city := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(cityToken)))
 			if len(cc) == 2 && cc != "NA" && city != "" && !strings.EqualFold(city, "na") {
 				addr := city + ", " + cc
 				if addressvalidate.IsPlausibleAddress(addr) {

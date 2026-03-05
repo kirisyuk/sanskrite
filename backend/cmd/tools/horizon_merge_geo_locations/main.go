@@ -14,6 +14,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 var (
@@ -191,10 +192,13 @@ func deriveLocationNameFromFragment(f *hmodels.HorizonFragment) string {
 	}
 	cp := strings.TrimSpace(f.CanonicalPath)
 	if strings.HasPrefix(cp, "/loc/") {
-		parts := strings.Split(strings.Trim(cp, "/"), "/")
-		if len(parts) >= 4 && parts[0] == "loc" {
-			city := strings.TrimSpace(parts[3])
-			if city != "" && !strings.EqualFold(city, "na") {
+		_, level1, level2, ok := taxonomy.ParseLocCanonicalPath(cp)
+		if ok {
+			city := strings.TrimSpace(level2)
+			if city == "" {
+				city = strings.TrimSpace(level1)
+			}
+			if city != "" {
 				return strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(city))
 			}
 		}

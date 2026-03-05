@@ -21,9 +21,8 @@ func (e *SupplyChainValidationError) Error() string {
 		e.Reason, e.Path, e.JobID, e.ChainIdx)
 }
 
-// SupplyChainStrictValidator enforces facility-level only supply chain operational links.
-// No transformations: invalid edges/links are rejected and logged.
-// org→org SUPPLIES_TO is explicitly rejected (operational edges require fac/deposit endpoints).
+// SupplyChainStrictValidator enforces supply chain operational links.
+// Full chain org→fac→product→fac→org allowed. org→org rejected.
 type SupplyChainStrictValidator struct{}
 
 // NewSupplyChainStrictValidator returns a new validator.
@@ -66,24 +65,25 @@ func (v *SupplyChainStrictValidator) ValidateEdge(edge *ChainEdge, jobID string,
 	if forbiddenEdgeTypes[relType] {
 		return &SupplyChainValidationError{Reason: "forbidden_edge_type", Path: relType, JobID: jobID, ChainIdx: chainIdx}
 	}
-	// Operational types: no org→org; enforce endpoint constraints per type
+	// Operational types: full chain org→fac→product→fac→org allowed. Org as endpoint is valid.
 	if operationalEdgeTypes[relType] {
-		if strings.HasPrefix(srcPath, "/org/") || strings.HasPrefix(dstPath, "/org/") {
-			return &SupplyChainValidationError{Reason: "org_endpoint_not_allowed", Path: srcPath + "->" + dstPath, JobID: jobID, ChainIdx: chainIdx}
+		// Reject org→org for operational edges (flow must involve fac/product)
+		if strings.HasPrefix(srcPath, "/org/") && strings.HasPrefix(dstPath, "/org/") {
+			return &SupplyChainValidationError{Reason: "org_to_org_not_allowed", Path: srcPath + "->" + dstPath, JobID: jobID, ChainIdx: chainIdx}
 		}
 		switch relType {
 		case "SUPPLIES_TO":
-			// fac→fac or fac→product
+			// fac→fac, fac→product, fac→org (fac supplies to org)
 			if !strings.HasPrefix(srcPath, "/fac/") && !strings.HasPrefix(srcPath, "/deposit/") {
 				return &SupplyChainValidationError{Reason: "supplies_to_source_must_be_fac_or_deposit", Path: srcPath, JobID: jobID, ChainIdx: chainIdx}
 			}
-			if !strings.HasPrefix(dstPath, "/fac/") && !strings.HasPrefix(dstPath, "/product/") {
-				return &SupplyChainValidationError{Reason: "supplies_to_target_must_be_fac_or_product", Path: dstPath, JobID: jobID, ChainIdx: chainIdx}
+			if !strings.HasPrefix(dstPath, "/fac/") && !strings.HasPrefix(dstPath, "/product/") && !strings.HasPrefix(dstPath, "/org/") && !strings.HasPrefix(dstPath, "/gov/") {
+				return &SupplyChainValidationError{Reason: "supplies_to_target_must_be_fac_product_org_or_gov", Path: dstPath, JobID: jobID, ChainIdx: chainIdx}
 			}
 		case "PRODUCES":
-			// fac→product
-			if !strings.HasPrefix(srcPath, "/fac/") && !strings.HasPrefix(srcPath, "/deposit/") {
-				return &SupplyChainValidationError{Reason: "produces_source_must_be_fac_or_deposit", Path: srcPath, JobID: jobID, ChainIdx: chainIdx}
+			// fac→product or org→product (org's general fac implied)
+			if !strings.HasPrefix(srcPath, "/fac/") && !strings.HasPrefix(srcPath, "/deposit/") && !strings.HasPrefix(srcPath, "/org/") && !strings.HasPrefix(srcPath, "/gov/") {
+				return &SupplyChainValidationError{Reason: "produces_source_must_be_fac_deposit_org_or_gov", Path: srcPath, JobID: jobID, ChainIdx: chainIdx}
 			}
 			if !strings.HasPrefix(dstPath, "/product/") {
 				return &SupplyChainValidationError{Reason: "produces_target_must_be_product", Path: dstPath, JobID: jobID, ChainIdx: chainIdx}
@@ -134,17 +134,18 @@ func (v *SupplyChainStrictValidator) ValidateSupplyLink(f *models.HorizonFragmen
 	if err := models.ValidateSupplyLinkFields(f); err != nil {
 		return err
 	}
-	// Strict: SupplierRef and CustomerRef must already be /fac/ or /deposit/
+	// SupplierRef and CustomerRef: /fac/, /deposit/, /org/, or /gov/
+	// (full chain org|gov→fac→product→fac→org|gov)
 	if f.SupplierRef != nil {
 		p := strings.TrimSpace(*f.SupplierRef)
-		if p != "" && !strings.HasPrefix(p, "/fac/") && !strings.HasPrefix(p, "/deposit/") {
-			return &SupplyChainValidationError{Reason: "supplier_ref_must_be_fac_or_deposit", Path: p}
+		if p != "" && !strings.HasPrefix(p, "/fac/") && !strings.HasPrefix(p, "/deposit/") && !strings.HasPrefix(p, "/org/") && !strings.HasPrefix(p, "/gov/") {
+			return &SupplyChainValidationError{Reason: "supplier_ref_must_be_fac_deposit_org_or_gov", Path: p}
 		}
 	}
 	if f.CustomerRef != nil {
 		p := strings.TrimSpace(*f.CustomerRef)
-		if p != "" && !strings.HasPrefix(p, "/fac/") {
-			return &SupplyChainValidationError{Reason: "customer_ref_must_be_fac", Path: p}
+		if p != "" && !strings.HasPrefix(p, "/fac/") && !strings.HasPrefix(p, "/org/") && !strings.HasPrefix(p, "/gov/") {
+			return &SupplyChainValidationError{Reason: "customer_ref_must_be_fac_org_or_gov", Path: p}
 		}
 	}
 	return nil

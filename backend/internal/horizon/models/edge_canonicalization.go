@@ -343,6 +343,13 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		targetType == FragmentTypeFacility {
 		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET DEPENDS_ON FACILITY -> FACILITY PARTICIPATES_IN MARKET"
 	}
+	// DEPENDS(MARKET → PRODUCT) → PARTICIPATES_IN (swap)
+	// Market "depends on" product category means product participates in that market.
+	if edgeType == DependencyTypeDependsOn &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeProduct {
+		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET DEPENDS_ON PRODUCT -> PRODUCT PARTICIPATES_IN MARKET"
+	}
 
 	// REGULATES(MARKET → ORGANIZATION) → REGULATES (swap)
 	// Markets are regulated by authorities; if the edge is reversed, swap it.

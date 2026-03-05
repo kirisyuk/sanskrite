@@ -3,7 +3,7 @@
     "id": "756btZKk76bzLQfNp7XM",
     "tenantId": "global",
     "type": "FACILITY",
-    "canonicalPath": "/fac/marriott/four-points-riyadh-khaldia",
+    "canonicalPath": "/fac/sa/four-points-riyadh-khaldia",
     "labels": {
       "en": "Four Points by Sheraton Riyadh Khaldia"
     },
@@ -18,7 +18,7 @@
     },
     "entityId": "UnLFfVTw85i8kWYddE3T",
     "raw": {
-      "canonicalPath": "/fac/marriott/four-points-riyadh-khaldia",
+      "canonicalPath": "/fac/sa/four-points-riyadh-khaldia",
       "createdAt": "2026-01-08T08:27:23.397164Z",
       "createdBy": "",
       "description": "Discovered via relation from /loc/sa/ar/riyadh",
@@ -35,7 +35,7 @@
         "shortName": "Four Points Khaldia"
       },
       "indexPaths": [
-        "/fac/marriott/four-points-riyadh-khaldia",
+        "/fac/sa/four-points-riyadh-khaldia",
         "/id/legalname/four-points-by-sheraton-riyadh-khaldia",
         "/id/shortname/four-points-khaldia"
       ],
@@ -147,7 +147,7 @@
     "id": "anz6w0uDOjDlSorQLA6S",
     "tenantId": "global",
     "type": "FACILITY",
-    "canonicalPath": "/fac/marriott/four-points-sheraton-riyadh-khaldia",
+    "canonicalPath": "/fac/sa/four-points-sheraton-riyadh-khaldia",
     "governance": {
       "owner": "SYSTEM",
       "activeSubscribers": 0,
@@ -155,7 +155,7 @@
     },
     "entityId": "Fn5Dqr4Ar7gVc0ElO1Tq",
     "raw": {
-      "canonicalPath": "/fac/marriott/four-points-sheraton-riyadh-khaldia",
+      "canonicalPath": "/fac/sa/four-points-sheraton-riyadh-khaldia",
       "createdAt": "2026-01-08T08:25:58.014993Z",
       "createdBy": "",
       "entityId": "Fn5Dqr4Ar7gVc0ElO1Tq",
@@ -167,7 +167,7 @@
       },
       "id": "anz6w0uDOjDlSorQLA6S",
       "indexPaths": [
-        "/fac/marriott/four-points-sheraton-riyadh-khaldia",
+        "/fac/sa/four-points-sheraton-riyadh-khaldia",
         "/sector/Industrials",
         "/sector/Industrials/Hospitality",
         "/sector/Industrials/Hospitality/Hotels",

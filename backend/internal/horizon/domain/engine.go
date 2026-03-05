@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	telemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetrycollector"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 type LensArtifactsReader interface {
@@ -802,6 +804,16 @@ func (e *Engine) awaitGraphDelta(
 	return snapshot
 }
 
+func containsFold(slice []string, val string) bool {
+	val = strings.TrimSpace(strings.ToLower(val))
+	for _, s := range slice {
+		if strings.TrimSpace(strings.ToLower(s)) == val {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, contract Contract) graphSnapshot {
 	out := graphSnapshot{
 		NodesByID:   map[string]*models.HorizonFragment{},
@@ -870,6 +882,12 @@ func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, cont
 			}
 		}
 	}
+
+	allowedEntities := expectedEntitiesForContractType(contract.ContractType)
+	allowedEdges := expectedRelationsForContractType(contract.ContractType)
+	droppedEntities := 0
+	droppedEdges := 0
+
 	if len(fragmentIDs) > 0 {
 		byID, err := e.fragments.GetMany(ctx, fragmentIDs)
 		if err != nil {
@@ -885,6 +903,13 @@ func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, cont
 			f := byID[strings.TrimSpace(id)]
 			if f == nil {
 				continue
+			}
+			if len(allowedEntities) > 0 {
+				ft := string(f.Type)
+				if ft != "DOMAIN" && ft != "SPHERE" && !containsFold(allowedEntities, ft) {
+					droppedEntities++
+					continue
+				}
 			}
 			out.NodesByID[f.ID] = f
 			cp := strings.TrimSpace(f.CanonicalPath)
@@ -909,6 +934,12 @@ func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, cont
 			if edge == nil {
 				continue
 			}
+			if len(allowedEdges) > 0 {
+				if !edgesemantics.IsDomainScaffoldRelationType(edge.Type) && !containsFold(allowedEdges, string(edge.Type)) {
+					droppedEdges++
+					continue
+				}
+			}
 			if edge.SourceFragmentID == "" || edge.TargetFragmentID == "" {
 				continue
 			}
@@ -925,6 +956,16 @@ func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, cont
 			})
 		}
 	}
+	
+	if droppedEntities > 0 || droppedEdges > 0 {
+		logDomainContract(ctx, "collect.artifacts.filtered", job, &contract, map[string]any{
+			"droppedEntities": droppedEntities,
+			"droppedEdges":    droppedEdges,
+			"allowedEntities": allowedEntities,
+			"allowedEdges":    allowedEdges,
+		})
+	}
+
 	fallbackFragmentErrors := 0
 	if len(out.NodesByID) == 0 && len(contract.FirstOrderEntities) > 0 && e.fragments != nil {
 		for _, cp := range contract.FirstOrderEntities {
@@ -1052,11 +1093,11 @@ func generateCrossFacetExpectations(contract Contract) []CrossFacetExpectation {
 func expectedRelationsForContractType(contractType string) []string {
 	switch steeringProfileForContractType(contractType) {
 	case SteeringProfileSupplyChain:
-		return []string{"SUPPLIES_TO", "CONSUMES", "DEPENDS_ON", "PRODUCES", "TRANSFORMS_INTO"}
+		return taxonomy.AllowedEdgeTypesForDomainMode(taxonomy.DomainModeSupplyChain)
 	case SteeringProfileRegulatoryExposure:
 		return []string{"REGULATES", "CONTROLS_ACCESS", "USES_MECHANISM", "APPLIES_TO"}
 	case SteeringProfilePolicyImpact:
-		return []string{"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "ADMINISTERS"}
+		return taxonomy.AllowedEdgeTypesForDomainMode(taxonomy.DomainModePolicyImpact)
 	case SteeringProfileCompetitiveLandscape:
 		return []string{"PARTICIPATES_IN", "COMPETES_WITH", "PRODUCES"}
 	case SteeringProfileSectorIndustry:
@@ -1066,6 +1107,23 @@ func expectedRelationsForContractType(contractType string) []string {
 		return []string{"LOCATED_IN", "OPERATES_IN", "EXTRACTS_FROM"}
 	default:
 		return []string{"DEPENDS_ON", "AFFECTS", "RELATED_DOMAIN"}
+	}
+}
+
+func expectedEntitiesForContractType(contractType string) []string {
+	switch steeringProfileForContractType(contractType) {
+	case SteeringProfileSupplyChain:
+		return taxonomy.AllowedEntityTypesForDomainMode(taxonomy.DomainModeSupplyChain)
+	case SteeringProfileRegulatoryExposure, SteeringProfilePolicyImpact:
+		return taxonomy.AllowedEntityTypesForDomainMode(taxonomy.DomainModePolicyImpact)
+	case SteeringProfileCompetitiveLandscape:
+		return taxonomy.AllowedEntityTypesForDomainMode(taxonomy.DomainModeMarket)
+	case SteeringProfileInvestmentFinance:
+		return taxonomy.AllowedEntityTypesForDomainMode(taxonomy.DomainModeGovernance)
+	case SteeringProfileEcosystemStakeholder:
+		return taxonomy.AllowedEntityTypesForDomainMode(taxonomy.DomainModeEcosystem)
+	default:
+		return nil
 	}
 }
 
@@ -2004,12 +2062,8 @@ func (e *Engine) contractSpecificChecks(contract Contract, g graphSnapshot, face
 	switch profile {
 	case SteeringProfileSupplyChain:
 		out = append(out,
-			checkSupplyChainEdges(g, facetNodes),
-			checkUpstreamDownstream(g, facetNodes),
-			checkMarketMetrics(snapshot),
-			checkConcentrationEvidence(snapshot, g),
-			checkSubstitutionData(snapshot),
-			checkGeoCoverage(snapshot, e.gateConfig.MinGeoCoverage),
+			checkSupplyChainEdgesOperational(g, facetNodes),
+			checkSupplyChainBidirectional(g, facetNodes),
 		)
 	case SteeringProfileRegulatoryExposure:
 		out = append(out,
@@ -2278,6 +2332,15 @@ func (e *Engine) enqueueEnrichmentTasks(ctx context.Context, parent *models.Scou
 	if e.scoutingJobs == nil || parent == nil {
 		logDomainContract(ctx, "enrich.enqueue.skipped", parent, &contract, map[string]any{
 			"reason": "missing_scouting_jobs_or_parent",
+			"cycle":  cycle,
+		})
+		return nil
+	}
+	// Supply chain: enrichment is done by domain expansion (EnrichSupplyChainFull → processSupplyChains).
+	// Entity jobs would run extraction+processRelations (org→org SUPPLIES_TO, DEPENDS_ON) — wrong pipeline.
+	if steeringProfileForContractType(contract.ContractType) == SteeringProfileSupplyChain {
+		logDomainContract(ctx, "enrich.enqueue.skipped", parent, &contract, map[string]any{
+			"reason": "supply_chain_enrichment_via_domain_expansion_only",
 			"cycle":  cycle,
 		})
 		return nil
@@ -3158,7 +3221,7 @@ func adaptSnapshotToViewDirective(snapshot *models.DomainAnswerSnapshot) *models
 func defaultFilterRelTypes(contractType string) []string {
 	switch steeringProfileForContractType(contractType) {
 	case SteeringProfileSupplyChain:
-		return []string{"SUPPLIES_TO", "CONSUMES", "DEPENDS_ON", "PRODUCES", "TRANSFORMS_INTO"}
+		return []string{"SUPPLIES_TO", "PRODUCES", "TRANSFORMS_INTO", "EXTRACTS_FROM"}
 	case SteeringProfileRegulatoryExposure:
 		return []string{"REGULATES", "CONTROLS_ACCESS", "USES_MECHANISM", "APPLIES_TO"}
 	case SteeringProfilePolicyImpact:
@@ -3355,12 +3418,14 @@ func edgeByID(edges []*models.DependencyEdge, edgeID string) *models.DependencyE
 	return nil
 }
 
-func checkSupplyChainEdges(g graphSnapshot, facetNodes map[string][]*models.HorizonFragment) models.DomainGateCheck {
+// checkSupplyChainEdgesOperational uses only supply-chain operational edge types:
+// PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM. No CONSUMES or DEPENDS_ON.
+func checkSupplyChainEdgesOperational(g graphSnapshot, facetNodes map[string][]*models.HorizonFragment) models.DomainGateCheck {
 	needed := map[models.DependencyType]struct{}{
-		models.DependencyTypeSuppliesTo: {},
-		models.DependencyTypeConsumes:   {},
-		models.DependencyTypeDependsOn:  {},
-		models.DependencyTypeProduces:   {},
+		models.DependencyTypeSuppliesTo:     {},
+		models.DependencyTypeProduces:       {},
+		models.DependencyTypeTransformsInto: {},
+		models.DependencyTypeExtractsFrom:  {},
 	}
 	perFacet := map[string]bool{}
 	for facet := range facetNodes {
@@ -3401,20 +3466,21 @@ func checkSupplyChainEdges(g graphSnapshot, facetNodes map[string][]*models.Hori
 		Priority:       "P0",
 		GapDescription: fmt.Sprintf("missing_facets=%s", strings.Join(missing, ",")),
 		Affected:       missing,
-		EnrichmentHint: "Add SUPPLIES_TO/CONSUMES/DEPENDS_ON/PRODUCES edges for missing facets",
+		EnrichmentHint: "Add SUPPLIES_TO/PRODUCES/TRANSFORMS_INTO/EXTRACTS_FROM edges for missing facets",
 	}
 }
 
-func checkUpstreamDownstream(g graphSnapshot, facetNodes map[string][]*models.HorizonFragment) models.DomainGateCheck {
-	failures := []string{}
+// checkSupplyChainBidirectional verifies anchor nodes have both incoming (SUPPLIES_TO as target)
+// and outgoing (PRODUCES or SUPPLIES_TO as source) edges. Supply chain model: upstream = receives supplies, downstream = produces/supplies.
+func checkSupplyChainBidirectional(g graphSnapshot, facetNodes map[string][]*models.HorizonFragment) models.DomainGateCheck {
 	outgoingTypes := map[models.DependencyType]struct{}{
 		models.DependencyTypeSuppliesTo: {},
 		models.DependencyTypeProduces:   {},
 	}
 	incomingTypes := map[models.DependencyType]struct{}{
-		models.DependencyTypeConsumes:  {},
-		models.DependencyTypeDependsOn: {},
+		models.DependencyTypeSuppliesTo: {},
 	}
+	failures := []string{}
 	for _, nodes := range facetNodes {
 		for _, n := range nodes {
 			if n == nil || n.ID == "" {
@@ -3448,27 +3514,10 @@ func checkUpstreamDownstream(g graphSnapshot, facetNodes map[string][]*models.Ho
 		Priority:       "P1",
 		GapDescription: fmt.Sprintf("anchors_missing_bidirectional=%d", len(failures)),
 		Affected:       failures,
-		EnrichmentHint: "Find upstream and downstream links for anchor nodes",
+		EnrichmentHint: "Find upstream (incoming SUPPLIES_TO) and downstream (outgoing PRODUCES/SUPPLIES_TO) links for anchor nodes",
 	}
 }
 
-func checkMarketMetrics(snapshot *models.DomainAnswerSnapshot) models.DomainGateCheck {
-	if snapshot == nil {
-		return models.DomainGateCheck{CheckID: "SC3_market_metrics", Status: "fail", Priority: "P2"}
-	}
-	for _, ev := range snapshot.ConcentrationEvidence {
-		if ev.TAM != nil || ev.CAGR != nil || ev.CR4 != nil || ev.HHI != nil || strings.TrimSpace(ev.DataGap) != "" {
-			return models.DomainGateCheck{CheckID: "SC3_market_metrics", Status: "pass", Priority: "P2"}
-		}
-	}
-	return models.DomainGateCheck{
-		CheckID:        "SC3_market_metrics",
-		Status:         "fail",
-		Priority:       "P2",
-		GapDescription: "no market metrics",
-		EnrichmentHint: "Collect TAM/CAGR/CR4/HHI or explicit data_gap",
-	}
-}
 
 func checkConcentrationEvidence(snapshot *models.DomainAnswerSnapshot, g graphSnapshot) models.DomainGateCheck {
 	if snapshot == nil {
@@ -3500,47 +3549,7 @@ func checkConcentrationEvidence(snapshot *models.DomainAnswerSnapshot, g graphSn
 	}
 }
 
-func checkSubstitutionData(snapshot *models.DomainAnswerSnapshot) models.DomainGateCheck {
-	if snapshot == nil {
-		return models.DomainGateCheck{CheckID: "SC5_substitution_data", Status: "fail", Priority: "P2"}
-	}
-	if len(snapshot.Alternatives) > 0 {
-		return models.DomainGateCheck{CheckID: "SC5_substitution_data", Status: "pass", Priority: "P2"}
-	}
-	for _, gap := range snapshot.DataGaps {
-		if gap.GapType == "no_alternatives" {
-			return models.DomainGateCheck{CheckID: "SC5_substitution_data", Status: "pass", Priority: "P2"}
-		}
-	}
-	return models.DomainGateCheck{
-		CheckID:        "SC5_substitution_data",
-		Status:         "fail",
-		Priority:       "P2",
-		GapDescription: "alternatives missing",
-		EnrichmentHint: "Find alternatives or mark explicit no_alternatives gap",
-	}
-}
 
-func checkGeoCoverage(snapshot *models.DomainAnswerSnapshot, minCoverage float64) models.DomainGateCheck {
-	if snapshot == nil || len(snapshot.CriticalNodes) == 0 {
-		return models.DomainGateCheck{CheckID: "SC6_geographic_distribution", Status: "fail", Priority: "P2"}
-	}
-	geoCovered := 0
-	for _, n := range snapshot.CriticalNodes {
-		cp := strings.ToLower(strings.TrimSpace(n.CanonicalPath))
-		if strings.Contains(cp, "/loc/") || strings.Contains(cp, "/geo/") || strings.Contains(cp, "/country/") {
-			geoCovered++
-		}
-	}
-	ratio := float64(geoCovered) / float64(len(snapshot.CriticalNodes))
-	return models.DomainGateCheck{
-		CheckID:        "SC6_geographic_distribution",
-		Status:         ternary(ratio >= minCoverage, "pass", "fail"),
-		Priority:       "P2",
-		GapDescription: fmt.Sprintf("geo_coverage=%.3f threshold=%.3f", ratio, minCoverage),
-		EnrichmentHint: "Link critical nodes with LOCATED_IN/OPERATES_IN",
-	}
-}
 
 func checkRegulatoryEdges(g graphSnapshot) models.DomainGateCheck {
 	n := 0

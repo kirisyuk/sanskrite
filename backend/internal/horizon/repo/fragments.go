@@ -1413,29 +1413,56 @@ func (r *HorizonFragmentsRepository) ListGeoBound(
 	}
 
 	prefix := strings.TrimSpace(pathPrefix)
-	var fsQ firestore.Query
+	var docs []*firestore.DocumentSnapshot
 	if prefix != "" {
 		if !strings.HasPrefix(prefix, "/") {
 			prefix = "/" + prefix
 		}
-		fsQ = r.col.
+		fsQ := r.col.
 			Where("tenantId", "==", "global").
 			Where("canonicalPath", ">=", prefix).
 			Where("canonicalPath", "<", prefix+"\ufffd").
 			OrderBy("canonicalPath", firestore.Asc).
 			Limit(scanLimit)
+		var err error
+		docs, err = fsQ.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
 	} else {
-		// Scan by updatedAt and filter in-memory for coordinate presence.
-		// TODO: switch to Where("hasCoordinates","==",true) once existing docs are backfilled.
-		fsQ = r.col.
+		// Main scan: by updatedAt (recent fragments)
+		fsQ := r.col.
 			Where("tenantId", "==", "global").
 			OrderBy("updatedAt", firestore.Desc).
 			Limit(scanLimit)
-	}
-
-	docs, err := fsQ.Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
+		mainDocs, err := fsQ.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
+		// Also fetch /zone/ (AFFECTED_ZONE) — they may be pushed out by more frequently updated orgs/facilities
+		zoneQ := r.col.
+			Where("tenantId", "==", "global").
+			Where("canonicalPath", ">=", "/zone/").
+			Where("canonicalPath", "<", "/zone/\ufffd").
+			OrderBy("canonicalPath", firestore.Asc).
+			Limit(2000)
+		zoneDocs, err := zoneQ.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, err
+		}
+		// Merge: zones FIRST so they're not pushed out by limit; then main (dedupe by ID)
+		seen := make(map[string]struct{}, len(mainDocs)+len(zoneDocs))
+		docs = make([]*firestore.DocumentSnapshot, 0, len(mainDocs)+len(zoneDocs))
+		for _, d := range zoneDocs {
+			docs = append(docs, d)
+			seen[d.Ref.ID] = struct{}{}
+		}
+		for _, d := range mainDocs {
+			if _, ok := seen[d.Ref.ID]; ok {
+				continue
+			}
+			docs = append(docs, d)
+		}
 	}
 	capHint := len(docs)
 	if capHint > limit {

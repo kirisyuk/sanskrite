@@ -24,7 +24,7 @@ import (
 //	  "title": "...",
 //	  "summary": "...",
 //	  "canonicalPaths": ["/org/ae/flydubai-llc"],   // used as default seedPaths by extractor
-//	  "locationPath": "/loc/ir/na/na",
+//	  "locationPath": "/loc/ir",
 //	  "actorPaths": ["/gov/ir/civil-aviation"],
 //	  "spherePaths": ["/sphere/logistics"],
 //	  "occurredAt": "2026-01-18T12:00:00Z",

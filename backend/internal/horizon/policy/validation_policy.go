@@ -4,15 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
-
-var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
 
 // ValidationPolicy validates combinations of source×target×relationType.
 type ValidationPolicy struct {
@@ -217,11 +214,10 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			}, nil
 		}
 
-		// Enforce strict 3-position geo model: /loc/{country}/{admin1}/{city}
-		parts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
-		if len(parts) != 4 || parts[0] != "loc" {
-			reason := fmt.Sprintf("GEO_REGION canonicalPath %q must be /loc/{country}/{admin1}/{city}", fragment.CanonicalPath)
-			log.Printf("%s REJECT: %s (parts=%v)", logPrefix, reason, parts)
+		cc, _, _, ok := taxonomy.ParseLocCanonicalPath(fragment.CanonicalPath)
+		if !ok {
+			reason := fmt.Sprintf("GEO_REGION canonicalPath %q must be /loc/{country}[/{level1}[/{level2}]]", fragment.CanonicalPath)
+			log.Printf("%s REJECT: %s", logPrefix, reason)
 			fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 			return PolicyDecision{
 				Action:       ActionQuarantineSoft,
@@ -231,10 +227,9 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 			}, nil
 		}
 
-		cc := strings.ToLower(strings.TrimSpace(parts[1]))
-		if !reCountryAlpha2.MatchString(cc) && !taxonomy.IsRegionalGeoToken(cc) && !taxonomy.IsCompositeGeoToken(cc) {
-			reason := fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country/region %q (expected ISO3166-1 alpha2, composite, or regional token)",
-				fragment.CanonicalPath, parts[1])
+		if !taxonomy.IsValidLocCountryToken(cc) {
+			reason := fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country/region %q (expected %s)",
+				fragment.CanonicalPath, cc, taxonomy.ISO2GeoDescriptionForPrompts())
 			log.Printf("%s REJECT: %s", logPrefix, reason)
 			fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
 			return PolicyDecision{

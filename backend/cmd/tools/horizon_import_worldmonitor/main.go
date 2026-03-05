@@ -556,7 +556,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 
 	for _, v := range p.Waterways {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("chokepoint", v.Name),
+			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			Description:   v.Description,
@@ -583,7 +583,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 
 	for _, v := range p.MilitaryBases {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("military-base", v.Name),
+			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			Description:   strings.TrimSpace(v.Status),
@@ -621,7 +621,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 			country = firstNonEmpty(v.LandingPoints[0].Country, v.LandingPoints[0].City)
 		}
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("undersea-cable", v.Name),
+			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			SourceID:      v.ID,
@@ -655,7 +655,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 
 	for _, v := range p.NuclearFacilities {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("nuclear", v.Name),
+			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			SourceID:      v.ID,
@@ -722,7 +722,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 
 	for _, v := range p.Spaceports {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("spaceport", v.Name),
+			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			SourceID:      v.ID,
@@ -800,7 +800,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 			country = v.Countries[0]
 		}
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("pipeline", v.Name),
+			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			Description:   v.Capacity,
@@ -840,7 +840,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 
 	for _, v := range p.Ports {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("port", v.Name),
+			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			Description:   v.Note,
@@ -2228,10 +2228,10 @@ func (i *importer) countryCanonicalPath(raw string) string {
 	}
 
 	if len(clean) == 2 && regexp.MustCompile(`^[a-z]{2}$`).MatchString(clean) {
-		return "/loc/" + clean + "/na/na"
+		return "/loc/" + clean
 	}
 	if code, ok := i.countryMap[clean]; ok {
-		return "/loc/" + code + "/na/na"
+		return "/loc/" + code
 	}
 	if cp := scout.GetCountryCanonicalPath(clean); cp != "" {
 		return cp
@@ -2250,7 +2250,7 @@ func (i *importer) geoToken(country string) string {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(cp, "/"), "/")
-	if len(parts) != 4 || parts[0] != "loc" {
+	if len(parts) < 2 || parts[0] != "loc" {
 		return ""
 	}
 	return strings.TrimSpace(parts[1])
@@ -2258,20 +2258,24 @@ func (i *importer) geoToken(country string) string {
 
 func (i *importer) geoLabelFromPath(path string) string {
 	parts := strings.Split(strings.Trim(strings.TrimSpace(path), "/"), "/")
-	if len(parts) < 4 || parts[0] != "loc" {
+	if len(parts) < 2 || parts[0] != "loc" {
 		return "Location"
 	}
 	cc := strings.TrimSpace(parts[1])
 	if cc == "" {
 		cc = "global"
 	}
-	admin := strings.TrimSpace(parts[2])
-	city := strings.TrimSpace(parts[3])
-	if city != "" && city != "na" {
-		return strings.ReplaceAll(city, "-", " ")
+	if len(parts) >= 4 {
+		city := strings.TrimSpace(parts[3])
+		if city != "" && city != "na" {
+			return strings.ReplaceAll(city, "-", " ")
+		}
 	}
-	if admin != "" && admin != "na" {
-		return strings.ReplaceAll(admin, "-", " ")
+	if len(parts) >= 3 {
+		admin := strings.TrimSpace(parts[2])
+		if admin != "" && admin != "na" {
+			return strings.ReplaceAll(admin, "-", " ")
+		}
 	}
 	return strings.ToUpper(cc)
 }

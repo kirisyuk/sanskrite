@@ -377,24 +377,25 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 	canonicalValidationBlock := fmt.Sprintf(`  MANDATORY - Canonical path validation (for fragment AND relations):
     - For the main fragment and EACH relation targetCanonicalPath:
       - If path is /org/... ensure it is %s; otherwise add a question:
-        - "Confirm official legal name, jurisdiction (ISO2 or regional token), and canonical org path for <entity>. REQUIRED FORMAT: %s where iso2 is ISO3166-1 alpha2 lowercase; regional tokens (e.g., gcc, eu) go in the geo slot (2nd segment); slug is hyphenated base name; legal_form is a SUFFIX token in {%s} (e.g., /org/us/tesla-inc). Do NOT rewrite names as 'JSC X' — keep official ordering from sources; legal_form belongs at the end of canonicalPath and in canonicalParts.Org.LegalForm."
+        - "Confirm official legal name, jurisdiction (ISO2 or regional token), and canonical org path for <entity>. REQUIRED FORMAT: %s where iso2 is %s; slug is hyphenated base name ONLY — do NOT include legal form (Inc, Ltd, LLC, etc.) in slug."
 	      - If path is /gov/... ensure it is %s; otherwise add a question:
-	        - "Which country/jurisdiction does this government body belong to? REQUIRED FORMAT: %s with iso2 ISO3166-1 alpha2 lowercase OR regional token (gcc, eu, asean); regional tokens go in the geo slot (2nd segment). Example: %s."
+	        - "Which country/jurisdiction does this government body belong to? REQUIRED FORMAT: %s with iso2 %s. Example: %s."
 	      - Shared naming constraints (for fragment + relations):
 	        %s
 	      - If path is /product/... ensure it is %s; otherwise add a question:
 	        - "Resolve canonical product taxonomy for <product>. REQUIRED FORMAT: %s. category∈{%s}; type∈{%s}; stage∈{%s}. For services, use category=service and map service domain/subdomain into {type}/{stage}. Example: %s."
       - If path is /loc/... ensure it is %s; otherwise add a question:
-        - "Resolve canonical GEO path for <location>. REQUIRED FORMAT: %s where cc is ISO3166-1 alpha2 lowercase (or allowed regional token: asean, brics, gcc, eu, eaeu), admin1 is GeoNames admin code or 'na', city is hyphenated English name. Example: %s."
+        - "Resolve canonical GEO path for <location>. REQUIRED FORMAT: %s where cc is %s, admin1 is GeoNames admin code or 'na', city is hyphenated English name. Example: %s."
       - If path is /program/... ensure it is /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known:
-        - "Confirm program jurisdiction and canonicalPath. REQUIRED FORMAT: /program/{jurisdiction}/{slug} where jurisdiction is ISO2 or regional token (gcc, eu, asean) and always goes in the 2nd segment."
+        - "Confirm program jurisdiction and canonicalPath. REQUIRED FORMAT: /program/{jurisdiction}/{slug} where jurisdiction is %s and always goes in the 2nd segment."
       - If path is missing segments (e.g., /org/<slug> or /product/<slug> with no taxonomy), treat it as non-canonical and add the appropriate question.
 `,
 		canonicalRules.Org.Format,
 		canonicalRules.Org.Format,
-		strings.Join(canonicalRules.Org.LegalForms, ", "),
+		taxonomy.ISO2GeoDescriptionForPrompts(),
 		canonicalRules.Gov.Format,
 		canonicalRules.Gov.Format,
+		taxonomy.ISO2GeoDescriptionForPrompts(),
 		canonicalRules.Gov.Example,
 		nameRulesBlock,
 		canonicalRules.Product.Format,
@@ -405,7 +406,9 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 		canonicalRules.Product.Example,
 		canonicalRules.Geo.Format,
 		canonicalRules.Geo.Format,
+		taxonomy.ISO2GeoDescriptionForPrompts(),
 		canonicalRules.Geo.Example,
+		taxonomy.ISO2GeoDescriptionForPrompts(),
 	)
 
 	return fmt.Sprintf(`You are a validation agent (Critic) for a risk analysis system. Your task is to verify that extracted data matches the source content and assess the completeness of the knowledge graph.
@@ -480,7 +483,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - If this looks like a government body (ministry/agency/regulator) but canonicalPath is not /gov/{iso2}/{slug}, add a question:
 	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2|regional}/{slug} where regional tokens (gcc, eu, asean) go in the geo slot (2nd segment). If unknown, /gov/na/{slug}."
 	  - If canonicalPath uses /org/na/{slug}, add a question:
-	    - "What is the country of origin / primary jurisdiction (ISO2 or regional token) for <org>? Use the entity's legalName/shortName/label to disambiguate and update canonicalPath to /org/{iso2|regional}/{slug}-{legal_form}. If truly unknown, keep /org/na/... but state uncertainty."
+	    - "What is the country of origin / primary jurisdiction (ISO2 or regional token) for <org>? Use the entity's legalName/shortName/label to disambiguate and update canonicalPath to /org/{iso2|regional}/{slug} (base name only, do NOT include legal form). If truly unknown, keep /org/na/... but state uncertainty."
 	
 %s
   MANDATORY - Community completeness (for COMMUNITY or /community/*):

@@ -17,26 +17,21 @@ func TestCheckFragmentPath_PathNamespaceWinsForPersonPath(t *testing.T) {
 
 	violations := pc.checkFragmentPath(context.Background(), frag)
 
-	var hasMissingLegalForm bool
 	var hasTypePathMismatch bool
 	for _, v := range violations {
-		if v.Type == ViolationMissingLegalForm {
-			hasMissingLegalForm = true
-		}
 		if v.Type == ViolationTypeMismatch && v.Rule == "fragment_type_path_namespace" {
 			hasTypePathMismatch = true
+			break
 		}
 	}
 
-	if hasMissingLegalForm {
-		t.Fatalf("did not expect missing legal form violation for person canonical path")
-	}
 	if !hasTypePathMismatch {
 		t.Fatalf("expected type/path mismatch violation for ORGANIZATION type with /person/ path")
 	}
 }
 
-func TestCheckFragmentPath_OrgPathStillChecksMissingLegalForm(t *testing.T) {
+func TestCheckFragmentPath_OrgPathNoLegalFormRequired(t *testing.T) {
+	// Legal form is no longer required; /org/{geo}/{slug} with base name only is valid.
 	pc := NewPolicyChecker(nil, nil)
 	frag := &horizonmodels.HorizonFragment{
 		ID:            "frag-org",
@@ -46,14 +41,9 @@ func TestCheckFragmentPath_OrgPathStillChecksMissingLegalForm(t *testing.T) {
 	}
 
 	violations := pc.checkFragmentPath(context.Background(), frag)
-	found := false
 	for _, v := range violations {
-		if v.Type == ViolationMissingLegalForm && v.Rule == "org_legal_form" {
-			found = true
-			break
+		if v.Rule == "org_path_format" || v.Type == ViolationPathFormat {
+			t.Fatalf("org path without legal form should stay valid; got violation: %s", v.Description)
 		}
-	}
-	if !found {
-		t.Fatalf("expected missing legal form violation for org path without legal form suffix")
 	}
 }

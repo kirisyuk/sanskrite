@@ -15,7 +15,7 @@ import (
 const (
 	// PolicyImpactContractTypeFamily is the registry key for policy-impact adapter.
 	PolicyImpactContractTypeFamily = "policy-impact"
-	defaultPolicyImpactLocation    = "/loc/global/na/na"
+	defaultPolicyImpactLocation    = "/loc/global"
 
 	// PolicyImpactEngineMacroEconomicalV1 is the first economic engine for policy impact modeling.
 	PolicyImpactEngineMacroEconomicalV1 = "macro_economical_v1"
@@ -209,7 +209,7 @@ func policyImpactLocationPath(params map[string]interface{}) string {
 	if s, ok := firstString(params, "jurisdiction", "country", "country_code", "countryCode"); ok {
 		cc := strings.ToLower(strings.TrimSpace(s))
 		if len(cc) == 2 || taxonomy.IsRegionalGeoToken(cc) {
-			return "/loc/" + cc + "/na/na"
+			return "/loc/" + cc
 		}
 	}
 	return ""

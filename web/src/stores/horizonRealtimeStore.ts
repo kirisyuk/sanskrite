@@ -518,6 +518,36 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             text = title;
             humanReadable = { title };
           }
+        } else if (type === 'horizon.supply_chain.depth.materialized') {
+          icon = 'success';
+          const depth = typeof data?.depth === 'number' ? data.depth : undefined;
+          const chainsN =
+            typeof data?.chainsN === 'number' ? data.chainsN : undefined;
+          const stageRaw = typeof data?.stage === 'string' ? data.stage.trim() : '';
+          const stage = stageRaw ? stageRaw : '';
+          const directionRaw =
+            typeof data?.direction === 'string' ? data.direction.trim() : '';
+          const direction =
+            directionRaw === 'upstream'
+              ? 'upstream'
+              : directionRaw === 'downstream'
+                ? 'downstream'
+                : directionRaw === 'both'
+                  ? 'both'
+                  : '';
+
+          const parts: string[] = [];
+          if (stage) parts.push(`stage=${stage}`);
+          if (typeof depth === 'number') parts.push(`depth=${depth}`);
+          if (typeof chainsN === 'number') parts.push(`chains=${chainsN}`);
+          if (direction) parts.push(`direction=${direction}`);
+
+          const title = 'Supply chain materialized';
+          text = parts.length > 0 ? `${title} — ${parts.join(' • ')}` : title;
+          humanReadable = {
+            title,
+            description: parts.length > 0 ? parts.join(' • ') : undefined,
+          };
         } else if (type === 'horizon.scout.job.log') {
           const rawLine = typeof data?.line === 'string' ? data.line : '';
           const level =
@@ -586,149 +616,12 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             return name ? name : c;
           };
 
-          const fmt = (() => {
-            const l = String(rawLine || '').trim();
-            if (!l)
-              return null as null | {
-                title: string;
-                description?: string;
-                text: string;
-                canonicalPath?: string;
-              };
-
-            // Supply chain parse summary
-            {
-              const m = l.match(
-                /^\[SupplyChainParse\]\s+chains=(\d+)\s+nodes=(\d+)\s+edges=(\d+)\s+fragments=(\d+)/i,
-              );
-              if (m) {
-                const chains = parseInt(m[1] || '0', 10) || 0;
-                const nodesN = parseInt(m[2] || '0', 10) || 0;
-                const edgesN = parseInt(m[3] || '0', 10) || 0;
-                const fragsN = parseInt(m[4] || '0', 10) || 0;
-                const title = 'Supply chain extracted';
-                const description = `${chains} chain${chains === 1 ? '' : 's'} • ${nodesN} node${nodesN === 1 ? '' : 's'} • ${edgesN} link${edgesN === 1 ? '' : 's'} • ${fragsN} entity${fragsN === 1 ? '' : 'ies'}`;
-                return { title, description: short(description), text: title };
-              }
-            }
-
-            // Supply chain parse error
-            {
-              const m = l.match(/^\[SupplyChainParse\]\s+failed.*?:\s*(.+)$/i);
-              if (m) {
-                const title = 'Supply chain parsing failed';
-                return { title, description: short(m[1] || ''), text: title };
-              }
-            }
-
-            // Research started
-            {
-              const m = l.match(
-                /^\>\s*research started\s*(?:\(\s*missing\s*=\s*(\d+)\s*\))?/i,
-              );
-              if (m) {
-                const missing = parseInt(m[1] || '0', 10) || 0;
-                const title = 'Research started';
-                const description =
-                  missing > 0
-                    ? `Gathering missing info (${missing} item${missing === 1 ? '' : 's'})`
-                    : 'Gathering missing info';
-                return { title, description: short(description), text: title };
-              }
-            }
-
-            // Fragment create/update
-            {
-              const m = l.match(
-                /^\[SupplyChainFragmentCreate\]\s+(OK|FAILED)\s+canonicalPath=([^\s]+)(?:\s+id=([^\s]+))?(?:\s+type=([A-Z_]+))?/i,
-              );
-              if (m) {
-                const ok = String(m[1] || '').toUpperCase() === 'OK';
-                const cp = String(m[2] || '').trim();
-                const t = String(m[4] || '').trim();
-                const title = ok ? 'Entity added' : 'Entity creation failed';
-                const description = ok
-                  ? `${typeName(t)} • ${prettyCP(cp)}`
-                  : `${prettyCP(cp)} • ${short(l)}`;
-                return { title, description: short(description), text: title, canonicalPath: cp || undefined };
-              }
-            }
-            {
-              const m = l.match(
-                /^\[SupplyChainFragmentUpdate\]\s+(OK|FAILED)\s+canonicalPath=([^\s]+)(?:\s+id=([^\s]+))?/i,
-              );
-              if (m) {
-                const ok = String(m[1] || '').toUpperCase() === 'OK';
-                const cp = String(m[2] || '').trim();
-                const title = ok ? 'Entity updated' : 'Entity update failed';
-                const description = ok
-                  ? prettyCP(cp)
-                  : `${prettyCP(cp)} • ${short(l)}`;
-                return { title, description: short(description), text: title, canonicalPath: cp || undefined };
-              }
-            }
-
-            // Edge create
-            {
-              const m = l.match(
-                /^\[SupplyChainEdgeCreate\]\s+(OK|FAILED)\s+([^\s]+)\s+-\[(\w+)\]->\s+([^\s]+)/i,
-              );
-              if (m) {
-                const ok = String(m[1] || '').toUpperCase() === 'OK';
-                const src = String(m[2] || '').trim();
-                const et = String(m[3] || '').trim();
-                const dst = String(m[4] || '').trim();
-                const title = ok
-                  ? 'Relationship added'
-                  : 'Relationship creation failed';
-                const description = `${prettyCP(src)} ${edgeVerb(et)} ${prettyCP(dst)}`;
-                return { title, description: short(description), text: title };
-              }
-            }
-
-            // Summary
-            {
-              const m = l.match(
-                /^\[SupplyChainSummary\]\s+fragments\(created=(\d+)\s+updated=(\d+)\s+err=(\d+)\)\s+edges\(created=(\d+)\s+dupes=(\d+)\s+err=(\d+)\s+reversed=(\d+)\s+penalized=(\d+)\)\s+gaps=(\d+)/i,
-              );
-              if (m) {
-                const createdFrags = parseInt(m[1] || '0', 10) || 0;
-                const updatedFrags = parseInt(m[2] || '0', 10) || 0;
-                const createdEdges = parseInt(m[4] || '0', 10) || 0;
-                const gaps = parseInt(m[9] || '0', 10) || 0;
-                const title = 'Supply chain saved';
-                const parts = [
-                  createdFrags ? `+${createdFrags} new` : null,
-                  updatedFrags ? `${updatedFrags} updated` : null,
-                  createdEdges ? `+${createdEdges} links` : null,
-                  gaps
-                    ? `${gaps} gap${gaps === 1 ? '' : 's'} identified`
-                    : null,
-                ].filter(Boolean);
-                const description =
-                  parts.length > 0 ? parts.join(' • ') : 'No changes';
-                return { title, description: short(description), text: title };
-              }
-            }
-
-            // Default fallback: strip technical prefix if present
-            const cleaned = l.replace(/^\[[^\]]+\]\s*/, '');
-            const title = 'Scout Activity';
-            const description = short(cleaned || l);
-            return { title, description, text: description };
-          })();
-
-          if (fmt) {
-            text = fmt.text;
-            humanReadable = { title: fmt.title, description: fmt.description };
-
-            // IMPORTANT: for log-derived "Entity added/updated" events, show the created entity's canonicalPath,
-            // not the scout job targetCanonicalPath (which is often /loc/{cc}/na/na for geo scope jobs).
-            if (fmt.canonicalPath) {
-              data = { ...(data || {}), canonicalPath: fmt.canonicalPath };
-            }
+          if (data?.humanReadable) {
+            // Already handled at the end, but let's just set the defaults if it's not present
           } else {
-            const line = short(rawLine);
+            const l = String(rawLine || '').trim();
+            const cleaned = l.replace(/^\[[^\]]+\]\s*/, '');
+            const line = short(cleaned);
             text = line || 'Scout activity';
             humanReadable = { title: 'Scout Activity', description: line };
           }
@@ -877,9 +770,12 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             .toLowerCase()
             .replace(/\b\w/g, (c: string) => c.toUpperCase());
           text = formattedType;
+          // Prefer humanized names for display; fallback to canonical paths (never raw fragment IDs)
+          const srcDisplay = src ? (humanizeCanonicalPath(src) || src) : '';
+          const dstDisplay = dst ? (humanizeCanonicalPath(dst) || dst) : '';
           humanReadable = {
             title: formattedType, // Just the type, UI will render "Link <chip> created"
-            description: src && dst ? `${src} → ${dst}` : 'Connection details', // Full canonical paths
+            description: srcDisplay && dstDisplay ? `${srcDisplay} → ${dstDisplay}` : src && dst ? `${src} → ${dst}` : 'Connection details',
           };
         } else if (type === 'horizon.policy.check_complete') {
           // Policy check completed

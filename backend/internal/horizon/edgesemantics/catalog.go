@@ -74,6 +74,23 @@ func IsDomainScaffoldRelationType(t models.DependencyType) bool {
 	return false
 }
 
+// Market relation types: PARTICIPATES_IN, HAS_MARKET_SEGMENT (market-specific).
+// Used when source is /market/... to allow market-anchor relations in supply-chain mode.
+var marketRelationTypes = []models.DependencyType{
+	models.DependencyTypeParticipatesIn,
+	models.DependencyTypeHasMarketSegment,
+}
+
+// IsMarketRelationType reports whether edge type belongs to MARKET anchor relation set.
+func IsMarketRelationType(t models.DependencyType) bool {
+	for _, allowed := range marketRelationTypes {
+		if allowed == t {
+			return true
+		}
+	}
+	return false
+}
+
 // supplyChainAllowlistFromTaxonomy derives allowlist from taxonomy.SupplyChainEdgeTypes (single source of truth).
 func supplyChainAllowlistFromTaxonomy() []models.DependencyType {
 	types := taxonomy.SupplyChainEdgeTypes

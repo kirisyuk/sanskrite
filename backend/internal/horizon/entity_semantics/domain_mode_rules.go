@@ -13,7 +13,7 @@ var DomainModeMissingInfoRules = map[string][]MissingInfoRule{
 		{Trigger: TriggerRelationMissing, RelationTypes: []string{"PRODUCES", "CONSUMES"}, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "products produced or consumed by %s"},
 		{Trigger: TriggerRelationMissing, RelationTypes: []string{"LOCATED_IN", "OPERATES_IN"}, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "facility locations and operating regions for %s"},
 		{Trigger: TriggerRelationMissing, RelationType: "EXTRACTS_FROM", DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "extractive source links (deposits, mines) for %s"}, // only when path suggests extractive
-		{Trigger: TriggerRelationCountBelow, MinCount: 3, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "upstream suppliers and downstream customers for %s"},
+		{Trigger: TriggerRelationCountBelow, MinCount: 3, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "child orgs, facilities, products, and org-recipients for %s"},
 	},
 	taxonomy.DomainModeGovernance: {
 		// Seed: always ask upstream (who owns/controls) — critical for org/gov/fac.

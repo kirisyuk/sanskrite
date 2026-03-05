@@ -434,8 +434,8 @@ func fragmentToView(f *models.HorizonFragment) *HorizonFragmentView {
 }
 
 // buildLocationPath builds a best-effort canonicalized location path for QueryAddress matching.
-// Canonical format: /loc/{country}/{admin1}/{city}
-// HorizonFragment stores only ISO3166-1 + ISO3166-2; we map to /loc/{country}/{admin1}/na.
+// Canonical format: /loc/{country}[/{level1}[/{level2}]]
+// HorizonFragment stores only ISO3166-1 + ISO3166-2; we map to /loc/{country}/{level1}.
 func buildLocationPath(homeLocation *models.Location) string {
 	if homeLocation == nil || homeLocation.ISO3166_1 == nil || strings.TrimSpace(*homeLocation.ISO3166_1) == "" {
 		return ""

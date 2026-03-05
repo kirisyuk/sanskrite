@@ -1,5 +1,6 @@
 import React from 'react';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
+import { humanizeCanonicalPath } from '../lib/uiUtils';
 import AssembleLensRequestComponent, { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
 
 export interface LensCanvasProgressProps {
@@ -1038,24 +1039,29 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
                 // Use humanReadable.title if available (already formatted), otherwise format ourselves
                 edgeTypeForChip = ev.humanReadable?.title || formatEdgeType(type);
                 title = ''; // We'll render custom layout for edges
-                
-                const s =
-                  ev.data?.sourceCanonicalPath ||
-                  ev.data?.qualifiers?.sourceCanonicalPath ||
-                  ev.data?.sourceLabel ||
-                  ev.data?.sourceFragmentId ||
-                  '';
-                const t =
-                  ev.data?.targetCanonicalPath ||
-                  ev.data?.qualifiers?.targetCanonicalPath ||
-                  ev.data?.targetLabel ||
-                  ev.data?.targetFragmentId ||
-                  '';
-                
-                if (s && t) {
-                   description = `${s} → ${t}`;
+                // Prefer store's humanReadable (uses humanized paths); else build from data with humanization
+                if (ev.humanReadable?.description) {
+                  description = ev.humanReadable.description;
                 } else {
-                   description = 'Connection details';
+                  const s =
+                    ev.data?.sourceCanonicalPath ||
+                    ev.data?.qualifiers?.sourceCanonicalPath ||
+                    ev.data?.sourceLabel ||
+                    ev.data?.sourceFragmentId ||
+                    '';
+                  const t =
+                    ev.data?.targetCanonicalPath ||
+                    ev.data?.qualifiers?.targetCanonicalPath ||
+                    ev.data?.targetLabel ||
+                    ev.data?.targetFragmentId ||
+                    '';
+                  if (s && t) {
+                    const sDisplay = humanizeCanonicalPath(s) || s;
+                    const tDisplay = humanizeCanonicalPath(t) || t;
+                    description = `${sDisplay} → ${tDisplay}`;
+                  } else {
+                    description = 'Connection details';
+                  }
                 }
                 entityPath = ''; // Don't show path for edge, description covers it
               } else {

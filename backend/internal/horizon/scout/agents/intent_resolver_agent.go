@@ -74,7 +74,7 @@ type SupplyChainQuery struct {
 	Anchor        string   `json:"anchor" firestore:"anchor"`                            // canonical path (single). Used when Anchors is empty.
 	Anchors       []string `json:"anchors,omitempty" firestore:"anchors,omitempty"`      // list of org paths for "from organizations" queries
 	AnchorType    string   `json:"anchorType" firestore:"anchorType"`                    // "org" | "product" | "deposit"
-	Direction     string   `json:"direction" firestore:"direction"`                      // "upstream" | "downstream" | "both"
+	Direction     string   `json:"direction" firestore:"direction"`                      // "down" (org→fac→product→fac→org tree). Legacy: "upstream"/"downstream"/"both" mapped to "down".
 	Depth         int      `json:"depth" firestore:"depth"`                              // 3-6
 	Level         int      `json:"level,omitempty" firestore:"level,omitempty"`          // optional: 1 = top ORGs, 2 = expansion (staged queries)
 	ProductFilter []string `json:"productFilter,omitempty" firestore:"productFilter,omitempty"`  // e.g. ["ev-batteries", "lithium-carbonate"]
@@ -135,7 +135,7 @@ type EcosystemQuery struct {
 }
 
 // AffectedZoneQuery holds parameters for holistic affected-zone discovery.
-// Geo is ISO2 code(s) or composite (e.g. "tr-sy"). No execution plan needed—derived from contract facets.
+// Geo: see taxonomy.ISO2GeoDescriptionForPrompts(). No execution plan needed—derived from contract facets.
 type AffectedZoneQuery struct {
 	Geo    string `json:"geo" firestore:"geo"`
 	Reason string `json:"reason" firestore:"reason"`
@@ -262,7 +262,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 		// Fix MSYS conversion if any.
 		cp = normalizeCanonicalPathForTools(cp)
 		// Best-effort legacy geo normalization: older flows may still emit /region/... paths.
-		// We normalize only supported legacy shapes into strict /loc/{country}/{admin1}/{city}.
+		// We normalize only supported legacy shapes into strict /loc/{country}[/{level1}[/{level2}]].
 		if strings.HasPrefix(cp, "/region/") {
 			if norm := normalizeLegacyGeoPathForIntent(cp); norm != "" {
 				cp = norm
@@ -654,12 +654,12 @@ DOMAIN RULES
   SCENARIOS: scenario-analysis, future-outlook (aliases: macro-trends, megatrends → scenario-analysis)
   SECTOR: sector-overview, industry-structure (aliases: vertical-deep-dive → sector-overview)
   FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
-- SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. CRITICAL: The FIRST queries must go FROM ORGANIZATIONS (as producers/suppliers). Supply chains are actor-centric: org→product→org. For product+geo queries (e.g. "Thai rice supply chain", "Thailand fruits supply chain", "EV battery supply chain Germany"): contractType MUST be supply-chain, facets MUST include geo and product or material (e.g. geo/th + product/fruits or material/rice). anchorType MUST be org. Use anchors (or anchors array) with canonical /org/... paths of key producers you can infer (e.g. CP Group, Thai rice exporters). Populate firstOrderEntities with 2-5 representative producer org paths. If you cannot name specific orgs, add decompositionHints with searchQueries like "top [product] producers [country]", "[country] [product] exporters" to guide discovery. Each query: anchor (single) or anchors (array of org paths), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries (Stage 2) optional.
+- SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. CRITICAL: The FIRST queries must go FROM ORGANIZATIONS (as producers/suppliers for downstream, or as consumers for upstream). Supply chains are actor-centric: org→product→org. direction: use "upstream" when the query asks about suppliers, raw materials, inputs, "who supplies X", "where does X get its materials", sourcing; use "downstream" when asking about customers, buyers, "who buys X", distribution; use "both" for full chain mapping. For upstream: anchors are the CONSUMER orgs (e.g. Coca-Cola for "who supplies Coca-Cola"). For downstream: anchors are PRODUCER orgs. For product+geo queries (e.g. "Thai rice supply chain"): contractType MUST be supply-chain, facets MUST include geo and product or material. anchorType MUST be org. Use anchors (or anchors array) with canonical /org/... paths. Each query: anchor (single) or anchors (array), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries (Stage 2) optional.
 - REGULATORY IMPACT PLAN: When contractType is policy-impact or regulatory-impact, you MUST include regulatoryImpactExecutionPlan with 1-5 queries. Each query: instrument (canonical path /mechanism/... or /program/...), jurisdiction (ISO2), parameters (rate_from, rate_to, effective_date when applicable), impactScope (economy-wide|sector-specific|entity-specific), depth (3-5), sectorFilter from facets, reason.
 - GOVERNANCE PLAN: When contractType is ownership-structure or control-map, you MUST include governanceExecutionPlan with 1-5 queries. Each query: target (canonical path /org/... or /gov/...), targetType (org|gov|person), direction (upward|downward|both), depth (3-6), includeBoard (true/false), geoFilter, reason.
 - ECOSYSTEM PLAN: When contractType is ecosystem-mapping or influence-network, you MUST include ecosystemExecutionPlan with 1-5 queries. Each query: focus (canonical path or description), focusType (geo|sector|market|org), depth (3-5), actorTypes (subset of [ORGANIZATION, GOV, PERSON, FACILITY]), sectorFilter, geoFilter, reason.
 - BILATERAL: If query is about relations between two countries → contractType bilateral-relations, geo = {cc1}-{cc2} (alphabetically sorted lowercase ISO2).
-- AFFECTED ZONE: If query asks about conflict zones, military conflicts, disaster zones, earthquake-affected areas, tension zones, humanitarian crisis areas, flood zones → contractType affected-zone, facet geo. geo: ISO2 (sy, ye), composite (tr-sy), or regional (africa, ssa, mena). Examples: /domain/v1/affected-zone/geo/tr-sy, /domain/v1/affected-zone/geo/sy, /domain/v1/affected-zone/geo/africa, /domain/v1/affected-zone/geo/ssa.
+- AFFECTED ZONE: If query asks about conflict zones, military conflicts, disaster zones, earthquake-affected areas, tension zones, humanitarian crisis areas, flood zones → contractType affected-zone, facet geo. geo: " + taxonomy.ISO2GeoDescriptionForPrompts() + ". Examples: /domain/v1/affected-zone/geo/tr-sy, /domain/v1/affected-zone/geo/sy, /domain/v1/affected-zone/geo/africa, /domain/v1/affected-zone/geo/ssa.
 - OWNERSHIP: If query asks who owns/controls an entity → contractType ownership-structure, facet subject.
 - COMMONALITY: If query asks what connects/unifies X and Y → contractType commonality-analysis, facets subject.
 - title: Title Case, specific to query (BAD: "Market Landscape", GOOD: "EV Lithium Batteries Market Landscape"), Latin-script only, 6-10 words.
@@ -675,10 +675,10 @@ ANCHOR TAXONOMY
 %s
 
 ORGANIZATION: /org/{iso2|na}/{slug} (e.g., /org/sa/saudi-aramco). GOV bodies: /gov/{iso2|na}/{slug}.
-FACILITY: /fac/{orgSlug}/{facilitySlug}. If org is unknown, use /fac/na/{facilitySlug}
-GEO_REGION: /loc/{countryAlpha2}/{admin1}/{city} — use "na" for unknown segments. Country-only: /loc/{cc}/na/na. Regional: /loc/gcc/na/na.
+FACILITY: /fac/{geo}/{facilitySlug}. geo like org/gov (ISO2, na, or regional). If geo unknown: /fac/na/{facilitySlug}
+GEO_REGION: /loc/{countryAlpha2}[/{level1}[/{level2}]] — omit unknown trailing levels. Country-only: /loc/{cc}. Regional: /loc/gcc.
 PRODUCT: /product/{category}/{type}/{stage}/{slug} — category: raw|component|finished|service. For services, use category=service and map service domain/subdomain into {type}/{stage}.
-MARKET: /market/{geo}/{domain}/{vertical} — geo: ISO2, composite, regional (gcc, eu), or "global". Inherit country ISO2 from query when geographic context is present.
+MARKET: /market/{geo}/{domain}/{vertical} — geo: " + taxonomy.ISO2GeoDescriptionForPrompts() + ". Inherit country ISO2 from query when geographic context is present.
 PROGRAM: /program/{jurisdictionSlug}/{programSlug}. If jurisdiction is unknown, use /program/global/{programSlug}
 PERSON: /person/{slug}
 EVENT: /event/{slug}
@@ -1337,13 +1337,8 @@ func extractCountryAnchors(
 		if !strings.HasPrefix(cp, "/loc/") {
 			continue
 		}
-		parts := strings.Split(strings.Trim(cp, "/"), "/")
-		// loc/{cc}/{admin1}/{city}
-		if len(parts) < 4 {
-			continue
-		}
-		cc := strings.TrimSpace(parts[1])
-		if len(cc) != 2 {
+		cc, _, _, ok := taxonomy.ParseLocCanonicalPath(cp)
+		if !ok || len(cc) != 2 {
 			continue
 		}
 		if _, ok := seen[cc]; ok {
@@ -1526,7 +1521,7 @@ RULES:
   - If the query is about relations/interaction between two countries or actors, you MUST create a DOMAIN of contractType bilateral-relations (in addition to anchors).
     Example: "Saudi Arabia and Yemen bilateral relations" -> domain:
       /domain/v1/bilateral-relations/geo/sa/geo/ye
-  - If the query asks about conflict zones, military conflicts, disaster zones, earthquake-affected areas, tension zones, humanitarian crisis areas, flood zones, you MUST create a DOMAIN of contractType affected-zone with facet geo. geo: ISO2, composite (tr-sy), or regional (africa, ssa, mena).
+  - If the query asks about conflict zones, military conflicts, disaster zones, earthquake-affected areas, tension zones, humanitarian crisis areas, flood zones, you MUST create a DOMAIN of contractType affected-zone with facet geo. geo: " + taxonomy.ISO2GeoDescriptionForPrompts() + ".
     Examples: "Northern Syria conflict zone" -> /domain/v1/affected-zone/geo/tr-sy; "Turkey earthquake" -> /domain/v1/affected-zone/geo/tr; "Africa military conflicts" -> /domain/v1/affected-zone/geo/africa
   - If the query asks who owns/controls an entity, you MUST create a DOMAIN of contractType ownership-structure.
   - If the query asks what connects/unifies two entities, you MUST create a DOMAIN of contractType commonality-analysis (in addition to anchors).
@@ -1599,7 +1594,7 @@ RULES:
       - (optional) MARKET: /market/global/technology/cloud-computing
     - "Tesla Gigafactory Texas Austin" → anchors:
       - ORGANIZATION: /org/us/tesla-inc
-      - FACILITY: /fac/tesla/gigafactory-texas
+      - FACILITY: /fac/us/gigafactory-texas
       - GEO_REGION: /loc/us/tx/austin
 - canonicalPath MUST be a valid canonical path with allowed namespaces:
   /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media, /domain, /zone
@@ -1608,7 +1603,7 @@ RULES:
   - Prefer using a stable handle/username if present; otherwise use the quoted title as the slug source.
   - Add keyword "telegram" and consider /sphere/social/information.
 - ALL path segments MUST be lowercase slugs (use hyphens instead of spaces):
-  - CORRECT: /org/sa/saudi-aramco, /fac/aramco/ras-tanura-refinery, /loc/ae/na/na, /product/raw/chemical/refining/lithium-carbonate
+  - CORRECT: /org/sa/saudi-aramco, /fac/sa/ras-tanura-refinery, /loc/ae, /product/raw/chemical/refining/lithium-carbonate
   - WRONG: /loc/UAE, /org/Tesla Inc, /product/Lithium Carbonate
 
 - The anchor type MUST match the canonicalPath namespace:
@@ -1624,14 +1619,14 @@ RULES:
   - AFFECTED_ZONE -> /zone/{geo}/{condition_type}/{slug}
     - slug: descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER "na".
 
-- GEO_REGION canonicalPath MUST be strict: /loc/{countryAlpha2}/{admin1}/{city}
-  - countryAlpha2: ISO3166-1 alpha2 lowercase OR regional token (e.g., gcc, eu, asean, opec)
+- GEO_REGION canonicalPath MUST be strict: /loc/{countryAlpha2}[/{level1}[/{level2}]]
+  - countryAlpha2: %s
   - Regional tokens ALWAYS go in the countryAlpha2 slot (2nd segment), never at the end.
-    - Example: GCC → /loc/gcc/na/na (NOT /loc/na/na/gcc)
-  - use "na" for unknown admin1/city
-  - country-only locations MUST be /loc/{cc}/na/na
-    - Saudi Arabia -> /loc/sa/na/na
-    - United Arab Emirates -> /loc/ae/na/na
+    - Example: GCC → /loc/gcc (NOT /loc/global/gcc)
+  - omit unknown trailing levels (no mandatory "na")
+  - country-only locations MUST be /loc/{cc}
+    - Saudi Arabia -> /loc/sa
+    - United Arab Emirates -> /loc/ae
 
 - PRODUCT canonicalPath MUST be strict hierarchical taxonomy:
   - /product/{category}/{type}/{stage}/{slug}
@@ -1641,12 +1636,12 @@ RULES:
   - If classification is uncertain, still keep this 5-segment format with your best taxonomy estimate
 
 - FACILITY canonicalPath:
-  - use /fac/{orgSlug}/{facilitySlug} when the owning org is known and stable
-  - if owning org is unknown, use /fac/na/{facilitySlug}
+  - use /fac/{geo}/{facilitySlug} — geo: %s
+  - if geo is unknown, use /fac/na/{facilitySlug}
 
 - ORGANIZATION canonicalPath:
   - Organizations: /org/{iso2|na}/{slug}
-    - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase, 2 letters). If unknown, use "na".
+    - iso2: country of origin / primary jurisdiction (%s). If unknown, use "na".
     - Regional tokens go in the geo slot (2nd segment): /org/gcc/{slug} (NOT /org/na/gcc/{slug}).
     - slug: lowercase slug derived from the base name (avoid legal suffixes like Inc/LLC in the path if possible)
   - Government bodies: /gov/{iso2|na}/{slug}
@@ -1657,7 +1652,7 @@ RULES:
 - PROGRAM/MARKET/EVENT/PERSON canonicalPath:
   - /program/{jurisdictionSlug}/{programSlug}, /event/{slug}, /person/{slug}
   - PROGRAM:
-    - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
+    - jurisdictionSlug: %s
     - If jurisdiction is unknown, use "global"
     - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
   - MARKET (segment-first):
@@ -1671,7 +1666,7 @@ RULES:
     - domain/vertical SHOULD align with the /segment/{domain}/{vertical}/{geo} taxonomy used for organizations.
     - Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
     - This enables consistent market hierarchy + aggregation.
-  - MARKET geo MUST be ISO2 lowercase, composite ISO2, regional token (e.g., eu, gcc, asean, opec), or "global"/"int" (default "global" if unknown)
+  - MARKET geo: %s (default "global" if unknown)
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
 
 %s
@@ -1690,7 +1685,10 @@ RULES:
 
 %s
 - Return ONLY JSON. No markdown. No commentary.`,
-		query, quotedBlock, multiHint, existingDomainsBlock, taxonomy.MarketGeographyAndHierarchyPromptBlock(), taxonomy.DecompositionHintsPromptBlock())
+		query, quotedBlock, multiHint, existingDomainsBlock,
+		taxonomy.ISO2GeoDescriptionForPrompts(), taxonomy.ISO2GeoDescriptionForPrompts(), taxonomy.ISO2GeoDescriptionForPrompts(),
+		taxonomy.ISO2GeoDescriptionForPrompts(), taxonomy.ISO2GeoDescriptionForPrompts(),
+		taxonomy.MarketGeographyAndHierarchyPromptBlock(), taxonomy.DecompositionHintsPromptBlock())
 }
 
 // looksLikeMultiEntityQuery is a cheap heuristic to hint the LLM to avoid collapsing multiple entities into one anchor.
@@ -1868,10 +1866,10 @@ func normalizeCanonicalPathForTools(raw string) string {
 	return s
 }
 
-// normalizeLegacyGeoPathForIntent maps older geo namespaces to the strict /loc/{country}/{admin1}/{city} model.
+// normalizeLegacyGeoPathForIntent maps older geo namespaces to variable-depth /loc model.
 // Supported legacy patterns:
-// - /region/na/{country}/{admin1}/{city} -> /loc/{country}/{admin1}/{city}
-// - /region/{country}/{admin1}/{city}    -> /loc/{country}/{admin1}/{city}
+// - /region/na/{country}/{admin1}/{city} -> /loc/{country}[/{level1}[/{level2}]]
+// - /region/{country}/{admin1}/{city}    -> /loc/{country}[/{level1}[/{level2}]]
 func normalizeLegacyGeoPathForIntent(path string) string {
 	p := strings.TrimSpace(path)
 	if p == "" {
@@ -1884,12 +1882,46 @@ func normalizeLegacyGeoPathForIntent(path string) string {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(p, "/"), "/")
+	extractCountry := func(idx int) string {
+		if idx < 0 || idx >= len(parts) {
+			return ""
+		}
+		c := strings.ToLower(strings.TrimSpace(parts[idx]))
+		if c == "" || c == "na" {
+			return ""
+		}
+		return c
+	}
 	// parts[0] == "region"
 	if len(parts) == 5 && parts[1] == "na" {
-		return fmt.Sprintf("/loc/%s/%s/%s", parts[2], parts[3], parts[4])
+		if c := extractCountry(2); c != "" {
+			return taxonomy.GeoCanonicalPath(c, parts[3], parts[4])
+		}
+		return ""
 	}
 	if len(parts) == 4 {
-		return fmt.Sprintf("/loc/%s/%s/%s", parts[1], parts[2], parts[3])
+		if c := extractCountry(1); c != "" {
+			return taxonomy.GeoCanonicalPath(c, parts[2], parts[3])
+		}
+		return ""
+	}
+	if len(parts) == 3 && parts[1] == "na" {
+		if c := extractCountry(2); c != "" {
+			return taxonomy.GeoCanonicalPath(c, "", "")
+		}
+		return ""
+	}
+	if len(parts) == 3 {
+		if c := extractCountry(1); c != "" {
+			return taxonomy.GeoCanonicalPath(c, parts[2], "")
+		}
+		return ""
+	}
+	if len(parts) == 2 {
+		if c := extractCountry(1); c != "" {
+			return taxonomy.GeoCanonicalPath(c, "", "")
+		}
+		return ""
 	}
 	return ""
 }

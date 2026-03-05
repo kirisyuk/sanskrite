@@ -1,14 +1,11 @@
 package canonical
 
 import (
-	"regexp"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
-
-var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
 
 // NormalizeFragmentForPersist applies deterministic, shared canonical-path rewrites
 // before persistence. It is fail-open and never blocks writes.
@@ -27,7 +24,7 @@ func NormalizeCanonicalPathForPersist(path string) string {
 		return cp
 	}
 
-	// Normalize GEO path shape to strict /loc/{cc}/{admin1}/{city} when safe.
+	// Normalize GEO path shape to variable-depth /loc hierarchy when safe.
 	if strings.HasPrefix(cp, "/loc/") {
 		if norm := NormalizeGeoPathToStrict(cp); norm != "" {
 			cp = norm
@@ -52,13 +49,15 @@ func NormalizeCanonicalPathForPersist(path string) string {
 	return cp
 }
 
-// NormalizeGeoPathToStrict converts non-strict /loc shapes into strict /loc/{cc}/{adm1}/{city}
-// for already-canonical geo tokens (ISO2 / regional / composite).
+// NormalizeGeoPathToStrict normalizes /loc shapes into variable-depth /loc hierarchy
+// for already-canonical geo tokens (ISO2 / regional / composite), removing "na" padding.
 //
 // Supported:
-// - /loc/{cc}                   -> /loc/{cc}/na/na
-// - /loc/{cc}/{adm1}            -> /loc/{cc}/{adm1}/na
-// - /loc/{cc}/{adm1}/{city}     -> /loc/{cc}/{adm1}/{city}
+// - /loc/{cc}                   -> /loc/{cc}
+// - /loc/{cc}/{level1}          -> /loc/{cc}/{level1}
+// - /loc/{cc}/{level1}/{level2} -> /loc/{cc}/{level1}/{level2}
+// - /loc/{cc}/na/na             -> /loc/{cc}
+// - /loc/{cc}/{level1}/na       -> /loc/{cc}/{level1}
 // Returns "" if normalization is unsafe.
 func NormalizeGeoPathToStrict(path string) string {
 	p := strings.TrimSpace(path)
@@ -71,34 +70,34 @@ func NormalizeGeoPathToStrict(path string) string {
 	}
 
 	cc := strings.ToLower(strings.TrimSpace(parts[1]))
-	if cc == "" || (!reCountryAlpha2.MatchString(cc) && !taxonomy.IsRegionalGeoToken(cc) && !taxonomy.IsCompositeGeoToken(cc)) {
+	if cc == "" || !taxonomy.IsValidLocCountryToken(cc) {
 		return ""
 	}
 
-	admin1 := "na"
-	city := "na"
+	admin1 := ""
+	city := ""
 	switch len(parts) {
 	case 2:
-		// Keep defaults.
+		// Country-level only.
 	case 3:
-		admin1 = slugOrNA(parts[2])
+		admin1 = slugOrEmpty(parts[2])
 	case 4:
-		admin1 = slugOrNA(parts[2])
-		city = slugOrNA(parts[3])
+		admin1 = slugOrEmpty(parts[2])
+		city = slugOrEmpty(parts[3])
 	default:
 		return ""
 	}
 
-	if taxonomy.IsCompositeGeoToken(cc) {
-		return taxonomy.JoinPath("loc", cc, admin1, city)
-	}
 	return taxonomy.GeoCanonicalPath(cc, admin1, city)
 }
 
-func slugOrNA(s string) string {
+func slugOrEmpty(s string) string {
+	if taxonomy.IsNAPlaceholderToken(s) {
+		return ""
+	}
 	v := taxonomy.Slugify(strings.ToLower(strings.TrimSpace(s)))
-	if v == "" {
-		return "na"
+	if v == "" || taxonomy.IsNAPlaceholderToken(v) {
+		return ""
 	}
 	return v
 }
@@ -114,7 +113,6 @@ func normalizeCanonicalPartsInPlace(parts *taxonomy.CanonicalPathParts) {
 		}
 		parts.Org.Geo = normalizeGeoToken(parts.Org.Geo, "na", true)
 		parts.Org.BaseSlug = taxonomy.Slugify(parts.Org.BaseSlug)
-		parts.Org.LegalForm = taxonomy.Slugify(parts.Org.LegalForm)
 	case "gov":
 		if parts.Gov == nil {
 			return
@@ -157,8 +155,8 @@ func normalizeCanonicalPartsInPlace(parts *taxonomy.CanonicalPathParts) {
 			return
 		}
 		parts.Loc.Country = normalizeGeoToken(parts.Loc.Country, "", false)
-		parts.Loc.Admin1 = slugOrNA(parts.Loc.Admin1)
-		parts.Loc.City = slugOrNA(parts.Loc.City)
+		parts.Loc.Admin1 = slugOrEmpty(parts.Loc.Admin1)
+		parts.Loc.City = slugOrEmpty(parts.Loc.City)
 	case "segment":
 		if parts.Segment == nil {
 			return
@@ -178,7 +176,10 @@ func normalizeCanonicalPartsInPlace(parts *taxonomy.CanonicalPathParts) {
 		if parts.Fac == nil {
 			return
 		}
-		parts.Fac.OrgSlug = taxonomy.Slugify(parts.Fac.OrgSlug)
+		parts.Fac.Geo = strings.ToLower(strings.TrimSpace(parts.Fac.Geo))
+		if parts.Fac.Geo == "" {
+			parts.Fac.Geo = "na"
+		}
 		parts.Fac.FacilitySlug = taxonomy.Slugify(parts.Fac.FacilitySlug)
 	case "program":
 		if parts.Program == nil {
@@ -236,7 +237,7 @@ func normalizeGeoToken(raw string, fallback string, allowInt bool) string {
 	if v == "global" || v == "na" || (allowInt && v == "int") {
 		return v
 	}
-	if reCountryAlpha2.MatchString(v) || taxonomy.IsRegionalGeoToken(v) || taxonomy.IsCompositeGeoToken(v) {
+	if taxonomy.IsISO2CountryCode(v) || taxonomy.IsRegionalGeoToken(v) || taxonomy.IsCompositeGeoToken(v) {
 		return v
 	}
 	s := taxonomy.Slugify(v)

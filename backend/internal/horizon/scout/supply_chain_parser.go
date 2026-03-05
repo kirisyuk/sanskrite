@@ -10,9 +10,6 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
-// generalProductionFacilityTitle is the label for facility fallback nodes.
-const generalProductionFacilityTitle = "General production"
-
 // SupplyChainParser converts supply chain objects from agent output
 // into HorizonFragments and DependencyEdges for graph insertion.
 type SupplyChainParser struct{}
@@ -236,7 +233,7 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 		}
 
 		// Extract SupplyLink segments (supplier actor→product→customer actor) for PathBuilder materialization.
-		// Only fac→product→fac (or deposit for extraction). Org actors are normalized to /fac/{orgSlug}-general-production.
+		// Full chain org→fac→product→fac→org. Keep org as endpoint; do not convert org to fac.
 		for i := 0; i < len(chain.Nodes)-2 && !hasDuplicateProduct; i++ {
 			a, prod, b := chain.Nodes[i], chain.Nodes[i+1], chain.Nodes[i+2]
 			srcPathRaw := strings.TrimSpace(a.CanonicalPath)
@@ -245,28 +242,18 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 			if srcPathRaw == "" || prodPath == "" || dstPathRaw == "" {
 				continue
 			}
-			// Normalize org→fac for supply chain: only facility-level endpoints allowed.
-			srcPath := models.NormalizeOrgRefToFacilityFallback(srcPathRaw)
-			dstPath := models.NormalizeOrgRefToFacilityFallback(dstPathRaw)
-			if srcPath == "" || dstPath == "" {
+			// Keep org, fac, deposit as-is. No conversion.
+			srcPath := srcPathRaw
+			dstPath := dstPathRaw
+			// Supplier: /fac/, /deposit/, /org/, or /gov/. Customer: /fac/, /org/, or /gov/ (deposit is supplier-only for extraction).
+			if !strings.HasPrefix(srcPath, "/fac/") && !strings.HasPrefix(srcPath, "/deposit/") && !strings.HasPrefix(srcPath, "/org/") && !strings.HasPrefix(srcPath, "/gov/") {
 				continue
 			}
-			// Supplier: /fac/ or /deposit/. Customer: /fac/ only (deposit is supplier-only for extraction).
-			if !strings.HasPrefix(srcPath, "/fac/") && !strings.HasPrefix(srcPath, "/deposit/") {
-				continue
-			}
-			if !strings.HasPrefix(dstPath, "/fac/") {
+			if !strings.HasPrefix(dstPath, "/fac/") && !strings.HasPrefix(dstPath, "/org/") && !strings.HasPrefix(dstPath, "/gov/") {
 				continue
 			}
 			if !p.isProductType(prod.Type, prodPath) {
 				continue
-			}
-			// Create facility fragments for normalized org→general-production paths
-			if strings.HasPrefix(srcPathRaw, "/org/") && result.Fragments[srcPath] == nil {
-				result.Fragments[srcPath] = p.createGeneralProductionFacilityFragment(srcPath)
-			}
-			if strings.HasPrefix(dstPathRaw, "/org/") && result.Fragments[dstPath] == nil {
-				result.Fragments[dstPath] = p.createGeneralProductionFacilityFragment(dstPath)
 			}
 			if p.isFinancialFlowProduct(prodPath, prod.Name) {
 				result.ParseWarnings = append(result.ParseWarnings,
@@ -331,8 +318,8 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 						if supRefRaw == "" {
 							continue
 						}
-						supRef := models.NormalizeOrgRefToFacilityFallback(supRefRaw)
-						if supRef == "" || (!strings.HasPrefix(supRef, "/fac/") && !strings.HasPrefix(supRef, "/deposit/")) {
+						supRef := supRefRaw
+						if !strings.HasPrefix(supRef, "/fac/") && !strings.HasPrefix(supRef, "/deposit/") && !strings.HasPrefix(supRef, "/org/") && !strings.HasPrefix(supRef, "/gov/") {
 							continue
 						}
 						if supRef != srcPath {
@@ -473,21 +460,6 @@ func (p *SupplyChainParser) extractSegmentState(metrics []agents.SegmentMetrics,
 	return state, contract
 }
 
-// createGeneralProductionFacilityFragment creates a facility fragment for /fac/{orgSlug}-general-production.
-// Used when org actor is normalized to facility fallback in supply chain context.
-func (p *SupplyChainParser) createGeneralProductionFacilityFragment(canonicalPath string) *models.HorizonFragment {
-	canonicalPath = strings.TrimSpace(canonicalPath)
-	if canonicalPath == "" || !strings.HasPrefix(canonicalPath, "/fac/") || !strings.HasSuffix(canonicalPath, "-general-production") {
-		return nil
-	}
-	return &models.HorizonFragment{
-		CanonicalPath: canonicalPath,
-		Type:          models.FragmentTypeFacility,
-		Labels:        map[string]string{"en": generalProductionFacilityTitle},
-		Identifiers:   map[string]string{},
-		State:         make(map[string]models.MetricValue),
-	}
-}
 
 // createTransportFacilityFragment creates a minimal HorizonFragment for a transport facility path.
 // Used when transportVia paths are not already in chain nodes; same canonicalization rules apply.
@@ -502,11 +474,15 @@ func (p *SupplyChainParser) createTransportFacilityFragment(canonicalPath string
 		name = parts[len(parts)-2]
 	}
 	name = strings.ReplaceAll(name, "-", " ")
+	identifiers := map[string]string{}
+	if kind := taxonomy.FacilityKindFromCanonicalPath(canonicalPath); kind != taxonomy.FacilityKindUnknown && kind != taxonomy.FacilityKindOther {
+		identifiers["facilityKind"] = string(kind)
+	}
 	return &models.HorizonFragment{
 		CanonicalPath: canonicalPath,
 		Type:          models.FragmentTypeFacility,
 		Labels:        map[string]string{"en": name},
-		Identifiers:   map[string]string{},
+		Identifiers:   identifiers,
 		State:         make(map[string]models.MetricValue),
 	}
 }
@@ -545,6 +521,22 @@ func (p *SupplyChainParser) createFragmentFromNode(node agents.SupplyChainNode) 
 	role := strings.TrimSpace(node.Role)
 	if role != "" {
 		frag.Identifiers["supplyChainRole"] = role
+	}
+	// Set facilityType (supply chain role) and facilityKind (physical type) for FACILITY
+	if fragType == models.FragmentTypeFacility {
+		if ft := taxonomy.NormalizeFacilityRole(strings.TrimSpace(node.FacilityType)); ft != "" {
+			frag.Identifiers["facilityType"] = string(ft)
+		}
+		fk := taxonomy.NormalizeFacilityKind(strings.TrimSpace(node.FacilityKind))
+		if fk != taxonomy.FacilityKindUnknown && fk != taxonomy.FacilityKindOther {
+			frag.Identifiers["facilityKind"] = string(fk)
+		} else {
+			// Infer from canonical path slug when LLM did not provide
+			inferred := taxonomy.FacilityKindFromCanonicalPath(canonicalPath)
+			if inferred != taxonomy.FacilityKindUnknown && inferred != taxonomy.FacilityKindOther {
+				frag.Identifiers["facilityKind"] = string(inferred)
+			}
+		}
 	}
 	return frag
 }
@@ -598,12 +590,13 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 
 // createEdgeBetweenNodes creates an edge based on the node types.
 // Supply chain pattern: actor → product → actor → product
+// Operational model: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM only. NO DEPENDS_ON.
 // - Actor (org/fac) → Product: PRODUCES
-// - Product → Actor: actor CONSUMES product (or invert to DEPENDS_ON)
+// - Product → Actor: abstain. Flow is captured by SupplyLink segments (fac1 SUPPLIES_TO fac2 via product).
 // - Facility → Deposit: EXTRACTS_FROM
 // - Actor → Actor: no direct inference (ambiguous without product-flow context)
 // - Product → Product: TRANSFORMS_INTO
-// - Unknown pair: abstain (return nil, true) instead of creating generic DEPENDS_ON.
+// - Unknown pair: abstain (return nil, true).
 func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNode, confidence float64, reason string) (*ChainEdge, bool) {
 	fromPath := strings.TrimSpace(from.CanonicalPath)
 	toPath := strings.TrimSpace(to.CanonicalPath)
@@ -611,41 +604,62 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 		return nil, false
 	}
 
+	fromIsOrg := p.isOrganizationType(from.Type, fromPath)
+	fromIsFac := p.isFacilityType(from.Type, fromPath)
 	fromIsActor := p.isActorType(from.Type, fromPath)
+	toIsOrg := p.isOrganizationType(to.Type, toPath)
+	toIsFac := p.isFacilityType(to.Type, toPath)
 	toIsActor := p.isActorType(to.Type, toPath)
 	fromIsProduct := p.isProductType(from.Type, fromPath)
 	toIsProduct := p.isProductType(to.Type, toPath)
 
-	var relationType string
-
-	switch {
-	case fromIsActor && toIsProduct:
-		relationType = string(models.DependencyTypeProduces)
-	case fromIsProduct && toIsActor:
-		return &ChainEdge{
-			SourceCanonicalPath: toPath,
-			TargetCanonicalPath: fromPath,
-			RelationType:        string(models.DependencyTypeDependsOn),
-			Confidence:          confidence,
-			Reason:              fmt.Sprintf("Supply chain: %s consumes %s. %s", to.Name, from.Name, reason),
-			Qualifiers: map[string]interface{}{
-				"source_role":     "dependent",
-				"target_role":     "dependency",
-				"direction_basis": "consumer_to_supplier",
-			},
-		}, false
-	case p.isFacilityType(from.Type, fromPath) && p.isDepositType(to.Type, toPath):
+	mkEdge := func(rel string) *ChainEdge {
 		return &ChainEdge{
 			SourceCanonicalPath: fromPath,
 			TargetCanonicalPath: toPath,
-			RelationType:        string(models.DependencyTypeExtractsFrom),
+			RelationType:        rel,
 			Confidence:          confidence,
-			Reason:              fmt.Sprintf("Supply chain: %s extracts from %s. %s", from.Name, to.Name, reason),
-		}, false
+			Reason:              fmt.Sprintf("Supply chain: %s → %s. %s", from.Name, to.Name, reason),
+		}
+	}
+
+	switch {
+	// org → fac: preserve org-fac anchoring explicitly.
+	// Use OPERATES_IN (allowed in supply-chain mode) to keep company↔facility linkage.
+	case fromIsOrg && toIsFac:
+		return mkEdge(string(models.DependencyTypeOperatesIn)), false
+
+	// fac → product: facility produces product
+	case fromIsFac && toIsProduct:
+		return mkEdge(string(models.DependencyTypeProduces)), false
+
+	// product → fac: abstain. Product is not a valid SUPPLIES_TO source.
+	// Facility-to-facility flow is materialized separately via SupplyLink segments.
+	case fromIsProduct && toIsFac:
+		return nil, true
+
+	// fac → org: facility is owned by org (reverse ownership, use SUPPLIES_TO as the chain flow direction)
+	case fromIsFac && toIsOrg:
+		return mkEdge(string(models.DependencyTypeSuppliesTo)), false
+
+	// Generic actor → product (fallback for non-fac actors)
+	case fromIsActor && toIsProduct:
+		return mkEdge(string(models.DependencyTypeProduces)), false
+
+	// product → actor (non-fac): abstain for non-facility actors
+	case fromIsProduct && toIsActor && !toIsFac:
+		return nil, true
+
+	// fac → deposit: extraction
+	case fromIsFac && p.isDepositType(to.Type, toPath):
+		return mkEdge(string(models.DependencyTypeExtractsFrom)), false
+
+	// actor → actor: no direct edge between same-level actors
 	case fromIsActor && toIsActor:
 		return nil, false
+
+	// product → product: transformation
 	case fromIsProduct && toIsProduct:
-		relationType = string(models.DependencyTypeTransformsInto)
 		srcPath, dstPath := fromPath, toPath
 		if shouldSwapProductStageOrder(fromPath, toPath) {
 			srcPath, dstPath = toPath, fromPath
@@ -653,23 +667,23 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 		return &ChainEdge{
 			SourceCanonicalPath: srcPath,
 			TargetCanonicalPath: dstPath,
-			RelationType:        relationType,
+			RelationType:        string(models.DependencyTypeTransformsInto),
 			Confidence:          confidence,
 			Reason:              fmt.Sprintf("Supply chain: %s → %s. %s", from.Name, to.Name, reason),
 		}, false
+
 	default:
 		return nil, true
 	}
-	_ = fromIsProduct
-	_ = toIsProduct
+}
 
-	return &ChainEdge{
-		SourceCanonicalPath: fromPath,
-		TargetCanonicalPath: toPath,
-		RelationType:        relationType,
-		Confidence:          confidence,
-		Reason:              fmt.Sprintf("Supply chain: %s → %s. %s", from.Name, to.Name, reason),
-	}, false
+func (p *SupplyChainParser) isOrganizationType(nodeType string, canonicalPath string) bool {
+	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
+	if nodeType == "ORGANIZATION" || nodeType == "ORG" {
+		return true
+	}
+	cp := strings.TrimSpace(canonicalPath)
+	return strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/")
 }
 
 // isActorType checks if the node represents an actor (org, facility, or deposit for extraction).
@@ -678,7 +692,7 @@ func (p *SupplyChainParser) isActorType(nodeType string, canonicalPath string) b
 	if nodeType == "ORGANIZATION" || nodeType == "FACILITY" || nodeType == "DEPOSIT" {
 		return true
 	}
-	return strings.HasPrefix(canonicalPath, "/org/") || strings.HasPrefix(canonicalPath, "/fac/") || strings.HasPrefix(canonicalPath, "/deposit/")
+	return strings.HasPrefix(canonicalPath, "/org/") || strings.HasPrefix(canonicalPath, "/gov/") || strings.HasPrefix(canonicalPath, "/fac/") || strings.HasPrefix(canonicalPath, "/deposit/")
 }
 
 func (p *SupplyChainParser) isFacilityType(nodeType string, canonicalPath string) bool {

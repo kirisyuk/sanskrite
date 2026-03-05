@@ -146,10 +146,10 @@ MESSAGE:
 Return JSON with entities, events, claims, and (optionally) metricUpdates. Be conservative - only extract clear, factual information.
 
 IMPORTANT (Horizon canonical taxonomy):
-- When you can normalize a location, provide countryAlpha2/admin1/city for /loc/{country}/{admin1}/{city}.
+- When you can normalize a location, provide countryAlpha2 and optional admin1/city for /loc/{country}[/{level1}[/{level2}]].
 - countryAlpha2 MUST be ISO3166-1 alpha2 lowercase (e.g., us, cn, de).
-- admin1/city SHOULD be lowercase slugs/codes; use "na" if unknown/not applicable.
-- Country-only locations MUST be represented as: countryAlpha2=<code>, admin1="na", city="na".
+- admin1/city SHOULD be lowercase slugs/codes when known; omit unknown trailing levels.
+- Country-only locations MUST be represented as: countryAlpha2=<code>.
 
 IMPORTANT (intangible events):
 - Include intangible events such as partnerships, alliances/coalitions, union actions, incorporations (new legal entities), policy/regulatory changes, sanctions/licensing, investigations, and dissolutions as events when clearly stated.
@@ -204,8 +204,8 @@ Schema:
         "address": "full address for geocoding (optional)",
         "iso6709": "string (optional)",
         "countryAlpha2": "string (ISO3166-1 alpha2 lowercase, optional)",
-        "admin1": "string (lowercase code/slug or 'na', optional)",
-        "city": "string (lowercase slug or 'na', optional)"
+        "admin1": "string (lowercase code/slug, optional)",
+        "city": "string (lowercase slug, optional)"
       },
       "spherePaths": ["string (optional, canonical /sphere/... taxonomy paths)"],
       "participants": [{"entityName": "string", "role": "agent|target|mediator|mentioned|beneficiary|affected|other"}]

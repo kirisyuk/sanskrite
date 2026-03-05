@@ -32,7 +32,7 @@ func TestPrimaryScope_HomeLocationISO_ResolvesLocScope(t *testing.T) {
 	}
 
 	got := r.primaryScope(frag)
-	if got != "/loc/sa/na/na" {
-		t.Fatalf("expected /loc/sa/na/na, got %q", got)
+	if got != "/loc/sa" {
+		t.Fatalf("expected /loc/sa, got %q", got)
 	}
 }

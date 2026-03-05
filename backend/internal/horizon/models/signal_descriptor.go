@@ -24,7 +24,7 @@ type SignalDescriptor struct {
 	ActorPaths   []string `json:"actorPaths,omitempty" firestore:"actorPaths,omitempty"`     // Who caused this (e.g., ["/gov/ir/civil-aviation"])
 	SeedPaths    []string `json:"seedPaths,omitempty" firestore:"seedPaths,omitempty"`       // Where to inject the impulse (initial affected nodes)
 	SeedNames    []string `json:"seedNames,omitempty" firestore:"seedNames,omitempty"`       // Human-readable names for semantic search (parallel to SeedPaths)
-	LocationPath string   `json:"locationPath,omitempty" firestore:"locationPath,omitempty"` // Geographic scope (e.g., "/loc/ir/na/na")
+	LocationPath string   `json:"locationPath,omitempty" firestore:"locationPath,omitempty"` // Geographic scope (e.g., "/loc/ir")
 	SpherePaths  []string `json:"spherePaths,omitempty" firestore:"spherePaths,omitempty"`   // Domain/industry scope
 
 	// === Constraints (the "conditions") ===

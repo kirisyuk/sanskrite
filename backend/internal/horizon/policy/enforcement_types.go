@@ -38,9 +38,8 @@ const (
 	ViolationGeoUnknown       PolicyViolationType = "geo_unknown"
 	ViolationSelfLoop         PolicyViolationType = "self_loop"
 	ViolationTypeMismatch     PolicyViolationType = "type_mismatch"
-	ViolationSymmetricEdge    PolicyViolationType = "symmetric_edge"
-	ViolationMissingLegalForm PolicyViolationType = "missing_legal_form"
-	ViolationInvalidISO2      PolicyViolationType = "invalid_iso2"
+	ViolationSymmetricEdge PolicyViolationType = "symmetric_edge"
+	ViolationInvalidISO2   PolicyViolationType = "invalid_iso2"
 	ViolationOrphanedEdge     PolicyViolationType = "orphaned_edge"
 	// ViolationMissingField indicates a required field is missing (e.g., title for DecisionPoint).
 	ViolationMissingField PolicyViolationType = "missing_field"
@@ -101,7 +100,6 @@ const (
 	TaskDeleteFragment     EnforcementTaskType = "delete_fragment"
 	TaskResolveGeoNames    EnforcementTaskType = "resolve_geonames"
 	TaskNormalizeSymmetric EnforcementTaskType = "normalize_symmetric"
-	TaskFixLegalForm       EnforcementTaskType = "fix_legal_form"
 	TaskFixISO2            EnforcementTaskType = "fix_iso2"
 	TaskEnrichEdge         EnforcementTaskType = "enrich_edge"
 )

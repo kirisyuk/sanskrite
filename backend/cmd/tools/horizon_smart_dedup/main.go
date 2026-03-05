@@ -213,21 +213,6 @@ func shouldSkipOrgNameCluster(matchType string, frags []*models.HorizonFragment)
 		return true, "mixed_org_gov_namespaces"
 	}
 
-	// Skip name-based ORG merges when legal forms conflict (semantic distinction).
-	// Equivalent forms (ao/jsc, ltd/limited, etc.) are grouped — same group = no conflict.
-	legalFormGroups := map[string]struct{}{}
-	for _, f := range frags {
-		lf := extractOrgLegalForm(f)
-		if lf == "" {
-			continue
-		}
-		group := legalFormCanonicalGroup(lf)
-		legalFormGroups[group] = struct{}{}
-	}
-	if len(legalFormGroups) > 1 {
-		return true, fmt.Sprintf("conflicting_legal_forms=%v", keysSorted(legalFormGroups))
-	}
-
 	return false, ""
 }
 
@@ -481,43 +466,6 @@ func filterClusterByNamespaceFamily(fragments []*models.HorizonFragment) ([]*mod
 	return byFamily[bestFamily], true, fmt.Sprintf("mixed_namespace_family_filtered(keep=%s;%s)", bestFamily, counts)
 }
 
-func extractOrgLegalForm(f *models.HorizonFragment) string {
-	parts := canonicalPartsForFragment(f)
-	if parts == nil || parts.Org == nil {
-		return ""
-	}
-	return strings.ToLower(strings.TrimSpace(parts.Org.LegalForm))
-}
-
-// legalFormCanonicalGroup maps equivalent legal forms to a canonical group.
-// Forms in the same group (e.g. ao/jsc) are not treated as conflicting.
-var legalFormCanonicalGroupMap = map[string]string{
-	// CIS JSC variants (АО = JSC, ОАО/PJSC = public JSC, ЗАО/CJSC = closed JSC)
-	"ao": "jsc", "oao": "jsc", "jsc": "jsc", "pjsc": "jsc", "cjsc": "jsc", "ojsc": "jsc",
-	"zao": "zao",
-	// CIS LLC variants (ООО = LLC)
-	"ooo": "llc", "llc": "llc",
-	// UK variants
-	"ltd": "ltd", "limited": "ltd", "plc": "plc", "p.l.c.": "plc",
-	// US variants
-	"inc": "inc", "corp": "inc", "corporation": "inc",
-	// French/Spanish
-	"sa": "sa", "s.a.": "sa", "sas": "sas", "sarl": "sarl",
-	// Nordic
-	"ab": "ab", "oy": "oy", "as": "as",
-	// German
-	"gmbh": "gmbh", "ag": "ag",
-	// Italian
-	"srl": "srl", "spa": "spa",
-}
-
-func legalFormCanonicalGroup(form string) string {
-	if g, ok := legalFormCanonicalGroupMap[form]; ok {
-		return g
-	}
-	return form
-}
-
 func keysSorted(m map[string]struct{}) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -607,14 +555,7 @@ func buildOrgSlug(parts *taxonomy.OrgPathParts) string {
 	if parts == nil {
 		return ""
 	}
-	base := strings.TrimSpace(parts.BaseSlug)
-	if base == "" {
-		return ""
-	}
-	if lf := strings.TrimSpace(parts.LegalForm); lf != "" {
-		return base + "-" + lf
-	}
-	return base
+	return strings.TrimSpace(parts.BaseSlug)
 }
 
 // extractLegacyOrgSlugAliases returns slug aliases from identifiers that store historical paths.
@@ -975,7 +916,7 @@ func main() {
 	normalizedLegalIndex := make(map[string][]*models.HorizonFragment)        // type:normalized_legal -> fragments
 	normalizedLegalNAIndex := make(map[string][]*models.HorizonFragment)      // type:ns:na:normalized -> ORG fragments with unknown jurisdiction (for cross-match into iso2-scoped clusters)
 	orgNormalizedNameIndex := make(map[string][]*models.HorizonFragment)      // type:normalized(label/legal) -> org fragments (LOW-signal stub rescue)
-	facilityNormalizedNameIndex := make(map[string][]*models.HorizonFragment) // facility_key -> facility fragments (normalized name; scoped by /fac/{org}/)
+	facilityNormalizedNameIndex := make(map[string][]*models.HorizonFragment) // facility_key -> facility fragments (normalized name; scoped by /fac/{geo}/)
 	geoCityIndex := make(map[string][]*models.HorizonFragment)                // city_name -> geo fragments
 	productNameIndex := make(map[string][]*models.HorizonFragment)            // product_name -> product fragments
 	productAliasIndex := make(map[string][]*models.HorizonFragment)           // product_alias_key -> product fragments (label/short/legal + legacy slug aliases)
@@ -1093,11 +1034,11 @@ func main() {
 			}
 		}
 
-		// FACILITY-only: normalized name index (stopwords/punctuation) scoped by /fac/{org}/ prefix.
+		// FACILITY-only: normalized name index (stopwords/punctuation) scoped by /fac/{geo}/ prefix.
 		// This catches common duplicates like:
 		//   "Four Points by Sheraton Riyadh Khaldia" vs "four points sheraton riyadh khaldia"
 		// Cross-org matching: facilities with same normalized name are likely the same,
-		// even if they are under different parent orgs (e.g., /fac/marriott/... vs /fac/khaldia-towers-company/...).
+		// even if they are under different parent orgs (e.g., /fac/sa/four-points-riyadh vs /fac/sa/sheraton-khaldia).
 		// The normalization function requires at least 3 meaningful tokens to reduce false positives.
 		if f.Type == models.FragmentTypeFacility {
 			aliasSet := map[string]struct{}{}
@@ -1321,7 +1262,7 @@ func main() {
 	}
 
 	// Priority 0: Organizations that are actually countries (type normalization)
-	// Example: /org/usa with legalName="United States of America" → merge with /loc/us/na/na
+	// Example: /org/usa with legalName="United States of America" → merge with /loc/us
 	orgAsCountryClusters := 0
 	for _, f := range fragments {
 		if processedFragmentIDs[f.ID] {
@@ -1369,9 +1310,9 @@ func main() {
 	}
 	log.Printf("  Found %d org-as-country clusters", orgAsCountryClusters)
 
-	// Priority 0.5: Non-canonical GEO paths → merge with canonical /loc/{cc}/na/na
-	// Example: /loc/uae → /loc/ae/na/na, /loc/saudi-arabia → /loc/sa/na/na
-	// CAUTION: Avoid false positives like /loc/georgia (US state) vs /loc/ge/na/na (country Georgia)
+	// Priority 0.5: Non-canonical GEO paths → merge with canonical /loc/{cc}
+	// Example: /loc/uae → /loc/ae, /loc/saudi-arabia → /loc/sa
+	// CAUTION: Avoid false positives like /loc/georgia (US state) vs /loc/ge (country Georgia)
 	nonCanonicalGeoClusters := 0
 	for _, f := range fragments {
 		if processedFragmentIDs[f.ID] {
@@ -1380,7 +1321,7 @@ func main() {
 		if f.Type != models.FragmentTypeGeoRegion {
 			continue
 		}
-		// Check if path is non-canonical (not /loc/{cc}/{admin1}/{city})
+		// Check if path is non-canonical for /loc hierarchy.
 		parts := strings.Split(strings.Trim(f.CanonicalPath, "/"), "/")
 		if !isCanonicalLocPath(f.CanonicalPath) && len(parts) == 2 && parts[0] == "loc" {
 			// This is /loc/{something} — check if {something} is a country name/alias
@@ -1392,7 +1333,7 @@ func main() {
 				if geoFrag, exists := geoByPath[canonicalPath]; exists && geoFrag.ID != f.ID && !processedFragmentIDs[geoFrag.ID] {
 					// SAFETY: Only merge if the non-canonical fragment is "empty" (no label/legalName set)
 					// OR if labels/legalName explicitly match a country name.
-					// This prevents merging /loc/georgia (US state) with /loc/ge/na/na (Georgia country).
+					// This prevents merging /loc/georgia (US state) with /loc/ge (Georgia country).
 					nonCanonLabel := strings.ToLower(strings.TrimSpace(f.Labels["en"]))
 					nonCanonLegal := strings.ToLower(strings.TrimSpace(f.Identifiers["legalName"]))
 					isEmpty := nonCanonLabel == "" && nonCanonLegal == ""
@@ -2092,7 +2033,7 @@ func main() {
 	}
 	log.Printf("  Found %d label[en]-based clusters", labelENClusters)
 
-	// Priority 4.5: FACILITY normalized name matches (scoped by /fac/{org}/ when available)
+	// Priority 4.5: FACILITY normalized name matches (scoped by /fac/{geo}/ when available)
 	// NOTE: We allow canonicals from earlier clusters to participate here for transitive merges.
 	// Example: A is canonical in shortName cluster {A,B}, but A also matches C via facilityNormName.
 	// We want {A,B,C} to all merge. So we only skip fragments that were marked as DUPLICATES, not canonicals.
@@ -3550,7 +3491,7 @@ func selectCanonical(fragments []*models.HorizonFragment, profileCache map[strin
 
 	// For GEO_REGION: first check if any have /loc/ prefix
 	if fragType == models.FragmentTypeGeoRegion {
-		// Prefer canonical /loc/{cc}/{admin1}/{city} when available.
+		// Prefer canonical /loc hierarchy when available.
 		var canonicalLocs []*models.HorizonFragment
 		var locFragments []*models.HorizonFragment
 		for _, f := range fragments {
@@ -3927,10 +3868,9 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment, profileCache ma
 			score += 40
 		}
 
-		// Prefer proper /loc/{cc}/{admin1}/{city} format (ISO2/composite/regional cc).
-		// This is the canonical form; other /loc/* shapes are legacy.
+		// Prefer proper canonical /loc hierarchy (ISO2/composite/regional cc).
 		if isCanonicalLocPath(f.CanonicalPath) {
-			score += 100 // Canonical /loc/{cc}/{admin1}/{city} format — highest priority!
+			score += 100 // Canonical /loc format — highest priority!
 		} else if strings.HasPrefix(f.CanonicalPath, "/loc/") {
 			score += 30 // Legacy /loc/* variants
 		}
@@ -4229,7 +4169,7 @@ func iso3ToIso2(iso3 string) string {
 	return iso3ToIso2Map[strings.ToLower(iso3)]
 }
 
-// fixGeoPath attempts to normalize a geo path into canonical /loc/{cc}/na/na when possible.
+// fixGeoPath attempts to normalize a geo path into canonical /loc hierarchy when possible.
 // Returns empty string when it cannot safely canonicalize.
 func fixGeoPath(path string) string {
 	path = strings.TrimSpace(path)
@@ -5271,7 +5211,7 @@ func normalizeLegalName(name string) string {
 // FACILITY normalized-name helpers (conservative)
 // =============================================================================
 
-// extractFacilityNameFromPath returns the last slug segment from /fac/{org}/{slug}.
+// extractFacilityNameFromPath returns the last slug segment from /fac/{geo}/{slug}.
 func extractFacilityNameFromPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -5348,9 +5288,9 @@ func normalizeFacilityAliasKey(name string) string {
 	return strings.Join(out, " ")
 }
 
-// extractCityFromPath extracts the city name from a canonical path
-// e.g., "/loc/kz/astana/astana" -> "astana"
+// extractCityFromPath extracts the deepest geo label from a canonical path
 // e.g., "/loc/us/tx/austin" -> "austin"
+// e.g., "/loc/kz/astana" -> "astana"
 // e.g., "/region/astana" -> "astana"
 func extractCityFromPath(path string) string {
 	path = strings.TrimSpace(path)
@@ -5363,7 +5303,7 @@ func extractCityFromPath(path string) string {
 		return ""
 	}
 
-	// For /loc/ paths: validate format /loc/{cc}/{admin1}/{city}
+	// For /loc/ paths: validate /loc hierarchy format.
 	if parts[0] == "loc" {
 		if len(parts) < 2 {
 			return ""
@@ -5377,15 +5317,16 @@ func extractCityFromPath(path string) string {
 		if len(cc) == 2 && (cc < "aa" || cc > "zz") {
 			return ""
 		}
-		// ONLY index 4-part paths: /loc/{cc}/{admin1}/{city}
-		// Skip 5+ part paths — they are sub-regions (e.g., /loc/cn/gd/shenzhen/futian)
-		if len(parts) != 4 {
-			return "" // Not canonical 4-part format
+		// Canonical /loc hierarchy supports depth up to 3 after namespace.
+		if len(parts) < 2 || len(parts) > 4 {
+			return ""
 		}
-		// City is the 4th part (index 3) if it's not "na"
-		city := parts[3]
-		if city != "na" && city != "" {
-			return strings.ToLower(city)
+		// Use the deepest non-placeholder level as city-like token.
+		for i := len(parts) - 1; i >= 2; i-- {
+			city := strings.ToLower(strings.TrimSpace(parts[i]))
+			if city != "" && city != "na" {
+				return city
+			}
 		}
 		return ""
 	}

@@ -694,19 +694,6 @@ func (e *ScoutEngine) persistRetargetState(ctx context.Context, job *models.Scou
 	}
 }
 
-func hasLegalFormSuffix(slug string) bool {
-	slug = strings.ToLower(strings.TrimSpace(slug))
-	if slug == "" {
-		return false
-	}
-	for _, lf := range taxonomy.LegalForms() {
-		if strings.HasSuffix(slug, "-"+lf) {
-			return true
-		}
-	}
-	return false
-}
-
 func shouldRequestOrgCanonicalization(frag *models.HorizonFragment) bool {
 	if frag == nil {
 		return false
@@ -717,15 +704,7 @@ func shouldRequestOrgCanonicalization(frag *models.HorizonFragment) bool {
 	}
 	// If jurisdiction is unknown (/org/na/...) or path is legacy (/org/{slug}),
 	// we should ask missingInfo to resolve country/jurisdiction.
-	if strings.HasPrefix(cp, "/org/na/") || isLegacyOrgPath(cp) {
-		return true
-	}
-	parts := strings.Split(strings.Trim(cp, "/"), "/")
-	if len(parts) < 2 {
-		return true
-	}
-	slug := parts[len(parts)-1]
-	return !hasLegalFormSuffix(slug)
+	return strings.HasPrefix(cp, "/org/na/") || isLegacyOrgPath(cp)
 }
 
 func buildOrgCanonicalizationMissingInfo(fragment *models.HorizonFragment, job *models.ScoutingJob, relations []agents.DiscoveredRelation) string {
@@ -749,12 +728,12 @@ func buildOrgCanonicalizationMissingInfo(fragment *models.HorizonFragment, job *
 	if strings.HasPrefix(cp, "/org/na/") || isLegacyOrgPath(cp) {
 		sb.WriteString("Resolve the country of origin / primary jurisdiction (ISO2) for this organization and update its canonicalPath.")
 		sb.WriteString(" Current canonicalPath is jurisdiction-unknown (/org/na/...) or legacy (/org/{slug}), which causes cross-country collisions.")
-		sb.WriteString(" Target format: /org/{iso2}/{slug}-{legal_form} (use legalName to pick legal_form suffix when known).")
+		sb.WriteString(" Target format: /org/{iso2}/{slug} (base name only, do NOT include legal form like Inc/Ltd/LLC in slug).")
 	} else {
 		sb.WriteString("Confirm the legal name, jurisdiction (ISO2), and canonical org path for this organization.")
-		sb.WriteString(" Ensure the /org/{iso2}/{slug}-{legal_form} suffix is correct (e.g., -llc, -jsc, -ltd).")
+		sb.WriteString(" Target format: /org/{iso2}/{slug} (base name only, do NOT include legal form in slug).")
 	}
-	sb.WriteString(" If legal form or country is unclear, resolve it using sources.")
+	sb.WriteString(" If country is unclear, resolve it using sources.")
 
 	// Optional hint: if we can infer jurisdiction from existing fragment fields or label, include it.
 	hintISO2 := ""
@@ -886,11 +865,7 @@ func relationNeedsOrgCanonicalization(path string) bool {
 		return true
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 3 {
-		return true
-	}
-	slug := parts[len(parts)-1]
-	return !hasLegalFormSuffix(slug)
+	return len(parts) < 3
 }
 
 func relationNeedsGovCanonicalization(path string) bool {
@@ -927,12 +902,12 @@ func relationNeedsGeoDisambiguation(path string) bool {
 		return false
 	}
 	if strings.HasPrefix(path, "/loc/") {
-		parts := strings.Split(strings.Trim(path, "/"), "/")
-		// /loc/{country}/{admin1}/{city}
-		if len(parts) >= 4 {
-			return parts[2] == "na" || parts[3] == "na"
+		_, level1, level2, ok := taxonomy.ParseLocCanonicalPath(path)
+		if !ok {
+			return true
 		}
-		return true
+		// Country-only locations and placeholder levels still need disambiguation.
+		return level1 == "" || level2 == ""
 	}
 	if strings.HasPrefix(path, "/market/") {
 		parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -982,7 +957,7 @@ func buildRelationMissingInfo(relations []agents.DiscoveredRelation, limit int) 
 			out = append(out, fmt.Sprintf("Confirm if related entity %s is a government body. If so, use /gov/{iso2}/{slug} canonical path and ensure jurisdiction is correct.", path))
 			seen[path] = struct{}{}
 		case relationNeedsOrgCanonicalization(path):
-			out = append(out, fmt.Sprintf("Confirm the legal name, jurisdiction (ISO2), and canonical org path for related entity %s. Ensure the /org/{iso2}/{slug}-{legal_form} suffix is correct.", path))
+			out = append(out, fmt.Sprintf("Confirm the legal name, jurisdiction (ISO2), and canonical org path for related entity %s. Target format: /org/{iso2}/{slug} (base name only, do NOT include legal form).", path))
 			seen[path] = struct{}{}
 		case relationNeedsProductCanonicalization(path):
 			out = append(out, fmt.Sprintf("Resolve canonical product taxonomy for related product %s. Use /product/{category}/{type}/{stage}/{slug}; for services, use category=service and map service domain/subdomain into {type}/{stage}.", path))
@@ -997,34 +972,94 @@ func buildRelationMissingInfo(relations []agents.DiscoveredRelation, limit int) 
 }
 
 func filterDiscoveredRelationsByDomainModes(in []agents.DiscoveredRelation, domainModes []string) []agents.DiscoveredRelation {
+	return filterDiscoveredRelationsByDomainModesWithDomainAnchor(nil, in, domainModes)
+}
+
+// filterDiscoveredRelationsByDomainModesWithDomainAnchor filters relations by domain-mode allowlist.
+// When sourceFragment is a domain node (/domain/...), domain-scaffold relation types (FocusesOn,
+// RelatedDomain, Affects, etc.) are always kept—they anchor the domain to its first-order entities
+// even in supply-chain mode.
+func filterDiscoveredRelationsByDomainModesWithDomainAnchor(sourceFragment *models.HorizonFragment, in []agents.DiscoveredRelation, domainModes []string) []agents.DiscoveredRelation {
+	out, _ := filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment, in, domainModes)
+	return out
+}
+
+// filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog is like the above but returns
+// dropped relation types for diagnostic logging (which types were filtered and why).
+func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment *models.HorizonFragment, in []agents.DiscoveredRelation, domainModes []string) ([]agents.DiscoveredRelation, []string) {
 	if len(in) == 0 {
-		return nil
+		return nil, nil
 	}
 	allowlist := EdgeAllowlistByDomainModes(domainModes)
 	if allowlist == nil {
-		return in
+		return in, nil
 	}
+	sourcePath := ""
+	if sourceFragment != nil {
+		sourcePath = strings.TrimSpace(sourceFragment.CanonicalPath)
+	}
+	sourceIsDomain := strings.HasPrefix(sourcePath, "/domain/")
+	sourceIsMarket := strings.HasPrefix(sourcePath, "/market/")
+	sourceIsSupplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain)
 	out := make([]agents.DiscoveredRelation, 0, len(in))
+	dropped := make([]string, 0, len(in))
 	for _, rel := range in {
 		normalized := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
 		if normalized == "" {
 			continue
 		}
-		if !AllowlistContains(allowlist, models.DependencyType(normalized)) {
+		dt := models.DependencyType(normalized)
+		if sourceIsSupplyChainMode && dt == models.DependencyTypeOwns {
+			srcPath := strings.TrimSpace(rel.SourceCanonicalPath)
+			if srcPath == "" {
+				srcPath = sourcePath
+			}
+			dstPath := strings.TrimSpace(rel.TargetCanonicalPath)
+			if allowSupplyChainOwnsByPath(srcPath, dstPath) {
+				rel.RelationType = normalized
+				out = append(out, rel)
+				continue
+			}
+			dropped = append(dropped, normalized)
 			continue
 		}
-		rel.RelationType = normalized
-		out = append(out, rel)
+		if AllowlistContains(allowlist, dt) {
+			rel.RelationType = normalized
+			out = append(out, rel)
+			continue
+		}
+		if sourceIsDomain && IsDomainScaffoldRelationType(dt) {
+			rel.RelationType = normalized
+			out = append(out, rel)
+			continue
+		}
+		// Supply chain: block DEPENDS_ON from market (use PARTICIPATES_IN with ORG as source instead).
+		if sourceIsMarket && sourceIsSupplyChainMode && dt == models.DependencyTypeDependsOn {
+			dropped = append(dropped, normalized)
+			continue
+		}
+		if sourceIsMarket && (IsDomainScaffoldRelationType(dt) || IsMarketRelationType(dt)) {
+			rel.RelationType = normalized
+			out = append(out, rel)
+			continue
+		}
+		dropped = append(dropped, normalized)
 	}
-	return out
+	return out, dropped
 }
 
-func countTotalNodes(chains []agents.SupplyChain) int {
-	n := 0
-	for _, ch := range chains {
-		n += len(ch.Nodes)
+func allowSupplyChainOwnsByPath(sourcePath, targetPath string) bool {
+	sourcePath = strings.TrimSpace(sourcePath)
+	targetPath = strings.TrimSpace(targetPath)
+	if sourcePath == "" || targetPath == "" {
+		return false
 	}
-	return n
+	sourceOk := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
+	if !sourceOk {
+		return false
+	}
+	targetOk := strings.HasPrefix(targetPath, "/org/") || strings.HasPrefix(targetPath, "/fac/") || strings.HasPrefix(targetPath, "/deposit/")
+	return targetOk
 }
 
 // filterEmptySupplyChains removes chains that have no nodes (LLM returned
@@ -1723,7 +1758,7 @@ func buildProcurementFacilityMissingInfo(targetCanonicalPath string) []string {
 		fmt.Sprintf("Who are the key vendors/suppliers contracted by %s and what categories/products do they cover? Return supplier organization/product links.", t),
 		fmt.Sprintf("What are the primary procurement channels and logistics partners for %s (distributors, freight forwarders, carriers, procurement service providers)?", t),
 		fmt.Sprintf("Which sourcing regions exist for %s? Return /loc/... + supplier paths.", t),
-		fmt.Sprintf("What are the critical contract/tender dependencies for %s (single-source risks, framework agreements, procurement bottlenecks) with evidence?", t),
+		fmt.Sprintf("What are the critical contract/tender dependencies for %s (framework agreements, procurement bottlenecks) with evidence?", t),
 	}
 }
 
@@ -1772,7 +1807,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		if canonicalPath == "" || canonicalPath == "/" {
 			return nil, fmt.Errorf("empty canonicalPath")
 		}
-		// Best-effort: normalize/strictify canonicalPath early so we don't create duplicates like /loc/uae vs /loc/ae/na/na.
+		// Best-effort: normalize canonicalPath early so we don't create duplicates like /loc/uae vs /loc/ae.
 		if e.canonicalPathResolver != nil && ftype != "" {
 			if resolved, rerr := e.canonicalPathResolver.Resolve(ctx, canonicalPath, ftype); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 				canonicalPath = strings.TrimSpace(resolved.CanonicalPath)
@@ -2691,7 +2726,8 @@ func NewScoutEngine(
 ) *ScoutEngine {
 	geoBuilder := NewGeoHierarchyBuilder(fragmentsRepo, edgesRepo)
 	orgDedup := NewOrgDeduplicator(fragmentsRepo, nil)       // WikidataClient set via WithWikidataClient
-	personDedup := NewPersonDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
+	personDedup := NewPersonDeduplicator(fragmentsRepo, nil)  // WikidataClient set via WithWikidataClient
+	facilityDedup := NewFacilityDeduplicator(fragmentsRepo)
 	orgHierarchy := NewOrgHierarchyBuilder(fragmentsRepo, edgesRepo)
 	marketHierarchy := NewMarketHierarchyBuilder(fragmentsRepo, edgesRepo)
 	marketGeoHierarchy := NewMarketGeoHierarchyBuilder(fragmentsRepo, edgesRepo)
@@ -2735,7 +2771,9 @@ func NewScoutEngine(
 		edgeRecentDedupTTL:        10 * time.Minute,
 		edgeRecentDedupMaxEntries: 20000,
 	}
-	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup, productDedup).WithPersonDedup(personDedup)
+	engine.preCreateValidator = NewPreCreateValidator(geoBuilder, orgDedup, productDedup).
+		WithPersonDedup(personDedup).
+		WithFacilityDedup(facilityDedup)
 	engine.contractNormalizer = &ContractNormalizer{PreCreateValidator: engine.preCreateValidator}
 	engine.groundingResolver = NewGroundingEvidenceResolver(fragmentsRepo)
 	return engine
@@ -4285,10 +4323,10 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				fmt.Sprintf("What products and services does %s produce/offer? Provide a canonical list of outputs suitable for /product/... paths.", job.TargetCanonicalPath),
 				fmt.Sprintf("What key inputs/materials/components does %s consume? Provide a canonical list of inputs suitable for /product/... paths.", job.TargetCanonicalPath),
 			)
-			// For product nodes, also request upstream/downstream transformations.
+			// For product nodes, request value chain transformations (product→product).
 			if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/product/") {
 				validationResult.MissingInfo = append(validationResult.MissingInfo,
-					fmt.Sprintf("What are the upstream materials and downstream derived products for %s (produced from / used to produce)? Return TRANSFORMS_INTO relationships between products.", job.TargetCanonicalPath),
+					fmt.Sprintf("What materials is %s produced from, and what products does it transform into? Return TRANSFORMS_INTO relationships between products. Format: JSON.", job.TargetCanonicalPath),
 				)
 			}
 		}
@@ -4327,7 +4365,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			return nilResultErr
 		}
 		if scoutResult != nil {
-			scoutResult.Relations = filterDiscoveredRelationsByDomainModes(scoutResult.Relations, domainModesForScout)
+			// Pass fragment so domain/market-anchor exceptions apply (FocusesOn, DEPENDS_ON, HAS_MARKET_SEGMENT, etc.).
+			scoutResult.Relations = filterDiscoveredRelationsByDomainModesWithDomainAnchor(&scoutResult.Fragment, scoutResult.Relations, domainModesForScout)
 			scoutResult.Relations = filterDiscoveredRelationsByFacilityQualifier(scoutResult.Relations, &scoutResult.Fragment, job.TargetCanonicalPath)
 			if !supplyChainsEnabled(job.TargetCanonicalPath, scoutResult.Fragment.Type, domainModesForScout, specialties) {
 				scoutResult.SupplyChains = nil
@@ -4424,7 +4463,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	}
 
 	// ORG CANONICALIZATION MISSING INFO (best-effort):
-	// If org path lacks legal form or jurisdiction clarity, request explicit canonicalization.
+	// If org path lacks jurisdiction clarity (na or legacy), request explicit canonicalization.
 	if validationResult != nil && extractedFragment != nil && shouldRequestOrgCanonicalization(extractedFragment) {
 		var rels []agents.DiscoveredRelation
 		if scoutResult != nil {
@@ -4921,145 +4960,6 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	}
 SKIP_RESEARCH:
 
-	// SUPPLY CHAIN REFINE: iterative gap analysis + patch-based refinement (supply_chain mode only).
-	// Skip when domain contracts are in play — they own supply chain logic; entity refine pollutes the graph.
-	if scoutResult != nil && len(scoutResult.SupplyChains) > 0 &&
-		taxonomy.HasDomainMode(domainModesForComposable, taxonomy.DomainModeSupplyChain) &&
-		researchSucceeded &&
-		!policy.HasDomainExpansionPeer {
-
-		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine")
-		const maxRefineRounds = 2
-		gapAnalyzer := agents.NewSupplyChainGapAnalyzer(e.aiExecutor)
-		chains := filterEmptySupplyChains(scoutResult.SupplyChains)
-		if dropped := len(scoutResult.SupplyChains) - len(chains); dropped > 0 {
-			e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain refine: dropped %d chain(s) with 0 valid nodes", dropped))
-		}
-		if len(chains) == 0 && extractedFragment != nil {
-			seed := buildSeedSupplyChain(extractedFragment)
-			if seed != nil {
-				chains = []agents.SupplyChain{*seed}
-				e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain refine: created seed chain from target entity %s", strings.TrimSpace(extractedFragment.CanonicalPath)))
-			}
-		}
-		initialChainCount := len(chains)
-		totalPatchesApplied := 0
-		completedRounds := 0
-		var lastScore float64
-
-		var exitReason string
-		for round := 0; round < maxRefineRounds; round++ {
-			gapReport, gapErr := gapAnalyzer.Analyze(ctx, chains, extractedFragment)
-			if gapErr != nil {
-				e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain gap analysis error (round %d): %v", round, gapErr))
-				exitReason = fmt.Sprintf("gap_analysis_error: %v", gapErr)
-				break
-			}
-			lastScore = gapReport.Score
-
-			gapFields := map[string]any{
-				"tenantId":           strings.TrimSpace(job.TenantID),
-				"jobId":              strings.TrimSpace(job.ID),
-				"target":             strings.TrimSpace(job.TargetCanonicalPath),
-				"round":              round,
-				"score":              gapReport.Score,
-				"sufficient":         gapReport.Sufficient,
-				"tierGaps":           len(gapReport.TierGaps),
-				"concentrationRisks": len(gapReport.ConcentrationRisks),
-				"metricGaps":         len(gapReport.MetricGaps),
-				"logisticsGaps":      len(gapReport.LogisticsGaps),
-				"temporalGaps":       len(gapReport.TemporalGaps),
-				"depthGaps":          len(gapReport.DepthGaps),
-				"industryGaps":       len(gapReport.IndustryGaps),
-				"directives":         len(gapReport.RefineDirectives),
-			}
-			for k, v := range gapReport.DiagnosticFields() {
-				gapFields[k] = v
-			}
-			trace.Log(ctx, "SupplyChain", "SupplyChain.gap_analysis", gapFields)
-
-			e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain gap analysis round %d: score=%.2f sufficient=%v directives=%d tier_gaps=%d conc_risks=%d llm_ok=%v",
-				round, gapReport.Score, gapReport.Sufficient, len(gapReport.RefineDirectives),
-				len(gapReport.TierGaps), len(gapReport.ConcentrationRisks), !gapReport.DiagnosticFields()["llmFailed"].(bool)))
-
-			if gapReport.Sufficient {
-				completedRounds = round + 1
-				exitReason = "sufficient"
-				break
-			}
-			if len(gapReport.RefineDirectives) == 0 {
-				completedRounds = round + 1
-				exitReason = "no_directives"
-				break
-			}
-
-			for _, ds := range gapReport.DirectiveSummaries() {
-				e.logLine(ctx, job, "debug", fmt.Sprintf("> directive: %s", ds))
-			}
-
-			patches, refineErr := e.researchAgent.RefineSupplyChain(ctx, chains, gapReport.RefineDirectives, extractedFragment, existingEntities)
-			if refineErr != nil {
-				e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain refine error (round %d): %v", round, refineErr))
-				exitReason = fmt.Sprintf("refine_error: %v", refineErr)
-				break
-			}
-			if len(patches) == 0 {
-				e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain refine round %d: no patches returned", round))
-				completedRounds = round + 1
-				exitReason = "no_patches"
-				break
-			}
-
-			for _, p := range patches {
-				e.logLine(ctx, job, "debug", fmt.Sprintf("> patch: %s", p.PatchSummary()))
-			}
-
-			refined, warnings := agents.ApplyPatches(chains, patches)
-			appliedCount := len(patches) - len(warnings)
-			totalPatchesApplied += appliedCount
-			for _, w := range warnings {
-				e.logLine(ctx, job, "warn", fmt.Sprintf("> supply chain patch warning: %s", w))
-			}
-			trace.Log(ctx, "SupplyChain", "SupplyChain.refine_round", map[string]any{
-				"tenantId":        strings.TrimSpace(job.TenantID),
-				"jobId":           strings.TrimSpace(job.ID),
-				"round":           round,
-				"patchesTotal":    len(patches),
-				"patchesApplied":  appliedCount,
-				"patchesWarnings": len(warnings),
-				"patchTypeCounts": agents.PatchTypeCounts(patches),
-				"nodesBeforeN":    countTotalNodes(chains),
-				"nodesAfterN":     countTotalNodes(refined),
-			})
-			e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain refine round %d: applied %d/%d patches (types: %v)", round, appliedCount, len(patches), agents.PatchTypeCounts(patches)))
-			chains = refined
-			completedRounds = round + 1
-			if round == maxRefineRounds-1 {
-				exitReason = "max_rounds"
-			}
-		}
-
-		scoutResult.SupplyChains = chains
-		trace.Log(ctx, "SupplyChain", "SupplyChain.refine_summary", map[string]any{
-			"tenantId":            strings.TrimSpace(job.TenantID),
-			"jobId":               strings.TrimSpace(job.ID),
-			"target":              strings.TrimSpace(job.TargetCanonicalPath),
-			"initialChains":       initialChainCount,
-			"finalChains":         len(chains),
-			"completedRounds":     completedRounds,
-			"totalPatchesApplied": totalPatchesApplied,
-			"finalScore":          lastScore,
-			"nodesTotal":          countTotalNodes(chains),
-			"exitReason":          exitReason,
-		})
-		e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine_done")
-	} else if policy.HasDomainExpansionPeer {
-		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine_skip_domain_contract")
-		e.logLine(ctx, job, "info", "> supply chain refine skipped: domain contract owns supply chain logic (no cascade/refine)")
-	} else {
-		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, false, "supply_chain_refine_skip")
-	}
-
 	// RE-VALIDATION: run Critic once after Research (best-effort).
 	if researchSucceeded && policy.ShouldRun(StepReValidation) && extractedFragment != nil && validationResult != nil {
 		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageRevalidation, false, "critic_revalidation")
@@ -5273,7 +5173,7 @@ SKIP_METRICS:
 	}
 
 	// ORG LEGACY CANONICALIZATION (self-correction):
-	// Upgrade /org/{slug} or /org/na/{slug} to geo-scoped /org/{iso2}/{slug}-{legal_form} when possible.
+	// Upgrade /org/{slug} or /org/na/{slug} to geo-scoped /org/{iso2}/{slug} when possible.
 	var orgUpgrade *orgPathUpgrade
 	if extractedFragment != nil {
 		orgUpgrade = e.maybeUpgradeLegacyOrgPath(ctx, extractedFragment, effectiveCanonicalPath)
@@ -6111,6 +6011,7 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 		IsAbstractAnchor:   isAbstract,
 		DecompositionHints: decompositionHints,
 		OriginalQuery:      originalQuery,
+		DomainModes:        getJobDomainModes(job),
 	}
 	rels, decompGroundingEvidence, err := agent.DecomposeWithGrounding(ctx, strings.TrimSpace(job.TargetCanonicalPath), focus, spherePaths, keywords, opts)
 	if err != nil {
@@ -6868,6 +6769,48 @@ func (e *ScoutEngine) tryPropagateCoordinatesFromParent(ctx context.Context, fra
 // POLICY ENFORCEMENT
 // =============================================================================
 
+// enrichFixISO2ViolationsWithJobContext adds original query and domain context to fix_iso2
+// enforcement tasks so the LLM can infer geo from user intent (e.g. "soft drinks South Africa" → za).
+func enrichFixISO2ViolationsWithJobContext(job *models.ScoutingJob, violations []policy.PolicyViolation) {
+	if job == nil || len(violations) == 0 {
+		return
+	}
+	originalQuery := strings.TrimSpace(parseStateString(job.State["originalQuery"]))
+	if originalQuery == "" {
+		originalQuery = strings.TrimSpace(parseStateString(job.State["query"]))
+	}
+	targetPath := strings.TrimSpace(job.TargetCanonicalPath)
+	domainPath := ""
+	if job.State != nil {
+		if dm, ok := job.State["domainExpansion"]; ok && dm != nil {
+			if m, ok := dm.(map[string]interface{}); ok {
+				domainPath = strings.TrimSpace(parseStateString(m["canonicalPath"]))
+			}
+		}
+	}
+	if originalQuery == "" && targetPath == "" && domainPath == "" {
+		return
+	}
+	for i := range violations {
+		v := &violations[i]
+		if v.SuggestedFix == nil || v.SuggestedFix.Type != policy.TaskFixISO2 {
+			continue
+		}
+		if v.SuggestedFix.Params == nil {
+			v.SuggestedFix.Params = map[string]interface{}{}
+		}
+		if originalQuery != "" {
+			v.SuggestedFix.Params["originalQuery"] = originalQuery
+		}
+		if targetPath != "" {
+			v.SuggestedFix.Params["targetCanonicalPath"] = targetPath
+		}
+		if domainPath != "" {
+			v.SuggestedFix.Params["domainPath"] = domainPath
+		}
+	}
+}
+
 // runPolicyCheck runs the policy checker on job output (non-blocking).
 // If violations are found, it creates enforcement jobs for auto-fixable issues
 // and publishes WebSocket messages for real-time UI updates.
@@ -6974,6 +6917,8 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 
 			// Create enforcement jobs for auto-fixable violations
 			if result.AutoFixableCount > 0 && e.enforcementExecutor != nil {
+				// Enrich fix_iso2 tasks with job context so LLM can infer geo from original query (e.g. "soft drinks South Africa" → za).
+				enrichFixISO2ViolationsWithJobContext(job, result.Violations)
 				enforcementCtx, enforcementCancel := context.WithTimeout(context.Background(), 45*time.Second)
 				enforcementJobs, err := e.enforcementExecutor.CreateEnforcementJobs(enforcementCtx, job.TenantID, job.ID, result.Violations)
 				enforcementCancel()
@@ -7260,7 +7205,6 @@ func isAutoExecutableTask(taskType policy.EnforcementTaskType) bool {
 		return true
 	case policy.TaskFixPath,
 		policy.TaskResolveGeoNames,
-		policy.TaskFixLegalForm,
 		policy.TaskFixISO2,
 		policy.TaskReverseEdge,
 		policy.TaskCanonicalizeEdge,

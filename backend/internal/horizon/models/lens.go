@@ -15,7 +15,7 @@ type Lens struct {
 	// Scope: Mixed array of canonical paths AND query addresses.
 	// Does NOT include /domain/ paths (domain is config, not a graph node).
 	// Examples:
-	//   - Static: "/org/tsmc", "/fac/tsmc/fab-21"
+	//   - Static: "/org/tsmc", "/fac/tw/fab-21"
 	//   - Dynamic (QueryAddress): "/query/sector:/Technology/Semiconductors/**"
 	Scope []string `json:"scope" firestore:"scope"`
 

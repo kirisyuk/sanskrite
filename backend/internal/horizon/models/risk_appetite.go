@@ -9,7 +9,7 @@ import (
 // RiskAppetiteProfile defines external risk tolerance for a canonical scope.
 // Scope examples:
 // - /market/{geo}/{domain}/{vertical}
-// - /loc/{country}/{admin1}/{city}
+// - /loc/{country}[/{level1}[/{level2}]]
 type RiskAppetiteProfile struct {
 	ID                 string             `json:"id" firestore:"id"`
 	TenantID           string             `json:"tenantId" firestore:"tenantId"`
@@ -67,4 +67,3 @@ func DefaultRiskAppetiteProfile(tenantID, scopePath, polarity string) *RiskAppet
 		UpdatedAt:          now,
 	}
 }
-

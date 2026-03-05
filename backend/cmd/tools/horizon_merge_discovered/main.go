@@ -485,7 +485,7 @@ RULES:
 - If none of the candidates are the same entity, CREATE a new stable canonicalPath in the correct namespace:
   - ORGANIZATION: /org/{lowercase-slug}
   - PRODUCT: /product/{lowercase-slug}
-  - FACILITY: /fac/{lowercase-slug}
+  - FACILITY: /fac/{geo}/{lowercase-slug}
   - GEO_REGION: /region/{lowercase-slug} (or /loc/... if you can)
   - EVENT: /event/{lowercase-slug}
 - Output JSON only. No markdown. No extra text.

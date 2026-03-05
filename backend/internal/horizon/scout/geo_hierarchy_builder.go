@@ -48,34 +48,27 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 	if !strings.HasPrefix(leafCanonicalPath, "/loc/") {
 		return nil
 	}
-	// Early canonicalization: always operate on strict geo path shape.
-	// This prevents creating legacy parents like /loc/{cc}/{admin1} and /loc/{cc}.
+	// Early canonicalization: operate on normalized variable-depth /loc shape.
 	if norm := normalizeGeoPathToStrict(leafCanonicalPath); norm != "" {
 		leafCanonicalPath = norm
 	}
 	parts := strings.Split(strings.Trim(leafCanonicalPath, "/"), "/")
-	// Strict geo shape only: /loc/{cc}/{admin1}/{city}
-	if len(parts) != 4 || parts[0] != "loc" {
+	if len(parts) < 2 || len(parts) > 4 || parts[0] != "loc" {
 		return nil
 	}
-	cc := strings.TrimSpace(parts[1])
-	admin1 := strings.TrimSpace(parts[2])
-	city := strings.TrimSpace(parts[3])
-	if cc == "" {
+	if strings.TrimSpace(parts[1]) == "" {
 		return nil
 	}
 
-	// Build strict parent chain:
-	// /loc/{cc}/{admin1}/{city} -> /loc/{cc}/{admin1}/na -> /loc/{cc}/na/na
+	// Build parent chain by progressively trimming one geo level:
+	// /loc/a/b/c -> /loc/a/b -> /loc/a
 	parents := make([]string, 0, 2)
-	if city != "" && city != "na" {
-		parents = append(parents, fmt.Sprintf("/loc/%s/%s/na", cc, admin1))
-	}
-	if admin1 != "na" || (city != "" && city != "na") {
-		parents = append(parents, fmt.Sprintf("/loc/%s/na/na", cc))
+	for i := len(parts) - 1; i >= 2; i-- {
+		parent := "/" + strings.Join(parts[:i], "/")
+		parents = append(parents, parent)
 	}
 	if len(parents) == 0 {
-		// Country-level node (/loc/{cc}/na/na) has no parent in strict model.
+		// Country-level node has no parent.
 		return nil
 	}
 
@@ -106,14 +99,11 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 
 		// Create a minimal GEO_REGION fragment.
 		parentParts := strings.Split(strings.Trim(parentPath, "/"), "/")
-		if len(parentParts) != 4 || parentParts[0] != "loc" {
+		if len(parentParts) < 2 || len(parentParts) > 4 || parentParts[0] != "loc" {
 			continue
 		}
-		label := parentParts[3]
-		if strings.TrimSpace(label) == "" || strings.TrimSpace(label) == "na" {
-			label = parentParts[2]
-		}
-		if strings.TrimSpace(label) == "" || strings.TrimSpace(label) == "na" {
+		label := parentParts[len(parentParts)-1]
+		if strings.TrimSpace(label) == "" || strings.EqualFold(strings.TrimSpace(label), "na") {
 			label = parentParts[1]
 		}
 		label = strings.ReplaceAll(label, "-", " ")
@@ -214,4 +204,3 @@ func (b *GeoHierarchyBuilder) String() string {
 	}
 	return fmt.Sprintf("GeoHierarchyBuilder(repo=%v, edges=%v)", b.fragmentsRepo != nil, b.edgesRepo != nil)
 }
-

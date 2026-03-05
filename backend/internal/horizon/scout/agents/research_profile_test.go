@@ -16,7 +16,7 @@ func TestResolveResearchProfile(t *testing.T) {
 	}{
 		{"market", models.FragmentTypeMarket, "/market/us/finance/banking", "", ResearchProfileMarket},
 		{"product", models.FragmentTypeProduct, "/product/raw/mineral/extraction/lithium", "", ResearchProfileProduct},
-		{"facility", models.FragmentTypeFacility, "/fac/tesla/gigafactory-shanghai", "", ResearchProfileFacility},
+		{"facility", models.FragmentTypeFacility, "/fac/cn/gigafactory-shanghai", "", ResearchProfileFacility},
 		{"deposit", models.FragmentTypeDeposit, "/deposit/lithium/atacama-salar", "", ResearchProfileDeposit},
 		{"gov", models.FragmentTypeOrganization, "/gov/us/sec", "", ResearchProfileGov},
 		{"dynasty", models.FragmentTypeCommunity, "/community/sa/dynasty/house-of-saud", "dynasty", ResearchProfileCommunityDynastyTribe},

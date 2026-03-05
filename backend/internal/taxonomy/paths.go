@@ -10,6 +10,7 @@ import (
 
 var reNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
+var reCanonicalSegment = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 // Regional geo tokens allowed in /loc/{cc}/... when ISO2 is insufficient.
 // This is a conservative allowlist and can be extended via env.
@@ -81,6 +82,26 @@ var regionalGeoTokens = map[string]struct{}{
 	"sub-saharan-africa":   {},
 	"mediterranean":        {},
 	"sea":                  {},
+}
+
+// IsISO2CountryCode returns true if s is exactly 2 lowercase letters (ISO3166-1 alpha2).
+// Single source of truth for ISO2 check; use instead of duplicating reCountryAlpha2.
+func IsISO2CountryCode(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return len(s) == 2 && reCountryAlpha2.MatchString(s)
+}
+
+// IsValidGeoForOrgGovFac returns true if geo is valid for /org, /gov, /fac, /community geo slot.
+// Valid: na, int, ISO2 (2 letters), composite (tr-sy, ae-sa-om), or regional token (eu, gcc, asean, etc.).
+func IsValidGeoForOrgGovFac(geo string) bool {
+	g := strings.ToLower(strings.TrimSpace(geo))
+	if g == "" {
+		return false
+	}
+	if g == "na" || g == "int" {
+		return true
+	}
+	return reCountryAlpha2.MatchString(g) || isCompositeGeo(g) || IsRegionalGeoToken(g)
 }
 
 // IsRegionalGeoToken returns true for allowed non-ISO2 regional geo tokens.
@@ -283,12 +304,12 @@ func ValidateCanonicalPath(path string) error {
 			return fmt.Errorf("product canonical path has invalid stage %q (expected one of code-defined taxonomy stages): %s", parts[3], path)
 		}
 	case "loc":
-		// /loc/{cc}/{admin1}/{city}
-		if len(parts) != 4 {
-			return fmt.Errorf("loc canonical path must have exactly 4 segments: /loc/{cc}/{admin1}/{city}: %s", path)
+		// /loc/{country}[/{level1}[/{level2}]]
+		if len(parts) < 2 || len(parts) > 4 {
+			return fmt.Errorf("loc canonical path must have 2-4 segments: /loc/{country}[/{level1}[/{level2}]]: %s", path)
 		}
 		cc := strings.ToLower(strings.TrimSpace(parts[1]))
-		if !reCountryAlpha2.MatchString(cc) && !IsRegionalGeoToken(cc) && !isCompositeGeo(cc) {
+		if !IsValidLocCountryToken(cc) {
 			return fmt.Errorf("loc canonical path has invalid country/region %q (expected ISO3166-1 alpha2, composite, or regional token): %s", parts[1], path)
 		}
 	case "community":
@@ -308,9 +329,13 @@ func ValidateCanonicalPath(path string) error {
 			return fmt.Errorf("community canonical path has unknown type %q: %s", communityType, path)
 		}
 	case "fac":
-		// Strict: /fac/{orgSlug}/{facilitySlug}
+		// Strict: /fac/{geo}/{facilitySlug} — geo like org/gov (ISO2, na, or regional)
 		if len(parts) != 3 {
-			return fmt.Errorf("facility canonical path must have exactly 3 segments: /fac/{orgSlug}/{facilitySlug}: %s", path)
+			return fmt.Errorf("facility canonical path must have exactly 3 segments: /fac/{geo}/{facilitySlug}: %s", path)
+		}
+		geo := strings.ToLower(strings.TrimSpace(parts[1]))
+		if geo != "na" && !reCountryAlpha2.MatchString(geo) && !isCompositeGeo(geo) && !IsRegionalGeoToken(geo) {
+			return fmt.Errorf("facility canonical path has invalid geo %q (expected ISO3166-1 alpha2, composite, na, or regional token): %s", parts[1], path)
 		}
 	case "program":
 		// Strict: /program/{jurisdiction}/{slug}
@@ -895,60 +920,112 @@ func JoinPath(parts ...string) string {
 	return "/" + strings.Join(out, "/")
 }
 
-// GeoCanonicalPath returns a Horizon-canonical geo path.
-// Canonical format: /loc/{country}/{admin1}/{city}
-// - country: ISO3166-1 alpha2 lowercase
-// - admin1: state/province code or slug lowercase; use "na" if not applicable/unknown
-// - city: lowercase slug; use "na" if not applicable/unknown (country-only locations are /loc/{country}/na/na)
-//
-// If countryAlpha2 is missing/invalid, returns empty string (unknown location cannot be canonicalized safely).
-func GeoCanonicalPath(countryAlpha2, admin1, city string) string {
-	c := strings.ToLower(strings.TrimSpace(countryAlpha2))
-	if !reCountryAlpha2.MatchString(c) && !IsRegionalGeoToken(c) {
+// IsValidLocCountryToken validates the country/region token used in /loc paths.
+func IsValidLocCountryToken(token string) bool {
+	token = strings.ToLower(strings.TrimSpace(token))
+	if token == "" {
+		return false
+	}
+	return reCountryAlpha2.MatchString(token) || IsRegionalGeoToken(token) || isCompositeGeo(token)
+}
+
+// IsNAPlaceholderToken returns true when a segment is an explicit unknown placeholder.
+func IsNAPlaceholderToken(token string) bool {
+	return strings.EqualFold(strings.TrimSpace(token), "na")
+}
+
+func normalizeLocLevelToken(token string) string {
+	token = strings.ToLower(strings.TrimSpace(token))
+	if token == "" || IsNAPlaceholderToken(token) {
 		return ""
 	}
-	a1 := strings.ToLower(strings.TrimSpace(admin1))
-	ct := strings.ToLower(strings.TrimSpace(city))
-	if a1 == "" {
-		a1 = "na"
+	token = Slugify(token)
+	if token == "" || IsNAPlaceholderToken(token) {
+		return ""
 	}
-	if ct == "" {
-		ct = "na"
+	return token
+}
+
+// ParseLocCanonicalPath parses /loc/{country}[/{level1}[/{level2}]] and returns normalized components.
+// Explicit "na" placeholders are normalized away (become empty components).
+func ParseLocCanonicalPath(path string) (country, level1, level2 string, ok bool) {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "/loc/") {
+		return "", "", "", false
 	}
-	a1 = Slugify(a1)
-	ct = Slugify(ct)
-	if a1 == "" {
-		a1 = "na"
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || len(parts) > 4 || parts[0] != "loc" {
+		return "", "", "", false
 	}
-	if ct == "" {
-		ct = "na"
+	country = strings.ToLower(strings.TrimSpace(parts[1]))
+	if !IsValidLocCountryToken(country) {
+		return "", "", "", false
 	}
-	return "/" + strings.Join([]string{"loc", c, a1, ct}, "/")
+	if len(parts) >= 3 {
+		raw := strings.ToLower(strings.TrimSpace(parts[2]))
+		if raw != "" && raw != "na" && !reCanonicalSegment.MatchString(raw) {
+			return "", "", "", false
+		}
+		level1 = normalizeLocLevelToken(raw)
+	}
+	if len(parts) >= 4 {
+		raw := strings.ToLower(strings.TrimSpace(parts[3]))
+		if raw != "" && raw != "na" && !reCanonicalSegment.MatchString(raw) {
+			return "", "", "", false
+		}
+		level2 = normalizeLocLevelToken(raw)
+	}
+	return country, level1, level2, true
+}
+
+// GeoCanonicalPath returns a canonical geo path with variable hierarchy depth.
+// Canonical format: /loc/{country}[/{level1}[/{level2}]]
+// - country: ISO3166-1 alpha2 lowercase, regional token, or composite token.
+// - level1/level2: optional lowercase slugs.
+// - trailing unknown placeholders ("na") are omitted.
+//
+// If countryAlpha2 is missing/invalid, returns empty string.
+func GeoCanonicalPath(countryAlpha2, admin1, city string) string {
+	c := strings.ToLower(strings.TrimSpace(countryAlpha2))
+	if !IsValidLocCountryToken(c) {
+		return ""
+	}
+	a1 := normalizeLocLevelToken(admin1)
+	ct := normalizeLocLevelToken(city)
+	// If only the deepest token is provided, keep it as level1 instead of introducing placeholders.
+	if a1 == "" && ct != "" {
+		a1 = ct
+		ct = ""
+	}
+	segments := []string{"loc", c}
+	if a1 != "" {
+		segments = append(segments, a1)
+	}
+	if ct != "" {
+		segments = append(segments, ct)
+	}
+	return "/" + strings.Join(segments, "/")
 }
 
 // OrgCanonicalPath returns a Horizon-canonical organization path:
-// /org/{geo}/{name-slug}-{legal-form}
+// /org/{geo}/{name-slug}
 //
 // geo is the geographic jurisdiction:
 //   - Default: ISO3166-1 alpha2 (exactly 2 lowercase letters, e.g., "us", "sa", "kz")
 //   - Composite: 2-3 ISO3166-1 alpha2 codes joined by "-" (e.g., "tr-sy", "ae-sa-om")
+//   - Regional token: e.g., "eu", "asean", "brics"
+//   - International: "int"
 //   - Unknown: "na" if jurisdiction is unknown/invalid
 //
-// Legal form is extracted from orgLabel and normalized to canonical English form (lowercase).
-// If no legal form detected, slug is created without legal form suffix.
-//
-// Legal form is extracted from orgLabel and normalized to canonical English form (lowercase).
-// If no legal form detected, slug is created without legal form suffix.
+// Legal form (Inc., Ltd., LLC, etc.) is NOT included in the slug — use base name only.
 func OrgCanonicalPath(countryAlpha2OrNA string, orgLabel string) string {
 	cc := strings.ToLower(strings.TrimSpace(countryAlpha2OrNA))
-	if !reCountryAlpha2.MatchString(cc) && !isCompositeGeo(cc) {
+	if cc != "na" && cc != "int" && !reCountryAlpha2.MatchString(cc) && !isCompositeGeo(cc) && !IsRegionalGeoToken(cc) {
 		cc = "na"
 	}
 
-	// Extract legal form from name
-	nameWithoutForm, legalFormCanonical, _ := extractLegalFormFromName(orgLabel)
-
-	// Create slug from name (without legal form)
+	// Strip legal form from name so slug does not include it
+	nameWithoutForm, _, _ := extractLegalFormFromName(orgLabel)
 	var nameSlug string
 	if nameWithoutForm != "" {
 		nameSlug = Slugify(nameWithoutForm)
@@ -960,32 +1037,40 @@ func OrgCanonicalPath(countryAlpha2OrNA string, orgLabel string) string {
 		return ""
 	}
 
-	// Fix: strip any existing legal form suffix from slug to avoid double suffixes (e.g., "-inc-inc")
+	// Strip any trailing legal form suffix (e.g., from "Tesla Inc" -> "tesla")
 	nameSlug = stripLegalFormSuffix(nameSlug)
-
-	// Append legal form if found
-	if legalFormCanonical != "" {
-		nameSlug = nameSlug + "-" + legalFormCanonical
-	}
 
 	return JoinPath("org", cc, nameSlug)
 }
 
-// stripLegalFormSuffix removes any trailing legal form suffix from a slug to prevent double suffixes.
+// stripLegalFormSuffix removes any trailing legal form suffix from a slug.
+// Used when building org paths from names that may contain legal form (e.g., "Tesla Inc" -> "tesla").
 // e.g., "amkor-technology-inc" -> "amkor-technology", "canon-inc-inc" -> "canon"
+var legalFormSuffixesForStrip = []string{
+	"pjsc", "cjsc", "ojsc", "oao", "zao", "ao", "jsc", "ooo",
+	"pllc", "llc", "inc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa",
+	"as", "ab", "bv", "nv", "se", "co", "llp", "lp", "sp", "sup", "fsup", "soe",
+	"kk", "oy", "oyj", "ltda", "sdnbhd", "ptyltd", "spzoo", "dac", "teo", "ulc",
+	"scs", "sca", "snc", "senc", "sas", "sasu", "asa", "pteltd",
+}
+
 func stripLegalFormSuffix(slug string) string {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
 		return slug
 	}
-	legalForms := LegalForms()
+	// Sort by length descending to match longer forms first (pjsc before jsc)
+	suffixes := make([]string, len(legalFormSuffixesForStrip))
+	copy(suffixes, legalFormSuffixesForStrip)
+	sort.Slice(suffixes, func(i, j int) bool { return len(suffixes[i]) > len(suffixes[j]) })
 	changed := true
 	for changed {
 		changed = false
-		for _, lf := range legalForms {
+		for _, lf := range suffixes {
 			suffix := "-" + lf
 			if strings.HasSuffix(slug, suffix) {
 				slug = strings.TrimSuffix(slug, suffix)
+				slug = strings.TrimSuffix(slug, "-")
 				changed = true
 				break
 			}
@@ -1028,10 +1113,11 @@ func IsCompositeGeoToken(s string) bool {
 // geo is the geographic jurisdiction:
 //   - Default: ISO3166-1 alpha2 (exactly 2 lowercase letters, e.g., "us", "sa")
 //   - Composite: 2-3 ISO3166-1 alpha2 codes joined by "-" for intergovernmental bodies (e.g., "ae-sa-om")
+//   - Regional token: e.g., "eu", "asean"
 //   - Unknown: "na" if jurisdiction is unknown/invalid
 func GovCanonicalPath(countryAlpha2OrNA string, agencyLabel string) string {
 	cc := strings.ToLower(strings.TrimSpace(countryAlpha2OrNA))
-	if !reCountryAlpha2.MatchString(cc) && !isCompositeGeo(cc) {
+	if cc != "na" && !reCountryAlpha2.MatchString(cc) && !isCompositeGeo(cc) && !IsRegionalGeoToken(cc) {
 		cc = "na"
 	}
 	slug := Slugify(agencyLabel)
@@ -1042,30 +1128,41 @@ func GovCanonicalPath(countryAlpha2OrNA string, agencyLabel string) string {
 }
 
 // FacilityGeneralProductionPath returns a fallback facility path when the specific facility is unknown.
-// Format: /fac/{orgSlug}-general-production
-// Used when an organization is known but its producing facility is not (e.g. for supply chain normalization).
-func FacilityGeneralProductionPath(orgSlug string) string {
+// Format: /fac/{geo}/{orgSlug}-general-production when orgSlug is provided (from org path).
+// Format: /fac/{geo}/general-production when only geo is known (fallback from fac path when no org found).
+// geo: ISO2 or "na" when unknown.
+func FacilityGeneralProductionPath(geo string, orgSlug string) string {
+	g := strings.ToLower(strings.TrimSpace(geo))
+	if g == "" {
+		g = "na"
+	}
+	if g != "na" && !reCountryAlpha2.MatchString(g) && !isCompositeGeo(g) && !IsRegionalGeoToken(g) {
+		g = "na"
+	}
 	slug := Slugify(orgSlug)
 	if slug == "" {
-		return ""
+		return JoinPath("fac", g, "general-production")
 	}
-	return JoinPath("fac", slug+"-general-production")
+	return JoinPath("fac", g, slug+"-general-production")
 }
 
 // FacilityCanonicalPath returns a Horizon-canonical facility path:
-// /fac/{orgSlug}/{facilitySlug}
+// /fac/{geo}/{facilitySlug} — geo like org/gov (ISO2, na, or regional)
 //
-// If orgSlug is unknown, "na" is used as a deterministic placeholder.
-func FacilityCanonicalPath(orgSlug string, facilityLabel string) string {
-	orgSlug = Slugify(orgSlug)
+// If geo is unknown, "na" is used as a deterministic placeholder.
+func FacilityCanonicalPath(geo string, facilityLabel string) string {
+	g := strings.ToLower(strings.TrimSpace(geo))
+	if g == "" {
+		g = "na"
+	}
+	if g != "na" && !reCountryAlpha2.MatchString(g) && !isCompositeGeo(g) && !IsRegionalGeoToken(g) {
+		g = "na"
+	}
 	facSlug := Slugify(facilityLabel)
 	if facSlug == "" {
 		return ""
 	}
-	if orgSlug == "" {
-		orgSlug = "na"
-	}
-	return JoinPath("fac", orgSlug, facSlug)
+	return JoinPath("fac", g, facSlug)
 }
 
 // ProductCanonicalPath returns a Horizon-canonical product path:
@@ -1085,15 +1182,19 @@ func ProductCanonicalPath(orgSlug string, productLabel string) string {
 // ProgramCanonicalPath returns a Horizon-canonical program path:
 // /program/{jurisdictionSlug}/{programSlug}
 //
-// If jurisdiction is unknown, "global" is used as a deterministic placeholder.
+// jurisdictionSlug accepts ISO2 or regional/global tokens ("int", "global", "eu", ...).
+// If jurisdiction is unknown/invalid, "global" is used as a deterministic placeholder.
 func ProgramCanonicalPath(jurisdiction string, programLabel string) string {
-	jSlug := Slugify(jurisdiction)
+	jSlug := strings.ToLower(strings.TrimSpace(jurisdiction))
+	if jSlug == "" {
+		jSlug = "global"
+	}
+	if jSlug != "global" && jSlug != "int" && !reCountryAlpha2.MatchString(jSlug) && !IsRegionalGeoToken(jSlug) {
+		jSlug = "global"
+	}
 	pSlug := Slugify(programLabel)
 	if pSlug == "" {
 		return ""
-	}
-	if jSlug == "" {
-		jSlug = "global"
 	}
 	return JoinPath("program", jSlug, pSlug)
 }
@@ -1136,12 +1237,12 @@ func EntityCanonicalPath(entityType string, canonicalName string) string {
 		// Prefer a stable nested product path when org context is known elsewhere; here we may only have a label.
 		return ProductCanonicalPath("", canonicalName)
 	case "Facility":
-		// Without a bound orgSlug, use deterministic placeholder orgSlug="na".
-		return FacilityCanonicalPath("", canonicalName)
+		// Without a bound geo, use deterministic placeholder geo="na".
+		return FacilityCanonicalPath("na", canonicalName)
 	case "SupplyChainNode":
 		// Horizon canonical taxonomy does not have a dedicated supply-chain namespace.
 		// Represent supply chain nodes as facilities by default.
-		return JoinPath("fac", canonicalName)
+		return FacilityCanonicalPath("na", canonicalName)
 	case "GovernmentProject":
 		// Treat government projects / initiatives as PROGRAM fragments in the Horizon taxonomy.
 		return ProgramCanonicalPath("", canonicalName)
@@ -1196,7 +1297,7 @@ func PersonCanonicalPath(personName string) string {
 }
 
 // LocationCanonicalPath is legacy and intentionally conservative.
-// Horizon canonical geo taxonomy is /loc/{country}/{admin1}/{city}; ISO6709/name-only inputs are insufficient.
+// Horizon canonical geo taxonomy is /loc/{country}[/{level1}[/{level2}]]; ISO6709/name-only inputs are insufficient.
 // Prefer using GeoCanonicalPath.
 func LocationCanonicalPath(name string, iso6709 string) string {
 	_ = name

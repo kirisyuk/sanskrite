@@ -93,10 +93,10 @@ func main() {
 		typ  hmodels.FragmentType
 		note string
 	}{
-		{in: "/loc/uae", typ: hmodels.FragmentTypeGeoRegion, note: "country alias -> strict country-only"},
-		{in: "/loc/abu-dhabi", typ: hmodels.FragmentTypeGeoRegion, note: "loose city -> strict city (if unambiguous)"},
-		{in: "/loc/ae/na/abu-dhabi", typ: hmodels.FragmentTypeGeoRegion, note: "fix admin1 within AE"},
-		{in: "/loc/us/na/springfield", typ: hmodels.FragmentTypeGeoRegion, note: "ambiguous city in-country should stay conservative"},
+		{in: "/loc/uae", typ: hmodels.FragmentTypeGeoRegion, note: "country alias -> country-level canonical"},
+		{in: "/loc/abu-dhabi", typ: hmodels.FragmentTypeGeoRegion, note: "loose city -> city-level canonical (if unambiguous)"},
+		{in: "/loc/ae/abu-dhabi", typ: hmodels.FragmentTypeGeoRegion, note: "fix city/admin within AE"},
+		{in: "/loc/us/springfield", typ: hmodels.FragmentTypeGeoRegion, note: "ambiguous city in-country should stay conservative"},
 		{in: "/loc/springfield", typ: hmodels.FragmentTypeGeoRegion, note: "ambiguous city global should stay conservative"},
 	}
 

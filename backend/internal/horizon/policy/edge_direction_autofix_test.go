@@ -266,6 +266,43 @@ func TestResolveEdgeDirectionAutoFix_MarketDependsOnGovBecomesRegulatesSwap(t *t
 	}
 }
 
+func TestApplyEdgeCanonicalizationPolicy_SupplyChainModeBlocksParticipatesInRewrite(t *testing.T) {
+	// DEPENDS_ON (ORG->MARKET) normally rewrites to PARTICIPATES_IN.
+	// With SupplyChainMode=true, PARTICIPATES_IN is out-of-contract; block the rewrite.
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:        horizonmodels.DependencyTypeDependsOn,
+		SourceType:      horizonmodels.FragmentTypeOrganization,
+		TargetType:      horizonmodels.FragmentTypeMarket,
+		SourcePath:      "/org/us/acme",
+		TargetPath:      "/market/global/electronics",
+		SupplyChainMode: true,
+	})
+	if got.Changed {
+		t.Fatalf("SupplyChainMode must block DEPENDS_ON->PARTICIPATES_IN rewrite; got Changed=true, EdgeType=%s", got.EdgeType)
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeDependsOn {
+		t.Fatalf("expected DEPENDS_ON preserved, got %s", got.EdgeType)
+	}
+}
+
+func TestApplyEdgeCanonicalizationPolicy_SupplyChainModeAllowsDependsOn(t *testing.T) {
+	// DEPENDS_ON is in contract; no rewrite; should pass through.
+	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
+		EdgeType:        horizonmodels.DependencyTypeDependsOn,
+		SourceType:      horizonmodels.FragmentTypeOrganization,
+		TargetType:      horizonmodels.FragmentTypeOrganization,
+		SourcePath:      "/org/us/acme",
+		TargetPath:      "/org/cn/supplier",
+		SupplyChainMode: true,
+	})
+	if got.Changed {
+		t.Fatalf("DEPENDS_ON (ORG->ORG) should not change in supply-chain mode, got %s", got.EdgeType)
+	}
+	if got.EdgeType != horizonmodels.DependencyTypeDependsOn {
+		t.Fatalf("expected DEPENDS_ON, got %s", got.EdgeType)
+	}
+}
+
 func TestApplyEdgeCanonicalizationPolicy_GovRegulatesMarketPreserved(t *testing.T) {
 	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
 		EdgeType:   horizonmodels.DependencyTypeRegulates,

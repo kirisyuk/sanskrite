@@ -149,7 +149,7 @@ func main() {
 	}
 
 	// Reference taxonomy to ensure it's linked
-	_ = taxonomy.FacilityGeneralProductionPath("test")
+	_ = taxonomy.FacilityGeneralProductionPath("na", "test")
 
 	log.Printf("Done. supplyLinksScanned=%d changed=%d applied=%d facilitiesCreated=%d errors=%d",
 		st.SupplyLinksScanned, st.SupplyLinksChanged, st.SupplyLinksApplied, st.FacilitiesCreated, st.Errors)
@@ -159,7 +159,7 @@ func init() {
 	flag.Usage = func() {
 		fmt.Printf(`Usage: supply_chain_migrate_org_to_fac --project=<gcp-project> [--apply] [--dry-run]
 
-Migrates SupplyLinks with /org/ refs to /fac/{orgSlug}-general-production per the Supply Chain Fractal Model.
+Migrates SupplyLinks with /org/ refs to /fac/{geo}/{orgSlug}-general-production per the Supply Chain Fractal Model.
 Creates facility fragments for general-production when missing.
 
 `)

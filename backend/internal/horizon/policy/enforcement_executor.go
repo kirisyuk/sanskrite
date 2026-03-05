@@ -233,8 +233,6 @@ func (e *EnforcementExecutor) ExecuteJob(ctx context.Context, job *PolicyEnforce
 		result, err = e.executeResolveGeoNames(ctx, job.Task)
 	case TaskNormalizeSymmetric:
 		result, err = e.executeNormalizeSymmetric(ctx, job.TenantID, job.Task)
-	case TaskFixLegalForm:
-		result, err = e.executeFixLegalForm(ctx, job.Task)
 	case TaskFixISO2:
 		result, err = e.executeFixISO2(ctx, job.Task)
 	case TaskEnrichEdge:
@@ -695,14 +693,18 @@ func (e *EnforcementExecutor) executeResolveGeoNames(ctx context.Context, task E
 			return nil, fmt.Errorf("currentPath not specified")
 		}
 
-		// Parse current path and resolve
-		parts := strings.Split(strings.Trim(currentPath, "/"), "/")
-		if len(parts) != 4 || parts[0] != "loc" {
+		// Parse current path and resolve (city-level only).
+		cc, level1, level2, ok := taxonomy.ParseLocCanonicalPath(currentPath)
+		if !ok {
 			return nil, fmt.Errorf("invalid geo path format: %s", currentPath)
 		}
-
-		cc := parts[1]
-		city := parts[3]
+		city := level2
+		if city == "" {
+			city = level1
+		}
+		if city == "" {
+			return nil, fmt.Errorf("geo path %s has no resolvable city token", currentPath)
+		}
 
 		// Search GeoNames
 		resp, err := e.geonamesClient.Search(ctx, city, 5, ontology.GeoNamesSearchOptions{
@@ -717,11 +719,8 @@ func (e *EnforcementExecutor) executeResolveGeoNames(ctx context.Context, task E
 		for _, place := range resp.Results {
 			if strings.EqualFold(place.CountryCode, cc) {
 				adminCode := strings.ToLower(strings.TrimSpace(place.AdminCode1))
-				if adminCode == "" {
-					adminCode = "na"
-				}
 				citySlug := slugifyName(place.Name)
-				correctPath = fmt.Sprintf("/loc/%s/%s/%s", strings.ToLower(cc), adminCode, citySlug)
+				correctPath = taxonomy.GeoCanonicalPath(strings.ToLower(cc), adminCode, citySlug)
 				break
 			}
 		}
@@ -781,280 +780,6 @@ func (e *EnforcementExecutor) executeNormalizeSymmetric(ctx context.Context, _ s
 		AffectedIDs: []string{edgeID},
 		Details:     fmt.Sprintf("Normalized symmetric edge: %s -> %s", normalizedSource, normalizedTarget),
 	}, nil
-}
-
-// executeFixLegalForm fixes a missing legal form in org path.
-func (e *EnforcementExecutor) executeFixLegalForm(ctx context.Context, task EnforcementTask) (*EnforcementResult, error) {
-	fragID := task.TargetID
-	correctPath, ok := task.Params["correctPath"].(string)
-	frag, err := e.fragmentsRepo.Get(ctx, fragID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load fragment: %w", err)
-	}
-	if frag == nil {
-		return nil, fmt.Errorf("fragment not found: %s", fragID)
-	}
-
-	oldPath := strings.TrimSpace(frag.CanonicalPath)
-	parts, perr := taxonomy.ParseCanonicalPathParts(oldPath)
-	if perr != nil || parts == nil {
-		parts = frag.CanonicalParts
-	}
-	if parts == nil || strings.TrimSpace(parts.Namespace) != "org" {
-		return &EnforcementResult{
-			Success:     true,
-			Action:      "fix_legal_form_skipped",
-			AffectedIDs: []string{fragID},
-			Details:     fmt.Sprintf("Skipped legal form fix for non-org canonical path: %s", oldPath),
-		}, nil
-	}
-
-	if ok && strings.TrimSpace(correctPath) != "" {
-		correctParts, cErr := taxonomy.ParseCanonicalPathParts(strings.TrimSpace(correctPath))
-		if cErr != nil || correctParts == nil || strings.TrimSpace(correctParts.Namespace) != "org" {
-			return &EnforcementResult{
-				Success:     true,
-				Action:      "fix_legal_form_skipped",
-				AffectedIDs: []string{fragID},
-				Details:     fmt.Sprintf("Skipped legal form fix with non-org target path: %s", strings.TrimSpace(correctPath)),
-			}, nil
-		}
-	}
-
-	// If correctPath is not provided, attempt to infer legal form via LLM and apply selectively.
-	if !ok || strings.TrimSpace(correctPath) == "" {
-		if e.aiExecutor == nil {
-			return &EnforcementResult{
-				Success: false,
-				Action:  "fix_legal_form",
-				Error:   "AI executor not configured - cannot infer legal form automatically",
-			}, nil
-		}
-		orgParts := parts.Org
-		if orgParts == nil {
-			return &EnforcementResult{Success: false, Action: "fix_legal_form", Error: "org canonical parts are missing"}, nil
-		}
-		if strings.TrimSpace(orgParts.LegalForm) != "" {
-			return &EnforcementResult{
-				Success: true,
-				Action:  "no_change_needed",
-				Details: "Legal form already present; skipping",
-			}, nil
-		}
-
-		labelEN := ""
-		if frag.Labels != nil {
-			labelEN = strings.TrimSpace(frag.Labels["en"])
-		}
-		legalName := ""
-		shortName := ""
-		if frag.Identifiers != nil {
-			legalName = strings.TrimSpace(frag.Identifiers["legalName"])
-			shortName = strings.TrimSpace(frag.Identifiers["shortName"])
-		}
-
-		type legalFormFixResult struct {
-			LegalForm   string  `json:"legalForm"`
-			Confidence  float64 `json:"confidence"`
-			Reason      string  `json:"reason"`
-			DisplayName string  `json:"displayName,omitempty"`
-		}
-		allowed := taxonomy.DefaultCanonicalRules().Org.LegalForms
-		allowSet := map[string]struct{}{}
-		for _, lf := range allowed {
-			lf = strings.ToLower(strings.TrimSpace(lf))
-			if lf != "" {
-				allowSet[lf] = struct{}{}
-			}
-		}
-		verifier := ai.NewGenericVerifier(func(r legalFormFixResult) error {
-			if r.Confidence < 0 || r.Confidence > 1 {
-				return fmt.Errorf("confidence must be 0..1")
-			}
-			lf := strings.ToLower(strings.TrimSpace(r.LegalForm))
-			if lf == "" {
-				return fmt.Errorf("legalForm is required")
-			}
-			if _, ok := allowSet[lf]; !ok {
-				return fmt.Errorf("legalForm %q not in allowlist", lf)
-			}
-			return nil
-		})
-
-		orgGeo := ""
-		orgGeo = strings.ToLower(strings.TrimSpace(orgParts.Geo))
-
-		prompt := strings.TrimSpace(fmt.Sprintf(`
-You are fixing a missing legal form suffix for an organization canonical path.
-
-Canonical org path format: /org/{iso2}/{baseSlug}-{legalForm}
-You must infer the most likely legalForm token from the allowed list.
-
-Allowed legalForm tokens:
-%s
-
-Rules:
-- Output STRICT JSON only: {"legalForm":"<token>","confidence":0..1,"reason":"...","displayName":"optional human readable"}
-- legalForm MUST be lowercase (exact token from the allowed list). Example: "ooo" (NOT "OOO").
-- Prefer high precision. If uncertain, still choose the best guess but reduce confidence (<0.7).
-- Do NOT output "unknown" or empty.
-- Do NOT change geo or baseSlug; only choose legalForm.
-
-Fragment context:
-- currentCanonicalPath: %s
-- label_en: %s
-- legalName: %s
-- shortName: %s
-`, strings.Join(allowed, ", "), oldPath, labelEN, legalName, shortName))
-
-		llmTask := &ai.AITask{
-			TaskType:     ai.TaskTypeContentAnalysis,
-			InputContent: prompt,
-			AIRequirements: ai.AIRequirements{
-				TextGenerationCapability: true,
-				MinCapabilityScore:       6,
-				MinContextWindow:         6000,
-				MaxOutputSize:            4096,
-			},
-			Verifier: verifier,
-		}
-
-		// Detach from any short parent deadline (this task is async) and enforce our own timeout.
-		llmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
-		defer cancel()
-
-		raw, err := e.aiExecutor.ExecuteStructuredTask(llmCtx, llmTask)
-		if err != nil {
-			return &EnforcementResult{
-				Success: false,
-				Action:  "fix_legal_form",
-				Error:   fmt.Sprintf("LLM legal form inference failed: %v", err),
-			}, nil
-		}
-		res, ok := raw.(legalFormFixResult)
-		if !ok {
-			if m, ok2 := raw.(map[string]interface{}); ok2 {
-				res = legalFormFixResult{
-					LegalForm:  getString(m, "legalForm"),
-					Confidence: getFloat(m, "confidence"),
-					Reason:     getString(m, "reason"),
-				}
-			} else {
-				return &EnforcementResult{Success: false, Action: "fix_legal_form", Error: fmt.Sprintf("unexpected LLM response type %T", raw)}, nil
-			}
-		}
-		if err := verifier.ValidateFunc(res); err != nil {
-			return &EnforcementResult{
-				Success: false,
-				Action:  "fix_legal_form",
-				Error:   fmt.Sprintf("LLM legal form inference validate failed: %v", err),
-			}, nil
-		}
-
-		lf := strings.ToLower(strings.TrimSpace(res.LegalForm))
-		if !isLegalFormCompatibleWithGeo(orgGeo, lf) {
-			// Safety: avoid clearly wrong jurisdiction-specific forms (e.g. kk for cn).
-			if fallback := fallbackLegalFormForGeo(orgGeo); fallback != "" {
-				log.Printf("[EnforcementExecutor] fix_legal_form: geo/legal mismatch geo=%q inferred=%q -> fallback=%q for fragment=%s",
-					orgGeo, lf, fallback, strings.TrimSpace(frag.ID))
-				lf = fallback
-			}
-		}
-		// Apply selectively to canonicalParts.
-		if frag.CanonicalParts == nil {
-			frag.CanonicalParts = parts
-		}
-		if frag.CanonicalParts.Org == nil {
-			frag.CanonicalParts.Org = &taxonomy.OrgPathParts{}
-		}
-		frag.CanonicalParts.Org.LegalForm = lf
-
-		frag.UpdatedAt = time.Now().UTC()
-		if err := e.fragmentsRepo.Update(ctx, frag); err != nil {
-			return nil, fmt.Errorf("failed to update fragment: %w", err)
-		}
-
-		newPath := strings.TrimSpace(frag.CanonicalPath)
-		if newPath != "" && oldPath != "" && newPath != oldPath {
-			e.bestEffortRewriteLensScopes(ctx, strings.TrimSpace(frag.TenantID), oldPath, newPath)
-		}
-
-		// Deterministic: merge on canonicalPath collision to avoid duplicate nodes by different IDs.
-		merged, mergeCanonicalID, mergeDuplicateID := e.bestEffortMergeCanonicalPathCollision(ctx, frag.ID, newPath)
-
-		return &EnforcementResult{
-			Success:     true,
-			Action:      "fix_legal_form",
-			AffectedIDs: []string{fragID},
-			Details: func() string {
-				base := fmt.Sprintf("Inferred legal form %q (conf=%.2f). %s", lf, res.Confidence, strings.TrimSpace(res.Reason))
-				if merged && strings.TrimSpace(mergeCanonicalID) != "" && strings.TrimSpace(mergeDuplicateID) != "" {
-					base += fmt.Sprintf(" CanonicalPath collision detected; merged %s into %s.", mergeDuplicateID, mergeCanonicalID)
-				}
-				return base
-			}(),
-		}, nil
-	}
-
-	return e.executeFixPath(ctx, EnforcementTask{
-		Type:     TaskFixPath,
-		TargetID: fragID,
-		Params: map[string]interface{}{
-			"correctPath": correctPath,
-		},
-	})
-}
-
-func isLegalFormCompatibleWithGeo(geo, legalForm string) bool {
-	geo = strings.ToLower(strings.TrimSpace(geo))
-	lf := strings.ToLower(strings.TrimSpace(legalForm))
-	if geo == "" || geo == "na" || lf == "" {
-		return true
-	}
-	switch lf {
-	case "kk":
-		return geo == "jp"
-	case "oy", "oyj":
-		return geo == "fi"
-	case "ab":
-		return geo == "se"
-	case "as", "asa":
-		return geo == "no"
-	case "pteltd":
-		return geo == "sg"
-	case "sdnbhd":
-		return geo == "my"
-	case "spzoo":
-		return geo == "pl"
-	case "ooo", "oao", "zao", "ao":
-		return geo == "ru" || geo == "kz" || geo == "ua" || geo == "by"
-	default:
-		return true
-	}
-}
-
-func fallbackLegalFormForGeo(geo string) string {
-	geo = strings.ToLower(strings.TrimSpace(geo))
-	switch geo {
-	case "cn":
-		return "ltd"
-	case "jp":
-		return "kk"
-	case "us":
-		return "inc"
-	case "gb":
-		return "ltd"
-	case "de":
-		return "gmbh"
-	case "fr":
-		return "sa"
-	case "it":
-		return "spa"
-	case "nl":
-		return "bv"
-	default:
-		return "ltd"
-	}
 }
 
 // executeFixISO2 fixes an invalid ISO2 code in org path.
@@ -1231,27 +956,58 @@ func (e *EnforcementExecutor) executeFixISO2(ctx context.Context, task Enforceme
 		}
 		r.ISO2 = strings.ToLower(strings.TrimSpace(r.ISO2))
 		if !isISO2OrComposite(r.ISO2) {
-			return fmt.Errorf("iso2 must be ISO3166-1 alpha2 or composite (got %q)", r.ISO2)
+			return fmt.Errorf("iso2 must be ISO3166-1 alpha2 or %s (got %q)", taxonomy.CompositeGeoDescriptionForPrompts(), r.ISO2)
 		}
 		return nil
 	})
+
+	// Optional context from scout job (original query, domain path) — helps LLM infer geo from user intent.
+	originalQuery := ""
+	targetCanonicalPath := ""
+	domainPath := ""
+	if task.Params != nil {
+		if s, ok := task.Params["originalQuery"].(string); ok {
+			originalQuery = strings.TrimSpace(s)
+		}
+		if s, ok := task.Params["targetCanonicalPath"].(string); ok {
+			targetCanonicalPath = strings.TrimSpace(s)
+		}
+		if s, ok := task.Params["domainPath"].(string); ok {
+			domainPath = strings.TrimSpace(s)
+		}
+	}
+
+	contextBlock := ""
+	if originalQuery != "" || targetCanonicalPath != "" || domainPath != "" {
+		contextBlock = "\nScout job context (use to infer jurisdiction when fragment lacks geo hints):\n"
+		if originalQuery != "" {
+			contextBlock += fmt.Sprintf("- originalQuery: %s\n", originalQuery)
+		}
+		if targetCanonicalPath != "" {
+			contextBlock += fmt.Sprintf("- targetCanonicalPath: %s\n", targetCanonicalPath)
+		}
+		if domainPath != "" {
+			contextBlock += fmt.Sprintf("- domainPath: %s\n", domainPath)
+		}
+		contextBlock += "E.g. query \"soft drinks South Africa\" or domain /domain/.../geo/za/... strongly suggests iso2=za.\n"
+	}
 
 	prompt := strings.TrimSpace(fmt.Sprintf(`
 You are fixing a Horizon canonical path geo token.
 
 Context:
 - Canonical path format:
-  - org: /org/{iso2}/{slug}-{legal_form}
+  - org: /org/{iso2}/{slug}
   - gov: /gov/{iso2_or_composite}/{slug}
 - The geo token "na" means "unknown jurisdiction". It is allowed, but we want to infer a better ISO token when possible.
 
 Task:
 - Infer the correct geo token for this fragment.
 - Return STRICT JSON only:
-  {"iso2": "<lowercase iso3166-1 alpha2 like 'kr' OR a composite like 'ae-sa-om'>", "confidence": 0..1, "reason": "...", "evidence": ["..."] }
+  {"iso2": "<lowercase iso3166-1 alpha2 like 'kr' OR " + taxonomy.CompositeGeoDescriptionForPrompts() + ">", "confidence": 0..1, "reason": "...", "evidence": ["..."] }
 - If you are not confident, still output a best guess but lower confidence (<0.7). It will NOT be applied automatically.
 - NEVER output "na".
-
+%s
 Fragment:
 - namespace: %s
 - currentCanonicalPath: %s
@@ -1263,7 +1019,7 @@ Fragment:
 
 Nearby edges that may hint location/jurisdiction (best-effort):
 %v
-`, namespace, oldPath, labelEN, legalName, shortName, desc, homeISO2, geoHints))
+`, contextBlock, namespace, oldPath, labelEN, legalName, shortName, desc, homeISO2, geoHints))
 
 	llmTask := &ai.AITask{
 		TaskType:     ai.TaskTypeContentAnalysis,
@@ -1576,18 +1332,6 @@ func (e *EnforcementExecutor) CreateEnforcementJobs(
 			}
 		}
 
-		// Idempotency guard: if org legal form is already populated in canonicalParts, don't enqueue fix_legal_form.
-		if task.Type == TaskFixLegalForm && strings.TrimSpace(task.TargetID) != "" && e.fragmentsRepo != nil {
-			if frag, err := e.fragmentsRepo.Get(ctx, strings.TrimSpace(task.TargetID)); err == nil && frag != nil {
-				if !strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/org/") {
-					continue
-				}
-				if frag.CanonicalParts != nil && frag.CanonicalParts.Org != nil && strings.TrimSpace(frag.CanonicalParts.Org.LegalForm) != "" {
-					continue
-				}
-			}
-		}
-
 		key := enforcementTaskKey(task)
 		if key != "" {
 			if _, ok := seenInBatch[key]; ok {
@@ -1649,10 +1393,6 @@ func enforcementTaskKey(t EnforcementTask) string {
 	case TaskFixISO2:
 		ns, _ := t.Params["namespace"].(string)
 		return base + ":" + strings.TrimSpace(ns)
-	case TaskFixLegalForm:
-		lf, _ := t.Params["legalForm"].(string)
-		mode, _ := t.Params["mode"].(string)
-		return base + ":" + strings.TrimSpace(lf) + ":" + strings.TrimSpace(mode)
 	case TaskCanonicalizeEdge:
 		nt, _ := t.Params["newType"].(string)
 		return base + ":" + strings.TrimSpace(nt)

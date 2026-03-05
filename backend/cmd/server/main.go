@@ -2292,7 +2292,9 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
-	scoutMaxInflightPerInstance := getEnvInt("SCOUT_MAX_INFLIGHT_PER_INSTANCE", 1)
+	// Default 2: domain expansion spawns cascade jobs (CCBSA, Pioneer, market, etc.); with 1,
+	// second task gets 429 "saturated" while first runs. Cloud Tasks retries, but throughput suffers.
+	scoutMaxInflightPerInstance := getEnvInt("SCOUT_MAX_INFLIGHT_PER_INSTANCE", 2)
 	if scoutMaxInflightPerInstance < 1 {
 		scoutMaxInflightPerInstance = 1
 	}

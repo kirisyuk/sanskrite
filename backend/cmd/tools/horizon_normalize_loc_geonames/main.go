@@ -59,7 +59,7 @@ var (
 	skipVertexSync = flag.Bool("skip-vertex-sync", false, "Skip Vertex AI Search sync triggers (avoid 429); still writes Firestore+GCS. Run a bulk import separately.")
 
 	// GeoNames attachment (optional backfill on existing fragments).
-	applyGeoNamesID = flag.Bool("apply-geonames-id", false, "Also attach GeoNames ID (identifiers.geonamesId + KBRef) to strict /loc/{cc}/{adm1}/{city} fragments when missing (apply mode only)")
+	applyGeoNamesID = flag.Bool("apply-geonames-id", false, "Also attach GeoNames ID (identifiers.geonamesId + KBRef) to /loc fragments with city-like depth when missing (apply mode only)")
 )
 
 // Telemetry counters
@@ -929,19 +929,26 @@ func maybeAttachGeoNamesID(ctx context.Context, geonamesClient coreontology.GeoN
 	if geonamesClient == nil || f == nil {
 		return false, ""
 	}
-	// Only attach to GEO_REGION fragments with strict /loc/{cc}/{adm1}/{city} where city != na.
+	// Only attach to GEO_REGION fragments with /loc paths where a city-like token is present.
 	cp := strings.TrimSpace(f.CanonicalPath)
 	if !strings.HasPrefix(cp, "/loc/") {
 		return false, ""
 	}
-	parts := strings.Split(strings.Trim(cp, "/"), "/")
-	if len(parts) != 4 || parts[0] != "loc" {
+	ccParsed, level1, level2, ok := taxonomy.ParseLocCanonicalPath(cp)
+	if !ok {
 		return false, ""
 	}
-	cc := strings.ToUpper(strings.TrimSpace(parts[1]))
-	adm := strings.TrimSpace(parts[2])
-	city := strings.TrimSpace(parts[3])
-	if len(cc) != 2 || strings.EqualFold(city, "na") || city == "" {
+	cc := strings.ToUpper(strings.TrimSpace(ccParsed))
+	if len(cc) != 2 {
+		return false, ""
+	}
+	adm := strings.TrimSpace(level1)
+	city := strings.TrimSpace(level2)
+	if city == "" {
+		city = strings.TrimSpace(level1)
+		adm = ""
+	}
+	if city == "" {
 		return false, ""
 	}
 

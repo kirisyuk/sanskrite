@@ -26,6 +26,7 @@ import (
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 	"github.com/igorkirisyuk/sanskrite/internal/wikidata"
 )
 
@@ -515,7 +516,7 @@ func parseTypesFilter(s string) map[hmodels.FragmentType]struct{} {
 	return out
 }
 
-// maybeAttachGeoNamesIDAndCoords attaches GeoNames ID and coordinates for /loc/{cc}/{adm1}/{city}.
+// maybeAttachGeoNamesIDAndCoords attaches GeoNames ID and coordinates for /loc paths with city-like depth.
 // Returns (attached, geonameId).
 func maybeAttachGeoNamesIDAndCoords(ctx context.Context, gn coreontology.GeoNamesClientInterface, f *hmodels.HorizonFragment) (bool, string) {
 	if gn == nil || f == nil {
@@ -525,14 +526,21 @@ func maybeAttachGeoNamesIDAndCoords(ctx context.Context, gn coreontology.GeoName
 	if !strings.HasPrefix(cp, "/loc/") {
 		return false, ""
 	}
-	parts := strings.Split(strings.Trim(cp, "/"), "/")
-	if len(parts) != 4 || parts[0] != "loc" {
+	ccParsed, level1, level2, ok := taxonomy.ParseLocCanonicalPath(cp)
+	if !ok {
 		return false, ""
 	}
-	cc := strings.ToUpper(strings.TrimSpace(parts[1]))
-	adm := strings.TrimSpace(parts[2])
-	city := strings.TrimSpace(parts[3])
-	if len(cc) != 2 || strings.EqualFold(city, "na") || city == "" {
+	cc := strings.ToUpper(strings.TrimSpace(ccParsed))
+	if len(cc) != 2 {
+		return false, ""
+	}
+	adm := strings.TrimSpace(level1)
+	city := strings.TrimSpace(level2)
+	if city == "" {
+		city = strings.TrimSpace(level1)
+		adm = ""
+	}
+	if city == "" {
 		return false, ""
 	}
 

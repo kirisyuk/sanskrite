@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,8 +17,6 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
-var reCountryAlpha2 = regexp.MustCompile(`^[a-z]{2}$`)
-
 // =============================================================================
 // PRE-CREATE VALIDATION POLICY
 // =============================================================================
@@ -32,6 +29,7 @@ type PreCreateValidator struct {
 	orgDedup         *OrgDeduplicator
 	productDedup     *ProductDeduplicator
 	personDedup      *PersonDeduplicator
+	facilityDedup    *FacilityDeduplicator
 	validationPolicy *policy.PolicyExecutor // Optional: unified validation policy
 	telemetryRepo    *repo.HorizonTelemetryRepository
 	wikidataClient   coreontology.WikidataClientInterface
@@ -51,6 +49,12 @@ func NewPreCreateValidator(geoBuilder *GeoHierarchyBuilder, orgDedup *OrgDedupli
 // WithPersonDedup sets the person deduplicator for phonetic matching.
 func (v *PreCreateValidator) WithPersonDedup(dedup *PersonDeduplicator) *PreCreateValidator {
 	v.personDedup = dedup
+	return v
+}
+
+// WithFacilityDedup sets the facility deduplicator for name/path matching.
+func (v *PreCreateValidator) WithFacilityDedup(dedup *FacilityDeduplicator) *PreCreateValidator {
+	v.facilityDedup = dedup
 	return v
 }
 
@@ -233,12 +237,12 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Policy 3: Warn about non-canonical facility paths
 	// ==========================================================================
 	// Facilities should be nested under their parent organization:
-	// Good: /fac/tesla/gigafactory-texas (or /fac/na/gigafactory-texas when owner unknown)
+	// Good: /fac/us/gigafactory-texas (or /fac/na/gigafactory-texas when geo unknown)
 	if fragment.Type == models.FragmentTypeFacility {
 		pathParts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
 		if len(pathParts) != 3 || pathParts[0] != "fac" {
 			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("non-canonical facility path %q - expected /fac/{org}/{facility}", fragment.CanonicalPath))
+				fmt.Sprintf("non-canonical facility path %q - expected /fac/{geo}/{facility}", fragment.CanonicalPath))
 		}
 	}
 
@@ -250,14 +254,14 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	if fragment.Type == models.FragmentTypeGeoRegion {
 		if strings.HasPrefix(fragment.CanonicalPath, "/region/") {
 			// NOTE: legacy /region/ had multiple shapes (including /region/na/{cc}/{admin1}/{city}).
-			// Do NOT do a naive prefix replace; normalize into strict /loc/{cc}/{admin1}/{city}.
+			// Do NOT do a naive prefix replace; normalize into canonical /loc hierarchy.
 			if norm := normalizeLegacyGeoPath(fragment.CanonicalPath); norm != "" {
 				result.Warnings = append(result.Warnings,
 					fmt.Sprintf("legacy /region/ path %q normalized to %q", fragment.CanonicalPath, norm))
 				fragment.CanonicalPath = norm
 			} else {
 				result.Warnings = append(result.Warnings,
-					fmt.Sprintf("legacy GEO_REGION canonicalPath %q cannot be normalized to /loc/{country}/{admin1}/{city} - will be fixed post-factum", fragment.CanonicalPath))
+					fmt.Sprintf("legacy GEO_REGION canonicalPath %q cannot be normalized to /loc/{country}[/{level1}[/{level2}]] - will be fixed post-factum", fragment.CanonicalPath))
 			}
 		}
 
@@ -265,7 +269,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("GEO_REGION canonicalPath %q should use /loc/ prefix - will be fixed post-factum", fragment.CanonicalPath))
 		} else {
-			// Best-effort: strictify any /loc path (e.g., /loc/id/na -> /loc/id/na/na) before validation.
+			// Best-effort: normalize any /loc path into variable-depth canonical shape.
 			if norm := normalizeGeoPathToStrict(fragment.CanonicalPath); norm != "" && norm != fragment.CanonicalPath {
 				result.Warnings = append(result.Warnings,
 					fmt.Sprintf("non-canonical GEO path %q → %q", fragment.CanonicalPath, norm))
@@ -279,52 +283,13 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 					}
 				}
 			}
-			// Enforce strict 3-position geo model: /loc/{country}/{admin1}/{city}
-			parts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
-			if len(parts) == 2 && parts[0] == "loc" {
-				// Non-canonical path like /loc/uae or /loc/saudi-arabia
-				// Try to normalize to canonical /loc/{cc}/na/na
-				// CAUTION: Avoid false positives like /loc/georgia (US state) vs /loc/ge/na/na (country)
-				countrySlug := strings.ReplaceAll(parts[1], "-", " ")
-				countrySlug = strings.ReplaceAll(countrySlug, "_", " ")
-				canonicalPath := GetCountryCanonicalPath(countrySlug)
-				if canonicalPath != "" && canonicalPath != fragment.CanonicalPath {
-					// SAFETY: Only deduplicate if fragment is "empty" or label matches a country
-					fragLabel := strings.ToLower(strings.TrimSpace(fragment.Labels["en"]))
-					fragLegal := strings.ToLower(strings.TrimSpace(fragment.Identifiers["legalName"]))
-					isEmpty := fragLabel == "" && fragLegal == ""
-					labelMatchesCountry := IsKnownCountryName(fragLabel) || IsKnownCountryName(fragLegal)
-					labelIsSlug := fragLabel == strings.ToLower(parts[1]) || fragLabel == countrySlug
-
-					if isEmpty || labelMatchesCountry || labelIsSlug {
-						result.Warnings = append(result.Warnings,
-							fmt.Sprintf("non-canonical GEO path %q → %q", fragment.CanonicalPath, canonicalPath))
-						// Normalize the fragment path in-place so creation uses the strict /loc/{cc}/na/na form.
-						fragment.CanonicalPath = canonicalPath
-						// Try to find existing fragment at canonical path and deduplicate
-						if v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil {
-							existing, err := v.geoBuilder.fragmentsRepo.GetByCanonicalPath(context.Background(), canonicalPath)
-							if err == nil && existing != nil && existing.ID != fragment.ID {
-								result.ReplacementFrag = existing
-								result.Warnings = append(result.Warnings,
-									fmt.Sprintf("found existing GEO_REGION %q (%s) - using instead", existing.CanonicalPath, existing.ID))
-							}
-						}
-					} else {
-						// Label doesn't match country — might be US state Georgia, etc.
-						result.Warnings = append(result.Warnings,
-							fmt.Sprintf("GEO_REGION %q has label %q which doesn't match known country - skipping auto-merge", fragment.CanonicalPath, fragLabel))
-					}
-				} else {
-					result.Warnings = append(result.Warnings,
-						fmt.Sprintf("GEO_REGION canonicalPath %q should be /loc/{country}/{admin1}/{city} - will be fixed post-factum", fragment.CanonicalPath))
-				}
-			} else if len(parts) != 4 || parts[0] != "loc" {
+			cc, _, _, ok := taxonomy.ParseLocCanonicalPath(fragment.CanonicalPath)
+			if !ok {
 				result.Warnings = append(result.Warnings,
-					fmt.Sprintf("GEO_REGION canonicalPath %q should be /loc/{country}/{admin1}/{city} - will be fixed post-factum", fragment.CanonicalPath))
-			} else if !reCountryAlpha2.MatchString(parts[1]) {
+					fmt.Sprintf("GEO_REGION canonicalPath %q should match /loc/{country}[/{level1}[/{level2}]] - will be fixed post-factum", fragment.CanonicalPath))
+			} else if !taxonomy.IsValidLocCountryToken(cc) {
 				result.Warnings = append(result.Warnings,
-					fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country code %q (expected ISO3166-1 alpha2 lowercase) - will be fixed post-factum", fragment.CanonicalPath, parts[1]))
+					fmt.Sprintf("GEO_REGION canonicalPath %q has invalid country/region %q - will be fixed post-factum", fragment.CanonicalPath, cc))
 			} else {
 				log.Printf("%s GEO_REGION validation passed: %s", logPrefix, fragment.CanonicalPath)
 			}
@@ -333,14 +298,17 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		// Best-effort: attach GeoNames ID to GEO_REGION fragments (fragment-only; no Entity writes).
 		// This makes geo fragments linkable externally (like Wikidata), while taxonomy still drives hierarchy.
 		if v.geonamesClient != nil && strings.HasPrefix(fragment.CanonicalPath, "/loc/") {
-			parts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
-			// Only attach for strict /loc/{cc}/{adm1}/{city} when city is present.
-			if len(parts) == 4 && parts[0] == "loc" && reCountryAlpha2.MatchString(parts[1]) && strings.TrimSpace(parts[3]) != "" && strings.ToLower(strings.TrimSpace(parts[3])) != "na" {
-				cc := strings.ToLower(strings.TrimSpace(parts[1]))
-				adm := strings.ToLower(strings.TrimSpace(parts[2]))
-				citySlug := strings.ToLower(strings.TrimSpace(parts[3]))
-				cityName := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(citySlug))
-				if cityName != "" {
+			cc, level1, level2, ok := taxonomy.ParseLocCanonicalPath(fragment.CanonicalPath)
+			if ok && taxonomy.IsISO2CountryCode(cc) {
+				adm := strings.ToLower(strings.TrimSpace(level1))
+				citySlug := strings.ToLower(strings.TrimSpace(level2))
+				if citySlug == "" {
+					citySlug = strings.ToLower(strings.TrimSpace(level1))
+					adm = ""
+				}
+				if citySlug != "" {
+					cityName := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(citySlug))
+					if cityName != "" {
 					if best, ok := pickUnambiguousCityCandidate(ctx, v.geonamesClient, cityName, cc, adm); ok && best != nil && best.GeoNameID > 0 {
 						if fragment.Identifiers == nil {
 							fragment.Identifiers = map[string]string{}
@@ -367,6 +335,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 						}
 						attachGeoCoordinatesFromGeoNames(fragment, best)
 					}
+				}
 				}
 			}
 		}
@@ -407,6 +376,33 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 			result.Warnings = append(result.Warnings, fmt.Sprintf("geocoding skipped: %v", err))
 		} else if enriched {
 			result.Warnings = append(result.Warnings, "coordinates resolved via geocoding")
+		}
+	}
+
+	// ==========================================================================
+	// Policy 4: Auto-fill facilityKind from canonical path slug when missing
+	// ==========================================================================
+	if fragment.Type == models.FragmentTypeFacility && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/fac/") {
+		if strings.TrimSpace(fragment.Identifiers["facilityKind"]) == "" {
+			kind := taxonomy.FacilityKindFromCanonicalPath(fragment.CanonicalPath)
+			if kind != taxonomy.FacilityKindUnknown && kind != taxonomy.FacilityKindOther {
+				fragment.Identifiers["facilityKind"] = string(kind)
+				result.Warnings = append(result.Warnings, fmt.Sprintf("inferred facilityKind=%s from path slug", kind))
+			}
+		}
+	}
+
+	// ==========================================================================
+	// Policy 4.5: Facility deduplication
+	// ==========================================================================
+	// Check if this facility already exists (by path, label, shortName, or normalized name in same geo).
+	if fragment.Type == models.FragmentTypeFacility && v.facilityDedup != nil {
+		existing, err := v.facilityDedup.DeduplicateFacility(ctx, fragment)
+		if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
+			result.ReplacementFrag = existing
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("found existing facility %q (%s) - using instead of creating new",
+					existing.CanonicalPath, existing.ID))
 		}
 	}
 
@@ -770,13 +766,13 @@ var CanonicalPathPolicies = map[models.FragmentType]CanonicalPathPolicy{
 	},
 	models.FragmentTypeFacility: {
 		Prefix:      "/fac/",
-		Example:     "/fac/tesla/gigafactory-texas",
+		Example:     "/fac/us/gigafactory-texas",
 		Description: "Facility paths are nested under parent organization",
 	},
 	models.FragmentTypeGeoRegion: {
 		Prefix:      "/loc/",
 		Example:     "/loc/us/tx/austin",
-		Description: "Geographic paths use /loc/{country}/{admin1}/{city} format",
+		Description: "Geographic paths use /loc/{country}[/{level1}[/{level2}]] format",
 	},
 	models.FragmentTypeProduct: {
 		Prefix:      "/product/",
@@ -809,5 +805,5 @@ func (v *PreCreateValidator) String() string {
 	if v == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("PreCreateValidator(geo=%v, orgDedup=%v, personDedup=%v)", v.geoBuilder != nil, v.orgDedup != nil, v.personDedup != nil)
+	return fmt.Sprintf("PreCreateValidator(geo=%v, orgDedup=%v, personDedup=%v, facilityDedup=%v)", v.geoBuilder != nil, v.orgDedup != nil, v.personDedup != nil, v.facilityDedup != nil)
 }

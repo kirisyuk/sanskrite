@@ -174,6 +174,9 @@ func (p *PostProcessingPolicy) CanSkipPlanning() bool {
 	if p == nil {
 		return false
 	}
+	if p.HasDomainExpansionPeer {
+		return true
+	}
 	if p.PipelineTier < 2 {
 		return false
 	}
@@ -197,22 +200,33 @@ func (p *PostProcessingPolicy) ShouldRun(step PostProcessingStep) bool {
 	}
 	switch step {
 	case StepSourcePlanning:
+		if p.HasDomainExpansionPeer {
+			return false
+		}
 		return p.PipelineTier < 2
 
 	case StepResearch:
+		if p.HasDomainExpansionPeer {
+			return false
+		}
 		return p.PipelineTier < 2 && !p.PlanModeResearchDone
 
 	case StepCritic:
-		// Temporarily disabled for supply chain refactor branch
-		if taxonomy.HasDomainMode(p.DomainModes, taxonomy.DomainModeSupplyChain) {
+		if p.HasDomainExpansionPeer {
 			return false
 		}
 		return p.PipelineTier <= 1
 
 	case StepReValidation:
+		if p.HasDomainExpansionPeer {
+			return false
+		}
 		return p.PipelineTier == 0
 
 	case StepMetrics:
+		if p.HasDomainExpansionPeer {
+			return false
+		}
 		return p.PipelineTier == 0
 
 	case StepArtifactMaterialization:

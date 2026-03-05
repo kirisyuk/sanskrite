@@ -4,7 +4,7 @@ import "testing"
 
 func TestNormalizeCanonicalPathForPersist_GeoStrict(t *testing.T) {
 	got := NormalizeCanonicalPathForPersist("/loc/ma")
-	want := "/loc/ma/na/na"
+	want := "/loc/ma"
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
@@ -12,7 +12,7 @@ func TestNormalizeCanonicalPathForPersist_GeoStrict(t *testing.T) {
 
 func TestNormalizeCanonicalPathForPersist_OrgSlugify(t *testing.T) {
 	got := NormalizeCanonicalPathForPersist("/org/CN/Changan Automobile LTD")
-	want := "/org/cn/changan-automobile-ltd"
+	want := "/org/cn/changan-automobile"
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}

@@ -3,6 +3,7 @@ package taxonomy
 import "testing"
 
 func TestCanonicalPathParts_Org(t *testing.T) {
+	// Parsing legacy path /org/us/tesla-inc strips -inc to get base slug; build outputs base only.
 	p, err := ParseCanonicalPathParts("/org/us/tesla-inc")
 	if err != nil {
 		t.Fatalf("ParseCanonicalPathParts(org) error: %v", err)
@@ -16,11 +17,8 @@ func TestCanonicalPathParts_Org(t *testing.T) {
 	if p.Org.BaseSlug != "tesla" {
 		t.Fatalf("baseSlug=%q, want %q", p.Org.BaseSlug, "tesla")
 	}
-	if p.Org.LegalForm != "inc" {
-		t.Fatalf("legalForm=%q, want %q", p.Org.LegalForm, "inc")
-	}
-	if got, ok := p.BuildCanonicalPath(); !ok || got != "/org/us/tesla-inc" {
-		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, "/org/us/tesla-inc")
+	if got, ok := p.BuildCanonicalPath(); !ok || got != "/org/us/tesla" {
+		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (/org/us/tesla,true)", got, ok)
 	}
 }
 
@@ -32,8 +30,8 @@ func TestCanonicalPathParts_OrgLegacyNormalized(t *testing.T) {
 	if p == nil || p.Namespace != "org" || p.Org == nil || !p.Org.Legacy {
 		t.Fatalf("unexpected parts: %#v", p)
 	}
-	if got, ok := p.BuildCanonicalPath(); !ok || got != "/org/na/tesla-inc" {
-		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (%q,true)", got, ok, "/org/na/tesla-inc")
+	if got, ok := p.BuildCanonicalPath(); !ok || got != "/org/na/tesla" {
+		t.Fatalf("BuildCanonicalPath()=(%q,%v), want (/org/na/tesla,true)", got, ok)
 	}
 }
 

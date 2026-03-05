@@ -169,14 +169,8 @@ func (b *SupplyChainPathBuilder) BuildUpstreamPaths(
 		return nil, fmt.Errorf("customerRef is required")
 	}
 	customerRef = strings.TrimSpace(customerRef)
-	// Normalize org→fac: SupplyLinks only have /fac/ as CustomerRef. When lens scope uses /org/, resolve to /fac/{orgSlug}-general-production.
-	if strings.HasPrefix(customerRef, "/org/") {
-		if norm := models.NormalizeOrgRefToFacilityFallback(customerRef); norm != "" {
-			customerRef = norm
-		}
-	}
-	if !strings.HasPrefix(customerRef, "/fac/") {
-		return nil, fmt.Errorf("customerRef must be a facility canonical path (use /fac/... or /org/... for auto-normalization)")
+	if !strings.HasPrefix(customerRef, "/fac/") && !strings.HasPrefix(customerRef, "/org/") {
+		return nil, fmt.Errorf("customerRef must be facility or org canonical path (/fac/... or /org/...)")
 	}
 
 	// Find all SupplyLinks where customer matches
@@ -376,18 +370,13 @@ func (b *SupplyChainPathBuilder) buildPathRecursive(
 
 // findSupplyLinksForCustomer finds all SupplyLink fragments where customer matches.
 // Implements tenant-first, global-fallback precedence.
-// Normalizes /org/ to /fac/{orgSlug}-general-production (SupplyLinks store facility refs only).
+// Implements tenant-first, global-fallback precedence.
 func (b *SupplyChainPathBuilder) findSupplyLinksForCustomer(
 	ctx context.Context,
 	customerRef string,
 	opts BuildPathOptions,
 ) ([]PathSegment, error) {
 	customerRef = strings.TrimSpace(customerRef)
-	if strings.HasPrefix(customerRef, "/org/") {
-		if norm := models.NormalizeOrgRefToFacilityFallback(customerRef); norm != "" {
-			customerRef = norm
-		}
-	}
 	// Segment-level precedence:
 	// - If tenant segments exist for this step, use them and do NOT mix with global.
 	// - Otherwise, fall back to global to avoid path breaks.

@@ -318,8 +318,8 @@ type ExtractedLocation struct {
 	Address       *string `json:"address,omitempty"` // full address for geocoding (e.g. "123 Main St, Houston, TX, USA")
 	ISO6709       *string `json:"iso6709,omitempty"`
 	CountryAlpha2 *string `json:"countryAlpha2,omitempty"` // ISO3166-1 alpha2 lowercase
-	Admin1        *string `json:"admin1,omitempty"`        // state/province code or slug lowercase; "na" if unknown
-	City          *string `json:"city,omitempty"`          // city slug lowercase; "na" if unknown
+	Admin1        *string `json:"admin1,omitempty"`        // optional state/province code or slug lowercase
+	City          *string `json:"city,omitempty"`          // optional city slug lowercase
 }
 
 // ExtractedEvent извлеченное событие
@@ -374,8 +374,8 @@ func (e *OntologyExtractor) extractEntities(
 		models.EntityTypeLocation: true, models.EntityTypeDocument: true, models.EntityTypeOther: true,
 	}
 
-	// First pass: resolve/create organizations early, so facilities can bind to a stable orgSlug.
-	orgNameToSlug := make(map[string]string) // lower-canonicalName -> orgSlug (from /org/{slug})
+	// First pass: resolve/create organizations early, so facilities can bind to a stable org path (for geo).
+	orgNameToOrgPath := make(map[string]string) // lower-canonicalName -> org canonical path (e.g. /org/{geo}/{slug})
 	for _, ext := range extractedEntities {
 		if strings.TrimSpace(ext.Value) == "" {
 			continue
@@ -479,14 +479,11 @@ func (e *OntologyExtractor) extractEntities(
 			entity.ID = entityID
 		}
 
-		// Derive orgSlug for facility binding when canonicalPath is of form /org/{slug}
+		// Store org path for facility binding (derive geo from /org/{geo}/{slug})
 		if ref, ok := entityIDs[canonicalName]; ok {
 			cp := strings.TrimSpace(ref.CanonicalPath)
-			if strings.HasPrefix(cp, "/org/") {
-				parts := strings.Split(strings.Trim(cp, "/"), "/")
-				if len(parts) >= 2 && parts[0] == "org" && strings.TrimSpace(parts[1]) != "" {
-					orgNameToSlug[strings.ToLower(canonicalName)] = parts[1]
-				}
+			if strings.HasPrefix(cp, "/org/") && cp != "" {
+				orgNameToOrgPath[strings.ToLower(canonicalName)] = cp
 			}
 		}
 	}
@@ -538,12 +535,12 @@ func (e *OntologyExtractor) extractEntities(
 		// Создаем новый Entity
 		cPath := ""
 		if entityType == models.EntityTypeFacility {
-			// Prefer /fac/{orgSlug}/{facilitySlug} when facility name starts with a resolved org name.
+			// Prefer /fac/{geo}/{facilitySlug} when facility name starts with a resolved org name (derive geo from org path).
 			lv := strings.ToLower(canonicalName)
 			bestOrgName := ""
-			bestOrgSlug := ""
-			for orgNameLower, orgSlug := range orgNameToSlug {
-				if orgSlug == "" {
+			bestGeo := ""
+			for orgNameLower, orgPath := range orgNameToOrgPath {
+				if orgPath == "" {
 					continue
 				}
 				if strings.HasPrefix(lv, orgNameLower) {
@@ -557,16 +554,16 @@ func (e *OntologyExtractor) extractEntities(
 					}
 					if len(orgNameLower) > len(bestOrgName) {
 						bestOrgName = orgNameLower
-						bestOrgSlug = orgSlug
+						bestGeo = extractGeoFromOrgPath(orgPath)
 					}
 				}
 			}
-			if bestOrgSlug != "" {
+			if bestGeo != "" {
 				rest := strings.TrimSpace(canonicalName[len(bestOrgName):])
-				cPath = taxonomy.FacilityCanonicalPath(bestOrgSlug, rest)
+				cPath = taxonomy.FacilityCanonicalPath(bestGeo, rest)
 			}
 			if cPath == "" {
-				cPath = taxonomy.FacilityCanonicalPath("", canonicalName)
+				cPath = taxonomy.FacilityCanonicalPath("na", canonicalName)
 			}
 		} else {
 			cPath = taxonomy.EntityCanonicalPath(string(entityType), canonicalName)
@@ -902,8 +899,7 @@ func (e *OntologyExtractor) extractEvents(
 				if event.Location.City != nil {
 					city = strings.TrimSpace(*event.Location.City)
 				}
-				// Canonical Horizon geo taxonomy: /loc/{country}/{admin1}/{city}
-				// Country-only locations are /loc/{country}/na/na.
+				// Canonical Horizon geo taxonomy: /loc/{country}[/{level1}[/{level2}]].
 				if strings.TrimSpace(country) != "" {
 					locPath := taxonomy.GeoCanonicalPath(country, admin1, city)
 					if locPath != "" && locPath != "/" {
@@ -1427,4 +1423,17 @@ func (e *OntologyExtractor) mapExtractedTypeToEntityType(extractedType string) m
 	}
 
 	return models.EntityTypeOther
+}
+
+// extractGeoFromOrgPath returns the geo segment from /org/{geo}/{slug} or "na" for legacy /org/{slug}.
+func extractGeoFromOrgPath(orgPath string) string {
+	orgPath = strings.TrimSpace(orgPath)
+	if orgPath == "" || !strings.HasPrefix(orgPath, "/org/") {
+		return "na"
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(orgPath, "/"), "/"), "/")
+	if len(parts) >= 3 {
+		return strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+	return "na"
 }

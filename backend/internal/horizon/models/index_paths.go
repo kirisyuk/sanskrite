@@ -15,7 +15,7 @@ const MaxIndexPaths = 80
 // - canonicalPath (as-is)
 // - /sector + sectorPath (+ ancestors)
 // - /entity + entityPath (+ ancestors)
-// - location paths from HomeLocation (as /loc/{country}/{admin1}/{cityOrNa})
+// - location paths from HomeLocation (as /loc/{country}[/{level1}[/{level2}]])
 // - /tag/{slug} for Tags
 // - /id/{key}/{slug(value)} for Identifiers
 // - extra paths (e.g., sphere paths from intent/facts)
@@ -278,14 +278,9 @@ func buildLocationIndexPaths(f *HorizonFragment) []string {
 		admin1 = "na"
 	}
 
-	// City is hard to canonicalize deterministically without a geo coder.
-	// Keep "na" to stay compatible with existing location canonical path rules.
-	city := "na"
-
-	out := []string{
-		"/loc/" + cc,
-		"/loc/" + cc + "/" + admin1,
-		"/loc/" + cc + "/" + admin1 + "/" + city,
+	out := []string{"/loc/" + cc}
+	if admin1 != "na" {
+		out = append(out, "/loc/"+cc+"/"+admin1)
 	}
 	return out
 }
@@ -322,4 +317,3 @@ func minInt(a, b int) int {
 	}
 	return b
 }
-

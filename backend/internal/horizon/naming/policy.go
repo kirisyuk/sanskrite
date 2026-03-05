@@ -403,12 +403,9 @@ func PromptEntityNameNormalizationRules() string {
   - fragment.identifiers.legalName: official name WITHOUT country suffix and WITHOUT legal form (LLC, Inc, Ltd, GmbH, AG, etc.)
   - fragment.identifiers.shortName: base/trade name without country and without legal form
 - Do NOT include country in organization names (e.g., "Core42 UAE" → "Core42"); country is already in canonical path /org/{geo}/...
-- Legal form (LLC, Inc, Ltd, GmbH, etc.) belongs ONLY in canonicalPath as -{legal_form} suffix, NOT in legalName/shortName/labelEn.
+- Do NOT include legal form (LLC, Inc, Ltd, GmbH, etc.) in legalName, shortName, labelEn, or canonicalPath slug.
 - For relations, ALWAYS provide targetLegalName and targetShortName in addition to targetName.
-- IMPORTANT (legal form placement):
-  - Do NOT move legal form tokens to the beginning (BAD: "JSC Tochka Bank").
-  - Keep official ordering from sources/registries.
-  - legal_form belongs as a suffix in canonical org paths and in canonicalParts.Org.LegalForm.
+- IMPORTANT: Keep official ordering from sources/registries. Do NOT move legal form tokens to the beginning (BAD: "JSC Tochka Bank").
 - IMPORTANT (official vs transliteration):
   - Prefer the OFFICIAL legal name as published by company/registry/primary source.
   - If official legal name is non-Latin and no established official English name exists:

@@ -119,7 +119,7 @@ DIRECTION ROLE CONTRACT (mandatory when applicable):
 - If direction is unclear, omit the relation instead of guessing.
 
 ZONE GEO CONTRACT:
-- In /zone/{geo}/{condition_type}/{slug}, geo must be ISO2, composite (tr-sy), or an allowed regional token.
+- In /zone/{geo}/{condition_type}/{slug}, geo: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `
 - Sea-area zones are valid and must use geo=sea (example: /zone/sea/political_tension/spratly-islands).
 - Do not invent natural-feature geo tokens like ocean/gulf/strait for {geo}; keep specific place naming in slug.
 `
@@ -152,13 +152,12 @@ func strategyMetricValueFormatBlock() string {
 `
 }
 
-const supplyChainOperationalModelBlock = `CRITICAL — Supply chain operational model:
-1. Operational links (supplies, produces) connect FACILITIES, not organizations.
-2. Organizations own/operate facilities. "ASML produces lithography" means: a specific ASML facility produces it. Use /fac/ paths.
-3. When facility is unknown: use /fac/{orgSlug}-general-production with title "General production".
-4. Do NOT create org→org SUPPLIES_TO, PRODUCES, or DEPENDS_ON. Only fac→fac or fac→product.
-5. Product = catalog entity. One product type, one node. Do not duplicate products for transport steps (ports, warehouses). Use transportVia array on the supplies edge. A product must NOT appear more than once in a single supply chain path — no pseudo-cycles.
-6. DEPENDS_ON, INFLUENCES, CONSUMES are NOT used. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.`
+const supplyChainOperationalModelBlock = `CRITICAL — Supply chain operational model (org→fac→product→fac→org):
+1. Full chain: ORGANIZATION → its FACILITIES → PRODUCTS they produce → receiving FACILITIES → their ORGANIZATIONS.
+2. Chain nodes use their real types: /org/ for organizations, /fac/ for facilities, /product/ for products.
+3. When a specific facility is unknown, use /fac/{geo}/{orgSlug}-general-production.
+4. Product = catalog entity. One product type, one node. Do not duplicate products for transport steps. Use transportVia array on the supplies edge. A product must NOT appear more than once in a single supply chain path — no pseudo-cycles.
+5. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.`
 
 const supplyChainProductGranularityBlock = `PRODUCT GRANULARITY (what counts as a product node):
 - Tech/consumer products: use MODEL LINE / product family level. NOT specific SKU or version.
@@ -168,10 +167,10 @@ const supplyChainProductGranularityBlock = `PRODUCT GRANULARITY (what counts as 
 - When in doubt: prefer product family over specific SKU; prefer concrete commodity over vague category.`
 
 const supplyChainSpecialScenariosBlock = `SPECIAL SCENARIOS:
-- Contract manufacturing: org owns IP; facility (contract manufacturer) produces. Link: fac_produces_product; facility may be /fac/{contractor}-general-production.
+- Contract manufacturing: org owns IP; facility (contract manufacturer) produces. Link: fac_produces_product; facility may be /fac/{geo}/{contractor}-general-production.
 - Toll manufacturing: raw from fac A, processing at fac B, result to A or C. Segments: fac_A→product→fac_B→product→fac_C.
 - Distributors/resellers: fac with type distribution/sales; supplies without produces.
-- Software vendors: fac = /fac/{vendor}-general-production, product = software product line (e.g. Claude Code), not specific release.
+- Software vendors: fac = /fac/{geo}/{vendor}-general-production, product = software product line (e.g. Claude Code), not specific release.
 - Co-product/by-product: one process (fac)→multiple product. Multiple PRODUCES edges from one fac.`
 
 // holisticOutputSchemaBlock returns the full JSON schema for holistic/refine prompts (fragment partial merge + relations).
@@ -205,8 +204,9 @@ func holisticOutputSchemaBlock() string {
 }
 
 const supplyChainMandatoryBlock = `MANDATORY — SUPPLY CHAIN RULES (NO EXCEPTIONS):
-- Actor endpoints for supplies/produces/consumes: ONLY /fac/... or /deposit/... (extraction). NEVER /org/.
-- Allowed edge types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM. NO CONSUMES (SUPPLIES covers flow), NO DEPENDS_ON, NO INFLUENCES, NO RELATED_TO. OWNS/CONTROLS — separate layer (org→fac, org→org→fac), NOT in supply links.
+- Chain model: org → fac → product → fac → org. Organizations at the ends, facilities in the middle, products between facilities.
+- Nodes: /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits.
+- Edge types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.
 - Product: one per type in path. No duplicates. No "Freight" or "delivery" as product unless that IS the facility's service.
 - If you cannot satisfy these rules, omit the relation. Do NOT output invalid links.`
 
@@ -219,28 +219,31 @@ func strategySupplyChainsJSONContractBlock() string {
   - "reason": REQUIRED short evidence string
   - "transportVia": OPTIONAL array of facility canonical paths (/fac/...)
   - "segmentMetrics": OPTIONAL array of { fromNodeIndex, toNodeIndex, productIndex, volume: { value, unit, confidence }, share, period, confidence }
-  - "alternatives": OPTIONAL array of { customerNodeIndex, productNodeIndex, suppliers: [{ supplierRef: "/fac/...", technicalFit, regulatoryFit, confidence }] }. supplierRef MUST be /fac/ path.
+  - (no "alternatives" field — model is org→fac→product→fac→org trees, not alternative suppliers)
 - Node object schema (each nodes[i]):
   - "canonicalPath": REQUIRED string
   - "name": REQUIRED string
-  - "type": REQUIRED enum: FACILITY|PRODUCT|DEPOSIT (actors) or ORGANIZATION|PROGRAM|MARKET|GEO_REGION|COMMUNITY for context only; supply flow endpoints MUST be FACILITY or DEPOSIT)
-  - "facilityType": OPTIONAL (extraction|refining|processing|manufacturing|distribution|storage|logistics)
+  - "type": REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|DEPOSIT
+  - "facilityType": OPTIONAL supply chain role: ` + taxonomy.FacilityRolesForPrompts() + `
+  - "facilityKind": OPTIONAL physical type: ` + taxonomy.FacilityKindsForPrompts() + ` (seaport, factory, cable, pipeline, mine, etc.)
   - "position": OPTIONAL (upstream|midstream|downstream)
   - "role": OPTIONAL string
-- Actor nodes MUST use /fac/ or /deposit/ paths. Use /fac/{orgSlug}-general-production when facility unknown.
+- Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. When facility unknown: /fac/{geo}/{orgSlug}-general-production.
 - INVALID shape example: "nodes": "A -> B -> C"
-- VALID shape example:
+- VALID shape example (org→fac→product→fac→org):
 {
   "supplyChains": [{
     "nodes": [
-      { "canonicalPath": "/fac/albemarle/silver-peak", "name": "Silver Peak Lithium", "type": "FACILITY", "facilityType": "extraction", "position": "upstream" },
+      { "canonicalPath": "/org/us/albemarle-corp", "name": "Albemarle Corporation", "type": "ORGANIZATION" },
+      { "canonicalPath": "/fac/us/silver-peak", "name": "Silver Peak Lithium", "type": "FACILITY", "facilityType": "extraction", "facilityKind": "mine", "position": "upstream" },
       { "canonicalPath": "/product/raw/mineral/refining/lithium-carbonate", "name": "Lithium carbonate", "type": "PRODUCT" },
-      { "canonicalPath": "/fac/catl/ningde", "name": "CATL Ningde", "type": "FACILITY", "facilityType": "manufacturing", "position": "downstream" }
+      { "canonicalPath": "/fac/cn/catl-ningde", "name": "CATL Ningde", "type": "FACILITY", "facilityType": "manufacturing", "facilityKind": "factory", "position": "downstream" },
+      { "canonicalPath": "/org/cn/catl", "name": "CATL", "type": "ORGANIZATION" }
     ],
     "confidence": 0.85,
     "reason": "Industry reports and filings.",
     "transportVia": ["/fac/us/port-long-beach"],
-    "segmentMetrics": [{ "fromNodeIndex": 0, "toNodeIndex": 2, "productIndex": 1, "volume": { "value": 10, "unit": "kt_per_year", "confidence": 0.7 }, "period": "2023" }]
+    "segmentMetrics": [{ "fromNodeIndex": 1, "toNodeIndex": 3, "productIndex": 2, "volume": { "value": 10, "unit": "kt_per_year", "confidence": 0.7 }, "period": "2023" }]
   }]
 }`
 }
@@ -261,6 +264,8 @@ func (s *SupplyChainResearchStrategy) Enrich(ctx context.Context, input Research
 	if err != nil || out == nil {
 		return nil, err
 	}
+	out.Relations, _ = FilterDomainRelations(ctx, s.DomainMode(), out.Relations)
+	out.SupplyChains, _ = FilterDomainChains(ctx, s.DomainMode(), out.SupplyChains)
 	return out, nil
 }
 
@@ -280,6 +285,8 @@ func (s *GovernanceResearchStrategy) Enrich(ctx context.Context, input ResearchS
 	if err != nil || out == nil {
 		return nil, err
 	}
+	out.Relations, _ = FilterDomainRelations(ctx, s.DomainMode(), out.Relations)
+	out.SupplyChains, _ = FilterDomainChains(ctx, s.DomainMode(), out.SupplyChains)
 	return out, nil
 }
 
@@ -299,6 +306,8 @@ func (s *AssuranceResearchStrategy) Enrich(ctx context.Context, input ResearchSt
 	if err != nil || out == nil {
 		return nil, err
 	}
+	out.Relations, _ = FilterDomainRelations(ctx, s.DomainMode(), out.Relations)
+	out.SupplyChains, _ = FilterDomainChains(ctx, s.DomainMode(), out.SupplyChains)
 	return out, nil
 }
 
@@ -318,6 +327,8 @@ func (s *MarketResearchStrategy) Enrich(ctx context.Context, input ResearchStrat
 	if err != nil || out == nil {
 		return nil, err
 	}
+	out.Relations, _ = FilterDomainRelations(ctx, s.DomainMode(), out.Relations)
+	out.SupplyChains, _ = FilterDomainChains(ctx, s.DomainMode(), out.SupplyChains)
 	return out, nil
 }
 
@@ -337,6 +348,8 @@ func (s *StrategicResearchStrategy) Enrich(ctx context.Context, input ResearchSt
 	if err != nil || out == nil {
 		return nil, err
 	}
+	out.Relations, _ = FilterDomainRelations(ctx, s.DomainMode(), out.Relations)
+	out.SupplyChains, _ = FilterDomainChains(ctx, s.DomainMode(), out.SupplyChains)
 	return out, nil
 }
 
@@ -356,6 +369,8 @@ func (s *PolicyImpactResearchStrategy) Enrich(ctx context.Context, input Researc
 	if err != nil || out == nil {
 		return nil, err
 	}
+	out.Relations, _ = FilterDomainRelations(ctx, s.DomainMode(), out.Relations)
+	out.SupplyChains, _ = FilterDomainChains(ctx, s.DomainMode(), out.SupplyChains)
 	return out, nil
 }
 
@@ -375,6 +390,8 @@ func (s *EcosystemResearchStrategy) Enrich(ctx context.Context, input ResearchSt
 	if err != nil || out == nil {
 		return nil, err
 	}
+	out.Relations, _ = FilterDomainRelations(ctx, s.DomainMode(), out.Relations)
+	out.SupplyChains, _ = FilterDomainChains(ctx, s.DomainMode(), out.SupplyChains)
 	return out, nil
 }
 
@@ -394,6 +411,8 @@ func (s *GeneralResearchStrategy) Enrich(ctx context.Context, input ResearchStra
 	if err != nil || out == nil {
 		return nil, err
 	}
+	out.Relations, _ = FilterDomainRelations(ctx, s.DomainMode(), out.Relations)
+	out.SupplyChains, _ = FilterDomainChains(ctx, s.DomainMode(), out.SupplyChains)
 	return out, nil
 }
 
@@ -922,6 +941,12 @@ func sanitizeSupplyChainNode(raw interface{}) map[string]interface{} {
 		if s := firstStringValue(v, "role"); s != "" {
 			node["role"] = s
 		}
+		if s := firstStringValue(v, "facilityType", "facility_type"); s != "" {
+			node["facilityType"] = s
+		}
+		if s := firstStringValue(v, "facilityKind", "facility_kind"); s != "" {
+			node["facilityKind"] = s
+		}
 		return node
 	case string:
 		return sanitizeSupplyChainNodeString(v)
@@ -1144,7 +1169,7 @@ func inferCanonicalPathFromNameAndType(name, nodeType string) string {
 }
 
 // inferCanonicalPathForSupplyChainActor is used when repairing supply chain nodes.
-// For ORGANIZATION: returns /fac/{slug}-general-production (never /org/) per fractal model.
+// For ORGANIZATION: returns /org/discovered/{slug} (org stays as org in supply chain).
 // For other types: delegates to inferCanonicalPathFromNameAndType.
 func inferCanonicalPathForSupplyChainActor(name, nodeType string) string {
 	slug := slugifyNodeName(name)
@@ -1153,7 +1178,7 @@ func inferCanonicalPathForSupplyChainActor(name, nodeType string) string {
 	}
 	nt := strings.ToUpper(strings.TrimSpace(nodeType))
 	if nt == "ORGANIZATION" || nt == "ORG" {
-		return taxonomy.FacilityGeneralProductionPath(slug)
+		return "/org/discovered/" + slug
 	}
 	return inferCanonicalPathFromNameAndType(name, nodeType)
 }
@@ -1424,7 +1449,7 @@ func generalResearchCanonicalSupplementBlock() string {
 - Markets: prefer /market/{geo}/{domain}/{vertical}; for HAS_MARKET_SEGMENT child path = parent path + one segment
 - Communities: /community/{geo}/{type}/{slug}; use HAS_SUBGROUP for parent->narrower subgroup
 - Programs: prefer /program/{jurisdiction}/{slug} when jurisdiction is known
-- AFFECTED_ZONE: /zone/{geo}/{condition_type}/{slug}. geo: ISO2 or composite (tr-sy). condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone. slug: descriptive place/region name (northern-syria, donbas, gaza-strip, northern-rakhine). NEVER use "na" as slug — use region name or condition-specific name (e.g. myanmar-crisis-area).
+- AFFECTED_ZONE: /zone/{geo}/{condition_type}/{slug}. geo: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `. condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone. slug: descriptive place/region name (northern-syria, donbas, gaza-strip, northern-rakhine). NEVER use "na" as slug — use region name or condition-specific name (e.g. myanmar-crisis-area).
 - NEVER use "/discovered/*" (not allowed)
 - canonicalPath MUST match expected prefix for targetType; if unsure, still output your best stable canonicalPath`
 }
@@ -1628,11 +1653,11 @@ func (a *ResearchAgent) buildSupplyChainEnrichmentPrompt(input ResearchStrategyI
 	questions := strings.Join(input.MissingInfo, "\n- ")
 	if questions == "" {
 		if frag != nil && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/org/") {
-			questions = "Find organizations under this organization (subsidiaries, controlled, partner companies). If org has own productions — return their facilities. Format: JSON."
+			questions = "Find ALL child organizations (subsidiaries, controlled, partners) AND ALL own facilities. One org → many child orgs + many facs. Format: JSON."
 		} else if frag != nil && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/fac/") {
-			questions = "Find products/services that THIS facility creates directly. Do NOT list products of related or parent companies. Format: JSON."
+			questions = "Find ALL products/services that THIS facility creates directly. One fac → many products. Do NOT list products of related or parent companies. Format: JSON."
 		} else {
-			questions = "Build org→fac→product→fac→org tree: (1) From org: child orgs + facilities. (2) From fac: products THIS fac produces. (3) From product: org-recipients. Format: JSON."
+			questions = "Build org→fac→product→fac→org trees (1-to-many at each level): (1) From org: ALL child orgs + ALL facilities. (2) From fac: ALL products THIS fac produces. (3) From product: ALL org-recipients. Format: JSON."
 		}
 	}
 	geoContext := geoAndSectorContext(frag)
@@ -1664,11 +1689,11 @@ CANONICAL PATH RULES (targetCanonicalPath MUST follow; supplyChains nodes too):
 %s
 %s
 
-WHAT TO FIND (org→fac→product→fac→org trees):
-1. From ORG: Organizations under it (subsidiaries, controlled, partners). If org has own productions — their facilities. Output /org/ and /fac/ paths. Format: JSON.
-2. From FAC: Products/services THIS facility creates directly. NOT products of related or parent companies. Output /product/ paths. Format: JSON.
-3. From PRODUCT: Org-recipients (orgs that receive this product via their facilities). Output /org/ paths. Format: JSON.
-4. Chains: fac→product→fac. Nodes alternate actor→product→actor. Use /fac/ for all actors. transportVia optional.
+WHAT TO FIND (org→fac→product→fac→org trees, 1-to-many at each level):
+1. From ORG: ALL child organizations (subsidiaries, controlled, partners) AND all its own facilities. One org → many orgs + many facs. Output /org/ and /fac/ paths.
+2. From FAC: ALL products/services THIS facility creates directly. One fac → many products. NOT products of related or parent companies. Output /product/ paths.
+3. From PRODUCT: ALL org-recipients (orgs that receive this product via their facilities). One product → many recipients. Output /org/ paths.
+4. Chains: one chain per leaf path. fac→product→fac. Nodes alternate actor→product→actor. Use /fac/ for all actors. transportVia optional.
 5. Extractive: EXTRACTS_FROM (FACILITY→DEPOSIT). If CURRENT FRAGMENT is DEPOSIT: incoming edges with sourceCanonicalPath.
 
 INTEGRATION_TYPE qualifier (for SUPPLIES_TO): When the relationship nature is clear, add qualifiers.integration_type:
@@ -1685,8 +1710,8 @@ QUESTIONS TO ANSWER (from Critic; prioritize these):
 Return a JSON object:
 {
   "fragment": { updated fields if found: homeLocation, state (e.g. /metric/reserves_volume, /metric/production_annual for extractive) },
-  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?", "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length", "transport_via"?: ["/fac/port/...", "/fac/terminal/..."], "source_role"?: "supplier|dependent", "target_role"?: "customer|dependency" } } ],
-  "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"? } ], "confidence", "reason", "transportVia"?: ["/fac/port/...", "/fac/terminal/..."] } ]
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?", "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length", "transport_via"?: ["/fac/us/port-long-beach", "/fac/ae/jebel-ali-port"], "source_role"?: "supplier|dependent", "target_role"?: "customer|dependency" } } ],
+  "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"? } ], "confidence", "reason", "transportVia"?: ["/fac/us/port-long-beach", "/fac/ae/jebel-ali-port"] } ]
 }
 Nodes MUST alternate actor→product. Include FACILITY where transformation happens (product→facility→product).
 For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transportVia in chains = facilities product passes through.
@@ -1697,7 +1722,7 @@ For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transp
 
 %s
 
-Return ONLY valid JSON. No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taxonomy.SupplyChainOperationalEdgeTypesString(), GovEntityRelationRulesBlock(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), chainBlock, geoContext, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
+Return ONLY valid JSON. No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taxonomy.SupplyChainEdgeTypesString(), GovEntityRelationRulesBlock(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), chainBlock, geoContext, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
 }
 
 // EnrichSupplyChainFull runs anchor-centric full supply chain query (Plan mode).
@@ -1712,7 +1737,8 @@ func (a *ResearchAgent) EnrichSupplyChainFull(ctx context.Context, query SupplyC
 	if err != nil || out == nil {
 		return nil, err
 	}
-	return out.SupplyChains, nil
+	filteredChains, _ := FilterDomainChains(ctx, taxonomy.DomainModeSupplyChain, out.SupplyChains)
+	return filteredChains, nil
 }
 
 // buildSupplyChainFullQueryPrompt builds anchor-centric prompt. Model: trees from org → fac → product → fac → org (recursion).
@@ -1743,12 +1769,15 @@ func (a *ResearchAgent) buildSupplyChainFullQueryPrompt(query SupplyChainQuery) 
 		filters += ", geoFilter=[" + geoFilter + "]"
 	}
 
-	taskBlock := `TASK: Build supply chain trees. Model: org → fac → product → fac → org (repeat from recipient orgs). Depth: ` + fmt.Sprintf("%d", depth) + ` hops. ` + anchorDesc + filters + `
+	taskBlock := `TASK: Build supply chain trees (1-to-many at each level). Depth: ` + fmt.Sprintf("%d", depth) + ` hops. ` + anchorDesc + filters + `
 
-Step 1 — From each org anchor: Find organizations under it (subsidiaries, controlled, partner companies). If org has own productions — return their facilities. Format: JSON.
-Step 2 — From each fac: Find products/services that THIS facility creates directly. Do NOT list products of related or parent companies. Format: JSON.
-Step 3 — From each product: Find org-recipients (orgs that receive/consume this product via their facilities).
-Step 4 — Recurse from recipient orgs (back to Step 1) until depth reached.`
+TREE STRUCTURE (each step fans out 1→many):
+Step 1 — ORG → [child orgs, facilities]: For each org anchor, find ALL organizations under it (subsidiaries, controlled, partners) AND its own production facilities. One org may have many child orgs and many facilities.
+Step 2 — FAC → [products]: For each facility, find ALL products/services THIS facility produces directly. One facility may produce many products. Do NOT include products of related or parent companies.
+Step 3 — PRODUCT → [recipient facs → orgs]: For each product, find ALL facilities that receive/consume it, and their parent organizations. One product may go to many recipients.
+Step 4 — Recurse: From each recipient org (back to Step 1) until depth reached.
+
+OUTPUT ONE CHAIN PER LEAF PATH. If org A has fac F1 and fac F2, and F1 produces P1 and P2 — output separate chains: A→F1→P1→..., A→F1→P2→..., A→F2→... etc.`
 
 	return fmt.Sprintf(`You are a supply chain research agent.
 
@@ -1775,253 +1804,18 @@ CANONICAL PATH RULES:
 %s
 
 OUTPUT: JSON with "supplyChains" array. Each chain:
-- nodes: actor→product→actor (fac/deposit → product → fac). Actors: /fac/ or /deposit/ only.
+- nodes: org→fac→product→fac→org chain. Actors: /org/, /fac/, or /deposit/.
 - segmentMetrics: volume, share, period per segment when known.
 - transportVia: facility paths product passes through (optional).
 - confidence, reason.
 
 Return ONLY valid JSON: { "supplyChains": [ { "nodes": [...], "segmentMetrics": [...], "confidence", "reason" } ] }
-No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taskBlock, taxonomy.SupplyChainOperationalEdgeTypesString(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategySupplyChainsJSONContractBlock())
+No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taskBlock, taxonomy.SupplyChainEdgeTypesString(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategySupplyChainsJSONContractBlock())
 }
 
 // ---------------------------------------------------------------------------
-// Supply chain refinement (patch-based)
+// Helper functions
 // ---------------------------------------------------------------------------
-
-// RefineSupplyChain sends existing chains + gap directives to LLM and returns patches.
-// existingEntities is the list of already-known canonical paths (from session graph)
-// so the LLM reuses them instead of inventing new paths for the same entities.
-func (a *ResearchAgent) RefineSupplyChain(
-	ctx context.Context,
-	chains []SupplyChain,
-	directives []RefineDirective,
-	fragment *models.HorizonFragment,
-	existingEntities []string,
-) ([]SupplyChainPatch, error) {
-	if a == nil || a.executor == nil || len(directives) == 0 {
-		return nil, nil
-	}
-	prompt := a.buildSupplyChainRefinePrompt(chains, directives, fragment, existingEntities)
-	verifier := ai.NewSimpleJSONVerifier()
-	task := &ai.AITask{
-		TaskType:     ai.TaskTypeKnowledgeSynthesis,
-		InputContent: prompt,
-		AIRequirements: ai.AIRequirements{
-			TextGenerationCapability:        true,
-			SearchGroundingCapability:       true,
-			InternalDataGroundingCapability: true,
-			MinCapabilityScore:              7,
-			MinContextWindow:                16000,
-			MaxOutputSize:                   16000,
-		},
-		Verifier: verifier,
-		UseCase:  "horizon.scout.supply_chain_refine",
-	}
-	result, err := a.executor.ExecuteStructuredTask(ctx, task)
-	if err != nil {
-		return nil, fmt.Errorf("supply chain refine: %w", err)
-	}
-	jsonData, err := json.Marshal(result)
-	if err != nil {
-		return nil, fmt.Errorf("marshal refine result: %w", err)
-	}
-	var parsed struct {
-		Patches []SupplyChainPatch `json:"patches"`
-	}
-	if err := json.Unmarshal(jsonData, &parsed); err != nil {
-		sanitized, sanitizeErr := sanitizeRefinePatchesRaw(jsonData)
-		if sanitizeErr != nil {
-			return nil, fmt.Errorf("unmarshal refine patches: %w", err)
-		}
-		if err2 := json.Unmarshal(sanitized, &parsed); err2 != nil {
-			return nil, fmt.Errorf("unmarshal refine patches after sanitize: %w", err2)
-		}
-	}
-	return sanitizeRefinePatches(parsed.Patches), nil
-}
-
-// sanitizeRefinePatchesRaw repairs type drifts in raw refine-patch JSON
-// (e.g. regulatoryFit as string instead of float64) so json.Unmarshal succeeds.
-func sanitizeRefinePatchesRaw(data []byte) ([]byte, error) {
-	var root map[string]interface{}
-	if err := json.Unmarshal(data, &root); err != nil {
-		return nil, err
-	}
-	patchesRaw := toInterfaceSlice(root["patches"])
-	if patchesRaw == nil {
-		return json.Marshal(root)
-	}
-	for _, pRaw := range patchesRaw {
-		pMap, ok := pRaw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if nodes := sanitizeSupplyChainNodesField(pMap["nodes"]); len(nodes) > 0 {
-			pMap["nodes"] = nodes
-		}
-		coerceFloatField(pMap, "confidence", 0.5)
-		if alts := sanitizeSupplyChainAlternativesField(pMap["alternatives"]); len(alts) > 0 {
-			pMap["alternatives"] = alts
-		} else {
-			delete(pMap, "alternatives")
-		}
-		if metrics := sanitizeSupplyChainSegmentMetricsField(pMap["segmentMetrics"]); len(metrics) > 0 {
-			pMap["segmentMetrics"] = metrics
-		} else {
-			delete(pMap, "segmentMetrics")
-		}
-	}
-	root["patches"] = patchesRaw
-	return json.Marshal(root)
-}
-
-// sanitizeRefinePatches repairs patch nodes: generates canonical paths from
-// name+type when missing, drops truly irrecoverable nodes, and skips
-// patches that become too short after cleanup.
-func sanitizeRefinePatches(patches []SupplyChainPatch) []SupplyChainPatch {
-	out := make([]SupplyChainPatch, 0, len(patches))
-	for _, p := range patches {
-		clean := make([]SupplyChainNode, 0, len(p.Nodes))
-		for _, n := range p.Nodes {
-			if strings.TrimSpace(n.Type) == "" {
-				n.Type = "ORGANIZATION"
-			}
-			if strings.TrimSpace(n.CanonicalPath) == "" {
-				name := strings.TrimSpace(n.Name)
-				if name == "" {
-					continue
-				}
-				n.CanonicalPath = inferCanonicalPathForSupplyChainActor(name, normalizeSupplyChainNodeType(n.Type))
-			}
-			if strings.TrimSpace(n.CanonicalPath) == "" {
-				continue
-			}
-			clean = append(clean, n)
-		}
-		p.Nodes = clean
-
-		switch p.PatchType {
-		case "splice":
-			if len(p.Nodes) < 3 {
-				continue
-			}
-		case "extend_upstream", "extend_downstream":
-			if len(p.Nodes) < 2 {
-				continue
-			}
-		case "alternatives":
-			if len(p.Alternatives) == 0 {
-				continue
-			}
-		}
-		out = append(out, p)
-	}
-	return out
-}
-
-func (a *ResearchAgent) buildSupplyChainRefinePrompt(
-	chains []SupplyChain,
-	directives []RefineDirective,
-	fragment *models.HorizonFragment,
-	existingEntities []string,
-) string {
-	chainsJSON, _ := json.MarshalIndent(chains, "", "  ")
-	directivesJSON, _ := json.MarshalIndent(directives, "", "  ")
-
-	entityContext := ""
-	if fragment != nil {
-		entityContext = fmt.Sprintf("Entity: %s (type: %s, path: %s)\n",
-			researchFragmentLabel(fragment), string(fragment.Type), fragment.CanonicalPath)
-	}
-
-	existingEntitiesBlock := buildResearchExistingEntitiesBlock(existingEntities)
-
-	return fmt.Sprintf(`You are a supply chain research agent. You are given EXISTING supply chains and a list of GAP DIRECTIVES describing specific white spots to fill.
-
-%s
-
-%s
-
-%s
-
-%s
-
-For each directive, return a PATCH — a mini supply chain that fills the gap.
-
-RULES:
-- Use ONLY these relation types (operational supply chain): %s.
-- Entity types: %s.
-- Canonical path rules: %s
-- Nodes MUST alternate actor→product→actor→product.
-- For "splice" patches: first AND last node MUST be anchor nodes that ALREADY EXIST in the chain (copy their exact canonicalPath). Inner nodes are NEW.
-- For "extend_upstream" patches: LAST node is the existing anchor (copy its exact canonicalPath). Earlier nodes are NEW.
-- For "extend_downstream" patches: FIRST node is the existing anchor (copy its exact canonicalPath). Later nodes are NEW.
-- For "alternatives" patches: return alternatives array only (no new nodes needed).
-- Include segmentMetrics (volume, share, period) for new segments when data is available.
-- Do NOT re-create or modify existing nodes. Only add NEW information.
-- Each directive has a "suggestedPatchType" field — use it as the patchType unless you have a strong reason to choose differently.
-- CRITICAL: anchor nodes in patches MUST use the EXACT canonicalPath from the existing chains. Copy the path character-for-character.
-- For NEW nodes: if the entity matches one from the EXISTING ENTITIES list below, reuse its canonical path exactly. Do NOT invent a new path for an entity that already exists.
-
-%s
-%s
-%s
-EXISTING SUPPLY CHAINS (read-only context):
-%s
-
-GAP DIRECTIVES (fill these):
-%s
-
-Return JSON:
-{
-  "patches": [
-    {
-      "directiveIndex": 0,
-      "patchType": "splice" | "extend_upstream" | "extend_downstream" | "alternatives",
-      "nodes": [
-        {"canonicalPath": "/fac/...", "name": "...", "type": "FACILITY", "role": "supplier"},
-        {"canonicalPath": "/product/...", "name": "...", "type": "PRODUCT"},
-        {"canonicalPath": "/fac/...", "name": "...", "type": "FACILITY", "role": "customer"}
-      ],
-      "segmentMetrics": [
-        {"fromNodeIndex": 0, "toNodeIndex": 2, "productIndex": 1, "volume": {"value": 1000, "unit": "metric_tons_per_year", "confidence": 0.5}, "period": "2023", "confidence": 0.6}
-      ],
-      "alternatives": [
-        {"customerNodeIndex": 2, "productNodeIndex": 1, "suppliers": [{"supplierRef": "/fac/...", "technicalFit": 0.8, "regulatoryFit": 0.9, "confidence": 0.7}]}
-      ],
-      "confidence": 0.7,
-      "reason": "why this patch fills the gap"
-    }
-  ]
-}
-
-%s
-
-Return ONLY valid JSON. No markdown.`,
-		supplyChainMandatoryBlock,
-		supplyChainOperationalModelBlock,
-		supplyChainSpecialScenariosBlock,
-		supplyChainProductGranularityBlock,
-		taxonomy.SupplyChainOperationalEdgeTypesString(),
-		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain),
-		taxonomy.ExtendedCanonicalPathRulesPrompt(),
-		entityContext,
-		existingEntitiesBlock,
-		researchPreferExistingEntitiesBlock(),
-		string(chainsJSON),
-		string(directivesJSON),
-		strategySupplyChainsJSONContractBlock(),
-	)
-}
-
-func researchFragmentLabel(f *models.HorizonFragment) string {
-	if f.Labels != nil {
-		if en, ok := f.Labels["en"]; ok && strings.TrimSpace(en) != "" {
-			return strings.TrimSpace(en)
-		}
-	}
-	return strings.TrimSpace(f.CanonicalPath)
-}
 
 // buildGovernanceEnrichmentPrompt builds a prompt for ownership, board, key persons, gov hierarchy (canonical types).
 func (a *ResearchAgent) buildGovernanceEnrichmentPrompt(input ResearchStrategyInput) string {
@@ -2422,7 +2216,8 @@ func (a *ResearchAgent) EnrichRegulatoryImpactFull(ctx context.Context, query Re
 	if err != nil || out == nil {
 		return nil, err
 	}
-	return out.Relations, nil
+	filteredRelations, _ := FilterDomainRelations(ctx, taxonomy.DomainModePolicyImpact, out.Relations)
+	return filteredRelations, nil
 }
 
 func (a *ResearchAgent) buildRegulatoryImpactFullPrompt(query RegulatoryImpactQuery) string {
@@ -2507,7 +2302,8 @@ func (a *ResearchAgent) EnrichGovernanceFull(ctx context.Context, query Governan
 	if err != nil || out == nil {
 		return nil, err
 	}
-	return out.Relations, nil
+	filteredRelations, _ := FilterDomainRelations(ctx, taxonomy.DomainModeGovernance, out.Relations)
+	return filteredRelations, nil
 }
 
 func (a *ResearchAgent) buildGovernanceFullPrompt(query GovernanceQuery) string {
@@ -2590,7 +2386,8 @@ func (a *ResearchAgent) EnrichEcosystemFull(ctx context.Context, query Ecosystem
 	if err != nil || out == nil {
 		return nil, err
 	}
-	return out.Relations, nil
+	filteredRelations, _ := FilterDomainRelations(ctx, taxonomy.DomainModeEcosystem, out.Relations)
+	return filteredRelations, nil
 }
 
 func (a *ResearchAgent) buildEcosystemFullPrompt(query EcosystemQuery) string {
@@ -2670,6 +2467,8 @@ func (a *ResearchAgent) EnrichAffectedZoneFull(ctx context.Context, query Affect
 	if err != nil || out == nil {
 		return nil, err
 	}
+	// AFFECTS is considered generic/strategic. We can use Strategic constraints or leave it unfiltered.
+	// We'll leave it unfiltered as it's a specialized edge type not bound to standard domains.
 	return out.Relations, nil
 }
 
@@ -2811,7 +2610,7 @@ Return JSON object:
 {
   "fragment": { partial fields to merge },
   "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?" } ],
-  "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"? } ], "confidence", "reason", "transportVia"?: ["/fac/port/...", "/fac/terminal/..."] } ]
+  "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"? } ], "confidence", "reason", "transportVia"?: ["/fac/us/port-long-beach", "/fac/ae/jebel-ali-port"] } ]
 }
 Nodes MUST alternate actor→product. Include FACILITY where transformation happens (product→facility→product).
 
@@ -2821,7 +2620,7 @@ Return ONLY valid JSON. No markdown.`,
 		input.OriginalQuery,
 		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
 		string(fragJSON),
-		taxonomy.SupplyChainOperationalEdgeTypesString(),
+		taxonomy.SupplyChainEdgeTypesString(),
 		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain),
 		taxonomy.ExtendedCanonicalPathRulesPrompt(),
 		researchPreferExistingEntitiesBlock(),

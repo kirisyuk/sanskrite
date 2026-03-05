@@ -100,7 +100,7 @@ func TestEnrichCoordinatesFromGeocoding_MarketIsGeoRelevant(t *testing.T) {
 func TestBuildAddressFromFragment_FacilityUsesParentCountry(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
 		Type:          hmodels.FragmentTypeFacility,
-		CanonicalPath: "/fac/acme-holding/plant-7",
+		CanonicalPath: "/fac/na/plant-7",
 		ParentPath:    "/org/us/acme-holding",
 		HomeLocation: &hmodels.Location{
 			Name: "Houston",
@@ -176,7 +176,7 @@ func TestEnrichCoordinatesFromParent_Facility(t *testing.T) {
 	}
 	child := &hmodels.HorizonFragment{
 		Type:          hmodels.FragmentTypeFacility,
-		CanonicalPath: "/fac/acme/plant-7",
+		CanonicalPath: "/fac/na/plant-7",
 	}
 
 	changed := EnrichCoordinatesFromParent(child, parent)
@@ -195,7 +195,7 @@ func TestBuildFacilityAddressCandidates_UsesParentContext(t *testing.T) {
 	cc := "US"
 	frag := &hmodels.HorizonFragment{
 		Type:          hmodels.FragmentTypeFacility,
-		CanonicalPath: "/fac/acme/petrochem-plant-alpha",
+		CanonicalPath: "/fac/na/petrochem-plant-alpha",
 		Identifiers: map[string]string{
 			"city": "Houston",
 		},

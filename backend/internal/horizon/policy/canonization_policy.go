@@ -173,7 +173,7 @@ func (p *CanonizationPolicy) safeNormalizationFallback(inputType, inputValue str
 	}
 }
 
-// normalizeLegacyGeoPath maps older geo namespaces to /loc/{country}/{admin1}/{city} (hardcoded from canonicalizer.go).
+// normalizeLegacyGeoPath maps older geo namespaces to /loc variable-depth hierarchy.
 func (p *CanonizationPolicy) normalizeLegacyGeoPath(path string) string {
 	normalized := strings.TrimSpace(path)
 	if normalized == "" {
@@ -186,12 +186,46 @@ func (p *CanonizationPolicy) normalizeLegacyGeoPath(path string) string {
 		return ""
 	}
 	parts := strings.Split(strings.Trim(normalized, "/"), "/")
+	extractCountry := func(idx int) string {
+		if idx < 0 || idx >= len(parts) {
+			return ""
+		}
+		c := strings.ToLower(strings.TrimSpace(parts[idx]))
+		if c == "" || c == "na" {
+			return ""
+		}
+		return c
+	}
 	// parts[0] == "region"
 	if len(parts) == 5 && parts[1] == "na" {
-		return fmt.Sprintf("/loc/%s/%s/%s", parts[2], parts[3], parts[4])
+		if c := extractCountry(2); c != "" {
+			return taxonomy.GeoCanonicalPath(c, parts[3], parts[4])
+		}
+		return ""
 	}
 	if len(parts) == 4 {
-		return fmt.Sprintf("/loc/%s/%s/%s", parts[1], parts[2], parts[3])
+		if c := extractCountry(1); c != "" {
+			return taxonomy.GeoCanonicalPath(c, parts[2], parts[3])
+		}
+		return ""
+	}
+	if len(parts) == 3 && parts[1] == "na" {
+		if c := extractCountry(2); c != "" {
+			return taxonomy.GeoCanonicalPath(c, "", "")
+		}
+		return ""
+	}
+	if len(parts) == 3 {
+		if c := extractCountry(1); c != "" {
+			return taxonomy.GeoCanonicalPath(c, parts[2], "")
+		}
+		return ""
+	}
+	if len(parts) == 2 {
+		if c := extractCountry(1); c != "" {
+			return taxonomy.GeoCanonicalPath(c, "", "")
+		}
+		return ""
 	}
 	return ""
 }

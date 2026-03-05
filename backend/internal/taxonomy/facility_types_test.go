@@ -1,0 +1,52 @@
+package taxonomy
+
+import (
+	"testing"
+)
+
+func TestFacilityKindFromSlug(t *testing.T) {
+	tests := []struct {
+		slug string
+		want FacilityKind
+	}{
+		{"port-of-houston", FacilityKindSeaport},
+		{"seaport-dubai", FacilityKindSeaport},
+		{"harbor-rotterdam", FacilityKindSeaport},
+		{"jfk-airport", FacilityKindAirport},
+		{"pipeline-nord-stream", FacilityKindPipeline},
+		{"submarine-cable-flags", FacilityKindCable},
+		{"sea-me-we-cable", FacilityKindCable},
+		{"lithium-mine", FacilityKindMine},
+		{"refinery-ras-tanura", FacilityKindRefinery},
+		{"gigafactory-texas", FacilityKindFactory},
+		{"tsmc-fab-21", FacilityKindFactory},
+		{"lng-terminal-zeebrugge", FacilityKindTerminal},
+		{"datacenter-ashburn", FacilityKindDatacenter},
+		{"power-plant-belchatow", FacilityKindPowerPlant},
+		{"unknown-facility-xyz", FacilityKindOther},
+	}
+	for _, tt := range tests {
+		got := FacilityKindFromSlug(tt.slug)
+		if got != tt.want {
+			t.Errorf("FacilityKindFromSlug(%q) = %q, want %q", tt.slug, got, tt.want)
+		}
+	}
+}
+
+func TestFacilityKindFromCanonicalPath(t *testing.T) {
+	if got := FacilityKindFromCanonicalPath("/fac/us/port-long-beach"); got != FacilityKindSeaport {
+		t.Errorf("got %q, want seaport", got)
+	}
+	if got := FacilityKindFromCanonicalPath("/fac/cn/submarine-cable-apcn"); got != FacilityKindCable {
+		t.Errorf("got %q, want cable", got)
+	}
+}
+
+func TestNormalizeFacilityKind(t *testing.T) {
+	if got := NormalizeFacilityKind("  Seaport  "); got != FacilityKindSeaport {
+		t.Errorf("got %q, want seaport", got)
+	}
+	if got := NormalizeFacilityKind("submarine-cable"); got != FacilityKindCable {
+		t.Errorf("got %q, want cable", got)
+	}
+}

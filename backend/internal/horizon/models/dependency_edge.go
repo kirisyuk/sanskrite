@@ -327,7 +327,7 @@ const (
 )
 
 // QualifierAtFacility is used on TRANSFORMS_INTO edges to indicate where the product transformation occurs.
-// Value: canonical path of the facility (e.g. /fac/albemarle/silver-peak).
+// Value: canonical path of the facility (e.g. /fac/us/silver-peak).
 // Semantics: products transform; the facility is the qualifier (where it happens).
 const QualifierAtFacility = "at_facility"
 

@@ -89,7 +89,7 @@ Starting deduplication scan (dry-run=true, tenant=global)...
 Found 5 canonical paths with duplicates
 Processing: /org/tesla (3 duplicates)
   [DRY-RUN] Would keep: abc123, remove: [def456, ghi789]
-Processing: /fac/tsmc/fab-21 (2 duplicates)
+Processing: /fac/tw/fab-21 (2 duplicates)
   [DRY-RUN] Would keep: xyz999, remove: [uvw888]
 
 === Deduplication Summary ===

@@ -131,12 +131,12 @@ Validate:
    - avoid contradictory duplicates unless source evidence explicitly supports both directions;
 4. transmission/logistics qualifiers quality for supply dependencies when present (facet, throughput_share, capacity_constraint, reroute_* best-effort);
 5. supplyChains node alternation actor→product and facility transformation hops;
-6. upstream/downstream coverage at broad or semi-depth level;
+6. org→fac→product→fac→org tree coverage (child orgs, facilities, products, org-recipients);
 7. qualifier quality (confidence, source hints, transport qualifiers when applicable).
 
 %s
 
-Return ONLY valid JSON.`, taxonomy.SupplyChainOperationalEdgeTypesString(), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(chainsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, taxonomy.SupplyChainEdgeTypesString(), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(chainsJSON), criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildGovernanceValidationPrompt(input CriticValidatorInput) string {
@@ -261,9 +261,9 @@ Validate:
 3. DEPENDS_ON vs SUPPLIES_TO semantics;
 4. transmission/logistics qualifiers quality when present;
 5. supplyChains node alternation actor→product and facility transformation hops;
-6. upstream/downstream coverage at broad or semi-depth level;
+6. org→fac→product→fac→org tree coverage (child orgs, facilities, products, org-recipients);
 7. qualifier quality (confidence, source hints, transport qualifiers when applicable).`,
-				taxonomy.SupplyChainOperationalEdgeTypesString(),
+				taxonomy.SupplyChainEdgeTypesString(),
 				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain),
 				taxonomy.ExtendedCanonicalPathRulesPrompt(),
 				string(chainsJSON)))

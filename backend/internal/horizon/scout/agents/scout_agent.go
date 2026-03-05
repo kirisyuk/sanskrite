@@ -147,6 +147,10 @@ type SupplyChainNode struct {
 	Type string `json:"type"`
 	// Role describes the node's function in the chain (optional): supplier, processor, assembler, distributor, customer
 	Role string `json:"role,omitempty"`
+	// FacilityType is supply chain role for FACILITY: extraction|refining|processing|manufacturing|distribution|storage|logistics
+	FacilityType string `json:"facilityType,omitempty"`
+	// FacilityKind is physical type for FACILITY: seaport|factory|cable|pipeline|mine|refinery|etc.
+	FacilityKind string `json:"facilityKind,omitempty"`
 }
 
 // Вспомогательная структура для парсинга, чтобы поймать name
@@ -407,7 +411,23 @@ func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string 
 	if len(specific) == 0 {
 		return nil
 	}
-	return edgesemantics.EdgeAllowlistStrings(specific)
+	allowed := edgesemantics.EdgeAllowlistStrings(specific)
+	// Supply-chain mode allows OWNS only for supply-relevant ownership links
+	// (ORG/GOV -> ORG/FAC/DEPOSIT). We include OWNS in generation guardrails
+	// and enforce exact path predicate during phase-A filtering.
+	if taxonomy.HasDomainMode(specific, taxonomy.DomainModeSupplyChain) {
+		hasOwns := false
+		for _, t := range allowed {
+			if strings.EqualFold(strings.TrimSpace(t), "OWNS") {
+				hasOwns = true
+				break
+			}
+		}
+		if !hasOwns {
+			allowed = append(allowed, "OWNS")
+		}
+	}
+	return allowed
 }
 
 func extractionDomainGuardrailBlock(domainModes []string) string {
@@ -534,19 +554,22 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	b.WriteString("   - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.\n")
 
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
-		b.WriteString(`   SUPPLY CHAIN MODE:
-   - DEPENDS_ON: consumer -> supplier/infrastructure dependency.
-   - SUPPLIES_TO: supplier -> customer flow.
-   - For actor↔actor DEPENDS_ON and ORG/FACILITY SUPPLIES_TO links, include qualifiers.source_role and qualifiers.target_role.
-   - PRODUCES/CONSUMES: actor -> product.
+		b.WriteString(`   SUPPLY CHAIN MODE (operational edges only):
+   - Do NOT use DEPENDS_ON. Use PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM for supply chain links.
+   - SUPPLIES_TO: supplier -> customer flow (source MUST be ORG or FACILITY).
+   - PRODUCES: actor -> product. CONSUMES: actor -> input product.
    - TRANSFORMS_INTO: upstream raw product -> downstream refined product (NEVER reversed; e.g. ore -> concentrate -> anode -> cathode).
    - EXTRACTS_FROM: facility -> deposit.
+   - For actor↔actor SUPPLIES_TO links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
+   - OWNS is allowed ONLY for supply-relevant ownership:
+     source MUST be /org/... or /gov/... and target MUST be /org/... or /fac/... or /deposit/....
+     Use OWNS when ownership clarifies who controls producing subsidiaries or critical facilities/deposits.
+     Do NOT emit OWNS for markets/programs/abstract entities.
    - LOCATED_IN/OPERATES_IN only for geo/facility anchoring.
-   - PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial market participation).
-   - REGULATES: GOV entity (/gov/...) -> MARKET or ORG (domestic regulatory oversight within the regulator's own jurisdiction only). NEVER use DEPENDS_ON or PARTICIPATES_IN for government regulation. For sanctions or extra-territorial restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION.
+   - PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial market participation). For "market depends on org" use PARTICIPATES_IN with ORG as source.
+   - REGULATES: GOV entity (/gov/...) -> MARKET or ORG (domestic regulatory oversight). NEVER use DEPENDS_ON for government regulation.
    - ADMINISTERS: GOV entity (/gov/...) -> subordinate GOV/PROGRAM/FACILITY (administrative hierarchy).
-   - Prefer qualifiers.facet for DEPENDS_ON (communication|infrastructure|payment|distribution|logistics|supply|labor|legitimization|enforcement|regulatory).
-   - For transmission dependencies add throughput_share, capacity_constraint, reroute_penalty, reroute_latency_delta_hours, reroute_cost_delta_pct when known.
+   - For transmission/capacity add throughput_share, capacity_constraint, reroute_penalty when known.
 `)
 		b.WriteString(GovEntityRelationRulesBlock())
 	}
@@ -623,7 +646,7 @@ func extractionCanonicalNamespaceDetailsBlock() string {
   - HAS_MARKET_SEGMENT child path = parent path + one segment
 - Communities: /community/{geo}/{type}/{slug}; subgroup hierarchy via HAS_SUBGROUP (broader -> narrower).
 - Programs: /program/{jurisdiction}/{slug}; if jurisdiction is unknown, use global.
-- Facilities: /fac/{orgSlug}/{facilitySlug}; if org is unknown, use orgSlug=na.`
+- Facilities: /fac/{geo}/{facilitySlug}; geo like org/gov (ISO2, na, or regional). If geo unknown, use na.`
 }
 
 // buildExtractionPrompt строит промпт для извлечения данных
@@ -646,8 +669,8 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 	relationRulesBlock := buildExtractionRelationsRulesBlock(domainModes)
 	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt()
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
-	// Object detail: from entity_semantics (unified per type). Scope from domain modes above.
-	typeBlock := entity_semantics.ExtractionBlockForPath(targetCanonicalPath, "", "")
+	// Object detail: from entity_semantics (unified per type). Supply-chain mode uses operational-only blocks.
+	typeBlock := entity_semantics.ExtractionBlockForPathAndDomainModes(targetCanonicalPath, "", "", domainModes)
 	if typeBlock != "" {
 		typeBlock = typeBlock + "\n\n"
 	}
@@ -693,13 +716,13 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 %s`, relationCatalogOverride, relationRulesBlock)
 
 	supplyChainsContractBlock := `4. "supplyChains" Field (Array of Objects):
-- Actor nodes MUST be FACILITY when possible. Use /fac/{orgSlug}/{facilitySlug}. When facility unknown: /fac/{orgSlug}-general-production.
-- Do NOT use ORGANIZATION as supplier/customer in supply links. Organizations appear in ownership (OWNS) layer only.
+- Chain model: org → fac → product → fac → org. Organizations at chain ends, facilities in the middle, products between facilities.
+- Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. When facility unknown: /fac/{geo}/{orgSlug}-general-production.
 - Each chain has: nodes[], confidence, reason, optional transportVia[].
-- Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: FACILITY|PRODUCT|DEPOSIT for supply endpoints; ORGANIZATION only for context), role?
-- Nodes MUST alternate actor -> product -> actor -> product.
-- Include FACILITY where transformation occurs (product -> facility -> product).
-- For extractive flows: facility -> deposit -> product.
+- Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|DEPOSIT), role?
+- Nodes follow: org → fac → product → fac → org (1-to-many at each level).
+- Include FACILITY where transformation occurs (product → facility → product).
+- For extractive flows: facility → deposit → product.
 - transportVia should contain facility canonical paths for ports/terminals/pipelines/warehouses when known.
 - Product granularity: use model line/product family (iPhone, MacBook, Claude Code), NOT specific SKU (iPhone 17, MacBook Pro M4, Claude Opus). Natural resources: keep taxonomy granularity, avoid over-generalization.`
 

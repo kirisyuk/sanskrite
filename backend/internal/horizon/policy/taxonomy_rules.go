@@ -39,9 +39,8 @@ type GeoTaxonomyRules struct {
 
 // OrgTaxonomyRules defines rules for ORGANIZATION canonical paths.
 type OrgTaxonomyRules struct {
-	Format     string   `json:"format" yaml:"format"`
-	LegalForms []string `json:"legalForms" yaml:"legalForms"`
-	Examples   Examples `json:"examples" yaml:"examples"`
+	Format   string   `json:"format" yaml:"format"`
+	Examples Examples `json:"examples" yaml:"examples"`
 }
 
 // GovTaxonomyRules defines rules for government body canonical paths.
@@ -113,37 +112,35 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				Correct: []string{
 					"/loc/ae/01/dubai",   // Dubai emirate = admin1 code "01"
 					"/loc/sa/01/riyadh",  // Riyadh province = "01"
-					"/loc/ae/na/na",      // Country-level UAE
+					"/loc/ae",      // Country-level UAE
 					"/loc/us/tx/austin",  // Texas, Austin
 					"/loc/ru/mow/moscow", // Moscow city
 				},
 				Incorrect: []string{
 					"/loc/ae/du/dubai",        // "du" is not GeoNames admin code
 					"/loc/ae/dubai/dubai",     // city name in admin1 slot
-					"/loc/uae/na/na",          // "uae" is not valid ISO2
-					"/loc/saudi-arabia/na/na", // country name instead of ISO2
+					"/loc/uae",          // "uae" is not valid ISO2
+					"/loc/saudi-arabia", // country name instead of ISO2
 				},
 			},
-			Resolution: "Use GeoNames API to resolve admin1 code. Country-level locations use /loc/{cc}/na/na.",
+			Resolution: "Use GeoNames API to resolve deeper geo levels when available. Country-level locations use /loc/{cc}.",
 		},
 		Org: OrgTaxonomyRules{
-			Format:     rules.Org.Format,
-			LegalForms: rules.Org.LegalForms,
+			Format: rules.Org.Format,
 			Examples: Examples{
 				Correct: []string{
-					"/org/sa/saudi-aramco-jsc",
-					"/org/ae/emirates-llc",
-					"/org/us/tesla-inc",
-					"/org/de/siemens-ag",
+					"/org/sa/saudi-aramco",
+					"/org/ae/emirates",
+					"/org/us/tesla",
+					"/org/de/siemens",
 					"/org/int/united-nations",
 					"/org/int/unesco",
 					"/org/eu/european-commission", // regional token for EU-level orgs
 				},
 				Incorrect: []string{
-					"/org/saudi-aramco",       // missing iso2 and legal form
-					"/org/sa/aramco",          // missing legal form
-					"/org/aramco-jsc",         // missing iso2
-					"/org/na/unknown-company", // "na" only when jurisdiction unknown
+					"/org/saudi-aramco",        // missing iso2
+					"/org/aramco",              // missing iso2
+					"/org/na/unknown-company",  // "na" only when jurisdiction unknown
 				},
 			},
 		},
@@ -200,15 +197,15 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 			},
 		},
 		Facility: FacilityTaxonomyRules{
-			Format: "/fac/{org-slug}/{facility-slug}",
+			Format: "/fac/{geo}/{facility-slug}",
 			Examples: Examples{
 				Correct: []string{
-					"/fac/saudi-aramco/abqaiq-refinery",
-					"/fac/tesla/gigafactory-texas",
-					"/fac/adnoc/ruwais-refinery",
+					"/fac/sa/abqaiq-refinery",
+					"/fac/us/gigafactory-texas",
+					"/fac/ae/ruwais-refinery",
 				},
 				Incorrect: []string{
-					"/fac/abqaiq",             // missing org prefix
+					"/fac/abqaiq",             // missing geo segment
 					"/facility/aramco/abqaiq", // wrong namespace
 				},
 			},
@@ -373,7 +370,7 @@ func (r *TaxonomyRules) ToLLMContext() string {
 	// Org rules
 	sb.WriteString("### ORGANIZATION Paths\n")
 	sb.WriteString(fmt.Sprintf("Format: `%s`\n", r.Org.Format))
-	sb.WriteString(fmt.Sprintf("Legal forms: %s\n", strings.Join(r.Org.LegalForms, ", ")))
+	sb.WriteString("Do NOT include legal form (Inc, Ltd, LLC, etc.) in slug.\n")
 	sb.WriteString("Correct examples:\n")
 	for _, ex := range r.Org.Examples.Correct {
 		sb.WriteString(fmt.Sprintf("  - `%s`\n", ex))
@@ -428,20 +425,16 @@ func (r *TaxonomyRules) ValidateGeoPath(path string) (bool, string) {
 		return false, "GEO_REGION path must start with /loc/"
 	}
 
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) != 4 {
-		return false, fmt.Sprintf("GEO_REGION path must have 4 segments (/loc/{cc}/{admin1}/{city}), got %d", len(parts))
+	cc, level1, _, ok := taxonomy.ParseLocCanonicalPath(path)
+	if !ok {
+		return false, "GEO_REGION path must match /loc/{country}[/{level1}[/{level2}]]"
 	}
-
-	cc := parts[1]
-	if len(cc) != 2 && !strings.Contains(cc, "-") && !taxonomy.IsRegionalGeoToken(cc) { // Allow composite like "ae-sa" and region tokens
-		return false, fmt.Sprintf("Invalid geo code: %s", cc)
+	if !taxonomy.IsValidLocCountryToken(cc) {
+		return false, fmt.Sprintf("invalid geo code: %s", cc)
 	}
-
-	// Basic admin1 validation (should not be a city name)
-	admin1 := parts[2]
-	if admin1 != "na" && len(admin1) > 10 {
-		return false, fmt.Sprintf("Admin1 code '%s' looks like a city name, not an admin code", admin1)
+	// Keep a soft sanity check for clearly overlong first subdivision tokens.
+	if level1 != "" && len(level1) > 48 {
+		return false, fmt.Sprintf("first geo subdivision token is too long: %s", level1)
 	}
 
 	return true, ""
@@ -456,26 +449,6 @@ func (r *TaxonomyRules) ValidateOrgPath(path string) (bool, string) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 3 {
 		return false, "ORGANIZATION path must have at least 3 segments (/org/{iso2}/{slug})"
-	}
-
-	// Special-case: international organizations (/org/int/...) do not require a legal form suffix.
-	// Rationale: many intergovernmental / international bodies are not incorporated as companies.
-	if strings.EqualFold(strings.TrimSpace(parts[1]), "int") {
-		return true, ""
-	}
-
-	// Check for legal form suffix
-	slug := parts[len(parts)-1]
-	hasLegalForm := false
-	for _, lf := range r.Org.LegalForms {
-		if strings.HasSuffix(slug, "-"+lf) {
-			hasLegalForm = true
-			break
-		}
-	}
-
-	if !hasLegalForm {
-		return false, fmt.Sprintf("ORGANIZATION path should include legal form suffix (e.g., -llc, -jsc): %s", path)
 	}
 
 	return true, ""
@@ -496,9 +469,9 @@ func (r *TaxonomyRules) ValidateGovPath(path string) (bool, string) {
 	if geo == "" {
 		return false, "GOVERNMENT path missing jurisdiction segment"
 	}
-	// Allow: na, ISO2 (2 chars), composite (contains "-"), or regional token (eu, asean, brics, gcc, etc.)
-	if geo != "na" && len(geo) != 2 && !strings.Contains(geo, "-") && !taxonomy.IsRegionalGeoToken(geo) {
-		return false, fmt.Sprintf("Invalid jurisdiction (expected ISO2, composite, na, or regional token like eu/asean/brics): %s", parts[1])
+	// Allow: na, ISO2 (2 chars), composite (tr-sy, ae-sa-om), or regional token (eu, asean, brics, gcc, etc.)
+	if !taxonomy.IsValidGeoForOrgGovFac(geo) {
+		return false, fmt.Sprintf("Invalid jurisdiction (expected %s): %s", taxonomy.ISO2GeoDescriptionForPrompts(), parts[1])
 	}
 
 	return true, ""

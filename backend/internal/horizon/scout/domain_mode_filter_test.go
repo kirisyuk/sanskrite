@@ -8,16 +8,19 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
-func TestEdgeAllowlistByDomainMode_SupplyChainOperationalTypesOnly(t *testing.T) {
+func TestEdgeAllowlistByDomainMode_SupplyChainIncludesMarketAnchors(t *testing.T) {
 	allow := EdgeAllowlistByDomainMode(taxonomy.DomainModeSupplyChain)
-	operational := []string{"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM"}
+	operational := []string{"PRODUCES", "CONSUMES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM"}
 	for _, ot := range operational {
 		if !AllowlistContains(allow, models.DependencyType(ot)) {
 			t.Fatalf("supply_chain allowlist must include %s", ot)
 		}
 	}
-	if AllowlistContains(allow, models.DependencyType("DEPENDS_ON")) || AllowlistContains(allow, models.DependencyType("CONSUMES")) {
-		t.Fatalf("supply_chain allowlist must exclude DEPENDS_ON and CONSUMES (operational types only)")
+	if !AllowlistContains(allow, models.DependencyType("HAS_MARKET_SEGMENT")) {
+		t.Fatalf("supply_chain allowlist must include HAS_MARKET_SEGMENT")
+	}
+	if AllowlistContains(allow, models.DependencyType("DEPENDS_ON")) {
+		t.Fatalf("supply_chain allowlist must exclude DEPENDS_ON (use CONSUMES, SUPPLIES_TO, PARTICIPATES_IN instead)")
 	}
 }
 
@@ -50,7 +53,7 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChain(t *testing.T) {
 		{RelationType: "OWNS"},
 	}
 	out := filterDiscoveredRelationsByDomainModes(in, []string{taxonomy.DomainModeSupplyChain})
-	// DEPENDS_ON and OWNS excluded (operational types only); SUPPLIES_TO and PRODUCES pass
+	// DEPENDS_ON excluded; OWNS excluded. Only SUPPLIES_TO and PRODUCES pass.
 	if len(out) != 2 {
 		t.Fatalf("expected 2 relations after supply_chain filter, got %d", len(out))
 	}
@@ -59,7 +62,134 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChain(t *testing.T) {
 		types[r.RelationType] = true
 	}
 	if !types["SUPPLIES_TO"] || !types["PRODUCES"] {
-		t.Fatalf("expected SUPPLIES_TO and PRODUCES, got %v", types)
+		t.Fatalf("expected SUPPLIES_TO, PRODUCES; got %v", types)
+	}
+	if types["DEPENDS_ON"] || types["OWNS"] {
+		t.Fatalf("DEPENDS_ON and OWNS must be excluded in supply_chain; got %v", types)
+	}
+}
+
+func TestFilterDiscoveredRelationsByDomainModes_DomainAnchorKeepsScaffold(t *testing.T) {
+	domainFrag := &models.HorizonFragment{CanonicalPath: "/domain/v1/supply-chain/geo/tr/market/tr/food-beverage/soft-drinks"}
+	in := []agents.DiscoveredRelation{
+		{RelationType: "FOCUSES_ON", TargetCanonicalPath: "/org/us/coca-cola"},
+		{RelationType: "RELATED_DOMAIN", TargetCanonicalPath: "/market/tr/beverages"},
+		{RelationType: "OWNS", TargetCanonicalPath: "/org/us/pepsi"},
+	}
+	out := filterDiscoveredRelationsByDomainModesWithDomainAnchor(domainFrag, in, []string{taxonomy.DomainModeSupplyChain})
+	// FOCUSES_ON and RELATED_DOMAIN pass (domain-scaffold from domain); OWNS excluded
+	if len(out) != 2 {
+		t.Fatalf("expected 2 relations (domain-anchor scaffold), got %d", len(out))
+	}
+	types := map[string]bool{}
+	for _, r := range out {
+		types[r.RelationType] = true
+	}
+	if !types["FOCUSES_ON"] || !types["RELATED_DOMAIN"] {
+		t.Fatalf("expected FOCUSES_ON and RELATED_DOMAIN from domain anchor, got %v", types)
+	}
+	if types["OWNS"] {
+		t.Fatalf("OWNS must remain excluded in supply_chain mode even from domain")
+	}
+}
+
+func TestFilterDiscoveredRelationsByDomainModes_MarketAnchorKeepsMarketTypes(t *testing.T) {
+	marketFrag := &models.HorizonFragment{CanonicalPath: "/market/za/fmcg/soft-drinks"}
+	in := []agents.DiscoveredRelation{
+		{RelationType: "DEPENDS_ON", TargetCanonicalPath: "/org/za/ccbsa"},
+		{RelationType: "HAS_MARKET_SEGMENT", TargetCanonicalPath: "/market/za/fmcg/carbonated-beverages"},
+		{RelationType: "PARTICIPATES_IN", TargetCanonicalPath: "/org/za/ccbsa"},
+		{RelationType: "OWNS", TargetCanonicalPath: "/org/za/pepsi"},
+	}
+	out := filterDiscoveredRelationsByDomainModesWithDomainAnchor(marketFrag, in, []string{taxonomy.DomainModeSupplyChain})
+	// DEPENDS_ON blocked in supply chain; HAS_MARKET_SEGMENT and PARTICIPATES_IN pass; OWNS excluded
+	if len(out) != 2 {
+		t.Fatalf("expected 2 relations (market-anchor), got %d", len(out))
+	}
+	types := map[string]bool{}
+	for _, r := range out {
+		types[r.RelationType] = true
+	}
+	if !types["HAS_MARKET_SEGMENT"] || !types["PARTICIPATES_IN"] {
+		t.Fatalf("expected HAS_MARKET_SEGMENT and PARTICIPATES_IN from market anchor, got %v", types)
+	}
+	if types["DEPENDS_ON"] || types["OWNS"] {
+		t.Fatalf("DEPENDS_ON and OWNS must remain excluded in supply_chain mode; got %v", types)
+	}
+}
+
+func TestFilterDiscoveredRelationsByDomainModes_SupplyChainOwnsAllowedForRelevantPaths(t *testing.T) {
+	orgFrag := &models.HorizonFragment{CanonicalPath: "/org/jp/canon"}
+	in := []agents.DiscoveredRelation{
+		{
+			RelationType:        "OWNS",
+			TargetCanonicalPath: "/org/jp/canon-semiconductor-manufacturing",
+		},
+		{
+			RelationType:        "OWNS",
+			TargetCanonicalPath: "/fac/jp/oita-plant",
+		},
+		{
+			RelationType:        "OWNS",
+			TargetCanonicalPath: "/market/jp/electronics/imaging",
+		},
+	}
+
+	out := filterDiscoveredRelationsByDomainModesWithDomainAnchor(orgFrag, in, []string{taxonomy.DomainModeSupplyChain})
+	if len(out) != 2 {
+		t.Fatalf("expected 2 supply-relevant OWNS relations, got %d", len(out))
+	}
+	for _, r := range out {
+		if r.RelationType != "OWNS" {
+			t.Fatalf("expected OWNS relation, got %s", r.RelationType)
+		}
+		if r.TargetCanonicalPath == "/market/jp/electronics/imaging" {
+			t.Fatalf("market target must not pass supply-chain OWNS predicate")
+		}
+	}
+}
+
+func TestFilterDiscoveredRelationsByDomainModes_SupplyChainDropsNonContractTypes(t *testing.T) {
+	// Contract isolation: PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, ASSOCIATED_WITH
+	// must be dropped in supply-chain mode (not in SupplyChainEdgeTypes).
+	// PARTICIPATES_IN is in allowlist (market→org scaffold); SUPPLIES_TO passes; DEPENDS_ON excluded.
+	in := []agents.DiscoveredRelation{
+		{RelationType: "SUPPLIES_TO", TargetCanonicalPath: "/org/us/acme"},
+		{RelationType: "PARTNERS_WITH", TargetCanonicalPath: "/org/eu/partner"},
+		{RelationType: "COMPETES_WITH", TargetCanonicalPath: "/org/us/competitor"},
+		{RelationType: "SUBSIDIARY_OF", TargetCanonicalPath: "/org/us/parent"},
+		{RelationType: "ASSOCIATED_WITH", TargetCanonicalPath: "/org/uk/affiliate"},
+		{RelationType: "PARTICIPATES_IN", TargetCanonicalPath: "/market/global/electronics"},
+		{RelationType: "DEPENDS_ON", TargetCanonicalPath: "/org/cn/supplier"},
+	}
+	out := filterDiscoveredRelationsByDomainModes(in, []string{taxonomy.DomainModeSupplyChain})
+	types := make(map[string]bool)
+	for _, r := range out {
+		types[r.RelationType] = true
+	}
+	if !types["SUPPLIES_TO"] || !types["PARTICIPATES_IN"] {
+		t.Fatalf("expected SUPPLIES_TO and PARTICIPATES_IN to pass, got %v", types)
+	}
+	if types["DEPENDS_ON"] {
+		t.Fatalf("DEPENDS_ON must be excluded in supply_chain; got %v", types)
+	}
+	for _, bad := range []string{"PARTNERS_WITH", "COMPETES_WITH", "SUBSIDIARY_OF", "ASSOCIATED_WITH"} {
+		if types[bad] {
+			t.Fatalf("supply-chain filter must drop %s (out-of-contract)", bad)
+		}
+	}
+}
+
+func TestIsSupplyChainEdgeType(t *testing.T) {
+	for _, allowed := range taxonomy.SupplyChainEdgeTypes {
+		if !IsSupplyChainEdgeType(allowed) {
+			t.Fatalf("IsSupplyChainEdgeType(%q) must be true", allowed)
+		}
+	}
+	for _, bad := range []string{"PARTNERS_WITH", "COMPETES_WITH", "SUBSIDIARY_OF", "ASSOCIATED_WITH", "INVESTS_IN", "DEPENDS_ON"} {
+		if IsSupplyChainEdgeType(bad) {
+			t.Fatalf("IsSupplyChainEdgeType(%q) must be false (out-of-contract)", bad)
+		}
 	}
 }
 

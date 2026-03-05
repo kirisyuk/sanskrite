@@ -150,7 +150,7 @@ TAXONOMY RULES:
 - canonicalPath MUST be a valid canonical path with allowed namespaces:
   /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media
 - ALL path segments MUST be lowercase slugs (use hyphens instead of spaces):
-  - CORRECT: /org/sa/saudi-aramco, /fac/aramco/ras-tanura-refinery, /loc/ae/na/na
+  - CORRECT: /org/sa/saudi-aramco, /fac/sa/ras-tanura-refinery, /loc/ae
   - WRONG: /loc/UAE, /org/Tesla Inc, /product/Lithium Carbonate
 
 - The anchor type MUST match the canonicalPath namespace:
@@ -165,15 +165,15 @@ TAXONOMY RULES:
   - EVENT        -> /event/...
 
 GEO_REGION (CRITICAL):
-- canonicalPath MUST be strict: /loc/{countryAlpha2}/{admin1}/{city}
-  - countryAlpha2: ISO3166-1 alpha2 lowercase OR regional token (e.g., gcc, eu, asean, opec)
+- canonicalPath MUST be strict: /loc/{countryAlpha2}[/{level1}[/{level2}]]
+  - countryAlpha2: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `
   - Regional tokens ALWAYS go in the countryAlpha2 slot (2nd segment), never at the end.
-    - Example: GCC → /loc/gcc/na/na (NOT /loc/na/na/gcc)
-  - use "na" for unknown admin1/city
-  - country-only locations MUST be /loc/{cc}/na/na
-    - Saudi Arabia -> /loc/sa/na/na
-    - United Arab Emirates -> /loc/ae/na/na
-    - Russia -> /loc/ru/na/na
+    - Example: GCC → /loc/gcc (NOT /loc/global/gcc)
+  - omit unknown trailing levels (no mandatory "na")
+  - country-only locations MUST be /loc/{cc}
+    - Saudi Arabia -> /loc/sa
+    - United Arab Emirates -> /loc/ae
+    - Russia -> /loc/ru
 
 PRODUCT (CRITICAL):
 - canonicalPath MUST be strict hierarchical taxonomy:
@@ -185,12 +185,12 @@ PRODUCT (CRITICAL):
   - Example: /product/raw/chemical/refining/lithium-carbonate
 
 FACILITY:
-- use /fac/{orgSlug}/{facilitySlug}; if org is unknown, use /fac/na/{facilitySlug}
-- Example: /fac/aramco/ras-tanura-refinery, /fac/na/gigafactory-texas
+- use /fac/{geo}/{facilitySlug}; if geo is unknown, use /fac/na/{facilitySlug}
+- Example: /fac/sa/ras-tanura-refinery, /fac/na/gigafactory-texas
 
 ORGANIZATION:
 - Organizations: /org/{iso2|na}/{slug}
-  - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase, 2 letters). If unknown, use "na".
+  - iso2: country of origin / primary jurisdiction (` + taxonomy.ISO2GeoDescriptionForPrompts() + `). If unknown, use "na".
   - Regional tokens go in the geo slot (2nd segment): /org/gcc/{slug} (NOT /org/na/gcc/{slug}).
   - slug: lowercase slug derived from the base name (avoid legal suffixes like Inc/LLC in the path if possible)
 - Government bodies: /gov/{iso2|na}/{slug}
@@ -225,7 +225,7 @@ MARKET (CRITICAL):
     - "Iraqi rice production" → /market/iq/agriculture/crop-production/rice-production (L3)
 - domain/vertical SHOULD align with the /segment/{domain}/{vertical}/{geo} taxonomy used for organizations.
 - Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
-- geo MUST be ISO2 lowercase, composite ISO2, regional token (e.g., eu, gcc, asean, opec), or "global"/"int" (default "global" if unknown)
+- geo: ` + taxonomy.ISO2GeoDescriptionForPrompts() + ` (default "global" if unknown)
   - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical}
 
 %s

@@ -63,14 +63,21 @@ func NormalizeOrgRefToFacilityFallback(orgPath string) string {
 	if !strings.HasPrefix(orgPath, "/org/") {
 		return ""
 	}
-	// Extract org slug: last segment of path (e.g. /org/cn/tsmc -> tsmc, /org/us/albemarle-corp -> albemarle-corp)
-	slug := extractSlugFromPath(orgPath)
+	// Path format: /org/{geo}/{slug}. Extract geo and org slug for /fac/{geo}/{orgSlug}-general-production.
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(orgPath, "/"), "/"), "/")
+	if len(parts) < 2 {
+		slug := extractSlugFromPath(orgPath)
+		if slug == "" {
+			return ""
+		}
+		return taxonomy.FacilityGeneralProductionPath("na", slug)
+	}
+	geo := strings.ToLower(strings.TrimSpace(parts[1]))
+	slug := strings.TrimSpace(parts[len(parts)-1])
 	if slug == "" {
 		return ""
 	}
-	// For multi-segment paths like /org/cn/tsmc, use tsmc. For /org/geo/cn, use geo-cn or similar.
-	// Path format: /org/{geo?}/{slug} — last segment is org slug.
-	return taxonomy.FacilityGeneralProductionPath(slug)
+	return taxonomy.FacilityGeneralProductionPath(geo, slug)
 }
 
 // extractSlugFromPath extracts the last segment from a canonical path.
@@ -137,18 +144,18 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 	if !strings.HasPrefix(*f.ProductRef, "/product/") {
 		return fmt.Errorf("productRef must be a product canonical path (starts with /product/)")
 	}
-	// SupplierRef: MUST be /fac/ or /deposit/ (extraction). NOT /org/ — use NormalizeOrgRefToFacilityFallback before validation.
+	// SupplierRef: /fac/, /deposit/, or /org/ (full chain org→fac→product→fac→org)
 	if f.SupplierRef != nil && strings.TrimSpace(*f.SupplierRef) != "" {
 		p := strings.TrimSpace(*f.SupplierRef)
-		if !strings.HasPrefix(p, "/fac/") && !strings.HasPrefix(p, "/deposit/") {
-			return fmt.Errorf("supplierRef must be facility or deposit canonical path (starts with /fac/ or /deposit/); /org/ is not allowed")
+		if !strings.HasPrefix(p, "/fac/") && !strings.HasPrefix(p, "/deposit/") && !strings.HasPrefix(p, "/org/") {
+			return fmt.Errorf("supplierRef must be facility, deposit, or org canonical path (starts with /fac/, /deposit/, or /org/)")
 		}
 	}
-	// CustomerRef: MUST be /fac/. NOT /org/ — use NormalizeOrgRefToFacilityFallback before validation.
+	// CustomerRef: /fac/ or /org/ (full chain org→fac→product→fac→org)
 	if f.CustomerRef != nil && strings.TrimSpace(*f.CustomerRef) != "" {
 		p := strings.TrimSpace(*f.CustomerRef)
-		if !strings.HasPrefix(p, "/fac/") {
-			return fmt.Errorf("customerRef must be facility canonical path (starts with /fac/); /org/ is not allowed")
+		if !strings.HasPrefix(p, "/fac/") && !strings.HasPrefix(p, "/org/") {
+			return fmt.Errorf("customerRef must be facility or org canonical path (starts with /fac/ or /org/)")
 		}
 	}
 	// Validate facility refs if present

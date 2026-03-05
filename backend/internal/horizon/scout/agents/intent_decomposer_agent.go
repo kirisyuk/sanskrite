@@ -8,6 +8,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // IntentDecomposerAgent proposes a reusable, taxonomy-aligned set of candidate relations
@@ -35,6 +36,8 @@ type DecomposeOptions struct {
 	DecompositionHints []DecompositionHint
 	// OriginalQuery is the raw user query for context.
 	OriginalQuery string
+	// DomainModes restrict relation types when set (e.g. supply_chain → supply-chain-only enum).
+	DomainModes []string
 }
 
 func (a *IntentDecomposerAgent) Decompose(
@@ -211,9 +214,35 @@ func (a *IntentDecomposerAgent) buildPromptWithOptions(targetCanonicalPath strin
 		}
 	} else if strings.HasPrefix(targetCanonicalPath, "/product/") {
 		decompositionBlock = "PRODUCT DECOMPOSITION MODE:\n"
-		decompositionBlock += "TARGET is a product. Output relations to ORGANIZATIONS and FACILITIES that produce, process, or supply this product.\n"
-		decompositionBlock += "Focus on: producers, processors, key suppliers. Use targetType ORGANIZATION or FACILITY. targetCanonicalPath: /org/... or /fac/...\n"
-		decompositionBlock += "Use DEPENDS_ON (product depends on supplier) or similar. Output concrete /org/ and /fac/ paths only.\n\n"
+		decompositionBlock += "TARGET is a product. Output relations to ORGANIZATIONS and FACILITIES that produce this product, and org-recipients that receive it.\n"
+		decompositionBlock += "Focus on: producing orgs, their facilities, org-recipients. Use targetType ORGANIZATION or FACILITY. targetCanonicalPath: /org/... or /fac/...\n"
+		decompositionBlock += "Use PRODUCES (producer→product) or SUPPLIES_TO (supplier→customer flow). Output concrete /org/ and /fac/ paths only. Do NOT use DEPENDS_ON.\n\n"
+	}
+
+	isSupplyChainMode := taxonomy.HasDomainMode(opts.DomainModes, taxonomy.DomainModeSupplyChain)
+	relationEnum := edgesemantics.AllEdgeTypesForPrompt()
+	relationRulesBlock := relationRulesBlockGeneral
+	validationSuffix := validationSuffixGeneral
+	dependsOnBlock := `DEPENDS_ON FACETS (qualifiers for more granular dependency analysis):
+When outputting DEPENDS_ON relations, you MAY add a "facet" qualifier to specify the nature of dependency:
+- communication: dependency on communication channels/platforms
+- infrastructure: dependency on physical or digital infrastructure
+- payment: dependency on payment/financial mechanisms
+- distribution: dependency on distribution networks/channels
+- logistics: dependency on logistics/transportation
+- supply: dependency on supply of materials/goods
+- labor: dependency on labor/workforce
+- legitimization: dependency on legitimization mechanisms (for illicit activities)
+- enforcement: dependency on enforcement/protection mechanisms
+- regulatory: dependency on regulatory environment/approvals
+Example: { "relationType": "DEPENDS_ON", "qualifiers": { "facet": "communication" } }
+`
+	if isSupplyChainMode {
+		relationEnum = taxonomy.SupplyChainEdgeTypesForPrompt()
+		relationRulesBlock = relationRulesBlockSupplyChain
+		validationSuffix = validationSuffixSupplyChain
+		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links.
+`
 	}
 
 	return fmt.Sprintf(`You are an intent decomposition agent for a risk analysis system.
@@ -227,7 +256,109 @@ TARGET:
 
 %s
 %s
-RELATION DIRECTION RULES (STRICT):
+%s
+
+%s
+
+OUTPUT:
+Return ONLY JSON with this schema:
+{
+  "relations": [
+    {
+      "targetName": "string",
+      "targetLegalName": "string",
+      "targetShortName": "string",
+      "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "COMMUNITY",
+      "relationType": %s,
+      "reason": "string",
+      "confidence": 0.0,
+      "targetCanonicalPath": "string (REQUIRED, stable, NOT /discovered/*)"
+    }
+  ]
+}
+
+RULES:
+- Output 5..12 relations max.
+- Prefer supply-chain/logistics structure when the intent suggests it (suppliers, battery materials/components, logistics providers, ports/regions, manufacturing facilities, key dependencies).
+- confidence MUST be <= 0.65 (hypothesis), use ~0.25..0.55 typically.
+- Use stable canonical paths:
+  - Organizations: /org/{iso2|na}/{slug}
+    - iso2: country of origin / primary jurisdiction (%s). If unknown use "na".
+  - Government bodies: /gov/{iso2|na}/{slug}
+    - Use for ministries, regulators, agencies, state bodies. If unknown, use /gov/na/{slug}.
+  - Media channels (last-mile endpoints): /media/{platform}/{slug}
+    - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
+  - Communities (informal social groups): /community/{geo}/{type}/{slug}
+    - geo: %s
+    - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
+    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe | representatives | industry-association | key-community
+    - Examples:
+      - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
+      - "Kazan drug dealers" -> /community/ru/criminal/kazan-synthetic-dealers
+      - "OSINT community" -> /community/global/professional/osint-researchers
+      - "House of Saud" -> /community/sa/dynasty/house-of-saud
+      - "Pashtun tribes" -> /community/af/tribe/pashtun
+      - "Senior Zhuz (Kazakhstan)" -> /community/kz/tribe/senior-zhuz
+    - CRITICAL: COMMUNITY is for INFORMAL groups WITHOUT legal structure.
+      - If the entity has legal registration → use ORGANIZATION (/org/)
+      - If the entity is a media endpoint (channel/group) → use MEDIA_CHANNEL (/media/)
+    - COMMUNITY HIERARCHY: Use HAS_SUBGROUP to link parent community → narrower sub-community
+      - dynasties: broader family → branch (house-of-saud → sudairi-seven)
+      - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
+      - Direction: broader → narrower
+  - Facilities: /fac/{geo}/{slug} — geo: %s
+  - People: /person/{slug}
+  - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
+    - category: "raw" | "component" | "finished" | "service"
+    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy"
+    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly"
+    - slug: lowercase-slug derived from product name
+    - If category/type/stage is uncertain, still output the same 5-segment format with your best estimate
+  - GEO regions/locations: MUST be /loc/{country}[/{level1}[/{level2}]]
+    - country: %s
+    - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
+      - GCC → /loc/gcc (NOT /loc/global/gcc)
+    - level1/level2: optional subdivision/city slugs (omit unknown trailing levels)
+    - country-only locations: /loc/{country}
+    - CRITICAL: country code MUST be valid. Invalid codes will be REJECTED.
+  - MARKET (segment-first preferred):
+    - HIERARCHY LEVELS:
+      - L1 (domain): /market/{geo}/{domain}; L2 (vertical): /market/{geo}/{domain}/{vertical}; L3+ (sub-vertical): parent path + one segment
+      - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
+      - Example chains: /market/sa/finance → /market/sa/finance/banking → .../islamic-banking; /market/tw/technology → /market/tw/technology/semiconductors → .../foundry
+    - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
+    - geo: %s
+    - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
+    - GEOGRAPHY INHERITANCE: If TARGET is a regional market (e.g., /market/sa/...), new MARKET relations MUST inherit that geo
+      - Example: decomposing /market/sa/event-marketing → sub-markets should be /market/sa/... (NOT /market/global/...)
+    - Use "global" ONLY when the market is truly global or no geographic context exists
+    - MARKET HIERARCHY: Use HAS_MARKET_SEGMENT to link parent market → narrower segment (child path = parent path + one segment)
+      - Example: /market/sa/marketing HAS_MARKET_SEGMENT /market/sa/marketing/event-marketing
+      - Direction: broader → narrower
+  - PROGRAM: /program/{jurisdictionSlug}/{programSlug}
+    - jurisdictionSlug: %s
+    - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
+    - If TARGET is a regional program, new related entities should reflect that jurisdiction context
+  - GOV: /gov/{iso2}/{slug}
+    - GOV HIERARCHY: Use ADMINISTERS to link superior gov body → subordinate body
+      - Example: /gov/sa/ministry-of-health ADMINISTERS /gov/sa/sfda
+      - Direction: superior → subordinate
+    - GovTypes: government, ministry, department, agency, authority, regulator, committee, service, bureau, office
+- VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
+  - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
+  - canonicalPath MUST match expected prefix for targetType
+  - GEO_REGION paths MUST match /loc/{country}[/{level1}[/{level2}]] with valid country code
+%s
+%s
+- NEVER use "/discovered/*".
+- Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock, decompositionBlock, relationRulesBlock, dependsOnBlock, relationEnum,
+		taxonomy.ISO2GeoDescriptionForPrompts(), taxonomy.ISO2GeoDescriptionForPrompts(), taxonomy.ISO2GeoDescriptionForPrompts(),
+		taxonomy.ISO2GeoDescriptionForPrompts(), taxonomy.ISO2GeoDescriptionForPrompts(), taxonomy.ISO2GeoDescriptionForPrompts(),
+		edgesemantics.EdgeDirectionValidationRulesForPrompt(), validationSuffix)
+}
+
+const (
+	relationRulesBlockGeneral = `RELATION DIRECTION RULES (STRICT):
 Each relation is a directed edge FROM TARGET (source) TO targetCanonicalPath (target).
 Choose relationType to match this direction:
 - DEPENDS_ON: source depends on target (use for suppliers, contractors, inputs, infrastructure dependencies).
@@ -282,114 +413,26 @@ Choose relationType to match this direction:
     /community/sa/dynasty/house-of-saud HAS_SUBGROUP /community/sa/dynasty/sudairi-seven
     /community/af/tribe/pashtun HAS_SUBGROUP /community/af/tribe/durrani
     /community/kz/tribe/senior-zhuz HAS_SUBGROUP /community/kz/tribe/uysun
+`
 
-DEPENDS_ON FACETS (qualifiers for more granular dependency analysis):
-When outputting DEPENDS_ON relations, you MAY add a "facet" qualifier to specify the nature of dependency:
-- communication: dependency on communication channels/platforms
-- infrastructure: dependency on physical or digital infrastructure
-- payment: dependency on payment/financial mechanisms
-- distribution: dependency on distribution networks/channels
-- logistics: dependency on logistics/transportation
-- supply: dependency on supply of materials/goods
-- labor: dependency on labor/workforce
-- legitimization: dependency on legitimization mechanisms (for illicit activities)
-- enforcement: dependency on enforcement/protection mechanisms
-- regulatory: dependency on regulatory environment/approvals
-Example: { "relationType": "DEPENDS_ON", "qualifiers": { "facet": "communication" } }
+	relationRulesBlockSupplyChain = `RELATION DIRECTION RULES (STRICT — supply-chain contract only):
+Each relation is a directed edge FROM TARGET (source) TO targetCanonicalPath (target).
+Use ONLY these relation types (canonical): PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, PARTICIPATES_IN, HAS_MARKET_SEGMENT.
+Do NOT use DEPENDS_ON, PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, OWNS, INVESTS_IN, or other non-supply-chain types.
+- SUPPLIES_TO: source supplies goods/services to target (supplier→customer flow).
+- PRODUCES: source produces target (source MUST be ORGANIZATION/FACILITY/DEPOSIT; target is a PRODUCT).
+- CONSUMES: source consumes target (actor→input product).
+- TRANSFORMS_INTO: for PRODUCT -> PRODUCT value-chain steps (not PRODUCES).
+- EXTRACTS_FROM: source extracts from target (e.g. DEPOSIT, GEO_REGION).
+- PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial participation). For "market depends on org" use PARTICIPATES_IN with ORG as source.
+- LOCATED_IN / OPERATES_IN: source located/operates in GEO target.
+- HAS_MARKET_SEGMENT: parent market -> narrower segment (market hierarchy only).
+`
 
-OUTPUT:
-Return ONLY JSON with this schema:
-{
-  "relations": [
-    {
-      "targetName": "string",
-      "targetLegalName": "string",
-      "targetShortName": "string",
-      "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "COMMUNITY",
-      "relationType": %s,
-      "reason": "string",
-      "confidence": 0.0,
-      "targetCanonicalPath": "string (REQUIRED, stable, NOT /discovered/*)"
-    }
-  ]
-}
-
-RULES:
-- Output 5..12 relations max.
-- Prefer supply-chain/logistics structure when the intent suggests it (suppliers, battery materials/components, logistics providers, ports/regions, manufacturing facilities, key dependencies).
-- confidence MUST be <= 0.65 (hypothesis), use ~0.25..0.55 typically.
-- Use stable canonical paths:
-  - Organizations: /org/{iso2|na}/{slug}
-    - iso2: country of origin / primary jurisdiction (ISO3166-1 alpha2 lowercase). If unknown use "na".
-  - Government bodies: /gov/{iso2|na}/{slug}
-    - Use for ministries, regulators, agencies, state bodies. If unknown, use /gov/na/{slug}.
-  - Media channels (last-mile endpoints): /media/{platform}/{slug}
-    - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
-  - Communities (informal social groups): /community/{geo}/{type}/{slug}
-    - geo: ISO2, regional token, or "global"/"int"
-    - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
-    - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
-    - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe | representatives | industry-association | key-community
-    - Examples:
-      - "Hawala network in Dubai" -> /community/ae/trade/hawala-dubai-network
-      - "Kazan drug dealers" -> /community/ru/criminal/kazan-synthetic-dealers
-      - "OSINT community" -> /community/global/professional/osint-researchers
-      - "House of Saud" -> /community/sa/dynasty/house-of-saud
-      - "Pashtun tribes" -> /community/af/tribe/pashtun
-      - "Senior Zhuz (Kazakhstan)" -> /community/kz/tribe/senior-zhuz
-    - CRITICAL: COMMUNITY is for INFORMAL groups WITHOUT legal structure.
-      - If the entity has legal registration → use ORGANIZATION (/org/)
-      - If the entity is a media endpoint (channel/group) → use MEDIA_CHANNEL (/media/)
-    - COMMUNITY HIERARCHY: Use HAS_SUBGROUP to link parent community → narrower sub-community
-      - dynasties: broader family → branch (house-of-saud → sudairi-seven)
-      - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
-      - Direction: broader → narrower
-  - Facilities: /fac/{orgSlug}/{slug} when possible (prefer nested over flat /fac/{slug})
-  - People: /person/{slug}
-  - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
-    - category: "raw" | "component" | "finished" | "service"
-    - type: "mineral" | "agricultural" | "chemical" | "electronic" | "mechanical" | "energy"
-    - stage: "extraction" | "refining" | "processing" | "manufacturing" | "assembly"
-    - slug: lowercase-slug derived from product name
-    - If category/type/stage is uncertain, still output the same 5-segment format with your best estimate
-  - GEO regions/locations: MUST be /loc/{country}/{admin1}/{city}
-    - country: ISO3166-1 alpha2 lowercase OR regional token (e.g., gcc, eu, asean, opec)
-    - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
-      - GCC → /loc/gcc/na/na (NOT /loc/na/na/gcc)
-    - admin1: subdivision code/slug lowercase; use "na" if not applicable/unknown
-    - city: lowercase slug; use "na" if not applicable/unknown
-    - country-only locations: /loc/{country}/na/na
-    - CRITICAL: country code MUST be valid ISO3166-1 alpha2 (exactly 2 lowercase letters). Invalid codes will be REJECTED.
-  - MARKET (segment-first preferred):
-    - HIERARCHY LEVELS:
-      - L1 (domain): /market/{geo}/{domain}; L2 (vertical): /market/{geo}/{domain}/{vertical}; L3+ (sub-vertical): parent path + one segment
-      - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
-      - Example chains: /market/sa/finance → /market/sa/finance/banking → .../islamic-banking; /market/tw/technology → /market/tw/technology/semiconductors → .../foundry
-    - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
-    - geo: ISO2, composite ISO2, regional token (eu, gcc, asean, opec), or "global"/"int"
-    - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
-    - GEOGRAPHY INHERITANCE: If TARGET is a regional market (e.g., /market/sa/...), new MARKET relations MUST inherit that geo
-      - Example: decomposing /market/sa/event-marketing → sub-markets should be /market/sa/... (NOT /market/global/...)
-    - Use "global" ONLY when the market is truly global or no geographic context exists
-    - MARKET HIERARCHY: Use HAS_MARKET_SEGMENT to link parent market → narrower segment (child path = parent path + one segment)
-      - Example: /market/sa/marketing HAS_MARKET_SEGMENT /market/sa/marketing/event-marketing
-      - Direction: broader → narrower
-  - PROGRAM: /program/{jurisdictionSlug}/{programSlug}
-    - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
-    - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
-    - If TARGET is a regional program, new related entities should reflect that jurisdiction context
-  - GOV: /gov/{iso2}/{slug}
-    - GOV HIERARCHY: Use ADMINISTERS to link superior gov body → subordinate body
-      - Example: /gov/sa/ministry-of-health ADMINISTERS /gov/sa/sfda
-      - Direction: superior → subordinate
-    - GovTypes: government, ministry, department, agency, authority, regulator, committee, service, bureau, office
-- VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
-  - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
-  - canonicalPath MUST match expected prefix for targetType
-  - GEO_REGION paths MUST have exactly 4 parts: /loc/{country}/{admin1}/{city} with valid country code
-%s
-  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
+	validationSuffixGeneral = `  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
   - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO (not PRODUCES).
-- NEVER use "/discovered/*".
-- Return ONLY valid JSON.`, targetCanonicalPath, ctxBlock, decompositionBlock, edgesemantics.AllEdgeTypesForPrompt(), edgesemantics.EdgeDirectionValidationRulesForPrompt())
-}
+`
+
+	validationSuffixSupplyChain = `  - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO (not PRODUCES).
+`
+)

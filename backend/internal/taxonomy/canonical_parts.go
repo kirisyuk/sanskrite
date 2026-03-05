@@ -52,16 +52,14 @@ type RawPathParts struct {
 	Segments []string `json:"segments" firestore:"Segments"`
 }
 
-// OrgPathParts represents /org/{geo}/{baseSlug}-{legalForm?}.
+// OrgPathParts represents /org/{geo}/{slug}.
 //
-// legalForm is stored separately to allow selective fixes (e.g., add ltd) without touching geo.
+// Legal form is not used; slug is base name only.
 type OrgPathParts struct {
 	// Geo is ISO2, composite ISO2 (e.g. "ae-sa-om"), or "na".
 	Geo string
-	// BaseSlug is org slug without legal form suffix.
+	// BaseSlug is org slug (base name, no legal form).
 	BaseSlug string
-	// LegalForm is canonical legal form token (e.g., "ltd", "inc", "llc"). Optional.
-	LegalForm string
 	// Legacy is deprecated and kept only for transitional handling of pre-contract records.
 	Legacy bool
 }
@@ -116,11 +114,11 @@ type CommunityPathParts struct {
 	Legacy bool // deprecated transitional flag
 }
 
-// LocPathParts represents /loc/{cc}/{admin1}/{city}.
+// LocPathParts represents /loc/{country}[/{level1}[/{level2}]].
 type LocPathParts struct {
 	Country string // ISO2, composite, or allowed regional token
-	Admin1  string // geonames admin1 code/slug or "na"
-	City    string // city slug or "na"
+	Admin1  string // optional level-1 subdivision slug
+	City    string // optional level-2 subdivision slug
 }
 
 // SegmentPathParts represents /segment/{domain}/{vertical}/{geo}.
@@ -140,9 +138,9 @@ type MarketPathParts struct {
 	Legacy   bool // deprecated transitional flag
 }
 
-// FacilityPathParts represents /fac/{orgSlug}/{facilitySlug}.
+// FacilityPathParts represents /fac/{geo}/{facilitySlug}.
 type FacilityPathParts struct {
-	OrgSlug      string
+	Geo          string // ISO2, na, or regional (like org/gov)
 	FacilitySlug string
 	Legacy       bool // deprecated transitional flag
 }
@@ -213,16 +211,15 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 
 	switch ns {
 	case "org":
-		// Canonical: /org/{geo}/{slug}.
-		// Transitional normalization: /org/{slug} -> /org/na/{slug}.
+		// Canonical: /org/{geo}/{slug}. When parsing legacy paths with -inc/-ltd etc., strip to get base.
 		if len(parts) == 2 {
-			base, lf := splitOrgSlugLegalForm(parts[1])
-			out.Org = &OrgPathParts{Geo: "na", BaseSlug: base, LegalForm: lf, Legacy: true}
+			base, _ := splitOrgSlugLegalForm(parts[1])
+			out.Org = &OrgPathParts{Geo: "na", BaseSlug: base, Legacy: true}
 			return out, nil
 		}
 		if len(parts) == 3 {
-			base, lf := splitOrgSlugLegalForm(parts[2])
-			out.Org = &OrgPathParts{Geo: parts[1], BaseSlug: base, LegalForm: lf, Legacy: false}
+			base, _ := splitOrgSlugLegalForm(parts[2])
+			out.Org = &OrgPathParts{Geo: parts[1], BaseSlug: base, Legacy: false}
 			return out, nil
 		}
 		return nil, fmt.Errorf("org path must be /org/{geo}/{slug}: %q", path)
@@ -296,10 +293,18 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 		return nil, fmt.Errorf("community path must be /community/{geo}/{type}/{slug}: %q", path)
 
 	case "loc":
-		if len(parts) != 4 {
-			return nil, fmt.Errorf("loc path must be /loc/{cc}/{admin1}/{city}: %q", path)
+		if len(parts) < 2 || len(parts) > 4 {
+			return nil, fmt.Errorf("loc path must be /loc/{country}[/{level1}[/{level2}]]: %q", path)
 		}
-		out.Loc = &LocPathParts{Country: parts[1], Admin1: parts[2], City: parts[3]}
+		level1 := ""
+		level2 := ""
+		if len(parts) >= 3 {
+			level1 = parts[2]
+		}
+		if len(parts) >= 4 {
+			level2 = parts[3]
+		}
+		out.Loc = &LocPathParts{Country: parts[1], Admin1: level1, City: level2}
 		return out, nil
 
 	case "segment":
@@ -333,17 +338,17 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 		return nil, fmt.Errorf("market path must be /market/{geo}/{domain}[/{vertical}...]: %q", path)
 
 	case "fac":
-		// Canonical: /fac/{orgSlug}/{facilitySlug}.
+		// Canonical: /fac/{geo}/{facilitySlug}.
 		// Transitional normalization: /fac/{facilitySlug} -> /fac/na/{facilitySlug}.
 		if len(parts) == 2 {
-			out.Fac = &FacilityPathParts{OrgSlug: "na", FacilitySlug: parts[1], Legacy: true}
+			out.Fac = &FacilityPathParts{Geo: "na", FacilitySlug: parts[1], Legacy: true}
 			return out, nil
 		}
 		if len(parts) == 3 {
-			out.Fac = &FacilityPathParts{OrgSlug: parts[1], FacilitySlug: parts[2], Legacy: false}
+			out.Fac = &FacilityPathParts{Geo: parts[1], FacilitySlug: parts[2], Legacy: false}
 			return out, nil
 		}
-		return nil, fmt.Errorf("facility path must be /fac/{orgSlug}/{facilitySlug}: %q", path)
+		return nil, fmt.Errorf("facility path must be /fac/{geo}/{facilitySlug}: %q", path)
 
 	case "program":
 		// Canonical: /program/{jurisdiction}/{slug}.
@@ -442,15 +447,11 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 		if base == "" {
 			return "", false
 		}
-		slug := base
-		if lf := strings.TrimSpace(p.Org.LegalForm); lf != "" {
-			slug = slug + "-" + lf
-		}
 		geo := strings.TrimSpace(p.Org.Geo)
 		if geo == "" {
 			geo = "na"
 		}
-		return JoinPath("org", geo, slug), true
+		return JoinPath("org", geo, base), true
 
 	case "gov":
 		if p.Gov == nil || strings.TrimSpace(p.Gov.Geo) == "" || strings.TrimSpace(p.Gov.Slug) == "" {
@@ -510,10 +511,10 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 		return JoinPath("community", geo, typ, p.Community.Slug), true
 
 	case "loc":
-		if p.Loc == nil || p.Loc.Country == "" || p.Loc.Admin1 == "" || p.Loc.City == "" {
+		if p.Loc == nil || strings.TrimSpace(p.Loc.Country) == "" {
 			return "", false
 		}
-		// GeoCanonicalPath preserves special handling for "na" defaults and regional tokens.
+		// GeoCanonicalPath preserves regional/composite validation and strips placeholder tails.
 		if built := GeoCanonicalPath(p.Loc.Country, p.Loc.Admin1, p.Loc.City); strings.TrimSpace(built) != "" {
 			return built, true
 		}
@@ -558,11 +559,11 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 		if p.Fac == nil || p.Fac.FacilitySlug == "" {
 			return "", false
 		}
-		org := strings.TrimSpace(p.Fac.OrgSlug)
-		if org == "" {
-			org = "na"
+		geo := strings.TrimSpace(p.Fac.Geo)
+		if geo == "" {
+			geo = "na"
 		}
-		return JoinPath("fac", org, p.Fac.FacilitySlug), true
+		return JoinPath("fac", geo, p.Fac.FacilitySlug), true
 
 	case "program":
 		if p.Program == nil || p.Program.Slug == "" {
@@ -629,46 +630,29 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 	return "", false
 }
 
+// legalFormSuffixesForParse used when parsing legacy paths (e.g. /org/us/tesla-inc). Strip to get base.
+var legalFormSuffixesForParse = []string{
+	"pjsc", "cjsc", "ojsc", "oao", "zao", "ao", "jsc", "ooo",
+	"pllc", "llc", "inc", "ltd", "corp", "plc", "gmbh", "sarl", "srl", "ag", "sa", "spa",
+	"as", "ab", "bv", "nv", "se", "co", "llp", "lp", "sp", "sup", "fsup", "soe",
+	"kk", "oy", "oyj", "ltda", "sdnbhd", "ptyltd", "spzoo", "dac", "teo", "ulc",
+	"scs", "sca", "snc", "senc", "sas", "sasu", "asa", "pteltd",
+}
+
 func splitOrgSlugLegalForm(slug string) (base string, legalForm string) {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
 		return "", ""
 	}
-	// Ensure we match on canonical, slugified tokens.
 	slug = Slugify(slug)
 	if slug == "" {
 		return "", ""
 	}
-
-	// Build a "known legal forms" list for suffix parsing.
-	// We union:
-	// - canonical rules list (shared contract)
-	// - additional canonical tokens used by normalizeLegalForm() and stripLegalFormSuffix()
-	forms := map[string]struct{}{}
-	rules := DefaultCanonicalRules()
-	for _, lf := range rules.Org.LegalForms {
-		lf = strings.TrimSpace(strings.ToLower(lf))
-		if lf != "" {
-			forms[lf] = struct{}{}
-		}
-	}
-	for _, lf := range []string{"cjsc", "llp", "lp", "sp", "sup", "fsup", "soe", "se", "co", "pty"} {
-		forms[lf] = struct{}{}
-	}
-
-	ordered := make([]string, 0, len(forms))
-	for lf := range forms {
-		ordered = append(ordered, lf)
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		// Prefer longer matches first (pjsc before jsc).
-		if len(ordered[i]) != len(ordered[j]) {
-			return len(ordered[i]) > len(ordered[j])
-		}
-		return ordered[i] < ordered[j]
-	})
-
-	for _, lf := range ordered {
+	// Sort by length descending to match longer forms first (pjsc before jsc)
+	suffixes := make([]string, len(legalFormSuffixesForParse))
+	copy(suffixes, legalFormSuffixesForParse)
+	sort.Slice(suffixes, func(i, j int) bool { return len(suffixes[i]) > len(suffixes[j]) })
+	for _, lf := range suffixes {
 		suffix := "-" + lf
 		if strings.HasSuffix(slug, suffix) {
 			b := strings.TrimSuffix(slug, suffix)

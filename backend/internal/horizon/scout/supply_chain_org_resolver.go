@@ -12,7 +12,7 @@ import (
 // SupplyChainOrgResolver performs Level 3 FAC→ORG resolution: for each facility in supply chains,
 // traverses OWNS/CONTROLS edges backward to find the owning organization.
 // Max depth SupplyChainMaxTraversalDepth (5), cycles prohibited via visited set.
-// Fallback: when no ORG found, uses /fac/{orgSlug}-general-production.
+// Fallback: when no ORG found, uses /fac/{geo}/general-production.
 type SupplyChainOrgResolver struct {
 	edgesRepo     *repo.DependencyEdgesRepository
 	fragmentsRepo *repo.HorizonFragmentsRepository
@@ -28,7 +28,7 @@ func NewSupplyChainOrgResolver(edgesRepo *repo.DependencyEdgesRepository, fragme
 
 // SupplyChainOrgResolveResult holds FAC→owning path (ORG or fallback facility) mappings.
 type SupplyChainOrgResolveResult struct {
-	// FacToOrg maps facility canonical path -> owning org path or fallback /fac/{orgSlug}-general-production
+	// FacToOrg maps facility canonical path -> owning org path or fallback /fac/{geo}/general-production
 	FacToOrg map[string]string
 }
 
@@ -46,8 +46,8 @@ func (r *SupplyChainOrgResolver) Resolve(ctx context.Context, tenantID string, p
 	for path := range pathToID {
 		path = strings.TrimSpace(path)
 		if path != "" && strings.HasPrefix(path, "/fac/") {
-			// Skip fallback facilities (already represent org-level)
-			if strings.HasSuffix(path, "-general-production") {
+			// Skip fallback facilities (already represent org-level): /fac/{geo}/general-production
+			if strings.HasSuffix(path, "-general-production") || strings.HasSuffix(path, "/general-production") {
 				continue
 			}
 			facPaths = append(facPaths, path)
@@ -151,8 +151,8 @@ func (r *SupplyChainOrgResolver) buildIDToPath(pathToID map[string]string) map[s
 	return out
 }
 
-// fallbackFromFacPath derives /fac/{orgSlug}-general-production when no ORG found.
-// Path format: /fac/{orgSlug}/{facSlug} or /fac/{orgSlug}-general-production.
+// fallbackFromFacPath derives /fac/{geo}/general-production when no ORG found.
+// Path format: /fac/{geo}/{facSlug}.
 func (r *SupplyChainOrgResolver) fallbackFromFacPath(facPath string) string {
 	facPath = strings.TrimSpace(facPath)
 	if facPath == "" || !strings.HasPrefix(facPath, "/fac/") {
@@ -162,10 +162,10 @@ func (r *SupplyChainOrgResolver) fallbackFromFacPath(facPath string) string {
 	if len(parts) < 2 {
 		return "" // need at least "fac" and one segment
 	}
-	// parts[0] = "fac", parts[1] = first segment
-	firstSeg := parts[1]
-	if strings.HasSuffix(firstSeg, "-general-production") {
+	// parts[0] = "fac", parts[1] = geo, parts[2] = facilitySlug (or *-general-production)
+	geo := parts[1]
+	if len(parts) >= 3 && (parts[2] == "general-production" || strings.HasSuffix(parts[2], "-general-production")) {
 		return facPath // already fallback
 	}
-	return taxonomy.FacilityGeneralProductionPath(firstSeg)
+	return taxonomy.FacilityGeneralProductionPath(geo, "")
 }

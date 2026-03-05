@@ -5,6 +5,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 type EdgeCanonicalizationInput struct {
@@ -17,6 +18,9 @@ type EdgeCanonicalizationInput struct {
 	Reason            string
 	Qualifiers        map[string]interface{}
 	OwnershipEvidence bool
+	// SupplyChainMode when true forbids rewrites that produce non-allowlisted types.
+	// Blocked rewrites are reverted to the original type.
+	SupplyChainMode bool
 }
 
 type EdgeCanonicalizationResult struct {
@@ -202,6 +206,24 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 				res.PolicyPenalty = 0.20
 				res.ConfidenceMult *= 0.80
 			}
+		}
+	}
+
+	// Supply-chain contract guard: forbid any rewrite that produces non-allowlisted types.
+	// Must run last to catch all rewrites (CanonicalizeEdgeWithPaths, transition fallback, unknown fallback).
+	if in.SupplyChainMode && res.Changed && string(res.EdgeType) != "" {
+		if !taxonomy.IsSupplyChainEdgeType(string(res.EdgeType)) {
+			res.EdgeType = in.EdgeType
+			if res.OriginalType != "" {
+				res.EdgeType = res.OriginalType
+			}
+			res.Changed = false
+			res.ShouldSwap = false
+			res.Reason = ""
+			res.PolicyStatus = horizonmodels.PolicyStatusClean
+			res.PolicyReason = ""
+			res.PolicyPenalty = 0
+			res.ConfidenceMult = 1.0
 		}
 	}
 

@@ -1824,9 +1824,9 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 	case string(horizonmodels.FragmentTypeOrganization):
 		return taxonomy.OrgCanonicalPath("na", label)
 	case string(horizonmodels.FragmentTypeFacility):
-		return taxonomy.FacilityCanonicalPath("", label)
+		return taxonomy.FacilityCanonicalPath("na", label)
 	case string(horizonmodels.FragmentTypeGeoRegion):
-		return taxonomy.GeoCanonicalPath("na", "na", slug)
+		return taxonomy.GeoCanonicalPath("global", slug, "")
 	case string(horizonmodels.FragmentTypeProduct):
 		return taxonomy.ProductCanonicalPath("", label)
 	case string(horizonmodels.FragmentTypeProgram):

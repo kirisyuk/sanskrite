@@ -59,7 +59,7 @@ func TestShouldRunStrategicOverlay_AlwaysForGovEntities(t *testing.T) {
 }
 
 func TestCollectAllEntityPaths_IncludesRelationTargets(t *testing.T) {
-	firstOrder := []string{"/org/ar/barrick-gold", "/fac/minera-argentina-gold/veladero-mine"}
+	firstOrder := []string{"/org/ar/barrick-gold", "/fac/ar/veladero-mine"}
 	rels := []agents.DiscoveredRelation{
 		{TargetCanonicalPath: "/org/ar/barrick-gold"}, // duplicate
 		{TargetCanonicalPath: "/gov/ar/secretaria-de-mineria"},
@@ -69,7 +69,7 @@ func TestCollectAllEntityPaths_IncludesRelationTargets(t *testing.T) {
 	paths := collectAllEntityPaths(firstOrder, rels)
 	expected := map[string]bool{
 		"/org/ar/barrick-gold":                true,
-		"/fac/minera-argentina-gold/veladero-mine": true,
+		"/fac/ar/veladero-mine": true,
 		"/gov/ar/secretaria-de-mineria":        true,
 		"/loc/ar/na/na":                        true,
 	}

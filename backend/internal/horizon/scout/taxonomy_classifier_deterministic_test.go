@@ -25,12 +25,12 @@ func TestClassifyTaxonomyDeterministic(t *testing.T) {
 		{"org bank", "/org/kz/bank-centerkredit", "/Organization/Corporation/Private", "/Financials/Banking/Systemic", true},
 
 		// --- FAC ---
-		{"fac pipeline", "/fac/botas/turkstream-pipeline", "/Infrastructure/Energy/Pipeline/Gas", "/Energy/Fossil_Fuels/Oil_Gas_Midstream", true},
-		{"fac refinery", "/fac/aramco/ras-tanura-refinery", "/Infrastructure/Manufacturing/Factory", "/Energy/Fossil_Fuels/Oil_Gas_Downstream", true},
+		{"fac pipeline", "/fac/tr/turkstream-pipeline", "/Infrastructure/Energy/Pipeline/Gas", "/Energy/Fossil_Fuels/Oil_Gas_Midstream", true},
+		{"fac refinery", "/fac/sa/ras-tanura-refinery", "/Infrastructure/Manufacturing/Factory", "/Energy/Fossil_Fuels/Oil_Gas_Downstream", true},
 		{"fac terminal", "/fac/na/lng-terminal-aliaga", "/Infrastructure/Logistics/Warehouse", "/Energy/Fossil_Fuels/Oil_Gas_Midstream", true},
-		{"fac mine", "/fac/bhp/olympic-dam-mine", "/Infrastructure/Manufacturing/Mine", "/Materials/Mining/Industrial_Metals", true},
+		{"fac mine", "/fac/au/olympic-dam-mine", "/Infrastructure/Manufacturing/Mine", "/Materials/Mining/Industrial_Metals", true},
 		{"fac port", "/fac/na/ceyhan-seaport", "/Infrastructure/Logistics/Seaport", "/Industrials/Transportation/Marine", true},
-		{"fac factory", "/fac/tsmc/fab-21", "/Infrastructure/Manufacturing/Factory", "/Technology/Semiconductors/Manufacturing", true},
+		{"fac factory", "/fac/tw/fab-21", "/Infrastructure/Manufacturing/Factory", "/Technology/Semiconductors/Manufacturing", true},
 		{"fac solar", "/fac/na/solar-park", "/Infrastructure/Energy/PowerPlant/Renewable", "/Energy/Renewable/Solar", true},
 		{"fac generic", "/fac/na/unknown-facility", "/Infrastructure/Manufacturing/Factory", "/Industrials/Machinery/Industrial_Automation", true},
 
