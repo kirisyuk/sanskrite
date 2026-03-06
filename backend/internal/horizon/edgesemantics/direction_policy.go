@@ -148,15 +148,6 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
 		Description:      "Producer produces product",
 	},
-	models.DependencyTypeConsumes: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
-		Description:      "Consumer consumes product",
-	},
 	models.DependencyTypeLocatedIn: {
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeFacility,
@@ -188,12 +179,13 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
+			models.FragmentTypeProduct,
 		},
 		ValidTargetTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
 		},
-		Description: "Supplier supplies to customer",
+		Description: "Supplier/product supplies to customer",
 	},
 	models.DependencyTypeDependsOn: {
 		ValidSourceTypes: []models.FragmentType{

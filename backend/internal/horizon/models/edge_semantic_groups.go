@@ -25,7 +25,6 @@ func SemanticGroupForEdgeType(t DependencyType) string {
 var edgeTypeToSemanticGroup = map[DependencyType]string{
 	// supply_chain
 	DependencyTypeProduces:     SemanticGroupSupplyChain,
-	DependencyTypeConsumes:    SemanticGroupSupplyChain,
 	DependencyTypeSuppliesTo:   SemanticGroupSupplyChain,
 	DependencyTypeTransformsInto: SemanticGroupSupplyChain,
 	DependencyTypeExtractsFrom: SemanticGroupSupplyChain,

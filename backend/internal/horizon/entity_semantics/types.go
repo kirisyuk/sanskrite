@@ -43,7 +43,7 @@ const (
 type MissingInfoRule struct {
 	Trigger          string   // relation_missing | field_empty | relation_count_below | seed
 	RelationType     string   // for relation_missing (PRODUCES, HAS_MARKET_SEGMENT, ...)
-	RelationTypes    []string // when set, rule fires when ALL listed types are missing (e.g. PRODUCES+CONSUMES)
+	RelationTypes    []string // when set, rule fires when ALL listed types are missing (e.g. PRODUCES+SUPPLIES_TO)
 	FieldPath        string   // for field_empty: Labels.en, MarketDomain, State./metric/market/tam_usd
 	MinCount         int      // for relation_count_below
 	DomainMode       string   // "" = general; "market" = only when DomainModeMarket active

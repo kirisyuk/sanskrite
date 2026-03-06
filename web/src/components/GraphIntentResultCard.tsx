@@ -150,7 +150,7 @@ export function GraphIntentResultCard({
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {nodes.map((n, idx) => {
-                const visualType = getHorizonNodeVisualType(n.type, n.canonicalPathHint, n.label);
+                const visualType = getHorizonNodeVisualType(n.type, n.canonicalPathHint, n.label, (n as any)?.facilityKind);
                 const colors = getNodeColors(visualType, theme);
                 const label = (n.label || '').trim() || '?';
                 return (

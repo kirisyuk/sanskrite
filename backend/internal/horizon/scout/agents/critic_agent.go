@@ -532,7 +532,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	MANDATORY - Products/inputs for FACILITY (always, not just for products_and_services specialty):
 	  - For any /fac/ (FACILITY): if there are NO PRODUCES relations, add:
 	    - "What products does this facility produce? Return as /product/... canonical paths."
-	  - If there are NO CONSUMES relations, add:
+	  - If there are NO input-product relations (SUPPLIES_TO product→org), add:
 	    - "What inputs/materials does this facility consume? Return as /product/... canonical paths."
 	
 	MANDATORY - Extractive industries (Mining and O&G):
@@ -598,7 +598,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - "Who is the CEO/CFO/COO/CTO/CIO/CMO/CHRO of <org>?" and "Who are the board members/chair of <org>?" and "Who founded <org>?"
 	  - NOTE: PERSON relations may appear inverted due to extraction being anchored on the organization; still treat them as valid signals for completeness.
 	- If "products_and_services" specialty is requested (ENHANCED requirements beyond the baseline):
-	  - For ORGANIZATION/FACILITY: in addition to baseline PRODUCES/CONSUMES, also check for:
+	  - For ORGANIZATION/FACILITY: in addition to baseline PRODUCES/SUPPLIES_TO, also check for:
 	    - TRANSFORMS_INTO relations for products (value chain)
 	    - Capacity/volume metrics on edges
 	    - Add questions for missing transformations and metrics.

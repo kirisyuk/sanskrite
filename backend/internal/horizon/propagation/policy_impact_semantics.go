@@ -115,16 +115,6 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisOperationalContinuity: 0.90,
 		},
 	},
-	horizonmodels.DependencyTypeConsumes: {
-		BaseFactor:        0.95,
-		DefaultAxisFactor: 0.65,
-		AxisFactor: map[string]float64{
-			horizonmodels.AxisPhysicalFlowDemand:    1.10,
-			horizonmodels.AxisPhysicalFlowSupply:    0.95,
-			horizonmodels.AxisFinancialSettlement:   0.95,
-			horizonmodels.AxisOperationalContinuity: 0.90,
-		},
-	},
 	horizonmodels.DependencyTypeParticipatesIn: {
 		BaseFactor:        0.90,
 		DefaultAxisFactor: 0.65,

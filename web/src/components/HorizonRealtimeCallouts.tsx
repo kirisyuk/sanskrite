@@ -5,6 +5,7 @@ function isRelevant(ev: HorizonRealtimeEvent): boolean {
   const t = ev.type || '';
   if (t === 'horizon.graph.node.upserted') return true;
   if (t === 'horizon.graph.edge.upserted') return true;
+  if (t === 'horizon.ontology.fact.created' && (ev.data as any)?.kind === 'relation') return true;
   if (t === 'horizon.scout.job.state') return true;
   if (t === 'horizon.scout.job.completed') return true;
   if (t === 'horizon.canvas.newsByFragments.completed') return true;

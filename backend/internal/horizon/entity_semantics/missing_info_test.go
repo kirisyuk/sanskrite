@@ -49,9 +49,9 @@ func TestEvaluateMissingInfoRules_TriggerRelationMissing(t *testing.T) {
 
 func TestEvaluateMissingInfoRules_TriggerRelationTypes(t *testing.T) {
 	rules := []MissingInfoRule{
-		{Trigger: TriggerRelationMissing, RelationTypes: []string{"PRODUCES", "CONSUMES"}, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "products for %s"},
+		{Trigger: TriggerRelationMissing, RelationTypes: []string{"PRODUCES", "SUPPLIES_TO"}, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "products for %s"},
 	}
-	// Neither PRODUCES nor CONSUMES: fires
+	// Neither PRODUCES nor SUPPLIES_TO: fires
 	out := EvaluateMissingInfoRules(nil, nil, rules, []string{taxonomy.DomainModeSupplyChain}, "/org/us/acme", EvaluateModeFull)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 (both missing), got %d", len(out))
@@ -64,7 +64,7 @@ func TestEvaluateMissingInfoRules_TriggerRelationTypes(t *testing.T) {
 	}
 
 	// Both present: does not fire
-	out3 := EvaluateMissingInfoRules(nil, []string{"PRODUCES", "CONSUMES"}, rules, []string{taxonomy.DomainModeSupplyChain}, "/org/us/acme", EvaluateModeFull)
+	out3 := EvaluateMissingInfoRules(nil, []string{"PRODUCES", "SUPPLIES_TO"}, rules, []string{taxonomy.DomainModeSupplyChain}, "/org/us/acme", EvaluateModeFull)
 	if len(out3) != 0 {
 		t.Errorf("both present: expected 0, got %d", len(out3))
 	}

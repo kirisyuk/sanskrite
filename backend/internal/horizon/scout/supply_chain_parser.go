@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -69,15 +70,15 @@ type ParsedChainResult struct {
 
 // ParsedChainStats captures diagnostics about parsing supply chains.
 type ParsedChainStats struct {
-	ChainsIn                 int `json:"chainsIn"`
-	NodesTotal               int `json:"nodesTotal"`
-	NodesWithCanonicalPath   int `json:"nodesWithCanonicalPath"`
-	NodesSkippedEmptyCP      int `json:"nodesSkippedEmptyCanonicalPath"`
-	NodesSkippedUnknownType  int `json:"nodesSkippedUnknownType"`
-	EdgesAttempted           int `json:"edgesAttempted"`
-	EdgesCreated             int `json:"edgesCreated"`
-	EdgesSkippedMissingCP    int `json:"edgesSkippedMissingCanonicalPath"`
-	EdgesInvertedToDependsOn int `json:"edgesInvertedToDependsOn"`
+	ChainsIn                  int `json:"chainsIn"`
+	NodesTotal                int `json:"nodesTotal"`
+	NodesWithCanonicalPath    int `json:"nodesWithCanonicalPath"`
+	NodesSkippedEmptyCP       int `json:"nodesSkippedEmptyCanonicalPath"`
+	NodesSkippedUnknownType   int `json:"nodesSkippedUnknownType"`
+	EdgesAttempted            int `json:"edgesAttempted"`
+	EdgesCreated              int `json:"edgesCreated"`
+	EdgesSkippedMissingCP     int `json:"edgesSkippedMissingCanonicalPath"`
+	EdgesInvertedToDependsOn  int `json:"edgesInvertedToDependsOn"`
 	EdgesAbstainedUnknownPair int `json:"edgesAbstainedUnknownPair"`
 	ConsecutiveSameTypeNodes  int `json:"consecutiveSameTypeNodes"`
 }
@@ -86,7 +87,7 @@ type ParsedChainStats struct {
 type ChainEdge struct {
 	SourceCanonicalPath string
 	TargetCanonicalPath string
-	RelationType        string // PRODUCES, CONSUMES, SUPPLIES_TO, DEPENDS_ON, TRANSFORMS_INTO
+	RelationType        string // PRODUCES, SUPPLIES_TO, DEPENDS_ON, TRANSFORMS_INTO
 	Confidence          float64
 	Reason              string
 	// Qualifiers carry edge-specific metadata (e.g. at_facility for TRANSFORMS_INTO).
@@ -115,6 +116,8 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 			// Need at least 2 nodes to form an edge
 			continue
 		}
+		chain.Nodes = normalizeSupplyChainNodes(chain.Nodes)
+		chain.TransportVia = normalizeSupplyChainPathList(chain.TransportVia)
 
 		altWarnings, altCount := p.validateChainAlternation(chain.Nodes, chainIdx)
 		result.ParseWarnings = append(result.ParseWarnings, altWarnings...)
@@ -261,7 +264,7 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 				continue
 			}
 			seg := &SupplyLinkSegment{
-					SupplierRef: srcPath,
+				SupplierRef: srcPath,
 				ProductRef:  prodPath,
 				CustomerRef: dstPath,
 				Confidence:  chain.Confidence,
@@ -460,11 +463,10 @@ func (p *SupplyChainParser) extractSegmentState(metrics []agents.SegmentMetrics,
 	return state, contract
 }
 
-
 // createTransportFacilityFragment creates a minimal HorizonFragment for a transport facility path.
 // Used when transportVia paths are not already in chain nodes; same canonicalization rules apply.
 func (p *SupplyChainParser) createTransportFacilityFragment(canonicalPath string) *models.HorizonFragment {
-	canonicalPath = strings.TrimSpace(canonicalPath)
+	canonicalPath = normalizeSupplyChainCanonicalPath(canonicalPath)
 	if canonicalPath == "" || !strings.HasPrefix(canonicalPath, "/fac/") {
 		return nil
 	}
@@ -475,7 +477,7 @@ func (p *SupplyChainParser) createTransportFacilityFragment(canonicalPath string
 	}
 	name = strings.ReplaceAll(name, "-", " ")
 	identifiers := map[string]string{}
-	if kind := taxonomy.FacilityKindFromCanonicalPath(canonicalPath); kind != taxonomy.FacilityKindUnknown && kind != taxonomy.FacilityKindOther {
+	if kind := taxonomy.InferFacilityKind(canonicalPath, name); kind != taxonomy.FacilityKindUnknown {
 		identifiers["facilityKind"] = string(kind)
 	}
 	return &models.HorizonFragment{
@@ -489,7 +491,7 @@ func (p *SupplyChainParser) createTransportFacilityFragment(canonicalPath string
 
 // createFragmentFromNode creates a HorizonFragment from a supply chain node.
 func (p *SupplyChainParser) createFragmentFromNode(node agents.SupplyChainNode) *models.HorizonFragment {
-	canonicalPath := strings.TrimSpace(node.CanonicalPath)
+	canonicalPath := normalizeSupplyChainCanonicalPath(node.CanonicalPath)
 	if canonicalPath == "" {
 		return nil
 	}
@@ -528,12 +530,12 @@ func (p *SupplyChainParser) createFragmentFromNode(node agents.SupplyChainNode) 
 			frag.Identifiers["facilityType"] = string(ft)
 		}
 		fk := taxonomy.NormalizeFacilityKind(strings.TrimSpace(node.FacilityKind))
-		if fk != taxonomy.FacilityKindUnknown && fk != taxonomy.FacilityKindOther {
+		if fk != taxonomy.FacilityKindUnknown {
 			frag.Identifiers["facilityKind"] = string(fk)
 		} else {
-			// Infer from canonical path slug when LLM did not provide
-			inferred := taxonomy.FacilityKindFromCanonicalPath(canonicalPath)
-			if inferred != taxonomy.FacilityKindUnknown && inferred != taxonomy.FacilityKindOther {
+			// Infer from canonical path + contextual fields when LLM did not provide.
+			inferred := taxonomy.InferFacilityKind(canonicalPath, node.Name, node.FacilityType, node.Role)
+			if inferred != taxonomy.FacilityKindUnknown {
 				frag.Identifiers["facilityKind"] = string(inferred)
 			}
 		}
@@ -598,8 +600,8 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 // - Product → Product: TRANSFORMS_INTO
 // - Unknown pair: abstain (return nil, true).
 func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNode, confidence float64, reason string) (*ChainEdge, bool) {
-	fromPath := strings.TrimSpace(from.CanonicalPath)
-	toPath := strings.TrimSpace(to.CanonicalPath)
+	fromPath := normalizeSupplyChainCanonicalPath(from.CanonicalPath)
+	toPath := normalizeSupplyChainCanonicalPath(to.CanonicalPath)
 	if fromPath == "" || toPath == "" {
 		return nil, false
 	}
@@ -624,10 +626,13 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 	}
 
 	switch {
-	// org → fac: preserve org-fac anchoring explicitly.
-	// Use OPERATES_IN (allowed in supply-chain mode) to keep company↔facility linkage.
+	// org/gov → fac: ownership/control anchoring for supply chain visibility.
+	// Use CONTROLS for /gov/ sources, OWNS for /org/ (and generic org) sources.
 	case fromIsOrg && toIsFac:
-		return mkEdge(string(models.DependencyTypeOperatesIn)), false
+		if strings.HasPrefix(fromPath, "/gov/") {
+			return mkEdge(string(models.DependencyTypeControls)), false
+		}
+		return mkEdge(string(models.DependencyTypeOwns)), false
 
 	// fac → product: facility produces product
 	case fromIsFac && toIsProduct:
@@ -954,8 +959,8 @@ func shouldSwapProductStageOrder(sourcePath, targetPath string) bool {
 	return false
 }
 
-// validateChainAlternation checks for consecutive same-type nodes (actor-actor or product-product)
-// which violate the expected actor→product→actor alternation. Returns warnings and count.
+// validateChainAlternation checks for consecutive same-type nodes
+// (org-org, fac-fac, deposit-deposit, product-product). Returns warnings and count.
 func (p *SupplyChainParser) validateChainAlternation(nodes []agents.SupplyChainNode, chainIdx int) ([]string, int) {
 	var warnings []string
 	count := 0
@@ -972,21 +977,61 @@ func (p *SupplyChainParser) validateChainAlternation(nodes []agents.SupplyChainN
 	return warnings, count
 }
 
+func normalizeSupplyChainCanonicalPath(path string) string {
+	return canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(path))
+}
+
+func normalizeSupplyChainNodes(nodes []agents.SupplyChainNode) []agents.SupplyChainNode {
+	if len(nodes) == 0 {
+		return nodes
+	}
+	out := make([]agents.SupplyChainNode, len(nodes))
+	for i := range nodes {
+		out[i] = nodes[i]
+		out[i].CanonicalPath = normalizeSupplyChainCanonicalPath(nodes[i].CanonicalPath)
+	}
+	return out
+}
+
+func normalizeSupplyChainPathList(paths []string) []string {
+	if len(paths) == 0 {
+		return paths
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if cp := normalizeSupplyChainCanonicalPath(p); cp != "" {
+			out = append(out, cp)
+		}
+	}
+	return out
+}
+
 func classifyNodeType(node agents.SupplyChainNode) string {
+	cp := strings.ToLower(normalizeSupplyChainCanonicalPath(node.CanonicalPath))
+	if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
+		return "org"
+	}
+	if strings.HasPrefix(cp, "/fac/") {
+		return "fac"
+	}
+	if strings.HasPrefix(cp, "/deposit/") {
+		return "deposit"
+	}
+	if strings.HasPrefix(cp, "/product/") {
+		return "product"
+	}
+
 	nt := strings.ToLower(strings.TrimSpace(node.Type))
 	switch nt {
-	case "actor", "org", "government", "gov":
-		return "actor"
+	case "org", "organization", "government", "gov":
+		return "org"
+	case "fac", "facility":
+		return "fac"
+	case "deposit":
+		return "deposit"
 	case "product", "resource", "material":
 		return "product"
 	default:
-		cp := strings.ToLower(strings.TrimSpace(node.CanonicalPath))
-		if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
-			return "actor"
-		}
-		if strings.HasPrefix(cp, "/product/") {
-			return "product"
-		}
 		return "unknown"
 	}
 }

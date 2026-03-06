@@ -122,6 +122,11 @@ func (e *FactEmitter) Emit(ctx context.Context, f *models.OntologyFact, opts Emi
 			"actorPaths":     f.ActorPaths,
 			"spherePaths":    f.SpherePaths,
 		}
+		// Unify with horizon.graph.edge.upserted: add sourceCanonicalPath/targetCanonicalPath for relation facts
+		if f.Kind == "relation" && len(f.CanonicalPaths) >= 2 {
+			payload["sourceCanonicalPath"] = strings.TrimSpace(f.CanonicalPaths[0])
+			payload["targetCanonicalPath"] = strings.TrimSpace(f.CanonicalPaths[1])
+		}
 		if f.LocationPath != nil && strings.TrimSpace(*f.LocationPath) != "" {
 			payload["locationPath"] = strings.TrimSpace(*f.LocationPath)
 		}

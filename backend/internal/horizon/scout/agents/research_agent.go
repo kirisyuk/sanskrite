@@ -691,12 +691,15 @@ Choose relationType to match the CORRECT semantic direction:
 -  For actor↔actor dependencies (ORG/FACILITY/PROGRAM/COMMUNITY/PERSON), include qualifiers.source_role=dependent and qualifiers.target_role=dependency (or supplier/provider).
 - SUPPLIES_TO: source supplies goods/services to target (use for customers/recipients).
 -  Clarification: commercial flow from supplier -> customer/recipient; not ownership or control.
--  Source MUST be ORGANIZATION or FACILITY. DEPOSIT cannot be source for SUPPLIES_TO.
+-  Source MUST be ORGANIZATION or FACILITY or PRODUCT.
+-  Target MUST be ORGANIZATION or FACILITY.
+-  MARKET MUST NOT be source or target for SUPPLIES_TO.
 -  For ORG/FACILITY -> ORG/FACILITY supply links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
 - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
 -  Clarification: physical/geographic location only (HQ, plant site, office presence).
 - OPERATES_IN: source operates in target (source MUST be ORGANIZATION or PERSON, target MUST be GEO_REGION or FACILITY or DEPOSIT).
 -  Clarification: operational activity or facility operation; not just a registered address.
+-  MARKET MUST NOT be source for OPERATES_IN.
 - REGULATES: source regulates target (source MUST be ORGANIZATION — only orgs can regulate).
    JURISDICTION RULE: REGULATES means ongoing domestic regulatory oversight within the regulator's own jurisdiction (e.g., SEC regulates US-listed companies, BaFin regulates German banks).
    Do NOT use REGULATES for sanctions, trade restrictions, or extra-territorial enforcement against foreign entities. For those, use CONTROLS_ACCESS or IMPOSES_CONDITION instead.
@@ -757,7 +760,7 @@ Choose relationType to match the CORRECT semantic direction:
   - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
 - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET).
   Exception: GOV entities (/gov/...) may use REGULATES (domestic regulatory oversight only), CONTROLS_ACCESS (sanctions, restrictions), or INFLUENCES toward MARKET targets.
-  Never use OPERATES_IN, DEPENDS_ON, CONSUMES, or other non-market types between regular ORGANIZATION and MARKET.
+  Never use OPERATES_IN, DEPENDS_ON, or other non-market types between regular ORGANIZATION and MARKET.
   If leadership is known, keep relationType=PARTICIPATES_IN and set qualifiers.marketRole = "leader" | "dominant" (plus market_share metric when available).
 
 === PHASE 2 STRATEGIC RELATIONS (may require EXPLICIT SOURCE) ===

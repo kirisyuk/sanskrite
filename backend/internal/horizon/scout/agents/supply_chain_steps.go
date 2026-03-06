@@ -52,7 +52,7 @@ type SCStepFacility struct {
 	Path         string `json:"path"`
 	Name         string `json:"name"`
 	FacilityType string `json:"facilityType,omitempty"` // supply chain role: taxonomy.FacilityRolesForPrompts()
-	FacilityKind string `json:"facilityKind,omitempty"`  // physical type: taxonomy.FacilityKindsForPrompts()
+	FacilityKind string `json:"facilityKind,omitempty"` // physical type: taxonomy.FacilityKindsForPrompts()
 }
 
 // SCStepProduct is a product discovered for a facility.
@@ -112,10 +112,10 @@ const (
 // Unwind entity caps to keep LLM calls ~50–60 per direction (target ~600 total for both).
 // Without caps, geometric expansion can reach 6000+ calls.
 const (
-	ScUnwindMaxOrgsPerDepth         = 30
-	ScUnwindMaxChildOrgsRecurse     = 20
-	ScUnwindMaxFacsPerDepth         = 45
-	ScUnwindMaxProductsPerDepth     = 60
+	ScUnwindMaxOrgsPerDepth          = 30
+	ScUnwindMaxChildOrgsRecurse      = 20
+	ScUnwindMaxFacsPerDepth          = 45
+	ScUnwindMaxProductsPerDepth      = 60
 	ScUnwindMaxRecipientFacsPerDepth = 45
 	ScUnwindMaxChildOrgRecurseLevels = 1
 )
@@ -183,7 +183,7 @@ func (a *ResearchAgent) findFacilitiesForOrgsBatch(ctx context.Context, orgPaths
 
 1. CHILD ORGANIZATIONS (priority): If the org produces goods not only through its own facilities but also through subsidiaries, controlled entities, or partners that manufacture on its behalf — return those child orgs FIRST. We will drill into them in the next iteration. For government bodies (/gov/...): include subordinate agencies, state-owned enterprises they control.
 
-2. PRODUCTION FACILITIES: Factories, plants, refineries, warehouses, distribution centers that the org owns or operates directly. For orgs with known production (e.g. Coca-Cola, large manufacturers) — search for and return SPECIFIC facilities that produce standalone products. For government bodies: include procurement, storage, or distribution facilities they operate. Use /fac/{geo}/{orgSlug}-general-production ONLY when no specific facility can be found or verified (small orgs, holding companies, agencies with no direct production).
+2. PRODUCTION FACILITIES: Factories, plants, refineries, warehouses, distribution centers that the org owns or operates directly. For orgs with known production (e.g. Coca-Cola, large manufacturers) — search for and return SPECIFIC facilities that produce standalone products. For government bodies: include procurement, storage, or distribution facilities they operate. Do NOT invent synthetic facilities; if no concrete facility is known, return an empty facilities list (org-level production will be represented later as org -> PRODUCES -> product).
 
 Organizations (use /org/... or /gov/... paths):
 %s
@@ -199,7 +199,7 @@ Return ONLY valid JSON array:
   {
     "orgPath": "/org/...",
     "childOrgs": ["/org/..."],
-    "facilities": [{ "path": "/fac/...", "name": "...", "facilityType": "` + taxonomy.FacilityRolesForPrompts() + `", "facilityKind": "` + taxonomy.FacilityKindsForPrompts() + `" }]
+    "facilities": [{ "path": "/fac/...", "name": "...", "facilityType": "`+taxonomy.FacilityRolesForPrompts()+`", "facilityKind": "`+taxonomy.FacilityKindsForPrompts()+`" }]
   }
 ]
 No markdown. One entry per input organization.`, list, contextBlock, scOrgPathRulesPrompt(), scFacPathRulesPrompt())
@@ -402,7 +402,7 @@ func (a *ResearchAgent) findSupplierFacsForProductsBatch(ctx context.Context, pr
 	prompt := fmt.Sprintf(`You are a supply chain research agent (UPSTREAM tracing). For each product below, find ALL facilities that PRODUCE and SUPPLY this product to the market.
 
 Include: extraction sites, refineries, processing plants, manufacturing facilities that output this product. The direct upstream link — who makes this product before it reaches consumers/processors.
-Exclude: distributors, traders, logistics hubs — only production facilities. Prefer specific facilities over general-production when known. When facility is known but geo is unknown: use /fac/na/{facilitySlug}.
+Exclude: distributors, traders, logistics hubs — only production facilities. Return only concrete facilities (no synthetic general-production placeholders). When facility is known but geo is unknown: use /fac/na/{facilitySlug}.
 
 Products:
 %s

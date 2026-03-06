@@ -1683,17 +1683,41 @@ func (r *HorizonFragmentsRepository) FindSupplyLinksByCustomer(
 	if limit <= 0 {
 		limit = 100
 	}
+	customerRef = normalizeSupplyLinkRef(customerRef)
+	if customerRef == "" {
+		return nil, nil
+	}
+	queryTenant := strings.TrimSpace(tenantID)
+	if queryTenant == "" {
+		queryTenant = "global"
+	}
 
 	// Get all SupplyLinks for the tenant
-	allSupplyLinks, err := r.ListByTypeAndTenant(ctx, tenantID, models.FragmentTypeSupplyLink, limit*2)
+	// Use a wider fetch window because customer matching can include alias refs (org↔fac/deposit).
+	allSupplyLinks, err := r.ListByTypeAndTenant(ctx, queryTenant, models.FragmentTypeSupplyLink, limit*4)
 	if err != nil {
 		return nil, err
+	}
+	customerCandidates := r.buildSupplyLinkCustomerRefAliases(ctx, customerRef, queryTenant)
+	if len(customerCandidates) == 0 {
+		customerCandidates = map[string]struct{}{customerRef: {}}
 	}
 
 	// Filter client-side where CustomerRef matches
 	var matches []*models.HorizonFragment
 	for _, link := range allSupplyLinks {
-		if link.CustomerRef != nil && *link.CustomerRef == customerRef {
+		matched := false
+		if link.CustomerRef != nil {
+			if _, ok := customerCandidates[normalizeSupplyLinkRef(*link.CustomerRef)]; ok {
+				matched = true
+			}
+		}
+		if !matched && link.CustomerFacilityRef != nil {
+			if _, ok := customerCandidates[normalizeSupplyLinkRef(*link.CustomerFacilityRef)]; ok {
+				matched = true
+			}
+		}
+		if matched {
 			matches = append(matches, link)
 			if len(matches) >= limit {
 				break
@@ -1702,6 +1726,108 @@ func (r *HorizonFragmentsRepository) FindSupplyLinksByCustomer(
 	}
 
 	return matches, nil
+}
+
+func normalizeSupplyLinkRef(path string) string {
+	return canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(path))
+}
+
+func (r *HorizonFragmentsRepository) buildSupplyLinkCustomerRefAliases(
+	ctx context.Context,
+	customerRef string,
+	tenantID string,
+) map[string]struct{} {
+	aliases := make(map[string]struct{}, 8)
+	add := func(path string) {
+		cp := normalizeSupplyLinkRef(path)
+		if cp != "" {
+			aliases[cp] = struct{}{}
+		}
+	}
+	add(customerRef)
+	if r == nil || r.edgesRepo == nil {
+		return aliases
+	}
+
+	cp := normalizeSupplyLinkRef(customerRef)
+	if cp == "" {
+		return aliases
+	}
+	isOrg := strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/")
+	isActorFacility := strings.HasPrefix(cp, "/fac/") || strings.HasPrefix(cp, "/deposit/")
+	if !isOrg && !isActorFacility {
+		return aliases
+	}
+
+	frag, err := r.GetByCanonicalPath(ctx, cp)
+	if err != nil || frag == nil || strings.TrimSpace(frag.ID) == "" {
+		return aliases
+	}
+
+	edgeTypes := []models.DependencyType{
+		models.DependencyTypeOwns,
+		models.DependencyTypeControls,
+		models.DependencyTypeOperatesIn,
+	}
+	adjacentIDs := make(map[string]struct{}, 16)
+	for _, edgeType := range edgeTypes {
+		et := edgeType
+		if isOrg {
+			edges, eerr := r.edgesRepo.ListBySource(ctx, tenantID, frag.ID, &et, 200)
+			if eerr != nil {
+				continue
+			}
+			for _, edge := range edges {
+				if edge == nil {
+					continue
+				}
+				if id := strings.TrimSpace(edge.TargetFragmentID); id != "" {
+					adjacentIDs[id] = struct{}{}
+				}
+			}
+			continue
+		}
+
+		edges, eerr := r.edgesRepo.ListByTarget(ctx, tenantID, frag.ID, &et, 200)
+		if eerr != nil {
+			continue
+		}
+		for _, edge := range edges {
+			if edge == nil {
+				continue
+			}
+			if id := strings.TrimSpace(edge.SourceFragmentID); id != "" {
+				adjacentIDs[id] = struct{}{}
+			}
+		}
+	}
+	if len(adjacentIDs) == 0 {
+		return aliases
+	}
+
+	ids := make([]string, 0, len(adjacentIDs))
+	for id := range adjacentIDs {
+		ids = append(ids, id)
+	}
+
+	fragsByID, ferr := r.GetMany(ctx, ids)
+	if ferr == nil && fragsByID != nil {
+		for _, id := range ids {
+			if f := fragsByID[id]; f != nil {
+				add(f.CanonicalPath)
+			}
+		}
+		return aliases
+	}
+
+	// Best-effort fallback: resolve fragments individually when bulk fetch failed.
+	for _, id := range ids {
+		f, gerr := r.Get(ctx, id)
+		if gerr == nil && f != nil {
+			add(f.CanonicalPath)
+		}
+	}
+	return aliases
 }
 
 // Delete удаляет HorizonFragment, его файл из GCS и триггерит синхронизацию с Vertex AI Search

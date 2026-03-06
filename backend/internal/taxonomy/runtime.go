@@ -94,7 +94,6 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"OWNS":            {},
 	"SUBSIDIARY_OF":   {},
 	"PRODUCES":        {},
-	"CONSUMES":        {},
 	"OPERATES_IN":     {},
 	"REGULATES":       {},
 	"COMPETES_WITH":   {},

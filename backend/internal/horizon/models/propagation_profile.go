@@ -100,7 +100,6 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			DefaultMaxHops:  4,
 			PropagationMode: "upstream",
 			StrongEdges: []StrongEdgeSpec{
-				{Type: "CONSUMES", Direction: "source_to_target", Weight: 1.0},
 				{Type: "DEPENDS_ON", Direction: "source_to_target", Weight: 0.9},
 			},
 			Transformations: []TransformationRule{},

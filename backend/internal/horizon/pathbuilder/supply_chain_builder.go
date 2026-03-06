@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 )
@@ -116,7 +117,7 @@ func DefaultBuildPathOptions() BuildPathOptions {
 		MaxDepth:                     6,
 		MaxBranching:                 5,
 		MaxPaths:                     10,
-		RequireProductTransformation: true,
+		RequireProductTransformation: false,
 		MinConfidence:                0.0,
 	}
 }
@@ -168,9 +169,9 @@ func (b *SupplyChainPathBuilder) BuildUpstreamPaths(
 	if customerRef == "" {
 		return nil, fmt.Errorf("customerRef is required")
 	}
-	customerRef = strings.TrimSpace(customerRef)
-	if !strings.HasPrefix(customerRef, "/fac/") && !strings.HasPrefix(customerRef, "/org/") {
-		return nil, fmt.Errorf("customerRef must be facility or org canonical path (/fac/... or /org/...)")
+	customerRef = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(customerRef))
+	if !strings.HasPrefix(customerRef, "/fac/") && !strings.HasPrefix(customerRef, "/org/") && !strings.HasPrefix(customerRef, "/gov/") {
+		return nil, fmt.Errorf("customerRef must be facility, org, or gov canonical path (/fac/... or /org/... or /gov/...)")
 	}
 
 	// Find all SupplyLinks where customer matches
@@ -376,7 +377,10 @@ func (b *SupplyChainPathBuilder) findSupplyLinksForCustomer(
 	customerRef string,
 	opts BuildPathOptions,
 ) ([]PathSegment, error) {
-	customerRef = strings.TrimSpace(customerRef)
+	customerRef = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(customerRef))
+	if customerRef == "" {
+		return nil, nil
+	}
 	// Segment-level precedence:
 	// - If tenant segments exist for this step, use them and do NOT mix with global.
 	// - Otherwise, fall back to global to avoid path breaks.
@@ -448,12 +452,16 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 
 		supplierRef := ""
 		if link.SupplierRef != nil {
-			supplierRef = *link.SupplierRef
+			supplierRef = canonical.NormalizeCanonicalPathForPersist(*link.SupplierRef)
 		}
 
 		customerRefVal := ""
 		if link.CustomerRef != nil {
-			customerRefVal = *link.CustomerRef
+			customerRefVal = canonical.NormalizeCanonicalPathForPersist(*link.CustomerRef)
+		}
+		productRefVal := canonical.NormalizeCanonicalPathForPersist(*link.ProductRef)
+		if productRefVal == "" {
+			continue
 		}
 
 		metrics := make(map[string]models.MetricValue)
@@ -462,13 +470,28 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 				metrics[k] = v
 			}
 		}
+		var supplierFacilityRef *string
+		if link.SupplierFacilityRef != nil {
+			if normalized := canonical.NormalizeCanonicalPathForPersist(*link.SupplierFacilityRef); normalized != "" {
+				nv := normalized
+				supplierFacilityRef = &nv
+			}
+		}
+		var customerFacilityRef *string
+		if link.CustomerFacilityRef != nil {
+			if normalized := canonical.NormalizeCanonicalPathForPersist(*link.CustomerFacilityRef); normalized != "" {
+				nv := normalized
+				customerFacilityRef = &nv
+			}
+		}
+
 		segment := PathSegment{
 			SupplyLinkID:        link.ID,
 			SupplierRef:         supplierRef,
-			ProductRef:          *link.ProductRef,
+			ProductRef:          productRefVal,
 			CustomerRef:         customerRefVal,
-			SupplierFacilityRef: link.SupplierFacilityRef,
-			CustomerFacilityRef: link.CustomerFacilityRef,
+			SupplierFacilityRef: supplierFacilityRef,
+			CustomerFacilityRef: customerFacilityRef,
 			TransportViaRefs:    link.TransportViaRefs,
 			Confidence:          confidence,
 			TenantID:            link.TenantID,
@@ -1056,9 +1079,9 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(path *SupplyChainPath
 		// Create SUPPLY_LINK edge
 		if supplierIdx >= 0 && customerIdx >= 0 && productIdx >= 0 {
 			edges = append(edges, models.SupplyChainPathEdge{
-				Type:           "SUPPLY_LINK",
-				From:           supplierIdx,
-				To:             customerIdx,
+				Type:            "SUPPLY_LINK",
+				From:            supplierIdx,
+				To:              customerIdx,
 				ViaProductIndex: &productIdx,
 			})
 		}
@@ -1074,17 +1097,16 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(path *SupplyChainPath
 			relation := "TRANSFORMS_INTO"
 			mode := "optional"
 			edges = append(edges, models.SupplyChainPathEdge{
-				Type:     "ONTOLOGY",
-				From:     currentProductIdx,
-				To:       nextProductIdx,
-				Relation: relation,
+				Type:             "ONTOLOGY",
+				From:             currentProductIdx,
+				To:               nextProductIdx,
+				Relation:         relation,
 				FromProductIndex: &currentProductIdx,
 				ToProductIndex:   &nextProductIdx,
-				Mode:     mode,
+				Mode:             mode,
 			})
 		}
 	}
 
 	return nodes, edges
 }
-

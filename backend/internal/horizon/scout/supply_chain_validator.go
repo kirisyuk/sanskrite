@@ -22,7 +22,7 @@ func (e *SupplyChainValidationError) Error() string {
 }
 
 // SupplyChainStrictValidator enforces supply chain operational links.
-// Full chain org→fac→product→fac→org allowed. org→org rejected.
+// Full chain org|gov→fac|deposit→product→fac|deposit→org|gov allowed.
 type SupplyChainStrictValidator struct{}
 
 // NewSupplyChainStrictValidator returns a new validator.
@@ -31,22 +31,22 @@ func NewSupplyChainStrictValidator() *SupplyChainStrictValidator {
 }
 
 var operationalEdgeTypes = map[string]bool{
-	"PRODUCES":       true,
-	"SUPPLIES_TO":    true,
+	"PRODUCES":        true,
+	"SUPPLIES_TO":     true,
 	"TRANSFORMS_INTO": true,
-	"EXTRACTS_FROM":  true,
+	"EXTRACTS_FROM":   true,
 }
 
 var forbiddenEdgeTypes = map[string]bool{
-	"DEPENDS_ON":       true,
-	"INFLUENCES":       true,
-	"CONSUMES":         true,
-	"REGULATES":        true,
-	"PARTICIPATES_IN":  true,
-	"ADMINISTERS":      true,
-	"RELATED_TO":       true,
-	"AFFILIATED_WITH":  true,
-	"PARTNERS_WITH":    true,
+	"DEPENDS_ON":      true,
+	"INFLUENCES":      true,
+	"CONSUMES":        true,
+	"REGULATES":       true,
+	"PARTICIPATES_IN": true,
+	"ADMINISTERS":     true,
+	"RELATED_TO":      true,
+	"AFFILIATED_WITH": true,
+	"PARTNERS_WITH":   true,
 }
 
 // ValidateEdge returns nil if the ChainEdge is valid for supply chain operational layer.
@@ -67,15 +67,11 @@ func (v *SupplyChainStrictValidator) ValidateEdge(edge *ChainEdge, jobID string,
 	}
 	// Operational types: full chain org→fac→product→fac→org allowed. Org as endpoint is valid.
 	if operationalEdgeTypes[relType] {
-		// Reject org→org for operational edges (flow must involve fac/product)
-		if strings.HasPrefix(srcPath, "/org/") && strings.HasPrefix(dstPath, "/org/") {
-			return &SupplyChainValidationError{Reason: "org_to_org_not_allowed", Path: srcPath + "->" + dstPath, JobID: jobID, ChainIdx: chainIdx}
-		}
 		switch relType {
 		case "SUPPLIES_TO":
-			// fac→fac, fac→product, fac→org (fac supplies to org)
-			if !strings.HasPrefix(srcPath, "/fac/") && !strings.HasPrefix(srcPath, "/deposit/") {
-				return &SupplyChainValidationError{Reason: "supplies_to_source_must_be_fac_or_deposit", Path: srcPath, JobID: jobID, ChainIdx: chainIdx}
+			// fac→fac, fac→product, fac→org, org→org, product→org (product supplies to consumer)
+			if !strings.HasPrefix(srcPath, "/fac/") && !strings.HasPrefix(srcPath, "/deposit/") && !strings.HasPrefix(srcPath, "/product/") && !strings.HasPrefix(srcPath, "/org/") && !strings.HasPrefix(srcPath, "/gov/") {
+				return &SupplyChainValidationError{Reason: "supplies_to_source_must_be_fac_deposit_product_or_org", Path: srcPath, JobID: jobID, ChainIdx: chainIdx}
 			}
 			if !strings.HasPrefix(dstPath, "/fac/") && !strings.HasPrefix(dstPath, "/product/") && !strings.HasPrefix(dstPath, "/org/") && !strings.HasPrefix(dstPath, "/gov/") {
 				return &SupplyChainValidationError{Reason: "supplies_to_target_must_be_fac_product_org_or_gov", Path: dstPath, JobID: jobID, ChainIdx: chainIdx}

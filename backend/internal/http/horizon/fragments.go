@@ -23,6 +23,7 @@ type geoObjectResponseItem struct {
 	ID            string              `json:"id"`
 	CanonicalPath string              `json:"canonicalPath"`
 	Type          models.FragmentType `json:"type"`
+	FacilityKind  string              `json:"facilityKind,omitempty"`
 	Label         string              `json:"label,omitempty"`
 	Description   string              `json:"description,omitempty"`
 	Status        string              `json:"status,omitempty"`
@@ -37,6 +38,25 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 	if f == nil || f.Coordinates == nil {
 		return geoObjectResponseItem{}, false
 	}
+	facilityKind := ""
+	if f.Type == models.FragmentTypeFacility || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/fac/") {
+		kind := taxonomy.NormalizeFacilityKind(strings.TrimSpace(f.Identifiers["facilityKind"]))
+		if kind == taxonomy.FacilityKindUnknown {
+			kind = taxonomy.InferFacilityKind(
+				f.CanonicalPath,
+				f.Labels["en"],
+				f.Description,
+				f.EntityPath,
+				f.SectorPath,
+				f.Identifiers["facilityType"],
+				f.Identifiers["supplyChainRole"],
+			)
+		}
+		if kind == taxonomy.FacilityKindUnknown {
+			kind = taxonomy.FacilityKindOther
+		}
+		facilityKind = string(kind)
+	}
 	label := strings.TrimSpace(f.Labels["en"])
 	if label == "" {
 		label = strings.TrimSpace(f.Identifiers["legalName"])
@@ -48,6 +68,7 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 		ID:            f.ID,
 		CanonicalPath: f.CanonicalPath,
 		Type:          f.Type,
+		FacilityKind:  facilityKind,
 		Label:         label,
 		Description:   strings.TrimSpace(f.Description),
 		Status:        strings.TrimSpace(f.Governance.Status),
@@ -58,7 +79,6 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 		UpdatedAt:     f.UpdatedAt,
 	}, true
 }
-
 
 // ListFragments получает список HorizonFragment через Lens scope
 func (h *HorizonHandlers) ListFragments(w http.ResponseWriter, r *http.Request) {

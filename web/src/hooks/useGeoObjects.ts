@@ -5,6 +5,7 @@ export type GeoObject = {
   id: string;
   canonicalPath: string;
   type: string;
+  facilityKind?: string;
   label?: string;
   description?: string;
   status?: string;
@@ -48,7 +49,7 @@ export function useGeoObjects(
       let cancelled = false;
       setLoading(true);
 
-      const opts: Parameters<typeof api.listHorizonGeoObjects>[0] = { limit: 2500 };
+      const opts: Parameters<typeof api.listHorizonGeoObjects>[0] = { limit: 5000 };
       if (filters.dateFrom) opts!.createdAfter = filters.dateFrom;
       if (filters.dateTo) opts!.createdBefore = filters.dateTo;
       if (scope?.lensId) opts!.lensId = scope.lensId;

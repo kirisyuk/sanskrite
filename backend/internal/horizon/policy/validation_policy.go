@@ -649,14 +649,6 @@ type EdgeDirectionRule = edgesemantics.EdgeDirectionRule
 
 func quarantinePenaltyForTriple(edgeType horizonmodels.DependencyType, sourceType, targetType horizonmodels.FragmentType) (float64, string) {
 	switch {
-	case edgeType == horizonmodels.DependencyTypeConsumes &&
-		sourceType == horizonmodels.FragmentTypeOrganization &&
-		targetType == horizonmodels.FragmentTypeOrganization:
-		return 0.30, "quarantine: ORGANIZATION -> ORGANIZATION CONSUMES is semantically invalid"
-	case edgeType == horizonmodels.DependencyTypeConsumes &&
-		sourceType == horizonmodels.FragmentTypeOrganization &&
-		targetType == horizonmodels.FragmentTypeFacility:
-		return 0.30, "quarantine: ORGANIZATION -> FACILITY CONSUMES is semantically invalid"
 	case edgeType == horizonmodels.DependencyTypeParticipatesIn &&
 		sourceType == horizonmodels.FragmentTypeMarket &&
 		targetType == horizonmodels.FragmentTypeMarket:
@@ -720,6 +712,10 @@ func requiresDirectionalRoleEvidence(
 	case horizonmodels.DependencyTypeDependsOn:
 		return isActorLike(sourceType) && isActorLike(targetType)
 	case horizonmodels.DependencyTypeSuppliesTo:
+		// PRODUCT→ORG/FAC: direction clear, no role evidence needed. ORG/FAC→ORG/FAC: may need evidence.
+		if sourceType == horizonmodels.FragmentTypeProduct && (isOrg(targetType) || isFac(targetType)) {
+			return false
+		}
 		return (isOrg(sourceType) || isFac(sourceType)) && (isOrg(targetType) || isFac(targetType))
 	default:
 		return false

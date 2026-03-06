@@ -98,7 +98,6 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   // 2) Products & dependency (inputs/outputs)
   'PRODUCES': 2,
   'SUPPLIES_TO': 2,
-  'CONSUMES': 2,
   'DEPENDS_ON': 2,
   'REQUIRES': 2,
   'USES': 2,
@@ -454,8 +453,8 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
       return isOutgoing ? 'supply-chain' : 'customers';  // outgoing = we depend on them (upstream), incoming = they depend on us (downstream)
     case 'EXTRACTS_FROM':
       return isOutgoing ? 'supply-chain' : 'customers';  // outgoing = we extract from them (upstream resource), incoming = they extract from us (rare)
-    case 'CONSUMES':
-      return 'supply-chain';  // we consume something = upstream
+    case 'CONSUMES': // legacy only (canonicalized to SUPPLIES_TO)
+      return 'supply-chain';
     
     // Ownership: OWNS направленная на центральную ноду (incoming) идет в верхнюю группу (supply-chain)
     // OWNS от центральной ноды (outgoing) идет в нижнюю группу (customers)
@@ -490,8 +489,10 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     // только если связь направлена НА центральную ноду (incoming)
     case 'LOCATED_IN':
       return isOutgoing ? 'context' : 'supply-chain';  // incoming = нода находится в объекте сверху -> supply-chain
-    // Context — geography, regulation, influence (остальные географические связи)
+    // org→fac (OPERATES_IN): org должен быть ЛЕВЕЕ раскрываемой ноды (fac). market = left.
     case 'OPERATES_IN':
+      return 'market';
+    // Context — geography, regulation, influence (остальные географические связи)
     case 'BASED_IN':
     case 'HEADQUARTERED_IN':
       return 'context';
@@ -586,7 +587,6 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     // Products / supply / dependencies (inputs+outputs)
     'PRODUCES',
     'SUPPLIES_TO',
-    'CONSUMES',
     'DEPENDS_ON',
     'REQUIRES',
     'USES',
@@ -671,7 +671,6 @@ export function getLinearSection(edgeType: string | undefined, isOutgoing: boole
     'REQUIRES',
     'NEEDS',
     'USES',
-    'CONSUMES',
     'EXTRACTS_FROM',
     // Context / Geography
     'LOCATED_IN',
@@ -1283,7 +1282,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'APPLIES_TO',
   ]);
   const DOCK_SUPPLY = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
-  const DOCK_DEPENDENCIES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
+  const DOCK_DEPENDENCIES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'EXTRACTS_FROM']);
   const DOCK_STRUCTURE = new Set(['DOMINATES', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP', 'PARTICIPATES_IN']);
 
   const rightDockCategoryForEdgeType = (edgeType: string | undefined): RightDockKey | null => {
@@ -1373,7 +1372,6 @@ export async function layoutLevelsTwoPane<T = any>(
     'REQUIRES',
     'NEEDS',
     'USES',
-    'CONSUMES',
     'EXTRACTS_FROM',
     // Market participation is directional: participant -> market.
     // Participant should appear to the LEFT of the market node.
@@ -1960,7 +1958,7 @@ export async function layoutLevelsTwoPane<T = any>(
   ]);
   const SUPPLY_EDGE_SET = new Set([
     'SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES',
-    'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM',
+    'NEEDS', 'USES', 'EXTRACTS_FROM',
   ]);
   const MARKET_EDGE_SET = new Set([
     'COMPETES_WITH', 'PARTICIPATES_IN', 'DOMINATES', 'HAS_MARKET_SEGMENT',
@@ -2163,6 +2161,7 @@ export async function layoutLevelsTwoPane<T = any>(
     if (GOVERNANCE_EDGE_SET.has(bestEdge)) role = 'governance';
     else if (ASSURANCE_EDGE_SET.has(bestEdge)) role = 'assurance';
     else if (SUPPLY_EDGE_SET.has(bestEdge)) role = 'supply_chain';
+    else if (bestEdge === 'OPERATES_IN') role = 'market';  // org→fac: org левее раскрываемой ноды
     else if (MARKET_EDGE_SET.has(bestEdge)) role = 'market';
     else if (STRATEGIC_EDGE_SET.has(bestEdge)) role = 'strategic_layer';
     else if (REGULATORY_EDGE_SET.has(bestEdge)) role = 'regulatory';
@@ -3722,7 +3721,7 @@ export async function layoutLevelsTwoPane<T = any>(
   const STRONG_GOVERNANCE_EDGE_TYPES = new Set(['BOARD_MEMBER_OF', 'BOARD', 'MANAGES']);
   const GEO_TYPES = new Set(['GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY', 'AFFECTED_ZONE']);
   const SUPPLY_EDGE_TYPES = new Set(['SUPPLIES_TO', 'PRODUCES']);
-  const DEPENDENCY_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
+  const DEPENDENCY_EDGE_TYPES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'EXTRACTS_FROM']);
   const SUPPLY_CHAIN_EDGE_TYPES = new Set([...SUPPLY_EDGE_TYPES, ...DEPENDENCY_EDGE_TYPES]);
   const DOMINATES_EDGE_TYPES = new Set(['DOMINATES']);
   const MARKET_PEER_EDGE_TYPES = new Set(['COMPETES_WITH', 'PARTNERS_WITH', 'COOPERATES_WITH', 'ASSOCIATED_WITH', 'CONFLICTS_WITH', 'OPPOSES']);
@@ -5966,7 +5965,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     // NOTE: SUBSIDIARY_OF is inverse of OWNS (subsidiary -> parent). The backend often normalizes it into OWNS,
     // but keep this here for robustness when legacy edges leak through.
     'SUBSIDIARY_OF',
-    'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM',
+    'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'EXTRACTS_FROM',
     // Market participation is directional: participant -> market.
     // Participant should appear to the LEFT of the market node.
     'PARTICIPATES_IN',

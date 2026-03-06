@@ -309,33 +309,33 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 				if citySlug != "" {
 					cityName := strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(citySlug))
 					if cityName != "" {
-					if best, ok := pickUnambiguousCityCandidate(ctx, v.geonamesClient, cityName, cc, adm); ok && best != nil && best.GeoNameID > 0 {
-						if fragment.Identifiers == nil {
-							fragment.Identifiers = map[string]string{}
-						}
-						fragment.Identifiers["geonamesId"] = strconv.Itoa(best.GeoNameID)
-						// Also keep KBRefs mirrored (Validate() will ensure consistency).
-						has := false
-						for i := range fragment.KBRefs {
-							if strings.EqualFold(strings.TrimSpace(fragment.KBRefs[i].KB), "GeoNames") {
-								has = true
-								fragment.KBRefs[i].KB = "GeoNames"
-								if strings.TrimSpace(fragment.KBRefs[i].ExternalID) == "" {
-									fragment.KBRefs[i].ExternalID = strconv.Itoa(best.GeoNameID)
-								}
-								break
+						if best, ok := pickUnambiguousCityCandidate(ctx, v.geonamesClient, cityName, cc, adm); ok && best != nil && best.GeoNameID > 0 {
+							if fragment.Identifiers == nil {
+								fragment.Identifiers = map[string]string{}
 							}
+							fragment.Identifiers["geonamesId"] = strconv.Itoa(best.GeoNameID)
+							// Also keep KBRefs mirrored (Validate() will ensure consistency).
+							has := false
+							for i := range fragment.KBRefs {
+								if strings.EqualFold(strings.TrimSpace(fragment.KBRefs[i].KB), "GeoNames") {
+									has = true
+									fragment.KBRefs[i].KB = "GeoNames"
+									if strings.TrimSpace(fragment.KBRefs[i].ExternalID) == "" {
+										fragment.KBRefs[i].ExternalID = strconv.Itoa(best.GeoNameID)
+									}
+									break
+								}
+							}
+							if !has {
+								fragment.KBRefs = append(fragment.KBRefs, models.KBReference{
+									KB:         "GeoNames",
+									ExternalID: strconv.Itoa(best.GeoNameID),
+									Confidence: 1.0,
+								})
+							}
+							attachGeoCoordinatesFromGeoNames(fragment, best)
 						}
-						if !has {
-							fragment.KBRefs = append(fragment.KBRefs, models.KBReference{
-								KB:         "GeoNames",
-								ExternalID: strconv.Itoa(best.GeoNameID),
-								Confidence: 1.0,
-							})
-						}
-						attachGeoCoordinatesFromGeoNames(fragment, best)
 					}
-				}
 				}
 			}
 		}
@@ -383,11 +383,28 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Policy 4: Auto-fill facilityKind from canonical path slug when missing
 	// ==========================================================================
 	if fragment.Type == models.FragmentTypeFacility && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/fac/") {
-		if strings.TrimSpace(fragment.Identifiers["facilityKind"]) == "" {
-			kind := taxonomy.FacilityKindFromCanonicalPath(fragment.CanonicalPath)
-			if kind != taxonomy.FacilityKindUnknown && kind != taxonomy.FacilityKindOther {
+		if fragment.Identifiers == nil {
+			fragment.Identifiers = map[string]string{}
+		}
+		currentRaw := strings.TrimSpace(fragment.Identifiers["facilityKind"])
+		currentNorm := taxonomy.NormalizeFacilityKind(currentRaw)
+		if currentNorm == taxonomy.FacilityKindUnknown || currentNorm == taxonomy.FacilityKindOther {
+			kind := taxonomy.InferFacilityKind(
+				fragment.CanonicalPath,
+				fragment.Labels["en"],
+				fragment.Description,
+				fragment.EntityPath,
+				fragment.SectorPath,
+				fragment.Identifiers["facilityType"],
+				fragment.Identifiers["supplyChainRole"],
+			)
+			if kind != taxonomy.FacilityKindUnknown {
 				fragment.Identifiers["facilityKind"] = string(kind)
-				result.Warnings = append(result.Warnings, fmt.Sprintf("inferred facilityKind=%s from path slug", kind))
+				if kind == taxonomy.FacilityKindOther {
+					result.Warnings = append(result.Warnings, "set facilityKind=other (no deterministic subtype signal)")
+				} else {
+					result.Warnings = append(result.Warnings, fmt.Sprintf("inferred facilityKind=%s from canonical path and context", kind))
+				}
 			}
 		}
 	}

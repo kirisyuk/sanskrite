@@ -289,7 +289,6 @@ var builtInAllowedEdgeMetrics = map[string][]string{
 	"INVESTS_IN":      {"investment_amount", "round_size_total"},
 	"SUPPLIES_TO":     {"annual_volume", "contract_value", "contract_duration_years"},
 	"PRODUCES":        {"annual_capacity", "annual_output"},
-	"CONSUMES":        {"annual_consumption"},
 	"EXTRACTS_FROM":   {"annual_extraction"},
 	"EMPLOYED_BY":     {"tenure_years", "compensation"},
 	"BOARD_MEMBER_OF": {"tenure_years"},

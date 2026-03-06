@@ -120,7 +120,7 @@ func TestPolicyCheckerUnifiedDirectionQuarantineSoft(t *testing.T) {
 			ID:               "e3",
 			SourceFragmentID: "s3",
 			TargetFragmentID: "t3",
-			Type:             horizonmodels.DependencyTypeConsumes,
+			Type:             horizonmodels.DependencyTypeParticipatesIn, // ORG->ORG PARTICIPATES_IN invalid (was CONSUMES, removed)
 		},
 		horizonmodels.FragmentTypeOrganization,
 		horizonmodels.FragmentTypeOrganization,

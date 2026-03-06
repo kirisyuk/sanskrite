@@ -2450,6 +2450,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       id: string;
       canonicalPath: string;
       type: string;
+      facilityKind?: string;
       label?: string;
       description?: string;
       status?: string;
@@ -2834,6 +2835,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       includeUnindexed?: boolean;
       includeCounts?: boolean;
       includeCoordinates?: boolean;
+      /** N-hop expansion (1..5). Default 1. */
+      hops?: number;
       // Optional budgets (applied only when provided)
       maxNeighbors?: number;
       maxEdges?: number;
@@ -2867,6 +2870,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       if (options?.includeUnindexed) params.includeUnindexed = '1';
       if (options?.includeCounts) params.includeCounts = '1';
       if (options?.includeCoordinates) params.includeCoordinates = '1';
+      if (typeof options?.hops === 'number' && options.hops >= 1 && options.hops <= 5) params.hops = String(options.hops);
       if (typeof options?.maxNeighbors === 'number' && options.maxNeighbors > 0) params.maxNeighbors = String(options.maxNeighbors);
       if (typeof options?.maxEdges === 'number' && options.maxEdges > 0) params.maxEdges = String(options.maxEdges);
       if (typeof options?.maxPerType === 'number' && options.maxPerType > 0) params.maxPerType = String(options.maxPerType);

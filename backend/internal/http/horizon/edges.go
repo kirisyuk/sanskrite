@@ -15,6 +15,7 @@ import (
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -617,6 +618,14 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 		limit = 500
 	}
 
+	// hops: N-hop neighborhood (1 = direct neighbors only). When > 1, BFS expands the subgraph.
+	hops := 1
+	if raw := strings.TrimSpace(r.URL.Query().Get("hops")); raw != "" {
+		if v, perr := strconv.Atoi(raw); perr == nil && v >= 1 && v <= 5 {
+			hops = v
+		}
+	}
+
 	var edges []*models.DependencyEdge
 	var err error
 
@@ -628,24 +637,97 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 		direction = "both"
 	}
 
-	switch direction {
-	case "outgoing":
-		edges, err = h.service.Edges().ListBySource(r.Context(), tenantID, fragmentID, edgeType, limit)
-	case "incoming":
-		edges, err = h.service.Edges().ListByTarget(r.Context(), tenantID, fragmentID, edgeType, limit)
-	case "both":
-		outgoing, err1 := h.service.Edges().ListBySource(r.Context(), tenantID, fragmentID, edgeType, limit)
-		incoming, err2 := h.service.Edges().ListByTarget(r.Context(), tenantID, fragmentID, edgeType, limit)
-		if err1 != nil {
-			err = err1
-		} else if err2 != nil {
-			err = err2
-		} else {
-			edges = append(outgoing, incoming...)
+	if hops > 1 {
+		// BFS: collect N-hop subgraph (edges + node IDs).
+		const maxNodes = 500
+		const maxEdgesTotal = 2000
+		const perNodeLimit = 100
+		visited := map[string]struct{}{fragmentID: {}}
+		frontier := []string{fragmentID}
+		allEdges := make([]*models.DependencyEdge, 0, 256)
+		edgeIDs := make(map[string]struct{}, 256)
+
+		for hop := 0; hop < hops; hop++ {
+			nextFrontier := make([]string, 0, 64)
+			for _, fid := range frontier {
+				if len(visited) >= maxNodes || len(allEdges) >= maxEdgesTotal {
+					break
+				}
+				outgoing, _ := h.service.Edges().ListBySource(r.Context(), tenantID, fid, edgeType, perNodeLimit)
+				incoming, _ := h.service.Edges().ListByTarget(r.Context(), tenantID, fid, edgeType, perNodeLimit)
+				for _, e := range outgoing {
+					if e == nil {
+						continue
+					}
+					if _, ok := edgeIDs[e.ID]; !ok {
+						edgeIDs[e.ID] = struct{}{}
+						allEdges = append(allEdges, e)
+					}
+					if tid := strings.TrimSpace(e.TargetFragmentID); tid != "" {
+						if _, ok := visited[tid]; !ok {
+							visited[tid] = struct{}{}
+							nextFrontier = append(nextFrontier, tid)
+						}
+					}
+				}
+				for _, e := range incoming {
+					if e == nil {
+						continue
+					}
+					if _, ok := edgeIDs[e.ID]; !ok {
+						edgeIDs[e.ID] = struct{}{}
+						allEdges = append(allEdges, e)
+					}
+					if sid := strings.TrimSpace(e.SourceFragmentID); sid != "" {
+						if _, ok := visited[sid]; !ok {
+							visited[sid] = struct{}{}
+							nextFrontier = append(nextFrontier, sid)
+						}
+					}
+				}
+			}
+			frontier = nextFrontier
+			if len(frontier) == 0 {
+				break
+			}
 		}
-	default:
-		http.Error(w, "Invalid direction parameter", http.StatusBadRequest)
-		return
+		// Keep only edges where both endpoints are in the subgraph.
+		filtered := make([]*models.DependencyEdge, 0, len(allEdges))
+		for _, e := range allEdges {
+			if e == nil {
+				continue
+			}
+			sid := strings.TrimSpace(e.SourceFragmentID)
+			tid := strings.TrimSpace(e.TargetFragmentID)
+			if sid != "" && tid != "" {
+				if _, okS := visited[sid]; okS {
+					if _, okT := visited[tid]; okT {
+						filtered = append(filtered, e)
+					}
+				}
+			}
+		}
+		edges = filtered
+	} else {
+		switch direction {
+		case "outgoing":
+			edges, err = h.service.Edges().ListBySource(r.Context(), tenantID, fragmentID, edgeType, limit)
+		case "incoming":
+			edges, err = h.service.Edges().ListByTarget(r.Context(), tenantID, fragmentID, edgeType, limit)
+		case "both":
+			outgoing, err1 := h.service.Edges().ListBySource(r.Context(), tenantID, fragmentID, edgeType, limit)
+			incoming, err2 := h.service.Edges().ListByTarget(r.Context(), tenantID, fragmentID, edgeType, limit)
+			if err1 != nil {
+				err = err1
+			} else if err2 != nil {
+				err = err2
+			} else {
+				edges = append(outgoing, incoming...)
+			}
+		default:
+			http.Error(w, "Invalid direction parameter", http.StatusBadRequest)
+			return
+		}
 	}
 
 	if err != nil {
@@ -685,7 +767,6 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 			"REQUIRES":         {},
 			"NEEDS":            {},
 			"USES":             {},
-			"CONSUMES":         {},
 			"EXTRACTS_FROM":    {}, // Facility -> Deposit means Deposit is upstream prerequisite/context
 			"LOCATED_IN":       {},
 			"OPERATES_IN":      {},
@@ -984,22 +1065,19 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 		}
 	}
 
-	// includeFragments: fetch neighbor fragments (best-effort) for the final edge list.
+	// includeFragments: fetch fragments for all nodes in the edge set (1-hop neighbors or N-hop subgraph).
 	var fragments []interface{}
 	if includeFragments && len(edges) > 0 {
-		uniq := make(map[string]struct{}, len(edges))
+		uniq := make(map[string]struct{}, len(edges)*2)
 		for _, e := range edges {
 			if e == nil {
 				continue
 			}
-			if strings.TrimSpace(e.SourceFragmentID) == fragmentID {
-				if tid := strings.TrimSpace(e.TargetFragmentID); tid != "" {
-					uniq[tid] = struct{}{}
-				}
-			} else if strings.TrimSpace(e.TargetFragmentID) == fragmentID {
-				if sid := strings.TrimSpace(e.SourceFragmentID); sid != "" {
-					uniq[sid] = struct{}{}
-				}
+			if sid := strings.TrimSpace(e.SourceFragmentID); sid != "" {
+				uniq[sid] = struct{}{}
+			}
+			if tid := strings.TrimSpace(e.TargetFragmentID); tid != "" {
+				uniq[tid] = struct{}{}
 			}
 		}
 		ids := make([]string, 0, len(uniq))
@@ -1100,6 +1178,8 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 				}
 				if f.Coordinates != nil && models.IsValidCoordinates(f.Coordinates.Lat, f.Coordinates.Lon) {
 					coordsMap[id] = f.Coordinates
+				} else if lat, lon, ok := horizonrepo.ResolveFragmentCoordinates(f); ok && models.IsValidCoordinates(lat, lon) {
+					coordsMap[id] = &models.Coordinates{Lat: lat, Lon: lon}
 				}
 			}
 		}

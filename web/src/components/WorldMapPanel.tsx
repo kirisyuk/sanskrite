@@ -4,8 +4,17 @@ import { useGeoObjects, type GeoObject } from '../hooks/useGeoObjects';
 import { useGeoMarkerLayer } from '../hooks/useGeoMarkerLayer';
 import { useGeoZoneLayer } from '../hooks/useGeoZoneLayer';
 import { useGeoEdgeLayer } from '../hooks/useGeoEdgeLayer';
+import { useStaticZoneLayer } from '../hooks/useStaticZoneLayer';
+import { useTransportFlowLayer } from '../hooks/useTransportFlowLayer';
 import { MapFilterPanel } from './MapFilterPanel';
 import { MapObjectDetail } from './MapObjectDetail';
+import { STATIC_ZONE_DATA, deriveZoneTypeCounts, type StaticZoneFeature, type StaticZoneType } from '../lib/staticZones';
+import {
+  STATIC_TRANSPORT_FLOW_DATA,
+  deriveTransportFlowModeCounts,
+  type TransportFlowFeature,
+  type TransportFlowMode,
+} from '../lib/staticTransportFlows';
 
 export interface WorldMapPanelProps {
   scope?: { lensId: string };
@@ -19,6 +28,11 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [dateFrom, setDateFrom] = React.useState('');
   const [dateTo, setDateTo] = React.useState('');
   const [activeTypes, setActiveTypes] = React.useState<Set<string> | null>(null);
+  const [zonesEnabled, setZonesEnabled] = React.useState(false);
+  const [activeZoneTypes, setActiveZoneTypes] = React.useState<Set<StaticZoneType> | null>(null);
+  const [flowsEnabled, setFlowsEnabled] = React.useState(false);
+  const [activeFlowModes, setActiveFlowModes] = React.useState<Set<TransportFlowMode> | null>(null);
+  const [hops, setHops] = React.useState(3);
   const [selectedObject, setSelectedObject] = React.useState<GeoObject | null>(null);
 
   const filters = React.useMemo(
@@ -28,9 +42,30 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
 
   const { allObjects, filteredObjects, typeCounts, loading, error } = useGeoObjects(scope, filters);
 
-  useGeoMarkerLayer(map, isReady, styleEpoch, filteredObjects, theme, setSelectedObject);
-  useGeoZoneLayer(map, isReady, styleEpoch, filteredObjects, theme);
-  const { edgesLoading, edgesCount } = useGeoEdgeLayer(map, isReady, styleEpoch, selectedObject, filteredObjects);
+  const { edgesLoading, edgesCount, discoveredObjects } = useGeoEdgeLayer(map, isReady, styleEpoch, selectedObject, filteredObjects, hops);
+  const mapObjects = React.useMemo(
+    () => (discoveredObjects.length > 0 ? [...filteredObjects, ...discoveredObjects] : filteredObjects),
+    [filteredObjects, discoveredObjects],
+  );
+  const allStaticZones = STATIC_ZONE_DATA.features;
+  const zoneTypeCounts = React.useMemo(() => deriveZoneTypeCounts(allStaticZones), [allStaticZones]);
+  const filteredStaticZones = React.useMemo(() => {
+    if (!zonesEnabled) return [] as StaticZoneFeature[];
+    if (!activeZoneTypes) return allStaticZones;
+    return allStaticZones.filter((f) => activeZoneTypes.has(f.properties.zoneType));
+  }, [zonesEnabled, activeZoneTypes, allStaticZones]);
+  const allTransportFlows = STATIC_TRANSPORT_FLOW_DATA.features;
+  const flowModeCounts = React.useMemo(() => deriveTransportFlowModeCounts(allTransportFlows), [allTransportFlows]);
+  const filteredTransportFlows = React.useMemo(() => {
+    if (!flowsEnabled) return [] as TransportFlowFeature[];
+    if (!activeFlowModes) return allTransportFlows;
+    return allTransportFlows.filter((f) => activeFlowModes.has(f.properties.flowMode));
+  }, [flowsEnabled, activeFlowModes, allTransportFlows]);
+
+  useGeoMarkerLayer(map, isReady, styleEpoch, mapObjects, theme, setSelectedObject);
+  useGeoZoneLayer(map, isReady, styleEpoch, mapObjects, theme);
+  useStaticZoneLayer(map, isReady, styleEpoch, filteredStaticZones, theme, zonesEnabled);
+  useTransportFlowLayer(map, isReady, styleEpoch, filteredTransportFlows, theme, flowsEnabled);
 
   const handleToggleType = React.useCallback((type: string) => {
     setActiveTypes((prev) => {
@@ -48,6 +83,38 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   }, [typeCounts]);
 
   const filterActive = activeTypes !== null;
+  const visibleStaticZonesCount = filteredStaticZones.length;
+  const visibleTransportFlowsCount = filteredTransportFlows.length;
+
+  const handleToggleZoneType = React.useCallback((type: StaticZoneType) => {
+    setActiveZoneTypes((prev) => {
+      if (!prev) {
+        const all = new Set(zoneTypeCounts.map((zc) => zc.type));
+        all.delete(type);
+        return all;
+      }
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      if (next.size === zoneTypeCounts.length) return null;
+      return next;
+    });
+  }, [zoneTypeCounts]);
+
+  const handleToggleFlowMode = React.useCallback((mode: TransportFlowMode) => {
+    setActiveFlowModes((prev) => {
+      if (!prev) {
+        const all = new Set(flowModeCounts.map((fc) => fc.mode));
+        all.delete(mode);
+        return all;
+      }
+      const next = new Set(prev);
+      if (next.has(mode)) next.delete(mode);
+      else next.add(mode);
+      if (next.size === flowModeCounts.length) return null;
+      return next;
+    });
+  }, [flowModeCounts]);
 
   return (
     <div className="flex-1 min-h-0" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -70,15 +137,31 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           isDark={isDark}
           paletteTheme={theme}
           typeCounts={typeCounts}
+          zoneTypeCounts={zoneTypeCounts}
+          flowModeCounts={flowModeCounts}
           activeTypes={activeTypes}
+          activeZoneTypes={activeZoneTypes}
+          activeFlowModes={activeFlowModes}
+          zonesEnabled={zonesEnabled}
+          flowsEnabled={flowsEnabled}
           dateFrom={dateFrom}
           dateTo={dateTo}
+          hops={hops}
           loadingData={loading}
           onSetDateFrom={setDateFrom}
           onSetDateTo={setDateTo}
+          onSetHops={setHops}
           onToggleType={handleToggleType}
+          onToggleZoneType={handleToggleZoneType}
+          onToggleFlowMode={handleToggleFlowMode}
+          onToggleZonesEnabled={() => setZonesEnabled((v) => !v)}
+          onToggleFlowsEnabled={() => setFlowsEnabled((v) => !v)}
           onSelectAll={() => setActiveTypes(null)}
           onSelectNone={() => setActiveTypes(new Set())}
+          onSelectAllZoneTypes={() => setActiveZoneTypes(null)}
+          onSelectNoneZoneTypes={() => setActiveZoneTypes(new Set())}
+          onSelectAllFlowModes={() => setActiveFlowModes(null)}
+          onSelectNoneFlowModes={() => setActiveFlowModes(new Set())}
         />
 
         <div style={{
@@ -90,6 +173,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           {filterActive
             ? `Shown: ${filteredObjects.length} / ${allObjects.length}`
             : `Objects: ${allObjects.length}`}
+          {zonesEnabled ? ` | Zones: ${visibleStaticZonesCount}` : ''}
+          {flowsEnabled ? ` | Flows: ${visibleTransportFlowsCount}` : ''}
         </div>
 
         {selectedObject && (

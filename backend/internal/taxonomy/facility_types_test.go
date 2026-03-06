@@ -23,6 +23,9 @@ func TestFacilityKindFromSlug(t *testing.T) {
 		{"lng-terminal-zeebrugge", FacilityKindTerminal},
 		{"datacenter-ashburn", FacilityKindDatacenter},
 		{"power-plant-belchatow", FacilityKindPowerPlant},
+		{"pepsico-cork-concentrate-plant", FacilityKindFactory},
+		{"marwin-general-distribution", FacilityKindWarehouse},
+		{"munich-airport-cargo-terminal", FacilityKindAirport},
 		{"unknown-facility-xyz", FacilityKindOther},
 	}
 	for _, tt := range tests {
@@ -48,5 +51,34 @@ func TestNormalizeFacilityKind(t *testing.T) {
 	}
 	if got := NormalizeFacilityKind("submarine-cable"); got != FacilityKindCable {
 		t.Errorf("got %q, want cable", got)
+	}
+}
+
+func TestInferFacilityKind(t *testing.T) {
+	got := InferFacilityKind(
+		"/fac/ie/pepsico-cork-concentrate-plant",
+		"PepsiCo Cork Plant",
+		"Concentrate manufacturing facility",
+		"",
+		"",
+	)
+	if got != FacilityKindFactory {
+		t.Fatalf("InferFacilityKind(...) = %q, want %q", got, FacilityKindFactory)
+	}
+
+	got = InferFacilityKind(
+		"/fac/kz/marwin-general-distribution",
+		"Marwin General Distribution",
+		"Logistics hub",
+		"",
+		"",
+	)
+	if got != FacilityKindWarehouse {
+		t.Fatalf("InferFacilityKind(...) = %q, want %q", got, FacilityKindWarehouse)
+	}
+
+	got = InferFacilityKind("/fac/na/northvolt-dwa", "Northvolt Dwa")
+	if got != FacilityKindOther {
+		t.Fatalf("InferFacilityKind(...) = %q, want %q", got, FacilityKindOther)
 	}
 }

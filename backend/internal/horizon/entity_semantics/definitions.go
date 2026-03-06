@@ -35,7 +35,7 @@ func registerAll() {
 - Required aspects to extract: products (PRODUCES), competitors (COMPETES_WITH), investors (INVESTS_IN), owners (OWNS/SUBSIDIARY_OF), markets (PARTICIPATES_IN), deposits (OPERATES_IN when extractive), locations (LOCATED_IN, OPERATES_IN).
 - Identify critical infrastructure dependencies: transport chokepoints (straits, canals, pipelines), key ports, and logistics corridors through which this entity's supply chain flows. Create DEPENDS_ON edges to these infrastructure nodes.
 - Taxonomically correct edge types:
-  - Required/primary: PRODUCES, CONSUMES, COMPETES_WITH, INVESTS_IN, OWNS, SUBSIDIARY_OF, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN
+  - Required/primary: PRODUCES, SUPPLIES_TO, COMPETES_WITH, INVESTS_IN, OWNS, SUBSIDIARY_OF, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN
   - Allowed when evidence exists: DEPENDS_ON, SUPPLIES_TO, CONTROLS, MANAGES, PARTNERS_WITH, REGULATES
   - For leadership: MANAGES, EMPLOYED_BY, BOARD_MEMBER_OF, FOUNDED (PERSON targets)
 - Missing info priorities:
@@ -54,7 +54,7 @@ func registerAll() {
 		},
 		ResearchBlock: `ENTITY TYPE: ORGANIZATION
 - Required aspects: products, competitors, investors, owners, markets, deposits, locations.
-- Taxonomically correct edge types: PRODUCES, CONSUMES, COMPETES_WITH, INVESTS_IN, OWNS, SUBSIDIARY_OF, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN.
+- Taxonomically correct edge types: PRODUCES, SUPPLIES_TO, COMPETES_WITH, INVESTS_IN, OWNS, SUBSIDIARY_OF, PARTICIPATES_IN, LOCATED_IN, OPERATES_IN.
 - Missing info priorities: products, competitors, ownership, markets, locations.`,
 	}
 
@@ -229,7 +229,7 @@ func registerAll() {
   4) Fill key supply-chain evidence (volumes/capacity/contracts where available).
 - Identify critical infrastructure dependencies: transport chokepoints (straits, canals, pipelines) through which this product's supply chain flows. Create DEPENDS_ON edges to these infrastructure nodes.
 - Taxonomically correct edge types:
-  - Required/primary: TRANSFORMS_INTO, PRODUCES, CONSUMES
+  - Required/primary: TRANSFORMS_INTO, PRODUCES, SUPPLIES_TO
   - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, PARTICIPATES_IN
   - Avoid: OWNS for actor-product commercial flows.
   - Avoid: PRODUCT -> PRODUCT with PRODUCES; use TRANSFORMS_INTO.
@@ -246,7 +246,7 @@ func registerAll() {
   4) Fill key supply-chain evidence (volumes/capacity/contracts where available).
 - Identify critical infrastructure dependencies: transport chokepoints through which this product's supply chain flows. Create DEPENDS_ON edges.
 - Taxonomically correct edge types:
-  - Required/primary: TRANSFORMS_INTO, PRODUCES, CONSUMES
+  - Required/primary: TRANSFORMS_INTO, PRODUCES, SUPPLIES_TO
   - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, PARTICIPATES_IN
   - Avoid: OWNS for actor-product commercial flows.
   - Avoid: PRODUCT -> PRODUCT with PRODUCES; use TRANSFORMS_INTO.
@@ -279,11 +279,11 @@ func registerAll() {
 		ExtractionBlock: `ENTITY TYPE: FACILITY
 - Required execution order:
   1) Resolve lifecycle and location validity.
-  2) Resolve facility IO profile: CONSUMES inputs, PRODUCES outputs.
+  2) Resolve facility IO profile: SUPPLIES_TO (product→org) for inputs, PRODUCES for outputs.
   3) Connect to counterparties/markets via SUPPLIES_TO, DEPENDS_ON, PARTICIPATES_IN.
   4) Add capacity/throughput metrics where available.
 - Taxonomically correct edge types:
-  - Required/primary: LOCATED_IN/OPERATES_IN, PRODUCES, CONSUMES
+  - Required/primary: LOCATED_IN/OPERATES_IN, PRODUCES, SUPPLIES_TO
   - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, PARTICIPATES_IN, EXTRACTS_FROM
   - Avoid: treating facility as legal owner in OWNS edges.
 - Missing info priorities:
@@ -293,11 +293,11 @@ func registerAll() {
 		ResearchBlock: `ENTITY TYPE: FACILITY
 - Required execution order:
   1) Resolve lifecycle and location validity.
-  2) Resolve facility IO profile: CONSUMES inputs, PRODUCES outputs.
+  2) Resolve facility IO profile: SUPPLIES_TO (product→org) for inputs, PRODUCES for outputs.
   3) Connect to counterparties/markets via SUPPLIES_TO, DEPENDS_ON, PARTICIPATES_IN.
   4) Add capacity/throughput metrics where available.
 - Taxonomically correct edge types:
-  - Required/primary: LOCATED_IN/OPERATES_IN, PRODUCES, CONSUMES
+  - Required/primary: LOCATED_IN/OPERATES_IN, PRODUCES, SUPPLIES_TO
   - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, PARTICIPATES_IN, EXTRACTS_FROM
   - Avoid: treating facility as legal owner in OWNS edges.
 - Missing info priorities:
@@ -728,7 +728,7 @@ func registerAll() {
 - Taxonomically correct edge types:
   - Required/primary: SUPPLIES_TO (supplier → customer), CARRIES (link → product)
   - Allowed when evidence exists: DEPENDS_ON (link → infrastructure/chokepoint), LOCATED_IN
-  - Avoid: PRODUCES/CONSUMES on the link itself; those belong on supplier/customer nodes.
+  - Avoid: PRODUCES/SUPPLIES_TO on the link itself; those belong on supplier/customer nodes.
 - Missing info priorities:
   - Missing supplier or customer identity.
   - Missing product specification.
@@ -776,7 +776,7 @@ func registerAll() {
 - Taxonomically correct edge types:
   - Required/primary: OPERATES_AT (track → facility/port), CARRIES (track → product), OWNED_BY (track → org)
   - Allowed when evidence exists: LOCATED_IN, DEPENDS_ON
-  - Avoid: PRODUCES/CONSUMES for tracks; use CARRIES for cargo association.
+  - Avoid: PRODUCES/SUPPLIES_TO for tracks; use CARRIES for cargo association.
 - Missing info priorities:
   - Missing operator/owner.
   - Missing vessel type and flag.
@@ -833,12 +833,12 @@ var supplyChainExtractionBlockOverrides = map[EntityTypeKey]string{
 - Missing info priorities: market segments, key players.`,
 	EntityTypeProduct: `ENTITY TYPE: PRODUCT (supply chain scope)
 - Required: TRANSFORMS_INTO (upstream/downstream), PRODUCES (actor→product), SUPPLIES_TO (flow).
-- Do NOT use DEPENDS_ON. Use TRANSFORMS_INTO for product chain; PRODUCES/CONSUMES for actor links.
-- Taxonomically correct edge types: TRANSFORMS_INTO, PRODUCES, CONSUMES, SUPPLIES_TO, PARTICIPATES_IN.
+- Do NOT use DEPENDS_ON. Use TRANSFORMS_INTO for product chain; PRODUCES/SUPPLIES_TO for actor links.
+- Taxonomically correct edge types: TRANSFORMS_INTO, PRODUCES, SUPPLIES_TO, PARTICIPATES_IN.
 - Missing info priorities: upstream inputs, downstream products, producers, consumers.`,
 	EntityTypeFacility: `ENTITY TYPE: FACILITY (supply chain scope)
-- Required: PRODUCES (outputs), CONSUMES (inputs), SUPPLIES_TO (to customers), LOCATED_IN, OPERATES_IN.
-- Do NOT use DEPENDS_ON. Use SUPPLIES_TO for flow; CONSUMES for input products.
-- Taxonomically correct edge types: PRODUCES, CONSUMES, SUPPLIES_TO, LOCATED_IN, OPERATES_IN, EXTRACTS_FROM.
+- Required: PRODUCES (outputs), SUPPLIES_TO (product→org for inputs, supplier→customer for flow), LOCATED_IN, OPERATES_IN.
+- Do NOT use DEPENDS_ON. Use SUPPLIES_TO for flow and input products (product supplies to org).
+- Taxonomically correct edge types: PRODUCES, SUPPLIES_TO, LOCATED_IN, OPERATES_IN, EXTRACTS_FROM.
 - Missing info priorities: products, counterparties, capacity.`,
 }

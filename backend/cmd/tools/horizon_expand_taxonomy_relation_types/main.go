@@ -57,7 +57,6 @@ func main() {
 		string(horizonmodels.DependencyTypeOwns),
 		string(horizonmodels.DependencyTypeSubsidiaryOf), // kept for prompts/taxonomy compatibility
 		string(horizonmodels.DependencyTypeProduces),
-		string(horizonmodels.DependencyTypeConsumes),
 		string(horizonmodels.DependencyTypeOperatesIn),
 		string(horizonmodels.DependencyTypeRegulates),
 		string(horizonmodels.DependencyTypeCompetesWith),

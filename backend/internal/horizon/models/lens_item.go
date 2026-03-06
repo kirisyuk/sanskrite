@@ -129,7 +129,6 @@ func (li *LensItem) Validate() error {
 			string(DependencyTypeOwns):         true,
 			string(DependencyTypeSubsidiaryOf): true,
 			string(DependencyTypeProduces):     true,
-			string(DependencyTypeConsumes):     true,
 			string(DependencyTypeOperatesIn):   true,
 			string(DependencyTypeRegulates):    true,
 			string(DependencyTypeCompetesWith): true,

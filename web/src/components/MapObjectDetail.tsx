@@ -14,8 +14,15 @@ interface MapObjectDetailProps {
 export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   object, isDark, paletteTheme, edgesLoading, edgesCount, onClose,
 }) => {
-  const visualType = getHorizonNodeVisualType(object.type, object.canonicalPath, object.label);
+  const visualType = getHorizonNodeVisualType(object.type, object.canonicalPath, object.label, object.facilityKind);
   const accent = getNodeColors(visualType || object.type, paletteTheme).accent;
+  const facilityKindLabel = String(object.facilityKind || '')
+    .trim()
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  const typeLabel = object.type === 'FACILITY' && facilityKindLabel
+    ? `Facility (${facilityKindLabel})`
+    : formatHorizonFragmentType(object.type, object.canonicalPath, object.label);
 
   return (
     <div
@@ -39,7 +46,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
         </div>
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 2 }}>
-        {formatHorizonFragmentType(object.type, object.canonicalPath, object.label)}
+        {typeLabel}
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 8 }}>
         {object.canonicalPath}

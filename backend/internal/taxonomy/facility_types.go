@@ -2,6 +2,7 @@ package taxonomy
 
 import (
 	"strings"
+	"unicode"
 )
 
 // FacilityKind is the physical infrastructure type of a facility.
@@ -35,12 +36,143 @@ var facilityKindSlugHints = map[FacilityKind][]string{
 	FacilityKindMine:       {"mine", "mining"},
 	FacilityKindSeaport:    {"port", "seaport", "harbor", "harbour"},
 	FacilityKindAirport:    {"airport"},
-	FacilityKindPowerPlant: {"power-plant", "powerplant", "plant", "solar", "wind", "renewable"},
+	FacilityKindPowerPlant: {"power-plant", "powerplant", "solar", "wind", "renewable"},
 	FacilityKindDatacenter: {"datacenter", "data-center"},
 	FacilityKindFactory:    {"factory", "fab", "gigafactory", "foundry"},
 	FacilityKindSubstation: {"substation", "grid"},
 	FacilityKindCable:      {"cable", "submarine-cable", "subsea-cable", "fiber", "optic"},
 	FacilityKindWarehouse:  {"warehouse", "depot", "distribution-center"},
+}
+
+func normalizeFacilitySignalText(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(raw))
+	prevSpace := true
+	for _, r := range raw {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			prevSpace = false
+			continue
+		}
+		if !prevSpace {
+			b.WriteByte(' ')
+			prevSpace = true
+		}
+	}
+	return strings.TrimSpace(strings.Join(strings.Fields(b.String()), " "))
+}
+
+func facilitySignalTokenSet(text string) map[string]struct{} {
+	norm := normalizeFacilitySignalText(text)
+	if norm == "" {
+		return nil
+	}
+	parts := strings.Fields(norm)
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		out[p] = struct{}{}
+	}
+	return out
+}
+
+func hasAnyFacilityToken(tokens map[string]struct{}, keys ...string) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	for _, k := range keys {
+		if _, ok := tokens[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyFacilityPhrase(text string, phrases ...string) bool {
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+	needleBase := " " + normalizeFacilitySignalText(text) + " "
+	for _, p := range phrases {
+		needle := " " + normalizeFacilitySignalText(p) + " "
+		if needle != "  " && strings.Contains(needleBase, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func inferFacilityKindFromText(text string) FacilityKind {
+	norm := normalizeFacilitySignalText(text)
+	if norm == "" {
+		return FacilityKindUnknown
+	}
+	tokens := facilitySignalTokenSet(norm)
+
+	// Hard infrastructure first.
+	if hasAnyFacilityToken(tokens, "pipeline", "pipelines", "pipe", "midstream") ||
+		hasAnyFacilityPhrase(norm, "gas pipeline", "oil pipeline", "export pipeline") {
+		return FacilityKindPipeline
+	}
+	if hasAnyFacilityToken(tokens, "refinery", "refining", "smelter", "smelting") {
+		return FacilityKindRefinery
+	}
+	if hasAnyFacilityToken(tokens, "mine", "mining", "quarry", "pit") ||
+		hasAnyFacilityPhrase(norm, "open pit", "mine complex") {
+		return FacilityKindMine
+	}
+	if hasAnyFacilityToken(tokens, "airport", "airfield", "aerodrome") {
+		return FacilityKindAirport
+	}
+	if hasAnyFacilityToken(tokens, "seaport", "harbor", "harbour", "dock", "quay", "pier", "port") {
+		return FacilityKindSeaport
+	}
+	if hasAnyFacilityToken(tokens, "terminal", "regas", "regasification") &&
+		(hasAnyFacilityToken(tokens, "lng", "lpg", "gas", "oil", "export", "import", "storage", "port") ||
+			hasAnyFacilityPhrase(norm, "lng terminal", "gas terminal", "oil terminal")) {
+		return FacilityKindTerminal
+	}
+	if hasAnyFacilityToken(tokens, "substation", "grid") ||
+		hasAnyFacilityPhrase(norm, "offshore substation", "transmission grid") {
+		return FacilityKindSubstation
+	}
+	if hasAnyFacilityToken(tokens, "cable") ||
+		(hasAnyFacilityToken(tokens, "fiber", "fibre", "optic") &&
+			(hasAnyFacilityToken(tokens, "submarine", "subsea", "undersea", "power", "optic", "fiber", "fibre") ||
+				hasAnyFacilityPhrase(norm, "submarine cable", "subsea cable", "power cable", "fiber cable"))) {
+		return FacilityKindCable
+	}
+	if hasAnyFacilityToken(tokens, "datacenter") ||
+		(hasAnyFacilityToken(tokens, "data", "center", "centre") &&
+			(hasAnyFacilityPhrase(norm, "data center", "data centre", "hyperscale data center") || hasAnyFacilityToken(tokens, "server", "cloud"))) {
+		return FacilityKindDatacenter
+	}
+	if hasAnyFacilityToken(tokens, "warehouse", "depot", "distribution", "logistics", "fulfillment", "fulfilment", "hub") &&
+		(hasAnyFacilityToken(tokens, "warehouse", "depot", "distribution", "logistics", "fulfillment", "fulfilment") ||
+			hasAnyFacilityPhrase(norm, "distribution center", "logistics hub", "general distribution")) {
+		return FacilityKindWarehouse
+	}
+
+	// Power plant requires explicit power-generation signal; plain "plant" is not enough.
+	if (hasAnyFacilityToken(tokens, "power", "generation", "generating", "thermal", "nuclear", "hydro", "geothermal", "biomass", "solar", "wind") &&
+		hasAnyFacilityToken(tokens, "plant", "station", "farm")) ||
+		hasAnyFacilityPhrase(norm, "power plant", "power station", "solar farm", "wind farm", "thermal power", "nuclear power") {
+		return FacilityKindPowerPlant
+	}
+
+	// Generic manufacturing fallback.
+	if hasAnyFacilityToken(tokens, "factory", "fab", "gigafactory", "foundry", "manufacturing", "assembly", "production", "processing", "mill", "works", "plant") ||
+		hasAnyFacilityPhrase(norm, "processing plant", "manufacturing plant", "assembly plant", "production facility") {
+		return FacilityKindFactory
+	}
+
+	return FacilityKindOther
 }
 
 // FacilityKinds returns all facility kinds in stable order (for prompts and validation).
@@ -78,24 +210,10 @@ func FacilityKindsForPrompts() string {
 // FacilityKindFromSlug infers FacilityKind from /fac/{geo}/{slug} facility slug.
 // Used by: taxonomy classifier (Vertex mapping), pre-create detection, LLM fallback.
 func FacilityKindFromSlug(slug string) FacilityKind {
-	s := strings.ToLower(strings.TrimSpace(slug))
-	if s == "" {
+	if strings.TrimSpace(slug) == "" {
 		return FacilityKindUnknown
 	}
-	// Check in deterministic order (more specific first; airport before seaport so "jfk-airport" -> airport not seaport)
-	for _, k := range []FacilityKind{
-		FacilityKindPipeline, FacilityKindRefinery, FacilityKindTerminal,
-		FacilityKindMine, FacilityKindAirport, FacilityKindSeaport,
-		FacilityKindPowerPlant, FacilityKindDatacenter, FacilityKindFactory,
-		FacilityKindSubstation, FacilityKindCable, FacilityKindWarehouse,
-	} {
-		for _, hint := range facilityKindSlugHints[k] {
-			if strings.Contains(s, hint) {
-				return k
-			}
-		}
-	}
-	return FacilityKindOther
+	return inferFacilityKindFromText(slug)
 }
 
 // FacilityKindFromCanonicalPath extracts slug from /fac/{geo}/{slug} and runs FacilityKindFromSlug.
@@ -109,6 +227,36 @@ func FacilityKindFromCanonicalPath(canonicalPath string) FacilityKind {
 		return FacilityKindUnknown
 	}
 	return FacilityKindFromSlug(parts[len(parts)-1])
+}
+
+// InferFacilityKind infers physical facility kind from canonical path plus optional textual signals
+// (name, description, entity/sector path, facilityType, etc.).
+// Returns concrete kind when possible, otherwise FacilityKindOther for /fac/* paths.
+func InferFacilityKind(canonicalPath string, signals ...string) FacilityKind {
+	path := strings.TrimSpace(canonicalPath)
+	if path == "" || !strings.HasPrefix(strings.ToLower(path), "/fac/") {
+		return FacilityKindUnknown
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "fac" {
+		return FacilityKindUnknown
+	}
+
+	candidates := make([]string, 0, len(signals)+2)
+	candidates = append(candidates, parts[len(parts)-1])
+	candidates = append(candidates, path)
+	for _, s := range signals {
+		if strings.TrimSpace(s) != "" {
+			candidates = append(candidates, s)
+		}
+	}
+
+	joined := strings.Join(candidates, " | ")
+	kind := inferFacilityKindFromText(joined)
+	if kind != FacilityKindUnknown {
+		return kind
+	}
+	return FacilityKindOther
 }
 
 // NormalizeFacilityKind normalizes raw LLM/import string to FacilityKind.

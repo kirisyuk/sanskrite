@@ -78,6 +78,7 @@ export interface HorizonNodeData {
   marketSegmentNormPairs?: string[];
   label?: string;
   type?: string; // FragmentType
+  facilityKind?: string;
   state?: Record<string, number>; // Метрики
   /** UI: whether to render metrics inside the node (disabled by default for performance). */
   showMetrics?: boolean;
@@ -439,7 +440,10 @@ export const getNodeColors = (type: string | undefined, theme: 'light' | 'dark')
   const cacheKey = `${normalizedType}:${theme}`;
   const cached = (getNodeColors as any)._cache?.get(cacheKey);
   if (cached) return cached;
-  const scheme = NODE_COLORS[normalizedType] || NODE_COLORS['default'];
+  const scheme =
+    NODE_COLORS[normalizedType] ||
+    (normalizedType.startsWith('FACILITY_') ? NODE_COLORS['FACILITY'] : undefined) ||
+    NODE_COLORS['default'];
   
   const out = {
     bg: theme === 'dark' ? scheme.bgDark : scheme.bg,
@@ -702,12 +706,86 @@ export const formatHorizonFragmentType = (
   return t.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
+const normalizeFacilityKindToken = (raw?: string | null): string => {
+  const norm = String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  switch (norm) {
+    case 'port':
+    case 'harbor':
+    case 'harbour':
+      return 'seaport';
+    case 'powerplant':
+      return 'power_plant';
+    case 'data_center':
+      return 'datacenter';
+    default:
+      return norm;
+  }
+};
+
+const inferFacilityKindToken = (canonicalPath?: string | null, label?: string | null): string => {
+  const raw = `${String(canonicalPath || '')} ${String(label || '')}`.toLowerCase();
+  const text = raw.replace(/[_/]+/g, ' ');
+  const has = (re: RegExp): boolean => re.test(text);
+
+  if (has(/\b(pipeline|pipe)\b/)) return 'pipeline';
+  if (has(/\b(refinery|refining)\b/)) return 'refinery';
+  if (has(/\b(mine|mining)\b/)) return 'mine';
+  if (has(/\bairport\b/)) return 'airport';
+  if (has(/\b(seaport|harbor|harbour)\b/)) return 'seaport';
+  if (has(/\bport\b/) && !has(/\bairport\b/)) return 'seaport';
+  if (has(/\b(lng\s*terminal|terminal)\b/)) return 'terminal';
+  if (has(/\bsubstation\b/) || has(/\bgrid\b/)) return 'substation';
+  if (has(/\b(submarine|subsea)\s*cable\b/) || has(/\bcable\b/) || has(/\bfiber\b/) || has(/\boptic\b/)) return 'cable';
+  if (has(/\b(data\s*center|datacenter)\b/)) return 'datacenter';
+  if (has(/\b(warehouse|depot|distribution\s*center|distribution\s*hub|logistics\s*center|logistics\s*hub)\b/)) return 'warehouse';
+  if (has(/\b(power\s*plant|powerplant)\b/)) return 'power_plant';
+  if ((has(/\b(solar|wind|hydro|thermal|nuclear)\b/) && has(/\b(plant|station)\b/))) return 'power_plant';
+  if (has(/\b(factory|fab|gigafactory|foundry)\b/)) return 'factory';
+  if (has(/\bplant\b/)) return 'factory';
+  return '';
+};
+
+const facilityKindToVisualType = (facilityKind?: string | null): string | null => {
+  switch (normalizeFacilityKindToken(facilityKind)) {
+    case 'seaport':
+      return 'FACILITY_SEAPORT';
+    case 'airport':
+      return 'FACILITY_AIRPORT';
+    case 'factory':
+      return 'FACILITY_FACTORY';
+    case 'warehouse':
+      return 'FACILITY_WAREHOUSE';
+    case 'pipeline':
+      return 'FACILITY_PIPELINE';
+    case 'cable':
+      return 'FACILITY_CABLE';
+    case 'mine':
+      return 'FACILITY_MINE';
+    case 'refinery':
+      return 'FACILITY_REFINERY';
+    case 'power_plant':
+      return 'FACILITY_POWER_PLANT';
+    case 'datacenter':
+      return 'FACILITY_DATACENTER';
+    case 'terminal':
+      return 'FACILITY_TERMINAL';
+    case 'substation':
+      return 'FACILITY_SUBSTATION';
+    default:
+      return null;
+  }
+};
+
 // Visual-only type overrides (do NOT change semantics/behavior).
 // Currently used to render /gov/* organizations differently while keeping them as ORGANIZATION logically.
 export const getHorizonNodeVisualType = (
   type: string | undefined,
   canonicalPath?: string | null,
   label?: string | null,
+  facilityKind?: string | null,
 ): string => {
   const t = String(type || '').trim();
   const cp = String(canonicalPath || '').trim();
@@ -729,6 +807,12 @@ export const getHorizonNodeVisualType = (
     const communityType = parts[2] || '';
     if (communityType === 'dynasty') return 'COMMUNITY_DYNASTY';
     if (communityType === 'tribe') return 'COMMUNITY_TRIBE';
+  }
+  if (String(t).toUpperCase() === 'FACILITY') {
+    const facilityVisualType =
+      facilityKindToVisualType(facilityKind) ||
+      facilityKindToVisualType(inferFacilityKindToken(cp, label));
+    if (facilityVisualType) return facilityVisualType;
   }
   if (String(t).toUpperCase() === 'PRODUCT' && isQuranReference(label, cp)) {
     return 'SACRED_TEXT_QURAN';
@@ -1094,6 +1178,145 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
           <circle cx="12" cy="12" r="10" />
           <path d="M2 12h20" />
           <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+        </svg>
+      );
+
+    case 'FACILITY_SEAPORT':
+      // Seaport: anchor
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M12 3v11" />
+          <circle cx="12" cy="5" r="1.5" />
+          <path d="M6 14a6 6 0 0 0 12 0" />
+          <path d="M6 14H3" />
+          <path d="M18 14h3" />
+          <path d="M9 14v2a3 3 0 0 0 6 0v-2" />
+        </svg>
+      );
+
+    case 'FACILITY_AIRPORT':
+      // Airport: airplane
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M2 12l8-2 4-6 2 1-2 6 8 2-8 2 2 6-2 1-4-6-8-2z" />
+        </svg>
+      );
+
+    case 'FACILITY_FACTORY':
+      // Factory icon
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v16z" />
+          <path d="M17 18h1" />
+          <path d="M12 18h1" />
+          <path d="M7 18h1" />
+        </svg>
+      );
+
+    case 'FACILITY_WAREHOUSE':
+      // Warehouse: box building
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 9l9-5 9 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z" />
+          <path d="M3 9l9 5 9-5" />
+          <path d="M9 14h6v8H9z" />
+        </svg>
+      );
+
+    case 'FACILITY_PIPELINE':
+      // Pipeline: connected pipe segments
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 7h6v4h6v6h6" />
+          <circle cx="3" cy="7" r="1.5" />
+          <circle cx="9" cy="7" r="1.5" />
+          <circle cx="9" cy="11" r="1.5" />
+          <circle cx="15" cy="11" r="1.5" />
+          <circle cx="15" cy="17" r="1.5" />
+          <circle cx="21" cy="17" r="1.5" />
+        </svg>
+      );
+
+    case 'FACILITY_CABLE':
+      // Cable: plug + line
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M8 10V6" />
+          <path d="M12 10V6" />
+          <path d="M6 10h8v3a4 4 0 0 1-4 4h-1a4 4 0 0 0-4 4v1" />
+          <path d="M18 20h3" />
+          <path d="M17 17h4v6h-4z" />
+        </svg>
+      );
+
+    case 'FACILITY_MINE':
+      // Mine: crossed tools
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M5 20l14-14" />
+          <path d="M4 9l3-3 4 4-3 3z" />
+          <path d="M9 20l11-11" />
+          <path d="M13 4l3 3-4 4-3-3z" />
+        </svg>
+      );
+
+    case 'FACILITY_REFINERY':
+      // Refinery: tower + drop
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M5 21h14" />
+          <path d="M8 21V6h4v15" />
+          <path d="M14 21V10h3v11" />
+          <path d="M9 9h2" />
+          <path d="M15 13h1" />
+          <path d="M18 4s2 2.2 2 4a2 2 0 0 1-4 0c0-1.8 2-4 2-4z" />
+        </svg>
+      );
+
+    case 'FACILITY_POWER_PLANT':
+      // Power plant: bolt + stack
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M4 21h16" />
+          <path d="M7 21V9h4v12" />
+          <path d="M14 21V6h3v15" />
+          <path d="M10 4L7 10h3l-2 6 6-8h-3l2-4z" />
+        </svg>
+      );
+
+    case 'FACILITY_DATACENTER':
+      // Datacenter: server racks
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <rect x="4" y="3" width="16" height="6" rx="1.5" />
+          <rect x="4" y="10" width="16" height="6" rx="1.5" />
+          <rect x="4" y="17" width="16" height="4" rx="1.5" />
+          <path d="M8 6h.01" />
+          <path d="M8 13h.01" />
+          <path d="M8 19h.01" />
+        </svg>
+      );
+
+    case 'FACILITY_TERMINAL':
+      // Terminal: container + crane hook
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M3 21h18" />
+          <rect x="4" y="13" width="10" height="6" rx="1" />
+          <path d="M8 13V7h9" />
+          <path d="M17 7v6" />
+          <path d="M17 13h3" />
+          <path d="M20 13v2a1.5 1.5 0 0 1-3 0v-2" />
+        </svg>
+      );
+
+    case 'FACILITY_SUBSTATION':
+      // Substation: grid tower
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
+          <path d="M12 3l5 6h-3l2 12h-8l2-12H7l5-6z" />
+          <path d="M5 12h14" />
+          <path d="M6 16h12" />
         </svg>
       );
     
@@ -3379,7 +3602,12 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
                   {fact.items.map((item) => {
                     const isOverflow = item.id.startsWith('__overflow__');
                     const nodeType = item.type || 'UNKNOWN';
-                    const visualType = getHorizonNodeVisualType(nodeType, '', item.label);
+                    const visualType = getHorizonNodeVisualType(
+                      nodeType,
+                      (item as any)?.canonicalPath || '',
+                      item.label,
+                      (item as any)?.facilityKind,
+                    );
                     const colors = getNodeColors(visualType, theme);
                     const badgeAccent = colors.accent;
                     // Mute the accent color for border (reduce opacity)
@@ -3513,7 +3741,7 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
 const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected, id }) => {
   // Note: ensureHorizonNode2026Styles() is called once on module load (not per render)
   const { theme } = React.useContext(ThemeContext);
-  const baseVisualType = getHorizonNodeVisualType(data.type, data.canonicalPath, data.label);
+  const baseVisualType = getHorizonNodeVisualType(data.type, data.canonicalPath, data.label, data.facilityKind);
   const colors = getNodeColors(baseVisualType, theme);
   const [isHovering, setIsHovering] = React.useState(false);
   const [fragmentProfileTab, setFragmentProfileTab] = React.useState<'events' | 'signals'>('events');

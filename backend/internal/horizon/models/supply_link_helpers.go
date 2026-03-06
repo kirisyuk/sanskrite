@@ -1,6 +1,8 @@
 package models
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -18,34 +20,38 @@ func BuildSupplyLinkCanonicalPath(tenantID string, supplierRef, productRef, cust
 		return "", fmt.Errorf("productRef is required for SupplyLink")
 	}
 
-	// Extract slugs from canonical paths
-	supplierSlug := "natural"
-	if supplierRef != nil && strings.TrimSpace(*supplierRef) != "" {
-		supplierSlug = extractSlugFromPath(*supplierRef)
-		if supplierSlug == "" {
-			supplierSlug = "natural"
-		}
-	}
-
-	productSlug := extractSlugFromPath(*productRef)
+	supplierSlug := buildSupplyLinkEndpointToken("natural", supplierRef)
+	productSlug := buildSupplyLinkEndpointToken("", productRef)
 	if productSlug == "" {
 		return "", fmt.Errorf("invalid productRef: %s", *productRef)
 	}
-
-	customerSlug := "end-consumer"
-	if customerRef != nil && strings.TrimSpace(*customerRef) != "" {
-		customerSlug = extractSlugFromPath(*customerRef)
-		if customerSlug == "" {
-			customerSlug = "end-consumer"
-		}
-	}
-
-	// Normalize slugs (lowercase, replace spaces/special chars with hyphens)
-	supplierSlug = normalizeSlug(supplierSlug)
-	productSlug = normalizeSlug(productSlug)
-	customerSlug = normalizeSlug(customerSlug)
+	customerSlug := buildSupplyLinkEndpointToken("end-consumer", customerRef)
 
 	return fmt.Sprintf("/supply-link/%s/%s/%s/%s", tenantID, supplierSlug, productSlug, customerSlug), nil
+}
+
+func buildSupplyLinkEndpointToken(fallback string, ref *string) string {
+	if ref == nil || strings.TrimSpace(*ref) == "" {
+		return normalizeSlug(fallback)
+	}
+	cp := strings.TrimSpace(*ref)
+	slug := normalizeSlug(extractSlugFromPath(cp))
+	if slug == "" {
+		slug = normalizeSlug(fallback)
+	}
+	if slug == "" {
+		return ""
+	}
+	return slug + "-" + shortPathHash(cp)
+}
+
+func shortPathHash(path string) string {
+	raw := strings.ToLower(strings.TrimSpace(path))
+	if raw == "" {
+		return ""
+	}
+	sum := sha1.Sum([]byte(raw))
+	return hex.EncodeToString(sum[:5])
 }
 
 // NormalizeOrgRefToFacilityFallback converts an org path to the facility fallback path.
@@ -60,11 +66,11 @@ func NormalizeOrgRefToFacilityFallback(orgPath string) string {
 	if strings.HasPrefix(orgPath, "/fac/") || strings.HasPrefix(orgPath, "/deposit/") {
 		return orgPath
 	}
-	if !strings.HasPrefix(orgPath, "/org/") {
+	if !strings.HasPrefix(orgPath, "/org/") && !strings.HasPrefix(orgPath, "/gov/") {
 		return ""
 	}
-	// Path format: /org/{geo}/{slug}. Extract geo and org slug for /fac/{geo}/{orgSlug}-general-production.
-	parts := strings.Split(strings.Trim(strings.TrimPrefix(orgPath, "/"), "/"), "/")
+	// Path format: /org/{geo}/{slug} or /gov/{geo}/{slug}.
+	parts := strings.Split(strings.Trim(orgPath, "/"), "/")
 	if len(parts) < 2 {
 		slug := extractSlugFromPath(orgPath)
 		if slug == "" {
@@ -144,18 +150,18 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 	if !strings.HasPrefix(*f.ProductRef, "/product/") {
 		return fmt.Errorf("productRef must be a product canonical path (starts with /product/)")
 	}
-	// SupplierRef: /fac/, /deposit/, or /org/ (full chain org→fac→product→fac→org)
+	// SupplierRef: /fac/, /deposit/, /org/, or /gov/ (full chain org|gov→fac→product→fac→org|gov)
 	if f.SupplierRef != nil && strings.TrimSpace(*f.SupplierRef) != "" {
 		p := strings.TrimSpace(*f.SupplierRef)
-		if !strings.HasPrefix(p, "/fac/") && !strings.HasPrefix(p, "/deposit/") && !strings.HasPrefix(p, "/org/") {
-			return fmt.Errorf("supplierRef must be facility, deposit, or org canonical path (starts with /fac/, /deposit/, or /org/)")
+		if !strings.HasPrefix(p, "/fac/") && !strings.HasPrefix(p, "/deposit/") && !strings.HasPrefix(p, "/org/") && !strings.HasPrefix(p, "/gov/") {
+			return fmt.Errorf("supplierRef must be facility, deposit, org, or gov canonical path (starts with /fac/, /deposit/, /org/, or /gov/)")
 		}
 	}
-	// CustomerRef: /fac/ or /org/ (full chain org→fac→product→fac→org)
+	// CustomerRef: /fac/, /org/, or /gov/ (full chain org|gov→fac→product→fac→org|gov)
 	if f.CustomerRef != nil && strings.TrimSpace(*f.CustomerRef) != "" {
 		p := strings.TrimSpace(*f.CustomerRef)
-		if !strings.HasPrefix(p, "/fac/") && !strings.HasPrefix(p, "/org/") {
-			return fmt.Errorf("customerRef must be facility or org canonical path (starts with /fac/ or /org/)")
+		if !strings.HasPrefix(p, "/fac/") && !strings.HasPrefix(p, "/org/") && !strings.HasPrefix(p, "/gov/") {
+			return fmt.Errorf("customerRef must be facility, org, or gov canonical path (starts with /fac/, /org/, or /gov/)")
 		}
 	}
 	// Validate facility refs if present
@@ -209,4 +215,3 @@ func GetSupplyLinkKey(f *HorizonFragment) string {
 	}
 	return fmt.Sprintf("%s:%s:%s:%s", f.TenantID, supplier, product, customer)
 }
-

@@ -36,3 +36,16 @@ func TestCollectAnchorOrgsFromQueriesByDirection_ExplicitDirectionWins(t *testin
 	}
 }
 
+func TestCollectAnchorOrgsFromQueriesByDirection_DepositAnchorIncluded(t *testing.T) {
+	queries := []agents.SupplyChainQuery{
+		{Anchor: "/deposit/cl/chuquicamata-copper-mine", Direction: "downstream"},
+	}
+
+	downOrgs, downFacs, upOrgs, upFacs := collectAnchorOrgsFromQueriesByDirection(queries, "downstream")
+	if len(downOrgs) != 0 || len(upOrgs) != 0 || len(upFacs) != 0 {
+		t.Fatalf("unexpected org/up anchors: downOrgs=%v upOrgs=%v upFacs=%v", downOrgs, upOrgs, upFacs)
+	}
+	if len(downFacs) != 1 || downFacs[0] != "/deposit/cl/chuquicamata-copper-mine" {
+		t.Fatalf("expected deposit anchor in downstream fac-list, got %v", downFacs)
+	}
+}

@@ -41,6 +41,15 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     return t.toUpperCase().replace(/\s+/g, '_');
   }, []);
 
+  const readFacilityKind = React.useCallback((obj: any): string => {
+    return String(
+      obj?.facilityKind ||
+      obj?.identifiers?.facilityKind ||
+      obj?.identifiers?.facility_kind ||
+      '',
+    ).trim();
+  }, []);
+
   const [fragment, setFragment] = React.useState<any>(null);
   const [edge, setEdge] = React.useState<any>(null);
   const [sourceFragment, setSourceFragment] = React.useState<any>(null);
@@ -1217,8 +1226,9 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       fragment?.labels?.en ||
       fragment?.labels?.[Object.keys(fragment?.labels || {})[0]] ||
       fragment?.label;
-    return getHorizonNodeVisualType(t, cp, lbl);
-  }, [nodeType, nodeCanonicalPath, fragment, nodeData?.label]);
+    const facilityKind = readFacilityKind(nodeData) || readFacilityKind(fragment);
+    return getHorizonNodeVisualType(t, cp, lbl, facilityKind);
+  }, [nodeType, nodeCanonicalPath, fragment, nodeData, readFacilityKind]);
 
   const canUseLoadedFragment = React.useMemo(() => {
     const wantId = String(nodeData?.fragmentId || nodeId || '').trim();
@@ -1587,6 +1597,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                             sourceFragment.type,
                             sourceFragment.canonicalPath,
                             sourceFragment.labels?.en || sourceFragment.labels?.[Object.keys(sourceFragment.labels || {})[0]],
+                            readFacilityKind(sourceFragment),
                           );
                           const accent = getNodeColors(vt || sourceFragment.type, theme === 'dark' ? 'dark' : 'light').accent;
                           return (
@@ -1626,6 +1637,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                             targetFragment.type,
                             targetFragment.canonicalPath,
                             targetFragment.labels?.en || targetFragment.labels?.[Object.keys(targetFragment.labels || {})[0]],
+                            readFacilityKind(targetFragment),
                           );
                           const accent = getNodeColors(vt || targetFragment.type, theme === 'dark' ? 'dark' : 'light').accent;
                           return (
@@ -3177,4 +3189,3 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     </div>
   );
 };
-

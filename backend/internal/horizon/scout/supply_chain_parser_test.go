@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 )
@@ -76,11 +77,11 @@ func TestParseSupplyChains_SupplyLinkSegmentBasic(t *testing.T) {
 	}
 	seg := result.SupplyLinkSegments[0]
 	// Full chain org→fac→product→fac→org: keep org as-is, do not convert
-	if seg.SupplierRef != "/org/cn/huawei-technologies-co-ltd" {
-		t.Fatalf("supplierRef=%q, want /org/cn/huawei-technologies-co-ltd", seg.SupplierRef)
+	if seg.SupplierRef != ncp("/org/cn/huawei-technologies-co-ltd") {
+		t.Fatalf("supplierRef=%q, want %q", seg.SupplierRef, ncp("/org/cn/huawei-technologies-co-ltd"))
 	}
-	if seg.CustomerRef != "/org/kz/kcell-jsc" {
-		t.Fatalf("customerRef=%q, want /org/kz/kcell-jsc", seg.CustomerRef)
+	if seg.CustomerRef != ncp("/org/kz/kcell-jsc") {
+		t.Fatalf("customerRef=%q, want %q", seg.CustomerRef, ncp("/org/kz/kcell-jsc"))
 	}
 	if len(seg.TransportViaRefs) != 1 || seg.TransportViaRefs[0] != "/fac/ae/jebel-ali-port" {
 		t.Fatalf("transportViaRefs=%v, want only /fac/ae/jebel-ali-port", seg.TransportViaRefs)
@@ -121,7 +122,7 @@ func TestParseSupplyChains_SuppliesToEdgeHasTransportVia(t *testing.T) {
 			continue
 		}
 		// Full chain: keep org as endpoint
-		if edge.SourceCanonicalPath == "/org/us/intel-corporation" && edge.TargetCanonicalPath == "/org/tw/tsmc" {
+		if edge.SourceCanonicalPath == ncp("/org/us/intel-corporation") && edge.TargetCanonicalPath == ncp("/org/tw/tsmc") {
 			suppliesEdge = edge
 			break
 		}
@@ -187,7 +188,7 @@ func TestParseSupplyChains_SuppliesToEdgeWithoutTransportStillHasDirectionalQual
 			continue
 		}
 		// Full chain: keep org as supplier
-		if edge.SourceCanonicalPath == "/org/br/vale-sa" && edge.TargetCanonicalPath == "/fac/cn/baosteel-shanghai" {
+		if edge.SourceCanonicalPath == ncp("/org/br/vale-sa") && edge.TargetCanonicalPath == ncp("/fac/cn/baosteel-shanghai") {
 			suppliesEdge = edge
 			break
 		}
@@ -209,6 +210,148 @@ func TestParseSupplyChains_SuppliesToEdgeWithoutTransportStillHasDirectionalQual
 	}
 	if got, _ := suppliesEdge.Qualifiers["product_ref"].(string); got != "/product/raw/minerals/iron-ore" {
 		t.Fatalf("product_ref=%q, want /product/raw/minerals/iron-ore", got)
+	}
+}
+
+func TestParseSupplyChains_OrgToFacilityUsesOwns(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.84,
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/org/us/intel-corporation",
+					Type:          "ORGANIZATION",
+				},
+				{
+					CanonicalPath: "/fac/us/chandler-fab-42",
+					Type:          "FACILITY",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/org/us/intel-corporation")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+
+	foundOwns := false
+	for _, edge := range result.Edges {
+		if edge == nil {
+			continue
+		}
+		if edge.RelationType == string(models.DependencyTypeOwns) &&
+			edge.SourceCanonicalPath == "/org/us/intel-corporation" &&
+			edge.TargetCanonicalPath == "/fac/us/chandler-fab-42" {
+			foundOwns = true
+		}
+	}
+	if !foundOwns {
+		t.Fatalf("expected OWNS edge for org->facility anchor")
+	}
+}
+
+func TestParseSupplyChains_GovToFacilityUsesControls(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.84,
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/gov/us/department-of-energy",
+					Type:          "ORGANIZATION",
+				},
+				{
+					CanonicalPath: "/fac/us/strategic-reserve-terminal",
+					Type:          "FACILITY",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/gov/us/department-of-energy")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+
+	foundControls := false
+	for _, edge := range result.Edges {
+		if edge == nil {
+			continue
+		}
+		if edge.RelationType == string(models.DependencyTypeControls) &&
+			edge.SourceCanonicalPath == "/gov/us/department-of-energy" &&
+			edge.TargetCanonicalPath == "/fac/us/strategic-reserve-terminal" {
+			foundControls = true
+		}
+	}
+	if !foundControls {
+		t.Fatalf("expected CONTROLS edge for gov->facility anchor")
+	}
+}
+
+func TestParseSupplyChains_NormalizesLegacyCanonicalPaths(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.9,
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/org/tesla-inc",
+					Type:          "ORGANIZATION",
+				},
+				{
+					CanonicalPath: "/product/technology/automotive/manufacturing/electric-vehicle",
+					Type:          "PRODUCT",
+				},
+				{
+					CanonicalPath: "/org/us/panasonic",
+					Type:          "ORGANIZATION",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/org/tesla-inc")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+	if _, ok := result.Fragments["/org/na/tesla"]; !ok {
+		t.Fatalf("expected normalized fragment key /org/na/tesla, got keys=%v", keys(result.Fragments))
+	}
+	if len(result.SupplyLinkSegments) != 1 {
+		t.Fatalf("expected one supply-link segment, got %d", len(result.SupplyLinkSegments))
+	}
+	if got := result.SupplyLinkSegments[0].SupplierRef; got != "/org/na/tesla" {
+		t.Fatalf("supplierRef=%q, want /org/na/tesla", got)
+	}
+}
+
+func TestParseSupplyChains_OrgToFacNoConsecutiveTypeWarning(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.8,
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/org/us/intel",
+					Type:          "ACTOR",
+				},
+				{
+					CanonicalPath: "/fac/us/chandler-fab-42",
+					Type:          "ACTOR",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/org/us/intel")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+	if result.Stats.ConsecutiveSameTypeNodes != 0 {
+		t.Fatalf("ConsecutiveSameTypeNodes=%d, want 0", result.Stats.ConsecutiveSameTypeNodes)
 	}
 }
 
@@ -507,4 +650,16 @@ func TestShouldSwapProductStageOrder(t *testing.T) {
 			}
 		})
 	}
+}
+
+func keys(m map[string]*models.HorizonFragment) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func ncp(path string) string {
+	return canonical.NormalizeCanonicalPathForPersist(path)
 }

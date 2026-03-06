@@ -241,7 +241,7 @@ Example: { "relationType": "DEPENDS_ON", "qualifiers": { "facet": "communication
 		relationEnum = taxonomy.SupplyChainEdgeTypesForPrompt()
 		relationRulesBlock = relationRulesBlockSupplyChain
 		validationSuffix = validationSuffixSupplyChain
-		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links.
+		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links.
 `
 	}
 
@@ -362,8 +362,13 @@ const (
 Each relation is a directed edge FROM TARGET (source) TO targetCanonicalPath (target).
 Choose relationType to match this direction:
 - DEPENDS_ON: source depends on target (use for suppliers, contractors, inputs, infrastructure dependencies).
-- SUPPLIES_TO: source supplies goods/services to target (use for customers/recipients).
+- SUPPLIES_TO: source supplies goods/services to target (supplier -> customer/consumer).
+  Source MUST be ORGANIZATION or FACILITY or PRODUCT.
+  Target MUST be ORGANIZATION or FACILITY.
+  MARKET MUST NOT be source or target for SUPPLIES_TO.
 - LOCATED_IN / OPERATES_IN: source located/operates in GEO target.
+  OPERATES_IN source MUST be ORGANIZATION or PERSON.
+  MARKET MUST NOT be source for OPERATES_IN.
 - OWNS: source owns target.
   Direction is strict: owner -> owned entity.
   In this decomposition prompt, SOURCE is fixed to TARGET; therefore emit OWNS only for entities that TARGET itself owns.
@@ -417,16 +422,19 @@ Choose relationType to match this direction:
 
 	relationRulesBlockSupplyChain = `RELATION DIRECTION RULES (STRICT — supply-chain contract only):
 Each relation is a directed edge FROM TARGET (source) TO targetCanonicalPath (target).
-Use ONLY these relation types (canonical): PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, PARTICIPATES_IN, HAS_MARKET_SEGMENT.
+Use ONLY these relation types (canonical): PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, PARTICIPATES_IN, HAS_MARKET_SEGMENT.
 Do NOT use DEPENDS_ON, PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, OWNS, INVESTS_IN, or other non-supply-chain types.
-- SUPPLIES_TO: source supplies goods/services to target (supplier→customer flow).
-- PRODUCES: source produces target (source MUST be ORGANIZATION/FACILITY/DEPOSIT; target is a PRODUCT).
-- CONSUMES: source consumes target (actor→input product).
-- TRANSFORMS_INTO: for PRODUCT -> PRODUCT value-chain steps (not PRODUCES).
-- EXTRACTS_FROM: source extracts from target (e.g. DEPOSIT, GEO_REGION).
-- PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial participation). For "market depends on org" use PARTICIPATES_IN with ORG as source.
-- LOCATED_IN / OPERATES_IN: source located/operates in GEO target.
-- HAS_MARKET_SEGMENT: parent market -> narrower segment (market hierarchy only).
+- PRODUCES: source MUST be ORGANIZATION|FACILITY|DEPOSIT, target MUST be PRODUCT.
+- SUPPLIES_TO: source MUST be ORGANIZATION|FACILITY|PRODUCT, target MUST be ORGANIZATION|FACILITY.
+- TRANSFORMS_INTO: source MUST be PRODUCT, target MUST be PRODUCT (upstream -> downstream).
+- EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
+- LOCATED_IN: target MUST be GEO_REGION.
+- OPERATES_IN: source MUST be ORGANIZATION|PERSON, target MUST be GEO_REGION|FACILITY|DEPOSIT.
+- PARTICIPATES_IN: source MUST be ORGANIZATION|FACILITY|COMMUNITY|PROGRAM|PRODUCT|PERSON, target MUST be MARKET.
+- HAS_MARKET_SEGMENT: source MUST be MARKET, target MUST be MARKET (parent -> child segment).
+- MARKET source guard in supply_chain:
+  MARKET may emit only PARTICIPATES_IN / HAS_MARKET_SEGMENT (plus DOMAIN scaffold when source is /domain/...).
+  Never emit PRODUCES/SUPPLIES_TO/TRANSFORMS_INTO/EXTRACTS_FROM/OPERATES_IN from MARKET.
 `
 
 	validationSuffixGeneral = `  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
@@ -434,5 +442,6 @@ Do NOT use DEPENDS_ON, PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, OWNS, INVEST
 `
 
 	validationSuffixSupplyChain = `  - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO (not PRODUCES).
+  - In supply_chain mode, MARKET source may emit only PARTICIPATES_IN or HAS_MARKET_SEGMENT.
 `
 )

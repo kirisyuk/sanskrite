@@ -712,17 +712,27 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
           let description = '';
           if (kind === 'relation') {
             icon = 'edge';
-            const verb = relationVerb(fType);
-            if (first && second) {
-              description = `${first} ${verb} ${second}`;
-            } else if (title) {
-              description = title;
-            } else if (typeLabel) {
-              description = typeLabel;
-            }
-            text = description ? short(description) : 'Relationship created';
+            // Unify with horizon.graph.edge.upserted: use type as chip, source→target as description
+            const src =
+              typeof data?.sourceCanonicalPath === 'string' && data.sourceCanonicalPath
+                ? data.sourceCanonicalPath
+                : paths[0] || '';
+            const dst =
+              typeof data?.targetCanonicalPath === 'string' && data.targetCanonicalPath
+                ? data.targetCanonicalPath
+                : paths[1] || '';
+            const srcDisplay = src ? (humanizeCanonicalPath(src) || src) : '';
+            const dstDisplay = dst ? (humanizeCanonicalPath(dst) || dst) : '';
+            description =
+              srcDisplay && dstDisplay
+                ? `${srcDisplay} → ${dstDisplay}`
+                : first && second
+                  ? `${first} → ${second}`
+                  : title || typeLabel || '';
+            const formattedType = typeLabel || (fType ? formatTypeLabel(fType) : 'Relationship');
+            text = formattedType;
             humanReadable = {
-              title: 'Relationship created',
+              title: formattedType,
               description: description ? short(description) : undefined,
               entityName: first || undefined,
             };

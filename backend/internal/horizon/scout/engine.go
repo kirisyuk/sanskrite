@@ -1009,13 +1009,25 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 			continue
 		}
 		dt := models.DependencyType(normalized)
-		if sourceIsSupplyChainMode && dt == models.DependencyTypeOwns {
+		// Supply-chain + MARKET source strictness:
+		// MARKET anchor may only emit market-structure relations.
+		// This blocks noisy operational edges like MARKET->PRODUCT SUPPLIES_TO or MARKET->GEO OPERATES_IN.
+		if sourceIsMarket && sourceIsSupplyChainMode {
+			if IsMarketRelationType(dt) {
+				rel.RelationType = normalized
+				out = append(out, rel)
+			} else {
+				dropped = append(dropped, normalized)
+			}
+			continue
+		}
+		if sourceIsSupplyChainMode && (dt == models.DependencyTypeOwns || dt == models.DependencyTypeControls) {
 			srcPath := strings.TrimSpace(rel.SourceCanonicalPath)
 			if srcPath == "" {
 				srcPath = sourcePath
 			}
 			dstPath := strings.TrimSpace(rel.TargetCanonicalPath)
-			if allowSupplyChainOwnsByPath(srcPath, dstPath) {
+			if allowSupplyChainOwnershipOrControlByPath(srcPath, dstPath) {
 				rel.RelationType = normalized
 				out = append(out, rel)
 				continue
@@ -1033,11 +1045,6 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 			out = append(out, rel)
 			continue
 		}
-		// Supply chain: block DEPENDS_ON from market (use PARTICIPATES_IN with ORG as source instead).
-		if sourceIsMarket && sourceIsSupplyChainMode && dt == models.DependencyTypeDependsOn {
-			dropped = append(dropped, normalized)
-			continue
-		}
 		if sourceIsMarket && (IsDomainScaffoldRelationType(dt) || IsMarketRelationType(dt)) {
 			rel.RelationType = normalized
 			out = append(out, rel)
@@ -1049,6 +1056,10 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 }
 
 func allowSupplyChainOwnsByPath(sourcePath, targetPath string) bool {
+	return allowSupplyChainOwnershipOrControlByPath(sourcePath, targetPath)
+}
+
+func allowSupplyChainOwnershipOrControlByPath(sourcePath, targetPath string) bool {
 	sourcePath = strings.TrimSpace(sourcePath)
 	targetPath = strings.TrimSpace(targetPath)
 	if sourcePath == "" || targetPath == "" {
@@ -1523,7 +1534,6 @@ func isFacilityQualifierAllowedRelationType(kind facilityQualifierSemantic, relT
 			string(models.DependencyTypeLocatedIn),
 			string(models.DependencyTypeOperatesIn),
 			string(models.DependencyTypeProduces),
-			string(models.DependencyTypeConsumes),
 			string(models.DependencyTypeTransformsInto),
 			string(models.DependencyTypeExtractsFrom),
 			string(models.DependencyTypeParticipatesIn),
@@ -1539,7 +1549,6 @@ func isFacilityQualifierAllowedRelationType(kind facilityQualifierSemantic, relT
 		case string(models.DependencyTypeDependsOn),
 			string(models.DependencyTypeSuppliesTo),
 			string(models.DependencyTypeProduces),
-			string(models.DependencyTypeConsumes),
 			string(models.DependencyTypeTransformsInto),
 			string(models.DependencyTypeExtractsFrom),
 			string(models.DependencyTypeLocatedIn),
@@ -2726,7 +2735,7 @@ func NewScoutEngine(
 ) *ScoutEngine {
 	geoBuilder := NewGeoHierarchyBuilder(fragmentsRepo, edgesRepo)
 	orgDedup := NewOrgDeduplicator(fragmentsRepo, nil)       // WikidataClient set via WithWikidataClient
-	personDedup := NewPersonDeduplicator(fragmentsRepo, nil)  // WikidataClient set via WithWikidataClient
+	personDedup := NewPersonDeduplicator(fragmentsRepo, nil) // WikidataClient set via WithWikidataClient
 	facilityDedup := NewFacilityDeduplicator(fragmentsRepo)
 	orgHierarchy := NewOrgHierarchyBuilder(fragmentsRepo, edgesRepo)
 	marketHierarchy := NewMarketHierarchyBuilder(fragmentsRepo, edgesRepo)
@@ -4342,7 +4351,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		e.logLine(ctx, job, "info", "> extracting structured data")
 
-		// Phase 0 (structural extraction): extract fragment identity and basic relations (LOCATED_IN, OPERATES_IN; optional PRODUCES/CONSUMES).
+		// Phase 0 (structural extraction): extract fragment identity and basic relations (LOCATED_IN, OPERATES_IN; optional PRODUCES/SUPPLIES_TO).
 		// Определяем entityPath и sectorPath из targetCanonicalPath через LLM
 		entityPath, sectorPath, err := e.taxonomyClassifier.ClassifyTaxonomy(ctx, job.TargetCanonicalPath)
 		if err != nil {
@@ -6028,6 +6037,29 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 		job.State["intentDecompositionDone"] = true
 		if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"intentDecompositionDone": true}); err != nil {
 			fmt.Printf("[ScoutEngine] Failed to persist intentDecompositionDone (best-effort): jobId=%s target=%s err=%v\n",
+				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
+		}
+		return nil
+	}
+	// Pre-materialization relation hygiene for intent facts:
+	// 1) Domain-mode allowlist (including supply-chain market guard)
+	// 2) Direction policy sanitization (drop/reverse before feed emission)
+	domainModes := taxonomy.NormalizeDomainModes(getJobDomainModes(job))
+	rels, droppedTypes := filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment, rels, domainModes)
+	if len(droppedTypes) > 0 {
+		e.logLine(ctx, job, "info", fmt.Sprintf("> intent relation filter (domain modes): kept=%d droppedTypes=%v", len(rels), droppedTypes))
+	}
+	if len(rels) > 0 {
+		sanitizedRelations, droppedByDirection, autoReversed := e.sanitizeRelationsByDirectionPolicy(ctx, sourceFragment, rels)
+		rels = sanitizedRelations
+		if droppedByDirection > 0 || autoReversed > 0 {
+			e.logLine(ctx, job, "info", fmt.Sprintf("> intent relation prefilter (direction policy): kept=%d dropped=%d reversed=%d", len(rels), droppedByDirection, autoReversed))
+		}
+	}
+	if len(rels) == 0 {
+		job.State["intentDecompositionDone"] = true
+		if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"intentDecompositionDone": true}); err != nil {
+			fmt.Printf("[ScoutEngine] Failed to persist intentDecompositionDone after filtering (best-effort): jobId=%s target=%s err=%v\n",
 				strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), err)
 		}
 		return nil

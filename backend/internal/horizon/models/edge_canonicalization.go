@@ -469,11 +469,12 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET PARTICIPATES_IN PRODUCT -> PRODUCT PARTICIPATES_IN MARKET"
 	}
 
-	// SUPPLIES_TO(PRODUCT → ORGANIZATION) → CONSUMES (swap)
-	if edgeType == DependencyTypeSuppliesTo &&
-		sourceType == FragmentTypeProduct &&
-		targetType == FragmentTypeOrganization {
-		return DependencyTypeConsumes, true, true, "canonicalize: PRODUCT SUPPLIES_TO ORGANIZATION -> ORGANIZATION CONSUMES PRODUCT"
+	// CONSUMES(actor→product) → SUPPLIES_TO (swap): legacy CONSUMES removed from taxonomy.
+	// Canonical form: PRODUCT SUPPLIES_TO ORGANIZATION/FACILITY.
+	if edgeType == DependencyTypeConsumes &&
+		targetType == FragmentTypeProduct &&
+		(sourceType == FragmentTypeOrganization || sourceType == FragmentTypeFacility || sourceType == FragmentTypeProduct) {
+		return DependencyTypeSuppliesTo, true, true, "canonicalize: CONSUMES deprecated -> PRODUCT SUPPLIES_TO ORGANIZATION/FACILITY (swap)"
 	}
 
 	// PRODUCES(ORGANIZATION → ORGANIZATION) is frequently a mistyped supply relation.

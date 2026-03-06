@@ -40,7 +40,7 @@ func buildSpecializationModulesBlock(specialties []string, domainModes []string,
 	}
 	if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyProductsAndServices) {
 		b.WriteString("MODULE: products_and_services (outputs + inputs + transformations)\n")
-		b.WriteString("- For ORG/FAC: outputs via PRODUCES, inputs via CONSUMES.\n")
+		b.WriteString("- For ORG/FAC: outputs via PRODUCES, inputs via SUPPLIES_TO(product→org).\n")
 		b.WriteString("- For PRODUCT: upstream/downstream value-chain via TRANSFORMS_INTO.\n")
 		b.WriteString("- Use canonical /product/{category}/{type}/{stage}/{slug} paths consistently.\n")
 		b.WriteString("- Product/material names: prefer singular canonical terms; avoid brand prefixes unless officially part of the name.\n\n")
@@ -161,7 +161,7 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 		b.WriteString("- Separate operating business vs holding structure early; for holdings prioritize ownership map before product map.\n")
 		b.WriteString("- For operating orgs, prioritize products/services, child orgs + their facilities, org-recipients, and market participation.\n")
 	case entity_semantics.EntityTypeFacility:
-		b.WriteString("- Prioritize lifecycle, location validity, IO profile (CONSUMES -> PRODUCES), and throughput/capacity signals.\n")
+		b.WriteString("- Prioritize lifecycle, location validity, IO profile (SUPPLIES_TO -> PRODUCES), and throughput/capacity signals.\n")
 		switch detectFacilityTaskSemantic(canonicalPath, qualifiers, identifiers) {
 		case facilityTaskSemanticRoute:
 			b.WriteString("- Route-qualified FAC: resolve route regions and waypoint coordinates first (prefer Google geocoding-backed matches).\n")

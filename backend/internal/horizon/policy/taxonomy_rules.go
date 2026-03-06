@@ -235,9 +235,8 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				// PROGRAM can also be located in a GEO region (e.g., incubator/government program operating in a city).
 				{EdgeType: "LOCATED_IN", Direction: "* → GEO_REGION", ValidSource: []string{"FACILITY", "ORGANIZATION", "PERSON", "PRODUCT", "PROGRAM", "GEO_REGION", "DEPOSIT", "COMMUNITY", "AFFECTED_ZONE"}, ValidTarget: []string{"GEO_REGION"}},
 				{EdgeType: "OPERATES_IN", Direction: "ORGANIZATION|PERSON → GEO_REGION|FACILITY|DEPOSIT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"GEO_REGION", "FACILITY", "DEPOSIT"}},
-				{EdgeType: "SUPPLIES_TO", Direction: "ORG|FACILITY → ORG|FACILITY", ValidSource: []string{"ORGANIZATION", "FACILITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY"}},
+				{EdgeType: "SUPPLIES_TO", Direction: "ORG|FACILITY|PRODUCT → ORG|FACILITY", ValidSource: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}, ValidTarget: []string{"ORGANIZATION", "FACILITY"}},
 				{EdgeType: "PRODUCES", Direction: "ORG|FACILITY|DEPOSIT → PRODUCT", ValidSource: []string{"ORGANIZATION", "FACILITY", "DEPOSIT"}, ValidTarget: []string{"PRODUCT"}},
-				{EdgeType: "CONSUMES", Direction: "ORG|FACILITY|PRODUCT → PRODUCT", ValidSource: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}, ValidTarget: []string{"PRODUCT"}},
 				{EdgeType: "INVESTS_IN", Direction: "ORG|PERSON → ORG|PROGRAM|PRODUCT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "PRODUCT"}},
 				// PROGRAM can participate in markets (e.g., government programs active in a sector/segment).
 				// GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES toward MARKET.

@@ -317,7 +317,6 @@ func (h *HorizonHandlers) buildControlCorridor(
 		"REQUIRES": {},
 		"NEEDS":    {},
 		"USES":     {},
-		string(horizonmodels.DependencyTypeConsumes):       {},
 		string(horizonmodels.DependencyTypeSuppliesTo):     {},
 		string(horizonmodels.DependencyTypeProduces):       {},
 		string(horizonmodels.DependencyTypeTransformsInto): {},

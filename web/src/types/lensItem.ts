@@ -31,7 +31,6 @@ export type DependencyType =
   | 'PARENT_OF'
   | 'SUBSIDIARY_OF'
   | 'PRODUCES'
-  | 'CONSUMES'
   | 'OPERATES_IN'
   | 'BASED_IN'
   | 'HEADQUARTERED_IN'

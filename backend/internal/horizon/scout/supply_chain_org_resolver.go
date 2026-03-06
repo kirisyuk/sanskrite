@@ -6,13 +6,11 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // SupplyChainOrgResolver performs Level 3 FAC→ORG resolution: for each facility in supply chains,
-// traverses OWNS/CONTROLS edges backward to find the owning organization.
+// traverses OWNS/CONTROLS/OPERATES_IN edges backward to find the owning organization.
 // Max depth SupplyChainMaxTraversalDepth (5), cycles prohibited via visited set.
-// Fallback: when no ORG found, uses /fac/{geo}/general-production.
 type SupplyChainOrgResolver struct {
 	edgesRepo     *repo.DependencyEdgesRepository
 	fragmentsRepo *repo.HorizonFragmentsRepository
@@ -26,13 +24,13 @@ func NewSupplyChainOrgResolver(edgesRepo *repo.DependencyEdgesRepository, fragme
 	}
 }
 
-// SupplyChainOrgResolveResult holds FAC→owning path (ORG or fallback facility) mappings.
+// SupplyChainOrgResolveResult holds FAC→owning path (ORG) mappings.
 type SupplyChainOrgResolveResult struct {
-	// FacToOrg maps facility canonical path -> owning org path or fallback /fac/{geo}/general-production
+	// FacToOrg maps facility canonical path -> owning org path.
 	FacToOrg map[string]string
 }
 
-// Resolve resolves each FAC path in pathToID to its owning ORG (or fallback).
+// Resolve resolves each FAC path in pathToID to its owning ORG.
 // pathToID: canonical path -> fragment ID (from processSupplyChains).
 // Returns mappings for UI/analytics; best-effort, errors are logged but do not fail the call.
 func (r *SupplyChainOrgResolver) Resolve(ctx context.Context, tenantID string, pathToID map[string]string) *SupplyChainOrgResolveResult {
@@ -46,10 +44,6 @@ func (r *SupplyChainOrgResolver) Resolve(ctx context.Context, tenantID string, p
 	for path := range pathToID {
 		path = strings.TrimSpace(path)
 		if path != "" && strings.HasPrefix(path, "/fac/") {
-			// Skip fallback facilities (already represent org-level): /fac/{geo}/general-production
-			if strings.HasSuffix(path, "-general-production") || strings.HasSuffix(path, "/general-production") {
-				continue
-			}
 			facPaths = append(facPaths, path)
 		}
 	}
@@ -57,6 +51,7 @@ func (r *SupplyChainOrgResolver) Resolve(ctx context.Context, tenantID string, p
 	edgeTypes := []models.DependencyType{
 		models.DependencyTypeOwns,
 		models.DependencyTypeControls,
+		models.DependencyTypeOperatesIn,
 	}
 
 	for _, facPath := range facPaths {
@@ -65,9 +60,6 @@ func (r *SupplyChainOrgResolver) Resolve(ctx context.Context, tenantID string, p
 			continue
 		}
 		owningPath := r.traverseToOrg(ctx, tenantID, facID, pathToID, edgeTypes)
-		if owningPath == "" {
-			owningPath = r.fallbackFromFacPath(facPath)
-		}
 		if owningPath != "" {
 			out.FacToOrg[facPath] = owningPath
 		}
@@ -75,7 +67,7 @@ func (r *SupplyChainOrgResolver) Resolve(ctx context.Context, tenantID string, p
 	return out
 }
 
-// traverseToOrg performs BFS from facility fragment ID along OWNS/CONTROLS (target→source)
+// traverseToOrg performs BFS from facility fragment ID along OWNS/CONTROLS/OPERATES_IN (target→source)
 // up to an ORG, max depth SupplyChainMaxTraversalDepth, cycle-prohibited.
 func (r *SupplyChainOrgResolver) traverseToOrg(
 	ctx context.Context,
@@ -149,23 +141,4 @@ func (r *SupplyChainOrgResolver) buildIDToPath(pathToID map[string]string) map[s
 		}
 	}
 	return out
-}
-
-// fallbackFromFacPath derives /fac/{geo}/general-production when no ORG found.
-// Path format: /fac/{geo}/{facSlug}.
-func (r *SupplyChainOrgResolver) fallbackFromFacPath(facPath string) string {
-	facPath = strings.TrimSpace(facPath)
-	if facPath == "" || !strings.HasPrefix(facPath, "/fac/") {
-		return ""
-	}
-	parts := strings.Split(strings.Trim(facPath, "/"), "/")
-	if len(parts) < 2 {
-		return "" // need at least "fac" and one segment
-	}
-	// parts[0] = "fac", parts[1] = geo, parts[2] = facilitySlug (or *-general-production)
-	geo := parts[1]
-	if len(parts) >= 3 && (parts[2] == "general-production" || strings.HasSuffix(parts[2], "-general-production")) {
-		return facPath // already fallback
-	}
-	return taxonomy.FacilityGeneralProductionPath(geo, "")
 }

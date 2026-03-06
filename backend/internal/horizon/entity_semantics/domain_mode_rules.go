@@ -10,7 +10,7 @@ import (
 // Used when domain modes are active; these rules are additive to type-specific rules.
 var DomainModeMissingInfoRules = map[string][]MissingInfoRule{
 	taxonomy.DomainModeSupplyChain: {
-		{Trigger: TriggerRelationMissing, RelationTypes: []string{"PRODUCES", "CONSUMES"}, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "products produced or consumed by %s"},
+		{Trigger: TriggerRelationMissing, RelationTypes: []string{"PRODUCES", "SUPPLIES_TO"}, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "products produced or supplied to %s"},
 		{Trigger: TriggerRelationMissing, RelationTypes: []string{"LOCATED_IN", "OPERATES_IN"}, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "facility locations and operating regions for %s"},
 		{Trigger: TriggerRelationMissing, RelationType: "EXTRACTS_FROM", DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "extractive source links (deposits, mines) for %s"}, // only when path suggests extractive
 		{Trigger: TriggerRelationCountBelow, MinCount: 3, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "child orgs, facilities, products, and org-recipients for %s"},
@@ -37,7 +37,7 @@ var DomainModeMissingInfoRules = map[string][]MissingInfoRule{
 }
 
 // DomainModeRulesForModes returns MissingInfoRules for the given domain modes.
-// Deduplicates by relation type within each mode (supply chain has PRODUCES+CONSUMES as one logical check).
+// Deduplicates by relation type within each mode (supply chain has PRODUCES+SUPPLIES_TO as one logical check).
 func DomainModeRulesForModes(domainModes []string) []MissingInfoRule {
 	domainModes = taxonomy.NormalizeDomainModes(domainModes)
 	seen := make(map[string]struct{})

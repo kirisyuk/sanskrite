@@ -31,7 +31,7 @@ function resolveVisualTypeAndColor(
   obj: GeoObject,
   theme: 'dark' | 'light',
 ): { vt: string; color: string } {
-  const vt = getHorizonNodeVisualType(obj.type, obj.canonicalPath, obj.label) || obj.type;
+  const vt = getHorizonNodeVisualType(obj.type, obj.canonicalPath, obj.label, obj.facilityKind) || obj.type;
   const color =
     obj.type === 'AFFECTED_ZONE'
       ? getAffectedZoneMapAccent(obj.canonicalPath, theme)

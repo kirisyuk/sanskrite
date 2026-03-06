@@ -47,7 +47,6 @@ func GraphIntentRelationTypeDescriptions(types []string) string {
 		"OWNS":                 "Ownership stake or full ownership",
 		"SUBSIDIARY_OF":        "Child company of parent",
 		"PRODUCES":             "Produces output (product, service)",
-		"CONSUMES":             "Consumes input",
 		"OPERATES_IN":          "Operates in a region/facility/deposit",
 		"REGULATES":            "Regulator oversees regulated entity",
 		"COMPETES_WITH":        "Competitive relationship",

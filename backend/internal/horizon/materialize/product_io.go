@@ -204,13 +204,13 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 		_, _ = ensureEdge(req.ObjectiveFragment.ID, p.ID, horizonmodels.DependencyTypeProduces, c.Confidence, c.Reason, nil)
 	}
 
-	// Apply consumes: objective -> product (CONSUMES)
+	// Apply consumes: product -> objective (SUPPLIES_TO). CONSUMES removed from taxonomy.
 	for _, c := range req.Consumes {
 		p, err := ensureProductFragment(c.ProductName)
 		if err != nil || p == nil {
 			continue
 		}
-		_, _ = ensureEdge(req.ObjectiveFragment.ID, p.ID, horizonmodels.DependencyTypeConsumes, c.Confidence, c.Reason, nil)
+		_, _ = ensureEdge(p.ID, req.ObjectiveFragment.ID, horizonmodels.DependencyTypeSuppliesTo, c.Confidence, c.Reason, nil)
 	}
 
 	return out, nil

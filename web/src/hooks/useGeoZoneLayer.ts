@@ -23,7 +23,7 @@ function circlePolygon(lat: number, lon: number, radiusKm: number, points = 32):
 
 function zoneColor(obj: GeoObject, theme: 'dark' | 'light'): string {
   if (obj.type === 'AFFECTED_ZONE') return getAffectedZoneMapAccent(obj.canonicalPath, theme);
-  const vt = getHorizonNodeVisualType(obj.type, obj.canonicalPath, obj.label);
+  const vt = getHorizonNodeVisualType(obj.type, obj.canonicalPath, obj.label, (obj as any)?.facilityKind);
   return getNodeColors(vt || obj.type, theme).accent;
 }
 

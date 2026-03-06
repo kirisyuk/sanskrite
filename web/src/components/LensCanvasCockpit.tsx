@@ -78,6 +78,15 @@ import { ScoutIntentModal, type ScoutIntentResolution } from './ScoutIntentModal
 import { SupplyChainOverlay, type MaterializedArtifact } from './SupplyChainOverlay';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+const readFacilityKindFromAny = (obj: any): string | undefined => {
+  const value = String(
+    obj?.facilityKind ||
+      obj?.identifiers?.facilityKind ||
+      obj?.identifiers?.facility_kind ||
+      '',
+  ).trim();
+  return value || undefined;
+};
 
 // Deterministic hash for stable edge routing/label offsets across renders.
 const stableHash32 = (input: string): number => {
@@ -3577,6 +3586,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               lensItemId: '',
               fragmentId: fragmentId || undefined,
               canonicalPath: canonicalPath || undefined,
+              facilityKind: readFacilityKindFromAny(raw),
               label:
                 String(labels?.en || raw?.label || '').trim() ||
                 (canonicalPath ? humanizeCanonicalPath(canonicalPath) : '') ||
@@ -4345,6 +4355,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   directionFromParent,
                   depth,
                   canonicalPath: fragObj?.canonicalPath,
+                  facilityKind: readFacilityKindFromAny(fragObj),
                   indexPaths: Array.isArray(fragObj?.indexPaths) ? fragObj.indexPaths : undefined,
                   marketSegments: Array.isArray(fragObj?.marketSegments) ? fragObj.marketSegments : undefined,
                   marketSegmentNorms: Array.isArray(fragObj?.marketSegmentNorms) ? fragObj.marketSegmentNorms : undefined,
@@ -4591,6 +4602,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             id: nodeId,
             fragmentId: frag?.id || nodeId,
             canonicalPath: path,
+            facilityKind: readFacilityKindFromAny(frag),
             label,
             type: frag?.type || 'ORGANIZATION',
             state: frag?.state,
@@ -6598,6 +6610,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             lensItemId: item.id,
             fragmentId: fragmentId || undefined,
             canonicalPath: item.canonicalPath,
+            facilityKind: readFacilityKindFromAny(item as any),
             label: item.label,
             type: item.type,
             state: item.state,
@@ -6818,6 +6831,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             rootFragmentId: fragmentId,
             depth: 0,
             canonicalPath: fragment.canonicalPath,
+            facilityKind: readFacilityKindFromAny(fragment),
             indexPaths: Array.isArray(fragment.indexPaths) ? fragment.indexPaths : undefined,
             marketSegments: Array.isArray(fragment.marketSegments) ? fragment.marketSegments : undefined,
             marketSegmentNorms: Array.isArray(fragment.marketSegmentNorms) ? fragment.marketSegmentNorms : undefined,
@@ -8637,6 +8651,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             ...(corridorNodeUsage.has(fid) ? { corridorPathCount: corridorNodeUsage.get(fid), corridorTotalPaths } : {}),
             depth: childDepth,
             canonicalPath: fragment.canonicalPath,
+            facilityKind: readFacilityKindFromAny(fragment),
             indexPaths: Array.isArray(fragment.indexPaths) ? fragment.indexPaths : undefined,
             marketSegments: Array.isArray(fragment.marketSegments) ? fragment.marketSegments : undefined,
             marketSegmentNorms: Array.isArray(fragment.marketSegmentNorms) ? fragment.marketSegmentNorms : undefined,
@@ -13589,6 +13604,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           lensItemId: createdId,
           fragmentId,
           canonicalPath,
+          facilityKind: readFacilityKindFromAny(fragment),
           label,
           type,
           state,
@@ -13688,6 +13704,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           lensItemId: createdId,
           fragmentId,
           canonicalPath,
+          facilityKind: readFacilityKindFromAny(fragment),
           label,
           type,
           state,
@@ -13993,6 +14010,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           lensItemId: createdId,
           fragmentId,
           canonicalPath,
+          facilityKind: readFacilityKindFromAny(fragment),
           label,
           type,
           state,
@@ -14226,7 +14244,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const miniMapNodeColor = React.useCallback((node: Node<HorizonNodeData>) => {
     const data = node.data as HorizonNodeData;
     if (data.critical) return '#EF4444';
-    const vt = getHorizonNodeVisualType(data.type, (data as any)?.canonicalPath, (data as any)?.label);
+    const vt = getHorizonNodeVisualType(data.type, (data as any)?.canonicalPath, (data as any)?.label, (data as any)?.facilityKind);
     return getNodeColors(vt || data.type, theme === 'dark' ? 'dark' : 'light').accent;
   }, [theme]);
 

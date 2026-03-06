@@ -17,7 +17,7 @@ Planning → Extraction (skip) → Critic (skip) → Research → Materialize �
 | Шаг | Кто | Запрос | Структура | Результат |
 |-----|-----|--------|-----------|-----------|
 | 1 | IntentResolver | domain path + facets | `SupplyChainExecutionPlan{Queries: []SupplyChainQuery}` | План с anchor/product/market anchors |
-| 2 | IntentDecomposer | product/market → org+fac | `expandSupplyChainQueriesWithOrgs` | `SupplyChainQuery.Anchors = []string{"/fac/..."}` |
+| 2 | IntentDecomposer | product/market → org+fac+deposit | `expandSupplyChainQueriesWithOrgs` | `SupplyChainQuery.Anchors = []string{"/org/..."|"/gov/..."|"/fac/..."|"/deposit/..."}` |
 | 3 | EnrichSupplyChainFull | anchor-centric | `SupplyChainQuery{Anchor\|Anchors, Direction, Depth, ProductFilter, GeoFilter}` | `[]SupplyChain` |
 | 4 | Domain Isolation | Strict Filters | `FilterDomainChains`, `FilterDomainRelations` | Отфильтрованные `[]SupplyChain` без нарушений |
 
@@ -55,7 +55,7 @@ Planning → Extraction (skip) → Critic (skip) → Research → Materialize �
 
 | Домен (Domain Mode) | Разрешенные типы связей (Allowed Edges) |
 |---------------------|-----------------------------------------|
-| **supply_chain** | `PRODUCES`, `SUPPLIES_TO`, `TRANSFORMS_INTO`, `EXTRACTS_FROM`, `LOCATED_IN`, `OPERATES_IN`, `DEPENDS_ON`, `HAS_MARKET_SEGMENT` |
+| **supply_chain** | `PRODUCES`, `SUPPLIES_TO`, `TRANSFORMS_INTO`, `EXTRACTS_FROM`, `LOCATED_IN`, `OPERATES_IN`, `HAS_MARKET_SEGMENT` + path-scoped `OWNS`/`CONTROLS` (`/org|/gov -> /org|/fac|/deposit`) |
 | **governance** | `OWNS`, `SUBSIDIARY_OF`, `CONTROLS`, `MANAGES`, `INVESTS_IN`, `BOARD_MEMBER_OF`, `EXECUTIVE_OF`, `EMPLOYED_BY`, `FOUNDED`, `ADMINISTERS`, `ASSURES` |
 | **assurance** | `ASSURES`, `REGULATES` |
 
@@ -67,13 +67,16 @@ Planning → Extraction (skip) → Critic (skip) → Research → Materialize �
 
 | Префикс | Тип | Пример | Описание |
 |---------|-----|--------|----------|
-| `/org/` | ORGANIZATION | `/org/th/tipco-foods` | Компании, юрлица. В supply chain часто маппятся на facility. |
-| `/fac/` | FACILITY | `/fac/tipco-foods-general-production` | Заводы, фабрики, порты. Физические точки логистики. |
+| `/org/` | ORGANIZATION | `/org/th/tipco-foods` | Компании, юрлица. Если конкретная производственная площадка неизвестна/невыделима, допустим org-level `PRODUCES` (`/org -> /product`). |
+| `/fac/` | FACILITY | `/fac/th/tipco-foods-main-plant` | Заводы, фабрики, порты. Физические точки логистики. Используются только конкретные площадки (без synthetic `*-general-production` по умолчанию). |
 | `/product/` | PRODUCT | `/product/raw/fruit/fresh/pineapple` | Товары, сырье, компоненты. |
 | `/deposit/` | DEPOSIT | `/deposit/cl/chuquicamata-copper-mine` | Месторождения природных ресурсов. Критичны для upstream supply chains (шахта -> сырье). |
 | `/market/` | MARKET | `/market/electric-vehicles` | Абстрактный якорь для декомпозиции. |
 
-Цепочка: `actor → product → actor → product → ...` (org/fac/deposit → product → org/fac).
+Предпочтительная цепочка: `org → fac → product → fac → org` (или с `deposit` в upstream).  
+Допустимый fallback: `org → product` только когда конкретная production-facility не установлена.
+
+Нормализация путей: перед материализацией используется canonical-normalization (например, legacy `/org/tesla` приводится к `/org/na/tesla`), чтобы не плодить дубли фрагментов/связей.
 
 ---
 

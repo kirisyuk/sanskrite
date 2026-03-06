@@ -38,15 +38,35 @@ function arcPoints(lon1: number, lat1: number, lon2: number, lat2: number, numPo
   return points;
 }
 
+function fragmentToGeoObject(
+  f: { id?: string; canonicalPath?: string; type?: string; label?: string; [k: string]: unknown },
+  coordsMap: Record<string, { lat: number; lon: number }>,
+): GeoObject | null {
+  const id = f?.id ?? (f as any)?.ID;
+  if (!id || typeof id !== 'string') return null;
+  const lat = (f as any)?.coordinates?.lat ?? coordsMap[id]?.lat;
+  const lon = (f as any)?.coordinates?.lon ?? coordsMap[id]?.lon;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return {
+    id,
+    canonicalPath: (f?.canonicalPath ?? (f as any)?.CanonicalPath ?? '') as string,
+    type: (f?.type ?? (f as any)?.Type ?? 'OTHER') as string,
+    label: (f?.label ?? (f as any)?.Label ?? '') as string | undefined,
+    coordinates: { lat: lat as number, lon: lon as number },
+  };
+}
+
 export function useGeoEdgeLayer(
   map: maplibregl.Map | null,
   isReady: boolean,
   styleEpoch: number,
   selectedObject: GeoObject | null,
   objects: GeoObject[],
+  hops: number = 3,
 ) {
   const [edgesLoading, setEdgesLoading] = useState(false);
   const [edgesCount, setEdgesCount] = useState(0);
+  const [discoveredObjects, setDiscoveredObjects] = useState<GeoObject[]>([]);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -85,20 +105,31 @@ export function useGeoEdgeLayer(
     setEdgesCount(0);
 
     api
-      .getFragmentDependencies(selectedObject.id, { direction: 'both', includeFragments: false, includeCoordinates: true, limit: 200 })
+      .getFragmentDependencies(selectedObject.id, {
+        direction: 'both',
+        includeFragments: true,
+        includeCoordinates: true,
+        limit: 200,
+        hops: Math.min(5, Math.max(1, hops)),
+      })
       .then((res) => {
         if (cancelled || !mountedRef.current) return;
         const edges = res?.edges ?? [];
         const serverCoords = res?.coordinates ?? {};
+        const fragments = res?.fragments ?? [];
+        const objectIds = new Set(objects.map((o) => o.id));
+        for (const [id, c] of Object.entries(serverCoords)) {
+          if (c && Number.isFinite(c.lat) && Number.isFinite(c.lon)) {
+            idToCoords.set(id, { lon: c.lon, lat: c.lat });
+          }
+        }
         const features: GeoJSON.Feature<GeoJSON.LineString>[] = [];
         for (const e of edges) {
           const src = e?.sourceFragmentId ?? e?.sourceFragmentID;
           const tgt = e?.targetFragmentId ?? e?.targetFragmentID;
           const edgeType = (e?.type ?? '').trim();
-          const srcCoords = (src ? idToCoords.get(src) : undefined) ??
-            (src && serverCoords[src] ? { lon: serverCoords[src].lon, lat: serverCoords[src].lat } : undefined);
-          const tgtCoords = (tgt ? idToCoords.get(tgt) : undefined) ??
-            (tgt && serverCoords[tgt] ? { lon: serverCoords[tgt].lon, lat: serverCoords[tgt].lat } : undefined);
+          const srcCoords = src ? idToCoords.get(src) : undefined;
+          const tgtCoords = tgt ? idToCoords.get(tgt) : undefined;
           if (!srcCoords || !tgtCoords) continue;
           features.push({
             type: 'Feature',
@@ -106,7 +137,22 @@ export function useGeoEdgeLayer(
             properties: { type: edgeType, color: toPastel(getEdgeColor(edgeType)) },
           });
         }
+        const newDiscovered: GeoObject[] = [];
+        for (const f of fragments) {
+          const obj = fragmentToGeoObject(f, serverCoords);
+          if (obj && !objectIds.has(obj.id)) {
+            newDiscovered.push(obj);
+            objectIds.add(obj.id);
+          }
+        }
         if (cancelled || !mountedRef.current) return;
+        setDiscoveredObjects((prev) => {
+          const byId = new Map(prev.map((o) => [o.id, o]));
+          for (const o of newDiscovered) {
+            if (!byId.has(o.id)) byId.set(o.id, o);
+          }
+          return Array.from(byId.values());
+        });
         removeLayers();
         setEdgesCount(features.length);
         if (features.length === 0) {
@@ -136,7 +182,7 @@ export function useGeoEdgeLayer(
       cancelled = true;
       removeLayers();
     };
-  }, [selectedObject?.id, objects, map, isReady, styleEpoch]);
+  }, [selectedObject?.id, objects, hops, map, isReady, styleEpoch]);
 
-  return { edgesLoading, edgesCount };
+  return { edgesLoading, edgesCount, discoveredObjects };
 }

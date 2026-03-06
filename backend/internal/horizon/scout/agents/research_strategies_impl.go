@@ -155,7 +155,7 @@ func strategyMetricValueFormatBlock() string {
 const supplyChainOperationalModelBlock = `CRITICAL — Supply chain operational model (org→fac→product→fac→org):
 1. Full chain: ORGANIZATION → its FACILITIES → PRODUCTS they produce → receiving FACILITIES → their ORGANIZATIONS.
 2. Chain nodes use their real types: /org/ for organizations, /fac/ for facilities, /product/ for products.
-3. When a specific facility is unknown, use /fac/{geo}/{orgSlug}-general-production.
+3. When a specific production facility is unknown or not separable (small org / org-level production only), use ORG → PRODUCES → PRODUCT directly.
 4. Product = catalog entity. One product type, one node. Do not duplicate products for transport steps. Use transportVia array on the supplies edge. A product must NOT appear more than once in a single supply chain path — no pseudo-cycles.
 5. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.`
 
@@ -167,10 +167,10 @@ const supplyChainProductGranularityBlock = `PRODUCT GRANULARITY (what counts as 
 - When in doubt: prefer product family over specific SKU; prefer concrete commodity over vague category.`
 
 const supplyChainSpecialScenariosBlock = `SPECIAL SCENARIOS:
-- Contract manufacturing: org owns IP; facility (contract manufacturer) produces. Link: fac_produces_product; facility may be /fac/{geo}/{contractor}-general-production.
+- Contract manufacturing: org owns IP; facility (contract manufacturer) produces. Link: fac_produces_product.
 - Toll manufacturing: raw from fac A, processing at fac B, result to A or C. Segments: fac_A→product→fac_B→product→fac_C.
 - Distributors/resellers: fac with type distribution/sales; supplies without produces.
-- Software vendors: fac = /fac/{geo}/{vendor}-general-production, product = software product line (e.g. Claude Code), not specific release.
+- Software vendors: prefer concrete production/delivery facilities when known; if production is org-level and facilities are not separable, model as org→product.
 - Co-product/by-product: one process (fac)→multiple product. Multiple PRODUCES edges from one fac.`
 
 // holisticOutputSchemaBlock returns the full JSON schema for holistic/refine prompts (fragment partial merge + relations).
@@ -204,7 +204,8 @@ func holisticOutputSchemaBlock() string {
 }
 
 const supplyChainMandatoryBlock = `MANDATORY — SUPPLY CHAIN RULES (NO EXCEPTIONS):
-- Chain model: org → fac → product → fac → org. Organizations at the ends, facilities in the middle, products between facilities.
+- Preferred chain model: org → fac → product → fac → org. Organizations at the ends, facilities in the middle, products between facilities.
+- Fallback model (only when concrete production facility is unknown or not separable): org → product.
 - Nodes: /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits.
 - Edge types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.
 - Product: one per type in path. No duplicates. No "Freight" or "delivery" as product unless that IS the facility's service.
@@ -228,7 +229,7 @@ func strategySupplyChainsJSONContractBlock() string {
   - "facilityKind": OPTIONAL physical type: ` + taxonomy.FacilityKindsForPrompts() + ` (seaport, factory, cable, pipeline, mine, etc.)
   - "position": OPTIONAL (upstream|midstream|downstream)
   - "role": OPTIONAL string
-- Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. When facility unknown: /fac/{geo}/{orgSlug}-general-production.
+- Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. Do NOT invent synthetic /fac/*-general-production placeholders. If production is only known at org level, use org→product.
 - INVALID shape example: "nodes": "A -> B -> C"
 - VALID shape example (org→fac→product→fac→org):
 {
@@ -248,7 +249,7 @@ func strategySupplyChainsJSONContractBlock() string {
 }`
 }
 
-// SupplyChainResearchStrategy enriches for supply chain only (PRODUCES, CONSUMES, SUPPLIES_TO, etc.).
+// SupplyChainResearchStrategy enriches for supply chain only (PRODUCES, SUPPLIES_TO, etc.).
 type SupplyChainResearchStrategy struct {
 	agent *ResearchAgent
 }

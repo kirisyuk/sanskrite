@@ -6,11 +6,11 @@ func TestBuildDecisionTelemetrySnapshot_QuarantineTriple(t *testing.T) {
 	s := BuildDecisionTelemetrySnapshot(DecisionTelemetryInput{
 		Kind:         "edge",
 		Decision:     PolicyDecision{Action: "quarantine"},
-		SourceType:   "ORGANIZATION",
-		TargetType:   "ORGANIZATION",
-		RelationType: "CONSUMES",
+		SourceType:   "MARKET",
+		TargetType:   "MARKET",
+		RelationType: "PARTICIPATES_IN",
 		FinalStatus:  "quarantined",
-		FinalReason:  "quarantine: semantically invalid",
+		FinalReason:  "quarantine: MARKET->MARKET PARTICIPATES_IN invalid",
 	})
 	if s.Counters["policy_decision_total"] != 1 {
 		t.Fatalf("expected policy_decision_total=1")
@@ -21,8 +21,8 @@ func TestBuildDecisionTelemetrySnapshot_QuarantineTriple(t *testing.T) {
 	if got := s.InvalidTripleCount["top_invalid_triples"]; got != 1 {
 		t.Fatalf("expected top_invalid_triples=1, got %d", got)
 	}
-	if s.InvalidTripleDims["edgeType"] != "CONSUMES" {
-		t.Fatalf("expected invalid triple edgeType=CONSUMES")
+	if s.InvalidTripleDims["edgeType"] != "PARTICIPATES_IN" {
+		t.Fatalf("expected invalid triple edgeType=PARTICIPATES_IN")
 	}
 }
 

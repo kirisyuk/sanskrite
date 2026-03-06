@@ -412,19 +412,25 @@ func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string 
 		return nil
 	}
 	allowed := edgesemantics.EdgeAllowlistStrings(specific)
-	// Supply-chain mode allows OWNS only for supply-relevant ownership links
-	// (ORG/GOV -> ORG/FAC/DEPOSIT). We include OWNS in generation guardrails
+	// Supply-chain mode allows OWNS/CONTROLS for supply-relevant ownership/control links
+	// (ORG/GOV -> ORG/FAC/DEPOSIT). We include both in generation guardrails
 	// and enforce exact path predicate during phase-A filtering.
 	if taxonomy.HasDomainMode(specific, taxonomy.DomainModeSupplyChain) {
 		hasOwns := false
+		hasControls := false
 		for _, t := range allowed {
 			if strings.EqualFold(strings.TrimSpace(t), "OWNS") {
 				hasOwns = true
-				break
+			}
+			if strings.EqualFold(strings.TrimSpace(t), "CONTROLS") {
+				hasControls = true
 			}
 		}
 		if !hasOwns {
 			allowed = append(allowed, "OWNS")
+		}
+		if !hasControls {
+			allowed = append(allowed, "CONTROLS")
 		}
 	}
 	return allowed
@@ -463,8 +469,12 @@ func extractionDomainRelationCatalogOverrideBlock(domainModes []string) string {
 const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends on target (use this for suppliers, contractors, infrastructure).
      Example: If Panasonic supplies Tesla battery cells, for Tesla (source) -> Panasonic (target) use DEPENDS_ON (NOT SUPPLIES_TO).
      For actor↔actor dependencies (ORG/FACILITY/PROGRAM/COMMUNITY/PERSON), include qualifiers.source_role=dependent and qualifiers.target_role=dependency (or supplier/provider).
-   - SUPPLIES_TO: source supplies goods/services to target (use this for customers/recipients). Source MUST be ORGANIZATION or FACILITY (never DEPOSIT).
+   - SUPPLIES_TO: source supplies goods/services to target (supplier -> customer/consumer).
+     Source MUST be ORGANIZATION or FACILITY or PRODUCT.
+     Target MUST be ORGANIZATION or FACILITY.
+     MARKET MUST NOT be source or target for SUPPLIES_TO.
      For ORG/FACILITY -> ORG/FACILITY supply links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
+     For PRODUCT -> ORG/FACILITY input-flow links, add source_role=input_product and target_role=consumer when known.
    - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
    - OPERATES_IN: source operates in target (source MUST be ORGANIZATION or PERSON, target MUST be GEO_REGION or FACILITY or DEPOSIT).
    - REGULATES: source regulates target (source MUST be ORGANIZATION — only orgs can regulate).
@@ -484,7 +494,7 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
      Direction is strict: investor -> investee.
      If THIS FRAGMENT is the investee (e.g., "invested in by X"), set explicit sourceCanonicalPath/sourceType/sourceName = X and targetCanonicalPath = THIS FRAGMENT.
    - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
-   - CONSUMES: source consumes target (source MUST be ORGANIZATION or FACILITY or PRODUCT, target MUST be PRODUCT).
+   - For input products: SUPPLIES_TO(product->org/fac) is allowed.
    - TRANSFORMS_INTO: upstream PRODUCT -> downstream PRODUCT (value-chain transformation).
      Direction is strict: source MUST be the raw/earlier-stage product, target MUST be the refined/later-stage product.
      Example: copper-ore TRANSFORMS_INTO copper-concentrate (NEVER the reverse). iron-ore TRANSFORMS_INTO iron-pellet (NEVER the reverse).
@@ -555,18 +565,28 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
 		b.WriteString(`   SUPPLY CHAIN MODE (operational edges only):
-   - Do NOT use DEPENDS_ON. Use PRODUCES, CONSUMES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM for supply chain links.
-   - SUPPLIES_TO: supplier -> customer flow (source MUST be ORG or FACILITY).
-   - PRODUCES: actor -> product. CONSUMES: actor -> input product.
-   - TRANSFORMS_INTO: upstream raw product -> downstream refined product (NEVER reversed; e.g. ore -> concentrate -> anode -> cathode).
-   - EXTRACTS_FROM: facility -> deposit.
+   - Do NOT use DEPENDS_ON for supply links. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.
+   - Operational type matrix (hard contract):
+     - PRODUCES: ORGANIZATION|FACILITY|DEPOSIT -> PRODUCT
+     - SUPPLIES_TO: ORGANIZATION|FACILITY|PRODUCT -> ORGANIZATION|FACILITY
+     - TRANSFORMS_INTO: PRODUCT -> PRODUCT (upstream -> downstream)
+     - EXTRACTS_FROM: FACILITY -> DEPOSIT
    - For actor↔actor SUPPLIES_TO links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
    - OWNS is allowed ONLY for supply-relevant ownership:
      source MUST be /org/... or /gov/... and target MUST be /org/... or /fac/... or /deposit/....
      Use OWNS when ownership clarifies who controls producing subsidiaries or critical facilities/deposits.
      Do NOT emit OWNS for markets/programs/abstract entities.
+   - CONTROLS is allowed ONLY for supply-relevant non-equity control:
+     source MUST be /org/... or /gov/... and target MUST be /org/... or /fac/... or /deposit/....
+     Use CONTROLS for state/contractual/operational control when ownership is unclear.
+     Do NOT emit CONTROLS for markets/programs/abstract entities.
    - LOCATED_IN/OPERATES_IN only for geo/facility anchoring.
+     - LOCATED_IN target MUST be GEO_REGION.
+     - OPERATES_IN source MUST be ORGANIZATION|PERSON, target MUST be GEO_REGION|FACILITY|DEPOSIT.
+     - MARKET MUST NOT be source for OPERATES_IN.
    - PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial market participation). For "market depends on org" use PARTICIPATES_IN with ORG as source.
+   - MARKET source guard in supply_chain: MARKET may emit only PARTICIPATES_IN and HAS_MARKET_SEGMENT (plus DOMAIN scaffold when source is /domain/...).
+     Never emit PRODUCES/SUPPLIES_TO/TRANSFORMS_INTO/EXTRACTS_FROM/OPERATES_IN from MARKET.
    - REGULATES: GOV entity (/gov/...) -> MARKET or ORG (domestic regulatory oversight). NEVER use DEPENDS_ON for government regulation.
    - ADMINISTERS: GOV entity (/gov/...) -> subordinate GOV/PROGRAM/FACILITY (administrative hierarchy).
    - For transmission/capacity add throughput_share, capacity_constraint, reroute_penalty when known.
@@ -716,11 +736,12 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 %s`, relationCatalogOverride, relationRulesBlock)
 
 	supplyChainsContractBlock := `4. "supplyChains" Field (Array of Objects):
-- Chain model: org → fac → product → fac → org. Organizations at chain ends, facilities in the middle, products between facilities.
-- Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. When facility unknown: /fac/{geo}/{orgSlug}-general-production.
+- Preferred chain model: org → fac → product → fac → org. Organizations at chain ends, facilities in the middle, products between facilities.
+- Fallback model (only when concrete production facility is unknown or not separable for a small org): org → product.
+- Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. Do NOT invent synthetic /fac/*-general-production placeholders.
 - Each chain has: nodes[], confidence, reason, optional transportVia[].
 - Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|DEPOSIT), role?
-- Nodes follow: org → fac → product → fac → org (1-to-many at each level).
+- Nodes follow: org → fac → product → fac → org (1-to-many at each level). org → product is allowed only for unknown/non-separated production.
 - Include FACILITY where transformation occurs (product → facility → product).
 - For extractive flows: facility → deposit → product.
 - transportVia should contain facility canonical paths for ports/terminals/pipelines/warehouses when known.

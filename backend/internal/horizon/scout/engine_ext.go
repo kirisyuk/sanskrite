@@ -1687,9 +1687,8 @@ func getSupplyChainExecutionPlanFromJobState(job *models.ScoutingJob, domainCano
 }
 
 // expandSupplyChainQueriesWithOrgs expands product/market-anchored queries to org/fac-anchored.
-// Discovers BOTH org and fac via IntentDecomposer recursively (max 5 hops). For org: uses
-// /fac/{geo}/{orgSlug}-general-production fallback when no specific fac. EnrichSupplyChainFull
-// builds chains from each anchor; SupplyChainOrgResolver handles fac→org at depth 5.
+// Discovers BOTH org and fac via IntentDecomposer recursively (max 5 hops). Organization anchors
+// remain /org|/gov paths (no synthetic /fac/*-general-production fallback).
 func (e *ScoutEngine) expandSupplyChainQueriesWithOrgs(ctx context.Context, job *models.ScoutingJob, queries []agents.SupplyChainQuery) []agents.SupplyChainQuery {
 	if e == nil || e.aiExecutor == nil || job == nil || len(queries) == 0 {
 		return queries
@@ -1762,9 +1761,9 @@ func (e *ScoutEngine) expandSupplyChainQueriesWithOrgs(ctx context.Context, job 
 	return out
 }
 
-// discoverOrgAndFacAnchorsRecursive discovers org and fac anchors via IntentDecomposer.
+// discoverOrgAndFacAnchorsRecursive discovers org/fac/deposit anchors via IntentDecomposer.
 // Recursion: round 0 = decompose product/market; rounds 1..maxHops-1 = decompose each org to find facilities.
-// Returns normalized anchors: /fac/ for facilities (incl. /fac/{geo}/{org}-general-production for org-only).
+// Returns normalized anchors without synthetic fallback nodes.
 func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 	ctx context.Context,
 	job *models.ScoutingJob,
@@ -1797,19 +1796,14 @@ func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 		return true
 	}
 
-	// Normalize path to effective anchor: /org/ -> /fac/{geo}/{slug}-general-production; /fac/ stays.
+	// Normalize path to effective anchor without org->fac fallback conversion.
 	toEffectiveAnchor := func(cp string) string {
 		cp = strings.TrimSpace(cp)
 		if cp == "" {
 			return ""
 		}
-		if strings.HasPrefix(cp, "/fac/") || strings.HasPrefix(cp, "/deposit/") {
+		if strings.HasPrefix(cp, "/fac/") || strings.HasPrefix(cp, "/deposit/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
 			return cp
-		}
-		if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
-			if norm := models.NormalizeOrgRefToFacilityFallback(cp); norm != "" {
-				return norm
-			}
 		}
 		return ""
 	}
@@ -1839,18 +1833,18 @@ func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 	}
 	queue := make([]queueItem, 0, 32)
 	decomposed := make(map[string]struct{}) // avoid re-decomposing same org
-	facAnchors := make([]string, 0, maxAnchors)
+	anchors := make([]string, 0, maxAnchors)
 	for _, r := range rels {
 		cp := strings.TrimSpace(r.TargetCanonicalPath)
 		if cp == "" {
 			continue
 		}
-		if strings.HasPrefix(cp, "/fac/") {
+		if strings.HasPrefix(cp, "/fac/") || strings.HasPrefix(cp, "/deposit/") {
 			eff := toEffectiveAnchor(cp)
 			if eff != "" && addAnchor(eff) {
-				facAnchors = append(facAnchors, eff)
-				if len(facAnchors) >= maxAnchors {
-					return facAnchors
+				anchors = append(anchors, eff)
+				if len(anchors) >= maxAnchors {
+					return anchors
 				}
 			}
 			continue
@@ -1858,9 +1852,9 @@ func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 		if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
 			eff := toEffectiveAnchor(cp)
 			if eff != "" && addAnchor(eff) {
-				facAnchors = append(facAnchors, eff)
-				if len(facAnchors) >= maxAnchors {
-					return facAnchors
+				anchors = append(anchors, eff)
+				if len(anchors) >= maxAnchors {
+					return anchors
 				}
 			}
 			if maxHops > 1 {
@@ -1873,17 +1867,17 @@ func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 		}
 	}
 	fromOrg, fromFac := 0, 0
-	for _, eff := range facAnchors {
-		if strings.Contains(eff, "-general-production") {
+	for _, eff := range anchors {
+		if strings.HasPrefix(eff, "/org/") || strings.HasPrefix(eff, "/gov/") {
 			fromOrg++
 		} else {
 			fromFac++
 		}
 	}
-	e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainDiscovery] round=0 decided anchors=%d (from_org=%d from_fac=%d): %v", len(facAnchors), fromOrg, fromFac, facAnchors))
+	e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainDiscovery] round=0 decided anchors=%d (from_org=%d from_fac=%d): %v", len(anchors), fromOrg, fromFac, anchors))
 
 	// Rounds 1..maxHops-1: decompose orgs to discover facilities
-	for len(queue) > 0 && len(facAnchors) < maxAnchors {
+	for len(queue) > 0 && len(anchors) < maxAnchors {
 		cur := queue[0]
 		queue = queue[1:]
 		if cur.round >= maxHops {
@@ -1897,18 +1891,18 @@ func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 		if len(rels2) == 0 {
 			continue
 		}
-		prevN := len(facAnchors)
+		prevN := len(anchors)
 		for _, r := range rels2 {
 			cp := strings.TrimSpace(r.TargetCanonicalPath)
 			if cp == "" {
 				continue
 			}
-			if strings.HasPrefix(cp, "/fac/") {
+			if strings.HasPrefix(cp, "/fac/") || strings.HasPrefix(cp, "/deposit/") {
 				eff := toEffectiveAnchor(cp)
 				if eff != "" && addAnchor(eff) {
-					facAnchors = append(facAnchors, eff)
-					if len(facAnchors) >= maxAnchors {
-						return facAnchors
+					anchors = append(anchors, eff)
+					if len(anchors) >= maxAnchors {
+						return anchors
 					}
 				}
 				continue
@@ -1916,9 +1910,9 @@ func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 			if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
 				eff := toEffectiveAnchor(cp)
 				if eff != "" && addAnchor(eff) {
-					facAnchors = append(facAnchors, eff)
-					if len(facAnchors) >= maxAnchors {
-						return facAnchors
+					anchors = append(anchors, eff)
+					if len(anchors) >= maxAnchors {
+						return anchors
 					}
 				}
 				if cur.round+1 < maxHops {
@@ -1930,10 +1924,10 @@ func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 				}
 			}
 		}
-		newN := len(facAnchors) - prevN
-		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainDiscovery] IntentDecomposer round=%d org=%q → relations=%d new_anchors=%d total=%d", cur.round, cur.path, len(rels2), newN, len(facAnchors)))
+		newN := len(anchors) - prevN
+		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainDiscovery] IntentDecomposer round=%d org=%q → relations=%d new_anchors=%d total=%d", cur.round, cur.path, len(rels2), newN, len(anchors)))
 	}
-	return facAnchors
+	return anchors
 }
 
 func decodeSupplyChainExecutionPlan(raw interface{}) *agents.SupplyChainExecutionPlan {
@@ -1966,7 +1960,6 @@ func decodeSupplyChainExecutionPlan(raw interface{}) *agents.SupplyChainExecutio
 	}
 	return &plan
 }
-
 
 // getRegulatoryImpactPlanFromJobState extracts RegulatoryImpactExecutionPlan for the matching domain.
 func getRegulatoryImpactPlanFromJobState(job *models.ScoutingJob, domainCanonicalPath string) *agents.RegulatoryImpactExecutionPlan {
@@ -4119,7 +4112,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		if edgeID, err := e.edgesRepo.Create(ctx, surfaceEdge); err == nil {
 			surfaceEdge.ID = edgeID
 			surfacesCount++
-			// Realtime: update graph edges (this is what Cockpit subscribes to).
+			// Realtime: update graph edges (unified payload with all sources)
 			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
 				"tenantId":            job.TenantID,
 				"projectId":           job.ProjectID,
@@ -4129,8 +4122,11 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 				"targetFragmentId":    surfaceEdge.TargetFragmentID,
 				"sourceCanonicalPath": domainCP,
 				"targetCanonicalPath": path,
+				"sourceLabel":         strings.TrimSpace(frag.Labels["en"]),
+				"targetLabel":         strings.TrimSpace(targetFrag.Labels["en"]),
 				"type":                string(surfaceEdge.Type),
 				"properties":          surfaceEdge.Properties,
+				"qualifiers":          surfaceEdge.Qualifiers,
 			})
 			e.publish(ctx, realtime.EventType("horizon.edge.created"), map[string]interface{}{
 				"tenantId":   job.TenantID,
@@ -5457,8 +5453,8 @@ func (e *ScoutEngine) processRelationsInternal(
 				srcPath = explicitSrc
 			}
 			allowed := IsSupplyChainEdgeType(normalizedRelationType)
-			if !allowed && strings.EqualFold(normalizedRelationType, "OWNS") {
-				allowed = allowSupplyChainOwnsByPath(srcPath, targetPath)
+			if !allowed && (strings.EqualFold(normalizedRelationType, "OWNS") || strings.EqualFold(normalizedRelationType, "CONTROLS")) {
+				allowed = allowSupplyChainOwnershipOrControlByPath(srcPath, targetPath)
 			}
 			if !allowed {
 				e.logLine(ctx, job, "info", fmt.Sprintf("> pre_materialization_supply_chain_guard: dropped type=%q source=%q target=%q reason=out_of_contract",
@@ -8132,8 +8128,8 @@ func (e *ScoutEngine) processSupplyChains(
 
 		// Final allowlist gate: never persist out-of-contract types for supply-chain edges.
 		allowed := IsSupplyChainEdgeType(string(edgeType))
-		if !allowed && strings.EqualFold(string(edgeType), "OWNS") {
-			allowed = allowSupplyChainOwnsByPath(srcPath, dstPath)
+		if !allowed && (strings.EqualFold(string(edgeType), "OWNS") || strings.EqualFold(string(edgeType), "CONTROLS")) {
+			allowed = allowSupplyChainOwnershipOrControlByPath(srcPath, dstPath)
 		}
 		if !allowed {
 			e.logLine(ctx, job, "info", fmt.Sprintf("> persist_final_gate_supply_chain: skipped type=%q source=%q target=%q reason=out_of_contract",
@@ -8188,10 +8184,10 @@ func (e *ScoutEngine) processSupplyChains(
 		if supplier == "" || customer == "" || product == "" {
 			continue
 		}
-		if !strings.HasPrefix(supplier, "/fac/") && !strings.HasPrefix(supplier, "/deposit/") && !strings.HasPrefix(supplier, "/org/") {
+		if !strings.HasPrefix(supplier, "/fac/") && !strings.HasPrefix(supplier, "/deposit/") && !strings.HasPrefix(supplier, "/org/") && !strings.HasPrefix(supplier, "/gov/") {
 			continue
 		}
-		if !strings.HasPrefix(customer, "/fac/") && !strings.HasPrefix(customer, "/org/") {
+		if !strings.HasPrefix(customer, "/fac/") && !strings.HasPrefix(customer, "/org/") && !strings.HasPrefix(customer, "/gov/") {
 			continue
 		}
 		if rp, ok := pathRewrites[supplier]; ok && rp != "" {
@@ -9350,7 +9346,7 @@ func collectAnchorOrgsFromQueriesByDirection(queries []agents.SupplyChainQuery, 
 		downSeen[p] = struct{}{}
 		if strings.HasPrefix(p, "/org/") || strings.HasPrefix(p, "/gov/") {
 			downOrgs = append(downOrgs, p)
-		} else if strings.HasPrefix(p, "/fac/") {
+		} else if strings.HasPrefix(p, "/fac/") || strings.HasPrefix(p, "/deposit/") {
 			downFacs = append(downFacs, p)
 		}
 	}
@@ -9364,7 +9360,7 @@ func collectAnchorOrgsFromQueriesByDirection(queries []agents.SupplyChainQuery, 
 		upSeen[p] = struct{}{}
 		if strings.HasPrefix(p, "/org/") || strings.HasPrefix(p, "/gov/") {
 			upOrgs = append(upOrgs, p)
-		} else if strings.HasPrefix(p, "/fac/") {
+		} else if strings.HasPrefix(p, "/fac/") || strings.HasPrefix(p, "/deposit/") {
 			upFacs = append(upFacs, p)
 		}
 	}
@@ -9476,14 +9472,21 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 	}
 	// facOwner tracks which org owns which fac across all depths.
 	facOwner := map[string]string{}
+	actorNodeType := func(path string) string {
+		path = strings.TrimSpace(path)
+		if strings.HasPrefix(path, "/deposit/") {
+			return "DEPOSIT"
+		}
+		return "FACILITY"
+	}
 	buildChains := func(segments []chainSegment) []agents.SupplyChain {
 		chains := make([]agents.SupplyChain, 0, len(segments))
 		for _, seg := range segments {
 			nodes := []agents.SupplyChainNode{
 				{CanonicalPath: seg.orgPath, Type: "ORGANIZATION", Role: "supplier"},
-				{CanonicalPath: seg.facPath, Type: "FACILITY", Role: "producer"},
+				{CanonicalPath: seg.facPath, Type: actorNodeType(seg.facPath), Role: "producer"},
 				{CanonicalPath: seg.productPath, Type: "PRODUCT"},
-				{CanonicalPath: seg.recipientFac, Type: "FACILITY", Role: "consumer"},
+				{CanonicalPath: seg.recipientFac, Type: actorNodeType(seg.recipientFac), Role: "consumer"},
 				{CanonicalPath: seg.recipientOrg, Type: "ORGANIZATION", Role: "customer"},
 			}
 			chains = append(chains, agents.SupplyChain{
@@ -9514,7 +9517,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 			chains = append(chains, agents.SupplyChain{
 				Nodes: []agents.SupplyChainNode{
 					{CanonicalPath: org, Type: "ORGANIZATION", Role: "supplier"},
-					{CanonicalPath: fac, Type: "FACILITY", Role: "producer"},
+					{CanonicalPath: fac, Type: actorNodeType(fac), Role: "producer"},
 				},
 				Confidence: 0.6,
 				Reason:     "recursive unwinding step1",
@@ -9543,7 +9546,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 			chains = append(chains, agents.SupplyChain{
 				Nodes: []agents.SupplyChainNode{
 					{CanonicalPath: org, Type: "ORGANIZATION", Role: "supplier"},
-					{CanonicalPath: fac, Type: "FACILITY", Role: "producer"},
+					{CanonicalPath: fac, Type: actorNodeType(fac), Role: "producer"},
 					{CanonicalPath: prod, Type: "PRODUCT"},
 				},
 				Confidence: 0.65,
@@ -9578,9 +9581,9 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 				chains = append(chains, agents.SupplyChain{
 					Nodes: []agents.SupplyChainNode{
 						{CanonicalPath: srcOrg, Type: "ORGANIZATION", Role: "supplier"},
-						{CanonicalPath: srcFac, Type: "FACILITY", Role: "producer"},
+						{CanonicalPath: srcFac, Type: actorNodeType(srcFac), Role: "producer"},
 						{CanonicalPath: prod, Type: "PRODUCT"},
-						{CanonicalPath: recipFac, Type: "FACILITY", Role: "consumer"},
+						{CanonicalPath: recipFac, Type: actorNodeType(recipFac), Role: "consumer"},
 					},
 					Confidence: 0.68,
 					Reason:     "recursive unwinding step3",
@@ -9672,7 +9675,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 				}
 				for _, f := range r.Facilities {
 					fp := strings.TrimSpace(f.Path)
-					if fp == "" || !strings.HasPrefix(fp, "/fac/") {
+					if fp == "" || (!strings.HasPrefix(fp, "/fac/") && !strings.HasPrefix(fp, "/deposit/")) {
 						continue
 					}
 					if _, ok := visited[fp]; !ok {
@@ -9691,6 +9694,14 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 		// Inject seed facs at depth 0 (anchors that were already /fac/ paths).
 		if depth == 0 && len(seedFacs) > 0 {
 			depthFacs = append(depthFacs, seedFacs...)
+			seedOrgResults, _ := e.researchAgent.FindOrgsForFacs(stepCtx, seedFacs)
+			for _, r := range seedOrgResults {
+				fp := strings.TrimSpace(r.FacPath)
+				op := strings.TrimSpace(r.OrgPath)
+				if fp != "" && (strings.HasPrefix(fp, "/fac/") || strings.HasPrefix(fp, "/deposit/")) && op != "" && !hasUnknownJurisdiction(op) {
+					facOwner[fp] = op
+				}
+			}
 			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=0 injected %d seed facs", len(seedFacs)))
 		}
 
@@ -9721,7 +9732,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 				}
 				for _, f := range r.Facilities {
 					fp := strings.TrimSpace(f.Path)
-					if fp == "" || !strings.HasPrefix(fp, "/fac/") {
+					if fp == "" || (!strings.HasPrefix(fp, "/fac/") && !strings.HasPrefix(fp, "/deposit/")) {
 						continue
 					}
 					if _, ok := visited[fp]; !ok {
@@ -9933,25 +9944,32 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 	}
 
 	type chainSegment struct {
-		supplierOrg   string
-		supplierFac   string
-		productPath   string
-		consumerFac   string
-		consumerOrg   string
+		supplierOrg string
+		supplierFac string
+		productPath string
+		consumerFac string
+		consumerOrg string
 	}
 	type facProductLink struct {
 		consumerFac string
 		productPath string
 	}
 	facOwner := map[string]string{}
+	actorNodeType := func(path string) string {
+		path = strings.TrimSpace(path)
+		if strings.HasPrefix(path, "/deposit/") {
+			return "DEPOSIT"
+		}
+		return "FACILITY"
+	}
 	buildChains := func(segments []chainSegment) []agents.SupplyChain {
 		chains := make([]agents.SupplyChain, 0, len(segments))
 		for _, seg := range segments {
 			nodes := []agents.SupplyChainNode{
 				{CanonicalPath: seg.supplierOrg, Type: "ORGANIZATION", Role: "supplier"},
-				{CanonicalPath: seg.supplierFac, Type: "FACILITY", Role: "producer"},
+				{CanonicalPath: seg.supplierFac, Type: actorNodeType(seg.supplierFac), Role: "producer"},
 				{CanonicalPath: seg.productPath, Type: "PRODUCT"},
-				{CanonicalPath: seg.consumerFac, Type: "FACILITY", Role: "consumer"},
+				{CanonicalPath: seg.consumerFac, Type: actorNodeType(seg.consumerFac), Role: "consumer"},
 				{CanonicalPath: seg.consumerOrg, Type: "ORGANIZATION", Role: "customer"},
 			}
 			chains = append(chains, agents.SupplyChain{
@@ -9982,7 +10000,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 			chains = append(chains, agents.SupplyChain{
 				Nodes: []agents.SupplyChainNode{
 					{CanonicalPath: org, Type: "ORGANIZATION", Role: "customer"},
-					{CanonicalPath: fac, Type: "FACILITY", Role: "consumer"},
+					{CanonicalPath: fac, Type: actorNodeType(fac), Role: "consumer"},
 				},
 				Confidence: 0.6,
 				Reason:     "upstream unwinding step1",
@@ -10011,7 +10029,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 			chains = append(chains, agents.SupplyChain{
 				Nodes: []agents.SupplyChainNode{
 					{CanonicalPath: org, Type: "ORGANIZATION", Role: "customer"},
-					{CanonicalPath: fac, Type: "FACILITY", Role: "consumer"},
+					{CanonicalPath: fac, Type: actorNodeType(fac), Role: "consumer"},
 					{CanonicalPath: prod, Type: "PRODUCT"},
 				},
 				Confidence: 0.65,
@@ -10049,9 +10067,9 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 				chains = append(chains, agents.SupplyChain{
 					Nodes: []agents.SupplyChainNode{
 						{CanonicalPath: consumerOrg, Type: "ORGANIZATION", Role: "customer"},
-						{CanonicalPath: supplierFac, Type: "FACILITY", Role: "supplier"},
+						{CanonicalPath: supplierFac, Type: actorNodeType(supplierFac), Role: "supplier"},
 						{CanonicalPath: prod, Type: "PRODUCT"},
-						{CanonicalPath: consumerFac, Type: "FACILITY", Role: "consumer"},
+						{CanonicalPath: consumerFac, Type: actorNodeType(consumerFac), Role: "consumer"},
 					},
 					Confidence: 0.68,
 					Reason:     "upstream unwinding U2",
@@ -10142,7 +10160,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 				}
 				for _, f := range r.Facilities {
 					fp := strings.TrimSpace(f.Path)
-					if fp == "" || !strings.HasPrefix(fp, "/fac/") {
+					if fp == "" || (!strings.HasPrefix(fp, "/fac/") && !strings.HasPrefix(fp, "/deposit/")) {
 						continue
 					}
 					if _, ok := visited[fp]; !ok {
@@ -10163,7 +10181,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 			// Populate facOwner for seed facs (they skip Step 1)
 			seedOrgResults, _ := e.researchAgent.FindOrgsForFacs(stepCtx, seedFacs)
 			for _, r := range seedOrgResults {
-				if fp, op := strings.TrimSpace(r.FacPath), strings.TrimSpace(r.OrgPath); fp != "" && op != "" && !hasUnknownJurisdiction(op) {
+				if fp, op := strings.TrimSpace(r.FacPath), strings.TrimSpace(r.OrgPath); fp != "" && (strings.HasPrefix(fp, "/fac/") || strings.HasPrefix(fp, "/deposit/")) && op != "" && !hasUnknownJurisdiction(op) {
 					facOwner[fp] = op
 				}
 			}
@@ -10196,7 +10214,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 				}
 				for _, f := range r.Facilities {
 					fp := strings.TrimSpace(f.Path)
-					if fp == "" || !strings.HasPrefix(fp, "/fac/") {
+					if fp == "" || (!strings.HasPrefix(fp, "/fac/") && !strings.HasPrefix(fp, "/deposit/")) {
 						continue
 					}
 					if _, ok := visited[fp]; !ok {
@@ -10271,7 +10289,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 		for _, r := range prodSuppResults {
 			for _, sf := range r.Suppliers {
 				sfp := strings.TrimSpace(sf.Path)
-				if sfp == "" || !strings.HasPrefix(sfp, "/fac/") {
+				if sfp == "" || (!strings.HasPrefix(sfp, "/fac/") && !strings.HasPrefix(sfp, "/deposit/")) {
 					continue
 				}
 				productToSupplierFacs[r.ProductPath] = append(productToSupplierFacs[r.ProductPath], sfp)
@@ -10330,11 +10348,11 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 					continue
 				}
 				allSegments = append(allSegments, chainSegment{
-					supplierOrg:   supplierOrg,
-					supplierFac:   sf,
-					productPath:   fpl.productPath,
-					consumerFac:   fpl.consumerFac,
-					consumerOrg:   consumerOrg,
+					supplierOrg: supplierOrg,
+					supplierFac: sf,
+					productPath: fpl.productPath,
+					consumerFac: fpl.consumerFac,
+					consumerOrg: consumerOrg,
 				})
 			}
 			for _, sf := range supplierFacs {

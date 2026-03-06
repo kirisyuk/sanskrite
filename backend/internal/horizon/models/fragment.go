@@ -295,6 +295,34 @@ func (f *HorizonFragment) Validate() error {
 	f.MarketSegments = taxonomy.NormalizeSegmentPaths(f.MarketSegments)
 	f.OrgSize = taxonomy.NormalizeOrgSize(f.OrgSize)
 
+	// Best-effort: keep FACILITY physical subtype deterministic at the model boundary.
+	// This guarantees facilityKind is populated even when writes bypass scout precreate flow
+	// (e.g., graph-intent apply, low-confidence stubs, admin/tools paths).
+	if f.Type == FragmentTypeFacility || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/fac/") {
+		if f.Identifiers == nil {
+			f.Identifiers = map[string]string{}
+		}
+		curRaw := strings.TrimSpace(f.Identifiers["facilityKind"])
+		curNorm := taxonomy.NormalizeFacilityKind(curRaw)
+		if curNorm != taxonomy.FacilityKindUnknown && curNorm != taxonomy.FacilityKindOther {
+			f.Identifiers["facilityKind"] = string(curNorm)
+		} else {
+			kind := taxonomy.InferFacilityKind(
+				f.CanonicalPath,
+				f.Labels["en"],
+				f.Description,
+				f.EntityPath,
+				f.SectorPath,
+				f.Identifiers["facilityType"],
+				f.Identifiers["supplyChainRole"],
+			)
+			if kind == taxonomy.FacilityKindUnknown {
+				kind = taxonomy.FacilityKindOther
+			}
+			f.Identifiers["facilityKind"] = string(kind)
+		}
+	}
+
 	// SpherePaths: normalize via L1/L2/L3+ taxonomy rules.
 	if len(f.SpherePaths) > 0 {
 		f.SpherePaths = taxonomy.NormalizeSpherePaths(f.SpherePaths)

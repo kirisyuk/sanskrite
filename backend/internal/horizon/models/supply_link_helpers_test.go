@@ -14,7 +14,7 @@ func TestBuildSupplyLinkCanonicalPath(t *testing.T) {
 		productRef  *string
 		customerRef *string
 		wantErr     bool
-		wantPrefix  string
+		wantPath    string
 	}{
 		{
 			name:        "valid supply link with all refs",
@@ -23,7 +23,7 @@ func TestBuildSupplyLinkCanonicalPath(t *testing.T) {
 			productRef:  strPtr("/product/lithium-carbonate"),
 			customerRef: strPtr("/org/catl"),
 			wantErr:     false,
-			wantPrefix:  "/supply-link/tenant-123/albemarle/lithium-carbonate/catl",
+			wantPath:    "/supply-link/tenant-123/" + buildSupplyLinkEndpointToken("natural", strPtr("/org/albemarle")) + "/" + buildSupplyLinkEndpointToken("", strPtr("/product/lithium-carbonate")) + "/" + buildSupplyLinkEndpointToken("end-consumer", strPtr("/org/catl")),
 		},
 		{
 			name:        "valid supply link without supplier",
@@ -32,7 +32,7 @@ func TestBuildSupplyLinkCanonicalPath(t *testing.T) {
 			productRef:  strPtr("/product/lithium-carbonate"),
 			customerRef: strPtr("/org/catl"),
 			wantErr:     false,
-			wantPrefix:  "/supply-link/tenant-123/natural/lithium-carbonate/catl",
+			wantPath:    "/supply-link/tenant-123/" + buildSupplyLinkEndpointToken("natural", nil) + "/" + buildSupplyLinkEndpointToken("", strPtr("/product/lithium-carbonate")) + "/" + buildSupplyLinkEndpointToken("end-consumer", strPtr("/org/catl")),
 		},
 		{
 			name:        "valid supply link without customer",
@@ -41,7 +41,7 @@ func TestBuildSupplyLinkCanonicalPath(t *testing.T) {
 			productRef:  strPtr("/product/lithium-carbonate"),
 			customerRef: nil,
 			wantErr:     false,
-			wantPrefix:  "/supply-link/tenant-123/albemarle/lithium-carbonate/end-consumer",
+			wantPath:    "/supply-link/tenant-123/" + buildSupplyLinkEndpointToken("natural", strPtr("/org/albemarle")) + "/" + buildSupplyLinkEndpointToken("", strPtr("/product/lithium-carbonate")) + "/" + buildSupplyLinkEndpointToken("end-consumer", nil),
 		},
 		{
 			name:        "valid: global tenant (assumption)",
@@ -50,7 +50,7 @@ func TestBuildSupplyLinkCanonicalPath(t *testing.T) {
 			productRef:  strPtr("/product/lithium-carbonate"),
 			customerRef: strPtr("/org/catl"),
 			wantErr:     false,
-			wantPrefix:  "/supply-link/global/albemarle/lithium-carbonate/catl",
+			wantPath:    "/supply-link/global/" + buildSupplyLinkEndpointToken("natural", strPtr("/org/albemarle")) + "/" + buildSupplyLinkEndpointToken("", strPtr("/product/lithium-carbonate")) + "/" + buildSupplyLinkEndpointToken("end-consumer", strPtr("/org/catl")),
 		},
 		{
 			name:        "error: empty tenant",
@@ -75,7 +75,7 @@ func TestBuildSupplyLinkCanonicalPath(t *testing.T) {
 			productRef:  strPtr("/product/lithium-carbonate"),
 			customerRef: strPtr("/fac/cn/catl-factory-1"),
 			wantErr:     false,
-			wantPrefix:  "/supply-link/tenant-123/albemarle-plant-1/lithium-carbonate/catl-factory-1",
+			wantPath:    "/supply-link/tenant-123/" + buildSupplyLinkEndpointToken("natural", strPtr("/fac/us/albemarle-plant-1")) + "/" + buildSupplyLinkEndpointToken("", strPtr("/product/lithium-carbonate")) + "/" + buildSupplyLinkEndpointToken("end-consumer", strPtr("/fac/cn/catl-factory-1")),
 		},
 	}
 
@@ -91,8 +91,8 @@ func TestBuildSupplyLinkCanonicalPath(t *testing.T) {
 					t.Errorf("BuildSupplyLinkCanonicalPath() returned empty path")
 					return
 				}
-				if tt.wantPrefix != "" && path != tt.wantPrefix {
-					t.Errorf("BuildSupplyLinkCanonicalPath() = %v, want %v", path, tt.wantPrefix)
+				if tt.wantPath != "" && path != tt.wantPath {
+					t.Errorf("BuildSupplyLinkCanonicalPath() = %v, want %v", path, tt.wantPath)
 				}
 			}
 		})
@@ -101,16 +101,16 @@ func TestBuildSupplyLinkCanonicalPath(t *testing.T) {
 
 func TestValidateSupplyLinkFields(t *testing.T) {
 	tests := []struct {
-		name    string
+		name     string
 		fragment *HorizonFragment
-		wantErr bool
+		wantErr  bool
 	}{
 		{
 			name: "valid supply link (facility refs only)",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
-				ProductRef: strPtr("/product/lithium-carbonate"),
+				Type:        FragmentTypeSupplyLink,
+				TenantID:    "tenant-123",
+				ProductRef:  strPtr("/product/lithium-carbonate"),
 				SupplierRef: strPtr("/fac/na/albemarle-general-production"),
 				CustomerRef: strPtr("/fac/cn/catl-general-production"),
 			},
@@ -127,9 +127,9 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 		{
 			name: "valid: global tenant (assumption)",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "global",
-				ProductRef: strPtr("/product/lithium-carbonate"),
+				Type:        FragmentTypeSupplyLink,
+				TenantID:    "global",
+				ProductRef:  strPtr("/product/lithium-carbonate"),
 				SupplierRef: strPtr("/fac/na/albemarle-general-production"),
 			},
 			wantErr: false,
@@ -145,8 +145,8 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 		{
 			name: "error: invalid productRef path",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
+				Type:       FragmentTypeSupplyLink,
+				TenantID:   "tenant-123",
 				ProductRef: strPtr("/org/invalid"),
 			},
 			wantErr: true,
@@ -154,9 +154,9 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 		{
 			name: "error: invalid supplierRef path",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
-				ProductRef: strPtr("/product/lithium-carbonate"),
+				Type:        FragmentTypeSupplyLink,
+				TenantID:    "tenant-123",
+				ProductRef:  strPtr("/product/lithium-carbonate"),
 				SupplierRef: strPtr("/product/invalid"),
 			},
 			wantErr: true,
@@ -164,8 +164,8 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 		{
 			name: "error: both supplier and customer missing",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
+				Type:       FragmentTypeSupplyLink,
+				TenantID:   "tenant-123",
 				ProductRef: strPtr("/product/lithium-carbonate"),
 			},
 			wantErr: true,
@@ -173,9 +173,9 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 		{
 			name: "valid: only supplier",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
-				ProductRef: strPtr("/product/lithium-carbonate"),
+				Type:        FragmentTypeSupplyLink,
+				TenantID:    "tenant-123",
+				ProductRef:  strPtr("/product/lithium-carbonate"),
 				SupplierRef: strPtr("/fac/na/albemarle-general-production"),
 			},
 			wantErr: false,
@@ -183,9 +183,9 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 		{
 			name: "valid: only customer",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
-				ProductRef: strPtr("/product/lithium-carbonate"),
+				Type:        FragmentTypeSupplyLink,
+				TenantID:    "tenant-123",
+				ProductRef:  strPtr("/product/lithium-carbonate"),
 				CustomerRef: strPtr("/fac/cn/catl-general-production"),
 			},
 			wantErr: false,
@@ -193,9 +193,9 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 		{
 			name: "valid: org as supplier (full chain org→fac→product→fac→org)",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
-				ProductRef: strPtr("/product/lithium-carbonate"),
+				Type:        FragmentTypeSupplyLink,
+				TenantID:    "tenant-123",
+				ProductRef:  strPtr("/product/lithium-carbonate"),
 				SupplierRef: strPtr("/org/albemarle"),
 				CustomerRef: strPtr("/fac/cn/catl-general-production"),
 			},
@@ -204,22 +204,33 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 		{
 			name: "valid: org as customer (full chain org→fac→product→fac→org)",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
-				ProductRef: strPtr("/product/lithium-carbonate"),
+				Type:        FragmentTypeSupplyLink,
+				TenantID:    "tenant-123",
+				ProductRef:  strPtr("/product/lithium-carbonate"),
 				SupplierRef: strPtr("/fac/us/albemarle-general-production"),
 				CustomerRef: strPtr("/org/catl"),
 			},
 			wantErr: false,
 		},
 		{
+			name: "valid: gov as supplier/customer",
+			fragment: &HorizonFragment{
+				Type:        FragmentTypeSupplyLink,
+				TenantID:    "tenant-123",
+				ProductRef:  strPtr("/product/lithium-carbonate"),
+				SupplierRef: strPtr("/gov/us/department-of-energy"),
+				CustomerRef: strPtr("/gov/eu/european-commission"),
+			},
+			wantErr: false,
+		},
+		{
 			name: "valid: with transportViaRefs",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
-				ProductRef: strPtr("/product/lithium-carbonate"),
-				SupplierRef: strPtr("/fac/na/albemarle-general-production"),
-				CustomerRef: strPtr("/fac/cn/catl-general-production"),
+				Type:             FragmentTypeSupplyLink,
+				TenantID:         "tenant-123",
+				ProductRef:       strPtr("/product/lithium-carbonate"),
+				SupplierRef:      strPtr("/fac/na/albemarle-general-production"),
+				CustomerRef:      strPtr("/fac/cn/catl-general-production"),
 				TransportViaRefs: []string{"/fac/cl/antofagasta-port", "/fac/cn/shanghai-port"},
 			},
 			wantErr: false,
@@ -227,11 +238,11 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 		{
 			name: "error: invalid transportViaRefs path",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
-				ProductRef: strPtr("/product/lithium-carbonate"),
-				SupplierRef: strPtr("/org/albemarle"),
-				CustomerRef: strPtr("/org/catl"),
+				Type:             FragmentTypeSupplyLink,
+				TenantID:         "tenant-123",
+				ProductRef:       strPtr("/product/lithium-carbonate"),
+				SupplierRef:      strPtr("/org/albemarle"),
+				CustomerRef:      strPtr("/org/catl"),
 				TransportViaRefs: []string{"/org/invalid-port"},
 			},
 			wantErr: true,
@@ -292,10 +303,10 @@ func TestGetSupplyLinkKey(t *testing.T) {
 		{
 			name: "valid supply link key",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
+				Type:        FragmentTypeSupplyLink,
+				TenantID:    "tenant-123",
 				SupplierRef: strPtr("/org/albemarle"),
-				ProductRef: strPtr("/product/lithium-carbonate"),
+				ProductRef:  strPtr("/product/lithium-carbonate"),
 				CustomerRef: strPtr("/org/catl"),
 			},
 			want: "tenant-123:/org/albemarle:/product/lithium-carbonate:/org/catl",
@@ -303,9 +314,9 @@ func TestGetSupplyLinkKey(t *testing.T) {
 		{
 			name: "supply link without supplier",
 			fragment: &HorizonFragment{
-				Type:     FragmentTypeSupplyLink,
-				TenantID: "tenant-123",
-				ProductRef: strPtr("/product/lithium-carbonate"),
+				Type:        FragmentTypeSupplyLink,
+				TenantID:    "tenant-123",
+				ProductRef:  strPtr("/product/lithium-carbonate"),
 				CustomerRef: strPtr("/org/catl"),
 			},
 			want: "tenant-123:natural:/product/lithium-carbonate:/org/catl",
@@ -330,39 +341,39 @@ func TestGetSupplyLinkKey(t *testing.T) {
 
 func TestNormalizeSlug(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input string
-		want string
+		want  string
 	}{
 		{
-			name: "simple slug",
+			name:  "simple slug",
 			input: "albemarle",
-			want: "albemarle",
+			want:  "albemarle",
 		},
 		{
-			name: "with spaces",
+			name:  "with spaces",
 			input: "Albemarle Corporation",
-			want: "albemarle-corporation",
+			want:  "albemarle-corporation",
 		},
 		{
-			name: "with underscores",
+			name:  "with underscores",
 			input: "lithium_carbonate",
-			want: "lithium-carbonate",
+			want:  "lithium-carbonate",
 		},
 		{
-			name: "with special chars",
+			name:  "with special chars",
 			input: "CATL (China)",
-			want: "catl-china",
+			want:  "catl-china",
 		},
 		{
-			name: "consecutive hyphens",
+			name:  "consecutive hyphens",
 			input: "test--slug",
-			want: "test-slug",
+			want:  "test-slug",
 		},
 		{
-			name: "leading/trailing hyphens",
+			name:  "leading/trailing hyphens",
 			input: "-test-slug-",
-			want: "test-slug",
+			want:  "test-slug",
 		},
 	}
 
@@ -384,6 +395,7 @@ func TestNormalizeOrgRefToFacilityFallback(t *testing.T) {
 		{name: "org simple", in: "/org/albemarle", want: "/fac/na/albemarle-general-production"},
 		{name: "org with geo", in: "/org/cn/tsmc", want: "/fac/cn/tsmc-general-production"},
 		{name: "org us", in: "/org/us/albemarle-corp", want: "/fac/us/albemarle-corp-general-production"},
+		{name: "gov with geo", in: "/gov/us/department-of-energy", want: "/fac/us/department-of-energy-general-production"},
 		{name: "fac unchanged", in: "/fac/us/silver-peak", want: "/fac/us/silver-peak"},
 		{name: "deposit unchanged", in: "/deposit/lithium/salar-de-atacama", want: "/deposit/lithium/salar-de-atacama"},
 		{name: "product returns empty", in: "/product/lithium-carbonate", want: ""},
@@ -400,34 +412,34 @@ func TestNormalizeOrgRefToFacilityFallback(t *testing.T) {
 
 func TestExtractSlugFromPath(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input string
-		want string
+		want  string
 	}{
 		{
-			name: "simple path",
+			name:  "simple path",
 			input: "/org/albemarle",
-			want: "albemarle",
+			want:  "albemarle",
 		},
 		{
-			name: "product path",
+			name:  "product path",
 			input: "/product/lithium-carbonate",
-			want: "lithium-carbonate",
+			want:  "lithium-carbonate",
 		},
 		{
-			name: "nested path",
+			name:  "nested path",
 			input: "/product/raw/mineral/lithium",
-			want: "lithium",
+			want:  "lithium",
 		},
 		{
-			name: "empty path",
+			name:  "empty path",
 			input: "",
-			want: "",
+			want:  "",
 		},
 		{
-			name: "just slash",
+			name:  "just slash",
 			input: "/",
-			want: "",
+			want:  "",
 		},
 	}
 
@@ -448,13 +460,13 @@ func strPtr(s string) *string {
 // Test that Validate() automatically generates canonicalPath for SupplyLink
 func TestFragmentValidateAutoGeneratesCanonicalPath(t *testing.T) {
 	f := &HorizonFragment{
-		Type:     FragmentTypeSupplyLink,
-		TenantID: "tenant-123",
-		ProductRef: strPtr("/product/lithium-carbonate"),
+		Type:        FragmentTypeSupplyLink,
+		TenantID:    "tenant-123",
+		ProductRef:  strPtr("/product/lithium-carbonate"),
 		SupplierRef: strPtr("/fac/na/albemarle-general-production"),
 		CustomerRef: strPtr("/fac/cn/catl-general-production"),
-		Governance: Governance{Owner: "SYSTEM"},
-		State: make(map[string]MetricValue),
+		Governance:  Governance{Owner: "SYSTEM"},
+		State:       make(map[string]MetricValue),
 		Metadata: FragmentMetadata{
 			CreatedAt:      time.Now(),
 			LastUpdatedAt:  time.Now(),
@@ -475,4 +487,3 @@ func TestFragmentValidateAutoGeneratesCanonicalPath(t *testing.T) {
 		t.Errorf("canonicalPath = %v, want prefix /supply-link/tenant-123/", f.CanonicalPath)
 	}
 }
-

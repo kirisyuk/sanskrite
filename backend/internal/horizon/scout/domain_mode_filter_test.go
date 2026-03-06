@@ -10,7 +10,7 @@ import (
 
 func TestEdgeAllowlistByDomainMode_SupplyChainIncludesMarketAnchors(t *testing.T) {
 	allow := EdgeAllowlistByDomainMode(taxonomy.DomainModeSupplyChain)
-	operational := []string{"PRODUCES", "CONSUMES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM"}
+	operational := []string{"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM"}
 	for _, ot := range operational {
 		if !AllowlistContains(allow, models.DependencyType(ot)) {
 			t.Fatalf("supply_chain allowlist must include %s", ot)
@@ -20,7 +20,7 @@ func TestEdgeAllowlistByDomainMode_SupplyChainIncludesMarketAnchors(t *testing.T
 		t.Fatalf("supply_chain allowlist must include HAS_MARKET_SEGMENT")
 	}
 	if AllowlistContains(allow, models.DependencyType("DEPENDS_ON")) {
-		t.Fatalf("supply_chain allowlist must exclude DEPENDS_ON (use CONSUMES, SUPPLIES_TO, PARTICIPATES_IN instead)")
+		t.Fatalf("supply_chain allowlist must exclude DEPENDS_ON (use SUPPLIES_TO, PARTICIPATES_IN instead)")
 	}
 }
 
@@ -145,6 +145,37 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChainOwnsAllowedForRelevan
 		}
 		if r.TargetCanonicalPath == "/market/jp/electronics/imaging" {
 			t.Fatalf("market target must not pass supply-chain OWNS predicate")
+		}
+	}
+}
+
+func TestFilterDiscoveredRelationsByDomainModes_SupplyChainControlsAllowedForRelevantPaths(t *testing.T) {
+	govFrag := &models.HorizonFragment{CanonicalPath: "/gov/us/department-of-energy"}
+	in := []agents.DiscoveredRelation{
+		{
+			RelationType:        "CONTROLS",
+			TargetCanonicalPath: "/fac/us/strategic-reserve-terminal",
+		},
+		{
+			RelationType:        "CONTROLS",
+			TargetCanonicalPath: "/org/us/federal-energy-regulatory-commission",
+		},
+		{
+			RelationType:        "CONTROLS",
+			TargetCanonicalPath: "/market/us/energy/oil-gas",
+		},
+	}
+
+	out := filterDiscoveredRelationsByDomainModesWithDomainAnchor(govFrag, in, []string{taxonomy.DomainModeSupplyChain})
+	if len(out) != 2 {
+		t.Fatalf("expected 2 supply-relevant CONTROLS relations, got %d", len(out))
+	}
+	for _, r := range out {
+		if r.RelationType != "CONTROLS" {
+			t.Fatalf("expected CONTROLS relation, got %s", r.RelationType)
+		}
+		if r.TargetCanonicalPath == "/market/us/energy/oil-gas" {
+			t.Fatalf("market target must not pass supply-chain CONTROLS predicate")
 		}
 	}
 }
