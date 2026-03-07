@@ -1,0 +1,4825 @@
+{
+  "schema": "map_activity_index.v1",
+  "generatedAt": "2026-03-06T18:54:46Z",
+  "zones": [
+    {
+      "id": "omn_muscat_sohar_industrial_corridor",
+      "name": "Muscat-Sohar Coastal Industrial Corridor",
+      "countryIso2": "OM",
+      "countryName": "Oman",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "coastal_port_manufacturing",
+      "tags": [
+        "port",
+        "manufacturing",
+        "logistics"
+      ]
+    },
+    {
+      "id": "omn_duqm_sezad",
+      "name": "Duqm SEZAD",
+      "countryIso2": "OM",
+      "countryName": "Oman",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "deepwater_port_industry",
+      "tags": [
+        "sez",
+        "port",
+        "heavy-industry"
+      ]
+    },
+    {
+      "id": "omn_salalah_free_zone",
+      "name": "Salalah Free Zone and Port Belt",
+      "countryIso2": "OM",
+      "countryName": "Oman",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_transshipment",
+      "tags": [
+        "freezone",
+        "port",
+        "shipping"
+      ]
+    },
+    {
+      "id": "sau_jubail_industrial_city",
+      "name": "Jubail Industrial City",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "petrochemical_heavy_industry",
+      "tags": [
+        "petrochem",
+        "export",
+        "heavy-industry"
+      ]
+    },
+    {
+      "id": "sau_yanbu_energy_hub",
+      "name": "Yanbu Energy and Industrial Zone",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "energy_hub",
+      "zoneSubType": "refining_export_terminal",
+      "tags": [
+        "refinery",
+        "energy",
+        "terminal"
+      ]
+    },
+    {
+      "id": "sau_dammam_jubail_port_belt",
+      "name": "Dammam-Jubail Port Belt",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "gulf_port_corridor",
+      "tags": [
+        "port",
+        "corridor",
+        "supply-chain"
+      ]
+    },
+    {
+      "id": "are_jebel_ali_dubai_south",
+      "name": "Jebel Ali and Dubai South",
+      "countryIso2": "AE",
+      "countryName": "United Arab Emirates",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "freezone_port_aircargo",
+      "tags": [
+        "freezone",
+        "port",
+        "aircargo"
+      ]
+    },
+    {
+      "id": "are_kizad_abu_dhabi",
+      "name": "KIZAD Abu Dhabi",
+      "countryIso2": "AE",
+      "countryName": "United Arab Emirates",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "metals_logistics",
+      "tags": [
+        "kizad",
+        "manufacturing",
+        "port"
+      ]
+    },
+    {
+      "id": "are_hamriyah_sharjah",
+      "name": "Hamriyah-Sharjah Industrial Coast",
+      "countryIso2": "AE",
+      "countryName": "United Arab Emirates",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "freezone_port",
+      "tags": [
+        "freezone",
+        "warehousing",
+        "shipping"
+      ]
+    },
+    {
+      "id": "ind_gujarat_pcpir",
+      "name": "Gujarat Coastal Industry Belt",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "petrochem_refining",
+      "tags": [
+        "petrochem",
+        "coast",
+        "export"
+      ]
+    },
+    {
+      "id": "ind_chennai_sriperumbudur",
+      "name": "Chennai-Sriperumbudur Manufacturing Belt",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "auto_electronics",
+      "tags": [
+        "automotive",
+        "electronics",
+        "assembly"
+      ]
+    },
+    {
+      "id": "ind_mundra_kandla_port_industry",
+      "name": "Mundra-Kandla Port Industry Belt",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_industry",
+      "tags": [
+        "ports",
+        "containers",
+        "logistics"
+      ]
+    },
+    {
+      "id": "chn_yangtze_delta",
+      "name": "Yangtze River Delta",
+      "countryIso2": "CN",
+      "countryName": "China",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "advanced_manufacturing_export",
+      "tags": [
+        "manufacturing",
+        "export",
+        "high-tech"
+      ]
+    },
+    {
+      "id": "chn_pearl_river_delta",
+      "name": "Pearl River Delta",
+      "countryIso2": "CN",
+      "countryName": "China",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "electronics_export",
+      "tags": [
+        "electronics",
+        "assembly",
+        "export"
+      ]
+    },
+    {
+      "id": "chn_bohai_rim",
+      "name": "Bohai Rim Industry Belt",
+      "countryIso2": "CN",
+      "countryName": "China",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "heavy_industry_ports",
+      "tags": [
+        "steel",
+        "ports",
+        "heavy-industry"
+      ]
+    },
+    {
+      "id": "vnm_haiphong_bacninh",
+      "name": "Hai Phong-Bac Ninh Industrial Corridor",
+      "countryIso2": "VN",
+      "countryName": "Vietnam",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "electronics_manufacturing",
+      "tags": [
+        "electronics",
+        "ports",
+        "export"
+      ]
+    },
+    {
+      "id": "vnm_hcm_binhduong_longan",
+      "name": "HCMC-Binh Duong-Long An Belt",
+      "countryIso2": "VN",
+      "countryName": "Vietnam",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "assembly_export",
+      "tags": [
+        "assembly",
+        "export",
+        "urban-industry"
+      ]
+    },
+    {
+      "id": "vnm_danang_quangnam",
+      "name": "Da Nang-Quang Nam Industry Coast",
+      "countryIso2": "VN",
+      "countryName": "Vietnam",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_industry",
+      "tags": [
+        "ports",
+        "coastal",
+        "regional-hub"
+      ]
+    },
+    {
+      "id": "idn_greater_jakarta_ring",
+      "name": "Greater Jakarta Industrial Ring",
+      "countryIso2": "ID",
+      "countryName": "Indonesia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "megacity_manufacturing",
+      "tags": [
+        "megacity",
+        "manufacturing",
+        "distribution"
+      ]
+    },
+    {
+      "id": "idn_batam_bintan_ftz",
+      "name": "Batam-Bintan FTZ",
+      "countryIso2": "ID",
+      "countryName": "Indonesia",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "ftz_shipbuilding_electronics",
+      "tags": [
+        "ftz",
+        "shipbuilding",
+        "electronics"
+      ]
+    },
+    {
+      "id": "idn_east_java_surabaya_gresik",
+      "name": "East Java Surabaya-Gresik Belt",
+      "countryIso2": "ID",
+      "countryName": "Indonesia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_industry",
+      "tags": [
+        "port",
+        "distribution",
+        "industry"
+      ]
+    },
+    {
+      "id": "tur_marmara_belt",
+      "name": "Marmara Industrial Belt",
+      "countryIso2": "TR",
+      "countryName": "Turkey",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "automotive_metals",
+      "tags": [
+        "automotive",
+        "metals",
+        "exports"
+      ]
+    },
+    {
+      "id": "tur_izmir_aliaga",
+      "name": "Izmir-Aliaga Energy and Petrochem Zone",
+      "countryIso2": "TR",
+      "countryName": "Turkey",
+      "zoneType": "energy_hub",
+      "zoneSubType": "petrochem_refinery",
+      "tags": [
+        "petrochem",
+        "refinery",
+        "terminal"
+      ]
+    },
+    {
+      "id": "tur_iskenderun_axis",
+      "name": "Iskenderun Port and Industry Axis",
+      "countryIso2": "TR",
+      "countryName": "Turkey",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_steel",
+      "tags": [
+        "port",
+        "steel",
+        "shipping"
+      ]
+    },
+    {
+      "id": "deu_rhine_ruhr",
+      "name": "Rhine-Ruhr Industrial Cluster",
+      "countryIso2": "DE",
+      "countryName": "Germany",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "machinery_chemicals_metals",
+      "tags": [
+        "machinery",
+        "chemicals",
+        "rail"
+      ]
+    },
+    {
+      "id": "deu_hamburg_port",
+      "name": "Hamburg Port Logistics Zone",
+      "countryIso2": "DE",
+      "countryName": "Germany",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_distribution",
+      "tags": [
+        "container",
+        "port",
+        "river"
+      ]
+    },
+    {
+      "id": "deu_ludwigshafen_chem_belt",
+      "name": "Ludwigshafen-Mannheim Chemical Belt",
+      "countryIso2": "DE",
+      "countryName": "Germany",
+      "zoneType": "energy_hub",
+      "zoneSubType": "chemical_feedstock",
+      "tags": [
+        "chemicals",
+        "feedstock",
+        "industry"
+      ]
+    },
+    {
+      "id": "nld_rotterdam_rijnmond",
+      "name": "Rotterdam-Rijnmond Complex",
+      "countryIso2": "NL",
+      "countryName": "Netherlands",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_petrochem",
+      "tags": [
+        "port",
+        "petrochem",
+        "gateway"
+      ]
+    },
+    {
+      "id": "nld_brainport_eindhoven",
+      "name": "Brainport Eindhoven",
+      "countryIso2": "NL",
+      "countryName": "Netherlands",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "hightech_semiconductor",
+      "tags": [
+        "hightech",
+        "semiconductor",
+        "r-and-d"
+      ]
+    },
+    {
+      "id": "nld_north_sea_canal",
+      "name": "North Sea Canal Industry Zone",
+      "countryIso2": "NL",
+      "countryName": "Netherlands",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "canal_port_industry",
+      "tags": [
+        "canal",
+        "ports",
+        "distribution"
+      ]
+    },
+    {
+      "id": "usa_houston_ship_channel",
+      "name": "Houston Ship Channel",
+      "countryIso2": "US",
+      "countryName": "United States",
+      "zoneType": "energy_hub",
+      "zoneSubType": "refining_petrochem",
+      "tags": [
+        "refinery",
+        "petrochem",
+        "shipping"
+      ]
+    },
+    {
+      "id": "usa_great_lakes_manufacturing",
+      "name": "Great Lakes Manufacturing Belt",
+      "countryIso2": "US",
+      "countryName": "United States",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "automotive_machinery",
+      "tags": [
+        "automotive",
+        "machinery",
+        "industrial-belt"
+      ]
+    },
+    {
+      "id": "usa_la_long_beach",
+      "name": "LA-Long Beach Logistics Complex",
+      "countryIso2": "US",
+      "countryName": "United States",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "container_ports",
+      "tags": [
+        "containers",
+        "pacific",
+        "imports"
+      ]
+    },
+    {
+      "id": "mex_monterrey_industrial",
+      "name": "Monterrey Industrial Region",
+      "countryIso2": "MX",
+      "countryName": "Mexico",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "manufacturing_metalworking",
+      "tags": [
+        "manufacturing",
+        "nearshoring",
+        "metals"
+      ]
+    },
+    {
+      "id": "mex_bajio_auto_corridor",
+      "name": "Bajio Automotive Corridor",
+      "countryIso2": "MX",
+      "countryName": "Mexico",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "automotive_supply_chain",
+      "tags": [
+        "automotive",
+        "suppliers",
+        "exports"
+      ]
+    },
+    {
+      "id": "mex_baja_maquiladora",
+      "name": "Baja Maquiladora Belt",
+      "countryIso2": "MX",
+      "countryName": "Mexico",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "border_assembly",
+      "tags": [
+        "maquiladora",
+        "border",
+        "assembly"
+      ]
+    },
+    {
+      "id": "sau_riyadh_industrial_belt",
+      "name": "Riyadh Industrial Belt",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_manufacturing",
+      "tags": [
+        "manufacturing",
+        "distribution",
+        "capital"
+      ]
+    },
+    {
+      "id": "sau_ras_al_khair_minerals_energy",
+      "name": "Ras Al-Khair Minerals and Energy Zone",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "energy_hub",
+      "zoneSubType": "metals_energy",
+      "tags": [
+        "minerals",
+        "metals",
+        "energy"
+      ]
+    },
+    {
+      "id": "sau_jazan_economic_city",
+      "name": "Jazan Economic City",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "port_industry",
+      "tags": [
+        "sez",
+        "port",
+        "processing"
+      ]
+    },
+    {
+      "id": "sau_neom_oxagon_redsea",
+      "name": "NEOM-Oxagon Red Sea Zone",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "new_industrial_city",
+      "tags": [
+        "sez",
+        "red-sea",
+        "new-industrial"
+      ]
+    },
+    {
+      "id": "sau_rabigh_petrochem_corridor",
+      "name": "Rabigh Petrochemical Corridor",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "energy_hub",
+      "zoneSubType": "petrochem_refining",
+      "tags": [
+        "petrochem",
+        "refinery",
+        "export"
+      ]
+    },
+    {
+      "id": "sau_spark_dammam_energypark",
+      "name": "SPARK-Dammam Energy Park",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "energy_services_manufacturing",
+      "tags": [
+        "energy-services",
+        "manufacturing",
+        "suppliers"
+      ]
+    },
+    {
+      "id": "sau_mecca_jeddah_logistics_arc",
+      "name": "Mecca-Jeddah Logistics Arc",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_air_road_arc",
+      "tags": [
+        "port",
+        "air",
+        "distribution"
+      ]
+    },
+    {
+      "id": "sau_tabuk_green_industry",
+      "name": "Tabuk Emerging Industry Zone",
+      "countryIso2": "SA",
+      "countryName": "Saudi Arabia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "emerging_northern_industry",
+      "tags": [
+        "northern",
+        "manufacturing",
+        "infrastructure"
+      ]
+    },
+    {
+      "id": "qat_ras_laffan_energy_city",
+      "name": "Ras Laffan Energy City",
+      "countryIso2": "QA",
+      "countryName": "Qatar",
+      "zoneType": "energy_hub",
+      "zoneSubType": "lng_processing_export",
+      "tags": [
+        "lng",
+        "energy",
+        "export"
+      ]
+    },
+    {
+      "id": "qat_mesaieed_industrial_city",
+      "name": "Mesaieed Industrial City",
+      "countryIso2": "QA",
+      "countryName": "Qatar",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "petrochem_metals",
+      "tags": [
+        "industrial",
+        "petrochem",
+        "metals"
+      ]
+    },
+    {
+      "id": "qat_hamad_port_logistics",
+      "name": "Hamad Port Logistics Zone",
+      "countryIso2": "QA",
+      "countryName": "Qatar",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_distribution",
+      "tags": [
+        "port",
+        "containers",
+        "distribution"
+      ]
+    },
+    {
+      "id": "kwt_al_ahmadi_shuaiba_corridor",
+      "name": "Al Ahmadi-Shuaiba Energy Corridor",
+      "countryIso2": "KW",
+      "countryName": "Kuwait",
+      "zoneType": "energy_hub",
+      "zoneSubType": "refining_export",
+      "tags": [
+        "refining",
+        "energy",
+        "export"
+      ]
+    },
+    {
+      "id": "kwt_shuwaikh_doha_port_belt",
+      "name": "Shuwaikh-Doha Port Belt",
+      "countryIso2": "KW",
+      "countryName": "Kuwait",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "urban_ports",
+      "tags": [
+        "port",
+        "urban-logistics",
+        "imports"
+      ]
+    },
+    {
+      "id": "bhr_hidd_sitra_industry",
+      "name": "Hidd-Sitra Industrial Zone",
+      "countryIso2": "BH",
+      "countryName": "Bahrain",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "port_industry",
+      "tags": [
+        "port",
+        "industry",
+        "island"
+      ]
+    },
+    {
+      "id": "bhr_bapco_energy_belt",
+      "name": "BAPCO Energy Belt",
+      "countryIso2": "BH",
+      "countryName": "Bahrain",
+      "zoneType": "energy_hub",
+      "zoneSubType": "refining_storage",
+      "tags": [
+        "refinery",
+        "storage",
+        "energy"
+      ]
+    },
+    {
+      "id": "are_ruwais_energy_complex",
+      "name": "Ruwais Energy Complex",
+      "countryIso2": "AE",
+      "countryName": "United Arab Emirates",
+      "zoneType": "energy_hub",
+      "zoneSubType": "refining_petrochem",
+      "tags": [
+        "refinery",
+        "petrochem",
+        "export"
+      ]
+    },
+    {
+      "id": "are_fujairah_energy_terminal",
+      "name": "Fujairah Energy Terminal Zone",
+      "countryIso2": "AE",
+      "countryName": "United Arab Emirates",
+      "zoneType": "energy_hub",
+      "zoneSubType": "storage_bunkering_terminal",
+      "tags": [
+        "terminal",
+        "storage",
+        "bunkering"
+      ]
+    },
+    {
+      "id": "omn_barka_rusayl_industry_arc",
+      "name": "Barka-Rusayl Industry Arc",
+      "countryIso2": "OM",
+      "countryName": "Oman",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_adjacent_industry",
+      "tags": [
+        "capital",
+        "manufacturing",
+        "corridor"
+      ]
+    },
+    {
+      "id": "isr_haifa_bay_industrial_port",
+      "name": "Haifa Bay Industrial Port",
+      "countryIso2": "IL",
+      "countryName": "Israel",
+      "zoneType": "energy_hub",
+      "zoneSubType": "port_refining_industry",
+      "tags": [
+        "port",
+        "refining",
+        "industry"
+      ]
+    },
+    {
+      "id": "isr_ashdod_ashkelon_port_belt",
+      "name": "Ashdod-Ashkelon Port Belt",
+      "countryIso2": "IL",
+      "countryName": "Israel",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "south_coast_ports",
+      "tags": [
+        "ports",
+        "containers",
+        "coastal"
+      ]
+    },
+    {
+      "id": "isr_telaviv_gushdan_tech_logistics",
+      "name": "Tel Aviv-Gush Dan Tech and Logistics Zone",
+      "countryIso2": "IL",
+      "countryName": "Israel",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "tech_logistics",
+      "tags": [
+        "tech",
+        "data",
+        "logistics"
+      ]
+    },
+    {
+      "id": "isr_negev_defense_industry",
+      "name": "Negev Defense Industry Corridor",
+      "countryIso2": "IL",
+      "countryName": "Israel",
+      "zoneType": "military_industrial",
+      "zoneSubType": "defense_systems",
+      "tags": [
+        "defense",
+        "systems",
+        "manufacturing"
+      ]
+    },
+    {
+      "id": "egy_suez_canal_economic_zone",
+      "name": "Suez Canal Economic Zone",
+      "countryIso2": "EG",
+      "countryName": "Egypt",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "canal_ports_industry",
+      "tags": [
+        "canal",
+        "ports",
+        "industry"
+      ]
+    },
+    {
+      "id": "egy_ain_sokhna_energy_industry",
+      "name": "Ain Sokhna Energy and Industry Zone",
+      "countryIso2": "EG",
+      "countryName": "Egypt",
+      "zoneType": "energy_hub",
+      "zoneSubType": "port_energy_industry",
+      "tags": [
+        "energy",
+        "port",
+        "industry"
+      ]
+    },
+    {
+      "id": "egy_greater_cairo_industrial_ring",
+      "name": "Greater Cairo Industrial Ring",
+      "countryIso2": "EG",
+      "countryName": "Egypt",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_manufacturing_ring",
+      "tags": [
+        "capital",
+        "manufacturing",
+        "labor"
+      ]
+    },
+    {
+      "id": "egy_alexandria_amreya_port_industry",
+      "name": "Alexandria-Amreya Port Industry Zone",
+      "countryIso2": "EG",
+      "countryName": "Egypt",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "mediterranean_port_industry",
+      "tags": [
+        "mediterranean",
+        "port",
+        "industry"
+      ]
+    },
+    {
+      "id": "egy_portsaid_damietta_corridor",
+      "name": "Port Said-Damietta Corridor",
+      "countryIso2": "EG",
+      "countryName": "Egypt",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "canal_mediterranean_gate",
+      "tags": [
+        "canal",
+        "gateway",
+        "shipping"
+      ]
+    },
+    {
+      "id": "egy_upper_egypt_mining_processing",
+      "name": "Upper Egypt Mining and Processing Zone",
+      "countryIso2": "EG",
+      "countryName": "Egypt",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "mining_processing",
+      "tags": [
+        "mining",
+        "processing",
+        "raw-materials"
+      ]
+    },
+    {
+      "id": "mar_tangier_med_industry",
+      "name": "Tangier Med Industry Zone",
+      "countryIso2": "MA",
+      "countryName": "Morocco",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "strait_port_complex",
+      "tags": [
+        "strait",
+        "port",
+        "manufacturing"
+      ]
+    },
+    {
+      "id": "mar_casablanca_kenitra_belt",
+      "name": "Casablanca-Kenitra Industrial Belt",
+      "countryIso2": "MA",
+      "countryName": "Morocco",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "atlantic_manufacturing",
+      "tags": [
+        "manufacturing",
+        "atlantic",
+        "assembly"
+      ]
+    },
+    {
+      "id": "mar_jorf_lasfar_energy_port",
+      "name": "Jorf Lasfar Energy Port Zone",
+      "countryIso2": "MA",
+      "countryName": "Morocco",
+      "zoneType": "energy_hub",
+      "zoneSubType": "phosphate_energy_export",
+      "tags": [
+        "energy",
+        "port",
+        "processing"
+      ]
+    },
+    {
+      "id": "dza_arzew_oran_petrochem",
+      "name": "Arzew-Oran Petrochemical Zone",
+      "countryIso2": "DZ",
+      "countryName": "Algeria",
+      "zoneType": "energy_hub",
+      "zoneSubType": "petrochem_gas",
+      "tags": [
+        "petrochem",
+        "gas",
+        "export"
+      ]
+    },
+    {
+      "id": "dza_algiers_blida_industry",
+      "name": "Algiers-Blida Industry Belt",
+      "countryIso2": "DZ",
+      "countryName": "Algeria",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_industry",
+      "tags": [
+        "capital",
+        "manufacturing",
+        "distribution"
+      ]
+    },
+    {
+      "id": "dza_annaba_skikda_industry",
+      "name": "Annaba-Skikda Industrial Coast",
+      "countryIso2": "DZ",
+      "countryName": "Algeria",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "east_coast_industry",
+      "tags": [
+        "coast",
+        "industry",
+        "ports"
+      ]
+    },
+    {
+      "id": "tun_tunis_bizerte_corridor",
+      "name": "Tunis-Bizerte Logistics Corridor",
+      "countryIso2": "TN",
+      "countryName": "Tunisia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "capital_port_corridor",
+      "tags": [
+        "ports",
+        "capital",
+        "logistics"
+      ]
+    },
+    {
+      "id": "tun_sfax_gabes_industry_coast",
+      "name": "Sfax-Gabes Industry Coast",
+      "countryIso2": "TN",
+      "countryName": "Tunisia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "south_coast_processing",
+      "tags": [
+        "processing",
+        "coast",
+        "industry"
+      ]
+    },
+    {
+      "id": "lby_tripoli_misrata_coast",
+      "name": "Tripoli-Misrata Coast Logistics Zone",
+      "countryIso2": "LY",
+      "countryName": "Libya",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "western_coast_ports",
+      "tags": [
+        "ports",
+        "coast",
+        "distribution"
+      ]
+    },
+    {
+      "id": "lby_sirte_oil_crescent",
+      "name": "Sirte Oil Crescent",
+      "countryIso2": "LY",
+      "countryName": "Libya",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "oil_extraction_terminals",
+      "tags": [
+        "oil",
+        "terminals",
+        "extraction"
+      ]
+    },
+    {
+      "id": "bra_sao_paulo_campinas_macrozone",
+      "name": "Sao Paulo-Campinas Macrozone",
+      "countryIso2": "BR",
+      "countryName": "Brazil",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "manufacturing_megacluster",
+      "tags": [
+        "manufacturing",
+        "suppliers",
+        "megacity"
+      ]
+    },
+    {
+      "id": "bra_santos_port_industry",
+      "name": "Santos Port Industry Belt",
+      "countryIso2": "BR",
+      "countryName": "Brazil",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_export_corridor",
+      "tags": [
+        "port",
+        "exports",
+        "containers"
+      ]
+    },
+    {
+      "id": "bra_rio_dejaneiro_energy_bay",
+      "name": "Rio de Janeiro Energy Bay",
+      "countryIso2": "BR",
+      "countryName": "Brazil",
+      "zoneType": "energy_hub",
+      "zoneSubType": "offshore_processing",
+      "tags": [
+        "energy",
+        "offshore",
+        "processing"
+      ]
+    },
+    {
+      "id": "bra_minas_gerais_metal_belt",
+      "name": "Minas Gerais Metals Belt",
+      "countryIso2": "BR",
+      "countryName": "Brazil",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "ore_metals_processing",
+      "tags": [
+        "ore",
+        "metals",
+        "processing"
+      ]
+    },
+    {
+      "id": "bra_manaus_free_zone",
+      "name": "Manaus Free Zone",
+      "countryIso2": "BR",
+      "countryName": "Brazil",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "free_zone_assembly",
+      "tags": [
+        "free-zone",
+        "assembly",
+        "electronics"
+      ]
+    },
+    {
+      "id": "bra_northeast_suape_complex",
+      "name": "Northeast Suape Complex",
+      "countryIso2": "BR",
+      "countryName": "Brazil",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_industry_complex",
+      "tags": [
+        "port",
+        "industry",
+        "northeast"
+      ]
+    },
+    {
+      "id": "arg_buenosaires_laplata_belt",
+      "name": "Buenos Aires-La Plata Belt",
+      "countryIso2": "AR",
+      "countryName": "Argentina",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "river_port_industry",
+      "tags": [
+        "river",
+        "ports",
+        "industry"
+      ]
+    },
+    {
+      "id": "arg_rosario_parana_agro_industry",
+      "name": "Rosario-Parana Agro Industry Corridor",
+      "countryIso2": "AR",
+      "countryName": "Argentina",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "agro_processing_river",
+      "tags": [
+        "agro",
+        "processing",
+        "river"
+      ]
+    },
+    {
+      "id": "arg_cordoba_automotive_cluster",
+      "name": "Cordoba Automotive Cluster",
+      "countryIso2": "AR",
+      "countryName": "Argentina",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "automotive_machinery",
+      "tags": [
+        "automotive",
+        "machinery",
+        "suppliers"
+      ]
+    },
+    {
+      "id": "arg_vaca_muerta_energy_zone",
+      "name": "Vaca Muerta Energy Zone",
+      "countryIso2": "AR",
+      "countryName": "Argentina",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "oil_gas_extraction",
+      "tags": [
+        "oil",
+        "gas",
+        "extraction"
+      ]
+    },
+    {
+      "id": "chl_antofagasta_mining_corridor",
+      "name": "Antofagasta Mining Corridor",
+      "countryIso2": "CL",
+      "countryName": "Chile",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "copper_lithium_mining",
+      "tags": [
+        "mining",
+        "copper",
+        "lithium"
+      ]
+    },
+    {
+      "id": "chl_valparaiso_sanantonio_ports",
+      "name": "Valparaiso-San Antonio Ports",
+      "countryIso2": "CL",
+      "countryName": "Chile",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "pacific_ports",
+      "tags": [
+        "ports",
+        "pacific",
+        "containers"
+      ]
+    },
+    {
+      "id": "chl_santiago_industrial_ring",
+      "name": "Santiago Industrial Ring",
+      "countryIso2": "CL",
+      "countryName": "Chile",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_industry",
+      "tags": [
+        "capital",
+        "industry",
+        "distribution"
+      ]
+    },
+    {
+      "id": "per_lima_callao_complex",
+      "name": "Lima-Callao Complex",
+      "countryIso2": "PE",
+      "countryName": "Peru",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "capital_port_complex",
+      "tags": [
+        "port",
+        "capital",
+        "logistics"
+      ]
+    },
+    {
+      "id": "per_southern_mining_belt",
+      "name": "Southern Peru Mining Belt",
+      "countryIso2": "PE",
+      "countryName": "Peru",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "andes_mining",
+      "tags": [
+        "mining",
+        "andes",
+        "ore"
+      ]
+    },
+    {
+      "id": "per_piura_talara_energy_coast",
+      "name": "Piura-Talara Energy Coast",
+      "countryIso2": "PE",
+      "countryName": "Peru",
+      "zoneType": "energy_hub",
+      "zoneSubType": "coastal_energy",
+      "tags": [
+        "energy",
+        "coast",
+        "processing"
+      ]
+    },
+    {
+      "id": "col_barranquilla_cartagena_corridor",
+      "name": "Barranquilla-Cartagena Corridor",
+      "countryIso2": "CO",
+      "countryName": "Colombia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "caribbean_ports",
+      "tags": [
+        "caribbean",
+        "ports",
+        "logistics"
+      ]
+    },
+    {
+      "id": "col_bogota_sabana_industry",
+      "name": "Bogota Sabana Industry Zone",
+      "countryIso2": "CO",
+      "countryName": "Colombia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_industry",
+      "tags": [
+        "capital",
+        "industry",
+        "distribution"
+      ]
+    },
+    {
+      "id": "col_medellin_valley_cluster",
+      "name": "Medellin Valley Cluster",
+      "countryIso2": "CO",
+      "countryName": "Colombia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "valley_manufacturing",
+      "tags": [
+        "manufacturing",
+        "valley",
+        "suppliers"
+      ]
+    },
+    {
+      "id": "ecu_guayaquil_port_belt",
+      "name": "Guayaquil Port Belt",
+      "countryIso2": "EC",
+      "countryName": "Ecuador",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_export",
+      "tags": [
+        "port",
+        "export",
+        "containers"
+      ]
+    },
+    {
+      "id": "ecu_quito_central_industry",
+      "name": "Quito Central Industry Zone",
+      "countryIso2": "EC",
+      "countryName": "Ecuador",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "highland_industry",
+      "tags": [
+        "highland",
+        "industry",
+        "distribution"
+      ]
+    },
+    {
+      "id": "bol_santa_cruz_agro_industry",
+      "name": "Santa Cruz Agro Industry Zone",
+      "countryIso2": "BO",
+      "countryName": "Bolivia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "agro_processing",
+      "tags": [
+        "agro",
+        "processing",
+        "supply-chain"
+      ]
+    },
+    {
+      "id": "pry_asuncion_river_logistics",
+      "name": "Asuncion River Logistics Zone",
+      "countryIso2": "PY",
+      "countryName": "Paraguay",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "river_logistics",
+      "tags": [
+        "river",
+        "logistics",
+        "distribution"
+      ]
+    },
+    {
+      "id": "ury_montevideo_port_industry",
+      "name": "Montevideo Port Industry Zone",
+      "countryIso2": "UY",
+      "countryName": "Uruguay",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_industry",
+      "tags": [
+        "port",
+        "industry",
+        "atlantic"
+      ]
+    },
+    {
+      "id": "pan_canal_logistics_axis",
+      "name": "Panama Canal Logistics Axis",
+      "countryIso2": "PA",
+      "countryName": "Panama",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "canal_axis",
+      "tags": [
+        "canal",
+        "transit",
+        "global-shipping"
+      ]
+    },
+    {
+      "id": "pan_colon_free_zone",
+      "name": "Colon Free Zone",
+      "countryIso2": "PA",
+      "countryName": "Panama",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "freezone_distribution",
+      "tags": [
+        "freezone",
+        "distribution",
+        "trade"
+      ]
+    },
+    {
+      "id": "pan_pacific_logistics_park",
+      "name": "Pacific Logistics Park",
+      "countryIso2": "PA",
+      "countryName": "Panama",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "pacific_terminal_cluster",
+      "tags": [
+        "pacific",
+        "terminal",
+        "logistics"
+      ]
+    },
+    {
+      "id": "cri_gam_hightech_corridor",
+      "name": "GAM High-Tech Corridor",
+      "countryIso2": "CR",
+      "countryName": "Costa Rica",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "hightech_services",
+      "tags": [
+        "high-tech",
+        "services",
+        "data"
+      ]
+    },
+    {
+      "id": "cri_limon_caribbean_logistics",
+      "name": "Limon Caribbean Logistics Zone",
+      "countryIso2": "CR",
+      "countryName": "Costa Rica",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "caribbean_port",
+      "tags": [
+        "caribbean",
+        "port",
+        "logistics"
+      ]
+    },
+    {
+      "id": "gtm_central_south_logistics",
+      "name": "Central-South Logistics Corridor",
+      "countryIso2": "GT",
+      "countryName": "Guatemala",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "capital_to_port_corridor",
+      "tags": [
+        "corridor",
+        "port-link",
+        "distribution"
+      ]
+    },
+    {
+      "id": "gtm_puerto_quetzal_industry",
+      "name": "Puerto Quetzal Industry Zone",
+      "countryIso2": "GT",
+      "countryName": "Guatemala",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "port_industry",
+      "tags": [
+        "port",
+        "industry",
+        "exports"
+      ]
+    },
+    {
+      "id": "hnd_sanpedro_sula_maquila",
+      "name": "San Pedro Sula Maquila Zone",
+      "countryIso2": "HN",
+      "countryName": "Honduras",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "maquila_manufacturing",
+      "tags": [
+        "maquila",
+        "manufacturing",
+        "suppliers"
+      ]
+    },
+    {
+      "id": "hnd_puerto_cortes_logistics",
+      "name": "Puerto Cortes Logistics Zone",
+      "countryIso2": "HN",
+      "countryName": "Honduras",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "caribbean_port",
+      "tags": [
+        "port",
+        "caribbean",
+        "shipping"
+      ]
+    },
+    {
+      "id": "slv_sansalvador_lalibertad_corridor",
+      "name": "San Salvador-La Libertad Corridor",
+      "countryIso2": "SV",
+      "countryName": "El Salvador",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_coast_corridor",
+      "tags": [
+        "capital",
+        "coast",
+        "industry"
+      ]
+    },
+    {
+      "id": "nic_managua_pacific_belt",
+      "name": "Managua Pacific Belt",
+      "countryIso2": "NI",
+      "countryName": "Nicaragua",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "pacific_manufacturing",
+      "tags": [
+        "pacific",
+        "manufacturing",
+        "distribution"
+      ]
+    },
+    {
+      "id": "kaz_almaty_industrial_ring",
+      "name": "Almaty Industrial Ring",
+      "countryIso2": "KZ",
+      "countryName": "Kazakhstan",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "metro_manufacturing",
+      "tags": [
+        "manufacturing",
+        "metro",
+        "distribution"
+      ]
+    },
+    {
+      "id": "kaz_astana_logistics_hub",
+      "name": "Astana Logistics Hub",
+      "countryIso2": "KZ",
+      "countryName": "Kazakhstan",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "rail_road_hub",
+      "tags": [
+        "rail",
+        "road",
+        "distribution"
+      ]
+    },
+    {
+      "id": "kaz_atyrau_caspian_energy",
+      "name": "Atyrau Caspian Energy Zone",
+      "countryIso2": "KZ",
+      "countryName": "Kazakhstan",
+      "zoneType": "energy_hub",
+      "zoneSubType": "caspian_oil_gas",
+      "tags": [
+        "oil",
+        "gas",
+        "caspian"
+      ]
+    },
+    {
+      "id": "kaz_aktau_port_corridor",
+      "name": "Aktau Port Corridor",
+      "countryIso2": "KZ",
+      "countryName": "Kazakhstan",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "caspian_port",
+      "tags": [
+        "port",
+        "caspian",
+        "corridor"
+      ]
+    },
+    {
+      "id": "kaz_karaganda_metals_cluster",
+      "name": "Karaganda Metals Cluster",
+      "countryIso2": "KZ",
+      "countryName": "Kazakhstan",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "coal_metals_processing",
+      "tags": [
+        "coal",
+        "metals",
+        "processing"
+      ]
+    },
+    {
+      "id": "kaz_shymkent_chem_industry",
+      "name": "Shymkent Chemical Industry Belt",
+      "countryIso2": "KZ",
+      "countryName": "Kazakhstan",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "chem_light_industry",
+      "tags": [
+        "chemical",
+        "industry",
+        "southern"
+      ]
+    },
+    {
+      "id": "uzb_tashkent_industrial_arc",
+      "name": "Tashkent Industrial Arc",
+      "countryIso2": "UZ",
+      "countryName": "Uzbekistan",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_manufacturing",
+      "tags": [
+        "capital",
+        "manufacturing",
+        "suppliers"
+      ]
+    },
+    {
+      "id": "uzb_navoi_mining_logistics",
+      "name": "Navoi Mining and Logistics Zone",
+      "countryIso2": "UZ",
+      "countryName": "Uzbekistan",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "mining_processing_logistics",
+      "tags": [
+        "mining",
+        "processing",
+        "logistics"
+      ]
+    },
+    {
+      "id": "uzb_fergana_valley_industry",
+      "name": "Fergana Valley Industry Zone",
+      "countryIso2": "UZ",
+      "countryName": "Uzbekistan",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "valley_manufacturing",
+      "tags": [
+        "valley",
+        "industry",
+        "labor"
+      ]
+    },
+    {
+      "id": "uzb_bukhara_energy_belt",
+      "name": "Bukhara Energy Belt",
+      "countryIso2": "UZ",
+      "countryName": "Uzbekistan",
+      "zoneType": "energy_hub",
+      "zoneSubType": "gas_processing",
+      "tags": [
+        "gas",
+        "processing",
+        "energy"
+      ]
+    },
+    {
+      "id": "uzb_syrdarya_jizzakh_sez",
+      "name": "Syrdarya-Jizzakh SEZ Belt",
+      "countryIso2": "UZ",
+      "countryName": "Uzbekistan",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "sez_manufacturing",
+      "tags": [
+        "sez",
+        "manufacturing",
+        "exports"
+      ]
+    },
+    {
+      "id": "tkm_turkmenbashi_port_energy",
+      "name": "Turkmenbashi Port Energy Zone",
+      "countryIso2": "TM",
+      "countryName": "Turkmenistan",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "caspian_port_energy",
+      "tags": [
+        "port",
+        "caspian",
+        "energy"
+      ]
+    },
+    {
+      "id": "tkm_ashgabat_industry_ring",
+      "name": "Ashgabat Industry Ring",
+      "countryIso2": "TM",
+      "countryName": "Turkmenistan",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_industry",
+      "tags": [
+        "capital",
+        "industry",
+        "distribution"
+      ]
+    },
+    {
+      "id": "tkm_mary_gas_processing",
+      "name": "Mary Gas Processing Zone",
+      "countryIso2": "TM",
+      "countryName": "Turkmenistan",
+      "zoneType": "energy_hub",
+      "zoneSubType": "gas_processing",
+      "tags": [
+        "gas",
+        "processing",
+        "energy"
+      ]
+    },
+    {
+      "id": "kgz_bishkek_chuy_industry",
+      "name": "Bishkek-Chuy Industry Zone",
+      "countryIso2": "KG",
+      "countryName": "Kyrgyzstan",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "valley_industry",
+      "tags": [
+        "valley",
+        "industry",
+        "distribution"
+      ]
+    },
+    {
+      "id": "kgz_osh_fergana_trade_corridor",
+      "name": "Osh Fergana Trade Corridor",
+      "countryIso2": "KG",
+      "countryName": "Kyrgyzstan",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "crossborder_trade",
+      "tags": [
+        "crossborder",
+        "trade",
+        "corridor"
+      ]
+    },
+    {
+      "id": "kgz_naryn_hydro_energy",
+      "name": "Naryn Hydro Energy Belt",
+      "countryIso2": "KG",
+      "countryName": "Kyrgyzstan",
+      "zoneType": "energy_hub",
+      "zoneSubType": "hydro_energy",
+      "tags": [
+        "hydro",
+        "energy",
+        "grid"
+      ]
+    },
+    {
+      "id": "tjk_dushanbe_industrial_axis",
+      "name": "Dushanbe Industrial Axis",
+      "countryIso2": "TJ",
+      "countryName": "Tajikistan",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_light_industry",
+      "tags": [
+        "capital",
+        "industry",
+        "logistics"
+      ]
+    },
+    {
+      "id": "tjk_khujand_fergana_corridor",
+      "name": "Khujand Fergana Corridor",
+      "countryIso2": "TJ",
+      "countryName": "Tajikistan",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "fergana_trade_corridor",
+      "tags": [
+        "trade",
+        "corridor",
+        "fergana"
+      ]
+    },
+    {
+      "id": "tjk_vakhsh_energy_cluster",
+      "name": "Vakhsh Energy Cluster",
+      "countryIso2": "TJ",
+      "countryName": "Tajikistan",
+      "zoneType": "energy_hub",
+      "zoneSubType": "hydro_aluminium",
+      "tags": [
+        "hydro",
+        "energy",
+        "metals"
+      ]
+    },
+    {
+      "id": "ind_delhi_ncr_industrial_belt",
+      "name": "Delhi NCR Industrial Belt",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "metro_manufacturing",
+      "tags": [
+        "manufacturing",
+        "metro",
+        "suppliers"
+      ]
+    },
+    {
+      "id": "ind_pune_mumbai_industry_corridor",
+      "name": "Pune-Mumbai Industry Corridor",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "auto_engineering",
+      "tags": [
+        "automotive",
+        "engineering",
+        "ports"
+      ]
+    },
+    {
+      "id": "ind_hyderabad_pharma_tech",
+      "name": "Hyderabad Pharma-Tech Zone",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "pharma_tech_cluster",
+      "tags": [
+        "pharma",
+        "tech",
+        "manufacturing"
+      ]
+    },
+    {
+      "id": "ind_bengaluru_hosur_tech_industry",
+      "name": "Bengaluru-Hosur Tech Industry Belt",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "electronics_software_hardware",
+      "tags": [
+        "electronics",
+        "hardware",
+        "software"
+      ]
+    },
+    {
+      "id": "ind_vizag_kakinada_energy_port",
+      "name": "Vizag-Kakinada Energy Port Belt",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "energy_hub",
+      "zoneSubType": "east_coast_refining",
+      "tags": [
+        "energy",
+        "port",
+        "refining"
+      ]
+    },
+    {
+      "id": "ind_kolkata_haldia_logistics",
+      "name": "Kolkata-Haldia Logistics Corridor",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "river_port_corridor",
+      "tags": [
+        "river",
+        "port",
+        "containers"
+      ]
+    },
+    {
+      "id": "ind_odisha_minerals_belt",
+      "name": "Odisha Minerals Belt",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "metals_mining_processing",
+      "tags": [
+        "metals",
+        "mining",
+        "processing"
+      ]
+    },
+    {
+      "id": "ind_ahmedabad_vadodara_corridor",
+      "name": "Ahmedabad-Vadodara Industrial Corridor",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "chemicals_engineering",
+      "tags": [
+        "chemicals",
+        "engineering",
+        "industry"
+      ]
+    },
+    {
+      "id": "ind_kochi_coastal_logistics",
+      "name": "Kochi Coastal Logistics Zone",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "coastal_port",
+      "tags": [
+        "coast",
+        "port",
+        "shipping"
+      ]
+    },
+    {
+      "id": "ind_nagpur_multimodal_hub",
+      "name": "Nagpur Multimodal Hub",
+      "countryIso2": "IN",
+      "countryName": "India",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "inland_multimodal",
+      "tags": [
+        "inland",
+        "multimodal",
+        "distribution"
+      ]
+    },
+    {
+      "id": "rus_moscow_central_industry_ring",
+      "name": "Moscow Central Industry Ring",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_manufacturing",
+      "tags": [
+        "capital",
+        "manufacturing",
+        "distribution"
+      ]
+    },
+    {
+      "id": "rus_stpetersburg_baltic_port_belt",
+      "name": "St Petersburg Baltic Port Belt",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "baltic_ports",
+      "tags": [
+        "baltic",
+        "ports",
+        "shipping"
+      ]
+    },
+    {
+      "id": "rus_kaliningrad_baltic_gateway",
+      "name": "Kaliningrad Baltic Gateway",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "baltic_gateway",
+      "tags": [
+        "gateway",
+        "baltic",
+        "logistics"
+      ]
+    },
+    {
+      "id": "rus_tatarstan_kama_industry",
+      "name": "Tatarstan-Kama Industry Zone",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "machinery_petchem",
+      "tags": [
+        "machinery",
+        "petrochem",
+        "industry"
+      ]
+    },
+    {
+      "id": "rus_samara_togliatti_auto",
+      "name": "Samara-Togliatti Automotive Belt",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "automotive_machinery",
+      "tags": [
+        "automotive",
+        "machinery",
+        "suppliers"
+      ]
+    },
+    {
+      "id": "rus_urals_metals_cluster",
+      "name": "Urals Metals Cluster",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "metals_processing",
+      "tags": [
+        "metals",
+        "mining",
+        "processing"
+      ]
+    },
+    {
+      "id": "rus_yamal_arctic_energy",
+      "name": "Yamal Arctic Energy Zone",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "energy_hub",
+      "zoneSubType": "arctic_gas",
+      "tags": [
+        "arctic",
+        "gas",
+        "energy"
+      ]
+    },
+    {
+      "id": "rus_krasnoyarsk_siberian_resources",
+      "name": "Krasnoyarsk Resource Belt",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "ore_energy_resources",
+      "tags": [
+        "resources",
+        "ore",
+        "energy"
+      ]
+    },
+    {
+      "id": "rus_kuzbass_coal_industry",
+      "name": "Kuzbass Coal Industry Zone",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "coal_mining",
+      "tags": [
+        "coal",
+        "mining",
+        "industry"
+      ]
+    },
+    {
+      "id": "rus_novosibirsk_logistics_hub",
+      "name": "Novosibirsk Logistics Hub",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "transsiberian_hub",
+      "tags": [
+        "transsiberian",
+        "rail",
+        "hub"
+      ]
+    },
+    {
+      "id": "rus_primorye_vladivostok_ports",
+      "name": "Primorye-Vladivostok Port Belt",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "far_east_ports",
+      "tags": [
+        "far-east",
+        "ports",
+        "shipping"
+      ]
+    },
+    {
+      "id": "rus_sakhalin_energy_shelf",
+      "name": "Sakhalin Energy Shelf Zone",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "energy_hub",
+      "zoneSubType": "offshore_energy",
+      "tags": [
+        "offshore",
+        "energy",
+        "lng"
+      ]
+    },
+    {
+      "id": "rus_rostov_krasnodar_agro_industry",
+      "name": "Rostov-Krasnodar Agro Industry Zone",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "agro_processing_logistics",
+      "tags": [
+        "agro",
+        "processing",
+        "logistics"
+      ]
+    },
+    {
+      "id": "rus_murmansk_arctic_logistics",
+      "name": "Murmansk Arctic Logistics Zone",
+      "countryIso2": "RU",
+      "countryName": "Russia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "arctic_shipping",
+      "tags": [
+        "arctic",
+        "shipping",
+        "port"
+      ]
+    },
+    {
+      "id": "gbr_london_thames_logistics",
+      "name": "London Thames Logistics Belt",
+      "countryIso2": "GB",
+      "countryName": "United Kingdom",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "river_port_distribution",
+      "tags": [
+        "thames",
+        "distribution",
+        "ports"
+      ]
+    },
+    {
+      "id": "gbr_midlands_industrial_engine",
+      "name": "Midlands Industrial Engine",
+      "countryIso2": "GB",
+      "countryName": "United Kingdom",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "auto_aerospace_engineering",
+      "tags": [
+        "automotive",
+        "aerospace",
+        "engineering"
+      ]
+    },
+    {
+      "id": "gbr_humber_teesside_energy",
+      "name": "Humber-Teesside Energy Coast",
+      "countryIso2": "GB",
+      "countryName": "United Kingdom",
+      "zoneType": "energy_hub",
+      "zoneSubType": "refining_chemicals",
+      "tags": [
+        "energy",
+        "chemicals",
+        "coast"
+      ]
+    },
+    {
+      "id": "fra_iledefrance_industry",
+      "name": "Ile-de-France Industry Belt",
+      "countryIso2": "FR",
+      "countryName": "France",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_industry_services",
+      "tags": [
+        "capital",
+        "industry",
+        "services"
+      ]
+    },
+    {
+      "id": "fra_lehavre_rouen_corridor",
+      "name": "Le Havre-Rouen Corridor",
+      "countryIso2": "FR",
+      "countryName": "France",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "seine_port_corridor",
+      "tags": [
+        "seine",
+        "ports",
+        "logistics"
+      ]
+    },
+    {
+      "id": "fra_marseille_fos_energy",
+      "name": "Marseille-Fos Energy Zone",
+      "countryIso2": "FR",
+      "countryName": "France",
+      "zoneType": "energy_hub",
+      "zoneSubType": "med_energy_ports",
+      "tags": [
+        "mediterranean",
+        "energy",
+        "ports"
+      ]
+    },
+    {
+      "id": "fra_lyon_saintetienne_industry",
+      "name": "Lyon-Saint-Etienne Industry Belt",
+      "countryIso2": "FR",
+      "countryName": "France",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "chemicals_machinery",
+      "tags": [
+        "chemicals",
+        "machinery",
+        "industry"
+      ]
+    },
+    {
+      "id": "ita_povalley_industrial_axis",
+      "name": "Po Valley Industrial Axis",
+      "countryIso2": "IT",
+      "countryName": "Italy",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "northern_manufacturing",
+      "tags": [
+        "manufacturing",
+        "northern",
+        "exports"
+      ]
+    },
+    {
+      "id": "ita_genoa_liguria_ports",
+      "name": "Genoa-Liguria Ports Zone",
+      "countryIso2": "IT",
+      "countryName": "Italy",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "ligurian_ports",
+      "tags": [
+        "ports",
+        "liguria",
+        "shipping"
+      ]
+    },
+    {
+      "id": "ita_taranto_south_energy",
+      "name": "Taranto South Energy Zone",
+      "countryIso2": "IT",
+      "countryName": "Italy",
+      "zoneType": "energy_hub",
+      "zoneSubType": "steel_energy_port",
+      "tags": [
+        "energy",
+        "steel",
+        "port"
+      ]
+    },
+    {
+      "id": "esp_barcelona_tarragona_corridor",
+      "name": "Barcelona-Tarragona Corridor",
+      "countryIso2": "ES",
+      "countryName": "Spain",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "coastal_manufacturing",
+      "tags": [
+        "coastal",
+        "industry",
+        "chemicals"
+      ]
+    },
+    {
+      "id": "esp_bilbao_north_industry",
+      "name": "Bilbao North Industry Belt",
+      "countryIso2": "ES",
+      "countryName": "Spain",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "metals_ports",
+      "tags": [
+        "metals",
+        "ports",
+        "industry"
+      ]
+    },
+    {
+      "id": "esp_algeciras_strait_hub",
+      "name": "Algeciras Strait Logistics Hub",
+      "countryIso2": "ES",
+      "countryName": "Spain",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "strait_shipping",
+      "tags": [
+        "strait",
+        "shipping",
+        "ports"
+      ]
+    },
+    {
+      "id": "esp_madrid_central_logistics",
+      "name": "Madrid Central Logistics Zone",
+      "countryIso2": "ES",
+      "countryName": "Spain",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "inland_distribution",
+      "tags": [
+        "inland",
+        "distribution",
+        "rail"
+      ]
+    },
+    {
+      "id": "pol_silesia_industrial_region",
+      "name": "Silesia Industrial Region",
+      "countryIso2": "PL",
+      "countryName": "Poland",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "metals_machinery",
+      "tags": [
+        "metals",
+        "machinery",
+        "industry"
+      ]
+    },
+    {
+      "id": "pol_gdansk_gdynia_ports",
+      "name": "Gdansk-Gdynia Port Zone",
+      "countryIso2": "PL",
+      "countryName": "Poland",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "baltic_ports",
+      "tags": [
+        "baltic",
+        "ports",
+        "containers"
+      ]
+    },
+    {
+      "id": "pol_warsaw_central_hub",
+      "name": "Warsaw Central Hub",
+      "countryIso2": "PL",
+      "countryName": "Poland",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "central_distribution",
+      "tags": [
+        "central",
+        "distribution",
+        "rail"
+      ]
+    },
+    {
+      "id": "cze_prague_pilsen_industry",
+      "name": "Prague-Pilsen Industry Belt",
+      "countryIso2": "CZ",
+      "countryName": "Czech Republic",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "engineering_auto",
+      "tags": [
+        "engineering",
+        "automotive",
+        "industry"
+      ]
+    },
+    {
+      "id": "cze_brno_moravia_cluster",
+      "name": "Brno Moravia Cluster",
+      "countryIso2": "CZ",
+      "countryName": "Czech Republic",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "electronics_machinery",
+      "tags": [
+        "electronics",
+        "machinery",
+        "suppliers"
+      ]
+    },
+    {
+      "id": "svk_bratislava_trnava_auto",
+      "name": "Bratislava-Trnava Automotive Zone",
+      "countryIso2": "SK",
+      "countryName": "Slovakia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "automotive_chain",
+      "tags": [
+        "automotive",
+        "supply-chain",
+        "manufacturing"
+      ]
+    },
+    {
+      "id": "hun_budapest_gyor_industry",
+      "name": "Budapest-Gyor Industry Belt",
+      "countryIso2": "HU",
+      "countryName": "Hungary",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "auto_electronics",
+      "tags": [
+        "automotive",
+        "electronics",
+        "industry"
+      ]
+    },
+    {
+      "id": "rou_bucharest_ploiesti_corridor",
+      "name": "Bucharest-Ploiesti Corridor",
+      "countryIso2": "RO",
+      "countryName": "Romania",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_energy_industry",
+      "tags": [
+        "capital",
+        "energy",
+        "industry"
+      ]
+    },
+    {
+      "id": "rou_constanta_blacksea_ports",
+      "name": "Constanta Black Sea Port Zone",
+      "countryIso2": "RO",
+      "countryName": "Romania",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "blacksea_ports",
+      "tags": [
+        "black-sea",
+        "ports",
+        "shipping"
+      ]
+    },
+    {
+      "id": "bgr_sofia_plovdiv_axis",
+      "name": "Sofia-Plovdiv Industrial Axis",
+      "countryIso2": "BG",
+      "countryName": "Bulgaria",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_to_inland_industry",
+      "tags": [
+        "industry",
+        "corridor",
+        "manufacturing"
+      ]
+    },
+    {
+      "id": "bgr_varna_burgas_coast",
+      "name": "Varna-Burgas Coast Logistics",
+      "countryIso2": "BG",
+      "countryName": "Bulgaria",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "blacksea_coast_ports",
+      "tags": [
+        "black-sea",
+        "ports",
+        "coast"
+      ]
+    },
+    {
+      "id": "bel_antwerp_ghent_port_industry",
+      "name": "Antwerp-Ghent Port Industry Zone",
+      "countryIso2": "BE",
+      "countryName": "Belgium",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_chemicals",
+      "tags": [
+        "port",
+        "chemicals",
+        "logistics"
+      ]
+    },
+    {
+      "id": "swe_stockholm_malardalen_hub",
+      "name": "Stockholm-Malardalen Hub",
+      "countryIso2": "SE",
+      "countryName": "Sweden",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "capital_logistics",
+      "tags": [
+        "capital",
+        "logistics",
+        "distribution"
+      ]
+    },
+    {
+      "id": "swe_goteborg_west_coast_ports",
+      "name": "Goteborg West Coast Port Zone",
+      "countryIso2": "SE",
+      "countryName": "Sweden",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "west_coast_ports",
+      "tags": [
+        "ports",
+        "shipping",
+        "west-coast"
+      ]
+    },
+    {
+      "id": "swe_lulea_north_resources",
+      "name": "Lulea Northern Resources Belt",
+      "countryIso2": "SE",
+      "countryName": "Sweden",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "metals_energy",
+      "tags": [
+        "metals",
+        "resources",
+        "energy"
+      ]
+    },
+    {
+      "id": "nor_oslo_viken_industry",
+      "name": "Oslo-Viken Industry Zone",
+      "countryIso2": "NO",
+      "countryName": "Norway",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_industry",
+      "tags": [
+        "capital",
+        "industry",
+        "distribution"
+      ]
+    },
+    {
+      "id": "nor_stavanger_offshore_energy",
+      "name": "Stavanger Offshore Energy Belt",
+      "countryIso2": "NO",
+      "countryName": "Norway",
+      "zoneType": "energy_hub",
+      "zoneSubType": "offshore_supply_chain",
+      "tags": [
+        "offshore",
+        "energy",
+        "supply-chain"
+      ]
+    },
+    {
+      "id": "nor_narvik_arctic_logistics",
+      "name": "Narvik Arctic Logistics Zone",
+      "countryIso2": "NO",
+      "countryName": "Norway",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "arctic_rail_port",
+      "tags": [
+        "arctic",
+        "rail",
+        "port"
+      ]
+    },
+    {
+      "id": "fin_helsinki_tampere_axis",
+      "name": "Helsinki-Tampere Industrial Axis",
+      "countryIso2": "FI",
+      "countryName": "Finland",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_to_inland_industry",
+      "tags": [
+        "industry",
+        "corridor",
+        "manufacturing"
+      ]
+    },
+    {
+      "id": "fin_oulu_northern_tech",
+      "name": "Oulu Northern Tech Zone",
+      "countryIso2": "FI",
+      "countryName": "Finland",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "northern_tech_cluster",
+      "tags": [
+        "tech",
+        "data",
+        "innovation"
+      ]
+    },
+    {
+      "id": "dnk_copenhagen_oresund_hub",
+      "name": "Copenhagen Oresund Hub",
+      "countryIso2": "DK",
+      "countryName": "Denmark",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "oresund_distribution",
+      "tags": [
+        "distribution",
+        "shipping",
+        "corridor"
+      ]
+    },
+    {
+      "id": "dnk_jutland_ports_industry",
+      "name": "Jutland Ports Industry Belt",
+      "countryIso2": "DK",
+      "countryName": "Denmark",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "port_industry",
+      "tags": [
+        "ports",
+        "industry",
+        "manufacturing"
+      ]
+    },
+    {
+      "id": "aut_vienna_central_hub",
+      "name": "Vienna Central Logistics Hub",
+      "countryIso2": "AT",
+      "countryName": "Austria",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "central_europe_hub",
+      "tags": [
+        "central-europe",
+        "logistics",
+        "rail"
+      ]
+    },
+    {
+      "id": "aut_upper_austria_industry",
+      "name": "Upper Austria Industry Belt",
+      "countryIso2": "AT",
+      "countryName": "Austria",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "machinery_metals",
+      "tags": [
+        "machinery",
+        "metals",
+        "industry"
+      ]
+    },
+    {
+      "id": "che_zurich_basel_lake_axis",
+      "name": "Zurich-Basel Industry Axis",
+      "countryIso2": "CH",
+      "countryName": "Switzerland",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "highvalue_manufacturing",
+      "tags": [
+        "high-value",
+        "manufacturing",
+        "pharma"
+      ]
+    },
+    {
+      "id": "prt_lisbon_setubal_logistics",
+      "name": "Lisbon-Setubal Logistics Zone",
+      "countryIso2": "PT",
+      "countryName": "Portugal",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "atlantic_ports",
+      "tags": [
+        "atlantic",
+        "ports",
+        "shipping"
+      ]
+    },
+    {
+      "id": "prt_porto_north_industry",
+      "name": "Porto Northern Industry Belt",
+      "countryIso2": "PT",
+      "countryName": "Portugal",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "north_manufacturing",
+      "tags": [
+        "manufacturing",
+        "north",
+        "exports"
+      ]
+    },
+    {
+      "id": "grc_athens_piraeus_hub",
+      "name": "Athens-Piraeus Hub",
+      "countryIso2": "GR",
+      "countryName": "Greece",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "med_ports",
+      "tags": [
+        "mediterranean",
+        "ports",
+        "shipping"
+      ]
+    },
+    {
+      "id": "grc_thessaloniki_north_corridor",
+      "name": "Thessaloniki North Corridor",
+      "countryIso2": "GR",
+      "countryName": "Greece",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "balkan_gateway",
+      "tags": [
+        "balkans",
+        "gateway",
+        "logistics"
+      ]
+    },
+    {
+      "id": "irl_dublin_east_coast_hub",
+      "name": "Dublin East Coast Hub",
+      "countryIso2": "IE",
+      "countryName": "Ireland",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "data_logistics",
+      "tags": [
+        "data",
+        "logistics",
+        "services"
+      ]
+    },
+    {
+      "id": "ukr_kyiv_central_industry",
+      "name": "Kyiv Central Industry Zone",
+      "countryIso2": "UA",
+      "countryName": "Ukraine",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "capital_industry",
+      "tags": [
+        "capital",
+        "industry",
+        "distribution"
+      ]
+    },
+    {
+      "id": "ukr_odesa_blacksea_ports",
+      "name": "Odesa Black Sea Ports Zone",
+      "countryIso2": "UA",
+      "countryName": "Ukraine",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "blacksea_ports",
+      "tags": [
+        "black-sea",
+        "ports",
+        "shipping"
+      ]
+    },
+    {
+      "id": "ukr_dnipro_zaporizhzhia_industry",
+      "name": "Dnipro-Zaporizhzhia Industry Belt",
+      "countryIso2": "UA",
+      "countryName": "Ukraine",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "metals_machinery",
+      "tags": [
+        "metals",
+        "machinery",
+        "industry"
+      ]
+    },
+    {
+      "id": "deu_dresden_chips_act_cluster",
+      "name": "Dresden Chips Act Cluster",
+      "countryIso2": "DE",
+      "countryName": "Germany",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "semiconductor_fab_ecosystem",
+      "tags": [
+        "semiconductor",
+        "fabs",
+        "design"
+      ]
+    },
+    {
+      "id": "deu_magdeburg_semiconductor_growth",
+      "name": "Magdeburg Semiconductor Growth Zone",
+      "countryIso2": "DE",
+      "countryName": "Germany",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "advanced_semiconductor_manufacturing",
+      "tags": [
+        "chips",
+        "manufacturing",
+        "materials"
+      ]
+    },
+    {
+      "id": "deu_northsea_wind_nzia_supply",
+      "name": "North Sea Wind NZIA Supply Zone",
+      "countryIso2": "DE",
+      "countryName": "Germany",
+      "zoneType": "energy_hub",
+      "zoneSubType": "offshore_wind_supply_chain",
+      "tags": [
+        "offshore-wind",
+        "blades",
+        "ports"
+      ]
+    },
+    {
+      "id": "deu_wilhelmshaven_h2_nzia_gateway",
+      "name": "Wilhelmshaven H2 NZIA Gateway",
+      "countryIso2": "DE",
+      "countryName": "Germany",
+      "zoneType": "energy_hub",
+      "zoneSubType": "hydrogen_ammonia_terminal",
+      "tags": [
+        "hydrogen",
+        "ammonia",
+        "terminal"
+      ]
+    },
+    {
+      "id": "fra_grenoble_chips_valley",
+      "name": "Grenoble Chips Valley",
+      "countryIso2": "FR",
+      "countryName": "France",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "microelectronics_cluster",
+      "tags": [
+        "microelectronics",
+        "r-and-d",
+        "fabs"
+      ]
+    },
+    {
+      "id": "fra_dunkirk_nzia_decarbon_hub",
+      "name": "Dunkirk NZIA Decarbon Hub",
+      "countryIso2": "FR",
+      "countryName": "France",
+      "zoneType": "energy_hub",
+      "zoneSubType": "decarbonized_industry_port",
+      "tags": [
+        "decarbonization",
+        "steel",
+        "port"
+      ]
+    },
+    {
+      "id": "fra_nord_battery_chain",
+      "name": "Nord Battery Regulation Chain Zone",
+      "countryIso2": "FR",
+      "countryName": "France",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "battery_cell_supply_chain",
+      "tags": [
+        "battery-cells",
+        "supply-chain",
+        "recycling"
+      ]
+    },
+    {
+      "id": "ita_catania_chips_sicily",
+      "name": "Catania Chips Sicily Zone",
+      "countryIso2": "IT",
+      "countryName": "Italy",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "semiconductor_power_electronics",
+      "tags": [
+        "chips",
+        "power-electronics",
+        "fabs"
+      ]
+    },
+    {
+      "id": "ita_piedmont_battery_chain",
+      "name": "Piedmont Battery Chain",
+      "countryIso2": "IT",
+      "countryName": "Italy",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "battery_automotive_chain",
+      "tags": [
+        "battery",
+        "automotive",
+        "pack-assembly"
+      ]
+    },
+    {
+      "id": "ita_taranto_nzia_green_steel",
+      "name": "Taranto NZIA Green Steel Transition",
+      "countryIso2": "IT",
+      "countryName": "Italy",
+      "zoneType": "energy_hub",
+      "zoneSubType": "green_steel_transition",
+      "tags": [
+        "green-steel",
+        "hydrogen",
+        "industry"
+      ]
+    },
+    {
+      "id": "nld_brainport_chips_expansion",
+      "name": "Brainport Chips Act Expansion Zone",
+      "countryIso2": "NL",
+      "countryName": "Netherlands",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "chip_photonics_ecosystem",
+      "tags": [
+        "chips",
+        "photonics",
+        "equipment"
+      ]
+    },
+    {
+      "id": "nld_rotterdam_nzia_hydrogen_gateway",
+      "name": "Rotterdam NZIA Hydrogen Gateway",
+      "countryIso2": "NL",
+      "countryName": "Netherlands",
+      "zoneType": "energy_hub",
+      "zoneSubType": "hydrogen_import_conversion",
+      "tags": [
+        "hydrogen",
+        "port",
+        "conversion"
+      ]
+    },
+    {
+      "id": "bel_leuven_chips_nanoelectronics",
+      "name": "Leuven Chips and Nanoelectronics Zone",
+      "countryIso2": "BE",
+      "countryName": "Belgium",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "nanoj_chip_design_fabless",
+      "tags": [
+        "nanoelectronics",
+        "design",
+        "r-and-d"
+      ]
+    },
+    {
+      "id": "bel_flanders_battery_recycling",
+      "name": "Flanders Battery Recycling Zone",
+      "countryIso2": "BE",
+      "countryName": "Belgium",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "battery_recycling_materials",
+      "tags": [
+        "battery-recycling",
+        "materials",
+        "processing"
+      ]
+    },
+    {
+      "id": "bel_brussels_digital_compliance",
+      "name": "Brussels Digital Compliance Zone",
+      "countryIso2": "BE",
+      "countryName": "Belgium",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "digital_ai_regulatory_ops",
+      "tags": [
+        "regtech",
+        "platform-governance",
+        "audit"
+      ]
+    },
+    {
+      "id": "esp_extremadura_lithium_crma",
+      "name": "Extremadura Lithium CRMA Zone",
+      "countryIso2": "ES",
+      "countryName": "Spain",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "lithium_mining_refining",
+      "tags": [
+        "lithium",
+        "mining",
+        "refining"
+      ]
+    },
+    {
+      "id": "esp_valencia_battery_cluster",
+      "name": "Valencia Battery Regulation Cluster",
+      "countryIso2": "ES",
+      "countryName": "Spain",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "battery_ev_supply_chain",
+      "tags": [
+        "battery",
+        "ev",
+        "assembly"
+      ]
+    },
+    {
+      "id": "esp_andalusia_solar_nzia",
+      "name": "Andalusia Solar NZIA Zone",
+      "countryIso2": "ES",
+      "countryName": "Spain",
+      "zoneType": "energy_hub",
+      "zoneSubType": "solar_equipment_manufacturing",
+      "tags": [
+        "solar",
+        "inverters",
+        "modules"
+      ]
+    },
+    {
+      "id": "prt_barroso_lithium_crma_chain",
+      "name": "Barroso Lithium CRMA Chain",
+      "countryIso2": "PT",
+      "countryName": "Portugal",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "lithium_to_battery_materials",
+      "tags": [
+        "lithium",
+        "materials",
+        "processing"
+      ]
+    },
+    {
+      "id": "prt_sines_hydrogen_nzia_port",
+      "name": "Sines Hydrogen NZIA Port Zone",
+      "countryIso2": "PT",
+      "countryName": "Portugal",
+      "zoneType": "energy_hub",
+      "zoneSubType": "green_hydrogen_export_port",
+      "tags": [
+        "hydrogen",
+        "port",
+        "electrolyzers"
+      ]
+    },
+    {
+      "id": "pol_lower_silesia_battery_zone",
+      "name": "Lower Silesia Battery Regulation Zone",
+      "countryIso2": "PL",
+      "countryName": "Poland",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "battery_materials_cells",
+      "tags": [
+        "battery",
+        "cells",
+        "materials"
+      ]
+    },
+    {
+      "id": "pol_baltic_wind_nzia_ports",
+      "name": "Baltic Wind NZIA Ports Zone",
+      "countryIso2": "PL",
+      "countryName": "Poland",
+      "zoneType": "energy_hub",
+      "zoneSubType": "offshore_wind_ports",
+      "tags": [
+        "offshore-wind",
+        "ports",
+        "assembly"
+      ]
+    },
+    {
+      "id": "hun_debrecen_battery_ecosystem",
+      "name": "Debrecen Battery Ecosystem",
+      "countryIso2": "HU",
+      "countryName": "Hungary",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "battery_cell_pack_ecosystem",
+      "tags": [
+        "battery",
+        "cells",
+        "pack"
+      ]
+    },
+    {
+      "id": "svk_west_battery_auto_chain",
+      "name": "Western Slovakia Battery-Auto Chain",
+      "countryIso2": "SK",
+      "countryName": "Slovakia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "battery_auto_supply_chain",
+      "tags": [
+        "battery",
+        "automotive",
+        "suppliers"
+      ]
+    },
+    {
+      "id": "cze_brno_chip_design_zone",
+      "name": "Brno Chip Design Zone",
+      "countryIso2": "CZ",
+      "countryName": "Czech Republic",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "chip_design_packaging",
+      "tags": [
+        "chip-design",
+        "packaging",
+        "r-and-d"
+      ]
+    },
+    {
+      "id": "swe_skelleftea_battery_hub",
+      "name": "Skelleftea Battery Hub",
+      "countryIso2": "SE",
+      "countryName": "Sweden",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "battery_cells_recycling",
+      "tags": [
+        "battery-cells",
+        "recycling",
+        "materials"
+      ]
+    },
+    {
+      "id": "fin_kokkola_battery_materials_crma",
+      "name": "Kokkola Battery Materials CRMA Zone",
+      "countryIso2": "FI",
+      "countryName": "Finland",
+      "zoneType": "resource_extraction",
+      "zoneSubType": "battery_material_refining",
+      "tags": [
+        "nickel",
+        "cobalt",
+        "refining"
+      ]
+    },
+    {
+      "id": "dnk_esbjerg_nzia_offshore_wind",
+      "name": "Esbjerg NZIA Offshore Wind Zone",
+      "countryIso2": "DK",
+      "countryName": "Denmark",
+      "zoneType": "energy_hub",
+      "zoneSubType": "offshore_wind_supply",
+      "tags": [
+        "offshore-wind",
+        "turbines",
+        "ports"
+      ]
+    },
+    {
+      "id": "rou_dobrogea_nzia_wind_h2",
+      "name": "Dobrogea NZIA Wind-H2 Corridor",
+      "countryIso2": "RO",
+      "countryName": "Romania",
+      "zoneType": "energy_hub",
+      "zoneSubType": "wind_hydrogen_corridor",
+      "tags": [
+        "wind",
+        "hydrogen",
+        "grid"
+      ]
+    },
+    {
+      "id": "grc_west_macedonia_nzia_transition",
+      "name": "West Macedonia NZIA Transition Zone",
+      "countryIso2": "GR",
+      "countryName": "Greece",
+      "zoneType": "energy_hub",
+      "zoneSubType": "just_transition_clean_industry",
+      "tags": [
+        "transition",
+        "clean-industry",
+        "energy"
+      ]
+    },
+    {
+      "id": "irl_dublin_dsa_ai_services",
+      "name": "Dublin DSA + AI Act Services Zone",
+      "countryIso2": "IE",
+      "countryName": "Ireland",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "platform_ai_compliance_services",
+      "tags": [
+        "platforms",
+        "compliance",
+        "trust-and-safety"
+      ]
+    },
+    {
+      "id": "lux_digital_governance_hub",
+      "name": "Luxembourg Digital Governance Hub",
+      "countryIso2": "LU",
+      "countryName": "Luxembourg",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "eu_digital_policy_operations",
+      "tags": [
+        "digital-governance",
+        "oversight",
+        "regtech"
+      ]
+    },
+    {
+      "id": "mys_pasir_gudang_johor_ports",
+      "name": "Pasir Gudang-Johor Port Belt",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "port_refining_logistics",
+      "tags": [
+        "ports",
+        "refining",
+        "shipping"
+      ]
+    },
+    {
+      "id": "mys_port_klang_kv_corridor",
+      "name": "Port Klang-Klang Valley Corridor",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "container_inland_distribution",
+      "tags": [
+        "containers",
+        "distribution",
+        "metro"
+      ]
+    },
+    {
+      "id": "mys_penang_electronics_cluster",
+      "name": "Penang Electronics Cluster",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "electronics_semiconductor",
+      "tags": [
+        "electronics",
+        "semiconductor",
+        "exports"
+      ]
+    },
+    {
+      "id": "mys_kulim_hi_tech_park",
+      "name": "Kulim Hi-Tech Park Zone",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "semiconductor_advanced_packaging",
+      "tags": [
+        "semiconductor",
+        "packaging",
+        "r-and-d"
+      ]
+    },
+    {
+      "id": "mys_iskandar_malacca_strait_hub",
+      "name": "Iskandar Strait Economic Hub",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "special_corridor_logistics",
+      "tags": [
+        "sez",
+        "strait",
+        "industry"
+      ]
+    },
+    {
+      "id": "mys_kuantan_east_coast_port",
+      "name": "Kuantan East Coast Port Zone",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "east_coast_port_minerals",
+      "tags": [
+        "port",
+        "minerals",
+        "corridor"
+      ]
+    },
+    {
+      "id": "mys_sarawak_bintulu_energy",
+      "name": "Bintulu Sarawak Energy Zone",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "energy_hub",
+      "zoneSubType": "lng_petchem_exports",
+      "tags": [
+        "lng",
+        "petchem",
+        "exports"
+      ]
+    },
+    {
+      "id": "mys_sabah_kota_kinabalu_logistics",
+      "name": "Kota Kinabalu Logistics Zone",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "borneo_port_supply",
+      "tags": [
+        "borneo",
+        "port",
+        "supply"
+      ]
+    },
+    {
+      "id": "mys_labuan_offshore_energy",
+      "name": "Labuan Offshore Energy Services Zone",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "energy_hub",
+      "zoneSubType": "offshore_energy_services",
+      "tags": [
+        "offshore",
+        "energy",
+        "services"
+      ]
+    },
+    {
+      "id": "mys_johor_data_center_belt",
+      "name": "Johor Data Infrastructure Belt",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "data_infrastructure",
+      "zoneSubType": "data_centers_crossborder_compute",
+      "tags": [
+        "data-centers",
+        "compute",
+        "crossborder"
+      ]
+    },
+    {
+      "id": "mys_perak_lumut_naval_industry",
+      "name": "Lumut Naval Industrial Zone",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "military_industrial",
+      "zoneSubType": "naval_shipyard_support",
+      "tags": [
+        "shipyard",
+        "defense",
+        "marine"
+      ]
+    },
+    {
+      "id": "mys_nilai_seremban_industry",
+      "name": "Nilai-Seremban Industry Belt",
+      "countryIso2": "MY",
+      "countryName": "Malaysia",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "light_industry_warehousing",
+      "tags": [
+        "light-industry",
+        "warehousing",
+        "distribution"
+      ]
+    },
+    {
+      "id": "phl_manila_batangas_subic_triangle",
+      "name": "Manila-Batangas-Subic Logistics Triangle",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "multi_port_ncr_corridor",
+      "tags": [
+        "ports",
+        "ncr",
+        "shipping"
+      ]
+    },
+    {
+      "id": "phl_cavite_laguna_tech_manufacturing",
+      "name": "Cavite-Laguna Manufacturing Belt",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "electronics_auto_parts",
+      "tags": [
+        "electronics",
+        "assembly",
+        "suppliers"
+      ]
+    },
+    {
+      "id": "phl_clark_subic_sez_axis",
+      "name": "Clark-Subic SEZ Axis",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "special_economic_zone",
+      "zoneSubType": "aero_logistics_industry",
+      "tags": [
+        "sez",
+        "aerospace",
+        "logistics"
+      ]
+    },
+    {
+      "id": "phl_cebu_mactan_electronics",
+      "name": "Cebu-Mactan Industrial Zone",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "electronics_shipbuilding_services",
+      "tags": [
+        "electronics",
+        "shipbuilding",
+        "services"
+      ]
+    },
+    {
+      "id": "phl_davao_mindanao_agro_industry",
+      "name": "Davao Mindanao Agro-Industry Zone",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "agro_processing_logistics",
+      "tags": [
+        "agro",
+        "processing",
+        "mindanao"
+      ]
+    },
+    {
+      "id": "phl_iloilo_bacolod_western_corridor",
+      "name": "Iloilo-Bacolod Western Corridor",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "interisland_distribution",
+      "tags": [
+        "interisland",
+        "distribution",
+        "ports"
+      ]
+    },
+    {
+      "id": "phl_cagayan_north_luzon_hub",
+      "name": "Cagayan North Luzon Gateway",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "north_luzon_gateway",
+      "tags": [
+        "gateway",
+        "luzon",
+        "trade"
+      ]
+    },
+    {
+      "id": "phl_batangas_energy_refining",
+      "name": "Batangas Energy and Refining Zone",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "energy_hub",
+      "zoneSubType": "refining_power_terminals",
+      "tags": [
+        "refining",
+        "power",
+        "terminals"
+      ]
+    },
+    {
+      "id": "phl_bataan_energy_transition",
+      "name": "Bataan Energy Transition Belt",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "energy_hub",
+      "zoneSubType": "power_lng_transition",
+      "tags": [
+        "lng",
+        "power",
+        "transition"
+      ]
+    },
+    {
+      "id": "phl_zamboanga_sulu_shipping",
+      "name": "Zamboanga-Sulu Shipping Zone",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "logistics_chokepoint",
+      "zoneSubType": "southwest_shipping_lane",
+      "tags": [
+        "shipping",
+        "lane",
+        "southwest"
+      ]
+    },
+    {
+      "id": "phl_cagayan_deoro_iligan_industry",
+      "name": "Cagayan de Oro-Iligan Industry Belt",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "industrial_cluster",
+      "zoneSubType": "metals_cement_logistics",
+      "tags": [
+        "metals",
+        "cement",
+        "industry"
+      ]
+    },
+    {
+      "id": "phl_palawan_offshore_energy_watch",
+      "name": "Palawan Offshore Energy Logistics",
+      "countryIso2": "PH",
+      "countryName": "Philippines",
+      "zoneType": "energy_hub",
+      "zoneSubType": "offshore_energy_logistics",
+      "tags": [
+        "offshore",
+        "energy",
+        "logistics"
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "id": "sea_suez_rotterdam",
+      "name": "Suez-Rotterdam Sea Mainline",
+      "flowMode": "sea",
+      "flowSubType": "container_mainline",
+      "tags": [
+        "suez",
+        "container",
+        "europe"
+      ]
+    },
+    {
+      "id": "sea_suez_mumbai",
+      "name": "Suez-Mumbai Corridor",
+      "flowMode": "sea",
+      "flowSubType": "energy_container",
+      "tags": [
+        "suez",
+        "india",
+        "trade"
+      ]
+    },
+    {
+      "id": "sea_malacca_shanghai",
+      "name": "Malacca-Shanghai Sea Mainline",
+      "flowMode": "sea",
+      "flowSubType": "container_mainline",
+      "tags": [
+        "malacca",
+        "china",
+        "container"
+      ]
+    },
+    {
+      "id": "sea_malacca_yokohama",
+      "name": "Malacca-Yokohama Corridor",
+      "flowMode": "sea",
+      "flowSubType": "container_mainline",
+      "tags": [
+        "malacca",
+        "japan",
+        "container"
+      ]
+    },
+    {
+      "id": "sea_gulf_westindia",
+      "name": "Persian Gulf-West India Energy Lane",
+      "flowMode": "sea",
+      "flowSubType": "energy",
+      "tags": [
+        "energy",
+        "gulf",
+        "india"
+      ]
+    },
+    {
+      "id": "sea_panama_la",
+      "name": "Panama-LA Pacific Route",
+      "flowMode": "sea",
+      "flowSubType": "container",
+      "tags": [
+        "panama",
+        "pacific",
+        "container"
+      ]
+    },
+    {
+      "id": "sea_panama_ny",
+      "name": "Panama-NY Atlantic Route",
+      "flowMode": "sea",
+      "flowSubType": "container",
+      "tags": [
+        "panama",
+        "atlantic",
+        "container"
+      ]
+    },
+    {
+      "id": "sea_northatlantic_core",
+      "name": "North Atlantic Core Shipping Lane",
+      "flowMode": "sea",
+      "flowSubType": "container",
+      "tags": [
+        "atlantic",
+        "europe",
+        "north-america"
+      ]
+    },
+    {
+      "id": "sea_cape_to_europe",
+      "name": "Cape-to-Europe Diversion Lane",
+      "flowMode": "sea",
+      "flowSubType": "energy_bulk",
+      "tags": [
+        "cape",
+        "diversion",
+        "bulk"
+      ]
+    },
+    {
+      "id": "sea_blacksea_med",
+      "name": "Black Sea-Mediterranean Lane",
+      "flowMode": "sea",
+      "flowSubType": "regional",
+      "tags": [
+        "black-sea",
+        "med",
+        "regional"
+      ]
+    },
+    {
+      "id": "sea_baltic_northsea",
+      "name": "Baltic-North Sea Lane",
+      "flowMode": "sea",
+      "flowSubType": "regional",
+      "tags": [
+        "baltic",
+        "north-sea",
+        "regional"
+      ]
+    },
+    {
+      "id": "sea_brazil_europe",
+      "name": "Brazil-Europe Atlantic Agro Lane",
+      "flowMode": "sea",
+      "flowSubType": "agro_bulk",
+      "tags": [
+        "agro",
+        "atlantic",
+        "bulk"
+      ]
+    },
+    {
+      "id": "sea_eastafrica_india",
+      "name": "East Africa-India Sea Lane",
+      "flowMode": "sea",
+      "flowSubType": "regional",
+      "tags": [
+        "africa",
+        "india",
+        "regional"
+      ]
+    },
+    {
+      "id": "sea_singapore_sydney",
+      "name": "Singapore-Sydney Corridor",
+      "flowMode": "sea",
+      "flowSubType": "regional",
+      "tags": [
+        "seasia",
+        "australia",
+        "shipping"
+      ]
+    },
+    {
+      "id": "air_northatlantic_bridge",
+      "name": "North Atlantic Air Bridge",
+      "flowMode": "air",
+      "flowSubType": "long_haul_passenger_cargo",
+      "tags": [
+        "air",
+        "atlantic",
+        "hub"
+      ]
+    },
+    {
+      "id": "air_europe_gulf_india",
+      "name": "Europe-Gulf-India Air Corridor",
+      "flowMode": "air",
+      "flowSubType": "hub_and_spoke",
+      "tags": [
+        "air",
+        "gulf",
+        "india"
+      ]
+    },
+    {
+      "id": "air_gulf_seasia",
+      "name": "Gulf-Southeast Asia Air Corridor",
+      "flowMode": "air",
+      "flowSubType": "hub_and_spoke",
+      "tags": [
+        "air",
+        "gulf",
+        "seasia"
+      ]
+    },
+    {
+      "id": "air_transpacific_eastasia_usw",
+      "name": "Transpacific East Asia-US West Air Corridor",
+      "flowMode": "air",
+      "flowSubType": "long_haul_cargo",
+      "tags": [
+        "air",
+        "transpacific",
+        "cargo"
+      ]
+    },
+    {
+      "id": "air_intra_europe_core",
+      "name": "Intra-Europe Core Air Network",
+      "flowMode": "air",
+      "flowSubType": "short_haul_dense",
+      "tags": [
+        "air",
+        "europe",
+        "short-haul"
+      ]
+    },
+    {
+      "id": "air_northamerica_coast_coast",
+      "name": "North America Coast-to-Coast Air Backbone",
+      "flowMode": "air",
+      "flowSubType": "domestic_backbone",
+      "tags": [
+        "air",
+        "usa",
+        "backbone"
+      ]
+    },
+    {
+      "id": "air_seasia_australia",
+      "name": "Southeast Asia-Australia Air Corridor",
+      "flowMode": "air",
+      "flowSubType": "regional_long_haul",
+      "tags": [
+        "air",
+        "seasia",
+        "australia"
+      ]
+    },
+    {
+      "id": "air_latam_us",
+      "name": "LATAM-US Trunk Air Corridor",
+      "flowMode": "air",
+      "flowSubType": "americas_trunk",
+      "tags": [
+        "air",
+        "latam",
+        "us"
+      ]
+    },
+    {
+      "id": "air_eastasia_europe_polar",
+      "name": "East Asia-Europe Polar Arc",
+      "flowMode": "air",
+      "flowSubType": "polar_long_haul",
+      "tags": [
+        "air",
+        "polar",
+        "europe"
+      ]
+    },
+    {
+      "id": "air_india_africa_gulf",
+      "name": "India-Gulf-East Africa Air Link",
+      "flowMode": "air",
+      "flowSubType": "regional_intercontinental",
+      "tags": [
+        "air",
+        "india",
+        "africa"
+      ]
+    },
+    {
+      "id": "road_rhine_alpine",
+      "name": "Rhine-Alpine Road Corridor",
+      "flowMode": "road",
+      "flowSubType": "eu_freight_corridor",
+      "tags": [
+        "road",
+        "eu",
+        "freight"
+      ]
+    },
+    {
+      "id": "road_iberia_france_eu",
+      "name": "Iberia-France Road Corridor",
+      "flowMode": "road",
+      "flowSubType": "eu_west_corridor",
+      "tags": [
+        "road",
+        "iberia",
+        "eu"
+      ]
+    },
+    {
+      "id": "road_us_i95_megacorridor",
+      "name": "US I-95 Megacorridor",
+      "flowMode": "road",
+      "flowSubType": "na_megacorridor",
+      "tags": [
+        "road",
+        "usa",
+        "megacorridor"
+      ]
+    },
+    {
+      "id": "road_us_i35_nafta",
+      "name": "US-Mexico I-35 Trade Corridor",
+      "flowMode": "road",
+      "flowSubType": "nafta_corridor",
+      "tags": [
+        "road",
+        "nafta",
+        "trade"
+      ]
+    },
+    {
+      "id": "road_china_coast_inland",
+      "name": "China Coast-Inland Road Backbone",
+      "flowMode": "road",
+      "flowSubType": "cn_domestic_backbone",
+      "tags": [
+        "road",
+        "china",
+        "backbone"
+      ]
+    },
+    {
+      "id": "road_india_golden_quad",
+      "name": "India Golden Quadrilateral (core)",
+      "flowMode": "road",
+      "flowSubType": "golden_quadrilateral",
+      "tags": [
+        "road",
+        "india",
+        "gq"
+      ]
+    },
+    {
+      "id": "road_gcc_backbone",
+      "name": "GCC Coastal Road Backbone",
+      "flowMode": "road",
+      "flowSubType": "gcc_trade_road",
+      "tags": [
+        "road",
+        "gcc",
+        "trade"
+      ]
+    },
+    {
+      "id": "road_brazil_southeast",
+      "name": "Brazil Southeast Road Belt",
+      "flowMode": "road",
+      "flowSubType": "latam_industrial",
+      "tags": [
+        "road",
+        "brazil",
+        "industry"
+      ]
+    },
+    {
+      "id": "road_turkiye_eu_gateway",
+      "name": "Turkiye-EU Gateway Corridor",
+      "flowMode": "road",
+      "flowSubType": "bridge_corridor",
+      "tags": [
+        "road",
+        "eu",
+        "gateway"
+      ]
+    },
+    {
+      "id": "road_andean_spine",
+      "name": "Andean Spine Road Corridor",
+      "flowMode": "road",
+      "flowSubType": "andes_corridor",
+      "tags": [
+        "road",
+        "andes",
+        "regional"
+      ]
+    },
+    {
+      "id": "rail_transsiberian_mainline",
+      "name": "Trans-Siberian Rail Mainline",
+      "flowMode": "rail",
+      "flowSubType": "continental_freight",
+      "tags": [
+        "rail",
+        "siberia",
+        "freight"
+      ]
+    },
+    {
+      "id": "rail_china_europe_landbridge",
+      "name": "China-Europe Rail Landbridge (Chongqing–Khorgos–Duisburg)",
+      "flowMode": "rail",
+      "flowSubType": "eurasia_freight",
+      "tags": [
+        "rail",
+        "eurasia",
+        "belt_road",
+        "khorgos",
+        "freight"
+      ]
+    },
+    {
+      "id": "rail_eu_northsea_med",
+      "name": "EU North Sea-Mediterranean Rail Corridor",
+      "flowMode": "rail",
+      "flowSubType": "eu_freight_corridor",
+      "tags": [
+        "rail",
+        "eu",
+        "freight"
+      ]
+    },
+    {
+      "id": "rail_eu_baltic_adriatic",
+      "name": "EU Baltic-Adriatic Rail Corridor",
+      "flowMode": "rail",
+      "flowSubType": "eu_freight_corridor",
+      "tags": [
+        "rail",
+        "eu",
+        "corridor"
+      ]
+    },
+    {
+      "id": "rail_us_transcontinental",
+      "name": "US Transcontinental Rail Corridor",
+      "flowMode": "rail",
+      "flowSubType": "na_freight",
+      "tags": [
+        "rail",
+        "usa",
+        "freight"
+      ]
+    },
+    {
+      "id": "rail_india_dfc_west",
+      "name": "India Western Dedicated Freight Corridor",
+      "flowMode": "rail",
+      "flowSubType": "dfc_freight",
+      "tags": [
+        "rail",
+        "india",
+        "dfc"
+      ]
+    },
+    {
+      "id": "rail_india_dfc_east",
+      "name": "India Eastern Dedicated Freight Corridor",
+      "flowMode": "rail",
+      "flowSubType": "dfc_freight",
+      "tags": [
+        "rail",
+        "india",
+        "dfc"
+      ]
+    },
+    {
+      "id": "rail_gcc_northsouth",
+      "name": "GCC North-South Rail Spine",
+      "flowMode": "rail",
+      "flowSubType": "gcc_cargo_rail",
+      "tags": [
+        "rail",
+        "gcc",
+        "cargo"
+      ]
+    },
+    {
+      "id": "rail_kazakh_transit",
+      "name": "Kazakh Transit Rail Corridor",
+      "flowMode": "rail",
+      "flowSubType": "centralasia_transit",
+      "tags": [
+        "rail",
+        "kazakhstan",
+        "transit"
+      ]
+    },
+    {
+      "id": "rail_brazil_northsouth",
+      "name": "Brazil North-South Rail Axis",
+      "flowMode": "rail",
+      "flowSubType": "latam_freight",
+      "tags": [
+        "rail",
+        "brazil",
+        "freight"
+      ]
+    },
+    {
+      "id": "waterway_rhine_axis",
+      "name": "Rhine Inland Waterway Axis",
+      "flowMode": "inland_waterway",
+      "flowSubType": "barge_freight",
+      "tags": [
+        "rhine",
+        "barge",
+        "freight"
+      ]
+    },
+    {
+      "id": "waterway_danube_axis",
+      "name": "Danube Inland Waterway Axis",
+      "flowMode": "inland_waterway",
+      "flowSubType": "barge_freight",
+      "tags": [
+        "danube",
+        "barge",
+        "freight"
+      ]
+    },
+    {
+      "id": "waterway_mississippi_axis",
+      "name": "Mississippi Inland Waterway Axis",
+      "flowMode": "inland_waterway",
+      "flowSubType": "bulk_barge",
+      "tags": [
+        "mississippi",
+        "bulk",
+        "barge"
+      ]
+    },
+    {
+      "id": "waterway_yangtze_axis",
+      "name": "Yangtze Inland Waterway Axis",
+      "flowMode": "inland_waterway",
+      "flowSubType": "container_barge",
+      "tags": [
+        "yangtze",
+        "container",
+        "barge"
+      ]
+    },
+    {
+      "id": "waterway_amazon_axis",
+      "name": "Amazon Inland Waterway Axis",
+      "flowMode": "inland_waterway",
+      "flowSubType": "bulk_regional",
+      "tags": [
+        "amazon",
+        "river",
+        "bulk"
+      ]
+    },
+    {
+      "id": "waterway_nile_axis",
+      "name": "Nile Inland Transport Axis",
+      "flowMode": "inland_waterway",
+      "flowSubType": "regional_bulk",
+      "tags": [
+        "nile",
+        "river",
+        "regional"
+      ]
+    },
+    {
+      "id": "intermodal_rotterdam_ruhr",
+      "name": "Rotterdam-Ruhr Intermodal Corridor",
+      "flowMode": "intermodal",
+      "flowSubType": "port_rail_road",
+      "tags": [
+        "intermodal",
+        "port",
+        "rail"
+      ]
+    },
+    {
+      "id": "intermodal_duisburg_hub",
+      "name": "Duisburg Inland Intermodal Hub",
+      "flowMode": "intermodal",
+      "flowSubType": "rail_inland_terminal",
+      "tags": [
+        "intermodal",
+        "terminal",
+        "rail"
+      ]
+    },
+    {
+      "id": "intermodal_singapore_johor",
+      "name": "Singapore-Johor Intermodal Belt",
+      "flowMode": "intermodal",
+      "flowSubType": "port_data_road",
+      "tags": [
+        "intermodal",
+        "port",
+        "data-centers"
+      ]
+    },
+    {
+      "id": "intermodal_jebelali_dwc",
+      "name": "Jebel Ali-DWC Intermodal Belt",
+      "flowMode": "intermodal",
+      "flowSubType": "port_aircargo_road",
+      "tags": [
+        "intermodal",
+        "port",
+        "aircargo"
+      ]
+    },
+    {
+      "id": "intermodal_la_lb_inland",
+      "name": "LA-LB Inland Intermodal Corridor",
+      "flowMode": "intermodal",
+      "flowSubType": "port_rail_truck",
+      "tags": [
+        "intermodal",
+        "port",
+        "rail"
+      ]
+    },
+    {
+      "id": "intermodal_panama_colon_balboa",
+      "name": "Colon-Balboa Intermodal Canal Corridor",
+      "flowMode": "intermodal",
+      "flowSubType": "canal_dual_port",
+      "tags": [
+        "intermodal",
+        "canal",
+        "ports"
+      ]
+    },
+    {
+      "id": "intermodal_shanghai_yangtze_delta",
+      "name": "Shanghai-Yangtze Delta Intermodal Network",
+      "flowMode": "intermodal",
+      "flowSubType": "port_inland_waterway_rail",
+      "tags": [
+        "intermodal",
+        "delta",
+        "barge"
+      ]
+    },
+    {
+      "id": "intermodal_mumbai_jnpt_dmic",
+      "name": "Mumbai-JNPT-DMIC Intermodal Corridor",
+      "flowMode": "intermodal",
+      "flowSubType": "port_rail_road",
+      "tags": [
+        "intermodal",
+        "port",
+        "dmic"
+      ]
+    },
+    {
+      "id": "pipeline_oil_saudi_eastwest",
+      "name": "Saudi East-West Crude Pipeline Corridor",
+      "flowMode": "pipeline_oil",
+      "flowSubType": "crude_export_bypass",
+      "tags": [
+        "oil",
+        "pipeline",
+        "red_sea"
+      ]
+    },
+    {
+      "id": "pipeline_oil_iraq_turkiye",
+      "name": "Iraq-Turkiye Oil Export Trunkline",
+      "flowMode": "pipeline_oil",
+      "flowSubType": "export_trunk",
+      "tags": [
+        "oil",
+        "pipeline",
+        "ceyhan"
+      ]
+    },
+    {
+      "id": "pipeline_oil_cpc_kazakhstan",
+      "name": "CPC Kazakhstan-Black Sea Oil Corridor",
+      "flowMode": "pipeline_oil",
+      "flowSubType": "export_trunk",
+      "tags": [
+        "oil",
+        "kazakhstan",
+        "black_sea"
+      ]
+    },
+    {
+      "id": "pipeline_oil_enbridge_mainline",
+      "name": "Enbridge Mainline Export Corridor",
+      "flowMode": "pipeline_oil",
+      "flowSubType": "north_america_crude",
+      "tags": [
+        "oil",
+        "canada",
+        "us_midwest"
+      ]
+    },
+    {
+      "id": "pipeline_oil_btc_caspian_med",
+      "name": "Baku-Tbilisi-Ceyhan Oil Corridor",
+      "flowMode": "pipeline_oil",
+      "flowSubType": "caspian_export",
+      "tags": [
+        "oil",
+        "caspian",
+        "mediterranean"
+      ]
+    },
+    {
+      "id": "pipeline_oil_druzhba_europe",
+      "name": "Druzhba Europe Oil Distribution Corridor",
+      "flowMode": "pipeline_oil",
+      "flowSubType": "continental_distribution",
+      "tags": [
+        "oil",
+        "europe",
+        "distribution"
+      ]
+    },
+    {
+      "id": "pipeline_gas_norway_uk_langeled",
+      "name": "Norway-UK Langeled Gas Trunkline",
+      "flowMode": "pipeline_gas",
+      "flowSubType": "offshore_trunkline",
+      "tags": [
+        "gas",
+        "offshore",
+        "uk"
+      ]
+    },
+    {
+      "id": "pipeline_gas_norway_germany",
+      "name": "Norway-Germany Gas Offshore Corridor",
+      "flowMode": "pipeline_gas",
+      "flowSubType": "offshore_trunkline",
+      "tags": [
+        "gas",
+        "offshore",
+        "germany"
+      ]
+    },
+    {
+      "id": "pipeline_gas_algeria_spain_medgaz",
+      "name": "Algeria-Spain Medgaz Gas Pipeline",
+      "flowMode": "pipeline_gas",
+      "flowSubType": "mediterranean_subsea",
+      "tags": [
+        "gas",
+        "mediterranean",
+        "spain"
+      ]
+    },
+    {
+      "id": "pipeline_gas_tanap_tap",
+      "name": "TANAP-TAP Gas Corridor",
+      "flowMode": "pipeline_gas",
+      "flowSubType": "eurasia_trunkline",
+      "tags": [
+        "gas",
+        "tanap",
+        "tap"
+      ]
+    },
+    {
+      "id": "pipeline_gas_qatar_uae_dolphin",
+      "name": "Qatar-UAE Dolphin Gas Pipeline",
+      "flowMode": "pipeline_gas",
+      "flowSubType": "regional_subsea",
+      "tags": [
+        "gas",
+        "gulf",
+        "dolphin"
+      ]
+    },
+    {
+      "id": "pipeline_gas_centralasia_china",
+      "name": "Central Asia-China Gas Corridor",
+      "flowMode": "pipeline_gas",
+      "flowSubType": "continental_trunkline",
+      "tags": [
+        "gas",
+        "central_asia",
+        "china"
+      ]
+    },
+    {
+      "id": "pipeline_gas_transmed_algeria_italy",
+      "name": "TransMed Algeria-Italy Gas Corridor",
+      "flowMode": "pipeline_gas",
+      "flowSubType": "mediterranean_subsea",
+      "tags": [
+        "gas",
+        "italy",
+        "north_africa"
+      ]
+    },
+    {
+      "id": "pipeline_h2_h2med_iberia",
+      "name": "H2Med Iberia-France Hydrogen Corridor",
+      "flowMode": "pipeline_h2",
+      "flowSubType": "hydrogen_backbone",
+      "tags": [
+        "hydrogen",
+        "iberia",
+        "eu_act"
+      ]
+    },
+    {
+      "id": "pipeline_h2_northsea_backbone",
+      "name": "North Sea Hydrogen Backbone",
+      "flowMode": "pipeline_h2",
+      "flowSubType": "north_sea_hub",
+      "tags": [
+        "hydrogen",
+        "north_sea",
+        "eu_act"
+      ]
+    },
+    {
+      "id": "pipeline_h2_rhine_ruhr",
+      "name": "Rhine-Ruhr Hydrogen Industrial Link",
+      "flowMode": "pipeline_h2",
+      "flowSubType": "industrial_cluster_link",
+      "tags": [
+        "hydrogen",
+        "industry",
+        "eu_act"
+      ]
+    },
+    {
+      "id": "pipeline_h2_neom_jubail",
+      "name": "NEOM-Jubail Hydrogen Corridor",
+      "flowMode": "pipeline_h2",
+      "flowSubType": "green_hydrogen_export",
+      "tags": [
+        "hydrogen",
+        "gulf",
+        "saudi"
+      ]
+    },
+    {
+      "id": "pipeline_co2_northern_lights",
+      "name": "Northern Lights CO2 Offshore Corridor",
+      "flowMode": "pipeline_co2",
+      "flowSubType": "offshore_storage",
+      "tags": [
+        "co2",
+        "storage",
+        "north_sea"
+      ]
+    },
+    {
+      "id": "pipeline_co2_rotterdam_northsea",
+      "name": "Rotterdam-North Sea CO2 Corridor",
+      "flowMode": "pipeline_co2",
+      "flowSubType": "port_capture_storage",
+      "tags": [
+        "co2",
+        "rotterdam",
+        "eu_act"
+      ]
+    },
+    {
+      "id": "pipeline_co2_humber_northsea",
+      "name": "Humber-North Sea CO2 Corridor",
+      "flowMode": "pipeline_co2",
+      "flowSubType": "industrial_capture_storage",
+      "tags": [
+        "co2",
+        "uk",
+        "ccus"
+      ]
+    },
+    {
+      "id": "pipeline_co2_zeebrugge_northsea",
+      "name": "Zeebrugge-North Sea CO2 Corridor",
+      "flowMode": "pipeline_co2",
+      "flowSubType": "industrial_capture_storage",
+      "tags": [
+        "co2",
+        "belgium",
+        "eu_act"
+      ]
+    },
+    {
+      "id": "pipeline_co2_gulf_industrial_storage",
+      "name": "Gulf Industrial CO2 Capture Corridor",
+      "flowMode": "pipeline_co2",
+      "flowSubType": "enhanced_recovery_storage",
+      "tags": [
+        "co2",
+        "gulf",
+        "industry"
+      ]
+    },
+    {
+      "id": "power_hvdc_north_sea_link",
+      "name": "North Sea Link HVDC (UK-Norway)",
+      "flowMode": "power_hvdc",
+      "flowSubType": "subsea_interconnector",
+      "tags": [
+        "power",
+        "hvdc",
+        "interconnector"
+      ]
+    },
+    {
+      "id": "power_hvdc_nordlink",
+      "name": "NordLink HVDC (Germany-Norway)",
+      "flowMode": "power_hvdc",
+      "flowSubType": "subsea_interconnector",
+      "tags": [
+        "power",
+        "hvdc",
+        "interconnector"
+      ]
+    },
+    {
+      "id": "power_hvdc_saudi_egypt",
+      "name": "Saudi-Egypt HVDC Corridor",
+      "flowMode": "power_hvdc",
+      "flowSubType": "cross_border_interconnector",
+      "tags": [
+        "power",
+        "hvdc",
+        "red_sea"
+      ]
+    },
+    {
+      "id": "power_hvdc_china_west_east",
+      "name": "China West-East UHVDC Backbone",
+      "flowMode": "power_hvdc",
+      "flowSubType": "ultra_high_voltage_dc",
+      "tags": [
+        "power",
+        "uhvdc",
+        "china"
+      ]
+    },
+    {
+      "id": "power_hvdc_india_north_south",
+      "name": "India North-South HVDC Transfer Corridor",
+      "flowMode": "power_hvdc",
+      "flowSubType": "bulk_transfer_dc",
+      "tags": [
+        "power",
+        "hvdc",
+        "india"
+      ]
+    },
+    {
+      "id": "power_hvdc_brazil_north_southeast",
+      "name": "Brazil North-Southeast HVDC Corridor",
+      "flowMode": "power_hvdc",
+      "flowSubType": "bulk_transfer_dc",
+      "tags": [
+        "power",
+        "hvdc",
+        "brazil"
+      ]
+    },
+    {
+      "id": "power_hvdc_basslink_australia",
+      "name": "Bass Strait HVDC Interconnector",
+      "flowMode": "power_hvdc",
+      "flowSubType": "subsea_interconnector",
+      "tags": [
+        "power",
+        "hvdc",
+        "australia"
+      ]
+    },
+    {
+      "id": "power_hvac_eu_core_ring",
+      "name": "EU Core HVAC Grid Ring",
+      "flowMode": "power_hvac",
+      "flowSubType": "synchronous_grid_core",
+      "tags": [
+        "power",
+        "hvac",
+        "eu_act"
+      ]
+    },
+    {
+      "id": "power_hvac_gcc_grid",
+      "name": "GCC HVAC Grid Corridor",
+      "flowMode": "power_hvac",
+      "flowSubType": "regional_grid_link",
+      "tags": [
+        "power",
+        "hvac",
+        "gcc"
+      ]
+    },
+    {
+      "id": "power_hvac_us_eastern_backbone",
+      "name": "US Eastern HVAC Backbone",
+      "flowMode": "power_hvac",
+      "flowSubType": "regional_backbone",
+      "tags": [
+        "power",
+        "hvac",
+        "usa"
+      ]
+    },
+    {
+      "id": "power_hvac_india_grid_ring",
+      "name": "India HVAC Grid Ring",
+      "flowMode": "power_hvac",
+      "flowSubType": "regional_backbone",
+      "tags": [
+        "power",
+        "hvac",
+        "india"
+      ]
+    },
+    {
+      "id": "power_hvac_maghreb_spine",
+      "name": "Maghreb HVAC Transmission Spine",
+      "flowMode": "power_hvac",
+      "flowSubType": "regional_backbone",
+      "tags": [
+        "power",
+        "hvac",
+        "north_africa"
+      ]
+    },
+    {
+      "id": "ferry_roro_dover_calais",
+      "name": "Dover-Calais Ferry / Ro-Ro Lane",
+      "flowMode": "ferry_roro",
+      "flowSubType": "short_sea_ro_ro",
+      "tags": [
+        "ferry",
+        "roro",
+        "channel"
+      ]
+    },
+    {
+      "id": "ferry_roro_helsinki_tallinn",
+      "name": "Helsinki-Tallinn Ferry Lane",
+      "flowMode": "ferry_roro",
+      "flowSubType": "short_sea_ro_ro",
+      "tags": [
+        "ferry",
+        "baltic",
+        "roro"
+      ]
+    },
+    {
+      "id": "ferry_roro_stockholm_turku",
+      "name": "Stockholm-Turku Ferry Lane",
+      "flowMode": "ferry_roro",
+      "flowSubType": "short_sea_ro_ro",
+      "tags": [
+        "ferry",
+        "baltic",
+        "roro"
+      ]
+    },
+    {
+      "id": "ferry_roro_piraeus_crete",
+      "name": "Piraeus-Crete Ferry Supply Lane",
+      "flowMode": "ferry_roro",
+      "flowSubType": "island_supply_lane",
+      "tags": [
+        "ferry",
+        "mediterranean",
+        "roro"
+      ]
+    },
+    {
+      "id": "ferry_roro_jeddah_safaga",
+      "name": "Jeddah-Safaga Ro-Ro Ferry Lane",
+      "flowMode": "ferry_roro",
+      "flowSubType": "ro_ro_short_sea",
+      "tags": [
+        "ferry",
+        "red_sea",
+        "roro"
+      ]
+    },
+    {
+      "id": "ferry_roro_dubai_bandarabbas",
+      "name": "Dubai-Bandar Abbas Ro-Ro Lane",
+      "flowMode": "ferry_roro",
+      "flowSubType": "regional_ro_ro",
+      "tags": [
+        "ferry",
+        "gulf",
+        "roro"
+      ]
+    },
+    {
+      "id": "ferry_roro_singapore_batam",
+      "name": "Singapore-Batam Ferry / Ro-Ro Lane",
+      "flowMode": "ferry_roro",
+      "flowSubType": "island_supply_lane",
+      "tags": [
+        "ferry",
+        "strait",
+        "roro"
+      ]
+    },
+    {
+      "id": "ferry_roro_manila_cebu",
+      "name": "Manila-Cebu Ferry Backbone",
+      "flowMode": "ferry_roro",
+      "flowSubType": "archipelago_backbone",
+      "tags": [
+        "ferry",
+        "philippines",
+        "roro"
+      ]
+    },
+    {
+      "id": "ferry_roro_cebu_davao",
+      "name": "Cebu-Davao Ferry Backbone",
+      "flowMode": "ferry_roro",
+      "flowSubType": "archipelago_backbone",
+      "tags": [
+        "ferry",
+        "philippines",
+        "roro"
+      ]
+    },
+    {
+      "id": "ferry_roro_japan_korea",
+      "name": "Korea-Japan Ro-Ro Lane",
+      "flowMode": "ferry_roro",
+      "flowSubType": "ro_ro_short_sea",
+      "tags": [
+        "ferry",
+        "korea",
+        "japan"
+      ]
+    },
+    {
+      "id": "ferry_roro_uk_ireland",
+      "name": "UK-Ireland Ro-Ro Lane",
+      "flowMode": "ferry_roro",
+      "flowSubType": "ro_ro_short_sea",
+      "tags": [
+        "ferry",
+        "roro",
+        "uk"
+      ]
+    },
+    {
+      "id": "ferry_roro_rostock_trelleborg",
+      "name": "Rostock-Trelleborg Ro-Ro Lane",
+      "flowMode": "ferry_roro",
+      "flowSubType": "ro_ro_short_sea",
+      "tags": [
+        "ferry",
+        "baltic",
+        "roro"
+      ]
+    },
+    {
+      "id": "internet_cable_transatlantic_ny_london",
+      "name": "Transatlantic Internet Cable (NY-London)",
+      "flowMode": "internet_cable",
+      "flowSubType": "subsea_backbone",
+      "tags": [
+        "internet",
+        "subsea",
+        "atlantic"
+      ]
+    },
+    {
+      "id": "internet_cable_transatlantic_marseille_ny",
+      "name": "Transatlantic Internet Cable (Marseille-US East)",
+      "flowMode": "internet_cable",
+      "flowSubType": "subsea_backbone",
+      "tags": [
+        "internet",
+        "subsea",
+        "atlantic"
+      ]
+    },
+    {
+      "id": "internet_cable_lisbon_fortaleza",
+      "name": "Lisbon-Fortaleza Internet Cable",
+      "flowMode": "internet_cable",
+      "flowSubType": "south_atlantic_backbone",
+      "tags": [
+        "internet",
+        "subsea",
+        "south_atlantic"
+      ]
+    },
+    {
+      "id": "internet_cable_miami_caribbean_panama",
+      "name": "Miami-Caribbean-Panama Internet Corridor",
+      "flowMode": "internet_cable",
+      "flowSubType": "regional_subsea_mesh",
+      "tags": [
+        "internet",
+        "caribbean",
+        "subsea"
+      ]
+    },
+    {
+      "id": "internet_cable_transpacific_la_tokyo",
+      "name": "Transpacific Internet Cable (LA-Tokyo)",
+      "flowMode": "internet_cable",
+      "flowSubType": "transpacific_backbone",
+      "tags": [
+        "internet",
+        "subsea",
+        "pacific"
+      ]
+    },
+    {
+      "id": "internet_cable_transpacific_oregon_chiba",
+      "name": "Transpacific Internet Cable (Oregon-Chiba)",
+      "flowMode": "internet_cable",
+      "flowSubType": "transpacific_backbone",
+      "tags": [
+        "internet",
+        "subsea",
+        "pacific"
+      ]
+    },
+    {
+      "id": "internet_cable_singapore_hk_tokyo",
+      "name": "Singapore-Hong Kong-Tokyo Cable Corridor",
+      "flowMode": "internet_cable",
+      "flowSubType": "asia_backbone",
+      "tags": [
+        "internet",
+        "subsea",
+        "asia"
+      ]
+    },
+    {
+      "id": "internet_cable_sea_me_we_style",
+      "name": "Europe-Asia Subsea Cable Backbone",
+      "flowMode": "internet_cable",
+      "flowSubType": "europe_asia_backbone",
+      "tags": [
+        "internet",
+        "subsea",
+        "eurasia"
+      ]
+    },
+    {
+      "id": "internet_cable_marseille_alexandria",
+      "name": "Marseille-Alexandria Internet Cable",
+      "flowMode": "internet_cable",
+      "flowSubType": "mediterranean_backbone",
+      "tags": [
+        "internet",
+        "mediterranean",
+        "subsea"
+      ]
+    },
+    {
+      "id": "internet_cable_redsea_gulf",
+      "name": "Red Sea-Gulf Internet Cable Corridor",
+      "flowMode": "internet_cable",
+      "flowSubType": "red_sea_gulf_backbone",
+      "tags": [
+        "internet",
+        "red_sea",
+        "gulf"
+      ]
+    },
+    {
+      "id": "internet_cable_east_africa_india",
+      "name": "East Africa-India Internet Cable Corridor",
+      "flowMode": "internet_cable",
+      "flowSubType": "indian_ocean_backbone",
+      "tags": [
+        "internet",
+        "indian_ocean",
+        "subsea"
+      ]
+    },
+    {
+      "id": "internet_cable_west_africa_europe",
+      "name": "West Africa-Europe Internet Cable Corridor",
+      "flowMode": "internet_cable",
+      "flowSubType": "atlantic_africa_backbone",
+      "tags": [
+        "internet",
+        "atlantic",
+        "africa"
+      ]
+    },
+    {
+      "id": "internet_cable_singapore_perth",
+      "name": "Singapore-Perth Internet Cable",
+      "flowMode": "internet_cable",
+      "flowSubType": "indian_ocean_backbone",
+      "tags": [
+        "internet",
+        "subsea",
+        "australia"
+      ]
+    },
+    {
+      "id": "internet_cable_sydney_auckland",
+      "name": "Sydney-Auckland Internet Cable",
+      "flowMode": "internet_cable",
+      "flowSubType": "tasman_backbone",
+      "tags": [
+        "internet",
+        "tasman",
+        "subsea"
+      ]
+    },
+    {
+      "id": "internet_cable_japan_ph_singapore",
+      "name": "Japan-Philippines-Singapore Cable Corridor",
+      "flowMode": "internet_cable",
+      "flowSubType": "asia_backbone",
+      "tags": [
+        "internet",
+        "subsea",
+        "asia"
+      ]
+    },
+    {
+      "id": "internet_cable_india_me_europe",
+      "name": "India-Middle East-Europe Internet Corridor",
+      "flowMode": "internet_cable",
+      "flowSubType": "eurasia_backbone",
+      "tags": [
+        "internet",
+        "subsea",
+        "europe_asia"
+      ]
+    },
+    {
+      "id": "internet_cable_south_america_cone",
+      "name": "South Cone Internet Cable Corridor",
+      "flowMode": "internet_cable",
+      "flowSubType": "regional_subsea_mesh",
+      "tags": [
+        "internet",
+        "subsea",
+        "south_america"
+      ]
+    },
+    {
+      "id": "sea_northern_sea_route",
+      "name": "Northern Sea Route (Arctic)",
+      "flowMode": "sea",
+      "flowSubType": "arctic_nsr",
+      "tags": [
+        "arctic",
+        "russia",
+        "nsr"
+      ]
+    },
+    {
+      "id": "road_russia_europe_asia",
+      "name": "Russia Europe-Asia Road Corridor",
+      "flowMode": "road",
+      "flowSubType": "transsib_corridor",
+      "tags": [
+        "russia",
+        "transsib",
+        "asia"
+      ]
+    },
+    {
+      "id": "road_central_asia_corridor",
+      "name": "Central Asia Road Corridor",
+      "flowMode": "road",
+      "flowSubType": "central_asia",
+      "tags": [
+        "central_asia",
+        "kazakhstan",
+        "uzbekistan"
+      ]
+    },
+    {
+      "id": "rail_russia_europe",
+      "name": "Russia-Europe Rail Corridor",
+      "flowMode": "rail",
+      "flowSubType": "north_europe",
+      "tags": [
+        "russia",
+        "europe",
+        "helsinki"
+      ]
+    },
+    {
+      "id": "rail_central_asia_south",
+      "name": "Central Asia South Rail Corridor",
+      "flowMode": "rail",
+      "flowSubType": "central_asia",
+      "tags": [
+        "central_asia",
+        "uzbekistan",
+        "tajikistan"
+      ]
+    },
+    {
+      "id": "pipeline_gas_power_of_siberia",
+      "name": "Power of Siberia Gas Pipeline (Russia-China)",
+      "flowMode": "pipeline_gas",
+      "flowSubType": "russia_china",
+      "tags": [
+        "russia",
+        "china",
+        "gas"
+      ]
+    },
+    {
+      "id": "pipeline_gas_russia_europe",
+      "name": "Russia-Europe Gas Pipeline Corridor",
+      "flowMode": "pipeline_gas",
+      "flowSubType": "yamal_europe",
+      "tags": [
+        "russia",
+        "europe",
+        "gas"
+      ]
+    },
+    {
+      "id": "air_russia_asia",
+      "name": "Russia-Asia Air Corridor",
+      "flowMode": "air",
+      "flowSubType": "russia_china",
+      "tags": [
+        "russia",
+        "china",
+        "asia"
+      ]
+    },
+    {
+      "id": "air_central_asia_hubs",
+      "name": "Central Asia-Gulf Air Corridor",
+      "flowMode": "air",
+      "flowSubType": "central_asia_gulf",
+      "tags": [
+        "central_asia",
+        "gulf",
+        "dubai"
+      ]
+    },
+    {
+      "id": "waterway_ob_irtysh_axis",
+      "name": "Ob-Irtysh Inland Waterway Axis",
+      "flowMode": "inland_waterway",
+      "flowSubType": "russia_siberia",
+      "tags": [
+        "russia",
+        "siberia",
+        "ob"
+      ]
+    },
+    {
+      "id": "waterway_volga_caspian_axis",
+      "name": "Volga-Caspian Inland Waterway Axis",
+      "flowMode": "inland_waterway",
+      "flowSubType": "russia_volga",
+      "tags": [
+        "russia",
+        "volga",
+        "caspian"
+      ]
+    },
+    {
+      "id": "intermodal_novorossiysk_black_sea",
+      "name": "Novorossiysk Black Sea Intermodal Corridor",
+      "flowMode": "intermodal",
+      "flowSubType": "black_sea",
+      "tags": [
+        "russia",
+        "black_sea",
+        "port"
+      ]
+    },
+    {
+      "id": "intermodal_khorgos_landbridge",
+      "name": "Khorgos Landbridge Intermodal Corridor",
+      "flowMode": "intermodal",
+      "flowSubType": "china_central_asia",
+      "tags": [
+        "china",
+        "kazakhstan",
+        "central_asia"
+      ]
+    },
+    {
+      "id": "intermodal_china_europe_silk_road",
+      "name": "China-Europe Silk Road (Port–Rail Multimodal)",
+      "flowMode": "intermodal",
+      "flowSubType": "belt_road_port_rail",
+      "tags": [
+        "china",
+        "belt_road",
+        "khorgos",
+        "europe",
+        "multimodal"
+      ]
+    }
+  ]
+}

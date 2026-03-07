@@ -23,25 +23,25 @@ type HorizonHandlers struct {
 	docsRepo                  *corerepo.DocumentsRepository
 	usersRepo                 *corerepo.UsersRepository
 	interactions              *corerepo.InteractionsRepository
-	factsRepo                  *corerepo.OntologyFactsRepository
+	factsRepo                 *corerepo.OntologyFactsRepository
 	exposurePathsRepo         *horizonrepo.ExposurePathsRepository
 	riskJobsRepo              *horizonrepo.RiskJobsRepository
-	propagationProfileLookup *horizonprop.ProfileLookup
+	propagationProfileLookup  *horizonprop.ProfileLookup
 	signalPipeline            *horizonscout.SignalPipeline
-	mergeFragmentsRepo          *horizonrepo.FragmentsMergeRepository
-	materializedArtifactsRepo   *horizonrepo.MaterializedArtifactsRepository
-	newsByFragmentsCanvas       *discovery.NewsByFragmentsCanvas
+	mergeFragmentsRepo        *horizonrepo.FragmentsMergeRepository
+	materializedArtifactsRepo *horizonrepo.MaterializedArtifactsRepository
+	newsByFragmentsCanvas     *discovery.NewsByFragmentsCanvas
 
 	// Lens Q&A (Analysis view)
-	qaEngine               *horizonqa.Engine
-	qaContextBuilder       *horizonqa.AnswerContextBuilder
-	qaSynthesizer          *horizonqa.AnswerSynthesizer
-	qaSessionsRepo         *horizonrepo.QASessionsRepository
-	qaSufficiencyChecker   *horizonqa.SufficiencyChecker
-	qaSignalGapDetector    *horizonqa.SignalGapDetector
+	qaEngine                *horizonqa.Engine
+	qaContextBuilder        *horizonqa.AnswerContextBuilder
+	qaSynthesizer           *horizonqa.AnswerSynthesizer
+	qaSessionsRepo          *horizonrepo.QASessionsRepository
+	qaSufficiencyChecker    *horizonqa.SufficiencyChecker
+	qaSignalGapDetector     *horizonqa.SignalGapDetector
 	qaGroundingQueryBuilder *horizonqa.GroundingQueryBuilder
-	qaBestEffortFiller     *horizonqa.BestEffortFiller
-	scoutingJobsRepo       *horizonrepo.ScoutingJobsRepository
+	qaBestEffortFiller      *horizonqa.BestEffortFiller
+	scoutingJobsRepo        *horizonrepo.ScoutingJobsRepository
 
 	// Job-level telemetry (LLM cost tracking)
 	jobTelemetryRepo *horizonrepo.JobTelemetryRepository
@@ -182,7 +182,6 @@ func (h *HorizonHandlers) WithJobTelemetryRepo(r *horizonrepo.JobTelemetryReposi
 	return h
 }
 
-
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Intent precheck (NL -> taxonomy-aligned intent)
@@ -205,6 +204,7 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/supply-chains/by-node", authMiddleware(http.HandlerFunc(h.GetSupplyChainsByNode)))
 	mux.Handle("/api/horizon/supply-chains/by-lens", authMiddleware(http.HandlerFunc(h.GetSupplyChainsByLens)))
 	mux.Handle("/api/horizon/geo-objects", authMiddleware(http.HandlerFunc(h.ListGeoObjects)))
+	mux.Handle("/api/horizon/map-activity", authMiddleware(http.HandlerFunc(h.ListMapActivity)))
 
 	// Fragment profiles (direct access by profile ID)
 	if h.profilesHandler != nil {
@@ -227,20 +227,20 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	// Scout endpoints
 	mux.Handle("/api/horizon/scout/jobs/", authMiddleware(http.HandlerFunc(h.HandleScoutRoutes)))
 
-		// Propagation endpoints
-		mux.Handle("/api/horizon/propagation/status", authMiddleware(http.HandlerFunc(h.GetPropagationStatus)))
-		mux.Handle("/api/horizon/propagation/trigger", authMiddleware(http.HandlerFunc(h.TriggerPropagation)))
-		mux.Handle("/api/horizon/propagation/trace", authMiddleware(http.HandlerFunc(h.TracePropagationPaths)))
+	// Propagation endpoints
+	mux.Handle("/api/horizon/propagation/status", authMiddleware(http.HandlerFunc(h.GetPropagationStatus)))
+	mux.Handle("/api/horizon/propagation/trigger", authMiddleware(http.HandlerFunc(h.TriggerPropagation)))
+	mux.Handle("/api/horizon/propagation/trace", authMiddleware(http.HandlerFunc(h.TracePropagationPaths)))
 
-		// Debug: inject an event and run SignalDescriptor pipeline (extract → seed → propagate)
-		mux.Handle("/api/horizon/events:inject", authMiddleware(http.HandlerFunc(h.InjectEvent)))
-		// Manual: extract 12-axis signals for existing event facts (no auto-invocation)
-		mux.Handle("/api/horizon/events:extract-signals", authMiddleware(http.HandlerFunc(h.ExtractEventSignals)))
+	// Debug: inject an event and run SignalDescriptor pipeline (extract → seed → propagate)
+	mux.Handle("/api/horizon/events:inject", authMiddleware(http.HandlerFunc(h.InjectEvent)))
+	// Manual: extract 12-axis signals for existing event facts (no auto-invocation)
+	mux.Handle("/api/horizon/events:extract-signals", authMiddleware(http.HandlerFunc(h.ExtractEventSignals)))
 	mux.Handle("/api/horizon/canvas/news-by-fragments", authMiddleware(http.HandlerFunc(h.NewsByFragments)))
 	mux.Handle("/api/horizon/ontology-facts/by-canonical-path", authMiddleware(http.HandlerFunc(h.GetFactsByCanonicalPath)))
 
-		// Domain scenario: Encode → Propagate → Decode (policy-impact, etc.)
-		mux.Handle("/api/horizon/scenarios/run", authMiddleware(http.HandlerFunc(h.RunScenario)))
+	// Domain scenario: Encode → Propagate → Decode (policy-impact, etc.)
+	mux.Handle("/api/horizon/scenarios/run", authMiddleware(http.HandlerFunc(h.RunScenario)))
 
 	// Entity search (Live Entity Recognition)
 	mux.Handle("/api/horizon/entities/search", authMiddleware(http.HandlerFunc(h.SearchEntities)))

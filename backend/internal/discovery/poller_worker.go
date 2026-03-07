@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/pubsub"
@@ -48,6 +49,7 @@ func (w *SourcePoller) PublishDue(ctx context.Context) error {
 	now := time.Now()
 	w.logger.Printf("source poller: checking %d sources for polling", len(list))
 	for _, ds := range list {
+		systemGlobalSource := w.isSystemGlobalHeuristicSource(ds)
 		// Skip if NextPollAt is set and not yet due, UNLESS LastPolledAt is never set (first poll)
 		// This ensures sources are polled at least once even if NextPollAt was set initially
 		if ds.NextPollAt != nil && now.Before(*ds.NextPollAt) {
@@ -61,7 +63,7 @@ func (w *SourcePoller) PublishDue(ctx context.Context) error {
 		}
 		// Check if source has at least one active project link
 		// For public sources (TenantID=""), we need to check all tenants
-		if !w.hasActiveProjects(ctx, ds.TenantID, ds.ID) {
+		if !systemGlobalSource && !w.hasActiveProjects(ctx, ds.TenantID, ds.ID) {
 			w.logger.Printf("source poller: skipping source %s - no active projects", ds.ID)
 			// Update NextPollAt to avoid "Overdue" status and immediate retry
 			// We'll check again after the standard cadence
@@ -108,12 +110,16 @@ func (w *SourcePoller) PublishDue(ctx context.Context) error {
 		// For public sources, we need to determine tenantID from active project links
 		tenantID := ds.TenantID
 		if tenantID == "" {
-			// Public source - get tenantID from first active project link
-			if w.orchestrator != nil && w.orchestrator.sproj != nil {
-				activeStatus := "active"
-				links, err := w.orchestrator.sproj.ListBySource(ctx, "", ds.ID, &activeStatus)
-				if err == nil && len(links) > 0 {
-					tenantID = links[0].TenantID
+			if systemGlobalSource {
+				tenantID = "global"
+			} else {
+				// Public source - get tenantID from first active project link
+				if w.orchestrator != nil && w.orchestrator.sproj != nil {
+					activeStatus := "active"
+					links, err := w.orchestrator.sproj.ListBySource(ctx, "", ds.ID, &activeStatus)
+					if err == nil && len(links) > 0 {
+						tenantID = links[0].TenantID
+					}
 				}
 			}
 		}
@@ -182,25 +188,30 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 		}
 		// Allow sources with Status="active" or Status="paused" (with ErrorCount < 10) to continue
 		// They will be checked for active projects below
+		systemGlobalSource := w.isSystemGlobalHeuristicSource(ds)
 		// Determine tenantID for processing (critical for public sources to track metrics under project tenant)
 		// For public sources (ds.TenantID == ""), we need to get tenantID from active project links
 		// This ensures usage metrics are tracked under the tenant that activated the source
 		processingTenantID := payload.TenantID
 		if processingTenantID == "" && ds.TenantID == "" {
-			// Public source - get tenantID from first active project link
-			if w.orchestrator != nil && w.orchestrator.sproj != nil {
-				activeStatus := "active"
-				links, err := w.orchestrator.sproj.ListBySource(ctx, "", payload.SourceID, &activeStatus)
-				if err == nil && len(links) > 0 {
-					processingTenantID = links[0].TenantID
-					w.logger.Printf("source poller: determined tenantID=%s for public source %s from active project", processingTenantID, payload.SourceID)
+			if systemGlobalSource {
+				processingTenantID = "global"
+			} else {
+				// Public source - get tenantID from first active project link
+				if w.orchestrator != nil && w.orchestrator.sproj != nil {
+					activeStatus := "active"
+					links, err := w.orchestrator.sproj.ListBySource(ctx, "", payload.SourceID, &activeStatus)
+					if err == nil && len(links) > 0 {
+						processingTenantID = links[0].TenantID
+						w.logger.Printf("source poller: determined tenantID=%s for public source %s from active project", processingTenantID, payload.SourceID)
+					}
 				}
 			}
 		}
 
 		// Check if source has at least one active project in rag_source_projects
 		// This is the primary activation mechanism - sources are activated per-project
-		if !w.hasActiveProjects(ctx, payload.TenantID, payload.SourceID) {
+		if !systemGlobalSource && !w.hasActiveProjects(ctx, payload.TenantID, payload.SourceID) {
 			w.logger.Printf("source poller: skipping source %s - no active projects (status=%s, errorCount=%d)", payload.SourceID, ds.Status, ds.ErrorCount)
 			m.Ack()
 			return
@@ -208,7 +219,7 @@ func (w *SourcePoller) Start(ctx context.Context) error {
 
 		// For public sources, we must have a tenantID to track metrics correctly
 		// If we still don't have one, skip processing to avoid losing metrics
-		if processingTenantID == "" && ds.TenantID == "" {
+		if !systemGlobalSource && processingTenantID == "" && ds.TenantID == "" {
 			w.logger.Printf("source poller: skipping public source %s - cannot determine tenantID for metrics tracking (no active projects found)", payload.SourceID)
 			m.Ack()
 			return
@@ -394,6 +405,22 @@ func (w *SourcePoller) hasActiveProjects(ctx context.Context, tenantID, sourceID
 		return true
 	}
 	return len(links) > 0
+}
+
+func (w *SourcePoller) isSystemGlobalHeuristicSource(ds *models.DataSource) bool {
+	if ds == nil {
+		return false
+	}
+	if strings.TrimSpace(ds.TenantID) != "" {
+		return false
+	}
+	kind := models.NormalizeSourceKind(strings.TrimSpace(ds.Kind))
+	switch kind {
+	case models.SourceKindRSS, models.SourceKindHorizonFeed, models.SourceKindWorldMonitorLegacy:
+	default:
+		return false
+	}
+	return ds.Details.DisableLLMProcessing != nil && *ds.Details.DisableLLMProcessing
 }
 
 // cadenceToDuration maps publishingCadence string (if available via profile) to a polling interval.

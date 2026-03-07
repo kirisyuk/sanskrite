@@ -173,6 +173,54 @@ type wmIntelSource struct {
 	Type string `json:"type"`
 }
 
+var intelSourceURLOverrides = map[string]string{
+	"csis":                  googleNewsSiteRSS("csis.org", 7),
+	"middle east institute": googleNewsSiteRSS("mei.edu", 7),
+	"rand":                  googleNewsSiteRSS("rand.org", 7),
+	"brookings":             googleNewsSiteRSS("brookings.edu", 7),
+	"carnegie":              googleNewsSiteRSS("carnegieendowment.org", 7),
+	"nti":                   googleNewsSiteRSS("nti.org", 7),
+}
+
+var expandedIntelSources = []wmIntelSource{
+	{Name: "BBC World", URL: "https://feeds.bbci.co.uk/news/world/rss.xml", Type: "mainstream"},
+	{Name: "BBC Middle East", URL: "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml", Type: "mainstream"},
+	{Name: "BBC Asia", URL: "https://feeds.bbci.co.uk/news/world/asia/rss.xml", Type: "mainstream"},
+	{Name: "BBC Europe", URL: "https://feeds.bbci.co.uk/news/world/europe/rss.xml", Type: "mainstream"},
+	{Name: "BBC US & Canada", URL: "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml", Type: "mainstream"},
+	{Name: "Al Jazeera", URL: "https://www.aljazeera.com/xml/rss/all.xml", Type: "mainstream"},
+	{Name: "NYT World", URL: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", Type: "mainstream"},
+	{Name: "The Guardian World", URL: "https://www.theguardian.com/world/rss", Type: "mainstream"},
+	{Name: "The Guardian Middle East", URL: "https://www.theguardian.com/world/middleeast/rss", Type: "mainstream"},
+	{Name: "The Guardian Ukraine", URL: "https://www.theguardian.com/world/ukraine/rss", Type: "mainstream"},
+	{Name: "France24 English", URL: "https://www.france24.com/en/rss", Type: "mainstream"},
+	{Name: "France24 Middle East", URL: "https://www.france24.com/en/middle-east/rss", Type: "mainstream"},
+	{Name: "AP News (site feed)", URL: googleNewsSiteRSS("apnews.com", 2), Type: "wire"},
+	{Name: "Reuters (site feed)", URL: googleNewsSiteRSS("reuters.com", 3), Type: "wire"},
+	{Name: "UN News", URL: "https://news.un.org/feed/subscribe/en/news/all/rss.xml", Type: "gov"},
+	{Name: "CISA Advisories", URL: "https://www.cisa.gov/cybersecurity-advisories/all.xml", Type: "cyber"},
+	{Name: "US-CERT Alerts", URL: "https://www.cisa.gov/uscert/ncas/alerts.xml", Type: "cyber"},
+	{Name: "DoD Releases", URL: "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=945&max=20", Type: "gov"},
+	{Name: "WHO News", URL: "https://www.who.int/rss-feeds/news-english.xml", Type: "gov"},
+	{Name: "UK MOD GOV.UK", URL: "https://www.gov.uk/government/organisations/ministry-of-defence.atom", Type: "gov"},
+	{Name: "UK FCDO GOV.UK", URL: "https://www.gov.uk/government/organisations/foreign-commonwealth-development-office.atom", Type: "gov"},
+	{Name: "State Dept (site feed)", URL: googleNewsSiteRSS("state.gov", 7), Type: "gov"},
+	{Name: "The Hacker News", URL: "https://feeds.feedburner.com/TheHackersNews", Type: "cyber"},
+	{Name: "BleepingComputer", URL: "https://www.bleepingcomputer.com/feed/", Type: "cyber"},
+	{Name: "SecurityWeek", URL: "https://feeds.feedburner.com/securityweek", Type: "cyber"},
+	{Name: "KrebsOnSecurity", URL: "https://krebsonsecurity.com/feed/", Type: "cyber"},
+	{Name: "gCaptain", URL: "https://gcaptain.com/feed/", Type: "shipping"},
+	{Name: "War on the Rocks", URL: "https://warontherocks.com/feed/", Type: "defense"},
+	{Name: "RealClearDefense", URL: "https://www.realcleardefense.com/index.xml", Type: "defense"},
+	{Name: "USNI News", URL: "https://news.usni.org/feed", Type: "defense"},
+	{Name: "Crisis Group", URL: "https://www.crisisgroup.org/rss", Type: "intl"},
+	{Name: "USGS Earthquakes M4.5+", URL: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.atom", Type: "disaster"},
+	{Name: "ReliefWeb (site feed)", URL: googleNewsSiteRSS("reliefweb.int", 3), Type: "disaster"},
+	{Name: "IMF (site feed)", URL: googleNewsSiteRSS("imf.org", 7), Type: "economic"},
+	{Name: "World Bank (site feed)", URL: googleNewsSiteRSS("worldbank.org", 7), Type: "economic"},
+	{Name: "Euractiv (site feed)", URL: googleNewsSiteRSS("euractiv.com", 7), Type: "intl"},
+}
+
 const (
 	wmIngestModeDocumentFeed = "document_feed"
 	wmIngestModeOntologyFact = "ontology_fact"
@@ -190,6 +238,7 @@ type wmSourceSpec struct {
 	SignalType   string
 	RequiresAuth bool
 	PollMinutes  int
+	DisableLLM   *bool
 }
 
 type importStats struct {
@@ -283,6 +332,7 @@ func main() {
 		extendTaxonomy = flag.Bool("extend-taxonomy", true, "Extend horizon_taxonomy/v1 with HorizonMonitor event/signal vocab")
 		importStatic   = flag.Bool("import-static", true, "Import static HorizonMonitor objects into horizon fragments")
 		importSources  = flag.Bool("import-sources", true, "Import HorizonMonitor intel RSS sources into core_datasources")
+		importExpanded = flag.Bool("import-expanded-sources", true, "Import additional curated RSS sources into core_datasources")
 		importAPISrc   = flag.Bool("import-api-sources", true, "Import HorizonMonitor API sources into core_datasources")
 		apiBaseURL     = flag.String("api-base-url", "https://horizon-monitor.app", "Base URL for HorizonMonitor API sources (used when source URL is relative)")
 		sourceKind     = flag.String("source-kind", "rss", "Source kind for imported feeds: rss|horizon_monitor_feed")
@@ -403,7 +453,11 @@ func main() {
 		if payload == nil {
 			log.Fatalf("internal error: import-sources requested but export payload is nil")
 		}
-		if err := imp.importIntelSources(ctx, payload.IntelSources); err != nil {
+		toImport := append([]wmIntelSource{}, payload.IntelSources...)
+		if *importExpanded {
+			toImport = mergeIntelSources(toImport, expandedIntelSources)
+		}
+		if err := imp.importIntelSources(ctx, toImport); err != nil {
 			log.Fatalf("failed to import intel sources: %v", err)
 		}
 	}
@@ -878,7 +932,7 @@ func (i *importer) importIntelSources(ctx context.Context, sources []wmIntelSour
 	}
 	specs := make([]wmSourceSpec, 0, len(sources))
 	for _, src := range sources {
-		sourceURL := strings.TrimSpace(src.URL)
+		sourceURL := normalizeImportedIntelSourceURL(strings.TrimSpace(src.Name), strings.TrimSpace(src.URL))
 		if sourceURL == "" {
 			continue
 		}
@@ -891,9 +945,80 @@ func (i *importer) importIntelSources(ctx context.Context, sources []wmIntelSour
 			FeedType:    "intel_rss",
 			IngestMode:  wmIngestModeDocumentFeed,
 			PollMinutes: 30,
+			DisableLLM:  boolPtr(true),
 		})
 	}
 	return i.importSourceSpecs(ctx, specs)
+}
+
+func mergeIntelSources(primary, extra []wmIntelSource) []wmIntelSource {
+	seen := map[string]struct{}{}
+	out := make([]wmIntelSource, 0, len(primary)+len(extra))
+	appendOne := func(src wmIntelSource) {
+		name := strings.TrimSpace(src.Name)
+		url := normalizeImportedIntelSourceURL(name, strings.TrimSpace(src.URL))
+		if name == "" || url == "" {
+			return
+		}
+		key := strings.ToLower(strings.TrimSpace(url))
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, wmIntelSource{Name: name, URL: url, Type: strings.TrimSpace(src.Type)})
+	}
+	for _, src := range primary {
+		appendOne(src)
+	}
+	for _, src := range extra {
+		appendOne(src)
+	}
+	return out
+}
+
+func normalizeImportedIntelSourceURL(sourceName, sourceURL string) string {
+	nameKey := strings.ToLower(strings.TrimSpace(sourceName))
+	if override := strings.TrimSpace(intelSourceURLOverrides[nameKey]); override != "" {
+		return override
+	}
+
+	sourceURL = strings.TrimSpace(sourceURL)
+	if sourceURL == "" {
+		return ""
+	}
+	parsed, err := neturl.Parse(sourceURL)
+	if err != nil || parsed == nil {
+		return sourceURL
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	switch host {
+	case "www.csis.org", "csis.org":
+		return googleNewsSiteRSS("csis.org", 7)
+	case "www.mei.edu", "mei.edu":
+		return googleNewsSiteRSS("mei.edu", 7)
+	case "www.rand.org", "rand.org":
+		return googleNewsSiteRSS("rand.org", 7)
+	case "www.brookings.edu", "brookings.edu":
+		return googleNewsSiteRSS("brookings.edu", 7)
+	case "carnegieendowment.org", "www.carnegieendowment.org":
+		return googleNewsSiteRSS("carnegieendowment.org", 7)
+	case "www.nti.org", "nti.org":
+		return googleNewsSiteRSS("nti.org", 7)
+	default:
+		return sourceURL
+	}
+}
+
+func googleNewsSiteRSS(site string, days int) string {
+	site = strings.ToLower(strings.TrimSpace(site))
+	if site == "" {
+		return ""
+	}
+	if days <= 0 {
+		days = 7
+	}
+	query := neturl.QueryEscape(fmt.Sprintf("site:%s when:%dd", site, days))
+	return "https://news.google.com/rss/search?q=" + query + "&hl=en-US&gl=US&ceid=US:en"
 }
 
 func (i *importer) importHorizonMonitorAPISources(ctx context.Context, apiBaseURL string) error {
@@ -1533,6 +1658,12 @@ func (i *importer) upsertSourceSpec(ctx context.Context, spec wmSourceSpec) erro
 			existing.Details.PollIntervalMinutes = intPtr(pollMinutes)
 			changed = true
 		}
+		if spec.DisableLLM != nil {
+			if existing.Details.DisableLLMProcessing == nil || *existing.Details.DisableLLMProcessing != *spec.DisableLLM {
+				existing.Details.DisableLLMProcessing = boolPtr(*spec.DisableLLM)
+				changed = true
+			}
+		}
 		if changed {
 			if i.apply {
 				if uerr := i.dsRepo.Upsert(ctx, existing); uerr != nil {
@@ -1564,6 +1695,9 @@ func (i *importer) upsertSourceSpec(ctx context.Context, spec wmSourceSpec) erro
 			HorizonMonitorRequiresAuth: boolPtr(spec.RequiresAuth),
 			PollIntervalMinutes:        intPtr(pollMinutes),
 		},
+	}
+	if spec.DisableLLM != nil {
+		ds.Details.DisableLLMProcessing = boolPtr(*spec.DisableLLM)
 	}
 	if kind == "rss" {
 		ds.Details.RSSURL = strPtr(sourceURL)

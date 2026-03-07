@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
 func TestParseWorldMonitorIntelSources(t *testing.T) {
@@ -32,6 +34,27 @@ func TestParseWorldMonitorIntelSources_NoBlock(t *testing.T) {
 	}
 }
 
+func TestParseWorldMonitorIntelSources_NormalizesProblematicFeeds(t *testing.T) {
+	src := `
+export const INTEL_SOURCES: Feed[] = [
+  { name: 'CSIS', url: rss('https://www.csis.org/analysis?type=analysis'), type: 'defense' },
+  { name: 'NTI', url: rss('https://www.nti.org/rss/'), type: 'research' },
+];`
+
+	feeds, err := parseWorldMonitorIntelSources(src)
+	if err != nil {
+		t.Fatalf("parseWorldMonitorIntelSources error: %v", err)
+	}
+	if len(feeds) != 2 {
+		t.Fatalf("expected 2 feeds, got %d", len(feeds))
+	}
+	for _, f := range feeds {
+		if !strings.Contains(f.URL, "news.google.com/rss/search") {
+			t.Fatalf("expected fallback Google News RSS url for %q, got %q", f.Name, f.URL)
+		}
+	}
+}
+
 func TestDeriveTaxonomyAssignment(t *testing.T) {
 	cases := []struct {
 		feed         worldMonitorFeed
@@ -52,6 +75,16 @@ func TestDeriveTaxonomyAssignment(t *testing.T) {
 			feed:         worldMonitorFeed{Name: "Unknown", URL: "https://example.com/feed.xml", Type: ""},
 			wantCategory: "/source/geopolitics/intelligence",
 			wantFormat:   "research",
+		},
+		{
+			feed:         worldMonitorFeed{Name: "Gov Feed", URL: "https://example.gov/feed.xml", Type: "gov"},
+			wantCategory: "/source/geopolitics/diplomacy",
+			wantFormat:   "gov",
+		},
+		{
+			feed:         worldMonitorFeed{Name: "Shipping Feed", URL: "https://example.com/rss", Type: "shipping"},
+			wantCategory: "/source/geopolitics/intelligence",
+			wantFormat:   "industry-media",
 		},
 	}
 
@@ -102,5 +135,44 @@ func TestResolveFeedsPath(t *testing.T) {
 	p := resolveFeedsPath("")
 	if !strings.Contains(p, "worldmonitor") {
 		t.Fatalf("expected default worldmonitor path, got %q", p)
+	}
+}
+
+func TestMergeWorldMonitorFeeds_DedupByURL(t *testing.T) {
+	base := []worldMonitorFeed{
+		{Name: "A", URL: "https://example.com/feed.xml", Type: "intl"},
+	}
+	extra := []worldMonitorFeed{
+		{Name: "B", URL: "https://example.com/feed.xml", Type: "gov"},
+		{Name: "C", URL: "https://example.net/rss", Type: "cyber"},
+	}
+	got := mergeWorldMonitorFeeds(base, extra)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 merged feeds, got %d: %+v", len(got), got)
+	}
+}
+
+func TestMergeExpectedSource_UpdatesDisableLLMProcessing(t *testing.T) {
+	dst := &models.DataSource{
+		DisplayName: "WM: test",
+		Kind:        models.SourceKindRSS,
+		Status:      "active",
+		Details:     models.SourceDetails{},
+	}
+	expect := &models.DataSource{
+		DisplayName: "WM: test",
+		Kind:        models.SourceKindRSS,
+		Status:      "active",
+		Details: models.SourceDetails{
+			DisableLLMProcessing: boolPtr(true),
+		},
+	}
+
+	changed := mergeExpectedSource(dst, expect)
+	if !changed {
+		t.Fatalf("expected merge to mark changes when disableLlmProcessing differs")
+	}
+	if dst.Details.DisableLLMProcessing == nil || !*dst.Details.DisableLLMProcessing {
+		t.Fatalf("expected disableLlmProcessing=true after merge, got %+v", dst.Details.DisableLLMProcessing)
 	}
 }

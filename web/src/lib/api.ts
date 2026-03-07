@@ -103,6 +103,7 @@ class ApiClient {
     }>;
     summary: Record<string, number>;
     hitRate: number;
+    rates?: Record<string, number>;
     tenantId: string;
   }> {
     const response = await this.client.get(`/api/v1/admin/horizon/telemetry`, { params });
@@ -2456,6 +2457,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       status?: string;
       coordinates?: { lat: number; lon: number };
       radiusKm?: number;
+      zoneType?: string;
+      zoneSubType?: string;
+      hype?: number;
+      hypeIndicator?: number;
+      activityStatus?: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
+      lastMatchedAt?: string;
       inScope?: boolean;
       createdAt?: string;
       updatedAt?: string;
@@ -2478,6 +2485,67 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return response.data;
     } catch (error: any) {
       console.error(`[API] listHorizonGeoObjects error:`, error);
+      throw error;
+    }
+  }
+
+  async getHorizonMapActivity(options?: {
+    lensId?: string;
+    minHype?: number;
+  }): Promise<{
+    generatedAt: string;
+    schema?: string;
+    lensId?: string;
+    minHype?: number;
+    zones: Array<{
+      id: string;
+      kind: 'zone';
+      name: string;
+      countryIso2?: string;
+      countryName?: string;
+      zoneType?: string;
+      score: number;
+      hype: number;
+      hypeIndicator: number;
+      status: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
+      hits1h: number;
+      hits24h: number;
+      totalMentions: number;
+      lastBoost: number;
+      lastMatchedAt?: string;
+      updatedAt?: string;
+      lastTitle?: string;
+    }>;
+    flows: Array<{
+      id: string;
+      kind: 'flow';
+      name: string;
+      flowMode?: string;
+      countryHints?: string[];
+      score: number;
+      hype: number;
+      hypeIndicator: number;
+      status: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
+      hits1h: number;
+      hits24h: number;
+      totalMentions: number;
+      lastBoost: number;
+      lastMatchedAt?: string;
+      updatedAt?: string;
+      lastTitle?: string;
+    }>;
+    totals?: { zones?: number; flows?: number };
+  }> {
+    try {
+      const params: Record<string, string> = {};
+      if (options?.lensId) params.lensId = options.lensId;
+      if (typeof options?.minHype === 'number' && Number.isFinite(options.minHype)) {
+        params.minHype = String(options.minHype);
+      }
+      const response = await this.client.get('/api/horizon/map-activity', { params });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getHorizonMapActivity error:`, error);
       throw error;
     }
   }

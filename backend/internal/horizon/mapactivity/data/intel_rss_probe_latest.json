@@ -1,0 +1,4041 @@
+{
+  "generatedAt": "2026-03-06T19:45:01.508Z",
+  "feedCount": 44,
+  "okCount": 38,
+  "problematicCount": 6,
+  "topGlobalTerms": [
+    [
+      "iran",
+      106
+    ],
+    [
+      "war",
+      53
+    ],
+    [
+      "world",
+      33
+    ],
+    [
+      "trump",
+      24
+    ],
+    [
+      "international",
+      24
+    ],
+    [
+      "department",
+      23
+    ],
+    [
+      "state",
+      23
+    ],
+    [
+      "imf",
+      23
+    ],
+    [
+      "iranian",
+      22
+    ],
+    [
+      "fund",
+      22
+    ],
+    [
+      "chatham",
+      21
+    ],
+    [
+      "house",
+      21
+    ],
+    [
+      "janes",
+      20
+    ],
+    [
+      "reuters",
+      20
+    ],
+    [
+      "gov",
+      20
+    ],
+    [
+      "reliefweb",
+      20
+    ],
+    [
+      "euractiv",
+      20
+    ],
+    [
+      "monetary",
+      19
+    ],
+    [
+      "advice",
+      18
+    ],
+    [
+      "travel",
+      18
+    ],
+    [
+      "east",
+      17
+    ],
+    [
+      "military",
+      16
+    ],
+    [
+      "bank",
+      16
+    ],
+    [
+      "air",
+      14
+    ],
+    [
+      "middle",
+      13
+    ],
+    [
+      "force",
+      12
+    ],
+    [
+      "submenu",
+      12
+    ],
+    [
+      "navy",
+      11
+    ],
+    [
+      "attack",
+      11
+    ],
+    [
+      "brief",
+      10
+    ],
+    [
+      "hegseth",
+      10
+    ],
+    [
+      "conflict",
+      10
+    ],
+    [
+      "defence",
+      10
+    ],
+    [
+      "strikes",
+      10
+    ],
+    [
+      "attacks",
+      10
+    ],
+    [
+      "crisis",
+      10
+    ],
+    [
+      "energy",
+      10
+    ],
+    [
+      "statement",
+      10
+    ],
+    [
+      "guidance",
+      10
+    ],
+    [
+      "data",
+      9
+    ],
+    [
+      "against",
+      9
+    ],
+    [
+      "first",
+      9
+    ],
+    [
+      "fao",
+      9
+    ],
+    [
+      "global",
+      9
+    ],
+    [
+      "exploited",
+      9
+    ],
+    [
+      "filter",
+      8
+    ],
+    [
+      "open",
+      8
+    ],
+    [
+      "israel",
+      8
+    ],
+    [
+      "gulf",
+      8
+    ],
+    [
+      "epic",
+      8
+    ],
+    [
+      "security",
+      8
+    ],
+    [
+      "health",
+      8
+    ],
+    [
+      "safety",
+      8
+    ],
+    [
+      "pentagon",
+      7
+    ],
+    [
+      "school",
+      7
+    ],
+    [
+      "army",
+      7
+    ],
+    [
+      "secretary",
+      7
+    ],
+    [
+      "trade",
+      7
+    ],
+    [
+      "cisa",
+      6
+    ],
+    [
+      "china",
+      6
+    ],
+    [
+      "ukraine",
+      6
+    ],
+    [
+      "country",
+      6
+    ],
+    [
+      "rubio",
+      6
+    ],
+    [
+      "capabilities",
+      5
+    ],
+    [
+      "europe",
+      5
+    ],
+    [
+      "europeans",
+      5
+    ],
+    [
+      "america",
+      5
+    ],
+    [
+      "american",
+      5
+    ],
+    [
+      "kimwolf",
+      5
+    ],
+    [
+      "joint",
+      5
+    ],
+    [
+      "people",
+      5
+    ],
+    [
+      "countries",
+      5
+    ],
+    [
+      "flying",
+      5
+    ],
+    [
+      "islands",
+      5
+    ],
+    [
+      "call",
+      5
+    ],
+    [
+      "foreign",
+      5
+    ],
+    [
+      "minister",
+      5
+    ],
+    [
+      "malware",
+      5
+    ],
+    [
+      "integrated",
+      5
+    ],
+    [
+      "solution",
+      5
+    ],
+    [
+      "wits",
+      5
+    ],
+    [
+      "day",
+      4
+    ],
+    [
+      "hormuz",
+      4
+    ],
+    [
+      "interceptor",
+      4
+    ],
+    [
+      "operation",
+      4
+    ],
+    [
+      "adds",
+      4
+    ],
+    [
+      "article",
+      4
+    ],
+    [
+      "russia",
+      4
+    ],
+    [
+      "european",
+      4
+    ],
+    [
+      "botnet",
+      4
+    ],
+    [
+      "centre",
+      4
+    ],
+    [
+      "lebanon",
+      4
+    ],
+    [
+      "video",
+      4
+    ],
+    [
+      "million",
+      4
+    ],
+    [
+      "march",
+      4
+    ],
+    [
+      "catalog",
+      4
+    ],
+    [
+      "fury",
+      4
+    ],
+    [
+      "low",
+      4
+    ],
+    [
+      "management",
+      4
+    ],
+    [
+      "transparency",
+      4
+    ]
+  ],
+  "problematic": [
+    {
+      "name": "CSIS",
+      "url": "https://www.csis.org/analysis?type=analysis",
+      "status": 200,
+      "health": "html_titles",
+      "suggestedFallback": "https://news.google.com/rss/search?q=site%3Acsis.org%20when%3A7d&hl=en-US&gl=US&ceid=US:en"
+    },
+    {
+      "name": "Middle East Institute",
+      "url": "https://www.mei.edu/rss.xml",
+      "status": 403,
+      "health": "error",
+      "suggestedFallback": "https://news.google.com/rss/search?q=site%3Amei.edu%20when%3A7d&hl=en-US&gl=US&ceid=US:en"
+    },
+    {
+      "name": "RAND",
+      "url": "https://www.rand.org/rss/all.xml",
+      "status": 403,
+      "health": "error",
+      "suggestedFallback": "https://news.google.com/rss/search?q=site%3Arand.org%20when%3A7d&hl=en-US&gl=US&ceid=US:en"
+    },
+    {
+      "name": "Brookings",
+      "url": "https://www.brookings.edu/feed/",
+      "status": 200,
+      "health": "html_titles",
+      "suggestedFallback": "https://news.google.com/rss/search?q=site%3Abrookings.edu%20when%3A7d&hl=en-US&gl=US&ceid=US:en"
+    },
+    {
+      "name": "Carnegie",
+      "url": "https://carnegieendowment.org/rss/",
+      "status": 200,
+      "health": "non_rss",
+      "suggestedFallback": "https://news.google.com/rss/search?q=site%3Acarnegieendowment.org%20when%3A7d&hl=en-US&gl=US&ceid=US:en"
+    },
+    {
+      "name": "NTI",
+      "url": "https://www.nti.org/rss/",
+      "status": 200,
+      "health": "rss_empty",
+      "suggestedFallback": "https://news.google.com/rss/search?q=site%3Anti.org%20when%3A7d&hl=en-US&gl=US&ceid=US:en"
+    }
+  ],
+  "results": [
+    {
+      "name": "Defense One",
+      "type": "defense",
+      "url": "https://www.defenseone.com/rss/all/",
+      "status": 200,
+      "contentType": "application/xml",
+      "health": "rss_ok",
+      "titles": [
+        "The D Brief: Russia’s helping Iran; Updated strike map; Drone threats; DOD’s new CDO; And a bit more.",
+        "The Pentagon’s investment deals draw congressional scrutiny",
+        "The US says it destroyed Iran’s space command. Experts say it wasn’t much of a threat.",
+        "‘Firepower about to surge dramatically’ over Iran: Hegseth",
+        "Air Force cybersecurity chief tapped to lead Pentagon's information-security efforts",
+        "The Pentagon moves into the era of affordable mass",
+        "B-1, B-52 bombers join Trump’s war on Iran",
+        "Drone threat ‘will far exceed’ that of GWOT’s roadside bombs",
+        "Trump to fire DHS Secretary Noem, picks Mullin as successor",
+        "Defense Business Brief: Shrinking stockpiles + Epic Fury; and an exclusive look at how AI can up UUV’s game",
+        "Why the US went to war without a plan to evacuate DOD civilians, contractors, and others",
+        "The D Brief: Death toll, oil prices rise; Ukraine to send anti-drone help; WH calls industry meeting; Claude at war; And a bit more.",
+        "CISA nominee: I left Coast Guard to address GOP hold",
+        "The US built up its missile defenses—and will need to do it again",
+        "The D Brief: US-Israel strikes continue; Hormuz closed; 4 US dead, ID’d; SOF join Ecuador drug ops; And a bit more.",
+        "Hegseth: US went to war because Iran 'had no intention' of signing a nuclear deal",
+        "Iran-linked hacktivists could target US state and local targets, experts warn",
+        "Trump’s CISA nominee to exit Coast Guard role, but still in running to lead cyber agency",
+        "The Army just launched an open call for industry ideas",
+        "Pentagon’s war on Anthropic based on ‘dubious’ legal thinking and ideology—not real risk, sources say"
+      ],
+      "topTerms": [
+        [
+          "iran",
+          5
+        ],
+        [
+          "war",
+          5
+        ],
+        [
+          "brief",
+          4
+        ],
+        [
+          "pentagon",
+          4
+        ],
+        [
+          "bit",
+          3
+        ],
+        [
+          "more",
+          3
+        ],
+        [
+          "trump",
+          3
+        ],
+        [
+          "cisa",
+          2
+        ],
+        [
+          "coast",
+          2
+        ],
+        [
+          "dod",
+          2
+        ],
+        [
+          "drone",
+          2
+        ],
+        [
+          "experts",
+          2
+        ],
+        [
+          "guard",
+          2
+        ],
+        [
+          "hegseth",
+          2
+        ],
+        [
+          "industry",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "Breaking Defense",
+      "type": "defense",
+      "url": "https://breakingdefense.com/feed/",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "2,000 strikes, 30 ships down: US operations against Iran by the numbers",
+        "Anthropic CEO says Pentagon ban less harsh than Hegseth had threatened",
+        "Swiss cutting F-35 order by six, facing up to five year Patriot delay",
+        "US sinking of Iranian navy ship stirs controversy in Australia, India",
+        "Pentagon&#8217;s new chief data officer to push &#8216;AI capabilities to warfighters&#8217;",
+        "&#8216;New status quo&#8217;: Germany reaches for European conventional military dominance",
+        "Drone Dominance: Pentagon to order 30,000 one-way drones in &#8216;next few days&#8217;",
+        "Multi-channel data link reshapes Navy’s communications capabilities",
+        "Air Force seeks additional vendors for radar-killing missile",
+        "How RAFT is approaching AI at the edge",
+        "UAE&#8217;s defense giant EDGE Group to equip Ecuador with border protection systems",
+        "Navy&#8217;s Kilby signals USS Ford could see 11-month deployment, approaching record length",
+        "Iran war powers resolution fails in Senate",
+        "US military uses PrSM for first time in combat, says CENTCOM",
+        "Gaucher takes over submarine &#8216;czar&#8217; role, overseeing Virginia, Columbia-class production"
+      ],
+      "topTerms": [
+        [
+          "navy",
+          3
+        ],
+        [
+          "pentagon",
+          3
+        ],
+        [
+          "approaching",
+          2
+        ],
+        [
+          "capabilities",
+          2
+        ],
+        [
+          "data",
+          2
+        ],
+        [
+          "dominance",
+          2
+        ],
+        [
+          "edge",
+          2
+        ],
+        [
+          "iran",
+          2
+        ],
+        [
+          "military",
+          2
+        ],
+        [
+          "order",
+          2
+        ],
+        [
+          "additional",
+          1
+        ],
+        [
+          "against",
+          1
+        ],
+        [
+          "air",
+          1
+        ],
+        [
+          "anthropic",
+          1
+        ],
+        [
+          "australia",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "The War Zone",
+      "type": "defense",
+      "url": "https://www.thedrive.com/the-war-zone/rss",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "Kuwaiti F/A-18’s Triple Friendly Fire Shootdown Gets Stranger By The Day",
+        "Trump Demands “Unconditional Surrender,” Iran Says Bring On The Ground Invasion",
+        "LUCAS Kamikaze Drones Lauded As “Indispensable” By U.S. Admiral In Charge Of Iran War",
+        "U.S. Denies F-15E Strike Eagle Went Down In Iran",
+        "The Misconception That Air Supremacy Has Been Achieved Over Iran",
+        "Ukrainian F-16s Had Only A Handful Of Sidewinder Missiles Available: Report",
+        "Strikes Hobble Iranian Missile Threat As Concerns Over Interceptor Stockpile Mount (Updated)",
+        "The Last Time A U.S. Navy Submarine Sunk An Enemy Ship In Combat",
+        "One Of Iran’s Most Advanced Wacky Catamaran Warships Sunk In Epic Fury",
+        "Israeli Air Force First To Claim F-35 Air-To-Air Kill Of A Crewed Aircraft",
+        "U.S. Navy Submarine Torpedoes Iranian Frigate In Indian Ocean",
+        "Kuwaiti F/A-18 Hornet Responsible For Shooting Down Three USAF F-15E Strike Eagles: Report",
+        "Gulf Arab States Under Pressure As Iranian Attacks Grind On (Updated)",
+        "Trump’s Plan To Escort Ships Through Strait Of Hormuz Would Put U.S. Navy Warships In The Crosshairs",
+        "New Russian Air-Launched Cruise Missile Appears In Ukraine",
+        "More U.S. Fighter Aircraft Heading To Middle East",
+        "Iranian Kamikaze Drone Boat Makes First Successful Strike Of War",
+        "War With Iran Now In Its Third Day",
+        "Friendly-Fire Incidents Are Nothing New In Modern Air Warfare",
+        "Iran’s Key Naval Base On Strait Of Hormuz Set Ablaze From Strikes"
+      ],
+      "topTerms": [
+        [
+          "iran",
+          7
+        ],
+        [
+          "iranian",
+          4
+        ],
+        [
+          "air",
+          3
+        ],
+        [
+          "navy",
+          3
+        ],
+        [
+          "strike",
+          3
+        ],
+        [
+          "war",
+          3
+        ],
+        [
+          "a-18",
+          2
+        ],
+        [
+          "aircraft",
+          2
+        ],
+        [
+          "day",
+          2
+        ],
+        [
+          "down",
+          2
+        ],
+        [
+          "f-15e",
+          2
+        ],
+        [
+          "first",
+          2
+        ],
+        [
+          "hormuz",
+          2
+        ],
+        [
+          "kamikaze",
+          2
+        ],
+        [
+          "kuwaiti",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "Defense News",
+      "type": "defense",
+      "url": "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml",
+      "status": 200,
+      "contentType": "application/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Air Force test launches Minuteman III with multiple reentry vehicles",
+        "No deal with Iran except ‘unconditional surrender,’ Trump says",
+        "Patriot production delays prompt Switzerland to seek European air-defense fallback",
+        "Gulf allies complain US did not provide notice of Iran attacks and ignored warnings, sources say",
+        "Iran can still fire drones and missiles — experts weigh the implications on the war",
+        "Pentagon says it is labeling Anthropic a supply chain risk ‘effective immediately’",
+        "‘Race of attrition’: US military’s finite interceptor stockpile is being tested",
+        "NORAD intercepts 2 Russian maritime patrol aircraft near Alaska, Canada",
+        "US and Mideast countries seek Kyiv’s drone expertise as Russia-Ukraine talks put on ice",
+        "Italy, allies send warships to protect Europe’s southeastern edge from Iran strikes",
+        "France, Germany create panel to advance shared nuclear deterrence plans",
+        "Novel interceptor drones bend air-defense economics in Ukraine’s favor",
+        "Trump to meet arms executives Friday in push to boost weapon supplies",
+        "Despite air dominance, US ‘can’t stop everything’ Iran fires, Hegseth says",
+        "Bombs headed for Iran in Operation Epic Fury don names of US sailors",
+        "US launches Precision Strike Missiles in Iran war in first combat use",
+        "French-German fighter program on life support as Dassault blames Airbus",
+        "US and Ecuador launch military operation against organized crime groups",
+        "Mastermind of Iranian plot to assassinate Trump is dead, Hegseth claims",
+        "The US Air Force just used its oldest bomber to attack Iran"
+      ],
+      "topTerms": [
+        [
+          "iran",
+          8
+        ],
+        [
+          "air",
+          3
+        ],
+        [
+          "trump",
+          3
+        ],
+        [
+          "air-defense",
+          2
+        ],
+        [
+          "allies",
+          2
+        ],
+        [
+          "drones",
+          2
+        ],
+        [
+          "force",
+          2
+        ],
+        [
+          "hegseth",
+          2
+        ],
+        [
+          "interceptor",
+          2
+        ],
+        [
+          "launches",
+          2
+        ],
+        [
+          "military",
+          2
+        ],
+        [
+          "missiles",
+          2
+        ],
+        [
+          "operation",
+          2
+        ],
+        [
+          "seek",
+          2
+        ],
+        [
+          "war",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "Janes",
+      "type": "defense",
+      "url": "https://news.google.com/rss/search?q=site:janes.com+when:3d&hl=en-US&gl=US&ceid=US:en",
+      "status": 200,
+      "contentType": "application/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Iran conflict 2026: UK sends additional Typhoons to bolster Qatar's air defence - Janes",
+        "North Korean leader calls for two Choe Hyon destroyers annually - Janes",
+        "Pakistan-Afghanistan conflict 2026: UAVs drive asymmetric air war - Janes",
+        "Iran conflict 2026: RAF adds to drone tally as F-35B scores first kills over Jordan - Janes",
+        "NATO's Dynamic Manta exercise demonstrates unmanned ASW integration - Janes",
+        "Latest OSINT Defence and Security Analysis - Janes",
+        "South Korea begins series production of C2A command-and-control system - Janes",
+        "Indian Army tests new tactical vehicle at military exercise - Janes",
+        "New Zealand explores strike role for P-8A fleet - Janes",
+        "Iran conflict 2026: Israeli F-35 claims type's first combat kill against manned aircraft - Janes",
+        "China announces defence budget increase of 7% - Janes",
+        "Iran conflict 2026: UAE reports more than 1,000 Iranian attacks - Janes",
+        "Armor International manufactures first medevac Hunter TR-12 - Janes",
+        "Ghana receives ACH175 helicopter - Janes",
+        "Evolving Warfare: Key Lessons from the Russia-Ukraine Conflict after Four Years - Janes",
+        "EOS to integrate KNDS 30 mm cannon with next-generation RWS - Janes",
+        "USMC to award ARV-30 prototype contracts in 2026 - Janes",
+        "Special Report: India's IG Defence advances UAV manufacturing capabilities - Janes",
+        "Special Report: New Zealand assesses future application of emerging technologies - Janes",
+        "NATO officially opens High North CAOC in Norway - Janes"
+      ],
+      "topTerms": [
+        [
+          "janes",
+          20
+        ],
+        [
+          "conflict",
+          6
+        ],
+        [
+          "defence",
+          4
+        ],
+        [
+          "iran",
+          4
+        ],
+        [
+          "first",
+          3
+        ],
+        [
+          "air",
+          2
+        ],
+        [
+          "exercise",
+          2
+        ],
+        [
+          "nato",
+          2
+        ],
+        [
+          "north",
+          2
+        ],
+        [
+          "special",
+          2
+        ],
+        [
+          "zealand",
+          2
+        ],
+        [
+          "ach175",
+          1
+        ],
+        [
+          "additional",
+          1
+        ],
+        [
+          "adds",
+          1
+        ],
+        [
+          "advances",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "CSIS",
+      "type": "defense",
+      "url": "https://www.csis.org/analysis?type=analysis",
+      "status": 200,
+      "contentType": "text/html; charset=UTF-8",
+      "health": "html_titles",
+      "titles": [
+        "Departments submenu",
+        "Regions submenu",
+        "Topics submenu",
+        "Primary Menu",
+        "About CSIS",
+        "About CSIS submenu",
+        "About Menu",
+        "Executive Ed Navigation",
+        "All Analysis",
+        "Type open filter submenu",
+        "Article Type open filter submenu",
+        "Report Type open filter submenu",
+        "Region open filter submenu",
+        "Topic open filter submenu",
+        "Author open filter submenu",
+        "Date Published open filter submenu",
+        "Department open filter submenu",
+        "Footer",
+        "Footer Social",
+        "Footer secondary navigation"
+      ],
+      "topTerms": [
+        [
+          "submenu",
+          12
+        ],
+        [
+          "filter",
+          8
+        ],
+        [
+          "open",
+          8
+        ],
+        [
+          "footer",
+          3
+        ],
+        [
+          "type",
+          3
+        ],
+        [
+          "csis",
+          2
+        ],
+        [
+          "menu",
+          2
+        ],
+        [
+          "navigation",
+          2
+        ],
+        [
+          "all",
+          1
+        ],
+        [
+          "article",
+          1
+        ],
+        [
+          "author",
+          1
+        ],
+        [
+          "date",
+          1
+        ],
+        [
+          "department",
+          1
+        ],
+        [
+          "departments",
+          1
+        ],
+        [
+          "executive",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Chatham House",
+      "type": "intl",
+      "url": "https://news.google.com/rss/search?q=site:chathamhouse.org+when:7d&hl=en-US&gl=US&ceid=US:en",
+      "status": 200,
+      "contentType": "application/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Trump, the polls, and the war with Iran: What happened to the ‘President of Peace’? - Chatham House",
+        "Afghanistan and Pakistan are facing ‘open war’. De-escalation is needed - Chatham House",
+        "Netanyahu’s biggest gamble - Chatham House",
+        "Macron’s nuclear weapons offer to Europe: Gaullist policy, updated for a more unstable world - Chatham House",
+        "The Iran war exposes the limits of Russia’s leverage in a fragmenting regional order - Chatham House",
+        "US–Israel strikes on Iran: What next for the Middle East? - Chatham House",
+        "Schwarzman Academy Fellowship 2026-2027 - Chatham House",
+        "With Iran attacks, President Trump is making the use of force the new normal – and casting aside international law - Chatham House",
+        "The contest of will between Trump and Iran - Chatham House",
+        "US and Israel attack Iran, killing Khamenei. Tehran launches counterstrikes: Early analysis from Chatham House experts - Chatham House",
+        "Sánchez’s principled stand against Trump matters. So does Merz’s silence - Chatham House",
+        "Anthropic’s feud with the Pentagon reveals the limits of AI governance - Chatham House",
+        "‘European preference’ signals a wider change of EU doctrine - Chatham House",
+        "How will the war in Iran affect Ukraine? - Chatham House",
+        "The rare earths race risks environmental disaster - Chatham House",
+        "Nepal’s general election will test the political power of Gen Z - Chatham House",
+        "Asia-Pacific Programme - Chatham House",
+        "Peacekeeping and intervention - Chatham House",
+        "Defence and security - Chatham House",
+        "Russia: Current affairs and analysis - Chatham House"
+      ],
+      "topTerms": [
+        [
+          "chatham",
+          21
+        ],
+        [
+          "house",
+          21
+        ],
+        [
+          "iran",
+          7
+        ],
+        [
+          "trump",
+          4
+        ],
+        [
+          "war",
+          4
+        ],
+        [
+          "israel",
+          2
+        ],
+        [
+          "limits",
+          2
+        ],
+        [
+          "president",
+          2
+        ],
+        [
+          "russia",
+          2
+        ],
+        [
+          "academy",
+          1
+        ],
+        [
+          "affairs",
+          1
+        ],
+        [
+          "affect",
+          1
+        ],
+        [
+          "afghanistan",
+          1
+        ],
+        [
+          "against",
+          1
+        ],
+        [
+          "anthropic",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "ECFR",
+      "type": "intl",
+      "url": "https://ecfr.eu/feed/",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "Europe, Mauritania and the Gulf states: Securing stability and growth in the Sahel",
+        "From shield to sword: Europe’s offensive strategy for the hybrid age",
+        "India in a world of chaos",
+        "Strategic lunacy: Why Europeans must stand up to Trump’s illegal war in Iran",
+        "Trump vs Sanchez: Why Europeans should back Spain against US threats",
+        "A year after Assad: The search for Syria’s future",
+        "The electric endgame: Europe’s clean path out of vassalage",
+        "A war with no winners: The costs of US-Israeli aggression on Iran",
+        "Trump strikes Iran",
+        "Trump’s strikes on Iran are an illegal war of choice—and Europeans should say so",
+        "How to defend Ukraine after a ceasefire",
+        "Suspicious minds: Why Europeans are considering their post-America nuclear options",
+        "Hedging the hegemon: Why Europe and South Korea need each other in the Trump era",
+        "Yemen: Between Gulf tensions and Iran war clouds",
+        "Merz in Beijing: A chance to flip China&#8217;s &#8220;stability&#8221; narrative",
+        "Beijing’s next bet: Why Europeans should care about biosolutions",
+        "MAGA’s approach to Europe hasn’t changed",
+        "Bretton Woods institutions in a new world order",
+        "Dispelling Trump’s dystopia: A European blueprint for Gaza’s renewal",
+        "The ticking clock: Why NATO’s deterrence against Russia is under pressure"
+      ],
+      "topTerms": [
+        [
+          "trump",
+          6
+        ],
+        [
+          "europe",
+          5
+        ],
+        [
+          "europeans",
+          5
+        ],
+        [
+          "iran",
+          5
+        ],
+        [
+          "war",
+          4
+        ],
+        [
+          "against",
+          2
+        ],
+        [
+          "beijing",
+          2
+        ],
+        [
+          "gulf",
+          2
+        ],
+        [
+          "illegal",
+          2
+        ],
+        [
+          "stability",
+          2
+        ],
+        [
+          "strikes",
+          2
+        ],
+        [
+          "world",
+          2
+        ],
+        [
+          "age",
+          1
+        ],
+        [
+          "aggression",
+          1
+        ],
+        [
+          "approach",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Foreign Policy",
+      "type": "intl",
+      "url": "https://foreignpolicy.com/feed/",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "Nigel Farage Isn’t So Unlikely",
+        "Amid War, Hezbollah Suffers a Political Defeat",
+        "Disapproval for Iran War Among Experts Is Sky-High",
+        "Shadow Boxing With the Kremlin",
+        "The Winners and Losers of the Iran War, One Week in",
+        "No, Israel Did Not Compel the U.S. to Wage War on Iran",
+        "Iran’s Wartime Leader Isn’t a Dealmaker",
+        "China Won’t Play Security Patron for Iran",
+        "Chile Bids Goodbye to Boric",
+        "Friedrich Merz Gets Real",
+        "Operation Epic Confusion",
+        "How the Gulf Countries Are Responding to Iran’s Attacks",
+        "The Iran War Spills Beyond the Middle East",
+        "How the Iran War Might Impact Russia-Ukraine",
+        "The Domino Effect of Operation Epic Fury",
+        "A Dangerous Opportunity for Iran’s Kurds",
+        "The United States Could Lose the Gulf",
+        "The Reductive Rhetoric of the Iran War",
+        "The Drone Attrition Trap",
+        "Why Aren’t Energy Markets Reacting More to the Iran War?"
+      ],
+      "topTerms": [
+        [
+          "iran",
+          11
+        ],
+        [
+          "war",
+          8
+        ],
+        [
+          "epic",
+          2
+        ],
+        [
+          "gulf",
+          2
+        ],
+        [
+          "isn",
+          2
+        ],
+        [
+          "operation",
+          2
+        ],
+        [
+          "among",
+          1
+        ],
+        [
+          "aren",
+          1
+        ],
+        [
+          "attacks",
+          1
+        ],
+        [
+          "attrition",
+          1
+        ],
+        [
+          "beyond",
+          1
+        ],
+        [
+          "bids",
+          1
+        ],
+        [
+          "boric",
+          1
+        ],
+        [
+          "boxing",
+          1
+        ],
+        [
+          "chile",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Foreign Affairs",
+      "type": "intl",
+      "url": "https://www.foreignaffairs.com/rss.xml",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Israel After the Iran War",
+        "Will China Overplay Its Hand?",
+        "The Mirage of a New Middle East",
+        "Why China Won’t Help Iran",
+        "The Coming Showdown Over Cuba",
+        "The Abiding Question of the Iranian Bomb",
+        "America and Israel’s War to Remake the Middle East",
+        "How India Can Supercharge Its Development",
+        "Is Hezbollah Still a Threat?",
+        "How Long Can the Iranian Regime Hold On?",
+        "One Man’s War",
+        "Taiwan Doesn’t Have to Choose",
+        "Trump’s Way of War",
+        "China’s AI Arsenal",
+        "Trump’s Iran Gamble",
+        "The Iranian Regime’s Existential Crisis—and What Might Come After Khamenei",
+        "What It Will Take to Change the Regime in Iran",
+        "The Trump Effect in Israel",
+        "China Is Winning by Waiting",
+        "How Washington Is Weaponizing Anticorruption Law"
+      ],
+      "topTerms": [
+        [
+          "china",
+          4
+        ],
+        [
+          "iran",
+          4
+        ],
+        [
+          "war",
+          4
+        ],
+        [
+          "iranian",
+          3
+        ],
+        [
+          "israel",
+          3
+        ],
+        [
+          "regime",
+          3
+        ],
+        [
+          "trump",
+          3
+        ],
+        [
+          "east",
+          2
+        ],
+        [
+          "middle",
+          2
+        ],
+        [
+          "abiding",
+          1
+        ],
+        [
+          "america",
+          1
+        ],
+        [
+          "anticorruption",
+          1
+        ],
+        [
+          "arsenal",
+          1
+        ],
+        [
+          "bomb",
+          1
+        ],
+        [
+          "change",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Atlantic Council",
+      "type": "intl",
+      "url": "https://www.atlanticcouncil.org/feed/",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "The US and China are in ‘gray zone’ competition. A counterinsurgency model can help explain what that means.",
+        "Hajjar Chemali interviewed on CNN discussing the growing economic collapse inside Iran",
+        "How the White House’s plan B on tariffs can give it all the trade leverage it needs",
+        "Iran war could save Vladimir Putin’s failing Ukraine invasion",
+        "What the US can do to mitigate an impending energy crisis",
+        "The renminbi is winning over Africa—but can it rival the dollar?",
+        "What a Middle East oil and LNG crisis means for China and East Asia",
+        "The hidden friction with Reza Pahlavi and the Iranian opposition",
+        "Enforce sanctions to prevent Russia from benefitting in a prolonged Iran crisis",
+        "While the Iran conflict continues, the Afghanistan-Pakistan crisis is only getting worse",
+        "Russian army faces comms crisis amid Starlink cut and Kremlin crackdown",
+        "Temnycky in Real Clear Defense on the impact of Russia&#8217;s full-scale invasion on US and European security",
+        "Wechsler joins KNX News to discuss the fallout from the US and Israel&#8217;s strikes on Iran",
+        "What Macron’s changes to French nuclear policy mean for European security",
+        "Dispatch from Kyiv: After a long, cold winter, momentum is back on Ukraine’s side",
+        "Trump wants Iranians to ‘take back their country’ from the regime. Can they?",
+        "Videos",
+        "How the US and its allies can prevent an energy supply crisis in the Strait of Hormuz",
+        "Experts react: How the world is responding to the US-Israeli war with Iran",
+        "#AtlanticDebrief &#8211; What&#8217;s in store for the Three Seas Summit? &#124; A Debrief from Amb. Romana Vlahutin"
+      ],
+      "topTerms": [
+        [
+          "crisis",
+          6
+        ],
+        [
+          "iran",
+          6
+        ],
+        [
+          "back",
+          2
+        ],
+        [
+          "china",
+          2
+        ],
+        [
+          "east",
+          2
+        ],
+        [
+          "energy",
+          2
+        ],
+        [
+          "european",
+          2
+        ],
+        [
+          "invasion",
+          2
+        ],
+        [
+          "means",
+          2
+        ],
+        [
+          "prevent",
+          2
+        ],
+        [
+          "russia",
+          2
+        ],
+        [
+          "security",
+          2
+        ],
+        [
+          "ukraine",
+          2
+        ],
+        [
+          "war",
+          2
+        ],
+        [
+          "afghanistan-pakistan",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Middle East Institute",
+      "type": "intl",
+      "url": "https://www.mei.edu/rss.xml",
+      "status": 403,
+      "contentType": "text/html; charset=UTF-8",
+      "health": "error",
+      "titles": [],
+      "topTerms": []
+    },
+    {
+      "name": "RAND",
+      "type": "research",
+      "url": "https://www.rand.org/rss/all.xml",
+      "status": 403,
+      "contentType": "text/html",
+      "health": "error",
+      "titles": [
+        "The request could not be satisfied."
+      ],
+      "topTerms": [
+        [
+          "not",
+          1
+        ],
+        [
+          "request",
+          1
+        ],
+        [
+          "satisfied",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Brookings",
+      "type": "research",
+      "url": "https://www.brookings.edu/feed/",
+      "status": 200,
+      "contentType": "text/html; charset=UTF-8",
+      "health": "html_titles",
+      "titles": [
+        "Advancing ideas that matter",
+        "Iran",
+        "USMCA",
+        "Brookings Brief",
+        "Brookings Podcast Network",
+        "Immigration and Migration",
+        "Tariffs and Trade",
+        "Housing and Affordability",
+        "Upcoming Events",
+        "Brookings’ scholarly research educates the public and informs decisionmakers on complex policy challenges.",
+        "Quality research",
+        "Independent analysis",
+        "Lasting impact"
+      ],
+      "topTerms": [
+        [
+          "brookings",
+          3
+        ],
+        [
+          "research",
+          2
+        ],
+        [
+          "advancing",
+          1
+        ],
+        [
+          "affordability",
+          1
+        ],
+        [
+          "brief",
+          1
+        ],
+        [
+          "challenges",
+          1
+        ],
+        [
+          "complex",
+          1
+        ],
+        [
+          "decisionmakers",
+          1
+        ],
+        [
+          "educates",
+          1
+        ],
+        [
+          "events",
+          1
+        ],
+        [
+          "housing",
+          1
+        ],
+        [
+          "ideas",
+          1
+        ],
+        [
+          "immigration",
+          1
+        ],
+        [
+          "impact",
+          1
+        ],
+        [
+          "independent",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Carnegie",
+      "type": "research",
+      "url": "https://carnegieendowment.org/rss/",
+      "status": 200,
+      "contentType": "text/html; charset=utf-8",
+      "health": "non_rss",
+      "titles": [],
+      "topTerms": []
+    },
+    {
+      "name": "FAS",
+      "type": "research",
+      "url": "https://fas.org/feed/",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "Hello world!"
+      ],
+      "topTerms": [
+        [
+          "hello",
+          1
+        ],
+        [
+          "world",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "NTI",
+      "type": "research",
+      "url": "https://www.nti.org/rss/",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_empty",
+      "titles": [],
+      "topTerms": []
+    },
+    {
+      "name": "Bellingcat",
+      "type": "osint",
+      "url": "https://www.bellingcat.com/feed/",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "Using Bellingcat’s New Open Source Tool to Explore Historical and Spatial Flight Data",
+        "Satellite Imagery Reveals Strikes on Iranian Police Stations",
+        "“Bombs will fall Everywhere”: The American, Israeli and Iranian Weapons Being Deployed in Middle East",
+        "How Russia’s War Has Devastated Civilian Life in Ukraine",
+        "Viral Child Soldiers on TikTok: The ‘Disney Stars’ of Sudan’s Civil War",
+        "Shipwrecks, Sham Papers and False Flags: Tracking the Company Behind It All",
+        "Epstein Files: X Users Are Asking Grok to &#8216;Unblur&#8217; Photos of Children",
+        "Made in the USA: How American-Built Weapons Have Wrought Destruction in Gaza",
+        "Identifying ‘Less-Lethal’ Weapons Used By DHS Agents in US Immigration Raids and Protests",
+        "Alex Pretti: Analysing Footage of Minneapolis CBP Shooting"
+      ],
+      "topTerms": [
+        [
+          "weapons",
+          3
+        ],
+        [
+          "iranian",
+          2
+        ],
+        [
+          "war",
+          2
+        ],
+        [
+          "agents",
+          1
+        ],
+        [
+          "alex",
+          1
+        ],
+        [
+          "all",
+          1
+        ],
+        [
+          "american",
+          1
+        ],
+        [
+          "american-built",
+          1
+        ],
+        [
+          "analysing",
+          1
+        ],
+        [
+          "asking",
+          1
+        ],
+        [
+          "behind",
+          1
+        ],
+        [
+          "being",
+          1
+        ],
+        [
+          "bellingcat",
+          1
+        ],
+        [
+          "bombs",
+          1
+        ],
+        [
+          "cbp",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Krebs Security",
+      "type": "cyber",
+      "url": "https://krebsonsecurity.com/feed/",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "Who is the Kimwolf Botmaster &#8220;Dort&#8221;?",
+        "&#8216;Starkiller&#8217; Phishing Service Proxies Real Login Pages, MFA",
+        "Kimwolf Botnet Swamps Anonymity Network I2P",
+        "Patch Tuesday, February 2026 Edition",
+        "Please Don&#8217;t Feed the Scattered Lapsus ShinyHunters",
+        "Who Operates the Badbox 2.0 Botnet?",
+        "Kimwolf Botnet Lurking in Corporate, Govt. Networks",
+        "Patch Tuesday, January 2026 Edition",
+        "Who Benefited from the Aisuru and Kimwolf Botnets?",
+        "The Kimwolf Botnet is Stalking Your Local Network"
+      ],
+      "topTerms": [
+        [
+          "kimwolf",
+          5
+        ],
+        [
+          "botnet",
+          4
+        ],
+        [
+          "edition",
+          2
+        ],
+        [
+          "network",
+          2
+        ],
+        [
+          "patch",
+          2
+        ],
+        [
+          "tuesday",
+          2
+        ],
+        [
+          "aisuru",
+          1
+        ],
+        [
+          "anonymity",
+          1
+        ],
+        [
+          "badbox",
+          1
+        ],
+        [
+          "benefited",
+          1
+        ],
+        [
+          "botmaster",
+          1
+        ],
+        [
+          "botnets",
+          1
+        ],
+        [
+          "corporate",
+          1
+        ],
+        [
+          "don",
+          1
+        ],
+        [
+          "dort",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "FAO News",
+      "type": "economic",
+      "url": "https://www.fao.org/feeds/fao-newsroom-rss",
+      "status": 200,
+      "contentType": "application/rss+xml",
+      "health": "rss_ok",
+      "titles": [
+        "FAO Food Price Index rises in February for first time in five months",
+        "Italy and FAO mark International Year of the Woman Farmer 2026 with commemorative coin",
+        "Women farmers’ access to justice and resources take centre stage as Rome-based UN agencies mark International Women’s Day 2026",
+        "Brazil’s Rosângela “Janja” Lula da Silva designated FAO Special Goodwill Champion Against Hunger",
+        "FAO Members in Latin America and Caribbean discuss priorities in fighting hunger and poverty",
+        "Somalia’s humanitarian crisis worsening with 6.5 million people facing high levels of hunger, Federal Government and United Nations warn",
+        "New global report highlights slow progress in expanding secure land tenure",
+        "High-Level roundtable highlights growing role of agrifood systems in National Biodiversity Strategies and Actions",
+        "Visit from high-level delegates from FAO headquarters and regional offices marks a first for Joint FAO/IAEA Centre",
+        "FAO, UNICEF and France join forces to strengthen food security and nutrition for earthquake-affected families in eastern Afghanistan",
+        "FAO experts assess risk of antimicrobial resistance spreading via food loss and waste",
+        "New FAO publication describes global fish fraud and the tools to combat it"
+      ],
+      "topTerms": [
+        [
+          "fao",
+          9
+        ],
+        [
+          "food",
+          3
+        ],
+        [
+          "hunger",
+          3
+        ],
+        [
+          "centre",
+          2
+        ],
+        [
+          "first",
+          2
+        ],
+        [
+          "global",
+          2
+        ],
+        [
+          "high-level",
+          2
+        ],
+        [
+          "highlights",
+          2
+        ],
+        [
+          "international",
+          2
+        ],
+        [
+          "mark",
+          2
+        ],
+        [
+          "women",
+          2
+        ],
+        [
+          "access",
+          1
+        ],
+        [
+          "actions",
+          1
+        ],
+        [
+          "afghanistan",
+          1
+        ],
+        [
+          "against",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "BBC World",
+      "type": "mainstream",
+      "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "status": 200,
+      "contentType": "text/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "'What is the game plan?': The Iran war is unsettling China and its ambitions",
+        "Trump cuts his losses on Noem after controversial tenure at homeland security",
+        "US and Venezuela agree to resume diplomatic ties after Maduro capture",
+        "Ukrainian bank workers released after detention in Hungary",
+        "US economy unexpectedly sheds 92,000 jobs in February",
+        "Indonesia to ban social media and other online platforms for under 16s",
+        "US asked Ukraine for help fighting Iranian drones, Zelensky says",
+        "Israel strikes Beirut after evacuation warning sparks panic",
+        "Anthropic vows to sue Pentagon over supply chain risk label",
+        "Canadian teen died from drowning after dingo attack in Australia",
+        "Savannah Guthrie plans return to NBC as search for missing mother continues",
+        "Finland plans to lift decades-old ban on hosting nuclear weapons",
+        "Ecuadorean troops find 35m-long 'narco-sub' hidden in nature reserve",
+        "Britney Spears arrested in California on suspicion of driving under the influence",
+        "Texas lawmaker admits 'lapse in judgement' in affair with aide",
+        "Azerbaijan furious with Iran as war spills over its border",
+        "The young women who fought in Ethiopia's last civil war and don't want to see another one",
+        "'We have been preparing': Why the boots on the ground in Iran could be Kurdish",
+        "Iran's high-risk war strategy seems to centre on endurance and deterrence",
+        "Dirty laundry and chocolate bars: How Venezuelan prisoners smuggled messages out of jail"
+      ],
+      "topTerms": [
+        [
+          "iran",
+          4
+        ],
+        [
+          "war",
+          4
+        ],
+        [
+          "ban",
+          2
+        ],
+        [
+          "plans",
+          2
+        ],
+        [
+          "admits",
+          1
+        ],
+        [
+          "affair",
+          1
+        ],
+        [
+          "agree",
+          1
+        ],
+        [
+          "aide",
+          1
+        ],
+        [
+          "ambitions",
+          1
+        ],
+        [
+          "another",
+          1
+        ],
+        [
+          "anthropic",
+          1
+        ],
+        [
+          "arrested",
+          1
+        ],
+        [
+          "asked",
+          1
+        ],
+        [
+          "attack",
+          1
+        ],
+        [
+          "australia",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "BBC Middle East",
+      "type": "mainstream",
+      "url": "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",
+      "status": 200,
+      "contentType": "text/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Israeli troops push into Lebanon for yet another war with Iran's proxy Hezbollah",
+        "'We couldn't sleep because of fear': Residents flee as Israel pounds south Beirut",
+        "Iran school and nearby military base struck multiple times, satellite image reveals",
+        "'We have been preparing': Why the boots on the ground in Iran could be Kurdish",
+        "'What is the game plan?': The Iran war is unsettling China and its ambitions",
+        "'This is war': BBC speaks to Iranians at Iran-Turkey border",
+        "Iran's high-risk war strategy seems to centre on endurance and deterrence",
+        "Iran targets headquarters of Iranian Kurdish forces in Iraq",
+        "Israel strikes Beirut after evacuation warning sparks panic",
+        "Checkpoints everywhere and internet blackouts: Life in Iran as US-Israeli strikes intensify",
+        "US sub sinks Iranian warship in Indian Ocean, Hegseth says",
+        "How depleted weapons stockpiles could affect the Iran conflict",
+        "US Senate vote fails to rein in Trump war powers on Iran",
+        "Iran postpones Khamenei funeral as US-Israeli bombardment continues",
+        "Israel tells people in large parts of southern Lebanon to leave ahead of attacks",
+        "Satellite images show Iranian navy and nuclear sites hit by US-Israeli strikes",
+        "Funerals held for students and staff after strike on Iran school",
+        "Fears over food shortages in Tehran as residents worry about length of war",
+        "In maps: Seven days of strikes across the Middle East",
+        "'All red lines have been crossed': Gulf states weigh response to Iranian strikes"
+      ],
+      "topTerms": [
+        [
+          "iran",
+          11
+        ],
+        [
+          "war",
+          6
+        ],
+        [
+          "strikes",
+          5
+        ],
+        [
+          "iranian",
+          4
+        ],
+        [
+          "israel",
+          3
+        ],
+        [
+          "us-israeli",
+          3
+        ],
+        [
+          "been",
+          2
+        ],
+        [
+          "beirut",
+          2
+        ],
+        [
+          "have",
+          2
+        ],
+        [
+          "kurdish",
+          2
+        ],
+        [
+          "lebanon",
+          2
+        ],
+        [
+          "residents",
+          2
+        ],
+        [
+          "satellite",
+          2
+        ],
+        [
+          "school",
+          2
+        ],
+        [
+          "across",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Al Jazeera",
+      "type": "mainstream",
+      "url": "https://www.aljazeera.com/xml/rss/all.xml",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "India vs New Zealand: T20 World Cup final – Predicted XI, time, stream",
+        "Iran’s future will be determined by Iranians, not Trump, officials say",
+        "US customs agency says it is not yet able to reimburse tariff costs",
+        "Zelenskyy visits front line as Ukraine and Russia swap 500 prisoners each",
+        "CCTV video captures moment strike lands next to boys’ school in Iran",
+        "Iran shares video of Tehran primary school after attack",
+        "Video shows explosions near Tehran’s Azadi Tower",
+        "Calls grow for independent probe into deadly Iranian girls’ school attack",
+        "White House posts ‘American justice’ video days after Iran school attack",
+        "Has Donald Trump failed to sell the Iran war to the world?",
+        "US job market stalls, unemployment rate rises before Fed decision",
+        "LIVE: Celta Vigo vs Real Madrid – La Liga",
+        "Israel extending ‘Gaza playbook’ to Lebanon, charity warns",
+        "In a bid to counter China, Trump hosts a summit for Latin America leaders",
+        "Thousands of Syrian refugees flee Lebanon after Israeli strikes",
+        "Kurdish opposition mulls whether to trust Trump after Iran uprising call",
+        "‘No deal with Iran except unconditional surrender,’ Trump says",
+        "Qatar warns Iran war could halt Gulf energy exports ‘within weeks’",
+        "Elementary school in Tehran hit, Iran’s foreign ministry says",
+        "FIFA, AFC urged to protect Iran women footballers after ‘traitors’ threat"
+      ],
+      "topTerms": [
+        [
+          "iran",
+          10
+        ],
+        [
+          "school",
+          5
+        ],
+        [
+          "trump",
+          5
+        ],
+        [
+          "video",
+          4
+        ],
+        [
+          "attack",
+          3
+        ],
+        [
+          "tehran",
+          3
+        ],
+        [
+          "lebanon",
+          2
+        ],
+        [
+          "not",
+          2
+        ],
+        [
+          "war",
+          2
+        ],
+        [
+          "warns",
+          2
+        ],
+        [
+          "world",
+          2
+        ],
+        [
+          "able",
+          1
+        ],
+        [
+          "afc",
+          1
+        ],
+        [
+          "agency",
+          1
+        ],
+        [
+          "america",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "Reuters (site feed)",
+      "type": "wire",
+      "url": "https://news.google.com/rss/search?q=site%3Areuters.com%20when%3A3d&hl=en-US&gl=US&ceid=US:en",
+      "status": 200,
+      "contentType": "application/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Exclusive: Israel backing Iranian Kurdish plans to seize Iran border areas, sources say - Reuters",
+        "US customs agency says it cannot comply with tariff refund order - Reuters",
+        "Oil derivatives signal traders see Middle East shock as short-lived - Reuters",
+        "Russia is providing Iran intelligence to target US forces, Washington Post reports - Reuters",
+        "BlackRock fund limits withdrawals as redemptions rattle private credit - Reuters",
+        "Trump says there will be no deal with Iran except 'unconditional surrender' - Reuters",
+        "Unexpected job losses, rise in unemployment rate fan US labor market doubts - Reuters",
+        "Iran spent years fostering proxies in Iraq. Now, many aren’t eager to join the war - Reuters",
+        "Robinhood's $658 million private markets fund for retail investors goes public - Reuters",
+        "Lithuania says Russia is expanding military units on NATO borders - Reuters",
+        "Fed faced with hard choice on weak jobs, high inflation - Reuters",
+        "Exclusive: Turkey asks Britain's MI6 to step up protection of Syria's Sharaa, sources say; Ankara denies report - Reuters",
+        "F1 likely to drop Bahrain and Saudi races without replacement amid Gulf conflict - Reuters",
+        "Drone strike drives calls to end British military presence on Cyprus - Reuters",
+        "Axel Springer buys UK's Telegraph for $766 million, ending ownership limbo - Reuters",
+        "US customs agency says tariff refund system will be ready in 45 days - Reuters",
+        "Investors cling to shock-absorber trades as Iran war brings economic visibility to zero - Reuters",
+        "Wall Street falls as Middle East turmoil, weak jobs report weigh - Reuters",
+        "US companies denied refunds on Trump’s illegal tariffs, FT reports - Reuters",
+        "Qatar energy minister warns war will force Gulf to halt energy exports within weeks, FT says - Reuters"
+      ],
+      "topTerms": [
+        [
+          "reuters",
+          20
+        ],
+        [
+          "iran",
+          5
+        ],
+        [
+          "war",
+          3
+        ],
+        [
+          "agency",
+          2
+        ],
+        [
+          "customs",
+          2
+        ],
+        [
+          "east",
+          2
+        ],
+        [
+          "energy",
+          2
+        ],
+        [
+          "exclusive",
+          2
+        ],
+        [
+          "fund",
+          2
+        ],
+        [
+          "gulf",
+          2
+        ],
+        [
+          "investors",
+          2
+        ],
+        [
+          "jobs",
+          2
+        ],
+        [
+          "middle",
+          2
+        ],
+        [
+          "military",
+          2
+        ],
+        [
+          "million",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "UN News",
+      "type": "gov",
+      "url": "https://news.un.org/feed/subscribe/en/news/all/rss.xml",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "On day seven of Middle East war, no let-up in suffering",
+        "MIDDLE EAST LIVE 6 March: World economy at grave risk, warns UN chief; ‘the situation could spiral beyond anyone&#039;s control’",
+        "World News In Brief: Sudan conflict intensifies, Global inequality deepening, HIV success amid new medicine, increase in ‘Domicide’ worldwide",
+        "UN calls for fair play in the global race for critical minerals",
+        "MIDDLE EAST LIVE 5 March: Further escalation drives uncertainty and suffering",
+        "Women’s rights are regressing worldwide, warns UN gender equality chief",
+        "World News in Brief: Afghan-Pakistan border clashes latest, murder of Iraqi women’s rights activist condemned, Chile leprosy milestone",
+        "Imprisoned Iranian protesters face ‘expedited’ executions",
+        "MIDDLE EAST LIVE 4 March: Conflict continues across region amid US, Israeli and Iranian strikes",
+        "MIDDLE EAST LIVE 3 March: Escalating conflict between US, Israel and Iran",
+        "How AI is already reshaping working conditions",
+        "‘The world is looking to you for clarity’, UN chief tells AI experts",
+        "Iran crisis: Schoolgirls killed, thousands displaced and aid compromised",
+        "Why medicinal plants matter on World Wildlife Day",
+        "World News in Brief: Gaza crossings closed, fighting in Sudan continues, Afghanistan quake victims",
+        "SECURITY COUNCIL LIVE: Melania Trump presides over historic session on children in conflict",
+        "MIDDLE EAST LIVE: Strikes continue from US, Israel and Iran as UN urges restraint",
+        "Iran crisis: Nuclear watchdog urges restraint amid ongoing strikes",
+        "Deadly bombing of Iran primary school ‘a grave violation of humanitarian law’: UNESCO",
+        "Justice on the move: Mobile courts offer hope for communities in South Sudan"
+      ],
+      "topTerms": [
+        [
+          "east",
+          6
+        ],
+        [
+          "middle",
+          6
+        ],
+        [
+          "world",
+          6
+        ],
+        [
+          "iran",
+          5
+        ],
+        [
+          "conflict",
+          4
+        ],
+        [
+          "march",
+          4
+        ],
+        [
+          "brief",
+          3
+        ],
+        [
+          "chief",
+          3
+        ],
+        [
+          "strikes",
+          3
+        ],
+        [
+          "sudan",
+          3
+        ],
+        [
+          "continues",
+          2
+        ],
+        [
+          "crisis",
+          2
+        ],
+        [
+          "day",
+          2
+        ],
+        [
+          "global",
+          2
+        ],
+        [
+          "grave",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "CISA Advisories",
+      "type": "cyber",
+      "url": "https://www.cisa.gov/cybersecurity-advisories/all.xml",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Delta Electronics CNCSoft-G2",
+        "CISA Adds Five Known Exploited Vulnerabilities to Catalog",
+        "ePower epower.ie",
+        "Mobiliti e-mobi.hu",
+        "Portwell Engineering Toolkits",
+        "Mitsubishi Electric MELSEC iQ-F Series EtherNet/IP module and Ethernet module",
+        "Hitachi Energy Relion REB500 Product",
+        "Labkotec LID-3300IP",
+        "Hitachi Energy RTU500 Product",
+        "Everon OCPP Backends",
+        "CISA Adds Two Known Exploited Vulnerabilities to Catalog",
+        "Mobility46 mobility46.se",
+        "EV Energy ev.energy",
+        "Copeland XWEB and XWEB Pro",
+        "SWITCH EV swtchenergy.com",
+        "Chargemap chargemap.com",
+        "Pelco, Inc. Sarix Pro 3 Series IP Cameras",
+        "Yokogawa CENTUM VP R6, R7",
+        "CloudCharge cloudcharge.se",
+        "EV2GO ev2go.io"
+      ],
+      "topTerms": [
+        [
+          "energy",
+          4
+        ],
+        [
+          "adds",
+          2
+        ],
+        [
+          "catalog",
+          2
+        ],
+        [
+          "chargemap",
+          2
+        ],
+        [
+          "cisa",
+          2
+        ],
+        [
+          "cloudcharge",
+          2
+        ],
+        [
+          "com",
+          2
+        ],
+        [
+          "epower",
+          2
+        ],
+        [
+          "ethernet",
+          2
+        ],
+        [
+          "ev2go",
+          2
+        ],
+        [
+          "exploited",
+          2
+        ],
+        [
+          "hitachi",
+          2
+        ],
+        [
+          "known",
+          2
+        ],
+        [
+          "mobility46",
+          2
+        ],
+        [
+          "module",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "US-CERT Alerts",
+      "type": "cyber",
+      "url": "https://www.cisa.gov/uscert/ncas/alerts.xml",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Pro-Russia Hacktivists Conduct Opportunistic Attacks Against US and Global Critical Infrastructure",
+        "CISA Shares Lessons Learned from an Incident Response Engagement",
+        "Countering Chinese State-Sponsored Actors Compromise of Networks Worldwide to Feed Global Espionage System",
+        "CISA and USCG Identify Areas for Cyber Hygiene Improvement After Conducting Proactive Threat Hunt at US Critical Infrastructure Organization",
+        "#StopRansomware: Interlock",
+        "Ransomware Actors Exploit Unpatched SimpleHelp Remote Monitoring and Management to Compromise Utility Billing Software Provider",
+        "Threat Actors Deploy LummaC2 Malware to Exfiltrate Sensitive Data from Organizations",
+        "Russian GRU Targeting Western Logistics Entities and Technology Companies",
+        "Fast Flux: A National Security Threat",
+        "#StopRansomware: Medusa Ransomware"
+      ],
+      "topTerms": [
+        [
+          "actors",
+          3
+        ],
+        [
+          "threat",
+          3
+        ],
+        [
+          "cisa",
+          2
+        ],
+        [
+          "compromise",
+          2
+        ],
+        [
+          "critical",
+          2
+        ],
+        [
+          "global",
+          2
+        ],
+        [
+          "infrastructure",
+          2
+        ],
+        [
+          "ransomware",
+          2
+        ],
+        [
+          "stopransomware",
+          2
+        ],
+        [
+          "against",
+          1
+        ],
+        [
+          "areas",
+          1
+        ],
+        [
+          "attacks",
+          1
+        ],
+        [
+          "billing",
+          1
+        ],
+        [
+          "chinese",
+          1
+        ],
+        [
+          "companies",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "DoD Releases",
+      "type": "gov",
+      "url": "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=945&max=20",
+      "status": 200,
+      "contentType": "text/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Hegseth Says There's No Shortage of American Will, Resources in Operation Epic Fury",
+        "Air Force, Space Force Ready for All Warfighting Challenges",
+        "Vice Chiefs Testify on Joint Force Readiness, Improvements",
+        "While Improving Quality of Life, Navy Remains Ready to Fight",
+        "Army Vice Chief Says Department Ready to Meet Threats Worldwide",
+        "Hegseth Promotes Regional Border Security, Signs Joint Security Declaration at Inaugural Counter Cartel Conference",
+        "Marine Corps Improving Amphibious Warfare Ship Availability, Says Defense Leader",
+        "Four Days In, Hegseth, Caine Say U.S. Making Decisive Progress in Iran",
+        "Trio of Army Medal of Honor Recipients Inducted Into Pentagon's Hall of Heroes",
+        "U.S. Space Force Strengthens Partnerships at 45th Cobra Gold",
+        "Hegseth Says 'Epic Fury' Goals in Iran Are 'Laser-Focused'",
+        "25th Infantry Division Leads Push for Faster, Data-Driven Capabilities",
+        "This Week in DOW: Honoring Heroes, Patrolling Oceans, Uncovering Truth, Out There",
+        "Hegseth Wraps Arsenal of Freedom Tour With Visit to Arkansas",
+        "Joint Interagency Task Force Marks 6 Months With Accelerated Delivery of Counter-UAS Capabilities",
+        "Oklahoma Army National Guard Deploys for Fire Suppression Mission",
+        "Hegseth Says Scouting America Support to Continue Upon Org's Commitment to Drop DEI",
+        "Joint Force Refines Chemical, Biological Defense Capabilities",
+        "Acquisition Reform Means a Focus on Warfighter Success",
+        "HoloLens Enables Remote Joint Inspection of Cargo"
+      ],
+      "topTerms": [
+        [
+          "force",
+          6
+        ],
+        [
+          "hegseth",
+          6
+        ],
+        [
+          "joint",
+          5
+        ],
+        [
+          "army",
+          3
+        ],
+        [
+          "capabilities",
+          3
+        ],
+        [
+          "ready",
+          3
+        ],
+        [
+          "defense",
+          2
+        ],
+        [
+          "epic",
+          2
+        ],
+        [
+          "fury",
+          2
+        ],
+        [
+          "heroes",
+          2
+        ],
+        [
+          "improving",
+          2
+        ],
+        [
+          "iran",
+          2
+        ],
+        [
+          "security",
+          2
+        ],
+        [
+          "space",
+          2
+        ],
+        [
+          "there",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "WHO News",
+      "type": "gov",
+      "url": "https://www.who.int/rss-feeds/news-english.xml",
+      "status": 200,
+      "contentType": "application/rss+xml",
+      "health": "rss_ok",
+      "titles": [
+        "Chile becomes the first country in the Americas to be verified by WHO for the elimination of leprosy",
+        "Recommendations for influenza vaccine composition for the 2026-2027 northern hemisphere season",
+        "Denmark becomes first country in the European Union to eliminate mother-to-child transmission of HIV and syphilis",
+        "WHO Director-General visits Jordan to recognize strong collaboration on health system delivery, emergency relief and advancing mental health",
+        "Attacks on Ukraine’s health care increased by 20% in 2025",
+        "WHO validates elimination of trachoma as a public health problem in Libya",
+        "Global commitment on display as countries negotiate key annex to the Pandemic Agreement",
+        "Statement on the planned hepatitis B birth dose vaccine trial in Guinea-Bissau",
+        "One in two people facing cataract blindness need access to life-changing surgery",
+        "Over four million girls still at risk of female genital mutilation: UN leaders call for sustained commitment and investment to end FGM",
+        "Preventive cholera vaccination resumes as global supply reaches critical milestone",
+        "Four in ten cancer cases could be prevented globally",
+        "WHO launches 2026 appeal to help millions of people in health emergencies and crisis settings",
+        "Six years after COVID-19’s global alarm: Is the world better prepared for the next pandemic?",
+        "Joint statement on the renewed Quadripartite Memorandum of Understanding regarding cooperation on One Health until 2030",
+        "Communities unite to address stigma and discrimination affecting people with neglected tropical diseases",
+        "WHO urges schools worldwide to promote healthy eating for children",
+        "WHO statement on notification of withdrawal of the United States",
+        "Countries progress negotiations in support of WHO Pandemic Agreement",
+        "WHO renews commitment to a leprosy-free world, spotlighting partnership and progress ahead of World Leprosy Day"
+      ],
+      "topTerms": [
+        [
+          "health",
+          6
+        ],
+        [
+          "commitment",
+          3
+        ],
+        [
+          "global",
+          3
+        ],
+        [
+          "pandemic",
+          3
+        ],
+        [
+          "people",
+          3
+        ],
+        [
+          "statement",
+          3
+        ],
+        [
+          "world",
+          3
+        ],
+        [
+          "agreement",
+          2
+        ],
+        [
+          "becomes",
+          2
+        ],
+        [
+          "countries",
+          2
+        ],
+        [
+          "country",
+          2
+        ],
+        [
+          "elimination",
+          2
+        ],
+        [
+          "first",
+          2
+        ],
+        [
+          "four",
+          2
+        ],
+        [
+          "leprosy",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "UK MOD GOV.UK",
+      "type": "gov",
+      "url": "https://www.gov.uk/government/organisations/ministry-of-defence.atom",
+      "status": 200,
+      "contentType": "application/atom+xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Transparency data: Official Development Assistance: UK Integrated Security Fund (UKISF)",
+        "Transparency data: Military court centres court listings",
+        "Guidance: Management of health and safety in defence – chapter 11: management of hazardous substances (JSP 375, volume 1)",
+        "Form: Management of health and safety in defence: safety forms (JSP 375)",
+        "Guidance: Contractor Flying Approved Organizations Scheme (Basic Uncrewed Air Systems) (CFAOS(BU))",
+        "Cyber Security Model",
+        "Veterans News and Communications Hub",
+        "Guidance: Global Support Organisation overseas guides: Scandinavia",
+        "Guidance: Dartmoor firing times",
+        "MOD engagement with trade associations",
+        "Guidance: The Defence Ordnance, Munitions and Explosives Safety Regulator (DOSR) - Regulatory Notices",
+        "Policy paper: Women in defence charter",
+        "Ministry of Defence Sanctuary Awards",
+        "Official Statistics: UK Defence Export Statistics 2024",
+        "Guidance: Military low flying: air weapons ranges activity",
+        "Guidance: Military low flying: MOD sponsored air exercises",
+        "Guidance: Military low flying: RAF operational low flying training timetable",
+        "Guidance: Air safety management system overview (ASMsO)",
+        "Transparency data: MOD: spending over £25,000, January to December 2026",
+        "Transparency data: Military Court Service sentencing remarks 2025"
+      ],
+      "topTerms": [
+        [
+          "guidance",
+          9
+        ],
+        [
+          "defence",
+          6
+        ],
+        [
+          "flying",
+          5
+        ],
+        [
+          "military",
+          5
+        ],
+        [
+          "safety",
+          5
+        ],
+        [
+          "air",
+          4
+        ],
+        [
+          "data",
+          4
+        ],
+        [
+          "low",
+          4
+        ],
+        [
+          "management",
+          4
+        ],
+        [
+          "transparency",
+          4
+        ],
+        [
+          "court",
+          3
+        ],
+        [
+          "mod",
+          3
+        ],
+        [
+          "health",
+          2
+        ],
+        [
+          "jsp",
+          2
+        ],
+        [
+          "official",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "UK FCDO GOV.UK",
+      "type": "gov",
+      "url": "https://www.gov.uk/government/organisations/foreign-commonwealth-development-office.atom",
+      "status": 200,
+      "contentType": "application/atom+xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Samoa travel advice",
+        "Tonga travel advice",
+        "Nauru travel advice",
+        "Solomon Islands travel advice",
+        "Fiji travel advice",
+        "Kiribati travel advice",
+        "Marshall Islands travel advice",
+        "Federated States of Micronesia travel advice",
+        "Tuvalu travel advice",
+        "Vanuatu travel advice",
+        "Papua New Guinea travel advice",
+        "Singapore travel advice",
+        "Laos travel advice",
+        "Indonesia travel advice",
+        "Venezuela travel advice",
+        "Botswana travel advice",
+        "New Zealand travel advice",
+        "Australia travel advice",
+        "Guidance: The UK Sanctions List",
+        "Russia: list of designations and sanctions notices"
+      ],
+      "topTerms": [
+        [
+          "advice",
+          18
+        ],
+        [
+          "travel",
+          18
+        ],
+        [
+          "islands",
+          2
+        ],
+        [
+          "list",
+          2
+        ],
+        [
+          "sanctions",
+          2
+        ],
+        [
+          "australia",
+          1
+        ],
+        [
+          "botswana",
+          1
+        ],
+        [
+          "designations",
+          1
+        ],
+        [
+          "federated",
+          1
+        ],
+        [
+          "fiji",
+          1
+        ],
+        [
+          "guidance",
+          1
+        ],
+        [
+          "guinea",
+          1
+        ],
+        [
+          "indonesia",
+          1
+        ],
+        [
+          "kiribati",
+          1
+        ],
+        [
+          "laos",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "State Dept (site feed)",
+      "type": "gov",
+      "url": "https://news.google.com/rss/search?q=site%3Astate.gov%20when%3A7d&hl=en-US&gl=US&ceid=US:en",
+      "status": 200,
+      "contentType": "application/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Announcement of Visa Restriction Policy Targeting Individuals Undermining Peace in the Great Lakes Region - U.S. Department of State (.gov)",
+        "A Statement on U.S.-Venezuela Relations - U.S. Department of State (.gov)",
+        "Status of U.S. Embassy Kuwait City - U.S. Department of State (.gov)",
+        "Joint Statement from the International Contact Group for the Great Lakes (ICG) on the Situation in the Eastern Democratic Republic of the Congo (DRC) - U.S. Department of State (.gov)",
+        "Statement from Assistant Secretary Dylan Johnson on Ensuring the Safety of American Citizens in the Middle East - U.S. Department of State (.gov)",
+        "Consular Information for Americans in the Middle East - U.S. Department of State (.gov)",
+        "Information on Department of State Charter Flights and Ground Transportation Options - U.S. Department of State (.gov)",
+        "Secretary Rubio’s Call with Saudi Foreign Minister Prince Faisal bin Farhan Al Saud - U.S. Department of State (.gov)",
+        "U.S. Assistance to Ensure the Safety of American Citizens Overseas - U.S. Department of State (.gov)",
+        "Secretary Rubio’s Call with Republic of Cyprus Foreign Minister Kombos - U.S. Department of State (.gov)",
+        "Sanctioning Rwandan Violators of the Washington Accords for Peace and Prosperity - U.S. Department of State (.gov)",
+        "Secretary of State Marco Rubio Remarks to Press - U.S. Department of State (.gov)",
+        "Joint Statement on Iran’s Missile and Drone Attacks in the Region - U.S. Department of State (.gov)",
+        "Worldwide Caution - U.S. Department of State (.gov)",
+        "Secretary Rubio’s Call with Kuwaiti Foreign Minister Sheikh Jarrah Jaber Al-Ahmad Al-Sabah - U.S. Department of State (.gov)",
+        "Department of State Charter Flight Departs Middle East to United States - U.S. Department of State (.gov)",
+        "Secretary Rubio’s Call with Turkish Foreign Minister Fidan - U.S. Department of State (.gov)",
+        "Secretary Rubio’s Call with Egyptian Foreign Minister Abdelatty - U.S. Department of State (.gov)",
+        "Ensuring the Safety of American Citizens Overseas - U.S. Department of State (.gov)",
+        "Resources and Support for U.S. Citizens Overseas - U.S. Department of State (.gov)"
+      ],
+      "topTerms": [
+        [
+          "state",
+          23
+        ],
+        [
+          "department",
+          22
+        ],
+        [
+          "gov",
+          20
+        ],
+        [
+          "secretary",
+          7
+        ],
+        [
+          "rubio",
+          6
+        ],
+        [
+          "call",
+          5
+        ],
+        [
+          "foreign",
+          5
+        ],
+        [
+          "minister",
+          5
+        ],
+        [
+          "citizens",
+          4
+        ],
+        [
+          "statement",
+          4
+        ],
+        [
+          "american",
+          3
+        ],
+        [
+          "east",
+          3
+        ],
+        [
+          "middle",
+          3
+        ],
+        [
+          "overseas",
+          3
+        ],
+        [
+          "safety",
+          3
+        ]
+      ]
+    },
+    {
+      "name": "The Hacker News",
+      "type": "cyber",
+      "url": "https://feeds.feedburner.com/TheHackersNews",
+      "status": 200,
+      "contentType": "text/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Transparent Tribe Uses AI to Mass-Produce Malware Implants in Campaign Targeting India",
+        "Multi-Stage VOID#GEIST Malware Delivering XWorm, AsyncRAT, and Xeno RAT",
+        "The MSP Guide to Using AI-Powered Risk Management to Scale Cybersecurity",
+        "Iran-Linked MuddyWater Hackers Target U.S. Networks With New Dindoor Backdoor",
+        "China-Linked Hackers Use TernDoor, PeerTime, BruteEntry in South American Telecom Attacks",
+        "Microsoft Reveals ClickFix Campaign Using Windows Terminal to Deploy Lumma Stealer",
+        "Hikvision and Rockwell Automation CVSS 9.8 Flaws Added to CISA KEV Catalog",
+        "Cisco Confirms Active Exploitation of Two Catalyst SD-WAN Manager Vulnerabilities",
+        "Preparing for the Quantum Era: Post-Quantum Cryptography Webinar for Security Leaders",
+        "ThreatsDay Bulletin: DDR5 Bot Scalping, Samsung TV Tracking, Reddit Privacy Fine & More",
+        "Dust Specter Targets Iraqi Officials with New SPLITDROP and GHOSTFORM Malware",
+        "Where Multi-Factor Authentication Stops and Credential Abuse Starts",
+        "APT28-Linked Campaign Deploys BadPaw Loader and MeowMeow Backdoor in Ukraine",
+        "Europol-Led Operation Takes Down Tycoon 2FA Phishing-as-a-Service Linked to 64,000 Attacks",
+        "FBI and Europol Seize LeakBase Forum Used to Trade Stolen Credentials",
+        "149 Hacktivist DDoS Attacks Hit 110 Organizations in 16 Countries After Middle East Conflict",
+        "Coruna iOS Exploit Kit Uses 23 Exploits Across Five Chains Targeting iOS 13–17.2.1",
+        "New RFP Template for AI Usage Control and AI Governance",
+        "Fake Laravel Packages on Packagist Deploy RAT on Windows, macOS, and Linux",
+        "APT41-Linked Silver Dragon Targets Governments Using Cobalt Strike and Google Drive C2"
+      ],
+      "topTerms": [
+        [
+          "attacks",
+          3
+        ],
+        [
+          "campaign",
+          3
+        ],
+        [
+          "malware",
+          3
+        ],
+        [
+          "using",
+          3
+        ],
+        [
+          "backdoor",
+          2
+        ],
+        [
+          "deploy",
+          2
+        ],
+        [
+          "hackers",
+          2
+        ],
+        [
+          "ios",
+          2
+        ],
+        [
+          "rat",
+          2
+        ],
+        [
+          "targeting",
+          2
+        ],
+        [
+          "targets",
+          2
+        ],
+        [
+          "uses",
+          2
+        ],
+        [
+          "windows",
+          2
+        ],
+        [
+          "abuse",
+          1
+        ],
+        [
+          "across",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "BleepingComputer",
+      "type": "cyber",
+      "url": "https://www.bleepingcomputer.com/feed/",
+      "status": 200,
+      "contentType": "text/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "CISA warns feds to patch iOS flaws exploited in crypto-theft attacks",
+        "EC-Council Expands AI Certification Portfolio to Strengthen U.S. AI Workforce Readiness and Security",
+        "Fake Claude Code install guides push infostealers in InstallFix attacks",
+        "Microsoft 365 Backup to add file-level restore for faster recovery",
+        "Ghanain man pleads guilty to role in $100 million fraud ring",
+        "FBI investigates breach of surveillance and wiretap systems",
+        "Chinese state hackers target telcos with new malware toolkit",
+        "Bing AI promoted fake OpenClaw GitHub repo pushing info-stealing malware",
+        "Wikipedia hit by self-propagating JavaScript worm that vandalized pages",
+        "WordPress membership plugin bug exploited to create admin accounts",
+        "FBI arrests suspect linked to $46M crypto theft from US Marshals",
+        "Google says 90 zero-days were exploited in attacks last year",
+        "2026 Browser Data Reveals Major Enterprise Security Blind Spots",
+        "Police dismantles online gambling ring exploiting Ukrainian women",
+        "Cisco flags more SD-WAN flaws as actively exploited in attacks"
+      ],
+      "topTerms": [
+        [
+          "attacks",
+          4
+        ],
+        [
+          "exploited",
+          4
+        ],
+        [
+          "fake",
+          2
+        ],
+        [
+          "fbi",
+          2
+        ],
+        [
+          "flaws",
+          2
+        ],
+        [
+          "malware",
+          2
+        ],
+        [
+          "ring",
+          2
+        ],
+        [
+          "security",
+          2
+        ],
+        [
+          "accounts",
+          1
+        ],
+        [
+          "actively",
+          1
+        ],
+        [
+          "add",
+          1
+        ],
+        [
+          "admin",
+          1
+        ],
+        [
+          "arrests",
+          1
+        ],
+        [
+          "backup",
+          1
+        ],
+        [
+          "bing",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "SecurityWeek",
+      "type": "cyber",
+      "url": "https://feeds.feedburner.com/securityweek",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "ArmorCode Raises $16 Million for Exposure Management Platform",
+        "In Other News: FBI Hacked, US Security Pro Killed in Iran War, Hijacked Cameras Used in Khamenei Strike",
+        "CISA Adds iOS Flaws From Coruna Exploit Kit to KEV List",
+        "Rockwell Vulnerability Allowing Remote ICS Hacking Exploited in Attacks",
+        "James &#8216;Aaron&#8217; Bishop Tapped to Serve as New Pentagon CISO",
+        "Iranian APT Hacked US Airport, Bank, Software Company",
+        "Data Security Firm Evervault Raises $25 Million in Series B Funding",
+        "Google: Half of 2025&#8217;s 90 Exploited Zero-Days Aimed at Enterprises",
+        "Russian Ransomware Operator Pleads Guilty in US",
+        "Cisco Warns of More Catalyst SD-WAN Flaws Exploited in the Wild"
+      ],
+      "topTerms": [
+        [
+          "exploited",
+          3
+        ],
+        [
+          "flaws",
+          2
+        ],
+        [
+          "hacked",
+          2
+        ],
+        [
+          "million",
+          2
+        ],
+        [
+          "raises",
+          2
+        ],
+        [
+          "security",
+          2
+        ],
+        [
+          "aaron",
+          1
+        ],
+        [
+          "adds",
+          1
+        ],
+        [
+          "aimed",
+          1
+        ],
+        [
+          "airport",
+          1
+        ],
+        [
+          "allowing",
+          1
+        ],
+        [
+          "apt",
+          1
+        ],
+        [
+          "armorcode",
+          1
+        ],
+        [
+          "attacks",
+          1
+        ],
+        [
+          "bank",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "gCaptain",
+      "type": "shipping",
+      "url": "https://gcaptain.com/feed/",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "Report: Russia Providing Iran Targeting Data on U.S. Warships in Middle East",
+        "Maritime Insurance Premiums Surge as Iran Conflict Widens",
+        "Qatar Appears to Have Loaded First LNG Cargo Since Force Majeure",
+        "When the Underwriters Blinked: What the Hormuz Insurance Crisis Really Means",
+        "CK Hutchison Escalates Legal Fight After Panama Seizes Canal Ports",
+        "Reinsurers Scrap War-Risk Cover After US Torpedoes Iranian Ship",
+        "Qatar Energy Minister Warns War Will Force Gulf to Halt Energy Exports Within Weeks, FT Says",
+        "U.S. Grants 30-Day Waiver Allowing India to Receive Russian Oil Cargoes Already at Sea",
+        "US Sinking of Iranian Warship Piles Pressure on India’s Modi",
+        "Trump Fires DHS Secretary Kristi Noem After Turbulent Maritime Tenure",
+        "Container Shipping Rates Rise as Asian Factories Reopen—But Hormuz Crisis Threatens New Shock",
+        "Over 270,000 TEU Stranded as Container Carriers Halt Gulf Cargo Bookings"
+      ],
+      "topTerms": [
+        [
+          "cargo",
+          2
+        ],
+        [
+          "container",
+          2
+        ],
+        [
+          "crisis",
+          2
+        ],
+        [
+          "energy",
+          2
+        ],
+        [
+          "force",
+          2
+        ],
+        [
+          "gulf",
+          2
+        ],
+        [
+          "halt",
+          2
+        ],
+        [
+          "hormuz",
+          2
+        ],
+        [
+          "india",
+          2
+        ],
+        [
+          "insurance",
+          2
+        ],
+        [
+          "iran",
+          2
+        ],
+        [
+          "iranian",
+          2
+        ],
+        [
+          "maritime",
+          2
+        ],
+        [
+          "qatar",
+          2
+        ],
+        [
+          "allowing",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "War on the Rocks",
+      "type": "defense",
+      "url": "https://warontherocks.com/feed/",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "Why Washington’s Kurdish Gambit Could Backfire in Iran",
+        "Quenching the Nuclear Stockpile’s Thirst for Tritium",
+        "The Adversarial: War in Iran Shapes Adversaries&#8217; Calculations",
+        "Why a $1.5 Trillion Defense Budget Request Might Slow the Pentagon’s Reform Efforts",
+        "The Bay of Bengal Flank: India’s Three-Front Dilemma and Its Implications for Taiwan",
+        "Fighting an Economic War Without Fused Intelligence",
+        "Bonus In Brief: Global Reaction to the War in Iran",
+        "What Recent Military Operations Signal About Trump’s Grand Strategy",
+        "The Velocity Gap Between Pakistan and India",
+        "The Burden That Should Not Be Theirs: How Congress Turned the Military into the Last Check on Illegal War",
+        "In Brief: Increasing Tensions Between China and Japan Create Risks for the Region",
+        "Why Satellites Fail — and How to Protect Them",
+        "Foundry, Fleet, and Fight: Hedging the U.S. Navy",
+        "Missed Signals and Middle East Shockwaves",
+        "Washington Built the AI Infrastructure AUKUS Needs — Then Locked Allies Out",
+        "The Deluge, the Paper Cup, and Washington’s Lack of Urgency on Guam",
+        "Twice Bombed, Still Nuclear: The Limits of Force Against Iran’s Atomic Program",
+        "A Proxy Without a Purpose: Hizballah and the Iran Crisis",
+        "The Arsenal Beneath the Arsenal",
+        "All Too Quiet on the Western Neuroenhancement Front"
+      ],
+      "topTerms": [
+        [
+          "iran",
+          5
+        ],
+        [
+          "war",
+          4
+        ],
+        [
+          "washington",
+          3
+        ],
+        [
+          "arsenal",
+          2
+        ],
+        [
+          "between",
+          2
+        ],
+        [
+          "brief",
+          2
+        ],
+        [
+          "india",
+          2
+        ],
+        [
+          "military",
+          2
+        ],
+        [
+          "nuclear",
+          2
+        ],
+        [
+          "without",
+          2
+        ],
+        [
+          "adversarial",
+          1
+        ],
+        [
+          "adversaries",
+          1
+        ],
+        [
+          "against",
+          1
+        ],
+        [
+          "all",
+          1
+        ],
+        [
+          "allies",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "RealClearDefense",
+      "type": "defense",
+      "url": "https://www.realcleardefense.com/index.xml",
+      "status": 200,
+      "contentType": "text/xml",
+      "health": "rss_ok",
+      "titles": [
+        "GAO Testimony on Military Readiness",
+        "'Race of Attrition': U.S. Military's Finite Interceptor Stockpile",
+        "LUCAS Kamikaze Drones Lauded As \"Indispensable\"",
+        "Navy's Kilby Signals USS Ford Could See 11-Month Deployment",
+        "The U.S. Navy's Sinking of the Dena Was Textbook",
+        "U.S. Substitutes 'Stand-Off' for 'Stand-In' Munitions Against Iran",
+        "America Should Still Rely on the Stealth Bomber",
+        "Epic Changes – Time for the Marine Corps To Change",
+        "Can an Interagency Task Force Work in the Arctic?",
+        "The Return of American Tradition in Foreign Policy",
+        "What the Arms Control Community Gets Wrong About Arms Control",
+        "Operation Epic Fury - Déjà Vu",
+        "2026 Index of Military Strength",
+        "Trump's Long Game",
+        "In Defense of America's War Colleges",
+        "A Blueprint to Fix America's Biodefense Gap",
+        "Army Aviation's Path to an Integrated Autonomous Fleet",
+        "The Army's New Engine to Power Apache, Black Hawk & FARA",
+        "Lockheed Martin Advances Next-Gen Interceptor Design Work",
+        "Air Force Test Enterprise Ready for the CCA Challenge"
+      ],
+      "topTerms": [
+        [
+          "america",
+          3
+        ],
+        [
+          "military",
+          3
+        ],
+        [
+          "arms",
+          2
+        ],
+        [
+          "army",
+          2
+        ],
+        [
+          "control",
+          2
+        ],
+        [
+          "epic",
+          2
+        ],
+        [
+          "force",
+          2
+        ],
+        [
+          "interceptor",
+          2
+        ],
+        [
+          "navy",
+          2
+        ],
+        [
+          "work",
+          2
+        ],
+        [
+          "advances",
+          1
+        ],
+        [
+          "against",
+          1
+        ],
+        [
+          "air",
+          1
+        ],
+        [
+          "american",
+          1
+        ],
+        [
+          "apache",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "USNI News",
+      "type": "defense",
+      "url": "https://news.usni.org/feed",
+      "status": 200,
+      "contentType": "application/rss+xml; charset=UTF-8",
+      "health": "rss_ok",
+      "titles": [
+        "Iranian Amphibious Vessel Seeks Refuge in Indian Port",
+        "North Korean Destroyer Tests Strategic Cruise Missile",
+        "Sri Lanka Interns Iranian Naval Vessel Following Sub Attack, European States Increase Middle East Naval and Air Deployments",
+        "Pentagon IDs Army Reserve Soldiers Killed in Iranian Strike in Kuwait",
+        "Chinese Navy Expanding Nuclear Attack Boat Fleet and Missile Strike Capabilities, ONI Commander Says",
+        "GAO Testimony on Military Readiness",
+        "NATO Shoots Down Iranian Missile Headed for Turkey",
+        "Philippine Forces Hold Naval Drills with U.S., Japanese Warships Near Taiwan",
+        "VIDEO: U.S. Attack Boat Torpedoes Iranian Frigate off Sri Lanka",
+        "Pentagon Official Defends New National Defense Strategy’s ‘Flexible Realism’ in Senate Hearing",
+        "Trump: U.S. Navy May Escort Tankers Through Strait of Hormuz, More European Warships en Route to Med",
+        "Navy Eyes Solutions for Training Pipeline Blockage As Some Sailors Wait 4 Weeks to Go to A-School",
+        "Testimony on U.S.-China Competition Under the Sea",
+        "Iranian Naval Forces are Major Target in Operation Epic Fury Strikes",
+        "USNI News Fleet and Marine Tracker: March 2, 2026",
+        "Shipyard Worker Dead, Fire Breaks Out on U.S.-Flagged Tanker After Iranian Attack on Bahrain Port",
+        "Belgian, French Forces Seize Russian ‘Shadow Fleet’ tanker in North Sea",
+        "3 U.S. Service Members Killed, 5 Seriously Wounded in Operation Epic Fury",
+        "UPDATED: U.S., Israel Launch Strikes Against Iran, Tehran Retaliates Across Region",
+        "U.S. Army Attack Helicopters Hold Maritime Attack Drills in the Pacific"
+      ],
+      "topTerms": [
+        [
+          "iranian",
+          7
+        ],
+        [
+          "attack",
+          6
+        ],
+        [
+          "naval",
+          4
+        ],
+        [
+          "fleet",
+          3
+        ],
+        [
+          "forces",
+          3
+        ],
+        [
+          "missile",
+          3
+        ],
+        [
+          "navy",
+          3
+        ],
+        [
+          "army",
+          2
+        ],
+        [
+          "boat",
+          2
+        ],
+        [
+          "drills",
+          2
+        ],
+        [
+          "epic",
+          2
+        ],
+        [
+          "european",
+          2
+        ],
+        [
+          "fury",
+          2
+        ],
+        [
+          "hold",
+          2
+        ],
+        [
+          "killed",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "USGS Earthquakes M4.5+",
+      "type": "disaster",
+      "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.atom",
+      "status": 200,
+      "contentType": "application/atom+xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "M 5.4 - 69 km E of Tobelo, Indonesia",
+        "M 5.1 - 132 km ENE of Masohi, Indonesia",
+        "M 5.3 - Kermadec Islands, New Zealand",
+        "M 6.3 - 181 km SE of Kirakira, Solomon Islands",
+        "M 5.2 - Mid-Indian Ridge",
+        "M 4.9 - south of the Fiji Islands",
+        "M 4.6 - 244 km SSE of Amahai, Indonesia",
+        "M 5.0 - 62 km SSW of Maisí, Cuba",
+        "M 4.6 - 162 km SSW of Kaş, Turkey",
+        "M 4.7 - 239 km ESE of Attu Station, Alaska",
+        "M 5.1 - 159 km SSE of Vilyuchinsk, Russia",
+        "M 4.8 - 84 km SE of La Tirana, Chile",
+        "M 4.6 - 30 km NNW of Barranca, Peru",
+        "M 4.5 - 6 km SSE of Carmen, Philippines",
+        "M 4.6 - 28 km NNE of Hirara, Japan",
+        "M 4.8 - Fiji region"
+      ],
+      "topTerms": [
+        [
+          "indonesia",
+          3
+        ],
+        [
+          "islands",
+          3
+        ],
+        [
+          "sse",
+          3
+        ],
+        [
+          "fiji",
+          2
+        ],
+        [
+          "ssw",
+          2
+        ],
+        [
+          "alaska",
+          1
+        ],
+        [
+          "amahai",
+          1
+        ],
+        [
+          "attu",
+          1
+        ],
+        [
+          "barranca",
+          1
+        ],
+        [
+          "carmen",
+          1
+        ],
+        [
+          "chile",
+          1
+        ],
+        [
+          "cuba",
+          1
+        ],
+        [
+          "ene",
+          1
+        ],
+        [
+          "ese",
+          1
+        ],
+        [
+          "hirara",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "ReliefWeb (site feed)",
+      "type": "disaster",
+      "url": "https://news.google.com/rss/search?q=site%3Areliefweb.int%20when%3A3d&hl=en-US&gl=US&ceid=US:en",
+      "status": 200,
+      "contentType": "application/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Program Officer Livelihoods and WASH - ReliefWeb",
+        "Program Manager - ReliefWeb",
+        "Sr. People & Talent Business Partner, U.S. People Operations - ReliefWeb",
+        "Consultant - Technical Advisor - ReliefWeb",
+        "Consultant - Senior Technical Advisor - ReliefWeb",
+        "Communication officer / Damascus, Raqqa, or Idlib / Subject to Fund, Nationals only - ReliefWeb",
+        "Project Manager Capacity Building Ukraine - ReliefWeb",
+        "Safety and Security Manager - Ukraine - ReliefWeb",
+        "Business Development and Grants Coordinator - ReliefWeb",
+        "Regional Fundraising Advisor – MENA region - ReliefWeb",
+        "LIGO Workday Support – Single Point of Contact (SPOC) - ReliefWeb",
+        "Legal Counsel - ReliefWeb",
+        "LACA Regional Human Resources Coordinator - ReliefWeb",
+        "Arabic-French speaking Cultural Mediator - ReliefWeb",
+        "Community Mobilization and Safeguarding Officer - ReliefWeb",
+        "Communications, Fundraising, and Advocacy Coordinator - ReliefWeb",
+        "Area Manager Libya East Benghazi - ReliefWeb",
+        "Field engineer – Shelter - ReliefWeb",
+        "Middle East Situation - as of 4 March 2026 - ReliefWeb",
+        "Feed the Children - ReliefWeb"
+      ],
+      "topTerms": [
+        [
+          "reliefweb",
+          20
+        ],
+        [
+          "manager",
+          4
+        ],
+        [
+          "advisor",
+          3
+        ],
+        [
+          "coordinator",
+          3
+        ],
+        [
+          "officer",
+          3
+        ],
+        [
+          "business",
+          2
+        ],
+        [
+          "consultant",
+          2
+        ],
+        [
+          "east",
+          2
+        ],
+        [
+          "fundraising",
+          2
+        ],
+        [
+          "people",
+          2
+        ],
+        [
+          "program",
+          2
+        ],
+        [
+          "regional",
+          2
+        ],
+        [
+          "technical",
+          2
+        ],
+        [
+          "ukraine",
+          2
+        ],
+        [
+          "advocacy",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "IMF (site feed)",
+      "type": "economic",
+      "url": "https://news.google.com/rss/search?q=site%3Aimf.org%20when%3A7d&hl=en-US&gl=US&ceid=US:en",
+      "status": 200,
+      "contentType": "application/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Shaping Asia’s Future - International Monetary Fund | IMF",
+        "The Debt-Inequality Cycle - International Monetary Fund | IMF",
+        "The New Face of African Debt - International Monetary Fund | IMF",
+        "IMF Statement on the Middle East - International Monetary Fund | IMF",
+        "THE DEBT RECKONING - International Monetary Fund | IMF",
+        "Asia in 2050 Conference - International Monetary Fund | IMF",
+        "Debt Reduction Lessons from Jamaica - International Monetary Fund | IMF",
+        "St. Kitts and Nevis: Staff Concluding Statement of the 2026 Article IV Mission - International Monetary Fund | IMF",
+        "Policy Coordination for Fractured Times - International Monetary Fund | IMF",
+        "Ukraine: Request for an Extended Arrangement Under the Extended Fund Facility and Cancellation of the Current Arrangement-Press Release; Staff Report; Supplementary Information; and Statement by the Alternate Executive Director for Ukraine - International Monetary Fund | IMF",
+        "- IMF Bookstore",
+        "Main Changes to the 2025 SNA - International Monetary Fund | IMF",
+        "Myrto Kalouptsidi: A Maritime Mind - International Monetary Fund | IMF",
+        "A Chronicle of Currencies - International Monetary Fund | IMF",
+        "Digital Infrastructure - International Monetary Fund | IMF",
+        "IMF Executive Board Concludes 2025 Article IV Consultation with Moldova - International Monetary Fund | IMF",
+        "Adequate Reserves Shield Economies From Shocks and Strengthen Resilience - International Monetary Fund | IMF",
+        "The Race for AI-Ready Workers - International Monetary Fund | IMF",
+        "IMF Staff Completes 2026 Article IV Consultation to Kiribati - International Monetary Fund | IMF",
+        "Tax Policy and Administration: Theory and Practice (TPAT) - International Monetary Fund | IMF"
+      ],
+      "topTerms": [
+        [
+          "imf",
+          23
+        ],
+        [
+          "fund",
+          20
+        ],
+        [
+          "international",
+          19
+        ],
+        [
+          "monetary",
+          19
+        ],
+        [
+          "article",
+          3
+        ],
+        [
+          "debt",
+          3
+        ],
+        [
+          "staff",
+          3
+        ],
+        [
+          "statement",
+          3
+        ],
+        [
+          "asia",
+          2
+        ],
+        [
+          "consultation",
+          2
+        ],
+        [
+          "executive",
+          2
+        ],
+        [
+          "extended",
+          2
+        ],
+        [
+          "policy",
+          2
+        ],
+        [
+          "ukraine",
+          2
+        ],
+        [
+          "adequate",
+          1
+        ]
+      ]
+    },
+    {
+      "name": "World Bank (site feed)",
+      "type": "economic",
+      "url": "https://news.google.com/rss/search?q=site%3Aworldbank.org%20when%3A7d&hl=en-US&gl=US&ceid=US:en",
+      "status": 200,
+      "contentType": "application/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "ELECTROLYZERS FOR HYDROGEN PRODUCTION - World Bank",
+        "Frequently Asked Questions - World Bank",
+        "https://www.worldbank.org/content/vdam/sitemap/www-worldbank-org-bready/sitemap-www-worldbank-org-others-api-1.xml - World Bank",
+        "WBG Finances One - Home - World Bank",
+        "International Women's Day 2026 - World Bank",
+        "Norway Food Products Imports by country 2023 - WITS (World Integrated Trade Solution)",
+        "Business Opportunities - World Bank",
+        "Casos Pendientes - International Centre for Settlement of Investment Disputes",
+        "The path to unlocking women’s potential. - World Bank",
+        "Trade - World Bank",
+        "Pending Cases - International Centre for Settlement of Investment Disputes",
+        "South Asia Exports by country and region 2022 - WITS (World Integrated Trade Solution)",
+        "China Soya beans imports by country | 2023 | Data - WITS (World Integrated Trade Solution)",
+        "Monthly currency exchange rate estimates by market - World Bank Data Catalog",
+        "LibGuides: Sources for WBG History Guide: Books about Bank History - World Bank",
+        "Cocoa beans, whole or broken, raw or roasted imports by country |2021 - WITS (World Integrated Trade Solution)",
+        "Vietnam Trade Summary 2000 - WITS (World Integrated Trade Solution)",
+        "P505543-b8472d91-e7a0-460b-aba3-528311661877.docx - World Bank Documents - World Bank",
+        "Building effective, accountable, and inclusive institutions: the Public Administration & Services Global Programs - World Bank",
+        "Indonesia - Monthly currency exchange rate estimates by market... - World Bank Data Catalog"
+      ],
+      "topTerms": [
+        [
+          "world",
+          19
+        ],
+        [
+          "bank",
+          15
+        ],
+        [
+          "trade",
+          7
+        ],
+        [
+          "integrated",
+          5
+        ],
+        [
+          "solution",
+          5
+        ],
+        [
+          "wits",
+          5
+        ],
+        [
+          "country",
+          4
+        ],
+        [
+          "data",
+          3
+        ],
+        [
+          "imports",
+          3
+        ],
+        [
+          "international",
+          3
+        ],
+        [
+          "beans",
+          2
+        ],
+        [
+          "catalog",
+          2
+        ],
+        [
+          "centre",
+          2
+        ],
+        [
+          "currency",
+          2
+        ],
+        [
+          "disputes",
+          2
+        ]
+      ]
+    },
+    {
+      "name": "Euractiv (site feed)",
+      "type": "intl",
+      "url": "https://news.google.com/rss/search?q=site%3Aeuractiv.com%20when%3A7d&hl=en-US&gl=US&ceid=US:en",
+      "status": 200,
+      "contentType": "application/xml; charset=utf-8",
+      "health": "rss_ok",
+      "titles": [
+        "Iceland locks in on date for EU referendum - Euractiv",
+        "Greece takes over Bulgaria’s anti-ballistic protection against Iran - Euractiv",
+        "‘Not acceptable’: Brussels slams Zelenskyy as Kyiv-Budapest tensions spiral - Euractiv",
+        "Paris inks deal for Greenland's mineral wealth - Euractiv",
+        "Tehran compound of Khamenei son and likely successor bombed, report says - Euractiv",
+        "EU countries shield Cyprus amid renewed Greece-Turkey tensions - Euractiv",
+        "US AI giants seem fine with their tech being used to spy on Europeans - Euractiv",
+        "Reza Pahlavi’s invitation to Brussels - Euractiv",
+        "Energy crisis déjà vu - Euractiv",
+        "Cyprus fears ‘chaotic’ terrorism from Turkey-occupied territory as EU help ramps up - Euractiv",
+        "Polish doctors jailed for denying woman abortion - Euractiv",
+        "EXCLUSIVE: EU terrorism threat heightened due to Iran, Europol says - Euractiv",
+        "EU’s mutual defence clause to be discussed in coming days, Commission says - Euractiv",
+        "Stranded in the Gulf: how European countries are scrambling to bring citizens home - Euractiv",
+        "‘Burger’ stays, ‘steak’ banned: EU clinches deal on plant-based foods - Euractiv",
+        "Merz accepts a harder world on Iran - Euractiv",
+        "The Brief – It's time to finally bury FCAS - Euractiv",
+        "Ukraine can survive financially until after Hungary election, Brussels reckons - Euractiv",
+        "Cyprus cancels EU meeting after drone attack - Euractiv",
+        "EU countries back farm safeguards tied to Mercosur trade deal - Euractiv"
+      ],
+      "topTerms": [
+        [
+          "euractiv",
+          20
+        ],
+        [
+          "brussels",
+          3
+        ],
+        [
+          "countries",
+          3
+        ],
+        [
+          "cyprus",
+          3
+        ],
+        [
+          "deal",
+          3
+        ],
+        [
+          "iran",
+          3
+        ],
+        [
+          "tensions",
+          2
+        ],
+        [
+          "terrorism",
+          2
+        ],
+        [
+          "abortion",
+          1
+        ],
+        [
+          "acceptable",
+          1
+        ],
+        [
+          "accepts",
+          1
+        ],
+        [
+          "against",
+          1
+        ],
+        [
+          "anti-ballistic",
+          1
+        ],
+        [
+          "attack",
+          1
+        ],
+        [
+          "back",
+          1
+        ]
+      ]
+    }
+  ]
+}

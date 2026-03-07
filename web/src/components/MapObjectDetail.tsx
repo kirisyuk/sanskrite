@@ -23,6 +23,14 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   const typeLabel = object.type === 'FACILITY' && facilityKindLabel
     ? `Facility (${facilityKindLabel})`
     : formatHorizonFragmentType(object.type, object.canonicalPath, object.label);
+  const isAffectedZone = object.type === 'AFFECTED_ZONE';
+  const zoneTypeLabel = String(object.zoneType || '').trim().replace(/_/g, ' ');
+  const zoneSubTypeLabel = String(object.zoneSubType || '').trim().replace(/_/g, ' ');
+  const zoneStatus = String(object.activityStatus || '').trim();
+  const zoneHype = Number(object.hype);
+  const zoneLastMatchedAt = object.lastMatchedAt
+    ? new Date(object.lastMatchedAt).toLocaleString()
+    : '';
 
   return (
     <div
@@ -54,6 +62,25 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
       {object.description && (
         <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 8 }}>
           {object.description}
+        </div>
+      )}
+      {isAffectedZone && (
+        <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 8 }}>
+          {zoneTypeLabel && (
+            <div>Zone type: {zoneTypeLabel}</div>
+          )}
+          {zoneSubTypeLabel && (
+            <div>Subtype: {zoneSubTypeLabel}</div>
+          )}
+          {(zoneStatus || Number.isFinite(zoneHype)) && (
+            <div>
+              Activity: {zoneStatus || 'unknown'}
+              {Number.isFinite(zoneHype) ? ` • Hype ${Math.round(zoneHype)}/100` : ''}
+            </div>
+          )}
+          {zoneLastMatchedAt && (
+            <div>Last match: {zoneLastMatchedAt}</div>
+          )}
         </div>
       )}
       <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 8 }}>

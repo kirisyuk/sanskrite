@@ -1491,6 +1491,12 @@ func main() {
 				logger.Printf("WARNING: propagation profile lookup initialization fallback: %v", err)
 			}
 			propagationEngine.WithProfileLookup(propagationProfileLookup)
+			wmVertexSearch := vertexSearchClient
+			if wmVertexSearch != nil {
+				if ds := strings.TrimSpace(getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); ds != "" {
+					wmVertexSearch = wmVertexSearch.WithDataStore(ds)
+				}
+			}
 			orchestrator = orchestrator.WithHorizonMonitorPipeline(
 				discovery.NewHorizonMonitorPipeline(
 					ontologyFactsRepo,
@@ -1500,7 +1506,9 @@ func main() {
 					propagationEngine,
 					propagationProfileLookup,
 					logger,
-				),
+				).WithTelemetryRepo(horizonTelemetryRepo).
+					WithRealtimePublisher(pub).
+					WithVertexSearch(wmVertexSearch),
 			)
 			interpretationQueue := horizoninterp.NewInterpretationQueue(fsClient.Client())
 			interpretationCache := horizoninterp.NewInterpretationCache(fsClient.Client())
@@ -2292,6 +2300,9 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+	// AIS vessel positions (AISStream proxy). Key from env AISSTREAM_API_KEY or GCP secret aisstream_api_key; no auth.
+	aisstreamVesselsHandler := httphandlers.NewAISStreamVesselsHandler(logger, projectID)
+	mux.Handle("/api/v1/vessels/bbox", aisstreamVesselsHandler)
 	// Default 2: domain expansion spawns cascade jobs (CCBSA, Pioneer, market, etc.); with 1,
 	// second task gets 429 "saturated" while first runs. Cloud Tasks retries, but throughput suffers.
 	scoutMaxInflightPerInstance := getEnvInt("SCOUT_MAX_INFLIGHT_PER_INSTANCE", 2)

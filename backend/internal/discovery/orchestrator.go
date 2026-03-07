@@ -592,11 +592,13 @@ func (o *Orchestrator) IngestProjectSources(ctx context.Context, tenantID, proje
 	return nil
 }
 
-// IngestRSS ingests RSS sources via facts-only path: NormalizedDocument → document.extract → OntologyFacts.
-// No Document or Chunks created. Requires providersReg and publish.
+// IngestRSS ingests RSS sources.
+//   - Default path: facts-only (document.extract → OntologyFacts, LLM extractor path).
+//   - If sourceDetails.disableLlmProcessing=true: deterministic path
+//     (Document persistence + Vertex sync, no document.process, no document.extract, heuristic pipeline only).
 func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string, _ ai.EmbeddingProvider) error {
-	if o.providersReg == nil || o.publish == nil {
-		return fmt.Errorf("RSS ingest requires providersReg and publish")
+	if o.providersReg == nil {
+		return fmt.Errorf("RSS ingest requires providersReg")
 	}
 	p, ok := o.providersReg.Get("rss")
 	if !ok {
@@ -604,12 +606,22 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	}
 	// Determine feed URL from DataSource details
 	feedURL := ""
+	var sourceDS *models.DataSource
 	if o.sources != nil {
 		if ds, err := o.sources.Get(ctx, sourceID); err == nil && ds != nil {
+			sourceDS = ds
 			if ds.Details.RSSURL != nil {
 				feedURL = *ds.Details.RSSURL
 			}
 		}
+	}
+	disableLLM := sourceDisablesLLMProcessing(sourceDS)
+	if disableLLM {
+		if o.docs == nil {
+			return fmt.Errorf("RSS ingest with disableLlmProcessing=true requires documents repository")
+		}
+	} else if o.publish == nil {
+		return fmt.Errorf("RSS ingest facts-only path requires publish")
 	}
 	if strings.TrimSpace(feedURL) == "" {
 		// fallback to using sourceID as URL for backward compatibility
@@ -669,7 +681,15 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	}
 
 	startTime := time.Now().UTC() // Start timing the processing part
-	documentsCreated, err := o.processProviderDocumentsWithOptions(ctx, tenantID, sourceID, docs, providerIngestOptions{FactsOnly: true})
+	processOpts := providerIngestOptions{FactsOnly: true}
+	if disableLLM {
+		// Keep documents/Vertex sync, but never enqueue LLM extraction.
+		processOpts = providerIngestOptions{
+			PublishDocumentProcess: false,
+			FactsOnly:              false,
+		}
+	}
+	documentsCreated, err := o.processProviderDocumentsWithOptions(ctx, tenantID, sourceID, docs, processOpts)
 	if err != nil {
 		// Save the original error before shadowing
 		processErr := err
@@ -717,6 +737,24 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 			}
 		}
 		return err
+	}
+	if disableLLM && o.wmPipeline != nil {
+		pipelineDS := sourceDS
+		if pipelineDS == nil {
+			mode := wmIngestModeDocumentFeed
+			disable := true
+			pipelineDS = &models.DataSource{
+				ID: sourceID,
+				Details: models.SourceDetails{
+					RSSURL:                   &feedURL,
+					HorizonMonitorIngestMode: &mode,
+					DisableLLMProcessing:     &disable,
+				},
+			}
+		}
+		if err := o.wmPipeline.ProcessDocuments(ctx, tenantID, pipelineDS, feedURL, docs); err != nil {
+			o.logger.Printf("orchestrator: deterministic RSS heuristic pipeline failed for source %s: %v", sourceID, err)
+		}
 	}
 
 	// Record successful ingestion history
@@ -1214,15 +1252,15 @@ func (o *Orchestrator) processProviderDocumentsFactsOnly(ctx context.Context, te
 			originPublishedAt = nd.OriginPublishedAt.Format(time.RFC3339)
 		}
 		payload := map[string]any{
-			"tenantId":          tenantID,
-			"sourceId":          sourceID,
-			"externalId":        nd.ExternalID,
-			"fullText":          nd.FullText,
-			"title":             nd.Title,
-			"url":               nd.URL,
-			"language":          nd.Language,
-			"documentType":      nd.DocumentType,
-			"sourceMeta":        nd.SourceMeta,
+			"tenantId":     tenantID,
+			"sourceId":     sourceID,
+			"externalId":   nd.ExternalID,
+			"fullText":     nd.FullText,
+			"title":        nd.Title,
+			"url":          nd.URL,
+			"language":     nd.Language,
+			"documentType": nd.DocumentType,
+			"sourceMeta":   nd.SourceMeta,
 		}
 		if originPublishedAt != "" {
 			payload["originPublishedAt"] = originPublishedAt

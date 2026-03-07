@@ -6,6 +6,7 @@ import { useGeoZoneLayer } from '../hooks/useGeoZoneLayer';
 import { useGeoEdgeLayer } from '../hooks/useGeoEdgeLayer';
 import { useStaticZoneLayer } from '../hooks/useStaticZoneLayer';
 import { useTransportFlowLayer } from '../hooks/useTransportFlowLayer';
+import { useVesselLayer, vesselsApiAvailable as isVesselsApiAvailable } from '../hooks/useVesselLayer';
 import { MapFilterPanel } from './MapFilterPanel';
 import { MapObjectDetail } from './MapObjectDetail';
 import { STATIC_ZONE_DATA, deriveZoneTypeCounts, type StaticZoneFeature, type StaticZoneType } from '../lib/staticZones';
@@ -15,10 +16,15 @@ import {
   type TransportFlowFeature,
   type TransportFlowMode,
 } from '../lib/staticTransportFlows';
+import { api } from '../lib/api';
 
 export interface WorldMapPanelProps {
   scope?: { lensId: string };
 }
+
+type MapActivityPayload = Awaited<ReturnType<typeof api.getHorizonMapActivity>>;
+type ZoneActivityItem = MapActivityPayload['zones'][number];
+type FlowActivityItem = MapActivityPayload['flows'][number];
 
 export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -32,8 +38,12 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [activeZoneTypes, setActiveZoneTypes] = React.useState<Set<StaticZoneType> | null>(null);
   const [flowsEnabled, setFlowsEnabled] = React.useState(false);
   const [activeFlowModes, setActiveFlowModes] = React.useState<Set<TransportFlowMode> | null>(null);
+  const [vesselsEnabled, setVesselsEnabled] = React.useState(false);
   const [hops, setHops] = React.useState(3);
+  const vesselsApiAvailable = isVesselsApiAvailable();
   const [selectedObject, setSelectedObject] = React.useState<GeoObject | null>(null);
+  const [zoneActivityById, setZoneActivityById] = React.useState<Record<string, ZoneActivityItem>>({});
+  const [flowActivityById, setFlowActivityById] = React.useState<Record<string, FlowActivityItem>>({});
 
   const filters = React.useMemo(
     () => ({ dateFrom, dateTo, activeTypes }),
@@ -62,10 +72,42 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     return allTransportFlows.filter((f) => activeFlowModes.has(f.properties.flowMode));
   }, [flowsEnabled, activeFlowModes, allTransportFlows]);
 
+  React.useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const payload = await api.getHorizonMapActivity({ lensId: scope?.lensId });
+        if (cancelled) return;
+        const z: Record<string, ZoneActivityItem> = {};
+        const f: Record<string, FlowActivityItem> = {};
+        for (const item of payload?.zones || []) {
+          if (item?.id) z[String(item.id)] = item;
+        }
+        for (const item of payload?.flows || []) {
+          if (item?.id) f[String(item.id)] = item;
+        }
+        setZoneActivityById(z);
+        setFlowActivityById(f);
+      } catch {
+        if (!cancelled) {
+          setZoneActivityById({});
+          setFlowActivityById({});
+        }
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => { void load(); }, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [scope?.lensId]);
+
   useGeoMarkerLayer(map, isReady, styleEpoch, mapObjects, theme, setSelectedObject);
   useGeoZoneLayer(map, isReady, styleEpoch, mapObjects, theme);
-  useStaticZoneLayer(map, isReady, styleEpoch, filteredStaticZones, theme, zonesEnabled);
-  useTransportFlowLayer(map, isReady, styleEpoch, filteredTransportFlows, theme, flowsEnabled);
+  useStaticZoneLayer(map, isReady, styleEpoch, filteredStaticZones, theme, zonesEnabled, zoneActivityById);
+  useTransportFlowLayer(map, isReady, styleEpoch, filteredTransportFlows, theme, flowsEnabled, flowActivityById);
+  useVesselLayer(map, isReady, styleEpoch, vesselsEnabled, theme);
 
   const handleToggleType = React.useCallback((type: string) => {
     setActiveTypes((prev) => {
@@ -144,6 +186,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           activeFlowModes={activeFlowModes}
           zonesEnabled={zonesEnabled}
           flowsEnabled={flowsEnabled}
+          vesselsEnabled={vesselsEnabled}
+          vesselsApiAvailable={vesselsApiAvailable}
           dateFrom={dateFrom}
           dateTo={dateTo}
           hops={hops}
@@ -156,6 +200,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           onToggleFlowMode={handleToggleFlowMode}
           onToggleZonesEnabled={() => setZonesEnabled((v) => !v)}
           onToggleFlowsEnabled={() => setFlowsEnabled((v) => !v)}
+          onToggleVesselsEnabled={() => setVesselsEnabled((v) => !v)}
           onSelectAll={() => setActiveTypes(null)}
           onSelectNone={() => setActiveTypes(new Set())}
           onSelectAllZoneTypes={() => setActiveZoneTypes(null)}
@@ -175,6 +220,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             : `Objects: ${allObjects.length}`}
           {zonesEnabled ? ` | Zones: ${visibleStaticZonesCount}` : ''}
           {flowsEnabled ? ` | Flows: ${visibleTransportFlowsCount}` : ''}
+          {vesselsEnabled ? ' | Vessels (AIS)' : ''}
         </div>
 
         {selectedObject && (

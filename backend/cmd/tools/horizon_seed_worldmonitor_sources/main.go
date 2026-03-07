@@ -5,7 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	neturl "net/url"
 	"os"
 	"path/filepath"
@@ -24,12 +26,68 @@ const (
 	defaultFeedsPath               = "../temp-repos/worldmonitor/src/config/feeds.ts"
 	worldMonitorIngestModeDocument = "document_feed"
 	defaultPollMinutes             = 30
+	defaultDisableLLMProcessing    = true
 )
 
 var (
 	reIntelSourcesBlock = regexp.MustCompile(`(?s)export\s+const\s+INTEL_SOURCES\s*:\s*Feed\[\]\s*=\s*\[(.*?)\];`)
 	reIntelFeedEntry    = regexp.MustCompile(`\{\s*name:\s*'([^']+)'\s*,\s*url:\s*(?:rss|railwayRss)\('([^']+)'\)\s*(?:,\s*type:\s*'([^']+)')?\s*\}`)
 )
+
+var worldMonitorFeedNameOverrides = map[string]string{
+	"csis":                  googleNewsSiteRSS("csis.org", 7),
+	"middle east institute": googleNewsSiteRSS("mei.edu", 7),
+	"rand":                  googleNewsSiteRSS("rand.org", 7),
+	"brookings":             googleNewsSiteRSS("brookings.edu", 7),
+	"carnegie":              googleNewsSiteRSS("carnegieendowment.org", 7),
+	"nti":                   googleNewsSiteRSS("nti.org", 7),
+}
+
+var expandedWorldMonitorFeeds = []worldMonitorFeed{
+	// Mainstream / wire (direct + Google News fallbacks)
+	{Name: "BBC World", URL: "https://feeds.bbci.co.uk/news/world/rss.xml", Type: "mainstream"},
+	{Name: "BBC Middle East", URL: "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml", Type: "mainstream"},
+	{Name: "BBC Asia", URL: "https://feeds.bbci.co.uk/news/world/asia/rss.xml", Type: "mainstream"},
+	{Name: "BBC Europe", URL: "https://feeds.bbci.co.uk/news/world/europe/rss.xml", Type: "mainstream"},
+	{Name: "BBC US & Canada", URL: "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml", Type: "mainstream"},
+	{Name: "Al Jazeera", URL: "https://www.aljazeera.com/xml/rss/all.xml", Type: "mainstream"},
+	{Name: "NYT World", URL: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", Type: "mainstream"},
+	{Name: "The Guardian World", URL: "https://www.theguardian.com/world/rss", Type: "mainstream"},
+	{Name: "The Guardian Middle East", URL: "https://www.theguardian.com/world/middleeast/rss", Type: "mainstream"},
+	{Name: "The Guardian Ukraine", URL: "https://www.theguardian.com/world/ukraine/rss", Type: "mainstream"},
+	{Name: "France24 English", URL: "https://www.france24.com/en/rss", Type: "mainstream"},
+	{Name: "France24 Middle East", URL: "https://www.france24.com/en/middle-east/rss", Type: "mainstream"},
+	{Name: "AP News (site feed)", URL: googleNewsSiteRSS("apnews.com", 2), Type: "wire"},
+	{Name: "Reuters (site feed)", URL: googleNewsSiteRSS("reuters.com", 3), Type: "wire"},
+
+	// Government / institutions
+	{Name: "UN News", URL: "https://news.un.org/feed/subscribe/en/news/all/rss.xml", Type: "gov"},
+	{Name: "CISA Advisories", URL: "https://www.cisa.gov/cybersecurity-advisories/all.xml", Type: "cyber"},
+	{Name: "US-CERT Alerts", URL: "https://www.cisa.gov/uscert/ncas/alerts.xml", Type: "cyber"},
+	{Name: "DoD Releases", URL: "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=945&max=20", Type: "gov"},
+	{Name: "WHO News", URL: "https://www.who.int/rss-feeds/news-english.xml", Type: "gov"},
+	{Name: "UK MOD GOV.UK", URL: "https://www.gov.uk/government/organisations/ministry-of-defence.atom", Type: "gov"},
+	{Name: "UK FCDO GOV.UK", URL: "https://www.gov.uk/government/organisations/foreign-commonwealth-development-office.atom", Type: "gov"},
+	{Name: "State Dept (site feed)", URL: googleNewsSiteRSS("state.gov", 7), Type: "gov"},
+
+	// Cyber + shipping + defense specialty
+	{Name: "The Hacker News", URL: "https://feeds.feedburner.com/TheHackersNews", Type: "cyber"},
+	{Name: "BleepingComputer", URL: "https://www.bleepingcomputer.com/feed/", Type: "cyber"},
+	{Name: "SecurityWeek", URL: "https://feeds.feedburner.com/securityweek", Type: "cyber"},
+	{Name: "KrebsOnSecurity", URL: "https://krebsonsecurity.com/feed/", Type: "cyber"},
+	{Name: "gCaptain", URL: "https://gcaptain.com/feed/", Type: "shipping"},
+	{Name: "War on the Rocks", URL: "https://warontherocks.com/feed/", Type: "defense"},
+	{Name: "RealClearDefense", URL: "https://www.realcleardefense.com/index.xml", Type: "defense"},
+	{Name: "USNI News", URL: "https://news.usni.org/feed", Type: "defense"},
+	{Name: "Crisis Group", URL: "https://www.crisisgroup.org/rss", Type: "intl"},
+
+	// Disaster + macro watch
+	{Name: "USGS Earthquakes M4.5+", URL: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.atom", Type: "disaster"},
+	{Name: "ReliefWeb (site feed)", URL: googleNewsSiteRSS("reliefweb.int", 3), Type: "disaster"},
+	{Name: "IMF (site feed)", URL: googleNewsSiteRSS("imf.org", 7), Type: "economic"},
+	{Name: "World Bank (site feed)", URL: googleNewsSiteRSS("worldbank.org", 7), Type: "economic"},
+	{Name: "Euractiv (site feed)", URL: googleNewsSiteRSS("euractiv.com", 7), Type: "intl"},
+}
 
 type worldMonitorFeed struct {
 	Name string
@@ -49,6 +107,7 @@ type runStats struct {
 	Updated    int
 	Unchanged  int
 	ParseError int
+	SkippedBad int
 }
 
 func main() {
@@ -58,6 +117,10 @@ func main() {
 	status := flag.String("status", "paused", "Source status to enforce (active|paused|completed)")
 	ownerUserID := flag.String("owner-user-id", "worldmonitor-bootstrap", "Owner user ID for created sources")
 	pollMinutes := flag.Int("poll-minutes", defaultPollMinutes, "Poll interval in minutes")
+	includeExpanded := flag.Bool("include-expanded", true, "Include additional curated RSS sources beyond worldmonitor INTEL_SOURCES")
+	verifyLive := flag.Bool("verify-live", true, "Probe feed URLs and skip non-RSS / dead endpoints")
+	probeTimeoutSec := flag.Int("probe-timeout-sec", 10, "HTTP timeout in seconds for live feed probe")
+	disableLLMProcessing := flag.Bool("disable-llm-processing", defaultDisableLLMProcessing, "Set sourceDetails.disableLlmProcessing for seeded sources")
 	flag.Parse()
 
 	if strings.TrimSpace(*projectID) == "" {
@@ -85,6 +148,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("parse INTEL_SOURCES from %s: %v", feedsFile, err)
 	}
+	if *includeExpanded {
+		feeds = mergeWorldMonitorFeeds(feeds, expandedWorldMonitorFeeds)
+	}
 	if len(feeds) == 0 {
 		log.Fatalf("no INTEL_SOURCES parsed from %s", feedsFile)
 	}
@@ -108,8 +174,24 @@ func main() {
 		mode = "APPLY"
 	}
 	log.Printf("[%s] processing %d worldmonitor INTEL_SOURCES from %s", mode, len(feeds), feedsFile)
+	probeCache := map[string]bool{}
+	probeTimeout := time.Duration(*probeTimeoutSec) * time.Second
 
 	for _, feed := range feeds {
+		if *verifyLive {
+			url := strings.TrimSpace(feed.URL)
+			ok, cached := probeCache[url]
+			if !cached {
+				ok = probeRSSURL(url, probeTimeout)
+				probeCache[url] = ok
+			}
+			if !ok {
+				stats.SkippedBad++
+				log.Printf("skip feed=%q url=%q reason=probe_not_rss_or_unreachable", feed.Name, feed.URL)
+				continue
+			}
+		}
+
 		assignment, aerr := deriveTaxonomyAssignment(feed)
 		if aerr != nil {
 			stats.ParseError++
@@ -151,6 +233,7 @@ func main() {
 				HorizonMonitorIngestMode:   strPtr(worldMonitorIngestModeDocument),
 				HorizonMonitorRequiresAuth: boolPtr(false),
 				PollIntervalMinutes:        intPtr(*pollMinutes),
+				DisableLLMProcessing:       boolPtr(*disableLLMProcessing),
 			},
 		}
 		expected.SyncCompatForWrite()
@@ -188,7 +271,7 @@ func main() {
 		stats.Updated++
 	}
 
-	log.Printf("[%s] done: total=%d created=%d updated=%d unchanged=%d skipped=%d", mode, stats.Total, stats.Created, stats.Updated, stats.Unchanged, stats.ParseError)
+	log.Printf("[%s] done: total=%d created=%d updated=%d unchanged=%d parseSkipped=%d probeSkipped=%d", mode, stats.Total, stats.Created, stats.Updated, stats.Unchanged, stats.ParseError, stats.SkippedBad)
 }
 
 func resolveFeedsPath(in string) string {
@@ -234,14 +317,15 @@ func parseWorldMonitorIntelSources(src string) ([]worldMonitorFeed, error) {
 		if name == "" || rawURL == "" {
 			continue
 		}
-		if _, err := neturl.ParseRequestURI(rawURL); err != nil {
+		normalizedURL := normalizeWorldMonitorFeedURL(worldMonitorFeed{Name: name, URL: rawURL, Type: typ})
+		if _, err := neturl.ParseRequestURI(normalizedURL); err != nil {
 			continue
 		}
-		if _, exists := seenByURL[rawURL]; exists {
+		if _, exists := seenByURL[normalizedURL]; exists {
 			continue
 		}
-		seenByURL[rawURL] = struct{}{}
-		out = append(out, worldMonitorFeed{Name: name, URL: rawURL, Type: typ})
+		seenByURL[normalizedURL] = struct{}{}
+		out = append(out, worldMonitorFeed{Name: name, URL: normalizedURL, Type: typ})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name == out[j].Name {
@@ -250,6 +334,122 @@ func parseWorldMonitorIntelSources(src string) ([]worldMonitorFeed, error) {
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+func mergeWorldMonitorFeeds(base, extra []worldMonitorFeed) []worldMonitorFeed {
+	seen := map[string]struct{}{}
+	out := make([]worldMonitorFeed, 0, len(base)+len(extra))
+	appendFeed := func(feed worldMonitorFeed) {
+		feed.Name = strings.TrimSpace(feed.Name)
+		feed.Type = strings.TrimSpace(feed.Type)
+		feed.URL = normalizeWorldMonitorFeedURL(feed)
+		if feed.Name == "" || strings.TrimSpace(feed.URL) == "" {
+			return
+		}
+		key := strings.ToLower(strings.TrimSpace(feed.URL))
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, feed)
+	}
+	for _, feed := range base {
+		appendFeed(feed)
+	}
+	for _, feed := range extra {
+		appendFeed(feed)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].URL < out[j].URL
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func normalizeWorldMonitorFeedURL(feed worldMonitorFeed) string {
+	nameKey := strings.ToLower(strings.TrimSpace(feed.Name))
+	if override := strings.TrimSpace(worldMonitorFeedNameOverrides[nameKey]); override != "" {
+		return override
+	}
+
+	rawURL := strings.TrimSpace(feed.URL)
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil || parsed == nil {
+		return rawURL
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	switch host {
+	case "www.csis.org", "csis.org":
+		return googleNewsSiteRSS("csis.org", 7)
+	case "www.mei.edu", "mei.edu":
+		return googleNewsSiteRSS("mei.edu", 7)
+	case "www.rand.org", "rand.org":
+		return googleNewsSiteRSS("rand.org", 7)
+	case "www.brookings.edu", "brookings.edu":
+		return googleNewsSiteRSS("brookings.edu", 7)
+	case "carnegieendowment.org", "www.carnegieendowment.org":
+		return googleNewsSiteRSS("carnegieendowment.org", 7)
+	case "www.nti.org", "nti.org":
+		return googleNewsSiteRSS("nti.org", 7)
+	default:
+		return rawURL
+	}
+}
+
+func googleNewsSiteRSS(site string, days int) string {
+	site = strings.ToLower(strings.TrimSpace(site))
+	if site == "" {
+		return ""
+	}
+	if days <= 0 {
+		days = 7
+	}
+	q := neturl.QueryEscape(fmt.Sprintf("site:%s when:%dd", site, days))
+	return "https://news.google.com/rss/search?q=" + q + "&hl=en-US&gl=US&ceid=US:en"
+}
+
+func probeRSSURL(url string, timeout time.Duration) bool {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return false
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", "sanskrite-source-seeder/1.0")
+	req.Header.Set("Accept", "application/rss+xml,application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.1")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if err != nil {
+		return false
+	}
+	text := strings.ToLower(string(raw))
+	if strings.Contains(text, "<rss") || strings.Contains(text, "<feed") || strings.Contains(text, "<rdf:rdf") {
+		return true
+	}
+	ct := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
+	if strings.Contains(ct, "rss") || strings.Contains(ct, "atom") {
+		return true
+	}
+	return false
 }
 
 func loadExistingPublicSources(ctx context.Context, dsRepo *repo.DataSourcesRepository) (map[string]*models.DataSource, error) {
@@ -359,6 +559,10 @@ func mergeExpectedSource(dst, expected *models.DataSource) bool {
 		dst.Details.PollIntervalMinutes = cloneIntPtr(expected.Details.PollIntervalMinutes)
 		changed = true
 	}
+	if !equalBoolPtr(dst.Details.DisableLLMProcessing, expected.Details.DisableLLMProcessing) {
+		dst.Details.DisableLLMProcessing = cloneBoolPtr(expected.Details.DisableLLMProcessing)
+		changed = true
+	}
 
 	if expected.TrustLevel > 0 && dst.TrustLevel != expected.TrustLevel {
 		dst.TrustLevel = expected.TrustLevel
@@ -374,20 +578,30 @@ func mergeExpectedSource(dst, expected *models.DataSource) bool {
 
 func deriveTaxonomyAssignment(feed worldMonitorFeed) (taxonomyAssignment, error) {
 	categoryByType := map[string]string{
-		"defense":  "/source/defense/defense-industry",
-		"intl":     "/source/geopolitics/diplomacy",
-		"research": "/source/science/general",
-		"osint":    "/source/geopolitics/intelligence",
-		"cyber":    "/source/cyber/threat-intel",
-		"economic": "/source/economy/macro",
+		"defense":    "/source/defense/defense-industry",
+		"intl":       "/source/geopolitics/diplomacy",
+		"research":   "/source/science/general",
+		"osint":      "/source/geopolitics/intelligence",
+		"cyber":      "/source/cyber/threat-intel",
+		"economic":   "/source/economy/macro",
+		"gov":        "/source/geopolitics/diplomacy",
+		"wire":       "/source/geopolitics/diplomacy",
+		"shipping":   "/source/geopolitics/intelligence",
+		"disaster":   "/source/science/general",
+		"mainstream": "/source/geopolitics/diplomacy",
 	}
 	formatByType := map[string]string{
-		"defense":  "industry-media",
-		"intl":     "think-tank",
-		"research": "research",
-		"osint":    "osint",
-		"cyber":    "tech-media",
-		"economic": "intl-org",
+		"defense":    "industry-media",
+		"intl":       "think-tank",
+		"research":   "research",
+		"osint":      "osint",
+		"cyber":      "tech-media",
+		"economic":   "intl-org",
+		"gov":        "gov",
+		"wire":       "wire",
+		"shipping":   "industry-media",
+		"disaster":   "intl-org",
+		"mainstream": "wire",
 	}
 
 	typ := taxonomy.Slugify(feed.Type)

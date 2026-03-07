@@ -55,7 +55,7 @@ gcloud run revisions list --service etigram-api --region us-central1 --limit 5
 echo "API: $(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')"; echo "TG: $(gcloud run services describe etigram-telegram --region us-central1 --format='value(status.url)')"
 
 # Check all secrets exist
-for s in vertex_api_key openai_api_key anthropic_api_key grok_api_key; do gcloud secrets describe $s >/dev/null 2>&1 && echo "✓ $s" || echo "✗ $s"; done
+for s in vertex_api_key openai_api_key anthropic_api_key grok_api_key aisstream_api_key; do gcloud secrets describe $s >/dev/null 2>&1 && echo "✓ $s" || echo "✗ $s"; done
 
 # Check all Pub/Sub topics exist
 for t in discovery.status discovery.profile discovery.answer discovery.project; do gcloud pubsub topics describe $t >/dev/null 2>&1 && echo "✓ $t" || echo "✗ $t"; done

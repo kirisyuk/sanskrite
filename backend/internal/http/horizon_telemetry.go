@@ -116,6 +116,18 @@ func (h *HorizonTelemetryHandler) List(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if total := summary["events_total"]; total > 0 {
+		rates["rss_category_known_rate"] = float64(summary["category_known_total"]) / float64(total)
+		rates["rss_high_or_critical_rate"] = float64(summary["high_or_critical_total"]) / float64(total)
+		rates["rss_zone_coverage_rate"] = float64(summary["zones_total"]) / float64(total)
+		rates["rss_non_event_filtered_rate"] = float64(summary["non_event_filtered_total"]) / float64(total)
+	}
+	if zonesTotal := summary["zones_total"]; zonesTotal > 0 {
+		rates["rss_zone_geocoded_rate"] = float64(summary["zones_geocoded_total"]) / float64(zonesTotal)
+		rates["rss_zone_typed_rate"] = float64(summary["zones_typed_total"]) / float64(zonesTotal)
+		rates["rss_zone_country_rate"] = float64(summary["zones_with_country_total"]) / float64(zonesTotal)
+		rates["rss_zone_map_ready_rate"] = float64(summary["zones_map_ready_total"]) / float64(zonesTotal)
+	}
 
 	// IMPORTANT: Return JSON keys in lowerCamelCase as expected by the frontend.
 	// Do NOT expose internal Go struct field names (WindowStart, Counters, etc).
@@ -224,7 +236,7 @@ func (h *HorizonTelemetryHandler) ExternalServices(w http.ResponseWriter, r *htt
 	}
 
 	WriteJSON(w, http.StatusOK, map[string]any{
-		"services":  result,
-		"tenantId":  tenantID,
+		"services": result,
+		"tenantId": tenantID,
 	})
 }

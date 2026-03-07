@@ -59,11 +59,16 @@ const AdminAccess: React.FC = () => {
   const [telemetryItems, setTelemetryItems] = React.useState<TelemetryItem[]>([]);
   const [telemetrySummary, setTelemetrySummary] = React.useState<Record<string, number>>({});
   const [telemetryHitRate, setTelemetryHitRate] = React.useState<number>(0);
+  const [rssTelemetryItems, setRssTelemetryItems] = React.useState<TelemetryItem[]>([]);
+  const [rssTelemetrySummary, setRssTelemetrySummary] = React.useState<Record<string, number>>({});
+  const [rssTelemetryRates, setRssTelemetryRates] = React.useState<Record<string, number>>({});
   const [telemetryLoading, setTelemetryLoading] = React.useState(false);
   const [telemetryError, setTelemetryError] = React.useState<string | null>(null);
   const [telemetryLimit, setTelemetryLimit] = React.useState(48);
   const telemetryComponent = 'canonical_path_resolver';
   const telemetryMetric = 'redirect_cache';
+  const rssTelemetryComponent = 'rss_heuristics';
+  const rssTelemetryMetric = 'wm_quality';
 
   // External services telemetry
   const [extServices, setExtServices] = React.useState<Record<string, ExternalServiceStats>>({});
@@ -109,20 +114,30 @@ const AdminAccess: React.FC = () => {
     setTelemetryLoading(true);
     setTelemetryError(null);
     try {
-      const data = await api.getHorizonTelemetry({
-        component: telemetryComponent,
-        metric: telemetryMetric,
-        limit: telemetryLimit,
-      });
+      const [data, rssData] = await Promise.all([
+        api.getHorizonTelemetry({
+          component: telemetryComponent,
+          metric: telemetryMetric,
+          limit: telemetryLimit,
+        }),
+        api.getHorizonTelemetry({
+          component: rssTelemetryComponent,
+          metric: rssTelemetryMetric,
+          limit: telemetryLimit,
+        }),
+      ]);
       setTelemetryItems(Array.isArray(data?.items) ? data.items : []);
       setTelemetrySummary(data?.summary || {});
       setTelemetryHitRate(typeof data?.hitRate === 'number' ? data.hitRate : 0);
+      setRssTelemetryItems(Array.isArray(rssData?.items) ? rssData.items : []);
+      setRssTelemetrySummary(rssData?.summary || {});
+      setRssTelemetryRates(rssData?.rates || {});
     } catch (e) {
       setTelemetryError('Failed to load telemetry');
     } finally {
       setTelemetryLoading(false);
     }
-  }, [telemetryLimit, telemetryComponent, telemetryMetric]);
+  }, [telemetryLimit, telemetryComponent, telemetryMetric, rssTelemetryComponent, rssTelemetryMetric]);
 
   const loadExternalServices = React.useCallback(async () => {
     setExtServicesLoading(true);
@@ -275,6 +290,9 @@ const AdminAccess: React.FC = () => {
           items={telemetryItems}
           summary={telemetrySummary}
           hitRate={telemetryHitRate}
+          rssItems={rssTelemetryItems}
+          rssSummary={rssTelemetrySummary}
+          rssRates={rssTelemetryRates}
           loading={telemetryLoading}
           error={telemetryError}
           limit={telemetryLimit}
@@ -857,6 +875,9 @@ const TelemetryTab: React.FC<{
   items: TelemetryItem[];
   summary: Record<string, number>;
   hitRate: number;
+  rssItems: TelemetryItem[];
+  rssSummary: Record<string, number>;
+  rssRates: Record<string, number>;
   loading: boolean;
   error: string | null;
   limit: number;
@@ -866,17 +887,43 @@ const TelemetryTab: React.FC<{
   items,
   summary,
   hitRate,
+  rssItems,
+  rssSummary,
+  rssRates,
   loading,
   error,
   limit,
   onLimitChange,
   onRefresh,
 }) => {
+  const metricRate = (value: number | undefined, numerator: number, denominator: number) => {
+    if (typeof value === 'number') return value;
+    if (denominator <= 0) return 0;
+    return numerator / denominator;
+  };
+
   const resolveCalls = summary?.resolve_calls || 0;
   const redirectHits = summary?.redirect_hits || 0;
   const redirectWrites = summary?.redirect_writes || 0;
   const redirectStable = summary?.redirect_stable || 0;
   const redirectVariability = summary?.redirect_variability || 0;
+
+  const rssEvents = rssSummary?.events_total || 0;
+  const rssZones = rssSummary?.zones_total || 0;
+  const rssCategoryKnown = rssSummary?.category_known_total || 0;
+  const rssHighOrCritical = rssSummary?.high_or_critical_total || 0;
+  const rssZonesMapReady = rssSummary?.zones_map_ready_total || 0;
+  const rssZonesGeocoded = rssSummary?.zones_geocoded_total || 0;
+  const rssZonesTyped = rssSummary?.zones_typed_total || 0;
+  const rssZonesCountry = rssSummary?.zones_with_country_total || 0;
+
+  const rssCategoryKnownRate = metricRate(rssRates?.rss_category_known_rate, rssCategoryKnown, rssEvents);
+  const rssHighOrCriticalRate = metricRate(rssRates?.rss_high_or_critical_rate, rssHighOrCritical, rssEvents);
+  const rssZoneCoverageRate = metricRate(rssRates?.rss_zone_coverage_rate, rssZones, rssEvents);
+  const rssZoneMapReadyRate = metricRate(rssRates?.rss_zone_map_ready_rate, rssZonesMapReady, rssZones);
+  const rssZoneGeocodedRate = metricRate(rssRates?.rss_zone_geocoded_rate, rssZonesGeocoded, rssZones);
+  const rssZoneTypedRate = metricRate(rssRates?.rss_zone_typed_rate, rssZonesTyped, rssZones);
+  const rssZoneCountryRate = metricRate(rssRates?.rss_zone_country_rate, rssZonesCountry, rssZones);
 
   return (
     <div>
@@ -964,10 +1011,86 @@ const TelemetryTab: React.FC<{
           </div>
         )}
       </div>
+
+      <div className="text-13 mt-4 mb-2" style={{ color: 'var(--text-heading)' }}>
+        RSS heuristics quality (affected zones)
+      </div>
+      <div className="grid grid-cols-4 gap-2 mb-3">
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Events</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{rssEvents}</div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Category known</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{(rssCategoryKnownRate * 100).toFixed(1)}%</div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>High or critical</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{(rssHighOrCriticalRate * 100).toFixed(1)}%</div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Zone coverage</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{(rssZoneCoverageRate * 100).toFixed(1)}%</div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Map-ready zones</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{(rssZoneMapReadyRate * 100).toFixed(1)}%</div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Geocoded zones</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{(rssZoneGeocodedRate * 100).toFixed(1)}%</div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Typed zones</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{(rssZoneTypedRate * 100).toFixed(1)}%</div>
+        </div>
+        <div className="p-3 rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)', backgroundColor: 'var(--bg-elevated)' }}>
+          <div className="text-11" style={{ color: 'var(--text-secondary)' }}>Country tagged zones</div>
+          <div className="text-16 font-semibold" style={{ color: 'var(--text-heading)' }}>{(rssZoneCountryRate * 100).toFixed(1)}%</div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border" style={{ borderColor: 'var(--overlay-line-90)' }}>
+        {loading ? (
+          <div className="p-3 text-12" style={{ color: 'var(--text-secondary)' }}>Loading…</div>
+        ) : error ? (
+          <div className="p-3 text-12" style={{ color: 'var(--text-secondary)' }}>{error}</div>
+        ) : rssItems.length === 0 ? (
+          <div className="p-3 text-12" style={{ color: 'var(--text-secondary)' }}>No RSS telemetry windows</div>
+        ) : (
+          <div className="divide-y" style={{ borderColor: 'var(--overlay-line-90)' }}>
+            {rssItems.map((item) => {
+              const events = item.counters?.events_total || 0;
+              const zones = item.counters?.zones_total || 0;
+              const categoryKnown = item.counters?.category_known_total || 0;
+              const highOrCritical = item.counters?.high_or_critical_total || 0;
+              const zoneCoverage = events > 0 ? (zones / events) * 100 : 0;
+              const categoryKnownRateWindow = events > 0 ? (categoryKnown / events) * 100 : 0;
+              const highOrCriticalRateWindow = events > 0 ? (highOrCritical / events) * 100 : 0;
+              const mapReadyRate = zones > 0 ? ((item.counters?.zones_map_ready_total || 0) / zones) * 100 : 0;
+              return (
+                <div key={`${item.windowStart}-${item.updatedAt}-rss`} className="p-3" style={{ backgroundColor: 'var(--bg-elevated)' }}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-13" style={{ color: 'var(--text-heading)' }}>
+                        {new Date(item.windowStart).toLocaleString()}
+                      </div>
+                      <div className="text-12" style={{ color: 'var(--text-secondary)' }}>
+                        Events: {events} · Zones: {zones} · Category known: {categoryKnownRateWindow.toFixed(1)}% · High/Critical: {highOrCriticalRateWindow.toFixed(1)}% · Zone coverage: {zoneCoverage.toFixed(1)}% · Map-ready: {mapReadyRate.toFixed(1)}%
+                      </div>
+                    </div>
+                    <div className="text-11" style={{ color: 'var(--text-secondary)' }}>
+                      window: {Math.round(item.windowSizeSec / 3600)}h
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
 
 export default AdminAccess;
-
-

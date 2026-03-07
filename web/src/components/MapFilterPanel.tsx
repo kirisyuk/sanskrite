@@ -20,6 +20,8 @@ interface MapFilterPanelProps {
   activeFlowModes: Set<TransportFlowMode> | null;
   zonesEnabled: boolean;
   flowsEnabled: boolean;
+  vesselsEnabled: boolean;
+  vesselsApiAvailable: boolean;
   dateFrom: string;
   dateTo: string;
   hops: number;
@@ -32,6 +34,7 @@ interface MapFilterPanelProps {
   onToggleFlowMode: (mode: TransportFlowMode) => void;
   onToggleZonesEnabled: () => void;
   onToggleFlowsEnabled: () => void;
+  onToggleVesselsEnabled: () => void;
   onSelectAll: () => void;
   onSelectNone: () => void;
   onSelectAllZoneTypes: () => void;
@@ -43,8 +46,8 @@ interface MapFilterPanelProps {
 const HOPS_OPTIONS = [1, 2, 3, 4] as const;
 
 export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
-  isDark, paletteTheme, typeCounts, zoneTypeCounts, flowModeCounts, activeTypes, activeZoneTypes, activeFlowModes, zonesEnabled, flowsEnabled, dateFrom, dateTo, hops, loadingData,
-  onSetDateFrom, onSetDateTo, onSetHops, onToggleType, onToggleZoneType, onToggleFlowMode, onToggleZonesEnabled, onToggleFlowsEnabled, onSelectAll, onSelectNone, onSelectAllZoneTypes, onSelectNoneZoneTypes, onSelectAllFlowModes, onSelectNoneFlowModes,
+  isDark, paletteTheme, typeCounts, zoneTypeCounts, flowModeCounts, activeTypes, activeZoneTypes, activeFlowModes,   zonesEnabled, flowsEnabled, vesselsEnabled, vesselsApiAvailable, dateFrom, dateTo, hops, loadingData,
+  onSetDateFrom, onSetDateTo, onSetHops, onToggleType, onToggleZoneType, onToggleFlowMode, onToggleZonesEnabled, onToggleFlowsEnabled, onToggleVesselsEnabled, onSelectAll, onSelectNone, onSelectAllZoneTypes, onSelectNoneZoneTypes, onSelectAllFlowModes, onSelectNoneFlowModes,
 }) => {
   const isAllSelected = activeTypes === null;
   const isAllZoneTypesSelected = activeZoneTypes === null;
@@ -215,6 +218,32 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
           </>
         )}
       </div>
+
+      {vesselsApiAvailable && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <span style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>Vessels (AIS)</span>
+            <button
+              type="button"
+              onClick={onToggleVesselsEnabled}
+              style={{
+                padding: '4px 8px',
+                borderRadius: 999,
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: 10,
+                fontWeight: 700,
+                background: vesselsEnabled
+                  ? (isDark ? 'rgba(56,189,248,0.3)' : 'rgba(3,105,161,0.16)')
+                  : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(15,23,42,0.08)'),
+                color: vesselsEnabled ? (isDark ? '#bae6fd' : '#0c4a6e') : 'var(--text-secondary-strong)',
+              }}
+            >
+              {vesselsEnabled ? 'On' : 'Off'}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>

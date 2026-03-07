@@ -199,6 +199,7 @@ echo "YOUR_KEY" | gcloud secrets versions add vertex_api_key --data-file=-
 echo "YOUR_KEY" | gcloud secrets versions add openai_api_key --data-file=-
 echo "YOUR_KEY" | gcloud secrets versions add anthropic_api_key --data-file=-
 echo "YOUR_KEY" | gcloud secrets versions add grok_api_key --data-file=-
+echo "YOUR_AISSTREAM_KEY" | gcloud secrets versions add aisstream_api_key --data-file=-   # optional: vessel map layer
 ```
 
 ### Verification

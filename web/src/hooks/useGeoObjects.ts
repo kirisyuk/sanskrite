@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { api } from '../lib/api';
+import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 
 export type GeoObject = {
   id: string;
@@ -11,8 +12,15 @@ export type GeoObject = {
   status?: string;
   coordinates?: { lat: number; lon: number };
   radiusKm?: number;
+  zoneType?: string;
+  zoneSubType?: string;
+  hype?: number;
+  hypeIndicator?: number;
+  activityStatus?: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
+  lastMatchedAt?: string;
   inScope?: boolean;
   createdAt?: string;
+  updatedAt?: string;
 };
 
 export type TypeCount = { type: string; count: number };
@@ -40,8 +48,11 @@ export function useGeoObjects(
   const [allObjects, setAllObjects] = useState<GeoObject[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const horizonEvents = useHorizonRealtimeStore((s) => s.events);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const lastEventIdRef = useRef<string | null>(null);
+  const realtimeInitializedRef = useRef(false);
 
   useEffect(() => {
     clearTimeout(debounceRef.current);
@@ -78,6 +89,83 @@ export function useGeoObjects(
 
     return () => clearTimeout(debounceRef.current);
   }, [filters.dateFrom, filters.dateTo, scope?.lensId]);
+
+  useEffect(() => {
+    if (!Array.isArray(horizonEvents) || horizonEvents.length === 0) return;
+    const latest = horizonEvents[horizonEvents.length - 1];
+    if (!latest?.id) return;
+
+    if (!realtimeInitializedRef.current) {
+      realtimeInitializedRef.current = true;
+      lastEventIdRef.current = latest.id;
+      return;
+    }
+
+    let fromIdx = horizonEvents.findIndex((ev) => ev?.id === lastEventIdRef.current);
+    if (fromIdx < 0) fromIdx = horizonEvents.length - 1;
+    const updates = horizonEvents.slice(fromIdx + 1);
+    lastEventIdRef.current = latest.id;
+    if (updates.length === 0) return;
+
+    setAllObjects((prev) => {
+      let next = prev;
+      let changed = false;
+      for (const ev of updates) {
+        if (ev?.type !== 'horizon.graph.node.upserted') continue;
+        const data = ev?.data || {};
+        const canonicalPath = typeof data?.canonicalPath === 'string' ? data.canonicalPath.trim() : '';
+        const rawType = typeof data?.type === 'string' ? data.type.trim().toUpperCase() : '';
+        const isAffectedZone = rawType === 'AFFECTED_ZONE' || canonicalPath.startsWith('/zone/');
+        if (!isAffectedZone) continue;
+        const lat = Number(data?.coordinates?.lat);
+        const lon = Number(data?.coordinates?.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        const id = String(data?.fragmentId || canonicalPath || '').trim();
+        if (!id || !canonicalPath) continue;
+        const radiusKm = Number(data?.radiusKm);
+        const activityStatusRaw = typeof data?.activityStatus === 'string' ? data.activityStatus.trim().toLowerCase() : '';
+        const activityStatus =
+          activityStatusRaw === 'hot' ||
+          activityStatusRaw === 'active' ||
+          activityStatusRaw === 'watch' ||
+          activityStatusRaw === 'cooling' ||
+          activityStatusRaw === 'inactive'
+            ? activityStatusRaw
+            : undefined;
+        const nextObj: GeoObject = {
+          id,
+          canonicalPath,
+          type: 'AFFECTED_ZONE',
+          label: typeof data?.label === 'string' ? data.label.trim() : undefined,
+          status: typeof data?.status === 'string' ? data.status.trim() : undefined,
+          coordinates: { lat, lon },
+          radiusKm: Number.isFinite(radiusKm) ? radiusKm : undefined,
+          zoneType: typeof data?.zoneType === 'string' ? data.zoneType.trim() : undefined,
+          zoneSubType: typeof data?.zoneSubType === 'string' ? data.zoneSubType.trim() : undefined,
+          hype: Number.isFinite(Number(data?.hype)) ? Number(data?.hype) : undefined,
+          hypeIndicator: Number.isFinite(Number(data?.hypeIndicator)) ? Number(data?.hypeIndicator) : undefined,
+          activityStatus,
+          lastMatchedAt: typeof data?.lastMatchedAt === 'string' ? data.lastMatchedAt : undefined,
+          updatedAt: typeof data?.updatedAt === 'string' ? data.updatedAt : new Date().toISOString(),
+        };
+        const idx = next.findIndex((obj) => obj.id === id || obj.canonicalPath === canonicalPath);
+        if (idx >= 0) {
+          const merged = { ...next[idx], ...nextObj };
+          const same = JSON.stringify(next[idx]) === JSON.stringify(merged);
+          if (!same) {
+            if (!changed) next = [...next];
+            next[idx] = merged;
+            changed = true;
+          }
+        } else {
+          if (!changed) next = [...next];
+          next.unshift(nextObj);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [horizonEvents]);
 
   const typeCounts = useMemo(() => deriveTypeCounts(allObjects), [allObjects]);
 

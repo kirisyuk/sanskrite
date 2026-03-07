@@ -1,0 +1,111 @@
+{
+  "_comment": "GeoJSON [lon, lat]. Origin/dest for sea and ferry routes so endpoints land in actual ports.",
+  "sea_suez_rotterdam": {
+    "origin": [32.3042, 31.2285],
+    "dest": [4.2867, 51.885]
+  },
+  "sea_suez_mumbai": {
+    "origin": [32.3042, 31.2285],
+    "dest": [72.96, 18.95]
+  },
+  "sea_malacca_shanghai": {
+    "origin": [103.855, 1.266],
+    "dest": [122.067, 30.617]
+  },
+  "sea_malacca_yokohama": {
+    "origin": [103.855, 1.266],
+    "dest": [139.646, 35.45]
+  },
+  "sea_gulf_westindia": {
+    "origin": [50.1485, 26.441],
+    "dest": [72.96, 18.95]
+  },
+  "sea_panama_la": {
+    "origin": [-79.5667, 8.948],
+    "dest": [-118.25, 33.75]
+  },
+  "sea_panama_ny": {
+    "origin": [-79.5667, 8.948],
+    "dest": [-74.05, 40.68]
+  },
+  "sea_northatlantic_core": {
+    "origin": [-74.05, 40.68],
+    "dest": [4.2867, 51.885]
+  },
+  "sea_cape_to_europe": {
+    "origin": [18.424, -33.925],
+    "dest": [4.2867, 51.885]
+  },
+  "sea_blacksea_med": {
+    "origin": [37.77, 44.72],
+    "dest": [28.98, 41.01]
+  },
+  "sea_baltic_northsea": {
+    "origin": [18.65, 54.35],
+    "dest": [4.2867, 51.885]
+  },
+  "sea_brazil_europe": {
+    "origin": [-43.17, -22.91],
+    "dest": [4.2867, 51.885]
+  },
+  "sea_eastafrica_india": {
+    "origin": [39.27, -6.16],
+    "dest": [72.96, 18.95]
+  },
+  "sea_singapore_sydney": {
+    "origin": [103.855, 1.266],
+    "dest": [151.215, -33.97]
+  },
+  "sea_northern_sea_route": {
+    "origin": [33.056, 68.98],
+    "dest": [-169.0, 66.0]
+  },
+  "ferry_roro_dover_calais": {
+    "origin": [1.33, 51.12],
+    "dest": [1.85, 50.95]
+  },
+  "ferry_roro_helsinki_tallinn": {
+    "origin": [24.97, 60.17],
+    "dest": [24.75, 59.44]
+  },
+  "ferry_roro_stockholm_turku": {
+    "origin": [18.07, 59.33],
+    "dest": [22.27, 60.45]
+  },
+  "ferry_roro_piraeus_crete": {
+    "origin": [23.64, 37.94],
+    "dest": [25.14, 35.34]
+  },
+  "ferry_roro_jeddah_safaga": {
+    "origin": [39.18, 21.54],
+    "dest": [33.95, 26.75]
+  },
+  "ferry_roro_dubai_bandarabbas": {
+    "origin": [55.061, 25.011],
+    "dest": [56.27, 27.18]
+  },
+  "ferry_roro_singapore_batam": {
+    "origin": [103.855, 1.266],
+    "dest": [104.05, 1.05]
+  },
+  "ferry_roro_manila_cebu": {
+    "origin": [120.97, 14.58],
+    "dest": [123.90, 10.32]
+  },
+  "ferry_roro_cebu_davao": {
+    "origin": [123.90, 10.32],
+    "dest": [125.61, 7.07]
+  },
+  "ferry_roro_japan_korea": {
+    "origin": [139.65, 35.45],
+    "dest": [129.04, 35.10]
+  },
+  "ferry_roro_uk_ireland": {
+    "origin": [-1.43, 54.87],
+    "dest": [-8.25, 51.85]
+  },
+  "ferry_roro_rostock_trelleborg": {
+    "origin": [12.09, 54.14],
+    "dest": [13.17, 55.37]
+  }
+}

@@ -26,6 +26,8 @@ interface FlowRenderProperties {
   color: string;
   width: number;
   opacity: number;
+  hype: number;
+  status: string;
 }
 
 type FlowEndpointSide = 'origin' | 'destination';
@@ -44,6 +46,11 @@ type EndpointIconKind =
 interface EndpointRenderProperties extends FlowRenderProperties {
   endpointSide: FlowEndpointSide;
   iconId: string;
+}
+
+interface FlowActivitySnapshot {
+  hype?: number;
+  status?: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
 }
 
 type LonLat = [number, number];
@@ -518,31 +525,53 @@ const FLOW_DASHARRAY_EXPRESSION: unknown = [
   ['literal', [1, 0.001]],
 ];
 const HOVER_FLAG_EXPRESSION: unknown = ['boolean', ['feature-state', 'hover'], false];
-const MAIN_LINE_BASE_WIDTH_EXPRESSION: unknown = ['interpolate', ['linear'], ['zoom'], 2, ['*', ['get', 'width'], 0.7], 7, ['get', 'width'], 10, ['*', ['get', 'width'], 1.3]];
-const GLOW_LINE_BASE_WIDTH_EXPRESSION: unknown = ['interpolate', ['linear'], ['zoom'], 2, ['*', ['get', 'width'], 1.1], 7, ['*', ['get', 'width'], 1.8]];
 
-function flowPropsFromFeature(feature: TransportFlowFeature, theme: 'dark' | 'light'): FlowRenderProperties | null {
+function flowPropsFromFeature(
+  feature: TransportFlowFeature,
+  theme: 'dark' | 'light',
+  activityById: Record<string, FlowActivitySnapshot>,
+): FlowRenderProperties | null {
   if (!feature?.properties) return null;
   const flowMode = normalizeTransportMode(String(feature.properties.flowMode || ''));
+  const id = String(feature.id || feature.properties.name);
+  const activity = activityById[id] || {};
+  const hype = Math.max(0, Math.min(100, Number(activity.hype || 0)));
+  const status = String(activity.status || 'inactive');
+  const baseColor = transportFlowModeColor(flowMode, theme);
+  const color = status === 'hot'
+    ? '#ef4444'
+    : status === 'active'
+      ? '#f97316'
+      : status === 'watch'
+        ? '#f59e0b'
+        : baseColor;
+  const width = transportFlowModeStrokeWidth(flowMode) * (1 + hype * 0.011);
+  const opacity = Math.min(0.98, transportFlowModeOpacity(flowMode) * (0.45 + hype / 100));
   return {
-    id: String(feature.id || feature.properties.name),
+    id,
     name: String(feature.properties.name || 'Transport flow'),
     flowMode,
     flowSubType: String(feature.properties.flowSubType || ''),
     tagsText: Array.isArray(feature.properties.tags)
       ? feature.properties.tags.map((x) => String(x)).slice(0, 4).join(', ')
       : '',
-    color: transportFlowModeColor(flowMode, theme),
-    width: transportFlowModeStrokeWidth(flowMode),
-    opacity: transportFlowModeOpacity(flowMode),
+    color,
+    width,
+    opacity,
+    hype,
+    status,
   };
 }
 
-function buildFlowCollection(features: TransportFlowFeature[], theme: 'dark' | 'light'): GeoJSON.FeatureCollection {
+function buildFlowCollection(
+  features: TransportFlowFeature[],
+  theme: 'dark' | 'light',
+  activityById: Record<string, FlowActivitySnapshot>,
+): GeoJSON.FeatureCollection {
   const mapped: GeoJSON.Feature[] = [];
   for (const feature of features) {
     if (!feature?.geometry || !feature?.properties) continue;
-    const props = flowPropsFromFeature(feature, theme);
+    const props = flowPropsFromFeature(feature, theme, activityById);
     if (!props) continue;
     const flowMode = props.flowMode;
     const lineStrings: LonLat[][] = feature.geometry.type === 'LineString'
@@ -566,11 +595,15 @@ function buildFlowCollection(features: TransportFlowFeature[], theme: 'dark' | '
   return { type: 'FeatureCollection', features: mapped };
 }
 
-function buildEndpointCollection(features: TransportFlowFeature[], theme: 'dark' | 'light'): GeoJSON.FeatureCollection {
+function buildEndpointCollection(
+  features: TransportFlowFeature[],
+  theme: 'dark' | 'light',
+  activityById: Record<string, FlowActivitySnapshot>,
+): GeoJSON.FeatureCollection {
   const mapped: GeoJSON.Feature[] = [];
   for (const feature of features) {
     if (!feature?.geometry || !feature?.properties) continue;
-    const props = flowPropsFromFeature(feature, theme);
+    const props = flowPropsFromFeature(feature, theme, activityById);
     if (!props) continue;
     const iconId = endpointIconId(endpointIconKind(props.flowMode));
     const lineStrings: LonLat[][] = feature.geometry.type === 'LineString'
@@ -619,8 +652,91 @@ export function useTransportFlowLayer(
   features: TransportFlowFeature[],
   theme: 'dark' | 'light',
   visible: boolean,
+  activityById: Record<string, FlowActivitySnapshot>,
 ) {
   const popupRef = useRef<maplibregl.Popup | null>(null);
+  const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
+  const hoveredLineIdRef = useRef<string | number | null>(null);
+  const hoveredEndpointIdRef = useRef<string | number | null>(null);
+
+  const clearHoverState = (targetMap: maplibregl.Map) => {
+    try {
+      if (hoveredLineIdRef.current !== null) {
+        targetMap.setFeatureState({ source: SRC, id: hoveredLineIdRef.current }, { hover: false });
+      }
+      if (hoveredEndpointIdRef.current !== null) {
+        targetMap.setFeatureState({ source: ENDPOINT_SRC, id: hoveredEndpointIdRef.current }, { hover: false });
+      }
+    } catch {
+      // source/style may be disposed
+    }
+    hoveredLineIdRef.current = null;
+    hoveredEndpointIdRef.current = null;
+  };
+
+  const setHoverState = (
+    targetMap: maplibregl.Map,
+    lineId: string | number | null,
+    endpointId: string | number | null,
+  ) => {
+    if (hoveredLineIdRef.current === lineId && hoveredEndpointIdRef.current === endpointId) return;
+    clearHoverState(targetMap);
+    try {
+      if (lineId !== null) targetMap.setFeatureState({ source: SRC, id: lineId }, { hover: true });
+      if (endpointId !== null) targetMap.setFeatureState({ source: ENDPOINT_SRC, id: endpointId }, { hover: true });
+    } catch {
+      // source/style reloading
+    }
+    hoveredLineIdRef.current = lineId;
+    hoveredEndpointIdRef.current = endpointId;
+  };
+
+  const renderPopupHtml = (props: FlowRenderProperties, endpointSide?: FlowEndpointSide): string => {
+    const title = escapeHtml(props.name);
+    const mode = escapeHtml(formatTransportFlowMode(props.flowMode));
+    const endpointText = endpointSide === 'origin'
+      ? 'Origin endpoint. '
+      : endpointSide === 'destination'
+        ? 'Destination endpoint. '
+        : '';
+    const text = escapeHtml(`${endpointText}${toEnglishFlowNarrative(props)}`);
+    const hype = `${Math.round(props.hype)}/100`;
+    const status = escapeHtml(props.status);
+    return (
+      `<div style="font-family: ui-sans-serif,system-ui,sans-serif; font-size:12px; line-height:1.4;">` +
+        `<div style="font-weight:700; margin-bottom:2px;">${title}</div>` +
+        `<div style="font-size:11px; opacity:.8; margin-bottom:6px;">${mode}</div>` +
+        `<div style="font-size:11px; margin-bottom:2px;">${text}</div>` +
+        `<div style="font-size:10px; opacity:.88;">Hype: ${hype} • Status: ${status}</div>` +
+      `</div>`
+    );
+  };
+
+  const parseFeature = (feature: maplibregl.MapGeoJSONFeature | undefined) => {
+    if (!feature?.properties) return null;
+    const raw = feature.properties as Record<string, unknown>;
+    const flowMode = normalizeTransportMode(String(raw.flowMode || ''));
+    const lineIdRaw = String(raw.id || feature.id || '');
+    const lineId = lineIdRaw || null;
+    const endpointId = feature.geometry.type === 'Point' ? (feature.id as string | number | undefined) ?? null : null;
+    const endpointSideRaw = String(raw.endpointSide || '');
+    const endpointSide: FlowEndpointSide | undefined = endpointSideRaw === 'origin' || endpointSideRaw === 'destination'
+      ? endpointSideRaw
+      : undefined;
+    const props: FlowRenderProperties = {
+      id: lineIdRaw,
+      name: String(raw.name || 'Transport flow'),
+      flowMode,
+      flowSubType: String(raw.flowSubType || ''),
+      tagsText: String(raw.tagsText || ''),
+      color: String(raw.color || ''),
+      width: Number(raw.width || 1.8),
+      opacity: Number(raw.opacity || 0.8),
+      hype: Number(raw.hype || 0),
+      status: String(raw.status || 'inactive'),
+    };
+    return { props, lineId, endpointId, endpointSide };
+  };
 
   useEffect(() => {
     if (!map || !isReady) return;
@@ -629,11 +745,11 @@ export function useTransportFlowLayer(
 
     map.addSource(SRC, {
       type: 'geojson',
-      data: buildFlowCollection([], theme),
+      data: buildFlowCollection([], theme, {}),
     });
     map.addSource(ENDPOINT_SRC, {
       type: 'geojson',
-      data: buildEndpointCollection([], theme),
+      data: buildEndpointCollection([], theme, {}),
     });
 
     const beforeId = map.getLayer('geo-clusters') ? 'geo-clusters' : undefined;
@@ -649,8 +765,12 @@ export function useTransportFlowLayer(
       },
       paint: {
         'line-color': ['get', 'color'],
-        'line-width': ['interpolate', ['linear'], ['zoom'], 2, ['*', ['get', 'width'], 1.1], 7, ['*', ['get', 'width'], 1.8]],
-        'line-opacity': ['*', ['get', 'opacity'], 0.25],
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          2, ['*', ['*', ['get', 'width'], 1.1], ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 1.2, 1]],
+          7, ['*', ['*', ['get', 'width'], 1.8], ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 1.2, 1]],
+        ],
+        'line-opacity': ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, ['*', ['get', 'opacity'], 0.55], ['*', ['get', 'opacity'], 0.12]],
         'line-dasharray': FLOW_DASHARRAY_EXPRESSION as maplibregl.ExpressionSpecification,
         'line-blur': 0.6,
       },
@@ -667,8 +787,13 @@ export function useTransportFlowLayer(
       },
       paint: {
         'line-color': ['get', 'color'],
-        'line-width': ['interpolate', ['linear'], ['zoom'], 2, ['*', ['get', 'width'], 0.7], 7, ['get', 'width'], 10, ['*', ['get', 'width'], 1.3]],
-        'line-opacity': ['get', 'opacity'],
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          2, ['*', ['*', ['get', 'width'], 0.7], ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 1.45, 1]],
+          7, ['*', ['get', 'width'], ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 1.45, 1]],
+          10, ['*', ['*', ['get', 'width'], 1.3], ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 1.45, 1]],
+        ],
+        'line-opacity': ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, ['*', ['get', 'opacity'], 1.05], ['*', ['get', 'opacity'], 0.34]],
         'line-dasharray': FLOW_DASHARRAY_EXPRESSION as maplibregl.ExpressionSpecification,
       },
     }, beforeId);
@@ -680,8 +805,13 @@ export function useTransportFlowLayer(
       layout: { visibility: visible ? 'visible' : 'none' },
       paint: {
         'circle-color': ['get', 'color'],
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 3.5, 7, 6.5, 10, 8],
-        'circle-opacity': 0.26,
+        'circle-radius': [
+          'interpolate', ['linear'], ['zoom'],
+          2, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 5.2, 3.5],
+          7, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 9, 6.5],
+          10, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 11, 8],
+        ],
+        'circle-opacity': ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 0.55, 0.2],
         'circle-blur': 0.7,
       },
     }, beforeId);
@@ -693,10 +823,15 @@ export function useTransportFlowLayer(
       layout: { visibility: visible ? 'visible' : 'none' },
       paint: {
         'circle-color': ['get', 'color'],
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 2.2, 7, 4, 10, 5.2],
-        'circle-opacity': 0.94,
+        'circle-radius': [
+          'interpolate', ['linear'], ['zoom'],
+          2, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 3.2, 2.1],
+          7, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 5.7, 3.8],
+          10, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 7, 5.2],
+        ],
+        'circle-opacity': ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 0.96, 0.52],
         'circle-stroke-color': theme === 'dark' ? '#0b1220' : '#f8fafc',
-        'circle-stroke-width': 1.2,
+        'circle-stroke-width': ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 1.8, 1.2],
       },
     }, beforeId);
 
@@ -707,45 +842,76 @@ export function useTransportFlowLayer(
       layout: {
         visibility: visible ? 'visible' : 'none',
         'icon-image': ['get', 'iconId'] as unknown as maplibregl.ExpressionSpecification,
-        'icon-size': ['interpolate', ['linear'], ['zoom'], 2, 0.36, 7, 0.47, 10, 0.56],
+        'icon-size': [
+          'interpolate', ['linear'], ['zoom'],
+          2, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 0.47, 0.34],
+          7, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 0.61, 0.46],
+          10, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 0.7, 0.56],
+        ],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
       },
       paint: {
-        'icon-opacity': 0.96,
+        'icon-opacity': ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 1, 0.65],
       },
     }, beforeId);
 
-    const handleMoveEnter = () => { map.getCanvas().style.cursor = 'pointer'; };
-    const handleMoveLeave = () => { map.getCanvas().style.cursor = ''; };
+    const interactiveLayers: string[] = [ENDPOINT_ICON_LAYER, ENDPOINT_LAYER, MAIN_LAYER];
+    const getQueryableLayers = (): string[] => interactiveLayers.filter((layerId) => Boolean(map.getLayer(layerId)));
 
-    const handleClick = (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
+    const handleMouseMove = (e: maplibregl.MapMouseEvent) => {
       try {
-        const feature = e.features?.[0];
-        if (!feature?.properties) return;
-        const raw = feature.properties as Record<string, unknown>;
-        const flowMode = normalizeTransportMode(String(raw.flowMode || ''));
-        const props: FlowRenderProperties = {
-          id: String(raw.id || feature.id || ''),
-          name: String(raw.name || 'Transport flow'),
-          flowMode,
-          flowSubType: String(raw.flowSubType || ''),
-          tagsText: String(raw.tagsText || ''),
-          color: String(raw.color || ''),
-          width: Number(raw.width || 1.8),
-          opacity: Number(raw.opacity || 0.8),
-        };
-        const endpointSide = String(raw.endpointSide || '');
+        const queryLayers = getQueryableLayers();
+        if (queryLayers.length === 0) {
+          map.getCanvas().style.cursor = '';
+          clearHoverState(map);
+          hoverPopupRef.current?.remove();
+          hoverPopupRef.current = null;
+          return;
+        }
+        const hits = map.queryRenderedFeatures(e.point, { layers: queryLayers }) as maplibregl.MapGeoJSONFeature[];
+        const parsed = parseFeature(hits[0]);
+        if (!parsed) {
+          map.getCanvas().style.cursor = '';
+          clearHoverState(map);
+          hoverPopupRef.current?.remove();
+          hoverPopupRef.current = null;
+          return;
+        }
+        map.getCanvas().style.cursor = 'pointer';
+        setHoverState(map, parsed.lineId, parsed.endpointId);
 
-        const title = escapeHtml(props.name);
-        const mode = escapeHtml(formatTransportFlowMode(props.flowMode));
-        const endpointText = endpointSide === 'origin'
-          ? 'Origin endpoint. '
-          : endpointSide === 'destination'
-            ? 'Destination endpoint. '
-            : '';
-        const text = escapeHtml(`${endpointText}${toEnglishFlowNarrative(props)}`);
+        hoverPopupRef.current?.remove();
+        hoverPopupRef.current = new maplibregl.Popup({
+          closeButton: false,
+          closeOnClick: false,
+          closeOnMove: false,
+          maxWidth: '320px',
+          className: `transport-flows-popup ${theme === 'dark' ? 'transport-flows-popup-dark' : 'transport-flows-popup-light'}`,
+          offset: 10,
+        })
+          .setLngLat(e.lngLat)
+          .setHTML(renderPopupHtml(parsed.props, parsed.endpointSide))
+          .addTo(map);
+      } catch {
+        // transient during style reload
+      }
+    };
 
+    const handleMouseOut = () => {
+      map.getCanvas().style.cursor = '';
+      clearHoverState(map);
+      hoverPopupRef.current?.remove();
+      hoverPopupRef.current = null;
+    };
+
+    const handleClick = (e: maplibregl.MapMouseEvent) => {
+      try {
+        const queryLayers = getQueryableLayers();
+        if (queryLayers.length === 0) return;
+        const hits = map.queryRenderedFeatures(e.point, { layers: queryLayers }) as maplibregl.MapGeoJSONFeature[];
+        const parsed = parseFeature(hits[0]);
+        if (!parsed) return;
         popupRef.current?.remove();
         popupRef.current = new maplibregl.Popup({
           closeButton: true,
@@ -754,34 +920,27 @@ export function useTransportFlowLayer(
           className: `transport-flows-popup ${theme === 'dark' ? 'transport-flows-popup-dark' : 'transport-flows-popup-light'}`,
         })
           .setLngLat(e.lngLat)
-          .setHTML(
-            `<div style="font-family: ui-sans-serif,system-ui,sans-serif; font-size:12px; line-height:1.4;">` +
-              `<div style="font-weight:700; margin-bottom:2px;">${title}</div>` +
-              `<div style="font-size:11px; opacity:.8; margin-bottom:6px;">${mode}</div>` +
-              `<div style="font-size:11px; margin-bottom:2px;">${text}</div>` +
-            `</div>`
-          )
+          .setHTML(renderPopupHtml(parsed.props, parsed.endpointSide))
           .addTo(map);
       } catch (err) {
         console.warn('[useTransportFlowLayer] popup render failed:', err);
       }
     };
 
-    for (const layerId of [MAIN_LAYER, ENDPOINT_LAYER, ENDPOINT_ICON_LAYER]) {
-      map.on('mouseenter', layerId, handleMoveEnter);
-      map.on('mouseleave', layerId, handleMoveLeave);
-      map.on('click', layerId, handleClick);
-    }
+    map.on('mousemove', handleMouseMove);
+    map.on('mouseout', handleMouseOut);
+    map.on('click', handleClick);
 
     return () => {
       popupRef.current?.remove();
       popupRef.current = null;
+      hoverPopupRef.current?.remove();
+      hoverPopupRef.current = null;
+      clearHoverState(map);
       try {
-        for (const layerId of [MAIN_LAYER, ENDPOINT_LAYER, ENDPOINT_ICON_LAYER]) {
-          map.off('mouseenter', layerId, handleMoveEnter);
-          map.off('mouseleave', layerId, handleMoveLeave);
-          map.off('click', layerId, handleClick);
-        }
+        map.off('mousemove', handleMouseMove);
+        map.off('mouseout', handleMouseOut);
+        map.off('click', handleClick);
         if (map.getLayer(ENDPOINT_ICON_LAYER)) map.removeLayer(ENDPOINT_ICON_LAYER);
         if (map.getLayer(ENDPOINT_LAYER)) map.removeLayer(ENDPOINT_LAYER);
         if (map.getLayer(ENDPOINT_GLOW_LAYER)) map.removeLayer(ENDPOINT_GLOW_LAYER);
@@ -799,8 +958,8 @@ export function useTransportFlowLayer(
     if (!map || !isReady) return;
     const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
     const endpointSrc = map.getSource(ENDPOINT_SRC) as maplibregl.GeoJSONSource | undefined;
-    if (src) src.setData(buildFlowCollection(features, theme));
-    if (endpointSrc) endpointSrc.setData(buildEndpointCollection(features, theme));
+    if (src) src.setData(buildFlowCollection(features, theme, activityById || {}));
+    if (endpointSrc) endpointSrc.setData(buildEndpointCollection(features, theme, activityById || {}));
 
     const visibility = visible ? 'visible' : 'none';
     if (map.getLayer(MAIN_LAYER)) map.setLayoutProperty(MAIN_LAYER, 'visibility', visibility);
@@ -808,5 +967,13 @@ export function useTransportFlowLayer(
     if (map.getLayer(ENDPOINT_GLOW_LAYER)) map.setLayoutProperty(ENDPOINT_GLOW_LAYER, 'visibility', visibility);
     if (map.getLayer(ENDPOINT_LAYER)) map.setLayoutProperty(ENDPOINT_LAYER, 'visibility', visibility);
     if (map.getLayer(ENDPOINT_ICON_LAYER)) map.setLayoutProperty(ENDPOINT_ICON_LAYER, 'visibility', visibility);
-  }, [map, isReady, features, theme, visible]);
+    if (!visible) {
+      clearHoverState(map);
+      map.getCanvas().style.cursor = '';
+      hoverPopupRef.current?.remove();
+      hoverPopupRef.current = null;
+      popupRef.current?.remove();
+      popupRef.current = null;
+    }
+  }, [map, isReady, features, theme, visible, activityById]);
 }

@@ -1,0 +1,39 @@
+{
+  "_comment": "Real-world coordinates for pipeline and power routes. Apply via refine-transport-flows or similar. Sources: see web/scripts/REFINED_SOURCES.md",
+  "pipeline_gas_norway_uk_langeled": [
+    [6.93, 62.832],
+    [4.8, 61.2],
+    [3.2, 59.5],
+    [2.0, 58.4],
+    [0.12, 53.655]
+  ],
+  "pipeline_gas_norway_germany": [
+    [5.24, 59.27],
+    [4.5, 58.5],
+    [4.0, 57.5],
+    [5.0, 56.0],
+    [6.5, 55.0],
+    [7.0, 53.65]
+  ],
+  "power_hvdc_nordlink": [
+    [6.754, 58.668],
+    [6.2, 57.8],
+    [6.5, 56.5],
+    [7.5, 55.5],
+    [8.5, 54.5],
+    [9.344, 53.919]
+  ],
+  "power_hvdc_north_sea_link": [
+    [-1.58, 55.13],
+    [0.5, 56.2],
+    [2.5, 57.5],
+    [4.5, 58.5],
+    [6.654, 59.529]
+  ],
+  "pipeline_co2_northern_lights": [
+    [4.885, 60.56],
+    [4.0, 60.4],
+    [3.2, 60.3],
+    [2.5, 60.2]
+  ]
+}

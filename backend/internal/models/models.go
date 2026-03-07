@@ -170,6 +170,11 @@ type SourceDetails struct {
 	RequestHeaders                 map[string]string `json:"requestHeaders,omitempty" firestore:"requestHeaders,omitempty"`
 	// PollIntervalMinutes allows source-level polling override (e.g., 30 min for Horizon Monitor feeds).
 	PollIntervalMinutes *int `json:"pollIntervalMinutes,omitempty" firestore:"pollIntervalMinutes,omitempty"`
+	// DisableLLMProcessing forces deterministic/heuristic processing for this source:
+	// - document.process is not published
+	// - document.extract (LLM extractor path) is not used
+	// - source-specific heuristic pipelines should be used instead
+	DisableLLMProcessing *bool `json:"disableLlmProcessing,omitempty" firestore:"disableLlmProcessing,omitempty"`
 }
 
 // DataSource соответствует Core.DataSources

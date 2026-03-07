@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,18 +21,24 @@ import (
 )
 
 type geoObjectResponseItem struct {
-	ID            string              `json:"id"`
-	CanonicalPath string              `json:"canonicalPath"`
-	Type          models.FragmentType `json:"type"`
-	FacilityKind  string              `json:"facilityKind,omitempty"`
-	Label         string              `json:"label,omitempty"`
-	Description   string              `json:"description,omitempty"`
-	Status        string              `json:"status,omitempty"`
-	Coordinates   *models.Coordinates `json:"coordinates,omitempty"`
-	RadiusKm      float64             `json:"radiusKm,omitempty"`
-	InScope       bool                `json:"inScope"`
-	CreatedAt     time.Time           `json:"createdAt"`
-	UpdatedAt     time.Time           `json:"updatedAt"`
+	ID             string              `json:"id"`
+	CanonicalPath  string              `json:"canonicalPath"`
+	Type           models.FragmentType `json:"type"`
+	FacilityKind   string              `json:"facilityKind,omitempty"`
+	Label          string              `json:"label,omitempty"`
+	Description    string              `json:"description,omitempty"`
+	Status         string              `json:"status,omitempty"`
+	Coordinates    *models.Coordinates `json:"coordinates,omitempty"`
+	RadiusKm       float64             `json:"radiusKm,omitempty"`
+	ZoneType       string              `json:"zoneType,omitempty"`
+	ZoneSubType    string              `json:"zoneSubType,omitempty"`
+	Hype           float64             `json:"hype,omitempty"`
+	HypeIndicator  int                 `json:"hypeIndicator,omitempty"`
+	ActivityStatus string              `json:"activityStatus,omitempty"`
+	LastMatchedAt  *time.Time          `json:"lastMatchedAt,omitempty"`
+	InScope        bool                `json:"inScope"`
+	CreatedAt      time.Time           `json:"createdAt"`
+	UpdatedAt      time.Time           `json:"updatedAt"`
 }
 
 func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectResponseItem, bool) {
@@ -64,20 +71,144 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 	if label == "" {
 		label = strings.TrimSpace(f.Identifiers["shortName"])
 	}
+	zoneType := ""
+	zoneSubType := ""
+	hype := 0.0
+	hypeIndicator := 0
+	activityStatus := ""
+	var lastMatchedAt *time.Time
+	if f.Type == models.FragmentTypeAffectedZone {
+		zoneType = strings.TrimSpace(asString(f.Qualifiers["zoneType"]))
+		zoneSubType = strings.TrimSpace(asString(f.Qualifiers["zoneSubType"]))
+		hype, hypeIndicator, activityStatus, lastMatchedAt = readZoneActivitySnapshot(f, time.Now().UTC())
+	}
 	return geoObjectResponseItem{
-		ID:            f.ID,
-		CanonicalPath: f.CanonicalPath,
-		Type:          f.Type,
-		FacilityKind:  facilityKind,
-		Label:         label,
-		Description:   strings.TrimSpace(f.Description),
-		Status:        strings.TrimSpace(f.Governance.Status),
-		Coordinates:   f.Coordinates,
-		RadiusKm:      f.RadiusKm,
-		InScope:       inScope,
-		CreatedAt:     f.CreatedAt,
-		UpdatedAt:     f.UpdatedAt,
+		ID:             f.ID,
+		CanonicalPath:  f.CanonicalPath,
+		Type:           f.Type,
+		FacilityKind:   facilityKind,
+		Label:          label,
+		Description:    strings.TrimSpace(f.Description),
+		Status:         strings.TrimSpace(f.Governance.Status),
+		Coordinates:    f.Coordinates,
+		RadiusKm:       f.RadiusKm,
+		ZoneType:       zoneType,
+		ZoneSubType:    zoneSubType,
+		Hype:           hype,
+		HypeIndicator:  hypeIndicator,
+		ActivityStatus: activityStatus,
+		LastMatchedAt:  lastMatchedAt,
+		InScope:        inScope,
+		CreatedAt:      f.CreatedAt,
+		UpdatedAt:      f.UpdatedAt,
 	}, true
+}
+
+func readZoneActivitySnapshot(f *models.HorizonFragment, now time.Time) (float64, int, string, *time.Time) {
+	if f == nil {
+		return 0, 0, "", nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	score := metricValue(f.State, "zone_hype_score")
+	hits1h := metricValue(f.State, "zone_hits_1h")
+	hits24h := metricValue(f.State, "zone_hits_24h")
+	lastMatchTS := metricValue(f.State, "zone_last_match_unix")
+
+	updatedAt := f.Metadata.LastUpdatedAt.UTC()
+	if updatedAt.IsZero() {
+		updatedAt = f.UpdatedAt.UTC()
+	}
+	if updatedAt.IsZero() {
+		updatedAt = now
+	}
+	deltaH := now.Sub(updatedAt).Hours()
+	if deltaH > 0 {
+		score = decayValue(score, deltaH, 8.0)
+		hits1h = decayValue(hits1h, deltaH, 1.0)
+		hits24h = decayValue(hits24h, deltaH, 24.0)
+		_ = hits1h
+		_ = hits24h
+	}
+	score = clamp(score, 0, 100)
+	status := zoneActivityStatus(score)
+	indicator := zoneHypeIndicator(score)
+	var lastMatchedAt *time.Time
+	if lastMatchTS > 0 {
+		t := time.Unix(int64(lastMatchTS), 0).UTC()
+		lastMatchedAt = &t
+	}
+	return score, indicator, status, lastMatchedAt
+}
+
+func metricValue(state map[string]models.MetricValue, key string) float64 {
+	if state == nil || strings.TrimSpace(key) == "" {
+		return 0
+	}
+	mv, ok := state[key]
+	if !ok {
+		return 0
+	}
+	return mv.Value
+}
+
+func decayValue(v, deltaHours, halfLifeHours float64) float64 {
+	if v <= 0 || deltaHours <= 0 || halfLifeHours <= 0 {
+		return v
+	}
+	return v * math.Exp(-math.Ln2*deltaHours/halfLifeHours)
+}
+
+func zoneActivityStatus(score float64) string {
+	switch {
+	case score >= 72:
+		return "hot"
+	case score >= 48:
+		return "active"
+	case score >= 26:
+		return "watch"
+	case score >= 10:
+		return "cooling"
+	default:
+		return "inactive"
+	}
+}
+
+func zoneHypeIndicator(score float64) int {
+	switch {
+	case score >= 80:
+		return 5
+	case score >= 60:
+		return 4
+	case score >= 40:
+		return 3
+	case score >= 20:
+		return 2
+	case score >= 8:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func asString(v interface{}) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	default:
+		return fmt.Sprintf("%v", t)
+	}
+}
+
+func clamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // ListFragments получает список HorizonFragment через Lens scope

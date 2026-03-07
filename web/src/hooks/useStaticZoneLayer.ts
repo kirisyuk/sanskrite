@@ -15,8 +15,18 @@ interface ZoneRenderProperties {
   tagsText: string;
   euActsText: string;
   color: string;
+  hype: number;
+  status: string;
+  fillOpacity: number;
+  lineOpacity: number;
+  lineWidth: number;
   minZoom?: number;
   maxZoom?: number;
+}
+
+interface ZoneActivitySnapshot {
+  hype?: number;
+  status?: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
 }
 
 const POPUP_STYLE_ID = 'static-zones-popup-style';
@@ -131,13 +141,35 @@ function normalizeZoneType(input: string): StaticZoneType {
   return 'industrial_cluster';
 }
 
-function buildZoneCollection(features: StaticZoneFeature[], theme: 'dark' | 'light'): GeoJSON.FeatureCollection {
+function statusTint(status: string, fallback: string): string {
+  switch (status) {
+    case 'hot': return '#ef4444';
+    case 'active': return '#f97316';
+    case 'watch': return '#f59e0b';
+    case 'cooling': return '#22c55e';
+    default: return fallback;
+  }
+}
+
+function buildZoneCollection(
+  features: StaticZoneFeature[],
+  theme: 'dark' | 'light',
+  activityById: Record<string, ZoneActivitySnapshot>,
+): GeoJSON.FeatureCollection {
   const mapped: GeoJSON.Feature[] = [];
   for (const feature of features) {
     if (!feature?.geometry || !feature?.properties) continue;
-    const color = zoneTypeColor(feature.properties.zoneType, theme);
+    const id = String(feature.id || feature.properties.name);
+    const activity = activityById[id] || {};
+    const hype = Math.max(0, Math.min(100, Number(activity.hype || 0)));
+    const status = String(activity.status || 'inactive');
+    const baseColor = zoneTypeColor(feature.properties.zoneType, theme);
+    const color = statusTint(status, baseColor);
+    const fillOpacity = Math.min(0.56, 0.12 + hype * 0.0042);
+    const lineOpacity = Math.min(0.95, 0.36 + hype * 0.0052);
+    const lineWidth = Math.min(3.2, 1.1 + hype * 0.018);
     const props: ZoneRenderProperties = {
-      id: String(feature.id || feature.properties.name),
+      id,
       name: String(feature.properties.name || 'Unnamed zone'),
       countryName: String(feature.properties.countryName || ''),
       zoneType: feature.properties.zoneType as StaticZoneType,
@@ -149,6 +181,11 @@ function buildZoneCollection(features: StaticZoneFeature[], theme: 'dark' | 'lig
         ? feature.properties.euActs.map((x) => String(x)).slice(0, 3).join(' | ')
         : '',
       color,
+      hype,
+      status,
+      fillOpacity,
+      lineOpacity,
+      lineWidth,
       minZoom: typeof feature.properties.minZoom === 'number' ? feature.properties.minZoom : undefined,
       maxZoom: typeof feature.properties.maxZoom === 'number' ? feature.properties.maxZoom : undefined,
     };
@@ -169,6 +206,7 @@ export function useStaticZoneLayer(
   features: StaticZoneFeature[],
   theme: 'dark' | 'light',
   visible: boolean,
+  activityById: Record<string, ZoneActivitySnapshot>,
 ) {
   const popupRef = useRef<maplibregl.Popup | null>(null);
 
@@ -176,7 +214,7 @@ export function useStaticZoneLayer(
     if (!map || !isReady) return;
     ensurePopupStyles();
 
-    const initial = buildZoneCollection([], theme);
+    const initial = buildZoneCollection([], theme, {});
     map.addSource(SRC, { type: 'geojson', data: initial });
     const beforeId = map.getLayer('geo-clusters') ? 'geo-clusters' : undefined;
 
@@ -189,7 +227,7 @@ export function useStaticZoneLayer(
       },
       paint: {
         'fill-color': ['get', 'color'],
-        'fill-opacity': 0.18,
+        'fill-opacity': ['coalesce', ['get', 'fillOpacity'], 0.18],
       },
     }, beforeId);
 
@@ -202,8 +240,8 @@ export function useStaticZoneLayer(
       },
       paint: {
         'line-color': ['get', 'color'],
-        'line-width': 1.35,
-        'line-opacity': 0.7,
+        'line-width': ['coalesce', ['get', 'lineWidth'], 1.35],
+        'line-opacity': ['coalesce', ['get', 'lineOpacity'], 0.7],
       },
     }, beforeId);
 
@@ -229,11 +267,18 @@ export function useStaticZoneLayer(
           tagsText: String(raw.tagsText || ''),
           euActsText: String(raw.euActsText || ''),
           color: String(raw.color || ''),
+          hype: Number(raw.hype || 0),
+          status: String(raw.status || 'inactive'),
+          fillOpacity: Number(raw.fillOpacity || 0.18),
+          lineOpacity: Number(raw.lineOpacity || 0.7),
+          lineWidth: Number(raw.lineWidth || 1.35),
         };
         const title = escapeHtml(props.name);
         const subtitle = escapeHtml(props.countryName);
         const zoneType = escapeHtml(formatZoneType(props.zoneType));
         const text = escapeHtml(toEnglishZoneNarrative(props));
+        const hype = `${Math.round(props.hype)}/100`;
+        const status = escapeHtml(props.status);
 
         popupRef.current?.remove();
         const popup = new maplibregl.Popup({
@@ -248,6 +293,7 @@ export function useStaticZoneLayer(
               `<div style="font-weight:700; margin-bottom:2px;">${title}</div>` +
               `<div style="font-size:11px; opacity:.8; margin-bottom:6px;">${subtitle}</div>` +
               `<div style="font-size:11px; margin-bottom:6px;">${text}</div>` +
+              `<div style="font-size:10px; margin-bottom:4px; opacity:.9;">Hype: ${hype} • Status: ${status}</div>` +
               `<div style="font-size:10px; opacity:.75;">${zoneType}</div>` +
             `</div>`
           )
@@ -282,10 +328,10 @@ export function useStaticZoneLayer(
     if (!map || !isReady) return;
     const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
     if (!src) return;
-    src.setData(buildZoneCollection(features, theme));
+    src.setData(buildZoneCollection(features, theme, activityById || {}));
 
     const visibility = visible ? 'visible' : 'none';
     if (map.getLayer(FILL_LAYER)) map.setLayoutProperty(FILL_LAYER, 'visibility', visibility);
     if (map.getLayer(OUTLINE_LAYER)) map.setLayoutProperty(OUTLINE_LAYER, 'visibility', visibility);
-  }, [map, isReady, features, theme, visible]);
+  }, [map, isReady, features, theme, visible, activityById]);
 }
