@@ -377,6 +377,26 @@ setup_infrastructure() {
     --quiet >/dev/null 2>&1 || true
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $scout_queue (maxAttempts=5)"
 
+  # 3.3 Ensure Cloud Tasks queue for per-source polling exists and is configured.
+  local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-etigram-source-poll}"
+  if gcloud tasks queues describe "$source_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $source_queue"
+  else
+    gcloud tasks queues create "$source_queue" --location="$REGION" --project="$PROJECT_ID" --quiet || true
+    echo -e "${GREEN}[infra] Created Cloud Tasks queue:${NC} $source_queue"
+  fi
+  gcloud tasks queues update "$source_queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=30s \
+    --max-backoff=1800s \
+    --max-retry-duration=7200s \
+    --max-dispatches-per-second=5 \
+    --max-concurrent-dispatches=25 \
+    --quiet >/dev/null 2>&1 || true
+  echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $source_queue (maxConcurrentDispatches=25)"
+
   # 3.4.1 Ensure Cloud Tasks queue for Profile refresh exists
   local profile_queue="${CLOUD_TASKS_PROFILE_QUEUE:-etigram-profile-refresh}"
   if gcloud tasks queues describe "$profile_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -1008,7 +1028,7 @@ setup_infrastructure() {
   echo -e "${BLUE}[infra] Ensuring Pub/Sub topics...${NC}"
   for topic in \
     discovery.status discovery.profile discovery.answer discovery.project \
-    document.process ground.refresh source.poll source.poll.due chat.ontology.process \
+    document.process ground.refresh chat.ontology.process \
     genai.stream genai.stream.error genai.stream.tool_call genai.stream.tool_result \
     artifact.generation.started artifact.section.generating artifact.section.chunk artifact.section.completed \
     artifact.assembly.started artifact.assembly.chunk artifact.assembly.completed \
@@ -1036,7 +1056,6 @@ setup_infrastructure() {
     "etigram.verified.streams"
     "etigram.horizon.events"
     "etigram.operations.events"
-    "source.poll"
   )
   for topic in "${agg_topics[@]}"; do
     if ! gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -1074,11 +1093,9 @@ setup_infrastructure() {
     fi
   done
 
-  # 4.5 Ensure worker subscriptions (source poller, grounding, document processor, chat ontology)
+  # 4.5 Ensure Pub/Sub worker subscriptions (grounding, document processor, chat ontology)
   echo -e "${BLUE}[infra] Ensuring Pub/Sub worker subscriptions...${NC}"
   local worker_subs=(
-    "source.poll:source.poll.worker"
-    "source.poll.due:source.poll.due.worker"
     "ground.refresh:ground.refresh.worker"
     "etigram.operations.events:etigram.operations.events.worker"
     "etigram.artifact.events:etigram.artifact.events.document-processor.worker"
@@ -1115,14 +1132,14 @@ setup_infrastructure() {
           echo -n "$ADMIN_TOKEN" | gcloud secrets versions add "$SECRET_ADMIN_JOB_TOKEN" --data-file=- >/dev/null 2>&1 || true
         fi
 
-        # 5a. Source poller job
+        # 5a. Source coordinator job
         JOB_NAME="etigram-source-poller"
-        # Create or update a job that calls admin publish-due with header X-Job-Token
+        # Create or update a job that calls admin source coordination with header X-Job-Token
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http "$JOB_NAME" \
             --location="$REGION" \
-            --schedule="*/5 * * * *" \
-            --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
+            --schedule="*/15 * * * *" \
+            --uri="$SVC_URL/api/v1/admin/sources/coordinate" \
             --http-method=POST \
             --oidc-service-account-email="$SA_BACKEND" \
             --oidc-token-audience="$SVC_URL" \
@@ -1132,8 +1149,8 @@ setup_infrastructure() {
         else
           gcloud scheduler jobs create http "$JOB_NAME" \
             --location="$REGION" \
-            --schedule="*/5 * * * *" \
-            --uri="$SVC_URL/api/v1/admin/sources/publish-due" \
+            --schedule="*/15 * * * *" \
+            --uri="$SVC_URL/api/v1/admin/sources/coordinate" \
             --http-method=POST \
             --oidc-service-account-email="$SA_BACKEND" \
             --oidc-token-audience="$SVC_URL" \
@@ -1141,7 +1158,7 @@ setup_infrastructure() {
             --attempt-deadline=60s \
             --quiet || true
         fi
-        echo -e "${GREEN}[infra] ✓${NC} Source poller scheduler job ensured"
+        echo -e "${GREEN}[infra] ✓${NC} Source coordinator scheduler job ensured"
         
         # 5b. Artifact scheduler job (checks for scheduled artifact updates)
         JOB_NAME="etigram-artifact-scheduler"
@@ -1373,6 +1390,23 @@ deploy_api() {
     --max-retry-duration=3600s \
     --max-dispatches-per-second=10 \
     --max-concurrent-dispatches=50 \
+    --quiet >/dev/null 2>&1 || true
+
+  # Ensure Cloud Tasks queue exists for per-source polling execution.
+  local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-etigram-source-poll}"
+  if ! gcloud tasks queues describe "$source_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $source_queue"
+    gcloud tasks queues create "$source_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+  fi
+  gcloud tasks queues update "$source_queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=30s \
+    --max-backoff=1800s \
+    --max-retry-duration=7200s \
+    --max-dispatches-per-second=5 \
+    --max-concurrent-dispatches=25 \
     --quiet >/dev/null 2>&1 || true
 
   # Ensure Cloud Tasks queue exists for risk pipeline as well.
@@ -1974,7 +2008,6 @@ elif [[ "$TARGET_SETUP_ETIGRAM_INFRA" -eq 1 ]]; then
     "etigram.verified.streams"
     "etigram.horizon.events"
     "etigram.operations.events"
-    "source.poll"
   )
   # 4.1 Ensure aggregated topics
   echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for etigram-ws...${NC}"

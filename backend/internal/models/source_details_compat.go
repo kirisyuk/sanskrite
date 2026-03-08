@@ -2,6 +2,18 @@ package models
 
 import "strings"
 
+const (
+	SourceScopeGlobalSystem = "global_system"
+	SourceScopePublic       = "public"
+	SourceScopeProject      = "project"
+
+	SourceProcessingModeHeuristic = "heuristic"
+	SourceProcessingModeCanvasLLM = "canvas_llm"
+
+	SourceOutputModeDocumentFeed = "document_feed"
+	SourceOutputModeOntologyFact = "ontology_fact"
+)
+
 func cloneStringPointer(in *string) *string {
 	if in == nil {
 		return nil
@@ -37,6 +49,50 @@ func normalizeFacetListCompat(values []string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+func normalizeSourceScopeValue(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case SourceScopeGlobalSystem:
+		return SourceScopeGlobalSystem
+	case SourceScopePublic:
+		return SourceScopePublic
+	case SourceScopeProject:
+		return SourceScopeProject
+	default:
+		return ""
+	}
+}
+
+func normalizeSourceProcessingModeValue(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case SourceProcessingModeHeuristic:
+		return SourceProcessingModeHeuristic
+	case SourceProcessingModeCanvasLLM:
+		return SourceProcessingModeCanvasLLM
+	default:
+		return ""
+	}
+}
+
+func normalizeSourceOutputModeValue(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case SourceOutputModeDocumentFeed:
+		return SourceOutputModeDocumentFeed
+	case SourceOutputModeOntologyFact:
+		return SourceOutputModeOntologyFact
+	default:
+		return ""
+	}
+}
+
+func isSystemCapableSourceKind(kind string) bool {
+	switch NormalizeSourceKind(strings.TrimSpace(kind)) {
+	case SourceKindRSS, SourceKindHorizonFeed, SourceKindWorldMonitorLegacy:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeSourceCategoryCompat(paths []string, primary *string) ([]string, *string) {
@@ -100,6 +156,27 @@ func (d *SourceDetails) NormalizeHorizonMonitorAliases() {
 	if d.HorizonMonitorRequiresAuth == nil {
 		d.HorizonMonitorRequiresAuth = cloneBoolPointer(d.WorldMonitorRequiresAuthLegacy)
 	}
+	if d.SourceScope != nil {
+		if v := normalizeSourceScopeValue(*d.SourceScope); v != "" {
+			d.SourceScope = &v
+		} else {
+			d.SourceScope = nil
+		}
+	}
+	if d.ProcessingMode != nil {
+		if v := normalizeSourceProcessingModeValue(*d.ProcessingMode); v != "" {
+			d.ProcessingMode = &v
+		} else {
+			d.ProcessingMode = nil
+		}
+	}
+	if d.OutputMode != nil {
+		if v := normalizeSourceOutputModeValue(*d.OutputMode); v != "" {
+			d.OutputMode = &v
+		} else {
+			d.OutputMode = nil
+		}
+	}
 }
 
 // SyncHorizonMonitorAliases mirrors canonical horizonMonitor* fields into legacy worldmonitor* aliases.
@@ -138,4 +215,75 @@ func (ds *DataSource) SyncCompatForWrite() {
 	ds.SourceCategoryPaths, ds.PrimarySourceCategoryPath = normalizeSourceCategoryCompat(ds.SourceCategoryPaths, ds.PrimarySourceCategoryPath)
 	ds.SourceGeoFacets = normalizeFacetListCompat(ds.SourceGeoFacets)
 	ds.SourceFormatFacets = normalizeFacetListCompat(ds.SourceFormatFacets)
+}
+
+// SourceScopeValue returns the effective routing scope, including legacy inference.
+func SourceScopeValue(ds *DataSource) string {
+	if ds == nil {
+		return ""
+	}
+	if ds.Details.SourceScope != nil {
+		if v := normalizeSourceScopeValue(*ds.Details.SourceScope); v != "" {
+			return v
+		}
+	}
+	if strings.TrimSpace(ds.TenantID) != "" {
+		return SourceScopeProject
+	}
+	if isSystemCapableSourceKind(ds.Kind) && ds.Details.DisableLLMProcessing != nil && *ds.Details.DisableLLMProcessing {
+		return SourceScopeGlobalSystem
+	}
+	return SourceScopePublic
+}
+
+// SourceProcessingModeValue returns the effective processing lane, including legacy inference.
+func SourceProcessingModeValue(ds *DataSource) string {
+	if ds == nil {
+		return ""
+	}
+	if ds.Details.ProcessingMode != nil {
+		if v := normalizeSourceProcessingModeValue(*ds.Details.ProcessingMode); v != "" {
+			return v
+		}
+	}
+	if ds.Details.DisableLLMProcessing != nil && *ds.Details.DisableLLMProcessing {
+		return SourceProcessingModeHeuristic
+	}
+	if SourceScopeValue(ds) == SourceScopeGlobalSystem {
+		return SourceProcessingModeCanvasLLM
+	}
+	return ""
+}
+
+func SourceOutputModeValue(ds *DataSource) string {
+	if ds == nil {
+		return ""
+	}
+	if ds.Details.OutputMode != nil {
+		if v := normalizeSourceOutputModeValue(*ds.Details.OutputMode); v != "" {
+			return v
+		}
+	}
+	if ds.Details.HorizonMonitorIngestMode != nil {
+		if v := normalizeSourceOutputModeValue(*ds.Details.HorizonMonitorIngestMode); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func IsGlobalSystemSource(ds *DataSource) bool {
+	return SourceScopeValue(ds) == SourceScopeGlobalSystem
+}
+
+func UsesHeuristicProcessing(ds *DataSource) bool {
+	return SourceProcessingModeValue(ds) == SourceProcessingModeHeuristic
+}
+
+func UsesCanvasLLMProcessing(ds *DataSource) bool {
+	return SourceProcessingModeValue(ds) == SourceProcessingModeCanvasLLM
+}
+
+func ShouldDisableLLMProcessing(ds *DataSource) bool {
+	return UsesHeuristicProcessing(ds)
 }

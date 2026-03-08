@@ -517,6 +517,11 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	if strings.HasSuffix(r.URL.Path, "/trace") {
+		h.GetFragmentTrace(w, r)
+		return
+	}
+
 	if strings.HasSuffix(r.URL.Path, "/metrics") {
 		h.GetFragmentMetrics(w, r)
 		return

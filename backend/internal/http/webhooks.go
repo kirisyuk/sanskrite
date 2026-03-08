@@ -32,8 +32,8 @@ func (h *WebhooksHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// PublishDueHandler triggers polling due selection (for Cloud Scheduler -> HTTP best practice)
-func (h *WebhooksHandler) PublishDueHandler(w http.ResponseWriter, r *http.Request) {
+// CoordinateSourcesHandler triggers source coordination (for Cloud Scheduler -> HTTP best practice)
+func (h *WebhooksHandler) CoordinateSourcesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodGet {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only GET/POST is allowed", nil)
 		return
@@ -42,8 +42,8 @@ func (h *WebhooksHandler) PublishDueHandler(w http.ResponseWriter, r *http.Reque
 		WriteInternalError(w, "Poller not configured")
 		return
 	}
-	if err := h.poller.PublishDue(r.Context()); err != nil {
-		h.logger.Printf("publish-due error: %v", err)
+	if err := h.poller.CoordinateDue(r.Context()); err != nil {
+		h.logger.Printf("coordinate-sources error: %v", err)
 		WriteInternalError(w, "Failed to publish due sources")
 		return
 	}

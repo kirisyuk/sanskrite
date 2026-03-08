@@ -164,6 +164,8 @@ func TestMergeExpectedSource_UpdatesDisableLLMProcessing(t *testing.T) {
 		Kind:        models.SourceKindRSS,
 		Status:      "active",
 		Details: models.SourceDetails{
+			SourceScope:          strPtr(models.SourceScopeGlobalSystem),
+			ProcessingMode:       strPtr(models.SourceProcessingModeHeuristic),
 			DisableLLMProcessing: boolPtr(true),
 		},
 	}
@@ -174,5 +176,11 @@ func TestMergeExpectedSource_UpdatesDisableLLMProcessing(t *testing.T) {
 	}
 	if dst.Details.DisableLLMProcessing == nil || !*dst.Details.DisableLLMProcessing {
 		t.Fatalf("expected disableLlmProcessing=true after merge, got %+v", dst.Details.DisableLLMProcessing)
+	}
+	if dst.Details.SourceScope == nil || *dst.Details.SourceScope != models.SourceScopeGlobalSystem {
+		t.Fatalf("expected sourceScope=%q after merge, got %+v", models.SourceScopeGlobalSystem, dst.Details.SourceScope)
+	}
+	if dst.Details.ProcessingMode == nil || *dst.Details.ProcessingMode != models.SourceProcessingModeHeuristic {
+		t.Fatalf("expected processingMode=%q after merge, got %+v", models.SourceProcessingModeHeuristic, dst.Details.ProcessingMode)
 	}
 }

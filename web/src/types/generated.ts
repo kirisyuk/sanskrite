@@ -247,6 +247,19 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
       [k: string]: string;
     };
     pollIntervalMinutes?: number;
+    sourceScope?: string;
+    processingMode?: string;
+    outputMode?: string;
+    cadencePolicy?: {
+      baseIntervalMinutes?: number;
+      minIntervalMinutes?: number;
+      maxIntervalMinutes?: number;
+      emptyBackoffMultiplier?: number;
+      errorBackoffMultiplier?: number;
+      freshnessBoostWindowMinutes?: number;
+      leaseDurationMinutes?: number;
+    };
+    disableLlmProcessing?: boolean;
   };
   lastPolledAt?: string;
   lastFoundAt?: string;

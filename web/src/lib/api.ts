@@ -2964,6 +2964,86 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  async getFragmentTrace(
+    fragmentId: string,
+    options?: {
+      direction?: 'incoming' | 'outgoing' | 'both';
+      edgeTypes?: string[];
+      includeFragments?: boolean;
+      includeUnindexed?: boolean;
+      includeCounts?: boolean;
+      includeCoordinates?: boolean;
+      hops?: number;
+      maxNeighbors?: number;
+      maxEdges?: number;
+      maxPerType?: number;
+      limit?: number;
+      semantic?: 'upstream' | 'downstream' | 'both';
+      lensId?: string;
+      signal?: AbortSignal;
+    },
+  ): Promise<{
+    fragmentId: string;
+    graph: {
+      edges: any[];
+      total: number;
+      fragments?: any[];
+      counts?: any;
+      coordinates?: Record<string, { lat: number; lon: number }>;
+    };
+    supplyChains?: {
+      chains: any[];
+      total: number;
+    };
+    propagation?: {
+      sourceFragmentId: string;
+      nodeIds: string[];
+      edges: Array<{
+        edgeId: string;
+        sourceFragmentId: string;
+        targetFragmentId: string;
+        edgeType?: string;
+        hopsFromSource: number;
+      }>;
+      paths: string[][];
+      maxHops: number;
+    };
+  }> {
+    try {
+      const params: any = {};
+      if (options?.direction) params.direction = options.direction;
+      if (Array.isArray(options?.edgeTypes) && options.edgeTypes.length > 0) {
+        params.edgeTypes = options.edgeTypes.join(',');
+      }
+      if (options?.includeFragments) params.includeFragments = '1';
+      if (options?.includeUnindexed) params.includeUnindexed = '1';
+      if (options?.includeCounts) params.includeCounts = '1';
+      if (options?.includeCoordinates) params.includeCoordinates = '1';
+      if (typeof options?.hops === 'number' && options.hops >= 1 && options.hops <= 5) params.hops = String(options.hops);
+      if (typeof options?.maxNeighbors === 'number' && options.maxNeighbors > 0) params.maxNeighbors = String(options.maxNeighbors);
+      if (typeof options?.maxEdges === 'number' && options.maxEdges > 0) params.maxEdges = String(options.maxEdges);
+      if (typeof options?.maxPerType === 'number' && options.maxPerType > 0) params.maxPerType = String(options.maxPerType);
+      if (typeof options?.limit === 'number' && options.limit > 0) params.limit = String(options.limit);
+      if (options?.semantic) params.semantic = options.semantic;
+
+      const headers: any = {};
+      if (options?.lensId) {
+        params.lensId = options.lensId;
+        headers['X-Lens-Id'] = options.lensId;
+      }
+
+      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/trace`, {
+        params,
+        headers,
+        signal: options?.signal,
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] getFragmentTrace error:`, error);
+      throw error;
+    }
+  }
+
   async getHorizonLensCockpit(lensId: string): Promise<{
     lens: {
       id: string;

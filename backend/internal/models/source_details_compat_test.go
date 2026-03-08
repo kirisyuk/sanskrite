@@ -70,3 +70,66 @@ func TestDataSourceSyncCompatForWriteNormalizesSourceCategories(t *testing.T) {
 		t.Fatalf("expected normalized format facets, got %v", ds.SourceFormatFacets)
 	}
 }
+
+func TestSourceDetailsNormalizeRoutingFields(t *testing.T) {
+	scope := " GLOBAL_SYSTEM "
+	mode := " HEURISTIC "
+	ds := &DataSource{
+		Details: SourceDetails{
+			SourceScope:    &scope,
+			ProcessingMode: &mode,
+		},
+	}
+
+	ds.SyncCompatForWrite()
+
+	if ds.Details.SourceScope == nil || *ds.Details.SourceScope != SourceScopeGlobalSystem {
+		t.Fatalf("expected normalized sourceScope=%q, got %+v", SourceScopeGlobalSystem, ds.Details.SourceScope)
+	}
+	if ds.Details.ProcessingMode == nil || *ds.Details.ProcessingMode != SourceProcessingModeHeuristic {
+		t.Fatalf("expected normalized processingMode=%q, got %+v", SourceProcessingModeHeuristic, ds.Details.ProcessingMode)
+	}
+}
+
+func TestSourceRouting_InferLegacyHeuristicSystemSource(t *testing.T) {
+	ds := &DataSource{
+		Kind:     SourceKindRSS,
+		TenantID: "",
+		Details: SourceDetails{
+			DisableLLMProcessing: cloneBoolPointer(boolPtr(true)),
+		},
+	}
+
+	if got := SourceScopeValue(ds); got != SourceScopeGlobalSystem {
+		t.Fatalf("expected inferred sourceScope=%q, got %q", SourceScopeGlobalSystem, got)
+	}
+	if got := SourceProcessingModeValue(ds); got != SourceProcessingModeHeuristic {
+		t.Fatalf("expected inferred processingMode=%q, got %q", SourceProcessingModeHeuristic, got)
+	}
+	if !ShouldDisableLLMProcessing(ds) {
+		t.Fatalf("expected heuristic source to disable LLM processing")
+	}
+}
+
+func TestSourceRouting_ExplicitCanvasModeWins(t *testing.T) {
+	scope := SourceScopeGlobalSystem
+	mode := SourceProcessingModeCanvasLLM
+	ds := &DataSource{
+		Kind:     SourceKindRSS,
+		TenantID: "",
+		Details: SourceDetails{
+			SourceScope:          &scope,
+			ProcessingMode:       &mode,
+			DisableLLMProcessing: boolPtr(true),
+		},
+	}
+
+	if got := SourceProcessingModeValue(ds); got != SourceProcessingModeCanvasLLM {
+		t.Fatalf("expected explicit processing mode to win, got %q", got)
+	}
+	if ShouldDisableLLMProcessing(ds) {
+		t.Fatalf("explicit canvas mode must not disable LLM processing")
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }

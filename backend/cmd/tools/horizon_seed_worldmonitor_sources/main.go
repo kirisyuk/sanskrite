@@ -25,7 +25,7 @@ import (
 const (
 	defaultFeedsPath               = "../temp-repos/worldmonitor/src/config/feeds.ts"
 	worldMonitorIngestModeOntology = "ontology_fact"
-	defaultPollMinutes             = 30
+	defaultPollMinutes             = 60
 	defaultDisableLLMProcessing    = true
 )
 
@@ -231,9 +231,21 @@ func main() {
 				HorizonMonitorCategory:     strPtr(hmCategory),
 				HorizonMonitorFeedType:     strPtr(feedType),
 				HorizonMonitorIngestMode:   strPtr(worldMonitorIngestModeOntology),
+				OutputMode:                 strPtr(models.SourceOutputModeOntologyFact),
 				HorizonMonitorRequiresAuth: boolPtr(false),
 				PollIntervalMinutes:        intPtr(*pollMinutes),
-				DisableLLMProcessing:       boolPtr(*disableLLMProcessing),
+				SourceScope:                strPtr(models.SourceScopeGlobalSystem),
+				ProcessingMode:             strPtr(models.SourceProcessingModeHeuristic),
+				CadencePolicy: &models.SourceCadencePolicy{
+					BaseIntervalMinutes:         intPtr(*pollMinutes),
+					MinIntervalMinutes:          intPtr(*pollMinutes),
+					MaxIntervalMinutes:          intPtr(360),
+					EmptyBackoffMultiplier:      floatPtr(2),
+					ErrorBackoffMultiplier:      floatPtr(2),
+					FreshnessBoostWindowMinutes: intPtr(120),
+					LeaseDurationMinutes:        intPtr(90),
+				},
+				DisableLLMProcessing: boolPtr(*disableLLMProcessing),
 			},
 		}
 		expected.SyncCompatForWrite()
@@ -551,12 +563,28 @@ func mergeExpectedSource(dst, expected *models.DataSource) bool {
 		dst.Details.HorizonMonitorIngestMode = cloneStringPtr(expected.Details.HorizonMonitorIngestMode)
 		changed = true
 	}
+	if !equalStringPtr(dst.Details.OutputMode, expected.Details.OutputMode) {
+		dst.Details.OutputMode = cloneStringPtr(expected.Details.OutputMode)
+		changed = true
+	}
 	if !equalBoolPtr(dst.Details.HorizonMonitorRequiresAuth, expected.Details.HorizonMonitorRequiresAuth) {
 		dst.Details.HorizonMonitorRequiresAuth = cloneBoolPtr(expected.Details.HorizonMonitorRequiresAuth)
 		changed = true
 	}
 	if !equalIntPtr(dst.Details.PollIntervalMinutes, expected.Details.PollIntervalMinutes) {
 		dst.Details.PollIntervalMinutes = cloneIntPtr(expected.Details.PollIntervalMinutes)
+		changed = true
+	}
+	if !equalStringPtr(dst.Details.SourceScope, expected.Details.SourceScope) {
+		dst.Details.SourceScope = cloneStringPtr(expected.Details.SourceScope)
+		changed = true
+	}
+	if !equalStringPtr(dst.Details.ProcessingMode, expected.Details.ProcessingMode) {
+		dst.Details.ProcessingMode = cloneStringPtr(expected.Details.ProcessingMode)
+		changed = true
+	}
+	if !equalCadencePolicy(dst.Details.CadencePolicy, expected.Details.CadencePolicy) {
+		dst.Details.CadencePolicy = cloneCadencePolicy(expected.Details.CadencePolicy)
 		changed = true
 	}
 	if !equalBoolPtr(dst.Details.DisableLLMProcessing, expected.Details.DisableLLMProcessing) {
@@ -710,6 +738,32 @@ func equalIntPtr(a, b *int) bool {
 	return *a == *b
 }
 
+func equalFloatPtr(a, b *float64) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func equalCadencePolicy(a, b *models.SourceCadencePolicy) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return equalIntPtr(a.BaseIntervalMinutes, b.BaseIntervalMinutes) &&
+		equalIntPtr(a.MinIntervalMinutes, b.MinIntervalMinutes) &&
+		equalIntPtr(a.MaxIntervalMinutes, b.MaxIntervalMinutes) &&
+		equalFloatPtr(a.EmptyBackoffMultiplier, b.EmptyBackoffMultiplier) &&
+		equalFloatPtr(a.ErrorBackoffMultiplier, b.ErrorBackoffMultiplier) &&
+		equalIntPtr(a.FreshnessBoostWindowMinutes, b.FreshnessBoostWindowMinutes) &&
+		equalIntPtr(a.LeaseDurationMinutes, b.LeaseDurationMinutes)
+}
+
 func cloneStringPtr(in *string) *string {
 	if in == nil {
 		return nil
@@ -734,6 +788,30 @@ func cloneIntPtr(in *int) *int {
 	return &v
 }
 
-func strPtr(v string) *string { return &v }
-func boolPtr(v bool) *bool    { return &v }
-func intPtr(v int) *int       { return &v }
+func cloneFloatPtr(in *float64) *float64 {
+	if in == nil {
+		return nil
+	}
+	v := *in
+	return &v
+}
+
+func cloneCadencePolicy(in *models.SourceCadencePolicy) *models.SourceCadencePolicy {
+	if in == nil {
+		return nil
+	}
+	return &models.SourceCadencePolicy{
+		BaseIntervalMinutes:         cloneIntPtr(in.BaseIntervalMinutes),
+		MinIntervalMinutes:          cloneIntPtr(in.MinIntervalMinutes),
+		MaxIntervalMinutes:          cloneIntPtr(in.MaxIntervalMinutes),
+		EmptyBackoffMultiplier:      cloneFloatPtr(in.EmptyBackoffMultiplier),
+		ErrorBackoffMultiplier:      cloneFloatPtr(in.ErrorBackoffMultiplier),
+		FreshnessBoostWindowMinutes: cloneIntPtr(in.FreshnessBoostWindowMinutes),
+		LeaseDurationMinutes:        cloneIntPtr(in.LeaseDurationMinutes),
+	}
+}
+
+func strPtr(v string) *string     { return &v }
+func boolPtr(v bool) *bool        { return &v }
+func intPtr(v int) *int           { return &v }
+func floatPtr(v float64) *float64 { return &v }

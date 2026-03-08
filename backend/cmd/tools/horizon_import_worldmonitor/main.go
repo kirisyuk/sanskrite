@@ -228,17 +228,20 @@ const (
 )
 
 type wmSourceSpec struct {
-	DisplayName  string
-	URL          string
-	Kind         string
-	Status       string
-	Category     string
-	FeedType     string
-	IngestMode   string
-	SignalType   string
-	RequiresAuth bool
-	PollMinutes  int
-	DisableLLM   *bool
+	DisplayName    string
+	URL            string
+	Kind           string
+	Status         string
+	Category       string
+	FeedType       string
+	IngestMode     string
+	OutputMode     string
+	SignalType     string
+	SourceScope    string
+	ProcessingMode string
+	RequiresAuth   bool
+	PollMinutes    int
+	DisableLLM     *bool
 }
 
 type importStats struct {
@@ -937,15 +940,18 @@ func (i *importer) importIntelSources(ctx context.Context, sources []wmIntelSour
 			continue
 		}
 		specs = append(specs, wmSourceSpec{
-			DisplayName: fmt.Sprintf("WM: %s", strings.TrimSpace(src.Name)),
-			URL:         sourceURL,
-			Kind:        i.sourceKind,
-			Status:      firstNonEmpty(i.sourceStatus, "active"),
-			Category:    strings.TrimSpace(src.Type),
-			FeedType:    "intel_rss",
-			IngestMode:  wmIngestModeDocumentFeed,
-			PollMinutes: 30,
-			DisableLLM:  boolPtr(true),
+			DisplayName:    fmt.Sprintf("WM: %s", strings.TrimSpace(src.Name)),
+			URL:            sourceURL,
+			Kind:           i.sourceKind,
+			Status:         firstNonEmpty(i.sourceStatus, "active"),
+			Category:       strings.TrimSpace(src.Type),
+			FeedType:       "intel_rss",
+			IngestMode:     wmIngestModeOntologyFact,
+			OutputMode:     models.SourceOutputModeOntologyFact,
+			SourceScope:    models.SourceScopeGlobalSystem,
+			ProcessingMode: models.SourceProcessingModeHeuristic,
+			PollMinutes:    60,
+			DisableLLM:     boolPtr(true),
 		})
 	}
 	return i.importSourceSpecs(ctx, specs)
@@ -1587,7 +1593,35 @@ func (i *importer) upsertSourceSpec(ctx context.Context, spec wmSourceSpec) erro
 	}
 	pollMinutes := spec.PollMinutes
 	if pollMinutes <= 0 {
-		pollMinutes = 30
+		pollMinutes = 60
+	}
+	sourceScope := strings.TrimSpace(spec.SourceScope)
+	if sourceScope == "" {
+		if strings.TrimSpace(i.tenantID) == "" {
+			sourceScope = models.SourceScopeGlobalSystem
+		} else {
+			sourceScope = models.SourceScopeProject
+		}
+	}
+	processingMode := strings.TrimSpace(spec.ProcessingMode)
+	if processingMode == "" {
+		processingMode = models.SourceProcessingModeHeuristic
+	}
+	outputMode := strings.TrimSpace(spec.OutputMode)
+	if outputMode == "" {
+		outputMode = strings.TrimSpace(spec.IngestMode)
+	}
+	if processingMode == models.SourceProcessingModeHeuristic && pollMinutes < 60 {
+		pollMinutes = 60
+	}
+	cadencePolicy := &models.SourceCadencePolicy{
+		BaseIntervalMinutes:         intPtr(pollMinutes),
+		MinIntervalMinutes:          intPtr(pollMinutes),
+		MaxIntervalMinutes:          intPtr(360),
+		EmptyBackoffMultiplier:      floatPtr(2),
+		ErrorBackoffMultiplier:      floatPtr(2),
+		FreshnessBoostWindowMinutes: intPtr(120),
+		LeaseDurationMinutes:        intPtr(90),
 	}
 
 	existing, err := i.dsRepo.FindByCanonicalSource(ctx, i.tenantID, sourceURL)
@@ -1644,6 +1678,12 @@ func (i *importer) upsertSourceSpec(ctx context.Context, spec wmSourceSpec) erro
 				changed = true
 			}
 		}
+		if outputMode != "" {
+			if existing.Details.OutputMode == nil || strings.TrimSpace(*existing.Details.OutputMode) != outputMode {
+				existing.Details.OutputMode = strPtr(outputMode)
+				changed = true
+			}
+		}
 		if strings.TrimSpace(spec.SignalType) != "" {
 			if existing.Details.HorizonMonitorSignalType == nil || strings.TrimSpace(*existing.Details.HorizonMonitorSignalType) != strings.TrimSpace(spec.SignalType) {
 				existing.Details.HorizonMonitorSignalType = strPtr(spec.SignalType)
@@ -1656,6 +1696,18 @@ func (i *importer) upsertSourceSpec(ctx context.Context, spec wmSourceSpec) erro
 		}
 		if existing.Details.PollIntervalMinutes == nil || *existing.Details.PollIntervalMinutes != pollMinutes {
 			existing.Details.PollIntervalMinutes = intPtr(pollMinutes)
+			changed = true
+		}
+		if !equalCadencePolicy(existing.Details.CadencePolicy, cadencePolicy) {
+			existing.Details.CadencePolicy = cadencePolicy
+			changed = true
+		}
+		if existing.Details.SourceScope == nil || strings.TrimSpace(*existing.Details.SourceScope) != sourceScope {
+			existing.Details.SourceScope = strPtr(sourceScope)
+			changed = true
+		}
+		if existing.Details.ProcessingMode == nil || strings.TrimSpace(*existing.Details.ProcessingMode) != processingMode {
+			existing.Details.ProcessingMode = strPtr(processingMode)
 			changed = true
 		}
 		if spec.DisableLLM != nil {
@@ -1691,9 +1743,13 @@ func (i *importer) upsertSourceSpec(ctx context.Context, spec wmSourceSpec) erro
 			HorizonMonitorCategory:     strPtr(spec.Category),
 			HorizonMonitorFeedType:     strPtr(spec.FeedType),
 			HorizonMonitorIngestMode:   strPtr(spec.IngestMode),
+			OutputMode:                 strPtr(outputMode),
 			HorizonMonitorSignalType:   strPtr(spec.SignalType),
 			HorizonMonitorRequiresAuth: boolPtr(spec.RequiresAuth),
 			PollIntervalMinutes:        intPtr(pollMinutes),
+			SourceScope:                strPtr(sourceScope),
+			ProcessingMode:             strPtr(processingMode),
+			CadencePolicy:              cadencePolicy,
 		},
 	}
 	if spec.DisableLLM != nil {
@@ -2608,4 +2664,40 @@ func floatPtr(v float64) *float64 {
 		return nil
 	}
 	return &v
+}
+
+func equalCadencePolicy(a, b *models.SourceCadencePolicy) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return equalIntPtr(a.BaseIntervalMinutes, b.BaseIntervalMinutes) &&
+		equalIntPtr(a.MinIntervalMinutes, b.MinIntervalMinutes) &&
+		equalIntPtr(a.MaxIntervalMinutes, b.MaxIntervalMinutes) &&
+		equalFloatPtr(a.EmptyBackoffMultiplier, b.EmptyBackoffMultiplier) &&
+		equalFloatPtr(a.ErrorBackoffMultiplier, b.ErrorBackoffMultiplier) &&
+		equalIntPtr(a.FreshnessBoostWindowMinutes, b.FreshnessBoostWindowMinutes) &&
+		equalIntPtr(a.LeaseDurationMinutes, b.LeaseDurationMinutes)
+}
+
+func equalIntPtr(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func equalFloatPtr(a, b *float64) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }

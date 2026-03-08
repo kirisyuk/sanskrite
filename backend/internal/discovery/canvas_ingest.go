@@ -77,7 +77,23 @@ func (c *CanvasIngester) Ingest(ctx context.Context, tenantID string) (docsFetch
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	if len(sources) == 0 {
+	eligible := make([]*models.DataSource, 0, len(sources))
+	for _, ds := range sources {
+		if !models.IsGlobalSystemSource(ds) {
+			if c.logger != nil {
+				c.logger.Printf("canvas: skip source=%s reason=not_global_system scope=%s", ds.ID, models.SourceScopeValue(ds))
+			}
+			continue
+		}
+		if !models.UsesCanvasLLMProcessing(ds) {
+			if c.logger != nil {
+				c.logger.Printf("canvas: skip source=%s reason=processing_mode_%s", ds.ID, models.SourceProcessingModeValue(ds))
+			}
+			continue
+		}
+		eligible = append(eligible, ds)
+	}
+	if len(eligible) == 0 {
 		return 0, 0, 0, nil
 	}
 
@@ -87,9 +103,9 @@ func (c *CanvasIngester) Ingest(ctx context.Context, tenantID string) (docsFetch
 		docs     []providers.NormalizedDocument
 		err      error
 	}
-	results := make([]fetchResult, len(sources))
+	results := make([]fetchResult, len(eligible))
 	g, gctx := errgroup.WithContext(ctx)
-	for i, ds := range sources {
+	for i, ds := range eligible {
 		i, ds := i, ds
 		g.Go(func() error {
 			var docs []providers.NormalizedDocument

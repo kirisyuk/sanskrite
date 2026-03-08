@@ -123,6 +123,45 @@
         },
         "pollIntervalMinutes": {
           "type": "integer"
+        },
+        "sourceScope": {
+          "type": "string"
+        },
+        "processingMode": {
+          "type": "string"
+        },
+        "outputMode": {
+          "type": "string"
+        },
+        "cadencePolicy": {
+          "properties": {
+            "baseIntervalMinutes": {
+              "type": "integer"
+            },
+            "minIntervalMinutes": {
+              "type": "integer"
+            },
+            "maxIntervalMinutes": {
+              "type": "integer"
+            },
+            "emptyBackoffMultiplier": {
+              "type": "number"
+            },
+            "errorBackoffMultiplier": {
+              "type": "number"
+            },
+            "freshnessBoostWindowMinutes": {
+              "type": "integer"
+            },
+            "leaseDurationMinutes": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false,
+          "type": "object"
+        },
+        "disableLlmProcessing": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,

@@ -823,8 +823,8 @@ func (h *DiscoveryHandler) ListProjectSources(w http.ResponseWriter, r *http.Req
 	WriteJSON(w, http.StatusOK, out)
 }
 
-// PublishDue exposes POST /api/v1/admin/sources/publish-due (secured via auth middleware)
-func (h *DiscoveryHandler) PublishDue(w http.ResponseWriter, r *http.Request) {
+// CoordinateSources exposes POST /api/v1/admin/sources/coordinate (secured via auth middleware).
+func (h *DiscoveryHandler) CoordinateSources(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Only POST is allowed", nil)
 		return
@@ -835,12 +835,12 @@ func (h *DiscoveryHandler) PublishDue(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	if err := h.sourcePoller.PublishDue(ctx); err != nil {
-		h.logger.Printf("PublishDue error: %v", err)
-		WriteInternalError(w, fmt.Sprintf("Failed to publish due sources: %v", err))
+	if err := h.sourcePoller.CoordinateDue(ctx); err != nil {
+		h.logger.Printf("CoordinateSources error: %v", err)
+		WriteInternalError(w, fmt.Sprintf("Failed to coordinate due sources: %v", err))
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "Due sources published"})
+	WriteJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "Due sources coordinated"})
 }
 
 // ListProjectInteractions handles GET /api/v1/projects/{id}/interactions

@@ -124,6 +124,9 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
         { label: '2 hops', value: String(traceSummary.hopCounts[2]) },
         { label: '3 hops', value: String(traceSummary.hopCounts[3]) },
         { label: 'Branches', value: String(traceSummary.branchCount) },
+        { label: 'Paths', value: String(traceSummary.pathArtifactCount) },
+        { label: 'Legs', value: String(traceSummary.pathLegCount) },
+        { label: 'Signals', value: String(traceSummary.propagationEdgeCount) },
       ]
     : [];
 
@@ -358,6 +361,16 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                     {traceSummary.topFamilies.length > 0 && (
                       <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
                         Dominant semantics: {traceSummary.topFamilies.map((item) => `${formatFamilyLabel(item.family)} (${item.count})`).join(' . ')}
+                      </div>
+                    )}
+                    {(traceSummary.pathArtifactCount > 0 || traceSummary.propagationNodeCount > 0) && (
+                      <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+                        {traceSummary.pathArtifactCount > 0
+                          ? `Related paths ${traceSummary.pathArtifactCount}, mapped legs ${traceSummary.pathLegCount}. `
+                          : ''}
+                        {traceSummary.propagationNodeCount > 0
+                          ? `Propagation preview reaches ${traceSummary.propagationNodeCount} node(s) across ${traceSummary.propagationEdgeCount} link(s).`
+                          : ''}
                       </div>
                     )}
                     {traceSummary.countryHighlights.length > 0 && (

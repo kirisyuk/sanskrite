@@ -39,7 +39,7 @@ func main() {
 		*apiURL = (*apiURL)[:len(*apiURL)-1]
 	}
 
-	url := *apiURL + "/api/v1/admin/sources/publish-due"
+	url := *apiURL + "/api/v1/admin/sources/coordinate"
 
 	fmt.Printf("Testing poller endpoint: %s\n", url)
 	fmt.Printf("Time: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))

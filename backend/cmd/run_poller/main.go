@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
-	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
@@ -40,27 +40,48 @@ func main() {
 	// Initialize repositories
 	sourcesRepo := repo.NewDataSourcesRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
-
-	// Create publisher for Pub/Sub
-	publisher, err := realtime.NewPublisher(ctx, *projectID)
-	if err != nil {
-		log.Fatalf("Failed to create Publisher: %v", err)
-	}
+	sourceRuntimeRepo := repo.NewSourceRuntimeStatesRepository(fsClient.Client())
 
 	// Create orchestrator (minimal setup for poller)
-	orchestrator := discovery.NewOrchestrator(nil, nil, nil, nil, sourcesRepo, publisher, logger)
+	orchestrator := discovery.NewOrchestrator(nil, nil, nil, nil, sourcesRepo, nil, logger)
 	orchestrator = orchestrator.WithSourceProjects(sourceProjectsRepo)
 
-	// Create poller (it will use orchestrator's publisher)
-	psClient := publisher.Client()
-	poller := discovery.NewSourcePoller(psClient, "source.poll.due", orchestrator, logger)
+	poller := discovery.NewSourcePoller(orchestrator, logger).WithRuntimeStates(sourceRuntimeRepo)
+	baseURL := strings.TrimSpace(os.Getenv("CLOUD_TASKS_TARGET_BASE_URL"))
+	saEmail := strings.TrimSpace(os.Getenv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT"))
+	if baseURL == "" || saEmail == "" {
+		log.Fatal("CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT are required for source coordination")
+	}
+	queue := strings.TrimSpace(os.Getenv("CLOUD_TASKS_SOURCE_QUEUE"))
+	if queue == "" {
+		queue = "etigram-source-poll"
+	}
+	location := strings.TrimSpace(os.Getenv("CLOUD_TASKS_LOCATION"))
+	if location == "" {
+		location = "us-central1"
+	}
+	aud := strings.TrimSpace(os.Getenv("CLOUD_TASKS_OIDC_AUDIENCE"))
+	dispatcher, err := discovery.NewSourceCloudTasksDispatcher(
+		ctx,
+		*projectID,
+		location,
+		queue,
+		strings.TrimRight(baseURL, "/")+"/api/v1/internal/tasks/sources/poll",
+		saEmail,
+		aud,
+	)
+	if err != nil {
+		log.Fatalf("Failed to create source Cloud Tasks dispatcher: %v", err)
+	}
+	defer dispatcher.Close()
+	poller = poller.WithTaskDispatcher(dispatcher)
 
-	fmt.Printf("Running PublishDue at %s...\n\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Printf("Running source coordination at %s...\n\n", time.Now().Format("2006-01-02 15:04:05"))
 
-	if err := poller.PublishDue(ctx); err != nil {
-		log.Fatalf("PublishDue failed: %v", err)
+	if err := poller.CoordinateDue(ctx); err != nil {
+		log.Fatalf("CoordinateDue failed: %v", err)
 	}
 
-	fmt.Printf("\n✅ PublishDue completed successfully!\n")
-	fmt.Printf("Check Pub/Sub topic 'source.poll.due' for published messages.\n")
+	fmt.Printf("\n✅ Source coordination completed successfully!\n")
+	fmt.Printf("Check Cloud Tasks queue %q for enqueued source execution tasks.\n", queue)
 }

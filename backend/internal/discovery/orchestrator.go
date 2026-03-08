@@ -473,48 +473,7 @@ func (o *Orchestrator) IngestTelegram(ctx context.Context, tenantID, sourceID, h
 // foundNew indicates if new content was found in the current poll.
 // Same logic as in poller_worker.go
 func (o *Orchestrator) cadenceToDuration(ds *models.DataSource, foundNew bool) time.Duration {
-	if ds != nil && ds.Details.PollIntervalMinutes != nil && *ds.Details.PollIntervalMinutes > 0 {
-		return time.Duration(*ds.Details.PollIntervalMinutes) * time.Minute
-	}
-	// horizon monitor feeds are intentionally conservative by default (product requirement).
-	if ds != nil && models.IsHorizonMonitorFeedKind(ds.Kind) {
-		return 30 * time.Minute
-	}
-	// Default 30 minutes
-	def := 30 * time.Minute
-
-	// If ds is nil, return default
-	if ds == nil {
-		return def
-	}
-
-	// If new content was found in current poll, use shorter interval
-	if foundNew {
-		return 10 * time.Minute
-	}
-
-	// Try to infer from profile attached to this datasource via orchestrator.profiles
-	// Minimal implementation: look up profile and parse behaviorPatterns.publishingCadence keywords
-	// Since poller doesn't have direct access to profiles repo, fall back to LastFoundAt heuristics
-	if ds.LastFoundAt != nil {
-		age := time.Since(*ds.LastFoundAt)
-		switch {
-		case age < 15*time.Minute:
-			// Recently found content - check more frequently
-			return 10 * time.Minute
-		case age < 2*time.Hour:
-			// Found content within last 2 hours - moderate frequency
-			return 30 * time.Minute
-		case age < 24*time.Hour:
-			// Found content within last day - check less frequently
-			return 2 * time.Hour
-		default:
-			// No new content for more than 24 hours - check rarely
-			return 6 * time.Hour
-		}
-	}
-	// No LastFoundAt set - use default (likely first poll or no content ever found)
-	return def
+	return effectivePollCadence(ds, foundNew)
 }
 
 // IngestProjectSources triggers ingest for all sources linked to a project (legacy linkage for now)

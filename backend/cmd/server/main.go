@@ -470,6 +470,9 @@ func main() {
 
 	// Wire orchestrator (AITaskExecutor + ModelManager + Vertex service)
 	modelManager := ai.NewAIModelManager()
+	var sourcePoller *discovery.SourcePoller
+	var ingestHistoryRepo *repo.SourceIngestHistoryRepository
+	var sourceRuntimeRepo *repo.SourceRuntimeStatesRepository
 
 	// For brevity, only Vertex provider is wired here; additional providers can be added
 	{
@@ -625,7 +628,12 @@ func main() {
 				log.Printf("invalid ARTIFACT_SCHEDULER_INTERVAL: %s, using default 1h", checkInterval)
 			}
 		}
+		// Wire ingest history repository EARLY to ensure poller has access to it
+		ingestHistoryRepo = repo.NewSourceIngestHistoryRepository(fsClient.Client())
+		sourceRuntimeRepo = repo.NewSourceRuntimeStatesRepository(fsClient.Client())
+
 		orchestrator := discovery.NewOrchestrator(exec, wc, tgClient, s.projs, s.dsrcs, pub, logger).WithProfiles(s.sprofs).WithSourceProjects(sourceProjectsRepo)
+		sourcePoller = discovery.NewSourcePoller(orchestrator, logger).WithRuntimeStates(sourceRuntimeRepo)
 		// Provider registry
 		reg := prov.NewRegistry()
 		reg.Register(prov.NewRSSProvider())
@@ -634,33 +642,8 @@ func main() {
 		_ = emb // wired into orchestrator when ingest endpoints are added
 		orchestrator = orchestrator.WithDocumentIngest(reg, docsRepo).WithEmbedding(emb)
 
-		// Wire ingest history repository EARLY to ensure poller has access to it
-		ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
 		orchestrator = orchestrator.WithIngestHistory(ingestHistoryRepo)
 		// We also wire it to sourcesHandler later, but orchestrator needs it now
-
-		// Start SourcePoller worker (listens for source.poll events)
-		// Always enable if we have pubsub and orchestrator
-		if pub != nil {
-			psClient := pub.Client()
-			// Ensure topic exists
-			topicName := "source.poll"
-			topic := psClient.Topic(topicName)
-			if exists, err := topic.Exists(ctx); err == nil && !exists {
-				_, _ = psClient.CreateTopic(ctx, topicName)
-			}
-			// Start worker
-			sourcePoller := discovery.NewSourcePoller(psClient, topicName, orchestrator, logger)
-			go func() {
-				// Use background context to survive request context cancellation
-				// But respect server shutdown via a separate context if needed
-				// For now, just run forever
-				if err := sourcePoller.Start(context.Background()); err != nil {
-					logger.Printf("SourcePoller worker failed: %v", err)
-				}
-			}()
-			logger.Printf("SourcePoller worker started on topic %s", topicName)
-		}
 
 		// Initialize Vertex AI Search client early (needed for GenAI CoreDocs, DiscoveryHandler, Horizon fragment sync, QA alternatives).
 		// Same config as horizon fragment indexing: VERTEX_SEARCH_DATA_STORE_ID or VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID / VERTEX_SEARCH_HORIZON_DATA_STORE_ID.
@@ -821,6 +804,7 @@ func main() {
 		}()
 
 		s.discoveryHandler = s.discoveryHandler.WithDocuments(docsRepo).WithSearchEvents(searchEventsRepo).WithSourceProjects(sourceProjectsRepo).WithOrchestrator(orchestrator)
+		s.discoveryHandler = s.discoveryHandler.WithSourcePoller(sourcePoller)
 		if vertexSearchClient != nil {
 			s.discoveryHandler = s.discoveryHandler.WithVertexSearch(vertexSearchClient)
 		}
@@ -879,18 +863,6 @@ func main() {
 				}
 			}()
 
-			// Start source poller worker (background)
-			poller := discovery.NewSourcePoller(psClient, string(realtime.EventSourcePoll), orchestrator, logger)
-			// Wire poller to discovery handler for HTTP endpoint
-			s.discoveryHandler = s.discoveryHandler.WithSourcePoller(poller)
-			go func() {
-				ctxP, cancelP := context.WithCancel(ctx)
-				defer cancelP()
-				if err := poller.Start(ctxP); err != nil {
-					log.Printf("source poller stopped: %v", err)
-				}
-			}()
-
 			// Periodic publisher loop (fallback if Cloud Scheduler not used)
 			// Can be disabled via DISABLE_POLLER_TICKER=true when using Cloud Scheduler
 			if os.Getenv("DISABLE_POLLER_TICKER") != "true" {
@@ -915,7 +887,7 @@ func main() {
 						case <-ctxPP.Done():
 							return
 						case <-t.C:
-							_ = poller.PublishDue(ctxPP)
+							_ = sourcePoller.CoordinateDue(ctxPP)
 						}
 					}
 				}()
@@ -952,7 +924,7 @@ func main() {
 			}
 
 			// Wire HTTP handler to allow Cloud Scheduler HTTP trigger
-			webhooksHandler = webhooksHandler.WithPoller(poller)
+			webhooksHandler = webhooksHandler.WithPoller(sourcePoller)
 			// Attach publisher to GenAI handler for streaming events via WithPublisher
 			genaiHandler = genaiHandler.WithPublisher(pub)
 		}
@@ -1470,6 +1442,8 @@ func main() {
 			}
 		}
 
+		var sourceTasksDispatcher *discovery.SourceCloudTasksDispatcher
+
 		// Cloud Tasks dispatcher for Profile refresh (managed queue + autoscaling + retries).
 		var profileTasksDispatcher *horizontasks.ProfileCloudTasksDispatcher
 		{
@@ -1495,6 +1469,35 @@ func main() {
 					logger.Printf("WARNING: Cloud Tasks (Profile) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
 				}
 			}
+
+			// Cloud Tasks dispatcher for per-source polling execution.
+			{
+				enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_SOURCE", "1"))
+				if enabled == "1" || strings.EqualFold(enabled, "true") {
+					location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
+					queue := strings.TrimSpace(getEnv("CLOUD_TASKS_SOURCE_QUEUE", "etigram-source-poll"))
+					baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
+					saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+					aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+					if baseURL != "" && saEmail != "" {
+						targetURL := strings.TrimRight(baseURL, "/") + "/api/v1/internal/tasks/sources/poll"
+						if aud == "" {
+							aud = strings.TrimRight(baseURL, "/")
+						}
+						if d, err := discovery.NewSourceCloudTasksDispatcher(ctx, projectID, location, queue, targetURL, saEmail, aud); err == nil {
+							sourceTasksDispatcher = d
+							logger.Printf("Cloud Tasks (Source) enabled: queue=%s location=%s target=%s", queue, location, targetURL)
+						} else {
+							logger.Printf("WARNING: Cloud Tasks (Source) disabled due to init error: %v", err)
+						}
+					} else {
+						logger.Printf("WARNING: Cloud Tasks (Source) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
+					}
+				}
+			}
+		}
+		if sourcePoller != nil && sourceTasksDispatcher != nil {
+			sourcePoller.WithTaskDispatcher(sourceTasksDispatcher)
 		}
 
 		// Configure dedicated GCS storage and Vertex AI Search sync for Horizon Fragments
@@ -2845,6 +2848,62 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
+	// Cloud Tasks -> per-source polling execution.
+	// Secured via OIDC token issued for the configured service account.
+	mux.HandleFunc("/api/v1/internal/tasks/sources/poll", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if sourcePoller == nil {
+			http.Error(w, "source poller not initialized", http.StatusServiceUnavailable)
+			return
+		}
+
+		authz := strings.TrimSpace(r.Header.Get("Authorization"))
+		const bearer = "Bearer "
+		if !strings.HasPrefix(authz, bearer) || len(authz) <= len(bearer) {
+			http.Error(w, "missing Authorization bearer token", http.StatusUnauthorized)
+			return
+		}
+		rawTok := strings.TrimSpace(authz[len(bearer):])
+		aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+		if aud == "" {
+			aud = "https://" + r.Host
+		}
+		payload, err := idtoken.Validate(r.Context(), rawTok, aud)
+		if err != nil {
+			http.Error(w, "invalid cloud tasks token", http.StatusUnauthorized)
+			return
+		}
+		expectedSA := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+		if expectedSA != "" {
+			if email, ok := payload.Claims["email"].(string); !ok || !strings.EqualFold(strings.TrimSpace(email), expectedSA) {
+				http.Error(w, "unexpected token identity", http.StatusForbidden)
+				return
+			}
+		}
+
+		var body discovery.SourceTaskPayload
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(body.SourceID) == "" {
+			http.Error(w, "sourceId is required", http.StatusBadRequest)
+			return
+		}
+
+		execCtx, cancel := context.WithTimeout(r.Context(), 45*time.Minute)
+		defer cancel()
+		if err := sourcePoller.RunSourcePoll(execCtx, body); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
 	// Cloud Tasks -> Canvas ingest (system sources → batch LLM → ontology facts → 12-axis signals).
 	// Secured via OIDC token issued for the configured service account.
 	mux.HandleFunc("/api/v1/internal/tasks/canvas/ingest", func(w http.ResponseWriter, r *http.Request) {
@@ -3648,7 +3707,7 @@ func main() {
 		mux.Handle("/api/v1/public/documents/", http.HandlerFunc(verifiedHandler.GetPublicDocument))
 	}
 
-	// Admin: publish-due (handled below with jobAuth middleware for Cloud Scheduler)
+	// Admin: source coordination (handled below with jobAuth middleware for Cloud Scheduler)
 
 	// Discovery routes
 	mux.Handle("/api/v1/sources-discovery/execute", authMiddleware(http.HandlerFunc(s.discoveryHandler.ExecuteDiscovery)))
@@ -3952,7 +4011,7 @@ func main() {
 	}
 
 	// Attach admin route without Firebase auth, but with jobAuth
-	mux.Handle("/api/v1/admin/sources/publish-due", jobAuth(http.HandlerFunc(s.discoveryHandler.PublishDue)))
+	mux.Handle("/api/v1/admin/sources/coordinate", jobAuth(http.HandlerFunc(s.discoveryHandler.CoordinateSources)))
 
 	// Etigram Watchdog cron endpoint (Cloud Scheduler)
 	// POST /api/v1/admin/etigram/watchdog/run?limit=200

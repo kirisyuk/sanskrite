@@ -75,6 +75,7 @@ func main() {
 	// Initialize repositories
 	sourcesRepo := repo.NewDataSourcesRepository(fsClient.Client())
 	sourceProjectsRepo := repo.NewSourceProjectsRepository(fsClient.Client())
+	sourceRuntimeRepo := repo.NewSourceRuntimeStatesRepository(fsClient.Client())
 	docsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	ingestHistoryRepo := repo.NewSourceIngestHistoryRepository(fsClient.Client())
 	ontologyFactsRepo := repo.NewOntologyFactsRepository(fsClient.Client())
@@ -119,22 +120,70 @@ func main() {
 		),
 	)
 
-	// Create poller
-	psClient := publisher.Client()
-	poller := discovery.NewSourcePoller(psClient, "source.poll", orchestrator, logger)
+	// Create source coordination poller
+	poller := discovery.NewSourcePoller(orchestrator, logger).WithRuntimeStates(sourceRuntimeRepo)
+	baseURL := strings.TrimSpace(os.Getenv("CLOUD_TASKS_TARGET_BASE_URL"))
+	saEmail := strings.TrimSpace(os.Getenv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT"))
+	if baseURL == "" || saEmail == "" {
+		log.Fatal("CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT are required for source coordination")
+	}
+	queue := strings.TrimSpace(os.Getenv("CLOUD_TASKS_SOURCE_QUEUE"))
+	if queue == "" {
+		queue = "etigram-source-poll"
+	}
+	location := strings.TrimSpace(os.Getenv("CLOUD_TASKS_LOCATION"))
+	if location == "" {
+		location = "us-central1"
+	}
+	aud := strings.TrimSpace(os.Getenv("CLOUD_TASKS_OIDC_AUDIENCE"))
+	dispatcher, err := discovery.NewSourceCloudTasksDispatcher(
+		ctx,
+		*projectID,
+		location,
+		queue,
+		strings.TrimRight(baseURL, "/")+"/api/v1/internal/tasks/sources/poll",
+		saEmail,
+		aud,
+	)
+	if err != nil {
+		log.Fatalf("Failed to create source Cloud Tasks dispatcher: %v", err)
+	}
+	defer dispatcher.Close()
+	poller = poller.WithTaskDispatcher(dispatcher)
 
-	fmt.Printf("Starting source poller worker at %s...\n", time.Now().Format("2006-01-02 15:04:05"))
+	interval := time.Minute
+	if raw := strings.TrimSpace(os.Getenv("SOURCE_COORDINATION_INTERVAL")); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed >= 10*time.Second {
+			interval = parsed
+		}
+	}
+
+	fmt.Printf("Starting source coordination worker at %s...\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Printf("Press Ctrl+C to stop\n\n")
 
 	// Handle graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start worker in goroutine
+	// Start coordination loop in goroutine
 	errChan := make(chan error, 1)
 	go func() {
-		if err := poller.Start(ctx); err != nil {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		if err := poller.CoordinateDue(ctx); err != nil {
 			errChan <- err
+			return
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := poller.CoordinateDue(ctx); err != nil {
+					errChan <- err
+					return
+				}
+			}
 		}
 	}()
 

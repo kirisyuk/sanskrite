@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
 import { api } from '../lib/api';
 import type { GeoObject } from './useGeoObjects';
+import type { MaterializedArtifact } from '../components/SupplyChainOverlay';
 import { getEdgeColor } from '../components/HorizonGraphNodeTypes';
 import { geoCodeToShortName, humanizeCanonicalPath } from '../lib/uiUtils';
 
@@ -20,6 +21,10 @@ export interface GeoEdgeTraceSummary {
   visibleEdges: number;
   hopCounts: Record<1 | 2 | 3, number>;
   branchCount: number;
+  pathArtifactCount: number;
+  pathLegCount: number;
+  propagationNodeCount: number;
+  propagationEdgeCount: number;
   topFamilies: Array<{ family: EdgeFamily; count: number }>;
   countryHighlights: Array<{
     countryIso2: string | null;
@@ -40,6 +45,10 @@ interface RawDependencyEdge {
   sourceId: string;
   targetId: string;
   type: string;
+  family?: EdgeFamily;
+  priority?: number;
+  businessMeaning?: string;
+  semanticDirection?: string;
 }
 
 type TraceObjectInfo = Pick<GeoObject, 'id' | 'canonicalPath' | 'type' | 'label' | 'facilityKind' | 'description' | 'status' | 'inScope'> & {
@@ -118,7 +127,11 @@ function toSoftHex(hex: string, blend: number): string {
   return `#${next.join('')}`;
 }
 
-function edgePriority(type: string): number {
+function edgePriority(edgeOrType: RawDependencyEdge | string): number {
+  if (typeof edgeOrType !== 'string' && typeof edgeOrType?.priority === 'number' && Number.isFinite(edgeOrType.priority)) {
+    return edgeOrType.priority;
+  }
+  const type = typeof edgeOrType === 'string' ? edgeOrType : edgeOrType.type;
   return EDGE_PRIORITY[type] ?? 40;
 }
 
@@ -138,7 +151,9 @@ function hashString(value: string): number {
   return hash;
 }
 
-function edgeFamily(type: string): EdgeFamily {
+function edgeFamily(edgeOrType: RawDependencyEdge | string): EdgeFamily {
+  if (typeof edgeOrType !== 'string' && edgeOrType?.family) return edgeOrType.family;
+  const type = typeof edgeOrType === 'string' ? edgeOrType : edgeOrType.type;
   if (['SUPPLIES_TO', 'DEPENDS_ON', 'PRODUCES', 'EXTRACTS_FROM', 'REQUIRES', 'USES', 'SUPPORTS'].includes(type)) {
     return 'supply';
   }
@@ -198,7 +213,9 @@ function humanizeEdgeType(edgeType: string): string {
     .join(' ');
 }
 
-function businessMeaningForEdgeType(edgeType: string): string {
+function businessMeaningForEdgeType(edgeOrType: RawDependencyEdge | string): string {
+  if (typeof edgeOrType !== 'string' && edgeOrType?.businessMeaning) return edgeOrType.businessMeaning;
+  const edgeType = typeof edgeOrType === 'string' ? edgeOrType : edgeOrType.type;
   switch (edgeType) {
     case 'SUPPLIES_TO':
     case 'PRODUCES':
@@ -378,8 +395,8 @@ function buildParentLinkFamilies(centerId: string, rawEdges: RawDependencyEdge[]
   for (const edge of rawEdges) {
     const sourceParent = parents.get(edge.sourceId);
     const targetParent = parents.get(edge.targetId);
-    const family = edgeFamily(edge.type);
-    const priority = edgePriority(edge.type);
+    const family = edgeFamily(edge);
+    const priority = edgePriority(edge);
     if (sourceParent === edge.targetId) {
       const prev = byChild.get(edge.sourceId);
       if (!prev || priority > prev.priority) {
@@ -480,7 +497,7 @@ function buildSelectedTraceEdges(
     }
 
     const hop = maxDepth as 1 | 2 | 3;
-    const family = edgeFamily(edge.type);
+    const family = edgeFamily(edge);
     const shallowerId = sourceDepth <= targetDepth ? edge.sourceId : edge.targetId;
     const deeperId = shallowerId === edge.sourceId ? edge.targetId : edge.sourceId;
     const branchRootId = hop === 1
@@ -626,6 +643,8 @@ function buildTraceSummary(
   objectById: Map<string, TraceObjectInfo>,
   centerId: string,
   visibleEdges: number,
+  pathArtifacts: MaterializedArtifact[],
+  propagation?: { nodeIds?: string[]; edges?: Array<unknown> } | null,
 ): GeoEdgeTraceSummary {
   const hopCounts: Record<1 | 2 | 3, number> = { 1: 0, 2: 0, 3: 0 };
   const familyCounts = new Map<EdgeFamily, number>();
@@ -674,7 +693,7 @@ function buildTraceSummary(
       type: humanizeFragmentType(targetObject.type),
       hop: edge.hop,
       relationLabel: humanizeEdgeType(edge.type),
-      businessMeaning: businessMeaningForEdgeType(edge.type),
+      businessMeaning: businessMeaningForEdgeType(edge),
       score,
     };
     if (!existingItem) {
@@ -688,6 +707,10 @@ function buildTraceSummary(
     visibleEdges,
     hopCounts,
     branchCount: branchIds.size,
+    pathArtifactCount: pathArtifacts.length,
+    pathLegCount: pathArtifacts.reduce((acc, artifact) => acc + (Array.isArray((artifact as any)?.payload?.legs) ? (artifact as any).payload.legs.length : 0), 0),
+    propagationNodeCount: Array.isArray(propagation?.nodeIds) ? propagation.nodeIds.length : 0,
+    propagationEdgeCount: Array.isArray(propagation?.edges) ? propagation.edges.length : 0,
     topFamilies: Array.from(familyCounts.entries())
       .sort((left, right) => right[1] - left[1])
       .slice(0, 3)
@@ -816,12 +839,14 @@ export function useGeoEdgeLayer(
   objects: GeoObject[],
   theme: ThemeMode,
   hops: number = MAX_HOPS,
+  lensId?: string,
 ) {
   const [edgesLoading, setEdgesLoading] = useState(false);
   const [edgesCount, setEdgesCount] = useState(0);
   const [visibleEdgesCount, setVisibleEdgesCount] = useState(0);
   const [discoveredObjects, setDiscoveredObjects] = useState<GeoObject[]>([]);
   const [traceSummary, setTraceSummary] = useState<GeoEdgeTraceSummary | null>(null);
+  const [relatedPathArtifacts, setRelatedPathArtifacts] = useState<MaterializedArtifact[]>([]);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -885,6 +910,7 @@ export function useGeoEdgeLayer(
       setEdgesCount(0);
       setVisibleEdgesCount(0);
       setTraceSummary(null);
+      setRelatedPathArtifacts([]);
       return;
     }
 
@@ -904,9 +930,10 @@ export function useGeoEdgeLayer(
     setVisibleEdgesCount(0);
     setDiscoveredObjects([]);
     setTraceSummary(null);
+    setRelatedPathArtifacts([]);
 
     api
-      .getFragmentDependencies(selectedObject.id, {
+      .getFragmentTrace(selectedObject.id, {
         direction: 'both',
         includeFragments: true,
         includeCounts: true,
@@ -916,14 +943,17 @@ export function useGeoEdgeLayer(
         maxEdges: requestedHops === 1 ? 72 : requestedHops === 2 ? 120 : 180,
         maxPerType: requestedHops === 3 ? 20 : 24,
         hops: requestedHops,
+        lensId,
       })
       .then((res) => {
         if (cancelled || !mountedRef.current) return;
 
         const rawEdges: RawDependencyEdge[] = [];
-        const edges = res?.edges ?? [];
-        const serverCoords = res?.coordinates ?? {};
-        const fragments = res?.fragments ?? [];
+        const graph = res?.graph ?? {};
+        const edges = graph?.edges ?? [];
+        const serverCoords = graph?.coordinates ?? {};
+        const fragments = graph?.fragments ?? [];
+        const pathArtifacts = Array.isArray(res?.supplyChains?.chains) ? (res.supplyChains.chains as MaterializedArtifact[]) : [];
         const objectIds = new Set(objects.map((obj) => obj.id));
         const objectById = new Map<string, TraceObjectInfo>(objects.map((obj) => [obj.id, obj] as const));
 
@@ -938,7 +968,15 @@ export function useGeoEdgeLayer(
           const targetId = String(edge?.targetFragmentId ?? edge?.targetFragmentID ?? '').trim();
           const type = normalizeEdgeType(edge?.type);
           if (!sourceId || !targetId || !type) continue;
-          rawEdges.push({ sourceId, targetId, type });
+          rawEdges.push({
+            sourceId,
+            targetId,
+            type,
+            family: typeof edge?.family === 'string' ? edge.family as EdgeFamily : undefined,
+            priority: typeof edge?.priority === 'number' ? edge.priority : undefined,
+            businessMeaning: typeof edge?.businessMeaning === 'string' ? edge.businessMeaning : undefined,
+            semanticDirection: typeof edge?.semanticDirection === 'string' ? edge.semanticDirection : undefined,
+          });
         }
 
         const selectedEdges = buildSelectedTraceEdges(selectedObject.id, rawEdges, idToCoords);
@@ -963,10 +1001,11 @@ export function useGeoEdgeLayer(
 
         if (cancelled || !mountedRef.current) return;
         setDiscoveredObjects(newDiscovered);
+        setRelatedPathArtifacts(pathArtifacts);
         removeLayers();
         setEdgesCount(selectedEdges.length);
         setVisibleEdgesCount(renderableEdges.length);
-        setTraceSummary(buildTraceSummary(selectedEdges, objectById, selectedObject.id, renderableEdges.length));
+        setTraceSummary(buildTraceSummary(selectedEdges, objectById, selectedObject.id, renderableEdges.length, pathArtifacts, res?.propagation || null));
 
         if (renderableEdges.length === 0 || !canAccessMapStyle(map)) {
           setEdgesLoading(false);
@@ -1005,6 +1044,7 @@ export function useGeoEdgeLayer(
           setEdgesCount(0);
           setVisibleEdgesCount(0);
           setTraceSummary(null);
+          setRelatedPathArtifacts([]);
         }
       });
 
@@ -1021,7 +1061,7 @@ export function useGeoEdgeLayer(
       } catch { /* handlers may not be attached */ }
       removeLayers();
     };
-  }, [selectedObject?.id, objects, hops, map, isReady, styleEpoch, theme]);
+  }, [selectedObject?.id, objects, hops, map, isReady, styleEpoch, theme, lensId]);
 
-  return { edgesLoading, edgesCount, visibleEdgesCount, discoveredObjects, traceSummary };
+  return { edgesLoading, edgesCount, visibleEdgesCount, discoveredObjects, traceSummary, relatedPathArtifacts };
 }

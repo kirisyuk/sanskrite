@@ -170,6 +170,25 @@ type SourceDetails struct {
 	RequestHeaders                 map[string]string `json:"requestHeaders,omitempty" firestore:"requestHeaders,omitempty"`
 	// PollIntervalMinutes allows source-level polling override (e.g., 30 min for Horizon Monitor feeds).
 	PollIntervalMinutes *int `json:"pollIntervalMinutes,omitempty" firestore:"pollIntervalMinutes,omitempty"`
+	// SourceScope separates global/system infra feeds from project-scoped or merely public feeds.
+	// Canonical values:
+	// - "global_system": source is part of global/system ingestion and should not require project links
+	// - "public": source is globally visible but activated through project links
+	// - "project": source is tenant/project scoped
+	SourceScope *string `json:"sourceScope,omitempty" firestore:"sourceScope,omitempty"`
+	// ProcessingMode selects the primary ingestion lane for this source.
+	// Canonical values:
+	// - "heuristic": deterministic/non-LLM processing
+	// - "canvas_llm": system canvas / batch LLM extraction path
+	ProcessingMode *string `json:"processingMode,omitempty" firestore:"processingMode,omitempty"`
+	// OutputMode declares what this source is expected to produce for downstream graph consumers.
+	// Canonical values:
+	// - "document_feed": document-first ingest with downstream enrichment
+	// - "ontology_fact": direct graph/fact-producing ingest
+	OutputMode *string `json:"outputMode,omitempty" firestore:"outputMode,omitempty"`
+	// CadencePolicy stores the source-level polling policy.
+	// Runtime scheduling state is stored separately in source_runtime_state.
+	CadencePolicy *SourceCadencePolicy `json:"cadencePolicy,omitempty" firestore:"cadencePolicy,omitempty"`
 	// DisableLLMProcessing forces deterministic/heuristic processing for this source:
 	// - document.process is not published
 	// - document.extract (LLM extractor path) is not used

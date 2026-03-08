@@ -66,10 +66,7 @@ func horizonMonitorShouldPublishDocumentProcess(_ string) bool {
 }
 
 func sourceDisablesLLMProcessing(ds *coremodels.DataSource) bool {
-	if ds == nil || ds.Details.DisableLLMProcessing == nil {
-		return false
-	}
-	return *ds.Details.DisableLLMProcessing
+	return coremodels.ShouldDisableLLMProcessing(ds)
 }
 
 type horizonMonitorSignalObservation struct {

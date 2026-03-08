@@ -65,11 +65,31 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
 
   const { allObjects, filteredObjects, typeCounts, loading, error } = useGeoObjects(scope, filters);
 
-  const { edgesLoading, edgesCount, visibleEdgesCount, discoveredObjects, traceSummary } = useGeoEdgeLayer(map, isReady, styleEpoch, selectedObject, filteredObjects, theme, hops);
+  const { edgesLoading, edgesCount, visibleEdgesCount, discoveredObjects, traceSummary, relatedPathArtifacts } = useGeoEdgeLayer(
+    map,
+    isReady,
+    styleEpoch,
+    selectedObject,
+    filteredObjects,
+    theme,
+    hops,
+    scope?.lensId,
+  );
   const mapObjects = React.useMemo(
     () => (discoveredObjects.length > 0 ? [...filteredObjects, ...discoveredObjects] : filteredObjects),
     [filteredObjects, discoveredObjects],
   );
+  const activePathArtifacts = React.useMemo(() => {
+    if (!pathLegsEnabled) return [] as MaterializedArtifact[];
+    const merged = new Map<string, MaterializedArtifact>();
+    for (const artifact of pathArtifacts) {
+      if (artifact?.id) merged.set(artifact.id, artifact);
+    }
+    for (const artifact of relatedPathArtifacts) {
+      if (artifact?.id && !merged.has(artifact.id)) merged.set(artifact.id, artifact);
+    }
+    return Array.from(merged.values());
+  }, [pathArtifacts, pathLegsEnabled, relatedPathArtifacts]);
   const allStaticZones = STATIC_ZONE_DATA.features;
   const zoneTypeCounts = React.useMemo(() => deriveZoneTypeCounts(allStaticZones), [allStaticZones]);
   const filteredStaticZones = React.useMemo(() => {
@@ -175,7 +195,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   useGeoZoneLayer(map, isReady, styleEpoch, mapObjects, theme);
   useStaticZoneLayer(map, isReady, styleEpoch, filteredStaticZones, theme, zonesEnabled, zoneActivityById, mapObjects);
   useTransportFlowLayer(map, isReady, styleEpoch, filteredTransportFlows, theme, flowsEnabled, flowActivityById);
-  const pathLegStats = usePathLegLayer(map, isReady, styleEpoch, pathArtifacts, allObjects, theme, pathLegsEnabled);
+  const pathLegStats = usePathLegLayer(map, isReady, styleEpoch, activePathArtifacts, allObjects, theme, pathLegsEnabled);
   useVesselLayer(map, isReady, styleEpoch, vesselsEnabled, theme);
 
   const handleToggleType = React.useCallback((type: string) => {
