@@ -70,31 +70,34 @@ func (b *AnswerContextBuilder) BuildContext(
 	// Header — always included
 	sb.WriteString(fmt.Sprintf("QUESTION: %s\n", plan.NormalizedQuestion))
 	sb.WriteString(fmt.Sprintf("ANSWER MODE: %s\n", plan.AnswerMode))
-	sb.WriteString(fmt.Sprintf("TIME HORIZON: %s\n\n", plan.TimeHorizon))
+	sb.WriteString(fmt.Sprintf("TIME HORIZON: %s\n", plan.TimeHorizon))
+	sb.WriteString(fmt.Sprintf("SCENARIO TYPE: %s\n\n", b.describeScenarioType(plan)))
 
-	// SCENARIO PROJECTION (Simulation) — explicitly labeled as hypothetical
-	// This prevents the LLM from confusing "what-if" simulation with "ground truth".
-	if len(simResult.NodeImpacts) > 0 {
-		sb.WriteString("=== SCENARIO PROJECTION (HYPOTHETICAL SIMULATION RESULTS) ===\n")
-		sb.WriteString("NOTE: These are projected impacts based on the graph structure. They are NOT current real-world observations.\n")
-		sb.WriteString("Use these to answer \"what would happen\" or \"how would it spread\".\n")
-		
-		impactSection := b.buildImpactMapSection(simResult)
-		sb.WriteString(impactSection)
-		
-		tracesSection := b.buildTracesSection(simResult, true)
-		sb.WriteString(tracesSection)
-	} else {
-		sb.WriteString("(No simulation impacts projected)\n\n")
+	sb.WriteString("=== DECISION BRIEF ===\n")
+	sb.WriteString(fmt.Sprintf("Assumed shock: %s\n", b.describeHypotheticalSignals(plan)))
+	sb.WriteString(fmt.Sprintf("Primary observation target: %s\n", b.describeTargetFilter(plan)))
+	sb.WriteString(fmt.Sprintf("What matters most: %s\n\n", b.describeDecisionFocus(plan)))
+
+	sb.WriteString("=== PROJECTED CONSEQUENCES ===\n")
+	sb.WriteString("These are projected business consequences from the graph. They are hypothetical unless confirmed by observed evidence below.\n")
+	if len(simResult.NodeImpacts) == 0 {
+		sb.WriteString("(No downstream propagation was projected from the current assumptions.)\n")
 	}
 
+	sb.WriteString(b.buildScenarioWindowsSection(simResult))
+	impactSection := b.buildImpactMapSection(simResult)
+	sb.WriteString(impactSection)
+
+	tracesSection := b.buildTracesSection(simResult, len(simResult.NodeImpacts) > 0)
+	sb.WriteString(tracesSection)
+
 	// REAL-WORLD EVIDENCE (Ground Truth)
-	sb.WriteString("=== REAL-WORLD EVIDENCE (GROUND TRUTH) ===\n")
-	sb.WriteString("NOTE: These are actual observed facts (leaf signals) or known supply chains. Use these to ground your answer in reality.\n")
+	sb.WriteString("=== GROUND TRUTH AND KNOWN STRUCTURE ===\n")
+	sb.WriteString("Use this section to distinguish what is already observed from what is only projected.\n")
 
 	// SUPPLY CHAIN PATHS (from artifact summaries)
 	if !overBudget() {
-		sb.WriteString("\n-- KNOWN SUPPLY CHAINS (MaterializedArtifacts) --\n")
+		sb.WriteString("\n-- KNOWN PATHS / CHAINS --\n")
 		for _, s := range artifactSummaries {
 			sb.WriteString(fmt.Sprintf("- %s\n", s))
 		}
@@ -102,7 +105,7 @@ func (b *AnswerContextBuilder) BuildContext(
 
 	// LEAF EVIDENCE — cap at 10 for better grounding
 	if !overBudget() {
-		sb.WriteString("\n-- OBSERVED SIGNALS (Leaf Evidence) --\n")
+		sb.WriteString("\n-- OBSERVED SIGNALS --\n")
 		maxLeaf := 10
 		for i, le := range simResult.LeafEvidence {
 			if i >= maxLeaf {
@@ -119,7 +122,7 @@ func (b *AnswerContextBuilder) BuildContext(
 
 	// PRE-COMPUTED IMPACT BREAKDOWN — cap at 10 nodes for budget
 	if !overBudget() {
-		sb.WriteString("=== IMPACT BREAKDOWN (from simulation — use for impactBreakdown in JSON) ===\n")
+		sb.WriteString("=== STRUCTURED IMPACT INPUT ===\n")
 		for i, ni := range simResult.NodeImpacts {
 			if i >= 10 {
 				break
@@ -137,7 +140,7 @@ func (b *AnswerContextBuilder) BuildContext(
 
 	// QUANTITATIVE HINT
 	if !overBudget() && b.shouldAddQuantitativeHint(plan, simResult) {
-		sb.WriteString("=== QUANTITATIVE HINT (use for cost/price impact — provide numeric ranges) ===\n")
+		sb.WriteString("=== QUANTIFICATION HINT ===\n")
 		sb.WriteString("- Pass-through heuristic: amplitude 0.6+ → 60-80% pass-through; 0.3-0.6 → 30-50%; <0.3 → 10-30%\n")
 		sb.WriteString("- For VAT/tariff: input % × pass-through × amplitude ≈ cost delta at that stage. Example: 5% VAT, amplitude 0.72 at nickel ore → ~3-4% cost increase there; amplitude 0.12 at battery cell → ~0.5-1.5% at final product.\n")
 		sb.WriteString("- ALWAYS provide numeric ranges when the question asks about cost/price. Avoid only \"likely\" or \"potentially\" without numbers.\n")
@@ -146,7 +149,7 @@ func (b *AnswerContextBuilder) BuildContext(
 
 	// EXISTING ANALYSIS (DomainAnswerSnapshot)
 	if !overBudget() && domainSnapshot != nil {
-		sb.WriteString("=== EXISTING ANALYSIS ===\n")
+		sb.WriteString("=== EXISTING ANALYSIS / BASELINE ===\n")
 		if domainSnapshot.Thesis.Text != "" {
 			sb.WriteString(fmt.Sprintf("Domain thesis: %s\n", domainSnapshot.Thesis.Text))
 		}
@@ -199,7 +202,7 @@ func (b *AnswerContextBuilder) BuildContext(
 
 	// DATA GAPS — skippable via "skip_gaps" hint, cap at 3 for budget
 	if !overBudget() && !hints.skipGaps {
-		sb.WriteString("=== DATA GAPS ===\n")
+		sb.WriteString("=== UNCERTAINTY / DATA GAPS ===\n")
 		if domainSnapshot != nil && len(domainSnapshot.DataGaps) > 0 {
 			maxGaps := 3
 			for i, g := range domainSnapshot.DataGaps {
@@ -220,7 +223,7 @@ func (b *AnswerContextBuilder) BuildContext(
 
 	// RECENTLY ENRICHED SIGNALS — from best-effort grounding (optional)
 	if !overBudget() && b.fillReport != nil && len(b.fillReport.FilledGaps) > 0 {
-		sb.WriteString("=== RECENTLY ENRICHED SIGNALS (from best-effort web grounding — treat as supplementary) ===\n")
+		sb.WriteString("=== RECENTLY ENRICHED SIGNALS ===\n")
 		maxEnriched := 5
 		for i, fg := range b.fillReport.FilledGaps {
 			if i >= maxEnriched {
@@ -251,8 +254,8 @@ func (b *AnswerContextBuilder) BuildContext(
 		enrichedHint = "\n- ENRICHED SIGNALS [E1]-[EN]: supplementary web-grounded data. Cite as [E1], [E2] etc. Lower confidence than primary evidence."
 	}
 
-	sb.WriteString(fmt.Sprintf(`ROLE: You are an expert Supply Chain Risk Analyst advising a C-level executive.
-TONE: Professional, concise, actionable. No fluff. No technical jargon (amplitude, hops).
+	sb.WriteString(fmt.Sprintf(`ROLE: You are a strategic risk analyst advising an executive on "what happens if..." questions.
+TONE: Decision-first, concrete, business-facing. No internal graph jargon in the final answer.
 
 TRANSLATION RULES (Internal Math -> Business Language):
 - Amplitude 0.75 - 1.00 → CRITICAL Impact (e.g. stoppage)
@@ -262,20 +265,50 @@ TRANSLATION RULES (Internal Math -> Business Language):
 
 MANDATORY OUTPUT STRUCTURE (JSON):
 {
-  "executiveSummary": "One powerful sentence summarizing the net impact.",
+  "executiveSummary": "One direct sentence that answers the business question.",
   "riskLevel": "CRITICAL" | "HIGH" | "MODERATE" | "LOW",
-  "riskScenario": "A clear narrative: The event at [Source] causes [Impact A], which cascades to [Impact B], ultimately affecting [Target].",
+  "riskScenario": "Short narrative: shock -> transmission path -> remote consequence.",
+  "firstOrderEffects": [
+    {
+      "summary": "What changes first",
+      "horizon": "immediate|short_term|medium_term|long_term",
+      "severity": "CRITICAL|HIGH|MODERATE|LOW",
+      "affectedEntities": ["entity names or canonical paths"],
+      "mechanism": "short causal description"
+    }
+  ],
+  "secondOrderEffects": [
+    {
+      "summary": "What changes later or farther downstream",
+      "horizon": "immediate|short_term|medium_term|long_term",
+      "severity": "CRITICAL|HIGH|MODERATE|LOW",
+      "affectedEntities": ["entity names or canonical paths"],
+      "mechanism": "short causal description"
+    }
+  ],
+  "watchpoints": [
+    {
+      "signal": "what to monitor next",
+      "whyItMatters": "why this confirms or disproves the scenario",
+      "expectedWithin": "immediate|short_term|medium_term|long_term"
+    }
+  ],
+  "assumptions": ["explicit assumption or model limit"],
   "recommendations": ["Action 1", "Action 2", "Action 3"],
-  "text": "Full detailed analysis...",
+  "text": "Short decision memo in plain language.",
   "confidence": 0.0-1.0,
   "evidence": [...],
   "impactBreakdown": [...]
 }
 
 %s
-- impactBreakdown: derive from SCENARIO PROJECTION — entity, axis, amplitude, hops.
-- QUANTIFICATION: When QUANTITATIVE HINT is present, translate amplitudes into estimated % impacts on cost/time.
-- Recommendations: Suggest specific mitigation steps (diversify, stockpile, hedge) based on the graph structure.
+- Start with the business consequence, not with the graph mechanics.
+- Use firstOrderEffects for direct hits near the shock and secondOrderEffects for farther downstream effects.
+- Prefer non-obvious remote endpoints when the graph supports them.
+- impactBreakdown: derive from STRUCTURED IMPACT INPUT — entity, axis, amplitude, hops.
+- QUANTIFICATION: When QUANTIFICATION HINT is present, translate amplitudes into estimated %% impacts on cost/time.
+- Recommendations: give operational or portfolio actions, not generic advice.
+- If evidence is weak, say what would change your view in watchpoints/assumptions.
 `, enrichedHint))
 
 	return sb.String(), nil
@@ -289,7 +322,7 @@ func (b *AnswerContextBuilder) buildImpactMapSection(
 	const maxNodes = 15
 	var sb strings.Builder
 
-	sb.WriteString("-- PROJECTED NODE IMPACTS (Simulation) --\n")
+	sb.WriteString("-- IMPACT MAP / PROJECTED NODE IMPACTS (Simulation) --\n")
 	topK := maxNodes
 	if len(simResult.NodeImpacts) < topK {
 		topK = len(simResult.NodeImpacts)
@@ -313,6 +346,55 @@ func (b *AnswerContextBuilder) buildImpactMapSection(
 	return sb.String()
 }
 
+func (b *AnswerContextBuilder) buildScenarioWindowsSection(simResult *horizonmodels.SimulationResult) string {
+	var sb strings.Builder
+	sb.WriteString("-- TIME WINDOWS / HOW THE EFFECT UNFOLDS --\n")
+	if simResult == nil || len(simResult.NodeImpacts) == 0 {
+		sb.WriteString("(no projected time-window effects)\n\n")
+		return sb.String()
+	}
+	firstOrder := make([]string, 0, 3)
+	secondOrder := make([]string, 0, 3)
+	for _, ni := range simResult.NodeImpacts {
+		label := strings.TrimSpace(ni.Name)
+		if label == "" {
+			label = strings.TrimSpace(ni.CanonicalPath)
+		}
+		if label == "" {
+			continue
+		}
+		topAxis, topAmp := strongestAxis(ni.AxisAmplitudes)
+		line := fmt.Sprintf("%s — %s %s (%.2f)", horizonLabelForHops(ni.Hops), label, topAxis, topAmp)
+		if ni.Hops <= 1 {
+			if len(firstOrder) < 3 {
+				firstOrder = append(firstOrder, line)
+			}
+			continue
+		}
+		if len(secondOrder) < 3 {
+			secondOrder = append(secondOrder, line)
+		}
+	}
+	if len(firstOrder) == 0 && len(secondOrder) == 0 {
+		sb.WriteString("(no projected time-window effects)\n\n")
+		return sb.String()
+	}
+	if len(firstOrder) > 0 {
+		sb.WriteString("First-order effects:\n")
+		for _, item := range firstOrder {
+			sb.WriteString("- " + item + "\n")
+		}
+	}
+	if len(secondOrder) > 0 {
+		sb.WriteString("Downstream / later effects:\n")
+		for _, item := range secondOrder {
+			sb.WriteString("- " + item + "\n")
+		}
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
 // buildTracesSection renders the PROPAGATION CHAINS section.
 // Capped at 3 chains for token budget.
 func (b *AnswerContextBuilder) buildTracesSection(
@@ -322,7 +404,7 @@ func (b *AnswerContextBuilder) buildTracesSection(
 	const maxChains = 3
 	var sb strings.Builder
 
-	sb.WriteString("-- PROJECTED PROPAGATION PATHS --\n")
+	sb.WriteString("-- PROPAGATION CHAINS / PROJECTED PROPAGATION PATHS --\n")
 	count := 0
 	for i, tp := range simResult.TracePaths {
 		if count >= maxChains {
@@ -353,10 +435,122 @@ func (b *AnswerContextBuilder) buildTracesSection(
 	}
 	if len(simResult.TracePaths) == 0 && hasImpacts {
 		sb.WriteString("(paths available in IMPACT MAP above)\n")
+	} else if len(simResult.TracePaths) == 0 {
+		sb.WriteString("(no propagation paths available)\n")
 	}
 	sb.WriteString("\n")
 
 	return sb.String()
+}
+
+func (b *AnswerContextBuilder) describeScenarioType(plan *horizonmodels.QuestionPlan) string {
+	if plan == nil {
+		return "current-state assessment"
+	}
+	if len(plan.HypotheticalSignals) > 0 {
+		return "what-if scenario"
+	}
+	switch strings.TrimSpace(plan.AnswerMode) {
+	case "risk_forecast":
+		return "forward-looking risk assessment"
+	case "alternative_sourcing":
+		return "alternative-path assessment"
+	case "dependency_audit":
+		return "dependency review"
+	case "blocker_analysis":
+		return "blocker diagnosis"
+	default:
+		return "current-state assessment"
+	}
+}
+
+func (b *AnswerContextBuilder) describeHypotheticalSignals(plan *horizonmodels.QuestionPlan) string {
+	if plan == nil || len(plan.HypotheticalSignals) == 0 {
+		return "No hypothetical shock injected; answer should focus on current exposure and existing risk."
+	}
+	parts := make([]string, 0, len(plan.HypotheticalSignals))
+	for i, sig := range plan.HypotheticalSignals {
+		if i >= 3 {
+			break
+		}
+		mech := strings.TrimSpace(sig.Mechanism)
+		if mech == "" {
+			mech = strings.TrimSpace(sig.Axis)
+		}
+		target := strings.Join(sig.SeedHints, ", ")
+		if target == "" {
+			target = "lens scope"
+		}
+		parts = append(parts, fmt.Sprintf("%s on %s (%s, amplitude %.2f)", mech, target, sig.TimeHorizon, sig.Amplitude))
+	}
+	if len(parts) == 0 {
+		return "No hypothetical shock injected."
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (b *AnswerContextBuilder) describeTargetFilter(plan *horizonmodels.QuestionPlan) string {
+	if plan == nil {
+		return "no explicit target filter"
+	}
+	parts := []string{}
+	if len(plan.TargetFilter.ObservePathPatterns) > 0 {
+		parts = append(parts, "paths="+strings.Join(plan.TargetFilter.ObservePathPatterns[:minInt(3, len(plan.TargetFilter.ObservePathPatterns))], ", "))
+	}
+	if len(plan.TargetFilter.ObserveAxes) > 0 {
+		parts = append(parts, "axes="+strings.Join(plan.TargetFilter.ObserveAxes[:minInt(4, len(plan.TargetFilter.ObserveAxes))], ", "))
+	}
+	if len(parts) == 0 {
+		return "broad lens scope"
+	}
+	return strings.Join(parts, " | ")
+}
+
+func (b *AnswerContextBuilder) describeDecisionFocus(plan *horizonmodels.QuestionPlan) string {
+	if plan == nil {
+		return "Explain the likely business effect, the transmission path, and what to monitor."
+	}
+	switch strings.TrimSpace(plan.AnswerMode) {
+	case "impact_assessment":
+		return "Explain what changes first, what spreads later, and where business pain concentrates."
+	case "risk_forecast":
+		return "Focus on forward-looking risk, timing, and the earliest reliable warning signs."
+	case "alternative_sourcing":
+		return "Focus on fallback paths, substitutes, and the trade-offs of switching."
+	case "blocker_analysis":
+		return "Focus on the single biggest blocker, why it matters, and what removes it."
+	case "dependency_audit":
+		return "Focus on concentrated dependencies, weak links, and remote downstream exposure."
+	default:
+		return "Explain the likely business effect, the transmission path, and what to monitor."
+	}
+}
+
+func strongestAxis(axisAmplitudes map[string]float64) (string, float64) {
+	var (
+		bestAxis string
+		bestAmp  float64
+	)
+	for axis, amp := range axisAmplitudes {
+		if amp > bestAmp || bestAxis == "" {
+			bestAxis = axis
+			bestAmp = amp
+		}
+	}
+	return bestAxis, bestAmp
+}
+
+func horizonLabelForHops(hops int) string {
+	switch {
+	case hops <= 0:
+		return "immediate"
+	case hops == 1:
+		return "short_term"
+	case hops == 2:
+		return "medium_term"
+	default:
+		return "long_term"
+	}
 }
 
 // shouldAddQuantitativeHint returns true when the question likely asks about cost/price impact

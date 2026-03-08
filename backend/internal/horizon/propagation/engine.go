@@ -35,6 +35,7 @@ type PropagationEngine struct {
 	adapterRegistry      *AdapterRegistry       // Optional: domain-model adapter registry (contract type/domain mode)
 	profileLookup        *ProfileLookup         // Optional: axis-based propagation profiles (used by PropagateChange when set)
 	fragmentChangedHook  func(ctx context.Context, fragmentID string)
+	supplyLinkOverlay    *supplyLinkOverlayIndex
 
 	// Трекинг активных распространений
 	activePropagations map[string]*PropagationStatus
@@ -793,7 +794,7 @@ func (e *PropagationEngine) propagateHotPathAxisBased(
 
 		for _, neighbor := range neighbors {
 			// Damping from profile + edge physics (same as signal_propagation)
-			breakdown := e.calculateDampedAmplitudeWithBreakdown(math.Abs(it.d), neighbor.edge, profile)
+			breakdown := e.calculateDampedAmplitudeWithBreakdown(math.Abs(it.d), it.axis, it.frag, neighbor.edge, profile)
 			nextAmp := breakdown.Amplitude
 			if it.d < 0 {
 				nextAmp = -nextAmp

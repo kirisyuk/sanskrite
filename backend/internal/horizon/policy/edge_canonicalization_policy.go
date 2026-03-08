@@ -3,9 +3,9 @@ package policy
 import (
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 type EdgeCanonicalizationInput struct {
@@ -211,8 +211,26 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 
 	// Supply-chain contract guard: forbid any rewrite that produces non-allowlisted types.
 	// Must run last to catch all rewrites (CanonicalizeEdgeWithPaths, transition fallback, unknown fallback).
+	if in.SupplyChainMode &&
+		res.Changed &&
+		in.EdgeType == horizonmodels.DependencyTypeDependsOn &&
+		res.EdgeType == horizonmodels.DependencyTypeParticipatesIn &&
+		((in.SourceType == horizonmodels.FragmentTypeOrganization && in.TargetType == horizonmodels.FragmentTypeMarket) ||
+			(in.SourceType == horizonmodels.FragmentTypeMarket && in.TargetType == horizonmodels.FragmentTypeOrganization)) {
+		res.EdgeType = in.EdgeType
+		if res.OriginalType != "" {
+			res.EdgeType = res.OriginalType
+		}
+		res.Changed = false
+		res.ShouldSwap = false
+		res.Reason = ""
+		res.PolicyStatus = horizonmodels.PolicyStatusClean
+		res.PolicyReason = ""
+		res.PolicyPenalty = 0
+		res.ConfidenceMult = 1.0
+	}
 	if in.SupplyChainMode && res.Changed && string(res.EdgeType) != "" {
-		if !taxonomy.IsSupplyChainEdgeType(string(res.EdgeType)) {
+		if !contractsemantics.ModeAllowsEdge("supply_chain", res.EdgeType) {
 			res.EdgeType = in.EdgeType
 			if res.OriginalType != "" {
 				res.EdgeType = res.OriginalType

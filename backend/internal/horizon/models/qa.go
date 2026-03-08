@@ -60,23 +60,23 @@ type NodeImpact struct {
 
 // TracePath is a propagation trace for visualization.
 type TracePath struct {
-	NodeCanonicalPaths []string   `json:"nodeCanonicalPaths" firestore:"nodeCanonicalPaths"`
-	Axis               string     `json:"axis" firestore:"axis"`
-	Amplitudes         []float64  `json:"amplitudes" firestore:"amplitudes"`
-	EdgeTypes          []string   `json:"edgeTypes,omitempty" firestore:"edgeTypes,omitempty"`
+	NodeCanonicalPaths []string  `json:"nodeCanonicalPaths" firestore:"nodeCanonicalPaths"`
+	Axis               string    `json:"axis" firestore:"axis"`
+	Amplitudes         []float64 `json:"amplitudes" firestore:"amplitudes"`
+	EdgeTypes          []string  `json:"edgeTypes,omitempty" firestore:"edgeTypes,omitempty"`
 }
 
 // LeafSignalEvidence is physical signal evidence at terminal nodes.
 type LeafSignalEvidence struct {
-	FragmentID   string    `json:"fragmentId" firestore:"fragmentId"`
-	CanonicalPath string   `json:"canonicalPath" firestore:"canonicalPath"`
-	Name         string    `json:"name" firestore:"name"`
-	SignalType   string    `json:"signalType" firestore:"signalType"`
-	Axis         string    `json:"axis" firestore:"axis"`
-	Amplitude    float64   `json:"amplitude" firestore:"amplitude"`
-	Modality     string    `json:"modality" firestore:"modality"`
-	ObservedAt   time.Time `json:"observedAt" firestore:"observedAt"`
-	Summary      string    `json:"summary" firestore:"summary"`
+	FragmentID    string    `json:"fragmentId" firestore:"fragmentId"`
+	CanonicalPath string    `json:"canonicalPath" firestore:"canonicalPath"`
+	Name          string    `json:"name" firestore:"name"`
+	SignalType    string    `json:"signalType" firestore:"signalType"`
+	Axis          string    `json:"axis" firestore:"axis"`
+	Amplitude     float64   `json:"amplitude" firestore:"amplitude"`
+	Modality      string    `json:"modality" firestore:"modality"`
+	ObservedAt    time.Time `json:"observedAt" firestore:"observedAt"`
+	Summary       string    `json:"summary" firestore:"summary"`
 }
 
 // ChainImpact describes impact on a materialized chain.
@@ -91,35 +91,39 @@ type ChainImpact struct {
 
 // SimulationResultSummary is a Firestore-safe summary (not full trace).
 type SimulationResultSummary struct {
-	AffectedNodeCount  int            `json:"affectedNodeCount" firestore:"affectedNodeCount"`
-	TopNodeImpacts    []NodeImpact   `json:"topNodeImpacts" firestore:"topNodeImpacts"`
-	LeafEvidenceCount int            `json:"leafEvidenceCount" firestore:"leafEvidenceCount"`
-	ChainImpacts      []ChainImpact  `json:"chainImpacts" firestore:"chainImpacts"`
-	SimulatedAxes     []string       `json:"simulatedAxes" firestore:"simulatedAxes"`
+	AffectedNodeCount int           `json:"affectedNodeCount" firestore:"affectedNodeCount"`
+	TopNodeImpacts    []NodeImpact  `json:"topNodeImpacts" firestore:"topNodeImpacts"`
+	LeafEvidenceCount int           `json:"leafEvidenceCount" firestore:"leafEvidenceCount"`
+	ChainImpacts      []ChainImpact `json:"chainImpacts" firestore:"chainImpacts"`
+	SimulatedAxes     []string      `json:"simulatedAxes" firestore:"simulatedAxes"`
 }
 
 // QAAnswer is the synthesized answer with evidence and highlights.
 type QAAnswer struct {
 	// --- Business Layer (Client Facing) ---
-	ExecutiveSummary string   `json:"executiveSummary" firestore:"executiveSummary"` // One-line "TL;DR"
-	RiskLevel        string   `json:"riskLevel" firestore:"riskLevel"`               // CRITICAL, HIGH, MODERATE, LOW, NEGLIGIBLE
-	RiskScenario     string   `json:"riskScenario" firestore:"riskScenario"`         // Narrative: Cause -> Effect chain
-	Recommendations  []string `json:"recommendations" firestore:"recommendations"`   // Actionable next steps
+	ExecutiveSummary   string         `json:"executiveSummary" firestore:"executiveSummary"` // One-line "TL;DR"
+	RiskLevel          string         `json:"riskLevel" firestore:"riskLevel"`               // CRITICAL, HIGH, MODERATE, LOW, NEGLIGIBLE
+	RiskScenario       string         `json:"riskScenario" firestore:"riskScenario"`         // Narrative: Cause -> Effect chain
+	Recommendations    []string       `json:"recommendations" firestore:"recommendations"`   // Actionable next steps
+	FirstOrderEffects  []QAEffect     `json:"firstOrderEffects,omitempty" firestore:"firstOrderEffects,omitempty"`
+	SecondOrderEffects []QAEffect     `json:"secondOrderEffects,omitempty" firestore:"secondOrderEffects,omitempty"`
+	Watchpoints        []QAWatchpoint `json:"watchpoints,omitempty" firestore:"watchpoints,omitempty"`
+	Assumptions        []string       `json:"assumptions,omitempty" firestore:"assumptions,omitempty"`
 
 	// --- Legacy/Technical Layer (Hidden/Debug) ---
-	Text                   string            `json:"text" firestore:"text"`
-	Confidence             float64           `json:"confidence" firestore:"confidence"`
-	BusinessRelevanceScore float64           `json:"businessRelevanceScore,omitempty" firestore:"businessRelevanceScore,omitempty"` // 0-1: how well answer addresses the question
-	Evidence               []AnswerEvidence  `json:"evidence" firestore:"evidence"`
-	HighlightedNodeIDs     []string          `json:"highlightedNodeIds" firestore:"highlightedNodeIds"`
-	HighlightedEdgeIDs     []string          `json:"highlightedEdgeIds" firestore:"highlightedEdgeIds"`
-	TracePaths             []TracePath       `json:"tracePaths" firestore:"tracePaths"`
-	ImpactBreakdown        []ImpactItem      `json:"impactBreakdown,omitempty" firestore:"impactBreakdown,omitempty"`
-	Alternatives           []QAAlternative   `json:"alternatives,omitempty" firestore:"alternatives,omitempty"`
-	DataGaps               []QADataGap       `json:"dataGaps,omitempty" firestore:"dataGaps,omitempty"`
-	AnswerMode             string            `json:"answerMode" firestore:"answerMode"`
-	TimeHorizon            string            `json:"timeHorizon" firestore:"timeHorizon"`
-	SimulatedAxes          []string          `json:"simulatedAxes" firestore:"simulatedAxes"`
+	Text                   string           `json:"text" firestore:"text"`
+	Confidence             float64          `json:"confidence" firestore:"confidence"`
+	BusinessRelevanceScore float64          `json:"businessRelevanceScore,omitempty" firestore:"businessRelevanceScore,omitempty"` // 0-1: how well answer addresses the question
+	Evidence               []AnswerEvidence `json:"evidence" firestore:"evidence"`
+	HighlightedNodeIDs     []string         `json:"highlightedNodeIds" firestore:"highlightedNodeIds"`
+	HighlightedEdgeIDs     []string         `json:"highlightedEdgeIds" firestore:"highlightedEdgeIds"`
+	TracePaths             []TracePath      `json:"tracePaths" firestore:"tracePaths"`
+	ImpactBreakdown        []ImpactItem     `json:"impactBreakdown,omitempty" firestore:"impactBreakdown,omitempty"`
+	Alternatives           []QAAlternative  `json:"alternatives,omitempty" firestore:"alternatives,omitempty"`
+	DataGaps               []QADataGap      `json:"dataGaps,omitempty" firestore:"dataGaps,omitempty"`
+	AnswerMode             string           `json:"answerMode" firestore:"answerMode"`
+	TimeHorizon            string           `json:"timeHorizon" firestore:"timeHorizon"`
+	SimulatedAxes          []string         `json:"simulatedAxes" firestore:"simulatedAxes"`
 }
 
 // AnswerEvidence backs a claim in the answer.
@@ -149,10 +153,26 @@ type QAAlternative struct {
 	TradeOff    string `json:"tradeOff" firestore:"tradeOff"`
 }
 
+// QAEffect is a business-facing effect within a what-if scenario.
+type QAEffect struct {
+	Summary          string   `json:"summary" firestore:"summary"`
+	Horizon          string   `json:"horizon,omitempty" firestore:"horizon,omitempty"`
+	Severity         string   `json:"severity,omitempty" firestore:"severity,omitempty"`
+	AffectedEntities []string `json:"affectedEntities,omitempty" firestore:"affectedEntities,omitempty"`
+	Mechanism        string   `json:"mechanism,omitempty" firestore:"mechanism,omitempty"`
+}
+
+// QAWatchpoint is an operational or market signal that should be monitored after the shock.
+type QAWatchpoint struct {
+	Signal         string `json:"signal" firestore:"signal"`
+	WhyItMatters   string `json:"whyItMatters,omitempty" firestore:"whyItMatters,omitempty"`
+	ExpectedWithin string `json:"expectedWithin,omitempty" firestore:"expectedWithin,omitempty"`
+}
+
 // QADataGap describes missing data that would strengthen the QA answer.
 type QADataGap struct {
-	Description   string `json:"description" firestore:"description"`
-	WhyItMatters  string `json:"whyItMatters" firestore:"whyItMatters"`
+	Description  string `json:"description" firestore:"description"`
+	WhyItMatters string `json:"whyItMatters" firestore:"whyItMatters"`
 }
 
 // QASession tracks a question-answer exchange within a lens.
@@ -167,10 +187,10 @@ type QASession struct {
 	NormalizedQuestion string `json:"normalizedQuestion" firestore:"normalizedQuestion"`
 	IntentID           string `json:"intentId,omitempty" firestore:"intentId,omitempty"`
 
-	Plan               *QuestionPlan            `json:"plan,omitempty" firestore:"plan,omitempty"`
-	SimulationResult   *SimulationResultSummary  `json:"simulationResult,omitempty" firestore:"simulationResult,omitempty"`
-	Answer             *QAAnswer                 `json:"answer,omitempty" firestore:"answer,omitempty"`
-	AnsweredAt         *time.Time               `json:"answeredAt,omitempty" firestore:"answeredAt,omitempty"`
+	Plan             *QuestionPlan            `json:"plan,omitempty" firestore:"plan,omitempty"`
+	SimulationResult *SimulationResultSummary `json:"simulationResult,omitempty" firestore:"simulationResult,omitempty"`
+	Answer           *QAAnswer                `json:"answer,omitempty" firestore:"answer,omitempty"`
+	AnsweredAt       *time.Time               `json:"answeredAt,omitempty" firestore:"answeredAt,omitempty"`
 
 	Status    string    `json:"status" firestore:"status"` // pending, decomposing, simulating, synthesizing, answered, failed
 	CreatedAt time.Time `json:"createdAt" firestore:"createdAt"`

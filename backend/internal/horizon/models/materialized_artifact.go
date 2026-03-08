@@ -10,10 +10,10 @@ import (
 type MaterializedKind string
 
 const (
-	MaterializedKindSupplyChainPath      MaterializedKind = "SUPPLY_CHAIN_PATH"
-	MaterializedKindRegulatoryImpactMap  MaterializedKind = "REGULATORY_IMPACT_MAP"
-	MaterializedKindGovernanceChain      MaterializedKind = "GOVERNANCE_CHAIN"
-	MaterializedKindEcosystemMap         MaterializedKind = "ECOSYSTEM_MAP"
+	MaterializedKindSupplyChainPath     MaterializedKind = "SUPPLY_CHAIN_PATH"
+	MaterializedKindRegulatoryImpactMap MaterializedKind = "REGULATORY_IMPACT_MAP"
+	MaterializedKindGovernanceChain     MaterializedKind = "GOVERNANCE_CHAIN"
+	MaterializedKindEcosystemMap        MaterializedKind = "ECOSYSTEM_MAP"
 )
 
 // Valid checks if the MaterializedKind is valid.
@@ -119,12 +119,12 @@ func (a *MaterializedArtifact) Validate() error {
 // RelationsGraphPayload represents the payload structure for domain-specific relation graphs
 // (GOVERNANCE_CHAIN, REGULATORY_IMPACT_MAP, ECOSYSTEM_MAP).
 type RelationsGraphPayload struct {
-	Version    int                     `json:"v"`
-	Nodes      []RelationsGraphNode    `json:"nodes"`
-	Edges      []RelationsGraphEdge    `json:"edges,omitempty"`
-	DomainMode string                  `json:"domainMode,omitempty"`
-	RootEntity string                  `json:"rootEntity,omitempty"`
-	Notes      map[string]interface{}  `json:"notes,omitempty"`
+	Version    int                    `json:"v"`
+	Nodes      []RelationsGraphNode   `json:"nodes"`
+	Edges      []RelationsGraphEdge   `json:"edges,omitempty"`
+	DomainMode string                 `json:"domainMode,omitempty"`
+	RootEntity string                 `json:"rootEntity,omitempty"`
+	Notes      map[string]interface{} `json:"notes,omitempty"`
 }
 
 // RelationsGraphNode represents an entity node in a domain relations graph.
@@ -209,6 +209,12 @@ type SupplyChainPathPayload struct {
 	// Can represent supply links, ontology transitions (TRANSFORMS_INTO), etc.
 	Edges []SupplyChainPathEdge `json:"edges,omitempty"`
 
+	// Legs: optional ordered operational legs with route/zone bindings.
+	Legs []SupplyChainPathLeg `json:"legs,omitempty"`
+
+	// Stress: optional aggregated structural stress profile over the path.
+	Stress *SupplyChainPathStress `json:"stress,omitempty"`
+
 	// Notes: optional metadata about how the path was built.
 	Notes map[string]interface{} `json:"notes,omitempty"`
 }
@@ -236,6 +242,26 @@ type SupplyChainPathEdge struct {
 	// ViaProductIndex: for SUPPLY_LINK, index of the product node (optional)
 	ViaProductIndex *int `json:"viaProductIndex,omitempty"`
 
+	// ProductNodeIndex/ProductRef make the carried product explicit on materialized edges,
+	// especially for logistics legs where the product is otherwise only implied by the segment.
+	ProductNodeIndex *int   `json:"productNodeIndex,omitempty"`
+	ProductRef       string `json:"productRef,omitempty"`
+
+	// SupplyLinkID/SegmentIndex trace the edge back to the originating operational segment.
+	SupplyLinkID string `json:"supplyLinkId,omitempty"`
+	SegmentIndex *int   `json:"segmentIndex,omitempty"`
+
+	// CarriesProduct marks edges that represent actual product flow/logistics, not just overlay semantics.
+	CarriesProduct bool `json:"carriesProduct,omitempty"`
+
+	// Role distinguishes flow edges inside the materialized path.
+	// Examples: product_flow, logistics_leg, product_transformation.
+	Role string `json:"role,omitempty"`
+
+	// Metrics/Qualifiers carry best-effort operational semantics from the underlying SupplyLink segment.
+	Metrics    map[string]MetricValue `json:"metrics,omitempty"`
+	Qualifiers map[string]interface{} `json:"qualifiers,omitempty"`
+
 	// Relation: for ONTOLOGY edges, the relation type (e.g., "TRANSFORMS_INTO")
 	Relation string `json:"relation,omitempty"`
 
@@ -245,6 +271,53 @@ type SupplyChainPathEdge struct {
 
 	// Mode: "optional", "required", "strict" (for validation/ranking)
 	Mode string `json:"mode,omitempty"`
+}
+
+// SupplyChainPathLeg describes one ordered operational leg of a path, enriched
+// with spatial bindings to routes, curated zones, and dynamic affected zones.
+type SupplyChainPathLeg struct {
+	Index                   int                   `json:"index"`
+	SupplierRef             string                `json:"supplierRef,omitempty"`
+	CustomerRef             string                `json:"customerRef,omitempty"`
+	ProductRef              string                `json:"productRef,omitempty"`
+	SupplierNodeIndex       *int                  `json:"supplierNodeIndex,omitempty"`
+	CustomerNodeIndex       *int                  `json:"customerNodeIndex,omitempty"`
+	ProductNodeIndex        *int                  `json:"productNodeIndex,omitempty"`
+	TransportViaRefs        []string              `json:"transportViaRefs,omitempty"`
+	TransportViaNodeIndices []int                 `json:"transportViaNodeIndices,omitempty"`
+	Mode                    string                `json:"mode,omitempty"`
+	GeoRefs                 []string              `json:"geoRefs,omitempty"`
+	FlowRefs                []string              `json:"flowRefs,omitempty"`
+	AlternateFlowRefs       []string              `json:"alternateFlowRefs,omitempty"`
+	ZoneRefs                []string              `json:"zoneRefs,omitempty"`
+	AffectedZoneRefs        []string              `json:"affectedZoneRefs,omitempty"`
+	SpatialSemantics        []string              `json:"spatialSemantics,omitempty"`
+	BindingConfidence       float64               `json:"bindingConfidence,omitempty"`
+	SegmentConfidence       float64               `json:"segmentConfidence,omitempty"`
+	Stress                  *SupplyChainLegStress `json:"stress,omitempty"`
+}
+
+// SupplyChainLegStress captures structural stress on a single path leg.
+type SupplyChainLegStress struct {
+	Fragility            float64  `json:"fragility,omitempty"`
+	Rerouteability       float64  `json:"rerouteability,omitempty"`
+	ZonePressure         float64  `json:"zonePressure,omitempty"`
+	AffectedZonePressure float64  `json:"affectedZonePressure,omitempty"`
+	RecoveryLatencyHrs   float64  `json:"recoveryLatencyHours,omitempty"`
+	StressScore          float64  `json:"stressScore,omitempty"`
+	DominantFactors      []string `json:"dominantFactors,omitempty"`
+}
+
+// SupplyChainPathStress aggregates structural stress across all legs of a path.
+type SupplyChainPathStress struct {
+	PathScore            float64  `json:"pathScore,omitempty"`
+	Fragility            float64  `json:"fragility,omitempty"`
+	Rerouteability       float64  `json:"rerouteability,omitempty"`
+	ZonePressure         float64  `json:"zonePressure,omitempty"`
+	AffectedZonePressure float64  `json:"affectedZonePressure,omitempty"`
+	RecoveryLatencyHrs   float64  `json:"recoveryLatencyHours,omitempty"`
+	BottleneckLegIndex   int      `json:"bottleneckLegIndex,omitempty"`
+	DominantFactors      []string `json:"dominantFactors,omitempty"`
 }
 
 // validateSupplyChainPathPayload validates SUPPLY_CHAIN_PATH payload structure.
@@ -294,6 +367,29 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 		}
 		if !strings.HasPrefix(ref, "/") {
 			return fmt.Errorf("payload node[%d] 'ref' must be a canonical path (start with /)", i)
+		}
+	}
+
+	// Legs are optional, but if present validate their node indices.
+	if legsRaw, ok := payload["legs"]; ok {
+		decodedLegs, err := decodeSupplyChainPathLegs(legsRaw)
+		if err != nil {
+			return err
+		}
+		for i, leg := range decodedLegs {
+			if leg.Index < 0 {
+				return fmt.Errorf("payload leg[%d] has negative index", i)
+			}
+			for _, idx := range []*int{leg.SupplierNodeIndex, leg.CustomerNodeIndex, leg.ProductNodeIndex} {
+				if idx != nil && (*idx < 0 || *idx >= len(decodedNodes)) {
+					return fmt.Errorf("payload leg[%d] references out-of-range node index", i)
+				}
+			}
+			for _, viaIdx := range leg.TransportViaNodeIndices {
+				if viaIdx < 0 || viaIdx >= len(decodedNodes) {
+					return fmt.Errorf("payload leg[%d] has out-of-range transportViaNodeIndex", i)
+				}
+			}
 		}
 	}
 

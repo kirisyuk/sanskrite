@@ -14,7 +14,6 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // =============================================================================
@@ -781,7 +780,12 @@ func (b *ProductHierarchyBuilder) ensureProducerFromWikidata(
 	}
 
 	// Build canonical path for organization in canonical /org/{geo}/{slug} shape.
-	canonicalPath := taxonomy.OrgCanonicalPath("na", label)
+	canonicalPath := inferOrgCanonicalPathFromHints(&models.HorizonFragment{
+		Type: models.FragmentTypeOrganization,
+		Labels: map[string]string{
+			"en": label,
+		},
+	})
 	if canonicalPath == "" {
 		return nil, fmt.Errorf("failed to build canonical org path for %q", label)
 	}

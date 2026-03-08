@@ -321,9 +321,9 @@ const (
 const (
 	QualifierIntegrationType = "integration_type" // "vertical" | "partnership" | "arm's-length"
 
-	IntegrationTypeVertical   = "vertical"   // owned/controlled within same group (e.g., BYD subsidiaries)
-	IntegrationTypePartnership = "partnership" // JV, strategic alliance, long-term partnership
-	IntegrationTypeArmsLength = "arm's-length" // spot/short-term commercial, pure financial
+	IntegrationTypeVertical    = "vertical"     // owned/controlled within same group (e.g., BYD subsidiaries)
+	IntegrationTypePartnership = "partnership"  // JV, strategic alliance, long-term partnership
+	IntegrationTypeArmsLength  = "arm's-length" // spot/short-term commercial, pure financial
 )
 
 // QualifierAtFacility is used on TRANSFORMS_INTO edges to indicate where the product transformation occurs.
@@ -336,6 +336,24 @@ const QualifierAtFacility = "at_facility"
 // Semantics: facilities that qualify the transport method; product passes through these.
 // Same canonicalization and deduplication rules apply as for other fragments.
 const QualifierTransportVia = "transport_via"
+
+// Path-centric spatial binding qualifiers shared by supply path artifacts and runtime propagation edges.
+const (
+	QualifierRouteMode            = "route_mode"
+	QualifierGeoRefs              = "geo_refs"
+	QualifierFlowRefs             = "flow_refs"
+	QualifierAlternateFlowRefs    = "alternate_flow_refs"
+	QualifierZoneRefs             = "zone_refs"
+	QualifierAffectedZoneRefs     = "affected_zone_refs"
+	QualifierSpatialSemantics     = "spatial_semantics"
+	QualifierBindingConfidence    = "binding_confidence"
+	QualifierPathStressScore      = "path_stress_score"
+	QualifierPathFragility        = "path_fragility"
+	QualifierPathRerouteability   = "path_rerouteability"
+	QualifierPathZonePressure     = "path_zone_pressure"
+	QualifierPathAffectedPressure = "path_affected_pressure"
+	QualifierRecoveryLatencyHours = "recovery_latency_hours"
+)
 
 // EdgeProperties свойства ребра зависимости
 type EdgeProperties struct {

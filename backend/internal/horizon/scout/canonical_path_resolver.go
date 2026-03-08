@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/geoambiguity"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/merge"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -245,6 +246,29 @@ func (r *CanonicalPathResolver) Resolve(
 					result.CanonicalPath = cp
 				}
 				log.Printf("%s Product variant match: %s -> %s (id=%s)", logPrefix, inputPath, result.CanonicalPath, candidate.ID)
+				return result, nil
+			}
+		}
+	}
+
+	// Step 2.25: For skeletal AFFECTED_ZONE inputs, reuse an existing richer sibling
+	// with the same geo + normalized identity slug inside the same condition family.
+	if result.ExistingFragment == nil && fragmentType == models.FragmentTypeAffectedZone && r.fragmentsRepo != nil {
+		incoming := &models.HorizonFragment{
+			CanonicalPath: result.CanonicalPath,
+			Type:          fragmentType,
+			Metadata: models.FragmentMetadata{
+				EpistemicStatus: models.EpistemicStatusLowConfidence,
+			},
+		}
+		candidates, err := FindAffectedZoneTwinCandidates(ctx, r.fragmentsRepo, result.CanonicalPath, "", 128)
+		if err == nil && len(candidates) > 0 {
+			if existing, reason := SelectAffectedZoneTwinReplacement(incoming, candidates); existing != nil && strings.TrimSpace(existing.ID) != "" {
+				result.CanonicalPath = strings.TrimSpace(existing.CanonicalPath)
+				result.ExistingFragment = existing
+				result.NormalizationSteps = append(result.NormalizationSteps,
+					fmt.Sprintf("affected_zone_twin_reuse: %s (id=%s)", reason, existing.ID))
+				log.Printf("%s Reused affected-zone twin: input=%s canonical=%s existingID=%s", logPrefix, inputPath, result.CanonicalPath, existing.ID)
 				return result, nil
 			}
 		}
@@ -705,12 +729,7 @@ func normalizeGeoPathToStrict(path string) string {
 }
 
 func isAmbiguousCountrySlug(countrySlug string) bool {
-	switch strings.ToLower(strings.TrimSpace(countrySlug)) {
-	case "georgia":
-		return true
-	default:
-		return false
-	}
+	return geoambiguity.IsAmbiguousCountryName(countrySlug)
 }
 
 func looksLikeGeoNamesAdminCode(admin string) bool {

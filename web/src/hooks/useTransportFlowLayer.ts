@@ -46,6 +46,7 @@ type EndpointIconKind =
 interface EndpointRenderProperties extends FlowRenderProperties {
   endpointSide: FlowEndpointSide;
   iconId: string;
+  iconScale: number;
 }
 
 interface FlowActivitySnapshot {
@@ -58,6 +59,14 @@ type Vec3 = [number, number, number];
 
 const POPUP_STYLE_ID = 'transport-flows-popup-style';
 const ENDPOINT_ICON_KINDS: EndpointIconKind[] = ['sea', 'air', 'road', 'rail', 'inland', 'intermodal', 'pipeline', 'power', 'ferry', 'internet'];
+
+function canAccessMapStyle(map: maplibregl.Map): boolean {
+  try {
+    return Boolean((map as unknown as { style?: unknown }).style);
+  } catch {
+    return false;
+  }
+}
 
 function endpointIconKind(mode: TransportFlowMode): EndpointIconKind {
   switch (mode) {
@@ -81,6 +90,10 @@ function endpointIconKind(mode: TransportFlowMode): EndpointIconKind {
 
 function endpointIconId(kind: EndpointIconKind): string {
   return `transport-flow-endpoint-icon-${kind}`;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 function makeEndpointIcon(kind: EndpointIconKind): ImageData | null {
@@ -202,6 +215,7 @@ function makeEndpointIcon(kind: EndpointIconKind): ImageData | null {
 }
 
 function ensureEndpointIcons(map: maplibregl.Map): void {
+  if (!canAccessMapStyle(map)) return;
   for (const kind of ENDPOINT_ICON_KINDS) {
     const id = endpointIconId(kind);
     if (map.hasImage(id)) continue;
@@ -606,6 +620,7 @@ function buildEndpointCollection(
     const props = flowPropsFromFeature(feature, theme, activityById);
     if (!props) continue;
     const iconId = endpointIconId(endpointIconKind(props.flowMode));
+    const iconScale = clamp(0.9 + props.hype / 190, 0.9, 1.42);
     const lineStrings: LonLat[][] = feature.geometry.type === 'LineString'
       ? [feature.geometry.coordinates as LonLat[]]
       : (feature.geometry.coordinates as LonLat[][]);
@@ -620,6 +635,7 @@ function buildEndpointCollection(
         ...props,
         endpointSide: 'origin',
         iconId,
+        iconScale,
       };
       mapped.push({
         type: 'Feature',
@@ -633,6 +649,7 @@ function buildEndpointCollection(
         ...props,
         endpointSide: 'destination',
         iconId,
+        iconScale,
       };
       mapped.push({
         type: 'Feature',
@@ -844,9 +861,9 @@ export function useTransportFlowLayer(
         'icon-image': ['get', 'iconId'] as unknown as maplibregl.ExpressionSpecification,
         'icon-size': [
           'interpolate', ['linear'], ['zoom'],
-          2, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 0.47, 0.34],
-          7, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 0.61, 0.46],
-          10, ['case', HOVER_FLAG_EXPRESSION as maplibregl.ExpressionSpecification, 0.7, 0.56],
+          2, ['*', ['coalesce', ['get', 'iconScale'], 1], 0.34],
+          7, ['*', ['coalesce', ['get', 'iconScale'], 1], 0.46],
+          10, ['*', ['coalesce', ['get', 'iconScale'], 1], 0.56],
         ],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
@@ -956,6 +973,7 @@ export function useTransportFlowLayer(
 
   useEffect(() => {
     if (!map || !isReady) return;
+    if (!canAccessMapStyle(map)) return;
     const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
     const endpointSrc = map.getSource(ENDPOINT_SRC) as maplibregl.GeoJSONSource | undefined;
     if (src) src.setData(buildFlowCollection(features, theme, activityById || {}));

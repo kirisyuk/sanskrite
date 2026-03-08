@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -60,8 +61,12 @@ func FilterDomainRelations(ctx context.Context, mode string, rels []DiscoveredRe
 		return rels, 0
 	}
 
-	allowedEdges := taxonomy.AllowedEdgeTypesForDomainMode(mode)
-	allowedEntities := taxonomy.AllowedEntityTypesForDomainMode(mode)
+	profile := contractsemantics.ProfileForDomainMode(mode)
+	allowedEdges := make([]string, 0, len(profile.AllowedEdges))
+	for _, edgeType := range profile.AllowedEdges {
+		allowedEdges = append(allowedEdges, string(edgeType))
+	}
+	allowedEntities := profile.AllowedEntities
 
 	// If domain mode doesn't specify limits, allow all.
 	if len(allowedEdges) == 0 && len(allowedEntities) == 0 {
@@ -132,7 +137,7 @@ func FilterDomainChains(ctx context.Context, mode string, chains []SupplyChain) 
 		return chains, 0
 	}
 
-	allowedEntities := taxonomy.AllowedEntityTypesForDomainMode(mode)
+	allowedEntities := contractsemantics.ProfileForDomainMode(mode).AllowedEntities
 	if len(allowedEntities) == 0 {
 		return chains, 0
 	}

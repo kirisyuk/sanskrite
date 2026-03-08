@@ -26,6 +26,9 @@ type ConservativeWikidataOptions struct {
 	// Overwrite controls whether we overwrite existing fields (labels/description/legalName/shortName).
 	// In our current data model, manual data is not expected, so Overwrite=true is typically safe.
 	Overwrite bool
+	// DisableCoordinates keeps Wikidata from setting fragment coordinates.
+	// Use in the core graph pipeline where geocoding is the source of truth for spatial identity.
+	DisableCoordinates bool
 }
 
 func (o ConservativeWikidataOptions) withDefaults() ConservativeWikidataOptions {
@@ -87,7 +90,7 @@ func EnrichFragmentFromWikidataIfPresent(
 	if locErr != nil || locData == nil {
 		return changed, nil
 	}
-	if applyCoordinatesFromWikidata(fragment, locData.PropertiesRaw, opts.Overwrite) {
+	if !opts.DisableCoordinates && applyCoordinatesFromWikidata(fragment, locData.PropertiesRaw, opts.Overwrite) {
 		changed = true
 	}
 	return changed, nil
@@ -116,7 +119,7 @@ func EnrichFragmentFromEntityData(
 	}
 
 	// Coordinates from Wikidata P625 for all fragment kinds (best-effort).
-	if applyCoordinatesFromWikidata(fragment, ed.PropertiesRaw, opts.Overwrite) {
+	if !opts.DisableCoordinates && applyCoordinatesFromWikidata(fragment, ed.PropertiesRaw, opts.Overwrite) {
 		changed = true
 	}
 

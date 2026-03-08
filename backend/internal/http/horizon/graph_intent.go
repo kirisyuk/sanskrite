@@ -1814,17 +1814,18 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 	}
 	typ := strings.ToUpper(strings.TrimSpace(spec.Type))
 	label := strings.TrimSpace(spec.Label)
+	geoHint := graphIntentGeoHint(spec)
 	slug := taxonomy.Slugify(label)
 	if slug == "" {
 		slug = "untitled"
 	}
 	switch typ {
 	case "GOVERNMENT_AGENCY":
-		return taxonomy.GovCanonicalPath("na", label)
+		return taxonomy.GovCanonicalPath(firstNonEmptyGraphIntent(geoHint, "na"), label)
 	case string(horizonmodels.FragmentTypeOrganization):
-		return taxonomy.OrgCanonicalPath("na", label)
+		return taxonomy.OrgCanonicalPath(firstNonEmptyGraphIntent(geoHint, "na"), label)
 	case string(horizonmodels.FragmentTypeFacility):
-		return taxonomy.FacilityCanonicalPath("na", label)
+		return taxonomy.FacilityCanonicalPath(firstNonEmptyGraphIntent(geoHint, "na"), label)
 	case string(horizonmodels.FragmentTypeGeoRegion):
 		return taxonomy.GeoCanonicalPath("global", slug, "")
 	case string(horizonmodels.FragmentTypeProduct):
@@ -1865,6 +1866,41 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 	default:
 		return taxonomy.OrgCanonicalPath("na", label)
 	}
+}
+
+func graphIntentGeoHint(spec horizonmodels.GraphIntentNodeSpec) string {
+	lookup := func(m map[string]interface{}, keys ...string) string {
+		for _, key := range keys {
+			raw, ok := m[key]
+			if !ok || raw == nil {
+				continue
+			}
+			s, ok := raw.(string)
+			if !ok {
+				continue
+			}
+			v := strings.ToLower(strings.TrimSpace(s))
+			if taxonomy.IsISO2CountryCode(v) || taxonomy.IsRegionalGeoToken(v) || taxonomy.IsCompositeGeoToken(v) {
+				return v
+			}
+		}
+		return ""
+	}
+	for _, m := range []map[string]interface{}{spec.Metadata, spec.State} {
+		if geo := lookup(m, "countryIso2", "jurisdictionIso2", "country", "jurisdiction", "iso2", "geo"); geo != "" {
+			return geo
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyGraphIntent(values ...string) string {
+	for _, v := range values {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func (e *graphIntentApplyExecutor) resolveEdgeEndpoint(tempID, nodeID string) (string, bool) {

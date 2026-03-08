@@ -402,7 +402,7 @@ func (a *ResearchAgent) findSupplierFacsForProductsBatch(ctx context.Context, pr
 	prompt := fmt.Sprintf(`You are a supply chain research agent (UPSTREAM tracing). For each product below, find ALL facilities that PRODUCE and SUPPLY this product to the market.
 
 Include: extraction sites, refineries, processing plants, manufacturing facilities that output this product. The direct upstream link — who makes this product before it reaches consumers/processors.
-Exclude: distributors, traders, logistics hubs — only production facilities. Return only concrete facilities (no synthetic general-production placeholders). When facility is known but geo is unknown: use /fac/na/{facilitySlug}.
+Exclude: distributors, traders, logistics hubs — only production facilities. Return only concrete facilities (no synthetic general-production placeholders). Use /fac/na/{facilitySlug} ONLY as a last resort after checking facility name, site/city mention, operator context, and source text for geography.
 
 Products:
 %s

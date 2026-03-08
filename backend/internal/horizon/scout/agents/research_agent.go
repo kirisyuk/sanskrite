@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -87,7 +88,7 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 		return fragment, nil, nil, nil, "", nil
 	}
 
-	normalizedModes := taxonomy.NormalizeDomainModes(domainModes)
+	normalizedModes := contractsemantics.SortDomainModesForExecution(domainModes)
 	if len(normalizedModes) == 0 {
 		normalizedModes = []string{taxonomy.DomainModeGeneral}
 	}
@@ -636,12 +637,16 @@ CRITICAL MISSING INFORMATION (QUESTIONS TO ANSWER):
 TASK: Use your search tools to find answers to the missing information questions.
 Return a JSON object with fields:
 1. "fragment": A JSON object containing ONLY the new or updated fields for the fragment that you found (e.g., "state", "homeLocation").
-   - Geo contract: if you update "homeLocation", use { "name": "city/place", "iso3166_1": "US|AE|..." } and keep iso3166_1 when known (do not drop it in partial updates).
+   - Geo contract: if you update "homeLocation", use { "name": "city/place", "iso3166_1": "US|AE|..." }.
+   - Set iso3166_1 ONLY when the country is explicit or strongly corroborated by the source and the place clue.
+   - If the place clue and iso3166_1 conflict, correct the ISO2 or omit it; never preserve a contradictory guess in a partial update.
+   - If this update would keep /org/na or /gov/na even though jurisdiction is inferable from official name/place clue/source, resolve the jurisdiction instead of preserving na.
 2. "relations": An array of DiscoveredRelation objects if you found new dependencies (suppliers, competitors, etc.).
 3. "supplyChains": Array of supply chain objects, each with:
    - "nodes": ordered array of {canonicalPath, name, type, role?}
    - "confidence": 0.0-1.0
    - "reason": evidence for this chain
+   - "transportVia": include facility/chokepoint path legs when the route is business-relevant and reasonably inferable; do not leave it empty for obvious maritime/pipeline/chokepoint flows unless evidence is genuinely absent
 
 %s
 

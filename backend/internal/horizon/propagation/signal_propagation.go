@@ -76,6 +76,26 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 		return nil, fmt.Errorf("invalid signal: %w", err)
 	}
 
+	kernelCfg := signalKernelConfigFromContext(ctx)
+	switch kernelCfg.Mode {
+	case SignalKernelModeTypedRWR:
+		return e.propagateSignalTypedRWR(ctx, signal, profileLookup, seedFragmentIDs, kernelCfg)
+	case SignalKernelModeHybrid:
+		boundedCtx := WithSignalKernelConfig(ctx, SignalKernelConfig{Mode: SignalKernelModeBounded})
+		baseRes, err := e.PropagateSignalFromSeeds(boundedCtx, signal, profileLookup, seedFragmentIDs)
+		if err != nil {
+			return nil, err
+		}
+		tailCfg := kernelCfg
+		tailCfg.Mode = SignalKernelModeTypedRWR
+		tailCtx := WithSignalKernelConfig(ctx, tailCfg)
+		tailRes, err := e.PropagateSignalFromSeeds(tailCtx, signal, profileLookup, seedFragmentIDs)
+		if err != nil {
+			return baseRes, nil
+		}
+		return mergeSignalPropagationResults(baseRes, tailRes), nil
+	}
+
 	startTime := time.Now()
 	traceCollector := newSignalTraceCollector(signalTraceConfigFromContext(ctx))
 
@@ -290,7 +310,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 
 		for _, neighbor := range neighbors {
 			// Calculate damped amplitude (profile damping + strong-edge weight + edge physics)
-			breakdown := e.calculateDampedAmplitudeWithBreakdown(outgoingAmplitude, neighbor.edge, profile)
+			breakdown := e.calculateDampedAmplitudeWithBreakdown(outgoingAmplitude, item.axis, frag, neighbor.edge, profile)
 			nextAmplitude := breakdown.Amplitude
 			traceFactors := cloneFactorMap(breakdown.Factors)
 
@@ -496,6 +516,26 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 	}
 	if err := signal.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid signal: %w", err)
+	}
+
+	kernelCfg := signalKernelConfigFromContext(ctx)
+	switch kernelCfg.Mode {
+	case SignalKernelModeTypedRWR:
+		return e.simulateSignalTypedRWR(ctx, signal, profileLookup, seedFragmentIDs, kernelCfg)
+	case SignalKernelModeHybrid:
+		boundedCtx := WithSignalKernelConfig(ctx, SignalKernelConfig{Mode: SignalKernelModeBounded})
+		baseRes, err := e.SimulateSignalFromSeeds(boundedCtx, signal, profileLookup, seedFragmentIDs)
+		if err != nil {
+			return nil, err
+		}
+		tailCfg := kernelCfg
+		tailCfg.Mode = SignalKernelModeTypedRWR
+		tailCtx := WithSignalKernelConfig(ctx, tailCfg)
+		tailRes, err := e.SimulateSignalFromSeeds(tailCtx, signal, profileLookup, seedFragmentIDs)
+		if err != nil {
+			return baseRes, nil
+		}
+		return mergeSignalSimulationResults(baseRes, tailRes), nil
 	}
 
 	startTime := time.Now()
@@ -715,7 +755,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 		}
 
 		for _, neighbor := range neighbors {
-			breakdown := e.calculateDampedAmplitudeWithBreakdown(outgoingAmplitude, neighbor.edge, profile)
+			breakdown := e.calculateDampedAmplitudeWithBreakdown(outgoingAmplitude, item.axis, frag, neighbor.edge, profile)
 			nextAmplitude := breakdown.Amplitude
 			traceFactors := cloneFactorMap(breakdown.Factors)
 			nextAxis, transformFactor := e.applyTransformation(item.axis, neighbor.edge, profile)
@@ -991,6 +1031,18 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 	}
 
 	neighbors := make([]neighborInfo, 0)
+	seen := make(map[string]struct{}, len(outgoingEdges)+len(incomingEdges))
+	addNeighbor := func(item neighborInfo) {
+		if item.edge == nil || strings.TrimSpace(item.fragmentID) == "" {
+			return
+		}
+		key := strings.TrimSpace(item.fragmentID) + "|" + strings.TrimSpace(item.traversalDirection) + "|" + strings.TrimSpace(string(item.edge.Type))
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		neighbors = append(neighbors, item)
+	}
 
 	// Process outgoing edges
 	for _, edge := range outgoingEdges {
@@ -1010,7 +1062,7 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 		}
 		// direction controls traversal relative to edge.Source -> edge.Target
 		if direction == "source_to_target" || direction == "both" {
-			neighbors = append(neighbors, neighborInfo{
+			addNeighbor(neighborInfo{
 				fragmentID:         edge.TargetFragmentID,
 				edge:               edge,
 				spec:               spec,
@@ -1037,13 +1089,21 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 		}
 		// direction controls traversal relative to edge.Source -> edge.Target
 		if direction == "target_to_source" || direction == "both" {
-			neighbors = append(neighbors, neighborInfo{
+			addNeighbor(neighborInfo{
 				fragmentID:         edge.SourceFragmentID,
 				edge:               edge,
 				spec:               spec,
 				traversalDirection: "target_to_source",
 			})
 		}
+	}
+
+	virtualNeighbors, err := e.getSupplyLinkVirtualNeighbors(ctx, frag, strongSpecs, allowSourceToTarget, allowTargetToSource)
+	if err != nil {
+		return nil, err
+	}
+	for _, neighbor := range virtualNeighbors {
+		addNeighbor(neighbor)
 	}
 
 	return neighbors, nil
@@ -1083,6 +1143,8 @@ func propagationModeAllowsTraversal(mode, traversalDirection string) bool {
 
 func (e *PropagationEngine) calculateDampedAmplitudeWithBreakdown(
 	inputAmplitude float64,
+	currentAxis string,
+	fromFrag *horizonmodels.HorizonFragment,
 	edge *horizonmodels.DependencyEdge,
 	profile *horizonmodels.PropagationProfile,
 ) amplitudeBreakdown {
@@ -1170,6 +1232,17 @@ func (e *PropagationEngine) calculateDampedAmplitudeWithBreakdown(
 		out *= costFactor
 	}
 	factors["cost_factor"] = costFactor
+
+	familyPhysics := ApplyEdgeFamilyPhysics(strings.TrimSpace(currentAxis), fromFrag, edge, DefaultEdgeFamilyPhysicsProfile())
+	out *= familyPhysics.Multiplier
+	factors["edge_family_multiplier"] = familyPhysics.Multiplier
+	if familyPhysics.Family != "" {
+		factors["edge_family_"+strings.ReplaceAll(familyPhysics.Family, "/", "_")] = 1.0
+	}
+
+	spatialFactor := spatialBindingFactor(edge, strings.TrimSpace(currentAxis))
+	out *= spatialFactor
+	factors["spatial_binding_factor"] = spatialFactor
 
 	// Waveguide: edges belonging to a materialized artifact (chain) experience reduced damping.
 	wgFactor := WaveguideBoostForEdge(edge, profile)
@@ -1333,4 +1406,118 @@ func (e *PropagationEngine) getFragmentForTrace(ctx context.Context, fragmentID 
 		cache[fragmentID] = frag
 	}
 	return frag
+}
+
+func spatialBindingFactor(edge *horizonmodels.DependencyEdge, axis string) float64 {
+	if edge == nil || edge.Qualifiers == nil {
+		return 1.0
+	}
+	factor := 1.0
+	zoneRefs := qualifierStringSlice(edge.Qualifiers[horizonmodels.QualifierZoneRefs])
+	affectedZoneRefs := qualifierStringSlice(edge.Qualifiers[horizonmodels.QualifierAffectedZoneRefs])
+	spatialSemantics := qualifierStringSlice(edge.Qualifiers[horizonmodels.QualifierSpatialSemantics])
+	pathStress, _ := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierPathStressScore])
+	pathFragility, _ := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierPathFragility])
+	pathRerouteability, _ := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierPathRerouteability])
+	pathZonePressure, _ := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierPathZonePressure])
+	pathAffectedPressure, _ := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierPathAffectedPressure])
+	if len(zoneRefs) > 0 {
+		factor *= 1 + math.Min(float64(len(zoneRefs)), 4)*0.03
+		if axis == horizonmodels.AxisLogisticsCapacity || axis == horizonmodels.AxisLogisticsLatency || axis == horizonmodels.AxisPhysicalFlowSupply {
+			if containsAnyRef(zoneRefs, "logistics_chokepoint") {
+				factor *= 1.10
+			}
+			if containsAnyRef(zoneRefs, "energy_hub") {
+				factor *= 1.06
+			}
+		}
+	}
+	if len(affectedZoneRefs) > 0 {
+		if axis == horizonmodels.AxisGeoConflict || axis == horizonmodels.AxisLogisticsCapacity || axis == horizonmodels.AxisLogisticsLatency || axis == horizonmodels.AxisPhysicalFlowSupply {
+			factor *= 1 + math.Min(float64(len(affectedZoneRefs)), 4)*0.05
+		}
+	}
+	if containsAnyRef(spatialSemantics, "chokepoint_exposed") && (axis == horizonmodels.AxisGeoConflict || axis == horizonmodels.AxisLogisticsCapacity || axis == horizonmodels.AxisLogisticsLatency) {
+		factor *= 1.08
+	}
+	if bindingConfidence, ok := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierBindingConfidence]); ok && bindingConfidence > 0 {
+		factor *= 1 + math.Min(bindingConfidence, 1.0)*0.12
+	}
+	if pathStress > 0 {
+		factor *= 1 + math.Min(pathStress, 1.0)*0.15
+	}
+	if pathFragility > 0 {
+		factor *= 1 + math.Min(pathFragility, 1.0)*0.08
+	}
+	if pathZonePressure > 0 && (axis == horizonmodels.AxisLogisticsCapacity || axis == horizonmodels.AxisLogisticsLatency || axis == horizonmodels.AxisPhysicalFlowSupply) {
+		factor *= 1 + math.Min(pathZonePressure, 1.0)*0.08
+	}
+	if pathAffectedPressure > 0 && (axis == horizonmodels.AxisGeoConflict || axis == horizonmodels.AxisLogisticsCapacity || axis == horizonmodels.AxisLogisticsLatency || axis == horizonmodels.AxisPhysicalFlowSupply) {
+		factor *= 1 + math.Min(pathAffectedPressure, 1.0)*0.10
+	}
+	if pathRerouteability > 0 {
+		factor *= 1 - math.Min(pathRerouteability, 1.0)*0.05
+	}
+	return factor
+}
+
+func qualifierStringSlice(raw interface{}) []string {
+	switch v := raw.(type) {
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+		return out
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return nil
+		}
+		return []string{s}
+	default:
+		return nil
+	}
+}
+
+func containsAnyRef(items []string, token string) bool {
+	token = strings.ToLower(strings.TrimSpace(token))
+	if token == "" {
+		return false
+	}
+	for _, item := range items {
+		if strings.Contains(strings.ToLower(strings.TrimSpace(item)), token) {
+			return true
+		}
+	}
+	return false
+}
+
+func qualifierFloatValue(raw interface{}) (float64, bool) {
+	switch v := raw.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	default:
+		return 0, false
+	}
 }

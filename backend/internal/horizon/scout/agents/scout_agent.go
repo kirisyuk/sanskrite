@@ -666,7 +666,7 @@ func extractionCanonicalNamespaceDetailsBlock() string {
   - HAS_MARKET_SEGMENT child path = parent path + one segment
 - Communities: /community/{geo}/{type}/{slug}; subgroup hierarchy via HAS_SUBGROUP (broader -> narrower).
 - Programs: /program/{jurisdiction}/{slug}; if jurisdiction is unknown, use global.
-- Facilities: /fac/{geo}/{facilitySlug}; geo like org/gov (ISO2, na, or regional). If geo unknown, use na.`
+- Facilities: /fac/{geo}/{facilitySlug}; geo like org/gov (ISO2, na, or regional). /fac/na is LAST-RESORT ONLY after checking facility name, site/city mention, operator context, and source text for geography. If the facility name itself contains a clear place clue, infer the ISO2 instead of using na.`
 }
 
 // buildExtractionPrompt строит промпт для извлечения данных
@@ -717,6 +717,9 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 - state: map of MetricValue entries
 - description: short factual summary
 - homeLocation: when geo is relevant, object with { name: string (city/place), iso3166_1: string (ISO3166-1 alpha2, e.g. "AE", "US") }. Required for org/facility/gov to enable geocoding.
+  - Set iso3166_1 ONLY when explicit or strongly corroborated by the source/location clue.
+  - If city/site clue and iso3166_1 conflict, fix the ISO2 or omit it; never keep a contradictory guess.
+  - For org/gov, /org/na or /gov/na is last-resort only after checking official name, HQ/site/place clue, and source text for jurisdiction.
 - lifecycleStage: concept|planning|permitting|financing|construction|commissioning|operational|expansion|suspended|decommissioning|closed
 - expectedStartDate, actualStartDate, expectedEndDate, actualEndDate: ISO8601 when known
 - identifiers: ISIN/LEI/Ticker/etc when available

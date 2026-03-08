@@ -61,14 +61,30 @@ func TestEvaluateChainReuse_FullSkip(t *testing.T) {
 	builder := &mockChainReuseBuilder{chains: map[string]*models.MaterializedArtifact{
 		"global|" + key: {
 			ID:         "art-123",
+			Kind:       models.MaterializedKindSupplyChainPath,
 			PathStatus: "validated",
 			UpdatedAt:  time.Now().Add(-1 * time.Hour),
 			Payload: map[string]interface{}{
+				"v": float64(1),
 				"nodes": []interface{}{
 					map[string]interface{}{"type": "org", "ref": "/org/catl"},
 					map[string]interface{}{"type": "product", "ref": "/product/lithium-battery-cell"},
 					map[string]interface{}{"type": "org", "ref": "/org/bmw-ag"},
 				},
+				"legs": []interface{}{
+					map[string]interface{}{
+						"index":             float64(0),
+						"supplierRef":       "/org/catl",
+						"customerRef":       "/org/bmw-ag",
+						"productRef":        "/product/lithium-battery-cell",
+						"flowRefs":          []interface{}{"sea_suez_rotterdam"},
+						"bindingConfidence": 0.86,
+					},
+				},
+				"stress": map[string]interface{}{
+					"pathScore": 0.64,
+				},
+				"notes": map[string]interface{}{"confidence": 0.92},
 			},
 			NodeRefs: []string{"/org/catl", "/product/lithium-battery-cell", "/org/bmw-ag"},
 		},
@@ -85,6 +101,37 @@ func TestEvaluateChainReuse_FullSkip(t *testing.T) {
 	}
 }
 
+func TestEvaluateChainReuse_EnrichMerge_WhenBindingsMissing(t *testing.T) {
+	key := pathbuilder.BuildStructuralCanonicalKey("global", []pathbuilder.PathSegment{
+		{SupplierRef: "/org/catl", ProductRef: "/product/lithium-battery-cell", CustomerRef: "/org/bmw-ag"},
+	})
+	builder := &mockChainReuseBuilder{chains: map[string]*models.MaterializedArtifact{
+		"global|" + key: {
+			ID:         "art-flat",
+			Kind:       models.MaterializedKindSupplyChainPath,
+			PathStatus: "validated",
+			UpdatedAt:  time.Now().Add(-1 * time.Hour),
+			Payload: map[string]interface{}{
+				"v": float64(1),
+				"nodes": []interface{}{
+					map[string]interface{}{"type": "org", "ref": "/org/catl"},
+					map[string]interface{}{"type": "product", "ref": "/product/lithium-battery-cell"},
+					map[string]interface{}{"type": "org", "ref": "/org/bmw-ag"},
+				},
+				"notes": map[string]interface{}{"confidence": 0.92},
+			},
+			NodeRefs: []string{"/org/catl", "/product/lithium-battery-cell", "/org/bmw-ag"},
+		},
+	}}
+	segments := []pathbuilder.PathSegment{
+		{SupplierRef: "/org/catl", ProductRef: "/product/lithium-battery-cell", CustomerRef: "/org/bmw-ag"},
+	}
+	d := evaluateChainReuse(context.Background(), builder, "global", segments)
+	if d.Level != ChainReuseEnrichMerge {
+		t.Fatalf("expected ChainReuseEnrichMerge, got %s (reason: %s)", d.Level, d.Reason)
+	}
+}
+
 func TestEvaluateChainReuse_EnrichMerge_Hypothesis(t *testing.T) {
 	key := pathbuilder.BuildStructuralCanonicalKey("global", []pathbuilder.PathSegment{
 		{SupplierRef: "/org/catl", ProductRef: "/product/lithium-battery-cell", CustomerRef: "/org/bmw-ag"},
@@ -92,6 +139,7 @@ func TestEvaluateChainReuse_EnrichMerge_Hypothesis(t *testing.T) {
 	builder := &mockChainReuseBuilder{chains: map[string]*models.MaterializedArtifact{
 		"global|" + key: {
 			ID:         "art-456",
+			Kind:       models.MaterializedKindSupplyChainPath,
 			PathStatus: "hypothesis",
 			UpdatedAt:  time.Now().Add(-1 * time.Hour),
 			Payload: map[string]interface{}{
@@ -120,6 +168,7 @@ func TestEvaluateChainReuse_EnrichMerge_Stale(t *testing.T) {
 	builder := &mockChainReuseBuilder{chains: map[string]*models.MaterializedArtifact{
 		"global|" + key: {
 			ID:         "art-789",
+			Kind:       models.MaterializedKindSupplyChainPath,
 			PathStatus: "validated",
 			UpdatedAt:  time.Now().Add(-30 * 24 * time.Hour),
 			Payload: map[string]interface{}{
@@ -148,6 +197,7 @@ func TestEvaluateChainReuse_EnrichMerge_SparseNodes(t *testing.T) {
 	builder := &mockChainReuseBuilder{chains: map[string]*models.MaterializedArtifact{
 		"global|" + key: {
 			ID:         "art-sparse",
+			Kind:       models.MaterializedKindSupplyChainPath,
 			PathStatus: "validated",
 			UpdatedAt:  time.Now().Add(-1 * time.Hour),
 			Payload: map[string]interface{}{
@@ -179,10 +229,10 @@ func TestFilterScopeWorthyRefs(t *testing.T) {
 	}
 	result := filterScopeWorthyRefs(refs)
 	expected := map[string]bool{
-		"/org/catl":                true,
-		"/fac/de/bmw-munich":       true,
-		"/deposit/au/greenbushes":  true,
-		"/gov/cn":                  true,
+		"/org/catl":               true,
+		"/fac/de/bmw-munich":      true,
+		"/deposit/au/greenbushes": true,
+		"/gov/cn":                 true,
 	}
 	if len(result) != len(expected) {
 		t.Fatalf("expected %d scope-worthy refs, got %d: %v", len(expected), len(result), result)

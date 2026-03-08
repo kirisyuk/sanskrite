@@ -610,7 +610,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 
 	for _, v := range p.Waterways {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
+			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, "", v.Lat, v.Lon),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			Description:   v.Description,
@@ -637,7 +637,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 
 	for _, v := range p.MilitaryBases {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
+			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, v.Country, v.Lat, v.Lon),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			Description:   strings.TrimSpace(v.Status),
@@ -675,7 +675,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 			country = firstNonEmpty(v.LandingPoints[0].Country, v.LandingPoints[0].City)
 		}
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
+			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, country, lat, lon),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			SourceID:      v.ID,
@@ -709,7 +709,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 
 	for _, v := range p.NuclearFacilities {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
+			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, v.Operator, v.Lat, v.Lon),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			SourceID:      v.ID,
@@ -776,7 +776,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 
 	for _, v := range p.Spaceports {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
+			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, v.Country, v.Lat, v.Lon),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			SourceID:      v.ID,
@@ -854,7 +854,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 			country = v.Countries[0]
 		}
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
+			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, country, lat, lon),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			Description:   v.Capacity,
@@ -894,7 +894,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 
 	for _, v := range p.Ports {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
-			CanonicalPath: taxonomy.FacilityCanonicalPath("na", v.Name),
+			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, v.Country, v.Lat, v.Lon),
 			Type:          hmodels.FragmentTypeFacility,
 			Label:         v.Name,
 			Description:   v.Note,
@@ -1769,6 +1769,22 @@ type buildFragmentSpec struct {
 	Country        string
 	Qualifiers     map[string]interface{}
 	HorizonMonitor *hmodels.HorizonMonitorFragmentData
+}
+
+func (i *importer) resolvedFacilityCanonicalPath(label, country string, lat, lon float64) string {
+	geo := strings.TrimSpace(i.geoToken(country))
+	if geo == "" {
+		if geoPath := i.resolveGeoPath(country, lat, lon); strings.HasPrefix(strings.TrimSpace(geoPath), "/loc/") {
+			parts := strings.Split(strings.Trim(strings.TrimSpace(geoPath), "/"), "/")
+			if len(parts) >= 2 {
+				geo = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	if geo == "" {
+		geo = "na"
+	}
+	return taxonomy.FacilityCanonicalPath(geo, label)
 }
 
 func (i *importer) upsertFragment(ctx context.Context, spec buildFragmentSpec) (string, error) {

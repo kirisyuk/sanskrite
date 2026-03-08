@@ -1,0 +1,103 @@
+package graphenrich
+
+import (
+	"testing"
+
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+)
+
+func TestApplyFragmentHeuristics_InfersGovAndMarketFields(t *testing.T) {
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeOrganization,
+		CanonicalPath: "/gov/sa/ministry-of-energy",
+		Labels:        map[string]string{"en": "Ministry of Energy"},
+		MarketSegments: []string{
+			"segment/energy/lng/sa",
+		},
+	}
+	if !ApplyFragmentHeuristics(frag) {
+		t.Fatalf("expected fragment heuristics to change fragment")
+	}
+	if frag.GovType != "ministry" {
+		t.Fatalf("expected govType=ministry, got %q", frag.GovType)
+	}
+	if frag.MarketDomain != "energy" {
+		t.Fatalf("expected marketDomain=energy, got %q", frag.MarketDomain)
+	}
+	if frag.MarketVertical != "lng" {
+		t.Fatalf("expected marketVertical=lng, got %q", frag.MarketVertical)
+	}
+	if len(frag.IndustryPaths) == 0 {
+		t.Fatalf("expected industryPaths to be inferred")
+	}
+}
+
+func TestApplyFragmentHeuristics_TagsChokepoint(t *testing.T) {
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeOrganization,
+		CanonicalPath: "/loc/sea/na/strait-of-hormuz",
+		Labels:        map[string]string{"en": "Strait of Hormuz"},
+	}
+	ApplyFragmentHeuristics(frag)
+	if frag.GeoFeatureType != "strait" {
+		t.Fatalf("expected geoFeatureType=strait, got %q", frag.GeoFeatureType)
+	}
+	found := false
+	for _, tag := range frag.Tags {
+		if tag == "chokepoint" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected chokepoint tag")
+	}
+}
+
+func TestApplyEdgeHeuristics_NormalizesTransportAndContracts(t *testing.T) {
+	edge := &models.DependencyEdge{
+		Type: models.DependencyTypeDependsOn,
+		Qualifiers: map[string]interface{}{
+			"transportVia":        []interface{}{string("/loc/sea/na/strait-of-hormuz")},
+			"throughputShare":     "0.72",
+			"reroutePenalty":      "0.40",
+			"capacityUtilization": "0.81",
+			"substitutability":    0.2,
+		},
+	}
+	changed := ApplyEdgeHeuristics(edge, "/fac/qa/ras-laffan-lng-terminal", "/fac/cn/shenzhen-general-production")
+	if !changed {
+		t.Fatalf("expected edge heuristics to change edge")
+	}
+	if got := edge.Qualifiers[models.QualifierTransportVia]; got == nil {
+		t.Fatalf("expected canonical transport_via qualifier, qualifiers=%#v", edge.Qualifiers)
+	}
+	if got := edge.Qualifiers["facet"]; got != string(models.FacetLogistics) {
+		t.Fatalf("expected logistics facet, got %v", got)
+	}
+	if got := edge.Qualifiers[models.QualifierTransmissionContractStatus]; got != models.TransmissionContractStatusComplete {
+		t.Fatalf("expected complete transmission contract, got %v", got)
+	}
+	if _, ok := edge.Metrics[models.QualifierThroughputShare]; !ok {
+		t.Fatalf("expected throughput metric to be mirrored")
+	}
+}
+
+func TestApplyEdgeHeuristics_RouteConstraintAddsDefaults(t *testing.T) {
+	edge := &models.DependencyEdge{
+		Type: models.DependencyTypeSuppliesTo,
+		Qualifiers: map[string]interface{}{
+			"via": "/loc/sea/na/strait-of-hormuz",
+		},
+	}
+	ApplyEdgeHeuristics(edge, "/fac/ir/bandar-abbas-refinery", "/fac/in/mundra-general-production")
+	if _, ok := ParseNumericQualifier(edge.Qualifiers[models.QualifierReroutePenalty]); !ok {
+		t.Fatalf("expected reroute penalty heuristic, qualifiers=%#v", edge.Qualifiers)
+	}
+	if _, ok := ParseNumericQualifier(edge.Qualifiers[models.QualifierCapacityConstraint]); !ok {
+		t.Fatalf("expected capacity constraint heuristic")
+	}
+	if _, ok := ParseNumericQualifier(edge.Qualifiers["substitutability"]); !ok {
+		t.Fatalf("expected substitutability heuristic")
+	}
+}

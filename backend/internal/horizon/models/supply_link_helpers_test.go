@@ -392,10 +392,10 @@ func TestNormalizeOrgRefToFacilityFallback(t *testing.T) {
 		in   string
 		want string
 	}{
-		{name: "org simple", in: "/org/albemarle", want: "/fac/na/albemarle-general-production"},
-		{name: "org with geo", in: "/org/cn/tsmc", want: "/fac/cn/tsmc-general-production"},
-		{name: "org us", in: "/org/us/albemarle-corp", want: "/fac/us/albemarle-corp-general-production"},
-		{name: "gov with geo", in: "/gov/us/department-of-energy", want: "/fac/us/department-of-energy-general-production"},
+		{name: "org simple", in: "/org/albemarle", want: ""},
+		{name: "org with geo", in: "/org/cn/tsmc", want: ""},
+		{name: "org us", in: "/org/us/albemarle-corp", want: ""},
+		{name: "gov with geo", in: "/gov/us/department-of-energy", want: ""},
 		{name: "fac unchanged", in: "/fac/us/silver-peak", want: "/fac/us/silver-peak"},
 		{name: "deposit unchanged", in: "/deposit/lithium/salar-de-atacama", want: "/deposit/lithium/salar-de-atacama"},
 		{name: "product returns empty", in: "/product/lithium-carbonate", want: ""},

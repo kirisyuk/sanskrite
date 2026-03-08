@@ -556,8 +556,13 @@ func countryFromPath(path string) string {
 		return ""
 	}
 	switch parts[0] {
-	case "org", "gov", "loc", "market", "community":
+	case "org", "gov", "loc", "market", "community", "fac":
 		return strings.ToLower(strings.TrimSpace(parts[1]))
+	case "track":
+		if len(parts) >= 3 {
+			return strings.ToLower(strings.TrimSpace(parts[2]))
+		}
+		return ""
 	default:
 		return ""
 	}

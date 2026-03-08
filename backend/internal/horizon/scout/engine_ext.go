@@ -5997,7 +5997,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		if canonFromEdgeType != "" {
 			edge.SetPolicyOriginalType(models.DependencyType(canonFromEdgeType))
 		}
-		applyBestEffortEdgeEnrichment(edge)
+		applyBestEffortEdgeEnrichment(edge, srcPath, dstPath)
 
 		// Check if edge already exists to prevent duplicates (idempotency)
 		if e.edgesRepo != nil {
@@ -6911,6 +6911,16 @@ func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]
 		if supplier == "" || product == "" || customer == "" {
 			continue
 		}
+		viaRefs := make([]string, 0, len(seg.TransportViaRefs))
+		for _, via := range seg.TransportViaRefs {
+			via = strings.TrimSpace(via)
+			if rp, ok := pathRewrites[via]; ok && rp != "" {
+				via = strings.TrimSpace(rp)
+			}
+			if via != "" {
+				viaRefs = append(viaRefs, via)
+			}
+		}
 		var supFac, custFac *string
 		if seg.SupplierFacilityRef != "" {
 			sup := strings.TrimSpace(seg.SupplierFacilityRef)
@@ -6936,7 +6946,7 @@ func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]
 			CustomerRef:         customer,
 			SupplierFacilityRef: supFac,
 			CustomerFacilityRef: custFac,
-			TransportViaRefs:    seg.TransportViaRefs,
+			TransportViaRefs:    viaRefs,
 			Confidence:          seg.Confidence,
 			TenantID:            "global",
 			IsTenantSpecific:    false,
@@ -8124,7 +8134,7 @@ func (e *ScoutEngine) processSupplyChains(
 			edge.Qualifiers["normalizedEdgeType"] = string(edgeType)
 		}
 		edge.SetPolicyStatus(policyStatus, policyReason, policyPenalty)
-		applyBestEffortEdgeEnrichment(edge)
+		applyBestEffortEdgeEnrichment(edge, srcPath, dstPath)
 
 		// Final allowlist gate: never persist out-of-contract types for supply-chain edges.
 		allowed := IsSupplyChainEdgeType(string(edgeType))
@@ -8202,13 +8212,23 @@ func (e *ScoutEngine) processSupplyChains(
 		supplierRef := supplier
 		customerRef := customer
 		productRef := product
+		transportViaRefs := make([]string, 0, len(seg.TransportViaRefs))
+		for _, via := range seg.TransportViaRefs {
+			via = strings.TrimSpace(via)
+			if rp, ok := pathRewrites[via]; ok && rp != "" {
+				via = strings.TrimSpace(rp)
+			}
+			if via != "" {
+				transportViaRefs = append(transportViaRefs, via)
+			}
+		}
 		slFrag := &models.HorizonFragment{
 			Type:             models.FragmentTypeSupplyLink,
 			TenantID:         "global",
 			SupplierRef:      &supplierRef,
 			ProductRef:       &productRef,
 			CustomerRef:      &customerRef,
-			TransportViaRefs: seg.TransportViaRefs,
+			TransportViaRefs: transportViaRefs,
 			Status:           "active",
 			Governance:       models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
 			Provenance:       models.Provenance{Method: "scout_supply_chain", SourceIDs: []string{job.ID}},

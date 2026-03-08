@@ -12,7 +12,6 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 var (
@@ -50,6 +49,7 @@ func main() {
 
 	log.Printf("Supply chain org→fac migration (project=%s apply=%v tenant=%s)",
 		*projectID, *apply && !*dryRun, *tenantID)
+	log.Fatal("deprecated: synthetic /fac/*-general-production migration is disabled; use org->product links and concrete facilities only")
 
 	var st stats
 
@@ -148,19 +148,15 @@ func main() {
 		}
 	}
 
-	// Reference taxonomy to ensure it's linked
-	_ = taxonomy.FacilityGeneralProductionPath("na", "test")
-
 	log.Printf("Done. supplyLinksScanned=%d changed=%d applied=%d facilitiesCreated=%d errors=%d",
 		st.SupplyLinksScanned, st.SupplyLinksChanged, st.SupplyLinksApplied, st.FacilitiesCreated, st.Errors)
 }
 
 func init() {
 	flag.Usage = func() {
-		fmt.Printf(`Usage: supply_chain_migrate_org_to_fac --project=<gcp-project> [--apply] [--dry-run]
+		fmt.Printf(`Usage: supply_chain_migrate_org_to_fac --project=<gcp-project>
 
-Migrates SupplyLinks with /org/ refs to /fac/{geo}/{orgSlug}-general-production per the Supply Chain Fractal Model.
-Creates facility fragments for general-production when missing.
+Deprecated. Synthetic /fac/*-general-production migration is disabled.
 
 `)
 		flag.PrintDefaults()

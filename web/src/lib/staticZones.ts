@@ -81,24 +81,24 @@ export function formatZoneType(type: StaticZoneType): string {
 
 export function zoneTypeColor(type: StaticZoneType, theme: 'dark' | 'light'): string {
   const darkPalette: Record<StaticZoneType, string> = {
-    industrial_cluster: '#f59e0b',
-    energy_hub: '#ef4444',
-    logistics_chokepoint: '#38bdf8',
-    special_economic_zone: '#14b8a6',
-    resource_extraction: '#f97316',
-    military_industrial: '#94a3b8',
-    data_infrastructure: '#22d3ee',
-    climate_exposure: '#facc15',
+    industrial_cluster: '#7b8ea4',
+    energy_hub: '#8f7a6a',
+    logistics_chokepoint: '#5f8fa8',
+    special_economic_zone: '#5d9a8c',
+    resource_extraction: '#8d7663',
+    military_industrial: '#7c8798',
+    data_infrastructure: '#5f90a1',
+    climate_exposure: '#8d8864',
   };
   const lightPalette: Record<StaticZoneType, string> = {
-    industrial_cluster: '#b45309',
-    energy_hub: '#b91c1c',
-    logistics_chokepoint: '#0369a1',
-    special_economic_zone: '#0f766e',
-    resource_extraction: '#c2410c',
-    military_industrial: '#475569',
-    data_infrastructure: '#0e7490',
-    climate_exposure: '#a16207',
+    industrial_cluster: '#6b7d92',
+    energy_hub: '#786657',
+    logistics_chokepoint: '#4f7892',
+    special_economic_zone: '#4f8378',
+    resource_extraction: '#775f4f',
+    military_industrial: '#647183',
+    data_infrastructure: '#4d7788',
+    climate_exposure: '#76714f',
   };
   const palette = theme === 'dark' ? darkPalette : lightPalette;
   return palette[type] || (theme === 'dark' ? '#38bdf8' : '#0369a1');

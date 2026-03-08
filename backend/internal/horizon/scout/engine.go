@@ -124,6 +124,19 @@ func mergeHomeLocation(dst, src *models.Location) {
 	}
 }
 
+func revalidateFragmentGeo(ctx context.Context, fragment *models.HorizonFragment, geocodingClient coreontology.GeocodingClientInterface) {
+	if fragment == nil || geocodingClient == nil {
+		return
+	}
+	if fragment.Type == models.FragmentTypeFacility {
+		_, _ = RevalidateFacilityGeo(ctx, fragment, geocodingClient)
+		return
+	}
+	if fragment.Type == models.FragmentTypeOrganization {
+		_, _ = RevalidateOrgGeo(ctx, fragment, geocodingClient)
+	}
+}
+
 func appendMissingInfoUnique(list []string, item string) []string {
 	item = strings.TrimSpace(item)
 	if item == "" {
@@ -5330,6 +5343,7 @@ SKIP_METRICS:
 		if orgLegacyPath != "" {
 			recordLegacyOrgPath(extractedFragment, orgLegacyPath)
 		}
+		revalidateFragmentGeo(ctx, extractedFragment, e.geocodingClient)
 
 		// Market deduplication via canonical path resolver (tag-based).
 		if e.canonicalPathResolver != nil && extractedFragment.Type == models.FragmentTypeMarket && len(extractedFragment.Tags) > 0 {
@@ -5462,6 +5476,7 @@ SKIP_METRICS:
 			existingFragment.Metadata.LastVerifiedAt = time.Now()
 			existingFragment.Metadata.SourceFrameID = frameID
 
+			revalidateFragmentGeo(ctx, existingFragment, e.geocodingClient)
 			// Best-effort: save the merged OrgSize/MarketSegments back to Firestore
 			if uerr := e.fragmentsRepo.Update(ctx, existingFragment); uerr != nil {
 				fmt.Printf("[ScoutEngine] Warning: failed to update fragment after dedup merge: %v\n", uerr)
@@ -5574,6 +5589,7 @@ SKIP_METRICS:
 						existingFragment.Labels["en"] = bestEffortDisplayLabel(existingFragment.Labels["en"], cp)
 					}
 
+					revalidateFragmentGeo(ctx, existingFragment, e.geocodingClient)
 					e.enrichFragmentParallel(ctx, existingFragment)
 
 					if uerr := e.fragmentsRepo.Update(ctx, existingFragment); uerr != nil {
@@ -5596,6 +5612,7 @@ SKIP_METRICS:
 						"materializationAllDocumentIDs": allDocumentIDs,
 					})
 				}
+				revalidateFragmentGeo(ctx, extractedFragment, e.geocodingClient)
 				fragmentID, err = e.fragmentsRepo.Create(ctx, extractedFragment)
 				if err != nil {
 					return fmt.Errorf("failed to create fragment: %w", err)
@@ -5708,6 +5725,7 @@ SKIP_METRICS:
 			existingFragment.Metadata.EpistemicStatus = models.EpistemicStatusLowConfidence
 		}
 
+		revalidateFragmentGeo(ctx, existingFragment, e.geocodingClient)
 		e.enrichFragmentParallel(ctx, existingFragment)
 		if internalFirstGroundingEnabled() {
 			var resolutionStats *models.GroundingResolutionStats
@@ -5729,6 +5747,7 @@ SKIP_METRICS:
 			}
 		}
 
+		revalidateFragmentGeo(ctx, existingFragment, e.geocodingClient)
 		if err := e.fragmentsRepo.Update(ctx, existingFragment); err != nil {
 			return fmt.Errorf("failed to update fragment: %w", err)
 		}
@@ -6735,8 +6754,9 @@ func (e *ScoutEngine) enrichFragmentParallel(ctx context.Context, frag *models.H
 		defer wg.Done()
 		if e.wikidataClient != nil {
 			_, _ = henrich.EnrichFragmentFromWikidataIfPresent(ctx, e.wikidataClient, frag, henrich.ConservativeWikidataOptions{
-				Force:     false,
-				Overwrite: true,
+				Force:              false,
+				Overwrite:          true,
+				DisableCoordinates: true,
 			})
 		}
 	}()
@@ -6748,10 +6768,7 @@ func (e *ScoutEngine) enrichFragmentParallel(ctx context.Context, frag *models.H
 	}()
 	wg.Wait()
 
-	// Group 2: geo chain (sequential — may depend on Wikidata-provided address data).
-	if e.geonamesClient != nil && (strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/loc/") || strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/zone/")) {
-		_, _ = henrich.EnrichCoordinatesFromGeoNames(ctx, e.geonamesClient, frag)
-	}
+	// Group 2: geo chain (sequential). Geocoding is the spatial source of truth.
 	if e.geocodingClient != nil {
 		_, _ = henrich.EnrichCoordinatesFromGeocoding(ctx, e.geocodingClient, frag)
 	}

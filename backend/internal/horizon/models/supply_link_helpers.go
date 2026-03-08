@@ -5,8 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
-
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // BuildSupplyLinkCanonicalPath generates a canonical path for a SupplyLink fragment.
@@ -54,10 +52,9 @@ func shortPathHash(path string) string {
 	return hex.EncodeToString(sum[:5])
 }
 
-// NormalizeOrgRefToFacilityFallback converts an org path to the facility fallback path.
-// When org is used as supplier/customer but facility is unknown: /org/X -> /fac/X-general-production.
-// For geo-prefixed orgs: /org/geo/X -> /fac/geo-X-general-production (slugified).
-// Returns the org path unchanged if it is already /fac/ or /deposit/; empty string if input is empty.
+// NormalizeOrgRefToFacilityFallback intentionally does not synthesize facility placeholders from
+// /org or /gov paths. The graph now prefers org->product when the concrete facility is unknown.
+// Returns the original path only for already-concrete /fac or /deposit refs; otherwise empty.
 func NormalizeOrgRefToFacilityFallback(orgPath string) string {
 	orgPath = strings.TrimSpace(orgPath)
 	if orgPath == "" {
@@ -66,24 +63,7 @@ func NormalizeOrgRefToFacilityFallback(orgPath string) string {
 	if strings.HasPrefix(orgPath, "/fac/") || strings.HasPrefix(orgPath, "/deposit/") {
 		return orgPath
 	}
-	if !strings.HasPrefix(orgPath, "/org/") && !strings.HasPrefix(orgPath, "/gov/") {
-		return ""
-	}
-	// Path format: /org/{geo}/{slug} or /gov/{geo}/{slug}.
-	parts := strings.Split(strings.Trim(orgPath, "/"), "/")
-	if len(parts) < 2 {
-		slug := extractSlugFromPath(orgPath)
-		if slug == "" {
-			return ""
-		}
-		return taxonomy.FacilityGeneralProductionPath("na", slug)
-	}
-	geo := strings.ToLower(strings.TrimSpace(parts[1]))
-	slug := strings.TrimSpace(parts[len(parts)-1])
-	if slug == "" {
-		return ""
-	}
-	return taxonomy.FacilityGeneralProductionPath(geo, slug)
+	return ""
 }
 
 // extractSlugFromPath extracts the last segment from a canonical path.

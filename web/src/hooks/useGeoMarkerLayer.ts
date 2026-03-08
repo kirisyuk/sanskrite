@@ -8,9 +8,12 @@ import {
   getHorizonNodeVisualType,
   getNodeColors,
 } from '../components/HorizonGraphNodeTypes';
+import { MAP_TEXT_FONT_STACK } from './useMapInstance';
 
 const SRC = 'geo-markers';
+const CLUSTER_GLOW = 'geo-cluster-glow';
 const CLUSTERS = 'geo-clusters';
+const CLUSTER_CORE = 'geo-cluster-core';
 const CLUSTER_COUNT = 'geo-cluster-count';
 const POINTS = 'geo-unclustered';
 const SPIDER_SRC = 'geo-spider';
@@ -22,6 +25,12 @@ const CLUSTER_RADIUS = 40;
 const MARKER_PX = 28;
 const ICON_PX = 16;
 const PIXEL_RATIO = 2;
+
+const CLUSTER_RING_RADIUS: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 13, 10, 17, 50, 22, 200, 28];
+const CLUSTER_GLOW_RADIUS: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 16, 10, 19, 50, 24, 200, 30];
+const CLUSTER_CORE_RADIUS: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 2.25, 10, 2.75, 50, 3.25, 200, 4.25];
+const CLUSTER_RING_STROKE_WIDTH: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 1.15, 10, 1.35, 50, 1.65, 200, 1.95];
+const CLUSTER_TEXT_SIZE: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 10, 10, 11, 50, 12, 200, 13];
 
 // ---------------------------------------------------------------------------
 // Icon key helpers
@@ -41,6 +50,14 @@ function resolveVisualTypeAndColor(
 
 function iconKey(vt: string, color: string): string {
   return `marker-${vt}-${color.replace('#', '')}`;
+}
+
+function canAccessMapStyle(map: maplibregl.Map): boolean {
+  try {
+    return Boolean((map as unknown as { style?: unknown }).style);
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -108,11 +125,12 @@ async function ensureMarkerImages(
   objects: GeoObject[],
   theme: 'dark' | 'light',
 ): Promise<void> {
+  if (!canAccessMapStyle(map)) return;
   const needed = new Map<string, { vt: string; color: string }>();
   for (const obj of objects) {
     const { vt, color } = resolveVisualTypeAndColor(obj, theme);
     const key = iconKey(vt, color);
-    if (!map.hasImage(key) && !needed.has(key)) {
+    if (canAccessMapStyle(map) && !map.hasImage(key) && !needed.has(key)) {
       needed.set(key, { vt, color });
     }
   }
@@ -121,7 +139,7 @@ async function ensureMarkerImages(
   const results = await Promise.allSettled(
     Array.from(needed.entries()).map(async ([key, { vt, color }]) => {
       const imgData = await renderMarkerImage(vt, color, theme);
-      if (!map.hasImage(key)) {
+      if (canAccessMapStyle(map) && !map.hasImage(key)) {
         map.addImage(key, imgData, { pixelRatio: PIXEL_RATIO });
       }
     }),
@@ -172,7 +190,7 @@ export function useGeoMarkerLayer(
   styleEpoch: number,
   objects: GeoObject[],
   theme: 'dark' | 'light',
-  onSelect: (obj: GeoObject | null) => void,
+  onSelect: (obj: GeoObject | null, anchor?: [number, number]) => void,
 ) {
   const objectsRef = useRef(objects);
   objectsRef.current = objects;
@@ -203,15 +221,39 @@ export function useGeoMarkerLayer(
     });
 
     map.addLayer({
+      id: CLUSTER_GLOW,
+      type: 'circle',
+      source: SRC,
+      filter: ['has', 'point_count'],
+      paint: {
+        'circle-color': isDark ? 'rgba(125, 170, 235, 0.18)' : 'rgba(59, 130, 246, 0.12)',
+        'circle-radius': CLUSTER_GLOW_RADIUS,
+        'circle-blur': 0.82,
+        'circle-opacity': ['step', ['get', 'point_count'], 0.08, 10, 0.1, 50, 0.13, 200, 0.16],
+      },
+    });
+
+    map.addLayer({
       id: CLUSTERS,
       type: 'circle',
       source: SRC,
       filter: ['has', 'point_count'],
       paint: {
-        'circle-color': isDark ? 'rgba(100,160,250,0.7)' : 'rgba(37,99,235,0.6)',
-        'circle-radius': ['step', ['get', 'point_count'], 16, 10, 22, 50, 30, 200, 40],
-        'circle-stroke-width': 2,
-        'circle-stroke-color': isDark ? 'rgba(255,255,255,0.2)' : 'rgba(15,23,42,0.15)',
+        'circle-color': isDark ? 'rgba(147, 197, 253, 0.08)' : 'rgba(255, 255, 255, 0.04)',
+        'circle-radius': CLUSTER_RING_RADIUS,
+        'circle-stroke-width': CLUSTER_RING_STROKE_WIDTH,
+        'circle-stroke-color': isDark ? 'rgba(168, 196, 228, 0.62)' : 'rgba(59, 130, 246, 0.52)',
+      },
+    });
+
+    map.addLayer({
+      id: CLUSTER_CORE,
+      type: 'circle',
+      source: SRC,
+      filter: ['has', 'point_count'],
+      paint: {
+        'circle-color': isDark ? 'rgba(191, 219, 254, 0.72)' : 'rgba(37, 99, 235, 0.58)',
+        'circle-radius': CLUSTER_CORE_RADIUS,
       },
     });
 
@@ -222,10 +264,15 @@ export function useGeoMarkerLayer(
       filter: ['has', 'point_count'],
       layout: {
         'text-field': '{point_count_abbreviated}',
-        'text-font': ['Open Sans Semibold'],
-        'text-size': 12,
+        'text-font': [...MAP_TEXT_FONT_STACK],
+        'text-size': CLUSTER_TEXT_SIZE,
+        'text-offset': [0, 0.05],
       },
-      paint: { 'text-color': '#ffffff' },
+      paint: {
+        'text-color': isDark ? 'rgba(226, 232, 240, 0.9)' : 'rgba(15, 23, 42, 0.78)',
+        'text-halo-color': isDark ? 'rgba(2, 6, 23, 0.82)' : 'rgba(248, 250, 252, 0.92)',
+        'text-halo-width': 0.75,
+      },
     });
 
     map.addLayer({
@@ -251,7 +298,8 @@ export function useGeoMarkerLayer(
       if (!feat) return;
       const id = feat.properties?.id;
       const match = objectsRef.current.find((o) => o.id === id);
-      onSelect(match ?? null);
+      const anchor: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+      onSelect(match ?? null, anchor);
     };
 
     const handleClusterClick = (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
@@ -340,7 +388,8 @@ export function useGeoMarkerLayer(
       if (!feat) return;
       const id = feat.properties?.id;
       const match = objectsRef.current.find((o) => o.id === id);
-      onSelect(match ?? null);
+      const anchor: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+      onSelect(match ?? null, anchor);
     };
 
     const handleMapClick = () => {
@@ -366,7 +415,9 @@ export function useGeoMarkerLayer(
       map.off('click', handleMapClick);
       try {
         if (map.getLayer(CLUSTER_COUNT)) map.removeLayer(CLUSTER_COUNT);
+        if (map.getLayer(CLUSTER_CORE)) map.removeLayer(CLUSTER_CORE);
         if (map.getLayer(CLUSTERS)) map.removeLayer(CLUSTERS);
+        if (map.getLayer(CLUSTER_GLOW)) map.removeLayer(CLUSTER_GLOW);
         if (map.getLayer(POINTS)) map.removeLayer(POINTS);
         if (map.getSource(SRC)) map.removeSource(SRC);
       } catch { /* disposed */ }
@@ -379,11 +430,13 @@ export function useGeoMarkerLayer(
     let cancelled = false;
 
     (async () => {
+      if (!canAccessMapStyle(map)) return;
       try {
         await ensureMarkerImages(map, objects, theme);
       } catch { /* map may have been disposed during style transition */ }
       if (cancelled) return;
       try {
+        if (!canAccessMapStyle(map)) return;
         const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
         if (src) src.setData(buildFeatureCollection(objects, theme));
       } catch { /* source might not exist during style transition */ }

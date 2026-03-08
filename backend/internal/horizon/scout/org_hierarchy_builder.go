@@ -151,6 +151,15 @@ func (b *OrgHierarchyBuilder) inferParentName(name string) string {
 
 // generateOrgPath creates a canonical path for an organization name.
 func (b *OrgHierarchyBuilder) generateOrgPath(name string) string {
+	fragment := &models.HorizonFragment{
+		Type: models.FragmentTypeOrganization,
+		Labels: map[string]string{
+			"en": strings.TrimSpace(name),
+		},
+	}
+	if cp := inferOrgCanonicalPathFromHints(fragment); cp != "" {
+		return cp
+	}
 	return taxonomy.OrgCanonicalPath("na", name)
 }
 

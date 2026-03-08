@@ -63,7 +63,20 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
 
   const scope: string[] = Array.isArray(lens?.scope) ? lens.scope : [];
   const scopeFragments: Record<string, string> = (lens?.scopeFragments && typeof lens.scopeFragments === 'object') ? lens.scopeFragments : {};
-  const scopeArtifacts: Record<string, { kind?: string; displayName?: string; nodeRefs?: string[]; status?: string }> =
+  const scopeArtifacts: Record<string, {
+    kind?: string;
+    displayName?: string;
+    nodeRefs?: string[];
+    status?: string;
+    flowRefs?: string[];
+    zoneRefs?: string[];
+    affectedZoneRefs?: string[];
+    legCount?: number;
+    bindingConfidence?: number;
+    pathStressScore?: number;
+    bottleneckLegIndex?: number;
+    recoveryLatencyHours?: number;
+  }> =
     (lens?.scopeArtifacts && typeof lens.scopeArtifacts === 'object') ? lens.scopeArtifacts : {};
   const resolvedQueries: Record<string, string[]> = (lens?.resolvedQueries && typeof lens.resolvedQueries === 'object') ? lens.resolvedQueries : {};
   const intents = Array.isArray(lens?.intents) ? lens.intents : [];
@@ -785,6 +798,29 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                                 {artMeta.nodeRefs.length} entities in chain
                               </div>
                             )}
+                            {(typeof artMeta?.legCount === 'number' && artMeta.legCount > 0) && (
+                              <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                {artMeta.legCount} legs
+                                {typeof artMeta?.bindingConfidence === 'number' && artMeta.bindingConfidence > 0
+                                  ? ` • bind ${Math.round(artMeta.bindingConfidence * 100)}%`
+                                  : ''}
+                                {typeof artMeta?.pathStressScore === 'number' && artMeta.pathStressScore > 0
+                                  ? ` • stress ${artMeta.pathStressScore.toFixed(2)}`
+                                  : ''}
+                              </div>
+                            )}
+                            {((artMeta?.flowRefs && artMeta.flowRefs.length > 0) ||
+                              (artMeta?.zoneRefs && artMeta.zoneRefs.length > 0) ||
+                              (artMeta?.affectedZoneRefs && artMeta.affectedZoneRefs.length > 0)) && (
+                              <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                {artMeta?.flowRefs && artMeta.flowRefs.length > 0 ? `${artMeta.flowRefs.length} flows` : ''}
+                                {artMeta?.flowRefs && artMeta.flowRefs.length > 0 && artMeta?.zoneRefs && artMeta.zoneRefs.length > 0 ? ' • ' : ''}
+                                {artMeta?.zoneRefs && artMeta.zoneRefs.length > 0 ? `${artMeta.zoneRefs.length} zones` : ''}
+                                {((artMeta?.flowRefs && artMeta.flowRefs.length > 0) || (artMeta?.zoneRefs && artMeta.zoneRefs.length > 0)) &&
+                                  artMeta?.affectedZoneRefs && artMeta.affectedZoneRefs.length > 0 ? ' • ' : ''}
+                                {artMeta?.affectedZoneRefs && artMeta.affectedZoneRefs.length > 0 ? `${artMeta.affectedZoneRefs.length} affected` : ''}
+                              </div>
+                            )}
                           </div>
                           <button type="button" onClick={() => void handleRemoveScope(path)} disabled={!onUpdateScope || savingScope} style={removeBtnStyle} title="Remove">Remove</button>
                         </div>
@@ -963,5 +999,4 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
     </div>
   );
 };
-
 

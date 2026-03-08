@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
@@ -243,6 +244,10 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		if len(pathParts) != 3 || pathParts[0] != "fac" {
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("non-canonical facility path %q - expected /fac/{geo}/{facility}", fragment.CanonicalPath))
+		} else if strings.EqualFold(strings.TrimSpace(pathParts[1]), "na") && canonical.FacilitySlugLowInformation(strings.TrimSpace(pathParts[2])) {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("low-information /fac/na slug %q is collision-prone; prefer operator/site-specific facility slug or stronger geo grounding", strings.TrimSpace(pathParts[2])))
+			v.recordFacilityIdentityTelemetry(ctx, fragment, strings.TrimSpace(pathParts[2]), "low_information_na_slug")
 		}
 	}
 
@@ -333,7 +338,6 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 									Confidence: 1.0,
 								})
 							}
-							attachGeoCoordinatesFromGeoNames(fragment, best)
 						}
 					}
 				}
@@ -362,21 +366,51 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// IMPORTANT: We do NOT run search here (unless the feature-flagged resolver above attached a QID).
 	if v.wikidataClient != nil {
 		if _, err := henrich.EnrichFragmentFromWikidataIfPresent(ctx, v.wikidataClient, fragment, henrich.ConservativeWikidataOptions{
-			Force:     true,
-			Overwrite: true,
+			Force:              true,
+			Overwrite:          true,
+			DisableCoordinates: true,
 		}); err != nil {
 			// Best-effort: do not block creation.
 			result.Warnings = append(result.Warnings, fmt.Sprintf("wikidata enrichment skipped: %v", err))
 		}
 	}
 
-	// Policy 4.6: Geocoding fallback for org/facility/gov when coordinates still missing
+	// Policy 4.6: Facility geo revalidation before generic coordinate enrichment.
+	// This blocks a common debt pattern: facility path/homeLocation country is guessed
+	// incorrectly, then survives forever as /fac/na/... or with the wrong ISO2.
+	if fragment.Type == models.FragmentTypeFacility && v.geocodingClient != nil {
+		if revalidated, err := RevalidateFacilityGeo(ctx, fragment, v.geocodingClient); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("facility geo revalidation skipped: %v", err))
+		} else if revalidated.Applied {
+			msg := revalidated.Reason
+			if strings.TrimSpace(revalidated.PreviousISO2) != "" && strings.TrimSpace(revalidated.ResolvedISO2) != "" &&
+				!strings.EqualFold(revalidated.PreviousISO2, revalidated.ResolvedISO2) {
+				msg += fmt.Sprintf(" (%s -> %s)", strings.ToUpper(strings.TrimSpace(revalidated.PreviousISO2)), strings.ToUpper(strings.TrimSpace(revalidated.ResolvedISO2)))
+			}
+			if strings.TrimSpace(revalidated.Query) != "" {
+				msg += fmt.Sprintf(" via %q", revalidated.Query)
+			}
+			result.Warnings = append(result.Warnings, msg)
+		}
+	}
+	if fragment.Type == models.FragmentTypeOrganization && v.geocodingClient != nil {
+		if revalidated, err := RevalidateOrgGeo(ctx, fragment, v.geocodingClient); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("organization geo revalidation skipped: %v", err))
+		} else if revalidated.Applied {
+			result.Warnings = append(result.Warnings, OrgGeoWarning(revalidated))
+		}
+	}
+
+	// Policy 4.7: Geocoding fallback for org/facility/gov when coordinates still missing
 	if v.geocodingClient != nil {
 		if enriched, err := henrich.EnrichCoordinatesFromGeocoding(ctx, v.geocodingClient, fragment); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("geocoding skipped: %v", err))
 		} else if enriched {
 			result.Warnings = append(result.Warnings, "coordinates resolved via geocoding")
 		}
+	}
+	if upgraded := maybeUpgradeFacilityPathFromHomeLocation(fragment); upgraded != "" {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("facility path upgraded from jurisdiction-unknown to %q", upgraded))
 	}
 
 	// ==========================================================================
@@ -529,6 +563,22 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	}
 
 	// ==========================================================================
+	// Policy 7.6: Skeletal AFFECTED_ZONE twin reuse
+	// ==========================================================================
+	// Zones are uniquely path-scoped by condition_type, so the same place can drift into
+	// multiple thin twins (e.g. /political_tension/... and /military_conflict/...).
+	// Reuse an existing richer sibling only when the incoming zone is clearly skeletal.
+	if fragment.Type == models.FragmentTypeAffectedZone && v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil && result.ReplacementFrag == nil {
+		candidates, err := FindAffectedZoneTwinCandidates(ctx, v.geoBuilder.fragmentsRepo, fragment.CanonicalPath, fragment.ID, 128)
+		if err == nil && len(candidates) > 0 {
+			if existing, reason := SelectAffectedZoneTwinReplacement(fragment, candidates); existing != nil {
+				result.ReplacementFrag = existing
+				result.Warnings = append(result.Warnings, reason)
+			}
+		}
+	}
+
+	// ==========================================================================
 	// Policy 8: Required fields validation
 	// ==========================================================================
 	if strings.TrimSpace(fragment.CanonicalPath) == "" {
@@ -590,36 +640,47 @@ func parseMarketGeoSectorForDedup(canonicalPath string) (string, string, string)
 	return parseMarketDedupScope(canonicalPath)
 }
 
-func attachGeoCoordinatesFromGeoNames(fragment *models.HorizonFragment, place *coreontology.GeoNamesPlace) {
-	if fragment == nil || place == nil {
-		return
+func maybeUpgradeFacilityPathFromHomeLocation(fragment *models.HorizonFragment) string {
+	if newPath, ok := canonical.InferFacilityCanonicalPathFromGeo(fragment); ok {
+		fragment.CanonicalPath = newPath
+		return newPath
 	}
-	lat, err := strconv.ParseFloat(strings.TrimSpace(place.Lat), 64)
-	if err != nil {
-		return
-	}
-	lon, err := strconv.ParseFloat(strings.TrimSpace(place.Lng), 64)
-	if err != nil {
-		return
-	}
-	if !models.IsValidCoordinates(lat, lon) {
-		return
-	}
+	return ""
+}
 
-	if fragment.Coordinates == nil || !models.IsValidCoordinates(fragment.Coordinates.Lat, fragment.Coordinates.Lon) {
-		fragment.Coordinates = &models.Coordinates{
-			Lat: lat,
-			Lon: lon,
-		}
-	}
+func inferFacilityISO2(fragment *models.HorizonFragment) string {
+	return canonical.InferFacilityISO2(fragment)
+}
 
-	if fragment.HomeLocation == nil {
-		fragment.HomeLocation = &models.Location{}
+func (v *PreCreateValidator) recordFacilityIdentityTelemetry(
+	ctx context.Context,
+	fragment *models.HorizonFragment,
+	slug string,
+	reason string,
+) {
+	if v == nil || v.telemetryRepo == nil || fragment == nil {
+		return
 	}
-	iso := fmt.Sprintf("%+.6f%+.6f/", lat, lon)
-	if fragment.HomeLocation.ISO6709 == nil || strings.TrimSpace(*fragment.HomeLocation.ISO6709) == "" {
-		fragment.HomeLocation.ISO6709 = &iso
+	tenantID := strings.TrimSpace(fragment.TenantID)
+	if tenantID == "" {
+		tenantID = "global"
 	}
+	dim := map[string]string{
+		"kind":   "facility",
+		"reason": strings.TrimSpace(reason),
+	}
+	if slug != "" {
+		dim["slug"] = strings.TrimSpace(slug)
+	}
+	_ = v.telemetryRepo.Increment(
+		ctx,
+		tenantID,
+		"facility_identity",
+		"kpi_rates",
+		time.Hour,
+		dim,
+		map[string]int64{"collision_prone_total": 1},
+	)
 }
 
 // isFinancialProductContext returns true if the fragment suggests a financial product

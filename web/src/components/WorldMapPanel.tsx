@@ -6,6 +6,7 @@ import { useGeoZoneLayer } from '../hooks/useGeoZoneLayer';
 import { useGeoEdgeLayer } from '../hooks/useGeoEdgeLayer';
 import { useStaticZoneLayer } from '../hooks/useStaticZoneLayer';
 import { useTransportFlowLayer } from '../hooks/useTransportFlowLayer';
+import { usePathLegLayer } from '../hooks/usePathLegLayer';
 import { useVesselLayer, vesselsApiAvailable as isVesselsApiAvailable } from '../hooks/useVesselLayer';
 import { MapFilterPanel } from './MapFilterPanel';
 import { MapObjectDetail } from './MapObjectDetail';
@@ -17,6 +18,7 @@ import {
   type TransportFlowMode,
 } from '../lib/staticTransportFlows';
 import { api } from '../lib/api';
+import type { MaterializedArtifact } from './SupplyChainOverlay';
 
 export interface WorldMapPanelProps {
   scope?: { lensId: string };
@@ -37,6 +39,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [zonesEnabled, setZonesEnabled] = React.useState(false);
   const [activeZoneTypes, setActiveZoneTypes] = React.useState<Set<StaticZoneType> | null>(null);
   const [flowsEnabled, setFlowsEnabled] = React.useState(false);
+  const [pathLegsEnabled, setPathLegsEnabled] = React.useState(Boolean(scope?.lensId));
   const [activeFlowModes, setActiveFlowModes] = React.useState<Set<TransportFlowMode> | null>(null);
   const [vesselsEnabled, setVesselsEnabled] = React.useState(false);
   const [hops, setHops] = React.useState(3);
@@ -44,6 +47,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [selectedObject, setSelectedObject] = React.useState<GeoObject | null>(null);
   const [zoneActivityById, setZoneActivityById] = React.useState<Record<string, ZoneActivityItem>>({});
   const [flowActivityById, setFlowActivityById] = React.useState<Record<string, FlowActivityItem>>({});
+  const [pathArtifacts, setPathArtifacts] = React.useState<MaterializedArtifact[]>([]);
 
   const filters = React.useMemo(
     () => ({ dateFrom, dateTo, activeTypes }),
@@ -52,7 +56,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
 
   const { allObjects, filteredObjects, typeCounts, loading, error } = useGeoObjects(scope, filters);
 
-  const { edgesLoading, edgesCount, discoveredObjects } = useGeoEdgeLayer(map, isReady, styleEpoch, selectedObject, filteredObjects, hops);
+  const { edgesLoading, edgesCount, visibleEdgesCount, discoveredObjects, traceSummary } = useGeoEdgeLayer(map, isReady, styleEpoch, selectedObject, filteredObjects, theme, hops);
   const mapObjects = React.useMemo(
     () => (discoveredObjects.length > 0 ? [...filteredObjects, ...discoveredObjects] : filteredObjects),
     [filteredObjects, discoveredObjects],
@@ -71,6 +75,33 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     if (!activeFlowModes) return allTransportFlows;
     return allTransportFlows.filter((f) => activeFlowModes.has(f.properties.flowMode));
   }, [flowsEnabled, activeFlowModes, allTransportFlows]);
+
+  React.useEffect(() => {
+    setPathLegsEnabled(Boolean(scope?.lensId));
+    if (scope?.lensId) return;
+    setPathArtifacts([]);
+  }, [scope?.lensId]);
+
+  React.useEffect(() => {
+    if (!scope?.lensId) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const payload = await api.getSupplyChainsByLens(scope.lensId);
+        if (!cancelled) {
+          setPathArtifacts(Array.isArray(payload?.chains) ? (payload.chains as MaterializedArtifact[]) : []);
+        }
+      } catch {
+        if (!cancelled) setPathArtifacts([]);
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => { void load(); }, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [scope?.lensId]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -103,10 +134,13 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     };
   }, [scope?.lensId]);
 
-  useGeoMarkerLayer(map, isReady, styleEpoch, mapObjects, theme, setSelectedObject);
+  useGeoMarkerLayer(map, isReady, styleEpoch, mapObjects, theme, (obj) => {
+    setSelectedObject(obj);
+  });
   useGeoZoneLayer(map, isReady, styleEpoch, mapObjects, theme);
-  useStaticZoneLayer(map, isReady, styleEpoch, filteredStaticZones, theme, zonesEnabled, zoneActivityById);
+  useStaticZoneLayer(map, isReady, styleEpoch, filteredStaticZones, theme, zonesEnabled, zoneActivityById, mapObjects);
   useTransportFlowLayer(map, isReady, styleEpoch, filteredTransportFlows, theme, flowsEnabled, flowActivityById);
+  const pathLegStats = usePathLegLayer(map, isReady, styleEpoch, pathArtifacts, allObjects, theme, pathLegsEnabled);
   useVesselLayer(map, isReady, styleEpoch, vesselsEnabled, theme);
 
   const handleToggleType = React.useCallback((type: string) => {
@@ -186,6 +220,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           activeFlowModes={activeFlowModes}
           zonesEnabled={zonesEnabled}
           flowsEnabled={flowsEnabled}
+          pathLegsEnabled={pathLegsEnabled}
+          pathLegCount={pathLegStats.legCount}
           vesselsEnabled={vesselsEnabled}
           vesselsApiAvailable={vesselsApiAvailable}
           dateFrom={dateFrom}
@@ -200,6 +236,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           onToggleFlowMode={handleToggleFlowMode}
           onToggleZonesEnabled={() => setZonesEnabled((v) => !v)}
           onToggleFlowsEnabled={() => setFlowsEnabled((v) => !v)}
+          onTogglePathLegsEnabled={() => setPathLegsEnabled((v) => !v)}
           onToggleVesselsEnabled={() => setVesselsEnabled((v) => !v)}
           onSelectAll={() => setActiveTypes(null)}
           onSelectNone={() => setActiveTypes(new Set())}
@@ -220,6 +257,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             : `Objects: ${allObjects.length}`}
           {zonesEnabled ? ` | Zones: ${visibleStaticZonesCount}` : ''}
           {flowsEnabled ? ` | Flows: ${visibleTransportFlowsCount}` : ''}
+          {pathLegsEnabled ? ` | Path legs: ${pathLegStats.legCount}` : ''}
           {vesselsEnabled ? ' | Vessels (AIS)' : ''}
         </div>
 
@@ -230,6 +268,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             paletteTheme={theme}
             edgesLoading={edgesLoading}
             edgesCount={edgesCount}
+            visibleEdgesCount={visibleEdgesCount}
+            traceSummary={traceSummary}
             onClose={() => setSelectedObject(null)}
           />
         )}

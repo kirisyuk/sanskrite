@@ -283,9 +283,9 @@ RULES:
 - confidence MUST be <= 0.65 (hypothesis), use ~0.25..0.55 typically.
 - Use stable canonical paths:
   - Organizations: /org/{iso2|na}/{slug}
-    - iso2: country of origin / primary jurisdiction (%s). If unknown use "na".
+    - iso2: country of origin / primary jurisdiction (%s). /org/na is last-resort only after checking official name, HQ/site/place clue, and source text for jurisdiction.
   - Government bodies: /gov/{iso2|na}/{slug}
-    - Use for ministries, regulators, agencies, state bodies. If unknown, use /gov/na/{slug}.
+    - Use for ministries, regulators, agencies, state bodies. /gov/na is last-resort only after checking the source for jurisdiction/country clues.
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - Communities (informal social groups): /community/{geo}/{type}/{slug}
@@ -306,7 +306,7 @@ RULES:
       - dynasties: broader family → branch (house-of-saud → sudairi-seven)
       - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
       - Direction: broader → narrower
-  - Facilities: /fac/{geo}/{slug} — geo: %s
+  - Facilities: /fac/{geo}/{slug} — geo: %s. /fac/na is last-resort only after checking facility/site/place clues in the name and source.
   - People: /person/{slug}
   - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
     - category: "raw" | "component" | "finished" | "service"

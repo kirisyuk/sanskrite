@@ -24,6 +24,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
@@ -103,6 +104,7 @@ func PrepareFragmentForValidation(fragment *models.HorizonFragment) {
 	bestEffortAssembleCanonicalPathFromParts(fragment)
 	canonical.NormalizeFragmentForPersist(fragment)
 	bestEffortReconcileFragmentTypeFromPath(fragment)
+	graphenrich.ApplyFragmentHeuristics(fragment)
 	ensurePersistInvariants(fragment)
 }
 
@@ -852,6 +854,38 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	return best, nil
 }
 
+// ListByCanonicalPath returns all fragments that currently share the exact canonicalPath.
+// This is primarily for debt diagnostics/repair when duplicate canonical paths exist.
+func (r *HorizonFragmentsRepository) ListByCanonicalPath(ctx context.Context, canonicalPath string) ([]*models.HorizonFragment, error) {
+	if canonicalPath == "" {
+		return nil, ErrInvalidDocument
+	}
+	cp := strings.TrimSpace(canonicalPath)
+	q := r.col.Where("tenantId", "==", "global").Where("canonicalPath", "==", cp)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, ErrFragmentNotFound
+	}
+	out := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		if doc == nil || !doc.Exists() {
+			continue
+		}
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(fragment.ID) == "" {
+			fragment.ID = strings.TrimSpace(doc.Ref.ID)
+		}
+		out = append(out, &fragment)
+	}
+	return out, nil
+}
+
 // ListByCanonicalPathPrefix returns fragments whose canonicalPath starts with prefix.
 // Used for abbreviation resolution: list fragments in same geo to find abbrev/full pairs.
 func (r *HorizonFragmentsRepository) ListByCanonicalPathPrefix(ctx context.Context, prefix string, limit int) ([]*models.HorizonFragment, error) {
@@ -1141,6 +1175,9 @@ type UpdateOptions struct {
 	// SkipIndexExport disables GCS/Vertex export for this update.
 	// Useful for internal state updates that do not affect search indexing.
 	SkipIndexExport bool
+	// SkipOnUpsert disables best-effort post-write callbacks.
+	// Useful for derived-state refreshes to avoid recursive hooks.
+	SkipOnUpsert bool
 }
 
 // Update обновляет HorizonFragment и сохраняет версию.
@@ -1157,18 +1194,20 @@ func (r *HorizonFragmentsRepository) UpdateFast(ctx context.Context, fragment *m
 	})
 }
 
+// UpdateDerived applies a lightweight internal update and suppresses post-write hooks.
+func (r *HorizonFragmentsRepository) UpdateDerived(ctx context.Context, fragment *models.HorizonFragment) error {
+	return r.updateWithOptions(ctx, fragment, UpdateOptions{
+		SkipVersionSnapshot: true,
+		SkipIndexExport:     true,
+		SkipOnUpsert:        true,
+	})
+}
+
 func (r *HorizonFragmentsRepository) updateWithOptions(ctx context.Context, fragment *models.HorizonFragment, opts UpdateOptions) error {
 	if fragment == nil || fragment.ID == "" {
 		return ErrInvalidDocument
 	}
-	// Best-effort: if only canonicalPath was provided, parse it into canonicalParts for future selective fixes.
-	bestEffortBackfillCanonicalPartsFromPath(fragment)
-	// Best-effort: if canonicalParts were provided, assemble canonicalPath before validation.
-	bestEffortAssembleCanonicalPathFromParts(fragment)
-	// Best-effort: shared canonical-path normalization at repository boundary.
-	canonical.NormalizeFragmentForPersist(fragment)
-	// Keep fragment type deterministic with canonicalPath namespace.
-	bestEffortReconcileFragmentTypeFromPath(fragment)
+	PrepareFragmentForValidation(fragment)
 	if err := fragment.Validate(); err != nil {
 		return fmt.Errorf("validation error: %w", err)
 	}
@@ -1221,7 +1260,9 @@ func (r *HorizonFragmentsRepository) updateWithOptions(ctx context.Context, frag
 	}
 
 	// Best-effort onUpsert hook (async, panic-safe)
-	r.runOnUpsertAsync(fragment)
+	if !opts.SkipOnUpsert {
+		r.runOnUpsertAsync(fragment)
+	}
 
 	return nil
 }
@@ -1252,6 +1293,7 @@ func (r *HorizonFragmentsRepository) UpdateGovernance(ctx context.Context, id st
 		bestEffortAssembleCanonicalPathFromParts(&fragment)
 		// Best-effort: shared canonical-path normalization at repository boundary.
 		canonical.NormalizeFragmentForPersist(&fragment)
+		graphenrich.ApplyFragmentHeuristics(&fragment)
 		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
 		return tx.Set(docRef, fragment)
 	})

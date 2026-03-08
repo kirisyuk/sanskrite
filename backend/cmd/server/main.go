@@ -52,6 +52,7 @@ import (
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	horizonenrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	horizonfeedback "github.com/igorkirisyuk/sanskrite/internal/horizon/feedback"
+	horizonimportance "github.com/igorkirisyuk/sanskrite/internal/horizon/importance"
 	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -185,6 +186,12 @@ func main() {
 	}
 
 	projectID := getEnv("GCP_PROJECT_ID", getEnv("GOOGLE_CLOUD_PROJECT", ""))
+	if projectID != "" && strings.TrimSpace(os.Getenv("GOOGLE_MAPS_API_KEY")) == "" {
+		if key := gcp.GetEnvOrSecret(ctx, projectID, "GOOGLE_MAPS_API_KEY", "google_maps_api_key"); key != "" {
+			_ = os.Setenv("GOOGLE_MAPS_API_KEY", key)
+			log.Printf("Google Maps API key loaded from Secret Manager")
+		}
+	}
 
 	// Override Firebase Auth Project ID if specified (for when Firebase project differs from GCP project)
 	firebaseProjectID := getEnv("FIREBASE_AUTH_PROJECT_ID", projectID)
@@ -537,6 +544,9 @@ func main() {
 		vertexSearchDataStoreID := getEnv("VERTEX_SEARCH_DATA_STORE_ID", "")
 		if vertexSearchDataStoreID == "" {
 			vertexSearchDataStoreID = getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")
+		}
+		if vertexSearchDataStoreID == "" && strings.TrimSpace(vertexSearchProjectID) != "" {
+			vertexSearchDataStoreID = gcp.GetEnvOrSecret(context.Background(), vertexSearchProjectID, "VERTEX_SEARCH_DATA_STORE_ID", "vertex_search_data_store_id")
 		}
 		var vertexSearchClient *ai.VertexAISearchClient
 		if vertexSearchDataStoreID != "" {
@@ -1109,6 +1119,25 @@ func main() {
 		horizonFramesRepo := horizonrepo.NewFramesRepository(fsClient.Client())
 		horizonLensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
 		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
+		if parseEnvBool(getEnv("HORIZON_IMPORTANCE_RUNTIME_ENABLED", "true")) {
+			importanceScorer := horizonimportance.NewScorer(horizonFragmentsRepo, horizonEdgesRepo)
+			importanceUpdater := horizonimportance.NewRuntimeUpdater("global", importanceScorer, horizonFragmentsRepo, 2048)
+			importanceUpdater.Start(context.Background(), 2)
+			horizonFragmentsRepo.WithOnUpsert(func(ctx context.Context, fragment *horizonmodels.HorizonFragment) {
+				if fragment == nil {
+					return
+				}
+				importanceUpdater.Enqueue(strings.TrimSpace(fragment.ID))
+			})
+			horizonEdgesRepo.WithOnUpsert(func(ctx context.Context, edge *horizonmodels.DependencyEdge) {
+				if edge == nil {
+					return
+				}
+				importanceUpdater.Enqueue(strings.TrimSpace(edge.SourceFragmentID))
+				importanceUpdater.Enqueue(strings.TrimSpace(edge.TargetFragmentID))
+			})
+			logger.Printf("Horizon importance runtime updater enabled")
+		}
 		horizonFragmentsRepo.WithEdgesRepo(horizonEdgesRepo)
 		enforcementJobsRepo := horizonrepo.NewEnforcementJobsRepository(fsClient.Client())
 		policyCheckResultsRepo := horizonrepo.NewPolicyCheckResultsRepository(fsClient.Client())
@@ -1374,21 +1403,11 @@ func main() {
 			}
 		}
 
-		// Wire coordinate enrichment for ontology facts (GeoNames, Geocoding, fragment lookup — same 3 services as fragments)
+		// Wire coordinate enrichment for ontology facts.
+		// Spatial source of truth: Google Geocoding primary, Nominatim fallback, fragment lookup.
 		{
-			var gnForFacts ontology.GeoNamesClientInterface
-			if geonamesClient != nil {
-				gnForFacts = geonames.NewCachedClient(geonames.NewAdapter(geonamesClient), externalCacheRepo, geonames.CacheOptionsFromEnv())
-			}
 			var gcForFacts ontology.GeocodingClientInterface
 			{
-				nomRaw := geocoding.NominatimOptionsFromEnv()
-				var nomBase ontology.GeocodingClientInterface = nomRaw
-				if horizonTelemetryRepo != nil {
-					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
-				}
-				nomCached := geocoding.NewCachedClient(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
-
 				var googleFacts ontology.GeocodingClientInterface
 				if gcClient := httphandlers.GetGoogleGeocodingClientFromEnv(); gcClient != nil {
 					gcAdapter := geocoding.NewAdapter(gcClient)
@@ -1398,13 +1417,19 @@ func main() {
 					}
 					googleFacts = geocoding.NewCachedClient(gcBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
 				}
-				gcForFacts = geocoding.NewFallbackClient(nomCached, googleFacts, logger)
+				nomRaw := geocoding.NominatimOptionsFromEnv()
+				var nomBase ontology.GeocodingClientInterface = nomRaw
+				if horizonTelemetryRepo != nil {
+					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
+				}
+				nomCached := geocoding.NewCachedClient(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+				gcForFacts = geocoding.NewFallbackClient(googleFacts, nomCached, logger)
 			}
-			if gnForFacts != nil || gcForFacts != nil {
-				enricher := horizonenrich.NewFactCoordinateEnricher(gnForFacts, gcForFacts).WithFragmentsRepo(horizonFragmentsRepo)
+			if gcForFacts != nil {
+				enricher := horizonenrich.NewFactCoordinateEnricher(nil, gcForFacts).WithFragmentsRepo(horizonFragmentsRepo)
 				ontologyFactsRepo = ontologyFactsRepo.WithCoordinateEnricher(enricher)
 				ontologyExtractor = ontologyExtractor.WithFactsRepo(ontologyFactsRepo)
-				logger.Printf("Ontology facts: coordinate enrichment enabled (GeoNames, Geocoding, fragment lookup)")
+				logger.Printf("Ontology facts: coordinate enrichment enabled (Google Geocoding primary, Nominatim fallback, fragment lookup)")
 			}
 		}
 
@@ -1883,18 +1908,9 @@ func main() {
 				logger.Printf("OpenCorporates skipped: OPEN_CORPORATES_API_TOKEN not set (API requires token; add open_corporates_api_token secret)")
 			}
 			// Wire geocoding into Scout for address-to-coordinates (org/facility/gov).
-			// Primary: Nominatim (free, OSM). Fallback: Google Geocoding (paid, GOOGLE_MAPS_API_KEY).
+			// Primary: Google Geocoding. Fallback: Nominatim.
 			// Both wrapped with telemetry and cached via external_data_cache.
 			{
-				var nominatimClient ontology.GeocodingClientInterface
-				nomRaw := geocoding.NominatimOptionsFromEnv()
-				var nomBase ontology.GeocodingClientInterface = nomRaw
-				if horizonTelemetryRepo != nil {
-					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
-				}
-				nominatimClient = geocoding.NewCachedClient(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
-				logger.Printf("Nominatim geocoding client wired (primary, free OSM-based)")
-
 				var googleClient ontology.GeocodingClientInterface
 				if gcRaw := httphandlers.GetGoogleGeocodingClientFromEnv(); gcRaw != nil {
 					gcAdapter := geocoding.NewAdapter(gcRaw)
@@ -1903,10 +1919,18 @@ func main() {
 						gcBase = horizontelemetry.NewGeocodingTelemetryWrapper(gcAdapter, horizonTelemetryRepo)
 					}
 					googleClient = geocoding.NewCachedClient(gcBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
-					logger.Printf("Google Geocoding client wired (fallback for Nominatim misses)")
+					logger.Printf("Google Geocoding client wired (primary)")
 				}
 
-				combined := geocoding.NewFallbackClient(nominatimClient, googleClient, logger)
+				nomRaw := geocoding.NominatimOptionsFromEnv()
+				var nomBase ontology.GeocodingClientInterface = nomRaw
+				if horizonTelemetryRepo != nil {
+					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
+				}
+				nominatimClient := geocoding.NewCachedClient(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+				logger.Printf("Nominatim geocoding client wired (fallback)")
+
+				combined := geocoding.NewFallbackClient(googleClient, nominatimClient, logger)
 				if combined != nil {
 					scoutEngine.WithGeocodingClient(combined)
 				}
@@ -4133,6 +4157,13 @@ func getEnvInt(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func parseEnvBool(raw string) bool {
+	if v, err := strconv.ParseBool(strings.TrimSpace(raw)); err == nil {
+		return v
+	}
+	return false
 }
 
 // getEnvWithAlt returns value from key, or altKey if key is empty, or def.

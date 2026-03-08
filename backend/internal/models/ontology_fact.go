@@ -53,6 +53,39 @@ type OntologyFact struct {
 	// CanonicalNames are human-readable names of the canonical paths (e.g. "San Francisco", "Emirates").
 	// Used for search/lookup when resolving facts to visible fragments.
 	CanonicalNames []string `json:"canonicalNames,omitempty" firestore:"canonicalNames,omitempty"`
+
+	// ExtractionLineage stores the deterministic/LLM pipeline layers that produced this fact.
+	// It allows downstream graph logic to distinguish source mechanics, heuristic normalization,
+	// signal derivation, and optional LLM-assisted interpretation without relying on ad-hoc tags.
+	ExtractionLineage *FactExtractionLineage `json:"extractionLineage,omitempty" firestore:"extractionLineage,omitempty"`
+}
+
+type FactExtractionLayer string
+
+const (
+	FactExtractionLayerSourceMechanics FactExtractionLayer = "source_mechanics"
+	FactExtractionLayerHeuristic       FactExtractionLayer = "heuristic"
+	FactExtractionLayerLLM             FactExtractionLayer = "llm"
+	FactExtractionLayerSignal          FactExtractionLayer = "signal"
+	FactExtractionLayerInterpretation  FactExtractionLayer = "interpretation"
+	FactExtractionLayerWarning         FactExtractionLayer = "warning"
+)
+
+type FactExtractionStep struct {
+	Layer         FactExtractionLayer `json:"layer" firestore:"layer"`
+	Driver        string              `json:"driver,omitempty" firestore:"driver,omitempty"`
+	Method        string              `json:"method,omitempty" firestore:"method,omitempty"`
+	Deterministic bool                `json:"deterministic" firestore:"deterministic"`
+	LLMUsed       bool                `json:"llmUsed" firestore:"llmUsed"`
+}
+
+type FactExtractionLineage struct {
+	Pipeline     string               `json:"pipeline,omitempty" firestore:"pipeline,omitempty"`
+	SourceType   string               `json:"sourceType,omitempty" firestore:"sourceType,omitempty"`
+	CurrentLayer FactExtractionLayer  `json:"currentLayer,omitempty" firestore:"currentLayer,omitempty"`
+	LLMEnabled   bool                 `json:"llmEnabled" firestore:"llmEnabled"`
+	LLMUsed      bool                 `json:"llmUsed" firestore:"llmUsed"`
+	Steps        []FactExtractionStep `json:"steps,omitempty" firestore:"steps,omitempty"`
 }
 
 // FactMetricUpdate represents a safe, typed metric update derived from a fact.
@@ -127,6 +160,31 @@ func (f *OntologyFact) GenerateVectorText() string {
 	}
 	if len(f.SourceIDs) > 0 {
 		add("Source IDs: " + strings.Join(f.SourceIDs, ", "))
+	}
+	if f.ExtractionLineage != nil {
+		if strings.TrimSpace(f.ExtractionLineage.Pipeline) != "" {
+			add("Extraction pipeline: " + strings.TrimSpace(f.ExtractionLineage.Pipeline))
+		}
+		if strings.TrimSpace(string(f.ExtractionLineage.CurrentLayer)) != "" {
+			add("Extraction layer: " + strings.TrimSpace(string(f.ExtractionLineage.CurrentLayer)))
+		}
+		if len(f.ExtractionLineage.Steps) > 0 {
+			stepParts := make([]string, 0, len(f.ExtractionLineage.Steps))
+			for _, step := range f.ExtractionLineage.Steps {
+				layer := strings.TrimSpace(string(step.Layer))
+				if layer == "" {
+					continue
+				}
+				part := layer
+				if strings.TrimSpace(step.Driver) != "" {
+					part += ":" + strings.TrimSpace(step.Driver)
+				}
+				stepParts = append(stepParts, part)
+			}
+			if len(stepParts) > 0 {
+				add("Extraction steps: " + strings.Join(stepParts, " -> "))
+			}
+		}
 	}
 	if len(f.MetricUpdates) > 0 {
 		for _, mu := range f.MetricUpdates {

@@ -24,7 +24,7 @@ import (
 
 const (
 	defaultFeedsPath               = "../temp-repos/worldmonitor/src/config/feeds.ts"
-	worldMonitorIngestModeDocument = "document_feed"
+	worldMonitorIngestModeOntology = "ontology_fact"
 	defaultPollMinutes             = 30
 	defaultDisableLLMProcessing    = true
 )
@@ -230,7 +230,7 @@ func main() {
 				Category:                   strPtr(hmCategory),
 				HorizonMonitorCategory:     strPtr(hmCategory),
 				HorizonMonitorFeedType:     strPtr(feedType),
-				HorizonMonitorIngestMode:   strPtr(worldMonitorIngestModeDocument),
+				HorizonMonitorIngestMode:   strPtr(worldMonitorIngestModeOntology),
 				HorizonMonitorRequiresAuth: boolPtr(false),
 				PollIntervalMinutes:        intPtr(*pollMinutes),
 				DisableLLMProcessing:       boolPtr(*disableLLMProcessing),

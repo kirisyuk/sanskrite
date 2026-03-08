@@ -10,6 +10,8 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbinding"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathstress"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 )
 
@@ -779,11 +781,12 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 		return "", fmt.Errorf("canonicalKey is required")
 	}
 
-	nodes, edges := b.pathToMaterializedPayload(path)
+	nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
 
-	payload := models.BuildSupplyChainPathPayload(nodes, edges, map[string]interface{}{
-		"buildMode": path.BuildMode,
-		"maxDepth":  fmt.Sprintf("%d", path.MaxDepth),
+	payload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, map[string]interface{}{
+		"buildMode":  path.BuildMode,
+		"maxDepth":   fmt.Sprintf("%d", path.MaxDepth),
+		"confidence": path.Confidence,
 	})
 
 	displayName := buildChainDisplayName(path.Segments)
@@ -871,10 +874,11 @@ func (b *SupplyChainPathBuilder) MaterializePathsBatch(
 		if key == "" {
 			continue
 		}
-		nodes, edges := b.pathToMaterializedPayload(path)
-		payload := models.BuildSupplyChainPathPayload(nodes, edges, map[string]interface{}{
-			"buildMode": path.BuildMode,
-			"maxDepth":  fmt.Sprintf("%d", path.MaxDepth),
+		nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
+		payload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, map[string]interface{}{
+			"buildMode":  path.BuildMode,
+			"maxDepth":   fmt.Sprintf("%d", path.MaxDepth),
+			"confidence": path.Confidence,
 		})
 		displayName := buildChainDisplayName(path.Segments)
 		labels := buildChainLabels(path.Segments)
@@ -966,10 +970,11 @@ func (b *SupplyChainPathBuilder) RebuildFromSupplyLinks(ctx context.Context, art
 	}
 
 	bestPath := paths[0]
-	nodes, edges := b.pathToMaterializedPayload(bestPath)
-	newPayload := models.BuildSupplyChainPathPayload(nodes, edges, map[string]interface{}{
-		"buildMode": "rebuild_from_supply_links",
-		"maxDepth":  fmt.Sprintf("%d", maxDepth),
+	nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, bestPath)
+	newPayload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, map[string]interface{}{
+		"buildMode":  "rebuild_from_supply_links",
+		"maxDepth":   fmt.Sprintf("%d", maxDepth),
+		"confidence": bestPath.Confidence,
 	})
 
 	merged := models.MergePayloads(artifact.Payload, newPayload)
@@ -1006,12 +1011,15 @@ func (b *SupplyChainPathBuilder) UpdatePathStatus(
 }
 
 // pathToMaterializedPayload converts a SupplyChainPath to MaterializedArtifact payload format.
-func (b *SupplyChainPathBuilder) pathToMaterializedPayload(path *SupplyChainPath) (
+func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, path *SupplyChainPath) (
 	[]models.SupplyChainPathNode,
 	[]models.SupplyChainPathEdge,
+	[]models.SupplyChainPathLeg,
+	*models.SupplyChainPathStress,
 ) {
 	var nodes []models.SupplyChainPathNode
 	var edges []models.SupplyChainPathEdge
+	var legs []models.SupplyChainPathLeg
 
 	nodeIndexMap := make(map[string]int) // canonicalPath -> index
 
@@ -1059,7 +1067,29 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(path *SupplyChainPath
 				nodeIndexMap[segment.CustomerRef] = len(nodes) - 1
 			}
 		}
+
+		for _, viaRef := range segment.TransportViaRefs {
+			viaRef = strings.TrimSpace(viaRef)
+			if viaRef == "" {
+				continue
+			}
+			if _, exists := nodeIndexMap[viaRef]; exists {
+				continue
+			}
+			nodeType := "fac"
+			if strings.HasPrefix(viaRef, "/deposit/") {
+				nodeType = "deposit"
+			}
+			nodes = append(nodes, models.SupplyChainPathNode{
+				Type: nodeType,
+				Ref:  viaRef,
+			})
+			nodeIndexMap[viaRef] = len(nodes) - 1
+		}
 	}
+
+	binder := pathbinding.NewEngine(b.fragmentsRepo, b.edgesRepo)
+	stressEval := pathstress.NewEvaluator()
 
 	// Build edges array
 	for i, segment := range path.Segments {
@@ -1076,14 +1106,111 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(path *SupplyChainPath
 			customerIdx = nodeIndexMap[segment.CustomerRef]
 		}
 
+		binding := binder.BindSegment(ctx, pathbinding.SegmentInput{
+			SupplierRef:       segment.SupplierRef,
+			CustomerRef:       segment.CustomerRef,
+			ProductRef:        segment.ProductRef,
+			TransportViaRefs:  segment.TransportViaRefs,
+			SegmentConfidence: segment.Confidence,
+		})
+		leg := models.SupplyChainPathLeg{
+			Index:             i,
+			SupplierRef:       segment.SupplierRef,
+			CustomerRef:       segment.CustomerRef,
+			ProductRef:        segment.ProductRef,
+			TransportViaRefs:  append([]string(nil), segment.TransportViaRefs...),
+			Mode:              binding.Mode,
+			GeoRefs:           append([]string(nil), binding.GeoRefs...),
+			FlowRefs:          append([]string(nil), binding.FlowRefs...),
+			AlternateFlowRefs: append([]string(nil), binding.AlternateFlowRefs...),
+			ZoneRefs:          append([]string(nil), binding.ZoneRefs...),
+			AffectedZoneRefs:  append([]string(nil), binding.AffectedZoneRefs...),
+			SpatialSemantics:  append([]string(nil), binding.SpatialSemantics...),
+			BindingConfidence: binding.BindingConfidence,
+			SegmentConfidence: segment.Confidence,
+		}
+		if supplierIdx >= 0 {
+			idx := supplierIdx
+			leg.SupplierNodeIndex = &idx
+		}
+		if customerIdx >= 0 {
+			idx := customerIdx
+			leg.CustomerNodeIndex = &idx
+		}
+		if productIdx >= 0 {
+			idx := productIdx
+			leg.ProductNodeIndex = &idx
+		}
+		for _, viaRef := range segment.TransportViaRefs {
+			if viaIdx, ok := nodeIndexMap[viaRef]; ok {
+				leg.TransportViaNodeIndices = append(leg.TransportViaNodeIndices, viaIdx)
+			}
+		}
+		leg.Stress = stressEval.EvaluateLeg(leg)
+
 		// Create SUPPLY_LINK edge
 		if supplierIdx >= 0 && customerIdx >= 0 && productIdx >= 0 {
+			segmentIdx := i
 			edges = append(edges, models.SupplyChainPathEdge{
-				Type:            "SUPPLY_LINK",
-				From:            supplierIdx,
-				To:              customerIdx,
-				ViaProductIndex: &productIdx,
+				Type:             "SUPPLY_LINK",
+				From:             supplierIdx,
+				To:               customerIdx,
+				ViaProductIndex:  &productIdx,
+				ProductNodeIndex: &productIdx,
+				ProductRef:       segment.ProductRef,
+				SupplyLinkID:     segment.SupplyLinkID,
+				SegmentIndex:     &segmentIdx,
+				CarriesProduct:   true,
+				Role:             "product_flow",
+				Metrics:          cloneMetricValues(segment.Metrics),
+				Qualifiers:       buildPathEdgeQualifiers(segment, leg, "product_flow", 0),
 			})
+		}
+		if supplierIdx >= 0 && len(segment.TransportViaRefs) > 0 {
+			previousIdx := supplierIdx
+			for viaOrder, viaRef := range segment.TransportViaRefs {
+				viaRef = strings.TrimSpace(viaRef)
+				if viaRef == "" {
+					continue
+				}
+				viaIdx, ok := nodeIndexMap[viaRef]
+				if !ok {
+					continue
+				}
+				segmentIdx := i
+				edges = append(edges, models.SupplyChainPathEdge{
+					Type:             "LOGISTICS",
+					From:             previousIdx,
+					To:               viaIdx,
+					Mode:             "required",
+					ProductNodeIndex: &productIdx,
+					ProductRef:       segment.ProductRef,
+					SupplyLinkID:     segment.SupplyLinkID,
+					SegmentIndex:     &segmentIdx,
+					CarriesProduct:   true,
+					Role:             "logistics_leg",
+					Metrics:          cloneMetricValues(segment.Metrics),
+					Qualifiers:       buildPathEdgeQualifiers(segment, leg, "logistics_leg", viaOrder),
+				})
+				previousIdx = viaIdx
+			}
+			if customerIdx >= 0 && previousIdx != customerIdx {
+				segmentIdx := i
+				edges = append(edges, models.SupplyChainPathEdge{
+					Type:             "LOGISTICS",
+					From:             previousIdx,
+					To:               customerIdx,
+					Mode:             "required",
+					ProductNodeIndex: &productIdx,
+					ProductRef:       segment.ProductRef,
+					SupplyLinkID:     segment.SupplyLinkID,
+					SegmentIndex:     &segmentIdx,
+					CarriesProduct:   true,
+					Role:             "logistics_leg",
+					Metrics:          cloneMetricValues(segment.Metrics),
+					Qualifiers:       buildPathEdgeQualifiers(segment, leg, "logistics_leg", len(segment.TransportViaRefs)),
+				})
+			}
 		}
 
 		// Add ontological edge between products if this is not the last segment
@@ -1100,13 +1227,103 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(path *SupplyChainPath
 				Type:             "ONTOLOGY",
 				From:             currentProductIdx,
 				To:               nextProductIdx,
+				ProductNodeIndex: &currentProductIdx,
+				ProductRef:       segment.ProductRef,
+				SegmentIndex:     intPtr(i),
+				CarriesProduct:   true,
+				Role:             "product_transformation",
 				Relation:         relation,
 				FromProductIndex: &currentProductIdx,
 				ToProductIndex:   &nextProductIdx,
 				Mode:             mode,
 			})
 		}
+
+		legs = append(legs, leg)
 	}
 
-	return nodes, edges
+	return nodes, edges, legs, stressEval.EvaluatePath(legs)
+}
+
+func cloneMetricValues(in map[string]models.MetricValue) map[string]models.MetricValue {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]models.MetricValue, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func buildPathEdgeQualifiers(segment PathSegment, leg models.SupplyChainPathLeg, role string, legOrder int) map[string]interface{} {
+	qualifiers := map[string]interface{}{
+		"role":              role,
+		"segmentConfidence": segment.Confidence,
+		"tenantId":          strings.TrimSpace(segment.TenantID),
+		"isTenantSpecific":  segment.IsTenantSpecific,
+		"legOrder":          legOrder,
+	}
+	if strings.TrimSpace(leg.Mode) != "" {
+		qualifiers[models.QualifierRouteMode] = strings.TrimSpace(leg.Mode)
+	}
+	if len(leg.GeoRefs) > 0 {
+		qualifiers[models.QualifierGeoRefs] = append([]string(nil), leg.GeoRefs...)
+	}
+	if len(leg.FlowRefs) > 0 {
+		qualifiers[models.QualifierFlowRefs] = append([]string(nil), leg.FlowRefs...)
+	}
+	if len(leg.AlternateFlowRefs) > 0 {
+		qualifiers[models.QualifierAlternateFlowRefs] = append([]string(nil), leg.AlternateFlowRefs...)
+	}
+	if len(leg.ZoneRefs) > 0 {
+		qualifiers[models.QualifierZoneRefs] = append([]string(nil), leg.ZoneRefs...)
+	}
+	if len(leg.AffectedZoneRefs) > 0 {
+		qualifiers[models.QualifierAffectedZoneRefs] = append([]string(nil), leg.AffectedZoneRefs...)
+	}
+	if len(leg.SpatialSemantics) > 0 {
+		qualifiers[models.QualifierSpatialSemantics] = append([]string(nil), leg.SpatialSemantics...)
+	}
+	if leg.BindingConfidence > 0 {
+		qualifiers[models.QualifierBindingConfidence] = leg.BindingConfidence
+	}
+	if leg.Stress != nil {
+		if leg.Stress.StressScore > 0 {
+			qualifiers[models.QualifierPathStressScore] = leg.Stress.StressScore
+		}
+		if leg.Stress.Fragility > 0 {
+			qualifiers[models.QualifierPathFragility] = leg.Stress.Fragility
+		}
+		if leg.Stress.Rerouteability > 0 {
+			qualifiers[models.QualifierPathRerouteability] = leg.Stress.Rerouteability
+		}
+		if leg.Stress.ZonePressure > 0 {
+			qualifiers[models.QualifierPathZonePressure] = leg.Stress.ZonePressure
+		}
+		if leg.Stress.AffectedZonePressure > 0 {
+			qualifiers[models.QualifierPathAffectedPressure] = leg.Stress.AffectedZonePressure
+		}
+		if leg.Stress.RecoveryLatencyHrs > 0 {
+			qualifiers[models.QualifierRecoveryLatencyHours] = leg.Stress.RecoveryLatencyHrs
+		}
+		if len(leg.Stress.DominantFactors) > 0 {
+			qualifiers["dominantFactors"] = append([]string(nil), leg.Stress.DominantFactors...)
+		}
+	}
+	if len(segment.TransportViaRefs) > 0 {
+		qualifiers["transportViaCount"] = len(segment.TransportViaRefs)
+		qualifiers[models.QualifierTransportVia] = append([]string(nil), segment.TransportViaRefs...)
+	}
+	if strings.TrimSpace(segment.ProductRef) != "" {
+		qualifiers["productRef"] = strings.TrimSpace(segment.ProductRef)
+	}
+	if strings.TrimSpace(segment.SupplyLinkID) != "" {
+		qualifiers["supplyLinkId"] = strings.TrimSpace(segment.SupplyLinkID)
+	}
+	return qualifiers
+}
+
+func intPtr(v int) *int {
+	return &v
 }

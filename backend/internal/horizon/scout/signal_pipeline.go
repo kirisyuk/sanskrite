@@ -2,6 +2,7 @@ package scout
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -122,6 +123,10 @@ func (p *SignalPipeline) ProcessEvent(ctx context.Context, event *coremodels.Ont
 
 		// Step 3: Inject metrics into seed nodes
 		seedFragmentIDs, err := p.seedInjector.Inject(ctx, signal)
+		if errors.Is(err, signals.ErrNoSeedNodes) {
+			log.Printf("%s no_seeds signalId=%s axis=%s location=%s", signalsys.LogPipeline, strings.TrimSpace(signal.ID), strings.TrimSpace(signal.Axis), strings.TrimSpace(signal.LocationPath))
+			continue
+		}
 		if err != nil {
 			log.Printf("%s seed injection failed signalId=%s err=%v", signalsys.LogPipeline, strings.TrimSpace(signal.ID), err)
 			continue

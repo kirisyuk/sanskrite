@@ -580,7 +580,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 	if canonFromEdgeType != "" {
 		edge.SetPolicyOriginalType(models.DependencyType(canonFromEdgeType))
 	}
-	applyBestEffortEdgeEnrichment(edge)
+	applyBestEffortEdgeEnrichment(edge, resolvedSourcePath, resolvedTargetPath)
 	dedupVariant = edgeDedupVariant(edge.Type, rawRelationType, edge.Qualifiers, rel.Reason)
 	if e.hasDuplicateEdgeByVariant(ctx, "global", edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, dedupVariant) {
 		e.rememberEdgeDedupRecently(edgeDedupKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, dedupVariant))

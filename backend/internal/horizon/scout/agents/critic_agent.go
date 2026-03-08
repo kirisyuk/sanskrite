@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
@@ -63,7 +64,7 @@ func (a *CriticAgent) ValidateWithGraphContext(
 	if a == nil {
 		return nil, fmt.Errorf("critic agent is nil")
 	}
-	domainModes = taxonomy.NormalizeDomainModes(domainModes)
+	domainModes = contractsemantics.SortDomainModesForExecution(domainModes)
 	if len(domainModes) > 0 {
 		input := CriticValidatorInput{
 			Fragment:      extractedData,
@@ -98,7 +99,7 @@ func RuleBasedQuickValidation(
 	supplyChains []SupplyChain,
 	domainModes []string,
 ) *ValidationResult {
-	domainModes = taxonomy.NormalizeDomainModes(domainModes)
+	domainModes = contractsemantics.SortDomainModesForExecution(domainModes)
 
 	// Extract relation types for evaluation
 	relTypes := make([]string, 0, len(relations))
@@ -484,6 +485,10 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2|regional}/{slug} where regional tokens (gcc, eu, asean) go in the geo slot (2nd segment). If unknown, /gov/na/{slug}."
 	  - If canonicalPath uses /org/na/{slug}, add a question:
 	    - "What is the country of origin / primary jurisdiction (ISO2 or regional token) for <org>? Use the entity's legalName/shortName/label to disambiguate and update canonicalPath to /org/{iso2|regional}/{slug} (base name only, do NOT include legal form). If truly unknown, keep /org/na/... but state uncertainty."
+	  - If this is a facility and canonicalPath uses /fac/na/{slug} while the facility name, homeLocation.name, or source text contains a clear place clue, add a question:
+	    - "What is the correct country/jurisdiction (ISO2) for <facility>? Resolve the facility/site location from the place clue and update canonicalPath to /fac/{iso2}/{slug}. Do NOT keep /fac/na/... when the place is inferable."
+	  - If homeLocation.name implies one country but homeLocation.iso3166_1 implies another, add a question:
+	    - "Resolve the contradictory facility geography for <facility>. Confirm the site/city and the correct ISO2 country code. Keep homeLocation.name but correct or remove the conflicting iso3166_1."
 	
 %s
   MANDATORY - Community completeness (for COMMUNITY or /community/*):

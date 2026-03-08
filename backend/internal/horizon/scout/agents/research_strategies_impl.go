@@ -157,7 +157,9 @@ const supplyChainOperationalModelBlock = `CRITICAL — Supply chain operational 
 2. Chain nodes use their real types: /org/ for organizations, /fac/ for facilities, /product/ for products.
 3. When a specific production facility is unknown or not separable (small org / org-level production only), use ORG → PRODUCES → PRODUCT directly.
 4. Product = catalog entity. One product type, one node. Do not duplicate products for transport steps. Use transportVia array on the supplies edge. A product must NOT appear more than once in a single supply chain path — no pseudo-cycles.
-5. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.`
+5. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.
+6. For long-haul, cross-border, maritime, pipeline, rail, or chokepoint-sensitive supply legs, include transportVia with real facility/chokepoint canonical paths whenever evidence or geography makes the route reasonably inferable.
+7. Prefer canonical ports, terminals, pipelines, straits, canals, warehouses, and intermodal nodes in transportVia over vague words like "shipping", "logistics", or "distribution".`
 
 const supplyChainProductGranularityBlock = `PRODUCT GRANULARITY (what counts as a product node):
 - Tech/consumer products: use MODEL LINE / product family level. NOT specific SKU or version.
@@ -230,6 +232,9 @@ func strategySupplyChainsJSONContractBlock() string {
   - "position": OPTIONAL (upstream|midstream|downstream)
   - "role": OPTIONAL string
 - Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. Do NOT invent synthetic /fac/*-general-production placeholders. If production is only known at org level, use org→product.
+- transportVia is operationally important. When the leg is cross-border or route-sensitive and a plausible business route is known, do not leave transportVia empty.
+- Good transportVia examples: /fac/sea/strait-of-hormuz-terminal, /fac/eg/suez-terminal, /fac/nl/port-of-rotterdam, /fac/ae/jebel-ali-terminal.
+- Bad transportVia examples: generic words, regions, countries, products, or non-facility placeholders.
 - INVALID shape example: "nodes": "A -> B -> C"
 - VALID shape example (org→fac→product→fac→org):
 {
@@ -1714,6 +1719,7 @@ Return a JSON object:
   "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?", "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length", "transport_via"?: ["/fac/us/port-long-beach", "/fac/ae/jebel-ali-port"], "source_role"?: "supplier|dependent", "target_role"?: "customer|dependency" } } ],
   "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"? } ], "confidence", "reason", "transportVia"?: ["/fac/us/port-long-beach", "/fac/ae/jebel-ali-port"] } ]
 }
+If you update fragment.homeLocation, set iso3166_1 only when the country is explicit or strongly corroborated by the place clue/source. If the place clue and ISO2 conflict, correct the ISO2 or omit it; never keep contradictory geo.
 Nodes MUST alternate actor→product. Include FACILITY where transformation happens (product→facility→product).
 For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transportVia in chains = facilities product passes through.
 

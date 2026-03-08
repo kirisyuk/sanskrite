@@ -41,8 +41,8 @@ type IntentResolution struct {
 type DomainResolution struct {
 	CanonicalPath      string              `json:"canonicalPath" firestore:"canonicalPath"`
 	ContractType       string              `json:"contractType" firestore:"contractType"` // allowlisted, must match /domain/v1/{contractType}/...
-	Title              string              `json:"title" firestore:"title"`        // human-readable English title (not a slug)
-	Description        string              `json:"description" firestore:"description"`  // actionable contract (“what to reveal/show”)
+	Title              string              `json:"title" firestore:"title"`               // human-readable English title (not a slug)
+	Description        string              `json:"description" firestore:"description"`   // actionable contract (“what to reveal/show”)
 	Facets             map[string][]string `json:"facets,omitempty" firestore:"facets,omitempty"`
 	Projections        []string            `json:"projections,omitempty" firestore:"projections,omitempty"`
 	RelatedDomains     []string            `json:"relatedDomains,omitempty" firestore:"relatedDomains,omitempty"`         // canonical /domain/... paths
@@ -71,14 +71,14 @@ type SupplyChainExecutionPlan struct {
 // Optional Level: 1 = top ORGs only (depth 1), 2 = ORG+FACs+products expansion (depth 2-3).
 // When Anchors is non-empty, it takes precedence over Anchor: build chains FROM each of these orgs (producers).
 type SupplyChainQuery struct {
-	Anchor        string   `json:"anchor" firestore:"anchor"`                            // canonical path (single). Used when Anchors is empty.
-	Anchors       []string `json:"anchors,omitempty" firestore:"anchors,omitempty"`      // list of org paths for "from organizations" queries
-	AnchorType    string   `json:"anchorType" firestore:"anchorType"`                    // "org" | "product" | "deposit"
-	Direction     string   `json:"direction" firestore:"direction"`                      // "down" (org→fac→product→fac→org tree). Legacy: "upstream"/"downstream"/"both" mapped to "down".
-	Depth         int      `json:"depth" firestore:"depth"`                              // 3-6
-	Level         int      `json:"level,omitempty" firestore:"level,omitempty"`          // optional: 1 = top ORGs, 2 = expansion (staged queries)
-	ProductFilter []string `json:"productFilter,omitempty" firestore:"productFilter,omitempty"`  // e.g. ["ev-batteries", "lithium-carbonate"]
-	GeoFilter     []string `json:"geoFilter,omitempty" firestore:"geoFilter,omitempty"`          // e.g. ["de", "cn"]
+	Anchor        string   `json:"anchor" firestore:"anchor"`                                   // canonical path (single). Used when Anchors is empty.
+	Anchors       []string `json:"anchors,omitempty" firestore:"anchors,omitempty"`             // list of org paths for "from organizations" queries
+	AnchorType    string   `json:"anchorType" firestore:"anchorType"`                           // "org" | "product" | "deposit"
+	Direction     string   `json:"direction" firestore:"direction"`                             // "down" (org→fac→product→fac→org tree). Legacy: "upstream"/"downstream"/"both" mapped to "down".
+	Depth         int      `json:"depth" firestore:"depth"`                                     // 3-6
+	Level         int      `json:"level,omitempty" firestore:"level,omitempty"`                 // optional: 1 = top ORGs, 2 = expansion (staged queries)
+	ProductFilter []string `json:"productFilter,omitempty" firestore:"productFilter,omitempty"` // e.g. ["ev-batteries", "lithium-carbonate"]
+	GeoFilter     []string `json:"geoFilter,omitempty" firestore:"geoFilter,omitempty"`         // e.g. ["de", "cn"]
 	Reason        string   `json:"reason" firestore:"reason"`
 }
 
@@ -675,7 +675,7 @@ ANCHOR TAXONOMY
 %s
 
 ORGANIZATION: /org/{iso2|na}/{slug} (e.g., /org/sa/saudi-aramco). GOV bodies: /gov/{iso2|na}/{slug}.
-FACILITY: /fac/{geo}/{facilitySlug}. geo like org/gov (ISO2, na, or regional). If geo unknown: /fac/na/{facilitySlug}
+FACILITY: /fac/{geo}/{facilitySlug}. geo like org/gov (ISO2, na, or regional). /fac/na is LAST-RESORT ONLY after checking facility name, site/city mention, operator context, and source text for geography. If the name contains a clear place clue, infer the ISO2 instead of using na.
 GEO_REGION: /loc/{countryAlpha2}[/{level1}[/{level2}]] — omit unknown trailing levels. Country-only: /loc/{cc}. Regional: /loc/gcc.
 PRODUCT: /product/{category}/{type}/{stage}/{slug} — category: raw|component|finished|service. For services, use category=service and map service domain/subdomain into {type}/{stage}.
 MARKET: /market/{geo}/{domain}/{vertical} — geo: " + taxonomy.ISO2GeoDescriptionForPrompts() + ". Inherit country ISO2 from query when geographic context is present.
@@ -706,7 +706,7 @@ var contractTypeAliases = map[string]string{
 	"sourcing-map":    "supply-chain",
 	"procurement-map": "supply-chain",
 	// Risk aliases -> geopolitical-risk
-	"risk-assessment":  "geopolitical-risk",
+	"risk-assessment":   "geopolitical-risk",
 	"conflict-dynamics": "geopolitical-risk",
 	// Policy aliases -> policy-impact
 	"policy-and-regulation":   "policy-impact",
@@ -1637,16 +1637,16 @@ RULES:
 
 - FACILITY canonicalPath:
   - use /fac/{geo}/{facilitySlug} — geo: %s
-  - if geo is unknown, use /fac/na/{facilitySlug}
+  - /fac/na/{facilitySlug} is allowed only as a last resort after checking facility name, site/city mention, operator context, and source text for geography
 
 - ORGANIZATION canonicalPath:
   - Organizations: /org/{iso2|na}/{slug}
-    - iso2: country of origin / primary jurisdiction (%s). If unknown, use "na".
+    - iso2: country of origin / primary jurisdiction (%s). /org/na is last-resort only after checking official name, HQ/site/place clue, and source text for jurisdiction.
     - Regional tokens go in the geo slot (2nd segment): /org/gcc/{slug} (NOT /org/na/gcc/{slug}).
     - slug: lowercase slug derived from the base name (avoid legal suffixes like Inc/LLC in the path if possible)
   - Government bodies: /gov/{iso2|na}/{slug}
     - Use for ministries, regulators, agencies, state bodies (prevents collisions like "Ministry of Defence" across countries).
-    - If jurisdiction is unknown, use /gov/na/{slug}.
+    - /gov/na/{slug} is last-resort only after checking the source for jurisdiction/country clues.
     - Regional tokens go in the geo slot (2nd segment): /gov/gcc/{slug} (NOT /gov/na/gcc/{slug}).
 
 - PROGRAM/MARKET/EVENT/PERSON canonicalPath:

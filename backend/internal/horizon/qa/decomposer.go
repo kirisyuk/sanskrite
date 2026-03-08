@@ -22,9 +22,9 @@ func NewQuestionDecomposer(executor *ai.AITaskExecutor) *QuestionDecomposer {
 
 // DecomposeContext provides lens context for decomposition.
 type DecomposeContext struct {
-	ScopePaths       []string // Top 30 canonical paths in lens scope
-	DomainModes      []string
-	ActiveSignals    []string // Top 5 signals by amplitude (human-readable)
+	ScopePaths        []string // Top 30 canonical paths in lens scope
+	DomainModes       []string
+	ActiveSignals     []string // Top 5 signals by amplitude (human-readable)
 	ArtifactSummaries []string // MaterializedArtifact display names
 }
 
@@ -50,10 +50,10 @@ func (d *QuestionDecomposer) Decompose(ctx context.Context, question string, len
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
-			TextGenerationCapability:  true,
-			MinCapabilityScore:        6,
-			MinContextWindow:          8000,
-			MaxOutputSize:             2048,
+			TextGenerationCapability: true,
+			MinCapabilityScore:       6,
+			MinContextWindow:         8000,
+			MaxOutputSize:            2048,
 		},
 		Verifier: verifier,
 	}
@@ -127,7 +127,7 @@ func (d *QuestionDecomposer) buildPrompt(question string, lensCtx *DecomposeCont
 		chainsStr = "(none)"
 	}
 
-	return fmt.Sprintf(`You are decomposing a business question into a simulation plan.
+	return fmt.Sprintf(`You are decomposing an executive "what happens if..." question into a graph simulation plan.
 
 LENS CONTEXT:
 - Scope: %s
@@ -176,12 +176,13 @@ Return a JSON object with this exact structure (no markdown, no code fences):
 }
 
 Rules:
-- For "what would happen if X" → create HypotheticalSignal with modality=projected
-- For "what are the current risks/blockers" → no signals (empty hypotheticalSignals), just targetFilter
+- For "what would happen if X" or "how would X affect Y" → create HypotheticalSignal with modality=projected
+- For current-state questions ("what are the risks now", "where are the blockers") → no hypotheticalSignals, just targetFilter
 - If question is unrelated to lens scope → answerMode: "out_of_scope"
 - SeedHints: use canonical path patterns from lens scope (e.g. /org/id/*, /deposit/nickel/*)
 - Amplitude: 0.3=minor, 0.5=moderate, 0.7=significant, 0.9=severe
 - answerMode: pick the best fit for the question
+- Prefer remote business consequences over obvious nearby restatements when the question asks about downstream effects.
+- When the question implies timing ("when", "months later", "early warning"), choose the most realistic timeHorizon and targetFilter for farther endpoints.
 `, scopeStr, domainStr, signalsStr, chainsStr, question)
 }
-

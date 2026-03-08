@@ -1113,6 +1113,23 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				NodeRefs:    artifact.NodeRefs,
 				Status:      artifact.PathStatus,
 			}
+			if artifact.Kind == models.MaterializedKindSupplyChainPath {
+				if parsed, err := models.ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
+					summary := models.SummarizeSupplyChainPathBindings(parsed)
+					ref := lens.ScopeArtifacts[artKey]
+					ref.GeoRefs = summary.GeoRefs
+					ref.FlowRefs = summary.FlowRefs
+					ref.ZoneRefs = summary.ZoneRefs
+					ref.AffectedZoneRefs = summary.AffectedZoneRefs
+					ref.SpatialSemantics = summary.SpatialSemantics
+					ref.LegCount = summary.LegCount
+					ref.BindingConfidence = summary.BindingConfidence
+					ref.PathStressScore = summary.PathStressScore
+					ref.BottleneckLegIndex = summary.BottleneckLegIndex
+					ref.RecoveryLatencyHrs = summary.RecoveryLatencyHrs
+					lens.ScopeArtifacts[artKey] = ref
+				}
+			}
 			staticPaths = append(staticPaths, artifact.NodeRefs...)
 			trace.Log(ctx, "scope", "scope.artifact.resolved", map[string]any{
 				"lensId":      lensID,
@@ -1967,6 +1984,23 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				DisplayName: artifact.DisplayName,
 				NodeRefs:    artifact.NodeRefs,
 				Status:      artifact.PathStatus,
+			}
+			if artifact.Kind == models.MaterializedKindSupplyChainPath {
+				if parsed, err := models.ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
+					summary := models.SummarizeSupplyChainPathBindings(parsed)
+					ref := lens.ScopeArtifacts[artKey]
+					ref.GeoRefs = summary.GeoRefs
+					ref.FlowRefs = summary.FlowRefs
+					ref.ZoneRefs = summary.ZoneRefs
+					ref.AffectedZoneRefs = summary.AffectedZoneRefs
+					ref.SpatialSemantics = summary.SpatialSemantics
+					ref.LegCount = summary.LegCount
+					ref.BindingConfidence = summary.BindingConfidence
+					ref.PathStressScore = summary.PathStressScore
+					ref.BottleneckLegIndex = summary.BottleneckLegIndex
+					ref.RecoveryLatencyHrs = summary.RecoveryLatencyHrs
+					lens.ScopeArtifacts[artKey] = ref
+				}
 			}
 			newStaticPaths = append(newStaticPaths, artifact.NodeRefs...)
 		}

@@ -4618,11 +4618,34 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
       const payloadNodes = artifact.payload?.nodes || [];
       const payloadEdges = artifact.payload?.edges || [];
+      const payloadLegs = artifact.payload?.legs || [];
+      const pathStress = artifact.payload?.stress || null;
+      const legByIndex = new Map<number, (typeof payloadLegs)[number]>();
+      for (const leg of payloadLegs) {
+        if (typeof leg?.index === 'number' && Number.isFinite(leg.index)) {
+          legByIndex.set(leg.index, leg);
+        }
+      }
       const existingEdgeIds = new Set((edges || []).map((e) => String((e as any)?.id || '').trim()));
-      const addEdge = (id: string, sourceId: string, targetId: string, edgeType: string) => {
+      const resolvePathEdgeType = (edge: any): string => {
+        if (edge.type === 'ONTOLOGY' && edge.relation) return edge.relation;
+        if (String(edge.role || '').trim() === 'logistics_leg' || edge.type === 'LOGISTICS') return 'OPERATES_VIA';
+        if (edge.type === 'SUPPLY_LINK') return 'SUPPLIES_TO';
+        return 'DEPENDS_ON';
+      };
+      const addEdge = (
+        id: string,
+        sourceId: string,
+        targetId: string,
+        edgeType: string,
+        extras?: Record<string, any>,
+      ) => {
         if (existingEdgeIds.has(id)) return;
         const baseStyle = getEdgeStyle(edgeType, undefined);
         const stroke = getEdgeStroke(baseStyle);
+        const edgeCaption = typeof extras?.edgeCaption === 'string' && extras.edgeCaption.trim()
+          ? extras.edgeCaption.trim()
+          : getEdgeCaptionShort(edgeType);
         newEdges.push({
           id,
           source: sourceId,
@@ -4632,7 +4655,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           style: baseStyle,
           data: {
             edgeType,
-            edgeCaption: getEdgeCaptionShort(edgeType),
+            edgeCaption,
+            ...(extras || {}),
           } as any,
         });
         existingEdgeIds.add(id);
@@ -4644,35 +4668,90 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const srcId = refToNodeId.get(fromRef);
         const trgId = refToNodeId.get(toRef);
         if (!srcId || !trgId) continue;
+        const edgeType = resolvePathEdgeType(e);
+        const segmentIndex = typeof e.segmentIndex === 'number' ? e.segmentIndex : undefined;
+        const leg = typeof segmentIndex === 'number' ? legByIndex.get(segmentIndex) : undefined;
+        const pathEdgeMeta = {
+          pathArtifactId: artifact.id,
+          pathRole: String(e.role || '').trim() || undefined,
+          pathProductRef: String(e.productRef || '').trim() || undefined,
+          pathCarriesProduct: Boolean(e.carriesProduct),
+          pathSegmentIndex: segmentIndex,
+          pathSupplyLinkId: String(e.supplyLinkId || '').trim() || undefined,
+          pathQualifiers: e.qualifiers,
+          pathStressScore: typeof leg?.stress?.stressScore === 'number' ? leg.stress.stressScore : pathStress?.pathScore,
+          pathFragility: typeof leg?.stress?.fragility === 'number' ? leg.stress.fragility : pathStress?.fragility,
+          pathRerouteability:
+            typeof leg?.stress?.rerouteability === 'number' ? leg.stress.rerouteability : pathStress?.rerouteability,
+          pathZonePressure:
+            typeof leg?.stress?.zonePressure === 'number' ? leg.stress.zonePressure : pathStress?.zonePressure,
+          pathAffectedZonePressure:
+            typeof leg?.stress?.affectedZonePressure === 'number'
+              ? leg.stress.affectedZonePressure
+              : pathStress?.affectedZonePressure,
+          pathRecoveryLatencyHours:
+            typeof leg?.stress?.recoveryLatencyHours === 'number'
+              ? leg.stress.recoveryLatencyHours
+              : pathStress?.recoveryLatencyHours,
+          pathBindingConfidence: typeof leg?.bindingConfidence === 'number' ? leg.bindingConfidence : undefined,
+          pathFlowRefs: leg?.flowRefs || [],
+          pathZoneRefs: leg?.zoneRefs || [],
+          pathAffectedZoneRefs: leg?.affectedZoneRefs || [],
+          pathSpatialSemantics: leg?.spatialSemantics || [],
+          pathDominantFactors: leg?.stress?.dominantFactors || pathStress?.dominantFactors || [],
+          pathBottleneck:
+            typeof pathStress?.bottleneckLegIndex === 'number' && typeof segmentIndex === 'number'
+              ? pathStress.bottleneckLegIndex === segmentIndex
+              : false,
+        } as Record<string, any>;
 
-        const viaIdx = e.viaProductIndex ?? (e as any).viaProductIndex;
-        if (e.type === 'SUPPLY_LINK' && typeof viaIdx === 'number' && viaIdx >= 0 && viaIdx < payloadNodes.length) {
-          const productRef = payloadNodes[viaIdx]?.ref;
+        const productIdx = e.productNodeIndex ?? e.viaProductIndex ?? (e as any).productNodeIndex ?? (e as any).viaProductIndex;
+        if (
+          edgeType === 'SUPPLIES_TO' &&
+          typeof productIdx === 'number' &&
+          productIdx >= 0 &&
+          productIdx < payloadNodes.length
+        ) {
+          const productRef = payloadNodes[productIdx]?.ref;
           const productId = productRef ? refToNodeId.get(productRef) : undefined;
-          if (productId) {
+          if (productId && productId !== srcId && productId !== trgId) {
             addEdge(
-              `supply:${artifact.id}:${e.from}-via${viaIdx}`,
+              `supply:${artifact.id}:${e.from}-product${productIdx}`,
               srcId,
               productId,
               'PRODUCES',
+              {
+                ...pathEdgeMeta,
+                edgeCaption: getEdgeCaptionShort('PRODUCES'),
+              },
             );
             addEdge(
-              `supply:${artifact.id}:via${viaIdx}-${e.to}`,
+              `supply:${artifact.id}:product${productIdx}-${e.to}`,
               productId,
               trgId,
               'SUPPLIES_TO',
+              {
+                ...pathEdgeMeta,
+                edgeCaption: getEdgeCaptionShort('SUPPLIES_TO'),
+              },
             );
             continue;
           }
         }
 
-        const edgeType =
-          e.type === 'ONTOLOGY' && e.relation
-            ? e.relation
-            : e.type === 'SUPPLY_LINK'
-              ? 'SUPPLIES_TO'
-              : 'DEPENDS_ON';
-        addEdge(`supply:${artifact.id}:${e.from}-${e.to}`, srcId, trgId, edgeType);
+        addEdge(
+          `supply:${artifact.id}:${e.from}-${e.to}:${String(e.role || e.type || '').trim() || edgeType}`,
+          srcId,
+          trgId,
+          edgeType,
+          {
+            ...pathEdgeMeta,
+            edgeCaption:
+              String(e.role || '').trim() === 'logistics_leg'
+                ? 'Via'
+                : getEdgeCaptionShort(edgeType),
+          },
+        );
       }
 
       setNodes((prev) => {
@@ -10887,10 +10966,38 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
 
     const baseStyled = (e: Edge) => {
-      const baseStyle = (e as any)?.data?.baseStyle || e.style || {};
+      const d: any = (e as any)?.data || {};
+      const rawBaseStyle = d.baseStyle || e.style || {};
+      const stressScore = typeof d.pathStressScore === 'number' ? d.pathStressScore : undefined;
+      const bindingConfidence = typeof d.pathBindingConfidence === 'number' ? d.pathBindingConfidence : undefined;
+      const pathBottleneck = Boolean(d.pathBottleneck);
+      let baseStyle: any = { ...rawBaseStyle };
+      if (typeof stressScore === 'number' && Number.isFinite(stressScore) && stressScore > 0) {
+        const stroke =
+          stressScore >= 0.78
+            ? '#ef4444'
+            : stressScore >= 0.58
+              ? '#f59e0b'
+              : stressScore >= 0.36
+                ? '#38bdf8'
+                : rawBaseStyle.stroke;
+        const currentWidth = typeof rawBaseStyle.strokeWidth === 'number' ? rawBaseStyle.strokeWidth : 1.5;
+        baseStyle = {
+          ...baseStyle,
+          stroke: stroke || rawBaseStyle.stroke,
+          strokeWidth: currentWidth + (pathBottleneck ? 1.8 : 0.5 + stressScore * 1.5),
+          opacity: Math.max(typeof rawBaseStyle.opacity === 'number' ? rawBaseStyle.opacity : 0.42, 0.48 + stressScore * 0.34),
+          strokeOpacity:
+            Math.max(typeof rawBaseStyle.strokeOpacity === 'number' ? rawBaseStyle.strokeOpacity : 0.42, 0.56 + stressScore * 0.32),
+          ...(bindingConfidence !== undefined && bindingConfidence < 0.42
+            ? { strokeDasharray: '4 3' }
+            : {}),
+          ...(pathBottleneck ? { filter: 'drop-shadow(0 0 5px rgba(245,158,11,0.38))' } : {}),
+        };
+      }
       const edgeTypeRaw = (e as any)?.data?.edgeType || (e as any)?.data?.subkind || e.label;
       const edgeLabel =
-        (e as any)?.data?.edgeCaption ||
+        d.edgeCaption ||
         getEdgeCaptionShort(edgeTypeRaw) ||
         (edgeTypeRaw ? String(edgeTypeRaw) : '');
       return { baseStyle, edgeLabel };
@@ -10899,10 +11006,18 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Helper to create edge with optional label
     const withLabel = (e: Edge, showLabel: boolean, style: any, raiseToFront: boolean) => {
       const d: any = (e as any)?.data || {};
+      const markerColor = typeof style?.stroke === 'string' && style.stroke.trim()
+        ? style.stroke.trim()
+        : undefined;
+      const markerEnd =
+        markerColor && (e as any)?.markerEnd
+          ? { ...((e as any).markerEnd || {}), color: markerColor }
+          : (e as any)?.markerEnd;
       if (!showLabel) {
         return {
           ...e,
           label: undefined,
+          markerEnd,
           data: { ...d, showLabel: false, raiseToFront: false },
           style,
         };
@@ -10911,6 +11026,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return {
         ...e,
         label: undefined,
+        markerEnd,
         data: { ...d, showLabel, edgeLabel, raiseToFront },
         style,
       };

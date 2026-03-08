@@ -85,9 +85,10 @@ func evaluateChainReuse(
 	isValidated := existing.PathStatus == "validated"
 	hasEnoughSegments := countPayloadNodes(existing.Payload) >= chainReuseMinSegments
 	confidence := extractPayloadConfidence(existing)
+	hasEnrichedBindings := artifactHasEnrichedPathBindings(existing)
 
 	// Full skip: artifact is fresh, validated, high-confidence, complete enough.
-	if isFresh && isValidated && confidence >= chainReuseMinConfidence && hasEnoughSegments {
+	if isFresh && isValidated && confidence >= chainReuseMinConfidence && hasEnoughSegments && hasEnrichedBindings {
 		return ChainReuseDecision{
 			Level:        ChainReuseFullSkip,
 			CanonicalKey: canonicalKey,
@@ -111,6 +112,9 @@ func evaluateChainReuse(
 	if !hasEnoughSegments {
 		reasons = append(reasons, fmt.Sprintf("sparse(%d_nodes)", countPayloadNodes(existing.Payload)))
 	}
+	if !hasEnrichedBindings {
+		reasons = append(reasons, "path_bindings_missing")
+	}
 
 	return ChainReuseDecision{
 		Level:        ChainReuseEnrichMerge,
@@ -118,6 +122,31 @@ func evaluateChainReuse(
 		Artifact:     existing,
 		Reason:       strings.Join(reasons, ","),
 	}
+}
+
+func artifactHasEnrichedPathBindings(artifact *models.MaterializedArtifact) bool {
+	if artifact == nil || artifact.Kind != models.MaterializedKindSupplyChainPath || artifact.Payload == nil {
+		return false
+	}
+	parsed, err := models.ParseSupplyChainPathPayload(artifact.Payload)
+	if err != nil || parsed == nil || len(parsed.Legs) == 0 {
+		return false
+	}
+	if parsed.Stress != nil && parsed.Stress.PathScore > 0 {
+		return true
+	}
+	for _, leg := range parsed.Legs {
+		if leg.BindingConfidence > 0 {
+			return true
+		}
+		if len(leg.FlowRefs) > 0 || len(leg.ZoneRefs) > 0 || len(leg.AffectedZoneRefs) > 0 || len(leg.SpatialSemantics) > 0 {
+			return true
+		}
+		if leg.Stress != nil && leg.Stress.StressScore > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // addArtifactToLensScope adds a MaterializedArtifact as a single /artifact/ scope entry
@@ -141,11 +170,42 @@ func addArtifactToLensScope(
 	}
 	// Persist ScopeArtifacts metadata so frontend can render immediately.
 	artKey := strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/")
-	_ = lensesRepo.UpsertScopeArtifact(ctx, lensID, artKey, models.ScopeArtifactRef{
+	ref := models.ScopeArtifactRef{
 		Kind:        string(artifact.Kind),
 		DisplayName: artifact.DisplayName,
 		NodeRefs:    artifact.NodeRefs,
 		Status:      artifact.PathStatus,
+	}
+	if artifact.Kind == models.MaterializedKindSupplyChainPath {
+		if parsed, err := models.ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
+			summary := models.SummarizeSupplyChainPathBindings(parsed)
+			ref.GeoRefs = summary.GeoRefs
+			ref.FlowRefs = summary.FlowRefs
+			ref.ZoneRefs = summary.ZoneRefs
+			ref.AffectedZoneRefs = summary.AffectedZoneRefs
+			ref.SpatialSemantics = summary.SpatialSemantics
+			ref.LegCount = summary.LegCount
+			ref.BindingConfidence = summary.BindingConfidence
+			ref.PathStressScore = summary.PathStressScore
+			ref.BottleneckLegIndex = summary.BottleneckLegIndex
+			ref.RecoveryLatencyHrs = summary.RecoveryLatencyHrs
+		}
+	}
+	_ = lensesRepo.UpsertScopeArtifact(ctx, lensID, artKey, models.ScopeArtifactRef{
+		Kind:               ref.Kind,
+		DisplayName:        ref.DisplayName,
+		NodeRefs:           ref.NodeRefs,
+		Status:             ref.Status,
+		GeoRefs:            ref.GeoRefs,
+		FlowRefs:           ref.FlowRefs,
+		ZoneRefs:           ref.ZoneRefs,
+		AffectedZoneRefs:   ref.AffectedZoneRefs,
+		SpatialSemantics:   ref.SpatialSemantics,
+		LegCount:           ref.LegCount,
+		BindingConfidence:  ref.BindingConfidence,
+		PathStressScore:    ref.PathStressScore,
+		BottleneckLegIndex: ref.BottleneckLegIndex,
+		RecoveryLatencyHrs: ref.RecoveryLatencyHrs,
 	})
 	return true
 }

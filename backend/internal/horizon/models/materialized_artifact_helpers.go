@@ -67,14 +67,50 @@ func decodeSupplyChainPathEdges(raw interface{}) ([]SupplyChainPathEdge, error) 
 	}
 }
 
-// BuildSupplyChainPathPayload creates a v1 SUPPLY_CHAIN_PATH payload from nodes and edges.
-func BuildSupplyChainPathPayload(nodes []SupplyChainPathNode, edges []SupplyChainPathEdge, notes map[string]interface{}) map[string]interface{} {
+func decodeSupplyChainPathLegs(raw interface{}) ([]SupplyChainPathLeg, error) {
+	switch legs := raw.(type) {
+	case []SupplyChainPathLeg:
+		return legs, nil
+	case []interface{}:
+		out := make([]SupplyChainPathLeg, 0, len(legs))
+		for i, rawLeg := range legs {
+			switch leg := rawLeg.(type) {
+			case SupplyChainPathLeg:
+				out = append(out, leg)
+			case map[string]interface{}:
+				legJSON, err := json.Marshal(leg)
+				if err != nil {
+					return nil, fmt.Errorf("payload leg[%d] marshal failed: %w", i, err)
+				}
+				var parsed SupplyChainPathLeg
+				if err := json.Unmarshal(legJSON, &parsed); err != nil {
+					return nil, fmt.Errorf("payload leg[%d] unmarshal failed: %w", i, err)
+				}
+				out = append(out, parsed)
+			default:
+				return nil, fmt.Errorf("payload leg[%d] must be an object", i)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload 'legs' must be an array")
+	}
+}
+
+// BuildSupplyChainPathPayload creates a v1 SUPPLY_CHAIN_PATH payload from nodes, edges, optional legs, and stress profile.
+func BuildSupplyChainPathPayload(nodes []SupplyChainPathNode, edges []SupplyChainPathEdge, legs []SupplyChainPathLeg, stress *SupplyChainPathStress, notes map[string]interface{}) map[string]interface{} {
 	payload := map[string]interface{}{
 		"v":     1,
 		"nodes": nodes,
 	}
 	if len(edges) > 0 {
 		payload["edges"] = edges
+	}
+	if len(legs) > 0 {
+		payload["legs"] = legs
+	}
+	if stress != nil {
+		payload["stress"] = stress
 	}
 	if len(notes) > 0 {
 		payload["notes"] = notes
@@ -118,6 +154,38 @@ func ParseSupplyChainPathPayload(payload map[string]interface{}) (*SupplyChainPa
 		edges = parsedEdges
 	}
 
+	legs := []SupplyChainPathLeg{}
+	if legsRaw, ok := payload["legs"]; ok {
+		parsedLegs, err := decodeSupplyChainPathLegs(legsRaw)
+		if err != nil {
+			return nil, err
+		}
+		legs = parsedLegs
+	}
+
+	var stress *SupplyChainPathStress
+	if stressRaw, ok := payload["stress"]; ok && stressRaw != nil {
+		switch typed := stressRaw.(type) {
+		case *SupplyChainPathStress:
+			stress = typed
+		case SupplyChainPathStress:
+			stressCopy := typed
+			stress = &stressCopy
+		case map[string]interface{}:
+			stressJSON, err := json.Marshal(typed)
+			if err != nil {
+				return nil, fmt.Errorf("payload stress marshal failed: %w", err)
+			}
+			var parsedStress SupplyChainPathStress
+			if err := json.Unmarshal(stressJSON, &parsedStress); err != nil {
+				return nil, fmt.Errorf("payload stress unmarshal failed: %w", err)
+			}
+			stress = &parsedStress
+		default:
+			return nil, fmt.Errorf("payload 'stress' must be an object")
+		}
+	}
+
 	notes := map[string]interface{}{}
 	if notesRaw, ok := payload["notes"]; ok {
 		notesMap, ok := notesRaw.(map[string]interface{})
@@ -130,6 +198,8 @@ func ParseSupplyChainPathPayload(payload map[string]interface{}) (*SupplyChainPa
 		Version: int(version),
 		Nodes:   nodes,
 		Edges:   edges,
+		Legs:    legs,
+		Stress:  stress,
 		Notes:   notes,
 	}, nil
 }
@@ -166,6 +236,60 @@ func GetSupplyChainPathEdges(artifact *MaterializedArtifact) ([]SupplyChainPathE
 	}
 
 	return parsed.Edges, nil
+}
+
+// GetSupplyChainPathLegs extracts operational legs from a MaterializedArtifact payload.
+func GetSupplyChainPathLegs(artifact *MaterializedArtifact) ([]SupplyChainPathLeg, error) {
+	if artifact == nil {
+		return nil, fmt.Errorf("artifact is nil")
+	}
+	if artifact.Kind != MaterializedKindSupplyChainPath {
+		return nil, fmt.Errorf("artifact kind is not SUPPLY_CHAIN_PATH")
+	}
+
+	parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("parse payload failed: %w", err)
+	}
+
+	return parsed.Legs, nil
+}
+
+type SupplyChainPathBindingSummary struct {
+	GeoRefs            []string
+	FlowRefs           []string
+	ZoneRefs           []string
+	AffectedZoneRefs   []string
+	SpatialSemantics   []string
+	LegCount           int
+	BindingConfidence  float64
+	PathStressScore    float64
+	BottleneckLegIndex int
+	RecoveryLatencyHrs float64
+}
+
+func SummarizeSupplyChainPathBindings(parsed *SupplyChainPathPayload) SupplyChainPathBindingSummary {
+	out := SupplyChainPathBindingSummary{}
+	if parsed == nil || len(parsed.Legs) == 0 {
+		return out
+	}
+	var confidenceTotal float64
+	for _, leg := range parsed.Legs {
+		out.GeoRefs = mergeUniqueStrings(out.GeoRefs, leg.GeoRefs)
+		out.FlowRefs = mergeUniqueStrings(out.FlowRefs, leg.FlowRefs)
+		out.ZoneRefs = mergeUniqueStrings(out.ZoneRefs, leg.ZoneRefs)
+		out.AffectedZoneRefs = mergeUniqueStrings(out.AffectedZoneRefs, leg.AffectedZoneRefs)
+		out.SpatialSemantics = mergeUniqueStrings(out.SpatialSemantics, leg.SpatialSemantics)
+		confidenceTotal += leg.BindingConfidence
+	}
+	out.LegCount = len(parsed.Legs)
+	out.BindingConfidence = confidenceTotal / float64(len(parsed.Legs))
+	if parsed.Stress != nil {
+		out.PathStressScore = parsed.Stress.PathScore
+		out.BottleneckLegIndex = parsed.Stress.BottleneckLegIndex
+		out.RecoveryLatencyHrs = parsed.Stress.RecoveryLatencyHrs
+	}
+	return out
 }
 
 // FindNodeByRef finds a node index by canonical path reference.
@@ -247,11 +371,45 @@ func (a *MaterializedArtifact) GenerateVectorText() string {
 					b.WriteString("\n")
 				}
 				for _, edge := range parsed.Edges {
+					if edge.CarriesProduct && edge.ProductRef != "" {
+						b.WriteString("Product Flow Edge: ")
+						b.WriteString(edge.Role)
+						b.WriteString(" ")
+						b.WriteString(edge.ProductRef)
+						b.WriteString("\n")
+					}
 					if edge.Type == "ONTOLOGY" && edge.Relation != "" {
 						b.WriteString("Transformation: ")
 						b.WriteString(edge.Relation)
 						b.WriteString("\n")
 					}
+				}
+				for _, leg := range parsed.Legs {
+					if len(leg.FlowRefs) > 0 {
+						b.WriteString("Flows: ")
+						b.WriteString(strings.Join(leg.FlowRefs, ", "))
+						b.WriteString("\n")
+					}
+					if len(leg.ZoneRefs) > 0 {
+						b.WriteString("Zones: ")
+						b.WriteString(strings.Join(leg.ZoneRefs, ", "))
+						b.WriteString("\n")
+					}
+					if len(leg.AffectedZoneRefs) > 0 {
+						b.WriteString("Affected Zones: ")
+						b.WriteString(strings.Join(leg.AffectedZoneRefs, ", "))
+						b.WriteString("\n")
+					}
+					if leg.Stress != nil && leg.Stress.StressScore > 0 {
+						b.WriteString("Leg Stress: ")
+						b.WriteString(fmt.Sprintf("%.2f", leg.Stress.StressScore))
+						b.WriteString("\n")
+					}
+				}
+				if parsed.Stress != nil && parsed.Stress.PathScore > 0 {
+					b.WriteString("Path Stress: ")
+					b.WriteString(fmt.Sprintf("%.2f", parsed.Stress.PathScore))
+					b.WriteString("\n")
 				}
 			}
 		}
@@ -326,6 +484,7 @@ func MergePayloads(existing, incoming map[string]interface{}) map[string]interfa
 
 	mergedNodes := mergePathNodes(existingParsed.Nodes, incomingParsed.Nodes)
 	mergedEdges := mergePathEdges(existingParsed.Edges, incomingParsed.Edges)
+	mergedLegs := mergePathLegs(existingParsed.Legs, incomingParsed.Legs)
 
 	mergedNotes := map[string]interface{}{}
 	for k, v := range existingParsed.Notes {
@@ -335,7 +494,7 @@ func MergePayloads(existing, incoming map[string]interface{}) map[string]interfa
 		mergedNotes[k] = v
 	}
 
-	return BuildSupplyChainPathPayload(mergedNodes, mergedEdges, mergedNotes)
+	return BuildSupplyChainPathPayload(mergedNodes, mergedEdges, mergedLegs, mergePathStress(existingParsed.Stress, incomingParsed.Stress), mergedNotes)
 }
 
 func mergePathNodes(existing, incoming []SupplyChainPathNode) []SupplyChainPathNode {
@@ -358,26 +517,118 @@ func mergePathNodes(existing, incoming []SupplyChainPathNode) []SupplyChainPathN
 
 func mergePathEdges(existing, incoming []SupplyChainPathEdge) []SupplyChainPathEdge {
 	type edgeKey struct {
-		From, To int
-		Type     string
+		From, To     int
+		Type         string
+		ProductRef   string
+		Role         string
+		SegmentIndex int
 	}
 	seen := map[edgeKey]bool{}
 	merged := make([]SupplyChainPathEdge, 0, len(existing)+len(incoming))
 	for _, e := range existing {
-		k := edgeKey{e.From, e.To, e.Type}
+		segmentIndex := -1
+		if e.SegmentIndex != nil {
+			segmentIndex = *e.SegmentIndex
+		}
+		k := edgeKey{From: e.From, To: e.To, Type: e.Type, ProductRef: strings.TrimSpace(e.ProductRef), Role: strings.TrimSpace(e.Role), SegmentIndex: segmentIndex}
 		if !seen[k] {
 			merged = append(merged, e)
 			seen[k] = true
 		}
 	}
 	for _, e := range incoming {
-		k := edgeKey{e.From, e.To, e.Type}
+		segmentIndex := -1
+		if e.SegmentIndex != nil {
+			segmentIndex = *e.SegmentIndex
+		}
+		k := edgeKey{From: e.From, To: e.To, Type: e.Type, ProductRef: strings.TrimSpace(e.ProductRef), Role: strings.TrimSpace(e.Role), SegmentIndex: segmentIndex}
 		if !seen[k] {
 			merged = append(merged, e)
 			seen[k] = true
 		}
 	}
 	return merged
+}
+
+func mergePathLegs(existing, incoming []SupplyChainPathLeg) []SupplyChainPathLeg {
+	type legKey struct {
+		Supplier string
+		Customer string
+		Product  string
+	}
+	seen := map[legKey]bool{}
+	merged := make([]SupplyChainPathLeg, 0, len(existing)+len(incoming))
+	appendIfNew := func(legs []SupplyChainPathLeg) {
+		for _, leg := range legs {
+			k := legKey{
+				Supplier: strings.TrimSpace(leg.SupplierRef),
+				Customer: strings.TrimSpace(leg.CustomerRef),
+				Product:  strings.TrimSpace(leg.ProductRef),
+			}
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			merged = append(merged, leg)
+		}
+	}
+	appendIfNew(existing)
+	appendIfNew(incoming)
+	sort.SliceStable(merged, func(i, j int) bool {
+		if merged[i].Index == merged[j].Index {
+			if merged[i].SupplierRef == merged[j].SupplierRef {
+				if merged[i].CustomerRef == merged[j].CustomerRef {
+					return merged[i].ProductRef < merged[j].ProductRef
+				}
+				return merged[i].CustomerRef < merged[j].CustomerRef
+			}
+			return merged[i].SupplierRef < merged[j].SupplierRef
+		}
+		return merged[i].Index < merged[j].Index
+	})
+	return merged
+}
+
+func mergePathStress(existing, incoming *SupplyChainPathStress) *SupplyChainPathStress {
+	if existing == nil {
+		return incoming
+	}
+	if incoming == nil {
+		return existing
+	}
+	if incoming.PathScore >= existing.PathScore {
+		return incoming
+	}
+	return existing
+}
+
+func replacePathInStringSlice(items []string, oldPath, newPath string) bool {
+	changed := false
+	for i, item := range items {
+		if strings.TrimSpace(item) == oldPath {
+			items[i] = newPath
+			changed = true
+		}
+	}
+	return changed
+}
+
+func mergeUniqueStrings(base, extra []string) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, item := range append(append([]string(nil), base...), extra...) {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // PayloadNodesChanged returns true if the incoming payload added new nodes compared to existing.
@@ -574,7 +825,36 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 					changed = true
 				}
 			}
-			artifact.Payload = BuildSupplyChainPathPayload(parsed.Nodes, parsed.Edges, parsed.Notes)
+			for i := range parsed.Edges {
+				if strings.TrimSpace(parsed.Edges[i].ProductRef) == oldPath {
+					parsed.Edges[i].ProductRef = newPath
+					changed = true
+				}
+			}
+			for i := range parsed.Legs {
+				if replacePathInStringSlice(parsed.Legs[i].TransportViaRefs, oldPath, newPath) {
+					changed = true
+				}
+				if replacePathInStringSlice(parsed.Legs[i].GeoRefs, oldPath, newPath) {
+					changed = true
+				}
+				if replacePathInStringSlice(parsed.Legs[i].AffectedZoneRefs, oldPath, newPath) {
+					changed = true
+				}
+				if strings.TrimSpace(parsed.Legs[i].SupplierRef) == oldPath {
+					parsed.Legs[i].SupplierRef = newPath
+					changed = true
+				}
+				if strings.TrimSpace(parsed.Legs[i].CustomerRef) == oldPath {
+					parsed.Legs[i].CustomerRef = newPath
+					changed = true
+				}
+				if strings.TrimSpace(parsed.Legs[i].ProductRef) == oldPath {
+					parsed.Legs[i].ProductRef = newPath
+					changed = true
+				}
+			}
+			artifact.Payload = BuildSupplyChainPathPayload(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Notes)
 		}
 	case MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
 		parsed, err := ParseRelationsGraphPayload(artifact.Payload)
@@ -604,8 +884,8 @@ func ValidateSupplyChainPathStructure(nodes []SupplyChainPathNode, edges []Suppl
 
 	// Validate node types
 	for i, node := range nodes {
-		if node.Type != "org" && node.Type != "fac" && node.Type != "product" {
-			return fmt.Errorf("node[%d] invalid type: %q (expected org|fac|product)", i, node.Type)
+		if node.Type != "org" && node.Type != "fac" && node.Type != "product" && node.Type != "deposit" {
+			return fmt.Errorf("node[%d] invalid type: %q (expected org|fac|product|deposit)", i, node.Type)
 		}
 		if node.Ref == "" {
 			return fmt.Errorf("node[%d] missing ref", i)
@@ -628,6 +908,18 @@ func ValidateSupplyChainPathStructure(nodes []SupplyChainPathNode, edges []Suppl
 			if nodes[viaIdx].Type != "product" {
 				return fmt.Errorf("edge[%d] 'viaProductIndex' %d points to non-product node (type: %q)", i, viaIdx, nodes[viaIdx].Type)
 			}
+		}
+		if edge.ProductNodeIndex != nil {
+			productIdx := *edge.ProductNodeIndex
+			if productIdx < 0 || productIdx >= len(nodes) {
+				return fmt.Errorf("edge[%d] 'productNodeIndex' %d out of range (nodes length: %d)", i, productIdx, len(nodes))
+			}
+			if nodes[productIdx].Type != "product" {
+				return fmt.Errorf("edge[%d] 'productNodeIndex' %d points to non-product node (type: %q)", i, productIdx, nodes[productIdx].Type)
+			}
+		}
+		if strings.TrimSpace(edge.ProductRef) != "" && !strings.HasPrefix(strings.TrimSpace(edge.ProductRef), "/product/") {
+			return fmt.Errorf("edge[%d] 'productRef' must be a product canonical path", i)
 		}
 	}
 

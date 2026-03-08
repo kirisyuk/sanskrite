@@ -11,6 +11,7 @@ import (
 	"cloud.google.com/go/firestore"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
@@ -56,6 +57,11 @@ type DependencyEdgesRepository struct {
 	validationPolicy *policy.PolicyExecutor      // Optional: for edge validation
 	fragmentsRepo    *HorizonFragmentsRepository // Optional: for fragment type lookup
 	telemetryRepo    *HorizonTelemetryRepository // Optional: aggregated edge policy KPIs
+	onUpsert         func(ctx context.Context, edge *models.DependencyEdge)
+}
+
+type EdgeUpdateOptions struct {
+	SkipOnUpsert bool
 }
 
 // NewDependencyEdgesRepository создает новый репозиторий
@@ -84,6 +90,29 @@ func (r *DependencyEdgesRepository) WithTelemetryRepo(repo *HorizonTelemetryRepo
 	return r
 }
 
+// WithOnUpsert registers a best-effort callback after successful edge create/update writes.
+func (r *DependencyEdgesRepository) WithOnUpsert(fn func(ctx context.Context, edge *models.DependencyEdge)) *DependencyEdgesRepository {
+	r.onUpsert = fn
+	return r
+}
+
+func (r *DependencyEdgesRepository) resolveEndpointTypesAndPaths(ctx context.Context, edge *models.DependencyEdge) (sourceType, targetType, sourcePath, targetPath string) {
+	if r == nil || r.fragmentsRepo == nil || edge == nil {
+		return "", "", "", ""
+	}
+	if sourceFrag, err := r.fragmentsRepo.Get(ctx, edge.SourceFragmentID); err == nil && sourceFrag != nil {
+		sourceType = string(sourceFrag.Type)
+		sourcePath = sourceFrag.CanonicalPath
+	}
+	if targetFrag, err := r.fragmentsRepo.Get(ctx, edge.TargetFragmentID); err == nil && targetFrag != nil {
+		targetType = string(targetFrag.Type)
+		targetPath = targetFrag.CanonicalPath
+	}
+	srcTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(sourceType), sourcePath)
+	dstTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(targetType), targetPath)
+	return string(srcTypeActual), string(dstTypeActual), sourcePath, targetPath
+}
+
 // Create создает новый DependencyEdge
 func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.DependencyEdge) (string, error) {
 	logPrefix := "[DependencyEdgesRepository:Create]"
@@ -94,6 +123,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 
 	log.Printf("%s Creating edge: sourceID=%s, targetID=%s, type=%s",
 		logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+	sourceType, targetType, sourcePath, targetPath := r.resolveEndpointTypesAndPaths(ctx, edge)
 
 	// Basic validation
 	if err := edge.Validate(); err != nil {
@@ -111,20 +141,11 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 		decision := policy.PolicyDecision{Action: "allow"}
 		var err error
 
-		// Get source and target fragment types and paths for validation
-		var sourceType, targetType string
-		var sourcePath, targetPath string
-		if r.fragmentsRepo != nil {
-			if sourceFrag, err := r.fragmentsRepo.Get(ctx, edge.SourceFragmentID); err == nil && sourceFrag != nil {
-				sourceType = string(sourceFrag.Type)
-				sourcePath = sourceFrag.CanonicalPath
-				log.Printf("%s Source fragment type: %s, path: %s", logPrefix, sourceType, sourcePath)
-			}
-			if targetFrag, err := r.fragmentsRepo.Get(ctx, edge.TargetFragmentID); err == nil && targetFrag != nil {
-				targetType = string(targetFrag.Type)
-				targetPath = targetFrag.CanonicalPath
-				log.Printf("%s Target fragment type: %s, path: %s", logPrefix, targetType, targetPath)
-			}
+		if sourceType != "" || sourcePath != "" {
+			log.Printf("%s Source fragment type: %s, path: %s", logPrefix, sourceType, sourcePath)
+		}
+		if targetType != "" || targetPath != "" {
+			log.Printf("%s Target fragment type: %s, path: %s", logPrefix, targetType, targetPath)
 		}
 		srcTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(sourceType), sourcePath)
 		dstTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(targetType), targetPath)
@@ -327,6 +348,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 			canonFromEdgeType != "",
 		)
 	}
+	graphenrich.ApplyEdgeHeuristics(edge, sourcePath, targetPath)
 
 	now := time.Now().UTC()
 	edge.Metadata.CreatedAt = now
@@ -346,6 +368,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 	if fn := getEdgeAffectCollector(ctx); fn != nil {
 		fn(edge.SourceFragmentID, edge.TargetFragmentID)
 	}
+	r.runOnUpsertAsync(edge)
 
 	log.Printf("%s Edge created successfully: id=%s", logPrefix, edge.ID)
 	return edge.ID, nil
@@ -432,6 +455,7 @@ func (r *DependencyEdgesRepository) CreateMany(ctx context.Context, edges []*mod
 			if edge == nil {
 				continue
 			}
+			graphenrich.ApplyEdgeHeuristics(edge, "", "")
 			edge.Metadata.CreatedAt = now
 			edge.Metadata.LastUpdatedAt = now
 			ref := r.col.NewDoc()
@@ -448,6 +472,7 @@ func (r *DependencyEdgesRepository) CreateMany(ctx context.Context, edges []*mod
 				if fn != nil {
 					fn(edge.SourceFragmentID, edge.TargetFragmentID)
 				}
+				r.runOnUpsertAsync(edge)
 			}
 		}
 	}
@@ -756,10 +781,20 @@ func filterEdgesByOptions(edges []*models.DependencyEdge, opts *EdgeQueryOptions
 }
 
 // Update обновляет DependencyEdge
+func (r *DependencyEdgesRepository) UpdateDerived(ctx context.Context, edge *models.DependencyEdge) error {
+	return r.updateWithOptions(ctx, edge, EdgeUpdateOptions{SkipOnUpsert: true})
+}
+
 func (r *DependencyEdgesRepository) Update(ctx context.Context, edge *models.DependencyEdge) error {
+	return r.updateWithOptions(ctx, edge, EdgeUpdateOptions{})
+}
+
+func (r *DependencyEdgesRepository) updateWithOptions(ctx context.Context, edge *models.DependencyEdge, opts EdgeUpdateOptions) error {
 	if edge == nil || edge.ID == "" {
 		return ErrInvalidDocument
 	}
+	_, _, sourcePath, targetPath := r.resolveEndpointTypesAndPaths(ctx, edge)
+	graphenrich.ApplyEdgeHeuristics(edge, sourcePath, targetPath)
 	if err := edge.Validate(); err != nil {
 		return fmt.Errorf("validation error: %w", err)
 	}
@@ -772,7 +807,27 @@ func (r *DependencyEdgesRepository) Update(ctx context.Context, edge *models.Dep
 		return err
 	}
 	tracking.RecordEdgeUpdated(ctx, edge.ID)
+	if !opts.SkipOnUpsert {
+		r.runOnUpsertAsync(edge)
+	}
 	return nil
+}
+
+func (r *DependencyEdgesRepository) runOnUpsertAsync(edge *models.DependencyEdge) {
+	if r == nil || r.onUpsert == nil || edge == nil {
+		return
+	}
+	e := edge
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[DependencyEdgesRepository] ERROR: onUpsert hook panic recovered: edgeId=%s panic=%v", strings.TrimSpace(e.ID), rec)
+			}
+		}()
+		hctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		r.onUpsert(hctx, e)
+	}()
 }
 
 // Delete удаляет DependencyEdge

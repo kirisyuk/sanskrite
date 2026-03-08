@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"unicode"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -14,11 +15,11 @@ import (
 
 // FacilityDeduplicatorStats is a lightweight in-memory counter snapshot for observability.
 type FacilityDeduplicatorStats struct {
-	Calls           int64
-	HitExactPath    int64
-	HitAltPath      int64
-	HitExactLabel   int64
-	HitExactShort   int64
+	Calls             int64
+	HitExactPath      int64
+	HitAltPath        int64
+	HitExactLabel     int64
+	HitExactShort     int64
 	HitNormalizedName int64
 }
 
@@ -62,10 +63,12 @@ func (d *FacilityDeduplicator) DeduplicateFacility(ctx context.Context, fragment
 	// Tier 1: Exact canonical path
 	cp := strings.TrimSpace(fragment.CanonicalPath)
 	if cp != "" {
-		if existing, err := d.fragmentsRepo.GetByCanonicalPath(ctx, cp); err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
-			atomic.AddInt64(&d.hitExactPath, 1)
-			fmt.Printf("[FacilityDeduplicator] Found by exact path: %s\n", cp)
-			return existing, nil
+		if !(facilityPathHasLowInformationSlug(cp) && extractFacilityGeoTokenFromPath(cp) == "na") {
+			if existing, err := d.fragmentsRepo.GetByCanonicalPath(ctx, cp); err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
+				atomic.AddInt64(&d.hitExactPath, 1)
+				fmt.Printf("[FacilityDeduplicator] Found by exact path: %s\n", cp)
+				return existing, nil
+			}
 		}
 		// Alternative path (alias)
 		if existing, err := d.fragmentsRepo.FindByAlternativePath(ctx, cp); err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID && existing.Type == models.FragmentTypeFacility {
@@ -187,6 +190,18 @@ func extractFacilityGeoFromPath(path string) string {
 	return g
 }
 
+func extractFacilityGeoTokenFromPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/fac/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "fac" {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(parts[1]))
+}
+
 // extractFacilityNameFromPath returns the last slug segment from /fac/{geo}/{slug}.
 func extractFacilityNameFromPath(path string) string {
 	path = strings.TrimSpace(path)
@@ -202,6 +217,10 @@ func extractFacilityNameFromPath(path string) string {
 		return ""
 	}
 	return slug
+}
+
+func facilityPathHasLowInformationSlug(path string) bool {
+	return canonical.FacilitySlugLowInformation(extractFacilityNameFromPath(path))
 }
 
 // normalizeFacilityAliasKey normalizes facility names for dedupe matching:

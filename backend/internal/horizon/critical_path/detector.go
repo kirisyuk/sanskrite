@@ -118,18 +118,27 @@ func (d *Detector) IsCriticalPath(edge *horizonmodels.DependencyEdge, sourceFrag
 		return true
 	}
 
-	// Check if source or target has high supply_chain_criticality
-	if sourceFragment != nil {
-		if metric, ok := sourceFragment.State["supply_chain_criticality"]; ok && metric.Value >= 0.7 {
-			return true
-		}
-	}
-	if targetFragment != nil {
-		if metric, ok := targetFragment.State["supply_chain_criticality"]; ok && metric.Value >= 0.7 {
-			return true
-		}
+	if hasHighNodeCriticality(sourceFragment) || hasHighNodeCriticality(targetFragment) {
+		return true
 	}
 
 	return false
 }
 
+func hasHighNodeCriticality(fragment *horizonmodels.HorizonFragment) bool {
+	if fragment == nil || len(fragment.State) == 0 {
+		return false
+	}
+	for _, key := range []string{
+		"supply_chain_criticality",
+		"/metric/risk/supply_chain_criticality",
+		horizonmodels.MetricPathImportanceStrategic,
+		horizonmodels.MetricPathImportanceBusinessBlastRadius,
+		horizonmodels.MetricPathImportanceConflictBlastRadius,
+	} {
+		if metric, ok := fragment.State[key]; ok && metric.Value >= 0.7 {
+			return true
+		}
+	}
+	return false
+}

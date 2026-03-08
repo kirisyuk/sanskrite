@@ -3,6 +3,7 @@ package scout
 import (
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/geoambiguity"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
@@ -70,6 +71,9 @@ func (n *TypeNormalizer) checkIfCountry(fragment *models.HorizonFragment) Normal
 		if name == "" {
 			continue
 		}
+		if geoambiguity.IsAmbiguousCountryName(name) && !countryAliasSupportedByFragmentContext(fragment, name) {
+			continue
+		}
 		if country, ok := KnownCountries[name]; ok {
 			return NormalizationResult{
 				ShouldNormalize: true,
@@ -95,6 +99,22 @@ func (n *TypeNormalizer) checkIfCountry(fragment *models.HorizonFragment) Normal
 	}
 
 	return NormalizationResult{ShouldNormalize: false}
+}
+
+func countryAliasSupportedByFragmentContext(fragment *models.HorizonFragment, alias string) bool {
+	if fragment == nil {
+		return false
+	}
+	if fragment.HomeLocation != nil && fragment.HomeLocation.ISO3166_1 != nil && strings.TrimSpace(*fragment.HomeLocation.ISO3166_1) != "" {
+		return true
+	}
+	text := strings.Join([]string{
+		strings.TrimSpace(fragment.CanonicalPath),
+		strings.TrimSpace(fragment.Labels["en"]),
+		strings.TrimSpace(fragment.Identifiers["legalName"]),
+		strings.TrimSpace(fragment.Identifiers["shortName"]),
+	}, " ")
+	return geoambiguity.CountryAliasAllowedInText(alias, text)
 }
 
 // checkPathTypeMismatch checks if canonicalPath prefix doesn't match type.
@@ -387,66 +407,66 @@ var KnownCountries = map[string]CountryInfo{
 	"tuvalu":           {ISO2: "tv", EnglishName: "Tuvalu", CanonicalPath: "/loc/tv"},
 
 	// Africa (all countries)
-	"algeria":                             {ISO2: "dz", EnglishName: "Algeria", CanonicalPath: "/loc/dz"},
-	"angola":                              {ISO2: "ao", EnglishName: "Angola", CanonicalPath: "/loc/ao"},
-	"benin":                               {ISO2: "bj", EnglishName: "Benin", CanonicalPath: "/loc/bj"},
-	"botswana":                            {ISO2: "bw", EnglishName: "Botswana", CanonicalPath: "/loc/bw"},
-	"burkina faso":                        {ISO2: "bf", EnglishName: "Burkina Faso", CanonicalPath: "/loc/bf"},
-	"burundi":                             {ISO2: "bi", EnglishName: "Burundi", CanonicalPath: "/loc/bi"},
-	"cabo verde":                          {ISO2: "cv", EnglishName: "Cabo Verde", CanonicalPath: "/loc/cv"},
-	"cape verde":                          {ISO2: "cv", EnglishName: "Cabo Verde", CanonicalPath: "/loc/cv"},
-	"cameroon":                            {ISO2: "cm", EnglishName: "Cameroon", CanonicalPath: "/loc/cm"},
-	"central african republic":            {ISO2: "cf", EnglishName: "Central African Republic", CanonicalPath: "/loc/cf"},
-	"chad":                                {ISO2: "td", EnglishName: "Chad", CanonicalPath: "/loc/td"},
-	"comoros":                             {ISO2: "km", EnglishName: "Comoros", CanonicalPath: "/loc/km"},
-	"republic of the congo":               {ISO2: "cg", EnglishName: "Republic of the Congo", CanonicalPath: "/loc/cg"},
-	"congo":                               {ISO2: "cg", EnglishName: "Republic of the Congo", CanonicalPath: "/loc/cg"},
-	"democratic republic of the congo":    {ISO2: "cd", EnglishName: "Democratic Republic of the Congo", CanonicalPath: "/loc/cd"},
-	"congo-kinshasa":                      {ISO2: "cd", EnglishName: "Democratic Republic of the Congo", CanonicalPath: "/loc/cd"},
-	"cote d'ivoire":                       {ISO2: "ci", EnglishName: "Cote d'Ivoire", CanonicalPath: "/loc/ci"},
-	"ivory coast":                         {ISO2: "ci", EnglishName: "Cote d'Ivoire", CanonicalPath: "/loc/ci"},
-	"djibouti":                            {ISO2: "dj", EnglishName: "Djibouti", CanonicalPath: "/loc/dj"},
-	"equatorial guinea":                   {ISO2: "gq", EnglishName: "Equatorial Guinea", CanonicalPath: "/loc/gq"},
-	"eritrea":                             {ISO2: "er", EnglishName: "Eritrea", CanonicalPath: "/loc/er"},
-	"eswatini":                            {ISO2: "sz", EnglishName: "Eswatini", CanonicalPath: "/loc/sz"},
-	"swaziland":                           {ISO2: "sz", EnglishName: "Eswatini", CanonicalPath: "/loc/sz"},
-	"ethiopia":                            {ISO2: "et", EnglishName: "Ethiopia", CanonicalPath: "/loc/et"},
-	"gabon":                               {ISO2: "ga", EnglishName: "Gabon", CanonicalPath: "/loc/ga"},
-	"gambia":                              {ISO2: "gm", EnglishName: "Gambia", CanonicalPath: "/loc/gm"},
-	"ghana":                               {ISO2: "gh", EnglishName: "Ghana", CanonicalPath: "/loc/gh"},
-	"guinea":                              {ISO2: "gn", EnglishName: "Guinea", CanonicalPath: "/loc/gn"},
-	"guinea-bissau":                       {ISO2: "gw", EnglishName: "Guinea-Bissau", CanonicalPath: "/loc/gw"},
-	"kenya":                               {ISO2: "ke", EnglishName: "Kenya", CanonicalPath: "/loc/ke"},
-	"lesotho":                             {ISO2: "ls", EnglishName: "Lesotho", CanonicalPath: "/loc/ls"},
-	"liberia":                             {ISO2: "lr", EnglishName: "Liberia", CanonicalPath: "/loc/lr"},
-	"libya":                               {ISO2: "ly", EnglishName: "Libya", CanonicalPath: "/loc/ly"},
-	"madagascar":                          {ISO2: "mg", EnglishName: "Madagascar", CanonicalPath: "/loc/mg"},
-	"malawi":                              {ISO2: "mw", EnglishName: "Malawi", CanonicalPath: "/loc/mw"},
-	"mali":                                {ISO2: "ml", EnglishName: "Mali", CanonicalPath: "/loc/ml"},
-	"mauritania":                          {ISO2: "mr", EnglishName: "Mauritania", CanonicalPath: "/loc/mr"},
-	"mauritius":                           {ISO2: "mu", EnglishName: "Mauritius", CanonicalPath: "/loc/mu"},
-	"morocco":                             {ISO2: "ma", EnglishName: "Morocco", CanonicalPath: "/loc/ma"},
-	"mozambique":                          {ISO2: "mz", EnglishName: "Mozambique", CanonicalPath: "/loc/mz"},
-	"niger":                               {ISO2: "ne", EnglishName: "Niger", CanonicalPath: "/loc/ne"},
-	"rwanda":                              {ISO2: "rw", EnglishName: "Rwanda", CanonicalPath: "/loc/rw"},
-	"sao tome and principe":               {ISO2: "st", EnglishName: "Sao Tome and Principe", CanonicalPath: "/loc/st"},
-	"senegal":                             {ISO2: "sn", EnglishName: "Senegal", CanonicalPath: "/loc/sn"},
-	"seychelles":                          {ISO2: "sc", EnglishName: "Seychelles", CanonicalPath: "/loc/sc"},
-	"sierra leone":                        {ISO2: "sl", EnglishName: "Sierra Leone", CanonicalPath: "/loc/sl"},
-	"somalia":                             {ISO2: "so", EnglishName: "Somalia", CanonicalPath: "/loc/so"},
-	"south sudan":                         {ISO2: "ss", EnglishName: "South Sudan", CanonicalPath: "/loc/ss"},
-	"sudan":                               {ISO2: "sd", EnglishName: "Sudan", CanonicalPath: "/loc/sd"},
-	"tanzania":                            {ISO2: "tz", EnglishName: "Tanzania", CanonicalPath: "/loc/tz"},
-	"togo":                                {ISO2: "tg", EnglishName: "Togo", CanonicalPath: "/loc/tg"},
-	"tunisia":                             {ISO2: "tn", EnglishName: "Tunisia", CanonicalPath: "/loc/tn"},
-	"uganda":                              {ISO2: "ug", EnglishName: "Uganda", CanonicalPath: "/loc/ug"},
-	"zambia":                              {ISO2: "zm", EnglishName: "Zambia", CanonicalPath: "/loc/zm"},
-	"zimbabwe":                            {ISO2: "zw", EnglishName: "Zimbabwe", CanonicalPath: "/loc/zw"},
-	"afghanistan":                         {ISO2: "af", EnglishName: "Afghanistan", CanonicalPath: "/loc/af"},
-	"bhutan":                              {ISO2: "bt", EnglishName: "Bhutan", CanonicalPath: "/loc/bt"},
-	"sri lanka":                           {ISO2: "lk", EnglishName: "Sri Lanka", CanonicalPath: "/loc/lk"},
-	"nepal":                               {ISO2: "np", EnglishName: "Nepal", CanonicalPath: "/loc/np"},
-	"maldives":                            {ISO2: "mv", EnglishName: "Maldives", CanonicalPath: "/loc/mv"},
+	"algeria":                          {ISO2: "dz", EnglishName: "Algeria", CanonicalPath: "/loc/dz"},
+	"angola":                           {ISO2: "ao", EnglishName: "Angola", CanonicalPath: "/loc/ao"},
+	"benin":                            {ISO2: "bj", EnglishName: "Benin", CanonicalPath: "/loc/bj"},
+	"botswana":                         {ISO2: "bw", EnglishName: "Botswana", CanonicalPath: "/loc/bw"},
+	"burkina faso":                     {ISO2: "bf", EnglishName: "Burkina Faso", CanonicalPath: "/loc/bf"},
+	"burundi":                          {ISO2: "bi", EnglishName: "Burundi", CanonicalPath: "/loc/bi"},
+	"cabo verde":                       {ISO2: "cv", EnglishName: "Cabo Verde", CanonicalPath: "/loc/cv"},
+	"cape verde":                       {ISO2: "cv", EnglishName: "Cabo Verde", CanonicalPath: "/loc/cv"},
+	"cameroon":                         {ISO2: "cm", EnglishName: "Cameroon", CanonicalPath: "/loc/cm"},
+	"central african republic":         {ISO2: "cf", EnglishName: "Central African Republic", CanonicalPath: "/loc/cf"},
+	"chad":                             {ISO2: "td", EnglishName: "Chad", CanonicalPath: "/loc/td"},
+	"comoros":                          {ISO2: "km", EnglishName: "Comoros", CanonicalPath: "/loc/km"},
+	"republic of the congo":            {ISO2: "cg", EnglishName: "Republic of the Congo", CanonicalPath: "/loc/cg"},
+	"congo":                            {ISO2: "cg", EnglishName: "Republic of the Congo", CanonicalPath: "/loc/cg"},
+	"democratic republic of the congo": {ISO2: "cd", EnglishName: "Democratic Republic of the Congo", CanonicalPath: "/loc/cd"},
+	"congo-kinshasa":                   {ISO2: "cd", EnglishName: "Democratic Republic of the Congo", CanonicalPath: "/loc/cd"},
+	"cote d'ivoire":                    {ISO2: "ci", EnglishName: "Cote d'Ivoire", CanonicalPath: "/loc/ci"},
+	"ivory coast":                      {ISO2: "ci", EnglishName: "Cote d'Ivoire", CanonicalPath: "/loc/ci"},
+	"djibouti":                         {ISO2: "dj", EnglishName: "Djibouti", CanonicalPath: "/loc/dj"},
+	"equatorial guinea":                {ISO2: "gq", EnglishName: "Equatorial Guinea", CanonicalPath: "/loc/gq"},
+	"eritrea":                          {ISO2: "er", EnglishName: "Eritrea", CanonicalPath: "/loc/er"},
+	"eswatini":                         {ISO2: "sz", EnglishName: "Eswatini", CanonicalPath: "/loc/sz"},
+	"swaziland":                        {ISO2: "sz", EnglishName: "Eswatini", CanonicalPath: "/loc/sz"},
+	"ethiopia":                         {ISO2: "et", EnglishName: "Ethiopia", CanonicalPath: "/loc/et"},
+	"gabon":                            {ISO2: "ga", EnglishName: "Gabon", CanonicalPath: "/loc/ga"},
+	"gambia":                           {ISO2: "gm", EnglishName: "Gambia", CanonicalPath: "/loc/gm"},
+	"ghana":                            {ISO2: "gh", EnglishName: "Ghana", CanonicalPath: "/loc/gh"},
+	"guinea":                           {ISO2: "gn", EnglishName: "Guinea", CanonicalPath: "/loc/gn"},
+	"guinea-bissau":                    {ISO2: "gw", EnglishName: "Guinea-Bissau", CanonicalPath: "/loc/gw"},
+	"kenya":                            {ISO2: "ke", EnglishName: "Kenya", CanonicalPath: "/loc/ke"},
+	"lesotho":                          {ISO2: "ls", EnglishName: "Lesotho", CanonicalPath: "/loc/ls"},
+	"liberia":                          {ISO2: "lr", EnglishName: "Liberia", CanonicalPath: "/loc/lr"},
+	"libya":                            {ISO2: "ly", EnglishName: "Libya", CanonicalPath: "/loc/ly"},
+	"madagascar":                       {ISO2: "mg", EnglishName: "Madagascar", CanonicalPath: "/loc/mg"},
+	"malawi":                           {ISO2: "mw", EnglishName: "Malawi", CanonicalPath: "/loc/mw"},
+	"mali":                             {ISO2: "ml", EnglishName: "Mali", CanonicalPath: "/loc/ml"},
+	"mauritania":                       {ISO2: "mr", EnglishName: "Mauritania", CanonicalPath: "/loc/mr"},
+	"mauritius":                        {ISO2: "mu", EnglishName: "Mauritius", CanonicalPath: "/loc/mu"},
+	"morocco":                          {ISO2: "ma", EnglishName: "Morocco", CanonicalPath: "/loc/ma"},
+	"mozambique":                       {ISO2: "mz", EnglishName: "Mozambique", CanonicalPath: "/loc/mz"},
+	"niger":                            {ISO2: "ne", EnglishName: "Niger", CanonicalPath: "/loc/ne"},
+	"rwanda":                           {ISO2: "rw", EnglishName: "Rwanda", CanonicalPath: "/loc/rw"},
+	"sao tome and principe":            {ISO2: "st", EnglishName: "Sao Tome and Principe", CanonicalPath: "/loc/st"},
+	"senegal":                          {ISO2: "sn", EnglishName: "Senegal", CanonicalPath: "/loc/sn"},
+	"seychelles":                       {ISO2: "sc", EnglishName: "Seychelles", CanonicalPath: "/loc/sc"},
+	"sierra leone":                     {ISO2: "sl", EnglishName: "Sierra Leone", CanonicalPath: "/loc/sl"},
+	"somalia":                          {ISO2: "so", EnglishName: "Somalia", CanonicalPath: "/loc/so"},
+	"south sudan":                      {ISO2: "ss", EnglishName: "South Sudan", CanonicalPath: "/loc/ss"},
+	"sudan":                            {ISO2: "sd", EnglishName: "Sudan", CanonicalPath: "/loc/sd"},
+	"tanzania":                         {ISO2: "tz", EnglishName: "Tanzania", CanonicalPath: "/loc/tz"},
+	"togo":                             {ISO2: "tg", EnglishName: "Togo", CanonicalPath: "/loc/tg"},
+	"tunisia":                          {ISO2: "tn", EnglishName: "Tunisia", CanonicalPath: "/loc/tn"},
+	"uganda":                           {ISO2: "ug", EnglishName: "Uganda", CanonicalPath: "/loc/ug"},
+	"zambia":                           {ISO2: "zm", EnglishName: "Zambia", CanonicalPath: "/loc/zm"},
+	"zimbabwe":                         {ISO2: "zw", EnglishName: "Zimbabwe", CanonicalPath: "/loc/zw"},
+	"afghanistan":                      {ISO2: "af", EnglishName: "Afghanistan", CanonicalPath: "/loc/af"},
+	"bhutan":                           {ISO2: "bt", EnglishName: "Bhutan", CanonicalPath: "/loc/bt"},
+	"sri lanka":                        {ISO2: "lk", EnglishName: "Sri Lanka", CanonicalPath: "/loc/lk"},
+	"nepal":                            {ISO2: "np", EnglishName: "Nepal", CanonicalPath: "/loc/np"},
+	"maldives":                         {ISO2: "mv", EnglishName: "Maldives", CanonicalPath: "/loc/mv"},
 
 	// European Union (special case - not a country but often typed as ORG)
 	"european union": {ISO2: "eu", EnglishName: "European Union", CanonicalPath: "/loc/eu"},

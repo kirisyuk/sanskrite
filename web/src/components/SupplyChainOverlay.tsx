@@ -15,12 +15,51 @@ export interface MaterializedArtifact {
   payload?: {
     v?: number;
     nodes?: Array<{ type: string; ref: string }>;
+    legs?: Array<{
+      index: number;
+      supplierRef?: string;
+      customerRef?: string;
+      productRef?: string;
+      transportViaRefs?: string[];
+      flowRefs?: string[];
+      alternateFlowRefs?: string[];
+      zoneRefs?: string[];
+      affectedZoneRefs?: string[];
+      spatialSemantics?: string[];
+      bindingConfidence?: number;
+      stress?: {
+        fragility?: number;
+        rerouteability?: number;
+        zonePressure?: number;
+        affectedZonePressure?: number;
+        recoveryLatencyHours?: number;
+        stressScore?: number;
+        dominantFactors?: string[];
+      };
+    }>;
+    stress?: {
+      pathScore?: number;
+      fragility?: number;
+      rerouteability?: number;
+      zonePressure?: number;
+      affectedZonePressure?: number;
+      recoveryLatencyHours?: number;
+      bottleneckLegIndex?: number;
+      dominantFactors?: string[];
+    };
     edges?: Array<{
       type: string;
       from: number;
       to: number;
       relation?: string;
       viaProductIndex?: number;
+      productNodeIndex?: number;
+      productRef?: string;
+      supplyLinkId?: string;
+      segmentIndex?: number;
+      carriesProduct?: boolean;
+      role?: string;
+      qualifiers?: Record<string, any>;
     }>;
   };
 }
@@ -85,7 +124,38 @@ export function SupplyChainOverlay({
     return chains.map((c) => {
       const refs = c.nodeRefs || (c.payload?.nodes?.map((x) => x.ref) ?? []);
       const onGraph = refs.some((r) => canonicalPathsOnGraph.has(r));
-      return { artifact: c, onGraph };
+      const legs = c.payload?.legs || [];
+      const stress = c.payload?.stress;
+      const flowRefs = new Set<string>();
+      const zoneRefs = new Set<string>();
+      const affectedZoneRefs = new Set<string>();
+      const semantics = new Set<string>();
+      let bindingConfidenceTotal = 0;
+      let bindingConfidenceCount = 0;
+      for (const leg of legs) {
+        for (const ref of leg.flowRefs || []) flowRefs.add(String(ref || '').trim());
+        for (const ref of leg.zoneRefs || []) zoneRefs.add(String(ref || '').trim());
+        for (const ref of leg.affectedZoneRefs || []) affectedZoneRefs.add(String(ref || '').trim());
+        for (const tag of leg.spatialSemantics || []) semantics.add(String(tag || '').trim());
+        if (typeof leg.bindingConfidence === 'number' && Number.isFinite(leg.bindingConfidence)) {
+          bindingConfidenceTotal += leg.bindingConfidence;
+          bindingConfidenceCount += 1;
+        }
+      }
+      const avgBindingConfidence =
+        bindingConfidenceCount > 0 ? bindingConfidenceTotal / bindingConfidenceCount : 0;
+      return {
+        artifact: c,
+        onGraph,
+        legCount: legs.length,
+        pathStressScore:
+          typeof stress?.pathScore === 'number' && Number.isFinite(stress.pathScore) ? stress.pathScore : 0,
+        bindingConfidence: avgBindingConfidence,
+        flowCount: Array.from(flowRefs).filter(Boolean).length,
+        zoneCount: Array.from(zoneRefs).filter(Boolean).length,
+        affectedZoneCount: Array.from(affectedZoneRefs).filter(Boolean).length,
+        spatialSemantics: Array.from(semantics).filter(Boolean),
+      };
     });
   }, [chains, canonicalPathsOnGraph]);
 
@@ -160,7 +230,7 @@ export function SupplyChainOverlay({
       )}
       {!loading && !error && chainStatus.length > 0 && (
         <div style={{ padding: '8px 0' }}>
-          {chainStatus.map(({ artifact, onGraph }) => (
+          {chainStatus.map(({ artifact, onGraph, legCount, pathStressScore, bindingConfidence, flowCount, zoneCount, affectedZoneCount, spatialSemantics }) => (
             <button
               key={artifact.id}
               type="button"
@@ -188,6 +258,47 @@ export function SupplyChainOverlay({
               <span style={{ fontWeight: 600 }}>
                 {artifact.displayName || artifact.id || 'Unnamed chain'}
               </span>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {legCount > 0 && (
+                  <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    {legCount} legs
+                  </span>
+                )}
+                {bindingConfidence > 0 && (
+                  <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    bind {Math.round(bindingConfidence * 100)}%
+                  </span>
+                )}
+                {pathStressScore > 0 && (
+                  <span style={{ fontSize: 11, color: pathStressScore >= 0.55 ? 'var(--text-warning)' : 'var(--text-secondary-strong)' }}>
+                    stress {pathStressScore.toFixed(2)}
+                  </span>
+                )}
+              </div>
+              {(flowCount > 0 || zoneCount > 0 || affectedZoneCount > 0) && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {flowCount > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      {flowCount} flows
+                    </span>
+                  )}
+                  {zoneCount > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      {zoneCount} zones
+                    </span>
+                  )}
+                  {affectedZoneCount > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      {affectedZoneCount} affected
+                    </span>
+                  )}
+                </div>
+              )}
+              {spatialSemantics.length > 0 && (
+                <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                  {spatialSemantics.slice(0, 3).join(' • ')}
+                </span>
+              )}
               {onGraph && (
                 <span style={{ fontSize: 11, color: 'var(--text-success)' }}>On graph</span>
               )}

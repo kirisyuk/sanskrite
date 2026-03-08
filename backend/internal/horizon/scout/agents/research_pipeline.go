@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -67,6 +68,7 @@ func (p *ResearchPipelineRunner) strategiesForModes(modes []string) []ResearchSt
 	if len(modes) == 0 {
 		return []ResearchStrategy{&GeneralResearchStrategy{agent: p.agent}}
 	}
+	modes = contractsemantics.SortDomainModesForExecution(modes)
 	seen := make(map[string]bool)
 	var list []ResearchStrategy
 	hasNonGeneral := false

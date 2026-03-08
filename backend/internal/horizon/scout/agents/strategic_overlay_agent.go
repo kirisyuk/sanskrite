@@ -303,7 +303,7 @@ EDGE TYPE SAFETY:
 CANONICAL PATH REMINDERS:
 - ALL paths must be lowercase with hyphens (not spaces or underscores)
 - Organizations: /org/{iso2}/{slug} or /gov/{iso2}/{slug}
-- Facilities: /fac/{geo}/{facility-slug} — geo like org/gov (ISO2, na, or regional)
+- Facilities: /fac/{geo}/{facility-slug} — geo like org/gov (ISO2, na, or regional). /fac/na is last-resort only after checking facility/site/place clues in the name and source.
 - Products: /product/{category}/{type}/{stage}/{slug}
 - Reuse existing paths from GRAPH CONTEXT when possible!
 

@@ -79,6 +79,13 @@ func (s *AnswerSynthesizer) Synthesize(ctx context.Context, contextPrompt string
 			}
 		}
 	}
+	if assumptions, ok := m["assumptions"].([]interface{}); ok {
+		for _, item := range assumptions {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				answer.Assumptions = append(answer.Assumptions, strings.TrimSpace(s))
+			}
+		}
+	}
 	// Fallback for Executive Summary if LLM missed it
 	if answer.ExecutiveSummary == "" && answer.Text != "" {
 		parts := splitIntoSentences(answer.Text)
@@ -180,6 +187,9 @@ func (s *AnswerSynthesizer) Synthesize(ctx context.Context, contextPrompt string
 			}
 		}
 	}
+	answer.FirstOrderEffects = parseEffects(m["firstOrderEffects"])
+	answer.SecondOrderEffects = parseEffects(m["secondOrderEffects"])
+	answer.Watchpoints = parseWatchpoints(m["watchpoints"])
 
 	// Alternatives
 	if altArr, ok := m["alternatives"].([]interface{}); ok {
@@ -222,6 +232,7 @@ func (s *AnswerSynthesizer) Synthesize(ctx context.Context, contextPrompt string
 	if len(scopeFragments) > 0 {
 		answer.Evidence = ValidateEvidence(answer.Evidence, scopeFragments)
 	}
+	applyScenarioFallbacks(answer, simResult)
 
 	return answer, nil
 }
@@ -269,4 +280,214 @@ func splitIntoSentences(text string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+func parseEffects(raw interface{}) []horizonmodels.QAEffect {
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]horizonmodels.QAEffect, 0, len(arr))
+	for _, item := range arr {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		eff := horizonmodels.QAEffect{}
+		if v, ok := m["summary"].(string); ok {
+			eff.Summary = strings.TrimSpace(v)
+		}
+		if v, ok := m["horizon"].(string); ok {
+			eff.Horizon = strings.TrimSpace(v)
+		}
+		if v, ok := m["severity"].(string); ok {
+			eff.Severity = strings.ToUpper(strings.TrimSpace(v))
+		}
+		if v, ok := m["mechanism"].(string); ok {
+			eff.Mechanism = strings.TrimSpace(v)
+		}
+		if entities, ok := m["affectedEntities"].([]interface{}); ok {
+			for _, entity := range entities {
+				if s, ok := entity.(string); ok && strings.TrimSpace(s) != "" {
+					eff.AffectedEntities = append(eff.AffectedEntities, strings.TrimSpace(s))
+				}
+			}
+		}
+		if eff.Summary == "" && len(eff.AffectedEntities) == 0 {
+			continue
+		}
+		out = append(out, eff)
+	}
+	return out
+}
+
+func parseWatchpoints(raw interface{}) []horizonmodels.QAWatchpoint {
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]horizonmodels.QAWatchpoint, 0, len(arr))
+	for _, item := range arr {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		wp := horizonmodels.QAWatchpoint{}
+		if v, ok := m["signal"].(string); ok {
+			wp.Signal = strings.TrimSpace(v)
+		}
+		if v, ok := m["whyItMatters"].(string); ok {
+			wp.WhyItMatters = strings.TrimSpace(v)
+		}
+		if v, ok := m["expectedWithin"].(string); ok {
+			wp.ExpectedWithin = strings.TrimSpace(v)
+		}
+		if wp.Signal == "" {
+			continue
+		}
+		out = append(out, wp)
+	}
+	return out
+}
+
+func applyScenarioFallbacks(answer *horizonmodels.QAAnswer, simResult *horizonmodels.SimulationResult) {
+	if answer == nil || simResult == nil {
+		return
+	}
+	if len(answer.FirstOrderEffects) == 0 || len(answer.SecondOrderEffects) == 0 {
+		first, second := fallbackEffectsFromSimulation(simResult)
+		if len(answer.FirstOrderEffects) == 0 {
+			answer.FirstOrderEffects = first
+		}
+		if len(answer.SecondOrderEffects) == 0 {
+			answer.SecondOrderEffects = second
+		}
+	}
+	if len(answer.Watchpoints) == 0 {
+		answer.Watchpoints = fallbackWatchpoints(simResult)
+	}
+	if answer.RiskScenario == "" {
+		if len(answer.FirstOrderEffects) > 0 && len(answer.SecondOrderEffects) > 0 {
+			answer.RiskScenario = answer.FirstOrderEffects[0].Summary + " Then " + answer.SecondOrderEffects[0].Summary
+		} else if len(answer.FirstOrderEffects) > 0 {
+			answer.RiskScenario = answer.FirstOrderEffects[0].Summary
+		}
+	}
+	if answer.Text == "" {
+		switch {
+		case answer.RiskScenario != "":
+			answer.Text = answer.RiskScenario
+		case answer.ExecutiveSummary != "":
+			answer.Text = answer.ExecutiveSummary
+		}
+	}
+}
+
+func fallbackEffectsFromSimulation(simResult *horizonmodels.SimulationResult) ([]horizonmodels.QAEffect, []horizonmodels.QAEffect) {
+	first := make([]horizonmodels.QAEffect, 0, 3)
+	second := make([]horizonmodels.QAEffect, 0, 3)
+	for _, ni := range simResult.NodeImpacts {
+		axis, amp := strongestImpactAxis(ni.AxisAmplitudes)
+		summary := humanizeImpactSummary(ni, axis, amp)
+		effect := horizonmodels.QAEffect{
+			Summary:          summary,
+			Horizon:          horizonForHops(ni.Hops),
+			Severity:         severityForAmplitude(amp),
+			AffectedEntities: compactAffectedEntities(ni),
+			Mechanism:        axis,
+		}
+		if ni.Hops <= 1 {
+			if len(first) < 3 {
+				first = append(first, effect)
+			}
+			continue
+		}
+		if len(second) < 3 {
+			second = append(second, effect)
+		}
+	}
+	return first, second
+}
+
+func fallbackWatchpoints(simResult *horizonmodels.SimulationResult) []horizonmodels.QAWatchpoint {
+	out := make([]horizonmodels.QAWatchpoint, 0, 3)
+	for _, le := range simResult.LeafEvidence {
+		if len(out) >= 3 {
+			break
+		}
+		signal := strings.TrimSpace(le.Summary)
+		if signal == "" {
+			signal = strings.TrimSpace(le.Axis)
+		}
+		if signal == "" {
+			continue
+		}
+		out = append(out, horizonmodels.QAWatchpoint{
+			Signal:         signal,
+			WhyItMatters:   "Confirms whether the projected impact is already materializing.",
+			ExpectedWithin: "short_term",
+		})
+	}
+	return out
+}
+
+func strongestImpactAxis(axisAmplitudes map[string]float64) (string, float64) {
+	var (
+		bestAxis string
+		bestAmp  float64
+	)
+	for axis, amp := range axisAmplitudes {
+		if bestAxis == "" || amp > bestAmp {
+			bestAxis = axis
+			bestAmp = amp
+		}
+	}
+	return bestAxis, bestAmp
+}
+
+func humanizeImpactSummary(ni horizonmodels.NodeImpact, axis string, amp float64) string {
+	name := strings.TrimSpace(ni.Name)
+	if name == "" {
+		name = strings.TrimSpace(ni.CanonicalPath)
+	}
+	if name == "" {
+		name = "Affected node"
+	}
+	return fmt.Sprintf("%s is likely to face %s pressure through %s", name, strings.ToLower(severityForAmplitude(amp)), axis)
+}
+
+func compactAffectedEntities(ni horizonmodels.NodeImpact) []string {
+	if strings.TrimSpace(ni.Name) != "" {
+		return []string{strings.TrimSpace(ni.Name)}
+	}
+	if strings.TrimSpace(ni.CanonicalPath) != "" {
+		return []string{strings.TrimSpace(ni.CanonicalPath)}
+	}
+	return nil
+}
+
+func horizonForHops(hops int) string {
+	switch {
+	case hops <= 0:
+		return "immediate"
+	case hops == 1:
+		return "short_term"
+	case hops == 2:
+		return "medium_term"
+	default:
+		return "long_term"
+	}
+}
+
+func severityForAmplitude(amp float64) string {
+	switch {
+	case amp >= 0.75:
+		return "CRITICAL"
+	case amp >= 0.40:
+		return "HIGH"
+	case amp >= 0.15:
+		return "MODERATE"
+	default:
+		return "LOW"
+	}
 }

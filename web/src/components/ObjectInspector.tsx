@@ -1423,6 +1423,54 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     return (typeof s === 'string' && s.trim()) ? s.trim() : 'var(--text-tertiary-weak)';
   }, [edgeData, edge]);
 
+  const edgePathLegMeta = React.useMemo(() => {
+    const src: any = edgeData || edge || {};
+    const readStringArray = (value: any): string[] => {
+      if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
+      return [];
+    };
+    const pathArtifactId = String(src?.pathArtifactId || '').trim();
+    const pathRole = String(src?.pathRole || '').trim();
+    const pathProductRef = String(src?.pathProductRef || '').trim();
+    const pathSupplyLinkId = String(src?.pathSupplyLinkId || '').trim();
+    const dominantFactors = readStringArray(src?.pathDominantFactors);
+    const flowRefs = readStringArray(src?.pathFlowRefs);
+    const zoneRefs = readStringArray(src?.pathZoneRefs);
+    const affectedZoneRefs = readStringArray(src?.pathAffectedZoneRefs);
+    const spatialSemantics = readStringArray(src?.pathSpatialSemantics);
+    const hasMeta =
+      !!pathArtifactId ||
+      !!pathRole ||
+      typeof src?.pathStressScore === 'number' ||
+      typeof src?.pathSegmentIndex === 'number' ||
+      flowRefs.length > 0 ||
+      zoneRefs.length > 0 ||
+      affectedZoneRefs.length > 0 ||
+      spatialSemantics.length > 0;
+    if (!hasMeta) return null;
+    return {
+      pathArtifactId,
+      pathRole,
+      pathProductRef,
+      pathSupplyLinkId,
+      pathSegmentIndex: typeof src?.pathSegmentIndex === 'number' ? src.pathSegmentIndex : undefined,
+      pathCarriesProduct: Boolean(src?.pathCarriesProduct),
+      pathStressScore: typeof src?.pathStressScore === 'number' ? src.pathStressScore : undefined,
+      pathFragility: typeof src?.pathFragility === 'number' ? src.pathFragility : undefined,
+      pathRerouteability: typeof src?.pathRerouteability === 'number' ? src.pathRerouteability : undefined,
+      pathZonePressure: typeof src?.pathZonePressure === 'number' ? src.pathZonePressure : undefined,
+      pathAffectedZonePressure: typeof src?.pathAffectedZonePressure === 'number' ? src.pathAffectedZonePressure : undefined,
+      pathRecoveryLatencyHours: typeof src?.pathRecoveryLatencyHours === 'number' ? src.pathRecoveryLatencyHours : undefined,
+      pathBindingConfidence: typeof src?.pathBindingConfidence === 'number' ? src.pathBindingConfidence : undefined,
+      pathBottleneck: Boolean(src?.pathBottleneck),
+      dominantFactors,
+      flowRefs,
+      zoneRefs,
+      affectedZoneRefs,
+      spatialSemantics,
+    };
+  }, [edgeData, edge]);
+
   const nodeAccent = React.useMemo(() => {
     return getNodeColors(nodeVisualType || nodeType || fragment?.type, theme === 'dark' ? 'dark' : 'light').accent;
   }, [nodeVisualType, nodeType, fragment, theme]);
@@ -1660,6 +1708,107 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               copyText={String(targetFragment?.canonicalPath || edge?.targetFragmentId || edgeData?.targetFragmentId || '').trim() || undefined}
             />
           </SectionCard>
+
+          {edgePathLegMeta && (
+            <SectionCard
+              title="Path leg"
+              right={
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  {typeof edgePathLegMeta.pathStressScore === 'number' && (
+                    <Chip tone={edgePathLegMeta.pathStressScore >= 0.58 ? 'danger' : 'info'}>
+                      stress {edgePathLegMeta.pathStressScore.toFixed(2)}
+                    </Chip>
+                  )}
+                  {edgePathLegMeta.pathBottleneck && <Chip tone="danger">bottleneck</Chip>}
+                  {typeof edgePathLegMeta.pathBindingConfidence === 'number' && (
+                    <Chip>bind {Math.round(edgePathLegMeta.pathBindingConfidence * 100)}%</Chip>
+                  )}
+                </div>
+              }
+            >
+              {typeof edgePathLegMeta.pathSegmentIndex === 'number' && (
+                <KV k="Segment" v={<span style={mono}>{edgePathLegMeta.pathSegmentIndex}</span>} />
+              )}
+              {edgePathLegMeta.pathRole && <KV k="Role" v={<span>{edgePathLegMeta.pathRole}</span>} />}
+              {edgePathLegMeta.pathArtifactId && (
+                <KV k="Path artifact" v={<span style={mono}>{edgePathLegMeta.pathArtifactId}</span>} copyText={edgePathLegMeta.pathArtifactId} />
+              )}
+              {edgePathLegMeta.pathSupplyLinkId && (
+                <KV k="Supply link" v={<span style={mono}>{edgePathLegMeta.pathSupplyLinkId}</span>} copyText={edgePathLegMeta.pathSupplyLinkId} />
+              )}
+              {edgePathLegMeta.pathProductRef && (
+                <KV k="Product" v={<span style={mono}>{edgePathLegMeta.pathProductRef}</span>} copyText={edgePathLegMeta.pathProductRef} />
+              )}
+              <KV
+                k="Carries product"
+                v={<span>{edgePathLegMeta.pathCarriesProduct ? 'Yes' : 'No'}</span>}
+              />
+              {typeof edgePathLegMeta.pathRecoveryLatencyHours === 'number' && (
+                <KV k="Recovery (h)" v={<span style={mono}>{edgePathLegMeta.pathRecoveryLatencyHours}</span>} />
+              )}
+              {(typeof edgePathLegMeta.pathFragility === 'number' ||
+                typeof edgePathLegMeta.pathRerouteability === 'number' ||
+                typeof edgePathLegMeta.pathZonePressure === 'number' ||
+                typeof edgePathLegMeta.pathAffectedZonePressure === 'number') && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {typeof edgePathLegMeta.pathFragility === 'number' && <Chip>fragility {edgePathLegMeta.pathFragility.toFixed(2)}</Chip>}
+                  {typeof edgePathLegMeta.pathRerouteability === 'number' && <Chip>reroute {edgePathLegMeta.pathRerouteability.toFixed(2)}</Chip>}
+                  {typeof edgePathLegMeta.pathZonePressure === 'number' && <Chip>zone {edgePathLegMeta.pathZonePressure.toFixed(2)}</Chip>}
+                  {typeof edgePathLegMeta.pathAffectedZonePressure === 'number' && <Chip>affected {edgePathLegMeta.pathAffectedZonePressure.toFixed(2)}</Chip>}
+                </div>
+              )}
+              {edgePathLegMeta.spatialSemantics.length > 0 && (
+                <KV
+                  k="Spatial semantics"
+                  v={
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {edgePathLegMeta.spatialSemantics.map((item) => <Chip key={item}>{item}</Chip>)}
+                    </div>
+                  }
+                />
+              )}
+              {edgePathLegMeta.flowRefs.length > 0 && (
+                <KV
+                  k="Flows"
+                  v={
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {edgePathLegMeta.flowRefs.map((item) => <Chip key={item}>{item}</Chip>)}
+                    </div>
+                  }
+                />
+              )}
+              {edgePathLegMeta.zoneRefs.length > 0 && (
+                <KV
+                  k="Zones"
+                  v={
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {edgePathLegMeta.zoneRefs.map((item) => <Chip key={item}>{item}</Chip>)}
+                    </div>
+                  }
+                />
+              )}
+              {edgePathLegMeta.affectedZoneRefs.length > 0 && (
+                <KV
+                  k="Affected"
+                  v={
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {edgePathLegMeta.affectedZoneRefs.map((item) => <Chip key={item} tone="danger">{item}</Chip>)}
+                    </div>
+                  }
+                />
+              )}
+              {edgePathLegMeta.dominantFactors.length > 0 && (
+                <KV
+                  k="Dominant factors"
+                  v={
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {edgePathLegMeta.dominantFactors.map((item) => <Chip key={item} tone="info">{item}</Chip>)}
+                    </div>
+                  }
+                />
+              )}
+            </SectionCard>
+          )}
 
           {/* Admin-only: Human-in-the-Loop edge curation */}
           {hitlAdminChecked && hitlIsAdmin && (

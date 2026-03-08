@@ -27,6 +27,32 @@ type QAStatus =
   | 'failed';
 
 type QAAnswer = {
+  executiveSummary?: string;
+  riskLevel?: string;
+  riskScenario?: string;
+  recommendations?: string[];
+  firstOrderEffects?: Array<{
+    summary?: string;
+    horizon?: string;
+    severity?: string;
+    affectedEntities?: string[];
+    mechanism?: string;
+  }>;
+  secondOrderEffects?: Array<{
+    summary?: string;
+    horizon?: string;
+    severity?: string;
+    affectedEntities?: string[];
+    mechanism?: string;
+  }>;
+  watchpoints?: Array<{
+    signal?: string;
+    whyItMatters?: string;
+    expectedWithin?: string;
+  }>;
+  assumptions?: string[];
+  timeHorizon?: string;
+  answerMode?: string;
   text: string;
   confidence: number;
   evidence?: Array<{ type?: string; canonicalPath?: string; summary?: string; confidence?: number; verified?: boolean }>;
@@ -50,34 +76,53 @@ type SufficiencyReport = {
 /* ─── Preset question hints ─── */
 const PRESET_CATEGORIES = [
   {
-    label: 'Impact',
+    label: 'Shock',
     presets: [
-      'What happens if [X] disappears?',
-      'Which nodes have the most influence?',
+      'What happens if Strait of Hormuz is disrupted?',
+      'What happens if a key supplier stops shipping?',
     ],
   },
   {
-    label: 'Risk',
+    label: 'Downstream',
     presets: [
-      'Where are single points of failure?',
-      'What are the biggest vulnerabilities?',
+      'Who gets hit later, not first?',
+      'Which remote factories or markets feel this next?',
     ],
   },
   {
-    label: 'What-now',
+    label: 'Response',
     presets: [
-      'What alternatives exist for [X]?',
-      'What should we prioritize?',
+      'What should we do first if this starts happening?',
+      'What fallback paths exist?',
     ],
   },
   {
-    label: 'Dependencies',
+    label: 'Policy',
     presets: [
-      'What depends on [X]?',
-      'Show the critical supply path',
+      'What happens if VAT rises from 12%% to 16%%?',
+      'How would a new restriction propagate through the graph?',
     ],
   },
 ];
+
+const riskTone = (level?: string): { bg: string; fg: string; border: string } => {
+  switch (String(level || '').toUpperCase()) {
+    case 'CRITICAL':
+      return { bg: 'rgba(220,38,38,0.12)', fg: '#ef4444', border: 'rgba(220,38,38,0.28)' };
+    case 'HIGH':
+      return { bg: 'rgba(245,158,11,0.12)', fg: '#f59e0b', border: 'rgba(245,158,11,0.28)' };
+    case 'MODERATE':
+      return { bg: 'rgba(59,130,246,0.12)', fg: '#60a5fa', border: 'rgba(59,130,246,0.24)' };
+    default:
+      return { bg: 'rgba(34,197,94,0.12)', fg: '#22c55e', border: 'rgba(34,197,94,0.24)' };
+  }
+};
+
+const prettyHorizon = (value?: string): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return 'unspecified';
+  return raw.replace(/_/g, ' ');
+};
 
 export const QAPanel: React.FC<QAPanelProps> = ({
   lensId,
@@ -214,12 +259,12 @@ export const QAPanel: React.FC<QAPanelProps> = ({
 
   const statusLabel = (s: QAStatus) => {
     switch (s) {
-      case 'decomposing': return 'Understanding your question…';
-      case 'simulating': return 'Tracing impact through the graph…';
-      case 'synthesizing': return 'Generating answer…';
-      case 'sufficiency_check': return 'Checking data sufficiency…';
-      case 'scouting': return 'Scouting for more data…';
-      case 'filling_gaps': return 'Filling signal gaps…';
+      case 'decomposing': return 'Mapping the shock and the exposed pathways…';
+      case 'simulating': return 'Estimating who gets hit first and who gets hit later…';
+      case 'synthesizing': return 'Writing the decision brief…';
+      case 'sufficiency_check': return 'Checking whether the evidence is strong enough…';
+      case 'scouting': return 'Pulling more evidence where the graph is thin…';
+      case 'filling_gaps': return 'Filling missing signals before answering…';
       default: return '';
     }
   };
@@ -303,7 +348,7 @@ export const QAPanel: React.FC<QAPanelProps> = ({
                     return;
                   }
                 }}
-                placeholder="Ask about this lens..."
+                placeholder="Ask what happens if..."
                 style={{
                   flex: 1,
                   border: 'none',
@@ -339,7 +384,7 @@ export const QAPanel: React.FC<QAPanelProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary-strong)' }}>
                 <input type="checkbox" checked={autoScout} onChange={(e) => setAutoScout(e.target.checked)} style={{ accentColor: 'var(--accent-primary, #3B82F6)' }} />
-                Auto-scout for missing data
+                Pull extra evidence if the answer is weak
               </label>
             </div>
 
@@ -436,7 +481,7 @@ export const QAPanel: React.FC<QAPanelProps> = ({
         <div style={{ padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-heading)' }}>
-              Data Sufficiency
+              Evidence strength
             </div>
             <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--border-subtle)', overflow: 'hidden' }}>
               <div
@@ -478,7 +523,7 @@ export const QAPanel: React.FC<QAPanelProps> = ({
                 cursor: 'pointer',
               }}
             >
-              Run Scout
+              Pull more evidence
             </button>
           )}
         </div>
@@ -488,7 +533,7 @@ export const QAPanel: React.FC<QAPanelProps> = ({
       {fillReport && (
         <div style={{ padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 12 }}>
-            Enriched graph with {fillReport.filledGaps?.length ?? 0} signal{(fillReport.filledGaps?.length ?? 0) !== 1 ? 's' : ''} from {fillReport.sources?.length ?? 0} source{(fillReport.sources?.length ?? 0) !== 1 ? 's' : ''}
+            Added {fillReport.filledGaps?.length ?? 0} missing signal{(fillReport.filledGaps?.length ?? 0) !== 1 ? 's' : ''} from {fillReport.sources?.length ?? 0} source{(fillReport.sources?.length ?? 0) !== 1 ? 's' : ''}
           </div>
 
           {fillReport.filledGaps && fillReport.filledGaps.length > 0 && (
@@ -533,7 +578,7 @@ export const QAPanel: React.FC<QAPanelProps> = ({
           )}
 
           <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', opacity: 0.7 }}>
-            This data is now permanently available for future queries.
+            This evidence is now available for later questions.
           </div>
         </div>
       )}
@@ -558,20 +603,60 @@ export const QAPanel: React.FC<QAPanelProps> = ({
           }}
         >
           {/* Headline */}
-          <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-heading)', lineHeight: 1.4 }}>
-            {answer?.text || answerText}
+          <div
+            style={{
+              padding: 18,
+              borderRadius: 14,
+              border: `1px solid ${riskTone(answer?.riskLevel).border}`,
+              background: riskTone(answer?.riskLevel).bg,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {answer?.riskLevel && (
+                <span
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 999,
+                    fontSize: 11,
+                    fontWeight: 800,
+                    letterSpacing: '0.3px',
+                    color: riskTone(answer?.riskLevel).fg,
+                    border: `1px solid ${riskTone(answer?.riskLevel).border}`,
+                  }}
+                >
+                  {answer.riskLevel}
+                </span>
+              )}
+              {answer?.timeHorizon && (
+                <span style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                  {prettyHorizon(answer.timeHorizon)}
+                </span>
+              )}
+              {answer && answer.confidence > 0 && (
+                <span style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                  confidence {Math.round(answer.confidence * 100)}%
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-heading)', lineHeight: 1.35 }}>
+              {answer?.executiveSummary || answer?.text || answerText}
+            </div>
+            {answer?.riskScenario && (
+              <div style={{ fontSize: 13, color: 'var(--text-secondary-strong)', lineHeight: 1.5 }}>
+                {answer.riskScenario}
+              </div>
+            )}
           </div>
 
-          {/* Confidence */}
-          {answer && answer.confidence > 0 && (
-            <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
-              {answer.confidence > 0.8 && '🟢 High confidence'}
-              {answer.confidence >= 0.5 && answer.confidence <= 0.8 && '🟡 Moderate confidence — some data gaps'}
-              {answer.confidence < 0.5 && answer.confidence > 0 && '🔴 Low confidence'}
+          {answer?.text && answer.executiveSummary && answer.text !== answer.executiveSummary && (
+            <div style={{ fontSize: 14, color: 'var(--text-secondary-strong)', lineHeight: 1.6 }}>
+              {answer.text}
             </div>
           )}
 
-          {/* Chain Impacts */}
           {answer?.chainImpacts && answer.chainImpacts.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {answer.chainImpacts.map((c, i) => (
@@ -582,7 +667,7 @@ export const QAPanel: React.FC<QAPanelProps> = ({
                     borderRadius: 12,
                     border: '1px solid var(--border-subtle)',
                     background: 'var(--bg-elevated)',
-                    minWidth: 140,
+                    minWidth: 160,
                   }}
                 >
                   <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 4 }}>
@@ -591,36 +676,81 @@ export const QAPanel: React.FC<QAPanelProps> = ({
                   <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-primary, #3B82F6)' }}>
                     {c.affected ?? 0}<span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary-strong)' }}>/{c.total ?? 0}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 2 }}>affected</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 2 }}>exposed nodes</div>
                 </div>
               ))}
             </div>
           )}
 
-          {/* Seed Failures warning */}
-          {answer?.seedFailures && answer.seedFailures.length > 0 && (
-            <div style={{ padding: 14, borderRadius: 12, border: '1px solid rgba(234,179,8,0.4)', background: 'rgba(234,179,8,0.08)' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#EAB308', marginBottom: 8 }}>
-                ⚠ Some seeds could not be resolved
-              </div>
-              {answer.seedFailures.map((f, i) => (
-                <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
-                  {f.seed}: {f.reason}
+          {((answer?.firstOrderEffects && answer.firstOrderEffects.length > 0) || (answer?.secondOrderEffects && answer.secondOrderEffects.length > 0)) && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+              {answer?.firstOrderEffects && answer.firstOrderEffects.length > 0 && (
+                <div style={{ padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: 'var(--text-heading)' }}>
+                    What changes first
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {answer.firstOrderEffects.map((item, i) => (
+                      <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          {item.severity && <span style={{ fontSize: 10, fontWeight: 700, color: riskTone(item.severity).fg }}>{item.severity}</span>}
+                          {item.horizon && <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>{prettyHorizon(item.horizon)}</span>}
+                        </div>
+                        <div style={{ fontSize: 13, color: 'var(--text-heading)', fontWeight: 600 }}>{item.summary}</div>
+                        {item.mechanism && <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>{item.mechanism}</div>}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
+              )}
+              {answer?.secondOrderEffects && answer.secondOrderEffects.length > 0 && (
+                <div style={{ padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: 'var(--text-heading)' }}>
+                    What spreads later
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {answer.secondOrderEffects.map((item, i) => (
+                      <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          {item.severity && <span style={{ fontSize: 10, fontWeight: 700, color: riskTone(item.severity).fg }}>{item.severity}</span>}
+                          {item.horizon && <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>{prettyHorizon(item.horizon)}</span>}
+                        </div>
+                        <div style={{ fontSize: 13, color: 'var(--text-heading)', fontWeight: 600 }}>{item.summary}</div>
+                        {item.mechanism && <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>{item.mechanism}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Impact breakdown */}
-          {answer?.impactBreakdown && answer.impactBreakdown.length > 0 && (
+          {answer?.watchpoints && answer.watchpoints.length > 0 && (
             <div style={{ padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-heading)' }}>
-                How does it spread?
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: 'var(--text-heading)' }}>
+                What to monitor next
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {answer.watchpoints.map((wp, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-heading)' }}>{wp.signal}</div>
+                    {wp.whyItMatters && <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>{wp.whyItMatters}</div>}
+                    {wp.expectedWithin && <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>{prettyHorizon(wp.expectedWithin)}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {answer?.recommendations && answer.recommendations.length > 0 && (
+            <div style={{ padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: 'var(--text-heading)' }}>
+                What to do now
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {answer.impactBreakdown.slice(0, 10).map((item, i) => (
+                {answer.recommendations.map((item, i) => (
                   <div key={i} style={{ fontSize: 13, color: 'var(--text-secondary-strong)' }}>
-                    {item.entityName || item.entity} — {item.axis} ({(item.amplitude ?? 0).toFixed(2)}, {item.hops ?? 0} hops)
+                    {i + 1}. {item}
                   </div>
                 ))}
               </div>
@@ -631,7 +761,7 @@ export const QAPanel: React.FC<QAPanelProps> = ({
           {answer?.alternatives && answer.alternatives.length > 0 && (
             <div style={{ padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-heading)' }}>
-                What can you do?
+                Fallbacks and alternatives
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {answer.alternatives.map((a, i) => (
@@ -644,55 +774,93 @@ export const QAPanel: React.FC<QAPanelProps> = ({
             </div>
           )}
 
-          {/* Evidence with verification flags */}
-          {answer?.evidence && answer.evidence.length > 0 && (
+          {((answer?.assumptions && answer.assumptions.length > 0) || (answer?.dataGaps && answer.dataGaps.length > 0)) && (
             <div style={{ padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-heading)' }}>
-                Evidence
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: 'var(--text-heading)' }}>
+                What could change this view
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {answer.evidence.map((ev, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      fontSize: 12,
-                      color: 'var(--text-secondary-strong)',
-                      opacity: ev.verified === false ? 0.5 : 1,
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: 6,
-                    }}
-                  >
-                    <span style={{ fontSize: 10, marginTop: 2 }}>
-                      {ev.verified === false ? '○' : '●'}
-                    </span>
-                    <span>
-                      {ev.summary || ev.canonicalPath}
-                      {ev.confidence != null && ` (${Math.round(ev.confidence * 100)}%)`}
-                      {ev.verified === false && <span style={{ color: '#F59E0B', marginLeft: 4 }}>unverified</span>}
-                    </span>
+                {(answer?.assumptions || []).map((item, i) => (
+                  <div key={`assumption-${i}`} style={{ fontSize: 13, color: 'var(--text-secondary-strong)' }}>
+                    • {item}
                   </div>
                 ))}
-              </div>
-            </div>
-          )}
-
-          {/* Data gaps */}
-          {answer?.dataGaps && answer.dataGaps.length > 0 && (
-            <div style={{ padding: 16, borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-heading)' }}>
-                What don&apos;t we know?
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {answer.dataGaps.map((g, i) => (
-                  <div key={i} style={{ fontSize: 13, color: 'var(--text-secondary-strong)' }}>
-                    {g.description}
+                {(answer?.dataGaps || []).map((g, i) => (
+                  <div key={`gap-${i}`} style={{ fontSize: 13, color: 'var(--text-secondary-strong)' }}>
+                    • {g.description}
                     {g.whyItMatters && ` — ${g.whyItMatters}`}
                   </div>
                 ))}
               </div>
             </div>
           )}
+
+          <details style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--bg-elevated)', padding: 16 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 700, color: 'var(--text-heading)' }}>
+              Diagnostics
+            </summary>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 14 }}>
+              {answer?.seedFailures && answer.seedFailures.length > 0 && (
+                <div style={{ padding: 14, borderRadius: 12, border: '1px solid rgba(234,179,8,0.4)', background: 'rgba(234,179,8,0.08)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#EAB308', marginBottom: 8 }}>
+                    Some seeds could not be resolved
+                  </div>
+                  {answer.seedFailures.map((f, i) => (
+                    <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                      {f.seed}: {f.reason}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {answer?.impactBreakdown && answer.impactBreakdown.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-heading)' }}>
+                    Propagation detail
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {answer.impactBreakdown.slice(0, 10).map((item, i) => (
+                      <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                        {item.entityName || item.entity} — {item.axis} ({(item.amplitude ?? 0).toFixed(2)}, {item.hops ?? 0} hops)
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {answer?.evidence && answer.evidence.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12, color: 'var(--text-heading)' }}>
+                    Evidence
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {answer.evidence.map((ev, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          fontSize: 12,
+                          color: 'var(--text-secondary-strong)',
+                          opacity: ev.verified === false ? 0.5 : 1,
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: 6,
+                        }}
+                      >
+                        <span style={{ fontSize: 10, marginTop: 2 }}>
+                          {ev.verified === false ? '○' : '●'}
+                        </span>
+                        <span>
+                          {ev.summary || ev.canonicalPath}
+                          {ev.confidence != null && ` (${Math.round(ev.confidence * 100)}%)`}
+                          {ev.verified === false && <span style={{ color: '#F59E0B', marginLeft: 4 }}>unverified</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </details>
 
           {/* Ask another question */}
           <button

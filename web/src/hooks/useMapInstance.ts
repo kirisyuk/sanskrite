@@ -3,6 +3,9 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { ThemeContext } from '../components/ThemeProvider';
 
+export const MAP_GLYPHS_URL = 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf';
+export const MAP_TEXT_FONT_STACK = ['Open Sans Regular', 'Arial Unicode MS Regular'] as const;
+
 function buildCartoStyle(theme: 'dark' | 'light'): maplibregl.StyleSpecification {
   const isDark = theme === 'dark';
   const variant = isDark ? 'dark_all' : 'light_all';
@@ -26,7 +29,7 @@ function buildCartoStyle(theme: 'dark' | 'light'): maplibregl.StyleSpecification
       { id: 'background', type: 'background', paint: { 'background-color': bgColor } },
       { id: 'carto-basemap-layer', type: 'raster', source: 'carto-basemap', minzoom: 0, maxzoom: 22 },
     ],
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    glyphs: MAP_GLYPHS_URL,
   };
 }
 
@@ -41,9 +44,11 @@ export function useMapInstance(containerRef: React.RefObject<HTMLDivElement | nu
   const mapRef = useRef<maplibregl.Map | null>(null);
   const initialThemeRef = useRef<string | null>(theme);
   const [styleEpoch, setStyleEpoch] = useState(0);
-  const isReady = styleEpoch > 0;
+  const [styleReady, setStyleReady] = useState(false);
+  const isReady = styleReady && styleEpoch > 0;
 
   const onStyleLoad = useCallback(() => {
+    setStyleReady(true);
     setStyleEpoch((n) => n + 1);
   }, []);
 
@@ -74,6 +79,7 @@ export function useMapInstance(containerRef: React.RefObject<HTMLDivElement | nu
       map.off('style.load', onStyleLoad);
       map.remove();
       mapRef.current = null;
+      setStyleReady(false);
       setStyleEpoch(0);
     };
   }, []);
@@ -88,6 +94,7 @@ export function useMapInstance(containerRef: React.RefObject<HTMLDivElement | nu
       return;
     }
     initialThemeRef.current = null;
+    setStyleReady(false);
     map.setStyle(buildCartoStyle(theme === 'dark' ? 'dark' : 'light'), { diff: false });
   }, [theme]);
 

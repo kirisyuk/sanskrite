@@ -47,6 +47,8 @@ func TestMaterializedArtifact_Validate(t *testing.T) {
 						{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1)},
 					},
 					nil,
+					nil,
+					nil,
 				),
 				Status:    "active",
 				CreatedAt: time.Now(),
@@ -111,14 +113,14 @@ func TestBuildSupplyChainPathPayload(t *testing.T) {
 		{Type: "org", Ref: "/org/bmw"},
 	}
 	edges := []SupplyChainPathEdge{
-		{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1)},
+		{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1), ProductNodeIndex: intPtr(1), ProductRef: "/product/.../battery-cell", CarriesProduct: true, Role: "product_flow"},
 	}
 	notes := map[string]interface{}{
 		"buildMode": "tenant_first_global_fallback",
 		"maxDepth":  6,
 	}
 
-	payload := BuildSupplyChainPathPayload(nodes, edges, notes)
+	payload := BuildSupplyChainPathPayload(nodes, edges, nil, nil, notes)
 
 	if payload["v"] != 1 {
 		t.Errorf("expected version 1, got %v", payload["v"])
@@ -151,11 +153,22 @@ func TestParseSupplyChainPathPayload(t *testing.T) {
 		},
 		"edges": []interface{}{
 			map[string]interface{}{
-				"type":            "SUPPLY_LINK",
-				"from":            float64(0),
-				"to":              float64(2),
-				"viaProductIndex": float64(1),
+				"type":             "SUPPLY_LINK",
+				"from":             float64(0),
+				"to":               float64(2),
+				"viaProductIndex":  float64(1),
+				"productNodeIndex": float64(1),
+				"productRef":       "/product/.../battery-cell",
+				"carriesProduct":   true,
+				"role":             "product_flow",
 			},
+		},
+		"stress": map[string]interface{}{
+			"pathScore":            0.71,
+			"fragility":            0.63,
+			"rerouteability":       0.28,
+			"recoveryLatencyHours": 72.0,
+			"bottleneckLegIndex":   float64(0),
 		},
 		"notes": map[string]interface{}{
 			"buildMode": "tenant_first",
@@ -176,8 +189,14 @@ func TestParseSupplyChainPathPayload(t *testing.T) {
 	if len(parsed.Edges) != 1 {
 		t.Errorf("expected 1 edge, got %d", len(parsed.Edges))
 	}
+	if parsed.Edges[0].ProductRef != "/product/.../battery-cell" || !parsed.Edges[0].CarriesProduct {
+		t.Fatalf("expected carried product metadata on parsed edge: %+v", parsed.Edges[0])
+	}
 	if parsed.Nodes[0].Ref != "/org/catl" {
 		t.Errorf("expected first node ref /org/catl, got %s", parsed.Nodes[0].Ref)
+	}
+	if parsed.Stress == nil || parsed.Stress.PathScore <= 0 {
+		t.Fatal("expected parsed stress")
 	}
 
 	t.Run("typed arrays from builder", func(t *testing.T) {
@@ -188,8 +207,10 @@ func TestParseSupplyChainPathPayload(t *testing.T) {
 				{Type: "org", Ref: "/org/bmw"},
 			},
 			[]SupplyChainPathEdge{
-				{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1)},
+				{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1), ProductNodeIndex: intPtr(1), ProductRef: "/product/.../battery-cell", CarriesProduct: true, Role: "product_flow"},
 			},
+			nil,
+			nil,
 			nil,
 		)
 
@@ -221,7 +242,7 @@ func TestValidateSupplyChainPathStructure(t *testing.T) {
 				{Type: "org", Ref: "/org/bmw"},
 			},
 			edges: []SupplyChainPathEdge{
-				{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1)},
+				{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1), ProductNodeIndex: intPtr(1), ProductRef: "/product/.../battery-cell"},
 			},
 			wantErr: false,
 		},
@@ -249,6 +270,17 @@ func TestValidateSupplyChainPathStructure(t *testing.T) {
 			},
 			edges: []SupplyChainPathEdge{
 				{Type: "SUPPLY_LINK", From: 0, To: 1, ViaProductIndex: intPtr(0)},
+			},
+			wantErr: true,
+		},
+		{
+			name: "productNodeIndex points to non-product",
+			nodes: []SupplyChainPathNode{
+				{Type: "org", Ref: "/org/catl"},
+				{Type: "org", Ref: "/org/bmw"},
+			},
+			edges: []SupplyChainPathEdge{
+				{Type: "LOGISTICS", From: 0, To: 1, ProductNodeIndex: intPtr(0), ProductRef: "/product/.../battery-cell"},
 			},
 			wantErr: true,
 		},

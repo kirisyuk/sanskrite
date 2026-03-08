@@ -137,10 +137,16 @@ func classifyFacDeterministic(parts []string) (string, string, bool) {
 	} else if len(parts) >= 2 {
 		slug = parts[1]
 	}
-	kind := taxonomy.FacilityKindFromSlug(slug)
-	if kind == taxonomy.FacilityKindPowerPlant && containsAny(slug, "solar", "wind", "renewable") {
+	if containsAny(slug, "solar") {
 		return "/Infrastructure/Energy/PowerPlant/Renewable", "/Energy/Renewable/Solar", true
 	}
+	if containsAny(slug, "wind") {
+		return "/Infrastructure/Energy/PowerPlant/Renewable", "/Energy/Renewable/Wind", true
+	}
+	if containsAny(slug, "renewable") {
+		return "/Infrastructure/Energy/PowerPlant/Renewable", "/Energy/Renewable/Solar", true
+	}
+	kind := taxonomy.FacilityKindFromSlug(slug)
 	return taxonomy.FacilityKindToVertexEntityPath(kind), taxonomy.FacilityKindToVertexSectorPath(kind), true
 }
 

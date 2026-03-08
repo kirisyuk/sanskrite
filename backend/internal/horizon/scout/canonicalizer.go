@@ -119,7 +119,8 @@ func PreferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 }
 
 // preferredCanonicalPaths returns ordered canonical path candidates derived from names only.
-// For facilities we emit /fac/{geo}/{facilitySlug}; without geo context we use "na".
+// For facilities we intentionally avoid a blind /fac/na fallback because name-only facility
+// paths create long-lived graph debt when geography is resolved later.
 //
 // Repo/Vertex checks decide which one is stable.
 func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
@@ -148,8 +149,9 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 		// Without jurisdiction in the relation payload, we default to "na".
 		return []string{"/org/na/" + slug}
 	case models.FragmentTypeFacility:
-		// Format: /fac/{geo}/{facilitySlug}. Without geo context we use "na".
-		return []string{"/fac/na/" + slug}
+		// Do not invent /fac/na/{slug} from name-only input.
+		// Facilities need explicit geo context or later grounding/canonicalization.
+		return nil
 	case models.FragmentTypeProduct:
 		ls := strings.TrimSpace(strings.ToLower(short))
 		if ls == "na" || ls == "n/a" || ls == "unknown" || ls == "none" {
@@ -1075,7 +1077,7 @@ RULES:
       - NEVER repeat a segment already in the path (e.g. /market/iq/agriculture/agriculture is INVALID)
     - domain/vertical SHOULD align with /segment/{domain}/{vertical}/{geo} taxonomy used for organizations
     - Use GICS terminology (no numeric codes). If not in GICS, use the closest GICS parent + a descriptive term.
-    - geo: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `
+    - geo: `+taxonomy.ISO2GeoDescriptionForPrompts()+`
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /market/gcc/{domain}/{vertical} (NOT /market/na/{domain}/gcc)
     - GEOGRAPHY INFERENCE: Extract geo from the market name/context:
       - If the name mentions a country/region, use that country's ISO2 code
@@ -1093,9 +1095,9 @@ RULES:
       - "UAE fintech sector" -> /market/ae/finance/fintech
   - FACILITY:
     - Use /fac/{geo}/{facilitySlug} (e.g., "TSMC Fab 21 in Taiwan" -> /fac/tw/fab-21)
-    - geo: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `
+    - geo: `+taxonomy.ISO2GeoDescriptionForPrompts()+`
   - GEO_REGION: MUST be /loc/{country}[/{level1}[/{level2}]]
-    - country: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `
+    - country: `+taxonomy.ISO2GeoDescriptionForPrompts()+`
     - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
       - GCC → /loc/gcc (NOT /loc/global/gcc)
     - level1/level2: optional subdivision/city slugs; omit unknown trailing levels
@@ -1110,7 +1112,7 @@ RULES:
     - Kazakhstan / Astana: /loc/kz/astana
   - EVENT: /event/{lowercase-slug}
   - COMMUNITY: /community/{geo}/{type}/{slug}
-    - geo: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `
+    - geo: `+taxonomy.ISO2GeoDescriptionForPrompts()+`
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
     - type: trade | activist | professional | criminal | religious | ethnic | interest | dynasty | tribe | representatives | industry-association | key-community
       - trade: commercial networks without formal structure (hawala, informal trade networks)

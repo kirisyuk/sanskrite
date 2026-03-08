@@ -65,10 +65,20 @@ type Lens struct {
 
 // ScopeArtifactRef caches metadata for a MaterializedArtifact referenced from lens scope.
 type ScopeArtifactRef struct {
-	Kind        string   `json:"kind" firestore:"kind"`
-	DisplayName string   `json:"displayName,omitempty" firestore:"displayName,omitempty"`
-	NodeRefs    []string `json:"nodeRefs,omitempty" firestore:"nodeRefs,omitempty"`
-	Status      string   `json:"status,omitempty" firestore:"status,omitempty"`
+	Kind               string   `json:"kind" firestore:"kind"`
+	DisplayName        string   `json:"displayName,omitempty" firestore:"displayName,omitempty"`
+	NodeRefs           []string `json:"nodeRefs,omitempty" firestore:"nodeRefs,omitempty"`
+	Status             string   `json:"status,omitempty" firestore:"status,omitempty"`
+	GeoRefs            []string `json:"geoRefs,omitempty" firestore:"geoRefs,omitempty"`
+	FlowRefs           []string `json:"flowRefs,omitempty" firestore:"flowRefs,omitempty"`
+	ZoneRefs           []string `json:"zoneRefs,omitempty" firestore:"zoneRefs,omitempty"`
+	AffectedZoneRefs   []string `json:"affectedZoneRefs,omitempty" firestore:"affectedZoneRefs,omitempty"`
+	SpatialSemantics   []string `json:"spatialSemantics,omitempty" firestore:"spatialSemantics,omitempty"`
+	LegCount           int      `json:"legCount,omitempty" firestore:"legCount,omitempty"`
+	BindingConfidence  float64  `json:"bindingConfidence,omitempty" firestore:"bindingConfidence,omitempty"`
+	PathStressScore    float64  `json:"pathStressScore,omitempty" firestore:"pathStressScore,omitempty"`
+	BottleneckLegIndex int      `json:"bottleneckLegIndex,omitempty" firestore:"bottleneckLegIndex,omitempty"`
+	RecoveryLatencyHrs float64  `json:"recoveryLatencyHours,omitempty" firestore:"recoveryLatencyHours,omitempty"`
 }
 
 // LensIntent is a living question the user wants to answer within the lens.
@@ -77,7 +87,7 @@ type LensIntent struct {
 	ID          string    `json:"id,omitempty" firestore:"id,omitempty"`
 	Question    string    `json:"question" firestore:"question"`
 	CreatedAt   time.Time `json:"createdAt,omitempty" firestore:"createdAt,omitempty"`
-	Status      string    `json:"status,omitempty" firestore:"status,omitempty"`       // pending, answered, archived
+	Status      string    `json:"status,omitempty" firestore:"status,omitempty"`           // pending, answered, archived
 	QASessionID string    `json:"qaSessionId,omitempty" firestore:"qaSessionId,omitempty"` // Link to QASession when answered
 }
 

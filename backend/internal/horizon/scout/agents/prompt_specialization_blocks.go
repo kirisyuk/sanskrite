@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -19,7 +20,7 @@ func buildResearchSpecializationModulesBlock(specialties []string) string {
 
 func buildSpecializationModulesBlock(specialties []string, domainModes []string, includeDomainModes bool) string {
 	specialties = taxonomy.NormalizeSpecialties(specialties)
-	domainModes = taxonomy.NormalizeDomainModes(domainModes)
+	domainModes = contractsemantics.SortDomainModesForExecution(domainModes)
 
 	var b strings.Builder
 	b.WriteString("CORE + SPECIALIZATION MODULES:\n")
@@ -56,6 +57,8 @@ func buildSpecializationModulesBlock(specialties []string, domainModes []string,
 	b.WriteString("- Chain pattern: supplier -> product -> processor -> product -> customer -> ...\n")
 	b.WriteString("- Nodes should alternate actor/product; include facilities where transformation occurs.\n")
 	b.WriteString("- Include transport/logistics hints (transport_via, route waypoints, corridor facilities) when available.\n")
+	b.WriteString("- For cross-border or chokepoint-sensitive chains, treat transport_via as expected unless route is genuinely unknown.\n")
+	b.WriteString("- Prefer canonical ports/terminals/pipelines/straits/canals over vague logistics wording.\n")
 	b.WriteString("- Always emit individual relations alongside chain-level output.\n\n")
 	return b.String()
 }

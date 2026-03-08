@@ -21,24 +21,27 @@ import (
 )
 
 type geoObjectResponseItem struct {
-	ID             string              `json:"id"`
-	CanonicalPath  string              `json:"canonicalPath"`
-	Type           models.FragmentType `json:"type"`
-	FacilityKind   string              `json:"facilityKind,omitempty"`
-	Label          string              `json:"label,omitempty"`
-	Description    string              `json:"description,omitempty"`
-	Status         string              `json:"status,omitempty"`
-	Coordinates    *models.Coordinates `json:"coordinates,omitempty"`
-	RadiusKm       float64             `json:"radiusKm,omitempty"`
-	ZoneType       string              `json:"zoneType,omitempty"`
-	ZoneSubType    string              `json:"zoneSubType,omitempty"`
-	Hype           float64             `json:"hype,omitempty"`
-	HypeIndicator  int                 `json:"hypeIndicator,omitempty"`
-	ActivityStatus string              `json:"activityStatus,omitempty"`
-	LastMatchedAt  *time.Time          `json:"lastMatchedAt,omitempty"`
-	InScope        bool                `json:"inScope"`
-	CreatedAt      time.Time           `json:"createdAt"`
-	UpdatedAt      time.Time           `json:"updatedAt"`
+	ID              string              `json:"id"`
+	CanonicalPath   string              `json:"canonicalPath"`
+	Type            models.FragmentType `json:"type"`
+	FacilityKind    string              `json:"facilityKind,omitempty"`
+	Label           string              `json:"label,omitempty"`
+	Description     string              `json:"description,omitempty"`
+	Status          string              `json:"status,omitempty"`
+	Coordinates     *models.Coordinates `json:"coordinates,omitempty"`
+	RadiusKm        float64             `json:"radiusKm,omitempty"`
+	ZoneType        string              `json:"zoneType,omitempty"`
+	ZoneSubType     string              `json:"zoneSubType,omitempty"`
+	GeoPrecision    string              `json:"geoPrecision,omitempty"`
+	SourceLayer     string              `json:"sourceLayer,omitempty"`
+	ProcessingLayer string              `json:"processingLayer,omitempty"`
+	Hype            float64             `json:"hype,omitempty"`
+	HypeIndicator   int                 `json:"hypeIndicator,omitempty"`
+	ActivityStatus  string              `json:"activityStatus,omitempty"`
+	LastMatchedAt   *time.Time          `json:"lastMatchedAt,omitempty"`
+	InScope         bool                `json:"inScope"`
+	CreatedAt       time.Time           `json:"createdAt"`
+	UpdatedAt       time.Time           `json:"updatedAt"`
 }
 
 func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectResponseItem, bool) {
@@ -73,6 +76,9 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 	}
 	zoneType := ""
 	zoneSubType := ""
+	geoPrecision := ""
+	sourceLayer := ""
+	processingLayer := ""
 	hype := 0.0
 	hypeIndicator := 0
 	activityStatus := ""
@@ -80,27 +86,33 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 	if f.Type == models.FragmentTypeAffectedZone {
 		zoneType = strings.TrimSpace(asString(f.Qualifiers["zoneType"]))
 		zoneSubType = strings.TrimSpace(asString(f.Qualifiers["zoneSubType"]))
+		geoPrecision = strings.TrimSpace(asString(f.Qualifiers["geoPrecision"]))
+		sourceLayer = strings.TrimSpace(asString(f.Qualifiers["sourceLayer"]))
+		processingLayer = strings.TrimSpace(asString(f.Qualifiers["processingLayer"]))
 		hype, hypeIndicator, activityStatus, lastMatchedAt = readZoneActivitySnapshot(f, time.Now().UTC())
 	}
 	return geoObjectResponseItem{
-		ID:             f.ID,
-		CanonicalPath:  f.CanonicalPath,
-		Type:           f.Type,
-		FacilityKind:   facilityKind,
-		Label:          label,
-		Description:    strings.TrimSpace(f.Description),
-		Status:         strings.TrimSpace(f.Governance.Status),
-		Coordinates:    f.Coordinates,
-		RadiusKm:       f.RadiusKm,
-		ZoneType:       zoneType,
-		ZoneSubType:    zoneSubType,
-		Hype:           hype,
-		HypeIndicator:  hypeIndicator,
-		ActivityStatus: activityStatus,
-		LastMatchedAt:  lastMatchedAt,
-		InScope:        inScope,
-		CreatedAt:      f.CreatedAt,
-		UpdatedAt:      f.UpdatedAt,
+		ID:              f.ID,
+		CanonicalPath:   f.CanonicalPath,
+		Type:            f.Type,
+		FacilityKind:    facilityKind,
+		Label:           label,
+		Description:     strings.TrimSpace(f.Description),
+		Status:          strings.TrimSpace(f.Governance.Status),
+		Coordinates:     f.Coordinates,
+		RadiusKm:        f.RadiusKm,
+		ZoneType:        zoneType,
+		ZoneSubType:     zoneSubType,
+		GeoPrecision:    geoPrecision,
+		SourceLayer:     sourceLayer,
+		ProcessingLayer: processingLayer,
+		Hype:            hype,
+		HypeIndicator:   hypeIndicator,
+		ActivityStatus:  activityStatus,
+		LastMatchedAt:   lastMatchedAt,
+		InScope:         inScope,
+		CreatedAt:       f.CreatedAt,
+		UpdatedAt:       f.UpdatedAt,
 	}, true
 }
 

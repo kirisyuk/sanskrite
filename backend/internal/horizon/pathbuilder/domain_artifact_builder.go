@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // DomainArtifactBuilder builds materialized artifacts for non-supply-chain domains
@@ -60,6 +60,7 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 	}
 
 	allowedEdgeTypes := domainEdgeTypes(domainMode)
+	profile := contractsemantics.ProfileForDomainMode(domainMode)
 
 	// Collect edges radiating from the root fragment (1 hop outbound + inbound).
 	outEdges, _ := b.edgesRepo.ListBySource(ctx, tenantID, rootFrag.ID, nil, 200)
@@ -180,7 +181,14 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 		displayName = fmt.Sprintf("%s: %s", kind, rootName)
 	}
 
-	payload := models.BuildRelationsGraphPayload(nodes, graphEdges, domainMode, rootCanonicalPath, nil)
+	notes := map[string]interface{}{
+		"graphLayer":         string(profile.PrimaryLayer),
+		"allowedEdges":       dependencyTypesToStrings(profile.AllowedEdges),
+		"overlayEdges":       dependencyTypesToStrings(profile.OverlayEdges),
+		"interpretiveEdges":  dependencyTypesToStrings(profile.InterpretiveEdges),
+		"complementaryModes": append([]string(nil), profile.ComplementaryModes...),
+	}
+	payload := models.BuildRelationsGraphPayload(nodes, graphEdges, domainMode, rootCanonicalPath, notes)
 
 	artifact := &models.MaterializedArtifact{
 		TenantID:     tenantID,
@@ -197,10 +205,12 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 		DisplayName:  displayName,
 		NodeRefs:     nodeRefs,
 		Labels: map[string]string{
-			"domainMode": domainMode,
-			"rootEntity": rootCanonicalPath,
-			"nodeCount":  fmt.Sprintf("%d", len(nodes)),
-			"edgeCount":  fmt.Sprintf("%d", len(graphEdges)),
+			"domainMode":   domainMode,
+			"rootEntity":   rootCanonicalPath,
+			"nodeCount":    fmt.Sprintf("%d", len(nodes)),
+			"edgeCount":    fmt.Sprintf("%d", len(graphEdges)),
+			"graphLayer":   string(profile.PrimaryLayer),
+			"artifactKind": string(kind),
 		},
 	}
 
@@ -229,11 +239,11 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 
 func domainModeToKind(domainMode string) models.MaterializedKind {
 	switch domainMode {
-	case taxonomy.DomainModeGovernance:
+	case "governance":
 		return models.MaterializedKindGovernanceChain
-	case taxonomy.DomainModePolicyImpact:
+	case "policy_impact":
 		return models.MaterializedKindRegulatoryImpactMap
-	case taxonomy.DomainModeEcosystem:
+	case "ecosystem":
 		return models.MaterializedKindEcosystemMap
 	default:
 		return ""
@@ -241,16 +251,11 @@ func domainModeToKind(domainMode string) models.MaterializedKind {
 }
 
 func domainEdgeTypes(domainMode string) []string {
-	switch domainMode {
-	case taxonomy.DomainModeGovernance:
-		return taxonomy.GovernanceEdgeTypes
-	case taxonomy.DomainModePolicyImpact:
-		return []string{"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "USES_MECHANISM", "APPLIES_TO", "GATEKEEPS_DECISION", "INFLUENCES", "DEPENDS_ON", "OPERATES_IN"}
-	case taxonomy.DomainModeEcosystem:
-		return taxonomy.EcosystemEdgeTypes
-	default:
+	profile := contractsemantics.ProfileForDomainMode(domainMode)
+	if len(profile.AllowedEdges) == 0 {
 		return nil
 	}
+	return dependencyTypesToStrings(profile.AllowedEdges)
 }
 
 func isAllowedEdge(edgeType models.DependencyType, allowed []string) bool {
@@ -270,6 +275,18 @@ func inferNameFromPath(path string) string {
 	}
 	last := parts[len(parts)-1]
 	return strings.ReplaceAll(strings.ReplaceAll(last, "-", " "), "_", " ")
+}
+
+func dependencyTypesToStrings(values []models.DependencyType) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(string(value)) == "" {
+			continue
+		}
+		out = append(out, string(value))
+	}
+	sort.Strings(out)
+	return out
 }
 
 func buildRelationsGraphCanonicalKey(tenantID, domainMode, rootPath string, nodeRefs []string) string {
